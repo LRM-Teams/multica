@@ -601,14 +601,14 @@ function LarkAgentBotConnectedBadge({
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-1 text-xs text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline"
-            />
+            >
+              <ExternalLink className="h-3 w-3" />
+              {installation.region === "lark"
+                ? t(($) => $.lark.agent_bot_manage_link_lark)
+                : t(($) => $.lark.agent_bot_manage_link_feishu)}
+            </a>
           }
-        >
-          <ExternalLink className="h-3 w-3" />
-          {installation.region === "lark"
-            ? t(($) => $.lark.agent_bot_manage_link_lark)
-            : t(($) => $.lark.agent_bot_manage_link_feishu)}
-        </TooltipTrigger>
+        />
         <TooltipContent side="top">
           {installation.region === "lark"
             ? t(($) => $.lark.agent_bot_manage_tooltip_lark)

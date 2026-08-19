@@ -30,11 +30,11 @@ export function RunReferenceView({ node }: NodeViewProps) {
                 if ((event.metaKey || event.ctrlKey) && openInNewTab) openInNewTab(href);
                 else push(href);
               }}
-            />
+            >
+              {label || t(($) => $.run_reference.fallback_label)}
+            </button>
           }
-        >
-          {label || t(($) => $.run_reference.fallback_label)}
-        </TooltipTrigger>
+        />
         <TooltipContent side="top">{t(($) => $.run_reference.open)}</TooltipContent>
       </Tooltip>
     </NodeViewWrapper>

@@ -186,11 +186,11 @@ export function ModelPicker({
                 type="button"
                 onClick={() => void select("")}
                 className="flex w-full items-center border-t px-3 py-2 text-left text-xs text-muted-foreground transition-colors hover:bg-accent/50"
-              />
+              >
+                {t(($) => $.pickers.model_clear)}
+              </button>
             }
-          >
-            {t(($) => $.pickers.model_clear)}
-          </TooltipTrigger>
+          />
           <TooltipContent side="top">{t(($) => $.pickers.model_clear_title)}</TooltipContent>
         </Tooltip>
       )}

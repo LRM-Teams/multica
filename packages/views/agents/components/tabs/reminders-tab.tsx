@@ -282,16 +282,12 @@ function AnchorLink({ anchor }: { anchor: ReminderDefinitionRow["anchor"] }) {
   );
   return navigation ? (
     <Tooltip>
-      <TooltipTrigger render={<AppLink href={anchor.href} className={className} />}>
-        {body}
-      </TooltipTrigger>
+      <TooltipTrigger render={<AppLink href={anchor.href} className={className}>{body}</AppLink>} />
       <TooltipContent side="top">{anchor.label}</TooltipContent>
     </Tooltip>
   ) : (
     <Tooltip>
-      <TooltipTrigger render={<a href={anchor.href} className={className} />}>
-        {body}
-      </TooltipTrigger>
+      <TooltipTrigger render={<a href={anchor.href} className={className}>{body}</a>} />
       <TooltipContent side="top">{anchor.label}</TooltipContent>
     </Tooltip>
   );

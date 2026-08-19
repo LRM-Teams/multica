@@ -166,11 +166,11 @@ export function ResearchNodeReportModal({
                                     type="button"
                                     className="max-w-full truncate text-left text-emerald-300 underline-offset-2 hover:underline focus-visible:underline"
                                     onClick={() => onSelectLineageNode(id)}
-                                  />
+                                  >
+                                    {title}
+                                  </button>
                                 }
-                              >
-                                {title}
-                              </TooltipTrigger>
+                              />
                               {title !== id && (
                                 <TooltipContent side="top">{id}</TooltipContent>
                               )}

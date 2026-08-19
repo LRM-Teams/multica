@@ -518,15 +518,11 @@ export function AgentTranscriptDialog({
             {task.relative_work_dir && (
               <Tooltip>
                 <TooltipTrigger
-                  render={<button type="button" onClick={handleCopyWorkdir} className="inline-flex max-w-[16rem] items-center gap-1 rounded-md border bg-muted/50 px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground" />}
-                >
-                  {copiedWorkdir ? (
+                  render={<button type="button" onClick={handleCopyWorkdir} className="inline-flex max-w-[16rem] items-center gap-1 rounded-md border bg-muted/50 px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">{copiedWorkdir ? (
                     <Check className="h-3 w-3 shrink-0 text-emerald-500" />
                   ) : (
                     <Folder className="h-3 w-3 shrink-0" />
-                  )}
-                  <span className="truncate font-mono">{task.relative_work_dir}</span>
-                </TooltipTrigger>
+                  )}<span className="truncate font-mono">{task.relative_work_dir}</span></button>} />
                 <TooltipContent side="top">{task.relative_work_dir}</TooltipContent>
               </Tooltip>
             )}
@@ -622,11 +618,7 @@ function SortDirectionToggle({ value, onChange, labels }: SortDirectionTogglePro
             value === "chronological"
               ? "bg-background text-foreground shadow-sm"
               : "text-muted-foreground hover:text-foreground",
-          )} />}
-        >
-          <ArrowDownNarrowWide className="h-3 w-3" />
-          <span className="hidden sm:inline">{labels.chronological}</span>
-        </TooltipTrigger>
+          )}><ArrowDownNarrowWide className="h-3 w-3" /><span className="hidden sm:inline">{labels.chronological}</span></button>} />
         <TooltipContent side="top">{labels.chronological}</TooltipContent>
       </Tooltip>
       <Tooltip>
@@ -636,11 +628,7 @@ function SortDirectionToggle({ value, onChange, labels }: SortDirectionTogglePro
             value === "newest_first"
               ? "bg-background text-foreground shadow-sm"
               : "text-muted-foreground hover:text-foreground",
-          )} />}
-        >
-          <ArrowUpNarrowWide className="h-3 w-3" />
-          <span className="hidden sm:inline">{labels.newestFirst}</span>
-        </TooltipTrigger>
+          )}><ArrowUpNarrowWide className="h-3 w-3" /><span className="hidden sm:inline">{labels.newestFirst}</span></button>} />
         <TooltipContent side="top">{labels.newestFirst}</TooltipContent>
       </Tooltip>
     </div>

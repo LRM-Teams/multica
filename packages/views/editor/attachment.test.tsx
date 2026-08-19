@@ -467,7 +467,7 @@ describe("Attachment — html dispatch", () => {
     expect(screen.getByText("design-agent-card-dm.html")).toBeTruthy();
     expect(document.querySelector("iframe")).toBeNull();
     expect(screen.queryByTitle("Preview")).toBeNull();
-    expect(screen.getByTitle("Download")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Download" })).toBeTruthy();
   });
 
   it("inlineHtmlPreview=false file-card open routes to new tab (not modal)", () => {

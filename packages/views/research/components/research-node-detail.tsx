@@ -765,9 +765,7 @@ export function ResearchNodeDetailBody({
           ) : null}
         </div>
         <Tooltip>
-          <TooltipTrigger render={<h2 className="line-clamp-3 text-base font-medium leading-snug" />}>
-            {node.title}
-          </TooltipTrigger>
+          <TooltipTrigger render={<h2 className="line-clamp-3 text-base font-medium leading-snug">{node.title}</h2>} />
           <TooltipContent side="bottom">{node.title}</TooltipContent>
         </Tooltip>
         <p className="sr-only">{t(($) => $.node.detail_hint)}</p>

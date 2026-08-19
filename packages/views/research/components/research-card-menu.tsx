@@ -133,11 +133,11 @@ export function ResearchCardMenu({
                     disabled={!item.enabled}
                     className={buttonClassName}
                     onClick={() => run(item.id)}
-                  />
+                  >
+                    {buttonContent}
+                  </button>
                 }
-              >
-                {buttonContent}
-              </TooltipTrigger>
+              />
               <TooltipContent side="top">{item.disabledReason}</TooltipContent>
             </Tooltip>
           );

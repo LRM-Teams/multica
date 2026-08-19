@@ -71,12 +71,12 @@ export function ResearchTemplateChipRow({
                       ? "border-blue-400 bg-blue-50 text-blue-700 dark:border-blue-400/45 dark:bg-blue-400/[0.14] dark:text-blue-200"
                       : "border-border bg-muted/40 text-foreground/80 hover:border-blue-300 hover:bg-blue-50/60 hover:text-blue-700 dark:hover:border-blue-400/45 dark:hover:bg-blue-400/[0.10] dark:hover:text-blue-200",
                   )}
-                />
+                >
+                  <Icon className="size-3 opacity-70" aria-hidden />
+                  {title}
+                </button>
               }
-            >
-              <Icon className="size-3 opacity-70" aria-hidden />
-              {title}
-            </TooltipTrigger>
+            />
             <TooltipContent side="top">{blurb}</TooltipContent>
           </Tooltip>
         );

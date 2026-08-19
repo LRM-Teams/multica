@@ -178,7 +178,7 @@ describe("ThinkingPropRow", () => {
     // matching the i18n `thinking_clear_title` copy.
     await screen.findByText("xhigh");
     fireEvent.click(screen.getByRole("button"));
-    const clearButton = await screen.findByTitle(/Clear the override/i);
+    const clearButton = await screen.findByRole("button", { name: /cli config/i });
     fireEvent.click(clearButton);
 
     expect(onChange).toHaveBeenCalledWith("");

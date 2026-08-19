@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { Copy } from "lucide-react";
 import type { RunnerActivityTimelineRow as RunnerActivityTimelineRowData } from "@multica/core/types";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { cn } from "@multica/ui/lib/utils";
 import { useViewingTimezone } from "../../common/use-viewing-timezone";
@@ -143,13 +144,19 @@ function RunnerActivityTimelineItem({
           <span className="min-w-0 flex-1 text-[13.5px] font-semibold leading-snug text-foreground">
             {row.title}
           </span>
-          <time
-            className={cn(TIMESTAMP_CLASS, "pt-0.5")}
-            dateTime={row.occurred_at}
-            title={exactTime}
-          >
-            {formatRelativeTime(row.occurred_at)}
-          </time>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <time
+                  className={cn(TIMESTAMP_CLASS, "pt-0.5")}
+                  dateTime={row.occurred_at}
+                />
+              }
+            >
+              {formatRelativeTime(row.occurred_at)}
+            </TooltipTrigger>
+            <TooltipContent side="top">{exactTime}</TooltipContent>
+          </Tooltip>
         </div>
         {displayCommand ? (
           <>

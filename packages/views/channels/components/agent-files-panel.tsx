@@ -18,6 +18,7 @@ import { api } from "@multica/core/api";
 import { useAgentPresence } from "@multica/core/agents";
 import type { Agent, AgentFileContentResponse, MemberWithUser } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import {
   Dialog,
   DialogContent,
@@ -370,9 +371,12 @@ export function AgentFilesPanel({
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           {rootPath ? (
             <div className="flex min-w-0 items-center gap-1 border-b bg-muted/30 px-3 py-2">
-              <code className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground" title={rootPath}>
-                {rootPath}
-              </code>
+              <Tooltip>
+                <TooltipTrigger render={<code className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground" />}>
+                  {rootPath}
+                </TooltipTrigger>
+                <TooltipContent side="top">{rootPath}</TooltipContent>
+              </Tooltip>
               <Button type="button" variant="ghost" size="icon" aria-label={COPY_PATH_LABEL} onClick={() => void copyRootPath()} className="size-7 shrink-0">
                 <Copy className="size-3.5" aria-hidden />
               </Button>

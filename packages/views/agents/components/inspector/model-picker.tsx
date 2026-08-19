@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { runtimeModelsOptions } from "@multica/core/runtimes";
 import { Input } from "@multica/ui/components/ui/input";
 import {
@@ -87,12 +88,14 @@ export function ModelPicker({
 
   if (!canEdit) {
     return (
-      <span
-        className="min-w-0 truncate px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground"
-        title={triggerTitle}
-      >
-        {triggerLabel}
-      </span>
+      <Tooltip>
+        <TooltipTrigger
+          render={<span className="min-w-0 truncate px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground" />}
+        >
+          {triggerLabel}
+        </TooltipTrigger>
+        <TooltipContent side="top">{triggerTitle}</TooltipContent>
+      </Tooltip>
     );
   }
 
@@ -176,14 +179,20 @@ export function ModelPicker({
       )}
 
       {value && (
-        <button
-          type="button"
-          onClick={() => void select("")}
-          className="flex w-full items-center border-t px-3 py-2 text-left text-xs text-muted-foreground transition-colors hover:bg-accent/50"
-          title={t(($) => $.pickers.model_clear_title)}
-        >
-          {t(($) => $.pickers.model_clear)}
-        </button>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                onClick={() => void select("")}
+                className="flex w-full items-center border-t px-3 py-2 text-left text-xs text-muted-foreground transition-colors hover:bg-accent/50"
+              >
+                {t(($) => $.pickers.model_clear)}
+              </button>
+            }
+          />
+          <TooltipContent side="top">{t(($) => $.pickers.model_clear_title)}</TooltipContent>
+        </Tooltip>
       )}
     </PropertyPicker>
   );

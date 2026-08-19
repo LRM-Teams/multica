@@ -2,6 +2,7 @@
 
 import { useCallback, useRef, useState, type MouseEvent } from "react";
 import { Loader2, Pencil } from "lucide-react";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { useUpdateRuntime } from "@multica/core/runtimes/mutations";
 import { cn } from "@multica/ui/lib/utils";
@@ -122,16 +123,22 @@ export function MachineNameEditor({
 
   if (!editable) {
     return (
-      <span
-        className={cn(
-          "truncate text-sm font-medium",
-          isPlaceholder && "text-muted-foreground",
-          className,
-        )}
-        title={visibleName}
-      >
-        {visibleName}
-      </span>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <span
+              className={cn(
+                "truncate text-sm font-medium",
+                isPlaceholder && "text-muted-foreground",
+                className,
+              )}
+            />
+          }
+        >
+          {visibleName}
+        </TooltipTrigger>
+        <TooltipContent side="top">{visibleName}</TooltipContent>
+      </Tooltip>
     );
   }
 
@@ -180,19 +187,19 @@ export function MachineNameEditor({
   const editAria = t(($) => $.machine.rename_aria, { name: visibleName });
 
   return (
-    <button
-      type="button"
-      onClick={beginEdit}
-      disabled={saving}
-      aria-label={editAria}
-      title={t(($) => $.machine.rename_hint)}
-      className={cn(
-        "group/name inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-md text-left",
-        "hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-        variant === "title" ? "-ml-1 px-1 py-0.5" : "px-0.5 py-0.5",
-        className,
-      )}
-    >
+    <Tooltip>
+      <TooltipTrigger
+        type="button"
+        onClick={beginEdit}
+        disabled={saving}
+        aria-label={editAria}
+        className={cn(
+          "group/name inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-md text-left",
+          "hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          variant === "title" ? "-ml-1 px-1 py-0.5" : "px-0.5 py-0.5",
+          className,
+        )}
+      >
       <span
         className={cn(
           "truncate font-medium",
@@ -213,6 +220,10 @@ export function MachineNameEditor({
           aria-hidden
         />
       )}
-    </button>
+      </TooltipTrigger>
+      <TooltipContent side="top">
+        {t(($) => $.machine.rename_hint)}
+      </TooltipContent>
+    </Tooltip>
   );
 }

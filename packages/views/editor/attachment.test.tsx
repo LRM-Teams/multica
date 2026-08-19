@@ -243,9 +243,9 @@ describe("Attachment — image dispatch", () => {
     renderWithQuery(
       <Attachment attachment={{ kind: "record", attachment: att }} editable />,
     );
-    expect(screen.getByTitle("View")).toBeTruthy();
-    expect(screen.getByTitle("Download")).toBeTruthy();
-    expect(screen.getByTitle("Copy link")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "View" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Download" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Copy link" })).toBeTruthy();
   });
 
   it("editable image shows Trash button and wires onDelete", () => {
@@ -258,7 +258,7 @@ describe("Attachment — image dispatch", () => {
         onDelete={onDelete}
       />,
     );
-    const trash = screen.getByTitle("Delete");
+    const trash = screen.getByRole("button", { name: "Delete" });
     fireEvent.click(trash);
     expect(onDelete).toHaveBeenCalled();
   });
@@ -286,7 +286,7 @@ describe("Attachment — image dispatch", () => {
     // (MUL-3130 review). The raw stored url is the fallback for
     // unresolved markdown only.
     expect(img?.getAttribute("src")).toBe(att.download_url);
-    fireEvent.click(screen.getByTitle("Download"));
+    fireEvent.click(screen.getByRole("button", { name: "Download" }));
     expect(downloadMock).toHaveBeenCalledWith("att-1");
   });
 
@@ -353,7 +353,7 @@ describe("Attachment — image dispatch", () => {
     );
     const img = document.querySelector("img");
     expect(img?.getAttribute("src")).toBe("https://external.example/foo.png");
-    fireEvent.click(screen.getByTitle("Download"));
+    fireEvent.click(screen.getByRole("button", { name: "Download" }));
     expect(openByUrlMock).toHaveBeenCalledWith("https://external.example/foo.png");
     expect(downloadMock).not.toHaveBeenCalled();
   });
@@ -426,8 +426,8 @@ describe("Attachment — html dispatch", () => {
     renderWithQuery(<Attachment attachment={{ kind: "record", attachment: att }} />);
     // HtmlAttachmentPreview hides the filename row.
     expect(screen.queryByText("report.html")).toBeNull();
-    expect(screen.getByTitle("Preview")).toBeTruthy();
-    expect(screen.getByTitle("Download")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Preview" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Download" })).toBeTruthy();
   });
 
   it("url-only html (no resolver match) falls back to AttachmentCard chrome", () => {
@@ -467,7 +467,7 @@ describe("Attachment — html dispatch", () => {
     expect(screen.getByText("design-agent-card-dm.html")).toBeTruthy();
     expect(document.querySelector("iframe")).toBeNull();
     expect(screen.queryByTitle("Preview")).toBeNull();
-    expect(screen.getByTitle("Download")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Download" })).toBeTruthy();
   });
 
   it("inlineHtmlPreview=false file-card open routes to new tab (not modal)", () => {

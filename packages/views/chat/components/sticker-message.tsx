@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { cn } from "@multica/ui/lib/utils";
 
 /**
@@ -49,36 +50,46 @@ export function StickerMessage({ id, className }: StickerMessageProps) {
   if (failed) {
     const emoji = STICKER_FALLBACK_EMOJI[id];
     return (
-      <span
-        role="img"
-        aria-label={id}
-        title={id}
-        data-testid="sticker-fallback"
-        className={cn(
-          "inline-flex items-center gap-1.5 rounded-2xl bg-muted px-3 py-2 leading-none",
-          className,
-        )}
-      >
-        <span className="text-3xl">{emoji ?? "🖼️"}</span>
-        {!emoji && (
-          <span className="text-xs text-muted-foreground">{id}</span>
-        )}
-      </span>
+      <Tooltip>
+        <TooltipTrigger
+          role="img"
+          aria-label={id}
+          data-testid="sticker-fallback"
+          render={
+            <span
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-2xl bg-muted px-3 py-2 leading-none",
+                className,
+              )}
+            />
+          }
+        >
+          <span className="text-3xl">{emoji ?? "🖼️"}</span>
+          {!emoji && <span className="text-xs text-muted-foreground">{id}</span>}
+        </TooltipTrigger>
+        <TooltipContent side="top">{id}</TooltipContent>
+      </Tooltip>
     );
   }
 
   return (
-    <img
-      src={src}
-      alt={id}
-      title={id}
-      draggable={false}
-      data-testid="sticker-image"
-      onError={() => setFailed(true)}
-      className={cn(
-        "inline-block h-24 w-24 select-none object-contain",
-        className,
-      )}
-    />
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <img
+            src={src}
+            alt={id}
+            draggable={false}
+            data-testid="sticker-image"
+            onError={() => setFailed(true)}
+            className={cn(
+              "inline-block h-24 w-24 select-none object-contain",
+              className,
+            )}
+          />
+        }
+      />
+      <TooltipContent side="top">{id}</TooltipContent>
+    </Tooltip>
   );
 }

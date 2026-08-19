@@ -2,6 +2,7 @@
 
 import type { ResearchSession } from "@multica/core/types/research";
 import { useT } from "../../i18n/use-t";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import {
   activeResearchSessions,
   knownResearchAttentionKind,
@@ -41,7 +42,12 @@ export function ResearchHomeConstellationPreview({ sessions, selectedId }: { ses
       <div className="research-home-node research-home-node-main">
         <span className="w-[76px] min-w-0 overflow-hidden">
           <span className="block text-xs font-medium uppercase tracking-wide text-success">{t(($) => $.stage_short[stage as keyof typeof $.stage_short] ?? stage)}</span>
-          <span className="mt-1 hidden truncate text-xs font-medium text-foreground sm:block" title={focus?.title || focus?.goal}>{focus?.title || focus?.goal || t(($) => $.home_overview.constellation_empty)}</span>
+          <Tooltip>
+            <TooltipTrigger render={<span className="mt-1 hidden truncate text-xs font-medium text-foreground sm:block" />}>
+              {focus?.title || focus?.goal || t(($) => $.home_overview.constellation_empty)}
+            </TooltipTrigger>
+            <TooltipContent side="top">{focus?.title || focus?.goal}</TooltipContent>
+          </Tooltip>
           <span className="mt-1 block text-xs tabular-nums text-muted-foreground">{progress ? t(($) => $.home_overview.tasks, { done: progress.task_completed, total: progress.task_total }) : "—"}</span>
         </span>
       </div>

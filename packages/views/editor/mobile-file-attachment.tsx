@@ -11,6 +11,7 @@
 
 import * as React from "react";
 import { ChevronRight, ChevronLeft, FileWarning } from "lucide-react";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../i18n";
 import { HtmlPreviewBody } from "./html-preview-body";
@@ -175,15 +176,19 @@ export function MobileFileAttachment({
               {uploading ? "…" : badge}
             </span>
             <span className="min-w-0 flex-1">
-              <span
-                className="block truncate text-[13px] font-semibold leading-tight text-foreground"
-                title={filename}
-                data-testid="mobile-file-filename"
-              >
-                {uploading
-                  ? t(($) => $.file_card.uploading, { filename })
-                  : filename}
-              </span>
+              <Tooltip>
+                <TooltipTrigger
+                  data-testid="mobile-file-filename"
+                  render={
+                    <span className="block truncate text-[13px] font-semibold leading-tight text-foreground" />
+                  }
+                >
+                  {uploading
+                    ? t(($) => $.file_card.uploading, { filename })
+                    : filename}
+                </TooltipTrigger>
+                <TooltipContent side="top">{filename}</TooltipContent>
+              </Tooltip>
               {sub && !uploading && (
                 <span className="mt-0.5 block truncate text-[11px] leading-tight text-muted-foreground">
                   {sub}

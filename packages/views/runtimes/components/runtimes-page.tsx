@@ -56,6 +56,7 @@ import type {
 } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import {
   Collapsible,
   CollapsibleTrigger,
@@ -1306,31 +1307,43 @@ function ComputerIdValue({
 
   return (
     <span className="inline-flex min-w-0 max-w-full items-center justify-end gap-1.5">
-      <span
-        className="min-w-0 break-all text-right font-mono text-xs text-muted-foreground"
-        data-testid="machine-basics-computer-id"
-        title={id}
-      >
-        {id}
-      </span>
-      <button
-        type="button"
-        data-testid="machine-basics-computer-id-copy"
-        aria-label={copyAria}
-        title={copyAria}
-        className="inline-flex size-7 shrink-0 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        onClick={() => {
-          void copyText(id).then((ok) => {
-            if (ok) setCopied(true);
-          });
-        }}
-      >
-        {copied ? (
-          <Check className="size-3.5 text-success" aria-hidden />
-        ) : (
-          <Copy className="size-3.5" aria-hidden />
-        )}
-      </button>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <span
+              className="min-w-0 break-all text-right font-mono text-xs text-muted-foreground"
+              data-testid="machine-basics-computer-id"
+            />
+          }
+        >
+          {id}
+        </TooltipTrigger>
+        <TooltipContent side="top">{id}</TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <button
+              type="button"
+              data-testid="machine-basics-computer-id-copy"
+              aria-label={copyAria}
+              className="inline-flex size-7 shrink-0 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              onClick={() => {
+                void copyText(id).then((ok) => {
+                  if (ok) setCopied(true);
+                });
+              }}
+            />
+          }
+        >
+          {copied ? (
+            <Check className="size-3.5 text-success" aria-hidden />
+          ) : (
+            <Copy className="size-3.5" aria-hidden />
+          )}
+        </TooltipTrigger>
+        <TooltipContent side="top">{copyAria}</TooltipContent>
+      </Tooltip>
     </span>
   );
 }

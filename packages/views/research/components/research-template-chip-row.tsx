@@ -2,6 +2,7 @@
 
 import { Building2, Scale, Cpu } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { useT } from "../../i18n/use-t";
 import {
   RESEARCH_TEMPLATES,
@@ -54,25 +55,30 @@ export function ResearchTemplateChipRow({
         const blurb = localizeTemplateField(template.blurb, language);
         const selected = selectedId === template.id;
         return (
-          <button
-            key={template.id}
-            type="button"
-            role="radio"
-            aria-checked={selected}
-            title={blurb}
-            onClick={() => onToggle(template)}
-            data-testid={`research-template-chip-${template.id}`}
-            className={cn(
-              "inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium whitespace-nowrap transition-colors",
-              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30",
-              selected
-                ? "border-blue-400 bg-blue-50 text-blue-700 dark:border-blue-400/45 dark:bg-blue-400/[0.14] dark:text-blue-200"
-                : "border-border bg-muted/40 text-foreground/80 hover:border-blue-300 hover:bg-blue-50/60 hover:text-blue-700 dark:hover:border-blue-400/45 dark:hover:bg-blue-400/[0.10] dark:hover:text-blue-200",
-            )}
-          >
-            <Icon className="size-3 opacity-70" aria-hidden />
-            {title}
-          </button>
+          <Tooltip key={template.id}>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={selected}
+                  onClick={() => onToggle(template)}
+                  data-testid={`research-template-chip-${template.id}`}
+                  className={cn(
+                    "inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium whitespace-nowrap transition-colors",
+                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30",
+                    selected
+                      ? "border-blue-400 bg-blue-50 text-blue-700 dark:border-blue-400/45 dark:bg-blue-400/[0.14] dark:text-blue-200"
+                      : "border-border bg-muted/40 text-foreground/80 hover:border-blue-300 hover:bg-blue-50/60 hover:text-blue-700 dark:hover:border-blue-400/45 dark:hover:bg-blue-400/[0.10] dark:hover:text-blue-200",
+                  )}
+                >
+                  <Icon className="size-3 opacity-70" aria-hidden />
+                  {title}
+                </button>
+              }
+            />
+            <TooltipContent side="top">{blurb}</TooltipContent>
+          </Tooltip>
         );
       })}
     </div>

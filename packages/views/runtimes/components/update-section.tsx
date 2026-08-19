@@ -39,6 +39,7 @@ import type {
   RuntimeUpdateStatus,
 } from "@multica/core/types";
 import { useT } from "../../i18n/use-t";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { formatRuntimeUpdateError } from "./update-error";
 import { deriveUpdateStatus, isNewerCliVersion, useComputerUpgrade, useComputerUpgradeStore } from "@multica/core/runtimes";
 
@@ -295,22 +296,26 @@ export function UpdateSection({
         )}
 
         {isManaged ? (
-          <span
-            className="inline-flex items-center gap-1 text-xs text-muted-foreground"
-            title={t(($) => $.update.managed_by_desktop_title)}
-          >
-            {t(($) => $.update.managed_by_desktop)}
-          </span>
+          <Tooltip>
+            <TooltipTrigger
+              render={<span className="inline-flex items-center gap-1 text-xs text-muted-foreground" />}
+            >
+              {t(($) => $.update.managed_by_desktop)}
+            </TooltipTrigger>
+            <TooltipContent side="top">{t(($) => $.update.managed_by_desktop_title)}</TooltipContent>
+          </Tooltip>
         ) : isSandbox ? (
           // Task #8 (2026-07-31, Parker): a disabled state with a reason,
           // never a silently-missing button — the user shouldn't have to
           // guess whether this is broken or intentional.
-          <span
-            className="inline-flex items-center gap-1 text-xs text-muted-foreground"
-            title={t(($) => $.update.managed_by_sandbox_title)}
-          >
-            {t(($) => $.update.managed_by_sandbox)}
-          </span>
+          <Tooltip>
+            <TooltipTrigger
+              render={<span className="inline-flex items-center gap-1 text-xs text-muted-foreground" />}
+            >
+              {t(($) => $.update.managed_by_sandbox)}
+            </TooltipTrigger>
+            <TooltipContent side="top">{t(($) => $.update.managed_by_sandbox_title)}</TooltipContent>
+          </Tooltip>
         ) : (
           <>
             {!compact && hasUpdate && !derivedStatus && (
@@ -419,15 +424,24 @@ export function UpdateSection({
 
       {(derivedStatus === "failed" || derivedStatus === "timeout") && (
         <div className="rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2">
-          <p
-            className="text-xs text-destructive"
-            title={updateError ?? undefined}
-          >
-            {error ||
-              contractError ||
-              statusLabel ||
-              t(($) => $.update.unknown_error)}
-          </p>
+          {updateError ? (
+            <Tooltip>
+              <TooltipTrigger render={<p className="text-xs text-destructive" />}>
+                {error ||
+                  contractError ||
+                  statusLabel ||
+                  t(($) => $.update.unknown_error)}
+              </TooltipTrigger>
+              <TooltipContent side="top">{updateError}</TooltipContent>
+            </Tooltip>
+          ) : (
+            <p className="text-xs text-destructive">
+              {error ||
+                contractError ||
+                statusLabel ||
+                t(($) => $.update.unknown_error)}
+            </p>
+          )}
           {showRawReason && (
             <p className="mt-1 break-all text-[11px] leading-snug text-muted-foreground">
               {rawContractError}

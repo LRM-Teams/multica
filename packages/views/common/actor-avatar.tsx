@@ -8,6 +8,7 @@ import {
   HoverCardTrigger,
   HoverCardContent,
 } from "@multica/ui/components/ui/hover-card";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { useActorName } from "@multica/core/workspace/hooks";
 import { isDirectoryActorMiss } from "@multica/core/workspace/resolved-actor-name";
 import { useMemberOnline } from "@multica/core/workspace/use-member-presence";
@@ -448,12 +449,18 @@ function AgentStatusDotVisual({
     <span className="pointer-events-none absolute bottom-0.5 right-0.5 z-[1] inline-flex">
       {/* `ring-background` is a cut-out ring the color of the surface behind the
           dot, so it stays legible on dark/light/hover/selected backgrounds. */}
-      <span
-        aria-label={`Status: ${label}`}
-        title={label}
-        style={dotStyle}
-        className={`relative rounded-full ring-2 ring-background ${dotColorClass}`}
-      />
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <span
+              aria-label={`Status: ${label}`}
+              style={dotStyle}
+              className={`relative rounded-full ring-2 ring-background ${dotColorClass}`}
+            />
+          }
+        />
+        <TooltipContent side="top">{label}</TooltipContent>
+      </Tooltip>
     </span>
   );
 }
@@ -502,12 +509,18 @@ export function MemberStatusDot({ userId, size }: { userId: string; size?: numbe
   return (
     // Same 2px inset as AgentStatusDot — keep fill + ring inside the box (LRM-1119).
     <span className="pointer-events-none absolute bottom-0.5 right-0.5 z-[1] inline-flex">
-      <span
-        aria-label={`Status: ${label}`}
-        title={label}
-        style={dotStyle}
-        className={`relative rounded-full ring-2 ring-background ${dotColorClass}`}
-      />
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <span
+              aria-label={`Status: ${label}`}
+              style={dotStyle}
+              className={`relative rounded-full ring-2 ring-background ${dotColorClass}`}
+            />
+          }
+        />
+        <TooltipContent side="top">{label}</TooltipContent>
+      </Tooltip>
     </span>
   );
 }

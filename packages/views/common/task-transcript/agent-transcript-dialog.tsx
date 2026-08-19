@@ -22,6 +22,7 @@ import {
   ArrowUpNarrowWide,
 } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { Dialog, DialogContent, DialogTitle } from "@multica/ui/components/ui/dialog";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@multica/ui/components/ui/collapsible";
@@ -515,19 +516,15 @@ export function AgentTranscriptDialog({
                 truncates because real workdir paths are routinely long
                 enough to push every other chip off the row. */}
             {task.relative_work_dir && (
-              <button
-                type="button"
-                onClick={handleCopyWorkdir}
-                title={task.relative_work_dir}
-                className="inline-flex max-w-[16rem] items-center gap-1 rounded-md border bg-muted/50 px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-              >
-                {copiedWorkdir ? (
-                  <Check className="h-3 w-3 shrink-0 text-emerald-500" />
-                ) : (
-                  <Folder className="h-3 w-3 shrink-0" />
-                )}
-                <span className="truncate font-mono">{task.relative_work_dir}</span>
-              </button>
+              <Tooltip>
+                <TooltipTrigger
+                  render={<button type="button" onClick={handleCopyWorkdir} className="inline-flex max-w-[16rem] items-center gap-1 rounded-md border bg-muted/50 px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">{copiedWorkdir ? (
+                    <Check className="h-3 w-3 shrink-0 text-emerald-500" />
+                  ) : (
+                    <Folder className="h-3 w-3 shrink-0" />
+                  )}<span className="truncate font-mono">{task.relative_work_dir}</span></button>} />
+                <TooltipContent side="top">{task.relative_work_dir}</TooltipContent>
+              </Tooltip>
             )}
 
             {/* Created time */}
@@ -614,36 +611,26 @@ function SortDirectionToggle({ value, onChange, labels }: SortDirectionTogglePro
       aria-label={labels.ariaLabel}
       className="inline-flex items-center rounded border bg-muted/40 p-0.5 text-xs"
     >
-      <button
-        type="button"
-        aria-pressed={value === "chronological"}
-        title={labels.chronological}
-        onClick={() => onChange("chronological")}
-        className={cn(
-          "flex items-center gap-1 rounded px-1.5 py-0.5 transition-colors",
-          value === "chronological"
-            ? "bg-background text-foreground shadow-sm"
-            : "text-muted-foreground hover:text-foreground",
-        )}
-      >
-        <ArrowDownNarrowWide className="h-3 w-3" />
-        <span className="hidden sm:inline">{labels.chronological}</span>
-      </button>
-      <button
-        type="button"
-        aria-pressed={value === "newest_first"}
-        title={labels.newestFirst}
-        onClick={() => onChange("newest_first")}
-        className={cn(
-          "flex items-center gap-1 rounded px-1.5 py-0.5 transition-colors",
-          value === "newest_first"
-            ? "bg-background text-foreground shadow-sm"
-            : "text-muted-foreground hover:text-foreground",
-        )}
-      >
-        <ArrowUpNarrowWide className="h-3 w-3" />
-        <span className="hidden sm:inline">{labels.newestFirst}</span>
-      </button>
+      <Tooltip>
+        <TooltipTrigger
+          render={<button type="button" aria-pressed={value === "chronological"} onClick={() => onChange("chronological")} className={cn(
+            "flex items-center gap-1 rounded px-1.5 py-0.5 transition-colors",
+            value === "chronological"
+              ? "bg-background text-foreground shadow-sm"
+              : "text-muted-foreground hover:text-foreground",
+          )}><ArrowDownNarrowWide className="h-3 w-3" /><span className="hidden sm:inline">{labels.chronological}</span></button>} />
+        <TooltipContent side="top">{labels.chronological}</TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger
+          render={<button type="button" aria-pressed={value === "newest_first"} onClick={() => onChange("newest_first")} className={cn(
+            "flex items-center gap-1 rounded px-1.5 py-0.5 transition-colors",
+            value === "newest_first"
+              ? "bg-background text-foreground shadow-sm"
+              : "text-muted-foreground hover:text-foreground",
+          )}><ArrowUpNarrowWide className="h-3 w-3" /><span className="hidden sm:inline">{labels.newestFirst}</span></button>} />
+        <TooltipContent side="top">{labels.newestFirst}</TooltipContent>
+      </Tooltip>
     </div>
   );
 }
@@ -708,25 +695,27 @@ function TimelineBar({
         const widthPercent = (seg.count / items.length) * 100;
 
         return (
-          <button
-            type="button"
-            key={seg.startIdx}
-            className={cn(
-              "h-full transition-all duration-150 hover:opacity-80 relative group",
-              isSelected ? color.bgActive : color.bg,
-              "min-w-[4px]",
-            )}
-            style={{ width: `${Math.max(widthPercent, 0.5)}%` }}
-            onClick={() => onSegmentClick(items[seg.startIdx]!.seq)}
-            title={`${getEventLabel(items[seg.startIdx]!)}${seg.count > 1 ? ` (+${seg.count - 1} more)` : ""}`}
-          >
-            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 hidden group-hover:block z-10 pointer-events-none">
-              <div className="rounded bg-popover border px-2 py-1 text-[10px] text-popover-foreground shadow-md whitespace-nowrap">
-                {getEventLabel(items[seg.startIdx]!)}
-                {seg.count > 1 && <span className="text-muted-foreground ml-1">+{seg.count - 1}</span>}
-              </div>
-            </div>
-          </button>
+          <Tooltip key={seg.startIdx}>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  className={cn(
+                    "h-full transition-all duration-150 hover:opacity-80 relative group",
+                    isSelected ? color.bgActive : color.bg,
+                    "min-w-[4px]",
+                  )}
+                  style={{ width: `${Math.max(widthPercent, 0.5)}%` }}
+                  onClick={() => onSegmentClick(items[seg.startIdx]!.seq)}
+                  aria-label={`${getEventLabel(items[seg.startIdx]!)}${seg.count > 1 ? ` (+${seg.count - 1} more)` : ""}`}
+                />
+              }
+            />
+            <TooltipContent side="top">
+              {getEventLabel(items[seg.startIdx]!)}
+              {seg.count > 1 && <span className="text-muted-foreground ml-1">+{seg.count - 1}</span>}
+            </TooltipContent>
+          </Tooltip>
         );
       })}
     </div>
@@ -812,13 +801,16 @@ const TranscriptEventRow = ({
 
           {/* Timestamp */}
           {date && (
-            <span className="shrink-0 text-[10px] text-muted-foreground/50 tabular-nums mt-1" title={date.toLocaleString()}>
-              {date.toLocaleTimeString(undefined, {
-                hour: "2-digit",
-                minute: "2-digit",
-                second: "2-digit",
-              })}
-            </span>
+            <Tooltip>
+              <TooltipTrigger render={<span className="shrink-0 text-[10px] text-muted-foreground/50 tabular-nums mt-1" />}>
+                {date.toLocaleTimeString(undefined, {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                  second: "2-digit",
+                })}
+              </TooltipTrigger>
+              <TooltipContent side="top">{date.toLocaleString()}</TooltipContent>
+            </Tooltip>
           )}
         </div>
 

@@ -62,6 +62,7 @@ import type {
 } from "@multica/core/types";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Button, buttonVariants } from "@multica/ui/components/ui/button";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { Checkbox } from "@multica/ui/components/ui/checkbox";
 import {
   Card,
@@ -1459,7 +1460,7 @@ function EvolutionTrendCard({ dailyMetrics }: { dailyMetrics: EvolutionDailyMetr
         <div className="flex h-36 items-end gap-1 rounded-2xl border bg-muted/20 p-3">
           {recent.length === 0 ? <EmptyState text={copy("noTrendData")} /> : recent.map((item) => {
             const total = item.memory_candidates + item.skill_candidates + item.promoted_memory + item.promoted_skill + (item.team_knowledge_items ?? 0);
-            return <div key={item.date} className="flex min-w-0 flex-1 flex-col items-center gap-1"><div className="w-full rounded-t bg-brand/70" style={{ height: `${Math.max(4, (total / maxValue) * 110)}px` }} title={`${item.date}: ${total}`} /><div className="w-full truncate text-center text-[10px] text-muted-foreground">{item.date.slice(5)}</div></div>;
+            return <div key={item.date} className="flex min-w-0 flex-1 flex-col items-center gap-1"><Tooltip><TooltipTrigger render={<div className="w-full rounded-t bg-brand/70" style={{ height: `${Math.max(4, (total / maxValue) * 110)}px` }} />} /><TooltipContent side="top">{`${item.date}: ${total}`}</TooltipContent></Tooltip><div className="w-full truncate text-center text-[10px] text-muted-foreground">{item.date.slice(5)}</div></div>;
           })}
         </div>
       </CardContent>

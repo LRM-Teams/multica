@@ -699,7 +699,10 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
                     className="inline-flex min-w-0 items-center gap-1.5 text-xs transition-colors hover:text-foreground"
                   >
                     <Hash className="size-3 shrink-0 text-muted-foreground" />
-                    <span className="min-w-0 truncate" title={ch.name}>{ch.name}</span>
+                    <Tooltip>
+                      <TooltipTrigger render={<span className="min-w-0 truncate" />}>{ch.name}</TooltipTrigger>
+                      <TooltipContent side="top">{ch.name}</TooltipContent>
+                    </Tooltip>
                   </AppLink>
                 ))}
               </div>

@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { DialogTitle } from "@multica/ui/components/ui/dialog";
 import { Button } from "@multica/ui/components/ui/button";
 import { Switch } from "@multica/ui/components/ui/switch";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { api, ApiError } from "@multica/core/api";
 import {
   matchesActorIdentitySearch,
@@ -403,29 +404,38 @@ export function AgentCreatePanel({
             <ChevronRight className="size-3 text-muted-foreground/50" />
             <span className="font-medium">{t(($) => $.create_issue.agent_breadcrumb)}</span>
           </div>
-          {/* Native `title` instead of Base UI Tooltip — Tooltip opens on
-              keyboard focus, and the dialog's focus trap briefly lands focus
-              on the first focusable element on mount, causing the tooltip to
-              auto-pop every open. Same workaround applies to expand. */}
+          {/* Icon-only header actions get aria-labels and a Tooltip affordance. */}
           <div className="flex items-center gap-1">
-            <button
-              type="button"
-              onClick={() => setIsExpanded(!isExpanded)}
-              title={isExpanded ? t(($) => $.common.collapse_tooltip) : t(($) => $.common.expand_tooltip)}
-              aria-label={isExpanded ? t(($) => $.common.collapse_tooltip) : t(($) => $.common.expand_tooltip)}
-              className="rounded-sm p-1.5 opacity-70 hover:opacity-100 hover:bg-accent/60 transition-all cursor-pointer"
-            >
-              {isExpanded ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
-            </button>
-            <button
-              type="button"
-              onClick={onClose}
-              title={t(($) => $.common.close)}
-              aria-label={t(($) => $.common.close)}
-              className="rounded-sm p-1.5 opacity-70 hover:opacity-100 hover:bg-accent/60 transition-all cursor-pointer"
-            >
-              <XIcon className="size-4" />
-            </button>
+            <Tooltip>
+              <TooltipTrigger
+                type="button"
+                onClick={() => setIsExpanded(!isExpanded)}
+                aria-label={
+                  isExpanded
+                    ? t(($) => $.common.collapse_tooltip)
+                    : t(($) => $.common.expand_tooltip)
+                }
+                className="rounded-sm p-1.5 opacity-70 hover:opacity-100 hover:bg-accent/60 transition-all cursor-pointer"
+              >
+                {isExpanded ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
+              </TooltipTrigger>
+              <TooltipContent side="top">
+                {isExpanded
+                  ? t(($) => $.common.collapse_tooltip)
+                  : t(($) => $.common.expand_tooltip)}
+              </TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger
+                type="button"
+                onClick={onClose}
+                aria-label={t(($) => $.common.close)}
+                className="rounded-sm p-1.5 opacity-70 hover:opacity-100 hover:bg-accent/60 transition-all cursor-pointer"
+              >
+                <XIcon className="size-4" />
+              </TooltipTrigger>
+              <TooltipContent side="top">{t(($) => $.common.close)}</TooltipContent>
+            </Tooltip>
           </div>
         </div>
 
@@ -506,17 +516,25 @@ export function AgentCreatePanel({
             align="start"
           />
           {parentIssueId && (
-            <span
-              data-testid="agent-sub-issue-chip"
-              className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground"
-              title={t(($) => $.create_issue.agent.sub_issue_of, {
-                identifier: parentIssueIdentifier ?? "",
-              })}
-            >
-              {t(($) => $.create_issue.agent.sub_issue_of, {
-                identifier: parentIssueIdentifier ?? "",
-              })}
-            </span>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <span
+                    data-testid="agent-sub-issue-chip"
+                    className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground"
+                  />
+                }
+              >
+                {t(($) => $.create_issue.agent.sub_issue_of, {
+                  identifier: parentIssueIdentifier ?? "",
+                })}
+              </TooltipTrigger>
+              <TooltipContent side="top">
+                {t(($) => $.create_issue.agent.sub_issue_of, {
+                  identifier: parentIssueIdentifier ?? "",
+                })}
+              </TooltipContent>
+            </Tooltip>
           )}
         </div>
 
@@ -535,15 +553,19 @@ export function AgentCreatePanel({
             )}
           </div>
           <div className="flex flex-wrap items-center justify-end gap-2">
-            <button
-              type="button"
-              onClick={switchToManual}
-              title={t(($) => $.create_issue.switch_to_manual_tooltip)}
-              className="flex shrink-0 items-center gap-1.5 text-xs px-2 py-1 rounded-sm text-muted-foreground hover:text-foreground hover:bg-accent/60 transition-colors cursor-pointer"
-            >
-              <ArrowLeftRight className="size-3.5" />
-              {t(($) => $.create_issue.switch_to_manual)}
-            </button>
+            <Tooltip>
+              <TooltipTrigger
+                type="button"
+                onClick={switchToManual}
+                className="flex shrink-0 items-center gap-1.5 text-xs px-2 py-1 rounded-sm text-muted-foreground hover:text-foreground hover:bg-accent/60 transition-colors cursor-pointer"
+              >
+                <ArrowLeftRight className="size-3.5" />
+                {t(($) => $.create_issue.switch_to_manual)}
+              </TooltipTrigger>
+              <TooltipContent side="top">
+                {t(($) => $.create_issue.switch_to_manual_tooltip)}
+              </TooltipContent>
+            </Tooltip>
             <label className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground cursor-pointer select-none">
               <Switch
                 size="sm"

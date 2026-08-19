@@ -29,6 +29,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@multica/ui/components/ui/dropdown-menu";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { useT } from "../i18n";
 import {
   deleteColumnAt,
@@ -469,73 +470,89 @@ export function TableControls({ editor, rootRef }: { editor: Editor; rootRef: Re
         className="pointer-events-auto absolute flex items-center gap-1"
         style={{ left: Math.max(0, tableLeft - 2), top: Math.max(0, tableTop - 26) }}
       >
-        <button
-          type="button"
-          className={cn(
-            "flex size-5 items-center justify-center rounded-md text-muted-foreground/40",
-            "hover:bg-muted hover:text-muted-foreground",
-            activeTable.selected && "bg-muted text-foreground",
-          )}
-          title={t(($) => $.table_controls.select_table)}
-          aria-label={t(($) => $.table_controls.select_table)}
-          onMouseDown={(event) => event.preventDefault()}
-          onClick={() => {
-            setOpenMenu(null);
-            const tr = editor.state.tr.setSelection(NodeSelection.create(editor.state.doc, activeTable.pos));
-            editor.view.dispatch(tr);
-            editor.view.focus();
-          }}
-        >
-          <span className="grid grid-cols-2 gap-0.5" aria-hidden>
-            <span className="size-1 rounded-[1px] bg-current opacity-70" />
-            <span className="size-1 rounded-[1px] bg-current opacity-70" />
-            <span className="size-1 rounded-[1px] bg-current opacity-70" />
-            <span className="size-1 rounded-[1px] bg-current opacity-70" />
-          </span>
-        </button>
-        {activeTable.selected && (
-          <button
+        <Tooltip>
+          <TooltipTrigger
             type="button"
-            className="flex size-5 items-center justify-center rounded-md text-muted-foreground/50 hover:bg-muted hover:text-destructive"
-            title={t(($) => $.table_controls.delete_table)}
-            aria-label={t(($) => $.table_controls.delete_table)}
+            className={cn(
+              "flex size-5 items-center justify-center rounded-md text-muted-foreground/40",
+              "hover:bg-muted hover:text-muted-foreground",
+              activeTable.selected && "bg-muted text-foreground",
+            )}
+            aria-label={t(($) => $.table_controls.select_table)}
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => {
-              // TipTap deleteTable() walks cell ancestors and fails when the
-              // table itself is NodeSelected — delete by position instead.
-              const tablePos = activeTable.pos;
               setOpenMenu(null);
-              deleteTableAt(editor, tablePos);
+              const tr = editor.state.tr.setSelection(NodeSelection.create(editor.state.doc, activeTable.pos));
+              editor.view.dispatch(tr);
+              editor.view.focus();
             }}
           >
-            <Trash2 className="size-3.5" />
-          </button>
+            <span className="grid grid-cols-2 gap-0.5" aria-hidden>
+              <span className="size-1 rounded-[1px] bg-current opacity-70" />
+              <span className="size-1 rounded-[1px] bg-current opacity-70" />
+              <span className="size-1 rounded-[1px] bg-current opacity-70" />
+              <span className="size-1 rounded-[1px] bg-current opacity-70" />
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="top">
+            {t(($) => $.table_controls.select_table)}
+          </TooltipContent>
+        </Tooltip>
+        {activeTable.selected && (
+          <Tooltip>
+            <TooltipTrigger
+              type="button"
+              className="flex size-5 items-center justify-center rounded-md text-muted-foreground/50 hover:bg-muted hover:text-destructive"
+              aria-label={t(($) => $.table_controls.delete_table)}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => {
+                // TipTap deleteTable() walks cell ancestors and fails when the
+                // table itself is NodeSelected — delete by position instead.
+                const tablePos = activeTable.pos;
+                setOpenMenu(null);
+                deleteTableAt(editor, tablePos);
+              }}
+            >
+              <Trash2 className="size-3.5" />
+            </TooltipTrigger>
+            <TooltipContent side="top">
+              {t(($) => $.table_controls.delete_table)}
+            </TooltipContent>
+          </Tooltip>
         )}
       </div>
 
-      <button
-        type="button"
-        className={cn("pointer-events-auto absolute", edgeAddClass())}
-        style={addColumnStyle}
-        title={t(($) => $.table_controls.add_column)}
-        aria-label={t(($) => $.table_controls.add_column)}
-        onMouseDown={(event) => event.preventDefault()}
-        onClick={() => insertColumnAt(editor, activeTable.pos, activeTable.cols)}
-      >
-        <Plus className="size-3.5" />
-      </button>
+      <Tooltip>
+        <TooltipTrigger
+          type="button"
+          className={cn("pointer-events-auto absolute", edgeAddClass())}
+          style={addColumnStyle}
+          aria-label={t(($) => $.table_controls.add_column)}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => insertColumnAt(editor, activeTable.pos, activeTable.cols)}
+        >
+          <Plus className="size-3.5" />
+        </TooltipTrigger>
+        <TooltipContent side="top">
+          {t(($) => $.table_controls.add_column)}
+        </TooltipContent>
+      </Tooltip>
 
-      <button
-        type="button"
-        className={cn("pointer-events-auto absolute", edgeAddClass())}
-        style={addRowStyle}
-        title={t(($) => $.table_controls.add_row)}
-        aria-label={t(($) => $.table_controls.add_row)}
-        onMouseDown={(event) => event.preventDefault()}
-        onClick={() => insertRowAt(editor, activeTable.pos, activeTable.rows)}
-      >
-        <Plus className="size-3.5" />
-      </button>
+      <Tooltip>
+        <TooltipTrigger
+          type="button"
+          className={cn("pointer-events-auto absolute", edgeAddClass())}
+          style={addRowStyle}
+          aria-label={t(($) => $.table_controls.add_row)}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => insertRowAt(editor, activeTable.pos, activeTable.rows)}
+        >
+          <Plus className="size-3.5" />
+        </TooltipTrigger>
+        <TooltipContent side="top">
+          {t(($) => $.table_controls.add_row)}
+        </TooltipContent>
+      </Tooltip>
 
       {activeTable.colRects.map((rect, col) => {
         if (!colVisible(rect)) return null;

@@ -18,6 +18,7 @@ import type {
 } from "@multica/core/types/research-v6";
 import { FileText } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { classifyNodeFamily, type NodeKindFamily } from "./node-kind-registry";
 import { NodeCardShell, type NodeCardZoom } from "./node-card-shell";
 import { GenericNodeCard } from "./generic-node-card";
@@ -165,15 +166,22 @@ function renderMeta(
 function NodeEvidenceCount({ detail }: { detail: unknown }) {
   const count = evidenceCountOf(detail);
   if (count === null) return null;
+  const title = count === 0 ? "无证据" : `${count} 条证据`;
   return (
-    <span
-      data-testid="node-evidence-count"
-      className={cn("flex items-center gap-1 text-muted-foreground", count === 0 && "opacity-60")}
-      title={count === 0 ? "无证据" : `${count} 条证据`}
-    >
-      <FileText className="h-3 w-3" />
-      {count}
-    </span>
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span
+            data-testid="node-evidence-count"
+            className={cn("flex items-center gap-1 text-muted-foreground", count === 0 && "opacity-60")}
+          />
+        }
+      >
+        <FileText className="h-3 w-3" />
+        {count}
+      </TooltipTrigger>
+      <TooltipContent side="top">{title}</TooltipContent>
+    </Tooltip>
   );
 }
 

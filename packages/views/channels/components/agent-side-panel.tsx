@@ -34,6 +34,7 @@ import {
 import { dashboardUsageByAgentOptions } from "@multica/core/dashboard/queries";
 import { useCustomPricingStore } from "@multica/core/runtimes/custom-pricing-store";
 import { cn } from "@multica/ui/lib/utils";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { AgentHonorPanelSection } from "../../agents/components/agent-honor-panel-section";
 import { AgentActivityStatus } from "../../agents/components/agent-activity-list-item";
 import { ActivityTab } from "../../agents/components/tabs/activity-tab";
@@ -498,13 +499,19 @@ function AgentProfileTabContent({
               ) : null}
             </div>
             <span className="text-muted-foreground">{t(($) => $.side_panel.created_label)}</span>
-            <span className="truncate" title={formatDate(agent.created_at)}>
-              {formatDate(agent.created_at)}
-            </span>
+            <Tooltip>
+              <TooltipTrigger render={<span className="truncate" />}>
+                {formatDate(agent.created_at)}
+              </TooltipTrigger>
+              <TooltipContent side="top">{formatDate(agent.created_at)}</TooltipContent>
+            </Tooltip>
             <span className="text-muted-foreground">{t(($) => $.side_panel.owner_label)}</span>
-            <span className="truncate" title={ownerName(agent, members)}>
-              {ownerName(agent, members)}
-            </span>
+            <Tooltip>
+              <TooltipTrigger render={<span className="truncate" />}>
+                {ownerName(agent, members)}
+              </TooltipTrigger>
+              <TooltipContent side="top">{ownerName(agent, members)}</TooltipContent>
+            </Tooltip>
           </div>
         </div>
 

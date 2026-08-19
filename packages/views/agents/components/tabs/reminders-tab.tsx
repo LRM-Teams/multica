@@ -18,6 +18,7 @@ import {
   type ReminderCadence,
 } from "@multica/core/agents/reminder-view-model";
 import { Button } from "@multica/ui/components/ui/button";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { useT } from "../../../i18n";
 import { AppLink } from "../../../navigation/app-link";
 import { useOptionalNavigation } from "../../../navigation/context";
@@ -280,13 +281,15 @@ function AnchorLink({ anchor }: { anchor: ReminderDefinitionRow["anchor"] }) {
     </>
   );
   return navigation ? (
-    <AppLink href={anchor.href} className={className} title={anchor.label}>
-      {body}
-    </AppLink>
+    <Tooltip>
+      <TooltipTrigger render={<AppLink href={anchor.href} className={className}>{body}</AppLink>} />
+      <TooltipContent side="top">{anchor.label}</TooltipContent>
+    </Tooltip>
   ) : (
-    <a href={anchor.href} className={className} title={anchor.label}>
-      {body}
-    </a>
+    <Tooltip>
+      <TooltipTrigger render={<a href={anchor.href} className={className}>{body}</a>} />
+      <TooltipContent side="top">{anchor.label}</TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -376,9 +379,12 @@ function UpcomingRowView({ row }: { row: ReminderDefinitionRow }) {
     <li className="flex flex-col gap-1.5 px-3 py-3 text-xs md:px-4">
       <div className="flex items-start justify-between gap-2">
         <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-          <p className="min-w-0 whitespace-pre-wrap font-medium text-foreground" title={row.title}>
-            {row.title}
-          </p>
+          <Tooltip>
+            <TooltipTrigger render={<p className="min-w-0 whitespace-pre-wrap font-medium text-foreground" />}>
+              {row.title}
+            </TooltipTrigger>
+            <TooltipContent side="top">{row.title}</TooltipContent>
+          </Tooltip>
         </div>
         <StatusBadge status={displayStatus} />
       </div>
@@ -396,9 +402,12 @@ function HistoryRowView({ row }: { row: FiredReminderRow }) {
   return (
     <li className="flex flex-col gap-1.5 px-3 py-3 text-xs md:px-4">
       <div className="flex items-start justify-between gap-2">
-        <p className="min-w-0 whitespace-pre-wrap font-medium text-foreground" title={row.title}>
-          {row.title}
-        </p>
+        <Tooltip>
+          <TooltipTrigger render={<p className="min-w-0 whitespace-pre-wrap font-medium text-foreground" />}>
+            {row.title}
+          </TooltipTrigger>
+          <TooltipContent side="top">{row.title}</TooltipContent>
+        </Tooltip>
         <span className="inline-flex shrink-0 rounded-md border border-border px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
           {t(($) => $.reminders.status_fired)}
         </span>

@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
 import { copyText } from "@multica/ui/lib/clipboard";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -180,7 +181,6 @@ function CodeBlockToolbar({
                 type="button"
                 data-testid="code-block-mermaid-view"
                 className={iconButtonClass}
-                title={t(($) => $.code_block.mermaid_view)}
                 aria-label={t(($) => $.code_block.mermaid_view)}
               />
             }
@@ -205,71 +205,95 @@ function CodeBlockToolbar({
       )}
 
       {isMermaid && (
-        <button
-          type="button"
-          data-testid="code-block-mermaid-zoom"
-          onClick={onZoom}
-          disabled={!mermaidActionsEnabled}
-          className={cn(iconButtonClass, "disabled:pointer-events-none disabled:opacity-40")}
-          title={t(($) => $.code_block.fullscreen)}
-          aria-label={t(($) => $.code_block.fullscreen)}
-        >
-          <ZoomIn className="h-3.5 w-3.5" />
-        </button>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                data-testid="code-block-mermaid-zoom"
+                onClick={onZoom}
+                disabled={!mermaidActionsEnabled}
+                className={cn(iconButtonClass, "disabled:pointer-events-none disabled:opacity-40")}
+                aria-label={t(($) => $.code_block.fullscreen)}
+              />
+            }
+          >
+            <ZoomIn className="h-3.5 w-3.5" />
+          </TooltipTrigger>
+          <TooltipContent side="top">{t(($) => $.code_block.fullscreen)}</TooltipContent>
+        </Tooltip>
       )}
 
       {isMermaid && (
-        <button
-          type="button"
-          data-testid="code-block-mermaid-download"
-          onClick={onDownload}
-          disabled={!mermaidActionsEnabled}
-          className={cn(iconButtonClass, "disabled:pointer-events-none disabled:opacity-40")}
-          title={t(($) => $.code_block.download_diagram)}
-          aria-label={t(($) => $.code_block.download_diagram)}
-        >
-          <Download className="h-3.5 w-3.5" />
-        </button>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                data-testid="code-block-mermaid-download"
+                onClick={onDownload}
+                disabled={!mermaidActionsEnabled}
+                className={cn(iconButtonClass, "disabled:pointer-events-none disabled:opacity-40")}
+                aria-label={t(($) => $.code_block.download_diagram)}
+              />
+            }
+          >
+            <Download className="h-3.5 w-3.5" />
+          </TooltipTrigger>
+          <TooltipContent side="top">{t(($) => $.code_block.download_diagram)}</TooltipContent>
+        </Tooltip>
       )}
 
       {isHtml && (
-        <button
-          type="button"
-          onClick={onToggleHtmlView}
-          className={iconButtonClass}
-          title={
-            htmlView === "preview"
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                onClick={onToggleHtmlView}
+                className={iconButtonClass}
+                aria-label={
+                  htmlView === "preview"
+                    ? t(($) => $.code_block.show_source)
+                    : t(($) => $.code_block.show_preview)
+                }
+              />
+            }
+          >
+            {htmlView === "preview" ? (
+              <CodeIcon className="h-3.5 w-3.5" />
+            ) : (
+              <Eye className="h-3.5 w-3.5" />
+            )}
+          </TooltipTrigger>
+          <TooltipContent side="top">
+            {htmlView === "preview"
               ? t(($) => $.code_block.show_source)
-              : t(($) => $.code_block.show_preview)
-          }
-          aria-label={
-            htmlView === "preview"
-              ? t(($) => $.code_block.show_source)
-              : t(($) => $.code_block.show_preview)
-          }
-        >
-          {htmlView === "preview" ? (
-            <CodeIcon className="h-3.5 w-3.5" />
-          ) : (
-            <Eye className="h-3.5 w-3.5" />
-          )}
-        </button>
+              : t(($) => $.code_block.show_preview)}
+          </TooltipContent>
+        </Tooltip>
       )}
 
-      <button
-        type="button"
-        data-testid="code-block-copy"
-        onClick={onCopy}
-        className={iconButtonClass}
-        title={t(($) => $.code_block.copy_code)}
-        aria-label={t(($) => $.code_block.copy_code)}
-      >
-        {copied ? (
-          <Check className="h-3.5 w-3.5" />
-        ) : (
-          <Copy className="h-3.5 w-3.5" />
-        )}
-      </button>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <button
+              type="button"
+              data-testid="code-block-copy"
+              onClick={onCopy}
+              className={iconButtonClass}
+              aria-label={t(($) => $.code_block.copy_code)}
+            />
+          }
+        >
+          {copied ? (
+            <Check className="h-3.5 w-3.5" />
+          ) : (
+            <Copy className="h-3.5 w-3.5" />
+          )}
+        </TooltipTrigger>
+        <TooltipContent side="top">{t(($) => $.code_block.copy_code)}</TooltipContent>
+      </Tooltip>
 
       <DropdownMenu onOpenChange={onMenuOpenChange}>
         <DropdownMenuTrigger
@@ -377,20 +401,26 @@ function CodeBlockView({ node, updateAttributes, deleteNode, editor, getPos }: N
           isMermaid && mermaidView === "diagram" && !hasMermaidChart && "code-block-frame-mermaid-diagram-only",
         )}
       >
-        <button
-          type="button"
-          data-testid="code-block-select"
-          className="absolute left-2 top-2 z-10 flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-background hover:text-foreground group-hover/code:opacity-100 focus-visible:opacity-100"
-          onMouseDown={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            selectCodeBlock();
-          }}
-          aria-label={t(($) => $.code_block.select_block)}
-          title={t(($) => $.code_block.select_block)}
-        >
-          <GripVertical className="h-3.5 w-3.5" />
-        </button>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                data-testid="code-block-select"
+                className="absolute left-2 top-2 z-10 flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-background hover:text-foreground group-hover/code:opacity-100 focus-visible:opacity-100"
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  selectCodeBlock();
+                }}
+                aria-label={t(($) => $.code_block.select_block)}
+              />
+            }
+          >
+            <GripVertical className="h-3.5 w-3.5" />
+          </TooltipTrigger>
+          <TooltipContent side="top">{t(($) => $.code_block.select_block)}</TooltipContent>
+        </Tooltip>
         {showMermaidDiagram && (
           <div
             contentEditable={false}

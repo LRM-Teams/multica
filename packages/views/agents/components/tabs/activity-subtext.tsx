@@ -10,6 +10,7 @@ import { channelsOptions } from "@multica/core/channels/queries";
 import type { Channel } from "@multica/core/types";
 import { useOptionalNavigation } from "../../../navigation/context";
 import { AppLink } from "../../../navigation/app-link";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import {
   parseActivitySubtext,
   resolveActivityHandleHref,
@@ -79,12 +80,14 @@ function ActivityHandle({
   }
   const className = `${HANDLE_CLASS} text-primary hover:underline`;
   return navigation ? (
-    <AppLink href={href} className={className} title={handle}>
-      {handle}
-    </AppLink>
+    <Tooltip>
+      <TooltipTrigger render={<AppLink href={href} className={className}>{handle}</AppLink>} />
+      <TooltipContent side="top">{handle}</TooltipContent>
+    </Tooltip>
   ) : (
-    <a href={href} className={className} title={handle}>
-      {handle}
-    </a>
+    <Tooltip>
+      <TooltipTrigger render={<a href={href} className={className}>{handle}</a>} />
+      <TooltipContent side="top">{handle}</TooltipContent>
+    </Tooltip>
   );
 }

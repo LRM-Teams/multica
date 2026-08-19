@@ -59,6 +59,7 @@ func (h *Handler) ListRunnerActivitySummaries(w http.ResponseWriter, r *http.Req
 	}
 	defer rows.Close()
 
+	inFlight := h.workspaceInFlightInboxAgentIDs(r.Context(), workspaceID)
 	response := RunnerActivitySummariesResponse{Items: []RunnerActivitySummaryResponseItem{}}
 	for rows.Next() {
 		var agentID pgtype.UUID
@@ -75,6 +76,9 @@ func (h *Handler) ListRunnerActivitySummaries(w http.ResponseWriter, r *http.Req
 		summary := activityprojection.ProjectSummary(snapshot)
 		if errorText.Valid {
 			summary = runnerActivitySummaryWithError(summary, errorText.String)
+		}
+		if _, busy := inFlight[util.UUIDToString(agentID)]; busy {
+			summary = overlayInFlightInboxOnIdleRunnerSummary(summary)
 		}
 		response.Items = append(response.Items, RunnerActivitySummaryResponseItem{
 			AgentID: util.UUIDToString(agentID),

@@ -176,7 +176,17 @@ func (runner *WorkspaceRunner) publishManagedAgentInactive(payload protocol.Work
 }
 
 func (runner *WorkspaceRunner) observeResidentMessageRuntime(agentID, runtimeID string, message agent.Message) {
-	if message.SessionID != "" {
+	poisoned := message.Type == agent.MessageError
+	if poisoned {
+		if _, ok := classifyPoisonedError(message.Content); !ok {
+			poisoned = false
+		}
+	}
+	if poisoned {
+		if runner.recordProviderSession != nil {
+			runner.recordProviderSession(agentID, runtimeID, "")
+		}
+	} else if message.SessionID != "" {
 		if runner.recordProviderSession != nil {
 			runner.recordProviderSession(agentID, runtimeID, message.SessionID)
 		}

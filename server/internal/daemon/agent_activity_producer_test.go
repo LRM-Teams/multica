@@ -814,6 +814,35 @@ func TestIdleMessageAcceptanceFailurePublishesVisibleErrorActivity(t *testing.T)
 	}
 }
 
+func TestObserveResidentMessageRuntimeClearsPoisonedPiSession(t *testing.T) {
+	sessions := map[string]string{}
+	runner := &WorkspaceRunner{
+		recordProviderSession: func(agentID, runtimeID, sessionID string) {
+			key := agentID + "/" + runtimeID
+			if sessionID == "" {
+				delete(sessions, key)
+				return
+			}
+			sessions[key] = sessionID
+		},
+	}
+	runner.observeResidentMessageRuntime("agent-a", "runtime-1", agent.Message{
+		Type:      agent.MessageStatus,
+		SessionID: "poisoned-pi",
+	})
+	if sessions["agent-a/runtime-1"] != "poisoned-pi" {
+		t.Fatalf("recorded session = %q", sessions["agent-a/runtime-1"])
+	}
+	runner.observeResidentMessageRuntime("agent-a", "runtime-1", agent.Message{
+		Type:      agent.MessageError,
+		SessionID: "poisoned-pi",
+		Content:   "Unknown parameter: 'input[86].status'",
+	})
+	if _, ok := sessions["agent-a/runtime-1"]; ok {
+		t.Fatalf("poisoned Pi session still recorded: %q", sessions["agent-a/runtime-1"])
+	}
+}
+
 func installActivityProducerAgent(t *testing.T, producer *agentActivityProducer) {
 	t.Helper()
 	if err := producer.SetManaged(protocol.AgentStatusPayload{AgentID: "agent-a", LaunchID: "launch-a", Status: protocol.AgentStatusActive}, protocol.AgentSessionPayload{AgentID: "agent-a", LaunchID: "launch-a", RuntimeGeneration: 1}); err != nil {

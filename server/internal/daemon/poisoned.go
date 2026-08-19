@@ -132,6 +132,14 @@ func classifyPoisonedError(errMsg string) (string, bool) {
 	if strings.Contains(lowered, "invalid_request_error") && strings.Contains(lowered, "400") {
 		return FailureReasonAPIInvalidRequest, true
 	}
+	// Pi + OpenAI Responses: tool-history replay includes input[n].status,
+	// which the API rejects. Resuming that session replays the same illegal
+	// field. Match without requiring the Anthropic 400 JSON envelope.
+	if strings.Contains(lowered, "unknown parameter") &&
+		strings.Contains(lowered, "input[") &&
+		strings.Contains(lowered, ".status") {
+		return FailureReasonAPIInvalidRequest, true
+	}
 	return "", false
 }
 

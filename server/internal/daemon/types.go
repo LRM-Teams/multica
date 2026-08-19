@@ -60,11 +60,15 @@ type Task struct {
 	// ScopedSecrets are channel/project (and optionally agent) secrets injected
 	// after filtering by the current task channel/project (LRM-953). Agent
 	// custom_env remains separate and is treated as agent-scoped.
-	ScopedSecrets            []ScopedSecret                     `json:"scoped_secrets,omitempty"`
-	ChannelGoal              *protocol.ChannelGoalContext       `json:"channel_goal,omitempty"`                // active channel goal, refreshed on every claim
-	ProjectTitle             string                             `json:"project_title,omitempty"`               // human-readable project title for context injection
-	PriorSessionID           string                             `json:"prior_session_id,omitempty"`            // Claude session ID from a previous task on this issue
-	PriorWorkDir             string                             `json:"prior_work_dir,omitempty"`              // work_dir from a previous task on this issue
+	ScopedSecrets  []ScopedSecret               `json:"scoped_secrets,omitempty"`
+	ChannelGoal    *protocol.ChannelGoalContext `json:"channel_goal,omitempty"`     // active channel goal, refreshed on every claim
+	ProjectTitle   string                       `json:"project_title,omitempty"`    // human-readable project title for context injection
+	PriorSessionID string                       `json:"prior_session_id,omitempty"` // Claude session ID from a previous task on this issue
+	PriorWorkDir   string                       `json:"prior_work_dir,omitempty"`   // work_dir from a previous task on this issue
+	// ForceFreshSession is true for one-shot wakes (Period Brief
+	// collect/synth/retry, manual rerun). When set, PriorSessionID must not
+	// be resumed and resident Pi must not inherit the last conversation.
+	ForceFreshSession        bool                               `json:"force_fresh_session,omitempty"`
 	TriggerCommentID         string                             `json:"trigger_comment_id,omitempty"`          // comment that triggered this task
 	TriggerThreadID          string                             `json:"trigger_thread_id,omitempty"`           // root comment ID for the triggering thread; falls back to trigger_comment_id on old servers
 	TriggerCommentContent    string                             `json:"trigger_comment_content,omitempty"`     // content of the triggering comment

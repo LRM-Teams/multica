@@ -31,6 +31,7 @@ import {
   DialogContent,
 } from "@multica/ui/components/ui/dialog";
 import { useT } from "../i18n";
+import { normalizeMermaidChart } from "./normalize-mermaid-chart";
 
 export type MermaidDiagramHandle = {
   openFullscreen: () => void;
@@ -297,7 +298,8 @@ export function MermaidDiagram({
           theme: "base",
           themeVariables: getMermaidThemeVariables(containerRef.current),
         });
-        const { svg: renderedSvg } = await mermaid.render(diagramId, chart);
+        const normalizedChart = normalizeMermaidChart(chart);
+        const { svg: renderedSvg } = await mermaid.render(diagramId, normalizedChart);
         if (!cancelled) {
           const measured = getMermaidLayout(renderedSvg);
           setLayout(measured);

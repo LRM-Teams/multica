@@ -522,6 +522,40 @@ func TestProjectsSkillCoversProjectOperations(t *testing.T) {
 	}
 }
 
+func TestPeriodWorkBriefSkillRequiresReportingShape(t *testing.T) {
+	skill, ok := findSkill(t, "multica-period-work-brief")
+	if !ok {
+		return
+	}
+	fm, body, _ := splitFrontmatter(skill.Content)
+
+	if got := strings.TrimSpace(fm["user-invocable"]); got != "false" {
+		t.Errorf("user-invocable = %q, want false", got)
+	}
+	if got := strings.TrimSpace(fm["allowed-tools"]); !strings.Contains(got, "Bash(multica *)") {
+		t.Errorf("allowed-tools = %q, want Multica CLI for retry + note-write", got)
+	}
+
+	mustContain := []string{
+		"Reporting shape",
+		"filesystem path",
+		"nested sub-points",
+		"Mermaid",
+		"Do not drop diagrams",
+		"retry-collectors",
+		"--note-write",
+		"references/period-work-brief-source-map.md",
+	}
+	for _, want := range mustContain {
+		if !strings.Contains(body, want) {
+			t.Errorf("period-work-brief skill missing %q", want)
+		}
+	}
+	if !skillHasFile(skill, "references/period-work-brief-source-map.md") {
+		t.Errorf("period-work-brief skill missing source map")
+	}
+}
+
 func TestPeriodWorkCollectSkillCoversOSHarvestAndNoteWrite(t *testing.T) {
 	skill, ok := findSkill(t, "multica-period-work-collect")
 	if !ok {
@@ -547,6 +581,9 @@ func TestPeriodWorkCollectSkillCoversOSHarvestAndNoteWrite(t *testing.T) {
 		"--note-write",
 		"## Repos / roots",
 		"## Highlights",
+		"## Integrated summary",
+		"## Diagrams",
+		"Mermaid",
 		"references/collect-recipes.md",
 		"references/period-work-collect-source-map.md",
 		"final Period Work Brief",

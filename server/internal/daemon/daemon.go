@@ -2244,6 +2244,20 @@ func gateResumeToReusedWorkdir(task *Task, taskCtx *execenv.TaskContextForEnv, e
 	return reused
 }
 
+// applyForceFreshSession drops any claimed prior provider session when the
+// server marked the wake as a one-shot. Period Brief collectors and the
+// synthesizer carry a self-contained prompt and must not resume a poisoned
+// Pi conversation (OpenAI Responses `input[n].status` 400).
+func applyForceFreshSession(task *Task, taskLog *slog.Logger) {
+	if task == nil || !task.ForceFreshSession {
+		return
+	}
+	if task.PriorSessionID != "" && taskLog != nil {
+		taskLog.Info("force_fresh_session: dropping prior session", "session_id", task.PriorSessionID)
+	}
+	task.PriorSessionID = ""
+}
+
 func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot int, taskLog *slog.Logger) (TaskResult, error) {
 	// Refuse to spawn an agent without a workspace. An empty workspace_id
 	// here would make MULTICA_WORKSPACE_ID empty in the agent env, and the
@@ -2263,6 +2277,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	restrictedExecution := isRestrictedExecutionProfile(profile)
 	restrictedMaxOutputTokens := restrictedOutputTokenLimitForTask(task, profile)
 	task = restrictTaskForExecutionProfile(task, profile)
+	applyForceFreshSession(&task, taskLog)
 	taskLog = taskLog.With("execution_profile", profile)
 
 	entry, ok := d.cfg.Agents[provider]

@@ -628,10 +628,10 @@
 
 ### 4.24 时段工作介绍：多 runtime 采集 + 专用周报 Agent 合成 — `仅文档`
 
-- **口径（2026-08-17，ADR 0019）**：人勾选若干 **已连接 runtime 上的 Agent**（含云端）作 **采集员**，各自在 **所在 OS** 搜集最近工作痕迹（整机 HOME / 云端环境；允许短 diff、文件摘要、关键片段；denylist 去密钥噪声）。平台 Facts 仍由服务端确定性拉取。全部采集包交给 Workspace 内 **专用周报 Agent**（可改选）做 Period Work Synthesis，产物是 Notes 里的 Period Work Brief。**废弃 Host Digest 作为 Brief 的本机源。** 不导出 PPT。
+- **口径（2026-08-17，ADR 0019；采集深度 2026-08-18 增补；结算/重采 2026-08-18；汇报叙事 2026-08-18；fresh session / 失败后仍收包 2026-08-18）**：人勾选若干 **已连接 runtime 上的 Agent**（含云端）作 **采集员**，各自在 **所在 OS** 搜集最近工作痕迹（整机 HOME / 云端环境；允许短 diff、文件摘要、关键片段；denylist 去密钥噪声）。采集员可见该机最全信息，应做 **初步整合（Integrated summary）**，并在必要时用 **Mermaid** 画流程图等；**完整性优先**——证据层（Repos/Highlights）不可被摘要/图替代。平台 Facts 仍由服务端确定性拉取。平台 **按状态等到采集 settle**（不得用固定时钟把仍在跑当成 empty）；**已 `--note-write` 的采集包仍算 ready**，即使随后 inbox 任务因 Pi/OpenAI `input[n].status` 记 `failed`。采集 / 重采 / 合成每次 wake **`force_fresh_session=true`**（一次性 prompt，禁止续上一次 Pi 会话）。周报 wake 带 **状态板**（`retryable` / `abandon_why`）。永久失败（无 API key / 模型配置 / 鉴权 / 配额等）放弃；可恢复失败由周报经窄工具重采（每采集员最多 3 次）。全部交给 Workspace 内 **专用周报 Agent**（可改选）做 Period Work Synthesis，产物是 Notes 里的 Period Work Brief。**汇报叙事**：按事项/成果归组（同一工作一条主线 + 嵌套子要点，禁止并列拆开）；标题用人话，禁止路径/目录当标题；ready 采集包里解释主线的 Mermaid **必须**带入 Brief。**废弃 Host Digest 作为 Brief 的本机源。** 不导出 PPT。
 - **仍禁止**：键鼠、截屏、剪贴板、浏览器历史、全仓灌模型、Daily 当源、密钥与 runtime 诊断、回顾 API 跑模型、静默 `replace_page`。
-- **指针**：ADR `docs/adr/0019-runtime-agent-collectors-period-brief.md`（取代 0018 Host Digest 路径）；术语 `CONTEXT.md` → Period Work。
-- **欠债**：按根目录 `todo.md` 新切片落地；完成后以采集员派发测、周报 Agent 供给测、合成 prompt 分区测升级为 `可执行`。
+- **指针**：ADR `docs/adr/0019-runtime-agent-collectors-period-brief.md`（取代 0018 Host Digest 路径）；skill `multica-period-work-collect` / `multica-period-work-brief`；术语 `CONTEXT.md` → Period Work。
+- **物（可执行回归）**：`awaitPeriodBriefCollectorPacks` + `classifyPeriodBriefCollectorOutcome`；`POST /api/agent/notes/period-briefs/{draft}/retry-collectors`；`multica notes period-brief retry-collectors`；migration `414_note_period_brief_run`；`notePeriodBriefInstruction` / `TestNotePeriodBriefInstructionRequiresReportingShape`；`EnsurePeriodBriefAgent` stale-persona refresh（`Do not drop diagrams`）；`persistPeriodBriefNoteBriefContext` `force_fresh_session=true`；`TestCreateNotePeriodBriefHarvestsNoteWriteAfterFailedTask`；daemon `applyForceFreshSession` + `classifyPoisonedError` Pi `input[n].status`。
 
 ### 4.23 Context compaction 是可见 Activity，不是 Message acceptance 或进程生命周期 — `可执行`（②统一 lifecycle event + ③单一 gate/投影 + ⑤状态机回归；owner: @Codex）
 - Provider 原生事件先归一成 `MessageCompactionStarted` / `MessageCompactionFinished`；resident runtime 的主动压缩必须在独立 `ResidentMessagePreparation` gate 完成，不能共享 20 秒 native Message acceptance timeout，也不能把压缩超时解释成进程重启。

@@ -36,6 +36,17 @@ Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
 });
 
 const { MermaidDiagram } = await import("./mermaid-diagram");
+const { normalizeMermaidChart } = await import("./normalize-mermaid-chart");
+
+describe("normalizeMermaidChart", () => {
+  it("restores Worker-escape lookalike arrows", () => {
+    expect(
+      normalizeMermaidChart(
+        "flowchart TD\n  A --› B\n  B ==› C\n  D -.-› E\n  F ‹--› G\n  H ‹-- I\n",
+      ),
+    ).toBe("flowchart TD\n  A --> B\n  B ==> C\n  D -.-> E\n  F <--> G\n  H <-- I\n");
+  });
+});
 
 describe("MermaidDiagram fullscreen", () => {
   beforeEach(() => {

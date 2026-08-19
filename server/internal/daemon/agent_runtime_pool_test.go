@@ -299,6 +299,57 @@ func TestCanonicalAgentRuntimePoolReusesAcrossChatSurfaces(t *testing.T) {
 	}
 }
 
+func TestCanonicalAgentRuntimePoolForceFreshDrainsNextResume(t *testing.T) {
+	pool := newCanonicalAgentRuntimePool()
+	probe := &canonicalRuntimeFactoryProbe{}
+	env := map[string]string{
+		"PATH":                 "/usr/bin",
+		"MULTICA_SERVER_URL":   "https://multica.example",
+		"MULTICA_WORKSPACE_ID": "workspace-a",
+		"MULTICA_AGENT_ID":     "agent-a",
+		"MULTICA_TASK_ID":      "turn-fresh",
+	}
+	identity := canonicalRuntimeIdentityForTest(t, "model-a", env)
+	pool.setNextResumeSession("agent-a", "runtime-a", "poisoned-pi-session")
+
+	fresh, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
+		Identity:          identity,
+		ForceFreshSession: true,
+		Factory:           probe.factory,
+	})
+	if err != nil {
+		t.Fatalf("force-fresh acquire: %v", err)
+	}
+	if _, err := fresh.backend.Execute(context.Background(), "collect", agent.ExecOptions{}); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if got := fresh.backend.(*canonicalSessionBackend).backend.(*canonicalRuntimeTestBackend).lastResumeSessionID(); got != "" {
+		t.Fatalf("force-fresh resume = %q, want empty", got)
+	}
+	fresh.release(true)
+
+	next, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
+		Identity: canonicalRuntimeIdentityForTestWithContext(t, "model-a", "chat-next", map[string]string{
+			"PATH":                 "/usr/bin",
+			"MULTICA_SERVER_URL":   "https://multica.example",
+			"MULTICA_WORKSPACE_ID": "workspace-a",
+			"MULTICA_AGENT_ID":     "agent-a",
+			"MULTICA_TASK_ID":      "turn-next",
+		}),
+		Factory: probe.factory,
+	})
+	if err != nil {
+		t.Fatalf("follow-up acquire: %v", err)
+	}
+	defer next.release(true)
+	if _, err := next.backend.Execute(context.Background(), "next", agent.ExecOptions{}); err != nil {
+		t.Fatalf("follow-up Execute: %v", err)
+	}
+	if got := next.backend.(*canonicalSessionBackend).backend.(*canonicalRuntimeTestBackend).lastResumeSessionID(); got != "" {
+		t.Fatalf("queued poisoned resume leaked after force-fresh: %q", got)
+	}
+}
+
 func TestCanonicalSessionBackendStaleResumeFallbackClearsWrapper(t *testing.T) {
 	// runTask sets opts.ResumeSessionID="" on stale resume; wrapper must also
 	// drop its forced id or retry keeps the bad Prior (Barry activation BLOCK).

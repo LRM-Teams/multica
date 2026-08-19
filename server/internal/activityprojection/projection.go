@@ -46,6 +46,7 @@ func TimelineRowFromSnapshot(snapshot protocol.AgentActivitySnapshot) TimelineRo
 var workingDetailLabels = map[string]string{
 	"starting":            "Starting…",
 	"message_received":    "Message received",
+	"model_response_started": "Thinking...",
 	"compacting_context":  "Compacting context...",
 	"compaction_finished": "Compaction finished",
 	"compaction_stale":    "Compaction still running",
@@ -148,6 +149,9 @@ func ProjectSummary(snapshot protocol.AgentActivitySnapshot) Summary {
 			tone := "warning"
 			if snapshot.DetailKind == "running_command" {
 				tone = "running"
+			}
+			if snapshot.DetailKind == "model_response_started" {
+				tone = "info"
 			}
 			return Summary{Label: label, Tone: tone, Visibility: "visible"}
 		}

@@ -2002,6 +2002,24 @@ func TestGateResumeToReusedWorkdir(t *testing.T) {
 	}
 }
 
+func TestApplyForceFreshSessionDropsPrior(t *testing.T) {
+	t.Parallel()
+	task := Task{PriorSessionID: "poisoned-pi", ForceFreshSession: true}
+	applyForceFreshSession(&task, slog.Default())
+	if task.PriorSessionID != "" {
+		t.Fatalf("PriorSessionID = %q, want empty", task.PriorSessionID)
+	}
+}
+
+func TestApplyForceFreshSessionNoopWhenUnset(t *testing.T) {
+	t.Parallel()
+	task := Task{PriorSessionID: "keep-me"}
+	applyForceFreshSession(&task, slog.Default())
+	if task.PriorSessionID != "keep-me" {
+		t.Fatalf("PriorSessionID = %q, want keep-me", task.PriorSessionID)
+	}
+}
+
 func TestExecuteAndDrain_ResumeFailureFallback(t *testing.T) {
 	t.Parallel()
 

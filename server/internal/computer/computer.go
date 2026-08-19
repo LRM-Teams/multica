@@ -179,7 +179,9 @@ func startResidentProcess(exe string, args []string, log *os.File) (procHandle, 
 		child.Stdout = log
 		child.Stderr = log
 		child.SysProcAttr = SysProcAttr(breakaway)
-		configureChildParentDeath(child)
+		// Do not set Pdeathsig here. StartBackground's parent is the short-lived
+		// `multica computer start` CLI; the resident must outlive that process.
+		// Binding children keep parent-death signaling in binding_child.go.
 		if err := child.Start(); err != nil {
 			return nil, err
 		}

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback } from "react";
-import { useWorkspacePaths } from "@multica/core/paths";
+import { appendQueryParams, useWorkspacePaths } from "@multica/core/paths";
 import { useOpenDM } from "../common/use-open-dm";
 import { useNavigation } from "../navigation";
 import type { NoteWorkerChatJob } from "./open-note-worker-chat";
@@ -22,7 +22,11 @@ export function useOpenNoteWorkerChat(): {
     async (job: NoteWorkerChatJob) => {
       const channelId = job.channel_id?.trim();
       if (channelId) {
-        push(paths.channelDetail(channelId));
+        const threadId = job.channel_message_id?.trim();
+        const href = threadId
+          ? appendQueryParams(paths.channelDetail(channelId), { thread: threadId })
+          : paths.channelDetail(channelId);
+        push(href);
         return;
       }
       const agentId = job.agent_id?.trim();

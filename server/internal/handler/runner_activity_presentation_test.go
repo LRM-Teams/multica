@@ -47,11 +47,23 @@ func TestProjectRunnerActivityTimelineEntryKeepsCommandText(t *testing.T) {
 	}
 }
 
-func TestTruncateRunnerActivitySummary(t *testing.T) {
-	if got := truncateRunnerActivitySummary("payment required", 240); got != "payment required" {
-		t.Fatalf("short reason = %q", got)
+func TestOverlayInFlightInboxOnIdleRunnerSummary(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		in, want string
+	}{
+		{"Online", "Thinking..."},
+		{"Idle", "Thinking..."},
+		{"Working...", "Thinking..."},
+		{"Running command...", "Running command..."},
+		{"Thinking...", "Thinking..."},
 	}
-	if got := truncateRunnerActivitySummary("abcdef", 4); got != "abcd…" {
-		t.Fatalf("truncated reason = %q", got)
+	for _, tc := range cases {
+		got := overlayInFlightInboxOnIdleRunnerSummary(activityprojection.Summary{
+			Label: tc.in, Tone: "success", Visibility: "visible",
+		})
+		if got.Label != tc.want {
+			t.Fatalf("%q → %q, want %q", tc.in, got.Label, tc.want)
+		}
 	}
 }

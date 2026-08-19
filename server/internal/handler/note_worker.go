@@ -257,7 +257,7 @@ VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7)`,
 
 	workerPrompt := wrapNoteWorkerChannelWakePrompt(
 		buildNoteWorkerPrompt(instruction, uuidToString(page.ID), page.Title, page.Content),
-		h.agentMessageTargetForPrompt(r.Context(), ch, msg),
+		h.agentMessageThreadTargetForPrompt(r.Context(), ch, msg),
 	)
 	task, err := h.enqueueChannelAgentPrompt(
 		r.Context(), ch, agent, msg, userID, workerPrompt,

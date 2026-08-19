@@ -191,8 +191,9 @@ SELECT parts FROM channel_message WHERE id = $1`, *resp.ChannelMessageID).Scan(&
 	if !strings.Contains(wakePrompt, "<instruction>") || !strings.Contains(wakePrompt, "Turn this brief into an Issue") {
 		t.Fatalf("wake prompt missing instruction: %s", wakePrompt)
 	}
-	if !strings.Contains(wakePrompt, "Message target for chat transport:") {
-		t.Fatalf("wake prompt missing Message target (agents need this for multica message send): %s", wakePrompt)
+	wantTarget := "Message target for chat transport: dm:@" + userHandleForTransportTest(t, testUserID) + ":" + (*resp.ChannelMessageID)[:8]
+	if !strings.Contains(wakePrompt, wantTarget) {
+		t.Fatalf("wake prompt missing thread Message target %q (agents need this for multica message send): %s", wantTarget, wakePrompt)
 	}
 	if !strings.Contains(wakePrompt, channelDirectedReplyInstruction) {
 		t.Fatalf("wake prompt missing directed reply instruction: %s", wakePrompt)

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -68,21 +68,21 @@ export function ResearchV6ReportModal({
     reportOrigin: report?.reportOrigin ?? "",
     compiledHtml: report?.compiledHtml,
   });
-  const [compiledBlobUrl, setCompiledBlobUrl] = useState<string | null>(null);
   const compiledHtml = source.kind === "compiled" ? source.html : "";
-  useEffect(() => {
+  const compiledBlobUrl = useMemo(() => {
     if (!open || source.kind !== "compiled" || !compiledHtml) {
-      setCompiledBlobUrl(null);
-      return;
+      return null;
     }
-    const objectUrl = URL.createObjectURL(
+    return URL.createObjectURL(
       new Blob([compiledHtml], { type: "text/html;charset=utf-8" }),
     );
-    setCompiledBlobUrl(objectUrl);
-    return () => {
-      URL.revokeObjectURL(objectUrl);
-    };
   }, [compiledHtml, open, source.kind]);
+  useEffect(() => {
+    if (!compiledBlobUrl) return;
+    return () => {
+      URL.revokeObjectURL(compiledBlobUrl);
+    };
+  }, [compiledBlobUrl]);
   const frameIdentity = [
     open ? "open" : "closed",
     report?.id ?? "missing",

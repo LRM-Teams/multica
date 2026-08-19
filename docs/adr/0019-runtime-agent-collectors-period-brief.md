@@ -37,12 +37,16 @@ retrospective API still does not run a model.
 
 Collectors see the **fullest local picture** on that Computer. They **must**
 still gather evidence (repos, commits, dirty paths, short diffs / summaries /
-key snippets). In addition they **may and should**:
+key snippets). In addition they **must**:
 
-1. **Preliminary integration** — group traces into themes / threads for *this
-   machine only* (an integrated summary section), without dropping underlying
-   evidence. Completeness beats clever compression: Highlights and repo lines
-   remain the evidence layer; the summary is additive.
+1. **Preliminary Work groups** — classify traces for *this machine* under
+   `## Work groups` without dropping underlying evidence:
+   - Same git repo / project root → one group by default.
+   - Different repos, files, or surfaces that share one outcome / initiative
+     → **one** group, with an explicit **why**.
+   - Unrelated work → separate groups (never glue by calendar).
+   Completeness beats clever compression: Highlights and repo lines remain
+   the evidence layer; Work groups organize them for the synthesizer.
 2. **Local-context diagrams** — when a multi-step flow, dependency, or state
    change is hard to narrate from bullets alone, include a **Mermaid**
    flowchart / sequence / state diagram in the pack. Diagrams are optional and
@@ -59,6 +63,11 @@ final Period Work Brief — that remains the synthesizer's job.
 The human picks among the provisioned per-Computer collectors. Empty
 selection is invalid for the machine-work channel. Default: all **online**
 collectors.
+
+The human picks a **time window**: calendar day / ISO week / calendar month
+(anchor date), or a **custom inclusive** start→end date range in the viewing
+timezone (half-open UTC internally). Collectors and synthesis **must** stay
+strictly inside that window.
 
 ## Synthesis
 
@@ -85,18 +94,27 @@ The synthesizer wake includes a **status board** per collector (`status`,
 (missing API key / model config / auth / quota / blocked / unusable runner)
 are `retryable=false` — abandon and narrate gaps; do not invent OS work.
 
-The Brief is a **reporting narrative** (提纲挈领), not a pack paste:
+The Brief is a **汇报稿 for other people** — strong structure and plain
+reporting language, not a pack paste and **not an evidence log**:
 
 - Fixed English sections: always `## Summary` with `### Work Summary`
-  (detailed, priority) and `### Next Steps`; optionally `## Technique`,
+  (detailed, reader-facing) and `### Next Steps`; optionally `## Technique`,
   `## Achievements`, `## Research` — **omit** any of those three when
   Facts+packs have no related work (no empty stubs).
-- Inside Work Summary: group by initiative/outcome; nest sub-points under
-  one thread. Do not flatten the same work into sibling bullets.
+- Inside Work Summary: **Start from collector ## Work groups.** Each group
+  becomes one main titled thread; nest different work as sub-points. Merge
+  across collectors only for the same initiative identity. Never invent
+  merges of unrelated groups; never split one group by calendar order.
+  Nest sub-points under one thread for the same work even when moments
+  interleaved. Never merge unrelated initiatives into one bullet just
+  because they shared a window or machine.
 - Thread titles are human reporting language — never a filesystem path or
-  package directory as a heading.
-- When a ready collector pack includes Mermaid that explains work, the
-  synthesizer **must** carry that diagram into the Brief.
+  package directory as a heading. Prefer no paths in the body.
+- **No evidence layer** in the Brief (no commit hashes, diffs, snippets,
+  or「证据」). Facts/packs stay private source material.
+- When a ready collector pack includes Mermaid that helps a reader, the
+  synthesizer **must** carry that diagram into the Brief (intuition, not
+  forensics).
 
 Skill: `multica-period-work-brief`.
 

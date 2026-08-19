@@ -39,11 +39,16 @@ git -C "$REPO" -c safe.directory="$REPO" log --branches --no-patch \
   --after="$START" --before="$END" \
   --pretty=format:'%h %ci %an %s' | head -n 40
 
+# Dirty paths: only keep files touched inside the window when possible.
 git -C "$REPO" -c safe.directory="$REPO" status --porcelain | head -n 80
+# Optional mtime filter for a dirty path (GNU find):
+# find "$REPO/path" -newermt "$START" ! -newermt "$END" 2>/dev/null | head
 
 git -C "$REPO" -c safe.directory="$REPO" diff --stat HEAD 2>/dev/null | head -n 40
 ```
 
+**Do not** use `git log` without `--after` / `--before` for Highlights. If a
+commit’s `%ci` is outside `$START`→`$END`, drop it.
 ## Short evidence (Highlights)
 
 Pick a few commits or dirty files that matter:
@@ -56,12 +61,16 @@ git -C "$REPO" -c safe.directory="$REPO" diff -- <path> | head -n 80
 
 Never dump an entire file or unbounded `git diff` without `head`.
 
-## Integrated summary + Diagrams (after harvest)
+## Work groups + Diagrams (after harvest)
 
 After Repos / Highlights are filled from shell evidence:
 
-1. Write **Integrated summary** themes for *this machine only*. Every theme
-   must point back to at least one Highlight or repo line.
+1. Write **`## Work groups`** for *this machine only*:
+   - Default: one `###` group per git repo / project root.
+   - Merge into one group when different repos/files share one outcome; state
+     **why**.
+   - Keep unrelated work in separate groups (never glue by calendar).
+   - Every group item must point back to at least one Highlight or repo line.
 2. Add **Diagrams** only when a Mermaid flowchart / sequence / state chart
    clarifies multi-step work that bullets alone cannot. Keep diagrams small
    (≤ ~20 nodes). Do not invent nodes without evidence.

@@ -49,22 +49,24 @@ func notePeriodBriefInstruction(folderPageID, draftPageID, windowLabel string) s
 	}
 	retryHint := ""
 	if draft != "" {
-		retryHint = "\n9) Collector status board: each pack has status + retryable. " +
+		retryHint = "\n10) Collector status board: each pack has status + retryable. " +
 			"Permanent failures (missing API key / model config / auth / quota / blocked) → abandon that collector; do not retry. " +
 			"Transient failures (runtime offline, network, capacity, empty pack, stalled) → retry with the narrow CLI below, at most " +
 			fmt.Sprintf("%d", notePeriodBriefCollectorMaxRetries) + " retries per collector. " +
 			"After retry, wait for the platform re-wake — do not invent OS work.\n" +
 			formatPeriodBriefRetryHint(draft)
 	}
-	return "Write a Period Work Brief a manager can read — a reporting narrative, not a pack dump, not a standup wrap-up, not slide-deck copy. Follow skill `multica-period-work-brief` for section shape, titles, and diagrams.\n" +
+	return "Write a Period Work Brief for **other people to read** (manager / colleague) — polished reporting narrative with clear structure. Not a pack dump, not a standup wrap-up, not slide-deck copy, not an engineering evidence log. Follow skill `multica-period-work-brief` for section shape, titles, and diagrams.\n" +
+		"0) STRICT TIME WINDOW: narrate only work that falls inside the wake window (Facts timestamps + collector pack claims dated in that range). Do not pull in earlier/later history to \"complete the story\". If a pack mentions out-of-window commits, ignore them.\n" +
 		"1) Fixed top-level sections (English headings): `## Summary`, then optionally `## Technique`, `## Achievements`, `## Research` — omit any of Technique/Achievements/Research entirely when Facts+packs have no related work (do not write empty placeholders).\n" +
 		"2) `## Summary` is the overview and is always required. It has exactly two subsections: `### Work Summary` and `### Next Steps`.\n" +
-		"3) `### Work Summary` is the priority section: a detailed account of what mattered in the period. Group by initiative/outcome (nested sub-points under one thread — never sibling threads for the same work). Each thread: human title + claim + nested bullets (decisions, impact, remaining risk). Cite Issue/PR when available. Put unscoped machine work (本机未归类) here only when it did not map into a thread — never invent OS work for failed collectors.\n" +
-		"4) `### Next Steps` may infer plausible follow-ups from current work and unfinished threads; label speculation honestly; do not invent facts from empty/failed collectors.\n" +
-		"5) Thread titles are reporting language (what changed / why it matters). Never use a filesystem path, repo folder, or package directory (`packages/…`, `/home/…`, a branch name alone) as a heading. Paths may appear only inside a bullet as evidence.\n" +
-		"6) If a ready collector pack has a Mermaid diagram that explains work in Work Summary (or another included section), copy that mermaid fence next to that work. Do not drop diagrams; if packs overlap, keep the clearest one. You may tighten labels, not invent topology.\n" +
-		"7) Call out delegated leverage (what agents or teammates carried) inside Work Summary when relevant.\n" +
-		"8) Deliver the Brief with `multica message send --target <Message target for chat transport> --note-write --note-page-id " + folder +
+		"3) `### Work Summary` is the priority section. **Start from collector ## Work groups.** Each Work group becomes one main titled thread; nest different work inside that group as nested sub-points / sub-bullets. Default trust: same-repo/project groups and cross-repo groups the collector marked related. Merge groups across collectors only when they share the same initiative identity. Never invent a merge of unrelated groups; never split one collector group by calendar. **Group by initiative identity / outcome / Issue — never by calendar order.** Unrelated initiatives must never share a sentence. Each thread: human title + 1–2 sentence claim + nested bullets about decisions, impact, and remaining risk — written so a non-author can understand. Optional Issue/PR identifiers only as human references (e.g. MUL-123), never as forensic proof.\n" +
+		"4) **No evidence layer in the Brief.** Facts and collector packs are private source material only. Do not paste commit hashes, diffs, file snippets, `evidence:` labels, Runtime/Repos dumps, dirty-path lists, or wording like「证据」. Do not explain how you verified a claim.\n" +
+		"5) `### Next Steps` may infer plausible follow-ups from current in-window work and unfinished threads; label speculation honestly; do not invent facts from empty/failed collectors.\n" +
+		"6) Titles and body use reporting language (what changed / why it matters to others). Never use a filesystem path, repo folder, or package directory (`packages/…`, `/home/…`, a branch name alone) as a heading. Prefer zero paths in the Brief; if a product name needs grounding, use plain language, not a path bullet.\n" +
+		"7) If a ready collector pack has a Mermaid diagram that clarifies a flow for the reader, copy that mermaid fence next to that work (tighten labels for readability). Do not drop useful diagrams; if packs overlap, keep the clearest one. Do not invent topology. Diagrams are for intuition, not for dumping graph evidence.\n" +
+		"8) Call out delegated leverage (what agents or teammates carried) inside Work Summary when relevant — still in plain reporting language.\n" +
+		"9) Deliver the Brief with `multica message send --target <Message target for chat transport> --note-write --note-page-id " + folder +
 		"`. The body must be only the Brief markdown. Title it like `工作介绍 " + label +
 		"`. The human confirms 「新建子笔记」 under 工作介绍/ — never treat the draft Facts page as the finished Brief, and never pass the draft page id to --note-page-id." +
 		retryHint
@@ -85,9 +87,11 @@ func notePeriodBriefCollectorInstruction(packPageID, windowLabel, windowStart, w
 		rangeHint = label + " (" + start + " → " + end + ")"
 	}
 	return "Collect recent work on the OS where this runtime runs for " + rangeHint + " into a structured Period Work collector pack.\n" +
-		"Follow the built-in skill `multica-period-work-collect` (read SKILL.md and `references/collect-recipes.md`) before collecting — use its shell recipes on this machine.\n" +
-		"Scope: whole-machine HOME for local runtimes; the cloud runtime environment for cloud. Prefer git status, recent commits, dirty trees, and project dirs you can see.\n" +
-		"You see the fullest local picture on this Computer: after harvesting evidence, add a preliminary Integrated summary (themes/threads for this machine only) and, when a multi-step flow needs it, Mermaid diagrams (flowchart/sequence/state). Completeness first — Highlights and Repos stay as the evidence layer; summary and diagrams are additive, never a substitute.\n" +
+		"STRICT TIME WINDOW: only include commits, file changes, and claims whose activity falls inside start→end from the wake `<window>` partition (RFC3339, half-open: include start, exclude end). Drop anything outside that range — do not widen to \"recent\" or \"this week\" on your own.\n" +
+		"Follow the built-in skill `multica-period-work-collect` (read SKILL.md and `references/collect-recipes.md`) before collecting — use its shell recipes with the wake `$START` / `$END`.\n" +
+		"Scope: whole-machine HOME for local runtimes; the cloud runtime environment for cloud. Prefer git status, commits in-window, dirty trees with in-window mtimes, and project dirs you can see.\n" +
+		"PRELIMINARY GROUPING (required): after harvesting evidence, build `## Work groups`. Default: one group per git repo / project root. If work in different repos, files, or surfaces shares one outcome/initiative, put them in **one** group and state why. Unrelated work stays in separate groups — never glue by calendar. Completeness first — Highlights and Repos stay as the evidence layer; Work groups organize them. Every Highlight belongs to exactly one group; every group claim must be in-window.\n" +
+		"When a multi-step flow needs it, add Mermaid diagrams under Diagrams.\n" +
 		"Allowed detail: short diffs, file summaries, and key snippets when needed to explain work. Prefer bounded excerpts over whole files.\n" +
 		"Forbidden: keymouse, screenshots, clipboard, browser history, full-repo dumps, secrets (.env / .ssh / keys / credentials), Host Digest APIs, and runtime diagnostics noise.\n" +
 		"Denylist paths (skip): .ssh, .gnupg, .aws, .env / .env.*, credential stores, and similar secret roots.\n" +
@@ -96,23 +100,29 @@ func notePeriodBriefCollectorInstruction(packPageID, windowLabel, windowStart, w
 		"# 采集包 " + label + "\n" +
 		"## Runtime\n" +
 		"- mode / hostname or cloud env (best effort)\n" +
+		"- window: start → end (copy from wake)\n" +
 		"## Repos / roots\n" +
-		"- path — short summary of what changed in the window\n" +
+		"- path — short summary of what changed **in the window**\n" +
 		"## Highlights\n" +
-		"- claim with optional short diff or snippet\n" +
-		"## Integrated summary\n" +
-		"- themes/threads for this machine; cite Highlights; do not drop evidence\n" +
+		"- claim with optional short diff or snippet (in-window only)\n" +
+		"## Work groups\n" +
+		"### <group title — project or related initiative>\n" +
+		"- why: same repo/project | related outcome across …\n" +
+		"- repos/paths: …\n" +
+		"- items: nested bullets of in-window work in this group (cite Highlights)\n" +
 		"## Diagrams\n" +
 		"- optional Mermaid blocks when flow/dependency/state needs full local context; omit section if unused\n" +
 		"## Unscoped / unclear\n" +
-		"- leftover traces that do not map cleanly\n" +
+		"- leftover traces that do not map cleanly (still in-window if dated)\n" +
 		"Deliver with `multica message send --target <Message target for chat transport> --note-write --note-page-id " + pack +
 		"`. Body = pack markdown only. Title it like `采集包 " + label + "`."
 }
 
 type createNotePeriodBriefRequest struct {
-	Window            string   `json:"window"` // day | week | month
+	Window            string   `json:"window"` // day | week | month | custom
 	Date              string   `json:"date"`
+	StartDate         string   `json:"start_date"` // custom: inclusive YYYY-MM-DD in timezone
+	EndDate           string   `json:"end_date"`   // custom: inclusive YYYY-MM-DD in timezone
 	Timezone          string   `json:"timezone"`
 	AgentID           string   `json:"agent_id"`
 	CollectorAgentIDs []string `json:"collector_agent_ids"`
@@ -161,7 +171,10 @@ func (h *Handler) CreateNotePeriodBrief(w http.ResponseWriter, r *http.Request) 
 	if tz == "" {
 		tz = h.resolveViewingTZ(r)
 	}
-	window, err := resolveNoteRetrospectiveWindow(noteRetrospectiveWindowKind(strings.TrimSpace(req.Window)), req.Date, tz, time.Now())
+	window, err := resolveNotePeriodBriefWindow(
+		noteRetrospectiveWindowKind(strings.TrimSpace(req.Window)),
+		req.Date, req.StartDate, req.EndDate, tz, time.Now(),
+	)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return

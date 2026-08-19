@@ -27,8 +27,12 @@ import { agentListOptions, workspaceKeys } from "@multica/core/workspace/queries
 import type {
   Agent,
   CreateNotePeriodBriefResponse,
-  NoteRetrospectiveWindow,
+  NotePeriodBriefWindow,
 } from "@multica/core/types";
+import {
+  defaultPeriodBriefCustomRange,
+  isValidPeriodBriefCustomRange,
+} from "@multica/core/notes/period-brief-window";
 import { Button } from "@multica/ui/components/ui/button";
 import {
   Dialog,
@@ -82,8 +86,11 @@ export function NotePeriodBriefDialog({
       return new Date().toISOString().slice(0, 10);
     }
   }, [timezone]);
-  const [windowKind, setWindowKind] = useState<NoteRetrospectiveWindow>("week");
+  const [windowKind, setWindowKind] = useState<NotePeriodBriefWindow>("week");
   const [date, setDate] = useState(today);
+  const defaultCustom = useMemo(() => defaultPeriodBriefCustomRange(today), [today]);
+  const [startDate, setStartDate] = useState(defaultCustom.start_date);
+  const [endDate, setEndDate] = useState(defaultCustom.end_date);
   /** null = follow derived default; set once the user (or open reset) pins a choice. */
   const [agentOverride, setAgentOverride] = useState<string | null>(null);
   const [collectorOverride, setCollectorOverride] = useState<string[] | null>(null);
@@ -139,6 +146,9 @@ export function NotePeriodBriefDialog({
       setCollectorOverride(null);
       setWindowKind("week");
       setDate(today);
+      const custom = defaultPeriodBriefCustomRange(today);
+      setStartDate(custom.start_date);
+      setEndDate(custom.end_date);
       setSubmitting(false);
       ensureAttemptedRef.current = false;
       collectorsEnsureAttemptedRef.current = false;
@@ -164,8 +174,15 @@ export function NotePeriodBriefDialog({
     ensurePeriodBriefCollectors(ensureModel);
   }, [open, wsId, agents, ensurePeriodBriefCollectors]);
 
+  const customRangeValid =
+    windowKind !== "custom" || isValidPeriodBriefCustomRange(startDate, endDate);
   const canSubmit =
-    Boolean(agentId) && collectorIds.length > 0 && agents.length > 0 && !submitting && !ensuring;
+    Boolean(agentId) &&
+    collectorIds.length > 0 &&
+    agents.length > 0 &&
+    !submitting &&
+    !ensuring &&
+    customRangeValid;
 
   const submit = async () => {
     if (!agentId) {
@@ -176,11 +193,17 @@ export function NotePeriodBriefDialog({
       showErrorToast(t(($) => $.notes_page.period_brief_collectors_required));
       return;
     }
+    if (windowKind === "custom" && !isValidPeriodBriefCustomRange(startDate, endDate)) {
+      showErrorToast(t(($) => $.notes_page.period_brief_custom_range_invalid));
+      return;
+    }
     setSubmitting(true);
     try {
       const result = await api.createNotePeriodBrief({
         window: windowKind,
-        date,
+        date: windowKind === "custom" ? undefined : date,
+        start_date: windowKind === "custom" ? startDate : undefined,
+        end_date: windowKind === "custom" ? endDate : undefined,
         timezone,
         agent_id: agentId,
         collector_agent_ids: collectorIds,
@@ -247,22 +270,71 @@ export function NotePeriodBriefDialog({
               >
                 {t(($) => $.notes_page.period_brief_window_month)}
               </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant={windowKind === "custom" ? "default" : "outline"}
+                onClick={() => setWindowKind("custom")}
+                disabled={submitting || ensuring}
+                data-testid="period-brief-window-custom"
+              >
+                {t(($) => $.notes_page.period_brief_window_custom)}
+              </Button>
             </div>
-          </div>
-          <div className="min-w-0 space-y-2">
-            <Label htmlFor="note-period-brief-date">{t(($) => $.notes_page.period_brief_date_label)}</Label>
-            <Input
-              id="note-period-brief-date"
-              type="date"
-              className="w-full max-w-full"
-              value={date}
-              onChange={(event) => setDate(event.target.value)}
-              disabled={submitting || ensuring}
-            />
             <p className="text-xs text-muted-foreground">
-              {t(($) => $.notes_page.period_brief_timezone_hint, { timezone })}
+              {t(($) => $.notes_page.period_brief_window_strict_hint)}
             </p>
           </div>
+          {windowKind === "custom" ? (
+            <div className="min-w-0 grid gap-3 sm:grid-cols-2">
+              <div className="min-w-0 space-y-2">
+                <Label htmlFor="note-period-brief-start">
+                  {t(($) => $.notes_page.period_brief_start_date_label)}
+                </Label>
+                <Input
+                  id="note-period-brief-start"
+                  type="date"
+                  className="w-full max-w-full"
+                  value={startDate}
+                  onChange={(event) => setStartDate(event.target.value)}
+                  disabled={submitting || ensuring}
+                  data-testid="period-brief-start-date"
+                />
+              </div>
+              <div className="min-w-0 space-y-2">
+                <Label htmlFor="note-period-brief-end">
+                  {t(($) => $.notes_page.period_brief_end_date_label)}
+                </Label>
+                <Input
+                  id="note-period-brief-end"
+                  type="date"
+                  className="w-full max-w-full"
+                  value={endDate}
+                  onChange={(event) => setEndDate(event.target.value)}
+                  disabled={submitting || ensuring}
+                  data-testid="period-brief-end-date"
+                />
+              </div>
+              <p className="text-xs text-muted-foreground sm:col-span-2">
+                {t(($) => $.notes_page.period_brief_timezone_hint, { timezone })}
+              </p>
+            </div>
+          ) : (
+            <div className="min-w-0 space-y-2">
+              <Label htmlFor="note-period-brief-date">{t(($) => $.notes_page.period_brief_date_label)}</Label>
+              <Input
+                id="note-period-brief-date"
+                type="date"
+                className="w-full max-w-full"
+                value={date}
+                onChange={(event) => setDate(event.target.value)}
+                disabled={submitting || ensuring}
+              />
+              <p className="text-xs text-muted-foreground">
+                {t(($) => $.notes_page.period_brief_timezone_hint, { timezone })}
+              </p>
+            </div>
+          )}
           <div className="min-w-0 space-y-2">
             <Label>{t(($) => $.notes_page.period_brief_collectors_label)}</Label>
             <p className="text-xs text-muted-foreground">

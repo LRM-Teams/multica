@@ -17,6 +17,11 @@ import {
   isPeriodBriefCollectorOnline,
   togglePeriodBriefCollectorId,
 } from "./period-brief-collectors";
+import {
+  defaultPeriodBriefCustomRange,
+  isValidPeriodBriefCustomRange,
+  shiftPeriodBriefCalendarDay,
+} from "./period-brief-window";
 
 describe("periodBriefLooksStructured", () => {
   it("accepts the fixture Brief with reporting headings", () => {
@@ -107,5 +112,21 @@ describe("defaultPeriodBriefCollectorIds", () => {
     expect(isPeriodBriefCollectorOnline(offline)).toBe(false);
     expect(togglePeriodBriefCollectorId(["local-1"], "off-1")).toEqual(["local-1", "off-1"]);
     expect(togglePeriodBriefCollectorId(["local-1", "off-1"], "local-1")).toEqual(["off-1"]);
+  });
+});
+
+describe("periodBriefCustomRange", () => {
+  it("validates inclusive YYYY-MM-DD order", () => {
+    expect(isValidPeriodBriefCustomRange("2026-08-10", "2026-08-12")).toBe(true);
+    expect(isValidPeriodBriefCustomRange("2026-08-12", "2026-08-10")).toBe(false);
+    expect(isValidPeriodBriefCustomRange("bad", "2026-08-10")).toBe(false);
+  });
+
+  it("defaults to a 7-day inclusive range ending today", () => {
+    expect(defaultPeriodBriefCustomRange("2026-08-19")).toEqual({
+      start_date: "2026-08-13",
+      end_date: "2026-08-19",
+    });
+    expect(shiftPeriodBriefCalendarDay("2026-03-01", -1)).toBe("2026-02-28");
   });
 });

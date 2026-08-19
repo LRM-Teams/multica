@@ -17,10 +17,10 @@ const (
 	periodBriefAgentName        = "weekly-report"
 	periodBriefAgentDisplayName = "周报"
 	periodBriefAgentTemplate    = "weekly-report"
-	// Detects personas that predate Summary / Work Summary board shape.
+	// Detects personas that predate collector Work-groups → Brief expansion.
 	// Ensure refreshes template instructions when missing so stale DB copy
 	// cannot fight the wake contract.
-	periodBriefInstructionsCapabilityMarker = "## Summary"
+	periodBriefInstructionsCapabilityMarker = "Start from collector ## Work groups"
 )
 
 // EnsurePeriodBriefAgentResponse is returned by POST /api/agents/period-brief.

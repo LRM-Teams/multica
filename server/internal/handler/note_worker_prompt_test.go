@@ -99,9 +99,9 @@ func TestBuildNotePeriodBriefPromptEscapesPacksCloserBreakout(t *testing.T) {
 		t.Fatalf("prompt missing Brief title hint:\n%s", prompt)
 	}
 	for _, want := range []string{
-		"Carry collector Mermaid",
-		"Never use a filesystem path",
-		"nested sub-points",
+		"Start from collector ## Work groups",
+		"Carry useful Mermaid",
+		"do not drop diagrams",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("period brief system_contract missing %q:\n%s", want, prompt)

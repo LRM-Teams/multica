@@ -246,7 +246,7 @@ func newDiagnosisStores(t *testing.T, projectID, workspaceID pgtype.UUID) *MockD
 	m.On("ListInteractionDAGSegmentsForProject", mock.Anything, projectID.String()).Return([]db.ListInteractionDAGSegmentsForProjectRow{diagSegmentToListForProjectRow(seg)}, nil)
 	m.On("ListInteractionDAGEdgesForProject", mock.Anything, projectID.String()).Return([]db.InteractionDagEdge{}, nil)
 	m.On("GetInteractionDAGSegmentByID", mock.Anything, diagSegmentID).Return(diagSegmentToGetByIDRow(seg), nil)
-	m.On("MessagesForTaskInRange", mock.Anything, diagAgentRunID, int32(1), int32(2)).Return(msgs, nil)
+	m.On("MessagesForTaskInRange", mock.Anything, mock.MatchedBy(func(a db.MessagesForTaskInRangeParams) bool { return a.TaskID == diagAgentRunID && a.StartSeq == 1 && a.EndSeq == 2 })).Return(msgs, nil)
 	// Root segment (no incoming edge) -> AgentRunID is the root task ID (D8).
 	m.On("GetIssueForTask", mock.Anything, diagAgentRunID).Return(db.Issue{
 		WorkspaceID:        workspaceID,

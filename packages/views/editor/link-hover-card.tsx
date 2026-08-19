@@ -16,6 +16,7 @@ import { ExternalLink, Copy } from "lucide-react";
 import { toast } from "sonner";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { Button } from "@multica/ui/components/ui/button";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { useWorkspaceSlug } from "@multica/core/paths";
 import { useT } from "../i18n";
@@ -210,30 +211,50 @@ function LinkHoverCard({
       onMouseEnter={onCardEnter}
       onMouseLeave={onCardLeave}
     >
-      <span
-        className="min-w-0 flex-1 truncate text-xs text-muted-foreground px-1"
-        title={href}
-      >
-        {truncateUrl(href)}
-      </span>
-      <Button
-        size="icon-xs"
-        variant="ghost"
-        className="text-muted-foreground"
-        onClick={handleCopy}
-        title={t(($) => $.link_hover.copy_link)}
-      >
-        <Copy className="size-3.5" />
-      </Button>
-      <Button
-        size="icon-xs"
-        variant="ghost"
-        className="text-muted-foreground"
-        onClick={handleOpen}
-        title={t(($) => $.link_hover.open_link)}
-      >
-        <ExternalLink className="size-3.5" />
-      </Button>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <span
+              className="min-w-0 flex-1 truncate text-xs text-muted-foreground px-1"
+            />
+          }
+        >
+          {truncateUrl(href)}
+        </TooltipTrigger>
+        <TooltipContent side="top">{href}</TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              className="text-muted-foreground"
+              onClick={handleCopy}
+              aria-label={t(($) => $.link_hover.copy_link)}
+            />
+          }
+        >
+          <Copy className="size-3.5" />
+        </TooltipTrigger>
+        <TooltipContent side="top">{t(($) => $.link_hover.copy_link)}</TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              className="text-muted-foreground"
+              onClick={handleOpen}
+              aria-label={t(($) => $.link_hover.open_link)}
+            />
+          }
+        >
+          <ExternalLink className="size-3.5" />
+        </TooltipTrigger>
+        <TooltipContent side="top">{t(($) => $.link_hover.open_link)}</TooltipContent>
+      </Tooltip>
     </div>,
     document.body,
   );

@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import type { ResearchGraphNode } from "@multica/core/types";
 import { cn } from "@multica/ui/lib/utils";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { useT } from "../../i18n/use-t";
 import {
   cardMenuItemsForNode,
@@ -90,31 +91,59 @@ export function ResearchCardMenu({
       onClick={(e) => e.stopPropagation()}
       onPointerDown={(e) => e.stopPropagation()}
     >
-      {items.map((item) => (
-        <button
-          key={item.id}
-          type="button"
-          role="menuitem"
-          disabled={!item.enabled}
-          title={!item.enabled ? item.disabledReason : undefined}
-          className={cn(
-            "flex w-full flex-col items-start rounded-md px-2.5 py-1.5 text-left text-sm",
-            item.enabled ? "hover:bg-muted" : "cursor-not-allowed text-muted-foreground",
-            item.danger && item.enabled && "text-destructive",
-          )}
-          onClick={() => run(item.id)}
-        >
-          <span>
-            {labelFor(item.id)}
-            {item.needConfirm ? "…" : ""}
-          </span>
-          {!item.enabled && item.disabledReason ? (
-            <span className="mt-0.5 text-xs leading-snug text-muted-foreground">
-              {item.disabledReason}
+      {items.map((item) => {
+        const buttonContent = (
+          <>
+            <span>
+              {labelFor(item.id)}
+              {item.needConfirm ? "…" : ""}
             </span>
-          ) : null}
-        </button>
-      ))}
+            {!item.enabled && item.disabledReason ? (
+              <span className="mt-0.5 text-xs leading-snug text-muted-foreground">
+                {item.disabledReason}
+              </span>
+            ) : null}
+          </>
+        );
+        const buttonClassName = cn(
+          "flex w-full flex-col items-start rounded-md px-2.5 py-1.5 text-left text-sm",
+          item.enabled ? "hover:bg-muted" : "cursor-not-allowed text-muted-foreground",
+          item.danger && item.enabled && "text-destructive",
+        );
+        const button = (
+          <button
+            type="button"
+            role="menuitem"
+            disabled={!item.enabled}
+            className={buttonClassName}
+            onClick={() => run(item.id)}
+          >
+            {buttonContent}
+          </button>
+        );
+        const showTitle = !item.enabled && Boolean(item.disabledReason);
+        if (showTitle) {
+          return (
+            <Tooltip key={item.id}>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    role="menuitem"
+                    disabled={!item.enabled}
+                    className={buttonClassName}
+                    onClick={() => run(item.id)}
+                  />
+                }
+              >
+                {buttonContent}
+              </TooltipTrigger>
+              <TooltipContent side="top">{item.disabledReason}</TooltipContent>
+            </Tooltip>
+          );
+        }
+        return button;
+      })}
     </div>
   );
 }

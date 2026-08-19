@@ -8,6 +8,7 @@ import { api } from "@multica/core/api";
 import type { AgentCreationProposal, MessagePart, StickerAsset, StickerCatalogResponse } from "@multica/core/types";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@multica/ui/components/ui/collapsible";
 import { cn } from "@multica/ui/lib/utils";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { MemoizedMarkdown } from "../../common/markdown";
 import { usePrefersReducedMotion } from "../../common/use-prefers-reduced-motion";
 import { useT } from "../../i18n/use-t";
@@ -288,17 +289,26 @@ function StickerPlaceholder({
   title?: string;
   muted?: boolean;
 }) {
+  const className = cn(
+    "not-prose inline-flex min-h-20 w-fit max-w-32 items-center justify-center rounded-md border border-dashed border-border/80 px-3 py-2 text-center text-xs sm:max-w-40",
+    muted ? "bg-muted/25 text-muted-foreground" : "bg-muted/35 text-muted-foreground",
+  );
+  if (!title) {
+    return (
+      <span data-testid="message-sticker-placeholder" className={className}>
+        {label}
+      </span>
+    );
+  }
   return (
-    <span
-      data-testid="message-sticker-placeholder"
-      title={title}
-      className={cn(
-        "not-prose inline-flex min-h-20 w-fit max-w-32 items-center justify-center rounded-md border border-dashed border-border/80 px-3 py-2 text-center text-xs sm:max-w-40",
-        muted ? "bg-muted/25 text-muted-foreground" : "bg-muted/35 text-muted-foreground",
-      )}
-    >
-      {label}
-    </span>
+    <Tooltip>
+      <TooltipTrigger
+        render={<span data-testid="message-sticker-placeholder" className={className} />}
+      >
+        {label}
+      </TooltipTrigger>
+      <TooltipContent side="top">{title}</TooltipContent>
+    </Tooltip>
   );
 }
 

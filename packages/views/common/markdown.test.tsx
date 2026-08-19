@@ -305,7 +305,9 @@ describe("Markdown", () => {
     expect(trigger).toHaveTextContent("@贝克汉姆");
     expect(trigger).not.toHaveTextContent("bei-ke-han-mu-11");
     const chip = trigger.querySelector(".mention");
-    expect(chip).toHaveAttribute("title", "@bei-ke-han-mu-11");
+    // LRM-515 handle peek migrated from native title to the shared Tooltip,
+    // so the chip no longer carries a hover `title` attribute (content opens on hover).
+    expect(chip).not.toHaveAttribute("title");
     expect(chip).not.toHaveAttribute("data-mention-unresolved");
   });
 

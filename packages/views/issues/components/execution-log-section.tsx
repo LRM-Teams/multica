@@ -451,13 +451,16 @@ function RowStatus({
   children: React.ReactNode;
   title?: string;
 }) {
+  const className =
+    "flex h-7 shrink-0 items-center justify-end gap-1 overflow-hidden whitespace-nowrap text-xs group-hover/execution-log-row:hidden";
+  if (!title) {
+    return <div className={className}>{children}</div>;
+  }
   return (
-    <div
-      title={title}
-      className="flex h-7 shrink-0 items-center justify-end gap-1 overflow-hidden whitespace-nowrap text-xs group-hover/execution-log-row:hidden"
-    >
-      {children}
-    </div>
+    <Tooltip>
+      <TooltipTrigger render={<div className={className} />}>{children}</TooltipTrigger>
+      <TooltipContent side="top">{title}</TooltipContent>
+    </Tooltip>
   );
 }
 

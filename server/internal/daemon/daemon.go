@@ -747,6 +747,7 @@ func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID s
 		"daemon_id":         d.cfg.DaemonID,
 		"legacy_daemon_ids": d.cfg.LegacyDaemonIDs,
 		"device_name":       d.cfg.DeviceName,
+		"machine_id":        d.cfg.MachineID,
 		"os":                runtime.GOOS,
 		"cli_version":       d.cfg.CLIVersion,
 		"launched_by":       d.cfg.LaunchedBy,

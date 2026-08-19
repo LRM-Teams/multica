@@ -175,8 +175,13 @@ type DaemonRegisterRequest struct {
 	// may have registered under before switching to a persistent UUID. The
 	// handler merges any matching runtime rows into the new row so agents
 	// and tasks keep working without manual intervention.
-	LegacyDaemonIDs   []string                          `json:"legacy_daemon_ids"`
-	DeviceName        string                            `json:"device_name"`
+	LegacyDaemonIDs []string `json:"legacy_daemon_ids"`
+	DeviceName      string   `json:"device_name"`
+	// MachineID is the OS-level machine fingerprint reported by the daemon
+	// (e.g. /etc/machine-id). It is an attribute of the physical machine,
+	// independent of daemon.id, and is the authoritative same-machine proof
+	// used for identity-rebuild convergence (LRM-1570).
+	MachineID         string                            `json:"machine_id,omitempty"`
 	OS                string                            `json:"os"`
 	CLIVersion        string                            `json:"cli_version"` // multica CLI version
 	LaunchedBy        string                            `json:"launched_by"` // "desktop" when spawned by the Electron app
@@ -348,6 +353,23 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Persist the machine fingerprint on the Computer identity at register time
+	// (not only via the WS ready path), so identity-rebuild convergence can
+	// resolve the same-machine proof for this daemon on the very first
+	// registration. Scoped to the owner; shared machines with multiple OS
+	// users never mix identities.
+	if mid := strings.TrimSpace(req.MachineID); mid != "" && ownerID.Valid {
+		if _, err := registrationHandler.DB.Exec(r.Context(), `
+INSERT INTO computer_identity_owner (daemon_id, user_id, machine_id)
+VALUES ($1, $2, $3)
+ON CONFLICT (daemon_id) DO UPDATE SET
+    machine_id = CASE WHEN computer_identity_owner.user_id = EXCLUDED.user_id
+                      THEN EXCLUDED.machine_id ELSE computer_identity_owner.machine_id END
+`, req.DaemonID, ownerID, mid); err != nil {
+			slog.Warn("persist machine_id on Computer identity failed", "daemon", req.DaemonID, "error", err)
+		}
+	}
+
 	resp := make([]AgentRuntimeResponse, 0, len(req.Runtimes))
 	type registeredRuntime struct {
 		runtime  db.AgentRuntime
@@ -391,6 +413,12 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		}
 		if osName := strings.ToLower(strings.TrimSpace(req.OS)); osName != "" {
 			metadataMap["os"] = osName
+		}
+		// machine_id is a Computer (machine) attribute, not a runtime one, but
+		// recording it on each runtime row lets API consumers and future
+		// convergence reads resolve same-machine provenance without a join.
+		if mid := strings.TrimSpace(req.MachineID); mid != "" {
+			metadataMap["machine_id"] = mid
 		}
 		// sandbox_instance_id is forwarded only by daemon-enabled env-dispatch
 		// sandboxes; recording it on the runtime row lets env-dispatch discover
@@ -677,8 +705,26 @@ func (h *Handler) mergeLegacyRuntimes(r *http.Request, registered db.AgentRuntim
 }
 
 // orphanDeadWindow is how long a daemon may stay silent before it is treated as
-// gone for identity-reestablishment convergence purposes.
+// gone for identity-reestablishment convergence purposes, when the live Runner
+// socket (Hub) is unavailable.
 const orphanDeadWindow = 5 * time.Minute
+
+// daemonAliveByRunner is the one daemon-liveness judgment used by orphan
+// convergence. A current DaemonCore Workspace Runner socket is authoritative;
+// the HTTP heartbeat window is only the fallback when Hub or identity is
+// unavailable (legacy / test composition), mirroring computerConnectedByRunner.
+func (h *Handler) daemonAliveByRunner(ctx context.Context, daemonID, workspaceID string, beats []db.DaemonHeartbeat) bool {
+	if h != nil && h.DaemonHub != nil && strings.TrimSpace(daemonID) != "" && strings.TrimSpace(workspaceID) != "" {
+		return h.DaemonHub.HasWorkspaceRunner(daemonID, workspaceID)
+	}
+	now := time.Now()
+	for _, hb := range beats {
+		if hb.DaemonID == daemonID && hb.LastSeenAt.Valid && now.Sub(hb.LastSeenAt.Time) < orphanDeadWindow {
+			return true
+		}
+	}
+	return false
+}
 
 // runtimeDeviceName extracts the structured device_name the daemon reports (its
 // hostname), falling back to the DeviceInfo "host · version" prefix when the
@@ -769,13 +815,6 @@ func (h *Handler) convergeOrphanedRuntime(ctx context.Context, registered db.Age
 		slog.Warn("orphan convergence: heartbeat lookup failed", "workspace", uuidToString(workspaceID), "error", err)
 		return
 	}
-	live := make(map[string]struct{}, len(beats))
-	now := time.Now()
-	for _, hb := range beats {
-		if hb.LastSeenAt.Valid && now.Sub(hb.LastSeenAt.Time) < orphanDeadWindow {
-			live[hb.DaemonID] = struct{}{}
-		}
-	}
 
 	var candidates []db.AgentRuntime
 	for _, rt := range all {
@@ -789,9 +828,13 @@ func (h *Handler) convergeOrphanedRuntime(ctx context.Context, registered db.Age
 		if rt.Provider != provider || !rt.OwnerID.Valid || uuidToString(rt.OwnerID) != ownerID {
 			continue
 		}
-		if _, ok := live[rtDaemon]; ok {
-			// Same-owner/same-device daemon is still alive — it is a live
-			// second machine, not a re-established predecessor.
+		// Live daemon check: a current DaemonCore Workspace Runner socket is
+		// authoritative liveness. Only a dead predecessor may be converged — a
+		// live same-owner/same-device daemon is a second machine, never a
+		// re-established identity. Falls back to the heartbeat window when the
+		// Hub is unavailable (legacy / test composition), mirroring
+		// computerConnectedByRunner.
+		if h.daemonAliveByRunner(ctx, rtDaemon, uuidToString(workspaceID), beats) {
 			continue
 		}
 		// Same-machine proof: prefer machine_id (ironclad), fall back to

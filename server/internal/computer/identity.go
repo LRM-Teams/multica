@@ -33,6 +33,9 @@ const (
 	// that must not silently mint a duplicate (corrupt canonical file, or
 	// conflicting legacy candidates). The caller must adopt explicitly.
 	IdentityAmbiguous
+	// IdentityReclaimed: no identity existed; a server-validated identity for
+	// the same physical machine (proven by machine fingerprint) was restored.
+	IdentityReclaimed
 )
 
 // IdentityResult is the outcome of resolving the machine identity.
@@ -304,6 +307,32 @@ func (s *IdentityStore) CreateFresh() (IdentityResult, error) {
 		return IdentityResult{}, fmt.Errorf("create fresh Computer identity: %w", err)
 	}
 	return IdentityResult{ID: id, Kind: IdentityMinted, LegacyCandidates: s.LegacyCandidates()}, nil
+}
+
+// Reclaim restores a Computer identity the server already knows about — the
+// same physical machine, proven by the OS machine fingerprint — instead of
+// minting a fresh UUID after a local identity rebuild (e.g. `~/.multica` was
+// wiped). Like CreateFresh it only writes when no canonical identity exists;
+// an existing local identity is never replaced (setup on an intact machine
+// keeps its id). The candidate is server-validated: it must be a UUID.
+func (s *IdentityStore) Reclaim(candidate string) (IdentityResult, error) {
+	candidate = strings.TrimSpace(candidate)
+	if _, err := uuid.Parse(candidate); err != nil {
+		return IdentityResult{}, fmt.Errorf("reclaimed Computer identity must be a UUID: %w", err)
+	}
+	if current, ok := s.read(); ok {
+		if current == candidate {
+			return IdentityResult{ID: current, Kind: IdentityStable}, nil
+		}
+		return IdentityResult{}, fmt.Errorf("Computer identity is already %s; refusing to replace it", current)
+	}
+	if err := s.preserveCanonicalEvidence(); err != nil {
+		return IdentityResult{}, err
+	}
+	if err := s.write(candidate); err != nil {
+		return IdentityResult{}, fmt.Errorf("reclaim Computer identity: %w", err)
+	}
+	return IdentityResult{ID: candidate, Kind: IdentityReclaimed, LegacyCandidates: s.LegacyCandidates()}, nil
 }
 
 func (s *IdentityStore) preserveCanonicalEvidence() error {

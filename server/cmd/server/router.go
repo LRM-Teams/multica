@@ -1158,7 +1158,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Post("/archive", h.ArchiveAgent)
 					r.Post("/restore", h.RestoreAgent)
 					r.Post("/cancel-tasks", h.CancelAgentTasks)
-				r.Post("/start", h.StartAgent)
+					r.Post("/start", h.StartAgent)
 					r.Post("/stop", h.StopAgent)
 					r.Get("/health", h.GetAgentHealth)
 					r.Get("/reset", h.GetAgentRestart)
@@ -1232,6 +1232,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 
 			// Computers
 			r.Get("/api/computers", h.ListComputers)
+			r.Post("/api/computers/resolve-by-machine-id", h.ResolveComputerByMachineID)
 			r.Delete("/api/computers/{daemonId}", h.DeleteComputer)
 			r.Get("/api/computers/{daemonId}/work-digest", h.GetComputerWorkDigest)
 			r.Patch("/api/computers/{daemonId}/work-journal", h.PatchComputerWorkJournal)

@@ -1602,7 +1602,7 @@ func (c *client) handleFrame(raw []byte) {
 // handleLegacyUpgradeReplayRequest completes the immediately preceding
 // Computer release's retired startup handshake without replaying or mutating
 // Attachment state. Echoing its validated cursors lets that client start the
-// current control-plane heartbeat and receive its pending machine upgrade.
+// current control-plane heartbeat.
 func (c *client) handleLegacyUpgradeReplayRequest(raw json.RawMessage) {
 	if c == nil || !c.hub.isCurrentWorkspaceRunner(c) || !c.isLegacyUpgradeRunner() {
 		return

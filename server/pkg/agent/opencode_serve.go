@@ -561,7 +561,6 @@ type opencodeServeClient struct {
 	waiters  map[string]*opencodeServeWaiter
 	closed   bool
 	closeCh  chan struct{}
-	closeErr error
 
 	// connectedCh closes once runEventLoop's GET /event has received a
 	// response (headers back — the SSE handshake completed and opencode has
@@ -725,7 +724,6 @@ func (c *opencodeServeClient) createSession(ctx context.Context, parentID string
 
 type opencodeServeTurnResult struct {
 	errMsg    string
-	toolCalls []Message
 	usageInfo *TokenUsage
 	// output is the reconciled final text, read back from GET
 	// /session/:id/message after session.idle — the authoritative source for

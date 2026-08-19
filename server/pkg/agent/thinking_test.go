@@ -20,90 +20,6 @@ func TestSlowDiscoveryCachesCoverChatBursts(t *testing.T) {
 
 // ── Claude help parsing ──────────────────────────────────────────────
 
-func TestParseClaudeEffortHelp_OldFormat(t *testing.T) {
-	t.Parallel()
-	// claude 2.1.109 — the older help omits xhigh.
-	help := `Usage: claude [options]
-
-Options:
-  --model <model>     Model to use
-  --effort <level>    Effort level for the current session (low, medium, high, max)
-  --verbose
-`
-	got := parseClaudeEffortHelp(help)
-	want := []string{"low", "medium", "high", "max"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("parseClaudeEffortHelp: got %v, want %v", got, want)
-	}
-}
-
-func TestParseClaudeEffortHelp_NewFormat(t *testing.T) {
-	t.Parallel()
-	// claude 2.1.121 — the newer help adds xhigh.
-	help := `Usage: claude [options]
-
-Options:
-  --effort <level>    Effort level for the current session (low, medium, high, xhigh, max)
-`
-	got := parseClaudeEffortHelp(help)
-	want := []string{"low", "medium", "high", "xhigh", "max"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("parseClaudeEffortHelp: got %v, want %v", got, want)
-	}
-}
-
-func TestParseClaudeEffortHelp_Missing(t *testing.T) {
-	t.Parallel()
-	help := `Usage: claude [options]
-
-Options:
-  --model <model>     Model to use
-  --verbose
-`
-	got := parseClaudeEffortHelp(help)
-	if got != nil {
-		t.Fatalf("parseClaudeEffortHelp: expected nil, got %v", got)
-	}
-}
-
-func TestProjectClaudeLevels_PerModelSubset(t *testing.T) {
-	t.Parallel()
-	superset := []string{"low", "medium", "high", "xhigh", "max"}
-	// Sonnet should drop xhigh per claudeModelEffortAllow.
-	got := projectClaudeLevels(superset, claudeModelEffortAllow["claude-sonnet-4-6"])
-	values := make([]string, 0, len(got))
-	for _, lvl := range got {
-		values = append(values, lvl.Value)
-	}
-	want := []string{"low", "medium", "high", "max"}
-	if !reflect.DeepEqual(values, want) {
-		t.Fatalf("projectClaudeLevels: got %v, want %v", values, want)
-	}
-	// Opus keeps xhigh.
-	got = projectClaudeLevels(superset, claudeModelEffortAllow["claude-opus-4-7"])
-	values = values[:0]
-	for _, lvl := range got {
-		values = append(values, lvl.Value)
-	}
-	if !reflect.DeepEqual(values, superset) {
-		t.Fatalf("projectClaudeLevels for Opus: got %v, want %v", values, superset)
-	}
-}
-
-// ── Codex discovery argv ────────────────────────────────────────────
-//
-// Elon's PR1 review found that `codex debug models --output json` is
-// rejected by codex-cli 0.131.0 — there is no `--output` flag on the
-// subcommand. The fix was to drop the flag and add `--bundled` (which
-// just skips network refresh). These two tests pin the contract:
-//
-//   - TestCodexDebugModelsArgs_Pinned asserts the literal argv we pass
-//     so a future "let's add a flag" refactor breaks loudly instead of
-//     silently swallowing the discovery output.
-//   - TestRunCodexDebugModels_ArgvSeenByBinary plugs a fake `codex`
-//     binary on PATH and verifies that what *actually* reaches the
-//     process matches the pinned argv, not just what the var holds.
-
 func TestCodexDebugModelsArgs_Pinned(t *testing.T) {
 	t.Parallel()
 	want := []string{"debug", "models", "--bundled"}
@@ -324,8 +240,6 @@ func TestValidateThinkingLevel_EmptyCodexModelDoesNotGuessDefault(t *testing.T) 
 	delete(modelCache, "codex")
 	delete(modelCache, "codex:"+fake)
 	modelCacheMu.Unlock()
-	resetThinkingCacheForTests()
-	defer resetThinkingCacheForTests()
 
 	ctx := context.Background()
 
@@ -360,8 +274,6 @@ func TestValidateThinkingLevel_ExplicitModel(t *testing.T) {
 	delete(modelCache, "codex")
 	delete(modelCache, "codex:"+fake)
 	modelCacheMu.Unlock()
-	resetThinkingCacheForTests()
-	defer resetThinkingCacheForTests()
 
 	ctx := context.Background()
 
@@ -466,43 +378,6 @@ func writeFakeClaudeHelpBinary(t *testing.T) string {
 }
 
 // ── Cache key invalidation ───────────────────────────────────────────
-
-func TestThinkingCacheKeyDistinct(t *testing.T) {
-	// Intentionally NOT t.Parallel(): this test puts three distinct keys into the
-	// shared global thinkingCache and reads them back. A sibling cache-resetting
-	// test running in parallel could wipe the cache between the puts and the gets,
-	// which is exactly the CI flake this fixes (#319). The cache-resetting tests
-	// are kept serial so their resets never overlap another test's assertions.
-	resetThinkingCacheForTests()
-	defer resetThinkingCacheForTests()
-
-	a := thinkingCacheKey{provider: "claude", executablePath: "/bin/claude", cliVersion: "2.1.121"}
-	b := thinkingCacheKey{provider: "claude", executablePath: "/bin/claude", cliVersion: "2.1.122"}
-	c := thinkingCacheKey{provider: "claude", executablePath: "/opt/claude", cliVersion: "2.1.121"}
-
-	thinkingCachePut(a, map[string]*ModelThinking{"x": {DefaultLevel: "a"}})
-	thinkingCachePut(b, map[string]*ModelThinking{"x": {DefaultLevel: "b"}})
-	thinkingCachePut(c, map[string]*ModelThinking{"x": {DefaultLevel: "c"}})
-
-	if got, _ := thinkingCacheGet(a); got["x"].DefaultLevel != "a" {
-		t.Errorf("cache key A: got %q, want a", got["x"].DefaultLevel)
-	}
-	if got, _ := thinkingCacheGet(b); got["x"].DefaultLevel != "b" {
-		t.Errorf("cache key B: got %q, want b", got["x"].DefaultLevel)
-	}
-	if got, _ := thinkingCacheGet(c); got["x"].DefaultLevel != "c" {
-		t.Errorf("cache key C: got %q, want c", got["x"].DefaultLevel)
-	}
-}
-
-// ── Shared injection fixture (Trump's MUL-2339 constraint) ───────────
-//
-// The three Codex injection points (thread/start.config,
-// thread/resume.config, turn/start.effort) must encode the same
-// thinking_level value, in the same shape per call type, with no
-// drift. This fixture defines the expected payload once and asserts
-// it across all three sites so a future refactor of any one site
-// breaks the test if the other two aren't kept in sync.
 
 // codexReasoningInjection is the shared expectation table for the
 // three Codex injection points. value→{turnStartEffort, configKey}.

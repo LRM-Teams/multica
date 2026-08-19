@@ -957,7 +957,6 @@ type DaemonHeartbeatAckPayload struct {
 	Status                  string                                  `json:"status"`
 	RuntimeGone             bool                                    `json:"runtime_gone,omitempty"`
 	PendingUpdate           *DaemonHeartbeatPendingUpdate           `json:"pending_update,omitempty"`
-	PendingMachineUpgrade   *DaemonHeartbeatPendingMachineUpgrade   `json:"pending_machine_upgrade,omitempty"`
 	PendingModelList        *DaemonHeartbeatPendingModelList        `json:"pending_model_list,omitempty"`
 	PendingLocalSkills      *DaemonHeartbeatPendingLocalSkills      `json:"pending_local_skills,omitempty"`
 	PendingLocalSkillImport *DaemonHeartbeatPendingLocalSkillImport `json:"pending_local_skill_import,omitempty"`
@@ -991,14 +990,6 @@ type DaemonHeartbeatPendingUpdate struct {
 	ID                   string `json:"id"`
 	TargetVersion        string `json:"target_version"`
 	SupportsReadyToApply bool   `json:"supports_ready_to_apply,omitempty"`
-}
-
-// DaemonHeartbeatPendingMachineUpgrade is a machine-owned operation claimed
-// by exactly one capable sibling heartbeat. #2378 uses it only for the
-// already-current tracer bullet; later phases add staging and handoff fields.
-type DaemonHeartbeatPendingMachineUpgrade struct {
-	ID            string `json:"id"`
-	TargetVersion string `json:"target_version"`
 }
 
 // DaemonHeartbeatPendingRestart describes a human-initiated remote restart

@@ -68,14 +68,10 @@ func TestHostMachineUpgradeSameOperationIsIgnoredWhileActive(t *testing.T) {
 	upgrade := newHostMachineUpgrade(host, hostMachineUpgradeConfig{})
 	upgrade.activeID = "upgrade-a"
 
-	raw, err := json.Marshal(protocol.DaemonHeartbeatAckPayload{
-		PendingMachineUpgrade: &protocol.DaemonHeartbeatPendingMachineUpgrade{ID: "upgrade-a", TargetVersion: "v9.9.9"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := upgrade.handleChildAction(context.Background(), identity, raw); err != nil {
-		t.Fatalf("forwarded heartbeat upgrade = %v", err)
+	if err := upgrade.startServiceUpgrade(identity, protocol.ComputerUpgradePayload{
+		RequestID: "upgrade-a", TargetVersion: "v9.9.9",
+	}); err != nil {
+		t.Fatalf("same upgrade request = %v", err)
 	}
 	if upgrade.activeID != "upgrade-a" {
 		t.Fatalf("activeID = %q, want upgrade-a", upgrade.activeID)
@@ -97,14 +93,10 @@ func TestHostMachineUpgradeDifferentOperationReturnsBusy(t *testing.T) {
 	upgrade := newHostMachineUpgrade(host, hostMachineUpgradeConfig{})
 	upgrade.activeID = "upgrade-a"
 
-	raw, err := json.Marshal(protocol.DaemonHeartbeatAckPayload{
-		PendingMachineUpgrade: &protocol.DaemonHeartbeatPendingMachineUpgrade{ID: "upgrade-b", TargetVersion: "v10.0.0"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := upgrade.handleChildAction(context.Background(), identity, raw); err != nil {
-		t.Fatalf("forwarded heartbeat upgrade = %v, want ignore", err)
+	if err := upgrade.startServiceUpgrade(identity, protocol.ComputerUpgradePayload{
+		RequestID: "upgrade-b", TargetVersion: "v10.0.0",
+	}); !errors.Is(err, ErrComputerControlBusy) {
+		t.Fatalf("different upgrade request = %v, want busy", err)
 	}
 }
 
@@ -128,7 +120,7 @@ func TestHostControlForwardsComputerControlBusy(t *testing.T) {
 
 	client := NewHostControlClient(endpoint, "owner-secret", identity)
 	err := client.ForwardComputerControl(context.Background(), protocol.DaemonHeartbeatAckPayload{
-		PendingMachineUpgrade: &protocol.DaemonHeartbeatPendingMachineUpgrade{ID: "upgrade-b", TargetVersion: "v10.0.0"},
+		PendingRestart: &protocol.DaemonHeartbeatPendingRestart{ID: "restart-b"},
 	})
 	if !errors.Is(err, ErrComputerControlBusy) {
 		t.Fatalf("ForwardComputerControl = %v, want ErrComputerControlBusy", err)

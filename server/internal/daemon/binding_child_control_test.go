@@ -306,7 +306,7 @@ func TestBindingChildForwardsRestartToHost(t *testing.T) {
 
 	select {
 	case ack := <-forwarded:
-		if ack.PendingRestart == nil || ack.PendingRestart.ID != "restart-a" || ack.PendingMachineUpgrade != nil {
+		if ack.PendingRestart == nil || ack.PendingRestart.ID != "restart-a" {
 			t.Fatalf("Host machine action = %+v", ack)
 		}
 	case <-time.After(time.Second):

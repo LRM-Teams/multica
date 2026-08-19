@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -114,17 +113,7 @@ func TestHostProcessOwnsMachineUpgradeAndReregistersBindingChild(t *testing.T) {
 		return nil, nil
 	})
 
-	var acceptCount atomic.Int32
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/daemon/runtimes/runtime-a/machine-upgrades/upgrade-a/accept":
-			acceptCount.Add(1)
-			t.Error("Host accepted a forwarded heartbeat Machine Upgrade")
-			http.Error(w, "Host must not execute Machine Upgrade", http.StatusConflict)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
+	upstream := httptest.NewServer(http.NotFoundHandler())
 	defer upstream.Close()
 
 	child := &readySupervisorChild{supervisorTestChild: newSupervisorTestChild(7201), controlEndpoint: childControl}
@@ -168,16 +157,12 @@ func TestHostProcessOwnsMachineUpgradeAndReregistersBindingChild(t *testing.T) {
 	}}, "runtime-token", time.Now().Add(time.Hour).Format(time.RFC3339Nano)); err != nil {
 		t.Fatalf("report Runtime set: %v", err)
 	}
-	if err := hostClient.ForwardComputerControl(context.Background(), protocol.DaemonHeartbeatAckPayload{
-		RuntimeID:             "runtime-a",
-		PendingMachineUpgrade: &protocol.DaemonHeartbeatPendingMachineUpgrade{ID: "upgrade-a", TargetVersion: "v1.0.0"},
+	if err := hostClient.RequestComputerUpgrade(context.Background(), protocol.ComputerUpgradePayload{
+		RequestID: "upgrade-a", TargetVersion: "v1.0.0",
 	}); err != nil {
-		t.Fatalf("forward Machine Upgrade: %v", err)
+		t.Fatalf("request Computer upgrade: %v", err)
 	}
 	time.Sleep(50 * time.Millisecond)
-	if got := acceptCount.Load(); got != 0 {
-		t.Fatalf("Host executed forwarded heartbeat upgrade %d times, want 0", got)
-	}
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatalf("RunProcess: %v", err)

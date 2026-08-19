@@ -236,7 +236,3 @@ func validateV6DeliberationTurn(turn V6DeliberationTurn) error {
 	}
 	return nil
 }
-
-func researchV6DeliberationEnvelope(result V6DeliberationResult) ResultEnvelope {
-	return researchV6IntegrationEnvelope(result.Envelope)
-}

@@ -2828,17 +2828,3 @@ func PreflightMixedDispatch(in MixedDispatchPreflightInput) (MixedDispatchPlan, 
 	}
 	return plan, nil
 }
-
-func mixedTrainingMode(agentID string, online, offline []string) string {
-	for _, id := range online {
-		if id == agentID {
-			return "online_rl"
-		}
-	}
-	for _, id := range offline {
-		if id == agentID {
-			return "offline_rl"
-		}
-	}
-	return "none"
-}

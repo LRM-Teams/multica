@@ -163,10 +163,6 @@ func truncateForSummary(s string, maxRunes int) string {
 
 const (
 	taskAnalyticsContextCacheMax = 4096
-	// claimResponseRecoveryWindow must exceed daemon client.Timeout for
-	// inbox drain (30s) plus execution start (30s) plus scheduling slack, so
-	// an in-flight StartTask cannot be reclaimed and double-dispatched.
-	claimResponseRecoveryWindow = 90 * time.Second
 )
 
 // buildCommentTriggerSummary fetches the comment content and truncates
@@ -2263,7 +2259,6 @@ func (s *TaskService) enqueueRerunTask(ctx context.Context, issue db.Issue, agen
 // ephemeral_sandbox marker is stored in a task's context JSONB (written at
 // dispatch by mergeEphemeralSandboxContext). It carries the sandbox_instance_id
 // the terminal cleanup hook reads to reclaim the ephemeral Cube sandbox.
-const ephemeralSandboxContextKey = "ephemeral_sandbox"
 
 // EphemeralSandboxMarker holds the Phase 5 sandbox-instance marker stored at
 // context.ephemeral_sandbox on an env-dispatch ephemeral rollout task.
@@ -2768,16 +2763,6 @@ func executionIncludesUserMemory(execution MemoryExecutionScope) bool {
 		return *execution.IncludeUserMemory
 	}
 	return memoryscope.IncludeUserMemory(execution.ChannelKind, execution.ChatSessionID, execution.MessageTexts...)
-}
-
-func teamKnowledgeAppliesForExecution(metadata []byte, execution MemoryExecutionScope) bool {
-	container := struct {
-		Applies memoryApplicability `json:"applies"`
-	}{}
-	if json.Unmarshal(metadata, &container) != nil {
-		return true
-	}
-	return memoryApplicabilityMatches(container.Applies, execution)
 }
 
 func memoryApplicabilityMatches(applies memoryApplicability, execution MemoryExecutionScope) bool {

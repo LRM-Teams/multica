@@ -15,8 +15,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-
-	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 // diagnosisToolServerMaxBody is the hard cap on HTTP request bodies.
@@ -46,55 +44,6 @@ type DiagnosisDAGWriter interface {
 	CountDiagnosisStepRewards(ctx context.Context, projectID, segmentID string) (int, error)
 }
 
-// diagnosisDAGAdapter wraps an InteractionDAGStore to implement
-// DiagnosisDAGWriter. The adapter delegates to the existing upsert query,
-// adds a point-read and count query for the tool server, and is scoped to
-// the concrete store the caller provides.
-type diagnosisDAGAdapter struct {
-	store InteractionDAGStore
-}
-
-func newDiagnosisDAGAdapter(store InteractionDAGStore) *diagnosisDAGAdapter {
-	return &diagnosisDAGAdapter{store: store}
-}
-
-func (a *diagnosisDAGAdapter) UpsertDiagnosisStepReward(ctx context.Context, projectID, segmentID string, seq int32, score int, rationale string) error {
-	return a.store.InsertInteractionDAGStepReward(ctx, db.InsertInteractionDAGStepRewardParams{
-		SegmentID: segmentID,
-		Seq:       seq,
-		Score:     int32(score),
-		Rationale: rationale,
-	})
-}
-
-func (a *diagnosisDAGAdapter) GetDiagnosisStepReward(ctx context.Context, projectID, segmentID string, seq int32) (int, string, bool, error) {
-	rewards, err := a.store.ListInteractionDAGStepRewardsForProject(ctx, projectID)
-	if err != nil {
-		return 0, "", false, err
-	}
-	for _, r := range rewards {
-		if r.SegmentID == segmentID && r.Seq == seq {
-			return int(r.Score), r.Rationale, true, nil
-		}
-	}
-	return 0, "", false, nil
-}
-
-func (a *diagnosisDAGAdapter) CountDiagnosisStepRewards(ctx context.Context, projectID, segmentID string) (int, error) {
-	rewards, err := a.store.ListInteractionDAGStepRewardsForProject(ctx, projectID)
-	if err != nil {
-		return 0, err
-	}
-	count := 0
-	for _, r := range rewards {
-		if r.SegmentID == segmentID {
-			count++
-		}
-	}
-	return count, nil
-}
-
-// topologyHash returns a deterministic hash of the ordered segment IDs for the
 // current run, matching the snapshot taken at CreateRun time.
 func (s *DiagnosisToolServer) topologyHash() string {
 	data, _ := json.Marshal(s.runCheckpoint.OrderedSegmentIDs)

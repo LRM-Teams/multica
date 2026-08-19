@@ -252,15 +252,6 @@ func ensureMulticaAgentRoot(root string) error {
 	return os.MkdirAll(root, 0o755)
 }
 
-func ensureFile(path, content string) error {
-	if _, err := os.Stat(path); err == nil {
-		return nil
-	} else if !os.IsNotExist(err) {
-		return err
-	}
-	return os.WriteFile(path, []byte(content), 0o644)
-}
-
 func (d *Daemon) syncSharedSkillsForRuntime(ctx context.Context, rt Runtime) error {
 	scanRoot, ok := sharedSkillScanRoot(d.cfg, rt.Provider)
 	if ok {

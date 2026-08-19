@@ -12,8 +12,6 @@ import (
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-const agentSkillSuggestionScanLimit = 200
-
 // MaterializePromotedSkill writes or updates a workspace skill row from a promoted evolution unit.
 func (s *EvolutionService) MaterializePromotedSkill(ctx context.Context, submission db.EvolutionUnitSubmission, unit db.SharedEvolutionUnit, files []db.EvolutionUnitSubmissionFile) (db.Skill, error) {
 	if submission.UnitType != "skill" {

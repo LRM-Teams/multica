@@ -51,6 +51,10 @@ ENV NEXT_PUBLIC_ENVIRONMENT=$NEXT_PUBLIC_ENVIRONMENT
 ENV NEXT_PUBLIC_APP_VERSION=$NEXT_PUBLIC_APP_VERSION
 ENV STANDALONE=true
 
+# NEXT_PUBLIC_* is compile-time. If this RUN ever goes through Turbo, do not
+# restore a .next built with another origin. The test workflow also sets
+# no-cache: true so Buildx cannot restore a production-baked layer.
+ENV TURBO_FORCE=1
 # Build the web app (standalone output for minimal runtime)
 RUN pnpm --filter @multica/web build
 

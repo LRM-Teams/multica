@@ -164,6 +164,13 @@ curl -fsS http://127.0.0.1:8080/readyz
 curl -fsS http://127.0.0.1:8090/api/config
 curl --connect-to 82.157.184.89:443:127.0.0.1:443 \
   -fsS https://82.157.184.89/healthz
+bash scripts/assert-baked-web-public-origins.sh \
+  --url https://82.157.184.89/login \
+  --curl-opt --connect-to \
+  --curl-opt 82.157.184.89:443:127.0.0.1 \
+  --expect https://82.157.184.89 \
+  --forbid https://api.leagent.me \
+  --forbid https://www.leagent.me
 ```
 
 The HTTPS probe validates the public-IP certificate while connecting over

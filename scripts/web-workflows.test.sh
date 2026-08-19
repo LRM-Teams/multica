@@ -89,6 +89,30 @@ if ! grep -Fq -- 'echo "tag=sha-${sha}"' <<<"$deploy_test_workflow"; then
   exit 1
 fi
 
+for required in \
+  'NEXT_PUBLIC_ENVIRONMENT=test' \
+  'no-cache: true' \
+  'assert-baked-web-public-origins.sh' \
+  'install -m 0755 scripts/assert-baked-web-public-origins.sh' \
+  '--forbid https://api.leagent.me' \
+  '--forbid https://www.leagent.me'; do
+  if ! grep -Fq -- "$required" <<<"$deploy_test_workflow"; then
+    echo "Test deployment must refuse a production-baked web image: $required"
+    exit 1
+  fi
+done
+
+if grep -Fq -- 'buildcache-test-amd64' <<<"$deploy_test_workflow" &&
+  awk '
+    /Build and push test web/ { capture = 1 }
+    /^  deploy:/ { capture = 0 }
+    capture && /buildcache-test-amd64/ { found = 1 }
+    END { exit(found ? 0 : 1) }
+  ' .github/workflows/deploy-test.yml; then
+  echo "Test web image must not reuse a Buildx cache that can restore production-baked NEXT_PUBLIC_*"
+  exit 1
+fi
+
 if grep -Fq -- 'compose run --rm --no-deps --pull always' <<<"$deploy_test_workflow"; then
   echo "Test migration must not use docker compose run --pull; s89 Compose does not support that flag"
   exit 1

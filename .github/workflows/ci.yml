@@ -90,6 +90,9 @@ jobs:
       - name: Enforce web-only workflow policy
         run: bash scripts/web-workflows.test.sh
 
+      - name: Check baked web public-origin gate
+        run: bash scripts/assert-baked-web-public-origins.test.sh
+
       - name: Verify reserved-slugs.ts is up to date
         # Re-runs the generator and fails on any drift from the
         # checked-in TypeScript output. The Go side embeds the JSON

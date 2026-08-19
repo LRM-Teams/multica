@@ -456,6 +456,9 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		// reassign agents + tasks onto the new UUID-keyed row, then delete
 		// the stale row so there's only ever one runtime per machine.
 		registrationHandler.mergeLegacyRuntimes(r, registered, provider, req.LegacyDaemonIDs)
+		// Heal agents orphaned by a daemon identity re-establishment (e.g.
+		// ~/.multica wiped and the daemon re-registered under a fresh id).
+		registrationHandler.convergeOrphanedRuntime(r.Context(), registered, row.Inserted)
 
 		resp = append(resp, registrationHandler.runtimeToResponse(r.Context(), registered))
 		registeredRuntimes = append(registeredRuntimes, registeredRuntime{
@@ -671,6 +674,148 @@ func (h *Handler) mergeLegacyRuntimes(r *http.Request, registered db.AgentRuntim
 			)
 		}
 	}
+}
+
+// orphanDeadWindow is how long a daemon may stay silent before it is treated as
+// gone for identity-reestablishment convergence purposes.
+const orphanDeadWindow = 5 * time.Minute
+
+// runtimeDeviceName extracts the structured device_name the daemon reports (its
+// hostname), falling back to the DeviceInfo "host · version" prefix when the
+// metadata field is absent.
+func runtimeDeviceName(rt db.AgentRuntime) string {
+	if len(rt.Metadata) > 0 {
+		var m map[string]any
+		if err := json.Unmarshal(rt.Metadata, &m); err == nil {
+			if s, ok := m["device_name"].(string); ok && strings.TrimSpace(s) != "" {
+				return strings.TrimSpace(s)
+			}
+		}
+	}
+	if i := strings.Index(rt.DeviceInfo, " · "); i >= 0 {
+		return strings.TrimSpace(rt.DeviceInfo[:i])
+	}
+	return strings.TrimSpace(rt.DeviceInfo)
+}
+
+// convergeOrphanedRuntime heals the daemon identity-reestablishment case. A
+// machine whose identity is rebuilt (e.g. `~/.multica` wiped → a fresh
+// daemon_id is minted) re-registers its runtimes under a brand-new daemon_id;
+// the new daemon has no way to report the old identity, so agents still pinned
+// to the old identity's runtimes would otherwise silently go offline.
+//
+// The predecessor is detected server-side and its agents reassigned onto the
+// newly registered same-provider runtime, but ONLY when the match is
+// unambiguous. A predecessor candidate is another daemon's runtime with the
+// SAME workspace, provider, owner and device_name whose daemon is dead (no
+// recent heartbeat). Because device_name is just the hostname and is not unique
+// across machines, whenever more than one candidate matches we refuse to guess
+// and skip — never misroute an agent onto another machine.
+//
+// It runs only on first insertion of a runtime row; normal restarts re-register
+// an existing row (inserted=false) and are left untouched, matching the
+// "no remap on the happy restart path" contract.
+func (h *Handler) convergeOrphanedRuntime(ctx context.Context, registered db.AgentRuntime, inserted bool) {
+	if !inserted {
+		return
+	}
+	newRuntimeID := uuidToString(registered.ID)
+	newDaemon := strings.TrimSpace(registered.DaemonID.String)
+	if newDaemon == "" || !registered.OwnerID.Valid {
+		return
+	}
+	device := runtimeDeviceName(registered)
+	if device == "" {
+		// Without a trusted device name we cannot identify the machine.
+		return
+	}
+	ownerID := uuidToString(registered.OwnerID)
+	provider := registered.Provider
+	workspaceID := registered.WorkspaceID
+
+	all, err := h.Queries.ListAgentRuntimes(ctx, workspaceID)
+	if err != nil {
+		slog.Warn("orphan convergence: list runtimes failed", "workspace", uuidToString(workspaceID), "error", err)
+		return
+	}
+	beats, err := h.Queries.GetDaemonHeartbeatsForWorkspace(ctx, workspaceID)
+	if err != nil {
+		slog.Warn("orphan convergence: heartbeat lookup failed", "workspace", uuidToString(workspaceID), "error", err)
+		return
+	}
+	live := make(map[string]struct{}, len(beats))
+	now := time.Now()
+	for _, hb := range beats {
+		if hb.LastSeenAt.Valid && now.Sub(hb.LastSeenAt.Time) < orphanDeadWindow {
+			live[hb.DaemonID] = struct{}{}
+		}
+	}
+
+	var candidates []db.AgentRuntime
+	for _, rt := range all {
+		rtDaemon := strings.TrimSpace(rt.DaemonID.String)
+		if rtDaemon == "" || rtDaemon == newDaemon {
+			continue
+		}
+		if uuidToString(rt.ID) == newRuntimeID {
+			continue
+		}
+		if rt.Provider != provider || !rt.OwnerID.Valid || uuidToString(rt.OwnerID) != ownerID {
+			continue
+		}
+		if runtimeDeviceName(rt) != device {
+			continue
+		}
+		if _, ok := live[rtDaemon]; ok {
+			// Same-owner/same-device daemon is still alive — it is a live
+			// second machine, not a re-established predecessor.
+			continue
+		}
+		candidates = append(candidates, rt)
+	}
+	if len(candidates) != 1 {
+		if len(candidates) > 1 {
+			slog.Info("orphan convergence: ambiguous predecessor, skipping",
+				"workspace", uuidToString(workspaceID), "daemon", newDaemon, "provider", provider, "candidates", len(candidates))
+		}
+		return
+	}
+	old := candidates[0]
+	oldID := uuidToString(old.ID)
+	agents, err := h.Queries.ReassignAgentsToRuntime(ctx, db.ReassignAgentsToRuntimeParams{
+		NewRuntimeID: registered.ID,
+		OldRuntimeID: old.ID,
+	})
+	if err != nil {
+		slog.Warn("orphan convergence: reassign agents failed", "old_runtime", oldID, "new_runtime", newRuntimeID, "error", err)
+		return
+	}
+	tasks, err := h.Queries.ReassignTasksToRuntime(ctx, db.ReassignTasksToRuntimeParams{
+		NewRuntimeID: registered.ID,
+		OldRuntimeID: old.ID,
+	})
+	if err != nil {
+		slog.Warn("orphan convergence: reassign tasks failed", "old_runtime", oldID, "new_runtime", newRuntimeID, "error", err)
+		return
+	}
+	// Fail incomplete memory curation runs on the stale runtime before deleting
+	// it (runtime_id FK is ON DELETE SET NULL and would otherwise strand queued
+	// runs). Mirrors the surrounding legacy-merge path.
+	if _, err := h.DB.Exec(ctx, `
+		UPDATE memory_curation_run
+		   SET status = 'failed', error = 'runtime merged', finished_at = now()
+		 WHERE runtime_id = $1 AND status IN ('queued', 'waiting_runtime', 'running')
+	`, old.ID); err != nil {
+		slog.Warn("orphan convergence: fail curation runs failed", "old_runtime", oldID, "error", err)
+	}
+	if err := h.Queries.DeleteAgentRuntime(ctx, old.ID); err != nil {
+		slog.Warn("orphan convergence: delete stale runtime failed", "old_runtime", oldID, "error", err)
+		return
+	}
+	slog.Info("orphan runtime converged",
+		"old_daemon", strings.TrimSpace(old.DaemonID.String), "old_runtime", oldID,
+		"new_daemon", newDaemon, "new_runtime", newRuntimeID,
+		"provider", provider, "device", device, "agents_reassigned", agents, "tasks_reassigned", tasks)
 }
 
 // DaemonDeregister marks runtimes as offline when the daemon shuts down.

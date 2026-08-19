@@ -12,6 +12,7 @@ import { deriveRuntimeHealth } from "@multica/core/runtimes";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import { resolveActorDisplayName } from "@multica/core/identity";
 import { Button } from "@multica/ui/components/ui/button";
+import { ButtonGroup } from "@multica/ui/components/ui/button-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@multica/ui/components/ui/tooltip";
 import { useOpenDM } from "../../common/use-open-dm";
 import { useT } from "../../i18n/use-t";
@@ -176,55 +177,73 @@ export function AgentProfileActions({
         aria-label={t(($) => $.side_panel.actions_section)}
         data-testid="agent-profile-chrome-actions"
       >
-        {showMessage ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            data-testid="agent-profile-chrome-action-message"
-            aria-label={messageLabel}
-            title={messageLabel}
-            disabled={openingDM}
-            onClick={() => void openDM({ peer_type: "agent", peer_id: agent.id })}
-          >
-            {messageIcon}
-          </Button>
-        ) : null}
+        {/* Icon-only segmented toolbar (Frank 2026-08-19): bordered outline
+            controls in a ButtonGroup so the cluster reads as real buttons
+            without text. Accessible names come from aria-label; Tooltip is the
+            hover affordance; no native title (banned by #3619). */}
+        <ButtonGroup>
+          {showMessage ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    data-testid="agent-profile-chrome-action-message"
+                    aria-label={messageLabel}
+                    disabled={openingDM}
+                    onClick={() => void openDM({ peer_type: "agent", peer_id: agent.id })}
+                  >
+                    {messageIcon}
+                  </Button>
+                }
+              />
+              <TooltipContent side="bottom">{messageLabel}</TooltipContent>
+            </Tooltip>
+          ) : null}
 
-        {showLifecycle ? (
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  data-testid="agent-profile-chrome-action-start"
-                  aria-label={lifecycleLabel}
-                  disabled={lifecycleDisabled}
-                  onClick={() => void handleLifecycle()}
-                >
-                  {lifecycleIcon}
-                </Button>
-              }
-            />
-            <TooltipContent>{lifecycleLabel}</TooltipContent>
-          </Tooltip>
-        ) : null}
+          {showLifecycle ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    data-testid="agent-profile-chrome-action-start"
+                    aria-label={lifecycleLabel}
+                    disabled={lifecycleDisabled}
+                    onClick={() => void handleLifecycle()}
+                  >
+                    {lifecycleIcon}
+                  </Button>
+                }
+              />
+              <TooltipContent side="bottom">{lifecycleLabel}</TooltipContent>
+            </Tooltip>
+          ) : null}
 
-        {showRestart ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            data-testid="agent-profile-chrome-action-restart"
-            aria-label={restartLabel}
-            title={restartLabel}
-            onClick={() => setRestartOpen(true)}
-          >
-            <RotateCcw className="size-4 shrink-0" aria-hidden />
-          </Button>
-        ) : null}
+          {showRestart ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    data-testid="agent-profile-chrome-action-restart"
+                    aria-label={restartLabel}
+                    onClick={() => setRestartOpen(true)}
+                  >
+                    <RotateCcw className="size-4 shrink-0" aria-hidden />
+                  </Button>
+                }
+              />
+              <TooltipContent side="bottom">{restartLabel}</TooltipContent>
+            </Tooltip>
+          ) : null}
+        </ButtonGroup>
 
         {dialogs}
       </section>

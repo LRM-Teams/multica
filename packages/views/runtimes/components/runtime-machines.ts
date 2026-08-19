@@ -794,7 +794,9 @@ function machineTitle(
   if (first.runtime_mode === "cloud") {
     return `${capitalize(first.provider)} cloud`;
   }
-  return first.daemon_id ? shortDaemonId(first.daemon_id) : "Unknown machine";
+  // Never show a bare daemon/computer id as the machine name (Frank
+  // 2026-08-19): a UUID is noise, not a name.
+  return `Unknown machine`;
 }
 
 /** Hostname placeholder when display_name is unset (grey label in rename UI). */
@@ -807,7 +809,8 @@ export function machineHostname(machine: RuntimeMachine): string | null {
   // id as the visible label — keep the create-time sandbox name (machine.title).
   if (machine.pendingCloud) return null;
   if (machine.isCurrent && machine.title) return machine.title;
-  return machine.daemonId ? shortDaemonId(machine.daemonId) : null;
+  // No resolvable device name — hide rather than show a bare id as hostname.
+  return null;
 }
 
 /** Prefer an online runtime id for API calls scoped to one daemon host. */

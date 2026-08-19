@@ -44,6 +44,7 @@ const (
 type RunnerRecord struct {
 	Lifecycle    RunnerLifecycle
 	BackoffUntil time.Time
+	ExternalPID  int
 
 	startIdentity string
 	child         bool
@@ -65,13 +66,39 @@ func (r *RunnerRecord) CanSpawn(wanted bool, now time.Time) bool {
 	if r == nil {
 		return wanted
 	}
-	if !wanted || r.child {
+	if !wanted || r.child || r.ExternalPID > 0 {
 		return false
 	}
 	if r.Lifecycle != RunnerLifecycleCrashed && r.Lifecycle != RunnerLifecycleStopped {
 		return false
 	}
 	return !now.Before(r.BackoffUntil)
+}
+
+// AdoptExternalPID records a still-live runner that a successor Host found
+// through pidfile evidence. Raft 1.0.17 does the same: adopt instead of
+// spawning a second child, and do not kill that pid on Host shutdown.
+func (r *RunnerRecord) AdoptExternalPID(pid int) {
+	if r == nil || pid < 1 {
+		return
+	}
+	r.child = false
+	r.ExternalPID = pid
+	r.Lifecycle = RunnerLifecycleRunning
+	r.BackoffUntil = time.Time{}
+}
+
+// ClearExternalPIDIfDead drops a previously adopted runner after it exits so
+// the next reconcile may spawn a replacement.
+func (r *RunnerRecord) ClearExternalPIDIfDead(alive bool) bool {
+	if r == nil || r.ExternalPID < 1 || alive {
+		return false
+	}
+	r.ExternalPID = 0
+	if r.Lifecycle == RunnerLifecycleRunning {
+		r.Lifecycle = RunnerLifecycleStopped
+	}
+	return true
 }
 
 func (r *RunnerRecord) ObserveSpawn() string {

@@ -72,8 +72,12 @@ func TestRecoverRunnerStatesRemovesDeadOwnerState(t *testing.T) {
 	if err := writeRunnerPID(root, state.WorkspaceID, 999999); err != nil {
 		t.Fatal(err)
 	}
-	if err := recoverRunnerStates(root, nil); err != nil {
+	adopted, err := recoverRunnerStates(root, nil)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if len(adopted) != 0 {
+		t.Fatalf("dead runner was adopted: %+v", adopted)
 	}
 	if _, err := os.Stat(filepath.Dir(runnerStatePath(root, state.WorkspaceID))); !os.IsNotExist(err) {
 		t.Fatalf("orphan runner directory still exists: %v", err)
@@ -96,10 +100,44 @@ func TestRecoverRunnerStatesRefusesMismatchedPIDIdentity(t *testing.T) {
 	if err := writeRunnerPID(root, state.WorkspaceID, state.RunnerPID); err != nil {
 		t.Fatal(err)
 	}
-	if err := recoverRunnerStates(root, nil); err != nil {
+	adopted, err := recoverRunnerStates(root, nil)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if len(adopted) != 0 {
+		t.Fatalf("mismatched runner was adopted: %+v", adopted)
 	}
 	if _, err := os.Stat(runnerStatePath(root, state.WorkspaceID)); !os.IsNotExist(err) {
 		t.Fatalf("mismatched runner state still exists: %v", err)
+	}
+}
+
+func TestRecoverRunnerStatesAdoptsLiveMatchingRunner(t *testing.T) {
+	root := t.TempDir()
+	pid := os.Getpid()
+	identity := processIdentityValue(pid)
+	if identity == "" {
+		t.Skip("process identity is unavailable on this platform")
+	}
+	state := persistedRunnerState{
+		WorkspaceID: "workspace-live", StartIdentity: "start-live", OwnerPID: 999998,
+		RunnerPID: pid, RunnerIdentity: identity,
+		StartedAt: time.Now().UTC(),
+	}
+	if err := writeRunnerState(root, state); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeRunnerPID(root, state.WorkspaceID, pid); err != nil {
+		t.Fatal(err)
+	}
+	adopted, err := recoverRunnerStates(root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(adopted) != 1 || adopted[0].WorkspaceID != state.WorkspaceID || adopted[0].PID != pid {
+		t.Fatalf("adopted = %+v, want live matching runner", adopted)
+	}
+	if _, err := os.Stat(runnerStatePath(root, state.WorkspaceID)); err != nil {
+		t.Fatalf("live runner state was deleted: %v", err)
 	}
 }

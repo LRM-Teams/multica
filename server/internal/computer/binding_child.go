@@ -66,7 +66,6 @@ func StartBindingProcess(exe string, args []string, bootstrap BindingChildBootst
 	}
 	cmd := exec.Command(exe, args...)
 	cmd.SysProcAttr = SysProcAttr(true)
-	configureChildParentDeath(cmd)
 	cmd.Stderr = os.Stderr
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -128,7 +127,6 @@ func StartBindingCommand(exe string, args []string) (*BindingRunner, error) {
 	}
 	cmd := exec.Command(exe, args...)
 	cmd.SysProcAttr = SysProcAttr(true)
-	configureChildParentDeath(cmd)
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}

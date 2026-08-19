@@ -94,13 +94,23 @@ func NewBindingSupervisor(config BindingSupervisorConfig) (*BindingSupervisor, e
 	if config.ReadyTimeout <= 0 {
 		config.ReadyTimeout = 30 * time.Second
 	}
-	if err := recoverRunnerStates(config.StateRoot, config.Logger); err != nil {
+	adopted, err := recoverRunnerStates(config.StateRoot, config.Logger)
+	if err != nil {
 		return nil, fmt.Errorf("recover persisted Binding Runner state: %w", err)
 	}
-	return &BindingSupervisor{
+	supervisor := &BindingSupervisor{
 		config: config, records: make(map[string]*RunnerRecord),
 		children: make(map[string]BindingChild), cancels: make(map[string]context.CancelFunc), controls: make(map[string]string), desired: make(map[string]struct{}),
-	}, nil
+	}
+	for _, runner := range adopted {
+		record := supervisor.recordLocked(runner.WorkspaceID)
+		record.startIdentity = runner.StartIdentity
+		record.AdoptExternalPID(runner.PID)
+		if config.Logger != nil {
+			config.Logger.Info("adopted still-live Binding Runner", "workspace_id", runner.WorkspaceID, "pid", runner.PID)
+		}
+	}
+	return supervisor, nil
 }
 
 func (supervisor *BindingSupervisor) Reconcile(parent context.Context, desiredWorkspaceIDs []string) {
@@ -131,8 +141,12 @@ func (supervisor *BindingSupervisor) Reconcile(parent context.Context, desiredWo
 		if _, wanted := desired[workspaceID]; wanted {
 			continue
 		}
-		child := supervisor.children[workspaceID]
 		record := supervisor.records[workspaceID]
+		if record != nil && record.ExternalPID > 0 && !record.HasChild() {
+			// Adopted runners are not this Host's children. Leave them alive.
+			continue
+		}
+		child := supervisor.children[workspaceID]
 		identity := BindingChildIdentity{WorkspaceID: workspaceID}
 		if record != nil {
 			identity.StartIdentity = record.StartIdentity()
@@ -156,6 +170,12 @@ func (supervisor *BindingSupervisor) Reconcile(parent context.Context, desiredWo
 			continue
 		}
 		record := supervisor.recordLocked(workspaceID)
+		if record.ExternalPID > 0 {
+			alive, known := processAlive(record.ExternalPID)
+			if known && record.ClearExternalPIDIfDead(alive) && supervisor.config.Logger != nil {
+				supervisor.config.Logger.Info("adopted Binding Runner exited; will respawn if still desired", "workspace_id", workspaceID)
+			}
+		}
 		if !record.CanSpawn(true, now) {
 			continue
 		}
@@ -314,6 +334,17 @@ func (supervisor *BindingSupervisor) Stop() {
 	if supervisor == nil {
 		return
 	}
+	// Raft 1.0.17 shutdown kills only children this Host spawned. An adopted
+	// externalPid is unproven ownership and is left alive for the successor.
+	supervisor.mu.Lock()
+	for workspaceID, record := range supervisor.records {
+		if record != nil && record.ExternalPID > 0 && !record.HasChild() {
+			if supervisor.config.Logger != nil {
+				supervisor.config.Logger.Warn("leaving adopted Binding Runner alive at shutdown", "workspace_id", workspaceID, "pid", record.ExternalPID)
+			}
+		}
+	}
+	supervisor.mu.Unlock()
 	supervisor.Reconcile(context.Background(), nil)
 }
 

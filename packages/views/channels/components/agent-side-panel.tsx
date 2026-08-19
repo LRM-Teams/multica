@@ -89,9 +89,10 @@ interface AgentSidePanelProps {
  * conversation — mutually exclusive with the thread panel (same slot,
  * per Frank's direction 2026-07-09: inline panel, not a route jump).
  *
- * Profile header keeps identity and its primary actions together.
- * Profile tab: editable Display name / Description, Info, Runtime Config
- * section (LRM-470). Usage is its own tab — never stacked in Profile.
+ * Profile chrome copies Message + Start/Stop + Restart/Reset as compact
+ * icons. Profile tab keeps the labeled ACTIONS stack without Message
+ * (LRM-448), plus editable Display name / Description, Info, Runtime
+ * Config (LRM-470). Usage is its own tab — never stacked in Profile.
  */
 export function AgentSidePanel({
   agent,
@@ -195,14 +196,32 @@ export function AgentSidePanel({
       closeAriaLabel={t(($) => $.side_panel.close_aria)}
       doneLabel={pageDoneLabel}
       leading={leading}
+      actions={
+        !agent.archived_at ? (
+          <AgentProfileActions
+            agent={agent}
+            canManage={canEdit.allowed}
+            presence={presence}
+            layout="icons"
+          />
+        ) : undefined
+      }
     >
       <div
         className={cn(
-          "flex shrink-0 items-center gap-3 pb-3 pl-4 pr-10 pt-3.5",
-          // LRM-1185: the page floating close is now a real 44×44 hit target,
-          // so the identity row must reserve 44 + inset instead of 40.
-          variant === "page" && "pl-0 pr-14",
-          stackedBack && "pr-4 pt-2",
+          "flex shrink-0 items-center gap-3 pb-3 pl-4 pt-3.5",
+          variant === "page" && "pl-0",
+          // Floating chrome sits over this row. Archived / Close-only keeps
+          // the original inset; live agents also reserve the copied icons.
+          stackedBack
+            ? "pr-4 pt-2"
+            : agent.archived_at
+              ? variant === "page"
+                ? "pr-14"
+                : "pr-10"
+              : variant === "page"
+                ? "pr-36"
+                : "pr-32",
         )}
         data-testid="agent-profile-identity"
       >
@@ -233,13 +252,6 @@ export function AgentSidePanel({
             />
           ) : null}
         </div>
-        {!agent.archived_at ? (
-          <AgentProfileActions
-            agent={agent}
-            canManage={canEdit.allowed}
-            presence={presence}
-          />
-        ) : null}
       </div>
 
       {showTabBar ? (
@@ -283,6 +295,7 @@ export function AgentSidePanel({
               <div className={tab === "profile" ? undefined : "hidden"}>
                 <AgentProfileTabContent
                   agent={agent}
+                  presence={presence}
                   members={members}
                   currentUserId={currentUserId}
                 />
@@ -319,6 +332,7 @@ export function AgentSidePanel({
         <div className="min-h-0 min-w-0 flex-1 overflow-y-auto">
           <AgentProfileTabContent
             agent={agent}
+            presence={presence}
             members={members}
             currentUserId={currentUserId}
           />
@@ -347,10 +361,12 @@ function formatDate(value: string): string {
 
 function AgentProfileTabContent({
   agent,
+  presence,
   members,
   currentUserId,
 }: {
   agent: Agent;
+  presence: AgentPresence | undefined;
   members: readonly MemberWithUser[];
   currentUserId: string | null;
 }) {
@@ -566,6 +582,14 @@ function AgentProfileTabContent({
             <MemoryGrowthField growth={agent.memory_growth} />
           </div>
         ) : null}
+
+        <div className="border-t border-border pt-3">
+          <AgentProfileActions
+            agent={agent}
+            canManage={canEdit.allowed}
+            presence={presence}
+          />
+        </div>
       </div>
     </div>
   );

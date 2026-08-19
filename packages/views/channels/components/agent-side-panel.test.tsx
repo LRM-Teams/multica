@@ -89,11 +89,26 @@ vi.mock("../../agents/components/tabs/reminders-tab", () => ({
 }));
 
 vi.mock("../../agents/components/agent-profile-actions", () => ({
-  AgentProfileActions: ({ canManage }: { canManage: boolean }) => (
-    <div data-testid="agent-profile-actions" data-can-manage={String(canManage)}>
-      <button type="button" data-testid="agent-profile-action-message">
-        Message
-      </button>
+  AgentProfileActions: ({
+    canManage,
+    layout = "stack",
+  }: {
+    canManage: boolean;
+    layout?: "stack" | "icons";
+  }) => (
+    <div
+      data-testid={
+        layout === "icons" ? "agent-profile-chrome-actions" : "agent-profile-actions"
+      }
+      data-can-manage={String(canManage)}
+    >
+      {layout === "icons" ? (
+        <button type="button" data-testid="agent-profile-chrome-action-message" />
+      ) : (
+        <button type="button" data-testid="agent-profile-action-start">
+          Start Agent
+        </button>
+      )}
     </div>
   ),
 }));
@@ -529,13 +544,17 @@ describe("AgentSidePanel", () => {
     );
   });
 
-  it("puts the action group in the identity header and removes it from the Profile body", () => {
+  it("copies compact icons into chrome and keeps labeled Actions in the Profile body", () => {
     renderPanel();
     expect(screen.queryByTestId("agent-profile-message-button")).not.toBeInTheDocument();
+    const chrome = screen.getByTestId("agent-profile-chrome-actions");
     const actions = screen.getByTestId("agent-profile-actions");
-    expect(screen.getByTestId("agent-profile-identity")).toContainElement(actions);
-    expect(screen.getByTestId("agent-profile-tab-content")).not.toContainElement(actions);
-    expect(screen.getByTestId("agent-profile-action-message")).toHaveTextContent("Message");
+    expect(screen.getByTestId("agent-profile-tab-content")).toContainElement(actions);
+    expect(screen.getByTestId("agent-profile-identity")).not.toContainElement(actions);
+    expect(screen.getByTestId("agent-profile-identity")).not.toContainElement(chrome);
+    expect(screen.queryByTestId("agent-profile-action-message")).not.toBeInTheDocument();
+    expect(screen.getByTestId("agent-profile-action-start")).toHaveTextContent("Start Agent");
+    expect(screen.getByTestId("agent-profile-chrome-action-message")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "More" })).not.toBeInTheDocument();
   });
 
@@ -813,6 +832,7 @@ describe("AgentSidePanel", () => {
   it("keeps header actions visible while Info and Usage stay in their own surfaces", () => {
     activityPermission.allowed = true;
     renderPanel("user-owner");
+    expect(screen.getByTestId("agent-profile-chrome-actions")).toBeInTheDocument();
     expect(screen.getByTestId("agent-profile-actions")).toBeInTheDocument();
     expect(screen.getByText("Display name")).toBeInTheDocument();
     expect(screen.getByText("Description")).toBeInTheDocument();

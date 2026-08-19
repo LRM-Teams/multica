@@ -671,12 +671,13 @@ _Avoid_: retrospective as the deliverable, PPT, standup dump, weekly report file
 
 An Agent on a provisioned per-Computer runtime (local or cloud) that gathers
 recent work on the OS where that runtime runs — evidence (short diffs, file
-summaries, key snippets) plus a preliminary Integrated summary and optional
-Mermaid diagrams that need full local context. Completeness first: summary and
+summaries, key snippets) plus preliminary **Work groups** (same project
+together; related cross-repo work in one group with why) and optional Mermaid
+diagrams that need full local context. Completeness first: groups and
 diagrams are additive, never a substitute for Highlights. Not Computer Host
 Digest harvest.
 _Avoid_: Host Journal as the Brief machine source, keymouse, full-repo dump,
-summary-only packs that drop evidence
+groups-only packs that drop evidence
 
 ### Period Brief Agent
 

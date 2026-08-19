@@ -1,6 +1,6 @@
 ---
 name: multica-period-work-collect
-description: "Use when collecting Period Work / 本期工作介绍 / collector packs on the OS where this runtime runs. Covers HOME (local) or cloud env git discovery, recent commits, dirty trees, short diffs, preliminary integration, optional Mermaid diagrams, denylist, pack markdown shape, and --note-write delivery. Do not use for writing the final Period Work Brief."
+description: "Use when collecting Period Work / 本期工作介绍 / collector packs on the OS where this runtime runs. Covers HOME (local) or cloud env git discovery, recent commits, dirty trees, short diffs, preliminary Work groups (same project + related cross-repo), optional Mermaid diagrams, denylist, pack markdown shape, and --note-write delivery. Do not use for writing the final Period Work Brief."
 user-invocable: false
 allowed-tools: Bash(multica *), Bash(git *), Bash(hostname *), Bash(uname *), Bash(find *), Bash(ls *), Bash(head *), Bash(tail *), Bash(wc *), Bash(date *)
 ---
@@ -12,9 +12,10 @@ end-to-end. Read `references/collect-recipes.md` for copy-paste shell recipes.
 
 You are gathering **work traces on the machine this runtime actually runs on**
 — not platform Facts, not Host Digest APIs, not the final Brief. You see the
-**fullest local picture** for this Computer: after harvesting evidence, do a
-**preliminary integration** and, when it helps, add **Mermaid** diagrams that
-only someone with full local context can draw honestly.
+**fullest local picture** for this Computer: after harvesting evidence, do
+**preliminary grouping** into **Work groups** and, when it helps, add
+**Mermaid** diagrams that only someone with full local context can draw
+honestly.
 
 ## Scope
 
@@ -24,19 +25,32 @@ only someone with full local context can draw honestly.
 | cloud | That cloud runtime environment (`$HOME` / workspace dirs you can see) |
 
 Prefer **git repositories under the scan root** that have commits or dirty
-files inside the wake `<window>` (RFC3339 start → end). Also note obvious
-project dirs that are not git if they clearly changed.
+files **inside the wake `<window>`** (RFC3339 start → end, half-open). Also
+note obvious project dirs that are not git if they clearly changed **in that
+same window**. Never pad the pack with earlier/later history.
 
 ## Hard rules
 
+- **STRICT WINDOW** — every Highlight, commit, and Work-group claim must fall
+  inside wake `<window>` start→end. Drop out-of-range evidence; do not invent
+  continuity from outside the window.
 - **Do** use `git` + bounded file reads for short diffs / summaries / key snippets.
-- **Do** add an **Integrated summary** that groups this machine's work into
-  themes / threads — **without dropping evidence**. Highlights + Repos remain
-  the evidence layer; the summary is additive.
+- **Do** add **`## Work groups`** that classify this machine's work for the
+  synthesizer — **without dropping evidence**. Highlights + Repos remain the
+  evidence layer; Work groups organize them.
+- **Grouping rules (required):**
+  1. **Same project / same git repo / same project root → one group** by
+     default.
+  2. **Related across repos, files, or surfaces → still one group** when they
+     share one outcome or initiative (e.g. frontend + backend for the same
+     feature). State **why** under the group.
+  3. **Unrelated work → separate groups**, even if same day or same machine.
+     Never glue by calendar.
+  4. Every Highlight belongs to **exactly one** group.
 - **Do** add Mermaid diagrams when a multi-step flow, dependency, or state
   change cannot be recovered from bullets alone (flowchart / sequence / state
   preferred). Cite which Highlights the diagram covers.
-- **Do not** replace evidence with summary-only or diagram-only content.
+- **Do not** replace evidence with groups-only or diagram-only content.
 - **Do not** invent work, secrets, or diagrams for decorative effect.
 - **Do not** use keymouse, screenshots, clipboard, browser history, or full-repo dumps.
 - **Do not** read or quote secrets: `.ssh`, `.gnupg`, `.aws`, `.env` / `.env.*`,
@@ -54,14 +68,19 @@ project dirs that are not git if they clearly changed.
    prefer depth-limited `find`, skip denylist dirs, stop after ~40 roots.
 3. **Per repo in the window** collect:
    - remotes (`git remote -v`)
-   - commits in window (`git log --after/--before`, subject + short hash)
-   - dirty paths (`git status --porcelain`)
-   - for the **top 3–7** most relevant changes: a **short** diff or file
+   - commits in window (`git log --after="$START" --before="$END"`, subject + short hash) — **required filter**
+   - dirty paths only when the path’s mtime (or a related commit) is in-window;
+     otherwise omit or park under Unscoped with an explicit “mtime outside window” note
+   - for the **top 3–7** most relevant **in-window** changes: a **short** diff or file
      summary (`git diff --stat`, `git show --stat`, or ≤80 lines of patch /
      file head — never whole files)
-4. **Integrate (this machine only)** — write **Integrated summary**: 3–7
-   themes/threads with what changed and why it matters locally. Every claim
-   must still be backed by a Highlight or repo line.
+4. **Group (this machine only)** — write **`## Work groups`**:
+   - Start from repos/project roots; merge into larger groups when work is
+     related across repos/files.
+   - Aim for **3–7 groups** when there is that much signal (fewer is fine).
+   - Each group: human title + why + repos/paths + nested items citing Highlights.
+   - Interleaved calendar moments stay in one group when they are the same
+     initiative; unrelated work stays separate.
 5. **Diagram when necessary** — if a flow/dependency/state change needs the
    full local picture, add 1–3 Mermaid blocks under **Diagrams**. Skip if
    bullets already suffice.
@@ -91,9 +110,20 @@ than inventing work.
 - <claim> — evidence: short hash / path / ≤80-line diff or snippet
 - …
 
-## Integrated summary
-- <theme/thread>: what this machine accomplished in the window (cite Highlights)
-- … keep evidence above; do not drop commits/paths just because they appear here
+## Work groups
+
+### <group title — project or related initiative>
+- why: same repo/project | related outcome across <repos/paths>
+- repos/paths: …
+- items:
+  - <in-window work in this group> (cite Highlights)
+  - …
+
+### <another group>
+- why: …
+- repos/paths: …
+- items:
+  - …
 
 ## Diagrams
 <!-- Optional. Omit the whole section if no diagram is needed. -->
@@ -109,8 +139,8 @@ flowchart TD
 ```
 
 Aim for **enough signal for a manager Brief**: at least several repo lines
-when repos exist, Highlights that cite concrete paths or commits, plus an
-Integrated summary — not vague “worked on stuff”.
+when repos exist, Highlights that cite concrete paths or commits, plus clear
+**Work groups** — not vague “worked on stuff”.
 
 ## Delivery
 

@@ -222,6 +222,9 @@ export interface CreateNoteWritebackRequest {
 
 /** S4-S1/S4-S3 on-demand day/week/month retrospective. */
 export type NoteRetrospectiveWindow = "day" | "week" | "month";
+
+/** Period Brief window — calendar presets or inclusive custom range. */
+export type NotePeriodBriefWindow = NoteRetrospectiveWindow | "custom";
 export type NoteRetrospectiveSource = "issue_activity" | "touched_notes" | "agent_runs";
 export type NoteRetrospectiveComposition = "day_raw" | "layered_summaries";
 
@@ -255,8 +258,13 @@ export interface CreateNoteRetrospectiveResponse {
 
 /** Period Work Brief synthesis (ADR 0019 / K0). */
 export interface CreateNotePeriodBriefRequest {
-  window: NoteRetrospectiveWindow;
+  window: NotePeriodBriefWindow;
+  /** Anchor date for day|week|month (YYYY-MM-DD in timezone). */
   date?: string;
+  /** Inclusive start calendar day for `window: "custom"` (YYYY-MM-DD). */
+  start_date?: string;
+  /** Inclusive end calendar day for `window: "custom"` (YYYY-MM-DD). */
+  end_date?: string;
   timezone?: string;
   /** Synthesizer Agent (defaults to Period Brief Agent / 周报 in the UI). */
   agent_id: string;

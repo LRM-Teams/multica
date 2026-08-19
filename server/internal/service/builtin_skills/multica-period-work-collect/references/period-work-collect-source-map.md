@@ -13,7 +13,7 @@ to these sources.
 | Collector wake partitions (`<window>`, `<instruction>`, empty pack note) | `server/internal/handler/note_worker_prompt.go` `buildNotePeriodBriefCollectorPrompt` |
 | Failed / empty collectors: status board says call failed; never seed stub pack body | `formatNotePeriodBriefPacks`; no `notePeriodBriefCollectorPackStub` |
 | Short wait / empty degrade for packs (does not fail whole request) | **Superseded:** status-driven settle + stalled ceiling; see `awaitPeriodBriefCollectorPacks` / `multica-period-work-brief` |
-| Collector may add Integrated summary + Mermaid (evidence remains required) | ADR 0019 Detail level; this skill `SKILL.md` pack shape |
+| Collector must add `## Work groups` + optional Mermaid (evidence remains required) | ADR 0019 Detail level; this skill `SKILL.md` pack shape; `notePeriodBriefCollectorInstruction` |
 | Synthesizer must not be confused with collectors | `server/internal/agenttmpl/templates/weekly-report.json`; `notePeriodBriefInstruction` |
 | Product contract | `docs/adr/0019-runtime-agent-collectors-period-brief.md` |
 

@@ -1,6 +1,6 @@
 ---
 name: multica-period-work-brief
-description: "Use when synthesizing a Period Work Brief / 本期工作介绍 / 周报 from platform Facts and collector packs. Covers fixed section shape (Summary with Work Summary + Next Steps; optional Technique / Achievements / Research), titles, required Mermaid, status board, abandon vs retry, the narrow retry-collectors CLI (max 3), and --note-write delivery under 工作介绍/. Do not use for collecting OS work (that is multica-period-work-collect)."
+description: "Use when synthesizing a Period Work Brief / 本期工作介绍 / 周报 from platform Facts and collector packs. Covers audience-facing reporting (no evidence layer), fixed section shape (Summary with Work Summary + Next Steps; optional Technique / Achievements / Research), titles, Mermaid for intuition, status board, abandon vs retry, the narrow retry-collectors CLI (max 3), and --note-write delivery under 工作介绍/. Do not use for collecting OS work (that is multica-period-work-collect)."
 user-invocable: false
 allowed-tools: Bash(multica *)
 ---
@@ -8,13 +8,45 @@ allowed-tools: Bash(multica *)
 # Period Work Brief synthesizer
 
 You turn **platform Facts** + **collector packs** into one Period Work Brief
-a manager can read. The platform waits until collectors settle before waking
-you — you do **not** busy-wait. You **do** read the status board and decide
-abandon vs retry. Then you **narrate**, you do not paste packs.
+**for other people to read** (manager / colleague). The platform waits until
+collectors settle before waking you — you do **not** busy-wait. You **do**
+read the status board and decide abandon vs retry. Then you **narrate for
+humans**, you do not paste packs or show how you verified anything.
+
+## Audience (non-negotiable)
+
+This note is a **对外稿给别人看** — strong structure, intuitive skim path,
+plain reporting language. Readers should understand what changed and why it
+matters **without** seeing engineering forensics.
+
+Facts and collector packs are **private source material**. Digest them; do
+not reprint their evidence layer.
 
 ## Reporting shape (non-negotiable)
 
-This is a **汇报稿**, not a file listing.
+### STRICT TIME WINDOW
+
+Narrate **only** work inside the wake window (platform Facts timestamps +
+collector claims dated in that half-open range). Do not widen to earlier or
+later history to “complete” a story. If a pack cites out-of-window commits,
+ignore them.
+
+### No evidence layer in the Brief
+
+**Forbidden in the Brief body:**
+
+- Commit hashes, `git` output, diffs, patches, file snippets
+- Labels like `evidence:` / 「证据」 / “as proven by”
+- Collector `## Runtime` / `## Repos / roots` dumps, dirty-path lists
+- Explaining *how* you know something (verification prose)
+
+**Allowed:**
+
+- Human titles and outcome claims
+- Nested bullets on decision / impact / leftover risk
+- Optional Issue/PR **identifiers as references** (e.g. `MUL-123`) — not as
+  proof blocks
+- Mermaid that makes a flow intuitive for a colleague
 
 ### Fixed sections (English headings)
 
@@ -40,8 +72,8 @@ This is a **汇报稿**, not a file listing.
 ```
 
 - **`## Summary` always required.** It contains exactly:
-  - **`### Work Summary`** — **priority**. Detailed account of what mattered
-    in the period (see grouping below).
+  - **`### Work Summary`** — **priority**. Detailed **reader-facing** account
+    of what mattered in the period (see grouping below).
   - **`### Next Steps`** — plausible follow-ups inferred from current work
     and unfinished threads; label speculation honestly.
 - **`## Technique` / `## Achievements` / `## Research`** — include **only**
@@ -50,45 +82,57 @@ This is a **汇报稿**, not a file listing.
 
 ### Work Summary grouping
 
-- Cluster by initiative / outcome / Issue, **not** by repo, directory,
-  machine, or collector.
-- The same work in several packs, Highlights, or machines is **one thread**
-  with nested sub-points. Never list sibling threads that are actually the
-  same project.
-- Each thread: human title + claim + **nested bullets** (decision, impact,
-  remaining risk). Skip trivia (dirty scratch files, Runtime dumps). Do not
-  starve a thread the packs treat as substantial.
+**Start from collector ## Work groups.** Then refine for readers.
+**Group by initiative identity**, not by clock.
+
+- Each collector Work group → **one main titled thread** under Work Summary.
+  Nest different work inside that group as **sub-bullets / nested sub-points**.
+- Trust collector defaults: same-repo/project groups, and cross-repo groups
+  the collector marked related (read their **why**).
+- Merge groups **across collectors** only when they share the same initiative
+  identity / outcome / Issue. Do **not** invent merges of unrelated groups.
+- Never split one collector group by calendar. Interleaved moments stay one
+  thread (e.g. product change + collaboration copy for the same flow).
+- Unrelated initiatives stay **separate** even if they shared a day or a
+  machine. Never write “另一条主线是 A，同时 B…” when A and B have no shared
+  outcome (e.g. stock screening vs Docker image automation).
+- Self-check before delivery: for every top-level thread, ask (1) would a
+  reader name this as **one** piece of work? (2) did I glue two unrelated
+  products with “和/同时/另外”? If (2) is yes, split. If two threads answer
+  the same initiative question, merge.
+- Each thread: **human main title** + 1–2 sentence claim + **nested bullets**
+  (decision, impact, remaining risk) a non-author can follow. Skip trivia.
 - Delegated leverage (agents / teammates) belongs inside Work Summary when
-  relevant.
-- Unscoped machine work (本机未归类) only when it did not map into a thread.
+  relevant — still in plain language.
 - Abandoned collectors: short “未纳入采集” note with machine + reason —
-  **never invent** that machine’s OS work.
+  **never invent** that machine’s OS work. Do not attach evidence dumps.
 
 ### Titles are reporting language
 
 - Good: `时段工作介绍改为状态驱动采集` / `对话忙碌态不再显示 Online`
 - Forbidden as headings: filesystem paths, repo folders, package directories
   (`packages/views`, `/home/jian40/…`), a branch name alone (`feat/foo`).
-- A path may appear **inside** a bullet as evidence, never as the `###` title.
+- Prefer **no paths** in the Brief body. Ground claims in product language,
+  not filesystem breadcrumbs.
 
-### Mermaid is required when the pack has it
+### Mermaid for intuition (when the pack has it)
 
-Collector packs often include flow/sequence/state diagrams **because a
-colleague needs them**. If a **ready** pack has a Mermaid fence that explains
-work in Work Summary (or another included section):
+If a **ready** pack has a Mermaid fence that helps a colleague understand a
+flow:
 
 1. Copy that ` ```mermaid ` block next to **that work**.
-2. Do not drop diagrams. Do not leave them only under unscoped leftovers.
-3. Overlapping packs → keep the clearest one. You may tighten node labels;
-   do not invent topology.
+2. Tighten labels for readability; do not invent topology.
+3. Do not drop useful diagrams. Overlapping packs → keep the clearest one.
+4. Diagrams are for **intuition**, not for dumping graph evidence.
 
 ### Density
 
-| Too detailed (cut) | Too thin (expand from packs) |
+| Cut from the Brief | Expand from packs into narrative |
 | --- | --- |
-| Raw diffs, commit lists, every dirty path | Work Summary that is only paths or one vague bullet |
-| Collector `## Runtime` / `## Repos / roots` dumps | Packs have Highlights/summary but Work Summary skips the claim |
-| Empty Technique/Achievements/Research stubs | Missing Mermaid that the pack already drew |
+| Raw diffs, commit lists, dirty paths,「证据」 | Vague Work Summary with no outcome claim |
+| Collector Runtime / Repos dumps | Packs have substance but Brief skips the story |
+| Empty Technique/Achievements/Research stubs | Missing Mermaid that would help a reader |
+| One bullet gluing unrelated initiatives | Same initiative split into time-sliced siblings |
 
 ## Status board (in the wake / draft)
 

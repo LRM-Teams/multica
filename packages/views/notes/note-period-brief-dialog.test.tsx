@@ -2,7 +2,7 @@
  * @vitest-environment happy-dom
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Agent } from "@multica/core/types";
@@ -225,5 +225,35 @@ describe("NotePeriodBriefDialog", () => {
     await user.click(screen.getByTestId("period-brief-collector-collector-b"));
     expect(screen.getByRole("button", { name: /开始介绍/ })).toBeDisabled();
     expect(createNotePeriodBrief).not.toHaveBeenCalled();
+  });
+
+  it("submits an inclusive custom date range", async () => {
+    const user = userEvent.setup();
+    renderDialog("zh-Hans");
+    await waitFor(() => {
+      expect(screen.getByTestId("period-brief-window-custom")).toBeTruthy();
+    });
+    await user.click(screen.getByTestId("period-brief-window-custom"));
+    fireEvent.change(screen.getByTestId("period-brief-start-date"), {
+      target: { value: "2026-08-10" },
+    });
+    fireEvent.change(screen.getByTestId("period-brief-end-date"), {
+      target: { value: "2026-08-14" },
+    });
+    await user.click(screen.getByRole("button", { name: /开始介绍/ }));
+    await waitFor(() => {
+      expect(createNotePeriodBrief).toHaveBeenCalledWith(
+        expect.objectContaining({
+          window: "custom",
+          start_date: "2026-08-10",
+          end_date: "2026-08-14",
+          agent_id: "weekly-1",
+        }),
+      );
+    });
+    const payload = createNotePeriodBrief.mock.calls.at(-1)?.[0] as {
+      date?: string;
+    };
+    expect(payload.date).toBeUndefined();
   });
 });

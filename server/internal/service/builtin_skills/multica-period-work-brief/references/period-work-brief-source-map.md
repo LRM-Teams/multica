@@ -5,7 +5,8 @@ to these sources.
 
 | Claim | Source |
 |-------|--------|
-| Platform waits until collectors settle (not fixed empty timeout) | `server/internal/handler/note_period_brief.go` `awaitPeriodBriefCollectorPacks` |
+| Custom inclusive date range (`window=custom`) | `resolveNotePeriodBriefWindow` / `resolveNotePeriodBriefCustomWindow` |
+| Strict in-window collect + synthesize | `notePeriodBriefCollectorInstruction`, `notePeriodBriefInstruction`, this skill |
 | Failed job still ready if `--note-write` landed | `classifyPeriodBriefCollectorOutcome` (`packReady` first); `TestCreateNotePeriodBriefHarvestsNoteWriteAfterFailedTask` |
 | Collect / retry / synth one-shot session | `persistPeriodBriefNoteBriefContext`; daemon `ForceFreshSession` |
 | Status board fields (status/retryable/abandon_why) | `formatNotePeriodBriefPacks`, `classifyPeriodBriefCollectorOutcome` |
@@ -23,6 +24,8 @@ to these sources.
 |-------|--------|
 | `--note-write` to folder under 工作介绍/ | `notePeriodBriefInstruction` |
 | Fixed board: Summary (Work Summary + Next Steps); optional Technique / Achievements / Research | `notePeriodBriefInstruction`; `weekly-report.json`; this skill |
+| Audience-facing Brief — no evidence layer (hashes/diffs/「证据」) | `notePeriodBriefInstruction`; this skill `Audience` / `No evidence layer` |
 | Wake system_contract repeats Summary board + Mermaid | `buildNotePeriodBriefPrompt` |
-| Platform weekly-report persona refresh on stale instructions | `EnsurePeriodBriefAgent` / `refreshPeriodBriefInstructionsIfStale` (`## Summary` marker) |
+| Platform weekly-report persona refresh on stale instructions | `EnsurePeriodBriefAgent` / `refreshPeriodBriefInstructionsIfStale` (`Start from collector ## Work groups` marker) |
+| Work Summary expands collector Work groups (main title + nested work) | this skill `Work Summary grouping`; `notePeriodBriefInstruction` |
 

@@ -32,6 +32,37 @@ type screenedCandidateFetchState struct {
 	DecisionHash                             string
 }
 
+func (s *PostgresStore) ListPendingScreenedSourceIngestions(ctx context.Context, limit int) ([]FetchScreenedSourceInput, error) {
+	if s == nil || s.pool == nil || limit <= 0 {
+		return nil, nil
+	}
+	rows, err := s.pool.Query(ctx, `SELECT candidate.workspace_id::text, candidate.session_id::text, candidate.id::text
+		FROM research_screening_decision decision
+		JOIN research_source_candidate candidate
+		  ON (candidate.workspace_id, candidate.session_id, candidate.id) =
+		     (decision.workspace_id, decision.session_id, decision.source_candidate_id)
+		LEFT JOIN research_source_snapshot snapshot
+		  ON (snapshot.workspace_id, snapshot.session_id, snapshot.screening_decision_id) =
+		     (decision.workspace_id, decision.session_id, decision.id)
+		WHERE decision.disposition='accepted' AND snapshot.id IS NULL
+		ORDER BY decision.decided_at, decision.id
+		LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	pending := make([]FetchScreenedSourceInput, 0, limit)
+	for rows.Next() {
+		var item FetchScreenedSourceInput
+		if err = rows.Scan(&item.WorkspaceID, &item.SessionID, &item.CandidateID); err != nil {
+			return nil, err
+		}
+		item.MaximumContentSize = defaultScreenedSourceFetchBytes
+		pending = append(pending, item)
+	}
+	return pending, rows.Err()
+}
+
 // FetchAndIngestScreenedSource performs provider I/O before opening the write
 // transaction, then re-locks and revalidates the append-only lineage before it
 // creates a canonical Source Snapshot. An accepted URL is never evidence until

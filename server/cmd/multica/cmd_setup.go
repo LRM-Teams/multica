@@ -456,6 +456,17 @@ func establishWorkspaceBinding(cmd *cobra.Command) error {
 		return nil // no workspace selected; nothing to bind yet
 	}
 
+	// After a local identity rebuild (e.g. `~/.multica` wiped), the resident
+	// would otherwise mint a fresh computer_id and orphan every agent still
+	// pinned to the old identity's runtimes. Before minting, ask the server
+	// whether this physical machine (OS machine fingerprint) already has an
+	// identity under this user; if so, reuse it (LRM-1570).
+	if err := reclaimComputerIdentityByMachineID(cfg); err != nil {
+		// Reclaim is best-effort: a lookup failure must not block setup. The
+		// server-side convergence heals the orphan case as a backstop.
+		fmt.Fprintf(os.Stderr, "(computer identity reclaim skipped: %v)\n", err)
+	}
+
 	identity, err := (&computer.Lifecycle{}).Identity()
 	if err != nil {
 		return fmt.Errorf("resolve computer identity: %w", err)
@@ -515,6 +526,44 @@ func establishWorkspaceConnection(cfg cli.CLIConfig, identity, workspaceID, work
 }
 
 var bindingAcceptanceTimeout = 50 * time.Second
+
+// reclaimComputerIdentityByMachineID restores the Computer identity the server
+// already knows for this physical machine instead of letting the resident mint
+// a fresh UUID after a local identity rebuild (LRM-1570). It is best-effort:
+// failures (network, server error, no match) return nil so setup proceeds and
+// the server-side orphan convergence heals the case as a backstop.
+func reclaimComputerIdentityByMachineID(cfg cli.CLIConfig) error {
+	store := computer.NewIdentityStore(computer.RootDir(""))
+	if state := store.Peek(""); state["computer_id"] != nil {
+		return nil // identity intact; nothing to reclaim
+	}
+	machineID := computer.MachineID()
+	if machineID == "" {
+		return nil // no machine fingerprint available on this platform
+	}
+	if cfg.ServerURL == "" || cfg.Token == "" || cfg.WorkspaceID == "" {
+		return nil // no authenticated session to ask
+	}
+	client := cli.NewAPIClient(cfg.ServerURL, cfg.WorkspaceID, cfg.Token)
+	ctx, cancel := cli.APIContext(context.Background())
+	defer cancel()
+	var resp struct {
+		ComputerID string `json:"computer_id"`
+	}
+	if err := client.PostJSON(ctx, "/api/computers/resolve-by-machine-id", map[string]any{
+		"machine_id": machineID,
+	}, &resp); err != nil {
+		return fmt.Errorf("resolve-by-machine-id: %w", err)
+	}
+	if strings.TrimSpace(resp.ComputerID) == "" {
+		return nil // never seen before → mint fresh
+	}
+	if _, err := store.Reclaim(resp.ComputerID); err != nil {
+		return fmt.Errorf("reclaim identity: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "Reclaimed existing Computer identity %s for this machine\n", resp.ComputerID)
+	return nil
+}
 
 func waitForWorkspaceBindingAcceptance(cmd *cobra.Command) error {
 	cfg, err := cli.LoadCLIConfigForProfile("")

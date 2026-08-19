@@ -26,6 +26,10 @@ type WorkspaceRunnerConfig struct {
 	DeviceName       string
 	OS               string
 	CLIVersion       string
+	// MachineID mirrors Config.MachineID: the OS-level machine fingerprint,
+	// reported in the Runner ready payload so the server can persist it on the
+	// Computer identity and use it for same-machine convergence (LRM-1570).
+	MachineID string
 }
 
 func (config WorkspaceRunnerConfig) validate() (WorkspaceRunnerConfig, error) {
@@ -308,6 +312,7 @@ func (runner *WorkspaceRunner) runConnection(ctx context.Context) error {
 		DeviceName:         runner.config.DeviceName,
 		OS:                 runner.config.OS,
 		CLIVersion:         runner.config.CLIVersion,
+		MachineID:          runner.config.MachineID,
 		RunningAgents:      runner.processes.RunningAgentIDs(),
 		ActiveCapabilities: runner.activeCapabilities(),
 	}); err != nil {
@@ -354,6 +359,7 @@ func (d *Daemon) newWorkspaceRunner(workspaceID string) (*WorkspaceRunner, error
 		DeviceName:       d.cfg.DeviceName,
 		OS:               normalizeGOOS(runtime.GOOS),
 		CLIVersion:       d.cfg.CLIVersion,
+		MachineID:        d.cfg.MachineID,
 	}, workspaceRunnerDependencies{
 		client:           d.client,
 		serverBaseURL:    d.cfg.ServerBaseURL,

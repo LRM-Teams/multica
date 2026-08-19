@@ -116,7 +116,7 @@ $$;
 
 ALTER FUNCTION research_artifact_scan_session_migration_diagnostics(UUID,UUID)
   RENAME TO research_artifact_scan_session_migration_diagnostics_v381;
-CREATE FUNCTION research_artifact_scan_session_migration_diagnostics(p_workspace_id UUID,p_session_id UUID)
+CREATE OR REPLACE FUNCTION research_artifact_scan_session_migration_diagnostics(p_workspace_id UUID,p_session_id UUID)
 RETURNS INTEGER LANGUAGE plpgsql AS $$
 DECLARE v_owner_id UUID; v_total INTEGER;
 BEGIN

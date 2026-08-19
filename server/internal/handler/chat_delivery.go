@@ -55,6 +55,10 @@ func (h *Handler) deliverStandaloneChatMessage(ctx context.Context, session db.C
 	sessionID := uuidToString(session.ID)
 	deliveryID := standaloneChatDeliveryID(messageID, agentID)
 	target := standaloneChatDeliveryTargetPrefix + sessionID
+	deliverContent := content
+	if prefix := h.buildNoteChatWakePrefix(ctx, session.ID); prefix != "" {
+		deliverContent = prefix + content
+	}
 	var seq int64
 	if err := h.DB.QueryRow(ctx, `
 		SELECT COALESCE(MAX(seq), 0) + 1
@@ -92,7 +96,7 @@ func (h *Handler) deliverStandaloneChatMessage(ctx context.Context, session db.C
 			Target:        target,
 			ReplyTarget:   target,
 			Seq:           seq,
-			Content:       content,
+			Content:       deliverContent,
 			Parts:         parts,
 			InitiatorType: "member",
 			InitiatorID:   initiatorUserID,

@@ -220,3 +220,116 @@ DELETE FROM note_page_share WHERE page_id = $1 AND user_id = $2`, noteID, collab
 		t.Fatalf("revoked share: expected 404, got %d: %s", denyRec.Code, denyRec.Body.String())
 	}
 }
+
+func TestGetAgentNotePageAllowsNoteChatSessionSubtree(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	agentID := createHandlerTestAgent(t, "Note Chat Bubble "+uuid.NewString()[:8], nil)
+	rootID := createNotePageForAITest(t, "Bubble root "+uuid.NewString())
+	var childID string
+	if err := testPool.QueryRow(context.Background(), `
+INSERT INTO note_page (workspace_id, parent_id, owner_user_id, title, content, sort_key, created_by, updated_by)
+VALUES ($1, $2, $3, $4, 'child body', '00000000000000000002', $3, $3)
+RETURNING id`, testWorkspaceID, rootID, testUserID, "Bubble child "+uuid.NewString()).Scan(&childID); err != nil {
+		t.Fatalf("create child: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM note_page WHERE id = $1`, childID) })
+
+	createRec := httptest.NewRecorder()
+	createReq := newRequest(http.MethodPost, "/api/chat/sessions", map[string]any{
+		"agent_id":             agentID,
+		"title":                "note bubble",
+		"context_note_page_id": rootID,
+	})
+	createReq = withChatTestWorkspaceCtx(t, createReq)
+	testHandler.CreateChatSession(createRec, createReq)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("CreateChatSession: %d %s", createRec.Code, createRec.Body.String())
+	}
+	var session ChatSessionResponse
+	if err := json.NewDecoder(createRec.Body).Decode(&session); err != nil {
+		t.Fatalf("decode session: %v", err)
+	}
+	if session.ContextNotePageID != rootID {
+		t.Fatalf("context_note_page_id = %q, want %s", session.ContextNotePageID, rootID)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM chat_session WHERE id = $1`, session.ID) })
+
+	childReq := withURLParam(withAgentCredentialPrincipal(
+		newRequest(http.MethodGet, "/api/agent/notes/pages/"+childID, nil),
+		agentID, testWorkspaceID, testUserID,
+	), "id", childID)
+	childRec := httptest.NewRecorder()
+	testHandler.GetAgentNotePage(childRec, childReq)
+	if childRec.Code != http.StatusOK {
+		t.Fatalf("child get: expected 200, got %d: %s", childRec.Code, childRec.Body.String())
+	}
+
+	treeReq := withURLParam(withAgentCredentialPrincipal(
+		newRequest(http.MethodGet, "/api/agent/notes/pages/"+rootID+"/tree", nil),
+		agentID, testWorkspaceID, testUserID,
+	), "id", rootID)
+	treeRec := httptest.NewRecorder()
+	testHandler.ListAgentNoteTree(treeRec, treeReq)
+	if treeRec.Code != http.StatusOK {
+		t.Fatalf("tree: expected 200, got %d: %s", treeRec.Code, treeRec.Body.String())
+	}
+	var tree struct {
+		Pages []struct {
+			ID    string `json:"id"`
+			Depth int    `json:"depth"`
+		} `json:"pages"`
+	}
+	if err := json.NewDecoder(treeRec.Body).Decode(&tree); err != nil {
+		t.Fatalf("decode tree: %v", err)
+	}
+	if len(tree.Pages) < 2 {
+		t.Fatalf("tree pages = %#v, want root+child", tree.Pages)
+	}
+}
+
+func TestGetAgentNotePageAllowsWorkerSubtreeDescendant(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	agentID := createHandlerTestAgent(t, "Worker Subtree "+uuid.NewString()[:8], nil)
+	rootID := createNotePageForAITest(t, "Worker root "+uuid.NewString())
+	var childID string
+	if err := testPool.QueryRow(context.Background(), `
+INSERT INTO note_page (workspace_id, parent_id, owner_user_id, title, content, sort_key, created_by, updated_by)
+VALUES ($1, $2, $3, $4, 'worker child', '00000000000000000002', $3, $3)
+RETURNING id`, testWorkspaceID, rootID, testUserID, "Worker child "+uuid.NewString()).Scan(&childID); err != nil {
+		t.Fatalf("create child: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM note_page WHERE id = $1`, childID) })
+
+	createRec := httptest.NewRecorder()
+	testHandler.CreateNoteWorkerJob(createRec, withURLParam(newRequest(http.MethodPost, "/api/notes/pages/"+rootID+"/worker-jobs", map[string]any{
+		"agent_id":    agentID,
+		"instruction": "read subtree",
+	}), "id", rootID))
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("CreateNoteWorkerJob: %d %s", createRec.Code, createRec.Body.String())
+	}
+	var job NoteWorkerJobResponse
+	if err := json.NewDecoder(createRec.Body).Decode(&job); err != nil {
+		t.Fatalf("decode job: %v", err)
+	}
+	if job.TaskID == nil {
+		t.Fatal("expected task_id")
+	}
+
+	req := withURLParam(withAgentTaskPrincipal(
+		newRequest(http.MethodGet, "/api/agent/notes/pages/"+childID, nil),
+		agentID, testWorkspaceID, testUserID, *job.TaskID,
+	), "id", childID)
+	rec := httptest.NewRecorder()
+	testHandler.GetAgentNotePage(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("descendant get: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+

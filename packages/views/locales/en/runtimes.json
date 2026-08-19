@@ -81,6 +81,8 @@
     "basics_pinned_version": "Version pin",
     "agents_section": "Agents on this computer",
     "code_agents_section": "Runtimes on this computer",
+    "code_agents_env": "Environment variables",
+    "code_agents_env_dialog_title": "Environment variables",
     "code_agents_installed": "Installed",
     "code_agents_not_installed": "Not installed",
     "code_agents_installed_empty": "No runtimes detected on this computer yet.",
@@ -206,7 +208,8 @@
       }
     },
     "section_team_public_one": "Team public ({{count}})",
-    "section_team_public_other": "Team public ({{count}})"
+    "section_team_public_other": "Team public ({{count}})",
+    "basics_version": "Version"
   },
   "health": {
     "online": {

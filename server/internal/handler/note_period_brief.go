@@ -88,6 +88,7 @@ func notePeriodBriefCollectorInstruction(draftPageID, windowLabel, windowStart, 
 		rangeHint = label + " (" + start + " → " + end + ")"
 	}
 	return "Collect recent work on the OS where this runtime runs for " + rangeHint + " into a structured Period Work collector pack.\n" +
+		"OWN COMPUTER ONLY: harvest only this bound Computer. Do not collect from another member's laptop/cloud box.\n" +
 		"STRICT TIME WINDOW: only include commits, file changes, and claims whose activity falls inside start→end from the wake `<window>` partition (RFC3339, half-open: include start, exclude end). Drop anything outside that range — do not widen to \"recent\" or \"this week\" on your own.\n" +
 		"Follow the built-in skill `multica-period-work-collect` (read SKILL.md and `references/collect-recipes.md`) before collecting — use its shell recipes with the wake `$START` / `$END`.\n" +
 		"Scope: whole-machine HOME for local runtimes; the cloud runtime environment for cloud. Prefer git status, commits in-window, dirty trees with in-window mtimes, and project dirs you can see.\n" +
@@ -164,7 +165,7 @@ func (h *Handler) CreateNotePeriodBrief(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
-	collectorIDs, ok := h.parsePeriodBriefCollectorAgentIDs(w, r.Context(), workspaceID, req.CollectorAgentIDs)
+	collectorIDs, ok := h.parsePeriodBriefCollectorAgentIDs(w, r.Context(), workspaceID, userID, req.CollectorAgentIDs)
 	if !ok {
 		return
 	}
@@ -435,12 +436,13 @@ UPDATE note_page SET content = $1, updated_at = now(), updated_by = $2 WHERE id 
 	return draft, job, used, empty, skipped, true
 }
 
-// parsePeriodBriefCollectorAgentIDs requires at least one non-archived Agent in
-// the workspace. Order is preserved; duplicates are dropped.
+// parsePeriodBriefCollectorAgentIDs requires at least one non-archived Period
+// Work collector whose bound Computer is owned by the caller. Public runtimes
+// and workspace admin role do not grant collection on someone else's machine.
 func (h *Handler) parsePeriodBriefCollectorAgentIDs(
 	w http.ResponseWriter,
 	ctx context.Context,
-	workspaceID pgtype.UUID,
+	workspaceID, callerUserID pgtype.UUID,
 	raw []string,
 ) ([]string, bool) {
 	if len(raw) == 0 {
@@ -471,6 +473,23 @@ func (h *Handler) parsePeriodBriefCollectorAgentIDs(
 		}
 		if !isPeriodBriefCollectorAgentName(agent.Name) {
 			writeError(w, http.StatusBadRequest, "collector agent must be a Period Work collector: "+trimmed)
+			return nil, false
+		}
+		if !agent.RuntimeID.Valid {
+			writeError(w, http.StatusBadRequest, "collector agent has no bound computer: "+trimmed)
+			return nil, false
+		}
+		rt, err := h.Queries.GetAgentRuntime(ctx, agent.RuntimeID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "collector agent runtime not found: "+trimmed)
+			return nil, false
+		}
+		if uuidToString(rt.WorkspaceID) != uuidToString(workspaceID) {
+			writeError(w, http.StatusBadRequest, "collector agent runtime not in workspace: "+trimmed)
+			return nil, false
+		}
+		if !rt.OwnerID.Valid || uuidToString(rt.OwnerID) != uuidToString(callerUserID) {
+			writeError(w, http.StatusBadRequest, "collector agent must be on a computer you own: "+trimmed)
 			return nil, false
 		}
 		seen[trimmed] = struct{}{}

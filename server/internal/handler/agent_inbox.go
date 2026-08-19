@@ -1402,6 +1402,14 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 	task := agentInboxSyntheticTask(event, runtime.ID)
 	runtimeWorkspaceID := uuidToString(runtime.WorkspaceID)
 	resp := taskToResponse(task, runtimeWorkspaceID)
+	if len(runtime.CustomEnv) > 0 {
+		var runtimeEnv map[string]string
+		if err := json.Unmarshal(runtime.CustomEnv, &runtimeEnv); err != nil {
+			slog.Warn("agent inbox claim: failed to unmarshal runtime custom_env", "runtime_id", uuidToString(runtime.ID), "error", err)
+		} else {
+			resp.RuntimeEnv = runtimeEnv
+		}
+	}
 	if event.ChannelID.Valid {
 		resp.ChannelID = uuidToString(event.ChannelID)
 		var channelKind string

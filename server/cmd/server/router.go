@@ -1246,6 +1246,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Delete("/by-daemon/{daemonId}", h.DeleteComputer)
 				r.Route("/{runtimeId}", func(r chi.Router) {
 					r.Patch("/", h.UpdateAgentRuntime)
+					r.Get("/env", h.GetRuntimeEnv)
+					r.Put("/env", h.UpdateRuntimeEnv)
 					r.Get("/usage", h.GetRuntimeUsage)
 					r.Get("/usage/by-agent", h.GetRuntimeUsageByAgent)
 					r.Get("/usage/by-hour", h.GetRuntimeUsageByHour)
@@ -1437,6 +1439,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Get("/issues/search", h.SearchAgentIssues)
 				r.Get("/issues/{id}", h.GetAgentIssue)
 				r.Get("/notes/pages/{id}", h.GetAgentNotePage)
+				r.Get("/notes/pages/{id}/tree", h.ListAgentNoteTree)
 				r.Post("/notes/period-briefs/{draftPageId}/retry-collectors", h.RetryAgentNotePeriodBriefCollectors)
 				r.Post("/notes/period-briefs/{draftPageId}/submit-pack", h.SubmitAgentNotePeriodBriefPack)
 				r.Post("/issues", h.CreateAgentIssue)

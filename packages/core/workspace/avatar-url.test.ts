@@ -70,13 +70,13 @@ describe("AGENT_AVATAR_PRESETS", () => {
   it("holds the full immutable OSS-backed pool", () => {
     expect(AGENT_AVATAR_PRESETS).toHaveLength(15);
     expect(AGENT_AVATAR_PRESETS).toContain(
-      "https://cdn.leagent.me/agent-avatars/v2/agent-11.png",
+      "https://cdn.leagent.me/agent-avatars/v3/agent-11.png",
     );
     expect(AGENT_AVATAR_PRESETS[0]).toBe(
-      "https://cdn.leagent.me/agent-avatars/v2/agent-01.png",
+      "https://cdn.leagent.me/agent-avatars/v3/agent-01.png",
     );
     expect(AGENT_AVATAR_PRESETS[14]).toBe(
-      "https://cdn.leagent.me/agent-avatars/v2/agent-15.png",
+      "https://cdn.leagent.me/agent-avatars/v3/agent-15.png",
     );
     expect(new Set(AGENT_AVATAR_PRESETS).size).toBe(15); // no dupes
   });

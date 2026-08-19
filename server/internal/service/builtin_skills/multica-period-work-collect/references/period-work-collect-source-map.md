@@ -8,6 +8,7 @@ to these sources.
 | Custom inclusive date range (`window=custom`) | `resolveNotePeriodBriefWindow` / `resolveNotePeriodBriefCustomWindow` |
 | Collector instruction + draft id + submit-pack | `server/internal/handler/note_period_brief.go` `notePeriodBriefCollectorInstruction`, `dispatchNotePeriodBriefCollector` |
 | `POST /api/notes/period-briefs` orchestrates collectors then synthesizer | `server/internal/handler/note_period_brief.go` `CreateNotePeriodBrief` |
+| Collectors only on Computers the caller owns | `EnsurePeriodBriefCollectors` (`ListAgentRuntimesByOwner`); `parsePeriodBriefCollectorAgentIDs` runtime `owner_id` check; FE `listOwnedPeriodBriefCollectorAgents` |
 | Pack stored on run JSONB (not Notes page) | `SubmitAgentNotePeriodBriefPack`; `notePeriodBriefCollectorRef.PackMarkdown` |
 | Settle reads `pack_markdown` | `awaitPeriodBriefCollectorPacks` |
 | Packs purged after synth wake | `clearCollectorPackMarkdown` when status → `done` |

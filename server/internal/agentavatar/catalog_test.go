@@ -18,6 +18,8 @@ func TestCanonicalizeSelection(t *testing.T) {
 		{name: "legacy first", raw: "/agent-avatars/human-01.jpg", want: LegacyURL(1), ok: true},
 		{name: "legacy last", raw: "/agent-avatars/human-24.jpg", want: LegacyURL(24), ok: true},
 		{name: "canonical legacy", raw: LegacyURL(12), want: LegacyURL(12), ok: true},
+		{name: "prior v2 first", raw: PriorPublicBaseURL + "/agent-01.png", want: PriorPublicBaseURL + "/agent-01.png", ok: true},
+		{name: "prior v2 last", raw: PriorPublicBaseURL + "/agent-15.png", want: PriorPublicBaseURL + "/agent-15.png", ok: true},
 		{name: "arbitrary CDN object", raw: PublicBaseURL + "/not-a-preset.png"},
 		{name: "foreign URL", raw: "https://example.com/agent-01.png"},
 		{name: "whitespace", raw: " " + URL(1)},

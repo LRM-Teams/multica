@@ -53,8 +53,8 @@ vi.mock("@multica/core/identity", () => ({
 }));
 vi.mock("@multica/core/workspace/avatar-url", () => ({
   AGENT_AVATAR_PRESETS: [
-    "https://cdn.leagent.me/agent-avatars/v2/agent-01.png",
-    "https://cdn.leagent.me/agent-avatars/v2/agent-02.png",
+    "https://cdn.leagent.me/agent-avatars/v3/agent-01.png",
+    "https://cdn.leagent.me/agent-avatars/v3/agent-02.png",
   ],
   resolvePublicFileUrl: () => null,
 }));
@@ -169,7 +169,7 @@ describe("AgentProfileAvatarEditor", () => {
       expect(onUpdate).toHaveBeenCalledWith("agent-1", {
         avatar_selection: {
           kind: "picked",
-          preset_url: "https://cdn.leagent.me/agent-avatars/v2/agent-02.png",
+          preset_url: "https://cdn.leagent.me/agent-avatars/v3/agent-02.png",
         },
       });
     });

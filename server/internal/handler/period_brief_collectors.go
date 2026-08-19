@@ -43,8 +43,9 @@ type periodBriefCollectorSlot struct {
 }
 
 // EnsurePeriodBriefCollectors idempotently provisions one Period Work collector
-// Agent per Computer the caller may bind Agents on: local Computers share a
-// daemon_id; each cloud runtime is its own Computer (labeled 云端).
+// Agent per Computer the caller owns (local Computers share a daemon_id; each
+// cloud runtime is its own Computer). Another member's machine is never
+// included — even when that runtime is workspace-public or the caller is admin.
 func (h *Handler) EnsurePeriodBriefCollectors(w http.ResponseWriter, r *http.Request) {
 	if rejectAgentOnHumanRoute(w, r, "EnsurePeriodBriefCollectors") {
 		return
@@ -74,7 +75,10 @@ func (h *Handler) EnsurePeriodBriefCollectors(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	runtimes, err := h.Queries.ListVisibleAgentRuntimes(r.Context(), db.ListVisibleAgentRuntimesParams{
+	// Period Work collection is Computer-owner-only: never provision collectors
+	// onto another member's machine, even when that runtime is workspace-public
+	// or the caller is a workspace admin.
+	runtimes, err := h.Queries.ListAgentRuntimesByOwner(r.Context(), db.ListAgentRuntimesByOwnerParams{
 		WorkspaceID: wsUUID,
 		OwnerID:     parseUUID(ownerID),
 	})
@@ -99,7 +103,7 @@ func (h *Handler) EnsurePeriodBriefCollectors(w http.ResponseWriter, r *http.Req
 
 	slots := make(map[string]periodBriefCollectorSlot)
 	for _, rt := range runtimes {
-		if !canUseRuntimeForAgent(member, rt) {
+		if !canOwnRuntime(member, rt) {
 			continue
 		}
 		mode := strings.ToLower(strings.TrimSpace(rt.RuntimeMode))

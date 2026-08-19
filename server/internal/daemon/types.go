@@ -31,6 +31,8 @@ type ResidentAgentRuntimeConfig struct {
 	RuntimeID        string     `json:"runtime_id"`
 	WorkspaceContext string     `json:"workspace_context,omitempty"`
 	Agent            *AgentData `json:"agent"`
+	// RuntimeEnv is the machine-default env injected before agent custom_env.
+	RuntimeEnv map[string]string `json:"runtime_env,omitempty"`
 }
 
 // Task represents a claimed task from the server.
@@ -60,7 +62,9 @@ type Task struct {
 	// ScopedSecrets are channel/project (and optionally agent) secrets injected
 	// after filtering by the current task channel/project (LRM-953). Agent
 	// custom_env remains separate and is treated as agent-scoped.
-	ScopedSecrets  []ScopedSecret               `json:"scoped_secrets,omitempty"`
+	ScopedSecrets []ScopedSecret `json:"scoped_secrets,omitempty"`
+	// RuntimeEnv is the machine-default env injected before agent custom_env.
+	RuntimeEnv     map[string]string            `json:"runtime_env,omitempty"`
 	ChannelGoal    *protocol.ChannelGoalContext `json:"channel_goal,omitempty"`     // active channel goal, refreshed on every claim
 	ProjectTitle   string                       `json:"project_title,omitempty"`    // human-readable project title for context injection
 	PriorSessionID string                       `json:"prior_session_id,omitempty"` // Claude session ID from a previous task on this issue

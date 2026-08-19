@@ -66,6 +66,8 @@ import type {
   UpdateAgentRequest,
   AgentEnvResponse,
   UpdateAgentEnvRequest,
+  RuntimeEnvResponse,
+  UpdateRuntimeEnvRequest,
   UpdateAgentFileContentRequest,
   UpdateAgentFileContentResponse,
   AgentTask,
@@ -1811,6 +1813,27 @@ export class ApiClient {
     });
   }
 
+  /**
+   * Returns the plaintext `custom_env` map for a runtime. Owner/admin /
+   * runtime owner only; every successful call writes a
+   * `runtime_env_revealed` activity_log row server-side.
+   */
+  async getRuntimeEnv(id: string): Promise<RuntimeEnvResponse> {
+    return this.fetch(`/api/runtimes/${id}/env`);
+  }
+
+  /**
+   * Replaces a runtime's `custom_env` wholesale. Values equal to `"****"`
+   * preserve the existing value for that key (same **** sentinel as agent
+   * env). Owner/admin / runtime owner only; every write is audited.
+   */
+  async updateRuntimeEnv(id: string, data: UpdateRuntimeEnvRequest): Promise<RuntimeEnvResponse> {
+    return this.fetch(`/api/runtimes/${id}/env`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  }
+
   async listAgentFiles(id: string, params?: ListAgentFilesParams): Promise<AgentFilesResponse> {
     const search = new URLSearchParams();
     if (params?.include_hidden) search.set("include_hidden", "true");
@@ -3534,7 +3557,11 @@ export class ApiClient {
     return this.fetch(`/api/chat/sessions/${id}`);
   }
 
-  async createChatSession(data: { agent_id: string; title?: string }): Promise<ChatSession> {
+  async createChatSession(data: {
+    agent_id: string;
+    title?: string;
+    context_note_page_id?: string;
+  }): Promise<ChatSession> {
     return this.fetch("/api/chat/sessions", {
       method: "POST",
       body: JSON.stringify(data),

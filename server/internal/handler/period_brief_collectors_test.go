@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -120,5 +121,93 @@ func TestAgentTemplatesIncludePeriodWorkCollector(t *testing.T) {
 	}
 	if tmpl.Instructions == "" || !strings.Contains(tmpl.Instructions, "multica-period-work-collect") {
 		t.Fatalf("template should point at collect skill: %+v", tmpl)
+	}
+}
+
+func TestEnsurePeriodBriefCollectors_SkipsOthersPublicComputers(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	_ = ensureSystemGeneralForTest(t)
+
+	otherOwner := createRuntimeLocalSkillTestMember(t, "member")
+	otherDaemon := "other-pc-" + uuid.NewString()[:8]
+	var otherRuntimeID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_runtime (
+			workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, visibility, owner_id, last_seen_at
+		) VALUES ($1, $2, $3, 'local', $4, 'online', '', '{}'::jsonb, 'public', $5, now())
+		RETURNING id
+	`, testWorkspaceID, otherDaemon, "Other Public Laptop", "other_pub_"+uuid.NewString(), otherOwner).Scan(&otherRuntimeID); err != nil {
+		t.Fatalf("seed other public runtime: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, otherRuntimeID)
+	})
+
+	ownDaemon := "own-pc-" + uuid.NewString()[:8]
+	_ = seedMachineLockedRuntime(t, ownDaemon, "My Laptop")
+
+	rec := httptest.NewRecorder()
+	req := newRequestAs(testUserID, http.MethodPost, "/api/agents/period-brief-collectors", map[string]string{
+		"model": "collector-model",
+	})
+	req.Header.Set("X-Workspace-ID", testWorkspaceID)
+	testHandler.EnsurePeriodBriefCollectors(rec, req)
+	if rec.Code != http.StatusCreated && rec.Code != http.StatusOK {
+		t.Fatalf("ensure=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp EnsurePeriodBriefCollectorsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	wantOwn := periodBriefCollectorNameForDaemon(ownDaemon)
+	forbidden := periodBriefCollectorNameForDaemon(otherDaemon)
+	sawOwn := false
+	for _, agent := range resp.Agents {
+		t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, agent.ID) })
+		if agent.Name == forbidden {
+			t.Fatalf("must not provision collector for another member's computer: %#v", agent)
+		}
+		if agent.Name == wantOwn {
+			sawOwn = true
+		}
+	}
+	if !sawOwn {
+		t.Fatalf("expected own collector %q among %#v", wantOwn, resp.Agents)
+	}
+}
+
+func TestCreateNotePeriodBriefRejectsCollectorOnOthersComputer(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	prevWait := notePeriodBriefCollectorMaxWait
+	notePeriodBriefCollectorMaxWait = 0
+	prevBG := notePeriodBriefFinishInBackground
+	notePeriodBriefFinishInBackground = false
+	t.Cleanup(func() {
+		notePeriodBriefCollectorMaxWait = prevWait
+		notePeriodBriefFinishInBackground = prevBG
+	})
+
+	otherOwner := createRuntimeLocalSkillTestMember(t, "member")
+	foreignCollector := createPeriodBriefCollectorTestAgentForOwner(t, "Foreign Laptop", otherOwner)
+	synthID := createHandlerTestAgent(t, "Period Brief Own Synth "+uuid.NewString()[:8], nil)
+
+	rec := httptest.NewRecorder()
+	testHandler.CreateNotePeriodBrief(rec, newRequest(http.MethodPost, "/api/notes/period-briefs", map[string]any{
+		"window":              "day",
+		"date":                time.Now().UTC().Format("2006-01-02"),
+		"timezone":            "UTC",
+		"agent_id":            synthID,
+		"collector_agent_ids": []string{foreignCollector},
+	}))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for foreign computer collector, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "computer you own") {
+		t.Fatalf("error should mention ownership: %s", rec.Body.String())
 	}
 }

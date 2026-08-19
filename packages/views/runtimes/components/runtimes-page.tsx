@@ -1043,6 +1043,20 @@ function MachineDetailView({
                   </span>
                 </InfoRow>
               )}
+              {/* Always surface the daemon CLI version when it is known and the
+                  Computer/daemon row (which embeds it) isn't rendering. */}
+              {machine.cliVersion?.trim() && !daemonUpgradeRuntime ? (
+                <InfoRow label={t(($) => $.machine.basics_version)}>
+                  <span
+                    className="truncate font-mono text-sm"
+                    data-testid="machine-basics-version"
+                  >
+                    {t(($) => $.machine.version_prefix, {
+                      version: machine.cliVersion.trim(),
+                    })}
+                  </span>
+                </InfoRow>
+              ) : null}
               {machine.daemonId ? (
                 <InfoRow label={t(($) => $.machine.basics_daemon_id)}>
                   <ComputerIdValue

@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -112,6 +113,12 @@ func (d *Daemon) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID
 	if mixed {
 		canonicalActionTurn = d.allocateCanonicalActionTurnToken()
 	}
+	// Standalone chat writeback prefers resident capture text, but capture is
+	// only populated for mixed-run (RunID-bound) Pi sessions. Bubble / FAB
+	// turns often have no RunID — accumulate streamed MessageText deltas so
+	// the reply still persists to chat_message (otherwise UI stays on 排队中).
+	var streamedMu sync.Mutex
+	var streamedText strings.Builder
 	err = d.canonicalRuntimes.deliverIdleMessages(ctx, agentID, runtimeID, preparedMessages, nil, func() {
 		if mixed {
 			d.activateCanonicalActionTurn(agentID, canonicalActionTurn)
@@ -123,6 +130,11 @@ func (d *Daemon) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID
 		d.recordResidentMessageBatch(workspaceID, runtimeID, agentID, preparedMessages, "runtime_delivery_accepted", "accepted", "")
 		runner.broadcastMessageReceivedActivity(agentID, runtimeID, preparedMessages)
 	}, func(message agent.Message) {
+		if message.Type == agent.MessageText && message.Content != "" {
+			streamedMu.Lock()
+			streamedText.WriteString(message.Content)
+			streamedMu.Unlock()
+		}
 		d.reportMixedRunToolActivity(agentID, runtimeID, runID, runAgentID, turnID, canonicalActionTurn, message)
 		runner.observeResidentMessageRuntime(agentID, runtimeID, message)
 	}, func(turnErr error, generation uint64, capture *agent.ResidentTurnCapture) {
@@ -141,10 +153,16 @@ func (d *Daemon) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID
 			reportCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			d.reportAgentMemoryWrites(reportCtx, memoryTask)
 			if sessionID, ok := standaloneChatSessionIDFromMessages(preparedMessages); ok {
-				if reply := standaloneAssistantTextFromCapture(capture); reply != "" {
+				streamedMu.Lock()
+				streamed := streamedText.String()
+				streamedMu.Unlock()
+				reply := standaloneAssistantReplyText(capture, streamed)
+				if reply != "" {
 					if err := d.client.ReportStandaloneChatReply(reportCtx, sessionID, reply, runtimeID); err != nil && d.logger != nil {
 						d.logger.Warn("standalone chat reply writeback failed", "session_id", sessionID, "error", err)
 					}
+				} else if d.logger != nil {
+					d.logger.Warn("standalone chat reply missing after successful turn", "session_id", sessionID, "has_capture", capture != nil)
 				}
 			}
 			cancel()
@@ -423,6 +441,16 @@ func standaloneAssistantTextFromCapture(capture *agent.ResidentTurnCapture) stri
 		}
 	}
 	return ""
+}
+
+// standaloneAssistantReplyText prefers capture final-assistant text (mixed-run
+// path). When capture is empty — typical for standalone bubble/FAB turns
+// without a RunID — fall back to concatenated MessageText deltas from the turn.
+func standaloneAssistantReplyText(capture *agent.ResidentTurnCapture, streamed string) string {
+	if reply := standaloneAssistantTextFromCapture(capture); reply != "" {
+		return reply
+	}
+	return strings.TrimSpace(streamed)
 }
 
 func standaloneAssistantTextFromJSON(raw json.RawMessage) string {

@@ -56,8 +56,11 @@ func TestPrepareResidentMessageBatchScopesIdentityAndUserMemoryPerMessage(t *tes
 	if strings.Contains(prepared[1].RuntimeContext, "Call me JHP") || strings.Contains(prepared[1].RuntimeContext, "server private preference") {
 		t.Fatalf("group runtime context leaked personal memory:\n%s", prepared[1].RuntimeContext)
 	}
-	if !strings.Contains(prepared[1].RuntimeContext, "server global convention") {
-		t.Fatalf("group runtime context lost applicable server memory:\n%s", prepared[1].RuntimeContext)
+	// Agent-scope memory is loaded once into the session-stable system prompt,
+	// not the per-message context (Frank 2026-08-19). Member-scope memory stays
+	// scoped per-message.
+	if strings.Contains(prepared[1].RuntimeContext, "server global convention") {
+		t.Fatalf("group runtime context must not repeat agent-scope memory:\n%s", prepared[1].RuntimeContext)
 	}
 }
 

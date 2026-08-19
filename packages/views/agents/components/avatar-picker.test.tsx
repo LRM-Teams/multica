@@ -6,9 +6,9 @@ import { AvatarPicker } from "./avatar-picker";
 
 const { PRESETS, RESOURCES } = vi.hoisted(() => {
   const PRESETS = [
-    "https://cdn.leagent.me/agent-avatars/v2/agent-01.png",
-    "https://cdn.leagent.me/agent-avatars/v2/agent-02.png",
-    "https://cdn.leagent.me/agent-avatars/v2/agent-03.png",
+    "https://cdn.leagent.me/agent-avatars/v3/agent-01.png",
+    "https://cdn.leagent.me/agent-avatars/v3/agent-02.png",
+    "https://cdn.leagent.me/agent-avatars/v3/agent-03.png",
   ] as const;
   const RESOURCES = {
     create_dialog: {

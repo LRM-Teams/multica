@@ -33,6 +33,10 @@ const chatSessionTitleMaxLen = 200
 type CreateChatSessionRequest struct {
 	AgentID string `json:"agent_id"`
 	Title   string `json:"title"`
+	// ContextNotePageID binds this standalone bubble to a product note page.
+	// When set, the agent may notes get that page and its descendants under
+	// the creator's note ACL (Notes assistant bubble).
+	ContextNotePageID string `json:"context_note_page_id,omitempty"`
 }
 
 func (h *Handler) CreateChatSession(w http.ResponseWriter, r *http.Request) {
@@ -73,18 +77,51 @@ func (h *Handler) CreateChatSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "agent is archived")
 		return
 	}
+
+	creatorID := parseUUID(userID)
+	var contextNotePageID pgtype.UUID
+	if strings.TrimSpace(req.ContextNotePageID) != "" {
+		pageUUID, ok := parseUUIDOrBadRequest(w, req.ContextNotePageID, "context_note_page_id")
+		if !ok {
+			return
+		}
+		accessible, _, accessErr := h.noteAccess(r.Context(), pageUUID, workspaceUUID, creatorID)
+		if accessErr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to authorize note page")
+			return
+		}
+		if !accessible {
+			writeError(w, http.StatusNotFound, "note page not found")
+			return
+		}
+		contextNotePageID = pageUUID
+	}
+
 	session, err := h.Queries.CreateChatSession(r.Context(), db.CreateChatSessionParams{
 		WorkspaceID: workspaceUUID,
 		AgentID:     agentID,
-		CreatorID:   parseUUID(userID),
+		CreatorID:   creatorID,
 		Title:       req.Title,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create chat session")
 		return
 	}
+	if contextNotePageID.Valid {
+		if _, err := h.DB.Exec(r.Context(), `
+UPDATE chat_session SET context_note_page_id = $2, updated_at = now()
+WHERE id = $1`, session.ID, contextNotePageID); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to bind note context")
+			return
+		}
+	}
 
-	writeJSON(w, http.StatusCreated, chatSessionToResponse(session))
+	resp := chatSessionToResponse(session)
+	resp.ProjectID = h.chatSessionProjectID(r.Context(), session.ID)
+	if contextNotePageID.Valid {
+		resp.ContextNotePageID = uuidToString(contextNotePageID)
+	}
+	writeJSON(w, http.StatusCreated, resp)
 }
 
 func (h *Handler) ListChatSessions(w http.ResponseWriter, r *http.Request) {
@@ -191,6 +228,7 @@ func (h *Handler) ListChatSessions(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	h.fillChatSessionProjects(r.Context(), resp)
+	h.fillChatSessionContextNotePages(r.Context(), resp)
 	h.fillChatSessionRuntimeStats(r.Context(), resp)
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -329,6 +367,7 @@ func (h *Handler) GetChatSession(w http.ResponseWriter, r *http.Request) {
 
 	resp := chatSessionToResponse(session)
 	resp.ProjectID = h.chatSessionProjectID(r.Context(), session.ID)
+	resp.ContextNotePageID = h.chatSessionContextNotePageID(r.Context(), session.ID)
 	responses := []ChatSessionResponse{resp}
 	h.fillChatSessionRuntimeStats(r.Context(), responses)
 	writeJSON(w, http.StatusOK, responses[0])
@@ -454,6 +493,7 @@ func (h *Handler) UpdateChatSession(w http.ResponseWriter, r *http.Request) {
 
 	resp := chatSessionToResponse(updated)
 	resp.ProjectID = h.chatSessionProjectID(r.Context(), session.ID)
+	resp.ContextNotePageID = h.chatSessionContextNotePageID(r.Context(), session.ID)
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -1356,8 +1396,11 @@ type ChatSessionResponse struct {
 	Status      string `json:"status"`
 	// ProjectID is the chat's bound project (composer "current project"), or
 	// empty. Filled separately so single and list endpoints stay consistent.
-	ProjectID    string                      `json:"project_id,omitempty"`
-	RuntimeStats *protocol.RuntimeTokenStats `json:"runtime_stats,omitempty"`
+	ProjectID string `json:"project_id,omitempty"`
+	// ContextNotePageID binds a Notes assistant bubble to a product note page
+	// (and its descendants for agent notes get / tree). Empty for ordinary chat.
+	ContextNotePageID string                      `json:"context_note_page_id,omitempty"`
+	RuntimeStats      *protocol.RuntimeTokenStats `json:"runtime_stats,omitempty"`
 	// Only populated by list endpoints — single-session fetches return false.
 	HasUnread bool   `json:"has_unread"`
 	CreatedAt string `json:"created_at"`
@@ -1470,6 +1513,44 @@ func (h *Handler) fillChatSessionProjects(ctx context.Context, resp []ChatSessio
 	for i := range resp {
 		if pid, ok := byID[resp[i].ID]; ok {
 			resp[i].ProjectID = pid
+		}
+	}
+}
+
+func (h *Handler) chatSessionContextNotePageID(ctx context.Context, id pgtype.UUID) string {
+	var pid pgtype.UUID
+	if err := h.DB.QueryRow(ctx, `SELECT context_note_page_id FROM chat_session WHERE id = $1`, id).Scan(&pid); err == nil && pid.Valid {
+		return uuidToString(pid)
+	}
+	return ""
+}
+
+func (h *Handler) fillChatSessionContextNotePages(ctx context.Context, resp []ChatSessionResponse) {
+	if len(resp) == 0 {
+		return
+	}
+	ids := make([]pgtype.UUID, 0, len(resp))
+	for _, s := range resp {
+		ids = append(ids, parseUUID(s.ID))
+	}
+	rows, err := h.DB.Query(ctx, `SELECT id, context_note_page_id FROM chat_session WHERE id = ANY($1::uuid[])`, ids)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	byID := make(map[string]string, len(resp))
+	for rows.Next() {
+		var id, pid pgtype.UUID
+		if err := rows.Scan(&id, &pid); err != nil {
+			continue
+		}
+		if pid.Valid {
+			byID[uuidToString(id)] = uuidToString(pid)
+		}
+	}
+	for i := range resp {
+		if pid, ok := byID[resp[i].ID]; ok {
+			resp[i].ContextNotePageID = pid
 		}
 	}
 }

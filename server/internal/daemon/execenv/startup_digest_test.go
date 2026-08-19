@@ -246,6 +246,33 @@ func TestStartupKernelBoundsConfigurableSections(t *testing.T) {
 	}
 }
 
+func TestNonAgentScopeMemoriesAndRenderAgentScopeMemory(t *testing.T) {
+	memories := []MemoryContextForEnv{
+		{Name: "agent global", Content: "global convention", Scope: "agent", SubjectType: "agent", SubjectID: "a1"},
+		{Name: "member private", Content: "call me JHP", Scope: "user", SubjectType: "member", SubjectID: "m1"},
+		{Name: "project", Content: "proj note", Scope: "project", SubjectType: "project", SubjectID: "p1"},
+	}
+	turn := RenderTurnContext(TaskContextForEnv{AgentMemories: memories})
+	if strings.Contains(turn, "global convention") {
+		t.Fatal("agent-scope memory must not appear in per-message context")
+	}
+	for _, want := range []string{"call me JHP", "proj note"} {
+		if !strings.Contains(turn, want) {
+			t.Errorf("per-message context missing %q", want)
+		}
+	}
+	agent := RenderAgentScopeMemory(memories)
+	if !strings.Contains(agent, "global convention") {
+		t.Fatal("agent-scope memory missing from system-prompt renderer")
+	}
+	if strings.Contains(agent, "call me JHP") || strings.Contains(agent, "proj note") {
+		t.Fatal("system-prompt agent memory leaked non-agent scope")
+	}
+	if RenderAgentScopeMemory([]MemoryContextForEnv{{Name: "m", Content: "x", Scope: "user"}}) != "" {
+		t.Fatal("no agent-scope memory must render empty")
+	}
+}
+
 func TestRenderTurnContextKeepsDynamicFactsOutOfStartupAndBoundsMemory(t *testing.T) {
 	ctx := TaskContextForEnv{
 		AgentInstructions: "stable instructions must not repeat",

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -11,7 +11,7 @@ import {
 import { Button } from "@multica/ui/components/ui/button";
 import { LoaderCircle, ShieldCheck } from "lucide-react";
 import { useT } from "../../i18n/use-t";
-import { validateResearchV6ReportSandboxUrl } from "../lib/research-v6-report-sandbox";
+import { resolveResearchV6ReportFrameSource } from "../lib/research-v6-report-sandbox";
 
 export interface ResearchV6ReportSandboxDocument {
   id: string;
@@ -19,6 +19,7 @@ export interface ResearchV6ReportSandboxDocument {
   packageHash: string;
   sandboxUrl: string;
   reportOrigin: string;
+  compiledHtml?: string;
   plainTextFallback: string;
   revision?: number;
   status?: string;
@@ -61,25 +62,46 @@ export function ResearchV6ReportModal({
   loadTimeoutMs?: number;
 }) {
   const { t } = useT("research");
-  const verdict = validateResearchV6ReportSandboxUrl(
-    report?.sandboxUrl ?? "",
+  const source = resolveResearchV6ReportFrameSource({
+    sandboxUrl: report?.sandboxUrl ?? "",
     appOrigin,
-    report?.reportOrigin ?? "",
-  );
+    reportOrigin: report?.reportOrigin ?? "",
+    compiledHtml: report?.compiledHtml,
+  });
+  const compiledHtml = source.kind === "compiled" ? source.html : "";
+  const compiledBlobUrl = useMemo(() => {
+    if (!open || source.kind !== "compiled" || !compiledHtml) {
+      return null;
+    }
+    return URL.createObjectURL(
+      new Blob([compiledHtml], { type: "text/html;charset=utf-8" }),
+    );
+  }, [compiledHtml, open, source.kind]);
+  useEffect(() => {
+    if (!compiledBlobUrl) return;
+    return () => {
+      URL.revokeObjectURL(compiledBlobUrl);
+    };
+  }, [compiledBlobUrl]);
   const frameIdentity = [
     open ? "open" : "closed",
     report?.id ?? "missing",
     report?.packageHash ?? "missing",
     loading ? "fetching" : "settled",
-    verdict.ok ? verdict.url : verdict.reason,
+    source.kind,
+    source.kind === "isolated"
+      ? source.url
+      : source.kind === "compiled"
+        ? String(compiledHtml.length)
+        : source.reason,
   ].join(":");
   const initialPhase: FramePhase = !open
     ? "idle"
     : loading
       ? "loading"
-      : verdict.ok
-      ? "loading"
-      : "unavailable";
+      : source.kind === "unavailable"
+        ? "unavailable"
+        : "loading";
   const [frameState, setFrameState] = useState<{
     identity: string;
     phase: FramePhase;
@@ -91,7 +113,19 @@ export function ResearchV6ReportModal({
   }, [frameState.identity, frameIdentity, initialPhase]);
   const phase =
     frameState.identity === frameIdentity ? frameState.phase : initialPhase;
-  const frameUrl = open && verdict.ok && phase !== "unavailable" ? verdict.url : null;
+  const isolatedUrl = source.kind === "isolated" ? source.url : null;
+  const frameUrl =
+    !open || phase === "unavailable"
+      ? null
+      : isolatedUrl ?? (source.kind === "compiled" ? compiledBlobUrl : null);
+  const documentLabel =
+    source.kind === "compiled"
+      ? t(($) => $.d5.report_sandbox.sandboxed_document)
+      : t(($) => $.d5.report_sandbox.isolated_document);
+  const loadingLabel =
+    source.kind === "compiled"
+      ? t(($) => $.d5.report_sandbox.loading_document)
+      : t(($) => $.d5.report_sandbox.loading);
 
   useEffect(() => {
     if (phase !== "loading" || !frameUrl) return;
@@ -143,7 +177,7 @@ export function ResearchV6ReportModal({
               <DialogDescription className="mt-1 flex min-w-0 items-center gap-1.5 truncate text-[11px]">
                 <ShieldCheck className="size-3 shrink-0 text-success" aria-hidden="true" />
                 <span className="truncate">
-                  {t(($) => $.d5.report_sandbox.isolated_document)}
+                  {documentLabel}
                   {report?.packageHash ? ` · ${report.packageHash}` : ""}
                 </span>
               </DialogDescription>
@@ -215,7 +249,7 @@ export function ResearchV6ReportModal({
                   className="size-4 animate-spin motion-reduce:animate-none"
                   aria-hidden="true"
                 />
-                {t(($) => $.d5.report_sandbox.loading)}
+                {loadingLabel}
               </div>
             </div>
           ) : null}

@@ -125,8 +125,8 @@ export function CreateAgentDialog({
   // #599: never submit draft.avatar_url as a raw client URL. Preview it when
   // present; create with draft_id lets the server apply it as assigned. User
   // choices go through avatar_selection (picked preset or uploaded file).
-  // Manual/proposal create seeds a random system face so the 15 built-in
-  // presets show immediately; clear re-seeds another random face (and
+  // Manual/proposal create seeds a random system face so a built-in
+  // preset shows immediately; clear re-seeds another random face (and
   // overrides draft_id face application when the preview came from a draft).
   const seededAvatarRef = useRef<{
     preview: string | null;

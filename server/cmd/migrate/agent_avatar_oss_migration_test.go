@@ -82,17 +82,20 @@ func TestAgentAvatarMigration314MovesOnlySystemPresetsToOSS(t *testing.T) {
 	assertMigrationAvatarURL(t, ctx, conn, uploadedID, "https://cdn.example.com/uploaded.png")
 	assertMigrationAvatarURL(t, ctx, conn, customID, "https://cdn.example.com/custom-system.png")
 
+	applyMigrationFile(t, ctx, conn, filepath.Join(migrationsDir, "421_agent_avatar_v3_presets.up.sql"))
+
 	const directID = "00000000-0000-0000-0000-000000000318"
 	var directURL string
 	if err := conn.QueryRow(ctx, `
 		INSERT INTO agent (id, avatar_url) VALUES ($1, NULL) RETURNING avatar_url
 	`, directID).Scan(&directURL); err != nil {
-		t.Fatalf("insert post-314 Agent: %v", err)
+		t.Fatalf("insert post-421 Agent: %v", err)
 	}
 	if want := agentavatar.DefaultURL(directID); directURL != want {
-		t.Fatalf("post-314 default = %q, want %q", directURL, want)
+		t.Fatalf("post-421 default = %q, want %q", directURL, want)
 	}
 
+	applyMigrationFile(t, ctx, conn, filepath.Join(migrationsDir, "421_agent_avatar_v3_presets.down.sql"))
 	applyMigrationFile(t, ctx, conn, filepath.Join(migrationsDir, "314_agent_avatar_oss_presets.down.sql"))
 	assertMigrationAvatarURL(t, ctx, conn, assignedID, "/agent-avatars/human-01.jpg")
 	assertMigrationAvatarURL(t, ctx, conn, pickedID, "/agent-avatars/human-24.jpg")

@@ -16,6 +16,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@multica/ui/components/ui/dialog";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@multica/ui/components/ui/tooltip";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
 import type { RuntimeMachine } from "./runtime-machines";
@@ -32,10 +37,52 @@ function SectionTitle({ children }: { children: ReactNode }) {
 }
 
 /**
+ * Card action: icon-only button with a tooltip. The visible label is sr-only
+ * so the accessible name (and the card's text content) still carries it —
+ * a 3-column grid has no room for two full-text buttons per card, which is
+ * what made the old footer wrap onto two lines.
+ */
+function CardAction({
+  label,
+  icon,
+  onClick,
+  disabled,
+  testId,
+}: {
+  label: string;
+  icon: ReactNode;
+  onClick?: () => void;
+  disabled?: boolean;
+  testId?: string;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            onClick={onClick}
+            disabled={disabled}
+            className="text-muted-foreground hover:text-foreground"
+            data-testid={testId}
+          />
+        }
+      >
+        {icon}
+        <span className="sr-only">{label}</span>
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+/**
  * LRM-922 / LRM-863 / LRM-960 / LRM-1071 / LRM-1108 — Code agents inventory:
  * section title + provider grid. Installed status is a green dot + muted
- * version (A2); visibility toggle on the same footer row. A2.1 drops the
- * section-header installed/supported count.
+ * version (A2); the per-card actions sit on the same line as the name as
+ * icon buttons so cards stay one compact row each.
  */
 export function MachineCodeAgentsSection({
   machine,
@@ -47,7 +94,11 @@ export function MachineCodeAgentsSection({
   const user = useAuthStore((s) => s.user);
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const updateRuntime = useUpdateRuntime(wsId);
-  const [envTarget, setEnvTarget] = useState<{ id: string; label: string } | null>(null);
+  const [envTarget, setEnvTarget] = useState<{
+    id: string;
+    label: string;
+    provider: string;
+  } | null>(null);
 
   const currentMember = user
     ? members.find((m) => m.user_id === user.id)
@@ -76,7 +127,7 @@ export function MachineCodeAgentsSection({
             {t(($) => $.machine.code_agents_installed_empty)}
           </p>
         ) : (
-          <div className="grid grid-cols-2 divide-x divide-y md:grid-cols-3">
+          <div className="grid grid-cols-1 divide-x divide-y sm:grid-cols-2 lg:grid-cols-3">
             {rows.map((row, idx) => {
               const isInstalled = idx < installedCount;
               const runtime = row.runtimeId
@@ -117,7 +168,7 @@ export function MachineCodeAgentsSection({
               return (
                 <article
                   key={row.id}
-                  className="flex min-h-[96px] flex-col p-3.5 md:min-h-[110px]"
+                  className="flex items-center gap-3 px-3.5 py-3 transition-colors hover:bg-muted/40"
                   data-testid={
                     isInstalled
                       ? `machine-runtime-card-${row.id}`
@@ -141,84 +192,100 @@ export function MachineCodeAgentsSection({
                         ].join(", ")
                   }
                 >
-                  <div className="flex items-center gap-2 text-sm font-semibold">
-                    <span
+                  <span
+                    className={cn(
+                      "flex size-8 shrink-0 items-center justify-center rounded-lg border bg-background",
+                      !isInstalled && "opacity-40 grayscale",
+                    )}
+                  >
+                    <ProviderLogo provider={row.id} className="size-4.5" />
+                  </span>
+
+                  <div className="min-w-0 flex-1">
+                    <div
                       className={cn(
-                        "shrink-0",
-                        !isInstalled && "opacity-40 grayscale",
+                        "truncate text-sm font-medium",
+                        !isInstalled && "text-muted-foreground",
                       )}
                     >
-                      <ProviderLogo
-                        provider={row.id}
-                        className="h-5 w-5"
+                      {row.label}
+                    </div>
+                    <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+                      <span
+                        className={cn(
+                          "inline-block size-1.5 shrink-0 rounded-full",
+                          isInstalled
+                            ? "bg-online"
+                            : "border border-muted-foreground/40",
+                        )}
+                        aria-hidden
                       />
-                    </span>
-                    <span className="min-w-0 truncate">{row.label}</span>
-                  </div>
-                  {isInstalled ? (
-                    <div className="mt-auto flex flex-col items-start gap-2 pt-3 md:flex-row md:items-center md:justify-between md:gap-2">
-                      <span className="inline-flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
-                        <span
-                          className="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-online"
-                          aria-hidden
-                        />
-                        {versionLabel ? (
-                          <span className="tabular-nums">{versionLabel}</span>
-                        ) : null}
+                      <span className="truncate tabular-nums">
+                        {isInstalled
+                          ? (versionLabel ??
+                            t(($) => $.machine.code_agents_status_installed))
+                          : t(($) => $.machine.code_agents_not_installed)}
                       </span>
-                      {runtime ? (
-                        <div className="flex items-center gap-1.5">
-                          {canEdit ? (
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="xs"
-                              className="h-6 shrink-0 gap-1 px-2 text-[11px]"
-                              onClick={() => setEnvTarget({ id: runtime.id, label: row.label })}
-                              data-testid={`machine-env-${runtime.id}`}
-                            >
-                              <SlidersHorizontal className="h-3 w-3" />
-                              {t(($) => $.machine.code_agents_env)}
-                            </Button>
-                          ) : null}
-                          {visibility ? (
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="xs"
-                              className="h-6 shrink-0 gap-1 px-2 text-[11px]"
-                              onClick={flip}
-                              disabled={!canEdit || updateRuntime.isPending}
-                              data-testid={`machine-sharing-toggle-${runtime.id}`}
-                            >
-                              {visibility === "public" ? (
-                                <Lock className="h-3 w-3" />
-                              ) : (
-                                <Globe className="h-3 w-3" />
-                              )}
-                              {canEdit
+                    </div>
+                  </div>
+
+                  <div className="flex shrink-0 items-center gap-0.5">
+                    {isInstalled && runtime ? (
+                      <>
+                        {canEdit ? (
+                          <CardAction
+                            label={t(($) => $.machine.code_agents_env)}
+                            icon={<SlidersHorizontal />}
+                            onClick={() =>
+                              setEnvTarget({
+                                id: runtime.id,
+                                label: row.label,
+                                provider: row.id,
+                              })
+                            }
+                            testId={`machine-env-${runtime.id}`}
+                          />
+                        ) : null}
+                        {visibility ? (
+                          <CardAction
+                            label={
+                              canEdit
                                 ? t(($) => $.machine.sharing.switch_to[next])
-                                : t(($) => $.machine.sharing.switch_locked)}
-                            </Button>
-                          ) : null}
-                        </div>
-                      ) : null}
-                    </div>
-                  ) : (
-                    <div className="mt-auto pt-3">
-                      {row.docsUrl ? (
-                        <a
-                          href={row.docsUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 text-[11px] font-semibold text-brand underline-offset-2 hover:underline"
+                                : t(($) => $.machine.sharing.switch_locked)
+                            }
+                            icon={
+                              visibility === "public" ? <Lock /> : <Globe />
+                            }
+                            onClick={flip}
+                            disabled={!canEdit || updateRuntime.isPending}
+                            testId={`machine-sharing-toggle-${runtime.id}`}
+                          />
+                        ) : null}
+                      </>
+                    ) : row.docsUrl ? (
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <a
+                              href={row.docsUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              aria-label={t(($) => $.machine.code_agents_docs)}
+                              className="inline-flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                            />
+                          }
                         >
+                          <ExternalLink className="size-3" aria-hidden />
+                          <span className="sr-only">
+                            {t(($) => $.machine.code_agents_docs)}
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent>
                           {t(($) => $.machine.code_agents_docs)}
-                          <ExternalLink className="h-3 w-3" aria-hidden />
-                        </a>
-                      ) : null}
-                    </div>
-                  )}
+                        </TooltipContent>
+                      </Tooltip>
+                    ) : null}
+                  </div>
                 </article>
               );
             })}
@@ -232,12 +299,28 @@ export function MachineCodeAgentsSection({
           if (!open) setEnvTarget(null);
         }}
       >
-        <DialogContent className="max-w-md">
+        <DialogContent className="sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle className="text-sm">
-              {t(($) => $.machine.code_agents_env_dialog_title)}
-              {envTarget ? ` · ${envTarget.label}` : ""}
-            </DialogTitle>
+            <div className="flex items-center gap-2.5">
+              {envTarget ? (
+                <span className="flex size-8 shrink-0 items-center justify-center rounded-lg border bg-background">
+                  <ProviderLogo
+                    provider={envTarget.provider}
+                    className="size-4.5"
+                  />
+                </span>
+              ) : null}
+              <div className="min-w-0">
+                <DialogTitle>
+                  {t(($) => $.machine.code_agents_env_dialog_title)}
+                </DialogTitle>
+                {envTarget ? (
+                  <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                    {envTarget.label}
+                  </p>
+                ) : null}
+              </div>
+            </div>
           </DialogHeader>
           {envTarget ? (
             <RuntimeEnvEditor

@@ -9,6 +9,7 @@ import { api, ApiError } from "@multica/core/api";
 import { createResearchV6DirectorProjectionTransport } from "@multica/core/api/research-v6-director";
 import {
   researchV6DirectorNodeDetailOptions,
+  researchV6DirectorReportCompiledOptions,
   researchV6DirectorReportOptions,
   researchV6DirectorReportsOptions,
 } from "@multica/core/research-v6/director-queries";
@@ -140,6 +141,7 @@ import { ResearchLiveStream } from "./research-live-stream";
 import { ResearchNodeDetail } from "./research-node-detail";
 import { ResearchSelectedRefChip } from "./research-selected-ref-chip";
 import { ResearchV6NodeDetail } from "./research-v6-node-detail";
+import { validateResearchV6ReportSandboxUrl } from "../lib/research-v6-report-sandbox";
 import { ResearchV6ReportModal } from "./research-v6-report-modal";
 import { ResearchProductRoundCardView } from "./research-product-round-card";
 import { ResearchProjectionContractNotice } from "./research-projection-contract-notice";
@@ -476,6 +478,28 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
       directorReportId ?? "00000000-0000-0000-0000-000000000000",
     ),
     enabled: directorV6Enabled && ui.deliveryOpen && Boolean(directorReportId),
+  });
+  const directorReportSandbox = validateResearchV6ReportSandboxUrl(
+    directorReportDetailData?.sandbox_url ?? "",
+    typeof window === "undefined" ? "" : window.location.origin,
+    directorReportDetailData?.report_origin ?? "",
+  );
+  const {
+    data: directorReportCompiledHtml,
+    isFetching: directorReportCompiledFetching,
+  } = useQuery({
+    ...researchV6DirectorReportCompiledOptions(
+      directorTransport,
+      wsId,
+      sessionId,
+      directorReportId ?? "00000000-0000-4000-8000-000000000000",
+    ),
+    enabled:
+      directorV6Enabled &&
+      ui.deliveryOpen &&
+      Boolean(directorReportId) &&
+      Boolean(directorReportDetailData) &&
+      !directorReportSandbox.ok,
   });
   const handleSelectCanvasNode = useCallback(
     (node: ResearchGraphNode | null) => {
@@ -1730,6 +1754,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
                   packageHash: directorReportDetailData.package_hash,
                   sandboxUrl: directorReportDetailData.sandbox_url ?? "",
                   reportOrigin: directorReportDetailData.report_origin ?? "",
+                  compiledHtml: directorReportCompiledHtml,
                   plainTextFallback: directorReportDetailData.plain_text,
                   revision: directorReportDetailData.revision,
                   status: directorReportDetailData.status,
@@ -1749,7 +1774,11 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
           }))}
           onSelectReport={setSelectedDirectorReportId}
           selectedReportId={directorReportId}
-          loading={directorReportsLoading || directorReportDetailFetching}
+          loading={
+            directorReportsLoading ||
+            directorReportDetailFetching ||
+            directorReportCompiledFetching
+          }
           onRequestFreshCapability={() => {
             void refetchDirectorReportDetail();
           }}

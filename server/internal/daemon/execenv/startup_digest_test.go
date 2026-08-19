@@ -246,6 +246,33 @@ func TestStartupKernelBoundsConfigurableSections(t *testing.T) {
 	}
 }
 
+func TestNonAgentScopeMemoriesAndRenderAgentScopeMemory(t *testing.T) {
+	memories := []MemoryContextForEnv{
+		{Name: "agent global", Content: "global convention", Scope: "agent", SubjectType: "agent", SubjectID: "a1"},
+		{Name: "member private", Content: "call me JHP", Scope: "user", SubjectType: "member", SubjectID: "m1"},
+		{Name: "project", Content: "proj note", Scope: "project", SubjectType: "project", SubjectID: "p1"},
+	}
+	turn := RenderTurnContext(TaskContextForEnv{AgentMemories: memories})
+	if strings.Contains(turn, "global convention") {
+		t.Fatal("agent-scope memory must not appear in per-message context")
+	}
+	for _, want := range []string{"call me JHP", "proj note"} {
+		if !strings.Contains(turn, want) {
+			t.Errorf("per-message context missing %q", want)
+		}
+	}
+	agent := RenderAgentScopeMemory(memories)
+	if !strings.Contains(agent, "global convention") {
+		t.Fatal("agent-scope memory missing from system-prompt renderer")
+	}
+	if strings.Contains(agent, "call me JHP") || strings.Contains(agent, "proj note") {
+		t.Fatal("system-prompt agent memory leaked non-agent scope")
+	}
+	if RenderAgentScopeMemory([]MemoryContextForEnv{{Name: "m", Content: "x", Scope: "user"}}) != "" {
+		t.Fatal("no agent-scope memory must render empty")
+	}
+}
+
 func TestRenderTurnContextKeepsDynamicFactsOutOfStartupAndBoundsMemory(t *testing.T) {
 	ctx := TaskContextForEnv{
 		AgentInstructions: "stable instructions must not repeat",
@@ -259,16 +286,10 @@ func TestRenderTurnContextKeepsDynamicFactsOutOfStartupAndBoundsMemory(t *testin
 	}
 	turn := RenderTurnContext(ctx)
 
-	for _, want := range []string{"## Current Task Initiator", "Alice", "member-1"} {
+	for _, want := range []string{"## Current Task Initiator", "Alice", "member-1", "## Effective Promoted Memory Snapshot"} {
 		if !strings.Contains(turn, want) {
 			t.Errorf("turn context missing %q", want)
 		}
-	}
-	// Promoted memory is loaded once into the session-stable system prompt
-	// (RenderPromotedMemorySnapshot), NOT re-injected into every turn's user
-	// context (Frank 2026-08-19).
-	if strings.Contains(turn, "## Effective Promoted Memory Snapshot") {
-		t.Fatal("promoted memory snapshot must NOT be re-injected into per-turn context")
 	}
 	if strings.Contains(turn, ctx.AgentInstructions) {
 		t.Fatal("stable agent instructions repeated in per-turn context")
@@ -278,29 +299,6 @@ func TestRenderTurnContextKeepsDynamicFactsOutOfStartupAndBoundsMemory(t *testin
 	}
 	if len(turn) > 10*1024 {
 		t.Fatalf("turn context = %d bytes, want <= 10240", len(turn))
-	}
-}
-
-func TestRenderPromotedMemorySnapshotBoundedAndBackedByMemories(t *testing.T) {
-	memories := []MemoryContextForEnv{{
-		Name: "Large selected memory", Content: strings.Repeat("记", 8*1024), Scope: "user",
-	}, {
-		Name: "Second", Content: "tiny", Scope: "project", SubjectType: "project", SubjectID: "p1",
-	}}
-	out := RenderPromotedMemorySnapshot(memories)
-	if !strings.Contains(out, "## Effective Promoted Memory Snapshot") {
-		t.Fatalf("expected memory section header in %q", out)
-	}
-	if !utf8.ValidString(out) {
-		t.Fatal("memory snapshot truncation split a UTF-8 code point")
-	}
-	// boundedPromptText truncates to 8KB plus a short truncation notice, so
-	// assert a sane bound rather than the exact cap.
-	if len(out) > 12*1024 {
-		t.Fatalf("memory snapshot = %d bytes, want <= 12288", len(out))
-	}
-	if RenderPromotedMemorySnapshot(nil) != "" {
-		t.Fatal("empty memories must render empty")
 	}
 }
 

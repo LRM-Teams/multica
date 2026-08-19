@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -92,7 +93,13 @@ const (
 // hot heartbeat path; the DB is allowed to lag up to runtimeHeartbeatDBFlushInterval).
 // When liveness is unavailable or errors, we fall back to trusting the DB
 // stale window — that is the original behavior.
-func runRuntimeSweeper(ctx context.Context, queries *db.Queries, liveness handler.LivenessStore, taskSvc *service.TaskService, bus *events.Bus) {
+//
+// LRM-1571: presence (the daemon WebSocket Hub) is consulted first. A
+// runtime whose Workspace Runner socket is currently connected is alive by
+// definition — WS-capable daemons no longer heartbeat on the socket path,
+// so their last_seen_at goes stale without meaning they are dead. Legacy
+// daemons (no socket) keep the heartbeat/liveness path below untouched.
+func runRuntimeSweeper(ctx context.Context, queries *db.Queries, liveness handler.LivenessStore, presence service.RunnerPresence, taskSvc *service.TaskService, bus *events.Bus) {
 	ticker := time.NewTicker(sweepInterval)
 	defer ticker.Stop()
 
@@ -101,7 +108,7 @@ func runRuntimeSweeper(ctx context.Context, queries *db.Queries, liveness handle
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			sweepStaleRuntimes(ctx, queries, liveness, taskSvc, bus)
+			sweepStaleRuntimes(ctx, queries, liveness, presence, taskSvc, bus)
 			sweepStaleSandboxNodes(ctx, queries)
 			sweepStaleTasks(ctx, queries, taskSvc, bus)
 			sweepExpiredQueuedTasks(ctx, queries, taskSvc)
@@ -130,12 +137,19 @@ func gcExpiredAgentCredentials(ctx context.Context, queries *db.Queries) {
 
 // sweepStaleRuntimes marks runtimes offline if they haven't heartbeated,
 // then fails any tasks belonging to those offline runtimes.
-func sweepStaleRuntimes(ctx context.Context, queries *db.Queries, liveness handler.LivenessStore, taskSvc *service.TaskService, bus *events.Bus) {
+func sweepStaleRuntimes(ctx context.Context, queries *db.Queries, liveness handler.LivenessStore, presence service.RunnerPresence, taskSvc *service.TaskService, bus *events.Bus) {
 	candidates, err := queries.SelectStaleOnlineRuntimes(ctx, staleThresholdSeconds)
 	if err != nil {
 		slog.Warn("runtime sweeper: failed to list stale online runtimes", "error", err)
 		return
 	}
+	if len(candidates) == 0 {
+		return
+	}
+
+	// LRM-1571: skip candidates with a live Workspace Runner socket — those
+	// are WS-capable daemons that simply stopped heartbeating; they are alive.
+	candidates = filterStaleRuntimesByPresence(candidates, presence)
 	if len(candidates) == 0 {
 		return
 	}
@@ -214,6 +228,27 @@ func sweepStaleSandboxNodes(ctx context.Context, queries *db.Queries) {
 		slog.Warn("sandbox node sweeper: failed to mark stale nodes offline", "error", err)
 		return
 	}
+}
+
+// filterStaleRuntimesByPresence drops stale-DB candidates whose Computer
+// currently has a live Workspace Runner socket for their daemon/workspace.
+// Socket presence is computer liveness (LRM-1571): a WS-connected runtime is
+// online even when last_seen_at is old because WS-capable daemons no longer
+// send heartbeat frames. A nil presence (no Hub wired, e.g. unit tests)
+// keeps every candidate, matching legacy behavior.
+func filterStaleRuntimesByPresence(candidates []db.SelectStaleOnlineRuntimesRow, presence service.RunnerPresence) []db.SelectStaleOnlineRuntimesRow {
+	if presence == nil || len(candidates) == 0 {
+		return candidates
+	}
+	out := make([]db.SelectStaleOnlineRuntimesRow, 0, len(candidates))
+	for _, c := range candidates {
+		daemonID := strings.TrimSpace(c.DaemonID.String)
+		if daemonID != "" && presence.HasWorkspaceRunner(daemonID, util.UUIDToString(c.WorkspaceID)) {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
 }
 
 // filterStaleRuntimesByLiveness narrows a SELECT-of-stale-candidates down to

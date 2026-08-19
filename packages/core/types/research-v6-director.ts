@@ -349,4 +349,10 @@ export interface ResearchV6DirectorDetailTransport {
     reportId: string,
     signal?: AbortSignal,
   ): Promise<ResearchV6DirectorReportDetail>;
+  loadCompiledReport(
+    workspaceId: string,
+    runId: string,
+    reportId: string,
+    signal?: AbortSignal,
+  ): Promise<string>;
 }

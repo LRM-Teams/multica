@@ -1060,6 +1060,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Post("/resume", h.PostResearchV6ProjectionResume)
 				})
 				r.Get("/v6/runs/{runId}/reports", h.GetResearchV6Reports)
+				r.Get("/v6/runs/{runId}/reports/{reportId}/compiled", h.GetResearchV6ReportCompiled)
 				r.Get("/v6/runs/{runId}/reports/{reportId}", h.GetResearchV6Report)
 				r.Get("/fleet", h.GetResearchFleet)
 				r.Post("/fleet/ensure", h.EnsureResearchFleet)
@@ -1232,6 +1233,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 
 			// Computers
 			r.Get("/api/computers", h.ListComputers)
+			r.Post("/api/computers/resolve-by-machine-id", h.ResolveComputerByMachineID)
 			r.Delete("/api/computers/{daemonId}", h.DeleteComputer)
 			r.Get("/api/computers/{daemonId}/work-digest", h.GetComputerWorkDigest)
 			r.Patch("/api/computers/{daemonId}/work-journal", h.PatchComputerWorkJournal)

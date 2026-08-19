@@ -27,6 +27,11 @@ data:
   LOCAL_UPLOAD_BASE_URL: {{ .Values.backend.config.localUploadBaseUrl | quote }}
   WEB_PUSH_VAPID_PUBLIC_KEY: {{ .Values.backend.config.webPushVapidPublicKey | quote }}
   WEB_PUSH_VAPID_SUBJECT: {{ .Values.backend.config.webPushVapidSubject | quote }}
+  # Isolated report origin is optional. Empty keeps single-origin deploys
+  # readable via the authenticated compiled HTML GET + sandboxed blob iframe.
+  RESEARCH_REPORT_ORIGIN: {{ .Values.backend.config.researchReportOrigin | default "" | quote }}
+  RESEARCH_REPORT_FRAME_ANCESTORS: {{ .Values.backend.config.researchReportFrameAncestors | default "" | quote }}
+  RESEARCH_REPORT_RENDERER_URL: {{ .Values.backend.config.researchReportRendererUrl | default "" | quote }}
 
   # --- PostgreSQL (also consumed by the backend to build DATABASE_URL) ---
   POSTGRES_DB: {{ .Values.postgres.database | quote }}

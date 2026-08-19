@@ -258,7 +258,7 @@ func TestMigration421MovesDefaultAgentAvatarsToV3(t *testing.T) {
 	for _, required := range []string{
 		"CREATE OR REPLACE FUNCTION default_agent_avatar_url(agent_id UUID)",
 		"https://cdn.leagent.me/agent-avatars/v3/agent-%s.png",
-		"% 15",
+		"% 6",
 		"avatar_source = 'assigned'",
 		"/agent-avatars/v2/",
 	} {

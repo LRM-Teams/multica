@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -193,6 +194,17 @@ const (
 )
 
 func runtimeConnectivity(rt db.AgentRuntime, now time.Time) runtimeConnectivityTier {
+	// LRM-1571: a runtime whose daemon currently holds a live Workspace
+	// Runner socket is online regardless of last_seen_at freshness
+	// (WS-capable daemons stop heartbeating). runnerPresence is wired once
+	// at startup (main.go) and nil in unit tests, where the legacy
+	// heartbeat-freshness judgment applies unchanged.
+	if p := runnerPresence; p != nil {
+		daemonID := strings.TrimSpace(rt.DaemonID.String)
+		if daemonID != "" && p.HasWorkspaceRunner(daemonID, uuidToString(rt.WorkspaceID)) {
+			return runtimeConnectivityOnline
+		}
+	}
 	return service.RuntimeConnectivity(rt, now)
 }
 

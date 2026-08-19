@@ -52,7 +52,7 @@ export function AgentHonorPanelSection({
 
   return (
     <section
-      className={cn("border-t border-border pt-3", className)}
+      className={cn("pt-3", className)}
       data-testid="agent-honor-panel-section"
     >
       <div className="mb-2 flex items-center justify-between gap-2">

@@ -15,7 +15,7 @@ import (
 )
 
 func (s *PostgresStore) ReviewV6Report(ctx context.Context, in ReviewV6ReportInput) (V6ReportReview, error) {
-	if s.reportStorage == nil || s.reportRenderer == nil {
+	if s.reportStorage == nil {
 		return V6ReportReview{}, ErrV6DirectorUnavailable
 	}
 	switch in.Decision {
@@ -76,22 +76,31 @@ func (s *PostgresStore) ReviewV6Report(ctx context.Context, in ReviewV6ReportInp
 	if err = ValidateV6ReportCSPHashes(scripts, styles); err != nil {
 		return V6ReportReview{}, err
 	}
-	ancestors, err := NormalizeV6ReportFrameAncestors(s.reportFrameAncestors)
-	if err != nil || len(ancestors) == 0 {
-		return V6ReportReview{}, ErrV6DirectorUnavailable
-	}
-	csp := V6ReportDocumentCSP(scripts, styles, ancestors)
-	render, err := s.reportRenderer.RenderReport(ctx, ReportRenderInput{HTML: html, CSP: csp})
-	if err != nil {
-		return V6ReportReview{}, err
-	}
-	if render.EffectiveCSP != csp || len(render.Screenshot) == 0 || len(render.Screenshot) > 10<<20 || !bytes.HasPrefix(render.Screenshot, []byte("\x89PNG\r\n\x1a\n")) || len(render.Diagnostics) > 256<<10 || !json.Valid(render.Diagnostics) || !bytes.HasPrefix(bytes.TrimSpace(render.Diagnostics), []byte("{")) {
-		return V6ReportReview{}, fmt.Errorf("%w: renderer did not enforce report CSP", ErrInvalidContract)
-	}
-	renderHash := ArtifactContentHashFromCanonicalJSON(render.Screenshot)
-	stored, err := s.reportStorage.PutImmutable(ctx, "research-v6-report-renders/"+in.ReportID+"/"+renderHash+".png", render.Screenshot, "image/png")
-	if err != nil {
-		return V6ReportReview{}, err
+	mode := ResolveV6ReportReviewMode(s.reportRenderer != nil, s.reportFrameAncestors)
+	var renderHash string
+	var diagnostics map[string]any
+	if mode == V6ReportReviewModeIsolated {
+		ancestors, ancestorErr := NormalizeV6ReportFrameAncestors(s.reportFrameAncestors)
+		if ancestorErr != nil || len(ancestors) == 0 || s.reportRenderer == nil {
+			return V6ReportReview{}, ErrV6DirectorUnavailable
+		}
+		csp := V6ReportDocumentCSP(scripts, styles, ancestors)
+		render, renderErr := s.reportRenderer.RenderReport(ctx, ReportRenderInput{HTML: html, CSP: csp})
+		if renderErr != nil {
+			return V6ReportReview{}, renderErr
+		}
+		if render.EffectiveCSP != csp || len(render.Screenshot) == 0 || len(render.Screenshot) > 10<<20 || !bytes.HasPrefix(render.Screenshot, []byte("\x89PNG\r\n\x1a\n")) || len(render.Diagnostics) > 256<<10 || !json.Valid(render.Diagnostics) || !bytes.HasPrefix(bytes.TrimSpace(render.Diagnostics), []byte("{")) {
+			return V6ReportReview{}, fmt.Errorf("%w: renderer did not enforce report CSP", ErrInvalidContract)
+		}
+		renderHash = ArtifactContentHashFromCanonicalJSON(render.Screenshot)
+		stored, storeErr := s.reportStorage.PutImmutable(ctx, "research-v6-report-renders/"+in.ReportID+"/"+renderHash+".png", render.Screenshot, "image/png")
+		if storeErr != nil {
+			return V6ReportReview{}, storeErr
+		}
+		diagnostics = map[string]any{"renderer": json.RawMessage(render.Diagnostics), "screenshot_storage_key": stored.Key, "screenshot_storage_generation": stored.Generation, "effective_csp": render.EffectiveCSP}
+	} else {
+		renderHash = documentHash
+		diagnostics = map[string]any{"renderer": "skipped", "reason": "report_renderer_unavailable"}
 	}
 	tx, err := s.beginResearchTx(ctx, txOpV6ReportReview, pgx.TxOptions{})
 	if err != nil {
@@ -109,7 +118,6 @@ func (s *PostgresStore) ReviewV6Report(ctx context.Context, in ReviewV6ReportInp
 		return V6ReportReview{}, ErrWorkItemChanged
 	}
 	review := V6ReportReview{ID: uuid.NewString(), Decision: in.Decision, ReportID: in.ReportID, Revision: revision}
-	diagnostics := map[string]any{"renderer": json.RawMessage(render.Diagnostics), "screenshot_storage_key": stored.Key, "screenshot_storage_generation": stored.Generation, "effective_csp": render.EffectiveCSP}
 	createdAt := time.Now().UTC()
 	_, err = tx.Exec(ctx, `INSERT INTO research_report_review(id,workspace_id,session_id,report_id,report_revision,director_assignment_id,director_generation,director_cycle_id,input_state_version,decision,reason,render_diagnostics,created_at) VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,$6::uuid,$7,$8::uuid,$9,$10,$11,$12::jsonb,$13)`, review.ID, in.WorkspaceID, in.RunID, in.ReportID, revision, in.DirectorAssignmentID, generation, in.DirectorCycleID, state, in.Decision, in.Reason, mustJSONRaw(diagnostics), createdAt)
 	if err != nil {

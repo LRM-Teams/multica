@@ -1051,6 +1051,29 @@ func (h *Hub) HasWorkspaceRunner(daemonID, workspaceID string) bool {
 	return h.byRunner[workspaceRunnerKey{daemonID: daemonID, workspaceID: workspaceID}] != nil
 }
 
+// WorkspaceRunnerRef is one live Workspace Runner socket identity returned by
+// ListWorkspaceRunners.
+type WorkspaceRunnerRef struct {
+	DaemonID    string
+	WorkspaceID string
+}
+
+// ListWorkspaceRunners returns the currently connected Workspace Runner
+// daemon/workspace pairs. LRM-1571 uses this to drive liveness (Redis TTL +
+// DB last_seen freshness) from socket presence instead of heartbeat frames.
+func (h *Hub) ListWorkspaceRunners() []WorkspaceRunnerRef {
+	if h == nil {
+		return nil
+	}
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	out := make([]WorkspaceRunnerRef, 0, len(h.byRunner))
+	for key := range h.byRunner {
+		out = append(out, WorkspaceRunnerRef{DaemonID: key.daemonID, WorkspaceID: key.workspaceID})
+	}
+	return out
+}
+
 // WorkspaceRunnerSupportsCapability reports only the active ready connection's
 // declared capabilities. A replaced Runner cannot lend its protocol support to
 // its successor.

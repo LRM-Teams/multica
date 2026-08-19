@@ -54,17 +54,15 @@ func (h *Handler) SubmitAgentNotePeriodBriefPack(w http.ResponseWriter, r *http.
 		return
 	}
 
-	ref, idx, found := findCollectorRef(run.Collectors, uuidToString(agentUUID))
+	_, idx, found := findCollectorRef(run.Collectors, uuidToString(agentUUID))
 	if !found {
 		writeError(w, http.StatusForbidden, "only a collector on this Period Brief run may submit a pack")
 		return
 	}
-	_ = ref
 
-	// Authorize via Worker job / NoteBrief on the draft (same ACL as notes get).
-	if _, _, ok := h.loadAgentAccessibleNote(w, r, principal, draftID); !ok {
-		return
-	}
+	// Authorization is membership on the run — not Notes page ACL.
+	// Collectors often authenticate with a durable agent_credential (no
+	// TaskID), which cannot pass loadAgentAccessibleNote / notes get.
 
 	markdown, ok := readPeriodBriefPackMarkdown(w, r)
 	if !ok {

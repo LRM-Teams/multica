@@ -28,6 +28,22 @@ func withAgentTaskPrincipal(r *http.Request, agentID, workspaceID, ownerUserID, 
 	return r
 }
 
+// Durable agent_credential has no task scope (Pi/local collectors often use this).
+func withAgentCredentialPrincipal(r *http.Request, agentID, workspaceID, ownerUserID string) *http.Request {
+	p := middleware.AgentPrincipal{
+		AgentID:     agentID,
+		WorkspaceID: workspaceID,
+		OwnerUserID: ownerUserID,
+		ActorSource: "agent_credential",
+	}
+	r = r.WithContext(middleware.WithAgentPrincipal(r.Context(), p))
+	r.Header.Set("X-User-ID", ownerUserID)
+	r.Header.Set("X-Agent-ID", agentID)
+	r.Header.Set("X-Actor-Source", "agent_credential")
+	r.Header.Set("X-Workspace-ID", workspaceID)
+	return r
+}
+
 func TestGetAgentNotePageAllowsWorkerBriefPage(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -70,6 +86,45 @@ UPDATE note_page SET content = $1 WHERE id = $2`, "secret brief body", noteID); 
 		t.Fatalf("decode page: %v", err)
 	}
 	if page.ID != noteID || page.Content != "secret brief body" || page.CanManageShares {
+		t.Fatalf("page = %#v", page)
+	}
+}
+
+func TestGetAgentNotePageAllowsActiveWorkerJobWithoutTaskID(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	agentID := createHandlerTestAgent(t, "Agent Notes Cred "+uuid.NewString()[:8], nil)
+	noteID := createNotePageForAITest(t, "Credential-readable note "+uuid.NewString())
+	if _, err := testPool.Exec(context.Background(), `
+UPDATE note_page SET content = $1 WHERE id = $2`, "credential brief body", noteID); err != nil {
+		t.Fatalf("set content: %v", err)
+	}
+
+	createRec := httptest.NewRecorder()
+	testHandler.CreateNoteWorkerJob(createRec, withURLParam(newRequest(http.MethodPost, "/api/notes/pages/"+noteID+"/worker-jobs", map[string]any{
+		"agent_id":    agentID,
+		"instruction": "use the note without task token",
+	}), "id", noteID))
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("CreateNoteWorkerJob: %d %s", createRec.Code, createRec.Body.String())
+	}
+
+	req := withURLParam(withAgentCredentialPrincipal(
+		newRequest(http.MethodGet, "/api/agent/notes/pages/"+noteID, nil),
+		agentID, testWorkspaceID, testUserID,
+	), "id", noteID)
+	rec := httptest.NewRecorder()
+	testHandler.GetAgentNotePage(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GetAgentNotePage with agent_credential: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var page NotePageResponse
+	if err := json.NewDecoder(rec.Body).Decode(&page); err != nil {
+		t.Fatalf("decode page: %v", err)
+	}
+	if page.ID != noteID || page.Content != "credential brief body" {
 		t.Fatalf("page = %#v", page)
 	}
 }

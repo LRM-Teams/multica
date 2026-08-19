@@ -74,10 +74,9 @@ func (h *Handler) RetryAgentNotePeriodBriefCollectors(w http.ResponseWriter, r *
 		return
 	}
 
-	// Authorize via the synthesizer's Worker job / note_brief on this draft.
-	if _, _, ok := h.loadAgentAccessibleNote(w, r, principal, draftID); !ok {
-		return
-	}
+	// Authorization is synthesizer_agent_id on the run — not Notes page ACL.
+	// Durable agent_credential tokens have no TaskID and cannot pass
+	// loadAgentAccessibleNote.
 
 	var req retryNotePeriodBriefCollectorsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && r.ContentLength != 0 {

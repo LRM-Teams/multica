@@ -521,3 +521,63 @@ func TestCreateNotePeriodBriefAllowsMemberWithCollectors(t *testing.T) {
 		t.Fatalf("collector_jobs = %#v", resp.CollectorJobs)
 	}
 }
+
+// Pi/local collectors authenticate with durable agent_credential (no TaskID).
+// submit-pack must accept that — Notes page ACL is not the gate.
+func TestSubmitAgentNotePeriodBriefPackAllowsAgentCredentialWithoutTaskID(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	prevWait := notePeriodBriefCollectorMaxWait
+	notePeriodBriefCollectorMaxWait = 30 * time.Second
+	t.Cleanup(func() { notePeriodBriefCollectorMaxWait = prevWait })
+
+	synthID := createHandlerTestAgent(t, "Submit Cred Synth "+uuid.NewString()[:8], nil)
+	collectorID := createPeriodBriefCollectorTestAgent(t, "Submit Cred Collector")
+
+	createRec := httptest.NewRecorder()
+	testHandler.CreateNotePeriodBrief(createRec, newRequest(http.MethodPost, "/api/notes/period-briefs", map[string]any{
+		"window":              "day",
+		"date":                time.Now().UTC().Format("2006-01-02"),
+		"timezone":            "UTC",
+		"agent_id":            synthID,
+		"collector_agent_ids": []string{collectorID},
+	}))
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create = %d: %s", createRec.Code, createRec.Body.String())
+	}
+	var created createNotePeriodBriefResponse
+	if err := json.NewDecoder(createRec.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create: %v", err)
+	}
+	draftID := created.Page.ID
+	if draftID == "" {
+		t.Fatal("missing draft page id")
+	}
+
+	packBody := "# 采集包 credential submit\n\n## Highlights\n- via agent_credential\n\n## Work groups\n\n### Demo\n- why: same project\n- items:\n  - via agent_credential\n\n## Unscoped / unclear\n- none\n"
+	submitReq := withURLParam(withAgentCredentialPrincipal(
+		newRequest(http.MethodPost, "/api/agent/notes/period-briefs/"+draftID+"/submit-pack", map[string]any{
+			"markdown": packBody,
+		}),
+		collectorID, testWorkspaceID, testUserID,
+	), "draftPageId", draftID)
+	submitRec := httptest.NewRecorder()
+	testHandler.SubmitAgentNotePeriodBriefPack(submitRec, submitReq)
+	if submitRec.Code != http.StatusOK {
+		t.Fatalf("submit-pack with agent_credential: expected 200, got %d: %s", submitRec.Code, submitRec.Body.String())
+	}
+
+	var stored string
+	if err := testPool.QueryRow(context.Background(), `
+SELECT c->>'pack_markdown'
+FROM note_period_brief_run r,
+     jsonb_array_elements(r.collectors) AS c
+WHERE r.draft_page_id = $1::uuid
+  AND c->>'agent_id' = $2`, draftID, collectorID).Scan(&stored); err != nil {
+		t.Fatalf("load pack_markdown: %v", err)
+	}
+	if !strings.Contains(stored, "via agent_credential") {
+		t.Fatalf("pack_markdown = %q", stored)
+	}
+}

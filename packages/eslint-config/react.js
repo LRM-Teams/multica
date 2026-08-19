@@ -29,6 +29,71 @@ export default [
       ...reactHooksPlugin.configs["recommended-latest"].rules,
     },
   },
+  // Native `title` attribute ban. Browser-native `title` tooltips are
+  // inconsistent, not accessible (not reliably read by screen readers / keyboard),
+  // and visually lag styled tooltips — the frontend moved native titles to the
+  // @multica/ui Tooltip component (see #3618, 25 places). This rule prevents
+  // regressions: flag the `title` ATTRIBUTE on host (lowercase) JSX elements.
+  // Component `title` props (<Tooltip title=...>) and SVG <title> accessible
+  // names are intentionally NOT matched. Warning (not error) per product choice:
+  // surface in lint/CI output without blocking merges.
+  //
+  // Implemented as a dedicated rule (not no-restricted-syntax) because #835 below
+  // already uses no-restricted-syntax for showErrorToast; flat-config later blocks
+  // would just clobber that single-rule selector.
+  {
+    files: ["**/*.{jsx,tsx}"],
+    plugins: {
+      multica: {
+        rules: {
+          "no-native-title": {
+            meta: {
+              type: "suggestion",
+              docs: { description: "Ban native title attribute on host JSX elements" },
+              schema: [],
+            },
+            create(context) {
+              return {
+                JSXAttribute(node) {
+                  if (
+                    !node.name ||
+                    node.name.type !== "JSXIdentifier" ||
+                    node.name.name !== "title"
+                  ) {
+                    return;
+                  }
+                  const opening = node.parent;
+                  if (
+                    !opening ||
+                    opening.type !== "JSXOpeningElement" ||
+                    !opening.name ||
+                    opening.name.type !== "JSXIdentifier" ||
+                    !/^[a-z]/.test(opening.name.name)
+                  ) {
+                    return;
+                  }
+                  // <iframe title> is an a11y accessible name describing the
+                  // embedded document — NOT a tooltip — so it must stay as a
+                  // native title and is exempt from this ban.
+                  if (opening.name.name === "iframe") {
+                    return;
+                  }
+                  context.report({
+                    node,
+                    message:
+                      "Native `title` attribute: use the Tooltip component from @multica/ui (base-ui) instead, and keep any accessible name via aria-label/aria-labelledby. Component title props, iframe a11y titles, and SVG <title> are exempt.",
+                  });
+                },
+              };
+            },
+          },
+        },
+      },
+    },
+    rules: {
+      "multica/no-native-title": "warn",
+    },
+  },
   // #835 — a failure is announced in exactly one place: showErrorToast.
   //
   // sonner's defaults were never chosen by us: TOAST_LIFETIME is 4s and only 3

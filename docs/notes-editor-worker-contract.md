@@ -104,8 +104,22 @@ Do not show Create note / Insert below on ordinary agent replies (a poem request
 ## Agent read path (S2-C2)
 
 - CLI: `multica notes get <page-id> --output json` (agent task token only)
+- CLI: `multica notes tree <page-id>` — flat outline of that page and descendants
 - API: `GET /api/agent/notes/pages/{id}`
-- ACL: current task must authorize the page via `note_worker_job` (or matching `note_brief`) **and** the Worker `creator_id` must still pass `noteAccess`. Agent `OwnerUserID` is never the note viewer. No list/search.
+- API: `GET /api/agent/notes/pages/{id}/tree`
+- ACL: current task must authorize the page via `note_worker_job`, matching `note_brief`, **or** an active `chat_session.context_note_page_id` (Notes assistant bubble). The human viewer (`creator_id` / initiator) must still pass `noteAccess`. Agent `OwnerUserID` is never the note viewer.
+- **Subtree:** authorization on a root page also covers its descendants. Agents may `notes get` / `notes tree` any page under the authorized root.
+
+## Notes assistant bubble (page FAB)
+
+Stay-on-page chat (not Worker → Messages):
+
+1. Notes page shows a bottom-right FAB when a page is selected.
+2. Opens a floating `chat_session` with `context_note_page_id` set to the current page.
+3. Standalone chat delivery prefixes `<note_chat_context>` (page id, title, subtree outline, `notes get` / `notes tree` hints).
+4. Distinct from Editor (`note_ai_job`) and Worker (`note_worker_job`); replies stay in the bubble transcript.
+
+FE: `packages/views/notes/note-assistant-bubble.tsx`; BE: `chat_session.context_note_page_id`, `resolveAgentNoteViewer`, `ListAgentNoteTree`.
 
 ## Code pointers
 

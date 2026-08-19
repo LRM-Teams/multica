@@ -28,6 +28,7 @@ import { PageHeader } from "../layout/page-header";
 import { useT } from "../i18n/use-t";
 import { NoteShareSummary } from "./note-share-summary";
 import { NoteWritebackReview } from "./note-writeback-review";
+import { NoteAssistantBubble } from "./note-assistant-bubble";
 import { NoteChannelAnchors } from "./note-channel-anchors";
 import { NoteIntentEntry, type NoteIntentKind } from "./note-intent-entry";
 import { NotePeriodBriefDialog } from "./note-period-brief-dialog";
@@ -1417,7 +1418,7 @@ export function NotesPage({ pageId }: { pageId?: string }) {
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-background">
+    <div className="relative flex h-full min-h-0 flex-col bg-background">
       <PageHeader>
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <FileText className="size-4 text-muted-foreground" />
@@ -1593,6 +1594,13 @@ export function NotesPage({ pageId }: { pageId?: string }) {
           await queryClient.invalidateQueries({ queryKey: noteListOptions(wsId).queryKey });
         }}
       />
+      {selected && !showTrash ? (
+        <NoteAssistantBubble
+          pageId={selected.id}
+          pageTitle={selected.title}
+          preferredAgentId={configuredAiAgentId}
+        />
+      ) : null}
     </div>
   );
 }

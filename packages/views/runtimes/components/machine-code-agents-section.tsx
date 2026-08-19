@@ -156,7 +156,7 @@ export function MachineCodeAgentsSection({
                     <span className="min-w-0 truncate">{row.label}</span>
                   </div>
                   {isInstalled ? (
-                    <div className="mt-auto flex flex-col items-start gap-2 pt-3 md:flex-row md:items-center md:justify-between md:gap-2">
+                    <div className="mt-auto flex flex-col items-start gap-2 pt-3 md:flex-row md:flex-wrap md:items-center md:justify-between md:gap-2">
                       <span className="inline-flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
                         <span
                           className="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-online"

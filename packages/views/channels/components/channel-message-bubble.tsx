@@ -17,6 +17,7 @@ import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { ReactionBar } from "@multica/ui/components/common/reaction-bar";
 import { QuickEmojiPicker } from "@multica/ui/components/common/quick-emoji-picker";
 import { copyText } from "@multica/ui/lib/clipboard";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { cn } from "@multica/ui/lib/utils";
 import {
   ContextMenu,
@@ -889,14 +890,18 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
       onPointerLeave={cancelTouchGesture}
     >
       {compact ? (
-        <span
-          data-testid="message-gutter-time"
-          className="mt-0.5 select-none self-start justify-self-end pt-0.5 text-[10px] tabular-nums text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100"
-          title={messageTime.full(message.created_at)}
-          aria-hidden
-        >
-          <Time kind="clock" value={message.created_at} title={false} />
-        </span>
+        <Tooltip>
+          <TooltipTrigger
+            data-testid="message-gutter-time"
+            aria-hidden
+            render={
+              <span className="mt-0.5 select-none self-start justify-self-end pt-0.5 text-[10px] tabular-nums text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+            }
+          >
+            <Time kind="clock" value={message.created_at} title={false} />
+          </TooltipTrigger>
+          <TooltipContent side="top">{messageTime.full(message.created_at)}</TooltipContent>
+        </Tooltip>
       ) : profileActorType && profileActorId ? (
         <ActorProfileTrigger
           memberType={profileActorType}
@@ -954,13 +959,17 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
                 {t(($) => $.message.feishu_badge)}
               </span>
             )}
-            <span
-              data-testid="message-author-time"
-              className="inline-flex h-5 shrink-0 items-center text-[10px] leading-none tabular-nums text-muted-foreground/50"
-              title={messageTime.full(message.created_at)}
-            >
-              <Time kind="message" value={message.created_at} title={false} />
-            </span>
+            <Tooltip>
+              <TooltipTrigger
+                data-testid="message-author-time"
+                render={
+                  <span className="inline-flex h-5 shrink-0 items-center text-[10px] leading-none tabular-nums text-muted-foreground/50" />
+                }
+              >
+                <Time kind="message" value={message.created_at} title={false} />
+              </TooltipTrigger>
+              <TooltipContent side="top">{messageTime.full(message.created_at)}</TooltipContent>
+            </Tooltip>
             {isEdited && (
               <span
                 data-testid="message-edited"
@@ -1020,64 +1029,94 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
                 contentClassName="rounded-md border border-border/70 bg-popover/95 shadow-none ring-0"
               />
             )}
-            <button
-              type="button"
-              onClick={handleCopy}
-              className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              aria-label={t(($) => $.message.copy_action)}
-              title={t(($) => $.message.copy_action)}
-            >
-              <Copy className="size-4" />
-            </button>
-            {canCreateNote && (
-              <button
-                type="button"
-                data-testid="message-action-create-note"
-                onClick={handleCreateNote}
-                disabled={createNoteBusy}
-                className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
-                aria-label={t(($) => $.message.create_note_action)}
-                title={t(($) => $.message.create_note_action)}
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    onClick={handleCopy}
+                    className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    aria-label={t(($) => $.message.copy_action)}
+                  />
+                }
               >
-                {createNoteBusy ? (
-                  <Loader2 className="size-4 animate-spin" aria-hidden />
-                ) : (
-                  <FilePlus className="size-4" />
-                )}
-              </button>
+                <Copy className="size-4" />
+              </TooltipTrigger>
+              <TooltipContent side="top">{t(($) => $.message.copy_action)}</TooltipContent>
+            </Tooltip>
+            {canCreateNote && (
+              <Tooltip>
+                <TooltipTrigger
+                  data-testid="message-action-create-note"
+                  render={
+                    <button
+                      type="button"
+                      onClick={handleCreateNote}
+                      disabled={createNoteBusy}
+                      className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
+                      aria-label={t(($) => $.message.create_note_action)}
+                    />
+                  }
+                >
+                  {createNoteBusy ? (
+                    <Loader2 className="size-4 animate-spin" aria-hidden />
+                  ) : (
+                    <FilePlus className="size-4" />
+                  )}
+                </TooltipTrigger>
+                <TooltipContent side="top">{t(($) => $.message.create_note_action)}</TooltipContent>
+              </Tooltip>
             )}
             {onQuote && (
-              <button
-                type="button"
-                onClick={handleQuote}
-                className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                aria-label={t(($) => $.quote.action)}
-                title={t(($) => $.quote.action)}
-              >
-                <Quote className="size-4" />
-              </button>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <button
+                      type="button"
+                      onClick={handleQuote}
+                      className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      aria-label={t(($) => $.quote.action)}
+                    />
+                  }
+                >
+                  <Quote className="size-4" />
+                </TooltipTrigger>
+                <TooltipContent side="top">{t(($) => $.quote.action)}</TooltipContent>
+              </Tooltip>
             )}
             {canOpenThread && (
-              <button
-                type="button"
-                onClick={() => onOpenThread?.(message)}
-                className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                aria-label={t(($) => $.thread.reply)}
-                title={t(($) => $.thread.reply)}
-              >
-                <MessageSquare className="size-4" />
-              </button>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <button
+                      type="button"
+                      onClick={() => onOpenThread?.(message)}
+                      className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      aria-label={t(($) => $.thread.reply)}
+                    />
+                  }
+                >
+                  <MessageSquare className="size-4" />
+                </TooltipTrigger>
+                <TooltipContent side="top">{t(($) => $.thread.reply)}</TooltipContent>
+              </Tooltip>
             )}
             {canEdit && (
-              <button
-                type="button"
-                onClick={handleStartEdit}
-                className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                aria-label={t(($) => $.message.edit_action)}
-                title={t(($) => $.message.edit_action)}
-              >
-                <Pencil className="size-4" />
-              </button>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <button
+                      type="button"
+                      onClick={handleStartEdit}
+                      className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      aria-label={t(($) => $.message.edit_action)}
+                    />
+                  }
+                >
+                  <Pencil className="size-4" />
+                </TooltipTrigger>
+                <TooltipContent side="top">{t(($) => $.message.edit_action)}</TooltipContent>
+              </Tooltip>
             )}
           </div>
         )}

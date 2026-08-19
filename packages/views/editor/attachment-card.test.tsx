@@ -101,7 +101,7 @@ describe("AttachmentCard — chrome row", () => {
     });
     fireEvent.click(download);
     expect(onDownload).toHaveBeenCalledTimes(1);
-    expect(screen.getByTitle("Download")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Download" })).toBeTruthy();
   });
 
   it("html source with an attachmentId makes the body a primary Open button", () => {
@@ -148,7 +148,7 @@ describe("AttachmentCard — open / download", () => {
         onDownload={onDownload}
       />,
     );
-    fireEvent.mouseDown(screen.getByTitle("Download"));
+    fireEvent.mouseDown(screen.getByRole("button", { name: "Download" }));
     expect(onDownload).toHaveBeenCalled();
   });
 
@@ -187,7 +187,7 @@ describe("AttachmentCard — open / download", () => {
     fireEvent.click(download);
     expect(onDownload).toHaveBeenCalledTimes(1);
     expect(screen.queryByTitle("Preview")).toBeNull();
-    expect(screen.getByTitle("Download")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Download" })).toBeTruthy();
     expect(screen.getByText("logs.zip")).toBeTruthy();
   });
 
@@ -260,7 +260,7 @@ describe("AttachmentCard — meta, truncation, keyboard order", () => {
         onDownload={() => {}}
       />,
     );
-    const nameEl = screen.getByTitle(long);
+    const nameEl = screen.getByTestId("attachment-card-filename");
     expect(nameEl.className).toContain("truncate");
   });
 
@@ -281,8 +281,12 @@ describe("AttachmentCard — meta, truncation, keyboard order", () => {
       screen.getByRole("button", { name: /open/i }),
     );
     await user.tab();
-    expect(document.activeElement).toBe(screen.getByTitle("Download"));
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Download" }),
+    );
     await user.tab();
-    expect(document.activeElement).toBe(screen.getByTitle("Remove attachment"));
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Remove attachment" }),
+    );
   });
 });

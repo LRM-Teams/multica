@@ -14,6 +14,7 @@ import { ChevronRight, ExternalLink, RefreshCw, Trash2 } from "lucide-react";
 // resolves correctly under both bundlers.
 import { QRCode } from "react-qr-code";
 import { cn } from "@multica/ui/lib/utils";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { Button } from "@multica/ui/components/ui/button";
 import { Card, CardContent } from "@multica/ui/components/ui/card";
 import {
@@ -384,40 +385,48 @@ export function LarkAgentBindButton({
         className={cn("flex flex-wrap items-center gap-2", className)}
         data-testid="lark-agent-bind-buttons"
       >
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => setDialogRegion("feishu")}
-          disabled={!agentId}
-          title={
-            agentName
-              ? t(($) => $.lark.bind_button_feishu_title, { agent: agentName })
-              : undefined
-          }
-          data-testid="lark-agent-bind-feishu"
-        >
-          <ExternalLink className="h-3 w-3" />
-          {t(($) => $.lark.bind_button_feishu)}
-        </Button>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setDialogRegion("feishu")}
+                disabled={!agentId}
+                data-testid="lark-agent-bind-feishu"
+              />
+            }
+          >
+            <ExternalLink className="h-3 w-3" />
+            {t(($) => $.lark.bind_button_feishu)}
+          </TooltipTrigger>
+          {agentName && (
+            <TooltipContent side="top">{t(($) => $.lark.bind_button_feishu_title, { agent: agentName })}</TooltipContent>
+          )}
+        </Tooltip>
         {/* MUL-3083: Lark (international) bind entry is temporarily hidden —
             see LARK_INTL_CONNECT_ENABLED. Mainland Feishu (above) is
             unaffected. */}
         {LARK_INTL_CONNECT_ENABLED && (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setDialogRegion("lark")}
-            disabled={!agentId}
-            title={
-              agentName
-                ? t(($) => $.lark.bind_button_lark_title, { agent: agentName })
-                : undefined
-            }
-            data-testid="lark-agent-bind-lark"
-          >
-            <ExternalLink className="h-3 w-3" />
-            {t(($) => $.lark.bind_button_lark)}
-          </Button>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setDialogRegion("lark")}
+                  disabled={!agentId}
+                  data-testid="lark-agent-bind-lark"
+                />
+              }
+            >
+              <ExternalLink className="h-3 w-3" />
+              {t(($) => $.lark.bind_button_lark)}
+            </TooltipTrigger>
+            {agentName && (
+              <TooltipContent side="top">{t(($) => $.lark.bind_button_lark_title, { agent: agentName })}</TooltipContent>
+            )}
+          </Tooltip>
         )}
       </div>
       {dialogRegion && (
@@ -558,42 +567,54 @@ function LarkAgentBotConnectedBadge({
           </span>
           <span className="truncate">{t(($) => $.lark.agent_bot_connected_label)}</span>
         </span>
-        <Button
-          variant="destructive"
-          size="sm"
-          onClick={() => setConfirmOpen(true)}
-          disabled={disconnecting}
-          title={t(($) => $.lark.agent_bot_disconnect_tooltip)}
-          aria-label={t(($) => $.lark.disconnect)}
-          data-testid="lark-agent-bot-disconnect"
-        >
-          <Trash2 className="h-3 w-3" />
-          {disconnecting
-            ? t(($) => $.lark.disconnecting)
-            : t(($) => $.lark.disconnect)}
-        </Button>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={() => setConfirmOpen(true)}
+                disabled={disconnecting}
+                aria-label={t(($) => $.lark.disconnect)}
+                data-testid="lark-agent-bot-disconnect"
+              />
+            }
+          >
+            <Trash2 className="h-3 w-3" />
+            {disconnecting
+              ? t(($) => $.lark.disconnecting)
+              : t(($) => $.lark.disconnect)}
+          </TooltipTrigger>
+          <TooltipContent side="top">{t(($) => $.lark.agent_bot_disconnect_tooltip)}</TooltipContent>
+        </Tooltip>
       </div>
 
       {/* Row 2: secondary "Manage in Lark" link to the Bot's dev-console
           app page. Demoted below the status row so it no longer competes
           with the primary connect/disconnect intents. Region-aware tooltip
           keeps the Feishu vs Lark distinction this branch introduced. */}
-      <a
-        href={manageHref}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="inline-flex items-center gap-1 text-xs text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline"
-        title={
-          installation.region === "lark"
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <a
+              href={manageHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-xs text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline"
+            />
+          }
+        >
+          <ExternalLink className="h-3 w-3" />
+          {installation.region === "lark"
+            ? t(($) => $.lark.agent_bot_manage_link_lark)
+            : t(($) => $.lark.agent_bot_manage_link_feishu)}
+        </TooltipTrigger>
+        <TooltipContent side="top">
+          {installation.region === "lark"
             ? t(($) => $.lark.agent_bot_manage_tooltip_lark)
-            : t(($) => $.lark.agent_bot_manage_tooltip_feishu)
-        }
-      >
-        <ExternalLink className="h-3 w-3" />
-        {installation.region === "lark"
-          ? t(($) => $.lark.agent_bot_manage_link_lark)
-          : t(($) => $.lark.agent_bot_manage_link_feishu)}
-      </a>
+            : t(($) => $.lark.agent_bot_manage_tooltip_feishu)}
+        </TooltipContent>
+      </Tooltip>
 
       <AlertDialog
         open={confirmOpen}

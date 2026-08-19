@@ -26,6 +26,7 @@
 
 import { Download, Loader2, Trash2 } from "lucide-react";
 import { FileIcon, defaultStyles } from "react-file-icon";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { useT } from "../i18n";
 import { getPreviewKind, rendersFromUrlAlone } from "./utils/preview";
 import {
@@ -128,15 +129,19 @@ export function AttachmentCard({
           LRM-359: filename locks to text-foreground (no inherit wash / UA button
           color); meta stays muted-foreground for secondary hierarchy. */}
       <span className="min-w-0 flex-1 text-left">
-        <span
-          className="block truncate text-[13.5px] font-semibold leading-tight text-foreground"
-          title={filename}
-          data-testid="attachment-card-filename"
-        >
-          {uploading
-            ? t(($) => $.file_card.uploading, { filename })
-            : filename}
-        </span>
+        <Tooltip>
+          <TooltipTrigger
+            data-testid="attachment-card-filename"
+            render={
+              <span className="block truncate text-[13.5px] font-semibold leading-tight text-foreground" />
+            }
+          >
+            {uploading
+              ? t(($) => $.file_card.uploading, { filename })
+              : filename}
+          </TooltipTrigger>
+          <TooltipContent side="top">{filename}</TooltipContent>
+        </Tooltip>
         {!uploading && meta && (
           <span className="mt-0.5 block truncate text-[11.5px] leading-tight text-muted-foreground">
             {meta}
@@ -176,34 +181,46 @@ export function AttachmentCard({
         {hasActions && (
           <div className="flex shrink-0 items-center gap-0.5 opacity-100 transition-opacity [@media(pointer:fine)]:opacity-0 [@media(pointer:fine)]:group-hover:opacity-100 [@media(pointer:fine)]:group-focus-within:opacity-100">
             {canDownload && (
-              <button
-                type="button"
-                className="flex size-11 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-brand/10 hover:text-brand md:size-7"
-                title={t(($) => $.image.download)}
-                aria-label={t(($) => $.image.download)}
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  onDownload();
-                }}
-              >
-                <Download className="size-3.5" />
-              </button>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <button
+                      type="button"
+                      className="flex size-11 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-brand/10 hover:text-brand md:size-7"
+                      aria-label={t(($) => $.image.download)}
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        onDownload();
+                      }}
+                    />
+                  }
+                >
+                  <Download className="size-3.5" />
+                </TooltipTrigger>
+                <TooltipContent side="top">{t(($) => $.image.download)}</TooltipContent>
+              </Tooltip>
             )}
             {canDelete && onDelete && (
-              <button
-                type="button"
-                className="flex size-11 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive md:size-7"
-                title={t(($) => $.attachment.remove)}
-                aria-label={t(($) => $.attachment.remove)}
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  onDelete();
-                }}
-              >
-                <Trash2 className="size-3.5" />
-              </button>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <button
+                      type="button"
+                      className="flex size-11 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive md:size-7"
+                      aria-label={t(($) => $.attachment.remove)}
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        onDelete();
+                      }}
+                    />
+                  }
+                >
+                  <Trash2 className="size-3.5" />
+                </TooltipTrigger>
+                <TooltipContent side="top">{t(($) => $.attachment.remove)}</TooltipContent>
+              </Tooltip>
             )}
           </div>
         )}

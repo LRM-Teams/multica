@@ -73,6 +73,9 @@ func (host *Host) LocalControlRegistry(state *hostProcessState) *LocalControlReg
 		if err := json.Unmarshal(raw, &request); err != nil {
 			return nil, err
 		}
+		if len(request.Command) == 0 {
+			return nil, errors.New("Computer upgrade command is required")
+		}
 		var command protocol.ComputerUpgradePayload
 		if err := json.Unmarshal(request.Command, &command); err != nil {
 			return nil, err

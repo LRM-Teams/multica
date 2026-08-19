@@ -38,10 +38,7 @@ func RequestBindingComputerUpgrade(ctx context.Context, controlEndpoint, token s
 	if !validLocalControlEndpoint(controlEndpoint) || strings.TrimSpace(token) == "" || identity.Validate() != nil {
 		return fmt.Errorf("Binding child machine control is not configured")
 	}
-	body, err := json.Marshal(struct {
-		Identity BindingChildIdentity            `json:"identity"`
-		Command  protocol.ComputerUpgradePayload `json:"command"`
-	}{Identity: identity, Command: command})
+	body, err := json.Marshal(upgradeStartControlRequest{Identity: identity, Command: command})
 	if err != nil {
 		return err
 	}

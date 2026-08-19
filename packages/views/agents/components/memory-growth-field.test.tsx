@@ -2,6 +2,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { cleanup, render, screen, act } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { I18nProvider } from "@multica/core/i18n/react";
 import type { AgentMemoryGrowth } from "@multica/core/types";
 import enCommon from "../../locales/en/common.json";
@@ -84,14 +85,20 @@ describe("MemoryGrowthField (LRM-304)", () => {
     expect(screen.getByTestId("memory-growth-fine-bar")).toBeTruthy();
   });
 
-  it("localizes labels and server-provided tier names in Simplified Chinese", () => {
+  it("localizes labels and server-provided tier names in Simplified Chinese", async () => {
+    // Hovering the segment tooltip needs real timers (base-ui open delay).
+    vi.useRealTimers();
     const { container } = renderGrowth(silverGrowth(), "zh-Hans");
 
     expect(screen.getByText("记忆成长")).toBeTruthy();
     expect(screen.getByTestId("memory-growth-tier")).toHaveTextContent("白银");
-    expect(
-      screen.getByTestId("memory-growth-segments").querySelector('[title="青铜"]'),
-    ).toBeTruthy();
+    // Tier-segment color bars render their label in a Tooltip (hover).
+    const bronzeSegment = screen
+      .getByTestId("memory-growth-segments")
+      .querySelector('[data-status="complete"]');
+    expect(bronzeSegment).toBeTruthy();
+    await userEvent.hover(bronzeSegment as Element);
+    expect(await screen.findByText("青铜")).toBeTruthy();
     expect(screen.getByTestId("memory-growth-next-tier")).toHaveTextContent(
       "下一阶段 · 黄金",
     );

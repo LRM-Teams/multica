@@ -1,6 +1,7 @@
 "use client";
 
 import { useT } from "./use-t";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { useTimeAgo } from "./use-time-ago";
 import {
   formatListTime,
@@ -56,13 +57,20 @@ export function Time({
           : kind === "clock"
             ? localTime(ms, tz)
             : fullTimestamp(ms, tz, locale);
-  return (
-    <time
-      dateTime={new Date(ms).toISOString()}
-      title={title ? fullTimestamp(ms, tz, locale) : undefined}
-      className={className}
-    >
+  const timestamp = new Date(ms).toISOString();
+  const full = fullTimestamp(ms, tz, locale);
+  const timeEl = (
+    <time dateTime={timestamp} className={className}>
       {text}
     </time>
+  );
+  if (!title) return timeEl;
+  return (
+    <Tooltip>
+      <TooltipTrigger render={<time dateTime={timestamp} className={className} />}>
+        {text}
+      </TooltipTrigger>
+      <TooltipContent side="top">{full}</TooltipContent>
+    </Tooltip>
   );
 }

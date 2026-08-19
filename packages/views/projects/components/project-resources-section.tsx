@@ -351,14 +351,23 @@ function ResourceRow({
           />
           <TooltipContent side="top">{ref.url}</TooltipContent>
         </Tooltip>
-        <button
-          type="button"
-          onClick={onRemove}
-          className="opacity-0 group-hover:opacity-100 transition-opacity rounded-sm p-0.5 hover:bg-accent"
-          title={t(($) => $.resources.remove_tooltip)}
-        >
-          <Trash2 className="size-3 text-muted-foreground" />
-        </button>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                onClick={onRemove}
+                className="opacity-0 group-hover:opacity-100 transition-opacity rounded-sm p-0.5 hover:bg-accent"
+                aria-label={t(($) => $.resources.remove_tooltip)}
+              />
+            }
+          >
+            <Trash2 className="size-3 text-muted-foreground" />
+          </TooltipTrigger>
+          <TooltipContent side="top">
+            {t(($) => $.resources.remove_tooltip)}
+          </TooltipContent>
+        </Tooltip>
       </div>
     );
   }
@@ -380,14 +389,23 @@ function ResourceRow({
       <span className="truncate flex-1">
         {resource.label || resource.resource_type}
       </span>
-      <button
-        type="button"
-        onClick={onRemove}
-        className="rounded-sm p-0.5 hover:bg-accent"
-        title={t(($) => $.resources.remove_tooltip)}
-      >
-        <Trash2 className="size-3" />
-      </button>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <button
+              type="button"
+              onClick={onRemove}
+              className="rounded-sm p-0.5 hover:bg-accent"
+              aria-label={t(($) => $.resources.remove_tooltip)}
+            />
+          }
+        >
+          <Trash2 className="size-3" />
+        </TooltipTrigger>
+        <TooltipContent side="top">
+          {t(($) => $.resources.remove_tooltip)}
+        </TooltipContent>
+      </Tooltip>
     </div>
   );
 }
@@ -486,23 +504,41 @@ function LocalDirectoryRow({
         </Tooltip>
       )}
       {canEdit && !mismatch && !editing && (
-        <button
-          type="button"
-          onClick={startEdit}
-          className="opacity-0 group-hover:opacity-100 transition-opacity rounded-sm p-0.5 hover:bg-accent"
-          title={t(($) => $.resources.local_rename_tooltip)}
-        >
-          <Pencil className="size-3 text-muted-foreground" />
-        </button>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                onClick={startEdit}
+                className="opacity-0 group-hover:opacity-100 transition-opacity rounded-sm p-0.5 hover:bg-accent"
+                aria-label={t(($) => $.resources.local_rename_tooltip)}
+              />
+            }
+          >
+            <Pencil className="size-3 text-muted-foreground" />
+          </TooltipTrigger>
+          <TooltipContent side="top">
+            {t(($) => $.resources.local_rename_tooltip)}
+          </TooltipContent>
+        </Tooltip>
       )}
-      <button
-        type="button"
-        onClick={onRemove}
-        className="opacity-0 group-hover:opacity-100 transition-opacity rounded-sm p-0.5 hover:bg-accent"
-        title={t(($) => $.resources.remove_tooltip)}
-      >
-        <Trash2 className="size-3 text-muted-foreground" />
-      </button>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <button
+              type="button"
+              onClick={onRemove}
+              className="opacity-0 group-hover:opacity-100 transition-opacity rounded-sm p-0.5 hover:bg-accent"
+              aria-label={t(($) => $.resources.remove_tooltip)}
+            />
+          }
+        >
+          <Trash2 className="size-3 text-muted-foreground" />
+        </TooltipTrigger>
+        <TooltipContent side="top">
+          {t(($) => $.resources.remove_tooltip)}
+        </TooltipContent>
+      </Tooltip>
     </div>
   );
 }

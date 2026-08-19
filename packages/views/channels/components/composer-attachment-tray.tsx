@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import { FileIcon, Loader2, RotateCcw, X, ZoomIn } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { cn } from "@multica/ui/lib/utils";
 import { useAttachmentPreview } from "../../editor/attachment-preview-modal";
 import { useT } from "../../i18n/use-t";
@@ -223,12 +224,16 @@ export function ComposerAttachmentTray({
 
               {!showImage ? (
                 <div className="min-w-0 flex-1">
-                  <p
-                    className="truncate text-xs font-medium leading-tight text-foreground"
-                    title={item.filename}
-                  >
-                    {item.filename}
-                  </p>
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <p className="truncate text-xs font-medium leading-tight text-foreground" />
+                      }
+                    >
+                      {item.filename}
+                    </TooltipTrigger>
+                    <TooltipContent side="top">{item.filename}</TooltipContent>
+                  </Tooltip>
                   {item.status === "error" ? (
                     <p className="truncate text-[10px] leading-tight text-destructive">
                       {item.errorMessage || t(($) => $.composer.tray_upload_failed)}

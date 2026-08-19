@@ -16,6 +16,7 @@ import {
   DialogTitle,
 } from "@multica/ui/components/ui/dialog";
 import { Badge } from "@multica/ui/components/ui/badge";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { FileText, GitMerge, ListTree } from "lucide-react";
 import { useT } from "../../i18n/use-t";
 import { buildNodeReportLineage } from "../lib/research-node-report-lineage";
@@ -158,14 +159,22 @@ export function ResearchNodeReportModal({
                       return (
                         <li key={id} data-testid={`research-node-report-lineage-${id}`}>
                           {onSelectLineageNode ? (
-                            <button
-                              type="button"
-                              className="max-w-full truncate text-left text-emerald-300 underline-offset-2 hover:underline focus-visible:underline"
-                              title={title !== id ? id : undefined}
-                              onClick={() => onSelectLineageNode(id)}
-                            >
-                              {title}
-                            </button>
+                            <Tooltip>
+                              <TooltipTrigger
+                                render={
+                                  <button
+                                    type="button"
+                                    className="max-w-full truncate text-left text-emerald-300 underline-offset-2 hover:underline focus-visible:underline"
+                                    onClick={() => onSelectLineageNode(id)}
+                                  />
+                                }
+                              >
+                                {title}
+                              </TooltipTrigger>
+                              {title !== id && (
+                                <TooltipContent side="top">{id}</TooltipContent>
+                              )}
+                            </Tooltip>
                           ) : (
                             title
                           )}

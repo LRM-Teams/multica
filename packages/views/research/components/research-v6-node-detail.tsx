@@ -178,12 +178,14 @@ export function ResearchV6NodeDetail({
           <dt className="text-[10px] font-medium text-muted-foreground">
             {t(($) => $.v6_detail.content_hash)}
           </dt>
-          <dd
-            className="mt-0.5 truncate font-mono text-[10px]"
-            title={node.canonical_ref.content_hash}
-          >
-            {node.canonical_ref.content_hash ?? t(($) => $.v6_detail.unavailable)}
-          </dd>
+          <Tooltip>
+            <TooltipTrigger
+              render={<dd className="mt-0.5 truncate font-mono text-[10px]" />}
+            >
+              {node.canonical_ref.content_hash ?? t(($) => $.v6_detail.unavailable)}
+            </TooltipTrigger>
+            <TooltipContent side="top">{node.canonical_ref.content_hash}</TooltipContent>
+          </Tooltip>
         </div>
       </dl>
 

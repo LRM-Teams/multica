@@ -7,6 +7,7 @@ import type {
   ResearchV6DirectorProjectionNode,
 } from "@multica/core/types/research-v6-director";
 import { Button } from "@multica/ui/components/ui/button";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import {
   ArrowDownLeft,
   ArrowUpRight,
@@ -148,9 +149,12 @@ export function ResearchV6NodeDetail({
           <dt className="text-[10px] font-medium text-muted-foreground">
             {t(($) => $.v6_detail.source)}
           </dt>
-          <dd className="mt-0.5 truncate font-medium" title={node.canonical_ref.id}>
-            {node.canonical_ref.kind} · {node.canonical_ref.id}
-          </dd>
+          <Tooltip>
+            <TooltipTrigger render={<dd className="mt-0.5 truncate font-medium" />}>
+              {node.canonical_ref.kind} · {node.canonical_ref.id}
+            </TooltipTrigger>
+            <TooltipContent side="top">{node.canonical_ref.id}</TooltipContent>
+          </Tooltip>
         </div>
         <div className="min-w-0">
           <dt className="text-[10px] font-medium text-muted-foreground">
@@ -254,9 +258,12 @@ export function ResearchV6NodeDetail({
                       key={`${reference.kind}:${reference.id}:${reference.revision ?? reference.version_id ?? "current"}`}
                       className="flex min-w-0 items-center justify-between gap-2 text-[10px] text-muted-foreground"
                     >
-                      <span className="truncate" title={`${reference.kind}:${reference.id}`}>
-                        {reference.kind} · {reference.id}
-                      </span>
+                      <Tooltip>
+                        <TooltipTrigger render={<span className="truncate" />}>
+                          {reference.kind} · {reference.id}
+                        </TooltipTrigger>
+                        <TooltipContent side="top">{`${reference.kind}:${reference.id}`}</TooltipContent>
+                      </Tooltip>
                       <span className="shrink-0 tabular-nums">
                         {reference.revision
                           ? `r${reference.revision}`

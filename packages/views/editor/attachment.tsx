@@ -33,6 +33,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { cn } from "@multica/ui/lib/utils";
 import { copyText } from "@multica/ui/lib/clipboard";
@@ -600,19 +601,31 @@ function ImageAttachmentView({
             onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => e.stopPropagation()}
           >
-            <button type="button" onClick={onView} title={t(($) => $.image.view)}>
-              <Maximize2 className="size-3.5" />
-            </button>
-            <button type="button" onClick={onDownload} title={t(($) => $.image.download)}>
-              <Download className="size-3.5" />
-            </button>
-            <button type="button" onClick={handleCopyLink} title={t(($) => $.image.copy_link)}>
-              <LinkIcon className="size-3.5" />
-            </button>
+            <Tooltip>
+              <TooltipTrigger type="button" aria-label={t(($) => $.image.view)} onClick={onView}>
+                <Maximize2 className="size-3.5" />
+              </TooltipTrigger>
+              <TooltipContent side="top">{t(($) => $.image.view)}</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger type="button" aria-label={t(($) => $.image.download)} onClick={onDownload}>
+                <Download className="size-3.5" />
+              </TooltipTrigger>
+              <TooltipContent side="top">{t(($) => $.image.download)}</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger type="button" aria-label={t(($) => $.image.copy_link)} onClick={handleCopyLink}>
+                <LinkIcon className="size-3.5" />
+              </TooltipTrigger>
+              <TooltipContent side="top">{t(($) => $.image.copy_link)}</TooltipContent>
+            </Tooltip>
             {onDelete && (
-              <button type="button" onClick={onDelete} title={t(($) => $.image.delete)}>
-                <Trash2 className="size-3.5" />
-              </button>
+              <Tooltip>
+                <TooltipTrigger type="button" aria-label={t(($) => $.image.delete)} onClick={onDelete}>
+                  <Trash2 className="size-3.5" />
+                </TooltipTrigger>
+                <TooltipContent side="top">{t(($) => $.image.delete)}</TooltipContent>
+              </Tooltip>
             )}
           </span>
         )}

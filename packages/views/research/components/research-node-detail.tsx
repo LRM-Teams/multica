@@ -12,6 +12,7 @@ import type {
 } from "@multica/core/types";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Button } from "@multica/ui/components/ui/button";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -763,9 +764,12 @@ export function ResearchNodeDetailBody({
             </Badge>
           ) : null}
         </div>
-        <h2 className="line-clamp-3 text-base font-medium leading-snug" title={node.title}>
-          {node.title}
-        </h2>
+        <Tooltip>
+          <TooltipTrigger render={<h2 className="line-clamp-3 text-base font-medium leading-snug" />}>
+            {node.title}
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{node.title}</TooltipContent>
+        </Tooltip>
         <p className="sr-only">{t(($) => $.node.detail_hint)}</p>
 
         {/* LRM-1410 residual: real session-run header meta — phase, run

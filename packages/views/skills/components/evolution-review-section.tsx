@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Button } from "@multica/ui/components/ui/button";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { Checkbox } from "@multica/ui/components/ui/checkbox";
 import { Card, CardContent } from "@multica/ui/components/ui/card";
 import { Label } from "@multica/ui/components/ui/label";
@@ -372,7 +373,10 @@ function ReviewFact({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-lg border bg-muted/20 p-3">
       <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd className="mt-1 truncate font-medium" title={value}>{value}</dd>
+      <Tooltip>
+        <TooltipTrigger render={<dd className="mt-1 truncate font-medium" />}>{value}</TooltipTrigger>
+        <TooltipContent side="top">{value}</TooltipContent>
+      </Tooltip>
     </div>
   );
 }

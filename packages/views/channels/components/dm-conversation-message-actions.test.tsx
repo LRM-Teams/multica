@@ -183,7 +183,6 @@ vi.mock("../../chat/components/dm-agent-bubble", async () => {
 // The working cue mounts for a non-agent_pair agent peer and reads agent
 // presence/health via useQuery; it's not under test here, so stub it so the
 // normal single-agent DM render path doesn't require that query wiring.
-vi.mock("./dm-agent-working-cue", () => ({ DmAgentWorkingCue: () => null }));
 vi.mock("./composer-agent-activity-strip", () => ({
   ComposerAgentActivityStrip: () => null,
 }));

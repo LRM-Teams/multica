@@ -105,8 +105,8 @@ vi.mock("../../agents/components/agent-profile-actions", () => ({
       {layout === "icons" ? (
         <button type="button" data-testid="agent-profile-chrome-action-message" />
       ) : (
-        <button type="button" data-testid="agent-profile-action-message">
-          Message
+        <button type="button" data-testid="agent-profile-action-start">
+          Start Agent
         </button>
       )}
     </div>
@@ -552,7 +552,8 @@ describe("AgentSidePanel", () => {
     expect(screen.getByTestId("agent-profile-tab-content")).toContainElement(actions);
     expect(screen.getByTestId("agent-profile-identity")).not.toContainElement(actions);
     expect(screen.getByTestId("agent-profile-identity")).not.toContainElement(chrome);
-    expect(screen.getByTestId("agent-profile-action-message")).toHaveTextContent("Message");
+    expect(screen.queryByTestId("agent-profile-action-message")).not.toBeInTheDocument();
+    expect(screen.getByTestId("agent-profile-action-start")).toHaveTextContent("Start Agent");
     expect(screen.getByTestId("agent-profile-chrome-action-message")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "More" })).not.toBeInTheDocument();
   });

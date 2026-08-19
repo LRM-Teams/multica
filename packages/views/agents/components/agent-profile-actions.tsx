@@ -19,9 +19,10 @@ import { AgentRestartModal } from "./agent-restart-modal";
 import { ConfirmDeleteAgent } from "./confirm-delete-agent";
 
 /**
- * Agent profile actions. The Profile body keeps the labeled ACTIONS stack.
- * Chrome copies Message + one Start/Stop toggle + Restart/Reset as compact
- * icons. Delete stays in the stack only.
+ * Agent profile actions. The Profile body keeps the labeled ACTIONS stack
+ * (Start/Stop, Restart/Reset, Delete). Chrome copies Message + one
+ * Start/Stop toggle + Restart/Reset as compact icons. Message and Delete
+ * each live in one place: Message in chrome, Delete in the stack.
  *
  * LRM-448 / Frank 2026-07-23: the destructive action is **Delete**, not
  * Archive (AC#2 "Message + Delete（非 Archive）"). The backend exposes no
@@ -123,7 +124,7 @@ export function AgentProfileActions({
   const messageLabel = openingDM
     ? t(($) => $.side_panel.message_opening)
     : t(($) => $.side_panel.message_button);
-  const showMessage = !isArchived;
+  const showMessage = layout === "icons" && !isArchived;
   const showLifecycle = canManage && !isArchived;
   const showRestart = canManage && !isArchived && isRuntimeOnline;
   const showDelete = layout === "stack" && canManage && !isArchived;
@@ -230,27 +231,16 @@ export function AgentProfileActions({
     );
   }
 
+  if (!showLifecycle && !showRestart && !showDelete) {
+    return dialogs;
+  }
+
   return (
     <section aria-label={t(($) => $.side_panel.actions_section)} data-testid="agent-profile-actions">
       <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
         {t(($) => $.side_panel.actions_section)}
       </h3>
       <div className="flex flex-col gap-2">
-        {showMessage ? (
-          <Button
-            type="button"
-            variant="outline"
-            size="lg"
-            className="w-full gap-2"
-            data-testid="agent-profile-action-message"
-            disabled={openingDM}
-            onClick={() => void openDM({ peer_type: "agent", peer_id: agent.id })}
-          >
-            {messageIcon}
-            {messageLabel}
-          </Button>
-        ) : null}
-
         {showLifecycle ? (
           <Button
             type="button"

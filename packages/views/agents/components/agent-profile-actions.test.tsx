@@ -190,15 +190,18 @@ describe("AgentProfileActions", () => {
     expect(mocks.toastSuccess).not.toHaveBeenCalled();
   });
 
-  it("renders Message as primary action and opens DM", () => {
-    render(<AgentProfileActions agent={agent} canManage presence={mocks.presence} />);
-    fireEvent.click(screen.getByTestId("agent-profile-action-message"));
+  it("opens DM from the chrome Message icon, not the stack", () => {
+    render(
+      <AgentProfileActions agent={agent} canManage presence={mocks.presence} layout="icons" />,
+    );
+    fireEvent.click(screen.getByTestId("agent-profile-chrome-action-message"));
     expect(mocks.openDM).toHaveBeenCalledWith({ peer_type: "agent", peer_id: "agent-1" });
+    expect(screen.queryByTestId("agent-profile-action-message")).not.toBeInTheDocument();
   });
 
   it("renders labeled stack actions including Delete", () => {
     render(<AgentProfileActions agent={agent} canManage presence={mocks.presence} />);
-    expect(screen.getByTestId("agent-profile-action-message")).toHaveTextContent("Message");
+    expect(screen.queryByTestId("agent-profile-action-message")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Start Agent" })).toHaveTextContent("Start Agent");
     expect(screen.getByRole("button", { name: "Restart/Reset" })).toHaveTextContent("Restart/Reset");
     expect(screen.getByRole("button", { name: "Delete" })).toHaveTextContent("Delete");
@@ -241,10 +244,11 @@ describe("AgentProfileActions", () => {
     expect(screen.getByTestId("agent-restart-modal")).toHaveTextContent("Restart and reset choices");
   });
 
-  it("hides Delete when canManage is false; keeps Message", () => {
+  it("hides the stack when canManage is false", () => {
     render(<AgentProfileActions agent={agent} canManage={false} presence={mocks.presence} />);
+    expect(screen.queryByTestId("agent-profile-actions")).not.toBeInTheDocument();
     expect(screen.queryByTestId("agent-profile-action-delete")).not.toBeInTheDocument();
-    expect(screen.getByTestId("agent-profile-action-message")).toBeInTheDocument();
+    expect(screen.queryByTestId("agent-profile-action-message")).not.toBeInTheDocument();
   });
 
   it("keeps Delete as the only solid destructive stack action", () => {

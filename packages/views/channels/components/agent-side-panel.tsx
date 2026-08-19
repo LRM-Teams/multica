@@ -90,9 +90,9 @@ interface AgentSidePanelProps {
  * per Frank's direction 2026-07-09: inline panel, not a route jump).
  *
  * Profile chrome copies Message + Start/Stop + Restart/Reset as compact
- * icons. Profile tab keeps the labeled ACTIONS stack (LRM-448), plus
- * editable Display name / Description, Info, Runtime Config (LRM-470).
- * Usage is its own tab — never stacked in Profile.
+ * icons. Profile tab keeps the labeled ACTIONS stack without Message
+ * (LRM-448), plus editable Display name / Description, Info, Runtime
+ * Config (LRM-470). Usage is its own tab — never stacked in Profile.
  */
 export function AgentSidePanel({
   agent,

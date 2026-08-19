@@ -170,6 +170,10 @@ func main() {
 	hub := realtime.NewHub()
 	go hub.Run()
 	daemonHub := daemonws.NewHub()
+	// LRM-1571: online judgment is WS-authoritative for new daemons. The
+	// handler's runtimeConnectivity read uses this presence source before
+	// falling back to legacy heartbeat freshness.
+	handler.SetRunnerPresence(daemonHub)
 	var daemonWakeup service.TaskWakeupNotifier = daemonHub
 	var reminderNotifier daemonws.ReminderNotifier = daemonHub
 	var reminderOwnerInputNotifier daemonws.ReminderOwnerInputNotifier = daemonHub

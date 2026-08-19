@@ -491,8 +491,8 @@ func TestPrepareSandboxBootstrap_ParallelAssemblyMatchesServerPath(t *testing.T)
 		{Seq: 1, Type: "assistant", Content: pgtype.Text{String: "b1", Valid: true}},
 		{Seq: 2, Type: "user", Content: pgtype.Text{String: "b2", Valid: true}},
 	}
-	stores.On("MessagesForTaskInRange", ctx, "task-1", int32(1), int32(4)).Return(msgs1, nil)
-	stores.On("MessagesForTaskInRange", ctx, "task-2", int32(1), int32(2)).Return(msgs2, nil)
+	stores.On("MessagesForTaskInRange", ctx, db.MessagesForTaskInRangeParams{TaskID: "task-1", StartSeq: 1, EndSeq: 4}).Return(msgs1, nil)
+	stores.On("MessagesForTaskInRange", ctx, db.MessagesForTaskInRangeParams{TaskID: "task-2", StartSeq: 1, EndSeq: 2}).Return(msgs2, nil)
 
 	dagWriter := newFakeDiagnosisDAGWriter()
 	bootstrap, err := r.PrepareSandboxBootstrap(ctx, state, dagWriter, diagProjectID, run, ordered)
@@ -569,7 +569,7 @@ func TestDiagnose_CapsSegmentCount(t *testing.T) {
 		segs = append(segs, diagSegmentToListForProjectRow(seg))
 		if i < maxDiagnosisSegments {
 			m.On("GetInteractionDAGSegmentByID", mock.Anything, sid).Return(diagSegmentToGetByIDRow(seg), nil)
-			m.On("MessagesForTaskInRange", mock.Anything, diagAgentRunID, int32(1), int32(1)).
+			m.On("MessagesForTaskInRange", mock.Anything, db.MessagesForTaskInRangeParams{TaskID: diagAgentRunID, StartSeq: 1, EndSeq: 1}).
 				Return([]db.TaskMessage{{Seq: 1, Type: "assistant", Content: pgtype.Text{String: "m", Valid: true}}}, nil)
 		}
 	}

@@ -17,6 +17,7 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/agentworkspace"
 	"github.com/multica-ai/multica/server/internal/cli"
+	"github.com/multica-ai/multica/server/internal/computer"
 	"github.com/multica-ai/multica/server/pkg/agent"
 )
 
@@ -68,14 +69,20 @@ type Config struct {
 	DaemonID        string
 	LegacyDaemonIDs []string // historical daemon_ids this machine may have registered under; reported at register time so the server can merge old runtime rows
 	DeviceName      string
-	RuntimeName     string
-	CLIVersion      string                // multica CLI version (e.g. "0.1.13")
-	LaunchedBy      string                // "desktop" when spawned by the Electron app, empty for standalone
-	Profile         string                // profile name (empty = default)
-	WorkspaceID     string                // the one workspace this daemon registers for
-	BindingsRoot    string                // machine-wide Computer Binding store; empty keeps legacy single-workspace test/config behavior
-	Agents          map[string]AgentEntry // keyed by provider: claude, codex, opencode, pi, cursor, kiro, grok
-	WorkspacesRoot  string                // base path containing workspace directories (default: ~/.multica/workspaces)
+	// MachineID is the OS-level persistent machine fingerprint (e.g.
+	// /etc/machine-id, IOPlatformUUID, MachineGuid). Unlike DaemonID it is
+	// independent of ~/.multica, so it survives an identity rebuild and is the
+	// authoritative same-machine proof for server-side convergence (LRM-1570).
+	// Empty when the platform could not derive one.
+	MachineID      string
+	RuntimeName    string
+	CLIVersion     string                // multica CLI version (e.g. "0.1.13")
+	LaunchedBy     string                // "desktop" when spawned by the Electron app, empty for standalone
+	Profile        string                // profile name (empty = default)
+	WorkspaceID    string                // the one workspace this daemon registers for
+	BindingsRoot   string                // machine-wide Computer Binding store; empty keeps legacy single-workspace test/config behavior
+	Agents         map[string]AgentEntry // keyed by provider: claude, codex, opencode, pi, cursor, kiro, grok
+	WorkspacesRoot string                // base path containing workspace directories (default: ~/.multica/workspaces)
 	// BindingStateRoot isolates durable workspace-execution coordinator state
 	// for one Binding child. Empty keeps the historical single-process paths.
 	BindingStateRoot string
@@ -375,6 +382,11 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		deviceName = overrides.DeviceName
 	}
 
+	// Machine fingerprint is an OS attribute, never user-provided: it must
+	// survive identity rebuilds and cannot be spoofed via env to fake a
+	// different machine in convergence decisions.
+	machineID := computer.MachineID()
+
 	runtimeName := envOrDefault("MULTICA_AGENT_RUNTIME_NAME", DefaultRuntimeName)
 	if overrides.RuntimeName != "" {
 		runtimeName = overrides.RuntimeName
@@ -473,6 +485,7 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		DaemonID:                       daemonID,
 		LegacyDaemonIDs:                legacyDaemonIDs,
 		DeviceName:                     deviceName,
+		MachineID:                      machineID,
 		RuntimeName:                    runtimeName,
 		Profile:                        profile,
 		WorkspaceID:                    workspaceID,

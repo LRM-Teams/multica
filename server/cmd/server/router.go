@@ -1232,6 +1232,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 
 			// Computers
 			r.Get("/api/computers", h.ListComputers)
+			r.Post("/api/computers/resolve-by-machine-id", h.ResolveComputerByMachineID)
 			r.Delete("/api/computers/{daemonId}", h.DeleteComputer)
 			r.Get("/api/computers/{daemonId}/work-digest", h.GetComputerWorkDigest)
 			r.Patch("/api/computers/{daemonId}/work-journal", h.PatchComputerWorkJournal)

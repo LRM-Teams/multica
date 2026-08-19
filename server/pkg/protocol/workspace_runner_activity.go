@@ -100,6 +100,12 @@ type WorkspaceRunnerReadyPayload struct {
 	DeviceName         string   `json:"deviceName,omitempty"`
 	OS                 string   `json:"os,omitempty"`
 	CLIVersion         string   `json:"cliVersion,omitempty"`
+	// MachineID is the OS-level persistent machine fingerprint (e.g.
+	// /etc/machine-id on Linux, IOPlatformUUID on macOS, MachineGuid on
+	// Windows). It is an attribute of the Computer, not of any single Workspace
+	// Runner, and is used as the authoritative same-machine proof for identity
+	// reclaim and agent convergence. Empty when the daemon could not derive one.
+	MachineID          string   `json:"machineId,omitempty"`
 	ActiveCapabilities []string `json:"activeCapabilities,omitempty"`
 	RunningAgents      []string `json:"runningAgents,omitempty"`
 }

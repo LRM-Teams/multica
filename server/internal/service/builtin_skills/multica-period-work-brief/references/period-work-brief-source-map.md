@@ -13,6 +13,7 @@ to these sources.
 | Permanent vs retryable classification | `server/internal/handler/note_period_brief_classify.go` |
 | Max 3 retries per collector | `notePeriodBriefCollectorMaxRetries` |
 | Narrow retry API | `POST /api/agent/notes/period-briefs/{draftPageId}/retry-collectors` → `RetryAgentNotePeriodBriefCollectors` |
+| Collector submit-pack API | `POST /api/agent/notes/period-briefs/{draftPageId}/submit-pack` → `SubmitAgentNotePeriodBriefPack` |
 | CLI | `multica notes period-brief retry-collectors` → `server/cmd/multica/cmd_notes.go` |
 | Durable run + retry counts | `note_period_brief_run` migration `414_note_period_brief_run` |
 | Product contract | `docs/adr/0019-runtime-agent-collectors-period-brief.md` |

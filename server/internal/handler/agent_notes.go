@@ -78,52 +78,71 @@ WHERE id = $1 AND deleted_at IS NULL AND workspace_id = $2`, pageUUID, workspace
 // resolveAgentNoteViewer returns the human viewer whose note ACL applies.
 // Prefer the Worker job bound to this task; otherwise accept a matching
 // note_brief on the task context and use the task initiator.
+// When TaskID is empty (durable agent_credential), fall back to an active
+// Worker job for this agent+page — Pi/local collectors often lack task scope.
 func (h *Handler) resolveAgentNoteViewer(
 	ctx context.Context,
 	principal middleware.AgentPrincipal,
 	agentID, workspaceID, pageID pgtype.UUID,
 ) (pgtype.UUID, bool, error) {
 	taskID := strings.TrimSpace(principal.TaskID)
-	if taskID == "" {
-		return pgtype.UUID{}, false, nil
-	}
-	taskUUID, err := util.ParseUUID(taskID)
-	if err != nil {
-		return pgtype.UUID{}, false, nil
-	}
+	if taskID != "" {
+		taskUUID, err := util.ParseUUID(taskID)
+		if err != nil {
+			return pgtype.UUID{}, false, nil
+		}
 
-	var creatorID pgtype.UUID
-	err = h.DB.QueryRow(ctx, `
+		var creatorID pgtype.UUID
+		err = h.DB.QueryRow(ctx, `
 SELECT creator_id
 FROM note_worker_job
 WHERE task_id = $1
   AND agent_id = $2
   AND page_id = $3
   AND workspace_id = $4`, taskUUID, agentID, pageID, workspaceID).Scan(&creatorID)
-	if err == nil {
-		return creatorID, true, nil
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return pgtype.UUID{}, false, err
-	}
+		if err == nil {
+			return creatorID, true, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return pgtype.UUID{}, false, err
+		}
 
-	var contextJSON []byte
-	var initiatorID pgtype.UUID
-	err = h.DB.QueryRow(ctx, `
+		var contextJSON []byte
+		var initiatorID pgtype.UUID
+		err = h.DB.QueryRow(ctx, `
 SELECT context, initiator_user_id
 FROM agent_inbox_event
 WHERE id = $1
   AND agent_id = $2
   AND workspace_id = $3`, taskUUID, agentID, workspaceID).Scan(&contextJSON, &initiatorID)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return pgtype.UUID{}, false, nil
+			}
+			return pgtype.UUID{}, false, err
+		}
+		brief, present, briefErr := service.NoteBriefFromContext(contextJSON)
+		if briefErr != nil || !present || brief.PageID != uuidToString(pageID) || !initiatorID.Valid {
 			return pgtype.UUID{}, false, nil
 		}
-		return pgtype.UUID{}, false, err
+		return initiatorID, true, nil
 	}
-	brief, present, briefErr := service.NoteBriefFromContext(contextJSON)
-	if briefErr != nil || !present || brief.PageID != uuidToString(pageID) || !initiatorID.Valid {
+
+	var creatorID pgtype.UUID
+	err := h.DB.QueryRow(ctx, `
+SELECT creator_id
+FROM note_worker_job
+WHERE agent_id = $1
+  AND page_id = $2
+  AND workspace_id = $3
+  AND status IN ('pending', 'dispatched', 'running')
+ORDER BY created_at DESC
+LIMIT 1`, agentID, pageID, workspaceID).Scan(&creatorID)
+	if err == nil {
+		return creatorID, true, nil
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
 		return pgtype.UUID{}, false, nil
 	}
-	return initiatorID, true, nil
+	return pgtype.UUID{}, false, err
 }

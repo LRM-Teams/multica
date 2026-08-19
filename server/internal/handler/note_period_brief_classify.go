@@ -78,7 +78,7 @@ func classifyPeriodBriefCollectorOutcome(
 		return periodBriefCollectorDisposition{
 			Status:      "empty",
 			Retryable:   true,
-			Detail:      firstNonEmpty(combined, "collector finished without a pack --note-write"),
+			Detail:      firstNonEmpty(combined, "collector finished without submit-pack"),
 			FailureKind: "empty_pack",
 		}
 	case jobStatus == "pending" || jobStatus == "dispatched" || jobStatus == "running":
@@ -100,7 +100,7 @@ func classifyPeriodBriefCollectorOutcome(
 		return periodBriefCollectorDisposition{
 			Status:      "empty",
 			Retryable:   true,
-			Detail:      firstNonEmpty(combined, "collector call failed without a pack --note-write"),
+			Detail:      firstNonEmpty(combined, "collector call failed without submit-pack"),
 			FailureKind: "empty_pack",
 		}
 	}

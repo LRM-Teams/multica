@@ -11,15 +11,18 @@ import (
 )
 
 // notePeriodBriefCollectorRef is durable per-collector state for one Brief run.
+// PackMarkdown is the implicit collector artifact (not a Notes page). Cleared
+// when the run reaches status=done after synthesis wake.
 type notePeriodBriefCollectorRef struct {
-	AgentID     string `json:"agent_id"`
-	PackPageID  string `json:"pack_page_id"`
-	JobID       string `json:"job_id"`
-	ChannelID   string `json:"channel_id,omitempty"`
-	RetryCount  int    `json:"retry_count"`
-	WindowLabel string `json:"window_label"`
-	WindowStart string `json:"window_start"`
-	WindowEnd   string `json:"window_end"`
+	AgentID      string `json:"agent_id"`
+	PackPageID   string `json:"pack_page_id,omitempty"` // legacy; unused for new runs
+	JobID        string `json:"job_id"`
+	ChannelID    string `json:"channel_id,omitempty"`
+	RetryCount   int    `json:"retry_count"`
+	WindowLabel  string `json:"window_label"`
+	WindowStart  string `json:"window_start"`
+	WindowEnd    string `json:"window_end"`
+	PackMarkdown string `json:"pack_markdown,omitempty"`
 }
 
 type notePeriodBriefRunRow struct {
@@ -54,6 +57,15 @@ func (h *Handler) insertNotePeriodBriefRun(
 	raw, err := json.Marshal(collectors)
 	if err != nil {
 		return err
+	}
+	if used == nil {
+		used = []string{}
+	}
+	if empty == nil {
+		empty = []string{}
+	}
+	if skipped == nil {
+		skipped = []string{}
 	}
 	var channelArg any
 	if trimmed := strings.TrimSpace(channelID); trimmed != "" {
@@ -130,7 +142,9 @@ func collectorRefsFromJobs(jobs []NoteWorkerJobResponse, windowLabel, windowStar
 	for _, job := range jobs {
 		ref := notePeriodBriefCollectorRef{
 			AgentID:     job.AgentID,
-			PackPageID:  job.PageID,
+			// Job.PageID is the draft page (Worker ACL / notes get). Packs are
+			// stored in PackMarkdown, not as child Notes pages.
+			PackPageID:  "",
 			JobID:       job.ID,
 			RetryCount:  0,
 			WindowLabel: windowLabel,
@@ -145,12 +159,17 @@ func collectorRefsFromJobs(jobs []NoteWorkerJobResponse, windowLabel, windowStar
 	return out
 }
 
-func jobsFromCollectorRefs(refs []notePeriodBriefCollectorRef) []NoteWorkerJobResponse {
+func jobsFromCollectorRefs(refs []notePeriodBriefCollectorRef, draftPageID string) []NoteWorkerJobResponse {
 	out := make([]NoteWorkerJobResponse, 0, len(refs))
+	draftPageID = strings.TrimSpace(draftPageID)
 	for _, ref := range refs {
+		pageID := draftPageID
+		if pageID == "" {
+			pageID = strings.TrimSpace(ref.PackPageID) // legacy runs
+		}
 		job := NoteWorkerJobResponse{
 			ID:      ref.JobID,
-			PageID:  ref.PackPageID,
+			PageID:  pageID,
 			AgentID: ref.AgentID,
 			Status:  "dispatched",
 		}
@@ -170,6 +189,15 @@ func findCollectorRef(refs []notePeriodBriefCollectorRef, agentID string) (noteP
 		}
 	}
 	return notePeriodBriefCollectorRef{}, -1, false
+}
+
+func clearCollectorPackMarkdown(refs []notePeriodBriefCollectorRef) []notePeriodBriefCollectorRef {
+	out := make([]notePeriodBriefCollectorRef, len(refs))
+	copy(out, refs)
+	for i := range out {
+		out[i].PackMarkdown = ""
+	}
+	return out
 }
 
 func formatPeriodBriefRetryHint(draftPageID string) string {

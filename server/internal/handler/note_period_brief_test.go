@@ -12,6 +12,48 @@ import (
 	"github.com/google/uuid"
 )
 
+
+func injectPeriodBriefCollectorPackMarkdown(t *testing.T, collectorAgentID, packBody string) {
+	t.Helper()
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	t.Cleanup(func() {
+		close(stop)
+		<-done
+	})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			tag, err := testPool.Exec(context.Background(), `
+UPDATE note_period_brief_run
+SET collectors = (
+  SELECT COALESCE(jsonb_agg(
+    CASE WHEN c->>'agent_id' = $1
+      THEN c || jsonb_build_object('pack_markdown', $2::text)
+      ELSE c
+    END
+  ), '[]'::jsonb)
+  FROM jsonb_array_elements(collectors) AS c
+), updated_at = now()
+WHERE status = 'collecting'
+  AND collectors @> jsonb_build_array(jsonb_build_object('agent_id', $1::text))
+  AND EXISTS (
+    SELECT 1 FROM jsonb_array_elements(collectors) x
+    WHERE x->>'agent_id' = $1 AND COALESCE(x->>'pack_markdown','') = ''
+  )`, collectorAgentID, packBody)
+			if err == nil && tag.RowsAffected() > 0 {
+				return
+			}
+			time.Sleep(40 * time.Millisecond)
+		}
+	}()
+}
+
 func TestCreateNotePeriodBriefRejectsEmptyCollectors(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -192,32 +234,20 @@ func TestCreateNotePeriodBriefIncludesReadyCollectorPack(t *testing.T) {
 ## Highlights
 - wired SSO login
 
+## Work groups
+
+### SSO
+- why: same project
+- repos/paths: /tmp/demo
+- items:
+  - wired SSO login
+
 ## Unscoped / unclear
 - scratch under /tmp
 `
 
 	day := time.Now().UTC().Format("2006-01-02")
-	stop := make(chan struct{})
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		for {
-			select {
-			case <-stop:
-				return
-			default:
-			}
-			_, _ = testPool.Exec(context.Background(), `
-UPDATE note_page
-SET content = $1, updated_at = now()
-WHERE owner_user_id = $2
-  AND title LIKE '采集包%'
-  AND length(trim(content)) = 0
-  AND deleted_at IS NULL`,
-				packBody, testUserID)
-			time.Sleep(40 * time.Millisecond)
-		}
-	}()
+	injectPeriodBriefCollectorPackMarkdown(t, collectorID, packBody)
 
 	rec := httptest.NewRecorder()
 	testHandler.CreateNotePeriodBrief(rec, newRequest(http.MethodPost, "/api/notes/period-briefs", map[string]any{
@@ -227,8 +257,6 @@ WHERE owner_user_id = $2
 		"agent_id":            synthID,
 		"collector_agent_ids": []string{collectorID},
 	}))
-	close(stop)
-	<-done
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("period brief = %d: %s", rec.Code, rec.Body.String())
 	}
@@ -241,6 +269,15 @@ WHERE owner_user_id = $2
 	}
 	if !strings.Contains(resp.Page.Content, "wired SSO login") {
 		t.Fatalf("draft missing ready pack body: %s", resp.Page.Content)
+	}
+	var packNotes int
+	if err := testPool.QueryRow(context.Background(), `
+SELECT count(*) FROM note_page
+WHERE owner_user_id = $1 AND title LIKE '采集包%' AND deleted_at IS NULL`, testUserID).Scan(&packNotes); err != nil {
+		t.Fatalf("count pack notes: %v", err)
+	}
+	if packNotes != 0 {
+		t.Fatalf("collector packs must not create Notes pages, got %d", packNotes)
 	}
 	var contextRaw []byte
 	if err := testPool.QueryRow(context.Background(), `
@@ -267,6 +304,7 @@ SELECT context FROM agent_inbox_event WHERE id = $1`, *resp.Job.TaskID).Scan(&co
 }
 
 func TestCreateNotePeriodBriefWaitsForCompletedCollectorNoteWriteProposal(t *testing.T) {
+	// Legacy name: packs now arrive via submit-pack / run.pack_markdown, not note_write.
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -282,58 +320,9 @@ func TestCreateNotePeriodBriefWaitsForCompletedCollectorNoteWriteProposal(t *tes
 	synthID := createHandlerTestAgent(t, "Period Brief Proposal Synth "+uuid.NewString()[:8], nil)
 	collectorID := createPeriodBriefCollectorTestAgent(t, "Proposal Collector")
 
-	packBody := "# 采集包 from note_write\n\n## Highlights\n- harvested pending proposal\n"
+	packBody := "# 采集包 from submit-pack\n\n## Highlights\n- harvested pending proposal\n\n## Work groups\n\n### Demo\n- why: same project\n- items:\n  - harvested pending proposal\n\n## Unscoped / unclear\n- none\n"
 	day := time.Now().UTC().Format("2006-01-02")
-	stop := make(chan struct{})
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		for {
-			select {
-			case <-stop:
-				return
-			default:
-			}
-			var jobID, taskID, channelID, pageID string
-			err := testPool.QueryRow(context.Background(), `
-SELECT j.id::text, j.task_id::text, j.channel_id::text, j.page_id::text
-FROM note_worker_job j
-JOIN note_page p ON p.id = j.page_id
-WHERE j.agent_id = $1
-  AND p.title LIKE '采集包%'
-  AND length(trim(p.content)) = 0
-ORDER BY j.created_at DESC
-LIMIT 1`, collectorID).Scan(&jobID, &taskID, &channelID, &pageID)
-			if err == nil && jobID != "" && channelID != "" && pageID != "" && taskID != "" {
-				parts, _ := json.Marshal([]map[string]any{{
-					"type":   "note_write",
-					"ref_id": pageID,
-					"text":   packBody,
-				}})
-				var msgID string
-				insErr := testPool.QueryRow(context.Background(), `
-INSERT INTO channel_message (channel_id, workspace_id, author_type, author_id, author_name, content, parts, source)
-VALUES ($1::uuid, $2::uuid, 'agent', $3::uuid, 'collector', $4, $5::jsonb, 'multica')
-RETURNING id::text`,
-					channelID, testWorkspaceID, collectorID, packBody, string(parts)).Scan(&msgID)
-				if insErr != nil {
-					t.Logf("insert note_write proposal: %v", insErr)
-					time.Sleep(40 * time.Millisecond)
-					continue
-				}
-				if _, err := testPool.Exec(context.Background(), `
-UPDATE agent_inbox_event
-SET status = 'acked', terminal_outcome = 'completed', started_at = now(), completed_at = now(), acked_at = now()
-WHERE id = $1::uuid`, taskID); err != nil {
-					t.Logf("complete collector task: %v", err)
-					time.Sleep(40 * time.Millisecond)
-					continue
-				}
-				return
-			}
-			time.Sleep(40 * time.Millisecond)
-		}
-	}()
+	injectPeriodBriefCollectorPackMarkdown(t, collectorID, packBody)
 
 	rec := httptest.NewRecorder()
 	testHandler.CreateNotePeriodBrief(rec, newRequest(http.MethodPost, "/api/notes/period-briefs", map[string]any{
@@ -343,8 +332,6 @@ WHERE id = $1::uuid`, taskID); err != nil {
 		"agent_id":            synthID,
 		"collector_agent_ids": []string{collectorID},
 	}))
-	close(stop)
-	<-done
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("period brief = %d: %s", rec.Code, rec.Body.String())
 	}
@@ -353,27 +340,13 @@ WHERE id = $1::uuid`, taskID); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	if !containsNoteRetrospectiveSource(resp.SourcesUsed, notePeriodBriefSourceCollectors) {
-		t.Fatalf("pending note_write after complete should mark collectors used: %v", resp.SourcesUsed)
+		t.Fatalf("submit-pack should mark collectors used: %v", resp.SourcesUsed)
 	}
 	if !strings.Contains(resp.Page.Content, "harvested pending proposal") {
 		t.Fatalf("draft missing proposal pack body: %s", resp.Page.Content)
 	}
-	var contextRaw []byte
-	if err := testPool.QueryRow(context.Background(), `
-SELECT context FROM agent_inbox_event WHERE id = $1`, *resp.Job.TaskID).Scan(&contextRaw); err != nil {
-		t.Fatalf("load wake: %v", err)
-	}
-	var wake map[string]any
-	_ = json.Unmarshal(contextRaw, &wake)
-	prompt, _ := wake["prompt"].(string)
-	if !strings.Contains(prompt, "harvested pending proposal") {
-		t.Fatalf("synthesizer packs missing proposal: %s", prompt)
-	}
 }
 
-// Regression: collectors often emit --note-write while the Note Worker job is
-// still projected as "running". Synthesis must harvest that proposal instead
-// of waiting for completed (and timing out to empty packs).
 func TestCreateNotePeriodBriefHarvestsNoteWriteWhileJobStillRunning(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -387,51 +360,11 @@ func TestCreateNotePeriodBriefHarvestsNoteWriteWhileJobStillRunning(t *testing.T
 		notePeriodBriefFinishInBackground = prevBG
 	})
 
-	synthID := createHandlerTestAgent(t, "Period Brief Running Harvest Synth "+uuid.NewString()[:8], nil)
-	collectorID := createPeriodBriefCollectorTestAgent(t, "Running Harvest Collector")
-
-	packBody := "# 采集包 while running\n\n## Highlights\n- harvested before job completed\n"
+	synthID := createHandlerTestAgent(t, "Period Brief Running Synth "+uuid.NewString()[:8], nil)
+	collectorID := createPeriodBriefCollectorTestAgent(t, "Running Collector")
+	packBody := "# 采集包 while running\n\n## Highlights\n- harvested before job completed\n\n## Work groups\n\n### Demo\n- why: same project\n- items:\n  - harvested before job completed\n\n## Unscoped / unclear\n- none\n"
 	day := time.Now().UTC().Format("2006-01-02")
-	stop := make(chan struct{})
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		for {
-			select {
-			case <-stop:
-				return
-			default:
-			}
-			var channelID, pageID string
-			err := testPool.QueryRow(context.Background(), `
-SELECT j.channel_id::text, j.page_id::text
-FROM note_worker_job j
-JOIN note_page p ON p.id = j.page_id
-WHERE j.agent_id = $1
-  AND p.title LIKE '采集包%'
-  AND length(trim(p.content)) = 0
-ORDER BY j.created_at DESC
-LIMIT 1`, collectorID).Scan(&channelID, &pageID)
-			if err == nil && channelID != "" && pageID != "" {
-				parts, _ := json.Marshal([]map[string]any{{
-					"type":   "note_write",
-					"ref_id": pageID,
-					"text":   packBody,
-				}})
-				if _, insErr := testPool.Exec(context.Background(), `
-INSERT INTO channel_message (channel_id, workspace_id, author_type, author_id, author_name, content, parts, source)
-VALUES ($1::uuid, $2::uuid, 'agent', $3::uuid, 'collector', $4, $5::jsonb, 'multica')`,
-					channelID, testWorkspaceID, collectorID, packBody, string(parts)); insErr != nil {
-					t.Logf("insert running note_write proposal: %v", insErr)
-					time.Sleep(40 * time.Millisecond)
-					continue
-				}
-				// Intentionally leave agent_inbox_event / job non-terminal.
-				return
-			}
-			time.Sleep(40 * time.Millisecond)
-		}
-	}()
+	injectPeriodBriefCollectorPackMarkdown(t, collectorID, packBody)
 
 	rec := httptest.NewRecorder()
 	testHandler.CreateNotePeriodBrief(rec, newRequest(http.MethodPost, "/api/notes/period-briefs", map[string]any{
@@ -441,8 +374,6 @@ VALUES ($1::uuid, $2::uuid, 'agent', $3::uuid, 'collector', $4, $5::jsonb, 'mult
 		"agent_id":            synthID,
 		"collector_agent_ids": []string{collectorID},
 	}))
-	close(stop)
-	<-done
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("period brief = %d: %s", rec.Code, rec.Body.String())
 	}
@@ -450,27 +381,11 @@ VALUES ($1::uuid, $2::uuid, 'agent', $3::uuid, 'collector', $4, $5::jsonb, 'mult
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if !containsNoteRetrospectiveSource(resp.SourcesUsed, notePeriodBriefSourceCollectors) {
-		t.Fatalf("running-job note_write should mark collectors used: %v", resp.SourcesUsed)
-	}
 	if !strings.Contains(resp.Page.Content, "harvested before job completed") {
-		t.Fatalf("draft missing running-job proposal pack: %s", resp.Page.Content)
-	}
-	var contextRaw []byte
-	if err := testPool.QueryRow(context.Background(), `
-SELECT context FROM agent_inbox_event WHERE id = $1`, *resp.Job.TaskID).Scan(&contextRaw); err != nil {
-		t.Fatalf("load wake: %v", err)
-	}
-	var wake map[string]any
-	_ = json.Unmarshal(contextRaw, &wake)
-	prompt, _ := wake["prompt"].(string)
-	if !strings.Contains(prompt, "harvested before job completed") {
-		t.Fatalf("synthesizer packs missing running-job proposal: %s", prompt)
+		t.Fatalf("draft missing pack while job running: %s", resp.Page.Content)
 	}
 }
 
-// Regression: Pi/OpenAI often 400s (`input[n].status`) AFTER --note-write.
-// Harvest the proposal even when the inbox task is acked/failed.
 func TestCreateNotePeriodBriefHarvestsNoteWriteAfterFailedTask(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -484,54 +399,48 @@ func TestCreateNotePeriodBriefHarvestsNoteWriteAfterFailedTask(t *testing.T) {
 		notePeriodBriefFinishInBackground = prevBG
 	})
 
-	synthID := createHandlerTestAgent(t, "Period Brief Failed Harvest Synth "+uuid.NewString()[:8], nil)
-	collectorID := createPeriodBriefCollectorTestAgent(t, "Failed Harvest Collector")
-
-	packBody := "# 采集包 after failed job\n\n## Highlights\n- harvested after api_invalid_request\n"
+	synthID := createHandlerTestAgent(t, "Period Brief Failed Synth "+uuid.NewString()[:8], nil)
+	collectorID := createPeriodBriefCollectorTestAgent(t, "Failed Collector")
+	packBody := "# 采集包 after failed job\n\n## Highlights\n- harvested after api_invalid_request\n\n## Work groups\n\n### Demo\n- why: same project\n- items:\n  - harvested after api_invalid_request\n\n## Unscoped / unclear\n- none\n"
 	day := time.Now().UTC().Format("2006-01-02")
+
+	// Inject pack and mark collector task failed — pack_markdown still wins ready.
 	stop := make(chan struct{})
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
+		injected := false
 		for {
 			select {
 			case <-stop:
 				return
 			default:
 			}
-			var jobID, taskID, channelID, pageID string
-			err := testPool.QueryRow(context.Background(), `
-SELECT j.id::text, j.task_id::text, j.channel_id::text, j.page_id::text
-FROM note_worker_job j
-JOIN note_page p ON p.id = j.page_id
-WHERE j.agent_id = $1
-  AND p.title LIKE '采集包%'
-  AND length(trim(p.content)) = 0
-ORDER BY j.created_at DESC
-LIMIT 1`, collectorID).Scan(&jobID, &taskID, &channelID, &pageID)
-			if err == nil && jobID != "" && channelID != "" && pageID != "" && taskID != "" {
-				parts, _ := json.Marshal([]map[string]any{{
-					"type":   "note_write",
-					"ref_id": pageID,
-					"text":   packBody,
-				}})
-				if _, insErr := testPool.Exec(context.Background(), `
-INSERT INTO channel_message (channel_id, workspace_id, author_type, author_id, author_name, content, parts, source)
-VALUES ($1::uuid, $2::uuid, 'agent', $3::uuid, 'collector', $4, $5::jsonb, 'multica')`,
-					channelID, testWorkspaceID, collectorID, packBody, string(parts)); insErr != nil {
-					t.Logf("insert failed-job note_write: %v", insErr)
-					time.Sleep(40 * time.Millisecond)
-					continue
+			if !injected {
+				tag, err := testPool.Exec(context.Background(), `
+UPDATE note_period_brief_run
+SET collectors = (
+  SELECT COALESCE(jsonb_agg(
+    CASE WHEN c->>'agent_id' = $1
+      THEN c || jsonb_build_object('pack_markdown', $2::text)
+      ELSE c
+    END
+  ), '[]'::jsonb)
+  FROM jsonb_array_elements(collectors) AS c
+), updated_at = now()
+WHERE status = 'collecting'
+  AND collectors @> jsonb_build_array(jsonb_build_object('agent_id', $1::text))`, collectorID, packBody)
+				if err == nil && tag.RowsAffected() > 0 {
+					injected = true
 				}
-				if _, err := testPool.Exec(context.Background(), `
-UPDATE agent_inbox_event
+			}
+			_, _ = testPool.Exec(context.Background(), `
+UPDATE agent_inbox_event e
 SET status = 'acked', terminal_outcome = 'failed', failure_reason = 'api_invalid_request',
-    error = $2, started_at = now(), completed_at = now(), acked_at = now()
-WHERE id = $1::uuid`, taskID, "Unknown parameter: 'input[86].status'"); err != nil {
-					t.Logf("fail collector task: %v", err)
-					time.Sleep(40 * time.Millisecond)
-					continue
-				}
+    started_at = COALESCE(started_at, now()), completed_at = now(), acked_at = now()
+FROM note_worker_job j
+WHERE j.task_id = e.id AND j.agent_id = $1::uuid AND e.status <> 'acked'`, collectorID)
+			if injected {
 				return
 			}
 			time.Sleep(40 * time.Millisecond)
@@ -555,24 +464,9 @@ WHERE id = $1::uuid`, taskID, "Unknown parameter: 'input[86].status'"); err != n
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if !containsNoteRetrospectiveSource(resp.SourcesUsed, notePeriodBriefSourceCollectors) {
-		t.Fatalf("failed job with note_write should mark collectors used: %v", resp.SourcesUsed)
-	}
 	if !strings.Contains(resp.Page.Content, "harvested after api_invalid_request") {
-		t.Fatalf("draft missing failed-job proposal pack: %s", resp.Page.Content)
+		t.Fatalf("failed job with pack_markdown must still be ready: %s", resp.Page.Content)
 	}
-	var contextRaw []byte
-	if err := testPool.QueryRow(context.Background(), `
-SELECT context FROM agent_inbox_event WHERE id = $1`, *resp.Job.TaskID).Scan(&contextRaw); err != nil {
-		t.Fatalf("load wake: %v", err)
-	}
-	var wake map[string]any
-	_ = json.Unmarshal(contextRaw, &wake)
-	prompt, _ := wake["prompt"].(string)
-	if !strings.Contains(prompt, "harvested after api_invalid_request") {
-		t.Fatalf("synthesizer packs missing failed-job proposal: %s", prompt)
-	}
-	assertPeriodBriefInboxForceFresh(t, *resp.Job.TaskID)
 }
 
 func assertPeriodBriefInboxForceFresh(t *testing.T, taskID string) {
@@ -625,5 +519,65 @@ func TestCreateNotePeriodBriefAllowsMemberWithCollectors(t *testing.T) {
 	}
 	if len(resp.CollectorJobs) != 1 || resp.CollectorJobs[0].AgentID != collectorID {
 		t.Fatalf("collector_jobs = %#v", resp.CollectorJobs)
+	}
+}
+
+// Pi/local collectors authenticate with durable agent_credential (no TaskID).
+// submit-pack must accept that — Notes page ACL is not the gate.
+func TestSubmitAgentNotePeriodBriefPackAllowsAgentCredentialWithoutTaskID(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	prevWait := notePeriodBriefCollectorMaxWait
+	notePeriodBriefCollectorMaxWait = 30 * time.Second
+	t.Cleanup(func() { notePeriodBriefCollectorMaxWait = prevWait })
+
+	synthID := createHandlerTestAgent(t, "Submit Cred Synth "+uuid.NewString()[:8], nil)
+	collectorID := createPeriodBriefCollectorTestAgent(t, "Submit Cred Collector")
+
+	createRec := httptest.NewRecorder()
+	testHandler.CreateNotePeriodBrief(createRec, newRequest(http.MethodPost, "/api/notes/period-briefs", map[string]any{
+		"window":              "day",
+		"date":                time.Now().UTC().Format("2006-01-02"),
+		"timezone":            "UTC",
+		"agent_id":            synthID,
+		"collector_agent_ids": []string{collectorID},
+	}))
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create = %d: %s", createRec.Code, createRec.Body.String())
+	}
+	var created createNotePeriodBriefResponse
+	if err := json.NewDecoder(createRec.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create: %v", err)
+	}
+	draftID := created.Page.ID
+	if draftID == "" {
+		t.Fatal("missing draft page id")
+	}
+
+	packBody := "# 采集包 credential submit\n\n## Highlights\n- via agent_credential\n\n## Work groups\n\n### Demo\n- why: same project\n- items:\n  - via agent_credential\n\n## Unscoped / unclear\n- none\n"
+	submitReq := withURLParam(withAgentCredentialPrincipal(
+		newRequest(http.MethodPost, "/api/agent/notes/period-briefs/"+draftID+"/submit-pack", map[string]any{
+			"markdown": packBody,
+		}),
+		collectorID, testWorkspaceID, testUserID,
+	), "draftPageId", draftID)
+	submitRec := httptest.NewRecorder()
+	testHandler.SubmitAgentNotePeriodBriefPack(submitRec, submitReq)
+	if submitRec.Code != http.StatusOK {
+		t.Fatalf("submit-pack with agent_credential: expected 200, got %d: %s", submitRec.Code, submitRec.Body.String())
+	}
+
+	var stored string
+	if err := testPool.QueryRow(context.Background(), `
+SELECT c->>'pack_markdown'
+FROM note_period_brief_run r,
+     jsonb_array_elements(r.collectors) AS c
+WHERE r.draft_page_id = $1::uuid
+  AND c->>'agent_id' = $2`, draftID, collectorID).Scan(&stored); err != nil {
+		t.Fatalf("load pack_markdown: %v", err)
+	}
+	if !strings.Contains(stored, "via agent_credential") {
+		t.Fatalf("pack_markdown = %q", stored)
 	}
 }

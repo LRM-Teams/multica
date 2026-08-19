@@ -9,14 +9,11 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/middleware"
-	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
-	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 type retryNotePeriodBriefCollectorsRequest struct {
@@ -77,10 +74,9 @@ func (h *Handler) RetryAgentNotePeriodBriefCollectors(w http.ResponseWriter, r *
 		return
 	}
 
-	// Authorize via the synthesizer's Worker job / note_brief on this draft.
-	if _, _, ok := h.loadAgentAccessibleNote(w, r, principal, draftID); !ok {
-		return
-	}
+	// Authorization is synthesizer_agent_id on the run — not Notes page ACL.
+	// Durable agent_credential tokens have no TaskID and cannot pass
+	// loadAgentAccessibleNote.
 
 	var req retryNotePeriodBriefCollectorsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && r.ContentLength != 0 {
@@ -160,24 +156,7 @@ func (h *Handler) retryNotePeriodBriefCollectors(
 		if projected.FailureReason != nil {
 			failReason = *projected.FailureReason
 		}
-		page, err := scanNotePage(h.DB.QueryRow(ctx, `
-SELECT id, workspace_id, parent_id, owner_user_id, title, content, sort_key, created_at, updated_at, deleted_at
-FROM note_page WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL`,
-			parseUUID(ref.PackPageID), workspaceID))
-		if err != nil {
-			resp.Skipped = append(resp.Skipped, notePeriodBriefRetrySkipped{AgentID: ref.AgentID, Reason: "pack page missing"})
-			continue
-		}
-		packReady := strings.TrimSpace(page.Content) != ""
-		if !packReady {
-			chID := ref.ChannelID
-			if projected.ChannelID != nil {
-				chID = *projected.ChannelID
-			}
-			if proposal := h.loadCollectorPackNoteWriteProposal(ctx, chID, ref.PackPageID); proposal != "" {
-				packReady = true
-			}
-		}
+		packReady := strings.TrimSpace(ref.PackMarkdown) != ""
 		d := classifyPeriodBriefCollectorOutcome(projected.Status, failReason, failReason, packReady, false)
 		if packReady || d.Status == "ready" {
 			resp.Skipped = append(resp.Skipped, notePeriodBriefRetrySkipped{AgentID: ref.AgentID, Reason: "already ready"})
@@ -208,17 +187,24 @@ FROM note_page WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL`,
 			continue
 		}
 
-		// Clear any prior pack body so harvest waits for a fresh --note-write.
-		_, _ = h.DB.Exec(ctx, `
-UPDATE note_page SET content = '', updated_at = now(), updated_by = $1 WHERE id = $2 AND workspace_id = $3`,
-			run.OwnerUserID, page.ID, workspaceID)
-		page.Content = ""
+		draft, err := scanNotePage(h.DB.QueryRow(ctx, `
+SELECT id, workspace_id, parent_id, owner_user_id, title, content, sort_key, created_at, updated_at, deleted_at
+FROM note_page WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL`,
+			run.DraftPageID, workspaceID))
+		if err != nil {
+			resp.Skipped = append(resp.Skipped, notePeriodBriefRetrySkipped{AgentID: ref.AgentID, Reason: "draft page missing"})
+			continue
+		}
+
+		// Clear prior pack artifact so harvest waits for a fresh submit-pack.
+		ref.PackMarkdown = ""
+		refs[i] = ref
 
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/api/notes/period-briefs/retry", nil)
-		job, ok := h.dispatchNotePeriodBriefCollectorOntoPack(
+		job, ok := h.dispatchNotePeriodBriefCollectorOntoDraft(
 			rec, req, workspaceID, run.OwnerUserID, uuidToString(run.OwnerUserID),
-			agent, page, ref.WindowLabel, ref.WindowStart, ref.WindowEnd, ref.ChannelID,
+			agent, draft, ref.WindowLabel, ref.WindowStart, ref.WindowEnd, ref.ChannelID,
 		)
 		if !ok {
 			resp.Skipped = append(resp.Skipped, notePeriodBriefRetrySkipped{
@@ -238,7 +224,7 @@ UPDATE note_page SET content = '', updated_at = now(), updated_by = $1 WHERE id 
 		jobs = append(jobs, job)
 		resp.Retried = append(resp.Retried, notePeriodBriefRetryItem{
 			AgentID:    ref.AgentID,
-			PackPageID: ref.PackPageID,
+			PackPageID: uuidToString(run.DraftPageID),
 			JobID:      ref.JobID,
 			RetryCount: ref.RetryCount,
 		})
@@ -247,111 +233,22 @@ UPDATE note_page SET content = '', updated_at = now(), updated_by = $1 WHERE id 
 	if updated {
 		_ = h.updateNotePeriodBriefRunCollectors(ctx, run.ID, refs, "collecting")
 	}
-	// Await path needs the full job list (retried + still-ready others) so
-	// synthesis sees the complete board. Rebuild from updated refs.
-	allJobs := jobsFromCollectorRefs(refs)
+	allJobs := jobsFromCollectorRefs(refs, uuidToString(run.DraftPageID))
 	if len(resp.Retried) == 0 {
 		return resp, nil, nil
 	}
 	return resp, allJobs, nil
 }
 
-// dispatchNotePeriodBriefCollectorOntoPack reuses an existing pack page
-// (retry path). Same wake contract as first dispatch.
-func (h *Handler) dispatchNotePeriodBriefCollectorOntoPack(
+// dispatchNotePeriodBriefCollectorOntoDraft reuses the draft page (retry path).
+func (h *Handler) dispatchNotePeriodBriefCollectorOntoDraft(
 	w http.ResponseWriter,
 	r *http.Request,
 	workspaceID, userID pgtype.UUID,
 	userIDString string,
 	agent db.Agent,
-	packPage notePageRow,
+	draft notePageRow,
 	windowLabel, windowStart, windowEnd, preferredChannelID string,
 ) (NoteWorkerJobResponse, bool) {
-	ch, ok := h.resolveNoteWorkerChannel(w, r, workspaceID, userIDString, agent, preferredChannelID)
-	if !ok {
-		// Fall back to DM when preferred channel is stale.
-		if preferredChannelID != "" {
-			ch, ok = h.resolveNoteWorkerChannel(w, r, workspaceID, userIDString, agent, "")
-		}
-		if !ok {
-			return NoteWorkerJobResponse{}, false
-		}
-	}
-
-	packPageID := uuidToString(packPage.ID)
-	instruction := notePeriodBriefCollectorInstruction(packPageID, windowLabel, windowStart, windowEnd)
-
-	jobID := uuid.New()
-	jobUUID := parseUUID(jobID.String())
-	if _, err := h.DB.Exec(r.Context(), `
-INSERT INTO note_worker_job (id, workspace_id, page_id, creator_id, agent_id, instruction, status, channel_id)
-VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7)`,
-		jobUUID, workspaceID, packPage.ID, userID, agent.ID, instruction, parseUUID(ch.ID)); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create collector Worker job")
-		return NoteWorkerJobResponse{}, false
-	}
-
-	visibleContent, parts, err := h.buildNoteWorkerChannelMessage(r.Context(), ch, agent, packPage, instruction)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return NoteWorkerJobResponse{}, false
-	}
-	authorName := h.channelAuthorName(r.Context(), userIDString)
-	threadID := uuid.NewString()
-	result, err := h.createUserChannelMessageWithIdempotency(r.Context(), channelMessageInsertInput{
-		ChannelID:   parseUUID(ch.ID),
-		WorkspaceID: workspaceID,
-		AuthorID:    userID,
-		AuthorName:  authorName,
-		Content:     visibleContent,
-		Parts:       parts,
-		ThreadID:    &threadID,
-	}, nil)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to post collector Worker message")
-		return NoteWorkerJobResponse{}, false
-	}
-	msg := result.Message
-	_, _ = h.DB.Exec(r.Context(), `UPDATE channel SET updated_at = now() WHERE id = $1`, parseUUID(ch.ID))
-
-	workerPrompt := wrapNoteWorkerChannelWakePrompt(
-		buildNotePeriodBriefCollectorPrompt(
-			instruction, packPageID, windowLabel, windowStart, windowEnd, packPage.Title, packPage.Content,
-		),
-		h.agentMessageTargetForPrompt(r.Context(), ch, msg),
-	)
-	task, err := h.enqueueChannelAgentPrompt(
-		r.Context(), ch, agent, msg, userID, workerPrompt,
-		"note worker", true, protocol.AgentInboxReasonNoteWorker, channelDirectedWakePriority,
-	)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to enqueue collector Worker job: "+err.Error())
-		return NoteWorkerJobResponse{}, false
-	}
-	mergedContext, err := service.WithNoteBrief(task.Context, service.NoteBrief{
-		Version: 1,
-		PageID:  packPageID,
-		Title:   packPage.Title,
-	})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to attach collector note brief")
-		return NoteWorkerJobResponse{}, false
-	}
-	if err := h.persistPeriodBriefNoteBriefContext(r.Context(), task.ID, mergedContext); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to persist collector note brief")
-		return NoteWorkerJobResponse{}, false
-	}
-	if _, err := h.DB.Exec(r.Context(), `
-UPDATE note_worker_job
-SET task_id = $1, channel_message_id = $2, status = 'dispatched', updated_at = now()
-WHERE id = $3`, task.ID, parseUUID(msg.ID), jobUUID); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to link collector Worker task")
-		return NoteWorkerJobResponse{}, false
-	}
-	resp, err := h.noteWorkerJobResponse(r.Context(), workspaceID, userID, jobUUID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to load collector Worker job")
-		return NoteWorkerJobResponse{}, false
-	}
-	return resp, true
+	return h.dispatchNotePeriodBriefCollector(w, r, workspaceID, userID, userIDString, draft, agent, windowLabel, windowStart, windowEnd)
 }

@@ -85,5 +85,10 @@ hostname; uname -s; echo "HOME=$HOME"; pwd
 
 ## Delivery reminder
 
-After the pack markdown is ready, send with `--note-write` to the pack page id
-from the wake — do not edit the final Brief folder as the pack target.
+After the pack markdown is ready, deliver with:
+
+```bash
+multica notes period-brief submit-pack --draft-page-id <draft-page-id>
+```
+
+Do not `--note-write` the pack into Notes. The draft id comes from the wake.

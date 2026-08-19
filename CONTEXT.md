@@ -673,11 +673,12 @@ An Agent on a provisioned per-Computer runtime (local or cloud) that gathers
 recent work on the OS where that runtime runs — evidence (short diffs, file
 summaries, key snippets) plus preliminary **Work groups** (same project
 together; related cross-repo work in one group with why) and optional Mermaid
-diagrams that need full local context. Completeness first: groups and
+diagrams that need full local context. Delivers via `submit-pack` onto the
+Period Brief run (not a Notes「采集包」page). Completeness first: groups and
 diagrams are additive, never a substitute for Highlights. Not Computer Host
 Digest harvest.
 _Avoid_: Host Journal as the Brief machine source, keymouse, full-repo dump,
-groups-only packs that drop evidence
+groups-only packs that drop evidence, --note-write packs into Notes
 
 ### Period Brief Agent
 

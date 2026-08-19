@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { validateResearchV6ReportSandboxUrl } from "./research-v6-report-sandbox";
+import {
+  resolveResearchV6ReportFrameSource,
+  validateResearchV6ReportSandboxUrl,
+} from "./research-v6-report-sandbox";
 
 describe("validateResearchV6ReportSandboxUrl", () => {
   it("accepts a capability URL only on an independent HTTP origin", () => {
@@ -36,5 +39,47 @@ describe("validateResearchV6ReportSandboxUrl", () => {
         "https://reports.example.test",
       ),
     ).toEqual({ ok: false, reason: "origin_mismatch" });
+  });
+});
+
+describe("resolveResearchV6ReportFrameSource", () => {
+  it("prefers an independent HTTPS capability over compiled HTML", () => {
+    expect(
+      resolveResearchV6ReportFrameSource({
+        sandboxUrl:
+          "https://reports.example.test/reports/r1/hash?expires=1&signature=x",
+        appOrigin: "https://app.example.test",
+        reportOrigin: "https://reports.example.test",
+        compiledHtml: "<html><body>fallback</body></html>",
+      }),
+    ).toEqual({
+      kind: "isolated",
+      url: "https://reports.example.test/reports/r1/hash?expires=1&signature=x",
+    });
+  });
+
+  it("uses compiled HTML when the isolated origin is unavailable", () => {
+    expect(
+      resolveResearchV6ReportFrameSource({
+        sandboxUrl: "",
+        appOrigin: "https://app.example.test",
+        reportOrigin: "",
+        compiledHtml: "<html><body>readable</body></html>",
+      }),
+    ).toEqual({
+      kind: "compiled",
+      html: "<html><body>readable</body></html>",
+    });
+  });
+
+  it("fails closed when neither an isolated URL nor compiled HTML exists", () => {
+    expect(
+      resolveResearchV6ReportFrameSource({
+        sandboxUrl: `${"https://app.example.test"}/report-1`,
+        appOrigin: "https://app.example.test",
+        reportOrigin: "",
+        compiledHtml: "   ",
+      }),
+    ).toMatchObject({ kind: "unavailable" });
   });
 });

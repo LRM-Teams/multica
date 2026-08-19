@@ -28,6 +28,23 @@ describe("Director V6 projection query identities", () => {
     ]);
   });
 
+  it("keeps compiled HTML off the JSON report identity", () => {
+    expect(
+      researchV6DirectorProjectionKeys.reportCompiled(
+        WORKSPACE_ID,
+        RUN_ID,
+        "00000000-0000-4000-8000-000000000701",
+      ),
+    ).toEqual([
+      "research-v6-director-projection",
+      WORKSPACE_ID,
+      RUN_ID,
+      "reports",
+      "00000000-0000-4000-8000-000000000701",
+      "compiled",
+    ]);
+  });
+
   it("constructs only depth=1 requests for every cursor page", () => {
     expect(
       researchV6DirectorSlicePageRequest(

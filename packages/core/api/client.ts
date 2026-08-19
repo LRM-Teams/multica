@@ -5525,4 +5525,26 @@ export class ApiClient {
     void workspaceId;
     return report;
   }
+
+  async getResearchV6DirectorReportCompiled(
+    workspaceId: string,
+    runId: string,
+    reportId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<string> {
+    const res = await this.fetchRaw(
+      `/api/research/v6/runs/${encodeURIComponent(runId)}/reports/${encodeURIComponent(reportId)}/compiled`,
+      { signal: options?.signal },
+    );
+    const mediaType = (res.headers.get("content-type") ?? "").toLowerCase();
+    if (!mediaType.startsWith("text/html")) {
+      throw new Error("Director V6 compiled report is not HTML");
+    }
+    const html = await res.text();
+    if (html.length === 0 || html.length > 24 * 1024 * 1024) {
+      throw new Error("Director V6 compiled report is empty or too large");
+    }
+    void workspaceId;
+    return html;
+  }
 }

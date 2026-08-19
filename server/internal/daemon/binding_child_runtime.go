@@ -346,13 +346,13 @@ func (d *Daemon) bindingMachineControlRegistry(bootstrap computer.BindingChildBo
 		}
 		return nil, d.handleComputerControlCommand(ctx, protocol.EventComputerUpgrade, request.Command)
 	})
-	register(computer.LocalControlUpgradeStatusOperation, func(_ context.Context, headers map[string]string, raw json.RawMessage) (any, error) {
+	register(computer.LocalControlUpgradeEventOperation, func(_ context.Context, headers map[string]string, raw json.RawMessage) (any, error) {
 		if err := authorized(headers); err != nil {
 			return nil, err
 		}
 		var request struct {
 			Identity  computer.BindingChildIdentity `json:"identity"`
-			EventType string                        `json:"event_type"`
+			EventType string                        `json:"eventType"`
 			Payload   json.RawMessage               `json:"payload"`
 		}
 		decoder := json.NewDecoder(bytes.NewReader(raw))

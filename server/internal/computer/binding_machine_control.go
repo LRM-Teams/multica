@@ -53,13 +53,13 @@ func RequestBindingComputerUpgradeEvent(ctx context.Context, controlEndpoint, to
 	}
 	body, err := json.Marshal(struct {
 		Identity  BindingChildIdentity `json:"identity"`
-		EventType string               `json:"event_type"`
+		EventType string               `json:"eventType"`
 		Payload   any                  `json:"payload"`
 	}{identity, eventType, payload})
 	if err != nil {
 		return err
 	}
-	return callLocalJSONWithTimeout(ctx, controlEndpoint, LocalControlUpgradeStatusOperation, 5*time.Second,
+	return callLocalJSONWithTimeout(ctx, controlEndpoint, LocalControlUpgradeEventOperation, 5*time.Second,
 		map[string]string{"Content-Type": "application/json", "X-Multica-Control-Token": strings.TrimSpace(token)},
 		json.RawMessage(body), nil)
 }

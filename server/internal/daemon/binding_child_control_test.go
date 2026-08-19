@@ -240,7 +240,6 @@ func TestBindingChildHarvestsWorkDigestFromHostNotUpgradePayload(t *testing.T) {
 }
 
 func TestBindingChildForwardsConnectSocketUpgradeToService(t *testing.T) {
-	t.Skip("integration fixture does not establish the generation-fenced service callback")
 	executed := make(chan protocol.ComputerUpgradePayload, 1)
 	host := newBindingControlTestHost(t, "host-control-token", 0, computer.HostControlCallbacks{
 		ComputerUpgrade: func(_ context.Context, _ computer.BindingChildIdentity, raw json.RawMessage) error {
@@ -405,8 +404,7 @@ func localHostControlRPC(t *testing.T, host *computer.Host) string {
 
 func localHostControlRPCListener(t *testing.T, host *computer.Host) (string, net.Listener) {
 	t.Helper()
-	registry := computer.NewLocalControlRegistry()
-	host.RegisterControlRPCHandlers(registry)
+	registry := host.LocalControlRegistry(nil)
 	endpoint := computer.ServiceControlEndpoint(t.TempDir())
 	listener, err := computer.ListenLocalControl(endpoint)
 	if err != nil {

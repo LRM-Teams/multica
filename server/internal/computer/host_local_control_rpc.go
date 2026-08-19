@@ -80,13 +80,16 @@ func (host *Host) LocalControlRegistry(state *hostProcessState) *LocalControlReg
 		if err := json.Unmarshal(request.Command, &command); err != nil {
 			return nil, err
 		}
-		if request.Identity.Validate() == nil && host.control.current(request.Identity) && host.control.callbacks.ComputerUpgrade != nil {
-			return nil, host.control.callbacks.ComputerUpgrade(ctx, request.Identity, request.Command)
+		if request.Identity.Validate() != nil || !host.control.current(request.Identity) {
+			return nil, errors.New("inactive managed runner process")
 		}
-		if err := host.upgrade.startServiceUpgrade(BindingChildIdentity{}, command); err != nil {
+		if host.control.callbacks.ComputerUpgrade == nil {
+			return nil, errors.New("Computer upgrade is unavailable")
+		}
+		if err := host.control.callbacks.ComputerUpgrade(ctx, request.Identity, request.Command); err != nil {
 			return nil, err
 		}
-		return map[string]string{"id": command.OperationID, "phase": "starting"}, nil
+		return map[string]string{"id": command.Operation(), "phase": "starting"}, nil
 	})
 	// Status/cancel are retained as explicit RPC operations; their journal
 	// implementation is owned by the upgrade coordinator.

@@ -187,11 +187,78 @@ func TestHostUpgradeStartDecodesCommandEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := handler(context.Background(), map[string]string{"X-Multica-Control-Token": "control-token"}, args); err != nil {
+	result, err := handler(context.Background(), map[string]string{"X-Multica-Control-Token": "control-token"}, args)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if got.RequestID != "upgrade-a" || got.OperationID != "op-a" || got.TargetVersion != "v9.9.9" {
 		t.Fatalf("decoded command = %+v", got)
+	}
+	response, ok := result.(map[string]string)
+	if !ok || response["id"] != "op-a" || response["phase"] != "starting" {
+		t.Fatalf("upgrade:start result = %#v", result)
+	}
+}
+
+func TestHostUpgradeStartReturnsRequestIDWhenOperationIDIsEmpty(t *testing.T) {
+	identity := BindingChildIdentity{WorkspaceID: "ws-1", StartIdentity: "start-2", PID: 1234}
+	host := &Host{control: NewHostControl("control-token", NewProcessCapacity(1), HostControlCallbacks{
+		Current: func(got BindingChildIdentity) bool { return got == identity },
+		ComputerUpgrade: func(context.Context, BindingChildIdentity, json.RawMessage) error {
+			return nil
+		},
+	})}
+	host.upgrade = newHostMachineUpgrade(host, hostMachineUpgradeConfig{})
+	registry := host.LocalControlRegistry(&hostProcessState{})
+	handler, ok := registry.handler(LocalControlUpgradeStartOperation)
+	if !ok {
+		t.Fatal("upgrade:start RPC was not registered")
+	}
+	args, err := json.Marshal(map[string]any{
+		"identity": identity,
+		"command":  protocol.ComputerUpgradePayload{RequestID: "upgrade-a", TargetVersion: "v9.9.9"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := handler(context.Background(), map[string]string{"X-Multica-Control-Token": "control-token"}, args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, ok := result.(map[string]string)
+	if !ok || response["id"] != "upgrade-a" {
+		t.Fatalf("upgrade:start result = %#v", result)
+	}
+}
+
+func TestHostUpgradeStartRejectsStaleIdentity(t *testing.T) {
+	active := BindingChildIdentity{WorkspaceID: "ws-1", StartIdentity: "start-2", PID: 1234}
+	started := false
+	host := &Host{control: NewHostControl("control-token", NewProcessCapacity(1), HostControlCallbacks{
+		Current: func(got BindingChildIdentity) bool { return got == active },
+		ComputerUpgrade: func(context.Context, BindingChildIdentity, json.RawMessage) error {
+			started = true
+			return nil
+		},
+	})}
+	host.upgrade = newHostMachineUpgrade(host, hostMachineUpgradeConfig{})
+	registry := host.LocalControlRegistry(&hostProcessState{})
+	handler, ok := registry.handler(LocalControlUpgradeStartOperation)
+	if !ok {
+		t.Fatal("upgrade:start RPC was not registered")
+	}
+	args, err := json.Marshal(map[string]any{
+		"identity": BindingChildIdentity{WorkspaceID: "ws-1", StartIdentity: "start-1", PID: 1234},
+		"command":  protocol.ComputerUpgradePayload{RequestID: "upgrade-a", TargetVersion: "v9.9.9"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := handler(context.Background(), map[string]string{"X-Multica-Control-Token": "control-token"}, args); err == nil {
+		t.Fatal("stale upgrade identity was accepted")
+	}
+	if started || host.upgrade.activeID != "" {
+		t.Fatalf("stale upgrade still started (callback=%t active=%q)", started, host.upgrade.activeID)
 	}
 }
 
@@ -212,5 +279,34 @@ func TestHostUpgradeStartRejectsMissingCommand(t *testing.T) {
 	_, err = handler(context.Background(), map[string]string{"X-Multica-Control-Token": "control-token"}, args)
 	if err == nil || strings.Contains(err.Error(), "unexpected end of JSON input") {
 		t.Fatalf("missing command error = %v", err)
+	}
+}
+
+func TestBindingComputerUpgradeEventUsesCamelCaseEventType(t *testing.T) {
+	identity := BindingChildIdentity{WorkspaceID: "ws-1", StartIdentity: "start-2", PID: 1234}
+	var got json.RawMessage
+	var operation string
+	endpoint := localControlTestServer(t, func(_ context.Context, name string, _ map[string]string, raw json.RawMessage) (any, error) {
+		operation = name
+		got = append(json.RawMessage(nil), raw...)
+		return nil, nil
+	})
+	if err := RequestBindingComputerUpgradeEvent(context.Background(), endpoint, "control-token", identity, protocol.EventComputerUpgradeProgress, protocol.ComputerUpgradeProgressPayload{
+		RequestID: "upgrade-a", Phase: "staging",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if operation != LocalControlUpgradeEventOperation {
+		t.Fatalf("operation = %q, want %q", operation, LocalControlUpgradeEventOperation)
+	}
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(got, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := envelope["event_type"]; ok {
+		t.Fatalf("upgrade event still uses event_type: %s", got)
+	}
+	if string(envelope["eventType"]) != `"computer:upgrade:progress"` {
+		t.Fatalf("eventType = %s", envelope["eventType"])
 	}
 }

@@ -143,9 +143,9 @@ describe("research empty/permission a11y static contract (LRM-1197)", () => {
     );
   });
 
-  it("source: card menu surfaces disabledReason via title + visible text", () => {
+  it("source: card menu surfaces disabledReason via Tooltip + visible text", () => {
     const src = readSrc("research-card-menu.tsx");
-    expect(src).toMatch(/title=\{!item\.enabled \? item\.disabledReason/);
+    expect(src).toMatch(/TooltipContent side="top">\{item\.disabledReason\}/);
     expect(src).toMatch(/item\.disabledReason/);
     expect(src).toMatch(/disabled=\{!item\.enabled\}/);
   });
@@ -212,7 +212,9 @@ describe("research empty/permission a11y static contract (LRM-1197)", () => {
     );
     const fork = screen.getByRole("menuitem", { name: /Fork from here/i });
     expect(fork).toBeDisabled();
-    expect(fork.getAttribute("title")).toMatch(/not available|不可创建探索分支/i);
+    // Native hover title was migrated to the shared Tooltip (content renders on hover);
+    // the accessible/visible reason is still exposed as inline text below the label.
+    expect(fork.getAttribute("title")).toBeNull();
     expect(fork.textContent).toMatch(/not available|不可创建探索分支/i);
   });
 });

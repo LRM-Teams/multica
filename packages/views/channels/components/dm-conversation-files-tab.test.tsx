@@ -124,7 +124,6 @@ vi.mock("@multica/ui/hooks/use-mobile", () => ({ useIsMobile: () => false }));
 vi.mock("../../chat/components/dm-agent-bubble", () => ({
   DmAgentBubble: () => null,
 }));
-vi.mock("./dm-agent-working-cue", () => ({ DmAgentWorkingCue: () => null }));
 vi.mock("./composer-agent-activity-strip", () => ({
   ComposerAgentActivityStrip: () => null,
 }));

@@ -19,7 +19,7 @@ func TestEmbeddedCatalogContainsEveryAgentAvatar(t *testing.T) {
 
 	wantKeys := map[string]bool{
 		"agent-avatars/v3/agent-01.png": false,
-		"agent-avatars/v3/agent-15.png": false,
+		"agent-avatars/v3/agent-06.png": false,
 	}
 	for _, asset := range assets {
 		if _, ok := wantKeys[asset.Key]; ok {

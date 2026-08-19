@@ -14,10 +14,21 @@ import (
 
 // runnerPresenceRefreshInterval is how often the server refreshes Redis
 // liveness and DB last_seen_at for currently-connected Workspace Runners.
-// It must stay below both runtimeLivenessTTL (90s in handler/daemon.go) and
-// the sweeper's stale threshold minus flush slack (150s), so a connected new
-// daemon never looks stale to any consumer while its socket is up.
+//
+// It participates in a three-constant freshness chain that MUST keep its
+// ordering: runnerPresenceRefreshInterval (45s) < runtimeLivenessTTL (90s,
+// handler/daemon.go) < staleThresholdSeconds (150s, runtime_sweeper.go).
+// The tick must be below the Redis TTL so a connected daemon never expires
+// its liveness record, and the TTL must stay below the sweeper's stale
+// window so a disconnected daemon degrades to offline at the normal cadence.
+// If you tune any of the three, recompute the whole chain.
 const runnerPresenceRefreshInterval = 45 * time.Second
+
+// runnerIDCacheTTL prunes daemon/workspace -> runtimeID entries that have not
+// been refreshed (i.e. whose socket is no longer being listed) for this long,
+// so a disconnected daemon's cache entry does not linger in memory forever.
+// Multiple of the refresh interval; a few minutes is plenty.
+const runnerIDCacheTTL = 5 * time.Minute
 
 // runRunnerPresenceLivenessTicker implements LRM-1571's "liveness driven by
 // WS connection state": while a Workspace Runner socket is connected, the
@@ -48,27 +59,50 @@ func runRunnerPresenceLivenessTicker(ctx context.Context, queries *db.Queries, l
 
 // runnerIDCache remembers daemon/workspace -> runtimeID so the per-tick
 // refresh does not re-query for every connected runner when nothing changed.
-// Keys are "daemonID|workspaceID".
+// Keys are "daemonID|workspaceID". Entries carry the last refresh time and
+// are pruned once they stop being refreshed (socket disconnected), keeping
+// the map bounded to currently-seen runners.
 type runnerIDCache struct {
 	mu sync.Mutex
-	m  map[string]string
+	m  map[string]runnerIDEntry
+}
+
+type runnerIDEntry struct {
+	runtimeID   string
+	refreshedAt time.Time
 }
 
 func newRunnerIDCache() *runnerIDCache {
-	return &runnerIDCache{m: make(map[string]string)}
+	return &runnerIDCache{m: make(map[string]runnerIDEntry)}
 }
 
 func (c *runnerIDCache) get(key string) (string, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	id, ok := c.m[key]
-	return id, ok
+	e, ok := c.m[key]
+	if !ok {
+		return "", false
+	}
+	return e.runtimeID, true
 }
 
-func (c *runnerIDCache) set(key, runtimeID string) {
+func (c *runnerIDCache) set(key, runtimeID string, now time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.m[key] = runtimeID
+	c.m[key] = runnerIDEntry{runtimeID: runtimeID, refreshedAt: now}
+}
+
+// prune drops entries not refreshed within ttl. Call it every tick so a
+// daemon whose socket disconnected stops occupying cache memory.
+func (c *runnerIDCache) prune(now time.Time, ttl time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	cutoff := now.Add(-ttl)
+	for k, e := range c.m {
+		if e.refreshedAt.Before(cutoff) {
+			delete(c.m, k)
+		}
+	}
 }
 
 // refreshRunnerPresenceLiveness resolves every connected Workspace Runner to
@@ -76,8 +110,10 @@ func (c *runnerIDCache) set(key, runtimeID string) {
 func refreshRunnerPresenceLiveness(ctx context.Context, queries *db.Queries, liveness handler.LivenessStore, hub *daemonws.Hub, cache *runnerIDCache) {
 	runners := hub.ListWorkspaceRunners()
 	if len(runners) == 0 {
+		// No sockets: nothing to refresh; let the cache age out naturally.
 		return
 	}
+	now := time.Now()
 	for _, r := range runners {
 		key := r.DaemonID + "|" + r.WorkspaceID
 		runtimeID, ok := cache.get(key)
@@ -106,10 +142,11 @@ func refreshRunnerPresenceLiveness(ctx context.Context, queries *db.Queries, liv
 			if runtimeID == "" {
 				continue
 			}
-			cache.set(key, runtimeID)
+			cache.set(key, runtimeID, now)
 		}
 		touchRuntimePresence(ctx, queries, liveness, runtimeID)
 	}
+	cache.prune(now, runnerIDCacheTTL)
 }
 
 // touchRuntimePresence refreshes the liveness record and DB last_seen_at for

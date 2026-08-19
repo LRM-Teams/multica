@@ -20,10 +20,9 @@ import (
 )
 
 const (
-	notePeriodBriefFolderTitle         = "工作介绍"
-	notePeriodBriefSourceCollectors    = "period_work_collectors"
-	notePeriodBriefCollectorPollEvery  = 1 * time.Second
-	notePeriodBriefCollectorStubMarker = "Stub awaiting Agent pack"
+	notePeriodBriefFolderTitle        = "工作介绍"
+	notePeriodBriefSourceCollectors   = "period_work_collectors"
+	notePeriodBriefCollectorPollEvery = 1 * time.Second
 )
 
 // Absolute safety ceiling for the background wait loop. Active collectors are
@@ -50,23 +49,22 @@ func notePeriodBriefInstruction(folderPageID, draftPageID, windowLabel string) s
 	}
 	retryHint := ""
 	if draft != "" {
-		retryHint = "\n10) Collector status board: each pack has status + retryable. " +
+		retryHint = "\n9) Collector status board: each pack has status + retryable. " +
 			"Permanent failures (missing API key / model config / auth / quota / blocked) → abandon that collector; do not retry. " +
 			"Transient failures (runtime offline, network, capacity, empty pack, stalled) → retry with the narrow CLI below, at most " +
 			fmt.Sprintf("%d", notePeriodBriefCollectorMaxRetries) + " retries per collector. " +
 			"After retry, wait for the platform re-wake — do not invent OS work.\n" +
 			formatPeriodBriefRetryHint(draft)
 	}
-	return "Write a Period Work Brief a manager can read in a few minutes — a reporting narrative, not a pack dump, not a standup wrap-up, not slide-deck copy. Follow skill `multica-period-work-brief` for grouping, titles, and diagrams.\n" +
-		"1) Open with one clear claim about what mattered in the period.\n" +
-		"2) Give 3–7 top-level threads grouped by initiative/outcome — the same work from several packs or Highlights is ONE thread with nested sub-points, never sibling threads.\n" +
-		"3) Each thread: a human title + 1–2 sentence claim + 2–5 nested bullets (decisions, impact, remaining risk). Skip trivia; do not starve a thread that packs treat as substantial. Cite Issue/PR when available.\n" +
-		"4) Thread titles are reporting language (what changed / why it matters). Never use a filesystem path, repo folder, or package directory (`packages/…`, `/home/…`, a branch name alone) as a heading. Paths may appear only inside a bullet as evidence.\n" +
-		"5) If a ready collector pack has a Mermaid diagram that explains a main thread, copy that mermaid fence into that thread. Do not drop diagrams; if packs overlap, keep the clearest one. You may tighten labels, not invent topology.\n" +
-		"6) Call out delegated leverage (what agents or teammates carried).\n" +
-		"7) State what remains unfinished.\n" +
-		"8) Put unscoped machine work (本机未归类) in its own section — never mix it into 主线. Do not list raw commits or Runtime/Repos dumps as the body.\n" +
-		"9) Deliver the Brief with `multica message send --target <Message target for chat transport> --note-write --note-page-id " + folder +
+	return "Write a Period Work Brief a manager can read — a reporting narrative, not a pack dump, not a standup wrap-up, not slide-deck copy. Follow skill `multica-period-work-brief` for section shape, titles, and diagrams.\n" +
+		"1) Fixed top-level sections (English headings): `## Summary`, then optionally `## Technique`, `## Achievements`, `## Research` — omit any of Technique/Achievements/Research entirely when Facts+packs have no related work (do not write empty placeholders).\n" +
+		"2) `## Summary` is the overview and is always required. It has exactly two subsections: `### Work Summary` and `### Next Steps`.\n" +
+		"3) `### Work Summary` is the priority section: a detailed account of what mattered in the period. Group by initiative/outcome (nested sub-points under one thread — never sibling threads for the same work). Each thread: human title + claim + nested bullets (decisions, impact, remaining risk). Cite Issue/PR when available. Put unscoped machine work (本机未归类) here only when it did not map into a thread — never invent OS work for failed collectors.\n" +
+		"4) `### Next Steps` may infer plausible follow-ups from current work and unfinished threads; label speculation honestly; do not invent facts from empty/failed collectors.\n" +
+		"5) Thread titles are reporting language (what changed / why it matters). Never use a filesystem path, repo folder, or package directory (`packages/…`, `/home/…`, a branch name alone) as a heading. Paths may appear only inside a bullet as evidence.\n" +
+		"6) If a ready collector pack has a Mermaid diagram that explains work in Work Summary (or another included section), copy that mermaid fence next to that work. Do not drop diagrams; if packs overlap, keep the clearest one. You may tighten labels, not invent topology.\n" +
+		"7) Call out delegated leverage (what agents or teammates carried) inside Work Summary when relevant.\n" +
+		"8) Deliver the Brief with `multica message send --target <Message target for chat transport> --note-write --note-page-id " + folder +
 		"`. The body must be only the Brief markdown. Title it like `工作介绍 " + label +
 		"`. The human confirms 「新建子笔记」 under 工作介绍/ — never treat the draft Facts page as the finished Brief, and never pass the draft page id to --note-page-id." +
 		retryHint
@@ -110,21 +108,6 @@ func notePeriodBriefCollectorInstruction(packPageID, windowLabel, windowStart, w
 		"- leftover traces that do not map cleanly\n" +
 		"Deliver with `multica message send --target <Message target for chat transport> --note-write --note-page-id " + pack +
 		"`. Body = pack markdown only. Title it like `采集包 " + label + "`."
-}
-
-func notePeriodBriefCollectorPackStub(windowLabel, agentLabel string) string {
-	label := strings.TrimSpace(windowLabel)
-	if label == "" {
-		label = "period"
-	}
-	who := strings.TrimSpace(agentLabel)
-	if who == "" {
-		who = "collector"
-	}
-	return "# 采集包 " + label + "\n\n" +
-		"Collector: " + who + "\n\n" +
-		notePeriodBriefCollectorStubMarker + " via `--note-write`. Replace this body with structured OS work traces " +
-		"(repos/roots, highlights, integrated summary, optional Mermaid diagrams, unscoped leftovers). Do not write the final Brief here.\n"
 }
 
 type createNotePeriodBriefRequest struct {
@@ -523,12 +506,13 @@ func (h *Handler) dispatchNotePeriodBriefCollector(
 		agentLabel = uuidToString(agent.ID)
 	}
 	packTitle := normalizeNoteTitle(fmt.Sprintf("采集包 %s · %s", windowLabel, agentLabel))
-	packContent := notePeriodBriefCollectorPackStub(windowLabel, agentLabel)
+	// Empty body until the collector delivers via --note-write. Never seed a
+	// placeholder pack — stubs used to leak into synthesis when collectors failed.
 	packPage, err := scanNotePage(h.DB.QueryRow(r.Context(), `
 INSERT INTO note_page (workspace_id, parent_id, owner_user_id, title, content, sort_key, created_by, updated_by)
-VALUES ($1, $2, $3, $4, $5, lpad((extract(epoch from now()) * 1000000)::bigint::text, 20, '0'), $3, $3)
+VALUES ($1, $2, $3, $4, '', lpad((extract(epoch from now()) * 1000000)::bigint::text, 20, '0'), $3, $3)
 RETURNING id, workspace_id, parent_id, owner_user_id, title, content, sort_key, created_at, updated_at, deleted_at`,
-		workspaceID, folderID, userID, packTitle, packContent))
+		workspaceID, folderID, userID, packTitle))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create collector pack note")
 		return NoteWorkerJobResponse{}, false
@@ -843,7 +827,7 @@ FROM note_page WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL`,
 				continue
 			}
 			out[i].Title = page.Title
-			out[i].Content = page.Content
+			out[i].Content = ""
 
 			projected, _ := h.noteWorkerJobResponse(ctx, workspaceID, userID, parseUUID(job.ID))
 			status := projected.Status
@@ -860,9 +844,9 @@ FROM note_page WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL`,
 			if projected.FailureReason != nil {
 				failReason = strings.TrimSpace(*projected.FailureReason)
 			}
-			stub := strings.Contains(page.Content, notePeriodBriefCollectorStubMarker)
 			packReady := false
-			if !stub && strings.TrimSpace(page.Content) != "" {
+			if strings.TrimSpace(page.Content) != "" {
+				out[i].Content = page.Content
 				packReady = true
 			} else if proposal := h.loadCollectorPackNoteWriteProposal(ctx, channelID, job.PageID); proposal != "" {
 				out[i].Content = proposal
@@ -940,9 +924,9 @@ func isPeriodBriefPackSettled(status string) bool {
 }
 
 // loadCollectorPackNoteWriteProposal returns the latest agent message body that
-// proposed --note-write onto the pack page. Used whenever the page is still a
-// stub (job running or completed) so synthesis does not require the human to
-// accept the writeback into note_page first.
+// proposed --note-write onto the pack page. Used when the pack page is still
+// empty (job running, completed, or failed after write) so synthesis does not
+// require the human to accept the writeback into note_page first.
 func (h *Handler) loadCollectorPackNoteWriteProposal(ctx context.Context, channelID, packPageID string) string {
 	channelID = strings.TrimSpace(channelID)
 	packPageID = strings.TrimSpace(packPageID)
@@ -957,7 +941,6 @@ WHERE m.channel_id = $1
   AND m.deleted_at IS NULL
   AND m.author_type = 'agent'
   AND length(trim(m.content)) > 0
-  AND position($3 in m.content) = 0
   AND EXISTS (
     SELECT 1
     FROM jsonb_array_elements(COALESCE(m.parts, '[]'::jsonb)) part
@@ -965,7 +948,7 @@ WHERE m.channel_id = $1
       AND part->>'ref_id' = $2
   )
 ORDER BY m.created_at DESC
-LIMIT 1`, parseUUID(channelID), packPageID, notePeriodBriefCollectorStubMarker).Scan(&content)
+LIMIT 1`, parseUUID(channelID), packPageID).Scan(&content)
 	if err != nil {
 		return ""
 	}
@@ -1005,19 +988,20 @@ func formatNotePeriodBriefPacks(packs []notePeriodBriefPackResult) string {
 			b.WriteString(strings.TrimSpace(pack.Content))
 			b.WriteByte('\n')
 		case "failed":
+			b.WriteString("调用采集 Agent 失败了 — do not treat this collector as Brief evidence; do not invent OS work.\n")
 			if pack.Retryable {
-				b.WriteString("(failed, retryable — consider narrow retry; do not invent OS work)\n")
+				b.WriteString("(retryable — consider narrow retry)\n")
 			} else {
-				b.WriteString("(failed, permanent — abandon this collector; do not invent OS work)\n")
+				b.WriteString("(permanent — abandon this collector)\n")
 			}
 		case "cancelled":
-			b.WriteString("(cancelled — abandon; do not invent OS work)\n")
+			b.WriteString("调用采集 Agent 失败了（已取消）— abandon; do not invent OS work.\n")
 		case "stalled":
-			b.WriteString("(stalled past safety ceiling — retryable unless marked permanent; do not invent OS work)\n")
+			b.WriteString("调用采集 Agent 失败了（超时未交付）— do not invent OS work.\n")
 		case "running", "pending":
 			b.WriteString("(still running — platform should not have woken you yet)\n")
 		default:
-			b.WriteString("(empty pack — retryable; do not invent OS work)\n")
+			b.WriteString("调用采集 Agent 失败了（未交付采集包）— retryable; do not invent OS work.\n")
 		}
 	}
 	return b.String()

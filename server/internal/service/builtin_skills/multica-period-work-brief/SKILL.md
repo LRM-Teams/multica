@@ -1,6 +1,6 @@
 ---
 name: multica-period-work-brief
-description: "Use when synthesizing a Period Work Brief / 本期工作介绍 / 周报 from platform Facts and collector packs. Covers reporting shape (grouping, human titles, required Mermaid), status board, abandon vs retry, the narrow retry-collectors CLI (max 3), and --note-write delivery under 工作介绍/. Do not use for collecting OS work (that is multica-period-work-collect)."
+description: "Use when synthesizing a Period Work Brief / 本期工作介绍 / 周报 from platform Facts and collector packs. Covers fixed section shape (Summary with Work Summary + Next Steps; optional Technique / Achievements / Research), titles, required Mermaid, status board, abandon vs retry, the narrow retry-collectors CLI (max 3), and --note-write delivery under 工作介绍/. Do not use for collecting OS work (that is multica-period-work-collect)."
 user-invocable: false
 allowed-tools: Bash(multica *)
 ---
@@ -8,27 +8,61 @@ allowed-tools: Bash(multica *)
 # Period Work Brief synthesizer
 
 You turn **platform Facts** + **collector packs** into one Period Work Brief
-a manager can read in a few minutes. The platform waits until collectors
-settle before waking you — you do **not** busy-wait. You **do** read the
-status board and decide abandon vs retry. Then you **narrate**, you do not
-paste packs.
+a manager can read. The platform waits until collectors settle before waking
+you — you do **not** busy-wait. You **do** read the status board and decide
+abandon vs retry. Then you **narrate**, you do not paste packs.
 
 ## Reporting shape (non-negotiable)
 
 This is a **汇报稿**, not a file listing.
 
-### Group by work, not by folder
+### Fixed sections (English headings)
+
+```markdown
+# 工作介绍 <window label>
+
+## Summary
+
+### Work Summary
+…
+
+### Next Steps
+…
+
+## Technique
+…   <!-- omit entire section if no related work -->
+
+## Achievements
+…   <!-- omit entire section if no related work -->
+
+## Research
+…   <!-- omit entire section if no related work -->
+```
+
+- **`## Summary` always required.** It contains exactly:
+  - **`### Work Summary`** — **priority**. Detailed account of what mattered
+    in the period (see grouping below).
+  - **`### Next Steps`** — plausible follow-ups inferred from current work
+    and unfinished threads; label speculation honestly.
+- **`## Technique` / `## Achievements` / `## Research`** — include **only**
+  when Facts + ready packs have related work. If none, **omit the section**
+  (no empty heading, no “N/A”).
+
+### Work Summary grouping
 
 - Cluster by initiative / outcome / Issue, **not** by repo, directory,
   machine, or collector.
 - The same work in several packs, Highlights, or machines is **one thread**
   with nested sub-points. Never list sibling threads that are actually the
-  same project (e.g. “采集员结算” and “周报 Agent 重采” stay under one
-  Period Work Brief initiative).
-- 3–7 top-level threads. Each thread: human title + 1–2 sentence claim +
-  **2–5 nested bullets** (decision, impact, remaining risk). Skip trivia
-  (dirty scratch files, Runtime sections). Do not starve a thread the packs
-  treat as substantial.
+  same project.
+- Each thread: human title + claim + **nested bullets** (decision, impact,
+  remaining risk). Skip trivia (dirty scratch files, Runtime dumps). Do not
+  starve a thread the packs treat as substantial.
+- Delegated leverage (agents / teammates) belongs inside Work Summary when
+  relevant.
+- Unscoped machine work (本机未归类) only when it did not map into a thread.
+- Abandoned collectors: short “未纳入采集” note with machine + reason —
+  **never invent** that machine’s OS work.
 
 ### Titles are reporting language
 
@@ -41,22 +75,20 @@ This is a **汇报稿**, not a file listing.
 
 Collector packs often include flow/sequence/state diagrams **because a
 colleague needs them**. If a **ready** pack has a Mermaid fence that explains
-a main thread:
+work in Work Summary (or another included section):
 
-1. Copy that ` ```mermaid ` block into **that thread** in the Brief.
-2. Do not drop diagrams. Do not leave them only in 本机未归类.
+1. Copy that ` ```mermaid ` block next to **that work**.
+2. Do not drop diagrams. Do not leave them only under unscoped leftovers.
 3. Overlapping packs → keep the clearest one. You may tighten node labels;
    do not invent topology.
-4. If a diagram is unscoped leftover, it may sit under 本机未归类 — that is
-   the exception, not the default.
 
 ### Density
 
 | Too detailed (cut) | Too thin (expand from packs) |
 | --- | --- |
-| Raw diffs, commit lists, every dirty path | A thread that is only a path or one vague bullet |
-| Collector `## Runtime` / `## Repos / roots` dumps | Packs have Highlights/summary but the Brief skips the claim |
-| Parallel bullets that are the same initiative | Missing Mermaid that the pack already drew |
+| Raw diffs, commit lists, every dirty path | Work Summary that is only paths or one vague bullet |
+| Collector `## Runtime` / `## Repos / roots` dumps | Packs have Highlights/summary but Work Summary skips the claim |
+| Empty Technique/Achievements/Research stubs | Missing Mermaid that the pack already drew |
 
 ## Status board (in the wake / draft)
 
@@ -72,7 +104,8 @@ Each collector has:
 
 `ready` includes a collector that already proposed `--note-write` even if the
 job later failed (Pi/OpenAI `input[n].status` 400). Use that pack; do not
-retry that collector.
+retry that collector. Failed collectors without a pack: say the collector
+call failed — do not invent OS work.
 
 ## When to abandon (do not retry)
 

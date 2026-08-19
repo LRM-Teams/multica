@@ -84,7 +84,13 @@ func TestCreateNotePeriodBriefOrchestratesCollectorsThenSynthesizerWithoutDigest
 		t.Fatalf("Brief path must not use Host Digest source: used=%v empty=%v", resp.SourcesUsed, resp.SourcesEmpty)
 	}
 	if !containsNoteRetrospectiveSource(resp.SourcesEmpty, notePeriodBriefSourceCollectors) {
-		t.Fatalf("unsettled/stalled stubs should mark collectors empty: %v", resp.SourcesEmpty)
+		t.Fatalf("unsettled/empty collectors should mark collectors empty: %v", resp.SourcesEmpty)
+	}
+	if strings.Contains(resp.Page.Content, "Stub awaiting Agent pack") {
+		t.Fatalf("draft must not include collector pack stub body: %s", resp.Page.Content)
+	}
+	if !strings.Contains(resp.Page.Content, "调用采集 Agent 失败了") {
+		t.Fatalf("draft must state collector call failed without a pack: %s", resp.Page.Content)
 	}
 	if strings.Contains(resp.Page.Content, "Machine Work Digest") || strings.Contains(resp.Page.Content, "disabled: true") {
 		t.Fatalf("draft must not include Host Digest: %s", resp.Page.Content)
@@ -206,9 +212,9 @@ UPDATE note_page
 SET content = $1, updated_at = now()
 WHERE owner_user_id = $2
   AND title LIKE '采集包%'
-  AND content LIKE $3
+  AND length(trim(content)) = 0
   AND deleted_at IS NULL`,
-				packBody, testUserID, "%"+notePeriodBriefCollectorStubMarker+"%")
+				packBody, testUserID)
 			time.Sleep(40 * time.Millisecond)
 		}
 	}()
@@ -295,9 +301,9 @@ FROM note_worker_job j
 JOIN note_page p ON p.id = j.page_id
 WHERE j.agent_id = $1
   AND p.title LIKE '采集包%'
-  AND p.content LIKE $2
+  AND length(trim(p.content)) = 0
 ORDER BY j.created_at DESC
-LIMIT 1`, collectorID, "%"+notePeriodBriefCollectorStubMarker+"%").Scan(&jobID, &taskID, &channelID, &pageID)
+LIMIT 1`, collectorID).Scan(&jobID, &taskID, &channelID, &pageID)
 			if err == nil && jobID != "" && channelID != "" && pageID != "" && taskID != "" {
 				parts, _ := json.Marshal([]map[string]any{{
 					"type":   "note_write",
@@ -403,9 +409,9 @@ FROM note_worker_job j
 JOIN note_page p ON p.id = j.page_id
 WHERE j.agent_id = $1
   AND p.title LIKE '采集包%'
-  AND p.content LIKE $2
+  AND length(trim(p.content)) = 0
 ORDER BY j.created_at DESC
-LIMIT 1`, collectorID, "%"+notePeriodBriefCollectorStubMarker+"%").Scan(&channelID, &pageID)
+LIMIT 1`, collectorID).Scan(&channelID, &pageID)
 			if err == nil && channelID != "" && pageID != "" {
 				parts, _ := json.Marshal([]map[string]any{{
 					"type":   "note_write",
@@ -500,9 +506,9 @@ FROM note_worker_job j
 JOIN note_page p ON p.id = j.page_id
 WHERE j.agent_id = $1
   AND p.title LIKE '采集包%'
-  AND p.content LIKE $2
+  AND length(trim(p.content)) = 0
 ORDER BY j.created_at DESC
-LIMIT 1`, collectorID, "%"+notePeriodBriefCollectorStubMarker+"%").Scan(&jobID, &taskID, &channelID, &pageID)
+LIMIT 1`, collectorID).Scan(&jobID, &taskID, &channelID, &pageID)
 			if err == nil && jobID != "" && channelID != "" && pageID != "" && taskID != "" {
 				parts, _ := json.Marshal([]map[string]any{{
 					"type":   "note_write",

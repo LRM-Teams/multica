@@ -17,10 +17,10 @@ const (
 	periodBriefAgentName        = "weekly-report"
 	periodBriefAgentDisplayName = "周报"
 	periodBriefAgentTemplate    = "weekly-report"
-	// Detects personas that predate reporting-shape rules (grouping, path
-	// titles, required Mermaid). Ensure refreshes template instructions when
-	// missing so stale DB copy cannot fight the wake contract.
-	periodBriefInstructionsCapabilityMarker = "Do not drop diagrams"
+	// Detects personas that predate Summary / Work Summary board shape.
+	// Ensure refreshes template instructions when missing so stale DB copy
+	// cannot fight the wake contract.
+	periodBriefInstructionsCapabilityMarker = "## Summary"
 )
 
 // EnsurePeriodBriefAgentResponse is returned by POST /api/agents/period-brief.

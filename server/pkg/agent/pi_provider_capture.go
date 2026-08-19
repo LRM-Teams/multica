@@ -246,31 +246,7 @@ func pairPiCaptureProviderCalls(records []piCaptureRecord) ([]piCaptureRecord, [
 	return requests, finals, nil
 }
 
-// typedPiCaptureEvents projects raw JSONL records into the resident RPC typed
-// event surface used by capture-batch assembly and diagnostics.
-func typedPiCaptureEvents(records []piCaptureRecord) ([]PiCaptureTypedEvent, error) {
-	events := make([]PiCaptureTypedEvent, 0, len(records))
-	for _, record := range records {
-		at, err := time.Parse(time.RFC3339Nano, record.At)
-		if err != nil {
-			return nil, fmt.Errorf("parse capture event timestamp: %w", err)
-		}
-		kind := record.Kind
-		switch kind {
-		case PiCaptureEventTurnEnd:
-			kind = PiCaptureEventFinalAssistant
-		case PiCaptureEventProviderRequest:
-			kind = PiCaptureEventProviderCall
-		}
-		events = append(events, PiCaptureTypedEvent{
-			Kind:    kind,
-			At:      at,
-			Payload: record.Payload,
-			Message: record.Message,
-		})
-	}
-	return events, nil
-}
+
 
 // newPiCaptureExtension writes a read-only Pi extension that records only the
 // final provider request and final assistant message boundaries. It must never

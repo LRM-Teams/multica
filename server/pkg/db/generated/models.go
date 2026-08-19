@@ -1210,6 +1210,7 @@ type ComputerIdentityOwner struct {
 	DeviceName         pgtype.Text        `json:"device_name"`
 	Os                 pgtype.Text        `json:"os"`
 	CliVersion         pgtype.Text        `json:"cli_version"`
+	MachineID          pgtype.Text        `json:"machine_id"`
 }
 
 type ComputerWorkspaceBinding struct {

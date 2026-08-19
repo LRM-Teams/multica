@@ -66,8 +66,9 @@ type Config struct {
 	// invitation only. The public /api/config endpoint mirrors this flag so
 	// the UI can hide every "Create workspace" affordance — see #3433.
 	DisableWorkspaceCreation bool
-	// ResearchV6BootstrapEnabled exposes the explicit V6 creation path only in
-	// fixture/acceptance environments. It does not change supported/default versions.
+	// ResearchV6BootstrapEnabled is retained for operators and fixtures. User-facing
+	// V6 create no longer requires this flag. Clients that omit orchestrator_version
+	// still default to V5.
 	ResearchV6BootstrapEnabled bool
 	// PublicURL is the absolute base URL the API is reachable at from the
 	// public internet, with no trailing slash (e.g. "https://app.multica.ai").

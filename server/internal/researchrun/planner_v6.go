@@ -20,8 +20,8 @@ const v6TextMaxBytes = 32768
 var v6KeyPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]*$`)
 
 // V6PlannerResult mirrors the frozen plan_result definition in
-// docs/contracts/research-run-v6.schema.json. V6 remains unavailable to
-// production Runs until the complete protocol is accepted.
+// docs/contracts/research-run-v6.schema.json. Omitted-version creates still
+// default to V5; explicit V6 + Director creates a V6 Run.
 type V6PlannerResult struct {
 	ContractKind    string              `json:"contract_kind"`
 	SchemaVersion   int                 `json:"schema_version"`

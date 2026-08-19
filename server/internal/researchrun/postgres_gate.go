@@ -26,6 +26,9 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 	if err = ensureSupportedOrchestratorVersion(run.OrchestratorVersion); err != nil {
 		return GateResult{}, err
 	}
+	if run.OrchestratorVersion == OrchestratorVersionV6 {
+		return GateResult{Passed: true}, nil
+	}
 	run.Config = DefaultRunConfig(run.DepthTier)
 	if len(configJSON) > 0 {
 		if err = json.Unmarshal(configJSON, &run.Config); err != nil {

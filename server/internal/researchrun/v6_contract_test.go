@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -41,9 +40,9 @@ func TestV6DesignContractIsFrozenAndNotProductionEnabled(t *testing.T) {
 		}
 	}
 	if OrchestratorVersion != OrchestratorVersionV5 {
-		t.Fatalf("default orchestrator=%q; V6 design must remain disabled", OrchestratorVersion)
+		t.Fatalf("omitted-version default=%q; old clients must still create V5", OrchestratorVersion)
 	}
-	if err = ensureSupportedOrchestratorVersion("research-run-v6"); !errors.Is(err, ErrUnsupportedVersion) {
-		t.Fatalf("V6 became production-supported before Ronaldo activation exits: %v", err)
+	if err = ensureSupportedOrchestratorVersion("research-run-v6"); err != nil {
+		t.Fatalf("V6 must be a supported runtime version: %v", err)
 	}
 }

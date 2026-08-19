@@ -14,6 +14,11 @@ not advance a task or satisfy a delivery gate.
 
 ## V6 Director assignments
 
+Users may create a V6 Run by sending `orchestrator_version=research-run-v6` and
+a Director. The homepage defaults to V6 and selects the first available Agent.
+Clients that omit `orchestrator_version` still create V5. `AssessV6Activation`
+remains an audit; it does not flip that omitted-version default.
+
 When the dispatch contract is `research-run-v6`, the durable Work Manifest and
 Director Brief are the complete authority for the current cycle. Never infer
 canonical state from chat history, a previous model session, the canvas, or a

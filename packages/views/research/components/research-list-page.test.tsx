@@ -179,7 +179,9 @@ beforeEach(() => {
   window.HTMLElement.prototype.scrollIntoView = vi.fn();
   mutationRef.current = { mutate: vi.fn(), isPending: false, isError: false, error: null, reset: vi.fn() };
   fleetQueryRef.current = {
-    data: undefined,
+    data: [
+      { id: "director-1", name: "Director One", display_name: "Director One", archived_at: null },
+    ],
     isLoading: false,
     isFetching: false,
     isError: false,
@@ -210,21 +212,13 @@ describe("ResearchListPage list states (LRM-789)", () => {
   it("includes the selected Director when creating a V6 run", () => {
     const mutate = vi.fn();
     mutationRef.current = { ...mutationRef.current, mutate };
-    fleetQueryRef.current = {
-      ...fleetQueryRef.current,
-      data: [
-        { id: "director-1", name: "Director One", display_name: "Director One", archived_at: null },
-      ],
-    };
     render(<ResearchListPage />);
 
+    const directorControls = screen.getAllByLabelText(enResearch.d5.rail.director_role);
+    expect(directorControls[0]).toHaveValue("research-run-v6");
+    expect(directorControls[1]).toHaveValue("director-1");
     fireEvent.change(screen.getByPlaceholderText(enResearch.goal_placeholder), {
       target: { value: "Compare collaboration modes" },
-    });
-    const directorControls = screen.getAllByLabelText(enResearch.d5.rail.director_role);
-    fireEvent.change(directorControls[0]!, { target: { value: "research-run-v6" } });
-    fireEvent.change(screen.getAllByLabelText(enResearch.d5.rail.director_role)[1]!, {
-      target: { value: "director-1" },
     });
     fireEvent.click(screen.getByTestId("research-create-submit"));
 

@@ -101,7 +101,7 @@ function emptyComposer(uiLanguage?: string): ComposerDraft {
     params: defaultCreateParams(uiLanguage),
     paramsOpen: false,
     fieldErrors: null,
-    orchestratorVersion: "research-run-v5",
+    orchestratorVersion: "research-run-v6",
     directorAgentId: "",
   };
 }
@@ -191,6 +191,10 @@ export function ResearchListPage() {
   const availableDirectors = (agentsQuery.data ?? []).filter(
     (agent) => agent.archived_at == null,
   );
+  const selectedDirectorId =
+    orchestratorVersion === "research-run-v6"
+      ? directorAgentId || availableDirectors[0]?.id || ""
+      : "";
   const { data, isLoading, isFetching, isError, error, refetch } = useQuery(
     researchSessionListOptions(wsId),
   );
@@ -226,7 +230,7 @@ export function ResearchListPage() {
             ? { client_request_id: createRequestIdRef.current }
             : {}),
           ...(orchestratorVersion === "research-run-v6"
-            ? { orchestrator_version: orchestratorVersion, director_agent_id: directorAgentId }
+            ? { orchestrator_version: orchestratorVersion, director_agent_id: selectedDirectorId }
             : {}),
         },
         wsId,
@@ -407,7 +411,7 @@ export function ResearchListPage() {
       params: createParams,
       uiLanguage: language,
     });
-    if (orchestratorVersion === "research-run-v6" && !directorAgentId) {
+    if (orchestratorVersion === "research-run-v6" && !selectedDirectorId) {
       setComposer((prev) => ({ ...prev, paramsOpen: true }));
       return;
     }
@@ -782,7 +786,7 @@ export function ResearchListPage() {
                 {orchestratorVersion === "research-run-v6" ? (
                   <select
                     aria-label={t(($) => $.d5.rail.director_role)}
-                    value={directorAgentId}
+                    value={selectedDirectorId}
                     onChange={(event) =>
                       setComposer((prev) => ({ ...prev, directorAgentId: event.target.value }))
                     }

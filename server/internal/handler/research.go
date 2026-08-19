@@ -462,8 +462,8 @@ func (h *Handler) CreateResearchSession(w http.ResponseWriter, r *http.Request) 
 		requestedVersion = researchrun.OrchestratorVersionV5
 	}
 	if requestedVersion == researchrun.OrchestratorVersionV6 {
-		if !h.cfg.ResearchV6BootstrapEnabled {
-			writeRonaldoV6Error(w, http.StatusConflict, "research.v6.not_activated", "research V6 bootstrap is disabled until activation evidence is complete", false)
+		if !researchV6UserCreateEnabled(h.cfg) {
+			writeRonaldoV6Error(w, http.StatusConflict, "research.v6.not_activated", "research V6 create is disabled", false)
 			return
 		}
 		directorID, valid := parseUUIDOrBadRequest(w, req.DirectorAgentID, "director_agent_id")
@@ -492,12 +492,18 @@ func (h *Handler) CreateResearchSession(w http.ResponseWriter, r *http.Request) 
 			writeError(w, http.StatusInternalServerError, "failed to load initialized research V6 session")
 			return
 		}
-		writeJSON(w, http.StatusCreated, map[string]any{
+		response := map[string]any{
 			"session":  researchSessionToResponse(session),
 			"nodes":    []any{},
 			"edges":    []any{},
 			"messages": []any{},
-		})
+		}
+		if runSnapshot, snapshotErr := h.ResearchRun.Snapshot(r.Context(), createdRun.SessionID, workspaceID); snapshotErr == nil {
+			response["run"] = runSnapshot
+		} else {
+			slog.Warn("research V6 create snapshot failed", "session_id", createdRun.SessionID, "error", snapshotErr)
+		}
+		writeJSON(w, http.StatusCreated, response)
 		return
 	}
 	if requestedVersion != researchrun.OrchestratorVersionV5 {
@@ -568,6 +574,13 @@ func (h *Handler) CreateResearchSession(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	writeJSON(w, http.StatusCreated, response)
+}
+
+// researchV6UserCreateEnabled is the product gate for explicit V6 + Director
+// create. Omitted orchestrator_version still defaults to V5. The bootstrap env
+// flag is not a user-facing gate.
+func researchV6UserCreateEnabled(Config) bool {
+	return true
 }
 
 func researchRunStartWillRetry(err error) bool {

@@ -395,6 +395,53 @@ func pgtimestamptz(t time.Time) pgtype.Timestamptz {
 	return pgtype.Timestamptz{Time: t, Valid: true}
 }
 
+// fakePresence drives runnerPresence in connectivity tests without a Hub.
+type fakePresence struct {
+	connected map[string]bool
+}
+
+func (f *fakePresence) HasWorkspaceRunner(daemonID, workspaceID string) bool {
+	if f == nil {
+		return false
+	}
+	return f.connected[runnerKeyForTest(daemonID, workspaceID)]
+}
+
+func runnerKeyForTest(daemonID, workspaceID string) string {
+	return daemonID + "/" + workspaceID
+}
+
+// TestRuntimeConnectivity_WSConnectedOverridesStaleHeartbeat is the LRM-1571
+// contract for the read-time online judgment: a runtime whose daemon holds a
+// live Workspace Runner socket is Online even when last_seen_at is far past
+// the stale threshold (WS-capable daemons stop heartbeating). Disconnected,
+// the legacy heartbeat ramp applies unchanged.
+func TestRuntimeConnectivity_WSConnectedOverridesStaleHeartbeat(t *testing.T) {
+	prev := runnerPresence
+	t.Cleanup(func() { runnerPresence = prev })
+
+	now := time.Now()
+	rt := db.AgentRuntime{
+		Status:    "online",
+		DaemonID:  pgtype.Text{String: "agent-main", Valid: true},
+		WorkspaceID: memberManagementTestUUID(7),
+		LastSeenAt: pgtimestamptz(now.Add(-10 * time.Minute)), // dead by heartbeat
+		UpdatedAt:  pgtimestamptz(now.Add(-10 * time.Minute)),
+	}
+
+	runnerPresence = &fakePresence{connected: map[string]bool{
+		runnerKeyForTest("agent-main", "00000000-0000-0000-0000-000000000007"): true,
+	}}
+	if got := runtimeConnectivity(rt, now); got != runtimeConnectivityOnline {
+		t.Fatalf("WS-connected runtime = %v, want online", got)
+	}
+
+	runnerPresence = &fakePresence{} // disconnected
+	if got := runtimeConnectivity(rt, now); got != runtimeConnectivityDead {
+		t.Fatalf("disconnected stale runtime = %v, want dead", got)
+	}
+}
+
 // TestAgentRuntimeDisplayStatus_FreshStartingSinceOverridesStaleConnectivity
 // keeps leftover starting_since readable: an older daemon may still have
 // stamped the column, and connectivity alone would otherwise read Dead/Stale

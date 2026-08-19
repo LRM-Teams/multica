@@ -72,10 +72,16 @@ export default [
                   ) {
                     return;
                   }
+                  // <iframe title> is an a11y accessible name describing the
+                  // embedded document — NOT a tooltip — so it must stay as a
+                  // native title and is exempt from this ban.
+                  if (opening.name.name === "iframe") {
+                    return;
+                  }
                   context.report({
                     node,
                     message:
-                      "Native `title` attribute: use the Tooltip component from @multica/ui (base-ui) instead, and keep any accessible name via aria-label/aria-labelledby. Component title props and SVG <title> are exempt.",
+                      "Native `title` attribute: use the Tooltip component from @multica/ui (base-ui) instead, and keep any accessible name via aria-label/aria-labelledby. Component title props, iframe a11y titles, and SVG <title> are exempt.",
                   });
                 },
               };

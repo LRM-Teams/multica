@@ -2760,6 +2760,17 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	if restrictedExecution || providerNeedsInlineSystemPrompt(provider) {
 		execOpts.SystemPrompt = runtimeBrief
 	}
+	// Agent-scope promoted memory is loaded once into the session-stable
+	// system prompt and is excluded from the per-message (pre-message)
+	// context (Frank 2026-08-19). Member/project/channel memory stays
+	// per-message to preserve per-recipient isolation.
+	if mem := execenv.RenderAgentScopeMemory(taskCtx.AgentMemories); mem != "" {
+		if execOpts.SystemPrompt != "" {
+			execOpts.SystemPrompt += "\n\n" + mem
+		} else {
+			execOpts.SystemPrompt = mem
+		}
+	}
 
 	backend, createErr := agent.New(provider, backendCfg)
 	if createErr != nil {

@@ -211,13 +211,13 @@ jobs:
           cache-to: type=registry,ref=${{ steps.prep.outputs.web_image }}:buildcache-production-amd64,mode=max
 
       - name: Build & push db-bridge
-        # The multica-side bridge server image. Context is the db_bridge/
+        # The multica-side bridge image. Context is the db_bridge/
         # subproject (own pyproject + Dockerfile); file defaults to
         # db_bridge/Dockerfile. The Dockerfile's default CMD (run_stub --side
-        # multica) is the multica-side gateway stub; the executor service
-        # overrides it to run_executor --side multica at deploy time. (The
-        # public run_multica server is no longer deployed - no external LLM
-        # relay is needed.)
+        # multica) is the multica-side gateway stub, the only db-bridge
+        # service deployed - AReaL reaches Multica directly, so no
+        # Multica-side executor exists. (The public run_multica server is no
+        # longer deployed either - no external LLM relay is needed.)
         uses: docker/build-push-action@v7
         with:
           context: db_bridge
@@ -484,6 +484,16 @@ jobs:
             "${RUNNER_TEMP}/multica-deploy-bundle"
 
       - name: Pull & restart backend + frontend + Caddy
+        # Optional db-bridge stub config from the s89 Environment
+        # (BRIDGE_USER_ID / SUPABASE_URL as variables, the service-role key
+        # as a secret). Shell env beats --env-file in Compose interpolation,
+        # and an empty value falls back to the compose default
+        # (${VAR:-default} also triggers on empty), so leaving these unset
+        # in the Environment keeps current behavior.
+        env:
+          BRIDGE_USER_ID: ${{ vars.BRIDGE_USER_ID }}
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
           set -euo pipefail
           owner_lc="${GITHUB_REPOSITORY_OWNER,,}"

@@ -20,6 +20,7 @@ type Engine struct {
 	leaseRenewInterval time.Duration
 	v6Agents           AgentLifecycleAdapter
 	v6Inbox            InboxDispatchAdapter
+	retrieval          RetrievalAdapter
 }
 
 const (
@@ -83,12 +84,15 @@ func NewEngineWithV6Adapters(store *PostgresStore, dispatcher Dispatcher, projec
 // NewEngineWithRuntimeAdapters wires every V6 external effect while retaining
 // the report package boundary. Production uses this constructor so a process
 // restart cannot silently drop either half of the Director runtime.
-func NewEngineWithRuntimeAdapters(store *PostgresStore, dispatcher Dispatcher, projector Projector, reportStorage ReportPackageStorage, renderer ReportRenderAdapter, frameAncestors []string, agents AgentLifecycleAdapter, inbox InboxDispatchAdapter) ResearchRun {
-	store.reportStorage, store.reportRenderer = reportStorage, renderer
-	store.reportFrameAncestors = append([]string(nil), frameAncestors...)
+func NewEngineWithRuntimeAdapters(store *PostgresStore, dispatcher Dispatcher, projector Projector, reportStorage ReportPackageStorage, renderer ReportRenderAdapter, frameAncestors []string, agents AgentLifecycleAdapter, inbox InboxDispatchAdapter, retrieval RetrievalAdapter) ResearchRun {
+	if store != nil {
+		store.reportStorage, store.reportRenderer = reportStorage, renderer
+		store.reportFrameAncestors = append([]string(nil), frameAncestors...)
+	}
 	engine := newEngine(store, dispatcher, projector)
 	engine.v6Agents = agents
 	engine.v6Inbox = inbox
+	engine.retrieval = retrieval
 	return engine
 }
 
@@ -172,6 +176,31 @@ func (e *Engine) SubmitResult(ctx context.Context, sessionID, workspaceID, taskI
 	return outcome, nil
 }
 
+const defaultScreenedSourceFetchBytes int64 = 2 << 20
+
+func (e *Engine) IngestPendingScreenedSources(ctx context.Context, limit int) (int, error) {
+	if e == nil || e.store == nil || e.retrieval == nil || limit <= 0 {
+		return 0, nil
+	}
+	pending, err := e.store.ListPendingScreenedSourceIngestions(ctx, limit)
+	if err != nil {
+		return 0, err
+	}
+	ingested := 0
+	var errs []error
+	for _, item := range pending {
+		if item.MaximumContentSize <= 0 {
+			item.MaximumContentSize = defaultScreenedSourceFetchBytes
+		}
+		if _, ingestErr := e.store.FetchAndIngestScreenedSource(ctx, item, e.retrieval); ingestErr != nil {
+			errs = append(errs, ingestErr)
+			continue
+		}
+		ingested++
+	}
+	return ingested, errors.Join(errs...)
+}
+
 func (e *Engine) ReconcileDue(ctx context.Context, limit int) (int, error) {
 	v6Processed, v6Err := e.ReconcileV6Work(ctx, limit)
 	ids, err := e.store.ListDueRunIDs(ctx, limit)
@@ -221,7 +250,8 @@ func (e *Engine) ReconcileV6Work(ctx context.Context, limit int) (int, error) {
 	events, eventErr := e.store.ProcessV6EventTriggers(ctx, limit)
 	prepared, prepareErr := e.store.PrepareV6Dispatches(ctx, limit)
 	delivered, deliveryErr := (v6RuntimeModule{store: e.store, team: e.store, agents: e.v6Agents, inbox: e.v6Inbox, clock: e.clock}).Deliver(ctx, limit)
-	return recovered + steering + proposals + reports + applied + events + prepared + delivered, errors.Join(err, steeringErr, proposalErr, reportErr, applyErr, eventErr, prepareErr, deliveryErr)
+	ingested, ingestErr := e.IngestPendingScreenedSources(ctx, limit)
+	return recovered + steering + proposals + reports + applied + events + prepared + delivered + ingested, errors.Join(err, steeringErr, proposalErr, reportErr, applyErr, eventErr, prepareErr, deliveryErr, ingestErr)
 }
 
 func (e *Engine) AssignV6Director(ctx context.Context, in AssignV6DirectorInput) (V6DirectorAssignment, error) {

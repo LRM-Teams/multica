@@ -11,7 +11,7 @@ import (
 func TestRaftLocalControlOperationNames(t *testing.T) {
 	want := map[string]bool{
 		LocalControlRestartServiceOperation: true, LocalControlUpgradeStartOperation: true,
-		LocalControlUpgradeStatusOperation: true, LocalControlUpgradeCancelOperation: true,
+		LocalControlUpgradeStatusOperation: true, LocalControlUpgradeEventOperation: true, LocalControlUpgradeCancelOperation: true,
 		LocalControlServiceStatusOperation: true, "service:start": true, "service:stop": true, "service:diagnostics": true,
 		"workspace:list": true, "workspace:status": true, "workspace:start": true, "workspace:stop": true,
 		"workspace:restart": true, "workspace:attach": true, "workspace:detach": true,

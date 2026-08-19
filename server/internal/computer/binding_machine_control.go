@@ -38,10 +38,7 @@ func RequestBindingComputerUpgrade(ctx context.Context, controlEndpoint, token s
 	if !validLocalControlEndpoint(controlEndpoint) || strings.TrimSpace(token) == "" || identity.Validate() != nil {
 		return fmt.Errorf("Binding child machine control is not configured")
 	}
-	body, err := json.Marshal(struct {
-		Identity BindingChildIdentity            `json:"identity"`
-		Command  protocol.ComputerUpgradePayload `json:"command"`
-	}{Identity: identity, Command: command})
+	body, err := json.Marshal(upgradeStartControlRequest{Identity: identity, Command: command})
 	if err != nil {
 		return err
 	}
@@ -56,13 +53,13 @@ func RequestBindingComputerUpgradeEvent(ctx context.Context, controlEndpoint, to
 	}
 	body, err := json.Marshal(struct {
 		Identity  BindingChildIdentity `json:"identity"`
-		EventType string               `json:"event_type"`
+		EventType string               `json:"eventType"`
 		Payload   any                  `json:"payload"`
 	}{identity, eventType, payload})
 	if err != nil {
 		return err
 	}
-	return callLocalJSONWithTimeout(ctx, controlEndpoint, LocalControlUpgradeStatusOperation, 5*time.Second,
+	return callLocalJSONWithTimeout(ctx, controlEndpoint, LocalControlUpgradeEventOperation, 5*time.Second,
 		map[string]string{"Content-Type": "application/json", "X-Multica-Control-Token": strings.TrimSpace(token)},
 		json.RawMessage(body), nil)
 }

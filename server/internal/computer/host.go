@@ -157,6 +157,9 @@ func NewHost(config HostConfig) (*Host, error) {
 		return host.WorkJournalEnabled(), nil
 	}
 	callbacks.ComputerUpgrade = func(ctx context.Context, identity BindingChildIdentity, raw json.RawMessage) error {
+		if external.ComputerUpgrade != nil {
+			return external.ComputerUpgrade(ctx, identity, raw)
+		}
 		var command protocol.ComputerUpgradePayload
 		if err := json.Unmarshal(raw, &command); err != nil {
 			return err

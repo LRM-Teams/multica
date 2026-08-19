@@ -619,7 +619,6 @@ func (c *Client) GetTaskStatus(ctx context.Context, taskID, runtimeID string) (s
 type (
 	HeartbeatResponse       = protocol.DaemonHeartbeatAckPayload
 	PendingUpdate           = protocol.DaemonHeartbeatPendingUpdate
-	PendingMachineUpgrade   = protocol.DaemonHeartbeatPendingMachineUpgrade
 	PendingModelList        = protocol.DaemonHeartbeatPendingModelList
 	PendingLocalSkills      = protocol.DaemonHeartbeatPendingLocalSkills
 	PendingLocalSkillImport = protocol.DaemonHeartbeatPendingLocalSkillImport

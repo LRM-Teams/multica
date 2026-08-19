@@ -267,11 +267,6 @@ func (upgrade *hostMachineUpgrade) handleChildAction(ctx context.Context, identi
 		upgrade.manifestBaseURL = manifest
 	}
 	upgrade.mu.Unlock()
-	if ack.PendingMachineUpgrade != nil {
-		// The connect socket already forwarded computer:upgrade to the Host's
-		// single service-owned executor.
-		return nil
-	}
 	if ack.PendingRestart != nil {
 		go upgrade.scheduleCurrentBinaryRestart()
 	}

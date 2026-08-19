@@ -19,6 +19,7 @@ const (
 	LocalControlRestartServiceOperation       = "service:restart"
 	LocalControlUpgradeStartOperation         = "upgrade:start"
 	LocalControlUpgradeStatusOperation        = "upgrade:status"
+	LocalControlUpgradeEventOperation         = "upgrade:event"
 	LocalControlUpgradeCancelOperation        = "upgrade:cancel"
 	LocalControlServiceStatusOperation        = "service:status"
 	LocalControlMachineAttestationOperation   = "machine-attestation"
@@ -39,7 +40,7 @@ type localControlOperationSpec struct {
 
 var localControlOperationSpecs = []localControlOperationSpec{
 	{Name: LocalControlRestartServiceOperation}, {Name: LocalControlUpgradeStartOperation},
-	{Name: LocalControlUpgradeStatusOperation}, {Name: LocalControlUpgradeCancelOperation}, {Name: LocalControlServiceStatusOperation}, {Name: LocalControlMachineAttestationOperation},
+	{Name: LocalControlUpgradeStatusOperation}, {Name: LocalControlUpgradeEventOperation}, {Name: LocalControlUpgradeCancelOperation}, {Name: LocalControlServiceStatusOperation}, {Name: LocalControlMachineAttestationOperation},
 	{Name: "service:start"}, {Name: "service:stop"}, {Name: "service:diagnostics"},
 	{Name: "workspace:list"}, {Name: "workspace:status"}, {Name: "workspace:start"},
 	{Name: "workspace:stop"}, {Name: "workspace:restart"}, {Name: "workspace:attach"},

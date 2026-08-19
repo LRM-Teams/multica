@@ -56,7 +56,6 @@ func (d *Daemon) handleWorkspaceRunnerControlAck(ctx context.Context, ack *Heart
 	}
 	local := *ack
 	local.PendingUpdate = nil
-	local.PendingMachineUpgrade = nil
 	local.PendingRestart = nil
 	local.ReleaseManifestBaseURL = ""
 	d.handleWSHeartbeatAck(ctx, &local)
@@ -65,11 +64,10 @@ func (d *Daemon) handleWorkspaceRunnerControlAck(ctx context.Context, ack *Heart
 		RuntimeID:              ack.RuntimeID,
 		Status:                 ack.Status,
 		PendingUpdate:          ack.PendingUpdate,
-		PendingMachineUpgrade:  ack.PendingMachineUpgrade,
 		PendingRestart:         ack.PendingRestart,
 		ReleaseManifestBaseURL: ack.ReleaseManifestBaseURL,
 	}
-	if machine.PendingUpdate == nil && machine.PendingMachineUpgrade == nil && machine.PendingRestart == nil && machine.ReleaseManifestBaseURL == "" {
+	if machine.PendingUpdate == nil && machine.PendingRestart == nil && machine.ReleaseManifestBaseURL == "" {
 		return
 	}
 	forwardCtx, cancel := context.WithTimeout(ctx, 5*time.Second)

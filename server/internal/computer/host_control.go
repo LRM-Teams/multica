@@ -298,6 +298,11 @@ type rawControlRequest struct {
 	Payload  json.RawMessage      `json:"payload"`
 }
 
+type upgradeStartControlRequest struct {
+	Identity BindingChildIdentity            `json:"identity"`
+	Command  protocol.ComputerUpgradePayload `json:"command"`
+}
+
 type runtimeSetControlRequest struct {
 	Identity             BindingChildIdentity `json:"identity"`
 	Runtimes             json.RawMessage      `json:"runtimes"`
@@ -398,8 +403,10 @@ func (client *HostControlClient) ForwardComputerControl(ctx context.Context, act
 	return client.postRaw(ctx, LocalControlComputerControlOperation, actions)
 }
 
-func (client *HostControlClient) RequestComputerUpgrade(ctx context.Context, command any) error {
-	return client.postRaw(ctx, LocalControlUpgradeStartOperation, command)
+func (client *HostControlClient) RequestComputerUpgrade(ctx context.Context, command protocol.ComputerUpgradePayload) error {
+	return client.post(ctx, LocalControlUpgradeStartOperation, upgradeStartControlRequest{
+		Identity: client.identity, Command: command,
+	}, nil)
 }
 
 func (client *HostControlClient) HarvestWorkDigest(ctx context.Context, command protocol.ComputerWorkDigestPayload) (protocol.WorkDigest, error) {

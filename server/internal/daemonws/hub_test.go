@@ -212,9 +212,6 @@ func TestLegacyControlPlaneRunnerCanBecomeReadyOnlyForRollingUpgrade(t *testing.
 		return &protocol.DaemonHeartbeatAckPayload{
 			RuntimeID: payload.RuntimeID,
 			Status:    "ok",
-			PendingMachineUpgrade: &protocol.DaemonHeartbeatPendingMachineUpgrade{
-				ID: "upgrade-1", TargetVersion: "v0.4.24-alpha.56",
-			},
 		}, nil
 	})
 	hub.SetWorkspaceRunnerHandler(func(_ context.Context, _ ClientIdentity, _ string, eventType string, _ json.RawMessage) error {
@@ -289,15 +286,15 @@ func TestLegacyControlPlaneRunnerCanBecomeReadyOnlyForRollingUpgrade(t *testing.
 	}
 	_, raw, err = conn.ReadMessage()
 	if err != nil {
-		t.Fatalf("legacy control-plane Runner did not receive machine upgrade: %v", err)
+		t.Fatalf("legacy control-plane Runner did not receive heartbeat ack: %v", err)
 	}
 	var ack protocol.Message
 	if err := json.Unmarshal(raw, &ack); err != nil {
 		t.Fatal(err)
 	}
 	var heartbeatAck protocol.DaemonHeartbeatAckPayload
-	if ack.Type != protocol.EventDaemonHeartbeatAck || json.Unmarshal(ack.Payload, &heartbeatAck) != nil || heartbeatAck.PendingMachineUpgrade == nil || heartbeatAck.PendingMachineUpgrade.ID != "upgrade-1" {
-		t.Fatalf("heartbeat ack = %s, want pending machine upgrade", raw)
+	if ack.Type != protocol.EventDaemonHeartbeatAck || json.Unmarshal(ack.Payload, &heartbeatAck) != nil || heartbeatAck.RuntimeID != "runtime-1" || heartbeatAck.Status != "ok" {
+		t.Fatalf("heartbeat ack = %s, want control-plane heartbeat ack", raw)
 	}
 	if hub.NotifyAgentRestartCommand("workspace-1", "daemon-1", protocol.EventDaemonAgentStart, "dispatch-1", protocol.WorkspaceRunnerAgentStartPayload{
 		AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1",

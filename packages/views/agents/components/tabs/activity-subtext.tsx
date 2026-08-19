@@ -81,16 +81,12 @@ function ActivityHandle({
   const className = `${HANDLE_CLASS} text-primary hover:underline`;
   return navigation ? (
     <Tooltip>
-      <TooltipTrigger render={<AppLink href={href} className={className} />}>
-        {handle}
-      </TooltipTrigger>
+      <TooltipTrigger render={<AppLink href={href} className={className}>{handle}</AppLink>} />
       <TooltipContent side="top">{handle}</TooltipContent>
     </Tooltip>
   ) : (
     <Tooltip>
-      <TooltipTrigger render={<a href={href} className={className} />}>
-        {handle}
-      </TooltipTrigger>
+      <TooltipTrigger render={<a href={href} className={className}>{handle}</a>} />
       <TooltipContent side="top">{handle}</TooltipContent>
     </Tooltip>
   );

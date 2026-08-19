@@ -415,8 +415,12 @@ func main() {
 		liveness = handler.NewRedisLivenessStore(storeRedis)
 	}
 
-	// Start background sweeper to mark stale runtimes as offline.
-	go runRuntimeSweeper(sweepCtx, queries, liveness, taskSvc, bus)
+	// Start background sweeper to mark stale runtimes as offline. The daemon
+	// Hub is passed as the RunnerPresence source so WS-connected runtimes
+	// (LRM-1571: heartbeat-retired daemons) are never swept despite stale
+	// last_seen_at.
+	var presence service.RunnerPresence = daemonHub
+	go runRuntimeSweeper(sweepCtx, queries, liveness, presence, taskSvc, bus)
 	go runRunnerActivityReaper(sweepCtx, h)
 	go runCollaborationTurnWorkers(sweepCtx, h)
 	go runChannelOnboardingPublisher(sweepCtx, h)

@@ -472,8 +472,6 @@ function AgentProfileTabContent({
           )}
         </ProfileField>
 
-        <AgentHonorPanelSection agentId={agent.id} workspaceId={agent.workspace_id} />
-
         <div className="border-t border-border pt-3">
           <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
             {t(($) => $.side_panel.info_section)}
@@ -513,6 +511,9 @@ function AgentProfileTabContent({
               <TooltipContent side="top">{ownerName(agent, members)}</TooltipContent>
             </Tooltip>
           </div>
+          {/* Honor moved into the Info section (Frank 2026-08-19): rich panel
+              stays unchanged, only its position moved under Info. */}
+          <AgentHonorPanelSection agentId={agent.id} workspaceId={agent.workspace_id} />
         </div>
 
         {/* LRM-470 — Runtime Config is its own section (not Info misc rows).

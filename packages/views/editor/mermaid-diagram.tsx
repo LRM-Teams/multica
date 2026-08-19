@@ -31,6 +31,7 @@ import {
   DialogContent,
 } from "@multica/ui/components/ui/dialog";
 import { useT } from "../i18n";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { normalizeMermaidChart } from "./normalize-mermaid-chart";
 
 export type MermaidDiagramHandle = {
@@ -366,14 +367,14 @@ export function MermaidDiagram({
           />
           {showToolbar && (
             <div className="mermaid-diagram-toolbar">
-              <button
-                type="button"
-                onClick={() => setLightboxOpen(true)}
-                title={t(($) => $.code_block.fullscreen)}
-                aria-label={t(($) => $.code_block.fullscreen)}
-              >
-                <Maximize2 className="size-3.5" />
-              </button>
+              <Tooltip>
+                <TooltipTrigger
+                  render={<button type="button" onClick={() => setLightboxOpen(true)} aria-label={t(($) => $.code_block.fullscreen)} />}
+                >
+                  <Maximize2 className="size-3.5" />
+                </TooltipTrigger>
+                <TooltipContent side="top">{t(($) => $.code_block.fullscreen)}</TooltipContent>
+              </Tooltip>
             </div>
           )}
           <Dialog open={lightboxOpen} onOpenChange={setLightboxOpen}>

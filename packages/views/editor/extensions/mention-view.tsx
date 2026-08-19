@@ -20,6 +20,7 @@ import type { NodeViewProps } from "@tiptap/react";
 import type { ReactNode } from "react";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { useAuthStore } from "@multica/core/auth";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { useNavigation } from "../../navigation";
 import { IssueChip } from "../../issues/components/issue-chip";
 import { ProjectChip } from "../../projects/components/project-chip";
@@ -85,33 +86,56 @@ function ActorMentionEditorChip({
 }): ReactNode {
   const { name, unresolved, handlePeek } = useActorMentionChipLabel(type, id, label);
   const kind = resolveMentionTokenKind(type, id, viewerUserId);
+  const chipClassName = mentionTokenClassName(
+    kind,
+    unresolved
+      ? "bg-muted text-muted-foreground hover:bg-muted focus-visible:bg-muted"
+      : undefined,
+    mentionVariant,
+  );
   const chip = (
     <span
-      className={mentionTokenClassName(
-        kind,
-        unresolved
-          ? "bg-muted text-muted-foreground hover:bg-muted focus-visible:bg-muted"
-          : undefined,
-        mentionVariant,
-      )}
+      className={chipClassName}
       data-mention-kind={kind}
       data-mention-type={type}
       data-mention-unresolved={unresolved ? "true" : undefined}
-      title={handlePeek ? `@${handlePeek}` : undefined}
     >
       @{name}
     </span>
   );
 
+  // Hover peek of the routing handle — only when a distinct handle exists;
+  // otherwise keep the plain chip with no hover affordance (matches the old
+  // conditional native `title`).
+  const chipNode = handlePeek ? (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span
+            className={chipClassName}
+            data-mention-kind={kind}
+            data-mention-type={type}
+            data-mention-unresolved={unresolved ? "true" : undefined}
+          />
+        }
+      >
+        @{name}
+      </TooltipTrigger>
+      <TooltipContent side="top">{"@" + handlePeek}</TooltipContent>
+    </Tooltip>
+  ) : (
+    chip
+  );
+
   if (type === "member" || type === "agent") {
     return (
       <ActorMentionProfileTrigger actorType={type} actorId={id}>
-        {chip}
+        {chipNode}
       </ActorMentionProfileTrigger>
     );
   }
 
-  return chip;
+  return chipNode;
 }
 
 function ProjectMention({

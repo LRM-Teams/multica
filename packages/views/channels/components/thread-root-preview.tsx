@@ -3,6 +3,7 @@
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { Bot } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { useActorName } from "@multica/core/workspace/hooks";
 import type { ChannelMessage } from "@multica/core/types";
 import type { OpenAgentPanelFn } from "@multica/core/agents";
@@ -185,12 +186,12 @@ export function ThreadRootPreview({
             ) : (
               nameNode
             )}
-            <span
-              className="text-[11px] text-muted-foreground"
-              title={messageTime.full(message.created_at)}
-            >
-              <Time kind="message" value={message.created_at} title={false} />
-            </span>
+            <Tooltip>
+              <TooltipTrigger render={<span className="text-[11px] text-muted-foreground" />}>
+                <Time kind="message" value={message.created_at} title={false} />
+              </TooltipTrigger>
+              <TooltipContent side="top">{messageTime.full(message.created_at)}</TooltipContent>
+            </Tooltip>
           </div>
           <div
             ref={messageBodyRef}

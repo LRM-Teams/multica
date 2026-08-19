@@ -49,6 +49,7 @@ import { createSafeId } from "@multica/core/utils";
 import { memberListOptions } from "@multica/core/workspace/queries";
 import { Button } from "@multica/ui/components/ui/button";
 import { Textarea } from "@multica/ui/components/ui/textarea";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { useAutoScroll } from "@multica/ui/hooks/use-auto-scroll";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
@@ -1602,13 +1603,21 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
                   className="min-h-[56px] resize-none border-0 bg-transparent px-1 py-1 text-[13px] shadow-none focus-visible:ring-0"
                 />
                 <div className="mt-1.5 flex flex-col gap-1.5 px-0.5 sm:flex-row sm:items-center sm:justify-between sm:gap-2">
-                  <span
-                    data-testid="research-chat-composer-hint"
-                    className="min-w-0 text-[10px] leading-snug text-muted-foreground"
-                    title={t(($) => $.step_card.composer_hint)}
-                  >
-                    {t(($) => $.step_card.composer_hint)}
-                  </span>
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <span
+                          data-testid="research-chat-composer-hint"
+                          className="min-w-0 text-[10px] leading-snug text-muted-foreground"
+                        />
+                      }
+                    >
+                      {t(($) => $.step_card.composer_hint)}
+                    </TooltipTrigger>
+                    <TooltipContent side="top">
+                      {t(($) => $.step_card.composer_hint)}
+                    </TooltipContent>
+                  </Tooltip>
                   <div className="flex shrink-0 items-center justify-end gap-1.5">
                     {showStop ? (
                       <Button

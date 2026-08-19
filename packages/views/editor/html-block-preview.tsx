@@ -30,6 +30,7 @@ import {
   Dialog,
   DialogContent,
 } from "@multica/ui/components/ui/dialog";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { useT } from "../i18n";
 import { CodeBlockStatic } from "./code-block-static";
 import { HtmlPreviewBody } from "./html-preview-body";
@@ -68,51 +69,69 @@ export function HtmlBlockPreview({ html, className }: HtmlBlockPreviewProps) {
         className="absolute top-0 right-0 z-10 flex items-center gap-1.5 px-2 py-1.5 opacity-0 transition-opacity group-hover/code:opacity-100"
       >
         <span className="text-xs text-muted-foreground select-none">{HTML_LANGUAGE_LABEL}</span>
-        <button
-          type="button"
-          onClick={toggleView}
-          className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
-          title={
-            view === "preview"
-              ? t(($) => $.code_block.show_source)
-              : t(($) => $.code_block.show_preview)
-          }
-          aria-label={
-            view === "preview"
-              ? t(($) => $.code_block.show_source)
-              : t(($) => $.code_block.show_preview)
-          }
-        >
-          {view === "preview" ? (
-            <CodeIcon className="h-3.5 w-3.5" />
-          ) : (
-            <Eye className="h-3.5 w-3.5" />
-          )}
-        </button>
-        {view === "preview" && (
-          <button
-            type="button"
-            onClick={() => setFullscreen(true)}
-            className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
-            title={t(($) => $.code_block.fullscreen)}
-            aria-label={t(($) => $.code_block.fullscreen)}
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                onClick={toggleView}
+                className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+                aria-label={
+                  view === "preview"
+                    ? t(($) => $.code_block.show_source)
+                    : t(($) => $.code_block.show_preview)
+                }
+              />
+            }
           >
-            <Maximize2 className="h-3.5 w-3.5" />
-          </button>
+            {view === "preview" ? (
+              <CodeIcon className="h-3.5 w-3.5" />
+            ) : (
+              <Eye className="h-3.5 w-3.5" />
+            )}
+          </TooltipTrigger>
+          <TooltipContent side="top">
+            {view === "preview"
+              ? t(($) => $.code_block.show_source)
+              : t(($) => $.code_block.show_preview)}
+          </TooltipContent>
+        </Tooltip>
+        {view === "preview" && (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  onClick={() => setFullscreen(true)}
+                  className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+                  aria-label={t(($) => $.code_block.fullscreen)}
+                />
+              }
+            >
+              <Maximize2 className="h-3.5 w-3.5" />
+            </TooltipTrigger>
+            <TooltipContent side="top">{t(($) => $.code_block.fullscreen)}</TooltipContent>
+          </Tooltip>
         )}
-        <button
-          type="button"
-          onClick={handleCopy}
-          className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
-          title={t(($) => $.code_block.copy_code)}
-          aria-label={t(($) => $.code_block.copy_code)}
-        >
-          {copied ? (
-            <Check className="h-3.5 w-3.5" />
-          ) : (
-            <Copy className="h-3.5 w-3.5" />
-          )}
-        </button>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                onClick={handleCopy}
+                className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+                aria-label={t(($) => $.code_block.copy_code)}
+              />
+            }
+          >
+            {copied ? (
+              <Check className="h-3.5 w-3.5" />
+            ) : (
+              <Copy className="h-3.5 w-3.5" />
+            )}
+          </TooltipTrigger>
+          <TooltipContent side="top">{t(($) => $.code_block.copy_code)}</TooltipContent>
+        </Tooltip>
       </div>
       {view === "preview" ? (
         <HtmlPreviewBody

@@ -34,6 +34,7 @@
 import type { ReactNode } from "react";
 import { ChevronRight, Star } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { useT } from "../../i18n/use-t";
 import type { NodeCardState } from "./node-state-matrix";
 import { stateVisualFor } from "./node-state-matrix";
@@ -82,23 +83,31 @@ function ImportanceStars({ level }: { level: number }): ReactNode {
   const { t } = useT("research");
   if (level < 1) return null;
   return (
-    <span
-      className="flex items-center gap-0.5"
-      data-testid="node-importance"
-      title={t(($) => $.node_card.importance_sr, { level })}
-    >
-      <span className="sr-only">{t(($) => $.node_card.importance_sr, { level })}</span>
-      {[1, 2, 3].map((i) => (
-        <Star
-          key={i}
-          aria-hidden="true"
-          className={cn(
-            "h-3 w-3",
-            i <= level ? "fill-warning text-warning" : "text-muted-foreground/50",
-          )}
-        />
-      ))}
-    </span>
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span
+            className="flex items-center gap-0.5"
+            data-testid="node-importance"
+          />
+        }
+      >
+        <span className="sr-only">{t(($) => $.node_card.importance_sr, { level })}</span>
+        {[1, 2, 3].map((i) => (
+          <Star
+            key={i}
+            aria-hidden="true"
+            className={cn(
+              "h-3 w-3",
+              i <= level ? "fill-warning text-warning" : "text-muted-foreground/50",
+            )}
+          />
+        ))}
+      </TooltipTrigger>
+      <TooltipContent side="top">
+        {t(($) => $.node_card.importance_sr, { level })}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 

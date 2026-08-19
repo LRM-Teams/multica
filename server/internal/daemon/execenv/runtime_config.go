@@ -170,7 +170,7 @@ const (
 	startupUserProfileMaxBytes       = 2 * 1024
 	startupWorkspaceContextMaxBytes  = 2 * 1024
 	startupSkillIndexMaxBytes        = 4 * 1024
-	turnMemorySnapshotMaxBytes       = 8 * 1024
+	memorySnapshotMaxBytes           = 8 * 1024
 )
 
 // buildStartupKernelContent renders the small process-scoped contract shared
@@ -276,12 +276,10 @@ func RenderTurnContext(ctx TaskContextForEnv) string {
 		b.WriteString("\n")
 	}
 
-	if len(ctx.AgentMemories) > 0 {
-		var memories strings.Builder
-		renderPromotedMemorySnapshot(&memories, ctx.AgentMemories)
-		b.WriteString(boundedPromptText(memories.String(), turnMemorySnapshotMaxBytes, "promoted memory snapshot"))
-		b.WriteString("\n\n")
-	}
+	// Promoted memory is intentionally NOT rendered per-turn: it is loaded
+	// once into the startup kernel (first user message / session start) and
+	// stays stable for the session (Frank 2026-08-19). Per-wake facts that
+	// still belong here: initiator, delivery mode, and other dynamic cues.
 	if strings.TrimSpace(ctx.ChatSessionID) != "" && strings.TrimSpace(ctx.ChannelID) == "" {
 		b.WriteString("## Delivery\n\n")
 		b.WriteString("This turn is Standalone Agent Chat. Final assistant output is delivered to the current chat session automatically. Do not run `multica message send` for this reply.\n\n")
@@ -932,6 +930,19 @@ func renderPromotedMemorySnapshot(b *strings.Builder, memories []MemoryContextFo
 		}
 		b.WriteString("\n")
 	}
+}
+
+// RenderPromotedMemorySnapshot renders the promoted-memory block for callers
+// that load memory once into a session-stable surface (the model system
+// prompt) instead of re-injecting it into every turn's user context (Frank
+// 2026-08-19). Returns "" when no memory is selected.
+func RenderPromotedMemorySnapshot(memories []MemoryContextForEnv) string {
+	if len(memories) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	renderPromotedMemorySnapshot(&b, memories)
+	return boundedPromptText(b.String(), memorySnapshotMaxBytes, "promoted memory snapshot")
 }
 
 func truncateMemorySnapshotContent(value string, maxBytes int) string {

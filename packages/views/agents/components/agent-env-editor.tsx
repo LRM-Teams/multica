@@ -14,6 +14,7 @@ import { api } from "@multica/core/api";
 import type { Agent } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
+import { cn } from "@multica/ui/lib/utils";
 import { toast } from "sonner";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { useT } from "../../i18n";
@@ -186,6 +187,20 @@ export function EnvEditor({
     }
   };
 
+  // autoReveal fetches on mount: show a placeholder list instead of flashing
+  // the reveal-first prompt for a request the user never has to make.
+  if (revealed === null && autoReveal) {
+    return (
+      <div
+        className="flex items-center justify-center gap-2 rounded-lg border border-dashed py-10 text-xs text-muted-foreground"
+        data-testid="env-editor-loading"
+      >
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        {t(($) => $.tab_body.env.revealing)}
+      </div>
+    );
+  }
+
   // Reveal-first pre-fetch state (agent env tab). autoReveal skips this.
   if (revealed === null) {
     return (
@@ -226,6 +241,13 @@ export function EnvEditor({
     );
   }
 
+  // One shared grid template keeps the header row and every entry row on the
+  // same column edges; borderless inputs make the box read as a table.
+  const GRID =
+    "grid grid-cols-[minmax(0,11rem)_minmax(0,1fr)_auto] items-center gap-2";
+  const CELL_INPUT =
+    "h-7 rounded-md border-transparent bg-transparent px-1.5 font-mono text-xs dark:bg-transparent";
+
   const renderValueInput = (entry: EnvEntry, index: number) => {
     if (simple) {
       return (
@@ -233,23 +255,23 @@ export function EnvEditor({
           value={entry.value}
           onChange={(e) => updateEnvEntry(index, "value", e.target.value)}
           placeholder={t(($) => $.tab_body.env.value_placeholder)}
-          className="flex-1 font-mono text-xs"
+          className={CELL_INPUT}
         />
       );
     }
     return (
-      <div className="relative flex-1">
+      <div className="relative">
         <Input
           type={entry.visible ? "text" : "password"}
           value={entry.value}
           onChange={(e) => updateEnvEntry(index, "value", e.target.value)}
           placeholder={t(($) => $.tab_body.env.value_placeholder)}
-          className="pr-8 font-mono text-xs"
+          className={cn(CELL_INPUT, "pr-7")}
         />
         <button
           type="button"
           onClick={() => toggleEnvVisibility(index)}
-          className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+          className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
           aria-label={
             entry.visible
               ? t(($) => $.tab_body.env.hide_value_aria)
@@ -267,72 +289,68 @@ export function EnvEditor({
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       {!simple ? (
-        <div className="flex items-start justify-between gap-3">
-          <p className="text-xs text-muted-foreground">
-            {t(($) => $.tab_body.env.intro_prefix)}
-            <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">
-              {"ANTHROPIC_API_KEY"}
-            </code>
-            {t(($) => $.tab_body.env.intro_separator)}
-            <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">
-              {"ANTHROPIC_BASE_URL"}
-            </code>
-            {t(($) => $.tab_body.env.intro_suffix)}
-          </p>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={addEnvEntry}
-            className="shrink-0"
-          >
-            <Plus className="h-3 w-3" />
-            {t(($) => $.tab_body.common.add)}
-          </Button>
-        </div>
+        <p className="text-xs text-muted-foreground">
+          {t(($) => $.tab_body.env.intro_prefix)}
+          <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">
+            {"ANTHROPIC_API_KEY"}
+          </code>
+          {t(($) => $.tab_body.env.intro_separator)}
+          <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">
+            {"ANTHROPIC_BASE_URL"}
+          </code>
+          {t(($) => $.tab_body.env.intro_suffix)}
+        </p>
       ) : null}
 
-      {revealed.length > 0 ? (
-        <div className="space-y-2">
-          {revealed.map((entry, index) => (
-            <div key={entry.id} className="flex items-center gap-2">
-              <Input
-                value={entry.key}
-                onChange={(e) => updateEnvEntry(index, "key", e.target.value)}
-                placeholder={t(($) => $.tab_body.env.key_placeholder)}
-                className="w-[40%] font-mono text-xs"
-              />
-              {renderValueInput(entry, index)}
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                onClick={() => removeEnvEntry(index)}
-                className="text-muted-foreground hover:text-destructive"
-                aria-label={t(($) => $.tab_body.env.remove_aria)}
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </Button>
-            </div>
-          ))}
-        </div>
-      ) : (
-        <p className="text-xs italic text-muted-foreground">
-          {t(($) => $.tab_body.env.empty_editable)}
-        </p>
-      )}
-
-      {simple ? (
-        <Button type="button" variant="outline" size="sm" onClick={addEnvEntry}>
+      <div className="overflow-hidden rounded-lg border">
+        {revealed.length > 0 ? (
+          <div className="divide-y">
+            {revealed.map((entry, index) => (
+              <div key={entry.id} className={cn(GRID, "px-2 py-1")}>
+                <Input
+                  value={entry.key}
+                  onChange={(e) => updateEnvEntry(index, "key", e.target.value)}
+                  placeholder={t(($) => $.tab_body.env.key_placeholder)}
+                  className={CELL_INPUT}
+                />
+                {renderValueInput(entry, index)}
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  onClick={() => removeEnvEntry(index)}
+                  className="text-muted-foreground hover:text-destructive"
+                  aria-label={t(($) => $.tab_body.env.remove_aria)}
+                >
+                  <Trash2 />
+                </Button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="px-4 py-5 text-center text-xs text-muted-foreground">
+            {t(($) => $.tab_body.env.not_revealed_empty)}
+          </p>
+        )}
+        <button
+          type="button"
+          onClick={addEnvEntry}
+          className="flex w-full items-center justify-center gap-1 border-t bg-muted/30 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        >
           <Plus className="h-3 w-3" />
           {t(($) => $.tab_body.common.add)}
-        </Button>
-      ) : null}
+        </button>
+      </div>
 
-      <div className="flex items-center justify-end gap-3">
+      <div
+        className={cn(
+          "flex items-center justify-end gap-2",
+          simple && "-mx-4 -mb-4 rounded-b-xl border-t bg-muted/50 px-4 py-3",
+        )}
+      >
         {!simple && dirty ? (
-          <span className="text-xs text-muted-foreground">
+          <span className="mr-auto text-xs text-muted-foreground">
             {t(($) => $.tab_body.common.unsaved_changes)}
           </span>
         ) : null}

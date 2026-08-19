@@ -320,12 +320,20 @@ does not inline full source snapshots or Discussion transcripts. `full` and
 
 - `GET /api/research/v6/runs/{runId}/reports`
 - `GET /api/research/v6/runs/{runId}/reports/{reportId}`
+- `GET /api/research/v6/runs/{runId}/reports/{reportId}/compiled`
 
 List returns immutable revision metadata, lifecycle/review status, author,
 Director review, input counts, package/document hashes and publish time; it never
 inlines HTML or object keys. Detail adds exact input refs, outline, citations,
 plain-text fallback, render diagnostics and one `sandbox_url` only when the user
 may view that revision.
+
+`compiled` is the authenticated member read for the frozen HTML. It is used when
+an independent report origin is not configured. The body is `text/html` and is
+never inlined into the JSON detail. Clients must mount it as a `blob:` iframe
+with exactly `sandbox="allow-scripts"`; they must not use `srcdoc`, the API URL
+as iframe `src`, or `allow-same-origin`. Isolated `sandbox_url` still wins when
+present.
 
 Latest published is the default Goal attachment. Draft and published
 `sandbox_url` values are short-lived signed bearer capabilities. Their path

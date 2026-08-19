@@ -160,6 +160,55 @@ func (h *Handler) GetResearchV6Report(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, out)
 }
+
+func (h *Handler) GetResearchV6ReportCompiled(w http.ResponseWriter, r *http.Request) {
+	if h.Storage == nil {
+		writeError(w, 503, "compiled report unavailable")
+		return
+	}
+	workspace := h.resolveWorkspaceID(r)
+	runUUID, valid := parseUUIDOrBadRequest(w, chi.URLParam(r, "runId"), "runId")
+	if !valid {
+		return
+	}
+	reportUUID, valid := parseUUIDOrBadRequest(w, chi.URLParam(r, "reportId"), "reportId")
+	if !valid {
+		return
+	}
+	run, id := uuidToString(runUUID), uuidToString(reportUUID)
+	var key, generation, documentHash string
+	var documentSize int64
+	var scripts, styles json.RawMessage
+	err := h.DB.QueryRow(r.Context(), `SELECT document_storage_key,document_storage_generation,document_content_hash,document_byte_size,csp_script_hashes,csp_style_hashes FROM research_report WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid AND document_storage_key<>''`, workspace, run, id).Scan(&key, &generation, &documentHash, &documentSize, &scripts, &styles)
+	if err != nil || documentSize < 0 || documentSize > researchrun.V6ReportMaxCompiledBytes {
+		writeError(w, 404, "report not found")
+		return
+	}
+	var scriptList, styleList []string
+	if json.Unmarshal(scripts, &scriptList) != nil || json.Unmarshal(styles, &styleList) != nil || researchrun.ValidateV6ReportCSPHashes(scriptList, styleList) != nil {
+		writeError(w, 503, "compiled report unavailable")
+		return
+	}
+	reader, err := researchReportStorageAdapter{store: h.Storage}.ReadVerified(r.Context(), key, generation)
+	if err != nil {
+		writeError(w, 503, "compiled report unavailable")
+		return
+	}
+	defer reader.Close()
+	html, err := io.ReadAll(io.LimitReader(reader, researchrun.V6ReportMaxCompiledBytes+1))
+	if err != nil || int64(len(html)) != documentSize || len(html) > researchrun.V6ReportMaxCompiledBytes || researchrun.ArtifactContentHashFromCanonicalJSON(html) != documentHash {
+		writeError(w, 503, "compiled report unavailable")
+		return
+	}
+	csp := researchrun.V6ReportDocumentCSP(scriptList, styleList, nil)
+	for header, value := range researchrun.V6ReportCompiledAPIHeaders(csp) {
+		w.Header().Set(header, value)
+	}
+	w.Header().Set("Content-Length", strconv.Itoa(len(html)))
+	w.Header().Set("ETag", `"`+documentHash+`"`)
+	_, _ = w.Write(html)
+}
+
 func (h *Handler) ServeResearchV6ReportDocument(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("Cookie") != "" || r.Header.Get("Authorization") != "" {
 		http.Error(w, "not found", http.StatusNotFound)

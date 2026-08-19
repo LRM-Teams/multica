@@ -539,7 +539,8 @@ Goal 到 Branch Frontier 使用明确标记的 `collapsed_path` Projection edge�
 ### 17.2 展示
 
 - 点击 Goal 打开 Goal 面板；选择报告后打开接近全屏的 modal。
-- modal 内使用独立 origin 的 sandboxed iframe。
+- modal 内使用独立 origin 的 sandboxed iframe。未部署第二 HTTPS origin 时，已登录成员读取 `GET .../reports/{id}/compiled`，前端用 `blob:` + `sandbox="allow-scripts"` 展示；禁止 `srcdoc`、禁止把带 cookie 的 API URL 当 iframe `src`、禁止把 compiled HTML 塞进 JSON detail。独立 origin 配好后仍走 capability URL。
+- 没有独立 renderer 时，Director 仍可在 HTML/hash/CSP 校验通过后审到 `published`，跳过截图；有 renderer 时必须看真实渲染截图。
 - Report 可以包含动画、图表、目录和前端筛选 JavaScript。
 - 报告关闭后不得继续在后台运行高负载脚本。
 

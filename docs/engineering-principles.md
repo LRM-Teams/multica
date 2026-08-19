@@ -455,8 +455,8 @@
 - 新 Run 由用户选择唯一 Director，初始团队只有罗纳尔多；其他 Agent 全部由 Director 动态创建和管理。Research、Match、Discussion、Integration、Director 与 Report 共用一个持久 Work Item 调度面，Agent 会话不保存 canonical progress。
 - Result/Insight 按 S/M/L/XL/XXL 压缩；promotion 需要至少两个 fresh 同级输入，assimilation 不提升等级。每个输入版本最多一个 canonical successor；已吸收节点不自动恢复，跨 Branch 只能复用 successor。每个 Branch 最多一个当前 XXL，同一 XXL 可以服务多个 Branch。
 - Director 上下文每轮从持久 Research Brief 与 Control Brief 重建；终止节点只给聚合总结。Director 不可用时进入 `awaiting_director` 并通知用户，不自动换人。每个 Run active team membership 上限 50，Research token 总量不设产品上限。
-- Report 是挂在 Goal 上的不可变 HTML 交付物，不是 graph node。JavaScript 只允许在独立 origin、`sandbox="allow-scripts"`、无同源/存储/外部网络/主应用桥接的 iframe 中运行；只有 Director 可以发布。
-- 用户显式选择 V6 + Director 即可创建 V6 Run；首页默认 V6 并自动选第一个未归档 Agent。省略 `orchestrator_version` 的旧客户端仍创建 V5。`AssessV6Activation` 继续只做审计，不把省略 version 的默认值改成 V6。独立 Report origin 未配置时 HTML 报告 fail closed，不得挡住创建。回滚只关闭新建 V6，既有 V6 进入 paused/maintenance，禁止用 V5 decoder 读取或删除事实。
+- Report 是挂在 Goal 上的不可变 HTML 交付物，不是 graph node。JavaScript 只允许在 `sandbox="allow-scripts"`、无同源/存储/外部网络/主应用桥接的 iframe 中运行；只有 Director 可以发布。独立 HTTPS origin + 短期 capability 仍是首选；未配置第二域名时，已登录成员走 `GET .../reports/{id}/compiled`，前端用 `blob:` 挂载，禁止 `srcdoc`、禁止把 API URL 当 iframe `src`、禁止把 24MB HTML 塞进 JSON detail。不得为过门编造 HTTPS origin。
+- 用户显式选择 V6 + Director 即可创建 V6 Run；首页默认 V6 并自动选第一个未归档 Agent。省略 `orchestrator_version` 的旧客户端仍创建 V5。`AssessV6Activation` 继续只做审计，不把省略 version 的默认值改成 V6。独立 Report origin / renderer 未配置时不得挡住创建，也不得挡住用户阅读已编译报告或 Director 审到 published（跳过截图，仍校验 HTML/hash/CSP）。回滚只关闭新建 V6，既有 V6 进入 paused/maintenance，禁止用 V5 decoder 读取或删除事实。
 
 ## 5. 验证方法论 — `仅文档`（诚实标注：拦不住人，只能让"猜"显式化）
 

@@ -35,5 +35,9 @@ export function createResearchV6DirectorProjectionTransport(
       api.getResearchV6DirectorReports(workspaceId, runId, { signal }),
     loadReport: (workspaceId, runId, reportId, signal) =>
       api.getResearchV6DirectorReport(workspaceId, runId, reportId, { signal }),
+    loadCompiledReport: (workspaceId, runId, reportId, signal) =>
+      api.getResearchV6DirectorReportCompiled(workspaceId, runId, reportId, {
+        signal,
+      }),
   };
 }

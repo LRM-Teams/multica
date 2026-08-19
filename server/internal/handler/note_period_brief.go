@@ -20,21 +20,17 @@ import (
 )
 
 const (
-	notePeriodBriefFolderTitle      = "工作介绍"
-	notePeriodBriefSourceCollectors = "period_work_collectors"
-	// Poll while collectors run. Production waits until jobs settle (or the
-	// budget elapses) so synthesis sees real packs — not a 6s empty degrade.
+	notePeriodBriefFolderTitle         = "工作介绍"
+	notePeriodBriefSourceCollectors    = "period_work_collectors"
 	notePeriodBriefCollectorPollEvery  = 1 * time.Second
 	notePeriodBriefCollectorStubMarker = "Stub awaiting Agent pack"
 )
 
-// Overridable in tests so suite does not sleep the full production budget.
-// Production budget covers a typical collector agent turn; still degrade to
-// empty packs if agents never finish.
-// Collectors often need several minutes of tool rounds before --note-write;
-// harvest pending proposals while the job is still running so a slow
-// note_worker_job status flip does not drop an already-written pack.
-var notePeriodBriefCollectorWaitBudget = 8 * time.Minute
+// Absolute safety ceiling for the background wait loop. Active collectors are
+// waited on until ready / failed / cancelled / empty (completed without pack).
+// Hitting this ceiling marks remaining runners as stalled — never silent empty.
+// Overridable in tests.
+var notePeriodBriefCollectorMaxWait = 2 * time.Hour
 
 // When true (production default), CreateNotePeriodBrief returns after dispatching
 // collectors and finishes synthesis in a background goroutine. Waiting inline
@@ -44,23 +40,36 @@ var notePeriodBriefFinishInBackground = true
 
 // Stable English instruction locked to the period_brief playbook (J3-T1 / J3-T4).
 // folderPageID is the private 工作介绍/ folder — Brief lands as a child via human confirm.
-func notePeriodBriefInstruction(folderPageID, windowLabel string) string {
+// draftPageID is the Facts+packs draft; synthesizer uses it for status / retry.
+func notePeriodBriefInstruction(folderPageID, draftPageID, windowLabel string) string {
 	folder := strings.TrimSpace(folderPageID)
+	draft := strings.TrimSpace(draftPageID)
 	label := strings.TrimSpace(windowLabel)
 	if label == "" {
 		label = "period"
 	}
-	return "Write a Period Work Brief for a manager or colleague — a reporting narrative, not a collaboration wrap-up and not slide deck copy.\n" +
-		"1) Open with one clear claim about the period.\n" +
-		"2) Give 3–7 main threads; each thread has at most 3 bullets and should cite Issue/PR/repo-path evidence when available.\n" +
-		"3) Call out delegated leverage (what agents or teammates carried).\n" +
-		"4) State what remains unfinished.\n" +
-		"5) Put unscoped machine work from collector packs (本机未归类) in its own section — never mix it into the team narrative.\n" +
-		"6) Prefer each pack's Integrated summary and Mermaid diagrams when present; still ground claims in Highlights/Facts — do not invent.\n" +
-		"7) Do not list raw commits; do not invent claims without evidence in Facts or collector packs.\n" +
-		"8) Deliver the Brief with `multica message send --target <Message target for chat transport> --note-write --note-page-id " + folder +
+	retryHint := ""
+	if draft != "" {
+		retryHint = "\n10) Collector status board: each pack has status + retryable. " +
+			"Permanent failures (missing API key / model config / auth / quota / blocked) → abandon that collector; do not retry. " +
+			"Transient failures (runtime offline, network, capacity, empty pack, stalled) → retry with the narrow CLI below, at most " +
+			fmt.Sprintf("%d", notePeriodBriefCollectorMaxRetries) + " retries per collector. " +
+			"After retry, wait for the platform re-wake — do not invent OS work.\n" +
+			formatPeriodBriefRetryHint(draft)
+	}
+	return "Write a Period Work Brief a manager can read in a few minutes — a reporting narrative, not a pack dump, not a standup wrap-up, not slide-deck copy. Follow skill `multica-period-work-brief` for grouping, titles, and diagrams.\n" +
+		"1) Open with one clear claim about what mattered in the period.\n" +
+		"2) Give 3–7 top-level threads grouped by initiative/outcome — the same work from several packs or Highlights is ONE thread with nested sub-points, never sibling threads.\n" +
+		"3) Each thread: a human title + 1–2 sentence claim + 2–5 nested bullets (decisions, impact, remaining risk). Skip trivia; do not starve a thread that packs treat as substantial. Cite Issue/PR when available.\n" +
+		"4) Thread titles are reporting language (what changed / why it matters). Never use a filesystem path, repo folder, or package directory (`packages/…`, `/home/…`, a branch name alone) as a heading. Paths may appear only inside a bullet as evidence.\n" +
+		"5) If a ready collector pack has a Mermaid diagram that explains a main thread, copy that mermaid fence into that thread. Do not drop diagrams; if packs overlap, keep the clearest one. You may tighten labels, not invent topology.\n" +
+		"6) Call out delegated leverage (what agents or teammates carried).\n" +
+		"7) State what remains unfinished.\n" +
+		"8) Put unscoped machine work (本机未归类) in its own section — never mix it into 主线. Do not list raw commits or Runtime/Repos dumps as the body.\n" +
+		"9) Deliver the Brief with `multica message send --target <Message target for chat transport> --note-write --note-page-id " + folder +
 		"`. The body must be only the Brief markdown. Title it like `工作介绍 " + label +
-		"`. The human confirms 「新建子笔记」 under 工作介绍/ — never treat the draft Facts page as the finished Brief, and never pass the draft page id to --note-page-id."
+		"`. The human confirms 「新建子笔记」 under 工作介绍/ — never treat the draft Facts page as the finished Brief, and never pass the draft page id to --note-page-id." +
+		retryHint
 }
 
 // notePeriodBriefCollectorInstruction tells a runtime Agent to gather OS work
@@ -141,10 +150,11 @@ type createNotePeriodBriefResponse struct {
 }
 
 // CreateNotePeriodBrief gathers platform Facts, dispatches collector Agents to
-// gather OS work packs, waits for packs (timeout → empty degrade), then wakes
-// the synthesizer with Facts + collector packs. No Host Digest. No model runs
-// here. In production the wait+synthesis runs in the background so the HTTP
-// response is not killed by reverse-proxy timeouts.
+// gather OS work packs, waits until collectors settle (status-driven; stalled
+// only at an absolute safety ceiling), then wakes the synthesizer with Facts +
+// a collector status board. No Host Digest. No model runs here. In production
+// the wait+synthesis runs in the background so the HTTP response is not killed
+// by reverse-proxy timeouts.
 func (h *Handler) CreateNotePeriodBrief(w http.ResponseWriter, r *http.Request) {
 	workspaceID, userID, userIDString, ok := h.notesWorkspaceAndUser(w, r)
 	if !ok {
@@ -261,6 +271,8 @@ RETURNING id, workspace_id, parent_id, owner_user_id, title, content, sort_key, 
 			CollectorAgentIDs: collectorIDs,
 			CollectorJobs:     collectorJobs,
 		})
+		refs := collectorRefsFromJobs(collectorJobs, window.Label, windowStart, windowEnd)
+		_ = h.insertNotePeriodBriefRun(r.Context(), workspaceID, userID, page.ID, folderID, agentID, window, channelID, factsText, used, empty, skipped, refs)
 		bg := context.WithoutCancel(r.Context())
 		go h.finishNotePeriodBriefAfterCollectors(bg, workspaceID, userID, userIDString, agentID, folderID, page, window, channelID, factsText, collectorJobs, used, empty, skipped)
 		return
@@ -272,6 +284,12 @@ RETURNING id, workspace_id, parent_id, owner_user_id, title, content, sort_key, 
 	)
 	if !ok {
 		return
+	}
+	refs := collectorRefsFromJobs(collectorJobs, window.Label, windowStart, windowEnd)
+	if err := h.insertNotePeriodBriefRun(r.Context(), workspaceID, userID, page.ID, folderID, agentID, window, channelID, factsText, used, empty, skipped, refs); err == nil {
+		if run, loadErr := h.loadNotePeriodBriefRunByDraft(r.Context(), workspaceID, page.ID); loadErr == nil {
+			_ = h.updateNotePeriodBriefRunCollectors(r.Context(), run.ID, refs, "synthesizing")
+		}
 	}
 	writeJSON(w, http.StatusCreated, createNotePeriodBriefResponse{
 		Page:              notePageToResponse(page, userID, []string{}, nil),
@@ -297,10 +315,18 @@ func (h *Handler) finishNotePeriodBriefAfterCollectors(
 	collectorJobs []NoteWorkerJobResponse,
 	used, empty, skipped []string,
 ) {
-	ctx, cancel := context.WithTimeout(ctx, notePeriodBriefCollectorWaitBudget+time.Minute)
+	// Wait until collectors settle; absolute ceiling only marks stalled.
+	ctx, cancel := context.WithTimeout(ctx, notePeriodBriefCollectorMaxWait+time.Minute)
 	defer cancel()
 
 	packResults := h.awaitPeriodBriefCollectorPacks(ctx, workspaceID, userID, collectorJobs)
+	if run, err := h.loadNotePeriodBriefRunByDraft(ctx, workspaceID, draft.ID); err == nil {
+		for i := range packResults {
+			if ref, _, ok := findCollectorRef(run.Collectors, packResults[i].AgentID); ok {
+				packResults[i].RetryCount = ref.RetryCount
+			}
+		}
+	}
 	packsText := formatNotePeriodBriefPacks(packResults)
 	packsReady := 0
 	for _, pack := range packResults {
@@ -324,6 +350,10 @@ UPDATE note_page SET content = $1, updated_at = now(), updated_by = $2 WHERE id 
 		content, userID, draft.ID, workspaceID)
 	draft.Content = content
 
+	if run, err := h.loadNotePeriodBriefRunByDraft(ctx, workspaceID, draft.ID); err == nil {
+		_ = h.updateNotePeriodBriefRunCollectors(ctx, run.ID, run.Collectors, "synthesizing")
+	}
+
 	agent, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: agentID, WorkspaceID: workspaceID})
 	if err != nil || agent.ArchivedAt.Valid {
 		return
@@ -331,6 +361,9 @@ UPDATE note_page SET content = $1, updated_at = now(), updated_by = $2 WHERE id 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/api/notes/period-briefs", nil)
 	_, _ = h.dispatchNotePeriodBriefWorker(rec, req, workspaceID, userID, userIDString, folderID, draft, agent, window.Label, channelID, factsText, packsText)
+	if run, err := h.loadNotePeriodBriefRunByDraft(ctx, workspaceID, draft.ID); err == nil {
+		_ = h.updateNotePeriodBriefRunCollectors(ctx, run.ID, run.Collectors, "done")
+	}
 }
 
 func filterNoteRetrospectiveSource(list []string, drop string) []string {
@@ -551,7 +584,7 @@ VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7)`,
 		buildNotePeriodBriefCollectorPrompt(
 			instruction, packPageID, windowLabel, windowStart, windowEnd, packPage.Title, packPage.Content,
 		),
-		h.agentMessageTargetForPrompt(r.Context(), ch, msg),
+		h.agentMessageThreadTargetForPrompt(r.Context(), ch, msg),
 	)
 	task, err := h.enqueueChannelAgentPrompt(
 		r.Context(), ch, agent, msg, userID, workerPrompt,
@@ -570,8 +603,7 @@ VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7)`,
 		writeError(w, http.StatusInternalServerError, "failed to attach collector note brief")
 		return NoteWorkerJobResponse{}, false
 	}
-	if _, err := h.DB.Exec(r.Context(), `
-UPDATE agent_inbox_event SET context = $1::jsonb WHERE id = $2`, mergedContext, task.ID); err != nil {
+	if err := h.persistPeriodBriefNoteBriefContext(r.Context(), task.ID, mergedContext); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to persist collector note brief")
 		return NoteWorkerJobResponse{}, false
 	}
@@ -606,7 +638,7 @@ func (h *Handler) dispatchNotePeriodBriefWorker(
 	}
 
 	folderPageID := uuidToString(folderID)
-	instruction := notePeriodBriefInstruction(folderPageID, windowLabel)
+	instruction := notePeriodBriefInstruction(folderPageID, uuidToString(page.ID), windowLabel)
 
 	jobID := uuid.New()
 	jobUUID := parseUUID(jobID.String())
@@ -648,7 +680,7 @@ VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7)`,
 
 	workerPrompt := wrapNoteWorkerChannelWakePrompt(
 		buildNotePeriodBriefPrompt(instruction, uuidToString(page.ID), folderPageID, windowLabel, page.Title, page.Content, factsText, packsText),
-		h.agentMessageTargetForPrompt(r.Context(), ch, msg),
+		h.agentMessageThreadTargetForPrompt(r.Context(), ch, msg),
 	)
 	task, err := h.enqueueChannelAgentPrompt(
 		r.Context(), ch, agent, msg, userID, workerPrompt,
@@ -667,8 +699,7 @@ VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7)`,
 		writeError(w, http.StatusInternalServerError, "failed to attach note brief")
 		return NoteWorkerJobResponse{}, false
 	}
-	if _, err := h.DB.Exec(r.Context(), `
-UPDATE agent_inbox_event SET context = $1::jsonb WHERE id = $2`, mergedContext, task.ID); err != nil {
+	if err := h.persistPeriodBriefNoteBriefContext(r.Context(), task.ID, mergedContext); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to persist note brief")
 		return NoteWorkerJobResponse{}, false
 	}
@@ -763,21 +794,22 @@ func formatNotePeriodBriefFacts(facts noteRetrospectiveFacts) string {
 }
 
 type notePeriodBriefPackResult struct {
-	AgentID string
-	PageID  string
-	Title   string
-	Content string
-	Status  string // ready | empty | failed
+	AgentID     string
+	PageID      string
+	Title       string
+	Content     string
+	Status      string // ready | empty | failed | cancelled | stalled | running
+	Retryable   bool
+	AbandonWhy  string
+	Detail      string
+	FailureKind string
+	RetryCount  int
 }
 
-// awaitPeriodBriefCollectorPacks waits until each collector pack is ready /
-// failed, or the wait budget elapses. Ready packs come from:
-//  1. the note page after human-accepted --note-write, or
-//  2. the latest pending note_write proposal targeting that pack page —
-//     harvested as soon as the message exists, even while the Note Worker
-//     job is still "running" (task completion and job projection can lag
-//     the agent's --note-write by minutes).
-// Timeouts still degrade to empty; they never fail the whole request.
+// awaitPeriodBriefCollectorPacks waits until each collector settles (ready /
+// failed / cancelled / empty). Ready packs come from the note page or a
+// pending --note-write targeting that pack. Hitting notePeriodBriefCollectorMaxWait
+// marks still-running collectors as stalled — never silent empty.
 func (h *Handler) awaitPeriodBriefCollectorPacks(
 	ctx context.Context,
 	workspaceID, userID pgtype.UUID,
@@ -788,17 +820,18 @@ func (h *Handler) awaitPeriodBriefCollectorPacks(
 		out[i] = notePeriodBriefPackResult{
 			AgentID: job.AgentID,
 			PageID:  job.PageID,
-			Status:  "empty",
+			Status:  "running",
 		}
 	}
 	if len(jobs) == 0 {
 		return out
 	}
-	deadline := time.Now().Add(notePeriodBriefCollectorWaitBudget)
+	deadline := time.Now().Add(notePeriodBriefCollectorMaxWait)
 	for {
+		pastCeiling := time.Now().After(deadline)
 		allSettled := true
 		for i, job := range jobs {
-			if out[i].Status == "ready" || out[i].Status == "failed" {
+			if isPeriodBriefPackSettled(out[i].Status) {
 				continue
 			}
 			page, err := scanNotePage(h.DB.QueryRow(ctx, `
@@ -823,45 +856,87 @@ FROM note_page WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL`,
 			} else if job.ChannelID != nil {
 				channelID = *job.ChannelID
 			}
+			failReason := ""
+			if projected.FailureReason != nil {
+				failReason = strings.TrimSpace(*projected.FailureReason)
+			}
 			stub := strings.Contains(page.Content, notePeriodBriefCollectorStubMarker)
-			switch {
-			case !stub && strings.TrimSpace(page.Content) != "":
-				out[i].Status = "ready"
-			case status == "failed" || status == "cancelled":
-				out[i].Status = "failed"
-			default:
-				// Prefer pending --note-write over waiting for job "completed".
-				// Agents often emit the proposal before the inbox task / job
-				// row flips terminal; skipping harvest here caused empty packs
-				// when the wait budget expired with status still "running".
-				if proposal := h.loadCollectorPackNoteWriteProposal(ctx, channelID, job.PageID); proposal != "" {
-					out[i].Content = proposal
-					out[i].Status = "ready"
-					break
-				}
-				if status == "completed" {
-					if stub || strings.TrimSpace(page.Content) == "" {
-						out[i].Status = "empty"
-					} else {
-						out[i].Status = "ready"
-					}
-					break
-				}
+			packReady := false
+			if !stub && strings.TrimSpace(page.Content) != "" {
+				packReady = true
+			} else if proposal := h.loadCollectorPackNoteWriteProposal(ctx, channelID, job.PageID); proposal != "" {
+				out[i].Content = proposal
+				packReady = true
+			}
+
+			timedOut := pastCeiling && !packReady &&
+				(status == "" || status == "pending" || status == "dispatched" || status == "running")
+			d := classifyPeriodBriefCollectorOutcome(status, failReason, failReason, packReady, timedOut)
+			out[i].Status = d.Status
+			out[i].Retryable = d.Retryable
+			out[i].AbandonWhy = d.AbandonWhy
+			out[i].Detail = d.Detail
+			out[i].FailureKind = d.FailureKind
+			if !isPeriodBriefPackSettled(out[i].Status) {
 				allSettled = false
 			}
 		}
-		if allSettled || time.Now().After(deadline) {
+		if allSettled || pastCeiling {
+			// Final pass: anything still running after the ceiling → stalled.
+			if pastCeiling {
+				for i := range out {
+					if out[i].Status == "running" || out[i].Status == "pending" {
+						d := classifyPeriodBriefCollectorOutcome("running", out[i].Detail, out[i].Detail, false, true)
+						out[i].Status = d.Status
+						out[i].Retryable = d.Retryable
+						out[i].AbandonWhy = d.AbandonWhy
+						out[i].Detail = d.Detail
+						out[i].FailureKind = d.FailureKind
+					}
+				}
+			}
 			break
 		}
 		timer := time.NewTimer(notePeriodBriefCollectorPollEvery)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
+			for i := range out {
+				if !isPeriodBriefPackSettled(out[i].Status) {
+					d := classifyPeriodBriefCollectorOutcome("running", out[i].Detail, "wait cancelled", false, true)
+					out[i].Status = d.Status
+					out[i].Retryable = d.Retryable
+					out[i].AbandonWhy = d.AbandonWhy
+					out[i].Detail = d.Detail
+					out[i].FailureKind = d.FailureKind
+				}
+			}
 			return out
 		case <-timer.C:
 		}
 	}
 	return out
+}
+
+// persistPeriodBriefNoteBriefContext writes the Note Worker brief onto the
+// inbox event and marks the wake force_fresh_session. Period Brief collect /
+// synth / retry are one-shot prompts — they must not resume a poisoned Pi
+// conversation from a prior turn (input[n].status 400).
+func (h *Handler) persistPeriodBriefNoteBriefContext(ctx context.Context, taskID pgtype.UUID, mergedContext []byte) error {
+	_, err := h.DB.Exec(ctx, `
+UPDATE agent_inbox_event
+SET context = $1::jsonb, force_fresh_session = true, updated_at = now()
+WHERE id = $2`, mergedContext, taskID)
+	return err
+}
+
+func isPeriodBriefPackSettled(status string) bool {
+	switch status {
+	case "ready", "empty", "failed", "cancelled", "stalled":
+		return true
+	default:
+		return false
+	}
 }
 
 // loadCollectorPackNoteWriteProposal returns the latest agent message body that
@@ -900,6 +975,9 @@ LIMIT 1`, parseUUID(channelID), packPageID, notePeriodBriefCollectorStubMarker).
 func formatNotePeriodBriefPacks(packs []notePeriodBriefPackResult) string {
 	var b strings.Builder
 	b.WriteString("## Collector packs\n")
+	b.WriteString("Platform waited until each collector settled (ready/failed/cancelled/empty/stalled).\n")
+	b.WriteString("retryable=true → you may call the narrow retry CLI (max retries enforced server-side).\n")
+	b.WriteString("retryable=false permanent → abandon that collector; do not invent its OS work.\n")
 	if len(packs) == 0 {
 		b.WriteString("status: empty\n(no collectors)\n")
 		return b.String()
@@ -908,6 +986,17 @@ func formatNotePeriodBriefPacks(packs []notePeriodBriefPackResult) string {
 		fmt.Fprintf(&b, "\n### Collector %s\n", pack.AgentID)
 		fmt.Fprintf(&b, "page_id: %s\n", pack.PageID)
 		fmt.Fprintf(&b, "status: %s\n", pack.Status)
+		fmt.Fprintf(&b, "retryable: %t\n", pack.Retryable)
+		fmt.Fprintf(&b, "retry_count: %d / max %d\n", pack.RetryCount, notePeriodBriefCollectorMaxRetries)
+		if pack.FailureKind != "" {
+			fmt.Fprintf(&b, "failure_kind: %s\n", pack.FailureKind)
+		}
+		if pack.AbandonWhy != "" {
+			fmt.Fprintf(&b, "abandon_why: %s\n", pack.AbandonWhy)
+		}
+		if pack.Detail != "" {
+			fmt.Fprintf(&b, "detail: %s\n", pack.Detail)
+		}
 		if pack.Title != "" {
 			fmt.Fprintf(&b, "title: %s\n", pack.Title)
 		}
@@ -916,11 +1005,19 @@ func formatNotePeriodBriefPacks(packs []notePeriodBriefPackResult) string {
 			b.WriteString(strings.TrimSpace(pack.Content))
 			b.WriteByte('\n')
 		case "failed":
-			b.WriteString("(collector job failed — treat as empty)\n")
-		case "pending":
-			b.WriteString("(pending — collectors still running; synthesizer will be woken when packs settle)\n")
+			if pack.Retryable {
+				b.WriteString("(failed, retryable — consider narrow retry; do not invent OS work)\n")
+			} else {
+				b.WriteString("(failed, permanent — abandon this collector; do not invent OS work)\n")
+			}
+		case "cancelled":
+			b.WriteString("(cancelled — abandon; do not invent OS work)\n")
+		case "stalled":
+			b.WriteString("(stalled past safety ceiling — retryable unless marked permanent; do not invent OS work)\n")
+		case "running", "pending":
+			b.WriteString("(still running — platform should not have woken you yet)\n")
 		default:
-			b.WriteString("(empty — pack still stub or timed out; do not invent OS work)\n")
+			b.WriteString("(empty pack — retryable; do not invent OS work)\n")
 		}
 	}
 	return b.String()

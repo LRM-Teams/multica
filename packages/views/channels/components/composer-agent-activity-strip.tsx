@@ -18,7 +18,8 @@ export type { ComposerActivityAgent };
  * Group: pass channel-member agents; live verbs sort first, idle stays hidden.
  *
  * Uses the workspace-batched Runner summary (one query + WS patch). Never
- * Working/Idle words, never command bodies, never per-agent timeline REST.
+ * Online/Working/Idle words (presence is the avatar), never command bodies,
+ * never per-agent timeline REST.
  */
 export function ComposerAgentActivityStrip({
   agentId,

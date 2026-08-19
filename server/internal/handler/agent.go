@@ -353,12 +353,16 @@ type AgentTaskResponse struct {
 	ChannelKind        string          `json:"channel_kind,omitempty"` // "dm" | "group" when ChannelID is set; personal-memory entry gate
 	// ScopedSecrets carries channel/project secrets for daemon injection after
 	// scope filtering (LRM-953). Empty until a secret store populates them.
-	ScopedSecrets  []ScopedSecretData `json:"scoped_secrets,omitempty"`
-	ProjectTitle   string             `json:"project_title,omitempty"` // for surfacing in agent context
-	CreatedAt      string             `json:"created_at"`
-	PriorSessionID string             `json:"prior_session_id,omitempty"` // session ID from a previous task on same issue
-	PriorWorkDir   string             `json:"prior_work_dir,omitempty"`   // work_dir from a previous task on same issue
-	WorkDir        string             `json:"work_dir,omitempty"`         // local working directory pinned for this task; populated once the daemon reports it
+	ScopedSecrets []ScopedSecretData `json:"scoped_secrets,omitempty"`
+	ProjectTitle  string             `json:"project_title,omitempty"` // for surfacing in agent context
+	CreatedAt     string             `json:"created_at"`
+	// ForceFreshSession is true when the server wants a one-shot provider
+	// conversation (Period Brief collect/synth/retry, manual rerun). The
+	// daemon must not resume PriorSessionID or a resident Pi session.
+	ForceFreshSession bool   `json:"force_fresh_session,omitempty"`
+	PriorSessionID    string `json:"prior_session_id,omitempty"` // session ID from a previous task on same issue
+	PriorWorkDir      string `json:"prior_work_dir,omitempty"`   // work_dir from a previous task on same issue
+	WorkDir           string `json:"work_dir,omitempty"`         // local working directory pinned for this task; populated once the daemon reports it
 	// RelativeWorkDir is a privacy-safe display form of WorkDir intended for
 	// the UI. For current tasks it strips the daemon's workspace root so the
 	// user sees `<workspaceUUID>/agents/<agentUUID>`; for legacy/external paths we strip
@@ -586,10 +590,11 @@ func taskToResponse(t db.AgentInboxEvent, workspaceID string) AgentTaskResponse 
 		// Surface task source so the UI can distinguish issue-linked tasks
 		// from chat-spawned or autopilot-spawned ones; all three may arrive
 		// with issue_id = "" once a task has no linked issue.
-		ChannelID:      uuidToString(t.ChannelID),
-		ChatSessionID:  uuidToString(t.ChatSessionID),
-		AutopilotRunID: uuidToString(t.AutopilotRunID),
-		Kind:           computeTaskKind(t),
+		ChannelID:         uuidToString(t.ChannelID),
+		ChatSessionID:     uuidToString(t.ChatSessionID),
+		AutopilotRunID:    uuidToString(t.AutopilotRunID),
+		Kind:              computeTaskKind(t),
+		ForceFreshSession: t.ForceFreshSession,
 	}
 	if config, ok := service.TaskExecutionConfigFromContext(t.Context); ok {
 		resp.ExecutionConfig = &config

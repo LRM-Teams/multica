@@ -916,6 +916,9 @@ func (h *Handler) runnerActivityPresentation(ctx context.Context, workspaceID, a
 	snapshot.ObservedAt = observedAt.Time
 	summary := activityprojection.ProjectSummary(snapshot)
 	if h.liveRunnerOwnsActivitySnapshot(daemonID, util.UUIDToString(workspaceID), snapshot) {
+		if h.agentHasInFlightInboxTask(ctx, workspaceID, agentID) {
+			summary = overlayInFlightInboxOnIdleRunnerSummary(summary)
+		}
 		response.Summary = &summary
 	}
 
@@ -972,6 +975,55 @@ func runnerActivitySummaryWithError(summary activityprojection.Summary, errorTex
 		summary.Label = "Error: " + truncateRunnerActivitySummary(errorText, 240)
 	}
 	return summary
+}
+
+// overlayInFlightInboxOnIdleRunnerSummary keeps compact Activity from saying
+// Online/Idle/Working while an inbox task (e.g. Period Work collector) is still
+// draining. Presence stays on the avatar; the composer strip needs a live verb.
+func overlayInFlightInboxOnIdleRunnerSummary(summary activityprojection.Summary) activityprojection.Summary {
+	base := strings.TrimRight(strings.TrimSpace(summary.Label), ".…")
+	switch base {
+	case "Online", "Idle", "Working":
+		return activityprojection.Summary{Label: "Thinking...", Tone: "info", Visibility: "visible"}
+	default:
+		return summary
+	}
+}
+
+func (h *Handler) agentHasInFlightInboxTask(ctx context.Context, workspaceID, agentID pgtype.UUID) bool {
+	if h == nil || h.DB == nil {
+		return false
+	}
+	var found bool
+	err := h.DB.QueryRow(ctx, `
+SELECT EXISTS (
+  SELECT 1 FROM agent_inbox_event
+  WHERE workspace_id = $1 AND agent_id = $2 AND status IN ('pending', 'draining')
+)`, workspaceID, agentID).Scan(&found)
+	return err == nil && found
+}
+
+func (h *Handler) workspaceInFlightInboxAgentIDs(ctx context.Context, workspaceID pgtype.UUID) map[string]struct{} {
+	out := map[string]struct{}{}
+	if h == nil || h.DB == nil {
+		return out
+	}
+	rows, err := h.DB.Query(ctx, `
+SELECT DISTINCT agent_id
+FROM agent_inbox_event
+WHERE workspace_id = $1 AND status IN ('pending', 'draining')`, workspaceID)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return out
+		}
+		out[util.UUIDToString(id)] = struct{}{}
+	}
+	return out
 }
 
 func truncateRunnerActivitySummary(value string, maxRunes int) string {

@@ -1433,6 +1433,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Get("/issues/search", h.SearchAgentIssues)
 				r.Get("/issues/{id}", h.GetAgentIssue)
 				r.Get("/notes/pages/{id}", h.GetAgentNotePage)
+				r.Post("/notes/period-briefs/{draftPageId}/retry-collectors", h.RetryAgentNotePeriodBriefCollectors)
 				r.Post("/issues", h.CreateAgentIssue)
 				r.Post("/issues/{id}/decompose", h.DecomposeAgentIssue)
 				r.Put("/issues/{id}", h.UpdateAgentIssue)

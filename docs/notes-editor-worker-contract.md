@@ -58,7 +58,7 @@ S2-C3 established the typed contract and misuse rejection. **S2-C1** wires dispa
 
 Dispatch additionally prefixes `wrapNoteWorkerChannelWakePrompt` (channel output contract, directed-reply instruction, and `Message target for chat transport`) so the agent has the same send target as a mention wake.
 
-**Untrusted escaping:** every `<` / `>` in title/body becomes `‹` / `›` so note content cannot close partitions or inject fake tags. Instruction text additionally replaces a literal `</instruction>` with `‹/instruction›` so it cannot truncate its own partition.
+**Untrusted escaping:** tag-shaped `<…>` / `</…>` spans in title/body/facts/packs become `‹…›` / `‹/…›` so note content cannot close partitions or inject fake tags. Plain `>` (Mermaid `-->`, comparisons) is preserved. Instruction text additionally replaces a literal `</instruction>` with `‹/instruction›` so it cannot truncate its own partition.
 
 Code: `server/internal/handler/note_worker_prompt.go`. Tests lock tag strings and breakout cases.
 

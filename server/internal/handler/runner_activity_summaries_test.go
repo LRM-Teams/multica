@@ -239,3 +239,75 @@ func TestListRunnerActivitySummariesEnforcesWorkspaceAndPrincipalBoundaries(t *t
 		}
 	})
 }
+
+func TestListRunnerActivitySummariesOverlaysInFlightInboxOnOnline(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	agentID := createHandlerTestAgent(t, "runner-summary-collecting-"+uuid.NewString()[:8], nil)
+	h := *testHandler
+	h.RunnerPresenceSource = fakeRunnerPresenceSource{current: map[string]bool{
+		"daemon-summary/" + testWorkspaceID + "/instance-summary": true,
+	}}
+	ctx := context.Background()
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO agent_activity_snapshot (
+			workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id,
+			launch_id, client_sequence, producer_fact_id, activity_kind,
+			detail_kind, observed_at
+		) VALUES ($1, $2, $3, 'daemon-summary', 'instance-summary',
+			'launch-summary', 1, $4, 'online', 'idle', now())`,
+		testWorkspaceID, agentID, handlerTestRuntimeID(t), "summary-online-"+uuid.NewString()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO agent_inbox_event (
+			workspace_id, agent_id, runtime_id, status, priority, reason, requires_wake
+		) VALUES ($1, $2, $3, 'draining', 0, 'note_worker', true)`,
+		testWorkspaceID, agentID, handlerTestRuntimeID(t)); err != nil {
+		t.Fatal(err)
+	}
+
+	req := newRequestAs(testUserID, http.MethodGet, "/api/agents/runner-activity-summaries", nil)
+	req.Header.Set("X-Workspace-ID", testWorkspaceID)
+	rec := httptest.NewRecorder()
+	h.ListRunnerActivitySummaries(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s want 200", rec.Code, rec.Body.String())
+	}
+	var summaries RunnerActivitySummariesResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &summaries); err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, item := range summaries.Items {
+		if item.AgentID != agentID {
+			continue
+		}
+		found = true
+		if item.Summary.Label != "Thinking..." {
+			t.Fatalf("collecting agent summary=%q, want Thinking... not Online", item.Summary.Label)
+		}
+	}
+	if !found {
+		t.Fatal("missing summary for collecting agent")
+	}
+
+	detailReq := newRequestAs(testUserID, http.MethodGet, "/api/agents/"+agentID+"/runner-activity", nil)
+	detailReq.Header.Set("X-Workspace-ID", testWorkspaceID)
+	detailReq = withURLParam(detailReq, "id", agentID)
+	detailRec := httptest.NewRecorder()
+	h.GetRunnerActivity(detailRec, detailReq)
+	if detailRec.Code != http.StatusOK {
+		t.Fatalf("detail status=%d body=%s", detailRec.Code, detailRec.Body.String())
+	}
+	var detail RunnerActivityResponse
+	if err := json.Unmarshal(detailRec.Body.Bytes(), &detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail.Summary == nil || detail.Summary.Label != "Thinking..." {
+		t.Fatalf("detail summary=%+v, want Thinking...", detail.Summary)
+	}
+}
+

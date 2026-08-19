@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -53,7 +54,9 @@ func TestEnsurePeriodBriefAgent_IdempotentCreateAndResolve(t *testing.T) {
 	if created.Agent.Instructions == "" {
 		t.Fatal("expected template instructions")
 	}
-	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, created.Agent.ID) })
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, created.Agent.ID)
+	})
 
 	again := call(map[string]string{"runtime_id": testRuntimeID, "model": "other-model"})
 	if again.Code != http.StatusOK {
@@ -81,5 +84,76 @@ func TestAgentTemplatesIncludeWeeklyReport(t *testing.T) {
 	}
 	if tmpl.Name == "" || tmpl.Instructions == "" {
 		t.Fatalf("weekly-report template incomplete: %+v", tmpl)
+	}
+	for _, want := range []string{
+		"filesystem path",
+		"Mermaid",
+		"nested sub-points",
+		"multica-period-work-brief",
+		periodBriefInstructionsCapabilityMarker,
+	} {
+		if !strings.Contains(tmpl.Instructions, want) {
+			t.Fatalf("weekly-report instructions missing %q", want)
+		}
+	}
+}
+
+func TestEnsurePeriodBriefAgent_RefreshesStaleInstructions(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	_ = ensureSystemGeneralForTest(t)
+
+	_, _ = testPool.Exec(ctx, `DELETE FROM agent WHERE workspace_id = $1 AND name = $2`, testWorkspaceID, periodBriefAgentName)
+
+	rec := httptest.NewRecorder()
+	req := newRequestAs(testUserID, http.MethodPost, "/api/agents/period-brief", map[string]string{
+		"runtime_id": testRuntimeID,
+		"model":      "period-brief-model",
+	})
+	req.Header.Set("X-Workspace-ID", testWorkspaceID)
+	testHandler.EnsurePeriodBriefAgent(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var created EnsurePeriodBriefAgentResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, created.Agent.ID)
+	})
+
+	stale := "You are the Workspace Period Brief Agent. Give ≤3 evidence bullets per thread. Mermaid is optional."
+	if strings.Contains(stale, periodBriefInstructionsCapabilityMarker) {
+		t.Fatal("stale fixture unexpectedly contains capability marker")
+	}
+	if _, err := testPool.Exec(ctx, `UPDATE agent SET instructions = $1 WHERE id = $2`, stale, created.Agent.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	again := httptest.NewRecorder()
+	req2 := newRequestAs(testUserID, http.MethodPost, "/api/agents/period-brief", map[string]string{
+		"runtime_id": testRuntimeID,
+		"model":      "other-model",
+	})
+	req2.Header.Set("X-Workspace-ID", testWorkspaceID)
+	testHandler.EnsurePeriodBriefAgent(again, req2)
+	if again.Code != http.StatusOK {
+		t.Fatalf("ensure=%d body=%s", again.Code, again.Body.String())
+	}
+	var existing EnsurePeriodBriefAgentResponse
+	if err := json.Unmarshal(again.Body.Bytes(), &existing); err != nil {
+		t.Fatal(err)
+	}
+	if existing.Created {
+		t.Fatal("expected created=false")
+	}
+	if !strings.Contains(existing.Agent.Instructions, periodBriefInstructionsCapabilityMarker) {
+		t.Fatalf("stale instructions were not refreshed:\n%s", existing.Agent.Instructions)
+	}
+	if strings.Contains(existing.Agent.Instructions, "≤3 evidence bullets") {
+		t.Fatal("old 3-bullet flattening contract must not remain after refresh")
 	}
 }

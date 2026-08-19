@@ -1203,13 +1203,9 @@ func trySendPiRPCCompletion(ch chan<- piRPCCompletion, completion piRPCCompletio
 func buildPiRPCArgs(sessionID string, opts ExecOptions, logger *slog.Logger) []string {
 	args := appendPiSessionArgs([]string{"--mode", "rpc"}, sessionID, opts.Cwd)
 	if opts.Model != "" {
-		provider, model := splitPiModel(opts.Model)
-		if provider != "" {
-			args = append(args, "--provider", provider)
-		}
-		if model != "" {
-			args = append(args, "--model", model)
-		}
+		// Preserve provider-prefixed model IDs so Pi can hand them through to
+		// provider-aware model routers unchanged.
+		args = append(args, "--model", opts.Model)
 	}
 	if opts.ThinkingLevel != "" {
 		args = append(args, "--thinking", opts.ThinkingLevel)

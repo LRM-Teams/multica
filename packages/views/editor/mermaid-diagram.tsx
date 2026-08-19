@@ -62,6 +62,22 @@ function getMermaid(): Promise<MermaidAPI> {
   return mermaidPromise;
 }
 
+/**
+ * Repair Worker-prompt lookalike arrows (‹ ›) that break Mermaid parse.
+ * Period Brief used to escape every ">" in collector packs, rewriting `-->`
+ * into `--›`; agents then copied the broken arrows into notes.
+ */
+export function normalizeMermaidChart(chart: string): string {
+  return chart
+    .replaceAll("‹--›", "<-->")
+    .replaceAll("--›", "-->")
+    .replaceAll("==›", "==>")
+    .replaceAll("-.-›", "-.->")
+    .replaceAll("~~~›", "~~~>")
+    .replaceAll("‹--", "<--")
+    .replaceAll("‹==", "<==");
+}
+
 function toLegacyColor(color: string, fallback: string, ownerDocument: Document): string {
   const canvas = ownerDocument.createElement("canvas");
   canvas.width = 1;
@@ -297,7 +313,8 @@ export function MermaidDiagram({
           theme: "base",
           themeVariables: getMermaidThemeVariables(containerRef.current),
         });
-        const { svg: renderedSvg } = await mermaid.render(diagramId, chart);
+        const normalizedChart = normalizeMermaidChart(chart);
+        const { svg: renderedSvg } = await mermaid.render(diagramId, normalizedChart);
         if (!cancelled) {
           const measured = getMermaidLayout(renderedSvg);
           setLayout(measured);

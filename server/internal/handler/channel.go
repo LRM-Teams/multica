@@ -6730,6 +6730,21 @@ func (h *Handler) agentMessageTargetForPrompt(ctx context.Context, ch ChannelRes
 	}
 }
 
+// agentMessageThreadTargetForPrompt appends the visible thread root for a
+// worker reply so the response lands back on the originating thread rather than
+// the DM mainline.
+func (h *Handler) agentMessageThreadTargetForPrompt(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse) string {
+	target := h.agentMessageTargetForPrompt(ctx, ch, trigger)
+	if target == "" {
+		return ""
+	}
+	threadRootID := strings.TrimSpace(trigger.ID)
+	if threadRootID == "" {
+		return target
+	}
+	return target + ":" + threadRootID[:min(8, len(threadRootID))]
+}
+
 func (h *Handler) dmUserHandleForAgentTarget(ctx context.Context, ch ChannelResponse) string {
 	var handle string
 	err := h.DB.QueryRow(ctx, `

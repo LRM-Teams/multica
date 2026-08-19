@@ -41,13 +41,21 @@ describe("selectComposerAgentActivityRows", () => {
     expect(rows.some((row) => /Online|Idle/.test(row.label))).toBe(false);
   });
 
-  it("still allows a 1:1 Online cue so DM matches the existing strip", () => {
+  it("hides Online/Idle on 1:1 as well — presence belongs on the avatar", () => {
     const rows = selectComposerAgentActivityRows(
       [{ agentId: "agent-online", name: "OnlineBot" }],
       [item("agent-online", "Online", "success")],
     );
+    expect(rows).toEqual([]);
+  });
+
+  it("keeps a 1:1 live verb so collecting is not mistaken for idle", () => {
+    const rows = selectComposerAgentActivityRows(
+      [{ agentId: "agent-think", name: "Collector" }],
+      [item("agent-think", "Thinking...", "active")],
+    );
     expect(rows).toHaveLength(1);
-    expect(rows[0]?.label).toBe("Online");
+    expect(rows[0]?.label).toBe("Thinking...");
   });
 
   it("drops Working, hidden, and agents with no observation", () => {

@@ -224,8 +224,10 @@ describe("NoteWorkerRunDialog", () => {
     const input = screen.getByPlaceholderText(
       /Create issues from this brief/i,
     ) as HTMLTextAreaElement;
-    expect(input.value).toMatch(/main threads/i);
-    expect(input.value).toMatch(/本机未归类|unscoped local/i);
+    expect(input.value).toMatch(/nested sub-points/i);
+    expect(input.value).toMatch(/Mermaid|do not drop diagrams/i);
+    expect(input.value).toMatch(/filesystem path/i);
+    expect(input.value).toMatch(/Unscoped machine work|本机未归类/i);
     expect(input.value).toMatch(/Do not list raw commits/i);
     expect(input.value).not.toMatch(/PPT|slide deck copy for leadership/i);
     expect(screen.queryByText(/works best in a group channel/i)).toBeNull();

@@ -17,6 +17,10 @@ const (
 	periodBriefAgentName        = "weekly-report"
 	periodBriefAgentDisplayName = "周报"
 	periodBriefAgentTemplate    = "weekly-report"
+	// Detects personas that predate reporting-shape rules (grouping, path
+	// titles, required Mermaid). Ensure refreshes template instructions when
+	// missing so stale DB copy cannot fight the wake contract.
+	periodBriefInstructionsCapabilityMarker = "Do not drop diagrams"
 )
 
 // EnsurePeriodBriefAgentResponse is returned by POST /api/agents/period-brief.
@@ -55,6 +59,7 @@ func (h *Handler) EnsurePeriodBriefAgent(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "failed to list agents")
 		return
 	} else if found {
+		agent = h.refreshPeriodBriefInstructionsIfStale(r.Context(), agent)
 		resp := agentToResponse(agent)
 		redactAgentResponseForActor(&resp, "member")
 		writeJSON(w, http.StatusOK, EnsurePeriodBriefAgentResponse{Agent: resp, Created: false})
@@ -125,6 +130,7 @@ func (h *Handler) EnsurePeriodBriefAgent(w http.ResponseWriter, r *http.Request)
 		// Concurrent ensure: another caller won the UNIQUE(workspace_id, name) race.
 		if identityUniqueViolation(err, "agent_workspace_name_unique") {
 			if agent, found, findErr := h.findPeriodBriefAgent(r.Context(), wsUUID); findErr == nil && found {
+				agent = h.refreshPeriodBriefInstructionsIfStale(r.Context(), agent)
 				resp := agentToResponse(agent)
 				redactAgentResponseForActor(&resp, "member")
 				writeJSON(w, http.StatusOK, EnsurePeriodBriefAgentResponse{Agent: resp, Created: false})
@@ -160,4 +166,33 @@ func (h *Handler) findPeriodBriefAgent(ctx context.Context, workspaceID pgtype.U
 		}
 	}
 	return db.Agent{}, false, nil
+}
+
+// refreshPeriodBriefInstructionsIfStale rewrites the platform-provisioned
+// weekly-report persona from the curated template when it still teaches the
+// pre-reporting-shape contract (flat ≤3 bullets, optional Mermaid). Custom
+// synthesizers (any other Agent name) are never touched.
+func (h *Handler) refreshPeriodBriefInstructionsIfStale(ctx context.Context, agent db.Agent) db.Agent {
+	if agent.Name != periodBriefAgentName {
+		return agent
+	}
+	if strings.Contains(agent.Instructions, periodBriefInstructionsCapabilityMarker) {
+		return agent
+	}
+	tmpl, found := agentTemplates.Get(periodBriefAgentTemplate)
+	if !found || strings.TrimSpace(tmpl.Instructions) == "" {
+		return agent
+	}
+	if !strings.Contains(tmpl.Instructions, periodBriefInstructionsCapabilityMarker) {
+		return agent
+	}
+	updated, err := h.Queries.UpdateAgent(ctx, db.UpdateAgentParams{
+		ID:           agent.ID,
+		Description:  pgtype.Text{String: tmpl.Description, Valid: true},
+		Instructions: pgtype.Text{String: tmpl.Instructions, Valid: true},
+	})
+	if err != nil {
+		return agent
+	}
+	return updated
 }

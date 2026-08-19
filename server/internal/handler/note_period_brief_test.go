@@ -41,12 +41,12 @@ func TestCreateNotePeriodBriefOrchestratesCollectorsThenSynthesizerWithoutDigest
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
-	prevWait := notePeriodBriefCollectorWaitBudget
-	notePeriodBriefCollectorWaitBudget = 0
+	prevWait := notePeriodBriefCollectorMaxWait
+	notePeriodBriefCollectorMaxWait = 0
 	prevBG := notePeriodBriefFinishInBackground
 	notePeriodBriefFinishInBackground = false
 	t.Cleanup(func() {
-		notePeriodBriefCollectorWaitBudget = prevWait
+		notePeriodBriefCollectorMaxWait = prevWait
 		notePeriodBriefFinishInBackground = prevBG
 	})
 
@@ -84,7 +84,7 @@ func TestCreateNotePeriodBriefOrchestratesCollectorsThenSynthesizerWithoutDigest
 		t.Fatalf("Brief path must not use Host Digest source: used=%v empty=%v", resp.SourcesUsed, resp.SourcesEmpty)
 	}
 	if !containsNoteRetrospectiveSource(resp.SourcesEmpty, notePeriodBriefSourceCollectors) {
-		t.Fatalf("timed-out stubs should mark collectors empty: %v", resp.SourcesEmpty)
+		t.Fatalf("unsettled/stalled stubs should mark collectors empty: %v", resp.SourcesEmpty)
 	}
 	if strings.Contains(resp.Page.Content, "Machine Work Digest") || strings.Contains(resp.Page.Content, "disabled: true") {
 		t.Fatalf("draft must not include Host Digest: %s", resp.Page.Content)
@@ -122,6 +122,13 @@ SELECT context FROM agent_inbox_event WHERE id = $1`, *resp.Job.TaskID).Scan(&co
 	if folderID == "" || !strings.Contains(prompt, "--note-write --note-page-id "+folderID) {
 		t.Fatalf("wake must note-write to folder: %s", prompt)
 	}
+	assertPeriodBriefInboxForceFresh(t, *resp.Job.TaskID)
+	for _, job := range resp.CollectorJobs {
+		if job.TaskID == nil {
+			t.Fatalf("collector job missing task_id: %#v", job)
+		}
+		assertPeriodBriefInboxForceFresh(t, *job.TaskID)
+	}
 	if resp.Job.ChannelMessageID == nil {
 		t.Fatal("expected synthesizer channel_message_id")
 	}
@@ -156,12 +163,12 @@ func TestCreateNotePeriodBriefIncludesReadyCollectorPack(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
-	prevWait := notePeriodBriefCollectorWaitBudget
-	notePeriodBriefCollectorWaitBudget = 2 * time.Second
+	prevWait := notePeriodBriefCollectorMaxWait
+	notePeriodBriefCollectorMaxWait = 2 * time.Second
 	prevBG := notePeriodBriefFinishInBackground
 	notePeriodBriefFinishInBackground = false
 	t.Cleanup(func() {
-		notePeriodBriefCollectorWaitBudget = prevWait
+		notePeriodBriefCollectorMaxWait = prevWait
 		notePeriodBriefFinishInBackground = prevBG
 	})
 
@@ -257,12 +264,12 @@ func TestCreateNotePeriodBriefWaitsForCompletedCollectorNoteWriteProposal(t *tes
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
-	prevWait := notePeriodBriefCollectorWaitBudget
-	notePeriodBriefCollectorWaitBudget = 3 * time.Second
+	prevWait := notePeriodBriefCollectorMaxWait
+	notePeriodBriefCollectorMaxWait = 3 * time.Second
 	prevBG := notePeriodBriefFinishInBackground
 	notePeriodBriefFinishInBackground = false
 	t.Cleanup(func() {
-		notePeriodBriefCollectorWaitBudget = prevWait
+		notePeriodBriefCollectorMaxWait = prevWait
 		notePeriodBriefFinishInBackground = prevBG
 	})
 
@@ -365,12 +372,12 @@ func TestCreateNotePeriodBriefHarvestsNoteWriteWhileJobStillRunning(t *testing.T
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
-	prevWait := notePeriodBriefCollectorWaitBudget
-	notePeriodBriefCollectorWaitBudget = 3 * time.Second
+	prevWait := notePeriodBriefCollectorMaxWait
+	notePeriodBriefCollectorMaxWait = 3 * time.Second
 	prevBG := notePeriodBriefFinishInBackground
 	notePeriodBriefFinishInBackground = false
 	t.Cleanup(func() {
-		notePeriodBriefCollectorWaitBudget = prevWait
+		notePeriodBriefCollectorMaxWait = prevWait
 		notePeriodBriefFinishInBackground = prevBG
 	})
 
@@ -456,16 +463,134 @@ SELECT context FROM agent_inbox_event WHERE id = $1`, *resp.Job.TaskID).Scan(&co
 	}
 }
 
+// Regression: Pi/OpenAI often 400s (`input[n].status`) AFTER --note-write.
+// Harvest the proposal even when the inbox task is acked/failed.
+func TestCreateNotePeriodBriefHarvestsNoteWriteAfterFailedTask(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	prevWait := notePeriodBriefCollectorMaxWait
+	notePeriodBriefCollectorMaxWait = 3 * time.Second
+	prevBG := notePeriodBriefFinishInBackground
+	notePeriodBriefFinishInBackground = false
+	t.Cleanup(func() {
+		notePeriodBriefCollectorMaxWait = prevWait
+		notePeriodBriefFinishInBackground = prevBG
+	})
+
+	synthID := createHandlerTestAgent(t, "Period Brief Failed Harvest Synth "+uuid.NewString()[:8], nil)
+	collectorID := createPeriodBriefCollectorTestAgent(t, "Failed Harvest Collector")
+
+	packBody := "# 采集包 after failed job\n\n## Highlights\n- harvested after api_invalid_request\n"
+	day := time.Now().UTC().Format("2006-01-02")
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			var jobID, taskID, channelID, pageID string
+			err := testPool.QueryRow(context.Background(), `
+SELECT j.id::text, j.task_id::text, j.channel_id::text, j.page_id::text
+FROM note_worker_job j
+JOIN note_page p ON p.id = j.page_id
+WHERE j.agent_id = $1
+  AND p.title LIKE '采集包%'
+  AND p.content LIKE $2
+ORDER BY j.created_at DESC
+LIMIT 1`, collectorID, "%"+notePeriodBriefCollectorStubMarker+"%").Scan(&jobID, &taskID, &channelID, &pageID)
+			if err == nil && jobID != "" && channelID != "" && pageID != "" && taskID != "" {
+				parts, _ := json.Marshal([]map[string]any{{
+					"type":   "note_write",
+					"ref_id": pageID,
+					"text":   packBody,
+				}})
+				if _, insErr := testPool.Exec(context.Background(), `
+INSERT INTO channel_message (channel_id, workspace_id, author_type, author_id, author_name, content, parts, source)
+VALUES ($1::uuid, $2::uuid, 'agent', $3::uuid, 'collector', $4, $5::jsonb, 'multica')`,
+					channelID, testWorkspaceID, collectorID, packBody, string(parts)); insErr != nil {
+					t.Logf("insert failed-job note_write: %v", insErr)
+					time.Sleep(40 * time.Millisecond)
+					continue
+				}
+				if _, err := testPool.Exec(context.Background(), `
+UPDATE agent_inbox_event
+SET status = 'acked', terminal_outcome = 'failed', failure_reason = 'api_invalid_request',
+    error = $2, started_at = now(), completed_at = now(), acked_at = now()
+WHERE id = $1::uuid`, taskID, "Unknown parameter: 'input[86].status'"); err != nil {
+					t.Logf("fail collector task: %v", err)
+					time.Sleep(40 * time.Millisecond)
+					continue
+				}
+				return
+			}
+			time.Sleep(40 * time.Millisecond)
+		}
+	}()
+
+	rec := httptest.NewRecorder()
+	testHandler.CreateNotePeriodBrief(rec, newRequest(http.MethodPost, "/api/notes/period-briefs", map[string]any{
+		"window":              "day",
+		"date":                day,
+		"timezone":            "UTC",
+		"agent_id":            synthID,
+		"collector_agent_ids": []string{collectorID},
+	}))
+	close(stop)
+	<-done
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("period brief = %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp createNotePeriodBriefResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !containsNoteRetrospectiveSource(resp.SourcesUsed, notePeriodBriefSourceCollectors) {
+		t.Fatalf("failed job with note_write should mark collectors used: %v", resp.SourcesUsed)
+	}
+	if !strings.Contains(resp.Page.Content, "harvested after api_invalid_request") {
+		t.Fatalf("draft missing failed-job proposal pack: %s", resp.Page.Content)
+	}
+	var contextRaw []byte
+	if err := testPool.QueryRow(context.Background(), `
+SELECT context FROM agent_inbox_event WHERE id = $1`, *resp.Job.TaskID).Scan(&contextRaw); err != nil {
+		t.Fatalf("load wake: %v", err)
+	}
+	var wake map[string]any
+	_ = json.Unmarshal(contextRaw, &wake)
+	prompt, _ := wake["prompt"].(string)
+	if !strings.Contains(prompt, "harvested after api_invalid_request") {
+		t.Fatalf("synthesizer packs missing failed-job proposal: %s", prompt)
+	}
+	assertPeriodBriefInboxForceFresh(t, *resp.Job.TaskID)
+}
+
+func assertPeriodBriefInboxForceFresh(t *testing.T, taskID string) {
+	t.Helper()
+	var fresh bool
+	if err := testPool.QueryRow(context.Background(), `
+SELECT force_fresh_session FROM agent_inbox_event WHERE id = $1`, taskID).Scan(&fresh); err != nil {
+		t.Fatalf("load force_fresh_session for %s: %v", taskID, err)
+	}
+	if !fresh {
+		t.Fatalf("period brief inbox %s must set force_fresh_session", taskID)
+	}
+}
+
 func TestCreateNotePeriodBriefAllowsMemberWithCollectors(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
-	prevWait := notePeriodBriefCollectorWaitBudget
-	notePeriodBriefCollectorWaitBudget = 0
+	prevWait := notePeriodBriefCollectorMaxWait
+	notePeriodBriefCollectorMaxWait = 0
 	prevBG := notePeriodBriefFinishInBackground
 	notePeriodBriefFinishInBackground = false
 	t.Cleanup(func() {
-		notePeriodBriefCollectorWaitBudget = prevWait
+		notePeriodBriefCollectorMaxWait = prevWait
 		notePeriodBriefFinishInBackground = prevBG
 	})
 

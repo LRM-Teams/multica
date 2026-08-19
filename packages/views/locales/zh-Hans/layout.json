@@ -170,7 +170,7 @@
     "worker_playbook_coordinate_instruction": "把这篇笔记当作目标 brief。\n1) 为本次工作创建或复用临时协调频道（需要时用 multica channel create）。\n2) 拆成 Issue 并 assign 给合适的智能体；进度回频道。\n3) 优先用结构化 mention 与 Issue 指派，少用私下旁路。\n4) 收工时用证据链接汇总结果——不要直接改笔记正文。",
     "worker_playbook_hire_instruction": "把这篇笔记当作目标 brief。\n1) 在群频道里推进，让招聘与讨论可见。\n2) 若能力不足，@ 工作区 Onboarding 智能体（Wendy）请她发 hiring proposal——do not create agents yourself。\n3) 等 Owner/Admin 批准招聘提案后，再假设新同事已就绪。\n4) 团队齐了再通过 Issue 与频道更新继续推进笔记目标。",
     "worker_playbook_writeback_instruction": "把这篇笔记当作目标 brief。\n1) 从频道与相关 Issue/run 收集结果，附上证据链接。\n2) 起草适合 pending writeback 落回本笔记的结构化摘要。\n3) 把草稿发到频道供人审——do not edit the note body directly；由人 Accept 待审写回。",
-    "worker_playbook_period_brief_instruction": "写一份给领导/同事看的本期工作介绍——是汇报稿，不是协作收工清单，也不是幻灯片文案。\n1) 先用一句话主张概括这段时间。\n2) 写 3–7 条主线；每条最多 3 个要点，尽量带 Issue/PR/仓路径证据。\n3) 点明委派杠杆（智能体或同事扛下的部分）。\n4) 写清未完成项。\n5) 「本机未归类」单独成节，来自采集包的未归类痕迹，不要混进团队主线。\n6) 优先采用采集包里的 Integrated summary 与 Mermaid 图（若有），仍须用 Highlights/Facts 作证据。\n7) 不要罗列原始 commit；没有 Facts/采集包证据的主张不要编造。",
+    "worker_playbook_period_brief_instruction": "写一份领导几分钟能看完的本期工作介绍——是汇报稿，不是采集包粘贴，也不是目录清单。\n1) 先用一句话主张概括这段时间真正重要的事。\n2) 按事项/成果归成 3–7 条主线；同一项工作只写一条，下面用子要点展开，不要并列成好几条。\n3) 每条主线：人话标题 + 一两句主张 + 2–5 个嵌套要点（决策、影响、剩余风险）；有 Issue/PR 就引用。\n4) 标题必须是汇报语言。禁止把文件系统路径、仓库目录、包路径当作标题。\n5) 采集包里若有解释该主线的 Mermaid 图，必须拷进对应主线，不要丢掉。\n6) 点明委派杠杆（智能体或同事扛下的部分）。\n7) 写清未完成；本机未归类单独成节。\n8) 不要罗列原始 commit；没有 Facts/采集包证据的主张不要编造。",
     "worker_playbook_channel_hint": "该剧本更适合发到群频道——请在下方选择频道（仍可切回智能体对话）。",
     "collaboration_links": "协作中",
     "worker_submit": "开始",

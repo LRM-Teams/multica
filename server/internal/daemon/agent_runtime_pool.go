@@ -158,6 +158,10 @@ type canonicalAgentRuntimeAcquireRequest struct {
 	// concrete backend lifetime and runs on every create failure.
 	PrepareLaunchEnvironment func(map[string]string) (func(), error)
 	Now                      time.Time
+	// ForceFreshSession discards CanonicalSessionID and any queued
+	// nextResume pointer so this acquire cannot continue a poisoned Pi
+	// conversation. Period Brief collect/synth/retry set this on claim.
+	ForceFreshSession bool
 	// Context bounds capacity-wait when the pool is full of running agents
 	// and no idle resident can be evicted. Nil → context.Background().
 	Context context.Context
@@ -315,7 +319,12 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 		return nil, errors.New("canonical runtime provider, executable, and work_dir are required")
 	}
 	resumeSessionID := strings.TrimSpace(request.CanonicalSessionID)
-	if request.CanonicalSessionID == "" {
+	if request.ForceFreshSession {
+		// Drain a queued composer resume so it cannot leak onto the next
+		// non-fresh acquire after this one-shot wake.
+		_, _ = p.takeNextResumeSession(request.Identity.AgentID, request.Identity.RuntimeID)
+		resumeSessionID = ""
+	} else if request.CanonicalSessionID == "" {
 		if next, ok := p.takeNextResumeSession(request.Identity.AgentID, request.Identity.RuntimeID); ok {
 			resumeSessionID = next
 		}

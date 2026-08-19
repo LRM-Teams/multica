@@ -68,10 +68,9 @@ export function selectComposerAgentActivityRows(
     });
   }
 
-  // Group rosters: only currently-live verbs. A 1:1 strip keeps the same
-  // compact set as before (Online may still render for a single peer).
-  const visible =
-    agents.length > 1 ? rows.filter((row) => !isComposerPresenceOnlyLabel(row.label)) : rows;
+  // Presence words belong on the avatar, not the composer strip — including
+  // 1:1 DMs. Showing Online while a collector is mid-task reads as idle.
+  const visible = rows.filter((row) => !isComposerPresenceOnlyLabel(row.label));
 
   visible.sort((a, b) => {
     const rank = toneRank(a.tone) - toneRank(b.tone);

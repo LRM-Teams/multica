@@ -9,8 +9,9 @@ to these sources.
 | --- | --- |
 | `POST /api/notes/period-briefs` orchestrates collectors then synthesizer | `server/internal/handler/note_period_brief.go` `CreateNotePeriodBrief` |
 | Collector instruction + pack stub + `--note-write` pack page id | `server/internal/handler/note_period_brief.go` `notePeriodBriefCollectorInstruction`, `notePeriodBriefCollectorPackStub`, `dispatchNotePeriodBriefCollector` |
+| Collect / retry / synth wakes force a fresh provider session | `persistPeriodBriefNoteBriefContext` (`force_fresh_session=true`); daemon `applyForceFreshSession` |
 | Collector wake partitions (`<window>`, `<instruction>`, stub note) | `server/internal/handler/note_worker_prompt.go` `buildNotePeriodBriefCollectorPrompt` |
-| Short wait / empty degrade for packs (does not fail whole request) | `server/internal/handler/note_period_brief.go` `awaitPeriodBriefCollectorPacks` (waits up to ~8m; harvests pending `--note-write` even while job still running) |
+| Short wait / empty degrade for packs (does not fail whole request) | **Superseded:** status-driven settle + stalled ceiling; see `awaitPeriodBriefCollectorPacks` / `multica-period-work-brief` |
 | Collector may add Integrated summary + Mermaid (evidence remains required) | ADR 0019 Detail level; this skill `SKILL.md` pack shape |
 | Synthesizer must not be confused with collectors | `server/internal/agenttmpl/templates/weekly-report.json`; `notePeriodBriefInstruction` |
 | Product contract | `docs/adr/0019-runtime-agent-collectors-period-brief.md` |

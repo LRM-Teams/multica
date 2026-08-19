@@ -16,7 +16,7 @@ Do not treat “all static files” as one Next.js switch:
 | `public/**` referenced as `/foo` | Still `https://www.leagent.me/foo` | Not moved by `assetPrefix`; migrate selected assets explicitly to versioned OSS URLs | Keep, especially `sw.js`, favicons, manifests, and sources consumed by `next/image` |
 | `next/image` optimized response | `https://www.leagent.me/_next/image?...` by default | Not a build artifact and not uploadable; it is generated at runtime | Keep on Next.js unless replacing it with a custom image loader/service |
 | Application HTML, RSC/navigation responses, API, WebSocket | Main application/API origins | Do not upload to OSS | Keep behind Caddy/Next.js/backend |
-| Agent preset avatars | Existing faces under `.../agent-avatars/v1/human-01.jpg`; new pool under `.../v2/agent-01.png` | Upload once under versioned, independently managed prefixes; immutable one-year cache | Retain the old Web copies for legacy clients; do not couple persisted DB URLs to a Next build ID |
+| Agent preset avatars | Existing faces under `.../agent-avatars/v1/human-01.jpg` and `.../v2/agent-01.png`; current pool under `.../v3/agent-01.png` | Upload once under versioned, independently managed prefixes; immutable one-year cache | Keep byte-identical v3 files under `apps/web/public/agent-avatars/v3` as a self-host/test fallback; do not overwrite a published prefix |
 | Honor raster catalog | `https://cdn.leagent.me/honor-assets/v1/{users,agents}/...` and `.../honor-center-orbit.webp` | Published from the backend image before rollout; immutable one-year cache | Keep byte-identical files under `public/honor-assets/v1` only as an error fallback for self-host/test/CDN failure; normal requests use OSS |
 
 ## What Next.js officially does

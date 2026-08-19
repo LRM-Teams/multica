@@ -1,0 +1,84 @@
+# One-shot publisher for the Botlab v3 agent avatar catalog.
+# Does not deploy. Does not migrate. Delete this workflow after CDN verify.
+name: ops-publish-agent-avatars-v3
+
+on:
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: [self-hosted, aliyun]
+    timeout-minutes: 10
+    environment:
+      name: aliyun-dev
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+    steps:
+      - name: Preflight runner identity
+        run: |
+          set -euo pipefail
+          actual="$(id -un)"
+          echo "runner user=${actual} uid=$(id -u)"
+          if [ ! -r /data/multica/.env ]; then
+            echo "::error::cannot read /data/multica/.env as ${actual}"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+
+      - name: Publish v3 catalog to OSS
+        run: |
+          set -euo pipefail
+          dotenv_value() {
+            local key="$1"
+            python3 - "$key" <<'PY'
+          import sys
+          from pathlib import Path
+          key = sys.argv[1]
+          for line in Path("/data/multica/.env").read_text().splitlines():
+              if line.startswith(key + "="):
+                  print(line.split("=", 1)[1].strip().strip('"').strip("'"))
+                  raise SystemExit(0)
+          PY
+          }
+          export S3_BUCKET="$(dotenv_value S3_BUCKET)"
+          export S3_REGION="$(dotenv_value S3_REGION)"
+          export AWS_ENDPOINT_URL="$(dotenv_value AWS_ENDPOINT_URL)"
+          export S3_FORCE_PATH_STYLE="$(dotenv_value S3_FORCE_PATH_STYLE)"
+          export S3_PUBLIC_BASE_URL="$(dotenv_value S3_PUBLIC_BASE_URL)"
+          export AWS_REQUEST_CHECKSUM_CALCULATION="${AWS_REQUEST_CHECKSUM_CALCULATION:-when_required}"
+          export AWS_RESPONSE_CHECKSUM_VALIDATION="${AWS_RESPONSE_CHECKSUM_VALIDATION:-when_required}"
+          if [ -z "${S3_BUCKET:-}" ]; then
+            echo "::error::S3_BUCKET missing in /data/multica/.env"
+            exit 1
+          fi
+          if [ -z "${AWS_ACCESS_KEY_ID:-}" ] || [ -z "${AWS_SECRET_ACCESS_KEY:-}" ]; then
+            echo "::error::AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY missing from aliyun-dev"
+            exit 1
+          fi
+          echo "publishing to bucket=${S3_BUCKET} region=${S3_REGION:-} endpoint=${AWS_ENDPOINT_URL:-}"
+          (cd server && go run ./cmd/publish-agent-avatars)
+
+      - name: Verify public CDN objects
+        run: |
+          set -euo pipefail
+          for url in \
+            https://cdn.leagent.me/agent-avatars/v3/agent-01.png \
+            https://cdn.leagent.me/agent-avatars/v3/agent-08.png \
+            https://cdn.leagent.me/agent-avatars/v3/agent-15.png; do
+            echo "GET ${url}"
+            curl -fsS --retry 5 --retry-delay 2 -o /tmp/avatar-check.png "$url"
+            python3 - <<'PY'
+          from pathlib import Path
+          data = Path("/tmp/avatar-check.png").read_bytes()
+          if data[:8] != b"\x89PNG\r\n\x1a\n":
+              raise SystemExit("downloaded object is not a PNG")
+          print(f"ok bytes={len(data)}")
+          PY
+          done

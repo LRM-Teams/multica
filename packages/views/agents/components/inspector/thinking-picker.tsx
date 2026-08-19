@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { RuntimeModelThinkingLevel } from "@multica/core/types";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import {
   PickerItem,
   PropertyPicker,
@@ -61,12 +62,16 @@ export function ThinkingPicker({
 
   if (!canEdit) {
     return (
-      <span
-        className="min-w-0 truncate px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground"
-        title={triggerTitle}
-      >
-        {triggerLabel}
-      </span>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <span className="min-w-0 truncate px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground" />
+          }
+        >
+          {triggerLabel}
+        </TooltipTrigger>
+        <TooltipContent side="top">{triggerTitle}</TooltipContent>
+      </Tooltip>
     );
   }
 
@@ -119,14 +124,18 @@ export function ThinkingPicker({
       ))}
 
       {value && (
-        <button
-          type="button"
-          onClick={() => void select("")}
-          className="mt-1 flex w-full items-center border-t px-3 py-2 text-left text-xs text-muted-foreground transition-colors hover:bg-accent/50"
-          title={t(($) => $.pickers.thinking_clear_title)}
-        >
-          {t(($) => $.pickers.thinking_clear)}
-        </button>
+        <Tooltip>
+          <TooltipTrigger
+            type="button"
+            onClick={() => void select("")}
+            className="mt-1 flex w-full items-center border-t px-3 py-2 text-left text-xs text-muted-foreground transition-colors hover:bg-accent/50"
+          >
+            {t(($) => $.pickers.thinking_clear)}
+          </TooltipTrigger>
+          <TooltipContent side="top">
+            {t(($) => $.pickers.thinking_clear_title)}
+          </TooltipContent>
+        </Tooltip>
       )}
     </PropertyPicker>
   );

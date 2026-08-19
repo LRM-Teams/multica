@@ -2,6 +2,7 @@
 
 import type { ResearchSelectedReference } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { cn } from "@multica/ui/lib/utils";
 import { X } from "lucide-react";
 import { useT } from "../../i18n/use-t";
@@ -20,15 +21,19 @@ export function ResearchSelectedRefChip({
   const { t } = useT("research");
 
   return (
-    <li
-      className={cn(
-        "group relative flex min-w-0 max-w-full items-center gap-2 rounded-xl border border-primary/20 bg-primary/7 py-1.5 pr-9 pl-2.5 text-foreground",
-        className,
-      )}
-      data-kind={reference.kind}
-      data-testid="research-selected-ref-chip"
-      title={reference.display_summary}
-    >
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <li
+            className={cn(
+              "group relative flex min-w-0 max-w-full items-center gap-2 rounded-xl border border-primary/20 bg-primary/7 py-1.5 pr-9 pl-2.5 text-foreground",
+              className,
+            )}
+            data-kind={reference.kind}
+            data-testid="research-selected-ref-chip"
+          />
+        }
+      >
       <span
         aria-hidden="true"
         className="shrink-0 rounded-md bg-primary/12 px-1.5 py-0.5 text-[10px] font-semibold text-primary"
@@ -56,6 +61,8 @@ export function ResearchSelectedRefChip({
       >
         <X className="size-3.5" aria-hidden="true" />
       </Button>
-    </li>
+      </TooltipTrigger>
+      <TooltipContent side="top">{reference.display_summary}</TooltipContent>
+    </Tooltip>
   );
 }

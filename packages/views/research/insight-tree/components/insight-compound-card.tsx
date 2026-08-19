@@ -17,6 +17,7 @@
 
 import { ChevronRight } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import type {
   InsightDerivationNode,
   InsightStaleReason,
@@ -178,16 +179,33 @@ export function InsightCompoundCard({
         </div>
 
         {/* 失效徽标 */}
-        {stale?.stale && (
-          <span
-            className="inline-flex items-center gap-1 rounded-4xl bg-destructive/15 px-2 text-[10px] font-semibold text-destructive line-through decoration-destructive"
-            data-testid="stale-badge"
-            data-affect={staleAffect}
-            title={stale.reason ? STALE_REASON_LABEL[stale.reason] : undefined}
-          >
-            {staleAffect === "inherited" ? inheritedLabel : staleLabel}
-          </span>
-        )}
+        {stale?.stale &&
+          (stale?.reason ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <span
+                    className="inline-flex items-center gap-1 rounded-4xl bg-destructive/15 px-2 text-[10px] font-semibold text-destructive line-through decoration-destructive"
+                    data-testid="stale-badge"
+                    data-affect={staleAffect}
+                  />
+                }
+              >
+                {staleAffect === "inherited" ? inheritedLabel : staleLabel}
+              </TooltipTrigger>
+              <TooltipContent side="top">
+                {STALE_REASON_LABEL[stale.reason]}
+              </TooltipContent>
+            </Tooltip>
+          ) : (
+            <span
+              className="inline-flex items-center gap-1 rounded-4xl bg-destructive/15 px-2 text-[10px] font-semibold text-destructive line-through decoration-destructive"
+              data-testid="stale-badge"
+              data-affect={staleAffect}
+            >
+              {staleAffect === "inherited" ? inheritedLabel : staleLabel}
+            </span>
+          ))}
       </div>
 
       {/* 结论文案 */}
@@ -210,13 +228,16 @@ export function InsightCompoundCard({
             data-testid="contributor-stack"
           >
             {node.contributingAgentIds.slice(0, 3).map((id) => (
-              <span
-                key={id}
-                title={id}
-                className="flex size-5 shrink-0 items-center justify-center rounded-full bg-primary/15 text-[9px] font-bold text-primary-foreground"
-              >
-                {initials(id)}
-              </span>
+              <Tooltip key={id}>
+                <TooltipTrigger
+                  render={
+                    <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-primary/15 text-[9px] font-bold text-primary-foreground" />
+                  }
+                >
+                  {initials(id)}
+                </TooltipTrigger>
+                <TooltipContent side="top">{id}</TooltipContent>
+              </Tooltip>
             ))}
             {node.contributingAgentIds.length > 3 ? (
               <span className="text-[10px] text-muted-foreground">

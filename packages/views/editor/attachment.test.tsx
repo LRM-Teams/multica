@@ -426,8 +426,8 @@ describe("Attachment — html dispatch", () => {
     renderWithQuery(<Attachment attachment={{ kind: "record", attachment: att }} />);
     // HtmlAttachmentPreview hides the filename row.
     expect(screen.queryByText("report.html")).toBeNull();
-    expect(screen.getByTitle("Preview")).toBeTruthy();
-    expect(screen.getByTitle("Download")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Preview" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Download" })).toBeTruthy();
   });
 
   it("url-only html (no resolver match) falls back to AttachmentCard chrome", () => {

@@ -425,6 +425,10 @@ func main() {
 	// last_seen_at.
 	var presence service.RunnerPresence = daemonHub
 	go runRuntimeSweeper(sweepCtx, queries, liveness, presence, taskSvc, bus)
+	// LRM-1571: while a Workspace Runner socket is connected, the server
+	// keeps Redis liveness + DB last_seen_at fresh for it — the WS connection
+	// state drives liveness for daemons that no longer send heartbeat frames.
+	go runRunnerPresenceLivenessTicker(sweepCtx, queries, liveness, daemonHub)
 	go runRunnerActivityReaper(sweepCtx, h)
 	go runCollaborationTurnWorkers(sweepCtx, h)
 	go runChannelOnboardingPublisher(sweepCtx, h)

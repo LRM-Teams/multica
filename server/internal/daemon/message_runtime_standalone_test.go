@@ -46,3 +46,24 @@ func TestStandaloneChatSessionIDFromDeliveredBatch(t *testing.T) {
 		t.Fatalf("got %q %v", sessionID, ok)
 	}
 }
+
+func TestStandaloneAssistantReplyTextFallsBackToStreamedDeltas(t *testing.T) {
+	if got := standaloneAssistantReplyText(nil, "  hello from deltas  "); got != "hello from deltas" {
+		t.Fatalf("streamed fallback got %q", got)
+	}
+	raw, err := json.Marshal(map[string]any{
+		"role": "assistant",
+		"blocks": []map[string]string{
+			{"type": "text", "text": "from capture"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	capture := &agent.ResidentTurnCapture{
+		ProviderCalls: []agent.ResidentProviderCallCapture{{FinalAssistantMessage: raw}},
+	}
+	if got := standaloneAssistantReplyText(capture, "from deltas"); got != "from capture" {
+		t.Fatalf("capture must win, got %q", got)
+	}
+}

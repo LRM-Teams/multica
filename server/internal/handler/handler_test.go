@@ -523,9 +523,31 @@ func createHandlerTestAgentOnRuntimeWithMcpConfig(t *testing.T, displayName, run
 }
 
 // createPeriodBriefCollectorTestAgent inserts an Agent whose permanent name uses
-// the Period Work collector prefix (required by CreateNotePeriodBrief).
+// the Period Work collector prefix (required by CreateNotePeriodBrief), bound
+// to a Computer owned by the shared test user.
 func createPeriodBriefCollectorTestAgent(t *testing.T, label string) string {
 	t.Helper()
+	return createPeriodBriefCollectorTestAgentForOwner(t, label, testUserID)
+}
+
+// createPeriodBriefCollectorTestAgentForOwner binds the collector to a fresh
+// Computer owned by ownerUserID (Period Brief collection is Computer-owner-only).
+func createPeriodBriefCollectorTestAgentForOwner(t *testing.T, label, ownerUserID string) string {
+	t.Helper()
+	daemonID := "collect-daemon-" + uuid.NewString()[:8]
+	var runtimeID string
+	if err := testPool.QueryRow(context.Background(), `
+		INSERT INTO agent_runtime (
+			workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, visibility, owner_id, last_seen_at
+		) VALUES ($1, $2, $3, 'local', $4, 'online', '', '{}'::jsonb, 'private', $5, now())
+		RETURNING id
+	`, testWorkspaceID, daemonID, "collect-rt-"+uuid.NewString()[:8], "collect_test_"+uuid.NewString(), ownerUserID).Scan(&runtimeID); err != nil {
+		t.Fatalf("seed collector runtime: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
+	})
+
 	slug := strings.ToLower(strings.ReplaceAll(uuid.NewString()[:8], "-", "a"))
 	name := periodBriefCollectorNamePrefix + slug
 	display := periodBriefCollectorDisplayLead + label
@@ -535,7 +557,7 @@ func createPeriodBriefCollectorTestAgent(t *testing.T, label string) string {
 			workspace_id, name, display_name, description, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id, instructions, custom_env, custom_args, mcp_config, model
 		) VALUES ($1, $2, $3, '', 'local', '{}'::jsonb, $4, 1, $5, '', '{}'::jsonb, '[]'::jsonb, '{}'::jsonb, 'composer-1.5')
 		RETURNING id
-	`, testWorkspaceID, name, display, handlerTestRuntimeID(t), testUserID).Scan(&agentID); err != nil {
+	`, testWorkspaceID, name, display, runtimeID, ownerUserID).Scan(&agentID); err != nil {
 		t.Fatalf("failed to create period brief collector: %v", err)
 	}
 	t.Cleanup(func() {
@@ -556,10 +578,10 @@ func seedMachineLockedRuntime(t *testing.T, daemonID, name string) string {
 	var runtimeID string
 	if err := testPool.QueryRow(context.Background(), `
 		INSERT INTO agent_runtime (
-			workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, visibility, last_seen_at
-		) VALUES ($1, $2, $3, 'local', $4, 'online', '', '{}'::jsonb, 'public', now())
+			workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, visibility, owner_id, last_seen_at
+		) VALUES ($1, $2, $3, 'local', $4, 'online', '', '{}'::jsonb, 'public', $5, now())
 		RETURNING id
-	`, testWorkspaceID, daemonID, name+" "+uuid.NewString(), "machine_lock_test_"+uuid.NewString()).Scan(&runtimeID); err != nil {
+	`, testWorkspaceID, daemonID, name+" "+uuid.NewString(), "machine_lock_test_"+uuid.NewString(), testUserID).Scan(&runtimeID); err != nil {
 		t.Fatalf("seed machine-locked runtime: %v", err)
 	}
 	t.Cleanup(func() {

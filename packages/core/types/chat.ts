@@ -29,6 +29,11 @@ export interface ChatSession {
    * works inside that project's directory. Null / absent means unbound.
    */
   project_id?: string | null;
+  /**
+   * Notes assistant bubble: product note page this session is bound to.
+   * Agent may read this page and its descendants via notes get / tree.
+   */
+  context_note_page_id?: string | null;
   /** Latest provider-native token/context stats when the runtime reports them. */
   runtime_stats?: RuntimeTokenStats | null;
   /** True when the session has any unread assistant replies. List-only. */

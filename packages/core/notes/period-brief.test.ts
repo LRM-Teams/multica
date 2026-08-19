@@ -83,6 +83,7 @@ describe("defaultPeriodBriefCollectorIds", () => {
         runtime_id: "r1",
         runtime_mode: "local" as const,
         runtime_status: "online" as const,
+        owner_id: "user-1",
       },
       {
         id: "specialty",
@@ -90,6 +91,7 @@ describe("defaultPeriodBriefCollectorIds", () => {
         runtime_id: "r1",
         runtime_mode: "local" as const,
         runtime_status: "online" as const,
+        owner_id: "user-1",
       },
       {
         id: "off-1",
@@ -97,6 +99,7 @@ describe("defaultPeriodBriefCollectorIds", () => {
         runtime_id: "r3",
         runtime_mode: "local" as const,
         runtime_status: "offline" as const,
+        owner_id: "user-1",
       },
       {
         id: "weekly-1",
@@ -104,6 +107,7 @@ describe("defaultPeriodBriefCollectorIds", () => {
         runtime_id: "r1",
         runtime_mode: "local" as const,
         runtime_status: "online" as const,
+        owner_id: "user-1",
       },
     ];
     expect(defaultPeriodBriefCollectorIds(agents)).toEqual(["local-1"]);
@@ -112,6 +116,32 @@ describe("defaultPeriodBriefCollectorIds", () => {
     expect(isPeriodBriefCollectorOnline(offline)).toBe(false);
     expect(togglePeriodBriefCollectorId(["local-1"], "off-1")).toEqual(["local-1", "off-1"]);
     expect(togglePeriodBriefCollectorId(["local-1", "off-1"], "local-1")).toEqual(["off-1"]);
+  });
+
+  it("excludes collectors on computers owned by someone else when userId is set", () => {
+    const agents = [
+      {
+        id: "mine",
+        name: "period-collect-mine",
+        runtime_id: "r-mine",
+        runtime_mode: "local" as const,
+        runtime_status: "online" as const,
+        owner_id: "user-1",
+      },
+      {
+        id: "theirs",
+        name: "period-collect-theirs",
+        runtime_id: "r-theirs",
+        runtime_mode: "local" as const,
+        runtime_status: "online" as const,
+        owner_id: "user-2",
+      },
+    ];
+    const runtimes = [
+      { id: "r-mine", status: "online" as const, owner_id: "user-1" },
+      { id: "r-theirs", status: "online" as const, owner_id: "user-2" },
+    ];
+    expect(defaultPeriodBriefCollectorIds(agents, runtimes, "user-1")).toEqual(["mine"]);
   });
 });
 

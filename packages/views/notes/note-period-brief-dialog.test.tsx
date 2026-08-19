@@ -118,6 +118,7 @@ describe("NotePeriodBriefDialog", () => {
       runtime_id: "runtime-1",
       runtime_mode: "local",
       runtime_status: "online",
+      owner_id: "user-1",
     });
     const collectorB = agent({
       id: "collector-b",
@@ -126,11 +127,22 @@ describe("NotePeriodBriefDialog", () => {
       runtime_id: "runtime-cloud",
       runtime_mode: "cloud",
       runtime_status: "online",
+      owner_id: "user-1",
+    });
+    const foreignCollector = agent({
+      id: "collector-foreign",
+      name: "period-collect-foreign",
+      display_name: "采集 · Other Laptop",
+      runtime_id: "runtime-foreign",
+      runtime_mode: "local",
+      runtime_status: "online",
+      owner_id: "user-2",
     });
     listAgents.mockResolvedValue([
       agent(),
       collectorA,
       collectorB,
+      foreignCollector,
       agent({
         id: "weekly-1",
         name: "weekly-report",
@@ -139,8 +151,9 @@ describe("NotePeriodBriefDialog", () => {
       }),
     ]);
     listRuntimes.mockResolvedValue([
-      { id: "runtime-1", status: "online", runtime_mode: "local" },
-      { id: "runtime-cloud", status: "online", runtime_mode: "cloud" },
+      { id: "runtime-1", status: "online", runtime_mode: "local", owner_id: "user-1" },
+      { id: "runtime-cloud", status: "online", runtime_mode: "cloud", owner_id: "user-1" },
+      { id: "runtime-foreign", status: "online", runtime_mode: "local", owner_id: "user-2" },
     ]);
     ensurePeriodBriefAgent.mockResolvedValue({
       agent: agent({ id: "weekly-1", name: "weekly-report", display_name: "周报", model: "m1" }),
@@ -174,6 +187,7 @@ describe("NotePeriodBriefDialog", () => {
       expect(screen.getByTestId("period-brief-collector-collector-a")).toBeTruthy();
     });
     expect(screen.queryByTestId("period-brief-collector-agent-1")).toBeNull();
+    expect(screen.queryByTestId("period-brief-collector-collector-foreign")).toBeNull();
     await user.click(screen.getByRole("button", { name: /开始介绍/ }));
     await waitFor(() => {
       expect(createNotePeriodBrief).toHaveBeenCalledWith(
@@ -189,6 +203,7 @@ describe("NotePeriodBriefDialog", () => {
     };
     expect(payload.collector_agent_ids).not.toContain("weekly-1");
     expect(payload.collector_agent_ids).not.toContain("agent-1");
+    expect(payload.collector_agent_ids).not.toContain("collector-foreign");
     expect(createNoteRetrospective).not.toHaveBeenCalled();
     expect(ensurePeriodBriefCollectors).toHaveBeenCalled();
   });

@@ -1436,6 +1436,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Get("/issues/search", h.SearchAgentIssues)
 				r.Get("/issues/{id}", h.GetAgentIssue)
 				r.Get("/notes/pages/{id}", h.GetAgentNotePage)
+				r.Get("/notes/pages/{id}/tree", h.ListAgentNoteTree)
 				r.Post("/notes/period-briefs/{draftPageId}/retry-collectors", h.RetryAgentNotePeriodBriefCollectors)
 				r.Post("/notes/period-briefs/{draftPageId}/submit-pack", h.SubmitAgentNotePeriodBriefPack)
 				r.Post("/issues", h.CreateAgentIssue)

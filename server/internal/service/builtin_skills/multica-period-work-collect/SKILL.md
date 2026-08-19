@@ -31,6 +31,10 @@ same window**. Never pad the pack with earlier/later history.
 
 ## Hard rules
 
+- **OWN COMPUTER ONLY** — collect solely on the OS where **this** runtime
+  runs (the Computer you are bound to). Never harvest another member's
+  machine, never remote into a sibling laptop/cloud box, never treat a
+  visible/`public` runtime as scannable from here.
 - **STRICT WINDOW** — every Highlight, commit, and Work-group claim must fall
   inside wake `<window>` start→end. Drop out-of-range evidence; do not invent
   continuity from outside the window.

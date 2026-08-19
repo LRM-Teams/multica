@@ -70,6 +70,16 @@ export interface ChatWindowProps {
    */
   lockedAgentId?: string;
   /**
+   * When set, Notes assistant bubble mode: bind new sessions to this page,
+   * filter history to note-scoped sessions, and use page-scoped open/session
+   * state (independent from global FAB / DM bubbles).
+   */
+  contextNotePageId?: string;
+  /**
+   * Optional default agent for Notes bubble when no per-page selection exists.
+   */
+  preferredAgentId?: string | null;
+  /**
    * Force layout. Default: floating desktop window; on mobile with a
    * lockedAgentId, fullscreen sheet is used automatically.
    */
@@ -198,11 +208,18 @@ function replaceOptimisticChatMessageId(
   );
 }
 
-export function ChatWindow({ lockedAgentId, layout = "floating" }: ChatWindowProps = {}) {
+export function ChatWindow({
+  lockedAgentId,
+  contextNotePageId,
+  preferredAgentId,
+  layout = "floating",
+}: ChatWindowProps = {}) {
   const { t } = useT("chat");
   const wsId = useWorkspaceId();
   // react-doctor-disable-next-line react-doctor/no-event-handler -- mode flag from optional mount prop; not an event→effect handler
-  const isDmBubble = Boolean(lockedAgentId);
+  const isDmBubble = Boolean(lockedAgentId) && !contextNotePageId;
+  // react-doctor-disable-next-line react-doctor/no-event-handler -- mode flag from optional mount prop; not an event→effect handler
+  const isNoteBubble = Boolean(contextNotePageId);
   const effectiveLayout: "floating" | "fullscreen" = layout;
 
   const globalIsOpen = useChatStore((s) => s.isOpen);
@@ -210,38 +227,89 @@ export function ChatWindow({ lockedAgentId, layout = "floating" }: ChatWindowPro
   const globalSelectedAgentId = useChatStore((s) => s.selectedAgentId);
   const dmBubbleOpenAgentId = useChatStore((s) => s.dmBubbleOpenAgentId);
   const dmBubbleActiveSessionByAgent = useChatStore((s) => s.dmBubbleActiveSessionByAgent);
+  const noteBubbleOpenPageId = useChatStore((s) => s.noteBubbleOpenPageId);
+  const noteBubbleActiveSessionByPage = useChatStore((s) => s.noteBubbleActiveSessionByPage);
+  const noteBubbleSelectedAgentByPage = useChatStore((s) => s.noteBubbleSelectedAgentByPage);
   const setGlobalOpen = useChatStore((s) => s.setOpen);
   const setGlobalActiveSession = useChatStore((s) => s.setActiveSession);
   const setSelectedAgentId = useChatStore((s) => s.setSelectedAgentId);
   const setDmBubbleOpenAgentId = useChatStore((s) => s.setDmBubbleOpenAgentId);
   const setDmBubbleActiveSession = useChatStore((s) => s.setDmBubbleActiveSession);
+  const setNoteBubbleOpenPageId = useChatStore((s) => s.setNoteBubbleOpenPageId);
+  const setNoteBubbleActiveSession = useChatStore((s) => s.setNoteBubbleActiveSession);
+  const setNoteBubbleSelectedAgent = useChatStore((s) => s.setNoteBubbleSelectedAgent);
 
-  const isOpen = isDmBubble
-    ? dmBubbleOpenAgentId === lockedAgentId
-    : globalIsOpen;
-  const activeSessionId = isDmBubble
-    ? (dmBubbleActiveSessionByAgent[lockedAgentId!] ?? null)
-    : globalActiveSessionId;
-  const selectedAgentId = isDmBubble ? lockedAgentId! : globalSelectedAgentId;
+  const isOpen = isNoteBubble
+    ? noteBubbleOpenPageId === contextNotePageId
+    : isDmBubble
+      ? dmBubbleOpenAgentId === lockedAgentId
+      : globalIsOpen;
+  const activeSessionId = isNoteBubble
+    ? (noteBubbleActiveSessionByPage[contextNotePageId!] ?? null)
+    : isDmBubble
+      ? (dmBubbleActiveSessionByAgent[lockedAgentId!] ?? null)
+      : globalActiveSessionId;
+  const noteSelectedAgentId = isNoteBubble
+    ? (noteBubbleSelectedAgentByPage[contextNotePageId!] ?? preferredAgentId ?? null)
+    : null;
+  const selectedAgentId = isNoteBubble
+    ? noteSelectedAgentId
+    : isDmBubble
+      ? lockedAgentId!
+      : globalSelectedAgentId;
   const setOpen = useCallback(
     (open: boolean) => {
+      if (isNoteBubble && contextNotePageId) {
+        setNoteBubbleOpenPageId(open ? contextNotePageId : null);
+        return;
+      }
       if (isDmBubble && lockedAgentId) {
         setDmBubbleOpenAgentId(open ? lockedAgentId : null);
         return;
       }
       setGlobalOpen(open);
     },
-    [isDmBubble, lockedAgentId, setDmBubbleOpenAgentId, setGlobalOpen],
+    [
+      isNoteBubble,
+      contextNotePageId,
+      setNoteBubbleOpenPageId,
+      isDmBubble,
+      lockedAgentId,
+      setDmBubbleOpenAgentId,
+      setGlobalOpen,
+    ],
   );
   const setActiveSession = useCallback(
     (id: string | null) => {
+      if (isNoteBubble && contextNotePageId) {
+        setNoteBubbleActiveSession(contextNotePageId, id);
+        return;
+      }
       if (isDmBubble && lockedAgentId) {
         setDmBubbleActiveSession(lockedAgentId, id);
         return;
       }
       setGlobalActiveSession(id);
     },
-    [isDmBubble, lockedAgentId, setDmBubbleActiveSession, setGlobalActiveSession],
+    [
+      isNoteBubble,
+      contextNotePageId,
+      setNoteBubbleActiveSession,
+      isDmBubble,
+      lockedAgentId,
+      setDmBubbleActiveSession,
+      setGlobalActiveSession,
+    ],
+  );
+  const setNoteOrGlobalSelectedAgent = useCallback(
+    (agentId: string) => {
+      if (isNoteBubble && contextNotePageId) {
+        setNoteBubbleSelectedAgent(contextNotePageId, agentId);
+        return;
+      }
+      setSelectedAgentId(agentId);
+    },
+    [isNoteBubble, contextNotePageId, setNoteBubbleSelectedAgent, setSelectedAgentId],
   );
 
   const user = useAuthStore((s) => s.user);
@@ -253,13 +321,16 @@ export function ChatWindow({ lockedAgentId, layout = "floating" }: ChatWindowPro
   // Bubble history must stay 1:1 — drop "#channelName" shells (no whitespace)
   // even when the sessions cache is stale or the live channel list is empty.
   const sessions = useMemo(() => {
-    const scoped = lockedAgentId
-      ? allSessions.filter((s) => s.agent_id === lockedAgentId)
-      : allSessions;
+    let scoped = allSessions;
+    if (isNoteBubble && contextNotePageId) {
+      scoped = allSessions.filter((s) => s.context_note_page_id === contextNotePageId);
+    } else if (lockedAgentId) {
+      scoped = allSessions.filter((s) => s.agent_id === lockedAgentId);
+    }
     // Always drop "#token" channel shells — backend does too, but the
     // sessions query uses staleTime: Infinity so a pre-fix cache can linger.
     return excludeChannelShellSessions(scoped);
-  }, [allSessions, lockedAgentId]);
+  }, [allSessions, lockedAgentId, isNoteBubble, contextNotePageId]);
   const {
     data: rawMessagePages,
     isLoading: messagesLoading,
@@ -313,13 +384,21 @@ export function ChatWindow({ lockedAgentId, layout = "floating" }: ChatWindowPro
   // runs eviction so a DM bubble doesn't wipe a sibling bubble's cache; keep
   // every open bubble session + the floating active session.
   useEffect(() => {
-    if (isDmBubble) return;
+    if (isDmBubble || isNoteBubble) return;
     const keep = [
       activeSessionId,
       ...Object.values(dmBubbleActiveSessionByAgent),
+      ...Object.values(noteBubbleActiveSessionByPage),
     ];
     evictInactiveChatMessageCaches(qc, keep);
-  }, [isDmBubble, activeSessionId, dmBubbleActiveSessionByAgent, qc]);
+  }, [
+    isDmBubble,
+    isNoteBubble,
+    activeSessionId,
+    dmBubbleActiveSessionByAgent,
+    noteBubbleActiveSessionByPage,
+    qc,
+  ]);
   const createSession = useCreateChatSession();
   const markRead = useMarkChatSessionRead();
 
@@ -331,8 +410,8 @@ export function ChatWindow({ lockedAgentId, layout = "floating" }: ChatWindowPro
 
   // Resolve selected agent:
   // - DM bubble: locked to peer only (never fall back to another agent)
-  // - global: stored preference → first available
-  const activeAgent = lockedAgentId
+  // - note bubble / global: stored preference → first available
+  const activeAgent = isDmBubble
     ? (agents.find((a) => a.id === lockedAgentId) ?? null)
     : (availableAgents.find((a) => a.id === selectedAgentId) ??
       availableAgents[0] ??
@@ -454,6 +533,9 @@ export function ChatWindow({ lockedAgentId, layout = "floating" }: ChatWindowPro
           const session = await createSession.mutateAsync({
             agent_id: activeAgent.id,
             title: titleSeed.slice(0, 50),
+            ...(contextNotePageId
+              ? { context_note_page_id: contextNotePageId }
+              : {}),
           });
           return session.id;
         } finally {
@@ -463,7 +545,7 @@ export function ChatWindow({ lockedAgentId, layout = "floating" }: ChatWindowPro
       sessionPromiseRef.current = promise;
       return promise;
     },
-    [activeSessionId, activeAgent, createSession],
+    [activeSessionId, activeAgent, createSession, contextNotePageId],
   );
 
   const handleUploadFile = useCallback(
@@ -667,7 +749,7 @@ export function ChatWindow({ lockedAgentId, layout = "floating" }: ChatWindowPro
   const handleSelectAgent = useCallback(
     (agent: Agent) => {
       // DM bubble is pinned to one agent — never switch.
-      if (lockedAgentId) return;
+      if (isDmBubble) return;
       // No-op when clicking the already-active agent — don't clobber the
       // current session just because the user closed the menu this way.
       // Compare against activeAgent (what the UI shows), not selectedAgentId
@@ -678,11 +760,18 @@ export function ChatWindow({ lockedAgentId, layout = "floating" }: ChatWindowPro
         to: agent.id,
         previousSessionId: activeSessionId,
       });
-      setSelectedAgentId(agent.id);
+      setNoteOrGlobalSelectedAgent(agent.id);
       // Reset session when switching agent
       setActiveSession(null);
     },
-    [lockedAgentId, activeAgent, selectedAgentId, activeSessionId, setSelectedAgentId, setActiveSession],
+    [
+      isDmBubble,
+      activeAgent,
+      selectedAgentId,
+      activeSessionId,
+      setNoteOrGlobalSelectedAgent,
+      setActiveSession,
+    ],
   );
 
   const handleNewChat = useCallback(() => {
@@ -696,18 +785,18 @@ export function ChatWindow({ lockedAgentId, layout = "floating" }: ChatWindowPro
   const handleSelectSession = useCallback(
     (session: ChatSession) => {
       // Sessions are bound 1:1 to an agent — picking a session from a
-      // different agent implicitly switches the agent too (global mode only).
-      if (!lockedAgentId && activeAgent && session.agent_id !== activeAgent.id) {
+      // different agent implicitly switches the agent too (global / note mode).
+      if (!isDmBubble && activeAgent && session.agent_id !== activeAgent.id) {
         uiLogger.info("selectSession (cross-agent)", {
           from: activeAgent.id,
           toAgent: session.agent_id,
           toSession: session.id,
         });
-        setSelectedAgentId(session.agent_id);
+        setNoteOrGlobalSelectedAgent(session.agent_id);
       }
       setActiveSession(session.id);
     },
-    [lockedAgentId, activeAgent, setSelectedAgentId, setActiveSession],
+    [isDmBubble, activeAgent, setNoteOrGlobalSelectedAgent, setActiveSession],
   );
 
   // Contact-list pick (left IM pane): switch agent AND open that agent's
@@ -715,10 +804,10 @@ export function ChatWindow({ lockedAgentId, layout = "floating" }: ChatWindowPro
   const handleSelectContact = useCallback(
     (agentId: string, sessionId: string) => {
       uiLogger.info("selectContact", { toAgent: agentId, toSession: sessionId });
-      setSelectedAgentId(agentId);
+      setNoteOrGlobalSelectedAgent(agentId);
       setActiveSession(sessionId);
     },
-    [setSelectedAgentId, setActiveSession],
+    [setNoteOrGlobalSelectedAgent, setActiveSession],
   );
 
   const handleMinimize = useCallback(() => {
@@ -808,7 +897,7 @@ export function ChatWindow({ lockedAgentId, layout = "floating" }: ChatWindowPro
     >
       {!isFullscreen && <ChatResizeHandles onDragStart={startDrag} />}
       {/* Left IM pane: agent contacts — hidden in DM bubble (locked agent). */}
-      {!isDmBubble && (
+      {!isDmBubble && !isNoteBubble && (
         <ChatContactList
           sessions={sessions}
           agents={agents}

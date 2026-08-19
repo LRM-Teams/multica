@@ -496,7 +496,7 @@ func TestCreateNotePeriodBriefAllowsMemberWithCollectors(t *testing.T) {
 
 	memberID := createRuntimeLocalSkillTestMember(t, "member")
 	agentID := createHandlerTestAgent(t, "Period Brief Member Agent "+uuid.NewString()[:8], nil)
-	collectorID := createPeriodBriefCollectorTestAgent(t, "Member Collector")
+	collectorID := createPeriodBriefCollectorTestAgentForOwner(t, "Member Collector", memberID)
 
 	rec := httptest.NewRecorder()
 	req := newRequestAsUser(memberID, http.MethodPost, "/api/notes/period-briefs", map[string]any{

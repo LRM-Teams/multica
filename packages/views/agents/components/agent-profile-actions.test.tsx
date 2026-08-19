@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Agent } from "@multica/core/types";
+import { TooltipProvider } from "@multica/ui/components/ui/tooltip";
 import { AgentProfileActions } from "./agent-profile-actions";
 import { pickStoppableDmTask, type StoppableAgentTask } from "./agent-profile-stoppable-task";
 
@@ -195,24 +196,49 @@ describe("AgentProfileActions", () => {
     expect(mocks.openDM).toHaveBeenCalledWith({ peer_type: "agent", peer_id: "agent-1" });
   });
 
-  it("renders Message plus compact icon-only lifecycle, Restart/Reset, and Delete controls", () => {
+  it("renders labeled stack actions including Delete", () => {
     render(<AgentProfileActions agent={agent} canManage presence={mocks.presence} />);
     expect(screen.getByTestId("agent-profile-action-message")).toHaveTextContent("Message");
+    expect(screen.getByRole("button", { name: "Start Agent" })).toHaveTextContent("Start Agent");
+    expect(screen.getByRole("button", { name: "Restart/Reset" })).toHaveTextContent("Restart/Reset");
+    expect(screen.getByRole("button", { name: "Delete" })).toHaveTextContent("Delete");
+    expect(screen.getByText("Actions")).toBeInTheDocument();
+    expect(screen.getAllByTestId("agent-profile-action-start")).toHaveLength(1);
 
-    const lifecycle = screen.getByRole("button", { name: "Start Agent" });
-    const restart = screen.getByRole("button", { name: "Restart/Reset" });
-    const deleteButton = screen.getByRole("button", { name: "Delete" });
-    expect(lifecycle).not.toHaveTextContent("Start Agent");
-    expect(restart).not.toHaveTextContent("Restart/Reset");
-    expect(deleteButton).not.toHaveTextContent("Delete");
-    expect(lifecycle.className).toMatch(/size-7/);
-    expect(restart.className).toMatch(/size-7/);
-    expect(deleteButton.className).toMatch(/size-7/);
-
-    fireEvent.click(restart);
+    fireEvent.click(screen.getByRole("button", { name: "Restart/Reset" }));
     expect(screen.getByTestId("agent-restart-modal")).toHaveTextContent("Restart and reset choices");
     expect(screen.queryByTestId("agent-profile-action-stop")).not.toBeInTheDocument();
     expect(screen.queryByText("Stop all")).not.toBeInTheDocument();
+  });
+
+  it("copies Message, Start/Stop, and Restart/Reset as compact chrome icons without Delete", async () => {
+    render(
+      <TooltipProvider delay={0}>
+        <AgentProfileActions agent={agent} canManage presence={mocks.presence} layout="icons" />
+      </TooltipProvider>,
+    );
+    const message = screen.getByTestId("agent-profile-chrome-action-message");
+    const lifecycle = screen.getByTestId("agent-profile-chrome-action-start");
+    const restart = screen.getByTestId("agent-profile-chrome-action-restart");
+    expect(message).not.toHaveTextContent("Message");
+    expect(lifecycle).not.toHaveTextContent("Start Agent");
+    expect(restart).not.toHaveTextContent("Restart/Reset");
+    expect(lifecycle).toHaveAttribute("aria-label", "Start Agent");
+    expect(restart).toHaveAttribute("aria-label", "Restart/Reset");
+    fireEvent.pointerMove(lifecycle);
+    fireEvent.mouseEnter(lifecycle);
+    fireEvent.focus(lifecycle);
+    await waitFor(() => {
+      expect(document.querySelector("[data-slot='tooltip-content']")).toHaveTextContent("Start Agent");
+    });
+    expect(screen.getAllByTestId("agent-profile-chrome-action-start")).toHaveLength(1);
+    expect(screen.queryByTestId("agent-profile-action-delete")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("agent-profile-chrome-action-delete")).not.toBeInTheDocument();
+    expect(lifecycle.className).toMatch(/size-8/);
+    expect(restart.className).toMatch(/size-8/);
+
+    fireEvent.click(restart);
+    expect(screen.getByTestId("agent-restart-modal")).toHaveTextContent("Restart and reset choices");
   });
 
   it("hides Delete when canManage is false; keeps Message", () => {
@@ -221,7 +247,7 @@ describe("AgentProfileActions", () => {
     expect(screen.getByTestId("agent-profile-action-message")).toBeInTheDocument();
   });
 
-  it("keeps Delete as the only solid destructive header action", () => {
+  it("keeps Delete as the only solid destructive stack action", () => {
     render(<AgentProfileActions agent={agent} canManage presence={mocks.presence} />);
     const del = screen.getByTestId("agent-profile-action-delete");
     expect(del.className).toMatch(/text-white/);

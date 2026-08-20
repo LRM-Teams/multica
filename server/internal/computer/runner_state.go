@@ -224,8 +224,8 @@ func readRunnerConnected(path string) (persistedRunnerConnected, error) {
 
 // listRunnerStates reads every persisted Binding Runner state file under
 // root without mutating anything. It is used by read-only evidence
-// gathering (doctor); recoverRunnerStates is the mutating counterpart used
-// at Host startup. Corrupt or unreadable entries are silently skipped.
+// gathering (doctor); findReclaimableRunners is the mutating counterpart
+// used at Host startup. Corrupt or unreadable entries are silently skipped.
 func listRunnerStates(root string) ([]persistedRunnerState, error) {
 	root = strings.TrimSpace(root)
 	if root == "" {
@@ -268,13 +268,17 @@ type reclaimableRunner struct {
 	RunnerEndpoint string
 }
 
-// recoverRunnerStates reads every persisted Binding Runner state directory
-// and reports which ones still have a live OS process to reclaim. It never
-// adopts a live process into this Host's own bookkeeping: a live runner
-// found here is handed back to the caller so it can be drained and killed
-// before this Host spawns a replacement. Dead entries are cleaned up
-// in place.
-func recoverRunnerStates(root string, logger *slog.Logger) ([]reclaimableRunner, error) {
+// findReclaimableRunners reads every persisted Binding Runner state
+// directory and reports which ones still have a live OS process to reclaim.
+// It never adopts a live process into this Host's own bookkeeping: a live
+// runner found here is handed back to the caller so it can be drained and
+// killed before this Host spawns a replacement.
+//
+// Side effect: any state directory whose process is already dead is deleted
+// in place as it is scanned (state file, pid file, connected file, and the
+// directory itself) — there is nothing left to reclaim for those, so this
+// doubles as the startup sweep for stale state.
+func findReclaimableRunners(root string, logger *slog.Logger) ([]reclaimableRunner, error) {
 	root = strings.TrimSpace(root)
 	if root == "" {
 		return nil, nil
@@ -361,6 +365,9 @@ func terminateProcess(pid int, pollInterval, grace time.Duration, sleep func(tim
 		if alive, known := processAlive(pid); known && !alive {
 			return nil
 		}
+		// SIGTERM failed to even reach a still-alive process (e.g. race with
+		// its own exit, or a signal it cannot receive) — fall through and
+		// let SIGKILL have a try instead of giving up here.
 	}
 	if waitForProcessExit(pid, pollInterval, grace, sleep) {
 		return nil

@@ -14,7 +14,12 @@ type BindingMachineControlRequest struct {
 	Identity BindingChildIdentity `json:"identity"`
 }
 
-func RequestBindingPrepareMachineUpgrade(ctx context.Context, controlEndpoint, token string, identity BindingChildIdentity) error {
+// RequestBindingRunnerDrain asks a Binding Runner's runner:drain operation to
+// close its own admission barrier and cancel in-flight work. It does not make
+// the runner process exit on its own — the caller still owns terminating the
+// process afterward. Used both to prepare a Binding for a Machine Upgrade and
+// to reclaim an orphaned Runner left behind by a previous Host generation.
+func RequestBindingRunnerDrain(ctx context.Context, controlEndpoint, token string, identity BindingChildIdentity) error {
 	return requestBindingMachineControl(ctx, controlEndpoint, token, LocalControlRunnerDrainOperation, identity)
 }
 

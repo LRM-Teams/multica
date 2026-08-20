@@ -60,7 +60,7 @@ func TestRunnerStateRoundTripAndDaemonInstanceIDFence(t *testing.T) {
 	}
 }
 
-func TestRecoverRunnerStatesRemovesDeadOwnerState(t *testing.T) {
+func TestFindReclaimableRunnersRemovesDeadOwnerState(t *testing.T) {
 	root := t.TempDir()
 	state := persistedRunnerState{
 		WorkspaceID: "workspace-a", DaemonInstanceID: "start-1", OwnerPID: 999998,
@@ -72,12 +72,12 @@ func TestRecoverRunnerStatesRemovesDeadOwnerState(t *testing.T) {
 	if err := writeRunnerPID(root, state.WorkspaceID, 999999); err != nil {
 		t.Fatal(err)
 	}
-	adopted, err := recoverRunnerStates(root, nil)
+	reclaimable, err := findReclaimableRunners(root, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(adopted) != 0 {
-		t.Fatalf("dead runner was adopted: %+v", adopted)
+	if len(reclaimable) != 0 {
+		t.Fatalf("dead runner was reported reclaimable: %+v", reclaimable)
 	}
 	if _, err := os.Stat(filepath.Dir(runnerStatePath(root, state.WorkspaceID))); !os.IsNotExist(err) {
 		t.Fatalf("orphan runner directory still exists: %v", err)
@@ -87,7 +87,7 @@ func TestRecoverRunnerStatesRemovesDeadOwnerState(t *testing.T) {
 	}
 }
 
-func TestRecoverRunnerStatesReportsLivePIDAsReclaimable(t *testing.T) {
+func TestFindReclaimableRunnersReportsLivePIDAsReclaimable(t *testing.T) {
 	root := t.TempDir()
 	pid := os.Getpid()
 	state := persistedRunnerState{
@@ -103,7 +103,7 @@ func TestRecoverRunnerStatesReportsLivePIDAsReclaimable(t *testing.T) {
 	if err := writeRunnerConnected(root, state.WorkspaceID, persistedRunnerConnected{PID: pid, ConnectedAt: state.StartedAt, RunnerEndpoint: "unix:///tmp/multica-test-runner.sock"}); err != nil {
 		t.Fatal(err)
 	}
-	reclaimable, err := recoverRunnerStates(root, nil)
+	reclaimable, err := findReclaimableRunners(root, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ func TestRecoverRunnerStatesReportsLivePIDAsReclaimable(t *testing.T) {
 	if reclaimable[0].RunnerEndpoint != "unix:///tmp/multica-test-runner.sock" {
 		t.Fatalf("reclaimable RunnerEndpoint = %q, want the persisted runner.connected endpoint", reclaimable[0].RunnerEndpoint)
 	}
-	// recoverRunnerStates only reports the live process; it must not have
+	// findReclaimableRunners only reports the live process; it must not have
 	// adopted it into any bookkeeping of its own, and the persisted state
 	// stays in place for the caller to clear only after it reclaims.
 	if _, err := os.Stat(runnerStatePath(root, state.WorkspaceID)); err != nil {
@@ -121,7 +121,7 @@ func TestRecoverRunnerStatesReportsLivePIDAsReclaimable(t *testing.T) {
 	}
 }
 
-func TestRecoverRunnerStatesIgnoresStaleRunnerConnectedFromEarlierGeneration(t *testing.T) {
+func TestFindReclaimableRunnersIgnoresStaleRunnerConnectedFromEarlierGeneration(t *testing.T) {
 	root := t.TempDir()
 	pid := os.Getpid()
 	state := persistedRunnerState{
@@ -139,7 +139,7 @@ func TestRecoverRunnerStatesIgnoresStaleRunnerConnectedFromEarlierGeneration(t *
 	if err := writeRunnerConnected(root, state.WorkspaceID, persistedRunnerConnected{PID: pid + 1, ConnectedAt: state.StartedAt, RunnerEndpoint: "unix:///tmp/stale.sock"}); err != nil {
 		t.Fatal(err)
 	}
-	reclaimable, err := recoverRunnerStates(root, nil)
+	reclaimable, err := findReclaimableRunners(root, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +148,7 @@ func TestRecoverRunnerStatesIgnoresStaleRunnerConnectedFromEarlierGeneration(t *
 	}
 }
 
-func TestRecoverRunnerStatesRefusesTakeoverAndLeavesFilesWhenOwnerIsAlive(t *testing.T) {
+func TestFindReclaimableRunnersRefusesTakeoverAndLeavesFilesWhenOwnerIsAlive(t *testing.T) {
 	root := t.TempDir()
 	state := persistedRunnerState{
 		WorkspaceID: "workspace-owned", DaemonInstanceID: "start-live", OwnerPID: os.Getpid(),
@@ -160,7 +160,7 @@ func TestRecoverRunnerStatesRefusesTakeoverAndLeavesFilesWhenOwnerIsAlive(t *tes
 	if err := writeRunnerPID(root, state.WorkspaceID, os.Getpid()); err != nil {
 		t.Fatal(err)
 	}
-	reclaimable, err := recoverRunnerStates(root, nil)
+	reclaimable, err := findReclaimableRunners(root, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

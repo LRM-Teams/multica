@@ -84,7 +84,11 @@ func NewHost(config HostConfig) (*Host, error) {
 	}
 	supervisor, err := NewBindingSupervisor(BindingSupervisorConfig{
 		Spawn: config.Spawn, StateRoot: config.ResidentRoot, Now: config.Now, ReadyTimeout: config.ReadyTimeout, Logger: config.Logger,
-		ControlToken: config.ControlToken,
+		// The Host owns the control-plane credential; the supervisor only
+		// knows "ask this endpoint to drain", never the token itself.
+		DrainRunner: func(ctx context.Context, endpoint string, identity BindingChildIdentity) error {
+			return RequestBindingRunnerDrain(ctx, endpoint, config.ControlToken, identity)
+		},
 		Released: func(identity BindingChildIdentity) {
 			if host.control != nil {
 				host.control.Release(identity)

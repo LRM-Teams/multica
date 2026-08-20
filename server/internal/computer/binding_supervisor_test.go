@@ -90,6 +90,15 @@ func reclaimTestTimings() (poll, grace time.Duration) {
 	return 5 * time.Millisecond, 50 * time.Millisecond
 }
 
+// testDrainRunner mimics how the Host wires BindingSupervisorConfig.DrainRunner
+// in production: close the control token over RequestBindingRunnerDrain so
+// reclaim tests exercise the real runner:drain RPC round trip.
+func testDrainRunner(token string) func(context.Context, string, BindingChildIdentity) error {
+	return func(ctx context.Context, endpoint string, identity BindingChildIdentity) error {
+		return RequestBindingRunnerDrain(ctx, endpoint, token, identity)
+	}
+}
+
 func writeReclaimableRunnerFixture(t *testing.T, root, workspaceID string, pid int, endpoint string) {
 	t.Helper()
 	state := persistedRunnerState{
@@ -125,8 +134,8 @@ func TestBindingSupervisorReclaimsDrainedOrphanThenSpawnsOwnChild(t *testing.T) 
 	poll, grace := reclaimTestTimings()
 	spawned := 0
 	supervisor, err := NewBindingSupervisor(BindingSupervisorConfig{
-		StateRoot: root, ControlToken: "control-token",
-		ReclaimPollInterval: poll, TerminateGrace: grace,
+		StateRoot: root, DrainRunner: testDrainRunner("control-token"),
+		TerminatePollInterval: poll, TerminateGrace: grace,
 		Spawn: func(string) (BindingChild, error) {
 			spawned++
 			return newSupervisorTestChild(101), nil
@@ -168,8 +177,8 @@ func TestBindingSupervisorReclaimsOrphanBySignalWhenDrainEndpointUnreachable(t *
 	poll, grace := reclaimTestTimings()
 	spawned := 0
 	supervisor, err := NewBindingSupervisor(BindingSupervisorConfig{
-		StateRoot: root, ControlToken: "control-token",
-		ReclaimPollInterval: poll, TerminateGrace: grace,
+		StateRoot: root, DrainRunner: testDrainRunner("control-token"),
+		TerminatePollInterval: poll, TerminateGrace: grace,
 		Spawn: func(string) (BindingChild, error) {
 			spawned++
 			return newSupervisorTestChild(102), nil
@@ -201,8 +210,8 @@ func TestBindingSupervisorReclaimsOrphanBySigkillWhenSigtermIsIgnored(t *testing
 	poll, grace := reclaimTestTimings()
 	spawned := 0
 	supervisor, err := NewBindingSupervisor(BindingSupervisorConfig{
-		StateRoot: root, ControlToken: "control-token",
-		ReclaimPollInterval: poll, TerminateGrace: grace,
+		StateRoot: root, DrainRunner: testDrainRunner("control-token"),
+		TerminatePollInterval: poll, TerminateGrace: grace,
 		Spawn: func(string) (BindingChild, error) {
 			spawned++
 			return newSupervisorTestChild(103), nil

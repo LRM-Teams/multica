@@ -47,7 +47,7 @@ func (a *researchV6AgentLifecycleAdapter) CreateAgent(ctx context.Context, works
 		  SELECT a.* FROM research_team_membership m
 		  JOIN agent a ON a.id=m.agent_id AND a.workspace_id=m.workspace_id
 		  WHERE m.workspace_id=$1::uuid AND m.state IN ('idle','working') AND a.archived_at IS NULL
-		  ORDER BY m.generation,m.created_at,m.id LIMIT 1
+		  ORDER BY m.membership_generation,m.created_at,m.id LIMIT 1
 		)
 		INSERT INTO agent(workspace_id,name,display_name,description,runtime_mode,runtime_config,runtime_id,max_concurrent_tasks,owner_id,instructions,custom_env,custom_args,mcp_config,model,thinking_level,avatar_source)
 		SELECT $1::uuid,$2,$3,$4,runtime_mode,runtime_config,runtime_id,max_concurrent_tasks,owner_id,$5,custom_env,custom_args,

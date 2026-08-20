@@ -160,7 +160,7 @@ const createSharedEvolutionUnitVersion = `-- name: CreateSharedEvolutionUnitVers
 INSERT INTO shared_evolution_unit_version (
   workspace_id, unit_id, version, title, content, metadata, applies, source_submission_ids, change_reason
 ) VALUES (
-  $1, $2, $3, $4, $5, $6, $7, ARRAY[$8]::uuid[], $9
+  $1, $2, $3, $4, $5, $6, $7, $8::uuid[], $9
 )
 RETURNING id, workspace_id, unit_id, version, title, content, metadata, applies, failure_cases, source_submission_ids, change_reason, created_by, created_at
 `

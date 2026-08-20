@@ -85,7 +85,8 @@ func BuildV6WorkDispatchPrompt(manifest V6WorkManifest) (string, error) {
 		prompt.WriteString("```bash\nmultica research report-upload " + base + " --file <absolute-file> --path <package-path> --role <role> --media-type <media-type> --output json\n```\n\n")
 		prompt.WriteString("For the credential-proxy fallback, use the `${V6_API}/report-uploads` workflow described by the frozen Manifest.\n\n")
 	}
-	prompt.WriteString("Write exactly the envelope named by `expected_result_schema`, preserving every identity and hash from the manifest, then submit it:\n\n")
+	prompt.WriteString("The submission endpoint has no validation-only or dry-run mode. Never send a probe, placeholder, or minimum test payload: any HTTP 200 is a durable handoff that may permanently settle this Work Item. Finish and inspect the mission's real result first.\n\n")
+	prompt.WriteString("Write exactly the final envelope named by `expected_result_schema`, preserving every identity and hash from the manifest, then submit it:\n\n")
 	prompt.WriteString("```bash\nmultica research work-submit " + base + " --file <absolute-result.json> --output json\n```\n\n")
 	prompt.WriteString("For the credential-proxy fallback, POST the exact result file to `${V6_API}/submission` with `Content-Type: application/json` and `--data-binary @<absolute-result.json>`.\n\n")
 	prompt.WriteString("`work-submit` durably records the envelope and normally returns status `received`; that is the successful Agent handoff, so stop and report completion. The server applies it asynchronously and may later mark it `accepted` or `rejected`. Retry only transport/unknown outcomes with the exact same client request ID and byte-equivalent envelope.\n\n### Mission\n\n")

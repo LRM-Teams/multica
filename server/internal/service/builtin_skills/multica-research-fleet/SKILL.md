@@ -140,6 +140,11 @@ multica research work-submit <session-id> <work-item-id> <attempt-id> \
   --file <absolute-path/result.json> --output json
 ```
 
+`/submission` has no validation-only or dry-run mode. Never send a probe,
+placeholder, or minimum test payload: any HTTP 200 is the formal durable
+handoff and may permanently settle the Work Item. Submit only the inspected,
+mission-complete result.
+
 Retry the same submission with the same `client_request_id` and byte-equivalent
 payload after a transport failure. Never send a V6 envelope through the legacy
 `task-result` command.

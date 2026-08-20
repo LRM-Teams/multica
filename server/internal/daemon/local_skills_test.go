@@ -234,14 +234,18 @@ func TestListRuntimeLocalSkills_CodexIncludesSharedAgentsSkills(t *testing.T) {
 	}
 }
 
-func TestListRuntimeLocalSkills_PiUsesCurrentGlobalPath(t *testing.T) {
+func TestListRuntimeLocalSkills_PiUsesUpstreamGlobalPaths(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("PI_CODING_AGENT_DIR", "")
 
-	writeTestLocalSkill(t, filepath.Join(home, ".pi", "skills"), "current", map[string]string{
+	writeTestLocalSkill(t, filepath.Join(home, ".pi", "agent", "skills"), "pi-native", map[string]string{
 		"SKILL.md": "# Current\n",
 	})
-	writeTestLocalSkill(t, filepath.Join(home, ".pi", "agent", "skills"), "legacy", map[string]string{
+	writeTestLocalSkill(t, filepath.Join(home, ".agents", "skills"), "agent-standard", map[string]string{
+		"SKILL.md": "# Shared\n",
+	})
+	writeTestLocalSkill(t, filepath.Join(home, ".pi", "skills"), "legacy", map[string]string{
 		"SKILL.md": "# Legacy\n",
 	})
 
@@ -249,7 +253,12 @@ func TestListRuntimeLocalSkills_PiUsesCurrentGlobalPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listRuntimeLocalSkills: %v", err)
 	}
-	if !supported || len(skills) != 1 || skills[0].Key != "current" {
+	wantKeys := []string{"agent-standard", "pi-native"}
+	gotKeys := make([]string, 0, len(skills))
+	for _, item := range skills {
+		gotKeys = append(gotKeys, item.Key)
+	}
+	if !supported || !reflect.DeepEqual(gotKeys, wantKeys) {
 		t.Fatalf("skills = %#v, supported = %v", skills, supported)
 	}
 }

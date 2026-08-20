@@ -15,7 +15,6 @@ const {
   createNotePeriodBrief,
   createNoteRetrospective,
   openNoteWorkerChat,
-  ensurePeriodBriefAgent,
   ensurePeriodBriefCollectors,
 } = vi.hoisted(() => ({
   listAgents: vi.fn(),
@@ -23,7 +22,6 @@ const {
   createNotePeriodBrief: vi.fn(),
   createNoteRetrospective: vi.fn(),
   openNoteWorkerChat: vi.fn(),
-  ensurePeriodBriefAgent: vi.fn(),
   ensurePeriodBriefCollectors: vi.fn(),
 }));
 
@@ -33,7 +31,6 @@ vi.mock("@multica/core/api", () => ({
     listRuntimes: (...args: unknown[]) => listRuntimes(...args),
     createNotePeriodBrief: (...args: unknown[]) => createNotePeriodBrief(...args),
     createNoteRetrospective: (...args: unknown[]) => createNoteRetrospective(...args),
-    ensurePeriodBriefAgent: (...args: unknown[]) => ensurePeriodBriefAgent(...args),
     ensurePeriodBriefCollectors: (...args: unknown[]) => ensurePeriodBriefCollectors(...args),
   },
 }));
@@ -93,7 +90,6 @@ function renderDialog(locale: "en" | "zh-Hans" = "en") {
       <NotePeriodBriefDialog
         open
         onOpenChange={onOpenChange}
-        preferredAgentId="agent-1"
         onCreated={onCreated}
       />
     </QueryClientProvider>,
@@ -109,7 +105,6 @@ describe("NotePeriodBriefDialog", () => {
     createNotePeriodBrief.mockReset();
     createNoteRetrospective.mockReset();
     openNoteWorkerChat.mockReset();
-    ensurePeriodBriefAgent.mockReset();
     ensurePeriodBriefCollectors.mockReset();
     const collectorA = agent({
       id: "collector-a",
@@ -144,6 +139,12 @@ describe("NotePeriodBriefDialog", () => {
       collectorB,
       foreignCollector,
       agent({
+        id: "notes-1",
+        name: "notes-assistant",
+        display_name: "笔记助手",
+        runtime_status: "online",
+      }),
+      agent({
         id: "weekly-1",
         name: "weekly-report",
         display_name: "周报",
@@ -155,10 +156,6 @@ describe("NotePeriodBriefDialog", () => {
       { id: "runtime-cloud", status: "online", runtime_mode: "cloud", owner_id: "user-1" },
       { id: "runtime-foreign", status: "online", runtime_mode: "local", owner_id: "user-2" },
     ]);
-    ensurePeriodBriefAgent.mockResolvedValue({
-      agent: agent({ id: "weekly-1", name: "weekly-report", display_name: "周报", model: "m1" }),
-      created: false,
-    });
     ensurePeriodBriefCollectors.mockResolvedValue({
       agents: [collectorA, collectorB],
       created: [],
@@ -179,21 +176,23 @@ describe("NotePeriodBriefDialog", () => {
     });
   });
 
-  it("defaults synthesizer to 周报 and collectors to dedicated online collectors", async () => {
+  it("uses 笔记助手 as synthesizer and dedicated online collectors", async () => {
     const user = userEvent.setup();
     renderDialog("zh-Hans");
     await waitFor(() => {
-      expect(screen.getByTestId("period-brief-default-agent")).toBeTruthy();
       expect(screen.getByTestId("period-brief-collector-collector-a")).toBeTruthy();
     });
+    expect(screen.queryByTestId("period-brief-default-agent")).toBeNull();
+    expect(screen.queryByText("整理 Agent")).toBeNull();
     expect(screen.queryByTestId("period-brief-collector-agent-1")).toBeNull();
     expect(screen.queryByTestId("period-brief-collector-collector-foreign")).toBeNull();
-    await user.click(screen.getByRole("button", { name: /开始介绍/ }));
+    expect(screen.queryByRole("button", { name: /Coder/ })).toBeNull();
+    await user.click(screen.getByRole("button", { name: /开始写/ }));
     await waitFor(() => {
       expect(createNotePeriodBrief).toHaveBeenCalledWith(
         expect.objectContaining({
           window: "week",
-          agent_id: "weekly-1",
+          agent_id: "notes-1",
           collector_agent_ids: expect.arrayContaining(["collector-a", "collector-b"]),
         }),
       );
@@ -215,11 +214,11 @@ describe("NotePeriodBriefDialog", () => {
       expect(screen.getByTestId("period-brief-collector-collector-b")).toBeTruthy();
     });
     await user.click(screen.getByTestId("period-brief-collector-collector-a"));
-    await user.click(screen.getByRole("button", { name: /开始介绍/ }));
+    await user.click(screen.getByRole("button", { name: /开始写/ }));
     await waitFor(() => {
       expect(createNotePeriodBrief).toHaveBeenCalledWith(
         expect.objectContaining({
-          agent_id: "weekly-1",
+          agent_id: "notes-1",
           collector_agent_ids: ["collector-b"],
         }),
       );
@@ -238,7 +237,7 @@ describe("NotePeriodBriefDialog", () => {
     });
     await user.click(screen.getByTestId("period-brief-collector-collector-a"));
     await user.click(screen.getByTestId("period-brief-collector-collector-b"));
-    expect(screen.getByRole("button", { name: /开始介绍/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /开始写/ })).toBeDisabled();
     expect(createNotePeriodBrief).not.toHaveBeenCalled();
   });
 
@@ -255,14 +254,14 @@ describe("NotePeriodBriefDialog", () => {
     fireEvent.change(screen.getByTestId("period-brief-end-date"), {
       target: { value: "2026-08-14" },
     });
-    await user.click(screen.getByRole("button", { name: /开始介绍/ }));
+    await user.click(screen.getByRole("button", { name: /开始写/ }));
     await waitFor(() => {
       expect(createNotePeriodBrief).toHaveBeenCalledWith(
         expect.objectContaining({
           window: "custom",
           start_date: "2026-08-10",
           end_date: "2026-08-14",
-          agent_id: "weekly-1",
+          agent_id: "notes-1",
         }),
       );
     });

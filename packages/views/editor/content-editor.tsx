@@ -187,9 +187,7 @@ interface ContentEditorRef {
   getMarkdown: () => string;
   clearContent: () => void;
   focus: () => void;
-  /** Drop focus from the editor — used by chat after send so the caret
-   *  stops competing with the StatusPill / streaming reply for the user's
-   *  attention. */
+  /** Drop focus from the editor (Escape / blur-shortcut paths). */
   blur: () => void;
   uploadFile: (file: File) => void;
   /** True when file uploads are still in progress. */

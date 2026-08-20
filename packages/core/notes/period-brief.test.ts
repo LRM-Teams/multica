@@ -6,8 +6,10 @@ import {
   periodBriefFromCollectorPackFixture,
   periodBriefLooksStructured,
 } from "./period-brief";
+import { NOTES_ASSISTANT_AGENT_NAME } from "./notes-assistant-agent";
 import {
   PERIOD_BRIEF_AGENT_NAME,
+  RETIRED_PERIOD_BRIEF_AGENT_NAME,
   isPeriodBriefAgent,
   resolvePeriodBriefAgent,
   resolvePeriodBriefSynthesizerId,
@@ -57,20 +59,21 @@ describe("collector pack → Brief (K2-T1)", () => {
 describe("resolvePeriodBriefSynthesizerId", () => {
   const agents = [
     { id: "a1", name: "wendy" },
-    { id: "a2", name: PERIOD_BRIEF_AGENT_NAME },
-    { id: "a3", name: "coder" },
+    { id: "a2", name: NOTES_ASSISTANT_AGENT_NAME },
+    { id: "a3", name: RETIRED_PERIOD_BRIEF_AGENT_NAME },
   ];
 
-  it("prefers the weekly-report agent over preferredAgentId", () => {
-    expect(resolvePeriodBriefSynthesizerId(agents, "a1")).toBe("a2");
+  it("resolves only 笔记助手 — leftover 周报 is not the synthesizer", () => {
+    expect(PERIOD_BRIEF_AGENT_NAME).toBe(NOTES_ASSISTANT_AGENT_NAME);
+    expect(resolvePeriodBriefSynthesizerId(agents)).toBe("a2");
     expect(isPeriodBriefAgent(agents[1])).toBe(true);
+    expect(isPeriodBriefAgent(agents[2])).toBe(false);
     expect(resolvePeriodBriefAgent(agents)?.id).toBe("a2");
   });
 
-  it("falls back to preferred then first when 周报 is absent", () => {
-    const without = agents.filter((a) => a.name !== PERIOD_BRIEF_AGENT_NAME);
-    expect(resolvePeriodBriefSynthesizerId(without, "a3")).toBe("a3");
-    expect(resolvePeriodBriefSynthesizerId(without, null)).toBe("a1");
+  it("returns null when 笔记助手 is absent", () => {
+    const without = agents.filter((a) => a.name !== NOTES_ASSISTANT_AGENT_NAME);
+    expect(resolvePeriodBriefSynthesizerId(without)).toBeNull();
   });
 });
 
@@ -103,7 +106,7 @@ describe("defaultPeriodBriefCollectorIds", () => {
       },
       {
         id: "weekly-1",
-        name: PERIOD_BRIEF_AGENT_NAME,
+        name: NOTES_ASSISTANT_AGENT_NAME,
         runtime_id: "r1",
         runtime_mode: "local" as const,
         runtime_status: "online" as const,

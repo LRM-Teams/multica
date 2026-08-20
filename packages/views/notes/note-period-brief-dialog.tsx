@@ -4,17 +4,12 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Bot, Check, ClipboardList, Cloud, Laptop, Loader2 } from "lucide-react";
+import { Check, ClipboardList, Cloud, Laptop, Loader2 } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api } from "@multica/core/api";
-import { resolveActorDisplayName } from "@multica/core/identity";
 import { useWorkspaceId } from "@multica/core/hooks";
-import {
-  PERIOD_BRIEF_AGENT_DISPLAY_NAME,
-  isPeriodBriefAgent,
-  resolvePeriodBriefSynthesizerId,
-} from "@multica/core/notes/period-brief-agent";
+import { resolvePeriodBriefSynthesizerId } from "@multica/core/notes/period-brief-agent";
 import {
   listOwnedPeriodBriefCollectorAgents,
   defaultPeriodBriefCollectorIds,
@@ -54,12 +49,10 @@ import { useAuthStore } from "@multica/core/auth";
 export function NotePeriodBriefDialog({
   open,
   onOpenChange,
-  preferredAgentId = null,
   onCreated,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  preferredAgentId?: string | null;
   onCreated?: (result: CreateNotePeriodBriefResponse) => void;
 }) {
   const { t } = useT("layout");
@@ -93,14 +86,11 @@ export function NotePeriodBriefDialog({
   const defaultCustom = useMemo(() => defaultPeriodBriefCustomRange(today), [today]);
   const [startDate, setStartDate] = useState(defaultCustom.start_date);
   const [endDate, setEndDate] = useState(defaultCustom.end_date);
-  /** null = follow derived default; set once the user (or open reset) pins a choice. */
-  const [agentOverride, setAgentOverride] = useState<string | null>(null);
   const [collectorOverride, setCollectorOverride] = useState<string[] | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const ensureAttemptedRef = useRef(false);
   const collectorsEnsureAttemptedRef = useRef(false);
 
-  const resolvedPreferredAgentId = resolvePeriodBriefSynthesizerId(agents, preferredAgentId);
+  const agentId = resolvePeriodBriefSynthesizerId(agents);
   const collectorAgents = useMemo(
     () => listOwnedPeriodBriefCollectorAgents(agents, runtimes, currentUserId),
     [agents, runtimes, currentUserId],
@@ -109,21 +99,7 @@ export function NotePeriodBriefDialog({
     () => defaultPeriodBriefCollectorIds(agents, runtimes, currentUserId),
     [agents, runtimes, currentUserId],
   );
-  const agentId = agentOverride ?? resolvedPreferredAgentId;
   const collectorIds = collectorOverride ?? defaultCollectors;
-
-  const { mutate: ensurePeriodBriefAgent, isPending: ensuringAgent } = useMutation({
-    mutationFn: ({ runtimeId, model }: { runtimeId: string; model: string }) =>
-      api.ensurePeriodBriefAgent(runtimeId, model),
-    onSuccess: (result) => {
-      if (!wsId) return;
-      queryClient.setQueryData(workspaceKeys.agents(wsId), (current: Agent[] = []) => {
-        if (current.some((agent) => agent.id === result.agent.id)) return current;
-        return [...current, result.agent];
-      });
-      void queryClient.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
-    },
-  });
 
   const { mutate: ensurePeriodBriefCollectors, isPending: ensuringCollectors } = useMutation({
     mutationFn: (model: string) => api.ensurePeriodBriefCollectors(model),
@@ -140,14 +116,13 @@ export function NotePeriodBriefDialog({
     },
   });
 
-  const ensuring = ensuringAgent || ensuringCollectors;
+  const ensuring = ensuringCollectors;
 
   // Reset form fields when the dialog opens — adjust during render (prev ref).
   const prevOpenRef = useRef(open);
   if (open !== prevOpenRef.current) {
     prevOpenRef.current = open;
     if (open) {
-      setAgentOverride(null);
       setCollectorOverride(null);
       setWindowKind("week");
       setDate(today);
@@ -155,21 +130,9 @@ export function NotePeriodBriefDialog({
       setStartDate(custom.start_date);
       setEndDate(custom.end_date);
       setSubmitting(false);
-      ensureAttemptedRef.current = false;
       collectorsEnsureAttemptedRef.current = false;
     }
   }
-
-  useEffect(() => {
-    if (!open || !wsId || ensureAttemptedRef.current) return;
-    if (agents.some((agent) => isPeriodBriefAgent(agent))) return;
-    const donor = agents.find((agent) => agent.runtime_id && agent.model?.trim());
-    const runtimeId = donor?.runtime_id ?? runtimes[0]?.id;
-    const model = donor?.model?.trim();
-    if (!runtimeId || !model) return;
-    ensureAttemptedRef.current = true;
-    ensurePeriodBriefAgent({ runtimeId, model });
-  }, [open, wsId, agents, runtimes, ensurePeriodBriefAgent]);
 
   useEffect(() => {
     if (!open || !wsId || collectorsEnsureAttemptedRef.current) return;
@@ -390,53 +353,6 @@ export function NotePeriodBriefDialog({
                             ? ` · ${t(($) => $.notes_page.period_brief_collector_offline)}`
                             : ""}
                         </span>
-                      </span>
-                      {selected ? <Check className="size-4 shrink-0 text-primary" /> : null}
-                    </button>
-                  );
-                })
-              )}
-            </div>
-          </div>
-          <div className="min-w-0 space-y-2">
-            <Label>{t(($) => $.notes_page.period_brief_agent_label)}</Label>
-            <p className="text-xs text-muted-foreground">
-              {t(($) => $.notes_page.period_brief_agent_hint, {
-                name: PERIOD_BRIEF_AGENT_DISPLAY_NAME,
-              })}
-            </p>
-            <div className="max-h-40 min-w-0 space-y-1 overflow-x-hidden overflow-y-auto rounded-md border p-1">
-              {agents.length === 0 ? (
-                <div className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">
-                  {ensuring
-                    ? t(($) => $.notes_page.period_brief_agent_ensuring)
-                    : t(($) => $.notes_page.ai_agent_empty)}
-                </div>
-              ) : (
-                agents.map((agent) => {
-                  const selected = agentId === agent.id;
-                  const name = resolveActorDisplayName(agent, agent.name || agent.id);
-                  const isDefault = isPeriodBriefAgent(agent);
-                  return (
-                    <button
-                      key={agent.id}
-                      type="button"
-                      className={cn(
-                        "flex w-full min-w-0 max-w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm hover:bg-muted/70",
-                        selected && "bg-muted text-foreground",
-                      )}
-                      onClick={() => setAgentOverride(agent.id)}
-                      disabled={submitting || ensuring}
-                      data-testid={isDefault ? "period-brief-default-agent" : undefined}
-                    >
-                      <Bot className="size-4 shrink-0 text-muted-foreground" />
-                      <span className="min-w-0 flex-1 overflow-hidden">
-                        <span className="block truncate">{name}</span>
-                        {isDefault ? (
-                          <span className="block truncate text-xs text-muted-foreground">
-                            {t(($) => $.notes_page.period_brief_agent_default_badge)}
-                          </span>
-                        ) : null}
                       </span>
                       {selected ? <Check className="size-4 shrink-0 text-primary" /> : null}
                     </button>

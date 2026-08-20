@@ -930,7 +930,12 @@ func (h *Handler) runnerActivityPresentation(ctx context.Context, workspaceID, a
 		&daemonID, &snapshot.DaemonInstanceID, &snapshot.LaunchID, &snapshot.ClientSequence, &snapshot.ProducerFactID,
 		&observedAt, &snapshot.ActivityKind, &snapshot.DetailKind, &snapshot.ProbeID, &snapshot.ProcessInstanceID,
 	)
+	inFlight := h.agentHasInFlightInboxTask(ctx, workspaceID, agentID)
 	if errors.Is(err, pgx.ErrNoRows) {
+		if inFlight {
+			summary := inFlightInboxThinkingSummary()
+			response.Summary = &summary
+		}
 		return response, nil
 	}
 	if err != nil {
@@ -940,10 +945,13 @@ func (h *Handler) runnerActivityPresentation(ctx context.Context, workspaceID, a
 	snapshot.ObservedAt = observedAt.Time
 	summary := activityprojection.ProjectSummary(snapshot)
 	if h.liveRunnerOwnsActivitySnapshot(daemonID, util.UUIDToString(workspaceID), snapshot) {
-		if h.agentHasInFlightInboxTask(ctx, workspaceID, agentID) {
+		if inFlight {
 			summary = overlayInFlightInboxOnIdleRunnerSummary(summary)
 		}
 		response.Summary = &summary
+	} else if inFlight {
+		thinking := inFlightInboxThinkingSummary()
+		response.Summary = &thinking
 	}
 
 	rows, err := h.DB.Query(ctx, `
@@ -1001,14 +1009,20 @@ func runnerActivitySummaryWithError(summary activityprojection.Summary, errorTex
 	return summary
 }
 
+func inFlightInboxThinkingSummary() activityprojection.Summary {
+	return activityprojection.Summary{Label: "Thinking...", Tone: "info", Visibility: "visible"}
+}
+
 // overlayInFlightInboxOnIdleRunnerSummary keeps compact Activity from saying
-// Online/Idle/Working while an inbox task (e.g. Period Work collector) is still
-// draining. Presence stays on the avatar; the composer strip needs a live verb.
+// Online/Idle/Working/Offline while an inbox task (e.g. Period Work collector)
+// is still draining. One-shot collectors (force_fresh_session) leave
+// Offline/stopped after the previous launch dies; presence stays on the avatar
+// and the composer strip still needs a live verb.
 func overlayInFlightInboxOnIdleRunnerSummary(summary activityprojection.Summary) activityprojection.Summary {
 	base := strings.TrimRight(strings.TrimSpace(summary.Label), ".…")
 	switch base {
-	case "Online", "Idle", "Working":
-		return activityprojection.Summary{Label: "Thinking...", Tone: "info", Visibility: "visible"}
+	case "Online", "Idle", "Working", "Offline":
+		return inFlightInboxThinkingSummary()
 	default:
 		return summary
 	}

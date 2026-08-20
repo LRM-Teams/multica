@@ -5,6 +5,16 @@ supersedes: docs/adr/0018-machine-work-journal-period-brief.md
 
 # Runtime Agents collect machine work; a dedicated Brief Agent synthesizes
 
+> **Amendment (2026-08-20):** Synthesizer identity is the Workspace Notes
+> Assistant (「笔记助手」 / `notes-assistant`). 「周报」 / `weekly-report` is
+> retired and archived on Ensure. Collectors are unchanged. One Agent, two
+> wakes (Notes FAB bubble vs `force_fresh_session` 写汇报).
+>
+> **Amendment (2026-08-20):** Collector scan roots are `SCAN_ROOTS` = `$HOME`
+> ∪ `/workspace` (when that directory exists) ∪ other visible project dirs
+> outside agent-private `.multica`. HOME-only is incomplete on container
+> sandboxes. Non-git in-window source files are evidence.
+
 A Period Work Brief remains a Notes narrative for colleagues or a manager —
 not an activity dump and not a PPT file. Collection and synthesis are split:
 
@@ -15,12 +25,14 @@ not an activity dump and not a PPT file. Collection and synthesis are split:
      `采集 · 云端 · <label>` so humans never confuse it with a laptop.
   Opening Period Work Brief ensures collectors exist for each Computer the
   member **owns** (never another member's machine, even when that runtime is
-  visible or `public`). Collectors gather recent work on that OS
-  (whole-machine HOME locally; the cloud runtime environment for cloud).
+  visible or `public`).   Collectors gather recent work on that OS
+  (`SCAN_ROOTS`: whole-machine HOME plus `/workspace` and other visible
+  project dirs — not HOME-only on container sandboxes).
   The collector UI lists **only** these owned-Computer Agents.
-2. **Synthesizer** — One dedicated Workspace Agent (「周报」 / `weekly-report`)
-   that reads platform Facts plus all collector packs and writes the Brief
-   into Notes.
+2. **Synthesizer** — The Workspace Notes Assistant (「笔记助手」 /
+   `notes-assistant`) in its 写汇报 wake. Leftover 「周报」 /
+   `weekly-report` agents are archived on Ensure. It reads platform Facts
+   plus all collector packs and writes the Brief into Notes.
 
 This supersedes ADR 0018's **Host Digest** path. Computer Host no longer
 silently harvests Work Digests for Period Work. Agents collect; one Agent
@@ -87,11 +99,11 @@ strictly inside that window.
 
 ## Synthesis
 
-A Workspace-provisioned **Period Brief Agent** (weekly-report specialist) is
-the default synthesizer. The human may override to another Agent. Synthesis
-uses Note Worker + `--note-write` under `工作介绍/`; humans confirm before
-body lands. Collector packs are untrusted partitions in the wake prompt
-(same escape rules as note/facts/digest).
+The Workspace **Notes Assistant** is the synthesizer (写汇报 wake,
+`force_fresh_session`). The human cannot pick another Agent. Synthesis uses
+Note Worker + `--note-write` under `工作介绍/`; humans confirm before body
+lands. Collector packs are untrusted partitions in the wake prompt (same
+escape rules as note/facts/digest).
 
 ### Collector settle + status board
 

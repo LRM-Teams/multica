@@ -24,9 +24,9 @@ to these sources.
 | Claim | Source |
 |-------|--------|
 | `--note-write` to folder under 工作介绍/ | `notePeriodBriefInstruction` |
-| Fixed board: Summary (Work Summary + Next Steps); optional Technique / Achievements / Research | `notePeriodBriefInstruction`; `weekly-report.json`; this skill |
+| Fixed board: Summary (Work Summary + Next Steps); optional Technique / Achievements / Research | `notePeriodBriefInstruction`; `notes-assistant.json` synthesizer wake; this skill |
 | Audience-facing Brief — no evidence layer (hashes/diffs/「证据」) | `notePeriodBriefInstruction`; this skill `Audience` / `No evidence layer` |
 | Wake system_contract repeats Summary board + Mermaid | `buildNotePeriodBriefPrompt` |
-| Platform weekly-report persona refresh on stale instructions | `EnsurePeriodBriefAgent` / `refreshPeriodBriefInstructionsIfStale` (`Start from collector ## Work groups` marker) |
+| Synthesizer identity is 笔记助手 | `resolvePeriodBriefSynthesizerId`; `EnsurePeriodBriefAgent` archives leftover `weekly-report` |
 | Work Summary expands collector Work groups (main title + nested work) | this skill `Work Summary grouping`; `notePeriodBriefInstruction` |
 

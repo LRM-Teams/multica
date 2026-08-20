@@ -1,35 +1,37 @@
 /**
- * Period Brief Agent (「周报」) — default synthesizer for Period Work Briefs.
- * Permanent name is stable so Workspace resolve / Ensure can find it.
+ * Period Brief synthesizer identity is the Workspace Notes Assistant.
+ * The dedicated 「周报」 / weekly-report Agent is retired.
  */
 
 import type { Agent } from "../types";
+import {
+  NOTES_ASSISTANT_AGENT_DISPLAY_NAME,
+  NOTES_ASSISTANT_AGENT_NAME,
+  isNotesAssistantAgent,
+  resolveNotesAssistantAgent,
+} from "./notes-assistant-agent";
 
-export const PERIOD_BRIEF_AGENT_NAME = "weekly-report";
-export const PERIOD_BRIEF_AGENT_DISPLAY_NAME = "周报";
-export const PERIOD_BRIEF_AGENT_TEMPLATE_SLUG = "weekly-report";
+/** Retired permanent name — used only to find leftover 周报 rows to archive. */
+export const RETIRED_PERIOD_BRIEF_AGENT_NAME = "weekly-report";
 
-/** True when this Agent is the Workspace Period Brief Agent. */
+export const PERIOD_BRIEF_AGENT_NAME = NOTES_ASSISTANT_AGENT_NAME;
+export const PERIOD_BRIEF_AGENT_DISPLAY_NAME = NOTES_ASSISTANT_AGENT_DISPLAY_NAME;
+
+/** True when this Agent is the 写汇报 synthesizer (笔记助手). */
 export function isPeriodBriefAgent(agent: Pick<Agent, "name"> | null | undefined): boolean {
-  return Boolean(agent?.name === PERIOD_BRIEF_AGENT_NAME);
+  return isNotesAssistantAgent(agent);
 }
 
-/** Prefer the provisioned 周报 Agent; otherwise null (caller falls back). */
+/** Prefer the provisioned 笔记助手; otherwise null. */
 export function resolvePeriodBriefAgent<T extends Pick<Agent, "id" | "name">>(
   agents: readonly T[],
 ): T | null {
-  return agents.find((agent) => isPeriodBriefAgent(agent)) ?? null;
+  return resolveNotesAssistantAgent(agents);
 }
 
-/** Default synthesizer id: 周报 → preferred → first agent. */
+/** Synthesizer is always 笔记助手; null until that agent is provisioned. */
 export function resolvePeriodBriefSynthesizerId(
   agents: readonly Pick<Agent, "id" | "name">[],
-  preferredAgentId?: string | null,
 ): string | null {
-  const periodBrief = resolvePeriodBriefAgent(agents);
-  if (periodBrief) return periodBrief.id;
-  if (preferredAgentId && agents.some((agent) => agent.id === preferredAgentId)) {
-    return preferredAgentId;
-  }
-  return agents[0]?.id ?? null;
+  return resolvePeriodBriefAgent(agents)?.id ?? null;
 }

@@ -16,10 +16,7 @@
     "placeholder_default": "Start a message…",
     "send_tooltip": "Send",
     "stop_tooltip": "Stop",
-    "send_failed_toast": "Failed to send message",
-    "project_label": "Project",
-    "project_none": "No project",
-    "project_tooltip": "Set the project for this chat"
+    "send_failed_toast": "Failed to send message"
   },
   "message_list": {
     "show_details": "Show details",
@@ -125,22 +122,7 @@
   "status_pill": {
     "stages": {
       "offline": "Offline",
-      "reconnecting": "Reconnecting",
-      "queued": "Queued",
-      "starting_up": "Working",
-      "thinking": "Thinking",
-      "typing": "Output"
-    },
-    "tools": {
-      "running_command": "Running command…",
-      "reading_files": "Reading file…",
-      "searching_code": "Searching code…",
-      "making_edits": "Editing file…",
-      "searching_web": "Searching web…",
-      "updating_todos": "Updating todos…",
-      "running_subagent": "Running subagent…",
-      "planning": "Planning…",
-      "fallback": "Working"
+      "thinking": "Thinking"
     }
   },
   "bubble_cursor": {

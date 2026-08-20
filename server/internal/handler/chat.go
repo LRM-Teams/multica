@@ -1033,9 +1033,12 @@ func (h *Handler) ListPendingChatTasks(w http.ResponseWriter, r *http.Request) {
 		items = append(items, PendingChatTaskItem{
 			ChatSessionID: row.SessionID,
 			Pending:       true,
-			Status:        "queued",
-			DeliveryID:    row.DeliveryID,
-			CreatedAt:     row.CreatedAt,
+			// Standalone chat has no observable queue/dispatch stages after
+			// Raft deliver — the agent is already being woken. "running" maps
+			// to the StatusPill "Thinking" label (empty transcript).
+			Status:     "running",
+			DeliveryID: row.DeliveryID,
+			CreatedAt:  row.CreatedAt,
 		})
 	}
 	writeJSON(w, http.StatusOK, PendingChatTasksResponse{Tasks: items})
@@ -1067,8 +1070,10 @@ func (h *Handler) GetPendingChatTask(w http.ResponseWriter, r *http.Request) {
 	}
 	if ok {
 		writeJSON(w, http.StatusOK, PendingChatTaskResponse{
-			Pending:    true,
-			Status:     "queued",
+			Pending: true,
+			// Standalone outstanding is "agent working on a reply", not a
+			// queued inbox task. Keep StatusPill on Thinking until chat:done.
+			Status:     "running",
 			CreatedAt:  out.CreatedAt,
 			DeliveryID: out.DeliveryID,
 		})

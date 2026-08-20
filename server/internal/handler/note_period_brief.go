@@ -91,7 +91,7 @@ func notePeriodBriefCollectorInstruction(draftPageID, windowLabel, windowStart, 
 		"OWN COMPUTER ONLY: harvest only this bound Computer. Do not collect from another member's laptop/cloud box.\n" +
 		"STRICT TIME WINDOW: only include commits, file changes, and claims whose activity falls inside start→end from the wake `<window>` partition (RFC3339, half-open: include start, exclude end). Drop anything outside that range — do not widen to \"recent\" or \"this week\" on your own.\n" +
 		"Follow the built-in skill `multica-period-work-collect` (read SKILL.md and `references/collect-recipes.md`) before collecting — use its shell recipes with the wake `$START` / `$END`.\n" +
-		"Scope: whole-machine HOME for local runtimes; the cloud runtime environment for cloud. Prefer git status, commits in-window, dirty trees with in-window mtimes, and project dirs you can see.\n" +
+		"Scope: run the collect-recipes SCAN_ROOTS snippet first. Scan `$HOME` and `/workspace` when that directory exists, plus other visible project dirs — HOME-only is incomplete on container sandboxes. Also harvest non-git source files whose mtime is in-window. Prefer git status, commits in-window, and dirty trees with in-window mtimes.\n" +
 		"PRELIMINARY GROUPING (required): after harvesting evidence, build `## Work groups`. Default: one group per git repo / project root. If work in different repos, files, or surfaces shares one outcome/initiative, put them in **one** group and state why. Unrelated work stays in separate groups — never glue by calendar. Completeness first — Highlights and Repos stay as the evidence layer; Work groups organize them. Every Highlight belongs to exactly one group; every group claim must be in-window.\n" +
 		"When a multi-step flow needs it, add Mermaid diagrams under Diagrams.\n" +
 		"Allowed detail: short diffs, file summaries, and key snippets when needed to explain work. Prefer bounded excerpts over whole files.\n" +
@@ -156,6 +156,7 @@ func (h *Handler) CreateNotePeriodBrief(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
+	h.archiveRetiredWeeklyReportAgents(r.Context(), workspaceID, userID)
 	var req createNotePeriodBriefRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")

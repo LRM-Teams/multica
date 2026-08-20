@@ -68,6 +68,20 @@ What lives where for sharing purposes is documented in *Sharing Principles* belo
 
 **pnpm catalog** — `pnpm-workspace.yaml` defines `catalog:` for version pinning. All shared deps use `catalog:` references to guarantee a single version across all packages. When adding new shared deps (including test deps), add to catalog first.
 
+### Daemon App Storage Identity
+
+Daemon-owned App state is scoped by machine, workspace, App, and owner Agent. The canonical per-Agent path is:
+
+```text
+<BindingsRoot>/app-storage/v1/<MachineID>/<WorkspaceID>/<AppID>/agents/<AgentID>/state.json
+```
+
+- `MachineID` is the stable OS-level machine fingerprint from `Config.MachineID`.
+- For this storage model, Multica `WorkspaceID` is semantically equivalent to Raft `serverId`. Do not introduce another `ServerScope`/`ServerID` directory, and never substitute `DaemonID` for it.
+- `AppID` is the App authority boundary. Reminder receipts use `system.reminder`; the aggregate Agent App Inbox uses `system.agent-inbox`.
+- Start from machine-wide `BindingsRoot`, not `BindingStateRoot`: the latter is already workspace-scoped and would duplicate `WorkspaceID` in the path.
+- App state owned by the Computer rather than an Agent uses `<AppID>/computer/state.json` at the same machine/workspace scope.
+
 ### State Management
 
 The architecture relies on a strict split between server state and client state. Mixing them is the most common way to break it.

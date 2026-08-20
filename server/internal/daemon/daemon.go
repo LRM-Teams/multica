@@ -145,7 +145,7 @@ type Daemon struct {
 	wsConnState   string
 
 	reminderCache            *reminderCache
-	localReminderInbox       *LocalReminderInbox
+	agentAppInboxes          *AgentAppInboxRegistry
 	reminderWSMu             sync.RWMutex
 	reminderWrites           chan<- []byte
 	reminderWSDone           <-chan struct{}
@@ -309,10 +309,27 @@ func (d *Daemon) initializeBindingExecution(bindingStateRoot string) {
 	d.agentRuntimeSessions = sessions
 	d.runner = taskRunnerFunc(d.runTask)
 	d.reminderCache = newReminderCache(nil, d.logger, nil)
-	d.localReminderInbox = &LocalReminderInbox{daemon: d}
-	d.reminderCache.onFireDelivery = d.localReminderInbox.AcceptDue
+	reminderStorageRoot, reminderStorageErr := builtInAppStorageAgentsRoot(d.cfg.BindingsRoot, d.cfg.MachineID, d.cfg.WorkspaceID, reminderInboxAppID)
+	inboxStorageRoot, inboxStorageErr := builtInAppStorageAgentsRoot(d.cfg.BindingsRoot, d.cfg.MachineID, d.cfg.WorkspaceID, agentInboxAppID)
+	if reminderStorageErr != nil && d.logger != nil {
+		d.logger.Error("Reminder App storage unavailable", "error", reminderStorageErr)
+	}
+	if inboxStorageErr != nil && d.logger != nil {
+		d.logger.Error("Agent Inbox App storage unavailable", "error", inboxStorageErr)
+	}
+	d.agentAppInboxes = newAgentAppInboxRegistry(inboxStorageRoot, func(agentID string, item AgentAppInboxItem) bool {
+		if item.AppID != reminderInboxAppID || item.NotificationClass != reminderDueClass || item.SourceRef.Kind != "reminder" || item.SourceRef.ID == "" {
+			return false
+		}
+		version, ok := reminderRevision(item.SourceRef)
+		if !ok {
+			return false
+		}
+		return d.reminderCache.consumeFireReceipt(reminderDueIdentity{OwnerAgentID: agentID, ReminderID: item.SourceRef.ID, Version: version})
+	})
+	d.reminderCache.onFireDelivery = d.materializeReminderFire
 	d.reminderCache.onFireReceipt = d.queueReminderFireReceipt
-	d.reminderCache.setPersistence(bindingStateRoot)
+	d.reminderCache.setPersistence(reminderStorageRoot)
 }
 
 // setAgentVersion records the detected CLI version for an agent provider so
@@ -672,8 +689,7 @@ func daemonRegistrationCapabilities(includeCredentialTransport bool) []string {
 		protocol.DaemonCapabilityMemoryCrossDeviceSync,
 		protocol.DaemonCapabilityRestrictedExecution,
 		protocol.DaemonCapabilityReminderVersionedCache,
-		protocol.DaemonCapabilityReminderLocalInbox,
-		protocol.DaemonCapabilityReminderTransientInput,
+		protocol.DaemonCapabilityReminderFireRequest,
 		protocol.DaemonCapabilityWorkspaceRunnerAgentProcess,
 		protocol.DaemonCapabilityWorkspaceRunnerAgentReset,
 		// Binding children advertise the wire capability so the server can

@@ -31,7 +31,7 @@ var ErrCursorACPAuthRequired = errors.New(ProviderAuthRequiredMarker + ": cursor
 type CursorACPBackend interface {
 	Backend
 	ResidentMessageInput
-	ResidentReminderInputReceiver
+	ResidentIdleInboxNoticeInput
 	ResidentPendingNoticeInput
 	Close()
 }
@@ -188,8 +188,8 @@ func (b *cursorACPBackend) AcceptMessageBatch(ctx context.Context, messages []Re
 	return b.acceptIdleInputPrompt(ctx, prompt)
 }
 
-func (b *cursorACPBackend) AcceptReminderInput(ctx context.Context, input ResidentReminderInput) (ResidentMessageAcceptance, error) {
-	prompt, err := formatResidentReminderInput(input)
+func (b *cursorACPBackend) AcceptIdleInboxNotice(ctx context.Context, notice ResidentPendingNotice) (ResidentMessageAcceptance, error) {
+	prompt, err := formatResidentPendingNotice(notice)
 	if err != nil {
 		return ResidentMessageAcceptance{}, err
 	}

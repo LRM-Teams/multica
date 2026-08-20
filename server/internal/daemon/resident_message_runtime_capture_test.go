@@ -79,7 +79,7 @@ func (r *captureBoundaryPiRuntime) PrepareMessageInput(context.Context, func(age
 	return nil
 }
 
-func (r *captureBoundaryPiRuntime) AcceptReminderInput(context.Context, agent.ResidentReminderInput) (agent.ResidentMessageAcceptance, error) {
+func (r *captureBoundaryPiRuntime) AcceptIdleInboxNotice(context.Context, agent.ResidentPendingNotice) (agent.ResidentMessageAcceptance, error) {
 	return agent.ResidentMessageAcceptance{}, nil
 }
 

@@ -102,8 +102,8 @@ func TestWorkspaceRunnerReadyPingAndReconnectUseFixedIdentity(t *testing.T) {
 			for _, capability := range got.ready.ActiveCapabilities {
 				capabilities[capability] = true
 			}
-			if !capabilities[protocol.DaemonCapabilityWorkspaceRunnerAgentProcess] || !capabilities[protocol.DaemonCapabilityWorkspaceRunnerAgentReset] || !capabilities[protocol.DaemonCapabilityReminderTransientInput] {
-				t.Fatalf("Runner capabilities = %v, want Agent process, reset, and Reminder transient input", got.ready.ActiveCapabilities)
+			if !capabilities[protocol.DaemonCapabilityWorkspaceRunnerAgentProcess] || !capabilities[protocol.DaemonCapabilityWorkspaceRunnerAgentReset] {
+				t.Fatalf("Runner capabilities = %v, want Agent process and reset", got.ready.ActiveCapabilities)
 			}
 		case <-ctx.Done():
 			t.Fatalf("timed out waiting for Runner connection %d", attempt+1)

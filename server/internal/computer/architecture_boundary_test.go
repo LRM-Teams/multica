@@ -15,7 +15,7 @@ func TestComputerProductionOwnsNoBindingExecutionTypes(t *testing.T) {
 	forbiddenIdentifiers := map[string]struct{}{
 		"WorkspaceRunner": {}, "AgentProcessManager": {}, "agentProcessManager": {},
 		"MessageCoordinator": {}, "messageCoordinator": {},
-		"LocalReminderInbox": {}, "canonicalAgentRuntimePool": {},
+		"canonicalAgentRuntimePool": {},
 		"mixedRunActivityOutbox": {}, "agentActivityProducer": {}, "inboxRegistry": {},
 		"localAgentAttachmentRegistry": {},
 	}

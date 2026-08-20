@@ -382,7 +382,7 @@ func (r *settlementBlockingPiRuntime) PrepareMessageInput(_ context.Context, _ f
 	return nil
 }
 
-func (r *settlementBlockingPiRuntime) AcceptReminderInput(_ context.Context, _ agent.ResidentReminderInput) (agent.ResidentMessageAcceptance, error) {
+func (r *settlementBlockingPiRuntime) AcceptIdleInboxNotice(_ context.Context, _ agent.ResidentPendingNotice) (agent.ResidentMessageAcceptance, error) {
 	return agent.ResidentMessageAcceptance{}, nil
 }
 

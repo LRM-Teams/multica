@@ -319,6 +319,8 @@ func (d *Daemon) credentialProxyMessageMutationHandler(path string, bodyFor any)
 }
 
 func (d *Daemon) registerCredentialProxyRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("/internal/agent-api/inbox", d.agentAppInboxHandler())
+	mux.HandleFunc("/internal/agent-api/inbox/ack", d.agentAppInboxAckHandler())
 	mux.HandleFunc("/credential-proxy/messages/check", d.credentialProxyMessageCheckHandler())
 	mux.HandleFunc("/credential-proxy/messages/read", d.credentialProxyMessageReadHandler())
 	mux.HandleFunc("/credential-proxy/messages/send", d.credentialProxyMessageSendHandler())

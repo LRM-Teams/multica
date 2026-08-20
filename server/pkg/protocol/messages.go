@@ -564,15 +564,7 @@ const (
 	DaemonCapabilityMemoryCrossDeviceSync    = "memory_cross_device_sync_v2"
 	DaemonCapabilityRestrictedExecution      = "restricted_execution_profiles_v1"
 	DaemonCapabilityReminderVersionedCache   = "reminder_versioned_cache_v1"
-	// DaemonCapabilityReminderLocalInbox selects the Raft 1.0.16 delivery
-	// contract: the owner daemon accepts a due item locally and reports only a
-	// fire receipt to the server. A server must not also push transient owner
-	// input to a runtime that advertises this capability.
-	DaemonCapabilityReminderLocalInbox = "reminder_local_inbox_v1"
-	// DaemonCapabilityReminderTransientInput gates the owner-only, idle-only
-	// Reminder system input. Unlike canonical Message delivery, this transport
-	// is best-effort and creates no queue, receipt, or reconnect replay.
-	DaemonCapabilityReminderTransientInput = "reminder_transient_owner_input_v1"
+	DaemonCapabilityReminderFireRequest      = "reminder:fire-request-v2"
 	// DaemonCapabilityWorkspaceRunnerAgentReset gates Raft's discrete
 	// agent:reset-workspace command plus Multica's terminal reset receipt.
 	DaemonCapabilityWorkspaceRunnerAgentReset = "workspace_runner_agent_reset_workspace_v1"
@@ -597,27 +589,7 @@ type ReminderTimerJob struct {
 	OwnerAgentID string `json:"owner_agent_id"`
 	Version      int64  `json:"version"`
 	FireAt       string `json:"fire_at"`
-	// LocalInput is the bounded, owner-authorized material needed by the
-	// Computer-local Inbox. Nil identifies the legacy server-pushed input
-	// contract and is retained only for rolling upgrade compatibility.
-	LocalInput *ReminderLocalInputPayload `json:"local_input,omitempty"`
-}
-
-// ReminderLocalInputPayload is persisted with one timer revision so the
-// owner Computer can wake its Agent without waiting for a server round trip.
-// It deliberately carries no canonical Message identity or delivery cursor.
-type ReminderLocalInputPayload struct {
-	Title      string                       `json:"title"`
-	Anchor     ReminderOwnerInputAnchor     `json:"anchor"`
-	Occurrence ReminderLocalInputOccurrence `json:"occurrence"`
-}
-
-type ReminderLocalInputOccurrence struct {
-	OccurrenceID string `json:"occurrence_id"`
-	ScheduledFor string `json:"scheduled_for"`
-	DueAt        string `json:"due_at"`
-	Cadence      string `json:"cadence,omitempty"`
-	Timezone     string `json:"timezone,omitempty"`
+	Title        string `json:"title"`
 }
 
 type ReminderUpsertPayload struct {
@@ -642,74 +614,30 @@ type ReminderSnapshotPayload struct {
 	Reminders []ReminderTimerJob `json:"reminders"`
 }
 
-type ReminderFireAttemptPayload struct {
-	AgentID       string `json:"agent_id"`
-	RuntimeID     string `json:"runtime_id"`
-	ReminderID    string `json:"reminder_id"`
+type ReminderFireRequestPayload struct {
+	AgentID       string `json:"agentId"`
+	ReminderID    string `json:"reminderId"`
 	Version       int64  `json:"version"`
-	FiredAtClient string `json:"fired_at_client"`
+	RequestID     string `json:"requestId"`
+	FiredAtClient string `json:"firedAtClient"`
 }
 
-type ReminderFireAckPayload struct {
-	AgentID    string `json:"agent_id"`
-	ReminderID string `json:"reminder_id"`
+type ReminderFireRequestResultPayload struct {
+	AgentID      string `json:"agentId"`
+	ReminderID   string `json:"reminderId"`
+	Version      int64  `json:"version"`
+	RequestID    string `json:"requestId"`
+	Outcome      string `json:"outcome"`
+	Fired        bool   `json:"fired,omitempty"`
+	Catchup      bool   `json:"catchup,omitempty"`
+	RetryAfterMS int64  `json:"retryAfterMs,omitempty"`
+	Reason       string `json:"reason,omitempty"`
+}
+
+type ReminderFireReceiptAckPayload struct {
+	AgentID    string `json:"agentId"`
+	ReminderID string `json:"reminderId"`
 	Version    int64  `json:"version"`
-}
-
-type ReminderFireResultPayload struct {
-	Ack    ReminderFireAckPayload `json:"ack"`
-	Upsert *ReminderUpsertPayload `json:"upsert,omitempty"`
-	Cancel *ReminderCancelPayload `json:"cancel,omitempty"`
-}
-
-// AgentTransientDeliverPayload is the non-durable branch of the Workspace
-// Runner agent:deliver union. Canonical Messages keep AgentDeliverPayload;
-// transient inputs share transport and resident-turn admission without gaining
-// Message identity, cursor, replay, acknowledgement, or Activity semantics.
-type AgentTransientDeliverPayload struct {
-	Kind      string                    `json:"kind"`
-	Transient bool                      `json:"transient"`
-	Reminder  ReminderOwnerInputPayload `json:"reminder"`
-}
-
-const AgentTransientDeliverKindReminder = "reminder"
-
-// ReminderOwnerInputPayload is one post-commit, best-effort Reminder input for
-// the current owner placement. It is deliberately not a Message projection and
-// carries no delivery identity or acknowledgement contract.
-type ReminderOwnerInputPayload struct {
-	WorkspaceID string                       `json:"workspace_id"`
-	AgentID     string                       `json:"agent_id"`
-	RuntimeID   string                       `json:"runtime_id"`
-	ReminderID  string                       `json:"reminder_id"`
-	Version     int64                        `json:"version"`
-	Title       string                       `json:"title"`
-	Anchor      ReminderOwnerInputAnchor     `json:"anchor"`
-	Occurrence  ReminderOwnerInputOccurrence `json:"occurrence"`
-}
-
-// ReminderOwnerInputAnchor is the already-authorized return surface and a
-// bounded excerpt from the immutable Message Anchor. When Available is false,
-// every other field must be empty so unavailable context cannot leak.
-type ReminderOwnerInputAnchor struct {
-	Available           bool   `json:"available"`
-	ChannelID           string `json:"channel_id,omitempty"`
-	MessageID           string `json:"message_id,omitempty"`
-	ThreadRootMessageID string `json:"thread_root_message_id,omitempty"`
-	Target              string `json:"target,omitempty"`
-	ReplyTarget         string `json:"reply_target,omitempty"`
-	Excerpt             string `json:"excerpt,omitempty"`
-}
-
-// ReminderOwnerInputOccurrence supplies only bounded scheduling context for
-// the committed fire. It is diagnostic context inside the private input, not a
-// second lifecycle or delivery record.
-type ReminderOwnerInputOccurrence struct {
-	OccurrenceID string `json:"occurrence_id"`
-	ScheduledFor string `json:"scheduled_for"`
-	DueAt        string `json:"due_at"`
-	Cadence      string `json:"cadence,omitempty"`
-	Timezone     string `json:"timezone,omitempty"`
 }
 
 const (

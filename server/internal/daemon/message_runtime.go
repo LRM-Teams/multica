@@ -187,6 +187,9 @@ func (d *Daemon) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID
 		// Notice; body delivery waits for idle Accept→Flush, recovery Flush, or
 		// agent `message check`.
 		runner.notifyPendingMessagesAfterTurn(agentID)
+		if runner != nil && runner.notifyAppInbox != nil {
+			_ = runner.notifyAppInbox(context.Background(), agentID, runtimeID)
+		}
 		d.canonicalRuntimes.publishIfMessageTurnStillIdle(agentID, runtimeID, generation, func() {
 			runner.observeMessageTurnCompletion(agentID, runtimeID, turnErr)
 		})

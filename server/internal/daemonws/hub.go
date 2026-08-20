@@ -113,7 +113,7 @@ func (c *client) markSeen(eventID string) bool {
 type HeartbeatHandler func(ctx context.Context, identity ClientIdentity, payload protocol.DaemonHeartbeatRequestPayload) (*protocol.DaemonHeartbeatAckPayload, error)
 
 type ReminderSnapshotHandler func(ctx context.Context, identity ClientIdentity, payload protocol.ReminderSnapshotRequestPayload) (*protocol.ReminderSnapshotPayload, error)
-type ReminderFireAttemptHandler func(ctx context.Context, identity ClientIdentity, payload protocol.ReminderFireAttemptPayload) (*protocol.ReminderFireResultPayload, error)
+type ReminderFireRequestHandler func(ctx context.Context, identity ClientIdentity, payload protocol.ReminderFireRequestPayload) (*protocol.ReminderFireRequestResultPayload, error)
 type AgentDeliveryAckHandler func(ctx context.Context, identity ClientIdentity, payload protocol.AgentDeliverAckPayload) error
 
 // WorkspaceRunnerHandler receives only frames from the current ready
@@ -151,7 +151,7 @@ type Hub struct {
 	onHeartbeat                 HeartbeatHandler
 	reminderMu                  sync.RWMutex
 	onReminderSnapshot          ReminderSnapshotHandler
-	onReminderFire              ReminderFireAttemptHandler
+	onReminderFire              ReminderFireRequestHandler
 	deliveryMu                  sync.RWMutex
 	onAgentDeliveryAck          AgentDeliveryAckHandler
 	runnerMu                    sync.RWMutex
@@ -651,7 +651,7 @@ func (h *Hub) heartbeatHandler() HeartbeatHandler {
 	return h.onHeartbeat
 }
 
-func (h *Hub) SetReminderHandlers(snapshot ReminderSnapshotHandler, fire ReminderFireAttemptHandler) {
+func (h *Hub) SetReminderHandlers(snapshot ReminderSnapshotHandler, fire ReminderFireRequestHandler) {
 	if h == nil {
 		return
 	}
@@ -661,7 +661,7 @@ func (h *Hub) SetReminderHandlers(snapshot ReminderSnapshotHandler, fire Reminde
 	h.reminderMu.Unlock()
 }
 
-func (h *Hub) reminderHandlers() (ReminderSnapshotHandler, ReminderFireAttemptHandler) {
+func (h *Hub) reminderHandlers() (ReminderSnapshotHandler, ReminderFireRequestHandler) {
 	h.reminderMu.RLock()
 	defer h.reminderMu.RUnlock()
 	return h.onReminderSnapshot, h.onReminderFire
@@ -770,6 +770,10 @@ func (h *Hub) NotifyReminderCancel(runtimeID string, payload protocol.ReminderCa
 	h.notifyReminder(runtimeID, protocol.EventReminderCancel, payload, fmt.Sprintf("reminder-cancel:%s:%d", payload.ReminderID, payload.Version))
 }
 
+func (h *Hub) NotifyReminderFireReceiptAck(runtimeID string, payload protocol.ReminderFireReceiptAckPayload) {
+	h.notifyReminder(runtimeID, protocol.EventReminderFireReceiptAck, payload, fmt.Sprintf("reminder-fire-receipt-ack:%s:%d", payload.ReminderID, payload.Version))
+}
+
 func (h *Hub) notifyWorkspaceRunnerCommand(workspaceID, daemonID, eventType string, payload any) bool {
 	if h == nil || strings.TrimSpace(workspaceID) == "" || strings.TrimSpace(daemonID) == "" {
 		return false
@@ -779,22 +783,6 @@ func (h *Hub) notifyWorkspaceRunnerCommand(workspaceID, daemonID, eventType stri
 		return false
 	}
 	return h.notifyWorkspaceRunnerFrame(daemonID, workspaceID, frame)
-}
-
-// NotifyReminderOwnerInput attempts one in-memory Workspace Runner write. It
-// does not enter pendingAgentDeliveries and deliberately has no retry or ACK.
-func (h *Hub) NotifyReminderOwnerInput(workspaceID, daemonID string, payload protocol.ReminderOwnerInputPayload) bool {
-	if h == nil || strings.TrimSpace(workspaceID) == "" || strings.TrimSpace(daemonID) == "" {
-		return false
-	}
-	input := protocol.AgentTransientDeliverPayload{
-		Kind: protocol.AgentTransientDeliverKindReminder, Transient: true, Reminder: payload,
-	}
-	delivered := h.notifyWorkspaceRunnerCommand(workspaceID, daemonID, protocol.EventAgentDeliver, input)
-	if !delivered {
-		slog.Info("transient Reminder owner input", "outcome", "transport_lost", "workspace_id", workspaceID, "daemon_id", daemonID, "runtime_id", payload.RuntimeID, "agent_id", payload.AgentID, "reminder_id", payload.ReminderID, "version", payload.Version)
-	}
-	return delivered
 }
 
 func (h *Hub) notifyReminder(runtimeID, eventType string, payload any, eventID string) {
@@ -1600,8 +1588,8 @@ func (c *client) handleFrame(raw []byte) {
 		c.hub.deliverResponse(done.RequestID, msg.Payload)
 	case protocol.EventReminderSnapshotRequest:
 		c.handleReminderSnapshotRequest(msg.Payload)
-	case protocol.EventReminderFireAttempt:
-		c.handleReminderFireAttempt(msg.Payload)
+	case protocol.EventReminderFireRequest:
+		c.handleReminderFireRequest(msg.Payload)
 	case protocol.EventAgentDeliverAck:
 		handler := c.hub.agentDeliveryAckHandler()
 		if handler == nil {
@@ -1691,13 +1679,13 @@ func (c *client) handleReminderSnapshotRequest(raw json.RawMessage) {
 	}
 }
 
-func (c *client) handleReminderFireAttempt(raw json.RawMessage) {
+func (c *client) handleReminderFireRequest(raw json.RawMessage) {
 	_, handler := c.hub.reminderHandlers()
 	if handler == nil {
 		return
 	}
-	var payload protocol.ReminderFireAttemptPayload
-	if err := json.Unmarshal(raw, &payload); err != nil || payload.AgentID == "" || payload.ReminderID == "" || payload.Version < 1 {
+	var payload protocol.ReminderFireRequestPayload
+	if err := json.Unmarshal(raw, &payload); err != nil || payload.AgentID == "" || payload.ReminderID == "" || payload.Version < 1 || payload.RequestID == "" {
 		slog.Debug("daemon websocket reminder fire invalid payload", "error", err, "daemon_id", c.identity.DaemonID)
 		return
 	}
@@ -1707,18 +1695,13 @@ func (c *client) handleReminderFireAttempt(raw json.RawMessage) {
 		if errors.As(err, &ownerGone) {
 			return
 		}
-		// Task #68: the daemon now keeps a locally-retryable in-flight record
-		// for a fired reminder until it sees a fire_result confirmation (see
-		// reminderCache.fireAndScheduleRetryLocked), so a transient failure
-		// here no longer needs the connection torn down just to force a
-		// reconnect+snapshot recovery — the daemon's own retry timer resends
-		// this fire_attempt shortly. Forcing a reconnect on every processing
-		// hiccup made a single transient DB error pay for a full WS drop.
+		// The daemon persists the in-flight request and retries it locally, so
+		// a transient server failure does not require a WebSocket reconnect.
 		slog.Warn("daemon websocket reminder fire failed; daemon local retry will resend", "error", err, "daemon_id", c.identity.DaemonID, "agent_id", payload.AgentID, "reminder_id", payload.ReminderID)
 		return
 	}
 	if result != nil {
-		_ = c.sendReminderFrame(protocol.EventReminderFireResult, result)
+		_ = c.sendReminderFrame(protocol.EventReminderFireRequestResult, result)
 	}
 }
 

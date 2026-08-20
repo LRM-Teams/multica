@@ -46,6 +46,15 @@ func (r *idleMessageFakeRuntime) AcceptPendingNotice(_ context.Context, notice a
 	return nil
 }
 
+func (r *idleMessageFakeRuntime) AcceptIdleInboxNotice(_ context.Context, notice agent.ResidentPendingNotice) (agent.ResidentMessageAcceptance, error) {
+	r.mu.Lock()
+	r.notices = append(r.notices, notice)
+	r.mu.Unlock()
+	done := make(chan error)
+	close(done)
+	return agent.ResidentMessageAcceptance{Done: done}, nil
+}
+
 func (r *idleMessageFakeRuntime) Execute(context.Context, string, agent.ExecOptions) (*agent.Session, error) {
 	return nil, nil
 }

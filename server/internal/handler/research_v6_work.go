@@ -34,6 +34,14 @@ func (h *Handler) researchV6Submission(w http.ResponseWriter) (researchrun.Resea
 }
 
 func (h *Handler) authorizeResearchV6Attempt(w http.ResponseWriter, r *http.Request) (researchrun.V6AttemptAccess, bool) {
+	return h.authorizeResearchV6AttemptWithReplay(w, r, false)
+}
+
+func (h *Handler) authorizeResearchV6SubmissionAttempt(w http.ResponseWriter, r *http.Request) (researchrun.V6AttemptAccess, bool) {
+	return h.authorizeResearchV6AttemptWithReplay(w, r, true)
+}
+
+func (h *Handler) authorizeResearchV6AttemptWithReplay(w http.ResponseWriter, r *http.Request, allowSettledReplay bool) (researchrun.V6AttemptAccess, bool) {
 	principal, ok := h.requireAgentPrincipal(w, r)
 	if !ok {
 		return researchrun.V6AttemptAccess{}, false
@@ -82,13 +90,24 @@ func (h *Handler) authorizeResearchV6Attempt(w http.ResponseWriter, r *http.Requ
 		  AND a.assigned_agent_id=$5::uuid AND m.agent_id=$5::uuid
 		  AND e.workspace_id=$1::uuid AND e.agent_id=$5::uuid
 		  AND m.state NOT IN ('archived','failed')
-		  AND a.status IN ('dispatching','running') AND e.status='draining'
+		  AND (
+		    (a.status IN ('dispatching','running') AND e.status='draining')
+		    OR (
+		      $6::boolean
+		      AND a.status IN ('succeeded','failed','cancelled')
+		      AND EXISTS (
+		        SELECT 1 FROM research_v6_work_submission sub
+		        WHERE (sub.workspace_id,sub.session_id,sub.work_item_id,sub.attempt_id)=
+		              (a.workspace_id,a.session_id,a.work_item_id,a.id)
+		      )
+		    )
+		  )
 		  AND (a.inbox_task_id IS NULL OR e.id=a.inbox_task_id)
 		  AND e.context->>'type'='research_run_work_item'
 		  AND e.context->>'run_id'=a.session_id::text
 		  AND e.context->>'work_item_id'=a.work_item_id::text
 		  AND e.context->>'attempt_id'=a.id::text
-	`, access.WorkspaceID, access.RunID, access.WorkItemID, access.AttemptID, access.AgentID).Scan(&access.InboxTaskID)
+	`, access.WorkspaceID, access.RunID, access.WorkItemID, access.AttemptID, access.AgentID, allowSettledReplay).Scan(&access.InboxTaskID)
 	if err != nil {
 		writeRonaldoV6Error(w, http.StatusConflict, "research.v6.principal_mismatch", "research attempt is not the active Agent task", false)
 		return researchrun.V6AttemptAccess{}, false
@@ -172,7 +191,7 @@ func (h *Handler) SubmitAgentResearchV6Work(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
-	access, ok := h.authorizeResearchV6Attempt(w, r)
+	access, ok := h.authorizeResearchV6SubmissionAttempt(w, r)
 	if !ok {
 		return
 	}

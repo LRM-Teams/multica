@@ -115,6 +115,33 @@ func TestResearchV6DurableCredentialRejectsInactiveAttempt(t *testing.T) {
 	}
 }
 
+func TestResearchV6SubmissionReplayAllowsExactSettledAttempt(t *testing.T) {
+	const inboxID = "00000000-0000-4000-8000-000000000214"
+	fake := &fakeRuntimeLookupDBTX{row: &fakeRuntimeRow{values: []string{inboxID}}}
+	h := &Handler{DB: fake}
+	req := researchV6AttemptRequest(
+		"00000000-0000-4000-8000-000000000003",
+		"00000000-0000-4000-8000-000000000212",
+		"00000000-0000-4000-8000-000000000213",
+		"00000000-0000-4000-8000-000000000002",
+		"00000000-0000-4000-8000-000000000009",
+	)
+	recorder := httptest.NewRecorder()
+	access, ok := h.authorizeResearchV6SubmissionAttempt(recorder, req)
+	if !ok || access.InboxTaskID != inboxID {
+		t.Fatalf("authorization=%v access=%+v status=%d body=%s", ok, access, recorder.Code, recorder.Body.String())
+	}
+	for _, fragment := range []string{
+		"$6::boolean",
+		"a.status IN ('succeeded','failed','cancelled')",
+		"FROM research_v6_work_submission sub",
+	} {
+		if !strings.Contains(fake.queryRowSQL, fragment) {
+			t.Fatalf("settled replay query missing %q: %s", fragment, fake.queryRowSQL)
+		}
+	}
+}
+
 func researchV6AttemptRequest(runID, workID, attemptID, workspaceID, agentID string) *http.Request {
 	req := httptest.NewRequest(http.MethodGet, "/api/agent/research/sessions/"+runID+"/work-items/"+workID+"/attempts/"+attemptID+"/manifest", nil)
 	route := chi.NewRouteContext()

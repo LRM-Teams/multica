@@ -143,6 +143,8 @@ multica research work-submit <session-id> <work-item-id> <attempt-id> \
 Retry the same submission with the same `client_request_id` and byte-equivalent
 payload after a transport failure. Never send a V6 envelope through the legacy
 `task-result` command.
+That exact replay remains valid after the Attempt settles and returns the
+original Submission outcome; a new request ID or changed content does not.
 
 An HTTP 400 `research.v6.invalid_contract` response includes the bounded field
 or hash validation reason. Correct that exact contract violation before the

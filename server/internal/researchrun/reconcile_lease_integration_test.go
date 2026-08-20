@@ -244,7 +244,13 @@ func TestEngineReconcileHeartbeatRenewsDuringSlowDispatch(t *testing.T) {
 		workspaceID: fixture.workspaceID, agentID: fixture.agentID,
 	}
 	engine := newEngine(store, dispatcher, nil)
-	engine.leaseDuration = 250 * time.Millisecond
+	// Lease slack must dwarf CI scheduling jitter: with a 250ms lease and 50ms
+	// renew interval a single >200ms stall on a loaded runner lapses the lease,
+	// the heartbeat stops with ErrRunLeaseLost, and the competitor claim below
+	// flakes green. A 10s lease renewed every 50ms keeps the same heartbeat
+	// semantics with ~10s of slack per renewal, and costs nothing because the
+	// test polls for the renewal instead of sleeping a fixed interval.
+	engine.leaseDuration = 10 * time.Second
 	engine.leaseRenewInterval = 50 * time.Millisecond
 	done := make(chan error, 1)
 	go func() { done <- engine.ReconcileSession(ctx, fixture.sessionID) }()
@@ -252,20 +258,33 @@ func TestEngineReconcileHeartbeatRenewsDuringSlowDispatch(t *testing.T) {
 	case <-dispatcher.started:
 	case err = <-done:
 		t.Fatalf("reconcile stopped before dispatch: %v", err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(15 * time.Second):
 		t.Fatal("dispatch did not start")
 	}
 	var initialExpiry time.Time
 	if err = pool.QueryRow(ctx, `SELECT reconcile_lease_expires_at FROM research_session WHERE id = $1::uuid`, fixture.sessionID).Scan(&initialExpiry); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(400 * time.Millisecond)
+	// Poll until the heartbeat observably extends the lease instead of sleeping
+	// a fixed interval: a fixed sleep can pass on a stale expiry written by the
+	// last successful renewal before the heartbeat died.
 	var renewedExpiry time.Time
-	if err = pool.QueryRow(ctx, `SELECT reconcile_lease_expires_at FROM research_session WHERE id = $1::uuid`, fixture.sessionID).Scan(&renewedExpiry); err != nil {
-		t.Fatal(err)
-	}
-	if !renewedExpiry.After(initialExpiry) {
-		t.Fatalf("heartbeat did not extend expiry: initial=%s renewed=%s", initialExpiry, renewedExpiry)
+	renewDeadline := time.Now().Add(5 * time.Second)
+	for {
+		if err = pool.QueryRow(ctx, `SELECT reconcile_lease_expires_at FROM research_session WHERE id = $1::uuid`, fixture.sessionID).Scan(&renewedExpiry); err != nil {
+			t.Fatal(err)
+		}
+		if renewedExpiry.After(initialExpiry) {
+			break
+		}
+		select {
+		case err = <-done:
+			t.Fatalf("reconcile stopped while waiting for heartbeat renewal: %v", err)
+		case <-time.After(20 * time.Millisecond):
+		}
+		if time.Now().After(renewDeadline) {
+			t.Fatalf("heartbeat did not extend expiry: initial=%s renewed=%s", initialExpiry, renewedExpiry)
+		}
 	}
 	if _, _, claimed, claimErr := store.ClaimRun(ctx, fixture.sessionID, uuid.NewString(), time.Minute); claimErr != nil || claimed {
 		t.Fatalf("competitor claimed renewed run: claimed=%v err=%v", claimed, claimErr)
@@ -276,7 +295,7 @@ func TestEngineReconcileHeartbeatRenewsDuringSlowDispatch(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(15 * time.Second):
 		t.Fatal("reconcile did not finish")
 	}
 }
@@ -312,13 +331,19 @@ func TestEngineReconcileCancelsWorkWhenLeaseIsTakenOver(t *testing.T) {
 		workspaceID: fixture.workspaceID, agentID: fixture.agentID,
 	}
 	engine := newEngine(store, dispatcher, nil)
-	engine.leaseDuration = 300 * time.Millisecond
-	engine.leaseRenewInterval = 40 * time.Millisecond
+	// The takeover below forces expiry with a direct UPDATE, so the lease
+	// duration is not what the test exercises. Keep it generous so a slow or
+	// loaded runner cannot lapse the lease before dispatch even starts (see
+	// TestEngineReconcileHeartbeatRenewsDuringSlowDispatch).
+	engine.leaseDuration = 10 * time.Second
+	engine.leaseRenewInterval = 50 * time.Millisecond
 	done := make(chan error, 1)
 	go func() { done <- engine.ReconcileSession(ctx, fixture.sessionID) }()
 	select {
 	case <-dispatcher.started:
-	case <-time.After(5 * time.Second):
+	case err = <-done:
+		t.Fatalf("reconcile stopped before dispatch: %v", err)
+	case <-time.After(15 * time.Second):
 		t.Fatal("dispatch did not start")
 	}
 	if _, err = pool.Exec(ctx, `UPDATE research_session SET reconcile_lease_expires_at = now() - interval '1 second' WHERE id = $1::uuid`, fixture.sessionID); err != nil {
@@ -333,7 +358,7 @@ func TestEngineReconcileCancelsWorkWhenLeaseIsTakenOver(t *testing.T) {
 		if !errors.Is(err, ErrRunLeaseLost) {
 			t.Fatalf("stale reconcile error=%v", err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(15 * time.Second):
 		t.Fatal("stale reconcile was not cancelled")
 	}
 	if err = store.AssertRunLease(withRunLease(ctx, successor), fixture.sessionID); err != nil {

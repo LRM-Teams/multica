@@ -107,7 +107,7 @@ func (h *Handler) ReportAgentMemoryWrites(w http.ResponseWriter, r *http.Request
 			AgentID:     agentID,
 			RelPath:     rel,
 			ContentHash: write.ContentHash,
-			CreatedAt:   dedupSince,
+			CreatedAt:   pgtype.Timestamptz{Time: dedupSince, Valid: true},
 		})
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "dedup check failed")

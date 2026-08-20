@@ -158,8 +158,8 @@ func (f *fakeDiagnosisRunPager) PageTaskMessagesInRange(_ context.Context, arg d
 		}
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Seq < result[j].Seq })
-	if len(result) > int(arg.Limit) {
-		result = result[:arg.Limit]
+	if len(result) > int(arg.PageLimit) {
+		result = result[:arg.PageLimit]
 	}
 	return result, nil
 }

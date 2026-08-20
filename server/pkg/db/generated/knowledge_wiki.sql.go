@@ -2,9 +2,6 @@
 // versions:
 //   sqlc v1.31.1
 // source: knowledge_wiki.sql
-//
-// Kept as a hand-preserved generate artifact (LRM-1000): full `sqlc generate`
-// also emits conflicting evolution.sql.go next to evolution_manual.sql.go.
 
 package db
 
@@ -13,21 +10,6 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 )
-
-// TeamKnowledgeEdge is the LRM-1000 explicit wiki edge row.
-type TeamKnowledgeEdge struct {
-	ID            pgtype.UUID        `json:"id"`
-	WorkspaceID   pgtype.UUID        `json:"workspace_id"`
-	EdgeType      string             `json:"edge_type"`
-	FromKind      string             `json:"from_kind"`
-	FromID        pgtype.UUID        `json:"from_id"`
-	ToKind        string             `json:"to_kind"`
-	ToID          pgtype.UUID        `json:"to_id"`
-	Metadata      []byte             `json:"metadata"`
-	CreatedByType string             `json:"created_by_type"`
-	CreatedByID   pgtype.UUID        `json:"created_by_id"`
-	CreatedAt     pgtype.Timestamptz `json:"created_at"`
-}
 
 const archiveTeamKnowledgeItem = `-- name: ArchiveTeamKnowledgeItem :exec
 UPDATE team_knowledge_item
@@ -241,10 +223,10 @@ func (q *Queries) ListTeamKnowledgeEdgesForNode(ctx context.Context, arg ListTea
 }
 
 const listTeamKnowledgeNeighborPageIDs = `-- name: ListTeamKnowledgeNeighborPageIDs :many
-SELECT DISTINCT CASE
+SELECT DISTINCT (CASE
          WHEN e.from_kind = 'team_knowledge' AND e.from_id = $1 THEN e.to_id
          ELSE e.from_id
-       END AS neighbor_id
+       END)::uuid AS neighbor_id
 FROM team_knowledge_edge e
 WHERE e.workspace_id = $2
   AND (
@@ -268,11 +250,11 @@ func (q *Queries) ListTeamKnowledgeNeighborPageIDs(ctx context.Context, arg List
 	defer rows.Close()
 	items := []pgtype.UUID{}
 	for rows.Next() {
-		var neighborID pgtype.UUID
-		if err := rows.Scan(&neighborID); err != nil {
+		var neighbor_id pgtype.UUID
+		if err := rows.Scan(&neighbor_id); err != nil {
 			return nil, err
 		}
-		items = append(items, neighborID)
+		items = append(items, neighbor_id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

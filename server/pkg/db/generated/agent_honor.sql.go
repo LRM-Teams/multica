@@ -11,56 +11,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-type AgentHonorAdminAudit struct {
-	ID          pgtype.UUID        `json:"id"`
-	WorkspaceID pgtype.UUID        `json:"workspace_id"`
-	AgentID     pgtype.UUID        `json:"agent_id"`
-	Action      string             `json:"action"`
-	Details     []byte             `json:"details"`
-	CreatedBy   pgtype.UUID        `json:"created_by"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-}
-
-type AgentHonorEvent struct {
-	ID          pgtype.UUID        `json:"id"`
-	WorkspaceID pgtype.UUID        `json:"workspace_id"`
-	AgentID     pgtype.UUID        `json:"agent_id"`
-	EventType   string             `json:"event_type"`
-	SourceRef   string             `json:"source_ref"`
-	XpDelta     int32              `json:"xp_delta"`
-	Reason      string             `json:"reason"`
-	Metadata    []byte             `json:"metadata"`
-	CreatedBy   pgtype.UUID        `json:"created_by"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-}
-
-type AgentHonorRuleConfig struct {
-	WorkspaceID pgtype.UUID        `json:"workspace_id"`
-	Version     int32              `json:"version"`
-	Config      []byte             `json:"config"`
-	UpdatedBy   pgtype.UUID        `json:"updated_by"`
-	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
-}
-
-type AgentHonorState struct {
-	WorkspaceID            pgtype.UUID        `json:"workspace_id"`
-	AgentID                pgtype.UUID        `json:"agent_id"`
-	TotalXp                int64              `json:"total_xp"`
-	Level                  int32              `json:"level"`
-	EquippedAchievementID  pgtype.Text        `json:"equipped_achievement_id"`
-	ShowcaseAchievementIds []string           `json:"showcase_achievement_ids"`
-	CreatedAt              pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt              pgtype.Timestamptz `json:"updated_at"`
-}
-
-type AgentHonorUnlock struct {
-	WorkspaceID   pgtype.UUID        `json:"workspace_id"`
-	AgentID       pgtype.UUID        `json:"agent_id"`
-	AchievementID string             `json:"achievement_id"`
-	Source        string             `json:"source"`
-	UnlockedAt    pgtype.Timestamptz `json:"unlocked_at"`
-}
-
 const backfillAgentDeliveryHonorEvents = `-- name: BackfillAgentDeliveryHonorEvents :many
 INSERT INTO agent_honor_event (
     workspace_id, agent_id, event_type, source_ref, xp_delta, reason, created_at

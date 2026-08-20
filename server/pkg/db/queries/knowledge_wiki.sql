@@ -92,10 +92,10 @@ LIMIT 12;
 
 -- name: ListTeamKnowledgeNeighborPageIDs :many
 -- One-hop undirected neighbors that are active team_knowledge pages.
-SELECT DISTINCT CASE
+SELECT DISTINCT (CASE
          WHEN e.from_kind = 'team_knowledge' AND e.from_id = @page_id THEN e.to_id
          ELSE e.from_id
-       END AS neighbor_id
+       END)::uuid AS neighbor_id
 FROM team_knowledge_edge e
 WHERE e.workspace_id = @workspace_id
   AND (

@@ -146,7 +146,7 @@ func (q *Queries) GetSkillBySourceEvolutionUnit(ctx context.Context, arg GetSkil
 }
 
 const listActiveAgentsByWorkspace = `-- name: ListActiveAgentsByWorkspace :many
-SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at FROM agent
+SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail FROM agent
 WHERE workspace_id = $1 AND archived_at IS NULL
 ORDER BY created_at ASC
 `
@@ -189,6 +189,9 @@ func (q *Queries) ListActiveAgentsByWorkspace(ctx context.Context, workspaceID p
 			&i.AvatarAttachmentID,
 			&i.WorkspaceRole,
 			&i.RuntimeReassignedAt,
+			&i.CrashedSince,
+			&i.ProviderBlockedUntil,
+			&i.ProviderBlockDetail,
 		); err != nil {
 			return nil, err
 		}

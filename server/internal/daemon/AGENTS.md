@@ -93,9 +93,9 @@ supervision, process identity fencing, sibling coordination, orphan cleanup,
 and upgrade policy. Cloud Server HTTP/WebSocket is not part of this migration.
 
 Use TDD at the RPC operation seam before changing handlers or callers. Managed
-runner identity is `pid + startIdentity + role + workspace/server identity +
-version`; do not restore numeric generation fences, per-Binding lease/attest
-polling, or persisted lifecycle state.
+runner identity is `pid + child-reported daemonInstanceId + role +
+workspace/server identity + version`. Do not restore per-Binding
+lease/attest polling or persisted lifecycle state.
 
 ## Go typing
 

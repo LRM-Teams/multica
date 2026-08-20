@@ -151,9 +151,49 @@ func InjectRuntimeConfig(workDir, provider string, ctx TaskContextForEnv) (strin
 // by the daemon. InjectRuntimeConfig remains available for callers that
 // explicitly need the historical task-aware materialization while they migrate
 // their workflow contracts to per-turn prompts.
+//
+// Agent-scope memory is appended to the on-disk brief (for providers that read
+// AGENTS/CLAUDE files and ignore inline SystemPrompt) but is intentionally
+// excluded from StartupStaticDigest so memory edits do not recycle the process.
 func InjectRuntimeKernel(workDir, provider string, ctx TaskContextForEnv) (string, error) {
-	content := buildStartupKernelContent(provider, StartupStaticContext(ctx))
+	content := appendAgentScopeMemoryBrief(buildStartupKernelContent(provider, StartupStaticContext(ctx)), ctx)
 	return writeRuntimeConfig(workDir, provider, content)
+}
+
+// appendAgentScopeMemoryBrief adds session-stable agent memory after the
+// static kernel. Digest still ignores this block (see StartupStaticContext).
+func appendAgentScopeMemoryBrief(brief string, ctx TaskContextForEnv) string {
+	mem := RenderAgentScopeMemory(agentScopeMemoriesForBrief(ctx))
+	if mem == "" {
+		return brief
+	}
+	brief = strings.TrimRight(brief, "\n")
+	if brief == "" {
+		return mem
+	}
+	return brief + "\n\n" + mem
+}
+
+func agentScopeMemoriesForBrief(ctx TaskContextForEnv) []MemoryContextForEnv {
+	if len(ctx.AgentScopeMemories) > 0 {
+		return ctx.AgentScopeMemories
+	}
+	// Backward-compatible: older callers may still place agent-scope rows in
+	// AgentMemories; filter to agent only so turn-scope rows stay out of AGENTS.
+	return filterAgentScopeMemories(ctx.AgentMemories)
+}
+
+func filterAgentScopeMemories(memories []MemoryContextForEnv) []MemoryContextForEnv {
+	if len(memories) == 0 {
+		return nil
+	}
+	out := make([]MemoryContextForEnv, 0, len(memories))
+	for _, m := range memories {
+		if strings.TrimSpace(m.Scope) == "agent" {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 func writeRuntimeConfig(workDir, provider, content string) (string, error) {
@@ -276,9 +316,9 @@ func RenderTurnContext(ctx TaskContextForEnv) string {
 		b.WriteString("\n")
 	}
 
-	if len(ctx.AgentMemories) > 0 {
+	if turnMemories := nonAgentScopeMemories(ctx.AgentMemories); len(turnMemories) > 0 {
 		var memories strings.Builder
-		renderPromotedMemorySnapshot(&memories, nonAgentScopeMemories(ctx.AgentMemories))
+		renderPromotedMemorySnapshot(&memories, turnMemories)
 		b.WriteString(boundedPromptText(memories.String(), turnMemorySnapshotMaxBytes, "promoted memory snapshot"))
 		b.WriteString("\n\n")
 	}
@@ -954,23 +994,24 @@ func nonAgentScopeMemories(memories []MemoryContextForEnv) []MemoryContextForEnv
 }
 
 // RenderAgentScopeMemory renders only agent-scope promoted memory for the
-// session-stable system prompt. Returns "" when there is no agent-scope memory.
+// session-stable system prompt / AGENTS brief. Returns "" when there is no
+// agent-scope memory.
 func RenderAgentScopeMemory(memories []MemoryContextForEnv) string {
-	if len(memories) == 0 {
-		return ""
-	}
-	var agentScoped []MemoryContextForEnv
-	for _, m := range memories {
-		if strings.TrimSpace(m.Scope) == "agent" {
-			agentScoped = append(agentScoped, m)
-		}
-	}
+	agentScoped := filterAgentScopeMemories(memories)
 	if len(agentScoped) == 0 {
 		return ""
 	}
 	var b strings.Builder
 	renderPromotedMemorySnapshot(&b, agentScoped)
 	return boundedPromptText(b.String(), turnMemorySnapshotMaxBytes, "agent memory snapshot")
+}
+
+// ShouldInjectAgentScopeSystemPrompt reports whether agent-scope memory may be
+// placed on ExecOptions.SystemPrompt. Resume must not re-append the same block
+// (Claude/Pi --append-system-prompt); fresh sessions and resume-fallback retries
+// (empty ResumeSessionID) inject once.
+func ShouldInjectAgentScopeSystemPrompt(resumeSessionID string) bool {
+	return strings.TrimSpace(resumeSessionID) == ""
 }
 
 func truncateMemorySnapshotContent(value string, maxBytes int) string {

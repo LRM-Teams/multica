@@ -127,7 +127,7 @@ func (q *Queries) DeleteForkedIssue(ctx context.Context, id pgtype.UUID) error {
 }
 
 const getTaskMessageAtSeq = `-- name: GetTaskMessageAtSeq :one
-SELECT id, task_id, seq, type, tool, content, input, output, created_at FROM task_message
+SELECT id, task_id, seq, type, tool, content, input, output, created_at, visibility FROM task_message
 WHERE task_id = $1
   AND seq = $2
 `
@@ -153,6 +153,7 @@ func (q *Queries) GetTaskMessageAtSeq(ctx context.Context, arg GetTaskMessageAtS
 		&i.Input,
 		&i.Output,
 		&i.CreatedAt,
+		&i.Visibility,
 	)
 	return i, err
 }

@@ -52,6 +52,12 @@ func TestEnsureResidentMessageRuntimeUsesOnlyStableAgentConfiguration(t *testing
 			_ = json.NewEncoder(w).Encode(AgentCredentialResponse{
 				ID: "credential-1", AgentID: agentID, Prefix: "mat_test", Token: "durable-agent-token", ExpiresAt: &expiresAt,
 			})
+		case "POST /api/daemon/agent-memory-center/hydrate":
+			_ = json.NewEncoder(w).Encode(AgentMemoryHydrateResponse{
+				Active: nil, Conflicts: nil, Deleted: nil, Cursor: 0,
+			})
+		case "POST /api/daemon/agent-memory-center/sync":
+			_ = json.NewEncoder(w).Encode(AgentMemoryCenterSyncResponse{Accepted: 0})
 		default:
 			http.NotFound(w, r)
 		}
@@ -76,6 +82,7 @@ func TestEnsureResidentMessageRuntimeUsesOnlyStableAgentConfiguration(t *testing
 		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 		runtimeIndex:      map[string]Runtime{runtimeID: {ID: runtimeID, WorkspaceID: workspaceID, Provider: "codex"}},
 		agentVersions:     make(map[string]string),
+		turnScopeMemory:   newTurnScopeMemoryTracker(),
 		canonicalRuntimes: newCanonicalAgentRuntimePool(),
 		canonicalResidentFactoryOverride: func(config agent.Config) (agent.Backend, func(), error) {
 			_, closer, err := probe.factory(config)
@@ -148,8 +155,18 @@ func TestEnsureResidentMessageRuntimeUsesOnlyStableAgentConfiguration(t *testing
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(requests) != 2 {
-		t.Fatalf("stable-config and credential requests = %v, want exactly two", requests)
+	want := []string{
+		"GET /api/daemon/runtimes/" + runtimeID + "/agents/" + agentID + "/runtime-config",
+		"POST /api/daemon/runtimes/" + runtimeID + "/agents/" + agentID + "/credential",
+		"POST /api/daemon/agent-memory-center/hydrate",
+	}
+	if len(requests) != len(want) {
+		t.Fatalf("stable-config/credential/hydrate requests = %v, want %v", requests, want)
+	}
+	for i, path := range want {
+		if requests[i] != path {
+			t.Fatalf("request[%d] = %q, want %q (all=%v)", i, requests[i], path, requests)
+		}
 	}
 	if err := d.canonicalRuntimes.closeAll(); err != nil {
 		t.Fatalf("close resident runtimes: %v", err)

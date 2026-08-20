@@ -84,6 +84,11 @@ func makeMemoryCurationIntentHandler(pool *pgxpool.Pool, stage any, hourOffset i
 			   AND p.runtime_id IS NOT NULL
 			   AND p.curator_agent_id IS NOT NULL
 			   AND curator.archived_at IS NULL
+			   AND NOT EXISTS (
+			     SELECT 1 FROM graph_memory_profile gmp
+			     WHERE gmp.workspace_id = p.workspace_id
+			       AND gmp.memory_type = 'graph'
+			   )
 		`, enabledColumn)
 		if err != nil {
 			return HandlerResult{}, err
@@ -234,6 +239,11 @@ func scheduleDefaultAgentSelfReviewRuns(ctx context.Context, pool *pgxpool.Pool,
 		    ) active ON active.agent_id = a.id
 		   WHERE a.archived_at IS NULL
 		     AND a.runtime_id IS NOT NULL
+		     AND NOT EXISTS (
+		       SELECT 1 FROM graph_memory_profile gmp
+		       WHERE gmp.workspace_id = a.workspace_id
+		         AND gmp.memory_type = 'graph'
+		     )
 		), workspace_targets AS (
 		  SELECT workspace_id,
 		         array_agg(agent_id ORDER BY agent_id) AS target_agent_ids,

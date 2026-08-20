@@ -16,6 +16,11 @@ export const evolutionKeys = {
   memoryCurationRun: (wsId: string, runId: string) => ["evolution", wsId, "memory-curation-run", runId] as const,
   memoryCuratorProfile: (wsId: string) => ["evolution", wsId, "memory-curator-profile"] as const,
   graphMemoryProfile: (wsId: string) => ["evolution", wsId, "graph-memory-profile"] as const,
+  graphMemoryStatus: (wsId: string) => ["evolution", wsId, "graph-memory-status"] as const,
+  graphMemoryAudit: (wsId: string) => ["evolution", wsId, "graph-memory-audit"] as const,
+  graphMemoryChannelLineage: (wsId: string, channelId: string) =>
+    ["evolution", wsId, "graph-memory-channel-lineage", channelId] as const,
+  graphMemoryConsolidations: (wsId: string) => ["evolution", wsId, "graph-memory-consolidations"] as const,
   memoryCurationDailySummary: (wsId: string, since = "", until = "") =>
     ["evolution", wsId, "memory-curation-daily-summary", since, until] as const,
   memoryCurationCandidates: (wsId: string, date: string, kind = "all") =>
@@ -84,6 +89,41 @@ export function graphMemoryProfileOptions(wsId: string) {
     queryKey: evolutionKeys.graphMemoryProfile(wsId),
     queryFn: () => api.getGraphMemoryProfile(wsId),
     enabled: !!wsId,
+  });
+}
+
+export function graphMemoryStatusOptions(wsId: string) {
+  return queryOptions({
+    queryKey: evolutionKeys.graphMemoryStatus(wsId),
+    queryFn: () => api.getGraphMemoryStatus(wsId),
+    enabled: !!wsId,
+  });
+}
+
+export function graphMemoryAuditOptions(wsId: string) {
+  return queryOptions({
+    queryKey: evolutionKeys.graphMemoryAudit(wsId),
+    queryFn: () => api.getGraphMemoryAudit(wsId),
+    enabled: !!wsId,
+  });
+}
+
+export function graphMemoryChannelLineageOptions(wsId: string, channelId: string) {
+  return queryOptions({
+    queryKey: evolutionKeys.graphMemoryChannelLineage(wsId, channelId),
+    queryFn: () => api.getGraphMemoryChannelLineage(wsId, channelId),
+    enabled: !!wsId && !!channelId,
+  });
+}
+
+export function graphMemoryConsolidationsOptions(wsId: string) {
+  return queryOptions({
+    queryKey: evolutionKeys.graphMemoryConsolidations(wsId),
+    queryFn: () => api.listGraphMemoryConsolidations(wsId),
+    enabled: !!wsId,
+    refetchInterval: (query) => (
+      query.state.data?.some((run) => run.status === "queued" || run.status === "running") ? 5000 : false
+    ),
   });
 }
 

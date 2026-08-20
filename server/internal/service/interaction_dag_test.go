@@ -29,13 +29,13 @@ func newFakeMessageStore() *fakeMessageStore {
 	return &fakeMessageStore{messages: map[string][]db.TaskMessage{}}
 }
 
-func (f *fakeMessageStore) MessagesForTaskInRange(_ context.Context, taskID string, startSeq, endSeq int32) ([]db.TaskMessage, error) {
+func (f *fakeMessageStore) MessagesForTaskInRange(_ context.Context, arg db.MessagesForTaskInRangeParams) ([]db.TaskMessage, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	msgs := f.messages[taskID]
+	msgs := f.messages[arg.TaskID]
 	var out []db.TaskMessage
 	for _, m := range msgs {
-		if m.Seq >= startSeq && m.Seq <= endSeq {
+		if m.Seq >= arg.StartSeq && m.Seq <= arg.EndSeq {
 			out = append(out, m)
 		}
 	}

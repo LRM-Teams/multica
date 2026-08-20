@@ -321,7 +321,8 @@ INSERT INTO issue (
     origin_type, origin_id, acceptance_criteria
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-    $16, $17, COALESCE($18::jsonb, '[]'::jsonb)
+    $16, $17,
+    COALESCE($18::jsonb, '[]'::jsonb)
 ) RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, forked_from_issue_id, forked_at_seq, forked_at_task_id
 `
 
@@ -568,50 +569,6 @@ func (q *Queries) GetIssue(ctx context.Context, id pgtype.UUID) (Issue, error) {
 	return i, err
 }
 
-const getIssueForTask = `-- name: GetIssueForTask :one
-SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority, i.assignee_type, i.assignee_id, i.creator_type, i.creator_id, i.parent_issue_id, i.acceptance_criteria, i.context_refs, i.position, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.origin_type, i.origin_id, i.first_executed_at, i.start_date, i.metadata, i.forked_from_issue_id, i.forked_at_seq, i.forked_at_task_id
-FROM issue i
-JOIN agent_inbox_event atq ON atq.issue_id = i.id
-WHERE atq.id::text = $1::text
-`
-
-// GetIssueForTask returns the issue linked to an agent task. The text comparison matches the
-// message-range queries whose callers carry the task ID as text.
-func (q *Queries) GetIssueForTask(ctx context.Context, dollar_1 string) (Issue, error) {
-	row := q.db.QueryRow(ctx, getIssueForTask, dollar_1)
-	var i Issue
-	err := row.Scan(
-		&i.ID,
-		&i.WorkspaceID,
-		&i.Title,
-		&i.Description,
-		&i.Status,
-		&i.Priority,
-		&i.AssigneeType,
-		&i.AssigneeID,
-		&i.CreatorType,
-		&i.CreatorID,
-		&i.ParentIssueID,
-		&i.AcceptanceCriteria,
-		&i.ContextRefs,
-		&i.Position,
-		&i.DueDate,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.Number,
-		&i.ProjectID,
-		&i.OriginType,
-		&i.OriginID,
-		&i.FirstExecutedAt,
-		&i.StartDate,
-		&i.Metadata,
-		&i.ForkedFromIssueID,
-		&i.ForkedAtSeq,
-		&i.ForkedAtTaskID,
-	)
-	return i, err
-}
-
 const getIssueByNumber = `-- name: GetIssueByNumber :one
 SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, forked_from_issue_id, forked_at_seq, forked_at_task_id FROM issue
 WHERE workspace_id = $1 AND number = $2
@@ -678,6 +635,50 @@ type GetIssueByOriginParams struct {
 // running with max_concurrent_tasks > 1).
 func (q *Queries) GetIssueByOrigin(ctx context.Context, arg GetIssueByOriginParams) (Issue, error) {
 	row := q.db.QueryRow(ctx, getIssueByOrigin, arg.WorkspaceID, arg.OriginType, arg.OriginID)
+	var i Issue
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Title,
+		&i.Description,
+		&i.Status,
+		&i.Priority,
+		&i.AssigneeType,
+		&i.AssigneeID,
+		&i.CreatorType,
+		&i.CreatorID,
+		&i.ParentIssueID,
+		&i.AcceptanceCriteria,
+		&i.ContextRefs,
+		&i.Position,
+		&i.DueDate,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Number,
+		&i.ProjectID,
+		&i.OriginType,
+		&i.OriginID,
+		&i.FirstExecutedAt,
+		&i.StartDate,
+		&i.Metadata,
+		&i.ForkedFromIssueID,
+		&i.ForkedAtSeq,
+		&i.ForkedAtTaskID,
+	)
+	return i, err
+}
+
+const getIssueForTask = `-- name: GetIssueForTask :one
+SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority, i.assignee_type, i.assignee_id, i.creator_type, i.creator_id, i.parent_issue_id, i.acceptance_criteria, i.context_refs, i.position, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.origin_type, i.origin_id, i.first_executed_at, i.start_date, i.metadata, i.forked_from_issue_id, i.forked_at_seq, i.forked_at_task_id
+FROM issue i
+JOIN agent_inbox_event atq ON atq.issue_id = i.id
+WHERE atq.id::text = $1::text
+`
+
+// Returns the issue linked to an agent task. The text comparison matches the
+// message-range queries whose callers carry the task ID as text.
+func (q *Queries) GetIssueForTask(ctx context.Context, dollar_1 string) (Issue, error) {
+	row := q.db.QueryRow(ctx, getIssueForTask, dollar_1)
 	var i Issue
 	err := row.Scan(
 		&i.ID,
@@ -891,13 +892,11 @@ WHERE i.workspace_id = $1
   AND ($11::jsonb IS NULL OR i.metadata @> $11::jsonb)
   AND (
     $12::uuid IS NULL
-    -- (1) assignee is an agent owned by the user
     OR (i.assignee_type = 'agent' AND i.assignee_id IN (
           SELECT a.id FROM agent a
            WHERE a.workspace_id = $1
              AND a.owner_id     = $12::uuid
     ))
-    -- (2)(3)(4) assignee is a squad related to the user — three relations
   )
 ORDER BY i.position ASC, i.created_at DESC
 LIMIT $2 OFFSET $3
@@ -941,9 +940,8 @@ type ListIssuesRow struct {
 }
 
 // involves_user_id widens the assignee filter to surface issues where the user
-// is *indirectly* the assignee — via an owned agent or a squad they belong to /
-// lead / have an agent inside. The semantics intentionally exclude direct
-// member assignment (`assignee_type='member' AND assignee_id=involves_user_id`)
+// is indirectly the assignee via an owned agent. The semantics intentionally
+// exclude direct member assignment (`assignee_type='member' AND assignee_id=involves_user_id`)
 // because that is already the meaning of the `assignee_id` filter (tab 1
 // "Assigned to me"), and the two filters must produce disjoint result sets.
 func (q *Queries) ListIssues(ctx context.Context, arg ListIssuesParams) ([]ListIssuesRow, error) {
@@ -1115,8 +1113,7 @@ type ListOpenIssuesRow struct {
 	Metadata      []byte             `json:"metadata"`
 }
 
-// See ListIssues for the semantics of involves_user_id (mirrors the 4-branch
-// filter; member-direct assignment is intentionally excluded).
+// See ListIssues for the semantics of involves_user_id.
 func (q *Queries) ListOpenIssues(ctx context.Context, arg ListOpenIssuesParams) ([]ListOpenIssuesRow, error) {
 	rows, err := q.db.Query(ctx, listOpenIssues,
 		arg.WorkspaceID,
@@ -1206,7 +1203,6 @@ func (q *Queries) MarkIssueFirstExecuted(ctx context.Context, id pgtype.UUID) (M
 	)
 	return i, err
 }
-
 
 const setIssueMetadataKey = `-- name: SetIssueMetadataKey :one
 

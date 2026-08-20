@@ -16,7 +16,7 @@ func (h *Handler) isWorkspaceOwnerOrAdmin(ctx context.Context, workspaceID strin
 	var role string
 	err := h.DB.QueryRow(ctx, `
 		SELECT wsm.role
-		FROM workspace_member wsm
+		FROM member wsm
 		WHERE wsm.workspace_id = $1 AND wsm.user_id = $2`,
 		parseUUID(workspaceID), userID).Scan(&role)
 	if err != nil {

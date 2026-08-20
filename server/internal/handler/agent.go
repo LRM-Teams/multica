@@ -162,7 +162,7 @@ func agentToResponse(a db.Agent) AgentResponse {
 		DisplayName:        agentDisplayName(a),
 		Description:        a.Description,
 		Instructions:       a.Instructions,
-		AvatarURL:          textToPtr(a.AvatarUrl),
+		AvatarURL:          &a.AvatarUrl,
 		AvatarSource:       a.AvatarSource,
 		RuntimeMode:        a.RuntimeMode,
 		RuntimeName:        defaultAgentRuntimeName(a.RuntimeMode),
@@ -324,20 +324,25 @@ type AgentTaskResponse struct {
 	// (design §1/A4): the daemon uses it as a per-task override of its
 	// MULTICA_MEMORY_TYPE env default. Empty when the workspace has no
 	// profile row (the daemon env default then applies) or on old servers.
-	MemoryType    string         `json:"memory_type,omitempty"`
-	ThreadName    string         `json:"thread_name,omitempty"` // semantic title for provider-native session/thread history
-	Status        string         `json:"status"`
-	Priority      int32          `json:"priority"`
-	DispatchedAt  *string        `json:"dispatched_at"`
-	StartedAt     *string        `json:"started_at"`
-	CompletedAt   *string        `json:"completed_at"`
-	Result        any            `json:"result"`
-	Error         *string        `json:"error"`
-	FailureReason string         `json:"failure_reason,omitempty"` // see TaskService.MaybeRetryFailedTask
-	Attempt       int32          `json:"attempt"`
-	MaxAttempts   int32          `json:"max_attempts"`
-	ParentTaskID  *string        `json:"parent_task_id,omitempty"`
-	Agent         *TaskAgentData `json:"agent,omitempty"`
+	MemoryType string `json:"memory_type,omitempty"`
+	// ExploreAgents / ExploreMaxRounds carry the workspace's graph explore
+	// knobs alongside MemoryType (spec §10). Zero means the daemon env
+	// defaults apply.
+	ExploreAgents    int32          `json:"explore_agents,omitempty"`
+	ExploreMaxRounds int32          `json:"explore_max_rounds,omitempty"`
+	ThreadName       string         `json:"thread_name,omitempty"` // semantic title for provider-native session/thread history
+	Status           string         `json:"status"`
+	Priority         int32          `json:"priority"`
+	DispatchedAt     *string        `json:"dispatched_at"`
+	StartedAt        *string        `json:"started_at"`
+	CompletedAt      *string        `json:"completed_at"`
+	Result           any            `json:"result"`
+	Error            *string        `json:"error"`
+	FailureReason    string         `json:"failure_reason,omitempty"` // see TaskService.MaybeRetryFailedTask
+	Attempt          int32          `json:"attempt"`
+	MaxAttempts      int32          `json:"max_attempts"`
+	ParentTaskID     *string        `json:"parent_task_id,omitempty"`
+	Agent            *TaskAgentData `json:"agent,omitempty"`
 	// ExecutionConfig is the immutable runtime configuration captured when this
 	// execution was created. It is distinct from the agent Profile defaults,
 	// which only govern later work.
@@ -717,6 +722,63 @@ func basename(p string) string {
 		return p[idx+1:]
 	}
 	return p
+}
+
+// taskSnapshotRowToResponse adapts the lean presence snapshot row
+// (ListWorkspaceAgentTaskSnapshotRow, LRM-1261: heavy blobs omitted) to the
+// same AgentTaskResponse the full-event mapper produces. The omitted blobs
+// (execution_config / context / result / error) are NULL in the projection,
+// which matches the presence contract: consumers only get status, ids,
+// timestamps and trigger summary — never the heavy payloads.
+func taskSnapshotRowToResponse(row db.ListWorkspaceAgentTaskSnapshotRow, workspaceID string) AgentTaskResponse {
+	return taskToResponse(db.AgentInboxEvent{
+		ID:                  row.ID,
+		WorkspaceID:         row.WorkspaceID,
+		AgentSessionID:      row.AgentSessionID,
+		ConversationID:      row.ConversationID,
+		ChannelID:           row.ChannelID,
+		ChatSessionID:       row.ChatSessionID,
+		AgentID:             row.AgentID,
+		SourceMessageID:     row.SourceMessageID,
+		Reason:              row.Reason,
+		RequiresWake:        row.RequiresWake,
+		Status:              row.Status,
+		Priority:            row.Priority,
+		SeqFrom:             row.SeqFrom,
+		SeqTo:               row.SeqTo,
+		Attempt:             row.Attempt,
+		LastError:           row.LastError,
+		ClaimedAt:           row.ClaimedAt,
+		AckedAt:             row.AckedAt,
+		CreatedAt:           row.CreatedAt,
+		UpdatedAt:           row.UpdatedAt,
+		TerminalOutcome:     row.TerminalOutcome,
+		TerminalDeliveryID:  row.TerminalDeliveryID,
+		Retryable:           row.Retryable,
+		TerminalAt:          row.TerminalAt,
+		RuntimeID:           row.RuntimeID,
+		DeliveryMode:        row.DeliveryMode,
+		ResponseMode:        row.ResponseMode,
+		ChannelOnboardingID: row.ChannelOnboardingID,
+		IssueID:             row.IssueID,
+		SourceChatMessageID: row.SourceChatMessageID,
+		DispatchedAt:        row.DispatchedAt,
+		StartedAt:           row.StartedAt,
+		CompletedAt:         row.CompletedAt,
+		SessionID:           row.SessionID,
+		WorkDir:             row.WorkDir,
+		TriggerCommentID:    row.TriggerCommentID,
+		AutopilotRunID:      row.AutopilotRunID,
+		MaxAttempts:         row.MaxAttempts,
+		ParentTaskID:        row.ParentTaskID,
+		FailureReason:       row.FailureReason,
+		TriggerSummary:      row.TriggerSummary,
+		ForceFreshSession:   row.ForceFreshSession,
+		IsLeaderTask:        row.IsLeaderTask,
+		WaitReason:          row.WaitReason,
+		InitiatorUserID:     row.InitiatorUserID,
+		// ExecutionConfig / Context / Result / Error stay nil (lean projection).
+	}, workspaceID)
 }
 
 // computeTaskKind picks the source-discriminator string the activity UI uses
@@ -2251,7 +2313,7 @@ func (h *Handler) ListWorkspaceAgentTaskSnapshot(w http.ResponseWriter, r *http.
 		resolver := h.newAgentOnlyActorIdentityResolver(loadCtx, workspaceID, actorType, actorID, member.Role)
 		resp := make([]AgentTaskResponse, 0, len(tasks))
 		for _, t := range tasks {
-			item := taskToResponse(t, workspaceID)
+			item := taskSnapshotRowToResponse(t, workspaceID)
 			applyActorIdentityToTask(&item, resolver.resolve("agent", item.AgentID))
 			resp = append(resp, item)
 		}

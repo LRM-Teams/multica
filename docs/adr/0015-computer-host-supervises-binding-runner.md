@@ -22,7 +22,7 @@ Computer process
     └── same isolated execution owners
 ```
 
-This aligns Raft v1.0.17's ownership, process identity, and reconcile model.
+This aligns Raft v1.0.17's ownership and reconcile model.
 Raft launches one child per attached Server; Multica launches one OS runner per
 execution per Workspace Binding. One machine owner still supervises N real
 execution owners, matching Raft's service/runner process boundary while
@@ -33,7 +33,7 @@ preserving Binding as Multica's domain term.
 `internal/computer` owns all machine-scoped policy:
 
 - desired Binding reconciliation and runner process start/stop;
-- Runner `startIdentity`/PID fence, Ready transition, crash budget and backoff;
+- Runner child-reported `daemonInstanceId`/PID fence, Ready transition, crash budget and backoff;
 - machine-wide provider-process capacity admission;
 - authenticated child control and diagnostic aggregation routing;
 - cross-child environment-switch and Machine Upgrade prepare/release;
@@ -66,15 +66,17 @@ Reminder cache, or Binding draft/outbox state.
 ## Bootstrap, Ready, and local control
 
 The service constructs one immutable bootstrap value for each runner
-execution. It includes `startIdentity`, Workspace identity, environment, roots,
+execution. It includes Workspace identity, environment, roots,
 server URL, and the local service IPC endpoint. It deliberately excludes
-execution credentials; the Binding execution reads its scoped credential from
-the permission-restricted Binding store. The executable fallback serializes the
-same value over stdin.
+a Host-minted process ticket and execution credentials; the Binding
+execution generates `daemonInstanceId` itself and reads its scoped
+credential from the permission-restricted Binding store. The executable
+fallback serializes the same value over stdin.
 
-The service generates and records the expected start identity before spawning
-the runner. The execution therefore does not need to poll or register
-back through the Unix socket or Windows named pipe. It publishes Ready only after it has:
+The service records the OS process handle before activating the runner.
+The child reports `daemonInstanceId` on Ready. The execution therefore
+does not need to poll or register back through the Unix socket or
+Windows named pipe. It publishes Ready only after it has:
 
 1. validated the current Binding credential and bootstrap identity;
 2. registered its provider Runtime set and reported it to the Host;
@@ -82,8 +84,9 @@ back through the Unix socket or Windows named pipe. It publishes Ready only afte
 4. opened the Workspace Runner transport and emitted the real Runner Ready
    frame.
 
-Ready returns the runner IPC endpoint. The service uses that endpoint only
-with the exact `startIdentity`/PID identity and the machine control token.
+Ready returns the runner IPC endpoint and the child-generated
+`daemonInstanceId`. The service uses that endpoint only with the exact
+`daemonInstanceId`/PID identity and the machine control token.
 
 ### Local control transport decision
 
@@ -111,11 +114,10 @@ the operation seam before each handler migration.
 ## Process identity fence and crash policy
 
 Each resident start generates an opaque `serviceGeneration`. Each managed
-runner spawn generates an opaque `startIdentity` before process activation. An
-exit, Ready, control request, Runtime report, diagnostic, or capacity lease
-must match the current Workspace + `startIdentity` + PID; a stale process is
-rejected or ignored. Numeric Computer and runner generations do not exist in
-the current protocol.
+runner child generates an opaque `daemonInstanceId` and reports it on Ready.
+An exit, Ready, control request, Runtime report, diagnostic, or capacity lease
+must match the current Workspace + `daemonInstanceId` + PID; a stale process is
+rejected or ignored.
 
 Host reconciliation follows the Raft Computer policy:
 

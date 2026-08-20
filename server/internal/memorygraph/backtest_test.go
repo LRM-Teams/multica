@@ -2,6 +2,7 @@ package memorygraph
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"sort"
 	"strings"
@@ -176,8 +177,9 @@ func TestEvaluateCoveredQueryPassesWithoutRunner(t *testing.T) {
 	if qs.Regressed {
 		t.Fatalf("query stat = %+v, want not regressed", qs)
 	}
-	if stats.MeanRounds != 1 {
-		t.Fatalf("mean rounds = %v, want 1", stats.MeanRounds)
+	// Coverage-only acceptance is not an agent run and must not affect round statistics.
+	if stats.MeanRounds != 0 || stats.P95Rounds != 0 {
+		t.Fatalf("mean/p95 rounds = %v/%v, want 0/0 without a full backtest", stats.MeanRounds, stats.P95Rounds)
 	}
 }
 
@@ -595,5 +597,173 @@ func TestComputeBaselineCoverage(t *testing.T) {
 	sig = ComputeBaselineCoverage(ctx, retr, g, "alpha", nil, 0)
 	if sig.Covered {
 		t.Fatalf("Covered = true, want false for an empty ground truth set")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// item-semantics backtests (spec §8/§9)
+// ---------------------------------------------------------------------------
+
+type fakeBacktestConfirmer struct {
+	confirm func(statement string, node *Node) (bool, error)
+}
+
+func (f fakeBacktestConfirmer) ConfirmNode(_ context.Context, statement string, node *Node) (bool, error) {
+	return f.confirm(statement, node)
+}
+
+type queryBacktestRunner struct {
+	results map[string]struct {
+		rounds int
+		found  bool
+	}
+}
+
+func (r queryBacktestRunner) RunExplore(_ context.Context, _ int, query string) (int, bool, error) {
+	result := r.results[query]
+	return result.rounds, result.found, nil
+}
+
+func itemBacktestStore(t *testing.T, nodes ...struct{ id, body string }) (*Store, int) {
+	t.Helper()
+	store := newTestStore(t)
+	for _, node := range nodes {
+		seedGraphNode(t, store, 1, node.id, node.body)
+	}
+	candidate, err := store.CreateVersionFrom(1, "ttt")
+	if err != nil {
+		t.Fatalf("CreateVersionFrom: %v", err)
+	}
+	return store, candidate
+}
+
+func TestEvaluateCandidateItemsRequireAllItems(t *testing.T) {
+	store, candidate := itemBacktestStore(t, struct{ id, body string }{"one", "alpha"})
+	q := &BacktestQuery{Query: "alpha", BaselineRounds: 1, BaselineFound: true, Items: []BacktestItem{
+		{ID: "item-one", Statement: "one", NodeIDs: []string{"one"}},
+		{ID: "item-two", Statement: "two", NodeIDs: []string{"two"}},
+	}}
+	stats := NewBacktester(store, BacktestConfig{}).EvaluateCandidate(context.Background(), candidate, 1, []*BacktestQuery{q})
+	got := stats.Queries[0]
+	if got.Covered || got.Found || got.ItemsTotal != 2 || got.ItemsSatisfied != 1 || len(got.ItemMisses) != 1 || got.ItemMisses[0] != "item-two" {
+		t.Fatalf("query stat = %+v, want one of two required items satisfied", got)
+	}
+	if stats.Recall != 0 || stats.Passed {
+		t.Fatalf("candidate = %+v, want recall miss", stats)
+	}
+}
+
+func TestEvaluateCandidateItemEquivalenceIsOR(t *testing.T) {
+	store, candidate := itemBacktestStore(t, struct{ id, body string }{"replacement", "alpha"})
+	q := &BacktestQuery{Query: "alpha", BaselineRounds: 1, BaselineFound: true, Items: []BacktestItem{{
+		ID: "item", Statement: "fact", NodeIDs: []string{"old-a", "replacement", "old-b"},
+	}}}
+	stats := NewBacktester(store, BacktestConfig{}).EvaluateCandidate(context.Background(), candidate, 1, []*BacktestQuery{q})
+	got := stats.Queries[0]
+	if !got.Covered || !got.Found || got.ItemsTotal != 1 || got.ItemsSatisfied != 1 {
+		t.Fatalf("query stat = %+v, want OR-equivalent item covered", got)
+	}
+}
+
+func TestEvaluateCandidateLegacyRelevantNodesRemainAND(t *testing.T) {
+	store, candidate := itemBacktestStore(t, struct{ id, body string }{"a", "alpha"})
+	q := &BacktestQuery{Query: "alpha", RelevantNodes: []string{"a", "b"}, BaselineRounds: 1, BaselineFound: true}
+	stats := NewBacktester(store, BacktestConfig{}).EvaluateCandidate(context.Background(), candidate, 1, []*BacktestQuery{q})
+	got := stats.Queries[0]
+	if got.Covered || got.ItemsTotal != 2 || got.ItemsSatisfied != 1 {
+		t.Fatalf("query stat = %+v, want legacy nodes as AND single-node items", got)
+	}
+}
+
+func TestEvaluateCandidateSourceOverlapDoesNotSatisfyItem(t *testing.T) {
+	store, candidate := itemBacktestStore(t, struct{ id, body string }{"source-match", "alpha"})
+	q := &BacktestQuery{Query: "alpha", BaselineRounds: 1, BaselineFound: true, Items: []BacktestItem{{
+		ID: "item", Statement: "fact", NodeIDs: []string{"historical"}, SourceRefs: []string{"source-match"},
+	}}}
+	stats := NewBacktester(store, BacktestConfig{}).EvaluateCandidate(context.Background(), candidate, 1, []*BacktestQuery{q})
+	if got := stats.Queries[0]; got.Covered || got.ItemsSatisfied != 0 {
+		t.Fatalf("query stat = %+v, want source overlap to remain insufficient", got)
+	}
+}
+
+func TestEvaluateCandidateSemanticConfirmationRecoversReplacement(t *testing.T) {
+	store, candidate := itemBacktestStore(t,
+		struct{ id, body string }{"error", "alpha bad"},
+		struct{ id, body string }{"replacement", "alpha replacement fact"},
+	)
+	q := &BacktestQuery{Query: "alpha", BaselineRounds: 1, BaselineFound: true, Items: []BacktestItem{{ID: "item", Statement: "replacement fact", NodeIDs: []string{"old"}}}}
+	confirmer := fakeBacktestConfirmer{confirm: func(_ string, node *Node) (bool, error) {
+		if node.NodeID == "error" {
+			return false, fmt.Errorf("transient")
+		}
+		return node.NodeID == "replacement", nil
+	}}
+	stats := NewBacktester(store, BacktestConfig{Confirmer: confirmer}).EvaluateCandidate(context.Background(), candidate, 1, []*BacktestQuery{q})
+	got := stats.Queries[0]
+	if !got.Covered || got.ItemsSatisfied != 1 || got.ConfirmedNodeIDs["item"] != "replacement" {
+		t.Fatalf("query stat = %+v, want semantic replacement confirmation", got)
+	}
+}
+
+func TestEvaluateCandidateNilConfirmerFailsClosed(t *testing.T) {
+	store, candidate := itemBacktestStore(t, struct{ id, body string }{"replacement", "alpha replacement fact"})
+	q := &BacktestQuery{Query: "alpha", BaselineRounds: 1, BaselineFound: true, Items: []BacktestItem{{ID: "item", Statement: "replacement fact", NodeIDs: []string{"old"}}}}
+	stats := NewBacktester(store, BacktestConfig{}).EvaluateCandidate(context.Background(), candidate, 1, []*BacktestQuery{q})
+	if got := stats.Queries[0]; got.Covered || got.ItemsSatisfied != 0 {
+		t.Fatalf("query stat = %+v, want missing confirmer fail-closed", got)
+	}
+}
+
+func TestEvaluateCandidateEmptyCohortFailsGroundTruthGate(t *testing.T) {
+	store, candidate := itemBacktestStore(t, struct{ id, body string }{"n1", "alpha"})
+	stats := NewBacktester(store, BacktestConfig{}).EvaluateCandidate(context.Background(), candidate, 1, nil)
+	if stats.Passed || stats.Recall == 1 || !strings.Contains(strings.Join(stats.GateFailures, ";"), "no_eligible_backtest_ground_truth") {
+		t.Fatalf("candidate = %+v, want unavailable-ground-truth gate", stats)
+	}
+}
+
+func TestEvaluateCandidateRequireFullBacktest(t *testing.T) {
+	store, candidate := itemBacktestStore(t, struct{ id, body string }{"n1", "alpha"})
+	q := &BacktestQuery{Query: "alpha", RelevantNodes: []string{"n1"}, BaselineRounds: 1, BaselineFound: true}
+	required := NewBacktester(store, BacktestConfig{RequireFullBacktest: true}).EvaluateCandidate(context.Background(), candidate, 1, []*BacktestQuery{q})
+	if required.Passed || !strings.Contains(strings.Join(required.GateFailures, ";"), "full_backtest_runner_required") {
+		t.Fatalf("required runner candidate = %+v", required)
+	}
+	optional := NewBacktester(store, BacktestConfig{}).EvaluateCandidate(context.Background(), candidate, 1, []*BacktestQuery{q})
+	if !optional.Passed || !optional.Queries[0].AcceptedWithoutExplore {
+		t.Fatalf("optional runner candidate = %+v", optional)
+	}
+}
+
+func TestEvaluateCandidateRoundsIncludeEverySuccessfulRun(t *testing.T) {
+	store, candidate := itemBacktestStore(t, struct{ id, body string }{"n1", "alpha one two three"})
+	queries := []*BacktestQuery{
+		{Query: "one", RelevantNodes: []string{"n1"}, BaselineRounds: 1, BaselineFound: true, JudgeDone: true, JudgeScore: 0.1},
+		{Query: "two", RelevantNodes: []string{"n1"}, BaselineRounds: 1, BaselineFound: false},
+		{Query: "three", RelevantNodes: []string{"n1"}, BaselineRounds: 10, BaselineFound: true, JudgeDone: true, JudgeScore: 0.9},
+	}
+	runner := queryBacktestRunner{results: map[string]struct {
+		rounds int
+		found  bool
+	}{
+		"one": {rounds: 3, found: true}, "two": {rounds: 5, found: false}, "three": {rounds: 9, found: true},
+	}}
+	stats := NewBacktester(store, BacktestConfig{Runner: runner}).EvaluateCandidate(context.Background(), candidate, 1, queries)
+	if stats.MeanRounds != float64(17)/3 || math.Abs(stats.P95Rounds-8.6) > 1e-9 {
+		t.Fatalf("mean/p95 = %v/%v, want 17/3 and 8.6", stats.MeanRounds, stats.P95Rounds)
+	}
+}
+
+func TestBacktestQueriesDeduplicatesWindowTraceID(t *testing.T) {
+	store := newTestStore(t)
+	seedGraphNode(t, store, 1, "n1", "alpha")
+	for _, window := range []string{"first", "second"} {
+		if err := store.AppendQueryLog(window, &QueryLogEntry{TraceID: "trace", Query: window, Version: 1, Found: true, Rounds: 1, JudgeDone: true, RelevantNodes: []string{"n1"}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	queries, err := BacktestQueries(store, 1)
+	if err != nil || len(queries) != 1 || queries[0].Query != "first" {
+		t.Fatalf("BacktestQueries = %+v, %v; want first trace occurrence once", queries, err)
 	}
 }

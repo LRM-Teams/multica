@@ -448,7 +448,7 @@ func residentTurnRecord(row db.EnvDispatchResidentTurn) ResidentTurnRecord {
 	}
 }
 
-func deliveryObligationRecord(row db.EnvDispatchDeliveryObligation) DeliveryObligationRecord {
+func deliveryObligationRecord(row db.SettleMixedRLDeliveryObligationRow) DeliveryObligationRecord {
 	return DeliveryObligationRecord{
 		DeliveryID: row.DeliveryID, RunID: row.RunID, ChannelMessageID: row.ChannelMessageID,
 		SourceRecipientAgentID: row.SourceRecipientAgentID, RunAgentID: row.RunAgentID,

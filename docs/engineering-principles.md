@@ -472,6 +472,8 @@
 - **数值必须注来源**（`getComputedStyle`/file:line/设计决定）；目测（尤其 2x 截图）不准进稿。量色/量身份取真正绘制的最内层元素。
 - **验收分道**：数据/DB/投递→automation；hover/弹卡→自起 `--headless=new` Chrome（有合成器，rAF 正常）；真人只留观感与环境不可用两种情况。点击前先滚进视口。
 - **依据分级**（设计稿必备节）：`抄`（注出处）/`定`（注理由）/`实测`（注 file:line）/`目测`（禁止）。别把"我们的选择"说成"Linear 就是这么做的"。
+- **React Doctor 不是合并门**（2026-08-19）：`pnpm react:doctor` 不再进入 CI，也不再作为前端 PR 必过项。warning 挡合并会把能用的代码拦在注释位置和 effect 风格上。功能验收以 typecheck / lint / 单测为准。`cursordeadlock` 等真实并发门禁保留。
+- **PR CI 只测影响面**（2026-08-20）：合进 `dev` 的门禁不再全仓重跑约 1.2 万条测试。相对 `origin/dev`（push 到 `dev` 则相对 `github.event.before`）只跑变更包及其依赖方；脚本门只在对应文件变更时跑。测试文件不删，本地 `make check` / `pnpm test` / `go test ./...` 仍是全量。改 `ci.yml`、lockfile、`go.mod`/`go.sum` 或分类脚本本身则回到现网 web 范围全量。Job 始终启动，无影响面则空过成功。不再每次重复跑 `make test-agent-delivery-route`。物：`scripts/ci-pr-scope.sh`、`scripts/ci-expand-go-packages.sh`、`scripts/ci-turbo-web.sh`、`.github/workflows/ci.yml`。规格：`docs/superpowers/specs/2026-08-20-pr-ci-affected-packages-design.md`。
 
 ## 6. 元规矩：别拿没验证的环节当地基 — `仅文档`（本文立身之本）
 
@@ -569,21 +571,21 @@
 
 ### 4.19.3 Reminder 本地 Inbox 是唯一新版唤醒路径 — `可执行`（②local projection + ③single admission + ⑤offline/replay tests）
 - **口径（2026-08-13，按 Raft 1.0.16 修正）**：定时控制面保留 `reminder.upsert` / `reminder.cancel` / `reminder.snapshot` / `reminder.fire_attempt`，但 `fire_attempt` 只是一份 Server receipt，不是 Agent wake。owner Computer 在 due/catch-up 时先持久化 due receipt，再由 `LocalReminderInbox.AcceptDue` 直接进入 resident-turn admission；Server commit 不得再向声明 `reminder_local_inbox_v1` 的 daemon 推第二份 transient input。
-- `ReminderTimerJob.local_input` 是 owner-authorized、bounded 的本地执行投影；不获得 canonical Message identity、cursor、MessageCoordinator 或 Message Activity。busy/compacting/native acceptance failure 保留同一 due receipt，每 1 秒只重试本地 wake；同一 `owner + reminder + version` 在 reconnect/snapshot/catch-up 中不得二次注入。一旦 `wake_enqueued=true`，周期重试立即停止；未 ACK 的 Server receipt 只在当前 fire dispatch 首发及 Computer connection-ready 时重放。`ReminderFireResultPayload.ack` 必须回显原始 `owner + reminder + attempted version`，Computer 只删除该 occurrence 的 receipt；不能从可能已推进到下一周期的 canonical projection 推断 ACK，也不能顺带确认同一 Reminder 的其他 occurrence。
+- `ReminderTimerJob.local_input` 是 owner-authorized、bounded 的本地执行投影；不获得 canonical Message identity、cursor、MessageCoordinator 或 Message Activity。busy/compacting/native acceptance failure 保留同一 due receipt，按 Raft 1.0.17 预算重试本地 wake：最多 8 次、15 分钟 deadline、指数退避 `1s × 2^(attempt-1)` 封顶 60s；耗尽写 `REMINDER_DELIVERY_RETRY_EXHAUSTED`，不再 1s 重挂。同一 `owner + reminder + version` 在 reconnect/snapshot/catch-up 中不得二次注入。一旦 `wakeEnqueued=true`，周期重试立即停止；未 ACK 的 Server receipt 只在当前 fire dispatch 首发及 Computer connection-ready 时重放。`ReminderFireResultPayload.ack` 必须回显原始 `owner + reminder + attempted version`，Computer 只删除该 occurrence 的 receipt；不能从可能已推进到下一周期的 canonical projection 推断 ACK，也不能顺带确认同一 Reminder 的其他 occurrence。
 - `reminder_transient_owner_input_v1` 只用于 rolling-upgrade 兼容：缺 `local_input` 的旧 timer projection 仍以成功排入 `fire_attempt` 作为旧 wake handoff；服务端按 runtime capability 二选一，绝不能对同一新版 daemon 同时走 Local Inbox 和 Runner transient 两条路。
 - **物**：`LocalReminderInbox.AcceptDue`；`ReminderTimerJob.local_input`；`reminderDueReceipt` 的 local-wake/server-ack 双收敛；`TestRecurringReminderFireAdvancesFromCadenceAndSnoozeSlot` 的原始 occurrence ACK；`TestReminderFireResultAcknowledgesOnlyItsAttemptedOccurrence` 的精确删除与相邻 receipt 对照；无 Server transport 仍接受本地 due 的回归；receipt/reconnect 不重复注入回归；local capability 下 notifier 调用为零的集成回归。
 
 ### 4.19.4 Computer host 按 Raft 对账 Binding execution — `可执行`（③ host reconcile + ⑤ crash/degrade/process identity tests）
 - **口径（2026-08-18，Raft 1.0.17）**：Computer 与每个 managed Binding Runner 是独立 OS process。`internal/computer.Host` 每 5s 对账 desired Binding；crash 后 2s backoff；60s 内 3 次 crash 进入 degraded、不再自动拉起。摘掉 Binding 是 graceful stop，不是 unlinked/degraded。
-- **process boundary**：每个 Binding child 持有自己的 `WorkspaceRunner + AgentProcessManager + Inbox/MessageCoordinator + Activity + provider runtimes`。Computer 通过 Unix socket / Windows named pipe 上的 length-prefixed JSON RPC 管理 child；Credential Proxy 仍是独立 loopback HTTP。Supervisor 必须在 spawn/activate 前登记 expected identity。
-- **process identity fence**：每次 resident 启动生成 UUID `serviceGeneration`；每次 managed runner spawn 前生成 UUID `startIdentity`。Bootstrap、Ready、Host control、Runtime report、diagnostic、capacity grant 和 exit observation 全部校验 exact Workspace + `startIdentity` + PID；stale process 必须 no-op / fail closed。当前 wire 与持久化 JSON 只使用 camelCase，不保留 numeric generation fallback、兼容读取或双写。
+- **process boundary**：每个 Binding child 持有自己的 `WorkspaceRunner + AgentProcessManager + Inbox/MessageCoordinator + Activity + provider runtimes`。Computer 通过 Unix socket / Windows named pipe 上的 length-prefixed JSON RPC 管理 child；Credential Proxy 仍是独立 loopback HTTP。Supervisor 在 spawn 时只登记 child handle/PID；`daemonInstanceId` 等 child Ready 自报后再记录。
+- **process identity fence**：每次 resident 启动生成 UUID `serviceGeneration`。Host 不预发 runner 门票；Binding child 自己生成 `daemonInstanceId`，Ready 时按进程句柄 + PID 收下。之后 Host control、Runtime report、diagnostic、capacity grant 和 exit observation 校验 exact Workspace + `daemonInstanceId` + PID；stale process 必须 no-op / fail closed。当前 wire 与持久化 JSON 只使用 camelCase。
 - **package boundary**：`internal/computer` 拥有 resident/health/control、desired set、supervision、crash/backoff、machine capacity、diagnostic aggregation 与 Machine Upgrade journal/stage/activation/successor attestation；`internal/daemon` 只拥有 child execution。Public resident 直接 `computer.NewHost → Host.RunProcess`，禁止构造或依赖 `daemon.Daemon`；反向也禁止 daemon 生产代码持有 `computer.Host`。CLI 只 wiring，不新增 `computerhost` 包。
-- **Machine Upgrade**：Host prepare 所有 current children；每个 child drain/terminate 自己的 execution。任一 prepare 失败必须 release 已暂停 siblings；already-current / rollback re-register 也由 generation-fenced child 执行，Host 禁止 provider probing。
+- **Machine Upgrade**：Host prepare 所有 current children；每个 child drain/terminate 自己的 execution。任一 prepare 失败必须 release 已暂停 siblings；already-current / rollback re-register 也由 child-reported `daemonInstanceId`-fenced child 执行，Host 禁止 provider probing。
 - **物**：`computer.Host` / `Host.RunProcess` / `hostMachineUpgrade` / `BindingSupervisor` / `HostControl` / `ProcessCapacity` / `BindingRunner`；真实 bootstrap/Ready/control process protocol；per-Binding child state root；双向 architecture guard；process-identity/crash/sibling/capacity/Machine Upgrade tests。
 
 ### 4.19.5 Machine Upgrade 以本机 successor attestation 收敛 — `可执行`（①无 cloud CAS + ⑤ local-proof tests）
 - **口径（2026-08-18，Raft 1.0.17）**：incumbent 不得自己 spawn successor。独立 `computer __upgrade` coordinator 等旧 service/runners 死后才启动 target，并继续拥有该 child。successor 必须通过 framed IPC 返回 exact target version、target PID、`sourceServicePid`、non-empty `serviceGeneration` 和完整 managed Workspace set/revision；前任未死不得 ready。journal 由 coordinator 在外部 attestation 之后删除；`fromVersion` 只有 `accepted`/`rolling_back` 才可清 journal。公开 `computer start` 看见 pending handoff 必须拒绝。
-- **物**：`machine-attestation` local RPC；`computer __upgrade`；包含 `phase` / `sourceServicePid` / `oldRunnerPids` / `acceptedManagedWorkspaceIds` / `acceptedManagedSetRevision` 的单一 handoff journal；`recoverSuccessor` 的前任死亡门与授权回滚恢复。无 loopback HTTP adapter、numeric generation 或 dual-write。
+- **物**：`machine-attestation` local RPC；`computer __upgrade`；包含 `phase` / `sourceServicePid` / `oldRunnerPids` / `acceptedManagedWorkspaceIds` / `acceptedManagedSetRevision` 的单一 handoff journal；`recoverSuccessor` 的前任死亡门与授权回滚恢复。无 loopback HTTP adapter 或 dual-write。
 
 ### 4.19.7 过期 Machine Upgrade journal 不得拦住新 PATH Computer — `可执行`（⑤ recovery 回归）
 - 对齐 Raft：正在跑的 PATH 二进制就是 Computer。journal 的 source/target 都对不上当前版本时，那是上一次升级留下的诊断记录，启动必须继续，禁止 fail closed，也禁止回滚到旧 source。
@@ -660,5 +662,11 @@
 - Token success is RFC 6749 `{access_token, token_type=Bearer, expires_in}` seconds. `access_token` is the existing user PAT (`mul_…`), still single-claim.
 - `/device` must accept a typed `user_code`. Arriving via `verification_uri_complete` must display the code and require a match confirmation before approve/deny.
 - **物**：`server/internal/handler/device_auth.go` + `device_auth_test.go`；`server/cmd/multica/cmd_auth.go` + `cmd_device_login_test.go`；`packages/views/device/device-confirm-page.tsx` + test.
+
+### 4.24 Graph Memory 是独立 project/channel 图，不是 legacy 无损替代 — `仅文档`（实现门槛尚未落地）
+- Graph 模式只替代 project/channel/daily；user 与 agent memory 继续使用 legacy 文件。Graph miss、故障或空库不得回退 legacy project/channel/daily。首次启用从空图开始，不迁移或 backfill 旧文件。
+- 每个 `(workspace_id, project_id)` 一个由获授权参与 Agent 共享的物理图；最初未绑定项目的 Channel 使用永久 standalone 图。Project-bound Channel 改绑后保留 channel-only lineage，旧 Project 的 project-visible 节点绝不可经该 Channel 泄漏。
+- Graph 数据面由 Server 统一拥有；daemon 不持有本地图真相。Profile 参数必须进入运行时；Graph writer 验收前 job 保持 inert，验收后才移除第二环境开关；Graph Workspace 不运行现有 legacy L1–L4/self-review/team-curation pipeline。
+- Graph 保持 Experimental，且任何用户 Workspace（含 Experimental）启用前必须先通过 P0。P0/P1、错误语义、daily、治理 API、UI 和验收矩阵见 [`docs/superpowers/specs/2026-08-17-graph-memory-scope-design.md`](superpowers/specs/2026-08-17-graph-memory-scope-design.md)。实现与见红测试落地前不得标 `可执行`，也不得把 Graph 设为默认。
 
 维护人：Parker（产品）。规矩变更走 PR；`可执行` 升降档需 owner 签字。

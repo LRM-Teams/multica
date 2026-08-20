@@ -574,9 +574,13 @@ func (h *Handler) GoogleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if needsUpdate {
+		displayNameArg := pgtype.Text{String: user.DisplayName, Valid: true}
+		if newDisplayName.Valid {
+			displayNameArg = pgtype.Text{String: newDisplayName.String, Valid: true}
+		}
 		updated, err := h.Queries.UpdateUser(r.Context(), db.UpdateUserParams{
 			ID:          user.ID,
-			DisplayName: newDisplayName,
+			DisplayName: displayNameArg,
 			AvatarUrl:   newAvatar,
 		})
 		if err == nil {
@@ -674,9 +678,13 @@ func (h *Handler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 		displayName = pgtype.Text{String: value, Valid: true}
 	}
 
+	displayNameArg := pgtype.Text{String: currentUser.DisplayName, Valid: true}
+	if displayName.Valid {
+		displayNameArg = pgtype.Text{String: displayName.String, Valid: true}
+	}
 	params := db.UpdateUserParams{
 		ID:          currentUser.ID,
-		DisplayName: displayName,
+		DisplayName: displayNameArg,
 	}
 	if req.AvatarURL != nil {
 		params.AvatarUrl = pgtype.Text{String: strings.TrimSpace(*req.AvatarURL), Valid: true}

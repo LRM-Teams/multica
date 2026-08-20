@@ -319,6 +319,13 @@ type AgentDeliverPayload struct {
 	Traceparent string                 `json:"traceparent,omitempty"`
 	RunID       string                 `json:"runId,omitempty"`
 	RunAgentID  string                 `json:"runAgentId,omitempty"`
+	// MemoryType / ExploreAgents / ExploreMaxRounds carry the workspace's
+	// effective graph memory profile at delivery time (spec §10). The daemon
+	// caches them per workspace for the resident-message memory path; empty
+	// means "no workspace profile" (env defaults apply).
+	MemoryType       string `json:"memory_type,omitempty"`
+	ExploreAgents    int    `json:"explore_agents,omitempty"`
+	ExploreMaxRounds int    `json:"explore_max_rounds,omitempty"`
 }
 
 // AgentDeliverAckPayload confirms only per-Agent provider acceptance, Pending
@@ -797,35 +804,47 @@ type TaskMessagePayload struct {
 	CreatedAt  string         `json:"created_at,omitempty"`
 }
 
-// GraphMemoryJudgeKickPayload is sent from daemon to server after a
-// graph-memory recall was handed to the downstream agent, kicking the
-// asynchronous judge + delayed-reward flow (design §5.3, Q18/Q28). The
-// daemon has no DB access for the judge's downstream history and no RL
-// bridge configuration, so judging and reward composition run server-side
-// (service.GraphMemoryJudgeService); the daemon only reports the recall.
-type GraphMemoryJudgeKickPayload struct {
-	TraceID string   `json:"trace_id"`
-	TaskID  string   `json:"task_id"` // agent_run_id of the downstream task
-	Query   string   `json:"query"`
-	Summary string   `json:"summary,omitempty"`
-	NodeIDs []string `json:"node_ids,omitempty"`
-	Rounds  int      `json:"rounds"`
-	Version int      `json:"version"`
-	// AgentRuns carries the per-trajectory round/error accounting of K-way
-	// explore (Q17) so the server-side reward composer can apply the
-	// round-cost term per run.
-	AgentRuns []GraphMemoryExploreRunPayload `json:"agent_runs,omitempty"`
+// GraphMemoryRecallRequest is the daemon's call to the server-authoritative
+// recall endpoint (spec §1/§3/§14). Only trace_id, task_id, runtime_id and
+// query are inputs; the workspace/daemon identity comes from the
+// authenticated daemon capability. Every remaining field is a caller-side
+// diagnostic hint and is never consulted for resolution (A14).
+type GraphMemoryRecallRequest struct {
+	TraceID   string `json:"trace_id"`
+	TaskID    string `json:"task_id"`
+	RuntimeID string `json:"runtime_id"`
+	Query     string `json:"query"`
+
+	GraphKind    string `json:"graph_kind,omitempty"`
+	GraphOwnerID string `json:"graph_owner_id,omitempty"`
+	GraphVersion int    `json:"graph_version,omitempty"`
+	TrainingMode string `json:"training_mode,omitempty"`
+	K            int    `json:"k,omitempty"`
 }
 
-// GraphMemoryExploreRunPayload is the wire shape of one explore trajectory
-// inside GraphMemoryJudgeKickPayload (mirrors memorygraph.ExploreRun minus
-// the fields the judge/reward flow does not need).
-type GraphMemoryExploreRunPayload struct {
-	RunID  string `json:"run_id"`
-	Seed   int    `json:"seed"`
-	Found  bool   `json:"found"`
-	Rounds int    `json:"rounds"`
-	Error  string `json:"error,omitempty"`
+// GraphMemoryRecallCitation identifies one graph node cited by a bounded
+// server-side recall injection.
+type GraphMemoryRecallCitation struct {
+	NodeID    string `json:"node_id"`
+	Level     int    `json:"level"`
+	Epistemic string `json:"epistemic"`
+}
+
+// GraphMemoryRecallResponse is the bounded outcome returned by the daemon
+// graph-memory recall endpoint.
+type GraphMemoryRecallResponse struct {
+	RecallID     string                      `json:"recall_id"`
+	TraceID      string                      `json:"trace_id"`
+	Status       string                      `json:"status"`
+	Replayed     bool                        `json:"replayed"`
+	K            int                         `json:"k"`
+	GraphKind    string                      `json:"graph_kind"`
+	GraphVersion int                         `json:"graph_version"`
+	Found        bool                        `json:"found"`
+	Summary      string                      `json:"summary"`
+	Citations    []GraphMemoryRecallCitation `json:"citations"`
+	Rounds       int                         `json:"rounds"`
+	Injection    string                      `json:"injection"`
 }
 
 // DaemonRegisterPayload is sent from daemon to server on connection.

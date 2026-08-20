@@ -37,7 +37,7 @@ func (s *PostgresStore) prepareNextV6Dispatch(ctx context.Context) (bool, error)
 		m.mission_prompt,w.expected_result_schema_id,w.goal_version,s.state_version,w.input_event_sequence,w.payload
 		FROM research_work_item w JOIN research_session s ON s.id=w.session_id
 		JOIN research_team_membership m ON m.workspace_id=w.workspace_id AND m.session_id=w.session_id AND m.agent_id=w.assigned_agent_id
-		AND m.state IN('idle','working') WHERE s.orchestrator_version='research-run-v6' AND w.status='ready' AND w.ready_at<=now()
+		AND m.state IN('idle','working') WHERE s.orchestrator_version='research-run-v6' AND s.status='running' AND w.status='ready' AND w.ready_at<=now()
 		AND w.attempt_count<w.max_attempts ORDER BY w.priority DESC,w.ready_at,w.id FOR UPDATE OF s,w,m SKIP LOCKED LIMIT 1`).Scan(
 		&workspaceID, &runID, &workItemID, &agentID, &membershipID, &mission, &expectedSchema, &goalVersion, &stateVersion, &throughSequence, &payload)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -131,7 +131,7 @@ func persistV6CatalogPagesTx(ctx context.Context, tx pgx.Tx, workspaceID, runID,
 		LEFT JOIN research_result_node rn ON rn.artifact_version_id=v.id LEFT JOIN research_insight_version iv ON iv.artifact_version_id=v.id
 		WHERE f.workspace_id=$1::uuid AND f.session_id=$2::uuid AND f.removed_by_event_sequence IS NULL
 		AND (($3='same_tier' AND f.tier='S') OR ($3='higher_candidates' AND f.tier<>'S' AND f.branch_id=ANY($4::uuid[])))
-		ORDER BY v.id`, workspaceID, runID, view, branchIDs)
+		ORDER BY v.id::text`, workspaceID, runID, view, branchIDs)
 		if err != nil {
 			return err
 		}
@@ -194,7 +194,7 @@ func compileV6WorkManifestTx(ctx context.Context, tx pgx.Tx, workspaceID, runID,
 		branchRefs = value
 	}
 	if len(branchRefs) == 0 {
-		rows, qerr := tx.Query(ctx, `SELECT DISTINCT b.id::text,b.state_version FROM research_work_item w JOIN research_discussion_input di ON di.discussion_id=w.target_id JOIN research_node_branch nb ON nb.node_artifact_version_id=di.node_artifact_version_id JOIN research_branch b ON b.id=nb.branch_id WHERE w.id=$1::uuid ORDER BY b.id`, workItemID)
+		rows, qerr := tx.Query(ctx, `SELECT DISTINCT b.id::text,b.state_version FROM research_work_item w JOIN research_discussion_input di ON di.discussion_id=w.target_id JOIN research_node_branch nb ON nb.node_artifact_version_id=di.node_artifact_version_id JOIN research_branch b ON b.id=nb.branch_id WHERE w.id=$1::uuid ORDER BY b.id::text`, workItemID)
 		if qerr != nil {
 			return nil, "", qerr
 		}
@@ -212,7 +212,7 @@ func compileV6WorkManifestTx(ctx context.Context, tx pgx.Tx, workspaceID, runID,
 		}
 	}
 	artifacts := []any{}
-	rows, err := tx.Query(ctx, `SELECT DISTINCT v.id::text,p.entity_kind,v.content_hash FROM research_work_item w JOIN research_discussion_input di ON di.discussion_id=w.target_id JOIN research_artifact_version v ON v.id=di.node_artifact_version_id JOIN research_artifact_passport p ON p.id=v.artifact_id WHERE w.id=$1::uuid ORDER BY v.id`, workItemID)
+	rows, err := tx.Query(ctx, `SELECT DISTINCT v.id::text,p.entity_kind,v.content_hash FROM research_work_item w JOIN research_discussion_input di ON di.discussion_id=w.target_id JOIN research_artifact_version v ON v.id=di.node_artifact_version_id JOIN research_artifact_passport p ON p.id=v.artifact_id WHERE w.id=$1::uuid ORDER BY v.id::text`, workItemID)
 	if err != nil {
 		return nil, "", err
 	}

@@ -70,7 +70,7 @@ func (s *PostgresStore) ProjectionV6NodeDetail(ctx context.Context, workspaceID,
 		detail.AgentRefs = append(detail.AgentRefs, V6ProjectionEntityRef{Kind: "agent", ID: agentID})
 	}
 	if versionID != "" {
-		rows, queryErr := s.pool.Query(ctx, `SELECT DISTINCT d.id::text FROM research_discussion d JOIN research_discussion_input i ON i.discussion_id=d.id WHERE d.workspace_id=$1::uuid AND d.session_id=$2::uuid AND i.node_artifact_version_id=$3::uuid ORDER BY d.id`, workspaceID, runID, versionID)
+		rows, queryErr := s.pool.Query(ctx, `SELECT DISTINCT d.id::text FROM research_discussion d JOIN research_discussion_input i ON i.discussion_id=d.id WHERE d.workspace_id=$1::uuid AND d.session_id=$2::uuid AND i.node_artifact_version_id=$3::uuid ORDER BY d.id::text`, workspaceID, runID, versionID)
 		if queryErr != nil {
 			return V6ProjectionNodeDetail{}, queryErr
 		}
@@ -83,7 +83,7 @@ func (s *PostgresStore) ProjectionV6NodeDetail(ctx context.Context, workspaceID,
 			detail.DiscussionRefs = append(detail.DiscussionRefs, V6ProjectionEntityRef{Kind: "discussion", ID: id})
 		}
 		rows.Close()
-		rows, queryErr = s.pool.Query(ctx, `SELECT DISTINCT r.id::text,r.revision,COALESCE(r.package_hash,'') FROM research_report r JOIN research_report_input i ON i.report_id=r.id AND i.report_revision=r.revision WHERE r.workspace_id=$1::uuid AND r.session_id=$2::uuid AND i.node_artifact_version_id=$3::uuid ORDER BY r.revision,r.id`, workspaceID, runID, versionID)
+		rows, queryErr = s.pool.Query(ctx, `SELECT DISTINCT r.id::text,r.revision,COALESCE(r.package_hash,'') FROM research_report r JOIN research_report_input i ON i.report_id=r.id AND i.report_revision=r.revision WHERE r.workspace_id=$1::uuid AND r.session_id=$2::uuid AND i.node_artifact_version_id=$3::uuid ORDER BY r.revision,r.id::text`, workspaceID, runID, versionID)
 		if queryErr != nil {
 			return V6ProjectionNodeDetail{}, queryErr
 		}

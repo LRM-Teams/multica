@@ -483,9 +483,12 @@ func (h *Handler) CreateResearchSession(w http.ResponseWriter, r *http.Request) 
 			WorkspaceID: workspaceID, CreatedBy: userID, DirectorAgentID: uuidToString(directorID), Goal: req.Goal, Title: title,
 			DepthTier: depthTier, Language: language, SourcePolicy: sourcePolicyJSON, ClientRequestID: req.ClientRequestID,
 		})
-		if createErr != nil {
+		if createErr != nil && createdRun.SessionID == "" {
 			writeResearchV6DomainError(w, createErr)
 			return
+		}
+		if createErr != nil {
+			slog.Warn("research V6 bootstrap persisted but follow-up failed", "session_id", createdRun.SessionID, "will_retry", researchRunStartWillRetry(createErr), "error", createErr)
 		}
 		session, loadErr := h.Queries.GetResearchSession(r.Context(), db.GetResearchSessionParams{ID: parseUUID(createdRun.SessionID), WorkspaceID: wsUUID})
 		if loadErr != nil {
@@ -502,6 +505,13 @@ func (h *Handler) CreateResearchSession(w http.ResponseWriter, r *http.Request) 
 			response["run"] = runSnapshot
 		} else {
 			slog.Warn("research V6 create snapshot failed", "session_id", createdRun.SessionID, "error", snapshotErr)
+		}
+		if createErr != nil {
+			if researchRunStartWillRetry(createErr) {
+				response["warning"] = "research V6 run was persisted but immediate director dispatch failed; the reconciler will retry"
+			} else {
+				response["warning"] = "research V6 run was created but initial director dispatch failed and will not be retried automatically; review run diagnostics before retrying"
+			}
 		}
 		writeJSON(w, http.StatusCreated, response)
 		return

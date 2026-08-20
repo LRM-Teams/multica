@@ -780,9 +780,6 @@ func TestLoadConfig_GraphMemoryDefaults(t *testing.T) {
 	if cfg.MemoryType != MemoryTypeLegacy {
 		t.Fatalf("MemoryType = %q, want %q", cfg.MemoryType, MemoryTypeLegacy)
 	}
-	if want := filepath.Join(root, "memory_graph"); cfg.GraphMemoryDir != want {
-		t.Fatalf("GraphMemoryDir = %q, want %q", cfg.GraphMemoryDir, want)
-	}
 	if cfg.GraphExploreAgents != DefaultGraphExploreAgents {
 		t.Fatalf("GraphExploreAgents = %d, want %d", cfg.GraphExploreAgents, DefaultGraphExploreAgents)
 	}
@@ -816,9 +813,7 @@ func TestLoadConfig_InvalidMemoryType(t *testing.T) {
 
 func TestLoadConfig_GraphReviewerFromEnv(t *testing.T) {
 	stageFakeAgent(t)
-	graphDir := filepath.Join(t.TempDir(), "graph")
 	t.Setenv("MULTICA_MEMORY_TYPE", "graph")
-	t.Setenv("MULTICA_GRAPH_MEMORY_DIR", graphDir)
 	t.Setenv("MULTICA_GRAPH_EXPLORE_AGENTS", "4")
 	t.Setenv("MULTICA_GRAPH_EXPLORE_MAX_ROUNDS", "5")
 	t.Setenv("MULTICA_GRAPH_REWARD_TIMEOUT_SECONDS", "900")
@@ -833,9 +828,6 @@ func TestLoadConfig_GraphReviewerFromEnv(t *testing.T) {
 	}
 	if cfg.MemoryType != MemoryTypeGraph {
 		t.Fatalf("MemoryType = %q, want %q", cfg.MemoryType, MemoryTypeGraph)
-	}
-	if cfg.GraphMemoryDir != graphDir {
-		t.Fatalf("GraphMemoryDir = %q, want %q", cfg.GraphMemoryDir, graphDir)
 	}
 	if cfg.GraphExploreAgents != 4 || cfg.GraphExploreMaxRounds != 5 || cfg.GraphRewardTimeoutSeconds != 900 {
 		t.Fatalf("graph explore/reward knobs = %d/%d/%d, want 4/5/900",

@@ -41,6 +41,7 @@ import {
 } from "../lib/session-list-filter";
 import { countSessionsByStatus } from "../lib/session-list-counts";
 import { RESEARCH_LIST_WORKBENCH_CLASS } from "../lib/research-list-layout";
+import { preferredResearchDirectorId } from "../lib/preferred-research-director";
 import {
   clearResearchListPersist,
   readResearchListPersist,
@@ -193,7 +194,7 @@ export function ResearchListPage() {
   );
   const selectedDirectorId =
     orchestratorVersion === "research-run-v6"
-      ? directorAgentId || availableDirectors[0]?.id || ""
+      ? directorAgentId || preferredResearchDirectorId(availableDirectors)
       : "";
   const { data, isLoading, isFetching, isError, error, refetch } = useQuery(
     researchSessionListOptions(wsId),

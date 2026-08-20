@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,15 +35,36 @@ func completedSessionWithMessages(output string, msgs ...agent.Message) *agent.S
 
 // traceFakeBackend replays a fixed completed session: output as the final
 // response, msgs streamed before it. executeErr fails the Execute call.
+// Because the tool-server submission is authoritative, the backend drives a
+// minimal real trajectory against the tool server coordinates in the prompt
+// (view the first seed, one expand, submit citing the seed) before replaying
+// the scripted session.
 type traceFakeBackend struct {
 	output     string
 	msgs       []agent.Message
 	executeErr error
 }
 
-func (f *traceFakeBackend) Execute(_ context.Context, _ string, _ agent.ExecOptions) (*agent.Session, error) {
+func (f *traceFakeBackend) Execute(_ context.Context, prompt string, _ agent.ExecOptions) (*agent.Session, error) {
 	if f.executeErr != nil {
 		return nil, f.executeErr
+	}
+	base := promptField(prompt, "Tool server base URL: ")
+	token := promptField(prompt, "Bearer token: ")
+	traj := promptField(prompt, "Trajectory ID: ")
+	seedExp := promptField(prompt, "Seed expansion ID: ")
+	node := firstSeedNode(prompt)
+	if base == "" || token == "" || traj == "" || seedExp == "" || node == "" {
+		return nil, fmt.Errorf("prompt missing tool coordinates")
+	}
+	if status, body := explorePost(base, token, "/view", map[string]any{"trajectory_id": traj, "expansion_id": seedExp, "node_id": node}); status != http.StatusOK {
+		return nil, fmt.Errorf("view %s: status %d body %s", node, status, body)
+	}
+	if status, body := explorePost(base, token, "/expand", map[string]any{"trajectory_id": traj, "node_id": node, "request_key": "rk-1"}); status != http.StatusOK {
+		return nil, fmt.Errorf("expand %s: status %d body %s", node, status, body)
+	}
+	if status, body := explorePost(base, token, "/submit", map[string]any{"trajectory_id": traj, "found": true, "summary": "s", "node_ids": []string{node}}); status != http.StatusOK {
+		return nil, fmt.Errorf("submit: status %d body %s", status, body)
 	}
 	return completedSessionWithMessages(f.output, f.msgs...), nil
 }

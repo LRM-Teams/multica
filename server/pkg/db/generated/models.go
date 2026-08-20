@@ -905,12 +905,65 @@ type GithubPullRequestCheckSuite struct {
 	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
 }
 
+type GraphMemoryChannelLineage struct {
+	WorkspaceID  pgtype.UUID        `json:"workspace_id"`
+	ChannelID    pgtype.UUID        `json:"channel_id"`
+	Generation   int64              `json:"generation"`
+	GraphKind    string             `json:"graph_kind"`
+	GraphOwnerID pgtype.UUID        `json:"graph_owner_id"`
+	ValidFrom    pgtype.Timestamptz `json:"valid_from"`
+	ValidTo      pgtype.Timestamptz `json:"valid_to"`
+}
+
+type GraphMemoryChannelRoute struct {
+	WorkspaceID         pgtype.UUID        `json:"workspace_id"`
+	ChannelID           pgtype.UUID        `json:"channel_id"`
+	RoutingMode         string             `json:"routing_mode"`
+	CurrentGraphKind    string             `json:"current_graph_kind"`
+	CurrentGraphOwnerID pgtype.UUID        `json:"current_graph_owner_id"`
+	Generation          int64              `json:"generation"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+}
+
+type GraphMemoryConsolidationRun struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	Status      string             `json:"status"`
+	TriggerKind string             `json:"trigger_kind"`
+	Error       string             `json:"error"`
+	Details     []byte             `json:"details"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	StartedAt   pgtype.Timestamptz `json:"started_at"`
+	FinishedAt  pgtype.Timestamptz `json:"finished_at"`
+}
+
 type GraphMemoryProfile struct {
-	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
-	MemoryType       string             `json:"memory_type"`
-	ExploreAgents    int32              `json:"explore_agents"`
-	ExploreMaxRounds int32              `json:"explore_max_rounds"`
-	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+	WorkspaceID              pgtype.UUID        `json:"workspace_id"`
+	MemoryType               string             `json:"memory_type"`
+	ExploreAgents            int32              `json:"explore_agents"`
+	ExploreMaxRounds         int32              `json:"explore_max_rounds"`
+	UpdatedAt                pgtype.Timestamptz `json:"updated_at"`
+	ScopedWriterReady        bool               `json:"scoped_writer_ready"`
+	Timezone                 string             `json:"timezone"`
+	TttEnabled               bool               `json:"ttt_enabled"`
+	ExploreNodesPerExpansion int32              `json:"explore_nodes_per_expansion"`
+	MaxHierarchyFanout       int32              `json:"max_hierarchy_fanout"`
+	MaxRelationEdgesPerNode  int32              `json:"max_relation_edges_per_node"`
+	DiveMaxRounds            int32              `json:"dive_max_rounds"`
+	DiveMaxViewedNodes       int32              `json:"dive_max_viewed_nodes"`
+	DiveMaxSourceFiles       int32              `json:"dive_max_source_files"`
+	DiveTimeoutSeconds       int32              `json:"dive_timeout_seconds"`
+	WRound                   float64            `json:"w_round"`
+	SourceMaxFileBytes       int64              `json:"source_max_file_bytes"`
+	SourceMaxTotalBytes      int64              `json:"source_max_total_bytes"`
+	SourceMaxPdfPages        int32              `json:"source_max_pdf_pages"`
+	SourceMaxAvSeconds       int32              `json:"source_max_av_seconds"`
+	SourceMaxImageMegapixels int32              `json:"source_max_image_megapixels"`
+	DiveModel                string             `json:"dive_model"`
+	DiveProvider             string             `json:"dive_provider"`
+	ConfigVersion            int64              `json:"config_version"`
+	SchemaVersion            int32              `json:"schema_version"`
 }
 
 type InboxItem struct {

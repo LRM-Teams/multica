@@ -876,7 +876,7 @@ func TestExpireQueuedTasksOnOfflineRuntimes(t *testing.T) {
 		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status)
 		VALUES ($1, 'offline-daemon-sweep-test', 'sweep test offline', 'local', 'pi', 'offline')
 		RETURNING id
-	`, testWorkspaceID, ownerID).Scan(&offlineRT); err != nil {
+	`, testWorkspaceID).Scan(&offlineRT); err != nil {
 		t.Fatalf("failed to insert offline runtime: %v", err)
 	}
 	if err := testPool.QueryRow(ctx, `

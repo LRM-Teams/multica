@@ -29,9 +29,10 @@ func TestInsertMemoryCurationAgentRuns_StaleHeartbeatSkipsNotQueues(t *testing.T
 		RETURNING id::text
 	`,  testWorkspaceID).Scan(&staleRuntimeID); err != nil {
 		t.Fatal(err)
+}
 	
 	bindTestRuntimeOwner(t, "memory-curation-insert-stale-daemon", testUserID)
-}
+
 	var agentID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (workspace_id, name, display_name, runtime_mode, runtime_id, owner_id, model)
@@ -142,9 +143,10 @@ func TestMemoryCurationBackfillSkipsIdleAndSucceededDays(t *testing.T) {
 		RETURNING id::text
 	`,  testWorkspaceID,  protocol.DaemonCapabilityMemoryCuration).Scan(&runtimeID); err != nil {
 		t.Fatal(err)
+}
 	
 	bindTestRuntimeOwner(t, "memory-curator-backfill-daemon", testUserID)
-}
+
 	var curatorAgentID, targetAgentID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (workspace_id, name, display_name, runtime_mode, runtime_id, owner_id, instructions, model)

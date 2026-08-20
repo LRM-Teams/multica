@@ -161,9 +161,10 @@ func TestMemoryCurationClaimFailsExhaustedStaleRunAndClaimsNext(t *testing.T) {
 		RETURNING id::text
 	`,  testWorkspaceID,  protocol.DaemonCapabilityMemoryCuration).Scan(&runtimeID); err != nil {
 		t.Fatal(err)
+}
 	
 	bindTestRuntimeOwner(t, "memory-curator-stale-daemon", testUserID)
-}
+
 	var staleRunID, nextRunID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO memory_curation_run (
@@ -221,9 +222,10 @@ func TestMemoryCurationActiveHeartbeatRefreshesBeforeExpirySweep(t *testing.T) {
 		RETURNING id::text
 	`,  testWorkspaceID,  protocol.DaemonCapabilityMemoryCuration).Scan(&runtimeID); err != nil {
 		t.Fatal(err)
+}
 	
 	bindTestRuntimeOwner(t, "memory-curator-active-hb-daemon", testUserID)
-}
+
 	var parentRunID, agentRunID, agentID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (workspace_id, name, display_name, runtime_mode, runtime_id, owner_id, model)
@@ -302,9 +304,10 @@ func TestWorkspaceMemoryCurationStatusSweepsExpiredRunningRuns(t *testing.T) {
 		RETURNING id::text
 	`,  testWorkspaceID,  protocol.DaemonCapabilityMemoryCuration).Scan(&runtimeID); err != nil {
 		t.Fatal(err)
+}
 	
 	bindTestRuntimeOwner(t, "memory-curator-status-daemon", testUserID)
-}
+
 	var staleRunID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO memory_curation_run (
@@ -358,9 +361,10 @@ func TestMemoryCuratorProfileQueuesAndCompletesDaemonRun(t *testing.T) {
 		RETURNING id::text
 	`,  testWorkspaceID,  protocol.DaemonCapabilityMemoryCuration).Scan(&runtimeID); err != nil {
 		t.Fatal(err)
+}
 	
 	bindTestRuntimeOwner(t, "memory-curator-test-daemon", testUserID)
-}
+
 	var curatorAgentID, targetAgentID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (workspace_id, name, display_name, runtime_mode, runtime_id, owner_id, instructions, model)
@@ -704,14 +708,15 @@ func TestDeleteRuntimeFailsIncompleteMemoryCurationRuns(t *testing.T) {
 		t.Skip("handler test database unavailable")
 	}
 	ctx := context.Background()
+	cleanupDaemonID := "curator-cleanup-" + uuid.NewString()
 	var runtimeID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info) VALUES ($1,  $2,  'Curator Cleanup Runtime',  'local',  'pi',  'online',  'cleanup test')
 		RETURNING id::text
-	`,  testWorkspaceID,  "curator-cleanup-"+uuid.NewString()).Scan(&runtimeID); err != nil {
+	`,  testWorkspaceID,  cleanupDaemonID).Scan(&runtimeID); err != nil {
 		t.Fatal(err)
 	}
-	bindTestRuntimeOwner(t, "curator-cleanup-"+uuid.NewString(), testUserID)
+	bindTestRuntimeOwner(t, cleanupDaemonID, testUserID)
 	var queuedRunID, doneRunID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO memory_curation_run (workspace_id, stage, trigger_kind, status, runtime_id)

@@ -542,7 +542,8 @@
     "overflow": "{{a}}, {{b}} and {{count}} people are typing"
   },
   "conversation_activity": {
-    "more_agents": "{{count}} more agents are working"
+    "more_agents_one": "{{count}} more agent is working",
+    "more_agents_other": "{{count}} more agents are working"
   },
   "agent_status": {
     "queued": "Queued",

@@ -354,6 +354,7 @@ func (d *Daemon) prepareResidentMessageBatch(ctx context.Context, agentID, runti
 	}
 
 	prepared := make([]protocol.AgentMessageProjection, 0, len(messages))
+	sessionKey := residentTurnScopeSessionKey(agentID, runtimeID)
 	for _, message := range messages {
 		messageTask := residentMessageMemoryTask(workspaceID, agentID, runtimeID, []protocol.AgentMessageProjection{message})
 		if profile, ok := d.graphProfileForWorkspace(workspaceID); ok {
@@ -361,16 +362,23 @@ func (d *Daemon) prepareResidentMessageBatch(ctx context.Context, agentID, runti
 			messageTask.ExploreAgents = profile.exploreAgents
 			messageTask.ExploreMaxRounds = profile.exploreMaxRounds
 		}
+		serverMemories := convertResidentMessageMemoriesForEnv(message.Memories)
 		var memories []execenv.MemoryContextForEnv
 		if effectiveMemoryType(d.cfg.MemoryType, messageTask.MemoryType) == MemoryTypeGraph {
 			// Same merge contract as runTask (spec §8): legacy user/agent
 			// retained, graph blob appended, no legacy project/channel/daily.
-			memories = mergeGraphModeExecutionMemory(
-				agentRoot, messageTask, convertResidentMessageMemoriesForEnv(message.Memories),
+			// Agent-scope rows stay out of per-message context.
+			combined := mergeGraphModeExecutionMemory(
+				agentRoot, messageTask, serverMemories,
 				d.graphExecutionMemories(ctx, messageTask, d.logger),
 			)
+			memories = withoutAgentScopeMemories(combined)
 		} else {
-			memories, _ = prepareExecutionMemory(agentRoot, messageTask, convertResidentMessageMemoriesForEnv(message.Memories))
+			memories, _ = prepareTurnScopeMemory(agentRoot, messageTask, serverMemories)
+		}
+		if d.turnScopeMemory != nil {
+			memories = d.turnScopeMemory.selectForInject(sessionKey, memories, false)
+			d.turnScopeMemory.markInjected(sessionKey, memories)
 		}
 		chatSessionID, _ := standaloneChatSessionID(message.Target)
 		message.RuntimeContext = execenv.RenderTurnContext(execenv.TaskContextForEnv{

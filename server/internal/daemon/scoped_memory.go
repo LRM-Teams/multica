@@ -14,7 +14,10 @@ import (
 	"github.com/multica-ai/multica/server/internal/memoryscope"
 )
 
-const executionMemoryBudgetBytes = 16 * 1024
+const (
+	executionMemoryBudgetBytes = 16 * 1024
+	agentScopeMemoryBudgetBytes = 6 * 1024
+)
 
 type scopedMemoryPaths struct {
 	UserDir    string
@@ -28,11 +31,22 @@ type executionMemoryCandidate struct {
 	Order    int
 }
 
+// prepareExecutionMemory packs turn-scope (user/project/channel) and agent-scope
+// memories together. Prefer prepareTurnScopeMemory + prepareAgentScopeMemory at
+// call sites that inject them on different surfaces.
 func prepareExecutionMemory(agentRoot string, task Task, serverMemories []execenv.MemoryContextForEnv) ([]execenv.MemoryContextForEnv, scopedMemoryPaths) {
+	turn, paths := prepareTurnScopeMemory(agentRoot, task, serverMemories)
+	agent, _ := prepareAgentScopeMemory(agentRoot, task, serverMemories)
+	return append(turn, agent...), paths
+}
+
+// prepareTurnScopeMemory loads only member/project/channel memory for the
+// current wake (pre-message / RuntimeContext). Agent-scope memory is excluded.
+func prepareTurnScopeMemory(agentRoot string, task Task, serverMemories []execenv.MemoryContextForEnv) ([]execenv.MemoryContextForEnv, scopedMemoryPaths) {
 	paths := scopedMemoryPathsForTask(agentRoot, task)
 	includeUser := taskIncludesUserMemory(task)
 
-	candidates := make([]executionMemoryCandidate, 0, len(serverMemories)+10)
+	candidates := make([]executionMemoryCandidate, 0, len(serverMemories)+8)
 	order := 0
 	add := func(priority int, memory execenv.MemoryContextForEnv) {
 		memory.Name = strings.TrimSpace(memory.Name)
@@ -40,11 +54,17 @@ func prepareExecutionMemory(agentRoot string, task Task, serverMemories []execen
 		if memory.Name == "" || memory.Content == "" {
 			return
 		}
+		if isAgentMemoryScope(memory.Scope) {
+			return
+		}
 		candidates = append(candidates, executionMemoryCandidate{Memory: memory, Priority: priority, Order: order})
 		order++
 	}
 	for _, memory := range serverMemories {
 		scope := strings.ToLower(strings.TrimSpace(memory.Scope))
+		if isAgentMemoryScope(scope) {
+			continue
+		}
 		if !includeUser && (scope == "user" || scope == "member") {
 			continue
 		}
@@ -70,6 +90,38 @@ func prepareExecutionMemory(agentRoot string, task Task, serverMemories []execen
 	if paths.ChannelDir != "" {
 		addFile(4, "Current channel context", filepath.Join(paths.ChannelDir, "CONTEXT.md"), "channel", "channel", task.ChannelID, channelMemoryTemplate, 1536)
 	}
+
+	return packExecutionMemoryCandidates(candidates, executionMemoryBudgetBytes), paths
+}
+
+// prepareAgentScopeMemory loads only agent-global memory for session-start
+// injection (system prompt / AGENTS brief). It is not re-read into per-message
+// turn context.
+func prepareAgentScopeMemory(agentRoot string, task Task, serverMemories []execenv.MemoryContextForEnv) ([]execenv.MemoryContextForEnv, scopedMemoryPaths) {
+	paths := scopedMemoryPathsForTask(agentRoot, task)
+	candidates := make([]executionMemoryCandidate, 0, len(serverMemories)+4)
+	order := 0
+	add := func(priority int, memory execenv.MemoryContextForEnv) {
+		memory.Name = strings.TrimSpace(memory.Name)
+		memory.Content = strings.TrimSpace(memory.Content)
+		if memory.Name == "" || memory.Content == "" {
+			return
+		}
+		if !isAgentMemoryScope(memory.Scope) {
+			return
+		}
+		candidates = append(candidates, executionMemoryCandidate{Memory: memory, Priority: priority, Order: order})
+		order++
+	}
+	for _, memory := range serverMemories {
+		if isAgentMemoryScope(memory.Scope) {
+			add(6, memory)
+		}
+	}
+	addFile := func(priority int, name, path, scope, subjectType, subjectID, template string, maxBytes int) {
+		content := readScopedMemoryFile(path, template, maxBytes)
+		add(priority, execenv.MemoryContextForEnv{Name: name, Content: content, Scope: scope, SubjectType: subjectType, SubjectID: subjectID})
+	}
 	if agentRoot != "" {
 		addFile(6, "Agent global memory", filepath.Join(agentRoot, "memory", "MEMORY.md"), "agent", "agent", task.AgentID, agentMemoryTemplate, 2*1024)
 		addFile(5, "Agent active state", filepath.Join(agentRoot, "memory", "STATE.md"), "agent", "agent", task.AgentID, agentStateTemplate, 2*1024)
@@ -77,7 +129,39 @@ func prepareExecutionMemory(agentRoot string, task Task, serverMemories []execen
 			addFile(7, "Today activity summary", todayPath, "agent", "agent", task.AgentID, "", 2*1024)
 		}
 	}
+	return packExecutionMemoryCandidates(candidates, agentScopeMemoryBudgetBytes), paths
+}
 
+// mergeExecutionMemories keeps legacy scoped memories and appends extras
+// (e.g. graph recall) with dedupe + shared budget. Extras win on content
+// collision only when they appear first in the packed result after priority sort.
+func mergeExecutionMemories(legacy, extras []execenv.MemoryContextForEnv) []execenv.MemoryContextForEnv {
+	if len(extras) == 0 {
+		return legacy
+	}
+	if len(legacy) == 0 {
+		return extras
+	}
+	candidates := make([]executionMemoryCandidate, 0, len(legacy)+len(extras))
+	order := 0
+	for _, memory := range legacy {
+		candidates = append(candidates, executionMemoryCandidate{Memory: memory, Priority: serverMemoryPriority(memory), Order: order})
+		order++
+	}
+	for _, memory := range extras {
+		// Graph / supplemental recall stays near the end so durable scoped
+		// facts keep budget priority, but still participates in the pack.
+		priority := serverMemoryPriority(memory)
+		if priority < 5 {
+			priority = 5
+		}
+		candidates = append(candidates, executionMemoryCandidate{Memory: memory, Priority: priority, Order: order})
+		order++
+	}
+	return packExecutionMemoryCandidates(candidates, executionMemoryBudgetBytes)
+}
+
+func packExecutionMemoryCandidates(candidates []executionMemoryCandidate, budget int) []execenv.MemoryContextForEnv {
 	sort.SliceStable(candidates, func(i, j int) bool {
 		if candidates[i].Priority != candidates[j].Priority {
 			return candidates[i].Priority < candidates[j].Priority
@@ -86,7 +170,7 @@ func prepareExecutionMemory(agentRoot string, task Task, serverMemories []execen
 	})
 	result := make([]execenv.MemoryContextForEnv, 0, len(candidates))
 	seen := map[[32]byte]struct{}{}
-	remaining := executionMemoryBudgetBytes
+	remaining := budget
 	for _, candidate := range candidates {
 		content := strings.TrimSpace(candidate.Memory.Content)
 		hash := sha256.Sum256([]byte(strings.ToLower(content)))
@@ -105,7 +189,11 @@ func prepareExecutionMemory(agentRoot string, task Task, serverMemories []execen
 		result = append(result, candidate.Memory)
 		remaining -= len(content)
 	}
-	return result, paths
+	return result
+}
+
+func isAgentMemoryScope(scope string) bool {
+	return strings.ToLower(strings.TrimSpace(scope)) == "agent"
 }
 
 func serverMemoryPriority(memory execenv.MemoryContextForEnv) int {
@@ -221,6 +309,38 @@ func mergeGraphModeExecutionMemory(agentRoot string, task Task, serverMemories, 
 	legacy, _ := prepareExecutionMemory(agentRoot, task, serverMemories)
 	merged := filterGraphModeLegacyMemories(legacy)
 	return append(merged, graphMemories...)
+}
+
+// withoutAgentScopeMemories drops agent-scope rows so they can be injected
+// once at session start instead of every turn/pre-message.
+func withoutAgentScopeMemories(in []execenv.MemoryContextForEnv) []execenv.MemoryContextForEnv {
+	if len(in) == 0 {
+		return in
+	}
+	out := make([]execenv.MemoryContextForEnv, 0, len(in))
+	for _, memory := range in {
+		if isAgentMemoryScope(memory.Scope) {
+			continue
+		}
+		out = append(out, memory)
+	}
+	return out
+}
+
+// withoutGraphModeLegacyDaily drops the legacy daily summary in graph mode
+// (spec §8: the graph owns daily memory).
+func withoutGraphModeLegacyDaily(in []execenv.MemoryContextForEnv) []execenv.MemoryContextForEnv {
+	if len(in) == 0 {
+		return in
+	}
+	out := make([]execenv.MemoryContextForEnv, 0, len(in))
+	for _, memory := range in {
+		if memory.Name == graphModeLegacyDailyName {
+			continue
+		}
+		out = append(out, memory)
+	}
+	return out
 }
 
 func truncateUTF8Bytes(value string, maxBytes int) string {

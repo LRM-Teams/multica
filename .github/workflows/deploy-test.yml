@@ -237,7 +237,7 @@ jobs:
           compose run --rm --no-deps --entrypoint ./migrate backend up
           # These variables expand inside the PostgreSQL container.
           # shellcheck disable=SC2016
-          schema_ready="$(compose exec -T postgres sh -ec 'PGPASSWORD="$POSTGRES_PASSWORD" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc "SELECT to_regclass('"'"'public.computer_identity_owner'"'"') IS NOT NULL AND to_regclass('"'"'public.computer_workspace_bindings'"'"') IS NOT NULL"')"
+          schema_ready="$(compose exec -T postgres sh -ec 'PGPASSWORD="$POSTGRES_PASSWORD" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc "SELECT to_regclass('"'"'public.computers'"'"') IS NOT NULL AND to_regclass('"'"'public.computer_workspace_bindings'"'"') IS NOT NULL"')"
           [ "$schema_ready" = t ] || { echo "::error::Computer Workspace binding schema is missing after migration"; exit 1; }
 
       - name: Roll test application

@@ -114,14 +114,29 @@ func runtimeVisibilityFixture(t *testing.T) (runtimeID, runtimeOwnerID, plainMem
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent_runtime (
 			workspace_id, daemon_id, name, runtime_mode, provider, status,
-			device_info, metadata, owner_id, visibility, last_seen_at
+			device_info, metadata, visibility, last_seen_at
 		)
-		VALUES ($1, NULL, 'Visibility Test Runtime', 'cloud', 'visibility_test_provider', 'online', 'visibility test', '{}'::jsonb, $2, 'private', now())
+		VALUES ($1, 'visibility-daemon-' || gen_random_uuid()::text, 'Visibility Test Runtime', 'cloud', 'visibility_test_provider', 'online', 'visibility test', '{}'::jsonb, 'private', now())
 		RETURNING id
-	`, testWorkspaceID, runtimeOwnerID).Scan(&runtimeID); err != nil {
+	`, testWorkspaceID).Scan(&runtimeID); err != nil {
 		t.Fatalf("create runtime: %v", err)
 	}
+	var daemonID string
+	if err := testPool.QueryRow(ctx, `SELECT daemon_id FROM agent_runtime WHERE id = $1`, runtimeID).Scan(&daemonID); err != nil {
+		t.Fatalf("load fixture runtime daemon_id: %v", err)
+	}
+	// LRM-1570: ownership is machine-level via an active binding for the
+	// runtime's daemon (the Computer owner is runtimeOwnerID).
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO computer_workspace_bindings (
+			daemon_id, workspace_id, user_id, execution_token_hash, active
+		) VALUES ($1, $2, $3, 'visibility-test', TRUE)
+	`, daemonID, testWorkspaceID, runtimeOwnerID); err != nil {
+		t.Fatalf("seed runtime owner binding: %v", err)
+	}
 	t.Cleanup(func() {
+		testPool.Exec(context.Background(),
+			`DELETE FROM computer_workspace_bindings WHERE daemon_id = $1 AND workspace_id = $2`, daemonID, testWorkspaceID)
 		testPool.Exec(context.Background(),
 			`DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
 	})
@@ -247,11 +262,11 @@ func TestUpdateAgent_RejectsRebindToPrivateRuntime(t *testing.T) {
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent_runtime (
 			workspace_id, daemon_id, name, runtime_mode, provider, status,
-			device_info, metadata, owner_id, visibility, last_seen_at
+			device_info, metadata, visibility, last_seen_at
 		)
-		VALUES ($1, NULL, 'Public Runtime', 'cloud', 'visibility_test_public_provider', 'online', 'public', '{}'::jsonb, $2, 'public', now())
+		VALUES ($1, NULL, 'Public Runtime', 'cloud', 'visibility_test_public_provider', 'online', 'public', '{}'::jsonb, 'public', now())
 		RETURNING id
-	`, testWorkspaceID, plainMemberID).Scan(&publicRuntimeID); err != nil {
+	`, testWorkspaceID).Scan(&publicRuntimeID); err != nil {
 		t.Fatalf("create public runtime: %v", err)
 	}
 	t.Cleanup(func() {

@@ -538,14 +538,24 @@ func createPeriodBriefCollectorTestAgentForOwner(t *testing.T, label, ownerUserI
 	var runtimeID string
 	if err := testPool.QueryRow(context.Background(), `
 		INSERT INTO agent_runtime (
-			workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, visibility, owner_id, last_seen_at
-		) VALUES ($1, $2, $3, 'local', $4, 'online', '', '{}'::jsonb, 'private', $5, now())
+			workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, visibility, last_seen_at
+		) VALUES ($1, $2, $3, 'local', $4, 'online', '', '{}'::jsonb, 'private', now())
 		RETURNING id
-	`, testWorkspaceID, daemonID, "collect-rt-"+uuid.NewString()[:8], "collect_test_"+uuid.NewString(), ownerUserID).Scan(&runtimeID); err != nil {
+	`, testWorkspaceID, daemonID, "collect-rt-"+uuid.NewString()[:8], "collect_test_"+uuid.NewString()).Scan(&runtimeID); err != nil {
 		t.Fatalf("seed collector runtime: %v", err)
+	}
+	// LRM-1570: ownership is machine-level via an active binding for the
+	// daemon in this workspace (the Computer owner is ownerUserID).
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO computer_workspace_bindings (
+			daemon_id, workspace_id, user_id, execution_token_hash, active
+		) VALUES ($1, $2, $3, 'collect-test-owner', TRUE)
+	`, daemonID, testWorkspaceID, ownerUserID); err != nil {
+		t.Fatalf("seed collector owner binding: %v", err)
 	}
 	t.Cleanup(func() {
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_workspace_bindings WHERE daemon_id = $1 AND workspace_id = $2`, daemonID, testWorkspaceID)
 	})
 
 	slug := strings.ToLower(strings.ReplaceAll(uuid.NewString()[:8], "-", "a"))

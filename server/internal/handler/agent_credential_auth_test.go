@@ -220,16 +220,32 @@ func seedHandlerTestRuntimeOwner(t *testing.T, ownerID string) {
 	t.Helper()
 
 	runtimeID := handlerTestRuntimeID(t)
+	// LRM-1570: ownership is machine-level, established via an active
+	// computer_workspace_bindings row for the runtime's daemon. The shared
+	// handler fixture runtime has a NULL daemon_id, so materialize one (the
+	// tests that need daemon-token requests later overwrite it via
+	// seedHandlerTestRuntimeDaemonID, which re-creates the binding).
 	var daemonID pgtype.Text
 	if err := testPool.QueryRow(context.Background(), `SELECT daemon_id FROM agent_runtime WHERE id = $1`, runtimeID).Scan(&daemonID); err != nil {
 		t.Fatalf("load runtime daemon_id: %v", err)
 	}
-	// LRM-1570: ownership is machine-level, established via an active
-	// computer_workspace_bindings row for the runtime's daemon.
+	if !daemonID.Valid || daemonID.String == "" {
+		const defaultDaemon = "handler-test-runtime-daemon"
+		if _, err := testPool.Exec(context.Background(), `UPDATE agent_runtime SET daemon_id = $1 WHERE id = $2`, defaultDaemon, runtimeID); err != nil {
+			t.Fatalf("materialize runtime daemon_id: %v", err)
+		}
+		daemonID = pgtype.Text{String: defaultDaemon, Valid: true}
+		t.Cleanup(func() {
+			_, _ = testPool.Exec(context.Background(), `UPDATE agent_runtime SET daemon_id = NULL WHERE id = $1`, runtimeID)
+			_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_workspace_bindings WHERE daemon_id = $1 AND workspace_id = $2`, defaultDaemon, testWorkspaceID)
+		})
+	}
 	if _, err := testPool.Exec(context.Background(), `
 		INSERT INTO computer_workspace_bindings (
 			daemon_id, workspace_id, user_id, execution_token_hash, active
 		) VALUES ($1, $2, $3, 'handler-test-owner', TRUE)
+		ON CONFLICT (daemon_id, workspace_id)
+		DO UPDATE SET user_id = EXCLUDED.user_id, active = TRUE, revoked_at = NULL
 	`, daemonID.String, testWorkspaceID, ownerID); err != nil {
 		t.Fatalf("seed runtime owner binding: %v", err)
 	}
@@ -249,8 +265,21 @@ func seedHandlerTestRuntimeDaemonID(t *testing.T, daemonID string) {
 	if _, err := testPool.Exec(context.Background(), `UPDATE agent_runtime SET daemon_id = $1 WHERE id = $2`, daemonID, runtimeID); err != nil {
 		t.Fatalf("seed runtime daemon id: %v", err)
 	}
+	// LRM-1570: re-establish the machine-level owner binding for the new
+	// daemon id so owner resolution (computer_workspace_bindings) succeeds
+	// for requests issued against this runtime.
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO computer_workspace_bindings (
+			daemon_id, workspace_id, user_id, execution_token_hash, active
+		) VALUES ($1, $2, $3, 'handler-test-daemon', TRUE)
+		ON CONFLICT (daemon_id, workspace_id)
+		DO UPDATE SET user_id = EXCLUDED.user_id, active = TRUE, revoked_at = NULL
+	`, daemonID, testWorkspaceID, testUserID); err != nil {
+		t.Fatalf("seed runtime daemon binding: %v", err)
+	}
 	t.Cleanup(func() {
 		_, _ = testPool.Exec(context.Background(), `UPDATE agent_runtime SET daemon_id = $1 WHERE id = $2`, oldDaemonID, runtimeID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_workspace_bindings WHERE daemon_id = $1 AND workspace_id = $2`, daemonID, testWorkspaceID)
 	})
 }
 

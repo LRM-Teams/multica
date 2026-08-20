@@ -167,8 +167,18 @@ func TestRestartEndpointsRequireComputerOwner(t *testing.T) {
 	`, testWorkspaceID, daemonID, "Restart Gate "+uuid.NewString()).Scan(&runtimeID); err != nil {
 		t.Fatalf("create runtime: %v", err)
 	}
+	// LRM-1570: ownership is machine-level via an active binding for the
+	// runtime's daemon (the Computer owner is testUserID).
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO computer_workspace_bindings (
+			daemon_id, workspace_id, user_id, execution_token_hash, active
+		) VALUES ($1, $2, $3, 'restart-gate-test', TRUE)
+	`, daemonID, testWorkspaceID, testUserID); err != nil {
+		t.Fatalf("seed restart-gate owner binding: %v", err)
+	}
 	t.Cleanup(func() {
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_workspace_bindings WHERE daemon_id = $1 AND workspace_id = $2`, daemonID, testWorkspaceID)
 	})
 
 	plainMemberID := createRuntimeLocalSkillTestMember(t, "member")

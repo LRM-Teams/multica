@@ -144,6 +144,11 @@ Retry the same submission with the same `client_request_id` and byte-equivalent
 payload after a transport failure. Never send a V6 envelope through the legacy
 `task-result` command.
 
+The submission boundary is asynchronous. Status `received` means the envelope
+is durably handed off and the Agent should finish; a server reconciler later
+marks it `accepted` or `rejected`. Do not keep the Inbox execution open waiting
+for `accepted`, and do not create a second request ID after `received`.
+
 ## Assigned Research Run task
 
 If the prompt contains `## Durable Research Run task`, follow its task ID,

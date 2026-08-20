@@ -34,6 +34,7 @@ func TestBuildV6WorkDispatchPromptMakesDirectorAssignmentExecutable(t *testing.T
 		`"payload_schema": "<one manifest.task_specific_schema.payload_schemas key>"`,
 		"POST each acknowledgement to `${V6_API}/director-brief-acks`",
 		"POST the exact result file to `${V6_API}/submission`",
+		"normally returns status `received`",
 		"multica research work-submit",
 		"Review the durable brief and propose the next actions.",
 	} {
@@ -83,6 +84,7 @@ func TestBuildV6WorkDispatchPromptBindsAtomicTaskIdentity(t *testing.T) {
 		`"task_id": "00000000-0000-4000-8000-000000000214"`,
 		`"agent_id": "00000000-0000-4000-8000-000000000009"`,
 		"RFC 8785 JCS",
+		"successful Agent handoff",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)

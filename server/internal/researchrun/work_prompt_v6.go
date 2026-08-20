@@ -88,7 +88,7 @@ func BuildV6WorkDispatchPrompt(manifest V6WorkManifest) (string, error) {
 	prompt.WriteString("Write exactly the envelope named by `expected_result_schema`, preserving every identity and hash from the manifest, then submit it:\n\n")
 	prompt.WriteString("```bash\nmultica research work-submit " + base + " --file <absolute-result.json> --output json\n```\n\n")
 	prompt.WriteString("For the credential-proxy fallback, POST the exact result file to `${V6_API}/submission` with `Content-Type: application/json` and `--data-binary @<absolute-result.json>`.\n\n")
-	prompt.WriteString("Do not claim completion until `work-submit` returns an accepted outcome.\n\n### Mission\n\n")
+	prompt.WriteString("`work-submit` durably records the envelope and normally returns status `received`; that is the successful Agent handoff, so stop and report completion. The server applies it asynchronously and may later mark it `accepted` or `rejected`. Retry only transport/unknown outcomes with the exact same client request ID and byte-equivalent envelope.\n\n### Mission\n\n")
 	prompt.WriteString(strings.TrimSpace(identity.MissionPrompt))
 	prompt.WriteString("\n")
 	return prompt.String(), nil

@@ -156,9 +156,18 @@ func (runner *WorkspaceRunner) serveConnection(connection *DaemonConnection, con
 				if runner.logger != nil {
 					runner.logger.Warn("forward Computer control to Host failed", "workspace_id", workspaceID, "action", message.Type, "request_id", command.RequestID, "error", err)
 				}
-				if message.Type == protocol.EventComputerUpgrade && errors.Is(err, computer.ErrComputerControlBusy) {
+				// EventComputerRestart has its own semantics and is not
+				// acknowledged here. Every EventComputerUpgrade failure — not
+				// only the busy case — must report back so the cloud (and the
+				// upgrade UI polling on it) never stalls waiting for a done
+				// frame that a purely-local WRN log can never deliver.
+				if message.Type == protocol.EventComputerUpgrade {
+					errorCode := "forward_failed"
+					if errors.Is(err, computer.ErrComputerControlBusy) {
+						errorCode = "control_busy"
+					}
 					_ = writeFrame(protocol.EventComputerUpgradeDone, protocol.ComputerUpgradeDonePayload{
-						RequestID: command.RequestID, OK: false, Error: "control_busy",
+						RequestID: command.RequestID, OK: false, Error: errorCode,
 					})
 				}
 			}

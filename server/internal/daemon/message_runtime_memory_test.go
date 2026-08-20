@@ -65,6 +65,73 @@ func TestPrepareResidentMessageBatchScopesIdentityAndUserMemoryPerMessage(t *tes
 	}
 }
 
+func TestPrepareResidentMessageBatchSkipsRepeatUserProjectChannelMemory(t *testing.T) {
+	root := t.TempDir()
+	d := New(Config{WorkspacesRoot: root}, nil)
+	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
+	agentRoot := agentworkspace.Root(root, "workspace-1", "agent-1")
+	userPath := filepath.Join(agentRoot, "users", "member-1", "USER.md")
+	if err := os.MkdirAll(filepath.Dir(userPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(userPath, []byte("# User Preferences\n\n- Call me JHP.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	msg := protocol.AgentMessageProjection{
+		ID: "message-1", Target: "dm:member-1", Seq: 1, Content: "hi",
+		ChannelID: "channel-dm", ChannelKind: "dm", ProjectID: "project-a",
+		InitiatorType: "member", InitiatorID: "member-1", InitiatorName: "JHP",
+	}
+	projectPath := filepath.Join(agentRoot, "projects", "project-a", "MEMORY.md")
+	if err := os.MkdirAll(filepath.Dir(projectPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(projectPath, []byte("Project uses Go.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	first, _, err := d.prepareResidentMessageBatch(context.Background(), "agent-1", "runtime-1", []protocol.AgentMessageProjection{msg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(first[0].RuntimeContext, "Call me JHP") || !strings.Contains(first[0].RuntimeContext, "Project uses Go") {
+		t.Fatalf("first wake missing turn-scope memory:\n%s", first[0].RuntimeContext)
+	}
+
+	msg.ID = "message-2"
+	msg.Seq = 2
+	msg.Content = "hi again"
+	second, _, err := d.prepareResidentMessageBatch(context.Background(), "agent-1", "runtime-1", []protocol.AgentMessageProjection{msg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(second[0].RuntimeContext, "Call me JHP") || strings.Contains(second[0].RuntimeContext, "Project uses Go") {
+		t.Fatalf("second wake re-injected turn-scope memory:\n%s", second[0].RuntimeContext)
+	}
+
+	msg.ID = "message-3"
+	msg.InitiatorID = "member-2"
+	msg.Content = "hello from other user"
+	otherUser := filepath.Join(agentRoot, "users", "member-2", "USER.md")
+	if err := os.MkdirAll(filepath.Dir(otherUser), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(otherUser, []byte("Call me Sam.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	third, _, err := d.prepareResidentMessageBatch(context.Background(), "agent-1", "runtime-1", []protocol.AgentMessageProjection{msg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(third[0].RuntimeContext, "Call me Sam") {
+		t.Fatalf("new user should inject once:\n%s", third[0].RuntimeContext)
+	}
+	if strings.Contains(third[0].RuntimeContext, "Call me JHP") {
+		t.Fatalf("other user's memory leaked:\n%s", third[0].RuntimeContext)
+	}
+}
+
 func TestAppendAgentScopeSystemPromptOnlyOnFreshSession(t *testing.T) {
 	memories := []execenv.MemoryContextForEnv{{
 		Name: "Agent global memory", Content: "Prefer terse replies.", Scope: "agent",

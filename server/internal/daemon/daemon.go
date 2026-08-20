@@ -223,6 +223,10 @@ type Daemon struct {
 	graphMemoryOnce sync.Once
 	graphMemoryProv *graphMemoryProvider
 
+	// turnScopeMemory tracks which user/project/channel scopes were already
+	// injected into a provider session or resident process continuum.
+	turnScopeMemory *turnScopeMemoryTracker
+
 	// canonicalRuntimes owns the one durable provider process for each
 	// Agent×runtime Message coordinator.
 	canonicalRuntimes *canonicalAgentRuntimePool
@@ -273,6 +277,7 @@ func newDaemonForRole(cfg Config, logger *slog.Logger, role daemonProcessRole) *
 		sharedSkillScanCache:      make(map[string]string),
 		memoryCurationRuns:        make(map[string]string),
 		activeCurationRuns:        make(map[string]string),
+		turnScopeMemory:           newTurnScopeMemoryTracker(),
 		runnerInstanceID:          uuid.NewString(),
 	}
 	d.initializeBindingExecution(bindingStateRoot)
@@ -2399,16 +2404,24 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	serverMemories := convertMemoriesForEnv(task.Agent)
 	memoryTask := task
 	memoryTask.AgentID = agentID
-	turnMemories := serverMemories
+	allTurnMemories := serverMemories
 	var agentScopeMemories []execenv.MemoryContextForEnv
 	if !restrictedExecution {
-		turnMemories, _ = prepareTurnScopeMemory(agentRootPath, memoryTask, serverMemories)
+		allTurnMemories, _ = prepareTurnScopeMemory(agentRootPath, memoryTask, serverMemories)
 		agentScopeMemories, _ = prepareAgentScopeMemory(agentRootPath, memoryTask, serverMemories)
 		// Graph reviewer (design §1 memory_type=graph): merge recall with
 		// legacy turn-scope memory instead of replacing the whole pack.
 		if graphMemories := d.graphExecutionMemories(ctx, memoryTask, taskLog); graphMemories != nil {
-			turnMemories = mergeExecutionMemories(turnMemories, graphMemories)
+			allTurnMemories = mergeExecutionMemories(allTurnMemories, graphMemories)
 		}
+	}
+	// Same provider session: skip user/project/channel scopes already injected.
+	// Fresh session (no PriorSessionID) loads them again.
+	freshTurnScopeSession := strings.TrimSpace(task.PriorSessionID) == ""
+	turnScopeSessionKey := issueTurnScopeSessionKey(agentID, task.RuntimeID, task.PriorSessionID)
+	turnMemories := allTurnMemories
+	if d.turnScopeMemory != nil {
+		turnMemories = d.turnScopeMemory.selectForInject(turnScopeSessionKey, allTurnMemories, freshTurnScopeSession)
 	}
 
 	// Prepare the agent's durable execution environment.
@@ -2602,6 +2615,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	}
 
 	prompt := execenv.RenderTurnContext(taskCtx) + BuildPrompt(task, provider, agentRootPath)
+	injectedTurnMemories := turnMemories
 
 	// Pass the product-task execution context so the spawned agent CLI can
 	// call its task APIs. Message commands use the separate local Credential
@@ -2854,7 +2868,10 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		taskLog.Warn("session resume failed, retrying with fresh session", "error", result.Error)
 		execOpts.ResumeSessionID = ""
 		clearCanonicalResumeIfPresent(backend)
-		// Fresh session: inject agent-scope memory that was skipped on resume.
+		// Fresh session: reinject full turn-scope + agent-scope memory.
+		injectedTurnMemories = allTurnMemories
+		taskCtx.AgentMemories = allTurnMemories
+		prompt = execenv.RenderTurnContext(taskCtx) + BuildPrompt(task, provider, agentRootPath)
 		appendAgentScopeSystemPrompt(&execOpts, agentScopeMemories)
 		retryResult, retryTools, retryErr := d.executeAndDrainForTask(ctx, backend, prompt, execOpts, taskLog, task)
 		if retryErr != nil {
@@ -2863,6 +2880,15 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			result = retryResult
 			result.Usage = mergeUsage(firstUsage, result.Usage)
 			tools = retryTools
+		}
+	}
+	if d.turnScopeMemory != nil {
+		markSessionID := strings.TrimSpace(task.PriorSessionID)
+		if markSessionID == "" {
+			markSessionID = strings.TrimSpace(result.SessionID)
+		}
+		if markSessionID != "" {
+			d.turnScopeMemory.markInjected(issueTurnScopeSessionKey(agentID, task.RuntimeID, markSessionID), injectedTurnMemories)
 		}
 	}
 	elapsed := time.Since(taskStart).Round(time.Second)

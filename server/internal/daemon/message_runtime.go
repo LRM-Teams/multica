@@ -354,6 +354,7 @@ func (d *Daemon) prepareResidentMessageBatch(ctx context.Context, agentID, runti
 	}
 
 	prepared := make([]protocol.AgentMessageProjection, 0, len(messages))
+	sessionKey := residentTurnScopeSessionKey(agentID, runtimeID)
 	for _, message := range messages {
 		messageTask := residentMessageMemoryTask(workspaceID, agentID, runtimeID, []protocol.AgentMessageProjection{message})
 		memories, _ := prepareTurnScopeMemory(agentRoot, messageTask, convertResidentMessageMemoriesForEnv(message.Memories))
@@ -361,6 +362,10 @@ func (d *Daemon) prepareResidentMessageBatch(ctx context.Context, agentID, runti
 		// turn-scope memory (same contract as runTask).
 		if graphMemories := d.graphExecutionMemories(ctx, messageTask, d.logger); graphMemories != nil {
 			memories = mergeExecutionMemories(memories, graphMemories)
+		}
+		if d.turnScopeMemory != nil {
+			memories = d.turnScopeMemory.selectForInject(sessionKey, memories, false)
+			d.turnScopeMemory.markInjected(sessionKey, memories)
 		}
 		chatSessionID, _ := standaloneChatSessionID(message.Target)
 		message.RuntimeContext = execenv.RenderTurnContext(execenv.TaskContextForEnv{

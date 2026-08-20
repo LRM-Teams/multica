@@ -50,6 +50,9 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 			if err := d.canonicalRuntimes.invalidateSession(agentID, runtimeID); err != nil {
 				return fmt.Errorf("rotate resident Pi run identity: %w", err)
 			}
+			if d.turnScopeMemory != nil {
+				d.turnScopeMemory.clearResident(agentID, runtimeID)
+			}
 		} else {
 			return d.ensureResidentProviderProcess(ctx, agentID, runtimeID)
 		}
@@ -172,6 +175,11 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 	systemPrompt := ""
 	if execenv.ShouldInjectAgentScopeSystemPrompt(resumeSessionID) {
 		systemPrompt = execenv.RenderAgentScopeMemory(agentScopeMemories)
+		if d.turnScopeMemory != nil {
+			// New provider process continuum: allow user/project/channel to
+			// inject again on the first Message after create.
+			d.turnScopeMemory.clearResident(config.Agent.ID, config.RuntimeID)
+		}
 	}
 	identity, err := newCanonicalAgentRuntimeIdentity(canonicalAgentRuntimeIdentityParams{
 		AgentID:             config.Agent.ID,
@@ -240,6 +248,9 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 	if runIdentity != nil {
 		if _, err := d.canonicalRuntimes.bindResidentPiRunIdentity(ctx, agentID, runtimeID, *runIdentity); err != nil {
 			_ = d.canonicalRuntimes.invalidateSession(agentID, runtimeID)
+			if d.turnScopeMemory != nil {
+				d.turnScopeMemory.clearResident(agentID, runtimeID)
+			}
 			return fmt.Errorf("bind resident Pi run identity: %w", err)
 		}
 	}
@@ -256,6 +267,9 @@ func (d *Daemon) ensureResidentProviderProcess(ctx context.Context, agentID, run
 		cleanupErr := d.canonicalRuntimes.invalidateSession(agentID, runtimeID)
 		if errors.Is(cleanupErr, ErrCanonicalAgentRuntimeBusy) {
 			cleanupErr = d.canonicalRuntimes.forceInvalidateSession(agentID, runtimeID)
+		}
+		if d.turnScopeMemory != nil {
+			d.turnScopeMemory.clearResident(agentID, runtimeID)
 		}
 		if cleanupErr != nil {
 			return errors.Join(startErr, fmt.Errorf("retire failed resident provider process: %w", cleanupErr))

@@ -78,7 +78,7 @@ require_config "$deploy_workflow" 'compose up -d --no-deps --force-recreate cadd
 require_config "$deploy_workflow" 'name: aliyun-dev'
 require_config "$deploy_workflow" 'runs-on: ubuntu-latest'
 require_config "$deploy_workflow" 'SSH_HOST: 101.200.210.144'
-require_config "$deploy_workflow" 'SSH_USER: root'
+require_config "$deploy_workflow" 'SSH_USER: ${{ secrets.SSH_USER }}'
 require_config "$deploy_workflow" 'SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}'
 require_config "$deploy_workflow" 'SSH_KNOWN_HOSTS: 101.200.210.144 ssh-ed25519'
 require_config "$deploy_workflow" 'uses: actions/upload-artifact@v7'

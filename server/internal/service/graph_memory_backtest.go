@@ -72,33 +72,43 @@ func (s *GraphMemoryInfoCatalogService) AttachBacktestGroundTruth(ctx context.Co
 		if err != nil {
 			return fmt.Errorf("graph memory backtest ground truth: list recalls: %w", err)
 		}
-		pageCount := 0
+		// Scan the page fully before resolving items: ItemsForRecall
+		// acquires its own pool connection, which would deadlock against
+		// the open page cursor.
+		type recallPageRow struct {
+			id             pgtype.UUID
+			traceID, query string
+			rounds         int
+			found          bool
+			created        time.Time
+		}
+		page := make([]recallPageRow, 0, graphMemoryBacktestRecallPageSize)
 		for rows.Next() {
-			var (
-				id             pgtype.UUID
-				traceID, query string
-				rounds         int
-				found          bool
-				created        time.Time
-			)
-			if err := rows.Scan(&id, &traceID, &query, &rounds, &found, &created); err != nil {
+			var row recallPageRow
+			if err := rows.Scan(&row.id, &row.traceID, &row.query, &row.rounds, &row.found, &row.created); err != nil {
 				rows.Close()
 				return fmt.Errorf("graph memory backtest ground truth: scan recall: %w", err)
 			}
-			pageCount++
-			lastCreated, lastID = created, id
-			recallID := util.UUIDToString(id)
+			page = append(page, row)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return fmt.Errorf("graph memory backtest ground truth: iterate recalls: %w", err)
+		}
+		rows.Close()
+		for _, row := range page {
+			lastCreated, lastID = row.created, row.id
+			recallID := util.UUIDToString(row.id)
 			if seen[recallID] {
 				continue
 			}
 			seen[recallID] = true
-			targets := byTrace[traceID]
+			targets := byTrace[row.traceID]
 			if len(targets) == 0 {
 				continue
 			}
 			items, err := s.ItemsForRecall(ctx, recallID)
 			if err != nil {
-				rows.Close()
 				return err
 			}
 			backtestItems := make([]memorygraph.BacktestItem, 0, len(items))
@@ -116,17 +126,12 @@ func (s *GraphMemoryInfoCatalogService) AttachBacktestGroundTruth(ctx context.Co
 			}
 			for _, q := range targets {
 				q.Items = append([]memorygraph.BacktestItem(nil), backtestItems...)
-				q.BaselineRounds = backtestBaselineRounds(rounds)
-				q.BaselineFound = found
-				q.Query = query
+				q.BaselineRounds = backtestBaselineRounds(row.rounds)
+				q.BaselineFound = row.found
+				q.Query = row.query
 			}
 		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
-			return fmt.Errorf("graph memory backtest ground truth: iterate recalls: %w", err)
-		}
-		rows.Close()
-		if pageCount < graphMemoryBacktestRecallPageSize {
+		if len(page) < graphMemoryBacktestRecallPageSize {
 			return nil
 		}
 	}

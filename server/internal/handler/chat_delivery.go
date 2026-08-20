@@ -409,31 +409,46 @@ func (h *Handler) redeliverUnacknowledgedStandaloneChat(ctx context.Context, ide
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	// Collect the rows before applying the graph profile: that helper
+	// acquires its own pool connection, which would deadlock against the
+	// open rows cursor.
+	type pendingChatRedelivery struct {
+		agentID, messageID, sessionID pgtype.UUID
+		seq                           int64
+		target, content               string
+		rawParts                      []byte
+	}
+	var pending []pendingChatRedelivery
 	for rows.Next() {
-		var agentID, messageID, sessionID pgtype.UUID
-		var seq int64
-		var target, content string
-		var rawParts []byte
-		if err := rows.Scan(&agentID, &messageID, &seq, &target, &sessionID, &content, &rawParts); err != nil {
+		var row pendingChatRedelivery
+		if err := rows.Scan(&row.agentID, &row.messageID, &row.seq, &row.target, &row.sessionID, &row.content, &row.rawParts); err != nil {
+			rows.Close()
 			return err
 		}
+		pending = append(pending, row)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	for _, row := range pending {
 		var parts []protocol.MessagePart
-		if len(rawParts) > 0 && string(rawParts) != "null" {
-			_ = json.Unmarshal(rawParts, &parts)
+		if len(row.rawParts) > 0 && string(row.rawParts) != "null" {
+			_ = json.Unmarshal(row.rawParts, &parts)
 		}
-		agentIDText := uuidToString(agentID)
-		messageIDText := uuidToString(messageID)
+		agentIDText := uuidToString(row.agentID)
+		messageIDText := uuidToString(row.messageID)
 		delivery := protocol.AgentDeliverPayload{
 			AgentID:    agentIDText,
-			Target:     target,
-			Seq:        seq,
+			Target:     row.target,
+			Seq:        row.seq,
 			DeliveryID: standaloneChatDeliveryID(messageIDText, agentIDText),
 			Message: protocol.AgentMessageProjection{
 				ID:      messageIDText,
-				Target:  target,
-				Seq:     seq,
-				Content: content,
+				Target:  row.target,
+				Seq:     row.seq,
+				Content: row.content,
 				Parts:   parts,
 			},
 		}
@@ -442,5 +457,5 @@ func (h *Handler) redeliverUnacknowledgedStandaloneChat(ctx context.Context, ide
 			slog.Debug("standalone chat redelivery deferred", "delivery_id", delivery.DeliveryID)
 		}
 	}
-	return rows.Err()
+	return nil
 }

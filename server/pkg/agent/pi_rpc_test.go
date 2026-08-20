@@ -317,6 +317,58 @@ func TestFormatResidentMessageBatchCarriesDeliveryContract(t *testing.T) {
 	}
 }
 
+// engineering-principles.md §1.5: chat: targets are standalone bubble delivery,
+// not Credential Proxy transport. The idle wake must look like a chat turn —
+// never a Canonical Message JSON batch with --target (that made Notes FAB
+// agents call `message send --target chat:…` → 400).
+func TestFormatResidentMessageBatchStandaloneChatUsesAutomaticDelivery(t *testing.T) {
+	prompt, err := formatResidentMessageBatch([]ResidentMessage{{
+		ID: "message-1", Target: "chat:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", Seq: 1,
+		Content: "<note_chat_context>\ncontext_note_title: todo\n</note_chat_context>\n\nwhat is the note title?",
+		RuntimeContext: "## Current Task Initiator\n\nAlice",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"Standalone Agent Chat",
+		"private bubble conversation",
+		"final assistant output only",
+		"written back to the bubble automatically",
+		"Do not run `multica message send`",
+		"Do not run Issue commands unless",
+		"Human:",
+		"what is the note title?",
+		"<note_chat_context>",
+		"## Current Task Initiator",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("standalone chat turn prompt missing %q\n--- prompt ---\n%s", want, prompt)
+		}
+	}
+	for _, banned := range []string{
+		"Final assistant output is not delivered",
+		"Reply visibly with `multica message send --target <target>`",
+		"Canonical Messages received while the runtime was idle",
+		`"target":"chat:`,
+		"scoped only to its own Message",
+	} {
+		if strings.Contains(prompt, banned) {
+			t.Errorf("standalone chat turn prompt leaked channel Message ceremony %q\n--- prompt ---\n%s", banned, prompt)
+		}
+	}
+}
+
+func TestFormatResidentMessageBatchRejectsMixedStandaloneAndTransportTargets(t *testing.T) {
+	_, err := formatResidentMessageBatch([]ResidentMessage{
+		{ID: "m1", Target: "chat:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", Seq: 1, Content: "bubble"},
+		{ID: "m2", Target: "dm:@alice", Seq: 2, Content: "dm"},
+	})
+	if err == nil {
+		t.Fatal("expected error for mixed standalone/transport batch")
+	}
+}
+
 func TestPiRPCBackendAcceptsIdleMessageBatchAtNativePromptBoundary(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "pi")

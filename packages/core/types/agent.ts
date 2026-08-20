@@ -640,6 +640,16 @@ export interface EnsurePeriodBriefAgentResponse {
   created: boolean;
 }
 
+/** Idempotent Notes Assistant (「笔记助手」) ensure for the Notes FAB bubble. */
+export interface EnsureNotesAssistantAgentResponse {
+  agent?: Agent;
+  created: boolean;
+  aligned?: boolean;
+  needs_setup?: boolean;
+  onboarding_available?: boolean;
+  setup_hint?: boolean;
+}
+
 /** Idempotent per-Computer Period Work collectors ensure. */
 export interface EnsurePeriodBriefCollectorsResponse {
   agents: Agent[];

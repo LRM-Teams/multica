@@ -440,6 +440,28 @@ func (runner *WorkspaceRunner) handleMessageDelivery(
 	runner.recordDiagnostic(canonicalMessageDiagnosticEvent(
 		runner.config.WorkspaceID, runtimeID, delivery, "ack_attempted", string(acceptance.outcome), "",
 	))
+	// engineering-principles.md §1.5: channel Raft may ACK into Pending before
+	// the provider is Running. Standalone chat: (FAB / Notes bubble) must not —
+	// acked_at stops server redelivery, and a stuck Starting launch then leaves
+	// the UI pending forever with no ledger recovery.
+	if !runner.shouldPersistDeliveryAck(delivery, acceptance) {
+		if runner.logger != nil {
+			runner.logger.Info("Workspace Runner deferred standalone chat delivery acknowledgement",
+				"workspace_id", runner.config.WorkspaceID,
+				"agent_id", delivery.AgentID,
+				"runtime_id", runtimeID,
+				"delivery_id", delivery.DeliveryID,
+				"message_id", delivery.Message.ID,
+				"target", delivery.Target,
+				"seq", delivery.Seq,
+				"acceptance", acceptance.outcome,
+			)
+		}
+		runner.recordDiagnostic(canonicalMessageDiagnosticEvent(
+			runner.config.WorkspaceID, runtimeID, delivery, "ack_deferred", string(acceptance.outcome), "",
+		))
+		return nil
+	}
 	if err := writeFrame(protocol.EventAgentDeliverAck, acceptance.ack); err != nil {
 		runner.recordDiagnostic(canonicalMessageDiagnosticEvent(
 			runner.config.WorkspaceID, runtimeID, delivery, "ack_sent", "failed", "runner_connection_write_failed",
@@ -456,6 +478,24 @@ func (runner *WorkspaceRunner) handleMessageDelivery(
 		runner.logger.Info("Workspace Runner Agent delivery acknowledged", "workspace_id", runner.config.WorkspaceID, "agent_id", delivery.AgentID, "runtime_id", runtimeID, "delivery_id", delivery.DeliveryID, "message_id", delivery.Message.ID, "target", delivery.Target, "seq", delivery.Seq, "acceptance", acceptance.outcome)
 	}
 	return nil
+}
+
+// shouldPersistDeliveryAck decides whether the server ledger may mark this
+// delivery acked. Channel targets keep Raft's accept-into-Pending ACK. Standalone
+// chat: targets only ACK after provider handoff or a true consumed boundary.
+func (runner *WorkspaceRunner) shouldPersistDeliveryAck(delivery protocol.AgentDeliverPayload, acceptance messageDeliveryAcceptance) bool {
+	if !strings.HasPrefix(strings.TrimSpace(delivery.Target), "chat:") {
+		return true
+	}
+	switch acceptance.outcome {
+	case messageDeliveryProviderAccepted:
+		return true
+	case messageDeliveryDeduplicated:
+		seq, known, err := runner.messageContextBoundary(delivery.AgentID, delivery.Target)
+		return err == nil && known && delivery.Seq <= seq
+	default:
+		return false
+	}
 }
 
 func (runner *WorkspaceRunner) sendAgentFrame(eventType string, payload any) bool {

@@ -55,6 +55,7 @@ import type {
   GetVoiceCallResponse,
   EnsureWindyResponse,
   EnsurePeriodBriefAgentResponse,
+  EnsureNotesAssistantAgentResponse,
   EnsurePeriodBriefCollectorsResponse,
   StartVoiceCallDuplexResponse,
   VoiceCallDuplexAudioHint,
@@ -2505,6 +2506,15 @@ export const EnsureWindyResponseSchema: z.ZodType<EnsureWindyResponse> = z.objec
 export const EnsurePeriodBriefAgentResponseSchema: z.ZodType<EnsurePeriodBriefAgentResponse> = z.object({
   agent: z.custom<Agent>((value) => MinimalAgentSchema.safeParse(value).success),
   created: z.boolean(),
+}).loose();
+
+export const EnsureNotesAssistantAgentResponseSchema: z.ZodType<EnsureNotesAssistantAgentResponse> = z.object({
+  agent: z.custom<Agent>((value) => MinimalAgentSchema.safeParse(value).success).optional(),
+  created: z.boolean().default(false),
+  aligned: z.boolean().optional(),
+  needs_setup: z.boolean().optional(),
+  onboarding_available: z.boolean().optional(),
+  setup_hint: z.boolean().optional(),
 }).loose();
 
 export const EnsurePeriodBriefCollectorsResponseSchema: z.ZodType<EnsurePeriodBriefCollectorsResponse> = z.object({

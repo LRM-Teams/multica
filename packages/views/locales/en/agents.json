@@ -263,6 +263,7 @@
     "title_create": "Create Agent",
     "title_duplicate": "Duplicate Agent",
     "description_create": "Create a new AI agent for your workspace.",
+    "description_identity_locked": "Name and instructions are prefilled. Choose a Computer, runtime, and model to finish.",
     "description_duplicate": "Create a new agent based on \"{{name}}\". Instructions, env, and skills are copied for you.",
     "name_label": "Name",
     "name_hint": "This permanent name is used for @mentions.",

@@ -427,17 +427,25 @@ func (h *Handler) redeliverUnacknowledgedStandaloneChat(ctx context.Context, ide
 		}
 		agentIDText := uuidToString(agentID)
 		messageIDText := uuidToString(messageID)
+		// Live deliverStandaloneChatMessage prefixes <note_chat_context> for
+		// Notes FAB sessions. chat_message.content stays raw; redelivery must
+		// rebuild the same prefix or the agent wakes without note root context.
+		deliverContent := content
+		if prefix := h.buildNoteChatWakePrefix(ctx, sessionID); prefix != "" && !strings.HasPrefix(content, "<note_chat_context>") {
+			deliverContent = prefix + content
+		}
 		delivery := protocol.AgentDeliverPayload{
 			AgentID:    agentIDText,
 			Target:     target,
 			Seq:        seq,
 			DeliveryID: standaloneChatDeliveryID(messageIDText, agentIDText),
 			Message: protocol.AgentMessageProjection{
-				ID:      messageIDText,
-				Target:  target,
-				Seq:     seq,
-				Content: content,
-				Parts:   parts,
+				ID:          messageIDText,
+				Target:      target,
+				ReplyTarget: target,
+				Seq:         seq,
+				Content:     deliverContent,
+				Parts:       parts,
 			},
 		}
 		if !h.AgentDeliveryNotifier.NotifyWorkspaceAgentDelivery(identity.WorkspaceID, identity.DaemonID, delivery) {

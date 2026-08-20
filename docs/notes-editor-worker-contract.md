@@ -115,11 +115,12 @@ Do not show Create note / Insert below on ordinary agent replies (a poem request
 Stay-on-page chat (not Worker → Messages):
 
 1. Notes page shows a bottom-right FAB when a page is selected.
-2. Opens a floating `chat_session` with `context_note_page_id` set to the current page.
-3. Standalone chat delivery prefixes `<note_chat_context>` (page id, title, subtree outline, `notes get` / `notes tree` hints).
-4. Distinct from Editor (`note_ai_job`) and Worker (`note_worker_job`); replies stay in the bubble transcript.
+2. First open **soft-probes** the Workspace Notes Assistant (`notes-assistant` / 「笔记助手」) via `POST /api/members/agents/notes-assistant` with `{}` — never auto-creates. Missing agent → `needs_setup` create card. Create only on button click: **clone Wendy** (`clone_onboarding`) or **Create Agent dialog** (identity locked; human picks Computer + runtime + model → `runtime_id`+`model`). Archived-after-delete is restored on create, not a hard error. No agent picker in the bubble.
+3. Opens a floating `chat_session` with `context_note_page_id` set to the current page, locked to that assistant.
+4. Standalone chat delivery prefixes `<note_chat_context>` with **root id + title only** (no full subtree dump). Idle wake uses `formatStandaloneChatTurnPrompt` (chat turn — **not** channel Canonical Message / `message send`). The agent must use `notes tree` / `notes get` selectively (skill `multica-notes-assistant`) and answer via **final assistant output** (daemon writeback). Redelivery rebuilds the same prefix. Turn failures still write an assistant error row so the UI leaves 排队中.
+5. Distinct from Editor (`note_ai_job`) and Worker (`note_worker_job`); replies stay in the bubble transcript. Bubble has no channel `note_write` confirm UI — rewrite proposals stay in final output for the human to apply.
 
-FE: `packages/views/notes/note-assistant-bubble.tsx`; BE: `chat_session.context_note_page_id`, `resolveAgentNoteViewer`, `ListAgentNoteTree`.
+FE: `packages/views/notes/note-assistant-bubble.tsx`, `notes-assistant-setup-card.tsx`; BE: `EnsureNotesAssistantAgent`, `chat_session.context_note_page_id`, `resolveAgentNoteViewer`, `ListAgentNoteTree`.
 
 ## Code pointers
 

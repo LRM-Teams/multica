@@ -73,8 +73,9 @@ func (h *Handler) HandleWorkspaceRunnerFrame(ctx context.Context, identity daemo
 			return err
 		}
 		// Raft establishes APM ownership before it offers durable deliveries.
-		// The Computer can then accept messages into the Agent's starting Inbox
-		// and ACK them without requiring the Provider to be ready yet.
+		// Channel messages may ACK into the Agent's starting Inbox before the
+		// Provider is Running. Standalone chat: (FAB) does not — see §1.5 —
+		// so redeliver unacked chat: lines once launches are converging.
 		if err := h.reconcileWorkspaceRunnerLaunches(ctx, identity); err != nil {
 			return err
 		}

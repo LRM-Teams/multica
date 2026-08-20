@@ -2,6 +2,8 @@ package daemon
 
 import (
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/multica-ai/multica/server/pkg/agent"
@@ -65,5 +67,21 @@ func TestStandaloneAssistantReplyTextFallsBackToStreamedDeltas(t *testing.T) {
 	}
 	if got := standaloneAssistantReplyText(capture, "from deltas"); got != "from capture" {
 		t.Fatalf("capture must win, got %q", got)
+	}
+}
+
+func TestStandaloneAssistantFailureReplySurfacesProviderError(t *testing.T) {
+	got := standaloneAssistantFailureReply(errors.New("Request timed out."))
+	for _, want := range []string{
+		"could not complete that reply",
+		"Request timed out.",
+		"try again",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("failure reply missing %q\n---\n%s", want, got)
+		}
+	}
+	if got := standaloneAssistantFailureReply(nil); got == "" {
+		t.Fatal("nil error still needs a non-empty writeback so the bubble leaves 排队中")
 	}
 }

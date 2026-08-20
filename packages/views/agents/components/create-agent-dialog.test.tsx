@@ -136,6 +136,12 @@ function renderDialog(
   runtimes: RuntimeDevice[],
   template?: Agent,
   defaultMachineId?: string,
+  prefill?: {
+    name: string;
+    description?: string;
+    instructions?: string;
+    lockIdentity?: boolean;
+  } | null,
 ) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -152,6 +158,7 @@ function renderDialog(
             members={members}
             currentUserId={ME}
             template={template}
+            prefill={prefill}
             defaultMachineId={defaultMachineId}
             onClose={onClose}
             onCreate={onCreate}
@@ -327,5 +334,36 @@ describe("CreateAgentDialog workspace runtime selection", () => {
 
     fireEvent.click(screen.getByTestId("create-model"));
     expect(screen.getByTestId("create-thinking")).toHaveTextContent("high");
+  });
+
+  it("locks identity fields when prefill.lockIdentity is set", async () => {
+    const runtime = makeRuntime({ id: "rt-notes", owner_id: ME, provider: "pi" });
+    const { onCreate } = renderDialog([runtime], undefined, undefined, {
+      name: "notes-assistant",
+      description: "Notes bubble agent",
+      instructions: "Selective note reads only.",
+      lockIdentity: true,
+    });
+
+    const nameInput = screen.getByDisplayValue("notes-assistant");
+    expect(nameInput).toHaveAttribute("readonly");
+    expect(
+      screen.getByText("Name and instructions are prefilled. Choose a Computer, runtime, and model to finish."),
+    ).toBeTruthy();
+    expect(screen.queryByText("Skills")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("create-model"));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Create" })).toBeEnabled(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(onCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "notes-assistant",
+        runtime_id: "rt-notes",
+        model: "claude-sonnet-5",
+      }),
+    );
   });
 });

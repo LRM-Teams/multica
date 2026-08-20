@@ -568,6 +568,45 @@ func TestPeriodWorkBriefSkillRequiresReportingShape(t *testing.T) {
 	}
 }
 
+func TestNotesAssistantSkillRequiresSelectiveReads(t *testing.T) {
+	skill, ok := findSkill(t, "multica-notes-assistant")
+	if !ok {
+		return
+	}
+	fm, body, _ := splitFrontmatter(skill.Content)
+
+	if got := strings.TrimSpace(fm["user-invocable"]); got != "false" {
+		t.Errorf("user-invocable = %q, want false", got)
+	}
+	if got := strings.TrimSpace(fm["allowed-tools"]); !strings.Contains(got, "Bash(multica *)") {
+		t.Errorf("allowed-tools = %q, want Multica CLI", got)
+	}
+	for _, want := range []string{
+		"Selective reads",
+		"notes tree",
+		"notes get",
+		"final assistant output",
+		"Do **not** run `multica message send`",
+		"context_note_page_id",
+		"references/notes-assistant-source-map.md",
+	} {
+		if !strings.Contains(body, want) && !strings.Contains(skill.Content, want) {
+			t.Errorf("notes-assistant skill missing %q", want)
+		}
+	}
+	for _, banned := range []string{
+		"--note-write",
+		"message send --target chat:",
+	} {
+		if strings.Contains(skill.Content, banned) {
+			t.Errorf("notes-assistant skill must not teach %q", banned)
+		}
+	}
+	if !skillHasFile(skill, "references/notes-assistant-source-map.md") {
+		t.Errorf("notes-assistant skill missing supporting source map")
+	}
+}
+
 func TestPeriodWorkCollectSkillCoversOSHarvestAndNoteWrite(t *testing.T) {
 	skill, ok := findSkill(t, "multica-period-work-collect")
 	if !ok {

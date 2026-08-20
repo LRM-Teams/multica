@@ -61,6 +61,7 @@ export type {
   CreateAgentDraftRequest,
   EnsureWindyResponse,
   EnsurePeriodBriefAgentResponse,
+  EnsureNotesAssistantAgentResponse,
   EnsurePeriodBriefCollectorsResponse,
   AgentTemplate,
   AgentTemplateSummary,

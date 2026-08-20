@@ -42,10 +42,13 @@ func (s *PostgresStore) executeV6CreateAgentAction(ctx context.Context, proposal
 	if state != expectedState || activeCount >= 50 || (activeCount >= 20 && strings.TrimSpace(payload.CapacityReason) == "") {
 		return ErrWorkItemChanged
 	}
-	outboxPayload, _ := json.Marshal(map[string]any{
+	outboxPayload, err := json.Marshal(map[string]any{
 		"spec":       V6AgentSpec{Name: payload.Name, Capability: payload.Capability, MissionPrompt: payload.MissionPrompt, ModelConfig: payload.ModelConfig, ToolConfig: payload.ToolConfig},
 		"membership": AddV6TeamMemberInput{WorkspaceID: proposal.WorkspaceID, RunID: proposal.RunID, DirectorCycleID: cycleID, MissionPrompt: payload.MissionPrompt, CapacityReason: payload.CapacityReason, ModelConfig: payload.ModelConfig, ToolConfig: payload.ToolConfig, PermissionConfig: payload.PermissionConfig},
 	})
+	if err != nil {
+		return err
+	}
 	if _, err = tx.Exec(ctx, `INSERT INTO research_v6_outbox(workspace_id,session_id,kind,idempotency_key,payload) VALUES($1::uuid,$2::uuid,'create_agent',$3,$4::jsonb) ON CONFLICT (workspace_id,session_id,idempotency_key) DO NOTHING`, proposal.WorkspaceID, proposal.RunID, action.IdempotencyKey, outboxPayload); err != nil {
 		return err
 	}

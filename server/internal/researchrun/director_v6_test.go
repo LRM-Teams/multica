@@ -22,6 +22,10 @@ func (s *teamV6StoreStub) ArchiveV6TeamMember(_ context.Context, in ArchiveV6Tea
 	return V6TeamMember{ID: in.MembershipID, State: V6TeamArchived}, nil
 }
 
+func (s *teamV6StoreStub) FindActiveV6TeamMemberByAgent(context.Context, string, string, string) (V6TeamMember, bool, error) {
+	return V6TeamMember{}, false, nil
+}
+
 func TestV6TeamCapacityRules(t *testing.T) {
 	store := &teamV6StoreStub{}
 	_, err := (teamV6Module{store: store}).Add(context.Background(), AddV6TeamMemberInput{

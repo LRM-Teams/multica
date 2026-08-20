@@ -74,6 +74,24 @@ func (s *PostgresStore) AddV6TeamMember(ctx context.Context, in AddV6TeamMemberI
 	return member, nil
 }
 
+func (s *PostgresStore) FindActiveV6TeamMemberByAgent(ctx context.Context, workspaceID, runID, agentID string) (V6TeamMember, bool, error) {
+	var member V6TeamMember
+	err := s.pool.QueryRow(ctx, `SELECT id::text,workspace_id::text,session_id::text,agent_id::text,membership_generation,
+		mission_prompt,mission_hash,mission_revision,model_config,tool_config,permission_config,state
+		FROM research_team_membership
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND agent_id=$3::uuid AND state IN ('idle','working','offline','retiring')
+		ORDER BY membership_generation DESC LIMIT 1`, workspaceID, runID, agentID).Scan(
+		&member.ID, &member.WorkspaceID, &member.RunID, &member.AgentID, &member.Generation, &member.MissionPrompt,
+		&member.MissionHash, &member.MissionRevision, &member.ModelConfig, &member.ToolConfig, &member.PermissionConfig, &member.State)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return V6TeamMember{}, false, nil
+	}
+	if err != nil {
+		return V6TeamMember{}, false, err
+	}
+	return member, true, nil
+}
+
 func (s *PostgresStore) ArchiveV6TeamMember(ctx context.Context, in ArchiveV6TeamMemberInput) (V6TeamMember, error) {
 	tx, err := s.beginResearchTx(ctx, txOpV6TeamMemberArchive, pgx.TxOptions{})
 	if err != nil {

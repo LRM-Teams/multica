@@ -84,6 +84,7 @@ func NewHost(config HostConfig) (*Host, error) {
 	}
 	supervisor, err := NewBindingSupervisor(BindingSupervisorConfig{
 		Spawn: config.Spawn, StateRoot: config.ResidentRoot, Now: config.Now, ReadyTimeout: config.ReadyTimeout, Logger: config.Logger,
+		ControlToken: config.ControlToken,
 		Released: func(identity BindingChildIdentity) {
 			if host.control != nil {
 				host.control.Release(identity)

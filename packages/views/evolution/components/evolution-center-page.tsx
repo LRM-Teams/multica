@@ -97,6 +97,7 @@ import {
   GraphMemoryAuditCard,
   GraphMemoryConsolidationCard,
   GraphMemoryStatusCard,
+  GraphMemoryTttCard,
   LegacyCurationNotApplicableCard,
 } from "./graph-memory-cards";
 
@@ -147,6 +148,16 @@ const COPY = {
   memoryTypeGraphConfirmCheckbox: "I understand the empty start and no-fallback behavior",
   memoryTypeGraphConfirmApply: "Switch to graph",
   memoryTypeGraphConfirmCancel: "Cancel",
+  graphTtt: "Test-time training",
+  graphTttHint: "When on, each recall runs K independent Explore trajectories and adopts the fastest success. When off, recall runs exactly one trajectory.",
+  graphTttConcurrency: "TTT concurrency",
+  graphTttEffectiveK: "Effective K = 1 while TTT is off",
+  graphTttSave: "Save TTT settings",
+  graphTttSaved: "Graph TTT settings saved",
+  graphTttConflict: "Profile changed elsewhere, refreshed",
+  graphTttParseError: "Profile could not be parsed",
+  graphTttRetry: "Retry",
+  graphTttAdminOnly: "Only workspace owners and admins can change TTT settings",
   memoryOpsHint: "Active agents self-review first; team curation then promotes clean shared knowledge. The top three stats are the workspace funnel: local proposals → DB pending → team knowledge.",
   funnelHint: "Funnel: left = latest self-review candidates; middle = DB pending candidates ({skills} skills); right = team_knowledge registry rows (not copied to every agent).",
   curatorOps: "Curator operations",
@@ -779,6 +790,7 @@ export function EvolutionCenterPage() {
             <TabsContent value="memory" className="grid gap-4 xl:grid-cols-[.9fr_1.1fr]">
               <div className="grid gap-4">
                 <MemoryTypeCard wsId={wsId} isAdmin={isWorkspaceAdmin} />
+                <GraphMemoryTttCard wsId={wsId} isAdmin={isWorkspaceAdmin} />
                 {isGraphMemory ? (
                   <>
                     <GraphMemoryStatusCard wsId={wsId} />

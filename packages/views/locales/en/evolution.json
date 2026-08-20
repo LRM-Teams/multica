@@ -261,5 +261,15 @@
   "evidenceNoUseYet": "No usage events yet",
   "evidenceNoWrites": "No writes yet",
   "evidenceJustNow": "just now",
-  "evidenceFilterEmpty": "No chains match this filter."
+  "evidenceFilterEmpty": "No chains match this filter.",
+  "graphTtt": "Test-time training",
+  "graphTttHint": "When on, each recall runs K independent Explore trajectories and adopts the fastest success. When off, recall runs exactly one trajectory.",
+  "graphTttConcurrency": "TTT concurrency",
+  "graphTttEffectiveK": "Effective K = 1 while TTT is off",
+  "graphTttSave": "Save TTT settings",
+  "graphTttSaved": "Graph TTT settings saved",
+  "graphTttConflict": "Profile changed elsewhere, refreshed",
+  "graphTttParseError": "Profile could not be parsed",
+  "graphTttRetry": "Retry",
+  "graphTttAdminOnly": "Only workspace owners and admins can change TTT settings"
 }

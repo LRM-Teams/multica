@@ -261,5 +261,15 @@
   "evidenceNoUseYet": "尚无使用事件",
   "evidenceNoWrites": "尚无写入",
   "evidenceJustNow": "刚刚",
-  "evidenceFilterEmpty": "此筛选下没有证据链。"
+  "evidenceFilterEmpty": "此筛选下没有证据链。",
+  "graphTtt": "测试时训练",
+  "graphTttHint": "开启后，每次召回会并行跑 K 条独立 Explore 轨迹，并采用最快成功的结果。关闭后恰好只跑一条轨迹。",
+  "graphTttConcurrency": "TTT 并发数",
+  "graphTttEffectiveK": "TTT 关闭时有效 K = 1",
+  "graphTttSave": "保存 TTT 设置",
+  "graphTttSaved": "图记忆 TTT 设置已保存",
+  "graphTttConflict": "配置已在别处更改，已重新加载",
+  "graphTttParseError": "无法解析配置",
+  "graphTttRetry": "重试",
+  "graphTttAdminOnly": "只有工作区所有者和管理员可以更改 TTT 设置"
 }

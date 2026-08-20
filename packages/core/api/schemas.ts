@@ -1445,9 +1445,28 @@ export const EMPTY_MEMORY_CURATOR_PROFILE = {
 
 export const GraphMemoryProfileSchema = z.object({
   workspace_id: z.string().default(""),
-  memory_type: z.enum(["legacy", "graph"]).catch("legacy"),
+  // Spec §2/§16: an unsupported memory_type must fail validation (surfaced
+  // via parseWithFallback) rather than silently coerce to legacy mode.
+  memory_type: z.enum(["legacy", "graph"]),
   explore_agents: z.number().int().default(4),
   explore_max_rounds: z.number().int().default(3),
+  ttt_enabled: z.boolean().default(false),
+  explore_nodes_per_expansion: z.number().int().default(1),
+  max_hierarchy_fanout: z.number().int().default(8),
+  max_relation_edges_per_node: z.number().int().default(8),
+  dive_max_rounds: z.number().int().default(6),
+  dive_max_viewed_nodes: z.number().int().default(24),
+  dive_max_source_files: z.number().int().default(4),
+  dive_timeout_seconds: z.number().int().default(600),
+  w_round: z.number().default(0.1),
+  source_max_file_bytes: z.number().int().default(20971520),
+  source_max_total_bytes: z.number().int().default(52428800),
+  source_max_pdf_pages: z.number().int().default(50),
+  source_max_av_seconds: z.number().int().default(600),
+  source_max_image_megapixels: z.number().int().default(40),
+  dive_model: z.string().default(""),
+  dive_provider: z.string().default(""),
+  config_version: z.number().int().default(0),
   updated_at: z.string().default(""),
 }).loose();
 
@@ -1456,6 +1475,23 @@ export const EMPTY_GRAPH_MEMORY_PROFILE = {
   memory_type: "legacy" as const,
   explore_agents: 4,
   explore_max_rounds: 3,
+  ttt_enabled: false,
+  explore_nodes_per_expansion: 1,
+  max_hierarchy_fanout: 8,
+  max_relation_edges_per_node: 8,
+  dive_max_rounds: 6,
+  dive_max_viewed_nodes: 24,
+  dive_max_source_files: 4,
+  dive_timeout_seconds: 600,
+  w_round: 0.1,
+  source_max_file_bytes: 20971520,
+  source_max_total_bytes: 52428800,
+  source_max_pdf_pages: 50,
+  source_max_av_seconds: 600,
+  source_max_image_megapixels: 40,
+  dive_model: "",
+  dive_provider: "",
+  config_version: 0,
   updated_at: "",
 };
 
@@ -1474,7 +1510,8 @@ export const GraphMemoryGraphStatusSchema = z.object({
 
 export const GraphMemoryStatusSchema = z.object({
   workspace_id: z.string().default(""),
-  memory_type: z.enum(["legacy", "graph"]).catch("legacy"),
+  // Same fail-closed rule as the profile schema (spec §2/§16).
+  memory_type: z.enum(["legacy", "graph"]),
   scoped_writer_ready: z.boolean().default(false),
   empty_start: z.boolean().default(true),
   graphs: z.array(GraphMemoryGraphStatusSchema).default([]),

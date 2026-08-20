@@ -468,6 +468,23 @@ export interface GraphMemoryProfile {
   memory_type: GraphMemoryType;
   explore_agents: number;
   explore_max_rounds: number;
+  ttt_enabled: boolean;
+  explore_nodes_per_expansion: number;
+  max_hierarchy_fanout: number;
+  max_relation_edges_per_node: number;
+  dive_max_rounds: number;
+  dive_max_viewed_nodes: number;
+  dive_max_source_files: number;
+  dive_timeout_seconds: number;
+  w_round: number;
+  source_max_file_bytes: number;
+  source_max_total_bytes: number;
+  source_max_pdf_pages: number;
+  source_max_av_seconds: number;
+  source_max_image_megapixels: number;
+  dive_model: string;
+  dive_provider: string;
+  config_version: number;
   updated_at: string;
 }
 
@@ -476,6 +493,24 @@ export interface UpdateGraphMemoryProfileRequest {
   explore_agents: number;
   explore_max_rounds: number;
   confirm_empty_start?: boolean;
+  // CAS guard: required when updating an existing profile row (spec §16).
+  config_version?: number;
+  ttt_enabled?: boolean;
+  explore_nodes_per_expansion?: number;
+  max_hierarchy_fanout?: number;
+  max_relation_edges_per_node?: number;
+  dive_max_rounds?: number;
+  dive_max_viewed_nodes?: number;
+  dive_max_source_files?: number;
+  dive_timeout_seconds?: number;
+  w_round?: number;
+  source_max_file_bytes?: number;
+  source_max_total_bytes?: number;
+  source_max_pdf_pages?: number;
+  source_max_av_seconds?: number;
+  source_max_image_megapixels?: number;
+  dive_model?: string;
+  dive_provider?: string;
 }
 
 export interface GraphMemoryGraphStatus {

@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/multica-ai/multica/server/internal/logger"
 	"github.com/multica-ai/multica/server/internal/researchrun"
 )
 
@@ -185,6 +187,13 @@ func (h *Handler) SubmitAgentResearchV6Work(w http.ResponseWriter, r *http.Reque
 	}
 	outcome, err := service.SubmitV6Work(r.Context(), researchrun.V6SubmissionInput{V6AttemptAccess: access, Raw: raw})
 	if err != nil {
+		slog.Warn("research V6 work submission rejected", append(logger.RequestAttrs(r),
+			"error", err,
+			"run_id", access.RunID,
+			"work_item_id", access.WorkItemID,
+			"attempt_id", access.AttemptID,
+			"agent_id", access.AgentID,
+		)...)
 		writeResearchV6DomainError(w, err)
 		return
 	}
@@ -262,7 +271,7 @@ func (h *Handler) AcknowledgeAgentResearchV6DirectorBrief(w http.ResponseWriter,
 func writeResearchV6DomainError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, researchrun.ErrInvalidContract):
-		writeRonaldoV6Error(w, http.StatusBadRequest, "research.v6.invalid_contract", "invalid research V6 contract", false)
+		writeRonaldoV6Error(w, http.StatusBadRequest, "research.v6.invalid_contract", researchV6InvalidContractMessage(err), false)
 	case errors.Is(err, researchrun.ErrAttemptNotAssigned):
 		writeRonaldoV6Error(w, http.StatusForbidden, "research.v6.principal_mismatch", "research attempt is not assigned to this principal", false)
 	case errors.Is(err, researchrun.ErrV6IdempotencyConflict), errors.Is(err, researchrun.ErrResultConflict):
@@ -280,6 +289,23 @@ func writeResearchV6DomainError(w http.ResponseWriter, err error) {
 	default:
 		writeRonaldoV6Error(w, http.StatusInternalServerError, "research.v6.internal", "research V6 request failed", true)
 	}
+}
+
+func researchV6InvalidContractMessage(err error) string {
+	const fallback = "invalid research V6 contract"
+	detail := strings.TrimSpace(err.Error())
+	for strings.HasPrefix(detail, researchrun.ErrInvalidContract.Error()) {
+		detail = strings.TrimSpace(strings.TrimPrefix(detail, researchrun.ErrInvalidContract.Error()))
+		detail = strings.TrimSpace(strings.TrimPrefix(detail, ":"))
+	}
+	if detail == "" {
+		return fallback
+	}
+	const maxDetailBytes = 1024
+	if len(detail) > maxDetailBytes {
+		detail = detail[:maxDetailBytes]
+	}
+	return fallback + ": " + detail
 }
 
 func writeRonaldoV6Error(w http.ResponseWriter, status int, code, message string, retryable bool) {

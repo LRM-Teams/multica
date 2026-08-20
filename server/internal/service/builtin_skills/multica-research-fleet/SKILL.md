@@ -144,6 +144,11 @@ Retry the same submission with the same `client_request_id` and byte-equivalent
 payload after a transport failure. Never send a V6 envelope through the legacy
 `task-result` command.
 
+An HTTP 400 `research.v6.invalid_contract` response includes the bounded field
+or hash validation reason. Correct that exact contract violation before the
+next submission; the rejected envelope was not durably handed off. Do not
+blindly resend an unchanged invalid file.
+
 The submission boundary is asynchronous. Status `received` means the envelope
 is durably handed off and the Agent should finish; a server reconciler later
 marks it `accepted` or `rejected`. Do not keep the Inbox execution open waiting

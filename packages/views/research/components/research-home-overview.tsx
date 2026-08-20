@@ -123,7 +123,7 @@ function FocusSession({ session, href, onNavigate }: { session: ResearchSession;
 
         {session.orchestrator_version === "research-run-v6" ? (
         <div className="mt-5 rounded-lg border border-border/70 px-3 py-2 text-xs text-muted-foreground" data-testid="research-home-v6-projection">
-          Director {session.director_agent_id ? session.director_agent_id.slice(0, 8) : "assigned"} · {progress ? t(($) => $.home_overview.tasks, { done: progress.task_completed, total: progress.task_total }) : t(($) => $.home_overview.progress_unavailable)}
+          {t(($) => $.home_overview.director)} {session.director_agent_id ? session.director_agent_id.slice(0, 8) : t(($) => $.home_overview.assigned)} · {progress ? t(($) => $.home_overview.tasks, { done: progress.task_completed, total: progress.task_total }) : t(($) => $.home_overview.progress_unavailable)}
         </div>
         ) : (
         <div className="mt-5 grid grid-cols-4 gap-0" aria-label={t(($) => $.home_overview.stage_progress)}>

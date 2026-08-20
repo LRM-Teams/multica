@@ -766,6 +766,8 @@
     "blocked_short": "Blocked",
     "recoverable_short": "Recoverable",
     "stalled_short": "Stalled",
+    "director": "Director",
+    "assigned": "assigned",
     "progress_unavailable": "Stage is available; detailed counts are unavailable"
   },
   "home_empty": {

@@ -766,6 +766,8 @@
     "blocked_short": "存在阻塞",
     "recoverable_short": "可恢复",
     "stalled_short": "进展停滞",
+    "director": "研究总监",
+    "assigned": "已分配",
     "progress_unavailable": "阶段进度可见，详细计数暂不可用"
   },
   "home_empty": {

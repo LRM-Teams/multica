@@ -188,6 +188,73 @@ func TestFixQuarantinesOnlyExpiredBindingStateWithoutABinding(t *testing.T) {
 	}
 }
 
+func TestDiagnoseReportsRunnerOwnedByTheLiveResident(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	pid := os.Getpid()
+	if err := writeRunnerState(RootDir(""), persistedRunnerState{
+		WorkspaceID: "workspace-a", DaemonInstanceID: "start-a", OwnerPID: pid,
+		RunnerPID: pid, StartedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	lc := &Lifecycle{}
+	lc.Probe = func(context.Context, string) map[string]any {
+		return map[string]any{"status": "running", "connected": true, "pid": float64(pid)}
+	}
+	d := lc.Diagnose()
+	if len(d.Runners) != 1 || !d.Runners[0].Alive || !d.Runners[0].Owned || d.Runners[0].WorkspaceID != "workspace-a" || d.Runners[0].PID != pid {
+		t.Fatalf("doctor runners = %+v, want one owned live runner", d.Runners)
+	}
+	if len(d.UnownedLive) != 0 {
+		t.Fatalf("doctor reported an owned runner as unowned: %+v", d.UnownedLive)
+	}
+}
+
+func TestDiagnoseReportsUnownedLiveRunnerAsDegraded(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	pid := os.Getpid()
+	// Owned by a different (dead) generation's pid, not the currently
+	// probed resident: this is the split-brain evidence doctor must surface.
+	if err := writeRunnerState(RootDir(""), persistedRunnerState{
+		WorkspaceID: "workspace-a", DaemonInstanceID: "start-a", OwnerPID: 999998,
+		RunnerPID: pid, StartedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	lc := &Lifecycle{}
+	lc.Probe = func(context.Context, string) map[string]any {
+		return map[string]any{"status": "running", "connected": true, "pid": float64(os.Getpid() + 1)}
+	}
+	d := lc.Diagnose()
+	if len(d.Runners) != 1 || !d.Runners[0].Alive || d.Runners[0].Owned {
+		t.Fatalf("doctor runners = %+v, want one alive, unowned runner", d.Runners)
+	}
+	if len(d.UnownedLive) != 1 || d.UnownedLive[0].WorkspaceID != "workspace-a" || d.UnownedLive[0].PID != pid {
+		t.Fatalf("doctor UnownedLive = %+v, want the alive unowned runner", d.UnownedLive)
+	}
+}
+
+func TestDiagnoseReportsDeadRunnerAsNotAliveOrOwned(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if err := writeRunnerState(RootDir(""), persistedRunnerState{
+		WorkspaceID: "workspace-a", DaemonInstanceID: "start-a", OwnerPID: 999998,
+		RunnerPID: 999999, StartedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	lc := &Lifecycle{}
+	lc.Probe = func(context.Context, string) map[string]any {
+		return map[string]any{"status": "running", "connected": true, "pid": float64(os.Getpid())}
+	}
+	d := lc.Diagnose()
+	if len(d.Runners) != 1 || d.Runners[0].Alive || d.Runners[0].Owned {
+		t.Fatalf("doctor runners = %+v, want the dead runner reported as neither alive nor owned", d.Runners)
+	}
+	if len(d.UnownedLive) != 0 {
+		t.Fatalf("doctor flagged a dead runner as unowned-live: %+v", d.UnownedLive)
+	}
+}
+
 func TestFixRemovesStaleResidentPIDOnlyWhenResidentIsStopped(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	pidPath := PIDPath("")

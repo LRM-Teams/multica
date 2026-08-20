@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/multica-ai/multica/server/internal/computer"
 	"github.com/multica-ai/multica/server/pkg/agent"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -382,6 +383,117 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 		t.Fatalf("inactive status=%+v, want launch %q", stopped, accepted.LaunchID)
 	}
 	<-errCh
+}
+
+// computerUpgradeDoneTestServer runs a minimal WS server that reads the
+// Runner's ready frame, sends one computer:upgrade command, then waits for
+// the computer:upgrade:done reply and hands it back on the returned channel.
+func computerUpgradeDoneTestServer(t *testing.T) (*httptest.Server, chan protocol.Message) {
+	t.Helper()
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	done := make(chan protocol.Message, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil { // ready frame
+			t.Error(err)
+			return
+		}
+		upgrade, _ := json.Marshal(protocol.Message{
+			Type:    protocol.EventComputerUpgrade,
+			Payload: marshalRaw(protocol.ComputerUpgradePayload{RequestID: "upgrade-1", TargetVersion: "v2.0.0"}),
+		})
+		if err := conn.WriteMessage(websocket.TextMessage, upgrade); err != nil {
+			t.Error(err)
+			return
+		}
+		for {
+			_, raw, err := conn.ReadMessage()
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			var msg protocol.Message
+			if json.Unmarshal(raw, &msg) != nil {
+				continue
+			}
+			if msg.Type == protocol.EventComputerUpgradeDone {
+				done <- msg
+				return
+			}
+		}
+	}))
+	return server, done
+}
+
+// TestWorkspaceRunnerReportsForwardFailureForComputerUpgrade covers the
+// non-busy failure path: any handleComputerControl error for
+// computer:upgrade must still produce a computer:upgrade:done{ok:false}
+// frame, not just a local log line the cloud never sees.
+func TestWorkspaceRunnerReportsForwardFailureForComputerUpgrade(t *testing.T) {
+	server, done := computerUpgradeDoneTestServer(t)
+	defer server.Close()
+	d := New(Config{ServerBaseURL: server.URL, DaemonID: "daemon-1", WorkspacesRoot: t.TempDir()}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	d.client.SetWorkspaceDaemonToken("ws-1", "workspace-token", time.Now().Add(time.Hour))
+	runner, err := d.newWorkspaceRunner("ws-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner.handleComputerControl = func(context.Context, string, protocol.ComputerUpgradePayload) error {
+		return errors.New("forward to Host failed")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	go func() { _ = runner.runConnection(ctx) }()
+
+	select {
+	case msg := <-done:
+		var payload protocol.ComputerUpgradeDonePayload
+		if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload.OK || payload.Error != "forward_failed" || payload.RequestID != "upgrade-1" {
+			t.Fatalf("computer:upgrade:done = %+v, want ok=false error=forward_failed requestId=upgrade-1", payload)
+		}
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for computer:upgrade:done after a non-busy forward failure")
+	}
+}
+
+// TestWorkspaceRunnerReportsControlBusyForComputerUpgrade keeps the existing
+// "control_busy" code stable: the frontend already special-cases it.
+func TestWorkspaceRunnerReportsControlBusyForComputerUpgrade(t *testing.T) {
+	server, done := computerUpgradeDoneTestServer(t)
+	defer server.Close()
+	d := New(Config{ServerBaseURL: server.URL, DaemonID: "daemon-1", WorkspacesRoot: t.TempDir()}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	d.client.SetWorkspaceDaemonToken("ws-1", "workspace-token", time.Now().Add(time.Hour))
+	runner, err := d.newWorkspaceRunner("ws-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner.handleComputerControl = func(context.Context, string, protocol.ComputerUpgradePayload) error {
+		return computer.ErrComputerControlBusy
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	go func() { _ = runner.runConnection(ctx) }()
+
+	select {
+	case msg := <-done:
+		var payload protocol.ComputerUpgradeDonePayload
+		if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload.OK || payload.Error != "control_busy" || payload.RequestID != "upgrade-1" {
+			t.Fatalf("computer:upgrade:done = %+v, want ok=false error=control_busy requestId=upgrade-1", payload)
+		}
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for computer:upgrade:done after a busy forward failure")
+	}
 }
 
 func TestWorkspaceRunnerRuntimeReplacementStopsOldLaunchBeforeNewActivity(t *testing.T) {

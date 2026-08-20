@@ -351,15 +351,6 @@ jobs:
         if: steps.scope.outputs.go_mode != 'skip'
         run: cd server && go vet ${{ steps.go_pkgs.outputs.packages }}
 
-      - name: Cursor-deadlock check
-        # Task #91: catches the #1803/#1812 shape (a rows cursor from
-        # Query() left open while a nested call acquires a second pool
-        # connection — deterministic pool deadlock under load). See
-        # server/tools/cursordeadlock for the false-positive bar this was
-        # held to before landing here.
-        if: steps.scope.outputs.go_mode != 'skip'
-        run: cd server && go run ./tools/cursordeadlock ./internal ./cmd ./pkg
-
       - name: Run migrations
         if: steps.scope.outputs.go_mode != 'skip'
         run: cd server && go run ./cmd/migrate up

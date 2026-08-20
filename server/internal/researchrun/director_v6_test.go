@@ -283,6 +283,9 @@ func TestV6EventTriggerWaitsForMaterialRuntimeEffects(t *testing.T) {
 
 func TestRejectedV6DirectorProposalTerminatesAndEmitsTrigger(t *testing.T) {
 	run := newTransactionRecoveryRun(t, "Reject stale V6 Director proposal")
+	t.Cleanup(func() {
+		_, _ = run.pool.Exec(context.Background(), `DELETE FROM research_v6_work_submission WHERE workspace_id=$1::uuid`, run.fixture.workspaceID)
+	})
 	membershipID, workItemID := seedV6RecoveryWorkItem(t, run, "running", time.Now().Add(time.Minute))
 	if _, err := run.pool.Exec(run.ctx, `UPDATE research_work_item
 		SET kind='director',client_key=$2 WHERE id=$1::uuid`, workItemID, "director-cycle:"+uuid.NewString()); err != nil {

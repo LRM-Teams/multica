@@ -206,3 +206,76 @@ func TestReviewedV6DirectorBriefCanBeReadAgainForRetry(t *testing.T) {
 		t.Fatalf("replayed page = reviewed:%v key:%q, want reviewed page %q", replayed.Reviewed, replayed.PageKey, page.PageKey)
 	}
 }
+
+func TestV6EventTriggerWaitsForMaterialRuntimeEffects(t *testing.T) {
+	run := newTransactionRecoveryRun(t, "Wait for V6 material runtime effects")
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_session SET orchestrator_version='research-run-v6' WHERE id=$1::uuid`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.store.AssignV6Director(run.ctx, AssignV6DirectorInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+		AgentID: run.fixture.agentID, UserID: run.fixture.userID,
+		Reason: "Run the material effect ordering test", ClientRequestID: uuid.NewString(),
+		ExpectedStateVersion: 0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err := run.pool.Begin(run.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event, err := appendEvent(run.ctx, tx, run.fixture.workspaceID, run.fixture.sessionID,
+		"v6_agent_creation_requested", "event-trigger-material-effect:"+uuid.NewString(), "system", "",
+		map[string]any{"name": "source scout"})
+	if err != nil {
+		_ = tx.Rollback(run.ctx)
+		t.Fatal(err)
+	}
+	if err = tx.Commit(run.ctx); err != nil {
+		t.Fatal(err)
+	}
+	outboxID := uuid.NewString()
+	if _, err = run.pool.Exec(run.ctx, `
+		INSERT INTO research_v6_outbox(id,workspace_id,session_id,kind,idempotency_key,payload)
+		VALUES($1::uuid,$2::uuid,$3::uuid,'create_agent',$4,'{}'::jsonb)
+	`, outboxID, run.fixture.workspaceID, run.fixture.sessionID, "material-effect:"+uuid.NewString()); err != nil {
+		t.Fatal(err)
+	}
+
+	processed, err := run.store.ProcessV6EventTriggers(run.ctx, 32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if processed != 0 {
+		t.Fatalf("processed %d event triggers while material outbox was pending", processed)
+	}
+	var cycles int
+	if err = run.pool.QueryRow(run.ctx, `SELECT count(*)::int FROM research_director_cycle WHERE session_id=$1::uuid`, run.fixture.sessionID).Scan(&cycles); err != nil {
+		t.Fatal(err)
+	}
+	if cycles != 0 {
+		t.Fatalf("created %d Director cycles before material runtime effects settled", cycles)
+	}
+
+	if _, err = run.pool.Exec(run.ctx, `UPDATE research_v6_outbox SET status='delivered',updated_at=now() WHERE id=$1::uuid`, outboxID); err != nil {
+		t.Fatal(err)
+	}
+	processed, err = run.store.ProcessV6EventTriggers(run.ctx, 32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if processed != 1 {
+		t.Fatalf("processed %d event triggers after material outbox settled, want 1", processed)
+	}
+	var throughSequence int64
+	if err = run.pool.QueryRow(run.ctx, `
+		SELECT trigger_through_sequence FROM research_director_cycle
+		WHERE session_id=$1::uuid ORDER BY created_at DESC LIMIT 1
+	`, run.fixture.sessionID).Scan(&throughSequence); err != nil {
+		t.Fatal(err)
+	}
+	if throughSequence < event.Sequence {
+		t.Fatalf("Director Brief watermark %d does not include material request event %d", throughSequence, event.Sequence)
+	}
+}

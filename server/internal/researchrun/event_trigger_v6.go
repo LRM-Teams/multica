@@ -37,6 +37,10 @@ func (s *PostgresStore) ProcessV6EventTriggers(ctx context.Context, limit int) (
 				AND covered.trigger_from_sequence<=e.sequence AND covered.trigger_through_sequence>=e.sequence)
 			AND NOT EXISTS (SELECT 1 FROM research_work_item active WHERE active.session_id=e.session_id AND active.kind='director'
 				AND active.status IN ('ready','dispatching','enqueued','running','awaiting_input'))
+			AND NOT EXISTS (SELECT 1 FROM research_v6_outbox material_effect
+				WHERE material_effect.session_id=e.session_id
+				AND material_effect.kind IN ('create_agent','archive_agent')
+				AND material_effect.status IN ('pending','delivering'))
 			ORDER BY e.created_at,e.sequence,e.id LIMIT 1`).Scan(&eventID, &workspaceID, &runID, &fromSequence, &throughSequence, &stateVersion)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return processed, nil

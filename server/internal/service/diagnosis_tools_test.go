@@ -60,8 +60,8 @@ func (m *MockDiagnosisStores) GetProjectInWorkspace(ctx context.Context, arg db.
 	return args.Get(0).(db.Project), args.Error(1)
 }
 
-func (m *MockDiagnosisStores) MessagesForTaskInRange(ctx context.Context, taskID string, startSeq, endSeq int32) ([]db.TaskMessage, error) {
-	args := m.Called(ctx, taskID, startSeq, endSeq)
+func (m *MockDiagnosisStores) MessagesForTaskInRange(ctx context.Context, arg db.MessagesForTaskInRangeParams) ([]db.TaskMessage, error) {
+	args := m.Called(ctx, arg)
 	return args.Get(0).([]db.TaskMessage), args.Error(1)
 }
 
@@ -149,7 +149,7 @@ func TestGetSegmentMessages(t *testing.T) {
 		mockStore.On("GetProjectInWorkspace", ctx, mock.MatchedBy(func(arg db.GetProjectInWorkspaceParams) bool {
 			return arg.ID.String() == segment.ProjectID && arg.WorkspaceID == workspaceID
 		})).Return(db.Project{ID: projectID, WorkspaceID: workspaceID}, nil)
-		mockStore.On("MessagesForTaskInRange", ctx, agentRunID, int32(1), int32(5)).Return(messages, nil)
+		mockStore.On("MessagesForTaskInRange", ctx, db.MessagesForTaskInRangeParams{TaskID: agentRunID, StartSeq: int32(1), EndSeq: int32(5)}).Return(messages, nil)
 
 		result, err := GetSegmentMessages(ctx, mockStore, mockStore, workspaceID, segmentID)
 		require.NoError(t, err)
@@ -179,7 +179,7 @@ func TestGetSegmentMessages(t *testing.T) {
 
 		mockStore.On("GetInteractionDAGSegmentByID", ctx, segmentID).Return(segment, nil)
 		mockStore.On("GetProjectInWorkspace", ctx, mock.Anything).Return(db.Project{ID: projectID, WorkspaceID: workspaceID}, nil)
-		mockStore.On("MessagesForTaskInRange", ctx, agentRunID, int32(1), int32(5)).Return(longMessages, nil)
+		mockStore.On("MessagesForTaskInRange", ctx, db.MessagesForTaskInRangeParams{TaskID: agentRunID, StartSeq: int32(1), EndSeq: int32(5)}).Return(longMessages, nil)
 
 		result, err := GetSegmentMessages(ctx, mockStore, mockStore, workspaceID, segmentID)
 		require.NoError(t, err)
@@ -228,7 +228,7 @@ func TestGetSegmentMessages(t *testing.T) {
 
 		mockStore.On("GetInteractionDAGSegmentByID", ctx, segmentID).Return(cappedSegment, nil)
 		mockStore.On("GetProjectInWorkspace", ctx, mock.Anything).Return(db.Project{ID: projectID, WorkspaceID: workspaceID}, nil)
-		mockStore.On("MessagesForTaskInRange", ctx, agentRunID, int32(1), int32(30)).Return(manyMessages, nil)
+		mockStore.On("MessagesForTaskInRange", ctx, db.MessagesForTaskInRangeParams{TaskID: agentRunID, StartSeq: int32(1), EndSeq: int32(30)}).Return(manyMessages, nil)
 
 		result, err := GetSegmentMessages(ctx, mockStore, mockStore, workspaceID, segmentID)
 		require.NoError(t, err)

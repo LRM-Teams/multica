@@ -356,12 +356,11 @@ func (d *Daemon) prepareResidentMessageBatch(ctx context.Context, agentID, runti
 	prepared := make([]protocol.AgentMessageProjection, 0, len(messages))
 	for _, message := range messages {
 		messageTask := residentMessageMemoryTask(workspaceID, agentID, runtimeID, []protocol.AgentMessageProjection{message})
-		memories, _ := prepareExecutionMemory(agentRoot, messageTask, convertResidentMessageMemoriesForEnv(message.Memories))
-		// Graph reviewer (design §1 memory_type=graph): same replacement
-		// contract as runTask — graph recall wins on success, legacy stands
-		// on miss or error.
+		memories, _ := prepareTurnScopeMemory(agentRoot, messageTask, convertResidentMessageMemoriesForEnv(message.Memories))
+		// Graph reviewer (design §1 memory_type=graph): merge with legacy
+		// turn-scope memory (same contract as runTask).
 		if graphMemories := d.graphExecutionMemories(ctx, messageTask, d.logger); graphMemories != nil {
-			memories = graphMemories
+			memories = mergeExecutionMemories(memories, graphMemories)
 		}
 		chatSessionID, _ := standaloneChatSessionID(message.Target)
 		message.RuntimeContext = execenv.RenderTurnContext(execenv.TaskContextForEnv{

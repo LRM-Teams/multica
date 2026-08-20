@@ -2254,6 +2254,24 @@ func providerNeedsInlineSystemPrompt(provider string) bool {
 	return agent.Capabilities(provider).NeedsInlineSystemPrompt
 }
 
+// appendAgentScopeSystemPrompt injects agent-global memory into SystemPrompt
+// only for fresh sessions. Resume leaves the prior session's system prompt
+// alone so Claude/Pi do not --append-system-prompt the same block again.
+func appendAgentScopeSystemPrompt(opts *agent.ExecOptions, memories []execenv.MemoryContextForEnv) {
+	if opts == nil || !execenv.ShouldInjectAgentScopeSystemPrompt(opts.ResumeSessionID) {
+		return
+	}
+	mem := execenv.RenderAgentScopeMemory(memories)
+	if mem == "" {
+		return
+	}
+	if opts.SystemPrompt != "" {
+		opts.SystemPrompt += "\n\n" + mem
+	} else {
+		opts.SystemPrompt = mem
+	}
+}
+
 // gateResumeToReusedWorkdir clears the task's prior session unless the task
 // runs in the exact workdir the session was recorded against, and reports
 // whether that workdir was reused. CLI backends key their session stores to
@@ -2381,14 +2399,15 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	serverMemories := convertMemoriesForEnv(task.Agent)
 	memoryTask := task
 	memoryTask.AgentID = agentID
-	executionMemories := serverMemories
+	turnMemories := serverMemories
+	var agentScopeMemories []execenv.MemoryContextForEnv
 	if !restrictedExecution {
-		executionMemories, _ = prepareExecutionMemory(agentRootPath, memoryTask, serverMemories)
-		// Graph reviewer (design §1 memory_type=graph): a successful graph
-		// recall replaces the legacy scoped-memory snapshot; errors and
-		// misses keep the legacy result.
+		turnMemories, _ = prepareTurnScopeMemory(agentRootPath, memoryTask, serverMemories)
+		agentScopeMemories, _ = prepareAgentScopeMemory(agentRootPath, memoryTask, serverMemories)
+		// Graph reviewer (design §1 memory_type=graph): merge recall with
+		// legacy turn-scope memory instead of replacing the whole pack.
 		if graphMemories := d.graphExecutionMemories(ctx, memoryTask, taskLog); graphMemories != nil {
-			executionMemories = graphMemories
+			turnMemories = mergeExecutionMemories(turnMemories, graphMemories)
 		}
 	}
 
@@ -2407,7 +2426,8 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		AgentInstructions:                instructions,
 		AgentRoot:                        agentRootPath,
 		AgentSkills:                      convertSkillsForEnv(skills),
-		AgentMemories:                    executionMemories,
+		AgentMemories:                    turnMemories,
+		AgentScopeMemories:               agentScopeMemories,
 		ProjectID:                        task.ProjectID,
 		ChannelID:                        task.ChannelID,
 		ProjectTitle:                     task.ProjectTitle,
@@ -2794,17 +2814,11 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	if restrictedExecution || providerNeedsInlineSystemPrompt(provider) {
 		execOpts.SystemPrompt = runtimeBrief
 	}
-	// Agent-scope promoted memory is loaded once into the session-stable
-	// system prompt and is excluded from the per-message (pre-message)
-	// context (Frank 2026-08-19). Member/project/channel memory stays
-	// per-message to preserve per-recipient isolation.
-	if mem := execenv.RenderAgentScopeMemory(taskCtx.AgentMemories); mem != "" {
-		if execOpts.SystemPrompt != "" {
-			execOpts.SystemPrompt += "\n\n" + mem
-		} else {
-			execOpts.SystemPrompt = mem
-		}
-	}
+	// Agent-scope memory: inject once on fresh session only. Resume must not
+	// re-append (Claude/Pi --append-system-prompt). On-disk AGENTS brief still
+	// carries agent memory via InjectRuntimeKernel for providers that ignore
+	// SystemPrompt (e.g. Cursor).
+	appendAgentScopeSystemPrompt(&execOpts, agentScopeMemories)
 
 	backend, createErr := agent.New(provider, backendCfg)
 	if createErr != nil {
@@ -2839,6 +2853,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		firstUsage := result.Usage
 		taskLog.Warn("session resume failed, retrying with fresh session", "error", result.Error)
 		execOpts.ResumeSessionID = ""
+		clearCanonicalResumeIfPresent(backend)
+		// Fresh session: inject agent-scope memory that was skipped on resume.
+		appendAgentScopeSystemPrompt(&execOpts, agentScopeMemories)
 		retryResult, retryTools, retryErr := d.executeAndDrainForTask(ctx, backend, prompt, execOpts, taskLog, task)
 		if retryErr != nil {
 			taskLog.Error("fresh session also failed to start", "error", retryErr)

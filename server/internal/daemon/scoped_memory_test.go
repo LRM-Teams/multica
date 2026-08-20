@@ -195,3 +195,80 @@ func TestPrepareExecutionMemoryEnforcesBudgetAndDeduplicates(t *testing.T) {
 		t.Fatalf("memory pack bytes = %d, budget = %d", total, executionMemoryBudgetBytes)
 	}
 }
+
+func TestPrepareTurnAndAgentScopeMemorySplit(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "agent")
+	if err := ensureMulticaAgentRoot(root); err != nil {
+		t.Fatal(err)
+	}
+	task := Task{AgentID: "agent-1", InitiatorType: "member", InitiatorID: "member-a", ProjectID: "project-a", ChannelID: "channel-a"}
+	paths := scopedMemoryPathsForTask(root, task)
+	writes := map[string]string{
+		filepath.Join(paths.UserDir, "USER.md"):       "User prefers bullets.\n",
+		filepath.Join(paths.ProjectDir, "MEMORY.md"):  "Project uses Go.\n",
+		filepath.Join(paths.ChannelDir, "CONTEXT.md"): "Channel is Chinese-first.\n",
+		filepath.Join(root, "memory", "MEMORY.md"):    "Agent-wide convention.\n",
+	}
+	for path, content := range writes {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	turn, _ := prepareTurnScopeMemory(root, task, []execenv.MemoryContextForEnv{
+		{Name: "server agent", Content: "server agent fact", Scope: "agent"},
+		{Name: "server user", Content: "server user fact", Scope: "user"},
+	})
+	var turnText strings.Builder
+	for _, memory := range turn {
+		if memory.Scope == "agent" {
+			t.Fatalf("turn pack leaked agent scope: %+v", memory)
+		}
+		turnText.WriteString(memory.Content)
+	}
+	for _, want := range []string{"User prefers", "Project uses Go", "Chinese-first", "server user"} {
+		if !strings.Contains(turnText.String(), want) {
+			t.Fatalf("turn pack missing %q:\n%s", want, turnText.String())
+		}
+	}
+	if strings.Contains(turnText.String(), "Agent-wide") || strings.Contains(turnText.String(), "server agent") {
+		t.Fatalf("turn pack leaked agent memory:\n%s", turnText.String())
+	}
+
+	agentOnly, _ := prepareAgentScopeMemory(root, task, []execenv.MemoryContextForEnv{
+		{Name: "server agent", Content: "server agent fact", Scope: "agent"},
+		{Name: "server user", Content: "server user fact", Scope: "user"},
+	})
+	var agentText strings.Builder
+	for _, memory := range agentOnly {
+		if memory.Scope != "agent" {
+			t.Fatalf("agent pack leaked non-agent scope: %+v", memory)
+		}
+		agentText.WriteString(memory.Content)
+	}
+	if !strings.Contains(agentText.String(), "Agent-wide") || !strings.Contains(agentText.String(), "server agent") {
+		t.Fatalf("agent pack missing agent memory:\n%s", agentText.String())
+	}
+	if strings.Contains(agentText.String(), "User prefers") || strings.Contains(agentText.String(), "server user") {
+		t.Fatalf("agent pack leaked turn memory:\n%s", agentText.String())
+	}
+}
+
+func TestMergeExecutionMemoriesKeepsLegacyAndAddsGraph(t *testing.T) {
+	merged := mergeExecutionMemories(
+		[]execenv.MemoryContextForEnv{{Name: "user", Content: "Call me JHP", Scope: "user"}},
+		[]execenv.MemoryContextForEnv{{Name: "Graph memory recall", Content: "## Graph Memory Recall\nfound node", Scope: "workspace"}},
+	)
+	var combined strings.Builder
+	for _, memory := range merged {
+		combined.WriteString(memory.Content)
+	}
+	content := combined.String()
+	if !strings.Contains(content, "Call me JHP") || !strings.Contains(content, "found node") {
+		t.Fatalf("merge dropped legacy or graph:\n%s", content)
+	}
+}
+

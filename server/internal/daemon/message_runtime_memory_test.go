@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/agentworkspace"
+	"github.com/multica-ai/multica/server/internal/daemon/execenv"
+	"github.com/multica-ai/multica/server/pkg/agent"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -56,11 +58,33 @@ func TestPrepareResidentMessageBatchScopesIdentityAndUserMemoryPerMessage(t *tes
 	if strings.Contains(prepared[1].RuntimeContext, "Call me JHP") || strings.Contains(prepared[1].RuntimeContext, "server private preference") {
 		t.Fatalf("group runtime context leaked personal memory:\n%s", prepared[1].RuntimeContext)
 	}
-	// Agent-scope memory is loaded once into the session-stable system prompt,
-	// not the per-message context (Frank 2026-08-19). Member-scope memory stays
-	// scoped per-message.
+	// Agent-scope memory is loaded once into the session-stable system prompt /
+	// AGENTS brief at resident create, not the per-message context.
 	if strings.Contains(prepared[1].RuntimeContext, "server global convention") {
 		t.Fatalf("group runtime context must not repeat agent-scope memory:\n%s", prepared[1].RuntimeContext)
+	}
+}
+
+func TestAppendAgentScopeSystemPromptOnlyOnFreshSession(t *testing.T) {
+	memories := []execenv.MemoryContextForEnv{{
+		Name: "Agent global memory", Content: "Prefer terse replies.", Scope: "agent",
+	}}
+	fresh := agent.ExecOptions{}
+	appendAgentScopeSystemPrompt(&fresh, memories)
+	if !strings.Contains(fresh.SystemPrompt, "Prefer terse replies") {
+		t.Fatalf("fresh session missing agent memory:\n%s", fresh.SystemPrompt)
+	}
+
+	resume := agent.ExecOptions{ResumeSessionID: "sess-1", SystemPrompt: "base"}
+	appendAgentScopeSystemPrompt(&resume, memories)
+	if resume.SystemPrompt != "base" || strings.Contains(resume.SystemPrompt, "Prefer terse") {
+		t.Fatalf("resume must not append agent memory: %q", resume.SystemPrompt)
+	}
+
+	resume.ResumeSessionID = ""
+	appendAgentScopeSystemPrompt(&resume, memories)
+	if !strings.Contains(resume.SystemPrompt, "Prefer terse replies") {
+		t.Fatalf("fresh-retry after resume clear missing agent memory:\n%s", resume.SystemPrompt)
 	}
 }
 

@@ -316,8 +316,9 @@ func effectiveMemoryType(configured, taskScoped string) string {
 
 // graphExecutionMemories returns graph-recalled execution memory when the
 // graph reviewer is active and the recall found something, or nil — the
-// caller then keeps the legacy prepareExecutionMemory result. Graph errors
-// never break task execution: they are logged and fall back to legacy.
+// caller then keeps the legacy prepareTurnScopeMemory result and may merge
+// extras via mergeExecutionMemories. Graph errors never break task execution:
+// they are logged and fall back to legacy.
 func (d *Daemon) graphExecutionMemories(ctx context.Context, task Task, log *slog.Logger) []execenv.MemoryContextForEnv {
 	if effectiveMemoryType(d.cfg.MemoryType, task.MemoryType) != MemoryTypeGraph {
 		return nil

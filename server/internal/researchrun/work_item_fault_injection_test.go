@@ -234,6 +234,56 @@ func TestCancelLostV6InboxTasksUsesSharedCancellationPath(t *testing.T) {
 	}
 }
 
+func TestRecoverV6WorkItemWaitsForQueuedOrActiveInbox(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		status    string
+		startedAt any
+	}{
+		{name: "queued", status: "pending"},
+		{name: "inside runtime timeout", status: "draining", startedAt: time.Now()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runTransactionRecoveryMatrix(t, txOpV6WorkItemRecover, func(t *testing.T, run *transactionRecoveryRun) transactionRecoveryOperation {
+				if _, err := run.pool.Exec(run.ctx, `UPDATE research_session SET orchestrator_version='research-run-v6' WHERE id=$1::uuid`, run.fixture.sessionID); err != nil {
+					t.Fatal(err)
+				}
+				membershipID, workItemID := seedV6RecoveryWorkItem(t, run, "running", time.Now().Add(-time.Minute))
+				attemptID := seedV6RecoveryAttempt(t, run, membershipID, workItemID)
+				inboxTaskID := uuid.NewString()
+				if _, err := run.pool.Exec(run.ctx, `
+					INSERT INTO agent_inbox_event (
+					 id,workspace_id,agent_id,reason,requires_wake,status,seq_from,seq_to,started_at
+					) VALUES ($1::uuid,$2::uuid,$3::uuid,'quick_create',true,$4,0,0,$5::timestamptz)
+				`, inboxTaskID, run.fixture.workspaceID, run.fixture.agentID, test.status, test.startedAt); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := run.pool.Exec(run.ctx, `UPDATE research_work_item_attempt SET inbox_task_id=$2::uuid WHERE id=$1::uuid`, attemptID, inboxTaskID); err != nil {
+					t.Fatal(err)
+				}
+				invoke := func() error { _, err := run.store.RecoverExpiredV6WorkItems(run.ctx, 10); return err }
+				assertActive := func() {
+					var workStatus, attemptStatus string
+					if err := run.pool.QueryRow(run.ctx, `
+						SELECT w.status,a.status
+						FROM research_work_item w
+						JOIN research_work_item_attempt a ON a.work_item_id=w.id
+						WHERE w.id=$1::uuid AND a.id=$2::uuid
+					`, workItemID, attemptID).Scan(&workStatus, &attemptStatus); err != nil {
+						t.Fatal(err)
+					}
+					if workStatus != "running" || attemptStatus != "running" {
+						t.Fatalf("work=%s attempt=%s, want running/running", workStatus, attemptStatus)
+					}
+				}
+				return transactionRecoveryOperation{
+					invoke: invoke, assertRolledBack: assertActive, assertCommitted: assertActive, recover: invoke,
+				}
+			})
+		})
+	}
+}
+
 func TestRecordV6SubmissionTransactionRecovery(t *testing.T) {
 	runTransactionRecoveryMatrix(t, txOpV6SubmissionRecord, func(t *testing.T, run *transactionRecoveryRun) transactionRecoveryOperation {
 		membershipID, workItemID := seedV6RecoveryWorkItem(t, run, "running", time.Now().Add(time.Minute))

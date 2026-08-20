@@ -93,6 +93,25 @@ func (s *PostgresStore) RecoverExpiredV6WorkItems(ctx context.Context, limit int
 		       AND active_outbox.status IN ('pending','delivering')
 		      WHERE active_attempt.work_item_id=w.id AND active_attempt.status='dispatching'
 		    ))
+		    AND NOT EXISTS (
+		      SELECT 1
+		      FROM research_work_item_attempt active_attempt
+		      JOIN agent_inbox_event inbox ON inbox.id=active_attempt.inbox_task_id
+		      WHERE active_attempt.work_item_id=w.id
+		        AND active_attempt.status IN ('dispatching','running')
+		        AND inbox.terminal_outcome IS NULL
+		        AND (
+		          inbox.status='pending'
+		          OR (inbox.status='failed' AND inbox.retryable)
+		          OR (
+		            inbox.status='draining'
+		            AND inbox.started_at IS NOT NULL
+		            AND inbox.started_at + make_interval(
+		              secs => GREATEST(COALESCE((s.run_config->>'task_timeout_seconds')::double precision,1800),1)
+		            ) > now()
+		          )
+		        )
+		    )
 		  ORDER BY s.id,w.lease_expires_at,w.id
 		  FOR UPDATE OF s,w SKIP LOCKED LIMIT $1
 		), received AS (

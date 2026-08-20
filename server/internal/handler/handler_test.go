@@ -600,6 +600,8 @@ func seedMachineLockedRuntime(t *testing.T, daemonID, name string) string {
 		INSERT INTO computer_workspace_bindings (
 			daemon_id, workspace_id, user_id, execution_token_hash, active
 		) VALUES ($1, $2, $3, 'machine-lock-test', TRUE)
+		ON CONFLICT (daemon_id, workspace_id)
+		DO UPDATE SET user_id = EXCLUDED.user_id, active = TRUE, revoked_at = NULL
 	`, daemonID, testWorkspaceID, testUserID); err != nil {
 		t.Fatalf("seed machine-locked binding: %v", err)
 	}

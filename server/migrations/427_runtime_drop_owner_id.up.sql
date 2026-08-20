@@ -25,8 +25,23 @@
 --
 -- Forward-only: code that still reads agent_runtime.owner_id must ship in the
 -- same release (see handler/sql changes in LRM-1570).
+--
+-- The rename is idempotent so a partially-applied shared database (one that
+-- already renamed computer_identity_owner -> computers, e.g. after a failed
+-- first attempt) re-applies cleanly without operator intervention.
 
-ALTER TABLE computer_identity_owner RENAME TO computers;
-ALTER TABLE computers RENAME COLUMN daemon_id TO id;
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_catalog.pg_class WHERE relname = 'computer_identity_owner' AND relkind = 'r') THEN
+        ALTER TABLE computer_identity_owner RENAME TO computers;
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM pg_catalog.pg_class
+                JOIN pg_attribute ON pg_attribute.attrelid = pg_class.oid
+               WHERE pg_class.relname = 'computers'
+                 AND pg_attribute.attname = 'daemon_id') THEN
+        ALTER TABLE computers RENAME COLUMN daemon_id TO id;
+    END IF;
+END $$;
 
 ALTER TABLE agent_runtime DROP COLUMN IF EXISTS owner_id;

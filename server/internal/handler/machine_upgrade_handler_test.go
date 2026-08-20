@@ -45,7 +45,9 @@ func bindMachineUpgradeWorkspace(t *testing.T, daemonID, workspaceID, ownerID st
 	if _, err := testPool.Exec(context.Background(), `
 		INSERT INTO computer_workspace_bindings (
 			daemon_id, workspace_id, user_id, execution_token_hash, active
-		) VALUES ($1, $2, $3, $4, TRUE)`, daemonID, workspaceID, ownerID, "machine-upgrade-test"); err != nil {
+		) VALUES ($1, $2, $3, $4, TRUE)
+		ON CONFLICT (daemon_id, workspace_id)
+		DO UPDATE SET user_id = EXCLUDED.user_id, active = TRUE, revoked_at = NULL`, daemonID, workspaceID, ownerID, "machine-upgrade-test"); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {

@@ -21,12 +21,11 @@ func TestCanUseRuntimeForAgent_Pure(t *testing.T) {
 	ownerUserID := "11111111-1111-1111-1111-111111111111"
 	otherUserID := "22222222-2222-2222-2222-222222222222"
 
+	rtOwnerID := util.MustParseUUID(ownerUserID)
 	privateRT := db.AgentRuntime{
-		OwnerID:    util.MustParseUUID(ownerUserID),
 		Visibility: "private",
 	}
 	publicRT := db.AgentRuntime{
-		OwnerID:    util.MustParseUUID(ownerUserID),
 		Visibility: "public",
 	}
 
@@ -55,7 +54,7 @@ func TestCanUseRuntimeForAgent_Pure(t *testing.T) {
 				UserID: util.MustParseUUID(tc.userID),
 				Role:   tc.role,
 			}
-			got := canUseRuntimeForAgent(member, tc.rt)
+			got := canUseRuntimeForAgent(member, tc.rt, rtOwnerID)
 			if got != tc.want {
 				t.Fatalf("canUseRuntimeForAgent(role=%s, visibility=%s, owner=%s, caller=%s) = %v; want %v",
 					tc.role, tc.rt.Visibility, ownerUserID, tc.userID, got, tc.want)

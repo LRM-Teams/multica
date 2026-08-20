@@ -488,7 +488,8 @@ func (h *Handler) parsePeriodBriefCollectorAgentIDs(
 			writeError(w, http.StatusBadRequest, "collector agent runtime not in workspace: "+trimmed)
 			return nil, false
 		}
-		if !rt.OwnerID.Valid || uuidToString(rt.OwnerID) != uuidToString(callerUserID) {
+		rtOwnerID, ownerErr := h.resolveRuntimeOwnerQuery(ctx, rt)
+		if ownerErr != nil || uuidToString(rtOwnerID) != uuidToString(callerUserID) {
 			writeError(w, http.StatusBadRequest, "collector agent must be on a computer you own: "+trimmed)
 			return nil, false
 		}

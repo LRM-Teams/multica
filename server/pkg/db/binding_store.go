@@ -85,12 +85,12 @@ func (s *bindingStore) UpsertScoped(req computer.BindingRequest, b computer.Work
 	var accepted bool
 	err := s.db.QueryRow(context.Background(), `
 WITH owner AS (
-    INSERT INTO computer_identity_owner (daemon_id, user_id)
+    INSERT INTO computers (id, user_id)
     VALUES ($1, $3)
-    ON CONFLICT (daemon_id)
-    DO UPDATE SET user_id = computer_identity_owner.user_id
-    WHERE computer_identity_owner.user_id = EXCLUDED.user_id
-    RETURNING daemon_id
+    ON CONFLICT (id)
+    DO UPDATE SET user_id = computers.user_id
+    WHERE computers.user_id = EXCLUDED.user_id
+    RETURNING id
 )
 INSERT INTO computer_workspace_bindings (daemon_id, workspace_id, user_id, execution_token_hash, active, revoked_at)
 SELECT $1, $2, $3, $4, TRUE, NULL

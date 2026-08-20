@@ -242,7 +242,13 @@ JOIN agent_runtime AS runtime
 WHERE agent.id = $1
   AND agent.workspace_id = $2
   AND runtime.id = $3
-  AND runtime.owner_id = $4
+  AND EXISTS (
+      SELECT 1 FROM computer_workspace_bindings b
+      WHERE b.workspace_id = runtime.workspace_id
+        AND b.daemon_id = runtime.daemon_id
+        AND b.user_id = $4
+        AND b.active = TRUE
+  )
   AND agent.archived_at IS NULL
 FOR UPDATE OF agent, runtime
 `
@@ -254,6 +260,10 @@ type LockAgentForDaemonCredentialEnsureParams struct {
 	OwnerID     pgtype.UUID `json:"owner_id"`
 }
 
+// A daemon may mint/hold a credential for an agent only while that agent's
+// current runtime lives on a machine the requesting owner has an active
+// binding for in this workspace (ownership is machine-level, not stored on
+// the runtime row).
 func (q *Queries) LockAgentForDaemonCredentialEnsure(ctx context.Context, arg LockAgentForDaemonCredentialEnsureParams) (pgtype.UUID, error) {
 	row := q.db.QueryRow(ctx, lockAgentForDaemonCredentialEnsure,
 		arg.AgentID,

@@ -55,7 +55,7 @@ SELECT b.daemon_id, b.user_id::text, h.last_seen_at,
 FROM computer_workspace_bindings b
 LEFT JOIN daemon_heartbeat h
   ON h.workspace_id = b.workspace_id AND h.daemon_id = b.daemon_id
-LEFT JOIN computer_identity_owner o
+LEFT JOIN computers o
   ON o.daemon_id = b.daemon_id
 WHERE b.workspace_id = $1 AND b.active = TRUE
 ORDER BY b.created_at, b.daemon_id`, parseUUID(workspaceID))

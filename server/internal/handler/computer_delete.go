@@ -88,7 +88,8 @@ func (h *Handler) DeleteComputer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for _, rt := range runtimes {
-		if !canDeleteRuntime(member, rt) {
+		rtOwnerID, _ := h.resolveRuntimeOwnerQuery(r.Context(), rt)
+		if !canDeleteRuntime(member, rt, rtOwnerID) {
 			writeError(w, http.StatusForbidden, "you can only delete your own runtimes")
 			return
 		}

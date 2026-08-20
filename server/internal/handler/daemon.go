@@ -360,11 +360,11 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 	// users never mix identities.
 	if mid := strings.TrimSpace(req.MachineID); mid != "" && ownerID.Valid {
 		if _, err := registrationHandler.DB.Exec(r.Context(), `
-INSERT INTO computer_identity_owner (daemon_id, user_id, machine_id)
+INSERT INTO computers (id, user_id, machine_id)
 VALUES ($1, $2, $3)
-ON CONFLICT (daemon_id) DO UPDATE SET
-    machine_id = CASE WHEN computer_identity_owner.user_id = EXCLUDED.user_id
-                      THEN EXCLUDED.machine_id ELSE computer_identity_owner.machine_id END
+ON CONFLICT (id) DO UPDATE SET
+    machine_id = CASE WHEN computers.user_id = EXCLUDED.user_id
+                      THEN EXCLUDED.machine_id ELSE computers.machine_id END
 `, req.DaemonID, ownerID, mid); err != nil {
 			slog.Warn("persist machine_id on Computer identity failed", "daemon", req.DaemonID, "error", err)
 		}
@@ -437,7 +437,6 @@ ON CONFLICT (daemon_id) DO UPDATE SET
 			Status:        status,
 			DeviceInfo:    deviceInfo,
 			Metadata:      metadata,
-			OwnerID:       ownerID,
 			PinnedVersion: req.PinnedVersion,
 		})
 		if err != nil {
@@ -471,7 +470,6 @@ ON CONFLICT (daemon_id) DO UPDATE SET
 			LastSeenAt:     row.LastSeenAt,
 			CreatedAt:      row.CreatedAt,
 			UpdatedAt:      row.UpdatedAt,
-			OwnerID:        row.OwnerID,
 			LegacyDaemonID: row.LegacyDaemonID,
 			Visibility:     row.Visibility,
 			DisplayName:    row.DisplayName,
@@ -755,8 +753,8 @@ func (h *Handler) computerMachineID(ctx context.Context, daemonID, ownerID strin
 	}
 	var id string
 	err := h.DB.QueryRow(ctx, `
-SELECT machine_id FROM computer_identity_owner
- WHERE daemon_id = $1 AND user_id = $2 AND machine_id IS NOT NULL AND machine_id <> ''
+SELECT machine_id FROM computers
+ WHERE id = $1 AND user_id = $2 AND machine_id IS NOT NULL AND machine_id <> ''
 `, daemonID, ownerID).Scan(&id)
 	if err != nil {
 		if !errors.Is(err, pgx.ErrNoRows) {
@@ -790,14 +788,18 @@ func (h *Handler) convergeOrphanedRuntime(ctx context.Context, registered db.Age
 	}
 	newRuntimeID := uuidToString(registered.ID)
 	newDaemon := strings.TrimSpace(registered.DaemonID.String)
-	if newDaemon == "" || !registered.OwnerID.Valid {
+	if newDaemon == "" {
 		return
 	}
-	ownerID := uuidToString(registered.OwnerID)
+	registeredOwner, err := h.resolveRuntimeOwnerQuery(ctx, registered)
+	if err != nil {
+		return
+	}
+	ownerID := uuidToString(registeredOwner)
 	provider := registered.Provider
 	workspaceID := registered.WorkspaceID
 	// machine_id is the authoritative same-machine proof. It is resolved from
-	// the Computer identity (computer_identity_owner), never from runtime
+	// the Computer identity (computers), never from runtime
 	// metadata. When neither side has one we fall back to hostname+uniqueness.
 	newMachineID := h.computerMachineID(ctx, newDaemon, ownerID)
 	device := runtimeDeviceName(registered)
@@ -825,7 +827,11 @@ func (h *Handler) convergeOrphanedRuntime(ctx context.Context, registered db.Age
 		if uuidToString(rt.ID) == newRuntimeID {
 			continue
 		}
-		if rt.Provider != provider || !rt.OwnerID.Valid || uuidToString(rt.OwnerID) != ownerID {
+		if rt.Provider != provider {
+			continue
+		}
+		rtOwner, err := h.resolveRuntimeOwnerQuery(ctx, rt)
+		if err != nil || uuidToString(rtOwner) != ownerID {
 			continue
 		}
 		// Live daemon check: a current DaemonCore Workspace Runner socket is
@@ -940,8 +946,9 @@ func (h *Handler) DaemonDeregister(w http.ResponseWriter, r *http.Request) {
 		h.recordRuntimeHealthEventForActiveAgents(r.Context(), rt, agentHealthEventLivenessProbe, agentHealthStateSuspectedDisconnect, "daemon_deregistered", "runtime deregistered by daemon shutdown", map[string]any{
 			"source": "daemon_deregister",
 		})
+		rtOwnerForAnalytics, _ := h.resolveRuntimeOwnerQuery(r.Context(), rt)
 		obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.RuntimeOffline(
-			uuidToString(rt.OwnerID),
+			uuidToString(rtOwnerForAnalytics),
 			wsID,
 			uuidToString(rt.ID),
 			rt.DaemonID.String,

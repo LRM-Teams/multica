@@ -91,7 +91,8 @@ func (h *Handler) EnsureNotesAssistantAgent(w http.ResponseWriter, r *http.Reque
 				writeError(w, http.StatusBadRequest, "onboarding agent is not configured")
 				return
 			}
-			if !canUseRuntimeForAgent(member, onboardingRuntime) {
+			onboardingRuntimeOwnerID, _ := h.resolveRuntimeOwnerQuery(r.Context(), onboardingRuntime)
+			if !canUseRuntimeForAgent(member, onboardingRuntime, onboardingRuntimeOwnerID) {
 				writeError(w, http.StatusForbidden, "this runtime is private; only its owner or a workspace admin can move agents onto it")
 				return
 			}
@@ -139,7 +140,8 @@ func (h *Handler) EnsureNotesAssistantAgent(w http.ResponseWriter, r *http.Reque
 			})
 			return
 		}
-		if !canUseRuntimeForAgent(member, onboardingRuntime) {
+		onboardingRuntimeOwnerID, _ := h.resolveRuntimeOwnerQuery(r.Context(), onboardingRuntime)
+		if !canUseRuntimeForAgent(member, onboardingRuntime, onboardingRuntimeOwnerID) {
 			writeError(w, http.StatusForbidden, "this runtime is private; only its owner or a workspace admin can create agents on it")
 			return
 		}
@@ -162,7 +164,8 @@ func (h *Handler) EnsureNotesAssistantAgent(w http.ResponseWriter, r *http.Reque
 			writeError(w, http.StatusBadRequest, "invalid runtime_id")
 			return
 		}
-		if !canUseRuntimeForAgent(member, rt) {
+		rtOwnerID, _ := h.resolveRuntimeOwnerQuery(r.Context(), rt)
+		if !canUseRuntimeForAgent(member, rt, rtOwnerID) {
 			writeError(w, http.StatusForbidden, "this runtime is private; only its owner or a workspace admin can create agents on it")
 			return
 		}

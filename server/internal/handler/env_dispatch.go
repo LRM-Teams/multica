@@ -1945,7 +1945,11 @@ func (a *envDispatchDepsAdapter) PrecreateAgentRuntime(ctx context.Context, work
 	if err != nil {
 		return "", "", fmt.Errorf("parse workspace_id: %w", err)
 	}
-	ownerUUID, err := util.ParseUUID(ownerUserID)
+	// LRM-1570: ownership is machine-level; PrecreateAgentRuntime no longer
+	// writes owner_id on the runtime row. The owner UUID parameter is retained
+	// for the calling contract (env-dispatch seeds the binding that carries
+	// ownership) but not stored here.
+	_, err = util.ParseUUID(ownerUserID)
 	if err != nil {
 		return "", "", fmt.Errorf("parse owner_user_id: %w", err)
 	}
@@ -1975,7 +1979,6 @@ func (a *envDispatchDepsAdapter) PrecreateAgentRuntime(ctx context.Context, work
 		DaemonID:    util.StrToText(daemonID),
 		Name:        fmt.Sprintf("%s sandbox runtime", agent.Name),
 		Provider:    bound.Provider,
-		OwnerID:     ownerUUID,
 	})
 	if err != nil {
 		return "", "", stackerr.Wrap(err, "precreate agent runtime")

@@ -289,39 +289,39 @@ func (m *evolutionMockDB) QueryRow(_ context.Context, sql string, args ...interf
 	case strings.Contains(sql, "RejectEvolutionSubmissionWithReview"):
 		updated := m.submission
 		updated.Status = "rejected"
-		updated.RejectReason = stringArg(args, 2)
-		updated.ReviewDecision = stringArg(args, 3)
-		updated.ReviewConfidence = float8Arg(args, 4)
-		updated.ReviewRiskLevel = stringArg(args, 5)
-		updated.ReviewReason = stringArg(args, 6)
-		updated.ReviewMetadata = bytesArg(args, 7)
+		updated.RejectReason = stringArg(args, 0)
+		updated.ReviewDecision = stringArg(args, 1)
+		updated.ReviewConfidence = float8Arg(args, 2)
+		updated.ReviewRiskLevel = stringArg(args, 3)
+		updated.ReviewReason = stringArg(args, 4)
+		updated.ReviewMetadata = bytesArg(args, 5)
 		m.submission = updated
 		return &evolutionMockRow{values: evolutionSubmissionValues(updated)}
 	case strings.Contains(sql, "MarkEvolutionSubmissionNeedsReview"):
 		updated := m.submission
 		updated.Status = "needs_review"
-		updated.ReviewDecision = stringArg(args, 2)
-		updated.ReviewConfidence = float8Arg(args, 3)
-		updated.ReviewRiskLevel = stringArg(args, 4)
-		updated.ReviewReason = stringArg(args, 5)
-		updated.ReviewMetadata = bytesArg(args, 6)
+		updated.ReviewDecision = stringArg(args, 0)
+		updated.ReviewConfidence = float8Arg(args, 1)
+		updated.ReviewRiskLevel = stringArg(args, 2)
+		updated.ReviewReason = stringArg(args, 3)
+		updated.ReviewMetadata = bytesArg(args, 4)
 		m.submission = updated
 		return &evolutionMockRow{values: evolutionSubmissionValues(updated)}
 	case strings.Contains(sql, "MarkEvolutionSubmissionPromotedWithReview"):
 		updated := m.submission
 		updated.Status = "promoted"
-		updated.PromotedUnitID = uuidArg(args, 2)
-		updated.ReviewDecision = stringArg(args, 3)
-		updated.ReviewConfidence = float8Arg(args, 4)
-		updated.ReviewRiskLevel = stringArg(args, 5)
-		updated.ReviewReason = stringArg(args, 6)
-		updated.ReviewMetadata = bytesArg(args, 7)
+		updated.PromotedUnitID = uuidArg(args, 0)
+		updated.ReviewDecision = stringArg(args, 1)
+		updated.ReviewConfidence = float8Arg(args, 2)
+		updated.ReviewRiskLevel = stringArg(args, 3)
+		updated.ReviewReason = stringArg(args, 4)
+		updated.ReviewMetadata = bytesArg(args, 5)
 		m.submission = updated
 		return &evolutionMockRow{values: evolutionSubmissionValues(updated)}
 	case strings.Contains(sql, "MarkEvolutionSubmissionPromoted"):
 		updated := m.submission
 		updated.Status = "promoted"
-		updated.PromotedUnitID = uuidArg(args, 2)
+		updated.PromotedUnitID = uuidArg(args, 0)
 		m.submission = updated
 		return &evolutionMockRow{values: evolutionSubmissionValues(updated)}
 	case strings.Contains(sql, "UpsertSharedEvolutionUnitFile"):

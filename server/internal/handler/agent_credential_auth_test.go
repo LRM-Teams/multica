@@ -220,11 +220,21 @@ func seedHandlerTestRuntimeOwner(t *testing.T, ownerID string) {
 	t.Helper()
 
 	runtimeID := handlerTestRuntimeID(t)
-	if _, err := testPool.Exec(context.Background(), `UPDATE agent_runtime SET owner_id = $1 WHERE id = $2`, ownerID, runtimeID); err != nil {
-		t.Fatalf("seed runtime owner: %v", err)
+	var daemonID pgtype.Text
+	if err := testPool.QueryRow(context.Background(), `SELECT daemon_id FROM agent_runtime WHERE id = $1`, runtimeID).Scan(&daemonID); err != nil {
+		t.Fatalf("load runtime daemon_id: %v", err)
+	}
+	// LRM-1570: ownership is machine-level, established via an active
+	// computer_workspace_bindings row for the runtime's daemon.
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO computer_workspace_bindings (
+			daemon_id, workspace_id, user_id, execution_token_hash, active
+		) VALUES ($1, $2, $3, 'handler-test-owner', TRUE)
+	`, daemonID.String, testWorkspaceID, ownerID); err != nil {
+		t.Fatalf("seed runtime owner binding: %v", err)
 	}
 	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `UPDATE agent_runtime SET owner_id = NULL WHERE id = $1`, runtimeID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_workspace_bindings WHERE daemon_id = $1 AND workspace_id = $2`, daemonID.String, testWorkspaceID)
 	})
 }
 

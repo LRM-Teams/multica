@@ -454,11 +454,11 @@ VALUES ($1, $2, 'owner')
 	if err := testPool.QueryRow(ctx, `
 INSERT INTO agent_runtime (
   workspace_id, daemon_id, name, runtime_mode, provider, status,
-  device_info, metadata, owner_id, last_seen_at
+  device_info, metadata, last_seen_at
 ) VALUES ($1, $2, 'delete-runtime', 'local', 'codex', 'online',
-  '', '{}'::jsonb, $3, now())
+  '', '{}'::jsonb, now())
 RETURNING id
-`, wsID, "delete-workspace-runtime-"+uuid.NewString(), testUserID).Scan(&runtimeID); err != nil {
+`, wsID, "delete-workspace-runtime-"+uuid.NewString()).Scan(&runtimeID); err != nil {
 		t.Fatalf("create runtime: %v", err)
 	}
 	var agentID string
@@ -650,11 +650,11 @@ INSERT INTO member (workspace_id, user_id, role) VALUES ($1, $2, 'admin') RETURN
 	if err := testPool.QueryRow(ctx, `
 INSERT INTO agent_runtime (
     workspace_id, daemon_id, name, runtime_mode, provider, status,
-    device_info, metadata, owner_id, last_seen_at
+    device_info, metadata, last_seen_at
 )
-VALUES ($1, $2, 'Target Runtime', 'local', 'multica_daemon', 'online', '', '{}'::jsonb, $3, now())
+VALUES ($1, $2, 'Target Runtime', 'local', 'multica_daemon', 'online', '', '{}'::jsonb, now())
 RETURNING id
-`, wsID, daemonID, targetUserID).Scan(&runtimeID); err != nil {
+`, wsID, daemonID).Scan(&runtimeID); err != nil {
 		t.Fatalf("insert runtime: %v", err)
 	}
 
@@ -808,11 +808,11 @@ func TestDeleteMember_CancelsTasksFromAgentReassignment(t *testing.T) {
 	if err := testPool.QueryRow(ctx, `
 INSERT INTO agent_runtime (
     workspace_id, daemon_id, name, runtime_mode, provider, status,
-    device_info, metadata, owner_id, last_seen_at
+    device_info, metadata, last_seen_at
 )
-VALUES ($1, $2, 'Other Runtime', 'local', 'multica_daemon', 'online', '', '{}'::jsonb, $3, now())
+VALUES ($1, $2, 'Other Runtime', 'local', 'multica_daemon', 'online', '', '{}'::jsonb, now())
 RETURNING id
-`, fx.WorkspaceID, "daemon-revoke-reassign-other", testUserID).Scan(&otherRuntimeID); err != nil {
+`, fx.WorkspaceID, "daemon-revoke-reassign-other").Scan(&otherRuntimeID); err != nil {
 		t.Fatalf("insert other runtime: %v", err)
 	}
 

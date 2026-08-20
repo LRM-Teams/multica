@@ -134,7 +134,7 @@ func (h *Handler) seedResearchSessionKickoff(
 	initiator := parseUUID(userID)
 	if leadID.Valid {
 		leadPrompt := adaptiveKickoffLeadPrompt(session.Goal, plan)
-		if err := h.enqueueResearchAgentWake(ctx, wsUUID, session, leadID, initiator, leadPrompt, "user"); err != nil {
+		if err := h.enqueueResearchAgentWake(ctx, wsUUID, session, leadID, initiator, leadPrompt, "user", true); err != nil {
 			slog.Warn("research kickoff lead wake failed", "error", err)
 			h.emitResearchProcessCard(ctx, workspaceID, wsUUID, session.ID, "user", userID, researchWakeFailureEvent(leadID, err))
 		}
@@ -148,7 +148,7 @@ func (h *Handler) seedResearchSessionKickoff(
 				"Record work with multica research graph-append / source-upsert / presence. Session id: %s",
 			session.Title, uuidToString(session.ID),
 		)
-		if err := h.enqueueResearchAgentWake(ctx, wsUUID, session, m.AgentID, initiator, standby, "system"); err != nil {
+		if err := h.enqueueResearchAgentWake(ctx, wsUUID, session, m.AgentID, initiator, standby, "system", true); err != nil {
 			slog.Warn("research kickoff member wake failed", "agent_id", uuidToString(m.AgentID), "error", err)
 			h.emitResearchProcessCard(ctx, workspaceID, wsUUID, session.ID, "user", userID, researchWakeFailureEvent(m.AgentID, err))
 		}

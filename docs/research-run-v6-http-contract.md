@@ -1,7 +1,10 @@
 # Research Run V6 HTTP and realtime contract
 
 Status: target transport contract frozen; user-facing V6 create is open. Clients
-that omit `orchestrator_version` still create V5.
+that omit `orchestrator_version` still create V5. Product-close routes:
+`GET/PATCH /api/research/v6/release`, `GET/POST /api/research/v6/monitors`,
+`PATCH /api/research/v6/monitors/{monitorId}`, `GET /api/research/v6/production-window`,
+`POST /api/research/sessions/{id}/sources/ingest`, `GET /api/research/sessions/{id}/canonical-rebuild`.
 
 Authority: [`superpowers/specs/2026-08-14-ronaldo-research-director-development-spec.zh-CN.md`](superpowers/specs/2026-08-14-ronaldo-research-director-development-spec.zh-CN.md), [`research-run-v6-contract.md`](research-run-v6-contract.md), and [`research-run-v6-storage-contract.md`](research-run-v6-storage-contract.md).
 

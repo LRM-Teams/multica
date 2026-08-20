@@ -118,10 +118,11 @@ func (s *PostgresStore) BootstrapV6(ctx context.Context, in V6BootstrapInput, cf
 	if err = ensureSessionPolicyStateTx(ctx, tx, in.WorkspaceID, runID); err != nil {
 		return Run{}, 0, err
 	}
-	event, err := appendEvent(ctx, tx, in.WorkspaceID, runID, "v6_run_bootstrapped", "v6-bootstrap:"+in.ClientRequestID, "user", in.CreatedBy, map[string]any{
+	event, err := appendEvent(ctx, tx, in.WorkspaceID, runID, "v6_run_bootstrapped", "v6-bootstrap:"+in.ClientRequestID, "user", in.CreatedBy, rebuildablePayload(map[string]any{
 		"orchestrator_version": OrchestratorVersionV6, "director_assignment_id": assignmentID, "director_agent_id": in.DirectorAgentID, "membership_id": membershipID,
 		"client_request_id": in.ClientRequestID, "request_hash": requestHash,
-	})
+		"goal": strings.TrimSpace(in.Goal), "title": strings.TrimSpace(in.Title), "status": "running",
+	}))
 	if err != nil {
 		return Run{}, 0, err
 	}

@@ -610,6 +610,9 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     mutationFn: (body: string) =>
       api.postResearchMessage(sessionId, {
         body,
+        target_agent_id: directorV6Enabled
+          ? persistedDirectorAgentId ?? undefined
+          : undefined,
         selected_research_refs:
           directorV6Enabled && selectedDirectorReference
             ? [selectedDirectorReference]

@@ -703,6 +703,14 @@
     "working": "Research fleet online · {{count}} Agents working",
     "standby": "Research fleet standing by"
   },
+  "v6_ops": {
+    "create_open": "V6 create open",
+    "create_closed": "V6 create rolled back",
+    "monitors": "{{count}} monitors",
+    "window_ok": "Quality window in bounds",
+    "window_breach": "Quality window out of bounds",
+    "window_observing": "Quality window observing"
+  },
   "home_preview": {
     "title": "Launch preview",
     "subtitle": "The fleet will follow this method after creation",

@@ -63,6 +63,7 @@ import { ResearchHomeHero } from "./research-home-hero";
 import { ResearchHomeOverview } from "./research-home-overview";
 import { ResearchHomeConstellationPreview } from "./research-home-constellation-preview";
 import { ResearchHomeHeader } from "./research-home-header";
+import { ResearchV6OpsPanel } from "./research-v6-ops-panel";
 import { ResearchShellAtmosphere } from "./research-shell-atmosphere";
 import "./research-home-visual.css";
 import { ResearchServerErrorPage } from "./research-server-error-page";
@@ -576,6 +577,7 @@ export function ResearchListPage() {
             <ResearchShellAtmosphere className="-top-2" heightClassName="h-[200px]" />
           ) : null}
           <ResearchHomeHeader sessions={sessions} />
+          {!bootstrapLoading && !bootstrapIsError ? <ResearchV6OpsPanel /> : null}
           {/* LRM-783 / LRM-784 / LRM-1106: brand-hero + full-width composer (12 cols). */}
           <div ref={composerCardRef} className="relative z-[1]">
             <ResearchHomeHero preview={<ResearchHomeConstellationPreview sessions={sessions} selectedId={selectedResearchId} />}>

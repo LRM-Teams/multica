@@ -537,19 +537,22 @@ func (h *Handler) PostResearchMessage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	var target pgtype.UUID
+	var requested, fleetLead pgtype.UUID
 	if req.TargetAgentID != "" {
 		t, ok := parseUUIDOrBadRequest(w, req.TargetAgentID, "target_agent_id")
 		if !ok {
 			return
 		}
-		target = t
-	} else if senderType == "user" {
-		// Default route to 罗纳尔多
-		fleet, err := h.Queries.GetResearchFleetByWorkspace(r.Context(), wsUUID)
-		if err == nil && fleet.LeadAgentID.Valid {
-			target = fleet.LeadAgentID
+		requested = t
+	}
+	if senderType == "user" && session.OrchestratorVersion != researchrun.OrchestratorVersionV6 {
+		if fleet, ferr := h.Queries.GetResearchFleetByWorkspace(r.Context(), wsUUID); ferr == nil {
+			fleetLead = fleet.LeadAgentID
 		}
+	}
+	target := requested
+	if senderType == "user" {
+		target = resolveUserResearchMessageTarget(session.OrchestratorVersion, requested, h.loadActiveV6DirectorAgentID(r.Context(), session), fleetLead)
 	}
 
 	selectedRefs, _ := json.Marshal(req.SelectedResearchRefs)
@@ -578,7 +581,7 @@ func (h *Handler) PostResearchMessage(w http.ResponseWriter, r *http.Request) {
 	// Wake the target fleet agent (default: 罗纳尔多). Failures are logged but
 	// do not roll back the persisted research message — surface a process card.
 	if target.Valid && senderType == "user" {
-		if wakeErr := h.enqueueResearchAgentWake(r.Context(), wsUUID, session, target, parseUUID(userID), req.Body, senderType); wakeErr != nil {
+		if wakeErr := h.enqueueResearchAgentWake(r.Context(), wsUUID, session, target, parseUUID(userID), req.Body, senderType, session.OrchestratorVersion != researchrun.OrchestratorVersionV6); wakeErr != nil {
 			slog.Warn("research agent wake failed",
 				"session_id", uuidToString(sessionID),
 				"agent_id", uuidToString(target),
@@ -588,7 +591,7 @@ func (h *Handler) PostResearchMessage(w http.ResponseWriter, r *http.Request) {
 		}
 	} else if target.Valid && senderType == "agent" {
 		initiator := session.CreatedBy
-		if wakeErr := h.enqueueResearchAgentWake(r.Context(), wsUUID, session, target, initiator, req.Body, senderType); wakeErr != nil {
+		if wakeErr := h.enqueueResearchAgentWake(r.Context(), wsUUID, session, target, initiator, req.Body, senderType, session.OrchestratorVersion != researchrun.OrchestratorVersionV6); wakeErr != nil {
 			slog.Warn("research dispatch wake failed",
 				"session_id", uuidToString(sessionID),
 				"agent_id", uuidToString(target),
@@ -602,7 +605,7 @@ func (h *Handler) PostResearchMessage(w http.ResponseWriter, r *http.Request) {
 		h.emitResearchProcessCard(r.Context(), workspaceID, wsUUID, session.ID, actorType, actorID, researchProcessEvent{
 			Op:    "wake_failed",
 			Title: "无主理人",
-			Body:  "调研团 lead（罗纳尔多）未就绪，消息已保存但无人接收。",
+			Body:  "当前 Run 没有可接收消息的 Director 或 Fleet Lead，消息已保存但无人接收。",
 			Meta:  map[string]any{"reason": "missing_lead"},
 		})
 	}
@@ -1103,6 +1106,19 @@ func (h *Handler) ConfirmResearchSession(w http.ResponseWriter, r *http.Request)
 			"session": researchSessionToResponse(updated),
 		})
 	}
+	strategyVersion := "research-v5-default"
+	if h.DB != nil {
+		_ = h.DB.QueryRow(r.Context(), `
+			SELECT v.version_key FROM research_run_strategy_assignment a
+			JOIN research_strategy_version v ON v.workspace_id=a.workspace_id AND v.id=a.strategy_version_id
+			WHERE a.workspace_id=$1::uuid AND a.session_id=$2::uuid
+		`, workspaceID, uuidToString(sessionID)).Scan(&strategyVersion)
+	}
+	budget := float64(updated.ProductRoundBudget)
+	if budget <= 0 {
+		budget = 1
+	}
+	_ = h.RecordResearchProductionEpisode(r.Context(), workspaceID, uuidToString(sessionID), strategyVersion, 0, budget)
 	h.awardHonorXP(r.Context(), parseUUID(userID), "research.session", uuidToString(sessionID))
 	writeJSON(w, http.StatusOK, researchSessionToResponse(updated))
 }

@@ -703,6 +703,14 @@
     "working": "调研团在线 · {{count}} 位智能体工作中",
     "standby": "调研团待命"
   },
+  "v6_ops": {
+    "create_open": "V6 新建已开放",
+    "create_closed": "V6 新建已回滚",
+    "monitors": "{{count}} 个监测",
+    "window_ok": "质量窗口在界内",
+    "window_breach": "质量窗口越界",
+    "window_observing": "质量窗口观察中"
+  },
   "home_preview": {
     "title": "启动预览",
     "subtitle": "创建后，调研团会按这套方法展开工作",

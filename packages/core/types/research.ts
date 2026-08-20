@@ -133,6 +133,8 @@ export interface ResearchSession {
   list_progress?: ResearchSessionListProgress;
   active_assignments?: ResearchActiveAssignment[];
   latest_outcomes?: ResearchLatestOutcome[];
+  orchestrator_version?: string;
+  director_agent_id?: string | null;
 }
 
 export interface ResearchSessionListProgress {

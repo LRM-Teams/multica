@@ -6,19 +6,13 @@ import (
 	"time"
 )
 
-func TestChannelDeleteFKIndexesCoverCascadeClosureAndAreIdempotent(t *testing.T) {
+func TestChannelDeleteFKIndexesCoverCascadeClosure(t *testing.T) {
 	pool := openTestPool(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	// The hook may already have run through `migrate up`; two more passes prove
-	// it is safe for interrupted/retried deploys and leaves no duplicate work.
-	for i := 0; i < 2; i++ {
-		if err := runChannelDeleteFKIndexesHook(ctx, pool); err != nil {
-			t.Fatalf("run channel-delete index hook pass %d: %v", i+1, err)
-		}
-	}
-
+	// Migration 430 creates these indexes; CI runs `migrate up` before the
+	// suite, so the assertions below read the real post-migration schema.
 	// Start at channel, recursively include every relation reached through
 	// ON DELETE CASCADE, then require a supporting child index for every FK
 	// that PostgreSQL must enforce while deleting any row in that closure.

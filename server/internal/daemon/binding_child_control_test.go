@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -16,9 +17,10 @@ import (
 )
 
 type bindingControlTestCurrentSet struct {
-	mu              sync.RWMutex
-	pids            map[string]int
-	startIdentities map[string]string
+	mu                sync.RWMutex
+	pids              map[string]int
+	daemonInstanceIDs map[string]string
+	delayReady        []string
 }
 
 type bindingControlTestHost struct {
@@ -27,11 +29,12 @@ type bindingControlTestHost struct {
 }
 
 type bindingControlTestChild struct {
-	pid       int
-	state     *bindingControlTestCurrentSet
-	workspace string
-	wait      chan computer.RunnerExitClass
-	stopOnce  sync.Once
+	pid        int
+	state      *bindingControlTestCurrentSet
+	workspace  string
+	wait       chan computer.RunnerExitClass
+	stopOnce   sync.Once
+	readyDelay bool
 }
 
 func (child *bindingControlTestChild) PID() int {
@@ -48,6 +51,26 @@ func (child *bindingControlTestChild) Wait() computer.RunnerExitClass {
 func (child *bindingControlTestChild) Stop() error {
 	child.stopOnce.Do(func() { child.wait <- computer.RunnerExitGraceful })
 	return nil
+}
+
+func (child *bindingControlTestChild) AwaitReady(ctx context.Context) (computer.BindingChildReady, error) {
+	if child.readyDelay {
+		<-ctx.Done()
+		return computer.BindingChildReady{}, ctx.Err()
+	}
+	identity := fmt.Sprintf("child-%s-%d", child.workspace, child.PID())
+	if child.state != nil {
+		child.state.mu.Lock()
+		child.state.daemonInstanceIDs[child.workspace] = identity
+		child.state.mu.Unlock()
+	}
+	return computer.BindingChildReady{
+		ProtocolVersion:  computer.BindingChildProtocolVersion,
+		WorkspaceID:      child.workspace,
+		DaemonInstanceID: identity,
+		PID:              child.PID(),
+		RunnerEndpoint:   "unix:///tmp/multica-test-runner.sock",
+	}, nil
 }
 
 type capturingRunnerDiagnosticSink struct {
@@ -350,7 +373,7 @@ func TestBindingChildReportsItsRuntimeSetToHost(t *testing.T) {
 	}
 
 	staleIdentity := liveBindingIdentity(t, host, "workspace-a", 101)
-	staleIdentity.StartIdentity = "stale-start"
+	staleIdentity.DaemonInstanceID = "stale-start"
 	stale := newBindingHostControlClient(serverURL, controlToken, staleIdentity)
 	if err := stale.reportRuntimeSet(context.Background(), []Runtime{
 		{ID: "runtime-stale", WorkspaceID: "workspace-a", Provider: "pi"},
@@ -360,10 +383,21 @@ func TestBindingChildReportsItsRuntimeSetToHost(t *testing.T) {
 }
 
 func installLiveBindingChild(t *testing.T, current *bindingControlTestHost, workspaceID string, pid int) {
+	installBindingChild(t, current, workspaceID, pid, false)
+}
+
+func installStartingBindingChild(t *testing.T, current *bindingControlTestHost, workspaceID string, pid int) {
+	installBindingChild(t, current, workspaceID, pid, true)
+}
+
+func installBindingChild(t *testing.T, current *bindingControlTestHost, workspaceID string, pid int, delayReady bool) {
 	t.Helper()
 	state := current.state
 	state.mu.Lock()
 	state.pids[workspaceID] = pid
+	if delayReady {
+		state.delayReady = append(state.delayReady, workspaceID)
+	}
 	desired := make([]string, 0, len(state.pids))
 	for current := range state.pids {
 		desired = append(desired, current)
@@ -373,10 +407,15 @@ func installLiveBindingChild(t *testing.T, current *bindingControlTestHost, work
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
 		state.mu.RLock()
-		startIdentity := state.startIdentities[workspaceID]
+		daemonInstanceID := state.daemonInstanceIDs[workspaceID]
 		state.mu.RUnlock()
-		identity := bindingChildControlIdentity{WorkspaceID: workspaceID, StartIdentity: startIdentity, PID: pid}
-		if current.host.Current(identity) {
+		identity := bindingChildControlIdentity{WorkspaceID: workspaceID, DaemonInstanceID: daemonInstanceID, PID: pid}
+		if delayReady {
+			identity.DaemonInstanceID = "pending-child"
+			if current.host.Current(identity) {
+				return
+			}
+		} else if daemonInstanceID != "" && current.host.Current(identity) {
 			return
 		}
 		time.Sleep(time.Millisecond)
@@ -387,12 +426,12 @@ func installLiveBindingChild(t *testing.T, current *bindingControlTestHost, work
 func liveBindingIdentity(t *testing.T, current *bindingControlTestHost, workspaceID string, pid int) bindingChildControlIdentity {
 	t.Helper()
 	current.state.mu.RLock()
-	startIdentity := current.state.startIdentities[workspaceID]
+	daemonInstanceID := current.state.daemonInstanceIDs[workspaceID]
 	current.state.mu.RUnlock()
-	if startIdentity == "" {
-		t.Fatalf("Binding child %s has no start identity", workspaceID)
+	if daemonInstanceID == "" {
+		t.Fatalf("Binding child %s has no daemon instance", workspaceID)
 	}
-	return bindingChildControlIdentity{WorkspaceID: workspaceID, StartIdentity: startIdentity, PID: pid}
+	return bindingChildControlIdentity{WorkspaceID: workspaceID, DaemonInstanceID: daemonInstanceID, PID: pid}
 }
 
 func localHostControlRPC(t *testing.T, host *computer.Host) string {
@@ -416,15 +455,22 @@ func localHostControlRPCListener(t *testing.T, host *computer.Host) (string, net
 
 func newBindingControlTestHost(t *testing.T, controlToken string, maxProcesses int, callbacks computer.HostControlCallbacks) *bindingControlTestHost {
 	t.Helper()
-	state := &bindingControlTestCurrentSet{pids: make(map[string]int), startIdentities: make(map[string]string)}
+	state := &bindingControlTestCurrentSet{pids: make(map[string]int), daemonInstanceIDs: make(map[string]string)}
 	host, err := computer.NewHost(computer.HostConfig{
 		ControlToken: controlToken, MaxAgentProcesses: maxProcesses, ControlCallbacks: callbacks,
-		Spawn: func(workspaceID, startIdentity string) (computer.BindingChild, error) {
+		Spawn: func(workspaceID string) (computer.BindingChild, error) {
 			state.mu.Lock()
 			pid := state.pids[workspaceID]
-			state.startIdentities[workspaceID] = startIdentity
+			delayReady := false
+			for i, delayed := range state.delayReady {
+				if delayed == workspaceID {
+					delayReady = true
+					state.delayReady = append(state.delayReady[:i], state.delayReady[i+1:]...)
+					break
+				}
+			}
 			state.mu.Unlock()
-			return &bindingControlTestChild{pid: pid, state: state, workspace: workspaceID, wait: make(chan computer.RunnerExitClass, 1)}, nil
+			return &bindingControlTestChild{pid: pid, state: state, workspace: workspaceID, wait: make(chan computer.RunnerExitClass, 1), readyDelay: delayReady}, nil
 		},
 	})
 	if err != nil {

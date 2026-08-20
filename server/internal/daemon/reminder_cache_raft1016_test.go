@@ -3,6 +3,9 @@ package daemon
 import (
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -406,5 +409,161 @@ func TestReminderDueTimerRetainsLocalInboxItemUntilResidentIsIdle(t *testing.T) 
 	}
 	if receipts := d.reminderCache.pendingFireReceipts(); len(receipts) != 1 || !receipts[0].WakeEnqueued {
 		t.Fatalf("idle retry receipt = %+v, want wake enqueued", receipts)
+	}
+}
+
+func lastActiveReminderTimer(clock *fakeReminderClock) int {
+	for i := len(clock.timers) - 1; i >= 0; i-- {
+		if !clock.timers[i].stopped {
+			return i
+		}
+	}
+	return -1
+}
+
+func TestReminderCacheExhaustsWakeRetryAfterMaxAttempts(t *testing.T) {
+	now := time.Date(2026, 8, 13, 8, 0, 0, 0, time.UTC)
+	clock := &fakeReminderClock{now: now}
+	attempts := 0
+	var exhausted *reminderRetryExhaustion
+	cache := newReminderCache(clock, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	cache.onRetryExhausted = func(next reminderRetryExhaustion) { exhausted = &next }
+	cache.onFireDelivery = func(protocol.ReminderTimerJob) bool {
+		attempts++
+		return false
+	}
+	if !cache.upsert(raft1016Job(now)) {
+		t.Fatal("upsert rejected")
+	}
+	clock.fire(0)
+	for attempts < defaultReminderFireRetryMaxAttempts {
+		index := lastActiveReminderTimer(clock)
+		if index < 0 {
+			t.Fatalf("retry stopped after %d attempts, want %d deliveries", attempts, defaultReminderFireRetryMaxAttempts)
+		}
+		clock.fire(index)
+	}
+	if attempts != defaultReminderFireRetryMaxAttempts {
+		t.Fatalf("attempts = %d, want %d", attempts, defaultReminderFireRetryMaxAttempts)
+	}
+	if lastActiveReminderTimer(clock) >= 0 {
+		t.Fatal("retry timer still armed after max attempts")
+	}
+	receipts := cache.pendingFireReceipts()
+	if len(receipts) != 1 || receipts[0].WakeEnqueued || receipts[0].RetryTerminal == nil {
+		t.Fatalf("receipt after exhaustion = %+v, want terminal unenqueued due", receipts)
+	}
+	got := receipts[0].RetryTerminal
+	if got.Code != reminderDeliveryRetryExhaustedCode || got.Stage != "fire_request" || got.Attempts != defaultReminderFireRetryMaxAttempts || got.ReminderID != "r-due" || got.OwnerAgentID != "owner-a" || got.Version != 3 {
+		t.Fatalf("retry terminal = %+v", got)
+	}
+	if exhausted == nil || *exhausted != *got {
+		t.Fatalf("onRetryExhausted = %+v, want %+v", exhausted, got)
+	}
+	index := lastActiveReminderTimer(clock)
+	if index >= 0 {
+		clock.fire(index)
+	}
+	if attempts != defaultReminderFireRetryMaxAttempts {
+		t.Fatalf("attempts after exhaustion = %d, want no further delivery", attempts)
+	}
+}
+
+func TestReminderCacheExhaustsWakeRetryAfterDeadline(t *testing.T) {
+	now := time.Date(2026, 8, 13, 8, 0, 0, 0, time.UTC)
+	clock := &fakeReminderClock{now: now}
+	attempts := 0
+	cache := newReminderCache(clock, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	cache.onFireDelivery = func(protocol.ReminderTimerJob) bool {
+		attempts++
+		return false
+	}
+	if !cache.upsert(raft1016Job(now)) {
+		t.Fatal("upsert rejected")
+	}
+	clock.fire(0)
+	if attempts != 1 {
+		t.Fatalf("attempts after due = %d, want 1", attempts)
+	}
+	index := lastActiveReminderTimer(clock)
+	if index < 0 {
+		t.Fatal("missing retry timer before deadline")
+	}
+	clock.now = now.Add(defaultReminderFireRetryDeadline)
+	clock.fire(index)
+	if attempts != 1 {
+		t.Fatalf("attempts after deadline = %d, want no extra delivery", attempts)
+	}
+	receipts := cache.pendingFireReceipts()
+	if len(receipts) != 1 || receipts[0].RetryTerminal == nil || receipts[0].RetryTerminal.Code != reminderDeliveryRetryExhaustedCode {
+		t.Fatalf("receipt after deadline = %+v, want terminal due", receipts)
+	}
+	if lastActiveReminderTimer(clock) >= 0 {
+		t.Fatal("retry timer still armed after deadline")
+	}
+}
+
+func TestReminderCacheWakeRetryBackoffDoublesUntilCap(t *testing.T) {
+	now := time.Date(2026, 8, 13, 8, 0, 0, 0, time.UTC)
+	clock := &fakeReminderClock{now: now}
+	cache := newReminderCache(clock, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	cache.onFireDelivery = func(protocol.ReminderTimerJob) bool { return false }
+	if !cache.upsert(raft1016Job(now)) {
+		t.Fatal("upsert rejected")
+	}
+	clock.fire(0)
+	want := []time.Duration{
+		time.Second,
+		2 * time.Second,
+		4 * time.Second,
+		8 * time.Second,
+		16 * time.Second,
+		32 * time.Second,
+		defaultReminderFireRetryMaxDelay,
+	}
+	got := make([]time.Duration, 0, len(want))
+	for range want {
+		index := lastActiveReminderTimer(clock)
+		if index < 0 {
+			t.Fatalf("retry delays = %v, want %v", got, want)
+		}
+		got = append(got, clock.delays[index])
+		clock.fire(index)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("retry delays = %v, want %v", got, want)
+		}
+	}
+	if lastActiveReminderTimer(clock) >= 0 {
+		t.Fatal("retry timer still armed after backoff cap and max attempts")
+	}
+}
+
+func TestReminderCachePersistsCamelCaseRetryState(t *testing.T) {
+	now := time.Date(2026, 8, 13, 8, 0, 0, 0, time.UTC)
+	clock := &fakeReminderClock{now: now}
+	root := t.TempDir()
+	cache := newReminderCache(clock, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	cache.onFireDelivery = func(protocol.ReminderTimerJob) bool { return false }
+	cache.setPersistence(root)
+	if !cache.upsert(raft1016Job(now)) {
+		t.Fatal("upsert rejected")
+	}
+	clock.fire(0)
+	raw, err := os.ReadFile(filepath.Join(root, ".daemon", reminderCacheStateFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(raw)
+	for _, legacy := range []string{"wake_enqueued", "retry_deadline_at", "fired_at_client", "server_acked", "retry_attempt"} {
+		if strings.Contains(body, legacy) {
+			t.Fatalf("persisted reminder cache still uses snake_case %q: %s", legacy, body)
+		}
+	}
+	for _, want := range []string{`"ownerAgentId"`, `"wakeEnqueued"`, `"retryDeadlineAt"`, `"firedAtClient"`, `"retryAttempt"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("persisted reminder cache missing %s: %s", want, body)
+		}
 	}
 }

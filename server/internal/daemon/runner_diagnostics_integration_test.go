@@ -72,7 +72,7 @@ func TestStandaloneChatDiagnosticsFollowInboxExecutionPath(t *testing.T) {
 	d := New(Config{ServerBaseURL: server.URL}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	d.runnerInstanceID = "start-identity-1"
 	d.runnerDiagnostics = &runnerDiagnosticRegistry{
-		store: store, environment: diagnosticlog.EnvironmentProduction, startIdentity: d.runnerInstanceID,
+		store: store, environment: diagnosticlog.EnvironmentProduction, daemonInstanceID: d.runnerInstanceID,
 		loggers: make(map[string]*diagnosticlog.Logger), failed: make(map[string]struct{}),
 	}
 	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID, Provider: "claude"}
@@ -380,7 +380,7 @@ func TestCredentialProxyResponseDiagnosticsUseBoundedOutcomes(t *testing.T) {
 	d := New(Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	d.runnerInstanceID = "start-identity-1"
 	d.runnerDiagnostics = &runnerDiagnosticRegistry{
-		store: store, environment: diagnosticlog.EnvironmentProduction, startIdentity: d.runnerInstanceID,
+		store: store, environment: diagnosticlog.EnvironmentProduction, daemonInstanceID: d.runnerInstanceID,
 		loggers: make(map[string]*diagnosticlog.Logger), failed: make(map[string]struct{}),
 	}
 	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
@@ -452,7 +452,7 @@ func newStandaloneChatDiagnosticDaemon(t *testing.T, serverURL string) (*Daemon,
 	d := New(Config{ServerBaseURL: serverURL}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	d.runnerInstanceID = "start-identity-1"
 	d.runnerDiagnostics = &runnerDiagnosticRegistry{
-		store: store, environment: diagnosticlog.EnvironmentProduction, startIdentity: d.runnerInstanceID,
+		store: store, environment: diagnosticlog.EnvironmentProduction, daemonInstanceID: d.runnerInstanceID,
 		loggers: make(map[string]*diagnosticlog.Logger), failed: make(map[string]struct{}),
 	}
 	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID, Provider: "claude"}

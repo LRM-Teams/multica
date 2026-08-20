@@ -17,16 +17,16 @@ import (
 
 const bindingChildControlBusyCode = "control_busy"
 
-// BindingChildIdentity fences every child-to-Host request by the immutable
-// managed runner start identity and OS process identity the Computer supervises.
+// BindingChildIdentity fences every child-to-Host request by the child-reported
+// daemonInstanceId and OS process identity the Computer supervises.
 type BindingChildIdentity struct {
-	WorkspaceID   string `json:"workspaceId"`
-	StartIdentity string `json:"startIdentity"`
-	PID           int    `json:"pid"`
+	WorkspaceID      string `json:"workspaceId"`
+	DaemonInstanceID string `json:"daemonInstanceId"`
+	PID              int    `json:"pid"`
 }
 
 func (identity BindingChildIdentity) Validate() error {
-	if strings.TrimSpace(identity.WorkspaceID) == "" || strings.TrimSpace(identity.StartIdentity) == "" || identity.PID < 1 {
+	if strings.TrimSpace(identity.WorkspaceID) == "" || strings.TrimSpace(identity.DaemonInstanceID) == "" || identity.PID < 1 {
 		return errors.New("Binding child control identity is incomplete")
 	}
 	return nil

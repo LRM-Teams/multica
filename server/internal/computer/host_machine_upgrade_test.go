@@ -54,7 +54,7 @@ func TestHostMachineUpgradeJournalIsPrivateAndRoundTrips(t *testing.T) {
 }
 
 func TestHostMachineUpgradeSameOperationIsIgnoredWhileActive(t *testing.T) {
-	identity := BindingChildIdentity{WorkspaceID: "workspace-a", StartIdentity: "start-3", PID: 8051}
+	identity := BindingChildIdentity{WorkspaceID: "workspace-a", DaemonInstanceID: "start-3", PID: 8051}
 	host := &Host{runtimeSets: map[string]hostBindingRuntimeSet{
 		"workspace-a": {
 			Identity: identity,
@@ -79,7 +79,7 @@ func TestHostMachineUpgradeSameOperationIsIgnoredWhileActive(t *testing.T) {
 }
 
 func TestHostMachineUpgradeDifferentOperationReturnsBusy(t *testing.T) {
-	identity := BindingChildIdentity{WorkspaceID: "workspace-a", StartIdentity: "start-3", PID: 8051}
+	identity := BindingChildIdentity{WorkspaceID: "workspace-a", DaemonInstanceID: "start-3", PID: 8051}
 	host := &Host{runtimeSets: map[string]hostBindingRuntimeSet{
 		"workspace-a": {
 			Identity: identity,
@@ -101,7 +101,7 @@ func TestHostMachineUpgradeDifferentOperationReturnsBusy(t *testing.T) {
 }
 
 func TestHostControlForwardsComputerControlBusy(t *testing.T) {
-	identity := BindingChildIdentity{WorkspaceID: "workspace-a", StartIdentity: "start-3", PID: 8051}
+	identity := BindingChildIdentity{WorkspaceID: "workspace-a", DaemonInstanceID: "start-3", PID: 8051}
 	control := NewHostControl("owner-secret", NewProcessCapacity(1), HostControlCallbacks{
 		Current: func(got BindingChildIdentity) bool { return got == identity },
 		MachineActions: func(context.Context, BindingChildIdentity, json.RawMessage) error {
@@ -128,7 +128,7 @@ func TestHostControlForwardsComputerControlBusy(t *testing.T) {
 }
 
 func TestHostMachineUpgradeEmptyRuntimeUsesCurrentBindingRuntime(t *testing.T) {
-	identity := BindingChildIdentity{WorkspaceID: "workspace-a", StartIdentity: "start-3", PID: 8051}
+	identity := BindingChildIdentity{WorkspaceID: "workspace-a", DaemonInstanceID: "start-3", PID: 8051}
 	host := &Host{runtimeSets: map[string]hostBindingRuntimeSet{
 		"workspace-a": {
 			Identity: identity,
@@ -172,14 +172,14 @@ func TestHostMachineUpgradePreparesEveryChildAndSuccessorConverges(t *testing.T)
 	newReadyHost := func(pidBase int) *Host {
 		host, err := NewHost(HostConfig{
 			ControlToken: controlToken,
-			Spawn: func(workspaceID, startIdentity string) (BindingChild, error) {
+			Spawn: func(workspaceID string) (BindingChild, error) {
 				pid := pidBase
 				if workspaceID == workspaceIDs[1] {
 					pid++
 				}
 				return &readySupervisorChild{
 					supervisorTestChild: newSupervisorTestChild(pid), controlEndpoint: childControl,
-					workspaceID: workspaceID, startIdentity: startIdentity,
+					workspaceID: workspaceID, daemonInstanceID: fmt.Sprintf("child-%d", pid),
 				}, nil
 			},
 		})
@@ -197,7 +197,7 @@ func TestHostMachineUpgradePreparesEveryChildAndSuccessorConverges(t *testing.T)
 				t.Fatalf("missing Binding %s", workspaceID)
 			}
 			host.runtimeSets[workspaceID] = hostBindingRuntimeSet{
-				Identity:    BindingChildIdentity{WorkspaceID: workspaceID, StartIdentity: record.StartIdentity(), PID: pid},
+				Identity:    BindingChildIdentity{WorkspaceID: workspaceID, DaemonInstanceID: record.DaemonInstanceID(), PID: pid},
 				Runtimes:    []hostBindingRuntime{{ID: runtimeIDs[index], WorkspaceID: workspaceID, Provider: "pi"}},
 				DaemonToken: "runtime-token-" + workspaceID, ExpiresAt: time.Now().Add(time.Hour),
 			}
@@ -301,10 +301,10 @@ func TestRecoverSuccessorRejectsLivePredecessor(t *testing.T) {
 	}
 	host, err := NewHost(HostConfig{
 		ControlToken: "token",
-		Spawn: func(workspaceID, startIdentity string) (BindingChild, error) {
+		Spawn: func(workspaceID string) (BindingChild, error) {
 			return &readySupervisorChild{
 				supervisorTestChild: newSupervisorTestChild(9201),
-				workspaceID:         workspaceID, startIdentity: startIdentity,
+				workspaceID:         workspaceID, daemonInstanceID: "child-9201",
 			}, nil
 		},
 	})
@@ -319,7 +319,7 @@ func TestRecoverSuccessorRejectsLivePredecessor(t *testing.T) {
 	}
 	host.runtimeMu.Lock()
 	host.runtimeSets["workspace-a"] = hostBindingRuntimeSet{
-		Identity:    BindingChildIdentity{WorkspaceID: "workspace-a", StartIdentity: record.StartIdentity(), PID: pid},
+		Identity:    BindingChildIdentity{WorkspaceID: "workspace-a", DaemonInstanceID: record.DaemonInstanceID(), PID: pid},
 		Runtimes:    []hostBindingRuntime{{ID: "runtime-a", WorkspaceID: "workspace-a", Provider: "pi"}},
 		DaemonToken: "runtime-token", ExpiresAt: time.Now().Add(time.Hour),
 	}

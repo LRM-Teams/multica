@@ -14,11 +14,11 @@ import (
 )
 
 type persistedRunnerState struct {
-	WorkspaceID   string    `json:"workspaceId"`
-	StartIdentity string    `json:"startIdentity"`
-	OwnerPID      int       `json:"ownerPid"`
-	RunnerPID     int       `json:"runnerPid"`
-	StartedAt     time.Time `json:"startedAt"`
+	WorkspaceID      string    `json:"workspaceId"`
+	DaemonInstanceID string    `json:"daemonInstanceId"`
+	OwnerPID         int       `json:"ownerPid"`
+	RunnerPID        int       `json:"runnerPid"`
+	StartedAt        time.Time `json:"startedAt"`
 }
 
 func runnerStateDir(root, workspaceID string) string {
@@ -66,7 +66,7 @@ func writeRunnerState(root string, state persistedRunnerState) error {
 	if path == "" {
 		return nil
 	}
-	if state.OwnerPID < 1 || strings.TrimSpace(state.StartIdentity) == "" {
+	if state.OwnerPID < 1 {
 		return errors.New("runner state identity is incomplete")
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -136,7 +136,7 @@ func writePrivateBytes(path string, data []byte) error {
 	return os.Rename(temporaryPath, path)
 }
 
-func removeRunnerState(root, workspaceID, startIdentity string, pid int) error {
+func removeRunnerState(root, workspaceID, daemonInstanceID string, pid int) error {
 	path := runnerStatePath(root, workspaceID)
 	if path == "" {
 		return nil
@@ -149,7 +149,10 @@ func removeRunnerState(root, workspaceID, startIdentity string, pid int) error {
 		return err
 	}
 	storedPID, err := readRunnerPID(runnerPIDPath(root, workspaceID))
-	if err != nil || state.StartIdentity != startIdentity || storedPID != pid {
+	if err != nil || storedPID != pid {
+		return nil
+	}
+	if daemonInstanceID != "" && state.DaemonInstanceID != daemonInstanceID {
 		return nil
 	}
 	for _, current := range []string{runnerConnectedPath(root, workspaceID), runnerPIDPath(root, workspaceID), path} {
@@ -160,7 +163,7 @@ func removeRunnerState(root, workspaceID, startIdentity string, pid int) error {
 	return os.Remove(filepath.Dir(path))
 }
 
-func discardRunnerStateAfterSpawnFailure(root, workspaceID, startIdentity string, pid int) error {
+func discardRunnerStateAfterSpawnFailure(root, workspaceID, daemonInstanceID string, pid int) error {
 	path := runnerStatePath(root, workspaceID)
 	if path == "" {
 		return nil
@@ -169,7 +172,10 @@ func discardRunnerStateAfterSpawnFailure(root, workspaceID, startIdentity string
 	if os.IsNotExist(err) {
 		return nil
 	}
-	if err != nil || state.StartIdentity != startIdentity || state.RunnerPID != pid {
+	if err != nil || state.RunnerPID != pid {
+		return err
+	}
+	if daemonInstanceID != "" && state.DaemonInstanceID != daemonInstanceID {
 		return err
 	}
 	for _, current := range []string{runnerConnectedPath(root, workspaceID), runnerPIDPath(root, workspaceID), path} {
@@ -205,9 +211,9 @@ func readRunnerPID(path string) (int, error) {
 }
 
 type recoveredRunner struct {
-	WorkspaceID   string
-	StartIdentity string
-	PID           int
+	WorkspaceID      string
+	DaemonInstanceID string
+	PID              int
 }
 
 func recoverRunnerStates(root string, logger *slog.Logger) ([]recoveredRunner, error) {
@@ -249,10 +255,10 @@ func recoverRunnerStates(root string, logger *slog.Logger) ([]recoveredRunner, e
 			alive, known = processAlive(pid)
 		}
 		if known && alive {
-			// Raft 1.0.17 adopts the live pidfile owner. It does not compare
-			// a process-start identity; that fence is always empty on macOS.
+			// Adopt the live pidfile owner. Raft 1.0.17 does the same and
+			// does not compare a Host-minted process-start ticket.
 			adopted = append(adopted, recoveredRunner{
-				WorkspaceID: state.WorkspaceID, StartIdentity: state.StartIdentity, PID: pid,
+				WorkspaceID: state.WorkspaceID, DaemonInstanceID: state.DaemonInstanceID, PID: pid,
 			})
 			continue
 		}

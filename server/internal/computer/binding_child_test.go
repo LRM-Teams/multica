@@ -98,11 +98,11 @@ func TestStartBindingRunnerRequiresWorkspace(t *testing.T) {
 	}
 }
 
-func TestBindingChildBootstrapRoundTripPublishesExactStartIdentity(t *testing.T) {
+func TestBindingChildBootstrapRoundTripPublishesChildDaemonInstance(t *testing.T) {
 	t.Setenv("MULTICA_BINDING_CHILD_HELPER", "ready")
 	bootstrap := BindingChildBootstrap{
 		ProtocolVersion: BindingChildProtocolVersion, WorkspaceID: "workspace-a",
-		ComputerID: "computer-a", StartIdentity: "start-7", Environment: "test",
+		ComputerID: "computer-a", Environment: "test",
 		ServerBaseURL: "https://test.example.com", ServiceEndpoint: "unix:///tmp/multica-test-service.sock",
 		BindingsRoot: "/tmp/computer-a", WorkspacesRoot: "/tmp/workspaces-a",
 	}
@@ -126,8 +126,8 @@ func TestBindingChildBootstrapRoundTripPublishesExactStartIdentity(t *testing.T)
 	if err != nil {
 		t.Fatalf("AwaitReady: %v", err)
 	}
-	if ready.WorkspaceID != bootstrap.WorkspaceID || ready.StartIdentity != bootstrap.StartIdentity {
-		t.Fatalf("ready identity = %#v, want workspace %q start %q", ready, bootstrap.WorkspaceID, bootstrap.StartIdentity)
+	if ready.WorkspaceID != bootstrap.WorkspaceID || ready.DaemonInstanceID == "" {
+		t.Fatalf("ready identity = %#v, want workspace %q and a child daemon instance", ready, bootstrap.WorkspaceID)
 	}
 	if ready.PID != child.PID() {
 		t.Fatalf("ready pid = %d, want child pid %d", ready.PID, child.PID())
@@ -137,11 +137,11 @@ func TestBindingChildBootstrapRoundTripPublishesExactStartIdentity(t *testing.T)
 	}
 }
 
-func TestBindingChildReadyRejectsStaleStartIdentity(t *testing.T) {
+func TestBindingChildReadyRejectsMissingDaemonInstance(t *testing.T) {
 	t.Setenv("MULTICA_BINDING_CHILD_HELPER", "stale")
 	bootstrap := BindingChildBootstrap{
 		ProtocolVersion: BindingChildProtocolVersion, WorkspaceID: "workspace-a",
-		ComputerID: "computer-a", StartIdentity: "start-7", Environment: "production",
+		ComputerID: "computer-a", Environment: "production",
 		ServerBaseURL: "https://api.leagent.me", ServiceEndpoint: "unix:///tmp/multica-test-service.sock",
 		BindingsRoot: "/tmp/computer-a", WorkspacesRoot: "/tmp/workspaces-a",
 	}
@@ -154,8 +154,8 @@ func TestBindingChildReadyRejectsStaleStartIdentity(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if _, err := child.AwaitReady(ctx); err == nil || !strings.Contains(err.Error(), "start identity") {
-		t.Fatalf("AwaitReady error = %v, want start identity rejection", err)
+	if _, err := child.AwaitReady(ctx); err == nil || !strings.Contains(err.Error(), "daemon instance") {
+		t.Fatalf("AwaitReady error = %v, want daemon instance rejection", err)
 	}
 	if class := child.Wait(); class != RunnerExitGraceful {
 		t.Fatalf("helper exit class = %s, want graceful", class)
@@ -173,11 +173,15 @@ func TestBindingChildProtocolHelper(t *testing.T) {
 	}
 	ready := BindingChildReady{
 		ProtocolVersion: BindingChildProtocolVersion, WorkspaceID: bootstrap.WorkspaceID,
-		StartIdentity: bootstrap.StartIdentity, PID: os.Getpid(),
+		DaemonInstanceID: "child-instance-1", PID: os.Getpid(),
 		RunnerEndpoint: "unix:///tmp/multica-test-runner.sock",
 	}
 	if mode == "stale" {
-		ready.StartIdentity = "stale-start"
+		ready.DaemonInstanceID = ""
+		if err := json.NewEncoder(os.Stdout).Encode(ready); err != nil {
+			os.Exit(3)
+		}
+		os.Exit(0)
 	}
 	if err := WriteBindingChildReady(os.Stdout, ready); err != nil {
 		os.Exit(3)

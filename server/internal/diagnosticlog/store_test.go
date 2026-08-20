@@ -34,7 +34,7 @@ func TestServiceAndRunnerStreamsAreScopedAndVersioned(t *testing.T) {
 	runner, err := store.Runner(RunnerOptions{
 		Environment:       EnvironmentProduction,
 		WorkspaceID:       testWorkspaceID,
-		StartIdentity:     "start-identity-1",
+		DaemonInstanceID:  "start-identity-1",
 		ComputerID:        testComputerID,
 		ServiceGeneration: "service-generation-1",
 	})
@@ -82,7 +82,7 @@ func TestServiceAndRunnerStreamsAreScopedAndVersioned(t *testing.T) {
 	assertField(t, runnerRecord, "scope", "runner")
 	assertField(t, runnerRecord, "environment", string(EnvironmentProduction))
 	assertField(t, runnerRecord, "workspaceId", testWorkspaceID)
-	assertField(t, runnerRecord, "startIdentity", "start-identity-1")
+	assertField(t, runnerRecord, "daemonInstanceId", "start-identity-1")
 	assertField(t, runnerRecord, "source_message_id", "55555555-5555-4555-8555-555555555555")
 
 	for _, path := range []string{root, filepath.Dir(runnerPath)} {
@@ -112,8 +112,8 @@ func TestRunnerRejectsInvalidDestination(t *testing.T) {
 		t.Fatal("Service accepted an empty serviceGeneration")
 	}
 	tests := []RunnerOptions{
-		{Environment: "staging", WorkspaceID: testWorkspaceID, StartIdentity: "start-1"},
-		{Environment: EnvironmentProduction, WorkspaceID: "../../escape", StartIdentity: "start-1"},
+		{Environment: "staging", WorkspaceID: testWorkspaceID, DaemonInstanceID: "start-1"},
+		{Environment: EnvironmentProduction, WorkspaceID: "../../escape", DaemonInstanceID: "start-1"},
 		{Environment: EnvironmentProduction, WorkspaceID: testWorkspaceID},
 	}
 	for _, options := range tests {
@@ -128,7 +128,7 @@ func TestRunnerRejectsInvalidDestination(t *testing.T) {
 	if err := service.Record(Event{Name: EventRunnerStateChanged, Level: LevelInfo, Component: "test"}); err == nil {
 		t.Fatal("Service accepted a Runner-scoped event")
 	}
-	runner, err := store.Runner(RunnerOptions{Environment: EnvironmentProduction, WorkspaceID: testWorkspaceID, StartIdentity: "start-1"})
+	runner, err := store.Runner(RunnerOptions{Environment: EnvironmentProduction, WorkspaceID: testWorkspaceID, DaemonInstanceID: "start-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,7 +290,7 @@ func TestCleanupEnforcesRetentionStreamAndGlobalBudgets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runner, err := store.Runner(RunnerOptions{Environment: EnvironmentProduction, WorkspaceID: testWorkspaceID, StartIdentity: "start-identity-1"})
+	runner, err := store.Runner(RunnerOptions{Environment: EnvironmentProduction, WorkspaceID: testWorkspaceID, DaemonInstanceID: "start-identity-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -410,7 +410,7 @@ func TestSymlinkEscapeIsRejected(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(root, "runners")); err != nil {
 		t.Skipf("symlink unsupported: %v", err)
 	}
-	if _, err := store.Runner(RunnerOptions{Environment: EnvironmentProduction, WorkspaceID: testWorkspaceID, StartIdentity: "start-1"}); err == nil {
+	if _, err := store.Runner(RunnerOptions{Environment: EnvironmentProduction, WorkspaceID: testWorkspaceID, DaemonInstanceID: "start-1"}); err == nil {
 		t.Fatal("Runner succeeded through symlink, want rejection")
 	}
 	entries, err := os.ReadDir(outside)

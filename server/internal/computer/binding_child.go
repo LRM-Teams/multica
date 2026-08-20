@@ -142,8 +142,8 @@ func (c *BindingRunner) observeReady(stdout io.ReadCloser) {
 			err = fmt.Errorf("Binding child ready protocol version %d does not match bootstrap %d", ready.ProtocolVersion, c.bootstrap.ProtocolVersion)
 		case strings.TrimSpace(ready.WorkspaceID) != c.bootstrap.WorkspaceID:
 			err = fmt.Errorf("Binding child ready workspace %q does not match bootstrap %q", ready.WorkspaceID, c.bootstrap.WorkspaceID)
-		case ready.StartIdentity != c.bootstrap.StartIdentity:
-			err = fmt.Errorf("Binding child ready start identity does not match bootstrap")
+		case strings.TrimSpace(ready.DaemonInstanceID) == "":
+			err = fmt.Errorf("Binding child ready daemon instance is missing")
 		case c.cmd == nil || c.cmd.Process == nil || ready.PID != c.cmd.Process.Pid:
 			err = fmt.Errorf("Binding child ready pid %d does not match process", ready.PID)
 		case !validLocalControlEndpoint(ready.RunnerEndpoint):

@@ -21,7 +21,7 @@ func TestRunnerRecordCanSpawnOnlyWhenWantedAndIdle(t *testing.T) {
 	if rec.CanSpawn(true, now) {
 		t.Fatal("running child must not spawn again")
 	}
-	if !rec.ObserveReady(rec.StartIdentity()) || rec.Lifecycle != RunnerLifecycleRunning {
+	if !rec.ObserveReady("child-a") || rec.Lifecycle != RunnerLifecycleRunning {
 		t.Fatal("matching child Ready did not move lifecycle to running")
 	}
 }
@@ -30,7 +30,7 @@ func TestRunnerCrashRestartsAfterBackoffThenDegrades(t *testing.T) {
 	now := time.Date(2026, 8, 13, 15, 0, 0, 0, time.UTC)
 	rec := &RunnerRecord{Lifecycle: RunnerLifecycleStopped}
 	rec.ObserveSpawn()
-	rec.ObserveReady(rec.StartIdentity())
+	rec.ObserveReady("child-a")
 	rec.ObserveExit(now, RunnerExitCrash)
 	if rec.Lifecycle != RunnerLifecycleCrashed {
 		t.Fatalf("first crash lifecycle = %s, want crashed", rec.Lifecycle)
@@ -43,10 +43,10 @@ func TestRunnerCrashRestartsAfterBackoffThenDegrades(t *testing.T) {
 	}
 
 	rec.ObserveSpawn()
-	rec.ObserveReady(rec.StartIdentity())
+	rec.ObserveReady("child-b")
 	rec.ObserveExit(now.Add(time.Second), RunnerExitCrash)
 	rec.ObserveSpawn()
-	rec.ObserveReady(rec.StartIdentity())
+	rec.ObserveReady("child-c")
 	rec.ObserveExit(now.Add(2*time.Second), RunnerExitCrash)
 	if rec.Lifecycle != RunnerLifecycleDegraded {
 		t.Fatalf("third crash in 60s lifecycle = %s, want degraded", rec.Lifecycle)
@@ -56,26 +56,29 @@ func TestRunnerCrashRestartsAfterBackoffThenDegrades(t *testing.T) {
 	}
 }
 
-func TestRunnerSpawnUsesFreshStartIdentityAcrossExit(t *testing.T) {
+func TestRunnerSpawnRecordsChildDaemonInstanceOnReady(t *testing.T) {
 	now := time.Date(2026, 8, 13, 15, 0, 0, 0, time.UTC)
 	rec := &RunnerRecord{Lifecycle: RunnerLifecycleStopped}
-	if rec.StartIdentity() != "" {
-		t.Fatalf("fresh start identity = %q", rec.StartIdentity())
+	if rec.DaemonInstanceID() != "" {
+		t.Fatalf("fresh daemon instance = %q", rec.DaemonInstanceID())
 	}
 	rec.ObserveSpawn()
-	rec.ObserveReady(rec.StartIdentity())
-	first := rec.StartIdentity()
-	if first == "" {
-		t.Fatal("ObserveSpawn must allocate a start identity")
+	if rec.DaemonInstanceID() != "" {
+		t.Fatal("ObserveSpawn must not mint a Host daemon instance")
+	}
+	if rec.ObserveReady("") {
+		t.Fatal("empty child Ready must not become running")
+	}
+	if !rec.ObserveReady("child-a") || rec.DaemonInstanceID() != "child-a" {
+		t.Fatal("ObserveReady must record the child-reported daemon instance")
 	}
 	rec.ObserveExit(now, RunnerExitGraceful)
-	if rec.StartIdentity() != first {
-		t.Fatal("ObserveExit must not reset start identity")
-	}
 	rec.ObserveSpawn()
-	rec.ObserveReady(rec.StartIdentity())
-	if rec.StartIdentity() == first {
-		t.Fatal("next spawn must not reuse the previous start identity")
+	if rec.DaemonInstanceID() != "" {
+		t.Fatal("next spawn must clear the previous child identity until Ready")
+	}
+	if !rec.ObserveReady("child-b") || rec.DaemonInstanceID() == "child-a" {
+		t.Fatal("next Ready must record a new child-reported daemon instance")
 	}
 }
 
@@ -83,7 +86,7 @@ func TestRunnerUnlinkedAndGracefulExits(t *testing.T) {
 	now := time.Date(2026, 8, 13, 15, 0, 0, 0, time.UTC)
 	rec := &RunnerRecord{}
 	rec.ObserveSpawn()
-	rec.ObserveReady(rec.StartIdentity())
+	rec.ObserveReady("child-a")
 	rec.ObserveExit(now, RunnerExitUnlinked)
 	if rec.Lifecycle != RunnerLifecycleDegraded || rec.CanSpawn(true, now) {
 		t.Fatalf("unlinked runner = %s spawn=%v", rec.Lifecycle, rec.CanSpawn(true, now))
@@ -91,7 +94,7 @@ func TestRunnerUnlinkedAndGracefulExits(t *testing.T) {
 
 	rec = &RunnerRecord{}
 	rec.ObserveSpawn()
-	rec.ObserveReady(rec.StartIdentity())
+	rec.ObserveReady("child-a")
 	rec.ObserveExit(now, RunnerExitGraceful)
 	if rec.Lifecycle != RunnerLifecycleStopped || !rec.CanSpawn(true, now) {
 		t.Fatalf("graceful stop = %s spawn=%v", rec.Lifecycle, rec.CanSpawn(true, now))

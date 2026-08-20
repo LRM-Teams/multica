@@ -17,7 +17,9 @@ not advance a task or satisfy a delivery gate.
 Users may create a V6 Run by sending `orchestrator_version=research-run-v6` and
 a Director. The homepage defaults to V6 and selects the first available Agent.
 Clients that omit `orchestrator_version` still create V5. `AssessV6Activation`
-remains an audit; it does not flip that omitted-version default.
+remains an audit; it does not flip that omitted-version default. User chat on a
+V6 Run wakes the current Director, not a workspace Fleet Lead. `PATCH
+/api/research/v6/release` can close new V6 creates and pause existing V6 Runs.
 
 When the dispatch contract is `research-run-v6`, the durable Work Manifest and
 Director Brief are the complete authority for the current cycle. Never infer

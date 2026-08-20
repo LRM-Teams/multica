@@ -5623,4 +5623,41 @@ export class ApiClient {
     void workspaceId;
     return html;
   }
+
+  async getResearchV6Release(): Promise<{
+    workspace_id: string;
+    create_enabled: boolean;
+    maintenance_reason: string;
+    paused_run_count: number;
+  }> {
+    const { ResearchV6ReleaseSchema } = await import("../research/schemas");
+    const raw = await this.fetch("/api/research/v6/release");
+    return parseWithFallback(raw, ResearchV6ReleaseSchema, {
+      workspace_id: "",
+      create_enabled: true,
+      maintenance_reason: "",
+      paused_run_count: 0,
+    }, { endpoint: "GET /api/research/v6/release" });
+  }
+
+  async listResearchMonitors(): Promise<{ monitors: Array<{ id: string; status: string; last_cycle_status?: string }> }> {
+    const { ResearchMonitorListSchema } = await import("../research/schemas");
+    const raw = await this.fetch("/api/research/v6/monitors");
+    return parseWithFallback(raw, ResearchMonitorListSchema, { monitors: [] }, {
+      endpoint: "GET /api/research/v6/monitors",
+    });
+  }
+
+  async getResearchProductionWindow(): Promise<{
+    llm_judge: boolean;
+    quality_signal: string;
+    report?: { sufficient_data?: boolean; within_bounds?: boolean };
+  }> {
+    const { ResearchProductionWindowSchema } = await import("../research/schemas");
+    const raw = await this.fetch("/api/research/v6/production-window");
+    return parseWithFallback(raw, ResearchProductionWindowSchema, {
+      llm_judge: false,
+      quality_signal: "user_confirmed_delivery",
+    }, { endpoint: "GET /api/research/v6/production-window" });
+  }
 }

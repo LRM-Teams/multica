@@ -115,6 +115,8 @@ export const ResearchSessionSchema = z
     list_progress: safeOptionalProjection(ResearchSessionListProgressSchema),
     active_assignments: safeOptionalProjection(ResearchActiveAssignmentsSchema),
     latest_outcomes: safeOptionalProjection(ResearchLatestOutcomesSchema),
+    orchestrator_version: z.string().optional().default(""),
+    director_agent_id: z.string().nullable().optional().default(null),
   })
   .passthrough();
 
@@ -645,3 +647,36 @@ export const EMPTY_RESEARCH_SNAPSHOT: ResearchSessionSnapshot = {
   messages: [],
   thought_strategies: [],
 };
+
+export const ResearchV6ReleaseSchema = z.object({
+  workspace_id: z.string().optional().default(""),
+  create_enabled: z.boolean().optional().default(true),
+  maintenance_reason: z.string().optional().default(""),
+  paused_run_count: z.number().optional().default(0),
+});
+
+export const ResearchMonitorListSchema = z.object({
+  monitors: z
+    .array(
+      z.object({
+        id: z.string(),
+        status: z.string().optional().default(""),
+        last_cycle_status: z.string().optional(),
+      }).passthrough(),
+    )
+    .optional()
+    .default([]),
+});
+
+export const ResearchProductionWindowSchema = z.object({
+  llm_judge: z.boolean().optional().default(false),
+  quality_signal: z.string().optional().default("user_confirmed_delivery"),
+  report: z
+    .object({
+      sufficient_data: z.boolean().optional(),
+      within_bounds: z.boolean().optional(),
+    })
+    .passthrough()
+    .optional(),
+});
+

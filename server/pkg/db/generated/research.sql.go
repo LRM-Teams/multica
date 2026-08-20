@@ -1560,6 +1560,22 @@ WITH ranked AS (
     AND t.plan_version = s.plan_version
     AND t.status IN ('dispatching', 'running')
     AND t.assigned_agent_id IS NOT NULL
+    AND s.orchestrator_version <> 'research-run-v6'
+  UNION ALL
+  SELECT
+    w.session_id,
+    w.assigned_agent_id AS agent_id,
+    'member'::text AS role,
+    w.id AS task_id,
+    COALESCE(NULLIF(w.reason, ''), w.kind)::text AS task_title,
+    w.status AS state,
+    row_number() OVER (PARTITION BY w.session_id ORDER BY w.priority DESC, w.started_at DESC NULLS LAST, w.created_at DESC) AS position
+  FROM research_work_item w
+  JOIN research_session s ON s.id = w.session_id
+  WHERE w.workspace_id = $1
+    AND s.orchestrator_version = 'research-run-v6'
+    AND w.status IN ('dispatching', 'running')
+    AND w.assigned_agent_id IS NOT NULL
 )
 SELECT session_id, agent_id, role, task_id, task_title, state
 FROM ranked
@@ -2190,7 +2206,20 @@ WITH task_progress AS (
   WHERE t.workspace_id = $1
     AND t.goal_version = s.goal_version
     AND t.plan_version = s.plan_version
+    AND s.orchestrator_version <> 'research-run-v6'
   GROUP BY t.session_id
+), work_item_progress AS (
+  SELECT
+    w.session_id,
+    count(*) FILTER (WHERE w.status <> 'cancelled') AS task_total,
+    count(*) FILTER (WHERE w.status = 'succeeded') AS task_completed,
+    count(*) FILTER (WHERE w.status IN ('dispatching', 'running', 'ready', 'enqueued', 'pending')) AS task_running,
+    count(*) FILTER (WHERE w.status IN ('failed', 'stale')) AS task_blocked
+  FROM research_work_item w
+  JOIN research_session s ON s.id = w.session_id
+  WHERE w.workspace_id = $1
+    AND s.orchestrator_version = 'research-run-v6'
+  GROUP BY w.session_id
 ), evidence_progress AS (
   SELECT session_id, count(*) AS evidence_count,
     count(*) FILTER (WHERE created_at >= now() - interval '24 hours') AS today_evidence_count
@@ -2214,10 +2243,10 @@ WITH task_progress AS (
 )
 SELECT
   s.id AS session_id,
-  COALESCE(tp.task_total, 0)::bigint AS task_total,
-  COALESCE(tp.task_completed, 0)::bigint AS task_completed,
-  COALESCE(tp.task_running, 0)::bigint AS task_running,
-  COALESCE(tp.task_blocked, 0)::bigint AS task_blocked,
+  COALESCE(wp.task_total, tp.task_total, 0)::bigint AS task_total,
+  COALESCE(wp.task_completed, tp.task_completed, 0)::bigint AS task_completed,
+  COALESCE(wp.task_running, tp.task_running, 0)::bigint AS task_running,
+  COALESCE(wp.task_blocked, tp.task_blocked, 0)::bigint AS task_blocked,
   COALESCE(ep.evidence_count, 0)::bigint AS evidence_count,
   COALESCE(ep.today_evidence_count, 0)::bigint AS today_evidence_count,
   COALESCE(np.node_count, 0)::bigint AS node_count,
@@ -2225,15 +2254,16 @@ SELECT
   (s.status = 'awaiting_user_confirm') AS awaiting_user_action,
   COALESCE((CASE
     WHEN s.status = 'awaiting_user_confirm' THEN 'user_confirmation'
-    WHEN COALESCE(tp.task_blocked, 0) > 0 THEN 'blocked_tasks'
+    WHEN COALESCE(wp.task_blocked, tp.task_blocked, 0) > 0 THEN 'blocked_tasks'
     WHEN s.status = 'failed' AND length(s.last_error) > 0 THEN 'recoverable_failure'
-    WHEN s.status = 'running' AND COALESCE(tp.task_running, 0) = 0 AND s.last_progress_at < now() - interval '15 minutes' THEN 'stalled'
+    WHEN s.status = 'running' AND COALESCE(wp.task_running, tp.task_running, 0) = 0 AND s.last_progress_at < now() - interval '15 minutes' THEN 'stalled'
     ELSE NULL
   END)::text, '')::text AS attention_kind,
-  COALESCE((s.status = 'failed' AND length(s.last_error) > 0) OR COALESCE(tp.task_blocked, 0) > 0, false)::boolean AS recoverable,
+  COALESCE((s.status = 'failed' AND length(s.last_error) > 0) OR COALESCE(wp.task_blocked, tp.task_blocked, 0) > 0, false)::boolean AS recoverable,
   s.last_progress_at
 FROM research_session s
 LEFT JOIN task_progress tp ON tp.session_id = s.id
+LEFT JOIN work_item_progress wp ON wp.session_id = s.id
 LEFT JOIN evidence_progress ep ON ep.session_id = s.id
 LEFT JOIN node_progress np ON np.session_id = s.id
 LEFT JOIN question_progress qp ON qp.session_id = s.id

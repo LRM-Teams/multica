@@ -46,6 +46,14 @@ type ResearchRunV6Bootstrap interface {
 	BootstrapV6(context.Context, V6BootstrapInput) (Run, error)
 }
 
+type ResearchSourceIngestion interface {
+	PersistSourceIngestion(context.Context, PersistSourceIngestionInput) (PersistSourceIngestionResult, error)
+}
+
+type ResearchCanonicalRebuild interface {
+	RebuildCanonicalRun(context.Context, string, string) (RebuiltCanonicalRun, error)
+}
+
 type ResearchRunDirectorControl interface {
 	AssignV6Director(context.Context, AssignV6DirectorInput) (V6DirectorAssignment, error)
 	MarkV6DirectorUnavailable(context.Context, MarkV6DirectorUnavailableInput) (V6DirectorAssignment, error)
@@ -65,6 +73,8 @@ type ResearchRunReconciler interface {
 var _ ResearchRun = (*Engine)(nil)
 var _ ResearchRunSubmission = (*Engine)(nil)
 var _ ResearchRunV6Bootstrap = (*Engine)(nil)
+var _ ResearchSourceIngestion = (*Engine)(nil)
+var _ ResearchCanonicalRebuild = (*Engine)(nil)
 var _ ResearchRunReconciler = (*Engine)(nil)
 var _ ResearchRunDirectorControl = (*Engine)(nil)
 var _ V6ProjectionReader = (*Engine)(nil)

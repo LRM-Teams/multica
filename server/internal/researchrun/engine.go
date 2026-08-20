@@ -120,6 +120,20 @@ func (e *Engine) Create(ctx context.Context, in StartInput) (Run, error) {
 	return e.store.GetRun(ctx, run.SessionID, in.WorkspaceID)
 }
 
+func (e *Engine) PersistSourceIngestion(ctx context.Context, in PersistSourceIngestionInput) (PersistSourceIngestionResult, error) {
+	if e == nil || e.store == nil {
+		return PersistSourceIngestionResult{}, errors.New("research run engine is unavailable")
+	}
+	return e.store.PersistSourceIngestion(ctx, in)
+}
+
+func (e *Engine) RebuildCanonicalRun(ctx context.Context, sessionID, workspaceID string) (RebuiltCanonicalRun, error) {
+	if e == nil || e.store == nil {
+		return RebuiltCanonicalRun{}, errors.New("research run engine is unavailable")
+	}
+	return e.store.RebuildCanonicalRun(ctx, sessionID, workspaceID)
+}
+
 func (e *Engine) BootstrapV6(ctx context.Context, in V6BootstrapInput) (Run, error) {
 	if e == nil || e.store == nil {
 		return Run{}, errors.New("research run engine is unavailable")

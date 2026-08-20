@@ -924,7 +924,9 @@ func (s *PostgresStore) Complete(ctx context.Context, sessionID, workspaceID, us
 	if _, err = tx.Exec(ctx, `UPDATE research_session SET status = 'completed', stop_reason = 'user_confirmed', updated_at = now() WHERE id = $1::uuid`, sessionID); err != nil {
 		return Run{}, RunEvent{}, err
 	}
-	event, err := appendEvent(ctx, tx, workspaceID, sessionID, "run_completed", "run-completed", "user", userID, map[string]any{})
+	event, err := appendEvent(ctx, tx, workspaceID, sessionID, "run_completed", "run-completed", "user", userID, rebuildablePayload(map[string]any{
+		"status": "completed", "stop_reason": "user_confirmed",
+	}))
 	if err != nil {
 		return Run{}, RunEvent{}, err
 	}

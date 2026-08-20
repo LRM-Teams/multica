@@ -25,7 +25,9 @@ func TestMemoryCuratorRunStatus_StaleHeartbeatIsWaitingRuntime(t *testing.T) {
 		RETURNING id::text
 	`,  testWorkspaceID).Scan(&staleRuntimeID); err != nil {
 		t.Fatal(err)
-	}
+	
+	bindTestRuntimeOwner(t, "memory-curator-run-status-stale-daemon", testUserID)
+}
 	var curatorAgentID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (workspace_id, name, display_name, runtime_mode, runtime_id, owner_id, model)
@@ -72,7 +74,9 @@ func TestResolveActiveMemoryCurationTargetAgentIDs_StaleHeartbeatExcluded(t *tes
 		RETURNING id::text
 	`,  testWorkspaceID).Scan(&staleRuntimeID); err != nil {
 		t.Fatal(err)
-	}
+	
+	bindTestRuntimeOwner(t, "memory-curator-active-targets-stale-daemon", testUserID)
+}
 	var targetAgentID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (workspace_id, name, display_name, runtime_mode, runtime_id, owner_id, model)

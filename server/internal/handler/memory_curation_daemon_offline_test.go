@@ -25,7 +25,9 @@ func TestReconcileOfflineMemoryCurationAgentRuns_StaleHeartbeatSkips(t *testing.
 		RETURNING id::text
 	`,  testWorkspaceID).Scan(&staleRuntimeID); err != nil {
 		t.Fatal(err)
-	}
+	
+	bindTestRuntimeOwner(t, "memory-curation-reconcile-stale-daemon", testUserID)
+}
 	var agentID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (workspace_id, name, display_name, runtime_mode, runtime_id, owner_id, model)
@@ -88,7 +90,9 @@ func TestReportMemoryCurationRunResult_SkipsStaleHeartbeatSiblings(t *testing.T)
 		RETURNING id::text
 	`,  testWorkspaceID).Scan(&freshRuntimeID); err != nil {
 		t.Fatal(err)
-	}
+	
+	bindTestRuntimeOwner(t, "memory-curation-report-fresh-daemon", testUserID)
+}
 	var staleRuntimeID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, visibility, last_seen_at, updated_at) VALUES ($1,  'memory-curation-report-stale-daemon',  'Memory Curation Report Stale Runtime',  'local',  'codex',  'online', 
@@ -96,7 +100,9 @@ func TestReportMemoryCurationRunResult_SkipsStaleHeartbeatSiblings(t *testing.T)
 		RETURNING id::text
 	`,  testWorkspaceID).Scan(&staleRuntimeID); err != nil {
 		t.Fatal(err)
-	}
+	
+	bindTestRuntimeOwner(t, "memory-curation-report-stale-daemon", testUserID)
+}
 	var reportingAgentID, staleAgentID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (workspace_id, name, display_name, runtime_mode, runtime_id, owner_id, model)

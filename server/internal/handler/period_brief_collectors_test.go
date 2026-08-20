@@ -26,12 +26,22 @@ func TestEnsurePeriodBriefCollectors_CreatesPerLocalComputer(t *testing.T) {
 	// Second runtime on the same Computer must not create a second collector.
 	_ = seedMachineLockedRuntime(t, daemonA, "Laptop A Twin")
 
+	cloudDaemon := "cloud-box-" + uuid.NewString()[:8]
 	var cloudRuntimeID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (workspace_id, name, display_name, runtime_mode, provider, status, device_info, metadata, visibility, last_seen_at) VALUES ($1,  'cloud-box',  'Cloud Box',  'cloud',  $2,  'online',  '',  '{}'::jsonb,  'public',  now())
+		INSERT INTO agent_runtime (workspace_id, daemon_id, name, display_name, runtime_mode, provider, status, device_info, metadata, visibility, last_seen_at) VALUES ($1,  $2,  'cloud-box',  'Cloud Box',  'cloud',  $3,  'online',  '',  '{}'::jsonb,  'public',  now())
 		RETURNING id
-	`,  testWorkspaceID,  "cloud_collect_"+uuid.NewString()).Scan(&cloudRuntimeID); err != nil {
+	`,  testWorkspaceID,  cloudDaemon,  "cloud_collect_"+uuid.NewString()).Scan(&cloudRuntimeID); err != nil {
 		t.Fatalf("seed cloud runtime: %v", err)
+	}
+	// LRM-1570: the cloud runtime is its own Computer, owned via an active
+	// binding for its daemon (the caller is testUserID).
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO computer_workspace_bindings (
+			daemon_id, workspace_id, user_id, execution_token_hash, active
+		) VALUES ($1, $2, $3, 'cloud-collect-test', TRUE)
+	`, cloudDaemon, testWorkspaceID, testUserID); err != nil {
+		t.Fatalf("seed cloud owner binding: %v", err)
 	}
 	t.Cleanup(func() {
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, cloudRuntimeID)

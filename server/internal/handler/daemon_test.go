@@ -967,14 +967,16 @@ func TestDaemonRegister_DaemonTokenRuntimeOwnedByComputerBindingUser(t *testing.
 		t.Fatalf("DaemonRegister: status=%d body=%s", w.Code, w.Body.String())
 	}
 	var ownerID string
+	// LRM-1570: ownership is machine-level; the daemon-token register resolves
+	// the owner from the active binding, which the test asserts directly.
 	if err := testPool.QueryRow(ctx, `
-		SELECT owner_id::text FROM agent_runtime
-		WHERE workspace_id = $1 AND daemon_id = $2 AND provider = 'codex'
-	`, testWorkspaceID, daemonID).Scan(&ownerID); err != nil {
+		SELECT user_id::text FROM computer_workspace_bindings
+		WHERE daemon_id = $1 AND workspace_id = $2 AND active = TRUE
+	`, daemonID, testWorkspaceID).Scan(&ownerID); err != nil {
 		t.Fatal(err)
 	}
 	if ownerID != testUserID {
-		t.Fatalf("runtime owner_id = %q, want Computer binding user %q", ownerID, testUserID)
+		t.Fatalf("binding owner = %q, want Computer binding user %q", ownerID, testUserID)
 	}
 }
 

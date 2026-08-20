@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -265,13 +266,15 @@ func TestArchiveAgentsAndDeleteRuntime_PlanChanged(t *testing.T) {
 func createCascadeFixtureRuntime(t *testing.T, ctx context.Context, name string) string {
 	t.Helper()
 	var runtimeID string
+	daemonID := "cascade-daemon-" + uuid.NewString()
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at)
-		VALUES ($1,  NULL,  $2,  'cloud',  'cascade-test',  'online',  $3,  '{}'::jsonb,  now())
+		VALUES ($1,  $2,  $3,  'cloud',  'cascade-test',  'online',  $4,  '{}'::jsonb,  now())
 		RETURNING id
-	`,  testWorkspaceID,  name,  name+" device").Scan(&runtimeID); err != nil {
+	`,  testWorkspaceID,  daemonID,  name,  name+" device").Scan(&runtimeID); err != nil {
 		t.Fatalf("insert cascade fixture runtime: %v", err)
 	}
+	bindTestRuntimeOwner(t, daemonID, testUserID)
 	t.Cleanup(func() {
 		// Best-effort cleanup. The cascade endpoint deletes the runtime;
 		// these statements only matter when the test failed before the

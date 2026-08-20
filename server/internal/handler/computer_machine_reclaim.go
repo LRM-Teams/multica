@@ -56,15 +56,15 @@ func (h *Handler) ResolveComputerByMachineID(w http.ResponseWriter, r *http.Requ
 	}
 
 	rows, err := h.DB.Query(r.Context(), `
-SELECT DISTINCT o.daemon_id
+SELECT DISTINCT o.id
   FROM computers o
   JOIN computer_workspace_bindings b
-    ON b.daemon_id = o.daemon_id
+    ON b.daemon_id = o.id
  WHERE o.user_id = $1 AND o.machine_id = $2
    AND b.active = TRUE AND b.revoked_at IS NULL
    AND NOT EXISTS (
      SELECT 1 FROM daemon_registration_tombstone t
-      WHERE t.workspace_id = $3 AND t.daemon_id = o.daemon_id
+      WHERE t.workspace_id = $3 AND t.daemon_id = o.id
    )`,
 		userID, machineID, parseUUID(workspaceID))
 	if err != nil {

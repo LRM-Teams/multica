@@ -61,3 +61,30 @@ func (tx *queryRowFailingTx) QueryRow(ctx context.Context, sql string, args ...a
 	}
 	return tx.Tx.QueryRow(ctx, sql, args...)
 }
+
+type queryFailingTxStarter struct {
+	base        txStarter
+	sqlContains string
+	err         error
+}
+
+func (s queryFailingTxStarter) Begin(ctx context.Context) (pgx.Tx, error) {
+	tx, err := s.base.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &queryFailingTx{Tx: tx, sqlContains: s.sqlContains, err: s.err}, nil
+}
+
+type queryFailingTx struct {
+	pgx.Tx
+	sqlContains string
+	err         error
+}
+
+func (tx *queryFailingTx) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	if tx.err != nil && strings.Contains(sql, tx.sqlContains) {
+		return nil, tx.err
+	}
+	return tx.Tx.Query(ctx, sql, args...)
+}

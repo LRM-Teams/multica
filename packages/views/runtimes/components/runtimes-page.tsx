@@ -801,11 +801,11 @@ function MachineDetailView({
     runtimeListOptions(wsId),
   );
   const qc = useQueryClient();
-  const selectedCount = selectedAgentIds.size;
   const selectedAgents = useMemo(
     () => machineAgents.filter((agent) => selectedAgentIds.has(agent.id)),
     [machineAgents, selectedAgentIds],
   );
+  const selectedCount = selectedAgents.length;
   const allSelected =
     machineAgents.length > 0 && selectedCount === machineAgents.length;
 
@@ -848,7 +848,7 @@ function MachineDetailView({
     setSelect((prev) => ({ ...prev, busy: action }));
     try {
       const response = await api.bulkAgentLifecycle({
-        agent_ids: Array.from(selectedAgentIds),
+        agent_ids: selectedAgents.map((agent) => agent.id),
         action,
         ...(mode ? { mode } : {}),
       });

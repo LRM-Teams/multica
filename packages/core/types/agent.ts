@@ -634,7 +634,7 @@ export interface EnsureWindyResponse {
   dm_id?: string;
 }
 
-/** Idempotent Period Brief Agent (「周报」) ensure. */
+/** Retired path: archives leftover 周报 and returns 笔记助手 (写汇报 synthesizer). */
 export interface EnsurePeriodBriefAgentResponse {
   agent: Agent;
   created: boolean;

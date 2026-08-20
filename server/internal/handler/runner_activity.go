@@ -186,7 +186,7 @@ UPDATE computers
        os = COALESCE(NULLIF($3, ''), os),
        cli_version = COALESCE(NULLIF($4, ''), cli_version),
        machine_id = COALESCE(NULLIF($5, ''), machine_id)
- WHERE daemon_id = $1`,
+ WHERE id = $1`,
 		strings.TrimSpace(daemonID),
 		strings.TrimSpace(ready.DeviceName),
 		strings.TrimSpace(ready.OS),

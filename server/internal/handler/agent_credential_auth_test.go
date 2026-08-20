@@ -759,19 +759,25 @@ func TestEnsureDaemonAgentCredential_DoesNotRevokePreviousRuntimeOwnerCredential
 		"Credential Runtime Owner "+uuid.NewString()[:8],
 		"credential-runtime-owner-"+uuid.NewString()+"@multica.test",
 	)
+	// LRM-1570: ownership is machine-level; "change runtime owner" means
+	// re-pointing the daemon's active binding to the new owner.
 	if _, err := testPool.Exec(ctx, `
-		UPDATE agent_runtime
-		SET owner_id = $1
-		WHERE id = $2
-	`, newOwnerID, runtimeID); err != nil {
+		INSERT INTO computer_workspace_bindings (
+			daemon_id, workspace_id, user_id, execution_token_hash, active, revoked_at
+		) VALUES ($1, $2, $3, 'owner-scope-test', TRUE, NULL)
+		ON CONFLICT (daemon_id, workspace_id)
+		DO UPDATE SET user_id = EXCLUDED.user_id, active = TRUE, revoked_at = NULL
+	`, daemonID, testWorkspaceID, newOwnerID); err != nil {
 		t.Fatalf("change runtime owner: %v", err)
 	}
 	t.Cleanup(func() {
 		_, _ = testPool.Exec(context.Background(), `
-			UPDATE agent_runtime
-			SET owner_id = $1
-			WHERE id = $2
-		`, testUserID, runtimeID)
+			INSERT INTO computer_workspace_bindings (
+				daemon_id, workspace_id, user_id, execution_token_hash, active, revoked_at
+			) VALUES ($1, $2, $3, 'owner-scope-test', TRUE, NULL)
+			ON CONFLICT (daemon_id, workspace_id)
+			DO UPDATE SET user_id = EXCLUDED.user_id, active = TRUE, revoked_at = NULL
+		`, daemonID, testWorkspaceID, testUserID)
 	})
 
 	req := newDaemonTokenRequest(

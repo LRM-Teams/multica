@@ -31,13 +31,15 @@ func TestTeardownRuntimeWithoutActiveAgents_ProductionScaleSelfFKLookup(t *testi
 		"kiro":  &victimRuntimeID,
 		"codex": &decoyRuntimeID,
 	} {
+		scaleDaemon := "scale-" + uuid.NewString()
 		if err := tx.QueryRow(setupCtx, `
 			INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at)
 			VALUES ($1,  $2,  $3,  'local',  $4,  'offline',  $3,  '{}'::jsonb,  now())
 			RETURNING id
-		`,  testWorkspaceID,  "scale-"+uuid.NewString(),  "Scale "+provider+" "+uuid.NewString()[:8],  provider).Scan(target); err != nil {
+		`,  testWorkspaceID,  scaleDaemon,  "Scale "+provider+" "+uuid.NewString()[:8],  provider).Scan(target); err != nil {
 			t.Fatalf("insert %s scale runtime: %v", provider, err)
 		}
+		bindTestRuntimeOwner(t, scaleDaemon, testUserID)
 	}
 
 	var victimAgentID, decoyAgentID string
@@ -871,6 +873,7 @@ func createBulkDaemonRuntimeWithMode(t *testing.T, ctx context.Context, daemonID
 	`, testWorkspaceID, daemonID, name, mode, provider, status, name+" device").Scan(&runtimeID); err != nil {
 		t.Fatalf("insert bulk daemon runtime: %v", err)
 	}
+	bindTestRuntimeOwner(t, daemonID, testUserID)
 	t.Cleanup(func() {
 		testPool.Exec(context.Background(), `DELETE FROM agent WHERE runtime_id = $1`, runtimeID)
 		testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)

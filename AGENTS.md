@@ -165,9 +165,11 @@ make db-reset         # Drop + recreate current env's DB, then re-run migrations
 
 CI runs on Node 22 and Go 1.26.1 with a `pgvector/pgvector:pg17` PostgreSQL service. See `.github/workflows/ci.yml`.
 
+PR CI tests only the packages affected by the diff (changed packages plus dependents). It does not replay the whole repo. Changing `ci.yml`, lockfiles, `server/go.mod` / `go.sum`, or the scope scripts forces the current web-surface full suite. Test files stay in the repo; `make check` / `pnpm test` / `go test ./...` remain full locally.
+
 ### Frontend PR Gate
 
-React Doctor is not a merge or CI gate. Frontend PRs are accepted on typecheck, lint, and unit tests.
+React Doctor is not a merge or CI gate. Frontend PRs are accepted on typecheck, lint, and the affected-package unit tests.
 
 ### Worktree Support
 

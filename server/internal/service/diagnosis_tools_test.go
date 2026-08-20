@@ -319,8 +319,8 @@ func (f *fakeDiagnosisMessagePager) PageTaskMessagesInRange(_ context.Context, a
 	}
 	// Sort by (seq, id) to match the SQL ORDER BY.
 	sortTaskMessages(result)
-	if len(result) > int(arg.Limit) {
-		result = result[:arg.Limit]
+	if len(result) > int(arg.PageLimit) {
+		result = result[:arg.PageLimit]
 	}
 	return result, nil
 }

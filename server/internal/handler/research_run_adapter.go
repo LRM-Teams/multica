@@ -138,6 +138,7 @@ func (d *researchRunDispatcher) Dispatch(ctx context.Context, request researchru
 	existingWorkspaceID, existingAgentID, existingStatus = "", "", ""
 	existingTerminal = false
 	existingContext = nil
+	supersedingExisting := false
 	if err = tx.QueryRow(ctx, `
 		SELECT id, COALESCE(context->>'research_dispatch_request_hash', ''),
 		       workspace_id::text, agent_id::text, status,
@@ -157,8 +158,28 @@ func (d *researchRunDispatcher) Dispatch(ctx context.Context, request researchru
 			}
 			return researchrun.DispatchResult{InboxTaskID: uuidToString(existingID)}, nil
 		}
+		supersedingExisting = true
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		return researchrun.DispatchResult{}, err
+	}
+	if supersedingExisting {
+		command, supersedeErr := tx.Exec(ctx, `
+			UPDATE agent_inbox_event
+			SET context=(context-'research_dispatch_key') || jsonb_build_object(
+			      'research_superseded_dispatch_key',$2::text,
+			      'research_superseded_by_request_hash',$3::text
+			    ),
+			    updated_at=now()
+			WHERE id=$1
+			  AND context->>'research_dispatch_key'=$2
+			  AND (terminal_at IS NOT NULL OR status='acked')
+		`, existingID, request.Key, requestHash)
+		if supersedeErr != nil {
+			return researchrun.DispatchResult{}, fmt.Errorf("retire terminal V6 dispatch key: %w", supersedeErr)
+		}
+		if command.RowsAffected() != 1 {
+			return researchrun.DispatchResult{}, researchrun.ErrWorkItemLeaseLost
+		}
 	}
 	qtx := db.New(tx)
 	message, err := qtx.CreateChatMessage(ctx, db.CreateChatMessageParams{

@@ -38,17 +38,25 @@ func (d *researchRunDispatcher) Dispatch(ctx context.Context, request researchru
 	}
 	request.RequestHash = requestHash
 	var existingID pgtype.UUID
-	var existingHash string
+	var existingHash, existingWorkspaceID, existingAgentID, existingStatus string
+	var existingTerminal bool
+	var existingContext json.RawMessage
 	if err := h.DB.QueryRow(ctx, `
-		SELECT id, COALESCE(context->>'research_dispatch_request_hash', '')
+		SELECT id, COALESCE(context->>'research_dispatch_request_hash', ''),
+		       workspace_id::text, agent_id::text, status,
+		       terminal_at IS NOT NULL OR status IN ('acked','suppressed'), context
 		FROM agent_inbox_event
 		WHERE context->>'research_dispatch_key' = $1
+		ORDER BY created_at DESC,id DESC
 		LIMIT 1
-	`, request.Key).Scan(&existingID, &existingHash); err == nil {
+	`, request.Key).Scan(&existingID, &existingHash, &existingWorkspaceID, &existingAgentID, &existingStatus, &existingTerminal, &existingContext); err == nil {
 		if existingHash != "" && existingHash != requestHash {
-			return researchrun.DispatchResult{}, researchrun.NonRetryableDispatchError(fmt.Errorf("research dispatch key %q was reused for a different request", request.Key))
+			if !canSupersedeTerminalV6Dispatch(request, existingWorkspaceID, existingAgentID, existingStatus, existingTerminal, existingContext) {
+				return researchrun.DispatchResult{}, researchrun.NonRetryableDispatchError(fmt.Errorf("research dispatch key %q was reused for a different request", request.Key))
+			}
+		} else {
+			return researchrun.DispatchResult{InboxTaskID: uuidToString(existingID)}, nil
 		}
-		return researchrun.DispatchResult{InboxTaskID: uuidToString(existingID)}, nil
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		return researchrun.DispatchResult{}, err
 	}
@@ -127,19 +135,28 @@ func (d *researchRunDispatcher) Dispatch(ctx context.Context, request researchru
 	}
 	existingID = pgtype.UUID{}
 	existingHash = ""
+	existingWorkspaceID, existingAgentID, existingStatus = "", "", ""
+	existingTerminal = false
+	existingContext = nil
 	if err = tx.QueryRow(ctx, `
-		SELECT id, COALESCE(context->>'research_dispatch_request_hash', '')
+		SELECT id, COALESCE(context->>'research_dispatch_request_hash', ''),
+		       workspace_id::text, agent_id::text, status,
+		       terminal_at IS NOT NULL OR status IN ('acked','suppressed'), context
 		FROM agent_inbox_event
 		WHERE context->>'research_dispatch_key' = $1
+		ORDER BY created_at DESC,id DESC
 		LIMIT 1
-	`, request.Key).Scan(&existingID, &existingHash); err == nil {
+	`, request.Key).Scan(&existingID, &existingHash, &existingWorkspaceID, &existingAgentID, &existingStatus, &existingTerminal, &existingContext); err == nil {
 		if existingHash != "" && existingHash != requestHash {
-			return researchrun.DispatchResult{}, researchrun.NonRetryableDispatchError(fmt.Errorf("research dispatch key %q was reused for a different request", request.Key))
+			if !canSupersedeTerminalV6Dispatch(request, existingWorkspaceID, existingAgentID, existingStatus, existingTerminal, existingContext) {
+				return researchrun.DispatchResult{}, researchrun.NonRetryableDispatchError(fmt.Errorf("research dispatch key %q was reused for a different request", request.Key))
+			}
+		} else {
+			if err = tx.Commit(ctx); err != nil {
+				return researchrun.DispatchResult{}, err
+			}
+			return researchrun.DispatchResult{InboxTaskID: uuidToString(existingID)}, nil
 		}
-		if err = tx.Commit(ctx); err != nil {
-			return researchrun.DispatchResult{}, err
-		}
-		return researchrun.DispatchResult{InboxTaskID: uuidToString(existingID)}, nil
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		return researchrun.DispatchResult{}, err
 	}
@@ -180,6 +197,20 @@ func (d *researchRunDispatcher) Dispatch(ctx context.Context, request researchru
 	}
 	h.TaskService.PublishChatTaskQueued(ctx, task, false)
 	return researchrun.DispatchResult{InboxTaskID: uuidToString(task.ID)}, nil
+}
+
+func canSupersedeTerminalV6Dispatch(request researchrun.DispatchRequest, workspaceID, agentID, status string, terminal bool, rawContext json.RawMessage) bool {
+	if request.WorkItemID == "" || !terminal || (status != "acked" && status != "suppressed" && status != "failed") ||
+		workspaceID != request.Run.WorkspaceID || agentID != request.AgentID {
+		return false
+	}
+	var binding researchV6InboxContext
+	if json.Unmarshal(rawContext, &binding) != nil {
+		return false
+	}
+	return binding.Type == "research_run_work_item" && binding.RunID == request.Run.SessionID &&
+		binding.WorkItemID == request.WorkItemID && binding.AttemptID == request.AttemptID &&
+		binding.ManifestID == request.ManifestID && binding.ManifestHash == request.ManifestHash
 }
 
 func encodeResearchDispatchInboxContext(request researchrun.DispatchRequest, requestHash string) ([]byte, error) {

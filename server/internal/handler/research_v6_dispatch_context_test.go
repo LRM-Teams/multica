@@ -35,6 +35,31 @@ func TestResearchV6DispatchContextBindsEntireAttemptIdentity(t *testing.T) {
 	}
 }
 
+func TestTerminalV6DispatchCanBeSupersededAfterPromptUpgrade(t *testing.T) {
+	request := researchrun.DispatchRequest{
+		Run: researchrun.Run{
+			WorkspaceID: "00000000-0000-4000-8000-000000000002",
+			SessionID:   "00000000-0000-4000-8000-000000000003",
+		},
+		WorkItemID:   "00000000-0000-4000-8000-000000000202",
+		AttemptID:    "00000000-0000-4000-8000-000000000204",
+		AgentID:      "00000000-0000-4000-8000-000000000009",
+		ManifestID:   "00000000-0000-4000-8000-000000000201",
+		ManifestHash: "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+	}
+	raw, err := encodeResearchDispatchInboxContext(request, "old-mission-only-prompt-hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !canSupersedeTerminalV6Dispatch(request, request.Run.WorkspaceID, request.AgentID, "acked", true, raw) {
+		t.Fatal("exact terminal V6 dispatch was not supersedable")
+	}
+	request.ManifestHash = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+	if canSupersedeTerminalV6Dispatch(request, request.Run.WorkspaceID, request.AgentID, "acked", true, raw) {
+		t.Fatal("dispatch with a different frozen manifest was supersedable")
+	}
+}
+
 func TestResearchV6DurableCredentialBindsExactActiveAttemptServerSide(t *testing.T) {
 	const (
 		workspaceID = "00000000-0000-4000-8000-000000000002"

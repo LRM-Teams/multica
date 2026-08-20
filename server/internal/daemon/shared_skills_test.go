@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/agentworkspace"
+	agentskills "github.com/multica-ai/multica/server/internal/daemon/agent/skills"
 	"github.com/multica-ai/multica/server/internal/memorycuration"
 )
 
@@ -271,7 +272,7 @@ func TestLocalSkillScanFingerprintChangesWhenFileChanges(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("v1"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	first, err := localSkillScanFingerprint(dir)
+	first, err := agentskills.LocalFingerprint(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +280,7 @@ func TestLocalSkillScanFingerprintChangesWhenFileChanges(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("version-2"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	second, err := localSkillScanFingerprint(dir)
+	second, err := agentskills.LocalFingerprint(dir)
 	if err != nil {
 		t.Fatal(err)
 	}

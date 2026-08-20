@@ -867,11 +867,11 @@ func createBulkDaemonRuntimeWithMode(t *testing.T, ctx context.Context, daemonID
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent_runtime (
 			workspace_id, daemon_id, name, runtime_mode, provider, status,
-			device_info, metadata, owner_id, last_seen_at
+			device_info, metadata, last_seen_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, '{}'::jsonb, $8, now() - interval '1 hour')
+		VALUES ($1, $2, $3, $4, $5, $6, $7, '{}'::jsonb, now() - interval '1 hour')
 		RETURNING id
-	`, testWorkspaceID, daemonID, name, mode, provider, status, name+" device", testUserID).Scan(&runtimeID); err != nil {
+	`, testWorkspaceID, daemonID, name, mode, provider, status, name+" device").Scan(&runtimeID); err != nil {
 		t.Fatalf("insert bulk daemon runtime: %v", err)
 	}
 	t.Cleanup(func() {

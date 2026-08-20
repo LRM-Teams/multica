@@ -53,7 +53,7 @@ done
 for required in \
   'branches: [main]' \
   "github.ref == 'refs/heads/main'" \
-  'SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}' \
+  'SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}' \
   'run-aliyun-step-over-ssh.sh' \
   'url: https://www.leagent.me'; do
   if ! grep -Fq -- "$required" <<<"$deploy_workflow"; then

@@ -79,7 +79,7 @@ require_config "$deploy_workflow" 'name: aliyun-dev'
 require_config "$deploy_workflow" 'runs-on: ubuntu-latest'
 require_config "$deploy_workflow" 'SSH_HOST: 101.200.210.144'
 require_config "$deploy_workflow" 'SSH_USER: ${{ secrets.SSH_USER }}'
-require_config "$deploy_workflow" 'SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}'
+require_config "$deploy_workflow" 'SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}'
 require_config "$deploy_workflow" 'SSH_KNOWN_HOSTS: 101.200.210.144 ssh-ed25519'
 require_config "$deploy_workflow" 'uses: actions/upload-artifact@v7'
 require_config "$deploy_workflow" 'uses: actions/download-artifact@v8'
@@ -179,7 +179,7 @@ if grep -Fq 'uses: actions/checkout' <<<"$deploy_job"; then
   echo "Aliyun SSH deploy job must consume the immutable deploy artifact, not git checkout."
   exit 1
 fi
-for forbidden_command in git; do
+for forbidden_command in git sudo; do
   if grep -Eq "(^|[^[:alnum:]_.-])${forbidden_command}[[:space:]]" <<<"$deploy_job"; then
     echo "Aliyun self-hosted deploy job must not execute ${forbidden_command}."
     exit 1

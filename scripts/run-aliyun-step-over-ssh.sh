@@ -5,13 +5,14 @@ set -euo pipefail
 script=${1:?usage: run-aliyun-step-over-ssh.sh <script>}
 : "${SSH_HOST:?SSH_HOST is required}"
 : "${SSH_USER:?SSH_USER is required}"
-: "${SSH_PASSWORD:?SSH_PASSWORD is required}"
+: "${SSH_KEY_PATH:?SSH_KEY_PATH is required}"
 : "${SSH_KNOWN_HOSTS_PATH:?SSH_KNOWN_HOSTS_PATH is required}"
 : "${REMOTE_RUNNER_TEMP:?REMOTE_RUNNER_TEMP is required}"
 
 ssh_options=(
-  -o PreferredAuthentications=password
-  -o PubkeyAuthentication=no
+  -i "$SSH_KEY_PATH"
+  -o BatchMode=yes
+  -o IdentitiesOnly=yes
   -o StrictHostKeyChecking=yes
   -o "UserKnownHostsFile=$SSH_KNOWN_HOSTS_PATH"
 )
@@ -63,6 +64,5 @@ forwarded_environment=(
     fi
   done
   cat "$script"
-} | SSHPASS="$SSH_PASSWORD" sshpass -e \
-  ssh "${ssh_options[@]}" "$SSH_USER@$SSH_HOST" \
-    'exec runuser -u dev -- env HOME=/home/dev bash -se'
+} | ssh "${ssh_options[@]}" "$SSH_USER@$SSH_HOST" \
+  'exec env HOME=/home/dev bash -se'

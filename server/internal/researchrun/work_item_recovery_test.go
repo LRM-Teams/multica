@@ -84,6 +84,9 @@ func TestV6SubmissionReplayReturnsOriginalOutcomeAndRejectsChangedPayload(t *tes
 
 func TestV6SubmissionReplaySurvivesSettledAttempt(t *testing.T) {
 	run := newTransactionRecoveryRun(t, "Replay settled V6 submission")
+	t.Cleanup(func() {
+		_, _ = run.pool.Exec(context.Background(), `DELETE FROM research_v6_work_submission WHERE workspace_id=$1::uuid`, run.fixture.workspaceID)
+	})
 	if _, err := run.pool.Exec(run.ctx, `UPDATE research_session SET orchestrator_version='research-run-v6' WHERE id=$1::uuid`, run.fixture.sessionID); err != nil {
 		t.Fatal(err)
 	}

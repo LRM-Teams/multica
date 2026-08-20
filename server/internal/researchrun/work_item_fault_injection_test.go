@@ -278,7 +278,7 @@ func TestSettledV6AttemptKeepsInboxEligibleUntilCancellation(t *testing.T) {
 	if err != nil || len(ids) != 1 || ids[0] != inboxTaskID {
 		t.Fatalf("settled Inbox tasks=%v err=%v, want %s", ids, err, inboxTaskID)
 	}
-	if _, err = run.pool.Exec(run.ctx, `UPDATE agent_inbox_event SET status='cancelled',terminal_outcome='cancelled',completed_at=now() WHERE id=$1::uuid`, inboxTaskID); err != nil {
+	if _, err = run.pool.Exec(run.ctx, `UPDATE agent_inbox_event SET status='suppressed',terminal_outcome='cancelled',completed_at=now() WHERE id=$1::uuid`, inboxTaskID); err != nil {
 		t.Fatal(err)
 	}
 	ids, err = run.store.ListSettledV6InboxTaskIDs(run.ctx, 10)

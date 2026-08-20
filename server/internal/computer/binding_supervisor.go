@@ -149,64 +149,31 @@ func NewBindingSupervisor(config BindingSupervisorConfig) (*BindingSupervisor, e
 	return supervisor, nil
 }
 
-// reclaimOrphanedRunner drains and then force-terminates a Binding Runner
-// process left behind by a previous Host generation for workspaceID, then
-// clears its persisted state so the first Reconcile spawns a fresh child
-// this Host owns. One Workspace holds at most one Binding Runner on this
-// machine, and it is always the current Host's own child; a live process
-// found at startup is reclaimed here, never adopted.
-//
-// Drain (runner:drain) only closes the runner's own admission barrier and
-// cancels in-flight work on the runner side; it never makes the runner
-// process exit on its own. So there is nothing to poll for after a
-// drain attempt — the very next step is always terminateProcess, which owns
-// its own bounded SIGTERM/SIGKILL wait and exit confirmation.
+// reclaimOrphanedRunner reclaims a Workspace Runner process left behind by a
+// previous Host generation so the first Reconcile can spawn a fresh child this
+// Host owns. One Workspace holds at most one Runner on this machine, and it is
+// always the current Host's own child; a live process found at startup is
+// reclaimed here, never adopted.
 func (supervisor *BindingSupervisor) reclaimOrphanedRunner(runner reclaimableRunner) {
 	config := supervisor.config
-	logger := config.Logger
-	identity := BindingChildIdentity{WorkspaceID: runner.WorkspaceID, DaemonInstanceID: runner.DaemonInstanceID, PID: runner.PID}
 	start := config.Now()
-
-	if runner.RunnerEndpoint != "" && config.DrainRunner != nil && identity.Validate() == nil {
-		if logger != nil {
-			logger.Info("reclaiming orphaned Binding Runner: requesting drain", "workspace_id", runner.WorkspaceID, "pid", runner.PID, "endpoint", runner.RunnerEndpoint)
-		}
-		// No extra timeout wrapping here: the local control RPC transport
-		// already bounds this call (see callLocalJSONWithTimeout), and
-		// drain itself may legitimately take close to its own internal
-		// grace period to finish closing out in-flight work.
-		if err := config.DrainRunner(context.Background(), runner.RunnerEndpoint, identity); err != nil {
-			if logger != nil {
-				logger.Warn("orphaned Binding Runner drain request failed; will terminate by signal", "workspace_id", runner.WorkspaceID, "pid", runner.PID, "error", err)
-			}
-		} else if logger != nil {
-			logger.Info("orphaned Binding Runner drained via runner:drain", "workspace_id", runner.WorkspaceID, "pid", runner.PID)
-		}
-	} else if logger != nil {
-		logger.Warn("orphaned Binding Runner has no reachable control endpoint; will terminate by signal", "workspace_id", runner.WorkspaceID, "pid", runner.PID)
-	}
-
-	if logger != nil {
-		logger.Info("terminating orphaned Binding Runner: sending SIGTERM/SIGKILL", "workspace_id", runner.WorkspaceID, "pid", runner.PID)
-	}
-	if err := terminateProcess(runner.PID, config.TerminatePollInterval, config.TerminateGrace, config.Sleep); err != nil {
-		if logger != nil {
-			logger.Warn("orphaned Binding Runner could not be confirmed dead; leaving this Workspace out of spawn rotation this cycle", "workspace_id", runner.WorkspaceID, "pid", runner.PID, "error", err)
+	err := reclaimRunnerProcess(runner, runnerReclaimOptions{
+		StateRoot:    config.StateRoot,
+		Drain:        config.DrainRunner,
+		PollInterval: config.TerminatePollInterval,
+		Grace:        config.TerminateGrace,
+		Sleep:        config.Sleep,
+		Logger:       config.Logger,
+	})
+	if err != nil {
+		if config.Logger != nil {
+			config.Logger.Warn("orphaned Workspace Runner could not be confirmed dead; leaving this Workspace out of spawn rotation this cycle", "workspace_id", runner.WorkspaceID, "pid", runner.PID, "error", err)
 		}
 		supervisor.backOffAfterFailedReclaim(runner)
 		return
 	}
-	if logger != nil {
-		logger.Info("orphaned Binding Runner terminated", "workspace_id", runner.WorkspaceID, "pid", runner.PID, "elapsed", config.Now().Sub(start))
-	}
-	supervisor.clearReclaimedRunnerState(runner)
-}
-
-// clearReclaimedRunnerState removes persisted state for a confirmed-dead
-// reclaim so the next Reconcile spawns this Host's own replacement child.
-func (supervisor *BindingSupervisor) clearReclaimedRunnerState(runner reclaimableRunner) {
-	if err := removeRunnerState(supervisor.config.StateRoot, runner.WorkspaceID, runner.DaemonInstanceID, runner.PID); err != nil && supervisor.config.Logger != nil {
-		supervisor.config.Logger.Warn("could not remove reclaimed Binding Runner state", "workspace_id", runner.WorkspaceID, "pid", runner.PID, "error", err)
+	if config.Logger != nil {
+		config.Logger.Info("orphaned Workspace Runner terminated", "workspace_id", runner.WorkspaceID, "pid", runner.PID, "elapsed", config.Now().Sub(start))
 	}
 }
 

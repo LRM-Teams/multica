@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/cli"
@@ -164,8 +165,40 @@ func (l *Lifecycle) Fix(d Diagnosis) Diagnosis {
 	now := time.Now()
 	applied = append(applied, cleanupAbandonedBindingState(RootDir(""), now)...)
 	applied = append(applied, cleanupExpiredUpgradeStaging(now)...)
+	applied = append(applied, reclaimOrphanedRunners(RootDir(""))...)
 	d.FixApplied = applied
 	return d
+}
+
+// reclaimOrphanedRunners terminates Workspace Runner processes whose owning
+// Host is gone, freeing the slot so the next `computer start` spawns a fresh
+// child instead of finding the machine wedged.
+//
+// This is the one Fix step that signals a live process, so its fence matters:
+// findReclaimableRunners refuses any slot whose recorded owner pid is still
+// alive, which means a Runner the running Host supervises can never be a
+// candidate here. Only a Runner whose parent Host is confirmed dead — the
+// self-locking state that used to require a manual kill — is reclaimed.
+func reclaimOrphanedRunners(root string) []string {
+	reclaimable, err := findReclaimableRunners(root, nil)
+	if err != nil || len(reclaimable) == 0 {
+		return nil
+	}
+	options := runnerReclaimOptions{StateRoot: root, PollInterval: 200 * time.Millisecond, Grace: 2 * time.Second}
+	if token, err := ReadControlToken(""); err == nil && strings.TrimSpace(token) != "" {
+		options.Drain = func(ctx context.Context, endpoint string, identity BindingChildIdentity) error {
+			return RequestBindingRunnerDrain(ctx, endpoint, token, identity)
+		}
+	}
+	applied := make([]string, 0, len(reclaimable))
+	for _, runner := range reclaimable {
+		if err := reclaimRunnerProcess(runner, options); err != nil {
+			applied = append(applied, fmt.Sprintf("could NOT terminate orphaned Workspace Runner pid %d (workspace %s): %v", runner.PID, runner.WorkspaceID, err))
+			continue
+		}
+		applied = append(applied, fmt.Sprintf("terminated orphaned Workspace Runner pid %d (workspace %s)", runner.PID, runner.WorkspaceID))
+	}
+	return applied
 }
 
 func cleanupAbandonedBindingState(root string, now time.Time) []string {

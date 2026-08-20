@@ -164,9 +164,14 @@ func (d *Daemon) recordReminderOwnerInputOutcome(payload protocol.ReminderOwnerI
 		"reminder_id", payload.ReminderID,
 		"version", payload.Version,
 	}
-	if outcome == reminderOwnerInputInjectionFailed || outcome == reminderOwnerInputRejected {
+	switch {
+	case reason == "agent_start_missing" || reason == "agent_start_mismatch":
+		// Expected while the owner has no accepted start. The 1s fire-retry
+		// path would otherwise flood daemon.log at Warn.
+		d.logger.Debug("transient Reminder owner input", fields...)
+	case outcome == reminderOwnerInputInjectionFailed || outcome == reminderOwnerInputRejected:
 		d.logger.Warn("transient Reminder owner input", fields...)
-		return
+	default:
+		d.logger.Info("transient Reminder owner input", fields...)
 	}
-	d.logger.Info("transient Reminder owner input", fields...)
 }

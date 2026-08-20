@@ -1,7 +1,9 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -173,6 +175,33 @@ func TestReminderOwnerInputRejectsUnauthorizedStaleAndOversizedPayloads(t *testi
 				t.Fatalf("rejected input reached runtime: %d", got)
 			}
 		})
+	}
+}
+
+func TestReminderOwnerInputMismatchLogsAtDebug(t *testing.T) {
+	var buf bytes.Buffer
+	runtime := &reminderOwnerInputFakeRuntime{}
+	d := newReminderOwnerInputDaemon(t, runtime, true)
+	d.logger = slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	payload := validReminderOwnerInputPayload()
+	payload.AgentID = "agent-b"
+
+	if outcome := d.handleReminderOwnerInput(context.Background(), payload); outcome != reminderOwnerInputRejected {
+		t.Fatalf("outcome=%q want=%q", outcome, reminderOwnerInputRejected)
+	}
+	var record struct {
+		Level  string `json:"level"`
+		Msg    string `json:"msg"`
+		Reason string `json:"reason_code"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &record); err != nil {
+		t.Fatalf("decode reminder owner input log: %v\n%s", err, buf.String())
+	}
+	if record.Level != "DEBUG" || record.Msg != "transient Reminder owner input" || record.Reason != "agent_start_mismatch" {
+		t.Fatalf("log=%+v want debug agent_start_mismatch", record)
+	}
+	if strings.Contains(buf.String(), "start_identity") {
+		t.Fatalf("reminder owner input log leaked start_identity: %s", buf.String())
 	}
 }
 

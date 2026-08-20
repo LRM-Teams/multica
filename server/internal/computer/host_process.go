@@ -275,7 +275,7 @@ func (host *Host) processHealthHandler(state *hostProcessState) http.HandlerFunc
 			record, pid, ok := host.Snapshot(workspaceID)
 			entry := map[string]any{"id": workspaceID, "runtimes": host.runtimeIDs(workspaceID)}
 			if ok {
-				entry["startIdentity"] = record.StartIdentity()
+				entry["daemonInstanceId"] = record.DaemonInstanceID()
 				entry["runnerPid"] = pid
 				entry["runnerStatus"] = record.Lifecycle
 			}
@@ -316,7 +316,7 @@ func (host *Host) recordBindingDiagnostic(_ BindingChildIdentity, workspaceID st
 	if logger == nil {
 		created, err := host.diagnosticStore.Runner(diagnosticlog.RunnerOptions{
 			Environment: diagnosticlog.Environment(host.processIdentity.Environment),
-			WorkspaceID: workspaceID, StartIdentity: host.processIdentity.ServiceGeneration,
+			WorkspaceID: workspaceID, DaemonInstanceID: host.processIdentity.ServiceGeneration,
 			ComputerID: host.processIdentity.ComputerID, ServiceGeneration: host.processIdentity.ServiceGeneration,
 		})
 		if err == nil {

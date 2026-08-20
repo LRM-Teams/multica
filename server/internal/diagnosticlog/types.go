@@ -130,7 +130,7 @@ type ServiceOptions struct {
 type RunnerOptions struct {
 	Environment       Environment
 	WorkspaceID       string
-	StartIdentity     string
+	DaemonInstanceID  string
 	ComputerID        string
 	ServiceGeneration string
 }
@@ -218,7 +218,7 @@ type wireRecord struct {
 	ServiceGeneration string      `json:"serviceGeneration,omitempty"`
 	Environment       Environment `json:"environment,omitempty"`
 	WorkspaceID       string      `json:"workspaceId,omitempty"`
-	StartIdentity     string      `json:"startIdentity,omitempty"`
+	DaemonInstanceID  string      `json:"daemonInstanceId,omitempty"`
 	StreamSeq         uint64      `json:"streamSeq"`
 
 	AgentID         string `json:"agent_id,omitempty"`

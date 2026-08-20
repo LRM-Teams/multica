@@ -261,7 +261,7 @@ func runBindingChild(ctx context.Context, bootstrap computer.BindingChildBootstr
 		return fmt.Errorf("read Computer Host control token: %w", err)
 	}
 	cfg.LocalControlToken = controlToken
-	logger := logger_pkg.NewLogger("runner").With("workspace_id", bootstrap.WorkspaceID, "start_identity", bootstrap.StartIdentity)
+	logger := logger_pkg.NewLogger("runner").With("workspace_id", bootstrap.WorkspaceID)
 	return daemon.RunBindingChild(ctx, daemon.BindingChildRunConfig{
 		Daemon: cfg, Bootstrap: bootstrap, Logger: logger, PublishReady: publishReady,
 	})

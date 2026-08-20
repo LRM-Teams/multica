@@ -42,7 +42,7 @@ type destination struct {
 	scope             Scope
 	environment       Environment
 	workspaceID       string
-	startIdentity     string
+	daemonInstanceID  string
 	computerID        string
 	serviceGeneration string
 	dir               string
@@ -149,7 +149,7 @@ func (s *Store) Runner(options RunnerOptions) (*Logger, error) {
 	if _, err := uuid.Parse(options.WorkspaceID); err != nil {
 		return nil, fmt.Errorf("workspace_id must be an immutable UUID: %w", err)
 	}
-	if err := validateRequiredToken("startIdentity", options.StartIdentity); err != nil {
+	if err := validateRequiredToken("daemonInstanceId", options.DaemonInstanceID); err != nil {
 		return nil, err
 	}
 	if err := validateOptionalUUID("computer_id", options.ComputerID); err != nil {
@@ -163,7 +163,7 @@ func (s *Store) Runner(options RunnerOptions) (*Logger, error) {
 		scope:             ScopeRunner,
 		environment:       options.Environment,
 		workspaceID:       options.WorkspaceID,
-		startIdentity:     options.StartIdentity,
+		daemonInstanceID:  options.DaemonInstanceID,
 		computerID:        options.ComputerID,
 		serviceGeneration: options.ServiceGeneration,
 		dir:               dir,
@@ -298,7 +298,7 @@ func (l *Logger) buildRecord(event Event, now time.Time) (wireRecord, error) {
 		ServiceGeneration: l.dest.serviceGeneration,
 		Environment:       l.dest.environment,
 		WorkspaceID:       l.dest.workspaceID,
-		StartIdentity:     l.dest.startIdentity,
+		DaemonInstanceID:  l.dest.daemonInstanceID,
 		StreamSeq:         l.seq.Add(1),
 		AgentID:           identity.AgentID,
 		RuntimeID:         identity.RuntimeID,

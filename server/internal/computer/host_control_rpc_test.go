@@ -11,7 +11,7 @@ import (
 )
 
 func TestHostControlRPCDispatchesCapacityOperation(t *testing.T) {
-	identity := BindingChildIdentity{WorkspaceID: "ws-1", StartIdentity: "start-2", PID: 1234}
+	identity := BindingChildIdentity{WorkspaceID: "ws-1", DaemonInstanceID: "start-2", PID: 1234}
 	control := NewHostControl("control-token", NewProcessCapacity(1), HostControlCallbacks{
 		Current: func(got BindingChildIdentity) bool { return got == identity },
 	})
@@ -38,8 +38,8 @@ func TestHostControlRPCDispatchesCapacityOperation(t *testing.T) {
 	}
 }
 
-func TestHostControlRPCRejectsStaleStartIdentity(t *testing.T) {
-	active := BindingChildIdentity{WorkspaceID: "ws-1", StartIdentity: "start-2", PID: 1234}
+func TestHostControlRPCRejectsStaleDaemonInstanceID(t *testing.T) {
+	active := BindingChildIdentity{WorkspaceID: "ws-1", DaemonInstanceID: "start-2", PID: 1234}
 	control := NewHostControl("control-token", NewProcessCapacity(1), HostControlCallbacks{
 		Current: func(got BindingChildIdentity) bool { return got == active },
 	})
@@ -50,7 +50,7 @@ func TestHostControlRPCRejectsStaleStartIdentity(t *testing.T) {
 		t.Fatal("workspace:capacity RPC was not registered")
 	}
 	args, err := json.Marshal(capacityControlRequest{
-		Identity:  BindingChildIdentity{WorkspaceID: "ws-1", StartIdentity: "start-1", PID: 1234},
+		Identity:  BindingChildIdentity{WorkspaceID: "ws-1", DaemonInstanceID: "start-1", PID: 1234},
 		Operation: "active", Grant: ProcessCapacityGrant{LaunchID: "launch-1"},
 	})
 	if err != nil {
@@ -63,7 +63,7 @@ func TestHostControlRPCRejectsStaleStartIdentity(t *testing.T) {
 
 func TestHostControlClientUsesLocalRPCTransport(t *testing.T) {
 	root := t.TempDir()
-	identity := BindingChildIdentity{WorkspaceID: "ws-1", StartIdentity: "start-2", PID: 1234}
+	identity := BindingChildIdentity{WorkspaceID: "ws-1", DaemonInstanceID: "start-2", PID: 1234}
 	control := NewHostControl("control-token", NewProcessCapacity(1), HostControlCallbacks{
 		Current: func(got BindingChildIdentity) bool { return got == identity },
 	})
@@ -126,7 +126,7 @@ func TestHostProcessHealthRPCPreservesLifecycleFields(t *testing.T) {
 }
 
 func TestHostControlClientUpgradeStartUsesCommandEnvelope(t *testing.T) {
-	identity := BindingChildIdentity{WorkspaceID: "ws-1", StartIdentity: "start-2", PID: 1234}
+	identity := BindingChildIdentity{WorkspaceID: "ws-1", DaemonInstanceID: "start-2", PID: 1234}
 	command := protocol.ComputerUpgradePayload{RequestID: "upgrade-a", OperationID: "op-a", TargetVersion: "v9.9.9"}
 	var got json.RawMessage
 	endpoint := localControlTestServer(t, func(_ context.Context, operation string, _ map[string]string, raw json.RawMessage) (any, error) {
@@ -163,7 +163,7 @@ func TestHostControlClientUpgradeStartUsesCommandEnvelope(t *testing.T) {
 }
 
 func TestHostUpgradeStartDecodesCommandEnvelope(t *testing.T) {
-	identity := BindingChildIdentity{WorkspaceID: "ws-1", StartIdentity: "start-2", PID: 1234}
+	identity := BindingChildIdentity{WorkspaceID: "ws-1", DaemonInstanceID: "start-2", PID: 1234}
 	var got protocol.ComputerUpgradePayload
 	host := &Host{control: NewHostControl("control-token", NewProcessCapacity(1), HostControlCallbacks{
 		Current: func(gotIdentity BindingChildIdentity) bool { return gotIdentity == identity },
@@ -201,7 +201,7 @@ func TestHostUpgradeStartDecodesCommandEnvelope(t *testing.T) {
 }
 
 func TestHostUpgradeStartReturnsRequestIDWhenOperationIDIsEmpty(t *testing.T) {
-	identity := BindingChildIdentity{WorkspaceID: "ws-1", StartIdentity: "start-2", PID: 1234}
+	identity := BindingChildIdentity{WorkspaceID: "ws-1", DaemonInstanceID: "start-2", PID: 1234}
 	host := &Host{control: NewHostControl("control-token", NewProcessCapacity(1), HostControlCallbacks{
 		Current: func(got BindingChildIdentity) bool { return got == identity },
 		ComputerUpgrade: func(context.Context, BindingChildIdentity, json.RawMessage) error {
@@ -232,7 +232,7 @@ func TestHostUpgradeStartReturnsRequestIDWhenOperationIDIsEmpty(t *testing.T) {
 }
 
 func TestHostUpgradeStartRejectsStaleIdentity(t *testing.T) {
-	active := BindingChildIdentity{WorkspaceID: "ws-1", StartIdentity: "start-2", PID: 1234}
+	active := BindingChildIdentity{WorkspaceID: "ws-1", DaemonInstanceID: "start-2", PID: 1234}
 	started := false
 	host := &Host{control: NewHostControl("control-token", NewProcessCapacity(1), HostControlCallbacks{
 		Current: func(got BindingChildIdentity) bool { return got == active },
@@ -248,7 +248,7 @@ func TestHostUpgradeStartRejectsStaleIdentity(t *testing.T) {
 		t.Fatal("upgrade:start RPC was not registered")
 	}
 	args, err := json.Marshal(map[string]any{
-		"identity": BindingChildIdentity{WorkspaceID: "ws-1", StartIdentity: "start-1", PID: 1234},
+		"identity": BindingChildIdentity{WorkspaceID: "ws-1", DaemonInstanceID: "start-1", PID: 1234},
 		"command":  protocol.ComputerUpgradePayload{RequestID: "upgrade-a", TargetVersion: "v9.9.9"},
 	})
 	if err != nil {
@@ -271,7 +271,7 @@ func TestHostUpgradeStartRejectsMissingCommand(t *testing.T) {
 		t.Fatal("upgrade:start RPC was not registered")
 	}
 	args, err := json.Marshal(map[string]any{
-		"identity": BindingChildIdentity{WorkspaceID: "ws-1", StartIdentity: "start-2", PID: 1234},
+		"identity": BindingChildIdentity{WorkspaceID: "ws-1", DaemonInstanceID: "start-2", PID: 1234},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -283,7 +283,7 @@ func TestHostUpgradeStartRejectsMissingCommand(t *testing.T) {
 }
 
 func TestBindingComputerUpgradeEventUsesCamelCaseEventType(t *testing.T) {
-	identity := BindingChildIdentity{WorkspaceID: "ws-1", StartIdentity: "start-2", PID: 1234}
+	identity := BindingChildIdentity{WorkspaceID: "ws-1", DaemonInstanceID: "start-2", PID: 1234}
 	var got json.RawMessage
 	var operation string
 	endpoint := localControlTestServer(t, func(_ context.Context, name string, _ map[string]string, raw json.RawMessage) (any, error) {

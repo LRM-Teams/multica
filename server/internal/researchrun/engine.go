@@ -593,6 +593,7 @@ func (e *Engine) Snapshot(ctx context.Context, sessionID, workspaceID string) (R
 		}
 		snapshot.ArtifactProjection = &projection
 	}
+	normalizeRunSnapshot(&snapshot)
 	return snapshot, nil
 }
 
@@ -651,10 +652,12 @@ func loadProjectionSnapshot(ctx context.Context, store projectionSnapshotStore, 
 	if err != nil {
 		return RunSnapshot{}, err
 	}
-	return RunSnapshot{
+	snapshot := RunSnapshot{
 		Run: run, Contract: contract, Method: method, Questions: questions,
 		Tasks: tasks, Attempts: attempts, Claims: claims, Gate: gate,
-	}, nil
+	}
+	normalizeRunSnapshot(&snapshot)
+	return snapshot, nil
 }
 
 func (e *Engine) SnapshotForAttempt(ctx context.Context, sessionID, workspaceID, attemptID string) (RunSnapshot, error) {
@@ -668,6 +671,7 @@ func (e *Engine) SnapshotForAttempt(ctx context.Context, sessionID, workspaceID,
 	if snapshot.Run.SessionID != sessionID {
 		return RunSnapshot{}, ErrRunNotFound
 	}
+	normalizeRunSnapshot(&snapshot)
 	return snapshot, nil
 }
 

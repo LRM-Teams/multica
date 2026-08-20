@@ -14,6 +14,11 @@
 
 import { z } from "zod";
 
+/** Go encodes a nil slice as JSON null. Zod `.default([])` only covers undefined. */
+function nullishArray<T extends z.ZodTypeAny>(schema: T) {
+  return z.preprocess((value) => (value == null ? [] : value), z.array(schema));
+}
+
 /* ------------------------------------------------------------------ *
  * Typed graph node — mirrors ResearchGraphTypedNodeResp (1:1 json tags).
  * ------------------------------------------------------------------ */
@@ -37,15 +42,15 @@ export const TypedGraphNodeSchema = z
     conclusion_count: z.number().int().optional(),
     goal_version_id: z.string().nullable().optional().default(null),
     derived_from: z.string().nullable().optional().default(null),
-    merged_from: z.array(z.string()).optional().default([]),
+    merged_from: nullishArray(z.string()),
     superseded_by: z.string().nullable().optional().default(null),
     restart_of: z.string().nullable().optional().default(null),
     invalidated_by: z.string().nullable().optional().default(null),
     superseded_at: z.string().nullable().optional().default(null),
     invalidated_at: z.string().nullable().optional().default(null),
     parent_id: z.string().nullable().optional().default(null),
-    child_ids: z.array(z.string()).optional().default([]),
-    children_of: z.array(z.string()).optional().default([]),
+    child_ids: nullishArray(z.string()),
+    children_of: nullishArray(z.string()),
     created_at: z.string().optional().default(""),
     updated_at: z.string().optional().default(""),
   })
@@ -127,17 +132,20 @@ export const TypedGraphResponseSchema = z
     graph_version: z.number().int().optional().default(0),
     /** Server-side total when the graph is paginated (optional until BE ships). */
     total_node_count: z.number().int().nullable().optional().default(null),
-    nodes: z.array(TypedGraphNodeSchema).optional().default([]),
-    edges: z.array(TypedGraphEdgeSchema).optional().default([]),
-    clusters: z.array(TypedGraphClusterSchema).optional().default([]),
-    lineage: TypedGraphLineageSchema.optional().default({
-      derived: {},
-      merged: {},
-      superseded: {},
-      restarted: {},
-      invalidated: {},
-      supersedes: {},
-    }),
+    nodes: nullishArray(TypedGraphNodeSchema),
+    edges: nullishArray(TypedGraphEdgeSchema),
+    clusters: nullishArray(TypedGraphClusterSchema),
+    lineage: z.preprocess(
+      (value) => (value == null ? undefined : value),
+      TypedGraphLineageSchema.optional().default({
+        derived: {},
+        merged: {},
+        superseded: {},
+        restarted: {},
+        invalidated: {},
+        supersedes: {},
+      }),
+    ),
   })
   .passthrough();
 

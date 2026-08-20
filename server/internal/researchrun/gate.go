@@ -195,7 +195,7 @@ func filterGateFindings(gate GateResult, codes ...string) GateResult {
 
 func firstGateFinding(findings []GateFinding) GateResult {
 	if len(findings) == 0 {
-		return GateResult{Passed: true}
+		return GateResult{Passed: true, Findings: []GateFinding{}}
 	}
 	return GateResult{Findings: []GateFinding{findings[0]}}
 }

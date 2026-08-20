@@ -160,8 +160,12 @@ func TestUpdateGraphMemoryProfileSwitchToGraphRequiresConfirmation(t *testing.T)
 	if rec := put(`{"memory_type":"graph","explore_agents":4,"explore_max_rounds":3,"confirm_empty_start":true}`); rec.Code != http.StatusOK {
 		t.Fatalf("confirmed switch: status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	// Knob updates while already graph need no confirmation.
-	if rec := put(`{"memory_type":"graph","explore_agents":6,"explore_max_rounds":3}`); rec.Code != http.StatusOK {
-		t.Fatalf("knob update: status=%d", rec.Code)
+	// Knob updates while already graph need no confirmation, but writes to an
+	// existing row must carry the current config_version (spec §16 CAS).
+	if rec := put(`{"memory_type":"graph","explore_agents":6,"explore_max_rounds":3}`); rec.Code != http.StatusConflict {
+		t.Fatalf("unversioned knob update: status=%d, want 409", rec.Code)
+	}
+	if rec := put(`{"memory_type":"graph","explore_agents":6,"explore_max_rounds":3,"config_version":1}`); rec.Code != http.StatusOK {
+		t.Fatalf("knob update: status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }

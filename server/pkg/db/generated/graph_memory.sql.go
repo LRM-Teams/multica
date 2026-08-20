@@ -51,6 +51,105 @@ func (q *Queries) CloseGraphMemoryChannelLineage(ctx context.Context, arg CloseG
 	return err
 }
 
+const createGraphMemoryProfile = `-- name: CreateGraphMemoryProfile :one
+INSERT INTO graph_memory_profile (
+  workspace_id, memory_type, explore_agents, explore_max_rounds,
+  ttt_enabled, explore_nodes_per_expansion,
+  max_hierarchy_fanout, max_relation_edges_per_node,
+  dive_max_rounds, dive_max_viewed_nodes, dive_max_source_files,
+  dive_timeout_seconds, w_round,
+  source_max_file_bytes, source_max_total_bytes, source_max_pdf_pages,
+  source_max_av_seconds, source_max_image_megapixels,
+  dive_model, dive_provider
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+RETURNING workspace_id, memory_type, explore_agents, explore_max_rounds, updated_at,
+       scoped_writer_ready, timezone,
+       ttt_enabled, explore_nodes_per_expansion,
+       max_hierarchy_fanout, max_relation_edges_per_node,
+       dive_max_rounds, dive_max_viewed_nodes, dive_max_source_files,
+       dive_timeout_seconds, w_round,
+       source_max_file_bytes, source_max_total_bytes, source_max_pdf_pages,
+       source_max_av_seconds, source_max_image_megapixels,
+       dive_model, dive_provider, config_version, schema_version
+`
+
+type CreateGraphMemoryProfileParams struct {
+	WorkspaceID              pgtype.UUID `json:"workspace_id"`
+	MemoryType               string      `json:"memory_type"`
+	ExploreAgents            int32       `json:"explore_agents"`
+	ExploreMaxRounds         int32       `json:"explore_max_rounds"`
+	TttEnabled               bool        `json:"ttt_enabled"`
+	ExploreNodesPerExpansion int32       `json:"explore_nodes_per_expansion"`
+	MaxHierarchyFanout       int32       `json:"max_hierarchy_fanout"`
+	MaxRelationEdgesPerNode  int32       `json:"max_relation_edges_per_node"`
+	DiveMaxRounds            int32       `json:"dive_max_rounds"`
+	DiveMaxViewedNodes       int32       `json:"dive_max_viewed_nodes"`
+	DiveMaxSourceFiles       int32       `json:"dive_max_source_files"`
+	DiveTimeoutSeconds       int32       `json:"dive_timeout_seconds"`
+	WRound                   float64     `json:"w_round"`
+	SourceMaxFileBytes       int64       `json:"source_max_file_bytes"`
+	SourceMaxTotalBytes      int64       `json:"source_max_total_bytes"`
+	SourceMaxPdfPages        int32       `json:"source_max_pdf_pages"`
+	SourceMaxAvSeconds       int32       `json:"source_max_av_seconds"`
+	SourceMaxImageMegapixels int32       `json:"source_max_image_megapixels"`
+	DiveModel                string      `json:"dive_model"`
+	DiveProvider             string      `json:"dive_provider"`
+}
+
+func (q *Queries) CreateGraphMemoryProfile(ctx context.Context, arg CreateGraphMemoryProfileParams) (GraphMemoryProfile, error) {
+	row := q.db.QueryRow(ctx, createGraphMemoryProfile,
+		arg.WorkspaceID,
+		arg.MemoryType,
+		arg.ExploreAgents,
+		arg.ExploreMaxRounds,
+		arg.TttEnabled,
+		arg.ExploreNodesPerExpansion,
+		arg.MaxHierarchyFanout,
+		arg.MaxRelationEdgesPerNode,
+		arg.DiveMaxRounds,
+		arg.DiveMaxViewedNodes,
+		arg.DiveMaxSourceFiles,
+		arg.DiveTimeoutSeconds,
+		arg.WRound,
+		arg.SourceMaxFileBytes,
+		arg.SourceMaxTotalBytes,
+		arg.SourceMaxPdfPages,
+		arg.SourceMaxAvSeconds,
+		arg.SourceMaxImageMegapixels,
+		arg.DiveModel,
+		arg.DiveProvider,
+	)
+	var i GraphMemoryProfile
+	err := row.Scan(
+		&i.WorkspaceID,
+		&i.MemoryType,
+		&i.ExploreAgents,
+		&i.ExploreMaxRounds,
+		&i.UpdatedAt,
+		&i.ScopedWriterReady,
+		&i.Timezone,
+		&i.TttEnabled,
+		&i.ExploreNodesPerExpansion,
+		&i.MaxHierarchyFanout,
+		&i.MaxRelationEdgesPerNode,
+		&i.DiveMaxRounds,
+		&i.DiveMaxViewedNodes,
+		&i.DiveMaxSourceFiles,
+		&i.DiveTimeoutSeconds,
+		&i.WRound,
+		&i.SourceMaxFileBytes,
+		&i.SourceMaxTotalBytes,
+		&i.SourceMaxPdfPages,
+		&i.SourceMaxAvSeconds,
+		&i.SourceMaxImageMegapixels,
+		&i.DiveModel,
+		&i.DiveProvider,
+		&i.ConfigVersion,
+		&i.SchemaVersion,
+	)
+	return i, err
+}
+
 const finishGraphMemoryConsolidationRun = `-- name: FinishGraphMemoryConsolidationRun :exec
 UPDATE graph_memory_consolidation_run
 SET status = $2, error = $3, details = $4, started_at = COALESCE(started_at, now()), finished_at = now()
@@ -190,28 +289,48 @@ func (q *Queries) GetGraphMemoryConsolidationRun(ctx context.Context, arg GetGra
 }
 
 const getGraphMemoryProfile = `-- name: GetGraphMemoryProfile :one
-SELECT workspace_id, memory_type, explore_agents, explore_max_rounds, updated_at
+SELECT workspace_id, memory_type, explore_agents, explore_max_rounds, updated_at,
+       scoped_writer_ready, timezone,
+       ttt_enabled, explore_nodes_per_expansion,
+       max_hierarchy_fanout, max_relation_edges_per_node,
+       dive_max_rounds, dive_max_viewed_nodes, dive_max_source_files,
+       dive_timeout_seconds, w_round,
+       source_max_file_bytes, source_max_total_bytes, source_max_pdf_pages,
+       source_max_av_seconds, source_max_image_megapixels,
+       dive_model, dive_provider, config_version, schema_version
 FROM graph_memory_profile
 WHERE workspace_id = $1
 `
 
-type GetGraphMemoryProfileRow struct {
-	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
-	MemoryType       string             `json:"memory_type"`
-	ExploreAgents    int32              `json:"explore_agents"`
-	ExploreMaxRounds int32              `json:"explore_max_rounds"`
-	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
-}
-
-func (q *Queries) GetGraphMemoryProfile(ctx context.Context, workspaceID pgtype.UUID) (GetGraphMemoryProfileRow, error) {
+func (q *Queries) GetGraphMemoryProfile(ctx context.Context, workspaceID pgtype.UUID) (GraphMemoryProfile, error) {
 	row := q.db.QueryRow(ctx, getGraphMemoryProfile, workspaceID)
-	var i GetGraphMemoryProfileRow
+	var i GraphMemoryProfile
 	err := row.Scan(
 		&i.WorkspaceID,
 		&i.MemoryType,
 		&i.ExploreAgents,
 		&i.ExploreMaxRounds,
 		&i.UpdatedAt,
+		&i.ScopedWriterReady,
+		&i.Timezone,
+		&i.TttEnabled,
+		&i.ExploreNodesPerExpansion,
+		&i.MaxHierarchyFanout,
+		&i.MaxRelationEdgesPerNode,
+		&i.DiveMaxRounds,
+		&i.DiveMaxViewedNodes,
+		&i.DiveMaxSourceFiles,
+		&i.DiveTimeoutSeconds,
+		&i.WRound,
+		&i.SourceMaxFileBytes,
+		&i.SourceMaxTotalBytes,
+		&i.SourceMaxPdfPages,
+		&i.SourceMaxAvSeconds,
+		&i.SourceMaxImageMegapixels,
+		&i.DiveModel,
+		&i.DiveProvider,
+		&i.ConfigVersion,
+		&i.SchemaVersion,
 	)
 	return i, err
 }
@@ -340,6 +459,120 @@ func (q *Queries) ListGraphMemoryConsolidationRuns(ctx context.Context, workspac
 	return items, nil
 }
 
+const updateGraphMemoryProfileCAS = `-- name: UpdateGraphMemoryProfileCAS :one
+UPDATE graph_memory_profile SET
+  memory_type = $3,
+  explore_agents = $4,
+  explore_max_rounds = $5,
+  ttt_enabled = $6,
+  explore_nodes_per_expansion = $7,
+  max_hierarchy_fanout = $8,
+  max_relation_edges_per_node = $9,
+  dive_max_rounds = $10,
+  dive_max_viewed_nodes = $11,
+  dive_max_source_files = $12,
+  dive_timeout_seconds = $13,
+  w_round = $14,
+  source_max_file_bytes = $15,
+  source_max_total_bytes = $16,
+  source_max_pdf_pages = $17,
+  source_max_av_seconds = $18,
+  source_max_image_megapixels = $19,
+  dive_model = $20,
+  dive_provider = $21,
+  config_version = config_version + 1,
+  updated_at = now()
+WHERE workspace_id = $1 AND config_version = $2
+RETURNING workspace_id, memory_type, explore_agents, explore_max_rounds, updated_at,
+       scoped_writer_ready, timezone,
+       ttt_enabled, explore_nodes_per_expansion,
+       max_hierarchy_fanout, max_relation_edges_per_node,
+       dive_max_rounds, dive_max_viewed_nodes, dive_max_source_files,
+       dive_timeout_seconds, w_round,
+       source_max_file_bytes, source_max_total_bytes, source_max_pdf_pages,
+       source_max_av_seconds, source_max_image_megapixels,
+       dive_model, dive_provider, config_version, schema_version
+`
+
+type UpdateGraphMemoryProfileCASParams struct {
+	WorkspaceID              pgtype.UUID `json:"workspace_id"`
+	ConfigVersion            int64       `json:"config_version"`
+	MemoryType               string      `json:"memory_type"`
+	ExploreAgents            int32       `json:"explore_agents"`
+	ExploreMaxRounds         int32       `json:"explore_max_rounds"`
+	TttEnabled               bool        `json:"ttt_enabled"`
+	ExploreNodesPerExpansion int32       `json:"explore_nodes_per_expansion"`
+	MaxHierarchyFanout       int32       `json:"max_hierarchy_fanout"`
+	MaxRelationEdgesPerNode  int32       `json:"max_relation_edges_per_node"`
+	DiveMaxRounds            int32       `json:"dive_max_rounds"`
+	DiveMaxViewedNodes       int32       `json:"dive_max_viewed_nodes"`
+	DiveMaxSourceFiles       int32       `json:"dive_max_source_files"`
+	DiveTimeoutSeconds       int32       `json:"dive_timeout_seconds"`
+	WRound                   float64     `json:"w_round"`
+	SourceMaxFileBytes       int64       `json:"source_max_file_bytes"`
+	SourceMaxTotalBytes      int64       `json:"source_max_total_bytes"`
+	SourceMaxPdfPages        int32       `json:"source_max_pdf_pages"`
+	SourceMaxAvSeconds       int32       `json:"source_max_av_seconds"`
+	SourceMaxImageMegapixels int32       `json:"source_max_image_megapixels"`
+	DiveModel                string      `json:"dive_model"`
+	DiveProvider             string      `json:"dive_provider"`
+}
+
+func (q *Queries) UpdateGraphMemoryProfileCAS(ctx context.Context, arg UpdateGraphMemoryProfileCASParams) (GraphMemoryProfile, error) {
+	row := q.db.QueryRow(ctx, updateGraphMemoryProfileCAS,
+		arg.WorkspaceID,
+		arg.ConfigVersion,
+		arg.MemoryType,
+		arg.ExploreAgents,
+		arg.ExploreMaxRounds,
+		arg.TttEnabled,
+		arg.ExploreNodesPerExpansion,
+		arg.MaxHierarchyFanout,
+		arg.MaxRelationEdgesPerNode,
+		arg.DiveMaxRounds,
+		arg.DiveMaxViewedNodes,
+		arg.DiveMaxSourceFiles,
+		arg.DiveTimeoutSeconds,
+		arg.WRound,
+		arg.SourceMaxFileBytes,
+		arg.SourceMaxTotalBytes,
+		arg.SourceMaxPdfPages,
+		arg.SourceMaxAvSeconds,
+		arg.SourceMaxImageMegapixels,
+		arg.DiveModel,
+		arg.DiveProvider,
+	)
+	var i GraphMemoryProfile
+	err := row.Scan(
+		&i.WorkspaceID,
+		&i.MemoryType,
+		&i.ExploreAgents,
+		&i.ExploreMaxRounds,
+		&i.UpdatedAt,
+		&i.ScopedWriterReady,
+		&i.Timezone,
+		&i.TttEnabled,
+		&i.ExploreNodesPerExpansion,
+		&i.MaxHierarchyFanout,
+		&i.MaxRelationEdgesPerNode,
+		&i.DiveMaxRounds,
+		&i.DiveMaxViewedNodes,
+		&i.DiveMaxSourceFiles,
+		&i.DiveTimeoutSeconds,
+		&i.WRound,
+		&i.SourceMaxFileBytes,
+		&i.SourceMaxTotalBytes,
+		&i.SourceMaxPdfPages,
+		&i.SourceMaxAvSeconds,
+		&i.SourceMaxImageMegapixels,
+		&i.DiveModel,
+		&i.DiveProvider,
+		&i.ConfigVersion,
+		&i.SchemaVersion,
+	)
+	return i, err
+}
+
 const upsertGraphMemoryChannelRoute = `-- name: UpsertGraphMemoryChannelRoute :exec
 INSERT INTO graph_memory_channel_route
   (workspace_id, channel_id, routing_mode, current_graph_kind, current_graph_owner_id, generation)
@@ -371,48 +604,4 @@ func (q *Queries) UpsertGraphMemoryChannelRoute(ctx context.Context, arg UpsertG
 		arg.Generation,
 	)
 	return err
-}
-
-const upsertGraphMemoryProfile = `-- name: UpsertGraphMemoryProfile :one
-INSERT INTO graph_memory_profile (workspace_id, memory_type, explore_agents, explore_max_rounds)
-VALUES ($1, $2, $3, $4)
-ON CONFLICT (workspace_id) DO UPDATE SET
-  memory_type = EXCLUDED.memory_type,
-  explore_agents = EXCLUDED.explore_agents,
-  explore_max_rounds = EXCLUDED.explore_max_rounds,
-  updated_at = now()
-RETURNING workspace_id, memory_type, explore_agents, explore_max_rounds, updated_at
-`
-
-type UpsertGraphMemoryProfileParams struct {
-	WorkspaceID      pgtype.UUID `json:"workspace_id"`
-	MemoryType       string      `json:"memory_type"`
-	ExploreAgents    int32       `json:"explore_agents"`
-	ExploreMaxRounds int32       `json:"explore_max_rounds"`
-}
-
-type UpsertGraphMemoryProfileRow struct {
-	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
-	MemoryType       string             `json:"memory_type"`
-	ExploreAgents    int32              `json:"explore_agents"`
-	ExploreMaxRounds int32              `json:"explore_max_rounds"`
-	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
-}
-
-func (q *Queries) UpsertGraphMemoryProfile(ctx context.Context, arg UpsertGraphMemoryProfileParams) (UpsertGraphMemoryProfileRow, error) {
-	row := q.db.QueryRow(ctx, upsertGraphMemoryProfile,
-		arg.WorkspaceID,
-		arg.MemoryType,
-		arg.ExploreAgents,
-		arg.ExploreMaxRounds,
-	)
-	var i UpsertGraphMemoryProfileRow
-	err := row.Scan(
-		&i.WorkspaceID,
-		&i.MemoryType,
-		&i.ExploreAgents,
-		&i.ExploreMaxRounds,
-		&i.UpdatedAt,
-	)
-	return i, err
 }

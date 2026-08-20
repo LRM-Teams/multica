@@ -1,17 +1,70 @@
 -- name: GetGraphMemoryProfile :one
-SELECT workspace_id, memory_type, explore_agents, explore_max_rounds, updated_at
+SELECT workspace_id, memory_type, explore_agents, explore_max_rounds, updated_at,
+       scoped_writer_ready, timezone,
+       ttt_enabled, explore_nodes_per_expansion,
+       max_hierarchy_fanout, max_relation_edges_per_node,
+       dive_max_rounds, dive_max_viewed_nodes, dive_max_source_files,
+       dive_timeout_seconds, w_round,
+       source_max_file_bytes, source_max_total_bytes, source_max_pdf_pages,
+       source_max_av_seconds, source_max_image_megapixels,
+       dive_model, dive_provider, config_version, schema_version
 FROM graph_memory_profile
 WHERE workspace_id = $1;
 
--- name: UpsertGraphMemoryProfile :one
-INSERT INTO graph_memory_profile (workspace_id, memory_type, explore_agents, explore_max_rounds)
-VALUES ($1, $2, $3, $4)
-ON CONFLICT (workspace_id) DO UPDATE SET
-  memory_type = EXCLUDED.memory_type,
-  explore_agents = EXCLUDED.explore_agents,
-  explore_max_rounds = EXCLUDED.explore_max_rounds,
+-- name: CreateGraphMemoryProfile :one
+INSERT INTO graph_memory_profile (
+  workspace_id, memory_type, explore_agents, explore_max_rounds,
+  ttt_enabled, explore_nodes_per_expansion,
+  max_hierarchy_fanout, max_relation_edges_per_node,
+  dive_max_rounds, dive_max_viewed_nodes, dive_max_source_files,
+  dive_timeout_seconds, w_round,
+  source_max_file_bytes, source_max_total_bytes, source_max_pdf_pages,
+  source_max_av_seconds, source_max_image_megapixels,
+  dive_model, dive_provider
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+RETURNING workspace_id, memory_type, explore_agents, explore_max_rounds, updated_at,
+       scoped_writer_ready, timezone,
+       ttt_enabled, explore_nodes_per_expansion,
+       max_hierarchy_fanout, max_relation_edges_per_node,
+       dive_max_rounds, dive_max_viewed_nodes, dive_max_source_files,
+       dive_timeout_seconds, w_round,
+       source_max_file_bytes, source_max_total_bytes, source_max_pdf_pages,
+       source_max_av_seconds, source_max_image_megapixels,
+       dive_model, dive_provider, config_version, schema_version;
+
+-- name: UpdateGraphMemoryProfileCAS :one
+UPDATE graph_memory_profile SET
+  memory_type = $3,
+  explore_agents = $4,
+  explore_max_rounds = $5,
+  ttt_enabled = $6,
+  explore_nodes_per_expansion = $7,
+  max_hierarchy_fanout = $8,
+  max_relation_edges_per_node = $9,
+  dive_max_rounds = $10,
+  dive_max_viewed_nodes = $11,
+  dive_max_source_files = $12,
+  dive_timeout_seconds = $13,
+  w_round = $14,
+  source_max_file_bytes = $15,
+  source_max_total_bytes = $16,
+  source_max_pdf_pages = $17,
+  source_max_av_seconds = $18,
+  source_max_image_megapixels = $19,
+  dive_model = $20,
+  dive_provider = $21,
+  config_version = config_version + 1,
   updated_at = now()
-RETURNING workspace_id, memory_type, explore_agents, explore_max_rounds, updated_at;
+WHERE workspace_id = $1 AND config_version = $2
+RETURNING workspace_id, memory_type, explore_agents, explore_max_rounds, updated_at,
+       scoped_writer_ready, timezone,
+       ttt_enabled, explore_nodes_per_expansion,
+       max_hierarchy_fanout, max_relation_edges_per_node,
+       dive_max_rounds, dive_max_viewed_nodes, dive_max_source_files,
+       dive_timeout_seconds, w_round,
+       source_max_file_bytes, source_max_total_bytes, source_max_pdf_pages,
+       source_max_av_seconds, source_max_image_megapixels,
+       dive_model, dive_provider, config_version, schema_version;
 
 -- name: GetGraphMemoryChannelBindingForUpdate :one
 SELECT project_id FROM channel

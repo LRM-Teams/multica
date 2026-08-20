@@ -918,13 +918,31 @@ type GraphMemoryConsolidationRun struct {
 }
 
 type GraphMemoryProfile struct {
-	WorkspaceID       pgtype.UUID        `json:"workspace_id"`
-	MemoryType        string             `json:"memory_type"`
-	ExploreAgents     int32              `json:"explore_agents"`
-	ExploreMaxRounds  int32              `json:"explore_max_rounds"`
-	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
-	ScopedWriterReady bool               `json:"scoped_writer_ready"`
-	Timezone          string             `json:"timezone"`
+	WorkspaceID              pgtype.UUID        `json:"workspace_id"`
+	MemoryType               string             `json:"memory_type"`
+	ExploreAgents            int32              `json:"explore_agents"`
+	ExploreMaxRounds         int32              `json:"explore_max_rounds"`
+	UpdatedAt                pgtype.Timestamptz `json:"updated_at"`
+	ScopedWriterReady        bool               `json:"scoped_writer_ready"`
+	Timezone                 string             `json:"timezone"`
+	TttEnabled               bool               `json:"ttt_enabled"`
+	ExploreNodesPerExpansion int32              `json:"explore_nodes_per_expansion"`
+	MaxHierarchyFanout       int32              `json:"max_hierarchy_fanout"`
+	MaxRelationEdgesPerNode  int32              `json:"max_relation_edges_per_node"`
+	DiveMaxRounds            int32              `json:"dive_max_rounds"`
+	DiveMaxViewedNodes       int32              `json:"dive_max_viewed_nodes"`
+	DiveMaxSourceFiles       int32              `json:"dive_max_source_files"`
+	DiveTimeoutSeconds       int32              `json:"dive_timeout_seconds"`
+	WRound                   float64            `json:"w_round"`
+	SourceMaxFileBytes       int64              `json:"source_max_file_bytes"`
+	SourceMaxTotalBytes      int64              `json:"source_max_total_bytes"`
+	SourceMaxPdfPages        int32              `json:"source_max_pdf_pages"`
+	SourceMaxAvSeconds       int32              `json:"source_max_av_seconds"`
+	SourceMaxImageMegapixels int32              `json:"source_max_image_megapixels"`
+	DiveModel                string             `json:"dive_model"`
+	DiveProvider             string             `json:"dive_provider"`
+	ConfigVersion            int64              `json:"config_version"`
+	SchemaVersion            int32              `json:"schema_version"`
 }
 
 type InboxItem struct {

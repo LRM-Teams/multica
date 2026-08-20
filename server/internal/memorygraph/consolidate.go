@@ -2,6 +2,7 @@ package memorygraph
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -23,12 +24,16 @@ const (
 	OpAddHierarchyEdge = "add_hierarchy_edge"
 	OpAddRelationEdge  = "add_relation_edge"
 	OpDeleteEdge       = "delete_edge"
-	OpPruneEdge        = "prune_edge" // agent-driven sparsification (Q20)
-	OpSubmit           = "submit"     // agent signals completion within budget (Q19)
+	OpUpdateEdge       = "update_edge" // rejected for source provenance; not a management write
+	OpPruneEdge        = "prune_edge"  // agent-driven sparsification (Q20)
+	OpSubmit           = "submit"      // agent signals completion within budget (Q19)
 )
 
 // OpSelectVersion is the op-log entry recording a TTT version selection.
 const OpSelectVersion = "select_version"
+
+// OpRejectedManagement records a rejected management operation and its reason.
+const OpRejectedManagement = "rejected_management"
 
 // CostWeights are the design §6 consolidation cost weights:
 //
@@ -45,34 +50,39 @@ type CostWeights struct {
 // ConsolidateConfig configures the Consolidator (design §6 consolidation
 // block plus the graph shape limits).
 type ConsolidateConfig struct {
-	TriggerSegments int     // new staging segments that trigger consolidation (default 50)
-	TriggerQueries  int     // queries since last consolidation that trigger it (default 200)
-	OpBudget        int     // max operations per consolidation trajectory (default 50)
-	RoundBudget     int     // max agent working rounds per trajectory (default 10)
-	TTVTrajectories int     // T parallel candidate trajectories; 1 = non-TTT in-place mode (default 4)
-	RecallTolerance float64 // allowed recall-rate drop vs baseline (default 0.02)
-	CostWeights     CostWeights
-	MaxLevels       int           // hierarchy depth cap; levels are 0..MaxLevels-1 (default 4)
-	MaxFanout       int           // max summarizes children per node (default 8)
-	VersionsKeep    int           // versions retained by the post-consolidation GC (default 5)
-	Model           string        // model name passed to the agent backend
-	Timeout         time.Duration // per-trajectory wall-clock timeout
+	TriggerSegments  int     // new staging segments that trigger consolidation (default 50)
+	TriggerQueries   int     // queries since last consolidation that trigger it (default 200)
+	OpBudget         int     // max operations per consolidation trajectory (default 50)
+	RoundBudget      int     // max agent working rounds per trajectory (default 10)
+	TTVTrajectories  int     // T parallel candidate trajectories; 1 = non-TTT in-place mode (default 4)
+	RecallTolerance  float64 // allowed recall-rate drop vs baseline (default 0.02)
+	CostWeights      CostWeights
+	MaxLevels        int           // hierarchy depth cap; levels are 0..MaxLevels-1 (default 4)
+	MaxFanout        int           // max summarizes children per node (default 8)
+	MaxRelationEdges int           // max incident countable relation edges per node (default 8)
+	VersionsKeep     int           // versions retained by the post-consolidation GC (default 5)
+	Model            string        // model name passed to the agent backend
+	Timeout          time.Duration // per-trajectory wall-clock timeout
+	// BacktestGroundTruth attaches server-authoritative catalog items and
+	// ledger baselines before candidate evaluation. Nil preserves legacy input.
+	BacktestGroundTruth func(ctx context.Context, store *Store, fromVersion int, queries []*BacktestQuery) error
 }
 
 // DefaultConsolidateConfig returns the design §6 defaults.
 func DefaultConsolidateConfig() ConsolidateConfig {
 	return ConsolidateConfig{
-		TriggerSegments: 50,
-		TriggerQueries:  200,
-		OpBudget:        50,
-		RoundBudget:     10,
-		TTVTrajectories: 4,
-		RecallTolerance: 0.02,
-		CostWeights:     CostWeights{Round: 1.0, Tail: 0.5, Embed: 0.2, Node: 0.1, Graph: 0.05},
-		MaxLevels:       4,
-		MaxFanout:       8,
-		VersionsKeep:    5,
-		Timeout:         30 * time.Minute,
+		TriggerSegments:  50,
+		TriggerQueries:   200,
+		OpBudget:         50,
+		RoundBudget:      10,
+		TTVTrajectories:  4,
+		RecallTolerance:  0.02,
+		CostWeights:      CostWeights{Round: 1.0, Tail: 0.5, Embed: 0.2, Node: 0.1, Graph: 0.05},
+		MaxLevels:        4,
+		MaxFanout:        8,
+		MaxRelationEdges: 8,
+		VersionsKeep:     5,
+		Timeout:          30 * time.Minute,
 	}
 }
 
@@ -105,6 +115,9 @@ func (c ConsolidateConfig) normalized() ConsolidateConfig {
 	}
 	if c.MaxFanout <= 0 {
 		c.MaxFanout = d.MaxFanout
+	}
+	if c.MaxRelationEdges <= 0 {
+		c.MaxRelationEdges = d.MaxRelationEdges
 	}
 	if c.VersionsKeep <= 0 {
 		c.VersionsKeep = d.VersionsKeep
@@ -341,6 +354,11 @@ func (c *Consolidator) consolidateTTT(ctx context.Context, current int, staging 
 	if err != nil {
 		return nil, fmt.Errorf("consolidate ttt: backtest queries: %w", err)
 	}
+	if c.cfg.BacktestGroundTruth != nil {
+		if err := c.cfg.BacktestGroundTruth(ctx, c.store, current, queries); err != nil {
+			return nil, fmt.Errorf("consolidate ttt: attach backtest ground truth: %w", err)
+		}
+	}
 	bt := NewBacktester(c.store, BacktestConfig{
 		RecallTolerance: c.cfg.RecallTolerance,
 		Embedder:        c.emb,
@@ -426,15 +444,20 @@ func (c *Consolidator) recordRegressions(winnerVersion int, winner CandidateStat
 	for _, re := range existing {
 		known[re.Query] = true
 	}
-	if len(winner.Queries) != len(queries) {
-		// Defensive: a winner that failed evaluation before the per-query
-		// backtest ran cannot be mapped back to its queries.
-		slog.Warn("consolidate ttt: winner query stats misaligned; skipping regression recording",
-			"version", winnerVersion, "stats", len(winner.Queries), "queries", len(queries))
-		return
-	}
-	for i, q := range queries {
-		qs := winner.Queries[i]
+	statIndex := 0
+	for _, q := range queries {
+		// Queries without resolved ground truth are intentionally skipped by
+		// EvaluateCandidate and therefore have no corresponding audit stat.
+		if len(resolveBacktestItems(q)) == 0 {
+			continue
+		}
+		if statIndex >= len(winner.Queries) {
+			slog.Warn("consolidate ttt: winner query stats misaligned; skipping regression recording",
+				"version", winnerVersion, "stats", len(winner.Queries), "queries", len(queries))
+			return
+		}
+		qs := winner.Queries[statIndex]
+		statIndex++
 		if q.Regression || !qs.Regressed || known[q.Query] {
 			continue
 		}
@@ -541,8 +564,15 @@ func (c *Consolidator) runAgent(ctx context.Context, prompt string) (*consolidat
 // under the given actor. OpBudget mutation operations are honored at most;
 // OpSubmit stops processing. Levels are recomputed after the batch.
 func (c *Consolidator) applyOperations(g *Graph, version int, actor string, ops []ConsolidateOp) (applied int, rejected []RejectReason, err error) {
+	var auditErr error
 	reject := func(op ConsolidateOp, target, reason string) {
 		rejected = append(rejected, RejectReason{Actor: actor, Op: op.Op, Target: target, Reason: reason})
+		if appendErr := c.oplog.Append(version, actor, OpRejectedManagement, target, map[string]any{
+			"operation": op.Op,
+			"reason":    reason,
+		}); appendErr != nil && auditErr == nil {
+			auditErr = appendErr
+		}
 	}
 	mutations := 0
 	for _, op := range ops {
@@ -567,6 +597,9 @@ func (c *Consolidator) applyOperations(g *Graph, version int, actor string, ops 
 			return applied, rejected, fmt.Errorf("op log v%d: %w", version, err)
 		}
 	}
+	if auditErr != nil {
+		return applied, rejected, fmt.Errorf("op log rejection v%d: %w", version, auditErr)
+	}
 	if err := g.RecomputeLevels(); err != nil {
 		return applied, rejected, fmt.Errorf("recompute levels: %w", err)
 	}
@@ -576,6 +609,9 @@ func (c *Consolidator) applyOperations(g *Graph, version int, actor string, ops 
 // applyOne validates and applies a single mutation operation, returning the
 // audit target id. The graph is left untouched when an error is returned.
 func (c *Consolidator) applyOne(g *Graph, version int, actor string, op ConsolidateOp) (string, error) {
+	if reason := c.sourceLayerReject(g, op); reason != "" {
+		return opTarget(op), fmt.Errorf("source_layer_immutable: %s", reason)
+	}
 	switch op.Op {
 	case OpAddNode:
 		if op.Node == nil {
@@ -647,6 +683,13 @@ func (c *Consolidator) applyOne(g *Graph, version int, actor string, op Consolid
 		n.SourceChannelIDs = mergeStringSet(existing.SourceChannelIDs, n.SourceChannelIDs)
 		n.SourceTaskIDs = mergeStringSet(existing.SourceTaskIDs, n.SourceTaskIDs)
 		c.mergeSegmentProvenance(&n)
+		if reason := extractionIdentityReject(existing, &n); reason != "" {
+			return id, fmt.Errorf("%s", reason)
+		}
+		if existing.Extraction != nil && n.Extraction == nil {
+			copied := *existing.Extraction
+			n.Extraction = &copied
+		}
 		n.UpdatedVersion = version
 		*existing = n // same-package in-place replacement keeps incident edges
 		g.rebuild()
@@ -684,6 +727,9 @@ func (c *Consolidator) applyOne(g *Graph, version int, actor string, op Consolid
 		}
 		e := *op.Edge
 		edgeDefaults(&e, actor, version)
+		if err := rejectRelationDegree(g, &e, c.cfg.MaxRelationEdges); err != nil {
+			return e.EdgeID, err
+		}
 		if err := g.AddRelationEdge(&e); err != nil {
 			return e.EdgeID, err
 		}
@@ -793,6 +839,22 @@ func mergeStringSet(base, add []string) []string {
 		}
 	}
 	return out
+}
+
+// rejectRelationDegree fails when adding e would exceed the per-node
+// countable relation-degree cap. Node-to-node edges consume a slot at both
+// ends; node-to-edge refs consume a slot only at From.
+func rejectRelationDegree(g *Graph, e *Edge, limit int) error {
+	if limit <= 0 {
+		return nil
+	}
+	if CountableRelationDegree(g, e.From) >= limit {
+		return fmt.Errorf("relation edge %s: node %q relation degree limit %d reached", e.EdgeID, e.From, limit)
+	}
+	if !e.IsEdgeRef() && CountableRelationDegree(g, e.To) >= limit {
+		return fmt.Errorf("relation edge %s: node %q relation degree limit %d reached", e.EdgeID, e.To, limit)
+	}
+	return nil
 }
 
 // edgeDefaults fills audit fields of an agent-supplied edge.
@@ -979,7 +1041,7 @@ func (c *Consolidator) buildPrompt(staging []stagingSummary, stats graphStats, s
 	b.WriteString("- {\"op\":\"submit\"} — finish within budget.\n\n")
 
 	fmt.Fprintf(&b, "Budgets (hard limits): at most %d operations and %d working rounds; submit when done.\n", c.cfg.OpBudget, c.cfg.RoundBudget)
-	fmt.Fprintf(&b, "Graph limits: at most %d hierarchy levels and %d children per node.\n\n", c.cfg.MaxLevels, c.cfg.MaxFanout)
+	fmt.Fprintf(&b, "Graph limits: at most %d hierarchy levels, %d children per node, and %d relation edges per node.\n\n", c.cfg.MaxLevels, c.cfg.MaxFanout, c.cfg.MaxRelationEdges)
 
 	fmt.Fprintf(&b, "Current graph stats: %d nodes, %d hierarchy edges, %d relation edges, max level %d.\n\n",
 		stats.NodeCount, stats.HierEdgeCount, stats.RelEdgeCount, stats.MaxLevel)
@@ -1021,4 +1083,16 @@ func candidateAuditDetails(cands []CandidateStats) []map[string]any {
 		}
 	}
 	return out
+}
+
+// extractJSONObject parses a strict-JSON final response, tolerating
+// surrounding prose by slicing from the first "{" to the last "}" (same
+// approach as extractExploreOutput and memorycuration's team_output.go).
+func extractJSONObject(output string, dst any) bool {
+	start := strings.Index(output, "{")
+	end := strings.LastIndex(output, "}")
+	if start < 0 || end < start {
+		return false
+	}
+	return json.Unmarshal([]byte(output[start:end+1]), dst) == nil
 }

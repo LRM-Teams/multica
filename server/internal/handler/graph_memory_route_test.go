@@ -17,6 +17,14 @@ func TestGraphMemoryRouteSchema(t *testing.T) {
 		t.Skip("test database unavailable")
 	}
 	ctx := context.Background()
+	// Self-contained profile row: scoped_writer_ready must be observable
+	// without relying on rows left behind by other tests.
+	workspaceID := createGraphMemoryTestWorkspace(t)
+	mustGraphMemoryMember(t, workspaceID, "owner")
+	if _, err := testPool.Exec(ctx,
+		`INSERT INTO graph_memory_profile (workspace_id, memory_type) VALUES ($1, 'graph')`, workspaceID); err != nil {
+		t.Fatal(err)
+	}
 	var routingMode string
 	err := testPool.QueryRow(ctx, `
 		SELECT routing_mode FROM graph_memory_channel_route LIMIT 0`).Scan(&routingMode)
@@ -59,6 +67,28 @@ func createGraphMemoryTestWorkspace(t *testing.T) pgtype.UUID {
 	return id
 }
 
+// mustGraphMemoryWorkspaceOwner installs a dedicated owner member so the
+// workspace satisfies the exactly-one-owner invariant (migration 301) before
+// non-owner members join. The shared test user stays free to take the role
+// under test (e.g. plain member).
+func mustGraphMemoryWorkspaceOwner(t *testing.T, workspaceID pgtype.UUID) {
+	t.Helper()
+	ctx := context.Background()
+	var userID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO "user" (name, email)
+		VALUES ($1, $2)
+		RETURNING id::text
+	`, "graph-memory-owner-"+uuid.NewString()[:8], "graph-memory-owner-"+uuid.NewString()[:8]+"@multica.ai").Scan(&userID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO member (workspace_id, user_id, role) VALUES ($1, $2, 'owner')
+	`, workspaceID, userID); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // createGraphMemoryTestChannel inserts a channel bound to no project
 // (migration 112 columns; project_id from migration 123 stays NULL).
 func createGraphMemoryTestChannel(t *testing.T, workspaceID pgtype.UUID) pgtype.UUID {
@@ -82,6 +112,10 @@ func TestResolveChannelRouteConcurrentSingleGeneration(t *testing.T) {
 	}
 	ctx := context.Background()
 	workspaceID := createGraphMemoryTestWorkspace(t)
+	// The channel auto-seed (migration 237) makes the creator the ordinary
+	// group's human owner only when the creator is a workspace member; the
+	// workspace itself must also satisfy the single-owner invariant (301).
+	mustGraphMemoryMember(t, workspaceID, "owner")
 	channelID := createGraphMemoryTestChannel(t, workspaceID) // bound to no project
 	const n = 8
 	results := make(chan service.GraphRouteResolution, n)

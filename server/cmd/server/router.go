@@ -584,7 +584,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Post("/agent-memory-writes", h.ReportAgentMemoryWrites)
 		r.Post("/agent-memory-center/sync", h.SyncAgentMemoryCenter)
 		r.Post("/agent-memory-center/hydrate", h.HydrateAgentMemoryCenter)
-		r.Post("/graph-memory/judge", h.ReportGraphMemoryJudge)
+		r.Post("/graph-memory/recalls", h.RequestGraphMemoryRecall)
 
 		r.Get("/tasks/{taskId}/status", h.GetTaskStatus)
 		r.Post("/tasks/{taskId}/progress", h.ReportTaskProgress)

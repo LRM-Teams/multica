@@ -35,7 +35,10 @@ func TestDailyNodeIDIdentity(t *testing.T) {
 func TestDailySealIsImmutableAndLateEventsLandInOpenDaily(t *testing.T) {
 	store, u := dailyFixture(t)
 	ctx := context.Background()
-	yesterday := time.Now().In(u.Location()).AddDate(0, 0, -1)
+	// Anchor to midday: a wall-clock "yesterday" within 2h of midnight makes
+	// the late event below cross into today and the test time-of-day dependent.
+	now := time.Now().In(u.Location())
+	yesterday := time.Date(now.Year(), now.Month(), now.Day(), 12, 0, 0, 0, u.Location()).AddDate(0, 0, -1)
 
 	if err := u.Record(ctx, DailyEvent{AgentID: "a1", ProjectID: "p1", Text: "shipped v1", OccurredAt: yesterday}); err != nil {
 		t.Fatal(err)

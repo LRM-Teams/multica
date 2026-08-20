@@ -209,14 +209,6 @@ type Daemon struct {
 	memoryCurationRuns   map[string]string // workspace\x00stage -> Beijing plan date
 	activeCurationRuns   map[string]string // runtime id -> claimed run id
 
-	// graphProvs holds the lazily-initialized graph memory providers, one per
-	// canonical graph directory (spec §3: the daemon recalls from the task's
-	// project and/or channel graph; the server owns the data plane and the
-	// daemon never creates graph dirs). A provider init failure for one dir
-	// is logged and that dir is skipped — never a legacy fallback.
-	graphProvMu sync.Mutex
-	graphProvs  map[string]*graphMemoryProvider // keyed by canonical graph dir
-
 	// graphProfiles caches the server-delivered effective graph memory
 	// profile per workspace (spec §10): deliveries on the resident/channel
 	// path carry it, and the resident-message memory prep applies it.

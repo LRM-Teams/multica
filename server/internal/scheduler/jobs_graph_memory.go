@@ -203,7 +203,7 @@ func makeGraphMemoryConsolidationHandler(pool *pgxpool.Pool, bm *obsmetrics.Busi
 			}
 			// Per-workspace errors are logged and the loop continues: one
 			// broken graph must not starve the others.
-			ok, err := consolidateOneGraph(ctx, dir, state.dir(dir), bm)
+			ok, err := consolidateOneGraphWithPool(ctx, pool, dir, state.dir(dir), bm)
 			if err != nil {
 				slog.Warn("graph memory consolidation failed", "dir", dir, "error", err)
 				continue
@@ -243,12 +243,28 @@ type graphConsolidationRunner func(ctx context.Context) (*memorygraph.Consolidat
 // memory_graph store at dir, updating ds in place. It reports whether a
 // consolidation ran.
 func consolidateOneGraph(ctx context.Context, dir string, ds *graphDirState, bm *obsmetrics.BusinessMetrics) (bool, error) {
+	return consolidateOneGraphWithPool(ctx, nil, dir, ds, bm)
+}
+
+// consolidateOneGraphWithPool wires authoritative catalog ground truth when
+// the scheduler has a database pool. Nil preserves DB-less test behavior.
+func consolidateOneGraphWithPool(ctx context.Context, pool *pgxpool.Pool, dir string, ds *graphDirState, bm *obsmetrics.BusinessMetrics) (bool, error) {
 	store := memorygraph.NewStore(dir)
 	if err := store.Init(); err != nil {
 		return false, fmt.Errorf("init store: %w", err)
 	}
 	cfg := memorygraph.DefaultConsolidateConfig()
 	cfg.Model = strings.TrimSpace(os.Getenv("MULTICA_PI_MODEL"))
+	if pool != nil {
+		identity, err := memorygraph.ReadGraphIdentity(dir)
+		if err != nil {
+			return false, err
+		}
+		catalog := service.NewGraphMemoryInfoCatalogService(pool)
+		cfg.BacktestGroundTruth = func(ctx context.Context, _ *memorygraph.Store, _ int, queries []*memorygraph.BacktestQuery) error {
+			return catalog.AttachBacktestGroundTruth(ctx, identity.Kind, identity.OwnerID, queries)
+		}
+	}
 	run := func(ctx context.Context) (*memorygraph.ConsolidateResult, error) {
 		backend, err := graphMemoryPIBackend()
 		if err != nil {

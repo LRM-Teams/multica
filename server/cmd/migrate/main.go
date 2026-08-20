@@ -51,6 +51,7 @@ var preMigrationHooks = map[string]preMigrationHook{
 	"337_env_dispatch_delivery_obligation_agent_index": runAgentDeleteFKIndexesHook,
 	"384_research_message_target_agent_scoped_index":   runAgentDeleteFKIndexesHook,
 	"385_research_message_target_agent_index":          runResearchMessageTargetAgentIndexHook,
+	"425_graph_memory_fk_indexes":                      runAgentDeleteCascadeFKIndexesHook,
 }
 
 type concurrentIndexSpec struct {
@@ -70,6 +71,8 @@ var agentDeleteIndexOptionalRelations = map[string]string{
 	"idx_agent_chat_delivery_message":                             "agent_chat_delivery",
 	"idx_agent_chat_delivery_chat_session":                        "agent_chat_delivery",
 	"idx_research_message_workspace_target_agent":                 "research_message",
+	"idx_graph_memory_recall_task":                                "graph_memory_recall",
+	"idx_graph_memory_rl_session_recall":                          "graph_memory_rl_session",
 }
 
 func runAgentDeleteFKIndexesHook(ctx context.Context, pool *pgxpool.Pool) error {
@@ -164,6 +167,9 @@ func runAgentDeleteCascadeFKIndexesHook(ctx context.Context, pool *pgxpool.Pool)
 		// 345_agent_chat_delivery: chat_message / chat_session CASCADE lookups.
 		{"idx_agent_chat_delivery_message", `CREATE INDEX CONCURRENTLY idx_agent_chat_delivery_message ON agent_chat_delivery (message_id)`},
 		{"idx_agent_chat_delivery_chat_session", `CREATE INDEX CONCURRENTLY idx_agent_chat_delivery_chat_session ON agent_chat_delivery (chat_session_id)`},
+		// 419/421 graph-memory ledger: recall task and RL-session recall cascade lookups.
+		{"idx_graph_memory_recall_task", `CREATE INDEX CONCURRENTLY idx_graph_memory_recall_task ON graph_memory_recall (task_id)`},
+		{"idx_graph_memory_rl_session_recall", `CREATE INDEX CONCURRENTLY idx_graph_memory_rl_session_recall ON graph_memory_rl_session (recall_id)`},
 	}
 
 	return ensureConcurrentIndexes(ctx, pool, indexes)

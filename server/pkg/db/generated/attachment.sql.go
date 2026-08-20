@@ -692,6 +692,11 @@ type ReplaceCommentAttachmentsParams struct {
 // Replace the attachment set for a comment. Newly added ids may be unbound
 // workspace uploads (issue_id IS NULL) or already scoped to this issue.
 func (q *Queries) ReplaceCommentAttachments(ctx context.Context, arg ReplaceCommentAttachmentsParams) error {
-	_, err := q.db.Exec(ctx, replaceCommentAttachments, arg.CommentID, arg.IssueID, arg.WorkspaceID, arg.AttachmentIds)
+	_, err := q.db.Exec(ctx, replaceCommentAttachments,
+		arg.CommentID,
+		arg.IssueID,
+		arg.WorkspaceID,
+		arg.AttachmentIds,
+	)
 	return err
 }

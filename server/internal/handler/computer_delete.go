@@ -317,7 +317,7 @@ func teardownArchivedAgentDependents(ctx context.Context, qtx *db.Queries, agent
 		return nil
 	}
 	if err := qtx.CancelRunningAgentExecutionsByAgentIDs(ctx, db.CancelRunningAgentExecutionsByAgentIDsParams{
-		FailureReason: "agent permanently deleted",
+		FailureReason: pgtype.Text{String: "agent permanently deleted", Valid: true},
 		AgentIds:      agentIDs,
 	}); err != nil {
 		return err

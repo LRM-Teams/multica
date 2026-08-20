@@ -109,7 +109,7 @@ INSERT INTO agent_runtime (
     owner_id,
     last_seen_at,
     pinned_version
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now(), NULLIF($10, ''))
+) VALUES (@workspace_id, @daemon_id, @name, @runtime_mode, @provider, @status, @device_info, @metadata, @owner_id, now(), NULLIF(@pinned_version, ''))
 ON CONFLICT (workspace_id, daemon_id, provider)
 DO UPDATE SET
     name = EXCLUDED.name,
@@ -122,7 +122,7 @@ DO UPDATE SET
     last_seen_at = now(),
     updated_at = now(),
     starting_since = NULL,
-    pinned_version = NULLIF($10, '')
+    pinned_version = NULLIF(@pinned_version, '')
 RETURNING *, (xmax = 0) AS inserted;
 
 -- name: PrecreateAgentRuntime :one

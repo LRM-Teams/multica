@@ -291,27 +291,27 @@ func (q *Queries) SetStarterContentState(ctx context.Context, arg SetStarterCont
 
 const updateUser = `-- name: UpdateUser :one
 UPDATE "user" SET
-    display_name = COALESCE($2, display_name),
-    avatar_url = COALESCE($3, avatar_url),
-    language = COALESCE($4, language),
-    profile_description = COALESCE($5, profile_description),
+    display_name = COALESCE($1, display_name),
+    avatar_url = COALESCE($2, avatar_url),
+    language = COALESCE($3, language),
+    profile_description = COALESCE($4, profile_description),
     timezone = CASE
-        WHEN $6::text IS NULL THEN timezone
-        WHEN $6::text = ''    THEN NULL
-        ELSE $6::text
+        WHEN $5::text IS NULL THEN timezone
+        WHEN $5::text = ''    THEN NULL
+        ELSE $5::text
     END,
     updated_at = now()
-WHERE id = $1
+WHERE id = $6
 RETURNING id, name, email, avatar_url, created_at, updated_at, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language, profile_description, timezone, display_name
 `
 
 type UpdateUserParams struct {
-	ID                 pgtype.UUID `json:"id"`
-	DisplayName        pgtype.Text `json:"display_name"`
+	DisplayName        string      `json:"display_name"`
 	AvatarUrl          pgtype.Text `json:"avatar_url"`
 	Language           pgtype.Text `json:"language"`
-	ProfileDescription pgtype.Text `json:"profile_description"`
-	Timezone           pgtype.Text `json:"timezone"`
+	ProfileDescription string      `json:"profile_description"`
+	Timezone           string      `json:"timezone"`
+	ID                 pgtype.UUID `json:"id"`
 }
 
 // Patches the user-controlled profile fields. Each parameter follows
@@ -319,21 +319,21 @@ type UpdateUserParams struct {
 // doesn't intend to write.
 //
 // `timezone` (Viewing-tz preference) participates in
-// the same shape but uses sqlc.narg + a sentinel-string convention:
+// the same shape but uses a sentinel-string convention:
 // the handler passes the empty string "" to mean "clear back to NULL"
 // (browser-detected fallback), an IANA name like "Asia/Shanghai" to
-// pin a value, and `sqlc.narg('timezone') IS NULL` (no value at all)
+// pin a value, and a NULL $6 (no value at all)
 // to leave the existing column untouched. Folding it into UpdateUser
 // rather than carrying a dedicated UpdateUserTimezone keeps the
 // profile-patch shape uniform between Preferences fields.
 func (q *Queries) UpdateUser(ctx context.Context, arg UpdateUserParams) (User, error) {
 	row := q.db.QueryRow(ctx, updateUser,
-		arg.ID,
 		arg.DisplayName,
 		arg.AvatarUrl,
 		arg.Language,
 		arg.ProfileDescription,
 		arg.Timezone,
+		arg.ID,
 	)
 	var i User
 	err := row.Scan(

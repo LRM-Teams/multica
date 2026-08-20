@@ -80,6 +80,25 @@ func (q *Queries) CreateEnvCheckpoint(ctx context.Context, arg CreateEnvCheckpoi
 	return i, err
 }
 
+const deleteEnvCheckpoint = `-- name: DeleteEnvCheckpoint :exec
+DELETE FROM env_checkpoint
+WHERE id = $1 AND workspace_id = $2
+`
+
+type DeleteEnvCheckpointParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+// Cascades the savepoint ownership rows migration 246 added and the
+// env_checkpoint_lane rows migration 247 added. The Cube templates themselves are
+// scheduled for deletion through delete_template jobs before this runs, since
+// once this row is gone nothing records that they exist.
+func (q *Queries) DeleteEnvCheckpoint(ctx context.Context, arg DeleteEnvCheckpointParams) error {
+	_, err := q.db.Exec(ctx, deleteEnvCheckpoint, arg.ID, arg.WorkspaceID)
+	return err
+}
+
 const getEnvCheckpointForWorkspace = `-- name: GetEnvCheckpointForWorkspace :one
 SELECT id, workspace_id, project_id, event_ref, checkpoint_kind, env_id_map, sandbox_refs, db_snapshot, entropy_score, save_timeout_ms, save_status, save_error, created_at, updated_at, resume_trigger, save_mode FROM env_checkpoint
 WHERE id = $1 AND workspace_id = $2
@@ -240,23 +259,4 @@ func (q *Queries) UpdateEnvCheckpointSaveStatus(ctx context.Context, arg UpdateE
 		&i.SaveMode,
 	)
 	return i, err
-}
-
-const deleteEnvCheckpoint = `-- name: DeleteEnvCheckpoint :exec
-DELETE FROM env_checkpoint
-WHERE id = $1 AND workspace_id = $2
-`
-
-type DeleteEnvCheckpointParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-}
-
-// Cascades the savepoint ownership rows migration 246 added and the
-// env_checkpoint_lane rows migration 247 added. The Cube templates themselves are
-// scheduled for deletion through delete_template jobs before this runs, since
-// once this row is gone nothing records that they exist.
-func (q *Queries) DeleteEnvCheckpoint(ctx context.Context, arg DeleteEnvCheckpointParams) error {
-	_, err := q.db.Exec(ctx, deleteEnvCheckpoint, arg.ID, arg.WorkspaceID)
-	return err
 }

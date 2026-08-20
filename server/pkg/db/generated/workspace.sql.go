@@ -74,26 +74,21 @@ func (q *Queries) GetDefaultSelfPlayEnv(ctx context.Context, id pgtype.UUID) (pg
 	return default_self_play_env_id, err
 }
 
-const setDefaultSelfPlayEnv = `-- name: SetDefaultSelfPlayEnv :exec
-UPDATE workspace
-   SET default_self_play_env_id = $2,
-       updated_at = now()
- WHERE id = $1
-   AND default_self_play_env_id IS NULL
+const getFirstWorkspaceOwnerUserID = `-- name: GetFirstWorkspaceOwnerUserID :one
+SELECT user_id
+  FROM member
+ WHERE workspace_id = $1 AND role = 'owner'
+ ORDER BY created_at ASC
+ LIMIT 1
 `
 
-type SetDefaultSelfPlayEnvParams struct {
-	ID                   pgtype.UUID `json:"id"`
-	DefaultSelfPlayEnvID pgtype.UUID `json:"default_self_play_env_id"`
-}
-
-// SetDefaultSelfPlayEnv conditionally persists envID as the workspace default
-// self_play base env (only when still NULL), so the first of N concurrent
-// auto-create writers wins and the rest are no-ops. The service re-reads
-// GetDefaultSelfPlayEnv to pick up the canonical winner.
-func (q *Queries) SetDefaultSelfPlayEnv(ctx context.Context, arg SetDefaultSelfPlayEnvParams) error {
-	_, err := q.db.Exec(ctx, setDefaultSelfPlayEnv, arg.ID, arg.DefaultSelfPlayEnvID)
-	return err
+// The schema enforces exactly one Owner for every live workspace. The ordering
+// remains deterministic for databases inspected before migration 301 applies.
+func (q *Queries) GetFirstWorkspaceOwnerUserID(ctx context.Context, workspaceID pgtype.UUID) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, getFirstWorkspaceOwnerUserID, workspaceID)
+	var user_id pgtype.UUID
+	err := row.Scan(&user_id)
+	return user_id, err
 }
 
 const getWorkspace = `-- name: GetWorkspace :one
@@ -148,24 +143,6 @@ func (q *Queries) GetWorkspaceBySlug(ctx context.Context, slug string) (Workspac
 	return i, err
 }
 
-const getFirstWorkspaceOwnerUserID = `-- name: GetFirstWorkspaceOwnerUserID :one
-SELECT user_id
-  FROM member
- WHERE workspace_id = $1 AND role = 'owner'
- ORDER BY created_at ASC
- LIMIT 1
-`
-
-// "First" by member.created_at is a pragmatic, stable tie-break for the rare
-// multi-owner case; it is not a claim that workspaces have a canonical owner
-// column (see docs/engineering-principles.md on that open question).
-func (q *Queries) GetFirstWorkspaceOwnerUserID(ctx context.Context, workspaceID pgtype.UUID) (pgtype.UUID, error) {
-	row := q.db.QueryRow(ctx, getFirstWorkspaceOwnerUserID, workspaceID)
-	var user_id pgtype.UUID
-	err := row.Scan(&user_id)
-	return user_id, err
-}
-
 const getWorkspaceOnboardingAgentID = `-- name: GetWorkspaceOnboardingAgentID :one
 SELECT onboarding_agent_id
   FROM workspace
@@ -177,29 +154,6 @@ func (q *Queries) GetWorkspaceOnboardingAgentID(ctx context.Context, id pgtype.U
 	var onboarding_agent_id pgtype.UUID
 	err := row.Scan(&onboarding_agent_id)
 	return onboarding_agent_id, err
-}
-
-const setWorkspaceOnboardingAgentID = `-- name: SetWorkspaceOnboardingAgentID :exec
-UPDATE workspace
-   SET onboarding_agent_id = $2,
-       updated_at = now()
- WHERE id = $1
-   AND onboarding_agent_id IS NULL
-`
-
-type SetWorkspaceOnboardingAgentIDParams struct {
-	ID                pgtype.UUID `json:"id"`
-	OnboardingAgentID pgtype.UUID `json:"onboarding_agent_id"`
-}
-
-// SetWorkspaceOnboardingAgentID conditionally binds the per-workspace
-// onboarding agent only when unset, so the first of N concurrent ensure()
-// callers wins and the rest are no-ops (the caller re-reads
-// GetWorkspaceOnboardingAgentID to pick up the canonical winner and archives
-// its own losing agent). Mirrors SetDefaultSelfPlayEnv.
-func (q *Queries) SetWorkspaceOnboardingAgentID(ctx context.Context, arg SetWorkspaceOnboardingAgentIDParams) error {
-	_, err := q.db.Exec(ctx, setWorkspaceOnboardingAgentID, arg.ID, arg.OnboardingAgentID)
-	return err
 }
 
 const incrementIssueCounter = `-- name: IncrementIssueCounter :one
@@ -280,15 +234,59 @@ func (q *Queries) ListWorkspaces(ctx context.Context, userID pgtype.UUID) ([]Lis
 	return items, nil
 }
 
+const setDefaultSelfPlayEnv = `-- name: SetDefaultSelfPlayEnv :exec
+UPDATE workspace
+   SET default_self_play_env_id = $2,
+       updated_at = now()
+ WHERE id = $1
+   AND default_self_play_env_id IS NULL
+`
+
+type SetDefaultSelfPlayEnvParams struct {
+	ID                   pgtype.UUID `json:"id"`
+	DefaultSelfPlayEnvID pgtype.UUID `json:"default_self_play_env_id"`
+}
+
+// Conditionally sets the per-workspace default self_play base env only when it
+// is still NULL, so the first of N concurrent auto-create writers wins and the
+// rest are no-ops (the service re-reads GetDefaultSelfPlayEnv to pick up the
+// canonical winner and clean up any losing env). envID may be NULL to no-op.
+func (q *Queries) SetDefaultSelfPlayEnv(ctx context.Context, arg SetDefaultSelfPlayEnvParams) error {
+	_, err := q.db.Exec(ctx, setDefaultSelfPlayEnv, arg.ID, arg.DefaultSelfPlayEnvID)
+	return err
+}
+
+const setWorkspaceOnboardingAgentID = `-- name: SetWorkspaceOnboardingAgentID :exec
+UPDATE workspace
+   SET onboarding_agent_id = $2,
+       updated_at = now()
+ WHERE id = $1
+   AND onboarding_agent_id IS NULL
+`
+
+type SetWorkspaceOnboardingAgentIDParams struct {
+	ID                pgtype.UUID `json:"id"`
+	OnboardingAgentID pgtype.UUID `json:"onboarding_agent_id"`
+}
+
+// Conditionally binds the per-workspace onboarding agent only when unset, so
+// the first of N concurrent ensure() callers wins and the rest are no-ops
+// (the caller re-reads GetWorkspaceOnboardingAgentID to pick up the canonical
+// winner and archives its own losing agent). Mirrors SetDefaultSelfPlayEnv.
+func (q *Queries) SetWorkspaceOnboardingAgentID(ctx context.Context, arg SetWorkspaceOnboardingAgentIDParams) error {
+	_, err := q.db.Exec(ctx, setWorkspaceOnboardingAgentID, arg.ID, arg.OnboardingAgentID)
+	return err
+}
+
 const updateWorkspace = `-- name: UpdateWorkspace :one
 UPDATE workspace SET
     name = COALESCE($2, name),
     description = COALESCE($3, description),
-	context = COALESCE($4, context),
-	settings = COALESCE($5, settings),
-	issue_prefix = COALESCE($6, issue_prefix),
-	avatar_url = COALESCE($7, avatar_url),
-	updated_at = now()
+    context = COALESCE($4, context),
+    settings = COALESCE($5, settings),
+    issue_prefix = COALESCE($6, issue_prefix),
+    avatar_url = COALESCE($7, avatar_url),
+    updated_at = now()
 WHERE id = $1
 RETURNING id, name, slug, description, settings, created_at, updated_at, context, issue_prefix, issue_counter, avatar_url, default_self_play_env_id, onboarding_agent_id
 `

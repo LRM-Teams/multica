@@ -11,14 +11,20 @@ cat >"$test_root/ssh" <<'EOF'
 #!/usr/bin/env bash
 cat
 EOF
-chmod +x "$test_root/ssh"
+cat >"$test_root/sshpass" <<'EOF'
+#!/usr/bin/env bash
+test "$1" = -e
+shift
+exec "$@"
+EOF
+chmod +x "$test_root/ssh" "$test_root/sshpass"
 printf 'printf "remote script ran\\n"\n' >"$test_root/step.sh"
 
 output=$(
   PATH="$test_root:$PATH" \
     SSH_HOST=production.example \
     SSH_USER=root \
-    SSH_KEY_PATH=/tmp/key \
+    SSH_PASSWORD='password;safe' \
     SSH_KNOWN_HOSTS_PATH=/tmp/known_hosts \
     REMOTE_RUNNER_TEMP='/tmp/deploy path' \
     IMAGE_TAG='sha-test; not-a-command' \

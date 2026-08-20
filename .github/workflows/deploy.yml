@@ -8,8 +8,8 @@ name: Deploy
 # runs only after an accepted promotion reaches `main`; production never
 # consumes a `dev` push directly.
 #
-# Host layout: SSH and deploy commands run as `dev`, and the stack lives under
-# `/data/multica`. The
+# Host layout: SSH enters as `root`, deploy commands run as `dev`, and the stack
+# lives under `/data/multica`. The
 # protected `aliyun-dev` Environment is the legacy-named production credential
 # boundary. Database
 # identity stays in the host-owned `/data/multica/.env`; the speech API key is
@@ -255,7 +255,8 @@ jobs:
     env:
       DEPLOY_DIR: /data/multica
       SSH_HOST: 101.200.210.144
-      SSH_USER: dev
+      SSH_USER: root
+      SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
       SSH_KNOWN_HOSTS: 101.200.210.144 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOdhb/rlrAgosAQJ2HgvvwwWWXQjB93g4iirhyKDBcn2
       REMOTE_RUNNER_TEMP: /tmp/multica-deploy-${{ github.run_id }}-${{ github.run_attempt }}
       # Secret values are never copied into the host dotenv. Compose propagates
@@ -293,40 +294,37 @@ jobs:
           name: deploy-bundle-${{ github.sha }}
           path: ${{ runner.temp }}/multica-deploy-bundle
 
-      - name: Configure production SSH identity
+      - name: Configure production SSH client
         shell: bash
-        env:
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         run: |
           set -euo pipefail
-          : "${SSH_PRIVATE_KEY:?SSH_PRIVATE_KEY must be configured in aliyun-dev}"
+          : "${SSH_PASSWORD:?SSH_PASSWORD must be configured in aliyun-dev}"
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq sshpass
           ssh_dir="${RUNNER_TEMP}/aliyun-ssh"
           install -d -m 0700 "$ssh_dir"
-          printf '%s\n' "$SSH_PRIVATE_KEY" >"${ssh_dir}/id_ed25519"
           printf '%s\n' "$SSH_KNOWN_HOSTS" >"${ssh_dir}/known_hosts"
-          chmod 0600 "${ssh_dir}/id_ed25519" "${ssh_dir}/known_hosts"
-          {
-            echo "SSH_KEY_PATH=${ssh_dir}/id_ed25519"
-            echo "SSH_KNOWN_HOSTS_PATH=${ssh_dir}/known_hosts"
-          } >>"$GITHUB_ENV"
+          chmod 0600 "${ssh_dir}/known_hosts"
+          echo "SSH_KNOWN_HOSTS_PATH=${ssh_dir}/known_hosts" >>"$GITHUB_ENV"
 
       - name: Copy immutable deploy bundle to production
         shell: bash
         run: |
           set -euo pipefail
           ssh_options=(
-            -i "$SSH_KEY_PATH"
-            -o BatchMode=yes
-            -o IdentitiesOnly=yes
+            -o PreferredAuthentications=password
+            -o PubkeyAuthentication=no
             -o StrictHostKeyChecking=yes
             -o "UserKnownHostsFile=$SSH_KNOWN_HOSTS_PATH"
           )
           printf -v remote_temp_q '%q' "$REMOTE_RUNNER_TEMP"
-          ssh "${ssh_options[@]}" "$SSH_USER@$SSH_HOST" \
-            "rm -rf -- ${remote_temp_q} && install -d -m 0700 -- ${remote_temp_q}"
-          tar -C "$RUNNER_TEMP" -czf - multica-deploy-bundle |
+          SSHPASS="$SSH_PASSWORD" sshpass -e \
             ssh "${ssh_options[@]}" "$SSH_USER@$SSH_HOST" \
-              "tar -C ${remote_temp_q} -xzf -"
+              "rm -rf -- ${remote_temp_q} && install -d -o dev -g dev -m 0700 -- ${remote_temp_q}"
+          tar -C "$RUNNER_TEMP" -czf - multica-deploy-bundle |
+            SSHPASS="$SSH_PASSWORD" sshpass -e \
+              ssh "${ssh_options[@]}" "$SSH_USER@$SSH_HOST" \
+                "tar -C ${remote_temp_q} -xzf - && chown -R dev:dev -- ${remote_temp_q}"
 
       - name: Log in to GHCR
         env:

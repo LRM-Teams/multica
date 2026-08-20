@@ -135,6 +135,10 @@ type Daemon struct {
 	versionsMu    sync.RWMutex      // guards agentVersions
 	agentVersions map[string]string // provider -> detected CLI version (set during registration)
 
+	// taskFriction maps taskID -> *memorysignal.FrictionTracker fed by the
+	// task drain loop and drained by reportTaskResultForTask.
+	taskFriction sync.Map
+
 	// wsConnState is the task-wakeup WebSocket lifecycle label for internal
 	// observability (connecting|open|backoff|closed). Not user-facing Activity.
 	wsConnStateMu sync.RWMutex
@@ -2055,6 +2059,9 @@ func (d *Daemon) ensureAgentCredential(ctx context.Context, workspaceID, runtime
 // the next chat turn to resume there rather than start over and "forget"
 // the conversation.
 func (d *Daemon) reportTaskResultForTask(ctx context.Context, task Task, result TaskResult, taskLog *slog.Logger) {
+	// Always drain the task's friction tracker here, whatever the status,
+	// so finished tasks never accumulate in the map.
+	friction := d.takeTaskFrictionVector(task.ID)
 	switch result.Status {
 	case "completed":
 		taskLog.Info("task completed", "status", result.Status)
@@ -2069,7 +2076,7 @@ func (d *Daemon) reportTaskResultForTask(ctx context.Context, task Task, result 
 			// remain leased for reclaim (Alice boundary #1).
 			d.ackFoldedInboxLeases(ctx, task, taskLog)
 			if result.Status == "completed" {
-				d.reportAgentMemoryWrites(ctx, task)
+				d.reportAgentMemoryWrites(ctx, task, friction)
 			}
 			return
 		}
@@ -3368,6 +3375,7 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 				case agent.MessageToolUse:
 					n := toolCount.Add(1)
 					taskLog.Info(fmt.Sprintf("tool #%d: %s", n, msg.Tool))
+					d.frictionTrackerForTask(taskID).ObserveToolUse(msg.Tool, frictionToolInputHash(msg.Input))
 					if msg.CallID != "" {
 						mu.Lock()
 						callIDToTool[msg.CallID] = msg.Tool
@@ -3426,6 +3434,7 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 					mu.Unlock()
 				case agent.MessageThinking:
 					if msg.Content != "" {
+						d.frictionTrackerForTask(taskID).ObserveProgress()
 						mu.Lock()
 						trajectory.append("thinking", msg.Content, msg.Lineage, time.Now(), emitTrajectory)
 						mu.Unlock()
@@ -3443,12 +3452,14 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 				case agent.MessageText:
 					if msg.Content != "" {
 						taskLog.Debug("agent", "text", truncateLog(msg.Content, 200))
+						d.frictionTrackerForTask(taskID).ObserveProgress()
 						mu.Lock()
 						trajectory.append("text", msg.Content, msg.Lineage, time.Now(), emitTrajectory)
 						mu.Unlock()
 					}
 				case agent.MessageError:
 					taskLog.Error("agent error", "content", msg.Content)
+					d.frictionTrackerForTask(taskID).ObserveError()
 					mu.Lock()
 					trajectory.flush(time.Now(), true, emitTrajectory)
 					s := seq.Add(1)

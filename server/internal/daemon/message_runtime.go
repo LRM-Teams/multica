@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/agentworkspace"
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
+	"github.com/multica-ai/multica/server/internal/memorysignal"
 	"github.com/multica-ai/multica/server/pkg/agent"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -119,6 +120,10 @@ func (d *Daemon) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID
 	// the reply still persists to chat_message (otherwise UI stays on 排队中).
 	var streamedMu sync.Mutex
 	var streamedText strings.Builder
+	// Resident turns bypass the issue-task drain loop, so friction is tracked
+	// here per delivery batch (friction-gated memory spec).
+	var frictionMu sync.Mutex
+	frictionTracker := memorysignal.NewFrictionTracker()
 	err = d.canonicalRuntimes.deliverIdleMessages(ctx, agentID, runtimeID, preparedMessages, nil, func() {
 		if mixed {
 			d.activateCanonicalActionTurn(agentID, canonicalActionTurn)
@@ -135,6 +140,18 @@ func (d *Daemon) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID
 			streamedText.WriteString(message.Content)
 			streamedMu.Unlock()
 		}
+		frictionMu.Lock()
+		switch message.Type {
+		case agent.MessageToolUse:
+			frictionTracker.ObserveToolUse(message.Tool, frictionToolInputHash(message.Input))
+		case agent.MessageError:
+			frictionTracker.ObserveError()
+		case agent.MessageText, agent.MessageThinking:
+			if message.Content != "" {
+				frictionTracker.ObserveProgress()
+			}
+		}
+		frictionMu.Unlock()
 		d.reportMixedRunToolActivity(agentID, runtimeID, runID, runAgentID, turnID, canonicalActionTurn, message)
 		runner.observeResidentMessageRuntime(agentID, runtimeID, message)
 	}, func(turnErr error, generation uint64, capture *agent.ResidentTurnCapture) {
@@ -152,7 +169,10 @@ func (d *Daemon) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID
 		if d.client != nil && strings.TrimSpace(d.client.baseURL) != "" {
 			reportCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			if turnErr == nil {
-				d.reportAgentMemoryWrites(reportCtx, memoryTask)
+				frictionMu.Lock()
+				frictionVector := frictionTracker.Vector()
+				frictionMu.Unlock()
+				d.reportAgentMemoryWrites(reportCtx, memoryTask, frictionVector)
 			}
 			if sessionID, ok := standaloneChatSessionIDFromMessages(preparedMessages); ok {
 				streamedMu.Lock()

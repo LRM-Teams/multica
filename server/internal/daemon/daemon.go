@@ -222,6 +222,10 @@ type Daemon struct {
 	graphProfileMu sync.Mutex
 	graphProfiles  map[string]graphMemoryEffectiveProfile // keyed by workspace id
 
+	// turnScopeMemory tracks which user/project/channel scopes were already
+	// injected into a provider session or resident process continuum.
+	turnScopeMemory *turnScopeMemoryTracker
+
 	// canonicalRuntimes owns the one durable provider process for each
 	// Agent×runtime Message coordinator.
 	canonicalRuntimes *canonicalAgentRuntimePool
@@ -272,6 +276,7 @@ func newDaemonForRole(cfg Config, logger *slog.Logger, role daemonProcessRole) *
 		sharedSkillScanCache:      make(map[string]string),
 		memoryCurationRuns:        make(map[string]string),
 		activeCurationRuns:        make(map[string]string),
+		turnScopeMemory:           newTurnScopeMemoryTracker(),
 		runnerInstanceID:          uuid.NewString(),
 	}
 	d.initializeBindingExecution(bindingStateRoot)
@@ -2253,6 +2258,24 @@ func providerNeedsInlineSystemPrompt(provider string) bool {
 	return agent.Capabilities(provider).NeedsInlineSystemPrompt
 }
 
+// appendAgentScopeSystemPrompt injects agent-global memory into SystemPrompt
+// only for fresh sessions. Resume leaves the prior session's system prompt
+// alone so Claude/Pi do not --append-system-prompt the same block again.
+func appendAgentScopeSystemPrompt(opts *agent.ExecOptions, memories []execenv.MemoryContextForEnv) {
+	if opts == nil || !execenv.ShouldInjectAgentScopeSystemPrompt(opts.ResumeSessionID) {
+		return
+	}
+	mem := execenv.RenderAgentScopeMemory(memories)
+	if mem == "" {
+		return
+	}
+	if opts.SystemPrompt != "" {
+		opts.SystemPrompt += "\n\n" + mem
+	} else {
+		opts.SystemPrompt = mem
+	}
+}
+
 // gateResumeToReusedWorkdir clears the task's prior session unless the task
 // runs in the exact workdir the session was recorded against, and reports
 // whether that workdir was reused. CLI backends key their session stores to
@@ -2380,19 +2403,31 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	serverMemories := convertMemoriesForEnv(task.Agent)
 	memoryTask := task
 	memoryTask.AgentID = agentID
-	executionMemories := serverMemories
+	allTurnMemories := serverMemories
+	var agentScopeMemories []execenv.MemoryContextForEnv
 	if !restrictedExecution {
+		agentScopeMemories, _ = prepareAgentScopeMemory(agentRootPath, memoryTask, serverMemories)
 		if effectiveMemoryType(d.cfg.MemoryType, memoryTask.MemoryType) == MemoryTypeGraph {
-			// Graph mode (spec §8): merge — legacy user/agent memory is
-			// always retained; the graph owns project/channel/daily; a
-			// graph miss or error injects no project/channel/daily data.
-			executionMemories = mergeGraphModeExecutionMemory(
+			// Graph mode (spec §8): legacy user/agent retained (no daily);
+			// graph owns project/channel/daily. Split agent out for
+			// session-start injection; turn context keeps user + graph blob.
+			combined := mergeGraphModeExecutionMemory(
 				agentRootPath, memoryTask, serverMemories,
 				d.graphExecutionMemories(ctx, memoryTask, taskLog),
 			)
+			allTurnMemories = withoutAgentScopeMemories(combined)
+			agentScopeMemories = withoutGraphModeLegacyDaily(agentScopeMemories)
 		} else {
-			executionMemories, _ = prepareExecutionMemory(agentRootPath, memoryTask, serverMemories)
+			allTurnMemories, _ = prepareTurnScopeMemory(agentRootPath, memoryTask, serverMemories)
 		}
+	}
+	// Same provider session: skip user/project/channel scopes already injected.
+	// Fresh session (no PriorSessionID) loads them again.
+	freshTurnScopeSession := strings.TrimSpace(task.PriorSessionID) == ""
+	turnScopeSessionKey := issueTurnScopeSessionKey(agentID, task.RuntimeID, task.PriorSessionID)
+	turnMemories := allTurnMemories
+	if d.turnScopeMemory != nil {
+		turnMemories = d.turnScopeMemory.selectForInject(turnScopeSessionKey, allTurnMemories, freshTurnScopeSession)
 	}
 
 	// Prepare the agent's durable execution environment.
@@ -2410,7 +2445,8 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		AgentInstructions:                instructions,
 		AgentRoot:                        agentRootPath,
 		AgentSkills:                      convertSkillsForEnv(skills),
-		AgentMemories:                    executionMemories,
+		AgentMemories:                    turnMemories,
+		AgentScopeMemories:               agentScopeMemories,
 		ProjectID:                        task.ProjectID,
 		ChannelID:                        task.ChannelID,
 		ProjectTitle:                     task.ProjectTitle,
@@ -2585,6 +2621,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	}
 
 	prompt := execenv.RenderTurnContext(taskCtx) + BuildPrompt(task, provider, agentRootPath)
+	injectedTurnMemories := turnMemories
 
 	// Pass the product-task execution context so the spawned agent CLI can
 	// call its task APIs. Message commands use the separate local Credential
@@ -2797,17 +2834,11 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	if restrictedExecution || providerNeedsInlineSystemPrompt(provider) {
 		execOpts.SystemPrompt = runtimeBrief
 	}
-	// Agent-scope promoted memory is loaded once into the session-stable
-	// system prompt and is excluded from the per-message (pre-message)
-	// context (Frank 2026-08-19). Member/project/channel memory stays
-	// per-message to preserve per-recipient isolation.
-	if mem := execenv.RenderAgentScopeMemory(taskCtx.AgentMemories); mem != "" {
-		if execOpts.SystemPrompt != "" {
-			execOpts.SystemPrompt += "\n\n" + mem
-		} else {
-			execOpts.SystemPrompt = mem
-		}
-	}
+	// Agent-scope memory: inject once on fresh session only. Resume must not
+	// re-append (Claude/Pi --append-system-prompt). On-disk AGENTS brief still
+	// carries agent memory via InjectRuntimeKernel for providers that ignore
+	// SystemPrompt (e.g. Cursor).
+	appendAgentScopeSystemPrompt(&execOpts, agentScopeMemories)
 
 	backend, createErr := agent.New(provider, backendCfg)
 	if createErr != nil {
@@ -2842,6 +2873,12 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		firstUsage := result.Usage
 		taskLog.Warn("session resume failed, retrying with fresh session", "error", result.Error)
 		execOpts.ResumeSessionID = ""
+		clearCanonicalResumeIfPresent(backend)
+		// Fresh session: reinject full turn-scope + agent-scope memory.
+		injectedTurnMemories = allTurnMemories
+		taskCtx.AgentMemories = allTurnMemories
+		prompt = execenv.RenderTurnContext(taskCtx) + BuildPrompt(task, provider, agentRootPath)
+		appendAgentScopeSystemPrompt(&execOpts, agentScopeMemories)
 		retryResult, retryTools, retryErr := d.executeAndDrainForTask(ctx, backend, prompt, execOpts, taskLog, task)
 		if retryErr != nil {
 			taskLog.Error("fresh session also failed to start", "error", retryErr)
@@ -2849,6 +2886,15 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			result = retryResult
 			result.Usage = mergeUsage(firstUsage, result.Usage)
 			tools = retryTools
+		}
+	}
+	if d.turnScopeMemory != nil {
+		markSessionID := strings.TrimSpace(task.PriorSessionID)
+		if markSessionID == "" {
+			markSessionID = strings.TrimSpace(result.SessionID)
+		}
+		if markSessionID != "" {
+			d.turnScopeMemory.markInjected(issueTurnScopeSessionKey(agentID, task.RuntimeID, markSessionID), injectedTurnMemories)
 		}
 	}
 	elapsed := time.Since(taskStart).Round(time.Second)

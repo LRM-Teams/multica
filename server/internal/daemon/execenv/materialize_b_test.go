@@ -67,6 +67,35 @@ func TestMaterializeSlimWritesOnlyAgentsManagedBlock(t *testing.T) {
 	}
 }
 
+func TestMaterializeAppendsAgentScopeMemoryWithoutDigestChurn(t *testing.T) {
+	workDir := t.TempDir()
+	base := TaskContextForEnv{
+		AgentID:   "agent-a",
+		AgentName: "Agent A",
+		AgentScopeMemories: []MemoryContextForEnv{{
+			Name: "Agent global memory", Content: "Prefer terse replies.", Scope: "agent",
+		}},
+	}
+	brief, receipt, err := MaterializeCanonicalTurnContextB(workDir, t.TempDir(), "codex", base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(brief, "Prefer terse replies") {
+		t.Fatalf("brief missing agent-scope memory:\n%s", brief)
+	}
+	raw, err := os.ReadFile(filepath.Join(workDir, "AGENTS.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "Prefer terse replies") {
+		t.Fatalf("AGENTS.md missing agent-scope memory:\n%s", raw)
+	}
+	wantDigest := StartupStaticDigest("codex", base)
+	if receipt.ManagedInputDigest != wantDigest {
+		t.Fatalf("digest = %q, want static digest %q (agent memory must not churn)", receipt.ManagedInputDigest, wantDigest)
+	}
+}
+
 func TestMaterializeSlimRefusesSymlinkAgents(t *testing.T) {
 	workDir := t.TempDir()
 	ledgerRoot := t.TempDir()

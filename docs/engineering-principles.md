@@ -473,6 +473,7 @@
 - **验收分道**：数据/DB/投递→automation；hover/弹卡→自起 `--headless=new` Chrome（有合成器，rAF 正常）；真人只留观感与环境不可用两种情况。点击前先滚进视口。
 - **依据分级**（设计稿必备节）：`抄`（注出处）/`定`（注理由）/`实测`（注 file:line）/`目测`（禁止）。别把"我们的选择"说成"Linear 就是这么做的"。
 - **React Doctor 不是合并门**（2026-08-19）：`pnpm react:doctor` 不再进入 CI，也不再作为前端 PR 必过项。warning 挡合并会把能用的代码拦在注释位置和 effect 风格上。功能验收以 typecheck / lint / 单测为准。`cursordeadlock` 等真实并发门禁保留。
+- **PR CI 只测影响面**（2026-08-20）：合进 `dev` 的门禁不再全仓重跑约 1.2 万条测试。相对 `origin/dev`（push 到 `dev` 则相对 `github.event.before`）只跑变更包及其依赖方；脚本门只在对应文件变更时跑。测试文件不删，本地 `make check` / `pnpm test` / `go test ./...` 仍是全量。改 `ci.yml`、lockfile、`go.mod`/`go.sum` 或分类脚本本身则回到现网 web 范围全量。Job 始终启动，无影响面则空过成功。不再每次重复跑 `make test-agent-delivery-route`。物：`scripts/ci-pr-scope.sh`、`scripts/ci-expand-go-packages.sh`、`scripts/ci-turbo-web.sh`、`.github/workflows/ci.yml`。规格：`docs/superpowers/specs/2026-08-20-pr-ci-affected-packages-design.md`。
 
 ## 6. 元规矩：别拿没验证的环节当地基 — `仅文档`（本文立身之本）
 

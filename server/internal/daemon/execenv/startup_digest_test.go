@@ -271,6 +271,45 @@ func TestNonAgentScopeMemoriesAndRenderAgentScopeMemory(t *testing.T) {
 	if RenderAgentScopeMemory([]MemoryContextForEnv{{Name: "m", Content: "x", Scope: "user"}}) != "" {
 		t.Fatal("no agent-scope memory must render empty")
 	}
+	if !ShouldInjectAgentScopeSystemPrompt("") || !ShouldInjectAgentScopeSystemPrompt("  ") {
+		t.Fatal("fresh session must inject agent-scope system prompt")
+	}
+	if ShouldInjectAgentScopeSystemPrompt("sess-1") {
+		t.Fatal("resume must not inject agent-scope system prompt")
+	}
+}
+
+func TestRenderTurnContextOmitsEmptyMemorySnapshot(t *testing.T) {
+	turn := RenderTurnContext(TaskContextForEnv{
+		AgentMemories: []MemoryContextForEnv{{
+			Name: "agent only", Content: "global only", Scope: "agent",
+		}},
+	})
+	if strings.Contains(turn, "Effective Promoted Memory Snapshot") {
+		t.Fatalf("agent-only memories must not render empty turn snapshot:\n%s", turn)
+	}
+}
+
+func TestAppendAgentScopeMemoryBriefKeepsDigestStable(t *testing.T) {
+	base := TaskContextForEnv{
+		AgentID:   "a1",
+		AgentName: "Ada",
+		AgentScopeMemories: []MemoryContextForEnv{{
+			Name: "Agent global memory", Content: "Prefer terse replies.", Scope: "agent",
+		}},
+	}
+	without := StartupStaticDigest("codex", base)
+	withMore := base
+	withMore.AgentScopeMemories = append(append([]MemoryContextForEnv{}, base.AgentScopeMemories...), MemoryContextForEnv{
+		Name: "Agent state", Content: "Shipping release.", Scope: "agent",
+	})
+	if StartupStaticDigest("codex", withMore) != without {
+		t.Fatal("AgentScopeMemories must not rotate StartupStaticDigest")
+	}
+	brief := appendAgentScopeMemoryBrief(buildStartupKernelContent("codex", StartupStaticContext(base)), base)
+	if !strings.Contains(brief, "Prefer terse replies") {
+		t.Fatalf("startup brief missing agent-scope memory:\n%s", brief)
+	}
 }
 
 func TestRenderTurnContextKeepsDynamicFactsOutOfStartupAndBoundsMemory(t *testing.T) {

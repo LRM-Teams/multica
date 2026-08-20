@@ -50,6 +50,9 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 			if err := d.canonicalRuntimes.invalidateSession(agentID, runtimeID); err != nil {
 				return fmt.Errorf("rotate resident Pi run identity: %w", err)
 			}
+			if d.turnScopeMemory != nil {
+				d.turnScopeMemory.clearResident(agentID, runtimeID)
+			}
 		} else {
 			return d.ensureResidentProviderProcess(ctx, agentID, runtimeID)
 		}
@@ -86,15 +89,25 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 		return fmt.Errorf("provision resident Agent workspace: %w", err)
 	}
 
+	if d.client != nil && strings.TrimSpace(d.client.baseURL) != "" {
+		d.hydrateAgentMemoryCenter(ctx, config.WorkspaceID, config.Agent.ID, config.RuntimeID, workspace.AgentRoot)
+	}
+	agentScopeMemories, _ := prepareAgentScopeMemory(workspace.AgentRoot, Task{
+		WorkspaceID: config.WorkspaceID,
+		AgentID:     config.Agent.ID,
+		RuntimeID:   config.RuntimeID,
+	}, convertMemoriesForEnv(config.Agent))
+
 	taskCtx := execenv.TaskContextForEnv{
-		MessageDelivery:   true,
-		AgentID:           config.Agent.ID,
-		AgentName:         config.Agent.Name,
-		ManagedRole:       config.Agent.ManagedRole,
-		AgentInstructions: config.Agent.Instructions,
-		AgentRoot:         workspace.AgentRoot,
-		AgentSkills:       convertSkillsForEnv(config.Agent.Skills),
-		WorkspaceContext:  config.WorkspaceContext,
+		MessageDelivery:    true,
+		AgentID:            config.Agent.ID,
+		AgentName:          config.Agent.Name,
+		ManagedRole:        config.Agent.ManagedRole,
+		AgentInstructions:  config.Agent.Instructions,
+		AgentRoot:          workspace.AgentRoot,
+		AgentSkills:        convertSkillsForEnv(config.Agent.Skills),
+		AgentScopeMemories: agentScopeMemories,
+		WorkspaceContext:   config.WorkspaceContext,
 	}
 	env := execenv.Reuse(execenv.ReuseParams{
 		AgentRoot:    workspace.AgentRoot,
@@ -147,6 +160,27 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 		addPiMemoryFastModeEnv(agentEnv)
 	}
 	residentLaunchID := "resident-" + uuid.NewString()
+	// Resume only the id last applied by agent:start for this DaemonCore.
+	// Do not invent a disk-backed pointer; a new process starts empty until
+	// the next start payload, same as Raft idleRestartSnapshots.
+	resumeSessionID := ""
+	if d.agentRuntimeSessions != nil {
+		if stored, err := d.agentRuntimeSessions.Get(agentID, runtimeID); err == nil {
+			resumeSessionID = stored
+		}
+	}
+	// Fresh resident process: put agent-scope memory on SystemPrompt once.
+	// Resume skips SystemPrompt so providers that --append-system-prompt do
+	// not stack the same block; AGENTS brief still carries it via Materialize.
+	systemPrompt := ""
+	if execenv.ShouldInjectAgentScopeSystemPrompt(resumeSessionID) {
+		systemPrompt = execenv.RenderAgentScopeMemory(agentScopeMemories)
+		if d.turnScopeMemory != nil {
+			// New provider process continuum: allow user/project/channel to
+			// inject again on the first Message after create.
+			d.turnScopeMemory.clearResident(config.Agent.ID, config.RuntimeID)
+		}
+	}
 	identity, err := newCanonicalAgentRuntimeIdentity(canonicalAgentRuntimeIdentityParams{
 		AgentID:             config.Agent.ID,
 		RuntimeID:           config.RuntimeID,
@@ -155,6 +189,7 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 		Model:               model,
 		Thinking:            thinking,
 		WorkDir:             env.AgentRoot,
+		SystemPrompt:        systemPrompt,
 		MCP:                 string(config.Agent.McpConfig),
 		CustomArgs:          append([]string(nil), config.Agent.CustomArgs...),
 		Environment:         agentEnv,
@@ -167,15 +202,6 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 		return fmt.Errorf("resident Message runtime identity: %w", err)
 	}
 
-	// Resume only the id last applied by agent:start for this DaemonCore.
-	// Do not invent a disk-backed pointer; a new process starts empty until
-	// the next start payload, same as Raft idleRestartSnapshots.
-	resumeSessionID := ""
-	if d.agentRuntimeSessions != nil {
-		if stored, err := d.agentRuntimeSessions.Get(agentID, runtimeID); err == nil {
-			resumeSessionID = stored
-		}
-	}
 	lease, err := d.canonicalRuntimes.acquire(canonicalAgentRuntimeAcquireRequest{
 		Identity:           identity,
 		CanonicalSessionID: resumeSessionID,
@@ -186,6 +212,7 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 			ResidentOptions: agent.ExecOptions{
 				Cwd:             env.AgentRoot,
 				Model:           model,
+				SystemPrompt:    systemPrompt,
 				CustomArgs:      append([]string(nil), config.Agent.CustomArgs...),
 				McpConfig:       append([]byte(nil), config.Agent.McpConfig...),
 				ThinkingLevel:   thinking,
@@ -221,6 +248,9 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 	if runIdentity != nil {
 		if _, err := d.canonicalRuntimes.bindResidentPiRunIdentity(ctx, agentID, runtimeID, *runIdentity); err != nil {
 			_ = d.canonicalRuntimes.invalidateSession(agentID, runtimeID)
+			if d.turnScopeMemory != nil {
+				d.turnScopeMemory.clearResident(agentID, runtimeID)
+			}
 			return fmt.Errorf("bind resident Pi run identity: %w", err)
 		}
 	}
@@ -237,6 +267,9 @@ func (d *Daemon) ensureResidentProviderProcess(ctx context.Context, agentID, run
 		cleanupErr := d.canonicalRuntimes.invalidateSession(agentID, runtimeID)
 		if errors.Is(cleanupErr, ErrCanonicalAgentRuntimeBusy) {
 			cleanupErr = d.canonicalRuntimes.forceInvalidateSession(agentID, runtimeID)
+		}
+		if d.turnScopeMemory != nil {
+			d.turnScopeMemory.clearResident(agentID, runtimeID)
 		}
 		if cleanupErr != nil {
 			return errors.Join(startErr, fmt.Errorf("retire failed resident provider process: %w", cleanupErr))

@@ -173,6 +173,11 @@ func TestDaemonRegister_PreservesUserDisplayName(t *testing.T) {
 	}
 
 	// List endpoint also surfaces both fields.
+	var dbgDaemon, dbgVis string
+	_ = testPool.QueryRow(context.Background(), `SELECT COALESCE(daemon_id::text,'<null>'), visibility FROM agent_runtime WHERE id=$1`, runtimeID).Scan(&dbgDaemon, &dbgVis)
+	var dbgB, dbgU string
+	_ = testPool.QueryRow(context.Background(), `SELECT COALESCE(daemon_id,'<none>'), COALESCE(user_id::text,'<none>') FROM computer_workspace_bindings WHERE daemon_id=$1 AND workspace_id=$2 AND active`, dbgDaemon, testWorkspaceID).Scan(&dbgB, &dbgU)
+	t.Logf("DBG rt=%s daemon=%s vis=%s bindDaemon=%s bindUser=%s wantUser=%s", runtimeID, dbgDaemon, dbgVis, dbgB, dbgU, testUserID)
 	w = httptest.NewRecorder()
 	listReq := newRequest(http.MethodGet, "/api/runtimes", nil)
 	testHandler.ListAgentRuntimes(w, listReq)

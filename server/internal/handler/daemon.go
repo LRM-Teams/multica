@@ -307,6 +307,35 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 	registrationHandler := *h
 	registrationHandler.Queries = h.Queries.WithTx(registrationLock)
 	registrationHandler.DB = registrationLock
+	// LRM-1570: ownership is machine-level. A member-registered Computer
+	// establishes it here (computers + active binding) — the old
+	// agent_runtime.owner_id write is gone, and every owner gate (visibility,
+	// edit, restart, upgrade, period-brief collectors) now resolves the owner
+	// from the active binding row.
+	if ownerID.Valid && !daemonTokenRequest {
+		if _, err := registrationHandler.DB.Exec(r.Context(), `
+WITH owner AS (
+    INSERT INTO computers (id, user_id)
+    VALUES ($1, $2)
+    ON CONFLICT (id) DO UPDATE SET user_id = computers.user_id
+    WHERE computers.user_id = EXCLUDED.user_id
+    RETURNING id
+)
+INSERT INTO computer_workspace_bindings (daemon_id, workspace_id, user_id, execution_token_hash, active, revoked_at)
+SELECT $1, $3, $2, 'register-' || gen_random_uuid()::text, TRUE, NULL
+  FROM owner
+ON CONFLICT (daemon_id, workspace_id)
+DO UPDATE SET user_id = EXCLUDED.user_id, active = TRUE, revoked_at = NULL
+WHERE computer_workspace_bindings.user_id = EXCLUDED.user_id`, req.DaemonID, ownerID, wsUUID); err != nil {
+			slog.Warn("register: establish machine ownership binding failed", "daemon", req.DaemonID, "error", err)
+		}
+		var dbgN int
+		_ = registrationHandler.DB.QueryRow(r.Context(), `SELECT count(*) FROM computer_workspace_bindings WHERE daemon_id=$1 AND active`, req.DaemonID).Scan(&dbgN)
+		var dbgWS string
+		_ = registrationHandler.DB.QueryRow(r.Context(), `SELECT COALESCE(string_agg(workspace_id::text, ','),'') FROM computer_workspace_bindings WHERE daemon_id=$1 AND active`, req.DaemonID).Scan(&dbgWS)
+		slog.Info("register: binding debug", "daemon", req.DaemonID, "count", dbgN, "ws", dbgWS, "wantWs", uuidToString(wsUUID))
+	}
+
 	if daemonTokenRequest {
 		err := registrationLock.QueryRow(r.Context(), `
 			SELECT user_id

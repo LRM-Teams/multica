@@ -51,6 +51,7 @@ apps/web/test-results/
 .context
 .agent_context/
 .multica/
+.amp/
 
 # local settings
 .claude/

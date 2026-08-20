@@ -318,14 +318,14 @@ func (s *PostgresStore) CompleteV6DispatchOutbox(ctx context.Context, outboxID, 
 	if command.RowsAffected() != 1 {
 		return ErrWorkItemLeaseLost
 	}
-	command, err = tx.Exec(ctx, `UPDATE research_work_item SET status='running',updated_at=now() WHERE id=$1::uuid AND status='dispatching'`, workItemID)
+	command, err = tx.Exec(ctx, `UPDATE research_work_item SET status='running',lease_expires_at=now()+interval '15 minutes',updated_at=now() WHERE id=$1::uuid AND status='dispatching'`, workItemID)
 	if err != nil {
 		return err
 	}
 	if command.RowsAffected() != 1 {
 		return ErrWorkItemChanged
 	}
-	command, err = tx.Exec(ctx, `UPDATE research_v6_outbox SET status='delivered',result=jsonb_build_object('inbox_task_id',$2),lease_token=NULL,lease_expires_at=NULL,updated_at=now() WHERE id=$1::uuid AND lease_token=$3::uuid`, outboxID, inboxTaskID, token)
+	command, err = tx.Exec(ctx, `UPDATE research_v6_outbox SET status='delivered',result=jsonb_build_object('inbox_task_id',$2::text),lease_token=NULL,lease_expires_at=NULL,updated_at=now() WHERE id=$1::uuid AND lease_token=$3::uuid`, outboxID, inboxTaskID, token)
 	if err != nil {
 		return err
 	}

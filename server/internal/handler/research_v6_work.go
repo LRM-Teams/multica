@@ -61,17 +61,36 @@ func (h *Handler) authorizeResearchV6Attempt(w http.ResponseWriter, r *http.Requ
 		}
 		return access, true
 	}
-	event, _, active := h.requireAgentCredentialActiveInboxDelivery(w, r)
-	if !active {
+	// The daemon's durable Credential Proxy deliberately strips the retired
+	// task and lease headers. Bind the request back to the exact active V6
+	// attempt server-side instead of asking the Agent process to carry those
+	// credentials. The attempt UUIDs, assignment, Inbox binding, and draining
+	// state together form the task fence. The Agent may start immediately after
+	// Inbox insertion, before outbox completion attaches inbox_task_id, so the
+	// exact immutable Inbox context also closes that dispatch race.
+	err := h.DB.QueryRow(r.Context(), `
+		SELECT COALESCE(a.inbox_task_id::text,'')
+		FROM research_work_item_attempt a
+		JOIN agent_inbox_event e
+		  ON e.workspace_id=a.workspace_id AND e.agent_id=a.assigned_agent_id
+		JOIN research_team_membership m
+		  ON (m.workspace_id,m.session_id,m.id)=(a.workspace_id,a.session_id,a.membership_id)
+		WHERE a.workspace_id=$1::uuid AND a.session_id=$2::uuid
+		  AND a.work_item_id=$3::uuid AND a.id=$4::uuid
+		  AND a.assigned_agent_id=$5::uuid AND m.agent_id=$5::uuid
+		  AND e.workspace_id=$1::uuid AND e.agent_id=$5::uuid
+		  AND m.state NOT IN ('archived','failed')
+		  AND a.status IN ('dispatching','running') AND e.status='draining'
+		  AND (a.inbox_task_id IS NULL OR e.id=a.inbox_task_id)
+		  AND e.context->>'type'='research_run_work_item'
+		  AND e.context->>'run_id'=a.session_id::text
+		  AND e.context->>'work_item_id'=a.work_item_id::text
+		  AND e.context->>'attempt_id'=a.id::text
+	`, access.WorkspaceID, access.RunID, access.WorkItemID, access.AttemptID, access.AgentID).Scan(&access.InboxTaskID)
+	if err != nil {
+		writeRonaldoV6Error(w, http.StatusConflict, "research.v6.principal_mismatch", "research attempt is not the active Agent task", false)
 		return researchrun.V6AttemptAccess{}, false
 	}
-	var binding researchV6InboxContext
-	if json.Unmarshal(event.Context, &binding) != nil || binding.Type != "research_run_work_item" ||
-		binding.RunID != access.RunID || binding.WorkItemID != access.WorkItemID || binding.AttemptID != access.AttemptID {
-		writeRonaldoV6Error(w, http.StatusForbidden, "research.v6.principal_mismatch", "active inbox delivery does not match this research attempt", false)
-		return researchrun.V6AttemptAccess{}, false
-	}
-	access.InboxTaskID = uuidToString(event.ID)
 	return access, true
 }
 

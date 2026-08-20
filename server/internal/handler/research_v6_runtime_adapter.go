@@ -74,7 +74,11 @@ func (a *researchV6AgentLifecycleAdapter) ArchiveAgent(ctx context.Context, work
 	return err
 }
 
-type researchV6InboxDispatchAdapter struct{ dispatcher *researchRunDispatcher }
+type researchV6WorkDispatcher interface {
+	Dispatch(context.Context, researchrun.DispatchRequest) (researchrun.DispatchResult, error)
+}
+
+type researchV6InboxDispatchAdapter struct{ dispatcher researchV6WorkDispatcher }
 
 func (a *researchV6InboxDispatchAdapter) DispatchV6Work(ctx context.Context, access researchrun.V6AttemptAccess, manifest researchrun.V6WorkManifest, idempotencyKey string) (string, error) {
 	if a == nil || a.dispatcher == nil {
@@ -85,18 +89,21 @@ func (a *researchV6InboxDispatchAdapter) DispatchV6Work(ctx context.Context, acc
 		return "", err
 	}
 	var identity struct {
-		ManifestID    string `json:"manifest_id"`
-		ManifestHash  string `json:"manifest_hash"`
-		MissionPrompt string `json:"mission_prompt"`
+		ManifestID   string `json:"manifest_id"`
+		ManifestHash string `json:"manifest_hash"`
 	}
 	if err = json.Unmarshal(decoded.Envelope, &identity); err != nil {
+		return "", err
+	}
+	prompt, err := researchrun.BuildV6WorkDispatchPrompt(researchrun.V6WorkManifest{Bytes: decoded.Envelope})
+	if err != nil {
 		return "", err
 	}
 	result, err := a.dispatcher.Dispatch(ctx, researchrun.DispatchRequest{
 		Run:       researchrun.Run{SessionID: access.RunID, WorkspaceID: access.WorkspaceID, OrchestratorVersion: researchrun.OrchestratorVersionV6},
 		AttemptID: access.AttemptID, AgentID: access.AgentID, WorkItemID: access.WorkItemID,
 		ManifestID: identity.ManifestID, ManifestHash: identity.ManifestHash,
-		Prompt: identity.MissionPrompt, Key: idempotencyKey,
+		Prompt: prompt, Key: idempotencyKey,
 	})
 	return result.InboxTaskID, err
 }

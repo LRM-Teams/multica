@@ -23,6 +23,14 @@ func (s *PostgresStore) RecoverExpiredV6WorkItems(ctx context.Context, limit int
 		  JOIN research_session s ON s.id=w.session_id
 		  WHERE s.orchestrator_version='research-run-v6'
 		    AND w.status IN ('dispatching','running') AND w.lease_expires_at <= now()
+		    AND NOT (w.status='dispatching' AND EXISTS (
+		      SELECT 1 FROM research_work_item_attempt active_attempt
+		      JOIN research_v6_outbox active_outbox
+		        ON active_outbox.kind='dispatch_work_item'
+		       AND COALESCE(active_outbox.payload->'access'->>'attempt_id',active_outbox.payload->'access'->>'AttemptID')=active_attempt.id::text
+		       AND active_outbox.status IN ('pending','delivering')
+		      WHERE active_attempt.work_item_id=w.id AND active_attempt.status='dispatching'
+		    ))
 		  ORDER BY s.id,w.lease_expires_at,w.id
 		  FOR UPDATE OF s,w SKIP LOCKED LIMIT $1
 		), received AS (
@@ -34,7 +42,15 @@ func (s *PostgresStore) RecoverExpiredV6WorkItems(ctx context.Context, limit int
 		  UPDATE research_work_item_attempt a SET status='lost',completed_at=now(),updated_at=now(),failure_class='lease_expired'
 		  WHERE a.work_item_id IN (SELECT id FROM due) AND a.status IN ('dispatching','running')
 		    AND a.work_item_id NOT IN (SELECT work_item_id FROM received)
-		  RETURNING a.work_item_id
+		  RETURNING a.id,a.work_item_id
+		), stale_outbox AS (
+		  UPDATE research_v6_outbox o
+		  SET status='failed',lease_token=NULL,lease_expires_at=NULL,
+		      last_error=CASE WHEN last_error='' THEN 'stale dispatch attempt' ELSE last_error END,
+		      updated_at=now()
+		  WHERE o.kind='dispatch_work_item' AND o.status IN ('pending','delivering')
+		    AND COALESCE(o.payload->'access'->>'attempt_id',o.payload->'access'->>'AttemptID') IN (SELECT id::text FROM lost)
+		  RETURNING o.id
 		)
 		UPDATE research_work_item w
 		SET status=CASE

@@ -2,7 +2,7 @@
 name: multica-research-fleet
 description: "Use when executing an assigned durable Research Run task or operating the sealed Research Fleet led by Ronaldo."
 user-invocable: false
-allowed-tools: Bash(multica *)
+allowed-tools: Bash(multica *), Bash(curl *)
 ---
 
 # Multica Research Fleet
@@ -50,6 +50,80 @@ If any Brief/Manifest hash, revision, cursor, state version, assignment,
 membership, capability, or expected envelope disagrees with the dispatch,
 fail closed and let the durable recovery path issue a new attempt. Do not adapt
 the payload into a legacy V1–V5 result.
+
+### V6 executable loop
+
+If the prompt contains `## Durable Research V6 Work Item`, use the exact Run,
+Work Item, and Attempt IDs from that prompt. Read the frozen Manifest first:
+
+```bash
+multica research work-manifest <session-id> <work-item-id> <attempt-id> --output json
+```
+
+The Manifest's `expected_result_schema` names the only accepted root envelope.
+Preserve its workspace, Run, Work Item, Attempt, Agent, Manifest, goal, state,
+and event identities exactly. The Mission is an instruction inside that frozen
+authority; it is not a substitute for reading the Manifest.
+
+If the daemon's installed CLI predates these V6 commands, use the daemon-owned
+credential proxy. Never read or print a token:
+
+```bash
+V6_API="http://127.0.0.1:${MULTICA_DAEMON_PORT}/api/agent/research/sessions/<session-id>/work-items/<work-item-id>/attempts/<attempt-id>"
+V6_CURL=(curl -fsS \
+  -H "X-Agent-ID: ${MULTICA_AGENT_ID}" \
+  -H "X-Workspace-ID: ${MULTICA_WORKSPACE_ID}")
+"${V6_CURL[@]}" "${V6_API}/manifest"
+```
+
+The equivalent paths are GET `/director-brief`, POST
+`/director-brief-acks`, GET `/catalog`, POST `/catalog-acks`, POST
+`/submission`, and the `/report-uploads` workflow. JSON writes use
+`Content-Type: application/json`; a strict submission uses
+`--data-binary @result.json`. This fallback has the same attempt and Agent
+authorization as the CLI and exists because server CI/CD may deploy before a
+local daemon binary is upgraded.
+
+For a Director assignment, read every Brief page by following `next_cursor` and
+acknowledge each page with the exact IDs and hashes returned in that page:
+
+```bash
+multica research director-brief <session-id> <work-item-id> <attempt-id> \
+  [--cursor <cursor>] --output json
+multica research director-brief-ack <session-id> <work-item-id> <attempt-id> \
+  --client-request-id <uuid> --brief-id <brief-id> --brief-hash <brief-hash> \
+  --page-key <page-key> --page-hash <page-hash> --output json
+```
+
+When `catalog_access` is present, read the authorized view page by page and
+acknowledge every page used by the result:
+
+```bash
+multica research work-catalog <session-id> <work-item-id> <attempt-id> \
+  --view <same_tier|higher_candidates> [--cursor <cursor>] --output json
+multica research work-catalog-ack <session-id> <work-item-id> <attempt-id> \
+  --client-request-id <uuid> --page-key <page-key> --page-hash <page-hash> \
+  --output json
+```
+
+Report work uploads each immutable resource before the package submission:
+
+```bash
+multica research report-upload <session-id> <work-item-id> <attempt-id> \
+  --file <absolute-file> --path <package-path> --role <role> \
+  --media-type <media-type> --output json
+```
+
+Submit the strict envelope only through the V6 endpoint:
+
+```bash
+multica research work-submit <session-id> <work-item-id> <attempt-id> \
+  --file <absolute-path/result.json> --output json
+```
+
+Retry the same submission with the same `client_request_id` and byte-equivalent
+payload after a transport failure. Never send a V6 envelope through the legacy
+`task-result` command.
 
 ## Assigned Research Run task
 

@@ -7,7 +7,19 @@ import (
 )
 
 func (s *PostgresStore) ClaimV6Outbox(ctx context.Context, token string, lease time.Duration, limit int) ([]V6OutboxIntent, error) {
-	rows, err := s.pool.Query(ctx, `WITH due AS (
+	rows, err := s.pool.Query(ctx, `WITH stale_dispatch AS (
+		UPDATE research_v6_outbox o
+		SET status='failed', lease_token=NULL, lease_expires_at=NULL,
+			last_error=CASE WHEN last_error='' THEN 'stale dispatch attempt' ELSE last_error END,
+			updated_at=now()
+		WHERE o.kind='dispatch_work_item' AND o.status IN ('pending','delivering')
+		  AND NOT EXISTS (
+			SELECT 1 FROM research_work_item_attempt a
+			WHERE a.id::text=COALESCE(o.payload->'access'->>'attempt_id',o.payload->'access'->>'AttemptID')
+			  AND a.status='dispatching'
+		  )
+		RETURNING o.id
+	), due AS (
 		SELECT id FROM research_v6_outbox
 		WHERE status IN ('pending','delivering') AND next_delivery_at <= now()
 		  AND (lease_expires_at IS NULL OR lease_expires_at <= now())
@@ -47,7 +59,8 @@ func (s *PostgresStore) CompleteV6Outbox(ctx context.Context, id, token string, 
 
 func (s *PostgresStore) RescheduleV6Outbox(ctx context.Context, id, token, message string, next time.Time) error {
 	command, err := s.pool.Exec(ctx, `UPDATE research_v6_outbox
-		SET status='pending',last_error=$3,next_delivery_at=$4,lease_token=NULL,lease_expires_at=NULL,updated_at=now()
+		SET status=CASE WHEN delivery_attempts>=20 THEN 'failed' ELSE 'pending' END,
+			last_error=$3,next_delivery_at=$4,lease_token=NULL,lease_expires_at=NULL,updated_at=now()
 		WHERE id=$1::uuid AND lease_token=$2::uuid AND status='delivering'`, id, token, message, next)
 	if err != nil {
 		return err

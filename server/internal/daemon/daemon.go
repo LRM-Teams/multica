@@ -713,14 +713,19 @@ func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID s
 	for name, entry := range d.cfg.Agents {
 		version, err := detectAgentVersion(ctx, entry.Path)
 		if err != nil {
+			// Friendly one-line progress so users can see a detected CLI that
+			// could not be registered and why, without digging through logs.
+			d.logger.Info(fmt.Sprintf("⚠️ skip %s: 版本探测失败（%v）", name, err))
 			d.logger.Warn("skip registering runtime", "name", name, "error", err)
 			continue
 		}
 		if err := checkAgentMinVersion(name, version); err != nil {
+			d.logger.Info(fmt.Sprintf("⚠️ skip %s: 版本过旧（%s）", name, version))
 			d.logger.Warn("skip registering runtime: version too old", "name", name, "version", version, "error", err)
 			continue
 		}
 		d.setAgentVersion(name, version)
+		d.logger.Info(fmt.Sprintf("✅ %s v%s", name, version))
 		d.logger.Debug("agent version detected", "name", name, "version", version, "path", entry.Path)
 		displayName := strings.ToUpper(name[:1]) + name[1:]
 		if d.cfg.DeviceName != "" {

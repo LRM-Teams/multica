@@ -272,13 +272,13 @@ func (m *evolutionMockDB) QueryRow(_ context.Context, sql string, args ...interf
 		return &evolutionMockRow{values: sharedEvolutionUnitVersionValues(m.version)}
 	case strings.Contains(sql, "SetSharedEvolutionUnitCurrentVersion"):
 		updated := m.unit
-		updated.ID = uuidArg(args, 0)
-		updated.WorkspaceID = uuidArg(args, 1)
-		updated.CurrentVersionID = uuidArg(args, 2)
+		updated.ID = uuidArg(args, 1)
+		updated.WorkspaceID = uuidArg(args, 2)
+		updated.CurrentVersionID = uuidArg(args, 0)
 		for _, unit := range m.activeUnits {
 			if unit.ID == updated.ID {
 				updated = unit
-				updated.CurrentVersionID = uuidArg(args, 2)
+				updated.CurrentVersionID = uuidArg(args, 0)
 				break
 			}
 		}

@@ -291,10 +291,10 @@ func (q *Queries) SetStarterContentState(ctx context.Context, arg SetStarterCont
 
 const updateUser = `-- name: UpdateUser :one
 UPDATE "user" SET
-    display_name = COALESCE($1, display_name),
-    avatar_url = COALESCE($2, avatar_url),
-    language = COALESCE($3, language),
-    profile_description = COALESCE($4, profile_description),
+    display_name = COALESCE($1::text, display_name),
+    avatar_url = COALESCE($2::text, avatar_url),
+    language = COALESCE($3::text, language),
+    profile_description = COALESCE($4::text, profile_description),
     timezone = CASE
         WHEN $5::text IS NULL THEN timezone
         WHEN $5::text = ''    THEN NULL
@@ -306,11 +306,11 @@ RETURNING id, name, email, avatar_url, created_at, updated_at, onboarded_at, onb
 `
 
 type UpdateUserParams struct {
-	DisplayName        string      `json:"display_name"`
+	DisplayName        pgtype.Text `json:"display_name"`
 	AvatarUrl          pgtype.Text `json:"avatar_url"`
 	Language           pgtype.Text `json:"language"`
-	ProfileDescription string      `json:"profile_description"`
-	Timezone           string      `json:"timezone"`
+	ProfileDescription pgtype.Text `json:"profile_description"`
+	Timezone           pgtype.Text `json:"timezone"`
 	ID                 pgtype.UUID `json:"id"`
 }
 

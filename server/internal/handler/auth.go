@@ -574,9 +574,9 @@ func (h *Handler) GoogleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if needsUpdate {
-		displayNameArg := user.DisplayName
+		displayNameArg := pgtype.Text{String: user.DisplayName, Valid: true}
 		if newDisplayName.Valid {
-			displayNameArg = newDisplayName.String
+			displayNameArg = pgtype.Text{String: newDisplayName.String, Valid: true}
 		}
 		updated, err := h.Queries.UpdateUser(r.Context(), db.UpdateUserParams{
 			ID:          user.ID,
@@ -678,9 +678,9 @@ func (h *Handler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 		displayName = pgtype.Text{String: value, Valid: true}
 	}
 
-	displayNameArg := currentUser.DisplayName
+	displayNameArg := pgtype.Text{String: currentUser.DisplayName, Valid: true}
 	if displayName.Valid {
-		displayNameArg = displayName.String
+		displayNameArg = pgtype.Text{String: displayName.String, Valid: true}
 	}
 	params := db.UpdateUserParams{
 		ID:          currentUser.ID,
@@ -706,7 +706,7 @@ func (h *Handler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, fmt.Sprintf("profile_description exceeds %d characters", MaxProfileDescriptionLen))
 			return
 		}
-		params.ProfileDescription = desc
+		params.ProfileDescription = pgtype.Text{String: desc, Valid: true}
 	}
 
 	if req.Timezone != nil {
@@ -720,7 +720,7 @@ func (h *Handler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		params.Timezone = tz
+		params.Timezone = pgtype.Text{String: tz, Valid: true}
 	}
 
 	updatedUser, err := h.Queries.UpdateUser(r.Context(), params)

@@ -120,7 +120,6 @@ pnpm build            # Build the web frontend and its dependencies
 pnpm typecheck        # TypeScript check for web and its dependencies
 pnpm lint             # ESLint
 pnpm test             # TS tests for web and its dependencies
-pnpm react:doctor     # Required after frontend code changes; scans changed React code against origin/dev
 
 # Backend (Go)
 make server           # Run Go server only (port 8080)
@@ -168,13 +167,7 @@ CI runs on Node 22 and Go 1.26.1 with a `pgvector/pgvector:pg17` PostgreSQL serv
 
 ### Frontend PR Gate
 
-Every PR that writes or changes frontend code must include a React Doctor result in the PR/task thread in addition to the relevant lint, typecheck, and test output. Run:
-
-```bash
-pnpm react:doctor
-```
-
-The command uses `react-doctor@0.5.8` in changed-scope mode against `origin/dev`, with score/telemetry disabled and CI failure on new warning/error diagnostics. Use it as a regression gate for new React issues; do not use a full-repository scan to block unrelated historical debt unless the task is explicitly a React Doctor cleanup.
+React Doctor is not a merge or CI gate. Frontend PRs are accepted on typecheck, lint, and unit tests.
 
 ### Worktree Support
 

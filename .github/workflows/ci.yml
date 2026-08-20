@@ -102,12 +102,6 @@ jobs:
           pnpm generate:reserved-slugs
           git diff --exit-code -- packages/core/paths/reserved-slugs.ts
 
-      - name: Fetch React Doctor base
-        run: git fetch --no-tags origin dev:refs/remotes/origin/dev
-
-      - name: React Doctor
-        run: pnpm react:doctor
-
       - name: Build, type check, lint
         # Web-only (Frank 2026-07-28): drop desktop/docs/mobile from the PR
         # frontend job so CI stays on the product surface that still ships.

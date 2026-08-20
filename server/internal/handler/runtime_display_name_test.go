@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/google/uuid"
 )
 
 // TestUpdateAgentRuntime_DisplayNamePatchAndClear covers PATCH display_name:
@@ -97,7 +99,7 @@ func TestDaemonRegister_PreservesUserDisplayName(t *testing.T) {
 		t.Skip("database not available")
 	}
 
-	daemonID := "display-name-preserve-daemon"
+	daemonID := "display-name-preserve-daemon-" + uuid.NewString()
 	provider := "claude"
 
 	// First register as the workspace member so owner_id is set (daemon-token
@@ -173,11 +175,6 @@ func TestDaemonRegister_PreservesUserDisplayName(t *testing.T) {
 	}
 
 	// List endpoint also surfaces both fields.
-	var dbgDaemon, dbgVis string
-	_ = testPool.QueryRow(context.Background(), `SELECT COALESCE(daemon_id::text,'<null>'), visibility FROM agent_runtime WHERE id=$1`, runtimeID).Scan(&dbgDaemon, &dbgVis)
-	var dbgB, dbgU string
-	_ = testPool.QueryRow(context.Background(), `SELECT COALESCE(daemon_id,'<none>'), COALESCE(user_id::text,'<none>') FROM computer_workspace_bindings WHERE daemon_id=$1 AND workspace_id=$2 AND active`, dbgDaemon, testWorkspaceID).Scan(&dbgB, &dbgU)
-	t.Logf("DBG rt=%s daemon=%s vis=%s bindDaemon=%s bindUser=%s wantUser=%s", runtimeID, dbgDaemon, dbgVis, dbgB, dbgU, testUserID)
 	w = httptest.NewRecorder()
 	listReq := newRequest(http.MethodGet, "/api/runtimes", nil)
 	testHandler.ListAgentRuntimes(w, listReq)

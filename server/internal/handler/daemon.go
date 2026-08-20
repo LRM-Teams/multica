@@ -329,11 +329,7 @@ DO UPDATE SET user_id = EXCLUDED.user_id, active = TRUE, revoked_at = NULL
 WHERE computer_workspace_bindings.user_id = EXCLUDED.user_id`, req.DaemonID, ownerID, wsUUID); err != nil {
 			slog.Warn("register: establish machine ownership binding failed", "daemon", req.DaemonID, "error", err)
 		}
-		var dbgN int
-		_ = registrationHandler.DB.QueryRow(r.Context(), `SELECT count(*) FROM computer_workspace_bindings WHERE daemon_id=$1 AND active`, req.DaemonID).Scan(&dbgN)
-		var dbgWS string
-		_ = registrationHandler.DB.QueryRow(r.Context(), `SELECT COALESCE(string_agg(workspace_id::text, ','),'') FROM computer_workspace_bindings WHERE daemon_id=$1 AND active`, req.DaemonID).Scan(&dbgWS)
-		slog.Info("register: binding debug", "daemon", req.DaemonID, "count", dbgN, "ws", dbgWS, "wantWs", uuidToString(wsUUID))
+
 	}
 
 	if daemonTokenRequest {

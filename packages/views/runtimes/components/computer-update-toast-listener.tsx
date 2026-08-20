@@ -11,7 +11,10 @@ import {
   computerUpdateCandidatesFingerprint,
   computerUpdateToastContentKey,
   computerUpdateToastId,
+  computerUpgradeVersionsFingerprint,
+  computerVersionsMatch,
   dismissComputerUpdate,
+  findComputerUpgradeRuntime,
   isComputerUpdateDismissed,
   listComputerUpdateCandidates,
   useAllComputerUpgrades,
@@ -118,6 +121,10 @@ export function ComputerUpdateToastListener() {
   const candidatesFingerprint = useMemo(
     () => computerUpdateCandidatesFingerprint(candidates),
     [candidates],
+  );
+  const upgradeVersionsFingerprint = useMemo(
+    () => computerUpgradeVersionsFingerprint(runtimes, upgrades),
+    [runtimes, upgrades],
   );
 
   const copy = useMemo<ToastCopy>(
@@ -283,18 +290,16 @@ export function ComputerUpdateToastListener() {
 
       for (const upgrade of Object.values(currentUpgrades)) {
         if (upgrade.phase === "pending" || upgrade.phase === "running") {
-          const runtime = runtimesRef.current?.find(
-            (r) =>
-              (r.daemon_id && r.daemon_id === upgrade.daemonId) ||
-              r.id === upgrade.runtimeId ||
-              r.name === upgrade.machineKey,
+          const runtime = findComputerUpgradeRuntime(
+            runtimesRef.current,
+            upgrade,
           );
           const reachedTarget =
             runtime &&
-            upgrade.targetVersion &&
-            (runtime.current_version === upgrade.targetVersion ||
-              `v${runtime.current_version}` === upgrade.targetVersion ||
-              runtime.current_version === upgrade.targetVersion.replace(/^v/, ""));
+            computerVersionsMatch(
+              runtime.current_version,
+              upgrade.targetVersion,
+            );
 
           if (reachedTarget) {
             useComputerUpgradeStore.getState().recordDone({
@@ -478,11 +483,21 @@ export function ComputerUpdateToastListener() {
     }
   });
 
-  // Only re-sync when eligibility fingerprint, locale copy, or active upgrades change —
-  // not on every runtime-list array identity churn.
+  // Only re-sync when eligibility fingerprint, locale copy, active upgrades, or
+  // the version an upgrading machine reports change — not on every runtime-list
+  // array identity churn. The version fingerprint is what retires a sticky
+  // "Updating…" toast: a restarted daemon sends no `computer:upgrade:done` and
+  // has already left the candidate list, so its re-registration on the target
+  // version moves no other dependency here.
   useEffect(() => {
     syncToasts(candidatesRef.current, upgrades);
-  }, [candidatesFingerprint, copy, syncToasts, upgrades]);
+  }, [
+    candidatesFingerprint,
+    copy,
+    syncToasts,
+    upgradeVersionsFingerprint,
+    upgrades,
+  ]);
 
   return null;
 }

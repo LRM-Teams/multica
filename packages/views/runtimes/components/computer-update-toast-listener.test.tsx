@@ -77,6 +77,17 @@ function s143Runtime(): AgentRuntime {
   };
 }
 
+/**
+ * Last toast body sonner was handed. Render it outside `waitFor` — rendering
+ * inside a `waitFor` callback mutates document.body, which re-fires the
+ * MutationObserver `waitFor` polls on and never lets the timeout run.
+ */
+function lastToast(): (id: string | number) => ReactNode {
+  return mocks.toastCustom.mock.lastCall?.[0] as (
+    id: string | number,
+  ) => ReactNode;
+}
+
 describe("ComputerUpdateToastListener", () => {
   beforeEach(() => {
     mocks.runtimes = [s143Runtime()];
@@ -149,6 +160,67 @@ describe("ComputerUpdateToastListener", () => {
       expect(view.getByText("Now on v0.4.24-alpha.12")).toBeInTheDocument();
       view.unmount();
     });
+  });
+
+  it("clears the updating toast when the daemon returns on the target version after the candidate is gone", async () => {
+    const user = userEvent.setup();
+    const { rerender } = renderWithI18n(<ComputerUpdateToastListener />);
+
+    await waitFor(() => expect(mocks.toastCustom).toHaveBeenCalledTimes(1));
+    const renderPrompt = mocks.toastCustom.mock.calls[0]?.[0] as (
+      id: string | number,
+    ) => ReactNode;
+    const prompt = render(renderPrompt("computer-update:s143"));
+    await user.click(screen.getByRole("button", { name: "Update now" }));
+    await waitFor(() =>
+      expect(
+        useComputerUpgradeStore
+          .getState()
+          .getUpgrade("1298b34b-b7de-4309-bdfb-71043265052d")?.phase,
+      ).toBe("running"),
+    );
+    prompt.unmount();
+
+    // The restarting daemon leaves the candidate list well before the new
+    // version lands, so the candidate fingerprint is already empty here.
+    mocks.runtimes = [
+      {
+        ...s143Runtime(),
+        status: "offline",
+        update_state: "running",
+        runtime_health: "updating",
+      },
+    ];
+    rerender(<ComputerUpdateToastListener />);
+    const updating = render(lastToast()("computer-update:s143"));
+    expect(updating.getByText("Updating s143…")).toBeInTheDocument();
+    updating.unmount();
+
+    // The successor registers on the target version. A restart handoff never
+    // emits computer:upgrade:done, so this version bump — visible only through
+    // the runtime list — is the one signal that can retire the toast.
+    const publishedBefore = mocks.toastCustom.mock.calls.length;
+    mocks.runtimes = [
+      {
+        ...s143Runtime(),
+        current_version: "0.4.24-alpha.12",
+        target_version: null,
+        daemon_target_version: null,
+        update_state: "idle",
+        runtime_health: "ok",
+      },
+    ];
+    rerender(<ComputerUpdateToastListener />);
+
+    await waitFor(() =>
+      expect(mocks.toastCustom.mock.calls.length).toBeGreaterThan(
+        publishedBefore,
+      ),
+    );
+    const success = render(lastToast()("computer-update:s143"));
+    expect(success.getByText("s143 updated")).toBeInTheDocument();
+    expect(success.getByText("Now on v0.4.24-alpha.12")).toBeInTheDocument();
+    success.unmount();
   });
 
   it("shows the current daemon upgrade phase", async () => {

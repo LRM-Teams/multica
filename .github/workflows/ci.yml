@@ -327,7 +327,10 @@ jobs:
           pkgs="$(bash scripts/ci-expand-go-packages.sh)"
           echo "packages=$pkgs" >> "$GITHUB_OUTPUT"
           echo "Affected Go packages: $pkgs"
-          bash scripts/ci-expand-go-packages.test.sh
+
+      - name: Prove Go package expansion
+        if: steps.scope.outputs.go_mode != 'skip'
+        run: bash scripts/ci-expand-go-packages.test.sh
 
       - name: Reject duplicate migration version numbers
         # Incremental only. `dev` already carries 59 duplicated numbers, and the

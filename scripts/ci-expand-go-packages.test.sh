@@ -9,19 +9,19 @@ fail() {
   exit 1
 }
 
-full="$(GO_MODE=full "$EXPAND")"
+full="$(env -u GO_SEED_PACKAGES GO_MODE=full "$EXPAND")"
 if [[ "$full" != "./..." ]]; then
   fail "GO_MODE=full must print ./... (got: $full)"
 fi
 
-empty="$(GO_SEED_PACKAGES="" "$EXPAND")"
+empty="$(env -u GO_MODE GO_SEED_PACKAGES="" "$EXPAND")"
 if [[ -n "$empty" ]]; then
   fail "empty seeds must print nothing (got: $empty)"
 fi
 
 # protocol is a leaf-ish library; the closure must include the seed itself
 # and at least one importer (daemon/handler historically depend on it).
-expanded="$(GO_SEED_PACKAGES=$'./pkg/protocol\n' "$EXPAND")"
+expanded="$(env -u GO_MODE GO_SEED_PACKAGES=$'./pkg/protocol\n' "$EXPAND")"
 if [[ "$expanded" != *"./pkg/protocol"* ]]; then
   fail "closure must keep the seed ./pkg/protocol (got: $expanded)"
 fi

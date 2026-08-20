@@ -688,10 +688,12 @@ func (s *PostgresStore) TaskContext(ctx context.Context, taskID, workspaceID str
 	if err != nil {
 		return RunSnapshot{}, err
 	}
-	return RunSnapshot{
+	snapshot := RunSnapshot{
 		Run: run, Contract: contract, Method: method, Questions: questions, Tasks: tasks, Attempts: attempts,
 		Sources: sources, Observations: observations, Claims: claims, Gate: gate,
-	}, nil
+	}
+	normalizeRunSnapshot(&snapshot)
+	return snapshot, nil
 }
 
 func (s *PostgresStore) TaskContextForAttempt(ctx context.Context, attemptID, workspaceID string) (RunSnapshot, error) {
@@ -787,6 +789,7 @@ func (s *PostgresStore) TaskContextForAttempt(ctx context.Context, attemptID, wo
 	} else if found {
 		filtered.Gate = gateSnapshot
 	}
+	normalizeRunSnapshot(&filtered)
 	return filtered, nil
 }
 

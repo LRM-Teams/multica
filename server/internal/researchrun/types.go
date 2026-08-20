@@ -504,6 +504,18 @@ type GateResult struct {
 	Findings []GateFinding `json:"findings"`
 }
 
+// MarshalJSON keeps Findings as [] instead of null so Zod clients that
+// treat null arrays as invalid (`.default([])` does not accept null) can
+// parse a passing V5/V6 gate.
+func (g GateResult) MarshalJSON() ([]byte, error) {
+	type alias GateResult
+	out := alias(g)
+	if out.Findings == nil {
+		out.Findings = []GateFinding{}
+	}
+	return json.Marshal(out)
+}
+
 type RunSnapshot struct {
 	Run                Run                        `json:"run"`
 	Contract           ResearchContract           `json:"contract"`
@@ -523,6 +535,83 @@ type RunSnapshot struct {
 	// Context Manifest. It is handler-only compatibility metadata, not another
 	// Research artifact family.
 	PrincipalHeader []FleetMember `json:"-"`
+}
+
+func normalizeRunSnapshot(snapshot *RunSnapshot) {
+	if snapshot.Questions == nil {
+		snapshot.Questions = []Question{}
+	}
+	if snapshot.Tasks == nil {
+		snapshot.Tasks = []Task{}
+	}
+	if snapshot.Attempts == nil {
+		snapshot.Attempts = []Attempt{}
+	}
+	if snapshot.Sources == nil {
+		snapshot.Sources = []SourceSnapshotView{}
+	}
+	if snapshot.Observations == nil {
+		snapshot.Observations = []Observation{}
+	}
+	if snapshot.Claims == nil {
+		snapshot.Claims = []Claim{}
+	}
+	if snapshot.Gate.Findings == nil {
+		snapshot.Gate.Findings = []GateFinding{}
+	}
+	if snapshot.Contract.Scope == nil {
+		snapshot.Contract.Scope = json.RawMessage("{}")
+	}
+	if snapshot.Contract.SourcePolicy == nil {
+		snapshot.Contract.SourcePolicy = json.RawMessage("{}")
+	}
+	if snapshot.Method != nil {
+		if snapshot.Method.AnalysisMethods == nil {
+			snapshot.Method.AnalysisMethods = []string{}
+		}
+		if snapshot.Method.EvidenceRequirements == nil {
+			snapshot.Method.EvidenceRequirements = []string{}
+		}
+		if snapshot.Method.EvidenceStandards == nil {
+			snapshot.Method.EvidenceStandards = []EvidenceStandard{}
+		}
+		if snapshot.Method.InclusionCriteria == nil {
+			snapshot.Method.InclusionCriteria = []string{}
+		}
+		if snapshot.Method.ExclusionCriteria == nil {
+			snapshot.Method.ExclusionCriteria = []string{}
+		}
+		if snapshot.Method.SourceStrategy == nil {
+			snapshot.Method.SourceStrategy = []string{}
+		}
+		if snapshot.Method.CounterevidenceStrategy == nil {
+			snapshot.Method.CounterevidenceStrategy = []string{}
+		}
+		if snapshot.Method.StoppingConditions == nil {
+			snapshot.Method.StoppingConditions = []string{}
+		}
+		if snapshot.Method.Uncertainties == nil {
+			snapshot.Method.Uncertainties = []string{}
+		}
+		if snapshot.Method.PlanningRisks == nil {
+			snapshot.Method.PlanningRisks = []string{}
+		}
+		for i := range snapshot.Method.EvidenceStandards {
+			if snapshot.Method.EvidenceStandards[i].RequiredSourceTraits == nil {
+				snapshot.Method.EvidenceStandards[i].RequiredSourceTraits = []string{}
+			}
+		}
+	}
+	for i := range snapshot.Claims {
+		if snapshot.Claims[i].Evidence == nil {
+			snapshot.Claims[i].Evidence = []ClaimEvidence{}
+		}
+	}
+	for i := range snapshot.Sources {
+		if snapshot.Sources[i].EvidenceTraits == nil {
+			snapshot.Sources[i].EvidenceTraits = []string{}
+		}
+	}
 }
 
 // FrozenLegacyContext retains V1-V5 compatibility families selected into one

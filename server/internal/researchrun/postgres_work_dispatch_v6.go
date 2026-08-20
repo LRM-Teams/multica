@@ -298,8 +298,13 @@ func (s *PostgresStore) CompleteV6DispatchOutbox(ctx context.Context, outboxID, 
 		return err
 	}
 	defer tx.Rollback(ctx)
-	var workspaceID, runID, attemptID, workItemID string
-	err = tx.QueryRow(ctx, `SELECT o.workspace_id::text,o.session_id::text,o.payload->'access'->>'attempt_id',o.payload->'access'->>'work_item_id' FROM research_v6_outbox o WHERE o.id=$1::uuid AND o.lease_token=$2::uuid AND o.kind='dispatch_work_item' AND o.status='delivering' FOR UPDATE`, outboxID, token).Scan(&workspaceID, &runID, &attemptID, &workItemID)
+	var workspaceID, runID string
+	var payload []byte
+	err = tx.QueryRow(ctx, `SELECT o.workspace_id::text,o.session_id::text,o.payload FROM research_v6_outbox o WHERE o.id=$1::uuid AND o.lease_token=$2::uuid AND o.kind='dispatch_work_item' AND o.status='delivering' FOR UPDATE`, outboxID, token).Scan(&workspaceID, &runID, &payload)
+	if err != nil {
+		return err
+	}
+	attemptID, workItemID, err := parseV6DispatchAccessIDs(payload)
 	if err != nil {
 		return err
 	}

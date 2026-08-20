@@ -142,15 +142,15 @@ func TestConsolidateNonTTTAppliesValidOps(t *testing.T) {
 		t.Fatalf("Rejected = %+v, want one delete_node/ghost rejection", res.Rejected)
 	}
 
-	// Op log: exactly the 3 applied ops, actor "consolidator".
+	// Op log contains the 3 applied ops plus the durable rejected operation.
 	entries, err := NewOpLogger(store).Read(1)
 	if err != nil {
 		t.Fatalf("read op log: %v", err)
 	}
-	if len(entries) != 3 {
-		t.Fatalf("op log entries = %d, want 3", len(entries))
+	if len(entries) != 4 {
+		t.Fatalf("op log entries = %d, want 4", len(entries))
 	}
-	wantOps := []string{OpAddNode, OpAddHierarchyEdge, OpUpdateNode}
+	wantOps := []string{OpAddNode, OpAddHierarchyEdge, OpUpdateNode, OpRejectedManagement}
 	for i, e := range entries {
 		if e.Actor != CreatorConsolidator {
 			t.Fatalf("entry %d actor = %q, want %q", i, e.Actor, CreatorConsolidator)
@@ -234,8 +234,8 @@ func TestConsolidateNonTTTCycleRejectedBatchContinues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read op log: %v", err)
 	}
-	if len(entries) != 1 || entries[0].Op != OpAddNode {
-		t.Fatalf("op log = %+v, want one add_node entry", entries)
+	if len(entries) != 2 || entries[0].Op != OpRejectedManagement || entries[1].Op != OpAddNode {
+		t.Fatalf("op log = %+v, want rejection then add_node entries", entries)
 	}
 
 	g, err := LoadGraph(store, 1)

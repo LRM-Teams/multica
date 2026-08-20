@@ -21,7 +21,7 @@ func (s *PostgresStore) ProcessV6EventTriggers(ctx context.Context, limit int) (
 			(SELECT max(last.sequence) FROM research_run_event last WHERE last.session_id=e.session_id),s.state_version
 			FROM research_run_event e JOIN research_session s ON s.workspace_id=e.workspace_id AND s.id=e.session_id
 			JOIN research_director_assignment a ON a.id=s.current_director_assignment_id AND a.status='active'
-			WHERE s.orchestrator_version='research-run-v6'
+			WHERE s.orchestrator_version='research-run-v6' AND s.status='running'
 			AND e.event_type IN (
 				'v6_result_node_accepted','v6_plan_materialized','v6_evidence_screened','v6_integration_materialized',
 				'v6_deliberation_materialized','v6_director_adjudication_materialized','v6_work_item_succeeded',

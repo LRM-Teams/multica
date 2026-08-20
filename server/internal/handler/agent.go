@@ -324,20 +324,25 @@ type AgentTaskResponse struct {
 	// (design §1/A4): the daemon uses it as a per-task override of its
 	// MULTICA_MEMORY_TYPE env default. Empty when the workspace has no
 	// profile row (the daemon env default then applies) or on old servers.
-	MemoryType    string         `json:"memory_type,omitempty"`
-	ThreadName    string         `json:"thread_name,omitempty"` // semantic title for provider-native session/thread history
-	Status        string         `json:"status"`
-	Priority      int32          `json:"priority"`
-	DispatchedAt  *string        `json:"dispatched_at"`
-	StartedAt     *string        `json:"started_at"`
-	CompletedAt   *string        `json:"completed_at"`
-	Result        any            `json:"result"`
-	Error         *string        `json:"error"`
-	FailureReason string         `json:"failure_reason,omitempty"` // see TaskService.MaybeRetryFailedTask
-	Attempt       int32          `json:"attempt"`
-	MaxAttempts   int32          `json:"max_attempts"`
-	ParentTaskID  *string        `json:"parent_task_id,omitempty"`
-	Agent         *TaskAgentData `json:"agent,omitempty"`
+	MemoryType string `json:"memory_type,omitempty"`
+	// ExploreAgents / ExploreMaxRounds carry the workspace's graph explore
+	// knobs alongside MemoryType (spec §10). Zero means the daemon env
+	// defaults apply.
+	ExploreAgents    int32          `json:"explore_agents,omitempty"`
+	ExploreMaxRounds int32          `json:"explore_max_rounds,omitempty"`
+	ThreadName       string         `json:"thread_name,omitempty"` // semantic title for provider-native session/thread history
+	Status           string         `json:"status"`
+	Priority         int32          `json:"priority"`
+	DispatchedAt     *string        `json:"dispatched_at"`
+	StartedAt        *string        `json:"started_at"`
+	CompletedAt      *string        `json:"completed_at"`
+	Result           any            `json:"result"`
+	Error            *string        `json:"error"`
+	FailureReason    string         `json:"failure_reason,omitempty"` // see TaskService.MaybeRetryFailedTask
+	Attempt          int32          `json:"attempt"`
+	MaxAttempts      int32          `json:"max_attempts"`
+	ParentTaskID     *string        `json:"parent_task_id,omitempty"`
+	Agent            *TaskAgentData `json:"agent,omitempty"`
 	// ExecutionConfig is the immutable runtime configuration captured when this
 	// execution was created. It is distinct from the agent Profile defaults,
 	// which only govern later work.

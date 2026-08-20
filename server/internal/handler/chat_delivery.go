@@ -361,6 +361,7 @@ func (h *Handler) notifyStandaloneChatDelivery(ctx context.Context, agent db.Age
 		return
 	}
 	workspaceID := uuidToString(agent.WorkspaceID)
+	h.applyGraphMemoryProfileToDelivery(ctx, workspaceID, &delivery)
 	if daemonID == nil || strings.TrimSpace(*daemonID) == "" || !h.AgentDeliveryNotifier.NotifyWorkspaceAgentDelivery(workspaceID, *daemonID, delivery) {
 		slog.Debug("standalone chat live delivery deferred to recovery",
 			"workspace_id", workspaceID,
@@ -412,13 +413,16 @@ func (h *Handler) redeliverUnacknowledgedStandaloneChat(ctx context.Context, ide
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	// Drain the list cursor before graph-profile lookup so nested QueryRow
+	// cannot hold two pool connections (cursordeadlock / #1803).
+	pending := make([]protocol.AgentDeliverPayload, 0)
 	for rows.Next() {
 		var agentID, messageID, sessionID pgtype.UUID
 		var seq int64
 		var target, content string
 		var rawParts []byte
 		if err := rows.Scan(&agentID, &messageID, &seq, &target, &sessionID, &content, &rawParts); err != nil {
+			rows.Close()
 			return err
 		}
 		var parts []protocol.MessagePart
@@ -427,7 +431,7 @@ func (h *Handler) redeliverUnacknowledgedStandaloneChat(ctx context.Context, ide
 		}
 		agentIDText := uuidToString(agentID)
 		messageIDText := uuidToString(messageID)
-		delivery := protocol.AgentDeliverPayload{
+		pending = append(pending, protocol.AgentDeliverPayload{
 			AgentID:    agentIDText,
 			Target:     target,
 			Seq:        seq,
@@ -439,10 +443,20 @@ func (h *Handler) redeliverUnacknowledgedStandaloneChat(ctx context.Context, ide
 				Content: content,
 				Parts:   parts,
 			},
-		}
-		if !h.AgentDeliveryNotifier.NotifyWorkspaceAgentDelivery(identity.WorkspaceID, identity.DaemonID, delivery) {
+		})
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+
+	for i := range pending {
+		delivery := &pending[i]
+		h.applyGraphMemoryProfileToDelivery(ctx, identity.WorkspaceID, delivery)
+		if !h.AgentDeliveryNotifier.NotifyWorkspaceAgentDelivery(identity.WorkspaceID, identity.DaemonID, *delivery) {
 			slog.Debug("standalone chat redelivery deferred", "delivery_id", delivery.DeliveryID)
 		}
 	}
-	return rows.Err()
+	return nil
 }

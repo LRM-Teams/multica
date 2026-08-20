@@ -472,6 +472,8 @@
 - **数值必须注来源**（`getComputedStyle`/file:line/设计决定）；目测（尤其 2x 截图）不准进稿。量色/量身份取真正绘制的最内层元素。
 - **验收分道**：数据/DB/投递→automation；hover/弹卡→自起 `--headless=new` Chrome（有合成器，rAF 正常）；真人只留观感与环境不可用两种情况。点击前先滚进视口。
 - **依据分级**（设计稿必备节）：`抄`（注出处）/`定`（注理由）/`实测`（注 file:line）/`目测`（禁止）。别把"我们的选择"说成"Linear 就是这么做的"。
+- **React Doctor 不是合并门**（2026-08-19）：`pnpm react:doctor` 不再进入 CI，也不再作为前端 PR 必过项。warning 挡合并会把能用的代码拦在注释位置和 effect 风格上。功能验收以 typecheck / lint / 单测为准。`cursordeadlock` 等真实并发门禁保留。
+- **PR CI 只测影响面**（2026-08-20）：合进 `dev` 的门禁不再全仓重跑约 1.2 万条测试。相对 `origin/dev`（push 到 `dev` 则相对 `github.event.before`）只跑变更包及其依赖方；脚本门只在对应文件变更时跑。测试文件不删，本地 `make check` / `pnpm test` / `go test ./...` 仍是全量。改 `ci.yml`、lockfile、`go.mod`/`go.sum` 或分类脚本本身则回到现网 web 范围全量。Job 始终启动，无影响面则空过成功。不再每次重复跑 `make test-agent-delivery-route`。物：`scripts/ci-pr-scope.sh`、`scripts/ci-expand-go-packages.sh`、`scripts/ci-turbo-web.sh`、`.github/workflows/ci.yml`。规格：`docs/superpowers/specs/2026-08-20-pr-ci-affected-packages-design.md`。
 
 ## 6. 元规矩：别拿没验证的环节当地基 — `仅文档`（本文立身之本）
 
@@ -660,5 +662,11 @@
 - Token success is RFC 6749 `{access_token, token_type=Bearer, expires_in}` seconds. `access_token` is the existing user PAT (`mul_…`), still single-claim.
 - `/device` must accept a typed `user_code`. Arriving via `verification_uri_complete` must display the code and require a match confirmation before approve/deny.
 - **物**：`server/internal/handler/device_auth.go` + `device_auth_test.go`；`server/cmd/multica/cmd_auth.go` + `cmd_device_login_test.go`；`packages/views/device/device-confirm-page.tsx` + test.
+
+### 4.24 Graph Memory 是独立 project/channel 图，不是 legacy 无损替代 — `仅文档`（实现门槛尚未落地）
+- Graph 模式只替代 project/channel/daily；user 与 agent memory 继续使用 legacy 文件。Graph miss、故障或空库不得回退 legacy project/channel/daily。首次启用从空图开始，不迁移或 backfill 旧文件。
+- 每个 `(workspace_id, project_id)` 一个由获授权参与 Agent 共享的物理图；最初未绑定项目的 Channel 使用永久 standalone 图。Project-bound Channel 改绑后保留 channel-only lineage，旧 Project 的 project-visible 节点绝不可经该 Channel 泄漏。
+- Graph 数据面由 Server 统一拥有；daemon 不持有本地图真相。Profile 参数必须进入运行时；Graph writer 验收前 job 保持 inert，验收后才移除第二环境开关；Graph Workspace 不运行现有 legacy L1–L4/self-review/team-curation pipeline。
+- Graph 保持 Experimental，且任何用户 Workspace（含 Experimental）启用前必须先通过 P0。P0/P1、错误语义、daily、治理 API、UI 和验收矩阵见 [`docs/superpowers/specs/2026-08-17-graph-memory-scope-design.md`](superpowers/specs/2026-08-17-graph-memory-scope-design.md)。实现与见红测试落地前不得标 `可执行`，也不得把 Graph 设为默认。
 
 维护人：Parker（产品）。规矩变更走 PR；`可执行` 升降档需 owner 签字。

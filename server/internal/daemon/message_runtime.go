@@ -354,14 +354,31 @@ func (d *Daemon) prepareResidentMessageBatch(ctx context.Context, agentID, runti
 	}
 
 	prepared := make([]protocol.AgentMessageProjection, 0, len(messages))
+	sessionKey := residentTurnScopeSessionKey(agentID, runtimeID)
 	for _, message := range messages {
 		messageTask := residentMessageMemoryTask(workspaceID, agentID, runtimeID, []protocol.AgentMessageProjection{message})
-		memories, _ := prepareExecutionMemory(agentRoot, messageTask, convertResidentMessageMemoriesForEnv(message.Memories))
-		// Graph reviewer (design §1 memory_type=graph): same replacement
-		// contract as runTask — graph recall wins on success, legacy stands
-		// on miss or error.
-		if graphMemories := d.graphExecutionMemories(ctx, messageTask, d.logger); graphMemories != nil {
-			memories = graphMemories
+		if profile, ok := d.graphProfileForWorkspace(workspaceID); ok {
+			messageTask.MemoryType = profile.memoryType
+			messageTask.ExploreAgents = profile.exploreAgents
+			messageTask.ExploreMaxRounds = profile.exploreMaxRounds
+		}
+		serverMemories := convertResidentMessageMemoriesForEnv(message.Memories)
+		var memories []execenv.MemoryContextForEnv
+		if effectiveMemoryType(d.cfg.MemoryType, messageTask.MemoryType) == MemoryTypeGraph {
+			// Same merge contract as runTask (spec §8): legacy user/agent
+			// retained, graph blob appended, no legacy project/channel/daily.
+			// Agent-scope rows stay out of per-message context.
+			combined := mergeGraphModeExecutionMemory(
+				agentRoot, messageTask, serverMemories,
+				d.graphExecutionMemories(ctx, messageTask, d.logger),
+			)
+			memories = withoutAgentScopeMemories(combined)
+		} else {
+			memories, _ = prepareTurnScopeMemory(agentRoot, messageTask, serverMemories)
+		}
+		if d.turnScopeMemory != nil {
+			memories = d.turnScopeMemory.selectForInject(sessionKey, memories, false)
+			d.turnScopeMemory.markInjected(sessionKey, memories)
 		}
 		chatSessionID, _ := standaloneChatSessionID(message.Target)
 		message.RuntimeContext = execenv.RenderTurnContext(execenv.TaskContextForEnv{

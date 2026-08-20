@@ -22,18 +22,29 @@ import (
 //	current                    small file containing the current version number
 //	versions/v<N>/             manifest.json + nodes/ + edges/
 //	shared/embeddings/         cross-version embedding cache (<content_hash>.vec)
+//	shared/sources/            append-only source layer (nodes/, edges.jsonl, journal.jsonl)
 //	staging/segments/          immutable source segment summaries
 //	query_log/                 per-window query logs (<window_id>.jsonl)
 //	op_log/                    per-version consolidation audit logs
 //	regression_set.jsonl       permanent regression query set
 //
-// A Store is safe for concurrent use within one process; cross-process
-// coordination is out of scope (the consolidator is a single writer).
+// A Store is safe for concurrent use within one process. GC also takes a
+// store-root gc.lock so concurrent processes fail busy or reclaim a stale lock.
 type Store struct {
 	// Root is the memory_graph/ directory.
 	Root string
 
 	mu sync.Mutex
+
+	// testHookBeforeJournal, if set, runs after a source node is prepared
+	// under pending/ and before the atomic rename + journal commit. Tests
+	// use it to inject a crash between the two publish phases.
+	testHookBeforeJournal func()
+
+	// testHookBeforeExtractionIndex, if set, runs after an extraction
+	// artifact is renamed into place and before its index.jsonl append.
+	// Tests use it to inject a crash between the two durability phases.
+	testHookBeforeExtractionIndex func()
 }
 
 // NewStore returns a Store rooted at root. Call Init before use.
@@ -51,6 +62,9 @@ func (s *Store) Init() error {
 	for _, dir := range []string{
 		s.versionsDir(),
 		s.embeddingsDir(),
+		s.sourcesDir(),
+		s.sourceNodesDir(),
+		s.sourcePendingDir(),
 		s.stagingDir(),
 		s.queryLogDir(),
 		s.opLogDir(),
@@ -136,14 +150,19 @@ func (s *Store) CreateVersionFrom(parentV int, createdBy string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	watermark, err := s.currentSourceSeqLocked()
+	if err != nil {
+		return 0, err
+	}
 	m := &Manifest{
-		Version:       newV,
-		ParentVersion: parentV,
-		CreatedAt:     time.Now().UTC(),
-		CreatedBy:     createdBy,
-		NodeCount:     nodeCount,
-		HierEdgeCount: len(hier),
-		RelEdgeCount:  len(rel),
+		Version:         newV,
+		ParentVersion:   parentV,
+		CreatedAt:       time.Now().UTC(),
+		CreatedBy:       createdBy,
+		NodeCount:       nodeCount,
+		HierEdgeCount:   len(hier),
+		RelEdgeCount:    len(rel),
+		SourceWatermark: watermark,
 	}
 	if err := s.saveManifestLocked(newV, m); err != nil {
 		return 0, err
@@ -225,32 +244,7 @@ func (s *Store) SaveNode(v int, n *Node) error {
 func (s *Store) LoadNodes(v int) ([]*Node, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	entries, err := os.ReadDir(s.nodesDir(v))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("read nodes dir v%d: %w", v, err)
-	}
-	var nodes []*Node
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
-			continue
-		}
-		path := filepath.Join(s.nodesDir(v), entry.Name())
-		b, err := os.ReadFile(path)
-		if err != nil {
-			return nil, fmt.Errorf("read node file %s: %w", path, err)
-		}
-		n, err := parseNodeFile(b)
-		if err != nil {
-			return nil, fmt.Errorf("parse node file %s: %w", path, err)
-		}
-		nodes = append(nodes, n)
-	}
-	sort.Slice(nodes, func(i, j int) bool { return nodes[i].NodeID < nodes[j].NodeID })
-	return nodes, nil
+	return s.loadNodesLocked(v)
 }
 
 // SaveEdges rewrites edges/hierarchy.jsonl and edges/relations.jsonl of
@@ -283,36 +277,7 @@ func (s *Store) LoadEdges(v int) (hier, rel []*Edge, err error) {
 // The current version is never deleted, even when it falls outside the
 // keep window (design §5.5).
 func (s *Store) GC(keep int) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	versions, err := s.listVersionsLocked()
-	if err != nil {
-		return err
-	}
-	if len(versions) <= keep {
-		return nil
-	}
-	current, err := s.currentVersionLocked()
-	if err != nil {
-		return fmt.Errorf("gc: read current version: %w", err)
-	}
-	keepSet := map[int]bool{current: true}
-	for i := len(versions) - 1; i >= 0 && keep > 0; i-- {
-		if !keepSet[versions[i]] {
-			keepSet[versions[i]] = true
-			keep--
-		}
-	}
-	for _, v := range versions {
-		if keepSet[v] {
-			continue
-		}
-		if err := os.RemoveAll(s.VersionDir(v)); err != nil {
-			return fmt.Errorf("gc: remove version v%d: %w", v, err)
-		}
-	}
-	return nil
+	return s.GCWithPinned(keep, nil)
 }
 
 // EmbeddingPath returns shared/embeddings/<hash>.vec for a content hash,
@@ -347,6 +312,58 @@ func (s *Store) WriteStagingSegment(segmentID string, content []byte) error {
 		return fmt.Errorf("write staging segment %s: %w", segmentID, err)
 	}
 	return nil
+}
+
+// WriteStagingSegmentMeta persists the scope/provenance sidecar
+// staging/segments/<segment_id>.scope.json. Like the segment body it
+// accompanies, the sidecar is immutable: it fails if the meta already
+// exists.
+func (s *Store) WriteStagingSegmentMeta(segmentID string, meta *SegmentMeta) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := validateFileID("segment_id", segmentID); err != nil {
+		return err
+	}
+	body, err := json.Marshal(meta)
+	if err != nil {
+		return fmt.Errorf("marshal staging segment meta %s: %w", segmentID, err)
+	}
+	if err := os.MkdirAll(s.stagingDir(), 0o755); err != nil {
+		return err
+	}
+	path := filepath.Join(s.stagingDir(), segmentID+".scope.json")
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		if os.IsExist(err) {
+			return fmt.Errorf("staging segment meta %s already exists", segmentID)
+		}
+		return fmt.Errorf("write staging segment meta %s: %w", segmentID, err)
+	}
+	defer f.Close()
+	if _, err := f.Write(body); err != nil {
+		return fmt.Errorf("write staging segment meta %s: %w", segmentID, err)
+	}
+	return nil
+}
+
+// ReadStagingSegmentMeta reads staging/segments/<segment_id>.scope.json.
+func (s *Store) ReadStagingSegmentMeta(segmentID string) (*SegmentMeta, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := validateFileID("segment_id", segmentID); err != nil {
+		return nil, err
+	}
+	body, err := os.ReadFile(filepath.Join(s.stagingDir(), segmentID+".scope.json"))
+	if err != nil {
+		return nil, fmt.Errorf("read staging segment meta %s: %w", segmentID, err)
+	}
+	var meta SegmentMeta
+	if err := json.Unmarshal(body, &meta); err != nil {
+		return nil, fmt.Errorf("parse staging segment meta %s: %w", segmentID, err)
+	}
+	return &meta, nil
 }
 
 // ReadStagingSegment reads staging/segments/<segment_id>.md.
@@ -572,6 +589,34 @@ func (s *Store) listVersionsLocked() ([]int, error) {
 	}
 	sort.Ints(versions)
 	return versions, nil
+}
+
+func (s *Store) loadNodesLocked(v int) ([]*Node, error) {
+	entries, err := os.ReadDir(s.nodesDir(v))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read nodes dir v%d: %w", v, err)
+	}
+	var nodes []*Node
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+			continue
+		}
+		path := filepath.Join(s.nodesDir(v), entry.Name())
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("read node file %s: %w", path, err)
+		}
+		n, err := parseNodeFile(b)
+		if err != nil {
+			return nil, fmt.Errorf("parse node file %s: %w", path, err)
+		}
+		nodes = append(nodes, n)
+	}
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].NodeID < nodes[j].NodeID })
+	return nodes, nil
 }
 
 func (s *Store) loadManifestLocked(v int) (*Manifest, error) {

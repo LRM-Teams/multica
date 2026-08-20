@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Run turbo tasks for the web product surface, either full or affected-only.
+#
+# Usage: ci-turbo-web.sh <full|affected> <turbo-tasks...>
+# Env: BASE_REF (default origin/dev), CONCURRENCY (optional, turbo --concurrency)
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT_DIR"
+
+mode=${1:-}
+shift || true
+if [[ "$mode" != full && "$mode" != affected ]]; then
+  echo "usage: ci-turbo-web.sh <full|affected> <turbo-tasks...>" >&2
+  exit 2
+fi
+if (($# == 0)); then
+  echo "usage: ci-turbo-web.sh <full|affected> <turbo-tasks...>" >&2
+  exit 2
+fi
+
+base=${BASE_REF:-origin/dev}
+concurrency_args=()
+if [[ -n "${CONCURRENCY:-}" ]]; then
+  concurrency_args=(--concurrency="$CONCURRENCY")
+fi
+
+if [[ "$mode" == full ]]; then
+  exec pnpm exec turbo "$@" --filter='@multica/web...' "${concurrency_args[@]}"
+fi
+
+filters=(
+  --filter="...[${base}]"
+  --filter='!@multica/desktop'
+  --filter='!@multica/mobile'
+  --filter='!@multica/docs'
+)
+
+dry_json="$(pnpm exec turbo "$@" --dry-run=json "${filters[@]}" "${concurrency_args[@]}" || true)"
+if ! python3 - "$dry_json" <<'PY'
+import json, sys
+raw = sys.argv[1].strip()
+if not raw:
+    raise SystemExit(1)
+try:
+    payload = json.loads(raw)
+except json.JSONDecodeError:
+    # turbo may print a banner before JSON
+    start = raw.find("{")
+    if start < 0:
+        raise SystemExit(1)
+    payload = json.loads(raw[start:])
+tasks = payload.get("tasks") or payload.get("packages") or []
+raise SystemExit(0 if tasks else 1)
+PY
+then
+  echo "No affected web packages for $* (base=$base); skipping"
+  exit 0
+fi
+
+exec pnpm exec turbo "$@" "${filters[@]}" "${concurrency_args[@]}"

@@ -2,7 +2,7 @@
 
 import { useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { ExecutionConfigFields } from "./execution-config-fields";
+import { RuntimeConfigFields } from "./runtime-config-fields";
 import {
   firstRuntimeMachine,
   firstRuntimeIdOnMachine,
@@ -452,7 +452,7 @@ export function CreateAgentDialog({
             </div>
 
 
-            <ExecutionConfigFields
+            <RuntimeConfigFields
               runtimes={runtimes}
               runtimesLoading={runtimesLoading}
               members={members}

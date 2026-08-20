@@ -197,7 +197,7 @@ export function AgentDetailInspector({
               type="button"
               className="ml-auto inline-flex shrink-0 rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               onClick={() => setRuntimeDialogOpen(true)}
-              aria-label={t(($) => $.execution_config.edit_trigger_aria)}
+              aria-label={t(($) => $.runtime_config.edit_trigger_aria)}
               data-testid="agent-inspector-runtime-config-edit"
             >
               <Pencil className="h-3.5 w-3.5" aria-hidden />

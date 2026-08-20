@@ -80,6 +80,12 @@ receipt. `POST /api/members/agents/{id}/stop` targets the current launch and
 requires the current Workspace Runner; it does not persist manual Stop intent.
 These are human product actions, not `multica agent *` CLI commands.
 
+For multiple Agents, `POST /api/members/agents/lifecycle` accepts one
+`agent_ids` array and an `action` of `start`, `stop`, or `reset`. Reset also
+requires `mode: restart|session|full`. The response reports acceptance per
+Agent because already-dispatched daemon commands cannot be rolled back. Clients
+must not fan out the single-Agent routes.
+
 Two distinct text fields, often confused:
 
 - `description` is a catalog summary. It is stored and shown in listings; the
@@ -137,6 +143,11 @@ the same visual asset in the retained v1 catalog at the write boundary. Raw
 `thinking_level` is validated only at the provider level: unrecognized literal
 → 400; a value valid for the provider but unsupported for the chosen model is
 NOT rejected at create — that surfaces as a daemon task error at run time.
+
+For one shared runtime configuration across multiple existing Agents, use
+`PUT /api/members/agents/runtime-config` with `agent_ids`, `runtime_id`, `model`, and
+`thinking_level`. The server validates every Agent and applies the update
+atomically; clients must not fan out one `PUT /api/agents/{id}` per Agent.
 
 ### model vs custom_args
 

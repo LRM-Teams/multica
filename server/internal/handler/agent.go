@@ -1347,7 +1347,7 @@ type UpdateAgentRequest struct {
 	// Distinguishing those modes is why this is a pointer; the raw-fields
 	// map captured at decode time tells us whether the key was sent.
 	ThinkingLevel *string `json:"thinking_level"`
-	// ModelCatalogRequestID binds a Profile execution-config save to the
+	// ModelCatalogRequestID binds a Profile runtime-config save to the
 	// completed runtime model discovery that populated its picker. It is not
 	// persisted on the agent: it is proof for this mutation that the selected
 	// model/reasoning combination is actually advertised by the target runtime.
@@ -1874,7 +1874,7 @@ func (h *Handler) resolveAgentProvider(r *http.Request, workspaceID pgtype.UUID,
 	return rt.Provider, true
 }
 
-// validateAgentModelCatalog verifies the exact execution-config tuple against
+// validateAgentModelCatalog verifies the exact runtime-config tuple against
 // a completed daemon model-discovery response. A model-list request is bound
 // to one runtime and expires with the store's normal retention window, so it
 // cannot be replayed for a different runtime or indefinitely after capability
@@ -1882,7 +1882,7 @@ func (h *Handler) resolveAgentProvider(r *http.Request, workspaceID pgtype.UUID,
 func (h *Handler) validateAgentModelCatalog(ctx context.Context, requestID string, runtimeID pgtype.UUID, model, thinkingLevel string) error {
 	requestID = strings.TrimSpace(requestID)
 	if requestID == "" {
-		return fmt.Errorf("model_catalog_request_id is required for execution configuration")
+		return fmt.Errorf("model_catalog_request_id is required for runtime configuration")
 	}
 	request, err := h.ModelListStore.Get(ctx, requestID)
 	if err != nil {

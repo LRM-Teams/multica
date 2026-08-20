@@ -15,11 +15,11 @@ import { Label } from "@multica/ui/components/ui/label";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n";
 import {
-  executionFieldClass,
-  executionOptionClass,
-  executionOptionSelectedClass,
-  executionTriggerClass,
-} from "./execution-picker-styles";
+  runtimeConfigFieldClass,
+  runtimeConfigOptionClass,
+  runtimeConfigOptionSelectedClass,
+  runtimeConfigTriggerClass,
+} from "./runtime-config-picker-styles";
 import {
   runtimePickerBrandLabel,
   runtimePickerHostSubtitle,
@@ -70,7 +70,7 @@ export function RuntimePicker({
     runtimes.find((d) => d.id === selectedRuntimeId) ?? null;
 
   return (
-    <div className={executionFieldClass}>
+    <div className={runtimeConfigFieldClass}>
       <Label className="text-xs font-medium text-muted-foreground">
         {pickerLabel}
       </Label>
@@ -78,7 +78,7 @@ export function RuntimePicker({
         <PopoverTrigger
           disabled={disabled || (runtimes.length === 0 && !runtimesLoading)}
           data-testid="runtime-picker-trigger"
-          className={executionTriggerClass}
+          className={runtimeConfigTriggerClass}
         >
           {runtimesLoading ? (
             <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
@@ -140,9 +140,9 @@ export function RuntimePicker({
                     setOpen(false);
                   }}
                   className={cn(
-                    executionOptionClass,
+                    runtimeConfigOptionClass,
                     device.id === selectedRuntimeId &&
-                      executionOptionSelectedClass,
+                      runtimeConfigOptionSelectedClass,
                   )}
                 >
                   <ProviderLogo

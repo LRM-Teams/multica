@@ -4,10 +4,20 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { Agent, AgentRuntime, MemberWithUser } from "@multica/core/types";
 import { RuntimeConfigDialog } from "./runtime-config-dialog";
+import { BulkRuntimeConfigDialog } from "./bulk-runtime-config-dialog";
 
 vi.mock("../../i18n", () => ({
   useT: () => ({
-    t: (selector: (r: typeof RESOURCES) => string) => selector(RESOURCES),
+    t: (
+      selector: (r: typeof RESOURCES) => string,
+      values?: Record<string, string | number>,
+    ) => {
+      let result = selector(RESOURCES);
+      for (const [key, value] of Object.entries(values ?? {})) {
+        result = result.replace(`{{${key}}}`, String(value));
+      }
+      return result;
+    },
   }),
 }));
 
@@ -143,6 +153,13 @@ vi.mock("./thinking-dropdown", () => ({
 }));
 
 const RESOURCES = {
+  machine: {
+    agents_bulk_config_title: "Configure {{count}} agents",
+    agents_bulk_config_description:
+      "Choose one runtime and model for all selected agents.",
+    agents_bulk_config_save: "Apply to {{count}} agents",
+    agents_bulk_config_saving: "Applying…",
+  },
   inspector: {
     prop_runtime: "Runtime",
     prop_model: "Model",
@@ -151,7 +168,7 @@ const RESOURCES = {
     save: "Save",
     cancel: "Cancel",
   },
-  execution_config: {
+  runtime_config: {
     dialog_title: "Runtime config",
     dialog_description: "Edits stay local until you save.",
     dialog_saving: "Saving…",
@@ -204,7 +221,7 @@ describe("RuntimeConfigDialog — Computer → Runtime → Model → Reasoning",
       />,
     );
 
-    expect(screen.getByTestId("execution-config-fields")).toBeInTheDocument();
+    expect(screen.getByTestId("runtime-config-fields")).toBeInTheDocument();
     expect(screen.getByTestId("draft-computer")).toBeInTheDocument();
     expect(screen.getByTestId("draft-runtime")).toBeInTheDocument();
     expect(screen.getByTestId("draft-model")).toBeInTheDocument();
@@ -257,5 +274,44 @@ describe("RuntimeConfigDialog — Computer → Runtime → Model → Reasoning",
     const patch = firstCall![0] as Record<string, unknown>;
     expect(patch.runtime_id).toBe("rt-2");
     expect(patch.model).toBe("claude-sonnet-5");
+  });
+});
+
+describe("BulkRuntimeConfigDialog", () => {
+  it("applies one runtime and model selection to every selected agent", () => {
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    const agents = [
+      agent,
+      {
+        ...agent,
+        id: "agent-2",
+        model: "claude-haiku-5",
+        thinking_level: "high",
+      },
+    ];
+
+    render(
+      <BulkRuntimeConfigDialog
+        agents={agents}
+        open
+        onOpenChange={vi.fn()}
+        runtimes={runtimes}
+        members={members}
+        currentUserId="user-1"
+        onSave={onSave}
+      />,
+    );
+
+    expect(
+      screen.getByRole("heading", { name: "Configure 2 agents" }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("draft-model"));
+    fireEvent.click(screen.getByTestId("agent-bulk-runtime-config-save"));
+
+    expect(onSave).toHaveBeenCalledWith({
+      runtime_id: "rt-1",
+      model: "claude-sonnet-5",
+      thinking_level: "",
+    });
   });
 });

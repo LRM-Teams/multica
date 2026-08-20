@@ -12,8 +12,8 @@ import { Button } from "@multica/ui/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@multica/ui/components/ui/card";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { cn } from "@multica/ui/lib/utils";
-import { ExecutionConfigFields } from "../agents/components/execution-config-fields";
-import { useExecutionSelection } from "../agents/components/use-execution-selection";
+import { RuntimeConfigFields } from "../agents/components/runtime-config-fields";
+import { useRuntimeConfigSelection } from "../agents/components/use-runtime-config-selection";
 import { useT } from "../i18n";
 import { CliInstallInstructions } from "../onboarding/steps/cli-install-instructions";
 
@@ -149,7 +149,7 @@ function WendyCreateForm({
   queryClient: ReturnType<typeof useQueryClient>;
 }) {
   const { t } = useT("agents");
-  const selection = useExecutionSelection({
+  const selection = useRuntimeConfigSelection({
     runtimes,
     currentUserId,
     autoSeedMachine: true,
@@ -181,7 +181,7 @@ function WendyCreateForm({
 
   return (
     <div data-testid="onboarding-agent-create-wendy" className="space-y-4">
-      <ExecutionConfigFields
+      <RuntimeConfigFields
         runtimes={runtimes}
         members={members}
         currentUserId={currentUserId}

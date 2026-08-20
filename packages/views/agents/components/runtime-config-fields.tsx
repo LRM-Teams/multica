@@ -10,16 +10,16 @@ import { ModelDropdown } from "./model-dropdown";
 import { ThinkingDropdown } from "./thinking-dropdown";
 
 /**
- * Site-wide execution bind form: Computer → Runtime → Model → Reasoning.
+ * Site-wide runtime config form: Computer → Runtime → Model → Reasoning.
  *
  * Visuals match Create Agent (bordered full-width pickers). Parents own
- * cascade state via `useExecutionSelection` or equivalent.
+ * cascade state via `useRuntimeConfigSelection` or equivalent.
  *
  * Selecting a Runtime immediately prefetches the model catalog (daemon
  * list-models scan) so Model/Reasoning do not wait for the user to open
  * the Model menu.
  */
-export function ExecutionConfigFields({
+export function RuntimeConfigFields({
   runtimes,
   runtimesLoading,
   members,
@@ -64,7 +64,7 @@ export function ExecutionConfigFields({
   return (
     <div
       className="flex min-w-0 flex-col gap-2.5"
-      data-testid="execution-config-fields"
+      data-testid="runtime-config-fields"
     >
       <ComputerPicker
         runtimes={runtimes}

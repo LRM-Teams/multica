@@ -3,7 +3,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
-import { ExecutionConfigFields } from "./execution-config-fields";
+import { RuntimeConfigFields } from "./runtime-config-fields";
 
 const runtimeModelsOptionsMock = vi.hoisted(() => vi.fn());
 
@@ -41,11 +41,11 @@ vi.mock("./thinking-dropdown", () => ({
   ),
 }));
 
-describe("ExecutionConfigFields disabled state", () => {
+describe("RuntimeConfigFields disabled state", () => {
   it("disables the full Computer to Reasoning chain", () => {
     render(
       <QueryClientProvider client={new QueryClient()}>
-        <ExecutionConfigFields
+        <RuntimeConfigFields
           runtimes={[]}
           members={[]}
           currentUserId="user-1"
@@ -72,7 +72,7 @@ describe("ExecutionConfigFields disabled state", () => {
     runtimeModelsOptionsMock.mockClear();
     render(
       <QueryClientProvider client={new QueryClient()}>
-        <ExecutionConfigFields
+        <RuntimeConfigFields
           runtimes={[]}
           members={[]}
           currentUserId="user-1"

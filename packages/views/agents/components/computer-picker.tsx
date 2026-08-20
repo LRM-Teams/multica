@@ -13,11 +13,11 @@ import { Label } from "@multica/ui/components/ui/label";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n";
 import {
-  executionFieldClass,
-  executionOptionClass,
-  executionOptionSelectedClass,
-  executionTriggerClass,
-} from "./execution-picker-styles";
+  runtimeConfigFieldClass,
+  runtimeConfigOptionClass,
+  runtimeConfigOptionSelectedClass,
+  runtimeConfigTriggerClass,
+} from "./runtime-config-picker-styles";
 
 /**
  * Computer selector: one row per machine (via `buildRuntimeMachines`).
@@ -50,7 +50,7 @@ export function ComputerPicker({
     machines.find((machine) => machine.id === selectedMachineId) ?? null;
 
   return (
-    <div className={executionFieldClass}>
+    <div className={runtimeConfigFieldClass}>
       <Label className="text-xs font-medium text-muted-foreground">
         {t(($) => $.create_dialog.computer_label)}
       </Label>
@@ -58,7 +58,7 @@ export function ComputerPicker({
         <PopoverTrigger
           disabled={disabled || (machines.length === 0 && !runtimesLoading)}
           data-testid="computer-picker-trigger"
-          className={executionTriggerClass}
+          className={runtimeConfigTriggerClass}
         >
           {runtimesLoading ? (
             <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
@@ -108,9 +108,9 @@ export function ComputerPicker({
                     setOpen(false);
                   }}
                   className={cn(
-                    executionOptionClass,
+                    runtimeConfigOptionClass,
                     machine.id === selectedMachineId &&
-                      executionOptionSelectedClass,
+                      runtimeConfigOptionSelectedClass,
                   )}
                 >
                   <Monitor className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />

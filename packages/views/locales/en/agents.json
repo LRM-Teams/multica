@@ -548,7 +548,7 @@
       "platinum": "Platinum"
     }
   },
-  "execution_config": {
+  "runtime_config": {
     "applies_next_run": "Open the dialog to edit Computer, Runtime, Model, and Reasoning. Saving applies all changes and restarts the agent when available (at most once).",
     "dialog_title": "Runtime config",
     "dialog_description": "Choose Computer → Runtime → Model → Reasoning. Edits stay local until you save. Cancel discards the draft without restarting.",

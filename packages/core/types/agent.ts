@@ -634,7 +634,7 @@ export interface EnsureWindyResponse {
   dm_id?: string;
 }
 
-/** Retired path: archives leftover 周报 and returns 笔记助手 (写汇报 synthesizer). */
+/** Idempotent Period Brief Agent (「周报」) ensure. */
 export interface EnsurePeriodBriefAgentResponse {
   agent: Agent;
   created: boolean;
@@ -805,7 +805,7 @@ export interface UpdateAgentRequest {
   status?: AgentStatus;
   max_concurrent_tasks?: number;
   model?: string;
-	/** Completed runtime-model discovery request backing an execution-config save. */
+	/** Completed runtime-model discovery request backing a runtime-config save. */
 	model_catalog_request_id?: string;
   /**
    * Runtime-native reasoning/effort token. Tri-state semantics (MUL-2339):
@@ -816,6 +816,37 @@ export interface UpdateAgentRequest {
    *     runtime's provider enum, rejected with 400 if not recognised
    */
   thinking_level?: string;
+}
+
+export interface BulkUpdateAgentRuntimeConfigRequest {
+  agent_ids: string[];
+  runtime_id: string;
+  model: string;
+  thinking_level: string;
+}
+
+export interface BulkUpdateAgentRuntimeConfigResponse {
+  updated_agent_ids: string[];
+}
+
+export type BulkAgentLifecycleAction = "start" | "stop" | "reset";
+
+export interface BulkAgentLifecycleRequest {
+  agent_ids: string[];
+  action: BulkAgentLifecycleAction;
+  mode?: AgentRestartMode;
+}
+
+export interface BulkAgentLifecycleResult {
+  agent_id: string;
+  accepted: boolean;
+  status?: string;
+  error?: string;
+  operation?: AgentRestartOperation;
+}
+
+export interface BulkAgentLifecycleResponse {
+  results: BulkAgentLifecycleResult[];
 }
 
 /**

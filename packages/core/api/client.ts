@@ -69,6 +69,10 @@ import type {
   PromoteKnowledgeResponse,
   PromoteEvolutionReviewSubmissionResponse,
   UpdateAgentRequest,
+  BulkUpdateAgentRuntimeConfigRequest,
+  BulkUpdateAgentRuntimeConfigResponse,
+  BulkAgentLifecycleRequest,
+  BulkAgentLifecycleResponse,
   AgentEnvResponse,
   UpdateAgentEnvRequest,
   RuntimeEnvResponse,
@@ -1653,10 +1657,16 @@ export class ApiClient {
     return EnsureWindyResponseSchema.parse(raw);
   }
 
-  async ensurePeriodBriefAgent(): Promise<EnsurePeriodBriefAgentResponse> {
+  async ensurePeriodBriefAgent(
+    runtimeId: string,
+    model: string,
+  ): Promise<EnsurePeriodBriefAgentResponse> {
     const raw = await this.fetch<unknown>("/api/members/agents/period-brief", {
       method: "POST",
-      body: JSON.stringify({}),
+      body: JSON.stringify({
+        runtime_id: runtimeId,
+        model,
+      }),
     });
     return EnsurePeriodBriefAgentResponseSchema.parse(raw);
   }
@@ -1745,6 +1755,24 @@ export class ApiClient {
   async updateAgent(id: string, data: UpdateAgentRequest): Promise<Agent> {
     return this.fetch(`/api/members/agents/${id}`, {
       method: "PUT",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async bulkUpdateAgentRuntimeConfig(
+    data: BulkUpdateAgentRuntimeConfigRequest,
+  ): Promise<BulkUpdateAgentRuntimeConfigResponse> {
+    return this.fetch("/api/members/agents/runtime-config", {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async bulkAgentLifecycle(
+    data: BulkAgentLifecycleRequest,
+  ): Promise<BulkAgentLifecycleResponse> {
+    return this.fetch("/api/members/agents/lifecycle", {
+      method: "POST",
       body: JSON.stringify(data),
     });
   }

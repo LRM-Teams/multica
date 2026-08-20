@@ -6,6 +6,67 @@ afterEach(() => {
 });
 
 describe("ApiClient", () => {
+  it("updates multiple Agent runtime configs with one request", async () => {
+    const response = { updated_agent_ids: ["agent-1", "agent-2"] };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(response), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+    const request = {
+      agent_ids: ["agent-1", "agent-2"],
+      runtime_id: "runtime-1",
+      model: "claude-opus-5",
+      thinking_level: "high",
+    };
+
+    await expect(
+      client.bulkUpdateAgentRuntimeConfig(request),
+    ).resolves.toEqual(response);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.example.test/api/members/agents/runtime-config",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify(request),
+      }),
+    );
+  });
+
+  it("applies one lifecycle action to multiple Agents with one request", async () => {
+    const response = {
+      results: [
+        { agent_id: "agent-1", accepted: true, status: "starting" },
+        { agent_id: "agent-2", accepted: true, status: "starting" },
+      ],
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(response), {
+        status: 202,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+    const request = {
+      agent_ids: ["agent-1", "agent-2"],
+      action: "start" as const,
+    };
+
+    await expect(client.bulkAgentLifecycle(request)).resolves.toEqual(response);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.example.test/api/members/agents/lifecycle",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify(request),
+      }),
+    );
+  });
+
   it("posts an explicit Goal delivery bootstrap and fails malformed responses closed", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ goal: { id: 42, status: "future-state" } }), {

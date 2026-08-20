@@ -3,7 +3,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { RuntimeDevice } from "@multica/core/types";
-import { useExecutionSelection } from "./use-execution-selection";
+import { useRuntimeConfigSelection } from "./use-runtime-config-selection";
 
 vi.mock("../../runtimes/components/runtime-machines", () => ({
   buildRuntimeMachines: (runtimes: RuntimeDevice[]) => {
@@ -32,10 +32,10 @@ function runtime(id: string, daemonId = "machine-1"): RuntimeDevice {
   } as RuntimeDevice;
 }
 
-describe("useExecutionSelection cascade identity", () => {
+describe("useRuntimeConfigSelection cascade identity", () => {
   it("does not clear model or reasoning when reselecting the current runtime", () => {
     const { result } = renderHook(() =>
-      useExecutionSelection({
+      useRuntimeConfigSelection({
         runtimes: [runtime("runtime-1")],
         currentUserId: "user-1",
         initialRuntimeId: "runtime-1",
@@ -52,7 +52,7 @@ describe("useExecutionSelection cascade identity", () => {
 
   it("does not clear reasoning when reselecting the current model", () => {
     const { result } = renderHook(() =>
-      useExecutionSelection({
+      useRuntimeConfigSelection({
         runtimes: [runtime("runtime-1")],
         currentUserId: "user-1",
         initialRuntimeId: "runtime-1",
@@ -69,7 +69,7 @@ describe("useExecutionSelection cascade identity", () => {
   it("preserves an initial binding while runtimes load asynchronously", () => {
     const { result, rerender } = renderHook(
       ({ runtimes }: { runtimes: RuntimeDevice[] }) =>
-        useExecutionSelection({
+        useRuntimeConfigSelection({
           runtimes,
           currentUserId: "user-1",
           initialRuntimeId: "saved-runtime",

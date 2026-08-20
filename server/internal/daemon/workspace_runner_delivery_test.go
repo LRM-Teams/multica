@@ -558,6 +558,56 @@ func TestWorkspaceRunnerStartingLaunchBuffersWithoutProviderDelivery(t *testing.
 	}
 }
 
+func TestWorkspaceRunnerStandaloneChatDefersAckWhileStarting(t *testing.T) {
+	// §1.5: chat: must not ACK on pending_buffered — otherwise agent_chat_delivery
+	// acked_at blocks redelivery and a stuck Starting launch never recovers.
+	d := New(Config{}, nil)
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
+		return errors.New("provider not ready")
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completeCoordinatorRecovery(t, coordinator)
+	d.mu.Lock()
+	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
+	d.mu.Unlock()
+	runner := registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
+	launch, ok := runner.processes.Snapshot("agent-1")
+	if !ok || launch.QueueState != protocol.AgentStartQueueStarting {
+		t.Fatalf("starting launch = %+v exists=%v", launch, ok)
+	}
+	sessionID := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	messageID := "11111111-2222-3333-4444-555555555555"
+	delivery := protocol.AgentDeliverPayload{
+		AgentID:    "agent-1",
+		Target:     "chat:" + sessionID,
+		Seq:        1,
+		DeliveryID: "chat:" + messageID + ":agent:agent-1",
+		Message: protocol.AgentMessageProjection{
+			ID: messageID, Target: "chat:" + sessionID, Seq: 1, Content: "hi from bubble",
+		},
+	}
+	var acknowledgements int
+	if err := runner.handleMessageDelivery(context.Background(), delivery, func(eventType string, _ any) error {
+		if eventType == protocol.EventAgentDeliverAck {
+			acknowledgements++
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if acknowledgements != 0 {
+		t.Fatalf("standalone chat acknowledgements=%d, want 0 while starting", acknowledgements)
+	}
+	coordinator.mu.Lock()
+	pending := coordinator.pendingBatchLocked()
+	coordinator.mu.Unlock()
+	if len(pending) != 1 || pending[0].ID != messageID {
+		t.Fatalf("Pending while starting = %+v, want %s", pending, messageID)
+	}
+}
+
 func TestWorkspaceRunnerDeliveryAfterManagedStartReachesProvider(t *testing.T) {
 	var handoffs int
 	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)

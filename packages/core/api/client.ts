@@ -25,6 +25,7 @@ import type {
   AgentCreationDraft,
   EnsureWindyResponse,
   EnsurePeriodBriefAgentResponse,
+  EnsureNotesAssistantAgentResponse,
   EnsurePeriodBriefCollectorsResponse,
   AgentTemplate,
   AgentTemplateSummary,
@@ -312,6 +313,7 @@ import {
   CreateAgentFromTemplateResponseSchema,
   EnsureWindyResponseSchema,
   EnsurePeriodBriefAgentResponseSchema,
+  EnsureNotesAssistantAgentResponseSchema,
   EnsurePeriodBriefCollectorsResponseSchema,
   DashboardAgentRunTimeListSchema,
   DashboardRunTimeDailyListSchema,
@@ -1663,6 +1665,18 @@ export class ApiClient {
       }),
     });
     return EnsurePeriodBriefAgentResponseSchema.parse(raw);
+  }
+
+  async ensureNotesAssistantAgent(input?: {
+    clone_onboarding?: boolean;
+    runtime_id?: string;
+    model?: string;
+  }): Promise<EnsureNotesAssistantAgentResponse> {
+    const raw = await this.fetch<unknown>("/api/members/agents/notes-assistant", {
+      method: "POST",
+      body: JSON.stringify(input ?? {}),
+    });
+    return EnsureNotesAssistantAgentResponseSchema.parse(raw);
   }
 
   async ensurePeriodBriefCollectors(model: string): Promise<EnsurePeriodBriefCollectorsResponse> {

@@ -62,6 +62,8 @@ interface ChatInputProps {
    * composer isn't tucked under the home indicator / browser chrome.
    */
   safeArea?: boolean;
+  /** Bump to focus the composer editor. */
+  focusToken?: number;
 }
 
 export function ChatInput({
@@ -81,6 +83,7 @@ export function ChatInput({
   sessionId,
   currentProjectId,
   safeArea = false,
+  focusToken,
 }: ChatInputProps) {
   const { t } = useT("chat");
   const editorRef = useRef<ContentEditorRef>(null);
@@ -148,6 +151,15 @@ export function ChatInput({
   // `onSend` call would silently drop `attachment_ids` so the
   // attachment never binds to the chat message.
   const uploadMapRef = useRef<Map<string, string>>(new Map());
+
+  useEffect(() => {
+    if (focusToken == null) return;
+    // Defer until after create-agent Dialog unmount / portal teardown.
+    const id = window.requestAnimationFrame(() => {
+      editorRef.current?.focus();
+    });
+    return () => window.cancelAnimationFrame(id);
+  }, [focusToken]);
 
   useEffect(() => {
     if (!restoreDraftRequest) return;

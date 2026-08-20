@@ -77,8 +77,23 @@ export interface ChatWindowProps {
   contextNotePageId?: string;
   /**
    * Optional default agent for Notes bubble when no per-page selection exists.
+   * With `lockPreferredAgent`, this is the only agent (no picker).
    */
   preferredAgentId?: string | null;
+  /**
+   * When true with preferredAgentId, hide the agent dropdown and always use
+   * that agent (Notes 笔记助手).
+   */
+  lockPreferredAgent?: boolean;
+  /**
+   * Optional slot rendered above the message list / empty state (e.g. Notes
+   * assistant first-open setup card).
+   */
+  headerAccessory?: React.ReactNode;
+  /**
+   * Bump to focus the composer (e.g. after Notes Assistant create dialog).
+   */
+  composerFocusToken?: number;
   /**
    * Force layout. Default: floating desktop window; on mobile with a
    * lockedAgentId, fullscreen sheet is used automatically.
@@ -212,6 +227,9 @@ export function ChatWindow({
   lockedAgentId,
   contextNotePageId,
   preferredAgentId,
+  lockPreferredAgent = false,
+  headerAccessory,
+  composerFocusToken,
   layout = "floating",
 }: ChatWindowProps = {}) {
   const { t } = useT("chat");
@@ -250,7 +268,9 @@ export function ChatWindow({
       ? (dmBubbleActiveSessionByAgent[lockedAgentId!] ?? null)
       : globalActiveSessionId;
   const noteSelectedAgentId = isNoteBubble
-    ? (noteBubbleSelectedAgentByPage[contextNotePageId!] ?? preferredAgentId ?? null)
+    ? lockPreferredAgent
+      ? (preferredAgentId ?? null)
+      : (noteBubbleSelectedAgentByPage[contextNotePageId!] ?? preferredAgentId ?? null)
     : null;
   const selectedAgentId = isNoteBubble
     ? noteSelectedAgentId
@@ -410,12 +430,19 @@ export function ChatWindow({
 
   // Resolve selected agent:
   // - DM bubble: locked to peer only (never fall back to another agent)
-  // - note bubble / global: stored preference → first available
+  // - Notes bubble with lockPreferredAgent: only the Notes Assistant (or null
+  //   while setup is pending). Never fall back to availableAgents[0] — that
+  //   incorrectly showed Wendy when 笔记助手 was missing/archived.
+  // - global / unlocked note: stored preference → first available
   const activeAgent = isDmBubble
     ? (agents.find((a) => a.id === lockedAgentId) ?? null)
-    : (availableAgents.find((a) => a.id === selectedAgentId) ??
-      availableAgents[0] ??
-      null);
+    : isNoteBubble && lockPreferredAgent
+      ? preferredAgentId
+        ? (agents.find((a) => a.id === preferredAgentId && !a.archived_at) ?? null)
+        : null
+      : (availableAgents.find((a) => a.id === selectedAgentId) ??
+        availableAgents[0] ??
+        null);
 
   // Three-state availability — "loading" stays neutral (no banner, no
   // disable) so the input doesn't flash a fake "no agent" state in the
@@ -1008,6 +1035,8 @@ export function ChatWindow({
         </div>
       </div>
 
+      {headerAccessory}
+
       {/* Messages / skeleton / empty state */}
       {showSkeleton ? (
         <ChatMessageSkeleton />
@@ -1065,8 +1094,9 @@ export function ChatWindow({
         sessionId={activeSessionId}
         currentProjectId={currentSession?.project_id ?? null}
         safeArea={isFullscreen}
+        focusToken={composerFocusToken}
         leftAdornment={
-          isDmBubble ? undefined : (
+          isDmBubble || isNoteBubble || lockPreferredAgent ? undefined : (
             <AgentDropdown
               agents={availableAgents}
               activeAgent={activeAgent}

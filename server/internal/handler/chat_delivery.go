@@ -413,9 +413,13 @@ func (h *Handler) redeliverUnacknowledgedStandaloneChat(ctx context.Context, ide
 	if err != nil {
 		return err
 	}
-	// Drain the list cursor before graph-profile lookup so nested QueryRow
-	// cannot hold two pool connections (cursordeadlock / #1803).
-	pending := make([]protocol.AgentDeliverPayload, 0)
+	// Drain the list cursor before nested QueryRow (note wake prefix + graph
+	// profile) so we cannot hold two pool connections (cursordeadlock / #1803).
+	type pendingStandalone struct {
+		sessionID pgtype.UUID
+		delivery  protocol.AgentDeliverPayload
+	}
+	pending := make([]pendingStandalone, 0)
 	for rows.Next() {
 		var agentID, messageID, sessionID pgtype.UUID
 		var seq int64
@@ -431,17 +435,21 @@ func (h *Handler) redeliverUnacknowledgedStandaloneChat(ctx context.Context, ide
 		}
 		agentIDText := uuidToString(agentID)
 		messageIDText := uuidToString(messageID)
-		pending = append(pending, protocol.AgentDeliverPayload{
-			AgentID:    agentIDText,
-			Target:     target,
-			Seq:        seq,
-			DeliveryID: standaloneChatDeliveryID(messageIDText, agentIDText),
-			Message: protocol.AgentMessageProjection{
-				ID:      messageIDText,
-				Target:  target,
-				Seq:     seq,
-				Content: content,
-				Parts:   parts,
+		pending = append(pending, pendingStandalone{
+			sessionID: sessionID,
+			delivery: protocol.AgentDeliverPayload{
+				AgentID:    agentIDText,
+				Target:     target,
+				Seq:        seq,
+				DeliveryID: standaloneChatDeliveryID(messageIDText, agentIDText),
+				Message: protocol.AgentMessageProjection{
+					ID:          messageIDText,
+					Target:      target,
+					ReplyTarget: target,
+					Seq:         seq,
+					Content:     content,
+					Parts:       parts,
+				},
 			},
 		})
 	}
@@ -452,10 +460,17 @@ func (h *Handler) redeliverUnacknowledgedStandaloneChat(ctx context.Context, ide
 	rows.Close()
 
 	for i := range pending {
-		delivery := &pending[i]
-		h.applyGraphMemoryProfileToDelivery(ctx, identity.WorkspaceID, delivery)
-		if !h.AgentDeliveryNotifier.NotifyWorkspaceAgentDelivery(identity.WorkspaceID, identity.DaemonID, *delivery) {
-			slog.Debug("standalone chat redelivery deferred", "delivery_id", delivery.DeliveryID)
+		item := &pending[i]
+		// Live deliverStandaloneChatMessage prefixes <note_chat_context> for
+		// Notes FAB sessions. chat_message.content stays raw; redelivery must
+		// rebuild the same prefix or the agent wakes without note root context.
+		content := item.delivery.Message.Content
+		if prefix := h.buildNoteChatWakePrefix(ctx, item.sessionID); prefix != "" && !strings.HasPrefix(content, "<note_chat_context>") {
+			item.delivery.Message.Content = prefix + content
+		}
+		h.applyGraphMemoryProfileToDelivery(ctx, identity.WorkspaceID, &item.delivery)
+		if !h.AgentDeliveryNotifier.NotifyWorkspaceAgentDelivery(identity.WorkspaceID, identity.DaemonID, item.delivery) {
+			slog.Debug("standalone chat redelivery deferred", "delivery_id", item.delivery.DeliveryID)
 		}
 	}
 	return nil

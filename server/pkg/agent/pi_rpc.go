@@ -629,7 +629,75 @@ func (b *piRPCBackend) finishIdleMessageInput(p *piRPCProcess, idleInput *piRPCI
 	close(idleInput.turnDone)
 }
 
+func residentMessageReplyTarget(message ResidentMessage) string {
+	if replyTarget := strings.TrimSpace(message.ReplyTarget); replyTarget != "" {
+		return replyTarget
+	}
+	return strings.TrimSpace(message.Target)
+}
+
+func isStandaloneChatDeliveryTarget(target string) bool {
+	return strings.HasPrefix(strings.TrimSpace(target), "chat:")
+}
+
 func formatResidentMessageBatch(messages []ResidentMessage) (string, error) {
+	if len(messages) == 0 {
+		return "", errors.New("resident Message batch is empty")
+	}
+	standaloneCount := 0
+	for _, message := range messages {
+		replyTarget := residentMessageReplyTarget(message)
+		if strings.TrimSpace(message.ID) == "" || replyTarget == "" || message.Seq <= 0 {
+			return "", errors.New("resident Message id, target, and positive seq are required")
+		}
+		if len(message.PartsJSON) > 0 && !json.Valid(message.PartsJSON) {
+			return "", errors.New("resident Message parts are invalid JSON")
+		}
+		if isStandaloneChatDeliveryTarget(replyTarget) {
+			standaloneCount++
+		}
+	}
+	if standaloneCount > 0 && standaloneCount < len(messages) {
+		return "", errors.New("resident Message batch mixes standalone chat: targets with channel/DM transport targets")
+	}
+	if standaloneCount == len(messages) {
+		// engineering-principles.md §1.5: standalone bubbles are chat turns, not
+		// channel Messages. Do not frame them as Canonical Message batches with
+		// CLI --target — that contract caused Notes FAB agents to call
+		// `message send --target chat:…` → 400 and leave the UI waiting.
+		return formatStandaloneChatTurnPrompt(messages)
+	}
+	return formatChannelResidentMessageBatch(messages)
+}
+
+// formatStandaloneChatTurnPrompt is the idle-wake shape for FAB / Notes bubble
+// chat_session turns. Final assistant output is auto-written back.
+func formatStandaloneChatTurnPrompt(messages []ResidentMessage) (string, error) {
+	var b strings.Builder
+	b.WriteString("Standalone Agent Chat. This is a private bubble conversation with a human — not a channel or DM Message.\n")
+	b.WriteString("Reply with final assistant output only. It is written back to the bubble automatically.\n")
+	b.WriteString("Do not run `multica message send` or `multica message react`. There is no channel/DM --target for this turn.\n")
+	b.WriteString("Do not run Issue commands unless the human asks for Issue or project work.\n")
+	b.WriteString("If `<note_chat_context>` appears, follow selective note reads (`multica notes tree` / `multica notes get`) before inventing page bodies.\n\n")
+	for i, message := range messages {
+		if i > 0 {
+			b.WriteString("\n---\n\n")
+		}
+		if rc := strings.TrimSpace(message.RuntimeContext); rc != "" {
+			b.WriteString(rc)
+			if !strings.HasSuffix(rc, "\n") {
+				b.WriteString("\n")
+			}
+			b.WriteString("\n")
+		}
+		b.WriteString("Human:\n")
+		b.WriteString(strings.TrimSpace(message.Content))
+		b.WriteString("\n")
+	}
+	return b.String(), nil
+}
+
+func formatChannelResidentMessageBatch(messages []ResidentMessage) (string, error) {
 	type residentMessageInput struct {
 		ID             string          `json:"id"`
 		Target         string          `json:"target"`
@@ -640,16 +708,7 @@ func formatResidentMessageBatch(messages []ResidentMessage) (string, error) {
 	}
 	payload := make([]residentMessageInput, 0, len(messages))
 	for _, message := range messages {
-		replyTarget := strings.TrimSpace(message.ReplyTarget)
-		if replyTarget == "" {
-			replyTarget = strings.TrimSpace(message.Target)
-		}
-		if strings.TrimSpace(message.ID) == "" || replyTarget == "" || message.Seq <= 0 {
-			return "", errors.New("resident Message id, target, and positive seq are required")
-		}
-		if len(message.PartsJSON) > 0 && !json.Valid(message.PartsJSON) {
-			return "", errors.New("resident Message parts are invalid JSON")
-		}
+		replyTarget := residentMessageReplyTarget(message)
 		payload = append(payload, residentMessageInput{
 			ID: message.ID, Target: replyTarget, Seq: message.Seq, Content: message.Content, Parts: message.PartsJSON, RuntimeContext: message.RuntimeContext,
 		})

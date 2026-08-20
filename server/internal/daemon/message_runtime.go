@@ -149,21 +149,16 @@ func (d *Daemon) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID
 			outcome, reasonCode = "failed", "provider_turn_failed"
 		}
 		d.recordResidentMessageBatch(workspaceID, runtimeID, agentID, preparedMessages, "provider_finished", outcome, reasonCode)
-		if turnErr == nil && d.client != nil && strings.TrimSpace(d.client.baseURL) != "" {
+		if d.client != nil && strings.TrimSpace(d.client.baseURL) != "" {
 			reportCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			d.reportAgentMemoryWrites(reportCtx, memoryTask)
+			if turnErr == nil {
+				d.reportAgentMemoryWrites(reportCtx, memoryTask)
+			}
 			if sessionID, ok := standaloneChatSessionIDFromMessages(preparedMessages); ok {
 				streamedMu.Lock()
 				streamed := streamedText.String()
 				streamedMu.Unlock()
-				reply := standaloneAssistantReplyText(capture, streamed)
-				if reply != "" {
-					if err := d.client.ReportStandaloneChatReply(reportCtx, sessionID, reply, runtimeID); err != nil && d.logger != nil {
-						d.logger.Warn("standalone chat reply writeback failed", "session_id", sessionID, "error", err)
-					}
-				} else if d.logger != nil {
-					d.logger.Warn("standalone chat reply missing after successful turn", "session_id", sessionID, "has_capture", capture != nil)
-				}
+				d.writebackStandaloneChatTurn(reportCtx, sessionID, runtimeID, turnErr, capture, streamed)
 			}
 			cancel()
 		}
@@ -192,6 +187,13 @@ func (d *Daemon) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID
 		// Project the failure explicitly instead of leaving it only in daemon
 		// logs while the user waits for an Agent response that cannot arrive.
 		runner.observeMessageTurnCompletion(agentID, runtimeID, err)
+		// Same for standalone bubbles: without an assistant row the UI stays on
+		// 排队中 forever after provider timeout / accept failure.
+		if sessionID, ok := standaloneChatSessionIDFromMessages(messages); ok && d.client != nil && strings.TrimSpace(d.client.baseURL) != "" {
+			reportCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			d.writebackStandaloneChatTurn(reportCtx, sessionID, runtimeID, err, nil, "")
+			cancel()
+		}
 	}
 	return err
 }
@@ -468,6 +470,39 @@ func standaloneAssistantReplyText(capture *agent.ResidentTurnCapture, streamed s
 		return reply
 	}
 	return strings.TrimSpace(streamed)
+}
+
+// standaloneAssistantFailureReply is written to chat_message when a standalone
+// bubble turn fails so the UI leaves 排队中 instead of waiting forever.
+func standaloneAssistantFailureReply(err error) string {
+	detail := "unknown error"
+	if err != nil {
+		if msg := strings.TrimSpace(err.Error()); msg != "" {
+			detail = msg
+		}
+	}
+	return "I could not complete that reply (" + detail + "). Please try again."
+}
+
+func (d *Daemon) writebackStandaloneChatTurn(ctx context.Context, sessionID, runtimeID string, turnErr error, capture *agent.ResidentTurnCapture, streamed string) {
+	if d == nil || d.client == nil || strings.TrimSpace(sessionID) == "" {
+		return
+	}
+	reply := ""
+	if turnErr != nil {
+		reply = standaloneAssistantFailureReply(turnErr)
+	} else {
+		reply = standaloneAssistantReplyText(capture, streamed)
+		if reply == "" {
+			if d.logger != nil {
+				d.logger.Warn("standalone chat reply missing after successful turn", "session_id", sessionID, "has_capture", capture != nil)
+			}
+			return
+		}
+	}
+	if err := d.client.ReportStandaloneChatReply(ctx, sessionID, reply, runtimeID); err != nil && d.logger != nil {
+		d.logger.Warn("standalone chat reply writeback failed", "session_id", sessionID, "error", err, "failed_turn", turnErr != nil)
+	}
 }
 
 func standaloneAssistantTextFromJSON(raw json.RawMessage) string {

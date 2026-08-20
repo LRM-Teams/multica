@@ -1598,7 +1598,6 @@ export function NotesPage({ pageId }: { pageId?: string }) {
         <NoteAssistantBubble
           pageId={selected.id}
           pageTitle={selected.title}
-          preferredAgentId={configuredAiAgentId}
         />
       ) : null}
     </div>

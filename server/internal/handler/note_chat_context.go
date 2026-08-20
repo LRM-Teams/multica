@@ -149,36 +149,29 @@ func formatNoteTreeOutline(nodes []agentNoteTreeNode) string {
 
 // buildNoteChatWakePrefix prepends machine-readable note context for a
 // Notes assistant bubble delivery. Empty when the session has no note bind.
+//
+// Intentionally omits the full subtree outline and page bodies — the Notes
+// Assistant must call `notes tree` / `notes get` for the pages it needs
+// (see skill multica-notes-assistant / Selective note reads).
 func (h *Handler) buildNoteChatWakePrefix(ctx context.Context, sessionID pgtype.UUID) string {
 	var rootID pgtype.UUID
-	var workspaceID pgtype.UUID
 	var title string
 	err := h.DB.QueryRow(ctx, `
-SELECT cs.context_note_page_id, cs.workspace_id, COALESCE(np.title, '')
+SELECT cs.context_note_page_id, COALESCE(np.title, '')
 FROM chat_session cs
 LEFT JOIN note_page np ON np.id = cs.context_note_page_id AND np.deleted_at IS NULL
-WHERE cs.id = $1`, sessionID).Scan(&rootID, &workspaceID, &title)
+WHERE cs.id = $1`, sessionID).Scan(&rootID, &title)
 	if err != nil || !rootID.Valid {
 		return ""
 	}
-	nodes, listErr := h.listNoteSubtreeNodes(ctx, rootID, workspaceID)
-	outline := ""
-	if listErr == nil {
-		outline = formatNoteTreeOutline(nodes)
-	}
 	var b strings.Builder
 	b.WriteString("<note_chat_context>\n")
-	b.WriteString("You are chatting about a product note page and its subtree.\n")
+	b.WriteString("You are the Notes Assistant chatting about one product note page and its subtree.\n")
 	fmt.Fprintf(&b, "context_note_page_id: %s\n", uuidToString(rootID))
 	fmt.Fprintf(&b, "context_note_title: %s\n", title)
-	b.WriteString("Use `multica notes get <page-id>` to read a page body.\n")
-	b.WriteString("Use `multica notes tree <page-id>` to list that page and descendants (ids + titles).\n")
-	b.WriteString("You may read the context root and any descendant; stay within this subtree unless the human names another authorized page.\n")
-	if outline != "" {
-		b.WriteString("Subtree outline:\n")
-		b.WriteString(outline)
-		b.WriteString("\n")
-	}
+	b.WriteString("Selective note reads: do not assume child bodies are in context.\n")
+	b.WriteString("Use `multica notes tree <page-id>` for ids+titles, then `multica notes get <page-id>` only for pages you need this turn.\n")
+	b.WriteString("Read skill `multica-notes-assistant`. Stay within this subtree unless the human names another authorized page.\n")
 	b.WriteString("</note_chat_context>\n\n")
 	return b.String()
 }

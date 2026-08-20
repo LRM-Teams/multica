@@ -1096,6 +1096,18 @@ type AgentMemoryWriteReport struct {
 	InitiatorID string                  `json:"initiator_id,omitempty"`
 	Signals     []AgentMemorySignal     `json:"signals,omitempty"`
 	Writes      []AgentMemoryWriteEntry `json:"writes"`
+	Friction    *AgentFrictionVector    `json:"friction,omitempty"`
+}
+
+// AgentFrictionVector is the per-task friction episode count vector observed
+// by the daemon (friction-gated memory spec). Counts are episodes, not raw
+// events, and are observability input for server-side guards only.
+type AgentFrictionVector struct {
+	HumanCorrection int `json:"human_correction,omitempty"`
+	ActionRejected  int `json:"action_rejected,omitempty"`
+	RetryLoop       int `json:"retry_loop,omitempty"`
+	Rework          int `json:"rework,omitempty"`
+	SelfErrorStreak int `json:"self_error_streak,omitempty"`
 }
 
 // AgentMemorySignal is an optional co-emitted memory intent. It does not replace

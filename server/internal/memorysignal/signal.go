@@ -184,14 +184,15 @@ func IsDurableWrite(w WriteEntry) bool {
 }
 
 // ShouldReportEvenWithoutWrites tells the daemon to POST an empty write report
-// so the server can run the missed-write guard.
+// so the server can run the missed-write, decision and friction guards.
 func ShouldReportEvenWithoutWrites(triggerText string, signals []Signal) bool {
 	for _, s := range signals {
-		if s.Action == ActionWrite {
+		switch s.Action {
+		case ActionWrite, ActionDecision, ActionFriction:
 			return true
 		}
 	}
-	return LooksLikeDurableFeedback(triggerText)
+	return LooksLikeDurableFeedback(triggerText) || LooksLikeDecisionFinal(triggerText) || LooksLikeCorrection(triggerText)
 }
 
 // DetectMissedWrite returns a candidate when trigger/signal asked for durable

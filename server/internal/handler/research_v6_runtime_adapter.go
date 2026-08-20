@@ -51,9 +51,9 @@ func (a *researchV6AgentLifecycleAdapter) CreateAgent(ctx context.Context, works
 		)
 		INSERT INTO agent(workspace_id,name,display_name,description,runtime_mode,runtime_config,runtime_id,max_concurrent_tasks,owner_id,instructions,custom_env,custom_args,mcp_config,model,thinking_level,avatar_source)
 		SELECT $1::uuid,$2,$3,$4,runtime_mode,runtime_config,runtime_id,max_concurrent_tasks,owner_id,$5,custom_env,custom_args,
-		       CASE WHEN length($6::jsonb::text)>2 THEN $6::jsonb ELSE mcp_config END,
-		       COALESCE(NULLIF($7::jsonb->>'model',''),model),COALESCE(NULLIF($7::jsonb->>'thinking_level',''),thinking_level),'generated'
-		FROM template RETURNING id::text`, workspaceID, name, displayName, description, mission, defaultJSONObject(spec.ToolConfig), defaultJSONObject(spec.ModelConfig)).Scan(&agentID)
+		       mcp_config,
+		       COALESCE(NULLIF(NULLIF($6::jsonb->>'model',''),'default'),model),COALESCE(NULLIF($6::jsonb->>'thinking_level',''),thinking_level),'generated'
+		FROM template RETURNING id::text`, workspaceID, name, displayName, description, mission, defaultJSONObject(spec.ModelConfig)).Scan(&agentID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", fmt.Errorf("%w: V6 team has no active Director template", researchrun.ErrV6DirectorUnavailable)
 	}

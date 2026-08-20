@@ -16,6 +16,14 @@ func TestResearchV6AgentLifecycleCreateAgentUsesMembershipGeneration(t *testing.
 
 	ctx := context.Background()
 	templateAgentID := createHandlerTestAgent(t, "v6-runtime-template-"+uuid.NewString()[:8], nil)
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent
+		SET model='template-v6-model', thinking_level='high',
+		    mcp_config='{"servers":{"template":{"command":"template-mcp"}}}'::jsonb
+		WHERE id=$1::uuid
+	`, templateAgentID); err != nil {
+		t.Fatalf("configure V6 runtime template: %v", err)
+	}
 	tx, err := testPool.Begin(ctx)
 	if err != nil {
 		t.Fatalf("begin research fixture transaction: %v", err)
@@ -63,20 +71,21 @@ func TestResearchV6AgentLifecycleCreateAgentUsesMembershipGeneration(t *testing.
 		Name:          "V6 source scout",
 		Capability:    "Find primary sources",
 		MissionPrompt: "Gather primary evidence and preserve lineage.",
-		ModelConfig:   json.RawMessage(`{"model":"test-v6-model","thinking_level":"high"}`),
+		ModelConfig:   json.RawMessage(`{"model":"default","thinking_level":"high"}`),
+		ToolConfig:    json.RawMessage(`{"allowed_tools":["web_search","read"]}`),
 	})
 	if err != nil {
 		t.Fatalf("create V6 agent: %v", err)
 	}
 
-	var displayName, model, thinkingLevel, runtimeID string
+	var displayName, model, thinkingLevel, runtimeID, mcpConfig string
 	if err = testPool.QueryRow(ctx, `
-		SELECT display_name, model, thinking_level, runtime_id::text
+		SELECT display_name, model, thinking_level, runtime_id::text, mcp_config::text
 		FROM agent WHERE id=$1::uuid
-	`, createdAgentID).Scan(&displayName, &model, &thinkingLevel, &runtimeID); err != nil {
+	`, createdAgentID).Scan(&displayName, &model, &thinkingLevel, &runtimeID, &mcpConfig); err != nil {
 		t.Fatalf("load created V6 agent: %v", err)
 	}
-	if displayName != "V6 source scout" || model != "test-v6-model" || thinkingLevel != "high" || runtimeID == "" {
-		t.Fatalf("created V6 agent = display:%q model:%q thinking:%q runtime:%q", displayName, model, thinkingLevel, runtimeID)
+	if displayName != "V6 source scout" || model != "template-v6-model" || thinkingLevel != "high" || runtimeID == "" || mcpConfig != `{"servers": {"template": {"command": "template-mcp"}}}` {
+		t.Fatalf("created V6 agent = display:%q model:%q thinking:%q runtime:%q mcp:%q", displayName, model, thinkingLevel, runtimeID, mcpConfig)
 	}
 }

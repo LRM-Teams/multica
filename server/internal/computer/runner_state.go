@@ -222,6 +222,37 @@ func readRunnerConnected(path string) (persistedRunnerConnected, error) {
 	return connected, nil
 }
 
+// listRunnerStates reads every persisted Binding Runner state file under
+// root without mutating anything. It is used by read-only evidence
+// gathering (doctor); recoverRunnerStates is the mutating counterpart used
+// at Host startup. Corrupt or unreadable entries are silently skipped.
+func listRunnerStates(root string) ([]persistedRunnerState, error) {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return nil, nil
+	}
+	dir := filepath.Join(root, "run", "runners")
+	entries, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var states []persistedRunnerState
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		state, err := readRunnerState(filepath.Join(dir, entry.Name(), "runner.state.json"))
+		if err != nil {
+			continue
+		}
+		states = append(states, state)
+	}
+	return states, nil
+}
+
 // reclaimableRunner is one Workspace slot whose previous-generation Binding
 // Runner process is still alive on this machine. A live process here is
 // never adopted; the current Host drains and terminates it, then spawns its

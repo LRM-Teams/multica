@@ -53,6 +53,13 @@ const (
 	taskMessageFlushInterval            = 200 * time.Millisecond
 	taskMessageTrajectoryCoalesceWindow = 350 * time.Millisecond
 	taskMessageTrajectoryMaxChars       = 2000
+
+	// agentVersionProbeTimeout caps each synchronous `--version` probe so a
+	// single networking ACP CLI (cursor, kiro, …) that hangs on its probe cannot
+	// drag down the whole startup registration pass. Startup stays synchronous
+	// (no async rework), but each agent is bounded to this window; a timed-out
+	// agent is skipped and every other detected agent still registers.
+	agentVersionProbeTimeout = 3 * time.Second
 )
 
 // taskRunner executes a single agent task and returns the result.
@@ -707,20 +714,46 @@ func (d *Daemon) clearDaemonTokensForWorkspace(workspaceID string) {
 	}
 }
 
+// probeFailureReason maps a version-probe error to a short English reason for
+// the one-line startup output, and the corresponding self-check command users
+// can run themselves to confirm whether the CLI detects at all.
+func probeFailureReason(name string, err error) (reason, selfCheck string) {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "probe timed out (network-backed CLI unreachable)", name + " --version"
+	}
+	return "version probe failed", name + " --version"
+}
+
 func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID string) (*RegisterResponse, error) {
 	d.logger.Debug("registering runtimes for workspace", "workspace_id", workspaceID, "agent_count", len(d.cfg.Agents))
 	var runtimes []map[string]string
+
+	// Surface detection progress to stderr directly so a foreground/attached
+	// terminal shows the per-agent pass live; when the computer is backgrounded
+	// stderr is the log file, so the same lines are still captured. One line per
+	// agent, English, emoji-prefixed, with an actionable self-check command on
+	// failure — so users never have to open logs to see who registered.
+	fmt.Fprintf(os.Stderr, "-- Detecting available code agents --\n")
 	for name, entry := range d.cfg.Agents {
-		version, err := detectAgentVersion(ctx, entry.Path)
+		// Bound each synchronous `--version` probe: a single networking ACP
+		// CLI (cursor, kiro, …) that hangs on its probe must not stall every
+		// other agent's registration.
+		probeCtx, cancel := context.WithTimeout(ctx, agentVersionProbeTimeout)
+		version, err := detectAgentVersion(probeCtx, entry.Path)
+		cancel()
 		if err != nil {
+			reason, selfCheck := probeFailureReason(name, err)
+			fmt.Fprintf(os.Stderr, "⚠️ skip %s: %s — try running '%s' to check\n", name, reason, selfCheck)
 			d.logger.Warn("skip registering runtime", "name", name, "error", err)
 			continue
 		}
 		if err := checkAgentMinVersion(name, version); err != nil {
+			fmt.Fprintf(os.Stderr, "⚠️ skip %s: version too old (%s) — upgrade %s then restart the computer\n", name, version, name)
 			d.logger.Warn("skip registering runtime: version too old", "name", name, "version", version, "error", err)
 			continue
 		}
 		d.setAgentVersion(name, version)
+		fmt.Fprintf(os.Stderr, "✅ %s v%s\n", name, version)
 		d.logger.Debug("agent version detected", "name", name, "version", version, "path", entry.Path)
 		displayName := strings.ToUpper(name[:1]) + name[1:]
 		if d.cfg.DeviceName != "" {

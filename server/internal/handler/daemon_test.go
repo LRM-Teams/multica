@@ -937,7 +937,7 @@ func TestDaemonRegister_DaemonTokenRuntimeOwnedByComputerBindingUser(t *testing.
 	}
 	ctx := context.Background()
 	daemonID := "test-daemon-binding-owner-" + uuid.NewString()
-	if _, err := testPool.Exec(ctx, `INSERT INTO computer_identity_owner (daemon_id, user_id) VALUES ($1, $2)`, daemonID, testUserID); err != nil {
+	if _, err := testPool.Exec(ctx, `INSERT INTO computers (id, user_id) VALUES ($1, $2)`, daemonID, testUserID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := testPool.Exec(ctx, `
@@ -950,7 +950,7 @@ func TestDaemonRegister_DaemonTokenRuntimeOwnedByComputerBindingUser(t *testing.
 	t.Cleanup(func() {
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE workspace_id = $1 AND daemon_id = $2`, testWorkspaceID, daemonID)
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_workspace_bindings WHERE daemon_id = $1`, daemonID)
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_identity_owner WHERE daemon_id = $1`, daemonID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM computers WHERE id = $1`, daemonID)
 	})
 
 	w := httptest.NewRecorder()

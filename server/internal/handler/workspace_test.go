@@ -461,6 +461,11 @@ RETURNING id
 `, wsID, "delete-workspace-runtime-"+uuid.NewString()).Scan(&runtimeID); err != nil {
 		t.Fatalf("create runtime: %v", err)
 	}
+	var deleteDaemonID string
+	if err := testPool.QueryRow(ctx, `SELECT daemon_id::text FROM agent_runtime WHERE id = $1`, runtimeID).Scan(&deleteDaemonID); err != nil {
+		t.Fatalf("load delete runtime daemon: %v", err)
+	}
+	bindRuntimeOwnerInWorkspace(t, wsID, deleteDaemonID, testUserID)
 	var agentID string
 	if err := testPool.QueryRow(ctx, `
 INSERT INTO agent (
@@ -657,6 +662,7 @@ RETURNING id
 `, wsID, daemonID).Scan(&runtimeID); err != nil {
 		t.Fatalf("insert runtime: %v", err)
 	}
+	bindRuntimeOwnerInWorkspace(t, wsID, daemonID, targetUserID)
 
 	var agentID string
 	if err := testPool.QueryRow(ctx, `
@@ -815,6 +821,7 @@ RETURNING id
 `, fx.WorkspaceID, "daemon-revoke-reassign-other").Scan(&otherRuntimeID); err != nil {
 		t.Fatalf("insert other runtime: %v", err)
 	}
+	bindRuntimeOwnerInWorkspace(t, fx.WorkspaceID, "daemon-revoke-reassign-other", testUserID)
 
 	// Queue a task on the agent while it was still pinned to the OTHER
 	// runtime (simulating a task created before the agent was reassigned

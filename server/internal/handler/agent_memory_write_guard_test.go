@@ -12,10 +12,10 @@ func seedGuardTestAgent(t *testing.T, ctx context.Context) (wsUUID, agentUUID pg
 	t.Helper()
 	var runtimeID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (workspace_id, name, runtime_mode, provider, device_info, owner_id)
-		VALUES ($1, 'friction guard runtime', 'local', 'legacy_local', 'friction guard runtime', $2)
+		INSERT INTO agent_runtime (workspace_id, name, runtime_mode, provider, device_info)
+		VALUES ($1, 'friction guard runtime', 'local', 'legacy_local', 'friction guard runtime')
 		RETURNING id
-	`, testWorkspaceID, testUserID).Scan(&runtimeID); err != nil {
+	`, testWorkspaceID).Scan(&runtimeID); err != nil {
 		t.Fatal(err)
 	}
 	var agentID string

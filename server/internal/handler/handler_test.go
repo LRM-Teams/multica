@@ -617,6 +617,33 @@ func seedMachineLockedRuntime(t *testing.T, daemonID, name string) string {
 // tests that need to set X-Task-ID alongside X-Agent-ID — resolveActor now
 // requires the pair to be present and consistent before granting "agent"
 // actor identity.
+
+// bindTestRuntimeOwner seeds an owner binding for a daemon in testWorkspaceID
+// (LRM-1570). Idempotent per (daemon, workspace).
+func bindTestRuntimeOwner(t *testing.T, daemonID, userID string) {
+	t.Helper()
+	bindRuntimeOwnerInWorkspace(t, testWorkspaceID, daemonID, userID)
+}
+
+// bindRuntimeOwnerInWorkspace seeds an active machine-level owner binding for
+// a daemon in an arbitrary workspace (LRM-1570). Idempotent per (daemon,
+// workspace).
+func bindRuntimeOwnerInWorkspace(t *testing.T, workspaceID, daemonID, userID string) {
+	t.Helper()
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO computer_workspace_bindings (
+			daemon_id, workspace_id, user_id, execution_token_hash, active
+		) VALUES ($1, $2, $3, 'handler-test-owner', TRUE)
+		ON CONFLICT (daemon_id, workspace_id)
+		DO UPDATE SET user_id = EXCLUDED.user_id, active = TRUE, revoked_at = NULL
+	`, daemonID, workspaceID, userID); err != nil {
+		t.Fatalf("bind runtime owner: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_workspace_bindings WHERE daemon_id = $1 AND workspace_id = $2`, daemonID, workspaceID)
+	})
+}
+
 func createHandlerTestTaskForAgent(t *testing.T, agentID string) string {
 	return createHandlerTestTaskForAgentOnIssue(t, agentID, "")
 }

@@ -272,7 +272,7 @@ func TestDeleteComputer_DeletesOnlineComputer(t *testing.T) {
 	t.Cleanup(func() {
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM daemon_registration_tombstone WHERE workspace_id=$1 AND daemon_id=lower($2)`, testWorkspaceID, daemonID)
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_workspace_bindings WHERE daemon_id=$1`, daemonID)
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_identity_owner WHERE daemon_id=$1`, daemonID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM computers WHERE id=$1`, daemonID)
 	})
 
 	onlineID := createBulkDaemonRuntime(t, ctx, daemonID, "claude", "online")
@@ -317,7 +317,7 @@ func TestDeleteComputer_DeletesBindingOnlyComputer(t *testing.T) {
 	t.Cleanup(func() {
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM daemon_registration_tombstone WHERE workspace_id=$1 AND daemon_id=lower($2)`, testWorkspaceID, daemonID)
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_workspace_bindings WHERE daemon_id=$1`, daemonID)
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_identity_owner WHERE daemon_id=$1`, daemonID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM computers WHERE id=$1`, daemonID)
 	})
 
 	w := httptest.NewRecorder()
@@ -344,7 +344,7 @@ func TestDeleteComputer_BlocksWhileActiveAgentsRemain(t *testing.T) {
 	t.Cleanup(func() {
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM daemon_registration_tombstone WHERE workspace_id=$1 AND daemon_id=lower($2)`, testWorkspaceID, daemonID)
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_workspace_bindings WHERE daemon_id=$1`, daemonID)
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_identity_owner WHERE daemon_id=$1`, daemonID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM computers WHERE id=$1`, daemonID)
 	})
 
 	rtID := createBulkDaemonRuntime(t, ctx, daemonID, "claude", "offline")

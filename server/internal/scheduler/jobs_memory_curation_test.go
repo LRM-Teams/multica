@@ -96,7 +96,7 @@ func TestMemoryCurationSchedulerCreatesDefaultSelfReviewRunIntent(t *testing.T) 
 		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, last_seen_at)
 		VALUES ($1, $2, 'Default Self Review Runtime', 'local', 'codex', 'online', 'test', now())
 		RETURNING id::text
-	`, workspaceID, "default-self-review-"+suffix, userID).Scan(&runtimeID); err != nil {
+	`, workspaceID, "default-self-review-"+suffix).Scan(&runtimeID); err != nil {
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(ctx, `
@@ -180,10 +180,10 @@ func TestMemoryCurationSchedulerSkipsInactiveTargets(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, owner_id, last_seen_at)
+		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, last_seen_at)
 		VALUES ($1, $2, 'Default Self Review Inactive Runtime', 'local', 'codex', 'online', 'test', now())
 		RETURNING id::text
-	`, workspaceID, "default-self-review-inactive-"+suffix, userID).Scan(&runtimeID); err != nil {
+	`, workspaceID, "default-self-review-inactive-"+suffix).Scan(&runtimeID); err != nil {
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(ctx, `
@@ -261,10 +261,10 @@ func TestMemoryCurationSchedulerCountsLegacyTaskQueueActivity(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, owner_id, last_seen_at)
+		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, last_seen_at)
 		VALUES ($1, $2, 'Default Self Review Legacy Runtime', 'local', 'codex', 'online', 'test', now())
 		RETURNING id::text
-	`, workspaceID, "default-self-review-legacy-"+suffix, userID).Scan(&runtimeID); err != nil {
+	`, workspaceID, "default-self-review-legacy-"+suffix).Scan(&runtimeID); err != nil {
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(ctx, `
@@ -334,10 +334,10 @@ func TestMemoryCurationSchedulerCountsMemoryWriteMaterial(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, owner_id, last_seen_at)
+		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, last_seen_at)
 		VALUES ($1, $2, 'Default Self Review Memory Write Runtime', 'local', 'codex', 'online', 'test', now())
 		RETURNING id::text
-	`, workspaceID, "default-self-review-memory-write-"+suffix, userID).Scan(&runtimeID); err != nil {
+	`, workspaceID, "default-self-review-memory-write-"+suffix).Scan(&runtimeID); err != nil {
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(ctx, `
@@ -422,17 +422,17 @@ func newCurationGraphGateFixture(t *testing.T, pool *pgxpool.Pool, memoryType st
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, owner_id, last_seen_at)
+		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, last_seen_at)
 		VALUES ($1, $2, 'Graph Gate Curator Runtime', 'local', 'codex', 'online', 'test', now())
 		RETURNING id::text
-	`, workspaceID, "graph-gate-curator-"+suffix, userID).Scan(&curatorRuntimeID); err != nil {
+	`, workspaceID, "graph-gate-curator-"+suffix).Scan(&curatorRuntimeID); err != nil {
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, owner_id, last_seen_at)
+		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, last_seen_at)
 		VALUES ($1, $2, 'Graph Gate Target Runtime', 'local', 'codex', 'online', 'test', now())
 		RETURNING id::text
-	`, workspaceID, "graph-gate-target-"+suffix, userID).Scan(&targetRuntimeID); err != nil {
+	`, workspaceID, "graph-gate-target-"+suffix).Scan(&targetRuntimeID); err != nil {
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(ctx, `

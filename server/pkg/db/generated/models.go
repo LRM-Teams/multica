@@ -621,7 +621,6 @@ type AgentRuntime struct {
 	LastSeenAt     pgtype.Timestamptz `json:"last_seen_at"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
-	OwnerID        pgtype.UUID        `json:"owner_id"`
 	LegacyDaemonID pgtype.Text        `json:"legacy_daemon_id"`
 	Visibility     string             `json:"visibility"`
 	DisplayName    string             `json:"display_name"`
@@ -1202,8 +1201,8 @@ type CommentReaction struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
-type ComputerIdentityOwner struct {
-	DaemonID           string             `json:"daemon_id"`
+type Computer struct {
+	ID                 string             `json:"id"`
 	UserID             pgtype.UUID        `json:"user_id"`
 	CreatedAt          pgtype.Timestamptz `json:"created_at"`
 	WorkJournalEnabled bool               `json:"work_journal_enabled"`

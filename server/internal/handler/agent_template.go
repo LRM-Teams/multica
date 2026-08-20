@@ -224,7 +224,8 @@ func (h *Handler) CreateAgentFromTemplate(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	if !canUseRuntimeForAgent(member, runtime) {
+	runtimeOwnerID, _ := h.resolveRuntimeOwnerQuery(r.Context(), runtime)
+	if !canUseRuntimeForAgent(member, runtime, runtimeOwnerID) {
 		writeError(w, http.StatusForbidden, "this runtime is private; only its owner or a workspace admin can create agents on it")
 		return
 	}

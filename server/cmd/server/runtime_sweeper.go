@@ -174,8 +174,13 @@ func sweepStaleRuntimes(ctx context.Context, queries *db.Queries, liveness handl
 	}
 	if taskSvc != nil && taskSvc.Analytics != nil {
 		for _, row := range staleRows {
+			// LRM-1570: ownership is machine-level, no owner_id on the runtime
+			// row anymore. MarkRuntimesOfflineByIDs no longer returns a
+			// per-runtime owner; the offline event keeps its machine identity
+			// (daemon_id) and workspace, with owner attribution dropping to
+			// empty for this telemetry path.
 			obsmetrics.RecordEvent(taskSvc.Analytics, taskSvc.Metrics, analytics.RuntimeOffline(
-				util.UUIDToString(row.OwnerID),
+				"",
 				util.UUIDToString(row.WorkspaceID),
 				util.UUIDToString(row.ID),
 				row.DaemonID.String,

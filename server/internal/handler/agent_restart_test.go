@@ -926,16 +926,13 @@ func createAgentRestartFixtureWithProvider(t *testing.T, capable bool, provider 
 	}
 	ctx := context.Background()
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (
-			workspace_id, name, runtime_mode, provider, status,
-			device_info, metadata, owner_id, visibility, last_seen_at, daemon_id
-		)
+		INSERT INTO agent_runtime (workspace_id, name, runtime_mode, provider, status, device_info, metadata, visibility, last_seen_at, daemon_id)
 		VALUES (
-			$1, $2, 'local', $3, 'online',
-			'', jsonb_build_object('capabilities', $4::jsonb), $5, 'private', now(), 'agent-restart-test-daemon'
+			$1,  $2,  'local',  $3,  'online', 
+			'',  jsonb_build_object('capabilities', $4::jsonb),  'private',  now(),  'agent-restart-test-daemon'
 		)
 		RETURNING id
-	`, testWorkspaceID, "restart-runtime-"+randomID(), provider, capabilities, testUserID).Scan(&runtimeID); err != nil {
+	`,  testWorkspaceID,  "restart-runtime-"+randomID(),  provider,  capabilities).Scan(&runtimeID); err != nil {
 		t.Fatalf("create restart runtime: %v", err)
 	}
 	if err := testPool.QueryRow(ctx, `

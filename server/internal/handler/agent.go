@@ -1103,7 +1103,8 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !canUseRuntimeForAgent(member, runtime) {
+	runtimeOwnerID, _ := h.resolveRuntimeOwnerQuery(r.Context(), runtime)
+	if !canUseRuntimeForAgent(member, runtime, runtimeOwnerID) {
 		writeError(w, http.StatusForbidden, "this runtime is private; only its owner or a workspace admin can create agents on it")
 		return
 	}
@@ -1620,7 +1621,8 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return
 		}
-		if !canUseRuntimeForAgent(member, runtime) {
+		runtimeOwnerID, _ := h.resolveRuntimeOwnerQuery(r.Context(), runtime)
+		if !canUseRuntimeForAgent(member, runtime, runtimeOwnerID) {
 			writeError(w, http.StatusForbidden, "this runtime is private; only its owner or a workspace admin can move agents onto it")
 			return
 		}

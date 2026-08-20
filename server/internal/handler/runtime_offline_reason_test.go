@@ -60,7 +60,6 @@ func TestUpsertAgentRuntime_ClearsStaleOfflineReason(t *testing.T) {
 		Status:      "online",
 		DeviceInfo:  "",
 		Metadata:    []byte("{}"),
-		OwnerID:     pgtype.UUID{},
 	}); err != nil {
 		t.Fatalf("UpsertAgentRuntime: %v", err)
 	}

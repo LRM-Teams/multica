@@ -80,7 +80,7 @@ func (h *Handler) EnsurePeriodBriefCollectors(w http.ResponseWriter, r *http.Req
 	// or the caller is a workspace admin.
 	runtimes, err := h.Queries.ListAgentRuntimesByOwner(r.Context(), db.ListAgentRuntimesByOwnerParams{
 		WorkspaceID: wsUUID,
-		OwnerID:     parseUUID(ownerID),
+		UserID:      parseUUID(ownerID),
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list runtimes")
@@ -103,7 +103,8 @@ func (h *Handler) EnsurePeriodBriefCollectors(w http.ResponseWriter, r *http.Req
 
 	slots := make(map[string]periodBriefCollectorSlot)
 	for _, rt := range runtimes {
-		if !canOwnRuntime(member, rt) {
+		rtOwnerID, _ := h.resolveRuntimeOwnerQuery(r.Context(), rt)
+		if !canOwnRuntime(member, rt, rtOwnerID) {
 			continue
 		}
 		mode := strings.ToLower(strings.TrimSpace(rt.RuntimeMode))

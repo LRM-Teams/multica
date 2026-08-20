@@ -289,17 +289,17 @@ func createAgentHealthFixture(t *testing.T, status string, lastSeen, updatedAt t
 	return createAgentHealthFixtureWithRuntimeAccess(t, status, lastSeen, updatedAt, testUserID, "public")
 }
 
-func createAgentHealthFixtureWithRuntimeAccess(t *testing.T, status string, lastSeen, updatedAt time.Time, runtimeOwnerID, visibility string) (agentID, runtimeID string) {
+func createAgentHealthFixtureWithRuntimeAccess(t *testing.T, status string, lastSeen, updatedAt time.Time, _ string, visibility string) (agentID, runtimeID string) {
 	t.Helper()
 	if err := testPool.QueryRow(context.Background(), `
 		INSERT INTO agent_runtime (
 			workspace_id, daemon_id, name, runtime_mode, provider,
-			status, device_info, metadata, last_seen_at, updated_at, owner_id, visibility
+			status, device_info, metadata, last_seen_at, updated_at, visibility
 		)
 		VALUES ($1, NULL, $2, 'cloud', 'health-test',
-			$3, '', '{}'::jsonb, $4, $5, $6, $7)
+			$3, '', '{}'::jsonb, $4, $5, $6)
 		RETURNING id
-	`, testWorkspaceID, "health-runtime-"+randomID(), status, lastSeen, updatedAt, runtimeOwnerID, visibility).Scan(&runtimeID); err != nil {
+	`, testWorkspaceID, "health-runtime-"+randomID(), status, lastSeen, updatedAt, visibility).Scan(&runtimeID); err != nil {
 		t.Fatalf("create health runtime: %v", err)
 	}
 	if err := testPool.QueryRow(context.Background(), `

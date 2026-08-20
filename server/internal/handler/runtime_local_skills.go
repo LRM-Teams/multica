@@ -538,7 +538,8 @@ func (h *Handler) requireRuntimeLocalSkillAccess(w http.ResponseWriter, r *http.
 		return runtimeIDAndWorkspace{}, false
 	}
 
-	if rt.OwnerID.Valid && uuidToString(rt.OwnerID) == uuidToString(member.UserID) {
+	rtOwnerID, _ := h.resolveRuntimeOwnerQuery(r.Context(), rt)
+	if rtOwnerID.Valid && uuidToString(rtOwnerID) == uuidToString(member.UserID) {
 		return runtimeIDAndWorkspace{
 			runtimeID:   uuidToString(rt.ID),
 			workspaceID: wsID,

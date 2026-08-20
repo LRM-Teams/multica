@@ -147,9 +147,11 @@ func (h *Handler) syncEvolutionSubmission(ctx context.Context, rt db.AgentRuntim
 			return "", fmt.Errorf("source_user_id is not a workspace member")
 		}
 		sourceMemberID = member.ID
-	} else if rt.OwnerID.Valid {
-		if member, err := h.getWorkspaceMember(ctx, uuidToString(rt.OwnerID), uuidToString(rt.WorkspaceID)); err == nil {
-			sourceMemberID = member.ID
+	} else {
+		if ownerID, err := h.resolveRuntimeOwnerQuery(ctx, rt); err == nil {
+			if member, err := h.getWorkspaceMember(ctx, uuidToString(ownerID), uuidToString(rt.WorkspaceID)); err == nil {
+				sourceMemberID = member.ID
+			}
 		}
 	}
 	if strings.EqualFold(strings.TrimSpace(incoming.SubjectType), "member") && strings.TrimSpace(incoming.SubjectID) != "" {

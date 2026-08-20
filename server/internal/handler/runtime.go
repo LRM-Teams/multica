@@ -122,7 +122,9 @@ func (h *Handler) runtimeToResponse(ctx context.Context, rt db.AgentRuntime) Age
 func (h *Handler) runtimeToResponseWithResolvedUpdate(ctx context.Context, rt db.AgentRuntime, update *UpdateRequest) AgentRuntimeResponse {
 	release := h.runtimeReleaseForResponse(ctx, rt, update)
 	daemonHeartbeat := h.daemonHeartbeatForRuntime(ctx, rt)
+	ownerID, _ := h.resolveRuntimeOwnerQuery(ctx, rt)
 	resp := runtimeToResponseWithUpdateReleaseAndObservation(rt, update, release, h.daemonUpdateStatusForRuntime(ctx, rt))
+	resp.OwnerID = uuidToPtr(ownerID)
 	resp.ComputerConnected = h.computerConnectedByRunner(runtimeDaemonKey(rt), uuidToString(rt.WorkspaceID), daemonHeartbeat, time.Now())
 	if daemonHeartbeat != nil {
 		resp.DaemonLastSeenAt = timestampToPtr(daemonHeartbeat.LastSeenAt)
@@ -354,7 +356,7 @@ func runtimeToResponseWithUpdateReleaseAndObservation(
 		RuntimeHealth:        runtimeHealth,
 		UpdateError:          updateError,
 		AutoUpdate:           autoUpdate,
-		OwnerID:              uuidToPtr(rt.OwnerID),
+		OwnerID:              uuidToPtr(pgtype.UUID{}),
 		Visibility:           rt.Visibility,
 		LastSeenAt:           timestampToPtr(rt.LastSeenAt),
 		CreatedAt:            timestampToString(rt.CreatedAt),
@@ -1038,7 +1040,8 @@ func (h *Handler) UpdateAgentRuntime(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !canEditRuntime(member, rt) {
+	rtOwnerID, _ := h.resolveRuntimeOwnerQuery(r.Context(), rt)
+	if !canEditRuntime(member, rt, rtOwnerID) {
 		writeError(w, http.StatusForbidden, "you can only edit your own runtimes")
 		return
 	}
@@ -1118,29 +1121,29 @@ func (h *Handler) UpdateAgentRuntime(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, h.runtimeToResponse(r.Context(), rt))
 }
 
-func canEditRuntime(member db.Member, rt db.AgentRuntime) bool {
+func canEditRuntime(member db.Member, rt db.AgentRuntime, rtOwnerID pgtype.UUID) bool {
 	if roleAllowed(member.Role, "owner", "admin") {
 		return true
 	}
-	return rt.OwnerID.Valid && uuidToString(rt.OwnerID) == uuidToString(member.UserID)
+	return rtOwnerID.Valid && uuidToString(rtOwnerID) == uuidToString(member.UserID)
 }
 
 // canDeleteRuntime intentionally has no workspace owner/admin override.
 // Runtime deletion is reserved for the member who owns the runtime.
-func canDeleteRuntime(member db.Member, rt db.AgentRuntime) bool {
-	return rt.OwnerID.Valid && uuidToString(rt.OwnerID) == uuidToString(member.UserID)
+func canDeleteRuntime(member db.Member, rt db.AgentRuntime, rtOwnerID pgtype.UUID) bool {
+	return rtOwnerID.Valid && uuidToString(rtOwnerID) == uuidToString(member.UserID)
 }
 
 // canOwnRuntime is Computer-owner-only for restart mutations.
-func canOwnRuntime(member db.Member, rt db.AgentRuntime) bool {
-	return rt.OwnerID.Valid && uuidToString(rt.OwnerID) == uuidToString(member.UserID)
+func canOwnRuntime(member db.Member, rt db.AgentRuntime, rtOwnerID pgtype.UUID) bool {
+	return rtOwnerID.Valid && uuidToString(rtOwnerID) == uuidToString(member.UserID)
 }
 
 // canManageMachineUpgrade is Computer-owner-only. A Workspace role grants
 // authority over that Workspace, not over another person's machine-wide
 // Computer lifecycle.
-func canManageMachineUpgrade(member db.Member, rt db.AgentRuntime) bool {
-	return canOwnRuntime(member, rt)
+func canManageMachineUpgrade(member db.Member, rt db.AgentRuntime, rtOwnerID pgtype.UUID) bool {
+	return canOwnRuntime(member, rt, rtOwnerID)
 }
 
 // canUseRuntimeForAgent reports whether a workspace member is allowed to
@@ -1150,14 +1153,14 @@ func canManageMachineUpgrade(member db.Member, rt db.AgentRuntime) bool {
 // runtime stays bound to its owner. Workspace owners/admins keep an
 // administrative override for both. See migration 083 for the visibility
 // column.
-func canUseRuntimeForAgent(member db.Member, rt db.AgentRuntime) bool {
+func canUseRuntimeForAgent(member db.Member, rt db.AgentRuntime, rtOwnerID pgtype.UUID) bool {
 	if roleAllowed(member.Role, "owner", "admin") {
 		return true
 	}
 	if rt.Visibility == "public" {
 		return true
 	}
-	return rt.OwnerID.Valid && uuidToString(rt.OwnerID) == uuidToString(member.UserID)
+	return rtOwnerID.Valid && uuidToString(rtOwnerID) == uuidToString(member.UserID)
 }
 
 // runtimesShareMachine reports whether two runtimes represent the same
@@ -1199,7 +1202,7 @@ func (h *Handler) ListAgentRuntimes(w http.ResponseWriter, r *http.Request) {
 	if ownerFilter := r.URL.Query().Get("owner"); ownerFilter == "me" {
 		runtimes, err = h.Queries.ListAgentRuntimesByOwner(r.Context(), db.ListAgentRuntimesByOwnerParams{
 			WorkspaceID: parseUUID(workspaceID),
-			OwnerID:     parseUUID(userID),
+			UserID:      parseUUID(userID),
 		})
 	} else {
 		// Privacy: a member sees their own runtimes plus everyone's public
@@ -1207,7 +1210,7 @@ func (h *Handler) ListAgentRuntimes(w http.ResponseWriter, r *http.Request) {
 		// override: visibility is per-user even for workspace admins.
 		runtimes, err = h.Queries.ListVisibleAgentRuntimes(r.Context(), db.ListVisibleAgentRuntimesParams{
 			WorkspaceID: parseUUID(workspaceID),
-			OwnerID:     parseUUID(userID),
+			UserID:      parseUUID(userID),
 		})
 	}
 
@@ -1228,7 +1231,9 @@ func (h *Handler) agentRuntimeResponsesForList(ctx context.Context, runtimes []d
 	for i, rt := range runtimes {
 		update := updates[uuidToString(rt.ID)]
 		release := h.runtimeReleaseForResponse(ctx, rt, update)
+		ownerID, _ := h.resolveRuntimeOwnerQuery(ctx, rt)
 		resp[i] = runtimeToResponseWithUpdateReleaseAndObservation(rt, update, release, autoUpdates[runtimeDaemonKey(rt)])
+		resp[i].OwnerID = uuidToPtr(ownerID)
 		hb := daemonHeartbeats[runtimeDaemonKey(rt)]
 		resp[i].ComputerConnected = h.computerConnectedByRunner(runtimeDaemonKey(rt), uuidToString(rt.WorkspaceID), hb, now)
 		if hb != nil {
@@ -1266,7 +1271,8 @@ func (h *Handler) DeleteAgentRuntime(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !canDeleteRuntime(member, rt) {
+	rtOwnerID, _ := h.resolveRuntimeOwnerQuery(r.Context(), rt)
+	if !canDeleteRuntime(member, rt, rtOwnerID) {
 		writeError(w, http.StatusForbidden, "you can only delete your own runtimes")
 		return
 	}
@@ -1424,7 +1430,8 @@ func (h *Handler) ArchiveAgentsAndDeleteRuntime(w http.ResponseWriter, r *http.R
 	if !ok {
 		return
 	}
-	if !canDeleteRuntime(member, rt) {
+	rtOwnerID, _ := h.resolveRuntimeOwnerQuery(r.Context(), rt)
+	if !canDeleteRuntime(member, rt, rtOwnerID) {
 		writeError(w, http.StatusForbidden, "you can only delete your own runtimes")
 		return
 	}

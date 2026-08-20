@@ -266,13 +266,10 @@ func createCascadeFixtureRuntime(t *testing.T, ctx context.Context, name string)
 	t.Helper()
 	var runtimeID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (
-			workspace_id, daemon_id, name, runtime_mode, provider, status,
-			device_info, metadata, owner_id, last_seen_at
-		)
-		VALUES ($1, NULL, $2, 'cloud', 'cascade-test', 'online', $3, '{}'::jsonb, $4, now())
+		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at)
+		VALUES ($1,  NULL,  $2,  'cloud',  'cascade-test',  'online',  $3,  '{}'::jsonb,  now())
 		RETURNING id
-	`, testWorkspaceID, name, name+" device", testUserID).Scan(&runtimeID); err != nil {
+	`,  testWorkspaceID,  name,  name+" device").Scan(&runtimeID); err != nil {
 		t.Fatalf("insert cascade fixture runtime: %v", err)
 	}
 	t.Cleanup(func() {

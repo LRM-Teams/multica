@@ -156,6 +156,8 @@ The submission boundary is asynchronous. Status `received` means the envelope
 is durably handed off and the Agent should finish; a server reconciler later
 marks it `accepted` or `rejected`. Do not keep the Inbox execution open waiting
 for `accepted`, and do not create a second request ID after `received`.
+The server may cancel the remaining Inbox execution after that durable result
+settles; this is successful cleanup, not a failed Research result.
 
 ## Assigned Research Run task
 

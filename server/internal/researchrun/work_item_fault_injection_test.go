@@ -205,6 +205,15 @@ type lostV6InboxTaskStoreStub struct {
 	err error
 }
 
+type settledV6InboxTaskStoreStub struct {
+	ids []string
+	err error
+}
+
+func (s settledV6InboxTaskStoreStub) ListSettledV6InboxTaskIDs(context.Context, int) ([]string, error) {
+	return s.ids, s.err
+}
+
 func (s lostV6InboxTaskStoreStub) ListLostV6InboxTaskIDs(context.Context, int) ([]string, error) {
 	return s.ids, s.err
 }
@@ -231,6 +240,50 @@ func TestCancelLostV6InboxTasksUsesSharedCancellationPath(t *testing.T) {
 	}
 	if canceller.reason != "research_v6_attempt_lease_expired" {
 		t.Fatalf("cancel reason=%q", canceller.reason)
+	}
+}
+
+func TestCancelSettledV6InboxTasksUsesSharedCancellationPath(t *testing.T) {
+	canceller := &v6InboxCancellerStub{}
+	count, err := cancelSettledV6InboxTasks(context.Background(), settledV6InboxTaskStoreStub{ids: []string{"inbox-accepted"}}, canceller, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 || len(canceller.ids) != 1 || canceller.ids[0] != "inbox-accepted" {
+		t.Fatalf("cancelled=%d ids=%v", count, canceller.ids)
+	}
+	if canceller.reason != "research_v6_attempt_settled" {
+		t.Fatalf("cancel reason=%q", canceller.reason)
+	}
+}
+
+func TestSettledV6AttemptKeepsInboxEligibleUntilCancellation(t *testing.T) {
+	run := newTransactionRecoveryRun(t, "Settle V6 Inbox execution")
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_session SET orchestrator_version='research-run-v6' WHERE id=$1::uuid`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	membershipID, workItemID := seedV6RecoveryWorkItem(t, run, "succeeded", time.Now())
+	attemptID := seedV6RecoveryAttempt(t, run, membershipID, workItemID)
+	inboxTaskID := uuid.NewString()
+	if _, err := run.pool.Exec(run.ctx, `
+		INSERT INTO agent_inbox_event (id,workspace_id,agent_id,reason,requires_wake,status,seq_from,seq_to)
+		VALUES ($1::uuid,$2::uuid,$3::uuid,'quick_create',true,'draining',0,0)
+	`, inboxTaskID, run.fixture.workspaceID, run.fixture.agentID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_work_item_attempt SET inbox_task_id=$2::uuid,status='succeeded',completed_at=now() WHERE id=$1::uuid`, attemptID, inboxTaskID); err != nil {
+		t.Fatal(err)
+	}
+	ids, err := run.store.ListSettledV6InboxTaskIDs(run.ctx, 10)
+	if err != nil || len(ids) != 1 || ids[0] != inboxTaskID {
+		t.Fatalf("settled Inbox tasks=%v err=%v, want %s", ids, err, inboxTaskID)
+	}
+	if _, err = run.pool.Exec(run.ctx, `UPDATE agent_inbox_event SET status='cancelled',terminal_outcome='cancelled',completed_at=now() WHERE id=$1::uuid`, inboxTaskID); err != nil {
+		t.Fatal(err)
+	}
+	ids, err = run.store.ListSettledV6InboxTaskIDs(run.ctx, 10)
+	if err != nil || len(ids) != 0 {
+		t.Fatalf("terminal Inbox tasks=%v err=%v, want none", ids, err)
 	}
 }
 

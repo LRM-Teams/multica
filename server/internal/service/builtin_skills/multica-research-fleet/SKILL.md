@@ -149,6 +149,9 @@ or hash validation reason. Correct that exact contract violation before the
 next submission; the rejected envelope was not durably handed off. Do not
 blindly resend an unchanged invalid file.
 
+JSON strings must not contain `U+0000`/NUL. Remove that character from copied
+source text before recomputing `content_hash` and resubmitting.
+
 The submission boundary is asynchronous. Status `received` means the envelope
 is durably handed off and the Agent should finish; a server reconciler later
 marks it `accepted` or `rejected`. Do not keep the Inbox execution open waiting

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 func TestV6DirectorBriefSurvivesItsOwnOperationalEvents(t *testing.T) {
@@ -136,5 +138,71 @@ func TestV6DirectorBriefAcknowledgementDelegates(t *testing.T) {
 	in := AcknowledgeV6DirectorBriefInput{ClientRequestID: "request", PageKey: "page"}
 	if err := (directorBriefModule{store: store}).Acknowledge(context.Background(), in); err != nil || store.acknowledged.PageKey != "page" {
 		t.Fatalf("ack=%+v err=%v", store.acknowledged, err)
+	}
+}
+
+func TestReviewedV6DirectorBriefCanBeReadAgainForRetry(t *testing.T) {
+	run := newTransactionRecoveryRun(t, "Re-read acknowledged Director Brief")
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_session SET orchestrator_version='research-run-v6' WHERE id=$1::uuid`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.store.AssignV6Director(run.ctx, AssignV6DirectorInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+		AgentID: run.fixture.agentID, UserID: run.fixture.userID,
+		Reason: "Run the retry readability test", ClientRequestID: uuid.NewString(),
+		ExpectedStateVersion: 0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stateVersion, throughSequence int64
+	if err := run.pool.QueryRow(run.ctx, `
+		SELECT state_version,COALESCE((SELECT max(sequence) FROM research_run_event WHERE session_id=$1::uuid),0)
+		FROM research_session WHERE id=$1::uuid
+	`, run.fixture.sessionID).Scan(&stateVersion, &throughSequence); err != nil {
+		t.Fatal(err)
+	}
+	cycle, err := (directorBriefModule{store: run.store}).Start(run.ctx, StartV6DirectorCycleInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+		TriggerKey: uuid.NewString(), FromSequence: throughSequence, ThroughSequence: throughSequence,
+		ExpectedStateVersion: stateVersion, Now: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var membershipID string
+	if err = run.pool.QueryRow(run.ctx, `
+		SELECT id::text FROM research_team_membership
+		WHERE session_id=$1::uuid AND agent_id=$2::uuid AND state='idle'
+		ORDER BY membership_generation DESC LIMIT 1
+	`, run.fixture.sessionID, run.fixture.agentID).Scan(&membershipID); err != nil {
+		t.Fatal(err)
+	}
+	attemptID := seedV6RecoveryAttempt(t, run, membershipID, cycle.WorkItemID)
+	access := V6AttemptAccess{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+		WorkItemID: cycle.WorkItemID, AttemptID: attemptID, AgentID: run.fixture.agentID,
+	}
+	page, err := run.store.LoadDirectorBriefPage(run.ctx, access, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Reviewed {
+		t.Fatal("new Director Brief page is already reviewed")
+	}
+	if err = run.store.AcknowledgeDirectorBriefPage(run.ctx, AcknowledgeV6DirectorBriefInput{
+		V6AttemptAccess: access, ClientRequestID: uuid.NewString(),
+		BriefID: cycle.BriefID, BriefHash: cycle.BriefHash,
+		PageKey: page.PageKey, PageHash: page.PageHash,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	replayed, err := run.store.LoadDirectorBriefPage(run.ctx, access, "")
+	if err != nil {
+		t.Fatalf("re-read acknowledged Director Brief: %v", err)
+	}
+	if !replayed.Reviewed || replayed.PageKey != page.PageKey || string(replayed.Bytes) != string(page.Bytes) {
+		t.Fatalf("replayed page = reviewed:%v key:%q, want reviewed page %q", replayed.Reviewed, replayed.PageKey, page.PageKey)
 	}
 }

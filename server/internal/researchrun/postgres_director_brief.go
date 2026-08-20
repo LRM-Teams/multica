@@ -458,7 +458,8 @@ func (s *PostgresStore) LoadDirectorBriefPage(ctx context.Context, access V6Atte
 		FROM research_work_item_attempt a JOIN research_director_cycle c ON c.work_item_id=a.work_item_id
 		JOIN research_director_brief_page p ON p.director_cycle_id=c.id JOIN research_team_membership m ON m.id=a.membership_id
 		WHERE a.workspace_id=$1::uuid AND a.session_id=$2::uuid AND a.work_item_id=$3::uuid AND a.id=$4::uuid AND a.assigned_agent_id=$5::uuid AND m.agent_id=$5::uuid
-		AND ($6='' OR a.inbox_task_id=$6::uuid) AND (($7<0 AND p.reviewed_at IS NULL) OR p.ordinal=$7) ORDER BY p.ordinal LIMIT 1`, access.WorkspaceID, access.RunID, access.WorkItemID, access.AttemptID, access.AgentID, access.InboxTaskID, ordinal).Scan(&raw, &page.PageKey, &page.PageHash, &page.BriefHash, &page.Ordinal, &page.PageCount, &page.Reviewed)
+		AND ($6='' OR a.inbox_task_id=$6::uuid) AND ($7<0 OR p.ordinal=$7)
+		ORDER BY (p.reviewed_at IS NOT NULL),p.ordinal LIMIT 1`, access.WorkspaceID, access.RunID, access.WorkItemID, access.AttemptID, access.AgentID, access.InboxTaskID, ordinal).Scan(&raw, &page.PageKey, &page.PageHash, &page.BriefHash, &page.Ordinal, &page.PageCount, &page.Reviewed)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return page, ErrRunNotFound
 	}

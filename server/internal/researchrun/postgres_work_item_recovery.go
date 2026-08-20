@@ -3,9 +3,71 @@ package researchrun
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
+
+type lostV6InboxTaskStore interface {
+	ListLostV6InboxTaskIDs(context.Context, int) ([]string, error)
+}
+
+type v6InboxCanceller interface {
+	Cancel(context.Context, []string, string) error
+}
+
+func cancelLostV6InboxTasks(ctx context.Context, store lostV6InboxTaskStore, canceller v6InboxCanceller, limit int) (int, error) {
+	if store == nil || limit <= 0 {
+		return 0, nil
+	}
+	inboxTaskIDs, err := store.ListLostV6InboxTaskIDs(ctx, limit)
+	if err != nil || len(inboxTaskIDs) == 0 {
+		return 0, err
+	}
+	if canceller == nil {
+		return 0, fmt.Errorf("cancel lost V6 Inbox tasks: dispatcher is unavailable")
+	}
+	cancelCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	defer cancel()
+	if err = canceller.Cancel(cancelCtx, inboxTaskIDs, "research_v6_attempt_lease_expired"); err != nil {
+		return 0, fmt.Errorf("cancel lost V6 Inbox tasks: %w", err)
+	}
+	return len(inboxTaskIDs), nil
+}
+
+// ListLostV6InboxTaskIDs keeps cancellation durable without another outbox:
+// rows remain eligible until the shared TaskService makes the Inbox task
+// terminal, so a transient cancellation failure is retried next reconcile.
+func (s *PostgresStore) ListLostV6InboxTaskIDs(ctx context.Context, limit int) ([]string, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT a.inbox_task_id::text
+		FROM research_work_item_attempt a
+		JOIN research_session run ON run.id=a.session_id
+		JOIN agent_inbox_event inbox ON inbox.id=a.inbox_task_id
+		WHERE run.orchestrator_version='research-run-v6'
+		  AND a.status='lost'
+		  AND inbox.status IN ('pending','draining','failed')
+		  AND inbox.terminal_outcome IS NULL
+		ORDER BY a.completed_at,a.id
+		LIMIT $1
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ids := make([]string, 0, limit)
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
 
 func (s *PostgresStore) RecoverExpiredV6WorkItems(ctx context.Context, limit int) (int, error) {
 	if limit <= 0 {

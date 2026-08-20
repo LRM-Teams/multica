@@ -156,7 +156,19 @@ func TestRecoverV6WorkItemTransactionRecovery(t *testing.T) {
 		if _, err := run.pool.Exec(run.ctx, `UPDATE research_session SET orchestrator_version='research-run-v6' WHERE id=$1::uuid`, run.fixture.sessionID); err != nil {
 			t.Fatal(err)
 		}
-		_, workItemID := seedV6RecoveryWorkItem(t, run, "running", time.Now().Add(-time.Minute))
+		membershipID, workItemID := seedV6RecoveryWorkItem(t, run, "running", time.Now().Add(-time.Minute))
+		attemptID := seedV6RecoveryAttempt(t, run, membershipID, workItemID)
+		inboxTaskID := uuid.NewString()
+		if _, err := run.pool.Exec(run.ctx, `
+			INSERT INTO agent_inbox_event (
+			 id,workspace_id,agent_id,reason,requires_wake,status,seq_from,seq_to
+			) VALUES ($1::uuid,$2::uuid,$3::uuid,'quick_create',true,'draining',0,0)
+		`, inboxTaskID, run.fixture.workspaceID, run.fixture.agentID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := run.pool.Exec(run.ctx, `UPDATE research_work_item_attempt SET inbox_task_id=$2::uuid WHERE id=$1::uuid`, attemptID, inboxTaskID); err != nil {
+			t.Fatal(err)
+		}
 		invoke := func() error { _, err := run.store.RecoverExpiredV6WorkItems(run.ctx, 10); return err }
 		status := func() string {
 			var value string
@@ -170,15 +182,56 @@ func TestRecoverV6WorkItemTransactionRecovery(t *testing.T) {
 				if got := status(); got != "running" {
 					t.Fatalf("status=%s", got)
 				}
+				if ids, listErr := run.store.ListLostV6InboxTaskIDs(run.ctx, 10); listErr != nil || len(ids) != 0 {
+					t.Fatalf("lost Inbox tasks=%v err=%v, want none", ids, listErr)
+				}
 			},
 			assertCommitted: func() {
 				if got := status(); got != "ready" {
 					t.Fatalf("status=%s", got)
 				}
+				ids, listErr := run.store.ListLostV6InboxTaskIDs(run.ctx, 10)
+				if listErr != nil || len(ids) != 1 || ids[0] != inboxTaskID {
+					t.Fatalf("lost Inbox tasks=%v err=%v, want %s", ids, listErr, inboxTaskID)
+				}
 			},
 			recover: invoke,
 		}
 	})
+}
+
+type lostV6InboxTaskStoreStub struct {
+	ids []string
+	err error
+}
+
+func (s lostV6InboxTaskStoreStub) ListLostV6InboxTaskIDs(context.Context, int) ([]string, error) {
+	return s.ids, s.err
+}
+
+type v6InboxCancellerStub struct {
+	ids    []string
+	reason string
+	err    error
+}
+
+func (s *v6InboxCancellerStub) Cancel(_ context.Context, ids []string, reason string) error {
+	s.ids, s.reason = append([]string(nil), ids...), reason
+	return s.err
+}
+
+func TestCancelLostV6InboxTasksUsesSharedCancellationPath(t *testing.T) {
+	canceller := &v6InboxCancellerStub{}
+	count, err := cancelLostV6InboxTasks(context.Background(), lostV6InboxTaskStoreStub{ids: []string{"inbox-1", "inbox-2"}}, canceller, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 || len(canceller.ids) != 2 || canceller.ids[0] != "inbox-1" || canceller.ids[1] != "inbox-2" {
+		t.Fatalf("cancelled=%d ids=%v", count, canceller.ids)
+	}
+	if canceller.reason != "research_v6_attempt_lease_expired" {
+		t.Fatalf("cancel reason=%q", canceller.reason)
+	}
 }
 
 func TestRecordV6SubmissionTransactionRecovery(t *testing.T) {

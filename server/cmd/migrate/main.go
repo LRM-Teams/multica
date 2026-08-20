@@ -52,6 +52,7 @@ var preMigrationHooks = map[string]preMigrationHook{
 	"384_research_message_target_agent_scoped_index":   runAgentDeleteFKIndexesHook,
 	"385_research_message_target_agent_index":          runResearchMessageTargetAgentIndexHook,
 	"425_graph_memory_fk_indexes":                      runAgentDeleteCascadeFKIndexesHook,
+	"430_channel_delete_fk_indexes":                    runChannelDeleteFKIndexesHook,
 }
 
 type concurrentIndexSpec struct {
@@ -170,6 +171,56 @@ func runAgentDeleteCascadeFKIndexesHook(ctx context.Context, pool *pgxpool.Pool)
 		// 419/421 graph-memory ledger: recall task and RL-session recall cascade lookups.
 		{"idx_graph_memory_recall_task", `CREATE INDEX CONCURRENTLY idx_graph_memory_recall_task ON graph_memory_recall (task_id)`},
 		{"idx_graph_memory_rl_session_recall", `CREATE INDEX CONCURRENTLY idx_graph_memory_rl_session_recall ON graph_memory_rl_session (recall_id)`},
+	}
+
+	return ensureConcurrentIndexes(ctx, pool, indexes)
+}
+
+func runChannelDeleteFKIndexesHook(ctx context.Context, pool *pgxpool.Pool) error {
+	// Deleting a group channel cascades through channel_message / channel_member
+	// / channel_thread and every row anchored to them. PostgreSQL enforces each
+	// CASCADE / SET NULL with one child lookup per deleted parent row, so an FK
+	// column without a supporting index becomes a sequential scan per message.
+	// chat_message.channel_thread_root_message_id was the worst offender: a
+	// 7.5k-message channel scanned that 1.6 GB table 7470 times (~190s of a
+	// ~200s delete) and the request died on the 30s proxy timeout as a 500.
+	indexes := []concurrentIndexSpec{
+		{"idx_agent_action_card_archive_channel_id", `CREATE INDEX CONCURRENTLY idx_agent_action_card_archive_channel_id ON agent_action_card_archive (channel_id) WHERE channel_id IS NOT NULL`},
+		{"idx_agent_attachment_upload_session_channel_id", `CREATE INDEX CONCURRENTLY idx_agent_attachment_upload_session_channel_id ON agent_attachment_upload_session (channel_id)`},
+		{"idx_agent_attachment_upload_session_thread_root_message_id", `CREATE INDEX CONCURRENTLY idx_agent_attachment_upload_session_thread_root_message_id ON agent_attachment_upload_session (thread_root_message_id) WHERE thread_root_message_id IS NOT NULL`},
+		{"idx_agent_creation_draft_channel_id", `CREATE INDEX CONCURRENTLY idx_agent_creation_draft_channel_id ON agent_creation_draft (channel_id) WHERE channel_id IS NOT NULL`},
+		{"idx_agent_dm_exchange_latest_message_id", `CREATE INDEX CONCURRENTLY idx_agent_dm_exchange_latest_message_id ON agent_dm_exchange (latest_message_id) WHERE latest_message_id IS NOT NULL`},
+		{"idx_agent_dm_exchange_source_channel_id", `CREATE INDEX CONCURRENTLY idx_agent_dm_exchange_source_channel_id ON agent_dm_exchange (source_channel_id) WHERE source_channel_id IS NOT NULL`},
+		{"idx_agent_dm_exchange_source_message_id", `CREATE INDEX CONCURRENTLY idx_agent_dm_exchange_source_message_id ON agent_dm_exchange (source_message_id) WHERE source_message_id IS NOT NULL`},
+		{"idx_agent_inbox_event_channel_id", `CREATE INDEX CONCURRENTLY idx_agent_inbox_event_channel_id ON agent_inbox_event (channel_id) WHERE channel_id IS NOT NULL`},
+		{"idx_agent_message_delivery_message_id", `CREATE INDEX CONCURRENTLY idx_agent_message_delivery_message_id ON agent_message_delivery (message_id)`},
+		{"idx_agent_reminder_anchor_message_id", `CREATE INDEX CONCURRENTLY idx_agent_reminder_anchor_message_id ON agent_reminder (anchor_message_id) WHERE anchor_message_id IS NOT NULL`},
+		{"idx_agent_reminder_anchor_thread_root_message_id", `CREATE INDEX CONCURRENTLY idx_agent_reminder_anchor_thread_root_message_id ON agent_reminder (anchor_thread_root_message_id) WHERE anchor_thread_root_message_id IS NOT NULL`},
+		{"idx_agent_session_channel_id", `CREATE INDEX CONCURRENTLY idx_agent_session_channel_id ON agent_session (channel_id) WHERE channel_id IS NOT NULL`},
+		{"idx_agent_session_conversation_id", `CREATE INDEX CONCURRENTLY idx_agent_session_conversation_id ON agent_session (conversation_id) WHERE conversation_id IS NOT NULL`},
+		{"idx_channel_attention_round_trigger_message_id", `CREATE INDEX CONCURRENTLY idx_channel_attention_round_trigger_message_id ON channel_attention_round (trigger_message_id) WHERE trigger_message_id IS NOT NULL`},
+		{"idx_channel_decision_audit_message_id", `CREATE INDEX CONCURRENTLY idx_channel_decision_audit_message_id ON channel_decision_audit (message_id) WHERE message_id IS NOT NULL`},
+		{"idx_channel_goal_process_markdown_channel_id", `CREATE INDEX CONCURRENTLY idx_channel_goal_process_markdown_channel_id ON channel_goal_process_markdown (channel_id)`},
+		{"idx_channel_message_thread_root_message_id", `CREATE INDEX CONCURRENTLY idx_channel_message_thread_root_message_id ON channel_message (thread_root_message_id) WHERE thread_root_message_id IS NOT NULL`},
+		{"idx_channel_thread_state_channel_id", `CREATE INDEX CONCURRENTLY idx_channel_thread_state_channel_id ON channel_thread_state (channel_id)`},
+		{"idx_channel_voice_synthesis_channel_id", `CREATE INDEX CONCURRENTLY idx_channel_voice_synthesis_channel_id ON channel_voice_synthesis (channel_id)`},
+		{"idx_channel_voice_transcription_channel_id", `CREATE INDEX CONCURRENTLY idx_channel_voice_transcription_channel_id ON channel_voice_transcription (channel_id)`},
+		{"idx_chat_message_channel_thread_root_message_id", `CREATE INDEX CONCURRENTLY idx_chat_message_channel_thread_root_message_id ON chat_message (channel_thread_root_message_id) WHERE channel_thread_root_message_id IS NOT NULL`},
+		{"idx_collaboration_session_channel_id", `CREATE INDEX CONCURRENTLY idx_collaboration_session_channel_id ON collaboration_session (channel_id)`},
+		{"idx_collaboration_session_source_message_id", `CREATE INDEX CONCURRENTLY idx_collaboration_session_source_message_id ON collaboration_session (source_message_id) WHERE source_message_id IS NOT NULL`},
+		{"idx_collaboration_turn_result_message_id", `CREATE INDEX CONCURRENTLY idx_collaboration_turn_result_message_id ON collaboration_turn (result_message_id) WHERE result_message_id IS NOT NULL`},
+		{"idx_env_dispatch_run_local_channel_id", `CREATE INDEX CONCURRENTLY idx_env_dispatch_run_local_channel_id ON env_dispatch_run (local_channel_id) WHERE local_channel_id IS NOT NULL`},
+		{"idx_evolution_training_example_channel_id", `CREATE INDEX CONCURRENTLY idx_evolution_training_example_channel_id ON evolution_training_example (channel_id) WHERE channel_id IS NOT NULL`},
+		{"idx_evolution_training_example_message_id", `CREATE INDEX CONCURRENTLY idx_evolution_training_example_message_id ON evolution_training_example (message_id) WHERE message_id IS NOT NULL`},
+		{"idx_issue_source_message_channel_id", `CREATE INDEX CONCURRENTLY idx_issue_source_message_channel_id ON issue_source_message (channel_id)`},
+		{"idx_issue_source_message_message_id", `CREATE INDEX CONCURRENTLY idx_issue_source_message_message_id ON issue_source_message (message_id) WHERE message_id IS NOT NULL`},
+		{"idx_note_worker_job_channel_message_id", `CREATE INDEX CONCURRENTLY idx_note_worker_job_channel_message_id ON note_worker_job (channel_message_id) WHERE channel_message_id IS NOT NULL`},
+		{"idx_pi_message_consumption_channel_message_id", `CREATE INDEX CONCURRENTLY idx_pi_message_consumption_channel_message_id ON pi_message_consumption (channel_message_id)`},
+		{"idx_research_session_channel_id", `CREATE INDEX CONCURRENTLY idx_research_session_channel_id ON research_session (channel_id) WHERE channel_id IS NOT NULL`},
+		{"idx_skill_promotion_channel_id", `CREATE INDEX CONCURRENTLY idx_skill_promotion_channel_id ON skill_promotion (channel_id) WHERE channel_id IS NOT NULL`},
+		{"idx_thread_participant_conversation_id", `CREATE INDEX CONCURRENTLY idx_thread_participant_conversation_id ON thread_participant (conversation_id)`},
+		{"idx_voice_call_session_channel_id", `CREATE INDEX CONCURRENTLY idx_voice_call_session_channel_id ON voice_call_session (channel_id)`},
+		{"idx_work_node_primary_channel_id", `CREATE INDEX CONCURRENTLY idx_work_node_primary_channel_id ON work_node (primary_channel_id) WHERE primary_channel_id IS NOT NULL`},
 	}
 
 	return ensureConcurrentIndexes(ctx, pool, indexes)

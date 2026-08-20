@@ -1,0 +1,13 @@
+-- Deleting a group channel cascades through its messages, threads, members and
+-- every row that anchors to them. PostgreSQL enforces each CASCADE / SET NULL
+-- with one child lookup per deleted parent row, so an FK column without a
+-- supporting index turns the teardown into a sequential scan per message.
+-- On the test workspace a 7.5k-message channel needed ~200s (dominated by
+-- chat_message.channel_thread_root_message_id scanning a 1.6 GB table 7470
+-- times) and the request died on the 30s proxy timeout as a 500.
+--
+-- Index creation runs in the idempotent pre-migration hook because each
+-- CREATE INDEX CONCURRENTLY must be issued as its own top-level statement.
+-- The marker is recorded only after every channel-delete FK index is valid
+-- and ready.
+SELECT 1;

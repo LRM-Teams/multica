@@ -323,3 +323,60 @@ func TestRejectedV6DirectorProposalTerminatesAndEmitsTrigger(t *testing.T) {
 		t.Fatalf("rejection events=%d want 1", rejectedEvents)
 	}
 }
+
+func TestV6DirectorCreatedWorkStartsAtVersionOne(t *testing.T) {
+	run := newTransactionRecoveryRun(t, "Create versioned V6 Work")
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_session SET orchestrator_version='research-run-v6' WHERE id=$1::uuid`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.store.AssignV6Director(run.ctx, AssignV6DirectorInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+		AgentID: run.fixture.agentID, UserID: run.fixture.userID,
+		Reason: "Create versioned work", ClientRequestID: uuid.NewString(), ExpectedStateVersion: 0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var stateVersion, throughSequence int64
+	if err := run.pool.QueryRow(run.ctx, `SELECT state_version,
+		COALESCE((SELECT max(sequence) FROM research_run_event WHERE session_id=$1::uuid),0)
+		FROM research_session WHERE id=$1::uuid`, run.fixture.sessionID).Scan(&stateVersion, &throughSequence); err != nil {
+		t.Fatal(err)
+	}
+	cycle, err := (directorBriefModule{store: run.store}).Start(run.ctx, StartV6DirectorCycleInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+		TriggerKey: uuid.NewString(), FromSequence: throughSequence, ThroughSequence: throughSequence,
+		ExpectedStateVersion: stateVersion, Now: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = run.pool.QueryRow(run.ctx, `SELECT state_version FROM research_session WHERE id=$1::uuid`, run.fixture.sessionID).Scan(&stateVersion); err != nil {
+		t.Fatal(err)
+	}
+	actionPayload, err := json.Marshal(map[string]any{
+		"kind": "research", "assignee_agent_id": run.fixture.agentID, "mission": "Investigate the assigned question",
+		"expected_result_schema_id": "atomic_result_submission", "payload_schema_id": "research.test.v1",
+		"payload":  map[string]any{"task_specific_schema": map[string]any{"type": "object"}},
+		"priority": 0.5, "max_attempts": 1, "branch_ids": []string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	idempotencyKey := "create-versioned-work:" + uuid.NewString()
+	if err = run.store.executeV6CreateWorkAction(run.ctx, v6DirectorProposal{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+	}, cycle.ID, v6DirectorAction{
+		ActionID: uuid.NewString(), Kind: "create_work_item", IdempotencyKey: idempotencyKey,
+		PayloadSchema: "work.create.v1", Payload: actionPayload,
+	}, stateVersion); err != nil {
+		t.Fatal(err)
+	}
+	var workStateVersion int64
+	if err = run.pool.QueryRow(run.ctx, `SELECT state_version FROM research_work_item
+		WHERE session_id=$1::uuid AND idempotency_key=$2`, run.fixture.sessionID, idempotencyKey).Scan(&workStateVersion); err != nil {
+		t.Fatal(err)
+	}
+	if workStateVersion != 1 {
+		t.Fatalf("created Work state_version=%d want 1", workStateVersion)
+	}
+}

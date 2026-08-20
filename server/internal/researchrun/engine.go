@@ -652,12 +652,13 @@ func loadProjectionSnapshot(ctx context.Context, store projectionSnapshotStore, 
 	if err != nil {
 		return RunSnapshot{}, err
 	}
-	snapshot := RunSnapshot{
+	// Projection is an internal read model: do not normalize nil slices here.
+	// Empty Sources/Observations must stay nil so the projection surface stays
+	// least-privilege. HTTP snapshots go through Engine.Snapshot instead.
+	return RunSnapshot{
 		Run: run, Contract: contract, Method: method, Questions: questions,
 		Tasks: tasks, Attempts: attempts, Claims: claims, Gate: gate,
-	}
-	normalizeRunSnapshot(&snapshot)
-	return snapshot, nil
+	}, nil
 }
 
 func (e *Engine) SnapshotForAttempt(ctx context.Context, sessionID, workspaceID, attemptID string) (RunSnapshot, error) {

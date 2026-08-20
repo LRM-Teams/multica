@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
 )
 
 func TestBuildV6WorkDispatchPromptMakesDirectorAssignmentExecutable(t *testing.T) {
@@ -24,6 +27,13 @@ func TestBuildV6WorkDispatchPromptMakesDirectorAssignmentExecutable(t *testing.T
 		"multica research work-manifest 00000000-0000-4000-8000-000000000003 00000000-0000-4000-8000-000000000212 00000000-0000-4000-8000-000000000213",
 		"multica research director-brief 00000000-0000-4000-8000-000000000003 00000000-0000-4000-8000-000000000212 00000000-0000-4000-8000-000000000213",
 		"multica research director-brief-ack",
+		"The submission must use this exact root shape",
+		`"contract_kind": "director_action_proposal"`,
+		`"director_assignment_id": "<brief.director_assignment_id>"`,
+		`"reviewed_page_count": <brief.page.page_count>`,
+		`"payload_schema": "<one manifest.task_specific_schema.payload_schemas key>"`,
+		"POST each acknowledgement to `${V6_API}/director-brief-acks`",
+		"POST the exact result file to `${V6_API}/submission`",
 		"multica research work-submit",
 		"Review the durable brief and propose the next actions.",
 	} {
@@ -33,6 +43,9 @@ func TestBuildV6WorkDispatchPromptMakesDirectorAssignmentExecutable(t *testing.T
 	}
 	if prompt == "Review the durable brief and propose the next actions." {
 		t.Fatal("dispatch regressed to the mission-only prompt")
+	}
+	if strings.Contains(prompt, "GET `/catalog`") || strings.Contains(prompt, "${V6_API}/catalog?") {
+		t.Fatal("Director prompt advertised catalog access that was not authorized")
 	}
 }
 
@@ -53,6 +66,73 @@ func TestBuildV6WorkDispatchPromptIncludesCatalogAndReportUploadPaths(t *testing
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)
 		}
+	}
+}
+
+func TestBuildV6WorkDispatchPromptBindsAtomicTaskIdentity(t *testing.T) {
+	manifest := validV6DispatchPromptManifest(t, map[string]any{
+		"expected_result_schema": string(V6ContractAtomicResultSubmission),
+		"task_id":                "00000000-0000-4000-8000-000000000214",
+	})
+	prompt, err := BuildV6WorkDispatchPrompt(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`"contract_kind": "atomic_result_submission"`,
+		`"task_id": "00000000-0000-4000-8000-000000000214"`,
+		`"agent_id": "00000000-0000-4000-8000-000000000009"`,
+		"RFC 8785 JCS",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
+func TestAtomicV6WorkManifestGetsOneBackingTaskAndFrozenMission(t *testing.T) {
+	run := newTransactionRecoveryRun(t, "Bind atomic V6 Work")
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_session SET orchestrator_version='research-run-v6' WHERE id=$1::uuid`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	_, workItemID := seedV6RecoveryWorkItem(t, run, "ready", time.Now().Add(time.Minute))
+	payload := `{"mission_prompt":"Inspect the assigned production boundary.","task_specific_schema":{"type":"object","additionalProperties":false,"required":["finding"],"properties":{"finding":{"type":"string","minLength":1}}}}`
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_work_item SET expected_result_schema_id='atomic_result_submission',payload_schema_id='research.finding.v1',payload=$2::jsonb,reason='fallback reason' WHERE id=$1::uuid`, workItemID, payload); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := run.pool.Begin(run.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(run.ctx)
+	taskID, err := ensureV6BackingTaskTx(run.ctx, tx, workItemID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, _, err := compileV6WorkManifestTx(run.ctx, tx, run.fixture.workspaceID, run.fixture.sessionID, workItemID,
+		uuid.NewString(), uuid.NewString(), run.fixture.agentID, "Inspect the assigned production boundary.", string(V6ContractAtomicResultSubmission), run.goalVersion, 1, 1, json.RawMessage(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.Commit(run.ctx); err != nil {
+		t.Fatal(err)
+	}
+	var identity struct {
+		TaskID        string `json:"task_id"`
+		MissionPrompt string `json:"mission_prompt"`
+	}
+	if err = json.Unmarshal(manifest, &identity); err != nil {
+		t.Fatal(err)
+	}
+	if identity.TaskID != taskID || identity.MissionPrompt != "Inspect the assigned production boundary." {
+		t.Fatalf("manifest task=%q mission=%q", identity.TaskID, identity.MissionPrompt)
+	}
+	var count int
+	if err = run.pool.QueryRow(run.ctx, `SELECT count(*)::int FROM research_task WHERE work_item_id=$1::uuid`, workItemID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("backing task count=%d want=1", count)
 	}
 }
 

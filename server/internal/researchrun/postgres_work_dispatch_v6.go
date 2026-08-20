@@ -34,7 +34,7 @@ func (s *PostgresStore) prepareNextV6Dispatch(ctx context.Context) (bool, error)
 	var stateVersion, throughSequence int64
 	var payload json.RawMessage
 	err = tx.QueryRow(ctx, `SELECT w.workspace_id::text,w.session_id::text,w.id::text,w.assigned_agent_id::text,m.id::text,
-		m.mission_prompt,w.expected_result_schema_id,w.goal_version,s.state_version,w.input_event_sequence,w.payload
+		COALESCE(NULLIF(w.payload->>'mission_prompt',''),m.mission_prompt),w.expected_result_schema_id,w.goal_version,s.state_version,w.input_event_sequence,w.payload
 		FROM research_work_item w JOIN research_session s ON s.id=w.session_id
 		JOIN research_team_membership m ON m.workspace_id=w.workspace_id AND m.session_id=w.session_id AND m.agent_id=w.assigned_agent_id
 		AND m.state IN('idle','working') WHERE s.orchestrator_version='research-run-v6' AND s.status='running' AND w.status='ready' AND w.ready_at<=now()
@@ -48,6 +48,11 @@ func (s *PostgresStore) prepareNextV6Dispatch(ctx context.Context) (bool, error)
 	}
 	if err = lockRunForMutation(ctx, tx, runID, workspaceID); err != nil {
 		return false, err
+	}
+	if expectedSchema == string(V6ContractAtomicResultSubmission) {
+		if _, err = ensureV6BackingTaskTx(ctx, tx, workItemID); err != nil {
+			return false, err
+		}
 	}
 	attemptID, manifestID := uuid.NewString(), uuid.NewString()
 	manifest, manifestHash, err := compileV6WorkManifestTx(ctx, tx, workspaceID, runID, workItemID, attemptID, manifestID, agentID, mission, expectedSchema, goalVersion, stateVersion, throughSequence, payload)
@@ -265,6 +270,11 @@ func compileV6WorkManifestTx(ctx context.Context, tx pgx.Tx, workspaceID, runID,
 	}
 	manifestMap := map[string]any{"contract_kind": "work_manifest", "schema_version": 6, "manifest_id": manifestID, "workspace_id": workspaceID, "run_id": runID, "work_item_id": workItemID, "attempt_id": attemptID, "assigned_agent_id": agentID, "goal": map[string]any{"goal_version": goalVersion, "goal": goal, "scope": jsonObjectOrEmpty(scope), "audience": audience, "freshness": freshness, "language": language, "source_policy": jsonObjectOrEmpty(sourcePolicy)}, "branch_refs": branchRefs, "runtime_protocol_version": "research-run-v6-runtime-v1", "mission_prompt": mission, "expected_result_schema": expectedSchema, "artifacts": artifacts, "through_state_version": stateVersion, "through_event_sequence": throughSequence}
 	if expectedSchema == string(V6ContractAtomicResultSubmission) {
+		var taskID string
+		if err = tx.QueryRow(ctx, `SELECT id::text FROM research_task WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND work_item_id=$3::uuid`, workspaceID, runID, workItemID).Scan(&taskID); err != nil {
+			return nil, "", err
+		}
+		manifestMap["task_id"] = taskID
 		tier := "S"
 		branchIDs := []string{}
 		for _, rawRef := range branchRefs {

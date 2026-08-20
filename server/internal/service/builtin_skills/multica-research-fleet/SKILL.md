@@ -76,10 +76,11 @@ V6_CURL=(curl -fsS \
 "${V6_CURL[@]}" "${V6_API}/manifest"
 ```
 
-The equivalent paths are GET `/director-brief`, POST
-`/director-brief-acks`, GET `/catalog`, POST `/catalog-acks`, POST
-`/submission`, and the `/report-uploads` workflow. JSON writes use
-`Content-Type: application/json`; a strict submission uses
+Use only the endpoint families authorized by the Manifest: Director work uses
+GET `/director-brief` and POST `/director-brief-acks`; a Manifest containing
+`catalog_access` authorizes GET `/catalog` and POST `/catalog-acks`; Report work
+uses `/report-uploads`; all work submits through POST `/submission`. JSON writes
+use `Content-Type: application/json`; a strict submission uses
 `--data-binary @result.json`. This fallback has the same attempt and Agent
 authorization as the CLI and exists because server CI/CD may deploy before a
 local daemon binary is upgraded.
@@ -95,6 +96,19 @@ multica research director-brief-ack <session-id> <work-item-id> <attempt-id> \
   --page-key <page-key> --page-hash <page-hash> --output json
 ```
 
+The acknowledgement object contains exactly `client_request_id`, `brief_id`,
+`brief_hash`, `page_key`, and `page_hash`. Build the strict
+`director_action_proposal` identity by copying workspace/Run/Work/Attempt and
+Manifest identity from the Manifest; copy Director assignment/generation,
+Brief identity, page count, state version, and event sequence from the Brief.
+Each action must use a root-contract action kind and one payload schema frozen
+under `manifest.task_specific_schema.payload_schemas`. Do not guess older
+`research.*` schema names. Agent creation is asynchronous: never assign Work to
+an Agent requested in the same proposal; wait for the joined event and next
+Director cycle. Atomic Work uses `atomic_result_submission`, a non-empty
+`payload_schema_id`, and the exact result validator in
+`payload.task_specific_schema`.
+
 When `catalog_access` is present, read the authorized view page by page and
 acknowledge every page used by the result:
 
@@ -105,6 +119,11 @@ multica research work-catalog-ack <session-id> <work-item-id> <attempt-id> \
   --client-request-id <uuid> --page-key <page-key> --page-hash <page-hash> \
   --output json
 ```
+
+An `atomic_result_submission` must copy the Manifest's `task_id` as well as its
+Work/Attempt/Agent identity. The server creates that one-to-one Task provenance
+record before dispatch. Its `content_hash` is SHA-256 over RFC 8785 JCS bytes
+after removing only `content_hash`; do not hash pretty-printed file bytes.
 
 Report work uploads each immutable resource before the package submission:
 

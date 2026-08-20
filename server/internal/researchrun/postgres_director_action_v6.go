@@ -37,6 +37,53 @@ type v6DirectorAction struct {
 	DependsOnActionIDs   []string        `json:"depends_on_action_ids"`
 }
 
+// rejectMaterialV6EventsAfterDirectorBrief separates the frozen research
+// watermark from operational events needed to deliver and submit that same
+// Director cycle. appendEvent advances the Run sequence for both categories;
+// delivery, page-review, and submission bookkeeping must not make the Brief
+// stale by construction.
+func (s *PostgresStore) rejectMaterialV6EventsAfterDirectorBrief(ctx context.Context, proposal v6DirectorProposal, cycleID string, throughSequence int64) error {
+	rows, err := s.pool.Query(ctx, `SELECT event_type,payload FROM research_run_event
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND sequence>$3 ORDER BY sequence`,
+		proposal.WorkspaceID, proposal.RunID, throughSequence)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var eventType string
+		var payload json.RawMessage
+		if err = rows.Scan(&eventType, &payload); err != nil {
+			return err
+		}
+		if !isV6DirectorCycleOperationalEvent(eventType, payload, cycleID, proposal.WorkItemID, proposal.BriefID) {
+			return ErrWorkItemChanged
+		}
+	}
+	return rows.Err()
+}
+
+func isV6DirectorCycleOperationalEvent(eventType string, payload json.RawMessage, cycleID, workItemID, briefID string) bool {
+	var identity struct {
+		CycleID    string `json:"cycle_id"`
+		WorkItemID string `json:"work_item_id"`
+		BriefID    string `json:"brief_id"`
+	}
+	if json.Unmarshal(payload, &identity) != nil {
+		return false
+	}
+	switch eventType {
+	case "v6_director_cycle_created":
+		return identity.CycleID == cycleID && identity.WorkItemID == workItemID && identity.BriefID == briefID
+	case "v6_work_item_dispatch_prepared", "v6_work_item_dispatched", "v6_work_item_recovered", "v6_work_submission_received":
+		return identity.WorkItemID == workItemID
+	case "v6_director_brief_page_acknowledged":
+		return identity.BriefID == briefID
+	default:
+		return false
+	}
+}
+
 func (s *PostgresStore) ApplyReceivedV6DirectorProposals(ctx context.Context, limit int) (int, error) {
 	applied := 0
 	for applied < limit {
@@ -120,17 +167,17 @@ func (s *PostgresStore) executeV6DirectorProposal(ctx context.Context, submissio
 	}
 	var cycleID string
 	var goalVersion, generation, pageCount, reviewedCount int
-	var stateVersion, throughSequence int64
+	var briefStateVersion, liveStateVersion, throughSequence int64
 	err = s.pool.QueryRow(ctx, `SELECT c.id::text,w.goal_version,c.director_generation,c.page_count,
 		(SELECT count(*)::int FROM research_director_brief_page p WHERE p.director_cycle_id=c.id AND p.reviewed_at IS NOT NULL),
-		s.state_version,w.input_event_sequence
+		w.input_state_version,s.state_version,w.input_event_sequence
 		FROM research_v6_work_submission sub JOIN research_work_item_attempt a ON a.id=sub.attempt_id
 		JOIN research_work_item w ON w.id=a.work_item_id JOIN research_director_cycle c ON c.work_item_id=w.id
 		JOIN research_session s ON s.id=w.session_id WHERE sub.id=$1::uuid AND sub.workspace_id=$2::uuid AND sub.session_id=$3::uuid
 		AND sub.work_item_id=$4::uuid AND sub.attempt_id=$5::uuid AND a.manifest_id=$6::uuid AND a.manifest_hash=$7
 		AND c.director_assignment_id=$8::uuid AND c.brief_id=$9::uuid AND c.brief_hash=$10 AND a.status='running'`, submissionID,
 		proposal.WorkspaceID, proposal.RunID, proposal.WorkItemID, proposal.AttemptID, proposal.ManifestID, proposal.ManifestHash,
-		proposal.DirectorAssignmentID, proposal.BriefID, proposal.BriefHash).Scan(&cycleID, &goalVersion, &generation, &pageCount, &reviewedCount, &stateVersion, &throughSequence)
+		proposal.DirectorAssignmentID, proposal.BriefID, proposal.BriefHash).Scan(&cycleID, &goalVersion, &generation, &pageCount, &reviewedCount, &briefStateVersion, &liveStateVersion, &throughSequence)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrAttemptNotAssigned
 	}
@@ -138,13 +185,16 @@ func (s *PostgresStore) executeV6DirectorProposal(ctx context.Context, submissio
 		return err
 	}
 	if proposal.DirectorGeneration != generation || proposal.ReviewedPageCount != pageCount || reviewedCount != pageCount ||
-		proposal.ExpectedStateVersion != stateVersion || proposal.ThroughEventSequence != throughSequence {
+		proposal.ExpectedStateVersion != briefStateVersion || proposal.ThroughEventSequence != throughSequence {
 		return ErrWorkItemChanged
+	}
+	if err = s.rejectMaterialV6EventsAfterDirectorBrief(ctx, proposal, cycleID, throughSequence); err != nil {
+		return err
 	}
 	results := make([]map[string]any, 0, len(order))
 	for _, index := range order {
 		action := proposal.Actions[index]
-		if action.ExpectedStateVersion != 0 && action.ExpectedStateVersion != stateVersion {
+		if action.ExpectedStateVersion != 0 && action.ExpectedStateVersion != briefStateVersion {
 			return ErrWorkItemChanged
 		}
 		switch action.Kind {
@@ -159,9 +209,9 @@ func (s *PostgresStore) executeV6DirectorProposal(ctx context.Context, submissio
 			if payload.MessageID != "" {
 				_, err = s.ApplyV6SteeringAssessment(ctx, ApplyV6SteeringAssessmentInput{WorkspaceID: proposal.WorkspaceID, RunID: proposal.RunID,
 					MessageID: payload.MessageID, DirectorCycleID: cycleID, AssessmentKind: "no_op", Interpretation: action.Reason,
-					Reason: payload.Reason, ExpectedGoalVersion: goalVersion, ExpectedStateVersion: stateVersion, AcceptedActionIDs: []string{action.ActionID}})
+					Reason: payload.Reason, ExpectedGoalVersion: goalVersion, ExpectedStateVersion: liveStateVersion, AcceptedActionIDs: []string{action.ActionID}})
 			} else {
-				err = s.recordV6DirectorNoOp(ctx, proposal, cycleID, action, stateVersion, payload.Reason)
+				err = s.recordV6DirectorNoOp(ctx, proposal, cycleID, action, liveStateVersion, payload.Reason)
 			}
 		case "record_decision":
 			if action.PayloadSchema != "steering_assessment.v1" {
@@ -186,45 +236,45 @@ func (s *PostgresStore) executeV6DirectorProposal(ctx context.Context, submissio
 			}
 			_, err = (steeringV6Module{store: s}).Apply(ctx, ApplyV6SteeringAssessmentInput{WorkspaceID: proposal.WorkspaceID, RunID: proposal.RunID,
 				MessageID: payload.MessageID, DirectorCycleID: cycleID, AssessmentKind: payload.AssessmentKind, Interpretation: payload.Interpretation,
-				Reason: payload.Reason, ExpectedGoalVersion: goalVersion, ExpectedStateVersion: stateVersion, Impacts: payload.Impacts,
+				Reason: payload.Reason, ExpectedGoalVersion: goalVersion, ExpectedStateVersion: liveStateVersion, Impacts: payload.Impacts,
 				AcceptedActionIDs: []string{action.ActionID}, RevisedGoal: payload.RevisedGoal, RevisedScope: payload.RevisedScope,
 				RevisedSourcePolicy: payload.RevisedSourcePolicy, RevisedLimits: payload.RevisedLimits, RevisedAudience: payload.RevisedAudience,
 				RevisedFreshness: payload.RevisedFreshness, RevisedLanguage: payload.RevisedLanguage})
 		case "create_agent":
-			err = s.executeV6CreateAgentAction(ctx, proposal, cycleID, action, stateVersion)
+			err = s.executeV6CreateAgentAction(ctx, proposal, cycleID, action, liveStateVersion)
 		case "create_work_item", "create_task":
-			err = s.executeV6CreateWorkAction(ctx, proposal, cycleID, action, stateVersion)
+			err = s.executeV6CreateWorkAction(ctx, proposal, cycleID, action, liveStateVersion)
 		case "create_match", "open_discussion", "create_dispute", "create_integration", "create_review":
 			collaborationKind := map[string]string{"create_match": "match", "open_discussion": "discussion", "create_dispute": "resolve_conflict", "create_integration": "integration", "create_review": "review"}[action.Kind]
 			action.Payload = withV6ActionKind(action.Payload, collaborationKind)
-			err = s.executeV6CreateWorkAction(ctx, proposal, cycleID, action, stateVersion)
+			err = s.executeV6CreateWorkAction(ctx, proposal, cycleID, action, liveStateVersion)
 		case "create_branch":
-			err = s.executeV6CreateBranchAction(ctx, proposal, cycleID, action, stateVersion)
+			err = s.executeV6CreateBranchAction(ctx, proposal, cycleID, action, liveStateVersion)
 		case "create_report":
-			err = s.executeV6CreateReportAction(ctx, proposal, cycleID, action, goalVersion, stateVersion)
+			err = s.executeV6CreateReportAction(ctx, proposal, cycleID, action, goalVersion, liveStateVersion)
 		case "revise_report", "reject_report", "publish_report":
-			err = s.executeV6ReportReviewAction(ctx, proposal, cycleID, action, stateVersion)
+			err = s.executeV6ReportReviewAction(ctx, proposal, cycleID, action, liveStateVersion)
 		case "challenge_node", "terminate_node":
-			err = s.executeV6NodeDecisionAction(ctx, proposal, action, stateVersion)
+			err = s.executeV6NodeDecisionAction(ctx, proposal, action, liveStateVersion)
 		case "assign_steward":
-			err = s.executeV6AssignStewardAction(ctx, proposal, action, stateVersion)
+			err = s.executeV6AssignStewardAction(ctx, proposal, action, liveStateVersion)
 		case "revise_goal":
-			err = s.executeV6ReviseGoalAction(ctx, proposal, action, stateVersion)
+			err = s.executeV6ReviseGoalAction(ctx, proposal, action, liveStateVersion)
 		case "adjudicate_discussion":
 			action.Payload = withV6ActionKind(action.Payload, "discussion")
-			err = s.executeV6CreateWorkAction(ctx, proposal, cycleID, action, stateVersion)
+			err = s.executeV6CreateWorkAction(ctx, proposal, cycleID, action, liveStateVersion)
 		case "cancel_work_item", "retry_work_item", "reassign_work_item":
-			err = s.executeV6WorkLifecycleAction(ctx, proposal, action, stateVersion)
+			err = s.executeV6WorkLifecycleAction(ctx, proposal, action, liveStateVersion)
 		case "update_agent", "archive_agent":
-			err = s.executeV6AgentLifecycleAction(ctx, proposal, cycleID, action, stateVersion)
+			err = s.executeV6AgentLifecycleAction(ctx, proposal, cycleID, action, liveStateVersion)
 		case "update_branch", "pause_branch", "terminate_branch", "split_branch", "merge_branch":
 			if action.Kind == "split_branch" {
-				err = s.executeV6SplitBranchAction(ctx, proposal, cycleID, action, stateVersion)
+				err = s.executeV6SplitBranchAction(ctx, proposal, cycleID, action, liveStateVersion)
 			} else {
-				err = s.executeV6BranchLifecycleAction(ctx, proposal, action, stateVersion)
+				err = s.executeV6BranchLifecycleAction(ctx, proposal, action, liveStateVersion)
 			}
 		case "pause_run", "resume_run", "complete_run", "fail_run":
-			err = s.executeV6RunLifecycleAction(ctx, proposal, action, stateVersion)
+			err = s.executeV6RunLifecycleAction(ctx, proposal, action, liveStateVersion)
 		default:
 			return fmt.Errorf("%w: unsupported Director action %q", ErrInvalidContract, action.Kind)
 		}
@@ -232,7 +282,7 @@ func (s *PostgresStore) executeV6DirectorProposal(ctx context.Context, submissio
 			return err
 		}
 		results = append(results, map[string]any{"action_id": action.ActionID, "status": "accepted"})
-		stateVersion++
+		liveStateVersion++
 	}
 	return s.completeV6DirectorProposal(ctx, submissionID, cycleID, proposal, envelope, results)
 }

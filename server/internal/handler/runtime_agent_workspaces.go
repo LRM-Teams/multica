@@ -187,7 +187,8 @@ func (h *Handler) DeleteRuntimeAgentWorkspace(w http.ResponseWriter, r *http.Req
 	if !ok {
 		return
 	}
-	if !canEditRuntime(member, rt) {
+	rtOwnerID, _ := h.resolveRuntimeOwnerQuery(r.Context(), rt)
+	if !canEditRuntime(member, rt, rtOwnerID) {
 		writeError(w, http.StatusForbidden, "you can only delete workspaces on your own runtimes")
 		return
 	}

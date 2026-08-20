@@ -21,7 +21,7 @@ type resolveComputerByMachineIDRequest struct {
 // When `~/.multica` is wiped (or identity evidence lost), setup would normally
 // mint a brand-new computer_id, orphaning every agent still pinned to the old
 // identity's runtimes. This endpoint lets setup reclaim the existing identity
-// instead: if the server knows a computer_identity_owner row for this user with
+// instead: if the server knows a computers row for this user with
 // the same machine_id, and that identity still has an active Workspace binding
 // (i.e. it was not deliberately removed), the client reuses that computer_id
 // and no orphan is created at all (LRM-1570).
@@ -56,15 +56,15 @@ func (h *Handler) ResolveComputerByMachineID(w http.ResponseWriter, r *http.Requ
 	}
 
 	rows, err := h.DB.Query(r.Context(), `
-SELECT DISTINCT o.daemon_id
-  FROM computer_identity_owner o
+SELECT DISTINCT o.id
+  FROM computers o
   JOIN computer_workspace_bindings b
-    ON b.daemon_id = o.daemon_id
+    ON b.daemon_id = o.id
  WHERE o.user_id = $1 AND o.machine_id = $2
    AND b.active = TRUE AND b.revoked_at IS NULL
    AND NOT EXISTS (
      SELECT 1 FROM daemon_registration_tombstone t
-      WHERE t.workspace_id = $3 AND t.daemon_id = o.daemon_id
+      WHERE t.workspace_id = $3 AND t.daemon_id = o.id
    )`,
 		userID, machineID, parseUUID(workspaceID))
 	if err != nil {

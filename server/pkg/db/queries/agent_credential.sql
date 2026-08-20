@@ -17,6 +17,10 @@ VALUES ($1, $2, $3, $4, $5, $6, 'daemon')
 RETURNING *;
 
 -- name: LockAgentForDaemonCredentialEnsure :one
+-- A daemon may mint/hold a credential for an agent only while that agent's
+-- current runtime lives on a machine the requesting owner has an active
+-- binding for in this workspace (ownership is machine-level, not stored on
+-- the runtime row).
 SELECT agent.id
 FROM agent
 JOIN agent_runtime AS runtime
@@ -25,7 +29,13 @@ JOIN agent_runtime AS runtime
 WHERE agent.id = sqlc.arg(agent_id)
   AND agent.workspace_id = sqlc.arg(workspace_id)
   AND runtime.id = sqlc.arg(runtime_id)
-  AND runtime.owner_id = sqlc.arg(owner_id)
+  AND EXISTS (
+      SELECT 1 FROM computer_workspace_bindings b
+      WHERE b.workspace_id = runtime.workspace_id
+        AND b.daemon_id = runtime.daemon_id
+        AND b.user_id = sqlc.arg(owner_id)
+        AND b.active = TRUE
+  )
   AND agent.archived_at IS NULL
 FOR UPDATE OF agent, runtime;
 

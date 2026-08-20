@@ -936,7 +936,7 @@ func TestDaemonRegister_DaemonTokenRuntimeOwnedByComputerBindingUser(t *testing.
 	}
 	ctx := context.Background()
 	daemonID := "test-daemon-binding-owner-" + uuid.NewString()
-	if _, err := testPool.Exec(ctx, `INSERT INTO computer_identity_owner (daemon_id, user_id) VALUES ($1, $2)`, daemonID, testUserID); err != nil {
+	if _, err := testPool.Exec(ctx, `INSERT INTO computers (id, user_id) VALUES ($1, $2)`, daemonID, testUserID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := testPool.Exec(ctx, `
@@ -949,7 +949,7 @@ func TestDaemonRegister_DaemonTokenRuntimeOwnedByComputerBindingUser(t *testing.
 	t.Cleanup(func() {
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE workspace_id = $1 AND daemon_id = $2`, testWorkspaceID, daemonID)
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_workspace_bindings WHERE daemon_id = $1`, daemonID)
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_identity_owner WHERE daemon_id = $1`, daemonID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM computers WHERE id = $1`, daemonID)
 	})
 
 	w := httptest.NewRecorder()
@@ -966,14 +966,16 @@ func TestDaemonRegister_DaemonTokenRuntimeOwnedByComputerBindingUser(t *testing.
 		t.Fatalf("DaemonRegister: status=%d body=%s", w.Code, w.Body.String())
 	}
 	var ownerID string
+	// LRM-1570: ownership is machine-level; the daemon-token register resolves
+	// the owner from the active binding, which the test asserts directly.
 	if err := testPool.QueryRow(ctx, `
-		SELECT owner_id::text FROM agent_runtime
-		WHERE workspace_id = $1 AND daemon_id = $2 AND provider = 'codex'
-	`, testWorkspaceID, daemonID).Scan(&ownerID); err != nil {
+		SELECT user_id::text FROM computer_workspace_bindings
+		WHERE daemon_id = $1 AND workspace_id = $2 AND active = TRUE
+	`, daemonID, testWorkspaceID).Scan(&ownerID); err != nil {
 		t.Fatal(err)
 	}
 	if ownerID != testUserID {
-		t.Fatalf("runtime owner_id = %q, want Computer binding user %q", ownerID, testUserID)
+		t.Fatalf("binding owner = %q, want Computer binding user %q", ownerID, testUserID)
 	}
 }
 
@@ -1947,10 +1949,10 @@ func TestDaemonRegister_MergesLegacyDaemonIDRuntime(t *testing.T) {
 	// Seed a legacy runtime row keyed on the hostname-derived id.
 	var legacyRuntimeID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, owner_id, last_seen_at)
-		VALUES ($1, $2, 'legacy-runtime', 'local', 'claude', 'offline', 'TestMachine.local', '{}'::jsonb, $3, now() - interval '1 hour')
+		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at)
+		VALUES ($1,  $2,  'legacy-runtime',  'local',  'claude',  'offline',  'TestMachine.local',  '{}'::jsonb,  now() - interval '1 hour')
 		RETURNING id
-	`, testWorkspaceID, legacyDaemonID, testUserID).Scan(&legacyRuntimeID); err != nil {
+	`,  testWorkspaceID,  legacyDaemonID).Scan(&legacyRuntimeID); err != nil {
 		t.Fatalf("seed legacy runtime: %v", err)
 	}
 	t.Cleanup(func() {
@@ -2081,10 +2083,10 @@ func TestDaemonRegister_MergesLegacyDaemonIDRuntime_ReverseDotLocal(t *testing.T
 
 	var legacyRuntimeID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, owner_id, last_seen_at)
-		VALUES ($1, $2, 'legacy-runtime-reverse', 'local', 'claude', 'offline', '', '{}'::jsonb, $3, now())
+		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at)
+		VALUES ($1,  $2,  'legacy-runtime-reverse',  'local',  'claude',  'offline',  '',  '{}'::jsonb,  now())
 		RETURNING id
-	`, testWorkspaceID, legacyDaemonID, testUserID).Scan(&legacyRuntimeID); err != nil {
+	`,  testWorkspaceID,  legacyDaemonID).Scan(&legacyRuntimeID); err != nil {
 		t.Fatalf("seed legacy runtime: %v", err)
 	}
 	t.Cleanup(func() {
@@ -2139,10 +2141,10 @@ func TestDaemonRegister_MergesLegacyDaemonIDRuntime_CaseDrift(t *testing.T) {
 
 	var legacyRuntimeID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, owner_id, last_seen_at)
-		VALUES ($1, $2, 'legacy-runtime-case', 'local', 'claude', 'offline', '', '{}'::jsonb, $3, now())
+		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at)
+		VALUES ($1,  $2,  'legacy-runtime-case',  'local',  'claude',  'offline',  '',  '{}'::jsonb,  now())
 		RETURNING id
-	`, testWorkspaceID, storedDaemonID, testUserID).Scan(&legacyRuntimeID); err != nil {
+	`,  testWorkspaceID,  storedDaemonID).Scan(&legacyRuntimeID); err != nil {
 		t.Fatalf("seed legacy runtime: %v", err)
 	}
 	t.Cleanup(func() {
@@ -2209,19 +2211,19 @@ func TestDaemonRegister_MergesAllCaseDuplicateLegacyRuntimes(t *testing.T) {
 
 	var legacyUpperID, legacyLowerID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, owner_id, last_seen_at)
-		VALUES ($1, $2, 'legacy-upper', 'local', 'claude', 'offline', '', '{}'::jsonb, $3, now() - interval '2 hours')
+		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at)
+		VALUES ($1,  $2,  'legacy-upper',  'local',  'claude',  'offline',  '',  '{}'::jsonb,  now() - interval '2 hours')
 		RETURNING id
-	`, testWorkspaceID, storedUpperID, testUserID).Scan(&legacyUpperID); err != nil {
+	`,  testWorkspaceID,  storedUpperID).Scan(&legacyUpperID); err != nil {
 		t.Fatalf("seed upper-case legacy runtime: %v", err)
 	}
 	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, legacyUpperID) })
 
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, owner_id, last_seen_at)
-		VALUES ($1, $2, 'legacy-lower', 'local', 'claude', 'offline', '', '{}'::jsonb, $3, now() - interval '1 hour')
+		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at)
+		VALUES ($1,  $2,  'legacy-lower',  'local',  'claude',  'offline',  '',  '{}'::jsonb,  now() - interval '1 hour')
 		RETURNING id
-	`, testWorkspaceID, storedLowerID, testUserID).Scan(&legacyLowerID); err != nil {
+	`,  testWorkspaceID,  storedLowerID).Scan(&legacyLowerID); err != nil {
 		t.Fatalf("seed lower-case legacy runtime: %v", err)
 	}
 	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, legacyLowerID) })
@@ -4001,14 +4003,11 @@ func createRuntimeGuardRuntime(t *testing.T, ctx context.Context, provider strin
 
 	var runtimeID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (
-			workspace_id, daemon_id, name, runtime_mode, provider, status,
-			device_info, metadata, owner_id, last_seen_at
-		)
-		VALUES ($1, 'runtime-guard-' || gen_random_uuid()::text, 'Runtime Guard Fixture',
-		        'local', $2, 'offline', '{}'::jsonb, '{}'::jsonb, $3, now())
+		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at)
+		VALUES ($1,  'runtime-guard-' || gen_random_uuid()::text,  'Runtime Guard Fixture', 
+		        'local',  $2,  'offline',  '{}'::jsonb,  '{}'::jsonb,  now())
 		RETURNING id
-	`, testWorkspaceID, provider, testUserID).Scan(&runtimeID); err != nil {
+	`,  testWorkspaceID,  provider).Scan(&runtimeID); err != nil {
 		t.Fatalf("setup: create runtime: %v", err)
 	}
 	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_runtime WHERE id = $1`, runtimeID) })

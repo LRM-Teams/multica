@@ -159,16 +159,26 @@ func TestRestartEndpointsRequireComputerOwner(t *testing.T) {
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent_runtime (
 			workspace_id, daemon_id, name, runtime_mode, provider, status,
-			device_info, metadata, owner_id, last_seen_at
+			device_info, metadata, last_seen_at
 		)
 		VALUES ($1, $2, $3, 'local', 'claude', 'offline',
-		        'Restart Gate Computer', '{}'::jsonb, $4, now())
+		        'Restart Gate Computer', '{}'::jsonb, now())
 		RETURNING id
-	`, testWorkspaceID, daemonID, "Restart Gate "+uuid.NewString(), testUserID).Scan(&runtimeID); err != nil {
+	`, testWorkspaceID, daemonID, "Restart Gate "+uuid.NewString()).Scan(&runtimeID); err != nil {
 		t.Fatalf("create runtime: %v", err)
+	}
+	// LRM-1570: ownership is machine-level via an active binding for the
+	// runtime's daemon (the Computer owner is testUserID).
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO computer_workspace_bindings (
+			daemon_id, workspace_id, user_id, execution_token_hash, active
+		) VALUES ($1, $2, $3, 'restart-gate-test', TRUE)
+	`, daemonID, testWorkspaceID, testUserID); err != nil {
+		t.Fatalf("seed restart-gate owner binding: %v", err)
 	}
 	t.Cleanup(func() {
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_workspace_bindings WHERE daemon_id = $1 AND workspace_id = $2`, daemonID, testWorkspaceID)
 	})
 
 	plainMemberID := createRuntimeLocalSkillTestMember(t, "member")

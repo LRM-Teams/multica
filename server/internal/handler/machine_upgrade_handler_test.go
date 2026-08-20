@@ -28,10 +28,10 @@ func createMachineUpgradeSiblingRuntimes(t *testing.T, ownerID string) (string, 
 		if err := testPool.QueryRow(ctx, `
 			INSERT INTO agent_runtime (
 				workspace_id, daemon_id, name, runtime_mode, provider, status,
-				device_info, metadata, owner_id, last_seen_at
+				device_info, metadata, last_seen_at
 			) VALUES ($1, $2, $3, 'local', $4, 'online', 'test machine',
-				'{"capabilities":["machine_upgrade_v1"]}'::jsonb, $5, now())
-			RETURNING id`, testWorkspaceID, daemonID, provider+"-"+uuid.NewString(), provider, ownerID).Scan(&id); err != nil {
+				'{"capabilities":["machine_upgrade_v1"]}'::jsonb, now())
+			RETURNING id`, testWorkspaceID, daemonID, provider+"-"+uuid.NewString(), provider).Scan(&id); err != nil {
 			t.Fatalf("create machine upgrade runtime: %v", err)
 		}
 		t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, id) })
@@ -45,7 +45,9 @@ func bindMachineUpgradeWorkspace(t *testing.T, daemonID, workspaceID, ownerID st
 	if _, err := testPool.Exec(context.Background(), `
 		INSERT INTO computer_workspace_bindings (
 			daemon_id, workspace_id, user_id, execution_token_hash, active
-		) VALUES ($1, $2, $3, $4, TRUE)`, daemonID, workspaceID, ownerID, "machine-upgrade-test"); err != nil {
+		) VALUES ($1, $2, $3, $4, TRUE)
+		ON CONFLICT (daemon_id, workspace_id)
+		DO UPDATE SET user_id = EXCLUDED.user_id, active = TRUE, revoked_at = NULL`, daemonID, workspaceID, ownerID, "machine-upgrade-test"); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
@@ -72,12 +74,7 @@ func TestMachineUpgrade_NoCurrentSocketFailsInsteadOfQueuing(t *testing.T) {
 		t.Skip("database not available")
 	}
 	_, _, daemonID := createMachineUpgradeSiblingRuntimes(t, testUserID)
-	if _, err := testPool.Exec(context.Background(), `INSERT INTO computer_identity_owner (daemon_id, user_id) VALUES ($1, $2)`, daemonID, testUserID); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_identity_owner WHERE daemon_id=$1`, daemonID)
-	})
+	bindMachineUpgradeWorkspace(t, daemonID, testWorkspaceID, testUserID)
 
 	createdW, created := initiateMachineUpgrade(t, testUserID, daemonID, "v9.9.9")
 	if createdW.Code != http.StatusConflict || created["code"] != "no_current_socket" {
@@ -96,9 +93,7 @@ func TestMachineUpgrade_AllowsOnlyComputerOwner(t *testing.T) {
 	}
 	runtimeID, _, daemonID := createMachineUpgradeSiblingRuntimes(t, testUserID)
 	computerOwnerID := createRuntimeLocalSkillTestMember(t, "member")
-	if _, err := testPool.Exec(context.Background(), `UPDATE agent_runtime SET owner_id = $1 WHERE daemon_id = $2`, computerOwnerID, daemonID); err != nil {
-		t.Fatal(err)
-	}
+	bindMachineUpgradeWorkspace(t, daemonID, testWorkspaceID, computerOwnerID)
 	workspaceAdminID := createRuntimeLocalSkillTestMember(t, "admin")
 	for label, workspaceManagerID := range map[string]string{
 		"Workspace owner": testUserID,
@@ -147,12 +142,7 @@ func TestMachineUpgrade_DispatchesComputerUpgradeToOneLiveBinding(t *testing.T) 
 		t.Skip("database not available")
 	}
 	_, _, daemonID := createMachineUpgradeSiblingRuntimes(t, testUserID)
-	if _, err := testPool.Exec(context.Background(), `INSERT INTO computer_identity_owner (daemon_id, user_id) VALUES ($1, $2)`, daemonID, testUserID); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_identity_owner WHERE daemon_id=$1`, daemonID)
-	})
+	bindMachineUpgradeWorkspace(t, daemonID, testWorkspaceID, testUserID)
 	siblingWorkspaceID := createBindingTestWorkspace(t, testUserID, "owner")
 	bindMachineUpgradeWorkspace(t, daemonID, testWorkspaceID, testUserID)
 	bindMachineUpgradeWorkspace(t, daemonID, siblingWorkspaceID, testUserID)
@@ -250,12 +240,7 @@ func TestMachineUpgrade_DispatchesComputerUpgradeToNextLiveBinding(t *testing.T)
 		t.Skip("database not available")
 	}
 	_, _, daemonID := createMachineUpgradeSiblingRuntimes(t, testUserID)
-	if _, err := testPool.Exec(context.Background(), `INSERT INTO computer_identity_owner (daemon_id, user_id) VALUES ($1, $2)`, daemonID, testUserID); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_identity_owner WHERE daemon_id=$1`, daemonID)
-	})
+	bindMachineUpgradeWorkspace(t, daemonID, testWorkspaceID, testUserID)
 	siblingWorkspaceID := createBindingTestWorkspace(t, testUserID, "owner")
 	firstWorkspaceID, secondWorkspaceID := testWorkspaceID, siblingWorkspaceID
 	if firstWorkspaceID > secondWorkspaceID {
@@ -383,12 +368,8 @@ func TestMachineUpgrade_DispatchDoesNotNeedCloudReceipt(t *testing.T) {
 		t.Skip("database not available")
 	}
 	_, _, daemonID := createMachineUpgradeSiblingRuntimes(t, testUserID)
-	if _, err := testPool.Exec(context.Background(), `INSERT INTO computer_identity_owner (daemon_id, user_id) VALUES ($1, $2)`, daemonID, testUserID); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_identity_owner WHERE daemon_id=$1`, daemonID)
-	})
+	bindMachineUpgradeWorkspace(t, daemonID, testWorkspaceID, testUserID)
+
 	createdW, created := initiateMachineUpgrade(t, testUserID, daemonID, "v9.9.9")
 	if createdW.Code != http.StatusConflict || created["code"] != "no_current_socket" {
 		t.Fatalf("dispatch without a socket = %d %s", createdW.Code, createdW.Body.String())

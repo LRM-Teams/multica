@@ -23,15 +23,19 @@ func (h *Handler) pickAgentRuntime(
 ) (db.AgentRuntime, bool) {
 	runtimes, err := h.Queries.ListVisibleAgentRuntimes(ctx, db.ListVisibleAgentRuntimesParams{
 		WorkspaceID: workspaceID,
-		OwnerID:     userID,
+		UserID:      userID,
 	})
 	if err != nil || len(runtimes) == 0 {
 		return db.AgentRuntime{}, false
 	}
 	now := time.Now()
+	// LRM-1570: ownership is machine-level. The SQL already restricts the
+	// visible set to runtimes on the user's own machines (active
+	// computer_workspace_bindings) plus public runtimes. Prefer a runtime
+	// whose machine owner is this user; fall back to any fresh online row.
 	for _, runtime := range runtimes {
-		if runtime.OwnerID.Valid &&
-			uuidToString(runtime.OwnerID) == uuidToString(userID) &&
+		if ownerID, err := h.resolveRuntimeOwnerQuery(ctx, runtime); err == nil &&
+			uuidToString(ownerID) == uuidToString(userID) &&
 			runtimeIsPickableOnline(runtime, now) {
 			return runtime, true
 		}

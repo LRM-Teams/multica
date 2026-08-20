@@ -268,7 +268,7 @@ WHERE id = @id;
 
 -- name: GetSandboxJobByTokenHash :one
 SELECT * FROM sandbox_job
-WHERE job_token_hash = $1 AND job_token_expires_at > now();
+WHERE job_token_hash = sqlc.arg(token_hash) AND job_token_expires_at > now();
 
 -- name: CompleteSandboxJob :one
 UPDATE sandbox_job

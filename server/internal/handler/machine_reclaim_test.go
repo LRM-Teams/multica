@@ -46,7 +46,7 @@ func TestDaemonRegister_PersistsMachineIDOnIdentityAndRuntime(t *testing.T) {
 	daemonID := "test-daemon-machineid-" + uuid.NewString()
 	machineID := "machine-fp-" + uuid.NewString()
 	if _, err := testPool.Exec(ctx, `
-		INSERT INTO computer_identity_owner (daemon_id, user_id) VALUES ($1, $2)
+		INSERT INTO computers (id, user_id) VALUES ($1, $2)
 	`, daemonID, testUserID); err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestDaemonRegister_PersistsMachineIDOnIdentityAndRuntime(t *testing.T) {
 	t.Cleanup(func() {
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE workspace_id = $1 AND daemon_id = $2`, testWorkspaceID, daemonID)
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_workspace_bindings WHERE daemon_id = $1`, daemonID)
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_identity_owner WHERE daemon_id = $1`, daemonID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM computers WHERE id = $1`, daemonID)
 	})
 
 	machineIDRegister(t, daemonID, machineID)
@@ -68,12 +68,12 @@ func TestDaemonRegister_PersistsMachineIDOnIdentityAndRuntime(t *testing.T) {
 	// Identity row carries the machine fingerprint.
 	var persisted string
 	if err := testPool.QueryRow(ctx, `
-		SELECT machine_id FROM computer_identity_owner WHERE daemon_id = $1
+		SELECT machine_id FROM computers WHERE id = $1
 	`, daemonID).Scan(&persisted); err != nil {
 		t.Fatal(err)
 	}
 	if persisted != machineID {
-		t.Fatalf("computer_identity_owner.machine_id = %q, want %q", persisted, machineID)
+		t.Fatalf("computers.machine_id = %q, want %q", persisted, machineID)
 	}
 	// Runtime metadata carries it too.
 	var metadata string
@@ -97,14 +97,14 @@ func TestDaemonRegister_WithoutMachineIDKeepsIdentityClean(t *testing.T) {
 	ctx := context.Background()
 	daemonID := "test-daemon-nomid-" + uuid.NewString()
 	if _, err := testPool.Exec(ctx, `
-		INSERT INTO computer_identity_owner (daemon_id, user_id) VALUES ($1, $2)
+		INSERT INTO computers (id, user_id) VALUES ($1, $2)
 	`, daemonID, testUserID); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE workspace_id = $1 AND daemon_id = $2`, testWorkspaceID, daemonID)
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_workspace_bindings WHERE daemon_id = $1`, daemonID)
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_identity_owner WHERE daemon_id = $1`, daemonID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM computers WHERE id = $1`, daemonID)
 	})
 	// Register without a binding (registration still works when the owner is
 	// resolved from the member context instead).
@@ -133,7 +133,7 @@ func TestResolveComputerByMachineID(t *testing.T) {
 	daemonID := "test-daemon-resolve-" + uuid.NewString()
 	machineID := "machine-resolve-" + uuid.NewString()
 	if _, err := testPool.Exec(ctx, `
-		INSERT INTO computer_identity_owner (daemon_id, user_id, machine_id) VALUES ($1, $2, $3)
+		INSERT INTO computers (id, user_id, machine_id) VALUES ($1, $2, $3)
 	`, daemonID, testUserID, machineID); err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +146,7 @@ func TestResolveComputerByMachineID(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_workspace_bindings WHERE daemon_id = $1`, daemonID)
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_identity_owner WHERE daemon_id = $1`, daemonID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM computers WHERE id = $1`, daemonID)
 	})
 
 	doResolve := func(machineID string) (string, int) {

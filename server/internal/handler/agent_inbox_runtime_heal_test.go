@@ -31,11 +31,11 @@ func TestDrainAgentInbox_HealsStaleRuntimeAfterAgentReassignment(t *testing.T) {
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent_runtime (
 			workspace_id, daemon_id, name, runtime_mode, provider, status,
-			device_info, metadata, owner_id, last_seen_at
+			device_info, metadata, last_seen_at
 		)
-		VALUES ($1, $2, 'Inbox Heal Runtime', 'local', 'test-heal', 'online', 'test runtime', '{}'::jsonb, $3, now())
+		VALUES ($1, $2, 'Inbox Heal Runtime', 'local', 'test-heal', 'online', 'test runtime', '{}'::jsonb, now())
 		RETURNING id
-	`, testWorkspaceID, "inbox-heal-"+uuid.NewString(), testUserID).Scan(&newRuntimeID); err != nil {
+	`, testWorkspaceID, "inbox-heal-"+uuid.NewString()).Scan(&newRuntimeID); err != nil {
 		t.Fatalf("create new runtime: %v", err)
 	}
 	t.Cleanup(func() {

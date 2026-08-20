@@ -129,12 +129,12 @@ func TestGetComputerWorkDigestOfflineComputerReturnsExplicitError(t *testing.T) 
 func setupComputerWorkDigestOwner(t *testing.T, ownerID string) string {
 	t.Helper()
 	daemonID := "work-digest-" + uuid.NewString()
-	if _, err := testPool.Exec(context.Background(), `INSERT INTO computer_identity_owner (daemon_id, user_id) VALUES ($1, $2)`, daemonID, ownerID); err != nil {
+	if _, err := testPool.Exec(context.Background(), `INSERT INTO computers (id, user_id) VALUES ($1, $2)`, daemonID, ownerID); err != nil {
 		t.Fatal(err)
 	}
 	bindMachineUpgradeWorkspace(t, daemonID, testWorkspaceID, ownerID)
 	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_identity_owner WHERE daemon_id=$1`, daemonID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM computers WHERE id=$1`, daemonID)
 	})
 	return daemonID
 }

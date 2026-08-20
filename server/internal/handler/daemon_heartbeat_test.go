@@ -21,16 +21,13 @@ func createTestAgentRuntimeWithDaemonID(t *testing.T, daemonID string) db.AgentR
 	ctx := context.Background()
 	var runtimeID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (
-			workspace_id, daemon_id, name, runtime_mode, provider, status,
-			device_info, metadata, owner_id, visibility, last_seen_at
-		)
+		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, visibility, last_seen_at)
 		VALUES (
-			$1, $2, $3, 'local', 'daemon-heartbeat-test', 'online',
-			'', '{}'::jsonb, $4, 'private', now()
+			$1,  $2,  $3,  'local',  'daemon-heartbeat-test',  'online', 
+			'',  '{}'::jsonb,  'private',  now()
 		)
 		RETURNING id
-	`, testWorkspaceID, daemonID, "heartbeat-runtime-"+randomID(), testUserID).Scan(&runtimeID); err != nil {
+	`,  testWorkspaceID,  daemonID,  "heartbeat-runtime-"+randomID()).Scan(&runtimeID); err != nil {
 		t.Fatalf("create test agent_runtime: %v", err)
 	}
 	t.Cleanup(func() {

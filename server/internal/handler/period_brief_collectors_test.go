@@ -26,14 +26,22 @@ func TestEnsurePeriodBriefCollectors_CreatesPerLocalComputer(t *testing.T) {
 	// Second runtime on the same Computer must not create a second collector.
 	_ = seedMachineLockedRuntime(t, daemonA, "Laptop A Twin")
 
+	cloudDaemon := "cloud-box-" + uuid.NewString()[:8]
 	var cloudRuntimeID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (
-			workspace_id, name, display_name, runtime_mode, provider, status, device_info, metadata, visibility, owner_id, last_seen_at
-		) VALUES ($1, 'cloud-box', 'Cloud Box', 'cloud', $2, 'online', '', '{}'::jsonb, 'public', $3, now())
+		INSERT INTO agent_runtime (workspace_id, daemon_id, name, display_name, runtime_mode, provider, status, device_info, metadata, visibility, last_seen_at) VALUES ($1,  $2,  'cloud-box',  'Cloud Box',  'cloud',  $3,  'online',  '',  '{}'::jsonb,  'public',  now())
 		RETURNING id
-	`, testWorkspaceID, "cloud_collect_"+uuid.NewString(), testUserID).Scan(&cloudRuntimeID); err != nil {
+	`,  testWorkspaceID,  cloudDaemon,  "cloud_collect_"+uuid.NewString()).Scan(&cloudRuntimeID); err != nil {
 		t.Fatalf("seed cloud runtime: %v", err)
+	}
+	// LRM-1570: the cloud runtime is its own Computer, owned via an active
+	// binding for its daemon (the caller is testUserID).
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO computer_workspace_bindings (
+			daemon_id, workspace_id, user_id, execution_token_hash, active
+		) VALUES ($1, $2, $3, 'cloud-collect-test', TRUE)
+	`, cloudDaemon, testWorkspaceID, testUserID); err != nil {
+		t.Fatalf("seed cloud owner binding: %v", err)
 	}
 	t.Cleanup(func() {
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, cloudRuntimeID)
@@ -135,15 +143,25 @@ func TestEnsurePeriodBriefCollectors_SkipsOthersPublicComputers(t *testing.T) {
 	otherDaemon := "other-pc-" + uuid.NewString()[:8]
 	var otherRuntimeID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (
-			workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, visibility, owner_id, last_seen_at
-		) VALUES ($1, $2, $3, 'local', $4, 'online', '', '{}'::jsonb, 'public', $5, now())
+		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, visibility, last_seen_at) VALUES ($1,  $2,  $3,  'local',  $4,  'online',  '',  '{}'::jsonb,  'public',  now())
 		RETURNING id
-	`, testWorkspaceID, otherDaemon, "Other Public Laptop", "other_pub_"+uuid.NewString(), otherOwner).Scan(&otherRuntimeID); err != nil {
+	`,  testWorkspaceID,  otherDaemon,  "Other Public Laptop",  "other_pub_"+uuid.NewString()).Scan(&otherRuntimeID); err != nil {
 		t.Fatalf("seed other public runtime: %v", err)
 	}
 	t.Cleanup(func() {
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, otherRuntimeID)
+	})
+	// LRM-1570: ownership is machine-level; the other computer is owned by
+	// otherOwner, so collectors must not be provisioned for it by testUserID.
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO computer_workspace_bindings (
+			daemon_id, workspace_id, user_id, execution_token_hash, active
+		) VALUES ($1, $2, $3, 'other-pc-test', TRUE)
+	`, otherDaemon, testWorkspaceID, otherOwner); err != nil {
+		t.Fatalf("seed other owner binding: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_workspace_bindings WHERE daemon_id = $1 AND workspace_id = $2`, otherDaemon, testWorkspaceID)
 	})
 
 	ownDaemon := "own-pc-" + uuid.NewString()[:8]

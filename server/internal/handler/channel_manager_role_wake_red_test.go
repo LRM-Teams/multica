@@ -356,8 +356,6 @@ func TestReminderWakeRacingManagerRemovalUsesCurrentRole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load Reminder owner runtime: %v", err)
 	}
-	runtime.OwnerID = pgtype.UUID{}
-
 	// The Reminder was queued while the role existed, then removal committed
 	// before claim. Claim must rebuild authority from the durable roster.
 	patchChannelMemberRole(t, fixture.channel.ID, "agent", fixture.agentA, "member")
@@ -564,7 +562,6 @@ func TestRoleWakeClaimAggregatesUnarchivedManagerChannelsFromRosterSource(t *tes
 	}
 	// Avoid transport-token persistence; this test exercises the claim read
 	// model and does not need a real leased delivery row.
-	runtime.OwnerID = pgtype.UUID{}
 	task := testHandler.agentInboxTaskResponse(
 		context.Background(),
 		runtime,

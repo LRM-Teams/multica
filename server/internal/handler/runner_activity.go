@@ -181,12 +181,12 @@ func (h *Handler) HandleWorkspaceRunnerFrame(ctx context.Context, identity daemo
 
 func (h *Handler) persistComputerReadyMetadata(ctx context.Context, daemonID string, ready protocol.WorkspaceRunnerReadyPayload) error {
 	_, err := h.DB.Exec(ctx, `
-UPDATE computer_identity_owner
+UPDATE computers
    SET device_name = COALESCE(NULLIF($2, ''), device_name),
        os = COALESCE(NULLIF($3, ''), os),
        cli_version = COALESCE(NULLIF($4, ''), cli_version),
        machine_id = COALESCE(NULLIF($5, ''), machine_id)
- WHERE daemon_id = $1`,
+ WHERE id = $1`,
 		strings.TrimSpace(daemonID),
 		strings.TrimSpace(ready.DeviceName),
 		strings.TrimSpace(ready.OS),

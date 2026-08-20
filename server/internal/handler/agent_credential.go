@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -80,11 +81,11 @@ func tokenPrefix(token string) string {
 	return token[:12]
 }
 
-func (h *Handler) authorizeAgentCredentialIssuance(w http.ResponseWriter, r *http.Request) (db.Agent, db.AgentRuntime, db.Member, bool) {
+func (h *Handler) authorizeAgentCredentialIssuance(w http.ResponseWriter, r *http.Request) (db.Agent, db.AgentRuntime, db.Member, pgtype.UUID, bool) {
 	agentID := chi.URLParam(r, "id")
 	agent, ok := h.loadAgentForUser(w, r, agentID)
 	if !ok {
-		return db.Agent{}, db.AgentRuntime{}, db.Member{}, false
+		return db.Agent{}, db.AgentRuntime{}, db.Member{}, pgtype.UUID{}, false
 	}
 
 	workspaceID := uuidToString(agent.WorkspaceID)
@@ -92,7 +93,7 @@ func (h *Handler) authorizeAgentCredentialIssuance(w http.ResponseWriter, r *htt
 	actorType, _ := h.resolveActor(r, userID, workspaceID)
 	if actorType == "agent" {
 		writeError(w, http.StatusForbidden, "agents may not issue agent credentials")
-		return db.Agent{}, db.AgentRuntime{}, db.Member{}, false
+		return db.Agent{}, db.AgentRuntime{}, db.Member{}, pgtype.UUID{}, false
 	}
 
 	runtime, err := h.Queries.GetAgentRuntimeForWorkspace(r.Context(), db.GetAgentRuntimeForWorkspaceParams{
@@ -101,25 +102,52 @@ func (h *Handler) authorizeAgentCredentialIssuance(w http.ResponseWriter, r *htt
 	})
 	if err != nil {
 		writeError(w, http.StatusNotFound, "agent runtime not found")
-		return db.Agent{}, db.AgentRuntime{}, db.Member{}, false
+		return db.Agent{}, db.AgentRuntime{}, db.Member{}, pgtype.UUID{}, false
 	}
 	member, ok := h.requireWorkspaceRole(w, r, workspaceID, "agent not found", "owner", "admin", "member")
 	if !ok {
-		return db.Agent{}, db.AgentRuntime{}, db.Member{}, false
+		return db.Agent{}, db.AgentRuntime{}, db.Member{}, pgtype.UUID{}, false
 	}
-	if !runtime.OwnerID.Valid {
+
+	// LRM-1570: ownership is machine-level. The runtime owner is the active
+	// computer_workspace_bindings owner for this runtime's daemon in this
+	// workspace — never a column on the runtime row.
+	ownerID, err := h.resolveRuntimeOwner(r, runtime)
+	if err != nil {
 		writeError(w, http.StatusConflict, "agent runtime has no owning user")
-		return db.Agent{}, db.AgentRuntime{}, db.Member{}, false
+		return db.Agent{}, db.AgentRuntime{}, db.Member{}, pgtype.UUID{}, false
 	}
-	if !roleAllowed(member.Role, "owner", "admin") && uuidToString(runtime.OwnerID) != userID {
+	if !roleAllowed(member.Role, "owner", "admin") && uuidToString(ownerID) != userID {
 		writeError(w, http.StatusForbidden, "only workspace owner/admin or the runtime owner can issue agent credentials")
-		return db.Agent{}, db.AgentRuntime{}, db.Member{}, false
+		return db.Agent{}, db.AgentRuntime{}, db.Member{}, pgtype.UUID{}, false
 	}
-	return agent, runtime, member, true
+	return agent, runtime, member, ownerID, true
+}
+
+// resolveRuntimeOwner resolves the machine-level owner for a runtime from its
+// active computer_workspace_bindings row (LRM-1570). Returns an error when no
+// active binding exists.
+func (h *Handler) resolveRuntimeOwner(r *http.Request, runtime db.AgentRuntime) (pgtype.UUID, error) {
+	return h.resolveRuntimeOwnerQuery(r.Context(), runtime)
+}
+
+// resolveRuntimeOwnerQuery is the context-level variant of resolveRuntimeOwner.
+func (h *Handler) resolveRuntimeOwnerQuery(ctx context.Context, runtime db.AgentRuntime) (pgtype.UUID, error) {
+	if !runtime.DaemonID.Valid {
+		return pgtype.UUID{}, errors.New("runtime has no daemon id")
+	}
+	owner, err := h.Queries.GetActiveBindingOwnerForRuntime(ctx, db.GetActiveBindingOwnerForRuntimeParams{
+		DaemonID:    runtime.DaemonID.String,
+		WorkspaceID: runtime.WorkspaceID,
+	})
+	if err != nil {
+		return pgtype.UUID{}, err
+	}
+	return owner, nil
 }
 
 func (h *Handler) CreateAgentCredential(w http.ResponseWriter, r *http.Request) {
-	agent, runtime, member, ok := h.authorizeAgentCredentialIssuance(w, r)
+	agent, _, member, runtimeOwnerID, ok := h.authorizeAgentCredentialIssuance(w, r)
 	if !ok {
 		return
 	}
@@ -170,7 +198,7 @@ func (h *Handler) CreateAgentCredential(w http.ResponseWriter, r *http.Request) 
 		TokenPrefix: tokenPrefix(rawToken),
 		AgentID:     agent.ID,
 		WorkspaceID: agent.WorkspaceID,
-		UserID:      runtime.OwnerID,
+		UserID:      runtimeOwnerID,
 		ExpiresAt:   expiresAt,
 	})
 	if err != nil {
@@ -237,7 +265,8 @@ func (h *Handler) EnsureDaemonAgentCredential(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusForbidden, "daemon token is not bound to this runtime")
 		return
 	}
-	if !runtime.OwnerID.Valid {
+	runtimeOwnerID, err := h.resolveRuntimeOwner(r, runtime)
+	if err != nil {
 		writeError(w, http.StatusConflict, "agent runtime has no owning user")
 		return
 	}
@@ -303,7 +332,7 @@ func (h *Handler) EnsureDaemonAgentCredential(w http.ResponseWriter, r *http.Req
 		AgentID:     agent.ID,
 		WorkspaceID: agent.WorkspaceID,
 		RuntimeID:   runtime.ID,
-		OwnerID:     runtime.OwnerID,
+		OwnerID:     runtimeOwnerID,
 	}); err != nil {
 		if isNotFound(err) {
 			writeError(w, http.StatusNotFound, "agent is no longer active on this runtime")
@@ -315,7 +344,7 @@ func (h *Handler) EnsureDaemonAgentCredential(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if _, err := qtx.GetMemberByUserAndWorkspace(r.Context(), db.GetMemberByUserAndWorkspaceParams{
-		UserID:      runtime.OwnerID,
+		UserID:      runtimeOwnerID,
 		WorkspaceID: runtime.WorkspaceID,
 	}); err != nil {
 		if isNotFound(err) {
@@ -334,7 +363,7 @@ func (h *Handler) EnsureDaemonAgentCredential(w http.ResponseWriter, r *http.Req
 				ID:          credentialID,
 				AgentID:     agent.ID,
 				WorkspaceID: agent.WorkspaceID,
-				UserID:      runtime.OwnerID,
+				UserID:      runtimeOwnerID,
 			})
 			switch {
 			case lookupErr != nil && !isNotFound(lookupErr):
@@ -364,7 +393,7 @@ func (h *Handler) EnsureDaemonAgentCredential(w http.ResponseWriter, r *http.Req
 					db.RevokeOtherDaemonAgentCredentialsForSubjectParams{
 						AgentID:     agent.ID,
 						WorkspaceID: agent.WorkspaceID,
-						UserID:      runtime.OwnerID,
+						UserID:      runtimeOwnerID,
 						ID:          cached.ID,
 					},
 				)
@@ -431,7 +460,7 @@ func (h *Handler) EnsureDaemonAgentCredential(w http.ResponseWriter, r *http.Req
 		db.RevokeDaemonAgentCredentialsForSubjectParams{
 			AgentID:     agent.ID,
 			WorkspaceID: agent.WorkspaceID,
-			UserID:      runtime.OwnerID,
+			UserID:      runtimeOwnerID,
 		},
 	)
 	if err != nil {
@@ -446,7 +475,7 @@ func (h *Handler) EnsureDaemonAgentCredential(w http.ResponseWriter, r *http.Req
 		TokenPrefix: tokenPrefix(rawToken),
 		AgentID:     agent.ID,
 		WorkspaceID: agent.WorkspaceID,
-		UserID:      runtime.OwnerID,
+		UserID:      runtimeOwnerID,
 		ExpiresAt:   pgtype.Timestamptz{Time: time.Now().Add(daemonAgentCredentialTTL), Valid: true},
 	})
 	if err != nil {

@@ -243,19 +243,6 @@ func (runner *WorkspaceRunner) serveConnection(connection *DaemonConnection, con
 				}
 			}
 		case protocol.EventAgentDeliver:
-			var transient protocol.AgentTransientDeliverPayload
-			if json.Unmarshal(message.Payload, &transient) == nil && transient.Kind != "" {
-				if transient.Kind != protocol.AgentTransientDeliverKindReminder || !transient.Transient || transient.Reminder.WorkspaceID != workspaceID {
-					if runner.logger != nil {
-						runner.logger.Warn("transient Agent delivery rejected", "workspace_id", workspaceID, "kind", transient.Kind, "reason_code", "invalid_transient_input")
-					}
-					continue
-				}
-				if runner.handleReminderInput != nil {
-					runner.handleReminderInput(connection.ctx, transient.Reminder)
-				}
-				continue
-			}
 			var delivery protocol.AgentDeliverPayload
 			if json.Unmarshal(message.Payload, &delivery) != nil || delivery.AgentID == "" || delivery.Target == "" || delivery.Seq <= 0 || delivery.DeliveryID == "" || delivery.Message.ID == "" || delivery.Message.Target != delivery.Target || delivery.Message.Seq != delivery.Seq {
 				continue

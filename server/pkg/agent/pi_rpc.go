@@ -33,7 +33,7 @@ type PiRPCBackend interface {
 	Backend
 	ResidentMessageInput
 	ResidentMessagePreparation
-	ResidentReminderInputReceiver
+	ResidentIdleInboxNoticeInput
 	ResidentPendingNoticeInput
 	BindRunIdentity(PiRunIdentity) (PiRunBinding, error)
 	PrepareRun(context.Context, PiRunIdentity) (PiRunBinding, error)
@@ -431,8 +431,8 @@ func (b *piRPCBackend) AcceptMessageBatch(ctx context.Context, messages []Reside
 	return b.acceptIdleInputPrompt(ctx, prompt)
 }
 
-func (b *piRPCBackend) AcceptReminderInput(ctx context.Context, input ResidentReminderInput) (ResidentMessageAcceptance, error) {
-	prompt, err := formatResidentReminderInput(input)
+func (b *piRPCBackend) AcceptIdleInboxNotice(ctx context.Context, notice ResidentPendingNotice) (ResidentMessageAcceptance, error) {
+	prompt, err := formatResidentPendingNotice(notice)
 	if err != nil {
 		return ResidentMessageAcceptance{}, err
 	}
@@ -553,8 +553,11 @@ func (b *piRPCBackend) AcceptPendingNotice(ctx context.Context, notice ResidentP
 }
 
 func formatResidentPendingNotice(notice ResidentPendingNotice) (string, error) {
-	if notice.TotalPending <= 0 || len(notice.ChangedTargets) == 0 {
-		return "", errors.New("Pending Notice requires a positive total and changed targets")
+	if notice.TotalPending < 0 || notice.PendingAppItems < 0 || notice.TotalPending == 0 && notice.PendingAppItems == 0 {
+		return "", errors.New("Pending Notice requires pending Messages or App items")
+	}
+	if notice.TotalPending > 0 && len(notice.ChangedTargets) == 0 {
+		return "", errors.New("Pending Message Notice requires changed targets")
 	}
 	count := 0
 	seen := make(map[string]struct{}, len(notice.ChangedTargets))
@@ -575,7 +578,7 @@ func formatResidentPendingNotice(notice ResidentPendingNotice) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("marshal Pending Notice: %w", err)
 	}
-	return "Content-free Message Notice. Concrete bodies remain Pending. Run `multica message check` at a natural breakpoint to inspect them:\n" + string(raw), nil
+	return "Content-free Inbox Notice. Concrete Message and App item bodies remain local. Run `multica inbox check` at a natural breakpoint to inspect them:\n" + string(raw), nil
 }
 
 func (b *piRPCBackend) finishIdleMessageInput(p *piRPCProcess, idleInput *piRPCIdleInput) {

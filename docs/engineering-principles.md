@@ -70,6 +70,13 @@
 - **命名**：新增接口和日志使用 Computer；既有 `daemon_id` 只视为旧存储/auth adapter。拒绝码按格子拆：`rejected_no_process` / `rejected_no_inbox` / `rejected_inbox_runtime_mismatch` / `idle_restore_failed` / `provider_rejected`，禁止收回 `has not been accepted by APM`。
 - **物**：migration `340_agent_message_delivery_ack`；`docs/agent-message-delivery-contract.md` 的 1.0.16 accept table；`requiredDeliveryRouteTests`；`TestAcceptMessageDeliveryForbidsUnmanagedEarlyNack`；`make test-agent-delivery-route`。改 `acceptMessageDelivery` 必跑该 target。
 
+### 0.4 Daemon App Storage 身份路径 — `可执行`
+
+- **口径（2026-08-20）**：本地 App state 的身份层级固定为 `MachineID → WorkspaceID → AppID → owner`。Multica `WorkspaceID` 在此模型中等价于 Raft `serverId`；禁止新增一层 `ServerScope` / `ServerID`，也禁止拿 `DaemonID` 代替。Agent-owned canonical path 为 `<BindingsRoot>/app-storage/v1/<MachineID>/<WorkspaceID>/<AppID>/agents/<AgentID>/state.json`；Computer-owned state 为同 scope 下的 `<AppID>/computer/state.json`。
+- **边界**：路径从 machine-wide `BindingsRoot` 起算；`BindingStateRoot` 已包含 workspace binding scope，不得再用于拼该 canonical path，否则会重复嵌套 `WorkspaceID`。Reminder pending-fire receipts 的 `AppID` 是 `system.reminder`；aggregate Agent App Inbox 的 `AppID` 是 `system.agent-inbox`，两者是独立 state file，禁止混成同一 envelope。
+- **依据**：Raft 1.0.17 published bundle 的 authenticated machine context 使用 `machineId + serverId`，再按 `appId + agentId/computer` 打开 scoped storage；Multica 已拍板以 `WorkspaceID` 承担该 `serverId` 语义。
+- **物**：`builtInAppStorageAgentsRoot` 是唯一 path builder；Reminder receipts 与 Agent App Inbox 均按 Agent 写入 `state.json`；`TestBindingChildrenUseIsolatedDurableExecutionState` 固定 machine/workspace/App 隔离。不读取旧路径，不提供迁移或兼容 fallback。
+
 ## 1. 消息写入管道（BE）
 
 ### 1.1 destination-first 统一 finalizer — `可执行`（已落地）
@@ -113,10 +120,10 @@
 
 ### 1.5.1 产品表面只认 `channel_id`；禁止新增 `chat_session` 硬门 — `可执行`（⑤；owner: @阿泰；LRM-1079 / LRM-1080 / LRM-1081）
 - **产品口径**（Frank #LRM2.0）：业务只记 `channel_id`（钉句再加 `message_id`）。`chat_session_id` 是底层消息流内部号，**不是** Agent/提醒/发言 API 的必填业务概念。Agent 自己的 runtime/agent session（恢复上下文）是第三条线，与本条无关。
-- **冻结**：新代码路径不得再以「缺 `chat_session_id` → 403/拒」作为频道级发言、reminder、inbox drain、ambient gate、completion 归一化的硬条件；已有 `channel_id`（+ 成员表面权限）时必须可纯 channel 运行。#1909 / LRM-1055 已开先例。
-- **P2 已迁**：ordinary mention / DM / reminder / ambient enqueue 为 channel-only（`agent_inbox_event.context` 存 `channel_wake` prompt）；claim 与 complete 不依赖 `chat_message` prompt。可见回复仍只走 task-scoped transport。`channel_agent_session` / `chat_session` **仅**留给 env-dispatch / onboarding / standalone Agent Chat 等遗留桥。
+- **冻结**：新代码路径不得再以「缺 `chat_session_id` → 403/拒」作为频道级发言、inbox drain、ambient gate、completion 归一化的硬条件；已有 `channel_id`（+ 成员表面权限）时必须可纯 channel 运行。#1909 / LRM-1055 已开先例。
+- **P2 已迁**：ordinary mention / DM / ambient enqueue 为 channel-only（`agent_inbox_event.context` 存 `channel_wake` prompt）；claim 与 complete 不依赖 `chat_message` prompt。可见回复仍只走 task-scoped transport。`channel_agent_session` / `chat_session` **仅**留给 env-dispatch / onboarding / standalone Agent Chat 等遗留桥。
 - **P3 废弃（未 DROP）**：表与列标记 deprecated；env-dispatch / onboarding / standalone chat 仍读它们时禁止 hard-drop。完整 DROP 另开单，须先迁完遗留读者。
-- **物**：`chatOutputOriginForTask` channel 回退；`isChannelAgentTask` / ambient gate stats / `channelInitiatorForTask`（LRM-1080）；`enqueueChannelAgentPrompt*` / reminder / ambient channel-only（LRM-1081）；`lrm_1080_channel_session_fallback_test.go`；`lrm_1081_channel_only_wake_test.go`。
+- **物**：`chatOutputOriginForTask` channel 回退；`isChannelAgentTask` / ambient gate stats / `channelInitiatorForTask`（LRM-1080）；`enqueueChannelAgentPrompt*` / ambient channel-only（LRM-1081）；`lrm_1080_channel_session_fallback_test.go`；`lrm_1081_channel_only_wake_test.go`。
 - **已见红**：缺 session 的 ambient/GM 运输 403（#1909）；channel-only wake 被 `isChannelAgentTask` 误判为非频道任务、ambient gate 漏计仅带 `channel_id` 的 priority-1 行。
 
 ### 1.6 Agent-to-agent DM 是受 owner 监督的有界协议 — `可执行`（①持久状态 + ⑤并发/权限回归；owner: @Barry ✅ 已签）
@@ -569,12 +576,6 @@
 - 每个 live connection 自己持有 per-Agent Delivery dispatcher 与 current-socket Message callback：同 Agent FIFO、不同 Agent 可并行；callback 只在 exact connection 仍 current 时可写，replacement 后 stale callback fail closed。Daemon 只按 Workspace 找 current Runner，不再保存 transport/generation parallel maps。
 - `InboxRegistry` 固定一个 Workspace scope；仅在该 scope 内 shared Attachment owner `Resolve` 成功且 Runtime ownership 匹配时创建 coordinator。Delivery、coverage 与 reconnect 都经过 current Runner 方法；网络 reconnect 保留 registry 和进程内 Context Boundary，Runner close 只关闭自己的 Inboxes。旧 machine-local 仅 Agent lookup 必须唯一，否则 fail closed，不能隐式选另一个 Workspace。
 - **物**：`workspace_runner_state.go` 的 narrow constructor/connection ownership 与 current-connection fence；`workspace_runner_message.go`、`workspace_runner_activity.go`、`workspace_runner_attachment.go` 的行为归属；`workspace_runner_delivery.go` 只返回 current Runner、不暴露 coordinator；`workspace_runner_state_test.go` 的 whole-Daemon dependency 与 field reach-through source guard，以及 identity/reconnect/isolation/recovery 回归。
-
-### 4.19.3 Reminder 本地 Inbox 是唯一新版唤醒路径 — `可执行`（②local projection + ③single admission + ⑤offline/replay tests）
-- **口径（2026-08-13，按 Raft 1.0.16 修正）**：定时控制面保留 `reminder.upsert` / `reminder.cancel` / `reminder.snapshot` / `reminder.fire_attempt`，但 `fire_attempt` 只是一份 Server receipt，不是 Agent wake。owner Computer 在 due/catch-up 时先持久化 due receipt，再由 `LocalReminderInbox.AcceptDue` 直接进入 resident-turn admission；Server commit 不得再向声明 `reminder_local_inbox_v1` 的 daemon 推第二份 transient input。
-- `ReminderTimerJob.local_input` 是 owner-authorized、bounded 的本地执行投影；不获得 canonical Message identity、cursor、MessageCoordinator 或 Message Activity。busy/compacting/native acceptance failure 保留同一 due receipt，按 Raft 1.0.17 预算重试本地 wake：最多 8 次、15 分钟 deadline、指数退避 `1s × 2^(attempt-1)` 封顶 60s；耗尽写 `REMINDER_DELIVERY_RETRY_EXHAUSTED`，不再 1s 重挂。同一 `owner + reminder + version` 在 reconnect/snapshot/catch-up 中不得二次注入。一旦 `wakeEnqueued=true`，周期重试立即停止；未 ACK 的 Server receipt 只在当前 fire dispatch 首发及 Computer connection-ready 时重放。`ReminderFireResultPayload.ack` 必须回显原始 `owner + reminder + attempted version`，Computer 只删除该 occurrence 的 receipt；不能从可能已推进到下一周期的 canonical projection 推断 ACK，也不能顺带确认同一 Reminder 的其他 occurrence。
-- `reminder_transient_owner_input_v1` 只用于 rolling-upgrade 兼容：缺 `local_input` 的旧 timer projection 仍以成功排入 `fire_attempt` 作为旧 wake handoff；服务端按 runtime capability 二选一，绝不能对同一新版 daemon 同时走 Local Inbox 和 Runner transient 两条路。
-- **物**：`LocalReminderInbox.AcceptDue`；`ReminderTimerJob.local_input`；`reminderDueReceipt` 的 local-wake/server-ack 双收敛；`TestRecurringReminderFireAdvancesFromCadenceAndSnoozeSlot` 的原始 occurrence ACK；`TestReminderFireResultAcknowledgesOnlyItsAttemptedOccurrence` 的精确删除与相邻 receipt 对照；无 Server transport 仍接受本地 due 的回归；receipt/reconnect 不重复注入回归；local capability 下 notifier 调用为零的集成回归。
 
 ### 4.19.4 Computer host 按 Raft 对账 Binding execution — `可执行`（③ host reconcile + ⑤ crash/degrade/process identity tests）
 - **口径（2026-08-18，Raft 1.0.17）**：Computer 与每个 managed Binding Runner 是独立 OS process。`internal/computer.Host` 每 5s 对账 desired Binding；crash 后 2s backoff；60s 内 3 次 crash 进入 degraded、不再自动拉起。摘掉 Binding 是 graceful stop，不是 unlinked/degraded。

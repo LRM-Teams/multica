@@ -1,24 +1,12 @@
 package handler
 
 import (
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
-
-func TestTruncateReminderOwnerInputExcerptIsRuneSafeAndDaemonBounded(t *testing.T) {
-	input := "  " + strings.Repeat("界", reminderOwnerInputExcerptMaxRunes+1) + "  "
-	got := truncateReminderOwnerInputExcerpt(input)
-	if runes := []rune(got); len(runes) != reminderOwnerInputExcerptMaxRunes+1 || runes[len(runes)-1] != '…' {
-		t.Fatalf("truncated rune shape=%d/%q", len(runes), string(runes[len(runes)-1]))
-	}
-	if len(got) > 4<<10 {
-		t.Fatalf("truncated excerpt bytes=%d exceed daemon bound", len(got))
-	}
-}
 
 func TestParseReminderFireAt(t *testing.T) {
 	now := time.Date(2026, 7, 10, 3, 0, 0, 0, time.UTC)
@@ -93,7 +81,6 @@ func TestEnforceReminderAnchorSurfaceMsgIDBind(t *testing.T) {
 	}
 	nonReminder := db.AgentInboxEvent{Reason: "mention", ChannelID: parseUUID(chA)}
 
-	// Main anchor: channel main OK; other channel / thread DENY.
 	if err := enforceReminderAnchorSurface(mainTask, chA, chatOutputTargetChannel, ""); err != nil {
 		t.Fatalf("main→main allow: %v", err)
 	}
@@ -104,7 +91,6 @@ func TestEnforceReminderAnchorSurfaceMsgIDBind(t *testing.T) {
 		t.Fatal("main→thread must DENY")
 	}
 
-	// Thread anchor: only that thread OK.
 	if err := enforceReminderAnchorSurface(threadTask, chA, chatOutputTargetThread, root); err != nil {
 		t.Fatalf("thread→same thread allow: %v", err)
 	}
@@ -115,7 +101,6 @@ func TestEnforceReminderAnchorSurfaceMsgIDBind(t *testing.T) {
 		t.Fatal("thread→other thread must DENY")
 	}
 
-	// Non-reminder: no gate.
 	if err := enforceReminderAnchorSurface(nonReminder, chB, chatOutputTargetChannel, ""); err != nil {
 		t.Fatalf("non-reminder must pass: %v", err)
 	}

@@ -556,7 +556,7 @@ func negotiatedDaemonCapabilities(capabilities []string) []string {
 	negotiated := make([]string, 0, 2)
 	for _, capability := range capabilities {
 		switch capability {
-		case protocol.DaemonCapabilityReminderVersionedCache, protocol.DaemonCapabilityReminderTransientInput, protocol.DaemonCapabilityMachineUpgrade:
+		case protocol.DaemonCapabilityReminderVersionedCache, protocol.DaemonCapabilityReminderFireRequest, protocol.DaemonCapabilityMachineUpgrade:
 			negotiated = append(negotiated, capability)
 		}
 	}

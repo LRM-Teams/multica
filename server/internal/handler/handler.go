@@ -137,14 +137,13 @@ type Handler struct {
 	// session for the current socket. It is not durable.
 	runnerObservations *runnerObservationStore
 	// agentRestarts is one in-flight Agent Restart on this process.
-	agentRestarts              *agentRestartStore
-	ReminderNotifier           daemonws.ReminderNotifier
-	ReminderOwnerInputNotifier daemonws.ReminderOwnerInputNotifier
-	AgentDeliveryNotifier      daemonws.AgentDeliveryNotifier
-	AgentRestartNotifier       daemonws.AgentRestartNotifier
-	SandboxHub                 *sandboxws.Hub
-	Bus                        *events.Bus
-	TaskService                *service.TaskService
+	agentRestarts         *agentRestartStore
+	ReminderNotifier      daemonws.ReminderNotifier
+	AgentDeliveryNotifier daemonws.AgentDeliveryNotifier
+	AgentRestartNotifier  daemonws.AgentRestartNotifier
+	SandboxHub            *sandboxws.Hub
+	Bus                   *events.Bus
+	TaskService           *service.TaskService
 	// GraphMemoryRecall backs the daemon's server-authoritative recall
 	// endpoint (spec §1/§3/§14). Nil-safe: the endpoint answers 503 when
 	// unwired.

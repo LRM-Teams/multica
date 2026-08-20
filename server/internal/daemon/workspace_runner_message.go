@@ -24,6 +24,14 @@ func (runner *WorkspaceRunner) messageRuntimeID(agentID string) string {
 	return runtimeID
 }
 
+func (runner *WorkspaceRunner) agentInboxPendingSnapshot(agentID string) []protocol.AgentMessageProjection {
+	coordinator, _, ok := runner.messageCoordinator(agentID)
+	if !ok {
+		return nil
+	}
+	return coordinator.PendingSnapshot()
+}
+
 func (runner *WorkspaceRunner) ensureMessageInbox(agentID, expectedRuntimeID string) (bool, error) {
 	if runner == nil || runner.inboxes == nil || runner.processes == nil {
 		return false, errors.New("Workspace Runner Inbox registry is unavailable")

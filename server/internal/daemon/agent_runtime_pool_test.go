@@ -1375,7 +1375,7 @@ func (b *piRPCRaceBackend) PrepareMessageInput(_ context.Context, _ func(agent.M
 	return nil
 }
 
-func (b *piRPCRaceBackend) AcceptReminderInput(_ context.Context, _ agent.ResidentReminderInput) (agent.ResidentMessageAcceptance, error) {
+func (b *piRPCRaceBackend) AcceptIdleInboxNotice(_ context.Context, _ agent.ResidentPendingNotice) (agent.ResidentMessageAcceptance, error) {
 	return agent.ResidentMessageAcceptance{}, nil
 }
 

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -22,9 +23,10 @@ var reminderSnoozeCmd = &cobra.Command{Use: "snooze", Short: "Snooze a reminder"
 var reminderUpdateCmd = &cobra.Command{Use: "update", Short: "Update a scheduled reminder", RunE: runReminderUpdate}
 var reminderCancelCmd = &cobra.Command{Use: "cancel", Short: "Cancel a scheduled reminder", RunE: runReminderCancel}
 var reminderLogCmd = &cobra.Command{Use: "log", Short: "Show a reminder's immutable lifecycle log", RunE: runReminderLog}
+var reminderAckCmd = &cobra.Command{Use: "ack", Short: "Acknowledge one exact fired reminder Inbox item", Args: cobra.NoArgs, RunE: runReminderAck}
 
 func init() {
-	reminderCmd.AddCommand(reminderScheduleCmd, reminderListCmd, reminderSnoozeCmd, reminderUpdateCmd, reminderCancelCmd, reminderLogCmd)
+	reminderCmd.AddCommand(reminderScheduleCmd, reminderListCmd, reminderSnoozeCmd, reminderUpdateCmd, reminderCancelCmd, reminderLogCmd, reminderAckCmd)
 
 	reminderScheduleCmd.Flags().String("title", "", "Reminder title")
 	reminderScheduleCmd.Flags().Int64("delay-seconds", 0, "Delay before waking (60 seconds to 90 days)")
@@ -49,6 +51,97 @@ func init() {
 	reminderUpdateCmd.Flags().Int64("delay-seconds", 0, "New delay before waking")
 	reminderUpdateCmd.Flags().String("fire-at", "", "New absolute RFC3339 wake time")
 	reminderUpdateCmd.Flags().String("cadence", "", "New recurring rule: every:Nm|Nh|Nd, daily@HH:MM, or weekly:days@HH:MM")
+	reminderAckCmd.Flags().String("id", "", "Reminder id (full UUID, short prefix, or Inbox item prefix)")
+	reminderAckCmd.Flags().String("revision", "", "Exact positive Reminder source revision")
+}
+
+func runReminderAck(cmd *cobra.Command, _ []string) error {
+	if !inAgentExecutionContext() {
+		return errors.New("Reminder Inbox acknowledgements are only available in managed runners")
+	}
+	id := strings.TrimSpace(flagString(cmd, "id"))
+	revision := strings.TrimSpace(flagString(cmd, "revision"))
+	if id == "" {
+		return errors.New("--id is required")
+	}
+	if !positiveIntegerString(revision) {
+		return errors.New("--revision must be a positive integer")
+	}
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := cli.APIContext(cmd.Context())
+	defer cancel()
+	var snapshot inboxCheckResponse
+	if err := client.GetJSON(ctx, "/internal/agent-api/inbox", &snapshot); err != nil {
+		return fmt.Errorf("check Inbox before Reminder ACK: %w", err)
+	}
+	active := matchingReminderInboxItems(snapshot.Items, id)
+	acknowledged := matchingReminderAcknowledgements(snapshot.AcknowledgedAppSources, id)
+	distinct := make(map[string]struct{})
+	for _, item := range active {
+		distinct[item.SourceRef.ID] = struct{}{}
+	}
+	for _, source := range acknowledged {
+		distinct[source.SourceRef.ID] = struct{}{}
+	}
+	if len(distinct) > 1 {
+		return fmt.Errorf("Reminder prefix %s is ambiguous across active or acknowledged Reminder Inbox items", id)
+	}
+	for _, item := range active {
+		if item.SourceRef.Revision != revision {
+			continue
+		}
+		var response inboxAckResponse
+		if err := client.PostJSON(ctx, "/internal/agent-api/inbox/ack", map[string]string{"itemId": item.ItemID}, &response); err != nil {
+			return fmt.Errorf("acknowledge Reminder Inbox item: %w", err)
+		}
+		_, err := fmt.Fprintf(cmd.OutOrStdout(), "Reminder %s revision %s fired item acknowledged.\n", item.SourceRef.ID, revision)
+		return err
+	}
+	for _, source := range acknowledged {
+		if source.SourceRef.Revision == revision {
+			_, err := fmt.Fprintf(cmd.OutOrStdout(), "Reminder %s revision %s was already acknowledged for this fired item.\n", source.SourceRef.ID, revision)
+			return err
+		}
+	}
+	if len(active) > 0 {
+		return fmt.Errorf("no active Reminder Inbox item matches %s revision %s", id, revision)
+	}
+	return fmt.Errorf("no active or acknowledged Reminder Inbox item matches %s revision %s", id, revision)
+}
+
+func positiveIntegerString(value string) bool {
+	if value == "" || value[0] == '0' {
+		return false
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func matchingReminderInboxItems(items []inboxTypedItem, query string) []inboxTypedItem {
+	result := make([]inboxTypedItem, 0)
+	for _, item := range items {
+		if item.Source == "app" && item.AppID == "system.reminder" && item.NotificationClass == "due" && item.SourceRef.Kind == "reminder" && (strings.HasPrefix(item.SourceRef.ID, query) || strings.HasPrefix(item.ItemID, query) || query == "reminder:"+item.SourceRef.ID) {
+			result = append(result, item)
+		}
+	}
+	return result
+}
+
+func matchingReminderAcknowledgements(items []inboxAcknowledgedSource, query string) []inboxAcknowledgedSource {
+	result := make([]inboxAcknowledgedSource, 0)
+	for _, item := range items {
+		if item.AppID == "system.reminder" && item.NotificationClass == "due" && item.SourceRef.Kind == "reminder" && (strings.HasPrefix(item.SourceRef.ID, query) || strings.HasPrefix(item.ItemID, query) || query == "reminder:"+item.SourceRef.ID) {
+			result = append(result, item)
+		}
+	}
+	return result
 }
 
 func reminderScheduleBody(cmd *cobra.Command, includeTitle bool) (map[string]any, error) {

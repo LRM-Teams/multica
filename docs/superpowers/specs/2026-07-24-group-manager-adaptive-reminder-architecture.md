@@ -4,10 +4,8 @@ Status: implementation contract for tasks #680, #698, and #703
 Date: 2026-07-24
 Related designs:
 
-- `2026-07-08-agent-reminders-design.md`
 - `2026-07-14-beckham-group-manager-design.md`
 - `2026-07-14-wendy-work-graph-supervisor-design.md`
-- `2026-07-22-raft-reminder-parity.md`
 
 ## 1. Decision
 

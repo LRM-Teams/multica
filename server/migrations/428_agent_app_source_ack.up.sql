@@ -1,3 +1,4 @@
+-- Persist exact, idempotent acknowledgements for App-owned inbox sources.
 CREATE TABLE agent_app_source_ack (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     workspace_id UUID NOT NULL REFERENCES workspace(id) ON DELETE CASCADE,

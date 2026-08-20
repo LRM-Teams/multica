@@ -210,13 +210,23 @@ func readRunnerPID(path string) (int, error) {
 	return pid, nil
 }
 
-type recoveredRunner struct {
-	WorkspaceID      string
-	DaemonInstanceID string
-	PID              int
+func readRunnerConnected(path string) (persistedRunnerConnected, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return persistedRunnerConnected{}, err
+	}
+	var connected persistedRunnerConnected
+	if err := json.Unmarshal(data, &connected); err != nil {
+		return persistedRunnerConnected{}, fmt.Errorf("parse runner connected evidence: %w", err)
+	}
+	return connected, nil
 }
 
-func recoverRunnerStates(root string, logger *slog.Logger) ([]recoveredRunner, error) {
+// listRunnerStates reads every persisted Binding Runner state file under
+// root without mutating anything. It is used by read-only evidence
+// gathering (doctor); recoverRunnerStates is the mutating counterpart used
+// at Host startup. Corrupt or unreadable entries are silently skipped.
+func listRunnerStates(root string) ([]persistedRunnerState, error) {
 	root = strings.TrimSpace(root)
 	if root == "" {
 		return nil, nil
@@ -229,7 +239,55 @@ func recoverRunnerStates(root string, logger *slog.Logger) ([]recoveredRunner, e
 	if err != nil {
 		return nil, err
 	}
-	var adopted []recoveredRunner
+	var states []persistedRunnerState
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		state, err := readRunnerState(filepath.Join(dir, entry.Name(), "runner.state.json"))
+		if err != nil {
+			continue
+		}
+		states = append(states, state)
+	}
+	return states, nil
+}
+
+// reclaimableRunner is one Workspace slot whose previous-generation Binding
+// Runner process is still alive on this machine. A live process here is
+// never adopted; the current Host drains and terminates it, then spawns its
+// own child through the normal CanSpawn/Reconcile path.
+type reclaimableRunner struct {
+	WorkspaceID      string
+	DaemonInstanceID string
+	PID              int
+	// RunnerEndpoint is the runner's local control unix socket, read from
+	// runner.connected when it still matches the live pidfile owner. It is
+	// empty when the runner never reached Ready or the evidence is stale, in
+	// which case the caller terminates by signal without asking it to drain.
+	RunnerEndpoint string
+}
+
+// recoverRunnerStates reads every persisted Binding Runner state directory
+// and reports which ones still have a live OS process to reclaim. It never
+// adopts a live process into this Host's own bookkeeping: a live runner
+// found here is handed back to the caller so it can be drained and killed
+// before this Host spawns a replacement. Dead entries are cleaned up
+// in place.
+func recoverRunnerStates(root string, logger *slog.Logger) ([]reclaimableRunner, error) {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return nil, nil
+	}
+	dir := filepath.Join(root, "run", "runners")
+	entries, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var reclaimable []reclaimableRunner
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -255,19 +313,81 @@ func recoverRunnerStates(root string, logger *slog.Logger) ([]recoveredRunner, e
 			alive, known = processAlive(pid)
 		}
 		if known && alive {
-			// Adopt the live pidfile owner. Raft 1.0.17 does the same and
-			// does not compare a Host-minted process-start ticket.
-			adopted = append(adopted, recoveredRunner{
-				WorkspaceID: state.WorkspaceID, DaemonInstanceID: state.DaemonInstanceID, PID: pid,
+			endpoint := ""
+			if connected, err := readRunnerConnected(filepath.Join(filepath.Dir(path), "runner.connected")); err == nil && connected.PID == pid {
+				endpoint = connected.RunnerEndpoint
+			}
+			if logger != nil {
+				logger.Info("found reclaimable Binding Runner left by a previous Host generation", "workspace_id", state.WorkspaceID, "pid", pid, "has_endpoint", endpoint != "")
+			}
+			reclaimable = append(reclaimable, reclaimableRunner{
+				WorkspaceID: state.WorkspaceID, DaemonInstanceID: state.DaemonInstanceID, PID: pid, RunnerEndpoint: endpoint,
 			})
 			continue
 		}
 		for _, current := range []string{filepath.Join(filepath.Dir(path), "runner.connected"), filepath.Join(filepath.Dir(path), "runner.pid"), path} {
 			if err := os.Remove(current); err != nil && !os.IsNotExist(err) {
-				return adopted, err
+				return reclaimable, err
 			}
 		}
 		_ = os.Remove(filepath.Dir(path))
 	}
-	return adopted, nil
+	return reclaimable, nil
+}
+
+// terminateProcess makes a bounded, best-effort attempt to stop pid: SIGTERM
+// first, then poll for exit every pollInterval up to grace; if it is still
+// alive, SIGKILL, then poll for exit the same way one more time (SIGKILL
+// delivery plus the kernel reaping the process is not instantaneous, so a
+// check made immediately after Kill() returning nil can still observe the
+// process as alive). It returns nil once the process is confirmed gone (or
+// was never running), and an error only if it could not be confirmed dead
+// within the bounded wait.
+func terminateProcess(pid int, pollInterval, grace time.Duration, sleep func(time.Duration)) error {
+	if pid < 1 {
+		return nil
+	}
+	if sleep == nil {
+		sleep = time.Sleep
+	}
+	if pollInterval <= 0 {
+		pollInterval = 200 * time.Millisecond
+	}
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return err
+	}
+	if err := stopBindingProcess(process); err != nil {
+		if alive, known := processAlive(pid); known && !alive {
+			return nil
+		}
+	}
+	if waitForProcessExit(pid, pollInterval, grace, sleep) {
+		return nil
+	}
+	if err := process.Kill(); err != nil {
+		if alive, known := processAlive(pid); known && !alive {
+			return nil
+		}
+		return err
+	}
+	if waitForProcessExit(pid, pollInterval, grace, sleep) {
+		return nil
+	}
+	return fmt.Errorf("process %d did not exit after SIGKILL", pid)
+}
+
+// waitForProcessExit polls processAlive every pollInterval until pid is
+// confirmed gone or timeout elapses.
+func waitForProcessExit(pid int, pollInterval, timeout time.Duration, sleep func(time.Duration)) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		if alive, known := processAlive(pid); known && !alive {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		sleep(pollInterval)
+	}
 }

@@ -270,7 +270,7 @@ func TestCodexResidentSteersContentFreePendingNoticeIntoBusyTurn(t *testing.T) {
 		t.Fatalf("read native turn/steer request: %v", err)
 	}
 	request := string(raw)
-	for _, want := range []string{`"method":"turn/steer"`, `"expectedTurnId":"turn-busy"`, "Content-free Message Notice", `channel:general`} {
+	for _, want := range []string{`"method":"turn/steer"`, `"expectedTurnId":"turn-busy"`, "Content-free Inbox Notice", `channel:general`} {
 		if !strings.Contains(request, want) {
 			t.Fatalf("native turn/steer request omitted %q: %s", want, request)
 		}

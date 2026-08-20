@@ -116,7 +116,7 @@ func TestClaudeStreamJSONResidentGatesNoticeAndReusesProcessForIdleHandoff(t *te
 	if len(lines) != 3 {
 		t.Fatalf("Claude input count = %d, want one initial, one Notice, one idle handoff\n%s", len(lines), raw)
 	}
-	if !strings.Contains(lines[1], "Content-free Message Notice") || strings.Contains(lines[1], "idle concrete body") {
+	if !strings.Contains(lines[1], "Content-free Inbox Notice") || strings.Contains(lines[1], "idle concrete body") {
 		t.Fatalf("Claude Notice input is not content-free: %s", lines[1])
 	}
 	if !strings.Contains(lines[2], "idle concrete body") {

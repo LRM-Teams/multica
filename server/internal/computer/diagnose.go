@@ -34,7 +34,23 @@ type Diagnosis struct {
 	SelectedWorkspaceID      string   `json:"selected_workspace_id,omitempty"`
 	SelectedWorkspaceSlug    string   `json:"selected_workspace_slug,omitempty"`
 	SelectedConnectionActive bool     `json:"selected_connection_active,omitempty"`
-	FixApplied               []string `json:"fix_applied,omitempty"`
+	// Runners is one entry per persisted Binding Runner slot on this machine.
+	// Owned is true only when the currently running resident (identified by
+	// its own live pid, from the health probe) is the one that persisted
+	// this pid as its child. A pid that is Alive but not Owned is a Binding
+	// Runner nothing on this machine currently controls.
+	Runners     []RunnerOwnership `json:"runners,omitempty"`
+	UnownedLive []RunnerOwnership `json:"unownedLive,omitempty"`
+	FixApplied  []string          `json:"fix_applied,omitempty"`
+}
+
+// RunnerOwnership is one on-disk Binding Runner slot's live-pid evidence
+// against the current resident's ownership record.
+type RunnerOwnership struct {
+	WorkspaceID string `json:"workspaceId"`
+	PID         int    `json:"pid"`
+	Alive       bool   `json:"alive"`
+	Owned       bool   `json:"owned"`
 }
 
 // Diagnose gathers local Computer evidence without mutating any state.
@@ -93,7 +109,37 @@ func (l *Lifecycle) Diagnose() Diagnosis {
 	if err == nil {
 		d.WorkspaceConnections = len(bindings)
 	}
+
+	residentPID, residentPIDKnown := healthPID(health)
+	if states, err := listRunnerStates(RootDir("")); err == nil {
+		for _, state := range states {
+			alive, known := processAlive(state.RunnerPID)
+			alive = known && alive
+			owned := alive && d.Resident == "running" && residentPIDKnown && residentPID == state.OwnerPID
+			ownership := RunnerOwnership{WorkspaceID: state.WorkspaceID, PID: state.RunnerPID, Alive: alive, Owned: owned}
+			d.Runners = append(d.Runners, ownership)
+			if alive && !owned {
+				d.UnownedLive = append(d.UnownedLive, ownership)
+			}
+		}
+	}
 	return d
+}
+
+// healthPID extracts the resident's own pid from a health probe map. The
+// value is a float64 after a real JSON round trip and may be an int in
+// tests that build the map directly.
+func healthPID(health map[string]any) (int, bool) {
+	switch value := health["pid"].(type) {
+	case float64:
+		return int(value), true
+	case int:
+		return value, true
+	case int64:
+		return int(value), true
+	default:
+		return 0, false
+	}
 }
 
 // Fix applies only provably safe stale-state cleanup and reports every

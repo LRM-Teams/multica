@@ -7,13 +7,18 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-const reminderCacheStateFile = "reminder_cache.json"
+const (
+	reminderCacheStateFile    = "state.json"
+	reminderCacheStateVersion = 6
+)
 
 const (
 	defaultReminderFireRetryDelay       = time.Second
@@ -24,15 +29,15 @@ const (
 	reminderDeliveryRetryExhaustedCode = "REMINDER_DELIVERY_RETRY_EXHAUSTED"
 )
 
-// reminderDueIdentity is the Raft 1.0.16 due key: owner + reminder + version.
+// reminderDueIdentity is the durable due key: owner + reminder + version.
 type reminderDueIdentity struct {
 	OwnerAgentID string `json:"ownerAgentId"`
 	ReminderID   string `json:"reminderId"`
 	Version      int64  `json:"version"`
 }
 
-// reminderRetryExhaustion is Raft 1.0.17's REMINDER_DELIVERY_RETRY_EXHAUSTED
-// terminal. A due receipt keeps this fact until wake+ack converge or the
+// reminderRetryExhaustion is the REMINDER_DELIVERY_RETRY_EXHAUSTED terminal.
+// A due receipt keeps this fact until wake+ack converge or the
 // occurrence is replaced; it must not 1s-retry after the budget is spent.
 type reminderRetryExhaustion struct {
 	Code         string `json:"code"`
@@ -45,15 +50,18 @@ type reminderRetryExhaustion struct {
 	ExhaustedAt  string `json:"exhaustedAt"`
 }
 
-// reminderDueReceipt is the persisted local due fact. It stays until both the
-// owner wake is enqueued and the server has acknowledged the same identity.
+// reminderDueReceipt is the persisted local due fact. It stays until the
+// server authorized the fire, the app-item wake was enqueued, and the exact
+// app item was consumed.
 type reminderDueReceipt struct {
 	RuntimeID          string                    `json:"runtimeId,omitempty"`
 	Job                protocol.ReminderTimerJob `json:"job"`
+	RequestID          string                    `json:"requestId"`
 	FiredAtClient      string                    `json:"firedAtClient"`
 	Catchup            bool                      `json:"catchup"`
 	WakeEnqueued       bool                      `json:"wakeEnqueued"`
 	ServerAcked        bool                      `json:"serverAcked"`
+	ServerFired        bool                      `json:"serverFired"`
 	ItemConsumed       bool                      `json:"itemConsumed"`
 	RetryAttempt       int                       `json:"retryAttempt"`
 	RetryNextAttemptAt string                    `json:"retryNextAttemptAt,omitempty"`
@@ -90,8 +98,9 @@ type reminderVersionFence struct {
 }
 
 type reminderCacheState struct {
+	Version  int                             `json:"version"`
 	Fences   map[string]reminderVersionFence `json:"fences"`
-	Receipts map[string][]reminderDueReceipt `json:"receipts,omitempty"`
+	Receipts map[string][]reminderDueReceipt `json:"receipts"`
 }
 
 // reminderCache is the Computer-local Raft-shaped timer cache. A reconnect
@@ -116,7 +125,8 @@ type reminderCache struct {
 	fireRetryTimers      map[string]reminderTimer
 	dispatching          map[string]bool
 	logger               *slog.Logger
-	path                 string
+	storageRoot          string
+	storageAgents        map[string]struct{}
 	loadErr              error
 	writeState           func(string, []byte) error
 }
@@ -135,6 +145,7 @@ func newReminderCache(clock reminderClock, logger *slog.Logger, onFire func(prot
 		receipts:             make(map[string][]reminderDueReceipt),
 		fireRetryTimers:      make(map[string]reminderTimer),
 		dispatching:          make(map[string]bool),
+		storageAgents:        make(map[string]struct{}),
 		fireRetryDelay:       defaultReminderFireRetryDelay,
 		fireRetryMaxDelay:    defaultReminderFireRetryMaxDelay,
 		fireRetryMaxAttempts: defaultReminderFireRetryMaxAttempts,
@@ -152,56 +163,51 @@ func (c *reminderCache) setPersistence(root string) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.path = filepath.Join(root, ".daemon", reminderCacheStateFile)
-	raw, err := osReadFile(c.path)
+	c.storageRoot = root
+	entries, err := os.ReadDir(root)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			quarantined, globErr := filepath.Glob(c.path + ".corrupt-*")
-			if globErr != nil {
-				c.loadErr = fmt.Errorf("find quarantined reminder cache state: %w", globErr)
-			} else if len(quarantined) > 0 {
-				c.initializeEmptyStateLocked(fmt.Errorf("primary reminder cache state missing after quarantine"))
+			return
+		}
+		c.loadErr = fmt.Errorf("read Reminder App storage: %w", err)
+		return
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || !safeAppStorageSegment(entry.Name()) {
+			continue
+		}
+		agentID := entry.Name()
+		path := filepath.Join(root, agentID, reminderCacheStateFile)
+		raw, readErr := osReadFile(path)
+		if errors.Is(readErr, os.ErrNotExist) {
+			continue
+		}
+		if readErr != nil {
+			c.loadErr = fmt.Errorf("read Reminder App state for Agent %s: %w", agentID, readErr)
+			return
+		}
+		var state reminderCacheState
+		if decodeErr := json.Unmarshal(raw, &state); decodeErr != nil || state.Version != reminderCacheStateVersion || state.Fences == nil || state.Receipts == nil {
+			c.loadErr = fmt.Errorf("invalid Reminder App state for Agent %s", agentID)
+			return
+		}
+		for reminderID, fence := range state.Fences {
+			if fence.OwnerAgentID != agentID || fence.Version <= 0 {
+				c.loadErr = fmt.Errorf("Reminder App fence owner mismatch for Agent %s", agentID)
+				return
 			}
-		} else {
-			c.recoverCorruptStateLocked(fmt.Errorf("load reminder cache state: %w", err))
+			c.fences[reminderID] = fence
 		}
-		return
-	}
-	var state reminderCacheState
-	if err := json.Unmarshal(raw, &state); err != nil {
-		c.recoverCorruptStateLocked(fmt.Errorf("decode reminder cache state: %w", err))
-		return
-	}
-	for id, fence := range state.Fences {
-		if id != "" && fence.Version > 0 {
-			c.fences[id] = fence
+		for reminderID, receipts := range state.Receipts {
+			for _, receipt := range receipts {
+				if receipt.Job.OwnerAgentID != agentID || receipt.Job.ReminderID != reminderID {
+					c.loadErr = fmt.Errorf("Reminder App state owner mismatch for Agent %s", agentID)
+					return
+				}
+			}
+			c.receipts[reminderID] = append(c.receipts[reminderID], receipts...)
 		}
-	}
-	if state.Receipts != nil {
-		c.receipts = cloneReminderReceipts(state.Receipts)
-	}
-}
-
-func (c *reminderCache) recoverCorruptStateLocked(cause error) {
-	quarantinePath := fmt.Sprintf("%s.corrupt-%d", c.path, time.Now().UTC().UnixNano())
-	if err := os.Rename(c.path, quarantinePath); err != nil {
-		c.loadErr = fmt.Errorf("quarantine corrupt reminder cache state: %w", err)
-		return
-	}
-	c.initializeEmptyStateLocked(cause)
-}
-
-func (c *reminderCache) initializeEmptyStateLocked(cause error) {
-	clear(c.fences)
-	clear(c.attemptedFires)
-	clear(c.receipts)
-	c.loadErr = nil
-	if err := c.persistLocked(); err != nil {
-		c.loadErr = fmt.Errorf("persist empty reminder cache state: %w", err)
-		return
-	}
-	if c.logger != nil {
-		c.logger.Warn("reminder cache state reset; reconnect snapshot required", "path", c.path, "error", cause)
+		c.storageAgents[agentID] = struct{}{}
 	}
 }
 
@@ -215,18 +221,46 @@ func (c *reminderCache) persistLocked() error {
 	if c.loadErr != nil {
 		return c.loadErr
 	}
-	if c.path == "" {
+	if c.storageRoot == "" {
 		return nil
 	}
-	state := reminderCacheState{Fences: c.fences, Receipts: c.receipts}
-	raw, err := json.Marshal(state)
-	if err != nil {
-		return err
+	states := make(map[string]*reminderCacheState)
+	stateForAgent := func(agentID string) *reminderCacheState {
+		state := states[agentID]
+		if state == nil {
+			state = &reminderCacheState{
+				Version: reminderCacheStateVersion,
+				Fences:  make(map[string]reminderVersionFence), Receipts: make(map[string][]reminderDueReceipt),
+			}
+			states[agentID] = state
+		}
+		return state
+	}
+	for reminderID, fence := range c.fences {
+		stateForAgent(fence.OwnerAgentID).Fences[reminderID] = fence
+		c.storageAgents[fence.OwnerAgentID] = struct{}{}
+	}
+	for reminderID, receipts := range c.receipts {
+		for _, receipt := range receipts {
+			agentID := receipt.Job.OwnerAgentID
+			state := stateForAgent(agentID)
+			state.Receipts[reminderID] = append(state.Receipts[reminderID], receipt)
+			c.storageAgents[agentID] = struct{}{}
+		}
 	}
 	if c.writeState == nil {
 		return errors.New("reminder cache state writer is not configured")
 	}
-	return c.writeState(c.path, raw)
+	for agentID := range c.storageAgents {
+		raw, err := json.Marshal(stateForAgent(agentID))
+		if err != nil {
+			return err
+		}
+		if err := c.writeState(filepath.Join(c.storageRoot, agentID, reminderCacheStateFile), append(raw, '\n')); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (c *reminderCache) stateError() error {
@@ -489,7 +523,7 @@ func (c *reminderCache) ackFireReceiptLocked(identity reminderDueIdentity) bool 
 		return false
 	}
 	receipts[index].ServerAcked = true
-	if receipts[index].WakeEnqueued {
+	if reminderReceiptComplete(receipts[index]) {
 		c.clearFireRetryLocked(identity)
 		receipts = append(receipts[:index], receipts[index+1:]...)
 		if len(receipts) == 0 {
@@ -502,6 +536,174 @@ func (c *reminderCache) ackFireReceiptLocked(identity reminderDueIdentity) bool 
 	}
 	_ = c.persistLocked()
 	return true
+}
+
+func (c *reminderCache) acceptFireRequest(identity reminderDueIdentity, requestID string, fired, catchup bool) bool {
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	receipts := c.receipts[identity.ReminderID]
+	index := findReceiptIndex(receipts, identity)
+	if index < 0 || receipts[index].RequestID != requestID {
+		c.mu.Unlock()
+		return false
+	}
+	receipts[index].ServerAcked = true
+	receipts[index].ServerFired = fired
+	receipts[index].Catchup = catchup
+	c.clearFireRetryLocked(identity)
+	if !fired {
+		receipts = append(receipts[:index], receipts[index+1:]...)
+		if len(receipts) == 0 {
+			delete(c.receipts, identity.ReminderID)
+		} else {
+			c.receipts[identity.ReminderID] = receipts
+		}
+		_ = c.persistLocked()
+		c.mu.Unlock()
+		return true
+	}
+	c.receipts[identity.ReminderID] = receipts
+	_ = c.persistLocked()
+	receipt := receipts[index]
+	c.mu.Unlock()
+	c.dispatchFire(receipt)
+	return true
+}
+
+func (c *reminderCache) discardFireRequest(identity reminderDueIdentity, requestID string) bool {
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	receipts := c.receipts[identity.ReminderID]
+	index := findReceiptIndex(receipts, identity)
+	if index < 0 || receipts[index].RequestID != requestID {
+		return false
+	}
+	c.clearFireRetryLocked(identity)
+	receipts = append(receipts[:index], receipts[index+1:]...)
+	if len(receipts) == 0 {
+		delete(c.receipts, identity.ReminderID)
+	} else {
+		c.receipts[identity.ReminderID] = receipts
+	}
+	_ = c.persistLocked()
+	return true
+}
+
+func (c *reminderCache) rearmFireRequest(identity reminderDueIdentity, requestID string, retryAfter time.Duration) bool {
+	if c == nil || retryAfter <= 0 {
+		return false
+	}
+	c.mu.Lock()
+	receipts := c.receipts[identity.ReminderID]
+	index := findReceiptIndex(receipts, identity)
+	if index < 0 || receipts[index].RequestID != requestID {
+		c.mu.Unlock()
+		return false
+	}
+	receipt := receipts[index]
+	c.clearFireRetryLocked(identity)
+	receipts = append(receipts[:index], receipts[index+1:]...)
+	if len(receipts) == 0 {
+		delete(c.receipts, identity.ReminderID)
+	} else {
+		c.receipts[identity.ReminderID] = receipts
+	}
+	if fence := c.fences[identity.ReminderID]; fence.OwnerAgentID == identity.OwnerAgentID && fence.Version == identity.Version && !fence.Terminal {
+		entry := reminderCacheEntry{runtimeID: receipt.RuntimeID, job: receipt.Job}
+		entry.timer = c.clock.AfterFunc(retryAfter, func() { c.attemptFireOnce(receipt.Job) })
+		c.entries[identity.ReminderID] = entry
+		delete(c.attemptedFires, identity.ReminderID)
+	}
+	_ = c.persistLocked()
+	c.mu.Unlock()
+	return true
+}
+
+func (c *reminderCache) consumeFireReceipt(identity reminderDueIdentity) bool {
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	receipts := c.receipts[identity.ReminderID]
+	index := findReceiptIndex(receipts, identity)
+	if index < 0 {
+		fence, ok := c.fences[identity.ReminderID]
+		return ok && fence.OwnerAgentID == identity.OwnerAgentID && fence.Version == identity.Version
+	}
+	previous := append([]reminderDueReceipt(nil), receipts...)
+	next := append([]reminderDueReceipt(nil), receipts...)
+	next[index].ItemConsumed = true
+	complete := reminderReceiptComplete(next[index])
+	if complete {
+		next = append(next[:index], next[index+1:]...)
+		if len(next) == 0 {
+			delete(c.receipts, identity.ReminderID)
+		} else {
+			c.receipts[identity.ReminderID] = next
+		}
+	} else {
+		c.receipts[identity.ReminderID] = next
+	}
+	if err := c.persistLocked(); err != nil {
+		c.receipts[identity.ReminderID] = previous
+		return false
+	}
+	if complete {
+		c.clearFireRetryLocked(identity)
+	}
+	return true
+}
+
+func reminderReceiptComplete(receipt reminderDueReceipt) bool {
+	return receipt.ServerAcked && receipt.WakeEnqueued && receipt.ItemConsumed
+}
+
+// materializeReminderFire projects one authorized Reminder due fact into the
+// generic per-Agent App Inbox. It never injects Reminder content into a
+// provider runtime or advances Message coverage.
+func (d *Daemon) materializeReminderFire(job protocol.ReminderTimerJob) bool {
+	if d == nil || d.agentAppInboxes == nil || strings.TrimSpace(job.Title) == "" {
+		return false
+	}
+	runtimeID, ok := d.reminderCache.runtimeFor(job)
+	if !ok {
+		return false
+	}
+	store, err := d.agentAppInboxes.Store(job.OwnerAgentID)
+	if err != nil {
+		if d.logger != nil {
+			d.logger.Error("open Agent app Inbox", "agent_id", job.OwnerAgentID, "error", err)
+		}
+		return false
+	}
+	summary := "Reminder due"
+	if fireAt, parseErr := time.Parse(time.RFC3339, job.FireAt); parseErr == nil && fireAt.Before(time.Now()) {
+		summary = "Overdue reminder recovered locally"
+	}
+	_, err = store.Mint(AgentAppInboxMintInput{
+		AppID: reminderInboxAppID, NotificationClass: reminderDueClass,
+		SourceRef: AgentAppInboxSourceRef{Kind: "reminder", ID: job.ReminderID, Revision: fmt.Sprint(job.Version)},
+		Title:     projectReminderInboxTitle(job.Title), Summary: summary,
+	})
+	if err != nil && d.logger != nil {
+		d.logger.Error("mint Reminder app Inbox item", "agent_id", job.OwnerAgentID, "reminder_id", job.ReminderID, "version", job.Version, "error", err)
+	}
+	return err == nil && d.enqueueAgentAppInboxNotice(job.OwnerAgentID, runtimeID)
+}
+
+func projectReminderInboxTitle(title string) string {
+	normalized := strings.Join(strings.Fields(title), " ")
+	runes := []rune(normalized)
+	if len(runes) > agentAppInboxPreviewLimit {
+		runes = runes[:agentAppInboxPreviewLimit]
+	}
+	return string(runes)
 }
 
 func (c *reminderCache) highWatermark(reminderID string) reminderVersionFence {
@@ -689,16 +891,32 @@ func (c *reminderCache) attemptFireOnce(job protocol.ReminderTimerJob) {
 	receipt := reminderDueReceipt{
 		RuntimeID:       current.runtimeID,
 		Job:             job,
+		RequestID:       uuid.NewString(),
 		FiredAtClient:   now.UTC().Format(time.RFC3339Nano),
 		Catchup:         fireAt.Before(now),
 		RetryDeadlineAt: now.Add(c.retryDeadline()).UTC().Format(time.RFC3339Nano),
 	}
 	identity := receiptIdentity(receipt)
-	if findReceiptIndex(c.receipts[job.ReminderID], identity) < 0 {
-		c.receipts[job.ReminderID] = append(c.receipts[job.ReminderID], receipt)
-		_ = c.persistLocked()
+	existingReceipts := c.receipts[job.ReminderID]
+	if findReceiptIndex(existingReceipts, identity) < 0 {
+		c.receipts[job.ReminderID] = append(existingReceipts, receipt)
+		if err := c.persistLocked(); err != nil {
+			if len(existingReceipts) == 0 {
+				delete(c.receipts, job.ReminderID)
+			} else {
+				c.receipts[job.ReminderID] = existingReceipts
+			}
+			delete(c.attemptedFires, job.ReminderID)
+			current.timer = c.clock.AfterFunc(c.retryDelay(), func() { c.attemptFireOnce(job) })
+			c.entries[job.ReminderID] = current
+			if c.logger != nil {
+				c.logger.Error("Reminder due receipt persistence failed", "reminder_id", job.ReminderID, "agent_id", job.OwnerAgentID, "version", job.Version, "error", err)
+			}
+			c.mu.Unlock()
+			return
+		}
 	} else {
-		receipt = c.receipts[job.ReminderID][findReceiptIndex(c.receipts[job.ReminderID], identity)]
+		receipt = existingReceipts[findReceiptIndex(existingReceipts, identity)]
 	}
 	c.mu.Unlock()
 	c.dispatchFire(receipt)
@@ -754,6 +972,29 @@ func (c *reminderCache) dispatchFire(receipt reminderDueReceipt) {
 	_ = c.persistLocked()
 	c.mu.Unlock()
 
+	if !pending.ServerAcked {
+		if c.onFireReceipt != nil {
+			c.deliverFireReceipt(pending)
+		}
+		c.mu.Lock()
+		delete(c.dispatching, key)
+		index = findReceiptIndex(c.receipts[pending.Job.ReminderID], identity)
+		if index < 0 {
+			c.mu.Unlock()
+			return
+		}
+		exhaustion := c.scheduleFireRetryLocked(c.receipts[pending.Job.ReminderID][index])
+		c.mu.Unlock()
+		c.notifyRetryExhausted(exhaustion)
+		return
+	}
+	if !pending.ServerFired {
+		c.mu.Lock()
+		delete(c.dispatching, key)
+		c.mu.Unlock()
+		return
+	}
+
 	wakeEnqueued := false
 	func() {
 		defer func() {
@@ -763,9 +1004,6 @@ func (c *reminderCache) dispatchFire(receipt reminderDueReceipt) {
 		}()
 		wakeEnqueued = c.deliverFire(pending.Job)
 	}()
-	if !pending.ServerAcked && c.onFireReceipt != nil {
-		c.deliverFireReceipt(pending)
-	}
 	c.mu.Lock()
 	delete(c.dispatching, key)
 	index = findReceiptIndex(c.receipts[pending.Job.ReminderID], identity)
@@ -782,7 +1020,7 @@ func (c *reminderCache) dispatchFire(receipt reminderDueReceipt) {
 	}
 	current[index].WakeEnqueued = true
 	current[index].RetryNextAttemptAt = ""
-	if current[index].ServerAcked {
+	if reminderReceiptComplete(current[index]) {
 		c.clearFireRetryLocked(identity)
 		current = append(current[:index], current[index+1:]...)
 		if len(current) == 0 {
@@ -807,7 +1045,7 @@ func (c *reminderCache) deliverFireReceipt(receipt reminderDueReceipt) (queued b
 }
 
 func (c *reminderCache) scheduleFireRetryLocked(receipt reminderDueReceipt) *reminderRetryExhaustion {
-	if receipt.WakeEnqueued && receipt.ServerAcked {
+	if reminderReceiptComplete(receipt) {
 		return nil
 	}
 	identity := receiptIdentity(receipt)

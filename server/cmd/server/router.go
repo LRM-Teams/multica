@@ -426,7 +426,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	daemonHub.SetHeartbeatHandler(h.HandleDaemonWSHeartbeat)
 	daemonHub.SetReminderHandlers(
 		h.HandleDaemonReminderSnapshot,
-		h.HandleDaemonReminderFireAttempt,
+		h.HandleDaemonReminderFireRequest,
 	)
 	daemonHub.SetAgentDeliveryAckHandler(h.HandleAgentDeliveryAck)
 	// The current fenced Workspace Runner owns Attachment, launch, Message, and
@@ -1174,7 +1174,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Post("/archive", h.ArchiveAgent)
 					r.Post("/restore", h.RestoreAgent)
 					r.Post("/cancel-tasks", h.CancelAgentTasks)
-				r.Post("/start", h.StartAgent)
+					r.Post("/start", h.StartAgent)
 					r.Post("/stop", h.StopAgent)
 					r.Get("/health", h.GetAgentHealth)
 					r.Get("/reset", h.GetAgentRestart)
@@ -1531,6 +1531,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Post("/api/agent/reminders/update", h.AgentTransportUpdateReminder)
 			r.Post("/api/agent/reminders/cancel", h.AgentTransportCancelReminder)
 			r.Post("/api/agent/reminders/log", h.AgentTransportReminderLog)
+			r.Post("/api/agent/app-sources/ack", h.AgentTransportAckAppSource)
 			r.Post("/api/agent/actions/prepare", h.AgentTransportPrepareAction)
 			r.Post("/api/agent/migrations/reserve", h.AgentMigrationLeaseReserve)
 			r.Post("/api/agent/migrations/release", h.AgentMigrationLeaseRelease)

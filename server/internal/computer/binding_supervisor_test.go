@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -66,22 +67,66 @@ func (child *supervisorTestChild) Stop() error {
 	return nil
 }
 
-func TestBindingSupervisorAdoptsLivePidfileAndDoesNotSpawn(t *testing.T) {
-	root := t.TempDir()
-	pid := os.Getpid()
+// spawnReclaimTestProcess starts a real short-lived OS process so reclaim
+// tests exercise processAlive/SIGTERM/SIGKILL against a live PID instead of
+// the test binary's own PID (which must never be signaled). The process is
+// reaped in the background so it never becomes a zombie that would make
+// processAlive report it as still alive after it has actually exited.
+func spawnReclaimTestProcess(t *testing.T, args ...string) *exec.Cmd {
+	t.Helper()
+	cmd := exec.Command(args[0], args[1:]...)
+	if err := cmd.Start(); err != nil {
+		t.Skipf("cannot spawn reclaim test process: %v", err)
+	}
+	go func() { _ = cmd.Wait() }()
+	t.Cleanup(func() { _ = cmd.Process.Kill() })
+	return cmd
+}
+
+// reclaimTestTimings are small real durations (not a fake clock) so kill-path
+// tests do not race the OS's actual signal delivery/reap timing; see
+// terminateProcess and reclaimOrphanedRunner.
+func reclaimTestTimings() (poll, grace time.Duration) {
+	return 5 * time.Millisecond, 50 * time.Millisecond
+}
+
+func writeReclaimableRunnerFixture(t *testing.T, root, workspaceID string, pid int, endpoint string) {
+	t.Helper()
 	state := persistedRunnerState{
-		WorkspaceID: "workspace-a", DaemonInstanceID: "start-live", OwnerPID: 999998,
+		WorkspaceID: workspaceID, DaemonInstanceID: "predecessor-start", OwnerPID: 999998,
 		RunnerPID: pid, StartedAt: time.Now().UTC(),
 	}
 	if err := writeRunnerState(root, state); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeRunnerPID(root, state.WorkspaceID, pid); err != nil {
+	if err := writeRunnerPID(root, workspaceID, pid); err != nil {
 		t.Fatal(err)
 	}
+	if endpoint != "" {
+		if err := writeRunnerConnected(root, workspaceID, persistedRunnerConnected{PID: pid, ConnectedAt: state.StartedAt, RunnerEndpoint: endpoint}); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestBindingSupervisorReclaimsDrainedOrphanThenSpawnsOwnChild(t *testing.T) {
+	root := t.TempDir()
+	orphan := spawnReclaimTestProcess(t, "sleep", "30")
+
+	var drains atomic.Int32
+	control := localControlTestServer(t, func(_ context.Context, operation string, _ map[string]string, _ json.RawMessage) (any, error) {
+		if operation == LocalControlRunnerDrainOperation {
+			drains.Add(1)
+		}
+		return nil, nil
+	})
+	writeReclaimableRunnerFixture(t, root, "workspace-a", orphan.Process.Pid, control)
+
+	poll, grace := reclaimTestTimings()
 	spawned := 0
 	supervisor, err := NewBindingSupervisor(BindingSupervisorConfig{
-		StateRoot: root,
+		StateRoot: root, ControlToken: "control-token",
+		ReclaimPollInterval: poll, TerminateGrace: grace,
 		Spawn: func(string) (BindingChild, error) {
 			spawned++
 			return newSupervisorTestChild(101), nil
@@ -90,17 +135,133 @@ func TestBindingSupervisorAdoptsLivePidfileAndDoesNotSpawn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	supervisor.Reconcile(context.Background(), []string{"workspace-a"})
-	record, _, ok := supervisor.Snapshot("workspace-a")
-	if !ok || record.Lifecycle != RunnerLifecycleRunning || record.ExternalPID != pid || record.HasChild() {
-		t.Fatalf("adopted record = %+v ok=%v, want running external pid %d", record, ok, pid)
+	if got := drains.Load(); got != 1 {
+		t.Fatalf("drain requests = %d, want 1", got)
 	}
-	if spawned != 0 {
-		t.Fatalf("spawned %d children after adopting a live pidfile runner", spawned)
+	if alive, known := processAlive(orphan.Process.Pid); known && alive {
+		t.Fatal("orphaned Binding Runner process is still alive after reclaim")
+	}
+	if _, err := os.Stat(runnerStatePath(root, "workspace-a")); !os.IsNotExist(err) {
+		t.Fatalf("reclaimed runner state was not cleared: %v", err)
+	}
+
+	supervisor.Reconcile(context.Background(), []string{"workspace-a"})
+	waitForSupervisorLifecycle(t, supervisor, "workspace-a", RunnerLifecycleRunning)
+	if spawned != 1 {
+		t.Fatalf("spawned %d children after reclaiming an orphan, want 1", spawned)
+	}
+	record, pid, ok := supervisor.Snapshot("workspace-a")
+	if !ok || !supervisor.Current(BindingChildIdentity{WorkspaceID: "workspace-a", DaemonInstanceID: record.DaemonInstanceID(), PID: pid}) {
+		t.Fatalf("Computer did not recognize its own freshly spawned child after reclaim: record=%+v pid=%d", record, pid)
 	}
 	supervisor.Stop()
+}
+
+func TestBindingSupervisorReclaimsOrphanBySignalWhenDrainEndpointUnreachable(t *testing.T) {
+	root := t.TempDir()
+	orphan := spawnReclaimTestProcess(t, "sleep", "30")
+	// A dangling unix endpoint nothing is listening on: the drain request
+	// must fail fast and fall through to signal-based termination.
+	unreachable := ServiceControlEndpoint(t.TempDir())
+	writeReclaimableRunnerFixture(t, root, "workspace-a", orphan.Process.Pid, unreachable)
+
+	poll, grace := reclaimTestTimings()
+	spawned := 0
+	supervisor, err := NewBindingSupervisor(BindingSupervisorConfig{
+		StateRoot: root, ControlToken: "control-token",
+		ReclaimPollInterval: poll, TerminateGrace: grace,
+		Spawn: func(string) (BindingChild, error) {
+			spawned++
+			return newSupervisorTestChild(102), nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if alive, known := processAlive(orphan.Process.Pid); known && alive {
+		t.Fatal("orphaned Binding Runner process is still alive after reclaim")
+	}
+
+	supervisor.Reconcile(context.Background(), []string{"workspace-a"})
+	waitForSupervisorLifecycle(t, supervisor, "workspace-a", RunnerLifecycleRunning)
+	if spawned != 1 {
+		t.Fatalf("spawned %d children after reclaiming an unreachable orphan, want 1", spawned)
+	}
+	supervisor.Stop()
+}
+
+func TestBindingSupervisorReclaimsOrphanBySigkillWhenSigtermIsIgnored(t *testing.T) {
+	root := t.TempDir()
+	// The child ignores SIGTERM (and execs into the ignoring shell so the
+	// disposition survives into the recorded pid), forcing terminateProcess
+	// to escalate to SIGKILL.
+	orphan := spawnReclaimTestProcess(t, "sh", "-c", `trap "" TERM; exec sleep 30`)
+	writeReclaimableRunnerFixture(t, root, "workspace-a", orphan.Process.Pid, "")
+
+	poll, grace := reclaimTestTimings()
+	spawned := 0
+	supervisor, err := NewBindingSupervisor(BindingSupervisorConfig{
+		StateRoot: root, ControlToken: "control-token",
+		ReclaimPollInterval: poll, TerminateGrace: grace,
+		Spawn: func(string) (BindingChild, error) {
+			spawned++
+			return newSupervisorTestChild(103), nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if alive, known := processAlive(orphan.Process.Pid); known && alive {
+		t.Fatal("orphaned Binding Runner process ignoring SIGTERM survived reclaim (SIGKILL escalation did not fire)")
+	}
+
+	supervisor.Reconcile(context.Background(), []string{"workspace-a"})
+	waitForSupervisorLifecycle(t, supervisor, "workspace-a", RunnerLifecycleRunning)
+	if spawned != 1 {
+		t.Fatalf("spawned %d children after SIGKILL-reclaiming an orphan, want 1", spawned)
+	}
+	supervisor.Stop()
+}
+
+func TestBindingSupervisorLeavesPredecessorOwnerAloneAndDoesNotReclaim(t *testing.T) {
+	root := t.TempDir()
+	orphan := spawnReclaimTestProcess(t, "sleep", "30")
+	// OwnerPID is this test process's own pid: a live owner means a second
+	// Host generation is (impossibly, but defensively) still running, so
+	// this instance must not touch the workspace at all.
+	state := persistedRunnerState{
+		WorkspaceID: "workspace-a", DaemonInstanceID: "predecessor-start", OwnerPID: os.Getpid(),
+		RunnerPID: orphan.Process.Pid, StartedAt: time.Now().UTC(),
+	}
+	if err := writeRunnerState(root, state); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeRunnerPID(root, state.WorkspaceID, orphan.Process.Pid); err != nil {
+		t.Fatal(err)
+	}
+
+	spawned := 0
+	supervisor, err := NewBindingSupervisor(BindingSupervisorConfig{
+		StateRoot: root,
+		Spawn: func(string) (BindingChild, error) {
+			spawned++
+			return newSupervisorTestChild(104), nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if alive, known := processAlive(orphan.Process.Pid); !known || !alive {
+		t.Fatal("supervisor with a live predecessor owner killed a Runner it must leave alone")
+	}
+	if _, err := os.Stat(runnerStatePath(root, "workspace-a")); err != nil {
+		t.Fatalf("live-owner runner state was removed: %v", err)
+	}
+	if _, _, ok := supervisor.Snapshot("workspace-a"); ok {
+		t.Fatal("supervisor recorded a workspace it must leave to its still-live predecessor owner")
+	}
 	if spawned != 0 {
-		t.Fatal("shutdown spawned a replacement for an adopted runner")
+		t.Fatalf("spawned %d children while a predecessor Host owner is still alive", spawned)
 	}
 }
 

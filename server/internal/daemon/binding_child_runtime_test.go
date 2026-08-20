@@ -581,19 +581,30 @@ func TestBindingChildMembershipRefreshStopsRevokedBinding(t *testing.T) {
 func TestBindingChildrenUseIsolatedDurableExecutionState(t *testing.T) {
 	root := t.TempDir()
 	workspacesRoot := filepath.Join(root, "workspaces")
-	firstRoot := filepath.Join(root, "bindings", "workspace-a")
-	secondRoot := filepath.Join(root, "bindings", "workspace-b")
-	first := newDaemonForRole(Config{WorkspacesRoot: workspacesRoot, BindingStateRoot: firstRoot, WorkspaceID: "workspace-a"}, slog.New(slog.NewTextHandler(io.Discard, nil)), daemonProcessBindingChild)
-	second := newDaemonForRole(Config{WorkspacesRoot: workspacesRoot, BindingStateRoot: secondRoot, WorkspaceID: "workspace-b"}, slog.New(slog.NewTextHandler(io.Discard, nil)), daemonProcessBindingChild)
+	bindingsRoot := filepath.Join(root, "bindings")
+	firstRoot := filepath.Join(root, "execution", "workspace-a")
+	secondRoot := filepath.Join(root, "execution", "workspace-b")
+	first := newDaemonForRole(Config{WorkspacesRoot: workspacesRoot, BindingsRoot: bindingsRoot, MachineID: "machine-a", BindingStateRoot: firstRoot, WorkspaceID: "workspace-a"}, slog.New(slog.NewTextHandler(io.Discard, nil)), daemonProcessBindingChild)
+	second := newDaemonForRole(Config{WorkspacesRoot: workspacesRoot, BindingsRoot: bindingsRoot, MachineID: "machine-a", BindingStateRoot: secondRoot, WorkspaceID: "workspace-b"}, slog.New(slog.NewTextHandler(io.Discard, nil)), daemonProcessBindingChild)
 
-	for label, pair := range map[string][2]string{
-		"Reminder cache":  {first.reminderCache.path, second.reminderCache.path},
-		"Activity outbox": {first.mixedRunActivityOutbox.path, second.mixedRunActivityOutbox.path},
+	for label, paths := range map[string]struct {
+		pair          [2]string
+		expectedRoots [2]string
+	}{
+		"Reminder cache": {
+			pair: [2]string{first.reminderCache.storageRoot, second.reminderCache.storageRoot},
+			expectedRoots: [2]string{
+				filepath.Join(bindingsRoot, "app-storage", "v1", "machine-a", "workspace-a"),
+				filepath.Join(bindingsRoot, "app-storage", "v1", "machine-a", "workspace-b"),
+			},
+		},
+		"Activity outbox": {pair: [2]string{first.mixedRunActivityOutbox.path, second.mixedRunActivityOutbox.path}, expectedRoots: [2]string{firstRoot, secondRoot}},
 	} {
+		pair := paths.pair
 		if pair[0] == "" || pair[1] == "" || pair[0] == pair[1] {
 			t.Fatalf("%s paths are not isolated: %q / %q", label, pair[0], pair[1])
 		}
-		if !strings.HasPrefix(pair[0], firstRoot) || !strings.HasPrefix(pair[1], secondRoot) {
+		if !strings.HasPrefix(pair[0], paths.expectedRoots[0]) || !strings.HasPrefix(pair[1], paths.expectedRoots[1]) {
 			t.Fatalf("%s escaped Binding state roots: %q / %q", label, pair[0], pair[1])
 		}
 	}

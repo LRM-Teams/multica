@@ -848,36 +848,6 @@ func TestRelayNotifierPublishesDaemonRuntimeScope(t *testing.T) {
 	}
 }
 
-func TestRelayNotifierPublishesReminderAsTransientAgentDeliveryToWorkspaceRunnerScope(t *testing.T) {
-	relay := &recordingRelayPublisher{}
-	notifier := NewRelayNotifier(nil, relay)
-	payload := protocol.ReminderOwnerInputPayload{
-		WorkspaceID: "workspace-1", AgentID: "agent-1", RuntimeID: "runtime-1",
-		ReminderID: "reminder-1", Version: 3,
-	}
-
-	if !notifier.NotifyReminderOwnerInput("workspace-1", "daemon-1", payload) {
-		t.Fatal("Reminder transient delivery was not published")
-	}
-	if relay.scopeType != realtime.ScopeDaemonWorkspaceRunner || relay.scopeID != workspaceRunnerRelayScopeID("daemon-1", "workspace-1") {
-		t.Fatalf("Reminder relay scope = %q/%q", relay.scopeType, relay.scopeID)
-	}
-	var frame protocol.Message
-	if err := json.Unmarshal(relay.frame, &frame); err != nil {
-		t.Fatalf("unmarshal Reminder relay frame: %v", err)
-	}
-	if frame.Type != protocol.EventAgentDeliver {
-		t.Fatalf("Reminder relay event = %q, want %q", frame.Type, protocol.EventAgentDeliver)
-	}
-	var input protocol.AgentTransientDeliverPayload
-	if err := json.Unmarshal(frame.Payload, &input); err != nil {
-		t.Fatalf("unmarshal Reminder transient input: %v", err)
-	}
-	if input.Kind != protocol.AgentTransientDeliverKindReminder || !input.Transient || input.Reminder != payload {
-		t.Fatalf("Reminder transient input = %+v", input)
-	}
-}
-
 func attachDaemonTestClient(hub *Hub, runtimeID string) *client {
 	c := &client{
 		send:     make(chan []byte, 2),
@@ -1357,16 +1327,16 @@ func TestReminderSnapshotTransientErrorClosesConnectionWithoutTerminalStop(t *te
 	}
 }
 
-// TestReminderFireAttemptTransientErrorKeepsConnectionOpenForLocalRetry pins
+// TestReminderFireRequestTransientErrorKeepsConnectionOpenForLocalRetry pins
 // task #68's hub.go fix: unlike the snapshot path above, a transient
 // fire-attempt processing failure must NOT force-close the connection. The
 // daemon now keeps a locally-retryable in-flight record and resends the
-// fire_attempt itself on a short backoff (reminder_cache.go), so tearing
+// fire_request itself on a short backoff (reminder_cache.go), so tearing
 // down the WS connection here would only add an unnecessary reconnect on
 // top of a retry that was already going to happen.
-func TestReminderFireAttemptTransientErrorKeepsConnectionOpenForLocalRetry(t *testing.T) {
+func TestReminderFireRequestTransientErrorKeepsConnectionOpenForLocalRetry(t *testing.T) {
 	hub := NewHub()
-	hub.SetReminderHandlers(nil, func(context.Context, ClientIdentity, protocol.ReminderFireAttemptPayload) (*protocol.ReminderFireResultPayload, error) {
+	hub.SetReminderHandlers(nil, func(context.Context, ClientIdentity, protocol.ReminderFireRequestPayload) (*protocol.ReminderFireRequestResultPayload, error) {
 		return nil, errors.New("transient fire processing failure")
 	})
 	hub.SetHeartbeatHandler(func(context.Context, ClientIdentity, protocol.DaemonHeartbeatRequestPayload) (*protocol.DaemonHeartbeatAckPayload, error) {
@@ -1382,9 +1352,9 @@ func TestReminderFireAttemptTransientErrorKeepsConnectionOpenForLocalRetry(t *te
 	}
 	defer conn.Close()
 	request, err := json.Marshal(protocol.Message{
-		Type: protocol.EventReminderFireAttempt,
-		Payload: mustMarshalRaw(protocol.ReminderFireAttemptPayload{
-			AgentID: "agent-1", RuntimeID: "runtime-1", ReminderID: "reminder-1", Version: 1,
+		Type: protocol.EventReminderFireRequest,
+		Payload: mustMarshalRaw(protocol.ReminderFireRequestPayload{
+			AgentID: "agent-1", ReminderID: "reminder-1", Version: 1, RequestID: "request-1",
 		}),
 	})
 	if err != nil {

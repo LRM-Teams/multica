@@ -33,7 +33,7 @@ var ErrOpenCodeServeTurnBusy = errors.New("opencode serve turn busy")
 type OpenCodeServeBackend interface {
 	Backend
 	ResidentMessageInput
-	ResidentReminderInputReceiver
+	ResidentIdleInboxNoticeInput
 	ResidentPendingNoticeInput
 	Close()
 }
@@ -176,8 +176,8 @@ func (b *opencodeServeBackend) AcceptMessageBatch(ctx context.Context, messages 
 	return b.acceptIdleInputPrompt(ctx, prompt)
 }
 
-func (b *opencodeServeBackend) AcceptReminderInput(ctx context.Context, input ResidentReminderInput) (ResidentMessageAcceptance, error) {
-	prompt, err := formatResidentReminderInput(input)
+func (b *opencodeServeBackend) AcceptIdleInboxNotice(ctx context.Context, notice ResidentPendingNotice) (ResidentMessageAcceptance, error) {
+	prompt, err := formatResidentPendingNotice(notice)
 	if err != nil {
 		return ResidentMessageAcceptance{}, err
 	}
@@ -557,10 +557,10 @@ type opencodeServeClient struct {
 	logger   *slog.Logger
 	http     *http.Client
 
-	mu       sync.Mutex
-	waiters  map[string]*opencodeServeWaiter
-	closed   bool
-	closeCh  chan struct{}
+	mu      sync.Mutex
+	waiters map[string]*opencodeServeWaiter
+	closed  bool
+	closeCh chan struct{}
 
 	// connectedCh closes once runEventLoop's GET /event has received a
 	// response (headers back — the SSE handshake completed and opencode has

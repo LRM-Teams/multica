@@ -26,7 +26,7 @@ type CodexAppServerBackend interface {
 	Backend
 	ResidentMessageInput
 	ResidentMessagePreparation
-	ResidentReminderInputReceiver
+	ResidentIdleInboxNoticeInput
 	ResidentPendingNoticeInput
 	Close()
 }
@@ -139,8 +139,8 @@ func (b *codexAppServerBackend) AcceptMessageBatch(ctx context.Context, messages
 	return b.acceptIdleInputPrompt(ctx, prompt)
 }
 
-func (b *codexAppServerBackend) AcceptReminderInput(ctx context.Context, input ResidentReminderInput) (ResidentMessageAcceptance, error) {
-	prompt, err := formatResidentReminderInput(input)
+func (b *codexAppServerBackend) AcceptIdleInboxNotice(ctx context.Context, notice ResidentPendingNotice) (ResidentMessageAcceptance, error) {
+	prompt, err := formatResidentPendingNotice(notice)
 	if err != nil {
 		return ResidentMessageAcceptance{}, err
 	}

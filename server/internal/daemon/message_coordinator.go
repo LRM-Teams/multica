@@ -540,6 +540,14 @@ func (c *MessageCoordinator) Boundaries() map[string]int64 {
 	return cloneBoundaries(c.boundaries)
 }
 
+// PendingSnapshot returns a pure copy for aggregate Inbox inspection. Unlike
+// message check/read, it creates no coverage receipt and advances no boundary.
+func (c *MessageCoordinator) PendingSnapshot() []protocol.AgentMessageProjection {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]protocol.AgentMessageProjection(nil), c.pendingBatchLocked()...)
+}
+
 // Acknowledgement constructs the wire receipt after Accept succeeds. Emission
 // remains the Workspace Runner acceptance seam's responsibility, after it has
 // classified provider acceptance, Pending retention, or deduplication.

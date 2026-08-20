@@ -156,9 +156,18 @@ func (runner *WorkspaceRunner) serveConnection(connection *DaemonConnection, con
 				if runner.logger != nil {
 					runner.logger.Warn("forward Computer control to Host failed", "workspace_id", workspaceID, "action", message.Type, "request_id", command.RequestID, "error", err)
 				}
-				if message.Type == protocol.EventComputerUpgrade && errors.Is(err, computer.ErrComputerControlBusy) {
+				// EventComputerRestart has its own semantics and is not
+				// acknowledged here. Every EventComputerUpgrade failure — not
+				// only the busy case — must report back so the cloud (and the
+				// upgrade UI polling on it) never stalls waiting for a done
+				// frame that a purely-local WRN log can never deliver.
+				if message.Type == protocol.EventComputerUpgrade {
+					errorCode := "forward_failed"
+					if errors.Is(err, computer.ErrComputerControlBusy) {
+						errorCode = "control_busy"
+					}
 					_ = writeFrame(protocol.EventComputerUpgradeDone, protocol.ComputerUpgradeDonePayload{
-						RequestID: command.RequestID, OK: false, Error: "control_busy",
+						RequestID: command.RequestID, OK: false, Error: errorCode,
 					})
 				}
 			}
@@ -243,19 +252,6 @@ func (runner *WorkspaceRunner) serveConnection(connection *DaemonConnection, con
 				}
 			}
 		case protocol.EventAgentDeliver:
-			var transient protocol.AgentTransientDeliverPayload
-			if json.Unmarshal(message.Payload, &transient) == nil && transient.Kind != "" {
-				if transient.Kind != protocol.AgentTransientDeliverKindReminder || !transient.Transient || transient.Reminder.WorkspaceID != workspaceID {
-					if runner.logger != nil {
-						runner.logger.Warn("transient Agent delivery rejected", "workspace_id", workspaceID, "kind", transient.Kind, "reason_code", "invalid_transient_input")
-					}
-					continue
-				}
-				if runner.handleReminderInput != nil {
-					runner.handleReminderInput(connection.ctx, transient.Reminder)
-				}
-				continue
-			}
 			var delivery protocol.AgentDeliverPayload
 			if json.Unmarshal(message.Payload, &delivery) != nil || delivery.AgentID == "" || delivery.Target == "" || delivery.Seq <= 0 || delivery.DeliveryID == "" || delivery.Message.ID == "" || delivery.Message.Target != delivery.Target || delivery.Message.Seq != delivery.Seq {
 				continue

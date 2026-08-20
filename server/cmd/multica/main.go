@@ -56,6 +56,7 @@ func init() {
 	memoryCmd.GroupID = groupCore
 	notesCmd.GroupID = groupCore
 	messageCmd.GroupID = groupCore
+	inboxCmd.GroupID = groupCore
 	channelCmd.GroupID = groupCore
 	goalCmd.GroupID = groupCore
 	threadCmd.GroupID = groupCore
@@ -86,6 +87,7 @@ func init() {
 	rootCmd.AddCommand(memoryCmd)
 	rootCmd.AddCommand(notesCmd)
 	rootCmd.AddCommand(messageCmd)
+	rootCmd.AddCommand(inboxCmd)
 	rootCmd.AddCommand(computerCmd)
 	rootCmd.AddCommand(runtimeCmd)
 	rootCmd.AddCommand(authCmd)

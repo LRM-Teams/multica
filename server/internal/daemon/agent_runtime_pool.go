@@ -228,6 +228,7 @@ type canonicalAgentRuntimeSlot struct {
 	lastPendingTargetFingerprint   map[string]string
 	lastPendingNoticeCoordinatorID string
 	lastPendingNoticeGeneration    uint64
+	lastAppInboxNoticeFingerprint  string
 }
 
 func newCanonicalAgentRuntimePool() *canonicalAgentRuntimePool {
@@ -565,6 +566,7 @@ func (slot *canonicalAgentRuntimeSlot) closeBackend() {
 	slot.lastPendingTargetFingerprint = nil
 	slot.lastPendingNoticeCoordinatorID = ""
 	slot.lastPendingNoticeGeneration = 0
+	slot.lastAppInboxNoticeFingerprint = ""
 	slot.invalidateAfterInput = false
 }
 
@@ -1033,13 +1035,15 @@ func (p *canonicalAgentRuntimePool) observeResidentRuntimeMessage(slot *canonica
 	}
 }
 
-// handoffIdleReminderInput crosses the same single resident-turn admission
-// lock as canonical Messages but owns no MessageCoordinator state. Busy and
-// native-acceptance failures are returned directly to the transient caller;
-// nothing here queues, retries, or schedules an idle-boundary replay.
-func (p *canonicalAgentRuntimePool) handoffIdleReminderInput(ctx context.Context, agentID, runtimeID string, inputValue agent.ResidentReminderInput) error {
+// deliverAppInboxNotice crosses the resident input boundary without carrying
+// any App item body. The durable App Inbox owns retry and consumption; this
+// method owns only per-process notice suppression.
+func (p *canonicalAgentRuntimePool) deliverAppInboxNotice(ctx context.Context, agentID, runtimeID string, notice agent.ResidentPendingNotice, fingerprint string) error {
 	if p == nil {
 		return errors.New("canonical agent runtime pool is nil")
+	}
+	if strings.TrimSpace(fingerprint) == "" || notice.PendingAppItems < 1 {
+		return errors.New("App Inbox notice identity and positive item count are required")
 	}
 	key := strings.TrimSpace(agentID) + "\x00" + strings.TrimSpace(runtimeID)
 	p.mu.Lock()
@@ -1050,18 +1054,36 @@ func (p *canonicalAgentRuntimePool) handoffIdleReminderInput(ctx context.Context
 	}
 	slot.mu.Lock()
 	p.mu.Unlock()
-	if slot.running {
-		slot.mu.Unlock()
-		return ErrCanonicalAgentRuntimeBusy
-	}
 	if slot.backend == nil {
 		slot.mu.Unlock()
 		return errors.New("canonical resident runtime is unavailable")
 	}
-	input, ok := slot.backend.(agent.ResidentReminderInputReceiver)
+	if slot.lastAppInboxNoticeFingerprint == fingerprint {
+		slot.mu.Unlock()
+		return nil
+	}
+	if slot.running {
+		if slot.compacting {
+			slot.mu.Unlock()
+			return ErrCanonicalAgentRuntimeBusy
+		}
+		input, ok := slot.backend.(agent.ResidentPendingNoticeInput)
+		if !ok {
+			slot.mu.Unlock()
+			return errors.New("canonical resident runtime does not support busy Inbox Notice input")
+		}
+		if err := input.AcceptPendingNotice(ctx, notice); err != nil {
+			slot.mu.Unlock()
+			return err
+		}
+		slot.lastAppInboxNoticeFingerprint = fingerprint
+		slot.mu.Unlock()
+		return nil
+	}
+	input, ok := slot.backend.(agent.ResidentIdleInboxNoticeInput)
 	if !ok {
 		slot.mu.Unlock()
-		return errors.New("canonical resident runtime does not support transient Reminder input")
+		return errors.New("canonical resident runtime does not support idle Inbox Notice input")
 	}
 	slot.running = true
 	slot.messageInputAttempt++
@@ -1075,7 +1097,7 @@ func (p *canonicalAgentRuntimePool) handoffIdleReminderInput(ctx context.Context
 		acceptCtx, cancel = context.WithTimeout(ctx, canonicalIdleAcceptTimeout)
 		defer cancel()
 	}
-	acceptance, err := input.AcceptReminderInput(acceptCtx, inputValue)
+	acceptance, err := input.AcceptIdleInboxNotice(acceptCtx, notice)
 	slot.mu.Lock()
 	if err != nil {
 		freed := false
@@ -1103,17 +1125,38 @@ func (p *canonicalAgentRuntimePool) handoffIdleReminderInput(ctx context.Context
 			slot.idleSince = time.Now()
 		}
 		slot.mu.Unlock()
-		return errors.New("canonical resident runtime returned no Reminder input completion receipt")
+		return errors.New("canonical resident runtime returned no Inbox Notice completion receipt")
 	}
 	invalidated := slot.messageInputAttempt != attempt || slot.invalidationGeneration != invalidationGeneration
 	slot.messageInputDone = acceptance.Done
+	if !invalidated {
+		slot.lastAppInboxNoticeFingerprint = fingerprint
+	}
 	slot.mu.Unlock()
 	activityDone := drainResidentActivity(acceptance.Messages, nil)
 	go p.finishResidentMessageInput(slot, acceptance.Done, activityDone, drainResidentCapture(acceptance.Capture), 0, nil)
 	if invalidated {
-		return errors.New("canonical resident runtime was invalidated during Reminder input acceptance")
+		return errors.New("canonical resident runtime was invalidated during Inbox Notice acceptance")
 	}
 	return nil
+}
+
+func (p *canonicalAgentRuntimePool) clearAppInboxNoticeMemo(agentID, runtimeID string) {
+	if p == nil {
+		return
+	}
+	key := strings.TrimSpace(agentID) + "\x00" + strings.TrimSpace(runtimeID)
+	p.mu.Lock()
+	slot := p.slots[key]
+	if slot != nil {
+		slot.mu.Lock()
+	}
+	p.mu.Unlock()
+	if slot == nil {
+		return
+	}
+	slot.lastAppInboxNoticeFingerprint = ""
+	slot.mu.Unlock()
 }
 
 func drainResidentActivity(messages <-chan agent.Message, onMessage func(agent.Message)) <-chan struct{} {

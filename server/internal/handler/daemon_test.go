@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1032,20 +1031,6 @@ func TestDaemonRegister_ReplacesReminderCapabilityOnReconnect(t *testing.T) {
 	}
 	if strings.Contains(string(stored), protocol.DaemonCapabilityReminderVersionedCache) {
 		t.Fatalf("stored metadata retained stale reminder capability: %s", stored)
-	}
-}
-
-func TestNegotiatedDaemonCapabilitiesGatesTransientReminderInput(t *testing.T) {
-	without := negotiatedDaemonCapabilities([]string{protocol.DaemonCapabilityReminderVersionedCache})
-	if slices.Contains(without, protocol.DaemonCapabilityReminderTransientInput) {
-		t.Fatalf("unadvertised transient Reminder capability negotiated: %v", without)
-	}
-	with := negotiatedDaemonCapabilities([]string{
-		protocol.DaemonCapabilityReminderVersionedCache,
-		protocol.DaemonCapabilityReminderTransientInput,
-	})
-	if !slices.Contains(with, protocol.DaemonCapabilityReminderTransientInput) {
-		t.Fatalf("advertised transient Reminder capability not negotiated: %v", with)
 	}
 }
 

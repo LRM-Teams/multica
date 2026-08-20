@@ -192,7 +192,6 @@ func main() {
 	handler.SetRunnerPresence(daemonHub)
 	var daemonWakeup service.TaskWakeupNotifier = daemonHub
 	var reminderNotifier daemonws.ReminderNotifier = daemonHub
-	var reminderOwnerInputNotifier daemonws.ReminderOwnerInputNotifier = daemonHub
 	var agentDeliveryNotifier daemonws.AgentDeliveryNotifier = daemonHub
 	var agentRestartNotifier daemonws.AgentRestartNotifier = daemonHub
 
@@ -249,7 +248,6 @@ func main() {
 				relayNotifier := daemonws.NewRelayNotifier(daemonHub, sharded)
 				daemonWakeup = relayNotifier
 				reminderNotifier = relayNotifier
-				reminderOwnerInputNotifier = relayNotifier
 				agentDeliveryNotifier = relayNotifier
 				agentRestartNotifier = relayNotifier
 			default:
@@ -260,7 +258,6 @@ func main() {
 				relayNotifier := daemonws.NewRelayNotifier(daemonHub, sharded)
 				daemonWakeup = relayNotifier
 				reminderNotifier = relayNotifier
-				reminderOwnerInputNotifier = relayNotifier
 				agentDeliveryNotifier = relayNotifier
 				agentRestartNotifier = relayNotifier
 			}
@@ -387,7 +384,6 @@ func main() {
 		HeartbeatScheduler: heartbeatScheduler,
 	})
 	h.ReminderNotifier = reminderNotifier
-	h.ReminderOwnerInputNotifier = reminderOwnerInputNotifier
 	h.AgentDeliveryNotifier = agentDeliveryNotifier
 	h.AgentRestartNotifier = agentRestartNotifier
 

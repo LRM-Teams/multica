@@ -321,12 +321,21 @@ func runComputerDoctor(cmd *cobra.Command, args []string) error {
 	for _, candidate := range d.LegacyIdentityCandidates {
 		fmt.Fprintf(os.Stdout, "legacy id:    %s (preserved; explicit choice required)\n", candidate)
 	}
+	for _, runner := range d.Runners {
+		fmt.Fprintf(os.Stdout, "runner:       workspace=%s pid=%d alive=%v owned=%v\n", runner.WorkspaceID, runner.PID, runner.Alive, runner.Owned)
+	}
 	for _, f := range d.FixApplied {
 		fmt.Fprintf(os.Stdout, "fixed:        %s\n", f)
+	}
+	for _, runner := range d.UnownedLive {
+		fmt.Fprintf(os.Stdout, "degraded:     workspace %s Binding Runner (pid %d) is alive but not owned by this Computer; run `multica computer restart`\n", runner.WorkspaceID, runner.PID)
 	}
 	// A disconnected resident is non-zero for automation.
 	if !d.Connected && d.Resident != "starting" {
 		return fmt.Errorf("Computer is not connected")
+	}
+	if len(d.UnownedLive) > 0 {
+		return fmt.Errorf("Computer has %d Binding Runner(s) alive but not owned by this Computer; run `multica computer restart`", len(d.UnownedLive))
 	}
 	return nil
 }

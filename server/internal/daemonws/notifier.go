@@ -15,13 +15,7 @@ import (
 type ReminderNotifier interface {
 	NotifyReminderUpsert(runtimeID string, payload protocol.ReminderUpsertPayload)
 	NotifyReminderCancel(runtimeID string, payload protocol.ReminderCancelPayload)
-}
-
-// ReminderOwnerInputNotifier is the non-durable post-commit transport for one
-// private Reminder input. A false result is final; implementations must not
-// stage retries or reconnect replay.
-type ReminderOwnerInputNotifier interface {
-	NotifyReminderOwnerInput(workspaceID, daemonID string, payload protocol.ReminderOwnerInputPayload) bool
+	NotifyReminderFireReceiptAck(runtimeID string, payload protocol.ReminderFireReceiptAckPayload)
 }
 
 // AgentDeliveryNotifier is the server-side transport boundary for canonical
@@ -180,34 +174,8 @@ func (n *RelayNotifier) NotifyReminderCancel(runtimeID string, payload protocol.
 	n.notifyReminderWithID(runtimeID, protocol.EventReminderCancel, payload, "reminder-cancel:"+payload.ReminderID+":"+strconv.FormatInt(payload.Version, 10))
 }
 
-func (n *RelayNotifier) NotifyReminderOwnerInput(workspaceID, daemonID string, payload protocol.ReminderOwnerInputPayload) bool {
-	if workspaceID == "" || daemonID == "" {
-		return false
-	}
-	input := protocol.AgentTransientDeliverPayload{
-		Kind: protocol.AgentTransientDeliverKindReminder, Transient: true, Reminder: payload,
-	}
-	frame, err := json.Marshal(protocol.Message{Type: protocol.EventAgentDeliver, Payload: mustMarshalRaw(input)})
-	if err != nil {
-		return false
-	}
-	delivered := false
-	eventID := ulid.Make().String()
-	if n.local != nil {
-		delivered = n.local.notifyWorkspaceRunnerFrame(daemonID, workspaceID, frame)
-	}
-	if n.relay != nil {
-		scopeID := workspaceRunnerRelayScopeID(daemonID, workspaceID)
-		if err := n.relay.PublishWithID(realtime.ScopeDaemonWorkspaceRunner, scopeID, "", frame, eventID); err != nil {
-			slog.Warn("workspace Runner Reminder owner input publish failed", "workspace_id", workspaceID, "daemon_id", daemonID, "runtime_id", payload.RuntimeID, "error", err)
-		} else {
-			delivered = true
-		}
-	}
-	if !delivered {
-		slog.Info("transient Reminder owner input", "outcome", "transport_lost", "workspace_id", workspaceID, "daemon_id", daemonID, "runtime_id", payload.RuntimeID, "agent_id", payload.AgentID, "reminder_id", payload.ReminderID, "version", payload.Version)
-	}
-	return delivered
+func (n *RelayNotifier) NotifyReminderFireReceiptAck(runtimeID string, payload protocol.ReminderFireReceiptAckPayload) {
+	n.notifyReminderWithID(runtimeID, protocol.EventReminderFireReceiptAck, payload, "reminder-fire-receipt-ack:"+payload.ReminderID+":"+strconv.FormatInt(payload.Version, 10))
 }
 
 func (n *RelayNotifier) notifyReminderWithID(runtimeID, eventType string, payload any, eventID string) {

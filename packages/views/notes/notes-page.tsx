@@ -1589,7 +1589,6 @@ export function NotesPage({ pageId }: { pageId?: string }) {
       <NotePeriodBriefDialog
         open={periodBriefOpen}
         onOpenChange={(open) => setUiState((current) => ({ ...current, periodBriefOpen: open }))}
-        preferredAgentId={configuredAiAgentId}
         onCreated={async () => {
           await queryClient.invalidateQueries({ queryKey: noteListOptions(wsId).queryKey });
         }}
@@ -1598,6 +1597,8 @@ export function NotesPage({ pageId }: { pageId?: string }) {
         <NoteAssistantBubble
           pageId={selected.id}
           pageTitle={selected.title}
+          onOpenPeriodBrief={() => setUiState((current) => ({ ...current, periodBriefOpen: true }))}
+          onOpenWorker={() => setUiState((current) => ({ ...current, workerOpen: true }))}
         />
       ) : null}
     </div>

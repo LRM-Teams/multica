@@ -1,10 +1,8 @@
 "use client";
 
 import * as React from "react";
-import { FileText } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { cn } from "@multica/ui/lib/utils";
 import { api } from "@multica/core/api";
 import { agentTemplateDetailOptions } from "@multica/core/agents/queries";
 import { useAuthStore } from "@multica/core/auth";
@@ -23,16 +21,12 @@ import { runtimeListOptions } from "@multica/core/runtimes";
 import { agentListOptions, memberListOptions, workspaceKeys } from "@multica/core/workspace/queries";
 import type { Agent, CreateAgentRequest, EnsureNotesAssistantAgentResponse } from "@multica/core/types";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
-import {
-  Tooltip,
-  TooltipTrigger,
-  TooltipContent,
-} from "@multica/ui/components/ui/tooltip";
 import { CreateAgentDialog } from "../agents/components/create-agent-dialog";
 import { useT } from "../i18n";
 import { usePrefersReducedMotion } from "../common/use-prefers-reduced-motion";
 import { excludeChannelShellSessions } from "../chat/lib/exclude-channel-shell-sessions";
 import { ChatWindow } from "../chat/components/chat-window";
+import { NoteAssistantFabCluster, type NoteAssistantFabAction } from "./note-assistant-fab-cluster";
 import { NotesAssistantSetupCard } from "./notes-assistant-setup-card";
 
 const logger = createLogger("chat.note-bubble");
@@ -56,9 +50,13 @@ function clearSetupHintDismissed(workspaceId: string | undefined) {
 export function NoteAssistantBubble({
   pageId,
   pageTitle,
+  onOpenPeriodBrief,
+  onOpenWorker,
 }: {
   pageId: string;
   pageTitle?: string;
+  onOpenPeriodBrief: () => void;
+  onOpenWorker: () => void;
 }) {
   const { t } = useT("layout");
   const wsId = useWorkspaceId();
@@ -95,6 +93,8 @@ export function NoteAssistantBubble({
   const [sessionDismissed, setSessionDismissed] = React.useState(false);
   const [createDialogOpen, setCreateDialogOpen] = React.useState(false);
   const [composerFocusToken, setComposerFocusToken] = React.useState(0);
+  const [pendingSend, setPendingSend] = React.useState<{ nonce: number; text: string } | null>(null);
+  const seedNonceRef = React.useRef(0);
 
   // Prefer the live agent list. After create/restore, ensureResult.agent bridges
   // until the list invalidation lands. needs_setup clears that bridge.
@@ -193,13 +193,33 @@ export function NoteAssistantBubble({
     return result.agent;
   };
 
-  const handleClick = () => {
-    logger.info("noteBubble.fab.click", {
-      pageId,
-      unreadSessionCount,
-      isRunning,
-      willOpen: !isOpen,
-    });
+  React.useEffect(() => {
+    if (openPageId !== pageId) setPendingSend(null);
+  }, [openPageId, pageId]);
+
+  const handleSeedSendConsumed = React.useCallback(() => {
+    setPendingSend(null);
+  }, []);
+
+  const handleFabAction = (action: NoteAssistantFabAction) => {
+    logger.info("noteBubble.fab.action", { pageId, action, isOpen });
+    if (action === "period_brief") {
+      onOpenPeriodBrief();
+      return;
+    }
+    if (action === "worker") {
+      onOpenWorker();
+      return;
+    }
+    if (action === "highlights") {
+      seedNonceRef.current += 1;
+      setPendingSend({
+        nonce: seedNonceRef.current,
+        text: t(($) => $.notes_page.assistant_highlights_prompt),
+      });
+      if (!isOpen) toggleNoteBubble(pageId);
+      return;
+    }
     toggleNoteBubble(pageId);
   };
 
@@ -235,6 +255,8 @@ export function NoteAssistantBubble({
         layout={layout}
         headerAccessory={setupSlot}
         composerFocusToken={composerFocusToken}
+        seedSend={pendingSend}
+        onSeedSendConsumed={handleSeedSendConsumed}
       />
       {createDialogOpen ? (
         <CreateAgentDialog
@@ -253,33 +275,13 @@ export function NoteAssistantBubble({
         />
       ) : null}
       {!isOpen && (
-        <Tooltip>
-          <TooltipTrigger
-            onClick={handleClick}
-            className={cn(
-              // Sit above the global ChatFab (bottom-2 right-2) when both show.
-              "absolute bottom-2 right-14 z-50 flex size-10 cursor-pointer items-center justify-center rounded-full ring-1 ring-foreground/10 bg-card text-muted-foreground shadow-sm transition-transform hover:scale-110 hover:text-accent-foreground active:scale-95",
-              isRunning &&
-                (prefersReducedMotion
-                  ? "text-brand ring-brand/40"
-                  : "animate-chat-impulse"),
-              unreadSessionCount > 0 &&
-                !isRunning &&
-                "ring-2 ring-brand text-foreground shadow-md",
-            )}
-            aria-label={tooltip}
-          >
-            <FileText className="size-5" />
-            {unreadSessionCount > 0 && (
-              <span className="pointer-events-none absolute -top-0.5 -right-0.5 flex min-w-4 h-4 items-center justify-center rounded-full bg-brand px-1 text-xs font-semibold leading-none text-background">
-                {unreadSessionCount > 9 ? "9+" : unreadSessionCount}
-              </span>
-            )}
-          </TooltipTrigger>
-          <TooltipContent side="top" sideOffset={10}>
-            {tooltip}
-          </TooltipContent>
-        </Tooltip>
+        <NoteAssistantFabCluster
+          tooltip={tooltip}
+          isRunning={isRunning}
+          unreadCount={unreadSessionCount}
+          reducedMotion={prefersReducedMotion}
+          onAction={handleFabAction}
+        />
       )}
     </>
   );

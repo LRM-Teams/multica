@@ -95,6 +95,13 @@ export interface ChatWindowProps {
    */
   composerFocusToken?: number;
   /**
+   * Send this text once the Notes bubble is open and an agent is ready
+   * (e.g. the Highlights satellite). Cleared via onSeedSendConsumed.
+   * `nonce` is unique per click so React Strict Mode cannot double-send.
+   */
+  seedSend?: { nonce: number; text: string } | null;
+  onSeedSendConsumed?: () => void;
+  /**
    * Force layout. Default: floating desktop window; on mobile with a
    * lockedAgentId, fullscreen sheet is used automatically.
    */
@@ -104,6 +111,7 @@ export interface ChatWindowProps {
 const uiLogger = createLogger("chat.ui");
 const apiLogger = createLogger("chat.api");
 const CHAT_VIRTUOSO_INITIAL_FIRST_ITEM_INDEX = 1_000_000;
+const consumedChatSeedNonces = new Set<number>();
 
 function seedChatMessagesPageCache(
   qc: ReturnType<typeof useQueryClient>,
@@ -230,6 +238,8 @@ export function ChatWindow({
   lockPreferredAgent = false,
   headerAccessory,
   composerFocusToken,
+  seedSend,
+  onSeedSendConsumed,
   layout = "floating",
 }: ChatWindowProps = {}) {
   const { t } = useT("chat");
@@ -685,7 +695,8 @@ export function ChatWindow({
       );
       qc.setQueryData<ChatPendingTask>(chatKeys.pendingTask(sessionId), {
         pending: true,
-        status: "queued",
+        // Match GET pending-task: standalone has no queue stage to show.
+        status: "running",
         created_at: sentAt,
       });
       // Cache primed → safe to publish the new active session. Idempotent
@@ -722,7 +733,7 @@ export function ChatWindow({
       let pendingAfterSend: ChatPendingTask = {
         pending: true,
         delivery_id: result.delivery_id,
-        status: "queued",
+        status: "running",
         created_at: result.created_at,
       };
       try {
@@ -760,6 +771,18 @@ export function ChatWindow({
       wsId,
     ],
   );
+
+  const handleSendRef = useRef(handleSend);
+  handleSendRef.current = handleSend;
+  useEffect(() => {
+    if (!seedSend || !isOpen || !activeAgent) return;
+    if (consumedChatSeedNonces.has(seedSend.nonce)) return;
+    consumedChatSeedNonces.add(seedSend.nonce);
+    void handleSendRef.current(seedSend.text).then((ok) => {
+      if (ok) onSeedSendConsumed?.();
+      else consumedChatSeedNonces.delete(seedSend.nonce);
+    });
+  }, [seedSend, isOpen, activeAgent, onSeedSendConsumed]);
 
   const handleStop = useCallback(() => {
     if (!activeSessionId) {
@@ -858,6 +881,42 @@ export function ChatWindow({
   const activeAgentDisplayName = activeAgent
     ? resolveActorDisplayName(activeAgent, activeAgent.id)
     : undefined;
+
+  // Notes floating bubble: click outside the window minimizes back to the FAB
+  // (same outcome as the header Minus). Ignore portaled layers that belong to
+  // this window (session menu, create-agent dialog, tooltips, etc.).
+  useEffect(() => {
+    if (!isNoteBubble || !isOpen || isFullscreen) return;
+
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (windowRef.current?.contains(target)) return;
+      if (
+        target.closest(
+          [
+            '[data-slot="popover-content"]',
+            '[data-slot="dialog-content"]',
+            '[data-slot="dialog-overlay"]',
+            '[data-slot="alert-dialog-content"]',
+            '[data-slot="alert-dialog-overlay"]',
+            '[data-slot="dropdown-menu-content"]',
+            '[data-slot="dropdown-menu-sub-content"]',
+            '[data-slot="select-content"]',
+            '[data-slot="tooltip-content"]',
+            '[data-slot="sheet-content"]',
+            '[data-slot="sheet-overlay"]',
+          ].join(","),
+        )
+      ) {
+        return;
+      }
+      handleMinimize();
+    };
+
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [isNoteBubble, isOpen, isFullscreen, handleMinimize]);
 
   // Fullscreen sheet must cover the *viewport*, not just the DM `<main>`.
   // Absolute+parent was leaving the DM composer visible underneath on mobile
@@ -1090,9 +1149,7 @@ export function ChatWindow({
         noAgent={noAgent}
         agentName={activeAgentDisplayName}
         agentId={activeAgent?.id ?? null}
-        wsId={wsId}
         sessionId={activeSessionId}
-        currentProjectId={currentSession?.project_id ?? null}
         safeArea={isFullscreen}
         focusToken={composerFocusToken}
         leftAdornment={

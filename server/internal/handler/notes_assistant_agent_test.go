@@ -226,7 +226,9 @@ func TestAgentTemplatesIncludeNotesAssistant(t *testing.T) {
 	}
 	for _, want := range []string{
 		"multica-notes-assistant",
+		"multica-period-work-brief",
 		notesAssistantInstructionsCapabilityMarker,
+		"Standalone Agent Chat",
 		"notes tree",
 		"notes get",
 		"final assistant output",
@@ -237,7 +239,6 @@ func TestAgentTemplatesIncludeNotesAssistant(t *testing.T) {
 		}
 	}
 	for _, banned := range []string{
-		"--note-write",
 		"message send --target chat:",
 	} {
 		if strings.Contains(tmpl.Instructions, banned) {

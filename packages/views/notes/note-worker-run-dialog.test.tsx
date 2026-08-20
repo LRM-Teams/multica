@@ -220,7 +220,7 @@ describe("NoteWorkerRunDialog", () => {
     const user = userEvent.setup();
     renderDialog();
 
-    await user.click(screen.getByRole("button", { name: /Period work brief/i }));
+    await user.click(screen.getByRole("button", { name: /Write report/i }));
     const input = screen.getByPlaceholderText(
       /Create issues from this brief/i,
     ) as HTMLTextAreaElement;

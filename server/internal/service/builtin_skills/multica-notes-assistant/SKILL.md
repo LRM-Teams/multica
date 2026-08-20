@@ -1,6 +1,6 @@
 ---
 name: multica-notes-assistant
-description: "Use when working in the Notes page assistant bubble (context_note_page_id). Covers selective subtree reads via notes tree/get, answering from pages you chose to load, and proposing root rewrites in final assistant output. Do not use for Period Brief collect/synthesize (multica-period-work-*) or Editor note_ai_job."
+description: "Use when working in the Notes page assistant bubble (context_note_page_id). Covers selective subtree reads via notes tree/get, answering from pages you chose to load, and proposing root rewrites in final assistant output. Do not use for a Period Brief synthesizer wake (that is multica-period-work-brief on the same 笔记助手 identity) or Editor note_ai_job."
 user-invocable: false
 allowed-tools: Bash(multica *)
 ---
@@ -67,7 +67,7 @@ authorized page.
 | This skill | Not this |
 |------------|----------|
 | Notes FAB bubble / `chat_session.context_note_page_id` | Worker `note_worker_job` / 「按这篇做」 |
-| Selective `notes get` / `tree` | Period Brief Facts/packs (`multica-period-work-brief`) |
+| Selective `notes get` / `tree` | Period Brief synthesizer wake (`multica-period-work-brief`) — same Agent, different wake |
 | Final-output rewrite proposals | Editor structured `note_ai_job` actions |
 
 Source map: `references/notes-assistant-source-map.md`.

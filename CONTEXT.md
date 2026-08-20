@@ -670,21 +670,25 @@ _Avoid_: retrospective as the deliverable, PPT, standup dump, weekly report file
 ### Period Work Collector
 
 An Agent on a provisioned per-Computer runtime (local or cloud) that gathers
-recent work on the OS where that runtime runs — evidence (short diffs, file
-summaries, key snippets) plus preliminary **Work groups** (same project
-together; related cross-repo work in one group with why) and optional Mermaid
-diagrams that need full local context. Delivers via `submit-pack` onto the
-Period Brief run (not a Notes「采集包」page). Completeness first: groups and
-diagrams are additive, never a substitute for Highlights. Not Computer Host
-Digest harvest.
+recent work on the OS where that runtime runs. Scan roots are `SCAN_ROOTS`
+(`$HOME` plus `/workspace` when present and other visible project dirs — not
+HOME-only on container sandboxes), including non-git in-window source files.
+Evidence (short diffs, file summaries, key snippets) plus preliminary **Work
+groups** (same project together; related cross-repo work in one group with
+why) and optional Mermaid diagrams that need full local context. Delivers via
+`submit-pack` onto the Period Brief run (not a Notes「采集包」page).
+Completeness first: groups and diagrams are additive, never a substitute for
+Highlights. Not Computer Host Digest harvest.
 _Avoid_: Host Journal as the Brief machine source, keymouse, full-repo dump,
-groups-only packs that drop evidence, --note-write packs into Notes
+HOME-only scans that miss `/workspace`, groups-only packs that drop evidence,
+--note-write packs into Notes
 
 ### Period Brief Agent
 
-The Workspace Agent specialized to synthesize one Period Work Brief from
-platform Facts plus collector packs. Default synthesizer for「本期工作介绍」.
-_Avoid_: forcing every arbitrary Agent to be the weekly narrator
+The Notes Assistant (笔记助手) in its 写汇报 synthesizer wake: platform
+Facts plus collector packs, force_fresh_session, --note-write. Not a second
+Workspace Agent. Leftover 周报 / weekly-report rows are archived on Ensure.
+_Avoid_: a dedicated weekly-report Agent; mixing bubble chat with --note-write
 
 ### Period Work Synthesis
 

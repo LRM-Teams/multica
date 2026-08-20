@@ -311,3 +311,97 @@ func TestListRunnerActivitySummariesOverlaysInFlightInboxOnOnline(t *testing.T) 
 	}
 }
 
+func TestListRunnerActivitySummariesOverlaysInFlightInboxOnStoppedOneShot(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	agentID := createHandlerTestAgent(t, "runner-summary-oneshot-"+uuid.NewString()[:8], nil)
+	h := *testHandler
+	h.RunnerPresenceSource = fakeRunnerPresenceSource{current: map[string]bool{}}
+	ctx := context.Background()
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO agent_activity_snapshot (
+			workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id,
+			launch_id, client_sequence, producer_fact_id, activity_kind,
+			detail_kind, observed_at
+		) VALUES ($1, $2, $3, 'daemon-oneshot', 'instance-stopped',
+			'launch-stopped', 1, $4, 'offline', 'stopped', now())`,
+		testWorkspaceID, agentID, handlerTestRuntimeID(t), "summary-stopped-"+uuid.NewString()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO agent_inbox_event (
+			workspace_id, agent_id, runtime_id, status, priority, reason, requires_wake
+		) VALUES ($1, $2, $3, 'draining', 0, 'note_worker', true)`,
+		testWorkspaceID, agentID, handlerTestRuntimeID(t)); err != nil {
+		t.Fatal(err)
+	}
+
+	assertCollectingRunnerSummary(t, &h, agentID)
+}
+
+func TestListRunnerActivitySummariesOverlaysInFlightInboxWithoutSnapshot(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	agentID := createHandlerTestAgent(t, "runner-summary-bare-"+uuid.NewString()[:8], nil)
+	h := *testHandler
+	h.RunnerPresenceSource = fakeRunnerPresenceSource{current: map[string]bool{}}
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO agent_inbox_event (
+			workspace_id, agent_id, runtime_id, status, priority, reason, requires_wake
+		) VALUES ($1, $2, $3, 'draining', 0, 'note_worker', true)`,
+		testWorkspaceID, agentID, handlerTestRuntimeID(t)); err != nil {
+		t.Fatal(err)
+	}
+
+	assertCollectingRunnerSummary(t, &h, agentID)
+}
+
+func assertCollectingRunnerSummary(t *testing.T, h *Handler, agentID string) {
+	t.Helper()
+
+	req := newRequestAs(testUserID, http.MethodGet, "/api/agents/runner-activity-summaries", nil)
+	req.Header.Set("X-Workspace-ID", testWorkspaceID)
+	rec := httptest.NewRecorder()
+	h.ListRunnerActivitySummaries(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s want 200", rec.Code, rec.Body.String())
+	}
+	var summaries RunnerActivitySummariesResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &summaries); err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, item := range summaries.Items {
+		if item.AgentID != agentID {
+			continue
+		}
+		found = true
+		if item.Summary.Label != "Thinking..." {
+			t.Fatalf("collecting agent summary=%q, want Thinking...", item.Summary.Label)
+		}
+	}
+	if !found {
+		t.Fatal("missing summary for collecting agent")
+	}
+
+	detailReq := newRequestAs(testUserID, http.MethodGet, "/api/agents/"+agentID+"/runner-activity", nil)
+	detailReq.Header.Set("X-Workspace-ID", testWorkspaceID)
+	detailReq = withURLParam(detailReq, "id", agentID)
+	detailRec := httptest.NewRecorder()
+	h.GetRunnerActivity(detailRec, detailReq)
+	if detailRec.Code != http.StatusOK {
+		t.Fatalf("detail status=%d body=%s", detailRec.Code, detailRec.Body.String())
+	}
+	var detail RunnerActivityResponse
+	if err := json.Unmarshal(detailRec.Body.Bytes(), &detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail.Summary == nil || detail.Summary.Label != "Thinking..." {
+		t.Fatalf("detail summary=%+v, want Thinking...", detail.Summary)
+	}
+}
+

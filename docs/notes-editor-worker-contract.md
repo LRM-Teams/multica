@@ -119,6 +119,7 @@ Stay-on-page chat (not Worker → Messages):
 3. Opens a floating `chat_session` with `context_note_page_id` set to the current page, locked to that assistant.
 4. Standalone chat delivery prefixes `<note_chat_context>` with **root id + title only** (no full subtree dump). Idle wake uses `formatStandaloneChatTurnPrompt` (chat turn — **not** channel Canonical Message / `message send`). The agent must use `notes tree` / `notes get` selectively (skill `multica-notes-assistant`) and answer via **final assistant output** (daemon writeback). Redelivery rebuilds the same prefix. Turn failures still write an assistant error row so the UI leaves 排队中.
 5. Distinct from Editor (`note_ai_job`) and Worker (`note_worker_job`); replies stay in the bubble transcript. Bubble has no channel `note_write` confirm UI — rewrite proposals stay in final output for the human to apply.
+6. The same 笔记助手 identity is the 写汇报 synthesizer. That wake is **not** this bubble: `force_fresh_session`, skill `multica-period-work-brief`, `--note-write` under `工作介绍/`. Leftover 「周报」 agents are archived on Ensure. Collectors stay separate.
 
 FE: `packages/views/notes/note-assistant-bubble.tsx`, `notes-assistant-setup-card.tsx`; BE: `EnsureNotesAssistantAgent`, `chat_session.context_note_page_id`, `resolveAgentNoteViewer`, `ListAgentNoteTree`.
 

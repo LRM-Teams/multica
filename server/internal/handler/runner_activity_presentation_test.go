@@ -55,6 +55,7 @@ func TestOverlayInFlightInboxOnIdleRunnerSummary(t *testing.T) {
 		{"Online", "Thinking..."},
 		{"Idle", "Thinking..."},
 		{"Working...", "Thinking..."},
+		{"Offline", "Thinking..."},
 		{"Running command...", "Running command..."},
 		{"Thinking...", "Thinking..."},
 	}

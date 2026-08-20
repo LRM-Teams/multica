@@ -15,10 +15,7 @@
     "placeholder_default": "输入消息…",
     "send_tooltip": "发送",
     "stop_tooltip": "停止",
-    "send_failed_toast": "发送消息失败",
-    "project_label": "项目",
-    "project_none": "无项目",
-    "project_tooltip": "设置该聊天对应的项目"
+    "send_failed_toast": "发送消息失败"
   },
   "message_list": {
     "show_details": "查看详情",
@@ -120,22 +117,7 @@
   "status_pill": {
     "stages": {
       "offline": "离线",
-      "reconnecting": "重连中",
-      "queued": "排队中",
-      "starting_up": "处理中",
-      "thinking": "思考中",
-      "typing": "输出"
-    },
-    "tools": {
-      "running_command": "执行命令…",
-      "reading_files": "读取文件…",
-      "searching_code": "搜索代码…",
-      "making_edits": "编辑文件…",
-      "searching_web": "搜索网页…",
-      "updating_todos": "更新待办…",
-      "running_subagent": "运行子代理…",
-      "planning": "规划中…",
-      "fallback": "处理中"
+      "thinking": "思考中"
     }
   },
   "bubble_cursor": {

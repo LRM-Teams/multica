@@ -14,5 +14,6 @@ to these sources.
 | Bubble Q&A = final assistant output (not `message send --target chat:`) | `formatStandaloneChatTurnPrompt`; `writebackStandaloneChatTurn`; engineering-principles §1.5 |
 | Wake prefix rebuilt on redelivery | `redeliverUnacknowledgedStandaloneChat` + `buildNoteChatWakePrefix` |
 | Workspace Notes Assistant persona | template `notes-assistant.json`; `EnsureNotesAssistantAgent` |
-| Stale instructions refresh marker | `notesAssistantInstructionsCapabilityMarker` (`Standalone Agent Chat`) |
+| Dual wake: bubble vs 写汇报 synthesizer | `notes-assistant.json` (`Period Brief synthesizer wake`); `multica-period-work-brief` |
+| Stale instructions refresh marker | `notesAssistantInstructionsCapabilityMarker` (`Period Brief synthesizer wake`) |
 | Product contract | `docs/notes-editor-worker-contract.md` § Notes assistant bubble |

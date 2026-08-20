@@ -190,6 +190,12 @@ func TestBuildNotePeriodBriefCollectorPromptEscapesWindowAndForbidsBrief(t *test
 	if !strings.Contains(prompt, "multica-period-work-collect") {
 		t.Fatalf("collector instruction must point at period-work-collect skill:\n%s", prompt)
 	}
+	if !strings.Contains(prompt, "/workspace") {
+		t.Fatalf("collector prompt must scan /workspace, not HOME-only:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "SCAN_ROOTS") {
+		t.Fatalf("collector prompt must name SCAN_ROOTS:\n%s", prompt)
+	}
 }
 
 func TestBuildNoteWorkerPromptUntrustedBoundary(t *testing.T) {

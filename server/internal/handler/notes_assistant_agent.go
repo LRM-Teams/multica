@@ -20,7 +20,7 @@ const (
 	notesAssistantAgentDisplayName = "笔记助手"
 	notesAssistantAgentTemplate    = "notes-assistant"
 	// Detects personas that predate selective-read wake contract.
-	notesAssistantInstructionsCapabilityMarker = "Standalone Agent Chat"
+	notesAssistantInstructionsCapabilityMarker = "Period Brief synthesizer wake"
 )
 
 // EnsureNotesAssistantAgentResponse is returned by POST /api/agents/notes-assistant.
@@ -65,6 +65,7 @@ func (h *Handler) EnsureNotesAssistantAgent(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
+	h.archiveRetiredWeeklyReportAgents(r.Context(), wsUUID, parseUUID(ownerID))
 
 	var req ensureNotesAssistantAgentRequest
 	if r.Body != nil {

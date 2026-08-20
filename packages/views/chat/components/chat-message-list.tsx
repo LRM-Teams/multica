@@ -34,7 +34,7 @@ import { Markdown } from "@multica/views/common/markdown";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { AttachmentList } from "../../issues/components/comment-card";
 import type { AgentPresence } from "@multica/core/agents";
-import type { ChatMessage, ChatPendingTask, TaskFailureReason, TaskMessagePayload } from "@multica/core/types";
+import type { ChatMessage, ChatPendingTask, TaskFailureReason } from "@multica/core/types";
 import type { ChatTimelineItem } from "@multica/core/chat";
 import { parseStickerMessage } from "@multica/core/chat";
 import { failureReasonLabel } from "../../agents/components/tabs/task-failure";
@@ -60,6 +60,7 @@ import {
   BubbleSubagentPanel,
   BubbleTodoPanel,
 } from "./bubble-cursor-panels";
+import { shouldPinChatToLatest } from "../lib/pin-chat-to-latest";
 import { useT } from "../../i18n";
 import type { MessagePart } from "@multica/core/types";
 
@@ -72,16 +73,10 @@ import type { MessagePart } from "@multica/core/types";
 
 interface ChatListChrome {
   isFetchingOlderMessages: boolean;
-  hasLive: boolean;
-  liveTimeline: ChatTimelineItem[];
-  isDmBubble: boolean;
   showStatusPill: boolean;
   pendingTask: ChatPendingTask | null | undefined;
-  liveTaskMessages: readonly TaskMessagePayload[];
   availability: AgentPresence | undefined;
   loadingOlderLabel: string;
-  /** Stable key so process-fold open state survives live remounts (LRM-690). */
-  liveFoldKey?: string;
 }
 
 const ChatListChromeContext = createContext<ChatListChrome | null>(null);
@@ -104,20 +99,9 @@ function ChatMessageListFooter() {
   if (!chrome) return null;
   return (
     <div className="mx-auto w-full max-w-4xl px-5 pb-4 space-y-4">
-      {chrome.hasLive && (
-        <div className="w-full space-y-1.5">
-          <TimelineView
-            items={chrome.liveTimeline}
-            isStreaming
-            enhanced={chrome.isDmBubble}
-            foldKey={chrome.liveFoldKey}
-          />
-        </div>
-      )}
       {chrome.showStatusPill && chrome.pendingTask && (
         <TaskStatusPill
           pendingTask={chrome.pendingTask}
-          taskMessages={chrome.liveTaskMessages}
           availability={chrome.availability}
         />
       )}
@@ -166,6 +150,8 @@ export function ChatMessageList({
   isDmBubble = false,
 }: ChatMessageListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const lastTailIdRef = useRef<string | undefined>(undefined);
+  const pinToLatestRef = useRef(true);
   const [scrollContainerEl, setScrollContainerEl] = useState<HTMLDivElement | null>(null);
   const [isNearTop, setIsNearTop] = useState(true);
   const [isNearBottom, setIsNearBottom] = useState(true);
@@ -179,12 +165,11 @@ export function ChatMessageList({
   const turnOutstanding = isStandaloneSessionOutstanding(pendingTask);
   const lastMessage = messages[messages.length - 1];
   const pendingAlreadyPersisted = turnOutstanding && lastMessage?.role === "assistant";
-  const liveTaskMessages: TaskMessagePayload[] = [];
-  const liveTimeline: ChatTimelineItem[] = [];
-  const hasLive = false;
+  // Standalone Raft deliver has no live task:message stream — StatusPill alone
+  // covers the outstanding wait until chat:done lands the assistant message.
   const showStatusPill = turnOutstanding && !pendingAlreadyPersisted && !!pendingTask;
 
-  const totalCount = messages.length + (hasLive || showStatusPill ? 1 : 0);
+  const totalCount = messages.length + (showStatusPill ? 1 : 0);
   const firstIndex = totalCount > 0 ? firstItemIndex : 0;
   const showScrollControls = totalCount > 0 && (!isNearTop || !isNearBottom);
 
@@ -193,8 +178,28 @@ export function ChatMessageList({
     if (!scrollEl) return;
 
     const distanceFromBottom = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight;
+    const nearBottom = distanceFromBottom <= 120;
     setIsNearTop(scrollEl.scrollTop <= 120);
-    setIsNearBottom(distanceFromBottom <= 120);
+    setIsNearBottom(nearBottom);
+    if (!nearBottom) pinToLatestRef.current = false;
+  }, []);
+
+  const scrollToBoundary = useCallback((top: number) => {
+    scrollRef.current?.scrollTo({ top, behavior: "smooth" });
+  }, []);
+
+  const scrollToLatest = useCallback((behavior: ScrollBehavior) => {
+    const el = scrollRef.current;
+    if (!el) return;
+    pinToLatestRef.current = true;
+    setIsNearBottom(true);
+    const jump = () => {
+      el.scrollTo({ top: el.scrollHeight, behavior });
+    };
+    jump();
+    // Virtuoso may grow the scroller after the first paint of a new row
+    // (status pill / optimistic bubble). A second frame lands on the real end.
+    window.requestAnimationFrame(jump);
   }, []);
 
   useEffect(() => {
@@ -206,12 +211,20 @@ export function ChatMessageList({
   }, [scrollContainerEl, updateScrollPosition]);
 
   useEffect(() => {
-    updateScrollPosition();
-  }, [totalCount, hasLive, showStatusPill, updateScrollPosition]);
+    const tail = messages[messages.length - 1];
+    const previousTailId = lastTailIdRef.current;
+    if (shouldPinChatToLatest(previousTailId, tail)) {
+      scrollToLatest(previousTailId === undefined ? "auto" : "smooth");
+    }
+    lastTailIdRef.current = tail?.id;
+  }, [messages, scrollToLatest]);
 
-  const scrollToBoundary = useCallback((top: number) => {
-    scrollRef.current?.scrollTo({ top, behavior: "smooth" });
-  }, []);
+  useEffect(() => {
+    updateScrollPosition();
+    if (pinToLatestRef.current && showStatusPill) {
+      scrollToLatest("smooth");
+    }
+  }, [totalCount, showStatusPill, updateScrollPosition, scrollToLatest]);
 
   const handleMessageBodyLayoutChange = useCallback(() => {
     const shouldKeepBottom = isNearBottom;
@@ -228,24 +241,15 @@ export function ChatMessageList({
   const chromeValue = useMemo<ChatListChrome>(
     () => ({
       isFetchingOlderMessages,
-      hasLive,
-      liveTimeline,
-      isDmBubble,
       showStatusPill,
       pendingTask,
-      liveTaskMessages: liveTaskMessages ?? [],
       availability,
       loadingOlderLabel: t(($) => $.message_list.loading_older),
-      liveFoldKey: undefined,
     }),
     [
       isFetchingOlderMessages,
-      hasLive,
-      liveTimeline,
-      isDmBubble,
       showStatusPill,
       pendingTask,
-      liveTaskMessages,
       availability,
       t,
     ],
@@ -272,8 +276,15 @@ export function ChatMessageList({
             firstItemIndex={firstIndex}
             increaseViewportBy={{ top: 400, bottom: 600 }}
             atBottomThreshold={120}
-            atBottomStateChange={setIsNearBottom}
-            followOutput={() => (!isFetchingOlderMessages && isNearBottom ? "smooth" : false)}
+            atBottomStateChange={(atBottom) => {
+              setIsNearBottom(atBottom);
+              if (!atBottom) pinToLatestRef.current = false;
+            }}
+            followOutput={() => {
+              if (isFetchingOlderMessages) return false;
+              if (pinToLatestRef.current || isNearBottom) return "smooth";
+              return false;
+            }}
             startReached={() => {
               if (hasOlderMessages && !isFetchingOlderMessages) {
                 onLoadOlderMessages?.();

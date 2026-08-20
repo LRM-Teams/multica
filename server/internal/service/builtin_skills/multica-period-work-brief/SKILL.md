@@ -1,6 +1,6 @@
 ---
 name: multica-period-work-brief
-description: "Use when synthesizing a Period Work Brief / 本期工作介绍 / 周报 from platform Facts and collector packs. Covers audience-facing reporting (no evidence layer), fixed section shape (Summary with Work Summary + Next Steps; optional Technique / Achievements / Research), titles, Mermaid for intuition, status board, abandon vs retry, the narrow retry-collectors CLI (max 3), and --note-write delivery under 工作介绍/. Do not use for collecting OS work (that is multica-period-work-collect)."
+description: "Use when the Notes Assistant (笔记助手) is woken as the 写汇报 synthesizer from platform Facts and collector packs. Covers audience-facing reporting (no evidence layer), fixed section shape (Summary with Work Summary + Next Steps; optional Technique / Achievements / Research), titles, Mermaid for intuition, status board, abandon vs retry, the narrow retry-collectors CLI (max 3), and --note-write delivery under 工作介绍/. Do not use for Notes FAB bubble chat (multica-notes-assistant) or collecting OS work (multica-period-work-collect)."
 user-invocable: false
 allowed-tools: Bash(multica *)
 ---

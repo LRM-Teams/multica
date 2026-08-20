@@ -561,18 +561,21 @@ const ResearchRunSnapshotSchema = z
     gate: z
       .object({
         passed: z.boolean(),
-        findings: z
-          .array(
-            z
-              .object({
-                code: z.string(),
-                severity: z.string(),
-                message: z.string(),
-                metadata: z.record(z.string(), z.unknown()).optional(),
-              })
-              .passthrough(),
-          )
-          .default([]),
+        findings: z.preprocess(
+          (value) => (value == null ? [] : value),
+          z
+            .array(
+              z
+                .object({
+                  code: z.string(),
+                  severity: z.string(),
+                  message: z.string(),
+                  metadata: z.record(z.string(), z.unknown()).optional(),
+                })
+                .passthrough(),
+            )
+            .default([]),
+        ),
       })
       .passthrough(),
     attempt_context: ResearchAttemptArtifactContextSchema.optional(),

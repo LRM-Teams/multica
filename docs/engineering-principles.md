@@ -661,4 +661,10 @@
 - `/device` must accept a typed `user_code`. Arriving via `verification_uri_complete` must display the code and require a match confirmation before approve/deny.
 - **物**：`server/internal/handler/device_auth.go` + `device_auth_test.go`；`server/cmd/multica/cmd_auth.go` + `cmd_device_login_test.go`；`packages/views/device/device-confirm-page.tsx` + test.
 
+### 4.24 Graph Memory 是独立 project/channel 图，不是 legacy 无损替代 — `仅文档`（实现门槛尚未落地）
+- Graph 模式只替代 project/channel/daily；user 与 agent memory 继续使用 legacy 文件。Graph miss、故障或空库不得回退 legacy project/channel/daily。首次启用从空图开始，不迁移或 backfill 旧文件。
+- 每个 `(workspace_id, project_id)` 一个由获授权参与 Agent 共享的物理图；最初未绑定项目的 Channel 使用永久 standalone 图。Project-bound Channel 改绑后保留 channel-only lineage，旧 Project 的 project-visible 节点绝不可经该 Channel 泄漏。
+- Graph 数据面由 Server 统一拥有；daemon 不持有本地图真相。Profile 参数必须进入运行时；Graph writer 验收前 job 保持 inert，验收后才移除第二环境开关；Graph Workspace 不运行现有 legacy L1–L4/self-review/team-curation pipeline。
+- Graph 保持 Experimental，且任何用户 Workspace（含 Experimental）启用前必须先通过 P0。P0/P1、错误语义、daily、治理 API、UI 和验收矩阵见 [`docs/superpowers/specs/2026-08-17-graph-memory-scope-design.md`](superpowers/specs/2026-08-17-graph-memory-scope-design.md)。实现与见红测试落地前不得标 `可执行`，也不得把 Graph 设为默认。
+
 维护人：Parker（产品）。规矩变更走 PR；`可执行` 升降档需 owner 签字。

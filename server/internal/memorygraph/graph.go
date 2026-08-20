@@ -24,22 +24,9 @@ type Graph struct {
 // LoadGraph loads version v from the store and builds the in-memory index.
 // Callers should run Validate to enforce the schema hard gate (design §5.4).
 func LoadGraph(store *Store, v int) (*Graph, error) {
-	nodes, err := store.LoadNodes(v)
-	if err != nil {
-		return nil, err
-	}
-	hier, rel, err := store.LoadEdges(v)
-	if err != nil {
-		return nil, err
-	}
-	g := newGraph()
-	for _, n := range nodes {
-		g.nodes[n.NodeID] = n
-	}
-	g.hier = hier
-	g.rel = rel
-	g.rebuild()
-	return g, nil
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	return store.loadGraphLocked(v)
 }
 
 func newGraph() *Graph {
@@ -153,7 +140,7 @@ func (g *Graph) AddHierarchyEdge(e *Edge, maxFanout int) error {
 	if e.From == e.To || g.reachable(e.To, e.From) {
 		return fmt.Errorf("hierarchy edge %s would create a cycle through node %q", e.EdgeID, e.From)
 	}
-	if maxFanout > 0 && len(g.childrenOf[e.From]) >= maxFanout {
+	if maxFanout > 0 && CountableHierarchyFanout(g, e.From) >= maxFanout {
 		return fmt.Errorf("hierarchy edge %s: node %q fanout limit %d reached", e.EdgeID, e.From, maxFanout)
 	}
 	g.hier = append(g.hier, e)

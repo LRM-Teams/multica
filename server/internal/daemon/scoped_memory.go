@@ -189,6 +189,40 @@ func readScopedMemoryFile(path, template string, maxBytes int) string {
 	return truncateUTF8Bytes(content, maxBytes)
 }
 
+// graphModeLegacyDailyName is the legacy daily file's injection name. The
+// graph owns daily memory in graph mode, so the legacy daily is excluded by
+// source even though its scope label is "agent" (spec §8 source whitelist).
+const graphModeLegacyDailyName = "Today activity summary"
+
+// filterGraphModeLegacyMemories applies the graph-mode legacy source
+// whitelist (spec §8): keep user/member scopes and agent scope except the
+// legacy daily summary; drop project, channel, workspace, and team scopes —
+// the graph owns those, and a graph miss never falls back to them.
+func filterGraphModeLegacyMemories(in []execenv.MemoryContextForEnv) []execenv.MemoryContextForEnv {
+	out := make([]execenv.MemoryContextForEnv, 0, len(in))
+	for _, m := range in {
+		switch strings.ToLower(strings.TrimSpace(m.Scope)) {
+		case "user", "member":
+			out = append(out, m)
+		case "agent":
+			if m.Name != graphModeLegacyDailyName {
+				out = append(out, m)
+			}
+		}
+	}
+	return out
+}
+
+// mergeGraphModeExecutionMemory composes graph-mode execution memory:
+// whitelisted legacy user/agent memory plus any graph recall blobs. It never
+// replaces the legacy user/agent snapshot and never injects legacy
+// project/channel/daily memory (spec §8, §13 P0-1/P0-7).
+func mergeGraphModeExecutionMemory(agentRoot string, task Task, serverMemories, graphMemories []execenv.MemoryContextForEnv) []execenv.MemoryContextForEnv {
+	legacy, _ := prepareExecutionMemory(agentRoot, task, serverMemories)
+	merged := filterGraphModeLegacyMemories(legacy)
+	return append(merged, graphMemories...)
+}
+
 func truncateUTF8Bytes(value string, maxBytes int) string {
 	value = strings.TrimSpace(value)
 	if maxBytes <= 0 || value == "" {

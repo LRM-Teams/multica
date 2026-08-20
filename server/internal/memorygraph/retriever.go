@@ -21,6 +21,10 @@ func IsStagingID(id string) bool {
 type RetrievalConfig struct {
 	TopK       int     // number of docs returned per query
 	BM25Weight float64 // lexical channel weight; vector channel gets 1-BM25Weight
+	// View is the caller's visibility scope (spec §5), reapplied on every
+	// Search. The zero value is inactive (no filtering), preserving legacy
+	// behavior for existing callers.
+	View GraphView
 }
 
 // DefaultRetrievalConfig returns the design §6 defaults.
@@ -36,9 +40,10 @@ type HybridRetriever struct {
 	emb   *CachedEmbedder // nil → BM25-only mode
 	cfg   RetrievalConfig
 
-	mu   sync.RWMutex // guards bm25 and vecs during Rebuild/Search
-	bm25 *BM25Index
-	vecs map[string][]float32 // doc id -> embedding (only when emb != nil)
+	mu    sync.RWMutex // guards bm25, vecs and nodes during Rebuild/Search
+	bm25  *BM25Index
+	vecs  map[string][]float32 // doc id -> embedding (only when emb != nil)
+	nodes map[string]*Node     // doc id -> graph node (graph docs only; staging docs absent)
 	// version is the graph version the installed indexes were built from
 	// (0 = never built). Explore pins its tool server to a version and uses
 	// a matching retriever view for the whole call (design R5).
@@ -57,6 +62,7 @@ func NewHybridRetriever(store *Store, emb *CachedEmbedder, cfg RetrievalConfig) 
 		cfg:   cfg,
 		bm25:  NewBM25Index(),
 		vecs:  make(map[string][]float32),
+		nodes: make(map[string]*Node),
 	}
 }
 
@@ -88,8 +94,10 @@ func (r *HybridRetriever) RebuildForVersion(ctx context.Context, version int) er
 		body string
 	}
 	var docs []doc
+	nodes := make(map[string]*Node)
 	for _, n := range g.Nodes() {
 		docs = append(docs, doc{id: n.NodeID, body: n.Body})
+		nodes[n.NodeID] = n
 	}
 	segIDs, err := r.store.ListStagingSegments()
 	if err != nil {
@@ -126,6 +134,7 @@ func (r *HybridRetriever) RebuildForVersion(ctx context.Context, version int) er
 	r.mu.Lock()
 	r.bm25 = index
 	r.vecs = vecs
+	r.nodes = nodes
 	r.version = version
 	r.mu.Unlock()
 	return nil
@@ -154,6 +163,7 @@ func (r *HybridRetriever) ForkForVersion(ctx context.Context, version int) (*Hyb
 			cfg:     r.cfg,
 			bm25:    r.bm25,
 			vecs:    r.vecs,
+			nodes:   r.nodes,
 			version: r.version,
 		}
 		r.mu.RUnlock()
@@ -168,13 +178,45 @@ func (r *HybridRetriever) ForkForVersion(ctx context.Context, version int) (*Hyb
 }
 
 // Search runs the hybrid recall over the indexes installed by the last
-// Rebuild/RebuildForVersion.
+// Rebuild/RebuildForVersion. When cfg.View is active, docs whose node is
+// not visible under the view are dropped from the results (spec §5: the
+// view is reapplied at every retrieval step so ranking can never leak
+// cross-scope material). Staging docs carry no graph node and pass
+// through — they are only reachable in the graph they were staged into,
+// and recall dirs are already scope-resolved upstream.
 func (r *HybridRetriever) Search(ctx context.Context, query string) ([]ScoredDoc, error) {
 	r.mu.RLock()
 	index := r.bm25
 	vecs := r.vecs
 	r.mu.RUnlock()
-	return hybridSearch(ctx, index, vecs, r.emb, r.cfg, query)
+	docs, err := hybridSearch(ctx, index, vecs, r.emb, r.cfg, query)
+	if err != nil {
+		return nil, err
+	}
+	if r.viewActive() {
+		out := docs[:0]
+		for _, d := range docs {
+			if n := r.nodeForDoc(d.ID); n == nil || r.cfg.View.Allows(n) {
+				out = append(out, d)
+			}
+		}
+		docs = out
+	}
+	return docs, nil
+}
+
+// viewActive reports whether cfg.View filters results (spec §5). The zero
+// GraphView is inactive so legacy callers keep unfiltered retrieval.
+func (r *HybridRetriever) viewActive() bool {
+	return r.cfg.View.AllowProject || r.cfg.View.ChannelID != ""
+}
+
+// nodeForDoc maps a retrieval doc id back to its graph node, or nil for
+// staging docs and unknown ids.
+func (r *HybridRetriever) nodeForDoc(id string) *Node {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.nodes[id]
 }
 
 // hybridSearch is the shared two-channel scoring used by production Search

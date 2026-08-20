@@ -216,12 +216,11 @@ type Daemon struct {
 	memoryCurationRuns   map[string]string // workspace\x00stage -> Beijing plan date
 	activeCurationRuns   map[string]string // runtime id -> claimed run id
 
-	// graphMemoryOnce/graphMemoryProv hold the lazily-initialized graph
-	// memory reviewer (design §5.2). Initialization runs on the first
-	// graph-mode recall; a failure permanently falls back to legacy memory
-	// injection (graphMemoryProv stays nil) after one warn log.
-	graphMemoryOnce sync.Once
-	graphMemoryProv *graphMemoryProvider
+	// graphProfiles caches the server-delivered effective graph memory
+	// profile per workspace (spec §10): deliveries on the resident/channel
+	// path carry it, and the resident-message memory prep applies it.
+	graphProfileMu sync.Mutex
+	graphProfiles  map[string]graphMemoryEffectiveProfile // keyed by workspace id
 
 	// canonicalRuntimes owns the one durable provider process for each
 	// Agent×runtime Message coordinator.
@@ -2383,12 +2382,16 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	memoryTask.AgentID = agentID
 	executionMemories := serverMemories
 	if !restrictedExecution {
-		executionMemories, _ = prepareExecutionMemory(agentRootPath, memoryTask, serverMemories)
-		// Graph reviewer (design §1 memory_type=graph): a successful graph
-		// recall replaces the legacy scoped-memory snapshot; errors and
-		// misses keep the legacy result.
-		if graphMemories := d.graphExecutionMemories(ctx, memoryTask, taskLog); graphMemories != nil {
-			executionMemories = graphMemories
+		if effectiveMemoryType(d.cfg.MemoryType, memoryTask.MemoryType) == MemoryTypeGraph {
+			// Graph mode (spec §8): merge — legacy user/agent memory is
+			// always retained; the graph owns project/channel/daily; a
+			// graph miss or error injects no project/channel/daily data.
+			executionMemories = mergeGraphModeExecutionMemory(
+				agentRootPath, memoryTask, serverMemories,
+				d.graphExecutionMemories(ctx, memoryTask, taskLog),
+			)
+		} else {
+			executionMemories, _ = prepareExecutionMemory(agentRootPath, memoryTask, serverMemories)
 		}
 	}
 

@@ -1062,6 +1062,23 @@ func (s *PostgresStore) transitionRun(ctx context.Context, sessionID, workspaceI
 	if err != nil {
 		return Run{}, RunEvent{}, nil, err
 	}
+	if !retryTasks {
+		if _, err = tx.Exec(ctx, `
+			UPDATE research_work_item_attempt
+			SET status = 'cancelled', failure_class = $2, completed_at = now(), updated_at = now()
+			WHERE session_id = $1::uuid AND status IN ('dispatching', 'running')
+		`, sessionID, target); err != nil {
+			return Run{}, RunEvent{}, nil, err
+		}
+		if _, err = tx.Exec(ctx, `
+			UPDATE research_work_item
+			SET status = 'cancelled', terminal_reason_code = 'run_terminal', terminal_reason_detail = $2,
+			    lease_token = NULL, lease_expires_at = NULL, updated_at = now()
+			WHERE session_id = $1::uuid AND status IN ('pending', 'enqueued', 'ready', 'dispatching', 'running', 'awaiting_input')
+		`, sessionID, truncateBytes(reason, 1024)); err != nil {
+			return Run{}, RunEvent{}, nil, err
+		}
+	}
 	if _, err = tx.Exec(ctx, `UPDATE research_session SET status = $2, stop_reason = $3, updated_at = now() WHERE id = $1::uuid`, sessionID, target, truncateBytes(reason, 1024)); err != nil {
 		return Run{}, RunEvent{}, nil, err
 	}

@@ -487,10 +487,7 @@ func (e *Engine) Pause(ctx context.Context, sessionID, workspaceID, userID strin
 	if err != nil {
 		return Run{}, err
 	}
-	if _, err = e.cancelPendingAttempts(ctx, run, "research_run_paused"); err != nil {
-		return run, err
-	}
-	return run, reconcileHandoff(e.ReconcileSession(ctx, sessionID))
+	return run, e.finishTerminalTransition(ctx, run, sessionID, "research_run_paused")
 }
 
 func (e *Engine) Resume(ctx context.Context, sessionID, workspaceID, userID string) (Run, error) {
@@ -506,10 +503,7 @@ func (e *Engine) Cancel(ctx context.Context, sessionID, workspaceID, userID, rea
 	if err != nil {
 		return Run{}, err
 	}
-	if _, err = e.cancelPendingAttempts(ctx, run, "research_run_cancelled"); err != nil {
-		return run, err
-	}
-	return run, reconcileHandoff(e.ReconcileSession(ctx, sessionID))
+	return run, e.finishTerminalTransition(ctx, run, sessionID, "research_run_cancelled")
 }
 
 func (e *Engine) Archive(ctx context.Context, sessionID, workspaceID, userID, reason string) (Run, error) {
@@ -517,10 +511,20 @@ func (e *Engine) Archive(ctx context.Context, sessionID, workspaceID, userID, re
 	if err != nil {
 		return Run{}, err
 	}
-	if _, err = e.cancelPendingAttempts(ctx, run, "research_run_archived"); err != nil {
-		return run, err
+	return run, e.finishTerminalTransition(ctx, run, sessionID, "research_run_archived")
+}
+
+// finishTerminalTransition keeps a persisted terminal transition successful
+// for V6 even when projection/reconcile is still catching up.
+func (e *Engine) finishTerminalTransition(ctx context.Context, run Run, sessionID, reason string) error {
+	if run.OrchestratorVersion == OrchestratorVersionV6 {
+		_ = reconcileHandoff(e.ReconcileSession(ctx, sessionID))
+		return nil
 	}
-	return run, reconcileHandoff(e.ReconcileSession(ctx, sessionID))
+	if _, err := e.cancelPendingAttempts(ctx, run, reason); err != nil {
+		return err
+	}
+	return reconcileHandoff(e.ReconcileSession(ctx, sessionID))
 }
 
 func (e *Engine) Confirm(ctx context.Context, sessionID, workspaceID, userID string) (Run, error) {

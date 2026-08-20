@@ -1157,6 +1157,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Post("/period-brief-collectors", h.EnsurePeriodBriefCollectors)
 				r.Post("/notes-assistant", h.EnsureNotesAssistantAgent)
 				r.Post("/drafts", h.CreateAgentDraft)
+				r.Put("/runtime-config", h.BulkUpdateAgentRuntimeConfig)
+				r.Post("/lifecycle", h.BulkAgentLifecycle)
 				r.Get("/drafts/{draftId}", h.GetAgentDraft)
 				// Agent templates: pre-configured instructions + skill refs.
 				// Picking a template imports the referenced skills into the

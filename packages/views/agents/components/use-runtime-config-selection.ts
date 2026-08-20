@@ -20,7 +20,7 @@ type ModelScope = {
  * Computer → Runtime → Model → Reasoning selection with cascade rules.
  * Shared by Create / Wendy / Profile edit so all surfaces share one machine.
  */
-export function useExecutionSelection({
+export function useRuntimeConfigSelection({
   runtimes,
   currentUserId,
   initialRuntimeId = "",

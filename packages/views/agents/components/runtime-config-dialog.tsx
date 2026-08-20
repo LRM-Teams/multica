@@ -18,8 +18,8 @@ import {
 } from "@multica/ui/components/ui/dialog";
 import { useT } from "../../i18n";
 import { AgentEnvEditor } from "./agent-env-editor";
-import { ExecutionConfigFields } from "./execution-config-fields";
-import { useExecutionSelection } from "./use-execution-selection";
+import { RuntimeConfigFields } from "./runtime-config-fields";
+import { useRuntimeConfigSelection } from "./use-runtime-config-selection";
 
 /**
  * LRM-1351 + site-wide Computer → Runtime → Model → Reasoning edit dialog.
@@ -63,7 +63,7 @@ export function RuntimeConfigDialog({
       >
         <DialogHeader>
           <DialogTitle className="text-sm">
-            {t(($) => $.execution_config.dialog_title)}
+            {t(($) => $.runtime_config.dialog_title)}
           </DialogTitle>
         </DialogHeader>
 
@@ -106,7 +106,7 @@ function RuntimeConfigDialogBody({
 }) {
   const { t } = useT("agents");
   const [advancedOpen, setAdvancedOpen] = useState(false);
-  const selection = useExecutionSelection({
+  const selection = useRuntimeConfigSelection({
     runtimes,
     currentUserId,
     initialRuntimeId: agent.runtime_id,
@@ -151,7 +151,7 @@ function RuntimeConfigDialogBody({
   return (
     <>
       <div className="min-w-0 space-y-4 overflow-y-auto py-1 max-h-[60vh]">
-        <ExecutionConfigFields
+        <RuntimeConfigFields
           runtimes={runtimes}
           members={members}
           currentUserId={currentUserId}
@@ -177,16 +177,16 @@ function RuntimeConfigDialogBody({
             <ChevronDown
               className={`h-3.5 w-3.5 transition-transform ${advancedOpen ? "rotate-180" : ""}`}
             />
-            {t(($) => $.execution_config.more)}
+            {t(($) => $.runtime_config.more)}
           </CollapsibleTrigger>
           <CollapsibleContent className="pt-1">
             <div className="space-y-3 rounded-lg border p-3">
               <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                {t(($) => $.execution_config.advanced)}
+                {t(($) => $.runtime_config.advanced)}
               </p>
               <div className="space-y-2">
                 <p className="text-sm font-medium">
-                  {t(($) => $.execution_config.env_vars_title)}
+                  {t(($) => $.runtime_config.env_vars_title)}
                 </p>
                 <AgentEnvEditor agent={agent} />
               </div>
@@ -211,7 +211,7 @@ function RuntimeConfigDialogBody({
           onClick={() => void handleSave()}
         >
           {saving
-            ? t(($) => $.execution_config.dialog_saving)
+            ? t(($) => $.runtime_config.dialog_saving)
             : t(($) => $.inspector.save)}
         </Button>
       </DialogFooter>

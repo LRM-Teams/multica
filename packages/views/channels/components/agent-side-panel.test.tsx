@@ -327,7 +327,7 @@ const RESOURCES = {
     computer_version: enAgents.inspector.computer_version,
     computer_none: enAgents.inspector.computer_none,
   },
-  execution_config: {
+  runtime_config: {
     applies_next_run: "Changes take effect on the next run",
     dialog_title: "Runtime config",
     dialog_description: "Edits stay local until you save.",

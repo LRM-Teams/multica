@@ -49,8 +49,8 @@ vi.mock("@multica/core/runtimes", () => ({
   aggregateRuntimeHealthPresentation: () => "ok",
 }));
 
-vi.mock("../agents/components/use-execution-selection", () => ({
-  useExecutionSelection: () => ({
+vi.mock("../agents/components/use-runtime-config-selection", () => ({
+  useRuntimeConfigSelection: () => ({
     machineId: "machine-1",
     machineRuntimes: runtimeState.runtimes,
     runtimeId: runtimeState.runtimes[0]?.id ?? "",
@@ -71,8 +71,8 @@ vi.mock("@multica/core/api", () => ({
   api: { ensureWindy: vi.fn() },
 }));
 
-vi.mock("../agents/components/execution-config-fields", () => ({
-  ExecutionConfigFields: () => <div data-testid="execution-config-fields" />,
+vi.mock("../agents/components/runtime-config-fields", () => ({
+  RuntimeConfigFields: () => <div data-testid="runtime-config-fields" />,
 }));
 
 vi.mock("../onboarding/steps/cli-install-instructions", () => ({
@@ -123,7 +123,7 @@ describe("OnboardingAgentSetup", () => {
     expect(screen.getByRole("heading", { name: "Connect a Computer" })).toBeInTheDocument();
     expect(screen.getByTestId("onboarding-agent-connect-computer")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Create Wendy" })).toBeNull();
-    expect(screen.queryByTestId("execution-config-fields")).toBeNull();
+    expect(screen.queryByTestId("runtime-config-fields")).toBeNull();
   });
 
   it("step 2 follows server-owned Computer connectivity, not runtime timestamps", () => {
@@ -143,7 +143,7 @@ describe("OnboardingAgentSetup", () => {
 
     expect(screen.getByRole("heading", { name: "Meet Wendy" })).toBeInTheDocument();
     expect(screen.getByTestId("onboarding-agent-create-wendy")).toBeInTheDocument();
-    expect(screen.getByTestId("execution-config-fields")).toBeInTheDocument();
+    expect(screen.getByTestId("runtime-config-fields")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Create Wendy" })).toBeInTheDocument();
     expect(screen.queryByTestId("onboarding-agent-connect-computer")).toBeNull();
   });
@@ -164,6 +164,6 @@ describe("OnboardingAgentSetup", () => {
     render(<OnboardingAgentSetup workspace={workspace} />);
 
     expect(screen.getByRole("heading", { name: "Connect a Computer" })).toBeInTheDocument();
-    expect(screen.queryByTestId("execution-config-fields")).toBeNull();
+    expect(screen.queryByTestId("runtime-config-fields")).toBeNull();
   });
 });

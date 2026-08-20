@@ -533,7 +533,7 @@ function AgentProfileTabContent({
                 type="button"
                 className="-my-1.5 inline-flex shrink-0 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 onClick={() => setRuntimeDialogOpen(true)}
-                aria-label={t(($) => $.execution_config.edit_trigger_aria)}
+                aria-label={t(($) => $.runtime_config.edit_trigger_aria)}
                 data-testid="agent-runtime-config-edit"
               >
                 <Pencil className="size-3.5" aria-hidden />

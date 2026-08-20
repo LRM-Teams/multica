@@ -45,6 +45,8 @@ func TestResearchTransactionRecoveryMatrixCoversRegistry(t *testing.T) {
 		txOpV6ReportWorkCreate:         "TestV6ReportWorkCreateTransactionBoundary",
 		txOpV6ProjectionSnapshot:       "TestV6ProjectionSnapshotTransactionBoundary",
 		txOpV6ProjectionSlice:          "TestV6ProjectionSliceTransactionBoundary",
+		txOpV6OutboxReschedule:         "TestV6OutboxSQLGuardsLeaseAndEmitsFailureEvent",
+		txOpV6OutboxFail:               "TestV6OutboxSQLGuardsLeaseAndEmitsFailureEvent",
 	}
 	for operation, testName := range bespoke {
 		covered[operation] = struct{}{}

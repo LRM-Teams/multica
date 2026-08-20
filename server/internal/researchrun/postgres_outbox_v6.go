@@ -3,7 +3,10 @@ package researchrun
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 func (s *PostgresStore) ClaimV6Outbox(ctx context.Context, token string, lease time.Duration, limit int) ([]V6OutboxIntent, error) {
@@ -13,6 +16,7 @@ func (s *PostgresStore) ClaimV6Outbox(ctx context.Context, token string, lease t
 			last_error=CASE WHEN last_error='' THEN 'stale dispatch attempt' ELSE last_error END,
 			updated_at=now()
 		WHERE o.kind='dispatch_work_item' AND o.status IN ('pending','delivering')
+		  AND (o.lease_expires_at IS NULL OR o.lease_expires_at <= now())
 		  AND NOT EXISTS (
 			SELECT 1 FROM research_work_item_attempt a
 			WHERE a.id::text=COALESCE(o.payload->'access'->>'attempt_id',o.payload->'access'->>'AttemptID')
@@ -58,15 +62,62 @@ func (s *PostgresStore) CompleteV6Outbox(ctx context.Context, id, token string, 
 }
 
 func (s *PostgresStore) RescheduleV6Outbox(ctx context.Context, id, token, message string, next time.Time) error {
-	command, err := s.pool.Exec(ctx, `UPDATE research_v6_outbox
-		SET status=CASE WHEN delivery_attempts>=20 THEN 'failed' ELSE 'pending' END,
-			last_error=$3,next_delivery_at=$4,lease_token=NULL,lease_expires_at=NULL,updated_at=now()
-		WHERE id=$1::uuid AND lease_token=$2::uuid AND status='delivering'`, id, token, message, next)
+	tx, err := s.beginResearchTx(ctx, txOpV6OutboxReschedule, pgx.TxOptions{})
 	if err != nil {
 		return err
 	}
-	if command.RowsAffected() != 1 {
+	defer tx.Rollback(ctx)
+	var workspaceID, runID, kind, idempotencyKey, status string
+	err = tx.QueryRow(ctx, `UPDATE research_v6_outbox
+		SET status=CASE WHEN delivery_attempts>=20 THEN 'failed' ELSE 'pending' END,
+			last_error=$3,next_delivery_at=$4,lease_token=NULL,lease_expires_at=NULL,updated_at=now()
+		WHERE id=$1::uuid AND lease_token=$2::uuid AND status='delivering'
+		RETURNING workspace_id::text,session_id::text,kind,idempotency_key,status`, id, token, message, next).Scan(
+		&workspaceID, &runID, &kind, &idempotencyKey, &status)
+	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrWorkItemLeaseLost
 	}
-	return nil
+	if err != nil {
+		return err
+	}
+	if status == "failed" {
+		if err = appendV6OutboxFailureEvent(ctx, tx, workspaceID, runID, id, kind, idempotencyKey, message); err != nil {
+			return err
+		}
+	}
+	return s.commitResearchTx(ctx, txOpV6OutboxReschedule, tx)
+}
+
+// FailV6Outbox terminates an intent whose delivery can never succeed
+// (contract-invalid payload, non-retryable adapter classification) without
+// burning the remaining retry budget. It emits the same run event as retry
+// exhaustion so the failure is visible outside the outbox table.
+func (s *PostgresStore) FailV6Outbox(ctx context.Context, id, token, message string) error {
+	tx, err := s.beginResearchTx(ctx, txOpV6OutboxFail, pgx.TxOptions{})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var workspaceID, runID, kind, idempotencyKey string
+	err = tx.QueryRow(ctx, `UPDATE research_v6_outbox
+		SET status='failed',last_error=$3,lease_token=NULL,lease_expires_at=NULL,updated_at=now()
+		WHERE id=$1::uuid AND lease_token=$2::uuid AND status='delivering'
+		RETURNING workspace_id::text,session_id::text,kind,idempotency_key`, id, token, message).Scan(
+		&workspaceID, &runID, &kind, &idempotencyKey)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrWorkItemLeaseLost
+	}
+	if err != nil {
+		return err
+	}
+	if err = appendV6OutboxFailureEvent(ctx, tx, workspaceID, runID, id, kind, idempotencyKey, message); err != nil {
+		return err
+	}
+	return s.commitResearchTx(ctx, txOpV6OutboxFail, tx)
+}
+
+func appendV6OutboxFailureEvent(ctx context.Context, tx pgx.Tx, workspaceID, runID, outboxID, kind, idempotencyKey, message string) error {
+	_, err := appendEvent(ctx, tx, workspaceID, runID, "v6_outbox_delivery_failed", "v6-outbox-failed:"+outboxID,
+		"system", "", map[string]any{"outbox_id": outboxID, "kind": kind, "idempotency_key": idempotencyKey, "error": message})
+	return err
 }

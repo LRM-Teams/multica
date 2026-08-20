@@ -49,6 +49,7 @@ func (s *PostgresStore) RecoverExpiredV6WorkItems(ctx context.Context, limit int
 		      last_error=CASE WHEN last_error='' THEN 'stale dispatch attempt' ELSE last_error END,
 		      updated_at=now()
 		  WHERE o.kind='dispatch_work_item' AND o.status IN ('pending','delivering')
+		    AND (o.lease_expires_at IS NULL OR o.lease_expires_at <= now())
 		    AND COALESCE(o.payload->'access'->>'attempt_id',o.payload->'access'->>'AttemptID') IN (SELECT id::text FROM lost)
 		  RETURNING o.id
 		)

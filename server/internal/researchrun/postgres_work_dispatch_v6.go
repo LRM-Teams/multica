@@ -84,7 +84,10 @@ func (s *PostgresStore) prepareNextV6Dispatch(ctx context.Context) (bool, error)
 			return false, err
 		}
 	}
-	outboxPayload, _ := json.Marshal(V6DispatchIntentPayload{Access: V6AttemptAccess{WorkspaceID: workspaceID, RunID: runID, WorkItemID: workItemID, AttemptID: attemptID, AgentID: agentID}, Manifest: manifest, Mission: mission})
+	outboxPayload, err := json.Marshal(V6DispatchIntentPayload{Access: V6AttemptAccess{WorkspaceID: workspaceID, RunID: runID, WorkItemID: workItemID, AttemptID: attemptID, AgentID: agentID}, Manifest: manifest, Mission: mission})
+	if err != nil {
+		return false, err
+	}
 	if _, err = tx.Exec(ctx, `INSERT INTO research_v6_outbox(workspace_id,session_id,kind,idempotency_key,payload)VALUES($1::uuid,$2::uuid,'dispatch_work_item',$3,$4::jsonb)`, workspaceID, runID, dispatchKey, outboxPayload); err != nil {
 		return false, err
 	}

@@ -53,6 +53,10 @@ type ArchiveV6TeamMemberInput struct {
 type teamV6Store interface {
 	AddV6TeamMember(context.Context, AddV6TeamMemberInput) (V6TeamMember, error)
 	ArchiveV6TeamMember(context.Context, ArchiveV6TeamMemberInput) (V6TeamMember, error)
+	// FindActiveV6TeamMemberByAgent reports the agent's current non-terminal
+	// membership, if any. Outbox redelivery uses it to converge instead of
+	// minting a duplicate membership for an already-onboarded agent.
+	FindActiveV6TeamMemberByAgent(ctx context.Context, workspaceID, runID, agentID string) (V6TeamMember, bool, error)
 }
 
 type teamV6Module struct{ store teamV6Store }

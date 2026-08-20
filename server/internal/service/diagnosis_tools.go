@@ -148,7 +148,9 @@ func GetSegmentMessages(
 	}
 
 	// Get messages for the task in the segment's seq range
-	messages, err := messageStore.MessagesForTaskInRange(ctx, segment.AgentRunID, segment.StartSeq, segment.EndSeq)
+	messages, err := messageStore.MessagesForTaskInRange(ctx, db.MessagesForTaskInRangeParams{
+		TaskID: segment.AgentRunID, StartSeq: segment.StartSeq, EndSeq: segment.EndSeq,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -394,7 +396,7 @@ func GetSegmentMessagePageWithKey(ctx context.Context, pager DiagnosisMessagePag
 		EndSeq:   endSeq,
 		LastSeq:  lastSeq,
 		LastID:   lastID,
-		Limit:    maxDiagnosisSegmentTurns,
+		PageLimit: maxDiagnosisSegmentTurns,
 	})
 	if err != nil {
 		return SegmentMessagePage{}, err

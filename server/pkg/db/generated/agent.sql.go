@@ -14,7 +14,7 @@ import (
 const archiveAgent = `-- name: ArchiveAgent :one
 UPDATE agent SET archived_at = now(), archived_by = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role
+RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail
 `
 
 type ArchiveAgentParams struct {
@@ -53,6 +53,10 @@ func (q *Queries) ArchiveAgent(ctx context.Context, arg ArchiveAgentParams) (Age
 		&i.AvatarSource,
 		&i.AvatarAttachmentID,
 		&i.WorkspaceRole,
+		&i.RuntimeReassignedAt,
+		&i.CrashedSince,
+		&i.ProviderBlockedUntil,
+		&i.ProviderBlockDetail,
 	)
 	return i, err
 }
@@ -61,7 +65,7 @@ const archiveAgentsByIDs = `-- name: ArchiveAgentsByIDs :many
 UPDATE agent
 SET archived_at = now(), archived_by = $1, updated_at = now()
 WHERE id = ANY($2::uuid[]) AND archived_at IS NULL
-RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role
+RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail
 `
 
 type ArchiveAgentsByIDsParams struct {
@@ -114,6 +118,10 @@ func (q *Queries) ArchiveAgentsByIDs(ctx context.Context, arg ArchiveAgentsByIDs
 			&i.AvatarSource,
 			&i.AvatarAttachmentID,
 			&i.WorkspaceRole,
+			&i.RuntimeReassignedAt,
+			&i.CrashedSince,
+			&i.ProviderBlockedUntil,
+			&i.ProviderBlockDetail,
 		); err != nil {
 			return nil, err
 		}
@@ -129,7 +137,7 @@ const archiveAgentsByRuntime = `-- name: ArchiveAgentsByRuntime :many
 UPDATE agent
 SET archived_at = now(), archived_by = $1, updated_at = now()
 WHERE runtime_id = ANY($2::uuid[]) AND archived_at IS NULL
-RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role
+RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail
 `
 
 type ArchiveAgentsByRuntimeParams struct {
@@ -178,6 +186,10 @@ func (q *Queries) ArchiveAgentsByRuntime(ctx context.Context, arg ArchiveAgentsB
 			&i.AvatarSource,
 			&i.AvatarAttachmentID,
 			&i.WorkspaceRole,
+			&i.RuntimeReassignedAt,
+			&i.CrashedSince,
+			&i.ProviderBlockedUntil,
+			&i.ProviderBlockDetail,
 		); err != nil {
 			return nil, err
 		}
@@ -194,7 +206,7 @@ UPDATE agent_inbox_event
 SET status = 'suppressed', terminal_outcome = 'cancelled',
     completed_at = now(), terminal_at = now(), acked_at = now()
 WHERE id = $1 AND status IN ('pending', 'draining', 'failed')
-RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id
+RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn
 `
 
 func (q *Queries) CancelAgentTask(ctx context.Context, id pgtype.UUID) (AgentInboxEvent, error) {
@@ -250,6 +262,8 @@ func (q *Queries) CancelAgentTask(ctx context.Context, id pgtype.UUID) (AgentInb
 		&i.IsLeaderTask,
 		&i.WaitReason,
 		&i.InitiatorUserID,
+		&i.AgentDmExchangeID,
+		&i.AgentDmTurn,
 	)
 	return i, err
 }
@@ -259,7 +273,7 @@ UPDATE agent_inbox_event
 SET status = 'suppressed', terminal_outcome = 'cancelled',
     completed_at = now(), terminal_at = now(), acked_at = now()
 WHERE agent_id = $1 AND status IN ('pending', 'draining', 'failed')
-RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id
+RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn
 `
 
 // Bulk-cancel every active (queued/dispatched/running) task for an agent.
@@ -326,6 +340,8 @@ func (q *Queries) CancelAgentTasksByAgent(ctx context.Context, agentID pgtype.UU
 			&i.IsLeaderTask,
 			&i.WaitReason,
 			&i.InitiatorUserID,
+			&i.AgentDmExchangeID,
+			&i.AgentDmTurn,
 		); err != nil {
 			return nil, err
 		}
@@ -342,7 +358,7 @@ UPDATE agent_inbox_event
 SET status = 'suppressed', terminal_outcome = 'cancelled',
     completed_at = now(), terminal_at = now(), acked_at = now()
 WHERE chat_session_id = $1 AND status IN ('pending', 'draining', 'failed')
-RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id
+RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn
 `
 
 // Cancels active tasks belonging to a chat session. Called from
@@ -409,6 +425,8 @@ func (q *Queries) CancelAgentTasksByChatSession(ctx context.Context, chatSession
 			&i.IsLeaderTask,
 			&i.WaitReason,
 			&i.InitiatorUserID,
+			&i.AgentDmExchangeID,
+			&i.AgentDmTurn,
 		); err != nil {
 			return nil, err
 		}
@@ -425,7 +443,7 @@ UPDATE agent_inbox_event
 SET status = 'suppressed', terminal_outcome = 'cancelled',
     completed_at = now(), terminal_at = now(), acked_at = now()
 WHERE issue_id = $1 AND status IN ('pending', 'draining', 'failed')
-RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id
+RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn
 `
 
 // Cancels every active task on the issue and returns the affected rows so the
@@ -492,6 +510,8 @@ func (q *Queries) CancelAgentTasksByIssue(ctx context.Context, issueID pgtype.UU
 			&i.IsLeaderTask,
 			&i.WaitReason,
 			&i.InitiatorUserID,
+			&i.AgentDmExchangeID,
+			&i.AgentDmTurn,
 		); err != nil {
 			return nil, err
 		}
@@ -508,7 +528,7 @@ UPDATE agent_inbox_event
 SET status = 'suppressed', terminal_outcome = 'cancelled',
     completed_at = now(), terminal_at = now(), acked_at = now()
 WHERE issue_id = $1 AND agent_id = $2 AND status IN ('pending', 'draining', 'failed')
-RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id
+RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn
 `
 
 type CancelAgentTasksByIssueAndAgentParams struct {
@@ -579,6 +599,8 @@ func (q *Queries) CancelAgentTasksByIssueAndAgent(ctx context.Context, arg Cance
 			&i.IsLeaderTask,
 			&i.WaitReason,
 			&i.InitiatorUserID,
+			&i.AgentDmExchangeID,
+			&i.AgentDmTurn,
 		); err != nil {
 			return nil, err
 		}
@@ -595,7 +617,7 @@ UPDATE agent_inbox_event
 SET status = 'suppressed', terminal_outcome = 'cancelled',
     completed_at = now(), terminal_at = now(), acked_at = now()
 WHERE trigger_comment_id = $1 AND status IN ('pending', 'draining', 'failed')
-RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id
+RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn
 `
 
 // Cancels active tasks whose trigger is the given comment. Called when a
@@ -662,6 +684,8 @@ func (q *Queries) CancelAgentTasksByTriggerComment(ctx context.Context, triggerC
 			&i.IsLeaderTask,
 			&i.WaitReason,
 			&i.InitiatorUserID,
+			&i.AgentDmExchangeID,
+			&i.AgentDmTurn,
 		); err != nil {
 			return nil, err
 		}
@@ -679,7 +703,7 @@ SET status = 'suppressed', terminal_outcome = 'cancelled',
     completed_at = now(), terminal_at = now(), acked_at = now(),
     failure_reason = 'followup_interrupt'
 WHERE chat_session_id = $1 AND agent_id = $2 AND id <> $3 AND status = 'draining'
-RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id
+RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn
 `
 
 type CancelInFlightChatTasksBySessionAndAgentParams struct {
@@ -749,6 +773,8 @@ func (q *Queries) CancelInFlightChatTasksBySessionAndAgent(ctx context.Context, 
 			&i.IsLeaderTask,
 			&i.WaitReason,
 			&i.InitiatorUserID,
+			&i.AgentDmExchangeID,
+			&i.AgentDmTurn,
 		); err != nil {
 			return nil, err
 		}
@@ -766,7 +792,7 @@ SET status = 'suppressed', terminal_outcome = 'cancelled',
     completed_at = now(), terminal_at = now(), acked_at = now(),
     failure_reason = 'followup_interrupt'
 WHERE issue_id = $1 AND agent_id = $2 AND id <> $3 AND status = 'draining'
-RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id
+RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn
 `
 
 type CancelInFlightTasksByIssueAndAgentParams struct {
@@ -837,6 +863,8 @@ func (q *Queries) CancelInFlightTasksByIssueAndAgent(ctx context.Context, arg Ca
 			&i.IsLeaderTask,
 			&i.WaitReason,
 			&i.InitiatorUserID,
+			&i.AgentDmExchangeID,
+			&i.AgentDmTurn,
 		); err != nil {
 			return nil, err
 		}
@@ -848,10 +876,25 @@ func (q *Queries) CancelInFlightTasksByIssueAndAgent(ctx context.Context, arg Ca
 	return items, nil
 }
 
+const clearAgentCrashed = `-- name: ClearAgentCrashed :exec
+UPDATE agent
+SET crashed_since = NULL, updated_at = now()
+WHERE id = $1
+`
+
+// Clears a prior MarkAgentCrashed once the daemon has a live resident
+// provider again (successful recreate after eviction) or a human-driven
+// lifecycle restart succeeded. Leaving this out would stick "crashed" forever
+// after recovery — the same class of stale-fact bug as uncleared offline_reason.
+func (q *Queries) ClearAgentCrashed(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, clearAgentCrashed, id)
+	return err
+}
+
 const clearAgentMcpConfig = `-- name: ClearAgentMcpConfig :one
 UPDATE agent SET mcp_config = NULL, updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role
+RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail
 `
 
 func (q *Queries) ClearAgentMcpConfig(ctx context.Context, id pgtype.UUID) (Agent, error) {
@@ -885,14 +928,33 @@ func (q *Queries) ClearAgentMcpConfig(ctx context.Context, id pgtype.UUID) (Agen
 		&i.AvatarSource,
 		&i.AvatarAttachmentID,
 		&i.WorkspaceRole,
+		&i.RuntimeReassignedAt,
+		&i.CrashedSince,
+		&i.ProviderBlockedUntil,
+		&i.ProviderBlockDetail,
 	)
 	return i, err
+}
+
+const clearAgentProviderBlocked = `-- name: ClearAgentProviderBlocked :exec
+UPDATE agent
+SET provider_blocked_until = NULL,
+    provider_block_detail = '',
+    updated_at = now()
+WHERE id = $1
+`
+
+// Explicit clear (e.g. admin override). Normal unlock is read-time when a
+// known until elapses — RefreshAgentStatusFromTasks then leaves blocked.
+func (q *Queries) ClearAgentProviderBlocked(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, clearAgentProviderBlocked, id)
+	return err
 }
 
 const clearAgentThinkingLevel = `-- name: ClearAgentThinkingLevel :one
 UPDATE agent SET thinking_level = NULL, updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role
+RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail
 `
 
 // Explicit NULL-clear for thinking_level. COALESCE-based UpdateAgent cannot
@@ -929,6 +991,10 @@ func (q *Queries) ClearAgentThinkingLevel(ctx context.Context, id pgtype.UUID) (
 		&i.AvatarSource,
 		&i.AvatarAttachmentID,
 		&i.WorkspaceRole,
+		&i.RuntimeReassignedAt,
+		&i.CrashedSince,
+		&i.ProviderBlockedUntil,
+		&i.ProviderBlockDetail,
 	)
 	return i, err
 }
@@ -939,7 +1005,7 @@ SET status = 'acked', completed_at = now(), terminal_at = now(),
     terminal_outcome = 'completed', retryable = false, acked_at = now(),
     result = $2, session_id = $3, work_dir = $4
 WHERE id = $1 AND status = 'draining'
-RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id
+RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn
 `
 
 type CompleteAgentTaskParams struct {
@@ -1007,6 +1073,8 @@ func (q *Queries) CompleteAgentTask(ctx context.Context, arg CompleteAgentTaskPa
 		&i.IsLeaderTask,
 		&i.WaitReason,
 		&i.InitiatorUserID,
+		&i.AgentDmExchangeID,
+		&i.AgentDmTurn,
 	)
 	return i, err
 }
@@ -1051,7 +1119,7 @@ INSERT INTO agent (
     $18, $5, $6, $7, $8, $9, $10, $11,
     $12, $13, $14, $15
 )
-RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role
+RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail
 `
 
 type CreateAgentParams struct {
@@ -1125,6 +1193,10 @@ func (q *Queries) CreateAgent(ctx context.Context, arg CreateAgentParams) (Agent
 		&i.AvatarSource,
 		&i.AvatarAttachmentID,
 		&i.WorkspaceRole,
+		&i.RuntimeReassignedAt,
+		&i.CrashedSince,
+		&i.ProviderBlockedUntil,
+		&i.ProviderBlockDetail,
 	)
 	return i, err
 }
@@ -1152,7 +1224,7 @@ SELECT
     $2
 FROM agent a
 WHERE a.id = $9
-RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id
+RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn
 `
 
 type CreateAgentTaskParams struct {
@@ -1230,6 +1302,8 @@ func (q *Queries) CreateAgentTask(ctx context.Context, arg CreateAgentTaskParams
 		&i.IsLeaderTask,
 		&i.WaitReason,
 		&i.InitiatorUserID,
+		&i.AgentDmExchangeID,
+		&i.AgentDmTurn,
 	)
 	return i, err
 }
@@ -1245,7 +1319,7 @@ SELECT
   NULL, 'quick_create', true, 'pending', $3, $2
 FROM agent a
 WHERE a.id = $4
-RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id
+RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn
 `
 
 type CreateQuickCreateTaskParams struct {
@@ -1316,6 +1390,8 @@ func (q *Queries) CreateQuickCreateTask(ctx context.Context, arg CreateQuickCrea
 		&i.IsLeaderTask,
 		&i.WaitReason,
 		&i.InitiatorUserID,
+		&i.AgentDmExchangeID,
+		&i.AgentDmTurn,
 	)
 	return i, err
 }
@@ -1343,7 +1419,7 @@ SELECT
     p.is_leader_task
 FROM agent_inbox_event p
 WHERE p.id = $3
-RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id
+RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn
 `
 
 type CreateRetryTaskParams struct {
@@ -1414,6 +1490,8 @@ func (q *Queries) CreateRetryTask(ctx context.Context, arg CreateRetryTaskParams
 		&i.IsLeaderTask,
 		&i.WaitReason,
 		&i.InitiatorUserID,
+		&i.AgentDmExchangeID,
+		&i.AgentDmTurn,
 	)
 	return i, err
 }
@@ -1445,7 +1523,7 @@ WHERE t.id = v.id
   AND NULLIF(t.context->'ephemeral_sandbox'->>'sandbox_instance_id', '') IS NOT NULL
   AND t.created_at < now() - make_interval(secs => $1::double precision)
   AND EXISTS (SELECT 1 FROM agent_runtime r WHERE r.id = t.runtime_id AND r.status = 'offline')
-RETURNING t.id, t.workspace_id, t.agent_session_id, t.conversation_id, t.channel_id, t.chat_session_id, t.agent_id, t.source_message_id, t.reason, t.requires_wake, t.status, t.priority, t.seq_from, t.seq_to, t.attempt, t.last_error, t.claimed_at, t.acked_at, t.created_at, t.updated_at, t.terminal_outcome, t.terminal_delivery_id, t.retryable, t.terminal_at, t.runtime_id, t.execution_config, t.delivery_mode, t.response_mode, t.channel_onboarding_id, t.issue_id, t.source_chat_message_id, t.context, t.dispatched_at, t.started_at, t.completed_at, t.result, t.error, t.session_id, t.work_dir, t.trigger_comment_id, t.autopilot_run_id, t.max_attempts, t.parent_task_id, t.failure_reason, t.trigger_summary, t.force_fresh_session, t.is_leader_task, t.wait_reason, t.initiator_user_id
+RETURNING t.id, t.workspace_id, t.agent_session_id, t.conversation_id, t.channel_id, t.chat_session_id, t.agent_id, t.source_message_id, t.reason, t.requires_wake, t.status, t.priority, t.seq_from, t.seq_to, t.attempt, t.last_error, t.claimed_at, t.acked_at, t.created_at, t.updated_at, t.terminal_outcome, t.terminal_delivery_id, t.retryable, t.terminal_at, t.runtime_id, t.execution_config, t.delivery_mode, t.response_mode, t.channel_onboarding_id, t.issue_id, t.source_chat_message_id, t.context, t.dispatched_at, t.started_at, t.completed_at, t.result, t.error, t.session_id, t.work_dir, t.trigger_comment_id, t.autopilot_run_id, t.max_attempts, t.parent_task_id, t.failure_reason, t.trigger_summary, t.force_fresh_session, t.is_leader_task, t.wait_reason, t.initiator_user_id, t.agent_dm_exchange_id, t.agent_dm_turn
 `
 
 type ExpireQueuedTasksOnOfflineRuntimesParams struct {
@@ -1531,6 +1609,8 @@ func (q *Queries) ExpireQueuedTasksOnOfflineRuntimes(ctx context.Context, arg Ex
 			&i.IsLeaderTask,
 			&i.WaitReason,
 			&i.InitiatorUserID,
+			&i.AgentDmExchangeID,
+			&i.AgentDmTurn,
 		); err != nil {
 			return nil, err
 		}
@@ -1552,10 +1632,10 @@ WITH victims AS (
       AND (
         r.id IS NULL
         OR r.last_seen_at IS NULL
-        OR r.last_seen_at >= now() - make_interval(secs => $3::double precision)
+        OR r.last_seen_at >= now() - make_interval(secs => $2::double precision)
       )
     ORDER BY t.created_at ASC
-    LIMIT $2::int
+    LIMIT $3::int
     FOR UPDATE OF t SKIP LOCKED
 )
 UPDATE agent_inbox_event t
@@ -1574,15 +1654,15 @@ WHERE t.id = v.id
     SELECT 1 FROM agent_runtime r
     WHERE r.id = t.runtime_id
       AND r.last_seen_at IS NOT NULL
-      AND r.last_seen_at < now() - make_interval(secs => $3::double precision)
+      AND r.last_seen_at < now() - make_interval(secs => $2::double precision)
   )
-RETURNING t.id, t.workspace_id, t.agent_session_id, t.conversation_id, t.channel_id, t.chat_session_id, t.agent_id, t.source_message_id, t.reason, t.requires_wake, t.status, t.priority, t.seq_from, t.seq_to, t.attempt, t.last_error, t.claimed_at, t.acked_at, t.created_at, t.updated_at, t.terminal_outcome, t.terminal_delivery_id, t.retryable, t.terminal_at, t.runtime_id, t.execution_config, t.delivery_mode, t.response_mode, t.channel_onboarding_id, t.issue_id, t.source_chat_message_id, t.context, t.dispatched_at, t.started_at, t.completed_at, t.result, t.error, t.session_id, t.work_dir, t.trigger_comment_id, t.autopilot_run_id, t.max_attempts, t.parent_task_id, t.failure_reason, t.trigger_summary, t.force_fresh_session, t.is_leader_task, t.wait_reason, t.initiator_user_id
+RETURNING t.id, t.workspace_id, t.agent_session_id, t.conversation_id, t.channel_id, t.chat_session_id, t.agent_id, t.source_message_id, t.reason, t.requires_wake, t.status, t.priority, t.seq_from, t.seq_to, t.attempt, t.last_error, t.claimed_at, t.acked_at, t.created_at, t.updated_at, t.terminal_outcome, t.terminal_delivery_id, t.retryable, t.terminal_at, t.runtime_id, t.execution_config, t.delivery_mode, t.response_mode, t.channel_onboarding_id, t.issue_id, t.source_chat_message_id, t.context, t.dispatched_at, t.started_at, t.completed_at, t.result, t.error, t.session_id, t.work_dir, t.trigger_comment_id, t.autopilot_run_id, t.max_attempts, t.parent_task_id, t.failure_reason, t.trigger_summary, t.force_fresh_session, t.is_leader_task, t.wait_reason, t.initiator_user_id, t.agent_dm_exchange_id, t.agent_dm_turn
 `
 
 type ExpireStaleQueuedTasksParams struct {
 	TtlSecs            float64 `json:"ttl_secs"`
-	MaxPerTick         int32   `json:"max_per_tick"`
 	StaleThresholdSecs float64 `json:"stale_threshold_secs"`
+	MaxPerTick         int32   `json:"max_per_tick"`
 }
 
 // Fails tasks that have been sitting in 'queued' for longer than the TTL —
@@ -1599,27 +1679,27 @@ type ExpireStaleQueuedTasksParams struct {
 // overnight looks identical to a dead machine from here), so time alone is
 // the wrong signal.
 //
-// The exclusion is computed directly from heartbeat freshness (last_seen_at
-// vs staleThresholdSecs — the same signal and threshold
-// SelectStaleOnlineRuntimes uses), NOT from the persisted
-// agent_runtime.status column. Reading status here would make this query's
-// correctness depend on sweepStaleRuntimes having already run earlier in
-// the same sweep tick — true today only because of an unenforced
-// call-order coincidence in runRuntimeSweeper. #1664 already established
-// the rule for the read-time display status (agentRuntimeDisplayStatus):
-// derive from heartbeat freshness at read time, don't trust the
-// (sweep-lagged, up to ~180s stale) persisted column. This query follows
-// the same rule for the same reason.
+// The exclusion is computed directly from heartbeat freshness
+// (last_seen_at vs @stale_threshold_secs — the same signal and threshold
+// SelectStaleOnlineRuntimes uses, passed in as staleThresholdSeconds from
+// runtime_sweeper.go), NOT from the persisted agent_runtime.status column.
+// Reading status here would make this query's correctness depend on
+// sweepStaleRuntimes having already run earlier in the same sweep tick —
+// true today only because of an unenforced call-order coincidence in
+// runRuntimeSweeper. #1664 already established the rule for the read-time
+// display status (agentRuntimeDisplayStatus): derive from heartbeat
+// freshness at read time, don't trust the (sweep-lagged, up to ~180s stale)
+// persisted column. This query follows the same rule for the same reason.
 //
 // A resident provider process crashing (recoverable — task #42②) does not
 // affect the daemon's heartbeat, so last_seen_at stays fresh for that case
 // and this TTL backstop still applies unchanged; it only ever fires for a
-// genuinely-stuck task behind a healthy runtime, same as before #50.
-// There is deliberately no separate "offline too long, give up" timeout
-// here — that would just be the same blind-clock mistake at a bigger
-// number. A queued task's terminal states are event-driven only (deleted
-// agent, agent moved to a different runtime, explicit cancel), never
-// elapsed wall-clock time on a merely-offline runtime.
+// genuinely-stuck task behind a healthy runtime, same as before #50. There
+// is deliberately no separate "offline too long, give up" timeout here —
+// that would just be the same blind-clock mistake at a bigger number. A
+// queued task's terminal states are event-driven only (deleted agent, agent
+// moved to a different runtime, explicit cancel), never elapsed wall-clock
+// time on a merely-offline runtime.
 //
 // Concurrency safety: the daemon's claim path may race with this sweeper to
 // transition the same row out of 'queued'. We protect against that two
@@ -1637,7 +1717,7 @@ type ExpireStaleQueuedTasksParams struct {
 // the DB when the backlog is large — the sweeper drains the rest on
 // subsequent ticks.
 func (q *Queries) ExpireStaleQueuedTasks(ctx context.Context, arg ExpireStaleQueuedTasksParams) ([]AgentInboxEvent, error) {
-	rows, err := q.db.Query(ctx, expireStaleQueuedTasks, arg.TtlSecs, arg.MaxPerTick, arg.StaleThresholdSecs)
+	rows, err := q.db.Query(ctx, expireStaleQueuedTasks, arg.TtlSecs, arg.StaleThresholdSecs, arg.MaxPerTick)
 	if err != nil {
 		return nil, err
 	}
@@ -1695,6 +1775,8 @@ func (q *Queries) ExpireStaleQueuedTasks(ctx context.Context, arg ExpireStaleQue
 			&i.IsLeaderTask,
 			&i.WaitReason,
 			&i.InitiatorUserID,
+			&i.AgentDmExchangeID,
+			&i.AgentDmTurn,
 		); err != nil {
 			return nil, err
 		}
@@ -1719,7 +1801,7 @@ SET status = 'acked',
     session_id = COALESCE($4, session_id),
     work_dir = COALESCE($5, work_dir)
 WHERE id = $1 AND status = 'draining'
-RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id
+RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn
 `
 
 type FailAgentTaskParams struct {
@@ -1798,6 +1880,8 @@ func (q *Queries) FailAgentTask(ctx context.Context, arg FailAgentTaskParams) (A
 		&i.IsLeaderTask,
 		&i.WaitReason,
 		&i.InitiatorUserID,
+		&i.AgentDmExchangeID,
+		&i.AgentDmTurn,
 	)
 	return i, err
 }
@@ -1818,7 +1902,7 @@ WHERE status = 'draining'
     (started_at IS NULL AND claimed_at < now() - make_interval(secs => $1::double precision))
     OR (started_at < now() - make_interval(secs => $2::double precision))
   )
-RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id
+RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn
 `
 
 type FailStaleTasksParams struct {
@@ -1888,6 +1972,8 @@ func (q *Queries) FailStaleTasks(ctx context.Context, arg FailStaleTasksParams) 
 			&i.IsLeaderTask,
 			&i.WaitReason,
 			&i.InitiatorUserID,
+			&i.AgentDmExchangeID,
+			&i.AgentDmTurn,
 		); err != nil {
 			return nil, err
 		}
@@ -1900,7 +1986,7 @@ func (q *Queries) FailStaleTasks(ctx context.Context, arg FailStaleTasksParams) 
 }
 
 const getAgent = `-- name: GetAgent :one
-SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at FROM agent
+SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail FROM agent
 WHERE id = $1
 `
 
@@ -1936,12 +2022,15 @@ func (q *Queries) GetAgent(ctx context.Context, id pgtype.UUID) (Agent, error) {
 		&i.AvatarAttachmentID,
 		&i.WorkspaceRole,
 		&i.RuntimeReassignedAt,
+		&i.CrashedSince,
+		&i.ProviderBlockedUntil,
+		&i.ProviderBlockDetail,
 	)
 	return i, err
 }
 
 const getAgentInWorkspace = `-- name: GetAgentInWorkspace :one
-SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role FROM agent
+SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail FROM agent
 WHERE id = $1 AND workspace_id = $2
 `
 
@@ -1981,6 +2070,10 @@ func (q *Queries) GetAgentInWorkspace(ctx context.Context, arg GetAgentInWorkspa
 		&i.AvatarSource,
 		&i.AvatarAttachmentID,
 		&i.WorkspaceRole,
+		&i.RuntimeReassignedAt,
+		&i.CrashedSince,
+		&i.ProviderBlockedUntil,
+		&i.ProviderBlockDetail,
 	)
 	return i, err
 }
@@ -2050,7 +2143,7 @@ func (q *Queries) GetAgentTask(ctx context.Context, id pgtype.UUID) (AgentInboxE
 }
 
 const getAgentTaskInWorkspace = `-- name: GetAgentTaskInWorkspace :one
-SELECT atq.id, atq.workspace_id, atq.agent_session_id, atq.conversation_id, atq.channel_id, atq.chat_session_id, atq.agent_id, atq.source_message_id, atq.reason, atq.requires_wake, atq.status, atq.priority, atq.seq_from, atq.seq_to, atq.attempt, atq.last_error, atq.claimed_at, atq.acked_at, atq.created_at, atq.updated_at, atq.terminal_outcome, atq.terminal_delivery_id, atq.retryable, atq.terminal_at, atq.runtime_id, atq.execution_config, atq.delivery_mode, atq.response_mode, atq.channel_onboarding_id, atq.issue_id, atq.source_chat_message_id, atq.context, atq.dispatched_at, atq.started_at, atq.completed_at, atq.result, atq.error, atq.session_id, atq.work_dir, atq.trigger_comment_id, atq.autopilot_run_id, atq.max_attempts, atq.parent_task_id, atq.failure_reason, atq.trigger_summary, atq.force_fresh_session, atq.is_leader_task, atq.wait_reason, atq.initiator_user_id FROM agent_inbox_event atq
+SELECT atq.id, atq.workspace_id, atq.agent_session_id, atq.conversation_id, atq.channel_id, atq.chat_session_id, atq.agent_id, atq.source_message_id, atq.reason, atq.requires_wake, atq.status, atq.priority, atq.seq_from, atq.seq_to, atq.attempt, atq.last_error, atq.claimed_at, atq.acked_at, atq.created_at, atq.updated_at, atq.terminal_outcome, atq.terminal_delivery_id, atq.retryable, atq.terminal_at, atq.runtime_id, atq.execution_config, atq.delivery_mode, atq.response_mode, atq.channel_onboarding_id, atq.issue_id, atq.source_chat_message_id, atq.context, atq.dispatched_at, atq.started_at, atq.completed_at, atq.result, atq.error, atq.session_id, atq.work_dir, atq.trigger_comment_id, atq.autopilot_run_id, atq.max_attempts, atq.parent_task_id, atq.failure_reason, atq.trigger_summary, atq.force_fresh_session, atq.is_leader_task, atq.wait_reason, atq.initiator_user_id, atq.agent_dm_exchange_id, atq.agent_dm_turn FROM agent_inbox_event atq
 JOIN agent a ON a.id = atq.agent_id
 WHERE atq.id = $1 AND a.workspace_id = $2
 `
@@ -2120,6 +2213,8 @@ func (q *Queries) GetAgentTaskInWorkspace(ctx context.Context, arg GetAgentTaskI
 		&i.IsLeaderTask,
 		&i.WaitReason,
 		&i.InitiatorUserID,
+		&i.AgentDmExchangeID,
+		&i.AgentDmTurn,
 	)
 	return i, err
 }
@@ -2414,7 +2509,7 @@ func (q *Queries) LinkTaskToIssue(ctx context.Context, arg LinkTaskToIssueParams
 }
 
 const listActiveAgentsByRuntime = `-- name: ListActiveAgentsByRuntime :many
-SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role FROM agent
+SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail FROM agent
 WHERE runtime_id = $1 AND archived_at IS NULL
 ORDER BY name ASC
 `
@@ -2462,6 +2557,10 @@ func (q *Queries) ListActiveAgentsByRuntime(ctx context.Context, runtimeID pgtyp
 			&i.AvatarSource,
 			&i.AvatarAttachmentID,
 			&i.WorkspaceRole,
+			&i.RuntimeReassignedAt,
+			&i.CrashedSince,
+			&i.ProviderBlockedUntil,
+			&i.ProviderBlockDetail,
 		); err != nil {
 			return nil, err
 		}
@@ -2474,7 +2573,7 @@ func (q *Queries) ListActiveAgentsByRuntime(ctx context.Context, runtimeID pgtyp
 }
 
 const listActiveAgentsByRuntimeForUpdate = `-- name: ListActiveAgentsByRuntimeForUpdate :many
-SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role FROM agent
+SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail FROM agent
 WHERE runtime_id = $1 AND archived_at IS NULL
 ORDER BY name ASC
 FOR UPDATE
@@ -2525,6 +2624,10 @@ func (q *Queries) ListActiveAgentsByRuntimeForUpdate(ctx context.Context, runtim
 			&i.AvatarSource,
 			&i.AvatarAttachmentID,
 			&i.WorkspaceRole,
+			&i.RuntimeReassignedAt,
+			&i.CrashedSince,
+			&i.ProviderBlockedUntil,
+			&i.ProviderBlockDetail,
 		); err != nil {
 			return nil, err
 		}
@@ -2537,12 +2640,14 @@ func (q *Queries) ListActiveAgentsByRuntimeForUpdate(ctx context.Context, runtim
 }
 
 const listActiveAgentsByRuntimesForUpdate = `-- name: ListActiveAgentsByRuntimesForUpdate :many
-SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role FROM agent
+SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail FROM agent
 WHERE runtime_id = ANY($1::uuid[]) AND archived_at IS NULL
 ORDER BY name ASC, id ASC
 FOR UPDATE
 `
 
+// Computer removal locks every active agent across the selected provider
+// runtimes and compares this exact set with the user's confirmation snapshot.
 func (q *Queries) ListActiveAgentsByRuntimesForUpdate(ctx context.Context, runtimeIds []pgtype.UUID) ([]Agent, error) {
 	rows, err := q.db.Query(ctx, listActiveAgentsByRuntimesForUpdate, runtimeIds)
 	if err != nil {
@@ -2580,6 +2685,10 @@ func (q *Queries) ListActiveAgentsByRuntimesForUpdate(ctx context.Context, runti
 			&i.AvatarSource,
 			&i.AvatarAttachmentID,
 			&i.WorkspaceRole,
+			&i.RuntimeReassignedAt,
+			&i.CrashedSince,
+			&i.ProviderBlockedUntil,
+			&i.ProviderBlockDetail,
 		); err != nil {
 			return nil, err
 		}
@@ -2592,7 +2701,7 @@ func (q *Queries) ListActiveAgentsByRuntimesForUpdate(ctx context.Context, runti
 }
 
 const listActiveTasksByIssue = `-- name: ListActiveTasksByIssue :many
-SELECT id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id FROM agent_inbox_event
+SELECT id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn FROM agent_inbox_event
 WHERE issue_id = $1 AND status IN ('pending', 'draining', 'failed')
 ORDER BY created_at DESC
 `
@@ -2661,6 +2770,8 @@ func (q *Queries) ListActiveTasksByIssue(ctx context.Context, issueID pgtype.UUI
 			&i.IsLeaderTask,
 			&i.WaitReason,
 			&i.InitiatorUserID,
+			&i.AgentDmExchangeID,
+			&i.AgentDmTurn,
 		); err != nil {
 			return nil, err
 		}
@@ -2672,8 +2783,80 @@ func (q *Queries) ListActiveTasksByIssue(ctx context.Context, issueID pgtype.UUI
 	return items, nil
 }
 
+const listAgentCrashedSinceByIDs = `-- name: ListAgentCrashedSinceByIDs :many
+SELECT id, crashed_since
+FROM agent
+WHERE id = ANY($1::uuid[]) AND crashed_since IS NOT NULL
+`
+
+type ListAgentCrashedSinceByIDsRow struct {
+	ID           pgtype.UUID        `json:"id"`
+	CrashedSince pgtype.Timestamptz `json:"crashed_since"`
+}
+
+// Narrow read used by attachAgentRuntimeNames so GET /agents can project
+// "crashed" without regenerating every SELECT * FROM agent query (make sqlc
+// is currently broken repo-wide — see task #83). Keep this in sync with the
+// column MarkAgentCrashed/ClearAgentCrashed touch.
+func (q *Queries) ListAgentCrashedSinceByIDs(ctx context.Context, dollar_1 []pgtype.UUID) ([]ListAgentCrashedSinceByIDsRow, error) {
+	rows, err := q.db.Query(ctx, listAgentCrashedSinceByIDs, dollar_1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAgentCrashedSinceByIDsRow{}
+	for rows.Next() {
+		var i ListAgentCrashedSinceByIDsRow
+		if err := rows.Scan(&i.ID, &i.CrashedSince); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAgentProviderBlockByIDs = `-- name: ListAgentProviderBlockByIDs :many
+SELECT id, provider_blocked_until, provider_block_detail
+FROM agent
+WHERE id = ANY($1::uuid[])
+  AND btrim(COALESCE(provider_block_detail, '')) <> ''
+  AND lower(btrim(provider_block_detail)) NOT IN ('{}', '[]', 'null', 'undefined', '""')
+  AND (provider_blocked_until IS NULL OR provider_blocked_until > now())
+`
+
+type ListAgentProviderBlockByIDsRow struct {
+	ID                   pgtype.UUID        `json:"id"`
+	ProviderBlockedUntil pgtype.Timestamptz `json:"provider_blocked_until"`
+	ProviderBlockDetail  string             `json:"provider_block_detail"`
+}
+
+// Narrow read for attachAgentRuntimeNames (same make-sqlc constraint as
+// ListAgentCrashedSinceByIDs). Active locks only (unknown-until stays active).
+func (q *Queries) ListAgentProviderBlockByIDs(ctx context.Context, dollar_1 []pgtype.UUID) ([]ListAgentProviderBlockByIDsRow, error) {
+	rows, err := q.db.Query(ctx, listAgentProviderBlockByIDs, dollar_1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAgentProviderBlockByIDsRow{}
+	for rows.Next() {
+		var i ListAgentProviderBlockByIDsRow
+		if err := rows.Scan(&i.ID, &i.ProviderBlockedUntil, &i.ProviderBlockDetail); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAgentTasks = `-- name: ListAgentTasks :many
-SELECT id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id FROM agent_inbox_event
+SELECT id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn FROM agent_inbox_event
 WHERE agent_id = $1
 ORDER BY created_at DESC
 LIMIT 50
@@ -2738,6 +2921,8 @@ func (q *Queries) ListAgentTasks(ctx context.Context, agentID pgtype.UUID) ([]Ag
 			&i.IsLeaderTask,
 			&i.WaitReason,
 			&i.InitiatorUserID,
+			&i.AgentDmExchangeID,
+			&i.AgentDmTurn,
 		); err != nil {
 			return nil, err
 		}
@@ -2750,7 +2935,7 @@ func (q *Queries) ListAgentTasks(ctx context.Context, agentID pgtype.UUID) ([]Ag
 }
 
 const listAgents = `-- name: ListAgents :many
-SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role FROM agent
+SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail FROM agent
 WHERE workspace_id = $1 AND archived_at IS NULL
 ORDER BY created_at ASC
 `
@@ -2792,6 +2977,10 @@ func (q *Queries) ListAgents(ctx context.Context, workspaceID pgtype.UUID) ([]Ag
 			&i.AvatarSource,
 			&i.AvatarAttachmentID,
 			&i.WorkspaceRole,
+			&i.RuntimeReassignedAt,
+			&i.CrashedSince,
+			&i.ProviderBlockedUntil,
+			&i.ProviderBlockDetail,
 		); err != nil {
 			return nil, err
 		}
@@ -2804,7 +2993,7 @@ func (q *Queries) ListAgents(ctx context.Context, workspaceID pgtype.UUID) ([]Ag
 }
 
 const listAllAgents = `-- name: ListAllAgents :many
-SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role FROM agent
+SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail FROM agent
 WHERE workspace_id = $1
 ORDER BY created_at ASC
 `
@@ -2846,6 +3035,10 @@ func (q *Queries) ListAllAgents(ctx context.Context, workspaceID pgtype.UUID) ([
 			&i.AvatarSource,
 			&i.AvatarAttachmentID,
 			&i.WorkspaceRole,
+			&i.RuntimeReassignedAt,
+			&i.CrashedSince,
+			&i.ProviderBlockedUntil,
+			&i.ProviderBlockDetail,
 		); err != nil {
 			return nil, err
 		}
@@ -2858,7 +3051,7 @@ func (q *Queries) ListAllAgents(ctx context.Context, workspaceID pgtype.UUID) ([
 }
 
 const listInFlightTasksForProject = `-- name: ListInFlightTasksForProject :many
-SELECT atq.id, atq.workspace_id, atq.agent_session_id, atq.conversation_id, atq.channel_id, atq.chat_session_id, atq.agent_id, atq.source_message_id, atq.reason, atq.requires_wake, atq.status, atq.priority, atq.seq_from, atq.seq_to, atq.attempt, atq.last_error, atq.claimed_at, atq.acked_at, atq.created_at, atq.updated_at, atq.terminal_outcome, atq.terminal_delivery_id, atq.retryable, atq.terminal_at, atq.runtime_id, atq.execution_config, atq.delivery_mode, atq.response_mode, atq.channel_onboarding_id, atq.issue_id, atq.source_chat_message_id, atq.context, atq.dispatched_at, atq.started_at, atq.completed_at, atq.result, atq.error, atq.session_id, atq.work_dir, atq.trigger_comment_id, atq.autopilot_run_id, atq.max_attempts, atq.parent_task_id, atq.failure_reason, atq.trigger_summary, atq.force_fresh_session, atq.is_leader_task, atq.wait_reason, atq.initiator_user_id FROM agent_inbox_event atq
+SELECT atq.id, atq.workspace_id, atq.agent_session_id, atq.conversation_id, atq.channel_id, atq.chat_session_id, atq.agent_id, atq.source_message_id, atq.reason, atq.requires_wake, atq.status, atq.priority, atq.seq_from, atq.seq_to, atq.attempt, atq.last_error, atq.claimed_at, atq.acked_at, atq.created_at, atq.updated_at, atq.terminal_outcome, atq.terminal_delivery_id, atq.retryable, atq.terminal_at, atq.runtime_id, atq.execution_config, atq.delivery_mode, atq.response_mode, atq.channel_onboarding_id, atq.issue_id, atq.source_chat_message_id, atq.context, atq.dispatched_at, atq.started_at, atq.completed_at, atq.result, atq.error, atq.session_id, atq.work_dir, atq.trigger_comment_id, atq.autopilot_run_id, atq.max_attempts, atq.parent_task_id, atq.failure_reason, atq.trigger_summary, atq.force_fresh_session, atq.is_leader_task, atq.wait_reason, atq.initiator_user_id, atq.agent_dm_exchange_id, atq.agent_dm_turn FROM agent_inbox_event atq
 LEFT JOIN issue i ON atq.issue_id = i.id
 LEFT JOIN chat_session cs ON atq.chat_session_id = cs.id
 WHERE (i.project_id = $1 OR cs.project_id = $1)
@@ -2928,6 +3121,8 @@ func (q *Queries) ListInFlightTasksForProject(ctx context.Context, projectID pgt
 			&i.IsLeaderTask,
 			&i.WaitReason,
 			&i.InitiatorUserID,
+			&i.AgentDmExchangeID,
+			&i.AgentDmTurn,
 		); err != nil {
 			return nil, err
 		}
@@ -2940,7 +3135,7 @@ func (q *Queries) ListInFlightTasksForProject(ctx context.Context, projectID pgt
 }
 
 const listPendingTasksByRuntime = `-- name: ListPendingTasksByRuntime :many
-SELECT id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id FROM agent_inbox_event
+SELECT id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn FROM agent_inbox_event
 WHERE runtime_id = $1 AND status IN ('pending', 'draining', 'failed')
 ORDER BY priority DESC, created_at ASC
 `
@@ -3004,6 +3199,8 @@ func (q *Queries) ListPendingTasksByRuntime(ctx context.Context, runtimeID pgtyp
 			&i.IsLeaderTask,
 			&i.WaitReason,
 			&i.InitiatorUserID,
+			&i.AgentDmExchangeID,
+			&i.AgentDmTurn,
 		); err != nil {
 			return nil, err
 		}
@@ -3016,7 +3213,7 @@ func (q *Queries) ListPendingTasksByRuntime(ctx context.Context, runtimeID pgtyp
 }
 
 const listTasksByIssue = `-- name: ListTasksByIssue :many
-SELECT id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id FROM agent_inbox_event
+SELECT id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn FROM agent_inbox_event
 WHERE issue_id = $1
 ORDER BY created_at DESC
 `
@@ -3080,6 +3277,8 @@ func (q *Queries) ListTasksByIssue(ctx context.Context, issueID pgtype.UUID) ([]
 			&i.IsLeaderTask,
 			&i.WaitReason,
 			&i.InitiatorUserID,
+			&i.AgentDmExchangeID,
+			&i.AgentDmTurn,
 		); err != nil {
 			return nil, err
 		}
@@ -3176,6 +3375,58 @@ WHERE a.workspace_id = $1
   AND a.archived_at IS NULL
 `
 
+type ListWorkspaceAgentTaskSnapshotRow struct {
+	ID                  pgtype.UUID        `json:"id"`
+	WorkspaceID         pgtype.UUID        `json:"workspace_id"`
+	AgentSessionID      pgtype.UUID        `json:"agent_session_id"`
+	ConversationID      pgtype.UUID        `json:"conversation_id"`
+	ChannelID           pgtype.UUID        `json:"channel_id"`
+	ChatSessionID       pgtype.UUID        `json:"chat_session_id"`
+	AgentID             pgtype.UUID        `json:"agent_id"`
+	SourceMessageID     pgtype.UUID        `json:"source_message_id"`
+	Reason              string             `json:"reason"`
+	RequiresWake        bool               `json:"requires_wake"`
+	Status              string             `json:"status"`
+	Priority            int32              `json:"priority"`
+	SeqFrom             int64              `json:"seq_from"`
+	SeqTo               int64              `json:"seq_to"`
+	Attempt             int32              `json:"attempt"`
+	LastError           pgtype.Text        `json:"last_error"`
+	ClaimedAt           pgtype.Timestamptz `json:"claimed_at"`
+	AckedAt             pgtype.Timestamptz `json:"acked_at"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+	TerminalOutcome     pgtype.Text        `json:"terminal_outcome"`
+	TerminalDeliveryID  pgtype.UUID        `json:"terminal_delivery_id"`
+	Retryable           bool               `json:"retryable"`
+	TerminalAt          pgtype.Timestamptz `json:"terminal_at"`
+	RuntimeID           pgtype.UUID        `json:"runtime_id"`
+	ExecutionConfig     []byte             `json:"execution_config"`
+	DeliveryMode        string             `json:"delivery_mode"`
+	ResponseMode        string             `json:"response_mode"`
+	ChannelOnboardingID pgtype.UUID        `json:"channel_onboarding_id"`
+	IssueID             pgtype.UUID        `json:"issue_id"`
+	SourceChatMessageID pgtype.UUID        `json:"source_chat_message_id"`
+	Context             []byte             `json:"context"`
+	DispatchedAt        pgtype.Timestamptz `json:"dispatched_at"`
+	StartedAt           pgtype.Timestamptz `json:"started_at"`
+	CompletedAt         pgtype.Timestamptz `json:"completed_at"`
+	Result              []byte             `json:"result"`
+	Error               pgtype.Text        `json:"error"`
+	SessionID           pgtype.Text        `json:"session_id"`
+	WorkDir             pgtype.Text        `json:"work_dir"`
+	TriggerCommentID    pgtype.UUID        `json:"trigger_comment_id"`
+	AutopilotRunID      pgtype.UUID        `json:"autopilot_run_id"`
+	MaxAttempts         int32              `json:"max_attempts"`
+	ParentTaskID        pgtype.UUID        `json:"parent_task_id"`
+	FailureReason       pgtype.Text        `json:"failure_reason"`
+	TriggerSummary      pgtype.Text        `json:"trigger_summary"`
+	ForceFreshSession   bool               `json:"force_fresh_session"`
+	IsLeaderTask        bool               `json:"is_leader_task"`
+	WaitReason          pgtype.Text        `json:"wait_reason"`
+	InitiatorUserID     pgtype.UUID        `json:"initiator_user_id"`
+}
+
 // Returns the tasks needed to derive each agent's current presence:
 //   - All active tasks (queued / dispatched / running) — for working signal + counts
 //   - Each agent's most recent OUTCOME task (completed / failed) — for sticky
@@ -3194,18 +3445,23 @@ WHERE a.workspace_id = $1
 // No UI windows in SQL: stickiness is decided by "is the latest outcome a
 // failure?", not a 2-minute clock. Active events filter directly by their
 // workspace_id. Latest outcomes enumerate non-archived workspace agents and do
-// one ordered index probe per agent, so history growth does not turn this hot
-// snapshot into a full-history scan. Heavy blobs are nulled in the SELECT for
-// the presence hot path (LRM-1261).
-func (q *Queries) ListWorkspaceAgentTaskSnapshot(ctx context.Context, workspaceID pgtype.UUID) ([]AgentInboxEvent, error) {
+// one ordered index probe per agent (idx_agent_inbox_event_workspace_agent_outcome),
+// so history growth does not turn this hot snapshot into a full-history scan.
+//
+// Hot-path payload (LRM-1261): omit heavy blobs (context/result/execution_config/
+// error) from the SELECT list — presence/FE snapshot consumers only need status,
+// ids, timestamps, and trigger summary. WHERE still uses context->>'type' for
+// quick_create visibility. Keep LATERAL (not DISTINCT ON) so each agent is a
+// LIMIT-1 index probe instead of scanning every historical outcome row.
+func (q *Queries) ListWorkspaceAgentTaskSnapshot(ctx context.Context, workspaceID pgtype.UUID) ([]ListWorkspaceAgentTaskSnapshotRow, error) {
 	rows, err := q.db.Query(ctx, listWorkspaceAgentTaskSnapshot, workspaceID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []AgentInboxEvent{}
+	items := []ListWorkspaceAgentTaskSnapshotRow{}
 	for rows.Next() {
-		var i AgentInboxEvent
+		var i ListWorkspaceAgentTaskSnapshotRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.WorkspaceID,
@@ -3267,6 +3523,46 @@ func (q *Queries) ListWorkspaceAgentTaskSnapshot(ctx context.Context, workspaceI
 	return items, nil
 }
 
+const markAgentCrashed = `-- name: MarkAgentCrashed :exec
+UPDATE agent
+SET crashed_since = now(), updated_at = now()
+WHERE id = $1
+`
+
+// Records that this agent's idle resident provider process was found dead
+// (daemon ResidentRuntimeCrashEvent / task #42②). Per-agent on purpose: many
+// agents can share one runtime/daemon, and only the crashed provider slot
+// should show "crashed". Cleared explicitly on successful recreate / manual
+// lifecycle restart — not by TTL (a crash with no next dispatch is exactly
+// the long-lived case this signal exists for).
+func (q *Queries) MarkAgentCrashed(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, markAgentCrashed, id)
+	return err
+}
+
+const markAgentProviderBlocked = `-- name: MarkAgentProviderBlocked :exec
+UPDATE agent
+SET provider_blocked_until = $2,
+    provider_block_detail = $3,
+    status = 'blocked',
+    updated_at = now()
+WHERE id = $1
+`
+
+type MarkAgentProviderBlockedParams struct {
+	ID                   pgtype.UUID        `json:"id"`
+	ProviderBlockedUntil pgtype.Timestamptz `json:"provider_blocked_until"`
+	ProviderBlockDetail  string             `json:"provider_block_detail"`
+}
+
+// Pins agent display as provider-quota blocked (tasks #64/#77). Extends or
+// replaces an existing lock. Does not clear on heartbeat. until may be NULL
+// (= locked, unknown end). Claim/drain gating is a separate card.
+func (q *Queries) MarkAgentProviderBlocked(ctx context.Context, arg MarkAgentProviderBlockedParams) error {
+	_, err := q.db.Exec(ctx, markAgentProviderBlocked, arg.ID, arg.ProviderBlockedUntil, arg.ProviderBlockDetail)
+	return err
+}
+
 const markAgentRuntimeReassigned = `-- name: MarkAgentRuntimeReassigned :exec
 UPDATE agent SET runtime_reassigned_at = now()
 WHERE id = $1
@@ -3298,8 +3594,9 @@ type MergeTaskArealProxyContextParams struct {
 // single read-modify-write. COALESCE handles a NULL/empty context; the `||`
 // operator preserves every existing top-level key and
 // overwrites only the areal_proxy sub-object. Used by the session-open hook.
-// This intentionally does NOT touch agent_inbox_event.session_id, which is the
-// runtime/chat session pointer, not the RL session.
+// This intentionally does NOT touch agent_inbox_event.session_id (provider CLI
+// --resume TEXT from PinTaskSession; also not the agent_session inbox UUID —
+// task #109), nor the RL session inside areal_proxy.
 func (q *Queries) MergeTaskArealProxyContext(ctx context.Context, arg MergeTaskArealProxyContextParams) error {
 	_, err := q.db.Exec(ctx, mergeTaskArealProxyContext, arg.ArealProxy, arg.ID)
 	return err
@@ -3318,7 +3615,7 @@ SET status = 'acked',
     retryable = false,
     wait_reason = NULL
 WHERE runtime_id = $1 AND status = 'draining'
-RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id
+RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn
 `
 
 // Called by the daemon at startup. Atomically fails any in-flight delivery
@@ -3382,6 +3679,8 @@ func (q *Queries) RecoverOrphanedTasksForRuntime(ctx context.Context, runtimeID 
 			&i.IsLeaderTask,
 			&i.WaitReason,
 			&i.InitiatorUserID,
+			&i.AgentDmExchangeID,
+			&i.AgentDmTurn,
 		); err != nil {
 			return nil, err
 		}
@@ -3408,9 +3707,13 @@ SET status = CASE
 END,
     updated_at = now()
 WHERE a.id = $1
-RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role
+RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail
 `
 
+// Provider-quota lock (tasks #64/#77) wins over workload: a blocked agent
+// must not flip back to idle/working just because the draining task ended.
+// Lock = a real detail (not "{}" / other JSON leftovers) AND (until unknown
+// OR until > now()).
 func (q *Queries) RefreshAgentStatusFromTasks(ctx context.Context, id pgtype.UUID) (Agent, error) {
 	row := q.db.QueryRow(ctx, refreshAgentStatusFromTasks, id)
 	var i Agent
@@ -3442,6 +3745,10 @@ func (q *Queries) RefreshAgentStatusFromTasks(ctx context.Context, id pgtype.UUI
 		&i.AvatarSource,
 		&i.AvatarAttachmentID,
 		&i.WorkspaceRole,
+		&i.RuntimeReassignedAt,
+		&i.CrashedSince,
+		&i.ProviderBlockedUntil,
+		&i.ProviderBlockDetail,
 	)
 	return i, err
 }
@@ -3453,7 +3760,7 @@ SET status = 'pending', started_at = NULL, dispatched_at = NULL,
 WHERE id = $1
   AND runtime_id = $2
   AND status = 'draining'
-RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id
+RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn
 `
 
 type ResetInFlightTaskForResumeParams struct {
@@ -3520,6 +3827,8 @@ func (q *Queries) ResetInFlightTaskForResume(ctx context.Context, arg ResetInFli
 		&i.IsLeaderTask,
 		&i.WaitReason,
 		&i.InitiatorUserID,
+		&i.AgentDmExchangeID,
+		&i.AgentDmTurn,
 	)
 	return i, err
 }
@@ -3527,7 +3836,7 @@ func (q *Queries) ResetInFlightTaskForResume(ctx context.Context, arg ResetInFli
 const restoreAgent = `-- name: RestoreAgent :one
 UPDATE agent SET archived_at = NULL, archived_by = NULL, updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role
+RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail
 `
 
 func (q *Queries) RestoreAgent(ctx context.Context, id pgtype.UUID) (Agent, error) {
@@ -3561,6 +3870,10 @@ func (q *Queries) RestoreAgent(ctx context.Context, id pgtype.UUID) (Agent, erro
 		&i.AvatarSource,
 		&i.AvatarAttachmentID,
 		&i.WorkspaceRole,
+		&i.RuntimeReassignedAt,
+		&i.CrashedSince,
+		&i.ProviderBlockedUntil,
+		&i.ProviderBlockDetail,
 	)
 	return i, err
 }
@@ -3608,7 +3921,7 @@ UPDATE agent_inbox_event AS atq
 SET started_at = COALESCE(started_at, now()), wait_reason = NULL
 WHERE atq.id = $1
   AND atq.status = 'draining'
-RETURNING atq.id, atq.workspace_id, atq.agent_session_id, atq.conversation_id, atq.channel_id, atq.chat_session_id, atq.agent_id, atq.source_message_id, atq.reason, atq.requires_wake, atq.status, atq.priority, atq.seq_from, atq.seq_to, atq.attempt, atq.last_error, atq.claimed_at, atq.acked_at, atq.created_at, atq.updated_at, atq.terminal_outcome, atq.terminal_delivery_id, atq.retryable, atq.terminal_at, atq.runtime_id, atq.execution_config, atq.delivery_mode, atq.response_mode, atq.channel_onboarding_id, atq.issue_id, atq.source_chat_message_id, atq.context, atq.dispatched_at, atq.started_at, atq.completed_at, atq.result, atq.error, atq.session_id, atq.work_dir, atq.trigger_comment_id, atq.autopilot_run_id, atq.max_attempts, atq.parent_task_id, atq.failure_reason, atq.trigger_summary, atq.force_fresh_session, atq.is_leader_task, atq.wait_reason, atq.initiator_user_id
+RETURNING atq.id, atq.workspace_id, atq.agent_session_id, atq.conversation_id, atq.channel_id, atq.chat_session_id, atq.agent_id, atq.source_message_id, atq.reason, atq.requires_wake, atq.status, atq.priority, atq.seq_from, atq.seq_to, atq.attempt, atq.last_error, atq.claimed_at, atq.acked_at, atq.created_at, atq.updated_at, atq.terminal_outcome, atq.terminal_delivery_id, atq.retryable, atq.terminal_at, atq.runtime_id, atq.execution_config, atq.delivery_mode, atq.response_mode, atq.channel_onboarding_id, atq.issue_id, atq.source_chat_message_id, atq.context, atq.dispatched_at, atq.started_at, atq.completed_at, atq.result, atq.error, atq.session_id, atq.work_dir, atq.trigger_comment_id, atq.autopilot_run_id, atq.max_attempts, atq.parent_task_id, atq.failure_reason, atq.trigger_summary, atq.force_fresh_session, atq.is_leader_task, atq.wait_reason, atq.initiator_user_id, atq.agent_dm_exchange_id, atq.agent_dm_turn
 `
 
 // Transitions a claimed delivery to running and clears any generic wait hint.
@@ -3665,6 +3978,8 @@ func (q *Queries) StartAgentTask(ctx context.Context, id pgtype.UUID) (AgentInbo
 		&i.IsLeaderTask,
 		&i.WaitReason,
 		&i.InitiatorUserID,
+		&i.AgentDmExchangeID,
+		&i.AgentDmTurn,
 	)
 	return i, err
 }
@@ -3718,7 +4033,7 @@ UPDATE agent SET
     thinking_level = COALESCE($19, thinking_level),
     updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role
+RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail
 `
 
 type UpdateAgentParams struct {
@@ -3794,6 +4109,10 @@ func (q *Queries) UpdateAgent(ctx context.Context, arg UpdateAgentParams) (Agent
 		&i.AvatarSource,
 		&i.AvatarAttachmentID,
 		&i.WorkspaceRole,
+		&i.RuntimeReassignedAt,
+		&i.CrashedSince,
+		&i.ProviderBlockedUntil,
+		&i.ProviderBlockDetail,
 	)
 	return i, err
 }
@@ -3802,7 +4121,7 @@ const updateAgentCustomEnv = `-- name: UpdateAgentCustomEnv :one
 UPDATE agent
 SET custom_env = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role
+RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail
 `
 
 type UpdateAgentCustomEnvParams struct {
@@ -3846,6 +4165,10 @@ func (q *Queries) UpdateAgentCustomEnv(ctx context.Context, arg UpdateAgentCusto
 		&i.AvatarSource,
 		&i.AvatarAttachmentID,
 		&i.WorkspaceRole,
+		&i.RuntimeReassignedAt,
+		&i.CrashedSince,
+		&i.ProviderBlockedUntil,
+		&i.ProviderBlockDetail,
 	)
 	return i, err
 }
@@ -3853,7 +4176,7 @@ func (q *Queries) UpdateAgentCustomEnv(ctx context.Context, arg UpdateAgentCusto
 const updateAgentStatus = `-- name: UpdateAgentStatus :one
 UPDATE agent SET status = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role
+RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail
 `
 
 type UpdateAgentStatusParams struct {
@@ -3892,6 +4215,10 @@ func (q *Queries) UpdateAgentStatus(ctx context.Context, arg UpdateAgentStatusPa
 		&i.AvatarSource,
 		&i.AvatarAttachmentID,
 		&i.WorkspaceRole,
+		&i.RuntimeReassignedAt,
+		&i.CrashedSince,
+		&i.ProviderBlockedUntil,
+		&i.ProviderBlockDetail,
 	)
 	return i, err
 }

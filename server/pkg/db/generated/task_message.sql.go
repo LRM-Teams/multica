@@ -11,6 +11,26 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countTaskMessagesInRange = `-- name: CountTaskMessagesInRange :one
+SELECT COUNT(*)::integer AS count FROM task_message
+WHERE task_id::text = $1::text AND seq BETWEEN $2 AND $3
+`
+
+type CountTaskMessagesInRangeParams struct {
+	TaskID   string `json:"task_id"`
+	StartSeq int32  `json:"start_seq"`
+	EndSeq   int32  `json:"end_seq"`
+}
+
+// Identical range predicates to PageTaskMessagesInRange so ExpectedCount cannot
+// disagree with page membership. No cursor condition — counts the full range.
+func (q *Queries) CountTaskMessagesInRange(ctx context.Context, arg CountTaskMessagesInRangeParams) (int32, error) {
+	row := q.db.QueryRow(ctx, countTaskMessagesInRange, arg.TaskID, arg.StartSeq, arg.EndSeq)
+	var count int32
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createTaskMessage = `-- name: CreateTaskMessage :one
 INSERT INTO task_message (
     task_id, seq, type, tool, content, input, output,
@@ -167,20 +187,20 @@ func (q *Queries) ListTaskMessagesSince(ctx context.Context, arg ListTaskMessage
 const messagesForTaskInRange = `-- name: MessagesForTaskInRange :many
 SELECT id, task_id, seq, type, tool, content, input, output, created_at, visibility FROM task_message
 WHERE task_id::text = $1::text AND seq BETWEEN $2 AND $3
-ORDER BY seq ASC
+ORDER BY seq ASC, id ASC
 `
 
 type MessagesForTaskInRangeParams struct {
-	TaskID   string
-	StartSeq int32
-	EndSeq   int32
+	TaskID   string `json:"task_id"`
+	StartSeq int32  `json:"start_seq"`
+	EndSeq   int32  `json:"end_seq"`
 }
 
-// MessagesForTaskInRange returns task messages for a task within the given seq range (inclusive).
-// Both sides are text so the caller passes the text agent_run_id (= task.ID) without UUID parsing,
-// matching GetMaxTaskMessageSeq.
-func (q *Queries) MessagesForTaskInRange(ctx context.Context, taskID string, startSeq, endSeq int32) ([]TaskMessage, error) {
-	rows, err := q.db.Query(ctx, messagesForTaskInRange, taskID, startSeq, endSeq)
+// Full-order range fetch for trajectory/history serialization (interaction dag,
+// diagnosis, memory graph). Returns every message in [startSeq, endSeq] for a
+// task ordered by (seq, id); unbounded (not paginated).
+func (q *Queries) MessagesForTaskInRange(ctx context.Context, arg MessagesForTaskInRangeParams) ([]TaskMessage, error) {
+	rows, err := q.db.Query(ctx, messagesForTaskInRange, arg.TaskID, arg.StartSeq, arg.EndSeq)
 	if err != nil {
 		return nil, err
 	}
@@ -218,14 +238,18 @@ LIMIT $6
 `
 
 type PageTaskMessagesInRangeParams struct {
-	TaskID   string
-	StartSeq int32
-	EndSeq   int32
-	LastSeq  int32
-	LastID   pgtype.UUID
-	Limit    int32
+	TaskID    string      `json:"task_id"`
+	StartSeq  int32       `json:"start_seq"`
+	EndSeq    int32       `json:"end_seq"`
+	LastSeq   int32       `json:"last_seq"`
+	LastID    pgtype.UUID `json:"last_id"`
+	PageLimit int32       `json:"page_limit"`
 }
 
+// Keyset-paginated messages within a seq range for one task. lastSeq=0 means
+// "start at the first message >= startSeq". Ordered by (seq, id) so the tie-
+// breaker is stable across pages. maxDiagnosisSegmentTurns pages are bounded
+// to 20 turns; the LIMIT here matches that cap.
 func (q *Queries) PageTaskMessagesInRange(ctx context.Context, arg PageTaskMessagesInRangeParams) ([]TaskMessage, error) {
 	rows, err := q.db.Query(ctx, pageTaskMessagesInRange,
 		arg.TaskID,
@@ -233,7 +257,7 @@ func (q *Queries) PageTaskMessagesInRange(ctx context.Context, arg PageTaskMessa
 		arg.EndSeq,
 		arg.LastSeq,
 		arg.LastID,
-		arg.Limit,
+		arg.PageLimit,
 	)
 	if err != nil {
 		return nil, err
@@ -262,22 +286,4 @@ func (q *Queries) PageTaskMessagesInRange(ctx context.Context, arg PageTaskMessa
 		return nil, err
 	}
 	return items, nil
-}
-
-const countTaskMessagesInRange = `-- name: CountTaskMessagesInRange :one
-SELECT COUNT(*)::integer AS count FROM task_message
-WHERE task_id::text = $1::text AND seq BETWEEN $2 AND $3
-`
-
-type CountTaskMessagesInRangeParams struct {
-	TaskID   string
-	StartSeq int32
-	EndSeq   int32
-}
-
-func (q *Queries) CountTaskMessagesInRange(ctx context.Context, arg CountTaskMessagesInRangeParams) (int32, error) {
-	row := q.db.QueryRow(ctx, countTaskMessagesInRange, arg.TaskID, arg.StartSeq, arg.EndSeq)
-	var count int32
-	err := row.Scan(&count)
-	return count, err
 }

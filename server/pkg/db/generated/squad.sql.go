@@ -20,6 +20,10 @@ type GetSquadInWorkspaceParams struct {
 	WorkspaceID pgtype.UUID `json:"workspace_id"`
 }
 
+// Used only to hydrate the display name of a historical squad mention
+// (legacy markup, e.g. an old comment's mention:// reference, or a
+// historical issue.assignee_type='squad' row) — the squad product itself
+// is retired and no new squad-routed work is ever created.
 func (q *Queries) GetSquadInWorkspace(ctx context.Context, arg GetSquadInWorkspaceParams) (Squad, error) {
 	row := q.db.QueryRow(ctx, getSquadInWorkspace, arg.ID, arg.WorkspaceID)
 	var i Squad

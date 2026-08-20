@@ -50,11 +50,11 @@ func (d *researchRunDispatcher) Dispatch(ctx context.Context, request researchru
 		ORDER BY created_at DESC,id DESC
 		LIMIT 1
 	`, request.Key).Scan(&existingID, &existingHash, &existingWorkspaceID, &existingAgentID, &existingStatus, &existingTerminal, &existingContext); err == nil {
-		if existingHash != "" && existingHash != requestHash {
-			if !canSupersedeTerminalV6Dispatch(request, existingWorkspaceID, existingAgentID, existingStatus, existingTerminal, existingContext) {
-				return researchrun.DispatchResult{}, researchrun.NonRetryableDispatchError(fmt.Errorf("research dispatch key %q was reused for a different request", request.Key))
-			}
-		} else {
+		supersede := canSupersedeTerminalV6Dispatch(request, existingWorkspaceID, existingAgentID, existingStatus, existingTerminal, existingContext)
+		if existingHash != "" && existingHash != requestHash && !supersede {
+			return researchrun.DispatchResult{}, researchrun.NonRetryableDispatchError(fmt.Errorf("research dispatch key %q was reused for a different request", request.Key))
+		}
+		if !supersede {
 			return researchrun.DispatchResult{InboxTaskID: uuidToString(existingID)}, nil
 		}
 	} else if !errors.Is(err, pgx.ErrNoRows) {
@@ -147,11 +147,11 @@ func (d *researchRunDispatcher) Dispatch(ctx context.Context, request researchru
 		ORDER BY created_at DESC,id DESC
 		LIMIT 1
 	`, request.Key).Scan(&existingID, &existingHash, &existingWorkspaceID, &existingAgentID, &existingStatus, &existingTerminal, &existingContext); err == nil {
-		if existingHash != "" && existingHash != requestHash {
-			if !canSupersedeTerminalV6Dispatch(request, existingWorkspaceID, existingAgentID, existingStatus, existingTerminal, existingContext) {
-				return researchrun.DispatchResult{}, researchrun.NonRetryableDispatchError(fmt.Errorf("research dispatch key %q was reused for a different request", request.Key))
-			}
-		} else {
+		supersede := canSupersedeTerminalV6Dispatch(request, existingWorkspaceID, existingAgentID, existingStatus, existingTerminal, existingContext)
+		if existingHash != "" && existingHash != requestHash && !supersede {
+			return researchrun.DispatchResult{}, researchrun.NonRetryableDispatchError(fmt.Errorf("research dispatch key %q was reused for a different request", request.Key))
+		}
+		if !supersede {
 			if err = tx.Commit(ctx); err != nil {
 				return researchrun.DispatchResult{}, err
 			}
@@ -200,7 +200,7 @@ func (d *researchRunDispatcher) Dispatch(ctx context.Context, request researchru
 }
 
 func canSupersedeTerminalV6Dispatch(request researchrun.DispatchRequest, workspaceID, agentID, status string, terminal bool, rawContext json.RawMessage) bool {
-	if request.WorkItemID == "" || !terminal || (status != "acked" && status != "suppressed" && status != "failed") ||
+	if request.WorkItemID == "" || !terminal || (status != "acked" && status != "failed") ||
 		workspaceID != request.Run.WorkspaceID || agentID != request.AgentID {
 		return false
 	}

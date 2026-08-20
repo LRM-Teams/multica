@@ -54,6 +54,9 @@ func TestTerminalV6DispatchCanBeSupersededAfterPromptUpgrade(t *testing.T) {
 	if !canSupersedeTerminalV6Dispatch(request, request.Run.WorkspaceID, request.AgentID, "acked", true, raw) {
 		t.Fatal("exact terminal V6 dispatch was not supersedable")
 	}
+	if canSupersedeTerminalV6Dispatch(request, request.Run.WorkspaceID, request.AgentID, "suppressed", true, raw) {
+		t.Fatal("cancelled V6 dispatch was supersedable")
+	}
 	request.ManifestHash = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
 	if canSupersedeTerminalV6Dispatch(request, request.Run.WorkspaceID, request.AgentID, "acked", true, raw) {
 		t.Fatal("dispatch with a different frozen manifest was supersedable")

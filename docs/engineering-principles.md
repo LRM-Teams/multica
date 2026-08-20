@@ -59,7 +59,7 @@
 - **ACK 语义**：`agent:start:ack` 只证明 Computer 的 APM 已接受或排队，不证明进程、Provider、session 或消息消费；重连重投必须复用原 dispatch，重复 dispatch 只复用原 ACK。
 - **切换顺序**：Runtime replacement 必须 `stop old → matching inactive → start new`，不得同批 stop/start；setup、reconnect、Computer restart、Agent restart 与 Runtime update 统一经过一个 desired-state reconciliation module。
 - **命名**：领域统一 `computer_id`；既有 `daemon_id` 仅可作为旧存储 adapter 细节，不得进入新增协议、schema、日志或生命周期 module interface。
-- **指针**：完整协议、禁止项、Raft 1.0.15 已验证范围与升级为 `可执行` 所需回归见 `docs/agent-start-dispatch-contract.md`。
+- **指针**：完整协议、禁止项、已验证范围与升级为 `可执行` 所需回归见 `docs/agent-start-dispatch-contract.md`。
 - **当前状态**：实现与迁移尚未完成，不能标 `可执行`；完成后以协议类型、数据库约束、APM/reconcile tests 和日志断言升级本条。
 
 ### 0.3 Agent Message ACK 重投协议 — `可执行`（①②⑤，owner: @Codex）
@@ -74,7 +74,7 @@
 
 - **口径（2026-08-20）**：本地 App state 的身份层级固定为 `MachineID → WorkspaceID → AppID → owner`。Multica `WorkspaceID` 在此模型中等价于 Raft `serverId`；禁止新增一层 `ServerScope` / `ServerID`，也禁止拿 `DaemonID` 代替。Agent-owned canonical path 为 `<BindingsRoot>/app-storage/v1/<MachineID>/<WorkspaceID>/<AppID>/agents/<AgentID>/state.json`；Computer-owned state 为同 scope 下的 `<AppID>/computer/state.json`。
 - **边界**：路径从 machine-wide `BindingsRoot` 起算；`BindingStateRoot` 已包含 workspace binding scope，不得再用于拼该 canonical path，否则会重复嵌套 `WorkspaceID`。Reminder pending-fire receipts 的 `AppID` 是 `system.reminder`；aggregate Agent App Inbox 的 `AppID` 是 `system.agent-inbox`，两者是独立 state file，禁止混成同一 envelope。
-- **依据**：Raft 1.0.17 published bundle 的 authenticated machine context 使用 `machineId + serverId`，再按 `appId + agentId/computer` 打开 scoped storage；Multica 已拍板以 `WorkspaceID` 承担该 `serverId` 语义。
+- **依据**：Raft published bundle 的 authenticated machine context 使用 `machineId + serverId`，再按 `appId + agentId/computer` 打开 scoped storage；Multica 已拍板以 `WorkspaceID` 承担该 `serverId` 语义。
 - **物**：`builtInAppStorageAgentsRoot` 是唯一 path builder；Reminder receipts 与 Agent App Inbox 均按 Agent 写入 `state.json`；`TestBindingChildrenUseIsolatedDurableExecutionState` 固定 machine/workspace/App 隔离。不读取旧路径，不提供迁移或兼容 fallback。
 
 ## 1. 消息写入管道（BE）
@@ -379,10 +379,10 @@
 - 代理 URL 可能携带凭据：持久配置仍走原子 `0600` config；CLI show/set receipt 只能显示 presence，禁止回显原值。没有真实 caller 的“image pull”等能力不得虚报覆盖；新增 subprocess caller 只有继承 canonical daemon env 才自动纳入。
 - **物**：`applyProxyConfig` 的 env-over-config、大小写归一、NO_PROXY 去重+loopback 回归；`taskWakeupDialer` 必须使用 `http.ProxyFromEnvironment`。双向 mutation gate 固定为：配置 `HTTP_PROXY` 时 proxy decision 必须非空（删 Proxy hook 即红）；目标命中 `NO_PROXY` 时 decision 必须为空（强制走 proxy 即红）。
 
-### 4.15 Agent lifecycle 对齐 Raft 1.0.17 离散命令 — `可执行`（⑤三模式与 Start/Stop 回归；owner: @Codex）
+### 4.15 Agent lifecycle 离散命令 — `可执行`（⑤三模式与 Start/Stop 回归；owner: @Codex）
 - Product/API 暴露 `startAgent(agentId)`、`stopAgent(agentId)` 与 `resetAgent(agentId, mode)`；Reset mode 固定为 `restart | session | full`，没有 public `action_kind`、`execution_mode`、幂等键或 `after_current_run`。显式 Start 每次生成新的 `launchId + startDispatchId`；manual Stop 只投递当前 launch 的 Computer 命令，不写 durable Stop intent。Agent Panel 用 Runner process Presence 在同一按钮切换 Start/Stop，不读 work/activity status。
 - 一场 restart 只活在当前 server 进程的内存里，步骤为 `stopping → resetting_workspace? → starting`。没有 `agent_restart_operation` 账本；server 进程重启后不会恢复。
-- Raft 1.0.17 Computer wire 只有 `agent:stop`、`agent:reset-workspace`、`agent:start`，没有 composite `agent:lifecycle`。Restart 的 start 使用 `config.sessionId=<canonical provider session>`；Session/Full 的 start 使用 `config:{}`。Raft 将 truthy sessionId 视为 resume、absent/empty 视为 fresh，Multica 不再自造 nil/empty/omitted 三态。session 在发 stop 前从当前连接观察抄到这场内存 restart；之后 start 只读这场状态，不再查 live observation。
+- Computer wire 只有 `agent:stop`、`agent:reset-workspace`、`agent:start`，没有 composite `agent:lifecycle`。Restart 的 start 使用 `config.sessionId=<canonical provider session>`；Session/Full 的 start 使用 `config:{}`。Raft 将 truthy sessionId 视为 resume、absent/empty 视为 fresh，Multica 不再自造 nil/empty/omitted 三态。session 在发 stop 前从当前连接观察抄到这场内存 restart；之后 start 只读这场状态，不再查 live observation。
 - Stop 先记住旧 `launchId`，只有该 launch 的 inactive status 才推进；Runner 必须先撤销 APM admission、fence 迟到 startup，并等待 startup owner、provider lease 与 resident process 全部 quiescent 后才能发布 inactive。Start 在当前 socket 上发出新 `launchId`。Full 必须在上述 stop 证据后 reset AgentRoot，并且 Server 收到同场 restart 的 terminal reset result 后才允许 start。
 - 当前 Runner socket 拥有整场 stop → start。Runner Ready 不按 step 恢复，desired/observed reconcile 跳过任何仍在内存中的 restart。relay publish 不等于 accepted/completed；中断的 restart 留在进程内存里，直到当前 socket 走完或人再点一次。Activity 只消费正常 `Stopped → Starting → Idle/Working` 事实；Agent Restart 不新增 toast stream。
 - **物**：离散 `WorkspaceRunnerAgentStopPayload` / `WorkspaceRunnerAgentResetWorkspacePayload+Result` / `WorkspaceRunnerAgentStartPayload.Config.SessionID`、内存 `agentRestartStore`、三模式成功链、stale launch fence、reset completion proof；旧 composite payload、heartbeat pending queue、delivery lease、Ready/reconcile redrive、持久幂等账本和本地 `.multica/lifecycle-commands` ledger 不得恢复。
@@ -579,7 +579,7 @@
 - **物**：`workspace_runner_state.go` 的 narrow constructor/connection ownership 与 current-connection fence；`workspace_runner_message.go`、`workspace_runner_activity.go`、`workspace_runner_attachment.go` 的行为归属；`workspace_runner_delivery.go` 只返回 current Runner、不暴露 coordinator；`workspace_runner_state_test.go` 的 whole-Daemon dependency 与 field reach-through source guard，以及 identity/reconnect/isolation/recovery 回归。
 
 ### 4.19.4 Computer host 按 Raft 对账 Binding execution — `可执行`（③ host reconcile + ⑤ crash/degrade/process identity tests）
-- **口径（2026-08-18，Raft 1.0.17）**：Computer 与每个 managed Binding Runner 是独立 OS process。`internal/computer.Host` 每 5s 对账 desired Binding；crash 后 2s backoff；60s 内 3 次 crash 进入 degraded、不再自动拉起。摘掉 Binding 是 graceful stop，不是 unlinked/degraded。
+- **口径（2026-08-18）**：Computer 与每个 managed Binding Runner 是独立 OS process。`internal/computer.Host` 每 5s 对账 desired Binding；crash 后 2s backoff；60s 内 3 次 crash 进入 degraded、不再自动拉起。摘掉 Binding 是 graceful stop，不是 unlinked/degraded。
 - **process boundary**：每个 Binding child 持有自己的 `WorkspaceRunner + AgentProcessManager + Inbox/MessageCoordinator + Activity + provider runtimes`。Computer 通过 Unix socket / Windows named pipe 上的 length-prefixed JSON RPC 管理 child；Credential Proxy 仍是独立 loopback HTTP。Supervisor 在 spawn 时只登记 child handle/PID；`daemonInstanceId` 等 child Ready 自报后再记录。
 - **process identity fence**：每次 resident 启动生成 UUID `serviceGeneration`。Host 不预发 runner 门票；Binding child 自己生成 `daemonInstanceId`，Ready 时按进程句柄 + PID 收下。之后 Host control、Runtime report、diagnostic、capacity grant 和 exit observation 校验 exact Workspace + `daemonInstanceId` + PID；stale process 必须 no-op / fail closed。当前 wire 与持久化 JSON 只使用 camelCase。
 - **package boundary**：`internal/computer` 拥有 resident/health/control、desired set、supervision、crash/backoff、machine capacity、diagnostic aggregation 与 Machine Upgrade journal/stage/activation/successor attestation；`internal/daemon` 只拥有 child execution。Public resident 直接 `computer.NewHost → Host.RunProcess`，禁止构造或依赖 `daemon.Daemon`；反向也禁止 daemon 生产代码持有 `computer.Host`。CLI 只 wiring，不新增 `computerhost` 包。
@@ -587,7 +587,7 @@
 - **物**：`computer.Host` / `Host.RunProcess` / `hostMachineUpgrade` / `BindingSupervisor` / `HostControl` / `ProcessCapacity` / `BindingRunner`；真实 bootstrap/Ready/control process protocol；per-Binding child state root；双向 architecture guard；process-identity/crash/sibling/capacity/Machine Upgrade tests。
 
 ### 4.19.5 Machine Upgrade 以本机 successor attestation 收敛 — `可执行`（①无 cloud CAS + ⑤ local-proof tests）
-- **口径（2026-08-18，Raft 1.0.17）**：incumbent 不得自己 spawn successor。独立 `computer __upgrade` coordinator 等旧 service/runners 死后才启动 target，并继续拥有该 child。successor 必须通过 framed IPC 返回 exact target version、target PID、`sourceServicePid`、non-empty `serviceGeneration` 和完整 managed Workspace set/revision；前任未死不得 ready。journal 由 coordinator 在外部 attestation 之后删除；`fromVersion` 只有 `accepted`/`rolling_back` 才可清 journal。公开 `computer start` 看见 pending handoff 必须拒绝。
+- **口径（2026-08-18）**：incumbent 不得自己 spawn successor。独立 `computer __upgrade` coordinator 等旧 service/runners 死后才启动 target，并继续拥有该 child。successor 必须通过 framed IPC 返回 exact target version、target PID、`sourceServicePid`、non-empty `serviceGeneration` 和完整 managed Workspace set/revision；前任未死不得 ready。journal 由 coordinator 在外部 attestation 之后删除；`fromVersion` 只有 `accepted`/`rolling_back` 才可清 journal。公开 `computer start` 看见 pending handoff 必须拒绝。
 - **物**：`machine-attestation` local RPC；`computer __upgrade`；包含 `phase` / `sourceServicePid` / `oldRunnerPids` / `acceptedManagedWorkspaceIds` / `acceptedManagedSetRevision` 的单一 handoff journal；`recoverSuccessor` 的前任死亡门与授权回滚恢复。无 loopback HTTP adapter 或 dual-write。
 
 ### 4.19.7 过期 Machine Upgrade journal 不得拦住新 PATH Computer — `可执行`（⑤ recovery 回归）

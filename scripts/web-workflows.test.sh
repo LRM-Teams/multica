@@ -53,7 +53,8 @@ done
 for required in \
   'branches: [main]' \
   "github.ref == 'refs/heads/main'" \
-  'runs-on: [self-hosted, aliyun]' \
+  'SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}' \
+  'run-aliyun-step-over-ssh.sh' \
   'url: https://www.leagent.me'; do
   if ! grep -Fq -- "$required" <<<"$deploy_workflow"; then
     echo "Production deployment contract is missing: $required"

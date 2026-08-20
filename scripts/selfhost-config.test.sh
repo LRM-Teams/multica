@@ -76,11 +76,14 @@ done
 
 require_config "$deploy_workflow" 'compose up -d --no-deps --force-recreate caddy'
 require_config "$deploy_workflow" 'name: aliyun-dev'
-require_config "$deploy_workflow" 'runs-on: [self-hosted, aliyun]'
-require_config "$deploy_workflow" 'RUNNER_EXPECTED_USER: dev'
+require_config "$deploy_workflow" 'runs-on: ubuntu-latest'
+require_config "$deploy_workflow" 'SSH_HOST: 101.200.210.144'
+require_config "$deploy_workflow" 'SSH_USER: dev'
+require_config "$deploy_workflow" 'SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}'
+require_config "$deploy_workflow" 'SSH_KNOWN_HOSTS: 101.200.210.144 ssh-ed25519'
 require_config "$deploy_workflow" 'uses: actions/upload-artifact@v7'
 require_config "$deploy_workflow" 'uses: actions/download-artifact@v8'
-require_config "$deploy_workflow" 'scripts/assert-runner-workspace-ownership.sh'
+require_config "$deploy_workflow" 'scripts/run-aliyun-step-over-ssh.sh'
 require_config "$deploy_workflow" 'scripts/assert-served-app-image-provenance.sh'
 require_config "$deploy_workflow" 'scripts/compose-environment-value.sh'
 require_config "$deploy_workflow" 'scripts/assert-oss-compose-credentials.sh'
@@ -166,17 +169,17 @@ build_job="$(awk '/^  build:/{capture=1; next} /^  deploy:/{capture=0} capture{p
 # Deliberately NOT asserted: which runner prepare/build use. That is a CI
 # preference, not a deployment-safety property, and pinning it here meant every
 # legitimate `runs-on` change silently reddened this test for the whole team
-# (2026-07-29). What this file guards is below — the deploy job must stay on the
-# target host, credentials must stay in the host .env, and the deploy must
-# consume an immutable artifact rather than a git checkout.
+# (2026-07-29). What this file guards is below — deployment commands must run on
+# the target host over SSH, credentials must stay in the host .env, and the
+# deploy must consume an immutable artifact rather than a git checkout.
 require_config "$build_job" 'buildkitd-config-inline: |'
 require_config "$build_job" '[registry."docker.io"]'
 require_config "$build_job" 'mirrors = ["docker.m.daocloud.io", "docker.1ms.run"]'
 if grep -Fq 'uses: actions/checkout' <<<"$deploy_job"; then
-  echo "Aliyun self-hosted deploy job must consume the immutable deploy artifact, not git checkout."
+  echo "Aliyun SSH deploy job must consume the immutable deploy artifact, not git checkout."
   exit 1
 fi
-for forbidden_command in git sudo chown; do
+for forbidden_command in git sudo; do
   if grep -Eq "(^|[^[:alnum:]_.-])${forbidden_command}[[:space:]]" <<<"$deploy_job"; then
     echo "Aliyun self-hosted deploy job must not execute ${forbidden_command}."
     exit 1
@@ -211,6 +214,7 @@ if [[ -z "$asset_publish_step_line" || -z "$migration_step_line" || -z "$runtime
 fi
 
 bash scripts/runner-workspace-ownership.test.sh
+bash scripts/run-aliyun-step-over-ssh.test.sh
 bash scripts/served-app-image-provenance.test.sh
 bash scripts/compose-environment-value.test.sh
 bash scripts/assert-oss-compose-credentials.test.sh

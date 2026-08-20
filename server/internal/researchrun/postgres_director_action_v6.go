@@ -133,7 +133,11 @@ func (s *PostgresStore) rejectV6DirectorProposal(ctx context.Context, submission
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if _, err = tx.Exec(ctx, `UPDATE research_v6_work_submission SET status='rejected',outcome=jsonb_build_object('error',$2),updated_at=now() WHERE id=$1::uuid`, submissionID, reason); err != nil {
+	var workspaceID, runID, contractKind string
+	if err = tx.QueryRow(ctx, `UPDATE research_v6_work_submission
+		SET status='rejected',outcome=jsonb_build_object('error',$2::text),updated_at=now()
+		WHERE id=$1::uuid
+		RETURNING workspace_id::text,session_id::text,contract_kind`, submissionID, reason).Scan(&workspaceID, &runID, &contractKind); err != nil {
 		return err
 	}
 	if _, err = tx.Exec(ctx, `UPDATE research_work_item_attempt a SET status='failed',failure_class='contract_rejected',diagnostics=$2,
@@ -146,6 +150,10 @@ func (s *PostgresStore) rejectV6DirectorProposal(ctx context.Context, submission
 	}
 	if _, err = tx.Exec(ctx, `UPDATE research_director_cycle c SET status='failed',failure_class='contract_rejected',diagnostics=$2,completed_at=now()
 		FROM research_v6_work_submission s WHERE s.id=$1::uuid AND c.work_item_id=s.work_item_id AND c.status IN ('pending','running')`, submissionID, reason); err != nil {
+		return err
+	}
+	if _, err = appendEvent(ctx, tx, workspaceID, runID, "v6_work_submission_rejected", "v6-submission-rejected:"+submissionID,
+		"system", "", map[string]any{"submission_id": submissionID, "contract_kind": contractKind, "reason": reason}); err != nil {
 		return err
 	}
 	return s.commitResearchTx(ctx, txOpV6DirectorProposalComplete, tx)

@@ -338,7 +338,7 @@ func challengeV6SuccessorsTx(ctx context.Context, tx pgx.Tx, in ApplyV6SteeringA
 		goal_version,input_state_version,input_event_sequence,assigned_agent_id,priority,max_attempts,payload_schema_id,expected_result_schema_id,payload,state_version,ready_at,created_by_director_cycle_id)
 		SELECT gen_random_uuid(),$1::uuid,$2::uuid,'review','ready','artifact_version',$3::uuid,$4,$4,s.goal_version,s.state_version,
 			COALESCE((SELECT max(sequence) FROM research_run_event WHERE session_id=s.id),0),st.agent_id,0.9,3,'research.challenge_repair.v1','atomic_result_submission',
-			jsonb_build_object('artifact_version_ids',jsonb_build_array($3),'challenge_reason',$5,'task_specific_schema',jsonb_build_object(
+			jsonb_build_object('artifact_version_ids',jsonb_build_array($3::text),'challenge_reason',$5::text,'task_specific_schema',jsonb_build_object(
 				'type','object','additionalProperties',false,'required',jsonb_build_array('repair_summary'),
 				'properties',jsonb_build_object('repair_summary',jsonb_build_object('type','string','minLength',1),'recommended_action',jsonb_build_object('type','string')))),1,now(),$6::uuid
 		FROM research_session s JOIN research_node_steward_assignment st ON st.session_id=s.id AND st.node_artifact_version_id=$3::uuid AND st.status='active'

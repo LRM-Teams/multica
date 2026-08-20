@@ -72,7 +72,7 @@ func (s *PostgresStore) applyNextReceivedV6Submission(ctx context.Context) (bool
 			return false, err
 		}
 		if _, updateErr := tx.Exec(ctx, `UPDATE research_v6_work_submission SET status='rejected',
-			outcome=jsonb_build_object('error',$2),updated_at=now() WHERE id=$1::uuid`, submissionID, err.Error()); updateErr != nil {
+			outcome=jsonb_build_object('error',$2::text),updated_at=now() WHERE id=$1::uuid`, submissionID, err.Error()); updateErr != nil {
 			return false, updateErr
 		}
 		if _, eventErr := appendEvent(ctx, tx, workspaceID, runID, "v6_work_submission_rejected", "v6-submission-rejected:"+submissionID,

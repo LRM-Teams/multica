@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -277,5 +278,48 @@ func TestV6EventTriggerWaitsForMaterialRuntimeEffects(t *testing.T) {
 	}
 	if throughSequence < event.Sequence {
 		t.Fatalf("Director Brief watermark %d does not include material request event %d", throughSequence, event.Sequence)
+	}
+}
+
+func TestRejectedV6DirectorProposalTerminatesAndEmitsTrigger(t *testing.T) {
+	run := newTransactionRecoveryRun(t, "Reject stale V6 Director proposal")
+	membershipID, workItemID := seedV6RecoveryWorkItem(t, run, "running", time.Now().Add(time.Minute))
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_work_item
+		SET kind='director',client_key=$2 WHERE id=$1::uuid`, workItemID, "director-cycle:"+uuid.NewString()); err != nil {
+		t.Fatal(err)
+	}
+	attemptID := seedV6RecoveryAttempt(t, run, membershipID, workItemID)
+	submissionID := uuid.NewString()
+	if _, err := run.pool.Exec(run.ctx, `INSERT INTO research_v6_work_submission(
+		id,workspace_id,session_id,work_item_id,attempt_id,client_request_id,contract_kind,content_hash,envelope,status
+	) VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6::uuid,'director_action_proposal',$7,'{}'::jsonb,'processing')`,
+		submissionID, run.fixture.workspaceID, run.fixture.sessionID, workItemID, attemptID, uuid.NewString(),
+		"sha256:"+strings.Repeat("7", 64)); err != nil {
+		t.Fatal(err)
+	}
+
+	reason := ErrWorkItemChanged.Error()
+	if err := run.store.rejectV6DirectorProposal(run.ctx, submissionID, reason); err != nil {
+		t.Fatal(err)
+	}
+	var submissionStatus, outcomeError, attemptStatus, workStatus string
+	if err := run.pool.QueryRow(run.ctx, `SELECT s.status,s.outcome->>'error',a.status,w.status
+		FROM research_v6_work_submission s
+		JOIN research_work_item_attempt a ON a.id=s.attempt_id
+		JOIN research_work_item w ON w.id=s.work_item_id
+		WHERE s.id=$1::uuid`, submissionID).Scan(&submissionStatus, &outcomeError, &attemptStatus, &workStatus); err != nil {
+		t.Fatal(err)
+	}
+	if submissionStatus != "rejected" || outcomeError != reason || attemptStatus != "failed" || workStatus != "failed" {
+		t.Fatalf("submission=%s outcome=%q attempt=%s work=%s", submissionStatus, outcomeError, attemptStatus, workStatus)
+	}
+	var rejectedEvents int
+	if err := run.pool.QueryRow(run.ctx, `SELECT count(*)::int FROM research_run_event
+		WHERE session_id=$1::uuid AND event_type='v6_work_submission_rejected'
+		AND payload->>'submission_id'=$2::text`, run.fixture.sessionID, submissionID).Scan(&rejectedEvents); err != nil {
+		t.Fatal(err)
+	}
+	if rejectedEvents != 1 {
+		t.Fatalf("rejection events=%d want 1", rejectedEvents)
 	}
 }

@@ -4962,9 +4962,12 @@ export class ApiClient {
       rawSessions.some((session) => {
         if (!session || typeof session !== "object" || Array.isArray(session)) return true;
         const value = session as Record<string, unknown>;
-        return ["id", "workspace_id", "fleet_id", "status", "current_stage"].some(
-          (key) => typeof value[key] !== "string" || value[key] === "",
-        );
+        const required = ["id", "workspace_id", "status", "current_stage"];
+        if (required.some((key) => typeof value[key] !== "string" || value[key] === "")) {
+          return true;
+        }
+        // V6 runs have no fleet; empty/missing fleet_id is valid.
+        return value.fleet_id != null && typeof value.fleet_id !== "string";
       })
     ) {
       throw new Error("GET /api/research/sessions response failed schema validation");

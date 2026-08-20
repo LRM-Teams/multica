@@ -37,6 +37,7 @@ func createRuntimeLocalSkillTestRuntime(t *testing.T, ownerID string) string {
 	`,  testWorkspaceID,  daemonID,  runtimeName).Scan(&runtimeID); err != nil {
 		t.Fatalf("create local runtime: %v", err)
 	}
+	bindTestRuntimeOwner(t, daemonID, ownerID)
 
 	t.Cleanup(func() {
 		testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
@@ -320,6 +321,7 @@ func createStaleHeartbeatRuntimeLocalSkillTestRuntime(t *testing.T, ownerID stri
 	`,  testWorkspaceID,  daemonID,  runtimeName).Scan(&runtimeID); err != nil {
 		t.Fatalf("create stale-heartbeat local runtime: %v", err)
 	}
+	bindTestRuntimeOwner(t, daemonID, ownerID)
 
 	t.Cleanup(func() {
 		testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)

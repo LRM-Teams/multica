@@ -120,6 +120,8 @@ type graphMemoryWorkspaceGate struct {
 
 type graphMemoryGateLookup func(ctx context.Context, workspaceID string) (graphMemoryWorkspaceGate, error)
 
+type graphMemoryProfileRoundsLookup func(ctx context.Context, workspaceID string) int
+
 func graphMemoryGateLookupForPool(pool *pgxpool.Pool) graphMemoryGateLookup {
 	if pool == nil {
 		return nil
@@ -135,6 +137,28 @@ func graphMemoryGateLookupForPool(pool *pgxpool.Pool) graphMemoryGateLookup {
 			return graphMemoryWorkspaceGate{}, err
 		}
 		return graphMemoryWorkspaceGate{memoryType: gate.MemoryType, scopedWriterReady: gate.ScopedWriterReady}, nil
+	}
+}
+
+// graphMemoryProfileRoundsForPool resolves a workspace profile's explore
+// budget. Missing rows and all lookup errors fail open to the default so a
+// profile lookup cannot block consolidation.
+func graphMemoryProfileRoundsForPool(pool *pgxpool.Pool) graphMemoryProfileRoundsLookup {
+	if pool == nil {
+		return nil
+	}
+	q := db.New(pool)
+	return func(ctx context.Context, workspaceID string) int {
+		defaultRounds := memorygraph.DefaultExploreConfig().MaxRounds
+		ws, err := uuid.Parse(workspaceID)
+		if err != nil {
+			return defaultRounds
+		}
+		profile, err := q.GetGraphMemoryProfile(ctx, pgtype.UUID{Bytes: ws, Valid: true})
+		if err != nil || profile.ExploreMaxRounds <= 0 {
+			return defaultRounds
+		}
+		return int(profile.ExploreMaxRounds)
 	}
 }
 
@@ -159,6 +183,16 @@ func resolveGraphMemoryGate(ctx context.Context, dir, envType string, lookup gra
 	return "graph"
 }
 
+// resolveGraphMemoryProfileRounds returns a workspace's configured explore
+// budget. Dirs without a workspace or without a lookup retain the default
+// when the consolidation config is constructed.
+func resolveGraphMemoryProfileRounds(ctx context.Context, dir string, lookup graphMemoryProfileRoundsLookup) int {
+	if wsID, ok := graphDirWorkspaceID(dir); ok && lookup != nil {
+		return lookup(ctx, wsID)
+	}
+	return 0
+}
+
 // graphDirWorkspaceID extracts the workspace id from a canonical graph dir
 // <root>/<ws>/memory_graph/<kind>s/<owner>.
 func graphDirWorkspaceID(dir string) (string, bool) {
@@ -173,6 +207,7 @@ func makeGraphMemoryConsolidationHandler(pool *pgxpool.Pool, bm *obsmetrics.Busi
 	return func(ctx context.Context, in HandlerInput) (HandlerResult, error) {
 		envType := strings.ToLower(strings.TrimSpace(os.Getenv("MULTICA_MEMORY_TYPE")))
 		lookup := graphMemoryGateLookupForPool(pool)
+		roundsLookup := graphMemoryProfileRoundsForPool(pool)
 		if lookup == nil && envType != "graph" {
 			// Without a DB there is no per-workspace override to resolve; the
 			// env default gates the whole sweep.
@@ -203,7 +238,8 @@ func makeGraphMemoryConsolidationHandler(pool *pgxpool.Pool, bm *obsmetrics.Busi
 			}
 			// Per-workspace errors are logged and the loop continues: one
 			// broken graph must not starve the others.
-			ok, err := consolidateOneGraph(ctx, dir, state.dir(dir), bm)
+			exploreMaxRounds := resolveGraphMemoryProfileRounds(ctx, dir, roundsLookup)
+			ok, err := consolidateOneGraph(ctx, dir, exploreMaxRounds, state.dir(dir), bm)
 			if err != nil {
 				slog.Warn("graph memory consolidation failed", "dir", dir, "error", err)
 				continue
@@ -239,16 +275,31 @@ func makeGraphMemoryConsolidationHandler(pool *pgxpool.Pool, bm *obsmetrics.Busi
 // without a pi backend.
 type graphConsolidationRunner func(ctx context.Context) (*memorygraph.ConsolidateResult, error)
 
+// graphMemoryConsolidationConfigs applies the effective profile budget to
+// the backtest runner and to D_q's closure-radius configuration.
+func graphMemoryConsolidationConfigs(model string, exploreMaxRounds int) (memorygraph.ConsolidateConfig, memorygraph.ExploreConfig) {
+	cfg := memorygraph.DefaultConsolidateConfig()
+	cfg.Model = model
+	exploreCfg := memorygraph.DefaultExploreConfig()
+	exploreCfg.Model = cfg.Model
+	if exploreMaxRounds > 0 {
+		exploreCfg.MaxRounds = exploreMaxRounds
+	}
+	// D_q's closure radius must track the explore budget the runner
+	// actually plays with (spec §5.1 L2).
+	cfg.ExploreMaxRounds = exploreCfg.MaxRounds
+	return cfg, exploreCfg
+}
+
 // consolidateOneGraph runs one gated consolidation cycle against the
 // memory_graph store at dir, updating ds in place. It reports whether a
 // consolidation ran.
-func consolidateOneGraph(ctx context.Context, dir string, ds *graphDirState, bm *obsmetrics.BusinessMetrics) (bool, error) {
+func consolidateOneGraph(ctx context.Context, dir string, exploreMaxRounds int, ds *graphDirState, bm *obsmetrics.BusinessMetrics) (bool, error) {
 	store := memorygraph.NewStore(dir)
 	if err := store.Init(); err != nil {
 		return false, fmt.Errorf("init store: %w", err)
 	}
-	cfg := memorygraph.DefaultConsolidateConfig()
-	cfg.Model = strings.TrimSpace(os.Getenv("MULTICA_PI_MODEL"))
+	cfg, exploreCfg := graphMemoryConsolidationConfigs(strings.TrimSpace(os.Getenv("MULTICA_PI_MODEL")), exploreMaxRounds)
 	run := func(ctx context.Context) (*memorygraph.ConsolidateResult, error) {
 		backend, err := graphMemoryPIBackend()
 		if err != nil {
@@ -262,8 +313,6 @@ func consolidateOneGraph(ctx context.Context, dir string, ds *graphDirState, bm 
 			// conservative pass. The embedder (when configured) keeps the
 			// backtest retrieval identical to production (A2).
 			emb := graphMemoryEmbedder(store)
-			exploreCfg := memorygraph.DefaultExploreConfig()
-			exploreCfg.Model = cfg.Model
 			consolidator.SetRunner(memorygraph.NewExploreBacktestRunner(store, emb, backend, memorygraph.DefaultRetrievalConfig(), exploreCfg, "pi"))
 			consolidator.SetEmbedder(emb)
 		}

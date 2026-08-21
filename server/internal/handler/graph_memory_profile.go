@@ -54,12 +54,16 @@ func graphMemoryProfileFromRow(workspaceID pgtype.UUID, memoryType string, explo
 	return resp
 }
 
+// defaultGraphMemoryProfile mirrors the daemon env defaults for workspaces
+// without a stored profile: the merged /explore protocol counts one round
+// per served node, so the budget is larger than the legacy /view+/expand
+// round count.
 func defaultGraphMemoryProfile(workspaceID string) graphMemoryProfileResponse {
 	return graphMemoryProfileResponse{
 		WorkspaceID:      workspaceID,
 		MemoryType:       defaultGraphMemoryType,
 		ExploreAgents:    4,
-		ExploreMaxRounds: 3,
+		ExploreMaxRounds: 6,
 	}
 }
 

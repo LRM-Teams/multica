@@ -1,6 +1,7 @@
 package memorygraph
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -20,12 +21,12 @@ import (
 // reviewer (design §4.1). The layout under Root is:
 //
 //	current                    small file containing the current version number
+//	protocol                   protocol-generation marker (stale generations are wiped on Init)
 //	versions/v<N>/             manifest.json + nodes/ + edges/
 //	shared/embeddings/         cross-version embedding cache (<content_hash>.vec)
 //	staging/segments/          immutable source segment summaries
 //	query_log/                 per-window query logs (<window_id>.jsonl)
 //	op_log/                    per-version consolidation audit logs
-//	regression_set.jsonl       permanent regression query set
 //
 // A Store is safe for concurrent use within one process; cross-process
 // coordination is out of scope (the consolidator is a single writer).
@@ -41,13 +42,31 @@ func NewStore(root string) *Store {
 	return &Store{Root: root}
 }
 
+// GraphProtocolGeneration identifies the explore/backtest protocol generation
+// a store's data belongs to. Generation 1 is the legacy /view+/expand
+// protocol; generation 2 (2026-08-21) is the merged /explore protocol whose
+// round accounting, budget allocation and gates are incompatible with
+// generation-1 baselines. Init wipes stores from an older generation and
+// starts cold (spec §7: 删除旧图，不做向后兼容).
+const GraphProtocolGeneration = 2
+
+// protocolFile marks the protocol generation of the data under Root.
+func (s *Store) protocolFile() string { return filepath.Join(s.Root, "protocol") }
+
 // Init creates the directory layout, the initial empty version v1 (manifest
 // CreatedBy "init") and the current pointer file. It is idempotent: an
-// existing current pointer is left untouched.
+// existing current pointer of the current protocol generation is left
+// untouched. A store holding data from an older protocol generation is
+// wiped first and rebuilt empty (cold start, spec §7): old graph versions,
+// query-log rounds and the regression set are all incompatible with the
+// merged-/explore backtest and must not seed its baselines.
 func (s *Store) Init() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if err := s.wipeIfStaleGenerationLocked(); err != nil {
+		return err
+	}
 	for _, dir := range []string{
 		s.versionsDir(),
 		s.embeddingsDir(),
@@ -60,7 +79,7 @@ func (s *Store) Init() error {
 		}
 	}
 	if _, err := s.currentVersionLocked(); err == nil {
-		return nil // already initialized
+		return s.writeProtocolMarkerLocked() // already initialized
 	} else if !os.IsNotExist(err) {
 		return err
 	}
@@ -82,7 +101,69 @@ func (s *Store) Init() error {
 		}
 		versions = []int{1}
 	}
-	return s.writeCurrentLocked(versions[len(versions)-1])
+	if err := s.writeCurrentLocked(versions[len(versions)-1]); err != nil {
+		return err
+	}
+	return s.writeProtocolMarkerLocked()
+}
+
+// wipeIfStaleGenerationLocked removes every file under Root when the stored
+// data belongs to an older protocol generation. A missing marker on a
+// non-empty store means generation-1 data (the marker did not exist yet).
+// Fresh or already-current stores are left alone.
+func (s *Store) wipeIfStaleGenerationLocked() error {
+	data, err := os.ReadFile(s.protocolFile())
+	switch {
+	case err == nil:
+		gen, parseErr := strconv.Atoi(string(bytes.TrimSpace(data)))
+		if parseErr != nil {
+			return fmt.Errorf("init memory graph: unreadable protocol marker %q: %w", string(data), parseErr)
+		}
+		if gen == GraphProtocolGeneration {
+			return nil // current generation, nothing to do
+		}
+		if gen > GraphProtocolGeneration {
+			return fmt.Errorf("init memory graph: protocol generation %d is newer than supported %d", gen, GraphProtocolGeneration)
+		}
+		// Older generation: fall through to the wipe.
+	case os.IsNotExist(err):
+		// No marker: only a store with core layout (current pointer or
+		// version dirs) predates the marker. A dir holding anything else —
+		// e.g. just the identity file written by EnsureScopedDir — is fresh
+		// and must not be wiped (the identity is immutable, spec §3).
+		if _, statErr := os.Stat(s.currentPath()); statErr != nil {
+			if _, statErr := os.Stat(s.versionsDir()); statErr != nil {
+				return nil
+			}
+		}
+	default:
+		return fmt.Errorf("init memory graph: read protocol marker: %w", err)
+	}
+
+	// Wipe every entry except the immutable identity marker (spec §3):
+	// the directory keeps its scoped identity while all data goes.
+	entries, err := os.ReadDir(s.Root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("init memory graph: read root for wipe: %w", err)
+	}
+	for _, e := range entries {
+		if e.Name() == graphIdentityFile {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(s.Root, e.Name())); err != nil {
+			return fmt.Errorf("init memory graph: wipe stale generation: %w", err)
+		}
+	}
+	return nil
+}
+
+// writeProtocolMarkerLocked records the current protocol generation; called
+// once the store holds current-generation data.
+func (s *Store) writeProtocolMarkerLocked() error {
+	return os.WriteFile(s.protocolFile(), []byte(strconv.Itoa(GraphProtocolGeneration)), 0o644)
 }
 
 // CurrentVersion returns the version number stored in the current pointer.
@@ -509,26 +590,6 @@ func (s *Store) UpdateQueryLogEntry(windowID, traceID string, mutate func(*Query
 		return false, fmt.Errorf("rewrite query log %s: %w", windowID, err)
 	}
 	return true, nil
-}
-
-// AppendRegression appends one entry to regression_set.jsonl (design Q26).
-func (s *Store) AppendRegression(e *RegressionEntry) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return appendJSONL(filepath.Join(s.Root, "regression_set.jsonl"), e)
-}
-
-// ReadRegression reads the permanent regression set. A missing file yields
-// an empty list.
-func (s *Store) ReadRegression() ([]*RegressionEntry, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	var entries []*RegressionEntry
-	if err := readJSONL(filepath.Join(s.Root, "regression_set.jsonl"), &entries); err != nil {
-		return nil, fmt.Errorf("read regression set: %w", err)
-	}
-	return entries, nil
 }
 
 // ---------------------------------------------------------------------------

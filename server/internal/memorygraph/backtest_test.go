@@ -3,7 +3,6 @@ package memorygraph
 import (
 	"context"
 	"math"
-	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -52,7 +51,7 @@ func (f *fakeFullBacktestRunner) callCount() int {
 // BacktestQueries
 // ---------------------------------------------------------------------------
 
-func TestBacktestQueriesCollectsWindowAndRegression(t *testing.T) {
+func TestBacktestQueriesCollectsWindow(t *testing.T) {
 	store := newTestStore(t)
 	seedGraphNode(t, store, 1, "n1", "alpha beta")
 
@@ -78,55 +77,25 @@ func TestBacktestQueriesCollectsWindowAndRegression(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("AppendQueryLog: %v", err)
 	}
-	if err := store.AppendRegression(&RegressionEntry{
-		Query: "alpha", RelevantNodes: []string{"n1"}, AddedVersion: 1, Reason: "degraded before",
-	}); err != nil {
-		t.Fatalf("AppendRegression: %v", err)
-	}
-	if err := store.AppendRegression(&RegressionEntry{
-		Query: "alpha deep", RelevantNodes: []string{"n1"}, AddedVersion: 1, Reason: "slow query",
-		BaselineRounds: 5,
-	}); err != nil {
-		t.Fatalf("AppendRegression: %v", err)
-	}
 
 	queries, err := BacktestQueries(store, 1)
 	if err != nil {
 		t.Fatalf("BacktestQueries: %v", err)
 	}
-	if len(queries) != 3 {
-		t.Fatalf("BacktestQueries = %d queries, want 3 (window t-in + 2 regression)", len(queries))
+	if len(queries) != 1 {
+		t.Fatalf("BacktestQueries = %d queries, want 1 (window t-in)", len(queries))
 	}
-	var window *BacktestQuery
-	var regressions []*BacktestQuery
-	for _, q := range queries {
-		if q.Regression {
-			regressions = append(regressions, q)
-		} else {
-			window = q
-		}
-	}
-	if window == nil || window.TraceID != "t-in" || !window.JudgeDone || window.JudgeScore != 0.9 {
-		t.Fatalf("window query = %+v, want judged t-in", window)
+	q := queries[0]
+	if q.TraceID != "t-in" || !q.JudgeDone || q.JudgeScore != 0.9 {
+		t.Fatalf("window query = %+v, want judged t-in", q)
 	}
 	// The window baseline is the recorded adopted-path rounds + found flag.
-	if window.BaselineRounds != 3 || !window.BaselineFound {
-		t.Fatalf("window baseline = rounds %d found %v, want 3/true", window.BaselineRounds, window.BaselineFound)
+	if q.BaselineRounds != 3 || !q.BaselineFound {
+		t.Fatalf("window baseline = rounds %d found %v, want 3/true", q.BaselineRounds, q.BaselineFound)
 	}
-	if len(regressions) != 2 {
-		t.Fatalf("regression queries = %d, want 2", len(regressions))
-	}
-	sort.Slice(regressions, func(i, j int) bool { return regressions[i].BaselineRounds < regressions[j].BaselineRounds })
-	// baseline_rounds absent in the first entry -> DefaultBacktestBaselineRounds;
-	// the second entry's recorded value is honored. Regression entries always
-	// pass baseline-side by construction.
-	if regressions[0].BaselineRounds != DefaultBacktestBaselineRounds || !regressions[0].BaselineFound {
-		t.Fatalf("regression[0] baseline = rounds %d found %v, want %d/true",
-			regressions[0].BaselineRounds, regressions[0].BaselineFound, DefaultBacktestBaselineRounds)
-	}
-	if regressions[1].BaselineRounds != 5 || !regressions[1].BaselineFound {
-		t.Fatalf("regression[1] baseline = rounds %d found %v, want 5/true",
-			regressions[1].BaselineRounds, regressions[1].BaselineFound)
+	count, err := BacktestWindowQueryCount(store, 1)
+	if err != nil || count != 2 {
+		t.Fatalf("BacktestWindowQueryCount = %d, %v; want 2 including unjudged entry", count, err)
 	}
 }
 
@@ -305,9 +274,9 @@ func TestEvaluateCoveredQueryRunsFullBacktest(t *testing.T) {
 }
 
 // Rounds overflow (A2): full-backtest rounds beyond baseline + tolerance
-// count as a regression. For a regression-set entry that fails hard gate 4;
-// for a window query it is recorded for audit without failing the
-// regression gate.
+// mark the query regressed for audit, but a window query never fails a gate
+// on rounds alone — recall and mean/p95 are the only rounds-sensitive
+// signals.
 func TestEvaluateRoundsOverflowRegresses(t *testing.T) {
 	store := newTestStore(t)
 	seedGraphNode(t, store, 1, "n1", "alpha beta")
@@ -316,67 +285,86 @@ func TestEvaluateRoundsOverflowRegresses(t *testing.T) {
 		t.Fatalf("CreateVersionFrom: %v", err)
 	}
 
-	regression := &BacktestQuery{
-		Query: "alpha", RelevantNodes: []string{"n1"},
-		BaselineRounds: 2, BaselineFound: true, Regression: true,
-	}
 	window := &BacktestQuery{
 		TraceID: "t1", Query: "alpha", RelevantNodes: []string{"n1"},
 		BaselineRounds: 2, BaselineFound: true, JudgeDone: true, JudgeScore: 0.9,
 	}
-	// 5 rounds > baseline 2 + tolerance 1 for both queries.
+	// 5 rounds > baseline 2 + tolerance 1.
 	runner := &fakeFullBacktestRunner{t: t, rounds: 5, found: true}
 	bt := NewBacktester(store, BacktestConfig{Runner: runner})
 
-	stats := bt.EvaluateCandidate(context.Background(), cand, 1, []*BacktestQuery{regression, window})
-	if stats.Passed {
-		t.Fatalf("candidate passed despite the regression-set rounds overflow")
+	stats := bt.EvaluateCandidate(context.Background(), cand, 1, []*BacktestQuery{window})
+	if !stats.Passed {
+		t.Fatalf("candidate failed gates on a window-query rounds overflow: %v", stats.GateFailures)
 	}
-	joined := strings.Join(stats.GateFailures, ";")
-	if !strings.Contains(joined, "regression") {
-		t.Fatalf("gate failures = %v, want a regression failure", stats.GateFailures)
+	qs := stats.Queries[0]
+	if !qs.Regressed {
+		t.Fatalf("query stat = %+v, want regressed (rounds overflow)", qs)
 	}
-	for _, qs := range stats.Queries {
-		if !qs.Regressed {
-			t.Fatalf("query stat = %+v, want regressed (rounds overflow)", qs)
-		}
-		if !qs.Found || qs.Rounds != 5 {
-			t.Fatalf("query stat = %+v, want found with 5 rounds (recall intact)", qs)
-		}
+	if !qs.Found || qs.Rounds != 5 {
+		t.Fatalf("query stat = %+v, want found with 5 rounds (recall intact)", qs)
 	}
-	// The recall gate is unaffected by rounds overflow: both queries still
-	// pass candidate-side.
+	// The recall gate is unaffected by rounds overflow: the query still
+	// passes candidate-side.
 	if stats.Recall != 1.0 || stats.BaselineRecall != 1.0 {
 		t.Fatalf("recall = %v baseline = %v, want 1/1", stats.Recall, stats.BaselineRecall)
 	}
 }
 
-// An uncovered regression-set entry fails hard gate 4 (关键 query 不退化).
-func TestEvaluateRegressionUncoveredRejectsCandidate(t *testing.T) {
+// Cold start (spec §7): a window thinner than ColdStartThreshold makes the
+// recorded baselines untrustworthy, so the recall gate is skipped and rounds
+// overflow no longer marks a regression. Miss regressions stay recorded (an
+// honest observation), and the structural gates still run.
+func TestEvaluateColdStartDegradesStatisticalGates(t *testing.T) {
 	store := newTestStore(t)
 	seedGraphNode(t, store, 1, "n1", "alpha beta")
+	seedGraphNode(t, store, 1, "n2", "gamma delta")
 	cand, err := store.CreateVersionFrom(1, "ttt")
 	if err != nil {
 		t.Fatalf("CreateVersionFrom: %v", err)
 	}
-	seedGraphNode(t, store, cand, "n1", "zzz qqq") // retrieval regression
+	// Retrieval regression on the alpha query: n1 no longer matches.
+	seedGraphNode(t, store, cand, "n1", "zzz qqq")
 
-	q := &BacktestQuery{
-		Query: "alpha", RelevantNodes: []string{"n1"},
-		BaselineRounds: 1, BaselineFound: true, Regression: true,
+	qAlpha := &BacktestQuery{
+		TraceID: "t1", Query: "alpha", RelevantNodes: []string{"n1"},
+		BaselineRounds: 1, BaselineFound: true, JudgeDone: true, JudgeScore: 0.9,
 	}
-	// The full backtest would find the answer, but uncovered queries never
-	// reach it (A2 step 3).
-	runner := &fakeFullBacktestRunner{t: t, rounds: 1, found: true, forbid: map[string]bool{"alpha": true}}
-	bt := NewBacktester(store, BacktestConfig{Runner: runner})
+	qGamma := &BacktestQuery{
+		TraceID: "t2", Query: "gamma", RelevantNodes: []string{"n2"},
+		BaselineRounds: 1, BaselineFound: true, JudgeDone: true, JudgeScore: 0.9,
+	}
+	// 5 rounds > baseline 1 + tolerance 1 on the covered gamma query.
+	runner := &fakeFullBacktestRunner{t: t, rounds: 5, found: true}
 
-	stats := bt.EvaluateCandidate(context.Background(), cand, 1, []*BacktestQuery{q})
+	// Without cold start the same setup fails the recall gate (0.5 < 1.0 -
+	// 0.02) and marks the gamma rounds overflow.
+	warm := NewBacktester(store, BacktestConfig{Runner: runner})
+	stats := warm.EvaluateCandidate(context.Background(), cand, 1, []*BacktestQuery{qAlpha, qGamma})
 	if stats.Passed {
-		t.Fatalf("candidate passed despite regression miss")
+		t.Fatalf("warm candidate passed despite recall 0.5: %v", stats.GateFailures)
 	}
-	joined := strings.Join(stats.GateFailures, ";")
-	if !strings.Contains(joined, "regression") {
-		t.Fatalf("gate failures = %v, want a regression failure", stats.GateFailures)
+	gammaWarm := stats.Queries[1]
+	if !gammaWarm.Regressed {
+		t.Fatalf("warm gamma stat = %+v, want rounds-overflow regression", gammaWarm)
+	}
+
+	// Cold start: the recall gate is skipped and the rounds overflow is not
+	// held against the candidate; the alpha miss stays marked regressed.
+	cold := NewBacktester(store, BacktestConfig{Runner: runner, ColdStart: true})
+	stats = cold.EvaluateCandidate(context.Background(), cand, 1, []*BacktestQuery{qAlpha, qGamma})
+	if !stats.Passed {
+		t.Fatalf("cold-start candidate failed statistical gates: %v", stats.GateFailures)
+	}
+	qAlphaStat, qGammaStat := stats.Queries[0], stats.Queries[1]
+	if !qAlphaStat.Regressed {
+		t.Fatalf("cold alpha stat = %+v, want the miss still marked regressed", qAlphaStat)
+	}
+	if qGammaStat.Regressed {
+		t.Fatalf("cold gamma stat = %+v, want rounds overflow suppressed under cold start", qGammaStat)
+	}
+	if stats.Recall != 0.5 || stats.BaselineRecall != 1.0 {
+		t.Fatalf("cold recall = %v baseline = %v, want the honest 0.5/1.0 (reported, not gated)", stats.Recall, stats.BaselineRecall)
 	}
 }
 

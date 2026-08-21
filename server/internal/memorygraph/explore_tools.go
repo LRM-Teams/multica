@@ -19,7 +19,7 @@ import (
 // exploreToolServerMaxBody is the hard cap on tool-server request bodies.
 const exploreToolServerMaxBody = 64 * 1024
 
-// expandSnippetChars caps the candidate snippet returned by /expand.
+// expandSnippetChars caps the neighbor snippet returned by /explore.
 const expandSnippetChars = 200
 
 // ExploreToolServer exposes the explore-agent graph operations over a
@@ -29,17 +29,17 @@ const expandSnippetChars = 200
 //
 // Endpoints (all require "Authorization: Bearer <token>"):
 //
-//	POST /view    {trajectory_id, node_id}             -> node body + frontmatter subset
-//	POST /expand  {trajectory_id, node_id, relation?}  -> ordered neighbor candidates;
-//	    beyond the round budget: 200 {"budget_exceeded":true,"candidates":[]} (Q15/A6)
+//	POST /explore {trajectory_id, node_ids[]} -> each node's body + inline
+//	    neighbor edge info; rounds consumed = nodes served (spec §4);
+//	    beyond the round budget: 200 {"budget_exceeded":true,"nodes":[]} (Q15/A6)
 //	POST /submit  {trajectory_id, found, summary, node_ids} -> record the final answer
 type ExploreToolServer struct {
 	store *Store
 	retr  *HybridRetriever // may be nil; embedding neighbors are then skipped
 	cfg   ExploreConfig
 	// version is the graph version this server is pinned to (design R5/R12):
-	// /view, /expand and /submit read this version's dir for the whole
-	// Explore call and never re-resolve the current pointer.
+	// /explore and /submit read this version's dir for the whole Explore
+	// call and never re-resolve the current pointer.
 	version int
 
 	httpServer  *http.Server
@@ -51,9 +51,9 @@ type ExploreToolServer struct {
 }
 
 // trajectoryState is the per-trajectory server-side accounting. The rounds
-// counter is the authoritative exploration-round count (one served /expand
-// call = one round); budgetBlown is set when the trajectory kept calling
-// /expand after reaching MaxRounds (design Q15/A6: the budget is enforced
+// counter is the authoritative exploration-round count (one served node =
+// one round, spec §4.2); budgetBlown is set when the trajectory kept calling
+// /explore after reaching MaxRounds (design Q15/A6: the budget is enforced
 // server-side); the submission records the trajectory's /submit payload.
 type trajectoryState struct {
 	rounds      int
@@ -88,8 +88,7 @@ func NewExploreToolServer(store *Store, retr *HybridRetriever, cfg ExploreConfig
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /view", s.handleView)
-	mux.HandleFunc("POST /expand", s.handleExpand)
+	mux.HandleFunc("POST /explore", s.handleExplore)
 	mux.HandleFunc("POST /submit", s.handleSubmit)
 
 	s.httpServer = &http.Server{
@@ -230,82 +229,12 @@ func (s *ExploreToolServer) loadGraph() (*Graph, error) {
 }
 
 // ---------------------------------------------------------------------------
-// POST /view
+// POST /explore
 // ---------------------------------------------------------------------------
 
-type viewRequest struct {
-	TrajectoryID string `json:"trajectory_id"`
-	NodeID       string `json:"node_id"`
-}
-
-type viewResponse struct {
-	NodeID          string   `json:"node_id"`
-	Level           int      `json:"level"` // -1 for staging segments
-	EpistemicStatus string   `json:"epistemic_status,omitempty"`
-	Tags            []string `json:"tags,omitempty"`
-	Body            string   `json:"body"`
-	Truncated       bool     `json:"truncated"`
-	Staging         bool     `json:"staging,omitempty"`
-}
-
-func (s *ExploreToolServer) handleView(w http.ResponseWriter, r *http.Request) {
-	var req viewRequest
-	if !s.decodeExploreRequest(w, r, &req) {
-		return
-	}
-	if strings.TrimSpace(req.TrajectoryID) == "" || strings.TrimSpace(req.NodeID) == "" {
-		exploreWriteError(w, http.StatusBadRequest, "MISSING_FIELDS", "trajectory_id and node_id are required")
-		return
-	}
-	s.mu.Lock()
-	s.stateLocked(req.TrajectoryID)
-	s.mu.Unlock()
-
-	var resp viewResponse
-	if IsStagingID(req.NodeID) {
-		segID := strings.TrimPrefix(req.NodeID, stagingDocPrefix)
-		body, err := s.store.ReadStagingSegment(segID)
-		if err != nil {
-			exploreWriteError(w, http.StatusNotFound, "NODE_NOT_FOUND", "staging segment not found")
-			return
-		}
-		resp = viewResponse{NodeID: req.NodeID, Level: -1, Staging: true, Body: string(body)}
-	} else {
-		g, err := s.loadGraph()
-		if err != nil {
-			exploreWriteError(w, http.StatusInternalServerError, "GRAPH_ERROR", err.Error())
-			return
-		}
-		n := g.Node(req.NodeID)
-		// A node outside the caller's graph view returns the same not-found
-		// shape as a missing node: fail closed, no existence leak (spec §5).
-		if n == nil || !s.viewAllows(n) {
-			exploreWriteError(w, http.StatusNotFound, "NODE_NOT_FOUND", "node not found")
-			return
-		}
-		resp = viewResponse{
-			NodeID:          n.NodeID,
-			Level:           n.Level,
-			EpistemicStatus: n.Epistemic,
-			Tags:            n.Tags,
-			Body:            n.Body,
-		}
-	}
-	if len(resp.Body) > s.cfg.MaxNodeChars {
-		resp.Body = resp.Body[:s.cfg.MaxNodeChars]
-		resp.Truncated = true
-	}
-	exploreWriteJSON(w, http.StatusOK, resp)
-}
-
-// ---------------------------------------------------------------------------
-// POST /expand
-// ---------------------------------------------------------------------------
-
-type expandRequest struct {
-	TrajectoryID string `json:"trajectory_id"`
-	NodeID       string `json:"node_id"`
-	Relation     string `json:"relation,omitempty"`
+type exploreRequest struct {
+	TrajectoryID string   `json:"trajectory_id"`
+	NodeIDs      []string `json:"node_ids"`
 }
 
 // expandCandidate is one neighbor offered to the explore agent. Via records
@@ -318,96 +247,164 @@ type expandCandidate struct {
 	Snippet string `json:"snippet"`
 }
 
-type expandResponse struct {
-	Round          int               `json:"round"`
-	BudgetExceeded bool              `json:"budget_exceeded"`
-	Candidates     []expandCandidate `json:"candidates"`
+// exploredNode is one served node: its body plus inline neighbor edge info,
+// so the agent sees a node and its edges in one call (spec §4.1).
+type exploredNode struct {
+	NodeID          string            `json:"node_id"`
+	Level           int               `json:"level"` // -1 for staging segments
+	EpistemicStatus string            `json:"epistemic_status,omitempty"`
+	Tags            []string          `json:"tags,omitempty"`
+	Body            string            `json:"body"`
+	Truncated       bool              `json:"truncated"`
+	Staging         bool              `json:"staging,omitempty"`
+	Neighbors       []expandCandidate `json:"neighbors,omitempty"`
 }
 
-func (s *ExploreToolServer) handleExpand(w http.ResponseWriter, r *http.Request) {
-	var req expandRequest
+type exploreResponse struct {
+	Round          int            `json:"round"` // cumulative rounds consumed after this call
+	BudgetExceeded bool           `json:"budget_exceeded"`
+	Nodes          []exploredNode `json:"nodes"`
+}
+
+func (s *ExploreToolServer) handleExplore(w http.ResponseWriter, r *http.Request) {
+	var req exploreRequest
 	if !s.decodeExploreRequest(w, r, &req) {
 		return
 	}
-	if strings.TrimSpace(req.TrajectoryID) == "" || strings.TrimSpace(req.NodeID) == "" {
-		exploreWriteError(w, http.StatusBadRequest, "MISSING_FIELDS", "trajectory_id and node_id are required")
+	if strings.TrimSpace(req.TrajectoryID) == "" || len(req.NodeIDs) == 0 {
+		exploreWriteError(w, http.StatusBadRequest, "MISSING_FIELDS", "trajectory_id and node_ids are required")
 		return
 	}
-	if IsStagingID(req.NodeID) {
-		exploreWriteError(w, http.StatusBadRequest, "STAGING_NOT_EXPANDABLE", "staging segments have no graph neighbors")
-		return
-	}
+	s.mu.Lock()
+	s.stateLocked(req.TrajectoryID)
+	s.mu.Unlock()
 
 	g, err := s.loadGraph()
 	if err != nil {
 		exploreWriteError(w, http.StatusInternalServerError, "GRAPH_ERROR", err.Error())
 		return
 	}
-	node := g.Node(req.NodeID)
-	// Same fail-closed not-found shape as /view for out-of-view anchors.
-	if node == nil || !s.viewAllows(node) {
-		exploreWriteError(w, http.StatusNotFound, "NODE_NOT_FOUND", "node not found")
-		return
+
+	// Fail closed before consuming any rounds: every requested node must
+	// resolve within the caller's graph view. A batch with one unknown or
+	// out-of-view node is rejected whole, mirroring the missing-node shape
+	// (no existence leak, spec §5).
+	for _, id := range req.NodeIDs {
+		if IsStagingID(id) {
+			segID := strings.TrimPrefix(id, stagingDocPrefix)
+			if _, err := s.store.ReadStagingSegment(segID); err != nil {
+				exploreWriteError(w, http.StatusNotFound, "NODE_NOT_FOUND", "staging segment not found")
+				return
+			}
+			continue
+		}
+		n := g.Node(id)
+		if n == nil || !s.viewAllows(n) {
+			exploreWriteError(w, http.StatusNotFound, "NODE_NOT_FOUND", "node not found")
+			return
+		}
 	}
 
-	// One served /expand call consumes one exploration round
-	// (server-authoritative). Budget enforcement (design Q15/A6): once the
-	// round counter reaches MaxRounds, subsequent /expand calls are rejected
-	// with HTTP 200 and {"budget_exceeded":true,"candidates":[]} — a 200,
-	// not a 429, so curl-driven agents parse one response shape — and the
-	// trajectory is marked budget-blown, which later forces its /submit to
-	// Found=false.
+	// Rounds are consumed per node served (server-authoritative, spec §4.2).
+	// Budget enforcement: once the round counter reaches MaxRounds, further
+	// calls are rejected with HTTP 200 and {"budget_exceeded":true,"nodes":[]}
+	// — a 200, not a 429, so curl-driven agents parse one response shape.
+	// Blowing the budget means asking for more than it allows: a rejected
+	// call or a request that straddles the remaining budget (partially
+	// served) marks the trajectory budget-blown, which later forces its
+	// /submit to Found=false. A request fully served within budget never
+	// blows, even when it spends the last round.
 	s.mu.Lock()
 	st := s.stateLocked(req.TrajectoryID)
 	if st.rounds >= s.cfg.MaxRounds {
 		st.budgetBlown = true
 		round := st.rounds
 		s.mu.Unlock()
-		exploreWriteJSON(w, http.StatusOK, expandResponse{
+		exploreWriteJSON(w, http.StatusOK, exploreResponse{
 			Round:          round,
 			BudgetExceeded: true,
-			Candidates:     []expandCandidate{},
+			Nodes:          []exploredNode{},
 		})
 		return
 	}
-	st.rounds++
+	remaining := s.cfg.MaxRounds - st.rounds
+	if len(req.NodeIDs) > remaining {
+		st.budgetBlown = true
+	} else {
+		remaining = len(req.NodeIDs)
+	}
+	st.rounds += remaining
 	round := st.rounds
 	s.mu.Unlock()
 
-	candidates := s.expandCandidates(g, node, req.Relation)
-	if len(candidates) > s.cfg.MaxExpandPerRound {
-		candidates = candidates[:s.cfg.MaxExpandPerRound]
+	nodes := make([]exploredNode, 0, remaining)
+	for _, id := range req.NodeIDs[:remaining] {
+		nodes = append(nodes, s.exploreNode(g, id))
 	}
-	exploreWriteJSON(w, http.StatusOK, expandResponse{
+	exploreWriteJSON(w, http.StatusOK, exploreResponse{
 		Round:          round,
 		BudgetExceeded: round >= s.cfg.MaxRounds,
-		Candidates:     candidates,
+		Nodes:          nodes,
 	})
 }
 
-// expandCandidates orders neighbors by the design §5.2 priority: hierarchy
-// parents/children (summarizes) first, then entity_refs co-occurrence, then
-// typed relation neighbors, then embedding neighbors. Cross-level relation
-// edges with |LevelDelta| > 1 are demoted to the end, except evidence_for
-// which is never demoted (Q5).
-func (s *ExploreToolServer) expandCandidates(g *Graph, node *Node, relationFilter string) []expandCandidate {
+// exploreNode assembles one served node: body (truncated to MaxNodeChars)
+// plus inline neighbors. Staging segments carry a body but no neighbors.
+// Neighbor ordering and the per-node cap reuse expandCandidates, and the
+// caller's graph view is reapplied to every offered neighbor.
+func (s *ExploreToolServer) exploreNode(g *Graph, id string) exploredNode {
+	if IsStagingID(id) {
+		segID := strings.TrimPrefix(id, stagingDocPrefix)
+		body, _ := s.store.ReadStagingSegment(segID)
+		node := exploredNode{NodeID: id, Level: -1, Staging: true, Body: string(body)}
+		return truncateExploreBody(&node, s.cfg.MaxNodeChars)
+	}
+	n := g.Node(id)
+	node := exploredNode{
+		NodeID:          n.NodeID,
+		Level:           n.Level,
+		EpistemicStatus: n.Epistemic,
+		Tags:            n.Tags,
+		Body:            n.Body,
+	}
+	node.Neighbors = s.expandCandidates(g, n, "")
+	return truncateExploreBody(&node, s.cfg.MaxNodeChars)
+}
+
+func truncateExploreBody(node *exploredNode, max int) exploredNode {
+	if len(node.Body) > max {
+		node.Body = node.Body[:max]
+		node.Truncated = true
+	}
+	return *node
+}
+
+// expandCandidateRef identifies one expand candidate without rendering it. The
+// shared construction keeps /explore and backtest L3 on the same candidate
+// priority, visibility and cap semantics.
+type expandCandidateRef struct {
+	NodeID string
+	Via    string
+}
+
+// expandCandidateRefs builds the capped candidate list returned by /explore.
+// It is pure over its graph and retriever inputs; allow may be nil when no
+// graph view applies.
+func expandCandidateRefs(g *Graph, node *Node, retr *HybridRetriever, maxExpand int, relationFilter string, allow func(*Node) bool) []expandCandidateRef {
+	if node == nil || maxExpand <= 0 {
+		return nil
+	}
 	seen := map[string]bool{node.NodeID: true}
-	var out, demoted []expandCandidate
+	var out, demoted []expandCandidateRef
 	add := func(id, via string, demote bool) {
 		if seen[id] || id == "" {
 			return
 		}
 		seen[id] = true
-		// Reapply the graph view on every offered neighbor (spec §5): an
-		// edge must never surface a node the caller may not see. Staging
-		// docs have no graph node and pass through (scope-resolved upstream).
-		if n := g.Node(id); n != nil && !s.viewAllows(n) {
+		if n := g.Node(id); n != nil && allow != nil && !allow(n) {
 			return
 		}
-		c := expandCandidate{NodeID: id, Via: via, Level: -1, Snippet: s.snippet(g, id)}
-		if n := g.Node(id); n != nil {
-			c.Level = n.Level
-		}
+		c := expandCandidateRef{NodeID: id, Via: via}
 		if demote {
 			demoted = append(demoted, c)
 		} else {
@@ -453,13 +450,31 @@ func (s *ExploreToolServer) expandCandidates(g *Graph, node *Node, relationFilte
 	}
 
 	// 4. Embedding neighbors (skipped without an embedder).
-	if s.retr != nil {
-		for _, hit := range s.retr.vectorNeighbors(node.NodeID, s.cfg.MaxExpandPerRound) {
+	if retr != nil {
+		for _, hit := range retr.vectorNeighbors(node.NodeID, maxExpand) {
 			add(hit.ID, "embedding", false)
 		}
 	}
 
-	return append(out, demoted...)
+	candidates := append(out, demoted...)
+	if len(candidates) > maxExpand {
+		candidates = candidates[:maxExpand]
+	}
+	return candidates
+}
+
+// expandCandidates renders the shared candidate construction for /explore.
+func (s *ExploreToolServer) expandCandidates(g *Graph, node *Node, relationFilter string) []expandCandidate {
+	refs := expandCandidateRefs(g, node, s.retr, s.cfg.MaxExpandPerRound, relationFilter, s.viewAllows)
+	out := make([]expandCandidate, 0, len(refs))
+	for _, ref := range refs {
+		c := expandCandidate{NodeID: ref.NodeID, Via: ref.Via, Level: -1, Snippet: s.snippet(g, ref.NodeID)}
+		if n := g.Node(ref.NodeID); n != nil {
+			c.Level = n.Level
+		}
+		out = append(out, c)
+	}
+	return out
 }
 
 // snippet returns a bounded body preview for a graph node or staging id.
@@ -552,7 +567,7 @@ func (s *ExploreToolServer) handleSubmit(w http.ResponseWriter, r *http.Request)
 }
 
 // ---------------------------------------------------------------------------
-// retriever vector neighbors (embedding channel for /expand)
+// retriever vector neighbors (embedding channel for /explore neighbors)
 // ---------------------------------------------------------------------------
 
 // vectorNeighbors returns up to topN doc ids most similar to the given doc id

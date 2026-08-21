@@ -324,8 +324,11 @@ func TestExplorePersistsTrajectoryTrace(t *testing.T) {
 		}
 	}
 	footer := records[4]
-	if footer["found"] != true || footer["rounds"] != 1.0 || footer["error"] != "" {
-		t.Fatalf("footer = %v, want found/rounds=1", footer)
+	// The replayed session claims rounds:1 in its final JSON but never
+	// actually called /explore, so the server-authoritative round count is 0
+	// (spec §4.2: rounds bill nodes served, never the agent's claim).
+	if footer["found"] != true || footer["rounds"] != 0.0 || footer["error"] != "" {
+		t.Fatalf("footer = %v, want found with server-counted rounds=0", footer)
 	}
 	ids, _ := footer["node_ids"].([]any)
 	if len(ids) != 1 || ids[0] != "n-target" {

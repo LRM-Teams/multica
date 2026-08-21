@@ -8,9 +8,8 @@ import (
 )
 
 // GraphMemoryAuditService backs the query/judge/backtest audit API
-// (spec §10): 24h recall volume and quality, judge write-back coverage, and
-// the permanent regression-set size, aggregated across the workspace's
-// physical graphs.
+// (spec §10): 24h recall volume and quality and judge write-back coverage,
+// aggregated across the workspace's physical graphs.
 type GraphMemoryAuditService struct {
 	root string // workspaces root; empty resolves MULTICA_WORKSPACES_ROOT
 }
@@ -27,7 +26,6 @@ type GraphMemoryAuditSummary struct {
 	RecallHitRate24h    float64 `json:"recall_hit_rate_24h"`
 	AvgExploreRounds24h float64 `json:"avg_explore_rounds_24h"`
 	JudgedQueries24h    int     `json:"judged_queries_24h"`
-	RegressionsTotal    int     `json:"regressions_total"`
 }
 
 func (s *GraphMemoryAuditService) Summary(ctx context.Context, workspaceID string) (*GraphMemoryAuditSummary, error) {
@@ -69,9 +67,6 @@ func (s *GraphMemoryAuditService) Summary(ctx context.Context, workspaceID strin
 					sum.JudgedQueries24h++
 				}
 			}
-		}
-		if regressions, err := store.ReadRegression(); err == nil {
-			sum.RegressionsTotal += len(regressions)
 		}
 	})
 	if sum.Queries24h > 0 {

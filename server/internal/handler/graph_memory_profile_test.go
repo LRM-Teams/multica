@@ -50,8 +50,8 @@ func TestGraphMemoryProfileRoundTrip(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&def); err != nil {
 		t.Fatal(err)
 	}
-	if def.WorkspaceID != workspaceID || def.MemoryType != "legacy" || def.ExploreAgents != 4 || def.ExploreMaxRounds != 3 {
-		t.Fatalf("default profile = %+v, want legacy/4/3", def)
+	if def.WorkspaceID != workspaceID || def.MemoryType != "legacy" || def.ExploreAgents != 4 || def.ExploreMaxRounds != 6 {
+		t.Fatalf("default profile = %+v, want legacy/4/6", def)
 	}
 
 	// PUT persists the reviewer settings.

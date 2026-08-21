@@ -227,19 +227,6 @@ type QueryLogEntry struct {
 	BaselineDist    float64  `json:"baseline_dist,omitempty"` // deprecated: superseded by BaselineCovered/BaselineTopK
 }
 
-// RegressionEntry is one line of regression_set.jsonl (Q26).
-type RegressionEntry struct {
-	Query         string   `json:"query"`
-	RelevantNodes []string `json:"relevant_nodes"`
-	AddedVersion  int      `json:"added_version"`
-	Reason        string   `json:"reason"`
-	// BaselineRounds is the number of explore rounds the original query
-	// needed (design Q13/A2): the n of the n-hop coverage check and the
-	// reference for the rounds-overflow regression gate. Absent/zero in
-	// files written before A2 defaults to DefaultBacktestBaselineRounds.
-	BaselineRounds int `json:"baseline_rounds,omitempty"`
-}
-
 // ExploreRun is one explore-agent trajectory (K of them in TTT mode, Q17).
 type ExploreRun struct {
 	RunID   string   `json:"run_id"`

@@ -17,8 +17,8 @@ type FullBacktestRunner interface {
 }
 
 // DefaultBacktestBaselineRounds is the n of the n-hop coverage check when a
-// backtest query carries no recorded baseline rounds (legacy regression
-// entries predate the baseline_rounds field, design Q13/A2).
+// backtest query carries no recorded baseline rounds (a recorded 0-round
+// entry, design Q13/A2).
 const DefaultBacktestBaselineRounds = 2
 
 // DefaultBacktestRoundsTolerance is the allowed candidate-rounds overflow
@@ -30,8 +30,8 @@ const DefaultBacktestRoundsTolerance = 1
 type BacktestConfig struct {
 	RecallTolerance float64 // allowed recall-rate drop vs baseline (default 0.02)
 	JudgeThreshold  float64 // τ: only judge-passed queries feed mean/p95 rounds (default 0.6)
-	// RoundsTolerance is the rounds-overflow tolerance for the regression
-	// gate (default DefaultBacktestRoundsTolerance).
+	// RoundsTolerance is the rounds-overflow tolerance for the per-query
+	// rounds-regression signal (default DefaultBacktestRoundsTolerance).
 	RoundsTolerance int
 	// Retrieval mirrors the production retrieval configuration (top_k,
 	// bm25_weight); zero values fall back to DefaultRetrievalConfig.
@@ -40,7 +40,13 @@ type BacktestConfig struct {
 	// retrieval. nil is allowed: backtests then run BM25-only through the
 	// same two-channel merge as production (retriever.go hybridSearch).
 	Embedder *CachedEmbedder
-	Runner   FullBacktestRunner
+	// ColdStart degrades the statistical gates (spec §7): when the window
+	// holds fewer than BacktestBudget.ColdStartThreshold query-log entries,
+	// the recall gate is skipped and rounds overflow no longer marks a
+	// regression — the recorded baselines are too thin to trust. Structural
+	// gates (validate, staging coverage) always run.
+	ColdStart bool
+	Runner    FullBacktestRunner
 }
 
 // normalized fills zero/negative fields with defaults.
@@ -60,36 +66,38 @@ func (c BacktestConfig) normalized() BacktestConfig {
 	return c
 }
 
-// BacktestQuery is one backtest input: a judged window query (design Q26)
-// or a permanent regression-set entry. BaselineRounds is the number of
-// explore rounds the original query needed (QueryLogEntry.Rounds of the
-// adopted path for window queries; RegressionEntry.BaselineRounds for
-// regression entries, defaulting to DefaultBacktestBaselineRounds when
-// absent). BaselineFound records whether the query passed baseline-side:
-// QueryLogEntry.Found for window queries, true for regression entries
-// (the regression set holds critical queries expected to pass).
+// BacktestQuery is one backtest input: a judged window query. BaselineRounds
+// is the number of explore rounds the original query needed
+// (QueryLogEntry.Rounds of the adopted path, normalized via baselineRounds);
+// BaselineFound records whether the query passed baseline-side
+// (QueryLogEntry.Found).
 type BacktestQuery struct {
-	TraceID        string   // empty for regression entries
+	TraceID        string
 	Query          string   `json:"query"`
 	RelevantNodes  []string // ground truth set
 	BaselineRounds int
 	BaselineFound  bool
 	JudgeScore     float64
 	JudgeDone      bool
-	Regression     bool
 }
 
 // QueryBacktestStat records the per-query outcome on one candidate.
+// Skipped marks a query left unmeasured by the budget allocation (spec §5):
+// it carries Rounds=0 and its D_q, and is excluded from recall and the
+// mean/p95 rounds aggregates.
 type QueryBacktestStat struct {
 	TraceID        string  `json:"trace_id,omitempty"`
 	Query          string  `json:"query"`
-	Regression     bool    `json:"regression"`
 	BaselineRounds int     `json:"baseline_rounds"` // n: rounds the original query needed
 	BaselineFound  bool    `json:"baseline_found"`  // baseline-side pass
 	Covered        bool    `json:"covered"`         // all ground truth within the n-hop hit neighborhood
 	Found          bool    `json:"found"`           // candidate-side pass (recall unit)
 	Rounds         float64 `json:"rounds"`          // candidate rounds (runner result, else n estimate)
 	Regressed      bool    `json:"regressed"`       // baseline pass -> candidate miss, or rounds overflow
+
+	Skipped    bool    `json:"skipped"`             // outside the budget union: not measured on this candidate
+	Dq         float64 `json:"dq"`                  // change-degree D_q used by the budget allocation (spec §5.1)
+	SkipReason string  `json:"skip_reason,omitempty"`
 
 	RequiresFullBacktest   bool `json:"requires_full_backtest"`
 	FullBacktestRan        bool `json:"full_backtest_ran"`
@@ -124,23 +132,29 @@ type CandidateStats struct {
 	Cost         float64 `json:"cost"`
 }
 
-// BacktestQueries collects the backtest input for a consolidation away from
-// fromVersion (design Q26): every judged query-log entry recorded against
-// fromVersion across all windows (the adjacent-version window) plus the
-// permanent regression set. Window baselines come from the recorded entry
-// (Rounds of the adopted path, Found); regression baselines come from the
-// entry's baseline_rounds (defaulting to DefaultBacktestBaselineRounds for
-// pre-A2 files) and are treated as baseline-passing by construction.
-func BacktestQueries(store *Store, fromVersion int) ([]*BacktestQuery, error) {
+// backtestWindowBounds returns the adjacent graph-version interval used by a
+// consolidation away from fromVersion.
+func backtestWindowBounds(store *Store, fromVersion int) (int, error) {
 	versions, err := store.ListVersions()
 	if err != nil {
-		return nil, fmt.Errorf("backtest queries: list versions: %w", err)
+		return 0, fmt.Errorf("backtest queries: list versions: %w", err)
 	}
 	prev := fromVersion - 1
 	for _, v := range versions {
 		if v < fromVersion && v > prev {
 			prev = v
 		}
+	}
+	return prev, nil
+}
+
+// BacktestQueries collects the judged backtest input for a consolidation away
+// from fromVersion (design Q26). Baselines come from the recorded entry
+// (Rounds of the adopted path, Found).
+func BacktestQueries(store *Store, fromVersion int) ([]*BacktestQuery, error) {
+	prev, err := backtestWindowBounds(store, fromVersion)
+	if err != nil {
+		return nil, err
 	}
 
 	var out []*BacktestQuery
@@ -165,24 +179,29 @@ func BacktestQueries(store *Store, fromVersion int) ([]*BacktestQuery, error) {
 			})
 		}
 	}
-
-	regression, err := store.ReadRegression()
-	if err != nil {
-		return nil, err
-	}
-	for _, re := range regression {
-		if len(re.RelevantNodes) == 0 {
-			continue
-		}
-		out = append(out, &BacktestQuery{
-			Query:          re.Query,
-			RelevantNodes:  re.RelevantNodes,
-			BaselineRounds: baselineRounds(re.BaselineRounds),
-			BaselineFound:  true,
-			Regression:     true,
-		})
-	}
 	return out, nil
+}
+
+// BacktestWindowQueryCount returns every query-log entry in the adjacent
+// version window, including entries whose asynchronous judge has not run.
+func BacktestWindowQueryCount(store *Store, fromVersion int) (int, error) {
+	prev, err := backtestWindowBounds(store, fromVersion)
+	if err != nil {
+		return 0, err
+	}
+	windows, err := store.ListQueryLogWindows()
+	if err != nil {
+		return 0, fmt.Errorf("backtest window query count: list windows: %w", err)
+	}
+	count := 0
+	for _, w := range windows {
+		entries, err := NewQueryRecorder(store, w).EntriesBetween(prev, fromVersion)
+		if err != nil {
+			return 0, err
+		}
+		count += len(entries)
+	}
+	return count, nil
 }
 
 // baselineRounds normalizes a recorded baseline-rounds value: absent/zero
@@ -290,28 +309,18 @@ func (b *Backtester) EvaluateCandidate(ctx context.Context, version, parentVersi
 	// Hard gate 3: recall rate >= baseline - tolerance. Recall is the
 	// fraction of backtest queries passing candidate-side (neighborhood
 	// coverage, plus explore found=true when a runner is wired); the
-	// baseline is the fraction passing baseline-side.
+	// baseline is the fraction passing baseline-side. Skipped under
+	// cold start (spec §7): thin windows make the rate untrustworthy.
 	stats.Recall, stats.BaselineRecall = recallRates(stats.Queries)
-	if stats.Recall < stats.BaselineRecall-b.cfg.RecallTolerance {
+	if !b.cfg.ColdStart && stats.Recall < stats.BaselineRecall-b.cfg.RecallTolerance {
 		fail("recall %.4f below baseline %.4f - tolerance %.4f", stats.Recall, stats.BaselineRecall, b.cfg.RecallTolerance)
-	}
-
-	// Hard gate 4: no regression-set query may regress (关键 query 不退化):
-	// a regression entry that passed baseline-side but misses
-	// candidate-side, or whose full-backtest rounds exceed the recorded
-	// baseline rounds plus RoundsTolerance, fails the gate.
-	for _, qs := range stats.Queries {
-		if qs.Regression && qs.Regressed {
-			fail("regression query %q regressed (covered=%v found=%v rounds=%.0f baseline_rounds=%d)",
-				qs.Query, qs.Covered, qs.Found, qs.Rounds, qs.BaselineRounds)
-		}
 	}
 
 	// Rounds stats over judge-passed queries only (design §5.4 step 6).
 	var rounds []float64
 	for i, q := range queries {
 		qs := stats.Queries[i]
-		if q.Regression || !q.JudgeDone || q.JudgeScore < b.cfg.JudgeThreshold || !qs.Found {
+		if !q.JudgeDone || q.JudgeScore < b.cfg.JudgeThreshold || !qs.Found {
 			continue
 		}
 		rounds = append(rounds, qs.Rounds)
@@ -374,7 +383,6 @@ func (b *Backtester) evalQuery(ctx context.Context, retr *HybridRetriever, g *Gr
 	stat := QueryBacktestStat{
 		TraceID:        q.TraceID,
 		Query:          q.Query,
-		Regression:     q.Regression,
 		BaselineRounds: n,
 		BaselineFound:  q.BaselineFound,
 	}
@@ -417,7 +425,10 @@ func (b *Backtester) evalQuery(ctx context.Context, retr *HybridRetriever, g *Gr
 	}
 	stat.Found = true
 	stat.Rounds = float64(rounds)
-	if q.BaselineFound && rounds > n+b.cfg.RoundsTolerance {
+	// Rounds overflow marks a regression unless cold start suppresses the
+	// rounds signal (spec §7): with a thin window the recorded baseline
+	// rounds are not trustworthy enough to police candidates against.
+	if q.BaselineFound && rounds > n+b.cfg.RoundsTolerance && !b.cfg.ColdStart {
 		stat.Regressed = true
 	}
 	return stat

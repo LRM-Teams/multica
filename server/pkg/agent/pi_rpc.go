@@ -66,6 +66,7 @@ func (b *piRPCBackend) maybeCompactAfterTurn(p *piRPCProcess, model string, msgC
 	ctx, cancel := context.WithTimeout(context.Background(), postTurnCompactionTimeout)
 	defer cancel()
 	trySend(msgCh, Message{Type: MessageCompactionStarted})
+	runMemoryFlushBeforeCompaction(processWorkingDir(p.cmd))
 	compacted, err := b.Compact(ctx, proactiveContextCompactionInstructions)
 	b.compact.recordAttempt(err != nil, p.queryRuntimeStats(context.Background(), nil, model))
 	if err != nil {

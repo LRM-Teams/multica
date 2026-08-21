@@ -12,31 +12,6 @@ import (
 	"github.com/google/uuid"
 )
 
-func TestV6DirectorBriefSurvivesItsOwnOperationalEvents(t *testing.T) {
-	cycleID := "00000000-0000-4000-8000-000000000001"
-	workID := "00000000-0000-4000-8000-000000000002"
-	briefID := "00000000-0000-4000-8000-000000000003"
-	for _, test := range []struct {
-		name, eventType, payload string
-		want                     bool
-	}{
-		{name: "cycle created", eventType: "v6_director_cycle_created", payload: `{"cycle_id":"` + cycleID + `","work_item_id":"` + workID + `","brief_id":"` + briefID + `"}`, want: true},
-		{name: "dispatch prepared", eventType: "v6_work_item_dispatch_prepared", payload: `{"work_item_id":"` + workID + `"}`, want: true},
-		{name: "dispatch completed", eventType: "v6_work_item_dispatched", payload: `{"work_item_id":"` + workID + `"}`, want: true},
-		{name: "attempt recovered", eventType: "v6_work_item_recovered", payload: `{"work_item_id":"` + workID + `"}`, want: true},
-		{name: "brief acknowledged", eventType: "v6_director_brief_page_acknowledged", payload: `{"brief_id":"` + briefID + `"}`, want: true},
-		{name: "proposal received", eventType: "v6_work_submission_received", payload: `{"work_item_id":"` + workID + `"}`, want: true},
-		{name: "other work", eventType: "v6_work_item_dispatched", payload: `{"work_item_id":"00000000-0000-4000-8000-000000000009"}`},
-		{name: "material event", eventType: "v6_branch_created", payload: `{"work_item_id":"` + workID + `"}`},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			if got := isV6DirectorCycleOperationalEvent(test.eventType, json.RawMessage(test.payload), cycleID, workID, briefID); got != test.want {
-				t.Fatalf("allowed=%v want=%v", got, test.want)
-			}
-		})
-	}
-}
-
 type teamV6StoreStub struct {
 	added    AddV6TeamMemberInput
 	archived ArchiveV6TeamMemberInput

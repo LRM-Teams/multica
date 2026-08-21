@@ -1039,11 +1039,17 @@ func appendEvent(ctx context.Context, tx pgx.Tx, workspaceID, sessionID, eventTy
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return RunEvent{}, err
 	}
+	// The event sequence is bookkeeping and must not consume
+	// research_session.state_version: that column is the semantic
+	// optimistic-concurrency token that only goal / steering / report
+	// transitions advance. Coupling them made every dispatch or submission
+	// event invalidate all in-flight Director proposals and Agent results.
+	// Serialized by lockRunForMutation above, so max(sequence)+1 is safe.
 	var sequence int64
 	if err := tx.QueryRow(ctx, `
-		UPDATE research_session SET state_version = state_version + 1, updated_at = now()
+		UPDATE research_session SET updated_at = now()
 		WHERE id = $1::uuid AND workspace_id = $2::uuid
-		RETURNING state_version
+		RETURNING (SELECT COALESCE(max(sequence), 0) + 1 FROM research_run_event WHERE session_id = $1::uuid)
 	`, sessionID, workspaceID).Scan(&sequence); err != nil {
 		return RunEvent{}, err
 	}

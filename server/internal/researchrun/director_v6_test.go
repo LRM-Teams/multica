@@ -107,8 +107,12 @@ func TestV6DirectorBriefBoundsTeamMissionSummary(t *testing.T) {
 	if _, err := run.pool.Exec(run.ctx, `UPDATE research_team_membership SET mission_prompt=$2 WHERE session_id=$1::uuid`, run.fixture.sessionID, longMission); err != nil {
 		t.Fatal(err)
 	}
+	var stateVersion int64
+	if err := run.pool.QueryRow(run.ctx, `SELECT state_version FROM research_session WHERE id=$1::uuid`, run.fixture.sessionID).Scan(&stateVersion); err != nil {
+		t.Fatal(err)
+	}
 	facts, err := run.store.LoadDirectorBriefFacts(run.ctx, StartV6DirectorCycleInput{
-		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID, ExpectedStateVersion: 0,
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID, ExpectedStateVersion: stateVersion,
 	})
 	if err != nil {
 		t.Fatal(err)

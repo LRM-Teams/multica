@@ -1319,20 +1319,19 @@ func (h *Handler) HireResearchFleetMember(w http.ResponseWriter, r *http.Request
 	}
 
 	agent, err := h.createAgentWithIdentity(r.Context(), h.Queries, db.CreateAgentParams{
-		WorkspaceID:        wsUUID,
-		Description:        req.Description,
-		Instructions:       instructions,
-		AvatarUrl:          pgtype.Text{},
-		AvatarSource:       agentAvatarSourceAssigned,
-		RuntimeMode:        runtime.RuntimeMode,
-		RuntimeConfig:      []byte("{}"),
-		RuntimeID:          runtime.ID,
-		MaxConcurrentTasks: 3,
-		OwnerID:            parseUUID(userID),
-		CustomEnv:          []byte("{}"),
-		CustomArgs:         []byte("[]"),
-		Model:              model,
-		ThinkingLevel:      pgtype.Text{},
+		WorkspaceID:   wsUUID,
+		Description:   req.Description,
+		Instructions:  instructions,
+		AvatarUrl:     pgtype.Text{},
+		AvatarSource:  agentAvatarSourceAssigned,
+		RuntimeMode:   runtime.RuntimeMode,
+		RuntimeConfig: []byte("{}"),
+		RuntimeID:     runtime.ID,
+		OwnerID:       parseUUID(userID),
+		CustomEnv:     []byte("{}"),
+		CustomArgs:    []byte("[]"),
+		Model:         model,
+		ThinkingLevel: pgtype.Text{},
 	}, req.Name, req.Name)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to hire agent: "+err.Error())

@@ -180,7 +180,6 @@ async function findOrCreateHelper(
       // its brand mark has a real server-owned path (registered preset or
       // an internal ensure-style write like Windy/Beckham).
       runtime_id: runtimeId,
-      max_concurrent_tasks: 6,
       template: "multica_helper",
     });
   })();
@@ -445,9 +444,7 @@ function RuntimeWelcome({
       );
       // Create issues in declared order (STARTER_CARD_IDS), so the user
       // lands on the most foundational task first when there's a tie. We
-      // run them in parallel — Helper's max_concurrent_tasks lets it pick
-      // them up immediately, and one failure of N shouldn't gate the
-      // others.
+      // run them in parallel: one failure of N shouldn't gate the others.
       const orderedIds = STARTER_CARD_IDS.filter((id) => selected.has(id));
       const issues = await Promise.all(
         orderedIds.map((id) => {

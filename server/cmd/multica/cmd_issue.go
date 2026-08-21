@@ -931,8 +931,8 @@ func runIssueCreate(cmd *cobra.Command, _ []string) error {
 	// inherits the env var and tags the new issue with origin_type=
 	// quick_create + origin_id=<task_id>. The completion handler then
 	// locates the issue deterministically by origin instead of "most
-	// recent issue by this agent", which is racy when max_concurrent_tasks
-	// > 1 and the agent is creating other issues in parallel.
+	// recent issue by this agent", which would be racy if the agent
+	// creates other issues around the same time.
 	if taskID := os.Getenv("MULTICA_QUICK_CREATE_TASK_ID"); taskID != "" {
 		body["origin_type"] = "quick_create"
 		body["origin_id"] = taskID

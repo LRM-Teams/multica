@@ -547,7 +547,6 @@ export interface Agent {
   managed_role?: "research_fleet";
   /** Workspace-level authority. Agents can be members or admins, never owners. */
   workspace_role: "member" | "admin";
-  max_concurrent_tasks: number;
   model: string;
   /**
    * Runtime-native reasoning/effort token (e.g. Claude's
@@ -722,7 +721,6 @@ export interface CreateAgentRequest {
    * a later batch alongside the DB column.
    */
   home_channel_id?: string | null;
-  max_concurrent_tasks?: number;
   model?: string;
   /** Optional runtime-native reasoning/effort token. See `Agent.thinking_level`. */
   thinking_level?: string;
@@ -782,7 +780,6 @@ export interface CreateAgentFromTemplateRequest {
   display_name?: string;
   runtime_id: string;
   model?: string;
-  max_concurrent_tasks?: number;
   /** Optional overrides applied to the template before creation. nil/omit
    *  uses the template's own value. */
   description?: string;
@@ -845,7 +842,6 @@ export interface UpdateAgentRequest {
    */
   home_channel_id?: string | null;
   status?: AgentStatus;
-  max_concurrent_tasks?: number;
   model?: string;
 	/** Completed runtime-model discovery request backing a runtime-config save. */
 	model_catalog_request_id?: string;

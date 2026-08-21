@@ -48,7 +48,7 @@ import { MemberSelfAvatarEditor } from "./member-self-avatar-editor";
 import { useOpenAgentPanel } from "../common/agent-panel-context";
 import { ActorAvatar } from "../common/actor-avatar";
 import { ActorStyledName } from "../common/actor-styled-name";
-import { ProfileField } from "../common/profile-field";
+import { ProfileField, ProfileSectionHeading } from "../common/profile-field";
 import { ConversationSidePanelShell } from "../common/conversation-side-panel-shell";
 import { useOpenDM } from "../common/use-open-dm";
 import { AppLink } from "../navigation";
@@ -560,9 +560,9 @@ function MemberSidePanelReady({
 
           {honorWall ? (
             <section className="border-t border-border pt-3">
-              <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                {t(($) => $.panel.honor_title)}
-              </h3>
+              <div className="mb-2">
+              <ProfileSectionHeading label={t(($) => $.panel.honor_title)} />
+            </div>
               <HonorWall
                 wall={honorWall}
                 completionLabel={t(($) => $.panel.honor_completion, {
@@ -594,9 +594,9 @@ function MemberSidePanelReady({
           ) : null}
 
           <section className="border-t border-border pt-3">
-            <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-              {t(($) => $.panel.info)}
-            </h3>
+            <div className="mb-2">
+              <ProfileSectionHeading label={t(($) => $.panel.info)} />
+            </div>
             <div className="grid grid-cols-[100px_minmax(0,1fr)] gap-x-3 gap-y-2 text-[13px]">
               <span className="pt-0.5 text-muted-foreground">
                 {t(($) => $.panel.role)}
@@ -640,12 +640,12 @@ function MemberSidePanelReady({
           </section>
 
           <section className="border-t border-border pt-3">
-            <h3 className="mb-2 flex items-center justify-between gap-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-              <span>{t(($) => $.panel.created_agents)}</span>
-              <span className="font-medium tabular-nums text-muted-foreground/80">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <ProfileSectionHeading label={t(($) => $.panel.created_agents)} />
+              <span className="text-[11px] font-medium tabular-nums text-muted-foreground/80">
                 {ownedAgents.length}
               </span>
-            </h3>
+            </div>
             {ownedAgents.length === 0 ? (
               <p className="text-[13px] text-muted-foreground">
                 {t(($) => $.panel.no_agents)}
@@ -684,9 +684,9 @@ function MemberSidePanelReady({
               aria-label={t(($) => $.panel.actions_section)}
               data-testid="member-profile-actions"
             >
-              <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                {t(($) => $.panel.actions_section)}
-              </h3>
+              <div className="mb-2">
+              <ProfileSectionHeading label={t(($) => $.panel.actions_section)} />
+            </div>
               <div className="flex flex-col gap-2">
                 {showActionMessage ? (
                   <Button

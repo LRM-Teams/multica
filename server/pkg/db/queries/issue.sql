@@ -194,9 +194,8 @@ ORDER BY parent_issue_id, position ASC, created_at DESC;
 -- name: GetIssueByOrigin :one
 -- Finds the issue stamped with a specific (origin_type, origin_id) pair.
 -- Used by quick-create completion to deterministically locate the issue
--- produced by a given agent_inbox_event.id — robust against concurrent
--- issue creates by the same agent (assignment task + quick-create both
--- running with max_concurrent_tasks > 1).
+-- produced by a given agent_inbox_event.id — robust against the same
+-- agent creating other issues around the same time.
 SELECT * FROM issue
 WHERE workspace_id = $1
   AND origin_type = $2

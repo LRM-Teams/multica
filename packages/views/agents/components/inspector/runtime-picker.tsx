@@ -10,6 +10,7 @@ import {
 } from "../../../issues/components/pickers";
 import { ProviderLogo } from "../../../runtimes/components/provider-logo";
 import { CHIP_CLASS } from "./chip";
+import { EditPencil } from "./inspector-field";
 import { useT } from "../../../i18n";
 import {
   runtimePickerBrandLabel,
@@ -120,6 +121,7 @@ export function RuntimePicker({
             <Icon className="h-3 w-3 shrink-0 text-muted-foreground" />
           )}
           <span className="min-w-0 truncate">{brandLabel}</span>
+          <EditPencil />
         </>
       }
     >

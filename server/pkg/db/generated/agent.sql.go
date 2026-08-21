@@ -1111,13 +1111,13 @@ const createAgent = `-- name: CreateAgent :one
 INSERT INTO agent (
     workspace_id, name, display_name, description, avatar_url, avatar_source,
     avatar_attachment_id, runtime_mode, runtime_config, runtime_id,
-    max_concurrent_tasks, owner_id, instructions, custom_env, custom_args,
+    owner_id, instructions, custom_env, custom_args,
     mcp_config, model, thinking_level
 ) VALUES (
-    $1, $2, $3, $4, $16,
-    COALESCE(NULLIF($17::text, ''), 'assigned'),
-    $18, $5, $6, $7, $8, $9, $10, $11,
-    $12, $13, $14, $15
+    $1, $2, $3, $4, $15,
+    COALESCE(NULLIF($16::text, ''), 'assigned'),
+    $17, $5, $6, $7, $8, $9, $10, $11,
+    $12, $13, $14
 )
 RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail
 `
@@ -1130,7 +1130,6 @@ type CreateAgentParams struct {
 	RuntimeMode        string      `json:"runtime_mode"`
 	RuntimeConfig      []byte      `json:"runtime_config"`
 	RuntimeID          pgtype.UUID `json:"runtime_id"`
-	MaxConcurrentTasks int32       `json:"max_concurrent_tasks"`
 	OwnerID            pgtype.UUID `json:"owner_id"`
 	Instructions       string      `json:"instructions"`
 	CustomEnv          []byte      `json:"custom_env"`
@@ -1152,7 +1151,6 @@ func (q *Queries) CreateAgent(ctx context.Context, arg CreateAgentParams) (Agent
 		arg.RuntimeMode,
 		arg.RuntimeConfig,
 		arg.RuntimeID,
-		arg.MaxConcurrentTasks,
 		arg.OwnerID,
 		arg.Instructions,
 		arg.CustomEnv,
@@ -4024,13 +4022,12 @@ UPDATE agent SET
     runtime_mode = COALESCE($10, runtime_mode),
     runtime_id = COALESCE($11, runtime_id),
     status = COALESCE($12, status),
-    max_concurrent_tasks = COALESCE($13, max_concurrent_tasks),
-    instructions = COALESCE($14, instructions),
-    custom_env = COALESCE($15, custom_env),
-    custom_args = COALESCE($16, custom_args),
-    mcp_config = COALESCE($17, mcp_config),
-    model = COALESCE($18, model),
-    thinking_level = COALESCE($19, thinking_level),
+    instructions = COALESCE($13, instructions),
+    custom_env = COALESCE($14, custom_env),
+    custom_args = COALESCE($15, custom_args),
+    mcp_config = COALESCE($16, mcp_config),
+    model = COALESCE($17, model),
+    thinking_level = COALESCE($18, thinking_level),
     updated_at = now()
 WHERE id = $1
 RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail
@@ -4049,7 +4046,6 @@ type UpdateAgentParams struct {
 	RuntimeMode        pgtype.Text `json:"runtime_mode"`
 	RuntimeID          pgtype.UUID `json:"runtime_id"`
 	Status             pgtype.Text `json:"status"`
-	MaxConcurrentTasks pgtype.Int4 `json:"max_concurrent_tasks"`
 	Instructions       pgtype.Text `json:"instructions"`
 	CustomEnv          []byte      `json:"custom_env"`
 	CustomArgs         []byte      `json:"custom_args"`
@@ -4072,7 +4068,6 @@ func (q *Queries) UpdateAgent(ctx context.Context, arg UpdateAgentParams) (Agent
 		arg.RuntimeMode,
 		arg.RuntimeID,
 		arg.Status,
-		arg.MaxConcurrentTasks,
 		arg.Instructions,
 		arg.CustomEnv,
 		arg.CustomArgs,

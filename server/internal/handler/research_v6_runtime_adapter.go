@@ -52,8 +52,8 @@ func (a *researchV6AgentLifecycleAdapter) CreateAgent(ctx context.Context, works
 		    AND m.state IN ('idle','working') AND a.archived_at IS NULL
 		  ORDER BY m.membership_generation,m.created_at,m.id LIMIT 1
 		)
-		INSERT INTO agent(workspace_id,name,display_name,description,runtime_mode,runtime_config,runtime_id,max_concurrent_tasks,owner_id,instructions,custom_env,custom_args,mcp_config,model,thinking_level,avatar_source)
-		SELECT $1::uuid,$2,$3,$4,runtime_mode,runtime_config,runtime_id,max_concurrent_tasks,owner_id,$5,custom_env,custom_args,
+		INSERT INTO agent(workspace_id,name,display_name,description,runtime_mode,runtime_config,runtime_id,owner_id,instructions,custom_env,custom_args,mcp_config,model,thinking_level,avatar_source)
+		SELECT $1::uuid,$2,$3,$4,runtime_mode,runtime_config,runtime_id,owner_id,$5,custom_env,custom_args,
 		       mcp_config,
 		       COALESCE(NULLIF(NULLIF($6::jsonb->>'model',''),'default'),model),COALESCE(NULLIF($6::jsonb->>'thinking_level',''),thinking_level),'generated'
 		FROM template RETURNING id::text`, workspaceID, name, displayName, description, mission, defaultJSONObject(spec.ModelConfig), runID).Scan(&agentID)

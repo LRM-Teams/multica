@@ -15,11 +15,11 @@ import (
 )
 
 const (
-	periodBriefCollectorNamePrefix        = "period-collect-"
-	periodBriefCollectorTemplate          = "period-work-collector"
-	periodBriefCollectorDisplayLead       = "采集 · "
-	periodBriefCollectorCloudDisplayLead  = "采集 · 云端 · "
-	periodBriefCollectorDaemonSlugLen     = 8
+	periodBriefCollectorNamePrefix       = "period-collect-"
+	periodBriefCollectorTemplate         = "period-work-collector"
+	periodBriefCollectorDisplayLead      = "采集 · "
+	periodBriefCollectorCloudDisplayLead = "采集 · 云端 · "
+	periodBriefCollectorDaemonSlugLen    = 8
 )
 
 var periodBriefCollectorNonSlug = regexp.MustCompile(`[^a-z0-9]+`)
@@ -160,19 +160,18 @@ func (h *Handler) EnsurePeriodBriefCollectors(w http.ResponseWriter, r *http.Req
 		}
 
 		createParams := db.CreateAgentParams{
-			WorkspaceID:        wsUUID,
-			Name:               name,
-			DisplayName:        displayName,
-			Description:        tmpl.Description,
-			Instructions:       tmpl.Instructions,
-			RuntimeMode:        slot.runtime.RuntimeMode,
-			RuntimeConfig:      []byte("{}"),
-			RuntimeID:          slot.runtime.ID,
-			MaxConcurrentTasks: 4,
-			OwnerID:            parseUUID(ownerID),
-			CustomEnv:          []byte("{}"),
-			CustomArgs:         []byte("[]"),
-			Model:              pgtype.Text{String: model, Valid: true},
+			WorkspaceID:   wsUUID,
+			Name:          name,
+			DisplayName:   displayName,
+			Description:   tmpl.Description,
+			Instructions:  tmpl.Instructions,
+			RuntimeMode:   slot.runtime.RuntimeMode,
+			RuntimeConfig: []byte("{}"),
+			RuntimeID:     slot.runtime.ID,
+			OwnerID:       parseUUID(ownerID),
+			CustomEnv:     []byte("{}"),
+			CustomArgs:    []byte("[]"),
+			Model:         pgtype.Text{String: model, Valid: true},
 		}
 		applyCreateAgentAvatar(&createParams, resolvedAgentAvatar{})
 

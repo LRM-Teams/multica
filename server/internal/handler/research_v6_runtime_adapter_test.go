@@ -15,6 +15,14 @@ func TestResearchV6AgentLifecycleCreateAgentUsesMembershipGeneration(t *testing.
 	}
 
 	ctx := context.Background()
+	foreignTemplateAgentID := createHandlerTestAgent(t, "v6-runtime-foreign-template-"+uuid.NewString()[:8], nil)
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent
+		SET model='foreign-run-model', thinking_level='low'
+		WHERE id=$1::uuid
+	`, foreignTemplateAgentID); err != nil {
+		t.Fatalf("configure foreign V6 runtime template: %v", err)
+	}
 	templateAgentID := createHandlerTestAgent(t, "v6-runtime-template-"+uuid.NewString()[:8], nil)
 	if _, err := testPool.Exec(ctx, `
 		UPDATE agent
@@ -29,6 +37,29 @@ func TestResearchV6AgentLifecycleCreateAgentUsesMembershipGeneration(t *testing.
 		t.Fatalf("begin research fixture transaction: %v", err)
 	}
 	defer tx.Rollback(ctx)
+	var foreignSessionID string
+	if err = tx.QueryRow(ctx, `
+		INSERT INTO research_session (
+			workspace_id, created_by, title, goal, status, orchestrator_version
+		) VALUES ($1::uuid, $2::uuid, $3, $4, 'running', 'research-run-v6')
+		RETURNING id::text
+	`, testWorkspaceID, testUserID, "Foreign V6 runtime adapter fixture", "Must not supply another Run's template").Scan(&foreignSessionID); err != nil {
+		t.Fatalf("create foreign research session: %v", err)
+	}
+	if _, err = tx.Exec(ctx, `SELECT research_ensure_run_session_passport($1::uuid, $2::uuid)`, testWorkspaceID, foreignSessionID); err != nil {
+		t.Fatalf("ensure foreign research session passport: %v", err)
+	}
+	if _, err = tx.Exec(ctx, `
+		INSERT INTO research_team_membership (
+			workspace_id, session_id, agent_id, membership_generation,
+			mission_prompt, mission_hash, mission_revision, state
+		) VALUES (
+			$1::uuid, $2::uuid, $3::uuid, 1,
+			'foreign template mission', 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 1, 'idle'
+		)
+	`, testWorkspaceID, foreignSessionID, foreignTemplateAgentID); err != nil {
+		t.Fatalf("create foreign research team membership: %v", err)
+	}
 	var sessionID string
 	if err = tx.QueryRow(ctx, `
 		INSERT INTO research_session (
@@ -46,7 +77,7 @@ func TestResearchV6AgentLifecycleCreateAgentUsesMembershipGeneration(t *testing.
 			workspace_id, session_id, agent_id, membership_generation,
 			mission_prompt, mission_hash, mission_revision, state
 		) VALUES (
-			$1::uuid, $2::uuid, $3::uuid, 1,
+			$1::uuid, $2::uuid, $3::uuid, 2,
 			'template mission', 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 1, 'idle'
 		)
 	`, testWorkspaceID, sessionID, templateAgentID); err != nil {
@@ -63,7 +94,7 @@ func TestResearchV6AgentLifecycleCreateAgentUsesMembershipGeneration(t *testing.
 		if createdAgentID != "" {
 			_, _ = testPool.Exec(context.Background(), `DELETE FROM agent WHERE id=$1::uuid`, createdAgentID)
 		}
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM research_session WHERE id=$1::uuid`, sessionID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM research_session WHERE id=ANY($1::uuid[])`, []string{sessionID, foreignSessionID})
 	})
 
 	adapter := &researchV6AgentLifecycleAdapter{handler: testHandler}

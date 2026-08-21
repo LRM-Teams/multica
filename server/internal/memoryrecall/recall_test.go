@@ -86,6 +86,21 @@ func TestGetLineWindow(t *testing.T) {
 	}
 }
 
+func TestSearchRecordsHits(t *testing.T) {
+	root := t.TempDir()
+	write(t, filepath.Join(root, "memory", "MEMORY.md"), "- Fixture conflicts cause make check retry loops.\n")
+	if _, err := Search(Scope{AgentRoot: root}, "fixture conflict", 5); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, ".multica", "memory-search-hits.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "memory/MEMORY.md") {
+		t.Fatalf("hits = %s", data)
+	}
+}
+
 func TestSearchRequiresQueryAndRoot(t *testing.T) {
 	if _, err := Search(Scope{AgentRoot: t.TempDir()}, "   ", 4); err == nil {
 		t.Fatal("empty query")

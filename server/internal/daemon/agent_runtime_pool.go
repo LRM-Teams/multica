@@ -229,6 +229,20 @@ type canonicalAgentRuntimeSlot struct {
 	lastPendingNoticeCoordinatorID string
 	lastPendingNoticeGeneration    uint64
 	lastAppInboxNoticeFingerprint  string
+	// lastRuntimeActivityAt is the slot-level silence clock. Unlike the
+	// per-turn watchdog stamp it survives across turns, so a delivery that
+	// never reaches native acceptance can still tell how long this resident
+	// runtime has been silent. Stamped at process create and on every
+	// observed provider Message; zero means "unknown", which never recovers.
+	lastRuntimeActivityAt time.Time
+	// outstandingToolCalls tracks tool calls this process started but has not
+	// reported a result for. Raft 1.0.17 refuses stalled recovery while any
+	// is in flight (a live Pi may legitimately be running a long tool).
+	outstandingToolCalls map[string]struct{}
+	// stalledRecovering is Raft's alreadyRecovering fence. The server
+	// redelivers roughly every 20s, so without it each redelivery would fire
+	// another kill while the first teardown is still in flight.
+	stalledRecovering bool
 }
 
 func newCanonicalAgentRuntimePool() *canonicalAgentRuntimePool {
@@ -443,6 +457,11 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 		slot.backend = created
 		slot.close = closeBackend
 		slot.provider = request.Identity.Provider
+		// Stamp the silence clock at spawn. A zero value would make the very
+		// first deferred delivery treat a still-booting process as stalled.
+		slot.lastRuntimeActivityAt = now
+		slot.outstandingToolCalls = nil
+		slot.stalledRecovering = false
 		machineGrantAttached = true
 		// New resident process is up — clear any server-side "crashed"
 		// fact from a prior idle death. First-ever create is a no-op clear.
@@ -555,6 +574,30 @@ func (l *canonicalAgentRuntimeLease) releaseAt(healthy bool, now time.Time) {
 	})
 }
 
+// silentFor reports how long this resident runtime has produced no provider
+// activity, reading the single lastRuntimeActivityAt clock. ok is false when
+// the slot has no activity stamp yet (no process, or one that has not been
+// stamped), which never counts as stalled. This is the sole staleness
+// accessor: both startResidentStallWatchdog (resident_stall_watch.go) and
+// recoverStalledSlotForQueuedMessage (resident_stall_queued_recovery.go)
+// read the same clock through this method rather than tracking their own.
+func (slot *canonicalAgentRuntimeSlot) silentFor(now time.Time) (time.Duration, bool) {
+	if slot == nil {
+		return 0, false
+	}
+	slot.mu.Lock()
+	defer slot.mu.Unlock()
+	return slot.silentForLocked(now)
+}
+
+// silentForLocked is silentFor for callers that already hold slot.mu.
+func (slot *canonicalAgentRuntimeSlot) silentForLocked(now time.Time) (time.Duration, bool) {
+	if slot.lastRuntimeActivityAt.IsZero() {
+		return 0, false
+	}
+	return now.Sub(slot.lastRuntimeActivityAt), true
+}
+
 func (slot *canonicalAgentRuntimeSlot) closeBackend() {
 	if slot.close != nil {
 		slot.close()
@@ -568,6 +611,9 @@ func (slot *canonicalAgentRuntimeSlot) closeBackend() {
 	slot.lastPendingNoticeGeneration = 0
 	slot.lastAppInboxNoticeFingerprint = ""
 	slot.invalidateAfterInput = false
+	slot.lastRuntimeActivityAt = time.Time{}
+	slot.outstandingToolCalls = nil
+	slot.stalledRecovering = false
 }
 
 func (p *canonicalAgentRuntimePool) slotCount() int {
@@ -860,10 +906,7 @@ func (p *canonicalAgentRuntimePool) deliverIdleMessages(
 	slot.mu.Unlock()
 
 	compactedThisInput := false
-	var lastActivityAt atomic.Int64
-	lastActivityAt.Store(time.Now().UnixNano())
 	observeRuntimeMessage := func(message agent.Message) {
-		lastActivityAt.Store(time.Now().UnixNano())
 		if message.Type == agent.MessageCompactionStarted {
 			compactedThisInput = true
 		}
@@ -935,6 +978,7 @@ func (p *canonicalAgentRuntimePool) deliverIdleMessages(
 	// processing that accepted input afterward, so retain pool-level admission
 	// until its completion receipt resolves without delaying boundary persistence.
 	slot.messageInputDone = acceptance.Done
+	slot.lastRuntimeActivityAt = time.Now()
 	var generation uint64
 	if !invalidated {
 		slot.messageInputGeneration++
@@ -972,7 +1016,7 @@ func (p *canonicalAgentRuntimePool) deliverIdleMessages(
 				onComplete(turnErr, gen, capture)
 			}
 		})
-		p.startResidentStallWatchdog(agentID, runtimeID, slot, &lastActivityAt, turnDone)
+		p.startResidentStallWatchdog(agentID, runtimeID, slot, turnDone)
 		return nil
 	}
 	// Raft: compaction does not cover inbox. After a prepare-time compact,
@@ -989,7 +1033,7 @@ func (p *canonicalAgentRuntimePool) deliverIdleMessages(
 			onComplete(turnErr, gen, capture)
 		}
 	})
-	p.startResidentStallWatchdog(agentID, runtimeID, slot, &lastActivityAt, turnDone)
+	p.startResidentStallWatchdog(agentID, runtimeID, slot, turnDone)
 	turnErr := <-finished
 	if turnErr != nil {
 		return turnErr
@@ -1027,10 +1071,23 @@ func (p *canonicalAgentRuntimePool) observeResidentRuntimeMessage(slot *canonica
 	}
 	slot.mu.Lock()
 	defer slot.mu.Unlock()
+	slot.lastRuntimeActivityAt = time.Now()
 	switch message.Type {
 	case agent.MessageCompactionStarted:
 		slot.compacting = true
-	case agent.MessageCompactionFinished, agent.MessageThinking, agent.MessageText, agent.MessageToolUse, agent.MessageError:
+	case agent.MessageToolUse:
+		slot.compacting = false
+		if callID := strings.TrimSpace(message.CallID); callID != "" {
+			if slot.outstandingToolCalls == nil {
+				slot.outstandingToolCalls = make(map[string]struct{}, 1)
+			}
+			slot.outstandingToolCalls[callID] = struct{}{}
+		}
+	case agent.MessageToolResult:
+		if callID := strings.TrimSpace(message.CallID); callID != "" {
+			delete(slot.outstandingToolCalls, callID)
+		}
+	case agent.MessageCompactionFinished, agent.MessageThinking, agent.MessageText, agent.MessageError:
 		slot.compacting = false
 	}
 }

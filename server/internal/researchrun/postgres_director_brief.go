@@ -163,33 +163,44 @@ func (s *PostgresStore) LoadDirectorBriefFacts(ctx context.Context, in StartV6Di
 }
 
 func (s *PostgresStore) loadV6BranchFrontierBrief(ctx context.Context, workspaceID, runID, branchID string) ([]any, bool, error) {
-	rows, err := s.pool.Query(ctx, `SELECT v.id::text,v.artifact_id::text,v.version,v.content_hash,iv.tier,iv.catalog_summary,iv.brief_summary,
+	rows, err := s.pool.Query(ctx, `WITH frontier_content AS (
+		SELECT rn.artifact_version_id,'result_s'::text AS node_kind,'S'::text AS tier,rn.catalog_summary,rn.brief_summary,
+			rn.conclusion_state,
+			CASE rn.integration_state WHEN 'candidate' THEN 'candidate' WHEN 'discussing' THEN 'discussing' WHEN 'excluded' THEN 'excluded' WHEN 'absorbed' THEN 'excluded' ELSE 'unmatched' END AS integration_state,
+			rn.accepted_at AS content_created_at,rn.id AS content_id
+		FROM research_result_node rn WHERE rn.workspace_id=$1::uuid AND rn.session_id=$2::uuid
+		UNION ALL
+		SELECT iv.artifact_version_id,'insight'::text,iv.tier,iv.catalog_summary,iv.brief_summary,
+			CASE iv.status WHEN 'accepted' THEN 'accepted' WHEN 'challenged' THEN 'challenged' WHEN 'refuted' THEN 'refuted' ELSE 'invalid' END,
+			CASE WHEN iv.status IN ('refuted','invalid','terminal') THEN 'excluded' WHEN iv.discussion_id IS NOT NULL THEN 'discussing' WHEN iv.integration_round_id IS NOT NULL THEN 'candidate' ELSE 'unmatched' END,
+			iv.created_at,iv.id
+		FROM research_insight_version iv WHERE iv.workspace_id=$1::uuid AND iv.session_id=$2::uuid
+	)
+		SELECT v.id::text,v.artifact_id::text,v.content_hash,content.node_kind,content.tier,content.catalog_summary,content.brief_summary,
 		COALESCE((SELECT steward.agent_id::text FROM research_node_steward_assignment steward WHERE steward.session_id=f.session_id AND steward.node_artifact_version_id=f.node_artifact_version_id AND steward.status='active' ORDER BY steward.generation DESC LIMIT 1),
 		         (SELECT assignment.director_agent_id::text FROM research_session session JOIN research_director_assignment assignment ON assignment.id=session.current_director_assignment_id WHERE session.id=f.session_id)),
-		CASE iv.status WHEN 'accepted' THEN 'accepted' WHEN 'challenged' THEN 'challenged' WHEN 'refuted' THEN 'refuted' ELSE 'invalid' END,
-		CASE WHEN iv.status IN ('refuted','invalid','terminal') THEN 'excluded' WHEN iv.discussion_id IS NOT NULL THEN 'discussing' WHEN iv.integration_round_id IS NOT NULL THEN 'candidate' ELSE 'unmatched' END,
+		content.conclusion_state,content.integration_state,
 		COALESCE((SELECT array_agg(DISTINCT binding.branch_id::text ORDER BY binding.branch_id::text) FROM research_node_branch binding WHERE binding.session_id=f.session_id AND binding.node_artifact_version_id=f.node_artifact_version_id),'{}')
 		FROM research_branch_frontier f JOIN research_artifact_version v ON v.id=f.node_artifact_version_id
-		JOIN research_insight_version iv ON iv.artifact_version_id=v.id
+		JOIN frontier_content content ON content.artifact_version_id=v.id
 		WHERE f.workspace_id=$1::uuid AND f.session_id=$2::uuid AND f.branch_id=$3::uuid AND f.removed_by_event_sequence IS NULL
-		ORDER BY CASE iv.tier WHEN 'XXL' THEN 5 WHEN 'XL' THEN 4 WHEN 'L' THEN 3 WHEN 'M' THEN 2 ELSE 1 END DESC,iv.created_at DESC,iv.id LIMIT 65`, workspaceID, runID, branchID)
+		ORDER BY CASE content.tier WHEN 'XXL' THEN 5 WHEN 'XL' THEN 4 WHEN 'L' THEN 3 WHEN 'M' THEN 2 ELSE 1 END DESC,content.content_created_at DESC,content.content_id LIMIT 65`, workspaceID, runID, branchID)
 	if err != nil {
 		return nil, false, err
 	}
 	defer rows.Close()
 	frontier := []any{}
 	for rows.Next() {
-		var versionID, artifactID, contentHash, tier, catalog, brief, steward, conclusion, integration string
-		var revision int
+		var versionID, artifactID, contentHash, nodeKind, tier, catalog, brief, steward, conclusion, integration string
 		var branchIDs []string
-		if err = rows.Scan(&versionID, &artifactID, &revision, &contentHash, &tier, &catalog, &brief, &steward, &conclusion, &integration, &branchIDs); err != nil {
+		if err = rows.Scan(&versionID, &artifactID, &contentHash, &nodeKind, &tier, &catalog, &brief, &steward, &conclusion, &integration, &branchIDs); err != nil {
 			return nil, false, err
 		}
 		if len(frontier) == 64 {
 			return frontier, true, nil
 		}
 		frontier = append(frontier, map[string]any{
-			"node":            map[string]any{"id": artifactID, "version_id": versionID, "revision": revision, "tier": tier, "content_hash": contentHash},
+			"node":            map[string]any{"kind": nodeKind, "id": artifactID, "version_id": versionID, "tier": tier, "content_hash": contentHash},
 			"catalog_summary": catalog, "brief_summary": brief, "steward_agent_id": steward, "branch_ids": branchIDs,
 			"conclusion_state": conclusion, "integration_state": integration,
 		})

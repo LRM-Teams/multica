@@ -368,6 +368,18 @@ func TestMaybeRetryFailedTask_NonRetryableIsTerminal(t *testing.T) {
 		"no NotifyTaskEnqueued when no child is created")
 }
 
+func TestMaybeRetryFailedTaskLeavesResearchRecoveryToWorkScheduler(t *testing.T) {
+	env := setupRetryTestDB(t, "runtime_recovery")
+	env.parent.Context = json.RawMessage(`{
+		"type":"research_run_work_item",
+		"research_dispatch_key":"v6-dispatch:attempt-1"
+	}`)
+
+	child, err := env.svc.MaybeRetryFailedTask(context.Background(), env.parent)
+	require.NoError(t, err)
+	require.Nil(t, child)
+}
+
 // TestMaybeRetryFailedTask_EnvIDFromProjectEnvID verifies the child's StartSession
 // receives the project's env_id (resolved via issue -> project), NOT the areal
 // session id. This is the D9 resolution path the helper implements.

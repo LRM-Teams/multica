@@ -431,7 +431,9 @@ type ReadWorkdirFileResponsePayload struct {
 // WriteWorkdirFileRequestPayload is pushed server→daemon to replace one UTF-8
 // text file inside a confined workdir root. ExpectedContentHash, when present,
 // must match the current file hash or the daemon returns Conflict without
-// modifying the file.
+// modifying the file. Create, when true, allows the daemon to create a missing
+// file (and parent directories) instead of returning Missing; agent-file
+// callers leave it false so the RPC stays edit-only.
 type WriteWorkdirFileRequestPayload struct {
 	RequestID           string `json:"request_id"`
 	RuntimeID           string `json:"runtime_id"`
@@ -440,6 +442,7 @@ type WriteWorkdirFileRequestPayload struct {
 	Content             string `json:"content"`
 	ExpectedContentHash string `json:"expected_content_hash,omitempty"`
 	MaxBytes            int    `json:"max_bytes,omitempty"`
+	Create              bool   `json:"create,omitempty"`
 }
 
 // WriteWorkdirFileResponsePayload is the daemon→server reply for a text write.

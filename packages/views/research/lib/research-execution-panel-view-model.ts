@@ -44,17 +44,6 @@ function executionStatus(phase: ResearchPresencePhase | undefined): ResearchExec
   }
 }
 
-function initials(name: string): string {
-  const compact = name.trim();
-  if (!compact) return "AI";
-  return compact
-    .split(/\s+/)
-    .map((part) => part[0])
-    .join("")
-    .slice(0, 2)
-    .toUpperCase();
-}
-
 export function buildResearchExecutionAgents(
   members: readonly ResearchFleetMember[],
   presence: ResearchPresenceMap,
@@ -72,7 +61,6 @@ export function buildResearchExecutionAgents(
         id: member.agent_id,
         name,
         role: member.role || signal?.role || "worker",
-        initials: initials(name),
         avatarUrl: member.avatar_url ?? undefined,
         status,
         action: signal?.activity || undefined,

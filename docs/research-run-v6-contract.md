@@ -173,7 +173,10 @@ mismatch fails before domain mutation.
 A Work Manifest binds immutable protocol version, Director-authored mission,
 Goal version, Branch state versions, artifact versions, representations and
 expected result schema. The Agent cannot cite platform-supplied material absent
-from that Manifest.
+from that Manifest. For Director-created Work, the persisted Work-to-Branch
+associations are the scope authority; dispatch resolves those associations to
+the current Branch versions and freezes them as `branch_refs`. The Agent copies
+those references exactly and never substitutes the Run state version.
 
 V6 dispatch uses `research-v6-context-v1`, distinct from the V1–V5 legacy
 compatibility policy. It admits only current `registered | accepted` artifacts

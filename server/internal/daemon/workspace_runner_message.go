@@ -219,6 +219,7 @@ func (runner *WorkspaceRunner) acceptMessageDelivery(ctx context.Context, delive
 			}
 		}
 		if deferred {
+			runner.recoverStalledRuntimeForQueuedMessage(coordinator, delivery.AgentID, runtimeID)
 			return result, nil
 		}
 		return messageDeliveryAcceptance{}, fmt.Errorf("%w: %v", errDeliveryProviderRejected, err)
@@ -227,6 +228,32 @@ func (runner *WorkspaceRunner) acceptMessageDelivery(ctx context.Context, delive
 		runner.config.WorkspaceID, runtimeID, delivery, "context_boundary_advanced", "accepted", "",
 	))
 	return result, nil
+}
+
+// recoverStalledRuntimeForQueuedMessage asks the resident pool to terminate a
+// silent-past-window runtime now that a Message has been queued against it
+// (ErrCanonicalAgentRuntimeBusy). It only bothers when Messages are actually
+// waiting: an empty Pending queue means nothing is stuck behind the wedge, so
+// there is nothing to recover for yet. See resident_stall_queued_recovery.go
+// for why this check does not require the process to be confirmed dead.
+func (runner *WorkspaceRunner) recoverStalledRuntimeForQueuedMessage(coordinator *MessageCoordinator, agentID, runtimeID string) {
+	if runner == nil || runner.runtimes == nil || coordinator == nil {
+		return
+	}
+	pending := coordinator.PendingCount()
+	if pending == 0 {
+		return
+	}
+	recovered, err := runner.runtimes.recoverStalledSlotForQueuedMessage(agentID, runtimeID)
+	if err != nil {
+		if runner.logger != nil {
+			runner.logger.Warn("Workspace Runner failed to recover stalled resident runtime for queued Messages", "error", err, "workspace_id", runner.config.WorkspaceID, "agent_id", agentID, "runtime_id", runtimeID)
+		}
+		return
+	}
+	if recovered && runner.logger != nil {
+		runner.logger.Warn("Workspace Runner terminated stalled resident runtime for queued Messages", "workspace_id", runner.config.WorkspaceID, "agent_id", agentID, "runtime_id", runtimeID, "pending_count", pending)
+	}
 }
 
 func (runner *WorkspaceRunner) acknowledgeConsumedDelivery(delivery protocol.AgentDeliverPayload) (messageDeliveryAcceptance, bool) {

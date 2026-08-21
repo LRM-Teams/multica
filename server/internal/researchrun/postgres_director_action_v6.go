@@ -37,53 +37,6 @@ type v6DirectorAction struct {
 	DependsOnActionIDs   []string        `json:"depends_on_action_ids"`
 }
 
-// rejectMaterialV6EventsAfterDirectorBrief separates the frozen research
-// watermark from operational events needed to deliver and submit that same
-// Director cycle. appendEvent advances the Run sequence for both categories;
-// delivery, page-review, and submission bookkeeping must not make the Brief
-// stale by construction.
-func (s *PostgresStore) rejectMaterialV6EventsAfterDirectorBrief(ctx context.Context, proposal v6DirectorProposal, cycleID string, throughSequence int64) error {
-	rows, err := s.pool.Query(ctx, `SELECT event_type,payload FROM research_run_event
-		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND sequence>$3 ORDER BY sequence`,
-		proposal.WorkspaceID, proposal.RunID, throughSequence)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var eventType string
-		var payload json.RawMessage
-		if err = rows.Scan(&eventType, &payload); err != nil {
-			return err
-		}
-		if !isV6DirectorCycleOperationalEvent(eventType, payload, cycleID, proposal.WorkItemID, proposal.BriefID) {
-			return ErrWorkItemChanged
-		}
-	}
-	return rows.Err()
-}
-
-func isV6DirectorCycleOperationalEvent(eventType string, payload json.RawMessage, cycleID, workItemID, briefID string) bool {
-	var identity struct {
-		CycleID    string `json:"cycle_id"`
-		WorkItemID string `json:"work_item_id"`
-		BriefID    string `json:"brief_id"`
-	}
-	if json.Unmarshal(payload, &identity) != nil {
-		return false
-	}
-	switch eventType {
-	case "v6_director_cycle_created":
-		return identity.CycleID == cycleID && identity.WorkItemID == workItemID && identity.BriefID == briefID
-	case "v6_work_item_dispatch_prepared", "v6_work_item_dispatched", "v6_work_item_recovered", "v6_work_submission_received":
-		return identity.WorkItemID == workItemID
-	case "v6_director_brief_page_acknowledged":
-		return identity.BriefID == briefID
-	default:
-		return false
-	}
-}
-
 func (s *PostgresStore) ApplyReceivedV6DirectorProposals(ctx context.Context, limit int) (int, error) {
 	applied := 0
 	for applied < limit {
@@ -196,8 +149,15 @@ func (s *PostgresStore) executeV6DirectorProposal(ctx context.Context, submissio
 		proposal.ExpectedStateVersion != briefStateVersion || proposal.ThroughEventSequence != throughSequence {
 		return ErrWorkItemChanged
 	}
-	if err = s.rejectMaterialV6EventsAfterDirectorBrief(ctx, proposal, cycleID, throughSequence); err != nil {
-		return err
+	// The Brief stays decision-current as long as the semantic state
+	// (goal / steering / report transitions) has not moved since it froze.
+	// Operational churn — dispatches, submissions, recoveries of other Work
+	// Items — must not reject the proposal: those events land constantly
+	// while Agents are active, and rejecting on them livelocks the Director
+	// (each rejection triggers a new cycle whose proposal loses the same
+	// race). Per-action executors still validate their own preconditions.
+	if briefStateVersion != liveStateVersion {
+		return ErrWorkItemChanged
 	}
 	results := make([]map[string]any, 0, len(order))
 	for _, index := range order {
@@ -290,7 +250,14 @@ func (s *PostgresStore) executeV6DirectorProposal(ctx context.Context, submissio
 			return err
 		}
 		results = append(results, map[string]any{"action_id": action.ActionID, "status": "accepted"})
-		liveStateVersion++
+		// Semantic bumps only come from this proposal's own actions
+		// (revise_goal, steering, report review) — V6 has no other writer of
+		// research_session.state_version — so re-reading keeps later actions
+		// validating against the version this proposal itself produced.
+		if err = s.pool.QueryRow(ctx, `SELECT state_version FROM research_session WHERE workspace_id=$1::uuid AND id=$2::uuid`,
+			proposal.WorkspaceID, proposal.RunID).Scan(&liveStateVersion); err != nil {
+			return err
+		}
 	}
 	return s.completeV6DirectorProposal(ctx, submissionID, cycleID, proposal, envelope, results)
 }

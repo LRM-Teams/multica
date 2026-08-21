@@ -4,11 +4,18 @@ import type { ExecutionRow } from "../execution-overlay";
 import { renderWithI18n } from "../../test/i18n";
 import { ResearchAgentInspector } from "./research-agent-inspector";
 
+// The row/inspector now render the site-wide smart avatar, which resolves
+// identity through workspace queries. These suites are about execution copy.
+vi.mock("../../common/actor-avatar", () => ({
+  ActorAvatar: ({ actorId }: { actorId: string }) => (
+    <span data-testid={`actor-avatar-${actorId}`} />
+  ),
+}));
+
 const row: ExecutionRow = {
   id: "agent-archived",
   name: "agent-archived",
   role: "Agent",
-  initials: "AG",
   status: "unknown",
   actionKey: "unknown",
 };

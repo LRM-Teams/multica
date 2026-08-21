@@ -461,7 +461,7 @@ Seam 只放在 provider/Agent creation、Inbox dispatch、object storage、HTML 
 
 - Snapshot 固定 `snapshot_id + through_event_sequence`，支持 Branch、tier、status、viewport Slice 和 one-layer expansion。
 - Delta 只来自 committed `research_run_event`，sequence 必须连续；缺口重新获取 Snapshot。
-- Node Detail 按需返回 brief/full/history/discussion/report refs，不在初始 Snapshot 携带全部正文。
+- Node Detail 必须携带当前画布的 `snapshot_id`，按该快照返回 brief/full/history/discussion/report refs；不得为详情请求新建或静默切换 Snapshot，也不在初始 Snapshot 携带全部正文。
 
 ### 15.4 Report 面
 

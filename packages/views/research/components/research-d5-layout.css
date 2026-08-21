@@ -497,17 +497,6 @@
   align-items: center;
   gap: 10px;
 }
-.research-agent-inspector-content .agent-big-avatar {
-  width: 42px;
-  height: 42px;
-  display: grid;
-  place-items: center;
-  border: 2px solid var(--primary);
-  border-radius: 50%;
-  background: color-mix(in oklab, var(--primary) 18%, var(--secondary));
-  color: var(--secondary-foreground);
-  font-weight: 900;
-}
 .research-agent-inspector-content .agent-close {
   position: absolute;
   right: 11px;

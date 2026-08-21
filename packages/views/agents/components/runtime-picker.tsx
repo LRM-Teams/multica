@@ -25,6 +25,7 @@ import {
   runtimePickerHostSubtitle,
 } from "./runtime-picker-labels";
 import { isRuntimeUsableForUser } from "./runtime-usability";
+import { useBindableRuntimeIds } from "@multica/core/runtimes";
 
 export function RuntimePicker({
   runtimes,
@@ -61,9 +62,11 @@ export function RuntimePicker({
 
   // Others' private runtimes are excluded outright, not shown-disabled —
   // a private runtime that isn't mine has nothing for me to do with it.
+  // Which ones those are is the server's call, delivered per Computer.
+  const bindableIds = useBindableRuntimeIds(runtimes[0]?.workspace_id);
   const sortedRuntimes = useMemo(
-    () => sortRuntimesForPicker(runtimes, currentUserId),
-    [runtimes, currentUserId],
+    () => sortRuntimesForPicker(runtimes, currentUserId, bindableIds),
+    [runtimes, currentUserId, bindableIds],
   );
 
   const selectedRuntime =
@@ -180,9 +183,10 @@ export function RuntimePicker({
 function sortRuntimesForPicker(
   runtimes: RuntimeDevice[],
   currentUserId: string | null,
+  bindableIds?: ReadonlySet<string> | null,
 ): RuntimeDevice[] {
   return runtimes
-    .filter((r) => isRuntimeUsableForUser(r, currentUserId))
+    .filter((r) => isRuntimeUsableForUser(r, currentUserId, bindableIds))
     .toSorted((a, b) => {
       const aMine = a.owner_id === currentUserId;
       const bMine = b.owner_id === currentUserId;

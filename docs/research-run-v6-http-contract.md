@@ -163,6 +163,14 @@ sends merge, stop, replan or tier commands.
 Returns one strict `work_manifest` envelope. `ETag` is the Manifest hash. The
 server returns 409 if the Attempt is no longer executable and 403 if the current
 task credential is not bound to it. A successful retry returns identical bytes.
+`branch_refs` is the frozen Branch scope for this Attempt, including each
+Branch's exact state version; submissions copy it byte-for-value rather than
+deriving versions from the Run watermark.
+For atomic Work, `task_specific_schema.payload_schemas` contains the exact single
+`payload_schema_id` key and its frozen validator. The Agent copies that key
+verbatim into `atomic_result_submission.task_specific_schema`; it never invents
+or renames the schema ID. A mismatch is rejected with the authorized ID named in
+the bounded validation error.
 
 ### 4.2 Review a paged Director Brief
 
@@ -311,7 +319,11 @@ sequence and hash must agree; sequence alone is insufficient.
 
 ### 5.3 Node detail
 
-`GET /api/research/v6/runs/{runId}/projection/nodes/{nodeId}?view=brief|full|history`
+`GET /api/research/v6/runs/{runId}/projection/nodes/{nodeId}?snapshot_id={snapshotId}&view=brief|full|history`
+
+`snapshot_id` is required and pins the lookup to the exact canonical Snapshot
+currently rendered by the caller. Node detail never creates or silently switches
+to a newer Snapshot. An expired or unknown Snapshot requires a projection resync.
 
 The response contains stable/canonical refs, current three-dimensional state,
 reason detail, Agent/Task/Attempt, Branches, evidence refs, Discussion refs,

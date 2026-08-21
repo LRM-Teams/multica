@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -276,23 +275,6 @@ func TestDaemonReminderFireRequestIsIdempotentAcrossConnections(t *testing.T) {
 	gotOccurrences, gotReceipts, gotDeliveries, gotEvents := reminderFireCounts(t, reminderID)
 	if gotOccurrences != occurrences || gotReceipts != receipts || gotDeliveries != deliveries || gotEvents != firedEvents {
 		t.Fatalf("retry duplicated fire: before=%d/%d/%d/%d after=%d/%d/%d/%d", occurrences, receipts, deliveries, firedEvents, gotOccurrences, gotReceipts, gotDeliveries, gotEvents)
-	}
-	historyReq := withChannelTestWorkspaceCtx(t,
-		newRequest(http.MethodGet, "/api/agents/"+fixture.agentIDs[0]+"/reminders?status=fired", nil),
-		testUserID)
-	historyReq = withURLParam(historyReq, "id", fixture.agentIDs[0])
-	historyRec := httptest.NewRecorder()
-	fixture.handler.ListAgentReminders(historyRec, historyReq)
-	if historyRec.Code != http.StatusOK {
-		t.Fatalf("list fired reminder history: status=%d body=%s", historyRec.Code, historyRec.Body.String())
-	}
-	var history humanReminderPage
-	if err := json.NewDecoder(historyRec.Body).Decode(&history); err != nil {
-		t.Fatal(err)
-	}
-	if len(history.Occurrences) != 1 || history.Occurrences[0].ReminderID != reminderID ||
-		history.Occurrences[0].Status != "fired" {
-		t.Fatalf("fired reminder history = %+v, want one fired occurrence", history.Occurrences)
 	}
 }
 
@@ -849,20 +831,6 @@ func TestRecurringReminderFireAdvancesFromCadenceAndSnoozeSlot(t *testing.T) {
 		t.Fatalf("reminder fire changed events=%d, want 1", len(*changed))
 	}
 
-	request := newRequest(http.MethodGet, "/api/agents/"+fixture.agentIDs[0]+"/reminders?status=fired", nil)
-	request = withURLParam(request, "id", fixture.agentIDs[0])
-	recorder := httptest.NewRecorder()
-	fixture.handler.ListAgentReminders(recorder, request)
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("list fired reminders status=%d body=%s", recorder.Code, recorder.Body.String())
-	}
-	var page humanReminderPage
-	if err := json.NewDecoder(recorder.Body).Decode(&page); err != nil {
-		t.Fatal(err)
-	}
-	if len(page.Occurrences) != 1 || page.Occurrences[0].Status != "fired" || page.Occurrences[0].DefinitionStatus != "scheduled" {
-		t.Fatalf("recurring occurrence/definition status layering = %+v", page.Occurrences)
-	}
 }
 
 func TestRecurringReminderOfflineGapCollapsesToOneOccurrenceAndFirstFutureSlot(t *testing.T) {
@@ -952,7 +920,7 @@ func TestRecurringReminderFiresEveryOccurrenceWithoutQuota(t *testing.T) {
 	}
 }
 
-func TestDeletedReminderAnchorFiresWithUnavailableMarker(t *testing.T) {
+func TestDeletedReminderAnchorFiresWithoutCancellation(t *testing.T) {
 	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}})
 	anchor := fixture.insertMessage(t, "user", testUserID, "anchor", nil)
 	reminderID := seedDueReminder(t, fixture.agentIDs[0], fixture.channel.ID, anchor.ID, "", "")
@@ -961,24 +929,6 @@ func TestDeletedReminderAnchorFiresWithUnavailableMarker(t *testing.T) {
 	}
 	if err := fireReminderAttempt(fixture.handler, reminderID); err != nil {
 		t.Fatalf("fire deleted anchor reminder: %v", err)
-	}
-	historyReq := withChannelTestWorkspaceCtx(t,
-		newRequest(http.MethodGet, "/api/agents/"+fixture.agentIDs[0]+"/reminders?status=fired", nil),
-		testUserID)
-	historyReq = withURLParam(historyReq, "id", fixture.agentIDs[0])
-	historyRec := httptest.NewRecorder()
-	fixture.handler.ListAgentReminders(historyRec, historyReq)
-	if historyRec.Code != http.StatusOK {
-		t.Fatalf("list deleted-anchor history: status=%d body=%s", historyRec.Code, historyRec.Body.String())
-	}
-	var history humanReminderPage
-	if err := json.NewDecoder(historyRec.Body).Decode(&history); err != nil {
-		t.Fatal(err)
-	}
-	if len(history.Occurrences) != 1 || history.Occurrences[0].Anchor.Available ||
-		history.Occurrences[0].Anchor.Kind != nil || history.Occurrences[0].Anchor.Display != nil ||
-		history.Occurrences[0].Anchor.Href != nil {
-		t.Fatalf("deleted-anchor history = %+v, want unavailable without metadata", history.Occurrences)
 	}
 	var definitionStatus, occurrenceStatus string
 	var cancelled bool
@@ -1023,7 +973,7 @@ func TestDeletedReminderThreadRootHidesAnchorEverywhere(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := withChannelTestWorkspaceCtx(t, newRequest(http.MethodGet, "/api/agents/"+fixture.agentIDs[0]+"/reminders", nil), testUserID)
-	if anchor := fixture.handler.safeHumanReminderAnchor(request, testUserID, reminder); anchor.Available || anchor.Kind != nil || anchor.Display != nil || anchor.Href != nil {
+	if anchor := fixture.handler.buildAgentReminderAnchorResponse(request, testUserID, reminder); anchor.Available || anchor.Kind != nil || anchor.DisplayName != nil || anchor.Href != nil {
 		t.Fatalf("deleted root human anchor = %+v, want unavailable without metadata", anchor)
 	}
 }
@@ -1125,7 +1075,7 @@ func TestArchivedReminderChannelTerminalizesWithoutWake(t *testing.T) {
 	}
 }
 
-func TestHumanReminderAnchorDenialOmitsRawMetadata(t *testing.T) {
+func TestAgentReminderAnchorDenialOmitsRawMetadata(t *testing.T) {
 	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}})
 	anchor := fixture.insertMessage(t, "user", testUserID, "anchor", nil)
 	reminderID := seedDueReminder(t, fixture.agentIDs[0], fixture.channel.ID, anchor.ID, "", "")
@@ -1134,7 +1084,7 @@ func TestHumanReminderAnchorDenialOmitsRawMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := newRequest("GET", "/api/agents/"+fixture.agentIDs[0]+"/reminders", nil)
-	anchorResponse := fixture.handler.safeHumanReminderAnchor(request, uuid.NewString(), reminder)
+	anchorResponse := fixture.handler.buildAgentReminderAnchorResponse(request, uuid.NewString(), reminder)
 	encoded, err := json.Marshal(anchorResponse)
 	if err != nil {
 		t.Fatal(err)
@@ -1144,7 +1094,7 @@ func TestHumanReminderAnchorDenialOmitsRawMetadata(t *testing.T) {
 	}
 }
 
-func TestHumanReminderAnchorRequiresEligibleOwnerAgent(t *testing.T) {
+func TestAgentReminderAnchorRequiresEligibleOwnerAgent(t *testing.T) {
 	for _, mode := range []string{"membership_removed", "agent_archived"} {
 		t.Run(mode, func(t *testing.T) {
 			fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}})
@@ -1170,7 +1120,7 @@ func TestHumanReminderAnchorRequiresEligibleOwnerAgent(t *testing.T) {
 			}
 			request := withChannelTestWorkspaceCtx(t,
 				newRequest(http.MethodGet, "/api/agents/"+fixture.agentIDs[0]+"/reminders", nil), testUserID)
-			got := fixture.handler.safeHumanReminderAnchor(request, testUserID, reminder)
+			got := fixture.handler.buildAgentReminderAnchorResponse(request, testUserID, reminder)
 			encoded, err := json.Marshal(got)
 			if err != nil {
 				t.Fatal(err)
@@ -1204,7 +1154,7 @@ func TestReminderThreadAnchorRequiresExactStoredReplyRoot(t *testing.T) {
 	}
 	request := withChannelTestWorkspaceCtx(t,
 		newRequest(http.MethodGet, "/api/agents/"+fixture.agentIDs[0]+"/reminders", nil), testUserID)
-	if got := fixture.handler.safeHumanReminderAnchor(request, testUserID, reminder); got != (humanReminderAnchor{Available: false}) {
+	if got := fixture.handler.buildAgentReminderAnchorResponse(request, testUserID, reminder); got != (agentReminderAnchorResponse{Available: false}) {
 		t.Fatalf("mismatched thread root human anchor=%+v want unavailable", got)
 	}
 	if err := fireReminderAttempt(fixture.handler, reminderID); err != nil {
@@ -1231,7 +1181,7 @@ func TestReminderAuthorizedAnchorSupportsCanonicalAuthorTypes(t *testing.T) {
 			}
 			request := withChannelTestWorkspaceCtx(t,
 				newRequest(http.MethodGet, "/api/agents/"+fixture.agentIDs[0]+"/reminders", nil), testUserID)
-			if got := fixture.handler.safeHumanReminderAnchor(request, testUserID, reminder); !got.Available || got.Href == nil {
+			if got := fixture.handler.buildAgentReminderAnchorResponse(request, testUserID, reminder); !got.Available || got.Href == nil {
 				t.Fatalf("%s human anchor=%+v want available", authorType, got)
 			}
 			if err := fireReminderAttempt(fixture.handler, reminderID); err != nil {
@@ -1254,8 +1204,8 @@ func TestReminderAuthorizedAnchorPreservesDMReturnSurface(t *testing.T) {
 	}
 	request := withChannelTestWorkspaceCtx(t,
 		newRequest(http.MethodGet, "/api/agents/"+fixture.agentIDs[0]+"/reminders", nil), testUserID)
-	humanAnchor := fixture.handler.safeHumanReminderAnchor(request, testUserID, reminder)
-	if !humanAnchor.Available || humanAnchor.Display == nil || strings.TrimSpace(*humanAnchor.Display) == "" || strings.Contains(*humanAnchor.Display, fixture.channel.Name) {
+	humanAnchor := fixture.handler.buildAgentReminderAnchorResponse(request, testUserID, reminder)
+	if !humanAnchor.Available || humanAnchor.DisplayName == nil || strings.TrimSpace(*humanAnchor.DisplayName) == "" || strings.Contains(*humanAnchor.DisplayName, fixture.channel.Name) {
 		t.Fatalf("DM human anchor=%+v want safe peer display", humanAnchor)
 	}
 	if err := fireReminderAttempt(fixture.handler, reminderID); err != nil {
@@ -1263,23 +1213,38 @@ func TestReminderAuthorizedAnchorPreservesDMReturnSurface(t *testing.T) {
 	}
 }
 
-func TestListAgentRemindersReturnsLayeredSafeProjection(t *testing.T) {
+func TestListAgentRemindersReturnsUpcomingSafeProjection(t *testing.T) {
 	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}})
 	anchor := fixture.insertMessage(t, "user", testUserID, "anchor", nil)
 	reminderID := seedDueReminder(t, fixture.agentIDs[0], fixture.channel.ID, anchor.ID, "daily@09:00", "Asia/Shanghai")
-	request := newRequest(http.MethodGet, "/api/agents/"+fixture.agentIDs[0]+"/reminders?status=scheduled", nil)
+	request := newRequest(http.MethodGet, "/api/agents/"+fixture.agentIDs[0]+"/reminders", nil)
 	request = withURLParam(request, "id", fixture.agentIDs[0])
 	recorder := httptest.NewRecorder()
 	fixture.handler.ListAgentReminders(recorder, request)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("list reminders status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	var response humanReminderPage
-	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+	body := recorder.Body.Bytes()
+	var response agentReminderListResponse
+	if err := json.Unmarshal(body, &response); err != nil {
 		t.Fatal(err)
 	}
-	if len(response.Definitions) != 1 || len(response.Occurrences) != 0 {
-		t.Fatalf("unexpected layered response: %+v", response)
+	if len(response.Definitions) != 1 {
+		t.Fatalf("unexpected reminder response: %+v", response)
+	}
+	for _, removedField := range []string{
+		"occurrences", "has_more", "next_cursor",
+		"schedule_kind", "next_fire_at", "last_fire_at", "schedule_timezone", "snooze_count",
+		"display_name", "event_type",
+	} {
+		if strings.Contains(string(body), `"`+removedField+`"`) {
+			t.Fatalf("reminder response exposes removed or non-camel field %q: %s", removedField, body)
+		}
+	}
+	for _, requiredField := range []string{"scheduleKind", "nextFireAt", "scheduleTimezone", "snoozeCount", "displayName", "eventType"} {
+		if !strings.Contains(string(body), `"`+requiredField+`"`) {
+			t.Fatalf("reminder response is missing camelCase field %q: %s", requiredField, body)
+		}
 	}
 	definition := response.Definitions[0]
 	if definition.ID != reminderID || definition.ScheduleKind != "recurring" || definition.Cadence == nil || *definition.Cadence != "daily@09:00" || definition.ScheduleTimezone == nil || *definition.ScheduleTimezone != "Asia/Shanghai" {
@@ -1294,8 +1259,8 @@ func TestListAgentRemindersReturnsLayeredSafeProjection(t *testing.T) {
 		t.Fatalf("missing safe anchor href: got=%+v want=%s", definition.Anchor, wantHref)
 	}
 	wantDisplay := "#" + fixture.channel.Name
-	if definition.Anchor.DisplayName == nil || *definition.Anchor.DisplayName != wantDisplay || definition.Anchor.Display == nil || *definition.Anchor.Display != wantDisplay {
-		t.Fatalf("anchor display name = display_name:%v display:%v, want %q", definition.Anchor.DisplayName, definition.Anchor.Display, wantDisplay)
+	if definition.Anchor.DisplayName == nil || *definition.Anchor.DisplayName != wantDisplay {
+		t.Fatalf("anchor display name = %v, want %q", definition.Anchor.DisplayName, wantDisplay)
 	}
 	encoded, err := json.Marshal(definition.Anchor)
 	if err != nil {
@@ -1306,7 +1271,7 @@ func TestListAgentRemindersReturnsLayeredSafeProjection(t *testing.T) {
 			t.Fatalf("authorized anchor leaked raw navigation field %q: %s", forbidden, encoded)
 		}
 	}
-	if response.Realtime.EventType != protocol.EventAgentReminderChanged || response.Realtime.Scope != "agent" || response.Realtime.ID != fixture.agentIDs[0] || response.Realtime.Payload != "agent_id" {
+	if response.Realtime.EventType != protocol.EventAgentReminderChanged || response.Realtime.Scope != "agent" || response.Realtime.ID != fixture.agentIDs[0] || response.Realtime.Payload != "agentId" {
 		t.Fatalf("unexpected reminder realtime contract: %+v", response.Realtime)
 	}
 	insertedReply, err := insertChannelMessageWithPartsExec(context.Background(), testPool,
@@ -1327,19 +1292,19 @@ func TestListAgentRemindersReturnsLayeredSafeProjection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	threadAnchor := fixture.handler.safeHumanReminderAnchor(request, testUserID, reminder)
+	threadAnchor := fixture.handler.buildAgentReminderAnchorResponse(request, testUserID, reminder)
 	wantThreadHref := "/" + workspaceSlug + "/channels/" + fixture.channel.ID + "?thread=" + anchor.ID + "&message=" + reply.ID
 	if !threadAnchor.Available || threadAnchor.Kind == nil || *threadAnchor.Kind != "thread" || threadAnchor.Href == nil || *threadAnchor.Href != wantThreadHref {
 		t.Fatalf("thread anchor did not deep-link to authorized root: %+v", threadAnchor)
 	}
 	wantThreadDisplay := "Thread in #" + fixture.channel.Name
-	if threadAnchor.DisplayName == nil || *threadAnchor.DisplayName != wantThreadDisplay || threadAnchor.Display == nil || *threadAnchor.Display != wantThreadDisplay {
-		t.Fatalf("thread anchor display name = display_name:%v display:%v, want %q", threadAnchor.DisplayName, threadAnchor.Display, wantThreadDisplay)
+	if threadAnchor.DisplayName == nil || *threadAnchor.DisplayName != wantThreadDisplay {
+		t.Fatalf("thread anchor display name = %v, want %q", threadAnchor.DisplayName, wantThreadDisplay)
 	}
 	if _, err := testPool.Exec(context.Background(), `UPDATE channel SET name = '' WHERE id = $1`, fixture.channel.ID); err != nil {
 		t.Fatal(err)
 	}
-	unnamedAnchor := fixture.handler.safeHumanReminderAnchor(request, testUserID, reminder)
+	unnamedAnchor := fixture.handler.buildAgentReminderAnchorResponse(request, testUserID, reminder)
 	if unnamedAnchor.DisplayName == nil || *unnamedAnchor.DisplayName != "Thread in # Unnamed channel" {
 		t.Fatalf("unnamed channel anchor display name = %+v, want explicit placeholder", unnamedAnchor)
 	}
@@ -1349,7 +1314,7 @@ func TestListAgentRemindersReturnsLayeredSafeProjection(t *testing.T) {
 	if _, err := testPool.Exec(context.Background(), `UPDATE channel SET kind = 'dm' WHERE id = $1`, fixture.channel.ID); err != nil {
 		t.Fatal(err)
 	}
-	dmAnchor := fixture.handler.safeHumanReminderAnchor(request, testUserID, reminder)
+	dmAnchor := fixture.handler.buildAgentReminderAnchorResponse(request, testUserID, reminder)
 	dmEncoded, err := json.Marshal(dmAnchor)
 	if err != nil {
 		t.Fatal(err)
@@ -1372,7 +1337,7 @@ func TestListAgentRemindersEnforcesInternalAccessAndWorkspaceScope(t *testing.T)
 		{name: "plain member", userID: memberID, want: http.StatusForbidden},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			req := withURLParam(newRequestAs(tc.userID, http.MethodGet, "/api/members/agents/"+agentID+"/reminders?status=scheduled", nil), "id", agentID)
+			req := withURLParam(newRequestAs(tc.userID, http.MethodGet, "/api/members/agents/"+agentID+"/reminders", nil), "id", agentID)
 			rec := httptest.NewRecorder()
 			testHandler.ListAgentReminders(rec, req)
 			if rec.Code != tc.want {
@@ -1381,70 +1346,12 @@ func TestListAgentRemindersEnforcesInternalAccessAndWorkspaceScope(t *testing.T)
 		})
 	}
 
-	crossWorkspace := withURLParam(newRequestAs(ownerID, http.MethodGet, "/api/members/agents/"+agentID+"/reminders?status=scheduled", nil), "id", agentID)
+	crossWorkspace := withURLParam(newRequestAs(ownerID, http.MethodGet, "/api/members/agents/"+agentID+"/reminders", nil), "id", agentID)
 	crossWorkspace.Header.Set("X-Workspace-ID", uuid.NewString())
 	rec := httptest.NewRecorder()
 	testHandler.ListAgentReminders(rec, crossWorkspace)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("cross-workspace status=%d body=%s want 404", rec.Code, rec.Body.String())
-	}
-}
-
-func TestListAgentReminderHistoryCursorIsStableAcrossEqualFireTimes(t *testing.T) {
-	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}})
-	anchor := fixture.insertMessage(t, "user", testUserID, "history anchor", nil)
-	reminderID := seedDueReminder(t, fixture.agentIDs[0], fixture.channel.ID, anchor.ID, "", "")
-	newer := time.Now().UTC().Add(-time.Minute).Truncate(time.Microsecond)
-	older := newer.Add(-time.Minute)
-	ids := []string{
-		"00000000-0000-0000-0000-000000000003",
-		"00000000-0000-0000-0000-000000000002",
-		"00000000-0000-0000-0000-000000000001",
-	}
-	for i, row := range []struct {
-		id      string
-		firedAt time.Time
-	}{
-		{id: ids[0], firedAt: newer},
-		{id: ids[1], firedAt: newer},
-		{id: ids[2], firedAt: older},
-	} {
-		if _, err := testPool.Exec(context.Background(), `
-			INSERT INTO agent_reminder_occurrence (
-				id, reminder_id, workspace_id, agent_id, cadence_scheduled_for,
-				due_at, status, title_snapshot, fired_at, fire_version
-			) VALUES ($1, $2, $3, $4, $5, $5, 'fired', $6, $5, $7)`,
-			row.id, reminderID, testWorkspaceID, fixture.agentIDs[0], row.firedAt,
-			fmt.Sprintf("history %d", i+1), int64(i+1)); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	readPage := func(cursor string) humanReminderPage {
-		path := "/api/members/agents/" + fixture.agentIDs[0] + "/reminders?status=fired&limit=2"
-		if cursor != "" {
-			path += "&cursor=" + url.QueryEscape(cursor)
-		}
-		req := withURLParam(newRequest(http.MethodGet, path, nil), "id", fixture.agentIDs[0])
-		rec := httptest.NewRecorder()
-		fixture.handler.ListAgentReminders(rec, req)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("list history status=%d body=%s", rec.Code, rec.Body.String())
-		}
-		var page humanReminderPage
-		if err := json.NewDecoder(rec.Body).Decode(&page); err != nil {
-			t.Fatal(err)
-		}
-		return page
-	}
-
-	first := readPage("")
-	if len(first.Occurrences) != 2 || first.Occurrences[0].ID != ids[0] || first.Occurrences[1].ID != ids[1] || !first.HasMore || first.NextCursor == nil {
-		t.Fatalf("first history page=%+v", first)
-	}
-	second := readPage(*first.NextCursor)
-	if len(second.Occurrences) != 1 || second.Occurrences[0].ID != ids[2] || second.HasMore || second.NextCursor != nil {
-		t.Fatalf("second history page=%+v", second)
 	}
 }
 
@@ -2350,7 +2257,7 @@ func TestAgentReminderTransportLocksTimezoneAndLogsLifecycle(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if string(encoded) != `{"agent_id":"`+agentID+`"}` {
+		if string(encoded) != `{"agentId":"`+agentID+`"}` {
 			t.Fatalf("reminder invalidate payload leaked metadata: %s", encoded)
 		}
 	}

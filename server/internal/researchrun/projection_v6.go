@@ -143,7 +143,7 @@ type V6ProjectionReader interface {
 	ProjectionV6Snapshot(context.Context, V6ProjectionPageRequest) (V6ProjectionSnapshot, error)
 	ProjectionV6Slice(context.Context, V6ProjectionSliceRequest) (V6ProjectionSnapshot, error)
 	ProjectionV6Deltas(context.Context, V6ProjectionDeltaRequest) (V6ProjectionDeltaPage, error)
-	ProjectionV6NodeDetail(context.Context, string, string, string, string) (V6ProjectionNodeDetail, error)
+	ProjectionV6NodeDetail(context.Context, string, string, string, string, string) (V6ProjectionNodeDetail, error)
 }
 
 // IsValidV6ProjectionNodeID reports whether value matches the frozen V6 key

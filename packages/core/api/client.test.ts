@@ -1548,9 +1548,9 @@ describe("ApiClient", () => {
   });
 
   describe("getAgentReminders response parsing", () => {
-    it("falls back to an empty page when definitions/occurrences arrive as null", async () => {
+    it("falls back to an empty list when definitions arrive as null", async () => {
       const fetchMock = vi.fn().mockResolvedValue(
-        new Response(JSON.stringify({ definitions: null, occurrences: null, limit: 20, has_more: false }), {
+        new Response(JSON.stringify({ definitions: null }), {
           status: 200,
           headers: { "Content-Type": "application/json" },
         }),
@@ -1558,18 +1558,17 @@ describe("ApiClient", () => {
       vi.stubGlobal("fetch", fetchMock);
 
       const client = new ApiClient("https://api.example.test");
-      const page = await client.getAgentReminders("agent-1", { status: "scheduled" });
+      const page = await client.getAgentReminders("agent-1");
 
-      // definitions/occurrences arriving as null (not a missing key) fails
-      // the array schema outright, so the whole page falls back to the safe
-      // empty constant — including limit — rather than partially trusting
-      // the rest of a response that already violated the contract.
-      expect(page).toEqual({ definitions: [], occurrences: [], limit: 0, has_more: false });
+      expect(page).toEqual({ definitions: [] });
+      expect(fetchMock.mock.calls[0]?.[0]).toBe(
+        "https://api.example.test/api/members/agents/agent-1/reminders",
+      );
     });
 
     it("falls back to an empty page when a field is the wrong type entirely", async () => {
       const fetchMock = vi.fn().mockResolvedValue(
-        new Response(JSON.stringify({ definitions: "not-an-array", occurrences: [], limit: 20, has_more: false }), {
+        new Response(JSON.stringify({ definitions: "not-an-array" }), {
           status: 200,
           headers: { "Content-Type": "application/json" },
         }),
@@ -1577,12 +1576,12 @@ describe("ApiClient", () => {
       vi.stubGlobal("fetch", fetchMock);
 
       const client = new ApiClient("https://api.example.test");
-      const page = await client.getAgentReminders("agent-1", { status: "scheduled" });
+      const page = await client.getAgentReminders("agent-1");
 
-      expect(page).toEqual({ definitions: [], occurrences: [], limit: 0, has_more: false });
+      expect(page).toEqual({ definitions: [] });
     });
 
-    it("keeps a well-formed page intact, including an unrecognized schedule_kind on one row (row-level narrowing happens in the adapter, not here)", async () => {
+    it("keeps a well-formed list intact, including an unrecognized scheduleKind on one row", async () => {
       const fetchMock = vi.fn().mockResolvedValue(
         new Response(
           JSON.stringify({
@@ -1591,26 +1590,23 @@ describe("ApiClient", () => {
                 id: "r-1",
                 title: "Ping standup",
                 status: "scheduled",
-                schedule_kind: "recurring",
-                next_fire_at: "2026-07-24T09:00:00Z",
+                scheduleKind: "recurring",
+                nextFireAt: "2026-07-24T09:00:00Z",
                 cadence: "daily@09:00",
-                schedule_timezone: "America/Los_Angeles",
-                snooze_count: 0,
+                scheduleTimezone: "America/Los_Angeles",
+                snoozeCount: 0,
                 anchor: { available: false },
               },
               {
                 id: "r-2",
                 title: "Unknown future kind",
                 status: "scheduled",
-                schedule_kind: "some_future_kind",
-                next_fire_at: "2026-07-25T09:00:00Z",
-                snooze_count: 0,
+                scheduleKind: "some_future_kind",
+                nextFireAt: "2026-07-25T09:00:00Z",
+                snoozeCount: 0,
                 anchor: { available: false },
               },
             ],
-            occurrences: [],
-            limit: 20,
-            has_more: false,
           }),
           { status: 200, headers: { "Content-Type": "application/json" } },
         ),
@@ -1618,13 +1614,12 @@ describe("ApiClient", () => {
       vi.stubGlobal("fetch", fetchMock);
 
       const client = new ApiClient("https://api.example.test");
-      const page = await client.getAgentReminders("agent-1", { status: "scheduled" });
+      const page = await client.getAgentReminders("agent-1");
 
-      // The schema layer is intentionally lenient — it parses both rows
-      // (an unknown schedule_kind doesn't reject the whole page). Dropping
-      // the row with the unrecognized kind is adaptUpcomingRow's job.
+      // The schema layer parses both rows. The view-model conversion drops
+      // definitions whose schedule kind it cannot safely display.
       expect(page.definitions).toHaveLength(2);
-      expect(page.definitions[1]?.schedule_kind).toBe("some_future_kind");
+      expect(page.definitions[1]?.scheduleKind).toBe("some_future_kind");
     });
 
   });

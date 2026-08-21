@@ -1,8 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useReducer } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+} from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, Monitor, Plus, Users } from "lucide-react";
+import { ChevronRight, Monitor, Plus, Search, Users, X } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@multica/core/api";
 import { useAuthStore } from "@multica/core/auth";
@@ -14,6 +20,7 @@ import {
   memberListOptions,
   workspaceKeys,
 } from "@multica/core/workspace/queries";
+import { useWorkspaceAgentPresence } from "@multica/core/agents";
 import { runtimeListOptions } from "@multica/core/runtimes";
 import { resolveActorDisplayName } from "@multica/core/identity";
 import type {
@@ -24,7 +31,15 @@ import type {
 } from "@multica/core/types";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { Button } from "@multica/ui/components/ui/button";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@multica/ui/components/ui/empty";
 import { Input } from "@multica/ui/components/ui/input";
+import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { cn } from "@multica/ui/lib/utils";
 import { ActorAvatar } from "../common/actor-avatar";
 import { ResolvedAgentSidePanel } from "../common/resolved-agent-side-panel";
@@ -37,7 +52,9 @@ import {
   buildMembersDirectoryRoster,
   filterMembersDirectoryRoster,
   isMembersDirectoryRosterReady,
+  listVisibleDirectoryRows,
   resolveMembersSelection,
+  stepDirectorySelection,
 } from "./members-directory-model";
 
 export interface MembersDirectoryPageProps {
@@ -136,6 +153,7 @@ export function MembersDirectoryPage({
   const qc = useQueryClient();
   const currentUser = useAuthStore((s) => s.user);
   const [ui, dispatch] = useReducer(directoryUiReducer, initialDirectoryUi);
+  const searchRef = useRef<HTMLInputElement>(null);
 
   const { data: agents = [], isLoading: agentsLoading } = useQuery(
     agentListOptions(wsId, { includeArchived: true }),
@@ -146,6 +164,10 @@ export function MembersDirectoryPage({
   const { data: runtimes = [], isLoading: runtimesLoading } = useQuery(
     runtimeListOptions(wsId),
   );
+  // One page-level Presence snapshot feeds every rail dot — passing it down
+  // avoids a Query observer per row (see ActorAvatar `agentPresence`).
+  const { byAgent: agentPresence, loading: agentPresenceLoading } =
+    useWorkspaceAgentPresence(wsId);
 
   const myRole = useMemo(() => {
     if (!currentUser) return null;
@@ -227,6 +249,33 @@ export function MembersDirectoryPage({
     );
   }, [rosterReady, selection, urlSelection, navigation, paths]);
 
+  // ↑/↓ walks the rows the rail is actually showing, so a search filter or a
+  // collapsed section narrows the traversal the same way it narrows the list.
+  const visibleRows = useMemo(
+    () =>
+      listVisibleDirectoryRows(filtered, {
+        agentsOpen: ui.agentsOpen,
+        humansOpen: ui.humansOpen,
+      }),
+    [filtered, ui.agentsOpen, ui.humansOpen],
+  );
+
+  const handleRailKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      if (e.key === "Escape" && ui.query) {
+        e.preventDefault();
+        dispatch({ type: "set_query", query: "" });
+        return;
+      }
+      const delta = e.key === "ArrowDown" ? 1 : e.key === "ArrowUp" ? -1 : 0;
+      if (!delta) return;
+      e.preventDefault();
+      const next = stepDirectorySelection(visibleRows, selection, delta);
+      if (next) setSelection(next.kind, next.id);
+    },
+    [ui.query, visibleRows, selection, setSelection],
+  );
+
   const handleCreate = async (data: CreateAgentRequest): Promise<Agent> => {
     if (!data.runtime_id) {
       throw new Error(t(($) => $.directory.computer_required));
@@ -294,6 +343,19 @@ export function MembersDirectoryPage({
       : null;
 
   const loading = !rosterReady;
+  const searching = ui.query.trim().length > 0;
+  // A filtered-empty rail is a "no matches" state, not an "empty workspace"
+  // one — the per-section "none yet" copy would misread as the latter.
+  const noMatches =
+    searching &&
+    filtered.listedAgents.length === 0 &&
+    filtered.humans.length === 0;
+
+  const roleBadgeLabel = (role: MemberRole): string | null => {
+    if (role === "owner") return t(($) => $.role.owner);
+    if (role === "admin") return t(($) => $.role.admin);
+    return null;
+  };
 
   return (
     <div
@@ -301,7 +363,10 @@ export function MembersDirectoryPage({
       data-testid="members-directory-page"
     >
       {/* Left rail */}
-      <div className="flex w-[300px] shrink-0 flex-col border-r bg-background">
+      <div
+        className="flex w-[300px] shrink-0 flex-col border-r bg-background"
+        onKeyDown={handleRailKeyDown}
+      >
         <div className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
           <Users className="size-4 text-muted-foreground" aria-hidden />
           <h1 className="text-sm font-semibold">
@@ -310,21 +375,47 @@ export function MembersDirectoryPage({
         </div>
 
         <div className="shrink-0 border-b px-3 py-2.5">
-          <Input
-            value={ui.query}
-            onChange={(e) =>
-              dispatch({ type: "set_query", query: e.target.value })
-            }
-            placeholder={t(($) => $.directory.search_placeholder)}
-            className="h-8"
-            data-testid="members-directory-search"
-          />
+          <div className="relative">
+            <Search
+              className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
+              aria-hidden
+            />
+            <Input
+              ref={searchRef}
+              value={ui.query}
+              onChange={(e) =>
+                dispatch({ type: "set_query", query: e.target.value })
+              }
+              placeholder={t(($) => $.directory.search_placeholder)}
+              className="h-8 px-8"
+              data-testid="members-directory-search"
+            />
+            {searching ? (
+              <button
+                type="button"
+                onClick={() => {
+                  dispatch({ type: "set_query", query: "" });
+                  searchRef.current?.focus();
+                }}
+                aria-label={t(($) => $.directory.clear_search_aria)}
+                data-testid="members-directory-search-clear"
+                className="absolute right-1.5 top-1/2 inline-flex size-5 -translate-y-1/2 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground"
+              >
+                <X className="size-3.5" aria-hidden />
+              </button>
+            ) : null}
+          </div>
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto py-2">
           {loading ? (
-            <p className="px-4 py-6 text-sm text-muted-foreground">
-              {t(($) => $.directory.loading)}
+            <RailSkeleton />
+          ) : noMatches ? (
+            <p
+              className="px-4 py-6 text-sm text-muted-foreground"
+              data-testid="members-directory-no-results"
+            >
+              {t(($) => $.directory.no_search_results, { query: ui.query })}
             </p>
           ) : (
             <>
@@ -346,8 +437,9 @@ export function MembersDirectoryPage({
                 ) : (
                   filtered.computerGroups.map((group) => (
                     <div key={group.machineId} className="mb-1">
+                      {/* PD2: label only — never clickable or collapsible. */}
                       <div
-                        className="flex items-center gap-1.5 px-4 py-1 text-[11px] font-medium text-muted-foreground"
+                        className="sticky top-0 z-10 flex items-center gap-1.5 bg-background px-4 py-1 text-[11px] font-medium text-muted-foreground"
                         data-testid="members-computer-label"
                       >
                         <Monitor className="size-3 shrink-0" aria-hidden />
@@ -371,18 +463,24 @@ export function MembersDirectoryPage({
                                 size={28}
                                 avatarUrlHint={a.avatar_url}
                                 profileLink={false}
+                                showStatusDot
+                                agentPresence={
+                                  agentPresenceLoading
+                                    ? "loading"
+                                    : (agentPresence.get(a.id) ?? "offline")
+                                }
                               />
                             }
                             title={resolveActorDisplayName(a, a.name)}
                             subtitle={a.description?.trim() || null}
                             badge={
                               isMine ? (
-                                <span
-                                  className="shrink-0 rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700 dark:text-emerald-300"
-                                  data-testid="members-mine-badge"
+                                <RailBadge
+                                  className="bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+                                  testId="members-mine-badge"
                                 >
                                   {t(($) => $.directory.mine_badge)}
-                                </span>
+                                </RailBadge>
                               ) : null
                             }
                             testId={`members-agent-row-${a.id}`}
@@ -416,6 +514,7 @@ export function MembersDirectoryPage({
                 ) : (
                   filtered.humans.map((h) => {
                     const isYou = currentUser?.id === h.user_id;
+                    const roleLabel = roleBadgeLabel(h.role);
                     return (
                       <RailRow
                         key={h.user_id}
@@ -431,6 +530,7 @@ export function MembersDirectoryPage({
                             size={28}
                             avatarUrlHint={h.avatar_url}
                             profileLink={false}
+                            showStatusDot
                             className="rounded-full"
                           />
                         }
@@ -440,6 +540,16 @@ export function MembersDirectoryPage({
                             : resolveActorDisplayName(h, h.user_id)
                         }
                         subtitle={null}
+                        badge={
+                          roleLabel ? (
+                            <RailBadge
+                              className="bg-muted text-muted-foreground"
+                              testId={`members-role-badge-${h.user_id}`}
+                            >
+                              {roleLabel}
+                            </RailBadge>
+                          ) : null
+                        }
                         testId={`members-human-row-${h.user_id}`}
                       />
                     );
@@ -454,8 +564,20 @@ export function MembersDirectoryPage({
       {/* Detail */}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         {!selection ? (
-          <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
-            {t(($) => $.directory.empty_select)}
+          <div className="flex flex-1 items-center justify-center">
+            <Empty data-testid="members-directory-empty">
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <Users aria-hidden />
+                </EmptyMedia>
+                <EmptyTitle>
+                  {t(($) => $.directory.empty_select_title)}
+                </EmptyTitle>
+                <EmptyDescription>
+                  {t(($) => $.directory.empty_select_description)}
+                </EmptyDescription>
+              </EmptyHeader>
+            </Empty>
           </div>
         ) : selection.kind === "agent" ? (
           <ResolvedAgentSidePanel
@@ -543,6 +665,47 @@ function directoryManageFor(
   };
 }
 
+/** Rail-shaped placeholder so the pane doesn't collapse to a text line. */
+function RailSkeleton() {
+  return (
+    <div className="px-3" data-testid="members-directory-skeleton">
+      {[0, 1].map((section) => (
+        <div key={section} className="mb-4">
+          <Skeleton className="mb-2 h-3 w-20" />
+          {[0, 1, 2].map((row) => (
+            <div key={row} className="flex items-center gap-2.5 px-1 py-1.5">
+              <Skeleton className="size-7 shrink-0 rounded-full" />
+              <Skeleton className="h-3 w-32" />
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function RailBadge({
+  children,
+  className,
+  testId,
+}: {
+  children: React.ReactNode;
+  className?: string;
+  testId: string;
+}) {
+  return (
+    <span
+      className={cn(
+        "shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold",
+        className,
+      )}
+      data-testid={testId}
+    >
+      {children}
+    </span>
+  );
+}
+
 function SectionHeader({
   label,
   count,
@@ -619,11 +782,20 @@ function RailRow({
   badge?: React.ReactNode;
   testId: string;
 }) {
+  const ref = useRef<HTMLButtonElement>(null);
+  // Keyboard traversal moves the selection without moving focus, so the row
+  // has to pull itself into view on its own.
+  useEffect(() => {
+    if (selected) ref.current?.scrollIntoView?.({ block: "nearest" });
+  }, [selected]);
+
   return (
     <button
+      ref={ref}
       type="button"
       onClick={onClick}
       data-testid={testId}
+      aria-current={selected ? "true" : undefined}
       className={cn(
         "flex w-full items-center gap-2.5 px-3 py-1.5 text-left transition-colors",
         selected

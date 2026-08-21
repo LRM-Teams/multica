@@ -49,7 +49,9 @@ versions, discussions, steering assessments, reports, and committed events.
 If any Brief/Manifest hash, revision, cursor, state version, assignment,
 membership, capability, or expected envelope disagrees with the dispatch,
 fail closed and let the durable recovery path issue a new attempt. Do not adapt
-the payload into a legacy V1–V5 result.
+the payload into a legacy V1–V5 result. A platform-generated atomic Manifest
+whose `branch_refs` is empty despite a persisted Work Branch scope is replaced
+without spending the Agent's attempt budget.
 
 ### V6 executable loop
 
@@ -122,8 +124,17 @@ multica research work-catalog-ack <session-id> <work-item-id> <attempt-id> \
 
 An `atomic_result_submission` must copy the Manifest's `task_id` as well as its
 Work/Attempt/Agent identity. The server creates that one-to-one Task provenance
-record before dispatch. Its `content_hash` is SHA-256 over RFC 8785 JCS bytes
-after removing only `content_hash`; do not hash pretty-printed file bytes.
+record before dispatch. Copy `manifest.branch_refs` exactly, including every
+Branch `state_version`; never replace it with `through_state_version` or another
+Run watermark. Copy the exact single key under
+`manifest.task_specific_schema.payload_schemas` into the submission's
+`task_specific_schema`; never invent or rename a `research.*` schema ID. Keep
+`content_layers.catalog_summary` at 512 characters or fewer. Root content-layer
+`uncertainties`, `conflicts`, and `open_questions` are string arrays; fields
+with the same names inside `task_specific_payload` follow the frozen task schema
+and may be object arrays. Its `content_hash`
+is SHA-256 over RFC 8785 JCS bytes after removing only `content_hash`; do not
+hash pretty-printed file bytes.
 
 Report work uploads each immutable resource before the package submission:
 
@@ -332,6 +343,11 @@ An Inbox delivery that expires before any worker claims it is terminal only for
 that delivery. The server preserves the Research Task's bounded attempt budget
 and re-resolves an available execution target; do not duplicate the Task or
 change its method to recover from this delivery failure.
+
+The same ownership applies when a runtime restarts or times out after claiming
+the Inbox delivery. Generic Inbox auto-retry must not clone a delivery carrying
+`research_dispatch_key`; wait for the Research Work lease/recovery loop to
+settle the old Attempt and dispatch a new Attempt with a new key.
 
 Every `required_capability` in a proposed task must exactly match an active
 fleet role. When a real specialty is missing, the lead must hire it, optimize

@@ -148,6 +148,50 @@ ON CONFLICT DO NOTHING`, secondChannelID, testWorkspaceID, secondAgentID); err !
 	}
 }
 
+func TestAgentInboxDrainIgnoresLeakedDeliveryForTerminalEvent(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	runtimeID := createClaimReclaimRuntime(t, ctx, "terminal-delivery-runtime-"+uuid.NewString())
+	agentID := createHandlerTestAgentOnRuntime(t, "Terminal Delivery Agent "+uuid.NewString()[:8], runtimeID)
+	channelID := seedChannelForTest(t, "terminal-delivery-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `INSERT INTO channel_member(channel_id,workspace_id,member_type,member_id) VALUES($1,$2,'agent',$3) ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed agent member: %v", err)
+	}
+	createProductInboxEventForRuntime(t, runtimeID, agentID, channelID)
+	createProductInboxEventForRuntime(t, runtimeID, agentID, channelID)
+
+	drain := func() DrainAgentInboxResponse {
+		req := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agent-inbox/drain", nil, testWorkspaceID, "terminal-delivery-daemon")
+		req = withURLParam(req, "runtimeId", runtimeID)
+		rec := httptest.NewRecorder()
+		testHandler.DrainAgentInboxByRuntime(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("drain: status=%d body=%s", rec.Code, rec.Body.String())
+		}
+		var response DrainAgentInboxResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+			t.Fatal(err)
+		}
+		return response
+	}
+
+	first := drain()
+	if len(first.Events) != 1 {
+		t.Fatalf("first drain events=%d, want 1", len(first.Events))
+	}
+	if _, err := testPool.Exec(ctx, `UPDATE agent_inbox_event SET status='suppressed',terminal_outcome='cancelled',terminal_delivery_id=$2::uuid,terminal_at=now(),completed_at=now(),updated_at=now() WHERE id=$1::uuid`, first.Events[0].ID, first.Events[0].DeliveryID); err != nil {
+		t.Fatal(err)
+	}
+
+	second := drain()
+	if len(second.Events) != 1 || second.Events[0].ID == first.Events[0].ID {
+		t.Fatalf("second drain=%+v, want queued event despite leaked terminal delivery", second.Events)
+	}
+}
+
 func TestAgentInboxDrainPrioritizesPendingWakeAcrossRuntimes(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

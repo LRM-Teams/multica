@@ -334,6 +334,7 @@ export interface ResearchV6DirectorDetailTransport {
   loadNodeDetail(
     workspaceId: string,
     runId: string,
+    snapshotId: string,
     nodeId: string,
     view: ResearchV6DirectorNodeDetailView,
     signal?: AbortSignal,

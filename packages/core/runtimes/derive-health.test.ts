@@ -1,30 +1,22 @@
 import { describe, expect, it } from "vitest";
 import type { AgentRuntime } from "../types";
+import { makeRuntime as sharedRuntime } from "./runtime-fixture";
 import { deriveRuntimeHealth } from "./derive-health";
 
 const FIXED_NOW = new Date("2026-04-27T12:00:00Z").getTime();
 
 function makeRuntime(overrides: Partial<AgentRuntime> = {}): AgentRuntime {
-  return {
-    id: "rt-1",
-    workspace_id: "ws-1",
-    daemon_id: "daemon-1",
+  return sharedRuntime({
     name: "Test Runtime",
-    runtime_mode: "local",
-    provider: "claude",
-    launch_header: "",
-    status: "online",
-    device_info: "",
-    metadata: {},
     current_version: null,
-    update_state: "idle",
-    runtime_health: "ok",
     owner_id: null,
+    // Fresh relative to this file's frozen clock — health is derived from the
+    // heartbeat's age, so the default timestamp would read as long offline.
     last_seen_at: new Date(FIXED_NOW - 10_000).toISOString(),
     created_at: "2026-04-01T00:00:00Z",
     updated_at: "2026-04-01T00:00:00Z",
     ...overrides,
-  };
+  });
 }
 
 describe("deriveRuntimeHealth", () => {

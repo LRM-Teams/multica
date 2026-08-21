@@ -1267,7 +1267,7 @@
     "summary": {
       "title": "调研星图 · 已加载 {{loaded}} 条方向",
       "title_with_total": "调研星图 · 已加载 {{loaded}} / {{total}} 条方向",
-      "detail": "{{stable}} 个稳定结果 · {{active}} 个深挖 · {{newDir}} 个新方向 · {{stopped}} 个已停止",
+      "detail": "{{stable}} 个稳定结果 · {{active}} 个执行中节点 · {{newDir}} 个新方向 · {{stopped}} 个终止节点",
       "load_more": "加载更多（还剩 {{count}} 条）",
       "load_more_pending": "加载中…"
     },

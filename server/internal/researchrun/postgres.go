@@ -1039,13 +1039,29 @@ func appendEvent(ctx context.Context, tx pgx.Tx, workspaceID, sessionID, eventTy
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return RunEvent{}, err
 	}
-	var sequence int64
+	// For V6 runs the event sequence is bookkeeping and must not consume
+	// research_session.state_version: that column is V6's semantic
+	// optimistic-concurrency token that only goal / steering / report
+	// transitions advance. Coupling them made every dispatch or submission
+	// event invalidate all in-flight Director proposals and Agent results.
+	// Legacy orchestrators keep the original contract (state_version bumps
+	// per event and doubles as the sequence) — their CAS checks and tests
+	// are built on it. Serialized by lockRunForMutation, so max(sequence)+1
+	// is race-free.
+	var sequence, semanticVersion int64
+	var orchestrator string
 	if err := tx.QueryRow(ctx, `
-		UPDATE research_session SET state_version = state_version + 1, updated_at = now()
+		UPDATE research_session SET
+			state_version = state_version + CASE WHEN orchestrator_version = $3 THEN 0 ELSE 1 END,
+			updated_at = now()
 		WHERE id = $1::uuid AND workspace_id = $2::uuid
-		RETURNING state_version
-	`, sessionID, workspaceID).Scan(&sequence); err != nil {
+		RETURNING orchestrator_version, state_version,
+			(SELECT COALESCE(max(sequence), 0) + 1 FROM research_run_event WHERE session_id = $1::uuid)
+	`, sessionID, workspaceID, OrchestratorVersionV6).Scan(&orchestrator, &semanticVersion, &sequence); err != nil {
 		return RunEvent{}, err
+	}
+	if orchestrator != OrchestratorVersionV6 {
+		sequence = semanticVersion
 	}
 	var event RunEvent
 	err = tx.QueryRow(ctx, `

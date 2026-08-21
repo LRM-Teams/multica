@@ -36,7 +36,6 @@ export type ExecutionRow = {
   id: string;
   name: string;
   role: string;
-  initials: string;
   avatarUrl?: string;
   status: ExecutionStatus;
   /** Live server activity text (locale-appropriate); undefined when none. */
@@ -76,17 +75,6 @@ export type ExecutionRow = {
   staleReason?: string | null;
   waitingReason?: string | null;
 };
-
-function initials(name: string): string {
-  const compact = name.trim();
-  if (!compact) return "AI";
-  return compact
-    .split(/\s+/)
-    .map((part) => part[0])
-    .join("")
-    .slice(0, 2)
-    .toUpperCase();
-}
 
 function toUnixMs(value: number | string | null | undefined): number | undefined {
   if (value == null) return undefined;
@@ -296,7 +284,6 @@ export function buildExecutionOverlayRows(input: {
         id: member.agent_id,
         name,
         role: member.role || signal?.role || "worker",
-        initials: initials(name),
         avatarUrl: member.avatar_url ?? undefined,
         status,
         action: signal?.activity || undefined,

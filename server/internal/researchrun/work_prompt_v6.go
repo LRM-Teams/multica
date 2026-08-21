@@ -21,6 +21,7 @@ type v6WorkDispatchIdentity struct {
 		GoalVersion int `json:"goal_version"`
 	} `json:"goal"`
 	CatalogAccess json.RawMessage `json:"catalog_access"`
+	TaskSchema    json.RawMessage `json:"task_specific_schema"`
 }
 
 // BuildV6WorkDispatchPrompt turns a frozen Work Manifest into an executable
@@ -69,11 +70,20 @@ func BuildV6WorkDispatchPrompt(manifest V6WorkManifest) (string, error) {
 		prompt.WriteString("Use only action kinds from the root contract and payload schemas present in `manifest.task_specific_schema.payload_schemas`. A newly requested Agent is asynchronous and cannot receive Work in the same proposal; create it now and wait for its joined event/next Director cycle. Work assigned to an existing team member may be created immediately. Atomic Work must set `expected_result_schema_id` to `atomic_result_submission`, choose a non-empty `payload_schema_id`, and put that result validator under `payload.task_specific_schema`. If no useful mutation exists, submit one `no_op` action with `payload_schema` `no_op.v1` and payload `{\"reason\":\"<reason>\"}`.\n\n")
 	}
 	if identity.ExpectedResult == V6ContractAtomicResultSubmission {
+		taskSchemaID := "<one manifest.task_specific_schema.payload_schemas key>"
+		var registry struct {
+			PayloadSchemas map[string]json.RawMessage `json:"payload_schemas"`
+		}
+		if json.Unmarshal(identity.TaskSchema, &registry) == nil && len(registry.PayloadSchemas) == 1 {
+			for schemaID := range registry.PayloadSchemas {
+				taskSchemaID = schemaID
+			}
+		}
 		prompt.WriteString("The atomic submission root must contain exactly the contract fields below. Copy identity and frozen references; do not invent a legacy Task ID:\n\n")
 		prompt.WriteString("```json\n{\n  \"contract_kind\": \"atomic_result_submission\",\n  \"schema_version\": 6,\n  \"client_request_id\": \"<new-uuid>\",\n")
 		fmt.Fprintf(&prompt, "  \"workspace_id\": \"%s\",\n  \"run_id\": \"%s\",\n  \"work_item_id\": \"%s\",\n  \"task_id\": \"%s\",\n  \"attempt_id\": \"%s\",\n  \"agent_id\": \"%s\",\n  \"manifest_id\": \"%s\",\n  \"manifest_hash\": \"%s\",\n  \"goal_version\": %d,\n", identity.WorkspaceID, identity.RunID, identity.WorkItemID, identity.TaskID, identity.AttemptID, identity.AssignedAgent, identity.ManifestID, identity.ManifestHash, identity.Goal.GoalVersion)
-		prompt.WriteString("  \"branch_refs\": <manifest.branch_refs>,\n  \"content_layers\": {\"catalog_summary\":\"<summary>\",\"brief_summary\":\"<summary>\",\"objective\":\"<objective>\",\"conclusion\":\"<conclusion>\",\"content\":\"<content>\",\"scope\":{},\"uncertainties\":[],\"conflicts\":[],\"open_questions\":[]},\n  \"evidence_refs\": <only frozen manifest artifact versions actually used>,\n  \"state_proposal\": {\"conclusion_state\":\"proposed\",\"integration_state\":\"candidate\"},\n  \"related_candidates\": [],\n  \"task_specific_schema\": \"<manifest-authorized payload_schema_id>\",\n  \"task_specific_payload\": <object matching manifest.task_specific_schema>,\n  \"content_hash\": \"sha256:<RFC-8785-hash>\"\n}\n```\n\n")
-		prompt.WriteString("For `content_hash`, remove only the `content_hash` field, canonicalize the remaining object with RFC 8785 JCS, SHA-256 those bytes, then write lowercase `sha256:<64-hex>`. Read and acknowledge every catalog page used before submitting.\n\n")
+		fmt.Fprintf(&prompt, "  \"branch_refs\": <manifest.branch_refs>,\n  \"content_layers\": {\"catalog_summary\":\"<summary>\",\"brief_summary\":\"<summary>\",\"objective\":\"<objective>\",\"conclusion\":\"<conclusion>\",\"content\":\"<content>\",\"scope\":{},\"uncertainties\":[],\"conflicts\":[],\"open_questions\":[]},\n  \"evidence_refs\": <only frozen manifest artifact versions actually used>,\n  \"state_proposal\": {\"conclusion_state\":\"proposed\",\"integration_state\":\"candidate\"},\n  \"related_candidates\": [],\n  \"task_specific_schema\": \"%s\",\n  \"task_specific_payload\": <object matching the schema under that exact manifest key>,\n  \"content_hash\": \"sha256:<RFC-8785-hash>\"\n}\n```\n\n", taskSchemaID)
+		prompt.WriteString("Use exactly the single key under `manifest.task_specific_schema.payload_schemas`; never invent or rename that schema ID. Keep `content_layers.catalog_summary` at 512 characters or fewer. Root `content_layers.uncertainties`, `content_layers.conflicts`, and `content_layers.open_questions` are arrays of strings; similarly named fields inside `task_specific_payload` follow the frozen task schema and may contain objects. For `content_hash`, remove only the `content_hash` field, canonicalize the remaining object with RFC 8785 JCS, SHA-256 those bytes, then write lowercase `sha256:<64-hex>`. Read and acknowledge every catalog page used before submitting.\n\n")
 	}
 	if len(identity.CatalogAccess) > 0 && string(identity.CatalogAccess) != "null" {
 		prompt.WriteString("Read and acknowledge every authorized catalog page needed by the work:\n\n")

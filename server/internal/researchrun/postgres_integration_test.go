@@ -2944,6 +2944,11 @@ func seedResearchRunFixture(t *testing.T, ctx context.Context, pool *pgxpool.Poo
 
 func researchArtifactCleanupTables() []string {
 	return []string{
+		"research_result_node",
+		"research_node_absorption",
+		"research_discussion_turn",
+		"research_report_review",
+		"research_steering_assessment",
 		"research_artifact_version",
 		"research_artifact_policy_mutation",
 		"research_artifact_lifecycle_event",
@@ -3006,6 +3011,12 @@ func cleanupSeedResearchRunFixture(t *testing.T, databaseURL string, fixture res
 	}
 	if err != nil && cleanupErr == nil {
 		cleanupErr = fmt.Errorf("delete research fixture input references: %w", err)
+	}
+	if cleanupErr == nil {
+		_, err = pool.Exec(ctx, `DELETE FROM research_node_steward_assignment WHERE workspace_id = $1::uuid`, fixture.workspaceID)
+	}
+	if err != nil && cleanupErr == nil {
+		cleanupErr = fmt.Errorf("delete research fixture node steward assignments: %w", err)
 	}
 	if cleanupErr == nil {
 		_, err = pool.Exec(ctx, `DELETE FROM workspace WHERE id = $1::uuid`, fixture.workspaceID)

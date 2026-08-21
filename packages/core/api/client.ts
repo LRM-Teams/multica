@@ -94,6 +94,7 @@ import type {
   AgentHonorRulesView,
   UpdateAgentHonorShowcaseRequest,
   AgentRuntime,
+  AgentRuntimeConfig,
   RuntimeAgentWorkspacesResponse,
   InboxItem,
   UserActivityListResponse,
@@ -272,7 +273,7 @@ import type {
 import type { OnboardingCompletionPath } from "../onboarding/types";
 import type { DMItem, CreateOrFindDMBody } from "../dm/types";
 import type { ConversationHandleLookup, ConversationListResponse } from "../conversations/types";
-import type { RawReminderPage } from "../agents/reminder-view-model";
+import type { AgentReminderListResponse } from "../agents/reminder-view-model";
 import type {
   CloudRuntimeNode,
   CreateCloudRuntimeNodeRequest,
@@ -328,6 +329,7 @@ import {
   EMPTY_AGENT_HEALTH_RESPONSE,
   EMPTY_AGENT_RESTART_OPERATION,
   EMPTY_AGENT_RESTART_PREFLIGHT,
+  EMPTY_AGENT_RUNTIME_CONFIG,
   EMPTY_AGENT_RUNTIME_LIST,
   EMPTY_COMPUTER_CONNECTION_LIST,
   EMPTY_COMPUTER_WORK_JOURNAL_SETTING,
@@ -358,6 +360,7 @@ import {
   EMPTY_RUNNER_ACTIVITY_SUMMARIES_RESPONSE,
   AgentPresenceResponseSchema,
   EMPTY_AGENT_PRESENCE_RESPONSE,
+  AgentRuntimeConfigSchema,
   AgentRuntimeListSchema,
   ComputerConnectionListSchema,
   ComputerWorkJournalSettingSchema,
@@ -478,8 +481,8 @@ import {
   EMPTY_CREATE_VOICE_CALL_RESPONSE,
   EMPTY_GET_VOICE_CALL_RESPONSE,
   EMPTY_START_VOICE_CALL_DUPLEX_RESPONSE,
-  RawReminderPageSchema,
-  EMPTY_REMINDER_PAGE,
+  AgentReminderListResponseSchema,
+  EMPTY_AGENT_REMINDER_LIST,
   EMPTY_WEB_PUSH_PUBLIC_KEY,
   EMPTY_WEB_PUSH_SUBSCRIPTION,
   EMPTY_WEB_PUSH_TEST,
@@ -1571,25 +1574,9 @@ export class ApiClient {
     return this.fetch(`/api/members/agents/${id}`);
   }
 
-  // #656 Agent Card Reminders tab: read-only, per the V2 product contract
-  // (docs/superpowers/specs/2026-07-22-raft-reminder-parity.md). `status`
-  // selects which section this page belongs to server-side — "scheduled"
-  // populates only active `definitions`, "fired" populates only `occurrences`
-  // (History, cursor-paginated newest-first) — not a
-  // client-side filter of one bigger list. Matches task #655's committed
-  // `ListAgentReminders` read-page contract (product baseline
-  // `product/654-reminder-parity@4937f3841`) — locked independent of #870's
-  // open fire/migration-correctness review.
-  async getAgentReminders(
-    agentId: string,
-    params: { status: "scheduled" | "fired"; cursor?: string; limit?: number },
-  ): Promise<RawReminderPage> {
-    const search = new URLSearchParams();
-    search.set("status", params.status);
-    if (params.cursor) search.set("cursor", params.cursor);
-    if (params.limit) search.set("limit", String(params.limit));
-    const raw = await this.fetch<unknown>(`/api/members/agents/${agentId}/reminders?${search}`);
-    return parseWithFallback(raw, RawReminderPageSchema, EMPTY_REMINDER_PAGE, {
+  async getAgentReminders(agentId: string): Promise<AgentReminderListResponse> {
+    const raw = await this.fetch<unknown>(`/api/members/agents/${agentId}/reminders`);
+    return parseWithFallback(raw, AgentReminderListResponseSchema, EMPTY_AGENT_REMINDER_LIST, {
       endpoint: "GET /api/members/agents/{agentId}/reminders",
     });
   }
@@ -1932,6 +1919,24 @@ export class ApiClient {
       EMPTY_AGENT_RUNTIME_LIST,
       { endpoint: "GET /api/runtimes" },
     );
+  }
+
+  /**
+   * The agent's assembled runtime config. Separate from getAgent because it
+   * joins Computer-level facts (name, liveness) that no agent row carries,
+   * and because it must stay readable for an agent bound to a runtime the
+   * caller cannot manage.
+   */
+  async getAgentRuntimeConfig(agentId: string): Promise<AgentRuntimeConfig> {
+    const raw = await this.fetch<unknown>(
+      `/api/agents/${encodeURIComponent(agentId)}/runtime-config`,
+    );
+    return parseWithFallback(
+      raw,
+      AgentRuntimeConfigSchema,
+      EMPTY_AGENT_RUNTIME_CONFIG,
+      { endpoint: "GET /api/agents/:id/runtime-config" },
+    ) as AgentRuntimeConfig;
   }
 
   async listComputers(workspaceId: string): Promise<ComputerConnection[]> {
@@ -5522,6 +5527,7 @@ export class ApiClient {
   async getResearchV6DirectorProjectionNodeDetail(
     workspaceId: string,
     runId: string,
+    snapshotId: string,
     nodeId: string,
     view: import("../types/research-v6-director").ResearchV6DirectorNodeDetailView = "brief",
     options?: { signal?: AbortSignal },
@@ -5529,8 +5535,9 @@ export class ApiClient {
     const { parseResearchV6DirectorNodeDetail } = await import(
       "../research-v6/director-schemas"
     );
+    const query = new URLSearchParams({ snapshot_id: snapshotId, view });
     const raw = await this.fetch(
-      `/api/research/v6/runs/${encodeURIComponent(runId)}/projection/nodes/${encodeURIComponent(nodeId)}?view=${encodeURIComponent(view)}`,
+      `/api/research/v6/runs/${encodeURIComponent(runId)}/projection/nodes/${encodeURIComponent(nodeId)}?${query.toString()}`,
       { signal: options?.signal },
     );
     const detail = parseResearchV6DirectorNodeDetail(raw);

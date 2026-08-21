@@ -270,7 +270,9 @@ func (h *Handler) leaseAgentInboxConversationBatchForRuntime(ctx context.Context
 			    SELECT 1
 			    FROM agent_event_delivery active_delivery
 			    JOIN agent_session active_session ON active_session.id = active_delivery.agent_session_id
+			    JOIN agent_inbox_event active_event ON active_event.id = active_delivery.inbox_event_id
 			    WHERE active_session.agent_id = event.agent_id
+			      AND active_event.status = 'draining'
 			      AND active_delivery.status IN ('leased', 'processing')
 			      AND active_delivery.lease_expires_at > now()
 			  )
@@ -355,7 +357,9 @@ func (h *Handler) leaseAgentInboxConversationBatchForRuntime(ctx context.Context
 			    SELECT 1
 			    FROM agent_event_delivery active_delivery
 			    JOIN agent_session active_session ON active_session.id = active_delivery.agent_session_id
+			    JOIN agent_inbox_event active_event ON active_event.id = active_delivery.inbox_event_id
 			    WHERE active_session.agent_id = event.agent_id
+			      AND active_event.status = 'draining'
 			      AND active_delivery.status IN ('leased', 'processing')
 			      AND active_delivery.lease_expires_at > now()
 			  )

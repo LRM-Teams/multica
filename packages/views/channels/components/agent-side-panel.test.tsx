@@ -26,6 +26,7 @@ const {
   rolePermission,
   usageRows,
   mockRuntimes,
+  mockRuntimeConfig,
   mockLocalSkills,
   mockWorkspaceSkills,
   updateAgentWorkspaceRole,
@@ -54,8 +55,20 @@ const {
   // Runtimes returned by the mocked runtime-list query. Empty by default so the
   // existing tests see no selected runtime; a #687 test loads a staged one.
   mockRuntimes: { current: [] as Array<Record<string, unknown>> },
+  // What GET /api/agents/{id}/runtime-config returns: Computer + runtime
+  // assembled server-side, independent of what the runtimes list carries.
+  mockRuntimeConfig: {
+    current: null as null | Record<string, unknown>,
+  },
   mockLocalSkills: { current: [] as Array<Record<string, unknown>> },
   mockWorkspaceSkills: { current: [] as Array<Record<string, unknown>> },
+}));
+
+// The Info grid renders <Time kind="date"/>, which reads the viewer timezone
+// off the auth store. Nothing here depends on a signed-in user.
+vi.mock("@multica/core/auth", () => ({
+  useAuthStore: (sel: (s: { user: null }) => unknown) => sel({ user: null }),
+  registerAuthStore: vi.fn(),
 }));
 
 vi.mock("@multica/core/workspace/avatar-url", () => ({
@@ -163,8 +176,12 @@ vi.mock("./agent-files-panel", () => ({
 // them so the panel test stays focused on gating/visibility, not picker
 // internals. Each stub echoes `canEdit` so we can assert the permission split.
 vi.mock("../../agents/components/inspector/runtime-picker", () => ({
-  RuntimePicker: (p: { canEdit?: boolean }) => (
-    <div data-testid="runtime-picker" data-can-edit={String(!!p.canEdit)} />
+  RuntimePicker: (p: { canEdit?: boolean; selectedProvider?: string | null }) => (
+    <div
+      data-testid="runtime-picker"
+      data-can-edit={String(!!p.canEdit)}
+      data-selected-provider={p.selectedProvider ?? ""}
+    />
   ),
 }));
 vi.mock("../../agents/components/inspector/model-picker", () => ({
@@ -233,6 +250,8 @@ vi.mock("@tanstack/react-query", () => ({
         ? usageRows
         : options.queryKey?.[0] === "agents" && options.queryKey?.[1] === "profile-skills"
           ? { global: mockLocalSkills.current, workspace: mockWorkspaceSkills.current }
+          : options.queryKey?.[0] === "runtimes" && options.queryKey?.[1] === "agent-config"
+            ? mockRuntimeConfig.current
           : options.queryKey?.[0] === "runtimes"
             ? mockRuntimes.current
           : [],
@@ -242,6 +261,7 @@ vi.mock("@tanstack/react-query", () => ({
 }));
 vi.mock("@multica/core/runtimes", () => ({
   runtimeListOptions: () => ({ queryKey: ["runtimes"] }),
+  agentRuntimeConfigOptions: () => ({ queryKey: ["runtimes", "agent-config"] }),
   agentProfileSkillsOptions: () => ({ queryKey: ["agents", "profile-skills"] }),
   deriveRuntimeHealth: (rt: { status?: string }) =>
     rt?.status === "online" ? "online" : "offline",
@@ -408,6 +428,7 @@ describe("AgentSidePanel", () => {
     rolePermission.allowed = false;
     usageRows.length = 0;
     mockRuntimes.current = [];
+    mockRuntimeConfig.current = null;
     mockLocalSkills.current = [];
     mockWorkspaceSkills.current = [];
   });
@@ -450,9 +471,10 @@ describe("AgentSidePanel", () => {
   // task #28 + Computer-first: computer binding lives in Runtime config
   // (not the Info section) so Computer → Runtime → Model stay together.
   it("shows the bound computer's connection + label in Runtime config (#28)", () => {
-    mockRuntimes.current = [
-      { id: "runtime-1", status: "online", name: "Cursor (s144)", display_name: "s144" },
-    ];
+    mockRuntimeConfig.current = {
+      computer: { daemon_id: "daemon-1", name: "s144", connected: true },
+      runtime: { id: "runtime-1", provider: "cursor" },
+    };
     renderPanel();
     const runtimeSection = screen.getByTestId("agent-profile-runtime-config");
     expect(within(runtimeSection).getByText("Computer")).toBeInTheDocument();
@@ -460,17 +482,41 @@ describe("AgentSidePanel", () => {
     expect(within(runtimeSection).getByText("s144")).toBeInTheDocument();
   });
 
-  it("shows disconnected + hostname when no display_name is set (#28)", () => {
-    mockRuntimes.current = [{ id: "runtime-1", status: "offline", name: "Cursor (s144)" }];
+  it("shows disconnected when the Computer has no live runner socket (#28)", () => {
+    mockRuntimeConfig.current = {
+      computer: { daemon_id: "daemon-1", name: "s144", connected: false },
+      runtime: { id: "runtime-1", provider: "cursor" },
+    };
     renderPanel();
     const runtimeSection = screen.getByTestId("agent-profile-runtime-config");
     expect(within(runtimeSection).getByText("Disconnected")).toBeInTheDocument();
     expect(within(runtimeSection).getByText("s144")).toBeInTheDocument();
-    expect(within(runtimeSection).queryByText("Cursor (s144)")).not.toBeInTheDocument();
   });
 
-  it("shows the no-computer fallback when the agent's runtime_id doesn't resolve (#28)", () => {
+  // Frank, 2026-08-21: this is the case that used to read "No computer" for
+  // everyone but the owner. The runtimes list is "what may I bind to" and
+  // never carries another member's private runtime; the assembled config
+  // answers "where does this agent run", which is a different question.
+  it("names the computer even when the runtimes list has nothing to bind to", () => {
     mockRuntimes.current = [];
+    mockRuntimeConfig.current = {
+      computer: { daemon_id: "daemon-1", name: "s144", connected: true },
+      runtime: { id: "runtime-1", provider: "cursor" },
+    };
+    renderPanel();
+    const runtimeSection = screen.getByTestId("agent-profile-runtime-config");
+    expect(within(runtimeSection).queryByText("No computer")).not.toBeInTheDocument();
+    expect(within(runtimeSection).getByText("s144")).toBeInTheDocument();
+    // The picker is still handed only what the viewer may bind to.
+    expect(within(runtimeSection).getByTestId("runtime-picker")).toHaveAttribute(
+      "data-selected-provider",
+      "cursor",
+    );
+  });
+
+  it("shows the no-computer fallback when the agent has no bound computer (#28)", () => {
+    mockRuntimes.current = [];
+    mockRuntimeConfig.current = { computer: null, runtime: null };
     renderPanel();
     const runtimeSection = screen.getByTestId("agent-profile-runtime-config");
     expect(within(runtimeSection).getByText("No computer")).toBeInTheDocument();

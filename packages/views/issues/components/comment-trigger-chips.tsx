@@ -5,7 +5,7 @@ import type { CommentTriggerPreviewAgent } from "@multica/core/types";
 import { resolveActorDisplayName, resolveActorIdentityPresentation } from "@multica/core/identity";
 import { useAgentPresence } from "@multica/core/agents";
 import { useCurrentWorkspace } from "@multica/core/paths";
-import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
+import { ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
 import {
   Popover,
   PopoverContent,

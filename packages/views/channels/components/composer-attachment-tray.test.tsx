@@ -1,67 +1,40 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PendingAttachment } from "../hooks/use-composer-pending-attachments";
 import { ComposerAttachmentTray } from "./composer-attachment-tray";
 
 vi.mock("../../i18n/use-t", () => ({
-  useT: () => ({
+  useT: (namespace: string) => ({
     t: (
       selector: (dict: Record<string, unknown>) => unknown,
       vars?: Record<string, string>,
     ) => {
-      const dict = {
-        composer: {
-          tray_remove_aria: `Remove ${vars?.filename ?? ""}`,
-          tray_retry_aria: `Retry upload of ${vars?.filename ?? ""}`,
-          tray_preview_aria: `Preview ${vars?.filename ?? ""}`,
-          tray_uploading: "Uploading",
-          tray_upload_failed: "Upload failed",
-          tray_reselect: "Needs re-selection",
-        },
-      };
+      const dict = namespace === "editor"
+        ? { image: { download: "Download" } }
+        : {
+            composer: {
+              tray_remove_aria: `Remove ${vars?.filename ?? ""}`,
+              tray_retry_aria: `Retry upload of ${vars?.filename ?? ""}`,
+              tray_preview_aria: `Preview ${vars?.filename ?? ""}`,
+              tray_uploading: "Uploading",
+              tray_upload_failed: "Upload failed",
+              tray_reselect: "Needs re-selection",
+            },
+          };
       const value = selector(dict);
       return typeof value === "string" ? value : String(value);
     },
   }),
 }));
 
-// LRM-1180 — the tray owns a real `useAttachmentPreview()` handle. The stand-in
-// keeps the *lifecycle* that matters to the tray (open() records the source,
-// `modal` flips null → node → null on close) without dragging the whole editor
-// barrel + modal dependency tree into this component test. The modal itself is
-// covered by attachment-preview-modal.test.tsx.
-const previewOpenSpy = vi.fn();
-// LRM-1264 R3 — tray imports attachment-preview-modal leaf (not the TipTap barrel).
-vi.mock("../../editor/attachment-preview-modal", async () => {
-  const React = await import("react");
-  return {
-    useAttachmentPreview: () => {
-      const [open, setOpen] = React.useState(false);
-      return {
-        tryOpen: vi.fn(),
-        open: (source: unknown) => {
-          previewOpenSpy(source);
-          setOpen(true);
-        },
-        modal: open
-          ? React.createElement(
-              "button",
-              {
-                type: "button",
-                "data-testid": "fake-preview-close",
-                onClick: () => setOpen(false),
-              },
-              "close",
-            )
-          : null,
-      };
-    },
-  };
-});
+const downloadMock = vi.fn();
+vi.mock("../../editor/use-download-attachment", () => ({
+  useDownloadAttachment: () => downloadMock,
+}));
 
 function item(overrides: Partial<PendingAttachment> & Pick<PendingAttachment, "localId" | "status" | "filename">): PendingAttachment {
   return {
@@ -80,7 +53,7 @@ describe("ComposerAttachmentTray", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("renders image thumbs and file chips with remove controls", async () => {
+  it("renders image thumbs without inline remove and file chips with remove controls", async () => {
     const user = userEvent.setup();
     const onRemove = vi.fn();
     const pending: PendingAttachment[] = [
@@ -112,8 +85,9 @@ describe("ComposerAttachmentTray", () => {
     );
     expect(screen.getByText("notes.pdf")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Remove photo.png" }));
-    expect(onRemove).toHaveBeenCalledWith("img-1");
+    expect(screen.queryByRole("button", { name: "Remove photo.png" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Remove notes.pdf" }));
+    expect(onRemove).toHaveBeenCalledWith("file-1");
   });
 
   it("shows error state and retry for failed uploads", async () => {
@@ -244,7 +218,8 @@ describe("ComposerAttachmentTray", () => {
     );
   });
 
-  it("on mobile web keeps remove visible without hover (touch)", () => {
+  it("on mobile web keeps image remove inside the popover with a large touch target", async () => {
+    const user = userEvent.setup();
     render(
       <ComposerAttachmentTray
         isMobile
@@ -264,10 +239,11 @@ describe("ComposerAttachmentTray", () => {
 
     const tray = screen.getByTestId("composer-attachment-tray");
     expect(tray).toHaveAttribute("data-mobile", "true");
-    const remove = screen.getByRole("button", { name: "Remove phone.png" });
-    // Must not rely on group-hover opacity-0 for the only remove control.
-    expect(remove.className).toMatch(/\bopacity-100\b/);
-    expect(remove.className).not.toMatch(/\bopacity-0\b/);
+    expect(screen.queryByRole("button", { name: "Remove phone.png" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Preview phone.png" }));
+    expect(screen.getByRole("button", { name: "Remove phone.png" }).className).toMatch(
+      /\bsize-11\b/,
+    );
   });
 
   // LRM-353 — tray chrome stays on background / muted / border tokens (no light hex).
@@ -303,15 +279,9 @@ describe("ComposerAttachmentTray", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// LRM-1180 — v2 frozen design (parent LRM-1150): zoomable thumb + 20px
-// overflow-corner remove button. Numbers below are the frozen spec, not taste:
-// 20px visual + after:-inset-0.5 → 24px hit target (SC 2.5.8 exactly), and the
-// button sits 8px outside the thumb so occlusion drops 41.3% → 4.6% on mobile.
-// ---------------------------------------------------------------------------
-describe("ComposerAttachmentTray — LRM-1180 v2 frozen design", () => {
+describe("ComposerAttachmentTray — image detail popover", () => {
   beforeEach(() => {
-    previewOpenSpy.mockClear();
+    downloadMock.mockClear();
   });
 
   function imageItem(
@@ -321,13 +291,15 @@ describe("ComposerAttachmentTray — LRM-1180 v2 frozen design", () => {
       localId: "img-1",
       status: "ready",
       filename: "shot.png",
+      sizeBytes: 2048,
       attachmentId: "a1",
       previewUrl: "blob:shot",
       ...overrides,
     });
   }
 
-  it("tray reserves the overflow corner: pt-2 pr-2 -mt-2 + gap-3 (overflow-y-hidden clips the padding box)", () => {
+  it("shows only the image thumbnail until it is clicked", async () => {
+    const user = userEvent.setup();
     render(
       <ComposerAttachmentTray
         pending={[imageItem()]}
@@ -335,21 +307,21 @@ describe("ComposerAttachmentTray — LRM-1180 v2 frozen design", () => {
         onRetry={vi.fn()}
       />,
     );
-    const tray = screen.getByTestId("composer-attachment-tray");
-    // Without pt-2/pr-2 the 8px-outdented button is clipped by overflow-y-hidden.
-    expect(tray.className).toMatch(/\bpt-2\b/);
-    expect(tray.className).toMatch(/\bpr-2\b/);
-    // -mt-2 cancels the reserved top padding so the composer doesn't grow.
-    expect(tray.className).toMatch(/-mt-2\b/);
-    // gap-2 (8px) exactly equals the outdent → button would touch the next item.
-    expect(tray.className).toMatch(/\bgap-3\b/);
-    expect(tray.className).not.toMatch(/\bgap-2\b/);
-    // Horizontal-strip contract from LRM-353/LRM-801 must survive.
-    expect(tray.className).toMatch(/\boverflow-y-hidden\b/);
-    expect(tray.className).toMatch(/\bflex-nowrap\b/);
+
+    expect(screen.queryByText("shot.png")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Remove shot.png" })).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Preview shot.png" }));
+
+    expect(screen.getByRole("dialog", { name: "shot.png" })).toBeInTheDocument();
+    expect(screen.getByText("shot.png")).toBeInTheDocument();
+    expect(screen.getByText("PNG · 2 KB")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Remove shot.png" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Download shot.png" })).toBeInTheDocument();
   });
 
-  it("image remove button is 20px in the overflow corner with a 24px hit area", () => {
+  it("downloads a ready image from the popover", async () => {
+    const user = userEvent.setup();
     render(
       <ComposerAttachmentTray
         pending={[imageItem()]}
@@ -357,19 +329,60 @@ describe("ComposerAttachmentTray — LRM-1180 v2 frozen design", () => {
         onRetry={vi.fn()}
       />,
     );
-    const remove = screen.getByRole("button", { name: "Remove shot.png" });
-    expect(remove.className).toMatch(/\bsize-5\b/); // 20px visual
-    expect(remove.className).not.toMatch(/\bsize-9\b/); // not the 36px live button
-    expect(remove.className).toMatch(/\brounded-full\b/);
-    const corner = remove.parentElement as HTMLElement;
-    expect(corner.className).toMatch(/-right-2\b/);
-    expect(corner.className).toMatch(/-top-2\b/);
-    // after:-inset-0.5 lifts the 20px visual to a 24px pointer target.
-    expect(remove.className).toMatch(/after:-inset-0\.5\b/);
-    expect(remove.className).toMatch(/\brelative\b/);
+
+    await user.click(screen.getByRole("button", { name: "Preview shot.png" }));
+    await user.click(screen.getByRole("button", { name: "Download shot.png" }));
+
+    expect(downloadMock).toHaveBeenCalledWith("a1");
   });
 
-  it("mobile image remove button is the same 20px overflow corner (not size-9) and stays visible", () => {
+  it("disables download while the request is in flight", async () => {
+    const user = userEvent.setup();
+    let finishDownload: (() => void) | undefined;
+    downloadMock.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        finishDownload = resolve;
+      }),
+    );
+    render(
+      <ComposerAttachmentTray
+        pending={[imageItem()]}
+        onRemove={vi.fn()}
+        onRetry={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Preview shot.png" }));
+    const button = screen.getByRole("button", { name: "Download shot.png" });
+    await user.click(button);
+
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute("aria-busy", "true");
+    expect(downloadMock).toHaveBeenCalledTimes(1);
+
+    finishDownload?.();
+    await waitFor(() => expect(button).toBeEnabled());
+  });
+
+  it("removes an image only from the popover action", async () => {
+    const user = userEvent.setup();
+    const onRemove = vi.fn();
+    render(
+      <ComposerAttachmentTray
+        pending={[imageItem()]}
+        onRemove={onRemove}
+        onRetry={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Preview shot.png" }));
+    await user.click(screen.getByRole("button", { name: "Remove shot.png" }));
+
+    expect(onRemove).toHaveBeenCalledWith("img-1");
+  });
+
+  it("uses responsive popover width and 44px mobile action targets", async () => {
+    const user = userEvent.setup();
     render(
       <ComposerAttachmentTray
         isMobile
@@ -378,61 +391,74 @@ describe("ComposerAttachmentTray — LRM-1180 v2 frozen design", () => {
         onRetry={vi.fn()}
       />,
     );
-    const remove = screen.getByRole("button", { name: "Remove phone.png" });
-    expect(remove.className).toMatch(/\bsize-5\b/);
-    expect(remove.className).not.toMatch(/\bsize-9\b/);
-    expect(remove.className).toMatch(/\bopacity-100\b/);
-  });
 
-  // LRM-1228 reverses the "file chips are untouched" half of this design: the
-  // corner treatment is now the single remove rule for every chip kind. What
-  // survives from LRM-1180 is that a file chip is not a zoom entry point.
-  it("non-image chip is not a zoom entry point", () => {
-    render(
-      <ComposerAttachmentTray
-        pending={[
-          item({
-            localId: "file-1",
-            status: "ready",
-            filename: "notes.pdf",
-            contentType: "application/pdf",
-            previewUrl: undefined,
-          }),
-        ]}
-        onRemove={vi.fn()}
-        onRetry={vi.fn()}
-      />,
+    await user.click(screen.getByRole("button", { name: "Preview phone.png" }));
+    expect(screen.getByTestId("composer-image-popover-img-1").className).toMatch(
+      /calc\(100vw-1\.5rem\)/,
     );
-    expect(screen.queryByRole("button", { name: /^Preview/ })).toBeNull();
+    expect(screen.getByRole("button", { name: "Download phone.png" }).className).toMatch(
+      /\bsize-11\b/,
+    );
+    expect(screen.getByRole("button", { name: "Remove phone.png" }).className).toMatch(
+      /\bsize-11\b/,
+    );
   });
 
-  it("clicking the thumb opens the shared preview with the real MIME type", async () => {
+  it("uses a taller, narrower detail surface for portrait images", async () => {
     const user = userEvent.setup();
     render(
       <ComposerAttachmentTray
-        pending={[imageItem({ contentType: "image/png" })]}
+        pending={[imageItem({ filename: "portrait.png" })]}
         onRemove={vi.fn()}
         onRetry={vi.fn()}
       />,
     );
 
-    const zoom = screen.getByRole("button", { name: "Preview shot.png" });
-    expect(zoom.className).toMatch(/\bcursor-zoom-in\b/);
-    await user.click(zoom);
-
-    // contentType must be forwarded: a pasted screenshot often has no
-    // extension, and getPreviewKind falls back to the filename without it.
-    expect(previewOpenSpy).toHaveBeenCalledWith({
-      kind: "url",
-      url: "blob:shot",
-      filename: "shot.png",
-      contentType: "image/png",
-      attachmentId: "a1",
+    const thumbnail = screen.getByAltText("portrait.png");
+    Object.defineProperties(thumbnail, {
+      naturalWidth: { configurable: true, value: 900 },
+      naturalHeight: { configurable: true, value: 1600 },
     });
-    expect(screen.getByTestId("fake-preview-close")).toBeInTheDocument();
+    fireEvent.load(thumbnail);
+    await user.click(screen.getByRole("button", { name: "Preview portrait.png" }));
+
+    expect(screen.getByTestId("composer-image-popover-img-1")).toHaveAttribute(
+      "data-orientation",
+      "portrait",
+    );
+    expect(screen.getByTestId("composer-image-preview-img-1").className).toMatch(
+      /aspect-\[4\/5\]/,
+    );
   });
 
-  it("returns focus to the thumb after the preview closes", async () => {
+  it("uses a wide detail surface for landscape images", async () => {
+    const user = userEvent.setup();
+    render(
+      <ComposerAttachmentTray
+        pending={[imageItem({ filename: "landscape.png" })]}
+        onRemove={vi.fn()}
+        onRetry={vi.fn()}
+      />,
+    );
+
+    const thumbnail = screen.getByAltText("landscape.png");
+    Object.defineProperties(thumbnail, {
+      naturalWidth: { configurable: true, value: 1600 },
+      naturalHeight: { configurable: true, value: 900 },
+    });
+    fireEvent.load(thumbnail);
+    await user.click(screen.getByRole("button", { name: "Preview landscape.png" }));
+
+    expect(screen.getByTestId("composer-image-popover-img-1")).toHaveAttribute(
+      "data-orientation",
+      "landscape",
+    );
+    expect(screen.getByTestId("composer-image-preview-img-1").className).toMatch(
+      /aspect-\[16\/10\]/,
+    );
+  });
+
+  it("closes on Escape and restores focus to the thumbnail", async () => {
     const user = userEvent.setup();
     render(
       <ComposerAttachmentTray
@@ -442,29 +468,51 @@ describe("ComposerAttachmentTray — LRM-1180 v2 frozen design", () => {
       />,
     );
 
-    const zoom = screen.getByRole("button", { name: "Preview shot.png" });
-    await user.click(zoom);
-    await user.click(screen.getByTestId("fake-preview-close"));
+    const trigger = screen.getByRole("button", { name: "Preview shot.png" });
+    await user.click(trigger);
+    expect(screen.getByRole("dialog", { name: "shot.png" })).toBeInTheDocument();
 
-    expect(screen.getByRole("button", { name: "Preview shot.png" })).toHaveFocus();
+    await user.keyboard("{Escape}");
+
+    expect(screen.queryByRole("dialog", { name: "shot.png" })).toBeNull();
+    expect(trigger).toHaveFocus();
   });
 
-  it("uploading keeps zoom available (blob previewUrl) but hides the centered zoom glyph", () => {
+  it("closes when clicking outside", async () => {
+    const user = userEvent.setup();
+    render(
+      <div>
+        <button type="button">Outside</button>
+        <ComposerAttachmentTray
+          pending={[imageItem()]}
+          onRemove={vi.fn()}
+          onRetry={vi.fn()}
+        />
+      </div>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Preview shot.png" }));
+    await user.click(screen.getByRole("button", { name: "Outside" }));
+
+    expect(screen.queryByRole("dialog", { name: "shot.png" })).toBeNull();
+  });
+
+  it("keeps download disabled while an image uploads but allows remove", async () => {
+    const user = userEvent.setup();
     render(
       <ComposerAttachmentTray
-        pending={[imageItem({ status: "uploading" })]}
+        pending={[imageItem({ status: "uploading", attachmentId: undefined })]}
         onRemove={vi.fn()}
         onRetry={vi.fn()}
       />,
     );
-    expect(
-      screen.getByRole("button", { name: "Preview shot.png" }),
-    ).toBeEnabled();
-    // Two centered elements (spinner + zoom glyph) would collide.
-    expect(screen.queryByTestId("composer-tray-zoom-hint-img-1")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Preview shot.png" }));
+    expect(screen.getByRole("button", { name: "Download shot.png" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Remove shot.png" })).toBeEnabled();
   });
 
-  it("error state centers retry, keeps remove in the corner, and drops the zoom entry point", () => {
+  it("keeps retry centered for a failed image and still has no inline remove", () => {
     render(
       <ComposerAttachmentTray
         pending={[imageItem({ status: "error", errorMessage: "network" })]}
@@ -473,25 +521,17 @@ describe("ComposerAttachmentTray — LRM-1180 v2 frozen design", () => {
       />,
     );
 
-    const retry = screen.getByRole("button", {
-      name: "Retry upload of shot.png",
-    });
+    const retry = screen.getByRole("button", { name: "Retry upload of shot.png" });
     expect(retry.className).toMatch(/-translate-x-1\/2/);
     expect(retry.className).toMatch(/-translate-y-1\/2/);
-    expect(retry.className).toMatch(/\bsize-6\b/); // 24px primary recovery action
-
-    const remove = screen.getByRole("button", { name: "Remove shot.png" });
-    expect((remove.parentElement as HTMLElement).className).toMatch(/-right-2\b/);
-
-    // The centered slot is taken by retry, and a failed item means retry-or-drop.
-    expect(screen.queryByRole("button", { name: /^Preview/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Remove shot.png" })).toBeNull();
   });
 
-  it("stale draft placeholder gets no zoom entry point (no previewUrl to show)", () => {
+  it("keeps a stale image without a preview URL as a removable file chip", () => {
     render(
       <ComposerAttachmentTray
         pending={[
-          item({
+          imageItem({
             localId: "stale-1",
             status: "stale",
             filename: "gone.png",
@@ -504,6 +544,7 @@ describe("ComposerAttachmentTray — LRM-1180 v2 frozen design", () => {
       />,
     );
     expect(screen.queryByRole("button", { name: /^Preview/ })).toBeNull();
+    expect(screen.getByRole("button", { name: "Remove gone.png" })).toBeInTheDocument();
   });
 });
 
@@ -658,7 +699,7 @@ describe("ComposerAttachmentTray — LRM-1228 file/stale chip remove button", ()
     expect(onRetry).toHaveBeenCalledWith("err-f");
   });
 
-  it("does not regress the #2047 image thumb surface", () => {
+  it("keeps image thumbs separate from file-chip padding and corner remove", () => {
     render(
       <ComposerAttachmentTray
         isMobile
@@ -675,12 +716,8 @@ describe("ComposerAttachmentTray — LRM-1228 file/stale chip remove button", ()
         onRetry={vi.fn()}
       />,
     );
-    const remove = screen.getByRole("button", { name: "Remove shot.png" });
-    expect(remove.className).toMatch(/\bsize-5\b/);
-    expect((remove.parentElement as HTMLElement).className).toMatch(
-      /-right-2\b/,
-    );
-    // Thumb keeps p-0 / max-w-none — the chip padding change must not leak here.
+    expect(screen.queryByRole("button", { name: "Remove shot.png" })).toBeNull();
+    // Thumb keeps p-0 / max-w-none; file-chip padding and remove do not leak here.
     const chip = screen.getByTestId("composer-tray-item-img-1");
     expect(chip.className).toMatch(/\bp-0\b/);
     expect(chip.className).not.toMatch(/\bpr-3\b/);

@@ -4,6 +4,14 @@ import { describe, expect, it, vi } from "vitest";
 import { researchExecutionPanelFixture } from "../lib/research-execution-panel-fixture";
 import { ResearchExecutionPanel } from "./research-execution-panel";
 
+// The row/inspector now render the site-wide smart avatar, which resolves
+// identity through workspace queries. These suites are about execution copy.
+vi.mock("../../common/actor-avatar", () => ({
+  ActorAvatar: ({ actorId }: { actorId: string }) => (
+    <span data-testid={`actor-avatar-${actorId}`} />
+  ),
+}));
+
 // LRM-1479 — ResearchExecutionPanel now delegates to ExecutionOverlayPanel.
 // The mock mirrors the overlay `panel.execution` bundle so chrome is fully
 // translated; statuses are asserted by 8-state mapping.

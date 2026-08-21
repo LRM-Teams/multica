@@ -76,6 +76,9 @@ func TestBuildV6WorkDispatchPromptBindsAtomicTaskIdentity(t *testing.T) {
 	manifest := validV6DispatchPromptManifest(t, map[string]any{
 		"expected_result_schema": string(V6ContractAtomicResultSubmission),
 		"task_id":                "00000000-0000-4000-8000-000000000214",
+		"task_specific_schema": map[string]any{"payload_schemas": map[string]any{
+			"research.finding.v1": map[string]any{"type": "object"},
+		}},
 	})
 	prompt, err := BuildV6WorkDispatchPrompt(manifest)
 	if err != nil {
@@ -85,6 +88,11 @@ func TestBuildV6WorkDispatchPromptBindsAtomicTaskIdentity(t *testing.T) {
 		`"contract_kind": "atomic_result_submission"`,
 		`"task_id": "00000000-0000-4000-8000-000000000214"`,
 		`"agent_id": "00000000-0000-4000-8000-000000000009"`,
+		`"task_specific_schema": "research.finding.v1"`,
+		"catalog_summary` at 512 characters or fewer",
+		"content_layers.conflicts`",
+		"arrays of strings",
+		"task_specific_payload` follow the frozen task schema",
 		"RFC 8785 JCS",
 		"successful Agent handoff",
 		"no validation-only or dry-run mode",
@@ -102,6 +110,7 @@ func TestAtomicV6WorkManifestGetsOneBackingTaskAndFrozenMission(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, workItemID := seedV6RecoveryWorkItem(t, run, "ready", time.Now().Add(time.Minute))
+	branchID := seedV6WorkBranchScope(t, run, workItemID, "manifest-branch:", "Inspect the assigned branch", 7)
 	payload := `{"mission_prompt":"Inspect the assigned production boundary.","task_specific_schema":{"type":"object","additionalProperties":false,"required":["finding"],"properties":{"finding":{"type":"string","minLength":1}}}}`
 	if _, err := run.pool.Exec(run.ctx, `UPDATE research_work_item SET expected_result_schema_id='atomic_result_submission',payload_schema_id='research.finding.v1',payload=$2::jsonb,reason='fallback reason' WHERE id=$1::uuid`, workItemID, payload); err != nil {
 		t.Fatal(err)
@@ -124,14 +133,24 @@ func TestAtomicV6WorkManifestGetsOneBackingTaskAndFrozenMission(t *testing.T) {
 		t.Fatal(err)
 	}
 	var identity struct {
-		TaskID        string `json:"task_id"`
-		MissionPrompt string `json:"mission_prompt"`
+		TaskID        string        `json:"task_id"`
+		MissionPrompt string        `json:"mission_prompt"`
+		BranchRefs    []V6BranchRef `json:"branch_refs"`
+		TaskSchema    struct {
+			PayloadSchemas map[string]json.RawMessage `json:"payload_schemas"`
+		} `json:"task_specific_schema"`
 	}
 	if err = json.Unmarshal(manifest, &identity); err != nil {
 		t.Fatal(err)
 	}
 	if identity.TaskID != taskID || identity.MissionPrompt != "Inspect the assigned production boundary." {
 		t.Fatalf("manifest task=%q mission=%q", identity.TaskID, identity.MissionPrompt)
+	}
+	if len(identity.BranchRefs) != 1 || identity.BranchRefs[0].ID != branchID || identity.BranchRefs[0].StateVersion != 7 {
+		t.Fatalf("manifest branch refs=%+v", identity.BranchRefs)
+	}
+	if len(identity.TaskSchema.PayloadSchemas["research.finding.v1"]) == 0 {
+		t.Fatalf("manifest task schema registry=%v", identity.TaskSchema.PayloadSchemas)
 	}
 	var count int
 	if err = run.pool.QueryRow(run.ctx, `SELECT count(*)::int FROM research_task WHERE work_item_id=$1::uuid`, workItemID).Scan(&count); err != nil {

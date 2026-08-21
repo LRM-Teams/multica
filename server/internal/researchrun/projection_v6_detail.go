@@ -7,22 +7,18 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-func (s *PostgresStore) ProjectionV6NodeDetail(ctx context.Context, workspaceID, runID, nodeID, view string) (V6ProjectionNodeDetail, error) {
+func (s *PostgresStore) ProjectionV6NodeDetail(ctx context.Context, workspaceID, runID, snapshotID, nodeID, view string) (V6ProjectionNodeDetail, error) {
 	if view == "" {
 		view = "brief"
 	}
 	if view != "brief" && view != "full" && view != "history" {
 		return V6ProjectionNodeDetail{}, ErrInvalidContract
 	}
-	first, err := s.createV6ProjectionSnapshot(ctx, V6ProjectionPageRequest{WorkspaceID: workspaceID, RunID: runID, Limit: v6ProjectionMaximumPageSize})
+	nodes, edges, _, sequence, projectionHash, err := s.loadPinnedCanonicalV6Projection(ctx, workspaceID, runID, snapshotID)
 	if err != nil {
 		return V6ProjectionNodeDetail{}, err
 	}
-	nodes, edges, _, sequence, projectionHash, err := s.loadPinnedCanonicalV6Projection(ctx, workspaceID, runID, first.SnapshotID)
-	if err != nil {
-		return V6ProjectionNodeDetail{}, err
-	}
-	detail := V6ProjectionNodeDetail{SnapshotID: first.SnapshotID, ThroughEventSequence: sequence, ProjectionHash: projectionHash, View: view, Incoming: []V6ProjectionEdge{}, Outgoing: []V6ProjectionEdge{}, HistoryRefs: []V6ProjectionEntityRef{}, AgentRefs: []V6ProjectionEntityRef{}, WorkItemRefs: []V6ProjectionEntityRef{}, AttemptRefs: []V6ProjectionEntityRef{}, EvidenceRefs: []V6ProjectionEntityRef{}, DiscussionRefs: []V6ProjectionEntityRef{}, ReportRefs: []V6ProjectionEntityRef{}}
+	detail := V6ProjectionNodeDetail{SnapshotID: snapshotID, ThroughEventSequence: sequence, ProjectionHash: projectionHash, View: view, Incoming: []V6ProjectionEdge{}, Outgoing: []V6ProjectionEdge{}, HistoryRefs: []V6ProjectionEntityRef{}, AgentRefs: []V6ProjectionEntityRef{}, WorkItemRefs: []V6ProjectionEntityRef{}, AttemptRefs: []V6ProjectionEntityRef{}, EvidenceRefs: []V6ProjectionEntityRef{}, DiscussionRefs: []V6ProjectionEntityRef{}, ReportRefs: []V6ProjectionEntityRef{}}
 	found := false
 	for _, node := range nodes {
 		if node.ID == nodeID {

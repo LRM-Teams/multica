@@ -168,11 +168,12 @@ func (d *Daemon) handleReadFileRequest(req protocol.ReadWorkdirFileRequestPayloa
 
 func (d *Daemon) handleWriteFileRequest(req protocol.WriteWorkdirFileRequestPayload, writes chan<- []byte) {
 	root := filepath.Join(d.cfg.WorkspacesRoot, filepath.FromSlash(req.RelPath))
-	// task #94/#204: this RPC can only edit an already-existing file (see
-	// writeWorkdirTextFile's Missing check below) under a 256KB per-request
-	// cap — it cannot create new files, so it is not the growth vector the
-	// quota exists to bound (that's the agent's own direct filesystem
-	// writes during a turn, gated at turn-start in runTask).
+	// Default (Create=false) is edit-only under a 256KB per-request cap —
+	// it cannot create new files, so it is not the growth vector the quota
+	// exists to bound (that's the agent's own direct filesystem writes
+	// during a turn, gated at turn-start in runTask). Create=true is the
+	// env-dispatch staging path and still goes through the quota gate
+	// below when the target is an agent workspace.
 	//
 	// Once a workspace is over cap, this is also the ONLY remaining path
 	// that can shrink it back down (handleDeleteDirRequest can nuke the
@@ -200,7 +201,7 @@ func (d *Daemon) handleWriteFileRequest(req protocol.WriteWorkdirFileRequestPayl
 			return
 		}
 	}
-	resp := writeWorkdirTextFile(root, req.FilePath, req.Content, req.ExpectedContentHash, req.MaxBytes)
+	resp := writeWorkdirTextFile(root, req.FilePath, req.Content, req.ExpectedContentHash, req.MaxBytes, req.Create)
 	resp.RequestID = req.RequestID
 	d.sendDaemonFrame(protocol.EventDaemonWriteFileResponse, resp, req.RequestID, writes)
 }
@@ -620,7 +621,7 @@ func seedContextHeader(rel string) string {
 	return "# " + headings[rel] + "\n"
 }
 
-func writeWorkdirTextFile(root, filePath, content, expectedContentHash string, maxBytes int) protocol.WriteWorkdirFileResponsePayload {
+func writeWorkdirTextFile(root, filePath, content, expectedContentHash string, maxBytes int, create bool) protocol.WriteWorkdirFileResponsePayload {
 	resp := protocol.WriteWorkdirFileResponsePayload{}
 	if maxBytes <= 0 || maxBytes > defaultWriteFileMaxBytes {
 		maxBytes = defaultWriteFileMaxBytes
@@ -647,7 +648,23 @@ func writeWorkdirTextFile(root, filePath, content, expectedContentHash string, m
 	info, err := os.Lstat(target)
 	if err != nil {
 		if os.IsNotExist(err) {
-			resp.Missing = true
+			if !create {
+				resp.Missing = true
+				return resp
+			}
+			if expectedContentHash != "" {
+				resp.Conflict = true
+				return resp
+			}
+			if mkdirErr := os.MkdirAll(filepath.Dir(target), 0o755); mkdirErr != nil {
+				resp.Error = "failed to create parent directory"
+				return resp
+			}
+			if writeErr := os.WriteFile(target, data, 0o644); writeErr != nil {
+				resp.Error = "failed to write file"
+				return resp
+			}
+			resp.ContentHash = contentHash(data)
 			return resp
 		}
 		resp.Error = "failed to stat file"

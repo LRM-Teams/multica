@@ -262,6 +262,11 @@ contain an allowed justification class.
 | lifecycle timestamps | ready/start/complete/cancel |
 
 Unique `(session_id, goal_version, idempotency_key)`. One active lease per row.
+Director `work.create.v1.kind` is the semantic task kind (`deep_read`, `verify`,
+and future task methods). It is retained as `payload.task_kind`; the persisted
+Work Item scheduling kind is derived from `expected_result_schema_id`
+(`research`, `discussion`, `integration`, or `report`) and must never store an
+open-ended semantic task kind in the constrained `kind` column.
 
 #### `research_work_item_attempt`
 
@@ -483,6 +488,12 @@ Team creation locks the Run before counting membership. Integration locks every
 input slot before output creation. Report publish locks the Run, Report revision,
 Branch inputs and current versions before accepting the Review. No Adapter call
 occurs while holding a database transaction.
+
+An active atomic Attempt whose frozen Manifest omits a persisted Work-to-Branch
+scope is a platform-invalid dispatch. Recovery marks that Attempt lost with
+`platform_invalid_manifest`, returns the Work to `ready`, and refunds its
+`attempt_count` before recompiling; it does not wait for the runtime timeout or
+spend the Agent retry budget.
 
 ## 7. Transaction operation registry
 

@@ -175,6 +175,7 @@ export function researchV6DirectorNodeDetailOptions(
       const detail = await transport.loadNodeDetail(
         workspaceId,
         runId,
+        snapshotId,
         nodeId,
         view,
         signal,

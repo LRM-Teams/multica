@@ -21,7 +21,11 @@ import type {
   DashboardUsageByAgent,
   MemberWithUser,
 } from "@multica/core/types";
-import { agentProfileSkillsOptions, runtimeListOptions } from "@multica/core/runtimes";
+import {
+  agentProfileSkillsOptions,
+  agentRuntimeConfigOptions,
+  runtimeListOptions,
+} from "@multica/core/runtimes";
 import { useAgentPermissions } from "@multica/core/permissions";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
@@ -52,8 +56,10 @@ import { useUpdateAgent } from "../../agents/hooks/use-update-agent";
 import { RolesDialog } from "../../settings/components/roles-dialog";
 import { ConversationSidePanelShell } from "../../common/conversation-side-panel-shell";
 import { ActorStyledName } from "../../common/actor-styled-name";
+import { ProfileField } from "../../common/profile-field";
 import { AgentFilesPanel } from "./agent-files-panel";
 import { useT } from "../../i18n/use-t";
+import { Time } from "../../i18n";
 import { estimateCost, formatTokens, isModelPriced } from "../../runtimes/utils";
 
 type OwnerTab = "activity" | "profile" | "reminders" | "files" | "usage";
@@ -349,17 +355,6 @@ function ownerName(agent: Agent, members: readonly MemberWithUser[]): string {
   return member?.display_name || member?.name || member?.email || agent.owner_id;
 }
 
-function formatDate(value: string): string {
-  if (!value) return "—";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleDateString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
-}
-
 function AgentProfileTabContent({
   agent,
   presence,
@@ -374,6 +369,10 @@ function AgentProfileTabContent({
   const { t } = useT("agents");
   const wsId = agent.workspace_id;
   const { data: runtimes = [] } = useQuery(runtimeListOptions(wsId));
+  // Server-assembled Computer + runtime + model + thinking. `runtimes` above
+  // stays for the pickers' options — it means "what may I bind to", which is a
+  // different question and a different (filtered) set.
+  const { data: runtimeConfig } = useQuery(agentRuntimeConfigOptions(wsId, agent.id));
   const { data: profileSkills } = useQuery(agentProfileSkillsOptions(agent.id));
   const handleUpdate = useUpdateAgent(wsId);
   const { canEdit, canChangeRole } = useAgentPermissions(agent, wsId);
@@ -497,12 +496,7 @@ function AgentProfileTabContent({
               ) : null}
             </div>
             <span className="text-muted-foreground">{t(($) => $.side_panel.created_label)}</span>
-            <Tooltip>
-              <TooltipTrigger render={<span className="truncate" />}>
-                {formatDate(agent.created_at)}
-              </TooltipTrigger>
-              <TooltipContent side="top">{formatDate(agent.created_at)}</TooltipContent>
-            </Tooltip>
+            <Time kind="date" value={agent.created_at} className="truncate" />
             <span className="text-muted-foreground">{t(($) => $.side_panel.owner_label)}</span>
             <Tooltip>
               <TooltipTrigger render={<span className="truncate" />}>
@@ -544,6 +538,7 @@ function AgentProfileTabContent({
               only the section-heading edit control opens the Dialog. */}
           <RuntimeConfigSummary
             agent={agent}
+            runtimeConfig={runtimeConfig}
             runtimes={runtimes}
             members={members}
             currentUserId={currentUserId}
@@ -693,11 +688,13 @@ function SkillScopeList({
 
 function RuntimeConfigSummary({
   agent,
+  runtimeConfig,
   runtimes,
   members,
   currentUserId,
 }: {
   agent: Agent;
+  runtimeConfig: import("@multica/core/types").AgentRuntimeConfig | undefined;
   runtimes: import("@multica/core/types").AgentRuntime[];
   members: readonly MemberWithUser[];
   currentUserId: string | null;
@@ -709,11 +706,7 @@ function RuntimeConfigSummary({
         <span className="pt-0.5 text-muted-foreground">
           {t(($) => $.inspector.prop_computer)}
         </span>
-        <ComputerInfoRow
-          runtime={
-            runtimes.find((r) => r.id === agent.runtime_id) ?? null
-          }
-        />
+        <ComputerInfoRow computer={runtimeConfig?.computer ?? null} />
         <span className="pt-0.5 text-muted-foreground">
           {t(($) => $.inspector.prop_runtime)}
         </span>
@@ -724,11 +717,13 @@ function RuntimeConfigSummary({
             members={[...members]}
             currentUserId={currentUserId}
             canEdit={false}
+            wsId={agent.workspace_id}
+            selectedProvider={runtimeConfig?.runtime?.provider ?? null}
             onChange={() => {}}
           />
           <ModelPicker
             runtimeId={agent.runtime_id}
-            value={agent.model ?? ""}
+            value={runtimeConfig?.model ?? agent.model ?? ""}
             canEdit={false}
             onChange={() => {}}
           />
@@ -737,24 +732,13 @@ function RuntimeConfigSummary({
       <div className="mt-2 grid min-w-0 grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
         <ThinkingPropRow
           runtimeId={agent.runtime_id}
-          model={agent.model ?? ""}
-          value={agent.thinking_level ?? ""}
+          model={runtimeConfig?.model ?? agent.model ?? ""}
+          value={runtimeConfig?.thinking ?? agent.thinking_level ?? ""}
           canEdit={false}
           onChange={() => {}}
         />
       </div>
     </>
-  );
-}
-
-function ProfileField({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div>
-      <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-        {label}
-      </div>
-      {children}
-    </div>
   );
 }
 

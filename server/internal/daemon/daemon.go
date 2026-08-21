@@ -21,6 +21,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/computer"
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/internal/diagnosticlog"
+	"github.com/multica-ai/multica/server/internal/memoryflush"
 	"github.com/multica-ai/multica/server/internal/secretscoped"
 	skillpkg "github.com/multica-ai/multica/server/internal/skill"
 	"github.com/multica-ai/multica/server/internal/turntransport"
@@ -284,6 +285,9 @@ func newDaemonForRole(cfg Config, logger *slog.Logger, role daemonProcessRole) *
 		runnerInstanceID:          uuid.NewString(),
 	}
 	d.initializeBindingExecution(bindingStateRoot)
+	agent.MemoryFlushBeforeCompaction = func(agentRoot string) {
+		_ = memoryflush.BeforeCompaction(agentRoot)
+	}
 	return d
 }
 

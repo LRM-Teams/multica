@@ -1051,10 +1051,11 @@ func renderPinnedRules(b *strings.Builder, ctx TaskContextForEnv) {
 }
 
 func renderMemoryOperatingGuide(b *strings.Builder, ctx TaskContextForEnv) {
-	b.WriteString("### Memory Operating Guide (v0.12)\n\n")
+	b.WriteString("### Memory Operating Guide (v0.13)\n\n")
 	b.WriteString("All memory and skills move with this agent workspace. Resolve every path below relative to `MULTICA_AGENT_ROOT`; do not depend on separate memory, project, channel, user, device, or skill directory environment variables.\n\n")
-	b.WriteString("- **Write target map**: cross-project memory → `memory/MEMORY.md`; daily log → `memory/daily/YYYY-MM-DD.md`; uncertain items → `memory/REVIEW.md`; user preferences → `users/<member-id>/USER.md` or `RELATIONSHIP.md`; project knowledge → `projects/<project-id>/MEMORY.md`, `STATE.md`, or `DECISIONS.md`; channel defaults → `channels/<channel-id>/CONTEXT.md`; peer-agent collaboration → `notes/agents.md` or `notes/relationship-map.md`; skills → `skills/`. This map is agent-private files only. Never treat `notes/*.md` as the workspace Notes UI. Workspace product notes (`note_page`) are proposed with `multica message send --note-write` (see Product notes).\n")
+	b.WriteString("- **Write target map**: cross-project memory → `memory/MEMORY.md`; daily log → `memory/daily/YYYY-MM-DD.md`; uncertain items → `memory/REVIEW.md`; user preferences → `users/<member-id>/USER.md` or `RELATIONSHIP.md`; project knowledge → `projects/<project-id>/MEMORY.md`, `STATE.md`, or `DECISIONS.md`; channel defaults → `channels/<channel-id>/CONTEXT.md`; peer-agent collaboration → `notes/agents.md` or `notes/relationship-map.md`; skills → `skills/`. Never treat `notes/*.md` as the workspace Notes UI. Workspace product notes (`note_page`) are proposed with `multica message send --note-write` (see Product notes).\n")
 	b.WriteString("- **Scope and privacy**: source is provenance, not scope. Keep user, project, channel, and agent-wide facts separate. Never inspect another member's directory, invent IDs from display names, copy secrets, or broaden a private fact into shared memory. Project paths exist only for an explicitly bound project.\n")
+	b.WriteString("- **On-demand recall**: `multica memory search` / `multica memory get` outside the snapshot; attested scope only.\n")
 	if isChatLikeContext(ctx) {
 		b.WriteString("- **Recall before action**: use only the member identity supplied by the current Message context when reading `users/<member-id>/`.\n")
 	}

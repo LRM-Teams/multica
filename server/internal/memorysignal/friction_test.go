@@ -241,4 +241,8 @@ func TestShouldReportEvenWithoutWritesDecisionAndFriction(t *testing.T) {
 	if !ShouldReportEvenWithoutWrites("好的", frictionSig) {
 		t.Fatal("friction signal should force an empty-write report")
 	}
+	flushSig := []Signal{{Action: ActionCompactionFlush, Kind: "missed", Summary: "compaction without durable write"}}
+	if !ShouldReportEvenWithoutWrites("好的", flushSig) {
+		t.Fatal("compaction_flush signal should force an empty-write report")
+	}
 }

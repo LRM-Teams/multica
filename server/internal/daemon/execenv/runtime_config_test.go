@@ -1219,7 +1219,7 @@ func TestMemoryOperatingGuidePrioritizesExplicitUserPreferences(t *testing.T) {
 	out := buildMetaSkillContent("codex", ctx)
 
 	for _, want := range []string{
-		"### Memory Operating Guide (v0.12)",
+		"### Memory Operating Guide (v0.13)",
 		"All memory and skills move with this agent workspace",
 		"do not depend on separate memory, project, channel, user, device, or skill directory environment variables",
 		"likely to matter in a future run",
@@ -1238,6 +1238,10 @@ func TestMemoryOperatingGuidePrioritizesExplicitUserPreferences(t *testing.T) {
 		"notes/relationship-map.md",
 		"Scope and privacy",
 		"source is provenance, not scope",
+		"On-demand recall",
+		"multica memory search",
+		"multica memory get",
+		"attested scope only",
 		"Claiming memory",
 		"Human and peer-agent durable instructions use the same bar",
 		"Workspace product notes",
@@ -1302,7 +1306,7 @@ func TestMemoryOperatingGuideRequiresAgentLocalScope(t *testing.T) {
 		MessageDelivery: true,
 		AgentRoot:       "/tmp/multica/workspace-1/agents/agent-1",
 	})
-	if !strings.Contains(withRoot, "### Memory Operating Guide (v0.12)") {
+	if !strings.Contains(withRoot, "### Memory Operating Guide (v0.13)") {
 		t.Fatalf("memory operating guide missing when an agent-local root exists:\n%s", withRoot)
 	}
 

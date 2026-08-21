@@ -194,6 +194,7 @@ func (b *claudeACPBackend) maybeCompactAfterTurn(p *claudeACPProcess, msgCh chan
 	ctx, cancel := context.WithTimeout(context.Background(), postTurnCompactionTimeout)
 	defer cancel()
 	trySend(msgCh, Message{Type: MessageCompactionStarted})
+	runMemoryFlushBeforeCompaction(processWorkingDir(p.cmd))
 	err := b.compactRuntime(ctx, p)
 	b.compact.recordAttempt(err != nil, p.client.currentRuntimeStats())
 	if err != nil {

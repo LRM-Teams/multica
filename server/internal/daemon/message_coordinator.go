@@ -583,6 +583,16 @@ func (c *MessageCoordinator) emitQueueActivityLocked(messages []protocol.AgentMe
 	}
 }
 
+// PendingCount reports how many Messages are queued for the resident runtime.
+func (c *MessageCoordinator) PendingCount() int {
+	if c == nil {
+		return 0
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.pendingCountLocked()
+}
+
 func (c *MessageCoordinator) pendingCountLocked() int {
 	total := 0
 	for _, messages := range c.pending {

@@ -168,9 +168,12 @@ func TestResearchV6AgentLifecycleCreateAgentScopesReceiptsByRun(t *testing.T) {
 		) VALUES (
 			$1::uuid, $2::uuid, $3::uuid, 1,
 			'template mission', 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 1, 'idle'
+		), (
+			$1::uuid, $4::uuid, $3::uuid, 1,
+			'template mission', 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 1, 'idle'
 		)
-	`, testWorkspaceID, runA, templateAgentID); err != nil {
-		t.Fatalf("create template membership: %v", err)
+	`, testWorkspaceID, runA, templateAgentID, runB); err != nil {
+		t.Fatalf("create run-scoped template memberships: %v", err)
 	}
 
 	idempotencyKey := "create_agent.cross_validator.v1-" + uuid.NewString()[:8]

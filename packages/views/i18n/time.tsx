@@ -4,6 +4,7 @@ import { useT } from "./use-t";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { useTimeAgo } from "./use-time-ago";
 import {
+  formatCalendarDate,
   formatListTime,
   formatMessageTime,
   fullTimestamp,
@@ -18,8 +19,15 @@ import { useViewingTimezone } from "../common/use-viewing-timezone";
 //   message  inline message timestamp   (the frozen message-bubble contract)
 //   relative activity/system surfaces   (刚刚 / N 分钟前 …)
 //   clock    bare HH:MM (group gutter)
+//   date     calendar day only (profile "created" / "joined" rows)
 //   full     absolute locale timestamp
-export type TimeKind = "list" | "message" | "relative" | "clock" | "full";
+export type TimeKind =
+  | "list"
+  | "message"
+  | "relative"
+  | "clock"
+  | "date"
+  | "full";
 
 export function Time({
   kind,
@@ -56,7 +64,9 @@ export function Time({
           ? timeAgo(value)
           : kind === "clock"
             ? localTime(ms, tz)
-            : fullTimestamp(ms, tz, locale);
+            : kind === "date"
+              ? formatCalendarDate(ms, tz, locale)
+              : fullTimestamp(ms, tz, locale);
   const timestamp = new Date(ms).toISOString();
   const full = fullTimestamp(ms, tz, locale);
   const timeEl = (

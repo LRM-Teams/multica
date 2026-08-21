@@ -52,8 +52,10 @@ import { useUpdateAgent } from "../../agents/hooks/use-update-agent";
 import { RolesDialog } from "../../settings/components/roles-dialog";
 import { ConversationSidePanelShell } from "../../common/conversation-side-panel-shell";
 import { ActorStyledName } from "../../common/actor-styled-name";
+import { ProfileField } from "../../common/profile-field";
 import { AgentFilesPanel } from "./agent-files-panel";
 import { useT } from "../../i18n/use-t";
+import { Time } from "../../i18n";
 import { estimateCost, formatTokens, isModelPriced } from "../../runtimes/utils";
 
 type OwnerTab = "activity" | "profile" | "reminders" | "files" | "usage";
@@ -349,17 +351,6 @@ function ownerName(agent: Agent, members: readonly MemberWithUser[]): string {
   return member?.display_name || member?.name || member?.email || agent.owner_id;
 }
 
-function formatDate(value: string): string {
-  if (!value) return "—";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleDateString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
-}
-
 function AgentProfileTabContent({
   agent,
   presence,
@@ -497,12 +488,7 @@ function AgentProfileTabContent({
               ) : null}
             </div>
             <span className="text-muted-foreground">{t(($) => $.side_panel.created_label)}</span>
-            <Tooltip>
-              <TooltipTrigger render={<span className="truncate" />}>
-                {formatDate(agent.created_at)}
-              </TooltipTrigger>
-              <TooltipContent side="top">{formatDate(agent.created_at)}</TooltipContent>
-            </Tooltip>
+            <Time kind="date" value={agent.created_at} className="truncate" />
             <span className="text-muted-foreground">{t(($) => $.side_panel.owner_label)}</span>
             <Tooltip>
               <TooltipTrigger render={<span className="truncate" />}>
@@ -744,17 +730,6 @@ function RuntimeConfigSummary({
         />
       </div>
     </>
-  );
-}
-
-function ProfileField({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div>
-      <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-        {label}
-      </div>
-      {children}
-    </div>
   );
 }
 

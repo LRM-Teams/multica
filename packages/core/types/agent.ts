@@ -184,6 +184,12 @@ export interface RuntimeDevice {
 export type AgentRuntime = RuntimeDevice;
 
 /** Workspace-scoped Computer connection, independent of Agent runtime rows. */
+/** One provider process on a Computer, named for picking (no liveness of its own). */
+export interface ComputerRuntimeOption {
+  id: string;
+  provider: string;
+}
+
 export interface ComputerConnection {
   daemon_id: string;
   owner_id: string;
@@ -195,6 +201,42 @@ export interface ComputerConnection {
   cliVersion?: string | null;
   /** Owner-projected Machine Work Journal switch; missing on older servers. */
   work_journal_enabled?: boolean | null;
+  /**
+   * Runtimes on this Computer the viewer may bind an agent to — already
+   * filtered by the server, which is the only place that rule lives now.
+   * Choosing where an agent runs is a two-level choice (machine, then
+   * provider) because that is the shape of the thing: a Computer's daemon
+   * core hosts one runtime per provider. Older servers omit the field.
+   */
+  runtimes?: ComputerRuntimeOption[];
+}
+
+/**
+ * The assembled answer to "what is this agent configured to run on", from
+ * GET /api/agents/{id}/runtime-config.
+ *
+ * Composed server-side on purpose. Resolving it client-side meant joining an
+ * agent's runtime_id against GET /api/runtimes — a list that means "computers
+ * I can manage" and omits another member's private runtime, so the join
+ * missed and the inspector claimed the agent had no computer. Liveness and
+ * the machine name live on `computer` because they are Computer-level facts;
+ * `runtime` only names the provider.
+ */
+export interface AgentRuntimeConfig {
+  computer: {
+    daemon_id: string;
+    /** Display-ready: the server already resolved the fallback chain. */
+    name: string;
+    /** WS truth — a live Workspace Runner socket for this daemon. */
+    connected: boolean;
+    cli_version?: string;
+    os?: string;
+    owner_id?: string;
+  } | null;
+  runtime: { id: string; provider: string } | null;
+  /** Stored values, echoed as-is. Empty means the provider decides at launch. */
+  model?: string;
+  thinking?: string;
 }
 
 /** One durable on-disk Agent workspace at `~/.multica/workspaces/<workspace_id>/agents/<agent_id>`. */

@@ -1178,6 +1178,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Post("/cancel-tasks", h.CancelAgentTasks)
 					r.Post("/start", h.StartAgent)
 					r.Post("/stop", h.StopAgent)
+					// Assembled Computer + runtime + model + thinking for the
+					// inspector's Runtime config block, so no client has to
+					// join a runtime id against a list it may not fully see.
+					r.Get("/runtime-config", h.GetAgentRuntimeConfig)
 					r.Get("/health", h.GetAgentHealth)
 					r.Get("/reset", h.GetAgentRestart)
 					r.Post("/reset", h.ResetAgent)

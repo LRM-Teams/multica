@@ -16,6 +16,7 @@ import {
   runtimePickerHostSubtitle,
 } from "../runtime-picker-labels";
 import { runtimePickerOptions } from "./runtime-picker-options";
+import { useBindableRuntimeIds } from "@multica/core/runtimes";
 
 /**
  * Inline runtime/code-agent picker for the agent inspector.
@@ -29,6 +30,8 @@ export function RuntimePicker({
   members,
   currentUserId,
   canEdit = true,
+  selectedProvider,
+  wsId,
   onChange,
 }: {
   value: string;
@@ -37,6 +40,15 @@ export function RuntimePicker({
   currentUserId: string | null;
   /** When false, render a static read-only display and skip the popover. */
   canEdit?: boolean;
+  /**
+   * Provider of the runtime this agent is bound to, from the server-assembled
+   * runtime config. The bound runtime is absent from `runtimes` whenever it is
+   * another member's private one — that list only carries what the viewer may
+   * bind to. Naming it is not offering it: it stays out of the options below.
+   */
+  selectedProvider?: string | null;
+  /** Workspace whose Computers supply the bindable set. */
+  wsId?: string;
   /** Retained for RuntimeConfigDialog compatibility; cross-machine moves no longer lock to it. */
   boundRuntimeId?: string;
   onChange: (runtimeId: string) => Promise<void> | void;
@@ -49,13 +61,17 @@ export function RuntimePicker({
   // Others' private runtimes are excluded outright, not shown-disabled — a
   // private runtime that isn't mine and isn't public has nothing for me to
   // do with it.
+  // The server says what may be bound (per Computer); this list only supplies
+  // the row's presentation.
+  const bindableIds = useBindableRuntimeIds(wsId);
   const filtered = useMemo(
-    () => runtimePickerOptions(runtimes, currentUserId),
-    [runtimes, currentUserId],
+    () => runtimePickerOptions(runtimes, currentUserId, bindableIds),
+    [runtimes, currentUserId, bindableIds],
   );
 
-  const brandLabel = selected
-    ? runtimePickerBrandLabel(selected)
+  const displayProvider = selected?.provider ?? selectedProvider ?? null;
+  const brandLabel = displayProvider
+    ? runtimePickerBrandLabel({ provider: displayProvider })
     : t(($) => $.pickers.runtime_none);
 
   if (!canEdit) {
@@ -67,7 +83,7 @@ export function RuntimePicker({
     );
   }
 
-  const triggerTitle = selected
+  const triggerTitle = displayProvider
     ? brandLabel
     : t(($) => $.pickers.runtime_tooltip_none);
 
@@ -95,9 +111,9 @@ export function RuntimePicker({
       }
       trigger={
         <>
-          {selected ? (
+          {displayProvider ? (
             <ProviderLogo
-              provider={selected.provider}
+              provider={displayProvider}
               className="h-3 w-3 shrink-0"
             />
           ) : (

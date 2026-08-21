@@ -2,38 +2,26 @@
 import { render, screen } from "@testing-library/react";
 import { describe, it, expect } from "vitest";
 import { I18nProvider } from "@multica/core/i18n/react";
-import type { AgentRuntime } from "@multica/core/types";
+import type { AgentRuntimeConfig } from "@multica/core/types";
 import enAgents from "../../../locales/en/agents.json";
 import { ComputerInfoRow } from "./computer-info-row";
 
-function makeRuntime(overrides: Partial<AgentRuntime> = {}): AgentRuntime {
+function makeComputer(
+  overrides: Partial<NonNullable<AgentRuntimeConfig["computer"]>> = {},
+): AgentRuntimeConfig["computer"] {
   return {
-    id: "rt-1",
-    workspace_id: "ws-1",
     daemon_id: "daemon-1",
-    name: "raw-hostname",
-    display_name: "s144",
-    runtime_mode: "local",
-    provider: "cursor",
-    launch_header: "cursor-agent (stream-json)",
-    status: "online",
-    device_info: "ubuntu",
-    metadata: {},
-    current_version: "0.3.92",
-    update_state: "idle",
-    runtime_health: "ok",
-    owner_id: "user-1",
-    last_seen_at: new Date().toISOString(),
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
+    name: "s144",
+    connected: true,
+    cli_version: "0.3.92",
     ...overrides,
   };
 }
 
-function renderRow(runtime: AgentRuntime | null) {
+function renderRow(computer: AgentRuntimeConfig["computer"]) {
   render(
     <I18nProvider locale="en" resources={{ en: { agents: enAgents } }}>
-      <ComputerInfoRow runtime={runtime} />
+      <ComputerInfoRow computer={computer} />
     </I18nProvider>,
   );
 }
@@ -41,48 +29,37 @@ function renderRow(runtime: AgentRuntime | null) {
 // Frank, 2026-08-01: standalone info row, deliberately independent of the
 // Runtime/code-agent picker row — it must not disappear or get relabeled
 // when that picker's own vocabulary changes.
+//
+// 2026-08-21: it also stopped resolving anything. The server assembles this
+// row now (GET /api/agents/{id}/runtime-config), because resolving it here
+// meant joining a runtime id against a list that omits another member's
+// private runtime — which silently missed and claimed "No computer".
 describe("ComputerInfoRow (2026-08-01)", () => {
-  it("shows Connected + machine label + version for an online runtime", () => {
-    renderRow(makeRuntime());
+  it("shows Connected + machine label + version", () => {
+    renderRow(makeComputer());
     expect(screen.getByText("Connected")).toBeInTheDocument();
     expect(screen.getByText("s144")).toBeInTheDocument();
     expect(screen.getByText("v0.3.92")).toBeInTheDocument();
   });
 
-  it("shows hostname — not Provider (host) — when display_name is unset (Frank 2026-08-02)", () => {
-    renderRow(
-      makeRuntime({
-        display_name: "",
-        name: "Cursor (s144)",
-        computer_connected: true,
-      }),
-    );
-    expect(screen.getByText("Connected")).toBeInTheDocument();
-    expect(screen.getByText("s144")).toBeInTheDocument();
-    expect(screen.queryByText("Cursor (s144)")).not.toBeInTheDocument();
-  });
-
-  it("prefers computer_connected over runtime last_seen for the Connected label", () => {
-    renderRow(
-      makeRuntime({
-        computer_connected: true,
-        status: "offline",
-        last_seen_at: new Date(Date.now() - 10 * 60_000).toISOString(),
-      }),
-    );
-    expect(screen.getByText("Connected")).toBeInTheDocument();
-  });
-
-  it("shows Disconnected for a stale-heartbeat runtime when computer_connected is absent", () => {
-    // status still says "online" but last_seen_at is far in the past — the
-    // whole point of deriveRuntimeHealth over reading raw `status` (#10).
-    renderRow(
-      makeRuntime({
-        status: "online",
-        last_seen_at: new Date(Date.now() - 10 * 60_000).toISOString(),
-      }),
-    );
+  it("shows Disconnected when the daemon has no live runner socket", () => {
+    renderRow(makeComputer({ connected: false }));
     expect(screen.getByText("Disconnected")).toBeInTheDocument();
+    expect(screen.getByText("s144")).toBeInTheDocument();
+  });
+
+  it("renders the name the server resolved, never re-deriving one", () => {
+    // Frank 2026-08-02: never the "Provider (host)" code-agent string. The
+    // fallback chain now lives on the server (resolveComputerName), so this
+    // component must render whatever it is handed.
+    renderRow(makeComputer({ name: "someone-elses-box" }));
+    expect(screen.getByText("someone-elses-box")).toBeInTheDocument();
+  });
+
+  it("omits the version when the Computer has not reported one", () => {
+    renderRow(makeComputer({ cli_version: undefined }));
+    expect(screen.getByText("s144")).toBeInTheDocument();
+    expect(screen.queryByText(/^v/)).not.toBeInTheDocument();
   });
 
   it("shows a 'no computer' placeholder when the agent has no bound runtime", () => {

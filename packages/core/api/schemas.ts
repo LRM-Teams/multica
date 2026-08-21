@@ -667,6 +667,11 @@ export const AgentRuntimeSchema = z.object({
 export const AgentRuntimeListSchema = z.array(AgentRuntimeSchema);
 export const EMPTY_AGENT_RUNTIME_LIST: AgentRuntime[] = [];
 
+export const ComputerRuntimeOptionSchema = z.object({
+  id: z.string().min(1),
+  provider: z.string(),
+}).loose();
+
 export const ComputerConnectionSchema = z.object({
   daemon_id: z.string().min(1),
   owner_id: z.string().min(1),
@@ -676,7 +681,33 @@ export const ComputerConnectionSchema = z.object({
   os: z.string().nullable().optional(),
   cliVersion: z.string().nullable().optional(),
   work_journal_enabled: z.boolean().nullable().optional(),
+  // Runtimes on this Computer the viewer may bind an agent to, already
+  // filtered server-side. Older servers omit it — treat missing as unknown,
+  // not as "none bindable".
+  runtimes: z.array(ComputerRuntimeOptionSchema).optional(),
 }).loose();
+
+export const AgentRuntimeConfigSchema = z.object({
+  computer: z.object({
+    daemon_id: z.string(),
+    name: z.string(),
+    connected: z.boolean(),
+    cli_version: z.string().optional(),
+    os: z.string().optional(),
+    owner_id: z.string().optional(),
+  }).loose().nullable(),
+  runtime: z.object({
+    id: z.string(),
+    provider: z.string(),
+  }).loose().nullable(),
+  model: z.string().optional(),
+  thinking: z.string().optional(),
+}).loose();
+
+export const EMPTY_AGENT_RUNTIME_CONFIG = {
+  computer: null,
+  runtime: null,
+} as const;
 export const ComputerConnectionListSchema = z.array(ComputerConnectionSchema);
 export const EMPTY_COMPUTER_CONNECTION_LIST: ComputerConnection[] = [];
 

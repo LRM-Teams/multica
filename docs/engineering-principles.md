@@ -265,6 +265,14 @@
 - **前置条件**：只要当前工作区内该 Computer 仍绑定 active Agent，就以 `409 computer_has_active_agents` 整体拒绝，runtime、connection、credential 和本机数据都不变。用户必须通过正常 Agent 删除流程清空后重试；Computer 删除不替用户级联删除 Agent。
 - **事务语义**：成功删除会在一个事务内清除当前工作区的 runtime 投影和已归档 Agent 服务端数据、撤销当前 Workspace connection/credential，并写 registration tombstone；零 runtime 的 binding-only Computer 也能删除。其他工作区和全部本机文件均不在操作范围内。
 
+### 4.0.c Computer → runtime 的层级，以及「显示」与「选择」分属两个接口 — `可执行`（⑤，owner: @Frank 定裁 2026-08-21）
+- **层级先钉死**：Computer（一台机器 / 一个 daemon core）→ 它托管的若干 runtime（一个 provider 一个）。**`visibility`（private/public）只存在于 runtime 级**（migration 083 在 `agent_runtime` 上）；**Computer 没有可见性**——`GET /api/computers` 按 workspace membership 返回全部 active binding 的机器，这是设计不是遗漏。**owner 则相反，是 Computer 级**（LRM-1570 / migration 429 删掉 `agent_runtime.owner_id`）。说「private 的电脑」是把两条不同的授权线混成一条。
+- **liveness 是 Computer 级的事实**：由 daemon 的 Workspace Runner WS socket 决定（`computerConnectedByRunner` → `DaemonHub.HasWorkspaceRunner`），HTTP 心跳只是 legacy fallback。**不得再用 runtime 的 `status` / `last_seen_at` 推在线**——那条路径随 runtime 全面走 WS 已经过时。
+- **前端不做跨列表拼装**（同 §2.1「服务端给 entity」）：agent 的运行配置由 `GET /api/agents/{id}/runtime-config` 一次给全——computer（名字已解析好 + connected + cli_version）、runtime（provider）、model、thinking。曾经的做法是拿 `agent.runtime_id` 去 `GET /api/runtimes` 里 `.find()`，而那个列表按 runtime visibility 过滤，于是别人机器上 private runtime 的 agent 对所有其他人都显示「无电脑」——连被允许在那台机器上建 agent 的 admin 也一样。
+- **「显示」与「选择」是两个问题、两个接口**：显示走 `runtime-config`（能看到）；选择走 `GET /api/computers` 携带的 `runtimes[]`（选不到）——按层级先选机器再选 provider，且**该数组已由服务端按 visibility 过滤**，客户端不得再自己判定可绑定性（`isRuntimeUsableForUser` 只在老服务器不返回该字段时兜底，它读的 `owner_id` 是机器 owner 投影到 runtime 行上的值，不能作为长期规则）。
+- **`GET /api/runtimes` 的语义不得为显示需求放宽**：它只回答「我能管哪些电脑」，是 computers 管理页的数据源。
+- **不得把这类状态反规范化到 agent 响应上**：在线状态的刷新链路挂在 `runtimeKeys` 上（`daemon:*` / `computer:*` WS 事件 invalidate 它），agent 响应走 `workspaceKeys.agents`。挂到 agent 上就脱离这条链路，绿点会停在上次拉取的值——**滞后的「已连接」比不显示更糟**。`runtimeKeys.agentConfig` 挂在 `runtimeKeys.all(wsId)` 之下正是为此。
+
 ### 4.0.a 当前 Aliyun deployment ownership — `可执行`（③单一部署链 + ⑤ workflow/host gate；owner: @Barry）
 - **当前事实**：`dev` 经 test Environment 部署到腾讯 s89；`main` 经 legacy-named `aliyun-dev` Environment 部署到 Aliyun `101.200.210.144` production。公开 Web/API origin 由部署环境变量提供，production 默认是 `https://www.leagent.me` / `https://api.leagent.me`；`:8090` 只保留 Computer 兼容与部署探针。不要把 Environment 的旧名字 `aliyun-dev` 误报为 dev 服务。
 - **构建与部署分界**：镜像和最小 deploy bundle 在 GitHub-hosted runner 生成；production deploy job 下载同一 `github.sha` 的 immutable artifact，经 pinned host key 的 SSH 复制到 Aliyun 临时目录，再在主机本地拉固定 SHA 镜像并执行 Compose/Caddy/readyz。deploy job 禁止 `actions/checkout`/git fetch，避免大陆网络 partial clone 失败，也避免生产机拥有 Actions Git worktree。

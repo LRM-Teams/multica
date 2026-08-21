@@ -9,6 +9,7 @@ import {
   machineForRuntime,
 } from "./computer-picker-utils";
 import { isRuntimeUsableForUser } from "./runtime-usability";
+import { useBindableRuntimeIds } from "@multica/core/runtimes";
 import { InstructionsEditor } from "./instructions-editor";
 import { SkillMultiSelect } from "./skill-multi-select";
 import { AvatarPicker, type AvatarPickerSelection } from "./avatar-picker";
@@ -123,6 +124,8 @@ export function CreateAgentDialog({
   const identityLocked = Boolean(prefill?.lockIdentity) && !isDuplicate && !isProposal && !isDraft;
   const queryClient = useQueryClient();
   const wsId = useWorkspaceId();
+  // Which runtimes may be bound is the server's answer, delivered per Computer.
+  const bindableIds = useBindableRuntimeIds(wsId);
   // Agent creation establishes the permanent name. The initial display
   // name matches it and remains editable later from Profile.
   const [name, setName] = useState(
@@ -208,7 +211,7 @@ export function CreateAgentDialog({
       : undefined;
     if (
       templateRuntime &&
-      isRuntimeUsableForUser(templateRuntime, currentUserId)
+      isRuntimeUsableForUser(templateRuntime, currentUserId, bindableIds)
     ) {
       return machineForRuntime(templateRuntime, initialMachines)?.id ?? "";
     }
@@ -223,7 +226,7 @@ export function CreateAgentDialog({
       : undefined;
     if (
       templateRuntime &&
-      isRuntimeUsableForUser(templateRuntime, currentUserId)
+      isRuntimeUsableForUser(templateRuntime, currentUserId, bindableIds)
     ) {
       return templateRuntime.id;
     }

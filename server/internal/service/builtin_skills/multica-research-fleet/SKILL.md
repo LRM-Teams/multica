@@ -129,7 +129,10 @@ Branch `state_version`; never replace it with `through_state_version` or another
 Run watermark. Copy the exact single key under
 `manifest.task_specific_schema.payload_schemas` into the submission's
 `task_specific_schema`; never invent or rename a `research.*` schema ID. Keep
-`content_layers.catalog_summary` at 512 characters or fewer. Its `content_hash`
+`content_layers.catalog_summary` at 512 characters or fewer. Root content-layer
+`uncertainties`, `conflicts`, and `open_questions` are string arrays; fields
+with the same names inside `task_specific_payload` follow the frozen task schema
+and may be object arrays. Its `content_hash`
 is SHA-256 over RFC 8785 JCS bytes after removing only `content_hash`; do not
 hash pretty-printed file bytes.
 

@@ -1,3 +1,8 @@
+-- Remap statuses introduced by the bubble flow before narrowing the CHECK.
+UPDATE note_period_brief_run
+SET status = 'synthesizing'
+WHERE status = 'awaiting_confirm';
+
 ALTER TABLE note_period_brief_run
     DROP CONSTRAINT IF EXISTS note_period_brief_run_status_check;
 

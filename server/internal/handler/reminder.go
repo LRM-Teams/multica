@@ -427,6 +427,14 @@ func reminderSelectColumns() string {
 		current_occurrence_id, terminal_reason, version`
 }
 
+func reminderSelectColumnsWithAlias(alias string) string {
+	parts := strings.Split(reminderSelectColumns(), ",")
+	for i, part := range parts {
+		parts[i] = alias + "." + strings.TrimSpace(part)
+	}
+	return strings.Join(parts, ", ")
+}
+
 func parseReminderFireAt(now time.Time, delaySeconds *int64, rawFireAt string) (time.Time, error) {
 	if (delaySeconds == nil) == (strings.TrimSpace(rawFireAt) == "") {
 		return time.Time{}, fmt.Errorf("provide exactly one of delay_seconds or fire_at")
@@ -1196,7 +1204,7 @@ func (h *Handler) reconcileAgentReminderRuntime(ctx context.Context, agentID, ol
 }
 
 type agentReminderChangedPayload struct {
-	AgentID string `json:"agent_id"`
+	AgentID string `json:"agentId"`
 }
 
 func (h *Handler) publishAgentReminderChanged(ctx context.Context, workspaceID, agentID pgtype.UUID) {

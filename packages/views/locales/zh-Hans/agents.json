@@ -703,27 +703,17 @@
     "info_status": "状态"
   },
   "reminders": {
-    "upcoming_heading": "待触发",
-    "history_heading": "历史",
-    "empty_all": "还没有提醒。",
-    "empty_upcoming": "没有待触发的提醒。",
-    "empty_history": "还没有已触发的提醒。",
+    "empty_list": "没有提醒。",
     "loading": "正在加载提醒…",
     "error_title": "提醒加载失败。",
     "retry": "重试",
-    "load_more": "加载更多",
     "inaccessible": "你没有权限查看该 Agent 的提醒。",
     "anchor_unavailable": "锚点不可用",
     "one_shot": "一次性",
     "next_fire_label": "下次",
-    "fired_label": "触发于",
-    "timezone_label": "时区",
     "status_scheduled": "已排程",
     "status_firing": "触发中",
-    "status_overdue": "已过期",
-    "status_dormant": "休眠",
-    "status_cancelled": "已取消",
-    "status_fired": "已触发"
+    "status_overdue": "已过期"
   },
   "task_failure": {
     "agent_error": "智能体执行出错",

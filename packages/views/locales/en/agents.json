@@ -715,27 +715,17 @@
     "info_status": "Status"
   },
   "reminders": {
-    "upcoming_heading": "Upcoming",
-    "history_heading": "History",
-    "empty_all": "No reminders yet.",
-    "empty_upcoming": "No upcoming reminders.",
-    "empty_history": "No fired reminders yet.",
+    "empty_list": "No reminders.",
     "loading": "Loading reminders…",
     "error_title": "Couldn't load reminders.",
     "retry": "Retry",
-    "load_more": "Load more",
     "inaccessible": "You don't have permission to view this agent's reminders.",
     "anchor_unavailable": "Anchor unavailable",
     "one_shot": "One-time",
     "next_fire_label": "Next",
-    "fired_label": "Fired",
-    "timezone_label": "Timezone",
     "status_scheduled": "Scheduled",
     "status_firing": "Firing",
-    "status_overdue": "Overdue",
-    "status_dormant": "Dormant",
-    "status_cancelled": "Cancelled",
-    "status_fired": "Fired"
+    "status_overdue": "Overdue"
   },
   "task_failure": {
     "agent_error": "Agent execution error",

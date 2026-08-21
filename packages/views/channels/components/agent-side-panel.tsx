@@ -21,7 +21,11 @@ import type {
   DashboardUsageByAgent,
   MemberWithUser,
 } from "@multica/core/types";
-import { agentProfileSkillsOptions, runtimeListOptions } from "@multica/core/runtimes";
+import {
+  agentProfileSkillsOptions,
+  agentRuntimeConfigOptions,
+  runtimeListOptions,
+} from "@multica/core/runtimes";
 import { useAgentPermissions } from "@multica/core/permissions";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
@@ -374,6 +378,10 @@ function AgentProfileTabContent({
   const { t } = useT("agents");
   const wsId = agent.workspace_id;
   const { data: runtimes = [] } = useQuery(runtimeListOptions(wsId));
+  // Server-assembled Computer + runtime + model + thinking. `runtimes` above
+  // stays for the pickers' options — it means "what may I bind to", which is a
+  // different question and a different (filtered) set.
+  const { data: runtimeConfig } = useQuery(agentRuntimeConfigOptions(wsId, agent.id));
   const { data: profileSkills } = useQuery(agentProfileSkillsOptions(agent.id));
   const handleUpdate = useUpdateAgent(wsId);
   const { canEdit, canChangeRole } = useAgentPermissions(agent, wsId);
@@ -544,6 +552,7 @@ function AgentProfileTabContent({
               only the section-heading edit control opens the Dialog. */}
           <RuntimeConfigSummary
             agent={agent}
+            runtimeConfig={runtimeConfig}
             runtimes={runtimes}
             members={members}
             currentUserId={currentUserId}
@@ -693,11 +702,13 @@ function SkillScopeList({
 
 function RuntimeConfigSummary({
   agent,
+  runtimeConfig,
   runtimes,
   members,
   currentUserId,
 }: {
   agent: Agent;
+  runtimeConfig: import("@multica/core/types").AgentRuntimeConfig | undefined;
   runtimes: import("@multica/core/types").AgentRuntime[];
   members: readonly MemberWithUser[];
   currentUserId: string | null;
@@ -709,11 +720,7 @@ function RuntimeConfigSummary({
         <span className="pt-0.5 text-muted-foreground">
           {t(($) => $.inspector.prop_computer)}
         </span>
-        <ComputerInfoRow
-          runtime={
-            runtimes.find((r) => r.id === agent.runtime_id) ?? null
-          }
-        />
+        <ComputerInfoRow computer={runtimeConfig?.computer ?? null} />
         <span className="pt-0.5 text-muted-foreground">
           {t(($) => $.inspector.prop_runtime)}
         </span>
@@ -724,11 +731,13 @@ function RuntimeConfigSummary({
             members={[...members]}
             currentUserId={currentUserId}
             canEdit={false}
+            wsId={agent.workspace_id}
+            selectedProvider={runtimeConfig?.runtime?.provider ?? null}
             onChange={() => {}}
           />
           <ModelPicker
             runtimeId={agent.runtime_id}
-            value={agent.model ?? ""}
+            value={runtimeConfig?.model ?? agent.model ?? ""}
             canEdit={false}
             onChange={() => {}}
           />
@@ -737,8 +746,8 @@ function RuntimeConfigSummary({
       <div className="mt-2 grid min-w-0 grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
         <ThinkingPropRow
           runtimeId={agent.runtime_id}
-          model={agent.model ?? ""}
-          value={agent.thinking_level ?? ""}
+          model={runtimeConfig?.model ?? agent.model ?? ""}
+          value={runtimeConfig?.thinking ?? agent.thinking_level ?? ""}
           canEdit={false}
           onChange={() => {}}
         />

@@ -12,6 +12,7 @@ import { Button } from "@multica/ui/components/ui/button";
 import type {
   Agent,
   AgentRuntime,
+  AgentRuntimeConfig,
   MemberWithUser,
 } from "@multica/core/types";
 import {
@@ -45,7 +46,12 @@ import { AgentActivityStatus } from "./agent-activity-list-item";
 
 interface InspectorProps {
   agent: Agent;
-  runtime: AgentRuntime | null;
+  /**
+   * Server-assembled Computer + runtime + model + thinking. Not resolved from
+   * `runtimes` below: that list is "what may I bind to" and omits another
+   * member's private runtime, which used to blank this whole block.
+   */
+  runtimeConfig: AgentRuntimeConfig | undefined;
   owner: MemberWithUser | null;
   presence: AgentPresence | null | undefined;
   // Below: needed for inline edit. The inspector now owns the editing surface
@@ -90,7 +96,7 @@ interface InspectorProps {
  */
 export function AgentDetailInspector({
   agent,
-  runtime,
+  runtimeConfig,
   owner,
   presence,
   runtimes,
@@ -173,7 +179,7 @@ export function AgentDetailInspector({
             effective values only. Frank pencil lock: trailing pencil only —
             summary chips are not a row-wide click target. */}
         <PropRow label={t(($) => $.inspector.prop_computer)} interactive={false}>
-          <ComputerInfoRow runtime={runtime} />
+          <ComputerInfoRow computer={runtimeConfig?.computer ?? null} />
         </PropRow>
         <PropRow label={t(($) => $.inspector.prop_runtime)} interactive={false}>
           <span className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
@@ -183,11 +189,13 @@ export function AgentDetailInspector({
               members={members}
               currentUserId={currentUserId}
               canEdit={false}
+              wsId={wsId}
+              selectedProvider={runtimeConfig?.runtime?.provider ?? null}
               onChange={() => {}}
             />
             <ModelPicker
               runtimeId={agent.runtime_id}
-              value={agent.model ?? ""}
+              value={runtimeConfig?.model ?? agent.model ?? ""}
               canEdit={false}
               onChange={() => {}}
             />

@@ -80,6 +80,10 @@
     "remove_confirm_title": "Remove {{name}}?",
     "remove_confirm_description": "They will lose access to this workspace immediately.",
     "search_placeholder": "Search members…",
-    "mine_badge": "Mine"
+    "mine_badge": "Mine",
+    "no_search_results": "No members match “{{query}}”",
+    "clear_search_aria": "Clear search",
+    "empty_select_title": "Select a member",
+    "empty_select_description": "Pick an agent or a human from the list to see their profile."
   }
 }

@@ -264,9 +264,10 @@ type ExecOptions struct {
 	// mixed-RL run. It is not configurable by callers and observes Pi's final
 	// provider boundary into a daemon-owned log.
 	piCaptureExtension string
-	// piMcpConfigPath is populated internally by the Pi backend after writing
-	// agent.mcp_config to a temp file. Callers outside this package cannot
-	// supply or override the path.
+	// piMcpConfigPath is retained for construction/argument-testing compatibility.
+	// The pi backend currently ignores agent.mcp_config entirely: installed pi
+	// (0.84.2) has no MCP support and exits 1 on --mcp-config (LRM-1598). Callers
+	// outside this package cannot supply or override the path.
 	piMcpConfigPath string
 	// ThinkingLevel is the runtime-native reasoning/effort value (e.g.
 	// Claude's "low|medium|high|xhigh|max", Codex's "none|minimal|low|

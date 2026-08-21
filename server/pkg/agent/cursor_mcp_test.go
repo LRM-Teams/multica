@@ -110,17 +110,39 @@ func TestBuildCursorArgsNoApproveMcpsWithoutManaged(t *testing.T) {
 	}
 }
 
-func TestBuildPiArgsMcpConfigPath(t *testing.T) {
+func TestBuildPiArgsIgnoresMcpConfig(t *testing.T) {
 	t.Parallel()
+	// Pi has no MCP support (pi 0.84.2) and does not understand --mcp-config;
+	// passing it makes pi exit 1 immediately with "Unknown option: --mcp-config"
+	// (LRM-1598). The pi backend must not emit the flag even when an MCP config
+	// path was provided.
 	args := buildPiArgs("", "/tmp/s.jsonl", ExecOptions{
 		piMcpConfigPath: "/tmp/mcp.json",
 	}, nil)
-	if !cursorTestHasArgPair(args, "--mcp-config", "/tmp/mcp.json") {
-		t.Fatalf("expected --mcp-config /tmp/mcp.json, got %v", args)
+	if cursorTestHasArgPair(args, "--mcp-config", "/tmp/mcp.json") {
+		t.Fatalf("pi must not pass --mcp-config, got %v", args)
 	}
 	rpcArgs := buildPiRPCArgs("/tmp/s.jsonl", ExecOptions{piMcpConfigPath: "/tmp/mcp.json"}, nil)
-	if !cursorTestHasArgPair(rpcArgs, "--mcp-config", "/tmp/mcp.json") {
-		t.Fatalf("expected RPC --mcp-config, got %v", rpcArgs)
+	if cursorTestHasArgPair(rpcArgs, "--mcp-config", "/tmp/mcp.json") {
+		t.Fatalf("pi RPC must not pass --mcp-config, got %v", rpcArgs)
+	}
+}
+
+func TestBuildPiArgsCollapsesDefaultModelSentinel(t *testing.T) {
+	t.Parallel()
+	// The research fleet persists literal "default" as the model sentinel. pi
+	// has no model named "default" — `--model default` makes pi exit 1 with
+	// "Model \"default\" not found" (LRM-1598). Both builders must collapse it
+	// to no --model flag so pi chooses its own default.
+	for _, sentinel := range []string{"", "default", "  default  "} {
+		args := buildPiArgs("", "/tmp/s.jsonl", ExecOptions{Model: sentinel}, nil)
+		if cursorTestHasArgPair(args, "--model", sentinel) || cursorTestHasArg(args, "--model") {
+			t.Fatalf("expected no --model for sentinel %q, got %v", sentinel, args)
+		}
+		rpcArgs := buildPiRPCArgs("/tmp/s.jsonl", ExecOptions{Model: sentinel}, nil)
+		if cursorTestHasArg(rpcArgs, "--model") {
+			t.Fatalf("expected no RPC --model for sentinel %q, got %v", sentinel, rpcArgs)
+		}
 	}
 }
 

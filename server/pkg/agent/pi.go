@@ -310,26 +310,16 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 	}
 	runCtx, cancel := runContext(ctx, timeout)
 
-	var mcpConfigPath string
-	var mcpFileCleanup func()
+	// Pi has no built-in MCP capability and does not understand --mcp-config
+	// (pi 0.84.2: README "No MCP", --help has no --mcp* flags). Passing the
+	// daemon-managed MCP file via --mcp-config makes pi exit 1 immediately with
+	// "Unknown option: --mcp-config", wedging the agent at spawn (LRM-1598). As
+	// long as pi lacks MCP, the pi backend deliberately ignores agent.mcp_config
+	// rather than forwarding it through an unsupported flag. Claude/codex, which
+	// do support MCP config, keep their own handling.
 	if hasManagedMcpConfig(opts.McpConfig) {
-		path, err := writeMcpConfigToTemp(opts.McpConfig)
-		if err != nil {
-			cancel()
-			if ephemeralSession {
-				_ = os.Remove(sessionID)
-			}
-			return nil, err
-		}
-		mcpConfigPath = path
-		opts.piMcpConfigPath = path
-		mcpFileCleanup = func() { os.Remove(mcpConfigPath) }
+		b.cfg.Logger.Warn("pi backend ignores agent.mcp_config: installed pi has no MCP support", "cwd", opts.Cwd, "model", opts.Model)
 	}
-	defer func() {
-		if mcpFileCleanup != nil {
-			mcpFileCleanup()
-		}
-	}()
 
 	var args []string
 	var stdinPrompt string
@@ -382,8 +372,6 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 		}
 		return nil, fmt.Errorf("start pi: %w", err)
 	}
-	// Transfer temp MCP file ownership to the run goroutine (cleaned on exit).
-	mcpFileCleanup = nil
 	stdinWriteResult := make(chan error, 1)
 	go func() {
 		var writeErr error
@@ -419,9 +407,6 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 		defer cancel()
 		defer close(msgCh)
 		defer close(resCh)
-		if mcpConfigPath != "" {
-			defer func() { _ = os.Remove(mcpConfigPath) }()
-		}
 		if outputLimitExtensionPath != "" {
 			defer func() {
 				if err := os.Remove(outputLimitExtensionPath); err != nil && !os.IsNotExist(err) {
@@ -787,16 +772,32 @@ func buildPiArgsForEphemeralExecution(prompt, sessionPath string, opts ExecOptio
 	return append(args, "--session", sessionPath), prompt
 }
 
+// piEffectiveModel normalizes the configured model for the pi backend. The
+// research fleet persists the literal sentinel "default" (meaning "the
+// provider's default model", see research_v6_runtime_adapter). pi has no model
+// literally named "default" — passing `--model default` makes pi exit 1 with
+// "Model \"default\" not found" and wedge at spawn (LRM-1598). Collapsing the
+// sentinel (and blank) to empty defers model selection to pi's own default, so
+// an unset/default model no longer crashes at launch.
+func piEffectiveModel(model string) string {
+	switch strings.TrimSpace(model) {
+	case "", "default":
+		return ""
+	default:
+		return strings.TrimSpace(model)
+	}
+}
+
 func buildPiArgs(prompt, sessionID string, opts ExecOptions, logger *slog.Logger) []string {
 	args := []string{
 		"-p",
 		"--mode", "json",
 	}
 	args = appendPiSessionArgs(args, sessionID, opts.Cwd)
-	if opts.Model != "" {
+	if model := piEffectiveModel(opts.Model); model != "" {
 		// Pi resolves provider/model IDs itself. Splitting the prefix here
 		// loses it before the request reaches provider-aware gateways.
-		args = append(args, "--model", opts.Model)
+		args = append(args, "--model", model)
 	}
 	if opts.ThinkingLevel != "" {
 		args = append(args, "--thinking", opts.ThinkingLevel)
@@ -829,9 +830,8 @@ func buildPiArgs(prompt, sessionID string, opts ExecOptions, logger *slog.Logger
 	if opts.SystemPrompt != "" {
 		args = append(args, "--append-system-prompt", opts.SystemPrompt)
 	}
-	if path := strings.TrimSpace(opts.piMcpConfigPath); path != "" {
-		args = append(args, "--mcp-config", path)
-	}
+	// Pi has no MCP support (pi 0.84.2): never pass --mcp-config, which would
+	// make pi exit 1 with "Unknown option: --mcp-config" and wedge at spawn.
 	args = append(args, filterPiCustomArgs(opts, logger)...)
 	if prompt != "" {
 		args = append(args, prompt)

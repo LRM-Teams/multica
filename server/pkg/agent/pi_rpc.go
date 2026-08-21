@@ -867,13 +867,12 @@ func (b *piRPCBackend) ensureProcess(opts ExecOptions) (*piRPCProcess, error) {
 		sessionID = newPiSessionID()
 	}
 	var mcpConfigPath string
+	// Pi has no MCP support (pi 0.84.2): never write/pass --mcp-config, which
+	// would make pi exit 1 with "Unknown option: --mcp-config" and wedge at
+	// spawn (LRM-1598). Keep an explicit config as a local warning so operators
+	// know it is being ignored rather than silently dropped.
 	if hasManagedMcpConfig(opts.McpConfig) {
-		path, err := writeMcpConfigToTemp(opts.McpConfig)
-		if err != nil {
-			return nil, err
-		}
-		mcpConfigPath = path
-		opts.piMcpConfigPath = path
+		b.cfg.Logger.Warn("pi backend ignores agent.mcp_config: installed pi has no MCP support", "cwd", opts.Cwd, "model", opts.Model)
 	}
 	args := buildPiRPCArgs(sessionID, opts, b.cfg.Logger)
 	argv0, cmdArgs := choosePiInvocation(execName, lookedUp, args, b.cfg.Logger)
@@ -1265,10 +1264,10 @@ func trySendPiRPCCompletion(ch chan<- piRPCCompletion, completion piRPCCompletio
 
 func buildPiRPCArgs(sessionID string, opts ExecOptions, logger *slog.Logger) []string {
 	args := appendPiSessionArgs([]string{"--mode", "rpc"}, sessionID, opts.Cwd)
-	if opts.Model != "" {
+	if model := piEffectiveModel(opts.Model); model != "" {
 		// Preserve provider-prefixed model IDs so Pi can hand them through to
 		// provider-aware model routers unchanged.
-		args = append(args, "--model", opts.Model)
+		args = append(args, "--model", model)
 	}
 	if opts.ThinkingLevel != "" {
 		args = append(args, "--thinking", opts.ThinkingLevel)
@@ -1294,8 +1293,7 @@ func buildPiRPCArgs(sessionID string, opts ExecOptions, logger *slog.Logger) []s
 	if opts.SystemPrompt != "" {
 		args = append(args, "--append-system-prompt", opts.SystemPrompt)
 	}
-	if path := strings.TrimSpace(opts.piMcpConfigPath); path != "" {
-		args = append(args, "--mcp-config", path)
-	}
+	// Pi has no MCP support (pi 0.84.2): never pass --mcp-config, which would
+	// make pi exit 1 with "Unknown option: --mcp-config" and wedge at spawn.
 	return append(args, filterPiCustomArgs(opts, logger)...)
 }

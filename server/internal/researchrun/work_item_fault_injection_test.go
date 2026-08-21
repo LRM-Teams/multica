@@ -2,6 +2,7 @@ package researchrun
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -74,6 +75,34 @@ func seedV6RecoveryAttempt(t *testing.T, run *transactionRecoveryRun, membership
 		t.Fatal(err)
 	}
 	return attemptID
+}
+
+func seedV6WorkBranchScope(t *testing.T, run *transactionRecoveryRun, workItemID, clientPrefix, objective string, stateVersion int64) string {
+	t.Helper()
+	branchID := uuid.NewString()
+	tx, err := run.pool.Begin(run.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(run.ctx)
+	if _, err = tx.Exec(run.ctx, `INSERT INTO research_branch(id,workspace_id,session_id,client_key,objective,status,goal_version,state_version)
+		VALUES($1::uuid,$2::uuid,$3::uuid,$4,$5,'active',$6,$7)`, branchID, run.fixture.workspaceID, run.fixture.sessionID, clientPrefix+branchID, objective, run.goalVersion, stateVersion); err != nil {
+		t.Fatal(err)
+	}
+	if err = registerV6BranchArtifactTx(run.ctx, tx, run.fixture.workspaceID, run.fixture.sessionID, branchID, time.Now().UTC(), run.goalVersion, map[string]any{
+		"parent_branch_id": "", "objective": objective, "entry_conditions": json.RawMessage(`[]`),
+		"exit_conditions": json.RawMessage(`[]`), "budget_share": 0.0, "status": "active",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(run.ctx, `INSERT INTO research_v6_work_item_branch(workspace_id,session_id,work_item_id,branch_id)
+		VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid)`, run.fixture.workspaceID, run.fixture.sessionID, workItemID, branchID); err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.Commit(run.ctx); err != nil {
+		t.Fatal(err)
+	}
+	return branchID
 }
 
 func TestClaimV6WorkItemTransactionRecovery(t *testing.T) {
@@ -209,15 +238,7 @@ func TestRecoverV6WorkItemReplacesPlatformInvalidManifestWithoutSpendingAttempt(
 	if _, err := run.pool.Exec(run.ctx, `UPDATE research_work_item SET expected_result_schema_id='atomic_result_submission',attempt_count=3,max_attempts=3 WHERE id=$1::uuid`, workItemID); err != nil {
 		t.Fatal(err)
 	}
-	branchID := uuid.NewString()
-	if _, err := run.pool.Exec(run.ctx, `INSERT INTO research_branch(id,workspace_id,session_id,client_key,objective,status,goal_version,state_version)
-		VALUES($1::uuid,$2::uuid,$3::uuid,$4,'Recover the frozen scope','active',$5,1)`, branchID, run.fixture.workspaceID, run.fixture.sessionID, "recovery-branch:"+branchID, run.goalVersion); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := run.pool.Exec(run.ctx, `INSERT INTO research_v6_work_item_branch(workspace_id,session_id,work_item_id,branch_id)
-		VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid)`, run.fixture.workspaceID, run.fixture.sessionID, workItemID, branchID); err != nil {
-		t.Fatal(err)
-	}
+	seedV6WorkBranchScope(t, run, workItemID, "recovery-branch:", "Recover the frozen scope", 1)
 	attemptID := seedV6RecoveryAttempt(t, run, membershipID, workItemID)
 	inboxTaskID := uuid.NewString()
 	if _, err := run.pool.Exec(run.ctx, `INSERT INTO agent_inbox_event(id,workspace_id,agent_id,reason,requires_wake,status,seq_from,seq_to,started_at)

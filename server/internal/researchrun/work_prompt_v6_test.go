@@ -107,15 +107,7 @@ func TestAtomicV6WorkManifestGetsOneBackingTaskAndFrozenMission(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, workItemID := seedV6RecoveryWorkItem(t, run, "ready", time.Now().Add(time.Minute))
-	branchID := uuid.NewString()
-	if _, err := run.pool.Exec(run.ctx, `INSERT INTO research_branch(id,workspace_id,session_id,client_key,objective,status,goal_version,state_version)
-		VALUES($1::uuid,$2::uuid,$3::uuid,$4,'Inspect the assigned branch','active',$5,7)`, branchID, run.fixture.workspaceID, run.fixture.sessionID, "manifest-branch:"+branchID, run.goalVersion); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := run.pool.Exec(run.ctx, `INSERT INTO research_v6_work_item_branch(workspace_id,session_id,work_item_id,branch_id)
-		VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid)`, run.fixture.workspaceID, run.fixture.sessionID, workItemID, branchID); err != nil {
-		t.Fatal(err)
-	}
+	branchID := seedV6WorkBranchScope(t, run, workItemID, "manifest-branch:", "Inspect the assigned branch", 7)
 	payload := `{"mission_prompt":"Inspect the assigned production boundary.","task_specific_schema":{"type":"object","additionalProperties":false,"required":["finding"],"properties":{"finding":{"type":"string","minLength":1}}}}`
 	if _, err := run.pool.Exec(run.ctx, `UPDATE research_work_item SET expected_result_schema_id='atomic_result_submission',payload_schema_id='research.finding.v1',payload=$2::jsonb,reason='fallback reason' WHERE id=$1::uuid`, workItemID, payload); err != nil {
 		t.Fatal(err)

@@ -28,9 +28,8 @@ func TestIsStickyProviderQuotaLock(t *testing.T) {
 func TestParseProviderBlockedUntil(t *testing.T) {
 	t.Parallel()
 	loc := time.FixedZone("CST", 8*3600)
-	now := time.Date(2026, 8, 2, 12, 0, 0, 0, loc)
 	err := `429: {"code":"1310","message":"已达到 7 天使用上限，2026-08-03 13:52:38 后可继续使用。"}`
-	got, ok := ParseProviderBlockedUntil(err, now, loc)
+	got, ok := ParseProviderBlockedUntil(err, loc)
 	if !ok {
 		t.Fatal("expected parse ok")
 	}
@@ -39,9 +38,41 @@ func TestParseProviderBlockedUntil(t *testing.T) {
 		t.Fatalf("ParseProviderBlockedUntil = %v, want %v", got, want)
 	}
 
-	_, ok = ParseProviderBlockedUntil("quota exceeded with no stamp", now, loc)
+	_, ok = ParseProviderBlockedUntil("quota exceeded with no stamp", loc)
 	if ok {
 		t.Fatal("must not invent a reset time when none is present")
+	}
+}
+
+func TestParseProviderBlockedUntil_CodexEnglishReset(t *testing.T) {
+	t.Parallel()
+	loc := time.FixedZone("CST", 8*3600)
+
+	for _, tc := range []struct {
+		name string
+		err  string
+		want time.Time
+	}{
+		{
+			name: "ordinal day",
+			err:  "You've hit your usage limit. Visit settings or try again at Aug 20th, 2026 3:30 AM.",
+			want: time.Date(2026, 8, 20, 3, 30, 0, 0, loc),
+		},
+		{
+			name: "day without ordinal and seconds",
+			err:  "usage limit reached; try again at January 2, 2027 11:04:05 PM",
+			want: time.Date(2027, 1, 2, 23, 4, 5, 0, loc),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := ParseProviderBlockedUntil(tc.err, loc)
+			if !ok {
+				t.Fatal("expected parse ok")
+			}
+			if !got.Equal(tc.want) {
+				t.Fatalf("ParseProviderBlockedUntil = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 

@@ -24,7 +24,6 @@ export function resolveAgentInspectorRow(
     id: actorId,
     name: actorId,
     role: "Agent",
-    initials: actorId.slice(0, 2).toUpperCase(),
     status: "unknown",
     actionKey: "unknown",
     currentNodeId: node.id,

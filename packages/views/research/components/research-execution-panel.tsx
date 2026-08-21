@@ -33,7 +33,6 @@ function toOverlayRow(agent: ResearchExecutionAgent): ExecutionRow {
     id: agent.id,
     name: agent.name,
     role: agent.role,
-    initials: agent.initials,
     avatarUrl: agent.avatarUrl,
     status: LEGACY_TO_OVERLAY[agent.status],
     action: agent.action,

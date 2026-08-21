@@ -202,6 +202,13 @@ missing document returns explicit 404 (no silent fallback).
 
 CLI: `multica goal process list|get|put --channel ...`.
 
+The per-wake Goal overlay tells a current channel manager to inspect this
+document before changing the long-form plan and to CAS-create or update it
+after meaningful planning, delegation, review, milestone, scope, or blocker
+changes. A wake with no meaningful change does not create placeholder content.
+This instruction does not merge the process document with the authoritative
+short checkpoint; when both changed, the manager updates both explicitly.
+
 ## 10. Acceptance criteria
 
 1. A group channel with no goal behaves exactly as before.

@@ -140,6 +140,8 @@
     "control_plane": "交付控制面",
     "control_plane_ready": "可以执行",
     "control_plane_blocked": "需要初始化",
+    "control_plane_issues_required": "需要创建 Issue",
+    "control_plane_unavailable": "状态不可用",
     "control_plane_complete_blocked": "请先完成 Git 项目下全部 Issue 的审核流程",
     "control_plane_project": "项目",
     "control_plane_git": "Git 仓库",

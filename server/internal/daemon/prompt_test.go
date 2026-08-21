@@ -894,6 +894,37 @@ func TestBuildPromptInjectsActiveChannelGoalEveryWake(t *testing.T) {
 	}
 }
 
+func TestBuildPromptTellsChannelManagerToMaintainGoalProcess(t *testing.T) {
+	base := Task{
+		ChannelID: "channel-1", ChatSessionID: "chat-1", ChatMessage: "continue",
+		ChannelGoal: &protocol.ChannelGoalContext{
+			ID: "goal-1", Title: "Ship", Objective: "Ship safely", Version: 2,
+			SuccessCriteria: []string{"Reviewed release"},
+		},
+	}
+
+	manager := base
+	manager.Agent = &AgentData{ManagerChannels: []execenv.ManagerChannelContextForEnv{{ID: "channel-1", Name: "delivery"}}}
+	out := BuildPrompt(manager, "claude", "")
+	for _, want := range []string{
+		"Manager process document:",
+		"multica goal process list --channel channel-1 --output json",
+		"multica goal process put --channel channel-1 --expected-version <current-process-version-or-0>",
+		"The process document and the authoritative short Goal checkpoint are separate",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("manager goal prompt missing %q:\n%s", want, out)
+		}
+	}
+
+	member := base
+	member.Agent = &AgentData{}
+	out = BuildPrompt(member, "claude", "")
+	if strings.Contains(out, "Manager process document:") || strings.Contains(out, "multica goal process put") {
+		t.Fatalf("ordinary channel member was told to write manager process:\n%s", out)
+	}
+}
+
 func TestBuildPromptBlocksUnassignedMultiAgentGoalImplementation(t *testing.T) {
 	base := Task{
 		ChannelID: "channel-1", ChatSessionID: "chat-1", ChatMessage: "continue",

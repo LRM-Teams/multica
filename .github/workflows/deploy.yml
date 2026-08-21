@@ -285,7 +285,14 @@ jobs:
             || needs.build.outputs.tag }}
     defaults:
       run:
-        shell: bash -c 'exec "$RUNNER_TEMP/multica-deploy-bundle/scripts/run-aliyun-step-over-ssh.sh" "$1"' _ {0}
+        # The runner splits `shell:` on whitespace without parsing quotes, so a
+        # quoted `bash -c '...'` wrapper is torn apart into separate argv words
+        # and bash receives `'exec` as its command string. Keep this a plain
+        # unquoted `bash <script> {0}`. `$RUNNER_TEMP` is not expanded here
+        # either, hence the literal GitHub-hosted runner path; and `bash` runs
+        # the script explicitly because artifact download does not preserve the
+        # executable bit prepare's `install -m 0755` set.
+        shell: bash /home/runner/work/_temp/multica-deploy-bundle/scripts/run-aliyun-step-over-ssh.sh {0}
     steps:
       - name: Download immutable deploy bundle
         uses: actions/download-artifact@v8

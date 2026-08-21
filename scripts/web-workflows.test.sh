@@ -236,6 +236,24 @@ if grep -Fq -- 'Ensure release feed directory' .github/workflows/deploy.yml .git
   exit 1
 fi
 
+# The Actions runner splits a custom `shell:` on whitespace without parsing
+# quotes, so a quoted wrapper such as `bash -c 'exec "$X" "$1"' _ {0}` reaches
+# bash as the command string `'exec` and every step using it dies with
+# "unexpected EOF while looking for matching `'". `$RUNNER_TEMP` is not
+# expanded there either. Keep every custom shell a plain unquoted command.
+while IFS= read -r shell_line; do
+  case "$shell_line" in
+    *[\'\"]*)
+      echo "Custom shell: must not contain quotes - the runner splits it on whitespace: $shell_line"
+      exit 1
+      ;;
+    *'$'*)
+      echo "Custom shell: must not reference variables - the runner does not expand them: $shell_line"
+      exit 1
+      ;;
+  esac
+done < <(grep -h -E '^\s*shell:' .github/workflows/deploy.yml .github/workflows/deploy-test.yml)
+
 goreleaser_config="$(<.goreleaser.yml)"
 if ! grep -Fq -- 'prerelease: auto' <<<"$goreleaser_config"; then
     echo ".goreleaser.yml must mark semantic prereleases automatically" >&2

@@ -3,11 +3,14 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func TestBulkUpdateAgentRuntimeConfigUpdatesAllAgentsAtomically(t *testing.T) {
@@ -87,5 +90,42 @@ func TestBulkUpdateAgentRuntimeConfigRejectsUnknownAgentWithoutPartialWrite(t *t
 	}
 	if runtimeID != oldRuntimeID || model == "must-not-apply" {
 		t.Fatalf("bulk update partially applied: runtime=%s model=%s", runtimeID, model)
+	}
+}
+
+func TestBulkUpdateAgentRuntimeConfigReturnsInternalErrorForUnexpectedUpdateFailure(t *testing.T) {
+	testBulkRuntimeConfigUpdateError(t, errors.New("injected update failure"), http.StatusInternalServerError, "failed to update agents")
+}
+
+func TestBulkUpdateAgentRuntimeConfigPreservesDaemonOutdatedError(t *testing.T) {
+	testBulkRuntimeConfigUpdateError(t, &pgconn.PgError{Code: "P0001", Message: "daemon_outdated"}, http.StatusConflict, "daemon_outdated")
+}
+
+func testBulkRuntimeConfigUpdateError(t *testing.T, updateErr error, wantStatus int, wantBody string) {
+	t.Helper()
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	daemonID := "bulk-config-error-" + uuid.NewString()
+	runtimeID := seedMachineLockedRuntime(t, daemonID, "Bulk Config Error")
+	agentID := createHandlerTestAgentOnRuntime(t, "bulk-config-error-"+uuid.NewString()[:8], runtimeID)
+	previousStarter := testHandler.TxStarter
+	testHandler.TxStarter = queryFailingTxStarter{
+		base:        previousStarter,
+		sqlContains: "UPDATE agent SET",
+		err:         updateErr,
+	}
+	t.Cleanup(func() { testHandler.TxStarter = previousStarter })
+
+	rec := httptest.NewRecorder()
+	req := newRequest(http.MethodPut, "/api/agents/runtime-config", map[string]any{
+		"agent_ids":  []string{agentID},
+		"runtime_id": runtimeID,
+		"model":      "bulk-model",
+	})
+	testHandler.BulkUpdateAgentRuntimeConfig(rec, req)
+
+	if rec.Code != wantStatus || !strings.Contains(rec.Body.String(), wantBody) {
+		t.Fatalf("bulk update response = %d %s, want %d containing %q", rec.Code, rec.Body.String(), wantStatus, wantBody)
 	}
 }

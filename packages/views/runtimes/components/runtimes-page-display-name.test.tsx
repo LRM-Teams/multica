@@ -430,6 +430,50 @@ describe("ComputersMachineDetail — bulk runtime config", () => {
     });
   });
 
+  it("excludes selected agents that move off the computer before an action", async () => {
+    bulkAgentLifecycle.mockClear();
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const agents = [
+      { id: "agent-1", runtime_id: "runtime-1" },
+      { id: "agent-2", runtime_id: "runtime-1" },
+    ] as Agent[];
+    const view = (
+      currentAgents: Agent[],
+    ) => (
+      <QueryClientProvider client={client}>
+        <I18nProvider locale="en" resources={TEST_RESOURCES}>
+          <ComputersMachineDetail
+            machine={makeMachine()}
+            agents={currentAgents}
+            snapshot={[]}
+            now={Date.parse("2026-08-01T00:00:05Z")}
+            wsId="ws-1"
+            isMobile={false}
+            actions={null}
+            onBack={() => {}}
+            headerActions={null}
+            showBack={false}
+            showListActions={false}
+          />
+        </I18nProvider>
+      </QueryClientProvider>
+    );
+    const { rerender } = render(view(agents));
+
+    fireEvent.click(screen.getByTestId("machine-agents-select"));
+    fireEvent.click(screen.getByTestId("machine-agents-select-all"));
+    rerender(view([agents[0]!]));
+    fireEvent.click(screen.getByTestId("machine-agents-bulk-start"));
+
+    await waitFor(() => expect(bulkAgentLifecycle).toHaveBeenCalledTimes(1));
+    expect(bulkAgentLifecycle).toHaveBeenCalledWith({
+      agent_ids: ["agent-1"],
+      action: "start",
+    });
+  });
+
   it("resets every selected agent in the chosen mode with one request", async () => {
     bulkAgentLifecycle.mockClear();
     const client = new QueryClient({

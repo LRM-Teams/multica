@@ -6,6 +6,31 @@ afterEach(() => {
 });
 
 describe("ApiClient", () => {
+  it("keeps the retired Period Brief ensure request parameterless", async () => {
+    const response = {
+      agent: { id: "notes-agent" },
+      created: false,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(response), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    expect(client.ensurePeriodBriefAgent).toHaveLength(0);
+    await expect(client.ensurePeriodBriefAgent()).resolves.toEqual(response);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.example.test/api/members/agents/period-brief",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({}),
+      }),
+    );
+  });
+
   it("updates multiple Agent runtime configs with one request", async () => {
     const response = { updated_agent_ids: ["agent-1", "agent-2"] };
     const fetchMock = vi.fn().mockResolvedValue(

@@ -230,7 +230,12 @@ func (h *Handler) BulkUpdateAgentRuntimeConfig(w http.ResponseWriter, r *http.Re
 		RETURNING id
 	`, targetRuntime.ID, targetRuntime.RuntimeMode, model, req.ThinkingLevel, workspaceUUID, agentIDs)
 	if err != nil {
-		writeError(w, http.StatusConflict, "agents changed while the bulk update was being applied")
+		if isReminderDaemonOutdatedError(err) {
+			writeCodedError(w, http.StatusConflict, "daemon_outdated", "target runtime must upgrade before moving an agent with active reminders")
+			return
+		}
+		slog.Warn("bulk update agents failed", append(logger.RequestAttrs(r), "error", err)...)
+		writeError(w, http.StatusInternalServerError, "failed to update agents")
 		return
 	}
 	updatedIDs := make([]string, 0, len(existingAgents))

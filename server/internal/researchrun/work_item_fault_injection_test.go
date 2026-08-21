@@ -210,8 +210,8 @@ func TestRecoverV6WorkItemReplacesPlatformInvalidManifestWithoutSpendingAttempt(
 		t.Fatal(err)
 	}
 	branchID := uuid.NewString()
-	if _, err := run.pool.Exec(run.ctx, `INSERT INTO research_branch(id,workspace_id,session_id,objective,status,goal_version,state_version)
-		VALUES($1::uuid,$2::uuid,$3::uuid,'Recover the frozen scope','active',$4,1)`, branchID, run.fixture.workspaceID, run.fixture.sessionID, run.goalVersion); err != nil {
+	if _, err := run.pool.Exec(run.ctx, `INSERT INTO research_branch(id,workspace_id,session_id,client_key,objective,status,goal_version,state_version)
+		VALUES($1::uuid,$2::uuid,$3::uuid,$4,'Recover the frozen scope','active',$5,1)`, branchID, run.fixture.workspaceID, run.fixture.sessionID, "recovery-branch:"+branchID, run.goalVersion); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := run.pool.Exec(run.ctx, `INSERT INTO research_v6_work_item_branch(workspace_id,session_id,work_item_id,branch_id)

@@ -108,8 +108,8 @@ func TestAtomicV6WorkManifestGetsOneBackingTaskAndFrozenMission(t *testing.T) {
 	}
 	_, workItemID := seedV6RecoveryWorkItem(t, run, "ready", time.Now().Add(time.Minute))
 	branchID := uuid.NewString()
-	if _, err := run.pool.Exec(run.ctx, `INSERT INTO research_branch(id,workspace_id,session_id,objective,status,goal_version,state_version)
-		VALUES($1::uuid,$2::uuid,$3::uuid,'Inspect the assigned branch','active',$4,7)`, branchID, run.fixture.workspaceID, run.fixture.sessionID, run.goalVersion); err != nil {
+	if _, err := run.pool.Exec(run.ctx, `INSERT INTO research_branch(id,workspace_id,session_id,client_key,objective,status,goal_version,state_version)
+		VALUES($1::uuid,$2::uuid,$3::uuid,$4,'Inspect the assigned branch','active',$5,7)`, branchID, run.fixture.workspaceID, run.fixture.sessionID, "manifest-branch:"+branchID, run.goalVersion); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := run.pool.Exec(run.ctx, `INSERT INTO research_v6_work_item_branch(workspace_id,session_id,work_item_id,branch_id)

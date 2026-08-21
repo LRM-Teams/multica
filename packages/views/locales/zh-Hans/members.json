@@ -56,12 +56,10 @@
   },
   "directory": {
     "title": "成员",
-    "loading": "加载中…",
     "agents_section": "智能体",
     "humans_section": "人类",
     "no_agents": "暂无智能体",
     "no_humans": "暂无成员",
-    "empty_select": "选择一位成员",
     "you_suffix": "（你）",
     "create_agent_aria": "创建智能体",
     "invite_human_aria": "邀请成员",

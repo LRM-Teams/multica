@@ -57,12 +57,10 @@
   },
   "directory": {
     "title": "Members",
-    "loading": "Loading…",
     "agents_section": "Agents",
     "humans_section": "Humans",
     "no_agents": "No agents yet",
     "no_humans": "No humans yet",
-    "empty_select": "Select a member",
     "you_suffix": "(you)",
     "create_agent_aria": "Create agent",
     "invite_human_aria": "Invite human",

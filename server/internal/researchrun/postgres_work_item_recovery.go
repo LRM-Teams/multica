@@ -150,15 +150,23 @@ func (s *PostgresStore) RecoverExpiredV6WorkItems(ctx context.Context, limit int
 		      SELECT 1 FROM research_v6_work_submission sub
 		      WHERE sub.attempt_id=active_attempt.id AND sub.status IN ('received','processing','accepted')
 		    )
+		), terminal_inbox AS (
+		  SELECT DISTINCT active_attempt.work_item_id
+		  FROM research_work_item_attempt active_attempt
+		  JOIN agent_inbox_event inbox ON inbox.id=active_attempt.inbox_task_id
+		  WHERE active_attempt.status IN ('dispatching','running')
+		    AND inbox.terminal_outcome IS NOT NULL
 		), due AS (
-		  SELECT w.id,(invalid.id IS NOT NULL) AS platform_invalid_manifest
+		  SELECT w.id,(invalid.id IS NOT NULL) AS platform_invalid_manifest,
+		    (terminal.work_item_id IS NOT NULL) AS inbox_terminal
 		  FROM research_work_item w
 		  JOIN research_session s ON s.id=w.session_id
 		  LEFT JOIN invalid_manifest invalid ON invalid.id=w.id
+		  LEFT JOIN terminal_inbox terminal ON terminal.work_item_id=w.id
 		  WHERE s.orchestrator_version='research-run-v6'
 		    AND w.status IN ('dispatching','running')
 		    AND (invalid.id IS NOT NULL OR (
-		      w.lease_expires_at <= now()
+		      (w.lease_expires_at <= now() OR terminal.work_item_id IS NOT NULL)
 		      AND NOT (w.status='dispatching' AND EXISTS (
 		      SELECT 1 FROM research_work_item_attempt active_attempt
 		      JOIN research_v6_outbox active_outbox
@@ -196,10 +204,15 @@ func (s *PostgresStore) RecoverExpiredV6WorkItems(ctx context.Context, limit int
 		  WHERE a.work_item_id IN (SELECT id FROM due)
 		), lost AS (
 		  UPDATE research_work_item_attempt a SET status='lost',completed_at=now(),updated_at=now(),
-		    failure_class=CASE WHEN a.work_item_id IN (SELECT id FROM due WHERE platform_invalid_manifest)
-		      THEN 'platform_invalid_manifest' ELSE 'lease_expired' END,
+		    failure_class=CASE
+		      WHEN a.work_item_id IN (SELECT id FROM due WHERE platform_invalid_manifest) THEN 'platform_invalid_manifest'
+		      WHEN a.work_item_id IN (SELECT id FROM due WHERE inbox_terminal) THEN 'inbox_terminal'
+		      ELSE 'lease_expired' END,
 		    diagnostics=CASE WHEN a.work_item_id IN (SELECT id FROM due WHERE platform_invalid_manifest)
-		      THEN 'Work Manifest omitted persisted Branch scope' ELSE diagnostics END
+		      THEN 'Work Manifest omitted persisted Branch scope'
+		      WHEN a.work_item_id IN (SELECT id FROM due WHERE inbox_terminal)
+		      THEN 'Inbox delivery reached a terminal outcome before Work completion'
+		      ELSE diagnostics END
 		  WHERE a.work_item_id IN (SELECT id FROM due) AND a.status IN ('dispatching','running')
 		    AND a.work_item_id NOT IN (SELECT work_item_id FROM received)
 		  RETURNING a.id,a.work_item_id

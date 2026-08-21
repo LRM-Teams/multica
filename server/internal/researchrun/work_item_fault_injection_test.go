@@ -268,6 +268,43 @@ func TestRecoverV6WorkItemReplacesPlatformInvalidManifestWithoutSpendingAttempt(
 	}
 }
 
+func TestRecoverV6WorkItemImmediatelyAfterTerminalInbox(t *testing.T) {
+	run := newTransactionRecoveryRun(t, "Recover terminal V6 Inbox delivery")
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_session SET orchestrator_version='research-run-v6' WHERE id=$1::uuid`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	membershipID, workItemID := seedV6RecoveryWorkItem(t, run, "running", time.Now().Add(time.Hour))
+	attemptID := seedV6RecoveryAttempt(t, run, membershipID, workItemID)
+	inboxTaskID := uuid.NewString()
+	if _, err := run.pool.Exec(run.ctx, `INSERT INTO agent_inbox_event(
+		id,workspace_id,agent_id,reason,requires_wake,status,seq_from,seq_to,
+		terminal_outcome,terminal_at,completed_at,failure_reason
+	) VALUES($1::uuid,$2::uuid,$3::uuid,'chat_session',true,'acked',0,0,
+		'failed',now(),now(),'runtime_recovery')`, inboxTaskID, run.fixture.workspaceID, run.fixture.agentID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_work_item_attempt SET inbox_task_id=$2::uuid WHERE id=$1::uuid`, attemptID, inboxTaskID); err != nil {
+		t.Fatal(err)
+	}
+
+	count, err := run.store.RecoverExpiredV6WorkItems(run.ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("recovered=%d want=1", count)
+	}
+	var workStatus, attemptStatus, failureClass string
+	if err = run.pool.QueryRow(run.ctx, `SELECT w.status,a.status,a.failure_class
+		FROM research_work_item w JOIN research_work_item_attempt a ON a.work_item_id=w.id
+		WHERE w.id=$1::uuid AND a.id=$2::uuid`, workItemID, attemptID).Scan(&workStatus, &attemptStatus, &failureClass); err != nil {
+		t.Fatal(err)
+	}
+	if workStatus != "ready" || attemptStatus != "lost" || failureClass != "inbox_terminal" {
+		t.Fatalf("work=%s attempt=%s failure=%s", workStatus, attemptStatus, failureClass)
+	}
+}
+
 type lostV6InboxTaskStoreStub struct {
 	ids []string
 	err error

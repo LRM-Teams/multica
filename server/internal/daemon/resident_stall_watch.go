@@ -54,9 +54,11 @@ func (p *canonicalAgentRuntimePool) startResidentStallWatchdog(
 			}
 			if !stalledPublished {
 				stalledPublished = true
-				if p.residentStallObserver != nil {
-					p.residentStallObserver(agentID, runtimeID, idleFor)
-				}
+				// Not holding slot.mu here — safe to call directly.
+				p.emitResidentProcessEvent(residentProcessEvent{
+					AgentID: agentID, RuntimeID: runtimeID, Kind: residentProcessStalled,
+					SilentFor: idleFor, At: time.Now(),
+				})
 			}
 
 			alive, liveKnown := false, false

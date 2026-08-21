@@ -167,11 +167,6 @@ type canonicalAgentRuntimeAcquireRequest struct {
 	Context context.Context
 }
 
-// ResidentRuntimeRecoveredSubscriber is notified when a resident backend is
-// successfully factory-created for an agent×runtime slot (not on reuse).
-// Used to clear the server-side crashed_since after local recovery.
-type ResidentRuntimeRecoveredSubscriber func(agentID, runtimeID string)
-
 type canonicalAgentRuntimePool struct {
 	mu                      sync.Mutex
 	slots                   map[string]*canonicalAgentRuntimeSlot
@@ -193,11 +188,10 @@ type canonicalAgentRuntimePool struct {
 	liveAgentProcesses atomic.Int64
 	evictForCapTotal   atomic.Int64
 
-	crashMu          sync.Mutex
-	crashSubscribers []ResidentRuntimeCrashSubscriber
-
-	recoverMu          sync.Mutex
-	recoverSubscribers []ResidentRuntimeRecoveredSubscriber
+	// residentProcessMu guards residentProcessSubscribers and serializes
+	// delivery through emitResidentProcessEvent (resident_process_event.go).
+	residentProcessMu          sync.Mutex
+	residentProcessSubscribers []func(residentProcessEvent)
 
 	// nextResume is the composer-applied provider session for the next
 	// acquire when the caller does not pass CanonicalSessionID. An explicit
@@ -207,7 +201,6 @@ type canonicalAgentRuntimePool struct {
 	// Message turn. Zero disables the recovery watchdog (used by tests and
 	// operators that opt out).
 	residentStallWatchdog time.Duration
-	residentStallObserver func(agentID, runtimeID string, staleFor time.Duration)
 }
 
 type canonicalAgentRuntimeSlot struct {
@@ -262,13 +255,6 @@ func (p *canonicalAgentRuntimePool) setResidentStallWatchdog(window time.Duratio
 		return
 	}
 	p.residentStallWatchdog = window
-}
-
-func (p *canonicalAgentRuntimePool) setResidentStallObserver(observer func(agentID, runtimeID string, staleFor time.Duration)) {
-	if p == nil {
-		return
-	}
-	p.residentStallObserver = observer
 }
 
 // setMaxAgentProcesses configures the #35 live-resident-agent process ceiling.
@@ -467,7 +453,9 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 		// fact from a prior idle death. First-ever create is a no-op clear.
 		// Fire async: we still hold slot.mu here and subscribers may do I/O.
 		agentID, runtimeID := request.Identity.AgentID, request.Identity.RuntimeID
-		go p.notifyResidentRecovered(agentID, runtimeID)
+		go p.emitResidentProcessEvent(residentProcessEvent{
+			AgentID: agentID, RuntimeID: runtimeID, Kind: residentProcessRecovered, At: now,
+		})
 	}
 
 	wrapped := &canonicalSessionBackend{
@@ -1624,68 +1612,23 @@ func (p *canonicalAgentRuntimePool) evictIdle(before time.Time) int {
 	return removed
 }
 
-// ResidentRuntimeCrashEvent describes a resident provider process found dead
-// while idle between turns — the case task #42 exists for. A turn's own
-// error path already surfaces a dead process; this is the proactive path for
-// when no turn happens to be running at the moment it died, which is exactly
-// how the ui-designer agent's opencode process sat crashed for 8 hours with
-// nothing noticing.
-type ResidentRuntimeCrashEvent struct {
-	AgentID    string
-	RuntimeID  string
-	Provider   string
-	DetectedAt time.Time
-}
-
-// ResidentRuntimeCrashSubscriber receives every crash checkResidentLiveness
-// finds. Multiple independent consumers (crash-recovery restart, external
-// status reporting) subscribe to the same detection pass instead of each
-// polling process liveness themselves.
-type ResidentRuntimeCrashSubscriber func(ResidentRuntimeCrashEvent)
-
-// subscribeResidentRuntimeCrash registers fn to run for every future crash
-// event. It does not replay past events.
-func (p *canonicalAgentRuntimePool) subscribeResidentRuntimeCrash(fn ResidentRuntimeCrashSubscriber) {
-	if p == nil || fn == nil {
-		return
-	}
-	p.crashMu.Lock()
-	defer p.crashMu.Unlock()
-	p.crashSubscribers = append(p.crashSubscribers, fn)
-}
-
-// subscribeResidentRuntimeRecovered registers fn for successful resident
-// backend creates (not reuse). Idempotent ClearAgentCrashed on the server
-// is safe even when there was no prior crash.
-func (p *canonicalAgentRuntimePool) subscribeResidentRuntimeRecovered(fn ResidentRuntimeRecoveredSubscriber) {
-	if p == nil || fn == nil {
-		return
-	}
-	p.recoverMu.Lock()
-	defer p.recoverMu.Unlock()
-	p.recoverSubscribers = append(p.recoverSubscribers, fn)
-}
-
-func (p *canonicalAgentRuntimePool) notifyResidentRecovered(agentID, runtimeID string) {
-	if p == nil {
-		return
-	}
-	p.recoverMu.Lock()
-	subs := append([]ResidentRuntimeRecoveredSubscriber(nil), p.recoverSubscribers...)
-	p.recoverMu.Unlock()
-	for _, sub := range subs {
-		sub(agentID, runtimeID)
-	}
-}
-
 // checkResidentLiveness polls every idle resident slot's process liveness and
-// evicts + reports any found definitively dead (known=true, alive=false).
-// This must fail open: an in-flight turn, a non-resident slot, a backend that
-// doesn't implement agent.ResidentRuntimeLivenessChecker, or an unknown
+// evicts + reports any found definitively dead (known=true, alive=false) —
+// the case task #42 exists for. A turn's own error path already surfaces a
+// dead process; this is the proactive path for when no turn happens to be
+// running at the moment it died, which is exactly how the ui-designer
+// agent's opencode process sat crashed for 8 hours with nothing noticing.
+//
+// This must fail open: an in-flight turn, a non-resident slot, a backend
+// that doesn't implement agent.ResidentRuntimeLivenessChecker, or an unknown
 // liveness answer are all left untouched — none of those are proof of a
 // crash, and misclassifying a merely-quiet process as dead would kill a
-// perfectly healthy resident session.
-func (p *canonicalAgentRuntimePool) checkResidentLiveness(now time.Time) []ResidentRuntimeCrashEvent {
+// perfectly healthy resident session. Every confirmed-dead slot is both
+// returned and delivered through emitResidentProcessEvent as a
+// residentProcessExited event, so callers that want the detection pass
+// itself and callers that only want the notification can each be served
+// without polling liveness twice.
+func (p *canonicalAgentRuntimePool) checkResidentLiveness(now time.Time) []residentProcessEvent {
 	if p == nil {
 		return nil
 	}
@@ -1700,7 +1643,7 @@ func (p *canonicalAgentRuntimePool) checkResidentLiveness(now time.Time) []Resid
 	}
 	p.mu.Unlock()
 
-	var events []ResidentRuntimeCrashEvent
+	var events []residentProcessEvent
 	for _, ref := range refs {
 		ref.slot.mu.Lock()
 		if ref.slot.running || ref.slot.backend == nil {
@@ -1722,24 +1665,17 @@ func (p *canonicalAgentRuntimePool) checkResidentLiveness(now time.Time) []Resid
 		ref.slot.mu.Unlock()
 
 		agentID, runtimeID := splitCanonicalSlotKey(ref.key)
-		events = append(events, ResidentRuntimeCrashEvent{
-			AgentID:    agentID,
-			RuntimeID:  runtimeID,
-			Provider:   provider,
-			DetectedAt: now,
+		events = append(events, residentProcessEvent{
+			AgentID:   agentID,
+			RuntimeID: runtimeID,
+			Kind:      residentProcessExited,
+			Provider:  provider,
+			At:        now,
 		})
 	}
 
-	if len(events) == 0 {
-		return nil
-	}
-	p.crashMu.Lock()
-	subs := append([]ResidentRuntimeCrashSubscriber(nil), p.crashSubscribers...)
-	p.crashMu.Unlock()
 	for _, ev := range events {
-		for _, sub := range subs {
-			sub(ev)
-		}
+		p.emitResidentProcessEvent(ev)
 	}
 	return events
 }

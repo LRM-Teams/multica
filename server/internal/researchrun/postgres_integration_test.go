@@ -3013,6 +3013,12 @@ func cleanupSeedResearchRunFixture(t *testing.T, databaseURL string, fixture res
 		cleanupErr = fmt.Errorf("delete research fixture input references: %w", err)
 	}
 	if cleanupErr == nil {
+		_, err = pool.Exec(ctx, `DELETE FROM research_node_steward_assignment WHERE workspace_id = $1::uuid`, fixture.workspaceID)
+	}
+	if err != nil && cleanupErr == nil {
+		cleanupErr = fmt.Errorf("delete research fixture node steward assignments: %w", err)
+	}
+	if cleanupErr == nil {
 		_, err = pool.Exec(ctx, `DELETE FROM workspace WHERE id = $1::uuid`, fixture.workspaceID)
 	}
 	if err != nil && cleanupErr == nil {

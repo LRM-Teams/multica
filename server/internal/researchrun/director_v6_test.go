@@ -133,6 +133,12 @@ func TestV6DirectorBriefIncludesAtomicResultFrontier(t *testing.T) {
 		VALUES($1::uuid,$2::uuid,$3::uuid,$4,'Investigate the source landscape','active',1,1)`, branchID, run.fixture.workspaceID, run.fixture.sessionID, "brief:"+branchID); err != nil {
 		t.Fatal(err)
 	}
+	if err = registerV6BranchArtifactTx(run.ctx, tx, run.fixture.workspaceID, run.fixture.sessionID, branchID, time.Now().UTC(), 1, map[string]any{
+		"parent_branch_id": "", "objective": "Investigate the source landscape", "entry_conditions": json.RawMessage(`[]`),
+		"exit_conditions": json.RawMessage(`[]`), "budget_share": 0.0, "status": "active",
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err = registerArtifactPassportTx(run.ctx, tx, registerArtifactPassportInput{
 		WorkspaceID: run.fixture.workspaceID, SessionID: run.fixture.sessionID, EntityID: resultArtifactID,
 		Kind: ArtifactKindResultArtifact, ProvenanceCompleteness: ArtifactProvenanceComplete,
@@ -452,6 +458,12 @@ func TestV6EventTriggerRepairsAtomicResultMissingFromCoveredBrief(t *testing.T) 
 	defer materializeTx.Rollback(run.ctx)
 	if _, err = materializeTx.Exec(run.ctx, `INSERT INTO research_branch(id,workspace_id,session_id,client_key,objective,status,goal_version,state_version)
 		VALUES($1::uuid,$2::uuid,$3::uuid,$4,'Investigate the source landscape','active',1,1)`, branchID, run.fixture.workspaceID, run.fixture.sessionID, "repair:"+branchID); err != nil {
+		t.Fatal(err)
+	}
+	if err = registerV6BranchArtifactTx(run.ctx, materializeTx, run.fixture.workspaceID, run.fixture.sessionID, branchID, time.Now().UTC(), 1, map[string]any{
+		"parent_branch_id": "", "objective": "Investigate the source landscape", "entry_conditions": json.RawMessage(`[]`),
+		"exit_conditions": json.RawMessage(`[]`), "budget_share": 0.0, "status": "active",
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = materializeTx.Exec(run.ctx, `INSERT INTO research_result_node(id,workspace_id,session_id,result_artifact_id,artifact_version_id,work_item_attempt_id,

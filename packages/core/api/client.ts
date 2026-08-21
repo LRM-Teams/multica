@@ -94,6 +94,7 @@ import type {
   AgentHonorRulesView,
   UpdateAgentHonorShowcaseRequest,
   AgentRuntime,
+  AgentRuntimeConfig,
   RuntimeAgentWorkspacesResponse,
   InboxItem,
   UserActivityListResponse,
@@ -329,6 +330,7 @@ import {
   EMPTY_AGENT_HEALTH_RESPONSE,
   EMPTY_AGENT_RESTART_OPERATION,
   EMPTY_AGENT_RESTART_PREFLIGHT,
+  EMPTY_AGENT_RUNTIME_CONFIG,
   EMPTY_AGENT_RUNTIME_LIST,
   EMPTY_COMPUTER_CONNECTION_LIST,
   EMPTY_COMPUTER_WORK_JOURNAL_SETTING,
@@ -359,6 +361,7 @@ import {
   EMPTY_RUNNER_ACTIVITY_SUMMARIES_RESPONSE,
   AgentPresenceResponseSchema,
   EMPTY_AGENT_PRESENCE_RESPONSE,
+  AgentRuntimeConfigSchema,
   AgentRuntimeListSchema,
   ComputerConnectionListSchema,
   ComputerWorkJournalSettingSchema,
@@ -1972,6 +1975,24 @@ export class ApiClient {
       EMPTY_AGENT_RUNTIME_LIST,
       { endpoint: "GET /api/runtimes" },
     );
+  }
+
+  /**
+   * The agent's assembled runtime config. Separate from getAgent because it
+   * joins Computer-level facts (name, liveness) that no agent row carries,
+   * and because it must stay readable for an agent bound to a runtime the
+   * caller cannot manage.
+   */
+  async getAgentRuntimeConfig(agentId: string): Promise<AgentRuntimeConfig> {
+    const raw = await this.fetch<unknown>(
+      `/api/agents/${encodeURIComponent(agentId)}/runtime-config`,
+    );
+    return parseWithFallback(
+      raw,
+      AgentRuntimeConfigSchema,
+      EMPTY_AGENT_RUNTIME_CONFIG,
+      { endpoint: "GET /api/agents/:id/runtime-config" },
+    ) as AgentRuntimeConfig;
   }
 
   async listComputers(workspaceId: string): Promise<ComputerConnection[]> {

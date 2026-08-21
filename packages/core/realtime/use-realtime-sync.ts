@@ -548,6 +548,11 @@ export function useRealtimeSync(
         const wsId = getCurrentWsId();
         if (wsId) {
           qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
+          // The assembled runtime config lives under runtimeKeys (its liveness
+          // rides the daemon/computer refresh chain), so an agent-side change
+          // to the binding, model, or thinking level has to invalidate it
+          // explicitly — the agents key does not cover it.
+          qc.invalidateQueries({ queryKey: [...runtimeKeys.all(wsId), "agent-config"] });
         }
       },
       member: () => {

@@ -7,9 +7,10 @@ export const noteKeys = {
   trash: (wsId: string) => [...noteKeys.all(wsId), "trash"] as const,
   detail: (wsId: string, pageId: string) => [...noteKeys.all(wsId), "detail", pageId] as const,
   aiJob: (jobId: string) => ["notes", "ai-job", jobId] as const,
-  workerJob: (jobId: string) => ["notes", "worker-job", jobId] as const,
   writebacks: (wsId: string, pageId: string, status?: string) =>
     [...noteKeys.all(wsId), "writebacks", pageId, status ?? "all"] as const,
+  periodBriefActive: (wsId: string, pageId: string) =>
+    [...noteKeys.all(wsId), "period-brief-active", pageId] as const,
 };
 
 export function noteListOptions(wsId: string) {
@@ -55,21 +56,16 @@ export function noteAIJobOptions(jobId: string) {
   });
 }
 
-export function noteWorkerJobOptions(jobId: string) {
+export function notePeriodBriefActiveOptions(wsId: string, pageId: string) {
   return queryOptions({
-    queryKey: noteKeys.workerJob(jobId),
-    queryFn: () => api.getNoteWorkerJob(jobId),
-    enabled: !!jobId,
-    staleTime: Infinity,
+    queryKey: noteKeys.periodBriefActive(wsId, pageId),
+    queryFn: () => api.getActiveNotePeriodBrief(pageId),
+    enabled: !!wsId && !!pageId,
     refetchInterval: (query) => {
-      const status = query.state.data?.status;
-      if (status === "pending" || status === "dispatched" || status === "running") return 5_000;
-      return false;
-    },
-    retry: (count, err) => {
-      const status = typeof err === "object" && err && "status" in err ? Number((err as { status: number }).status) : 0;
-      if (status === 403 || status === 404) return false;
-      return count < 2;
+      const status = query.state.data?.run?.status;
+      return status === "planning" || status === "collecting" || status === "synthesizing"
+        ? 4_000
+        : false;
     },
   });
 }

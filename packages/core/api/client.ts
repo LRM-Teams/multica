@@ -252,16 +252,12 @@ import type {
   UpdateNotePageSharesRequest,
   CreateNoteAIJobRequest,
   NoteAIJob,
-  CreateNoteWorkerJobRequest,
-  NoteWorkerJob,
   NotePageIssueRef,
   NotePageIssueRefListResponse,
   CreateNotePageIssueRefRequest,
   CreateNotePageAgentRefRequest,
   CreateNotePageRunRefRequest,
   CreateNotePageChannelRefRequest,
-  CreateNotePageIssueRequest,
-  CreateNotePageIssueResponse,
   NoteWriteback,
   NoteWritebackListResponse,
   CreateNoteWritebackRequest,
@@ -269,6 +265,9 @@ import type {
   CreateNoteRetrospectiveResponse,
   CreateNotePeriodBriefRequest,
   CreateNotePeriodBriefResponse,
+  NotePeriodBriefActiveResponse,
+  InsertNotePeriodBriefRequest,
+  InsertNotePeriodBriefResponse,
   IssueNoteRefListResponse,
 } from "../types";
 import type { OnboardingCompletionPath } from "../onboarding/types";
@@ -499,13 +498,10 @@ import {
   EMPTY_NOTE_PAGE_LIST,
   NoteAIJobSchema,
   EMPTY_NOTE_AI_JOB,
-  NoteWorkerJobSchema,
-  EMPTY_NOTE_WORKER_JOB,
   NotePageIssueRefSchema,
   NotePageIssueRefListResponseSchema,
   EMPTY_NOTE_PAGE_ISSUE_REF,
   EMPTY_NOTE_PAGE_ISSUE_REF_LIST,
-  CreateNotePageIssueResponseSchema,
   NoteWritebackSchema,
   NoteWritebackListResponseSchema,
   EMPTY_NOTE_WRITEBACK,
@@ -514,6 +510,10 @@ import {
   EMPTY_CREATE_NOTE_RETROSPECTIVE_RESPONSE,
   CreateNotePeriodBriefResponseSchema,
   EMPTY_CREATE_NOTE_PERIOD_BRIEF_RESPONSE,
+  NotePeriodBriefActiveResponseSchema,
+  EMPTY_NOTE_PERIOD_BRIEF_ACTIVE,
+  InsertNotePeriodBriefResponseSchema,
+  EMPTY_INSERT_NOTE_PERIOD_BRIEF_RESPONSE,
 } from "./schemas";
 
 /** Identifies the calling client to the server.
@@ -1156,31 +1156,6 @@ export class ApiClient {
     });
   }
 
-  async createNoteWorkerJob(
-    pageId: string,
-    data: CreateNoteWorkerJobRequest,
-    init?: { signal?: AbortSignal },
-  ): Promise<NoteWorkerJob> {
-    const raw = await this.fetch<unknown>(`/api/notes/pages/${encodeURIComponent(pageId)}/worker-jobs`, {
-      method: "POST",
-      body: JSON.stringify(data),
-      signal: init?.signal,
-    });
-    return parseWithFallback(raw, NoteWorkerJobSchema, EMPTY_NOTE_WORKER_JOB, {
-      endpoint: "POST /api/notes/pages/{id}/worker-jobs",
-    });
-  }
-
-  async getNoteWorkerJob(jobId: string, init?: { signal?: AbortSignal }): Promise<NoteWorkerJob> {
-    const raw = await this.fetch<unknown>(
-      `/api/notes/worker-jobs/${encodeURIComponent(jobId)}`,
-      init?.signal ? { signal: init.signal } : undefined,
-    );
-    return parseWithFallback(raw, NoteWorkerJobSchema, EMPTY_NOTE_WORKER_JOB, {
-      endpoint: "GET /api/notes/worker-jobs/{id}",
-    });
-  }
-
   async listNotePageIssueRefs(pageId: string): Promise<NotePageIssueRefListResponse> {
     const raw = await this.fetch<unknown>(`/api/notes/pages/${encodeURIComponent(pageId)}/issue-refs`);
     return parseWithFallback(raw, NotePageIssueRefListResponseSchema, EMPTY_NOTE_PAGE_ISSUE_REF_LIST, {
@@ -1273,43 +1248,6 @@ export class ApiClient {
     });
   }
 
-  async createNotePageIssue(pageId: string, data: CreateNotePageIssueRequest = {}): Promise<CreateNotePageIssueResponse> {
-    const raw = await this.fetch<unknown>(`/api/notes/pages/${encodeURIComponent(pageId)}/issues`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    });
-    return parseWithFallback(
-      raw,
-      CreateNotePageIssueResponseSchema,
-      {
-        issue: {
-          id: "",
-          workspace_id: "",
-          number: 0,
-          identifier: "",
-          title: "",
-          description: null,
-          status: "todo",
-          priority: "none",
-          assignee_type: null,
-          assignee_id: null,
-          creator_type: "member",
-          creator_id: "",
-          parent_issue_id: null,
-          project_id: null,
-          position: 0,
-          start_date: null,
-          due_date: null,
-          metadata: {},
-          created_at: "",
-          updated_at: "",
-        },
-        ref: EMPTY_NOTE_PAGE_ISSUE_REF,
-      },
-      { endpoint: "POST /api/notes/pages/{id}/issues" },
-    );
-  }
-
   async createNoteRetrospective(data: CreateNoteRetrospectiveRequest): Promise<CreateNoteRetrospectiveResponse> {
     const raw = await this.fetch<unknown>("/api/notes/retrospectives", {
       method: "POST",
@@ -1317,6 +1255,28 @@ export class ApiClient {
     });
     return parseWithFallback(raw, CreateNoteRetrospectiveResponseSchema, EMPTY_CREATE_NOTE_RETROSPECTIVE_RESPONSE, {
       endpoint: "POST /api/notes/retrospectives",
+    });
+  }
+
+  async getActiveNotePeriodBrief(pageId: string): Promise<NotePeriodBriefActiveResponse> {
+    const raw = await this.fetch<unknown>(
+      `/api/notes/period-briefs/active?page_id=${encodeURIComponent(pageId)}`,
+    );
+    return parseWithFallback(raw, NotePeriodBriefActiveResponseSchema, EMPTY_NOTE_PERIOD_BRIEF_ACTIVE, {
+      endpoint: "GET /api/notes/period-briefs/active",
+    });
+  }
+
+  async insertNotePeriodBrief(
+    runId: string,
+    data: InsertNotePeriodBriefRequest,
+  ): Promise<InsertNotePeriodBriefResponse> {
+    const raw = await this.fetch<unknown>(`/api/notes/period-briefs/${runId}/insert`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, InsertNotePeriodBriefResponseSchema, EMPTY_INSERT_NOTE_PERIOD_BRIEF_RESPONSE, {
+      endpoint: "POST /api/notes/period-briefs/{runId}/insert",
     });
   }
 

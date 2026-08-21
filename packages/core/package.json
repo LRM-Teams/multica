@@ -54,6 +54,7 @@
     "./notes/period-brief-agent": "./notes/period-brief-agent.ts",
     "./notes/period-brief-collectors": "./notes/period-brief-collectors.ts",
     "./notes/period-brief-window": "./notes/period-brief-window.ts",
+    "./notes/period-brief-compose": "./notes/period-brief-compose.ts",
     "./notes/notes-assistant-agent": "./notes/notes-assistant-agent.ts",
     "./user-activity": "./user-activity/index.ts",
     "./user-activity/queries": "./user-activity/queries.ts",

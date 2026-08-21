@@ -16,17 +16,29 @@ import {
   notesAssistantSetupDismissKey,
   resolveNotesAssistantAgent,
 } from "@multica/core/notes/notes-assistant-agent";
+import {
+  periodBriefRunLocksComposer,
+  resolvePeriodBriefComposeRequest,
+} from "@multica/core/notes/period-brief-compose";
+import { isValidPeriodBriefCustomRange } from "@multica/core/notes/period-brief-window";
+import { noteListOptions, notePeriodBriefActiveOptions } from "@multica/core/notes/queries";
+import { chatKeys } from "@multica/core/chat/queries";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { runtimeListOptions } from "@multica/core/runtimes";
 import { agentListOptions, memberListOptions, workspaceKeys } from "@multica/core/workspace/queries";
 import type { Agent, CreateAgentRequest, EnsureNotesAssistantAgentResponse } from "@multica/core/types";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { CreateAgentDialog } from "../agents/components/create-agent-dialog";
 import { useT } from "../i18n";
 import { usePrefersReducedMotion } from "../common/use-prefers-reduced-motion";
 import { excludeChannelShellSessions } from "../chat/lib/exclude-channel-shell-sessions";
 import { ChatWindow } from "../chat/components/chat-window";
 import { NoteAssistantFabCluster, type NoteAssistantFabAction } from "./note-assistant-fab-cluster";
+import {
+  NotePeriodBriefCompose,
+  type NotePeriodBriefResolved,
+} from "./note-period-brief-compose";
 import { NotesAssistantSetupCard } from "./notes-assistant-setup-card";
 
 const logger = createLogger("chat.note-bubble");
@@ -50,13 +62,9 @@ function clearSetupHintDismissed(workspaceId: string | undefined) {
 export function NoteAssistantBubble({
   pageId,
   pageTitle,
-  onOpenPeriodBrief,
-  onOpenWorker,
 }: {
   pageId: string;
   pageTitle?: string;
-  onOpenPeriodBrief: () => void;
-  onOpenWorker: () => void;
 }) {
   const { t } = useT("layout");
   const wsId = useWorkspaceId();
@@ -64,9 +72,12 @@ export function NoteAssistantBubble({
   const queryClient = useQueryClient();
   const currentUser = useAuthStore((s) => s.user);
   const isMobile = useIsMobile();
-  const layout = isMobile ? "fullscreen" : "floating";
+  const layout = isMobile ? "fullscreen" : "sidebar";
   const openPageId = useChatStore((s) => s.noteBubbleOpenPageId);
   const toggleNoteBubble = useChatStore((s) => s.toggleNoteBubble);
+  const setNoteBubbleActiveSession = useChatStore((s) => s.setNoteBubbleActiveSession);
+  const noteBubbleActiveSessionByPage = useChatStore((s) => s.noteBubbleActiveSessionByPage);
+  const { data: activePeriodBrief } = useQuery(notePeriodBriefActiveOptions(wsId, pageId));
   const { data: sessions = [] } = useQuery(chatSessionsOptions(wsId));
   const { data: pending } = useQuery(pendingChatTasksOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
@@ -95,6 +106,11 @@ export function NoteAssistantBubble({
   const [composerFocusToken, setComposerFocusToken] = React.useState(0);
   const [pendingSend, setPendingSend] = React.useState<{ nonce: number; text: string } | null>(null);
   const seedNonceRef = React.useRef(0);
+  const [periodBriefOpen, setPeriodBriefOpen] = React.useState(false);
+  const [periodBriefSubmitting, setPeriodBriefSubmitting] = React.useState(false);
+  const periodBriefResolvedRef = React.useRef<NotePeriodBriefResolved | null>(null);
+  const composerLocked =
+    periodBriefRunLocksComposer(activePeriodBrief?.run?.status) || periodBriefSubmitting;
 
   // Prefer the live agent list. After create/restore, ensureResult.agent bridges
   // until the list invalidation lands. needs_setup clears that bridge.
@@ -194,21 +210,91 @@ export function NoteAssistantBubble({
   };
 
   React.useEffect(() => {
-    if (openPageId !== pageId) setPendingSend(null);
+    if (openPageId !== pageId) {
+      setPendingSend(null);
+      setPeriodBriefOpen(false);
+      setPeriodBriefSubmitting(false);
+    }
   }, [openPageId, pageId]);
 
   const handleSeedSendConsumed = React.useCallback(() => {
     setPendingSend(null);
   }, []);
 
+  const handlePeriodBriefResolved = React.useCallback((resolved: NotePeriodBriefResolved) => {
+    periodBriefResolvedRef.current = resolved;
+  }, []);
+
+  const submitPeriodBrief = React.useCallback(async (text: string): Promise<boolean> => {
+    const resolved = periodBriefResolvedRef.current;
+    if (!resolved) return false;
+    const request = resolvePeriodBriefComposeRequest(
+      resolved.selection,
+      resolved.collectors,
+      text,
+    );
+    if (!resolved.agentId) {
+      showErrorToast(t(($) => $.notes_page.period_brief_agent_required));
+      return false;
+    }
+    if (request.collector_ids.length === 0) {
+      showErrorToast(t(($) => $.notes_page.period_brief_collectors_required));
+      return false;
+    }
+    if (
+      request.window === "custom" &&
+      !isValidPeriodBriefCustomRange(request.start_date ?? "", request.end_date ?? "")
+    ) {
+      showErrorToast(t(($) => $.notes_page.period_brief_custom_range_invalid));
+      return false;
+    }
+    setPeriodBriefSubmitting(true);
+    try {
+      const sessionId = noteBubbleActiveSessionByPage[pageId];
+      const result = await api.createNotePeriodBrief({
+        window: request.window,
+        date: request.date,
+        start_date: request.start_date,
+        end_date: request.end_date,
+        timezone: resolved.timezone,
+        agent_id: resolved.agentId,
+        collector_agent_ids: request.collector_ids,
+        context_note_page_id: pageId,
+        ...(sessionId ? { chat_session_id: sessionId } : {}),
+        ...(request.focus ? { focus: request.focus } : {}),
+      });
+      if (!result.job?.id) {
+        throw new Error(t(($) => $.notes_page.period_brief_failed));
+      }
+      if (result.chat_session_id) {
+        setNoteBubbleActiveSession(pageId, result.chat_session_id);
+        void queryClient.invalidateQueries({ queryKey: chatKeys.messages(result.chat_session_id) });
+        void queryClient.invalidateQueries({ queryKey: chatKeys.messagesPage(result.chat_session_id) });
+      }
+      setPeriodBriefOpen(false);
+      void queryClient.invalidateQueries({ queryKey: chatKeys.sessions(wsId) });
+      void queryClient.invalidateQueries({ queryKey: noteListOptions(wsId).queryKey });
+      void queryClient.invalidateQueries({
+        queryKey: notePeriodBriefActiveOptions(wsId, pageId).queryKey,
+      });
+      return true;
+    } catch (error: unknown) {
+      showErrorToast(
+        error instanceof Error && error.message
+          ? error.message
+          : t(($) => $.notes_page.period_brief_failed),
+      );
+      return false;
+    } finally {
+      setPeriodBriefSubmitting(false);
+    }
+  }, [noteBubbleActiveSessionByPage, pageId, queryClient, setNoteBubbleActiveSession, t, wsId]);
+
   const handleFabAction = (action: NoteAssistantFabAction) => {
     logger.info("noteBubble.fab.action", { pageId, action, isOpen });
     if (action === "period_brief") {
-      onOpenPeriodBrief();
-      return;
-    }
-    if (action === "worker") {
-      onOpenWorker();
+      if (!isOpen) toggleNoteBubble(pageId);
+      if (!composerLocked) setPeriodBriefOpen(true);
       return;
     }
     if (action === "highlights") {
@@ -255,8 +341,25 @@ export function NoteAssistantBubble({
         layout={layout}
         headerAccessory={setupSlot}
         composerFocusToken={composerFocusToken}
-        seedSend={pendingSend}
+        seedSend={periodBriefOpen ? null : pendingSend}
         onSeedSendConsumed={handleSeedSendConsumed}
+        composerAccessory={
+          periodBriefOpen && !composerLocked ? (
+            <NotePeriodBriefCompose
+              active={periodBriefOpen}
+              submitting={periodBriefSubmitting}
+              onResolvedChange={handlePeriodBriefResolved}
+            />
+          ) : null
+        }
+        composerPlaceholder={
+          periodBriefOpen && !composerLocked
+            ? t(($) => $.notes_page.period_brief_focus_placeholder)
+            : undefined
+        }
+        allowEmptySend={periodBriefOpen && !composerLocked}
+        onSendOverride={periodBriefOpen && !composerLocked ? submitPeriodBrief : undefined}
+        composerLocked={composerLocked}
       />
       {createDialogOpen ? (
         <CreateAgentDialog

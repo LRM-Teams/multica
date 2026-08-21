@@ -25,6 +25,11 @@ const (
 	// RefID is optional: empty means create a new page; set it to target an
 	// existing note_page. Label may carry a suggested title.
 	MessagePartTypeNoteWrite = "note_write"
+	// MessagePartTypePeriodBriefInsert is the two-button insert card on a
+	// Notes-bubble Period Brief result (append below the issuing page, or
+	// create a child page). RefID is the run id; SelectedOptionID is set
+	// after the human picks append or child.
+	MessagePartTypePeriodBriefInsert = "period_brief_insert"
 	// MessagePartTypeConfirmation is the structured acknowledgement part (LRM-1523
 	// L1). A pure confirmation carries no new information, no @-directive and no
 	// action, and must not wake any agent.

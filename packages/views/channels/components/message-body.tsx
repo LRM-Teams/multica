@@ -143,7 +143,8 @@ function MessageBodyInner({
             part.type === "sticker" ||
             part.type === "choice" ||
             part.type === "choice_reply" ||
-            part.type === "note_brief",
+            part.type === "note_brief" ||
+            part.type === "period_brief_insert",
         ) || (hasReferenceParts && content.trim() !== "" && !suppressHiringProtocolFallback);
       if (!hasBodyContent && !hasHiringProposal) return null;
       // Structured mention / issue-ref parts (#463): the canonical `content` now

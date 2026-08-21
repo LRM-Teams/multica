@@ -55,6 +55,10 @@ interface ChatInputProps {
   safeArea?: boolean;
   /** Bump to focus the composer editor. */
   focusToken?: number;
+  /** Replace the default composer placeholder. */
+  placeholder?: string;
+  /** Allow sending when the composer is empty. */
+  allowEmptySend?: boolean;
 }
 
 export function ChatInput({
@@ -73,6 +77,8 @@ export function ChatInput({
   sessionId,
   safeArea = false,
   focusToken,
+  placeholder: placeholderOverride,
+  allowEmptySend = false,
 }: ChatInputProps) {
   const { t } = useT("chat");
   const editorRef = useRef<ContentEditorRef>(null);
@@ -196,8 +202,8 @@ export function ChatInput({
   });
 
   const handleSend = async () => {
-    const content = editorRef.current?.getMarkdown()?.replace(/(\n\s*)+$/, "").trim();
-    if (!content || isSubmitting || disabled || noAgent) {
+    const content = editorRef.current?.getMarkdown()?.replace(/(\n\s*)+$/, "").trim() ?? "";
+    if ((!content && !allowEmptySend) || isSubmitting || disabled || noAgent) {
       logger.debug("input.send skipped", {
         emptyContent: !content,
         isRunning,
@@ -258,9 +264,11 @@ export function ChatInput({
     ? t(($) => $.input.placeholder_no_agent)
     : disabled
       ? t(($) => $.input.placeholder_archived)
-      : agentName
-        ? t(($) => $.input.placeholder_named, { name: agentName })
-        : t(($) => $.input.placeholder_default);
+      : placeholderOverride
+        ? placeholderOverride
+        : agentName
+          ? t(($) => $.input.placeholder_named, { name: agentName })
+          : t(($) => $.input.placeholder_default);
 
   const uploadEnabled = !!onUploadFile && !disabled && !noAgent;
 
@@ -348,7 +356,7 @@ export function ChatInput({
           )}
           <SubmitButton
             onClick={handleSend}
-            disabled={isEmpty || isSubmitting || !!disabled || !!noAgent || pendingUploads > 0}
+            disabled={(isEmpty && !allowEmptySend) || isSubmitting || !!disabled || !!noAgent || pendingUploads > 0}
             running={isRunning}
             allowSubmitWhileRunning
             tooltip={`${t(($) => $.input.send_tooltip)} · ${enterKey}`}

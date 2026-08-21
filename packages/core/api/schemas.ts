@@ -75,6 +75,8 @@ import type {
   NoteWritebackListResponse,
   CreateNoteRetrospectiveResponse,
   CreateNotePeriodBriefResponse,
+  NotePeriodBriefActiveResponse,
+  InsertNotePeriodBriefResponse,
   IssueNoteRef,
   IssueNoteRefListResponse,
 } from "../types";
@@ -363,6 +365,7 @@ export const CreateNotePeriodBriefResponseSchema: z.ZodType<CreateNotePeriodBrie
   fact_count: z.number().default(0),
   collector_agent_ids: z.array(z.string()).nullish().transform((v) => v ?? []),
   collector_jobs: z.array(NoteWorkerJobSchema).nullish().transform((v) => v ?? []),
+  chat_session_id: z.string().nullish().transform((v) => v ?? ""),
 }).loose();
 
 export const EMPTY_CREATE_NOTE_PERIOD_BRIEF_RESPONSE: CreateNotePeriodBriefResponse = {
@@ -375,6 +378,33 @@ export const EMPTY_CREATE_NOTE_PERIOD_BRIEF_RESPONSE: CreateNotePeriodBriefRespo
   fact_count: 0,
   collector_agent_ids: [],
   collector_jobs: [],
+  chat_session_id: "",
+};
+
+export const NotePeriodBriefActiveRunSchema = z.object({
+  id: z.string(),
+  status: z.string(),
+  chat_session_id: z.string().nullish().transform((v) => v ?? ""),
+  source_page_id: z.string().nullish().transform((v) => v ?? ""),
+  draft_page_id: z.string(),
+}).loose();
+
+export const NotePeriodBriefActiveResponseSchema: z.ZodType<NotePeriodBriefActiveResponse> = z.object({
+  run: NotePeriodBriefActiveRunSchema.nullable(),
+}).loose();
+
+export const EMPTY_NOTE_PERIOD_BRIEF_ACTIVE: NotePeriodBriefActiveResponse = {
+  run: null,
+};
+
+export const InsertNotePeriodBriefResponseSchema: z.ZodType<InsertNotePeriodBriefResponse> = z.object({
+  mode: z.enum(["append", "child"]),
+  title: z.string().optional(),
+}).loose();
+
+export const EMPTY_INSERT_NOTE_PERIOD_BRIEF_RESPONSE = {
+  mode: "child" as const,
+  title: "",
 };
 
 export const ChannelGoalSchema = z.object({
@@ -2046,11 +2076,6 @@ export const IssueSchema = z.object({
   labels: z.array(z.unknown()).optional(),
   created_at: z.string(),
   updated_at: z.string(),
-}).loose();
-
-export const CreateNotePageIssueResponseSchema = z.object({
-  issue: IssueSchema,
-  ref: NotePageIssueRefSchema,
 }).loose();
 
 export const ListIssuesResponseSchema = z.object({

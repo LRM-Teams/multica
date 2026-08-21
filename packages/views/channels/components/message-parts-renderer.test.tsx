@@ -30,6 +30,9 @@ vi.mock("../../common/agent-creation-proposal-card", () => ({
     <div data-testid="agent-creation-proposal-card" data-message-id={proposal.message_id} data-status={proposal.status} />
   ),
 }));
+vi.mock("../../notes/period-brief-insert-actions", () => ({
+  PeriodBriefInsertActions: () => <div data-testid="period-brief-insert-actions" />,
+}));
 
 const catalogState = vi.hoisted(() => ({
   catalog: undefined as StickerCatalogResponse | undefined,

@@ -278,6 +278,8 @@ func FallbackContent(parts []protocol.MessagePart) string {
 			values = append(values, "笔记「"+title+"」")
 		case protocol.MessagePartTypeNoteWrite:
 			// Confirmation marker only; visible markdown stays in content/text.
+		case protocol.MessagePartTypePeriodBriefInsert:
+			values = append(values, "插入汇报稿")
 		case protocol.MessagePartTypeAttachment:
 			// Attachment-only messages may have empty content. Do not invent
 			// markdown URLs or synthetic labels from attachment metadata.
@@ -467,6 +469,8 @@ func normalizePart(part protocol.MessagePart) (protocol.MessagePart, error) {
 		return normalizeNoteBriefPart(part)
 	case protocol.MessagePartTypeNoteWrite:
 		return normalizeNoteWritePart(part)
+	case protocol.MessagePartTypePeriodBriefInsert:
+		return normalizePeriodBriefInsertPart(part)
 	case protocol.MessagePartTypeVoice:
 		if part.DurationMS < 0 || part.DurationMS > 60_000 {
 			return protocol.MessagePart{}, fmt.Errorf("duration_ms must be between 0 and 60000")
@@ -671,6 +675,46 @@ func normalizeNoteWritePart(part protocol.MessagePart) (protocol.MessagePart, er
 	return part, nil
 }
 
+func normalizePeriodBriefInsertPart(part protocol.MessagePart) (protocol.MessagePart, error) {
+	part.RefID = strings.TrimSpace(part.RefID)
+	if part.RefID == "" {
+		return protocol.MessagePart{}, fmt.Errorf("ref_id is required")
+	}
+	switch strings.TrimSpace(part.SelectedOptionID) {
+	case "", "append", "child":
+	default:
+		return protocol.MessagePart{}, fmt.Errorf("selected_option_id must be append or child")
+	}
+	part.Text = ""
+	part.Label = ""
+	part.RefType = ""
+	part.RefSubType = ""
+	part.Event = ""
+	part.EventParams = nil
+	part.Params = nil
+	part.ContentStartUTF16 = nil
+	part.ContentEndUTF16 = nil
+	part.PackID = ""
+	part.StickerID = ""
+	part.Alt = ""
+	part.AttachmentID = ""
+	part.Filename = ""
+	part.ContentType = ""
+	part.SizeBytes = 0
+	part.DurationMS = 0
+	part.TranscriptionStatus = ""
+	part.SynthesisStatus = ""
+	part.ChoiceID = ""
+	part.Prompt = ""
+	part.Layout = ""
+	part.Options = nil
+	part.AllowDismiss = nil
+	part.ExpiresAt = ""
+	part.SelectCount = 0
+	part.OptionID = ""
+	return part, nil
+}
+
 func clearNonChoiceFields(part *protocol.MessagePart) {
 	part.Text = ""
 	part.RefType = ""
@@ -728,6 +772,18 @@ func scrubForeignPartFields(part protocol.MessagePart) protocol.MessagePart {
 		part.OptionID = ""
 		part.Text = ""
 		// Keep optional RefID (page id) and Label (suggested title).
+	case protocol.MessagePartTypePeriodBriefInsert:
+		part.ChoiceID = ""
+		part.Prompt = ""
+		part.Layout = ""
+		part.Options = nil
+		part.AllowDismiss = nil
+		part.ExpiresAt = ""
+		part.SelectCount = 0
+		part.OptionID = ""
+		part.Text = ""
+		part.Label = ""
+		// Keep RefID (run id) and SelectedOptionID (append/child).
 	default:
 		part.ChoiceID = ""
 		part.Prompt = ""

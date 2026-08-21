@@ -1,8 +1,7 @@
-export type NoteAssistantSatelliteId = "period_brief" | "worker" | "highlights";
+export type NoteAssistantSatelliteId = "period_brief" | "highlights";
 
 export const NOTE_ASSISTANT_SATELLITE_IDS: readonly NoteAssistantSatelliteId[] = [
   "period_brief",
-  "worker",
   "highlights",
 ];
 

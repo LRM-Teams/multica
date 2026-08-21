@@ -145,3 +145,9 @@ type V6ProjectionReader interface {
 	ProjectionV6Deltas(context.Context, V6ProjectionDeltaRequest) (V6ProjectionDeltaPage, error)
 	ProjectionV6NodeDetail(context.Context, string, string, string, string) (V6ProjectionNodeDetail, error)
 }
+
+// IsValidV6ProjectionNodeID reports whether value matches the frozen V6 key
+// contract used by projection node identifiers.
+func IsValidV6ProjectionNodeID(value string) bool {
+	return validV6Key(value)
+}

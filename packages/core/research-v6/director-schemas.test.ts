@@ -53,6 +53,32 @@ describe("Director V6 projection wire schemas", () => {
     );
   });
 
+  it("accepts a running Director Work node with an empty catalog summary", () => {
+    const value = snapshot();
+    value.nodes[0] = {
+      ...value.nodes[0]!,
+      id: "work_s:director",
+      kind: "work_s",
+      tier: "S",
+      canonical_ref: { kind: "work_item", id: ID },
+      branch_ids: [],
+      state: {
+        execution: "running",
+        conclusion: "proposed",
+        integration: "unmatched",
+      },
+      title: "director",
+      catalog_summary: "",
+      terminal: false,
+      expandable: false,
+      hidden_child_count: 0,
+    };
+
+    const parsed = parseResearchV6DirectorProjectionSnapshot(value);
+    expect(parsed.slice_key).toBe("default");
+    expect(parsed.nodes[0]?.catalog_summary).toBe("");
+  });
+
   it("degrades the legacy experimental projection shape without throwing", () => {
     expect(
       parseResearchV6DirectorProjectionSnapshot({

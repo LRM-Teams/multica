@@ -59,7 +59,7 @@ export const ResearchV6DirectorProjectionNodeSchema = z
       .refine((values) => new Set(values).size === values.length),
     state: ResearchV6DirectorProjectionStateSchema,
     title: z.string().max(4096).optional(),
-    catalog_summary: z.string().min(1).max(512),
+    catalog_summary: z.string().max(512),
     absorbed: z.boolean(),
     terminal: z.boolean(),
     expandable: z.boolean(),

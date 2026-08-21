@@ -1,14 +1,15 @@
 name: Deploy
 
-# Production deployment to the Aliyun host (101.200.210.144, runner label
-# `aliyun`). Images build on GitHub-hosted runners and push to GHCR; the
-# Aliyun runner pulls exact immutable image tags and restarts Compose locally.
+# Production deployment to the Aliyun host (101.200.210.144). Images build on
+# GitHub-hosted runners and push to GHCR; the deploy job copies its immutable
+# bundle over SSH and restarts Compose on the host.
 #
 # Test has its own `dev` → Tencent s89 workflow in deploy-test.yml. This lane
 # runs only after an accepted promotion reaches `main`; production never
 # consumes a `dev` push directly.
 #
-# Host layout: deploy/runner user `dev`, stack under `/data/multica`. The
+# Host layout: SSH and deploy commands run as `dev`, and the stack lives under
+# `/data/multica`. The
 # protected `aliyun-dev` Environment is the legacy-named production credential
 # boundary. Database
 # identity stays in the host-owned `/data/multica/.env`; the speech API key is
@@ -80,9 +81,9 @@ jobs:
           install -m 0644 docker-compose.aliyun.yml "${bundle}/docker-compose.aliyun.yml"
           install -m 0644 docker-compose.oss.yml "${bundle}/docker-compose.oss.yml"
           install -m 0644 deploy/aliyun/Caddyfile "${bundle}/deploy/aliyun/Caddyfile"
-          install -m 0644 scripts/assert-runner-workspace-ownership.sh "${bundle}/scripts/assert-runner-workspace-ownership.sh"
           install -m 0644 scripts/assert-served-app-image-provenance.sh "${bundle}/scripts/assert-served-app-image-provenance.sh"
           install -m 0644 scripts/compose-environment-value.sh "${bundle}/scripts/compose-environment-value.sh"
+          install -m 0755 scripts/run-aliyun-step-over-ssh.sh "${bundle}/scripts/run-aliyun-step-over-ssh.sh"
           install -m 0755 scripts/run-aliyun-backend-migration.sh "${bundle}/scripts/run-aliyun-backend-migration.sh"
           install -m 0644 scripts/validate-rtc-environment.sh "${bundle}/scripts/validate-rtc-environment.sh"
           install -m 0755 scripts/validate-public-origins.sh "${bundle}/scripts/validate-public-origins.sh"
@@ -246,14 +247,17 @@ jobs:
        (github.event_name == 'workflow_dispatch' &&
         github.ref == 'refs/heads/main' &&
         github.event.inputs.image_tag != ''))
-    runs-on: [self-hosted, aliyun]
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       actions: read
       packages: read
     env:
       DEPLOY_DIR: /data/multica
-      RUNNER_EXPECTED_USER: dev
+      SSH_HOST: 101.200.210.144
+      SSH_USER: ${{ secrets.SSH_USER }}
+      SSH_KNOWN_HOSTS: 101.200.210.144 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOdhb/rlrAgosAQJ2HgvvwwWWXQjB93g4iirhyKDBcn2
+      REMOTE_RUNNER_TEMP: /tmp/multica-deploy-${{ github.run_id }}-${{ github.run_attempt }}
       # Secret values are never copied into the host dotenv. Compose propagates
       # this ambient value into the backend container.
       DOUBAO_SPEECH_API_KEY: ${{ secrets.DOUBAO_SPEECH_API_KEY }}
@@ -279,55 +283,51 @@ jobs:
         ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.image_tag != '')
             && github.event.inputs.image_tag
             || needs.build.outputs.tag }}
+    defaults:
+      run:
+        shell: bash -c 'exec "$RUNNER_TEMP/multica-deploy-bundle/scripts/run-aliyun-step-over-ssh.sh" "$1"' _ {0}
     steps:
-      # This runs before any artifact extraction. It catches contamination left
-      # by a previous job or host-side command at the first observable phase.
-      - name: Preflight runner work root ownership
-        run: |
-          set -euo pipefail
-          phase=pre-artifact
-          actual_user="$(id -un)"
-          if [ "$actual_user" != "$RUNNER_EXPECTED_USER" ]; then
-            echo "::error title=Unexpected runner identity::phase=${phase} expected=${RUNNER_EXPECTED_USER} actual=${actual_user}"
-            exit 1
-          fi
-          runner_work_root="$(dirname -- "$RUNNER_WORKSPACE")"
-          ownership_report="$(mktemp "${RUNNER_TEMP}/runner-ownership-preflight.XXXXXX")"
-          find_errors="$(mktemp "${RUNNER_TEMP}/runner-ownership-preflight-errors.XXXXXX")"
-          trap 'rm -f "$ownership_report" "$find_errors"' EXIT
-          cd /
-          find_status=0
-          if find "$runner_work_root" -xdev ! -user "$RUNNER_EXPECTED_USER" -print0 >"$ownership_report" 2>"$find_errors"; then
-            :
-          else
-            find_status=$?
-          fi
-          offender_count=0
-          while IFS= read -r -d '' path; do
-            metadata="$(stat -c '%U:%G mode=%a' -- "$path")"
-            echo "::error title=Runner workspace ownership violation::phase=${phase} owner=${metadata} path=${path}"
-            offender_count=$((offender_count + 1))
-          done <"$ownership_report"
-          if [ "$find_status" -ne 0 ]; then
-            echo "::error title=Runner ownership scan failed::phase=${phase} root=${runner_work_root}"
-            sed 's/^/  /' "$find_errors"
-            exit 1
-          fi
-          if [ "$offender_count" -gt 0 ]; then
-            echo "::error title=Runner workspace ownership violation::phase=${phase} root=${runner_work_root} expected_owner=${RUNNER_EXPECTED_USER} offenders=${offender_count}"
-            exit 1
-          fi
-          echo "Runner workspace ownership OK: phase=${phase} root=${runner_work_root} owner=${RUNNER_EXPECTED_USER}"
-
       - name: Download immutable deploy bundle
         uses: actions/download-artifact@v8
         with:
           name: deploy-bundle-${{ github.sha }}
           path: ${{ runner.temp }}/multica-deploy-bundle
 
-      - name: Verify runner ownership after artifact extraction
-        id: ownership_after_artifact
-        run: bash "${RUNNER_TEMP}/multica-deploy-bundle/scripts/assert-runner-workspace-ownership.sh" post-artifact
+      - name: Configure production SSH identity
+        shell: bash
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          : "${SSH_USER:?SSH_USER must be configured in aliyun-dev}"
+          : "${SSH_PRIVATE_KEY:?SSH_PRIVATE_KEY must be configured in aliyun-dev}"
+          ssh_dir="${RUNNER_TEMP}/aliyun-ssh"
+          install -d -m 0700 "$ssh_dir"
+          printf '%s\n' "$SSH_PRIVATE_KEY" >"${ssh_dir}/id_ed25519"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" >"${ssh_dir}/known_hosts"
+          chmod 0600 "${ssh_dir}/id_ed25519" "${ssh_dir}/known_hosts"
+          {
+            echo "SSH_KEY_PATH=${ssh_dir}/id_ed25519"
+            echo "SSH_KNOWN_HOSTS_PATH=${ssh_dir}/known_hosts"
+          } >>"$GITHUB_ENV"
+
+      - name: Copy immutable deploy bundle to production
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh_options=(
+            -i "$SSH_KEY_PATH"
+            -o BatchMode=yes
+            -o IdentitiesOnly=yes
+            -o StrictHostKeyChecking=yes
+            -o "UserKnownHostsFile=$SSH_KNOWN_HOSTS_PATH"
+          )
+          printf -v remote_temp_q '%q' "$REMOTE_RUNNER_TEMP"
+          ssh "${ssh_options[@]}" "$SSH_USER@$SSH_HOST" \
+            "rm -rf -- ${remote_temp_q} && install -d -m 0700 -- ${remote_temp_q}"
+          tar -C "$RUNNER_TEMP" -czf - multica-deploy-bundle |
+            ssh "${ssh_options[@]}" "$SSH_USER@$SSH_HOST" \
+              "tar -C ${remote_temp_q} -xzf -"
 
       - name: Log in to GHCR
         env:
@@ -565,14 +565,6 @@ jobs:
           # Prune unused Docker images to prevent disk from filling up (#327).
           docker image prune -af
 
-      # Run even when the deploy step failed. The deploy user owns both the
-      # runner work root and /data; any unexpected owner in _work is a hard
-      # boundary violation, not something for a later checkout to discover.
-      - name: Verify runner ownership after deploy step
-        id: ownership_after_deploy
-        if: always() && steps.ownership_after_artifact.outcome == 'success'
-        run: bash "${RUNNER_TEMP}/multica-deploy-bundle/scripts/assert-runner-workspace-ownership.sh" post-deploy
-
       - name: Verify served app image provenance before health checks
         run: |
           set -euo pipefail
@@ -704,6 +696,6 @@ jobs:
             "ghcr.io/${owner_lc}/multica-backend:${IMAGE_TAG}" \
             "ghcr.io/${owner_lc}/multica-web:${IMAGE_TAG}"
 
-      - name: Final runner ownership postflight
-        if: always() && steps.ownership_after_artifact.outcome == 'success'
-        run: bash "${RUNNER_TEMP}/multica-deploy-bundle/scripts/assert-runner-workspace-ownership.sh" final
+      - name: Remove remote deploy bundle
+        if: always()
+        run: rm -rf -- "$RUNNER_TEMP"

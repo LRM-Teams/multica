@@ -12,6 +12,7 @@ import {
   researchV6DirectorReportCompiledOptions,
   researchV6DirectorReportOptions,
   researchV6DirectorReportsOptions,
+  researchV6DirectorWorkActivityOptions,
 } from "@multica/core/research-v6/director-queries";
 import {
   researchV6DirectorSelectedRefFromNode,
@@ -23,11 +24,12 @@ import type {
   AgentPanelIdentitySnapshot,
   OpenAgentPanelFn,
 } from "@multica/core/agents";
+import { useRunnerActivity } from "@multica/core/agents";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { agentListOptions } from "@multica/core/workspace/queries";
 import { useWS } from "@multica/core/realtime";
-import type { WSEventType } from "@multica/core/types/events";
+import type { RunnerActivityTimelineRow, WSEventType } from "@multica/core/types/events";
 import {
   dedupeResearchFleetMembers,
   isResearchD5Lens,
@@ -316,6 +318,79 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
       directorV6Enabled &&
       Boolean(directorCanvas.snapshotId && selectedDirectorProjectionNode),
   });
+  const selectedDirectorWorkItemId =
+    selectedDirectorProjectionNode?.kind === "work_s"
+      ? selectedDirectorProjectionNode.canonical_ref.id
+      : "";
+  const {
+    data: directorWorkActivityData,
+    isLoading: directorWorkActivityLoading,
+    isError: directorWorkActivityError,
+    refetch: refetchDirectorWorkActivity,
+  } = useQuery({
+    ...researchV6DirectorWorkActivityOptions(
+      directorTransport,
+      wsId,
+      sessionId,
+      selectedDirectorWorkItemId,
+      selectedDirectorProjectionNode?.updated_at ?? "unselected",
+    ),
+    enabled: directorV6Enabled && Boolean(selectedDirectorWorkItemId),
+  });
+  useEffect(() => {
+    const inboxTaskId = directorWorkActivityData?.inbox_task_id;
+    if (!directorV6Enabled || !inboxTaskId) return;
+    const refetchMatchingWorkActivity = (payload: unknown) => {
+      const progress = payload as { task_id?: unknown };
+      if (progress.task_id === inboxTaskId) {
+        void refetchDirectorWorkActivity();
+      }
+    };
+    const unsubscribers = [
+      "task:running",
+      "task:progress",
+      "task:completed",
+      "task:failed",
+      "task:cancelled",
+    ].map((event) => subscribe(event as WSEventType, refetchMatchingWorkActivity));
+    return () => {
+      for (const unsubscribe of unsubscribers) unsubscribe();
+    };
+  }, [
+    directorV6Enabled,
+    directorWorkActivityData?.inbox_task_id,
+    refetchDirectorWorkActivity,
+    subscribe,
+  ]);
+  const directorRunnerActivity = useRunnerActivity(
+    directorV6Enabled ? wsId : undefined,
+    directorWorkActivityData?.agent_id || undefined,
+  );
+  const directorWorkTimeline = useMemo<RunnerActivityTimelineRow[]>(() => {
+    const startedAt = Date.parse(directorWorkActivityData?.started_at ?? "");
+    const persistedTimeline = directorWorkActivityData?.timeline ?? [];
+    if (!Number.isFinite(startedAt)) return persistedTimeline.slice(0, 8);
+    const completedAt = Date.parse(directorWorkActivityData?.completed_at ?? "");
+    const upperBound = Number.isFinite(completedAt) ? completedAt : Number.POSITIVE_INFINITY;
+    const timelineById = new Map(
+      persistedTimeline.map((row) => [row.id, row] as const),
+    );
+    for (const row of directorRunnerActivity.data?.timeline ?? []) {
+      timelineById.set(row.id, row);
+    }
+    return [...timelineById.values()]
+      .filter((row) => {
+        const occurredAt = Date.parse(row.occurred_at);
+        return occurredAt >= startedAt && occurredAt <= upperBound;
+      })
+      .sort((left, right) => Date.parse(right.occurred_at) - Date.parse(left.occurred_at))
+      .slice(0, 8);
+  }, [
+    directorRunnerActivity.data?.timeline,
+    directorWorkActivityData?.completed_at,
+    directorWorkActivityData?.started_at,
+    directorWorkActivityData?.timeline,
+  ]);
   const directorSelectionIdentity = researchV6DirectorSelectionIdentity(
     wsId,
     sessionId,
@@ -1281,6 +1356,10 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
                 <ResearchV6NodeDetail
                   node={selectedDirectorProjectionNode}
                   detail={directorNodeDetailData}
+                  workActivity={directorWorkActivityData}
+                  workTimeline={directorWorkTimeline}
+                  workActivityLoading={directorWorkActivityLoading}
+                  workActivityError={directorWorkActivityError}
                   loading={directorNodeDetailLoading}
                   error={directorNodeDetailError}
                   selectedForChat={
@@ -1291,6 +1370,12 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
                     directorCanvas.canvas?.projectionNodeById ?? new Map()
                   }
                   onRetry={() => void refetchDirectorNodeDetail()}
+                  onRetryWorkActivity={() => {
+                    void refetchDirectorWorkActivity();
+                    if (directorWorkActivityData?.agent_id) {
+                      void directorRunnerActivity.refetch();
+                    }
+                  }}
                   onFocusNode={(nodeId) => {
                     if (!directorCanvas.canvas?.projectionNodeById.has(nodeId)) return;
                     handleD5LensChange("relations");

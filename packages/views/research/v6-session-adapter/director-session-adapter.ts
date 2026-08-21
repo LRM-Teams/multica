@@ -42,9 +42,12 @@ function rendererStatus(node: ResearchV6DirectorProjectionNode): string {
 
 function rendererLevel(node: ResearchV6DirectorProjectionNode): "xxl" | "xl" | "l" | "m" | "s" {
   switch (node.tier) {
-    case "GOAL":
     case "XXL":
       return "xxl";
+    case "GOAL":
+      // Goal is the origin, not the final synthesis. Keeping it below XXL
+      // leaves visual headroom for the research result the run is building.
+      return "l";
     case "XL":
       return "xl";
     case "L":

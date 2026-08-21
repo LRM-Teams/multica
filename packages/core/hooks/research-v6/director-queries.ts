@@ -50,6 +50,18 @@ export const researchV6DirectorProjectionKeys = {
       nodeId,
       view,
     ] as const,
+  workActivity: (
+    workspaceId: string,
+    runId: string,
+    workItemId: string,
+    projectionRevision: string,
+  ) =>
+    [
+      ...researchV6DirectorProjectionKeys.all(workspaceId, runId),
+      "work-activity",
+      workItemId,
+      projectionRevision,
+    ] as const,
   reports: (workspaceId: string, runId: string) =>
     [
       ...researchV6DirectorProjectionKeys.all(workspaceId, runId),
@@ -185,6 +197,25 @@ export function researchV6DirectorNodeDetailOptions(
       }
       return detail;
     },
+  });
+}
+
+export function researchV6DirectorWorkActivityOptions(
+  transport: ResearchV6DirectorDetailTransport,
+  workspaceId: string,
+  runId: string,
+  workItemId: string,
+  projectionRevision: string,
+) {
+  return queryOptions({
+    queryKey: researchV6DirectorProjectionKeys.workActivity(
+      workspaceId,
+      runId,
+      workItemId,
+      projectionRevision,
+    ),
+    queryFn: ({ signal }) =>
+      transport.loadWorkActivity(workspaceId, runId, workItemId, signal),
   });
 }
 

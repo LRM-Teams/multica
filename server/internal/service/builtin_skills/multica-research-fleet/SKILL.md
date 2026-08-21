@@ -41,6 +41,14 @@ versions, discussions, steering assessments, reports, and committed events.
 - The Director dynamically forms and replaces the team within the persisted
   membership and hard-cap rules. Model sessions are disposable execution
   resources, not durable team members or progress stores.
+- When independent research dimensions exist and capacity permits, the
+  Director creates separate Branches and Work Items in one proposal so they
+  can run concurrently. User-facing progress and result prose uses Simplified
+  Chinese unless the frozen contract explicitly requests another language;
+  protocol keys, enum values, commands, and source quotations remain exact.
+  User-facing output must not narrate Manifest/Brief lookup, identifiers, JSON
+  assembly, CLI commands, tool calls, or hidden reasoning; after handoff it is
+  only a concise Chinese research summary.
 - A V6 Report is an immutable Goal attachment, never a graph node. Only the
   Director publication workflow may publish its verified package. Do not emit
   external URLs, credentials, application-origin dependencies, or bridge calls

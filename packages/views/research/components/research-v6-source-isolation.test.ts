@@ -39,4 +39,18 @@ describe("Research D5 canonical projection source isolation", () => {
       /fallbackName=\{[\s\S]*directorV6Enabled[\s\S]*assignedDirectorAgent/,
     );
   });
+
+  it("refetches the selected durable Work activity on matching task progress", () => {
+    for (const event of [
+      '"task:running"',
+      '"task:progress"',
+      '"task:completed"',
+      '"task:failed"',
+      '"task:cancelled"',
+    ]) {
+      expect(source).toContain(event);
+    }
+    expect(source).toContain("progress.task_id === inboxTaskId");
+    expect(source).toContain("void refetchDirectorWorkActivity()");
+  });
 });

@@ -5548,6 +5548,25 @@ export class ApiClient {
     return detail;
   }
 
+  async getResearchV6DirectorWorkActivity(
+    workspaceId: string,
+    runId: string,
+    workItemId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<import("../types/research-v6-director").ResearchV6DirectorWorkActivity> {
+    const activity = await this.fetch<
+      import("../types/research-v6-director").ResearchV6DirectorWorkActivity
+    >(
+      `/api/research/v6/runs/${encodeURIComponent(runId)}/work-items/${encodeURIComponent(workItemId)}/activity`,
+      { signal: options?.signal },
+    );
+    if (activity.work_item_id !== workItemId) {
+      throw new Error("Director V6 work activity identity mismatch");
+    }
+    void workspaceId;
+    return activity;
+  }
+
   async getResearchV6DirectorReports(
     workspaceId: string,
     runId: string,

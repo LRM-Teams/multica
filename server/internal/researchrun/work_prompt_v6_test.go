@@ -52,6 +52,37 @@ func TestBuildV6WorkDispatchPromptMakesDirectorAssignmentExecutable(t *testing.T
 	}
 }
 
+func TestRonaldoV6DirectorProtocolRequiresParallelChineseResearch(t *testing.T) {
+	for _, want := range []string{
+		"Simplified Chinese",
+		"multiple independent branches",
+		"same proposal",
+		"Do not narrate contract lookup",
+	} {
+		if !strings.Contains(RonaldoV6DirectorSystemProtocol, want) {
+			t.Fatalf("director protocol missing %q", want)
+		}
+	}
+}
+
+func TestV6WorkPromptKeepsUserFacingProgressInChinese(t *testing.T) {
+	manifest := validV6DispatchPromptManifest(t, map[string]any{
+		"expected_result_schema": string(V6ContractAtomicResultSubmission),
+		"task_id":                "00000000-0000-4000-8000-000000000214",
+		"mission_prompt":         "调研浏览器游戏的市场与技术可行性。",
+		"task_specific_schema": map[string]any{"payload_schemas": map[string]any{
+			"research.finding.v1": map[string]any{"type": "object"},
+		}},
+	})
+	prompt, err := BuildV6WorkDispatchPrompt(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(prompt, "Simplified Chinese") {
+		t.Fatal("work prompt does not constrain user-facing progress language")
+	}
+}
+
 func TestBuildV6WorkDispatchPromptIncludesCatalogAndReportUploadPaths(t *testing.T) {
 	manifest := validV6DispatchPromptManifest(t, map[string]any{
 		"expected_result_schema": string(V6ContractReportPackageSubmission),

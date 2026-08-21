@@ -8,6 +8,7 @@ import {
   PropertyPicker,
 } from "../../../issues/components/pickers";
 import { CHIP_CLASS } from "./chip";
+import { EditPencil } from "./inspector-field";
 import { useT } from "../../../i18n";
 
 /**
@@ -90,9 +91,12 @@ export function ThinkingPicker({
         />
       }
       trigger={
-        <span className="min-w-0 truncate font-mono text-[11px]">
-          {triggerLabel}
-        </span>
+        <>
+          <span className="min-w-0 truncate font-mono text-[11px]">
+            {triggerLabel}
+          </span>
+          <EditPencil />
+        </>
       }
     >
       {levels.map((l) => (

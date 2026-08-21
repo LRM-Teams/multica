@@ -155,7 +155,6 @@
     "prop_runtime": "Runtime",
     "prop_model": "Model",
     "prop_thinking": "Thinking",
-    "prop_concurrency": "Concurrency",
     "prop_owner": "Owner",
     "prop_created": "Created",
     "prop_updated": "Updated",
@@ -189,6 +188,7 @@
       "cancel": "Cancel",
       "role_updated_toast": "Workspace role updated",
       "role_update_failed_toast": "Failed to update workspace role",
+      "role_hint": "Admin lets this agent manage channels, invitations, agents & computers, and settings in this workspace. It can never become Owner.",
       "role_readonly_hint": "Only workspace owners and admins can change an agent's workspace role."
     },
     "start_intent_failure": "This agent did not finish starting on its selected computer ({{code}}). Review the runtime configuration, then use the normal human restart flow if appropriate.",
@@ -199,8 +199,6 @@
     "trigger_label": "Attach"
   },
   "pickers": {
-    "concurrency_tooltip": "Concurrency · {{value}} max concurrent tasks",
-    "concurrency_range": "Max concurrent tasks ({{min}}–{{max}})",
     "runtime_none": "No runtime",
     "runtime_tooltip": "Runtime · {{name}} · {{status}}",
     "runtime_tooltip_none": "Runtime · none selected",

@@ -20,6 +20,30 @@ func TestV6ProjectionUsesCanonicalPostgresAndPinnedPages(t *testing.T) {
 	}
 }
 
+func TestV6WorkProjectionUsesAssignedBranchScope(t *testing.T) {
+	raw, err := os.ReadFile("postgres_projection_v6.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(raw)
+	for _, required := range []string{
+		"research_v6_work_item_branch",
+		"agent_inbox_event inbox",
+		"inbox.updated_at",
+		"inbox.started_at",
+		"inbox.completed_at",
+		"agent_task_progress_snapshot",
+		"progress.updated_at",
+		`kind != "director" || !terminal`,
+		"build.defaultVisible[workNodeID] = false",
+		`v6ProjectionEdgeID("collapsed_path"`,
+	} {
+		if !strings.Contains(source, required) {
+			t.Fatalf("V6 Work projection missing %q", required)
+		}
+	}
+}
+
 func BenchmarkV6ProjectionPagination(b *testing.B) {
 	for _, size := range []int{1000, 10000, 50000} {
 		b.Run(fmt.Sprintf("nodes_%d", size), func(b *testing.B) {

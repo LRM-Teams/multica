@@ -45,6 +45,106 @@ const node = (id: string, title: string): ResearchV6DirectorProjectionNode => ({
 });
 
 describe("ResearchV6NodeDetail", () => {
+  it("shows the assigned Agent, mission, and live execution process for Work S", () => {
+    const work = {
+      ...node("work-node", "深读手"),
+      kind: "work_s",
+      tier: "S",
+      canonical_ref: { kind: "work_item", id: "work-item-1" },
+      state: { execution: "running", conclusion: "proposed", integration: "unmatched" },
+      catalog_summary: "核查网页游戏的技术实现与成本。",
+    } satisfies ResearchV6DirectorProjectionNode;
+
+    render(
+      <ResearchV6NodeDetail
+        node={work}
+        loading={false}
+        error={false}
+        selectedForChat={false}
+        projectionNodeById={new Map()}
+        workActivity={{
+          work_item_id: "work-item-1",
+          attempt_id: "attempt-1",
+          agent_id: "agent-1",
+          agent_name: "深读手",
+          inbox_task_id: "task-1",
+          mission: "核查网页游戏的技术实现与成本。",
+          status: "running",
+          progress: "正在核对浏览器兼容性数据",
+          progress_step: 1,
+          progress_total: 3,
+          started_at: "2026-08-17T00:00:00Z",
+          updated_at: "2026-08-17T00:00:00Z",
+          timeline: [],
+          timeline_has_more: false,
+        }}
+        workTimeline={[
+          {
+            id: "activity-1",
+            occurred_at: "2026-08-17T00:00:01Z",
+            title: "Searching web",
+            subtext: "WebGPU compatibility",
+            tone: "warning",
+            body_kind: "none",
+          },
+          {
+            id: "activity-2",
+            occurred_at: "2026-08-17T00:00:02Z",
+            title: "Running command",
+            subtext: "检查 Canvas 兼容性数据",
+            tone: "running",
+            body_kind: "command",
+          },
+        ]}
+        onRetry={vi.fn()}
+        onReference={vi.fn()}
+        onFocusNode={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("region", { name: "Agent work activity" })).toHaveTextContent("深读手");
+    expect(screen.getAllByText("核查网页游戏的技术实现与成本。")).toHaveLength(2);
+    expect(screen.getByText("Searching web")).toBeTruthy();
+    expect(screen.getByText("WebGPU compatibility")).toBeTruthy();
+    expect(screen.getByText("Running command")).toBeTruthy();
+    expect(screen.getByText("检查 Canvas 兼容性数据")).toBeTruthy();
+    expect(screen.getByRole("progressbar", { name: "Latest progress" })).toHaveAttribute(
+      "aria-valuenow",
+      "33",
+    );
+  });
+
+  it("shows a retry action when Agent activity cannot be loaded", () => {
+    const work = {
+      ...node("work-node", "Researcher"),
+      kind: "work_s",
+      tier: "S",
+      canonical_ref: { kind: "work_item", id: "work-item-1" },
+    } satisfies ResearchV6DirectorProjectionNode;
+    const onRetryWorkActivity = vi.fn();
+
+    render(
+      <ResearchV6NodeDetail
+        node={work}
+        loading={false}
+        error={false}
+        workActivityError
+        selectedForChat={false}
+        projectionNodeById={new Map()}
+        onRetry={vi.fn()}
+        onRetryWorkActivity={onRetryWorkActivity}
+        onReference={vi.fn()}
+        onFocusNode={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "The Agent's work activity could not be loaded.",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(onRetryWorkActivity).toHaveBeenCalledOnce();
+  });
+
   it("locates a server-declared related node and exposes immutable history", () => {
     const current = node("current", "Synthesis");
     const input = node("input", "Supporting result");

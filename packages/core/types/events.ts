@@ -298,7 +298,7 @@ export interface TaskMessagePayload {
 
 /** `agent_reminder:changed` — a pure invalidate signal (schedule/snooze/update/cancel/fire/terminalize, emitted post-commit). Minimal on purpose: no title/anchor/reminder data broadcast, just the scope to refetch. */
 export interface AgentReminderChangedPayload {
-  agent_id: string;
+  agentId: string;
 }
 
 // The Workspace Runner Activity read-model is presentation-safe: callers must

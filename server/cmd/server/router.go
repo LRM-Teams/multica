@@ -1351,12 +1351,16 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// (spec 005); lets operators/AReaL track runs without the
 			// per-run capability token.
 			r.Get("/api/v1/env-dispatch/{projectID}/diagnosis/latest", h.GetLatestEnvDispatchDiagnosis)
+			r.Get("/api/v1/env-dispatch/{projectID}/files", h.DownloadEnvDispatchFile)
+			r.Post("/api/v1/env-dispatch/{projectID}/files", h.UploadEnvDispatchFile)
 			// Channel-first facades for dispatch_type=message: resolve the bound
 			// project internally. Project-first routes above remain available.
 			r.Get("/api/v1/env-dispatch/channels/{channelID}/dag", h.GetEnvDispatchChannelDag)
 			r.Post("/api/v1/env-dispatch/channels/{channelID}/diagnosis", h.DiagnoseEnvDispatchChannel)
 			r.Get("/api/v1/env-dispatch/channels/{channelID}/diagnosis/latest", h.GetLatestEnvDispatchChannelDiagnosis)
 			r.Delete("/api/v1/env-dispatch/channels/{channelID}", h.DeleteEnvDispatchChannel)
+			r.Get("/api/v1/env-dispatch/channels/{channelID}/files", h.DownloadEnvDispatchChannelFile)
+			r.Post("/api/v1/env-dispatch/channels/{channelID}/files", h.UploadEnvDispatchChannelFile)
 			r.Get("/api/v1/channels/{channelID}/env-checkpoints", h.ListChannelEnvCheckpoints)
 
 			// Env-checkpoint APIs. Gated by ENV_CHECKPOINTS_ENABLED; handlers

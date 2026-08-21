@@ -53,6 +53,31 @@ type EnvDispatchRequest struct {
 	Message     *MessageDispatchInput         `json:"message,omitempty"`
 	PerAgentEnv map[string]PerAgentEnvRequest `json:"per_agent_env,omitempty"`
 	Audit       *EnvDispatchAuditRequest      `json:"audit,omitempty"`
+	// StageFiles optionally materializes workspace-relative text files into the
+	// dispatched environment after provision. Additive eval seam: omitted on
+	// training dispatches. Paths must be relative and must not contain "..".
+	StageFiles []EnvDispatchStagedFile `json:"stage_files,omitempty"`
+	// Environment is an optional benchmark-neutral recipe. Image/services are
+	// accepted for client compatibility; only inlined Files are applied as
+	// staged workspace files. Docker image names are not MultiCA templates.
+	Environment *EnvDispatchEnvironment `json:"environment,omitempty"`
+}
+
+// EnvDispatchStagedFile is one workspace-relative text file to materialize
+// into a dispatched environment (POST /env-dispatch stage_files, and
+// POST .../files).
+type EnvDispatchStagedFile struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+}
+
+// EnvDispatchEnvironment is the additive `environment` object on
+// POST /api/v1/env-dispatch. Files are staged; Image and Services are
+// recorded only as client-compatible fields.
+type EnvDispatchEnvironment struct {
+	Image    string                  `json:"image,omitempty"`
+	Files    []EnvDispatchStagedFile `json:"files,omitempty"`
+	Services []string                `json:"services,omitempty"`
 }
 
 // EnvDispatchAuditRequest is the opt-in audit correlation request. The
@@ -302,6 +327,12 @@ func (h *Handler) EnvDispatch(w http.ResponseWriter, r *http.Request) {
 		template = h.cfg.DefaultSelfPlayTemplate
 	}
 
+	staged, err := collectEnvDispatchStagedFiles(req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	svc := newEnvDispatchService(h, envDispatchConcurrency())
 	// Branch dispatch continues a running source, which it can only do from a
 	// captured savepoint now that the live clone is gone.
@@ -331,6 +362,15 @@ func (h *Handler) EnvDispatch(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeEnvDispatchError(w, err, res)
 		return
+	}
+	if len(staged) > 0 {
+		if stageErr := h.stageEnvDispatchFiles(r.Context(), workspaceID, res.ProjectID, res.ChannelID, staged); stageErr != nil {
+			slog.Error("env-dispatch stage_files failed after provision",
+				"project_id", res.ProjectID,
+				"channel_id", res.ChannelID,
+				"error", stageErr,
+			)
+		}
 	}
 	writeJSON(w, http.StatusCreated, envDispatchSuccessResponse(res))
 }

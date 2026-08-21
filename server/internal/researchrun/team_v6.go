@@ -82,7 +82,10 @@ type V6AgentSpec struct {
 }
 
 type AgentLifecycleAdapter interface {
-	CreateAgent(context.Context, string, string, V6AgentSpec) (string, error)
+	// CreateAgent mints (or idempotently returns) the agent for one
+	// director proposal. The idempotency key is director-generated and
+	// only unique within a run, so runID is part of the receipt identity.
+	CreateAgent(ctx context.Context, workspaceID, runID, idempotencyKey string, spec V6AgentSpec) (string, error)
 	ArchiveAgent(context.Context, string, string, string) error
 }
 

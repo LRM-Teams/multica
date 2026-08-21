@@ -1,11 +1,16 @@
 "use client";
 
-import { useEffect, useRef } from "react";
-import { FileIcon, Loader2, RotateCcw, X, ZoomIn } from "lucide-react";
+import { Download, FileIcon, Loader2, RotateCcw, Trash2, X } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@multica/ui/components/ui/popover";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { cn } from "@multica/ui/lib/utils";
-import { useAttachmentPreview } from "../../editor/attachment-preview-modal";
+import { useDownloadAttachment } from "../../editor/use-download-attachment";
+import { formatFileSize, getFileExtension } from "../../editor/utils/file-meta";
 import { useT } from "../../i18n/use-t";
 import type { PendingAttachment } from "../hooks/use-composer-pending-attachments";
 
@@ -25,39 +30,22 @@ function isImagePending(item: PendingAttachment): boolean {
   return item.contentType.startsWith("image/");
 }
 
+function imageMeta(item: PendingAttachment): string {
+  const type = getFileExtension(item.filename).toUpperCase() || "IMAGE";
+  return [type, formatFileSize(item.sizeBytes)].filter(Boolean).join(" · ");
+}
+
 /**
  * Slack-style composer tray: a **single horizontal strip** of pending
  * thumbs/chips above the editor. Never stacks as a vertical list.
  *
  * Mobile web: same one-row model + horizontal pan; larger hit targets; remove
- * always visible (no hover-gated controls).
+ * actions use 40px touch targets inside the image detail popover.
  *
- * LRM-1180 (frozen design v2 on parent LRM-1150) — two changes, both about the
- * remove button no longer smothering the thumb it belongs to:
- *
- *  1. The image remove button is 20px (`size-5`) and sits in the **overflow
- *     corner** (`-right-2 -top-2`), so only a 12×12 sliver overlaps the thumb:
- *     41.3% → 4.6% occlusion on mobile (36px in-image button on a 56px thumb),
- *     25.0% → 6.25% on desktop. `after:-inset-0.5` restores a 24px pointer
- *     target so WCAG SC 2.5.8 still passes at a 20px visual size.
- *     LRM-1228 extends the same corner rule to file/stale chips: they were the
- *     other half of “手机端 button 太大” (a 36px `size-9` in-chip button on
- *     mobile web). Nothing sits under the button there, but it ate ~42px of a
- *     176px chip; moving it out gives the filename 98px → 136px and the visual
- *     drops 36px → 20px. The chip reserves `pr-3` (the outdented button's inner
- *     half is 12px) so `truncate` text never runs underneath. Retry keeps the
- *     layout — centered on a thumb, inline in a chip — so only remove outdents.
- *  2. The thumb itself becomes the preview entry point (`<button>` + Enter /
- *     Space), reusing the shared `useAttachmentPreview()` modal rather than
- *     introducing a second lightbox. Desktop hover/keyboard-focus reveals a
- *     centered zoom glyph; the overflow corner leaves room for it (a centered
- *     24px block and an in-image 24px corner button used to overlap 12×12).
- *
- * Both depend on the tray reserving `pt-2 pr-2` (the `<ul>` has
- * `overflow-y-hidden`, whose clip region is the *padding* box — without it the
- * outdented button's top half is cut off) and `gap-3` (gap-2 == the 8px
- * outdent, so the button would touch the next item). `-mt-2` gives the
- * reserved top padding back to the layout so the composer doesn't grow.
+ * Images stay as clean thumbnails in the tray. Clicking one opens a compact,
+ * anchored popover with the contained image, filename, file metadata, download,
+ * and remove actions. Non-image and stale attachments keep the compact file
+ * chip with its overflow-corner remove control.
  *
  * Spec: docs/superpowers/specs/2026-07-13-chat-attachment-presentation-design.md
  */
@@ -69,53 +57,17 @@ export function ComposerAttachmentTray({
   className,
 }: ComposerAttachmentTrayProps) {
   const { t } = useT("channels");
-  const preview = useAttachmentPreview();
-
-  // Focus return: the shared handle exposes no onClose, so the tray watches
-  // `modal` flipping back to null and restores focus to the thumb that opened
-  // it. Keyboard users would otherwise land back at document start.
-  const thumbRefs = useRef<Record<string, HTMLButtonElement | null>>({});
-  const lastZoomedRef = useRef<string | null>(null);
-  const previewOpen = preview.modal !== null;
-  const wasPreviewOpen = useRef(false);
-  useEffect(() => {
-    if (previewOpen) {
-      wasPreviewOpen.current = true;
-      return;
-    }
-    if (!wasPreviewOpen.current) return;
-    wasPreviewOpen.current = false;
-    const id = lastZoomedRef.current;
-    // No-op when the item was removed while the preview was open.
-    if (id) thumbRefs.current[id]?.focus();
-  }, [previewOpen]);
+  const { t: editorT } = useT("editor");
+  const download = useDownloadAttachment();
 
   if (pending.length === 0) return null;
 
   // Image thumbs and file chip outer height stay aligned.
   const thumb = isMobile ? "size-14" : "size-12";
   const chipH = isMobile ? "h-14" : "h-12";
-  // ≥44px hit target on mobile web; desktop can stay compact. File chips only —
-  // image items use the 20px overflow-corner button (LRM-1180).
+  // File-chip recovery controls retain their existing responsive sizes.
   const iconBtn = isMobile ? "size-9" : "size-6";
   const iconGlyph = isMobile ? "size-3.5" : "size-2.5";
-
-  const openPreview = (item: PendingAttachment) => {
-    if (!item.previewUrl) return;
-    lastZoomedRef.current = item.localId;
-    // `open`, not `tryOpen`: tryOpen returns false when the kind can't be
-    // resolved and the visible result is a click that does nothing.
-    // `contentType` is the real MIME the tray already holds — pasted
-    // screenshots often have no extension, and getPreviewKind checks
-    // contentType before falling back to the filename.
-    preview.open({
-      kind: "url",
-      url: item.previewUrl,
-      filename: item.filename,
-      contentType: item.contentType,
-      attachmentId: item.attachmentId,
-    });
-  };
 
   return (
     <>
@@ -148,13 +100,7 @@ export function ComposerAttachmentTray({
             filename: item.filename,
           });
           const showImage = isImagePending(item) && !!item.previewUrl;
-          // Error keeps the centered slot for retry (retry-or-drop is the only
-          // meaningful action on a failed upload), so no zoom there. Uploading
-          // stays zoomable — previewUrl is a local blob, viewable before the
-          // upload lands.
-          const canZoom = showImage && item.status !== "error";
-          // Two centered elements would collide with the uploading spinner.
-          const showZoomHint = canZoom && item.status !== "uploading";
+          const canDownload = item.status === "ready" && !!item.attachmentId;
 
           return (
             <li
@@ -170,51 +116,84 @@ export function ComposerAttachmentTray({
               )}
             >
               {showImage ? (
-                canZoom ? (
-                  <button
-                    type="button"
-                    ref={(node) => {
-                      thumbRefs.current[item.localId] = node;
-                    }}
-                    className={cn(
-                      thumb,
-                      "relative block cursor-zoom-in overflow-hidden rounded-[7px] p-0 outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                    )}
-                    aria-label={previewLabel}
-                    data-testid={`composer-tray-zoom-${item.localId}`}
-                    onClick={() => openPreview(item)}
-                  >
-                    {/* Blob/remote tray preview only; shared package cannot use next/image.
-                        react-doctor-disable-next-line react-doctor/nextjs-no-img-element */}
-                    <img
-                      src={item.previewUrl}
-                      alt={item.filename}
-                      className={cn(thumb, "rounded-[7px] object-cover")}
-                      draggable={false}
-                    />
-                    {showZoomHint ? (
-                      <span
-                        data-testid={`composer-tray-zoom-hint-${item.localId}`}
-                        className="pointer-events-none absolute inset-0 hidden items-center justify-center rounded-[7px] bg-black/28 group-focus-within:flex group-hover:flex"
-                        aria-hidden
+                <Popover>
+                  <PopoverTrigger
+                    render={
+                      <button
+                        type="button"
+                        className={cn(
+                          thumb,
+                          "relative block cursor-zoom-in overflow-hidden rounded-[7px] p-0 outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                        )}
+                        aria-label={previewLabel}
+                        data-testid={`composer-tray-zoom-${item.localId}`}
                       >
-                        <span className="flex size-6 items-center justify-center rounded-md bg-background/90 text-foreground">
-                          <ZoomIn className="size-3.5" />
-                        </span>
-                      </span>
-                    ) : null}
-                  </button>
-                ) : (
-                  // Failed upload: the image stays visible for context but is
-                  // not an entry point — the centered slot is retry's.
-                  // react-doctor-disable-next-line react-doctor/nextjs-no-img-element
-                  <img
-                    src={item.previewUrl}
-                    alt={item.filename}
-                    className={cn(thumb, "rounded-[7px] object-cover")}
-                    draggable={false}
+                        {/* Blob/remote tray preview only; shared package cannot use next/image.
+                            react-doctor-disable-next-line react-doctor/nextjs-no-img-element */}
+                        <img
+                          src={item.previewUrl}
+                          alt={item.filename}
+                          className={cn(thumb, "rounded-[7px] object-cover")}
+                          draggable={false}
+                        />
+                      </button>
+                    }
                   />
-                )
+                  <PopoverContent
+                    side="top"
+                    align="start"
+                    sideOffset={8}
+                    data-testid={`composer-image-popover-${item.localId}`}
+                    className="w-[min(28.75rem,calc(100vw-1.5rem))] gap-0 overflow-hidden p-0"
+                  >
+                    <div className="flex aspect-[16/10] max-h-[38dvh] min-h-0 items-center justify-center bg-muted/50 p-3">
+                      {/* Local blob or uploaded URL; shared package cannot use next/image.
+                          react-doctor-disable-next-line react-doctor/nextjs-no-img-element */}
+                      <img
+                        src={item.previewUrl}
+                        alt={item.filename}
+                        className="max-h-full max-w-full rounded-md object-contain shadow-sm"
+                        draggable={false}
+                      />
+                    </div>
+                    <div className="flex min-h-14 items-center gap-3 px-3 py-2">
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium text-foreground">
+                          {item.filename}
+                        </p>
+                        <p className="text-xs text-muted-foreground">{imageMeta(item)}</p>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className={cn(isMobile ? "size-10" : "size-8")}
+                          aria-label={`${editorT(($) => $.image.download)} ${item.filename}`}
+                          disabled={!canDownload}
+                          onClick={() => {
+                            if (item.attachmentId) void download(item.attachmentId);
+                          }}
+                        >
+                          <Download className="size-4" />
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className={cn(
+                            isMobile ? "size-10" : "size-8",
+                            "hover:bg-destructive/10 hover:text-destructive",
+                          )}
+                          aria-label={removeLabel}
+                          onClick={() => onRemove(item.localId)}
+                        >
+                          <Trash2 className="size-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  </PopoverContent>
+                </Popover>
               ) : (
                 <FileIcon
                   className="size-3.5 shrink-0 text-muted-foreground"
@@ -270,9 +249,8 @@ export function ComposerAttachmentTray({
                 </div>
               ) : null}
 
-              {/* Retry is the primary recovery action and covers nothing, so it
-                  stays in the layout: centered over an image thumb, inline in a
-                  file chip's control row. Only remove goes to the corner. */}
+              {/* Retry remains centered over a failed image or inline in a file
+                  chip. Image removal lives in the detail popover. */}
               {showImage && item.status === "error" ? (
                 <Button
                   type="button"
@@ -299,39 +277,30 @@ export function ComposerAttachmentTray({
                 </Button>
               ) : null}
 
-              {/* LRM-1228: one remove rule for every chip kind — 20px visual in
-                  the overflow corner, 24px pointer target via `after:-inset-0.5`.
-                  File chips reserve `pr-3` (the button's inner half is 12px) so
-                  the truncated filename never runs underneath. */}
-              <div className="absolute -right-2 -top-2 z-30 flex shrink-0 items-center">
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="icon"
-                  className={cn(
-                    // 20px visual, 24px hit target via the ::after pad.
-                    "relative size-5 rounded-full border border-border bg-background/95 shadow-sm",
-                    'after:absolute after:-inset-0.5 after:content-[""]',
-                    // Only an image has something worth un-covering on desktop
-                    // hover. A file chip's remove is the chip's only control, so
-                    // hiding it until hover would just cost discoverability.
-                    showImage && !isMobile
-                      ? "opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100"
-                      : "opacity-100",
-                  )}
-                  aria-label={removeLabel}
-                  onClick={() => onRemove(item.localId)}
-                >
-                  <X className="size-3" />
-                </Button>
-              </div>
+              {/* File and stale chips retain the compact overflow-corner remove.
+                  Images intentionally have no inline remove chrome. */}
+              {!showImage ? (
+                <div className="absolute -right-2 -top-2 z-30 flex shrink-0 items-center">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="icon"
+                    className={cn(
+                      "relative size-5 rounded-full border border-border bg-background/95 shadow-sm",
+                      'after:absolute after:-inset-0.5 after:content-[""]',
+                      "opacity-100",
+                    )}
+                    aria-label={removeLabel}
+                    onClick={() => onRemove(item.localId)}
+                  >
+                    <X className="size-3" />
+                  </Button>
+                </div>
+              ) : null}
             </li>
           );
         })}
       </ul>
-      {/* Portals to document.body; mounted here so all four tray call sites
-          (channel + thread, DM ×2) get zoom with zero prop changes. */}
-      {preview.modal}
     </>
   );
 }

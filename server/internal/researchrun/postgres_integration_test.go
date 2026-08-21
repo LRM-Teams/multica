@@ -2944,6 +2944,11 @@ func seedResearchRunFixture(t *testing.T, ctx context.Context, pool *pgxpool.Poo
 
 func researchArtifactCleanupTables() []string {
 	return []string{
+		"research_result_node",
+		"research_node_absorption",
+		"research_discussion_turn",
+		"research_report_review",
+		"research_steering_assessment",
 		"research_artifact_version",
 		"research_artifact_policy_mutation",
 		"research_artifact_lifecycle_event",

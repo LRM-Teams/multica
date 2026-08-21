@@ -24,6 +24,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/memoryflush"
 	"github.com/multica-ai/multica/server/internal/memoryorigin"
 	"github.com/multica-ai/multica/server/internal/memorysignal"
+	"github.com/multica-ai/multica/server/internal/openclawadapt"
 	"github.com/multica-ai/multica/server/internal/secretscoped"
 	skillpkg "github.com/multica-ai/multica/server/internal/skill"
 	"github.com/multica-ai/multica/server/internal/turntransport"
@@ -3643,6 +3644,13 @@ func addMulticaAgentEnv(env map[string]string, cfg Config, workspaceID, agentID 
 	}
 	agentRoot := agentworkspace.Root(cfg.WorkspacesRoot, workspaceID, agentID)
 	env["MULTICA_AGENT_ROOT"] = agentRoot
+	_ = openclawadapt.Apply(agentRoot, env["MULTICA_MEMBER_ID"])
+	for key, value := range openclawadapt.Env(agentRoot) {
+		current := strings.TrimSpace(env[key])
+		if current == "" || !strings.HasPrefix(current, agentRoot) {
+			env[key] = value
+		}
+	}
 }
 
 func addPiMemoryFastModeEnv(env map[string]string) {

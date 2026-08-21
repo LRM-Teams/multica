@@ -142,8 +142,12 @@ func prepareAgentScopeMemory(agentRoot string, task Task, serverMemories []exece
 	if agentRoot != "" {
 		addFile(6, "Agent global memory", filepath.Join(agentRoot, "memory", "MEMORY.md"), "agent", "agent", task.AgentID, agentMemoryTemplate, 2*1024)
 		addFile(5, "Agent active state", filepath.Join(agentRoot, "memory", "STATE.md"), "agent", "agent", task.AgentID, agentStateTemplate, 2*1024)
-		if todayPath := scopedMemoryTodayPath(agentRoot, time.Now()); todayPath != "" {
+		now := time.Now()
+		if todayPath := scopedMemoryTodayPath(agentRoot, now); todayPath != "" {
 			addFile(7, "Today activity summary", todayPath, "agent", "agent", task.AgentID, "", 2*1024)
+		}
+		if yesterdayPath := scopedMemoryYesterdayPath(agentRoot, now); yesterdayPath != "" {
+			addFile(8, "Yesterday activity summary", yesterdayPath, "agent", "agent", task.AgentID, "", 1024)
 		}
 	}
 	return packExecutionMemoryCandidates(candidates, agentScopeMemoryBudgetBytes), paths
@@ -272,11 +276,20 @@ const (
 )
 
 func scopedMemoryTodayPath(agentRoot string, now time.Time) string {
+	return scopedMemoryDailyPath(agentRoot, now, 0)
+}
+
+func scopedMemoryYesterdayPath(agentRoot string, now time.Time) string {
+	return scopedMemoryDailyPath(agentRoot, now, -1)
+}
+
+func scopedMemoryDailyPath(agentRoot string, now time.Time, dayOffset int) string {
 	loc, err := time.LoadLocation(memorycuration.DefaultTimezone)
 	if err != nil {
 		loc = time.FixedZone("CST", 8*60*60)
 	}
-	return filepath.Join(agentRoot, "memory", "daily", now.In(loc).Format("2006-01-02")+".md")
+	day := now.In(loc).AddDate(0, 0, dayOffset)
+	return filepath.Join(agentRoot, "memory", "daily", day.Format("2006-01-02")+".md")
 }
 
 func readScopedMemoryFile(path, template string, maxBytes int) string {
@@ -310,7 +323,7 @@ func filterGraphModeLegacyMemories(in []execenv.MemoryContextForEnv) []execenv.M
 		case "user", "member":
 			out = append(out, m)
 		case "agent":
-			if m.Name != graphModeLegacyDailyName {
+			if m.Name != graphModeLegacyDailyName && m.Name != "Yesterday activity summary" {
 				out = append(out, m)
 			}
 		}

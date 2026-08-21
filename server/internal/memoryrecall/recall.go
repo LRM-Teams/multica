@@ -140,6 +140,7 @@ func Search(scope Scope, query string, limit int) (SearchResult, error) {
 	if hits == nil {
 		hits = []Hit{}
 	}
+	RecordHits(scope.AgentRoot, query, hits)
 	return SearchResult{Query: query, Hits: hits}, nil
 }
 

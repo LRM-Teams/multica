@@ -69,8 +69,7 @@ func TestPrepareExecutionMemoryLoadsOnlyCurrentScopesAndToday(t *testing.T) {
 	if err := os.WriteFile(todayPath, []byte("Today's activity only.\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	yesterday := time.Now().Add(-24 * time.Hour)
-	if err := os.WriteFile(scopedMemoryTodayPath(root, yesterday), []byte("Yesterday must stay lazy.\n"), 0o644); err != nil {
+	if err := os.WriteFile(scopedMemoryYesterdayPath(root, time.Now()), []byte("Yesterday carryover.\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -85,12 +84,12 @@ func TestPrepareExecutionMemoryLoadsOnlyCurrentScopesAndToday(t *testing.T) {
 		total += len(memory.Content)
 	}
 	content := combined.String()
-	for _, want := range []string{"acknowledgement", "Project A uses Go", "release is blocked", "targets dev", "This channel", "Agent-wide", "Today's activity", "Reviewed exact"} {
+	for _, want := range []string{"acknowledgement", "Project A uses Go", "release is blocked", "targets dev", "This channel", "Agent-wide", "Today's activity", "Yesterday carryover", "Reviewed exact"} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("memory pack missing %q:\n%s", want, content)
 		}
 	}
-	for _, unwanted := range []string{"Other user's", "Other project", "Yesterday"} {
+	for _, unwanted := range []string{"Other user's", "Other project"} {
 		if strings.Contains(content, unwanted) {
 			t.Fatalf("memory pack leaked %q:\n%s", unwanted, content)
 		}
@@ -209,6 +208,7 @@ func TestPrepareTurnAndAgentScopeMemorySplit(t *testing.T) {
 		filepath.Join(paths.ProjectDir, "MEMORY.md"):  "Project uses Go.\n",
 		filepath.Join(paths.ChannelDir, "CONTEXT.md"): "Channel is Chinese-first.\n",
 		filepath.Join(root, "memory", "MEMORY.md"):    "Agent-wide convention.\n",
+		scopedMemoryYesterdayPath(root, time.Now()):   "Yesterday carryover.\n",
 	}
 	for path, content := range writes {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -235,7 +235,7 @@ func TestPrepareTurnAndAgentScopeMemorySplit(t *testing.T) {
 			t.Fatalf("turn pack missing %q:\n%s", want, turnText.String())
 		}
 	}
-	if strings.Contains(turnText.String(), "Agent-wide") || strings.Contains(turnText.String(), "server agent") {
+	if strings.Contains(turnText.String(), "Agent-wide") || strings.Contains(turnText.String(), "server agent") || strings.Contains(turnText.String(), "Yesterday carryover") {
 		t.Fatalf("turn pack leaked agent memory:\n%s", turnText.String())
 	}
 
@@ -250,7 +250,7 @@ func TestPrepareTurnAndAgentScopeMemorySplit(t *testing.T) {
 		}
 		agentText.WriteString(memory.Content)
 	}
-	if !strings.Contains(agentText.String(), "Agent-wide") || !strings.Contains(agentText.String(), "server agent") {
+	if !strings.Contains(agentText.String(), "Agent-wide") || !strings.Contains(agentText.String(), "server agent") || !strings.Contains(agentText.String(), "Yesterday carryover") {
 		t.Fatalf("agent pack missing agent memory:\n%s", agentText.String())
 	}
 	if strings.Contains(agentText.String(), "User prefers") || strings.Contains(agentText.String(), "server user") {

@@ -489,6 +489,12 @@ input slot before output creation. Report publish locks the Run, Report revision
 Branch inputs and current versions before accepting the Review. No Adapter call
 occurs while holding a database transaction.
 
+An active atomic Attempt whose frozen Manifest omits a persisted Work-to-Branch
+scope is a platform-invalid dispatch. Recovery marks that Attempt lost with
+`platform_invalid_manifest`, returns the Work to `ready`, and refunds its
+`attempt_count` before recompiling; it does not wait for the runtime timeout or
+spend the Agent retry budget.
+
 ## 7. Transaction operation registry
 
 Implementation registers at least these stable operation labels with the

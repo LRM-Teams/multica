@@ -49,7 +49,9 @@ versions, discussions, steering assessments, reports, and committed events.
 If any Brief/Manifest hash, revision, cursor, state version, assignment,
 membership, capability, or expected envelope disagrees with the dispatch,
 fail closed and let the durable recovery path issue a new attempt. Do not adapt
-the payload into a legacy V1–V5 result.
+the payload into a legacy V1–V5 result. A platform-generated atomic Manifest
+whose `branch_refs` is empty despite a persisted Work Branch scope is replaced
+without spending the Agent's attempt budget.
 
 ### V6 executable loop
 

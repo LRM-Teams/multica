@@ -200,6 +200,53 @@ func TestRecoverV6WorkItemTransactionRecovery(t *testing.T) {
 	})
 }
 
+func TestRecoverV6WorkItemReplacesPlatformInvalidManifestWithoutSpendingAttempt(t *testing.T) {
+	run := newTransactionRecoveryRun(t, "Recover invalid V6 Work Manifest")
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_session SET orchestrator_version='research-run-v6' WHERE id=$1::uuid`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	membershipID, workItemID := seedV6RecoveryWorkItem(t, run, "running", time.Now().Add(time.Hour))
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_work_item SET expected_result_schema_id='atomic_result_submission',attempt_count=3,max_attempts=3 WHERE id=$1::uuid`, workItemID); err != nil {
+		t.Fatal(err)
+	}
+	branchID := uuid.NewString()
+	if _, err := run.pool.Exec(run.ctx, `INSERT INTO research_branch(id,workspace_id,session_id,objective,status,goal_version,state_version)
+		VALUES($1::uuid,$2::uuid,$3::uuid,'Recover the frozen scope','active',$4,1)`, branchID, run.fixture.workspaceID, run.fixture.sessionID, run.goalVersion); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.pool.Exec(run.ctx, `INSERT INTO research_v6_work_item_branch(workspace_id,session_id,work_item_id,branch_id)
+		VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid)`, run.fixture.workspaceID, run.fixture.sessionID, workItemID, branchID); err != nil {
+		t.Fatal(err)
+	}
+	attemptID := seedV6RecoveryAttempt(t, run, membershipID, workItemID)
+	inboxTaskID := uuid.NewString()
+	if _, err := run.pool.Exec(run.ctx, `INSERT INTO agent_inbox_event(id,workspace_id,agent_id,reason,requires_wake,status,seq_from,seq_to,started_at)
+		VALUES($1::uuid,$2::uuid,$3::uuid,'quick_create',true,'draining',0,0,now())`, inboxTaskID, run.fixture.workspaceID, run.fixture.agentID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_work_item_attempt SET inbox_task_id=$2::uuid WHERE id=$1::uuid`, attemptID, inboxTaskID); err != nil {
+		t.Fatal(err)
+	}
+
+	count, err := run.store.RecoverExpiredV6WorkItems(run.ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("recovered=%d want=1", count)
+	}
+	var workStatus, attemptStatus, failureClass string
+	var attemptCount int
+	if err = run.pool.QueryRow(run.ctx, `SELECT w.status,w.attempt_count,a.status,a.failure_class
+		FROM research_work_item w JOIN research_work_item_attempt a ON a.work_item_id=w.id
+		WHERE w.id=$1::uuid AND a.id=$2::uuid`, workItemID, attemptID).Scan(&workStatus, &attemptCount, &attemptStatus, &failureClass); err != nil {
+		t.Fatal(err)
+	}
+	if workStatus != "ready" || attemptCount != 2 || attemptStatus != "lost" || failureClass != "platform_invalid_manifest" {
+		t.Fatalf("work=%s count=%d attempt=%s failure=%s", workStatus, attemptCount, attemptStatus, failureClass)
+	}
+}
+
 type lostV6InboxTaskStoreStub struct {
 	ids []string
 	err error

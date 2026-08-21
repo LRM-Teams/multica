@@ -137,21 +137,37 @@ func (s *PostgresStore) RecoverExpiredV6WorkItems(ctx context.Context, limit int
 	}
 	defer tx.Rollback(ctx)
 	rows, err := tx.Query(ctx, `
-		WITH due AS (
-		  SELECT w.id
+		WITH invalid_manifest AS (
+		  SELECT DISTINCT w.id
+		  FROM research_work_item w
+		  JOIN research_work_item_attempt active_attempt ON active_attempt.work_item_id=w.id
+		    AND active_attempt.status IN ('dispatching','running')
+		  JOIN research_v6_work_item_branch branch_scope ON branch_scope.work_item_id=w.id
+		  WHERE w.expected_result_schema_id='atomic_result_submission'
+		    AND w.status IN ('dispatching','running')
+		    AND COALESCE(active_attempt.manifest->'branch_refs','[]'::jsonb)='[]'::jsonb
+		    AND NOT EXISTS (
+		      SELECT 1 FROM research_v6_work_submission sub
+		      WHERE sub.attempt_id=active_attempt.id AND sub.status IN ('received','processing','accepted')
+		    )
+		), due AS (
+		  SELECT w.id,(invalid.id IS NOT NULL) AS platform_invalid_manifest
 		  FROM research_work_item w
 		  JOIN research_session s ON s.id=w.session_id
+		  LEFT JOIN invalid_manifest invalid ON invalid.id=w.id
 		  WHERE s.orchestrator_version='research-run-v6'
-		    AND w.status IN ('dispatching','running') AND w.lease_expires_at <= now()
-		    AND NOT (w.status='dispatching' AND EXISTS (
+		    AND w.status IN ('dispatching','running')
+		    AND (invalid.id IS NOT NULL OR (
+		      w.lease_expires_at <= now()
+		      AND NOT (w.status='dispatching' AND EXISTS (
 		      SELECT 1 FROM research_work_item_attempt active_attempt
 		      JOIN research_v6_outbox active_outbox
 		        ON active_outbox.kind='dispatch_work_item'
 		       AND COALESCE(active_outbox.payload->'access'->>'attempt_id',active_outbox.payload->'access'->>'AttemptID')=active_attempt.id::text
 		       AND active_outbox.status IN ('pending','delivering')
 		      WHERE active_attempt.work_item_id=w.id AND active_attempt.status='dispatching'
-		    ))
-		    AND NOT EXISTS (
+		      ))
+		      AND NOT EXISTS (
 		      SELECT 1
 		      FROM research_work_item_attempt active_attempt
 		      JOIN agent_inbox_event inbox ON inbox.id=active_attempt.inbox_task_id
@@ -169,7 +185,8 @@ func (s *PostgresStore) RecoverExpiredV6WorkItems(ctx context.Context, limit int
 		            ) > now()
 		          )
 		        )
-		    )
+		      )
+		    ))
 		  ORDER BY s.id,w.lease_expires_at,w.id
 		  FOR UPDATE OF s,w SKIP LOCKED LIMIT $1
 		), received AS (
@@ -178,7 +195,11 @@ func (s *PostgresStore) RecoverExpiredV6WorkItems(ctx context.Context, limit int
 		  JOIN research_v6_work_submission sub ON sub.attempt_id=a.id AND sub.status IN ('received','processing','accepted')
 		  WHERE a.work_item_id IN (SELECT id FROM due)
 		), lost AS (
-		  UPDATE research_work_item_attempt a SET status='lost',completed_at=now(),updated_at=now(),failure_class='lease_expired'
+		  UPDATE research_work_item_attempt a SET status='lost',completed_at=now(),updated_at=now(),
+		    failure_class=CASE WHEN a.work_item_id IN (SELECT id FROM due WHERE platform_invalid_manifest)
+		      THEN 'platform_invalid_manifest' ELSE 'lease_expired' END,
+		    diagnostics=CASE WHEN a.work_item_id IN (SELECT id FROM due WHERE platform_invalid_manifest)
+		      THEN 'Work Manifest omitted persisted Branch scope' ELSE diagnostics END
 		  WHERE a.work_item_id IN (SELECT id FROM due) AND a.status IN ('dispatching','running')
 		    AND a.work_item_id NOT IN (SELECT work_item_id FROM received)
 		  RETURNING a.id,a.work_item_id
@@ -195,11 +216,22 @@ func (s *PostgresStore) RecoverExpiredV6WorkItems(ctx context.Context, limit int
 		UPDATE research_work_item w
 		SET status=CASE
 		      WHEN w.id IN (SELECT work_item_id FROM received) THEN 'awaiting_input'
+		      WHEN w.id IN (SELECT id FROM due WHERE platform_invalid_manifest) THEN 'ready'
 		      WHEN w.attempt_count >= w.max_attempts THEN 'failed'
 		      ELSE 'ready' END,
+		    attempt_count=CASE
+		      WHEN w.id IN (SELECT id FROM due WHERE platform_invalid_manifest)
+		        AND w.id NOT IN (SELECT work_item_id FROM received)
+		      THEN GREATEST(w.attempt_count-1,0)
+		      ELSE w.attempt_count END,
 		    lease_token=NULL,lease_expires_at=NULL,state_version=state_version+1,
-		    terminal_reason_code=CASE WHEN w.attempt_count >= w.max_attempts THEN 'attempt_budget_exhausted' ELSE '' END,
-		    ready_at=CASE WHEN w.attempt_count < w.max_attempts AND w.id NOT IN (SELECT work_item_id FROM received) THEN now() ELSE w.ready_at END,
+		    terminal_reason_code=CASE
+		      WHEN w.id NOT IN (SELECT id FROM due WHERE platform_invalid_manifest) AND w.attempt_count >= w.max_attempts
+		      THEN 'attempt_budget_exhausted' ELSE '' END,
+		    ready_at=CASE
+		      WHEN w.id NOT IN (SELECT work_item_id FROM received)
+		        AND (w.id IN (SELECT id FROM due WHERE platform_invalid_manifest) OR w.attempt_count < w.max_attempts)
+		      THEN now() ELSE w.ready_at END,
 		    updated_at=now()
 		WHERE w.id IN (SELECT id FROM due)
 		RETURNING w.workspace_id::text,w.session_id::text,w.id::text,w.status,w.state_version

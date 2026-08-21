@@ -71,11 +71,12 @@ func TestAssignmentBriefIncludesWorkDecompositionGate(t *testing.T) {
 		"DIRECT",
 		"ISSUE_DAG",
 		"GOAL_GRAPH",
-		"one bounded context",
 		"multica issue decompose",
-		"A greeting, one tool call",
-		"must not also implement work already delegated",
-		"The server is authoritative",
+		"research, data collection, implementation, testing, or review",
+		"needs no extra confirmation",
+		"Task length alone is not a split reason",
+		"does not duplicate delegated work",
+		"The server owns readiness",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("assignment brief missing decomposition contract %q\n--- output ---\n%s", want, out)

@@ -295,17 +295,9 @@ func (d *Daemon) initializeBindingExecution(bindingStateRoot string) {
 	d.workspaceRunners = make(map[string]*WorkspaceRunner)
 	d.canonicalRuntimes = newCanonicalAgentRuntimePool()
 	d.canonicalRuntimes.setResidentStallWatchdog(d.cfg.RuntimeProgressStale)
-	d.canonicalRuntimes.setResidentStallObserver(func(agentID, runtimeID string, staleFor time.Duration) {
-		d.observeResidentRuntimeStalled(agentID, runtimeID, staleFor)
-	})
 	d.canonicalRuntimes.setMaxAgentProcesses(d.cfg.MaxAgentProcesses)
 	d.processAdmission = d.canonicalRuntimes.managedProcessAdmission()
-	d.canonicalRuntimes.subscribeResidentRuntimeCrash(func(ev ResidentRuntimeCrashEvent) {
-		d.onResidentRuntimeCrash(ev)
-	})
-	d.canonicalRuntimes.subscribeResidentRuntimeRecovered(func(agentID, runtimeID string) {
-		d.clearAgentProviderCrashedOnServer(runtimeID, agentID)
-	})
+	d.canonicalRuntimes.subscribeResidentProcess(d.onResidentProcessEvent)
 	d.messageDraftStore = NewMessageDraftStore(d.cfg.WorkspacesRoot)
 	d.mixedRunActivityOutbox = newMixedRunActivityOutbox(bindingStateRoot)
 	d.residentCrashBackoff = newResidentCrashBackoffTracker(residentCrashBackoffWindow, residentCrashRetryCap)

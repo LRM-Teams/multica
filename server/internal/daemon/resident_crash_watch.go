@@ -62,22 +62,72 @@ func (d *Daemon) residentCrashWatchLoop(ctx context.Context) {
 	}
 }
 
-// onResidentRuntimeCrash is the daemon's own subscriber to crash events —
-// it tracks the retry-cap/backoff bookkeeping and best-effort reports the
-// crash fact to the server so GET /agents can show "crashed" (Parker Raft
-// status ②). Mid-turn process_failure deliberately does NOT call this path.
-func (d *Daemon) onResidentRuntimeCrash(ev ResidentRuntimeCrashEvent) {
+// onResidentProcessEvent is the daemon's single subscriber to the
+// canonicalAgentRuntimePool resident process event bus
+// (resident_process_event.go). It routes each kind to its own handler; see
+// §3 of the change that introduced this file for why exited/recovered/
+// stalled are handled here instead of each having their own subscription.
+func (d *Daemon) onResidentProcessEvent(ev residentProcessEvent) {
+	if d == nil {
+		return
+	}
+	switch ev.Kind {
+	case residentProcessExited:
+		d.onResidentRuntimeExited(ev)
+	case residentProcessRecovered:
+		d.clearAgentProviderCrashedOnServer(ev.RuntimeID, ev.AgentID)
+	case residentProcessStalled:
+		d.observeResidentRuntimeStalled(ev.AgentID, ev.RuntimeID, ev.SilentFor)
+	}
+}
+
+// onResidentRuntimeExited is the daemon's handler for a resident provider
+// process the pool found dead — it tracks the retry-cap/backoff bookkeeping,
+// tells agentProcessManager (APM) the launch it believes is still running
+// has in fact exited, and best-effort reports the crash fact to the server
+// so GET /agents can show "crashed" (Parker Raft status ②). Mid-turn
+// process_failure deliberately does NOT call this path.
+//
+// Order matters: the local launch fact (APM) must settle before the
+// server-facing report, so a concurrent Snapshot/dispatch decision on this
+// daemon never observes "server knows it crashed" before "APM knows the
+// launch is no longer running".
+func (d *Daemon) onResidentRuntimeExited(ev residentProcessEvent) {
 	if d.residentCrashBackoff == nil {
 		return
 	}
-	attempt, backoff, terminal := d.residentCrashBackoff.recordCrash(ev.AgentID, ev.RuntimeID, ev.DetectedAt)
+	attempt, backoff, terminal := d.residentCrashBackoff.recordCrash(ev.AgentID, ev.RuntimeID, ev.At)
+
+	// 1. Local launch fact: tell APM the process behind this launch exited.
+	// A resident slot with no matching APM launch (runtime detached, launch
+	// never reached APM) is not an error — there is simply nothing to route
+	// to, so neither runner verb below is called unless the lookup
+	// succeeds. terminal decides which of the two single-purpose verbs
+	// runs — the decision lives here because this is where terminal is
+	// computed; the runner verbs themselves carry no branch.
+	if launch, runner, found := d.resolveManagedLaunch(ev.AgentID, ev.RuntimeID); found {
+		var routeErr error
+		if terminal {
+			routeErr = runner.retireManagedLaunchAfterExit(ev.AgentID, ev.RuntimeID, launch, "provider_crash_looping")
+		} else {
+			routeErr = runner.retryManagedLaunchAfterExit(ev.AgentID, launch)
+		}
+		if routeErr != nil {
+			d.logger.Debug("resident process exited callback rejected (stale launch)",
+				"agent_id", ev.AgentID, "runtime_id", ev.RuntimeID, "error", routeErr)
+		}
+	}
+
+	// 2. Server-facing report. Best-effort: local recovery continues even if
+	// the server call fails.
 	if d.client != nil && ev.AgentID != "" && ev.RuntimeID != "" {
-		// Best-effort: local recovery continues even if the server call fails.
 		if err := d.client.ReportAgentProviderCrashed(context.Background(), ev.RuntimeID, ev.AgentID); err != nil {
 			d.logger.Debug("report agent provider crashed failed; continuing",
 				"agent_id", ev.AgentID, "runtime_id", ev.RuntimeID, "error", err)
 		}
 	}
+
+	// 3. Logging, unchanged from the original crash-only subscriber.
 	if terminal {
 		d.logger.Warn("resident runtime crash-looping, auto-recovery stopped",
 			"agent_id", ev.AgentID, "runtime_id", ev.RuntimeID, "provider", ev.Provider,

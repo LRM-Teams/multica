@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -473,6 +474,57 @@ func (h *Handler) recordRunnerStartAcknowledgement(ctx context.Context, identity
 	})
 }
 
+// recoverRunnerObservation rebuilds a missing in-memory observation from the
+// durable desired-launch projection. The observation store starts empty after
+// a server restart, and deployed daemons only replay agent:status through the
+// start-ACK round trip — which older daemon builds never complete for an
+// already-running Agent. A session or activity frame from the current ready
+// connection whose launch matches the desired projection is itself a
+// residency report from the live Computer process, so re-admit it with the
+// same projection authority the start-ACK path uses instead of rejecting it
+// (and re-driving agent:start forever).
+func (h *Handler) recoverRunnerObservation(ctx context.Context, identity daemonws.ClientIdentity, daemonInstanceID, agentID, launchID string) (runnerObservedAgent, bool) {
+	if daemonInstanceID == "" || agentID == "" || launchID == "" {
+		return runnerObservedAgent{}, false
+	}
+	// Recovery is only for a true miss. An existing observation — even a
+	// conflicting one — keeps full fencing authority.
+	if _, ok := h.observations().get(identity.WorkspaceID, agentID); ok {
+		return runnerObservedAgent{}, false
+	}
+	source := h.currentRunnerPresenceSource()
+	if source == nil || !source.IsCurrentWorkspaceRunner(identity.DaemonID, identity.WorkspaceID, daemonInstanceID) {
+		return runnerObservedAgent{}, false
+	}
+	var runtimeID string
+	if err := h.DB.QueryRow(ctx, `
+		SELECT desired.runtime_id::text
+		FROM agent_runner_launch_projection desired
+		JOIN agent_runtime runtime ON runtime.id = desired.runtime_id
+		WHERE desired.workspace_id::text = $1 AND desired.agent_id::text = $2
+		  AND desired.launch_id::text = $3 AND runtime.daemon_id = $4`,
+		identity.WorkspaceID, agentID, launchID, identity.DaemonID).Scan(&runtimeID); err != nil {
+		return runnerObservedAgent{}, false
+	}
+	if !h.observations().acceptStatus(identity.WorkspaceID, identity.DaemonID, daemonInstanceID, agentID, runtimeID, launchID, protocol.AgentStatusActive) {
+		return runnerObservedAgent{}, false
+	}
+	obs, ok := h.observations().get(identity.WorkspaceID, agentID)
+	if !ok {
+		return runnerObservedAgent{}, false
+	}
+	slog.Info("Workspace Runner observation recovered from desired launch projection",
+		"workspace_id", identity.WorkspaceID, "daemon_id", identity.DaemonID,
+		"daemon_instance_id", daemonInstanceID, "agent_id", agentID, "launch_id", launchID)
+	// No observation existed, so the projected presence before recovery was
+	// necessarily offline.
+	h.publishAgentPresenceChange(identity.WorkspaceID, agentID, AgentPresenceOffline,
+		h.projectRunnerLaunchPresence(identity.WorkspaceID, &runnerLaunchPresence{
+			daemonID: identity.DaemonID, daemonInstanceID: daemonInstanceID, status: protocol.AgentStatusActive,
+		}))
+	return obs, true
+}
+
 func (h *Handler) recordRunnerSession(ctx context.Context, identity daemonws.ClientIdentity, daemonInstanceID string, session protocol.AgentSessionPayload) error {
 	if err := session.Validate(); err != nil {
 		return err
@@ -486,7 +538,10 @@ func (h *Handler) recordRunnerSession(ctx context.Context, identity daemonws.Cli
 			return err
 		}
 		if !h.observations().acceptSession(identity.WorkspaceID, identity.DaemonID, daemonInstanceID, session.AgentID, session.LaunchID, session.ProviderSessionID) {
-			return errors.New("stale or unknown Workspace Runner session")
+			if _, recovered := h.recoverRunnerObservation(ctx, identity, daemonInstanceID, session.AgentID, session.LaunchID); !recovered ||
+				!h.observations().acceptSession(identity.WorkspaceID, identity.DaemonID, daemonInstanceID, session.AgentID, session.LaunchID, session.ProviderSessionID) {
+				return errors.New("stale or unknown Workspace Runner session")
+			}
 		}
 		command, err := h.DB.Exec(ctx, `
 			UPDATE agent_runner_launch_projection
@@ -522,6 +577,9 @@ func (h *Handler) recordRunnerActivity(ctx context.Context, identity daemonws.Cl
 	}
 	terminalStopped := snapshot.ActivityKind == protocol.ActivityKindOffline && snapshot.DetailKind == "stopped" && snapshot.ProbeID == ""
 	obs, ok := h.observations().get(identity.WorkspaceID, snapshot.AgentID)
+	if !ok {
+		obs, ok = h.recoverRunnerObservation(ctx, identity, daemonInstanceID, snapshot.AgentID, snapshot.LaunchID)
+	}
 	if !ok || obs.daemonID != identity.DaemonID || obs.daemonInstanceID != daemonInstanceID || obs.launchID != snapshot.LaunchID {
 		return errors.New("stale or unauthorized Runner Activity")
 	}

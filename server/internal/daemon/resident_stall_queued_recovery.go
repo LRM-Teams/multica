@@ -79,13 +79,14 @@ func (p *canonicalAgentRuntimePool) recoverStalledSlotForQueuedMessage(agentID, 
 	// slot.mu itself, and holding slot.mu here would deadlock against that.
 	slot.mu.Unlock()
 
-	if p.residentStallObserver != nil {
-		observer := p.residentStallObserver
-		// Run async: this executes on the synchronous deferred-delivery path
-		// and the observer publishes Activity (does I/O). Never block delivery
-		// on it, and never call it while holding slot.mu.
-		go observer(agentID, runtimeID, staleFor)
-	}
+	// Run async: this executes on the synchronous deferred-delivery path and
+	// emission may run subscriber I/O (observeResidentRuntimeStalled
+	// publishes Activity). Never block delivery on it, and never call it
+	// while holding slot.mu.
+	go p.emitResidentProcessEvent(residentProcessEvent{
+		AgentID: agentID, RuntimeID: runtimeID, Kind: residentProcessStalled,
+		SilentFor: staleFor, At: time.Now(),
+	})
 
 	if err := p.forceInvalidateSession(agentID, runtimeID); err != nil {
 		slot.mu.Lock()

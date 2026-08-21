@@ -246,6 +246,13 @@
 - **Subgoal 收敛方向**：现有 `channel_goal_subgoal` 不发展成第二套 DAG；通用图内核落地后，Goal 子目标 UI 应成为 Work Graph Node 投影或被明确迁移，禁止长期双向同步两套执行真相。
 - **当前物**：assignment runtime 的 `Work Decomposition Gate` 及回归测试；完整分期见 [`docs/superpowers/plans/2026-08-06-goal-work-graph-runtime.md`](superpowers/plans/2026-08-06-goal-work-graph-runtime.md)。原子建图、ready scheduler、Graph Delta、Artifact/verification 和失效传播尚未实现，不得由 Prompt 冒充。
 
+### 4.0.b 独立工作默认并行，拆分决策必须早于实现派发 — `可执行`（⑤，owner: @Codex）
+
+- **准入时机**：活跃 multi-Agent Goal 的 manager 在 chat 控制面创建或派发实现 Issue 前，必须先识别可独立验收的工作单元；不能等一个大 Issue 已经唤醒执行者后才第一次询问是否拆分。
+- **默认并行**：两个及以上无需互等、可独立验收的调研、来源/数据采集、实现、测试或 review，默认成为同一真实父 Issue 下的并行 Issue DAG roots。只把真实前置依赖写成 `depends_on`；不得把独立 root 放进 backlog，也不得创建多个顶层 Issue 后仅在描述里称其中一个为“父卡”。
+- **授权边界**：在当前 Goal/Issue 已授权 scope、permissions 和 committed budget 内做并行拆分，不额外请求确认；只有拆分会实质扩大任一边界时才提案。小任务、紧耦合交付或拆分成本高于 wall-clock 收益时保持 DIRECT。
+- **物**：`channelGoalStateSlot` 的 manager-only `Parallel admission`（新增热路径文案有 600-byte 上限）；assignment prompt/runtime 的同义 `Work Decomposition Gate`；`multica issue decompose` 的原子父子/依赖写入。回归为 `TestBuildPromptChannelManagerDefaultsIndependentGoalWorkToIssueDAG`、`TestBuildPromptWithoutChannelGoalKeepsOrdinaryChatUnchanged` 和 `TestAssignmentBriefIncludesWorkDecompositionGate`。
+
 ### 4.0 服务环境决定连接目标与 Computer 包源 — `可执行`（⑤，owner: @Barry；Web origin 门：`scripts/assert-baked-web-public-origins.sh` + `deploy-test.yml`）
 - **服务环境**：`production` 是 leagent.me 正式服务，browser/API 的 canonical origin 分别是 `https://www.leagent.me` 与 `https://api.leagent.me`；`test` 是腾讯云测试服务，首版以 `https://82.157.184.89` 同时承担 app/API，之后可只改部署配置切到 `https://test.leagent.me`。服务端用 `APP_ENV=production|test` 声明身份，并通过公共 `/api/config.environment` 明确告诉页面，禁止根据域名或 IP 猜环境。旧服务缺字段或字段非法时，前端保守降级为 production。
 - **Web 公开 origin 是构建期常量**：`NEXT_PUBLIC_API_URL` / `NEXT_PUBLIC_APP_URL` / `NEXT_PUBLIC_ENVIRONMENT` 烤进浏览器 JS，容器启动后再改环境变量无效。test 镜像必须烤 `https://82.157.184.89`（或当时的 test origin），不得出现 `api.leagent.me` / `www.leagent.me`。`/health` 探活发现不了这件事。门禁是 `scripts/assert-baked-web-public-origins.sh`，由 `deploy-test.yml` 在 s89 验收登录页 layout chunk；`scripts/assert-baked-web-public-origins.test.sh` 先见红再生产包。test web 构建禁用 Buildx cache，Dockerfile 设 `TURBO_FORCE=1`，避免复用生产烤过的 `.next`。

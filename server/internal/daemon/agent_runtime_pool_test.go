@@ -1146,8 +1146,16 @@ func TestCheckResidentLivenessEvictsAndReportsOnlyConfirmedDeadIdleSlots(t *test
 	}
 
 	var mu sync.Mutex
-	var received []ResidentRuntimeCrashEvent
-	pool.subscribeResidentRuntimeCrash(func(ev ResidentRuntimeCrashEvent) {
+	var received []residentProcessEvent
+	pool.subscribeResidentProcess(func(ev residentProcessEvent) {
+		// Acquiring agent-alive/unknown/busy above each also fires an async
+		// "recovered" notice on this same bus (task #42②'s first-ever-create
+		// clear) with no ordering guarantee relative to this subscription —
+		// filter to the exited events this test actually pins, so it does
+		// not flake on a recovered notice landing mid-assertion.
+		if ev.Kind != residentProcessExited {
+			return
+		}
 		mu.Lock()
 		defer mu.Unlock()
 		received = append(received, ev)
@@ -1160,8 +1168,11 @@ func TestCheckResidentLivenessEvictsAndReportsOnlyConfirmedDeadIdleSlots(t *test
 	if events[0].AgentID != "agent-dead" || events[0].RuntimeID != "runtime-dead" || events[0].Provider != "opencode" {
 		t.Fatalf("unexpected event: %+v", events[0])
 	}
-	if !events[0].DetectedAt.Equal(time.Unix(500, 0)) {
-		t.Fatalf("DetectedAt = %v, want %v", events[0].DetectedAt, time.Unix(500, 0))
+	if events[0].Kind != residentProcessExited {
+		t.Fatalf("Kind = %v, want %v", events[0].Kind, residentProcessExited)
+	}
+	if !events[0].At.Equal(time.Unix(500, 0)) {
+		t.Fatalf("At = %v, want %v", events[0].At, time.Unix(500, 0))
 	}
 
 	mu.Lock()
@@ -1216,12 +1227,21 @@ func TestCheckResidentLivenessSupportsMultipleSubscribers(t *testing.T) {
 
 	var mu sync.Mutex
 	var firstSeen, secondSeen int
-	pool.subscribeResidentRuntimeCrash(func(ResidentRuntimeCrashEvent) {
+	// Filtered to exited for the same reason as the test above: the earlier
+	// acquire() also fires an async "recovered" notice on this bus with no
+	// ordering guarantee relative to this subscription.
+	pool.subscribeResidentProcess(func(ev residentProcessEvent) {
+		if ev.Kind != residentProcessExited {
+			return
+		}
 		mu.Lock()
 		firstSeen++
 		mu.Unlock()
 	})
-	pool.subscribeResidentRuntimeCrash(func(ResidentRuntimeCrashEvent) {
+	pool.subscribeResidentProcess(func(ev residentProcessEvent) {
+		if ev.Kind != residentProcessExited {
+			return
+		}
 		mu.Lock()
 		secondSeen++
 		mu.Unlock()

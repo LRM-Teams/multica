@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PendingAttachment } from "../hooks/use-composer-pending-attachments";
@@ -242,7 +242,7 @@ describe("ComposerAttachmentTray", () => {
     expect(screen.queryByRole("button", { name: "Remove phone.png" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "Preview phone.png" }));
     expect(screen.getByRole("button", { name: "Remove phone.png" }).className).toMatch(
-      /\bsize-10\b/,
+      /\bsize-11\b/,
     );
   });
 
@@ -313,6 +313,7 @@ describe("ComposerAttachmentTray — image detail popover", () => {
 
     await user.click(screen.getByRole("button", { name: "Preview shot.png" }));
 
+    expect(screen.getByRole("dialog", { name: "shot.png" })).toBeInTheDocument();
     expect(screen.getByText("shot.png")).toBeInTheDocument();
     expect(screen.getByText("PNG · 2 KB")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Remove shot.png" })).toBeInTheDocument();
@@ -335,6 +336,34 @@ describe("ComposerAttachmentTray — image detail popover", () => {
     expect(downloadMock).toHaveBeenCalledWith("a1");
   });
 
+  it("disables download while the request is in flight", async () => {
+    const user = userEvent.setup();
+    let finishDownload: (() => void) | undefined;
+    downloadMock.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        finishDownload = resolve;
+      }),
+    );
+    render(
+      <ComposerAttachmentTray
+        pending={[imageItem()]}
+        onRemove={vi.fn()}
+        onRetry={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Preview shot.png" }));
+    const button = screen.getByRole("button", { name: "Download shot.png" });
+    await user.click(button);
+
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute("aria-busy", "true");
+    expect(downloadMock).toHaveBeenCalledTimes(1);
+
+    finishDownload?.();
+    await waitFor(() => expect(button).toBeEnabled());
+  });
+
   it("removes an image only from the popover action", async () => {
     const user = userEvent.setup();
     const onRemove = vi.fn();
@@ -352,7 +381,7 @@ describe("ComposerAttachmentTray — image detail popover", () => {
     expect(onRemove).toHaveBeenCalledWith("img-1");
   });
 
-  it("uses responsive popover width and mobile action targets", async () => {
+  it("uses responsive popover width and 44px mobile action targets", async () => {
     const user = userEvent.setup();
     render(
       <ComposerAttachmentTray
@@ -368,11 +397,104 @@ describe("ComposerAttachmentTray — image detail popover", () => {
       /calc\(100vw-1\.5rem\)/,
     );
     expect(screen.getByRole("button", { name: "Download phone.png" }).className).toMatch(
-      /\bsize-10\b/,
+      /\bsize-11\b/,
     );
     expect(screen.getByRole("button", { name: "Remove phone.png" }).className).toMatch(
-      /\bsize-10\b/,
+      /\bsize-11\b/,
     );
+  });
+
+  it("uses a taller, narrower detail surface for portrait images", async () => {
+    const user = userEvent.setup();
+    render(
+      <ComposerAttachmentTray
+        pending={[imageItem({ filename: "portrait.png" })]}
+        onRemove={vi.fn()}
+        onRetry={vi.fn()}
+      />,
+    );
+
+    const thumbnail = screen.getByAltText("portrait.png");
+    Object.defineProperties(thumbnail, {
+      naturalWidth: { configurable: true, value: 900 },
+      naturalHeight: { configurable: true, value: 1600 },
+    });
+    fireEvent.load(thumbnail);
+    await user.click(screen.getByRole("button", { name: "Preview portrait.png" }));
+
+    expect(screen.getByTestId("composer-image-popover-img-1")).toHaveAttribute(
+      "data-orientation",
+      "portrait",
+    );
+    expect(screen.getByTestId("composer-image-preview-img-1").className).toMatch(
+      /aspect-\[4\/5\]/,
+    );
+  });
+
+  it("uses a wide detail surface for landscape images", async () => {
+    const user = userEvent.setup();
+    render(
+      <ComposerAttachmentTray
+        pending={[imageItem({ filename: "landscape.png" })]}
+        onRemove={vi.fn()}
+        onRetry={vi.fn()}
+      />,
+    );
+
+    const thumbnail = screen.getByAltText("landscape.png");
+    Object.defineProperties(thumbnail, {
+      naturalWidth: { configurable: true, value: 1600 },
+      naturalHeight: { configurable: true, value: 900 },
+    });
+    fireEvent.load(thumbnail);
+    await user.click(screen.getByRole("button", { name: "Preview landscape.png" }));
+
+    expect(screen.getByTestId("composer-image-popover-img-1")).toHaveAttribute(
+      "data-orientation",
+      "landscape",
+    );
+    expect(screen.getByTestId("composer-image-preview-img-1").className).toMatch(
+      /aspect-\[16\/10\]/,
+    );
+  });
+
+  it("closes on Escape and restores focus to the thumbnail", async () => {
+    const user = userEvent.setup();
+    render(
+      <ComposerAttachmentTray
+        pending={[imageItem()]}
+        onRemove={vi.fn()}
+        onRetry={vi.fn()}
+      />,
+    );
+
+    const trigger = screen.getByRole("button", { name: "Preview shot.png" });
+    await user.click(trigger);
+    expect(screen.getByRole("dialog", { name: "shot.png" })).toBeInTheDocument();
+
+    await user.keyboard("{Escape}");
+
+    expect(screen.queryByRole("dialog", { name: "shot.png" })).toBeNull();
+    expect(trigger).toHaveFocus();
+  });
+
+  it("closes when clicking outside", async () => {
+    const user = userEvent.setup();
+    render(
+      <div>
+        <button type="button">Outside</button>
+        <ComposerAttachmentTray
+          pending={[imageItem()]}
+          onRemove={vi.fn()}
+          onRetry={vi.fn()}
+        />
+      </div>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Preview shot.png" }));
+    await user.click(screen.getByRole("button", { name: "Outside" }));
+
+    expect(screen.queryByRole("dialog", { name: "shot.png" })).toBeNull();
   });
 
   it("keeps download disabled while an image uploads but allows remove", async () => {

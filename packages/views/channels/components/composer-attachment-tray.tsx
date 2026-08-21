@@ -1,10 +1,13 @@
 "use client";
 
+import { useState } from "react";
 import { Download, FileIcon, Loader2, RotateCcw, Trash2, X } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
 import {
   Popover,
   PopoverContent,
+  PopoverDescription,
+  PopoverTitle,
   PopoverTrigger,
 } from "@multica/ui/components/ui/popover";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
@@ -35,12 +38,170 @@ function imageMeta(item: PendingAttachment): string {
   return [type, formatFileSize(item.sizeBytes)].filter(Boolean).join(" · ");
 }
 
+type ImageOrientation = "unknown" | "portrait" | "square" | "landscape";
+
+function imageOrientation(width: number, height: number): ImageOrientation {
+  if (width <= 0 || height <= 0) return "unknown";
+  const ratio = width / height;
+  if (ratio < 0.85) return "portrait";
+  if (ratio <= 1.2) return "square";
+  return "landscape";
+}
+
+type ComposerImageAttachmentProps = {
+  item: PendingAttachment;
+  previewUrl: string;
+  thumb: string;
+  isMobile: boolean;
+  previewLabel: string;
+  removeLabel: string;
+  downloadLabel: string;
+  onRemove: (localId: string) => void;
+  download: (attachmentId: string) => Promise<void>;
+};
+
+function ComposerImageAttachment({
+  item,
+  previewUrl,
+  thumb,
+  isMobile,
+  previewLabel,
+  removeLabel,
+  downloadLabel,
+  onRemove,
+  download,
+}: ComposerImageAttachmentProps) {
+  const [orientation, setOrientation] = useState<ImageOrientation>("unknown");
+  const [isDownloading, setIsDownloading] = useState(false);
+  const canDownload = item.status === "ready" && !!item.attachmentId;
+
+  const handleDownload = async () => {
+    if (!item.attachmentId || isDownloading) return;
+    setIsDownloading(true);
+    try {
+      await download(item.attachmentId);
+    } finally {
+      setIsDownloading(false);
+    }
+  };
+
+  return (
+    <Popover>
+      <PopoverTrigger
+        render={
+          <button
+            type="button"
+            className={cn(
+              thumb,
+              "relative block cursor-zoom-in touch-manipulation overflow-hidden rounded-[7px] p-0 outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            )}
+            aria-label={previewLabel}
+            data-testid={`composer-tray-zoom-${item.localId}`}
+          >
+            {/* Blob/remote tray preview only; shared package cannot use next/image.
+                react-doctor-disable-next-line react-doctor/nextjs-no-img-element */}
+            <img
+              src={previewUrl}
+              alt={item.filename}
+              className={cn(thumb, "rounded-[7px] object-cover")}
+              draggable={false}
+              onLoad={(event) => {
+                const next = imageOrientation(
+                  event.currentTarget.naturalWidth,
+                  event.currentTarget.naturalHeight,
+                );
+                setOrientation((current) => (current === next ? current : next));
+              }}
+            />
+          </button>
+        }
+      />
+      <PopoverContent
+        side="top"
+        align="start"
+        sideOffset={8}
+        data-testid={`composer-image-popover-${item.localId}`}
+        data-orientation={orientation}
+        className={cn(
+          "w-[min(28.75rem,calc(100vw-1.5rem))] gap-0 overflow-hidden overscroll-contain p-0",
+          orientation === "portrait" &&
+            "sm:w-[min(22rem,calc(100vw-1.5rem))]",
+          orientation === "square" &&
+            "sm:w-[min(24rem,calc(100vw-1.5rem))]",
+        )}
+      >
+        <div
+          data-testid={`composer-image-preview-${item.localId}`}
+          className={cn(
+            "flex min-h-0 items-center justify-center bg-muted/50 p-3",
+            orientation === "portrait"
+              ? "aspect-[4/5] max-h-[60dvh]"
+              : orientation === "square"
+                ? "aspect-square max-h-[55dvh]"
+                : "aspect-[16/10] max-h-[45dvh]",
+          )}
+        >
+          {/* Local blob or uploaded URL; shared package cannot use next/image.
+              react-doctor-disable-next-line react-doctor/nextjs-no-img-element */}
+          <img
+            src={previewUrl}
+            alt={item.filename}
+            className="max-h-full max-w-full rounded-md object-contain shadow-sm"
+            draggable={false}
+          />
+        </div>
+        <div className="flex min-h-14 items-center gap-3 px-3 py-2">
+          <div className="min-w-0 flex-1">
+            <PopoverTitle className="line-clamp-2 break-all text-sm font-medium text-foreground">
+              {item.filename}
+            </PopoverTitle>
+            <PopoverDescription className="text-xs text-muted-foreground">
+              {imageMeta(item)}
+            </PopoverDescription>
+          </div>
+          <div className="flex shrink-0 items-center gap-1">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className={cn(isMobile ? "size-11" : "size-8")}
+              aria-label={`${downloadLabel} ${item.filename}`}
+              aria-busy={isDownloading || undefined}
+              disabled={!canDownload || isDownloading}
+              onClick={() => void handleDownload()}
+            >
+              {isDownloading ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Download className="size-4" />
+              )}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className={cn(
+                isMobile ? "size-11" : "size-8",
+                "hover:bg-destructive/10 hover:text-destructive",
+              )}
+              aria-label={removeLabel}
+              onClick={() => onRemove(item.localId)}
+            >
+              <Trash2 className="size-4" />
+            </Button>
+          </div>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 /**
  * Slack-style composer tray: a **single horizontal strip** of pending
  * thumbs/chips above the editor. Never stacks as a vertical list.
  *
  * Mobile web: same one-row model + horizontal pan; larger hit targets; remove
- * actions use 40px touch targets inside the image detail popover.
+ * actions use 44px touch targets inside the image detail popover.
  *
  * Images stay as clean thumbnails in the tray. Clicking one opens a compact,
  * anchored popover with the contained image, filename, file metadata, download,
@@ -99,8 +260,8 @@ export function ComposerAttachmentTray({
           const previewLabel = t(($) => $.composer.tray_preview_aria, {
             filename: item.filename,
           });
-          const showImage = isImagePending(item) && !!item.previewUrl;
-          const canDownload = item.status === "ready" && !!item.attachmentId;
+          const imagePreviewUrl = isImagePending(item) ? item.previewUrl : undefined;
+          const showImage = !!imagePreviewUrl;
 
           return (
             <li
@@ -115,85 +276,18 @@ export function ComposerAttachmentTray({
                 item.status === "error" && "border-destructive/50 bg-destructive/5",
               )}
             >
-              {showImage ? (
-                <Popover>
-                  <PopoverTrigger
-                    render={
-                      <button
-                        type="button"
-                        className={cn(
-                          thumb,
-                          "relative block cursor-zoom-in overflow-hidden rounded-[7px] p-0 outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                        )}
-                        aria-label={previewLabel}
-                        data-testid={`composer-tray-zoom-${item.localId}`}
-                      >
-                        {/* Blob/remote tray preview only; shared package cannot use next/image.
-                            react-doctor-disable-next-line react-doctor/nextjs-no-img-element */}
-                        <img
-                          src={item.previewUrl}
-                          alt={item.filename}
-                          className={cn(thumb, "rounded-[7px] object-cover")}
-                          draggable={false}
-                        />
-                      </button>
-                    }
-                  />
-                  <PopoverContent
-                    side="top"
-                    align="start"
-                    sideOffset={8}
-                    data-testid={`composer-image-popover-${item.localId}`}
-                    className="w-[min(28.75rem,calc(100vw-1.5rem))] gap-0 overflow-hidden p-0"
-                  >
-                    <div className="flex aspect-[16/10] max-h-[38dvh] min-h-0 items-center justify-center bg-muted/50 p-3">
-                      {/* Local blob or uploaded URL; shared package cannot use next/image.
-                          react-doctor-disable-next-line react-doctor/nextjs-no-img-element */}
-                      <img
-                        src={item.previewUrl}
-                        alt={item.filename}
-                        className="max-h-full max-w-full rounded-md object-contain shadow-sm"
-                        draggable={false}
-                      />
-                    </div>
-                    <div className="flex min-h-14 items-center gap-3 px-3 py-2">
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-medium text-foreground">
-                          {item.filename}
-                        </p>
-                        <p className="text-xs text-muted-foreground">{imageMeta(item)}</p>
-                      </div>
-                      <div className="flex shrink-0 items-center gap-1">
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className={cn(isMobile ? "size-10" : "size-8")}
-                          aria-label={`${editorT(($) => $.image.download)} ${item.filename}`}
-                          disabled={!canDownload}
-                          onClick={() => {
-                            if (item.attachmentId) void download(item.attachmentId);
-                          }}
-                        >
-                          <Download className="size-4" />
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className={cn(
-                            isMobile ? "size-10" : "size-8",
-                            "hover:bg-destructive/10 hover:text-destructive",
-                          )}
-                          aria-label={removeLabel}
-                          onClick={() => onRemove(item.localId)}
-                        >
-                          <Trash2 className="size-4" />
-                        </Button>
-                      </div>
-                    </div>
-                  </PopoverContent>
-                </Popover>
+              {imagePreviewUrl ? (
+                <ComposerImageAttachment
+                  item={item}
+                  previewUrl={imagePreviewUrl}
+                  thumb={thumb}
+                  isMobile={isMobile}
+                  previewLabel={previewLabel}
+                  removeLabel={removeLabel}
+                  downloadLabel={editorT(($) => $.image.download)}
+                  onRemove={onRemove}
+                  download={download}
+                />
               ) : (
                 <FileIcon
                   className="size-3.5 shrink-0 text-muted-foreground"

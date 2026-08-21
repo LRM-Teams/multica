@@ -107,6 +107,15 @@ func TestAtomicV6WorkManifestGetsOneBackingTaskAndFrozenMission(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, workItemID := seedV6RecoveryWorkItem(t, run, "ready", time.Now().Add(time.Minute))
+	branchID := uuid.NewString()
+	if _, err := run.pool.Exec(run.ctx, `INSERT INTO research_branch(id,workspace_id,session_id,objective,status,goal_version,state_version)
+		VALUES($1::uuid,$2::uuid,$3::uuid,'Inspect the assigned branch','active',$4,7)`, branchID, run.fixture.workspaceID, run.fixture.sessionID, run.goalVersion); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.pool.Exec(run.ctx, `INSERT INTO research_v6_work_item_branch(workspace_id,session_id,work_item_id,branch_id)
+		VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid)`, run.fixture.workspaceID, run.fixture.sessionID, workItemID, branchID); err != nil {
+		t.Fatal(err)
+	}
 	payload := `{"mission_prompt":"Inspect the assigned production boundary.","task_specific_schema":{"type":"object","additionalProperties":false,"required":["finding"],"properties":{"finding":{"type":"string","minLength":1}}}}`
 	if _, err := run.pool.Exec(run.ctx, `UPDATE research_work_item SET expected_result_schema_id='atomic_result_submission',payload_schema_id='research.finding.v1',payload=$2::jsonb,reason='fallback reason' WHERE id=$1::uuid`, workItemID, payload); err != nil {
 		t.Fatal(err)
@@ -129,8 +138,9 @@ func TestAtomicV6WorkManifestGetsOneBackingTaskAndFrozenMission(t *testing.T) {
 		t.Fatal(err)
 	}
 	var identity struct {
-		TaskID        string `json:"task_id"`
-		MissionPrompt string `json:"mission_prompt"`
+		TaskID        string        `json:"task_id"`
+		MissionPrompt string        `json:"mission_prompt"`
+		BranchRefs    []V6BranchRef `json:"branch_refs"`
 		TaskSchema    struct {
 			PayloadSchemas map[string]json.RawMessage `json:"payload_schemas"`
 		} `json:"task_specific_schema"`
@@ -140,6 +150,9 @@ func TestAtomicV6WorkManifestGetsOneBackingTaskAndFrozenMission(t *testing.T) {
 	}
 	if identity.TaskID != taskID || identity.MissionPrompt != "Inspect the assigned production boundary." {
 		t.Fatalf("manifest task=%q mission=%q", identity.TaskID, identity.MissionPrompt)
+	}
+	if len(identity.BranchRefs) != 1 || identity.BranchRefs[0].ID != branchID || identity.BranchRefs[0].StateVersion != 7 {
+		t.Fatalf("manifest branch refs=%+v", identity.BranchRefs)
 	}
 	if len(identity.TaskSchema.PayloadSchemas["research.finding.v1"]) == 0 {
 		t.Fatalf("manifest task schema registry=%v", identity.TaskSchema.PayloadSchemas)

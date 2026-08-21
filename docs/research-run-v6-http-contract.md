@@ -163,6 +163,9 @@ sends merge, stop, replan or tier commands.
 Returns one strict `work_manifest` envelope. `ETag` is the Manifest hash. The
 server returns 409 if the Attempt is no longer executable and 403 if the current
 task credential is not bound to it. A successful retry returns identical bytes.
+`branch_refs` is the frozen Branch scope for this Attempt, including each
+Branch's exact state version; submissions copy it byte-for-value rather than
+deriving versions from the Run watermark.
 For atomic Work, `task_specific_schema.payload_schemas` contains the exact single
 `payload_schema_id` key and its frozen validator. The Agent copies that key
 verbatim into `atomic_result_submission.task_specific_schema`; it never invents

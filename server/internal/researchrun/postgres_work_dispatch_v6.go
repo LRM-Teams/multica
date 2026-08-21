@@ -198,29 +198,55 @@ func compileV6WorkManifestTx(ctx context.Context, tx pgx.Tx, workspaceID, runID,
 		config = map[string]any{}
 	}
 	branchRefs := []any{}
-	if value, ok := config["branch_refs"].([]any); ok {
-		branchRefs = value
+	rows, qerr := tx.Query(ctx, `SELECT b.id::text,b.state_version
+		FROM research_v6_work_item_branch scope
+		JOIN research_branch b ON (b.workspace_id,b.session_id,b.id)=(scope.workspace_id,scope.session_id,scope.branch_id)
+		WHERE scope.workspace_id=$1::uuid AND scope.session_id=$2::uuid AND scope.work_item_id=$3::uuid
+		ORDER BY b.id::text`, workspaceID, runID, workItemID)
+	if qerr != nil {
+		return nil, "", qerr
+	}
+	for rows.Next() {
+		var id string
+		var version int64
+		if qerr = rows.Scan(&id, &version); qerr != nil {
+			rows.Close()
+			return nil, "", qerr
+		}
+		branchRefs = append(branchRefs, map[string]any{"id": id, "state_version": version})
+	}
+	if qerr = rows.Err(); qerr != nil {
+		rows.Close()
+		return nil, "", qerr
+	}
+	rows.Close()
+	if len(branchRefs) == 0 {
+		if value, ok := config["branch_refs"].([]any); ok {
+			branchRefs = value
+		}
 	}
 	if len(branchRefs) == 0 {
-		rows, qerr := tx.Query(ctx, `SELECT DISTINCT b.id::text,b.state_version FROM research_work_item w JOIN research_discussion_input di ON di.discussion_id=w.target_id JOIN research_node_branch nb ON nb.node_artifact_version_id=di.node_artifact_version_id JOIN research_branch b ON b.id=nb.branch_id WHERE w.id=$1::uuid ORDER BY b.id::text`, workItemID)
+		rows, qerr = tx.Query(ctx, `SELECT DISTINCT b.id::text,b.state_version FROM research_work_item w JOIN research_discussion_input di ON di.discussion_id=w.target_id JOIN research_node_branch nb ON nb.node_artifact_version_id=di.node_artifact_version_id JOIN research_branch b ON b.id=nb.branch_id WHERE w.id=$1::uuid ORDER BY b.id::text`, workItemID)
 		if qerr != nil {
 			return nil, "", qerr
 		}
-		defer rows.Close()
 		for rows.Next() {
 			var id string
 			var version int64
 			if qerr = rows.Scan(&id, &version); qerr != nil {
+				rows.Close()
 				return nil, "", qerr
 			}
 			branchRefs = append(branchRefs, map[string]any{"id": id, "state_version": version})
 		}
 		if qerr = rows.Err(); qerr != nil {
+			rows.Close()
 			return nil, "", qerr
 		}
+		rows.Close()
 	}
 	artifacts := []any{}
-	rows, err := tx.Query(ctx, `SELECT DISTINCT v.id::text,p.entity_kind,v.content_hash FROM research_work_item w JOIN research_discussion_input di ON di.discussion_id=w.target_id JOIN research_artifact_version v ON v.id=di.node_artifact_version_id JOIN research_artifact_passport p ON p.id=v.artifact_id WHERE w.id=$1::uuid ORDER BY v.id::text`, workItemID)
+	rows, err = tx.Query(ctx, `SELECT DISTINCT v.id::text,p.entity_kind,v.content_hash FROM research_work_item w JOIN research_discussion_input di ON di.discussion_id=w.target_id JOIN research_artifact_version v ON v.id=di.node_artifact_version_id JOIN research_artifact_passport p ON p.id=v.artifact_id WHERE w.id=$1::uuid ORDER BY v.id::text`, workItemID)
 	if err != nil {
 		return nil, "", err
 	}

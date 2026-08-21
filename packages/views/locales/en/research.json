@@ -149,6 +149,8 @@
     "detail_close": "Close detail"
   },
   "v6_detail": {
+    "live_activity": "Live activity",
+    "live_activity_stale": "The execution lease has expired; the server is re-dispatching this work.",
     "execution": "Execution",
     "absorbed": "Absorbed",
     "terminal": "Terminal",

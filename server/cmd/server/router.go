@@ -1522,6 +1522,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 							r.Post("/director-brief-acks", h.AcknowledgeAgentResearchV6DirectorBrief)
 							r.Get("/catalog", h.GetAgentResearchV6WorkCatalog)
 							r.Post("/catalog-acks", h.AcknowledgeAgentResearchV6WorkCatalog)
+							r.Post("/progress", h.ReportAgentResearchV6WorkProgress)
 							r.Post("/submission", h.SubmitAgentResearchV6Work)
 							r.Post("/report-uploads", h.CreateAgentResearchV6ReportUpload)
 							r.Put("/report-uploads/{uploadId}/content", h.PutAgentResearchV6ReportUpload)

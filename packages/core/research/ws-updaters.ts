@@ -294,8 +294,9 @@ export function applyResearchWSEvent(
           }
           next[agentId] = {
             ...(next[agentId] ?? {
-              phase: "idle", role: "", fleetMemberId: null, taskId: null,
-              nodeId: null, branchId: null, stage: null, expiresAt: null, staleReason: null,
+              phase: "idle", role: "", name: "", avatarUrl: null, fleetMemberId: null,
+              taskId: null, nodeId: null, branchId: null, stage: null,
+              expiresAt: null, staleReason: null,
             }),
             activity, updatedAt,
           };

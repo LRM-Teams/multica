@@ -34,6 +34,7 @@ type ResearchRunSubmission interface {
 	WorkManifest(context.Context, V6AttemptAccess) (V6WorkManifest, error)
 	WorkCatalog(context.Context, V6CatalogRequest) (V6CatalogPage, error)
 	AcknowledgeWorkCatalog(context.Context, AcknowledgeV6CatalogInput) error
+	ReportWorkProgress(context.Context, ReportV6WorkProgressInput) error
 	SubmitV6Work(context.Context, V6SubmissionInput) (V6SubmissionOutcome, error)
 	DirectorBriefPage(context.Context, V6AttemptAccess, string) (V6DirectorBriefPage, error)
 	AcknowledgeDirectorBrief(context.Context, AcknowledgeV6DirectorBriefInput) error

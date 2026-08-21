@@ -955,6 +955,32 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     nodes: data.nodes,
     run: data.run,
   });
+  // Live executor caption for the selected V6 projection node: match the
+  // presence roster by executing agent, by the node's own work item identity,
+  // or by any work item linked from the node detail.
+  const selectedNodeLiveActivity = (() => {
+    const ref = selectedDirectorProjectionNode?.canonical_ref;
+    if (!ref) return null;
+    const linkedWorkItemIds = new Set(
+      (directorNodeDetailData?.work_item_refs ?? []).map((r) => r.id),
+    );
+    for (const [agentId, entry] of Object.entries(presence)) {
+      if (entry.phase !== "running" && entry.phase !== "queued" && entry.phase !== "stale") continue;
+      const matchesNode =
+        (ref.kind === "agent" && agentId === ref.id) ||
+        (entry.taskId != null &&
+          (entry.taskId === ref.id || linkedWorkItemIds.has(entry.taskId)));
+      if (!matchesNode) continue;
+      if (!entry.activity) continue;
+      return {
+        name: entry.name || agentId.slice(0, 8),
+        activity: entry.activity,
+        phase: entry.phase,
+        updatedAt: entry.updatedAt,
+      };
+    }
+    return null;
+  })();
   // LRM-1329 — drawer overview owns error/permission; cards stay fact-only.
   const canvasMode = resolveCanvasBodyMode({
     nodes: data.nodes,
@@ -1290,6 +1316,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
                   projectionNodeById={
                     directorCanvas.canvas?.projectionNodeById ?? new Map()
                   }
+                  liveActivity={selectedNodeLiveActivity}
                   onRetry={() => void refetchDirectorNodeDetail()}
                   onFocusNode={(nodeId) => {
                     if (!directorCanvas.canvas?.projectionNodeById.has(nodeId)) return;

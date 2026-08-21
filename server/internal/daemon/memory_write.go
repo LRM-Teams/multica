@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"github.com/multica-ai/multica/server/internal/agentworkspace"
+	"github.com/multica-ai/multica/server/internal/memoryorigin"
 	"github.com/multica-ai/multica/server/internal/memorysignal"
 )
 
@@ -211,6 +212,9 @@ func (d *Daemon) reportAgentMemoryWrites(ctx context.Context, task Task, frictio
 	if d == nil || d.client == nil {
 		return
 	}
+	if profile, err := taskExecutionProfile(task); err == nil && memoryorigin.SkipDurableCandidates(profile) {
+		return
+	}
 	workspaceID := strings.TrimSpace(task.WorkspaceID)
 	agentID := strings.TrimSpace(task.AgentID)
 	if workspaceID == "" || agentID == "" {
@@ -228,6 +232,7 @@ func (d *Daemon) reportAgentMemoryWrites(ctx context.Context, task Task, frictio
 		return
 	}
 	triggerText := memoryWriteTriggerText(task)
+	friction = memorysignal.AugmentFrictionFromIssue(friction, task.IssueID, triggerText)
 	signals := loadMemorySignals(agentRoot)
 	// Non-zero friction forces a report even without writes so the server-side
 	// friction guard can queue a lesson candidate (friction-gated memory spec).

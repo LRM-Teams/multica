@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
+	"github.com/multica-ai/multica/server/internal/memoryorigin"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -52,6 +53,7 @@ func (d *Daemon) graphExecutionMemories(ctx context.Context, task Task, log *slo
 	}
 	return []execenv.MemoryContextForEnv{{
 		Name: "Graph memory recall", Content: response.Injection, Scope: "workspace",
+		OriginClass: memoryorigin.Untrusted, Injected: true,
 	}}
 }
 

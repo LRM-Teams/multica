@@ -144,8 +144,14 @@ func (d *Daemon) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID
 		switch message.Type {
 		case agent.MessageToolUse:
 			frictionTracker.ObserveToolUse(message.Tool, frictionToolInputHash(message.Input))
+		case agent.MessageToolResult:
+			frictionTracker.ObserveToolResult(message.Output)
 		case agent.MessageError:
-			frictionTracker.ObserveError()
+			if memorysignal.LooksLikeActionRejected(message.Content) {
+				frictionTracker.ObserveActionRejected()
+			} else {
+				frictionTracker.ObserveError()
+			}
 		case agent.MessageText, agent.MessageThinking:
 			if message.Content != "" {
 				frictionTracker.ObserveProgress()

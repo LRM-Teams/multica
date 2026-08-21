@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"crypto/sha256"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -11,11 +12,12 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/internal/memorycuration"
+	"github.com/multica-ai/multica/server/internal/memoryorigin"
 	"github.com/multica-ai/multica/server/internal/memoryscope"
 )
 
 const (
-	executionMemoryBudgetBytes = 16 * 1024
+	executionMemoryBudgetBytes  = 16 * 1024
 	agentScopeMemoryBudgetBytes = 6 * 1024
 )
 
@@ -75,7 +77,19 @@ func prepareTurnScopeMemory(agentRoot string, task Task, serverMemories []execen
 	}
 	addFile := func(priority int, name, path, scope, subjectType, subjectID, template string, maxBytes int) {
 		content := readScopedMemoryFile(path, template, maxBytes)
-		add(priority, execenv.MemoryContextForEnv{Name: name, Content: content, Scope: scope, SubjectType: subjectType, SubjectID: subjectID})
+		add(priority, execenv.MemoryContextForEnv{
+			Name: name, Content: content, Scope: scope, SubjectType: subjectType, SubjectID: subjectID,
+			OriginClass: memoryorigin.ClassifyScope(scope, name), Injected: true,
+		})
+	}
+	if notice, ok := memoryorigin.ConsumeNotice(agentRoot); ok {
+		add(0, execenv.MemoryContextForEnv{
+			Name:        "Recent memory curation",
+			Content:     fmt.Sprintf("Curation updated %d local memory file(s). %s", notice.ChangedFiles, notice.Hint),
+			Scope:       "system",
+			OriginClass: memoryorigin.System,
+			Injected:    true,
+		})
 	}
 
 	if paths.UserDir != "" {
@@ -120,7 +134,10 @@ func prepareAgentScopeMemory(agentRoot string, task Task, serverMemories []exece
 	}
 	addFile := func(priority int, name, path, scope, subjectType, subjectID, template string, maxBytes int) {
 		content := readScopedMemoryFile(path, template, maxBytes)
-		add(priority, execenv.MemoryContextForEnv{Name: name, Content: content, Scope: scope, SubjectType: subjectType, SubjectID: subjectID})
+		add(priority, execenv.MemoryContextForEnv{
+			Name: name, Content: content, Scope: scope, SubjectType: subjectType, SubjectID: subjectID,
+			OriginClass: memoryorigin.ClassifyScope(scope, name), Injected: true,
+		})
 	}
 	if agentRoot != "" {
 		addFile(6, "Agent global memory", filepath.Join(agentRoot, "memory", "MEMORY.md"), "agent", "agent", task.AgentID, agentMemoryTemplate, 2*1024)

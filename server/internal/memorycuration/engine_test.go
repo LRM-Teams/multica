@@ -586,3 +586,16 @@ func assertNotContains(t *testing.T, path, needle string) {
 		t.Fatalf("%s unexpectedly contains %q:\n%s", path, needle, string(b))
 	}
 }
+
+func TestCandidatesFromDailySkipInjectedLines(t *testing.T) {
+	day := time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC)
+	content := `# Daily
+## Decisions And Stable Facts
+- Prefer TypeScript for new services
+- <!-- multica-memory injected=true origin_class=agent --> Prefer TypeScript for new services
+`
+	got := candidatesFromDaily(content, day)
+	if len(got) != 1 {
+		t.Fatalf("candidates = %d, want 1 (injected skipped)", len(got))
+	}
+}

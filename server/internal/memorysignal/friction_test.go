@@ -229,6 +229,33 @@ func TestAugmentFrictionFromTrigger(t *testing.T) {
 	}
 }
 
+func TestLooksLikeActionRejectedAndRework(t *testing.T) {
+	if !LooksLikeActionRejected("Error: permission denied") {
+		t.Fatal("permission denied")
+	}
+	if !LooksLikeActionRejected("User rejected the tool call") {
+		t.Fatal("user rejected")
+	}
+	if LooksLikeActionRejected("request timed out") {
+		t.Fatal("timeout is not a rejection")
+	}
+	if !LooksLikeRework("请返工，changes requested") {
+		t.Fatal("rework phrasing")
+	}
+	got := AugmentFrictionFromIssue(FrictionVector{}, "issue-1", "needs rework on this issue")
+	if got.Rework != 1 {
+		t.Fatalf("rework = %d", got.Rework)
+	}
+	if got := AugmentFrictionFromIssue(FrictionVector{}, "", "needs rework"); got.Rework != 0 {
+		t.Fatal("no issue id")
+	}
+	tr := NewFrictionTracker()
+	tr.ObserveToolResult("permission denied by user")
+	if tr.Vector().ActionRejected != 1 {
+		t.Fatal("tool result rejection")
+	}
+}
+
 func TestShouldReportEvenWithoutWritesDecisionAndFriction(t *testing.T) {
 	if !ShouldReportEvenWithoutWrites("行，就用 B 方案", nil) {
 		t.Fatal("decision phrasing should force an empty-write report")

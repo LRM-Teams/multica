@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/multica-ai/multica/server/internal/memoryorigin"
 	"github.com/multica-ai/multica/server/internal/memorypolicy"
 )
 
@@ -157,6 +158,9 @@ func (e *Engine) Run(opts Options) (Result, error) {
 		unlock()
 		if ar.Changed {
 			res.AgentsChanged++
+			if !opts.DryRun {
+				_ = memoryorigin.WriteNotice(root.Root, 1+ar.DailyFilesWritten+ar.EntriesPromoted+ar.ReviewCandidatesAdded)
+			}
 		}
 		res.DailyFilesWritten += ar.DailyFilesWritten
 		res.ReviewCandidatesAdded += ar.ReviewCandidatesAdded
@@ -887,7 +891,7 @@ func candidatesFromDaily(content string, sourceDate time.Time) []reviewEntry {
 	var out []reviewEntry
 	add := func(kind, dest, title, body string) {
 		body = strings.TrimSpace(body)
-		if body == "" || strings.HasPrefix(strings.ToLower(body), "no ") {
+		if body == "" || strings.HasPrefix(strings.ToLower(body), "no ") || memoryorigin.SkipLine(body) {
 			return
 		}
 		h := hashShort(kind, dest, body, formatDate(sourceDate))

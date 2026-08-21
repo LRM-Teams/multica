@@ -11,6 +11,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/multica-ai/multica/server/internal/memoryorigin"
 	"github.com/multica-ai/multica/server/internal/memorypolicy"
 	"github.com/multica-ai/multica/server/pkg/agent"
 )
@@ -960,11 +961,16 @@ func renderPromotedMemorySnapshot(b *strings.Builder, memories []MemoryContextFo
 		if scope == "" {
 			scope = "agent"
 		}
+		origin := memoryorigin.Normalize(memory.OriginClass)
+		if origin == memoryorigin.Agent && memory.OriginClass == "" {
+			origin = memoryorigin.ClassifyScope(scope, name)
+		}
+		content = memoryorigin.Taint(content, origin)
 		fmt.Fprintf(b, "Scope: `%s`", sanitizeInlineCodeForBrief(scope))
 		if memory.SubjectType != "" && memory.SubjectID != "" {
 			fmt.Fprintf(b, "; subject: `%s:%s`", sanitizeInlineCodeForBrief(memory.SubjectType), sanitizeInlineCodeForBrief(memory.SubjectID))
 		}
-		b.WriteString("\n\n")
+		fmt.Fprintf(b, "; origin: `%s` (injected)\n\n", sanitizeInlineCodeForBrief(origin))
 		for _, line := range strings.Split(content, "\n") {
 			b.WriteString("> ")
 			b.WriteString(line)

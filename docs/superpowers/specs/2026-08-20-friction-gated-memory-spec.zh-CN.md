@@ -1,8 +1,7 @@
 # 摩擦门控记忆规格（Friction-Gated Memory）
 
-> 状态：Phase 0–1 首批已落地（daemon 摩擦采集 retry_loop / self_error_streak、
-> 纠正句式 human_correction、resident 通道追踪、friction_guard / decision_guard
-> 兜底、L2 自审接入）；action_rejected、Issue rework 聚合与 Phase 2 Goal 集成未开始
+> 状态：Phase 0–1 已补齐 action_rejected（工具权限/用户拒绝）与 Issue rework
+> （触发句式 + 关联 Issue）；Phase 2 Goal / Epoch 聚合仍未开始
 >
 > 日期：2026-08-20
 >

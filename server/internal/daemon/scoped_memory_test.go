@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
+	"github.com/multica-ai/multica/server/internal/memoryorigin"
 )
 
 func TestPrepareExecutionMemoryDoesNotCreateFiles(t *testing.T) {
@@ -257,6 +258,37 @@ func TestPrepareTurnAndAgentScopeMemorySplit(t *testing.T) {
 	}
 }
 
+func TestPrepareTurnScopeMemoryInjectsCurationNotice(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "agent")
+	if err := ensureMulticaAgentRoot(root); err != nil {
+		t.Fatal(err)
+	}
+	if err := memoryorigin.WriteNotice(root, 3); err != nil {
+		t.Fatal(err)
+	}
+	turn, _ := prepareTurnScopeMemory(root, Task{AgentID: "agent-1", InitiatorType: "member", InitiatorID: "member-a"}, nil)
+	var text strings.Builder
+	found := false
+	for _, memory := range turn {
+		if memory.Name == "Recent memory curation" {
+			found = true
+			if memory.OriginClass != memoryorigin.System {
+				t.Fatalf("origin = %q", memory.OriginClass)
+			}
+		}
+		text.WriteString(memory.Content)
+	}
+	if !found || !strings.Contains(text.String(), "Curation updated 3") {
+		t.Fatalf("missing curation notice:\n%s", text.String())
+	}
+	again, _ := prepareTurnScopeMemory(root, Task{AgentID: "agent-1"}, nil)
+	for _, memory := range again {
+		if memory.Name == "Recent memory curation" {
+			t.Fatal("notice must be one-shot")
+		}
+	}
+}
+
 func TestMergeExecutionMemoriesKeepsLegacyAndAddsGraph(t *testing.T) {
 	merged := mergeExecutionMemories(
 		[]execenv.MemoryContextForEnv{{Name: "user", Content: "Call me JHP", Scope: "user"}},
@@ -271,4 +303,3 @@ func TestMergeExecutionMemoriesKeepsLegacyAndAddsGraph(t *testing.T) {
 		t.Fatalf("merge dropped legacy or graph:\n%s", content)
 	}
 }
-

@@ -12,7 +12,6 @@ import (
 	"github.com/google/uuid"
 )
 
-
 func injectPeriodBriefCollectorPackMarkdown(t *testing.T, collectorAgentID, packBody string) {
 	t.Helper()
 	stop := make(chan struct{})
@@ -579,5 +578,193 @@ WHERE r.draft_page_id = $1::uuid
 	}
 	if !strings.Contains(stored, "via agent_credential") {
 		t.Fatalf("pack_markdown = %q", stored)
+	}
+}
+
+func injectPeriodBriefCollectPlan(t *testing.T, plan notePeriodBriefCollectPlan) {
+	t.Helper()
+	raw, err := json.Marshal(plan)
+	if err != nil {
+		t.Fatalf("marshal plan: %v", err)
+	}
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	t.Cleanup(func() {
+		close(stop)
+		<-done
+	})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			tag, err := testPool.Exec(context.Background(), `
+UPDATE note_period_brief_run
+SET collect_plan = $1::jsonb, updated_at = now()
+WHERE status = 'planning'
+  AND collect_plan IS NULL`, raw)
+			if err == nil && tag.RowsAffected() > 0 {
+				return
+			}
+			time.Sleep(40 * time.Millisecond)
+		}
+	}()
+}
+
+func TestCreateNotePeriodBriefEmptyFocusSkipsPlanner(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	prevWait := notePeriodBriefCollectorMaxWait
+	notePeriodBriefCollectorMaxWait = 0
+	prevPlan := notePeriodBriefPlannerMaxWait
+	notePeriodBriefPlannerMaxWait = 0
+	prevBG := notePeriodBriefFinishInBackground
+	notePeriodBriefFinishInBackground = false
+	t.Cleanup(func() {
+		notePeriodBriefCollectorMaxWait = prevWait
+		notePeriodBriefPlannerMaxWait = prevPlan
+		notePeriodBriefFinishInBackground = prevBG
+	})
+
+	synthID := createHandlerTestAgent(t, "Period Brief Synth "+uuid.NewString()[:8], nil)
+	collectorA := createPeriodBriefCollectorTestAgent(t, "Collector A")
+	day := time.Now().UTC().Format("2006-01-02")
+	rec := httptest.NewRecorder()
+	testHandler.CreateNotePeriodBrief(rec, newRequest(http.MethodPost, "/api/notes/period-briefs", map[string]any{
+		"window":              "day",
+		"date":                day,
+		"timezone":            "UTC",
+		"agent_id":            synthID,
+		"collector_agent_ids": []string{collectorA},
+		"focus":               "   ",
+	}))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("period brief = %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp createNotePeriodBriefResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.CollectorJobs) != 1 {
+		t.Fatalf("empty focus must dispatch collectors immediately: %#v", resp.CollectorJobs)
+	}
+	var userFocus, status string
+	if err := testPool.QueryRow(context.Background(), `
+SELECT user_focus, status FROM note_period_brief_run WHERE draft_page_id = $1`, resp.Page.ID).Scan(&userFocus, &status); err != nil {
+		t.Fatalf("load run: %v", err)
+	}
+	if userFocus != "" {
+		t.Fatalf("blank focus should store empty, got %q", userFocus)
+	}
+	if status == "planning" {
+		t.Fatal("empty focus must not stay in planning")
+	}
+}
+
+func TestCreateNotePeriodBriefFocusFallsBackWhenPlanMissing(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	prevWait := notePeriodBriefCollectorMaxWait
+	notePeriodBriefCollectorMaxWait = 0
+	prevPlan := notePeriodBriefPlannerMaxWait
+	notePeriodBriefPlannerMaxWait = 0
+	prevBG := notePeriodBriefFinishInBackground
+	notePeriodBriefFinishInBackground = false
+	t.Cleanup(func() {
+		notePeriodBriefCollectorMaxWait = prevWait
+		notePeriodBriefPlannerMaxWait = prevPlan
+		notePeriodBriefFinishInBackground = prevBG
+	})
+
+	synthID := createHandlerTestAgent(t, "Period Brief Synth "+uuid.NewString()[:8], nil)
+	collectorA := createPeriodBriefCollectorTestAgent(t, "Collector A")
+	collectorB := createPeriodBriefCollectorTestAgent(t, "Collector B")
+	day := time.Now().UTC().Format("2006-01-02")
+	rec := httptest.NewRecorder()
+	testHandler.CreateNotePeriodBrief(rec, newRequest(http.MethodPost, "/api/notes/period-briefs", map[string]any{
+		"window":              "day",
+		"date":                day,
+		"timezone":            "UTC",
+		"agent_id":            synthID,
+		"collector_agent_ids": []string{collectorA, collectorB},
+		"focus":               "只整理 ~/multica",
+	}))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("period brief = %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp createNotePeriodBriefResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Job.AgentID != synthID {
+		t.Fatalf("synthesizer job agent = %s, want %s", resp.Job.AgentID, synthID)
+	}
+	if len(resp.CollectorJobs) != 2 {
+		t.Fatalf("missing plan should fall back to all selected collectors: %#v", resp.CollectorJobs)
+	}
+	var userFocus string
+	if err := testPool.QueryRow(context.Background(), `
+SELECT user_focus FROM note_period_brief_run WHERE draft_page_id = $1`, resp.Page.ID).Scan(&userFocus); err != nil {
+		t.Fatalf("load focus: %v", err)
+	}
+	if userFocus != "只整理 ~/multica" {
+		t.Fatalf("user_focus = %q", userFocus)
+	}
+}
+
+func TestCreateNotePeriodBriefFocusHonorsCollectPlanSkip(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	prevWait := notePeriodBriefCollectorMaxWait
+	notePeriodBriefCollectorMaxWait = 0
+	prevPlan := notePeriodBriefPlannerMaxWait
+	notePeriodBriefPlannerMaxWait = 3 * time.Second
+	prevBG := notePeriodBriefFinishInBackground
+	notePeriodBriefFinishInBackground = false
+	t.Cleanup(func() {
+		notePeriodBriefCollectorMaxWait = prevWait
+		notePeriodBriefPlannerMaxWait = prevPlan
+		notePeriodBriefFinishInBackground = prevBG
+	})
+
+	synthID := createHandlerTestAgent(t, "Period Brief Synth "+uuid.NewString()[:8], nil)
+	collectorA := createPeriodBriefCollectorTestAgent(t, "Collector A")
+	collectorB := createPeriodBriefCollectorTestAgent(t, "Collector B")
+	injectPeriodBriefCollectPlan(t, notePeriodBriefCollectPlan{
+		Summary: "laptop only",
+		Assignments: []notePeriodBriefCollectAssignment{
+			{CollectorAgentID: collectorA, Paths: []string{"/home/jian40/multica"}, Brief: "notes-agent"},
+			{CollectorAgentID: collectorB, Skip: true},
+		},
+	})
+
+	day := time.Now().UTC().Format("2006-01-02")
+	rec := httptest.NewRecorder()
+	testHandler.CreateNotePeriodBrief(rec, newRequest(http.MethodPost, "/api/notes/period-briefs", map[string]any{
+		"window":              "day",
+		"date":                day,
+		"timezone":            "UTC",
+		"agent_id":            synthID,
+		"collector_agent_ids": []string{collectorA, collectorB},
+		"focus":               "只整理本机 ~/multica",
+	}))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("period brief = %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp createNotePeriodBriefResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.CollectorJobs) != 1 {
+		t.Fatalf("plan skip should dispatch one collector: %#v", resp.CollectorJobs)
+	}
+	if resp.CollectorJobs[0].AgentID != collectorA {
+		t.Fatalf("dispatched %s, want %s", resp.CollectorJobs[0].AgentID, collectorA)
 	}
 }

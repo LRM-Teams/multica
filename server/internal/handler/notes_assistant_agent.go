@@ -20,17 +20,17 @@ const (
 	notesAssistantAgentDisplayName = "笔记助手"
 	notesAssistantAgentTemplate    = "notes-assistant"
 	// Detects personas that predate selective-read wake contract.
-	notesAssistantInstructionsCapabilityMarker = "Period Brief synthesizer wake"
+	notesAssistantInstructionsCapabilityMarker = "Period Brief collect-plan wake"
 )
 
 // EnsureNotesAssistantAgentResponse is returned by POST /api/agents/notes-assistant.
 type EnsureNotesAssistantAgentResponse struct {
-	Agent                 *AgentResponse `json:"agent,omitempty"`
-	Created               bool           `json:"created"`
-	Aligned               bool           `json:"aligned"`
-	NeedsSetup            bool           `json:"needs_setup"`
-	OnboardingAvailable   bool           `json:"onboarding_available"`
-	SetupHint             bool           `json:"setup_hint"`
+	Agent               *AgentResponse `json:"agent,omitempty"`
+	Created             bool           `json:"created"`
+	Aligned             bool           `json:"aligned"`
+	NeedsSetup          bool           `json:"needs_setup"`
+	OnboardingAvailable bool           `json:"onboarding_available"`
+	SetupHint           bool           `json:"setup_hint"`
 }
 
 type ensureNotesAssistantAgentRequest struct {

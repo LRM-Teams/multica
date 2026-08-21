@@ -205,6 +205,7 @@ FROM note_page WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL`,
 		job, ok := h.dispatchNotePeriodBriefCollectorOntoDraft(
 			rec, req, workspaceID, run.OwnerUserID, uuidToString(run.OwnerUserID),
 			agent, draft, ref.WindowLabel, ref.WindowStart, ref.WindowEnd, ref.ChannelID,
+			scopeFromCollectPlan(run.CollectPlan, ref.AgentID),
 		)
 		if !ok {
 			resp.Skipped = append(resp.Skipped, notePeriodBriefRetrySkipped{
@@ -249,6 +250,8 @@ func (h *Handler) dispatchNotePeriodBriefCollectorOntoDraft(
 	agent db.Agent,
 	draft notePageRow,
 	windowLabel, windowStart, windowEnd, preferredChannelID string,
+	scope notePeriodBriefCollectorScope,
 ) (NoteWorkerJobResponse, bool) {
-	return h.dispatchNotePeriodBriefCollector(w, r, workspaceID, userID, userIDString, draft, agent, windowLabel, windowStart, windowEnd)
+	_ = preferredChannelID
+	return h.dispatchNotePeriodBriefCollector(w, r, workspaceID, userID, userIDString, draft, agent, windowLabel, windowStart, windowEnd, scope)
 }

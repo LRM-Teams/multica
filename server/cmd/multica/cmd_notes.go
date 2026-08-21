@@ -24,6 +24,7 @@ var notesCmd = &cobra.Command{
 		"From a DM or channel, pipe cleaned markdown to `multica message send --target <target> --note-write`. " +
 		"Omit `--note-page-id` to create a note after human confirm. " +
 		"Period Work collectors deliver packs with `notes period-brief submit-pack` (not --note-write). " +
+		"The Notes Assistant collect-plan wake delivers `notes period-brief submit-collect-plan`. " +
 		"Period Brief synthesizers may call `notes period-brief retry-collectors` to re-dispatch retryable collectors.",
 }
 
@@ -56,6 +57,15 @@ var notesPeriodBriefRetryCollectorsCmd = &cobra.Command{
 	RunE: runNotesPeriodBriefRetryCollectors,
 }
 
+var notesPeriodBriefSubmitCollectPlanCmd = &cobra.Command{
+	Use:   "submit-collect-plan",
+	Short: "Store a Notes Assistant collect plan on the Period Brief run",
+	Long: "Planner-only tool. Reads JSON from stdin (or --json) and stores the collect plan " +
+		"on note_period_brief_run.collect_plan. Do not --note-write. Do not submit-pack from this wake.",
+	Args: cobra.NoArgs,
+	RunE: runNotesPeriodBriefSubmitCollectPlan,
+}
+
 var notesPeriodBriefSubmitPackCmd = &cobra.Command{
 	Use:   "submit-pack",
 	Short: "Store a Period Work collector pack on the Brief run (not a Notes page)",
@@ -71,6 +81,7 @@ func init() {
 	notesCmd.AddCommand(notesPeriodBriefCmd)
 	notesPeriodBriefCmd.AddCommand(notesPeriodBriefRetryCollectorsCmd)
 	notesPeriodBriefCmd.AddCommand(notesPeriodBriefSubmitPackCmd)
+	notesPeriodBriefCmd.AddCommand(notesPeriodBriefSubmitCollectPlanCmd)
 	notesGetCmd.Flags().String("output", "json", "Output format: json (default) or table")
 	notesTreeCmd.Flags().String("output", "json", "Output format: json (default) or table")
 	notesPeriodBriefRetryCollectorsCmd.Flags().String("draft-page-id", "", "Period Brief draft page id (required)")
@@ -79,6 +90,9 @@ func init() {
 	notesPeriodBriefSubmitPackCmd.Flags().String("draft-page-id", "", "Period Brief draft page id (required)")
 	notesPeriodBriefSubmitPackCmd.Flags().String("markdown", "", "Pack markdown (default: read stdin)")
 	_ = notesPeriodBriefSubmitPackCmd.MarkFlagRequired("draft-page-id")
+	notesPeriodBriefSubmitCollectPlanCmd.Flags().String("draft-page-id", "", "Period Brief draft page id (required)")
+	notesPeriodBriefSubmitCollectPlanCmd.Flags().String("json", "", "Collect plan JSON (default: read stdin)")
+	_ = notesPeriodBriefSubmitCollectPlanCmd.MarkFlagRequired("draft-page-id")
 }
 
 func runNotesGet(cmd *cobra.Command, args []string) error {
@@ -236,6 +250,49 @@ func runNotesPeriodBriefSubmitPack(cmd *cobra.Command, _ []string) error {
 	path := "/api/agent/notes/period-briefs/" + draftPageID + "/submit-pack"
 	if err := client.PostJSON(ctx, path, map[string]any{"markdown": markdown}, &out); err != nil {
 		return fmt.Errorf("submit pack: %w", err)
+	}
+	enc := json.NewEncoder(cmd.OutOrStdout())
+	enc.SetIndent("", "  ")
+	return enc.Encode(out)
+}
+
+func runNotesPeriodBriefSubmitCollectPlan(cmd *cobra.Command, _ []string) error {
+	if !isAgentAPIToken(cmd) {
+		return fmt.Errorf("multica notes period-brief submit-collect-plan requires an agent task token")
+	}
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := cli.APIContext(context.Background())
+	defer cancel()
+
+	draftPageID, _ := cmd.Flags().GetString("draft-page-id")
+	draftPageID = strings.TrimSpace(draftPageID)
+	if draftPageID == "" {
+		return fmt.Errorf("--draft-page-id is required")
+	}
+	rawJSON, _ := cmd.Flags().GetString("json")
+	rawJSON = strings.TrimSpace(rawJSON)
+	if rawJSON == "" {
+		raw, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return fmt.Errorf("read stdin: %w", err)
+		}
+		rawJSON = strings.TrimSpace(string(raw))
+	}
+	if rawJSON == "" {
+		return fmt.Errorf("collect plan JSON is required (stdin or --json)")
+	}
+	var body map[string]any
+	if err := json.Unmarshal([]byte(rawJSON), &body); err != nil {
+		return fmt.Errorf("collect plan must be JSON: %w", err)
+	}
+
+	var out map[string]any
+	path := "/api/agent/notes/period-briefs/" + draftPageID + "/submit-collect-plan"
+	if err := client.PostJSON(ctx, path, body, &out); err != nil {
+		return fmt.Errorf("submit collect plan: %w", err)
 	}
 	enc := json.NewEncoder(cmd.OutOrStdout())
 	enc.SetIndent("", "  ")

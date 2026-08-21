@@ -270,4 +270,36 @@ describe("NotePeriodBriefDialog", () => {
     };
     expect(payload.date).toBeUndefined();
   });
+
+  it("omits focus when the request is blank", async () => {
+    const user = userEvent.setup();
+    renderDialog("zh-Hans");
+    await waitFor(() => {
+      expect(screen.getByTestId("period-brief-collector-collector-a")).toBeTruthy();
+    });
+    await user.click(screen.getByRole("button", { name: /开始写/ }));
+    await waitFor(() => {
+      expect(createNotePeriodBrief).toHaveBeenCalled();
+    });
+    const payload = createNotePeriodBrief.mock.calls[0]?.[0] as { focus?: string };
+    expect(payload.focus).toBeUndefined();
+  });
+
+  it("sends a scoped focus request to the Notes Assistant", async () => {
+    const user = userEvent.setup();
+    renderDialog("zh-Hans");
+    await waitFor(() => {
+      expect(screen.getByTestId("period-brief-focus")).toBeTruthy();
+    });
+    await user.type(screen.getByTestId("period-brief-focus"), "只整理 ~/multica 下笔记助手相关改动");
+    await user.click(screen.getByRole("button", { name: /开始写/ }));
+    await waitFor(() => {
+      expect(createNotePeriodBrief).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agent_id: "notes-1",
+          focus: "只整理 ~/multica 下笔记助手相关改动",
+        }),
+      );
+    });
+  });
 });

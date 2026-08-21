@@ -39,6 +39,7 @@ import {
 } from "@multica/ui/components/ui/dialog";
 import { Input } from "@multica/ui/components/ui/input";
 import { Label } from "@multica/ui/components/ui/label";
+import { Textarea } from "@multica/ui/components/ui/textarea";
 import { cn } from "@multica/ui/lib/utils";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { useT } from "../i18n/use-t";
@@ -87,6 +88,7 @@ export function NotePeriodBriefDialog({
   const [startDate, setStartDate] = useState(defaultCustom.start_date);
   const [endDate, setEndDate] = useState(defaultCustom.end_date);
   const [collectorOverride, setCollectorOverride] = useState<string[] | null>(null);
+  const [focus, setFocus] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const collectorsEnsureAttemptedRef = useRef(false);
 
@@ -124,6 +126,7 @@ export function NotePeriodBriefDialog({
     prevOpenRef.current = open;
     if (open) {
       setCollectorOverride(null);
+      setFocus("");
       setWindowKind("week");
       setDate(today);
       const custom = defaultPeriodBriefCustomRange(today);
@@ -167,6 +170,7 @@ export function NotePeriodBriefDialog({
     }
     setSubmitting(true);
     try {
+      const trimmedFocus = focus.trim();
       const result = await api.createNotePeriodBrief({
         window: windowKind,
         date: windowKind === "custom" ? undefined : date,
@@ -175,15 +179,20 @@ export function NotePeriodBriefDialog({
         timezone,
         agent_id: agentId,
         collector_agent_ids: collectorIds,
+        ...(trimmedFocus ? { focus: trimmedFocus } : {}),
       });
       if (!result.job?.id) {
         throw new Error(t(($) => $.notes_page.period_brief_failed));
       }
       toast.success(
-        t(($) => $.notes_page.period_brief_created, {
-          title: result.page.title || result.window.label || "工作介绍",
-          count: result.fact_count ?? 0,
-        }),
+        trimmedFocus
+          ? t(($) => $.notes_page.period_brief_created_focused, {
+              title: result.page.title || result.window.label || "工作介绍",
+            })
+          : t(($) => $.notes_page.period_brief_created, {
+              title: result.page.title || result.window.label || "工作介绍",
+              count: result.fact_count ?? 0,
+            }),
       );
       onOpenChange(false);
       onCreated?.(result);
@@ -303,6 +312,23 @@ export function NotePeriodBriefDialog({
               </p>
             </div>
           )}
+          <div className="min-w-0 space-y-2">
+            <Label htmlFor="note-period-brief-focus">
+              {t(($) => $.notes_page.period_brief_focus_label)}
+            </Label>
+            <Textarea
+              id="note-period-brief-focus"
+              value={focus}
+              onChange={(event) => setFocus(event.target.value)}
+              disabled={submitting || ensuring}
+              placeholder={t(($) => $.notes_page.period_brief_focus_placeholder)}
+              data-testid="period-brief-focus"
+              className="min-h-20"
+            />
+            <p className="text-xs text-muted-foreground">
+              {t(($) => $.notes_page.period_brief_focus_hint)}
+            </p>
+          </div>
           <div className="min-w-0 space-y-2">
             <Label>{t(($) => $.notes_page.period_brief_collectors_label)}</Label>
             <p className="text-xs text-muted-foreground">

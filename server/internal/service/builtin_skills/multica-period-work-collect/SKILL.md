@@ -25,7 +25,9 @@ honestly.
 | container / cloud sandbox | `$HOME` **plus** `/workspace` when that directory exists — HOME-only is incomplete |
 
 Resolve `SCAN_ROOTS` with `references/collect-recipes.md` **before** any
-`find`. Prefer **git repositories under those roots** that have commits or
+`find`. If a `<focus>` partition is present (Notes Assistant collect plan),
+**narrow** harvest to those paths / topics / aspects — do not wander the
+whole machine. Prefer **git repositories under those roots** that have commits or
 dirty files **inside the wake `<window>`** (RFC3339 start → end, half-open).
 Also harvest **non-git** source files whose mtime is in-window (a lone
 `/workspace/multica/*.py` counts). Never pad the pack with earlier/later

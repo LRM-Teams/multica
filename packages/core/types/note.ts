@@ -272,6 +272,8 @@ export interface CreateNotePeriodBriefRequest {
   collector_agent_ids: string[];
   sources?: NoteRetrospectiveSource[];
   channel_id?: string;
+  /** Optional scoped request (paths / topics / aspects). Empty = full-scope default. */
+  focus?: string;
 }
 
 export interface CreateNotePeriodBriefResponse {

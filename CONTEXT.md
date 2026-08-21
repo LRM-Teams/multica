@@ -683,18 +683,26 @@ _Avoid_: Host Journal as the Brief machine source, keymouse, full-repo dump,
 HOME-only scans that miss `/workspace`, groups-only packs that drop evidence,
 --note-write packs into Notes
 
+### Period Brief Collect Plan
+
+The Notes Assistant restatement of an optional human 写汇报 focus (paths,
+topics, aspects) used to assign scoped collector tasks. Empty focus means
+full-scope default collection on every selected collector.
+_Avoid_: treating the plan as the Brief; letting collectors invent extra machines
+
 ### Period Brief Agent
 
-The Notes Assistant (笔记助手) in its 写汇报 synthesizer wake: platform
-Facts plus collector packs, force_fresh_session, --note-write. Not a second
-Workspace Agent. Leftover 周报 / weekly-report rows are archived on Ensure.
+The Notes Assistant (笔记助手) in its 写汇报 wakes: collect-plan commander
+when the human gave a focus, then synthesizer from platform Facts plus
+collector packs, force_fresh_session, --note-write. Not a second Workspace
+Agent. Leftover 周报 / weekly-report rows are archived on Ensure.
 _Avoid_: a dedicated weekly-report Agent; mixing bubble chat with --note-write
 
 ### Period Work Synthesis
 
 The job that reads platform facts plus collector packs and writes one Period
-Work Brief. Selection and grouping happen here; multi-machine collection is
-done by Collectors first.
+Work Brief. When the human gave a focus, a collect-plan wake assigns scoped
+collector tasks first; selection and grouping of the Brief still happen here.
 _Avoid_: LLM inside the retrospective API, Host Digest as required input,
 silent note overwrite
 

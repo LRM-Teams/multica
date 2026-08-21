@@ -568,6 +568,38 @@ func TestPeriodWorkBriefSkillRequiresReportingShape(t *testing.T) {
 	}
 }
 
+func TestPeriodWorkPlanSkillRequiresCollectPlanDelivery(t *testing.T) {
+	skill, ok := findSkill(t, "multica-period-work-plan")
+	if !ok {
+		return
+	}
+	fm, body, _ := splitFrontmatter(skill.Content)
+
+	if got := strings.TrimSpace(fm["user-invocable"]); got != "false" {
+		t.Errorf("user-invocable = %q, want false", got)
+	}
+	if got := strings.TrimSpace(fm["allowed-tools"]); !strings.Contains(got, "Bash(multica *)") {
+		t.Errorf("allowed-tools = %q, want Multica CLI for submit-collect-plan", got)
+	}
+	for _, want := range []string{
+		"submit-collect-plan",
+		"roster",
+		"paths",
+		"topics",
+		"aspects",
+		"SCAN_ROOTS",
+		"Forbidden",
+		"references/period-work-plan-source-map.md",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("period-work-plan skill missing %q", want)
+		}
+	}
+	if !skillHasFile(skill, "references/period-work-plan-source-map.md") {
+		t.Errorf("period-work-plan skill missing source map")
+	}
+}
+
 func TestNotesAssistantSkillRequiresSelectiveReads(t *testing.T) {
 	skill, ok := findSkill(t, "multica-notes-assistant")
 	if !ok {

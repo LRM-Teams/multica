@@ -15,6 +15,8 @@ to these sources.
 | Narrow retry API | `POST /api/agent/notes/period-briefs/{draftPageId}/retry-collectors` → `RetryAgentNotePeriodBriefCollectors` |
 | Collector submit-pack API | `POST /api/agent/notes/period-briefs/{draftPageId}/submit-pack` → `SubmitAgentNotePeriodBriefPack` |
 | CLI | `multica notes period-brief retry-collectors` → `server/cmd/multica/cmd_notes.go` |
+| Optional human focus + collect plan | `normalizePeriodBriefUserFocus`; `applyNotePeriodBriefCollectPlan`; `<focus>` in `buildNotePeriodBriefPrompt` |
+| Collect-plan wake (earlier) | `multica-period-work-plan`; `submit-collect-plan` |
 | Durable run + retry counts | `note_period_brief_run` migration `414_note_period_brief_run` |
 | Product contract | `docs/adr/0019-runtime-agent-collectors-period-brief.md` |
 | Collector skill (do not confuse) | `multica-period-work-collect` |

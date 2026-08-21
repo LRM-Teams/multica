@@ -5,6 +5,14 @@ supersedes: docs/adr/0018-machine-work-journal-period-brief.md
 
 # Runtime Agents collect machine work; a dedicated Brief Agent synthesizes
 
+> **Amendment (2026-08-21):** Optional human `focus` on 写汇报. Empty focus
+> keeps today's full-scope collect. Non-empty focus wakes 笔记助手 first as
+> collect-plan commander (`submit-collect-plan`); it restates paths/topics/
+> aspects and assigns only the needed roster collectors. Collectors then
+> harvest that scope. After packs settle, the same 笔记助手 synthesizes and
+> honors `<focus>`. One Agent, three wakes (Notes FAB bubble /
+> collect-plan / synthesizer).
+>
 > **Amendment (2026-08-20):** Synthesizer identity is the Workspace Notes
 > Assistant (「笔记助手」 / `notes-assistant`). 「周报」 / `weekly-report` is
 > retired and archived on Ensure. Collectors are unchanged. One Agent, two

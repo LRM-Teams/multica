@@ -227,7 +227,9 @@ func TestAgentTemplatesIncludeNotesAssistant(t *testing.T) {
 	for _, want := range []string{
 		"multica-notes-assistant",
 		"multica-period-work-brief",
+		"multica-period-work-plan",
 		notesAssistantInstructionsCapabilityMarker,
+		"Period Brief synthesizer wake",
 		"Standalone Agent Chat",
 		"notes tree",
 		"notes get",

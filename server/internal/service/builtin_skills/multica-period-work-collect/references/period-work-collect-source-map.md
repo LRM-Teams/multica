@@ -6,7 +6,8 @@ to these sources.
 | Claim | Source |
 |-------|--------|
 | Custom inclusive date range (`window=custom`) | `resolveNotePeriodBriefWindow` / `resolveNotePeriodBriefCustomWindow` |
-| Collector instruction + draft id + submit-pack | `server/internal/handler/note_period_brief.go` `notePeriodBriefCollectorInstruction`, `dispatchNotePeriodBriefCollector` |
+| Collector instruction + draft id + submit-pack | `server/internal/handler/note_period_brief.go` `notePeriodBriefCollectorInstruction`, `notePeriodBriefCollectorInstructionScoped`, `dispatchNotePeriodBriefCollector` |
+| Optional scoped collect from Notes Assistant plan | `<focus>` in `buildNotePeriodBriefCollectorPrompt`; `applyNotePeriodBriefCollectPlan` |
 | `POST /api/notes/period-briefs` orchestrates collectors then synthesizer | `server/internal/handler/note_period_brief.go` `CreateNotePeriodBrief` |
 | Collectors only on Computers the caller owns | `EnsurePeriodBriefCollectors` (`ListAgentRuntimesByOwner`); `parsePeriodBriefCollectorAgentIDs` runtime `owner_id` check; FE `listOwnedPeriodBriefCollectorAgents` |
 | Pack stored on run JSONB (not Notes page) | `SubmitAgentNotePeriodBriefPack`; `notePeriodBriefCollectorRef.PackMarkdown` |

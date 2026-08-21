@@ -22,6 +22,7 @@ import {
 } from "@multica/ui/components/ui/sheet";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { cn } from "@multica/ui/lib/utils";
+import { ActorAvatar } from "../../common/actor-avatar";
 import { useT } from "../../i18n/use-t";
 
 function payloadString(payload: unknown, key: string): string | null {
@@ -143,7 +144,15 @@ function ResearchAgentInspectorBody({
           ×
         </button>
         <div className="who">
-          <div className="agent-big-avatar">{row.initials || row.name.slice(0, 2).toUpperCase()}</div>
+          {/* One site-wide actor face. The hand-rolled disc here rendered a
+              two-letter fake face, which LRM-201 forbids. */}
+          <ActorAvatar
+            actorType="agent"
+            actorId={row.id}
+            name={row.name}
+            size={42}
+            profileLink={false}
+          />
           <div>
             <b id={titleId}>{row.name}</b>
             <span>{headerStatus}</span>

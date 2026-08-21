@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import {
+  formatCalendarDate,
   formatListTime,
   formatMessageTime,
   fullTimestamp,
@@ -131,5 +132,24 @@ describe("fullTimestamp", () => {
     expect(full).toContain("2026");
     expect(full).toContain("09:36");
     expect(full).not.toMatch(/AM|PM/);
+  });
+});
+
+describe("formatCalendarDate", () => {
+  it("renders the calendar day with no clock, in the viewer's locale", () => {
+    const ms = Date.parse("2026-03-05T09:36:00Z");
+    const en = formatCalendarDate(ms, "UTC", "en");
+    expect(en).toContain("2026");
+    expect(en).toContain("Mar");
+    expect(en).not.toContain("09:36");
+    // The profile panels used to pin "en-US" here, so a zh viewer read an
+    // English date on their own profile.
+    expect(formatCalendarDate(ms, "UTC", "zh-Hans")).not.toBe(en);
+  });
+
+  it("resolves the day in the viewer timezone, not UTC", () => {
+    const lateUtc = Date.parse("2026-03-05T23:30:00Z");
+    expect(formatCalendarDate(lateUtc, "Asia/Shanghai", "en")).toContain("6");
+    expect(formatCalendarDate(lateUtc, "UTC", "en")).toContain("5");
   });
 });

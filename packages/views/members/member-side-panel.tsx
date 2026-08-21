@@ -48,6 +48,7 @@ import { MemberSelfAvatarEditor } from "./member-self-avatar-editor";
 import { useOpenAgentPanel } from "../common/agent-panel-context";
 import { ActorAvatar } from "../common/actor-avatar";
 import { ActorStyledName } from "../common/actor-styled-name";
+import { ProfileField } from "../common/profile-field";
 import { ConversationSidePanelShell } from "../common/conversation-side-panel-shell";
 import { useOpenDM } from "../common/use-open-dm";
 import { AppLink } from "../navigation";
@@ -55,6 +56,7 @@ import { HonorWall } from "../honor/honor-wall";
 import { UserHonorLevelIcon } from "../honor/user-honor-level-icon";
 import { RolesDialog } from "../settings/components/roles-dialog";
 import { useT } from "../i18n/use-t";
+import { Time } from "../i18n";
 
 const MAX_PROFILE_DESCRIPTION_LEN = 2000;
 
@@ -631,7 +633,7 @@ function MemberSidePanelReady({
                   <span className="text-muted-foreground">
                     {t(($) => $.panel.joined)}
                   </span>
-                  <span className="truncate">{formatJoinedDate(joinedAt)}</span>
+                  <Time kind="date" value={joinedAt} className="truncate" />
                 </>
               ) : null}
             </div>
@@ -792,23 +794,6 @@ function MemberSidePanelReady({
   );
 }
 
-function ProfileField({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div>
-      <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-        {label}
-      </div>
-      {children}
-    </div>
-  );
-}
-
 function CreatedAgentRow({
   agent,
   fleet,
@@ -893,12 +878,3 @@ function CreatedAgentRow({
   );
 }
 
-function formatJoinedDate(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
-}

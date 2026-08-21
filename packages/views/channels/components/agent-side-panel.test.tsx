@@ -64,6 +64,13 @@ const {
   mockWorkspaceSkills: { current: [] as Array<Record<string, unknown>> },
 }));
 
+// The Info grid renders <Time kind="date"/>, which reads the viewer timezone
+// off the auth store. Nothing here depends on a signed-in user.
+vi.mock("@multica/core/auth", () => ({
+  useAuthStore: (sel: (s: { user: null }) => unknown) => sel({ user: null }),
+  registerAuthStore: vi.fn(),
+}));
+
 vi.mock("@multica/core/workspace/avatar-url", () => ({
   resolvePublicFileUrl: () => null,
 }));

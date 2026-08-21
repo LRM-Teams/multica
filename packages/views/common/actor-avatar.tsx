@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@multica/ui/lib/utils";
-import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
+import { ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
 import {
   HoverCard,
   HoverCardTrigger,

@@ -9,6 +9,7 @@ import {
 import { Button } from "@multica/ui/components/ui/button";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { cn } from "@multica/ui/lib/utils";
+import { ActorAvatar } from "../../common/actor-avatar";
 import {
   EXECUTION_STATUS_ACTION_KEY,
   EXECUTION_STATUS_PRESENTATION,
@@ -165,16 +166,16 @@ export function ExecutionOverlayRow({
         onClick={activate}
         onKeyDown={navigateRowList}
       >
-        {agent.avatarUrl ? (
-          <img src={agent.avatarUrl} alt="" className="size-8 shrink-0 rounded-lg object-cover" />
-        ) : (
-          <span
-            aria-hidden="true"
-            className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-[11px] font-semibold text-foreground"
-          >
-            {agent.initials}
-          </span>
-        )}
+        {/* One site-wide actor face. `name` overrides the directory so fixture
+            and demo rows still render a real identity. */}
+        <ActorAvatar
+          actorType="agent"
+          actorId={agent.id}
+          name={agent.name}
+          avatarUrlHint={agent.avatarUrl}
+          size={32}
+          profileLink={false}
+        />
         <span className="min-w-0">
           <span className="flex min-w-0 items-baseline gap-1.5">
             <span className={cn("truncate text-xs font-semibold", presentation.textClass)}>

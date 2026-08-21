@@ -302,3 +302,97 @@ func TestForceInvalidateReleasesWedgedRunningSlot(t *testing.T) {
 	}
 	t.Fatal("wedged slot never released admission after ForceKill")
 }
+
+// TestAcceptMessageDeliveryDeferredRecoversStalledSlot proves the wiring in
+// acceptMessageDelivery (workspace_runner_message.go) actually invokes
+// recoverStalledRuntimeForQueuedMessage on the deferred-delivery outcome, not
+// just that recoverStalledSlotForQueuedMessage behaves correctly in
+// isolation (the rest of this file). A delivery that lands on a slot silent
+// past the stall window, while a Message is stuck queued behind
+// ErrCanonicalAgentRuntimeBusy, must terminate that stalled backend before
+// acceptMessageDelivery returns its deferred acceptance.
+func TestAcceptMessageDeliveryDeferredRecoversStalledSlot(t *testing.T) {
+	d := New(Config{}, nil)
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
+		return ErrCanonicalAgentRuntimeBusy
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completeCoordinatorRecovery(t, coordinator)
+	d.mu.Lock()
+	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
+	d.mu.Unlock()
+	runner := registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
+	markTestLaunchRunning(t, runner, "agent-1")
+
+	d.canonicalRuntimes.setResidentStallWatchdog(15 * time.Minute)
+	slot := &canonicalAgentRuntimeSlot{backend: &idleMessageFakeRuntime{}}
+	d.canonicalRuntimes.slots["agent-1\x00runtime-1"] = slot
+	ageSlotActivity(slot, 16*time.Minute)
+
+	delivery := protocol.AgentDeliverPayload{
+		AgentID: "agent-1", Target: "channel:one", Seq: 1, DeliveryID: "delivery-1",
+		Message: protocol.AgentMessageProjection{ID: "message-1", Target: "channel:one", Seq: 1},
+	}
+
+	acceptance, err := runner.acceptMessageDelivery(context.Background(), delivery)
+	if err != nil {
+		t.Fatalf("acceptMessageDelivery: %v", err)
+	}
+	if acceptance.outcome != messageDeliveryPendingBuffered {
+		t.Fatalf("acceptance outcome = %v, want pending_buffered", acceptance.outcome)
+	}
+	if pending := coordinator.PendingCount(); pending != 1 {
+		t.Fatalf("Pending after deferred delivery = %d, want 1 (message-1 stuck behind the busy runtime)", pending)
+	}
+
+	slot.mu.Lock()
+	backendPresent := slot.backend != nil
+	slot.mu.Unlock()
+	if backendPresent {
+		t.Fatal("acceptMessageDelivery deferred a Message past the stall window but left the stalled backend attached; recoverStalledRuntimeForQueuedMessage did not run")
+	}
+}
+
+// TestAcceptMessageDeliveryDeferredSparesRecentlyActiveSlot is the negative
+// twin: the same deferred outcome, but the slot has recent activity so it is
+// not yet due for recovery. It guards against a wiring bug the positive test
+// alone cannot catch — one that force-kills on every deferral regardless of
+// staleness.
+func TestAcceptMessageDeliveryDeferredSparesRecentlyActiveSlot(t *testing.T) {
+	d := New(Config{}, nil)
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
+		return ErrCanonicalAgentRuntimeBusy
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completeCoordinatorRecovery(t, coordinator)
+	d.mu.Lock()
+	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
+	d.mu.Unlock()
+	runner := registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
+	markTestLaunchRunning(t, runner, "agent-1")
+
+	d.canonicalRuntimes.setResidentStallWatchdog(15 * time.Minute)
+	slot := &canonicalAgentRuntimeSlot{backend: &idleMessageFakeRuntime{}}
+	d.canonicalRuntimes.slots["agent-1\x00runtime-1"] = slot
+	ageSlotActivity(slot, time.Minute)
+
+	delivery := protocol.AgentDeliverPayload{
+		AgentID: "agent-1", Target: "channel:one", Seq: 1, DeliveryID: "delivery-1",
+		Message: protocol.AgentMessageProjection{ID: "message-1", Target: "channel:one", Seq: 1},
+	}
+
+	if _, err := runner.acceptMessageDelivery(context.Background(), delivery); err != nil {
+		t.Fatalf("acceptMessageDelivery: %v", err)
+	}
+
+	slot.mu.Lock()
+	backendPresent := slot.backend != nil
+	slot.mu.Unlock()
+	if !backendPresent {
+		t.Fatal("acceptMessageDelivery force-killed a slot with recent activity; recovery must only fire past the stall window")
+	}
+}

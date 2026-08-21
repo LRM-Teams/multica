@@ -695,7 +695,9 @@
     "template_prompt_empty": "Research method cannot be empty.",
     "template_prompt_reset": "Restore default",
     "template_prompt_cancel": "Cancel",
-    "template_prompt_apply": "Apply changes"
+    "template_prompt_apply": "Apply changes",
+    "lead_prefix": "Lead",
+    "lead_fleet_option": "Classic fleet (no lead)"
   },
   "home_header": {
     "title": "Research Constellation",
@@ -760,6 +762,7 @@
     "agent": "Research Agent",
     "lead_idle": "Lead · synthesis and coordination",
     "waiting_dispatch": "Waiting for dispatch",
+    "assignment_running": "Working",
     "latest_outcomes": "Latest verified outcomes",
     "outcomes_empty": "The fleet is building the research frame. Verified outcomes will appear here.",
     "confirm_short": "Awaiting confirmation",

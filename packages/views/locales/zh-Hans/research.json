@@ -695,7 +695,9 @@
     "template_prompt_empty": "研究方法不能为空。",
     "template_prompt_reset": "恢复默认",
     "template_prompt_cancel": "取消",
-    "template_prompt_apply": "应用更改"
+    "template_prompt_apply": "应用更改",
+    "lead_prefix": "主理人",
+    "lead_fleet_option": "经典舰队（无主理人）"
   },
   "home_header": {
     "title": "调研星图",
@@ -760,6 +762,7 @@
     "agent": "调研智能体",
     "lead_idle": "主理 · 综合与调度",
     "waiting_dispatch": "等待调度",
+    "assignment_running": "工作中",
     "latest_outcomes": "最近有效成果",
     "outcomes_empty": "正在建立研究框架，可靠成果会在验证后出现在这里。",
     "confirm_short": "等待确认",

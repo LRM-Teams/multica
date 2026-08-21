@@ -13,6 +13,13 @@ import {
 } from "@multica/core/research";
 import type { ResearchSession } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@multica/ui/components/ui/select";
 import { Textarea } from "@multica/ui/components/ui/textarea";
 import { cn } from "@multica/ui/lib/utils";
 import { AlertCircle, Loader2, SlidersHorizontal } from "lucide-react";
@@ -92,6 +99,13 @@ type ComposerDraft = {
   orchestratorVersion: "research-run-v5" | "research-run-v6";
   directorAgentId: string;
 };
+
+/**
+ * Sentinel for "run without a Director" (legacy V5 fleet). Base UI Select
+ * rejects "" as an item value, and the engine version string must never
+ * surface in the UI — the user picks a behavior, not an orchestrator tag.
+ */
+const CLASSIC_FLEET_VALUE = "__classic_fleet__";
 
 function emptyComposer(uiLanguage?: string): ComposerDraft {
   return {
@@ -197,6 +211,15 @@ export function ResearchListPage() {
     orchestratorVersion === "research-run-v6"
       ? directorAgentId || preferredResearchDirectorId(availableDirectors)
       : "";
+  const selectedDirector = availableDirectors.find(
+    (agent) => agent.id === selectedDirectorId,
+  );
+  const leadLabel =
+    orchestratorVersion === "research-run-v5"
+      ? t(($) => $.home.lead_fleet_option)
+      : selectedDirector
+        ? selectedDirector.display_name || selectedDirector.name || selectedDirector.id
+        : t(($) => $.d5.rail.director_fallback);
   const { data, isLoading, isFetching, isError, error, refetch } = useQuery(
     researchSessionListOptions(wsId),
   );
@@ -414,7 +437,10 @@ export function ResearchListPage() {
       uiLanguage: language,
     });
     if (orchestratorVersion === "research-run-v6" && !selectedDirectorId) {
-      setComposer((prev) => ({ ...prev, paramsOpen: true }));
+      const trigger = document.querySelector(
+        '[data-testid="research-create-lead"]',
+      );
+      if (trigger instanceof HTMLElement) trigger.focus();
       return;
     }
     if (!result.ok) {
@@ -698,6 +724,48 @@ export function ResearchListPage() {
                     </p>
                   </div>
                   <div className="flex w-full flex-col gap-2 md:w-auto md:flex-row md:items-center">
+                    {/* Critique 2026-08-21 P0: one behavior-named decision — who
+                        hosts the run. Picking an agent runs V6; the classic
+                        fleet option maps to V5. Engine strings stay internal. */}
+                    <Select
+                      value={
+                        orchestratorVersion === "research-run-v6"
+                          ? selectedDirectorId
+                          : CLASSIC_FLEET_VALUE
+                      }
+                      onValueChange={(next) => {
+                        if (createBusy || typeof next !== "string" || next === "") return;
+                        setComposer((prev) => ({
+                          ...prev,
+                          orchestratorVersion:
+                            next === CLASSIC_FLEET_VALUE
+                              ? "research-run-v5"
+                              : "research-run-v6",
+                          directorAgentId: next === CLASSIC_FLEET_VALUE ? "" : next,
+                        }));
+                      }}
+                    >
+                      <SelectTrigger
+                        aria-label={t(($) => $.d5.rail.director_role)}
+                        data-testid="research-create-lead"
+                        className="h-10 w-full rounded-full px-3.5 text-sm font-medium md:h-8 md:w-auto md:max-w-56"
+                      >
+                        <span className="shrink-0 text-muted-foreground">
+                          {t(($) => $.home.lead_prefix)}
+                        </span>
+                        <SelectValue>{leadLabel}</SelectValue>
+                      </SelectTrigger>
+                      <SelectContent align="start">
+                        {availableDirectors.map((agent) => (
+                          <SelectItem key={agent.id} value={agent.id}>
+                            {agent.display_name || agent.name || agent.id}
+                          </SelectItem>
+                        ))}
+                        <SelectItem value={CLASSIC_FLEET_VALUE}>
+                          {t(($) => $.home.lead_fleet_option)}
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
                     <Button
                       type="button"
                       variant="outline"
@@ -768,43 +836,6 @@ export function ResearchListPage() {
                   }))
                 }
               />
-              <div className="mt-2 rounded-xl border border-border/60 bg-card/50 p-3" data-testid="research-create-director-options">
-                <label className="flex items-center gap-2 text-xs font-medium text-foreground">
-                  <span>{t(($) => $.d5.rail.director_role)}</span>
-                  <select
-                    value={orchestratorVersion}
-                    onChange={(event) =>
-                      setComposer((prev) => ({
-                        ...prev,
-                        orchestratorVersion: event.target.value as ComposerDraft["orchestratorVersion"],
-                        directorAgentId: event.target.value === "research-run-v6" ? prev.directorAgentId : "",
-                      }))
-                    }
-                    className="rounded-md border border-input bg-background px-2 py-1 text-xs"
-                  >
-                    <option value="research-run-v5">{t(($) => $.panel.fleet)}</option>
-                    <option value="research-run-v6">{t(($) => $.d5.rail.director_role)}</option>
-                  </select>
-                </label>
-                {orchestratorVersion === "research-run-v6" ? (
-                  <select
-                    aria-label={t(($) => $.d5.rail.director_role)}
-                    value={selectedDirectorId}
-                    onChange={(event) =>
-                      setComposer((prev) => ({ ...prev, directorAgentId: event.target.value }))
-                    }
-                    className="mt-2 w-full rounded-md border border-input bg-background px-2 py-1.5 text-xs"
-                  >
-                    <option value="">{t(($) => $.d5.rail.director_fallback)}</option>
-                    {availableDirectors.map((agent) => (
-                      <option key={agent.id} value={agent.id}>
-                        {agent.display_name || agent.name || agent.id}
-                      </option>
-                    ))}
-                  </select>
-                ) : null}
-              </div>
-
               {visibleCreateError ? (
                 <div
                   role="alert"

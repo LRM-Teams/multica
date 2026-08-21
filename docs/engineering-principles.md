@@ -300,8 +300,9 @@
 
 ### 4.2 并发/投递 — `可执行`（已落地）
 - 同 agent 聊天 lane 全局一条活 run，服务端 lease 排他（agent 行锁+active-delivery exclusion），daemon per-agent 单槽兜底；lease 永久拒绝→取消旧 executor 丢弃结果。聊天 lane 不读 `max_concurrent_tasks`（那是 issue/task 调度的公开配置，别混）。
-- 待执行 wake 按 `priority DESC`，同优先级按 `created_at/id` FIFO；高优先级人类消息可越过尚未开始的低优先级后台 wake，但不能打断活 run，也不能越过更早的同优先级人类消息。
-- **物**：#611 + 双 wake/异 agent/失租回归；跨 runtime 优先级与同优先级并发 FIFO 回归。
+- 同 agent 的 Issue work 以 `(agent_id, issue_id)` 为串行 lane：同一 Issue 的 follow-up 必须等前一 run 释放，不同 Issue 可并行领取，活跃 Issue lane 总数不得超过 `max_concurrent_tasks`。Issue lane 与聊天 lane 彼此独立；server admission 和 daemon execution key 必须使用同一划分，禁止任一侧退化成 agent 全局单槽。
+- 每条 lane 内待执行 wake 按 `priority DESC`，同优先级按 `created_at/id` FIFO；多个可领取 lane head 之间仍按这套顺序选择。高优先级 wake 不能打断活 run，也不能越过同 lane 更早的同优先级 wake；被活跃同 Issue lane 挡住的 pending head 不得 head-of-line block 其它 Issue lane。
+- **物**：#611 + 双 wake/异 agent/失租回归；`TestAgentInboxDrainRunsDistinctIssueLanesUpToAgentLimit`；跨 runtime 优先级与同优先级并发 FIFO 回归；daemon `taskWakeSerializationKey` / `taskExecutionRoot`。
 
 ### 4.3 定向请求先反馈；用户偏好必须“写入 + 取回” — `可执行`（⑤ prompt contract tests；owner: @jianghp3 ✅）
 - **先反馈再干活**：人在 DM、群聊 @mention 或直接提问里交代了需要查资料、跑工具、改代码等非即时工作时，agent 必须先发一条简短确认，复述理解与下一步，再开始第一个实质性工具调用；能当场回答的简单问题只答一次，attention-management 操作仍走成功后 `✅` 的专用合同。

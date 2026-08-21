@@ -89,7 +89,7 @@ func seedV6WorkBranchScope(t *testing.T, run *transactionRecoveryRun, workItemID
 		VALUES($1::uuid,$2::uuid,$3::uuid,$4,$5,'active',$6,$7)`, branchID, run.fixture.workspaceID, run.fixture.sessionID, clientPrefix+branchID, objective, run.goalVersion, stateVersion); err != nil {
 		t.Fatal(err)
 	}
-	if err = registerV6BranchArtifactTx(run.ctx, tx, run.fixture.workspaceID, run.fixture.sessionID, branchID, time.Now().UTC(), run.goalVersion, map[string]any{
+	if err = registerV6BranchArtifactTx(run.ctx, tx, run.fixture.workspaceID, run.fixture.sessionID, branchID, time.Now().UTC(), int32(run.goalVersion), map[string]any{
 		"parent_branch_id": "", "objective": objective, "entry_conditions": json.RawMessage(`[]`),
 		"exit_conditions": json.RawMessage(`[]`), "budget_share": 0.0, "status": "active",
 	}); err != nil {

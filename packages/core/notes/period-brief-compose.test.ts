@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   formatPeriodBriefUserTurn,
+  looksLikePeriodBriefRequest,
   periodBriefRunLocksComposer,
   resolvePeriodBriefComposeRequest,
 } from "./period-brief-compose";
@@ -97,6 +98,15 @@ describe("formatPeriodBriefUserTurn", () => {
         "\n",
       ),
     );
+  });
+});
+
+describe("looksLikePeriodBriefRequest", () => {
+  it("matches a spoken 写汇报 ask and ignores ordinary note chat", () => {
+    expect(looksLikePeriodBriefRequest("帮我写汇报")).toBe(true);
+    expect(looksLikePeriodBriefRequest("整理一份周报")).toBe(true);
+    expect(looksLikePeriodBriefRequest("period brief for this week")).toBe(true);
+    expect(looksLikePeriodBriefRequest("这段笔记的标题怎么改")).toBe(false);
   });
 });
 

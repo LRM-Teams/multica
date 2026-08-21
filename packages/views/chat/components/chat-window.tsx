@@ -61,6 +61,8 @@ import { useNoteBubbleSidebarWidth } from "./use-note-bubble-sidebar-width";
 import {
   NOTE_ASSISTANT_SIDEBAR_EXIT_MS,
   chatWindowClosesOnOutsideClick,
+  chatWindowMainPane,
+  chatWindowMainPaneClassName,
   chatWindowShellClassName,
   chatWindowSidebarClipClassName,
   chatWindowSidebarSlideClassName,
@@ -126,6 +128,11 @@ export interface ChatWindowProps {
    * Return true to clear the composer; false to keep the draft.
    */
   onSendOverride?: (text: string) => boolean | Promise<boolean>;
+  /**
+   * Run before a normal send. Return true to keep the draft and skip the
+   * chat post (e.g. open Period Brief chips after a 写汇报 ask).
+   */
+  onSendIntercept?: (text: string) => boolean;
   /** Hide the composer until a page-bound Period Brief run finishes. */
   composerLocked?: boolean;
   /**
@@ -272,6 +279,7 @@ export function ChatWindow({
   composerPlaceholder,
   allowEmptySend = false,
   onSendOverride,
+  onSendIntercept,
   composerLocked = false,
   layout = "floating",
 }: ChatWindowProps = {}) {
@@ -674,6 +682,9 @@ export function ChatWindow({
 
   const handleSend = useCallback(
     async (content: string, attachmentIds?: string[]): Promise<boolean> => {
+      if (onSendIntercept?.(content)) {
+        return false;
+      }
       if (onSendOverride) {
         return await onSendOverride(content);
       }
@@ -809,6 +820,7 @@ export function ChatWindow({
       t,
       wsId,
       onSendOverride,
+      onSendIntercept,
     ],
   );
 
@@ -939,6 +951,7 @@ export function ChatWindow({
   const sidebarSlideOpen = sidebarPresence === "open" && sidebarEntered;
 
   const hasMessages = messages.length > 0 || turnOutstanding;
+  const mainPane = chatWindowMainPane(showSkeleton, hasMessages, Boolean(composerAccessory));
 
   const isVisible = isOpen && (isFullscreen || isSidebar || isExpanded || boundsReady);
 
@@ -1147,10 +1160,10 @@ export function ChatWindow({
 
       {headerAccessory}
 
-      {/* Messages / skeleton / empty state */}
-      {showSkeleton ? (
+      {/* Messages / skeleton / empty state. Chips never replace this pane. */}
+      {mainPane === "skeleton" ? (
         <ChatMessageSkeleton />
-        ) : hasMessages ? (
+      ) : mainPane === "messages" ? (
         <ChatMessageList
           key={activeSessionId}
           sessionId={activeSessionId ?? ""}
@@ -1163,9 +1176,10 @@ export function ChatWindow({
           onLoadOlderMessages={() => void fetchOlderMessages()}
           isDmBubble={isDmBubble}
           hoverMessageActions={isNoteBubble}
+          noteInsertPageId={isNoteBubble ? contextNotePageId : undefined}
         />
-      ) : composerAccessory ? (
-        composerAccessory
+      ) : mainPane === "spacer" ? (
+        <div className={chatWindowMainPaneClassName(mainPane)} aria-hidden />
       ) : (
         <EmptyState
           hasSessions={sessions.length > 0}
@@ -1177,7 +1191,7 @@ export function ChatWindow({
           }}
         />
       )}
-      {hasMessages && composerAccessory ? composerAccessory : null}
+      {composerAccessory}
 
       {/* No-agent banner above the input. Presence (online/offline)
        *  belongs to the header only (#624, Parker/Iris) — this slot used to

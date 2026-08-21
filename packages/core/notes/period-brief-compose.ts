@@ -3,6 +3,14 @@
  * When the text names a window or computer, the text wins.
  */
 
+/** Same intent as Go `looksLikePeriodBriefRequest` — keep the two in lockstep. */
+const PERIOD_BRIEF_INTENT_RE =
+  /((写|整理|做|生成|帮我).{0,12}(汇报|周报)|period\s*work\s*brief|period\s*brief|weekly\s*report)/i;
+
+export function looksLikePeriodBriefRequest(text: string): boolean {
+  return PERIOD_BRIEF_INTENT_RE.test(text.trim());
+}
+
 import type { NotePeriodBriefWindow } from "../types";
 import { isValidPeriodBriefCustomRange, shiftPeriodBriefCalendarDay } from "./period-brief-window";
 

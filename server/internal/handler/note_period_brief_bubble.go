@@ -73,6 +73,9 @@ func joinPeriodBriefSpokenNames(names []string) string {
 	return strings.Join(names, "、")
 }
 
+// ensurePeriodBriefBubbleSession uses chatSessionID when the bubble is
+// already on a thread. An empty id starts a new session — never the
+// latest session on the note (⊕ new chat must not jump back).
 func (h *Handler) ensurePeriodBriefBubbleSession(
 	ctx context.Context,
 	workspaceID, userID, agentID, sourcePageID pgtype.UUID,
@@ -96,20 +99,6 @@ WHERE id = $1 AND context_note_page_id IS NULL`, found, sourcePageID)
 				return found, nil
 			}
 		}
-	}
-	var existing pgtype.UUID
-	err := h.DB.QueryRow(ctx, `
-SELECT id FROM chat_session
-WHERE workspace_id = $1 AND creator_id = $2 AND agent_id = $3
-  AND context_note_page_id = $4 AND status = 'active'
-ORDER BY updated_at DESC LIMIT 1`,
-		workspaceID, userID, agentID, sourcePageID,
-	).Scan(&existing)
-	if err == nil {
-		return existing, nil
-	}
-	if err != nil && err != pgx.ErrNoRows {
-		return pgtype.UUID{}, err
 	}
 	session, err := h.Queries.CreateChatSession(ctx, db.CreateChatSessionParams{
 		WorkspaceID: workspaceID,

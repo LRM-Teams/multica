@@ -16,11 +16,10 @@ import (
 // but not claiming"): when a daemon died mid-task, RecoverOrphanedTasksForRuntime
 // failed the agent_inbox_event row and HandleFailedTasks enqueued a fresh
 // retry child — but neither touched the agent_event_delivery row the dead
-// task left behind, and leaseAgentInboxEventForRuntime's same-agent
-// serialization check (an active, unexpired delivery blocks ANY new event
-// for that agent, not just the one it was leased for) then blocked the
-// retry child until the stale delivery's original 2-minute lease naturally
-// timed out. Now that RecoverOrphanedTasks also calls
+// task left behind, and leaseAgentInboxEventForRuntime's same-issue
+// serialization check (an active, unexpired delivery blocks the retry lane)
+// then blocked the retry child until the stale delivery's original 2-minute
+// lease naturally timed out. Now that RecoverOrphanedTasks also calls
 // ExpireDeliveriesForRuntimeRecovery for the same runtime_id, the retry
 // child must be claimable immediately — this test asserts that fixed
 // behavior instead.
@@ -110,58 +109,24 @@ func TestRecoverOrphanedTaskRetryIsImmediatelyClaimableAfterRecovery(t *testing.
 
 	// Step 3: the new daemon incarnation polls immediately after recovery.
 	// Before the fix this came back empty for up to ~2 minutes (task #107).
-	// Confirmed via the exact eligibility predicate
-	// (leaseAgentInboxEventForRuntime's first SELECT, channel_ambient_helpers.go)
-	// rather than the full drain() HTTP round trip: the retry child here is
+	// Confirmed via leaseAgentInboxEventForRuntime rather than the full drain()
+	// HTTP round trip: the retry child here is
 	// channel-sourced (RequiresWake + ChatSessionID from a fixture chat
 	// session with no attached prompt message), which trips an unrelated
 	// "exact prompt missing" guard in agentInboxTaskResponse's
 	// response-construction step — a fixture mismatch, not part of #107's
 	// stale-delivery mechanism.
-	var selectableEventID string
-	err := testPool.QueryRow(ctx, `
-		SELECT event.id
-		FROM agent_inbox_event event
-		JOIN agent_session session ON session.id = event.agent_session_id
-		JOIN agent agent_row ON agent_row.id = event.agent_id
-		WHERE COALESCE(event.runtime_id, session.runtime_id) = $1
-		  AND session.status = 'active'
-		  AND event.status IN ('pending', 'failed')
-		  AND NOT (
-		    agent_row.provider_block_detail <> ''
-		    AND (agent_row.provider_blocked_until IS NULL OR agent_row.provider_blocked_until > now())
-		  )
-		  AND NOT EXISTS (
-		    SELECT 1
-		    FROM agent_inbox_event blocking_event
-		    JOIN agent_session blocking_session
-		      ON blocking_session.id = blocking_event.agent_session_id
-		    WHERE blocking_event.agent_id = event.agent_id
-		      AND blocking_session.status = 'active'
-		      AND blocking_event.status IN ('pending', 'failed')
-		      AND (
-		        blocking_event.priority > event.priority
-		        OR (
-		          blocking_event.priority = event.priority
-		          AND (blocking_event.created_at, blocking_event.id) < (event.created_at, event.id)
-		        )
-		      )
-		  )
-		  AND NOT EXISTS (
-		    SELECT 1
-		    FROM agent_event_delivery active_delivery
-		    JOIN agent_session active_session ON active_session.id = active_delivery.agent_session_id
-		    WHERE active_session.agent_id = event.agent_id
-		      AND active_delivery.status IN ('leased', 'processing')
-		      AND active_delivery.lease_expires_at > now()
-		  )
-		ORDER BY event.priority DESC, event.requires_wake DESC, event.created_at, event.id
-		LIMIT 1`, runtimeID).Scan(&selectableEventID)
+	runtime, err := testHandler.Queries.GetAgentRuntime(ctx, parseUUID(runtimeID))
 	if err != nil {
-		t.Fatalf("eligibility query immediately after recovery: %v", err)
+		t.Fatalf("load runtime immediately after recovery: %v", err)
 	}
+	delivery, err := testHandler.leaseAgentInboxEventForRuntime(ctx, runtime)
+	if err != nil {
+		t.Fatalf("lease retry immediately after recovery: %v", err)
+	}
+	selectableEventID := uuidToString(delivery.InboxEventID)
 	if selectableEventID != pendingChildID {
-		t.Fatalf("eligibility query selected %s, want the retry child %s", selectableEventID, pendingChildID)
+		t.Fatalf("lease selected %s, want the retry child %s", selectableEventID, pendingChildID)
 	}
 }
 

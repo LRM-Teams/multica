@@ -188,7 +188,13 @@ func (runner *WorkspaceRunner) registerManagedAgentStartOnce(payload protocol.Wo
 		return protocol.AgentStartAckPayload{}, false, fmt.Errorf("prepare managed Agent Inbox: %w", err)
 	}
 	if runner.residency != nil {
-		runner.residency.rememberLaunch(payload.AgentID, payload.RuntimeID, payload.LaunchID, payload.StartDispatchID)
+		// Best-effort, like prepareManagedAgentStartFailure below: the launch
+		// was just registered in APM above, so this lookup only fails if a
+		// concurrent Stop already superseded it, in which case epoch 0 is
+		// safely rejected by clear's tombstone (or simply overwritten by
+		// whatever legitimate write follows).
+		startStopEpoch, _ := runner.processes.startStopEpoch(agentProcessCallback{AgentID: payload.AgentID, LaunchID: payload.LaunchID})
+		runner.residency.rememberLaunch(payload.AgentID, payload.RuntimeID, payload.LaunchID, payload.StartDispatchID, startStopEpoch)
 	}
 	return ack, false, nil
 }

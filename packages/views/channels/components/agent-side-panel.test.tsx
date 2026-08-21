@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Agent, MemberWithUser } from "@multica/core/types";
 import { configStore } from "@multica/core/config";
@@ -192,6 +192,16 @@ vi.mock("../../agents/components/inspector/model-picker", () => ({
 vi.mock("../../agents/components/inspector/thinking-prop-row", () => ({
   ThinkingPropRow: (p: { canEdit?: boolean }) => (
     <div data-testid="thinking-picker" data-can-edit={String(!!p.canEdit)} />
+  ),
+}));
+// Role has its own test file (agent-workspace-role.test.tsx) covering the
+// picker and its PATCH. Stubbed here so this file's hand-rolled resource
+// object does not have to carry the whole workspace_role i18n namespace.
+vi.mock("../../agents/components/agent-workspace-role", () => ({
+  AgentWorkspaceRole: (p: { agent?: { workspace_role?: string } }) => (
+    <div data-testid="agent-workspace-role-value">
+      {p.agent?.workspace_role === "admin" ? "Admin" : "Member"}
+    </div>
   ),
 }));
 vi.mock("../../agents/components/runtime-config-dialog", () => ({
@@ -605,26 +615,16 @@ describe("AgentSidePanel", () => {
     expect(screen.queryByRole("button", { name: "More" })).not.toBeInTheDocument();
   });
 
+  // The role control itself is AgentWorkspaceRole, stubbed above and covered
+  // by its own test file — including that selecting a role PATCHes directly,
+  // with no dialog in between. What matters here is that Info renders it.
   it("shows an agent's workspace role in Info", () => {
     renderPanel();
-    expect(screen.getByText("Role")).toBeInTheDocument();
     expect(screen.getByTestId("agent-workspace-role-value")).toHaveTextContent("Member");
     expect(screen.queryByText("Agent")).not.toBeInTheDocument();
+    // The old pencil-into-a-modal entry point is gone: one value, one picker,
+    // the same one the detail inspector renders.
     expect(screen.queryByTestId("agent-workspace-role-edit")).not.toBeInTheDocument();
-  });
-
-  it("lets workspace owners and admins edit the workspace role", async () => {
-    rolePermission.allowed = true;
-    renderPanel();
-
-    fireEvent.click(screen.getByTestId("agent-workspace-role-edit"));
-    fireEvent.click(screen.getByTestId("agent-workspace-role-save"));
-
-    await waitFor(() => {
-      expect(updateAgentWorkspaceRole).toHaveBeenCalledWith("ws-1", "agent-1", "admin");
-      expect(setQueryData).toHaveBeenCalledTimes(2);
-      expect(invalidateQueries).toHaveBeenCalledTimes(2);
-    });
   });
 
   it("shows Usage as its own tab — not stacked in Profile (LRM-448)", () => {

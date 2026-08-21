@@ -126,6 +126,7 @@ func channelGoalStateSlot(task Task) string {
 	if goal == nil || strings.TrimSpace(task.ChannelID) == "" {
 		return ""
 	}
+	isManager := agentManagesChannel(task.Agent, task.ChannelID)
 	completed := make(map[string]struct{}, len(goal.CompletedCriteria))
 	for _, criterion := range goal.CompletedCriteria {
 		completed[criterion] = struct{}{}
@@ -163,7 +164,6 @@ func channelGoalStateSlot(task Task) string {
 			c.ChannelIssueTotal, c.ChannelProjectIssueTotal, c.ProjectIssueTotal, c.OpenProjectIssueTotal,
 			c.InReviewProjectIssueTotal, c.SubgoalTotal, c.OpenSubgoalTotal)
 		if c.AgentMemberCount > 1 || c.ExecutionAdmission == "unavailable" {
-			isManager := agentManagesChannel(task.Agent, task.ChannelID)
 			if strings.TrimSpace(task.IssueID) == "" {
 				b.WriteString("EXECUTION GATE: this multi-agent Goal is not a code assignment. Do not edit shared project files, create a code branch or commit, push, open/merge a PR, or deploy from this chat task. Only durable control-plane setup and status/review coordination are admitted until this agent is claimed on a channel-linked Issue in the bound Project.\n")
 				if isManager {
@@ -195,6 +195,9 @@ func channelGoalStateSlot(task Task) string {
 			}
 			b.WriteString("Long-running delivery is durable across turns: use parallel Issue runs, Issue comments/status, Goal checkpoints, and Reminder wakes. Do not keep one chat turn alive as the scheduler and do not redo terminal Issue work after resume.\n")
 		}
+	}
+	if isManager {
+		fmt.Fprintf(&b, "Manager process document: before changing the long-form plan, inspect your current document with `multica goal process list --channel %s --output json`. After meaningful planning, delegation, review, milestone, scope, or blocker changes, preserve useful prior context and create or update your own document with `multica goal process put --channel %s --expected-version <current-process-version-or-0> --content-file <path> --output json` (use 0 only when no document exists). Do not write a no-change placeholder. The process document and the authoritative short Goal checkpoint are separate; when both changed, update both.\n", task.ChannelID, task.ChannelID)
 	}
 	b.WriteString("Advance only the work requested in this turn toward the goal. Preserve the objective and success standard; do not revise or lower the parent goal.\n")
 	fmt.Fprintf(&b, "After concrete progress, checkpoint it with `multica goal checkpoint --channel %s --expected-version %d --progress \"...\" --current-step \"...\"` plus repeatable `--evidence`, `--completed-criterion`, or `--blocker` flags as needed. If the command reports a stale version, run `multica goal get --channel %s` and reconcile before retrying.\n", task.ChannelID, goal.Version, task.ChannelID)

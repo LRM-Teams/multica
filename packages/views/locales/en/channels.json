@@ -140,6 +140,8 @@
     "control_plane": "Delivery control plane",
     "control_plane_ready": "Delivery ready",
     "control_plane_blocked": "Setup required",
+    "control_plane_issues_required": "Issues required",
+    "control_plane_unavailable": "Status unavailable",
     "control_plane_complete_blocked": "Complete the Git-backed Project Issue review flow first",
     "control_plane_project": "Project",
     "control_plane_git": "Git repository",

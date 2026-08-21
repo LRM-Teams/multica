@@ -39,7 +39,7 @@ vi.mock("@multica/core/agents", async (importOriginal) => ({
 }));
 
 vi.mock("@multica/ui/components/common/actor-avatar", () => ({
-  ActorAvatar: () => <span data-testid="actor-avatar" />,
+  ActorAvatarBase: () => <span data-testid="actor-avatar" />,
 }));
 
 vi.mock("./actor-avatar", () => ({

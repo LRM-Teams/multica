@@ -9,7 +9,7 @@
 // carries a react-doctor-disable-next-line for react-doctor/no-multi-comp.
 
 import { useQuery } from "@tanstack/react-query";
-import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
+import { ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
 import {
   HoverCard,
   HoverCardContent,

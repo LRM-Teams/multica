@@ -8,7 +8,7 @@ import type { Agent, AgentAvatarSelection } from "@multica/core/types";
 import { agentDetailKeys } from "@multica/core/agents";
 import { resolveActorDisplayName } from "@multica/core/identity";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
-import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
+import { ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
 import { cn } from "@multica/ui/lib/utils";
 import { initialsOf } from "../../common/initials";
 import { AgentPresenceOverlay } from "../../common/actor-avatar";

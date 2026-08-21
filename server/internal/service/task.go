@@ -2000,6 +2000,12 @@ func (s *TaskService) MaybeRetryFailedTask(ctx context.Context, parent db.AgentI
 		// Autopilot has its own retry semantics; do not double-trigger.
 		return nil, nil
 	}
+	if hasResearchDispatchKey(parent.Context) {
+		// Research Work owns attempt budgets, leases, and redispatch. Cloning
+		// its Inbox delivery here would either violate the dispatch-key
+		// uniqueness fence or execute one Work attempt through two Inbox rows.
+		return nil, nil
+	}
 	if !parent.IssueID.Valid && !parent.ChatSessionID.Valid && !parent.ChannelID.Valid {
 		return nil, nil
 	}
@@ -2057,6 +2063,13 @@ func (s *TaskService) MaybeRetryFailedTask(ctx context.Context, parent db.AgentI
 	}
 
 	return &child, nil
+}
+
+func hasResearchDispatchKey(raw json.RawMessage) bool {
+	var taskContext struct {
+		DispatchKey string `json:"research_dispatch_key"`
+	}
+	return json.Unmarshal(raw, &taskContext) == nil && strings.TrimSpace(taskContext.DispatchKey) != ""
 }
 
 // openFreshSessionForRetryChild opens a FRESH areal RL session for a retry child

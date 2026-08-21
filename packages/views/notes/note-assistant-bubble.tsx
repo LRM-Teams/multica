@@ -18,6 +18,7 @@ import {
 } from "@multica/core/notes/notes-assistant-agent";
 import {
   periodBriefRunLocksComposer,
+  looksLikePeriodBriefRequest,
   resolvePeriodBriefComposeRequest,
 } from "@multica/core/notes/period-brief-compose";
 import { isValidPeriodBriefCustomRange } from "@multica/core/notes/period-brief-window";
@@ -40,6 +41,7 @@ import {
   type NotePeriodBriefResolved,
 } from "./note-period-brief-compose";
 import { NotesAssistantSetupCard } from "./notes-assistant-setup-card";
+import { noteAssistantSidebarClosesOnLeave } from "../chat/components/chat-window-layout";
 
 const logger = createLogger("chat.note-bubble");
 
@@ -75,6 +77,7 @@ export function NoteAssistantBubble({
   const layout = isMobile ? "fullscreen" : "sidebar";
   const openPageId = useChatStore((s) => s.noteBubbleOpenPageId);
   const toggleNoteBubble = useChatStore((s) => s.toggleNoteBubble);
+  const setNoteBubbleOpenPageId = useChatStore((s) => s.setNoteBubbleOpenPageId);
   const setNoteBubbleActiveSession = useChatStore((s) => s.setNoteBubbleActiveSession);
   const noteBubbleActiveSessionByPage = useChatStore((s) => s.noteBubbleActiveSessionByPage);
   const { data: activePeriodBrief } = useQuery(notePeriodBriefActiveOptions(wsId, pageId));
@@ -89,6 +92,15 @@ export function NoteAssistantBubble({
   const prefersReducedMotion = usePrefersReducedMotion();
 
   const isOpen = openPageId === pageId;
+
+  React.useEffect(() => {
+    return () => {
+      const open = useChatStore.getState().noteBubbleOpenPageId;
+      if (noteAssistantSidebarClosesOnLeave(open, pageId)) {
+        setNoteBubbleOpenPageId(null);
+      }
+    };
+  }, [pageId, setNoteBubbleOpenPageId]);
   const pageSessions = excludeChannelShellSessions(
     sessions.filter((s) => s.context_note_page_id === pageId),
   );
@@ -290,6 +302,13 @@ export function NoteAssistantBubble({
     }
   }, [noteBubbleActiveSessionByPage, pageId, queryClient, setNoteBubbleActiveSession, t, wsId]);
 
+  const interceptPeriodBriefCompose = React.useCallback((text: string) => {
+    if (periodBriefOpen || composerLocked) return false;
+    if (!looksLikePeriodBriefRequest(text)) return false;
+    setPeriodBriefOpen(true);
+    return true;
+  }, [composerLocked, periodBriefOpen]);
+
   const handleFabAction = (action: NoteAssistantFabAction) => {
     logger.info("noteBubble.fab.action", { pageId, action, isOpen });
     if (action === "period_brief") {
@@ -358,6 +377,7 @@ export function NoteAssistantBubble({
             : undefined
         }
         allowEmptySend={periodBriefOpen && !composerLocked}
+        onSendIntercept={interceptPeriodBriefCompose}
         onSendOverride={periodBriefOpen && !composerLocked ? submitPeriodBrief : undefined}
         composerLocked={composerLocked}
       />

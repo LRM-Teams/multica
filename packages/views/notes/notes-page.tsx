@@ -31,6 +31,10 @@ import { NoteAssistantBubble } from "./note-assistant-bubble";
 import { NoteChannelAnchors } from "./note-channel-anchors";
 import { waitForNoteAIJobResult } from "./note-ai-job-wait";
 import { resolveNotesAssistantAgent } from "@multica/core/notes/notes-assistant-agent";
+import { useChatStore } from "@multica/core/chat";
+import { useIsMobile } from "@multica/ui/hooks/use-mobile";
+import { noteAssistantSidebarReservePx } from "../chat/components/chat-window-layout";
+import { useNoteBubbleSidebarWidth } from "../chat/components/use-note-bubble-sidebar-width";
 import { buildNoteShareNames, memberLabel, workspaceLabel } from "./share-labels";
 
 type NoteTreeNode = NotePage & { children: NoteTreeNode[] };
@@ -1048,6 +1052,14 @@ export function NotesPage({ pageId }: { pageId?: string }) {
   const [dragState, setDragState] = useState<NoteDragState>({ draggingId: null, dropTarget: null });
   const { sharePage, exportOpen, showTrash } = uiState;
   const { draggingId: draggingNoteId } = dragState;
+  const isMobile = useIsMobile();
+  const noteBubbleOpenPageId = useChatStore((s) => s.noteBubbleOpenPageId);
+  const { width: noteBubbleSidebarWidth } = useNoteBubbleSidebarWidth();
+  const sidebarReservePx = noteAssistantSidebarReservePx(
+    Boolean(selected && !showTrash && noteBubbleOpenPageId === selected.id),
+    isMobile,
+    noteBubbleSidebarWidth,
+  );
 
   useEffect(() => {
     writeNoteExpandedIds(wsId, noteExpansionOverrides.expanded);
@@ -1389,6 +1401,12 @@ export function NotesPage({ pageId }: { pageId?: string }) {
             />
           )}
         </main>
+        <div
+          aria-hidden
+          data-testid="note-assistant-sidebar-dock"
+          className="shrink-0 overflow-hidden"
+          style={{ width: sidebarReservePx }}
+        />
       </div>
       <ShareDialog page={sharePage} members={shareWorkspaceMembers} workspaceName={shareWorkspaceName} open={!!sharePage} onOpenChange={(open) => {
         if (!open) setUiState((current) => ({ ...current, sharePage: null }));

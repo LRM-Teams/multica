@@ -1,13 +1,20 @@
 "use client";
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Copy } from "lucide-react";
+import { Copy, FilePlus2, ListPlus, Loader2 } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { useWorkspaceId } from "@multica/core/hooks";
+import { noteKeys } from "@multica/core/notes/queries";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@multica/ui/components/ui/tooltip";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n";
+import {
+  insertMessageIntoNote,
+  type NoteMessageInsertMode,
+} from "./insert-message-into-note";
 
 /** Same hover-overlay chrome as channel `message-action-bar`. */
 export const CHAT_MESSAGE_HOVER_ACTION_BAR_CLASS = [
@@ -20,14 +27,125 @@ export const CHAT_MESSAGE_HOVER_ACTION_BAR_CLASS = [
   "top-0 -translate-y-1/2",
 ].join(" ");
 
+const HOVER_ICON_BUTTON_CLASS =
+  "inline-flex size-5 items-center justify-center rounded-sm transition-colors hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50";
+
+function HoverIconButton({
+  label,
+  onClick,
+  disabled,
+  children,
+}: {
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <button
+            type="button"
+            onClick={onClick}
+            disabled={disabled}
+            className={HOVER_ICON_BUTTON_CLASS}
+            aria-label={label}
+          />
+        }
+      >
+        {children}
+      </TooltipTrigger>
+      <TooltipContent side="top">{label}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+function NoteInsertHoverButtons({
+  pageId,
+  text,
+  onInserted,
+}: {
+  pageId: string;
+  text: string;
+  onInserted: () => void;
+}) {
+  const { t } = useT("chat");
+  const wsId = useWorkspaceId();
+  const queryClient = useQueryClient();
+  const [insertBusy, setInsertBusy] = useState<NoteMessageInsertMode | null>(null);
+
+  const handleInsert = async (mode: NoteMessageInsertMode) => {
+    if (insertBusy) return;
+    onInserted();
+    setInsertBusy(mode);
+    try {
+      const res = await insertMessageIntoNote({
+        pageId,
+        text,
+        mode,
+        titleFallback: t(($) => $.message_list.insert_title_fallback),
+      });
+      if (wsId) {
+        void queryClient.invalidateQueries({ queryKey: noteKeys.all(wsId) });
+      }
+      toast.success(
+        mode === "append"
+          ? t(($) => $.message_list.insert_below_success)
+          : t(($) => $.message_list.insert_child_success, { title: res.title }),
+      );
+    } catch (error) {
+      showErrorToast(
+        error instanceof Error ? error.message : t(($) => $.message_list.insert_failed),
+      );
+    } finally {
+      setInsertBusy(null);
+    }
+  };
+
+  return (
+    <>
+      <HoverIconButton
+        label={t(($) => $.message_list.insert_below_action)}
+        onClick={() => void handleInsert("append")}
+        disabled={insertBusy != null}
+      >
+        {insertBusy === "append" ? (
+          <Loader2 className="size-3 animate-spin" />
+        ) : (
+          <ListPlus className="size-3" />
+        )}
+      </HoverIconButton>
+      <HoverIconButton
+        label={t(($) => $.message_list.insert_child_action)}
+        onClick={() => void handleInsert("child")}
+        disabled={insertBusy != null}
+      >
+        {insertBusy === "child" ? (
+          <Loader2 className="size-3 animate-spin" />
+        ) : (
+          <FilePlus2 className="size-3" />
+        )}
+      </HoverIconButton>
+    </>
+  );
+}
+
 export function ChatMessageHoverActionBar({
   onCopy,
+  noteInsertPageId,
+  copyTextValue,
+  onInserted,
   pinned,
 }: {
   onCopy: () => void;
+  noteInsertPageId?: string | null;
+  copyTextValue?: string;
+  onInserted?: () => void;
   pinned?: boolean;
 }) {
   const { t } = useT("chat");
+  const pageId = noteInsertPageId?.trim() || "";
   return (
     <div
       data-testid="chat-message-action-bar"
@@ -37,21 +155,16 @@ export function ChatMessageHoverActionBar({
         pinned && "flex pointer-events-auto opacity-100",
       )}
     >
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <button
-              type="button"
-              onClick={onCopy}
-              className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              aria-label={t(($) => $.message_list.copy_action)}
-            />
-          }
-        >
-          <Copy className="size-4" />
-        </TooltipTrigger>
-        <TooltipContent side="top">{t(($) => $.message_list.copy_action)}</TooltipContent>
-      </Tooltip>
+      <HoverIconButton label={t(($) => $.message_list.copy_action)} onClick={onCopy}>
+        <Copy className="size-3" />
+      </HoverIconButton>
+      {pageId ? (
+        <NoteInsertHoverButtons
+          pageId={pageId}
+          text={copyTextValue ?? ""}
+          onInserted={onInserted ?? (() => undefined)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -59,10 +172,12 @@ export function ChatMessageHoverActionBar({
 export function ChatMessageHoverShell({
   enabled,
   copyTextValue,
+  noteInsertPageId,
   children,
 }: {
   enabled: boolean;
   copyTextValue: string;
+  noteInsertPageId?: string | null;
   children: ReactNode;
 }) {
   const { t } = useT("chat");
@@ -116,7 +231,13 @@ export function ChatMessageHoverShell({
       onPointerCancel={clearHold}
     >
       {children}
-      <ChatMessageHoverActionBar onCopy={() => void handleCopy()} pinned={pinned} />
+      <ChatMessageHoverActionBar
+        onCopy={() => void handleCopy()}
+        noteInsertPageId={noteInsertPageId}
+        copyTextValue={copyTextValue}
+        onInserted={() => setPinned(false)}
+        pinned={pinned}
+      />
     </div>
   );
 }

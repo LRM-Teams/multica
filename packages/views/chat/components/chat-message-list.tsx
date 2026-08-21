@@ -142,6 +142,8 @@ interface ChatMessageListProps {
    * fixed footer slot under every reply.
    */
   hoverMessageActions?: boolean;
+  /** Notes page id for hover insert-below / insert-child. */
+  noteInsertPageId?: string | null;
 }
 
 export function ChatMessageList({
@@ -155,6 +157,7 @@ export function ChatMessageList({
   onLoadOlderMessages,
   isDmBubble = false,
   hoverMessageActions = false,
+  noteInsertPageId,
 }: ChatMessageListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const lastTailIdRef = useRef<string | undefined>(undefined);
@@ -307,6 +310,7 @@ export function ChatMessageList({
                   isPending={false}
                   enhanced={isDmBubble}
                   hoverMessageActions={hoverMessageActions}
+                  noteInsertPageId={noteInsertPageId}
                 />
               </div>
             )}
@@ -392,12 +396,14 @@ function MessageBubble({
   isPending,
   enhanced,
   hoverMessageActions,
+  noteInsertPageId,
 }: {
   sessionId: string;
   message: ChatMessage;
   isPending: boolean;
   enhanced?: boolean;
   hoverMessageActions?: boolean;
+  noteInsertPageId?: string | null;
 }) {
   if (message.role === "user") {
     return (
@@ -405,6 +411,7 @@ function MessageBubble({
         <ChatMessageHoverShell
           enabled={!!hoverMessageActions}
           copyTextValue={extractCopyText(message, [])}
+          noteInsertPageId={noteInsertPageId}
         >
           <div className="max-w-[80%] space-y-1">
             <div className={cn("rounded-2xl bg-muted px-3.5 py-2 text-sm break-words", selectableMessageTextClass)}>
@@ -444,6 +451,7 @@ function MessageBubble({
       isPending={isPending}
       enhanced={enhanced}
       hoverMessageActions={hoverMessageActions}
+      noteInsertPageId={noteInsertPageId}
     />
   );
 }
@@ -454,12 +462,14 @@ function AssistantMessage({
   isPending,
   enhanced,
   hoverMessageActions,
+  noteInsertPageId,
 }: {
   sessionId: string;
   message: ChatMessage;
   isPending: boolean;
   enhanced?: boolean;
   hoverMessageActions?: boolean;
+  noteInsertPageId?: string | null;
 }) {
   const taskId = message.task_id;
   const canFetchTaskMessages = !!sessionId && isTaskMessageTaskId(taskId);
@@ -483,6 +493,7 @@ function AssistantMessage({
       <ChatMessageHoverShell
         enabled={!!hoverMessageActions}
         copyTextValue={extractCopyText(message, timeline)}
+        noteInsertPageId={noteInsertPageId}
       >
         <FailureBubble
           reason={message.failure_reason}
@@ -499,6 +510,7 @@ function AssistantMessage({
     <ChatMessageHoverShell
       enabled={!!hoverMessageActions && !isPending}
       copyTextValue={extractCopyText(message, timeline)}
+      noteInsertPageId={noteInsertPageId}
     >
       <div className="w-full space-y-1.5">
         {timeline.length > 0 ? (

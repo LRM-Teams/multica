@@ -689,7 +689,7 @@ The Notes Assistant restatement of an optional human 写汇报 focus (paths,
 topics, aspects) used to assign scoped collector tasks. Humans pick time
 range and owned computers as chips for one send in the Notes bubble; typed
 composer text wins if it conflicts. Saying 写汇报 in the bubble (no chips)
-makes the Notes Assistant ask for time and computers first, then start.
+opens the same time + computer chips; the next send starts the run.
 Empty focus means full-scope default collection on every selected collector.
 After send, chips go away, the composer locks until the run finishes, and
 progress is spoken in this page's right-side assistant sidebar. Collector packs and the

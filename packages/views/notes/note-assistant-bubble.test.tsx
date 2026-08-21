@@ -21,6 +21,7 @@ const {
   createNotePeriodBrief,
   getActiveNotePeriodBrief,
   toggleNoteBubble,
+  setNoteBubbleOpenPageId,
   setNoteBubbleActiveSession,
 } = vi.hoisted(() => ({
   listAgents: vi.fn(),
@@ -33,6 +34,7 @@ const {
   createNotePeriodBrief: vi.fn(),
   getActiveNotePeriodBrief: vi.fn(),
   toggleNoteBubble: vi.fn(),
+  setNoteBubbleOpenPageId: vi.fn(),
   setNoteBubbleActiveSession: vi.fn(),
 }));
 
@@ -40,6 +42,7 @@ const chatState = {
   noteBubbleOpenPageId: null as string | null,
   noteBubbleActiveSessionByPage: {} as Record<string, string>,
   toggleNoteBubble,
+  setNoteBubbleOpenPageId,
   setNoteBubbleActiveSession,
 };
 
@@ -103,16 +106,27 @@ vi.mock("../chat/components/chat-window", () => ({
   ChatWindow: ({
     composerAccessory,
     onSendOverride,
+    onSendIntercept,
     layout,
   }: {
     composerAccessory?: ReactNode;
     onSendOverride?: (text: string) => boolean | Promise<boolean>;
+    onSendIntercept?: (text: string) => boolean;
     layout?: string;
   }) => (
     <div>
       <div data-testid="chat-window" data-layout={layout}>
         {composerAccessory}
       </div>
+      <button
+        type="button"
+        onClick={() => {
+          if (onSendIntercept?.("帮我写汇报")) return;
+          void onSendOverride?.("帮我写汇报");
+        }}
+      >
+        send-intent
+      </button>
       <button type="button" onClick={() => void onSendOverride?.("只采集 Cloud Box")}>
         send-override
       </button>
@@ -160,6 +174,7 @@ describe("NoteAssistantBubble period brief", () => {
     createNotePeriodBrief.mockReset();
     getActiveNotePeriodBrief.mockReset();
     toggleNoteBubble.mockReset();
+    setNoteBubbleOpenPageId.mockReset();
     setNoteBubbleActiveSession.mockReset();
     chatState.noteBubbleOpenPageId = null;
     chatState.noteBubbleActiveSessionByPage = {};
@@ -245,6 +260,40 @@ describe("NoteAssistantBubble period brief", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
+  it("opens the satellite chips when the user asks for a Period Brief in chat", async () => {
+    const user = userEvent.setup();
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    renderWithI18n(
+      <QueryClientProvider client={qc}>
+        <NoteAssistantBubble pageId="page-1" pageTitle="Note" />
+      </QueryClientProvider>,
+      { locale: "zh-Hans" },
+    );
+
+    expect(screen.queryByTestId("period-brief-compose")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "send-intent" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("period-brief-compose")).toBeTruthy();
+    });
+    expect(createNotePeriodBrief).not.toHaveBeenCalled();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("period-brief-collector-collector-b")).toBeTruthy();
+    });
+    await user.click(screen.getByRole("button", { name: "send-override" }));
+    await waitFor(() => {
+      expect(createNotePeriodBrief).toHaveBeenCalledWith(
+        expect.objectContaining({
+          context_note_page_id: "page-1",
+          collector_agent_ids: ["collector-b"],
+        }),
+      );
+      expect(createNotePeriodBrief.mock.calls[0]?.[0]).not.toHaveProperty("chat_session_id");
+    });
+  });
+
   it("opens as a right-side full-height sidebar on desktop", async () => {
     const qc = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -255,5 +304,23 @@ describe("NoteAssistantBubble period brief", () => {
       </QueryClientProvider>,
     );
     expect(screen.getByTestId("chat-window")).toHaveAttribute("data-layout", "sidebar");
+  });
+
+  it("closes the rail when leaving the note that opened it", () => {
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    chatState.noteBubbleOpenPageId = "page-1";
+    const view = renderWithI18n(
+      <QueryClientProvider client={qc}>
+        <NoteAssistantBubble pageId="page-1" pageTitle="Note A" />
+      </QueryClientProvider>,
+    );
+    view.rerender(
+      <QueryClientProvider client={qc}>
+        <NoteAssistantBubble pageId="page-2" pageTitle="Note B" />
+      </QueryClientProvider>,
+    );
+    expect(setNoteBubbleOpenPageId).toHaveBeenCalledWith(null);
   });
 });

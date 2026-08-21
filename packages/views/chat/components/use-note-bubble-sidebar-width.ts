@@ -1,49 +1,26 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import {
-  CHAT_WINDOW_SIDEBAR_DEFAULT_WIDTH,
-  CHAT_WINDOW_SIDEBAR_WIDTH_STORAGE_KEY,
-  clampChatWindowSidebarWidth,
-} from "./chat-window-layout";
-
-function readStoredWidth(): number {
-  if (typeof window === "undefined") return CHAT_WINDOW_SIDEBAR_DEFAULT_WIDTH;
-  try {
-    const raw = window.localStorage.getItem(CHAT_WINDOW_SIDEBAR_WIDTH_STORAGE_KEY);
-    if (!raw) return CHAT_WINDOW_SIDEBAR_DEFAULT_WIDTH;
-    const parsed = Number(raw);
-    return Number.isFinite(parsed)
-      ? clampChatWindowSidebarWidth(parsed)
-      : CHAT_WINDOW_SIDEBAR_DEFAULT_WIDTH;
-  } catch {
-    return CHAT_WINDOW_SIDEBAR_DEFAULT_WIDTH;
-  }
-}
+import { useChatStore } from "@multica/core/chat";
+import { useCallback, useRef, type PointerEvent as ReactPointerEvent } from "react";
+import { clampChatWindowSidebarWidth } from "./chat-window-layout";
 
 /**
  * Desktop drag width for the Notes assistant rail.
- * Persists across refresh. Mobile uses the fullscreen sheet and should
- * not attach this handle.
+ * Lives in the chat store so the page dock and the rail share one value —
+ * widening and narrowing both recenter the note body.
  */
 export function useNoteBubbleSidebarWidth() {
-  const [width, setWidth] = useState(CHAT_WINDOW_SIDEBAR_DEFAULT_WIDTH);
+  const width = useChatStore((s) => s.noteBubbleSidebarWidth);
+  const setNoteBubbleSidebarWidth = useChatStore((s) => s.setNoteBubbleSidebarWidth);
   const widthRef = useRef(width);
   widthRef.current = width;
 
-  useEffect(() => {
-    setWidth(readStoredWidth());
-  }, []);
-
-  const persist = useCallback((next: number) => {
-    const clamped = clampChatWindowSidebarWidth(next);
-    setWidth(clamped);
-    try {
-      window.localStorage.setItem(CHAT_WINDOW_SIDEBAR_WIDTH_STORAGE_KEY, String(clamped));
-    } catch {
-      // ignore quota / private mode
-    }
-  }, []);
+  const persist = useCallback(
+    (next: number) => {
+      setNoteBubbleSidebarWidth(clampChatWindowSidebarWidth(next));
+    },
+    [setNoteBubbleSidebarWidth],
+  );
 
   const onResizePointerDown = useCallback(
     (event: ReactPointerEvent<HTMLElement>) => {
@@ -61,7 +38,7 @@ export function useNoteBubbleSidebarWidth() {
 
       const onMove = (moveEvent: PointerEvent) => {
         liveWidth = clampChatWindowSidebarWidth(startWidth + (startX - moveEvent.clientX));
-        setWidth(liveWidth);
+        persist(liveWidth);
       };
       const onUp = (upEvent: PointerEvent) => {
         try {
@@ -82,5 +59,5 @@ export function useNoteBubbleSidebarWidth() {
     [persist],
   );
 
-  return { width, onResizePointerDown };
+  return { width: clampChatWindowSidebarWidth(width), onResizePointerDown };
 }

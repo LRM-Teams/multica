@@ -9,7 +9,11 @@ import {
   chatWindowSidebarSlideClassName,
   chatWindowUsesFloatingChrome,
   clampChatWindowSidebarWidth,
+  noteAssistantSidebarClosesOnLeave,
   noteAssistantSidebarPresence,
+  noteAssistantSidebarReservePx,
+  chatWindowMainPane,
+  chatWindowMainPaneClassName,
 } from "./chat-window-layout";
 
 describe("chat window layout chrome", () => {
@@ -23,6 +27,12 @@ describe("chat window layout chrome", () => {
     expect(sidebar).not.toContain("bottom-2");
     expect(sidebar).not.toContain("rounded-xl");
     expect(sidebar).not.toContain("w-[min(24rem,100%)]");
+  });
+
+  it("closes the rail when leaving the note that opened it", () => {
+    expect(noteAssistantSidebarClosesOnLeave("page-a", "page-a")).toBe(true);
+    expect(noteAssistantSidebarClosesOnLeave("page-a", "page-b")).toBe(false);
+    expect(noteAssistantSidebarClosesOnLeave(null, "page-a")).toBe(false);
   });
 
   it("omits the rail on first paint so a closed refresh cannot peek", () => {
@@ -52,6 +62,20 @@ describe("chat window layout chrome", () => {
     expect(chatWindowClosesOnOutsideClick("floating")).toBe(true);
     expect(chatWindowUsesFloatingChrome("sidebar")).toBe(false);
     expect(chatWindowUsesFloatingChrome("floating")).toBe(true);
+  });
+
+  it("reserves the rail width only when the desktop sidebar is open", () => {
+    expect(noteAssistantSidebarReservePx(false, false, 384)).toBe(0);
+    expect(noteAssistantSidebarReservePx(true, true, 384)).toBe(0);
+    expect(noteAssistantSidebarReservePx(true, false, 384)).toBe(CHAT_WINDOW_SIDEBAR_DEFAULT_WIDTH);
+    expect(noteAssistantSidebarReservePx(true, false, 800)).toBe(CHAT_WINDOW_SIDEBAR_MAX_WIDTH);
+  });
+
+  it("keeps an empty thread filled when chips open so the input stays at the bottom", () => {
+    expect(chatWindowMainPane(false, false, true)).toBe("spacer");
+    expect(chatWindowMainPane(false, false, false)).toBe("empty");
+    expect(chatWindowMainPane(false, true, true)).toBe("messages");
+    expect(chatWindowMainPaneClassName("spacer")).toContain("flex-1");
   });
 
   it("clamps a dragged sidebar width to the note-rail range", () => {

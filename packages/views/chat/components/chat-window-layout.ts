@@ -1,5 +1,27 @@
 export type ChatWindowLayout = "floating" | "fullscreen" | "sidebar";
 
+export type ChatWindowMainPane = "skeleton" | "messages" | "empty" | "spacer";
+
+/**
+ * Message-area slot. Composer chips always sit above the input — they
+ * never replace this pane. An empty thread with chips uses a flex
+ * spacer so the input stays pinned to the bottom.
+ */
+export function chatWindowMainPane(
+  showSkeleton: boolean,
+  hasMessages: boolean,
+  hasComposerAccessory: boolean,
+): ChatWindowMainPane {
+  if (showSkeleton) return "skeleton";
+  if (hasMessages) return "messages";
+  if (hasComposerAccessory) return "spacer";
+  return "empty";
+}
+
+export function chatWindowMainPaneClassName(pane: ChatWindowMainPane): string {
+  return pane === "spacer" ? "min-h-0 flex-1" : "";
+}
+
 /** Default Notes assistant rail (24rem). Drag persists a pixel width. */
 export const CHAT_WINDOW_SIDEBAR_DEFAULT_WIDTH = 384;
 export const CHAT_WINDOW_SIDEBAR_MIN_WIDTH = 280;
@@ -42,6 +64,14 @@ export const NOTE_ASSISTANT_SIDEBAR_EXIT_MS = 200;
 
 export type NoteAssistantSidebarPresence = "omit" | "closed" | "open";
 
+/** Leaving this note (or unmounting its bubble) closes that page's rail. */
+export function noteAssistantSidebarClosesOnLeave(
+  openPageId: string | null,
+  leavingPageId: string,
+): boolean {
+  return openPageId === leavingPageId;
+}
+
 /** Closed + never (or no longer) mounted → no rail in the DOM. */
 export function noteAssistantSidebarPresence(
   open: boolean,
@@ -58,4 +88,14 @@ export function chatWindowUsesFloatingChrome(layout: ChatWindowLayout): boolean 
 
 export function chatWindowClosesOnOutsideClick(layout: ChatWindowLayout): boolean {
   return layout === "floating";
+}
+
+/** Width the Notes page must reserve so the editor recenters beside the rail. */
+export function noteAssistantSidebarReservePx(
+  open: boolean,
+  isMobile: boolean,
+  width: number,
+): number {
+  if (!open || isMobile) return 0;
+  return clampChatWindowSidebarWidth(width);
 }

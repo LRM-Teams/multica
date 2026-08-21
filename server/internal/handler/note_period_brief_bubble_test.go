@@ -12,6 +12,77 @@ import (
 	"github.com/google/uuid"
 )
 
+func TestEnsurePeriodBriefBubbleSessionOmittingIDCreatesNewThread(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	var sourcePageID string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO note_page (workspace_id, owner_user_id, title, content, sort_key, created_by, updated_by)
+VALUES ($1, $2, $3, '', lpad((extract(epoch from now()) * 1000000)::bigint::text, 20, '0'), $2, $2)
+RETURNING id`, testWorkspaceID, testUserID, "Source page "+uuid.NewString()[:8]).Scan(&sourcePageID); err != nil {
+		t.Fatalf("create source page: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(ctx, `DELETE FROM note_page WHERE id = $1`, sourcePageID)
+	})
+
+	agentID := createHandlerTestAgent(t, "Bubble Session "+uuid.NewString()[:8], nil)
+	var oldSessionID string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO chat_session (workspace_id, agent_id, creator_id, title)
+VALUES ($1, $2, $3, 'old thread')
+RETURNING id`, testWorkspaceID, agentID, testUserID).Scan(&oldSessionID); err != nil {
+		t.Fatalf("create old session: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+UPDATE chat_session SET context_note_page_id = $2 WHERE id = $1`, oldSessionID, sourcePageID); err != nil {
+		t.Fatalf("bind old session: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(ctx, `DELETE FROM chat_session WHERE id = $1`, oldSessionID)
+	})
+
+	pageID, ok := parseUUIDQuiet(sourcePageID)
+	if !ok {
+		t.Fatal("source page id")
+	}
+	created, err := testHandler.ensurePeriodBriefBubbleSession(
+		ctx,
+		parseUUID(testWorkspaceID),
+		parseUUID(testUserID),
+		parseUUID(agentID),
+		pageID,
+		"",
+	)
+	if err != nil {
+		t.Fatalf("ensure omitted id: %v", err)
+	}
+	createdID := uuidToString(created)
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(ctx, `DELETE FROM chat_session WHERE id = $1`, createdID)
+	})
+	if createdID == oldSessionID {
+		t.Fatal("omitted chat_session_id reused the latest page session")
+	}
+
+	kept, err := testHandler.ensurePeriodBriefBubbleSession(
+		ctx,
+		parseUUID(testWorkspaceID),
+		parseUUID(testUserID),
+		parseUUID(agentID),
+		pageID,
+		oldSessionID,
+	)
+	if err != nil {
+		t.Fatalf("ensure explicit id: %v", err)
+	}
+	if uuidToString(kept) != oldSessionID {
+		t.Fatalf("explicit chat_session_id = %s, want %s", uuidToString(kept), oldSessionID)
+	}
+}
+
 func TestFormatPeriodBriefBubbleUserTurn(t *testing.T) {
 	got := formatPeriodBriefBubbleUserTurn("本周", []string{"采集 · Laptop A", "采集 · 云端 · Cloud Box"}, "只整理 ~/multica")
 	want := "写汇报\n\n时间：本周\n电脑：采集 · Laptop A、采集 · 云端 · Cloud Box\n\n只整理 ~/multica"

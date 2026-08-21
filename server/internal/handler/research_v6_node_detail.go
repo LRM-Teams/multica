@@ -3,6 +3,7 @@ package handler
 import (
 	"errors"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 
@@ -42,8 +43,8 @@ func (h *Handler) GetResearchV6ProjectionNodeDetail(w http.ResponseWriter, r *ht
 	if !valid {
 		return
 	}
-	nodeID := strings.TrimSpace(chi.URLParam(r, "nodeId"))
-	if !researchrun.IsValidV6ProjectionNodeID(nodeID) {
+	nodeID, err := url.PathUnescape(strings.TrimSpace(chi.URLParam(r, "nodeId")))
+	if err != nil || !researchrun.IsValidV6ProjectionNodeID(nodeID) {
 		writeRonaldoV6Error(w, http.StatusBadRequest, "research.v6.invalid_contract", "nodeId must match the frozen V6 projection key contract", false)
 		return
 	}

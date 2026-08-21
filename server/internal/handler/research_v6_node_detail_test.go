@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/multica-ai/multica/server/internal/researchrun"
 )
 
@@ -44,17 +45,20 @@ func (s *researchV6NodeDetailRunStub) ProjectionV6NodeDetail(_ context.Context, 
 	}, nil
 }
 
-func TestGetResearchV6ProjectionNodeDetailAcceptsStableNodeID(t *testing.T) {
+func TestGetResearchV6ProjectionNodeDetailRouteDecodesStableNodeID(t *testing.T) {
 	const (
-		runID  = "ecfab91c-7fe7-4e65-b636-f4d7ea65088b"
-		nodeID = "pv6:goal:60f8f7f3-82e6-48f0-a3f7-b5c0d8a012a2:1"
+		runID         = "ecfab91c-7fe7-4e65-b636-f4d7ea65088b"
+		nodeID        = "pv6:goal:60f8f7f3-82e6-48f0-a3f7-b5c0d8a012a2:1"
+		encodedNodeID = "pv6%3Agoal%3A60f8f7f3-82e6-48f0-a3f7-b5c0d8a012a2%3A1"
 	)
 	service := &researchV6NodeDetailRunStub{}
 	h := &Handler{ResearchRun: service}
-	req := withURLParams(newRequest(http.MethodGet, "/api/research/v6/runs/"+runID+"/projection/nodes/"+nodeID+"?view=brief", nil), "runId", runID, "nodeId", nodeID)
+	router := chi.NewRouter()
+	router.Get("/api/research/v6/runs/{runId}/projection/nodes/{nodeId}", h.GetResearchV6ProjectionNodeDetail)
+	req := newRequest(http.MethodGet, "/api/research/v6/runs/"+runID+"/projection/nodes/"+encodedNodeID+"?view=brief", nil)
 	w := httptest.NewRecorder()
 
-	h.GetResearchV6ProjectionNodeDetail(w, req)
+	router.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body=%s", w.Code, http.StatusOK, w.Body.String())

@@ -2135,11 +2135,36 @@ func (a *envDispatchDepsAdapter) DeleteAgentRuntime(ctx context.Context, workspa
 	if err != nil {
 		return fmt.Errorf("parse runtime_id: %w", err)
 	}
-	if err := a.h.Queries.DeleteAgentRuntimeForWorkspace(ctx, db.DeleteAgentRuntimeForWorkspaceParams{
+
+	tx, err := a.h.TxStarter.Begin(ctx)
+	if err != nil {
+		return stackerr.Wrap(err, "begin agent runtime reclaim")
+	}
+	defer tx.Rollback(ctx)
+
+	// A ready binding requires all three execution handles. Clear its runtime
+	// reference before the FK's ON DELETE SET NULL action can violate that check.
+	if _, err := tx.Exec(ctx, `
+		UPDATE environment_agent_sandbox binding
+		SET status = CASE WHEN status IN ('deleting', 'deleted') THEN status ELSE 'failed_retryable' END,
+			sandbox_instance_id = NULL,
+			runtime_id = NULL,
+			daemon_id = NULL,
+			updated_at = now()
+		FROM environment env
+		WHERE binding.env_id = env.id
+		  AND env.workspace_id = $1
+		  AND binding.runtime_id = $2`, wsUUID, rtUUID); err != nil {
+		return stackerr.Wrap(err, "clear env-dispatch runtime binding")
+	}
+	if err := a.h.Queries.WithTx(tx).DeleteAgentRuntimeForWorkspace(ctx, db.DeleteAgentRuntimeForWorkspaceParams{
 		ID:          rtUUID,
 		WorkspaceID: wsUUID,
 	}); err != nil {
 		return stackerr.Wrap(err, "delete agent runtime")
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return stackerr.Wrap(err, "commit agent runtime reclaim")
 	}
 	return nil
 }

@@ -173,9 +173,15 @@ func (runner *WorkspaceRunner) stopManagedAgent(ctx context.Context, payload pro
 	}
 	runner.inboxes.Remove(payload.AgentID, runtimeID)
 	if runtimeID != "" {
-		if err := runner.runtimes.forceInvalidateSession(payload.AgentID, runtimeID); err != nil {
-			return fmt.Errorf("stop managed Agent provider: %w", err)
-		}
+		// Dispatch the kill immediately, before waiting on startupDone: a
+		// managed start blocked inside provider spawn runs on the Workspace
+		// Runner's own lifetime context (runner.life), not this stop's ctx,
+		// so nothing else can ever interrupt it. Waiting first would
+		// deadlock the stop against its own precondition. The dispatch is
+		// fire-and-forget here (fire-and-forget everywhere else this pool
+		// method is called) — its own failure (e.g. a non-ForceKillable
+		// backend) still shows up in the confirm wait below.
+		_ = runner.runtimes.beginResidentTermination(payload.AgentID, runtimeID)
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -188,8 +194,26 @@ func (runner *WorkspaceRunner) stopManagedAgent(ctx context.Context, payload pro
 		}
 	}
 	if runtimeID != "" {
-		if err := runner.runtimes.awaitSessionQuiescence(ctx, payload.AgentID, runtimeID); err != nil {
-			return fmt.Errorf("wait for managed Agent provider stop: %w", err)
+		if err := runner.runtimes.awaitResidentTerminated(ctx, payload.AgentID, runtimeID); err != nil {
+			// A stop that cannot confirm the kill must still leave the system
+			// in a consistent, reported state. Falling through here (instead
+			// of returning) is the fix for the half-stop: the Inbox and
+			// residency are already cleared above, so an early return at this
+			// point would strand the launch in `stopping` with no terminal
+			// status ever published, and workspace_runner.go's caller would
+			// additionally call failConnection and tear down every other
+			// agent on this connection over one unconfirmed kill.
+			var timeout *residentTerminationTimeout
+			if runner.logger != nil {
+				if errors.As(err, &timeout) {
+					runner.logger.Warn("resident termination unconfirmed, completing Stop anyway",
+						"agent_id", payload.AgentID, "runtime_id", runtimeID, "launch_id", payload.LaunchID,
+						"process_alive", timeout.ProcessAlive, "turn_running", timeout.TurnRunning)
+				} else {
+					runner.logger.Warn("resident termination unconfirmed, completing Stop anyway",
+						"agent_id", payload.AgentID, "runtime_id", runtimeID, "launch_id", payload.LaunchID, "error", err)
+				}
+			}
 		}
 	}
 	// Provider startup may have recorded a terminal residency after the stop

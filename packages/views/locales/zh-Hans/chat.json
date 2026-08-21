@@ -79,6 +79,7 @@
     "restore_tooltip": "还原",
     "expand_tooltip": "展开",
     "minimize_tooltip": "最小化",
+    "resize_sidebar_aria": "调整助手边栏宽度",
     "another_running": "另一个对话正在运行",
     "another_unread": "另一个对话有未读回复",
     "running": "运行中",

@@ -83,6 +83,11 @@ func (h *Handler) SubmitAgentNotePeriodBriefPack(w http.ResponseWriter, r *http.
 		writeError(w, http.StatusInternalServerError, "failed to store collector pack")
 		return
 	}
+	if names := h.periodBriefCollectorSpokenNames(r.Context(), run.WorkspaceID, []string{uuidToString(agentUUID)}); len(names) > 0 {
+		h.postPeriodBriefPackReceived(r.Context(), run, names[0], markdown)
+	} else {
+		h.postPeriodBriefPackReceived(r.Context(), run, "", markdown)
+	}
 
 	writeJSON(w, http.StatusOK, submitNotePeriodBriefPackResponse{
 		DraftPageID: draftID,

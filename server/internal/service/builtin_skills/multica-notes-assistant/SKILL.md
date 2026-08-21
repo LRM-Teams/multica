@@ -66,7 +66,7 @@ authorized page.
 
 | This skill | Not this |
 |------------|----------|
-| Notes FAB bubble / `chat_session.context_note_page_id` | Worker `note_worker_job` / 「按这篇做」 |
+| Notes FAB bubble / `chat_session.context_note_page_id` | Period Brief / other `note_worker_job` wakes |
 | Selective `notes get` / `tree` | Period Brief synthesizer wake (`multica-period-work-brief`) — same Agent, different wake |
 | Final-output rewrite proposals | Editor structured `note_ai_job` actions |
 

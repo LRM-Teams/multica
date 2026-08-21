@@ -37,6 +37,12 @@ var notePeriodBriefCollectorMaxWait = 2 * time.Hour
 // Tests set this false so the response includes the synthesizer job.
 var notePeriodBriefFinishInBackground = true
 
+// How long the background synthesizer wait will poll for a --note-write
+// that belongs to this run (created_at >= run.created_at). Tests that run
+// synthesis inline (FinishInBackground=false) skip the wait.
+var notePeriodBriefSynthWriteMaxWait = 30 * time.Minute
+var notePeriodBriefSynthWritePollEvery = 2 * time.Second
+
 // Stable English instruction locked to the period_brief playbook (J3-T1 / J3-T4).
 // folderPageID is the private 工作介绍/ folder — Brief lands as a child via human confirm.
 // draftPageID is the Facts+packs draft; synthesizer uses it for status / retry.
@@ -158,6 +164,9 @@ type createNotePeriodBriefRequest struct {
 	Sources           []string `json:"sources"`
 	ChannelID         string   `json:"channel_id"`
 	Focus             string   `json:"focus"`
+	ContextNotePageID string   `json:"context_note_page_id"`
+	ChatSessionID     string   `json:"chat_session_id"`
+	FromChat          bool     `json:"from_chat"`
 }
 
 type createNotePeriodBriefResponse struct {
@@ -170,6 +179,7 @@ type createNotePeriodBriefResponse struct {
 	FactCount         int                             `json:"fact_count"`
 	CollectorAgentIDs []string                        `json:"collector_agent_ids"`
 	CollectorJobs     []NoteWorkerJobResponse         `json:"collector_jobs"`
+	ChatSessionID     string                          `json:"chat_session_id,omitempty"`
 }
 
 // CreateNotePeriodBrief gathers platform Facts, dispatches collector Agents to
@@ -237,6 +247,19 @@ func (h *Handler) CreateNotePeriodBrief(w http.ResponseWriter, r *http.Request) 
 		Label:    window.Label,
 	}
 	channelID := strings.TrimSpace(req.ChannelID)
+	sourcePageID, ok := h.resolvePeriodBriefSourcePage(w, r, workspaceID, userID, req.ContextNotePageID)
+	if !ok {
+		return
+	}
+	var bubbleSessionID pgtype.UUID
+	if sourcePageID.Valid {
+		sessionID, sessErr := h.ensurePeriodBriefBubbleSession(r.Context(), workspaceID, userID, agentID, sourcePageID, req.ChatSessionID)
+		if sessErr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to open notes bubble session")
+			return
+		}
+		bubbleSessionID = sessionID
+	}
 	used := append([]string(nil), bundle.SourcesUsed...)
 	empty := append([]string(nil), bundle.SourcesEmpty...)
 	skipped := append([]string(nil), bundle.SourcesSkipped...)
@@ -277,10 +300,11 @@ RETURNING id, workspace_id, parent_id, owner_user_id, title, content, sort_key, 
 				WindowEnd:   windowEnd,
 			})
 		}
-		if err := h.insertNotePeriodBriefRun(r.Context(), workspaceID, userID, draft.ID, folderID, agentID, window, channelID, factsText, used, empty, skipped, pendingRefs, focus, "planning"); err != nil {
+		if err := h.insertNotePeriodBriefRun(r.Context(), workspaceID, userID, draft.ID, folderID, agentID, window, channelID, factsText, used, empty, skipped, pendingRefs, focus, "planning", bubbleSessionID, sourcePageID); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to create period brief run: "+err.Error())
 			return
 		}
+		h.startPeriodBriefBubbleTranscript(r.Context(), workspaceID, userID, bubbleSessionID, userIDString, window.Label, focus, collectorIDs, req.FromChat)
 		plannerJob, ok := h.dispatchNotePeriodBriefPlanner(
 			w, r, workspaceID, userID, userIDString, draft, agentID, window.Label, windowStart, windowEnd, channelID, focus, collectorIDs,
 		)
@@ -290,6 +314,7 @@ RETURNING id, workspace_id, parent_id, owner_user_id, title, content, sort_key, 
 		if run, loadErr := h.loadNotePeriodBriefRunByDraft(r.Context(), workspaceID, draft.ID); loadErr == nil && plannerJob.ID != "" {
 			_ = h.updateNotePeriodBriefRunPlannerJob(r.Context(), run.ID, parseUUID(plannerJob.ID))
 		}
+		h.postPeriodBriefBubbleAssigned(r.Context(), workspaceID, userID, bubbleSessionID, userIDString, collectorIDs)
 		if notePeriodBriefFinishInBackground {
 			writeJSON(w, http.StatusCreated, createNotePeriodBriefResponse{
 				Page:              notePageToResponse(draft, userID, []string{}, nil),
@@ -301,6 +326,7 @@ RETURNING id, workspace_id, parent_id, owner_user_id, title, content, sort_key, 
 				FactCount:         bundle.FactCount(),
 				CollectorAgentIDs: collectorIDs,
 				CollectorJobs:     nil,
+				ChatSessionID:     uuidToString(bubbleSessionID),
 			})
 			bg := context.WithoutCancel(r.Context())
 			go h.finishNotePeriodBriefAfterPlan(bg, workspaceID, userID, userIDString, agentID, folderID, draft, window, channelID, factsText, collectorIDs, used, empty, skipped)
@@ -320,7 +346,7 @@ RETURNING id, workspace_id, parent_id, owner_user_id, title, content, sort_key, 
 			return
 		}
 		if run, loadErr := h.loadNotePeriodBriefRunByDraft(r.Context(), workspaceID, page.ID); loadErr == nil {
-			_ = h.updateNotePeriodBriefRunCollectors(r.Context(), run.ID, clearCollectorPackMarkdown(run.Collectors), "done")
+			h.completePeriodBriefRunAfterSynth(r.Context(), run, userIDString)
 		}
 		writeJSON(w, http.StatusCreated, createNotePeriodBriefResponse{
 			Page:              notePageToResponse(page, userID, []string{}, nil),
@@ -332,6 +358,7 @@ RETURNING id, workspace_id, parent_id, owner_user_id, title, content, sort_key, 
 			FactCount:         bundle.FactCount(),
 			CollectorAgentIDs: collectorIDs,
 			CollectorJobs:     collectorJobs,
+			ChatSessionID:     uuidToString(bubbleSessionID),
 		})
 		return
 	}
@@ -344,10 +371,12 @@ RETURNING id, workspace_id, parent_id, owner_user_id, title, content, sort_key, 
 	}
 
 	refs := collectorRefsFromJobs(collectorJobs, window.Label, windowStart, windowEnd)
-	if err := h.insertNotePeriodBriefRun(r.Context(), workspaceID, userID, draft.ID, folderID, agentID, window, channelID, factsText, used, empty, skipped, refs, "", "collecting"); err != nil {
+	if err := h.insertNotePeriodBriefRun(r.Context(), workspaceID, userID, draft.ID, folderID, agentID, window, channelID, factsText, used, empty, skipped, refs, "", "collecting", bubbleSessionID, sourcePageID); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create period brief run: "+err.Error())
 		return
 	}
+	h.startPeriodBriefBubbleTranscript(r.Context(), workspaceID, userID, bubbleSessionID, userIDString, window.Label, "", collectorIDs, req.FromChat)
+	h.postPeriodBriefBubbleAssigned(r.Context(), workspaceID, userID, bubbleSessionID, userIDString, collectorIDs)
 
 	if notePeriodBriefFinishInBackground {
 		primaryJob := collectorJobs[0]
@@ -361,6 +390,7 @@ RETURNING id, workspace_id, parent_id, owner_user_id, title, content, sort_key, 
 			FactCount:         bundle.FactCount(),
 			CollectorAgentIDs: collectorIDs,
 			CollectorJobs:     collectorJobs,
+			ChatSessionID:     uuidToString(bubbleSessionID),
 		})
 		bg := context.WithoutCancel(r.Context())
 		go h.finishNotePeriodBriefAfterCollectors(bg, workspaceID, userID, userIDString, agentID, folderID, draft, window, channelID, factsText, collectorJobs, used, empty, skipped)
@@ -375,7 +405,7 @@ RETURNING id, workspace_id, parent_id, owner_user_id, title, content, sort_key, 
 		return
 	}
 	if run, loadErr := h.loadNotePeriodBriefRunByDraft(r.Context(), workspaceID, page.ID); loadErr == nil {
-		_ = h.updateNotePeriodBriefRunCollectors(r.Context(), run.ID, clearCollectorPackMarkdown(run.Collectors), "done")
+		h.completePeriodBriefRunAfterSynth(r.Context(), run, userIDString)
 	}
 	writeJSON(w, http.StatusCreated, createNotePeriodBriefResponse{
 		Page:              notePageToResponse(page, userID, []string{}, nil),
@@ -387,6 +417,7 @@ RETURNING id, workspace_id, parent_id, owner_user_id, title, content, sort_key, 
 		FactCount:         bundle.FactCount(),
 		CollectorAgentIDs: collectorIDs,
 		CollectorJobs:     collectorJobs,
+		ChatSessionID:     uuidToString(bubbleSessionID),
 	})
 }
 
@@ -528,6 +559,7 @@ UPDATE note_page SET content = $1, updated_at = now(), updated_by = $2 WHERE id 
 
 	if run, err := h.loadNotePeriodBriefRunByDraft(ctx, workspaceID, draft.ID); err == nil {
 		_ = h.updateNotePeriodBriefRunCollectors(ctx, run.ID, run.Collectors, "synthesizing")
+		h.postPeriodBriefBubbleProgress(ctx, run, userIDString, "我已经收到了所有需要的材料，下面将根据这些材料整理一份汇报稿。")
 	}
 
 	agent, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: agentID, WorkspaceID: workspaceID})
@@ -540,7 +572,7 @@ UPDATE note_page SET content = $1, updated_at = now(), updated_by = $2 WHERE id 
 	if run, err := h.loadNotePeriodBriefRunByDraft(ctx, workspaceID, draft.ID); err == nil {
 		// Purge ephemeral pack artifacts once the synthesizer has been woken
 		// with packsText in the prompt.
-		_ = h.updateNotePeriodBriefRunCollectors(ctx, run.ID, clearCollectorPackMarkdown(run.Collectors), "done")
+		h.completePeriodBriefRunAfterSynth(ctx, run, userIDString)
 	}
 }
 
@@ -598,6 +630,7 @@ UPDATE note_page SET content = $1, updated_at = now(), updated_by = $2 WHERE id 
 
 	if run, loadErr := h.loadNotePeriodBriefRunByDraft(r.Context(), workspaceID, draft.ID); loadErr == nil {
 		_ = h.updateNotePeriodBriefRunCollectors(r.Context(), run.ID, run.Collectors, "synthesizing")
+		h.postPeriodBriefBubbleProgress(r.Context(), run, userIDString, "我已经收到了所有需要的材料，下面将根据这些材料整理一份汇报稿。")
 	}
 
 	agent, err := h.Queries.GetAgentInWorkspace(r.Context(), db.GetAgentInWorkspaceParams{ID: agentID, WorkspaceID: workspaceID})

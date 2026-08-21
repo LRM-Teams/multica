@@ -686,9 +686,17 @@ HOME-only scans that miss `/workspace`, groups-only packs that drop evidence,
 ### Period Brief Collect Plan
 
 The Notes Assistant restatement of an optional human 写汇报 focus (paths,
-topics, aspects) used to assign scoped collector tasks. Empty focus means
-full-scope default collection on every selected collector.
-_Avoid_: treating the plan as the Brief; letting collectors invent extra machines
+topics, aspects) used to assign scoped collector tasks. Humans pick time
+range and owned computers as chips for one send in the Notes bubble; typed
+composer text wins if it conflicts. Saying 写汇报 in the bubble (no chips)
+makes the Notes Assistant ask for time and computers first, then start.
+Empty focus means full-scope default collection on every selected collector.
+After send, chips go away, the composer locks until the run finishes, and
+progress is spoken in this page's right-side assistant sidebar. Collector packs and the
+finished brief show as collapsed cards of **this run** (never the latest
+`工作介绍/` write from a previous run); the brief has Insert below note and
+Insert as child note.
+_Avoid_: treating the plan as the Brief; letting collectors invent extra machines; a dedicated 写汇报 dialog; auto-jumping to Messages; treating chips as a standing form
 
 ### Period Brief Agent
 
@@ -696,15 +704,19 @@ The Notes Assistant (笔记助手) in its 写汇报 wakes: collect-plan commande
 when the human gave a focus, then synthesizer from platform Facts plus
 collector packs, force_fresh_session, --note-write. Not a second Workspace
 Agent. Leftover 周报 / weekly-report rows are archived on Ensure.
-_Avoid_: a dedicated weekly-report Agent; mixing bubble chat with --note-write
+Progress is narrated in the issuing page's bubble session.
+_Avoid_: a dedicated weekly-report Agent; treating Worker --note-write as the human-facing transcript
 
 ### Period Work Synthesis
 
 The job that reads platform facts plus collector packs and writes one Period
 Work Brief. When the human gave a focus, a collect-plan wake assigns scoped
 collector tasks first; selection and grouping of the Brief still happen here.
+After the human confirms in the bubble, the Brief is inserted as a child of
+the note page that issued the task.
 _Avoid_: LLM inside the retrospective API, Host Digest as required input,
-silent note overwrite
+silent note overwrite, inserting under a global 工作介绍/ folder when the
+task started from a page bubble
 
 ### Machine Work Journal / Work Digest (legacy)
 

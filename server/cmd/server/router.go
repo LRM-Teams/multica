@@ -891,6 +891,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Route("/api/notes", func(r chi.Router) {
 				r.Post("/retrospectives", h.CreateNoteRetrospective)
 				r.Post("/period-briefs", h.CreateNotePeriodBrief)
+				r.Get("/period-briefs/active", h.GetActiveNotePeriodBrief)
+				r.Post("/period-briefs/{runId}/insert", h.InsertNotePeriodBrief)
 				r.Route("/pages", func(r chi.Router) {
 					r.Get("/", h.ListNotePages)
 					r.Post("/", h.CreateNotePage)
@@ -918,7 +920,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 						r.Get("/channel-refs", h.ListNotePageChannelRefs)
 						r.Post("/channel-refs", h.CreateNotePageChannelRef)
 						r.Delete("/channel-refs/{channelId}", h.DeleteNotePageChannelRef)
-						r.Post("/issues", h.CreateNotePageIssue)
 						r.Get("/writebacks", h.ListNotePageWritebacks)
 						r.Post("/writebacks", h.CreateNotePageWriteback)
 					})

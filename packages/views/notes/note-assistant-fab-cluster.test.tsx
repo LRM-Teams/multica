@@ -31,16 +31,11 @@ describe("NoteAssistantFabCluster", () => {
 
     fireEvent.mouseEnter(cluster!);
     const period = await screen.findByRole("button", { name: "写汇报" });
-    const worker = screen.getByRole("button", { name: "按这篇做" });
     const highlights = screen.getByRole("button", { name: "整理本笔记与子笔记的重点" });
+    expect(screen.queryByRole("button", { name: "按这篇做" })).toBeNull();
 
     await user.click(period);
     expect(onAction).toHaveBeenCalledWith("period_brief");
-    onAction.mockClear();
-
-    fireEvent.mouseEnter(cluster!);
-    await user.click(await screen.findByRole("button", { name: "按这篇做" }));
-    expect(onAction).toHaveBeenCalledWith("worker");
     onAction.mockClear();
 
     fireEvent.mouseEnter(cluster!);
@@ -51,7 +46,6 @@ describe("NoteAssistantFabCluster", () => {
     fireEvent.mouseEnter(cluster!);
     await user.click(screen.getByRole("button", { name: "Chat about this note" }));
     expect(onAction).toHaveBeenCalledWith("chat");
-    expect(worker).toBeTruthy();
     expect(highlights).toBeTruthy();
   });
 });

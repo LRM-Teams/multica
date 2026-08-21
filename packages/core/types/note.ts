@@ -1,5 +1,3 @@
-import type { Issue } from "./issue";
-
 export interface NotePage {
   id: string;
   workspace_id: string;
@@ -172,16 +170,6 @@ export interface CreateNotePageChannelRefRequest {
   kind?: "worker" | "coordination";
 }
 
-export interface CreateNotePageIssueRequest {
-  title?: string;
-  description?: string;
-}
-
-export interface CreateNotePageIssueResponse {
-  issue: Issue;
-  ref: NotePageIssueRef;
-}
-
 /** Pending note writeback proposal (S1-W1 / D1). */
 export type NoteWritebackAction = "append" | "patch" | "replace_page";
 export type NoteWritebackStatus = "pending" | "applied" | "rejected";
@@ -274,6 +262,10 @@ export interface CreateNotePeriodBriefRequest {
   channel_id?: string;
   /** Optional scoped request (paths / topics / aspects). Empty = full-scope default. */
   focus?: string;
+  /** Note page whose bubble started this run; the finished brief inserts as its child. */
+  context_note_page_id?: string;
+  /** Existing notes-bubble chat session to continue. */
+  chat_session_id?: string;
 }
 
 export interface CreateNotePeriodBriefResponse {
@@ -288,4 +280,36 @@ export interface CreateNotePeriodBriefResponse {
   collector_agent_ids?: string[];
   /** One Note Worker job per collector (pack page + wake). */
   collector_jobs?: NoteWorkerJob[];
+  /** Notes-bubble session that received the user turn and progress. */
+  chat_session_id?: string;
+}
+
+export type NotePeriodBriefRunStatus =
+  | "planning"
+  | "collecting"
+  | "synthesizing"
+  | "awaiting_confirm"
+  | "done";
+
+export interface NotePeriodBriefActiveRun {
+  id: string;
+  status: NotePeriodBriefRunStatus | string;
+  chat_session_id?: string;
+  source_page_id?: string;
+  draft_page_id: string;
+}
+
+export interface NotePeriodBriefActiveResponse {
+  run: NotePeriodBriefActiveRun | null;
+}
+
+export type NotePeriodBriefInsertMode = "append" | "child";
+
+export interface InsertNotePeriodBriefRequest {
+  mode: NotePeriodBriefInsertMode;
+}
+
+export interface InsertNotePeriodBriefResponse {
+  mode: NotePeriodBriefInsertMode;
+  title?: string;
 }

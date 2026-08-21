@@ -46,7 +46,7 @@ S2-C3 established the typed contract and misuse rejection. **S2-C1** wires dispa
 
 1. `POST .../worker-jobs` loads the page under ACL, builds the Worker prompt (below), wraps it with the channel delivery contract + `Message target for chat transport`, enqueues a chat task, and merges `context.note_brief = { version, page_id, title }`.
 2. `note_worker_job.task_id` is set and status becomes `dispatched`.
-3. UI trigger is **S2-A2** (`NoteWorkerRunDialog` / 「按这篇做」); Agent `notes get` tool is **S2-C2**.
+3. Human Notes UI no longer starts Worker jobs (「按这篇做」 / 「用这篇」 were removed). Period Brief and Agent `notes get` still use `note_worker_job` internally. Agent `notes get` tool is **S2-C2**.
 
 ## Worker prompt partitions (S2-C4)
 
@@ -62,15 +62,9 @@ Dispatch additionally prefixes `wrapNoteWorkerChannelWakePrompt` (channel output
 
 Code: `server/internal/handler/note_worker_prompt.go`. Tests lock tag strings and breakout cases.
 
-## UI trigger (S2-A2 / S3-A4)
+## UI trigger (S2-A2 / S3-A4) — removed
 
-Notes page exposes a single **Use this note** / 「用这篇…」 menu (S3-A4) that routes to Editor / Worker / Create Issue. Worker path:
-
-1. User picks a destination — agent DM (default) or a group channel — plus an executing agent and instruction → `POST .../worker-jobs` with `intent: "worker"` (never `note_ai_job` / Editor). Optional `channel_id` selects a group destination; omit it to post into the agent DM.
-2. Server posts a visible message into that Messages channel (instruction text + a collapsed `note_brief` part with the note title/body snapshot) and enqueues a channel-directed inbox wake with `note_brief` context (main timeline — not floating `chat_session` bubble).
-3. UI stores the returned job id, opens `channel_id`, and polls `GET .../worker-jobs/{id}` while status is `pending` | `dispatched` | `running`.
-
-The timeline card for `note_brief` is **collapsed by default**; expanding it reveals the note body snapshot captured at dispatch.
+The Notes page no longer exposes **Use this note** / 「用这篇…」, **Work from this note** / 「按这篇做」, or **Create issue from note**. Editor AI (selection / empty-line) uses the Workspace Notes Assistant. Worker jobs are started by Period Brief and other server wakes, not a notes-page picker.
 
 Agent replies that **propose a write** (`note_write` part) after a Worker `note_brief` trigger show two actions under the message body. Ordinary chat/status replies in that thread stay button-free.
 
@@ -81,7 +75,7 @@ The same two actions appear when a chat `note_write` part targets an existing pa
 
 **Period Work Brief (J3-T4):** the channel `note_brief` sticky points at the private `工作介绍/` **folder** (write parent), while the wake prompt / task `note_brief` context still names the **draft Facts** page for `notes get`. Agent `--note-write --note-page-id <folder>` + human **Create child** lands the Brief under the folder — not on the draft.
 
-FE: `packages/views/notes/note-worker-run-dialog.tsx`, `note-worker-status-banner.tsx`, `note-worker-reply-actions.tsx`; helpers in `@multica/core/notes/worker-reply-actions` and `@multica/core/notes/period-brief`.
+FE: `packages/views/notes/note-worker-reply-actions.tsx`; helpers in `@multica/core/notes/worker-reply-actions` and `@multica/core/notes/period-brief`.
 
 ## Chat → note confirmation (DM and channel)
 
@@ -116,10 +110,10 @@ Stay-on-page chat (not Worker → Messages):
 
 1. Notes page shows a bottom-right FAB when a page is selected.
 2. First open **soft-probes** the Workspace Notes Assistant (`notes-assistant` / 「笔记助手」) via `POST /api/members/agents/notes-assistant` with `{}` — never auto-creates. Missing agent → `needs_setup` create card. Create only on button click: **clone Wendy** (`clone_onboarding`) or **Create Agent dialog** (identity locked; human picks Computer + runtime + model → `runtime_id`+`model`). Archived-after-delete is restored on create, not a hard error. No agent picker in the bubble.
-3. Opens a floating `chat_session` with `context_note_page_id` set to the current page, locked to that assistant.
+3. Opens a right-side full-height sidebar (`chat_session`) with `context_note_page_id` set to the current page, locked to that assistant. Desktop slides in from the right (left-edge drag resizes 280–640px). Closed rail is **not in the DOM** (`noteAssistantSidebarPresence` omit) — a `motion.div` with `initial={false}` writes `transform: none` and would pin the rail on a refresh. Exit keeps the node 200ms for the CSS slide, then unmounts. Mobile stays fullscreen.
 4. Standalone chat delivery prefixes `<note_chat_context>` with **root id + title only** (no full subtree dump). Idle wake uses `formatStandaloneChatTurnPrompt` (chat turn — **not** channel Canonical Message / `message send`). The agent must use `notes tree` / `notes get` selectively (skill `multica-notes-assistant`) and answer via **final assistant output** (daemon writeback). Redelivery rebuilds the same prefix. Turn failures still write an assistant error row so the UI leaves 排队中.
 5. Distinct from Editor (`note_ai_job`) and Worker (`note_worker_job`); replies stay in the bubble transcript. Bubble has no channel `note_write` confirm UI — rewrite proposals stay in final output for the human to apply.
-6. The same 笔记助手 identity is the 写汇报 synthesizer. That wake is **not** this bubble: `force_fresh_session`, skill `multica-period-work-brief`, `--note-write` under `工作介绍/`. Leftover 「周报」 agents are archived on Ensure. Collectors stay separate.
+6. 写汇报 starts from the Notes FAB satellite (not a header button or dedicated dialog). Time range + owned computers are chips for **one send**; typed text wins on conflict. Saying 写汇报 in the bubble without chips makes the assistant **ask for time and computers first**, then start. After send, chips disappear, the composer locks until the run leaves `planning|collecting|synthesizing`, and progress is posted into **this page's `chat_session`** (right sidebar). Collectors / planner / synthesizer still run as Worker `force_fresh_session` wakes. Incoming collector packs and the finished brief render as collapsed `note_brief` cards in this sidebar (packs have no Notes page link). The brief card snapshots **this run's** synthesizer `--note-write` (`created_at >= run.created_at`) or this run's draft — never the latest write on `工作介绍/` from a previous run. The brief card has **插入笔记下面** (append a `##` section onto the issuing page) and **插入子笔记** (create a child of that page) — not under global `工作介绍/`. Leftover 「周报」 agents are archived on Ensure. Collectors stay separate.
 
 FE: `packages/views/notes/note-assistant-bubble.tsx`, `notes-assistant-setup-card.tsx`; BE: `EnsureNotesAssistantAgent`, `chat_session.context_note_page_id`, `resolveAgentNoteViewer`, `ListAgentNoteTree`.
 

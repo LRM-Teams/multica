@@ -128,6 +128,64 @@ func (t *FrictionTracker) ObserveProgress() {
 	t.breakErrorStreak()
 }
 
+// ObserveActionRejected records one permission/user rejection of a tool call.
+func (t *FrictionTracker) ObserveActionRejected() {
+	if t == nil {
+		return
+	}
+	t.vector.ActionRejected++
+}
+
+// ObserveRework records one review-reject / reopen episode on an Issue task.
+func (t *FrictionTracker) ObserveRework() {
+	if t == nil {
+		return
+	}
+	t.vector.Rework++
+}
+
+// ObserveToolResult inspects a tool output for an explicit rejection.
+func (t *FrictionTracker) ObserveToolResult(output string) {
+	if LooksLikeActionRejected(output) {
+		t.ObserveActionRejected()
+	}
+}
+
+var actionRejectedRE = regexp.MustCompile(`(?i)(permission denied|not (allowed|authorized|permitted)|user (rejected|denied|cancelled|canceled)|rejected by (the )?user|tool (call )?(was )?rejected|authorization failed|ask.?user.?question)`)
+
+// LooksLikeActionRejected is true when a tool result or error is an explicit
+// permission / user rejection, not a timeout or ordinary tool failure.
+func LooksLikeActionRejected(text string) bool {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return false
+	}
+	lower := strings.ToLower(text)
+	if strings.Contains(lower, "timeout") || strings.Contains(lower, "timed out") {
+		return false
+	}
+	return actionRejectedRE.MatchString(text)
+}
+
+var reworkRE = regexp.MustCompile(`(?i)(返工|驳回|重做一遍|请修改后|changes?\s+requested|needs?\s+rework|please\s+rework|reopen(ed)?\s+(this\s+)?issue)`)
+
+// LooksLikeRework is true when the trigger is a review reject or reopen.
+func LooksLikeRework(text string) bool {
+	return reworkRE.MatchString(strings.TrimSpace(text))
+}
+
+// AugmentFrictionFromIssue adds one rework episode when this is an Issue task
+// and the trigger is a review reject / reopen.
+func AugmentFrictionFromIssue(friction FrictionVector, issueID, triggerText string) FrictionVector {
+	if strings.TrimSpace(issueID) == "" {
+		return friction
+	}
+	if LooksLikeRework(triggerText) {
+		friction.Rework++
+	}
+	return friction
+}
+
 func (t *FrictionTracker) breakErrorStreak() {
 	t.errorRun = 0
 	t.errorCounted = false

@@ -22,6 +22,8 @@ import (
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/internal/diagnosticlog"
 	"github.com/multica-ai/multica/server/internal/memoryflush"
+	"github.com/multica-ai/multica/server/internal/memoryorigin"
+	"github.com/multica-ai/multica/server/internal/memorysignal"
 	"github.com/multica-ai/multica/server/internal/secretscoped"
 	skillpkg "github.com/multica-ai/multica/server/internal/skill"
 	"github.com/multica-ai/multica/server/internal/turntransport"
@@ -3413,6 +3415,10 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 					})
 					mu.Unlock()
 				case agent.MessageToolResult:
+					d.frictionTrackerForTask(taskID).ObserveToolResult(msg.Output)
+					if memorysignal.LooksLikeActionRejected(msg.Content) {
+						d.frictionTrackerForTask(taskID).ObserveActionRejected()
+					}
 					output := msg.Output
 					if len(output) > 8192 {
 						output = output[:8192]
@@ -3479,7 +3485,11 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 					}
 				case agent.MessageError:
 					taskLog.Error("agent error", "content", msg.Content)
-					d.frictionTrackerForTask(taskID).ObserveError()
+					if memorysignal.LooksLikeActionRejected(msg.Content) {
+						d.frictionTrackerForTask(taskID).ObserveActionRejected()
+					} else {
+						d.frictionTrackerForTask(taskID).ObserveError()
+					}
 					mu.Lock()
 					trajectory.flush(time.Now(), true, emitTrajectory)
 					s := seq.Add(1)
@@ -3614,6 +3624,7 @@ func convertMemoriesForEnv(agent *AgentData) []execenv.MemoryContextForEnv {
 		result = append(result, execenv.MemoryContextForEnv{
 			Name: memory.Name, Content: memory.Content, Scope: memory.Scope,
 			SubjectType: memory.SubjectType, SubjectID: memory.SubjectID,
+			OriginClass: memoryorigin.ClassifyScope(memory.Scope, memory.Name), Injected: true,
 		})
 	}
 	return result

@@ -57,7 +57,6 @@ import { useUpdateAgent } from "../../agents/hooks/use-update-agent";
 import { RolesDialog } from "../../settings/components/roles-dialog";
 import { ConversationSidePanelShell } from "../../common/conversation-side-panel-shell";
 import { ActorStyledName } from "../../common/actor-styled-name";
-import { ProfileField } from "../../common/profile-field";
 import { AgentFilesPanel } from "./agent-files-panel";
 import { useT } from "../../i18n/use-t";
 import { Time } from "../../i18n";

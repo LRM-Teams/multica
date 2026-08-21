@@ -116,6 +116,82 @@ func TestV6DirectorBriefIsBoundedAndPaged(t *testing.T) {
 	}
 }
 
+func TestV6DirectorBriefIncludesAtomicResultFrontier(t *testing.T) {
+	run := newTransactionRecoveryRun(t, "V6 Director Brief atomic frontier")
+	membershipID, workItemID := seedV6RecoveryWorkItem(t, run, "running", time.Now().Add(time.Minute))
+	attemptID := seedV6RecoveryAttempt(t, run, membershipID, workItemID)
+	branchID, resultArtifactID := uuid.NewString(), uuid.NewString()
+	contentHash := "sha256:" + strings.Repeat("a", 64)
+
+	tx, err := run.pool.Begin(run.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(run.ctx)
+	if _, err = tx.Exec(run.ctx, `INSERT INTO research_branch(id,workspace_id,session_id,client_key,objective,status,goal_version,state_version)
+		VALUES($1::uuid,$2::uuid,$3::uuid,$4,'Investigate the source landscape','active',1,1)`, branchID, run.fixture.workspaceID, run.fixture.sessionID, "brief:"+branchID); err != nil {
+		t.Fatal(err)
+	}
+	if err = registerArtifactPassportTx(run.ctx, tx, registerArtifactPassportInput{
+		WorkspaceID: run.fixture.workspaceID, SessionID: run.fixture.sessionID, EntityID: resultArtifactID,
+		Kind: ArtifactKindResultArtifact, ProvenanceCompleteness: ArtifactProvenanceComplete,
+		SchemaVersion: "research-run-v6", ContentHash: contentHash,
+		AccessLevel: ArtifactAccessRaw, HashOrigin: ArtifactHashOriginProduction,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var artifactVersionID string
+	if err = tx.QueryRow(run.ctx, `SELECT id::text FROM research_artifact_version WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND artifact_id=$3::uuid AND version=1`, run.fixture.workspaceID, run.fixture.sessionID, resultArtifactID).Scan(&artifactVersionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(run.ctx, `INSERT INTO research_result_node(workspace_id,session_id,result_artifact_id,artifact_version_id,work_item_attempt_id,
+		catalog_summary,brief_summary,objective,conclusion,content,conclusion_state,integration_state,content_hash)
+		VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,'Source landscape','Ten candidate sources found','Find sources','Candidates found','Result content','accepted','unmatched',$6)`,
+		run.fixture.workspaceID, run.fixture.sessionID, resultArtifactID, artifactVersionID, attemptID, contentHash); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(run.ctx, `INSERT INTO research_node_branch(workspace_id,session_id,node_artifact_version_id,branch_id)
+		VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid)`, run.fixture.workspaceID, run.fixture.sessionID, artifactVersionID, branchID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(run.ctx, `INSERT INTO research_branch_frontier(workspace_id,session_id,branch_id,node_artifact_version_id,tier,added_by_event_sequence)
+		VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,'S',1)`, run.fixture.workspaceID, run.fixture.sessionID, branchID, artifactVersionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(run.ctx, `INSERT INTO research_node_steward_assignment(workspace_id,session_id,node_artifact_version_id,agent_id,membership_id,generation,status,reason)
+		VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,1,'active','accepted_result_owner')`, run.fixture.workspaceID, run.fixture.sessionID, artifactVersionID, run.fixture.agentID, membershipID); err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.Commit(run.ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	frontier, hasMore, err := run.store.loadV6BranchFrontierBrief(run.ctx, run.fixture.workspaceID, run.fixture.sessionID, branchID)
+	if err != nil || hasMore || len(frontier) != 1 {
+		t.Fatalf("frontier=%+v hasMore=%v err=%v", frontier, hasMore, err)
+	}
+	item := frontier[0].(map[string]any)
+	node := item["node"].(map[string]any)
+	if node["kind"] != "result_s" || node["tier"] != "S" || node["id"] != resultArtifactID || node["version_id"] != artifactVersionID {
+		t.Fatalf("atomic frontier node=%+v", node)
+	}
+	if _, legacyRevision := node["revision"]; legacyRevision {
+		t.Fatalf("atomic frontier node contains non-contract revision: %+v", node)
+	}
+
+	_, err = (contextCompilerModule{}).CompileDirectorBrief(DirectorBriefFacts{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+		AssignmentID: uuid.NewString(), DirectorGeneration: 1, StateVersion: 1, ThroughSequence: 1,
+		Goal:          map[string]any{"goal_version": 1, "goal": "Research", "scope": map[string]any{}, "audience": "", "freshness": "", "language": "en", "source_policy": map[string]any{}},
+		DirectorState: "available", Team: []any{map[string]any{"agent_id": run.fixture.agentID, "membership_id": membershipID, "state": "idle", "mission_summary": "Direct"}},
+		Branches:          []any{map[string]any{"branch": map[string]any{"id": branchID, "state_version": 1}, "objective": "Investigate the source landscape", "scope": map[string]any{}, "status": "active", "frontier_nodes": frontier, "has_more": false}},
+		TerminalSummaries: []any{}, WorkItems: []any{}, Discussions: []any{}, Reports: []any{}, UnresolvedDisputes: []any{}, Steering: []any{},
+	}, time.Unix(1, 0))
+	if err != nil {
+		t.Fatalf("compile Director Brief with atomic frontier: %v", err)
+	}
+}
+
 type directorBriefStoreStub struct {
 	acknowledged AcknowledgeV6DirectorBriefInput
 }

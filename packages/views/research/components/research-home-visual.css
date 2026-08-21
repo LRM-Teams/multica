@@ -64,17 +64,17 @@ body:has(.research-home-theme) {
 }
 
 .research-home-theme::-webkit-scrollbar-thumb {
-  border: 3px solid #07111b;
+  border: 3px solid var(--background);
   border-radius: 8px;
-  background: #20384b;
+  background: var(--line);
 }
 
 .research-home-launch {
   min-height: 230px;
   overflow: hidden;
-  border: 1px solid #244052;
+  border: 1px solid var(--line);
   border-radius: 16px;
-  background: linear-gradient(105deg, rgb(13 27 41 / 96%), rgb(8 19 30 / 92%));
+  background: linear-gradient(105deg, var(--surface), var(--background));
 }
 
 .research-home-constellation {
@@ -82,8 +82,8 @@ body:has(.research-home-theme) {
   min-height: 212px;
   overflow: hidden;
   background:
-    radial-gradient(circle at 52% 48%, rgb(88 214 154 / 13%), transparent 30%),
-    radial-gradient(circle at 86% 18%, rgb(72 211 228 / 10%), transparent 22%);
+    radial-gradient(circle at 52% 48%, color-mix(in oklab, var(--success) 13%, transparent), transparent 30%),
+    radial-gradient(circle at 86% 18%, color-mix(in oklab, var(--brand) 10%, transparent), transparent 22%);
 }
 
 .research-home-constellation::after {
@@ -91,32 +91,28 @@ body:has(.research-home-theme) {
   inset: 0;
   content: "";
   pointer-events: none;
-  background-image: radial-gradient(circle, rgb(72 211 228 / 20%) 1px, transparent 1.5px);
+  background-image: radial-gradient(circle, color-mix(in oklab, var(--brand) 20%, transparent) 1px, transparent 1.5px);
   background-size: 24px 24px;
   mask-image: radial-gradient(circle at center, black, transparent 76%);
 }
 
 .research-home-orbit {
   fill: none;
-  stroke: #23506a;
+  stroke: color-mix(in oklab, var(--brand) 28%, transparent);
   stroke-width: 1;
   stroke-dasharray: 3 6;
 }
 
 .research-home-edge {
   fill: none;
-  stroke: #48d3e4;
+  stroke: var(--brand);
   stroke-width: 1.5;
   opacity: 0.78;
 }
 
-.research-home-edge-support {
-  stroke: #58d69a;
-}
-
-.research-home-edge-risk {
-  stroke: #f3bd54;
-  stroke-dasharray: 5 5;
+.research-home-edge-muted {
+  stroke: var(--line);
+  opacity: 0.9;
 }
 
 .research-home-node {
@@ -124,47 +120,58 @@ body:has(.research-home-theme) {
   z-index: 2;
   display: grid;
   place-items: center;
-  border: 1px solid #32657b;
+  border: 1px solid color-mix(in oklab, var(--brand) 32%, var(--line));
   border-radius: 999px;
-  color: #dcecf4;
+  color: var(--ink);
   text-align: center;
-  background: radial-gradient(circle at 50% 35%, #163145, #0b1925 72%);
+  background: radial-gradient(circle at 50% 35%, var(--surface-raised), var(--background) 72%);
   overflow: hidden;
 }
 
 .research-home-node-main {
   left: 50%;
-  top: 50%;
+  top: 45%;
   width: 104px;
   height: 104px;
-  border-color: #48a77b;
-  background: radial-gradient(circle at 50% 35%, #1c4936, #0e211a 70%);
-  box-shadow: 0 0 0 10px rgb(88 214 154 / 5%), 0 0 42px rgb(88 214 154 / 16%);
+  border-color: color-mix(in oklab, var(--success) 62%, var(--line));
+  background: radial-gradient(circle at 50% 35%, color-mix(in oklab, var(--success) 18%, var(--surface)), var(--background) 70%);
+  box-shadow:
+    0 0 0 10px color-mix(in oklab, var(--success) 5%, transparent),
+    0 0 42px color-mix(in oklab, var(--success) 16%, transparent);
   transform: translate(-50%, -50%);
 }
 
-.research-home-node-a { left: 10%; top: 15%; width: 66px; height: 66px; }
-.research-home-node-b { right: 10%; top: 12%; width: 70px; height: 70px; border-color: #7b68c5; }
-.research-home-node-c { right: 11%; bottom: 10%; width: 64px; height: 64px; border-color: #4c9f78; }
-.research-home-node-d { left: 11%; bottom: 10%; width: 62px; height: 62px; border-color: #a87d3d; }
+.research-home-node-sat {
+  width: 64px;
+  height: 64px;
+  transform: translate(-50%, -50%);
+}
+
+.research-home-constellation-stats {
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  z-index: 3;
+  display: flex;
+  gap: 16px;
+  justify-content: center;
+  padding: 7px 16px;
+  border-top: 1px solid color-mix(in oklab, var(--line) 60%, transparent);
+  background: color-mix(in oklab, var(--background) 55%, transparent);
+}
 
 @media (max-width: 1023px) {
   .research-home-launch {
     min-height: 0;
     grid-template-columns: minmax(0, 1fr);
   }
-  .research-home-constellation { min-height: 210px; border-top: 1px solid #244052; }
+  .research-home-constellation { min-height: 210px; border-top: 1px solid var(--line); }
 }
 
 @media (max-width: 639px) {
   .research-home-header-status { display: none !important; }
   .research-home-constellation { min-height: 150px; }
   .research-home-launch > * { min-width: 0; }
-  .research-home-node-main { width: 82px; height: 82px; }
-  .research-home-node-a,
-  .research-home-node-b,
-  .research-home-node-c,
-  .research-home-node-d { width: 52px; height: 52px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

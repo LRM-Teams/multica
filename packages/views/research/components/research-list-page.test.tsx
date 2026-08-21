@@ -212,14 +212,19 @@ describe("ResearchListPage one-time return restoration", () => {
 });
 
 describe("ResearchListPage list states (LRM-789)", () => {
-  it("includes the selected Director when creating a V6 run", () => {
+  it("defaults to a V6 Director lead and submits with it selected", () => {
     const mutate = vi.fn();
     mutationRef.current = { ...mutationRef.current, mutate };
     render(<ResearchListPage />);
 
-    const directorControls = screen.getAllByLabelText(enResearch.d5.rail.director_role);
-    expect(directorControls[0]).toHaveValue("research-run-v6");
-    expect(directorControls[1]).toHaveValue("director-1");
+    // Critique 2026-08-21 P0: one behavior-named lead control inside the
+    // composer footer; the raw orchestrator-version select is gone.
+    const lead = screen.getByTestId("research-create-lead");
+    expect(lead).toHaveTextContent("Director One");
+    expect(screen.queryByTestId("research-create-director-options")).toBeNull();
+    expect(screen.queryByText("research-run-v5")).toBeNull();
+    expect(screen.queryByText("research-run-v6")).toBeNull();
+
     fireEvent.change(screen.getByPlaceholderText(enResearch.goal_placeholder), {
       target: { value: "Compare collaboration modes" },
     });

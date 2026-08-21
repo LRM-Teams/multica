@@ -287,6 +287,16 @@ func compileV6WorkManifestTx(ctx context.Context, tx pgx.Tx, workspaceID, runID,
 		manifestMap["catalog_access"] = map[string]any{"same_tier": tier, "higher_candidate_branch_ids": branchIDs, "include_higher_candidates": true, "through_event_sequence": throughSequence, "page_size": 128}
 	}
 	if taskSchema != nil {
+		if expectedSchema == string(V6ContractAtomicResultSubmission) {
+			var payloadSchemaID string
+			if err = tx.QueryRow(ctx, `SELECT payload_schema_id FROM research_work_item WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid`, workspaceID, runID, workItemID).Scan(&payloadSchemaID); err != nil {
+				return nil, "", err
+			}
+			if payloadSchemaID == "" {
+				return nil, "", ErrInvalidContract
+			}
+			taskSchema = map[string]any{"payload_schemas": map[string]any{payloadSchemaID: taskSchema}}
+		}
 		manifestMap["task_specific_schema"] = taskSchema
 	}
 	canonical, err := marshalV6CanonicalJSON(manifestMap)

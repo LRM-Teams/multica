@@ -122,8 +122,12 @@ multica research work-catalog-ack <session-id> <work-item-id> <attempt-id> \
 
 An `atomic_result_submission` must copy the Manifest's `task_id` as well as its
 Work/Attempt/Agent identity. The server creates that one-to-one Task provenance
-record before dispatch. Its `content_hash` is SHA-256 over RFC 8785 JCS bytes
-after removing only `content_hash`; do not hash pretty-printed file bytes.
+record before dispatch. Copy the exact single key under
+`manifest.task_specific_schema.payload_schemas` into the submission's
+`task_specific_schema`; never invent or rename a `research.*` schema ID. Keep
+`content_layers.catalog_summary` at 512 characters or fewer. Its `content_hash`
+is SHA-256 over RFC 8785 JCS bytes after removing only `content_hash`; do not
+hash pretty-printed file bytes.
 
 Report work uploads each immutable resource before the package submission:
 

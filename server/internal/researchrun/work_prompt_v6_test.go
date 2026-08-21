@@ -76,6 +76,9 @@ func TestBuildV6WorkDispatchPromptBindsAtomicTaskIdentity(t *testing.T) {
 	manifest := validV6DispatchPromptManifest(t, map[string]any{
 		"expected_result_schema": string(V6ContractAtomicResultSubmission),
 		"task_id":                "00000000-0000-4000-8000-000000000214",
+		"task_specific_schema": map[string]any{"payload_schemas": map[string]any{
+			"research.finding.v1": map[string]any{"type": "object"},
+		}},
 	})
 	prompt, err := BuildV6WorkDispatchPrompt(manifest)
 	if err != nil {
@@ -85,6 +88,8 @@ func TestBuildV6WorkDispatchPromptBindsAtomicTaskIdentity(t *testing.T) {
 		`"contract_kind": "atomic_result_submission"`,
 		`"task_id": "00000000-0000-4000-8000-000000000214"`,
 		`"agent_id": "00000000-0000-4000-8000-000000000009"`,
+		`"task_specific_schema": "research.finding.v1"`,
+		"catalog_summary` at 512 characters or fewer",
 		"RFC 8785 JCS",
 		"successful Agent handoff",
 		"no validation-only or dry-run mode",
@@ -126,12 +131,18 @@ func TestAtomicV6WorkManifestGetsOneBackingTaskAndFrozenMission(t *testing.T) {
 	var identity struct {
 		TaskID        string `json:"task_id"`
 		MissionPrompt string `json:"mission_prompt"`
+		TaskSchema    struct {
+			PayloadSchemas map[string]json.RawMessage `json:"payload_schemas"`
+		} `json:"task_specific_schema"`
 	}
 	if err = json.Unmarshal(manifest, &identity); err != nil {
 		t.Fatal(err)
 	}
 	if identity.TaskID != taskID || identity.MissionPrompt != "Inspect the assigned production boundary." {
 		t.Fatalf("manifest task=%q mission=%q", identity.TaskID, identity.MissionPrompt)
+	}
+	if len(identity.TaskSchema.PayloadSchemas["research.finding.v1"]) == 0 {
+		t.Fatalf("manifest task schema registry=%v", identity.TaskSchema.PayloadSchemas)
 	}
 	var count int
 	if err = run.pool.QueryRow(run.ctx, `SELECT count(*)::int FROM research_task WHERE work_item_id=$1::uuid`, workItemID).Scan(&count); err != nil {

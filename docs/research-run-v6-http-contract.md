@@ -163,6 +163,11 @@ sends merge, stop, replan or tier commands.
 Returns one strict `work_manifest` envelope. `ETag` is the Manifest hash. The
 server returns 409 if the Attempt is no longer executable and 403 if the current
 task credential is not bound to it. A successful retry returns identical bytes.
+For atomic Work, `task_specific_schema.payload_schemas` contains the exact single
+`payload_schema_id` key and its frozen validator. The Agent copies that key
+verbatim into `atomic_result_submission.task_specific_schema`; it never invents
+or renames the schema ID. A mismatch is rejected with the authorized ID named in
+the bounded validation error.
 
 ### 4.2 Review a paged Director Brief
 

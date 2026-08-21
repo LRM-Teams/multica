@@ -116,7 +116,8 @@ func registerTestRunnerInbox(t *testing.T, runner *WorkspaceRunner, key InboxKey
 			t.Fatalf("register test APM launch: %v", err)
 		}
 		if runner.residency != nil {
-			runner.residency.rememberLaunch(key.AgentID, runtimeID, "test-launch-"+key.AgentID, "test-launch-"+key.AgentID+"-dispatch")
+			startStopEpoch, _ := runner.processes.startStopEpoch(agentProcessCallback{AgentID: key.AgentID, LaunchID: "test-launch-" + key.AgentID})
+			runner.residency.rememberLaunch(key.AgentID, runtimeID, "test-launch-"+key.AgentID, "test-launch-"+key.AgentID+"-dispatch", startStopEpoch)
 		}
 	}
 }

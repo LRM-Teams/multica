@@ -216,12 +216,6 @@ func (runner *WorkspaceRunner) stopManagedAgent(ctx context.Context, payload pro
 			}
 		}
 	}
-	// Provider startup may have recorded a terminal residency after the stop
-	// first cleared it. Re-clear only after startup and provider quiescence so a
-	// late failure cannot survive the stop epoch.
-	if runner.residency != nil {
-		runner.residency.clear(payload.AgentID)
-	}
 	if found {
 		runner.processes.completeManagedStop(callback)
 	}

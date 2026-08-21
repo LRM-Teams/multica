@@ -266,7 +266,7 @@ func (d *Daemon) ensureResidentProviderProcess(ctx context.Context, agentID, run
 		startErr := fmt.Errorf("start resident provider process: %w", err)
 		cleanupErr := d.canonicalRuntimes.invalidateSession(agentID, runtimeID)
 		if errors.Is(cleanupErr, ErrCanonicalAgentRuntimeBusy) {
-			cleanupErr = d.canonicalRuntimes.forceInvalidateSession(agentID, runtimeID)
+			cleanupErr = d.canonicalRuntimes.beginResidentTermination(agentID, runtimeID)
 		}
 		if d.turnScopeMemory != nil {
 			d.turnScopeMemory.clearResident(agentID, runtimeID)

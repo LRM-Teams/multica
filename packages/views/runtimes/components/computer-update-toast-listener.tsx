@@ -11,7 +11,10 @@ import {
   computerUpdateCandidatesFingerprint,
   computerUpdateToastContentKey,
   computerUpdateToastId,
+  computerUpgradeVersionsFingerprint,
+  computerVersionsMatch,
   dismissComputerUpdate,
+  findComputerUpgradeRuntime,
   isComputerUpdateDismissed,
   listComputerUpdateCandidates,
   useAllComputerUpgrades,
@@ -119,6 +122,10 @@ export function ComputerUpdateToastListener() {
     () => computerUpdateCandidatesFingerprint(candidates),
     [candidates],
   );
+  const upgradeVersionsFingerprint = useMemo(
+    () => computerUpgradeVersionsFingerprint(runtimes, upgrades),
+    [runtimes, upgrades],
+  );
 
   const copy = useMemo<ToastCopy>(
     () => ({
@@ -153,6 +160,37 @@ export function ComputerUpdateToastListener() {
   );
   const copyRef = useRef(copy);
   copyRef.current = copy;
+
+  /**
+   * Success is the one toast with a finite duration, so it must leave the
+   * sticky bookkeeping behind: `syncToasts` sweeps every published id that its
+   * next pass no longer produces, and the pass right after a finished upgrade
+   * produces nothing. Forgetting the id here is what lets the toast live out
+   * its 4s instead of being dismissed a frame later.
+   */
+  const publishSuccessToast = useCallback(
+    (machineKey: string, title: string, versionLine: string) => {
+      const toastId = computerUpdateToastId(machineKey);
+      publishedContentRef.current?.delete(toastId);
+      const c = copyRef.current;
+      toast.custom(
+        (id) => (
+          <ComputerUpdateToast
+            phase="success"
+            title={title}
+            versionLine={versionLine}
+            updateLabel={c.update}
+            laterLabel={c.later}
+            retryLabel={c.retry}
+            dismissLabel={c.dismiss}
+            onDismiss={() => toast.dismiss(id)}
+          />
+        ),
+        { ...computerUpdateSuccessToastOptions, id: toastId },
+      );
+    },
+    [],
+  );
 
   const syncToasts = useCallback(
     (
@@ -264,37 +302,28 @@ export function ComputerUpdateToastListener() {
                         toast.dismiss(id);
                       }
                     }
-                  : phase === "success"
-                    ? () => toast.dismiss(id)
-                    : undefined
+                  : undefined
               }
             />
           ),
-          {
-            ...computerUpdateToastOptions,
-            id: toastId,
-            duration:
-              phase === "success"
-                ? computerUpdateSuccessToastOptions.duration
-                : Infinity,
-          },
+          // Sticky by construction — success is published by
+          // publishSuccessToast, the only computer-update toast that expires.
+          { ...computerUpdateToastOptions, id: toastId },
         );
       };
 
       for (const upgrade of Object.values(currentUpgrades)) {
         if (upgrade.phase === "pending" || upgrade.phase === "running") {
-          const runtime = runtimesRef.current?.find(
-            (r) =>
-              (r.daemon_id && r.daemon_id === upgrade.daemonId) ||
-              r.id === upgrade.runtimeId ||
-              r.name === upgrade.machineKey,
+          const runtime = findComputerUpgradeRuntime(
+            runtimesRef.current,
+            upgrade,
           );
           const reachedTarget =
             runtime &&
-            upgrade.targetVersion &&
-            (runtime.current_version === upgrade.targetVersion ||
-              `v${runtime.current_version}` === upgrade.targetVersion ||
-              runtime.current_version === upgrade.targetVersion.replace(/^v/, ""));
+            computerVersionsMatch(
+              runtime.current_version,
+              upgrade.targetVersion,
+            );
 
           if (reachedTarget) {
             useComputerUpgradeStore.getState().recordDone({
@@ -303,10 +332,11 @@ export function ComputerUpdateToastListener() {
               newVersion: runtime.current_version ?? undefined,
             });
             const machineKey = upgrade.machineKey || upgrade.daemonId;
-            upsertToast(machineKey, "success", {
-              title: c.successTitle(upgrade.machineTitle || upgrade.daemonId),
-              versionLine: c.successBody(upgrade.targetVersion),
-            });
+            publishSuccessToast(
+              machineKey,
+              c.successTitle(upgrade.machineTitle || upgrade.daemonId),
+              c.successBody(upgrade.targetVersion),
+            );
             if (storage && wsId && upgrade.targetVersion) {
               dismissComputerUpdate(
                 storage,
@@ -367,7 +397,7 @@ export function ComputerUpdateToastListener() {
       }
       publishedContentRef.current = nextPublished;
     },
-    [userId, wsId],
+    [publishSuccessToast, userId, wsId],
   );
 
   const candidatesRef = useRef(candidates);
@@ -454,23 +484,14 @@ export function ComputerUpdateToastListener() {
       if (storage && wsId && upgrade?.machineKey && upgrade?.targetVersion) {
         dismissComputerUpdate(storage, wsId, upgrade.machineKey, upgrade.targetVersion);
       }
-      const machineKey = upgrade?.machineKey || payload.computer_id;
-      const toastId = computerUpdateToastId(machineKey);
-      publishedContentRef.current?.delete(toastId);
-      toast.custom(
-        (id) => (
-          <ComputerUpdateToast
-            phase="success"
-            title={copyRef.current.successTitle(upgrade?.machineTitle || payload.computer_id)}
-            versionLine={copyRef.current.successBody(upgrade?.targetVersion || payload.newVersion || "")}
-            updateLabel={copyRef.current.update}
-            laterLabel={copyRef.current.later}
-            retryLabel={copyRef.current.retry}
-            dismissLabel={copyRef.current.dismiss}
-            onDismiss={() => toast.dismiss(id)}
-          />
+      publishSuccessToast(
+        upgrade?.machineKey || payload.computer_id,
+        copyRef.current.successTitle(
+          upgrade?.machineTitle || payload.computer_id,
         ),
-        { ...computerUpdateSuccessToastOptions, id: toastId },
+        copyRef.current.successBody(
+          upgrade?.targetVersion || payload.newVersion || "",
+        ),
       );
       qc.invalidateQueries({
         predicate: (query) => query.queryKey[0] === "runtimes",
@@ -478,11 +499,21 @@ export function ComputerUpdateToastListener() {
     }
   });
 
-  // Only re-sync when eligibility fingerprint, locale copy, or active upgrades change —
-  // not on every runtime-list array identity churn.
+  // Only re-sync when eligibility fingerprint, locale copy, active upgrades, or
+  // the version an upgrading machine reports change — not on every runtime-list
+  // array identity churn. The version fingerprint is what retires a sticky
+  // "Updating…" toast: a restarted daemon sends no `computer:upgrade:done` and
+  // has already left the candidate list, so its re-registration on the target
+  // version moves no other dependency here.
   useEffect(() => {
     syncToasts(candidatesRef.current, upgrades);
-  }, [candidatesFingerprint, copy, syncToasts, upgrades]);
+  }, [
+    candidatesFingerprint,
+    copy,
+    syncToasts,
+    upgradeVersionsFingerprint,
+    upgrades,
+  ]);
 
   return null;
 }

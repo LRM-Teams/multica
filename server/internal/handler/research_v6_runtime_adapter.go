@@ -15,8 +15,8 @@ import (
 
 type researchV6AgentLifecycleAdapter struct{ handler *Handler }
 
-func (a *researchV6AgentLifecycleAdapter) CreateAgent(ctx context.Context, workspaceID, idempotencyKey string, spec researchrun.V6AgentSpec) (string, error) {
-	if a == nil || a.handler == nil || a.handler.TxStarter == nil || strings.TrimSpace(idempotencyKey) == "" {
+func (a *researchV6AgentLifecycleAdapter) CreateAgent(ctx context.Context, workspaceID, runID, idempotencyKey string, spec researchrun.V6AgentSpec) (string, error) {
+	if a == nil || a.handler == nil || a.handler.TxStarter == nil || strings.TrimSpace(idempotencyKey) == "" || strings.TrimSpace(runID) == "" {
 		return "", researchrun.ErrV6DirectorUnavailable
 	}
 	tx, err := a.handler.TxStarter.Begin(ctx)
@@ -24,16 +24,18 @@ func (a *researchV6AgentLifecycleAdapter) CreateAgent(ctx context.Context, works
 		return "", err
 	}
 	defer tx.Rollback(ctx)
-	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "research-v6-agent:"+workspaceID+":"+idempotencyKey); err != nil {
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "research-v6-agent:"+workspaceID+":"+runID+":"+idempotencyKey); err != nil {
 		return "", err
 	}
 	var existing string
-	if err = tx.QueryRow(ctx, `SELECT resource_id::text FROM research_v6_runtime_effect WHERE workspace_id=$1::uuid AND effect_kind='create_agent' AND idempotency_key=$2`, workspaceID, idempotencyKey).Scan(&existing); err == nil {
+	if err = tx.QueryRow(ctx, `SELECT resource_id::text FROM research_v6_runtime_effect WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND effect_kind='create_agent' AND idempotency_key=$3`, workspaceID, runID, idempotencyKey).Scan(&existing); err == nil {
 		return existing, tx.Commit(ctx)
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		return "", err
 	}
-	sum := sha256.Sum256([]byte(idempotencyKey))
+	// The internal agent name must also be run-scoped: two runs reusing the
+	// same director key would otherwise collide on the same derived name.
+	sum := sha256.Sum256([]byte(runID + ":" + idempotencyKey))
 	name := "ronaldo-" + hex.EncodeToString(sum[:])[:20]
 	displayName := strings.TrimSpace(spec.Name)
 	if displayName == "" {
@@ -60,7 +62,7 @@ func (a *researchV6AgentLifecycleAdapter) CreateAgent(ctx context.Context, works
 	if err != nil {
 		return "", fmt.Errorf("create V6 agent: %w", err)
 	}
-	if _, err = tx.Exec(ctx, `INSERT INTO research_v6_runtime_effect(workspace_id,effect_kind,idempotency_key,resource_id) VALUES($1::uuid,'create_agent',$2,$3::uuid)`, workspaceID, idempotencyKey, agentID); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO research_v6_runtime_effect(workspace_id,session_id,effect_kind,idempotency_key,resource_id) VALUES($1::uuid,$2::uuid,'create_agent',$3,$4::uuid)`, workspaceID, runID, idempotencyKey, agentID); err != nil {
 		return "", err
 	}
 	return agentID, tx.Commit(ctx)

@@ -79,7 +79,7 @@ type agentLifecycleStub struct {
 	createCalls int
 }
 
-func (s *agentLifecycleStub) CreateAgent(context.Context, string, string, V6AgentSpec) (string, error) {
+func (s *agentLifecycleStub) CreateAgent(context.Context, string, string, string, V6AgentSpec) (string, error) {
 	s.createCalls++
 	return "agent-1", nil
 }

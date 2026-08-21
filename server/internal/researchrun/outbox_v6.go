@@ -95,7 +95,7 @@ func (m v6RuntimeModule) deliverOne(ctx context.Context, intent V6OutboxIntent, 
 		if err := json.Unmarshal(intent.Payload, &payload); err != nil {
 			return nil, false, fmt.Errorf("%w: create agent intent", ErrInvalidContract)
 		}
-		agentID, err := m.agents.CreateAgent(ctx, intent.WorkspaceID, intent.IdempotencyKey, payload.Spec)
+		agentID, err := m.agents.CreateAgent(ctx, intent.WorkspaceID, intent.RunID, intent.IdempotencyKey, payload.Spec)
 		if err != nil {
 			return nil, false, err
 		}

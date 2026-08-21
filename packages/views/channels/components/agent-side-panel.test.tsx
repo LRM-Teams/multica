@@ -393,7 +393,6 @@ function makeAgent(ownerId = "user-owner"): Agent {
     runtime_config: {},
     custom_args: [],
     status: "idle",
-    max_concurrent_tasks: 1,
     model: "",
     owner_id: ownerId,
     skills: [],
@@ -478,8 +477,9 @@ describe("AgentSidePanel", () => {
     renderPanel();
     const runtimeSection = screen.getByTestId("agent-profile-runtime-config");
     expect(within(runtimeSection).getByText("Computer")).toBeInTheDocument();
-    expect(within(runtimeSection).getByText("Connected")).toBeInTheDocument();
     expect(within(runtimeSection).getByText("s144")).toBeInTheDocument();
+    // Online: the dot carries the state visually, the text is screen-reader only.
+    expect(within(runtimeSection).getByText("Connected")).toHaveClass("sr-only");
   });
 
   it("shows disconnected when the Computer has no live runner socket (#28)", () => {
@@ -489,7 +489,8 @@ describe("AgentSidePanel", () => {
     };
     renderPanel();
     const runtimeSection = screen.getByTestId("agent-profile-runtime-config");
-    expect(within(runtimeSection).getByText("Disconnected")).toBeInTheDocument();
+    // Grey dot carries it visually; the word exists only for screen readers.
+    expect(within(runtimeSection).getByText("Disconnected")).toHaveClass("sr-only");
     expect(within(runtimeSection).getByText("s144")).toBeInTheDocument();
   });
 

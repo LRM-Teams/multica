@@ -44,10 +44,11 @@ import { AgentActivityStatus } from "../../agents/components/agent-activity-list
 import { ActivityTab } from "../../agents/components/tabs/activity-tab";
 import { RemindersTab } from "../../agents/components/tabs/reminders-tab";
 import { AgentProfileAvatarEditor } from "../../agents/components/agent-profile-avatar-editor";
-import { ModelPicker } from "../../agents/components/inspector/model-picker";
-import { RuntimePicker } from "../../agents/components/inspector/runtime-picker";
-import { ComputerInfoRow } from "../../agents/components/inspector/computer-info-row";
-import { ThinkingPropRow } from "../../agents/components/inspector/thinking-prop-row";
+import {
+  InspectorField,
+  InspectorSectionHeading,
+} from "../../agents/components/inspector/inspector-field";
+import { RuntimeConfigBlock } from "../../agents/components/inspector/runtime-config-block";
 import { RuntimeConfigDialog } from "../../agents/components/runtime-config-dialog";
 import { MemoryGrowthField } from "../../agents/components/memory-growth-field";
 import { AgentProfileActions } from "../../agents/components/agent-profile-actions";
@@ -432,7 +433,7 @@ function AgentProfileTabContent({
   return (
     <div className="flex min-w-0 flex-col" data-testid="agent-profile-tab-content">
       <div className="space-y-4 p-3 md:p-4">
-        <ProfileField label={t(($) => $.side_panel.display_name_label)}>
+        <InspectorField label={t(($) => $.side_panel.display_name_label)}>
           {canEditIdentity ? (
             <InlineFieldEditor
               value={displayName}
@@ -449,9 +450,9 @@ function AgentProfileTabContent({
           ) : (
             <p className="text-[13px] leading-5">{displayName}</p>
           )}
-        </ProfileField>
+        </InspectorField>
 
-        <ProfileField label={t(($) => $.side_panel.description_label)}>
+        <InspectorField label={t(($) => $.side_panel.description_label)}>
           {canEditIdentity ? (
             <InlineFieldEditor
               value={agent.description ?? ""}
@@ -469,12 +470,12 @@ function AgentProfileTabContent({
               {agent.description || t(($) => $.side_panel.no_description)}
             </p>
           )}
-        </ProfileField>
+        </InspectorField>
 
         <div className="border-t border-border pt-3">
-          <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-            {t(($) => $.side_panel.info_section)}
-          </h3>
+          <div className="mb-2">
+            <InspectorSectionHeading label={t(($) => $.side_panel.info_section)} />
+          </div>
           <div className="grid grid-cols-[100px_minmax(0,1fr)] gap-x-3 gap-y-2 text-[13px]">
             <span className="pt-0.5 text-muted-foreground">
               {t(($) => $.profile_card.role_label)}
@@ -613,9 +614,11 @@ function AgentProfileSkills({
       aria-label={t(($) => $.side_panel.skills_section)}
       data-testid="agent-profile-skills"
     >
-      <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-        {t(($) => $.side_panel.skills_section)} ({globalSkills.length + workspaceSkills.length})
-      </h3>
+      <div className="mb-3">
+        <InspectorSectionHeading
+          label={`${t(($) => $.side_panel.skills_section)} (${globalSkills.length + workspaceSkills.length})`}
+        />
+      </div>
       <SkillScopeList
         title={t(($) => $.side_panel.global_skills)}
         emptyLabel={t(($) => $.side_panel.no_global_skills)}
@@ -699,46 +702,15 @@ function RuntimeConfigSummary({
   members: readonly MemberWithUser[];
   currentUserId: string | null;
 }) {
-  const { t } = useT("agents");
   return (
-    <>
-      <div className="grid grid-cols-[100px_minmax(0,1fr)] gap-x-3 gap-y-2 text-[13px]">
-        <span className="pt-0.5 text-muted-foreground">
-          {t(($) => $.inspector.prop_computer)}
-        </span>
-        <ComputerInfoRow computer={runtimeConfig?.computer ?? null} />
-        <span className="pt-0.5 text-muted-foreground">
-          {t(($) => $.inspector.prop_runtime)}
-        </span>
-        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-          <RuntimePicker
-            value={agent.runtime_id}
-            runtimes={runtimes}
-            members={[...members]}
-            currentUserId={currentUserId}
-            canEdit={false}
-            wsId={agent.workspace_id}
-            selectedProvider={runtimeConfig?.runtime?.provider ?? null}
-            onChange={() => {}}
-          />
-          <ModelPicker
-            runtimeId={agent.runtime_id}
-            value={runtimeConfig?.model ?? agent.model ?? ""}
-            canEdit={false}
-            onChange={() => {}}
-          />
-        </div>
-      </div>
-      <div className="mt-2 grid min-w-0 grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
-        <ThinkingPropRow
-          runtimeId={agent.runtime_id}
-          model={runtimeConfig?.model ?? agent.model ?? ""}
-          value={runtimeConfig?.thinking ?? agent.thinking_level ?? ""}
-          canEdit={false}
-          onChange={() => {}}
-        />
-      </div>
-    </>
+    <RuntimeConfigBlock
+      agent={agent}
+      runtimeConfig={runtimeConfig}
+      runtimes={runtimes}
+      members={members}
+      currentUserId={currentUserId}
+      wsId={agent.workspace_id}
+    />
   );
 }
 

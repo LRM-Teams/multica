@@ -51,7 +51,7 @@ func (s *PostgresStore) LoadDirectorBriefFacts(ctx context.Context, in StartV6Di
 			rows.Close()
 			return DirectorBriefFacts{}, err
 		}
-		item := map[string]any{"agent_id": agentID, "membership_id": membershipID, "state": state, "mission_summary": mission, "steward_node_count": stewardCount}
+		item := map[string]any{"agent_id": agentID, "membership_id": membershipID, "state": state, "mission_summary": truncateV6BriefText(mission, 512), "steward_node_count": stewardCount}
 		if activeWork != "" {
 			item["active_work_item_id"] = activeWork
 		}
@@ -306,10 +306,11 @@ func directorBriefControlState(state string) string {
 
 func truncateV6BriefText(value string, limit int) string {
 	value = strings.TrimSpace(value)
-	if len(value) <= limit {
+	runes := []rune(value)
+	if len(runes) <= limit {
 		return value
 	}
-	return value[:limit]
+	return string(runes[:limit])
 }
 
 func jsonObjectOrEmpty(raw json.RawMessage) any {

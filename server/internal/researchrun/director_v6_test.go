@@ -91,6 +91,40 @@ func TestV6DirectorBriefIsBoundedAndPaged(t *testing.T) {
 	}
 }
 
+func TestV6DirectorBriefBoundsTeamMissionSummary(t *testing.T) {
+	run := newTransactionRecoveryRun(t, "Bound V6 team mission summary")
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_session SET orchestrator_version='research-run-v6' WHERE id=$1::uuid`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.store.AssignV6Director(run.ctx, AssignV6DirectorInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+		AgentID: run.fixture.agentID, UserID: run.fixture.userID,
+		Reason: "Compile a bounded team summary", ClientRequestID: uuid.NewString(), ExpectedStateVersion: 0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	longMission := strings.Repeat("研究", 300)
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_team_membership SET mission_prompt=$2 WHERE session_id=$1::uuid`, run.fixture.sessionID, longMission); err != nil {
+		t.Fatal(err)
+	}
+	facts, err := run.store.LoadDirectorBriefFacts(run.ctx, StartV6DirectorCycleInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID, ExpectedStateVersion: 0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(facts.Team) != 1 {
+		t.Fatalf("team members=%d, want 1", len(facts.Team))
+	}
+	mission, ok := facts.Team[0].(map[string]any)["mission_summary"].(string)
+	if !ok || len([]rune(mission)) != 512 {
+		t.Fatalf("mission summary rune count=%d, want 512", len([]rune(mission)))
+	}
+	if _, err = (contextCompilerModule{}).CompileDirectorBrief(facts, time.Unix(1, 0)); err != nil {
+		t.Fatalf("compile Director Brief with bounded team mission: %v", err)
+	}
+}
+
 func TestV6DirectorBriefIncludesAtomicResultFrontier(t *testing.T) {
 	run := newTransactionRecoveryRun(t, "V6 Director Brief atomic frontier")
 	membershipID, workItemID := seedV6RecoveryWorkItem(t, run, "running", time.Now().Add(time.Minute))

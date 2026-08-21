@@ -248,18 +248,17 @@ WHERE id = $1`, agentID, customEnv, parseUUID(work.RuntimeID), work.SystemPrompt
 		return agentID, nil
 	}
 	agent, err := e.h.Queries.CreateAgent(ctx, db.CreateAgentParams{
-		WorkspaceID:        parseUUID(work.WorkspaceID),
-		Name:               name,
-		DisplayName:        "Diagnosis " + work.RunID,
-		Description:        "Per-run sandboxed diagnosis agent (spec 005); reclaimed with its sandbox.",
-		RuntimeMode:        "local",
-		RuntimeConfig:      []byte("{}"),
-		RuntimeID:          parseUUID(work.RuntimeID),
-		MaxConcurrentTasks: 1,
-		OwnerID:            parseUUID(work.ActorUserID),
-		Instructions:       work.SystemPrompt,
-		CustomEnv:          customEnv,
-		Model:              pgtype.Text{String: work.Model, Valid: work.Model != ""},
+		WorkspaceID:   parseUUID(work.WorkspaceID),
+		Name:          name,
+		DisplayName:   "Diagnosis " + work.RunID,
+		Description:   "Per-run sandboxed diagnosis agent (spec 005); reclaimed with its sandbox.",
+		RuntimeMode:   "local",
+		RuntimeConfig: []byte("{}"),
+		RuntimeID:     parseUUID(work.RuntimeID),
+		OwnerID:       parseUUID(work.ActorUserID),
+		Instructions:  work.SystemPrompt,
+		CustomEnv:     customEnv,
+		Model:         pgtype.Text{String: work.Model, Valid: work.Model != ""},
 	})
 	if err != nil {
 		return pgtype.UUID{}, fmt.Errorf("create diagnosis agent: %w", err)

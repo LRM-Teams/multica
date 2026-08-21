@@ -304,7 +304,7 @@ func (h *Handler) provisionOnboardingAgent(ctx context.Context, workspaceID, cre
 		WorkspaceID: workspaceID, Description: windyDescription, Instructions: windyInstructions,
 		AvatarUrl: pgtype.Text{String: windyAvatarURL, Valid: true}, AvatarSource: agentAvatarSourceAssigned,
 		RuntimeMode: runtime.RuntimeMode, RuntimeConfig: []byte("{}"), RuntimeID: runtime.ID,
-		MaxConcurrentTasks: 6, OwnerID: creatorID, CustomEnv: []byte("{}"), CustomArgs: []byte("[]"),
+		OwnerID: creatorID, CustomEnv: []byte("{}"), CustomArgs: []byte("[]"),
 		Model: pgtype.Text{String: model, Valid: true}, ThinkingLevel: thinking,
 	}, windyAgentName)
 	if err != nil {

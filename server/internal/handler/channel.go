@@ -6133,7 +6133,7 @@ func (h *Handler) channelMentionedAgents(ctx context.Context, workspaceID, chann
 	}
 	rows, err := h.DB.Query(ctx, `
 		SELECT a.id, a.workspace_id, a.name, a.avatar_url, a.runtime_mode, a.runtime_config, a.status,
-		       a.max_concurrent_tasks, a.owner_id, a.created_at, a.updated_at, a.description, a.runtime_id,
+		       a.owner_id, a.created_at, a.updated_at, a.description, a.runtime_id,
 		       a.instructions, a.archived_at, a.display_name, a.model, a.thinking_level
 		FROM channel_member cm
 		JOIN agent a ON cm.member_type = 'agent' AND a.id = cm.member_id
@@ -6145,7 +6145,7 @@ func (h *Handler) channelMentionedAgents(ctx context.Context, workspaceID, chann
 	var out []db.Agent
 	for rows.Next() {
 		var a db.Agent
-		if err := rows.Scan(&a.ID, &a.WorkspaceID, &a.Name, &a.AvatarUrl, &a.RuntimeMode, &a.RuntimeConfig, &a.Status, &a.MaxConcurrentTasks, &a.OwnerID, &a.CreatedAt, &a.UpdatedAt, &a.Description, &a.RuntimeID, &a.Instructions, &a.ArchivedAt, &a.DisplayName, &a.Model, &a.ThinkingLevel); err != nil {
+		if err := rows.Scan(&a.ID, &a.WorkspaceID, &a.Name, &a.AvatarUrl, &a.RuntimeMode, &a.RuntimeConfig, &a.Status, &a.OwnerID, &a.CreatedAt, &a.UpdatedAt, &a.Description, &a.RuntimeID, &a.Instructions, &a.ArchivedAt, &a.DisplayName, &a.Model, &a.ThinkingLevel); err != nil {
 			continue
 		}
 		_, mentionedByID := mentionedAgents[uuidToString(a.ID)]
@@ -6160,7 +6160,7 @@ func (h *Handler) channelMentionedAgents(ctx context.Context, workspaceID, chann
 func (h *Handler) channelThreadFollowerAgents(ctx context.Context, workspaceID, channelID, rootMessageID string) []db.Agent {
 	return h.channelThreadAgentsFromQuery(ctx, `
 		SELECT a.id, a.workspace_id, a.name, a.avatar_url, a.runtime_mode, a.runtime_config, a.status,
-		       a.max_concurrent_tasks, a.owner_id, a.created_at, a.updated_at, a.description, a.runtime_id,
+		       a.owner_id, a.created_at, a.updated_at, a.description, a.runtime_id,
 		       a.instructions, a.archived_at, a.display_name, a.model, a.thinking_level
 		FROM thread_participant tp
 		JOIN channel_message root ON root.id = tp.root_message_id
@@ -6184,7 +6184,7 @@ func (h *Handler) channelThreadAgentsFromQuery(ctx context.Context, query string
 	var out []db.Agent
 	for rows.Next() {
 		var a db.Agent
-		if err := rows.Scan(&a.ID, &a.WorkspaceID, &a.Name, &a.AvatarUrl, &a.RuntimeMode, &a.RuntimeConfig, &a.Status, &a.MaxConcurrentTasks, &a.OwnerID, &a.CreatedAt, &a.UpdatedAt, &a.Description, &a.RuntimeID, &a.Instructions, &a.ArchivedAt, &a.DisplayName, &a.Model, &a.ThinkingLevel); err != nil {
+		if err := rows.Scan(&a.ID, &a.WorkspaceID, &a.Name, &a.AvatarUrl, &a.RuntimeMode, &a.RuntimeConfig, &a.Status, &a.OwnerID, &a.CreatedAt, &a.UpdatedAt, &a.Description, &a.RuntimeID, &a.Instructions, &a.ArchivedAt, &a.DisplayName, &a.Model, &a.ThinkingLevel); err != nil {
 			continue
 		}
 		out = append(out, a)

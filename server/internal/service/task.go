@@ -3301,9 +3301,8 @@ func (s *TaskService) parseQuickCreateContext(task db.AgentInboxEvent) (QuickCre
 // requester pointing at the issue the agent just created. The issue is
 // stamped with origin_type=quick_create + origin_id=<task_id> by the
 // daemon-injected MULTICA_QUICK_CREATE_TASK_ID env var, so this lookup is
-// deterministic — robust against the same agent creating other issues in
-// parallel (e.g. assignment task running while max_concurrent_tasks > 1
-// permits another quick-create alongside it).
+// deterministic — the origin_id=task.ID key means it can't be confused by
+// other issues the same agent may have created around the same time.
 func (s *TaskService) notifyQuickCreateCompleted(ctx context.Context, task db.AgentInboxEvent, qc QuickCreateContext) {
 	requesterID, err := util.ParseUUID(qc.RequesterID)
 	if err != nil {
@@ -3490,21 +3489,20 @@ func agentToMap(a db.Agent) map[string]any {
 		json.Unmarshal(a.RuntimeConfig, &rc)
 	}
 	return map[string]any{
-		"id":                   util.UUIDToString(a.ID),
-		"workspace_id":         util.UUIDToString(a.WorkspaceID),
-		"runtime_id":           util.UUIDToString(a.RuntimeID),
-		"name":                 a.Name,
-		"description":          a.Description,
-		"avatar_url":           a.AvatarUrl,
-		"runtime_mode":         a.RuntimeMode,
-		"runtime_config":       rc,
-		"status":               a.Status,
-		"max_concurrent_tasks": a.MaxConcurrentTasks,
-		"owner_id":             util.UUIDToPtr(a.OwnerID),
-		"skills":               []any{},
-		"created_at":           util.TimestampToString(a.CreatedAt),
-		"updated_at":           util.TimestampToString(a.UpdatedAt),
-		"archived_at":          util.TimestampToPtr(a.ArchivedAt),
-		"archived_by":          util.UUIDToPtr(a.ArchivedBy),
+		"id":             util.UUIDToString(a.ID),
+		"workspace_id":   util.UUIDToString(a.WorkspaceID),
+		"runtime_id":     util.UUIDToString(a.RuntimeID),
+		"name":           a.Name,
+		"description":    a.Description,
+		"avatar_url":     a.AvatarUrl,
+		"runtime_mode":   a.RuntimeMode,
+		"runtime_config": rc,
+		"status":         a.Status,
+		"owner_id":       util.UUIDToPtr(a.OwnerID),
+		"skills":         []any{},
+		"created_at":     util.TimestampToString(a.CreatedAt),
+		"updated_at":     util.TimestampToString(a.UpdatedAt),
+		"archived_at":    util.TimestampToPtr(a.ArchivedAt),
+		"archived_by":    util.UUIDToPtr(a.ArchivedBy),
 	}
 }

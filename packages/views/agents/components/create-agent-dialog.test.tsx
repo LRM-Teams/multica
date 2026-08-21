@@ -324,7 +324,6 @@ describe("CreateAgentDialog workspace runtime selection", () => {
       custom_env: {},
       custom_args: [],
       skills: [],
-      max_concurrent_tasks: 1,
     } as unknown as Agent;
     renderDialog([selected], template);
 

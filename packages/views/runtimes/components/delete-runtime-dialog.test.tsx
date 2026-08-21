@@ -189,7 +189,6 @@ function makeAgent(id: string, overrides: Partial<Agent> = {}): Agent {
     runtime_config: {},
     custom_args: [],
     status: "idle",
-    max_concurrent_tasks: 1,
     model: "claude-sonnet-4-5",
     owner_id: "user-me",
     skills: [],

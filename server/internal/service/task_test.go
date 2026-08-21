@@ -113,18 +113,17 @@ func setupRetryTestDB(t *testing.T, failureReason string) *retryTestEnv {
 	require.NoError(t, err)
 
 	agent, err := q.CreateAgent(ctx, db.CreateAgentParams{
-		WorkspaceID:        ws.ID,
-		Name:               "retry-agent",
-		DisplayName:        "Retry Agent",
-		Description:        "test",
-		RuntimeMode:        "cloud",
-		RuntimeConfig:      []byte("{}"),
-		RuntimeID:          rtID,
-		MaxConcurrentTasks: 1,
-		Instructions:       "",
-		CustomEnv:          []byte("{}"),
-		CustomArgs:         []byte("[]"),
-		Model:              pgtype.Text{String: "composer-1.5", Valid: true},
+		WorkspaceID:   ws.ID,
+		Name:          "retry-agent",
+		DisplayName:   "Retry Agent",
+		Description:   "test",
+		RuntimeMode:   "cloud",
+		RuntimeConfig: []byte("{}"),
+		RuntimeID:     rtID,
+		Instructions:  "",
+		CustomEnv:     []byte("{}"),
+		CustomArgs:    []byte("[]"),
+		Model:         pgtype.Text{String: "composer-1.5", Valid: true},
 	})
 	require.NoError(t, err)
 

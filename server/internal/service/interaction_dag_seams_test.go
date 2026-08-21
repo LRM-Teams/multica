@@ -123,9 +123,9 @@ func TestDiscoverDelegationParent_ExcludesNewChildTask(t *testing.T) {
 	agent, err := q.CreateAgent(ctx, db.CreateAgentParams{
 		WorkspaceID: ws.ID, Name: "seam-agent", DisplayName: "Seam Agent", Description: "test",
 		RuntimeMode: "cloud", RuntimeConfig: []byte("{}"), RuntimeID: rtID,
-		MaxConcurrentTasks: 1, Instructions: "", CustomEnv: []byte("{}"), CustomArgs: []byte("[]"),
-			Model:              pgtype.Text{String: "composer-1.5", Valid: true},
-})
+		Instructions: "", CustomEnv: []byte("{}"), CustomArgs: []byte("[]"),
+		Model: pgtype.Text{String: "composer-1.5", Valid: true},
+	})
 	require.NoError(t, err)
 	proj, err := q.CreateProject(ctx, db.CreateProjectParams{WorkspaceID: ws.ID, Title: "seam-proj", Status: "in_progress", Priority: "none"})
 	require.NoError(t, err)

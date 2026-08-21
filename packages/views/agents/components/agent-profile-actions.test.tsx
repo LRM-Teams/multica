@@ -100,7 +100,6 @@ const agent = {
   status: "idle",
   runtime_status: "online",
   runtime_last_seen_at: new Date().toISOString(),
-  max_concurrent_tasks: 1,
   model: "auto",
   thinking_level: "",
   managed_role: undefined,

@@ -29,11 +29,11 @@ func cloneReviewAgent(ctx context.Context, tx pgx.Tx, workspaceID, sourceAgentID
 	err := tx.QueryRow(ctx, `
 		INSERT INTO agent (
 			workspace_id,name,display_name,description,avatar_url,runtime_mode,
-			runtime_config,runtime_id,max_concurrent_tasks,owner_id,instructions,
+			runtime_config,runtime_id,owner_id,instructions,
 			model,thinking_level,source_agent_id
 		)
 		SELECT workspace_id,$3,display_name,description,avatar_url,runtime_mode,
-		       runtime_config,runtime_id,1,owner_id,instructions,
+		       runtime_config,runtime_id,owner_id,instructions,
 		       model,thinking_level,COALESCE(source_agent_id,id)
 		FROM agent
 		WHERE workspace_id=$1 AND id=$2 AND archived_at IS NULL AND runtime_id IS NOT NULL

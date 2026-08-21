@@ -221,6 +221,14 @@ describe("ComputerUpdateToastListener", () => {
     expect(success.getByText("s143 updated")).toBeInTheDocument();
     expect(success.getByText("Now on v0.4.24-alpha.12")).toBeInTheDocument();
     success.unmount();
+    // The success toast owns a finite duration; the sync pass that follows the
+    // recordDone store write must not sweep it off screen.
+    // The success toast owns a finite duration; the sync pass that follows the
+    // recordDone store write must not sweep it off screen.
+    expect(mocks.toastDismiss).not.toHaveBeenCalledWith(
+      "computer-update:1298b34b-b7de-4309-bdfb-71043265052d",
+    );
+    expect(mocks.toastCustom.mock.lastCall?.[1]?.duration).toBe(4000);
   });
 
   it("shows the current daemon upgrade phase", async () => {

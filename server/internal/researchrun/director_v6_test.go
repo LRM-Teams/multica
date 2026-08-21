@@ -120,8 +120,9 @@ func TestV6DirectorBriefIncludesAtomicResultFrontier(t *testing.T) {
 	run := newTransactionRecoveryRun(t, "V6 Director Brief atomic frontier")
 	membershipID, workItemID := seedV6RecoveryWorkItem(t, run, "running", time.Now().Add(time.Minute))
 	attemptID := seedV6RecoveryAttempt(t, run, membershipID, workItemID)
-	branchID, resultArtifactID := uuid.NewString(), uuid.NewString()
+	branchID, resultArtifactID, resultNodeID := uuid.NewString(), uuid.NewString(), uuid.NewString()
 	contentHash := "sha256:" + strings.Repeat("a", 64)
+	clientRequestID := uuid.NewString()
 
 	tx, err := run.pool.Begin(run.ctx)
 	if err != nil {
@@ -144,10 +145,21 @@ func TestV6DirectorBriefIncludesAtomicResultFrontier(t *testing.T) {
 	if err = tx.QueryRow(run.ctx, `SELECT id::text FROM research_artifact_version WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND artifact_id=$3::uuid AND version=1`, run.fixture.workspaceID, run.fixture.sessionID, resultArtifactID).Scan(&artifactVersionID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = tx.Exec(run.ctx, `INSERT INTO research_result_node(workspace_id,session_id,result_artifact_id,artifact_version_id,work_item_attempt_id,
+	var manifestID, manifestHash string
+	if err = tx.QueryRow(run.ctx, `SELECT manifest_id::text,manifest_hash FROM research_work_item_attempt WHERE id=$1::uuid`, attemptID).Scan(&manifestID, &manifestHash); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(run.ctx, `UPDATE research_work_item_attempt SET result_kind='result_node',result_entity_id=$2::uuid,result_artifact_id=$3::uuid,result_hash=$4,client_request_id=$5::uuid,result_submitted_at=now() WHERE id=$1::uuid`, attemptID, resultNodeID, resultArtifactID, contentHash, clientRequestID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(run.ctx, `INSERT INTO research_result_artifact(id,workspace_id,session_id,attempt_id,work_item_attempt_id,orchestrator_version,result_schema_version,result,client_request_id,content_hash,accepted_at,acceptance_work_manifest_id,acceptance_work_manifest_hash,resolved_input_versions_v6,acceptance_lineage_v6)
+		VALUES($1::uuid,$2::uuid,$3::uuid,NULL,$4::uuid,$5,'6','{}'::jsonb,$6,$7,now(),$8::uuid,$9,'[]'::jsonb,'[]'::jsonb)`, resultArtifactID, run.fixture.workspaceID, run.fixture.sessionID, attemptID, OrchestratorVersionV6, clientRequestID, contentHash, manifestID, manifestHash); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(run.ctx, `INSERT INTO research_result_node(id,workspace_id,session_id,result_artifact_id,artifact_version_id,work_item_attempt_id,
 		catalog_summary,brief_summary,objective,conclusion,content,conclusion_state,integration_state,content_hash)
-		VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,'Source landscape','Ten candidate sources found','Find sources','Candidates found','Result content','accepted','unmatched',$6)`,
-		run.fixture.workspaceID, run.fixture.sessionID, resultArtifactID, artifactVersionID, attemptID, contentHash); err != nil {
+		VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6::uuid,'Source landscape','Ten candidate sources found','Find sources','Candidates found','Result content','accepted','unmatched',$7)`,
+		resultNodeID, run.fixture.workspaceID, run.fixture.sessionID, resultArtifactID, artifactVersionID, attemptID, contentHash); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = tx.Exec(run.ctx, `INSERT INTO research_node_branch(workspace_id,session_id,node_artifact_version_id,branch_id)
@@ -380,8 +392,9 @@ func TestV6EventTriggerRepairsAtomicResultMissingFromCoveredBrief(t *testing.T) 
 		t.Fatal(err)
 	}
 	attemptID := seedV6RecoveryAttempt(t, run, membershipID, workItemID)
-	resultArtifactID := uuid.NewString()
+	resultArtifactID, resultNodeID := uuid.NewString(), uuid.NewString()
 	contentHash := "sha256:" + strings.Repeat("b", 64)
+	clientRequestID := uuid.NewString()
 	tx, err := run.pool.Begin(run.ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -399,9 +412,20 @@ func TestV6EventTriggerRepairsAtomicResultMissingFromCoveredBrief(t *testing.T) 
 	if err = tx.QueryRow(run.ctx, `SELECT id::text FROM research_artifact_version WHERE artifact_id=$1::uuid AND version=1`, resultArtifactID).Scan(&artifactVersionID); err != nil {
 		t.Fatal(err)
 	}
+	var manifestID, manifestHash string
+	if err = tx.QueryRow(run.ctx, `SELECT manifest_id::text,manifest_hash FROM research_work_item_attempt WHERE id=$1::uuid`, attemptID).Scan(&manifestID, &manifestHash); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(run.ctx, `UPDATE research_work_item_attempt SET result_kind='result_node',result_entity_id=$2::uuid,result_artifact_id=$3::uuid,result_hash=$4,client_request_id=$5::uuid,result_submitted_at=now() WHERE id=$1::uuid`, attemptID, resultNodeID, resultArtifactID, contentHash, clientRequestID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(run.ctx, `INSERT INTO research_result_artifact(id,workspace_id,session_id,attempt_id,work_item_attempt_id,orchestrator_version,result_schema_version,result,client_request_id,content_hash,accepted_at,acceptance_work_manifest_id,acceptance_work_manifest_hash,resolved_input_versions_v6,acceptance_lineage_v6)
+		VALUES($1::uuid,$2::uuid,$3::uuid,NULL,$4::uuid,$5,'6','{}'::jsonb,$6,$7,now(),$8::uuid,$9,'[]'::jsonb,'[]'::jsonb)`, resultArtifactID, run.fixture.workspaceID, run.fixture.sessionID, attemptID, OrchestratorVersionV6, clientRequestID, contentHash, manifestID, manifestHash); err != nil {
+		t.Fatal(err)
+	}
 	resultEvent, err := appendEvent(run.ctx, tx, run.fixture.workspaceID, run.fixture.sessionID,
 		"v6_result_node_accepted", "covered-without-frontier:"+uuid.NewString(), "agent", run.fixture.agentID,
-		map[string]any{"artifact_version_id": artifactVersionID, "result_artifact_id": resultArtifactID, "work_item_id": workItemID})
+		map[string]any{"artifact_version_id": artifactVersionID, "result_artifact_id": resultArtifactID, "result_node_id": resultNodeID, "work_item_id": workItemID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -430,9 +454,9 @@ func TestV6EventTriggerRepairsAtomicResultMissingFromCoveredBrief(t *testing.T) 
 		VALUES($1::uuid,$2::uuid,$3::uuid,$4,'Investigate the source landscape','active',1,1)`, branchID, run.fixture.workspaceID, run.fixture.sessionID, "repair:"+branchID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = materializeTx.Exec(run.ctx, `INSERT INTO research_result_node(workspace_id,session_id,result_artifact_id,artifact_version_id,work_item_attempt_id,
+	if _, err = materializeTx.Exec(run.ctx, `INSERT INTO research_result_node(id,workspace_id,session_id,result_artifact_id,artifact_version_id,work_item_attempt_id,
 		catalog_summary,brief_summary,objective,conclusion,content,conclusion_state,integration_state,content_hash)
-		VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,'Source landscape','Candidates found','Find sources','Candidates found','Result content','accepted','unmatched',$6)`, run.fixture.workspaceID, run.fixture.sessionID, resultArtifactID, artifactVersionID, attemptID, contentHash); err != nil {
+		VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6::uuid,'Source landscape','Candidates found','Find sources','Candidates found','Result content','accepted','unmatched',$7)`, resultNodeID, run.fixture.workspaceID, run.fixture.sessionID, resultArtifactID, artifactVersionID, attemptID, contentHash); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = materializeTx.Exec(run.ctx, `INSERT INTO research_node_branch(workspace_id,session_id,node_artifact_version_id,branch_id) VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid)`, run.fixture.workspaceID, run.fixture.sessionID, artifactVersionID, branchID); err != nil {

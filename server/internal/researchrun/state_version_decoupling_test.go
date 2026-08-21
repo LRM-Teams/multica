@@ -11,12 +11,16 @@ import (
 	"github.com/google/uuid"
 )
 
-// The Run event sequence is bookkeeping; research_session.state_version is a
-// semantic concurrency token that only goal / steering / report transitions
-// may advance. Coupling them made every dispatch or submission event
-// invalidate all in-flight Director proposals and Agent results (livelock).
+// For V6 runs the event sequence is bookkeeping; research_session.state_version
+// is a semantic concurrency token that only goal / steering / report
+// transitions may advance. Coupling them made every dispatch or submission
+// event invalidate all in-flight Director proposals and Agent results
+// (livelock). Legacy orchestrators keep the coupled contract.
 func TestAppendEventDoesNotAdvanceSemanticStateVersion(t *testing.T) {
 	run := newTransactionRecoveryRun(t, "Decouple event sequence")
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_session SET orchestrator_version='research-run-v6' WHERE id=$1::uuid`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
 	var stateBefore, maxSequenceBefore int64
 	if err := run.pool.QueryRow(run.ctx, `SELECT s.state_version,
 		COALESCE((SELECT max(sequence) FROM research_run_event WHERE session_id=s.id),0)
@@ -70,6 +74,11 @@ func setupV6DirectorProposalFixture(t *testing.T, title string) directorProposal
 	if _, err := run.pool.Exec(run.ctx, `UPDATE research_session SET orchestrator_version='research-run-v6' WHERE id=$1::uuid`, run.fixture.sessionID); err != nil {
 		t.Fatal(err)
 	}
+	// Seed before assigning the Director: the membership doubles as the
+	// Director attempt's membership (AssignV6Director reuses an active one),
+	// and the extra Work Item is the "someone else's operational activity"
+	// the proposal must survive.
+	membershipID, otherWorkID := seedV6RecoveryWorkItem(t, run, "running", time.Now().Add(time.Minute))
 	if _, err := run.store.AssignV6Director(run.ctx, AssignV6DirectorInput{
 		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
 		AgentID: run.fixture.agentID, UserID: run.fixture.userID,
@@ -77,10 +86,6 @@ func setupV6DirectorProposalFixture(t *testing.T, title string) directorProposal
 	}); err != nil {
 		t.Fatal(err)
 	}
-	// The membership doubles as the Director attempt's membership; the extra
-	// Work Item is the "someone else's operational activity" the proposal
-	// must survive.
-	membershipID, otherWorkID := seedV6RecoveryWorkItem(t, run, "running", time.Now().Add(time.Minute))
 	var stateVersion, throughSequence int64
 	if err := run.pool.QueryRow(run.ctx, `SELECT state_version,
 		COALESCE((SELECT max(sequence) FROM research_run_event WHERE session_id=$1::uuid),0)

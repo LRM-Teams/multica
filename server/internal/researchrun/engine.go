@@ -53,11 +53,11 @@ func (e *Engine) ProjectionV6Deltas(ctx context.Context, request V6ProjectionDel
 	return e.store.ProjectionV6Deltas(ctx, request)
 }
 
-func (e *Engine) ProjectionV6NodeDetail(ctx context.Context, workspaceID, runID, nodeID, view string) (V6ProjectionNodeDetail, error) {
+func (e *Engine) ProjectionV6NodeDetail(ctx context.Context, workspaceID, runID, snapshotID, nodeID, view string) (V6ProjectionNodeDetail, error) {
 	if e == nil || e.store == nil {
 		return V6ProjectionNodeDetail{}, ErrV6DirectorUnavailable
 	}
-	return e.store.ProjectionV6NodeDetail(ctx, workspaceID, runID, nodeID, view)
+	return e.store.ProjectionV6NodeDetail(ctx, workspaceID, runID, snapshotID, nodeID, view)
 }
 
 func NewEngineWithReportStorage(store *PostgresStore, dispatcher Dispatcher, projector Projector, reportStorage ReportPackageStorage) ResearchRun {

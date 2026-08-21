@@ -105,8 +105,19 @@ describe("ApiClient Director V6 projection HTTP contract", () => {
     response({});
     const client = new ApiClient("https://api.example.test");
     await expect(
-      client.getResearchV6DirectorProjectionNodeDetail(WORKSPACE_ID, RUN_ID, "node-1"),
+      client.getResearchV6DirectorProjectionNodeDetail(
+        WORKSPACE_ID,
+        RUN_ID,
+        SNAPSHOT_ID,
+        "node-1",
+      ),
     ).rejects.toThrow("node detail identity mismatch");
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining(
+        `/projection/nodes/node-1?snapshot_id=${SNAPSHOT_ID}&view=brief`,
+      ),
+      expect.any(Object),
+    );
   });
 
   it("rejects a report detail response when the response changes report identity", async () => {

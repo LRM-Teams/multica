@@ -577,7 +577,7 @@ func TestV6DirectorCreatedWorkStartsAtVersionOne(t *testing.T) {
 		t.Fatal(err)
 	}
 	actionPayload, err := json.Marshal(map[string]any{
-		"kind": "research", "assignee_agent_id": run.fixture.agentID, "mission": "Investigate the assigned question",
+		"kind": "deep_read", "assignee_agent_id": run.fixture.agentID, "mission": "Investigate the assigned question",
 		"expected_result_schema_id": "atomic_result_submission", "payload_schema_id": "research.test.v1",
 		"payload":  map[string]any{"task_specific_schema": map[string]any{"type": "object"}},
 		"priority": 0.5, "max_attempts": 1, "branch_ids": []string{},
@@ -595,11 +595,15 @@ func TestV6DirectorCreatedWorkStartsAtVersionOne(t *testing.T) {
 		t.Fatal(err)
 	}
 	var workStateVersion int64
-	if err = run.pool.QueryRow(run.ctx, `SELECT state_version FROM research_work_item
-		WHERE session_id=$1::uuid AND idempotency_key=$2`, run.fixture.sessionID, idempotencyKey).Scan(&workStateVersion); err != nil {
+	var persistedKind, taskKind string
+	if err = run.pool.QueryRow(run.ctx, `SELECT state_version,kind,payload->>'task_kind' FROM research_work_item
+		WHERE session_id=$1::uuid AND idempotency_key=$2`, run.fixture.sessionID, idempotencyKey).Scan(&workStateVersion, &persistedKind, &taskKind); err != nil {
 		t.Fatal(err)
 	}
 	if workStateVersion != 1 {
 		t.Fatalf("created Work state_version=%d want 1", workStateVersion)
+	}
+	if persistedKind != "research" || taskKind != "deep_read" {
+		t.Fatalf("created Work kind=%q task_kind=%q want research/deep_read", persistedKind, taskKind)
 	}
 }

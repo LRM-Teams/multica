@@ -77,12 +77,20 @@ func (s *PostgresStore) executeV6CreateWorkAction(ctx context.Context, proposal 
 		return ErrInvalidContract
 	}
 	expectedKind := V6ContractKind(payload.ExpectedResultSchemaID)
+	persistedKind := ""
 	switch expectedKind {
-	case V6ContractAtomicResultSubmission, V6ContractDiscussionTurnSubmission, V6ContractIntegrationSubmission, V6ContractReportPackageSubmission:
+	case V6ContractAtomicResultSubmission:
+		persistedKind = "research"
+	case V6ContractDiscussionTurnSubmission:
+		persistedKind = "discussion"
+	case V6ContractIntegrationSubmission:
+		persistedKind = "integration"
+	case V6ContractReportPackageSubmission:
+		persistedKind = "report"
 	default:
 		return ErrInvalidContract
 	}
-	workPayload, err := v6WorkPayloadWithMission(payload.Payload, payload.Mission)
+	workPayload, err := v6WorkPayloadWithMission(payload.Payload, payload.Mission, payload.Kind)
 	if err != nil {
 		return err
 	}
@@ -121,7 +129,7 @@ func (s *PostgresStore) executeV6CreateWorkAction(ctx context.Context, proposal 
 	}
 	workID := uuid.NewString()
 	result, err := tx.Exec(ctx, `INSERT INTO research_work_item(id,workspace_id,session_id,kind,status,target_kind,client_key,idempotency_key,goal_version,input_state_version,input_event_sequence,created_by_director_cycle_id,assigned_agent_id,priority,max_attempts,payload_schema_id,expected_result_schema_id,payload,state_version,ready_at,reason)
-		VALUES($1::uuid,$2::uuid,$3::uuid,$4,'ready','',$5,$5,$6,$7,$8,$9::uuid,$10::uuid,$11,$12,$13,$14,$15::jsonb,1,now(),$16) ON CONFLICT (session_id,goal_version,idempotency_key) WHERE goal_version IS NOT NULL AND idempotency_key<>'' DO NOTHING`, workID, proposal.WorkspaceID, proposal.RunID, payload.Kind, action.IdempotencyKey, goalVersion, state, sequence, cycleID, payload.AssigneeAgentID, payload.Priority, payload.MaxAttempts, payload.PayloadSchemaID, payload.ExpectedResultSchemaID, workPayload, payload.Mission)
+		VALUES($1::uuid,$2::uuid,$3::uuid,$4,'ready','',$5,$5,$6,$7,$8,$9::uuid,$10::uuid,$11,$12,$13,$14,$15::jsonb,1,now(),$16) ON CONFLICT (session_id,goal_version,idempotency_key) WHERE goal_version IS NOT NULL AND idempotency_key<>'' DO NOTHING`, workID, proposal.WorkspaceID, proposal.RunID, persistedKind, action.IdempotencyKey, goalVersion, state, sequence, cycleID, payload.AssigneeAgentID, payload.Priority, payload.MaxAttempts, payload.PayloadSchemaID, payload.ExpectedResultSchemaID, workPayload, payload.Mission)
 	if err != nil {
 		return err
 	}
@@ -146,12 +154,13 @@ func (s *PostgresStore) executeV6CreateWorkAction(ctx context.Context, proposal 
 	return s.commitResearchTx(ctx, txOpV6DirectorProposalComplete, tx)
 }
 
-func v6WorkPayloadWithMission(raw json.RawMessage, mission string) (json.RawMessage, error) {
+func v6WorkPayloadWithMission(raw json.RawMessage, mission, taskKind string) (json.RawMessage, error) {
 	value := map[string]any{}
 	if len(raw) > 0 && string(raw) != "null" && json.Unmarshal(raw, &value) != nil {
 		return nil, ErrInvalidContract
 	}
 	value["mission_prompt"] = strings.TrimSpace(mission)
+	value["task_kind"] = strings.TrimSpace(taskKind)
 	encoded, err := json.Marshal(value)
 	if err != nil {
 		return nil, err

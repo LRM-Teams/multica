@@ -5546,6 +5546,7 @@ export class ApiClient {
   async getResearchV6DirectorProjectionNodeDetail(
     workspaceId: string,
     runId: string,
+    snapshotId: string,
     nodeId: string,
     view: import("../types/research-v6-director").ResearchV6DirectorNodeDetailView = "brief",
     options?: { signal?: AbortSignal },
@@ -5553,8 +5554,9 @@ export class ApiClient {
     const { parseResearchV6DirectorNodeDetail } = await import(
       "../research-v6/director-schemas"
     );
+    const query = new URLSearchParams({ snapshot_id: snapshotId, view });
     const raw = await this.fetch(
-      `/api/research/v6/runs/${encodeURIComponent(runId)}/projection/nodes/${encodeURIComponent(nodeId)}?view=${encodeURIComponent(view)}`,
+      `/api/research/v6/runs/${encodeURIComponent(runId)}/projection/nodes/${encodeURIComponent(nodeId)}?${query.toString()}`,
       { signal: options?.signal },
     );
     const detail = parseResearchV6DirectorNodeDetail(raw);

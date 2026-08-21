@@ -33,8 +33,9 @@ export function summarizeTypedGraph(
   for (const node of nodes) {
     const level = (node.level || "").toLowerCase();
     const status = (node.status || "").toLowerCase();
+    const nodeType = (node.node_type || "").toLowerCase();
 
-    if (STABLE_LEVELS.has(level)) stableResults += 1;
+    if (nodeType !== "goal" && STABLE_LEVELS.has(level)) stableResults += 1;
     if (level === "s") {
       if (STOP_STATUSES.has(status)) stoppedDirections += 1;
       else if (status === "running" || status === "queued" || status === "in_progress") {
@@ -47,11 +48,18 @@ export function summarizeTypedGraph(
     options?.clusters?.filter(
       (cluster) => (cluster.cluster_type || "").toLowerCase() === "new_frontier",
     ).length ?? 0;
+  const branchCount =
+    options?.clusters?.filter(
+      (cluster) => (cluster.cluster_type || "").toLowerCase() === "branch",
+    ).length ?? 0;
+  const usesCanonicalBranches = branchCount > 0;
 
   return {
-    loadedDirections: nodes.length,
+    loadedDirections: usesCanonicalBranches ? branchCount : nodes.length,
     totalDirections:
-      options?.totalNodeCount != null && options.totalNodeCount > nodes.length
+      !usesCanonicalBranches &&
+      options?.totalNodeCount != null &&
+      options.totalNodeCount > nodes.length
         ? options.totalNodeCount
         : null,
     stableResults,

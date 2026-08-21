@@ -1267,7 +1267,7 @@
     "summary": {
       "title": "Constellation · {{loaded}} loaded directions",
       "title_with_total": "Constellation · {{loaded}} / {{total}} directions",
-      "detail": "{{stable}} stable · {{active}} active · {{newDir}} new · {{stopped}} stopped",
+      "detail": "{{stable}} stable results · {{active}} running nodes · {{newDir}} new directions · {{stopped}} terminal nodes",
       "load_more": "Load more ({{count}} remaining)",
       "load_more_pending": "Loading more…"
     },

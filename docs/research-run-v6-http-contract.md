@@ -311,7 +311,11 @@ sequence and hash must agree; sequence alone is insufficient.
 
 ### 5.3 Node detail
 
-`GET /api/research/v6/runs/{runId}/projection/nodes/{nodeId}?view=brief|full|history`
+`GET /api/research/v6/runs/{runId}/projection/nodes/{nodeId}?snapshot_id={snapshotId}&view=brief|full|history`
+
+`snapshot_id` is required and pins the lookup to the exact canonical Snapshot
+currently rendered by the caller. Node detail never creates or silently switches
+to a newer Snapshot. An expired or unknown Snapshot requires a projection resync.
 
 The response contains stable/canonical refs, current three-dimensional state,
 reason detail, Agent/Task/Attempt, Branches, evidence refs, Discussion refs,

@@ -99,12 +99,19 @@ func TestBuildResearchV6PresenceRoster(t *testing.T) {
 	`, eventID, testWorkspaceID, sessionID, workerAgentID); err != nil {
 		t.Fatalf("insert progress event: %v", err)
 	}
+	// Passport registration must go through the ledger helper so the policy
+	// mutation audit row exists; a bare passport INSERT trips the deferred
+	// research_artifact_passport_to_policy_mutation_guard at commit.
 	if _, err := eventTx.Exec(ctx, `
-		INSERT INTO research_artifact_passport (
-			id, workspace_id, session_id, entity_kind, current_version, eligibility_revision,
-			lifecycle_status, provenance_completeness, source_created_at, registered_at
-		) VALUES ($1::uuid, $2::uuid, $3::uuid, 'run_event', NULL, 1, 'registered', 'complete', now(), now())
-	`, eventID, testWorkspaceID, sessionID); err != nil {
+		INSERT INTO research_artifact_policy_state (workspace_id, session_id, policy_version, watermark)
+		VALUES ($1::uuid, $2::uuid, 'legacy-v1-v5-compat-v1', 0)
+		ON CONFLICT (workspace_id, session_id) DO NOTHING
+	`, testWorkspaceID, sessionID); err != nil {
+		t.Fatalf("ensure policy state: %v", err)
+	}
+	if _, err := eventTx.Exec(ctx, `
+		SELECT research_artifact_backfill_registered($1::uuid, $2::uuid, $3::uuid, 'run_event', now(), 1, 1)
+	`, testWorkspaceID, sessionID, eventID); err != nil {
 		t.Fatalf("register progress event passport: %v", err)
 	}
 	if err := eventTx.Commit(ctx); err != nil {

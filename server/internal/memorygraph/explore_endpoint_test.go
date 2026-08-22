@@ -6,10 +6,12 @@ package memorygraph
 // helpers from explore_test.go.
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 )
 
 func exploreNodes(t *testing.T, baseURL, token, traj string, nodeIDs ...string) exploreResponse {
@@ -271,5 +273,52 @@ func TestExploreToolServerRequestAfterExactExhaustionBlowsTrajectory(t *testing.
 	second := exploreNodes(t, baseURL, token, "t1", "c")
 	if len(second.Nodes) != 0 || !second.BudgetExceeded || !srv.trajectoryBudgetBlown("t1") {
 		t.Fatalf("post-budget response = %+v blown=%v, want empty/budget-exceeded/blown", second, srv.trajectoryBudgetBlown("t1"))
+	}
+}
+
+// The merged endpoint reapplies the graph view to both requested nodes and
+// inline neighbors, so channel-only nodes cannot leak through a project view.
+func TestExploreToolServerExploreAppliesGraphView(t *testing.T) {
+	store := newExploreGraphStore(t)
+	g, err := LoadGraph(store, 1)
+	if err != nil {
+		t.Fatalf("LoadGraph: %v", err)
+	}
+	channelNode := g.Node("c")
+	channelNode.Visibility = "channel"
+	channelNode.ChannelID = "chan-a"
+	if err := store.SaveNode(1, channelNode); err != nil {
+		t.Fatalf("SaveNode channel node: %v", err)
+	}
+
+	retrieval := DefaultRetrievalConfig()
+	retrieval.View = GraphView{AllowProject: true}
+	retr := NewHybridRetriever(store, nil, retrieval)
+	srv, err := NewExploreToolServer(store, retr, testExploreConfig(), 1)
+	if err != nil {
+		t.Fatalf("NewExploreToolServer: %v", err)
+	}
+	baseURL, token, err := srv.Start(context.Background())
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(ctx)
+	})
+
+	resp := exploreNodes(t, baseURL, token, "t1", "b")
+	for _, neighbor := range resp.Nodes[0].Neighbors {
+		if neighbor.NodeID == "c" {
+			t.Fatalf("out-of-view channel node leaked through neighbors: %+v", resp.Nodes[0].Neighbors)
+		}
+	}
+	status, _ := explorePost(baseURL, token, "/explore", map[string]any{
+		"trajectory_id": "t2",
+		"node_ids":      []string{"c"},
+	})
+	if status != http.StatusNotFound {
+		t.Fatalf("explore out-of-view node: status = %d, want 404", status)
 	}
 }

@@ -15,7 +15,7 @@
   "learningQueueHint": "等待人工决策的记忆和技能候选项，默认先审核。",
   "memoryOps": "记忆策展",
   "memoryType": "记忆类型",
-  "memoryTypeHint": "选择本工作区使用的记忆管线。图记忆会构建层次化记忆 DAG，目前为实验特性。",
+  "memoryTypeHint": "选择本工作区使用的记忆管线。图记忆会构建层次化记忆图，目前为实验特性。",
   "memoryTypeLegacy": "现有记忆管线（MEMORY.md）",
   "memoryTypeGraph": "图记忆（实验）",
   "memoryTypeSaved": "记忆类型已更新",

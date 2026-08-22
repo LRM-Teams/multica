@@ -15,7 +15,7 @@
   "learningQueueHint": "Review-first memory and skill candidates waiting for a human decision.",
   "memoryOps": "Memory curation",
   "memoryType": "Memory type",
-  "memoryTypeHint": "Pick the memory pipeline for this workspace. Graph memory builds a hierarchical memory DAG and is experimental.",
+  "memoryTypeHint": "Pick the memory pipeline for this workspace. Graph memory builds a hierarchical memory graph and is experimental.",
   "memoryTypeLegacy": "Legacy (MEMORY.md)",
   "memoryTypeGraph": "Graph memory (experimental)",
   "memoryTypeSaved": "Memory type updated",

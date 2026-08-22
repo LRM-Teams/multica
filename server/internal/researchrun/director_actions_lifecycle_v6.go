@@ -59,13 +59,17 @@ func (s *PostgresStore) executeV6WorkLifecycleAction(ctx context.Context, propos
 		if status != "failed" && status != "cancelled" && status != "stale" {
 			return ErrInvalidTransition
 		}
-		command = `UPDATE research_work_item SET status='ready',terminal_reason_code='',terminal_reason_detail='',lease_token=NULL,lease_expires_at=NULL,ready_at=now(),updated_at=now() WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid`
+		// A Director retry is an explicit grant of a fresh attempt budget.
+		// Without the reset, a budget-exhausted item returns to 'ready' but is
+		// skipped by dispatch preparation forever (attempt_count>=max_attempts),
+		// leaving a silent zombie the Director believes it has retried.
+		command = `UPDATE research_work_item SET status='ready',attempt_count=0,terminal_reason_code='',terminal_reason_detail='',lease_token=NULL,lease_expires_at=NULL,ready_at=now(),updated_at=now() WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid`
 		args = []any{proposal.WorkspaceID, proposal.RunID, payload.TargetID}
 	case "reassign_work_item":
 		if strings.TrimSpace(payload.AssigneeAgentID) == "" || status == "succeeded" || status == "cancelled" {
 			return ErrInvalidTransition
 		}
-		command = `UPDATE research_work_item w SET assigned_agent_id=$4::uuid,status='ready',lease_token=NULL,lease_expires_at=NULL,ready_at=now(),updated_at=now() WHERE w.workspace_id=$1::uuid AND w.session_id=$2::uuid AND w.id=$3::uuid AND EXISTS(SELECT 1 FROM research_team_membership m WHERE m.session_id=w.session_id AND m.agent_id=$4::uuid AND m.state IN ('idle','working','offline','retiring'))`
+		command = `UPDATE research_work_item w SET assigned_agent_id=$4::uuid,status='ready',attempt_count=0,lease_token=NULL,lease_expires_at=NULL,ready_at=now(),updated_at=now() WHERE w.workspace_id=$1::uuid AND w.session_id=$2::uuid AND w.id=$3::uuid AND EXISTS(SELECT 1 FROM research_team_membership m WHERE m.session_id=w.session_id AND m.agent_id=$4::uuid AND m.state IN ('idle','working','offline','retiring'))`
 		args = []any{proposal.WorkspaceID, proposal.RunID, payload.TargetID, payload.AssigneeAgentID}
 	}
 	result, err := tx.Exec(ctx, command, args...)

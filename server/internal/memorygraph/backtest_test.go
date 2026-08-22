@@ -190,6 +190,34 @@ func TestEvaluateUncoveredQueryFailsOutright(t *testing.T) {
 	}
 }
 
+// Cold start suppresses only statistical gates: malformed graphs and
+// unreferenced staging material must still fail gates 1 and 2.
+func TestEvaluateColdStartKeepsStructuralGates(t *testing.T) {
+	store := newTestStore(t)
+	seedGraphNode(t, store, 1, "n1", "alpha beta")
+	if err := store.WriteStagingSegment("seg-unreferenced", []byte("staging evidence")); err != nil {
+		t.Fatalf("WriteStagingSegment: %v", err)
+	}
+	cand, err := store.CreateVersionFrom(1, "ttt")
+	if err != nil {
+		t.Fatalf("CreateVersionFrom: %v", err)
+	}
+	if err := store.SaveEdges(cand, []*Edge{
+		{EdgeID: "bad", Type: EdgeTypeSummarizes, From: "n1", To: "missing", CreatedBy: "ttt", CreatedVersion: cand},
+	}, nil); err != nil {
+		t.Fatalf("SaveEdges: %v", err)
+	}
+
+	stats := NewBacktester(store, BacktestConfig{ColdStart: true}).EvaluateCandidate(context.Background(), cand, 1, nil)
+	if stats.Passed {
+		t.Fatal("cold-start candidate passed despite graph and staging structural failures")
+	}
+	failures := strings.Join(stats.GateFailures, ";")
+	if !strings.Contains(failures, "validate") || !strings.Contains(failures, "seg-unreferenced") {
+		t.Fatalf("cold-start gate failures = %v, want validate and staging coverage failures", stats.GateFailures)
+	}
+}
+
 // The n of the coverage check is the number of rounds the original query
 // needed (A2 step 2): the same hit set covers a two-hop ground truth only
 // when n reaches 2.

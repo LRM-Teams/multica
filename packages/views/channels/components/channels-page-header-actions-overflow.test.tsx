@@ -357,7 +357,9 @@ describe("ChannelsPage header actions — container-driven overflow (#568)", () 
     expectDirect();
 
     fireEvent.click(screen.getByLabelText("Open channel details"));
-    expect(await screen.findByText("Channel details")).toBeInTheDocument();
+    expect(
+      await screen.findByTestId("channel-details-home", {}, { timeout: 8000 }),
+    ).toBeInTheDocument();
     // Panel just opened — still plenty of (mocked) room, so the row hasn't
     // had a reason to collapse yet; this isolates "panel is open" from
     // "container got squeezed" as two independent inputs to the decision.

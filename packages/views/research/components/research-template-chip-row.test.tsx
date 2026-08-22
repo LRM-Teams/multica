@@ -33,26 +33,51 @@ function chipClass(id: string) {
 }
 
 /**
- * Pixel theme 2026-08-22 (supersedes the LRM-1189 blue triple): chips are
- * `.px-chip` bevel plates; selected/hover/focus visuals live in
- * research-home-visual.css keyed off `aria-checked` / `:focus-visible`.
- * The TSX must stay free of raw hex and per-tone utility classes.
+ * LRM-1189: drop raw-hex selected glow; selected + hover dark halves match the
+ * LRM-1175 inject-tag blue tone. Light classes stay frozen.
  */
-describe("pixel research template chip row · tokens", () => {
+describe("LRM-1189 research template chip row · tokens and dark parity", () => {
   it("has no raw hex and no arbitrary shadow anywhere in the source", () => {
     expect(SOURCE).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
     expect(SOURCE).not.toContain("shadow-[");
   });
 
-  it("every chip carries the px-chip bevel class in both states", () => {
+  it("selected chip keeps the frozen light triple and gains dark variants", () => {
     render(
       <ResearchTemplateChipRow selectedId={FIRST.id} onToggle={() => {}} />,
     );
-    expect(chipClass(FIRST.id)).toContain("px-chip");
+    const className = chipClass(FIRST.id);
+
+    expect(className).toContain("border-blue-400");
+    expect(className).toContain("bg-blue-50");
+    expect(className).toContain("text-blue-700");
+    expect(className).toContain("dark:bg-blue-400/[0.14]");
+    expect(className).toContain("dark:text-blue-200");
+    expect(className).toContain("dark:border-blue-400/45");
+    expect(className).not.toContain("shadow-[");
   });
 
-  it("no legacy blue tone utilities remain in the source", () => {
-    expect(SOURCE).not.toMatch(/\b(bg|text|border)-blue-\d/);
+  it("unselected chip hover tone also carries a dark variant", () => {
+    render(<ResearchTemplateChipRow selectedId={null} onToggle={() => {}} />);
+    const className = chipClass(FIRST.id);
+
+    expect(className).toContain("hover:border-blue-300");
+    expect(className).toContain("hover:bg-blue-50/60");
+    expect(className).toContain("hover:text-blue-700");
+    expect(className).toContain("dark:hover:bg-blue-400/[0.10]");
+    expect(className).toContain("dark:hover:text-blue-200");
+    expect(className).toContain("dark:hover:border-blue-400/45");
+  });
+
+  it("every light blue tone in the source has a dark counterpart on the same line", () => {
+    const toneLines = SOURCE.split("\n").filter((line) =>
+      /(bg-blue-50|text-blue-700|border-blue-(300|400))/.test(line),
+    );
+
+    expect(toneLines.length).toBeGreaterThan(0);
+    for (const line of toneLines) {
+      expect(line).toMatch(/dark:/);
+    }
   });
 
   it("keeps the frozen radiogroup contract (roles, aria-checked, testids)", () => {
@@ -69,7 +94,7 @@ describe("pixel research template chip row · tokens", () => {
     expect(
       screen.getByTestId(`research-template-chip-${FIRST.id}`),
     ).toHaveAttribute("aria-checked", "true");
-    expect(SOURCE).toContain("px-chip");
+    expect(SOURCE).toContain("focus-visible:ring-brand/30");
   });
 });
 

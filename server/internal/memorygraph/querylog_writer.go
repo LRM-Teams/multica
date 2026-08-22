@@ -4,9 +4,10 @@ import (
 	"fmt"
 )
 
-// QueryRecorder glues Explorer output and the on-disk query log of one
-// window (design §5.2): recalls are appended at recall time, and entries
-// carrying the legacy judge fields feed version backtests (design Q26).
+// QueryRecorder glues Explorer output, the async Judge, and the on-disk
+// query log of one window (design §5.2/5.3): recalls are appended at recall
+// time, judge results are written back asynchronously, and judged entries
+// feed version backtests (design Q26).
 type QueryRecorder struct {
 	store    *Store
 	windowID string
@@ -25,20 +26,71 @@ func (r *QueryRecorder) RecordRecall(e QueryLogEntry) error {
 	return nil
 }
 
-// QueriesBetween returns the judged entries of the current window whose graph
-// version falls in (aVersion, bVersion] — the backtest input for a version
-// transition (design Q26).
-func (r *QueryRecorder) QueriesBetween(aVersion, bVersion int) ([]*QueryLogEntry, error) {
+// BaselineSignal is the judge-time baseline coverage record written back
+// onto a query-log entry (design Q13/A2, review R10): the hybrid top-k hit
+// ids on the current version and whether the ground truth set lay within
+// their n-hop neighborhood (n = the adopted path's explore rounds).
+type BaselineSignal struct {
+	Covered bool
+	TopK    []string
+}
+
+// JudgeResult is the asynchronous judgment data written to a query-log entry.
+// The writer retains this transport type after the judge runtime was removed.
+type JudgeResult struct {
+	Score         float64  `json:"score"`
+	RelevantNodes []string `json:"relevant_nodes"`
+	Rationale     string   `json:"rationale"`
+}
+
+// ApplyJudge writes the judge result back onto the entry with the given trace
+// id: it marks the entry judged, records the score, the relevant-node ground
+// truth set, and the judge-time baseline coverage signal (design §5.3). It
+// reports whether a matching entry was found.
+func (r *QueryRecorder) ApplyJudge(traceID string, res *JudgeResult, baseline BaselineSignal) (bool, error) {
+	if res == nil {
+		return false, fmt.Errorf("query recorder: nil judge result")
+	}
+	found, err := r.store.UpdateQueryLogEntry(r.windowID, traceID, func(e *QueryLogEntry) {
+		e.JudgeDone = true
+		e.JudgeScore = res.Score
+		e.RelevantNodes = res.RelevantNodes
+		e.BaselineCovered = baseline.Covered
+		e.BaselineTopK = baseline.TopK
+	})
+	if err != nil {
+		return false, fmt.Errorf("query recorder: apply judge for trace %s: %w", traceID, err)
+	}
+	return found, nil
+}
+
+// EntriesBetween returns every entry of the current window whose graph
+// version falls in (aVersion, bVersion].
+func (r *QueryRecorder) EntriesBetween(aVersion, bVersion int) ([]*QueryLogEntry, error) {
 	entries, err := r.store.ReadQueryLog(r.windowID)
 	if err != nil {
 		return nil, fmt.Errorf("query recorder: read window %s: %w", r.windowID, err)
 	}
 	var out []*QueryLogEntry
 	for _, e := range entries {
-		if e.LegacyNonAuthoritative {
-			continue
+		if e.Version > aVersion && e.Version <= bVersion {
+			out = append(out, e)
 		}
-		if e.Version > aVersion && e.Version <= bVersion && e.JudgeDone {
+	}
+	return out, nil
+}
+
+// QueriesBetween returns the judged entries of the current window whose graph
+// version falls in (aVersion, bVersion] — the backtest input for a version
+// transition (design Q26).
+func (r *QueryRecorder) QueriesBetween(aVersion, bVersion int) ([]*QueryLogEntry, error) {
+	entries, err := r.EntriesBetween(aVersion, bVersion)
+	if err != nil {
+		return nil, err
+	}
+	var out []*QueryLogEntry
+	for _, e := range entries {
+		if e.JudgeDone {
 			out = append(out, e)
 		}
 	}

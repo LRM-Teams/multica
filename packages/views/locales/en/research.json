@@ -731,8 +731,6 @@
   },
   "home": {
     "composer_label": "Create a research session",
-    "frame_title": "New run",
-    "frame_tag": "NEW RUN",
     "hero_title": "Turn one question into a research constellation.",
     "hero_desc": "Ask a question worth understanding. The fleet branches, gathers evidence, validates conflicts, and delivers a research map.",
     "composer_hint": "⌘⏎ to start · stages S1–S4 stay visible",

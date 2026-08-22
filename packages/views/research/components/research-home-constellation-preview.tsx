@@ -11,31 +11,45 @@ import {
   knownResearchAttentionKind,
   selectedResearchSession,
 } from "../lib/research-home-selection";
-import vistaAsset from "../assets/pixel-sector-vista.png";
 
 const STAGES = ["s1_plan", "s2_sources", "s3_validation", "s4_delivery"] as const;
 
 /**
- * Nameplate anchor points, in percent of the sector view box. The lower band
- * is reserved for the focus plate and the stats strip, so all slots sit in
- * the upper ~60% of the vista.
+ * Satellite anchor points, in percent of the preview box. Edges are drawn in
+ * the same coordinate space (VIEW_W × VIEW_H with preserveAspectRatio="none"),
+ * so a rendered edge genuinely terminates at the node it belongs to.
  */
 const SLOTS = [
-  { left: 16, top: 20 },
-  { left: 82, top: 18 },
-  { left: 80, top: 52 },
-  { left: 18, top: 55 },
+  { left: 15, top: 24 },
+  { left: 85, top: 22 },
+  { left: 85, top: 64 },
+  { left: 15, top: 66 },
 ] as const;
 
-const vistaSrc = typeof vistaAsset === "string" ? vistaAsset : vistaAsset.src;
+const VIEW_W = 520;
+const VIEW_H = 226;
+const CENTER = { x: VIEW_W / 2, y: VIEW_H * 0.45 };
+
+/** Quadratic edge from the run hub to a satellite slot, bowed slightly. */
+function edgePath(slot: (typeof SLOTS)[number]): string {
+  const sx = (slot.left / 100) * VIEW_W;
+  const sy = (slot.top / 100) * VIEW_H;
+  const mx = (CENTER.x + sx) / 2;
+  const my = (CENTER.y + sy) / 2;
+  const dx = sx - CENTER.x;
+  const dy = sy - CENTER.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const cx = mx - (dy / len) * 14;
+  const cy = my + (dx / len) * 14;
+  return `M${CENTER.x},${CENTER.y} Q${cx.toFixed(1)},${cy.toFixed(1)} ${sx.toFixed(1)},${sy.toFixed(1)}`;
+}
 
 /**
- * LRM-783 home preview on real projection data (critique 2026-08-21), pixel
- * theme 2026-08-22: the vista is a hand-shaded pixel sector painting; the
- * focused run is the gold planet (focus plate), and its actual
- * `active_assignments` are named satellites pinned with nameplates — every
- * plate is a real "agent is working on this run" relationship. Workspace
- * aggregates stay in the honest stats band; no decorative pseudo-topology.
+ * LRM-783 home preview, rebuilt on real projection data (critique 2026-08-21):
+ * the desktop layer renders the focused run as a hub and its actual
+ * `active_assignments` as satellites — every drawn edge is a real
+ * "agent is working on this run" relationship. Workspace aggregates moved to
+ * an honest stat strip; no decorative pseudo-topology remains.
  */
 export function ResearchHomeConstellationPreview({ sessions, selectedId }: { sessions: ResearchSession[]; selectedId: string | null }) {
   const { t } = useT("research");
@@ -48,7 +62,6 @@ export function ResearchHomeConstellationPreview({ sessions, selectedId }: { ses
   const attention = active.filter((session) => Boolean(knownResearchAttentionKind(session.list_progress?.attention_kind))).length;
   const stage = focus?.current_stage ?? "s1_plan";
   const currentStage = Math.max(0, STAGES.indexOf(stage as (typeof STAGES)[number]));
-  const focusAttention = knownResearchAttentionKind(progress?.attention_kind);
 
   const assignments = (focus?.active_assignments ?? [])
     .toSorted((a, b) => Number(b.state === "running") - Number(a.state === "running"))
@@ -71,7 +84,28 @@ export function ResearchHomeConstellationPreview({ sessions, selectedId }: { ses
   return (
     <div className="research-home-constellation" data-testid="research-home-constellation" aria-label={t(($) => $.home_overview.constellation_label)}>
       <div className="hidden sm:block">
-        <img className="research-home-vista" src={vistaSrc} alt="" aria-hidden />
+        <svg className="absolute inset-0 size-full" viewBox={`0 0 ${VIEW_W} ${VIEW_H}`} preserveAspectRatio="none" aria-hidden>
+          <ellipse className="research-home-orbit" cx={CENTER.x} cy={CENTER.y} rx="194" ry="76" />
+          {assignments.map((assignment, index) => (
+            <path
+              key={assignment.task_id || assignment.agent_id}
+              className={`research-home-edge ${assignment.state === "running" ? "" : "research-home-edge-muted"}`}
+              d={edgePath(SLOTS[index]!)}
+            />
+          ))}
+        </svg>
+        <div className="research-home-node research-home-node-main">
+          <span className="w-[76px] min-w-0 overflow-hidden">
+            <span className="block text-xs font-medium uppercase tracking-wide text-success">{t(($) => $.stage_short[stage as keyof typeof $.stage_short] ?? stage)}</span>
+            <Tooltip>
+              <TooltipTrigger render={<span className="mt-1 hidden truncate text-xs font-medium text-foreground sm:block" />}>
+                {focus?.title || focus?.goal || t(($) => $.home_overview.constellation_empty)}
+              </TooltipTrigger>
+              <TooltipContent side="top">{focus?.title || focus?.goal}</TooltipContent>
+            </Tooltip>
+            <span className="mt-1 block text-xs tabular-nums text-muted-foreground">{progress ? t(($) => $.home_overview.tasks, { done: progress.task_completed, total: progress.task_total }) : "—"}</span>
+          </span>
+        </div>
         {assignments.map((assignment, index) => {
           const slot = SLOTS[index]!;
           const name = agentName(assignment);
@@ -84,54 +118,38 @@ export function ResearchHomeConstellationPreview({ sessions, selectedId }: { ses
               <TooltipTrigger
                 render={
                   <div
-                    className="research-home-plate"
+                    className="research-home-node research-home-node-sat"
                     style={{ left: `${slot.left}%`, top: `${slot.top}%` }}
                     data-testid="research-home-constellation-agent"
                     aria-label={`${name} · ${stateLabel}`}
                   />
                 }
               >
-                <span className="block max-w-[112px] truncate text-xs text-foreground">{name}</span>
-                <span className={`research-home-plate-state block truncate ${running ? "research-home-plate-state-on" : ""}`}>
-                  {stateLabel}
+                <span className="w-[52px] min-w-0 overflow-hidden">
+                  <span className="block truncate text-xs font-medium text-foreground">{name}</span>
+                  <span className={`mt-0.5 block truncate text-[10px] ${running ? "text-brand" : "text-muted-foreground"}`}>{stateLabel}</span>
                 </span>
               </TooltipTrigger>
               <TooltipContent side="top">{assignment.task_title || name}</TooltipContent>
             </Tooltip>
           );
         })}
-        <div className="research-home-focus-plate">
-          <Tooltip>
-            <TooltipTrigger render={<span className="block max-w-[300px] truncate text-sm text-foreground" />}>
-              {focus?.title || focus?.goal || t(($) => $.home_overview.constellation_empty)}
-            </TooltipTrigger>
-            <TooltipContent side="top">{focus?.title || focus?.goal}</TooltipContent>
-          </Tooltip>
-          <span className="text-xs text-muted-foreground">
-            <span className="text-success">{t(($) => $.stage_short[stage as keyof typeof $.stage_short] ?? stage)}</span>
-            <span aria-hidden> · </span>
-            <span className="tabular-nums">{progress ? t(($) => $.home_overview.tasks, { done: progress.task_completed, total: progress.task_total }) : "—"}</span>
-          </span>
-          {focus && assignments.length === 0 ? (
-            <span className="text-xs text-muted-foreground">{t(($) => $.home_overview.assignments_idle)}</span>
-          ) : null}
-          {focusAttention ? (
-            <span className="research-home-attention-tag text-xs">
-              {t(($) => $.home_overview.needs_attention)}
-            </span>
-          ) : null}
-        </div>
+        {focus && assignments.length === 0 ? (
+          <p className="absolute inset-x-6 bottom-9 text-center text-xs text-muted-foreground">
+            {t(($) => $.home_overview.assignments_idle)}
+          </p>
+        ) : null}
         <dl className="research-home-constellation-stats" data-testid="research-home-constellation-stats">
           {stats.map((item) => (
-            <div key={item.key} className="research-home-stat" data-stat={item.key}>
+            <div key={item.key} className="flex min-w-0 items-baseline gap-1.5">
+              <dd className="text-xs font-medium tabular-nums text-foreground">{item.value}</dd>
               <dt className="truncate text-[11px] text-muted-foreground">{item.label}</dt>
-              <dd className="text-sm tabular-nums text-foreground">{item.value}</dd>
             </div>
           ))}
         </dl>
       </div>
       <div className="absolute inset-x-4 top-1/2 flex -translate-y-1/2 sm:hidden" aria-label={t(($) => $.home_overview.stage_progress)}>
-        {STAGES.map((item, index) => <div key={item} className="relative flex min-w-0 flex-1 flex-col items-center text-center">{index > 0 ? <span className={`absolute right-1/2 top-3 h-px w-full ${index <= currentStage ? "bg-success/60" : "bg-border"}`} aria-hidden /> : null}<span className={`relative z-[1] grid size-7 place-items-center border-2 bg-card text-xs ${index === currentStage ? "border-brand text-brand" : index < currentStage ? "border-success text-success" : "border-border text-muted-foreground"}`}>{index + 1}</span><span className="mt-2 text-xs text-muted-foreground">{t(($) => $.stage_short[item])}</span></div>)}
+        {STAGES.map((item, index) => <div key={item} className="relative flex min-w-0 flex-1 flex-col items-center text-center">{index > 0 ? <span className={`absolute right-1/2 top-3 h-px w-full ${index <= currentStage ? "bg-success/60" : "bg-border"}`} aria-hidden /> : null}<span className={`relative z-[1] grid size-7 place-items-center rounded-full border bg-card text-xs ${index === currentStage ? "border-brand text-brand" : index < currentStage ? "border-success text-success" : "border-border text-muted-foreground"}`}>{index + 1}</span><span className="mt-2 text-xs text-muted-foreground">{t(($) => $.stage_short[item])}</span></div>)}
       </div>
     </div>
   );

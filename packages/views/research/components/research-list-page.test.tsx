@@ -450,22 +450,38 @@ describe("ResearchListPage list states (LRM-789)", () => {
     expect(list?.querySelector('[role="radiogroup"]')).toBeTruthy();
   });
 
-  it("keeps the compact composer above the fold without the legacy atmosphere layer", () => {
+  it("keeps the atmosphere at shell level and the compact composer above the fold", () => {
     setQuery({
       data: {
         sessions: [session({ id: "s-run", status: "running", title: "Alpha" })],
       },
     });
-    render(<ResearchListPage />);
-    // Pixel theme 2026-08-22: the starfield lives on the theme root; the old
-    // dot-grid atmosphere layer is gone from the home shell.
-    expect(screen.queryByTestId("research-shell-atmosphere")).toBeNull();
+    const { container, rerender } = render(<ResearchListPage />);
+    const workbench = container.querySelector('[data-testid="research-list-workbench"]');
+    const atmosphere = screen.getByTestId("research-shell-atmosphere");
+    expect(workbench?.contains(atmosphere)).toBe(true);
+    expect(screen.getByTestId("research-home-hero").contains(atmosphere)).toBe(false);
+    expect(atmosphere.className).toContain("h-[200px]");
 
     const desc = screen.getByText(enResearch.home.hero_desc);
     expect(desc.className).not.toContain("max-w-[36rem]");
+    expect(desc.className).toContain("line-clamp-1");
 
     const goal = screen.getByTestId("research-create-goal");
     expect(goal.className).toContain("min-h-10");
+
+    setQuery({ data: undefined, isLoading: true });
+    rerender(<ResearchListPage />);
+    expect(screen.queryByTestId("research-shell-atmosphere")).toBeNull();
+
+    setQuery({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: new Error("boom"),
+    });
+    rerender(<ResearchListPage />);
+    expect(screen.queryByTestId("research-shell-atmosphere")).toBeNull();
   });
 });
 
@@ -529,10 +545,10 @@ describe("ResearchListPage composer hero (LRM-783 / LRM-784 / LRM-906)", () => {
     setQuery({ data: { sessions: [] } });
   });
 
-  it("renders pixel-frame title, visible value line, and start CTA", () => {
+  it("renders brand-hero title, visible value line, and start CTA", () => {
     render(<ResearchListPage />);
     expect(screen.getByTestId("research-home-hero")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: enResearch.home.frame_title })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: enResearch.home.hero_title })).toBeInTheDocument();
     // LRM-783: value line is visible (not sr-only).
     const desc = screen.getByText(enResearch.home.hero_desc);
     expect(desc).toBeInTheDocument();
@@ -551,14 +567,17 @@ describe("ResearchListPage composer hero (LRM-783 / LRM-784 / LRM-906)", () => {
     expect(page.className).toContain("dark");
   });
 
-  it("wires pixel bevel CTA styling (theme 2026-08-22, supersedes LRM-837)", () => {
+  it("wires hero CTA micro-interaction tokens (LRM-837)", () => {
     render(<ResearchListPage />);
     const start = screen.getByTestId("research-create-submit");
     const params = screen.getByTestId("research-create-params-open");
     const composer = screen.getByTestId("research-home-composer");
-    expect(start.className).toContain("px-btn-gold");
-    expect(params.className).toContain("px-btn");
-    expect(composer.className).toContain("focus-within:border-muted-foreground");
+    expect(start.className).toContain("--motion-duration-moderate");
+    expect(start.className).toContain("focus-visible:ring");
+    expect(start.className).toContain("active:scale");
+    expect(params.className).toContain("--motion-duration-moderate");
+    expect(params.className).toContain("active:scale");
+    expect(composer.className).toContain("--motion-duration-moderate");
     // Narrow: start is full-width (not hover-dependent layout).
     expect(start.className).toContain("w-full");
   });

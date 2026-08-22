@@ -22,6 +22,12 @@ const CHIP_DARK_TRIPLE = [
   "dark:text-blue-200",
 ] as const;
 
+const CHIP_HOVER_DARK = [
+  "dark:hover:border-blue-400/45",
+  "dark:hover:bg-blue-400/[0.10]",
+  "dark:hover:text-blue-200",
+] as const;
+
 const here = path.dirname(fileURLToPath(import.meta.url));
 const researchRoot = path.resolve(here, "..");
 
@@ -51,14 +57,23 @@ describe("LRM-1196 research template chip/inject · dark parity + raw-hex guard"
   const chipSrc = readComponent("research-template-chip-row.tsx");
   const injectSrc = readComponent("research-template-inject-tag.tsx");
 
-  it("chip source is pixel-theme bevel: px-chip class, no blue tones, no raw hex", () => {
-    // Pixel theme 2026-08-22: chips decoupled from the LRM-1175 blue pair —
-    // state visuals live in research-home-visual.css keyed off aria-checked.
-    expect(chipSrc).toContain("px-chip");
-    expect(chipSrc).not.toMatch(/\b(bg|text|border)-blue-\d/);
+  it("chip selected state keeps LRM-1175 dark triple and has no raw hex halo", () => {
+    for (const token of CHIP_DARK_TRIPLE) {
+      expect(chipSrc, token).toContain(token);
+    }
+    expect(chipSrc).toContain("border-blue-400 bg-blue-50 text-blue-700");
     expect(chipSrc).not.toMatch(FORBIDDEN_CHIP_HALO);
     expect(chipSrc).not.toMatch(FORBIDDEN_SHADOW_RAW_HEX);
     expect(chipSrc).not.toContain("shadow-[");
+  });
+
+  it("chip unselected hover carries dark hover dual", () => {
+    for (const token of CHIP_HOVER_DARK) {
+      expect(chipSrc, token).toContain(token);
+    }
+    expect(chipSrc).toContain("hover:border-blue-300");
+    expect(chipSrc).toContain("hover:bg-blue-50/60");
+    expect(chipSrc).toContain("hover:text-blue-700");
   });
 
   it("inject tag industry tone keeps the same dark triple (pair contract)", () => {

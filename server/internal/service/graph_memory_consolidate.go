@@ -52,11 +52,15 @@ func (s *GraphMemoryConsolidationService) Run(ctx context.Context, workspaceID, 
 		return "", err
 	}
 	runID := util.UUIDToString(run.ID)
-	go s.execute(context.Background(), run.ID, workspaceID)
+	tttEnabled := false
+	if profile, perr := s.queries.GetGraphMemoryProfile(ctx, ws); perr == nil {
+		tttEnabled = profile.TttEnabled
+	}
+	go s.execute(context.Background(), run.ID, workspaceID, tttEnabled)
 	return runID, nil
 }
 
-func (s *GraphMemoryConsolidationService) execute(ctx context.Context, runID pgtype.UUID, workspaceID string) {
+func (s *GraphMemoryConsolidationService) execute(ctx context.Context, runID pgtype.UUID, workspaceID string, tttEnabled bool) {
 	details := map[string]any{}
 	finish := func(status, errText string) {
 		body, _ := json.Marshal(details)
@@ -87,7 +91,11 @@ func (s *GraphMemoryConsolidationService) execute(ctx context.Context, runID pgt
 			if err != nil {
 				return err
 			}
-			c := memorygraph.NewConsolidator(store, backend, memorygraph.DefaultConsolidateConfig(), "pi",
+			cfg := memorygraph.DefaultConsolidateConfig()
+			if !tttEnabled {
+				cfg.TTVTrajectories = 1
+			}
+			c := memorygraph.NewConsolidator(store, backend, cfg, "pi",
 				memorygraph.NewOpLogger(store), memorygraph.NewTraceRecorder(dir))
 			res, err := c.Consolidate(ctx)
 			if err != nil {

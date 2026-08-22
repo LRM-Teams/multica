@@ -151,7 +151,7 @@ const COPY = {
   memoryTypeGraphConfirmApply: "Switch to graph",
   memoryTypeGraphConfirmCancel: "Cancel",
   graphTtt: "Test-time training",
-  graphTttHint: "When on, each recall runs K independent Explore trajectories and adopts the fastest success; when off, recall runs exactly one trajectory. Graph consolidation always generates multiple candidate versions in parallel and adopts the best, regardless of this switch.",
+  graphTttHint: "When on, each recall runs K independent Explore trajectories and adopts the fastest success, and graph consolidation generates multiple candidate versions in parallel and adopts the best. When off, both run exactly one trajectory.",
   graphTttConcurrency: "TTT concurrency",
   graphTttEffectiveK: "Effective K = 1 while TTT is off",
   graphTttSave: "Save TTT settings",

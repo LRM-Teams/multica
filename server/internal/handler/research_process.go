@@ -36,11 +36,10 @@ func (h *Handler) publishResearchGraph(workspaceID string, actorType, actorID st
 		if _, err := h.ResearchRun.Snapshot(context.Background(), runID, workspaceID); err == nil {
 			var sequence int64
 			if err = h.DB.QueryRow(context.Background(), `SELECT COALESCE(max(sequence),0) FROM research_run_event WHERE workspace_id=$1::uuid AND session_id=$2::uuid`, workspaceID, runID).Scan(&sequence); err == nil {
-				// This compatibility callback has no committed Run Event payload and
-				// therefore no trustworthy prior graph baseline for tombstones. Tell
-				// V6 clients to reload instead of publishing a lossy synthetic delta.
+				// This compatibility callback has no committed Run Event payload;
+				// signal the current sequence so V6 clients catch up over HTTP.
 				h.publish(protocol.EventResearchProjectionV6Delta, workspaceID, actorType, actorID,
-					researchV6RealtimeResyncEnvelope{RunID: runID, ResyncRequired: true, ThroughSequence: sequence})
+					researchV6SequenceAdvanceEnvelope{RunID: runID, ThroughSequence: sequence})
 			}
 		}
 	}

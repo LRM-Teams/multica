@@ -23,7 +23,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
-import { api } from "@multica/core/api";
+import { api, ApiError } from "@multica/core/api";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { agentListOptions } from "@multica/core/workspace/queries";
@@ -124,6 +124,7 @@ const COPY = {
   memoryTypeLegacy: "Legacy (MEMORY.md)",
   memoryTypeGraph: "Graph memory (experimental)",
   memoryTypeSaved: "Memory type updated",
+  memoryTypeConflict: "Profile changed elsewhere, refreshed",
   graphStatus: "Graph memory status",
   graphStatusHint: "Per-graph versions, staging depth, and recall for this workspace.",
   graphEmptyStart: "Graph memory starts empty: no legacy project, channel, or daily memory was imported, and graph misses never fall back to it.",
@@ -1070,7 +1071,7 @@ function draftFromProfile(profile: MemoryCuratorProfile | undefined): CuratorPro
   };
 }
 
-function MemoryTypeCard({ wsId, isAdmin }: { wsId: string; isAdmin: boolean }) {
+export function MemoryTypeCard({ wsId, isAdmin }: { wsId: string; isAdmin: boolean }) {
   const copy = useEvolutionCopy();
   const queryClient = useQueryClient();
   const { data: profile } = useQuery(graphMemoryProfileOptions(wsId));
@@ -1087,7 +1088,7 @@ function MemoryTypeCard({ wsId, isAdmin }: { wsId: string; isAdmin: boolean }) {
     mutationFn: (next: GraphMemoryType) => api.updateGraphMemoryProfile(wsId, {
       memory_type: next,
       explore_agents: profile?.explore_agents ?? 4,
-      explore_max_rounds: profile?.explore_max_rounds ?? 3,
+      explore_max_rounds: profile?.explore_max_rounds ?? 6,
       config_version: profile?.config_version ?? 0,
       ...(next === "graph" ? { confirm_empty_start: true } : {}),
     }),
@@ -1097,7 +1098,14 @@ function MemoryTypeCard({ wsId, isAdmin }: { wsId: string; isAdmin: boolean }) {
       setConfirmed(false);
       await queryClient.invalidateQueries({ queryKey: evolutionKeys.graphMemoryProfile(wsId) });
     },
-    onError: (error) => showErrorToast(error instanceof Error ? error.message : copy("memoryType")),
+    onError: (error) => {
+      if (error instanceof ApiError && error.status === 409) {
+        void queryClient.invalidateQueries({ queryKey: evolutionKeys.graphMemoryProfile(wsId) });
+        showErrorToast(copy("memoryTypeConflict"));
+        return;
+      }
+      showErrorToast(error instanceof Error ? error.message : copy("memoryType"));
+    },
   });
 
   return (

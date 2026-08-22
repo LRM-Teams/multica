@@ -19,6 +19,7 @@
   "memoryTypeLegacy": "Legacy (MEMORY.md)",
   "memoryTypeGraph": "Graph memory (experimental)",
   "memoryTypeSaved": "Memory type updated",
+  "memoryTypeConflict": "Profile changed elsewhere, refreshed",
   "graphStatus": "Graph memory status",
   "graphStatusHint": "Per-graph versions, staging depth, and recall for this workspace.",
   "graphEmptyStart": "Graph memory starts empty: no legacy project, channel, or daily memory was imported, and graph misses never fall back to it.",

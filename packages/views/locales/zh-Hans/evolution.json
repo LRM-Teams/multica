@@ -19,6 +19,7 @@
   "memoryTypeLegacy": "现有记忆管线（MEMORY.md）",
   "memoryTypeGraph": "图记忆（实验）",
   "memoryTypeSaved": "记忆类型已更新",
+  "memoryTypeConflict": "配置已在别处更改，已重新加载",
   "graphStatus": "图记忆状态",
   "graphStatusHint": "此工作区每个图的版本、暂存深度与召回情况。",
   "graphEmptyStart": "图记忆从空开始：不会导入任何 legacy 项目、频道或日报记忆，图未命中也绝不回退到它们。",

@@ -2226,6 +2226,17 @@ WITH task_progress AS (
   FROM research_observation
   WHERE workspace_id = $1 AND verification_status <> 'rejected'
   GROUP BY session_id
+), v6_evidence_progress AS (
+  -- V6 runs never write research_observation; accepted atomic results live in
+  -- research_result_node, so evidence counters must read from there instead.
+  SELECT n.session_id, count(*) AS evidence_count,
+    count(*) FILTER (WHERE n.created_at >= now() - interval '24 hours') AS today_evidence_count
+  FROM research_result_node n
+  JOIN research_session s ON s.id = n.session_id
+  WHERE n.workspace_id = $1
+    AND s.orchestrator_version = 'research-run-v6'
+    AND n.conclusion_state NOT IN ('refuted', 'invalid')
+  GROUP BY n.session_id
 ), node_progress AS (
   SELECT session_id, count(*) AS node_count
   FROM research_graph_node
@@ -2247,8 +2258,8 @@ SELECT
   COALESCE(wp.task_completed, tp.task_completed, 0)::bigint AS task_completed,
   COALESCE(wp.task_running, tp.task_running, 0)::bigint AS task_running,
   COALESCE(wp.task_blocked, tp.task_blocked, 0)::bigint AS task_blocked,
-  COALESCE(ep.evidence_count, 0)::bigint AS evidence_count,
-  COALESCE(ep.today_evidence_count, 0)::bigint AS today_evidence_count,
+  COALESCE(vep.evidence_count, ep.evidence_count, 0)::bigint AS evidence_count,
+  COALESCE(vep.today_evidence_count, ep.today_evidence_count, 0)::bigint AS today_evidence_count,
   COALESCE(np.node_count, 0)::bigint AS node_count,
   COALESCE(qp.open_question_count, 0)::bigint AS open_question_count,
   (s.status = 'awaiting_user_confirm') AS awaiting_user_action,
@@ -2265,6 +2276,7 @@ FROM research_session s
 LEFT JOIN task_progress tp ON tp.session_id = s.id
 LEFT JOIN work_item_progress wp ON wp.session_id = s.id
 LEFT JOIN evidence_progress ep ON ep.session_id = s.id
+LEFT JOIN v6_evidence_progress vep ON vep.session_id = s.id
 LEFT JOIN node_progress np ON np.session_id = s.id
 LEFT JOIN question_progress qp ON qp.session_id = s.id
 WHERE s.workspace_id = $1

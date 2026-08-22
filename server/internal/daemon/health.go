@@ -4,13 +4,11 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/multica-ai/multica/server/internal/cli"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -125,9 +123,9 @@ func (d *Daemon) credentialProxyMessageReadHandler() http.HandlerFunc {
 			http.Error(w, "agent_id, workspace_id, and target are required", http.StatusBadRequest)
 			return
 		}
-		credential, ok := readCachedAgentCredentialForMessage(d.cfg, request.WorkspaceID, request.AgentID, time.Now())
-		if !ok {
-			http.Error(w, "Agent credential is unavailable", http.StatusConflict)
+		credential, err := d.messageAgentCredential(r.Context(), request.WorkspaceID, request.AgentID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}
 
@@ -196,10 +194,10 @@ func (d *Daemon) credentialProxyMessageReadHandler() http.HandlerFunc {
 
 // credentialProxyAgentMessageClient resolves the durable credential locally.
 // The Agent process never receives it, nor any task/lease/execution envelope.
-func (d *Daemon) credentialProxyAgentMessageClient(workspaceID, agentID string) (*cli.APIClient, error) {
-	credential, ok := readCachedAgentCredentialForMessage(d.cfg, workspaceID, agentID, time.Now())
-	if !ok {
-		return nil, errors.New("Agent credential is unavailable")
+func (d *Daemon) credentialProxyAgentMessageClient(ctx context.Context, workspaceID, agentID string) (*cli.APIClient, error) {
+	credential, err := d.messageAgentCredential(ctx, workspaceID, agentID)
+	if err != nil {
+		return nil, err
 	}
 	client := cli.NewAPIClient(d.cfg.ServerBaseURL, workspaceID, credential.Token)
 	client.AgentID = agentID
@@ -235,7 +233,7 @@ func (d *Daemon) credentialProxyMessageSearchHandler() http.HandlerFunc {
 			}
 			return
 		}
-		client, err := d.credentialProxyAgentMessageClient(request.WorkspaceID, request.AgentID)
+		client, err := d.credentialProxyAgentMessageClient(r.Context(), request.WorkspaceID, request.AgentID)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
@@ -301,7 +299,7 @@ func (d *Daemon) credentialProxyMessageMutationHandler(path string, bodyFor any)
 			http.Error(w, "agent_id, workspace_id, and message identity are required", http.StatusBadRequest)
 			return
 		}
-		client, err := d.credentialProxyAgentMessageClient(workspaceID, agentID)
+		client, err := d.credentialProxyAgentMessageClient(r.Context(), workspaceID, agentID)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return

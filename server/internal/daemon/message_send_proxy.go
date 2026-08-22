@@ -63,9 +63,9 @@ func (d *Daemon) credentialProxyMessageSendHandler() http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		credential, ok := readCachedAgentCredentialForMessage(d.cfg, request.WorkspaceID, request.AgentID, time.Now())
-		if !ok {
-			http.Error(w, "Agent credential is unavailable", http.StatusConflict)
+		credential, err := d.messageAgentCredential(r.Context(), request.WorkspaceID, request.AgentID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}
 

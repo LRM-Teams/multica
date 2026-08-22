@@ -149,6 +149,8 @@
     "detail_close": "关闭详情"
   },
   "v6_detail": {
+    "live_activity": "实时动态",
+    "live_activity_stale": "执行租约已过期，服务端正在重新派发这项工作。",
     "execution": "执行状态",
     "absorbed": "已吸收",
     "terminal": "终止状态",

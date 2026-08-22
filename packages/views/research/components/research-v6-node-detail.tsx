@@ -35,6 +35,17 @@ function relatedNodeId(
     : edge.from_node_id;
 }
 
+/** Live executor caption for the selected node, derived from run presence. */
+export type ResearchV6NodeLiveActivity = {
+  /** Executor display name. */
+  name: string;
+  /** Latest live caption (progress note or protocol milestone). */
+  activity: string;
+  phase: "queued" | "running" | "stale";
+  /** Unix ms of the latest live signal; null when undated. */
+  updatedAt: number | null;
+};
+
 export function ResearchV6NodeDetail({
   node,
   detail,
@@ -46,6 +57,7 @@ export function ResearchV6NodeDetail({
   error,
   selectedForChat,
   projectionNodeById,
+  liveActivity,
   onRetry,
   onRetryWorkActivity,
   onReference,
@@ -61,6 +73,7 @@ export function ResearchV6NodeDetail({
   error: boolean;
   selectedForChat: boolean;
   projectionNodeById: ReadonlyMap<string, ResearchV6DirectorProjectionNode>;
+  liveActivity?: ResearchV6NodeLiveActivity | null;
   onRetry: () => void;
   onRetryWorkActivity?: () => void;
   onReference: () => void;
@@ -162,6 +175,44 @@ export function ResearchV6NodeDetail({
           </p>
         ) : null}
       </header>
+
+      {liveActivity ? (
+        <div
+          className="space-y-1 rounded-xl border border-primary/25 bg-primary/5 px-3 py-2.5"
+          role="status"
+          aria-live="polite"
+        >
+          <div className="flex items-center gap-2 text-[11px] font-semibold">
+            <span
+              className={
+                liveActivity.phase === "stale"
+                  ? "size-2 shrink-0 rounded-full bg-amber-500"
+                  : "size-2 shrink-0 animate-pulse rounded-full bg-primary"
+              }
+              aria-hidden="true"
+            />
+            <span className="truncate text-primary">
+              {t(($) => $.v6_detail.live_activity)} · {liveActivity.name}
+            </span>
+            {liveActivity.updatedAt != null ? (
+              <span className="ml-auto shrink-0 font-normal text-muted-foreground">
+                <Time
+                  kind="relative"
+                  value={new Date(liveActivity.updatedAt).toISOString()}
+                />
+              </span>
+            ) : null}
+          </div>
+          <p className="break-words text-sm leading-relaxed text-foreground">
+            {liveActivity.activity}
+          </p>
+          {liveActivity.phase === "stale" ? (
+            <p className="text-[11px] leading-relaxed text-muted-foreground">
+              {t(($) => $.v6_detail.live_activity_stale)}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
 
       {node.kind === "work_s" ? (
         <section

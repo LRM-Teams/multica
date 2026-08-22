@@ -255,6 +255,10 @@ func (e *Engine) AcknowledgeWorkCatalog(ctx context.Context, in AcknowledgeV6Cat
 	return (workCatalogModule{store: e.store}).Acknowledge(ctx, in)
 }
 
+func (e *Engine) ReportWorkProgress(ctx context.Context, in ReportV6WorkProgressInput) error {
+	return (workProgressModule{store: e.store}).Report(ctx, in)
+}
+
 func (e *Engine) SubmitV6Work(ctx context.Context, in V6SubmissionInput) (V6SubmissionOutcome, error) {
 	return (v6SubmissionModule{store: e.store}).Submit(ctx, in)
 }

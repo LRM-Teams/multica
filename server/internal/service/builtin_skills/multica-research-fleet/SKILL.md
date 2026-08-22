@@ -95,6 +95,21 @@ use `Content-Type: application/json`; a strict submission uses
 authorization as the CLI and exists because server CI/CD may deploy before a
 local daemon binary is upgraded.
 
+Report live progress throughout the attempt so humans can follow the work.
+Immediately after reading the Manifest, and again on every phase change
+(reading the brief or catalog, searching, reading sources, analyzing,
+drafting, verifying), POST a one-line note to `${V6_API}/progress`:
+
+```bash
+"${V6_CURL[@]}" -X POST -H 'Content-Type: application/json' \
+  -d '{"client_request_id":"<new-uuid>","text":"<one line, mission language, ≤240 chars>","stage":"<short-key>"}' \
+  "${V6_API}/progress"
+```
+
+Progress notes are observability only. They never settle the Work Item, the
+server caps them per attempt, and a failed progress POST must never block or
+retry-loop the mission — ignore its errors and continue.
+
 For a Director assignment, read every Brief page by following `next_cursor` and
 acknowledge each page with the exact IDs and hashes returned in that page:
 

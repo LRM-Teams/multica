@@ -57,8 +57,8 @@ func TestBuildResearchV6PresenceRoster(t *testing.T) {
 	}
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO research_director_assignment (
-			workspace_id, session_id, director_agent_id, generation, status, assigned_by_user_id
-		) VALUES ($1::uuid, $2::uuid, $3::uuid, 1, 'active', $4::uuid)
+			workspace_id, session_id, director_agent_id, generation, status, assigned_by_user_id, reason
+		) VALUES ($1::uuid, $2::uuid, $3::uuid, 1, 'active', $4::uuid, 'presence fixture')
 	`, testWorkspaceID, sessionID, directorAgentID, testUserID); err != nil {
 		t.Fatalf("create director assignment: %v", err)
 	}

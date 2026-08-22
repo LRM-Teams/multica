@@ -9,6 +9,8 @@
  * visual path instead of taking down the complete canvas.
  */
 
+import type { RunnerActivityTimelineRow } from "./events";
+
 export type ResearchV6DirectorEntityKind =
   | "goal"
   | "branch"
@@ -214,6 +216,24 @@ export interface ResearchV6DirectorNodeDetail {
   report_refs: ResearchV6DirectorEntityRef[];
 }
 
+export interface ResearchV6DirectorWorkActivity {
+  work_item_id: string;
+  attempt_id: string;
+  agent_id: string;
+  agent_name: string;
+  inbox_task_id: string;
+  mission: string;
+  status: string;
+  progress: string;
+  progress_step: number;
+  progress_total: number;
+  started_at?: string;
+  completed_at?: string;
+  updated_at: string;
+  timeline: RunnerActivityTimelineRow[];
+  timeline_has_more: boolean;
+}
+
 export interface ResearchV6DirectorReportReview {
   id?: string;
   decision: string;
@@ -339,6 +359,12 @@ export interface ResearchV6DirectorDetailTransport {
     view: ResearchV6DirectorNodeDetailView,
     signal?: AbortSignal,
   ): Promise<ResearchV6DirectorNodeDetail>;
+  loadWorkActivity(
+    workspaceId: string,
+    runId: string,
+    workItemId: string,
+    signal?: AbortSignal,
+  ): Promise<ResearchV6DirectorWorkActivity>;
   listReports(
     workspaceId: string,
     runId: string,

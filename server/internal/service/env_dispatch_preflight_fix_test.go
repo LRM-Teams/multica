@@ -15,7 +15,8 @@ type mixedBranchPreflightDeps struct {
 	failStage              string
 	events                 []string
 	acceptedMessages       int
-	agentTurns            int
+	agentTurns             int
+	deliveryDone           chan struct{}
 	startAttempts          int
 	preparedAgents         []string
 	revokedAgents          []string
@@ -44,7 +45,7 @@ func newMixedBranchPreflightDeps() *mixedBranchPreflightDeps {
 		SourceMessageID: "source-message", TaskID: "source-task", RuntimeID: "source-runtime",
 	}
 	base.branchSourceSandbox = "source-sandbox-online"
-	return &mixedBranchPreflightDeps{fakeEnvDispatchDeps: base}
+	return &mixedBranchPreflightDeps{fakeEnvDispatchDeps: base, deliveryDone: make(chan struct{})}
 }
 
 func (f *mixedBranchPreflightDeps) ProvisionEnvDispatchAgent(ctx context.Context, in EnvDispatchAgentProvisionInput) (EnvDispatchAgentProvisionResult, error) {
@@ -122,6 +123,7 @@ func (f *mixedBranchPreflightDeps) PersistMixedDispatchInitialMessage(_ context.
 		f.events = append(f.events, "deliver")
 		f.acceptedMessages++
 		f.agentTurns++
+		close(f.deliveryDone)
 	}), nil
 }
 
@@ -180,6 +182,11 @@ func TestDispatchMixedBranchCompletesPreflightBeforeCanonicalSend(t *testing.T) 
 	result, err := NewEnvDispatchService(deps, 1).WithBranchSavepoints(newFakeBranchSavepointProvider()).Dispatch(context.Background(), mixedBranchDispatchInput())
 	if err != nil {
 		t.Fatalf("mixed branch dispatch: %v", err)
+	}
+	select {
+	case <-deps.deliveryDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("detached initial-message acknowledgement did not complete")
 	}
 	wantEvents := []string{
 		"provision:agent-online", "provision:agent-offline",
@@ -335,4 +342,65 @@ func stringCountSet(values []string) map[string]int {
 		set[value]++
 	}
 	return set
+}
+
+// blockingMixedDispatchAckDeps holds the canonical post-acceptance callback so
+// the dispatch test can prove that acknowledgment never blocks the response.
+type blockingMixedDispatchAckDeps struct {
+	*fakeEnvDispatchDeps
+	entered chan struct{}
+	release <-chan struct{}
+}
+
+func (f *blockingMixedDispatchAckDeps) PersistMixedDispatchInitialMessage(ctx context.Context, channelID, workspaceID, userID, content string) (PreparedMixedDispatchMessage, error) {
+	messageID, err := f.CreateChannelMessage(ctx, channelID, workspaceID, userID, content)
+	if err != nil {
+		return PreparedMixedDispatchMessage{}, err
+	}
+	return NewPreparedMixedDispatchMessage(messageID, time.Now().UTC(), func(context.Context) {
+		close(f.entered)
+		<-f.release
+	}), nil
+}
+
+func TestDispatchMixedReturnsBeforeInitialMessageAcknowledgement(t *testing.T) {
+	base := newFakeEnvDispatchDeps()
+	baseEnv := base.seedBaseEnv()
+	base.messageRoster = MessageRoster{LeaderID: "agent-a", AgentIDs: []string{"agent-a"}}
+	base.mixedRoster = []MixedDispatchRosterAgent{{
+		SourceAgentID: "agent-a", Provider: "pi", TargetPolicy: "target-a", Tokenizer: "tokenizer-a", OfflineReady: true,
+	}}
+	release := make(chan struct{})
+	deps := &blockingMixedDispatchAckDeps{
+		fakeEnvDispatchDeps: base,
+		entered:             make(chan struct{}),
+		release:             release,
+	}
+	defer close(release)
+
+	result := make(chan error, 1)
+	go func() {
+		_, err := NewEnvDispatchService(deps, 1).Dispatch(context.Background(), EnvDispatchInput{
+			WorkspaceID: "ws", UserID: "u", Mode: EnvModeScratch, EnvID: baseEnv,
+			Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1,
+			AgentID: "agent-a", OfflineTrainableAgents: []string{"agent-a"},
+			QuietWindowMS: 2000, TotalTimeoutSeconds: 3300,
+			Message: &MessageInput{Content: "start mixed run"},
+		})
+		result <- err
+	}()
+
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatalf("mixed dispatch: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("mixed dispatch waited for initial-message acknowledgement")
+	}
+	select {
+	case <-deps.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("detached initial-message acknowledgement did not start")
+	}
 }

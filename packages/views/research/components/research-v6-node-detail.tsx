@@ -5,7 +5,9 @@ import type {
   ResearchV6DirectorNodeDetail,
   ResearchV6DirectorProjectionEdge,
   ResearchV6DirectorProjectionNode,
+  ResearchV6DirectorWorkActivity,
 } from "@multica/core/types/research-v6-director";
+import type { RunnerActivityTimelineRow } from "@multica/core/types/events";
 import { Button } from "@multica/ui/components/ui/button";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import {
@@ -13,10 +15,13 @@ import {
   ArrowUpRight,
   GitBranch,
   History,
+  LoaderCircle,
   Link2,
   LocateFixed,
   MessageSquareText,
   RefreshCw,
+  TerminalSquare,
+  Wrench,
 } from "lucide-react";
 import { useT } from "../../i18n/use-t";
 import { Time } from "../../i18n/time";
@@ -44,23 +49,33 @@ export type ResearchV6NodeLiveActivity = {
 export function ResearchV6NodeDetail({
   node,
   detail,
+  workActivity,
+  workTimeline,
+  workActivityLoading = false,
+  workActivityError = false,
   loading,
   error,
   selectedForChat,
   projectionNodeById,
   liveActivity,
   onRetry,
+  onRetryWorkActivity,
   onReference,
   onFocusNode,
 }: {
   node: ResearchV6DirectorProjectionNode;
   detail?: ResearchV6DirectorNodeDetail;
+  workActivity?: ResearchV6DirectorWorkActivity;
+  workTimeline?: readonly RunnerActivityTimelineRow[];
+  workActivityLoading?: boolean;
+  workActivityError?: boolean;
   loading: boolean;
   error: boolean;
   selectedForChat: boolean;
   projectionNodeById: ReadonlyMap<string, ResearchV6DirectorProjectionNode>;
   liveActivity?: ResearchV6NodeLiveActivity | null;
   onRetry: () => void;
+  onRetryWorkActivity?: () => void;
   onReference: () => void;
   onFocusNode: (nodeId: string) => void;
 }) {
@@ -102,6 +117,37 @@ export function ResearchV6NodeDetail({
     const labels = t(($) => $.v6_detail.relation_kind, { returnObjects: true });
     return labels[kind as keyof typeof labels] ?? kind;
   };
+  const stateValueLabel = (value: string) => {
+    const labels = t(($) => $.v6_detail.state_value, { returnObjects: true });
+    return labels[value as keyof typeof labels] ?? value;
+  };
+  const activityTitleLabels = t(($) => $.v6_detail.activity_title, {
+    returnObjects: true,
+  });
+  const activityTitleLabel = (title: string) => {
+    const key = title
+      .trim()
+      .toLowerCase()
+      .replace(/[.…]+$/u, "")
+      .replace(/[^a-z0-9]+/g, "_");
+    return (
+      activityTitleLabels[key as keyof typeof activityTitleLabels] ??
+      t(($) => $.v6_detail.processing)
+    );
+  };
+  const workSteps = workTimeline ?? [];
+  const workProgressPercent =
+    workActivity && workActivity.progress_total > 0
+      ? Math.min(
+          100,
+          Math.max(
+            0,
+            Math.round(
+              (workActivity.progress_step / workActivity.progress_total) * 100,
+            ),
+          ),
+        )
+      : null;
 
   return (
     <section
@@ -109,7 +155,7 @@ export function ResearchV6NodeDetail({
       aria-labelledby={titleId}
     >
       <header className="min-w-0 space-y-2">
-        <div className="flex items-center gap-2 text-[11px] font-semibold text-muted-foreground">
+        <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
           <span className="rounded-md bg-primary/10 px-1.5 py-0.5 text-primary">
             {node.tier}
           </span>
@@ -119,7 +165,7 @@ export function ResearchV6NodeDetail({
         </div>
         <h2
           id={titleId}
-          className="text-balance text-base font-semibold leading-snug"
+          className="text-balance text-base font-medium leading-snug"
         >
           {node.title ?? node.catalog_summary}
         </h2>
@@ -168,15 +214,131 @@ export function ResearchV6NodeDetail({
         </div>
       ) : null}
 
+      {node.kind === "work_s" ? (
+        <section
+          className="space-y-3 rounded-xl bg-primary/[0.06] p-3"
+          aria-label={t(($) => $.v6_detail.work_activity)}
+        >
+          <div className="flex items-center gap-3">
+            <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/15 text-xs font-medium text-primary">
+              {(workActivity?.agent_name || node.title || "A").slice(0, 1).toUpperCase()}
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <p className="truncate text-sm font-medium">
+                  {workActivity?.agent_name || node.title || t(($) => $.v6_detail.agent_unknown)}
+                </p>
+                {state.execution === "running" ? (
+                  <LoaderCircle className="size-3.5 shrink-0 animate-spin text-primary motion-reduce:animate-none" aria-hidden="true" />
+                ) : null}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {t(($) => $.v6_detail.work_status, { status: stateValueLabel(state.execution) })}
+              </p>
+            </div>
+          </div>
+          <div>
+            <h3 className="text-xs font-medium text-foreground">
+              {t(($) => $.v6_detail.current_task)}
+            </h3>
+            <p className="mt-1 break-words text-xs leading-relaxed text-muted-foreground">
+              {workActivityLoading
+                ? t(($) => $.v6_detail.work_activity_loading)
+                : workActivityError
+                  ? t(($) => $.v6_detail.work_activity_failed)
+                  : workActivity?.mission ||
+                    node.catalog_summary ||
+                    t(($) => $.v6_detail.task_waiting)}
+            </p>
+          </div>
+          {workActivity?.progress ? (
+            <div className="rounded-lg bg-background/65 px-2.5 py-2">
+              <div className="flex items-center justify-between gap-2 text-xs font-medium text-muted-foreground">
+                <p>{t(($) => $.v6_detail.latest_progress)}</p>
+                {workProgressPercent !== null ? <span>{workProgressPercent}%</span> : null}
+              </div>
+              {workProgressPercent !== null ? (
+                <div
+                  className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted"
+                  role="progressbar"
+                  aria-label={t(($) => $.v6_detail.latest_progress)}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={workProgressPercent}
+                >
+                  <span
+                    className="block h-full rounded-full bg-primary transition-[width] motion-reduce:transition-none"
+                    style={{ width: `${workProgressPercent}%` }}
+                  />
+                </div>
+              ) : null}
+              <p className="mt-1 text-xs leading-relaxed">{workActivity.progress}</p>
+            </div>
+          ) : null}
+          <div className="space-y-2" aria-live="polite" aria-atomic="false">
+            <h3 className="text-xs font-medium text-foreground">
+              {t(($) => $.v6_detail.work_process)}
+            </h3>
+            {workActivityLoading ? (
+              <p className="text-xs leading-relaxed text-muted-foreground" role="status">
+                {t(($) => $.v6_detail.work_activity_loading)}
+              </p>
+            ) : workActivityError ? (
+              <div className="flex items-center justify-between gap-3 rounded-lg bg-destructive/10 px-2.5 py-2" role="alert">
+                <p className="text-xs leading-relaxed text-foreground">
+                  {t(($) => $.v6_detail.work_activity_failed)}
+                </p>
+                {onRetryWorkActivity ? (
+                  <Button type="button" size="sm" variant="ghost" onClick={onRetryWorkActivity}>
+                    <RefreshCw className="size-3.5" aria-hidden="true" />
+                    {t(($) => $.v6_detail.retry_activity)}
+                  </Button>
+                ) : null}
+              </div>
+            ) : workSteps.length > 0 ? (
+              <ol className="space-y-1.5">
+                {workSteps.map((activity) => {
+                  const Icon = activity.body_kind === "command" ? Wrench : TerminalSquare;
+                  const detailText = activity.subtext || activity.body;
+                  return (
+                    <li key={activity.id} className="flex gap-2 rounded-lg bg-background/55 px-2.5 py-2">
+                      <Icon className="mt-0.5 size-3.5 shrink-0 text-primary" aria-hidden="true" />
+                      <div className="min-w-0">
+                        <p className="text-xs font-medium leading-relaxed">
+                          {activityTitleLabel(activity.title)}
+                        </p>
+                        {detailText ? (
+                          <p className="line-clamp-3 break-words text-xs leading-relaxed text-muted-foreground">
+                            {detailText}
+                          </p>
+                        ) : null}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ol>
+            ) : (
+              <p className="text-xs leading-relaxed text-muted-foreground" role="status">
+                {state.execution === "running"
+                  ? t(($) => $.v6_detail.process_waiting)
+                  : t(($) => $.v6_detail.process_empty)}
+              </p>
+            )}
+          </div>
+        </section>
+      ) : null}
+
+      <section className="space-y-2" aria-label={t(($) => $.v6_detail.projection_state)}>
+      <h3 className="text-xs font-medium">{t(($) => $.v6_detail.projection_state)}</h3>
       <dl className="grid grid-cols-1 gap-px overflow-hidden rounded-xl bg-border/70 sm:grid-cols-3">
         {[
-          [t(($) => $.v6_detail.execution), state.execution],
-          [t(($) => $.v6_detail.conclusion), state.conclusion],
-          [t(($) => $.v6_detail.integration), state.integration],
+          [t(($) => $.v6_detail.execution), stateValueLabel(state.execution)],
+          [t(($) => $.v6_detail.conclusion), stateValueLabel(state.conclusion)],
+          [t(($) => $.v6_detail.integration), stateValueLabel(state.integration)],
         ].map(([label, value]) => (
           <div key={label} className="min-w-0 bg-card px-3 py-2.5">
-            <dt className="text-[10px] font-medium text-muted-foreground">{label}</dt>
-            <dd className="mt-1 truncate text-xs font-semibold">{value}</dd>
+            <dt className="text-xs font-medium text-muted-foreground">{label}</dt>
+            <dd className="mt-1 truncate text-xs font-medium">{value}</dd>
           </div>
         ))}
       </dl>
@@ -189,15 +351,16 @@ export function ResearchV6NodeDetail({
           [t(($) => $.v6_detail.hidden_children), String(node.hidden_child_count)],
         ].map(([label, value]) => (
           <div key={label} className="min-w-0 bg-card px-3 py-2.5">
-            <dt className="text-[10px] font-medium text-muted-foreground">{label}</dt>
-            <dd className="mt-1 truncate text-xs font-semibold">{value}</dd>
+            <dt className="text-xs font-medium text-muted-foreground">{label}</dt>
+            <dd className="mt-1 truncate text-xs font-medium">{value}</dd>
           </div>
         ))}
       </dl>
+      </section>
 
       <dl className="grid grid-cols-2 gap-x-4 gap-y-3 border-y border-border/70 py-3 text-xs">
         <div className="min-w-0">
-          <dt className="text-[10px] font-medium text-muted-foreground">
+          <dt className="text-xs font-medium text-muted-foreground">
             {t(($) => $.v6_detail.source)}
           </dt>
           <Tooltip>
@@ -208,7 +371,7 @@ export function ResearchV6NodeDetail({
           </Tooltip>
         </div>
         <div className="min-w-0">
-          <dt className="text-[10px] font-medium text-muted-foreground">
+          <dt className="text-xs font-medium text-muted-foreground">
             {t(($) => $.v6_detail.version)}
           </dt>
           <dd className="mt-0.5 truncate font-medium tabular-nums">
@@ -218,7 +381,7 @@ export function ResearchV6NodeDetail({
           </dd>
         </div>
         <div className="min-w-0">
-          <dt className="text-[10px] font-medium text-muted-foreground">
+          <dt className="text-xs font-medium text-muted-foreground">
             {t(($) => $.v6_detail.updated_at)}
           </dt>
           <dd className="mt-0.5 truncate font-medium tabular-nums">
@@ -226,12 +389,12 @@ export function ResearchV6NodeDetail({
           </dd>
         </div>
         <div className="min-w-0">
-          <dt className="text-[10px] font-medium text-muted-foreground">
+          <dt className="text-xs font-medium text-muted-foreground">
             {t(($) => $.v6_detail.content_hash)}
           </dt>
           <Tooltip>
             <TooltipTrigger
-              render={<dd className="mt-0.5 truncate font-mono text-[10px]" />}
+              render={<dd className="mt-0.5 truncate font-mono text-xs" />}
             >
               {node.canonical_ref.content_hash ?? t(($) => $.v6_detail.unavailable)}
             </TooltipTrigger>
@@ -242,29 +405,12 @@ export function ResearchV6NodeDetail({
 
       {state.termination ? (
         <div className="space-y-1 rounded-xl bg-muted/45 px-3 py-2.5">
-          <p className="text-xs font-semibold">{state.termination.reason_code}</p>
+          <p className="text-xs font-medium">{state.termination.reason_code}</p>
           <p className="break-words text-xs leading-relaxed text-muted-foreground">
             {state.termination.reason_detail}
           </p>
         </div>
       ) : null}
-
-      <section className="space-y-2" aria-label={t(($) => $.v6_detail.projection_state)}>
-        <h3 className="text-xs font-semibold">{t(($) => $.v6_detail.projection_state)}</h3>
-        <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-xl bg-border/70 sm:grid-cols-4">
-        {[
-          [t(($) => $.v6_detail.absorbed), node.absorbed ? t(($) => $.v6_detail.yes) : t(($) => $.v6_detail.no)],
-          [t(($) => $.v6_detail.terminal), node.terminal ? t(($) => $.v6_detail.yes) : t(($) => $.v6_detail.no)],
-          [t(($) => $.v6_detail.expandable), node.expandable ? t(($) => $.v6_detail.yes) : t(($) => $.v6_detail.no)],
-          [t(($) => $.v6_detail.hidden_children), String(node.hidden_child_count)],
-        ].map(([label, value]) => (
-          <div key={label} className="min-w-0 bg-card px-3 py-2.5">
-            <dt className="text-[10px] font-medium text-muted-foreground">{label}</dt>
-            <dd className="mt-1 truncate text-xs font-semibold">{value}</dd>
-          </div>
-        ))}
-        </dl>
-      </section>
 
       {loading ? (
         <p className="text-xs text-muted-foreground" role="status">
@@ -285,7 +431,7 @@ export function ResearchV6NodeDetail({
 
       {refs.length > 0 ? (
         <div className="space-y-2">
-          <h3 className="flex items-center gap-2 text-xs font-semibold">
+          <h3 className="flex items-center gap-2 text-xs font-medium">
             <Link2 className="size-3.5 text-primary" aria-hidden="true" />
             {t(($) => $.v6_detail.linked_records)}
           </h3>
@@ -293,7 +439,7 @@ export function ResearchV6NodeDetail({
             {refs.map(([label, count]) => (
               <li
                 key={label}
-                className="rounded-lg bg-muted/55 px-2 py-1 text-[11px] text-muted-foreground"
+                className="rounded-lg bg-muted/55 px-2 py-1 text-xs text-muted-foreground"
               >
                 {label} · {count}
               </li>
@@ -302,14 +448,14 @@ export function ResearchV6NodeDetail({
           <div className="space-y-1.5">
             {recordGroups.map(([label, records]) => (
               <details key={label} className="rounded-lg bg-muted/35 px-2.5 py-2">
-                <summary className="cursor-pointer text-[11px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                <summary className="cursor-pointer text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                   {label} · {records.length}
                 </summary>
                 <ul className="mt-2 max-h-40 space-y-1 overflow-y-auto overscroll-contain">
                   {records.map((reference) => (
                     <li
                       key={`${reference.kind}:${reference.id}:${reference.revision ?? reference.version_id ?? "current"}`}
-                      className="flex min-w-0 items-center justify-between gap-2 text-[10px] text-muted-foreground"
+                      className="flex min-w-0 items-center justify-between gap-2 text-xs text-muted-foreground"
                     >
                       <Tooltip>
                         <TooltipTrigger render={<span className="truncate" />}>
@@ -333,7 +479,7 @@ export function ResearchV6NodeDetail({
 
       {relations.length > 0 ? (
         <div className="space-y-2">
-          <h3 className="flex items-center gap-2 text-xs font-semibold">
+          <h3 className="flex items-center gap-2 text-xs font-medium">
             <LocateFixed className="size-3.5 text-primary" aria-hidden="true" />
             {t(($) => $.v6_detail.relationships)}
           </h3>
@@ -361,12 +507,12 @@ export function ResearchV6NodeDetail({
                           relatedNode?.catalog_summary ??
                           t(($) => $.v6_detail.related_node_unavailable)}
                       </span>
-                      <span className="block truncate text-[10px] text-muted-foreground">
+                      <span className="block truncate text-xs text-muted-foreground">
                         {relationLabel(edge.kind)}
                       </span>
                     </span>
                     {relatedNode ? (
-                      <span className="shrink-0 text-[10px] font-semibold text-primary">
+                      <span className="shrink-0 text-xs font-medium text-primary">
                         {relatedNode.tier}
                       </span>
                     ) : null}
@@ -380,28 +526,33 @@ export function ResearchV6NodeDetail({
 
       {detail && detail.history_refs.length > 0 ? (
         <div className="space-y-2">
-          <h3 className="flex items-center gap-2 text-xs font-semibold">
+          <h3 className="flex items-center gap-2 text-xs font-medium">
             <History className="size-3.5 text-primary" aria-hidden="true" />
             {t(($) => $.v6_detail.history)}
           </h3>
           <ul className="flex flex-wrap gap-1.5">
             {detail.history_refs.map((reference) => (
-              <li
+              <Tooltip
                 key={`${reference.kind}:${reference.id}:${reference.revision ?? reference.version_id ?? "current"}`}
-                className="max-w-full rounded-lg bg-muted/55 px-2 py-1 text-[11px] text-muted-foreground"
-                title={`${reference.kind}:${reference.id}`}
               >
-                <span>{reference.kind}</span>
-                {reference.revision ? (
-                  <span>
-                    {t(($) => $.v6_detail.revision, {
-                      revision: reference.revision,
-                    })}
-                  </span>
-                ) : reference.version_id ? (
-                  <span> · {reference.version_id}</span>
-                ) : null}
-              </li>
+                <TooltipTrigger
+                  render={
+                    <li className="max-w-full rounded-lg bg-muted/55 px-2 py-1 text-xs text-muted-foreground" />
+                  }
+                >
+                  <span>{reference.kind}</span>
+                  {reference.revision ? (
+                    <span>
+                      {t(($) => $.v6_detail.revision, {
+                        revision: reference.revision,
+                      })}
+                    </span>
+                  ) : reference.version_id ? (
+                    <span> · {reference.version_id}</span>
+                  ) : null}
+                </TooltipTrigger>
+                <TooltipContent side="top">{`${reference.kind}:${reference.id}`}</TooltipContent>
+              </Tooltip>
             ))}
           </ul>
         </div>
@@ -409,11 +560,11 @@ export function ResearchV6NodeDetail({
 
       {node.branch_ids.length > 0 ? (
         <div className="space-y-2">
-          <h3 className="flex items-center gap-2 text-xs font-semibold">
+          <h3 className="flex items-center gap-2 text-xs font-medium">
             <GitBranch className="size-3.5 text-primary" aria-hidden="true" />
             {t(($) => $.v6_detail.branches)}
           </h3>
-          <p className="break-all text-[11px] leading-relaxed text-muted-foreground">
+          <p className="break-all text-xs leading-relaxed text-muted-foreground">
             {node.branch_ids.join(" · ")}
           </p>
         </div>
@@ -433,7 +584,7 @@ export function ResearchV6NodeDetail({
             : t(($) => $.v6_detail.reference_in_chat)}
         </Button>
         {!canReference ? (
-          <p className="text-[10px] leading-relaxed text-muted-foreground">
+          <p className="text-xs leading-relaxed text-muted-foreground">
             {t(($) => $.v6_detail.reference_unavailable)}
           </p>
         ) : null}

@@ -48,6 +48,8 @@ func BuildV6WorkDispatchPrompt(manifest V6WorkManifest) (string, error) {
 	var prompt strings.Builder
 	prompt.WriteString("## Durable Research V6 Work Item\n\n")
 	prompt.WriteString("Use the `multica-research-fleet` skill. This is a task-bound V6 assignment; chat output does not complete it.\n\n")
+	prompt.WriteString("Use Simplified Chinese for user-facing progress and result prose unless the frozen Manifest explicitly requests another language. Keep protocol fields, JSON keys, enum values, commands, and source quotations unchanged.\n\n")
+	prompt.WriteString("Do not narrate Manifest lookup, identifiers, JSON assembly, CLI commands, tool calls, or hidden reasoning in user-facing output. After the durable submission is received, report only a concise Chinese summary of the research completed and remaining uncertainty.\n\n")
 	fmt.Fprintf(&prompt, "- Run ID: `%s`\n- Work Item ID: `%s`\n- Attempt ID: `%s`\n", identity.RunID, identity.WorkItemID, identity.AttemptID)
 	fmt.Fprintf(&prompt, "- Manifest ID: `%s`\n- Manifest hash: `%s`\n- Expected result: `%s`\n\n", identity.ManifestID, identity.ManifestHash, identity.ExpectedResult)
 	prompt.WriteString("Read the frozen authority first:\n\n```bash\nmultica research work-manifest " + base + " --output json\n```\n\n")

@@ -200,11 +200,18 @@ type piRPCProcess struct {
 	sessionID     string
 	mcpConfigPath string // temp file from agent.mcp_config; removed on dispose
 
-	writeMu   sync.Mutex
-	stateMu   sync.Mutex
-	turn      *piRPCTurn
-	idleInput *piRPCIdleInput
-	pending   map[string]chan piRPCResponse // request-ID keyed control responses
+	writeMu       sync.Mutex
+	stateMu       sync.Mutex
+	turn          *piRPCTurn
+	idleInput     *piRPCIdleInput
+	hasServedTurn bool
+	pending       map[string]chan piRPCResponse // request-ID keyed control responses
+}
+
+func (p *piRPCProcess) isUnboundIdle() bool {
+	p.stateMu.Lock()
+	defer p.stateMu.Unlock()
+	return !p.hasServedTurn && p.turn == nil && p.idleInput == nil && len(p.pending) == 0
 }
 
 type piRPCIdleInput struct {
@@ -300,7 +307,13 @@ func (b *piRPCBackend) BindRunIdentity(identity PiRunIdentity) (PiRunBinding, er
 		return *b.runBinding, nil
 	}
 	if b.process != nil {
-		return PiRunBinding{}, fmt.Errorf("%w: Pi run identity must be bound before the resident process starts", ErrPiRPCRunIdentityRequiresFreshSession)
+		// Lifecycle startup may eagerly create an unbound resident before the
+		// dispatch run identity arrives. It is safe to replace only while no
+		// user turn or control request has used the native session.
+		if b.running.Load() || !b.process.isUnboundIdle() {
+			return PiRunBinding{}, fmt.Errorf("%w: Pi run identity must be bound before the resident process serves a turn", ErrPiRPCRunIdentityRequiresFreshSession)
+		}
+		b.disposeLocked(b.process)
 	}
 	sessionID := newPiSessionID()
 	captureExtPath, captureLogPath, err := newPiCaptureExtension()
@@ -494,6 +507,7 @@ func (b *piRPCBackend) acceptIdleInputPrompt(ctx context.Context, prompt string)
 		p.stateMu.Unlock()
 		return ResidentMessageAcceptance{}, fmt.Errorf("%w: Pi RPC native input is active", ErrPiRPCTurnBusy)
 	}
+	p.hasServedTurn = true
 	p.idleInput = idleInput
 	p.stateMu.Unlock()
 	clearIdleInput := func() {
@@ -776,6 +790,7 @@ func (b *piRPCBackend) executeTurn(ctx context.Context, prompt string, opts Exec
 		},
 	}
 	p.stateMu.Lock()
+	p.hasServedTurn = true
 	p.turn = turn
 	p.stateMu.Unlock()
 	defer func() {

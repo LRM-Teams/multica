@@ -90,6 +90,95 @@ func TestStopManagedAgentPublishesInactiveDespiteResidentTerminationTimeout(t *t
 	}
 }
 
+// TestStopManagedAgentSingleClearSurvivesRacingProviderStartupWrite pins the
+// residency epoch guard (LRM-1571 follow-up) that made stopManagedAgent's
+// second residency.clear unnecessary: with the guard in place, a
+// provider-startup write racing in with its own (now-stale) startStopEpoch
+// after the sole remaining clear must be dropped rather than resurrecting
+// residency -- exactly the resurrection the removed second clear used to
+// paper over.
+func TestStopManagedAgentSingleClearSurvivesRacingProviderStartupWrite(t *testing.T) {
+	const (
+		workspaceID = "ws-1"
+		runtimeID   = "runtime-a"
+		agentID     = "agent-a"
+		launchID    = "launch-a"
+	)
+	d := New(Config{WorkspacesRoot: t.TempDir()}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	d.mu.Lock()
+	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
+	d.mu.Unlock()
+	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, nil)
+	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error { return nil }
+
+	_, status, _, err := runner.startManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStartPayload{
+		AgentID: agentID, RuntimeID: runtimeID, LaunchID: launchID, StartDispatchID: "dispatch-a",
+	})
+	if err != nil || status.Status != protocol.AgentStatusActive {
+		t.Fatalf("start managed Agent: status %+v, error %v", status, err)
+	}
+
+	// The epoch this exact launch started with -- what a racing provider
+	// startup write for this same launch would carry.
+	startEpoch, err := runner.processes.startStopEpoch(agentProcessCallback{AgentID: agentID, LaunchID: launchID})
+	if err != nil {
+		t.Fatalf("capture launch epoch: %v", err)
+	}
+
+	// A real resident slot that never releases gives awaitResidentTerminated
+	// a genuine multi-millisecond window to block in, same as the timeout
+	// test above -- room for the racing goroutine below to fire after clear.
+	probe := &canonicalRuntimeFactoryProbe{}
+	identity := canonicalRuntimeIdentityForTest(t, "model-a", map[string]string{
+		"MULTICA_SERVER_URL":   "https://multica.example",
+		"MULTICA_WORKSPACE_ID": workspaceID,
+		"MULTICA_AGENT_ID":     agentID,
+		"MULTICA_TASK_ID":      "turn-a",
+	})
+	if _, err := runner.runtimes.acquire(canonicalAgentRuntimeAcquireRequest{
+		Identity: identity,
+		Factory:  probe.factory,
+	}); err != nil {
+		t.Fatalf("acquire resident slot: %v", err)
+	}
+
+	raced := make(chan struct{})
+	pause := func() {
+		go func() {
+			defer close(raced)
+			// Wait for the sole clear to actually run, then fire the racing
+			// write -- this must land strictly after clear for the test to
+			// exercise anything.
+			for {
+				if _, ok := runner.residency.get(agentID); !ok {
+					break
+				}
+				time.Sleep(time.Millisecond)
+			}
+			runner.residency.rememberFailure(agentID, runtimeID, launchID, startEpoch, managedRuntimeFailureRuntime, "provider_spawn_failed", "")
+		}()
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	stopErr := runner.stopManagedAgent(ctx, protocol.WorkspaceRunnerAgentStopPayload{
+		AgentID: agentID, LaunchID: launchID,
+	}, pause, func(string, any) error { return nil })
+	if stopErr != nil {
+		t.Fatalf("stopManagedAgent returned %v, want nil", stopErr)
+	}
+
+	select {
+	case <-raced:
+	case <-time.After(time.Second):
+		t.Fatal("racing write never fired -- test did not exercise the race window")
+	}
+
+	if res, ok := runner.residency.get(agentID); ok {
+		t.Fatalf("residency survived a racing stale write past the sole clear: %+v", res)
+	}
+}
+
 // TestCanonicalAgentRuntimeTerminateResidentReturnsOnSignalNotPoll pins the
 // "no busy-wait" requirement: terminateResident must return as soon as the
 // slot's own completion signal fires, driven by the in-flight turn's own

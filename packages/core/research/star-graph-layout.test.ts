@@ -123,6 +123,42 @@ describe("LRM-1514 star-graph layout — D5 baseline from algorithm", () => {
     expect(layout.frontiers?.[0]?.memberIds).toEqual(["frontier"]);
   });
 
+  it("forms a branch territory for S-tier work before a stable result exists", () => {
+    const layout = layoutStarGraph([
+      { id: "goal", tier: "l", nodeKind: "goal" },
+      { id: "work-a", tier: "s", nodeKind: "work_s", clusterId: "branch-a" },
+      { id: "work-b", tier: "s", nodeKind: "work_s", clusterId: "branch-a" },
+      { id: "work-c", tier: "s", nodeKind: "work_s", clusterId: "branch-b" },
+    ]);
+    const goal = layout.nodes.find((node) => node.id === "goal")!;
+    const branchA = layout.clusters.find((cluster) => cluster.clusterId === "branch-a")!;
+    const branchB = layout.clusters.find((cluster) => cluster.clusterId === "branch-b")!;
+
+    expect(branchA.memberIds).toEqual(["work-a", "work-b"]);
+    expect(branchB.memberIds).toEqual(["work-c"]);
+    expect(Math.hypot(branchA.x - goal.x, branchA.y - goal.y)).toBeGreaterThan(300);
+    expect(Math.hypot(branchB.x - goal.x, branchB.y - goal.y)).toBeGreaterThan(300);
+    expect(Math.hypot(branchA.x - branchB.x, branchA.y - branchB.y)).toBeGreaterThan(150);
+  });
+
+  it("keeps branch-scoped Work S beside its stable result instead of the Goal", () => {
+    const layout = layoutStarGraph([
+      { id: "goal", tier: "l", nodeKind: "goal" },
+      { id: "result-a", tier: "m", nodeKind: "result_s", clusterId: "branch-a" },
+      { id: "work-a", tier: "s", nodeKind: "work_s", clusterId: "branch-a" },
+      { id: "result-b", tier: "m", nodeKind: "result_s", clusterId: "branch-b" },
+    ]);
+    const goal = layout.nodes.find((node) => node.id === "goal")!;
+    const result = layout.nodes.find((node) => node.id === "result-a")!;
+    const work = layout.nodes.find((node) => node.id === "work-a")!;
+    const branch = layout.clusters.find((cluster) => cluster.clusterId === "branch-a")!;
+
+    expect(dist(work.x, work.y, result.x, result.y)).toBeLessThan(
+      dist(work.x, work.y, goal.x, goal.y),
+    );
+    expect(branch.memberIds).toEqual(["result-a", "work-a"]);
+  });
+
   it("gives an unclustered goal-led graph enough world-space to remain legible", () => {
     const layout = layoutStarGraph([
       { id: "goal", tier: "m", nodeKind: "goal" },

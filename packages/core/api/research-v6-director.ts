@@ -36,6 +36,10 @@ export function createResearchV6DirectorProjectionTransport(
         view,
         { signal },
       ),
+    loadWorkActivity: (workspaceId, runId, workItemId, signal) =>
+      api.getResearchV6DirectorWorkActivity(workspaceId, runId, workItemId, {
+        signal,
+      }),
     listReports: (workspaceId, runId, signal) =>
       api.getResearchV6DirectorReports(workspaceId, runId, { signal }),
     loadReport: (workspaceId, runId, reportId, signal) =>

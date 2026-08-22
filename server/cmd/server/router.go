@@ -1067,6 +1067,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Post("/resume", h.PostResearchV6ProjectionResume)
 				})
 				r.Get("/v6/runs/{runId}/reports", h.GetResearchV6Reports)
+				r.Get("/v6/runs/{runId}/work-items/{workItemId}/activity", h.GetResearchV6WorkActivity)
 				r.Get("/v6/runs/{runId}/reports/{reportId}/compiled", h.GetResearchV6ReportCompiled)
 				r.Get("/v6/runs/{runId}/reports/{reportId}", h.GetResearchV6Report)
 				r.Get("/fleet", h.GetResearchFleet)

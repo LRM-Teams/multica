@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/cloudruntime"
+	"github.com/multica-ai/multica/server/internal/daemonws"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	"github.com/multica-ai/multica/server/internal/util/stackerr"
@@ -1424,6 +1425,20 @@ func (a *envDispatchDepsAdapter) CreateMixedDispatchRun(ctx context.Context, pro
 	return runUUID.String(), nil
 }
 
+// envDispatchPreparePiRunSettleTimeout bounds how long the dispatch waits for a
+// freshly provisioned daemon's WebSocket to settle before giving up on
+// PreparePiRun. The daemon registers over REST (flipping its runtime online in
+// the DB) BEFORE it dials the WebSocket, and WaitForOnlineSandboxRuntime only
+// observes the DB row, so PreparePiRun can race the WS connect and reach the hub
+// while no socket watches the runtime yet (ErrRuntimeOffline). The window is
+// transient and self-heals in milliseconds-to-seconds, so the dispatch retries
+// within this bound instead of failing the whole rollout. Vars (not consts) so
+// tests can shrink the window.
+var (
+	envDispatchPreparePiRunSettleTimeout = 30 * time.Second
+	envDispatchPreparePiRunRetryDelay    = 200 * time.Millisecond
+)
+
 func (a *envDispatchDepsAdapter) PrepareMixedDispatchRunAgent(ctx context.Context, runID string, runAgent service.MixedDispatchRunAgent) (service.MixedDispatchRunAgent, error) {
 	if a.h.envDispatchPreparePiRunTestHook != nil {
 		return a.h.envDispatchPreparePiRunTestHook(ctx, runID, runAgent)
@@ -1433,16 +1448,46 @@ func (a *envDispatchDepsAdapter) PrepareMixedDispatchRunAgent(ctx context.Contex
 		return service.MixedDispatchRunAgent{}, errors.New("prepare mixed Pi run: daemon lifecycle transport unavailable")
 	}
 	runAgent.RunAgentID = uuid.NewString()
-	response, err := client.RequestPreparePiRun(ctx, protocol.PreparePiRunRequestPayload{
+	request := protocol.PreparePiRunRequestPayload{
 		RequestID: uuid.NewString(), RuntimeID: runAgent.RuntimeID,
 		AgentID: runAgent.ExecutionAgentID, RunID: runID, RunAgentID: runAgent.RunAgentID,
-	})
+	}
+	response, err := a.requestPreparePiRunWithSettle(ctx, client, request)
 	if err != nil {
 		return service.MixedDispatchRunAgent{}, fmt.Errorf("prepare mixed Pi run: %w", err)
 	}
 	runAgent.PiSessionID = response.SessionID
 	runAgent.CaptureBoundary = response.CaptureBoundary
 	return runAgent, nil
+}
+
+// requestPreparePiRunWithSettle calls client.RequestPreparePiRun, retrying while
+// the hub reports no daemon connection for the runtime (ErrRuntimeOffline). This
+// rides out the gap between the daemon's REST register (runtime online in the DB)
+// and its WebSocket connect, which WaitForOnlineSandboxRuntime cannot observe. A
+// non-offline error fails immediately, and the bounded settle deadline keeps a
+// genuinely dead daemon from stalling the rollout.
+func (a *envDispatchDepsAdapter) requestPreparePiRunWithSettle(ctx context.Context, client mixedDispatchPiRunClient, request protocol.PreparePiRunRequestPayload) (*protocol.PreparePiRunResponsePayload, error) {
+	deadline := time.Now().Add(envDispatchPreparePiRunSettleTimeout)
+	var lastErr error
+	for {
+		response, err := client.RequestPreparePiRun(ctx, request)
+		if err == nil {
+			return response, nil
+		}
+		if !errors.Is(err, daemonws.ErrRuntimeOffline) {
+			return nil, err
+		}
+		lastErr = err
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("daemon WebSocket not connected within %s: %w", envDispatchPreparePiRunSettleTimeout, lastErr)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(envDispatchPreparePiRunRetryDelay):
+		}
+	}
 }
 
 func (a *envDispatchDepsAdapter) RevokeMixedDispatchRunAgent(ctx context.Context, runID string, runAgent service.MixedDispatchRunAgent) error {
@@ -2090,11 +2135,36 @@ func (a *envDispatchDepsAdapter) DeleteAgentRuntime(ctx context.Context, workspa
 	if err != nil {
 		return fmt.Errorf("parse runtime_id: %w", err)
 	}
-	if err := a.h.Queries.DeleteAgentRuntimeForWorkspace(ctx, db.DeleteAgentRuntimeForWorkspaceParams{
+
+	tx, err := a.h.TxStarter.Begin(ctx)
+	if err != nil {
+		return stackerr.Wrap(err, "begin agent runtime reclaim")
+	}
+	defer tx.Rollback(ctx)
+
+	// A ready binding requires all three execution handles. Clear its runtime
+	// reference before the FK's ON DELETE SET NULL action can violate that check.
+	if _, err := tx.Exec(ctx, `
+		UPDATE environment_agent_sandbox binding
+		SET status = CASE WHEN status IN ('deleting', 'deleted') THEN status ELSE 'failed_retryable' END,
+			sandbox_instance_id = NULL,
+			runtime_id = NULL,
+			daemon_id = NULL,
+			updated_at = now()
+		FROM environment env
+		WHERE binding.env_id = env.id
+		  AND env.workspace_id = $1
+		  AND binding.runtime_id = $2`, wsUUID, rtUUID); err != nil {
+		return stackerr.Wrap(err, "clear env-dispatch runtime binding")
+	}
+	if err := a.h.Queries.WithTx(tx).DeleteAgentRuntimeForWorkspace(ctx, db.DeleteAgentRuntimeForWorkspaceParams{
 		ID:          rtUUID,
 		WorkspaceID: wsUUID,
 	}); err != nil {
 		return stackerr.Wrap(err, "delete agent runtime")
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return stackerr.Wrap(err, "commit agent runtime reclaim")
 	}
 	return nil
 }

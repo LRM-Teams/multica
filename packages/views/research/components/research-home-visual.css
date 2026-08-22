@@ -1,11 +1,26 @@
+/*
+ * Research home pixel theme — "像素宇宙（细腻版)" art direction, approved
+ * 2026-08-22 from docs/design-prototypes/research-home-pixel-rich.
+ *
+ * OWN-WORLD: deep indigo night; cream starlight ink; gold = primary action /
+ * the run itself; mint = running; coral = blocked; lavender = accent.
+ * Fusion Pixel SC everywhere in scope; double-outline panels with corner
+ * studs; bevel-embossed buttons; checker-dither strips; hard offset shadows
+ * (no blur); steps() frame animation only.
+ */
+
 .research-home-theme {
-  --page-bg: #08121c;
-  --surface: #0d1723;
-  --surface-raised: #101d2a;
-  --ink: #edf4fb;
-  --ink-2: #a6b6c5;
-  --ink-3: #8293a7;
-  --line: #26384c;
+  --px-panel: #171d3d;
+  --px-panel-hi: #1e2650;
+  --px-line: #2e3768;
+  --px-line-dark: #0a0d1d;
+  --px-gold: #ffc93c;
+  --px-gold-hi: #ffe08a;
+  --px-gold-sh: #c98f1e;
+  --px-mint: #7ee08a;
+  --px-coral: #ff7a66;
+  --px-lav: #b48cf0;
+  --px-dither: repeating-conic-gradient(rgb(255 255 255 / 5%) 0% 25%, transparent 0% 50%);
 }
 
 body:has(.research-home-theme) {
@@ -21,143 +36,385 @@ body:has(.research-home-theme) {
 
 .research-home-theme {
   color-scheme: dark;
-  --background: #07111b;
-  --foreground: #edf4fb;
-  --muted-foreground: #8293a7;
-  --muted: #111d29;
-  --border: #26384c;
-  --input: #34516a;
-  --ring: #48d3e4;
-  --brand: #48d3e4;
-  --brand-foreground: #041018;
-  --primary: #48d3e4;
-  --primary-foreground: #041018;
-  --secondary: #101b28;
-  --secondary-foreground: #d7f8fb;
-  --accent: #102a33;
-  --accent-foreground: #c9f8fb;
-  --card: #0d1723;
-  --card-foreground: #edf4fb;
-  --popover: #0d1723;
-  --popover-foreground: #edf4fb;
-  --success: #58d69a;
-  --warning: #f3bd54;
-  --destructive: #ff6674;
+  --background: #0e1226;
+  --foreground: #f2ead8;
+  --muted-foreground: #8a93c4;
+  --muted: #131836;
+  --border: #2e3768;
+  --input: #3a4685;
+  --ring: #ffc93c;
+  --brand: #ffc93c;
+  --brand-foreground: #171402;
+  --primary: #ffc93c;
+  --primary-foreground: #171402;
+  --secondary: #131836;
+  --secondary-foreground: #f2ead8;
+  --accent: #1e2650;
+  --accent-foreground: #f2ead8;
+  --card: #171d3d;
+  --card-foreground: #f2ead8;
+  --popover: #171d3d;
+  --popover-foreground: #f2ead8;
+  --success: #7ee08a;
+  --warning: #f0a848;
+  --destructive: #ff7a66;
+  font-family: "Fusion Pixel 12px Proportional SC", "PingFang SC", ui-monospace, monospace;
+  -webkit-font-smoothing: none;
   color: var(--foreground);
-  background-color: var(--background);
-  background-image:
-    linear-gradient(rgb(4 12 19 / 76%), rgb(4 12 19 / 91%)),
-    url("../assets/research-space-background.png");
-  background-position: center top;
-  background-repeat: no-repeat;
-  background-size: cover;
+  background:
+    radial-gradient(1200px 500px at 70% -10%, rgb(80 60 140 / 18%), transparent 60%),
+    var(--background);
   overflow-x: hidden;
+  position: relative;
+}
+
+/* Pixel starfield: 2px and 1px stars scattered by hard box-shadow offsets. */
+.research-home-theme::before,
+.research-home-theme::after {
+  content: "";
+  position: absolute;
+  width: 2px;
+  height: 2px;
+  background: var(--foreground);
+  pointer-events: none;
+  opacity: 0.4;
+}
+
+.research-home-theme::before {
+  left: 0;
+  top: 0;
+  box-shadow:
+    120px 90px, 320px 40px, 540px 120px, 780px 60px, 1020px 100px, 1260px 50px,
+    1480px 130px, 200px 640px, 460px 700px, 900px 660px, 1200px 710px, 1420px 680px;
+}
+
+.research-home-theme::after {
+  left: 40px;
+  top: 20px;
+  width: 1px;
+  height: 1px;
+  opacity: 0.3;
+  box-shadow:
+    90px 200px, 260px 160px, 700px 30px, 1100px 180px, 1350px 90px,
+    60px 500px, 1500px 400px;
+}
+
+/* Pixel worlds have no rounded corners: flatten in-scope radius utilities.
+   (Plain author CSS wins over Tailwind's layered utilities.) */
+.research-home-theme [class*="rounded"] {
+  border-radius: 0;
 }
 
 .research-home-theme ::selection {
-  color: #f4fbff;
-  background: rgb(72 211 228 / 28%);
+  color: #10142b;
+  background: var(--px-gold);
 }
 
 .research-home-theme::-webkit-scrollbar {
-  width: 9px;
+  width: 10px;
 }
 
 .research-home-theme::-webkit-scrollbar-thumb {
   border: 3px solid var(--background);
-  border-radius: 8px;
-  background: var(--line);
+  background: var(--px-line);
 }
+
+/* ---------- pixel frame: double outline + hard offset shadow ---------- */
+
+.px-frame {
+  position: relative;
+  background: var(--px-panel);
+  border: 2px solid var(--px-line);
+  box-shadow:
+    0 0 0 2px var(--px-line-dark),
+    6px 8px 0 rgb(0 0 0 / 45%);
+}
+
+/* Corner studs — rendered as four <span class="px-stud"> by PixelStuds. */
+.px-stud {
+  position: absolute;
+  z-index: 6;
+  width: 6px;
+  height: 6px;
+  background: var(--px-line);
+}
+
+.px-stud:nth-of-type(1) { top: -4px; left: -4px; }
+.px-stud:nth-of-type(2) { top: -4px; right: -4px; }
+.px-stud:nth-of-type(3) { bottom: -4px; left: -4px; }
+.px-stud:nth-of-type(4) { bottom: -4px; right: -4px; }
+
+.px-frame-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 14px;
+  background: var(--px-panel-hi) var(--px-dither);
+  background-size: auto, 4px 4px;
+  border-bottom: 2px solid var(--px-line);
+  letter-spacing: 2px;
+}
+
+.px-frame-header .px-frame-title::before {
+  content: "◆ ";
+  color: var(--px-gold);
+}
+
+.px-diamond::before {
+  content: "◆";
+}
+
+/* ---------- bevel controls ---------- */
+
+.research-home-theme .px-btn {
+  background: var(--muted);
+  border: 2px solid var(--px-line);
+  color: var(--foreground);
+  box-shadow:
+    inset 2px 2px 0 rgb(255 255 255 / 6%),
+    inset -2px -2px 0 rgb(0 0 0 / 35%);
+}
+
+.research-home-theme .px-btn:hover,
+.research-home-theme .px-btn:focus-visible {
+  background: var(--muted);
+  border-color: var(--muted-foreground);
+}
+
+/* Hard pixel focus indicator — square gold outline, no soft ring. */
+.research-home-theme .px-btn:focus-visible,
+.research-home-theme .px-btn-gold:focus-visible,
+.research-home-theme .px-chip:focus-visible {
+  outline: 2px solid var(--px-gold);
+  outline-offset: 2px;
+}
+
+.research-home-theme .px-btn-gold {
+  background: var(--px-gold);
+  color: #171402;
+  border: 2px solid var(--px-gold-sh);
+  letter-spacing: 3px;
+  box-shadow:
+    inset 3px 3px 0 var(--px-gold-hi),
+    inset -3px -3px 0 var(--px-gold-sh),
+    4px 4px 0 #000;
+}
+
+.research-home-theme .px-btn-gold:hover,
+.research-home-theme .px-btn-gold:focus-visible {
+  background: var(--px-gold);
+  color: #171402;
+  filter: brightness(1.08);
+}
+
+.research-home-theme .px-btn-gold:active {
+  transform: translate(4px, 4px);
+  box-shadow: inset 3px 3px 0 var(--px-gold-sh);
+}
+
+/* Template chips: bevel idle, gold-pressed selected (aria-checked). */
+.research-home-theme .px-chip {
+  background: var(--muted);
+  border: 2px solid var(--px-line);
+  color: var(--foreground);
+  letter-spacing: 1px;
+  box-shadow:
+    inset 2px 2px 0 rgb(255 255 255 / 6%),
+    inset -2px -2px 0 rgb(0 0 0 / 35%);
+}
+
+.research-home-theme .px-chip:hover,
+.research-home-theme .px-chip:focus-visible {
+  border-color: var(--muted-foreground);
+  background: var(--muted);
+  color: var(--foreground);
+}
+
+.research-home-theme .px-chip[aria-checked="true"] {
+  background: var(--px-gold);
+  border-color: var(--px-gold-sh);
+  color: #10142b;
+  box-shadow:
+    inset 2px 2px 0 var(--px-gold-hi),
+    inset -2px -2px 0 var(--px-gold-sh);
+}
+
+/* Goal well: sunken input plate. */
+.research-home-theme .px-input-well {
+  background: var(--background);
+  border: 2px solid var(--px-line);
+  box-shadow: inset 3px 3px 0 rgb(0 0 0 / 45%);
+}
+
+.research-home-theme .px-input-well:hover,
+.research-home-theme .px-input-well:focus-within {
+  border-color: var(--muted-foreground);
+}
+
+/* ---------- launch panel (composer + sector view) ---------- */
 
 .research-home-launch {
   min-height: 230px;
-  overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: 16px;
-  background: linear-gradient(105deg, var(--surface), var(--background));
+  overflow: visible;
 }
+
+/* ---------- sector view ---------- */
 
 .research-home-constellation {
   position: relative;
-  min-height: 212px;
+  min-height: 260px;
   overflow: hidden;
-  background:
-    radial-gradient(circle at 52% 48%, color-mix(in oklab, var(--success) 13%, transparent), transparent 30%),
-    radial-gradient(circle at 86% 18%, color-mix(in oklab, var(--brand) 10%, transparent), transparent 22%);
+  border-left: 2px solid var(--px-line);
+  background: #0a0d1f;
 }
 
-.research-home-constellation::after {
+.research-home-vista {
   position: absolute;
   inset: 0;
-  content: "";
-  pointer-events: none;
-  background-image: radial-gradient(circle, color-mix(in oklab, var(--brand) 20%, transparent) 1px, transparent 1.5px);
-  background-size: 24px 24px;
-  mask-image: radial-gradient(circle at center, black, transparent 76%);
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center 35%;
+  image-rendering: pixelated;
 }
 
-.research-home-orbit {
-  fill: none;
-  stroke: color-mix(in oklab, var(--brand) 28%, transparent);
-  stroke-width: 1;
-  stroke-dasharray: 3 6;
-}
-
-.research-home-edge {
-  fill: none;
-  stroke: var(--brand);
-  stroke-width: 1.5;
-  opacity: 0.78;
-}
-
-.research-home-edge-muted {
-  stroke: var(--line);
-  opacity: 0.9;
-}
-
-.research-home-node {
+/* Agent nameplate pinned to the vista with a 1-wire stem. */
+.research-home-plate {
   position: absolute;
-  z-index: 2;
-  display: grid;
-  place-items: center;
-  border: 1px solid color-mix(in oklab, var(--brand) 32%, var(--line));
-  border-radius: 999px;
-  color: var(--ink);
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  max-width: 132px;
+  padding: 4px 9px 5px;
+  background: rgb(10 13 29 / 82%);
+  border: 1px solid var(--px-line);
   text-align: center;
-  background: radial-gradient(circle at 50% 35%, var(--surface-raised), var(--background) 72%);
-  overflow: hidden;
+  letter-spacing: 1px;
+  transform: translateX(-50%);
 }
 
-.research-home-node-main {
+.research-home-plate::before {
+  content: "";
+  position: absolute;
+  top: -10px;
   left: 50%;
-  top: 45%;
-  width: 104px;
-  height: 104px;
-  border-color: color-mix(in oklab, var(--success) 62%, var(--line));
-  background: radial-gradient(circle at 50% 35%, color-mix(in oklab, var(--success) 18%, var(--surface)), var(--background) 70%);
-  box-shadow:
-    0 0 0 10px color-mix(in oklab, var(--success) 5%, transparent),
-    0 0 42px color-mix(in oklab, var(--success) 16%, transparent);
-  transform: translate(-50%, -50%);
+  margin-left: -1px;
+  width: 2px;
+  height: 10px;
+  background: var(--px-line);
 }
 
-.research-home-node-sat {
-  width: 64px;
-  height: 64px;
-  transform: translate(-50%, -50%);
+.research-home-plate-below::before {
+  top: auto;
+  bottom: -10px;
 }
 
+.research-home-plate-state {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+.research-home-plate-state-on {
+  color: var(--px-mint);
+}
+
+.research-home-plate-state-on::before {
+  content: "● ";
+  animation: px-blink 1.4s steps(2, jump-none) infinite;
+}
+
+@keyframes px-blink {
+  50% { opacity: 0; }
+}
+
+/* Focused run plate, bottom center above the stats band. */
+.research-home-focus-plate {
+  position: absolute;
+  z-index: 4;
+  left: 50%;
+  bottom: 46px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  max-width: calc(100% - 32px);
+  padding: 8px 14px 9px;
+  background: rgb(10 13 29 / 88%);
+  border: 2px solid var(--px-line);
+  box-shadow: 0 0 0 2px var(--px-line-dark);
+  text-align: center;
+}
+
+.research-home-attention-tag {
+  display: inline-block;
+  margin-top: 2px;
+  padding: 2px 8px;
+  background: var(--px-coral);
+  color: #10142b;
+  letter-spacing: 1px;
+}
+
+.research-home-attention-tag::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  background: #7a1f12;
+  margin-right: 6px;
+  animation: px-blink 0.9s steps(2, jump-none) infinite;
+}
+
+/* Bottom stats band: 4 cells over a dither strip, colored pixel glyphs. */
 .research-home-constellation-stats {
   position: absolute;
   inset-inline: 0;
   bottom: 0;
-  z-index: 3;
+  z-index: 5;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  margin: 0;
+  border-top: 2px solid var(--px-line);
+  background: var(--px-panel-hi) var(--px-dither);
+  background-size: auto, 4px 4px;
+}
+
+.research-home-stat {
   display: flex;
-  gap: 16px;
-  justify-content: center;
-  padding: 7px 16px;
-  border-top: 1px solid color-mix(in oklab, var(--line) 60%, transparent);
-  background: color-mix(in oklab, var(--background) 55%, transparent);
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  padding: 8px 12px;
+}
+
+.research-home-stat + .research-home-stat {
+  border-left: 2px solid var(--px-line);
+}
+
+.research-home-stat dt::before {
+  margin-right: 5px;
+}
+
+.research-home-stat[data-stat="active"] dt::before { content: "▶"; color: var(--px-mint); }
+.research-home-stat[data-stat="agents"] dt::before { content: "◆"; color: var(--px-lav); }
+.research-home-stat[data-stat="evidence"] dt::before { content: "■"; color: var(--px-gold); }
+.research-home-stat[data-stat="questions"] dt::before { content: "▲"; color: var(--muted-foreground); }
+.research-home-stat[data-stat="attention"] dt::before { content: "▲"; color: var(--px-coral); }
+.research-home-stat[data-stat="attention"] dd { color: var(--px-coral); }
+
+/* ---------- recent run rows ---------- */
+
+.research-home-theme [data-testid="research-session-row"]:hover::after,
+.research-home-theme [data-testid="research-session-row"]:focus-within::after {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  border: 1px dashed var(--muted-foreground);
+  pointer-events: none;
 }
 
 @media (max-width: 1023px) {
@@ -165,15 +422,23 @@ body:has(.research-home-theme) {
     min-height: 0;
     grid-template-columns: minmax(0, 1fr);
   }
-  .research-home-constellation { min-height: 210px; border-top: 1px solid var(--line); }
+  .research-home-constellation {
+    min-height: 240px;
+    border-left: 0;
+    border-top: 2px solid var(--px-line);
+  }
 }
 
 @media (max-width: 639px) {
   .research-home-header-status { display: none !important; }
-  .research-home-constellation { min-height: 150px; }
+  .research-home-constellation { min-height: 170px; }
   .research-home-launch > * { min-width: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .research-home-theme .animate-pulse { animation: none; }
+  .research-home-theme .animate-pulse,
+  .research-home-plate-state-on::before,
+  .research-home-attention-tag::before {
+    animation: none;
+  }
 }

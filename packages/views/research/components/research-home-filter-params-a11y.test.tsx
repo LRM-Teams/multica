@@ -32,7 +32,8 @@ vi.mock("../../i18n/use-t", () => ({
       const raw = fn({
         home: {
           composer_label: "Research composer",
-          hero_title: "Research home",
+          frame_title: "New run",
+          frame_tag: "NEW RUN",
           hero_desc: "Start from a goal.",
         },
         filter: {
@@ -92,12 +93,14 @@ describe("research home/filter/params a11y static contract (LRM-1207)", () => {
     }
   });
 
-  it("source: hero section has accessible name; Compass shell aria-hidden; visible h1", () => {
+  it("source: hero section has accessible name; corner studs aria-hidden; visible h2", () => {
     const src = readSrc("research-home-hero.tsx");
     expect(src).toMatch(/data-testid=["']research-home-hero["']/);
     expect(src).toMatch(/aria-label=\{t\(\(\$\) => \$\.home\.composer_label\)\}/);
-    expect(src).toMatch(/aria-hidden[\s\S]{0,120}<Compass\b/);
+    expect(src).toMatch(/<PixelStuds\b/);
     expect(src).toMatch(/<h2\b/);
+    const studs = readSrc("pixel-studs.tsx");
+    expect(studs).toMatch(/aria-hidden/);
   });
 
   it("source: filter search labelled; Search icon hidden; radiogroup + aria-checked radios", () => {
@@ -119,7 +122,7 @@ describe("research home/filter/params a11y static contract (LRM-1207)", () => {
     expect(src).toMatch(/create_params\.weights_label/);
   });
 
-  it("render: hero exposes named region, hidden compass chrome, visible title", () => {
+  it("render: hero exposes named region, hidden stud chrome, visible title", () => {
     render(<ResearchHomeHero />);
     const hero = screen.getByTestId("research-home-hero");
     expect(hero.tagName).toBe("SECTION");
@@ -128,7 +131,7 @@ describe("research home/filter/params a11y static contract (LRM-1207)", () => {
     ).toBe(hero);
     expect(hero.querySelector("[aria-hidden]")).toBeTruthy();
     expect(
-      screen.getByRole("heading", { level: 2, name: "Research home" }),
+      screen.getByRole("heading", { level: 2, name: "New run" }),
     ).toBeTruthy();
   });
 

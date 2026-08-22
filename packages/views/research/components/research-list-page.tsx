@@ -26,11 +26,6 @@ import { AlertCircle, Loader2, SlidersHorizontal } from "lucide-react";
 import { useNavigation } from "../../navigation/context";
 import { useT } from "../../i18n/use-t";
 import {
-  HERO_COMPOSER_CARD_CLASS,
-  HERO_CTA_PRIMARY_CLASS,
-  HERO_CTA_SECONDARY_CLASS,
-} from "../lib/hero-cta-motion";
-import {
   defaultCreateParams,
   draftCreateParams,
   normalizeCreateParams,
@@ -71,7 +66,8 @@ import { ResearchHomeOverview } from "./research-home-overview";
 import { ResearchHomeConstellationPreview } from "./research-home-constellation-preview";
 import { ResearchHomeHeader } from "./research-home-header";
 import { ResearchV6OpsPanel } from "./research-v6-ops-panel";
-import { ResearchShellAtmosphere } from "./research-shell-atmosphere";
+import { PixelStuds } from "./pixel-studs";
+import "@fontsource/fusion-pixel-12px-proportional-sc/index.css";
 import "./research-home-visual.css";
 import { ResearchServerErrorPage } from "./research-server-error-page";
 import { ResearchSessionFilterBar } from "./research-session-filter-bar";
@@ -598,10 +594,6 @@ export function ResearchListPage() {
           )}
           data-testid="research-list-workbench"
         >
-          {/* LRM-1144 Δ1: dot-grid matches workbench width; omit on skeleton/error. */}
-          {!bootstrapLoading && !bootstrapIsError ? (
-            <ResearchShellAtmosphere className="-top-2" heightClassName="h-[200px]" />
-          ) : null}
           <ResearchHomeHeader sessions={sessions} />
           {!bootstrapLoading && !bootstrapIsError ? <ResearchV6OpsPanel /> : null}
           {/* LRM-783 / LRM-784 / LRM-1106: brand-hero + full-width composer (12 cols). */}
@@ -609,9 +601,8 @@ export function ResearchListPage() {
             <ResearchHomeHero preview={<ResearchHomeConstellationPreview sessions={sessions} selectedId={selectedResearchId} />}>
               <div
                 className={cn(
-                  "w-full overflow-hidden rounded-2xl border bg-card",
-                  "focus-within:ring-2 focus-within:ring-ring",
-                  HERO_COMPOSER_CARD_CLASS,
+                  "w-full overflow-hidden border-2 border-border bg-background",
+                  "focus-within:border-muted-foreground",
                 )}
                 data-testid="research-home-composer"
               >
@@ -748,7 +739,7 @@ export function ResearchListPage() {
                       <SelectTrigger
                         aria-label={t(($) => $.d5.rail.director_role)}
                         data-testid="research-create-lead"
-                        className="h-10 w-full rounded-full px-3.5 text-sm font-medium md:h-8 md:w-auto md:max-w-56"
+                        className="px-btn h-10 w-full px-3.5 text-sm md:h-8 md:w-auto md:max-w-56"
                       >
                         <span className="shrink-0 text-muted-foreground">
                           {t(($) => $.home.lead_prefix)}
@@ -776,8 +767,7 @@ export function ResearchListPage() {
                         setComposer((prev) => ({ ...prev, paramsOpen: true }));
                       }}
                       className={cn(
-                        "h-10 w-full shrink-0 rounded-full px-3.5 text-sm font-medium md:h-8 md:w-auto",
-                        HERO_CTA_SECONDARY_CLASS,
+                        "px-btn h-10 w-full shrink-0 px-3.5 text-sm md:h-8 md:w-auto",
                         createBusy && "opacity-50 cursor-not-allowed",
                       )}
                       data-testid="research-create-params-open"
@@ -792,8 +782,7 @@ export function ResearchListPage() {
                       aria-disabled={createBusy || undefined}
                       data-testid="research-create-submit"
                       className={cn(
-                        "h-10 w-full shrink-0 rounded-full bg-brand px-4 text-sm font-medium text-brand-foreground md:h-8 md:w-auto",
-                        HERO_CTA_PRIMARY_CLASS,
+                        "px-btn-gold h-10 w-full shrink-0 px-4 text-sm md:h-8 md:w-auto",
                         createBusy && "opacity-50 cursor-not-allowed",
                       )}
                     >
@@ -804,10 +793,10 @@ export function ResearchListPage() {
                         </>
                       ) : (
                         <>
-                          {t(($) => $.start)}
-                          <span aria-hidden className="ml-0.5">
-                            →
+                          <span aria-hidden className="mr-0.5">
+                            ▶
                           </span>
+                          {t(($) => $.start)}
                         </>
                       )}
                     </Button>
@@ -931,16 +920,17 @@ export function ResearchListPage() {
               onStart={focusComposer}
             />
           ) : (
-            <div data-testid="research-session-list-content" className="relative z-[1] space-y-3">
-              <div className="flex items-baseline gap-2 px-0.5">
-                <h2 className="text-sm font-medium text-foreground">
+            <section data-testid="research-session-list-content" className="px-frame relative z-[1]">
+              <PixelStuds />
+              <header className="px-frame-header">
+                <h2 className="px-frame-title text-sm font-normal text-foreground">
                   {t(($) => $.list.recent_heading)}
                 </h2>
-                <span className="text-xs tabular-nums text-muted-foreground">
+                <small className="shrink-0 text-xs tabular-nums tracking-[0.2em] text-muted-foreground">
                   {t(($) => $.list.recent_count, { count: sessions.length })}
-                </span>
-              </div>
-
+                </small>
+              </header>
+              <div className="space-y-3 p-3 md:p-4">
               <ResearchSessionFilterBar
                 query={titleQuery}
                 status={statusFilter}
@@ -998,7 +988,8 @@ export function ResearchListPage() {
               ) : (
                 renderGroupedOrFlat()
               )}
-            </div>
+              </div>
+            </section>
           )}
         </div>
       </div>

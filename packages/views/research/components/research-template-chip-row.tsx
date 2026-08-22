@@ -25,8 +25,9 @@ type ResearchTemplateChipRowProps = {
 /**
  * LRM-1092 / LRM-1072: template pills inside the home composer (replaces external cards).
  *
- * LRM-1189: selected/hover reuse the frozen template blue triple from
- * `research-template-inject-tag.tsx`; light values unchanged; no raw hex halo.
+ * Pixel theme 2026-08-22 (supersedes the LRM-1189 blue triple): chips are
+ * `.px-chip` bevel plates; the selected state is the gold-pressed bevel keyed
+ * off `aria-checked` in research-home-visual.css. No raw hex in TSX.
  *
  * LRM-1218: bottom divider uses solid/subtle border vocabulary (dashed
  * borders stay reserved for drop/placeholder surfaces).
@@ -64,13 +65,7 @@ export function ResearchTemplateChipRow({
                   aria-checked={selected}
                   onClick={() => onToggle(template)}
                   data-testid={`research-template-chip-${template.id}`}
-                  className={cn(
-                    "inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium whitespace-nowrap transition-colors",
-                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30",
-                    selected
-                      ? "border-blue-400 bg-blue-50 text-blue-700 dark:border-blue-400/45 dark:bg-blue-400/[0.14] dark:text-blue-200"
-                      : "border-border bg-muted/40 text-foreground/80 hover:border-blue-300 hover:bg-blue-50/60 hover:text-blue-700 dark:hover:border-blue-400/45 dark:hover:bg-blue-400/[0.10] dark:hover:text-blue-200",
-                  )}
+                  className="px-chip inline-flex h-7 shrink-0 items-center gap-1.5 px-2.5 text-xs whitespace-nowrap"
                 >
                   <Icon className="size-3 opacity-70" aria-hidden />
                   {title}

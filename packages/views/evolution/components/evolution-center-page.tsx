@@ -120,7 +120,7 @@ const COPY = {
   learningQueueHint: "Review-first memory and skill candidates waiting for a human decision.",
   memoryOps: "Memory curation",
   memoryType: "Memory type",
-  memoryTypeHint: "Pick the memory pipeline for this workspace. Graph memory builds a hierarchical memory DAG and is experimental.",
+  memoryTypeHint: "Pick the memory pipeline for this workspace. Graph memory builds a hierarchical memory graph and is experimental.",
   memoryTypeLegacy: "Legacy (MEMORY.md)",
   memoryTypeGraph: "Graph memory (experimental)",
   memoryTypeSaved: "Memory type updated",
@@ -1078,14 +1078,17 @@ function MemoryTypeCard({ wsId, isAdmin }: { wsId: string; isAdmin: boolean }) {
   const [pendingGraphConfirm, setPendingGraphConfirm] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
 
-  // The PUT endpoint validates the full profile, so the explore knobs are
-  // re-sent unchanged from the current profile (or the server defaults).
+  // The PUT endpoint guards concurrent writes with a config_version
+  // compare-and-set (spec §16): every update to an existing row must carry
+  // the current version or the server rejects it with 409. The remaining
+  // tunables are preserved server-side when left out.
   // Switching TO graph requires the explicit empty-start confirmation.
   const update = useMutation({
     mutationFn: (next: GraphMemoryType) => api.updateGraphMemoryProfile(wsId, {
       memory_type: next,
       explore_agents: profile?.explore_agents ?? 4,
       explore_max_rounds: profile?.explore_max_rounds ?? 3,
+      config_version: profile?.config_version ?? 0,
       ...(next === "graph" ? { confirm_empty_start: true } : {}),
     }),
     onSuccess: async () => {

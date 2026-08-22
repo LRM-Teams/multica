@@ -359,22 +359,30 @@ package hash alone does not grant access.
 
 ## 7. Realtime
 
-The authenticated existing realtime bus publishes:
+The authenticated existing realtime bus publishes a run-scoped
+sequence-advance signal for every committed Run Event:
 
 ```json
 {
   "event": "research_projection_v6:delta",
   "payload": {
     "run_id": "00000000-0000-4000-8000-000000000003",
-    "delta": {}
+    "through_sequence": 47
   }
 }
 ```
 
-`delta` is a strict `projection_delta`. Clients ignore other Runs, apply events
-only in contiguous sequence/hash order and call resume after reconnect. Malformed
-frames, a gap timeout, snapshot mismatch or hash mismatch cause a full Snapshot
-reload; clients never repair canonical state locally.
+The frame carries no delta payload: Director Projection Delta identity
+(`snapshot_id` + projection hash chain) is pinned to each client's own
+snapshot, so a broadcast frame cannot carry a delta that validates for every
+subscriber. On receiving a signal ahead of its confirmed sequence, a client
+calls the authenticated resume route, which computes the incremental
+`projection_delta` chain against that client's snapshot. Clients ignore other
+Runs and apply resumed deltas only in contiguous sequence/hash order. A gap
+timeout, snapshot mismatch or hash mismatch cause a full Snapshot reload;
+clients never repair canonical state locally. If a future payload does carry
+a `delta` field, it must be a strict `projection_delta`; unparseable deltas
+degrade to the incremental resume path, not to a full reload.
 
 User-visible control changes that do not alter graph content may still emit an
 empty Delta with a new sequence and hash chain. Notifications such as

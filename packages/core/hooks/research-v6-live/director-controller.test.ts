@@ -167,4 +167,104 @@ describe("ResearchV6DirectorLiveController", () => {
     expect(controller.getLiveState().malformedFrameCount).toBe(0);
     expect(controller.getClient().getState().resyncRequired).toBe(false);
   });
+
+  it("catches up over resume on a sequence-advance envelope", async () => {
+    const live = bus();
+    const wire = transport({
+      resumePage: {
+        run_id: RUN_ID,
+        deltas: [delta()],
+        next_cursor: null,
+        resync_required: false,
+      },
+    });
+    const controller = new ResearchV6DirectorLiveController(
+      { workspaceId: WORKSPACE_ID, runId: RUN_ID },
+      wire.value,
+      live.realtime,
+    );
+    controller.seedSnapshotPage(snapshot());
+    controller.connect();
+    live.push({ run_id: RUN_ID, through_sequence: 5 });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(wire.resumeRequests).toHaveLength(1);
+    expect(wire.snapshotLoads()).toBe(0);
+    expect(controller.getClient().getState().lastConfirmedSequence).toBe(5);
+  });
+
+  it("ignores a sequence-advance envelope at or behind the confirmed sequence", () => {
+    const live = bus();
+    const wire = transport();
+    const controller = new ResearchV6DirectorLiveController(
+      { workspaceId: WORKSPACE_ID, runId: RUN_ID },
+      wire.value,
+      live.realtime,
+    );
+    controller.seedSnapshotPage(snapshot());
+    controller.connect();
+    live.push({ run_id: RUN_ID, through_sequence: 4 });
+    expect(wire.resumeRequests).toHaveLength(0);
+  });
+
+  it("catches up incrementally instead of reloading on a malformed delta", async () => {
+    const live = bus();
+    const wire = transport();
+    const controller = new ResearchV6DirectorLiveController(
+      { workspaceId: WORKSPACE_ID, runId: RUN_ID },
+      wire.value,
+      live.realtime,
+    );
+    controller.seedSnapshotPage(snapshot());
+    controller.connect();
+    live.push({ run_id: RUN_ID, delta: { broken: true } });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(controller.getLiveState().malformedFrameCount).toBe(1);
+    expect(wire.resumeRequests).toHaveLength(1);
+    expect(wire.snapshotLoads()).toBe(0);
+    expect(controller.getClient().getState().resyncRequired).toBe(false);
+  });
+
+  it("coalesces advance signals that arrive while a resume is in flight", async () => {
+    const live = bus();
+    const releases: Array<() => void> = [];
+    const resumeRequests: unknown[] = [];
+    const wire = {
+      loadSnapshot: async () => snapshot(),
+      resume: async (_workspaceId: string, _runId: string, request: unknown) => {
+        resumeRequests.push(request);
+        if (resumeRequests.length === 1) {
+          await new Promise<void>((resolve) => {
+            releases.push(resolve);
+          });
+        }
+        return {
+          run_id: RUN_ID,
+          deltas: [],
+          next_cursor: null,
+          resync_required: false,
+        };
+      },
+    } as Pick<
+      ResearchV6DirectorProjectionTransport,
+      "loadSnapshot" | "resume"
+    > as ResearchV6DirectorProjectionTransport;
+    const controller = new ResearchV6DirectorLiveController(
+      { workspaceId: WORKSPACE_ID, runId: RUN_ID },
+      wire,
+      live.realtime,
+    );
+    controller.seedSnapshotPage(snapshot());
+    controller.connect();
+    live.push({ run_id: RUN_ID, through_sequence: 5 });
+    live.push({ run_id: RUN_ID, through_sequence: 6 });
+    live.push({ run_id: RUN_ID, through_sequence: 7 });
+    expect(resumeRequests).toHaveLength(1);
+    releases[0]?.();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(resumeRequests).toHaveLength(2);
+  });
 });

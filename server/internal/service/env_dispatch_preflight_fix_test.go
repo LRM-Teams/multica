@@ -315,6 +315,13 @@ func TestDispatchMixedBranchPostDispatchPersistenceFailureCompensatesStartedRoll
 	if err == nil || !strings.Contains(err.Error(), "synthetic post-dispatch local-target failure") {
 		t.Fatalf("dispatch error = %v, want post-dispatch local-target failure", err)
 	}
+	// Initial-message acknowledgement is detached from the dispatch response;
+	// asserting acceptedMessages without this wait races the delivery goroutine.
+	select {
+	case <-deps.deliveryDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("detached initial-message acknowledgement did not complete")
+	}
 	if deps.acceptedMessages != 1 || deps.startAttempts != 1 || len(deps.mixedStartedRuns) != 1 || deps.localTargetCalls != 2 {
 		t.Fatalf("post-dispatch edge: accepted=%d startAttempts=%d successfulStarts=%v localTargetCalls=%d", deps.acceptedMessages, deps.startAttempts, deps.mixedStartedRuns, deps.localTargetCalls)
 	}

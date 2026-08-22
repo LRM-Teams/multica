@@ -270,6 +270,43 @@ func (s *PostgresStore) RecoverExpiredV6WorkItems(ctx context.Context, limit int
 		return 0, err
 	}
 	rows.Close()
+	// A 'ready' item whose attempt budget is already exhausted is invisible to
+	// dispatch preparation (attempt_count>=max_attempts) and to lease recovery
+	// (status not in dispatching/running), so nothing would ever settle it or
+	// wake the Director. Fail it explicitly so the budget_exhausted outcome
+	// becomes a Run Event the Director trigger processor reacts to.
+	zombieRows, err := tx.Query(ctx, `
+		WITH zombie AS (
+		  SELECT w.id
+		  FROM research_work_item w
+		  JOIN research_session s ON s.id=w.session_id
+		  WHERE s.orchestrator_version='research-run-v6'
+		    AND w.status='ready' AND w.attempt_count>=w.max_attempts
+		  ORDER BY s.id,w.id
+		  FOR UPDATE OF s,w SKIP LOCKED LIMIT $1
+		)
+		UPDATE research_work_item w
+		SET status='failed',terminal_reason_code='attempt_budget_exhausted',
+		    lease_token=NULL,lease_expires_at=NULL,state_version=w.state_version+1,updated_at=now()
+		WHERE w.id IN (SELECT id FROM zombie)
+		RETURNING w.workspace_id::text,w.session_id::text,w.id::text,w.status,w.state_version
+	`, limit)
+	if err != nil {
+		return 0, err
+	}
+	for zombieRows.Next() {
+		var item recovered
+		if err = zombieRows.Scan(&item.workspaceID, &item.runID, &item.workItemID, &item.status, &item.version); err != nil {
+			zombieRows.Close()
+			return 0, err
+		}
+		items = append(items, item)
+	}
+	if err = zombieRows.Err(); err != nil {
+		zombieRows.Close()
+		return 0, err
+	}
+	zombieRows.Close()
 	for _, item := range items {
 		if _, err = appendEvent(ctx, tx, item.workspaceID, item.runID, "v6_work_item_recovered",
 			fmt.Sprintf("v6-work-item-recovered:%s:%d", item.workItemID, item.version), "system", "",

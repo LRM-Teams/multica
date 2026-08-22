@@ -275,10 +275,11 @@ func (e *Engine) ReconcileV6Work(ctx context.Context, limit int) (int, error) {
 	cancelled, cancellationErr := cancelLostV6InboxTasks(ctx, e.store, e.dispatcher, limit)
 	settled, settledCancellationErr := cancelSettledV6InboxTasks(ctx, e.store, e.dispatcher, limit)
 	events, eventErr := e.store.ProcessV6EventTriggers(ctx, limit)
+	idleWakes, idleErr := e.store.ProcessV6IdleRuns(ctx, limit)
 	prepared, prepareErr := e.store.PrepareV6Dispatches(ctx, limit)
 	delivered, deliveryErr := (v6RuntimeModule{store: e.store, team: e.store, agents: e.v6Agents, inbox: e.v6Inbox, clock: e.clock}).Deliver(ctx, limit)
 	ingested, ingestErr := e.IngestPendingScreenedSources(ctx, limit)
-	return recovered + cancelled + settled + steering + proposals + reports + applied + events + prepared + delivered + ingested, errors.Join(err, cancellationErr, settledCancellationErr, steeringErr, proposalErr, reportErr, applyErr, eventErr, prepareErr, deliveryErr, ingestErr)
+	return recovered + cancelled + settled + steering + proposals + reports + applied + events + idleWakes + prepared + delivered + ingested, errors.Join(err, cancellationErr, settledCancellationErr, steeringErr, proposalErr, reportErr, applyErr, eventErr, idleErr, prepareErr, deliveryErr, ingestErr)
 }
 
 func (e *Engine) AssignV6Director(ctx context.Context, in AssignV6DirectorInput) (V6DirectorAssignment, error) {

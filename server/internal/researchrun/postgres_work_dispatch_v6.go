@@ -96,7 +96,10 @@ func (s *PostgresStore) prepareNextV6Dispatch(ctx context.Context) (bool, error)
 	if _, err = tx.Exec(ctx, `INSERT INTO research_v6_outbox(workspace_id,session_id,kind,idempotency_key,payload)VALUES($1::uuid,$2::uuid,'dispatch_work_item',$3,$4::jsonb)`, workspaceID, runID, dispatchKey, outboxPayload); err != nil {
 		return false, err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE research_work_item SET status='dispatching',attempt_count=attempt_count+1,lease_token=$2::uuid,lease_expires_at=now()+interval '15 minutes',state_version=state_version+1,updated_at=now() WHERE id=$1::uuid`, workItemID, uuid.NewString()); err != nil {
+	// Observed Agent turns run 17-30 minutes; a 15-minute lease expired mid-turn
+	// and burned the whole attempt budget on healthy work. Progress reports also
+	// slide this lease (see ReportV6WorkProgress).
+	if _, err = tx.Exec(ctx, `UPDATE research_work_item SET status='dispatching',attempt_count=attempt_count+1,lease_token=$2::uuid,lease_expires_at=now()+interval '45 minutes',state_version=state_version+1,updated_at=now() WHERE id=$1::uuid`, workItemID, uuid.NewString()); err != nil {
 		return false, err
 	}
 	if _, err = tx.Exec(ctx, `UPDATE research_team_membership SET state='working' WHERE id=$1::uuid`, membershipID); err != nil {
@@ -367,7 +370,7 @@ func (s *PostgresStore) CompleteV6DispatchOutbox(ctx context.Context, outboxID, 
 	if command.RowsAffected() != 1 {
 		return ErrWorkItemLeaseLost
 	}
-	command, err = tx.Exec(ctx, `UPDATE research_work_item SET status='running',lease_expires_at=now()+interval '15 minutes',updated_at=now() WHERE id=$1::uuid AND status='dispatching'`, workItemID)
+	command, err = tx.Exec(ctx, `UPDATE research_work_item SET status='running',lease_expires_at=now()+interval '45 minutes',updated_at=now() WHERE id=$1::uuid AND status='dispatching'`, workItemID)
 	if err != nil {
 		return err
 	}

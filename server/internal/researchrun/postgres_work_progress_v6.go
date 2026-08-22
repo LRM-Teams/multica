@@ -10,7 +10,9 @@ import (
 
 // ReportV6WorkProgress appends an operational progress note for an active
 // attempt. The note becomes a `v6_work_progress_reported` Run Event whose
-// payload feeds live presence; it never mutates work item or attempt state.
+// payload feeds live presence. A report is also a liveness heartbeat: it
+// slides the work item lease forward so a long but visibly active turn is not
+// recovered as expired mid-work.
 func (s *PostgresStore) ReportV6WorkProgress(ctx context.Context, in ReportV6WorkProgressInput) error {
 	tx, err := s.beginResearchTx(ctx, txOpV6WorkProgressReport, pgx.TxOptions{})
 	if err != nil {
@@ -46,6 +48,12 @@ func (s *PostgresStore) ReportV6WorkProgress(ctx context.Context, in ReportV6Wor
 	}
 	if noteCount >= maxV6WorkProgressNotesPerAttempt {
 		return fmt.Errorf("%w: progress note budget exhausted for this attempt", ErrInvalidContract)
+	}
+	// Heartbeat: extend the lease only forward, never shorten it. The fence
+	// above already proved the reporting attempt is the in-flight one.
+	if _, err = tx.Exec(ctx, `UPDATE research_work_item SET lease_expires_at=GREATEST(lease_expires_at, now()+interval '20 minutes'),updated_at=now()
+		WHERE id=$1::uuid AND status IN ('dispatching','running') AND lease_expires_at IS NOT NULL`, in.WorkItemID); err != nil {
+		return err
 	}
 	payload := map[string]any{
 		"work_item_id": in.WorkItemID,

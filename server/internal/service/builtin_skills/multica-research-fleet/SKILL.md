@@ -106,9 +106,12 @@ drafting, verifying), POST a one-line note to `${V6_API}/progress`:
   "${V6_API}/progress"
 ```
 
-Progress notes are observability only. They never settle the Work Item, the
-server caps them per attempt, and a failed progress POST must never block or
-retry-loop the mission — ignore its errors and continue.
+Progress notes never settle the Work Item, the server caps them per attempt,
+and a failed progress POST must never block or retry-loop the mission — ignore
+its errors and continue. A progress note is also your liveness heartbeat: each
+accepted note slides the Work Item lease forward (at least 20 more minutes), so
+during a long turn report at least once every 15 minutes or the lease may
+expire mid-work and the attempt will be recovered as lost.
 
 For a Director assignment, read every Brief page by following `next_cursor` and
 acknowledge each page with the exact IDs and hashes returned in that page:

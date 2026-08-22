@@ -67,7 +67,7 @@ var graphMemoryStorageBounds = GraphMemoryTunables{
 func DefaultGraphMemoryTunables() GraphMemoryTunables {
 	return GraphMemoryTunables{
 		TTTConcurrency:           4,
-		ExploreMaxRounds:         3,
+		ExploreMaxRounds:         6,
 		ExploreNodesPerExpansion: 1,
 		MaxHierarchyFanout:       8,
 		MaxRelationEdgesPerNode:  8,

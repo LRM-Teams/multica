@@ -46,7 +46,10 @@ const (
 	// operator opts into the graph reviewer via MULTICA_MEMORY_TYPE=graph.
 	DefaultMemoryType                = MemoryTypeLegacy
 	DefaultGraphExploreAgents        = 1
-	DefaultGraphExploreMaxRounds     = 3
+	// DefaultGraphExploreMaxRounds matches memorygraph.DefaultExploreConfig:
+	// the merged /explore protocol counts one round per served node, so the
+	// budget is larger than the legacy /view+/expand round count.
+	DefaultGraphExploreMaxRounds     = 6
 	DefaultGraphRewardTimeoutSeconds = 600
 	// DefaultMemoryCurationL3ReviewTimeout is the per-invocation wall clock for
 	// the curator agent (self-review / team curation / L3). 30s was too short

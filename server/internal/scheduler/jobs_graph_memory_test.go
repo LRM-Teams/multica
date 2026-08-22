@@ -354,6 +354,56 @@ func TestResolveGraphMemoryGate(t *testing.T) {
 	}
 }
 
+func TestGraphMemoryConsolidationConfigs(t *testing.T) {
+	cases := []struct {
+		name   string
+		rounds int
+		want   int
+	}{
+		{name: "zero keeps default", rounds: 0, want: 6},
+		{name: "profile rounds override default", rounds: 10, want: 10},
+		{name: "negative keeps default", rounds: -1, want: 6},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, exploreCfg := graphMemoryConsolidationConfigs("model", tc.rounds)
+			if exploreCfg.MaxRounds != tc.want {
+				t.Fatalf("exploreCfg.MaxRounds = %d, want %d", exploreCfg.MaxRounds, tc.want)
+			}
+			if cfg.ExploreMaxRounds != tc.want {
+				t.Fatalf("cfg.ExploreMaxRounds = %d, want %d", cfg.ExploreMaxRounds, tc.want)
+			}
+			if exploreCfg.Model != "model" {
+				t.Fatalf("exploreCfg.Model = %q, want model", exploreCfg.Model)
+			}
+		})
+	}
+}
+
+func TestResolveGraphMemoryProfileRounds(t *testing.T) {
+	ctx := context.Background()
+	wsID := "3f6b1c2e-7a8d-4e5f-9a0b-1c2d3e4f5a6b"
+	wsDir := "/root/" + wsID + "/memory_graph/projects/1f2e3d4c-5b6a-4978-8c7d-6e5f4a3b2c1d"
+
+	var gotWorkspaceID string
+	lookup := func(_ context.Context, workspaceID string) int {
+		gotWorkspaceID = workspaceID
+		return 10
+	}
+	if got := resolveGraphMemoryProfileRounds(ctx, wsDir, lookup); got != 10 {
+		t.Fatalf("resolveGraphMemoryProfileRounds = %d, want 10", got)
+	}
+	if gotWorkspaceID != wsID {
+		t.Fatalf("lookup workspace ID = %q, want %q", gotWorkspaceID, wsID)
+	}
+	if got := resolveGraphMemoryProfileRounds(ctx, "/root/memory_graph", lookup); got != 0 {
+		t.Fatalf("root-level rounds = %d, want 0", got)
+	}
+	if got := resolveGraphMemoryProfileRounds(ctx, wsDir, nil); got != 0 {
+		t.Fatalf("nil lookup rounds = %d, want 0", got)
+	}
+}
+
 func TestGraphMemoryJobSpecValid(t *testing.T) {
 	job := GraphMemoryJobs(nil, nil)
 	if err := job.validate(); err != nil {

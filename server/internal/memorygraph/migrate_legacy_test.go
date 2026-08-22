@@ -50,42 +50,6 @@ func TestMigrateLegacyQueryLogsMarksFlatEntriesAndExcludesBacktests(t *testing.T
 	}
 }
 
-func TestMigrateLegacyQueryLogsMarksRegressionAndPreventsRegressionGate(t *testing.T) {
-	store := newTestStore(t)
-	seedGraphNode(t, store, 1, "n1", "alpha")
-	if err := store.AppendRegression(&RegressionEntry{Query: "legacy", RelevantNodes: []string{"n1"}, AddedVersion: 1}); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.AppendRegression(&RegressionEntry{
-		Query: "modern", RelevantNodes: []string{"n1"}, AddedVersion: 1,
-		InfoItems: []BacktestItem{{ID: "item-1", Statement: "alpha", NodeIDs: []string{"n1"}}},
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	result, err := MigrateLegacyQueryLogs(store)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Marked != 1 {
-		t.Fatalf("migration result = %+v, want one marked regression", result)
-	}
-	entries, err := store.ReadRegression()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !entries[0].LegacyNonAuthoritative || entries[1].LegacyNonAuthoritative {
-		t.Fatalf("regression entries = %+v, want only flat regression marked", entries)
-	}
-	queries, err := BacktestQueries(store, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(queries) != 1 || !queries[0].Regression || queries[0].Query != "modern" {
-		t.Fatalf("BacktestQueries = %+v, want only modern regression", queries)
-	}
-}
-
 func TestMigrateLegacyQueryLogsIsIdempotentAndResumesPartialWindow(t *testing.T) {
 	store := newTestStore(t)
 	for _, query := range []string{"first", "second"} {

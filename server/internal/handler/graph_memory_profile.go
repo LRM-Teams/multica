@@ -129,7 +129,7 @@ func (h *Handler) defaultGraphMemoryProfile(workspaceID string) graphMemoryProfi
 		WorkspaceID:              workspaceID,
 		MemoryType:               defaultGraphMemoryType,
 		ExploreAgents:            int32(defaults.TTTConcurrency),
-		ExploreMaxRounds:         int32(defaults.ExploreMaxRounds),
+		ExploreMaxRounds:         6,
 		ExploreNodesPerExpansion: int32(defaults.ExploreNodesPerExpansion),
 		MaxHierarchyFanout:       int32(defaults.MaxHierarchyFanout),
 		MaxRelationEdgesPerNode:  int32(defaults.MaxRelationEdgesPerNode),

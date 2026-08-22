@@ -264,7 +264,7 @@
   "evidenceJustNow": "just now",
   "evidenceFilterEmpty": "No chains match this filter.",
   "graphTtt": "Test-time training",
-  "graphTttHint": "When on, each recall runs K independent Explore trajectories and adopts the fastest success. When off, recall runs exactly one trajectory.",
+  "graphTttHint": "When on, each recall runs K independent Explore trajectories and adopts the fastest success; when off, recall runs exactly one trajectory. Graph consolidation always generates multiple candidate versions in parallel and adopts the best, regardless of this switch.",
   "graphTttConcurrency": "TTT concurrency",
   "graphTttEffectiveK": "Effective K = 1 while TTT is off",
   "graphTttSave": "Save TTT settings",

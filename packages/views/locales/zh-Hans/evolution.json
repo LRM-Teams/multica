@@ -264,7 +264,7 @@
   "evidenceJustNow": "刚刚",
   "evidenceFilterEmpty": "此筛选下没有证据链。",
   "graphTtt": "测试时训练",
-  "graphTttHint": "开启后，每次召回会并行跑 K 条独立 Explore 轨迹，并采用最快成功的结果。关闭后恰好只跑一条轨迹。",
+  "graphTttHint": "开启后，每次召回会并行跑 K 条独立 Explore 轨迹，并采用最快成功的结果；关闭后召回恰好只跑一条轨迹。图整合始终并行生成多条候选版本并择优采纳，不受此开关影响。",
   "graphTttConcurrency": "TTT 并发数",
   "graphTttEffectiveK": "TTT 关闭时有效 K = 1",
   "graphTttSave": "保存 TTT 设置",

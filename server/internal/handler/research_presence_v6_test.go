@@ -83,13 +83,32 @@ func TestBuildResearchV6PresenceRoster(t *testing.T) {
 	`, testWorkspaceID, sessionID, staleAgentID, uuid.NewString()); err != nil {
 		t.Fatalf("create expired work item: %v", err)
 	}
-	if _, err := testPool.Exec(ctx, `
+	// Run Event inserts are guarded by a deferred artifact-passport trigger, so
+	// the event and its passport must commit in the same transaction.
+	eventID := uuid.NewString()
+	eventTx, err := testPool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin progress event transaction: %v", err)
+	}
+	defer eventTx.Rollback(ctx)
+	if _, err := eventTx.Exec(ctx, `
 		INSERT INTO research_run_event (
-			workspace_id, session_id, sequence, event_type, idempotency_key, actor_type, actor_id, payload
-		) VALUES ($1::uuid, $2::uuid, 1, 'v6_work_progress_reported', 'test-progress-1', 'agent', $3::uuid,
+			id, workspace_id, session_id, sequence, event_type, idempotency_key, actor_type, actor_id, payload
+		) VALUES ($1::uuid, $2::uuid, $3::uuid, 1, 'v6_work_progress_reported', 'test-progress-1', 'agent', $4::uuid,
 			'{"text":"正在交叉验证三个来源","stage":"verifying"}'::jsonb)
-	`, testWorkspaceID, sessionID, workerAgentID); err != nil {
+	`, eventID, testWorkspaceID, sessionID, workerAgentID); err != nil {
 		t.Fatalf("insert progress event: %v", err)
+	}
+	if _, err := eventTx.Exec(ctx, `
+		INSERT INTO research_artifact_passport (
+			id, workspace_id, session_id, entity_kind, current_version, eligibility_revision,
+			lifecycle_status, provenance_completeness, source_created_at, registered_at
+		) VALUES ($1::uuid, $2::uuid, $3::uuid, 'run_event', NULL, 1, 'registered', 'complete', now(), now())
+	`, eventID, testWorkspaceID, sessionID); err != nil {
+		t.Fatalf("register progress event passport: %v", err)
+	}
+	if err := eventTx.Commit(ctx); err != nil {
+		t.Fatalf("commit progress event: %v", err)
 	}
 
 	presence, err := testHandler.buildResearchV6PresenceRoster(

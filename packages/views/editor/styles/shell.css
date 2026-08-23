@@ -12,6 +12,15 @@
   word-break: break-word;
 }
 
+/* Notes default typography — CSS variables come from the format store.
+   Selection color/size still wins because those are inline span styles. */
+.rich-text-editor.note-format {
+  color: var(--note-default-color, var(--foreground));
+  caret-color: var(--note-default-color, var(--foreground));
+  font-family: var(--note-default-font-family, inherit);
+  font-size: var(--note-default-font-size, 0.875rem);
+}
+
 .rich-text-editor.ProseMirror:focus {
   outline: none;
 }

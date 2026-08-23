@@ -51,3 +51,59 @@ describe("createChatStore note bubble open state", () => {
     expect(reloaded.getState().noteBubbleSidebarWidth).toBe(520);
   });
 });
+
+describe("createChatStore note selection quote", () => {
+  it("opens the rail and stores the excerpt without persisting it", () => {
+    const storage = makeStorage();
+    const store = createChatStore({ storage });
+    store.getState().askAboutNoteSelection("page-1", "  selected excerpt  ");
+
+    const quote = store.getState().noteSelectionQuote;
+    expect(store.getState().noteBubbleOpenPageId).toBe("page-1");
+    expect(quote?.pageId).toBe("page-1");
+    expect(quote?.excerpts.map((excerpt) => excerpt.text)).toEqual(["selected excerpt"]);
+    expect(quote?.askedAt).toBeGreaterThan(0);
+    expect(storage.snapshot()["multica:chat:noteBubbleOpenPageId"]).toBeUndefined();
+    expect(Object.keys(storage.snapshot()).some((key) => key.includes("noteSelection"))).toBe(false);
+  });
+
+  it("clears the quote when the rail closes", () => {
+    const storage = makeStorage();
+    const store = createChatStore({ storage });
+    store.getState().askAboutNoteSelection("page-1", "excerpt");
+    store.getState().setNoteBubbleOpenPageId(null);
+    expect(store.getState().noteSelectionQuote).toBeNull();
+  });
+
+  it("ignores a blank excerpt so an empty selection cannot open a quote", () => {
+    const storage = makeStorage();
+    const store = createChatStore({ storage });
+    store.getState().askAboutNoteSelection("page-1", " \n ");
+    expect(store.getState().noteSelectionQuote).toBeNull();
+    expect(store.getState().noteBubbleOpenPageId).toBeNull();
+  });
+
+  it("appends a second selection instead of replacing the first", () => {
+    const storage = makeStorage();
+    const store = createChatStore({ storage });
+    store.getState().askAboutNoteSelection("page-1", "第一段");
+    store.getState().askAboutNoteSelection("page-1", "第二段");
+    expect(store.getState().noteSelectionQuote?.excerpts.map((excerpt) => excerpt.text)).toEqual([
+      "第一段",
+      "第二段",
+    ]);
+  });
+
+  it("removes one excerpt without dropping the rest", () => {
+    const storage = makeStorage();
+    const store = createChatStore({ storage });
+    store.getState().askAboutNoteSelection("page-1", "第一段");
+    store.getState().askAboutNoteSelection("page-1", "第二段");
+    const firstId = store.getState().noteSelectionQuote?.excerpts[0]?.id;
+    expect(firstId).toBeTruthy();
+    store.getState().removeNoteSelectionExcerpt(firstId!);
+    expect(store.getState().noteSelectionQuote?.excerpts.map((excerpt) => excerpt.text)).toEqual([
+      "第二段",
+    ]);
+  });
+});

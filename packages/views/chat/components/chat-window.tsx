@@ -133,6 +133,12 @@ export interface ChatWindowProps {
    * chat post (e.g. open Period Brief chips after a 写汇报 ask).
    */
   onSendIntercept?: (text: string) => boolean;
+  /** Rewrite the outgoing body (e.g. attach a Notes selection quote). */
+  transformOutgoing?: (content: string) => string;
+  /** Called after a chat send is accepted (not intercept / override / error). */
+  onSendAccepted?: () => void;
+  /** Rendered inside the composer card, above the editor. */
+  composerPrefix?: React.ReactNode;
   /** Hide the composer until a page-bound Period Brief run finishes. */
   composerLocked?: boolean;
   /**
@@ -280,6 +286,9 @@ export function ChatWindow({
   allowEmptySend = false,
   onSendOverride,
   onSendIntercept,
+  transformOutgoing,
+  onSendAccepted,
+  composerPrefix,
   composerLocked = false,
   layout = "floating",
 }: ChatWindowProps = {}) {
@@ -693,7 +702,7 @@ export function ChatWindow({
         return false;
       }
 
-      const finalContent = content;
+      const finalContent = transformOutgoing ? transformOutgoing(content) : content;
 
       const isNewSession = !activeSessionId;
 
@@ -778,6 +787,7 @@ export function ChatWindow({
         qc.invalidateQueries({ queryKey: chatKeys.messages(sessionId) });
         qc.invalidateQueries({ queryKey: chatKeys.messagesPage(sessionId) });
         qc.invalidateQueries({ queryKey: chatKeys.pendingTasks(wsId) });
+        onSendAccepted?.();
         return true;
       }
       let pendingAfterSend: ChatPendingTask = {
@@ -800,6 +810,7 @@ export function ChatWindow({
         apiLogger.warn("sendChatMessage.pendingTask.refresh.error", { sessionId, err });
       }
       qc.setQueryData<ChatPendingTask>(chatKeys.pendingTask(sessionId), pendingAfterSend);
+      onSendAccepted?.();
       if (stopRequestedBeforeTaskRef.current) {
         stopRequestedBeforeTaskRef.current = false;
         await cancelStandaloneTurn(sessionId, { source: "deferred-send" });
@@ -821,6 +832,8 @@ export function ChatWindow({
       wsId,
       onSendOverride,
       onSendIntercept,
+      transformOutgoing,
+      onSendAccepted,
     ],
   );
 
@@ -1223,6 +1236,7 @@ export function ChatWindow({
         focusToken={composerFocusToken}
         placeholder={composerPlaceholder}
         allowEmptySend={allowEmptySend}
+        composerPrefix={composerPrefix}
         leftAdornment={
           isDmBubble || isNoteBubble || lockPreferredAgent ? undefined : (
             <AgentDropdown

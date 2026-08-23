@@ -59,6 +59,8 @@ interface ChatInputProps {
   placeholder?: string;
   /** Allow sending when the composer is empty. */
   allowEmptySend?: boolean;
+  /** Rendered inside the composer card, above the editor (e.g. a quote chip). */
+  composerPrefix?: ReactNode;
 }
 
 export function ChatInput({
@@ -79,6 +81,7 @@ export function ChatInput({
   focusToken,
   placeholder: placeholderOverride,
   allowEmptySend = false,
+  composerPrefix,
 }: ChatInputProps) {
   const { t } = useT("chat");
   const editorRef = useRef<ContentEditorRef>(null);
@@ -300,6 +303,7 @@ export function ChatInput({
         )}
         aria-disabled={noAgent || undefined}
       >
+        {composerPrefix}
         <div className="flex-1 min-h-0 overflow-y-auto px-3 py-2">
           <ContentEditor
             // See the editorKey / draftKey split note above — editorKey

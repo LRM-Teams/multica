@@ -23,6 +23,9 @@ const {
   toggleNoteBubble,
   setNoteBubbleOpenPageId,
   setNoteBubbleActiveSession,
+  setNoteSelectionQuote,
+  removeNoteSelectionExcerpt,
+  lastOutgoing,
 } = vi.hoisted(() => ({
   listAgents: vi.fn(),
   listRuntimes: vi.fn(),
@@ -36,14 +39,24 @@ const {
   toggleNoteBubble: vi.fn(),
   setNoteBubbleOpenPageId: vi.fn(),
   setNoteBubbleActiveSession: vi.fn(),
+  setNoteSelectionQuote: vi.fn(),
+  removeNoteSelectionExcerpt: vi.fn(),
+  lastOutgoing: { text: "" },
 }));
 
 const chatState = {
   noteBubbleOpenPageId: null as string | null,
   noteBubbleActiveSessionByPage: {} as Record<string, string>,
+  noteSelectionQuote: null as {
+    pageId: string;
+    excerpts: { id: string; text: string }[];
+    askedAt: number;
+  } | null,
   toggleNoteBubble,
   setNoteBubbleOpenPageId,
   setNoteBubbleActiveSession,
+  setNoteSelectionQuote,
+  removeNoteSelectionExcerpt,
 };
 
 vi.mock("@multica/core/api", () => ({
@@ -117,19 +130,35 @@ vi.mock("./note-assistant-fab-cluster", () => ({
 vi.mock("../chat/components/chat-window", () => ({
   ChatWindow: ({
     composerAccessory,
+    composerPrefix,
+    transformOutgoing,
     onSendOverride,
     onSendIntercept,
+    onSendAccepted,
     layout,
   }: {
     composerAccessory?: ReactNode;
+    composerPrefix?: ReactNode;
+    transformOutgoing?: (content: string) => string;
     onSendOverride?: (text: string) => boolean | Promise<boolean>;
     onSendIntercept?: (text: string) => boolean;
+    onSendAccepted?: () => void;
     layout?: string;
   }) => (
     <div>
       <div data-testid="chat-window" data-layout={layout}>
+        {composerPrefix}
         {composerAccessory}
       </div>
+      <button
+        type="button"
+        onClick={() => {
+          lastOutgoing.text = transformOutgoing?.("这句话想表达什么？") ?? "这句话想表达什么？";
+          onSendAccepted?.();
+        }}
+      >
+        send-quoted
+      </button>
       <button
         type="button"
         onClick={() => {
@@ -187,8 +216,12 @@ describe("NoteAssistantBubble period brief", () => {
     toggleNoteBubble.mockReset();
     setNoteBubbleOpenPageId.mockReset();
     setNoteBubbleActiveSession.mockReset();
+    setNoteSelectionQuote.mockReset();
+    removeNoteSelectionExcerpt.mockReset();
     chatState.noteBubbleOpenPageId = null;
     chatState.noteBubbleActiveSessionByPage = {};
+    chatState.noteSelectionQuote = null;
+    lastOutgoing.text = "";
     getActiveNotePeriodBrief.mockResolvedValue({ run: null });
     const collectorA = agent({
       id: "collector-a",
@@ -380,6 +413,78 @@ describe("NoteAssistantBubble period brief", () => {
       </QueryClientProvider>,
     );
     expect(screen.getByTestId("chat-window")).toHaveAttribute("data-layout", "sidebar");
+  });
+
+  it("shows an abbreviated selection quote in the composer", () => {
+    chatState.noteBubbleOpenPageId = "page-1";
+    chatState.noteSelectionQuote = {
+      pageId: "page-1",
+      excerpts: [{ id: "e1", text: `${"选中内容".repeat(20)}尾部不应出现在缩略引用里` }],
+      askedAt: 1,
+    };
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    renderWithI18n(
+      <QueryClientProvider client={qc}>
+        <NoteAssistantBubble pageId="page-1" pageTitle="Note" />
+      </QueryClientProvider>,
+      { locale: "zh-Hans" },
+    );
+    const chip = screen.getByTestId("note-selection-quote-preview");
+    expect(chip.textContent).toContain("选中内容");
+    expect(chip.textContent).toContain("…");
+    expect(chip.textContent ?? "").not.toContain("尾部不应出现在缩略引用里");
+  });
+
+  it("sends the full excerpt with the question and then clears the quote", async () => {
+    const user = userEvent.setup();
+    chatState.noteBubbleOpenPageId = "page-1";
+    chatState.noteSelectionQuote = {
+      pageId: "page-1",
+      excerpts: [{ id: "e1", text: "完整选区\n第二行" }],
+      askedAt: 1,
+    };
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    renderWithI18n(
+      <QueryClientProvider client={qc}>
+        <NoteAssistantBubble pageId="page-1" pageTitle="Note" />
+      </QueryClientProvider>,
+      { locale: "zh-Hans" },
+    );
+    await user.click(screen.getByRole("button", { name: "send-quoted" }));
+    expect(lastOutgoing.text).toBe("> 完整选区\n> 第二行\n\n这句话想表达什么？");
+    expect(setNoteSelectionQuote).toHaveBeenCalledWith(null);
+  });
+
+  it("keeps multiple selection quotes in the composer and sends them together", async () => {
+    const user = userEvent.setup();
+    chatState.noteBubbleOpenPageId = "page-1";
+    chatState.noteSelectionQuote = {
+      pageId: "page-1",
+      excerpts: [
+        { id: "e1", text: "第一段" },
+        { id: "e2", text: "第二段" },
+      ],
+      askedAt: 1,
+    };
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    renderWithI18n(
+      <QueryClientProvider client={qc}>
+        <NoteAssistantBubble pageId="page-1" pageTitle="Note" />
+      </QueryClientProvider>,
+      { locale: "zh-Hans" },
+    );
+    const rows = screen.getAllByTestId("note-selection-quote-excerpt");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.textContent).toContain("第一段");
+    expect(rows[1]?.textContent).toContain("第二段");
+    await user.click(screen.getByRole("button", { name: "send-quoted" }));
+    expect(lastOutgoing.text).toBe("> 第一段\n\n> 第二段\n\n这句话想表达什么？");
   });
 
   it("closes the rail when leaving the note that opened it", () => {

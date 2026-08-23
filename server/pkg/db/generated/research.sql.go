@@ -1574,6 +1574,7 @@ WITH ranked AS (
   JOIN research_session s ON s.id = w.session_id
   WHERE w.workspace_id = $1
     AND s.orchestrator_version = 'research-run-v6'
+    AND w.goal_version = s.goal_version
     AND w.status IN ('dispatching', 'running')
     AND w.assigned_agent_id IS NOT NULL
 )
@@ -1987,12 +1988,28 @@ WITH outcomes AS (
   SELECT o.session_id, o.id, 1, 'observation'::text, COALESCE(NULLIF(o.interpretation, ''), NULLIF(o.quote, ''), 'Verified observation'),
     NULLIF(o.quote, '')::text, o.verification_status, o.created_at
   FROM research_observation o
+  JOIN research_task ot ON ot.id = o.produced_by_task_id
+  JOIN research_session os ON os.id = o.session_id
   WHERE o.workspace_id = $1 AND o.verification_status = 'verified'
+    AND ot.goal_version = os.goal_version AND ot.plan_version = os.plan_version
+    AND os.orchestrator_version <> 'research-run-v6'
   UNION ALL
   SELECT t.session_id, t.id, 2, 'task'::text, t.objective, NULLIF(t.terminal_reason, '')::text, t.status, t.completed_at
   FROM research_task t
   JOIN research_session s ON s.id = t.session_id
   WHERE t.workspace_id = $1 AND t.goal_version = s.goal_version AND t.plan_version = s.plan_version AND t.status = 'succeeded' AND t.completed_at IS NOT NULL
+  UNION ALL
+  SELECT n.session_id, n.id, 0, 'result'::text, n.catalog_summary,
+    COALESCE(NULLIF(n.brief_summary, ''), NULLIF(n.conclusion, ''))::text,
+    n.conclusion_state, n.created_at
+  FROM research_result_node n
+  JOIN research_work_item_attempt a ON a.id = n.work_item_attempt_id
+  JOIN research_work_item w ON w.id = a.work_item_id
+  JOIN research_session s ON s.id = n.session_id
+  WHERE n.workspace_id = $1
+    AND s.orchestrator_version = 'research-run-v6'
+    AND w.goal_version = s.goal_version
+    AND n.conclusion_state NOT IN ('refuted', 'invalid')
 ), ranked AS (
   SELECT outcomes.session_id, outcomes.id, outcomes.outcome_priority, outcomes.kind, outcomes.title, outcomes.summary, outcomes.verification_state, outcomes.created_at, row_number() OVER (PARTITION BY session_id ORDER BY outcome_priority, created_at DESC, id) AS position
   FROM outcomes
@@ -2219,22 +2236,32 @@ WITH task_progress AS (
   JOIN research_session s ON s.id = w.session_id
   WHERE w.workspace_id = $1
     AND s.orchestrator_version = 'research-run-v6'
+    AND w.goal_version = s.goal_version
   GROUP BY w.session_id
 ), evidence_progress AS (
-  SELECT session_id, count(*) AS evidence_count,
-    count(*) FILTER (WHERE created_at >= now() - interval '24 hours') AS today_evidence_count
-  FROM research_observation
-  WHERE workspace_id = $1 AND verification_status <> 'rejected'
-  GROUP BY session_id
+  SELECT o.session_id, count(*) AS evidence_count,
+    count(*) FILTER (WHERE o.created_at >= now() - interval '24 hours') AS today_evidence_count
+  FROM research_observation o
+  JOIN research_task t ON t.id = o.produced_by_task_id
+  JOIN research_session s ON s.id = o.session_id
+  WHERE o.workspace_id = $1
+    AND o.verification_status <> 'rejected'
+    AND t.goal_version = s.goal_version
+    AND t.plan_version = s.plan_version
+    AND s.orchestrator_version <> 'research-run-v6'
+  GROUP BY o.session_id
 ), v6_evidence_progress AS (
   -- V6 runs never write research_observation; accepted atomic results live in
   -- research_result_node, so evidence counters must read from there instead.
   SELECT n.session_id, count(*) AS evidence_count,
     count(*) FILTER (WHERE n.created_at >= now() - interval '24 hours') AS today_evidence_count
   FROM research_result_node n
+  JOIN research_work_item_attempt a ON a.id = n.work_item_attempt_id
+  JOIN research_work_item w ON w.id = a.work_item_id
   JOIN research_session s ON s.id = n.session_id
   WHERE n.workspace_id = $1
     AND s.orchestrator_version = 'research-run-v6'
+    AND w.goal_version = s.goal_version
     AND n.conclusion_state NOT IN ('refuted', 'invalid')
   GROUP BY n.session_id
 ), node_progress AS (

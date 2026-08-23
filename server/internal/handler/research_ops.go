@@ -983,8 +983,9 @@ func (h *Handler) StopResearchSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, researchSessionToResponse(updated))
 }
 
-// DeleteResearchSession permanently removes a research session and cascaded
-// graph/messages/sources/report rows.
+// DeleteResearchSession permanently removes legacy sessions. V6 sessions are
+// archived because their canonical facts are append-only and may only be
+// removed by the enclosing Workspace deletion policy.
 func (h *Handler) DeleteResearchSession(w http.ResponseWriter, r *http.Request) {
 	workspaceID := h.resolveWorkspaceID(r)
 	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace_id")
@@ -1024,6 +1025,23 @@ func (h *Handler) DeleteResearchSession(w http.ResponseWriter, r *http.Request) 
 
 	if err = h.stopResearchSessionWakes(r.Context(), wsUUID, sessionID); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to cancel active research tasks")
+		return
+	}
+	if session.OrchestratorVersion == researchrun.OrchestratorVersionV6 {
+		archived, archiveErr := h.Queries.UpdateResearchSession(r.Context(), db.UpdateResearchSessionParams{
+			ID:          sessionID,
+			WorkspaceID: wsUUID,
+			Status:      pgtype.Text{String: "archived", Valid: true},
+		})
+		if archiveErr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to archive research session")
+			return
+		}
+		h.publish(protocol.EventResearchSessionStatusChanged, workspaceID, "user", userID, map[string]any{
+			"session":  researchSessionToResponse(archived),
+			"archived": true,
+		})
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 

@@ -4997,7 +4997,16 @@ export class ApiClient {
     const { CreateResearchSessionResponseSchema } = await import("../research/schemas");
     const raw = await this.fetch("/api/research/sessions", {
       method: "POST",
-      body: JSON.stringify(data),
+      body: JSON.stringify({
+        goal: data.goal,
+        title: data.title,
+        client_request_id: data.clientRequestId,
+        depth_tier: data.depthTier,
+        language: data.language,
+        source_weights: data.sourceWeights,
+        orchestrator_version: data.orchestratorVersion,
+        director_agent_id: data.directorAgentId,
+      }),
     });
     const parsed = CreateResearchSessionResponseSchema.safeParse(raw);
     if (!parsed.success) {

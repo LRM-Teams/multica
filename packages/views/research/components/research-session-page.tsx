@@ -260,8 +260,8 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     [typedGraphPages, selectedNodeId],
   );
   const directorV6Enabled =
-    data?.run?.run.orchestrator_version === "research-run-v6";
-  const persistedDirectorAgentId = data?.run?.run.director_agent_id ?? null;
+    data?.run?.run.orchestratorVersion === "research-run-v6";
+  const persistedDirectorAgentId = data?.run?.run.directorAgentId ?? null;
   const directorTransport = useMemo(
     () => createResearchV6DirectorProjectionTransport(api),
     [],

@@ -246,15 +246,15 @@ export function ResearchListPage() {
             language,
             selectedTemplate ? appliedTemplatePrompt : null,
           ),
-          depth_tier: params.depth_tier,
+          depthTier: params.depth_tier,
           language: params.language,
-          source_weights: params.source_weights,
+          sourceWeights: params.source_weights,
           ...(draftTitle?.trim() ? { title: draftTitle.trim() } : {}),
           ...(createRequestIdRef.current
-            ? { client_request_id: createRequestIdRef.current }
+            ? { clientRequestId: createRequestIdRef.current }
             : {}),
           ...(orchestratorVersion === "research-run-v6"
-            ? { orchestrator_version: orchestratorVersion, director_agent_id: selectedDirectorId }
+            ? { orchestratorVersion, directorAgentId: selectedDirectorId }
             : {}),
         },
         wsId,

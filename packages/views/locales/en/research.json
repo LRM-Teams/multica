@@ -80,6 +80,11 @@
     "delete_desc": "The canvas, chat, and sources will be permanently removed.",
     "delete_confirm": "Delete",
     "delete_done": "Research deleted",
+    "archive": "Archive",
+    "archive_title": "Archive this research?",
+    "archive_desc": "The research will move to history. Its canvas, discussion, evidence, and report remain available.",
+    "archive_confirm": "Archive",
+    "archive_done": "Research archived",
     "cancel": "Cancel",
     "view_goal": "View goal"
   },

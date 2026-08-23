@@ -71,6 +71,7 @@ describe("ApiClient research snapshot boundary", () => {
             plan_version: 1,
             state_version: 1,
             orchestrator_version: "research-run-v6",
+            director_agent_id: "director-1",
             config: {
               max_tasks: 1,
               max_parallel_tasks: 1,
@@ -136,7 +137,14 @@ describe("ApiClient research snapshot boundary", () => {
       session: { id: "s1" },
       fleet: { id: "f1", members: [] },
       nodes: [],
-      run: { gate: { passed: true, findings: [] }, questions: [] },
+      run: {
+        run: {
+          orchestratorVersion: "research-run-v6",
+          directorAgentId: "director-1",
+        },
+        gate: { passed: true, findings: [] },
+        questions: [],
+      },
     });
   });
 

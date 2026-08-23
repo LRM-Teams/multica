@@ -80,6 +80,11 @@
     "delete_desc": "画布、对话和来源都会被永久删除，无法恢复。",
     "delete_confirm": "删除",
     "delete_done": "调研已删除",
+    "archive": "归档",
+    "archive_title": "归档这条调研？",
+    "archive_desc": "调研会移至历史记录，画布、讨论、证据和报告都会保留。",
+    "archive_confirm": "归档",
+    "archive_done": "调研已归档",
     "cancel": "取消",
     "view_goal": "查看目标"
   },

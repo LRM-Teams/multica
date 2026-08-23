@@ -2082,7 +2082,7 @@ func TestSetWorkspaceOnboardingAgentIDIsConditionalOnNull(t *testing.T) {
 		agent, err := q.CreateAgent(ctx, db.CreateAgentParams{
 			WorkspaceID: workspace.ID, Name: name, DisplayName: name,
 			Description: "cas test agent", RuntimeMode: "cloud", RuntimeConfig: []byte("{}"),
-			RuntimeID: runtimeID, MaxConcurrentTasks: 1, OwnerID: ownerID,
+			RuntimeID: runtimeID, OwnerID: ownerID,
 			Instructions: "", CustomEnv: []byte("{}"), CustomArgs: []byte("[]"),
 			Model: pgtype.Text{String: "composer-1.5", Valid: true},
 		})

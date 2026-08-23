@@ -35,17 +35,24 @@ function renderRow(computer: AgentRuntimeConfig["computer"]) {
 // meant joining a runtime id against a list that omits another member's
 // private runtime — which silently missed and claimed "No computer".
 describe("ComputerInfoRow (2026-08-01)", () => {
-  it("shows Connected + machine label + version", () => {
+  // Online, the dot carries the state and the version gets the space —
+  // spelling out "Connected" was pushing the machine name aside. The state is
+  // still announced, so nothing depends on colour alone.
+  it("shows the machine and version, with the state on the dot", () => {
     renderRow(makeComputer());
-    expect(screen.getByText("Connected")).toBeInTheDocument();
     expect(screen.getByText("s144")).toBeInTheDocument();
     expect(screen.getByText("v0.3.92")).toBeInTheDocument();
+    // Announced to a screen reader, invisible on screen — the dot carries it.
+    expect(screen.getByText("Connected")).toHaveClass("sr-only");
   });
 
-  it("shows Disconnected when the daemon has no live runner socket", () => {
+  // Offline differs by the dot's colour and nothing else: grey reads as
+  // offline without spending a word on it. The state is still announced.
+  it("announces Disconnected on the dot without spelling it out", () => {
     renderRow(makeComputer({ connected: false }));
-    expect(screen.getByText("Disconnected")).toBeInTheDocument();
+    expect(screen.getByText("Disconnected")).toHaveClass("sr-only");
     expect(screen.getByText("s144")).toBeInTheDocument();
+    expect(screen.getByText("v0.3.92")).toBeInTheDocument();
   });
 
   it("renders the name the server resolved, never re-deriving one", () => {
@@ -59,7 +66,7 @@ describe("ComputerInfoRow (2026-08-01)", () => {
   it("omits the version when the Computer has not reported one", () => {
     renderRow(makeComputer({ cli_version: undefined }));
     expect(screen.getByText("s144")).toBeInTheDocument();
-    expect(screen.queryByText(/^v/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^v\d/)).not.toBeInTheDocument();
   });
 
   it("shows a 'no computer' placeholder when the agent has no bound runtime", () => {

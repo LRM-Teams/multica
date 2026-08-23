@@ -388,15 +388,14 @@ func agentActionFinalPayload(params db.CreateAgentParams, proposed map[string]an
 		}
 	}
 	final := map[string]any{
-		"display_name":         params.DisplayName,
-		"name":                 params.Name,
-		"description":          params.Description,
-		"runtime_id":           uuidToString(params.RuntimeID),
-		"runtime_mode":         params.RuntimeMode,
-		"model":                params.Model.String,
-		"thinking_level":       params.ThinkingLevel.String,
-		"max_concurrent_tasks": params.MaxConcurrentTasks,
-		"preferred_computer":   preferredComputer,
+		"display_name":       params.DisplayName,
+		"name":               params.Name,
+		"description":        params.Description,
+		"runtime_id":         uuidToString(params.RuntimeID),
+		"runtime_mode":       params.RuntimeMode,
+		"model":              params.Model.String,
+		"thinking_level":     params.ThinkingLevel.String,
+		"preferred_computer": preferredComputer,
 	}
 	return final
 }

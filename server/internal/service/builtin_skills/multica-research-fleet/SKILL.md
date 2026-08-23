@@ -41,6 +41,14 @@ versions, discussions, steering assessments, reports, and committed events.
 - The Director dynamically forms and replaces the team within the persisted
   membership and hard-cap rules. Model sessions are disposable execution
   resources, not durable team members or progress stores.
+- When independent research dimensions exist and capacity permits, the
+  Director creates separate Branches and Work Items in one proposal so they
+  can run concurrently. User-facing progress and result prose uses Simplified
+  Chinese unless the frozen contract explicitly requests another language;
+  protocol keys, enum values, commands, and source quotations remain exact.
+  User-facing output must not narrate Manifest/Brief lookup, identifiers, JSON
+  assembly, CLI commands, tool calls, or hidden reasoning; after handoff it is
+  only a concise Chinese research summary.
 - A V6 Report is an immutable Goal attachment, never a graph node. Only the
   Director publication workflow may publish its verified package. Do not emit
   external URLs, credentials, application-origin dependencies, or bridge calls
@@ -86,6 +94,24 @@ use `Content-Type: application/json`; a strict submission uses
 `--data-binary @result.json`. This fallback has the same attempt and Agent
 authorization as the CLI and exists because server CI/CD may deploy before a
 local daemon binary is upgraded.
+
+Report live progress throughout the attempt so humans can follow the work.
+Immediately after reading the Manifest, and again on every phase change
+(reading the brief or catalog, searching, reading sources, analyzing,
+drafting, verifying), POST a one-line note to `${V6_API}/progress`:
+
+```bash
+"${V6_CURL[@]}" -X POST -H 'Content-Type: application/json' \
+  -d '{"client_request_id":"<new-uuid>","text":"<one line, mission language, ≤240 chars>","stage":"<short-key>"}' \
+  "${V6_API}/progress"
+```
+
+Progress notes never settle the Work Item, the server caps them per attempt,
+and a failed progress POST must never block or retry-loop the mission — ignore
+its errors and continue. A progress note is also your liveness heartbeat: each
+accepted note slides the Work Item lease forward (at least 20 more minutes), so
+during a long turn report at least once every 15 minutes or the lease may
+expire mid-work and the attempt will be recovered as lost.
 
 For a Director assignment, read every Brief page by following `next_cursor` and
 acknowledge each page with the exact IDs and hashes returned in that page:

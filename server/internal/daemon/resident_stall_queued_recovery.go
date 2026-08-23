@@ -75,7 +75,7 @@ func (p *canonicalAgentRuntimePool) recoverStalledSlotForQueuedMessage(agentID, 
 		return false, nil
 	}
 	slot.stalledRecovering = true
-	// Release slot.mu before forceInvalidateSession: it re-takes p.mu then
+	// Release slot.mu before beginResidentTermination: it re-takes p.mu then
 	// slot.mu itself, and holding slot.mu here would deadlock against that.
 	slot.mu.Unlock()
 
@@ -88,14 +88,14 @@ func (p *canonicalAgentRuntimePool) recoverStalledSlotForQueuedMessage(agentID, 
 		SilentFor: staleFor, At: time.Now(),
 	})
 
-	if err := p.forceInvalidateSession(agentID, runtimeID); err != nil {
+	if err := p.beginResidentTermination(agentID, runtimeID); err != nil {
 		slot.mu.Lock()
 		slot.stalledRecovering = false
 		slot.mu.Unlock()
 		return false, err
 	}
 	// stalledRecovering is cleared only by closeBackend(), reached through
-	// both branches of forceInvalidateSession (the idle close-now path and the
+	// both branches of beginResidentTermination (the idle close-now path and the
 	// force-killed turn's eventual finishResidentMessageInput/failResident-
 	// MessageInputAttempt teardown). No second clearing path is added here.
 	return true, nil

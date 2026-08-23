@@ -111,7 +111,7 @@ display name is `name`.
 The HTTP body (`CreateAgentRequest`) accepts: `name`, optional `display_name`,
 `description`, `instructions`, `runtime_id`, `runtime_config`,
 `avatar_selection`, `custom_env`, `custom_args`, `model`, `thinking_level`,
-`visibility`, `max_concurrent_tasks`, `mcp_config`.
+`visibility`, `mcp_config`.
 
 ## Field contracts
 
@@ -130,12 +130,11 @@ The HTTP body (`CreateAgentRequest`) accepts: `name`, optional `display_name`,
 | `custom_env` | JSON object | — | daemon process env; see Env & secrets |
 | `mcp_config` | raw JSON | object or `null`; create drops literal `null` | daemon MCP; redacted on read |
 | `visibility` | string | — | access control; default `private` |
-| `max_concurrent_tasks` | int | — | scheduler cap; default `6` |
 
 Defaults when omitted: `display_name` from legacy `name` seed, `runtime_config`
-→ `{}`, `custom_env` → `{}`, `custom_args` → `[]`, `visibility` → `private`,
-`max_concurrent_tasks` → `6`; omitted `avatar_selection` gets one concrete
-preset with `avatar_source=assigned`. Presets are absolute, immutable CDN URLs
+→ `{}`, `custom_env` → `{}`, `custom_args` → `[]`, `visibility` → `private`;
+omitted `avatar_selection` gets one concrete preset with
+`avatar_source=assigned`. Presets are absolute, immutable CDN URLs
 backed by OSS; older `/agent-avatars/human-XX.jpg` selections are normalized to
 the same visual asset in the retained v1 catalog at the write boundary. Raw
 `avatar_url` is rejected.

@@ -236,6 +236,16 @@ type canonicalAgentRuntimeSlot struct {
 	// redelivers roughly every 20s, so without it each redelivery would fire
 	// another kill while the first teardown is still in flight.
 	stalledRecovering bool
+	// terminated signals that this slot's resident process is confirmed gone
+	// AND slot.running has been released — the single completion fact
+	// awaitTerminated waits on instead of polling hasRunningTurn/
+	// residentProcessAlive separately. It is created fresh whenever a new
+	// backend is attached (see acquire()'s create-only branch) and closed by
+	// closeBackend(), the one place both halves of that fact are always
+	// settled together before slot.mu is released (see closeBackend's
+	// comment for why). A nil channel means this slot has never had a
+	// backend, so there is nothing to await.
+	terminated chan struct{}
 }
 
 func newCanonicalAgentRuntimePool() *canonicalAgentRuntimePool {
@@ -443,6 +453,10 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 		slot.backend = created
 		slot.close = closeBackend
 		slot.provider = request.Identity.Provider
+		// Re-arm the termination signal for this new process. A stale closed
+		// channel from a previous backend on this same slot must never make
+		// the next awaitTerminated return instantly.
+		slot.terminated = make(chan struct{})
 		// Stamp the silence clock at spawn. A zero value would make the very
 		// first deferred delivery treat a still-booting process as stalled.
 		slot.lastRuntimeActivityAt = now
@@ -602,6 +616,47 @@ func (slot *canonicalAgentRuntimeSlot) closeBackend() {
 	slot.lastRuntimeActivityAt = time.Time{}
 	slot.outstandingToolCalls = nil
 	slot.stalledRecovering = false
+	// Every closeBackend() caller either already has slot.running false or
+	// sets it false in the same slot.mu critical section as this call (see
+	// releaseAt's unhealthy branch, failResidentMessageInputAttempt,
+	// finishResidentMessageInput), so by the time slot.mu is released both
+	// halves of the terminated fact — process gone, running released — are
+	// always settled together; no waiter can observe them out of order. Every
+	// call site is a real process teardown (an idle-path close, a
+	// force-killed turn's own detach, idle eviction, or a confirmed-dead
+	// liveness sweep), so this is the single correct place to close the
+	// signal. Guard against a double close: closeBackend() is idempotent by
+	// design (e.g. beginResidentTermination's idle path can run again
+	// against an already-closed slot).
+	if slot.terminated != nil {
+		select {
+		case <-slot.terminated:
+		default:
+			close(slot.terminated)
+		}
+	}
+}
+
+// awaitTerminated blocks until this slot's resident process is confirmed
+// gone and slot.running has been released (see the terminated field), or
+// until ctx is done. A slot that has never had a backend has nothing to
+// await and returns immediately.
+func (slot *canonicalAgentRuntimeSlot) awaitTerminated(ctx context.Context) error {
+	if slot == nil {
+		return nil
+	}
+	slot.mu.Lock()
+	ch := slot.terminated
+	slot.mu.Unlock()
+	if ch == nil {
+		return nil
+	}
+	select {
+	case <-ch:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (p *canonicalAgentRuntimePool) slotCount() int {
@@ -648,7 +703,7 @@ func (p *canonicalAgentRuntimePool) takeNextResumeSession(agentID, runtimeID str
 	return sessionID, true
 }
 
-func (p *canonicalAgentRuntimePool) hasLiveLease(agentID, runtimeID string) bool {
+func (p *canonicalAgentRuntimePool) hasRunningTurn(agentID, runtimeID string) bool {
 	if p == nil {
 		return false
 	}
@@ -1466,21 +1521,25 @@ func (p *canonicalAgentRuntimePool) invalidateSession(agentID, runtimeID string)
 	return nil
 }
 
-// forceInvalidateSession interrupts a busy slot instead of refusing it
+// beginResidentTermination interrupts a busy slot instead of refusing it
 // (task #62 — invalidateSession is deliberately for the already-idle case
-// only). It never calls closeBackend() on a running slot: that would race
-// with whatever goroutine currently holds Execute() against the same
-// backend. Instead it asks the backend itself to force-kill its process via
-// agent.ResidentRuntimeForceKillable, then returns — the in-flight turn's own
-// goroutine is expected to observe the failure and release the slot, exactly
-// as it already does for an unexpected crash (task #42②'s self-heal path).
+// only) and requests termination without waiting for it. It never calls
+// closeBackend() on a running slot: that would race with whatever goroutine
+// currently holds Execute() against the same backend. Instead it asks the
+// backend itself to force-kill its process via agent.ResidentRuntimeForceKillable,
+// then returns — the in-flight turn's own goroutine is expected to observe
+// the failure and release the slot, exactly as it already does for an
+// unexpected crash (task #42②'s self-heal path).
 //
 // If the slot is idle, this behaves exactly like invalidateSession (no
 // force-kill needed, nothing to interrupt). If the backend does not
 // implement ResidentRuntimeForceKillable, this fails closed with
 // ErrCanonicalAgentRuntimeBusy rather than silently no-op'ing — a missing
 // capability must be loud, not indistinguishable from "nothing to do."
-func (p *canonicalAgentRuntimePool) forceInvalidateSession(agentID, runtimeID string) error {
+//
+// This is the non-blocking half of resident termination. Callers that need
+// to know the process is actually gone want terminateResident instead.
+func (p *canonicalAgentRuntimePool) beginResidentTermination(agentID, runtimeID string) error {
 	if p == nil {
 		return nil
 	}
@@ -1524,25 +1583,99 @@ func (p *canonicalAgentRuntimePool) forceInvalidateSession(agentID, runtimeID st
 	return killable.ForceKill()
 }
 
-// awaitSessionQuiescence turns ForceKill's request receipt into Raft's stop
-// completion boundary: no inactive status may be emitted while the old turn
-// still owns its lease or the resident provider process is still alive.
-func (p *canonicalAgentRuntimePool) awaitSessionQuiescence(ctx context.Context, agentID, runtimeID string) error {
+// residentTerminationWait bounds terminateResident's wait for confirmation
+// that a resident process is actually gone. Internal to the pool: callers
+// pass their own ctx for cancellation, but must never be able to make this
+// wait unbounded (a caller's connection ctx living far longer than any
+// process teardown should is exactly the bug this replaces).
+const residentTerminationWait = 5 * time.Second
+
+// residentTerminationTimeout reports the state of each condition that was
+// still unmet when terminateResident's bounded wait elapsed. Both conditions
+// are independent and can be true at once, which is why this is a struct and
+// not a pair of sentinel errors: ProcessAlive means the OS process itself is
+// still present (usually uninterruptible sleep, a process-level problem);
+// TurnRunning means our own turn goroutine never released the slot (a code
+// wedge). Distinguishing them is the entire diagnostic value of this type.
+type residentTerminationTimeout struct {
+	AgentID, RuntimeID string
+	// ProcessAlive is true when the OS process is still present.
+	ProcessAlive bool
+	// TurnRunning is true when slot.running was never released.
+	TurnRunning bool
+}
+
+func (e *residentTerminationTimeout) Error() string {
+	var unmet []string
+	if e.ProcessAlive {
+		unmet = append(unmet, "OS process still alive")
+	}
+	if e.TurnRunning {
+		unmet = append(unmet, "turn goroutine never released the slot")
+	}
+	if len(unmet) == 0 {
+		unmet = []string{"unknown condition"}
+	}
+	return fmt.Sprintf("resident termination timed out for agent %s runtime %s: %s",
+		e.AgentID, e.RuntimeID, strings.Join(unmet, ", "))
+}
+
+// awaitResidentTerminated is the confirm-only half of resident termination:
+// it blocks until the resident process for agentID/runtimeID is confirmed
+// gone and the slot has been released, bounded internally to
+// residentTerminationWait (intersected with ctx, whichever is shorter). It
+// does not itself request termination — call beginResidentTermination first.
+// Splitting the two lets a caller dispatch the kill immediately and defer
+// the bounded wait until some other precondition has resolved, e.g.
+// stopManagedAgent must fire the kill before waiting on a concurrent managed
+// start's startupDone: a start blocked inside provider spawn runs on the
+// Workspace Runner's own lifetime context, not the stop's ctx, so nothing
+// but an explicit kill can ever unblock it — waiting first would deadlock.
+// If the wait elapses without confirmation, the returned error is a
+// *residentTerminationTimeout reporting which condition(s) were still unmet,
+// so a caller can tell a wedged OS process apart from a wedged turn
+// goroutine.
+func (p *canonicalAgentRuntimePool) awaitResidentTerminated(ctx context.Context, agentID, runtimeID string) error {
+	if p == nil {
+		return nil
+	}
+	agentID = strings.TrimSpace(agentID)
+	runtimeID = strings.TrimSpace(runtimeID)
+	key := agentID + "\x00" + runtimeID
+	p.mu.Lock()
+	slot := p.slots[key]
+	p.mu.Unlock()
+	if slot == nil {
+		return nil
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		if !p.hasLiveLease(agentID, runtimeID) && !p.residentProcessAlive(agentID, runtimeID) {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
+	waitCtx, cancel := context.WithTimeout(ctx, residentTerminationWait)
+	defer cancel()
+	if err := slot.awaitTerminated(waitCtx); err != nil {
+		return &residentTerminationTimeout{
+			AgentID:      agentID,
+			RuntimeID:    runtimeID,
+			ProcessAlive: p.residentProcessAlive(agentID, runtimeID),
+			TurnRunning:  p.hasRunningTurn(agentID, runtimeID),
 		}
 	}
+	return nil
+}
+
+// terminateResident terminates the resident process and returns once it is
+// actually gone and the slot has been released. It is beginResidentTermination
+// plus awaitResidentTerminated — no polling — for callers that do not need
+// the kill and the confirm wait split across some other precondition.
+func (p *canonicalAgentRuntimePool) terminateResident(ctx context.Context, agentID, runtimeID string) error {
+	if p == nil {
+		return nil
+	}
+	if err := p.beginResidentTermination(agentID, runtimeID); err != nil {
+		return err
+	}
+	return p.awaitResidentTerminated(ctx, agentID, runtimeID)
 }
 
 // revokeResidentPiRunIdentity retires only the requested run binding. A stale

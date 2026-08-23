@@ -104,14 +104,14 @@ describe("Director V6 canvas adapter", () => {
     ]);
   });
 
-  it("keeps the Goal tier canonical while using the top-size D5 presentation", () => {
+  it("keeps the Goal tier canonical while leaving room for a larger synthesis", () => {
     const result = adaptResearchV6DirectorCanvas({
       runId: RUN_ID,
       eventSequence: 8,
       nodes: [node("goal", "GOAL", { kind: "goal" })],
       edges: [],
     });
-    expect(result.graph.nodes[0]?.level).toBe("xxl");
+    expect(result.graph.nodes[0]?.level).toBe("l");
     expect(result.graph.nodes[0]?.payload).toMatchObject({
       projection_tier: "GOAL",
       semantic_role: "goal",

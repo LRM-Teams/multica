@@ -545,96 +545,24 @@ func publishProjectedRunGraph(ctx context.Context, h *Handler, workspaceID, acto
 		}
 		h.publish(protocol.EventResearchSessionGraphUpdated, workspaceID, actorType, actorID, payload)
 	}
-	// V6 is run-scoped and sequence-framed. Publish the same deterministic graph
-	// that the projector committed, using the exact identity mapper used by the
-	// snapshot route. Full upserts are intentionally valid and idempotent here;
-	// the bounded HTTP delta route may return a smaller event-derived set.
+	// V6 realtime is a run-scoped sequence-advance signal. Director Projection
+	// Delta identity (snapshot_id + projection hash chain) is pinned per client
+	// snapshot, so one broadcast frame cannot carry a delta that validates for
+	// every subscriber. Clients catch up incrementally over the authenticated
+	// HTTP resume route, which computes the delta against their own snapshot.
 	if err := assertResearchProjectionLease(ctx, h.DB, sessionID); err != nil {
 		return err
 	}
-	envelope, err := buildResearchV6ProjectedGraphEnvelope(sessionID, eventType, eventSequence, nodes, edges, typedGraph)
-	if err != nil {
-		return err
-	}
-	h.publish(protocol.EventResearchProjectionV6Delta, workspaceID, actorType, actorID, envelope)
+	h.publish(protocol.EventResearchProjectionV6Delta, workspaceID, actorType, actorID,
+		researchV6SequenceAdvanceEnvelope{RunID: sessionID, ThroughSequence: eventSequence})
 	return nil
 }
 
-type researchV6RealtimeResyncEnvelope struct {
+// researchV6SequenceAdvanceEnvelope tells V6 clients that the committed Run
+// Event sequence advanced; it intentionally carries no delta payload.
+type researchV6SequenceAdvanceEnvelope struct {
 	RunID           string `json:"run_id"`
-	ResyncRequired  bool   `json:"resync_required"`
 	ThroughSequence int64  `json:"through_sequence"`
-}
-
-func buildResearchV6ProjectedGraphEnvelope(runID, eventType string, eventSequence int64, nodes []ResearchGraphNodeResp,
-	edges []ResearchGraphEdgeResp, typedGraph ResearchGraphTypedResp) (any, error) {
-	if researchV6RealtimeRequiresResync(eventType) {
-		return researchV6RealtimeResyncEnvelope{RunID: runID, ResyncRequired: true, ThroughSequence: eventSequence}, nil
-	}
-	v6Nodes, v6Edges, clusters, err := mapResearchV6TypedGraph(runID, nodes, edges, typedGraph)
-	if err != nil {
-		return nil, err
-	}
-	from := eventSequence - 1
-	if from < 0 {
-		from = 0
-	}
-	delta := researchV6Delta{
-		FromSequenceExclusive: from,
-		ThroughSequence:       eventSequence,
-		NodeUpserts:           v6Nodes,
-		EdgeUpserts:           v6Edges,
-		NodeTombstones:        []string{},
-		EdgeTombstones:        []string{},
-		ClusterUpserts:        clusters,
-		ClusterTombstones:     []string{},
-		AffectedRootNodeIDs:   researchV6RootIDs(v6Nodes),
-		TransitionKind:        researchV6TransitionKindForEvent(eventType),
-	}
-	return researchV6DeltaEnvelope{RunID: runID, Delta: delta}, nil
-}
-
-func researchV6RealtimeRequiresResync(eventType string) bool {
-	switch eventType {
-	case "task_dispatching", "task_dispatched", "task_started", "task_attempt_cancelling", "task_attempt_failed",
-		"task_blocked", "run_started", "run_awaiting_confirmation", "run_completed", "run_resumed", "run_paused",
-		"run_cancelled", "run_archived", "budget_exhausted", "execution_circuit_transition",
-		"target_repair_decided", "task_waiting_for_execution_target":
-		return false
-	default:
-		// Structural and unknown events may remove or regroup nodes. Without the
-		// client's prior cluster baseline the server cannot invent tombstones;
-		// an explicit resync frame is the only lossless response.
-		return true
-	}
-}
-
-func researchV6TransitionKindForEvent(eventType string) *string {
-	var transition string
-	switch eventType {
-	case "task_dispatching", "task_dispatched":
-		transition = "task_dispatched"
-	case "task_result_accepted":
-		transition = "result_accepted"
-	case "integration_completed", "insight_created":
-		transition = "integration_formed"
-	case "insight_staled":
-		transition = "insight_staled"
-	case "dispute_opened":
-		transition = "dispute_opened"
-	case "deliberation_turn_recorded":
-		transition = "deliberation_progressed"
-	case "lead_escalated":
-		transition = "lead_escalated"
-	case "team_formation_committed", "team_membership_changed":
-		transition = "team_membership_changed"
-	case "report_revised":
-		transition = "report_revised"
-	}
-	if transition == "" {
-		return nil
-	}
-	return &transition
 }
 
 func assertResearchProjectionLease(ctx context.Context, executor dbExecutor, sessionID string) error {

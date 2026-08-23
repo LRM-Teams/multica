@@ -40,6 +40,7 @@ export class ResearchV6DirectorLiveController {
   private readonly client: ResearchV6DirectorProjectionClient;
   private connection: ResearchV6DirectorConnectionStatus = "idle";
   private syncing = false;
+  private pendingCatchUp = false;
   private malformedFrameCount = 0;
   private revision = 0;
   private destroyed = false;
@@ -135,7 +136,11 @@ export class ResearchV6DirectorLiveController {
   }
 
   private receive(payload: unknown): void {
-    const envelope = payload as { run_id?: unknown; delta?: unknown };
+    const envelope = payload as {
+      run_id?: unknown;
+      delta?: unknown;
+      through_sequence?: unknown;
+    };
     if (
       !envelope ||
       typeof envelope !== "object" ||
@@ -143,17 +148,40 @@ export class ResearchV6DirectorLiveController {
     ) {
       return;
     }
-    let delta: ResearchV6DirectorProjectionDelta;
-    try {
-      delta = parseResearchV6DirectorProjectionDelta(envelope.delta);
-    } catch {
-      this.malformedFrameCount += 1;
-      this.client.requireServerResync();
-      this.emit();
-      void this.resyncSnapshot();
+    if (envelope.delta !== undefined && envelope.delta !== null) {
+      // parseResearchV6DirectorProjectionDelta never throws; failures come
+      // back as the empty fallback delta, whose run_id cannot match this run.
+      const delta: ResearchV6DirectorProjectionDelta =
+        parseResearchV6DirectorProjectionDelta(envelope.delta);
+      if (delta.run_id !== this.identity.runId) {
+        this.malformedFrameCount += 1;
+        // An unparseable frame is not proof the projection diverged; catch up
+        // incrementally over HTTP instead of discarding the whole snapshot.
+        void this.catchUp();
+        return;
+      }
+      this.applyDelta(delta);
       return;
     }
-    this.applyDelta(delta);
+    // Sequence-advance signal: the server committed new Run Events but the
+    // Delta identity (snapshot_id + hash chain) is pinned per client snapshot,
+    // so the catch-up delta must be fetched over the authenticated resume path.
+    if (
+      typeof envelope.through_sequence === "number" &&
+      envelope.through_sequence <= this.client.getState().lastConfirmedSequence
+    ) {
+      return;
+    }
+    void this.catchUp();
+  }
+
+  /** Run one incremental resume, coalescing signals that arrive mid-sync. */
+  private catchUp(): Promise<void> {
+    if (this.syncing) {
+      this.pendingCatchUp = true;
+      return Promise.resolve();
+    }
+    return this.resume();
   }
 
   private applyDelta(delta: ResearchV6DirectorProjectionDelta): void {
@@ -226,6 +254,7 @@ export class ResearchV6DirectorLiveController {
     } finally {
       this.syncing = false;
       this.emit();
+      this.drainPendingCatchUp();
     }
   }
 
@@ -240,7 +269,14 @@ export class ResearchV6DirectorLiveController {
     } finally {
       this.syncing = false;
       this.emit();
+      this.drainPendingCatchUp();
     }
+  }
+
+  private drainPendingCatchUp(): void {
+    if (!this.pendingCatchUp || this.destroyed) return;
+    this.pendingCatchUp = false;
+    void this.resume();
   }
 
   private async loadFreshSnapshot(): Promise<void> {

@@ -785,9 +785,9 @@ export function ResearchConstellationWorkspace({
             rightPanelWidth={0}
             nodeAccessibleNames={nodeAccessibleNames}
             relatedNodeIds={isMobile ? mobileNeighborhoodIds : relatedNodeIds}
-            hideUnselectedSTierRelations={projectionSource === "v6"}
+            hideUnselectedSTierRelations={false}
             semanticLandmarkLabels={projectionSource === "v6"}
-            sTierPresentation={projectionSource === "v6" ? "point" : "label"}
+            sTierPresentation="label"
             initialFitEntityIdList={isMobile ? mobileNeighborhoodIdList : undefined}
             entityBudget={isMobile ? STAR_GRAPH_MOBILE_DOM_BUDGET : undefined}
             typedNodes={typedGraph?.nodes}

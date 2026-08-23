@@ -632,8 +632,24 @@ func (h *Handler) GetResearchPresence(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if _, err := h.Queries.GetResearchSession(r.Context(), db.GetResearchSessionParams{ID: sessionID, WorkspaceID: wsUUID}); err != nil {
+	sessionRow, err := h.Queries.GetResearchSession(r.Context(), db.GetResearchSessionParams{ID: sessionID, WorkspaceID: wsUUID})
+	if err != nil {
 		writeError(w, http.StatusNotFound, "research session not found")
+		return
+	}
+	// V6 runs have a run-scoped team (not workspace fleet members) and track
+	// execution in V6 work items — the V5 fleet/task roster below never sees
+	// them, so derive presence from the V6 ledger instead.
+	if sessionRow.OrchestratorVersion == researchrun.OrchestratorVersionV6 {
+		presence, presenceErr := h.buildResearchV6PresenceRoster(r.Context(), wsUUID, sessionID, time.Now().UTC())
+		if presenceErr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to load presence")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"session_id": uuidToString(sessionID),
+			"presence":   presence,
+		})
 		return
 	}
 	nodes, err := h.Queries.ListResearchGraphNodes(r.Context(), db.ListResearchGraphNodesParams{
@@ -1319,20 +1335,19 @@ func (h *Handler) HireResearchFleetMember(w http.ResponseWriter, r *http.Request
 	}
 
 	agent, err := h.createAgentWithIdentity(r.Context(), h.Queries, db.CreateAgentParams{
-		WorkspaceID:        wsUUID,
-		Description:        req.Description,
-		Instructions:       instructions,
-		AvatarUrl:          pgtype.Text{},
-		AvatarSource:       agentAvatarSourceAssigned,
-		RuntimeMode:        runtime.RuntimeMode,
-		RuntimeConfig:      []byte("{}"),
-		RuntimeID:          runtime.ID,
-		MaxConcurrentTasks: 3,
-		OwnerID:            parseUUID(userID),
-		CustomEnv:          []byte("{}"),
-		CustomArgs:         []byte("[]"),
-		Model:              model,
-		ThinkingLevel:      pgtype.Text{},
+		WorkspaceID:   wsUUID,
+		Description:   req.Description,
+		Instructions:  instructions,
+		AvatarUrl:     pgtype.Text{},
+		AvatarSource:  agentAvatarSourceAssigned,
+		RuntimeMode:   runtime.RuntimeMode,
+		RuntimeConfig: []byte("{}"),
+		RuntimeID:     runtime.ID,
+		OwnerID:       parseUUID(userID),
+		CustomEnv:     []byte("{}"),
+		CustomArgs:    []byte("[]"),
+		Model:         model,
+		ThinkingLevel: pgtype.Text{},
 	}, req.Name, req.Name)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to hire agent: "+err.Error())

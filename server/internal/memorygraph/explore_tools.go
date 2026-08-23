@@ -86,9 +86,12 @@ type TraversalStore interface {
 	BudgetBlown(ctx context.Context, trajectoryID string) (bool, error)
 	// Submission returns the recorded submission, or nil.
 	Submission(ctx context.Context, trajectoryID string) (*submitRecord, error)
-	// Viewed returns the trajectory's successfully viewed node ids in
+	// Viewed returns the trajectory's successfully served node ids in
 	// observed order.
 	Viewed(ctx context.Context, trajectoryID string) ([]string, error)
+	// Serve atomically accounts for a /explore request. It returns the prefix
+	// that fits the node budget; only an over-budget request marks the run blown.
+	Serve(ctx context.Context, trajectoryID string, nodeIDs []string, maxRounds int) (served, rounds int, budgetExceeded bool, err error)
 }
 
 // ExploreToolServer exposes the explore-agent graph operations over a
@@ -156,8 +159,7 @@ func NewExploreToolServerWithState(store *Store, retr *HybridRetriever, cfg Expl
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /view", s.handleView)
-	mux.HandleFunc("POST /expand", s.handleExpand)
+	mux.HandleFunc("POST /explore", s.handleExplore)
 	mux.HandleFunc("POST /submit", s.handleSubmit)
 
 	s.httpServer = &http.Server{
@@ -438,6 +440,75 @@ type expandResponse struct {
 	Candidates     []expandCandidate `json:"candidates"`
 }
 
+type exploreRequest struct {
+	TrajectoryID string   `json:"trajectory_id"`
+	NodeIDs      []string `json:"node_ids"`
+}
+
+type exploredNode struct {
+	NodeID          string            `json:"node_id"`
+	Level           int               `json:"level"`
+	EpistemicStatus string            `json:"epistemic_status,omitempty"`
+	Tags            []string          `json:"tags,omitempty"`
+	Body            string            `json:"body"`
+	Truncated       bool              `json:"truncated"`
+	Staging         bool              `json:"staging,omitempty"`
+	Neighbors       []expandCandidate `json:"neighbors,omitempty"`
+}
+
+type exploreResponse struct {
+	Round          int            `json:"round"`
+	BudgetExceeded bool           `json:"budget_exceeded"`
+	Nodes          []exploredNode `json:"nodes"`
+}
+
+// handleExplore is the sole graph-read endpoint. Validation is completed for
+// the whole request before TraversalStore consumes a single node round.
+func (s *ExploreToolServer) handleExplore(w http.ResponseWriter, r *http.Request) {
+	var req exploreRequest
+	if !s.decodeExploreRequest(w, r, &req) { return }
+	if strings.TrimSpace(req.TrajectoryID) == "" || len(req.NodeIDs) == 0 {
+		exploreWriteError(w, http.StatusBadRequest, "MISSING_FIELDS", "trajectory_id and node_ids are required")
+		return
+	}
+	g, err := s.loadGraph()
+	if err != nil { exploreWriteError(w, http.StatusInternalServerError, "GRAPH_ERROR", err.Error()); return }
+	for _, id := range req.NodeIDs {
+		if IsStagingID(id) {
+			if _, err := s.store.ReadStagingSegment(strings.TrimPrefix(id, stagingDocPrefix)); err != nil {
+				exploreWriteError(w, http.StatusNotFound, "NODE_NOT_FOUND", "node not found"); return
+			}
+			continue
+		}
+		n := g.Node(id)
+		if n == nil || !s.viewAllows(n) { exploreWriteError(w, http.StatusNotFound, "NODE_NOT_FOUND", "node not found"); return }
+	}
+	if _, err := s.state.RegisterTrajectory(r.Context(), req.TrajectoryID, req.NodeIDs, len(req.NodeIDs)); err != nil {
+		writeTraversalError(w, err); return
+	}
+	served, round, exceeded, err := s.state.Serve(r.Context(), req.TrajectoryID, req.NodeIDs, s.cfg.MaxRounds)
+	if err != nil { writeTraversalError(w, err); return }
+	nodes := make([]exploredNode, 0, served)
+	for _, id := range req.NodeIDs[:served] { nodes = append(nodes, s.exploreNode(g, id)) }
+	exploreWriteJSON(w, http.StatusOK, exploreResponse{Round: round, BudgetExceeded: exceeded, Nodes: nodes})
+}
+
+func (s *ExploreToolServer) exploreNode(g *Graph, id string) exploredNode {
+	if IsStagingID(id) {
+		body, _ := s.store.ReadStagingSegment(strings.TrimPrefix(id, stagingDocPrefix))
+		n := exploredNode{NodeID: id, Level: -1, Staging: true, Body: string(body)}
+		return truncateExploreBody(&n, s.cfg.MaxNodeChars)
+	}
+	node := g.Node(id)
+	n := exploredNode{NodeID: node.NodeID, Level: node.Level, EpistemicStatus: node.Epistemic, Tags: node.Tags, Body: node.Body, Neighbors: s.expandCandidates(g, node, "")}
+	return truncateExploreBody(&n, s.cfg.MaxNodeChars)
+}
+
+func truncateExploreBody(node *exploredNode, max int) exploredNode {
+	if len(node.Body) > max { node.Body, node.Truncated = node.Body[:max], true }
+	return *node
+}
+
 func (s *ExploreToolServer) handleExpand(w http.ResponseWriter, r *http.Request) {
 	var req expandRequest
 	if !s.decodeExploreRequest(w, r, &req) {
@@ -492,29 +563,34 @@ func (s *ExploreToolServer) handleExpand(w http.ResponseWriter, r *http.Request)
 	})
 }
 
-// expandCandidates orders neighbors by the design §5.2 priority: hierarchy
+// expandCandidateRef identifies one expand candidate without rendering it. The
+// shared construction keeps /explore and backtest L3 on the same candidate
+// priority, visibility and cap semantics.
+type expandCandidateRef struct {
+	NodeID string
+	Via    string
+}
+
+// expandCandidateRefs orders neighbors by the design §5.2 priority: hierarchy
 // parents/children (summarizes) first, then entity_refs co-occurrence, then
 // typed relation neighbors, then embedding neighbors. Cross-level relation
 // edges with |LevelDelta| > 1 are demoted to the end, except evidence_for
 // which is never demoted (Q5).
-func (s *ExploreToolServer) expandCandidates(g *Graph, node *Node, relationFilter string) []expandCandidate {
+func expandCandidateRefs(g *Graph, node *Node, retr *HybridRetriever, maxExpand int, relationFilter string, allow func(*Node) bool) []expandCandidateRef {
+	if node == nil || maxExpand <= 0 {
+		return nil
+	}
 	seen := map[string]bool{node.NodeID: true}
-	var out, demoted []expandCandidate
+	var out, demoted []expandCandidateRef
 	add := func(id, via string, demote bool) {
 		if seen[id] || id == "" {
 			return
 		}
 		seen[id] = true
-		// Reapply the graph view on every offered neighbor (spec §5): an
-		// edge must never surface a node the caller may not see. Staging
-		// docs have no graph node and pass through (scope-resolved upstream).
-		if n := g.Node(id); n != nil && !s.viewAllows(n) {
+		if n := g.Node(id); n != nil && allow != nil && !allow(n) {
 			return
 		}
-		c := expandCandidate{NodeID: id, Via: via, Level: -1, Snippet: s.snippet(g, id)}
-		if n := g.Node(id); n != nil {
-			c.Level = n.Level
-		}
+		c := expandCandidateRef{NodeID: id, Via: via}
 		if demote {
 			demoted = append(demoted, c)
 		} else {
@@ -560,13 +636,30 @@ func (s *ExploreToolServer) expandCandidates(g *Graph, node *Node, relationFilte
 	}
 
 	// 4. Embedding neighbors (skipped without an embedder).
-	if s.retr != nil {
-		for _, hit := range s.retr.vectorNeighbors(node.NodeID, s.cfg.MaxExpandPerRound) {
+	if retr != nil {
+		for _, hit := range retr.vectorNeighbors(node.NodeID, maxExpand) {
 			add(hit.ID, "embedding", false)
 		}
 	}
 
-	return append(out, demoted...)
+	candidates := append(out, demoted...)
+	if len(candidates) > maxExpand {
+		candidates = candidates[:maxExpand]
+	}
+	return candidates
+}
+
+func (s *ExploreToolServer) expandCandidates(g *Graph, node *Node, relationFilter string) []expandCandidate {
+	refs := expandCandidateRefs(g, node, s.retr, s.cfg.MaxExpandPerRound, relationFilter, s.viewAllows)
+	out := make([]expandCandidate, 0, len(refs))
+	for _, ref := range refs {
+		c := expandCandidate{NodeID: ref.NodeID, Via: ref.Via, Level: -1, Snippet: s.snippet(g, ref.NodeID)}
+		if n := g.Node(ref.NodeID); n != nil {
+			c.Level = n.Level
+		}
+		out = append(out, c)
+	}
+	return out
 }
 
 // snippet returns a bounded body preview for a graph node or staging id.
@@ -859,6 +952,27 @@ func submissionHash(found bool, summary string, nodeIDs []string) string {
 	}{found, summary, nodeIDs})
 	sum := sha256.Sum256(body)
 	return hex.EncodeToString(sum[:])
+}
+
+func (m *inMemoryTraversalStore) Serve(_ context.Context, trajectoryID string, nodeIDs []string, maxRounds int) (served, rounds int, budgetExceeded bool, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	tr, err := m.lookup(trajectoryID)
+	if err != nil { return 0, 0, false, err }
+	if tr.rounds >= maxRounds {
+		tr.budgetBlown = true
+		return 0, tr.rounds, true, nil
+	}
+	remaining := maxRounds - tr.rounds
+	served = len(nodeIDs)
+	if served > remaining { served = remaining; tr.budgetBlown = true }
+	tr.rounds += served
+	// The handler has already resolved each served id against the pinned graph.
+	// Synthetic IDs preserve submission validation while retaining observed order.
+	for _, id := range nodeIDs[:served] {
+		if !tr.viewedSet[id] { tr.viewedSet[id] = true; tr.viewed = append(tr.viewed, id) }
+	}
+	return served, tr.rounds, tr.rounds >= maxRounds, nil
 }
 
 func (m *inMemoryTraversalStore) Rounds(_ context.Context, trajectoryID string) (int, error) {

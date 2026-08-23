@@ -60,6 +60,13 @@ func (e *Engine) ProjectionV6NodeDetail(ctx context.Context, workspaceID, runID,
 	return e.store.ProjectionV6NodeDetail(ctx, workspaceID, runID, snapshotID, nodeID, view)
 }
 
+func (e *Engine) ProjectionV6WorkActivity(ctx context.Context, workspaceID, runID, workItemID string) (V6WorkActivity, error) {
+	if e == nil || e.store == nil {
+		return V6WorkActivity{}, ErrV6DirectorUnavailable
+	}
+	return e.store.ProjectionV6WorkActivity(ctx, workspaceID, runID, workItemID)
+}
+
 func NewEngineWithReportStorage(store *PostgresStore, dispatcher Dispatcher, projector Projector, reportStorage ReportPackageStorage) ResearchRun {
 	store.reportStorage = reportStorage
 	return newEngine(store, dispatcher, projector)
@@ -248,6 +255,10 @@ func (e *Engine) AcknowledgeWorkCatalog(ctx context.Context, in AcknowledgeV6Cat
 	return (workCatalogModule{store: e.store}).Acknowledge(ctx, in)
 }
 
+func (e *Engine) ReportWorkProgress(ctx context.Context, in ReportV6WorkProgressInput) error {
+	return (workProgressModule{store: e.store}).Report(ctx, in)
+}
+
 func (e *Engine) SubmitV6Work(ctx context.Context, in V6SubmissionInput) (V6SubmissionOutcome, error) {
 	return (v6SubmissionModule{store: e.store}).Submit(ctx, in)
 }
@@ -264,10 +275,11 @@ func (e *Engine) ReconcileV6Work(ctx context.Context, limit int) (int, error) {
 	cancelled, cancellationErr := cancelLostV6InboxTasks(ctx, e.store, e.dispatcher, limit)
 	settled, settledCancellationErr := cancelSettledV6InboxTasks(ctx, e.store, e.dispatcher, limit)
 	events, eventErr := e.store.ProcessV6EventTriggers(ctx, limit)
+	idleWakes, idleErr := e.store.ProcessV6IdleRuns(ctx, limit)
 	prepared, prepareErr := e.store.PrepareV6Dispatches(ctx, limit)
 	delivered, deliveryErr := (v6RuntimeModule{store: e.store, team: e.store, agents: e.v6Agents, inbox: e.v6Inbox, clock: e.clock}).Deliver(ctx, limit)
 	ingested, ingestErr := e.IngestPendingScreenedSources(ctx, limit)
-	return recovered + cancelled + settled + steering + proposals + reports + applied + events + prepared + delivered + ingested, errors.Join(err, cancellationErr, settledCancellationErr, steeringErr, proposalErr, reportErr, applyErr, eventErr, prepareErr, deliveryErr, ingestErr)
+	return recovered + cancelled + settled + steering + proposals + reports + applied + events + idleWakes + prepared + delivered + ingested, errors.Join(err, cancellationErr, settledCancellationErr, steeringErr, proposalErr, reportErr, applyErr, eventErr, idleErr, prepareErr, deliveryErr, ingestErr)
 }
 
 func (e *Engine) AssignV6Director(ctx context.Context, in AssignV6DirectorInput) (V6DirectorAssignment, error) {

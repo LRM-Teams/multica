@@ -31,6 +31,12 @@ graph LR
 - **Failed** — aborted with an error or timeout; if the failure reason is retryable, the task automatically returns to `queued` for another attempt
 - **Cancelled** — the user cancelled it
 
+## Which tasks run concurrently
+
+Issue work uses one execution lane per agent and issue. The same agent's follow-up tasks on the same issue wait for the active run to finish, which prevents two sessions from overwriting the same issue workspace. Tasks for different issues can run in parallel up to that agent's **Concurrency limit** (`max_concurrent_tasks`, default 6).
+
+Chat, DM, channel, and other issue-less work share one separate conversation lane per agent. That lane stays serial so mutable conversation context cannot race, but it does not consume or block the agent's issue-task slots. Different agents are always admitted independently.
+
 ## What happens when a task times out
 
 The Multica server scans every 30 seconds. Two kinds of timeout trigger a failure:

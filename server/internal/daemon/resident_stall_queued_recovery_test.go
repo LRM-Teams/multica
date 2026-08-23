@@ -63,7 +63,7 @@ func TestRecoverStalledSlotForQueuedMessageKillsSilentButLiveRuntime(t *testing.
 	if !recovered {
 		t.Fatal("recovered = false, want true for a runtime silent past the stall window")
 	}
-	// The slot is idle, so forceInvalidateSession closes the backend outright
+	// The slot is idle, so beginResidentTermination closes the backend outright
 	// rather than force-killing an in-flight turn.
 	slot.mu.Lock()
 	backendPresent := slot.backend != nil
@@ -181,7 +181,7 @@ func TestRecoverStalledSlotForQueuedMessageDoesNotRefireWhileRecovering(t *testi
 	}
 	defer lease.release(true)
 
-	// Keep the lease so the slot stays running: forceInvalidateSession then
+	// Keep the lease so the slot stays running: beginResidentTermination then
 	// takes the force-kill path and admission is held until the turn resolves.
 	pool.mu.Lock()
 	slot := pool.slots[identity.slotKey()]
@@ -286,8 +286,8 @@ func TestForceInvalidateReleasesWedgedRunningSlot(t *testing.T) {
 		t.Fatal("slot is not running after an accepted batch; the wedge is not reproduced")
 	}
 
-	if err := pool.forceInvalidateSession("agent-a", "runtime-a"); err != nil {
-		t.Fatalf("forceInvalidateSession: %v", err)
+	if err := pool.beginResidentTermination("agent-a", "runtime-a"); err != nil {
+		t.Fatalf("beginResidentTermination: %v", err)
 	}
 
 	deadline := time.Now().Add(2 * time.Second)

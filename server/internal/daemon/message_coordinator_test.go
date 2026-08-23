@@ -77,11 +77,11 @@ func TestRuntimePoolRestartInterruptsNativeAcceptance(t *testing.T) {
 	}
 
 	restartDone := make(chan error, 1)
-	go func() { restartDone <- pool.forceInvalidateSession("agent-1", "runtime-1") }()
+	go func() { restartDone <- pool.beginResidentTermination("agent-1", "runtime-1") }()
 	select {
 	case err := <-restartDone:
 		if err != nil {
-			t.Fatalf("forceInvalidateSession: %v", err)
+			t.Fatalf("beginResidentTermination: %v", err)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("restart could not interrupt a runtime stuck before native acceptance")

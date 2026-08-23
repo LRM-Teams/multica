@@ -23,7 +23,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
-import { api } from "@multica/core/api";
+import { api, ApiError } from "@multica/core/api";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { agentListOptions } from "@multica/core/workspace/queries";
@@ -120,10 +120,11 @@ const COPY = {
   learningQueueHint: "Review-first memory and skill candidates waiting for a human decision.",
   memoryOps: "Memory curation",
   memoryType: "Memory type",
-  memoryTypeHint: "Pick the memory pipeline for this workspace. Graph memory builds a hierarchical memory DAG and is experimental.",
+  memoryTypeHint: "Pick the memory pipeline for this workspace. Graph memory builds a hierarchical memory graph and is experimental.",
   memoryTypeLegacy: "Legacy (MEMORY.md)",
   memoryTypeGraph: "Graph memory (experimental)",
   memoryTypeSaved: "Memory type updated",
+  memoryTypeConflict: "Profile changed elsewhere, refreshed",
   graphStatus: "Graph memory status",
   graphStatusHint: "Per-graph versions, staging depth, and recall for this workspace.",
   graphEmptyStart: "Graph memory starts empty: no legacy project, channel, or daily memory was imported, and graph misses never fall back to it.",
@@ -150,7 +151,7 @@ const COPY = {
   memoryTypeGraphConfirmApply: "Switch to graph",
   memoryTypeGraphConfirmCancel: "Cancel",
   graphTtt: "Test-time training",
-  graphTttHint: "When on, each recall runs K independent Explore trajectories and adopts the fastest success. When off, recall runs exactly one trajectory.",
+  graphTttHint: "When on, each recall runs K independent Explore trajectories and adopts the fastest success, and graph consolidation generates multiple candidate versions in parallel and adopts the best. When off, both run exactly one trajectory.",
   graphTttConcurrency: "TTT concurrency",
   graphTttEffectiveK: "Effective K = 1 while TTT is off",
   graphTttSave: "Save TTT settings",
@@ -1070,7 +1071,7 @@ function draftFromProfile(profile: MemoryCuratorProfile | undefined): CuratorPro
   };
 }
 
-function MemoryTypeCard({ wsId, isAdmin }: { wsId: string; isAdmin: boolean }) {
+export function MemoryTypeCard({ wsId, isAdmin }: { wsId: string; isAdmin: boolean }) {
   const copy = useEvolutionCopy();
   const queryClient = useQueryClient();
   const { data: profile } = useQuery(graphMemoryProfileOptions(wsId));
@@ -1078,14 +1079,17 @@ function MemoryTypeCard({ wsId, isAdmin }: { wsId: string; isAdmin: boolean }) {
   const [pendingGraphConfirm, setPendingGraphConfirm] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
 
-  // The PUT endpoint validates the full profile, so the explore knobs are
-  // re-sent unchanged from the current profile (or the server defaults).
+  // The PUT endpoint guards concurrent writes with a config_version
+  // compare-and-set (spec §16): every update to an existing row must carry
+  // the current version or the server rejects it with 409. The remaining
+  // tunables are preserved server-side when left out.
   // Switching TO graph requires the explicit empty-start confirmation.
   const update = useMutation({
     mutationFn: (next: GraphMemoryType) => api.updateGraphMemoryProfile(wsId, {
       memory_type: next,
       explore_agents: profile?.explore_agents ?? 4,
-      explore_max_rounds: profile?.explore_max_rounds ?? 3,
+      explore_max_rounds: profile?.explore_max_rounds ?? 6,
+      config_version: profile?.config_version ?? 0,
       ...(next === "graph" ? { confirm_empty_start: true } : {}),
     }),
     onSuccess: async () => {
@@ -1094,7 +1098,14 @@ function MemoryTypeCard({ wsId, isAdmin }: { wsId: string; isAdmin: boolean }) {
       setConfirmed(false);
       await queryClient.invalidateQueries({ queryKey: evolutionKeys.graphMemoryProfile(wsId) });
     },
-    onError: (error) => showErrorToast(error instanceof Error ? error.message : copy("memoryType")),
+    onError: (error) => {
+      if (error instanceof ApiError && error.status === 409) {
+        void queryClient.invalidateQueries({ queryKey: evolutionKeys.graphMemoryProfile(wsId) });
+        showErrorToast(copy("memoryTypeConflict"));
+        return;
+      }
+      showErrorToast(error instanceof Error ? error.message : copy("memoryType"));
+    },
   });
 
   return (

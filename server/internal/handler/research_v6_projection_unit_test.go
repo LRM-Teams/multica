@@ -118,36 +118,13 @@ func TestProjectResearchV6ClustersUsesRealMembershipAndNullableMetrics(t *testin
 	}
 }
 
-func TestRealtimeEnvelopeUsesTypedNodeAndClusterSemantics(t *testing.T) {
-	clusterID := "cluster-1"
-	confidence := .84
-	legacy := []ResearchGraphNodeResp{{ID: "source-node", NodeType: "finding", Title: "Finding", Status: "accepted", Confidence: &confidence, Payload: json.RawMessage(`{"kind":"insight"}`)}}
-	typed := ResearchGraphTypedResp{
-		Nodes:    []ResearchGraphTypedNodeResp{{ID: "source-node", Level: "XXL", Round: 2, ClusterID: &clusterID, Confidence: &confidence, DocumentCount: 46, ConclusionCount: 4}},
-		Clusters: []ResearchGraphClusterResp{{ID: clusterID, Label: "Stable result", ClusterType: "stable_result"}},
-	}
-	raw, err := buildResearchV6ProjectedGraphEnvelope("run-1", "task_dispatched", 7, legacy, nil, typed)
+func TestRealtimeSequenceAdvanceEnvelopeShape(t *testing.T) {
+	encoded, err := json.Marshal(researchV6SequenceAdvanceEnvelope{RunID: "run-1", ThroughSequence: 7})
 	if err != nil {
 		t.Fatal(err)
 	}
-	envelope, ok := raw.(researchV6DeltaEnvelope)
-	if !ok || len(envelope.Delta.NodeUpserts) != 1 || len(envelope.Delta.ClusterUpserts) != 1 {
-		t.Fatalf("realtime envelope=%#v", raw)
-	}
-	node := envelope.Delta.NodeUpserts[0]
-	if node.Level != "xxl" || node.ClusterID == nil || *node.ClusterID != clusterID || node.DocumentCount == nil || *node.DocumentCount != 46 {
-		t.Fatalf("realtime typed node=%+v", node)
-	}
-}
-
-func TestRealtimeEnvelopeRequiresResyncForStructuralClusterChange(t *testing.T) {
-	raw, err := buildResearchV6ProjectedGraphEnvelope("run-1", "goal_steered", 8, nil, nil, ResearchGraphTypedResp{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	resync, ok := raw.(researchV6RealtimeResyncEnvelope)
-	if !ok || !resync.ResyncRequired || resync.ThroughSequence != 8 {
-		t.Fatalf("realtime structural envelope=%#v", raw)
+	if string(encoded) != `{"run_id":"run-1","through_sequence":7}` {
+		t.Fatalf("sequence advance envelope=%s", encoded)
 	}
 }
 

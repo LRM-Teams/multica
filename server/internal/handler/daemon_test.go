@@ -495,7 +495,7 @@ func settleClaimedInboxEventForTest(t *testing.T, eventID string) {
 	}
 }
 
-func TestClaimTaskByRuntime_QueuesChatBehindActiveIssueWake(t *testing.T) {
+func TestClaimTaskByRuntime_RunsChatAlongsideActiveIssueWake(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -551,20 +551,14 @@ func TestClaimTaskByRuntime_QueuesChatBehindActiveIssueWake(t *testing.T) {
 	}
 
 	task, body := claimTaskByRuntimeForTest(t, runtimeID)
-	if task != nil {
-		t.Fatalf("chat wake %s bypassed active issue wake as %s: %s", chatTaskID, task.ID, body)
+	if task == nil || task.ID != chatTaskID {
+		t.Fatalf("claim alongside active issue wake = %+v, want chat task %s: %s", task, chatTaskID, body)
 	}
 	if got := taskStatus(t, runningIssueTaskID); got != "draining" {
 		t.Fatalf("running issue task status = %q, want draining", got)
 	}
-	if got := taskStatus(t, chatTaskID); got != "pending" {
-		t.Fatalf("chat task status = %q, want pending behind active issue wake", got)
-	}
-
-	settleClaimedInboxEventForTest(t, runningIssueTaskID)
-	task, body = claimTaskByRuntimeForTest(t, runtimeID)
-	if task == nil || task.ID != chatTaskID {
-		t.Fatalf("claim after issue completion = %+v, want chat task %s: %s", task, chatTaskID, body)
+	if got := taskStatus(t, chatTaskID); got != "draining" {
+		t.Fatalf("chat task status = %q, want draining alongside active issue wake", got)
 	}
 }
 

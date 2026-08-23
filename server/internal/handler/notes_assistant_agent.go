@@ -209,19 +209,18 @@ func (h *Handler) EnsureNotesAssistantAgent(w http.ResponseWriter, r *http.Reque
 	}
 
 	createParams := db.CreateAgentParams{
-		WorkspaceID:        wsUUID,
-		Name:               notesAssistantAgentName,
-		DisplayName:        notesAssistantAgentDisplayName,
-		Description:        tmpl.Description,
-		Instructions:       tmpl.Instructions,
-		RuntimeMode:        runtime.RuntimeMode,
-		RuntimeConfig:      []byte("{}"),
-		RuntimeID:          runtime.ID,
-		MaxConcurrentTasks: 6,
-		OwnerID:            parseUUID(ownerID),
-		CustomEnv:          []byte("{}"),
-		CustomArgs:         []byte("[]"),
-		Model:              pgtype.Text{String: model, Valid: true},
+		WorkspaceID:   wsUUID,
+		Name:          notesAssistantAgentName,
+		DisplayName:   notesAssistantAgentDisplayName,
+		Description:   tmpl.Description,
+		Instructions:  tmpl.Instructions,
+		RuntimeMode:   runtime.RuntimeMode,
+		RuntimeConfig: []byte("{}"),
+		RuntimeID:     runtime.ID,
+		OwnerID:       parseUUID(ownerID),
+		CustomEnv:     []byte("{}"),
+		CustomArgs:    []byte("[]"),
+		Model:         pgtype.Text{String: model, Valid: true},
 	}
 	applyCreateAgentAvatar(&createParams, resolvedAgentAvatar{})
 

@@ -45,6 +45,31 @@ describe("Director V6 projection query identities", () => {
     ]);
   });
 
+  it("refreshes selected Work activity when its Projection revision changes", () => {
+    const first = researchV6DirectorProjectionKeys.workActivity(
+      WORKSPACE_ID,
+      RUN_ID,
+      "work-item-1",
+      "2026-08-21T00:00:00Z",
+    );
+    const dispatched = researchV6DirectorProjectionKeys.workActivity(
+      WORKSPACE_ID,
+      RUN_ID,
+      "work-item-1",
+      "2026-08-21T00:00:01Z",
+    );
+
+    expect(first).not.toEqual(dispatched);
+    expect(dispatched).toEqual([
+      "research-v6-director-projection",
+      WORKSPACE_ID,
+      RUN_ID,
+      "work-activity",
+      "work-item-1",
+      "2026-08-21T00:00:01Z",
+    ]);
+  });
+
   it("constructs only depth=1 requests for every cursor page", () => {
     expect(
       researchV6DirectorSlicePageRequest(

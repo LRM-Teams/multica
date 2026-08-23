@@ -9,21 +9,20 @@ import (
 
 func TestAgentActionFinalPayloadHashIncludesAllFinalCreateInputsWithoutPersistingSecrets(t *testing.T) {
 	params := db.CreateAgentParams{
-		Name:               "proposal-agent",
-		DisplayName:        "Proposal Agent",
-		Description:        "summary",
-		Instructions:       "follow the project rules",
-		RuntimeMode:        "cloud",
-		RuntimeConfig:      []byte(`{"endpoint":"https://example.test"}`),
-		RuntimeID:          parseUUID("11111111-1111-4111-8111-111111111111"),
-		MaxConcurrentTasks: 3,
-		CustomEnv:          []byte(`{"API_KEY":"secret-a"}`),
-		CustomArgs:         []byte(`["--safe"]`),
-		McpConfig:          []byte(`{"token":"secret-b"}`),
-		AvatarUrl:          pgtype.Text{String: "https://example.test/avatar.png", Valid: true},
-		AvatarSource:       "picked",
-		Model:              pgtype.Text{String: "composer-1.5", Valid: true},
-		ThinkingLevel:      pgtype.Text{String: "high", Valid: true},
+		Name:          "proposal-agent",
+		DisplayName:   "Proposal Agent",
+		Description:   "summary",
+		Instructions:  "follow the project rules",
+		RuntimeMode:   "cloud",
+		RuntimeConfig: []byte(`{"endpoint":"https://example.test"}`),
+		RuntimeID:     parseUUID("11111111-1111-4111-8111-111111111111"),
+		CustomEnv:     []byte(`{"API_KEY":"secret-a"}`),
+		CustomArgs:    []byte(`["--safe"]`),
+		McpConfig:     []byte(`{"token":"secret-b"}`),
+		AvatarUrl:     pgtype.Text{String: "https://example.test/avatar.png", Valid: true},
+		AvatarSource:  "picked",
+		Model:         pgtype.Text{String: "composer-1.5", Valid: true},
+		ThinkingLevel: pgtype.Text{String: "high", Valid: true},
 	}
 	proposed := map[string]any{"preferred_computer": "Mac Studio"}
 	base := agentActionFinalPayloadHash(params, proposed)

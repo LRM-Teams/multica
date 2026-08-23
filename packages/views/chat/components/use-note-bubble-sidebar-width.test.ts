@@ -16,11 +16,11 @@ import { useNoteBubbleSidebarWidth } from "./use-note-bubble-sidebar-width";
 function makeStorage(initial: Record<string, string> = {}) {
   const data = { ...initial };
   return {
-    getItem: (k) => data[k] ?? null,
-    setItem: (k, v) => {
+    getItem: (k: string) => data[k] ?? null,
+    setItem: (k: string, v: string) => {
       data[k] = v;
     },
-    removeItem: (k) => {
+    removeItem: (k: string) => {
       delete data[k];
     },
   };

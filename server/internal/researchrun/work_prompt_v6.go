@@ -48,6 +48,8 @@ func BuildV6WorkDispatchPrompt(manifest V6WorkManifest) (string, error) {
 	var prompt strings.Builder
 	prompt.WriteString("## Durable Research V6 Work Item\n\n")
 	prompt.WriteString("Use the `multica-research-fleet` skill. This is a task-bound V6 assignment; chat output does not complete it.\n\n")
+	prompt.WriteString("Use Simplified Chinese for user-facing progress and result prose unless the frozen Manifest explicitly requests another language. Keep protocol fields, JSON keys, enum values, commands, and source quotations unchanged.\n\n")
+	prompt.WriteString("Do not narrate Manifest lookup, identifiers, JSON assembly, CLI commands, tool calls, or hidden reasoning in user-facing output. After the durable submission is received, report only a concise Chinese summary of the research completed and remaining uncertainty.\n\n")
 	fmt.Fprintf(&prompt, "- Run ID: `%s`\n- Work Item ID: `%s`\n- Attempt ID: `%s`\n", identity.RunID, identity.WorkItemID, identity.AttemptID)
 	fmt.Fprintf(&prompt, "- Manifest ID: `%s`\n- Manifest hash: `%s`\n- Expected result: `%s`\n\n", identity.ManifestID, identity.ManifestHash, identity.ExpectedResult)
 	prompt.WriteString("Read the frozen authority first:\n\n```bash\nmultica research work-manifest " + base + " --output json\n```\n\n")
@@ -56,6 +58,9 @@ func BuildV6WorkDispatchPrompt(manifest V6WorkManifest) (string, error) {
 	prompt.WriteString("V6_CURL=(curl -fsS -H \"X-Agent-ID: ${MULTICA_AGENT_ID}\" -H \"X-Workspace-ID: ${MULTICA_WORKSPACE_ID}\")\n")
 	prompt.WriteString("\"${V6_CURL[@]}\" \"${V6_API}/manifest\"\n```\n\n")
 	prompt.WriteString("The fallback uses the same task-bound authorization as the CLI. Send JSON writes with `Content-Type: application/json` and submit files with `--data-binary @file`.\n\n")
+	prompt.WriteString("Report live progress so humans can follow your work. Immediately after reading the manifest, and again every time you move to a new phase (reading the brief or catalog, searching, reading sources, analyzing, drafting, verifying), POST a one-line note (same language as the mission, 240 characters max) to `${V6_API}/progress`:\n\n")
+	prompt.WriteString("```bash\n\"${V6_CURL[@]}\" -X POST -H 'Content-Type: application/json' \\\n  -d '{\"client_request_id\":\"'\"$(uuidgen | tr A-Z a-z)\"'\",\"text\":\"<what you are doing right now>\",\"stage\":\"<short-key, e.g. searching>\"}' \\\n  \"${V6_API}/progress\"\n```\n\n")
+	prompt.WriteString("Progress notes never settle the Work Item and a failed progress POST must never block or retry-loop the mission — ignore its errors and continue. Each accepted note also slides your Work Item lease forward, so during a long turn report at least once every 15 minutes or the lease may expire mid-work.\n\n")
 	if identity.ExpectedResult == V6ContractDirectorActionProposal {
 		prompt.WriteString(RonaldoV6DirectorSystemProtocol + "\n\n")
 		prompt.WriteString("Read every Director Brief page, acknowledge each page with its exact IDs and hashes, then submit the proposal:\n\n")

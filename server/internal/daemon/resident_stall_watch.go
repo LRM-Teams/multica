@@ -80,7 +80,7 @@ func (p *canonicalAgentRuntimePool) startResidentStallWatchdog(
 			if time.Since(deadSince) < residentStallSettleGrace {
 				continue
 			}
-			if err := p.forceInvalidateSession(agentID, runtimeID); err == nil {
+			if err := p.beginResidentTermination(agentID, runtimeID); err == nil {
 				return
 			}
 		}

@@ -464,7 +464,16 @@ export function layoutStarGraph(
       byCluster.set(n.clusterId, list);
     }
   }
-  const clusterKeys = [...byCluster.keys()].sort();
+  // Work S can be the first visible content in a branch. Include its explicit
+  // branch scope even before a stable M+ result exists, otherwise every early
+  // Work S falls back to the Goal orbit and the canvas loses its branch shape.
+  const clusterKeys = [
+    ...new Set(
+      nodes
+        .filter((node) => node.id !== rootId && node.clusterId)
+        .map((node) => node.clusterId as string),
+    ),
+  ].sort();
   const sectorCount = clusterKeys.length + (freeStable.length > 0 ? 1 : 0);
 
   /* ---- Angular sector per cluster group; deterministic (sorted keys). ---- */
@@ -546,24 +555,81 @@ export function layoutStarGraph(
   };
 
   for (const key of clusterKeys) {
-    placeStableCluster(byCluster.get(key)!, key);
+    const members = byCluster.get(key) ?? [];
+    if (members.length > 0) placeStableCluster(members, key);
   }
   if (freeStable.length > 0) {
     placeStableCluster(freeStable, "__free__");
   }
 
   /* ---- S-tier: orbit their parent result on a small exploration radius. ---- */
+  const clusterCenters = new Map<string, { x: number; y: number }>();
+  const clusterAnchorRadii = new Map<string, number>();
+  for (const key of clusterKeys) {
+    const stableMembers = byCluster.get(key) ?? [];
+    if (stableMembers.length > 0) {
+      const center = stableMembers.reduce(
+        (sum, member) => {
+          const memberPosition = pos.get(member.id)!;
+          return {
+            x: sum.x + memberPosition.x,
+            y: sum.y + memberPosition.y,
+          };
+        },
+        { x: 0, y: 0 },
+      );
+      center.x /= stableMembers.length;
+      center.y /= stableMembers.length;
+      clusterCenters.set(key, center);
+      clusterAnchorRadii.set(
+        key,
+        Math.max(
+          ...stableMembers.map((member) => {
+            const memberPosition = pos.get(member.id)!;
+            return (
+              dist(center.x, center.y, memberPosition.x, memberPosition.y) +
+              STAR_GRAPH_RADIUS[member.tier]
+            );
+          }),
+        ),
+      );
+      continue;
+    }
+    const start = sectorStart.get(key) ?? 0;
+    const span = sectorSpan.get(key) ?? 0;
+    const angle = start + span / 2;
+    const radial = rootRadius + STAR_GRAPH_RADIUS.m + 300;
+    clusterCenters.set(key, {
+      x: Math.cos(angle) * radial,
+      y: Math.sin(angle) * radial,
+    });
+    clusterAnchorRadii.set(key, STAR_GRAPH_RADIUS.m);
+  }
+
+  const virtualParentKey = (clusterId: string) => `cluster:${clusterId}`;
   const sByParent = new Map<string, EngineNode[]>();
   for (const n of orbit) {
-    const parentId = n.parentId ?? rootId;
+    const parentId =
+      n.parentId ??
+      (n.clusterId ? virtualParentKey(n.clusterId) : rootId);
     const list = sByParent.get(parentId) ?? [];
     list.push(n);
     sByParent.set(parentId, list);
   }
   for (const [parentId, children] of sByParent) {
-    const parentCenter = pos.get(parentId) ?? { x: 0, y: 0 };
+    const clusterId = parentId.startsWith("cluster:")
+      ? parentId.slice("cluster:".length)
+      : null;
+    const parentCenter =
+      pos.get(parentId) ??
+      (clusterId ? clusterCenters.get(clusterId) : undefined) ??
+      { x: 0, y: 0 };
     const parent = nodes.find((n) => n.id === parentId);
-    const parentRadius = parent ? STAR_GRAPH_RADIUS[parent.tier] : STAR_GRAPH_RADIUS.m;
+    const parentRadius = parent
+      ? STAR_GRAPH_RADIUS[parent.tier]
+      : clusterId
+        ? (clusterAnchorRadii.get(clusterId) ?? STAR_GRAPH_RADIUS.m)
+        : STAR_GRAPH_RADIUS.m;
     const childrenSorted = [...children].sort((a, b) => a.id.localeCompare(b.id));
     // Adaptive ring: wide enough that all children sit on the ring without
     // colliding, so the exploration orbit is dense but collision-free.
@@ -659,10 +725,19 @@ export function layoutStarGraph(
     // pull re-introducing overlap.
     if (iter < 12) {
       for (const [parentId, children] of sByParent) {
-        const parentCenter = pos.get(parentId);
+        const clusterId = parentId.startsWith("cluster:")
+          ? parentId.slice("cluster:".length)
+          : null;
+        const parentCenter =
+          pos.get(parentId) ??
+          (clusterId ? clusterCenters.get(clusterId) : undefined);
         if (!parentCenter) continue;
         const parent = nodes.find((n) => n.id === parentId);
-        const parentRadius = parent ? STAR_GRAPH_RADIUS[parent.tier] : STAR_GRAPH_RADIUS.m;
+        const parentRadius = parent
+          ? STAR_GRAPH_RADIUS[parent.tier]
+          : clusterId
+            ? (clusterAnchorRadii.get(clusterId) ?? STAR_GRAPH_RADIUS.m)
+            : STAR_GRAPH_RADIUS.m;
         const orbitRadius = orbitRadiusFor(parentRadius, children.length);
         for (const child of children) {
           if (reused.has(child.id)) continue;
@@ -708,7 +783,7 @@ export function layoutStarGraph(
   /* ---- Cluster boundaries (bounding circle around members). ---- */
   const clusters: StarGraphLayoutCluster[] = [];
   for (const key of clusterKeys) {
-    const stableMembers = byCluster.get(key)!;
+    const stableMembers = byCluster.get(key) ?? [];
     const memberIdSet = new Set(stableMembers.map((n) => n.id));
     const orbitMembers = orbit.filter((n) => {
       if (n.clusterId === key) return true;

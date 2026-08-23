@@ -248,8 +248,28 @@ export function buildExecutionOverlayRows(input: {
     if (node) attemptNodeByAgent.set(agentId, node);
   }
 
-  return (input.members ?? [])
-    .filter((member) => member.status !== "archived")
+  const rosterMembers = (input.members ?? []).filter(
+    (member) => member.status !== "archived",
+  );
+  // V6 run-scoped team agents are not workspace fleet members, so the fleet
+  // roster never lists them. The V6 presence projection carries their display
+  // identity (name/avatar/role) — append a row for every presence entry whose
+  // agent is missing from the fleet roster.
+  const fleetAgentIds = new Set(rosterMembers.map((member) => member.agent_id));
+  const presenceOnlyMembers: ResearchFleetMember[] = Object.entries(input.presence)
+    .filter(([agentId, entry]) => !fleetAgentIds.has(agentId) && entry.name !== "")
+    .map(([agentId, entry]) => ({
+      id: agentId,
+      agent_id: agentId,
+      role: entry.role,
+      status: "active",
+      is_lead: entry.role === "lead",
+      name: entry.name,
+      display_name: entry.name,
+      avatar_url: entry.avatarUrl,
+    }));
+
+  return [...rosterMembers, ...presenceOnlyMembers]
     .map((member) => {
       const signal = input.presence[member.agent_id];
       const status = deriveStatus(

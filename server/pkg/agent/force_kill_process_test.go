@@ -13,7 +13,7 @@ import (
 // on TestPiRPCBackendForceKillDuringInitialAckActuallyKillsNotHang: ForceKill
 // closes stdin, the hung child exits, Execute()'s Wait() reaps it, then Kill
 // returns os.ErrProcessDone. That must be success — the process is already
-// dead — not an error that forceInvalidateSession would surface as a failed
+// dead — not an error that beginResidentTermination would surface as a failed
 // restart.
 func TestForceKillProcessTreatsAlreadyReapedAsSuccess(t *testing.T) {
 	dir := t.TempDir()

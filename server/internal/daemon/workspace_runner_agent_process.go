@@ -188,7 +188,13 @@ func (runner *WorkspaceRunner) registerManagedAgentStartOnce(payload protocol.Wo
 		return protocol.AgentStartAckPayload{}, false, fmt.Errorf("prepare managed Agent Inbox: %w", err)
 	}
 	if runner.residency != nil {
-		runner.residency.rememberLaunch(payload.AgentID, payload.RuntimeID, payload.LaunchID, payload.StartDispatchID)
+		// Best-effort, like prepareManagedAgentStartFailure below: the launch
+		// was just registered in APM above, so this lookup only fails if a
+		// concurrent Stop already superseded it, in which case epoch 0 is
+		// safely rejected by clear's tombstone (or simply overwritten by
+		// whatever legitimate write follows).
+		startStopEpoch, _ := runner.processes.startStopEpoch(agentProcessCallback{AgentID: payload.AgentID, LaunchID: payload.LaunchID})
+		runner.residency.rememberLaunch(payload.AgentID, payload.RuntimeID, payload.LaunchID, payload.StartDispatchID, startStopEpoch)
 	}
 	return ack, false, nil
 }
@@ -230,7 +236,7 @@ func (runner *WorkspaceRunner) completeManagedAgentStart(ctx context.Context, pa
 		return managedAgentStartOutcome{}, runner.cleanupStoppedManagedAgentStart(payload)
 	}
 	if err := runner.admitManagedProviderProcess(payload); err != nil {
-		_ = runner.runtimes.forceInvalidateSession(payload.AgentID, payload.RuntimeID)
+		_ = runner.runtimes.beginResidentTermination(payload.AgentID, payload.RuntimeID)
 		return runner.prepareManagedAgentStartFailure(payload, managedRuntimeFailureSpawn, "provider_spawn_failed"), fmt.Errorf("admit managed Agent process: %w", err)
 	}
 	if stopRequested() {
@@ -238,7 +244,7 @@ func (runner *WorkspaceRunner) completeManagedAgentStart(ctx context.Context, pa
 	}
 	if current, ok := runner.processes.Snapshot(payload.AgentID); !ok || current.LaunchID != payload.LaunchID {
 		if !ok || current.RuntimeID != payload.RuntimeID {
-			_ = runner.runtimes.forceInvalidateSession(payload.AgentID, payload.RuntimeID)
+			_ = runner.runtimes.beginResidentTermination(payload.AgentID, payload.RuntimeID)
 		}
 		return managedAgentStartOutcome{}, errors.New("managed start was superseded during provider startup")
 	}
@@ -261,7 +267,7 @@ func (runner *WorkspaceRunner) completeManagedAgentStart(ctx context.Context, pa
 }
 
 func (runner *WorkspaceRunner) cleanupStoppedManagedAgentStart(payload protocol.WorkspaceRunnerAgentStartPayload) error {
-	if err := runner.runtimes.forceInvalidateSession(payload.AgentID, payload.RuntimeID); err != nil {
+	if err := runner.runtimes.beginResidentTermination(payload.AgentID, payload.RuntimeID); err != nil {
 		return fmt.Errorf("clean up managed Agent start after Stop: %w", err)
 	}
 	return errManagedAgentStartStopped

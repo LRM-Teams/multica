@@ -580,8 +580,8 @@ Goal 到 Branch Frontier 使用明确标记的 `collapsed_path` Projection edge�
 - V6 新 Run 不创建固定 Fleet，不展示虚构的“预计 Agent 数”或固定角色；首页需按 orchestrator version 做兼容 Projection。
 - `docs/superpowers/specs/2026-08-14-research-home-command-center-spec.zh-CN.md` 中固定 Fleet/阶段展示对 V6 的冲突内容由本规格覆盖，旧 Run 仍按原规格显示。
 - V6 schema、prompt、result、gate、builtin skill 和 source map 必须在同一实现系列中更新。
-- `AssessV6Activation` 所有证据通过前：默认 V5、V6 unsupported、不可创建生产 V6 Run。
-- 激活只影响新 Run。回滚把新建默认恢复 V5；已创建 V6 Run 进入 paused/maintenance，不用 V5 decoder 读取。
+- 省略 `orchestrator_version` 时默认 V5；显式指定 V6 和主理人可以创建 V6 Run。`AssessV6Activation` 审计是否具备把省略版本的默认值切到 V6 的条件，不关闭显式 V6 创建。
+- 默认版本激活只影响新 Run。工作区 release control 可独立关闭新的 V6 创建并暂停现有 V6 Run；回滚不用 V5 decoder 读取已创建的 V6 Run。
 
 ## 20. 测试和验收
 

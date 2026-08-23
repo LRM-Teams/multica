@@ -28,7 +28,7 @@ func TestDispatchManifestFreezesRealVersionAndReferenceCounts(t *testing.T) {
 	if _, err = fixture.store.AcceptResult(ctx, fixture.input); err != nil {
 		t.Fatalf("AcceptResult plan: %v", err)
 	}
-	tasks, err := fixture.store.ListTasks(ctx, fixture.run.SessionID)
+	tasks, err := fixture.store.ListTasks(ctx, fixture.run.SessionID, fixture.run.WorkspaceID)
 	if err != nil {
 		t.Fatalf("ListTasks: %v", err)
 	}

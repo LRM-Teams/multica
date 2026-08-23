@@ -39,7 +39,7 @@ func TestAttemptRuntimeLeaseSeparatesQueueExecutionAndCancellationSettlement(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	tasks, err := store.ListTasks(ctx, fixture.sessionID)
+	tasks, err := store.ListTasks(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil || len(tasks) != 1 {
 		t.Fatalf("tasks=%+v err=%v", tasks, err)
 	}
@@ -84,7 +84,7 @@ func TestAttemptRuntimeLeaseSeparatesQueueExecutionAndCancellationSettlement(t *
 	}); reconcileErr != nil || len(events) != 0 {
 		t.Fatalf("stale queued reconcile events=%+v err=%v", events, reconcileErr)
 	}
-	attempts, err := store.ListAttempts(ctx, fixture.sessionID)
+	attempts, err := store.ListAttempts(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil || len(attempts) != 1 || attempts[0].Status != AttemptStatusDispatching || attempts[0].RuntimeStartedAt != nil ||
 		attempts[0].RuntimeObservedAt == nil || attempts[0].RuntimeObservedAt.Sub(queuedAt).Abs() > time.Millisecond ||
 		attempts[0].RuntimeLeaseUntil == nil || attempts[0].RuntimeLeaseUntil.Sub(queuedLeaseUntil).Abs() > time.Millisecond {
@@ -118,12 +118,12 @@ func TestAttemptRuntimeLeaseSeparatesQueueExecutionAndCancellationSettlement(t *
 	if err != nil || len(events) != 1 || events[0].Type != "task_attempt_cancelling" {
 		t.Fatalf("timeout events=%+v err=%v", events, err)
 	}
-	attempts, err = store.ListAttempts(ctx, fixture.sessionID)
+	attempts, err = store.ListAttempts(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil || len(attempts) != 1 || attempts[0].Status != AttemptStatusCancelling || attempts[0].PendingFailure != string(FailureTimeout) || attempts[0].CancelCompletedAt != nil ||
 		attempts[0].RuntimeStartedAt == nil || attempts[0].RuntimeStartedAt.Sub(startedAt).Abs() > time.Millisecond {
 		t.Fatalf("timed out attempt=%+v err=%v", attempts, err)
 	}
-	tasks, err = store.ListTasks(ctx, fixture.sessionID)
+	tasks, err = store.ListTasks(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil || tasks[0].Status != TaskStatusRunning {
 		t.Fatalf("task retried before cancellation acknowledgement: %+v err=%v", tasks, err)
 	}
@@ -142,11 +142,11 @@ func TestAttemptRuntimeLeaseSeparatesQueueExecutionAndCancellationSettlement(t *
 	if pending, cancelErr := engine.cancelPendingAttempts(ctx, run, "task_timeout"); cancelErr != nil || pending {
 		t.Fatalf("pending=%v err=%v", pending, cancelErr)
 	}
-	attempts, err = store.ListAttempts(ctx, fixture.sessionID)
+	attempts, err = store.ListAttempts(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil || attempts[0].Status != AttemptStatusFailed || attempts[0].FailureClass != string(FailureTimeout) || attempts[0].CancelCompletedAt == nil {
 		t.Fatalf("settled attempt=%+v err=%v", attempts, err)
 	}
-	tasks, err = store.ListTasks(ctx, fixture.sessionID)
+	tasks, err = store.ListTasks(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil || tasks[0].Status != TaskStatusReady {
 		t.Fatalf("retry was not released after cancellation acknowledgement: %+v err=%v", tasks, err)
 	}
@@ -177,7 +177,7 @@ func TestCreateDispatchIntentRejectsPendingPriorCancellation(t *testing.T) {
 	}, DefaultRunConfig("standard")); err != nil {
 		t.Fatal(err)
 	}
-	tasks, err := store.ListTasks(ctx, fixture.sessionID)
+	tasks, err := store.ListTasks(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil || len(tasks) != 1 {
 		t.Fatalf("tasks=%+v err=%v", tasks, err)
 	}
@@ -252,7 +252,7 @@ func TestConcurrentCancellationSettlementIsIdempotent(t *testing.T) {
 	}, DefaultRunConfig("standard")); err != nil {
 		t.Fatal(err)
 	}
-	tasks, err := store.ListTasks(ctx, fixture.sessionID)
+	tasks, err := store.ListTasks(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil || len(tasks) != 1 {
 		t.Fatalf("tasks=%+v err=%v", tasks, err)
 	}
@@ -281,7 +281,7 @@ func TestConcurrentCancellationSettlementIsIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := CancellationRequest{AttemptID: attempt.ID, InboxTaskID: inboxID}
-	if err = store.MarkCancellationsRequested(ctx, fixture.sessionID, []CancellationRequest{request}); err != nil {
+	if err = store.MarkCancellationsRequested(ctx, fixture.sessionID, fixture.workspaceID, []CancellationRequest{request}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -306,24 +306,24 @@ func TestConcurrentCancellationSettlementIsIdempotent(t *testing.T) {
 	}
 	// A late marker can occur after another worker observed the terminal Inbox
 	// state and completed settlement. It is the same cancellation fact.
-	if err = store.MarkCancellationsRequested(ctx, fixture.sessionID, []CancellationRequest{request}); err != nil {
+	if err = store.MarkCancellationsRequested(ctx, fixture.sessionID, fixture.workspaceID, []CancellationRequest{request}); err != nil {
 		t.Fatalf("late cancellation marker was not idempotent: %v", err)
 	}
 	mismatched := CancellationRequest{AttemptID: attempt.ID, InboxTaskID: uuid.NewString()}
-	if err = store.MarkCancellationsRequested(ctx, fixture.sessionID, []CancellationRequest{mismatched}); !errors.Is(err, ErrInvalidTransition) {
+	if err = store.MarkCancellationsRequested(ctx, fixture.sessionID, fixture.workspaceID, []CancellationRequest{mismatched}); !errors.Is(err, ErrInvalidTransition) {
 		t.Fatalf("mismatched Inbox identity error=%v, want ErrInvalidTransition", err)
 	}
 	if _, err = pool.Exec(ctx, `UPDATE research_task_attempt SET inbox_task_id=NULL WHERE id=$1::uuid`, attempt.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err = store.MarkCancellationsRequested(ctx, fixture.sessionID, []CancellationRequest{request}); !errors.Is(err, ErrInvalidTransition) {
+	if err = store.MarkCancellationsRequested(ctx, fixture.sessionID, fixture.workspaceID, []CancellationRequest{request}); !errors.Is(err, ErrInvalidTransition) {
 		t.Fatalf("missing persisted Inbox identity error=%v, want ErrInvalidTransition", err)
 	}
 	if _, err = store.CompleteCancellations(ctx, fixture.sessionID, []string{uuid.NewString()}); !errors.Is(err, ErrInvalidTransition) {
 		t.Fatalf("missing cancellation attempt error=%v, want ErrInvalidTransition", err)
 	}
 
-	attempts, err := store.ListAttempts(ctx, fixture.sessionID)
+	attempts, err := store.ListAttempts(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil || len(attempts) != 1 || attempts[0].Status != AttemptStatusFailed || attempts[0].CancelCompletedAt == nil {
 		t.Fatalf("settled attempt=%+v err=%v", attempts, err)
 	}

@@ -98,7 +98,7 @@ func TestResearchExecutionStateTransitionTriggersRejectTerminalReopen(t *testing
 	}, DefaultRunConfig("standard")); err != nil {
 		t.Fatal(err)
 	}
-	tasks, err := store.ListTasks(ctx, fixture.sessionID)
+	tasks, err := store.ListTasks(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil || len(tasks) != 1 {
 		t.Fatalf("tasks=%+v err=%v", tasks, err)
 	}

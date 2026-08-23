@@ -348,15 +348,16 @@ func loadRun(ctx context.Context, q rowQuerier, sessionID, workspaceID string, f
 	return run, nil
 }
 
-func (s *PostgresStore) ListQuestions(ctx context.Context, sessionID string) ([]Question, error) {
+func (s *PostgresStore) ListQuestions(ctx context.Context, sessionID, workspaceID string) ([]Question, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT id::text, session_id::text, COALESCE(parent_question_id::text, ''),
 		       COALESCE(created_by_task_id::text, ''), client_key, kind, question,
 		       required, status, priority, impact, uncertainty, novelty, coverage,
 		       goal_version, plan_version, COALESCE(answer_claim_id::text, ''), terminal_explanation
-		FROM research_question WHERE session_id = $1::uuid
+		FROM research_question
+		WHERE session_id = $1::uuid AND workspace_id = $2::uuid
 		ORDER BY required DESC, priority DESC, created_at, id
-	`, sessionID)
+	`, sessionID, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -375,8 +376,8 @@ func (s *PostgresStore) ListQuestions(ctx context.Context, sessionID string) ([]
 	return out, rows.Err()
 }
 
-func (s *PostgresStore) ListTasks(ctx context.Context, sessionID string) ([]Task, error) {
-	rows, err := s.pool.Query(ctx, taskSelectSQL+` WHERE t.session_id = $1::uuid ORDER BY t.priority DESC, t.created_at, t.id`, sessionID)
+func (s *PostgresStore) ListTasks(ctx context.Context, sessionID, workspaceID string) ([]Task, error) {
+	rows, err := s.pool.Query(ctx, taskSelectSQL+` WHERE t.session_id = $1::uuid AND t.workspace_id = $2::uuid ORDER BY t.priority DESC, t.created_at, t.id`, sessionID, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -392,8 +393,8 @@ func (s *PostgresStore) ListTasks(ctx context.Context, sessionID string) ([]Task
 	return out, rows.Err()
 }
 
-func (s *PostgresStore) ListAttempts(ctx context.Context, sessionID string) ([]Attempt, error) {
-	rows, err := s.pool.Query(ctx, attemptSelectSQL+` WHERE a.session_id = $1::uuid ORDER BY a.created_at, a.id`, sessionID)
+func (s *PostgresStore) ListAttempts(ctx context.Context, sessionID, workspaceID string) ([]Attempt, error) {
+	rows, err := s.pool.Query(ctx, attemptSelectSQL+` WHERE a.session_id = $1::uuid AND a.workspace_id = $2::uuid ORDER BY a.created_at, a.id`, sessionID, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -409,16 +410,17 @@ func (s *PostgresStore) ListAttempts(ctx context.Context, sessionID string) ([]A
 	return out, rows.Err()
 }
 
-func (s *PostgresStore) ListPendingCancellations(ctx context.Context, sessionID string) ([]PendingCancellation, error) {
+func (s *PostgresStore) ListPendingCancellations(ctx context.Context, sessionID, workspaceID string) ([]PendingCancellation, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT id::text, COALESCE(inbox_task_id::text, ''), dispatch_key, status,
 		       dispatched_at, cancellation_requested_at
 		FROM research_task_attempt
 		WHERE session_id = $1::uuid
+		  AND workspace_id = $2::uuid
 		  AND status IN ('cancelling', 'cancelled')
 		  AND cancellation_completed_at IS NULL
 		ORDER BY dispatched_at, id
-	`, sessionID)
+	`, sessionID, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -435,7 +437,7 @@ func (s *PostgresStore) ListPendingCancellations(ctx context.Context, sessionID 
 	return out, rows.Err()
 }
 
-func (s *PostgresStore) MarkCancellationsRequested(ctx context.Context, sessionID string, requests []CancellationRequest) error {
+func (s *PostgresStore) MarkCancellationsRequested(ctx context.Context, sessionID, workspaceID string, requests []CancellationRequest) error {
 	if len(requests) == 0 {
 		return nil
 	}
@@ -444,7 +446,7 @@ func (s *PostgresStore) MarkCancellationsRequested(ctx context.Context, sessionI
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if err = lockRunForMutation(ctx, tx, sessionID, ""); err != nil {
+	if err = lockRunForMutation(ctx, tx, sessionID, workspaceID); err != nil {
 		return err
 	}
 	for _, request := range requests {
@@ -454,11 +456,12 @@ func (s *PostgresStore) MarkCancellationsRequested(ctx context.Context, sessionI
 			    cancellation_requested_at = COALESCE(cancellation_requested_at, now()),
 			    updated_at = now()
 			WHERE session_id = $1::uuid
+			  AND workspace_id = $4::uuid
 			  AND id = $2::uuid
 			  AND status IN ('cancelling', 'cancelled')
 			  AND cancellation_completed_at IS NULL
 			  AND (inbox_task_id IS NULL OR inbox_task_id = $3::uuid)
-		`, sessionID, request.AttemptID, request.InboxTaskID)
+		`, sessionID, request.AttemptID, request.InboxTaskID, workspaceID)
 		if updateErr != nil {
 			return updateErr
 		}
@@ -468,9 +471,9 @@ func (s *PostgresStore) MarkCancellationsRequested(ctx context.Context, sessionI
 			stateErr := tx.QueryRow(ctx, `
 				SELECT status, COALESCE(inbox_task_id::text, ''), cancellation_completed_at
 				FROM research_task_attempt
-				WHERE session_id = $1::uuid AND id = $2::uuid
+				WHERE session_id = $1::uuid AND workspace_id = $3::uuid AND id = $2::uuid
 				FOR UPDATE
-			`, sessionID, request.AttemptID).Scan(&status, &existingInboxID, &completedAt)
+			`, sessionID, request.AttemptID, workspaceID).Scan(&status, &existingInboxID, &completedAt)
 			if stateErr != nil {
 				return fmt.Errorf("%w: cancellation request changed concurrently", ErrInvalidTransition)
 			}
@@ -660,31 +663,31 @@ func (s *PostgresStore) TaskContext(ctx context.Context, taskID, workspaceID str
 	if err != nil {
 		return RunSnapshot{}, err
 	}
-	questions, err := s.ListQuestions(ctx, sessionID)
+	questions, err := s.ListQuestions(ctx, sessionID, workspaceID)
 	if err != nil {
 		return RunSnapshot{}, err
 	}
-	tasks, err := s.ListTasks(ctx, sessionID)
+	tasks, err := s.ListTasks(ctx, sessionID, workspaceID)
 	if err != nil {
 		return RunSnapshot{}, err
 	}
-	attempts, err := s.ListAttempts(ctx, sessionID)
+	attempts, err := s.ListAttempts(ctx, sessionID, workspaceID)
 	if err != nil {
 		return RunSnapshot{}, err
 	}
-	sources, err := s.ListSourceSnapshots(ctx, sessionID)
+	sources, err := s.ListSourceSnapshots(ctx, sessionID, workspaceID)
 	if err != nil {
 		return RunSnapshot{}, err
 	}
-	observations, err := s.ListObservations(ctx, sessionID)
+	observations, err := s.ListObservations(ctx, sessionID, workspaceID)
 	if err != nil {
 		return RunSnapshot{}, err
 	}
-	claims, err := s.ListClaims(ctx, sessionID)
+	claims, err := s.ListClaims(ctx, sessionID, workspaceID)
 	if err != nil {
 		return RunSnapshot{}, err
 	}
-	gate, err := s.EvaluateGate(ctx, sessionID)
+	gate, err := s.EvaluateGate(ctx, sessionID, workspaceID)
 	if err != nil {
 		return RunSnapshot{}, err
 	}

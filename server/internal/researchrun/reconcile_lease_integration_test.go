@@ -156,7 +156,7 @@ func TestEngineReconcilePersistsFailureAndClearsItAfterRecovery(t *testing.T) {
 	if failed.Status != RunStatusRunning || failed.LastError != injected.Error() {
 		t.Fatalf("failed run status=%q last_error=%q", failed.Status, failed.LastError)
 	}
-	if attempts, listErr := store.ListAttempts(ctx, fixture.sessionID); listErr != nil || len(attempts) != 0 {
+	if attempts, listErr := store.ListAttempts(ctx, fixture.sessionID, fixture.workspaceID); listErr != nil || len(attempts) != 0 {
 		t.Fatalf("rolled-back attempts=%+v err=%v", attempts, listErr)
 	}
 

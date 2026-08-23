@@ -111,9 +111,6 @@ vi.mock("./research-session-row", () => ({
 vi.mock("./research-home-overview", () => ({
   ResearchHomeOverview: () => <div data-testid="research-home-overview" />,
 }));
-vi.mock("./research-v6-ops-panel", () => ({
-  ResearchV6OpsPanel: () => <div data-testid="research-v6-ops-panel" />,
-}));
 
 vi.mock("./research-home-constellation-preview", () => ({
   ResearchHomeConstellationPreview: () => (

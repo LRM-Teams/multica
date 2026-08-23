@@ -373,11 +373,13 @@ forces Snapshot reload.
 ## Version and rollout rules
 
 1. The target schema hash above is frozen by this documentation phase.
-2. Implementation slice 0 replaces the old code-coupled V6 schema and its hash
-   test in one commit while V6 remains unsupported.
+2. Implementation slice 0 replaced the old code-coupled V6 schema and its hash
+   test in one commit before explicit user V6 create opened.
 3. V1–V5 decoders reject all V6 envelopes and do not receive V6 optional fields.
 4. Historical V1–V5 Run rows remain on their pinned orchestrator version.
-5. Activation applies only to new Runs and requires an exercised V5 rollback.
+5. Changing the omitted-version default to V6 applies only to new Runs and
+   requires an exercised V5 rollback. Explicit V6 create is independently
+   controlled by the workspace release policy.
 6. After implementation slice 0 freezes the target under the canonical filename,
    an incompatible hash change requires V7.
 

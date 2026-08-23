@@ -421,6 +421,7 @@ termination removes the iframe.
   generic Work Item submission endpoint.
 - Existing Markdown Report reader remains available for legacy revisions.
 - Web/Desktop select the transport by the Run's pinned orchestrator version.
-- Until activation succeeds, attempts to create a production V6 Run return the
-  existing unsupported-version response and none of these routes authorize V6
-  mutation.
+- Explicit V6 + Director create authorizes these V6 routes. Omitted-version
+  create remains V5 until activation evidence supports changing that default;
+  workspace release control may independently close new V6 creates and pause
+  existing V6 Runs.

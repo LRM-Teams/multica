@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/events"
@@ -65,6 +66,9 @@ func (s *TaskService) mirrorResearchChatReply(ctx context.Context, task db.Agent
 			"error", err,
 		)
 		return
+	}
+	if researchSession.OrchestratorVersion == "research-run-v6" {
+		body = visibleV6ResearchReply(body, stopped)
 	}
 
 	meta := map[string]any{"mirrored_from": "chat"}
@@ -149,6 +153,35 @@ func (s *TaskService) mirrorResearchChatReply(ctx context.Context, task db.Agent
 			Payload:     payload,
 		})
 	}
+}
+
+const (
+	v6ResearchReplyCompleted = "本轮调研工作已完成，结果已提交到调研任务图。"
+	v6ResearchReplyStopped   = "本轮调研执行已停止；已持久化的进度仍会保留。"
+)
+
+// visibleV6ResearchReply is the final user-visible guard for V6 runner output.
+// Prompts require Chinese, but provider/runtime drift must not expose an
+// English operational transcript in the Research conversation.
+func visibleV6ResearchReply(body string, stopped bool) string {
+	if stopped {
+		return v6ResearchReplyStopped
+	}
+	var han, latin int
+	for _, r := range body {
+		switch {
+		case unicode.Is(unicode.Han, r):
+			han++
+		case unicode.Is(unicode.Latin, r):
+			latin++
+		}
+	}
+	// Technical names may remain in their original form, but a token amount of
+	// Chinese must not allow a predominantly English transcript through.
+	if han >= 4 && latin <= han*2 {
+		return body
+	}
+	return v6ResearchReplyCompleted
 }
 
 // coalesceTaskMessageText joins user-facing text fragments from a task's

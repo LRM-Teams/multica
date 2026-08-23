@@ -14,6 +14,12 @@ not advance a task or satisfy a delivery gate.
 
 ## V6 Director assignments
 
+V6 的最高优先级语言规则：从收到任务到结束，所有自然语言输出，
+包括执行进度、智能体之间的消息、分析说明、错误说明和最终摘要，
+都必须使用简体中文。不得用英文叙述“我将……”“让我……”或工具探查过程。
+只有 JSON 字段名、枚举值、命令、代码、专有名词和来源原文保持原样；
+冻结合同明确要求其他语言时除外。下文中的英文是协议说明，不是输出语言示例。
+
 Users may create a V6 Run by sending `orchestrator_version=research-run-v6` and
 a Director. The homepage defaults to V6 and selects the first available Agent.
 Clients that omit `orchestrator_version` still create V5. `AssessV6Activation`
@@ -62,6 +68,9 @@ whose `branch_refs` is empty despite a persisted Work Branch scope is replaced
 without spending the Agent's attempt budget.
 
 ### V6 executable loop
+
+先遵守上面的简体中文输出规则，再执行本节的协议步骤。不得把 CLI、
+credential proxy、Manifest、Brief 或 schema 的查找过程逐句输出给用户。
 
 If the prompt contains `## Durable Research V6 Work Item`, use the exact Run,
 Work Item, and Attempt IDs from that prompt. Read the frozen Manifest first:

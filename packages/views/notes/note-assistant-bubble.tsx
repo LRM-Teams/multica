@@ -7,7 +7,7 @@ import { api } from "@multica/core/api";
 import { agentTemplateDetailOptions } from "@multica/core/agents/queries";
 import { useAuthStore } from "@multica/core/auth";
 import { useChatStore } from "@multica/core/chat";
-import { chatSessionsOptions, pendingChatTasksOptions } from "@multica/core/chat/queries";
+import { chatKeys, chatSessionsOptions, pendingChatTasksOptions } from "@multica/core/chat/queries";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { createLogger } from "@multica/core/logger";
 import {
@@ -24,7 +24,7 @@ import {
 import { type PeriodBriefCollectorSlot } from "@multica/core/notes/period-brief-collectors";
 import { isValidPeriodBriefCustomRange } from "@multica/core/notes/period-brief-window";
 import { noteListOptions, notePeriodBriefActiveOptions } from "@multica/core/notes/queries";
-import { chatKeys } from "@multica/core/chat/queries";
+import { abbreviateNoteSelection, attachNoteSelectionQuote, type NoteSelectionExcerpt } from "@multica/core/notes/selection-quote";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { runtimeListOptions } from "@multica/core/runtimes";
 import { agentListOptions, memberListOptions, workspaceKeys } from "@multica/core/workspace/queries";
@@ -36,15 +36,17 @@ import { useT } from "../i18n";
 import { usePrefersReducedMotion } from "../common/use-prefers-reduced-motion";
 import { excludeChannelShellSessions } from "../chat/lib/exclude-channel-shell-sessions";
 import { ChatWindow } from "../chat/components/chat-window";
+import { noteAssistantSidebarClosesOnLeave } from "../chat/components/chat-window-layout";
 import { NoteAssistantFabCluster, type NoteAssistantFabAction } from "./note-assistant-fab-cluster";
 import {
   NotePeriodBriefCompose,
   type NotePeriodBriefResolved,
 } from "./note-period-brief-compose";
+import { NoteSelectionQuotePreview } from "./note-selection-quote-preview";
 import { NotesAssistantSetupCard } from "./notes-assistant-setup-card";
-import { noteAssistantSidebarClosesOnLeave } from "../chat/components/chat-window-layout";
 
 const logger = createLogger("chat.note-bubble");
+const EMPTY_SELECTION_EXCERPTS: NoteSelectionExcerpt[] = [];
 
 function readSetupHintDismissed(workspaceId: string | undefined): boolean {
   if (!workspaceId || typeof window === "undefined") return false;
@@ -79,7 +81,13 @@ export function NoteAssistantBubble({
   const openPageId = useChatStore((s) => s.noteBubbleOpenPageId);
   const toggleNoteBubble = useChatStore((s) => s.toggleNoteBubble);
   const setNoteBubbleOpenPageId = useChatStore((s) => s.setNoteBubbleOpenPageId);
+  const setNoteSelectionQuote = useChatStore((s) => s.setNoteSelectionQuote);
+  const removeNoteSelectionExcerpt = useChatStore((s) => s.removeNoteSelectionExcerpt);
   const setNoteBubbleActiveSession = useChatStore((s) => s.setNoteBubbleActiveSession);
+  const quotePageId = useChatStore((s) => s.noteSelectionQuote?.pageId ?? null);
+  const quoteExcerpts = useChatStore((s) => s.noteSelectionQuote?.excerpts);
+  const quoteAskedAt = useChatStore((s) => s.noteSelectionQuote?.askedAt ?? 0);
+  const excerptsForPage = quotePageId === pageId ? (quoteExcerpts ?? EMPTY_SELECTION_EXCERPTS) : EMPTY_SELECTION_EXCERPTS;
   const noteBubbleActiveSessionByPage = useChatStore((s) => s.noteBubbleActiveSessionByPage);
   const { data: activePeriodBrief } = useQuery(notePeriodBriefActiveOptions(wsId, pageId));
   const { data: sessions = [] } = useQuery(chatSessionsOptions(wsId));
@@ -126,6 +134,27 @@ export function NoteAssistantBubble({
   const periodBriefResolvedRef = React.useRef<NotePeriodBriefResolved | null>(null);
   const composerLocked =
     periodBriefRunLocksComposer(activePeriodBrief?.run?.status) || periodBriefSubmitting;
+
+  React.useEffect(() => {
+    if (excerptsForPage.length === 0 || !quoteAskedAt) return;
+    setComposerFocusToken((n) => n + 1);
+  }, [excerptsForPage.length, quoteAskedAt]);
+
+  const wrapOutgoing = React.useCallback((content: string) => {
+    const quote = useChatStore.getState().noteSelectionQuote;
+    if (!quote || quote.pageId !== pageId || quote.excerpts.length === 0) return content;
+    return attachNoteSelectionQuote(content, quote.excerpts.map((excerpt) => excerpt.text));
+  }, [pageId]);
+
+  const clearSelectionQuote = React.useCallback(() => {
+    const quote = useChatStore.getState().noteSelectionQuote;
+    if (quote?.pageId === pageId) setNoteSelectionQuote(null);
+  }, [pageId, setNoteSelectionQuote]);
+
+  const removeSelectionExcerpt = React.useCallback((excerptId: string) => {
+    const quote = useChatStore.getState().noteSelectionQuote;
+    if (quote?.pageId === pageId) removeNoteSelectionExcerpt(excerptId);
+  }, [pageId, removeNoteSelectionExcerpt]);
 
   // Prefer the live agent list. After create/restore, ensureResult.agent bridges
   // until the list invalidation lands. needs_setup clears that bridge.
@@ -389,6 +418,19 @@ export function NoteAssistantBubble({
         composerFocusToken={composerFocusToken}
         seedSend={periodBriefOpen ? null : pendingSend}
         onSeedSendConsumed={handleSeedSendConsumed}
+        transformOutgoing={wrapOutgoing}
+        onSendAccepted={clearSelectionQuote}
+        composerPrefix={
+          excerptsForPage.length > 0 ? (
+            <NoteSelectionQuotePreview
+              excerpts={excerptsForPage.map((excerpt) => ({
+                id: excerpt.id,
+                summary: abbreviateNoteSelection(excerpt.text),
+              }))}
+              onRemove={removeSelectionExcerpt}
+            />
+          ) : null
+        }
         composerAccessory={
           setupSlot || (periodBriefOpen && !composerLocked) ? (
             <>
@@ -408,7 +450,9 @@ export function NoteAssistantBubble({
         composerPlaceholder={
           periodBriefOpen && !composerLocked
             ? t(($) => $.notes_page.period_brief_focus_placeholder)
-            : undefined
+            : excerptsForPage.length > 0
+              ? t(($) => $.notes_page.assistant_selection_quote_placeholder)
+              : undefined
         }
         allowEmptySend={periodBriefOpen && !composerLocked}
         onSendIntercept={interceptPeriodBriefCompose}

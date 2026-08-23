@@ -1,5 +1,10 @@
 import { create } from "zustand";
 import type { StorageAdapter } from "../types";
+import {
+  appendNoteSelectionExcerpt,
+  removeNoteSelectionExcerpt as dropNoteSelectionExcerpt,
+  type NoteSelectionQuote,
+} from "../notes/selection-quote";
 import { getCurrentSlug, registerForWorkspaceRehydration } from "../platform/workspace-storage";
 import { createLogger } from "../logger";
 
@@ -133,6 +138,11 @@ export interface ChatState {
   /** Selected agent per note page id for the Notes assistant bubble. */
   noteBubbleSelectedAgentByPage: Record<string, string>;
   /**
+   * Selection excerpt waiting in the Notes assistant composer. Session-only —
+   * never persisted. Cleared when the rail closes.
+   */
+  noteSelectionQuote: NoteSelectionQuote | null;
+  /**
    * Desktop Notes rail width in px. Shared so the page dock and the overlay
    * stay in lockstep while dragging either direction.
    */
@@ -152,6 +162,9 @@ export interface ChatState {
   setDmBubbleActiveSession: (agentId: string, sessionId: string | null) => void;
   setNoteBubbleOpenPageId: (pageId: string | null) => void;
   toggleNoteBubble: (pageId: string) => void;
+  setNoteSelectionQuote: (quote: NoteSelectionQuote | null) => void;
+  askAboutNoteSelection: (pageId: string, text: string) => void;
+  removeNoteSelectionExcerpt: (excerptId: string) => void;
   setNoteBubbleActiveSession: (pageId: string, sessionId: string | null) => void;
   setNoteBubbleSelectedAgent: (pageId: string, agentId: string | null) => void;
   setNoteBubbleSidebarWidth: (width: number) => void;
@@ -188,6 +201,7 @@ export function createChatStore(options: ChatStoreOptions) {
     dmBubbleOpenAgentId: storage.getItem(wsKey(DM_BUBBLE_OPEN_AGENT_KEY)),
     dmBubbleActiveSessionByAgent: readStringMap(storage, wsKey(DM_BUBBLE_SESSIONS_KEY)),
     noteBubbleOpenPageId: null,
+    noteSelectionQuote: null,
     noteBubbleActiveSessionByPage: readStringMap(storage, wsKey(NOTE_BUBBLE_SESSIONS_KEY)),
     noteBubbleSelectedAgentByPage: readStringMap(storage, wsKey(NOTE_BUBBLE_AGENTS_KEY)),
     noteBubbleSidebarWidth:
@@ -262,14 +276,52 @@ export function createChatStore(options: ChatStoreOptions) {
         to: pageId,
       });
       storage.removeItem(wsKey(NOTE_BUBBLE_OPEN_PAGE_KEY));
-      set({ noteBubbleOpenPageId: pageId });
+      set({
+        noteBubbleOpenPageId: pageId,
+        noteSelectionQuote: pageId ? get().noteSelectionQuote : null,
+      });
     },
     toggleNoteBubble: (pageId) => {
       const current = get().noteBubbleOpenPageId;
       const next = current === pageId ? null : pageId;
       logger.debug("toggleNoteBubble", { pageId, to: next });
       storage.removeItem(wsKey(NOTE_BUBBLE_OPEN_PAGE_KEY));
-      set({ noteBubbleOpenPageId: next });
+      set({
+        noteBubbleOpenPageId: next,
+        noteSelectionQuote: next ? get().noteSelectionQuote : null,
+      });
+    },
+    setNoteSelectionQuote: (quote) => {
+      logger.debug("setNoteSelectionQuote", {
+        pageId: quote?.pageId ?? null,
+        excerptCount: quote?.excerpts.length ?? 0,
+      });
+      set({ noteSelectionQuote: quote });
+    },
+    askAboutNoteSelection: (pageId, text) => {
+      const current = get().noteSelectionQuote;
+      const next = appendNoteSelectionExcerpt(current, pageId, text, {
+        id: `excerpt-${Date.now()}-${current?.excerpts.length ?? 0}`,
+      });
+      if (!next) return;
+      logger.info("askAboutNoteSelection", {
+        pageId,
+        excerptCount: next.excerpts.length,
+        textLength: text.trim().length,
+      });
+      storage.removeItem(wsKey(NOTE_BUBBLE_OPEN_PAGE_KEY));
+      set({
+        noteBubbleOpenPageId: pageId,
+        noteSelectionQuote: next,
+      });
+    },
+    removeNoteSelectionExcerpt: (excerptId) => {
+      const next = dropNoteSelectionExcerpt(get().noteSelectionQuote, excerptId);
+      logger.debug("removeNoteSelectionExcerpt", {
+        excerptId,
+        excerptCount: next?.excerpts.length ?? 0,
+      });
+      set({ noteSelectionQuote: next });
     },
     setNoteBubbleActiveSession: (pageId, sessionId) => {
       const prev = get().noteBubbleActiveSessionByPage[pageId] ?? null;
@@ -361,6 +413,7 @@ export function createChatStore(options: ChatStoreOptions) {
       dmBubbleOpenAgentId: nextBubbleAgent,
       dmBubbleActiveSessionByAgent: nextBubbleSessions,
       noteBubbleOpenPageId: null,
+      noteSelectionQuote: null,
       noteBubbleActiveSessionByPage: nextNoteBubbleSessions,
       noteBubbleSelectedAgentByPage: nextNoteBubbleAgents,
     });

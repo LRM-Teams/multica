@@ -84,7 +84,17 @@ import {
   FilePlus,
   Loader2,
   Sparkles,
+  Palette,
 } from "lucide-react";
+import {
+  NOTE_COLORS,
+  NOTE_FONT_SIZES,
+  cssToNoteFontSize,
+  fontSizeToCss,
+  hexToNoteColor,
+  noteColorToHex,
+  type NoteColor,
+} from "@multica/core/notes/format";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -361,6 +371,157 @@ function HeadingDropdown({ editor, onOpenChange, activeLevel }: { editor: Editor
   );
 }
 
+function ColorDropdown({
+  editor,
+  onOpenChange,
+  activeColor,
+}: {
+  editor: Editor;
+  onOpenChange: (open: boolean) => void;
+  activeColor: string | null;
+}) {
+  const { t } = useT("editor");
+  const [open, setOpen] = useState(false);
+  const current = hexToNoteColor(activeColor);
+
+  const handleOpenChange = useCallback((next: boolean) => {
+    setOpen(next);
+    onOpenChange(next);
+  }, [onOpenChange]);
+
+  const apply = (color: NoteColor) => {
+    const hex = noteColorToHex(color);
+    if (hex) editor.chain().focus().setTextColor(hex).run();
+    else editor.chain().focus().unsetTextColor().run();
+    handleOpenChange(false);
+  };
+
+  return (
+    <Popover modal={false} open={open} onOpenChange={handleOpenChange}>
+      <Tooltip>
+        <TooltipTrigger render={
+          <PopoverTrigger
+            className="inline-flex h-7 items-center gap-0.5 rounded-md px-1.5 text-xs font-medium hover:bg-muted"
+            onMouseDown={(e) => e.preventDefault()}
+          />
+        }>
+          <Palette className="size-3.5" />
+          <span
+            className="size-2 rounded-full border border-border"
+            style={{ backgroundColor: noteColorToHex(current) ?? "var(--foreground)" }}
+          />
+        </TooltipTrigger>
+        <TooltipContent side="top" sideOffset={8}>{t(($) => $.bubble_menu.color)}</TooltipContent>
+      </Tooltip>
+      <PopoverContent
+        side="bottom"
+        sideOffset={8}
+        align="start"
+        className="flex w-auto gap-1 p-1.5"
+        initialFocus={false}
+        finalFocus={false}
+      >
+        {NOTE_COLORS.map((color) => {
+          const hex = noteColorToHex(color);
+          const selected = current === color;
+          return (
+            <button
+              key={color}
+              type="button"
+              aria-label={t(($) => $.bubble_menu.color_names[color])}
+              aria-pressed={selected}
+              className="flex size-6 items-center justify-center rounded-md hover:bg-accent"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                apply(color);
+              }}
+            >
+              <span
+                className="size-3.5 rounded-full border border-border"
+                style={{ backgroundColor: hex ?? "var(--foreground)" }}
+              />
+              {selected && <span className="sr-only">{t(($) => $.bubble_menu.color_names[color])}</span>}
+            </button>
+          );
+        })}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function FontSizeDropdown({
+  editor,
+  onOpenChange,
+  activeSize,
+}: {
+  editor: Editor;
+  onOpenChange: (open: boolean) => void;
+  activeSize: string | null;
+}) {
+  const { t } = useT("editor");
+  const [open, setOpen] = useState(false);
+  const current = cssToNoteFontSize(activeSize);
+  const label = current ? `${current}` : t(($) => $.bubble_menu.size);
+
+  const handleOpenChange = useCallback((next: boolean) => {
+    setOpen(next);
+    onOpenChange(next);
+  }, [onOpenChange]);
+
+  return (
+    <Popover modal={false} open={open} onOpenChange={handleOpenChange}>
+      <Tooltip>
+        <TooltipTrigger render={
+          <PopoverTrigger
+            className="inline-flex h-7 items-center gap-0.5 rounded-md px-1.5 text-xs font-medium hover:bg-muted"
+            onMouseDown={(e) => e.preventDefault()}
+          />
+        }>
+          {label}
+          <ChevronDown className="size-3" />
+        </TooltipTrigger>
+        <TooltipContent side="top" sideOffset={8}>{t(($) => $.bubble_menu.size)}</TooltipContent>
+      </Tooltip>
+      <PopoverContent
+        side="bottom"
+        sideOffset={8}
+        align="start"
+        className="w-auto min-w-24 p-1"
+        initialFocus={false}
+        finalFocus={false}
+      >
+        <button
+          type="button"
+          className="flex w-full cursor-default items-center gap-2 rounded-md px-1.5 py-1 text-xs outline-hidden select-none hover:bg-accent hover:text-accent-foreground"
+          onMouseDown={(e) => {
+            e.preventDefault();
+            editor.chain().focus().unsetFontSize().run();
+            handleOpenChange(false);
+          }}
+        >
+          {t(($) => $.bubble_menu.size_default)}
+          {!current && <Check className="ml-auto size-3.5" />}
+        </button>
+        {NOTE_FONT_SIZES.map((size) => (
+          <button
+            key={size}
+            type="button"
+            className="flex w-full cursor-default items-center gap-2 rounded-md px-1.5 py-1 text-xs outline-hidden select-none hover:bg-accent hover:text-accent-foreground"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              editor.chain().focus().setFontSize(fontSizeToCss(size)).run();
+              handleOpenChange(false);
+            }}
+          >
+            {size}
+            {current === size && <Check className="ml-auto size-3.5" />}
+          </button>
+        ))}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // List Dropdown
 // ---------------------------------------------------------------------------
@@ -441,20 +602,28 @@ function ListDropdown({ editor, onOpenChange, isBullet, isOrdered, isTask }: { e
 function OptimizeSelectionButton({
   editor,
   onStateChange,
+  onAskAboutSelection,
   pending,
 }: {
   editor: Editor;
   onStateChange: (state: TextOptimizationState) => void;
+  onAskAboutSelection?: (text: string) => void;
   pending: boolean;
 }) {
   const { t } = useT("editor");
 
   const handleClick = useCallback(() => {
     if (pending) return;
+    if (onAskAboutSelection) {
+      const selectedText = serializeSelectionToMarkdown(editor).trim();
+      if (!selectedText) return;
+      onAskAboutSelection(selectedText);
+      return;
+    }
     const draft = buildTextOptimizationDraft(editor);
     if (!draft) return;
     onStateChange({ status: "prompt", ...draft });
-  }, [editor, onStateChange, pending]);
+  }, [editor, onAskAboutSelection, onStateChange, pending]);
 
   return (
     <Tooltip>
@@ -471,7 +640,11 @@ function OptimizeSelectionButton({
       >
         {pending ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
       </TooltipTrigger>
-      <TooltipContent side="top" sideOffset={8}>{t(($) => $.bubble_menu.optimize.tooltip)}</TooltipContent>
+      <TooltipContent side="top" sideOffset={8}>
+        {onAskAboutSelection
+          ? t(($) => $.bubble_menu.optimize.ask_tooltip)
+          : t(($) => $.bubble_menu.optimize.tooltip)}
+      </TooltipContent>
     </Tooltip>
   );
 }
@@ -819,12 +992,14 @@ function EditorBubbleMenu({
   editor,
   currentIssueId,
   onOptimizeSelection,
+  onAskAboutSelection,
   onApplyTitle,
   currentTitle,
 }: {
   editor: Editor;
   currentIssueId?: string;
   onOptimizeSelection?: TextOptimizationAction;
+  onAskAboutSelection?: (text: string) => void;
   onApplyTitle?: (title: string) => void;
   currentTitle?: string;
 }) {
@@ -861,6 +1036,9 @@ function EditorBubbleMenu({
       heading1: e.isActive("heading", { level: 1 }),
       heading2: e.isActive("heading", { level: 2 }),
       heading3: e.isActive("heading", { level: 3 }),
+      textColor: (e.getAttributes("textStyle").color as string | undefined) ?? null,
+      fontSize: (e.getAttributes("textStyle").fontSize as string | undefined) ?? null,
+      hasTextStyle: Boolean(e.schema.marks.textStyle),
     }),
   });
 
@@ -992,6 +1170,12 @@ function EditorBubbleMenu({
             <MarkButton editor={editor} mark="strike" icon={Strikethrough} label={t(($) => $.bubble_menu.strikethrough)} shortcut={`${modKey}+Shift+S`} isActive={fmt.strike} />
             <MarkButton editor={editor} mark="code" icon={Code} label={t(($) => $.bubble_menu.code)} shortcut={`${modKey}+E`} isActive={fmt.code} />
             <MarkButton editor={editor} mark="highlight" icon={Highlighter} label={t(($) => $.bubble_menu.highlight)} shortcut={`${modKey}+Shift+H`} isActive={fmt.highlight} />
+            {fmt.hasTextStyle && (
+              <>
+                <ColorDropdown editor={editor} onOpenChange={handleMenuOpenChange} activeColor={fmt.textColor} />
+                <FontSizeDropdown editor={editor} onOpenChange={handleMenuOpenChange} activeSize={fmt.fontSize} />
+              </>
+            )}
             <Separator orientation="vertical" className="mx-0.5 h-5" />
             <Tooltip>
               <TooltipTrigger render={
@@ -1012,8 +1196,13 @@ function EditorBubbleMenu({
               </TooltipTrigger>
               <TooltipContent side="top" sideOffset={8}>{t(($) => $.bubble_menu.quote)}</TooltipContent>
             </Tooltip>
-            {onOptimizeSelection && (
-              <OptimizeSelectionButton editor={editor} onStateChange={setOptimizationState} pending={false} />
+            {(onAskAboutSelection || onOptimizeSelection) && (
+              <OptimizeSelectionButton
+                editor={editor}
+                onStateChange={setOptimizationState}
+                onAskAboutSelection={onAskAboutSelection}
+                pending={false}
+              />
             )}
             {currentIssueId && (
               <>

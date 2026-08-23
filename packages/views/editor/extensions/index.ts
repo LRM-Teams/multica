@@ -95,6 +95,7 @@ import { FileCardExtension } from "./file-card";
 import { ImageView } from "./image-view";
 import { BlockMathExtension, InlineMathExtension } from "./math";
 import { HighlightExtension } from "./highlight";
+import { TextStyleExtension } from "./text-style";
 
 const lowlight = sharedLowlight;
 
@@ -233,6 +234,12 @@ export interface EditorExtensionsOptions {
    * - "block" — Notion-style content blocks for editors such as Notes.
    */
   slashCommandMode?: "skill" | "command" | "block";
+  /**
+   * Notes-only: register the color / font-size mark so selection formatting
+   * persists as sanitized `<span style>` in markdown. Other surfaces stay
+   * off so issue comments do not grow Office-pasted colors.
+   */
+  enableTextStyles?: boolean;
 }
 
 export function createEditorExtensions(
@@ -346,6 +353,7 @@ export function createEditorExtensions(
     BlockMathExtension,
     InlineMathExtension,
     HighlightExtension,
+    ...(options.enableTextStyles ? [TextStyleExtension] : []),
     // 3-space indent so nested ordered lists survive CommonMark in ReadonlyContent.
     Markdown.configure({ indentation: { style: "space", size: 3 } }),
     // Make Cmd+C / Cmd+X / drag write Markdown source to clipboard text/plain

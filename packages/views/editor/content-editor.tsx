@@ -94,6 +94,8 @@ interface ContentEditorProps {
   showBubbleMenu?: boolean;
   /** Optional AI rewrite action for the selected text plus nearby context. */
   onOptimizeSelection?: (request: TextOptimizationRequest, options?: { signal?: AbortSignal; onStatus?: (status: NoteAIJobStatus) => void }) => Promise<NoteAIEditResult>;
+  /** Open the Notes assistant with the selection quoted in the composer. */
+  onAskAboutSelection?: (text: string) => void;
   /** Optional Notion-style empty-line AI action for editing the current page. */
   onEditPageWithAI?: PageEditAIAction;
   /** Applies an AI-suggested title only after the user confirms an edit. */
@@ -181,6 +183,13 @@ interface ContentEditorProps {
    * every other editor (issue/comment/description) keeps its current behavior.
    */
   plainUrls?: boolean;
+  /**
+   * Notes-only: enable selection color / font-size marks and apply
+   * `--note-default-*` CSS variables to the editor root.
+   */
+  enableTextStyles?: boolean;
+  /** CSS custom properties for notes default typography. */
+  contentCssVars?: Record<string, string | undefined>;
 }
 
 interface ContentEditorRef {
@@ -228,6 +237,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
       onUploadFile,
       showBubbleMenu = true,
       onOptimizeSelection,
+      onAskAboutSelection,
       onEditPageWithAI,
       onApplyAITitle,
       currentAITitle,
@@ -250,6 +260,8 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
       mediaMode = "inline",
       onExternalFiles,
       plainUrls = false,
+      enableTextStyles = false,
+      contentCssVars,
     },
     ref,
   ) {
@@ -413,6 +425,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
           enableIssueReferences,
           enableSlashCommands,
         slashCommandMode,
+        enableTextStyles,
       }),
       onUpdate: ({ editor: ed }) => {
         if (!onUpdateRef.current) return;
@@ -487,6 +500,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
         attributes: {
           class: cn(
             "flex-1 rich-text-editor text-sm outline-none",
+            enableTextStyles && "note-format",
             showEmptyLinePlaceholder && "show-empty-line-placeholder",
             className,
           ),
@@ -500,6 +514,22 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
         if (debounceRef.current) clearTimeout(debounceRef.current);
       };
     }, []);
+
+    useEffect(() => {
+      if (!editor || editor.isDestroyed) return;
+      const el = editor.view.dom as HTMLElement;
+      el.classList.toggle("note-format", enableTextStyles);
+      const keys = [
+        "--note-default-font-family",
+        "--note-default-font-size",
+        "--note-default-color",
+      ] as const;
+      for (const key of keys) {
+        const value = contentCssVars?.[key];
+        if (value) el.style.setProperty(key, value);
+        else el.style.removeProperty(key);
+      }
+    }, [contentCssVars, editor, enableTextStyles]);
 
     // Sync external `defaultValue` changes into the editor.
     // Tiptap v3 `useEditor` reads `content` only at mount (ueberdosis/tiptap#5831);
@@ -724,7 +754,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
           <EditorContent className="flex flex-1 flex-col" editor={editor} />
           <TableControls editor={editor} rootRef={wrapperRef} />
           {showBubbleMenu && (
-            <EditorBubbleMenu editor={editor} currentIssueId={currentIssueId} onOptimizeSelection={onOptimizeSelection} onApplyTitle={onApplyAITitle} currentTitle={currentAITitle} />
+            <EditorBubbleMenu editor={editor} currentIssueId={currentIssueId} onOptimizeSelection={onOptimizeSelection} onAskAboutSelection={onAskAboutSelection} onApplyTitle={onApplyAITitle} currentTitle={currentAITitle} />
           )}
           {emptyLineAiState && onEditPageWithAI && (
             <EmptyLineAiMenu

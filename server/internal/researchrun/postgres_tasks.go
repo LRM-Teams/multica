@@ -321,7 +321,7 @@ func (s *PostgresStore) CreateDispatchIntent(ctx context.Context, in CreateDispa
 		); err != nil {
 			return Attempt{}, RunEvent{}, err
 		}
-		gateSnapshot, gateErr := s.EvaluateGate(ctx, in.SessionID)
+		gateSnapshot, gateErr := s.EvaluateGate(ctx, in.SessionID, workspaceID)
 		if gateErr != nil {
 			return Attempt{}, RunEvent{}, gateErr
 		}

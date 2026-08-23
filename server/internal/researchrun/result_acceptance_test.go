@@ -136,7 +136,7 @@ func (store *resultAcceptanceTestStore) GetTask(context.Context, string, string)
 	return store.task, nil
 }
 
-func (store *resultAcceptanceTestStore) ListAttempts(context.Context, string) ([]Attempt, error) {
+func (store *resultAcceptanceTestStore) ListAttempts(context.Context, string, string) ([]Attempt, error) {
 	return append([]Attempt(nil), store.attempts...), nil
 }
 

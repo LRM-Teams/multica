@@ -756,7 +756,7 @@ func initializeCircuitFixture(t *testing.T, ctx context.Context, store *Postgres
 		t.Fatal(err)
 	}
 	target := selectedExecutionTarget(fixture.agentID, members)
-	tasks, err := store.ListTasks(ctx, fixture.sessionID)
+	tasks, err := store.ListTasks(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil || len(tasks) == 0 {
 		t.Fatalf("initial tasks=%+v err=%v", tasks, err)
 	}

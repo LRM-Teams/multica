@@ -41,7 +41,7 @@ func TestAcceptResultRaceRejectsClaimIdentityDrift(t *testing.T) {
 	if _, err = store.ActivateReadyTasks(ctx, fixture.sessionID); err != nil {
 		t.Fatal(err)
 	}
-	tasks, err := store.ListTasks(ctx, fixture.sessionID)
+	tasks, err := store.ListTasks(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil {
 		t.Fatal(err)
 	}

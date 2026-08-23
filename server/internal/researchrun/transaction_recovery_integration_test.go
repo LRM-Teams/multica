@@ -124,7 +124,7 @@ func TestCreateDispatchIntentTransactionRecovery(t *testing.T) {
 			}, DefaultRunConfig("standard")); err != nil {
 				t.Fatal(err)
 			}
-			tasks, err := store.ListTasks(ctx, fixture.sessionID)
+			tasks, err := store.ListTasks(ctx, fixture.sessionID, fixture.workspaceID)
 			if err != nil || len(tasks) != 1 {
 				t.Fatalf("tasks=%+v err=%v", tasks, err)
 			}
@@ -261,7 +261,7 @@ func newTransactionRecoveryRun(t *testing.T, title string) *transactionRecoveryR
 	if err != nil {
 		t.Fatal(err)
 	}
-	tasks, err := store.ListTasks(ctx, fixture.sessionID)
+	tasks, err := store.ListTasks(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil || len(tasks) != 1 {
 		t.Fatalf("tasks=%+v err=%v", tasks, err)
 	}
@@ -720,7 +720,7 @@ func TestMarkCancellationsRequestedTransactionRecovery(t *testing.T) {
 		attempt, inboxID := prepareCancellationRecovery(t, run)
 		request := CancellationRequest{AttemptID: attempt.ID, InboxTaskID: inboxID}
 		invoke := func() error {
-			return run.store.MarkCancellationsRequested(run.ctx, run.fixture.sessionID, []CancellationRequest{request})
+			return run.store.MarkCancellationsRequested(run.ctx, run.fixture.sessionID, run.fixture.workspaceID, []CancellationRequest{request})
 		}
 		return transactionRecoveryOperation{
 			invoke: invoke,
@@ -745,7 +745,7 @@ func TestCompleteCancellationsTransactionRecovery(t *testing.T) {
 	runTransactionRecoveryMatrix(t, txOpAttemptCancelComplete, func(t *testing.T, run *transactionRecoveryRun) transactionRecoveryOperation {
 		attempt, inboxID := prepareCancellationRecovery(t, run)
 		request := CancellationRequest{AttemptID: attempt.ID, InboxTaskID: inboxID}
-		if err := run.store.MarkCancellationsRequested(run.ctx, run.fixture.sessionID, []CancellationRequest{request}); err != nil {
+		if err := run.store.MarkCancellationsRequested(run.ctx, run.fixture.sessionID, run.fixture.workspaceID, []CancellationRequest{request}); err != nil {
 			t.Fatal(err)
 		}
 		invoke := func() error {
@@ -834,7 +834,7 @@ func TestAcceptResultTransactionRecovery(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		tasks, err := run.store.ListTasks(run.ctx, run.fixture.sessionID)
+		tasks, err := run.store.ListTasks(run.ctx, run.fixture.sessionID, run.fixture.workspaceID)
 		if err != nil || len(tasks) != 1 {
 			t.Fatalf("tasks=%+v err=%v", tasks, err)
 		}

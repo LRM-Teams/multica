@@ -13,7 +13,7 @@ import (
 type failureStore interface {
 	MarkFailed(context.Context, string, string) (Run, RunEvent, []string, error)
 	RecordBudgetExhausted(context.Context, string, string, string) (RunEvent, error)
-	EvaluateGate(context.Context, string) (GateResult, error)
+	EvaluateGate(context.Context, string, string) (GateResult, error)
 	SetAwaitingConfirmation(context.Context, string, GateResult) (Run, RunEvent, error)
 }
 
@@ -66,7 +66,7 @@ func (module failureModule) HandleBudgetExhaustion(ctx context.Context, run Run,
 	if _, err := module.store.RecordBudgetExhausted(ctx, run.SessionID, budgetKind, details); err != nil {
 		return err
 	}
-	gate, err := module.store.EvaluateGate(ctx, run.SessionID)
+	gate, err := module.store.EvaluateGate(ctx, run.SessionID, run.WorkspaceID)
 	if err != nil {
 		return err
 	}

@@ -22,7 +22,7 @@ func TestExecutionModuleSyncAttemptsUsesCanonicalRuntimeKeys(t *testing.T) {
 	}}
 	module := executionModule{store: store, dispatcher: dispatcher, prompts: taskPromptModule{}}
 
-	if err := module.SyncAttempts(context.Background(), "session-1"); err != nil {
+	if err := module.SyncAttempts(context.Background(), "session-1", "workspace-1"); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(dispatcher.inspected, []string{"inbox-1", "dispatch-2"}) {
@@ -43,7 +43,7 @@ func TestExecutionModuleSyncAttemptsFailsBeforeStateMutationWhenInspectFails(t *
 		store: store, dispatcher: &executionTestDispatcher{inspectErr: inspectErr}, prompts: taskPromptModule{},
 	}
 
-	err := module.SyncAttempts(context.Background(), "session-1")
+	err := module.SyncAttempts(context.Background(), "session-1", "workspace-1")
 	if !errors.Is(err, inspectErr) || !strings.Contains(err.Error(), "inspect research attempts") {
 		t.Fatalf("error=%v", err)
 	}
@@ -57,7 +57,7 @@ func TestExecutionModuleSyncAttemptsActivatesDependenciesWithoutActiveRuntimeWor
 	dispatcher := &executionTestDispatcher{}
 	module := executionModule{store: store, dispatcher: dispatcher, prompts: taskPromptModule{}}
 
-	if err := module.SyncAttempts(context.Background(), "session-1"); err != nil {
+	if err := module.SyncAttempts(context.Background(), "session-1", "workspace-1"); err != nil {
 		t.Fatal(err)
 	}
 	if dispatcher.inspectCalls != 0 || store.reconciledSession != "session-1" || store.activatedSession != "session-1" {
@@ -530,7 +530,7 @@ type executionTestStore struct {
 	passportEnabled         bool
 }
 
-func (store *executionTestStore) ListAttempts(context.Context, string) ([]Attempt, error) {
+func (store *executionTestStore) ListAttempts(context.Context, string, string) ([]Attempt, error) {
 	return append([]Attempt(nil), store.attempts...), nil
 }
 
@@ -545,11 +545,11 @@ func (store *executionTestStore) ActivateReadyTasks(_ context.Context, sessionID
 	return 0, nil
 }
 
-func (store *executionTestStore) ListPendingCancellations(context.Context, string) ([]PendingCancellation, error) {
+func (store *executionTestStore) ListPendingCancellations(context.Context, string, string) ([]PendingCancellation, error) {
 	return append([]PendingCancellation(nil), store.pending...), nil
 }
 
-func (store *executionTestStore) MarkCancellationsRequested(_ context.Context, sessionID string, requests []CancellationRequest) error {
+func (store *executionTestStore) MarkCancellationsRequested(_ context.Context, sessionID, _ string, requests []CancellationRequest) error {
 	store.requestedSession = sessionID
 	store.requestedRequests = append([]CancellationRequest(nil), requests...)
 	return nil

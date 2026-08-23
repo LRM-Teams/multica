@@ -404,15 +404,15 @@ func (e *Engine) ReconcileSession(ctx context.Context, sessionID string) (retErr
 		return e.failureModule().HandleBudgetExhaustion(ctx, run, "wall_time", fmt.Sprintf("run exceeded %d seconds", run.Config.MaxRunSeconds))
 	}
 
-	if err = e.executionModule().SyncAttempts(ctx, sessionID); err != nil {
+	if err = e.executionModule().SyncAttempts(ctx, sessionID, run.WorkspaceID); err != nil {
 		return e.failureModule().HandleDispatchFailure(ctx, sessionID, err)
 	}
 
-	tasks, err := e.store.ListTasks(ctx, sessionID)
+	tasks, err := e.store.ListTasks(ctx, sessionID, run.WorkspaceID)
 	if err != nil {
 		return err
 	}
-	attempts, err := e.store.ListAttempts(ctx, sessionID)
+	attempts, err := e.store.ListAttempts(ctx, sessionID, run.WorkspaceID)
 	if err != nil {
 		return err
 	}
@@ -449,11 +449,11 @@ func (e *Engine) ReconcileSession(ctx context.Context, sessionID string) (retErr
 	if err = e.executionModule().ActivateReadyTasks(ctx, sessionID); err != nil {
 		return err
 	}
-	tasks, err = e.store.ListTasks(ctx, sessionID)
+	tasks, err = e.store.ListTasks(ctx, sessionID, run.WorkspaceID)
 	if err != nil {
 		return err
 	}
-	attempts, err = e.store.ListAttempts(ctx, sessionID)
+	attempts, err = e.store.ListAttempts(ctx, sessionID, run.WorkspaceID)
 	if err != nil {
 		return err
 	}
@@ -576,31 +576,31 @@ func (e *Engine) Snapshot(ctx context.Context, sessionID, workspaceID string) (R
 	if err != nil {
 		return RunSnapshot{}, err
 	}
-	questions, err := e.store.ListQuestions(ctx, sessionID)
+	questions, err := e.store.ListQuestions(ctx, sessionID, workspaceID)
 	if err != nil {
 		return RunSnapshot{}, err
 	}
-	tasks, err := e.store.ListTasks(ctx, sessionID)
+	tasks, err := e.store.ListTasks(ctx, sessionID, workspaceID)
 	if err != nil {
 		return RunSnapshot{}, err
 	}
-	attempts, err := e.store.ListAttempts(ctx, sessionID)
+	attempts, err := e.store.ListAttempts(ctx, sessionID, workspaceID)
 	if err != nil {
 		return RunSnapshot{}, err
 	}
-	sources, err := e.store.ListSourceSnapshots(ctx, sessionID)
+	sources, err := e.store.ListSourceSnapshots(ctx, sessionID, workspaceID)
 	if err != nil {
 		return RunSnapshot{}, err
 	}
-	observations, err := e.store.ListObservations(ctx, sessionID)
+	observations, err := e.store.ListObservations(ctx, sessionID, workspaceID)
 	if err != nil {
 		return RunSnapshot{}, err
 	}
-	claims, err := e.store.ListClaims(ctx, sessionID)
+	claims, err := e.store.ListClaims(ctx, sessionID, workspaceID)
 	if err != nil {
 		return RunSnapshot{}, err
 	}
-	gate, err := e.gateModule().Evaluate(ctx, sessionID)
+	gate, err := e.gateModule().Evaluate(ctx, sessionID, workspaceID)
 	if err != nil {
 		return RunSnapshot{}, err
 	}
@@ -640,11 +640,11 @@ type projectionSnapshotStore interface {
 	GetRun(context.Context, string, string) (Run, error)
 	GetCurrentContract(context.Context, string, string) (ResearchContract, error)
 	GetCurrentMethod(context.Context, string, string) (*ResearchMethod, error)
-	ListQuestions(context.Context, string) ([]Question, error)
-	ListTasks(context.Context, string) ([]Task, error)
-	ListAttempts(context.Context, string) ([]Attempt, error)
-	ListClaims(context.Context, string) ([]Claim, error)
-	EvaluateGate(context.Context, string) (GateResult, error)
+	ListQuestions(context.Context, string, string) ([]Question, error)
+	ListTasks(context.Context, string, string) ([]Task, error)
+	ListAttempts(context.Context, string, string) ([]Attempt, error)
+	ListClaims(context.Context, string, string) ([]Claim, error)
+	EvaluateGate(context.Context, string, string) (GateResult, error)
 }
 
 func loadProjectionSnapshot(ctx context.Context, store projectionSnapshotStore, sessionID, workspaceID string) (RunSnapshot, error) {
@@ -660,23 +660,23 @@ func loadProjectionSnapshot(ctx context.Context, store projectionSnapshotStore, 
 	if err != nil {
 		return RunSnapshot{}, err
 	}
-	questions, err := store.ListQuestions(ctx, sessionID)
+	questions, err := store.ListQuestions(ctx, sessionID, workspaceID)
 	if err != nil {
 		return RunSnapshot{}, err
 	}
-	tasks, err := store.ListTasks(ctx, sessionID)
+	tasks, err := store.ListTasks(ctx, sessionID, workspaceID)
 	if err != nil {
 		return RunSnapshot{}, err
 	}
-	attempts, err := store.ListAttempts(ctx, sessionID)
+	attempts, err := store.ListAttempts(ctx, sessionID, workspaceID)
 	if err != nil {
 		return RunSnapshot{}, err
 	}
-	claims, err := store.ListClaims(ctx, sessionID)
+	claims, err := store.ListClaims(ctx, sessionID, workspaceID)
 	if err != nil {
 		return RunSnapshot{}, err
 	}
-	gate, err := store.EvaluateGate(ctx, sessionID)
+	gate, err := store.EvaluateGate(ctx, sessionID, workspaceID)
 	if err != nil {
 		return RunSnapshot{}, err
 	}

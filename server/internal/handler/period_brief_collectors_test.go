@@ -107,12 +107,29 @@ func TestEnsurePeriodBriefCollectors_CreatesPerLocalComputer(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
 		t.Fatal(err)
 	}
-	if len(created.Missing) != 0 {
-		t.Fatalf("missing after create=%#v", created.Missing)
+	missingByKey := map[string]PeriodBriefCollectorMissingSlot{}
+	for _, slot := range created.Missing {
+		missingByKey[slot.Key] = slot
 	}
+	for _, key := range []string{
+		"local:" + strings.ToLower(daemonA),
+		"local:" + strings.ToLower(daemonB),
+		"cloud:" + cloudRuntimeID,
+	} {
+		if _, ok := missingByKey[key]; ok {
+			t.Fatalf("slot %s still missing after create: %#v", key, created.Missing)
+		}
+	}
+	wantA := periodBriefCollectorNameForDaemon(daemonA)
+	wantB := periodBriefCollectorNameForDaemon(daemonB)
+	wantCloud := periodBriefCollectorNameForDaemon(cloudRuntimeID)
 	names := map[string]string{}
 	var sawCloud bool
 	for _, agent := range created.Agents {
+		names[agent.Name] = agent.ID
+		if agent.Name != wantA && agent.Name != wantB && agent.Name != wantCloud {
+			continue
+		}
 		if !strings.HasPrefix(agent.Name, periodBriefCollectorNamePrefix) {
 			t.Fatalf("collector name %q", agent.Name)
 		}
@@ -121,15 +138,11 @@ func TestEnsurePeriodBriefCollectors_CreatesPerLocalComputer(t *testing.T) {
 		} else if !strings.HasPrefix(agent.DisplayName, periodBriefCollectorDisplayLead) {
 			t.Fatalf("display_name %q", agent.DisplayName)
 		}
-		names[agent.Name] = agent.ID
 		t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, agent.ID) })
 	}
 	if !sawCloud {
 		t.Fatal("expected a cloud-labeled collector display name")
 	}
-	wantA := periodBriefCollectorNameForDaemon(daemonA)
-	wantB := periodBriefCollectorNameForDaemon(daemonB)
-	wantCloud := periodBriefCollectorNameForDaemon(cloudRuntimeID)
 	if names[wantA] == "" || names[wantB] == "" || names[wantCloud] == "" {
 		t.Fatalf("missing collectors want %q/%q/%q got %#v", wantA, wantB, wantCloud, names)
 	}

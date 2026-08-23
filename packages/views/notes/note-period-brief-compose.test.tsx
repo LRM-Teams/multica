@@ -3,7 +3,7 @@
  */
 import type { ComponentProps } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { screen, waitFor, fireEvent } from "@testing-library/react";
+import { screen, waitFor, fireEvent, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Agent } from "@multica/core/types";
@@ -21,6 +21,7 @@ vi.mock("@multica/core/api", () => ({
     listAgents: (...args: unknown[]) => listAgents(...args),
     listRuntimes: (...args: unknown[]) => listRuntimes(...args),
     ensurePeriodBriefCollectors: (...args: unknown[]) => ensurePeriodBriefCollectors(...args),
+    listComputers: () => Promise.resolve([]),
   },
 }));
 
@@ -129,6 +130,15 @@ describe("NotePeriodBriefCompose", () => {
       { id: "runtime-1", status: "online", runtime_mode: "local", owner_id: "user-1" },
       { id: "runtime-cloud", status: "online", runtime_mode: "cloud", owner_id: "user-1" },
       { id: "runtime-foreign", status: "online", runtime_mode: "local", owner_id: "user-2" },
+      {
+        id: "runtime-c",
+        daemon_id: "pc-daemon-cccc",
+        status: "online",
+        runtime_mode: "local",
+        owner_id: "user-1",
+        display_name: "Laptop C",
+        name: "laptop-c",
+      },
     ]);
     ensurePeriodBriefCollectors.mockResolvedValue({
       agents: [collectorA, collectorB],
@@ -149,7 +159,7 @@ describe("NotePeriodBriefCompose", () => {
     expect(screen.queryByTestId("period-brief-collector-collector-foreign")).toBeNull();
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.queryByTestId("period-brief-focus")).toBeNull();
-    expect(ensurePeriodBriefCollectors).toHaveBeenCalled();
+    expect(ensurePeriodBriefCollectors).not.toHaveBeenCalled();
   });
 
   it("reports chip selections and lets the user toggle computers", async () => {
@@ -223,6 +233,51 @@ describe("NotePeriodBriefCompose", () => {
         }),
       );
     });
+  });
+
+  it("reminds about a computer with no collector without blocking the rest", async () => {
+    const user = userEvent.setup();
+    const onConfigureCollector = vi.fn();
+    const { onResolvedChange } = renderCompose({ onConfigureCollector });
+    await waitFor(() => {
+      expect(screen.getByTestId("period-brief-collector-missing-local:pc-daemon-cccc")).toBeTruthy();
+    });
+    expect(screen.getByText("Laptop C")).toBeTruthy();
+    expect(screen.getByTestId("period-brief-collector-collector-a")).toBeTruthy();
+    await waitFor(() => {
+      expect(onResolvedChange).toHaveBeenCalledWith(
+        expect.objectContaining({
+          canSubmit: true,
+          request: expect.objectContaining({
+            collector_ids: expect.arrayContaining(["collector-a", "collector-b"]),
+          }),
+        }),
+      );
+    });
+    const missing = screen.getByTestId("period-brief-collector-missing-local:pc-daemon-cccc");
+    await user.click(within(missing).getByTestId("period-brief-collector-missing-configure"));
+    expect(onConfigureCollector).toHaveBeenCalledWith(
+      expect.objectContaining({ label: "Laptop C", needsSetup: true }),
+    );
+    await user.click(within(missing).getByTestId("period-brief-collector-missing-dismiss"));
+    expect(screen.queryByTestId("period-brief-collector-missing-local:pc-daemon-cccc")).toBeNull();
+    expect(screen.getByTestId("period-brief-collector-collector-a")).toBeTruthy();
+  });
+
+  it("offers cancel while choosing chips", async () => {
+    const user = userEvent.setup();
+    const onCancel = vi.fn();
+    renderCompose({ onCancel });
+    const cancel = screen.getByTestId("period-brief-cancel");
+    expect(cancel).toBeEnabled();
+    expect(cancel).toHaveTextContent("取消");
+    await user.click(cancel);
+    expect(onCancel).toHaveBeenCalledOnce();
+  });
+
+  it("disables cancel once submit starts", () => {
+    renderCompose({ onCancel: vi.fn(), submitting: true });
+    expect(screen.getByTestId("period-brief-cancel")).toBeDisabled();
   });
 
   it("shows the in-bubble run status instead of jumping away", () => {

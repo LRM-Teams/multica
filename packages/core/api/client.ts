@@ -1624,10 +1624,13 @@ export class ApiClient {
     return EnsureNotesAssistantAgentResponseSchema.parse(raw);
   }
 
-  async ensurePeriodBriefCollectors(model: string): Promise<EnsurePeriodBriefCollectorsResponse> {
+  async ensurePeriodBriefCollectors(input: {
+    model: string;
+    runtime_id?: string;
+  }): Promise<EnsurePeriodBriefCollectorsResponse> {
     const raw = await this.fetch<unknown>("/api/members/agents/period-brief-collectors", {
       method: "POST",
-      body: JSON.stringify({ model }),
+      body: JSON.stringify(input),
     });
     return parseWithFallback(
       raw,

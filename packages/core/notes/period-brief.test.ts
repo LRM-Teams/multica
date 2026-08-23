@@ -17,6 +17,8 @@ import {
 import {
   defaultPeriodBriefCollectorIds,
   isPeriodBriefCollectorOnline,
+  listOwnedPeriodBriefCollectorSlots,
+  periodBriefCollectorNameForSeed,
   togglePeriodBriefCollectorId,
 } from "./period-brief-collectors";
 import {
@@ -145,6 +147,99 @@ describe("defaultPeriodBriefCollectorIds", () => {
       { id: "r-theirs", status: "online" as const, owner_id: "user-2" },
     ];
     expect(defaultPeriodBriefCollectorIds(agents, runtimes, "user-1")).toEqual(["mine"]);
+  });
+});
+
+describe("listOwnedPeriodBriefCollectorSlots", () => {
+  const laptopA = {
+    id: "rt-a",
+    daemon_id: "pc-daemon-AAAA",
+    runtime_mode: "local" as const,
+    owner_id: "user-1",
+    display_name: "Laptop A",
+    name: "laptop-a",
+    status: "online" as const,
+  };
+  const laptopB = {
+    id: "rt-b",
+    daemon_id: "pc-daemon-BBBB",
+    runtime_mode: "local" as const,
+    owner_id: "user-1",
+    display_name: "Laptop B",
+    name: "laptop-b",
+    status: "online" as const,
+  };
+  const theirs = {
+    id: "rt-theirs",
+    daemon_id: "pc-daemon-THEIRS",
+    runtime_mode: "local" as const,
+    owner_id: "user-2",
+    display_name: "Theirs",
+    name: "theirs",
+    status: "online" as const,
+  };
+
+  it("marks a missing collector on an owned computer as needing setup", () => {
+    const slots = listOwnedPeriodBriefCollectorSlots(
+      [laptopA, laptopB, theirs],
+      [
+        {
+          id: "c-a",
+          name: periodBriefCollectorNameForSeed(laptopA.daemon_id),
+          display_name: "采集 · Laptop A",
+          runtime_id: "rt-a",
+          runtime_mode: "local",
+          runtime_status: "online",
+          owner_id: "user-1",
+        },
+      ],
+      "user-1",
+    );
+    expect(slots.map((slot) => slot.label).sort()).toEqual(["Laptop A", "Laptop B"]);
+    const a = slots.find((slot) => slot.label === "Laptop A");
+    const b = slots.find((slot) => slot.label === "Laptop B");
+    expect(a?.needsSetup).toBe(false);
+    expect(a?.collector?.id).toBe("c-a");
+    expect(b?.needsSetup).toBe(true);
+    expect(b?.collector).toBeNull();
+    expect(b?.machineId).toBe("local:pc-daemon-BBBB");
+  });
+
+  it("marks a collector bound to the wrong computer as needing setup", () => {
+    const nameForA = periodBriefCollectorNameForSeed(laptopA.daemon_id);
+    const slots = listOwnedPeriodBriefCollectorSlots(
+      [laptopA, laptopB],
+      [
+        {
+          id: "c-stray",
+          name: nameForA,
+          display_name: "采集 · Laptop A",
+          runtime_id: "rt-b",
+          runtime_mode: "local",
+          runtime_status: "online",
+          owner_id: "user-1",
+        },
+      ],
+      "user-1",
+    );
+    const a = slots.find((slot) => slot.label === "Laptop A");
+    const b = slots.find((slot) => slot.label === "Laptop B");
+    expect(a?.needsSetup).toBe(true);
+    expect(a?.strayAgentId).toBe("c-stray");
+    expect(b?.needsSetup).toBe(false);
+    expect(b?.collector?.id).toBe("c-stray");
+  });
+
+  it("includes a computer owned via Workspace connection when runtime owner_id is missing", () => {
+    const slots = listOwnedPeriodBriefCollectorSlots(
+      [{ ...laptopA, owner_id: null }],
+      [],
+      "user-1",
+      [{ daemon_id: laptopA.daemon_id, owner_id: "user-1", deviceName: "Laptop A" }],
+    );
+    expect(slots).toHaveLength(1);
+    expect(slots[0]?.needsSetup).toBe(true);
+    expect(slots[0]?.label).toBe("Laptop A");
   });
 });
 

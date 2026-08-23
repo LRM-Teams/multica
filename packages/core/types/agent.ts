@@ -692,10 +692,18 @@ export interface EnsureNotesAssistantAgentResponse {
   setup_hint?: boolean;
 }
 
-/** Idempotent per-Computer Period Work collectors ensure. */
+/** Owned Computer that still needs a Period Work collector. */
+export interface PeriodBriefCollectorMissingSlot {
+  key: string;
+  label: string;
+  machine_id: string;
+}
+
+/** Probe (no runtime_id) or create/repair one collector for a chosen runtime. */
 export interface EnsurePeriodBriefCollectorsResponse {
   agents: Agent[];
   created: string[];
+  missing?: PeriodBriefCollectorMissingSlot[];
 }
 
 /** Verified avatar write intent. The server derives and persists the URL and

@@ -65,6 +65,7 @@ export type {
   EnsurePeriodBriefAgentResponse,
   EnsureNotesAssistantAgentResponse,
   EnsurePeriodBriefCollectorsResponse,
+  PeriodBriefCollectorMissingSlot,
   AgentTemplate,
   AgentTemplateSummary,
   AgentTemplateSkillRef,

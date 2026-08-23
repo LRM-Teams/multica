@@ -58,6 +58,7 @@ vi.mock("@multica/core/api", () => ({
     createNotePeriodBrief: (...args: unknown[]) => createNotePeriodBrief(...args),
     getActiveNotePeriodBrief: (...args: unknown[]) => getActiveNotePeriodBrief(...args),
     getAgentTemplate: () => Promise.resolve(null),
+    listComputers: () => Promise.resolve([]),
   },
 }));
 
@@ -83,6 +84,17 @@ vi.mock("@multica/core/chat", () => ({
 vi.mock("@multica/core/paths", () => ({
   useWorkspacePaths: () => ({
     members: () => "/members",
+  }),
+}));
+
+vi.mock("../navigation", () => ({
+  useNavigation: () => ({
+    push: vi.fn(),
+    replace: vi.fn(),
+    back: vi.fn(),
+    pathname: "/",
+    searchParams: new URLSearchParams(),
+    getShareableUrl: (path: string) => path,
   }),
 }));
 
@@ -257,7 +269,29 @@ describe("NoteAssistantBubble period brief", () => {
     });
     expect(setNoteBubbleActiveSession).toHaveBeenCalledWith("page-1", "session-brief");
     expect(screen.queryByTestId("period-brief-compose")).toBeNull();
+    expect(screen.queryByTestId("period-brief-cancel")).toBeNull();
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("cancels the compose chips without starting a run", async () => {
+    const user = userEvent.setup();
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    renderWithI18n(
+      <QueryClientProvider client={qc}>
+        <NoteAssistantBubble pageId="page-1" pageTitle="Note" />
+      </QueryClientProvider>,
+      { locale: "zh-Hans" },
+    );
+
+    await user.click(screen.getByRole("button", { name: "open-period" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("period-brief-cancel")).toBeTruthy();
+    });
+    await user.click(screen.getByTestId("period-brief-cancel"));
+    expect(screen.queryByTestId("period-brief-compose")).toBeNull();
+    expect(createNotePeriodBrief).not.toHaveBeenCalled();
   });
 
   it("opens the satellite chips when the user asks for a Period Brief in chat", async () => {
@@ -292,6 +326,49 @@ describe("NoteAssistantBubble period brief", () => {
       );
       expect(createNotePeriodBrief.mock.calls[0]?.[0]).not.toHaveProperty("chat_session_id");
     });
+  });
+
+  it("shows a collector setup card instead of silently creating agents", async () => {
+    const user = userEvent.setup();
+    listAgents.mockResolvedValue([agent()]);
+    listRuntimes.mockResolvedValue([
+      {
+        id: "runtime-1",
+        daemon_id: "pc-daemon-aaaa",
+        status: "online",
+        runtime_mode: "local",
+        owner_id: "user-1",
+        display_name: "Laptop A",
+        name: "laptop-a",
+      },
+      {
+        id: "runtime-cloud",
+        daemon_id: "cloud-box",
+        status: "online",
+        runtime_mode: "cloud",
+        owner_id: "user-1",
+        display_name: "Cloud Box",
+        name: "cloud-box",
+      },
+    ]);
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    renderWithI18n(
+      <QueryClientProvider client={qc}>
+        <NoteAssistantBubble pageId="page-1" pageTitle="Note" />
+      </QueryClientProvider>,
+      { locale: "zh-Hans" },
+    );
+
+    await user.click(screen.getByRole("button", { name: "open-period" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("period-brief-collector-missing-local:pc-daemon-aaaa")).toBeTruthy();
+      expect(screen.getByTestId("period-brief-collector-missing-cloud:runtime-cloud")).toBeTruthy();
+    });
+    expect(screen.getByText("Laptop A")).toBeTruthy();
+    expect(screen.getByText("Cloud Box")).toBeTruthy();
+    expect(ensurePeriodBriefCollectors).not.toHaveBeenCalled();
   });
 
   it("opens as a right-side full-height sidebar on desktop", async () => {

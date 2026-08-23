@@ -21,6 +21,7 @@ import {
   looksLikePeriodBriefRequest,
   resolvePeriodBriefComposeRequest,
 } from "@multica/core/notes/period-brief-compose";
+import { type PeriodBriefCollectorSlot } from "@multica/core/notes/period-brief-collectors";
 import { isValidPeriodBriefCustomRange } from "@multica/core/notes/period-brief-window";
 import { noteListOptions, notePeriodBriefActiveOptions } from "@multica/core/notes/queries";
 import { chatKeys } from "@multica/core/chat/queries";
@@ -115,6 +116,8 @@ export function NoteAssistantBubble({
   );
   const [sessionDismissed, setSessionDismissed] = React.useState(false);
   const [createDialogOpen, setCreateDialogOpen] = React.useState(false);
+  const [collectorConfigSlot, setCollectorConfigSlot] =
+    React.useState<PeriodBriefCollectorSlot | null>(null);
   const [composerFocusToken, setComposerFocusToken] = React.useState(0);
   const [pendingSend, setPendingSend] = React.useState<{ nonce: number; text: string } | null>(null);
   const seedNonceRef = React.useRef(0);
@@ -219,6 +222,31 @@ export function NoteAssistantBubble({
     }
     setCreateDialogOpen(false);
     return result.agent;
+  };
+
+  const handleCollectorCreate = async (data: CreateAgentRequest): Promise<Agent> => {
+    const model = data.model?.trim();
+    if (!data.runtime_id || !model) {
+      throw new Error(t(($) => $.notes_page.assistant_setup_ensure_failed));
+    }
+    const result = await api.ensurePeriodBriefCollectors({
+      runtime_id: data.runtime_id,
+      model,
+    });
+    const created = result.agents[0];
+    if (!created) {
+      throw new Error(t(($) => $.notes_page.assistant_setup_ensure_failed));
+    }
+    queryClient.setQueryData<Agent[]>(workspaceKeys.agents(wsId), (current = []) => {
+      const byId = new Map(current.map((agent) => [agent.id, agent]));
+      for (const agent of result.agents) {
+        byId.set(agent.id, agent);
+      }
+      return [...byId.values()];
+    });
+    void queryClient.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
+    setCollectorConfigSlot(null);
+    return created;
   };
 
   React.useEffect(() => {
@@ -358,17 +386,23 @@ export function NoteAssistantBubble({
         preferredAgentId={assistant?.id ?? null}
         lockPreferredAgent
         layout={layout}
-        headerAccessory={setupSlot}
         composerFocusToken={composerFocusToken}
         seedSend={periodBriefOpen ? null : pendingSend}
         onSeedSendConsumed={handleSeedSendConsumed}
         composerAccessory={
-          periodBriefOpen && !composerLocked ? (
-            <NotePeriodBriefCompose
-              active={periodBriefOpen}
-              submitting={periodBriefSubmitting}
-              onResolvedChange={handlePeriodBriefResolved}
-            />
+          setupSlot || (periodBriefOpen && !composerLocked) ? (
+            <>
+              {setupSlot}
+              {periodBriefOpen && !composerLocked ? (
+                <NotePeriodBriefCompose
+                  active={periodBriefOpen}
+                  submitting={periodBriefSubmitting}
+                  onResolvedChange={handlePeriodBriefResolved}
+                  onCancel={() => setPeriodBriefOpen(false)}
+                  onConfigureCollector={setCollectorConfigSlot}
+                />
+              ) : null}
+            </>
           ) : null
         }
         composerPlaceholder={
@@ -395,6 +429,22 @@ export function NoteAssistantBubble({
           }}
           onClose={() => setCreateDialogOpen(false)}
           onCreate={handleManualCreate}
+        />
+      ) : null}
+      {collectorConfigSlot ? (
+        <CreateAgentDialog
+          runtimes={runtimes}
+          runtimesLoading={runtimesLoading}
+          members={members}
+          currentUserId={currentUser?.id ?? null}
+          defaultMachineId={collectorConfigSlot.machineId}
+          lockComputer
+          prefill={{
+            name: collectorConfigSlot.expectedName,
+            lockIdentity: true,
+          }}
+          onClose={() => setCollectorConfigSlot(null)}
+          onCreate={handleCollectorCreate}
         />
       ) : null}
       {!isOpen && (

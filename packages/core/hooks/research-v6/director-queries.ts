@@ -108,7 +108,7 @@ export function researchV6DirectorSnapshotOptions(
         signal,
       ),
     getNextPageParam: (page) =>
-      page.has_more ? (page.next_cursor ?? null) : null,
+      page.hasMore ? (page.nextCursor ?? null) : null,
   });
 }
 
@@ -123,7 +123,7 @@ export function researchV6DirectorSliceOptions(
     queryKey: researchV6DirectorProjectionKeys.slice(
       workspaceId,
       runId,
-      input.snapshot_id,
+      input.snapshotId,
       input.root,
     ),
     initialPageParam: null as string | null,
@@ -135,7 +135,7 @@ export function researchV6DirectorSliceOptions(
         signal,
       ),
     getNextPageParam: (page) =>
-      page.has_more ? (page.next_cursor ?? null) : null,
+      page.hasMore ? (page.nextCursor ?? null) : null,
   });
 }
 
@@ -163,7 +163,7 @@ export function researchV6DirectorDeltaOptions(
         pageParam ?? undefined,
         signal,
       ),
-    getNextPageParam: (page) => page.next_cursor,
+    getNextPageParam: (page) => page.nextCursor,
   });
 }
 
@@ -192,7 +192,7 @@ export function researchV6DirectorNodeDetailOptions(
         view,
         signal,
       );
-      if (detail && detail.snapshot_id !== snapshotId) {
+      if (detail && detail.snapshotId !== snapshotId) {
         throw new Error("Director V6 node detail changed snapshot identity");
       }
       return detail;

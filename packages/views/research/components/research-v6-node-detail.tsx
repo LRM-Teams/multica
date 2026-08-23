@@ -30,9 +30,9 @@ function relatedNodeId(
   edge: ResearchV6DirectorProjectionEdge,
   selectedNodeId: string,
 ): string {
-  return edge.from_node_id === selectedNodeId
-    ? edge.to_node_id
-    : edge.from_node_id;
+  return edge.fromNodeId === selectedNodeId
+    ? edge.toNodeId
+    : edge.fromNodeId;
 }
 
 /** Live executor caption for the selected node, derived from run presence. */
@@ -83,26 +83,26 @@ export function ResearchV6NodeDetail({
   const state = detail?.node.state ?? node.state;
   const titleId = `research-v6-node-detail-title-${node.id}`;
   const canReference = Boolean(
-    node.canonical_ref.revision && node.canonical_ref.content_hash,
+    node.canonicalRef.revision && node.canonicalRef.contentHash,
   );
   const refs: Array<[string, number]> = detail
     ? ([
-        [t(($) => $.v6_detail.agents), detail.agent_refs.length],
-        [t(($) => $.v6_detail.work_items), detail.work_item_refs.length],
-        [t(($) => $.v6_detail.attempts), detail.attempt_refs.length],
-        [t(($) => $.v6_detail.evidence), detail.evidence_refs.length],
-        [t(($) => $.v6_detail.discussions), detail.discussion_refs.length],
-        [t(($) => $.v6_detail.reports), detail.report_refs.length],
+        [t(($) => $.v6_detail.agents), detail.agentRefs.length],
+        [t(($) => $.v6_detail.work_items), detail.workItemRefs.length],
+        [t(($) => $.v6_detail.attempts), detail.attemptRefs.length],
+        [t(($) => $.v6_detail.evidence), detail.evidenceRefs.length],
+        [t(($) => $.v6_detail.discussions), detail.discussionRefs.length],
+        [t(($) => $.v6_detail.reports), detail.reportRefs.length],
       ] satisfies Array<[string, number]>).filter((entry) => entry[1] > 0)
     : [];
   const recordGroups: Array<[string, ResearchV6DirectorEntityRef[]]> = detail
     ? ([
-        [t(($) => $.v6_detail.agents), detail.agent_refs],
-        [t(($) => $.v6_detail.work_items), detail.work_item_refs],
-        [t(($) => $.v6_detail.attempts), detail.attempt_refs],
-        [t(($) => $.v6_detail.evidence), detail.evidence_refs],
-        [t(($) => $.v6_detail.discussions), detail.discussion_refs],
-        [t(($) => $.v6_detail.reports), detail.report_refs],
+        [t(($) => $.v6_detail.agents), detail.agentRefs],
+        [t(($) => $.v6_detail.work_items), detail.workItemRefs],
+        [t(($) => $.v6_detail.attempts), detail.attemptRefs],
+        [t(($) => $.v6_detail.evidence), detail.evidenceRefs],
+        [t(($) => $.v6_detail.discussions), detail.discussionRefs],
+        [t(($) => $.v6_detail.reports), detail.reportRefs],
       ] satisfies Array<[string, ResearchV6DirectorEntityRef[]]>).filter(
         (entry) => entry[1].length > 0,
       )
@@ -137,13 +137,13 @@ export function ResearchV6NodeDetail({
   };
   const workSteps = workTimeline ?? [];
   const workProgressPercent =
-    workActivity && workActivity.progress_total > 0
+    workActivity && workActivity.progressTotal > 0
       ? Math.min(
           100,
           Math.max(
             0,
             Math.round(
-              (workActivity.progress_step / workActivity.progress_total) * 100,
+              (workActivity.progressStep / workActivity.progressTotal) * 100,
             ),
           ),
         )
@@ -161,17 +161,17 @@ export function ResearchV6NodeDetail({
           </span>
           <span>{node.kind}</span>
           <span aria-hidden="true">·</span>
-          <span className="truncate">{node.canonical_ref.kind}</span>
+          <span className="truncate">{node.canonicalRef.kind}</span>
         </div>
         <h2
           id={titleId}
           className="text-balance text-base font-medium leading-snug"
         >
-          {node.title ?? node.catalog_summary}
+          {node.title ?? node.catalogSummary}
         </h2>
         {node.title ? (
           <p className="break-words text-sm leading-relaxed text-muted-foreground">
-            {node.catalog_summary}
+            {node.catalogSummary}
           </p>
         ) : null}
       </header>
@@ -221,12 +221,12 @@ export function ResearchV6NodeDetail({
         >
           <div className="flex items-center gap-3">
             <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/15 text-xs font-medium text-primary">
-              {(workActivity?.agent_name || node.title || "A").slice(0, 1).toUpperCase()}
+              {(workActivity?.agentName || node.title || "A").slice(0, 1).toUpperCase()}
             </span>
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
                 <p className="truncate text-sm font-medium">
-                  {workActivity?.agent_name || node.title || t(($) => $.v6_detail.agent_unknown)}
+                  {workActivity?.agentName || node.title || t(($) => $.v6_detail.agent_unknown)}
                 </p>
                 {state.execution === "running" ? (
                   <LoaderCircle className="size-3.5 shrink-0 animate-spin text-primary motion-reduce:animate-none" aria-hidden="true" />
@@ -247,7 +247,7 @@ export function ResearchV6NodeDetail({
                 : workActivityError
                   ? t(($) => $.v6_detail.work_activity_failed)
                   : workActivity?.mission ||
-                    node.catalog_summary ||
+                    node.catalogSummary ||
                     t(($) => $.v6_detail.task_waiting)}
             </p>
           </div>
@@ -348,7 +348,7 @@ export function ResearchV6NodeDetail({
           [t(($) => $.v6_detail.absorbed), node.absorbed ? t(($) => $.v6_detail.yes) : t(($) => $.v6_detail.no)],
           [t(($) => $.v6_detail.terminal), node.terminal ? t(($) => $.v6_detail.yes) : t(($) => $.v6_detail.no)],
           [t(($) => $.v6_detail.expandable), node.expandable ? t(($) => $.v6_detail.yes) : t(($) => $.v6_detail.no)],
-          [t(($) => $.v6_detail.hidden_children), String(node.hidden_child_count)],
+          [t(($) => $.v6_detail.hidden_children), String(node.hiddenChildCount)],
         ].map(([label, value]) => (
           <div key={label} className="min-w-0 bg-card px-3 py-2.5">
             <dt className="text-xs font-medium text-muted-foreground">{label}</dt>
@@ -365,9 +365,9 @@ export function ResearchV6NodeDetail({
           </dt>
           <Tooltip>
             <TooltipTrigger render={<dd className="mt-0.5 truncate font-medium" />}>
-              {node.canonical_ref.kind} · {node.canonical_ref.id}
+              {node.canonicalRef.kind} · {node.canonicalRef.id}
             </TooltipTrigger>
-            <TooltipContent side="top">{node.canonical_ref.id}</TooltipContent>
+            <TooltipContent side="top">{node.canonicalRef.id}</TooltipContent>
           </Tooltip>
         </div>
         <div className="min-w-0">
@@ -375,9 +375,9 @@ export function ResearchV6NodeDetail({
             {t(($) => $.v6_detail.version)}
           </dt>
           <dd className="mt-0.5 truncate font-medium tabular-nums">
-            {node.canonical_ref.revision
-              ? `r${node.canonical_ref.revision}`
-              : node.canonical_ref.version_id ?? t(($) => $.v6_detail.current)}
+            {node.canonicalRef.revision
+              ? `r${node.canonicalRef.revision}`
+              : node.canonicalRef.versionId ?? t(($) => $.v6_detail.current)}
           </dd>
         </div>
         <div className="min-w-0">
@@ -385,7 +385,7 @@ export function ResearchV6NodeDetail({
             {t(($) => $.v6_detail.updated_at)}
           </dt>
           <dd className="mt-0.5 truncate font-medium tabular-nums">
-            <Time kind="full" value={node.updated_at} />
+            <Time kind="full" value={node.updatedAt} />
           </dd>
         </div>
         <div className="min-w-0">
@@ -396,18 +396,18 @@ export function ResearchV6NodeDetail({
             <TooltipTrigger
               render={<dd className="mt-0.5 truncate font-mono text-xs" />}
             >
-              {node.canonical_ref.content_hash ?? t(($) => $.v6_detail.unavailable)}
+              {node.canonicalRef.contentHash ?? t(($) => $.v6_detail.unavailable)}
             </TooltipTrigger>
-            <TooltipContent side="top">{node.canonical_ref.content_hash}</TooltipContent>
+            <TooltipContent side="top">{node.canonicalRef.contentHash}</TooltipContent>
           </Tooltip>
         </div>
       </dl>
 
       {state.termination ? (
         <div className="space-y-1 rounded-xl bg-muted/45 px-3 py-2.5">
-          <p className="text-xs font-medium">{state.termination.reason_code}</p>
+          <p className="text-xs font-medium">{state.termination.reasonCode}</p>
           <p className="break-words text-xs leading-relaxed text-muted-foreground">
-            {state.termination.reason_detail}
+            {state.termination.reasonDetail}
           </p>
         </div>
       ) : null}
@@ -454,7 +454,7 @@ export function ResearchV6NodeDetail({
                 <ul className="mt-2 max-h-40 space-y-1 overflow-y-auto overscroll-contain">
                   {records.map((reference) => (
                     <li
-                      key={`${reference.kind}:${reference.id}:${reference.revision ?? reference.version_id ?? "current"}`}
+                      key={`${reference.kind}:${reference.id}:${reference.revision ?? reference.versionId ?? "current"}`}
                       className="flex min-w-0 items-center justify-between gap-2 text-xs text-muted-foreground"
                     >
                       <Tooltip>
@@ -466,7 +466,7 @@ export function ResearchV6NodeDetail({
                       <span className="shrink-0 tabular-nums">
                         {reference.revision
                           ? `r${reference.revision}`
-                          : reference.version_id ?? t(($) => $.v6_detail.current)}
+                          : reference.versionId ?? t(($) => $.v6_detail.current)}
                       </span>
                     </li>
                   ))}
@@ -504,7 +504,7 @@ export function ResearchV6NodeDetail({
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-xs font-medium">
                         {relatedNode?.title ??
-                          relatedNode?.catalog_summary ??
+                          relatedNode?.catalogSummary ??
                           t(($) => $.v6_detail.related_node_unavailable)}
                       </span>
                       <span className="block truncate text-xs text-muted-foreground">
@@ -524,16 +524,16 @@ export function ResearchV6NodeDetail({
         </div>
       ) : null}
 
-      {detail && detail.history_refs.length > 0 ? (
+      {detail && detail.historyRefs.length > 0 ? (
         <div className="space-y-2">
           <h3 className="flex items-center gap-2 text-xs font-medium">
             <History className="size-3.5 text-primary" aria-hidden="true" />
             {t(($) => $.v6_detail.history)}
           </h3>
           <ul className="flex flex-wrap gap-1.5">
-            {detail.history_refs.map((reference) => (
+            {detail.historyRefs.map((reference) => (
               <Tooltip
-                key={`${reference.kind}:${reference.id}:${reference.revision ?? reference.version_id ?? "current"}`}
+                key={`${reference.kind}:${reference.id}:${reference.revision ?? reference.versionId ?? "current"}`}
               >
                 <TooltipTrigger
                   render={
@@ -547,8 +547,8 @@ export function ResearchV6NodeDetail({
                         revision: reference.revision,
                       })}
                     </span>
-                  ) : reference.version_id ? (
-                    <span> · {reference.version_id}</span>
+                  ) : reference.versionId ? (
+                    <span> · {reference.versionId}</span>
                   ) : null}
                 </TooltipTrigger>
                 <TooltipContent side="top">{`${reference.kind}:${reference.id}`}</TooltipContent>
@@ -558,14 +558,14 @@ export function ResearchV6NodeDetail({
         </div>
       ) : null}
 
-      {node.branch_ids.length > 0 ? (
+      {node.branchIds.length > 0 ? (
         <div className="space-y-2">
           <h3 className="flex items-center gap-2 text-xs font-medium">
             <GitBranch className="size-3.5 text-primary" aria-hidden="true" />
             {t(($) => $.v6_detail.branches)}
           </h3>
           <p className="break-all text-xs leading-relaxed text-muted-foreground">
-            {node.branch_ids.join(" · ")}
+            {node.branchIds.join(" · ")}
           </p>
         </div>
       ) : null}

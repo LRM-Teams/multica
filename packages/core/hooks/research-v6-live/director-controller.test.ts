@@ -18,36 +18,36 @@ const HASH_B = `sha256:${"b".repeat(64)}`;
 
 function snapshot(): ResearchV6DirectorProjectionSnapshot {
   return {
-    contract_kind: "projection_snapshot",
-    schema_version: 6,
-    snapshot_id: SNAPSHOT_ID,
-    workspace_id: WORKSPACE_ID,
-    run_id: RUN_ID,
-    through_event_sequence: 4,
-    projection_hash: HASH_A,
-    slice_key: "default",
+    contractKind: "projection_snapshot",
+    schemaVersion: 6,
+    snapshotId: SNAPSHOT_ID,
+    workspaceId: WORKSPACE_ID,
+    runId: RUN_ID,
+    throughEventSequence: 4,
+    projectionHash: HASH_A,
+    sliceKey: "default",
     nodes: [],
     edges: [],
-    density_bins: [],
-    has_more: false,
+    densityBins: [],
+    hasMore: false,
   };
 }
 
 function delta(): ResearchV6DirectorProjectionDelta {
   return {
-    contract_kind: "projection_delta",
-    schema_version: 6,
-    workspace_id: WORKSPACE_ID,
-    run_id: RUN_ID,
-    snapshot_id: SNAPSHOT_ID,
-    event_sequence: 5,
-    previous_projection_hash: HASH_A,
-    projection_hash: HASH_B,
-    upsert_nodes: [],
-    remove_node_ids: [],
-    upsert_edges: [],
-    remove_edge_ids: [],
-    invalidate_slice_keys: ["expand:root"],
+    contractKind: "projection_delta",
+    schemaVersion: 6,
+    workspaceId: WORKSPACE_ID,
+    runId: RUN_ID,
+    snapshotId: SNAPSHOT_ID,
+    eventSequence: 5,
+    previousProjectionHash: HASH_A,
+    projectionHash: HASH_B,
+    upsertNodes: [],
+    removeNodeIds: [],
+    upsertEdges: [],
+    removeEdgeIds: [],
+    invalidateSliceKeys: ["expand:root"],
   };
 }
 
@@ -93,10 +93,10 @@ function transport(options?: {
       resumeRequests.push(request);
       return (
         options?.resumePage ?? {
-          run_id: RUN_ID,
+          runId: RUN_ID,
           deltas: [],
-          next_cursor: null,
-          resync_required: false,
+          nextCursor: null,
+          resyncRequired: false,
         }
       );
     },
@@ -131,10 +131,10 @@ describe("ResearchV6DirectorLiveController", () => {
   it("resumes with snapshot, sequence, and hash rather than sequence alone", async () => {
     const wire = transport({
       resumePage: {
-        run_id: RUN_ID,
+        runId: RUN_ID,
         deltas: [delta()],
-        next_cursor: null,
-        resync_required: false,
+        nextCursor: null,
+        resyncRequired: false,
       },
     });
     const controller = new ResearchV6DirectorLiveController(
@@ -146,9 +146,9 @@ describe("ResearchV6DirectorLiveController", () => {
     await controller.resumeNow();
     expect(wire.resumeRequests).toEqual([
       {
-        snapshot_id: SNAPSHOT_ID,
-        last_confirmed_sequence: 4,
-        projection_hash: HASH_A,
+        snapshotId: SNAPSHOT_ID,
+        lastConfirmedSequence: 4,
+        projectionHash: HASH_A,
       },
     ]);
     expect(controller.getClient().getState().projectionHash).toBe(HASH_B);
@@ -172,10 +172,10 @@ describe("ResearchV6DirectorLiveController", () => {
     const live = bus();
     const wire = transport({
       resumePage: {
-        run_id: RUN_ID,
+        runId: RUN_ID,
         deltas: [delta()],
-        next_cursor: null,
-        resync_required: false,
+        nextCursor: null,
+        resyncRequired: false,
       },
     });
     const controller = new ResearchV6DirectorLiveController(
@@ -240,10 +240,10 @@ describe("ResearchV6DirectorLiveController", () => {
           });
         }
         return {
-          run_id: RUN_ID,
+          runId: RUN_ID,
           deltas: [],
-          next_cursor: null,
-          resync_required: false,
+          nextCursor: null,
+          resyncRequired: false,
         };
       },
     } as Pick<

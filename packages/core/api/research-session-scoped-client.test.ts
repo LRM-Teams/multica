@@ -99,24 +99,33 @@ describe("ApiClient session-scoped Research reads", () => {
     stubResponse({ id: "m1", session_id: "s1", body: "check this" });
     const client = new ApiClient("https://api.example.test");
     const selectedRef = {
-      stable_id: "insight:00000000-0000-4000-8000-000000000306",
+      stableId: "insight:00000000-0000-4000-8000-000000000306",
       kind: "insight",
-      entity_id: "00000000-0000-4000-8000-000000000306",
+      entityId: "00000000-0000-4000-8000-000000000306",
       revision: 2,
-      content_hash: `sha256:${"c".repeat(64)}`,
-      display_summary: "Latency boundary",
+      contentHash: `sha256:${"c".repeat(64)}`,
+      displaySummary: "Latency boundary",
     };
 
     await client.postResearchMessage("s1", {
       body: "check this",
-      selected_research_refs: [selectedRef],
+      selectedResearchRefs: [selectedRef],
     });
 
     const fetchMock = vi.mocked(fetch);
     const request = fetchMock.mock.calls[0]?.[1];
     expect(JSON.parse(String(request?.body))).toEqual({
       body: "check this",
-      selected_research_refs: [selectedRef],
+      selected_research_refs: [
+        {
+          stable_id: selectedRef.stableId,
+          kind: selectedRef.kind,
+          entity_id: selectedRef.entityId,
+          revision: selectedRef.revision,
+          content_hash: selectedRef.contentHash,
+          display_summary: selectedRef.displaySummary,
+        },
+      ],
     });
   });
 

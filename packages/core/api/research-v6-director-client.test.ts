@@ -4,6 +4,7 @@ import { ApiClient } from "./client";
 const WORKSPACE_ID = "00000000-0000-4000-8000-000000000001";
 const RUN_ID = "00000000-0000-4000-8000-000000000003";
 const SNAPSHOT_ID = "00000000-0000-4000-8000-000000000601";
+const WORK_ITEM_ID = "00000000-0000-4000-8000-000000000701";
 const HASH = `sha256:${"d".repeat(64)}`;
 
 afterEach(() => vi.unstubAllGlobals());
@@ -41,9 +42,16 @@ describe("ApiClient Director V6 projection HTTP contract", () => {
   it("requests a snapshot page with its opaque cursor", async () => {
     response(snapshot());
     const client = new ApiClient("https://api.example.test");
-    await client.getResearchV6DirectorProjectionSnapshot(WORKSPACE_ID, RUN_ID, {
+    const result = await client.getResearchV6DirectorProjectionSnapshot(WORKSPACE_ID, RUN_ID, {
       cursor: "opaque page",
     });
+    expect(result).toMatchObject({
+      snapshotId: SNAPSHOT_ID,
+      workspaceId: WORKSPACE_ID,
+      runId: RUN_ID,
+      throughEventSequence: 47,
+    });
+    expect(result).not.toHaveProperty("snapshot_id");
     expect(fetch).toHaveBeenCalledWith(
       expect.stringContaining("/projection/snapshot?cursor=opaque+page"),
       expect.any(Object),
@@ -56,7 +64,7 @@ describe("ApiClient Director V6 projection HTTP contract", () => {
     await client.getResearchV6DirectorProjectionSlice(WORKSPACE_ID, RUN_ID, {
       root: "insight:one",
       depth: 1,
-      snapshot_id: SNAPSHOT_ID,
+      snapshotId: SNAPSHOT_ID,
     });
     expect(fetch).toHaveBeenCalledWith(
       expect.stringContaining(
@@ -73,7 +81,7 @@ describe("ApiClient Director V6 projection HTTP contract", () => {
       client.getResearchV6DirectorProjectionSlice(WORKSPACE_ID, RUN_ID, {
         root: "insight:one",
         depth: 1,
-        snapshot_id: SNAPSHOT_ID,
+        snapshotId: SNAPSHOT_ID,
       }),
     ).rejects.toThrow("projection slice snapshot mismatch");
   });
@@ -98,7 +106,7 @@ describe("ApiClient Director V6 projection HTTP contract", () => {
     const client = new ApiClient("https://api.example.test");
     await expect(
       client.getResearchV6DirectorProjectionDeltaPage(WORKSPACE_ID, RUN_ID, 47),
-    ).resolves.toMatchObject({ run_id: RUN_ID, deltas: [], resync_required: true });
+    ).resolves.toMatchObject({ runId: RUN_ID, deltas: [], resyncRequired: true });
   });
 
   it("rejects a node detail response when the response changes node identity", async () => {
@@ -128,13 +136,45 @@ describe("ApiClient Director V6 projection HTTP contract", () => {
     ).rejects.toThrow("report detail identity mismatch");
   });
 
+  it("converts Work activity wire fields at the HTTP seam", async () => {
+    response({
+      work_item_id: WORK_ITEM_ID,
+      attempt_id: "00000000-0000-4000-8000-000000000702",
+      agent_id: "00000000-0000-4000-8000-000000000703",
+      agent_name: "Researcher",
+      inbox_task_id: "00000000-0000-4000-8000-000000000704",
+      mission: "Verify evidence",
+      status: "running",
+      progress: "Reading",
+      progress_step: 1,
+      progress_total: 2,
+      started_at: "2026-08-23T08:00:00Z",
+      updated_at: "2026-08-23T08:01:00Z",
+      timeline: [],
+      timeline_has_more: false,
+    });
+    const client = new ApiClient("https://api.example.test");
+    const activity = await client.getResearchV6DirectorWorkActivity(
+      WORKSPACE_ID,
+      RUN_ID,
+      WORK_ITEM_ID,
+    );
+    expect(activity).toMatchObject({
+      workItemId: WORK_ITEM_ID,
+      agentName: "Researcher",
+      progressStep: 1,
+      progressTotal: 2,
+    });
+    expect(activity).not.toHaveProperty("work_item_id");
+  });
+
   it("sends the full snapshot identity when resuming", async () => {
     response({ run_id: RUN_ID, deltas: [], next_cursor: null, resync_required: true });
     const client = new ApiClient("https://api.example.test");
     await client.resumeResearchV6DirectorProjection(WORKSPACE_ID, RUN_ID, {
-      snapshot_id: SNAPSHOT_ID,
-      last_confirmed_sequence: 47,
-      projection_hash: HASH,
+      snapshotId: SNAPSHOT_ID,
+      lastConfirmedSequence: 47,
+      projectionHash: HASH,
     });
     expect(fetch).toHaveBeenCalledWith(
       expect.stringContaining("/projection/resume"),

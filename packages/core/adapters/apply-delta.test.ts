@@ -1,22 +1,18 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import {
-  adaptV6Delta,
-  adaptV6Snapshot,
-  applyCanvasDelta,
-} from "./index";
+import { applyCanvasDelta } from "./index";
 import type { CanvasDelta } from "./index";
 import {
   twoComponentSnapshot,
-  v6FixtureDelta,
-  v6FixtureSnapshot,
+  canvasFixtureDelta,
+  canvasFixtureSnapshot,
 } from "./fixtures";
 
-const base = () => adaptV6Snapshot(v6FixtureSnapshot());
+const base = () => canvasFixtureSnapshot();
 
 describe("applyCanvasDelta — (§7.2) idempotent, sequence-framed", () => {
   it("applies upserts and advances the event sequence", () => {
-    const delta = adaptV6Delta(v6FixtureDelta());
+    const delta = canvasFixtureDelta();
     const applied = applyCanvasDelta(base(), delta);
     expect(applied.needsResync).toBe(false);
     expect(applied.wasDuplicate).toBe(false);
@@ -25,7 +21,7 @@ describe("applyCanvasDelta — (§7.2) idempotent, sequence-framed", () => {
   });
 
   it("re-applying the same frame is a no-op (duplicate detection)", () => {
-    const delta = adaptV6Delta(v6FixtureDelta());
+    const delta = canvasFixtureDelta();
     const first = applyCanvasDelta(base(), delta);
     // Same frame arrives again; the snapshot watermark is already 8.
     const dup = applyCanvasDelta(first.snapshot, delta);
@@ -36,11 +32,11 @@ describe("applyCanvasDelta — (§7.2) idempotent, sequence-framed", () => {
 
   it("buffers/signals a future (gapped) frame instead of guessing", () => {
     // Client is at watermark 6; delta claims to start at 9 → a gap exists.
-    const delta = adaptV6Delta({
-      ...v6FixtureDelta(),
-      from_sequence_exclusive: 9,
-      through_sequence: 10,
-    });
+    const delta = {
+      ...canvasFixtureDelta(),
+      fromSequenceExclusive: 9,
+      throughSequence: 10,
+    };
     const snap = base();
     const applied = applyCanvasDelta(snap, delta);
     expect(applied.needsResync).toBe(true);
@@ -49,17 +45,17 @@ describe("applyCanvasDelta — (§7.2) idempotent, sequence-framed", () => {
 
   it("signals resync on an overlapping frame that also contains new events", () => {
     // from=4 < watermark=6 < through=8: some already applied, some new.
-    const delta = adaptV6Delta({
-      ...v6FixtureDelta(),
-      from_sequence_exclusive: 4,
-      through_sequence: 8,
-    });
+    const delta = {
+      ...canvasFixtureDelta(),
+      fromSequenceExclusive: 4,
+      throughSequence: 8,
+    };
     const applied = applyCanvasDelta(base(), delta);
     expect(applied.needsResync).toBe(true);
   });
 
   it("drops the view node and every dangling edge on a visibility tombstone", () => {
-    const delta = adaptV6Delta(v6FixtureDelta());
+    const delta = canvasFixtureDelta();
     const applied = applyCanvasDelta(base(), delta);
     const snapshot = applied.snapshot;
     // claim:c1 removed.
@@ -76,20 +72,20 @@ describe("applyCanvasDelta — (§7.2) idempotent, sequence-framed", () => {
   });
 
   it("reports affected roots so the renderer recomputes only that region", () => {
-    const delta = adaptV6Delta(v6FixtureDelta());
+    const delta = canvasFixtureDelta();
     const applied = applyCanvasDelta(base(), delta);
     // Retained neighbors of the tombstoned claim:c1 (pre-removal, both
     // directions): q1 (in), h1 (in), i1 (out), c2 (out via contradicts).
     expect(applied.affectedRootIds.sort()).toEqual([
-      "run-v6-contract-fixture:claim:c2",
-      "run-v6-contract-fixture:hypothesis:h1",
-      "run-v6-contract-fixture:insight:i1",
-      "run-v6-contract-fixture:question:q1",
+      "run-canvas-fixture:claim:c2",
+      "run-canvas-fixture:hypothesis:h1",
+      "run-canvas-fixture:insight:i1",
+      "run-canvas-fixture:question:q1",
     ]);
   });
 
   it("recomputes a deterministic content hash after each delta", () => {
-    const delta = adaptV6Delta(v6FixtureDelta());
+    const delta = canvasFixtureDelta();
     const applied = applyCanvasDelta(base(), delta);
     const again = applyCanvasDelta(base(), delta);
     expect(applied.snapshot.graphContentHash).toBe(again.snapshot.graphContentHash);

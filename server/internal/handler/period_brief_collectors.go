@@ -24,15 +24,24 @@ const (
 
 var periodBriefCollectorNonSlug = regexp.MustCompile(`[^a-z0-9]+`)
 
+// PeriodBriefCollectorMissingSlot is an owned Computer that still needs a collector.
+type PeriodBriefCollectorMissingSlot struct {
+	Key       string `json:"key"`
+	Label     string `json:"label"`
+	MachineID string `json:"machine_id"`
+}
+
 // EnsurePeriodBriefCollectorsResponse is returned by
 // POST /api/members/agents/period-brief-collectors.
 type EnsurePeriodBriefCollectorsResponse struct {
-	Agents  []AgentResponse `json:"agents"`
-	Created []string        `json:"created"`
+	Agents  []AgentResponse                    `json:"agents"`
+	Created []string                           `json:"created"`
+	Missing []PeriodBriefCollectorMissingSlot  `json:"missing,omitempty"`
 }
 
 type ensurePeriodBriefCollectorsRequest struct {
-	Model string `json:"model"`
+	Model     string `json:"model"`
+	RuntimeID string `json:"runtime_id"`
 }
 
 type periodBriefCollectorSlot struct {
@@ -42,10 +51,9 @@ type periodBriefCollectorSlot struct {
 	cloud    bool
 }
 
-// EnsurePeriodBriefCollectors idempotently provisions one Period Work collector
-// Agent per Computer the caller owns (local Computers share a daemon_id; each
-// cloud runtime is its own Computer). Another member's machine is never
-// included — even when that runtime is workspace-public or the caller is admin.
+// EnsurePeriodBriefCollectors probes owned Computers (no runtime_id) or
+// creates/repairs one collector for the chosen runtime. It never silently
+// creates every missing slot. Another member's machine is never included.
 func (h *Handler) EnsurePeriodBriefCollectors(w http.ResponseWriter, r *http.Request) {
 	if rejectAgentOnHumanRoute(w, r, "EnsurePeriodBriefCollectors") {
 		return
@@ -135,75 +143,233 @@ func (h *Handler) EnsurePeriodBriefCollectors(w http.ResponseWriter, r *http.Req
 		}
 	}
 
+	wantRuntimeID := strings.TrimSpace(req.RuntimeID)
+	if wantRuntimeID == "" {
+		out := make([]AgentResponse, 0, len(slots))
+		missing := make([]PeriodBriefCollectorMissingSlot, 0)
+		for _, slot := range slots {
+			if agent, ok := resolvePeriodBriefCollectorForSlot(agents, agentsByName, runtimeByID, slot); ok {
+				resp := agentToResponse(agent)
+				redactAgentResponseForActor(&resp, "member")
+				out = append(out, resp)
+				continue
+			}
+			missing = append(missing, PeriodBriefCollectorMissingSlot{
+				Key:       slot.key,
+				Label:     periodBriefCollectorComputerLabel(slot),
+				MachineID: periodBriefMachineID(slot.runtime),
+			})
+		}
+		writeJSON(w, http.StatusOK, EnsurePeriodBriefCollectorsResponse{Agents: out, Created: []string{}, Missing: missing})
+		return
+	}
+
+	var requested *db.AgentRuntime
+	for i := range runtimes {
+		if uuidToString(runtimes[i].ID) == wantRuntimeID {
+			requested = &runtimes[i]
+			break
+		}
+	}
+	if requested == nil {
+		writeError(w, http.StatusBadRequest, "runtime is not on a computer you own")
+		return
+	}
+	slot, ok := periodBriefCollectorSlotForRuntime(slots, *requested)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "runtime is not on a computer you own")
+		return
+	}
+	slot.runtime = *requested
+
 	tmpl, found := agentTemplates.Get(periodBriefCollectorTemplate)
 	if !found {
 		writeError(w, http.StatusInternalServerError, "period-work-collector template missing")
 		return
 	}
 
-	out := make([]AgentResponse, 0, len(slots))
-	createdIDs := make([]string, 0)
-	for _, slot := range slots {
-		name := periodBriefCollectorNameForSeed(slot.slugSeed)
-		displayName := periodBriefCollectorDisplayName(slot.runtime, slot.slugSeed, slot.cloud)
-		if agent, ok := agentsByName[name]; ok {
-			resp := agentToResponse(agent)
-			redactAgentResponseForActor(&resp, "member")
-			out = append(out, resp)
-			continue
-		}
-		if agent, ok := findPeriodBriefCollectorForSlot(agents, runtimeByID, slot); ok {
-			resp := agentToResponse(agent)
-			redactAgentResponseForActor(&resp, "member")
-			out = append(out, resp)
-			continue
-		}
-
-		createParams := db.CreateAgentParams{
-			WorkspaceID:   wsUUID,
-			Name:          name,
-			DisplayName:   displayName,
-			Description:   tmpl.Description,
-			Instructions:  tmpl.Instructions,
-			RuntimeMode:   slot.runtime.RuntimeMode,
-			RuntimeConfig: []byte("{}"),
-			RuntimeID:     slot.runtime.ID,
-			OwnerID:       parseUUID(ownerID),
-			CustomEnv:     []byte("{}"),
-			CustomArgs:    []byte("[]"),
-			Model:         pgtype.Text{String: model, Valid: true},
-		}
-		applyCreateAgentAvatar(&createParams, resolvedAgentAvatar{})
-
-		created, err := h.createAgentManagedCommit(r.Context(), wsUUID, createParams, displayName)
-		if err != nil {
-			if identityUniqueViolation(err, "agent_workspace_name_unique") {
-				if agent, found, findErr := h.findAgentByName(r.Context(), wsUUID, name); findErr == nil && found {
-					resp := agentToResponse(agent)
-					redactAgentResponseForActor(&resp, "member")
-					out = append(out, resp)
-					continue
-				}
-			}
-			if errors.Is(err, errIdentityHandleInvalid) {
-				writeError(w, http.StatusBadRequest, "name must be 1-32 lowercase letters, digits, or hyphens")
-				return
-			}
-			writeError(w, http.StatusInternalServerError, "failed to create period brief collector: "+err.Error())
+	agent, created, err := h.ensureOnePeriodBriefCollector(r.Context(), wsUUID, ownerID, model, tmpl.Description, tmpl.Instructions, agents, agentsByName, runtimeByID, slot)
+	if err != nil {
+		if errors.Is(err, errIdentityHandleInvalid) {
+			writeError(w, http.StatusBadRequest, "name must be 1-32 lowercase letters, digits, or hyphens")
 			return
 		}
-		agentsByName[name] = created
-		createdIDs = append(createdIDs, uuidToString(created.ID))
-		resp := agentToResponse(created)
-		redactAgentResponseForActor(&resp, "member")
-		out = append(out, resp)
+		writeError(w, http.StatusInternalServerError, "failed to create period brief collector: "+err.Error())
+		return
 	}
-
+	resp := agentToResponse(agent)
+	redactAgentResponseForActor(&resp, "member")
+	createdIDs := []string{}
 	status := http.StatusOK
-	if len(createdIDs) > 0 {
+	if created {
+		createdIDs = []string{uuidToString(agent.ID)}
 		status = http.StatusCreated
 	}
-	writeJSON(w, status, EnsurePeriodBriefCollectorsResponse{Agents: out, Created: createdIDs})
+	writeJSON(w, status, EnsurePeriodBriefCollectorsResponse{Agents: []AgentResponse{resp}, Created: createdIDs})
+}
+
+func periodBriefCollectorSlotForRuntime(
+	slots map[string]periodBriefCollectorSlot,
+	rt db.AgentRuntime,
+) (periodBriefCollectorSlot, bool) {
+	mode := strings.ToLower(strings.TrimSpace(rt.RuntimeMode))
+	switch mode {
+	case "local":
+		daemonID := strings.TrimSpace(rt.DaemonID.String)
+		if !rt.DaemonID.Valid || daemonID == "" {
+			return periodBriefCollectorSlot{}, false
+		}
+		slot, ok := slots["local:"+strings.ToLower(daemonID)]
+		return slot, ok
+	case "cloud":
+		runtimeID := uuidToString(rt.ID)
+		if runtimeID == "" {
+			return periodBriefCollectorSlot{}, false
+		}
+		slot, ok := slots["cloud:"+runtimeID]
+		return slot, ok
+	default:
+		return periodBriefCollectorSlot{}, false
+	}
+}
+
+func resolvePeriodBriefCollectorForSlot(
+	agents []db.Agent,
+	agentsByName map[string]db.Agent,
+	runtimeByID map[string]db.AgentRuntime,
+	slot periodBriefCollectorSlot,
+) (db.Agent, bool) {
+	name := periodBriefCollectorNameForSeed(slot.slugSeed)
+	if agent, ok := agentsByName[name]; ok && periodBriefCollectorBelongsToSlot(agent, runtimeByID, slot) {
+		return agent, true
+	}
+	return findPeriodBriefCollectorForSlot(agents, runtimeByID, slot)
+}
+
+func periodBriefCollectorBelongsToSlot(
+	agent db.Agent,
+	runtimeByID map[string]db.AgentRuntime,
+	slot periodBriefCollectorSlot,
+) bool {
+	rt, ok := runtimeByID[uuidToString(agent.RuntimeID)]
+	if !ok {
+		return false
+	}
+	if slot.cloud {
+		return uuidToString(rt.ID) == uuidToString(slot.runtime.ID)
+	}
+	if !rt.DaemonID.Valid {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(rt.DaemonID.String), strings.TrimSpace(slot.slugSeed))
+}
+
+func periodBriefCollectorComputerLabel(slot periodBriefCollectorSlot) string {
+	label := strings.TrimSpace(slot.runtime.DisplayName)
+	if label == "" {
+		label = strings.TrimSpace(slot.runtime.Name)
+	}
+	if label == "" {
+		label = strings.TrimSpace(slot.slugSeed)
+	}
+	if label == "" {
+		if slot.cloud {
+			return "Cloud"
+		}
+		return "Computer"
+	}
+	return label
+}
+
+func periodBriefMachineID(rt db.AgentRuntime) string {
+	mode := strings.ToLower(strings.TrimSpace(rt.RuntimeMode))
+	if mode == "" {
+		mode = "local"
+	}
+	if rt.DaemonID.Valid {
+		daemon := strings.TrimSpace(rt.DaemonID.String)
+		if daemon != "" {
+			return mode + ":" + daemon
+		}
+	}
+	return mode + ":runtime:" + uuidToString(rt.ID)
+}
+
+func (h *Handler) rebindPeriodBriefCollector(
+	ctx context.Context,
+	agent db.Agent,
+	runtime db.AgentRuntime,
+	model string,
+) (db.Agent, error) {
+	if uuidToString(agent.RuntimeID) == uuidToString(runtime.ID) &&
+		agent.Model.Valid && agent.Model.String == model {
+		return agent, nil
+	}
+	updated, err := h.Queries.UpdateAgent(ctx, db.UpdateAgentParams{
+		ID:          agent.ID,
+		RuntimeID:   runtime.ID,
+		RuntimeMode: pgtype.Text{String: runtime.RuntimeMode, Valid: true},
+		Model:       pgtype.Text{String: model, Valid: true},
+	})
+	if err != nil {
+		return agent, err
+	}
+	if agent.RuntimeID != runtime.ID {
+		_ = h.Queries.MarkAgentRuntimeReassigned(ctx, agent.ID)
+	}
+	return updated, nil
+}
+
+func (h *Handler) ensureOnePeriodBriefCollector(
+	ctx context.Context,
+	wsUUID pgtype.UUID,
+	ownerID string,
+	model string,
+	description string,
+	instructions string,
+	agents []db.Agent,
+	agentsByName map[string]db.Agent,
+	runtimeByID map[string]db.AgentRuntime,
+	slot periodBriefCollectorSlot,
+) (db.Agent, bool, error) {
+	name := periodBriefCollectorNameForSeed(slot.slugSeed)
+	displayName := periodBriefCollectorDisplayName(slot.runtime, slot.slugSeed, slot.cloud)
+	if agent, ok := agentsByName[name]; ok {
+		updated, err := h.rebindPeriodBriefCollector(ctx, agent, slot.runtime, model)
+		return updated, false, err
+	}
+	if agent, ok := findPeriodBriefCollectorForSlot(agents, runtimeByID, slot); ok {
+		updated, err := h.rebindPeriodBriefCollector(ctx, agent, slot.runtime, model)
+		return updated, false, err
+	}
+
+	createParams := db.CreateAgentParams{
+		WorkspaceID:   wsUUID,
+		Name:          name,
+		DisplayName:   displayName,
+		Description:   description,
+		Instructions:  instructions,
+		RuntimeMode:   slot.runtime.RuntimeMode,
+		RuntimeConfig: []byte("{}"),
+		RuntimeID:     slot.runtime.ID,
+		OwnerID:       parseUUID(ownerID),
+		CustomEnv:     []byte("{}"),
+		CustomArgs:    []byte("[]"),
+		Model:         pgtype.Text{String: model, Valid: true},
+	}
+	applyCreateAgentAvatar(&createParams, resolvedAgentAvatar{})
+
+	created, err := h.createAgentManagedCommit(ctx, wsUUID, createParams, displayName)
+	if err != nil {
+		if identityUniqueViolation(err, "agent_workspace_name_unique") {
+			if agent, found, findErr := h.findAgentByName(ctx, wsUUID, name); findErr == nil && found {
+				updated, rebindErr := h.rebindPeriodBriefCollector(ctx, agent, slot.runtime, model)
+				return updated, false, rebindErr
+			}
+		}
+		return db.Agent{}, false, err
+	}
+	return created, true, nil
 }
 
 func (h *Handler) findAgentByName(ctx context.Context, workspaceID pgtype.UUID, name string) (db.Agent, bool, error) {

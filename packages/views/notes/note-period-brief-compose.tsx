@@ -1,9 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, Cloud, Laptop, Loader2 } from "lucide-react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "@multica/core/api";
+import { Check, Cloud, Laptop } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import { useAuthStore } from "@multica/core/auth";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { resolvePeriodBriefSynthesizerId } from "@multica/core/notes/period-brief-agent";
@@ -11,8 +10,10 @@ import {
   defaultPeriodBriefCollectorIds,
   isPeriodBriefCollectorOnline,
   listOwnedPeriodBriefCollectorAgents,
+  listPeriodBriefCollectorSlotsNeedingSetup,
   periodBriefCollectorLabel,
   togglePeriodBriefCollectorId,
+  type PeriodBriefCollectorSlot,
 } from "@multica/core/notes/period-brief-collectors";
 import {
   resolvePeriodBriefComposeRequest,
@@ -24,14 +25,15 @@ import {
   defaultPeriodBriefCustomRange,
   isValidPeriodBriefCustomRange,
 } from "@multica/core/notes/period-brief-window";
-import { runtimeListOptions } from "@multica/core/runtimes";
-import type { Agent, NotePeriodBriefWindow } from "@multica/core/types";
-import { agentListOptions, workspaceKeys } from "@multica/core/workspace/queries";
+import { computerListOptions, runtimeListOptions } from "@multica/core/runtimes";
+import type { NotePeriodBriefWindow } from "@multica/core/types";
+import { agentListOptions } from "@multica/core/workspace/queries";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
 import { cn } from "@multica/ui/lib/utils";
 import { useViewingTimezone } from "../common/use-viewing-timezone";
 import { useT } from "../i18n/use-t";
+import { NotesCollectorSetupCard } from "./notes-collector-setup-card";
 
 export type NotePeriodBriefResolved = {
   agentId: string | null;
@@ -50,17 +52,20 @@ export function NotePeriodBriefCompose({
   submitting = false,
   startedTitle = null,
   onResolvedChange,
+  onCancel,
+  onConfigureCollector,
 }: {
   active: boolean;
   text?: string;
   submitting?: boolean;
   startedTitle?: string | null;
   onResolvedChange?: (resolved: NotePeriodBriefResolved) => void;
+  onCancel?: () => void;
+  onConfigureCollector?: (slot: PeriodBriefCollectorSlot) => void;
 }) {
   const { t } = useT("layout");
   const timezone = useViewingTimezone();
   const wsId = useWorkspaceId();
-  const queryClient = useQueryClient();
   const currentUserId = useAuthStore((s) => s.user?.id ?? null);
   const { data: agents = [] } = useQuery({
     ...agentListOptions(wsId),
@@ -68,6 +73,10 @@ export function NotePeriodBriefCompose({
   });
   const { data: runtimes = [] } = useQuery({
     ...runtimeListOptions(wsId),
+    enabled: Boolean(wsId) && active,
+  });
+  const { data: computers = [] } = useQuery({
+    ...computerListOptions(wsId ?? ""),
     enabled: Boolean(wsId) && active,
   });
   const today = useMemo(() => {
@@ -87,7 +96,7 @@ export function NotePeriodBriefCompose({
   const [startDate, setStartDate] = useState(defaultCustom.start_date);
   const [endDate, setEndDate] = useState(defaultCustom.end_date);
   const [collectorOverride, setCollectorOverride] = useState<string[] | null>(null);
-  const collectorsEnsureAttemptedRef = useRef(false);
+  const [dismissedMissingKeys, setDismissedMissingKeys] = useState<string[]>([]);
 
   const agentId = resolvePeriodBriefSynthesizerId(agents);
   const collectorAgents = useMemo(
@@ -98,43 +107,30 @@ export function NotePeriodBriefCompose({
     () => defaultPeriodBriefCollectorIds(agents, runtimes, currentUserId),
     [agents, runtimes, currentUserId],
   );
+  const missingCollectorSlots = useMemo(
+    () =>
+      listPeriodBriefCollectorSlotsNeedingSetup(
+        runtimes,
+        agents,
+        currentUserId,
+        computers,
+      ).filter((slot) => !dismissedMissingKeys.includes(slot.key)),
+    [agents, computers, currentUserId, dismissedMissingKeys, runtimes],
+  );
   const collectorIds = collectorOverride ?? defaultCollectors;
-
-  const { mutate: ensurePeriodBriefCollectors, isPending: ensuring } = useMutation({
-    mutationFn: (model: string) => api.ensurePeriodBriefCollectors(model),
-    onSuccess: (result) => {
-      if (!wsId) return;
-      queryClient.setQueryData(workspaceKeys.agents(wsId), (current: Agent[] = []) => {
-        const byId = new Map(current.map((agent) => [agent.id, agent]));
-        for (const agent of result.agents) {
-          byId.set(agent.id, agent);
-        }
-        return [...byId.values()];
-      });
-      void queryClient.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
-    },
-  });
 
   const prevActiveRef = useRef(active);
   if (active !== prevActiveRef.current) {
     prevActiveRef.current = active;
     if (active) {
       setCollectorOverride(null);
+      setDismissedMissingKeys([]);
       setWindowKind("week");
       const custom = defaultPeriodBriefCustomRange(today);
       setStartDate(custom.start_date);
       setEndDate(custom.end_date);
-      collectorsEnsureAttemptedRef.current = false;
     }
   }
-
-  useEffect(() => {
-    if (!active || !wsId || collectorsEnsureAttemptedRef.current) return;
-    const ensureModel = agents.find((agent) => agent.model?.trim())?.model?.trim();
-    if (!ensureModel) return;
-    collectorsEnsureAttemptedRef.current = true;
-    ensurePeriodBriefCollectors(ensureModel);
-  }, [active, wsId, agents, ensurePeriodBriefCollectors]);
 
   const collectors = useMemo(
     () =>
@@ -166,7 +162,6 @@ export function NotePeriodBriefCompose({
     Boolean(agentId) &&
     request.collector_ids.length > 0 &&
     !submitting &&
-    !ensuring &&
     customRangeValid;
 
   useEffect(() => {
@@ -194,7 +189,7 @@ export function NotePeriodBriefCompose({
     );
   }
 
-  const busy = submitting || ensuring;
+  const busy = submitting;
 
   return (
     <div className="mx-3 mb-2 space-y-3 rounded-xl border bg-card px-3 py-3" data-testid="period-brief-compose">
@@ -248,15 +243,14 @@ export function NotePeriodBriefCompose({
         <p className="text-xs font-medium text-muted-foreground">
           {t(($) => $.notes_page.period_brief_collectors_label)}
         </p>
-        <div className="max-h-36 space-y-1 overflow-y-auto" data-testid="period-brief-collectors">
-          {collectorAgents.length === 0 ? (
+        <div className="max-h-48 space-y-1 overflow-y-auto" data-testid="period-brief-collectors">
+          {collectorAgents.length === 0 && missingCollectorSlots.length === 0 ? (
             <div className="rounded-md border border-dashed px-2 py-2 text-xs text-muted-foreground">
-              {ensuring
-                ? t(($) => $.notes_page.period_brief_collectors_ensuring)
-                : t(($) => $.notes_page.period_brief_collectors_empty)}
+              {t(($) => $.notes_page.period_brief_collectors_empty)}
             </div>
           ) : (
-            collectorAgents.map((agent) => {
+            <>
+            {collectorAgents.map((agent) => {
               const selected = collectorIds.includes(agent.id);
               const online = isPeriodBriefCollectorOnline(agent, runtimes);
               const name = periodBriefCollectorLabel(agent);
@@ -289,18 +283,40 @@ export function NotePeriodBriefCompose({
                   {selected ? <Check className="size-3.5 shrink-0 text-primary" /> : null}
                 </button>
               );
-            })
+            })}
+            {missingCollectorSlots.map((slot) => (
+              <NotesCollectorSetupCard
+                key={slot.key}
+                slotKey={slot.key}
+                label={slot.label}
+                onOpenRuntimePicker={() => onConfigureCollector?.(slot)}
+                onDismiss={() =>
+                  setDismissedMissingKeys((current) =>
+                    current.includes(slot.key) ? current : [...current, slot.key],
+                  )
+                }
+              />
+            ))}
+            </>
           )}
         </div>
       </div>
       <p className="text-[11px] leading-4 text-muted-foreground">
         {t(($) => $.notes_page.period_brief_compose_hint)}
       </p>
-      {ensuring ? (
-        <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-          <Loader2 className="size-3 animate-spin" />
-          {t(($) => $.notes_page.period_brief_collectors_ensuring)}
-        </p>
+      {onCancel ? (
+        <div className="flex justify-end">
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            disabled={busy}
+            data-testid="period-brief-cancel"
+            onClick={onCancel}
+          >
+            {t(($) => $.notes_page.period_brief_cancel)}
+          </Button>
+        </div>
       ) : null}
     </div>
   );

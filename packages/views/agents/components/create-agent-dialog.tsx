@@ -74,6 +74,7 @@ export function CreateAgentDialog({
   proposal,
   prefill,
   defaultMachineId = null,
+  lockComputer = false,
   onClose,
   onCreate,
 }: {
@@ -109,6 +110,8 @@ export function CreateAgentDialog({
   defaultHomeChannelId?: string | null;
   /** Prefill computer (machine id from buildRuntimeMachines). */
   defaultMachineId?: string | null;
+  /** Hide Computer changes — the caller already chose this machine. */
+  lockComputer?: boolean;
   onClose: () => void;
   // Returns the created Agent so the dialog can run a follow-up
   // setAgentSkills with the IDs the user picked in the form. Pre-skill-
@@ -375,7 +378,9 @@ export function CreateAgentDialog({
           )}
           {identityLocked && (
             <DialogDescription className="mt-1 text-xs">
-              {t(($) => $.create_dialog.description_identity_locked)}
+              {lockComputer
+                ? t(($) => $.create_dialog.description_computer_locked)
+                : t(($) => $.create_dialog.description_identity_locked)}
             </DialogDescription>
           )}
           {(isProposal || isDraft) && (
@@ -462,6 +467,7 @@ export function CreateAgentDialog({
               machineRuntimes={machineRuntimes}
               runtimeId={effectiveRuntimeId}
               onRuntimeSelect={handleRuntimeSelect}
+              lockComputer={lockComputer}
               model={model}
               onModelChange={(next) => {
                 if (next === model) return;

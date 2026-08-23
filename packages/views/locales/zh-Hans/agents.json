@@ -257,6 +257,7 @@
     "title_duplicate": "复制智能体",
     "description_create": "为工作区创建一个新的 AI 智能体。",
     "description_identity_locked": "名称与指令已填好。请选择电脑、运行时和模型后创建。",
+    "description_computer_locked": "电脑已锁定。请选择运行时和模型后创建。",
     "description_duplicate": "基于\"{{name}}\"创建一个新智能体。指令、环境变量和 skill 会一并复制。",
     "name_label": "名称",
     "name_hint": "这个永久名称用于 @提及。",

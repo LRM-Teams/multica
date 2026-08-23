@@ -71,16 +71,16 @@ export function adaptResearchV6DirectorCanvas(
   const absorbedInputs = new Map<string, string[]>();
   for (const edge of projection.edges) {
     if (edge.kind !== "absorbed_into") continue;
-    const inputs = absorbedInputs.get(edge.to_node_id) ?? [];
-    inputs.push(edge.from_node_id);
-    absorbedInputs.set(edge.to_node_id, inputs);
+    const inputs = absorbedInputs.get(edge.toNodeId) ?? [];
+    inputs.push(edge.fromNodeId);
+    absorbedInputs.set(edge.toNodeId, inputs);
   }
 
   const expandableNodeIds = new Set<string>();
   const hiddenChildCountByNodeId = new Map<string, number>();
   for (const node of visibleNodes) {
     if (node.expandable) expandableNodeIds.add(node.id);
-    hiddenChildCountByNodeId.set(node.id, node.hidden_child_count);
+    hiddenChildCountByNodeId.set(node.id, node.hiddenChildCount);
   }
 
   const merged: Record<string, string[]> = {};
@@ -89,7 +89,7 @@ export function adaptResearchV6DirectorCanvas(
   }
 
   const branchIds = [
-    ...new Set(visibleNodes.flatMap((node) => node.branch_ids)),
+    ...new Set(visibleNodes.flatMap((node) => node.branchIds)),
   ];
 
   return {
@@ -101,13 +101,13 @@ export function adaptResearchV6DirectorCanvas(
         id: node.id,
         session_id: projection.runId,
         node_type: node.kind,
-        title: node.title ?? node.catalog_summary,
-        summary: node.catalog_summary,
+        title: node.title ?? node.catalogSummary,
+        summary: node.catalogSummary,
         status: rendererStatus(node),
         actor_agent_id: null,
         payload: {
-          canonical_ref: node.canonical_ref,
-          branch_ids: node.branch_ids,
+          canonical_ref: node.canonicalRef,
+          branch_ids: node.branchIds,
           projection_state: node.state,
           projection_tier: node.tier,
           // Keep the Goal root semantically distinct from an XXL result. The
@@ -120,12 +120,12 @@ export function adaptResearchV6DirectorCanvas(
           absorbed: node.absorbed,
           terminal: node.terminal,
           expandable: node.expandable,
-          hidden_child_count: node.hidden_child_count,
+          hidden_child_count: node.hiddenChildCount,
         },
         // Unknown future tiers retain their canonical value in payload while
         // degrading to the neutral M visual instead of breaking the canvas.
         level: rendererLevel(node),
-        cluster_id: node.branch_ids[0] ?? null,
+        cluster_id: node.branchIds[0] ?? null,
         confidence: null,
         goal_version_id: null,
         derived_from: null,
@@ -139,13 +139,13 @@ export function adaptResearchV6DirectorCanvas(
         child_ids: [],
         children_of: [],
         created_at: "",
-        updated_at: node.updated_at,
+        updated_at: node.updatedAt,
       })),
       edges: projection.edges.map((edge) => ({
         id: edge.id,
         session_id: projection.runId,
-        from_node_id: edge.from_node_id,
-        to_node_id: edge.to_node_id,
+        from_node_id: edge.fromNodeId,
+        to_node_id: edge.toNodeId,
         edge_type: edge.kind,
         created_at: "",
       })),
@@ -159,7 +159,7 @@ export function adaptResearchV6DirectorCanvas(
         goal_version_id: null,
         payload: {
           member_node_ids: visibleNodes
-            .filter((node) => node.branch_ids.includes(branchId))
+            .filter((node) => node.branchIds.includes(branchId))
             .map((node) => node.id),
         },
         created_at: "",
@@ -185,10 +185,10 @@ export function adaptResearchV6DirectorSnapshot(
   snapshot: ResearchV6DirectorProjectionSnapshot,
 ): ResearchV6DirectorCanvasAdapterResult {
   return adaptResearchV6DirectorCanvas({
-    runId: snapshot.run_id,
-    eventSequence: snapshot.through_event_sequence,
+    runId: snapshot.runId,
+    eventSequence: snapshot.throughEventSequence,
     nodes: snapshot.nodes,
     edges: snapshot.edges,
-    densityBins: snapshot.density_bins,
+    densityBins: snapshot.densityBins,
   });
 }

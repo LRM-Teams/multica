@@ -41,7 +41,7 @@ export function ResearchSelectedRefChip({
         {reference.kind}
       </span>
       <span className="min-w-0 truncate text-xs font-medium">
-        {reference.display_summary}
+        {reference.displaySummary}
       </span>
       <span className="sr-only">
         {t(($) => $.panel.selected_ref_revision, {
@@ -54,15 +54,15 @@ export function ResearchSelectedRefChip({
         size="icon"
         className="absolute top-1/2 right-0.5 size-8 -translate-y-1/2 rounded-lg text-muted-foreground hover:bg-primary/10 hover:text-foreground"
         aria-label={t(($) => $.panel.selected_ref_remove, {
-          summary: reference.display_summary,
+          summary: reference.displaySummary,
         })}
         disabled={disabled}
-        onClick={() => onRemove(reference.stable_id)}
+        onClick={() => onRemove(reference.stableId)}
       >
         <X className="size-3.5" aria-hidden="true" />
       </Button>
       </TooltipTrigger>
-      <TooltipContent side="top">{reference.display_summary}</TooltipContent>
+      <TooltipContent side="top">{reference.displaySummary}</TooltipContent>
     </Tooltip>
   );
 }

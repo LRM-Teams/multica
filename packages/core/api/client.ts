@@ -5150,7 +5150,18 @@ export class ApiClient {
     const { ResearchMessageSchema } = await import("../research/schemas");
     const raw = await this.fetch(`/api/research/sessions/${id}/messages`, {
       method: "POST",
-      body: JSON.stringify(data),
+      body: JSON.stringify({
+        body: data.body,
+        target_agent_id: data.targetAgentId,
+        selected_research_refs: data.selectedResearchRefs?.map((reference) => ({
+          stable_id: reference.stableId,
+          kind: reference.kind,
+          entity_id: reference.entityId,
+          revision: reference.revision,
+          content_hash: reference.contentHash,
+          display_summary: reference.displaySummary,
+        })),
+      }),
     });
     const result = ResearchMessageSchema.safeParse(raw);
     if (!result.success) {
@@ -5335,7 +5346,7 @@ export class ApiClient {
       { signal: options?.signal },
     );
     const snapshot = parseResearchV6DirectorProjectionSnapshot(raw);
-    if (snapshot.workspace_id !== workspaceId || snapshot.run_id !== runId) {
+    if (snapshot.workspaceId !== workspaceId || snapshot.runId !== runId) {
       throw new Error("Director V6 projection snapshot identity mismatch");
     }
     return snapshot;
@@ -5387,25 +5398,25 @@ export class ApiClient {
     options?: { signal?: AbortSignal },
   ): Promise<import("../types/research-v6-director").ResearchV6DirectorProjectionSnapshot> {
     const {
-      parseResearchV6DirectorProjectionSliceRequest,
+      encodeResearchV6DirectorProjectionSliceRequest,
       parseResearchV6DirectorProjectionSnapshot,
     } = await import("../research-v6/director-schemas");
-    const validated = parseResearchV6DirectorProjectionSliceRequest(request);
+    const encoded = encodeResearchV6DirectorProjectionSliceRequest(request);
     const params = new URLSearchParams({
-      root: validated.root,
-      depth: String(validated.depth),
-      snapshot_id: validated.snapshot_id,
+      root: encoded.root,
+      depth: String(encoded.depth),
+      snapshot_id: encoded.snapshot_id,
     });
-    if (validated.cursor) params.set("cursor", validated.cursor);
+    if (encoded.cursor) params.set("cursor", encoded.cursor);
     const raw = await this.fetch(
       `/api/research/v6/runs/${encodeURIComponent(runId)}/projection/slice?${params.toString()}`,
       { signal: options?.signal },
     );
     const snapshot = parseResearchV6DirectorProjectionSnapshot(raw);
-    if (snapshot.workspace_id !== workspaceId || snapshot.run_id !== runId) {
+    if (snapshot.workspaceId !== workspaceId || snapshot.runId !== runId) {
       throw new Error("Director V6 projection slice identity mismatch");
     }
-    if (snapshot.snapshot_id !== validated.snapshot_id) {
+    if (snapshot.snapshotId !== encoded.snapshot_id) {
       throw new Error("Director V6 projection slice snapshot mismatch");
     }
     return snapshot;
@@ -5430,12 +5441,12 @@ export class ApiClient {
       { signal: options?.signal },
     );
     const page = parseResearchV6DirectorProjectionDeltaPage(raw);
-    if (page.run_id !== runId || page.deltas.some((delta) => delta.workspace_id !== workspaceId || delta.run_id !== runId)) {
+    if (page.runId !== runId || page.deltas.some((delta) => delta.workspaceId !== workspaceId || delta.runId !== runId)) {
       return {
-        run_id: runId,
+        runId,
         deltas: [],
-        next_cursor: null,
-        resync_required: true,
+        nextCursor: null,
+        resyncRequired: true,
       };
     }
     return page;
@@ -5449,9 +5460,9 @@ export class ApiClient {
   ): Promise<import("../types/research-v6-director").ResearchV6DirectorProjectionDeltaPage> {
     const {
       parseResearchV6DirectorProjectionDeltaPage,
-      parseResearchV6DirectorProjectionResumeRequest,
+      encodeResearchV6DirectorProjectionResumeRequest,
     } = await import("../research-v6/director-schemas");
-    const body = parseResearchV6DirectorProjectionResumeRequest(request);
+    const body = encodeResearchV6DirectorProjectionResumeRequest(request);
     const raw = await this.fetch(
       `/api/research/v6/runs/${encodeURIComponent(runId)}/projection/resume`,
       {
@@ -5461,12 +5472,12 @@ export class ApiClient {
       },
     );
     const page = parseResearchV6DirectorProjectionDeltaPage(raw);
-    if (page.run_id !== runId || page.deltas.some((delta) => delta.workspace_id !== workspaceId || delta.run_id !== runId)) {
+    if (page.runId !== runId || page.deltas.some((delta) => delta.workspaceId !== workspaceId || delta.runId !== runId)) {
       return {
-        run_id: runId,
+        runId,
         deltas: [],
-        next_cursor: null,
-        resync_required: true,
+        nextCursor: null,
+        resyncRequired: true,
       };
     }
     return page;
@@ -5502,13 +5513,15 @@ export class ApiClient {
     workItemId: string,
     options?: { signal?: AbortSignal },
   ): Promise<import("../types/research-v6-director").ResearchV6DirectorWorkActivity> {
-    const activity = await this.fetch<
-      import("../types/research-v6-director").ResearchV6DirectorWorkActivity
-    >(
+    const { parseResearchV6DirectorWorkActivity } = await import(
+      "../research-v6/director-schemas"
+    );
+    const raw = await this.fetch(
       `/api/research/v6/runs/${encodeURIComponent(runId)}/work-items/${encodeURIComponent(workItemId)}/activity`,
       { signal: options?.signal },
     );
-    if (activity.work_item_id !== workItemId) {
+    const activity = parseResearchV6DirectorWorkActivity(raw);
+    if (activity === null || activity.workItemId !== workItemId) {
       throw new Error("Director V6 work activity identity mismatch");
     }
     void workspaceId;

@@ -312,7 +312,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   });
   const selectedDirectorWorkItemId =
     selectedDirectorProjectionNode?.kind === "work_s"
-      ? selectedDirectorProjectionNode.canonical_ref.id
+      ? selectedDirectorProjectionNode.canonicalRef.id
       : "";
   const {
     data: directorWorkActivityData,
@@ -325,12 +325,12 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
       wsId,
       sessionId,
       selectedDirectorWorkItemId,
-      selectedDirectorProjectionNode?.updated_at ?? "unselected",
+      selectedDirectorProjectionNode?.updatedAt ?? "unselected",
     ),
     enabled: directorV6Enabled && Boolean(selectedDirectorWorkItemId),
   });
   useEffect(() => {
-    const inboxTaskId = directorWorkActivityData?.inbox_task_id;
+    const inboxTaskId = directorWorkActivityData?.inboxTaskId;
     if (!directorV6Enabled || !inboxTaskId) return;
     const refetchMatchingWorkActivity = (payload: unknown) => {
       const progress = payload as { task_id?: unknown };
@@ -350,19 +350,19 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     };
   }, [
     directorV6Enabled,
-    directorWorkActivityData?.inbox_task_id,
+    directorWorkActivityData?.inboxTaskId,
     refetchDirectorWorkActivity,
     subscribe,
   ]);
   const directorRunnerActivity = useRunnerActivity(
     directorV6Enabled ? wsId : undefined,
-    directorWorkActivityData?.agent_id || undefined,
+    directorWorkActivityData?.agentId || undefined,
   );
   const directorWorkTimeline = useMemo<RunnerActivityTimelineRow[]>(() => {
-    const startedAt = Date.parse(directorWorkActivityData?.started_at ?? "");
+    const startedAt = Date.parse(directorWorkActivityData?.startedAt ?? "");
     const persistedTimeline = directorWorkActivityData?.timeline ?? [];
     if (!Number.isFinite(startedAt)) return persistedTimeline.slice(0, 8);
-    const completedAt = Date.parse(directorWorkActivityData?.completed_at ?? "");
+    const completedAt = Date.parse(directorWorkActivityData?.completedAt ?? "");
     const upperBound = Number.isFinite(completedAt) ? completedAt : Number.POSITIVE_INFINITY;
     const timelineById = new Map(
       persistedTimeline.map((row) => [row.id, row] as const),
@@ -379,8 +379,8 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
       .slice(0, 8);
   }, [
     directorRunnerActivity.data?.timeline,
-    directorWorkActivityData?.completed_at,
-    directorWorkActivityData?.started_at,
+    directorWorkActivityData?.completedAt,
+    directorWorkActivityData?.startedAt,
     directorWorkActivityData?.timeline,
   ]);
   const directorSelectionIdentity = researchV6DirectorSelectionIdentity(
@@ -515,9 +515,9 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     enabled: directorV6Enabled && ui.deliveryOpen && Boolean(directorReportId),
   });
   const directorReportSandbox = validateResearchV6ReportSandboxUrl(
-    directorReportDetailData?.sandbox_url ?? "",
+    directorReportDetailData?.sandboxUrl ?? "",
     typeof window === "undefined" ? "" : window.location.origin,
-    directorReportDetailData?.report_origin ?? "",
+    directorReportDetailData?.reportOrigin ?? "",
   );
   const {
     data: directorReportCompiledHtml,
@@ -645,10 +645,10 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     mutationFn: (body: string) =>
       api.postResearchMessage(sessionId, {
         body,
-        target_agent_id: directorV6Enabled
+        targetAgentId: directorV6Enabled
           ? persistedDirectorAgentId ?? undefined
           : undefined,
-        selected_research_refs:
+        selectedResearchRefs:
           directorV6Enabled && selectedDirectorReference
             ? [selectedDirectorReference]
             : undefined,
@@ -993,10 +993,10 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   // presence roster by executing agent, by the node's own work item identity,
   // or by any work item linked from the node detail.
   const selectedNodeLiveActivity = (() => {
-    const ref = selectedDirectorProjectionNode?.canonical_ref;
+    const ref = selectedDirectorProjectionNode?.canonicalRef;
     if (!ref) return null;
     const linkedWorkItemIds = new Set(
-      (directorNodeDetailData?.work_item_refs ?? []).map((r) => r.id),
+      (directorNodeDetailData?.workItemRefs ?? []).map((r) => r.id),
     );
     for (const [agentId, entry] of Object.entries(presence)) {
       if (entry.phase !== "running" && entry.phase !== "queued" && entry.phase !== "stale") continue;
@@ -1345,8 +1345,8 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
                   loading={directorNodeDetailLoading}
                   error={directorNodeDetailError}
                   selectedForChat={
-                    selectedDirectorReference?.stable_id ===
-                    `${selectedDirectorProjectionNode.canonical_ref.kind}:${selectedDirectorProjectionNode.canonical_ref.id}`
+                    selectedDirectorReference?.stableId ===
+                    `${selectedDirectorProjectionNode.canonicalRef.kind}:${selectedDirectorProjectionNode.canonicalRef.id}`
                   }
                   projectionNodeById={
                     directorCanvas.canvas?.projectionNodeById ?? new Map()
@@ -1355,7 +1355,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
                   onRetry={() => void refetchDirectorNodeDetail()}
                   onRetryWorkActivity={() => {
                     void refetchDirectorWorkActivity();
-                    if (directorWorkActivityData?.agent_id) {
+                    if (directorWorkActivityData?.agentId) {
                       void directorRunnerActivity.refetch();
                     }
                   }}
@@ -1668,7 +1668,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
                 {directorV6Enabled && selectedDirectorReference ? (
                   <ul
                     className="mb-2"
-                    aria-label={selectedDirectorReference.display_summary}
+                    aria-label={selectedDirectorReference.displaySummary}
                   >
                     <ResearchSelectedRefChip
                       reference={selectedDirectorReference}
@@ -1822,17 +1822,17 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
               ? {
                   id: directorReportDetailData.id,
                   title: directorReportDetailData.title,
-                  packageHash: directorReportDetailData.package_hash,
-                  sandboxUrl: directorReportDetailData.sandbox_url ?? "",
-                  reportOrigin: directorReportDetailData.report_origin ?? "",
+                  packageHash: directorReportDetailData.packageHash,
+                  sandboxUrl: directorReportDetailData.sandboxUrl ?? "",
+                  reportOrigin: directorReportDetailData.reportOrigin ?? "",
                   compiledHtml: directorReportCompiledHtml,
-                  plainTextFallback: directorReportDetailData.plain_text,
+                  plainTextFallback: directorReportDetailData.plainText,
                   revision: directorReportDetailData.revision,
                   status: directorReportDetailData.status,
                   inputCount:
                     directorReportsData?.find(
                       (item) => item.id === directorReportDetailData.id,
-                    )?.input_count ?? directorReportDetailData.input_refs.length,
+                    )?.inputCount ?? directorReportDetailData.inputRefs.length,
                 }
               : null
           }
@@ -1841,7 +1841,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
             revision: item.revision,
             status: item.status,
             title: item.title,
-            publishedAt: item.published_at,
+            publishedAt: item.publishedAt,
           }))}
           onSelectReport={setSelectedDirectorReportId}
           selectedReportId={directorReportId}

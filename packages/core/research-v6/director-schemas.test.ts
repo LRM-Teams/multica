@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   parseResearchV6DirectorProjectionDeltaPage,
   parseResearchV6DirectorProjectionSnapshot,
-  parseResearchV6DirectorProjectionSliceRequest,
+  encodeResearchV6DirectorProjectionSliceRequest,
 } from "./director-schemas";
 
 const ID = "00000000-0000-4000-8000-000000000003";
@@ -48,7 +48,7 @@ function snapshot() {
 
 describe("Director V6 projection wire schemas", () => {
   it("accepts the exact strict projection snapshot", () => {
-    expect(parseResearchV6DirectorProjectionSnapshot(snapshot()).slice_key).toBe(
+    expect(parseResearchV6DirectorProjectionSnapshot(snapshot()).sliceKey).toBe(
       "default",
     );
   });
@@ -75,8 +75,8 @@ describe("Director V6 projection wire schemas", () => {
     };
 
     const parsed = parseResearchV6DirectorProjectionSnapshot(value);
-    expect(parsed.slice_key).toBe("default");
-    expect(parsed.nodes[0]?.catalog_summary).toBe("");
+    expect(parsed.sliceKey).toBe("default");
+    expect(parsed.nodes[0]?.catalogSummary).toBe("");
   });
 
   it("degrades the legacy experimental projection shape without throwing", () => {
@@ -87,7 +87,7 @@ describe("Director V6 projection wire schemas", () => {
         graph_content_hash: { nodes: HASH, edges: HASH },
         nodes: [],
         edges: [],
-      }).slice_key,
+      }).sliceKey,
     ).toBe("invalid-response");
   });
 
@@ -96,7 +96,7 @@ describe("Director V6 projection wire schemas", () => {
       parseResearchV6DirectorProjectionSnapshot({
         ...snapshot(),
         direction: "both",
-      }).slice_key,
+      }).sliceKey,
     ).toBe("invalid-response");
   });
 
@@ -115,7 +115,7 @@ describe("Director V6 projection wire schemas", () => {
     };
 
     const parsed = parseResearchV6DirectorProjectionSnapshot(value);
-    expect(parsed.slice_key).toBe("default");
+    expect(parsed.sliceKey).toBe("default");
     expect(parsed.nodes[0]?.kind).toBe("future_result");
     expect(parsed.nodes[0]?.state.execution).toBe("queued_remote");
   });
@@ -127,7 +127,7 @@ describe("Director V6 projection wire schemas", () => {
         deltas: [],
         next_cursor: null,
         resync_required: true,
-      }).resync_required,
+      }).resyncRequired,
     ).toBe(true);
   });
 
@@ -135,7 +135,7 @@ describe("Director V6 projection wire schemas", () => {
     const schemas = await import("./director-schemas");
     expect(schemas.parseResearchV6DirectorNodeDetail({}).node.id).toBe("invalid-response");
     expect(schemas.parseResearchV6DirectorReportDetail({}).id).toBeTruthy();
-    expect(schemas.parseResearchV6DirectorProjectionDelta({}).event_sequence).toBe(0);
+    expect(schemas.parseResearchV6DirectorProjectionDelta({}).eventSequence).toBe(0);
   });
 
   it("keeps an unknown node detail view forward-compatible", async () => {
@@ -161,17 +161,17 @@ describe("Director V6 projection wire schemas", () => {
 
   it("fixes derivation expansion depth to exactly one layer", () => {
     expect(
-      parseResearchV6DirectorProjectionSliceRequest({
+      encodeResearchV6DirectorProjectionSliceRequest({
         root: "insight:one",
         depth: 1,
-        snapshot_id: SNAPSHOT_ID,
+        snapshotId: SNAPSHOT_ID,
       }).depth,
     ).toBe(1);
     expect(() =>
-      parseResearchV6DirectorProjectionSliceRequest({
+      encodeResearchV6DirectorProjectionSliceRequest({
         root: "insight:one",
-        depth: 2,
-        snapshot_id: SNAPSHOT_ID,
+        depth: 2 as 1,
+        snapshotId: SNAPSHOT_ID,
       }),
     ).toThrow();
   });

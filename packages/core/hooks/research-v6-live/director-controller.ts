@@ -64,8 +64,8 @@ export class ResearchV6DirectorLiveController {
 
   seedSnapshotPage(snapshot: ResearchV6DirectorProjectionSnapshot): void {
     if (
-      snapshot.workspace_id !== this.identity.workspaceId ||
-      snapshot.run_id !== this.identity.runId
+      snapshot.workspaceId !== this.identity.workspaceId ||
+      snapshot.runId !== this.identity.runId
     ) {
       this.client.requireServerResync();
       this.emit();
@@ -150,10 +150,10 @@ export class ResearchV6DirectorLiveController {
     }
     if (envelope.delta !== undefined && envelope.delta !== null) {
       // parseResearchV6DirectorProjectionDelta never throws; failures come
-      // back as the empty fallback delta, whose run_id cannot match this run.
+      // back as the empty fallback delta, whose runId cannot match this run.
       const delta: ResearchV6DirectorProjectionDelta =
         parseResearchV6DirectorProjectionDelta(envelope.delta);
-      if (delta.run_id !== this.identity.runId) {
+      if (delta.runId !== this.identity.runId) {
         this.malformedFrameCount += 1;
         // An unparseable frame is not proof the projection diverged; catch up
         // incrementally over HTTP instead of discarding the whole snapshot.
@@ -214,12 +214,12 @@ export class ResearchV6DirectorLiveController {
         this.identity.workspaceId,
         this.identity.runId,
         {
-          snapshot_id: state.snapshotId,
-          last_confirmed_sequence: after,
-          projection_hash: state.projectionHash,
+          snapshotId: state.snapshotId,
+          lastConfirmedSequence: after,
+          projectionHash: state.projectionHash,
         },
       );
-      if (page.resync_required) {
+      if (page.resyncRequired) {
         await this.loadFreshSnapshot();
         return;
       }
@@ -232,7 +232,7 @@ export class ResearchV6DirectorLiveController {
             return;
           }
         }
-        if (!page.next_cursor) break;
+        if (!page.nextCursor) break;
         pages += 1;
         if (pages >= (this.options.maxResumePages ?? 64)) {
           await this.loadFreshSnapshot();
@@ -242,9 +242,9 @@ export class ResearchV6DirectorLiveController {
           this.identity.workspaceId,
           this.identity.runId,
           after,
-          page.next_cursor,
+          page.nextCursor,
         );
-        if (page.resync_required) {
+        if (page.resyncRequired) {
           await this.loadFreshSnapshot();
           return;
         }
@@ -291,7 +291,7 @@ export class ResearchV6DirectorLiveController {
       );
       if (pageCount === 0) this.client.replaceWithSnapshotPage(snapshot);
       else this.client.applySnapshotPage(snapshot);
-      cursor = snapshot.has_more ? snapshot.next_cursor : undefined;
+      cursor = snapshot.hasMore ? snapshot.nextCursor : undefined;
       pageCount += 1;
       if (pageCount >= 128 && cursor) {
         throw new Error("Director V6 snapshot exceeded the bounded page limit");

@@ -18,19 +18,19 @@ function node(id: string): ResearchV6DirectorProjectionNode {
     id,
     kind: "insight",
     tier: "L",
-    canonical_ref: { kind: "insight", id: RUN_ID },
-    branch_ids: [],
+    canonicalRef: { kind: "insight", id: RUN_ID },
+    branchIds: [],
     state: {
       execution: "succeeded",
       conclusion: "accepted",
       integration: "candidate",
     },
-    catalog_summary: id,
+    catalogSummary: id,
     absorbed: false,
     terminal: true,
     expandable: true,
-    hidden_child_count: 2,
-    updated_at: "2026-08-17T08:00:00Z",
+    hiddenChildCount: 2,
+    updatedAt: "2026-08-17T08:00:00Z",
   };
 }
 
@@ -39,18 +39,18 @@ function snapshot(
   options: Partial<ResearchV6DirectorProjectionSnapshot> = {},
 ): ResearchV6DirectorProjectionSnapshot {
   return {
-    contract_kind: "projection_snapshot",
-    schema_version: 6,
-    snapshot_id: SNAPSHOT_ID,
-    workspace_id: WORKSPACE_ID,
-    run_id: RUN_ID,
-    through_event_sequence: 4,
-    projection_hash: HASH_A,
-    slice_key: "default",
+    contractKind: "projection_snapshot",
+    schemaVersion: 6,
+    snapshotId: SNAPSHOT_ID,
+    workspaceId: WORKSPACE_ID,
+    runId: RUN_ID,
+    throughEventSequence: 4,
+    projectionHash: HASH_A,
+    sliceKey: "default",
     nodes,
     edges: [],
-    density_bins: [],
-    has_more: false,
+    densityBins: [],
+    hasMore: false,
     ...options,
   };
 }
@@ -62,26 +62,26 @@ function delta(
   nodes: ResearchV6DirectorProjectionNode[] = [],
 ): ResearchV6DirectorProjectionDelta {
   return {
-    contract_kind: "projection_delta",
-    schema_version: 6,
-    workspace_id: WORKSPACE_ID,
-    run_id: RUN_ID,
-    snapshot_id: SNAPSHOT_ID,
-    event_sequence: eventSequence,
-    previous_projection_hash: previousHash,
-    projection_hash: projectionHash,
-    upsert_nodes: nodes,
-    remove_node_ids: [],
-    upsert_edges: [],
-    remove_edge_ids: [],
-    invalidate_slice_keys: [],
+    contractKind: "projection_delta",
+    schemaVersion: 6,
+    workspaceId: WORKSPACE_ID,
+    runId: RUN_ID,
+    snapshotId: SNAPSHOT_ID,
+    eventSequence: eventSequence,
+    previousProjectionHash: previousHash,
+    projectionHash: projectionHash,
+    upsertNodes: nodes,
+    removeNodeIds: [],
+    upsertEdges: [],
+    removeEdgeIds: [],
+    invalidateSliceKeys: [],
   };
 }
 
 describe("ResearchV6DirectorProjectionClient", () => {
   it("merges pages pinned to the same snapshot and slice", () => {
     const client = new ResearchV6DirectorProjectionClient();
-    client.applySnapshotPage(snapshot([node("a")], { has_more: true, next_cursor: "p2" }));
+    client.applySnapshotPage(snapshot([node("a")], { hasMore: true, nextCursor: "p2" }));
     client.applySnapshotPage(snapshot([node("b")]));
     expect(client.getState().views.get("default")?.nodes.size).toBe(2);
   });
@@ -129,10 +129,10 @@ describe("ResearchV6DirectorProjectionClient", () => {
     const client = new ResearchV6DirectorProjectionClient();
     client.applySnapshotPage(snapshot([node("a")]));
     client.applySnapshotPage(
-      snapshot([node("child")], { slice_key: "expand:a", has_more: false }),
+      snapshot([node("child")], { sliceKey: "expand:a", hasMore: false }),
     );
     const update = delta(5, HASH_A, HASH_B);
-    update.invalidate_slice_keys = ["expand:a"];
+    update.invalidateSliceKeys = ["expand:a"];
     client.applyDelta(update);
     expect(client.getState().views.has("expand:a")).toBe(false);
     expect(client.getState().views.has("default")).toBe(true);

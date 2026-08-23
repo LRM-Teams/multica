@@ -32,16 +32,16 @@ const node = (id: string, title: string): ResearchV6DirectorProjectionNode => ({
   id,
   kind: "insight",
   tier: "L",
-  canonical_ref: { kind: "insight", id, revision: 2, content_hash: "sha256:test" },
-  branch_ids: ["branch-1"],
+  canonicalRef: { kind: "insight", id, revision: 2, contentHash: "sha256:test" },
+  branchIds: ["branch-1"],
   state: { execution: "succeeded", conclusion: "accepted", integration: "candidate" },
   title,
-  catalog_summary: `${title} summary`,
+  catalogSummary: `${title} summary`,
   absorbed: false,
   terminal: false,
   expandable: true,
-  hidden_child_count: 1,
-  updated_at: "2026-08-17T00:00:00Z",
+  hiddenChildCount: 1,
+  updatedAt: "2026-08-17T00:00:00Z",
 });
 
 describe("ResearchV6NodeDetail", () => {
@@ -50,9 +50,9 @@ describe("ResearchV6NodeDetail", () => {
       ...node("work-node", "深读手"),
       kind: "work_s",
       tier: "S",
-      canonical_ref: { kind: "work_item", id: "work-item-1" },
+      canonicalRef: { kind: "work_item", id: "work-item-1" },
       state: { execution: "running", conclusion: "proposed", integration: "unmatched" },
-      catalog_summary: "核查网页游戏的技术实现与成本。",
+      catalogSummary: "核查网页游戏的技术实现与成本。",
     } satisfies ResearchV6DirectorProjectionNode;
 
     render(
@@ -63,20 +63,20 @@ describe("ResearchV6NodeDetail", () => {
         selectedForChat={false}
         projectionNodeById={new Map()}
         workActivity={{
-          work_item_id: "work-item-1",
-          attempt_id: "attempt-1",
-          agent_id: "agent-1",
-          agent_name: "深读手",
-          inbox_task_id: "task-1",
+          workItemId: "work-item-1",
+          attemptId: "attempt-1",
+          agentId: "agent-1",
+          agentName: "深读手",
+          inboxTaskId: "task-1",
           mission: "核查网页游戏的技术实现与成本。",
           status: "running",
           progress: "正在核对浏览器兼容性数据",
-          progress_step: 1,
-          progress_total: 3,
-          started_at: "2026-08-17T00:00:00Z",
-          updated_at: "2026-08-17T00:00:00Z",
+          progressStep: 1,
+          progressTotal: 3,
+          startedAt: "2026-08-17T00:00:00Z",
+          updatedAt: "2026-08-17T00:00:00Z",
           timeline: [],
-          timeline_has_more: false,
+          timelineHasMore: false,
         }}
         workTimeline={[
           {
@@ -119,7 +119,7 @@ describe("ResearchV6NodeDetail", () => {
       ...node("work-node", "Researcher"),
       kind: "work_s",
       tier: "S",
-      canonical_ref: { kind: "work_item", id: "work-item-1" },
+      canonicalRef: { kind: "work_item", id: "work-item-1" },
     } satisfies ResearchV6DirectorProjectionNode;
     const onRetryWorkActivity = vi.fn();
 
@@ -149,19 +149,19 @@ describe("ResearchV6NodeDetail", () => {
     const current = node("current", "Synthesis");
     const input = node("input", "Supporting result");
     const detail: ResearchV6DirectorNodeDetail = {
-      snapshot_id: "snapshot-1",
-      through_event_sequence: 8,
-      projection_hash: "sha256:projection",
+      snapshotId: "snapshot-1",
+      throughEventSequence: 8,
+      projectionHash: "sha256:projection",
       view: "full",
       node: current,
       incoming: [
         {
           id: "edge-1",
           kind: "derived_from",
-          from_node_id: "input",
-          to_node_id: "current",
+          fromNodeId: "input",
+          toNodeId: "current",
           canonical: true,
-          hidden_count: 0,
+          hiddenCount: 0,
           expandable: false,
         },
       ],
@@ -169,20 +169,20 @@ describe("ResearchV6NodeDetail", () => {
         {
           id: "edge-future",
           kind: "future_relation_kind",
-          from_node_id: "current",
-          to_node_id: "input",
+          fromNodeId: "current",
+          toNodeId: "input",
           canonical: false,
-          hidden_count: 0,
+          hiddenCount: 0,
           expandable: false,
         },
       ],
-      history_refs: [{ kind: "insight", id: "current", revision: 1 }],
-      agent_refs: [{ kind: "agent", id: "agent-1", revision: 3 }],
-      work_item_refs: [],
-      attempt_refs: [],
-      evidence_refs: [],
-      discussion_refs: [],
-      report_refs: [],
+      historyRefs: [{ kind: "insight", id: "current", revision: 1 }],
+      agentRefs: [{ kind: "agent", id: "agent-1", revision: 3 }],
+      workItemRefs: [],
+      attemptRefs: [],
+      evidenceRefs: [],
+      discussionRefs: [],
+      reportRefs: [],
     };
     const onFocusNode = vi.fn();
 

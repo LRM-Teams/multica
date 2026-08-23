@@ -73,12 +73,12 @@ describe("Director V6 projection query identities", () => {
   it("constructs only depth=1 requests for every cursor page", () => {
     expect(
       researchV6DirectorSlicePageRequest(
-        { root: "insight:one", snapshot_id: SNAPSHOT_ID },
+        { root: "insight:one", snapshotId: SNAPSHOT_ID },
         "opaque",
       ),
     ).toEqual({
       root: "insight:one",
-      snapshot_id: SNAPSHOT_ID,
+      snapshotId: SNAPSHOT_ID,
       depth: 1,
       cursor: "opaque",
     });

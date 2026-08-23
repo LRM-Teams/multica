@@ -72,12 +72,12 @@ export function useResearchV6DirectorCanvas({
   const firstPage = snapshotQuery.error
     ? null
     : snapshotQuery.data?.pages[0] ?? null;
-  const snapshotId = firstPage?.snapshot_id ?? null;
+  const snapshotId = firstPage?.snapshotId ?? null;
   const expectedDisplayIdentity = firstPage
     ? researchV6DirectorDisplayIdentity(
         workspaceId,
         runId,
-        firstPage.snapshot_id,
+        firstPage.snapshotId,
       )
     : null;
   const displayIdentity = useResearchV6DirectorDisplayStore(
@@ -121,7 +121,7 @@ export function useResearchV6DirectorCanvas({
             {
               onInvalidateSliceKeys: (sliceKeys) => {
                 controller?.invalidateSliceKeys(sliceKeys);
-                if (firstPage && sliceKeys.includes(firstPage.slice_key)) {
+                if (firstPage && sliceKeys.includes(firstPage.sliceKey)) {
                   void queryClient.invalidateQueries({
                     queryKey: researchV6DirectorProjectionKeys.snapshot(
                       workspaceId,
@@ -170,7 +170,7 @@ export function useResearchV6DirectorCanvas({
     const liveView = liveController
       ?.getClient()
       .getState()
-      .views.get(firstPage.slice_key);
+      .views.get(firstPage.sliceKey);
     // Keep absorbed inputs long enough for the adapter to project their
     // immutable assimilation lineage onto the visible successor. The adapter
     // owns the final default-visibility filter.
@@ -182,14 +182,14 @@ export function useResearchV6DirectorCanvas({
       : defaultPages.flatMap((page) => page.edges);
     const densityBins: ResearchV6DirectorDensityBin[] = liveView
       ? [...liveView.densityBins.values()]
-      : defaultPages.flatMap((page) => page.density_bins);
+      : defaultPages.flatMap((page) => page.densityBins);
     if (displayMatches) {
       for (const rootNodeId of Object.keys(expandedByRoot)) {
         const pages = queryClient.getQueryData<SlicePages>(
           researchV6DirectorProjectionKeys.slice(
             workspaceId,
             runId,
-            firstPage.snapshot_id,
+            firstPage.snapshotId,
             rootNodeId,
           ),
         );
@@ -203,7 +203,7 @@ export function useResearchV6DirectorCanvas({
       runId,
       eventSequence:
         liveController?.getClient().getState().lastConfirmedSequence ??
-        firstPage.through_event_sequence,
+        firstPage.throughEventSequence,
       nodes: dedupeById(nodes),
       edges: dedupeById(edges),
       densityBins: dedupeById(densityBins),

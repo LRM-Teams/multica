@@ -57,6 +57,32 @@ describe("ApiClient.createResearchSession response boundary", () => {
     });
   });
 
+  it("encodes camelCase create fields to the wire contract", async () => {
+    stubResponse(createResponse());
+    const client = new ApiClient("https://api.example.test");
+
+    await client.createResearchSession({
+      goal: "Research",
+      clientRequestId: "request-1",
+      depthTier: "deep",
+      language: "zh-Hans",
+      sourceWeights: { primary: 0.9, secondary: 0.7, community: 0.4 },
+      orchestratorVersion: "research-run-v6",
+      directorAgentId: "director-1",
+    });
+
+    const request = vi.mocked(fetch).mock.calls[0]?.[1];
+    expect(JSON.parse(String(request?.body))).toMatchObject({
+      goal: "Research",
+      client_request_id: "request-1",
+      depth_tier: "deep",
+      language: "zh-Hans",
+      source_weights: { primary: 0.9, secondary: 0.7, community: 0.4 },
+      orchestrator_version: "research-run-v6",
+      director_agent_id: "director-1",
+    });
+  });
+
   it("rejects a kickoff response from another workspace", async () => {
     stubResponse(createResponse());
     const client = new ApiClient("https://api.example.test");
@@ -117,6 +143,8 @@ describe("ApiClient.createResearchSession response boundary", () => {
         fleet_id: "",
         status: "running",
         current_stage: "s1_plan",
+        orchestrator_version: "research-run-v6",
+        director_agent_id: "director-1",
       },
       nodes: [],
       edges: [],
@@ -199,8 +227,16 @@ describe("ApiClient.createResearchSession response boundary", () => {
     await expect(
       client.createResearchSession({ goal: "Research" }, "workspace-1"),
     ).resolves.toMatchObject({
-      session: { id: "session-v6", fleet_id: "" },
-      run: { gate: { passed: true, findings: [] } },
+      session: {
+        id: "session-v6",
+        fleet_id: "",
+        orchestratorVersion: "research-run-v6",
+        directorAgentId: "director-1",
+      },
+      run: {
+        run: { orchestratorVersion: "research-run-v6" },
+        gate: { passed: true, findings: [] },
+      },
     });
   });
 

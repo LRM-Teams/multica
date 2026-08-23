@@ -71,6 +71,27 @@ func TestV6WorkProgressModuleValidation(t *testing.T) {
 	}
 }
 
+func TestV6WorkProgressModuleReplacesPureEnglishNarration(t *testing.T) {
+	store := &workProgressStoreStub{}
+	module := workProgressModule{store: store}
+	access := V6AttemptAccess{
+		WorkspaceID: uuid.NewString(), RunID: uuid.NewString(),
+		WorkItemID: uuid.NewString(), AttemptID: uuid.NewString(), AgentID: uuid.NewString(),
+	}
+
+	if err := module.Report(context.Background(), ReportV6WorkProgressInput{
+		V6AttemptAccess: access,
+		ClientRequestID: uuid.NewString(),
+		Text:            "Now let me inspect the manifest and schema.",
+		Stage:           "reading_manifest",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.got) != 1 || store.got[0].Text != v6WorkProgressChineseFallback {
+		t.Fatalf("progress=%+v, want Chinese fallback", store.got)
+	}
+}
+
 func TestReportV6WorkProgressTransactionRecovery(t *testing.T) {
 	runTransactionRecoveryMatrix(t, txOpV6WorkProgressReport, func(t *testing.T, run *transactionRecoveryRun) transactionRecoveryOperation {
 		membershipID, workItemID := seedV6RecoveryWorkItem(t, run, "running", time.Now().Add(time.Minute))

@@ -19,7 +19,7 @@ func TestBuildV6WorkDispatchPromptMakesDirectorAssignmentExecutable(t *testing.T
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"## Durable Research V6 Work Item",
+		"## 持久化 Research V6 Work Item",
 		"Run ID：`00000000-0000-4000-8000-000000000003`",
 		"Work Item ID：`00000000-0000-4000-8000-000000000212`",
 		"Attempt ID：`00000000-0000-4000-8000-000000000213`",
@@ -27,16 +27,16 @@ func TestBuildV6WorkDispatchPromptMakesDirectorAssignmentExecutable(t *testing.T
 		"multica research work-manifest 00000000-0000-4000-8000-000000000003 00000000-0000-4000-8000-000000000212 00000000-0000-4000-8000-000000000213",
 		"multica research director-brief 00000000-0000-4000-8000-000000000003 00000000-0000-4000-8000-000000000212 00000000-0000-4000-8000-000000000213",
 		"multica research director-brief-ack",
-		"The submission must use this exact root shape",
+		"提交必须使用下面的精确根结构",
 		`"contract_kind": "director_action_proposal"`,
 		`"director_assignment_id": "<brief.director_assignment_id>"`,
 		`"reviewed_page_count": <brief.page.page_count>`,
 		`"payload_schema": "<one manifest.task_specific_schema.payload_schemas key>"`,
-		"POST each acknowledgement to `${V6_API}/director-brief-acks`",
-		"POST the exact result file to `${V6_API}/submission`",
-		"normally returns status `received`",
-		"no validation-only or dry-run mode",
-		"Never send a probe, placeholder, or minimum test payload",
+		"把每页确认 POST 到 `${V6_API}/director-brief-acks`",
+		"精确结果文件 POST 到 `${V6_API}/submission`",
+		"通常返回状态 `received`",
+		"没有仅校验或 dry-run 模式",
+		"不得发送探测、占位或最小测试 payload",
 		"multica research work-submit",
 		"Review the durable brief and propose the next actions.",
 	} {
@@ -120,14 +120,14 @@ func TestBuildV6WorkDispatchPromptBindsAtomicTaskIdentity(t *testing.T) {
 		`"task_id": "00000000-0000-4000-8000-000000000214"`,
 		`"agent_id": "00000000-0000-4000-8000-000000000009"`,
 		`"task_specific_schema": "research.finding.v1"`,
-		"catalog_summary` at 512 characters or fewer",
+		"catalog_summary` 最多 512 个字符",
 		"content_layers.conflicts`",
-		"arrays of strings",
-		"task_specific_payload` follow the frozen task schema",
+		"字符串数组",
+		"task_specific_payload` 内同名字段遵循冻结的任务 schema",
 		"RFC 8785 JCS",
-		"successful Agent handoff",
-		"no validation-only or dry-run mode",
-		"Never send a probe, placeholder, or minimum test payload",
+		"Agent 已成功交接",
+		"没有仅校验或 dry-run 模式",
+		"不得发送探测、占位或最小测试 payload",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)

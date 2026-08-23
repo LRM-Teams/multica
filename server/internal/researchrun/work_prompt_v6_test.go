@@ -20,10 +20,10 @@ func TestBuildV6WorkDispatchPromptMakesDirectorAssignmentExecutable(t *testing.T
 	}
 	for _, want := range []string{
 		"## Durable Research V6 Work Item",
-		"Run ID: `00000000-0000-4000-8000-000000000003`",
-		"Work Item ID: `00000000-0000-4000-8000-000000000212`",
-		"Attempt ID: `00000000-0000-4000-8000-000000000213`",
-		"Expected result: `director_action_proposal`",
+		"Run ID：`00000000-0000-4000-8000-000000000003`",
+		"Work Item ID：`00000000-0000-4000-8000-000000000212`",
+		"Attempt ID：`00000000-0000-4000-8000-000000000213`",
+		"预期结果：`director_action_proposal`",
 		"multica research work-manifest 00000000-0000-4000-8000-000000000003 00000000-0000-4000-8000-000000000212 00000000-0000-4000-8000-000000000213",
 		"multica research director-brief 00000000-0000-4000-8000-000000000003 00000000-0000-4000-8000-000000000212 00000000-0000-4000-8000-000000000213",
 		"multica research director-brief-ack",
@@ -54,10 +54,10 @@ func TestBuildV6WorkDispatchPromptMakesDirectorAssignmentExecutable(t *testing.T
 
 func TestRonaldoV6DirectorProtocolRequiresParallelChineseResearch(t *testing.T) {
 	for _, want := range []string{
-		"Simplified Chinese",
-		"multiple independent branches",
-		"same proposal",
-		"Do not narrate contract lookup",
+		"所有自然语言输出",
+		"多个独立方向",
+		"同一 proposal",
+		"不得叙述合同查找",
 	} {
 		if !strings.Contains(RonaldoV6DirectorSystemProtocol, want) {
 			t.Fatalf("director protocol missing %q", want)
@@ -78,7 +78,7 @@ func TestV6WorkPromptKeepsUserFacingProgressInChinese(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(prompt, "Simplified Chinese") {
+	if !strings.Contains(prompt, "所有自然语言输出") {
 		t.Fatal("work prompt does not constrain user-facing progress language")
 	}
 }

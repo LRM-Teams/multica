@@ -5317,61 +5317,6 @@ export class ApiClient {
     };
   }
 
-  // ---- Research V6 Graph Projection (design doc 7.1 / 7.2) ----
-
-  async getResearchV6ProjectionSnapshot(
-    runId: string,
-    init?: { signal?: AbortSignal },
-  ): Promise<import("../types/research-v6").ResearchV6Snapshot> {
-    const { parseResearchV6SnapshotStrict } = await import("../research-v6/schemas");
-    const raw = await this.fetch(`/api/research/v6/runs/${runId}/projection/snapshot`, {
-      signal: init?.signal,
-    });
-    const snapshot = parseResearchV6SnapshotStrict(raw);
-    const nodeIds = snapshot.nodes.map((node) => node.id);
-    const edgeIds = snapshot.edges.map((edge) => edge.id);
-    if (
-      !snapshot.snapshot_id ||
-      snapshot.run_id !== runId ||
-      snapshot.next_cursor !== null ||
-      !Number.isInteger(snapshot.through_event_sequence) ||
-      snapshot.through_event_sequence < 0 ||
-      snapshot.nodes.some((node) => !node.id || node.run_id !== runId) ||
-      snapshot.edges.some((edge) => !edge.id || edge.run_id !== runId) ||
-      new Set(nodeIds).size !== nodeIds.length ||
-      new Set(edgeIds).size !== edgeIds.length
-    ) {
-      throw new Error(
-        "GET /api/research/v6/runs/:runId/projection/snapshot response failed complete snapshot identity validation",
-      );
-    }
-    return snapshot;
-  }
-
-  async getResearchV6ProjectionDeltaPage(
-    runId: string,
-    fromSequenceExclusive: number,
-  ): Promise<import("../types/research-v6").ResearchV6Delta | null> {
-    const { parseResearchV6Delta } = await import("../research-v6/schemas");
-    const raw = await this.fetch(
-      `/api/research/v6/runs/${runId}/projection/deltas?from_sequence_exclusive=${fromSequenceExclusive}`,
-    );
-    if (raw == null) return null;
-    return parseResearchV6Delta(raw);
-  }
-
-  async resumeResearchV6Projection(
-    runId: string,
-    lastConfirmedSequence: number,
-  ): Promise<import("../types/research-v6").ResearchV6ResumeVerdict> {
-    const { parseResearchV6ResumeVerdict } = await import("../research-v6/schemas");
-    const raw = await this.fetch(`/api/research/v6/runs/${runId}/projection/resume`, {
-      method: "POST",
-      body: JSON.stringify({ last_confirmed_sequence: lastConfirmedSequence }),
-    });
-    return parseResearchV6ResumeVerdict(raw);
-  }
-
   // ---- Ronaldo / Director V6 Projection (authoritative unreleased contract) ----
 
   async getResearchV6DirectorProjectionSnapshot(

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Crosshair, Loader2 } from "lucide-react";
+import { useResearchUiStore } from "@multica/core/research";
 import { Button } from "@multica/ui/components/ui/button";
 import {
   Dialog,
@@ -19,9 +20,7 @@ import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
 import {
-  readGoalCardCollapsed,
   resolveSessionGoalModel,
-  writeGoalCardCollapsed,
   type SessionGoalVisualState,
 } from "../lib/session-goal";
 import type { GoalVersionEntry } from "../lib/research-d5-goal-history";
@@ -88,20 +87,14 @@ export function ResearchSessionGoalCard({
   const { t } = useT("research");
   const isMobile = useIsMobile();
   const [open, setOpen] = useState(false);
-  const [collapsed, setCollapsed] = useState(() =>
-    readGoalCardCollapsed(sessionId),
+  const collapsed = useResearchUiStore(
+    (state) => state.goalCollapsedBySession[sessionId] === true,
   );
+  const setGoalCollapsed = useResearchUiStore((state) => state.setGoalCollapsed);
   const [previousGoal, setPreviousGoal] = useState<string | null>(null);
   const [justUpdated, setJustUpdated] = useState(false);
   const lastGoalRef = useRef<string | null>(null);
-  const collapsedSessionRef = useRef(sessionId);
   const confirmSubmittingRef = useRef(false);
-
-  // Reset collapse preference when navigating sessions (render-time adjust).
-  if (collapsedSessionRef.current !== sessionId) {
-    collapsedSessionRef.current = sessionId;
-    setCollapsed(readGoalCardCollapsed(sessionId));
-  }
 
   // Detect user-driven goal writes during render (LRM-898: fleet cannot write goal).
   const nextGoal = goal ?? "";
@@ -133,8 +126,7 @@ export function ResearchSessionGoalCard({
   });
 
   const setCollapsedPersist = (value: boolean) => {
-    setCollapsed(value);
-    writeGoalCardCollapsed(sessionId, value);
+    setGoalCollapsed(sessionId, value);
   };
 
   const summaryLabel =

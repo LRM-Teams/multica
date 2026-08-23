@@ -80,11 +80,7 @@ import {
 import { resolveCanvasBodyMode } from "../lib/canvas-body-mode";
 import { buildExecutionOverlayRows } from "../execution-overlay/index";
 import { resolveChatDrawerMode } from "../lib/chat-drawer-mode";
-import {
-  dismissCompletionGuide,
-  isCompletionGuideDismissed,
-  resolveCompletionGuideKind,
-} from "../lib/completion-guide";
+import { resolveCompletionGuideKind } from "../lib/completion-guide";
 import { deliveryContentCount } from "../lib/delivery-mode";
 import {
   buildHumanBoundary,
@@ -112,11 +108,7 @@ import {
 import { isServerError } from "../lib/network-status";
 import { formatStageGateRejectReply } from "../lib/stage-gate-confirm";
 import { useBrowserOnline } from "../lib/use-browser-online";
-import {
-  canvasSnapshotToTypedGraph,
-  useResearchV6DirectorCanvas,
-  useResearchSessionCanvas,
-} from "../v6-session-adapter";
+import { useResearchV6DirectorCanvas } from "../v6-session-adapter";
 import {
   INITIAL_RESEARCH_SESSION_UI_STATE,
   researchSessionUiReducer,
@@ -223,15 +215,15 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   const setD5Lens = useResearchUiStore((s) => s.setD5Lens);
   const setD5RailOpen = useResearchUiStore((s) => s.setD5RailOpen);
   const setD5RailMode = useResearchUiStore((s) => s.setD5RailMode);
-  // LRM-832 — dismiss is per-session (localStorage + in-memory for this visit).
-  // react-doctor-disable-next-line react-doctor/prefer-useReducer -- these independent UI concerns are intentionally owned by their respective stores/hooks.
-  const [dismissedSessionId, setDismissedSessionId] = useState<string | null>(null);
-  const completionDismissed =
-    dismissedSessionId === sessionId || isCompletionGuideDismissed(sessionId);
+  const completionDismissed = useResearchUiStore(
+    (state) => state.completionGuideDismissedBySession[sessionId] === true,
+  );
+  const dismissCompletionGuide = useResearchUiStore(
+    (state) => state.dismissCompletionGuide,
+  );
   const dismissCompletion = useCallback(() => {
     dismissCompletionGuide(sessionId);
-    setDismissedSessionId(sessionId);
-  }, [sessionId]);
+  }, [dismissCompletionGuide, sessionId]);
   const online = useBrowserOnline();
   const { data, isLoading, isFetching, isError, error, refetch } = useQuery(
     researchSessionSnapshotOptions(wsId, sessionId),
@@ -404,39 +396,11 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   const clearDirectorReference = useResearchV6DirectorSelectionStore(
     (state) => state.clear,
   );
-  // The current durable run contract is session-keyed. Probe the V6 projection
-  // with that stable key for legacy runs only; Director V6 uses the strict
-  // workspace/run/snapshot projection contract above and never falls through
-  // this compatibility probe.
-  const projectionGateway = useResearchSessionCanvas({
-    wsId,
-    sessionId,
-    runId: data && !directorV6Enabled ? sessionId : undefined,
-    transports: {
-      loadV6Snapshot: (runId, signal) =>
-        api.getResearchV6ProjectionSnapshot(runId, { signal }),
-      loadV5Session: async (id) => {
-        const snapshot = await api.getResearchSessionSnapshot(id);
-        return { sessionId: id, nodes: snapshot.nodes, edges: snapshot.edges };
-      },
-    },
-  });
   const rawDisplayTypedGraph = useMemo(
-    () => {
-      if (directorV6Enabled) return directorCanvas.canvas?.graph;
-      if (projectionGateway.status === "error") return undefined;
-      return projectionGateway.source === "v6" && projectionGateway.canvas
-        ? canvasSnapshotToTypedGraph(sessionId, projectionGateway.snapshot)
-        : typedGraph;
-    },
+    () => (directorV6Enabled ? directorCanvas.canvas?.graph : typedGraph),
     [
-      projectionGateway.canvas,
-      projectionGateway.snapshot,
-      projectionGateway.source,
-      projectionGateway.status,
       directorCanvas.canvas,
       directorV6Enabled,
-      sessionId,
       typedGraph,
     ],
   );
@@ -447,20 +411,16 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     sessionStatus: data?.session.status ?? "",
   });
   const displayTypedGraph = guardedProjection.graph;
-  const projectionSource = directorV6Enabled ? "v6" : projectionGateway.source;
-  const canvasUsesV5 = !directorV6Enabled && projectionGateway.status === "v5";
+  const projectionSource = directorV6Enabled ? "v6" : "v5";
   const canvasLoading =
     (directorV6Enabled && directorCanvas.isLoading) ||
-    (!directorV6Enabled && projectionGateway.status === "probing") ||
-    (canvasUsesV5 && typedGraphLoading);
+    (!directorV6Enabled && typedGraphLoading);
   const canvasError =
     (directorV6Enabled && directorCanvas.error !== null) ||
-    (!directorV6Enabled && projectionGateway.status === "error") ||
-    (canvasUsesV5 && typedGraphError);
+    (!directorV6Enabled && typedGraphError);
   const canvasRetryPending =
     (directorV6Enabled && directorCanvas.isFetching) ||
-    (!directorV6Enabled && projectionGateway.isFetching) ||
-    (canvasUsesV5 && typedGraphFetching && !typedGraphFetchingNextPage);
+    (!directorV6Enabled && typedGraphFetching && !typedGraphFetchingNextPage);
   const detailGraphNodes = useMemo(
     () => mergeResearchCanvasNodes(data?.nodes ?? [], displayTypedGraph),
     [data?.nodes, displayTypedGraph],
@@ -779,7 +739,6 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     onSettled: () => {
       void refetch();
       void refetchTypedGraph();
-      projectionGateway.refetch();
     },
   });
 
@@ -1316,15 +1275,12 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
           typedLoading={canvasLoading}
           typedError={canvasError}
           projectionErrorReason={
-            directorV6Enabled
-              ? directorCanvas.error?.message
-              : projectionGateway.error?.reason
+            directorV6Enabled ? directorCanvas.error?.message : undefined
           }
           projectionMismatch={projectionMismatch}
           onRetryTypedGraph={() => {
             void refetchTypedGraph();
             if (directorV6Enabled) directorCanvas.refetch();
-            else projectionGateway.refetch();
           }}
           retryTypedGraphPending={canvasRetryPending}
           snapshotNodeCount={data.nodes.length}
@@ -1340,17 +1296,17 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
           typedGraphHasNextPage={
             directorV6Enabled
               ? directorCanvas.hasNextSnapshotPage
-              : canvasUsesV5 && typedGraphHasNextPage === true
+              : typedGraphHasNextPage === true
           }
           typedGraphLoadMorePending={
             directorV6Enabled
               ? directorCanvas.isFetching
-              : canvasUsesV5 && typedGraphFetchingNextPage
+              : typedGraphFetchingNextPage
           }
           onLoadMoreTypedGraph={
             directorV6Enabled && directorCanvas.hasNextSnapshotPage
               ? directorCanvas.loadNextSnapshotPage
-              : canvasUsesV5 && typedGraphHasNextPage
+              : typedGraphHasNextPage
               ? () => void fetchNextTypedGraphPage()
               : undefined
           }

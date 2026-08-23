@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
+import { useResearchUiStore } from "@multica/core/research";
 import { ResearchSessionGoalCard } from "./research-session-goal-card";
 
 const mobileState = { isMobile: false };
@@ -52,6 +53,7 @@ vi.mock("../../i18n/use-t", () => ({
 describe("ResearchSessionGoalCard (LRM-1008 / LRM-1010)", () => {
   beforeEach(() => {
     window.localStorage.clear();
+    useResearchUiStore.setState({ goalCollapsedBySession: {} });
     mobileState.isMobile = false;
     vi.useFakeTimers();
   });

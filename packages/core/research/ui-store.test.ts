@@ -9,6 +9,8 @@ describe("useResearchUiStore", () => {
       d5RailMode: "chat",
       d5Lens: "relations",
       d5Overlay: null,
+      goalCollapsedBySession: {},
+      completionGuideDismissedBySession: {},
     });
   });
 
@@ -47,7 +49,7 @@ describe("useResearchUiStore", () => {
     expect(useResearchUiStore.getState().d5Overlay).toBeNull();
   });
 
-  it("persists D5 rail chrome defaults", () => {
+  it("owns D5 rail chrome", () => {
     expect(useResearchUiStore.getState().d5RailOpen).toBe(true);
     expect(useResearchUiStore.getState().d5RailMode).toBe("chat");
     expect(useResearchUiStore.getState().d5Lens).toBe("relations");
@@ -57,5 +59,20 @@ describe("useResearchUiStore", () => {
     expect(useResearchUiStore.getState().d5RailOpen).toBe(false);
     expect(useResearchUiStore.getState().d5RailMode).toBe("detail");
     expect(useResearchUiStore.getState().d5Lens).toBe("agent");
+  });
+
+  it("owns bounded session preferences", () => {
+    const store = useResearchUiStore.getState();
+    store.setGoalCollapsed("session-a", true);
+    store.dismissCompletionGuide("session-a");
+    expect(useResearchUiStore.getState().goalCollapsedBySession).toEqual({
+      "session-a": true,
+    });
+    expect(
+      useResearchUiStore.getState().completionGuideDismissedBySession,
+    ).toEqual({ "session-a": true });
+
+    store.setGoalCollapsed("session-a", false);
+    expect(useResearchUiStore.getState().goalCollapsedBySession).toEqual({});
   });
 });

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"unicode"
 )
 
 // V6WorkProgressEventType is the operational Run Event recorded when an Agent
@@ -22,6 +23,8 @@ const maxV6WorkProgressStageRunes = 64
 // maxV6WorkProgressNotesPerAttempt caps notes per attempt so a looping Agent
 // cannot flood the Run Event ledger.
 const maxV6WorkProgressNotesPerAttempt = 200
+
+const v6WorkProgressChineseFallback = "Agent 正在执行调研任务，稍后会更新中文进度。"
 
 type ReportV6WorkProgressInput struct {
 	V6AttemptAccess
@@ -46,6 +49,7 @@ func (m workProgressModule) Report(ctx context.Context, in ReportV6WorkProgressI
 	if in.ClientRequestID == "" || in.Text == "" {
 		return fmt.Errorf("%w: incomplete progress report", ErrInvalidContract)
 	}
+	in.Text = normalizeV6WorkProgressText(in.Text)
 	if text := []rune(in.Text); len(text) > maxV6WorkProgressTextRunes {
 		in.Text = string(text[:maxV6WorkProgressTextRunes])
 	}
@@ -53,4 +57,13 @@ func (m workProgressModule) Report(ctx context.Context, in ReportV6WorkProgressI
 		return fmt.Errorf("%w: progress stage exceeds %d characters", ErrInvalidContract, maxV6WorkProgressStageRunes)
 	}
 	return m.store.ReportV6WorkProgress(ctx, in)
+}
+
+func normalizeV6WorkProgressText(text string) string {
+	for _, value := range text {
+		if unicode.Is(unicode.Han, value) {
+			return text
+		}
+	}
+	return v6WorkProgressChineseFallback
 }

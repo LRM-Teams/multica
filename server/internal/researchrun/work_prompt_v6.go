@@ -46,7 +46,7 @@ func BuildV6WorkDispatchPrompt(manifest V6WorkManifest) (string, error) {
 
 	base := fmt.Sprintf("%s %s %s", identity.RunID, identity.WorkItemID, identity.AttemptID)
 	var prompt strings.Builder
-	prompt.WriteString("## Durable Research V6 Work Item\n\n")
+	prompt.WriteString("## 持久化 Research V6 Work Item\n\n")
 	prompt.WriteString("使用 `multica-research-fleet` skill。这是与任务绑定的 V6 派发；仅在聊天中回复不能完成任务。\n\n")
 	prompt.WriteString("最高优先级语言要求：从收到任务到结束，所有自然语言输出，包括执行进度、智能体之间的消息、分析说明、错误说明和最终摘要，都必须使用简体中文。不得用英文叙述“我将……”“让我……”或工具探查过程。只有协议字段、JSON key、枚举值、命令、代码、专有名词和来源原文保持原样；冻结 Manifest 明确要求其他语言时除外。\n\n")
 	prompt.WriteString("面向用户的输出不得叙述 Manifest 查找、标识符、JSON 拼装、CLI 命令、工具调用或隐藏推理。持久提交返回 received 后，只报告一段简短的中文摘要，说明已完成的调研和仍存在的不确定性。\n\n")
@@ -63,16 +63,16 @@ func BuildV6WorkDispatchPrompt(manifest V6WorkManifest) (string, error) {
 	prompt.WriteString("进度说明不会结算 Work Item。进度 POST 失败不得阻塞任务或形成重试循环；忽略错误并继续。每条被接受的进度也会延长 Work Item 租约，因此长回合至少每 15 分钟报告一次，否则租约可能在工作期间过期。\n\n")
 	if identity.ExpectedResult == V6ContractDirectorActionProposal {
 		prompt.WriteString(RonaldoV6DirectorSystemProtocol + "\n\n")
-		prompt.WriteString("Read every Director Brief page, acknowledge each page with its exact IDs and hashes, then submit the proposal:\n\n")
+		prompt.WriteString("读取每一页 Director Brief，使用每页的精确 ID 和 hash 逐页确认，然后提交 proposal：\n\n")
 		prompt.WriteString("```bash\nmultica research director-brief " + base + " --output json\nmultica research director-brief-ack " + base + " --client-request-id <uuid> --brief-id <brief-id> --brief-hash <brief-hash> --page-key <page-key> --page-hash <page-hash> --output json\n```\n\n")
-		prompt.WriteString("For the credential-proxy fallback, GET `${V6_API}/director-brief` (append `?cursor=<next_cursor>` when present) and POST each acknowledgement to `${V6_API}/director-brief-acks`. The acknowledgement JSON has exactly `client_request_id`, `brief_id`, `brief_hash`, `page_key`, and `page_hash`.\n\n")
-		prompt.WriteString("The submission must use this exact root shape (replace every angle-bracket value; do not include the angle brackets):\n\n")
+		prompt.WriteString("使用凭据代理回退时，GET `${V6_API}/director-brief`；存在 `next_cursor` 时追加 `?cursor=<next_cursor>`。把每页确认 POST 到 `${V6_API}/director-brief-acks`。确认 JSON 只能包含 `client_request_id`、`brief_id`、`brief_hash`、`page_key` 和 `page_hash`。\n\n")
+		prompt.WriteString("提交必须使用下面的精确根结构；替换所有尖括号占位值，最终 JSON 中不得保留尖括号：\n\n")
 		prompt.WriteString("```json\n{\n")
 		prompt.WriteString("  \"contract_kind\": \"director_action_proposal\",\n  \"schema_version\": 6,\n  \"client_request_id\": \"<new-uuid>\",\n")
 		fmt.Fprintf(&prompt, "  \"workspace_id\": \"<manifest.workspace_id>\",\n  \"run_id\": \"%s\",\n  \"work_item_id\": \"%s\",\n  \"attempt_id\": \"%s\",\n", identity.RunID, identity.WorkItemID, identity.AttemptID)
 		fmt.Fprintf(&prompt, "  \"manifest_id\": \"%s\",\n  \"manifest_hash\": \"%s\",\n", identity.ManifestID, identity.ManifestHash)
 		prompt.WriteString("  \"director_assignment_id\": \"<brief.director_assignment_id>\",\n  \"director_generation\": <brief.director_generation>,\n  \"brief_id\": \"<brief.brief_id>\",\n  \"brief_hash\": \"<brief.brief_hash>\",\n  \"reviewed_page_count\": <brief.page.page_count>,\n  \"expected_state_version\": <brief.state_version>,\n  \"through_event_sequence\": <brief.through_event_sequence>,\n  \"actions\": [\n    {\n      \"action_id\": \"<stable-key>\",\n      \"kind\": \"<allowed-kind>\",\n      \"reason\": \"<reason>\",\n      \"idempotency_key\": \"<stable-key>\",\n      \"expected_state_version\": <brief.state_version>,\n      \"payload_schema\": \"<one manifest.task_specific_schema.payload_schemas key>\",\n      \"payload\": <object matching that payload schema>,\n      \"depends_on_action_ids\": []\n    }\n  ]\n}\n```\n\n")
-		prompt.WriteString("Use only action kinds from the root contract and payload schemas present in `manifest.task_specific_schema.payload_schemas`. A newly requested Agent is asynchronous and cannot receive Work in the same proposal; create it now and wait for its joined event/next Director cycle. Work assigned to an existing team member may be created immediately. Atomic Work must set `expected_result_schema_id` to `atomic_result_submission`, choose a non-empty `payload_schema_id`, and put that result validator under `payload.task_specific_schema`. If no useful mutation exists, submit one `no_op` action with `payload_schema` `no_op.v1` and payload `{\"reason\":\"<reason>\"}`.\n\n")
+		prompt.WriteString("只能使用根合同允许的 action kind，以及 `manifest.task_specific_schema.payload_schemas` 中存在的 payload schema。新申请的 Agent 采用异步加入，不能在同一个 proposal 中接收 Work；先创建它，等待 joined 事件和下一次 Director cycle。分配给现有团队成员的 Work 可以立即创建。原子 Work 必须把 `expected_result_schema_id` 设为 `atomic_result_submission`，选择非空 `payload_schema_id`，并把该结果校验器放在 `payload.task_specific_schema`。如果没有有效状态变更，提交一个 `payload_schema` 为 `no_op.v1`、payload 为 `{\"reason\":\"<reason>\"}` 的 `no_op` action。\n\n")
 	}
 	if identity.ExpectedResult == V6ContractAtomicResultSubmission {
 		taskSchemaID := "<one manifest.task_specific_schema.payload_schemas key>"
@@ -84,27 +84,27 @@ func BuildV6WorkDispatchPrompt(manifest V6WorkManifest) (string, error) {
 				taskSchemaID = schemaID
 			}
 		}
-		prompt.WriteString("The atomic submission root must contain exactly the contract fields below. Copy identity and frozen references; do not invent a legacy Task ID:\n\n")
+		prompt.WriteString("原子提交的根对象必须精确包含下列合同字段。复制身份与冻结引用，不得编造旧版 Task ID：\n\n")
 		prompt.WriteString("```json\n{\n  \"contract_kind\": \"atomic_result_submission\",\n  \"schema_version\": 6,\n  \"client_request_id\": \"<new-uuid>\",\n")
 		fmt.Fprintf(&prompt, "  \"workspace_id\": \"%s\",\n  \"run_id\": \"%s\",\n  \"work_item_id\": \"%s\",\n  \"task_id\": \"%s\",\n  \"attempt_id\": \"%s\",\n  \"agent_id\": \"%s\",\n  \"manifest_id\": \"%s\",\n  \"manifest_hash\": \"%s\",\n  \"goal_version\": %d,\n", identity.WorkspaceID, identity.RunID, identity.WorkItemID, identity.TaskID, identity.AttemptID, identity.AssignedAgent, identity.ManifestID, identity.ManifestHash, identity.Goal.GoalVersion)
 		fmt.Fprintf(&prompt, "  \"branch_refs\": <manifest.branch_refs>,\n  \"content_layers\": {\"catalog_summary\":\"<summary>\",\"brief_summary\":\"<summary>\",\"objective\":\"<objective>\",\"conclusion\":\"<conclusion>\",\"content\":\"<content>\",\"scope\":{},\"uncertainties\":[],\"conflicts\":[],\"open_questions\":[]},\n  \"evidence_refs\": <only frozen manifest artifact versions actually used>,\n  \"state_proposal\": {\"conclusion_state\":\"proposed\",\"integration_state\":\"candidate\"},\n  \"related_candidates\": [],\n  \"task_specific_schema\": \"%s\",\n  \"task_specific_payload\": <object matching the schema under that exact manifest key>,\n  \"content_hash\": \"sha256:<RFC-8785-hash>\"\n}\n```\n\n", taskSchemaID)
-		prompt.WriteString("Use exactly the single key under `manifest.task_specific_schema.payload_schemas`; never invent or rename that schema ID. Keep `content_layers.catalog_summary` at 512 characters or fewer. Root `content_layers.uncertainties`, `content_layers.conflicts`, and `content_layers.open_questions` are arrays of strings; similarly named fields inside `task_specific_payload` follow the frozen task schema and may contain objects. For `content_hash`, remove only the `content_hash` field, canonicalize the remaining object with RFC 8785 JCS, SHA-256 those bytes, then write lowercase `sha256:<64-hex>`. Read and acknowledge every catalog page used before submitting.\n\n")
+		prompt.WriteString("必须使用 `manifest.task_specific_schema.payload_schemas` 下唯一的 key，不得编造或重命名 schema ID。`content_layers.catalog_summary` 最多 512 个字符。根层的 `content_layers.uncertainties`、`content_layers.conflicts` 和 `content_layers.open_questions` 是字符串数组；`task_specific_payload` 内同名字段遵循冻结的任务 schema，可能包含对象。计算 `content_hash` 时只移除 `content_hash` 字段，用 RFC 8785 JCS 规范化其余对象，对所得字节做 SHA-256，然后写入小写 `sha256:<64-hex>`。提交前必须读取并确认实际使用的每一页 catalog。\n\n")
 	}
 	if len(identity.CatalogAccess) > 0 && string(identity.CatalogAccess) != "null" {
-		prompt.WriteString("Read and acknowledge every authorized catalog page needed by the work:\n\n")
+		prompt.WriteString("读取并确认本次工作所需的每一页已授权 catalog：\n\n")
 		prompt.WriteString("```bash\nmultica research work-catalog " + base + " --view same_tier --output json\nmultica research work-catalog-ack " + base + " --client-request-id <uuid> --page-key <page-key> --page-hash <page-hash> --output json\n```\n\n")
-		prompt.WriteString("For the credential-proxy fallback, GET `${V6_API}/catalog?view=<same_tier|higher_candidates>` and POST acknowledgements to `${V6_API}/catalog-acks`. Do not call the catalog endpoint when `catalog_access` is absent.\n\n")
+		prompt.WriteString("使用凭据代理回退时，GET `${V6_API}/catalog?view=<same_tier|higher_candidates>`，并把确认 POST 到 `${V6_API}/catalog-acks`。Manifest 中没有 `catalog_access` 时不得调用 catalog endpoint。\n\n")
 	}
 	if identity.ExpectedResult == V6ContractReportPackageSubmission {
-		prompt.WriteString("Upload each report resource before referencing its returned resource ID:\n\n")
+		prompt.WriteString("先上传每个报告资源，再引用上传返回的 resource ID：\n\n")
 		prompt.WriteString("```bash\nmultica research report-upload " + base + " --file <absolute-file> --path <package-path> --role <role> --media-type <media-type> --output json\n```\n\n")
-		prompt.WriteString("For the credential-proxy fallback, use the `${V6_API}/report-uploads` workflow described by the frozen Manifest.\n\n")
+		prompt.WriteString("使用凭据代理回退时，按冻结 Manifest 描述的 `${V6_API}/report-uploads` 工作流操作。\n\n")
 	}
-	prompt.WriteString("The submission endpoint has no validation-only or dry-run mode. Never send a probe, placeholder, or minimum test payload: any HTTP 200 is a durable handoff that may permanently settle this Work Item. Finish and inspect the mission's real result first.\n\n")
-	prompt.WriteString("Write exactly the final envelope named by `expected_result_schema`, preserving every identity and hash from the manifest, then submit it:\n\n")
+	prompt.WriteString("提交 endpoint 没有仅校验或 dry-run 模式。不得发送探测、占位或最小测试 payload：任何 HTTP 200 都是持久交接，可能永久结算此 Work Item。必须先完成并检查任务的真实结果。\n\n")
+	prompt.WriteString("严格写出 `expected_result_schema` 指定的最终 envelope，保留 Manifest 中的每个身份和 hash，然后提交：\n\n")
 	prompt.WriteString("```bash\nmultica research work-submit " + base + " --file <absolute-result.json> --output json\n```\n\n")
-	prompt.WriteString("For the credential-proxy fallback, POST the exact result file to `${V6_API}/submission` with `Content-Type: application/json` and `--data-binary @<absolute-result.json>`.\n\n")
-	prompt.WriteString("`work-submit` durably records the envelope and normally returns status `received`; that is the successful Agent handoff, so stop and report completion. The server applies it asynchronously and may later mark it `accepted` or `rejected`. Retry only transport/unknown outcomes with the exact same client request ID and byte-equivalent envelope.\n\n### Mission\n\n")
+	prompt.WriteString("使用凭据代理回退时，携带 `Content-Type: application/json`，用 `--data-binary @<absolute-result.json>` 把精确结果文件 POST 到 `${V6_API}/submission`。\n\n")
+	prompt.WriteString("`work-submit` 会持久记录 envelope，通常返回状态 `received`；这表示 Agent 已成功交接，应立即停止执行并报告完成。服务端会异步应用，之后可能标记为 `accepted` 或 `rejected`。只有传输失败或结果未知时才可重试，并且必须使用完全相同的 client request ID 和字节等价的 envelope。\n\n### 调研任务\n\n")
 	prompt.WriteString(strings.TrimSpace(identity.MissionPrompt))
 	prompt.WriteString("\n")
 	return prompt.String(), nil

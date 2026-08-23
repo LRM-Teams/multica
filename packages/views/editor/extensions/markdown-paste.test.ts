@@ -8,13 +8,13 @@ import {
 } from "./markdown-paste";
 
 interface FakeClipboard {
-  files: never[];
+  files: File[];
   getData: (type: string) => string;
 }
 
-function fakePasteEvent(text: string, html?: string) {
+function fakePasteEvent(text: string, html?: string, files: File[] = []) {
   const data: FakeClipboard = {
-    files: [],
+    files,
     getData: (type) =>
       type === "text/plain" ? text : type === "text/html" ? (html ?? "") : "",
   };
@@ -34,8 +34,13 @@ function makeEditor(content: object) {
   });
 }
 
-function paste(editor: Editor, text: string, html?: string): boolean {
-  const event = fakePasteEvent(text, html);
+function paste(
+  editor: Editor,
+  text: string,
+  html?: string,
+  files?: File[],
+): boolean {
+  const event = fakePasteEvent(text, html, files);
   return (
     editor.view.someProp("handlePaste", (handler) =>
       handler(editor.view, event, editor.view.state.selection.content()),
@@ -357,6 +362,32 @@ describe("markdownPaste — code block context", () => {
 
     expectLiteralPaste(editor, text);
     expect(parseJsonSpy).not.toHaveBeenCalled();
+  });
+
+  it("pastes PowerPoint text instead of yielding to the companion bitmap", () => {
+    editor = makeEditor({
+      type: "doc",
+      content: [{ type: "paragraph" }],
+    });
+
+    editor.commands.setTextSelection(1);
+    const bitmap = new File(["png"], "image.png", { type: "image/png" });
+    const html =
+      '<html xmlns:o="urn:schemas-microsoft-com:office:office">' +
+      '<body><p><img src="file:///tmp/ppt.png">季度目标</p></body></html>';
+
+    const handled = paste(editor, "季度目标", html, [bitmap]);
+
+    expect(handled).toBe(true);
+    expect(editor.getText()).toContain("季度目标");
+    expect(editor.getMarkdown()).not.toContain("![");
+    expect(editor.getJSON()).not.toEqual(
+      expect.objectContaining({
+        content: expect.arrayContaining([
+          expect.objectContaining({ type: "image" }),
+        ]),
+      }),
+    );
   });
 });
 

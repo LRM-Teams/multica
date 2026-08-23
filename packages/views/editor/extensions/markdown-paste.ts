@@ -24,10 +24,15 @@
  * should stay native so links, lists, emphasis, and inline code survive.
  * Syntax-highlight wrappers from editors (<pre>/<code>/<span>/<div>) are not
  * enough by themselves, because those should still paste as Markdown source.
+ *
+ * Office apps also put a bitmap of the selection in clipboard.files. When
+ * usable text/plain is present, ignore that bitmap (and Office HTML, which
+ * may embed the same image) so a text copy pastes as text.
  */
 import { Extension } from "@tiptap/core";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { Slice } from "@tiptap/pm/model";
+import { clipboardPrefersTextOverFiles } from "./clipboard-paste";
 
 const LARGE_PASTE_TEXT_THRESHOLD = 50_000;
 const SEMANTIC_RICH_HTML_SELECTOR = [
@@ -362,12 +367,17 @@ export function createMarkdownPasteExtension() {
               if (!clipboard) return false;
 
               const text = clipboard.getData("text/plain");
-              const html = clipboard.getData("text/html");
+              const prefersText =
+                Boolean(clipboard.files?.length) &&
+                clipboardPrefersTextOverFiles(clipboard);
+              // Office dual-format: ignore HTML (it may embed the same bitmap
+              // as <img>) and treat this as a text paste.
+              const html = prefersText ? "" : clipboard.getData("text/html");
               const { $from } = view.state.selection;
               const mode = classifyPaste({
                 text,
                 html,
-                hasFiles: Boolean(clipboard.files?.length),
+                hasFiles: Boolean(clipboard.files?.length) && !prefersText,
                 isInsideCodeBlock: $from.parent.type.name === "codeBlock",
               });
 

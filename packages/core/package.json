@@ -157,7 +157,6 @@
     "./research-v6/director-queries": "./hooks/research-v6/director-queries.ts",
     "./research-v6/director-display-store": "./hooks/research-v6/director-display-store.ts",
     "./research-v6/director-expansion-controller": "./hooks/research-v6/director-expansion-controller.ts",
-    "./research-v6/registry": "./research-v6/registry.ts",
     "./research-v6/director-schemas": "./research-v6/director-schemas.ts",
     "./research-v6/director-registry": "./research-v6/director-registry.ts",
     "./research-v6-live": "./hooks/research-v6-live/index.ts",

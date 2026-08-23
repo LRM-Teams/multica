@@ -9,10 +9,6 @@ import { api, ApiError } from "@multica/core/api";
 import { createResearchV6DirectorProjectionTransport } from "@multica/core/api/research-v6-director";
 import {
   researchV6DirectorNodeDetailOptions,
-  researchV6DirectorReportCompiledOptions,
-  researchV6DirectorReportOptions,
-  researchV6DirectorReportsOptions,
-  researchV6DirectorWorkActivityOptions,
 } from "@multica/core/research-v6/director-queries";
 import {
   researchV6DirectorSelectedRefFromNode,
@@ -24,12 +20,10 @@ import type {
   AgentPanelIdentitySnapshot,
   OpenAgentPanelFn,
 } from "@multica/core/agents";
-import { useRunnerActivity } from "@multica/core/agents";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
-import { agentListOptions } from "@multica/core/workspace/queries";
 import { useWS } from "@multica/core/realtime";
-import type { RunnerActivityTimelineRow, WSEventType } from "@multica/core/types/events";
+import type { WSEventType } from "@multica/core/types/events";
 import {
   dedupeResearchFleetMembers,
   isResearchD5Lens,
@@ -108,7 +102,12 @@ import {
 import { isServerError } from "../lib/network-status";
 import { formatStageGateRejectReply } from "../lib/stage-gate-confirm";
 import { useBrowserOnline } from "../lib/use-browser-online";
-import { useResearchV6DirectorCanvas } from "../v6-session-adapter";
+import {
+  useResearchV6DirectorCanvas,
+  useResearchV6DirectorAssignment,
+  useResearchV6Reports,
+  useResearchV6WorkActivity,
+} from "../v6-session-adapter";
 import {
   INITIAL_RESEARCH_SESSION_UI_STATE,
   researchSessionUiReducer,
@@ -135,7 +134,6 @@ import { ResearchLiveStream } from "./research-live-stream";
 import { ResearchNodeDetail } from "./research-node-detail";
 import { ResearchSelectedRefChip } from "./research-selected-ref-chip";
 import { ResearchV6NodeDetail } from "./research-v6-node-detail";
-import { validateResearchV6ReportSandboxUrl } from "../lib/research-v6-report-sandbox";
 import { ResearchV6ReportModal } from "./research-v6-report-modal";
 import { ResearchProductRoundCardView } from "./research-product-round-card";
 import { ResearchProjectionContractNotice } from "./research-projection-contract-notice";
@@ -264,10 +262,6 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   const directorV6Enabled =
     data?.run?.run.orchestrator_version === "research-run-v6";
   const persistedDirectorAgentId = data?.run?.run.director_agent_id ?? null;
-  const { data: workspaceAgents = [] } = useQuery({
-    ...agentListOptions(wsId),
-    enabled: directorV6Enabled,
-  });
   const directorTransport = useMemo(
     () => createResearchV6DirectorProjectionTransport(api),
     [],
@@ -310,79 +304,21 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
       directorV6Enabled &&
       Boolean(directorCanvas.snapshotId && selectedDirectorProjectionNode),
   });
-  const selectedDirectorWorkItemId =
-    selectedDirectorProjectionNode?.kind === "work_s"
-      ? selectedDirectorProjectionNode.canonicalRef.id
-      : "";
   const {
     data: directorWorkActivityData,
     isLoading: directorWorkActivityLoading,
     isError: directorWorkActivityError,
     refetch: refetchDirectorWorkActivity,
-  } = useQuery({
-    ...researchV6DirectorWorkActivityOptions(
-      directorTransport,
-      wsId,
-      sessionId,
-      selectedDirectorWorkItemId,
-      selectedDirectorProjectionNode?.updatedAt ?? "unselected",
-    ),
-    enabled: directorV6Enabled && Boolean(selectedDirectorWorkItemId),
-  });
-  useEffect(() => {
-    const inboxTaskId = directorWorkActivityData?.inboxTaskId;
-    if (!directorV6Enabled || !inboxTaskId) return;
-    const refetchMatchingWorkActivity = (payload: unknown) => {
-      const progress = payload as { task_id?: unknown };
-      if (progress.task_id === inboxTaskId) {
-        void refetchDirectorWorkActivity();
-      }
-    };
-    const unsubscribers = [
-      "task:running",
-      "task:progress",
-      "task:completed",
-      "task:failed",
-      "task:cancelled",
-    ].map((event) => subscribe(event as WSEventType, refetchMatchingWorkActivity));
-    return () => {
-      for (const unsubscribe of unsubscribers) unsubscribe();
-    };
-  }, [
-    directorV6Enabled,
-    directorWorkActivityData?.inboxTaskId,
-    refetchDirectorWorkActivity,
+    timeline: directorWorkTimeline,
+    refetchRunnerActivity,
+  } = useResearchV6WorkActivity({
+    enabled: directorV6Enabled,
+    workspaceId: wsId,
+    runId: sessionId,
+    selectedNode: selectedDirectorProjectionNode,
+    transport: directorTransport,
     subscribe,
-  ]);
-  const directorRunnerActivity = useRunnerActivity(
-    directorV6Enabled ? wsId : undefined,
-    directorWorkActivityData?.agentId || undefined,
-  );
-  const directorWorkTimeline = useMemo<RunnerActivityTimelineRow[]>(() => {
-    const startedAt = Date.parse(directorWorkActivityData?.startedAt ?? "");
-    const persistedTimeline = directorWorkActivityData?.timeline ?? [];
-    if (!Number.isFinite(startedAt)) return persistedTimeline.slice(0, 8);
-    const completedAt = Date.parse(directorWorkActivityData?.completedAt ?? "");
-    const upperBound = Number.isFinite(completedAt) ? completedAt : Number.POSITIVE_INFINITY;
-    const timelineById = new Map(
-      persistedTimeline.map((row) => [row.id, row] as const),
-    );
-    for (const row of directorRunnerActivity.data?.timeline ?? []) {
-      timelineById.set(row.id, row);
-    }
-    return [...timelineById.values()]
-      .filter((row) => {
-        const occurredAt = Date.parse(row.occurred_at);
-        return occurredAt >= startedAt && occurredAt <= upperBound;
-      })
-      .sort((left, right) => Date.parse(right.occurred_at) - Date.parse(left.occurred_at))
-      .slice(0, 8);
-  }, [
-    directorRunnerActivity.data?.timeline,
-    directorWorkActivityData?.completedAt,
-    directorWorkActivityData?.startedAt,
-    directorWorkActivityData?.timeline,
-  ]);
+  });
   const directorSelectionIdentity = researchV6DirectorSelectionIdentity(
     wsId,
     sessionId,
@@ -454,87 +390,35 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     researchSessionUiReducer,
     INITIAL_RESEARCH_SESSION_UI_STATE,
   );
-  const [selectedDirectorReportId, setSelectedDirectorReportId] = useState<
-    string | null
-  >(null);
-  const [assignedDirectorAgentId, setAssignedDirectorAgentId] = useState<string | null>(
-    persistedDirectorAgentId,
-  );
-  useEffect(() => {
-    // react-doctor-disable-next-line react-doctor/no-derived-state -- assignment changes optimistically and is reconciled from the persisted snapshot.
-    setAssignedDirectorAgentId(persistedDirectorAgentId);
-  }, [persistedDirectorAgentId]);
-  const assignedDirectorAgent = workspaceAgents.find(
-    (agent) => agent.id === assignedDirectorAgentId,
-  );
-  // react-doctor-disable-next-line react-doctor/query-mutation-missing-invalidation -- onSuccess updates the persisted Director assignment and the session snapshot is refreshed by the assignment flow.
-  const directorAssignment = useMutation({
-    mutationFn: ({ agentId, reason }: { agentId: string; reason: string }) =>
-      api.replaceResearchV6Director(wsId, sessionId, {
-        directorAgentId: agentId,
-        expectedStateVersion: data?.run?.run.state_version ?? 0,
-        reason,
-        clientRequestId: crypto.randomUUID(),
-      }),
-    onSuccess: (assignment) => {
-      if (assignment) {
-        setAssignedDirectorAgentId(assignment.directorAgentId);
-        void qc.invalidateQueries({
-          queryKey: researchKeys.snapshot(wsId, sessionId),
-        });
-      }
-    },
-  });
   const {
-    data: directorReportsData,
-    isLoading: directorReportsLoading,
-    refetch: refetchDirectorReports,
-  } = useQuery({
-    ...researchV6DirectorReportsOptions(directorTransport, wsId, sessionId),
+    agents: workspaceAgents,
+    assignedAgentId: assignedDirectorAgentId,
+    assignedAgent: assignedDirectorAgent,
+    assignment: directorAssignment,
+  } = useResearchV6DirectorAssignment({
     enabled: directorV6Enabled,
+    workspaceId: wsId,
+    runId: sessionId,
+    persistedAgentId: persistedDirectorAgentId,
+    expectedStateVersion: data?.run?.run.state_version ?? 0,
   });
-  const directorReportId =
-    (selectedDirectorReportId &&
-    directorReportsData?.some((item) => item.id === selectedDirectorReportId)
-      ? selectedDirectorReportId
-      : null) ??
-    directorReportsData?.find((item) => item.status === "published")?.id ??
-    directorReportsData?.[0]?.id ??
-    null;
   const {
-    data: directorReportDetailData,
-    isFetching: directorReportDetailFetching,
-    refetch: refetchDirectorReportDetail,
-  } = useQuery({
-    ...researchV6DirectorReportOptions(
-      directorTransport,
-      wsId,
-      sessionId,
-      directorReportId ?? "00000000-0000-0000-0000-000000000000",
-    ),
-    enabled: directorV6Enabled && ui.deliveryOpen && Boolean(directorReportId),
-  });
-  const directorReportSandbox = validateResearchV6ReportSandboxUrl(
-    directorReportDetailData?.sandboxUrl ?? "",
-    typeof window === "undefined" ? "" : window.location.origin,
-    directorReportDetailData?.reportOrigin ?? "",
-  );
-  const {
-    data: directorReportCompiledHtml,
-    isFetching: directorReportCompiledFetching,
-  } = useQuery({
-    ...researchV6DirectorReportCompiledOptions(
-      directorTransport,
-      wsId,
-      sessionId,
-      directorReportId ?? "00000000-0000-4000-8000-000000000000",
-    ),
-    enabled:
-      directorV6Enabled &&
-      ui.deliveryOpen &&
-      Boolean(directorReportId) &&
-      Boolean(directorReportDetailData) &&
-      !directorReportSandbox.ok,
+    reports: directorReportsData,
+    reportsLoading: directorReportsLoading,
+    refetchReports: refetchDirectorReports,
+    reportId: directorReportId,
+    selectReport: setSelectedDirectorReportId,
+    reportDetail: directorReportDetailData,
+    reportDetailFetching: directorReportDetailFetching,
+    refetchReportDetail: refetchDirectorReportDetail,
+    compiledHtml: directorReportCompiledHtml,
+    compiledFetching: directorReportCompiledFetching,
+  } = useResearchV6Reports({
+    enabled: directorV6Enabled,
+    deliveryOpen: ui.deliveryOpen,
+    workspaceId: wsId,
+    runId: sessionId,
+    transport: directorTransport,
   });
   const handleSelectCanvasNode = useCallback(
     (node: ResearchGraphNode | null) => {
@@ -1356,7 +1240,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
                   onRetryWorkActivity={() => {
                     void refetchDirectorWorkActivity();
                     if (directorWorkActivityData?.agentId) {
-                      void directorRunnerActivity.refetch();
+                      void refetchRunnerActivity();
                     }
                   }}
                   onFocusNode={(nodeId) => {

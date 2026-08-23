@@ -7,6 +7,13 @@ const source = readFileSync(
   join(dirname(fileURLToPath(import.meta.url)), "research-session-page.tsx"),
   "utf8",
 );
+const workActivitySource = readFileSync(
+  join(
+    dirname(fileURLToPath(import.meta.url)),
+    "../v6-session-adapter/use-research-v6-work-activity.ts",
+  ),
+  "utf8",
+);
 
 describe("Research D5 canonical projection source isolation", () => {
   it("uses only V5 or the authoritative Director V6 projection", () => {
@@ -40,6 +47,7 @@ describe("Research D5 canonical projection source isolation", () => {
   });
 
   it("refetches the selected durable Work activity on matching task progress", () => {
+    expect(source).toContain("useResearchV6WorkActivity({");
     for (const event of [
       '"task:running"',
       '"task:progress"',
@@ -47,9 +55,9 @@ describe("Research D5 canonical projection source isolation", () => {
       '"task:failed"',
       '"task:cancelled"',
     ]) {
-      expect(source).toContain(event);
+      expect(workActivitySource).toContain(event);
     }
-    expect(source).toContain("progress.task_id === inboxTaskId");
-    expect(source).toContain("void refetchDirectorWorkActivity()");
+    expect(workActivitySource).toContain("progress.task_id === inboxTaskId");
+    expect(workActivitySource).toContain("void query.refetch()");
   });
 });

@@ -695,7 +695,11 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
 
   // LRM-840 — reject stage-gate confirm: tip → agent + status resumes via BE.
   const rejectConfirm = useMutation({
-    mutationFn: (body: string) => api.postResearchMessage(sessionId, { body }),
+    mutationFn: (body: string) =>
+      api.postResearchMessage(sessionId, {
+        body,
+        clientRequestId: createSafeId(),
+      }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) });
       void qc.invalidateQueries({ queryKey: researchKeys.sessions(wsId) });
@@ -763,7 +767,10 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     interruptRetryPriorIdRef.current = sessionInterrupt.messageId;
     setInterruptPhase("pending");
     void api
-      .postResearchMessage(sessionId, { body })
+      .postResearchMessage(sessionId, {
+        body,
+        clientRequestId: createSafeId(),
+      })
       .then(() =>
         qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) }),
       )
@@ -1122,7 +1129,10 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
 
   const postFleetAction = (body: string) => {
     void api
-      .postResearchMessage(sessionId, { body })
+      .postResearchMessage(sessionId, {
+        body,
+        clientRequestId: createSafeId(),
+      })
       .then(() =>
         qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) }),
       )

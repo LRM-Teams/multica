@@ -113,6 +113,7 @@ func canonicalMessageDiagnosticEvent(
 		Level:     diagnosticLevel(outcome),
 		Component: "message_coordinator",
 		Identity: diagnosticlog.Identity{
+			EventID:    delivery.Message.ID,
 			AgentID:    delivery.AgentID,
 			RuntimeID:  runtimeID,
 			MessageID:  delivery.Message.ID,
@@ -145,6 +146,30 @@ func (d *Daemon) recordResidentMessageBatch(
 		event.Component = "resident_runtime"
 		d.recordRunnerDiagnostic(workspaceID, event)
 	}
+}
+
+func (d *Daemon) recordInboxLeaseDiagnostic(lease AgentInboxLease, phase, outcome, reason string) {
+	if d == nil || strings.TrimSpace(lease.RuntimeID) == "" {
+		return
+	}
+	d.mu.Lock()
+	workspaceID := ""
+	runtimeEpoch := int64(0)
+	if runtime, ok := d.runtimeIndex[lease.RuntimeID]; ok {
+		workspaceID = runtime.WorkspaceID
+		if state := d.workspaces[workspaceID]; state != nil {
+			runtimeEpoch = state.runtimeEpoch
+		}
+	}
+	d.mu.Unlock()
+	if workspaceID == "" {
+		return
+	}
+	d.recordRunnerDiagnostic(workspaceID, diagnosticlog.Event{
+		Name: diagnosticlog.EventDeliveryStateChanged, Level: diagnosticLevel(outcome), Component: "agent_inbox",
+		Identity: diagnosticlog.Identity{EventID: lease.ID, InboxEventID: lease.ID, RuntimeID: lease.RuntimeID, DeliveryID: lease.DeliveryID, ExecutionID: lease.ExecutionID, ConversationID: lease.ConversationID, SourceMessageID: lease.SourceMessageID},
+		Fields:   diagnosticlog.Fields{Phase: phase, Outcome: outcome, ReasonCode: reason, SeqFrom: lease.SeqFrom, SeqTo: lease.SeqTo, ResponseMode: lease.ResponseMode, RuntimeEpoch: runtimeEpoch},
+	})
 }
 
 func (d *Daemon) recordAgentMessageResponse(
@@ -209,7 +234,9 @@ func (d *Daemon) recordStandaloneChatCheckpoint(
 			AgentID:         task.AgentID,
 			RuntimeID:       task.RuntimeID,
 			TaskID:          task.ID,
+			EventID:         lease.ID,
 			DeliveryID:      lease.DeliveryID,
+			InboxEventID:    lease.ID,
 			ChatSessionID:   task.ChatSessionID,
 			ConversationID:  lease.ConversationID,
 			SourceMessageID: lease.SourceMessageID,
@@ -256,6 +283,21 @@ func diagnosticLevel(outcome string) diagnosticlog.Level {
 		return diagnosticlog.LevelWarn
 	default:
 		return diagnosticlog.LevelInfo
+	}
+}
+
+func terminationReasonFromLifecycle(result string) string {
+	switch result {
+	case "advanced", "":
+		return ""
+	case "timeout":
+		return "startup_timeout"
+	case "superseded":
+		return "superseded"
+	case "terminal":
+		return "natural"
+	default:
+		return "unknown"
 	}
 }
 

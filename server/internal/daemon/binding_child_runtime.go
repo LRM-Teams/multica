@@ -130,7 +130,15 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 	}
 	runtimeIDs := make([]string, 0, len(response.Runtimes))
 	d.mu.Lock()
+	previousEpoch := int64(0)
+	previousRegisteredAt := time.Time{}
+	if previous := d.workspaces[workspaceID]; previous != nil {
+		previousEpoch = previous.runtimeEpoch
+		previousRegisteredAt = previous.registeredAt
+	}
 	d.workspaces[workspaceID] = newWorkspaceState(workspaceID, nil, response.ServerCapabilities...)
+	d.workspaces[workspaceID].runtimeEpoch = previousEpoch
+	d.workspaces[workspaceID].registeredAt = previousRegisteredAt
 	for _, runtime := range response.Runtimes {
 		runtimeIDs = append(runtimeIDs, runtime.ID)
 		d.runtimeIndex[runtime.ID] = runtime

@@ -66,6 +66,29 @@ func (h *Handler) DaemonWebSocket(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// WorkspaceDaemonWebSocket serves the dedicated WorkspaceDaemon connection.
+func (h *Handler) WorkspaceDaemonWebSocket(w http.ResponseWriter, r *http.Request) {
+	if h.DaemonHub == nil {
+		writeError(w, http.StatusServiceUnavailable, "workspace daemon websocket unavailable")
+		return
+	}
+	workspaceID := strings.TrimSpace(middleware.DaemonWorkspaceIDFromContext(r.Context()))
+	if workspaceID == "" {
+		writeError(w, http.StatusNotFound, "workspace not found")
+		return
+	}
+	if err := agent.CheckCLIVersionAtLeast(r.Header.Get("X-Client-Version"), MinWorkspaceDaemonProtocolCLIVersion); err != nil {
+		writeJSON(w, http.StatusUpgradeRequired, map[string]any{"code": "workspace_daemon_protocol_unsupported", "min_version": MinWorkspaceDaemonProtocolCLIVersion})
+		return
+	}
+	h.DaemonHub.HandleWebSocket(w, r, daemonws.ClientIdentity{
+		DaemonID:      middleware.DaemonIDFromContext(r.Context()),
+		UserID:        requestUserID(r),
+		WorkspaceID:   workspaceID,
+		ClientVersion: r.Header.Get("X-Client-Version"),
+	})
+}
+
 func parseRuntimeIDs(r *http.Request) []string {
 	seen := map[string]struct{}{}
 	var out []string

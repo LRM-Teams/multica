@@ -110,7 +110,8 @@ export type WSEventType =
   | "research_session:message"
   | "research_session:stage_eval"
   | "research_session:status_changed"
-  | "research_session:product_round";
+  | "research_session:product_round"
+  | "research_projection_v6:delta";
 
 export interface WSMessage<T = unknown> {
   type: WSEventType;
@@ -639,6 +640,11 @@ export interface WSEventPayloadMap {
   "research_session:message": unknown;
   "research_session:stage_eval": unknown;
   "research_session:status_changed": unknown;
+  "research_projection_v6:delta": {
+    run_id: string;
+    through_sequence?: number;
+    delta?: unknown;
+  };
 }
 
 /**

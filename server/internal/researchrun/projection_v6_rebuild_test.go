@@ -3,9 +3,25 @@ package researchrun
 import (
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestV6NodeDetailExposesImmutableContentLayers(t *testing.T) {
+	if _, ok := reflect.TypeOf(V6ProjectionNodeDetail{}).FieldByName("ContentLayers"); !ok {
+		t.Fatal("V6 node detail does not expose immutable content layers")
+	}
+	raw, err := os.ReadFile("projection_v6_detail.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"research_result_node", "research_insight_version", "objective", "conclusion"} {
+		if !strings.Contains(string(raw), required) {
+			t.Fatalf("V6 node detail content query missing %q", required)
+		}
+	}
+}
 
 func TestV6ProjectionUsesCanonicalPostgresAndPinnedPages(t *testing.T) {
 	raw, err := os.ReadFile("postgres_projection_v6.go")

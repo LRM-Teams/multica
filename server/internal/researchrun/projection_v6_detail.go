@@ -30,6 +30,13 @@ func (s *PostgresStore) ProjectionV6NodeDetail(ctx context.Context, workspaceID,
 	if !found {
 		return V6ProjectionNodeDetail{}, pgx.ErrNoRows
 	}
+	versionID := detail.Node.CanonicalRef.VersionID
+	if versionID != "" && (view == "full" || view == "history") && (detail.Node.Kind == "result_s" || detail.Node.Kind == "insight") {
+		detail.ContentLayers, err = s.loadV6ProjectionContentLayers(ctx, workspaceID, runID, detail.Node.Kind, versionID)
+		if err != nil {
+			return V6ProjectionNodeDetail{}, err
+		}
+	}
 	for _, edge := range edges {
 		if edge.FromNodeID == nodeID {
 			detail.Outgoing = append(detail.Outgoing, edge)
@@ -38,7 +45,6 @@ func (s *PostgresStore) ProjectionV6NodeDetail(ctx context.Context, workspaceID,
 			detail.Incoming = append(detail.Incoming, edge)
 		}
 	}
-	versionID := detail.Node.CanonicalRef.VersionID
 	if detail.Node.Kind == "work_s" {
 		detail.WorkItemRefs = append(detail.WorkItemRefs, V6ProjectionEntityRef{Kind: "work_item", ID: detail.Node.CanonicalRef.ID})
 		rows, queryErr := s.pool.Query(ctx, `SELECT a.id::text,a.assigned_agent_id::text FROM research_work_item_attempt a WHERE a.workspace_id=$1::uuid AND a.session_id=$2::uuid AND a.work_item_id=$3::uuid ORDER BY a.attempt_number`, workspaceID, runID, detail.Node.CanonicalRef.ID)
@@ -113,6 +119,37 @@ func (s *PostgresStore) ProjectionV6NodeDetail(ctx context.Context, workspaceID,
 	sort.Slice(detail.Incoming, func(i, j int) bool { return detail.Incoming[i].ID < detail.Incoming[j].ID })
 	sort.Slice(detail.Outgoing, func(i, j int) bool { return detail.Outgoing[i].ID < detail.Outgoing[j].ID })
 	return detail, nil
+}
+
+func (s *PostgresStore) loadV6ProjectionContentLayers(ctx context.Context, workspaceID, runID, nodeKind, artifactVersionID string) (*V6ContentLayers, error) {
+	var query string
+	switch nodeKind {
+	case "result_s":
+		query = `SELECT catalog_summary,brief_summary,objective,conclusion,content,scope,uncertainties,conflicts,open_questions
+			FROM research_result_node
+			WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND artifact_version_id=$3::uuid`
+	case "insight":
+		query = `SELECT catalog_summary,brief_summary,objective,conclusion,content,scope,uncertainties,conflicts,open_questions
+			FROM research_insight_version
+			WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND artifact_version_id=$3::uuid`
+	default:
+		return nil, ErrInvalidContract
+	}
+	layers := &V6ContentLayers{}
+	if err := s.pool.QueryRow(ctx, query, workspaceID, runID, artifactVersionID).Scan(
+		&layers.CatalogSummary,
+		&layers.BriefSummary,
+		&layers.Objective,
+		&layers.Conclusion,
+		&layers.Content,
+		&layers.Scope,
+		&layers.Uncertainties,
+		&layers.Conflicts,
+		&layers.OpenQuestions,
+	); err != nil {
+		return nil, err
+	}
+	return layers, nil
 }
 
 func appendUniqueV6ProjectionRef(values []V6ProjectionEntityRef, candidate V6ProjectionEntityRef) []V6ProjectionEntityRef {

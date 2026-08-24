@@ -148,6 +148,26 @@ export function ResearchV6NodeDetail({
           ),
         )
       : null;
+  const contentLayers = detail?.contentLayers;
+  const showsResultMeaning =
+    Boolean(contentLayers) && (node.kind === "result_s" || node.kind === "insight");
+  const resultSupplementals: Array<{ label: string; entries: string[] }> =
+    contentLayers
+      ? [
+          {
+            label: t(($) => $.v6_detail.uncertainties),
+            entries: contentLayers.uncertainties,
+          },
+          {
+            label: t(($) => $.v6_detail.conflicts),
+            entries: contentLayers.conflicts,
+          },
+          {
+            label: t(($) => $.v6_detail.open_questions),
+            entries: contentLayers.openQuestions,
+          },
+        ]
+      : [];
 
   return (
     <section
@@ -175,6 +195,60 @@ export function ResearchV6NodeDetail({
           </p>
         ) : null}
       </header>
+
+      {showsResultMeaning && contentLayers ? (
+        <section
+          className="space-y-3 rounded-xl border border-primary/20 bg-primary/[0.04] p-3"
+          aria-label={t(($) => $.v6_detail.result_meaning)}
+        >
+          <div className="space-y-1">
+            <h3 className="text-xs font-semibold text-primary">
+              {t(($) => $.v6_detail.result_objective)}
+            </h3>
+            <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground">
+              {contentLayers.objective}
+            </p>
+          </div>
+          <div className="space-y-1 rounded-lg bg-background/70 px-3 py-2.5">
+            <h3 className="text-xs font-semibold text-primary">
+              {t(($) => $.v6_detail.result_conclusion)}
+            </h3>
+            <p className="whitespace-pre-wrap break-words text-sm font-medium leading-relaxed text-foreground">
+              {contentLayers.conclusion}
+            </p>
+          </div>
+          {contentLayers.briefSummary !== contentLayers.conclusion ? (
+            <p className="whitespace-pre-wrap break-words text-xs leading-relaxed text-muted-foreground">
+              {contentLayers.briefSummary}
+            </p>
+          ) : null}
+          {contentLayers.content !== contentLayers.conclusion &&
+          contentLayers.content !== contentLayers.briefSummary ? (
+            <details className="rounded-lg bg-muted/35 px-3 py-2">
+              <summary className="cursor-pointer text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                {t(($) => $.v6_detail.result_details)}
+              </summary>
+              <p className="mt-2 whitespace-pre-wrap break-words text-xs leading-relaxed text-muted-foreground">
+                {contentLayers.content}
+              </p>
+            </details>
+          ) : null}
+          {resultSupplementals.map(({ label, entries }) =>
+            entries.length > 0 ? (
+              <div key={label} className="space-y-1.5">
+                <h3 className="text-xs font-medium text-foreground">{label}</h3>
+                <ul className="list-disc space-y-1 pl-4 text-xs leading-relaxed text-muted-foreground">
+                  {entries.map((entry, index) => (
+                    <li key={`${index}:${entry}`} className="whitespace-pre-wrap break-words">
+                      {entry}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null,
+          )}
+        </section>
+      ) : null}
 
       {liveActivity ? (
         <div

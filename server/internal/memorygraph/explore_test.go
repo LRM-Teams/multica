@@ -773,3 +773,68 @@ func TestExploreCapturesAdoptedTranscript(t *testing.T) {
 		t.Fatalf("run message buffers must be cleared after adoption: %+v", res.AgentRuns[0])
 	}
 }
+
+type promptCaptureBackend struct{ prompt string }
+
+func (b *promptCaptureBackend) Execute(_ context.Context, prompt string, _ agent.ExecOptions) (*agent.Session, error) {
+	b.prompt = prompt
+	return exploreCompletedSession(`{"found":false,"summary":"","node_ids":[],"rounds":0}`), nil
+}
+
+// Phase 2 §5.4: prior node ids merge AFTER the fresh seeds (fresh always
+// first, D1), duplicates are skipped, unknown ids (empty hydration) are
+// dropped, and the tentative evidence block carries the full brief.
+func TestExploreWithPriorPromptCarriesTentativeBlock(t *testing.T) {
+	store := newExploreStore(t)
+	retr := newExploreRetriever(t, store)
+	capture := &promptCaptureBackend{}
+	ex := NewExplorer(store, retr, capture, testExploreConfig(), "pi", nil)
+
+	prior := &PriorBrief{
+		Summary: "S", NodeIDs: []string{"n-ghost", "n-other", "n-target"},
+		Observations: []string{"obs-1"}, Rejected: []string{"rej-1"}, OpenQuestions: []string{"oq-1"},
+	}
+	if _, err := ex.ExploreWithPrior(context.Background(), "dispatch router retries", []string{"n-target"}, prior); err != nil {
+		t.Fatalf("ExploreWithPrior: %v", err)
+	}
+	for _, want := range []string{
+		"MAY BE STALE OR WRONG", "prior summary: S",
+		"observation: obs-1", "rejected branch: rej-1", "open question: oq-1",
+	} {
+		if !strings.Contains(capture.prompt, want) {
+			t.Fatalf("prompt missing %q", want)
+		}
+	}
+	freshAt := strings.Index(capture.prompt, "- n-target:")
+	priorAt := strings.Index(capture.prompt, "- n-other:")
+	if freshAt < 0 || priorAt < 0 || freshAt > priorAt {
+		t.Fatalf("fresh seed must precede merged prior seed (fresh=%d prior=%d)", freshAt, priorAt)
+	}
+	if strings.Count(capture.prompt, "- n-other:") != 1 {
+		t.Fatalf("prior node must appear exactly once (dedup)")
+	}
+	if strings.Contains(capture.prompt, "n-ghost") {
+		t.Fatalf("unknown prior node id must be dropped from seeds")
+	}
+}
+
+// The merged seed list must keep the whole tool-server flow healthy: the
+// fake backend explores and submits the first seed end to end.
+func TestExploreWithPriorToolServerPath(t *testing.T) {
+	store := newExploreStore(t)
+	retr := newExploreRetriever(t, store)
+	backend := &fakeExploreBackend{t: t}
+	ex := NewExplorer(store, retr, backend, testExploreConfig(), "pi", nil)
+
+	prior := &PriorBrief{Summary: "prior summary", NodeIDs: []string{"n-other"}}
+	res, err := ex.ExploreWithPrior(context.Background(), "dispatch router retries", []string{"n-target"}, prior)
+	if err != nil {
+		t.Fatalf("ExploreWithPrior: %v", err)
+	}
+	if len(backend.errs) > 0 {
+		t.Fatalf("fake backend tool errors: %v", backend.errs)
+	}
+	if !res.Found || len(res.NodeIDs) != 1 || res.NodeIDs[0] != "n-target" {
+		t.Fatalf("result = %+v, want first seed n-target explored and adopted", res)
+	}
+}

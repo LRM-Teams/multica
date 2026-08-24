@@ -6,24 +6,20 @@ import (
 	"testing"
 )
 
-func TestWorkActivityReadsAttemptScopedPersistentTimeline(t *testing.T) {
-	raw, err := os.ReadFile("work_activity.go")
+func TestV6WorkActivityReadsAttemptScopedPersistentTimeline(t *testing.T) {
+	raw, err := os.ReadFile("work_activity_v6.go")
 	if err != nil {
 		t.Fatal(err)
 	}
 	source := string(raw)
 	for _, required := range []string{
-		"agent_activity_entry",
+		"research_work_item_activity_entry",
 		"agent_inbox_event inbox",
 		"inbox.started_at",
 		"inbox.completed_at",
-		"COALESCE(inbox.started_at, work.updated_at)",
-		"COALESCE(inbox.completed_at, work.updated_at)",
-		"entry.observed_at >= $3::timestamptz",
-		"entry.observed_at <= $4::timestamptz",
-		"workActivityTimelineLimit+1",
-		"entry.title",
-		"entry.body_kind",
+		"entry.work_item_attempt_id=$3::uuid",
+		"entry.inbox_task_id=$4::uuid",
+		"v6WorkActivityTimelineLimit+1",
 		"progress.updated_at",
 		"v6_work_progress_reported",
 		"event.payload->>'work_item_id'=work.id::text",
@@ -35,7 +31,13 @@ func TestWorkActivityReadsAttemptScopedPersistentTimeline(t *testing.T) {
 			t.Fatalf("V6 Work activity read model missing %q", required)
 		}
 	}
-	if strings.Contains(source, "attempt.started_at,") || strings.Contains(source, "attempt.completed_at,") {
-		t.Fatal("dispatch-time Attempt timestamps must not bound Inbox Task activity")
+	for _, forbidden := range []string{
+		"FROM agent_activity_entry",
+		"entry.observed_at >=",
+		"entry.observed_at <=",
+	} {
+		if strings.Contains(source, forbidden) {
+			t.Fatalf("V6 Work activity must not use generic Agent/time-window source %q", forbidden)
+		}
 	}
 }

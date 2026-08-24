@@ -170,7 +170,17 @@ For atomic Work, `task_specific_schema.payload_schemas` contains the exact singl
 `payload_schema_id` key and its frozen validator. The Agent copies that key
 verbatim into `atomic_result_submission.task_specific_schema`; it never invents
 or renames the schema ID. A mismatch is rejected with the authorized ID named in
-the bounded validation error.
+the bounded validation error. Director-created atomic Work must itself freeze a
+non-empty schema ID other than `no_op.v1` and include the exact non-empty
+`payload.task_specific_schema`; otherwise the action proposal is rejected before
+the Work Item is created.
+
+The canonical projection includes Run-scoped `agent` nodes and `assigned_to`
+edges from Work to the assigned Agent. Work activity responses are scoped by the
+exact Work Attempt and Inbox Task. A matching `task:message` causes clients to
+refetch durable activity; it is not rendered as an uncommitted stream frame.
+Only bounded user-facing tool/error summaries are returned—never hidden model
+reasoning, raw tool output or unrecognized sensitive arguments.
 
 ### 4.2 Review a paged Director Brief
 

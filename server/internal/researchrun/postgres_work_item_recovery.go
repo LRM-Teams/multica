@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -255,6 +256,7 @@ func (s *PostgresStore) RecoverExpiredV6WorkItems(ctx context.Context, limit int
 	type recovered struct {
 		workspaceID, runID, workItemID, status string
 		version                                int64
+		recoveryKind                           string
 	}
 	items := []recovered{}
 	for rows.Next() {
@@ -263,6 +265,7 @@ func (s *PostgresStore) RecoverExpiredV6WorkItems(ctx context.Context, limit int
 			rows.Close()
 			return 0, err
 		}
+		item.recoveryKind = "lease_or_budget"
 		items = append(items, item)
 	}
 	if err = rows.Err(); err != nil {
@@ -300,6 +303,7 @@ func (s *PostgresStore) RecoverExpiredV6WorkItems(ctx context.Context, limit int
 			zombieRows.Close()
 			return 0, err
 		}
+		item.recoveryKind = "lease_or_budget"
 		items = append(items, item)
 	}
 	if err = zombieRows.Err(); err != nil {
@@ -307,10 +311,114 @@ func (s *PostgresStore) RecoverExpiredV6WorkItems(ctx context.Context, limit int
 		return 0, err
 	}
 	zombieRows.Close()
+	// A retryable runtime-capacity failure is not evidence that the research
+	// contract or Agent is bad. Reopen each exhausted Work Item once with a
+	// bounded delay. The one-time Run Event fence prevents an unavailable model
+	// from creating an infinite retry loop while still recovering a transient
+	// Codex capacity incident without user intervention.
+	runtimeRows, err := tx.Query(ctx, `
+		WITH retryable_runtime AS (
+		  SELECT w.id
+		  FROM research_work_item w
+		  JOIN research_session s ON s.id=w.session_id
+		  WHERE s.orchestrator_version='research-run-v6'
+		    AND s.status='running'
+		    AND w.kind<>'director'
+		    AND w.status='failed'
+		    AND w.terminal_reason_code='attempt_budget_exhausted'
+		    AND EXISTS (
+		      SELECT 1
+		      FROM research_work_item_attempt a
+		      JOIN agent_inbox_event inbox ON inbox.id=a.inbox_task_id
+		      WHERE a.work_item_id=w.id
+		        AND inbox.terminal_outcome='failed'
+		        AND inbox.retryable
+		        AND inbox.failure_reason='agent_error.model_not_found_or_unavailable'
+		    )
+		    AND NOT EXISTS (
+		      SELECT 1
+		      FROM research_work_item_attempt a
+		      LEFT JOIN agent_inbox_event inbox ON inbox.id=a.inbox_task_id
+		      WHERE a.work_item_id=w.id
+		        AND (inbox.id IS NULL
+		          OR inbox.terminal_outcome IS DISTINCT FROM 'failed'
+		          OR NOT COALESCE(inbox.retryable,false)
+		          OR inbox.failure_reason IS DISTINCT FROM 'agent_error.model_not_found_or_unavailable')
+		    )
+		    AND NOT EXISTS (
+		      SELECT 1 FROM research_run_event e
+		      WHERE e.session_id=w.session_id
+		        AND e.idempotency_key='v6-work-item-runtime-reopened:'||w.id::text
+		    )
+		  ORDER BY s.id,w.updated_at,w.id
+		  FOR UPDATE OF s,w SKIP LOCKED LIMIT $1
+		)
+		UPDATE research_work_item w
+		SET status='ready',attempt_count=0,terminal_reason_code='',terminal_reason_detail='',
+		    lease_token=NULL,lease_expires_at=NULL,ready_at=now()+interval '2 minutes',
+		    state_version=state_version+1,updated_at=now()
+		WHERE w.id IN (SELECT id FROM retryable_runtime)
+		RETURNING w.workspace_id::text,w.session_id::text,w.id::text,w.status,w.state_version
+	`, limit)
+	if err != nil {
+		return 0, err
+	}
+	for runtimeRows.Next() {
+		var item recovered
+		if err = runtimeRows.Scan(&item.workspaceID, &item.runID, &item.workItemID, &item.status, &item.version); err != nil {
+			runtimeRows.Close()
+			return 0, err
+		}
+		item.recoveryKind = "retryable_runtime"
+		items = append(items, item)
+	}
+	if err = runtimeRows.Err(); err != nil {
+		runtimeRows.Close()
+		return 0, err
+	}
+	runtimeRows.Close()
+	// Membership state tracks active V6 Work, not the lifetime of the Agent.
+	// Terminal Attempts must release the member or the graph permanently shows
+	// "working" after execution has already ended.
+	workItemIDs := make([]uuid.UUID, 0, len(items))
 	for _, item := range items {
+		workItemID, parseErr := uuid.Parse(item.workItemID)
+		if parseErr != nil {
+			return 0, parseErr
+		}
+		workItemIDs = append(workItemIDs, workItemID)
+	}
+	if len(workItemIDs) > 0 {
+		_, err = tx.Exec(ctx, `
+		UPDATE research_team_membership m
+		SET state='idle'
+		WHERE m.state='working'
+		  AND EXISTS (
+		    SELECT 1 FROM research_work_item_attempt settled
+		    WHERE settled.membership_id=m.id
+		      AND settled.work_item_id=ANY($1::uuid[])
+		      AND settled.status IN ('succeeded','failed','cancelled','lost')
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1 FROM research_work_item_attempt active
+		    WHERE active.membership_id=m.id
+		      AND active.status IN ('dispatching','running')
+		  )
+	`, workItemIDs)
+		if err != nil {
+			return 0, err
+		}
+	}
+	for _, item := range items {
+		eventKey := fmt.Sprintf("v6-work-item-recovered:%s:%d", item.workItemID, item.version)
+		if item.recoveryKind == "retryable_runtime" {
+			eventKey = "v6-work-item-runtime-reopened:" + item.workItemID
+		}
 		if _, err = appendEvent(ctx, tx, item.workspaceID, item.runID, "v6_work_item_recovered",
-			fmt.Sprintf("v6-work-item-recovered:%s:%d", item.workItemID, item.version), "system", "",
-			map[string]any{"work_item_id": item.workItemID, "status": item.status, "state_version": item.version}); err != nil {
+			eventKey, "system", "", map[string]any{
+				"work_item_id": item.workItemID, "status": item.status,
+				"state_version": item.version, "recovery_kind": item.recoveryKind,
+			}); err != nil {
 			return 0, err
 		}
 	}

@@ -45,8 +45,18 @@ func (s *PostgresStore) ProjectionV6NodeDetail(ctx context.Context, workspaceID,
 			detail.Incoming = append(detail.Incoming, edge)
 		}
 	}
+	if detail.Node.Kind == "agent" {
+		detail.AgentRefs = append(detail.AgentRefs, V6ProjectionEntityRef{Kind: "agent", ID: detail.Node.CanonicalRef.ID})
+	}
 	if detail.Node.Kind == "work_s" {
 		detail.WorkItemRefs = append(detail.WorkItemRefs, V6ProjectionEntityRef{Kind: "work_item", ID: detail.Node.CanonicalRef.ID})
+		var assignedAgentID string
+		if queryErr := s.pool.QueryRow(ctx, `SELECT COALESCE(assigned_agent_id::text,'') FROM research_work_item WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid`, workspaceID, runID, detail.Node.CanonicalRef.ID).Scan(&assignedAgentID); queryErr != nil {
+			return V6ProjectionNodeDetail{}, queryErr
+		}
+		if assignedAgentID != "" {
+			detail.AgentRefs = append(detail.AgentRefs, V6ProjectionEntityRef{Kind: "agent", ID: assignedAgentID})
+		}
 		rows, queryErr := s.pool.Query(ctx, `SELECT a.id::text,a.assigned_agent_id::text FROM research_work_item_attempt a WHERE a.workspace_id=$1::uuid AND a.session_id=$2::uuid AND a.work_item_id=$3::uuid ORDER BY a.attempt_number`, workspaceID, runID, detail.Node.CanonicalRef.ID)
 		if queryErr != nil {
 			return V6ProjectionNodeDetail{}, queryErr

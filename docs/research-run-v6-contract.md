@@ -148,6 +148,14 @@ second-stage payload Schemas, so adding a research method or Agent role does not
 require a new orchestrator version. Unknown platform verbs still fail closed;
 Ronaldo's semantic authority does not make unimplemented server operations real.
 
+The Director plans, staffs, assigns and integrates; it never executes atomic
+research Work itself. Atomic Work uses `atomic_result_submission`, a non-empty
+payload schema ID other than `no_op.v1`, and an exact non-empty
+`payload.task_specific_schema`. A contract-rejected assignment with idle
+run-scoped workers must be corrected and retried rather than followed by
+`no_op`. A failed run-scoped Agent Work with no active Agent Work is likewise
+not a valid `no_op` state: the Director must retry or reassign it.
+
 Ronaldo cannot pause the whole Run. A failed Work Item is a recovery input: the
 Director must retry it, reassign it, create replacement Work, or report the
 failure to the user. Only the authenticated user Stop operation or the V6 release
@@ -156,7 +164,10 @@ the `pause_run` shape token, but the Director execution authorization rejects it
 
 When Ronaldo decides that no state change is useful, the Proposal contains one
 `no_op` action with its reason and no semantic dependents; `no_op` cannot coexist
-with another action. An empty or missing action list is invalid.
+with another action. An empty or missing action list is invalid. While a Run is
+active, `no_op` is also invalid when no non-Director member exists and no Agent
+creation is pending, or when idle members remain unassigned after a rejected
+Work contract, or when failed Agent Work remains and no Agent Work is active.
 
 External Agent creation, Inbox dispatch, storage upload and notification use
 durable outbox intents. Database facts commit before an Adapter call. Unknown

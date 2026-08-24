@@ -1330,26 +1330,11 @@ func (q *Queries) ListSandboxSnapshotsByNode(ctx context.Context, arg ListSandbo
 	defer rows.Close()
 	items := []SandboxSnapshot{}
 	for rows.Next() {
-		var i SandboxSnapshot
-		if err := rows.Scan(
-			&i.ID,
-			&i.WorkspaceID,
-			&i.NodeID,
-			&i.InstanceID,
-			&i.CreatorUserID,
-			&i.CubeSnapshotID,
-			&i.Name,
-			&i.Description,
-			&i.Status,
-			&i.Error,
-			&i.Metadata,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.CheckpointID,
-		); err != nil {
+		item, err := scanSandboxSnapshot(rows)
+		if err != nil {
 			return nil, err
 		}
-		items = append(items, i)
+		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -1377,26 +1362,11 @@ func (q *Queries) ListSandboxSnapshotsForCheckpoint(ctx context.Context, arg Lis
 	defer rows.Close()
 	items := []SandboxSnapshot{}
 	for rows.Next() {
-		var i SandboxSnapshot
-		if err := rows.Scan(
-			&i.ID,
-			&i.WorkspaceID,
-			&i.NodeID,
-			&i.InstanceID,
-			&i.CreatorUserID,
-			&i.CubeSnapshotID,
-			&i.Name,
-			&i.Description,
-			&i.Status,
-			&i.Error,
-			&i.Metadata,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.CheckpointID,
-		); err != nil {
+		item, err := scanSandboxSnapshot(rows)
+		if err != nil {
 			return nil, err
 		}
-		items = append(items, i)
+		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -2228,6 +2198,16 @@ func (q *Queries) UpsertSandboxWorkspaceBinding(ctx context.Context, arg UpsertS
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+func scanSandboxSnapshot(row interface{ Scan(...interface{}) error }) (SandboxSnapshot, error) {
+	var i SandboxSnapshot
+	err := row.Scan(
+		&i.ID, &i.WorkspaceID, &i.NodeID, &i.InstanceID, &i.CreatorUserID,
+		&i.CubeSnapshotID, &i.Name, &i.Description, &i.Status, &i.Error,
+		&i.Metadata, &i.CreatedAt, &i.UpdatedAt, &i.CheckpointID,
 	)
 	return i, err
 }

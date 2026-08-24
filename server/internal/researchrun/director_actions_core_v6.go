@@ -3,6 +3,7 @@ package researchrun
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
@@ -98,8 +99,8 @@ func (s *PostgresStore) executeV6CreateWorkAction(ctx context.Context, proposal 
 		var config struct {
 			TaskSpecificSchema json.RawMessage `json:"task_specific_schema"`
 		}
-		if json.Unmarshal(workPayload, &config) != nil || len(config.TaskSpecificSchema) == 0 || string(config.TaskSpecificSchema) == "null" || strings.TrimSpace(payload.PayloadSchemaID) == "" {
-			return ErrInvalidContract
+		if json.Unmarshal(workPayload, &config) != nil || len(config.TaskSpecificSchema) == 0 || string(config.TaskSpecificSchema) == "null" || strings.TrimSpace(payload.PayloadSchemaID) == "" || payload.PayloadSchemaID == "no_op.v1" {
+			return fmt.Errorf("%w: atomic Work payload_schema_id must never be no_op.v1 and payload.task_specific_schema is required", ErrInvalidContract)
 		}
 	}
 	if !validV6ActionUUID(payload.AssigneeAgentID) {
@@ -120,12 +121,19 @@ func (s *PostgresStore) executeV6CreateWorkAction(ctx context.Context, proposal 
 	}
 	var goalVersion int
 	var state, sequence int64
-	var member bool
-	if err = tx.QueryRow(ctx, `SELECT goal_version,state_version,COALESCE((SELECT max(sequence) FROM research_run_event WHERE session_id=s.id),0),EXISTS(SELECT 1 FROM research_team_membership m WHERE m.session_id=s.id AND m.agent_id=$3::uuid AND m.state IN ('idle','working','offline','retiring')) FROM research_session s WHERE s.workspace_id=$1::uuid AND s.id=$2::uuid`, proposal.WorkspaceID, proposal.RunID, payload.AssigneeAgentID).Scan(&goalVersion, &state, &sequence, &member); err != nil {
+	var member, assigneeIsDirector bool
+	if err = tx.QueryRow(ctx, `SELECT goal_version,state_version,
+		COALESCE((SELECT max(sequence) FROM research_run_event WHERE session_id=s.id),0),
+		EXISTS(SELECT 1 FROM research_team_membership m WHERE m.session_id=s.id AND m.agent_id=$3::uuid AND m.state IN ('idle','working','offline','retiring')),
+		EXISTS(SELECT 1 FROM research_director_assignment d WHERE d.id=s.current_director_assignment_id AND d.status='active' AND d.director_agent_id=$3::uuid)
+		FROM research_session s WHERE s.workspace_id=$1::uuid AND s.id=$2::uuid`, proposal.WorkspaceID, proposal.RunID, payload.AssigneeAgentID).Scan(&goalVersion, &state, &sequence, &member, &assigneeIsDirector); err != nil {
 		return err
 	}
 	if state != expectedState || !member {
 		return ErrWorkItemChanged
+	}
+	if expectedKind == V6ContractAtomicResultSubmission && assigneeIsDirector {
+		return fmt.Errorf("%w: Research Director cannot execute atomic research; create a run-scoped Agent first", ErrInvalidContract)
 	}
 	workID := uuid.NewString()
 	result, err := tx.Exec(ctx, `INSERT INTO research_work_item(id,workspace_id,session_id,kind,status,target_kind,client_key,idempotency_key,goal_version,input_state_version,input_event_sequence,created_by_director_cycle_id,assigned_agent_id,priority,max_attempts,payload_schema_id,expected_result_schema_id,payload,state_version,ready_at,reason)

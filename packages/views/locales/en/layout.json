@@ -72,6 +72,7 @@
     "expand_page": "Expand {{title}}",
     "collapse_page": "Collapse {{title}}",
     "create_child": "Create child page",
+    "change_icon": "Change icon",
     "share_title": "Share note",
     "share_members_section": "Members",
     "share_agents_section": "Agents",

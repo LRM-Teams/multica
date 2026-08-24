@@ -547,7 +547,7 @@ WHERE id = $3 AND workspace_id = $4 AND deleted_at IS NULL`,
 	page, err := scanNotePage(h.DB.QueryRow(ctx, `
 INSERT INTO note_page (workspace_id, parent_id, owner_user_id, title, content, sort_key, created_by, updated_by)
 VALUES ($1, $2, $3, $4, $5, lpad((extract(epoch from now()) * 1000000)::bigint::text, 20, '0'), $3, $3)
-RETURNING id, workspace_id, parent_id, owner_user_id, title, content, sort_key, created_at, updated_at, deleted_at`,
+RETURNING id, workspace_id, parent_id, owner_user_id, title, icon, content, sort_key, created_at, updated_at, deleted_at`,
 		workspaceID, run.SourcePageID, userID, normalizeNoteTitle(title), body))
 	if err != nil {
 		return "", err

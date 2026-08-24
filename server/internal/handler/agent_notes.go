@@ -112,7 +112,7 @@ func (h *Handler) loadAgentAccessibleNote(w http.ResponseWriter, r *http.Request
 		return notePageRow{}, pgtype.UUID{}, false
 	}
 	page, err := scanNotePage(h.DB.QueryRow(r.Context(), `
-SELECT id, workspace_id, parent_id, owner_user_id, title, content, sort_key, created_at, updated_at, deleted_at
+SELECT id, workspace_id, parent_id, owner_user_id, title, icon, content, sort_key, created_at, updated_at, deleted_at
 FROM note_page
 WHERE id = $1 AND deleted_at IS NULL AND workspace_id = $2`, pageUUID, workspaceUUID))
 	if err != nil {

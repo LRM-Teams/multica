@@ -289,7 +289,7 @@ func (h *Handler) CreateNotePeriodBrief(w http.ResponseWriter, r *http.Request) 
 	draft, err := scanNotePage(h.DB.QueryRow(r.Context(), `
 INSERT INTO note_page (workspace_id, parent_id, owner_user_id, title, content, sort_key, created_by, updated_by)
 VALUES ($1, $2, $3, $4, $5, lpad((extract(epoch from now()) * 1000000)::bigint::text, 20, '0'), $3, $3)
-RETURNING id, workspace_id, parent_id, owner_user_id, title, content, sort_key, created_at, updated_at, deleted_at`,
+RETURNING id, workspace_id, parent_id, owner_user_id, title, icon, content, sort_key, created_at, updated_at, deleted_at`,
 		workspaceID, folderID, userID, normalizeNoteTitle(title), content))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create period brief draft note")
@@ -744,7 +744,7 @@ LIMIT 1`, workspaceID, userID, notePeriodBriefFolderTitle).Scan(&id)
 	page, err := scanNotePage(h.DB.QueryRow(ctx, `
 INSERT INTO note_page (workspace_id, parent_id, owner_user_id, title, content, sort_key, created_by, updated_by)
 VALUES ($1, NULL, $2, $3, '', lpad((extract(epoch from now()) * 1000000)::bigint::text, 20, '0'), $2, $2)
-RETURNING id, workspace_id, parent_id, owner_user_id, title, content, sort_key, created_at, updated_at, deleted_at`,
+RETURNING id, workspace_id, parent_id, owner_user_id, title, icon, content, sort_key, created_at, updated_at, deleted_at`,
 		workspaceID, userID, notePeriodBriefFolderTitle))
 	if err != nil {
 		return pgtype.UUID{}, err

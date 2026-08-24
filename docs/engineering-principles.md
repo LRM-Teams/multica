@@ -702,6 +702,7 @@
 - **分享给虚拟成员（2026-08-24）**：分享对话框分三区：真人成员、智能体、群频道。智能体只读**当前页**。分享给频道后，该频道人类成员获得与直接分享相同的读权限（本页及子页），并在该频道（或与智能体的 DM）里贴一张 `note_brief` 卡片。`note_page_share_agent` / `note_page_share_channel`；`TestUpdateNotePageSharesAcceptsAgentAndChannel` / `TestAgentNoteShareAllowsCurrentPageOnly`。
 - **回收站清空（2026-08-24）**：`DELETE /api/notes/pages/trash` 硬删当前用户所有 `deleted_at` 页（含子页）。不删别人的回收站，也不删未删除的页。`TestEmptyNoteTrashDeletesOwnDeletedPagesOnly`。
 - **拖入回收站（2026-08-24）**：树条目拖到侧栏「回收站」走软删（含子页），不弹确认；菜单删除仍确认。只有 `can_manage_shares` 的页能拖入。`NoteTrashDock`。
+- **目录图标（2026-08-24）**：`note_page.icon` 存原生 emoji。目录行画在展开箭头和标题之间；空则淡 `FileText`。只有 `can_manage_shares` 能改，点那一格打开现有 `EmojiPicker` 后 `PATCH icon`。`NoteTreeIcon` + `TestUpdateNotePageIconOwnerOnly`。
 - **物**：`docs/notes-editor-worker-contract.md`；`docs/agent-memory-model.md` §10；migration `338_note_worker_job` / `420_chat_session_context_note_page` / `442_note_page_virtual_share`；`note_intent.go` / `note_brief.go` / `note_worker_prompt.go` / `note_writeback_events.go` / `appendAgentNoteWritePart` + 误用、dispatch/ACL、prompt breakout、白名单、`--note-write` 测；`note_chat_context.go` / `ListAgentNoteTree` / Notes FAB；`requestInlineNotePageAI` + EmptyLineAiMenu `onRequestPageAI`（无笔记助手时回车发送才开边栏配置卡）。
 
 ### 4.25 Notes 字体分层：默认是偏好，选区样式才进正文 — `可执行`（②类型 + ⑤单测；owner: 本 Slice）

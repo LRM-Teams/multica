@@ -96,7 +96,7 @@ func (h *Handler) RetryAgentNotePeriodBriefCollectors(w http.ResponseWriter, r *
 
 	bg := context.WithoutCancel(r.Context())
 	draft, err := scanNotePage(h.DB.QueryRow(bg, `
-SELECT id, workspace_id, parent_id, owner_user_id, title, content, sort_key, created_at, updated_at, deleted_at
+SELECT id, workspace_id, parent_id, owner_user_id, title, icon, content, sort_key, created_at, updated_at, deleted_at
 FROM note_page WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL`, draftUUID, workspaceUUID))
 	if err != nil {
 		return
@@ -188,7 +188,7 @@ func (h *Handler) retryNotePeriodBriefCollectors(
 		}
 
 		draft, err := scanNotePage(h.DB.QueryRow(ctx, `
-SELECT id, workspace_id, parent_id, owner_user_id, title, content, sort_key, created_at, updated_at, deleted_at
+SELECT id, workspace_id, parent_id, owner_user_id, title, icon, content, sort_key, created_at, updated_at, deleted_at
 FROM note_page WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL`,
 			run.DraftPageID, workspaceID))
 		if err != nil {

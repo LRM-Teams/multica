@@ -45,3 +45,39 @@ func TestPriorCompressorFailures(t *testing.T) {
 		t.Fatalf("want error for unparseable compressor output")
 	}
 }
+
+func TestPriorRecordStoreRoundtrip(t *testing.T) {
+	dir := t.TempDir()
+	s := NewPriorRecordStore(dir)
+	if rec, err := s.Load("ws|channel|c1"); err != nil || rec != nil {
+		t.Fatalf("Load missing = (%v, %v), want (nil, nil)", rec, err)
+	}
+	in := PriorRecord{
+		GraphVersion: 3, Query: "q1", CreatedAt: time.Unix(1000, 0).UTC(),
+		Transcript: []TraceMessage{{Kind: "message", Sequence: 0, Type: "text", Content: "hello"}},
+		Briefs:     map[string]PriorBrief{"q b": {Summary: "s"}},
+	}
+	if err := s.Save("ws|channel|c1", in); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	out, err := s.Load("ws|channel|c1")
+	if err != nil || out == nil {
+		t.Fatalf("Load: %v %v", out, err)
+	}
+	if out.GraphVersion != 3 || out.Query != "q1" || len(out.Transcript) != 1 || out.Briefs["q b"].Summary != "s" {
+		t.Fatalf("roundtrip = %+v", out)
+	}
+	in.GraphVersion = 4 // overwrite: the newest found recall replaces wholesale
+	if err := s.Save("ws|channel|c1", in); err != nil {
+		t.Fatalf("Save overwrite: %v", err)
+	}
+	if out, _ := s.Load("ws|channel|c1"); out.GraphVersion != 4 {
+		t.Fatalf("overwrite failed: %+v", out)
+	}
+}
+
+func TestNormalizeRecallKey(t *testing.T) {
+	if NormalizeRecallKey("  Foo   Bar ") != "foo bar" {
+		t.Fatalf("NormalizeRecallKey = %q", NormalizeRecallKey("  Foo   Bar "))
+	}
+}

@@ -2,8 +2,12 @@ package memorygraph
 
 import (
 	"context"
+	"crypto/sha1"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -93,4 +97,67 @@ func (c *PriorCompressor) Compress(ctx context.Context, query string, transcript
 		return nil, fmt.Errorf("prior compress: unparseable output")
 	}
 	return &brief, nil
+}
+
+// PriorRecord is the per-channel continuation state (spec §5.1): the
+// latest found recall's sanitized adopted transcript plus the brief cache.
+// It lives under <graph_dir>/continuation/<sha1(key)>.json and is replaced
+// wholesale by each new found recall; a graph version change invalidates
+// it (caller compares GraphVersion, spec D8).
+type PriorRecord struct {
+	GraphVersion int                   `json:"graph_version"`
+	Query        string                `json:"query"`
+	CreatedAt    time.Time             `json:"created_at"`
+	Transcript   []TraceMessage        `json:"transcript"`
+	Briefs       map[string]PriorBrief `json:"briefs,omitempty"`
+}
+
+type PriorRecordStore struct{ dir string }
+
+func NewPriorRecordStore(dir string) *PriorRecordStore { return &PriorRecordStore{dir: dir} }
+
+func priorRecordPath(dir, key string) string {
+	sum := sha1.Sum([]byte(key))
+	return filepath.Join(dir, fmt.Sprintf("%x.json", sum))
+}
+
+// Save writes the record atomically (temp file + rename). Errors are the
+// caller's to log; continuation is best-effort by design.
+func (s *PriorRecordStore) Save(key string, rec PriorRecord) error {
+	if err := os.MkdirAll(s.dir, 0o755); err != nil {
+		return err
+	}
+	data, err := json.Marshal(rec)
+	if err != nil {
+		return err
+	}
+	path := priorRecordPath(s.dir, key)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// Load returns nil, nil when no record exists for the key.
+func (s *PriorRecordStore) Load(key string) (*PriorRecord, error) {
+	data, err := os.ReadFile(priorRecordPath(s.dir, key))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var rec PriorRecord
+	if err := json.Unmarshal(data, &rec); err != nil {
+		return nil, err
+	}
+	return &rec, nil
+}
+
+// NormalizeRecallKey canonicalizes a query for exact-match brief caching
+// (spec D11): case-folding with whitespace runs collapsed. Mirrors the
+// daemon-side batch coalescing key.
+func NormalizeRecallKey(query string) string {
+	return strings.Join(strings.Fields(strings.ToLower(query)), " ")
 }

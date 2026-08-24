@@ -60,7 +60,9 @@ the editor. Never claim a silent page replace succeeded.
 
 Agent token + active bubble session authorize the **context root and its
 descendants**. Stay in that subtree unless the human points at another
-authorized page.
+authorized page. A page shared to this Agent (or a group channel it belongs
+to) authorizes **that page only** — `notes tree` will not list children from
+a share.
 
 ## Do not confuse
 

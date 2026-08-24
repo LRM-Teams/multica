@@ -25,6 +25,16 @@ inviting humans and changing or removing human membership.
 _Avoid_: Agents page (retired name for this surface), Settings members tab
 (retired human-admin entry), team page, people list
 
+### Note virtual share
+
+Sharing a note page with virtual members: Agents, and Messages group
+channels. An Agent share (direct or via membership in a shared channel)
+authorizes **that page only**. Sharing to a channel also grants its human
+members the same inherited read as a direct member share (this page and
+descendants) and posts a `note_brief` card in that conversation.
+_Avoid_: sharing DMs as channels, Agent subtree from a share, write access
+from share
+
 ### Computer
 
 The single machine-local authority for supervising Multica execution under one

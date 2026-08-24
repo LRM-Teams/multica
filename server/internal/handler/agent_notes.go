@@ -17,9 +17,10 @@ import (
 
 // GetAgentNotePage is the agent data-plane read for a single product note page
 // (S2-C2). Authorization is fail-closed: the current task must authorize the
-// page via note_worker_job, note_brief, or a note-scoped chat_session, and the
-// human viewer must still pass noteAccess. Agent OwnerUserID is never used as
-// the note viewer. Authorized roots also cover descendants (subtree read).
+// page via note_worker_job, note_brief, or a note-scoped chat_session, or an
+// exact-page virtual share. The human viewer must still pass noteAccess. Agent
+// OwnerUserID is never used as the note viewer. Worker / brief / session
+// grants also cover descendants; a share grant is the current page only.
 func (h *Handler) GetAgentNotePage(w http.ResponseWriter, r *http.Request) {
 	principal, ok := h.requireAgentPrincipal(w, r)
 	if !ok {
@@ -50,6 +51,24 @@ func (h *Handler) ListAgentNoteTree(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	agentUUID, ok := parseUUIDOrBadRequest(w, principal.AgentID, "agent id")
+	if !ok {
+		return
+	}
+	subtreeOK, err := h.agentNoteGrantAllowsSubtree(r.Context(), principal, agentUUID, page.WorkspaceID, page.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list note tree")
+		return
+	}
+	if !subtreeOK {
+		writeJSON(w, http.StatusOK, map[string]any{"pages": []agentNoteTreeNode{{
+			ID:       uuidToString(page.ID),
+			ParentID: uuidToPtr(page.ParentID),
+			Title:    page.Title,
+			Depth:    0,
+		}}})
+		return
+	}
 	nodes, err := h.listNoteSubtreeNodes(r.Context(), page.ID, page.WorkspaceID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list note tree")
@@ -75,6 +94,13 @@ func (h *Handler) loadAgentAccessibleNote(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to authorize note page")
 		return notePageRow{}, pgtype.UUID{}, false
+	}
+	if !authorized {
+		viewerID, authorized, err = h.resolveAgentNoteShareViewer(r.Context(), agentUUID, workspaceUUID, pageUUID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to authorize note page")
+			return notePageRow{}, pgtype.UUID{}, false
+		}
 	}
 	if !authorized {
 		writeError(w, http.StatusNotFound, "note page not found")
@@ -201,4 +227,50 @@ LIMIT 16`, agentID, workspaceID)
 	}
 
 	return h.resolveNoteChatSessionViewer(ctx, agentID, workspaceID, pageID)
+}
+
+// resolveAgentNoteShareViewer grants the exact shared page only (no descendants).
+// Viewer is the page owner so the subsequent human noteAccess check passes.
+func (h *Handler) resolveAgentNoteShareViewer(
+	ctx context.Context,
+	agentID, workspaceID, pageID pgtype.UUID,
+) (pgtype.UUID, bool, error) {
+	var ownerID pgtype.UUID
+	err := h.DB.QueryRow(ctx, `
+SELECT p.owner_user_id
+FROM note_page p
+WHERE p.id = $1
+  AND p.workspace_id = $2
+  AND p.deleted_at IS NULL
+  AND (
+    EXISTS (
+      SELECT 1 FROM note_page_share_agent s
+      WHERE s.page_id = p.id AND s.agent_id = $3
+    )
+    OR EXISTS (
+      SELECT 1
+      FROM note_page_share_channel sc
+      JOIN channel_member cm ON cm.channel_id = sc.channel_id
+        AND cm.workspace_id = $2
+        AND cm.member_type = 'agent'
+        AND cm.member_id = $3
+      WHERE sc.page_id = p.id
+    )
+  )`, pageID, workspaceID, agentID).Scan(&ownerID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return pgtype.UUID{}, false, nil
+	}
+	if err != nil {
+		return pgtype.UUID{}, false, err
+	}
+	return ownerID, true, nil
+}
+
+func (h *Handler) agentNoteGrantAllowsSubtree(
+	ctx context.Context,
+	principal middleware.AgentPrincipal,
+	agentID, workspaceID, pageID pgtype.UUID,
+) (bool, error) {
+	_, authorized, err := h.resolveAgentNoteViewer(ctx, principal, agentID, workspaceID, pageID)
+	return authorized, err
 }

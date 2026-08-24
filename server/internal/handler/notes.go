@@ -27,6 +27,8 @@ type NotePageResponse struct {
 	Content         string                     `json:"content"`
 	SortKey         string                     `json:"sort_key"`
 	ShareUserIDs    []string                   `json:"share_user_ids"`
+	ShareAgentIDs   []string                   `json:"share_agent_ids"`
+	ShareChannelIDs []string                   `json:"share_channel_ids"`
 	CanManageShares bool                       `json:"can_manage_shares"`
 	CreatedAt       string                     `json:"created_at"`
 	UpdatedAt       string                     `json:"updated_at"`
@@ -58,7 +60,9 @@ type noteUpdateRequest struct {
 }
 
 type noteShareRequest struct {
-	UserIDs []string `json:"user_ids"`
+	UserIDs    []string `json:"user_ids"`
+	AgentIDs   []string `json:"agent_ids"`
+	ChannelIDs []string `json:"channel_ids"`
 }
 
 type noteMoveRequest struct {
@@ -176,6 +180,8 @@ func notePageToResponse(p notePageRow, currentUserID pgtype.UUID, shareUserIDs [
 		Content:         p.Content,
 		SortKey:         p.SortKey,
 		ShareUserIDs:    shareUserIDs,
+		ShareAgentIDs:   []string{},
+		ShareChannelIDs: []string{},
 		CanManageShares: uuidToString(p.OwnerUserID) == uuidToString(currentUserID),
 		CreatedAt:       timestampToString(p.CreatedAt),
 		UpdatedAt:       timestampToString(p.UpdatedAt),
@@ -226,7 +232,18 @@ SELECT
     WHERE c.owner_user_id = $3
        OR (
          c.workspace_id = $2
-         AND EXISTS (SELECT 1 FROM note_page_share s WHERE s.page_id = c.id AND s.user_id = $3)
+         AND (
+           EXISTS (SELECT 1 FROM note_page_share s WHERE s.page_id = c.id AND s.user_id = $3)
+           OR EXISTS (
+             SELECT 1
+             FROM note_page_share_channel sc
+             JOIN channel_member cm ON cm.channel_id = sc.channel_id
+               AND cm.workspace_id = $2
+               AND cm.member_type = 'user'
+               AND cm.member_id = $3
+             WHERE sc.page_id = c.id
+           )
+         )
        )
   ) AS accessible,
   EXISTS (
@@ -272,7 +289,18 @@ WITH RECURSIVE visible AS (
         p.owner_user_id = $2
         OR (
           p.workspace_id = $1
-          AND EXISTS (SELECT 1 FROM note_page_share s WHERE s.page_id = p.id AND s.user_id = $2)
+          AND (
+            EXISTS (SELECT 1 FROM note_page_share s WHERE s.page_id = p.id AND s.user_id = $2)
+            OR EXISTS (
+              SELECT 1
+              FROM note_page_share_channel sc
+              JOIN channel_member cm ON cm.channel_id = sc.channel_id
+                AND cm.workspace_id = $1
+                AND cm.member_type = 'user'
+                AND cm.member_id = $2
+              WHERE sc.page_id = p.id
+            )
+          )
         )
       )
   UNION
@@ -304,12 +332,12 @@ ORDER BY parent_id NULLS FIRST, sort_key, created_at`, workspaceID, userID)
 	}
 	pages := make([]NotePageResponse, 0, len(collected))
 	for _, p := range collected {
-		shares, err := h.noteShareUserIDs(r.Context(), p.ID)
+		resp, err := h.notePageResponseWithShares(r.Context(), p, userID, nil)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to list notes")
 			return
 		}
-		pages = append(pages, notePageToResponse(p, userID, shares, nil))
+		pages = append(pages, resp)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"pages": pages})
 }
@@ -397,17 +425,17 @@ func (h *Handler) GetNotePage(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	shares, err := h.noteShareUserIDs(r.Context(), page.ID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to load note page")
-		return
-	}
 	refs, err := h.loadNotePageRefs(r.Context(), page.ID, page.WorkspaceID, userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load note page refs")
 		return
 	}
-	writeJSON(w, http.StatusOK, notePageToResponse(page, userID, shares, refs))
+	resp, err := h.notePageResponseWithShares(r.Context(), page, userID, refs)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load note page")
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (h *Handler) UpdateNotePage(w http.ResponseWriter, r *http.Request) {
@@ -769,41 +797,29 @@ func (h *Handler) UpdateNotePageShares(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(r.Context())
-	if _, err := tx.Exec(r.Context(), `DELETE FROM note_page_share WHERE page_id = $1`, page.ID); err != nil {
+	previous, err := h.noteShareRoster(r.Context(), page.ID)
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update shares")
 		return
 	}
-	seen := map[string]bool{}
-	for _, rawID := range req.UserIDs {
-		targetID, ok := parseUUIDOrBadRequest(w, rawID, "share user id")
-		if !ok {
-			return
-		}
-		key := uuidToString(targetID)
-		if key == uuidToString(userID) || seen[key] {
-			continue
-		}
-		seen[key] = true
-		var exists bool
-		if err := tx.QueryRow(r.Context(), `SELECT EXISTS (SELECT 1 FROM member WHERE workspace_id = $1 AND user_id = $2)`, page.WorkspaceID, targetID).Scan(&exists); err != nil || !exists {
-			writeError(w, http.StatusBadRequest, "share user must be a workspace member")
-			return
-		}
-		if _, err := tx.Exec(r.Context(), `INSERT INTO note_page_share (page_id, user_id, created_by) VALUES ($1, $2, $3)`, page.ID, targetID, userID); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to update shares")
-			return
-		}
+	roster, ok := h.replaceNotePageShares(r.Context(), tx, w, page, userID, req)
+	if !ok {
+		return
 	}
 	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update shares")
 		return
 	}
-	shares, err := h.noteShareUserIDs(r.Context(), page.ID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to update shares")
-		return
-	}
-	writeJSON(w, http.StatusOK, notePageToResponse(page, userID, shares, nil))
+	h.publishNoteShareCards(
+		r.Context(),
+		page,
+		userID,
+		addedShareIDs(previous.AgentIDs, roster.AgentIDs),
+		addedShareIDs(previous.ChannelIDs, roster.ChannelIDs),
+	)
+	resp := notePageToResponse(page, userID, roster.UserIDs, nil)
+	applyNoteShareRoster(&resp, roster)
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func normalizeNoteAIJobTitle(title, noteTitle string) string {

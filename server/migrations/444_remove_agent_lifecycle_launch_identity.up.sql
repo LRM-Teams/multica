@@ -13,7 +13,6 @@ DROP TABLE IF EXISTS agent_activity_launch;
 
 DROP INDEX IF EXISTS agent_activity_entry_launch_idx;
 ALTER TABLE agent_activity_entry
-  DROP CONSTRAINT agent_activity_entry_workspace_id_agent_id_launch_id_producer_fact_id_entry_position_key,
   DROP COLUMN launch_id,
   ADD CONSTRAINT agent_activity_entry_fact_key
     UNIQUE (workspace_id, agent_id, daemon_instance_id, producer_fact_id, entry_position);

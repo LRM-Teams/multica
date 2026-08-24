@@ -65,6 +65,9 @@ func (h *Handler) HandleWorkspaceDaemonFrame(ctx context.Context, identity daemo
 		if err := h.recordWorkspaceDaemonReady(ctx, identity, daemonInstanceID, ready.RunningAgents); err != nil {
 			return err
 		}
+		h.publish(protocol.EventComputerUpdated, identity.WorkspaceID, "system", "", map[string]any{
+			"computer_id": identity.DaemonID,
+		})
 		// Raft establishes APM ownership before it offers durable deliveries.
 		// Channel messages may ACK into the Agent's starting Inbox before the
 		// Provider is Running. Standalone chat: (FAB) does not — see §1.5 —
@@ -576,7 +579,7 @@ func (h *Handler) recordRunnerActivity(ctx context.Context, identity daemonws.Cl
 // owns the current ready Runner slot. Exact daemon-instance fencing prevents a
 // late teardown from deactivating a replacement Runner's launches.
 func (h *Handler) HandleWorkspaceDaemonDisconnect(ctx context.Context, identity daemonws.ClientIdentity, daemonInstanceID string) error {
-	return h.runnerPresenceLocked(func() error {
+	err := h.runnerPresenceLocked(func() error {
 		if _, err := util.ParseUUID(identity.WorkspaceID); err != nil {
 			return errors.New("invalid Runner workspace identity")
 		}
@@ -599,6 +602,13 @@ func (h *Handler) HandleWorkspaceDaemonDisconnect(ctx context.Context, identity 
 		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	h.publish(protocol.EventComputerUpdated, identity.WorkspaceID, "system", "", map[string]any{
+		"computer_id": identity.DaemonID,
+	})
+	return nil
 }
 
 func (h *Handler) liveRunnerOwnsActivitySnapshot(daemonID, workspaceID string, snapshot protocol.AgentActivitySnapshot) bool {

@@ -596,7 +596,7 @@ func (d *Daemon) enqueueAgentAppInboxNotice(agentID, runtimeID string) bool {
 	d.mu.Lock()
 	workspaceID := d.runtimeIndex[runtimeID].WorkspaceID
 	d.mu.Unlock()
-	runner := d.currentWorkspaceRunner(workspaceID)
+	runner := d.currentWorkspaceDaemon(workspaceID)
 	if runner == nil {
 		return false
 	}

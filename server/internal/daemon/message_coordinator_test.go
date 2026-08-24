@@ -716,7 +716,7 @@ func TestResidentMessageTurnCompletionDoesNotAutoDeliverPending(t *testing.T) {
 	d.mu.Lock()
 	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
 	d.mu.Unlock()
-	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, func(string, any) error { return nil })
+	runner, _ := attachTestWorkspaceDaemon(t, d, workspaceID, func(string, any) error { return nil })
 	if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: agentID, RuntimeID: runtimeID, LaunchID: "launch-1", StartDispatchID: "dispatch-1"}); err != nil {
 		t.Fatal(err)
 	}
@@ -790,7 +790,7 @@ func TestResidentMessageTurnErrorDoesNotAutoDeliverPending(t *testing.T) {
 	d.mu.Lock()
 	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
 	d.mu.Unlock()
-	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, func(string, any) error { return nil })
+	runner, _ := attachTestWorkspaceDaemon(t, d, workspaceID, func(string, any) error { return nil })
 	if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: agentID, RuntimeID: runtimeID, LaunchID: "launch-1", StartDispatchID: "dispatch-1"}); err != nil {
 		t.Fatal(err)
 	}

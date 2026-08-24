@@ -400,7 +400,7 @@ type fakePresence struct {
 	connected map[string]bool
 }
 
-func (f *fakePresence) HasWorkspaceRunner(daemonID, workspaceID string) bool {
+func (f *fakePresence) HasWorkspaceDaemon(daemonID, workspaceID string) bool {
 	if f == nil {
 		return false
 	}
@@ -422,11 +422,11 @@ func TestRuntimeConnectivity_WSConnectedOverridesStaleHeartbeat(t *testing.T) {
 
 	now := time.Now()
 	rt := db.AgentRuntime{
-		Status:    "online",
-		DaemonID:  pgtype.Text{String: "agent-main", Valid: true},
+		Status:      "online",
+		DaemonID:    pgtype.Text{String: "agent-main", Valid: true},
 		WorkspaceID: memberManagementTestUUID(7),
-		LastSeenAt: pgtimestamptz(now.Add(-10 * time.Minute)), // dead by heartbeat
-		UpdatedAt:  pgtimestamptz(now.Add(-10 * time.Minute)),
+		LastSeenAt:  pgtimestamptz(now.Add(-10 * time.Minute)), // dead by heartbeat
+		UpdatedAt:   pgtimestamptz(now.Add(-10 * time.Minute)),
 	}
 
 	runnerPresence = &fakePresence{connected: map[string]bool{

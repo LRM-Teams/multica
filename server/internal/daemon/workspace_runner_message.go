@@ -12,19 +12,19 @@ import (
 
 // messageCoordinator resolves an Inbox only inside this Runner's immutable
 // Workspace scope. Callers never inspect the Runner's Inbox registry directly.
-func (runner *WorkspaceRunner) messageCoordinator(agentID string) (*MessageCoordinator, string, bool) {
+func (runner *WorkspaceDaemon) messageCoordinator(agentID string) (*MessageCoordinator, string, bool) {
 	if runner == nil || runner.inboxes == nil {
 		return nil, "", false
 	}
 	return runner.inboxes.Resolve(agentID)
 }
 
-func (runner *WorkspaceRunner) messageRuntimeID(agentID string) string {
+func (runner *WorkspaceDaemon) messageRuntimeID(agentID string) string {
 	_, runtimeID, _ := runner.messageCoordinator(agentID)
 	return runtimeID
 }
 
-func (runner *WorkspaceRunner) agentInboxPendingSnapshot(agentID string) []protocol.AgentMessageProjection {
+func (runner *WorkspaceDaemon) agentInboxPendingSnapshot(agentID string) []protocol.AgentMessageProjection {
 	coordinator, _, ok := runner.messageCoordinator(agentID)
 	if !ok {
 		return nil
@@ -32,7 +32,7 @@ func (runner *WorkspaceRunner) agentInboxPendingSnapshot(agentID string) []proto
 	return coordinator.PendingSnapshot()
 }
 
-func (runner *WorkspaceRunner) ensureMessageInbox(agentID, expectedRuntimeID string) (bool, error) {
+func (runner *WorkspaceDaemon) ensureMessageInbox(agentID, expectedRuntimeID string) (bool, error) {
 	if runner == nil || runner.inboxes == nil || runner.processes == nil {
 		return false, errors.New("Workspace Runner Inbox registry is unavailable")
 	}
@@ -55,12 +55,12 @@ func (runner *WorkspaceRunner) ensureMessageInbox(agentID, expectedRuntimeID str
 	return created, nil
 }
 
-func (runner *WorkspaceRunner) hasMessageInbox(agentID string) bool {
+func (runner *WorkspaceDaemon) hasMessageInbox(agentID string) bool {
 	_, _, ok := runner.messageCoordinator(agentID)
 	return ok
 }
 
-func (runner *WorkspaceRunner) hasAcceptedStart(agentID, runtimeID string) bool {
+func (runner *WorkspaceDaemon) hasAcceptedStart(agentID, runtimeID string) bool {
 	if runner == nil || runner.processes == nil {
 		return false
 	}
@@ -68,7 +68,7 @@ func (runner *WorkspaceRunner) hasAcceptedStart(agentID, runtimeID string) bool 
 	return ok && launch.Managed && launch.RuntimeID == runtimeID
 }
 
-func (runner *WorkspaceRunner) ensureMessageInboxForDelivery(agentID string) error {
+func (runner *WorkspaceDaemon) ensureMessageInboxForDelivery(agentID string) error {
 	if runner == nil || runner.inboxes == nil || runner.processes == nil {
 		return errors.New("Workspace Runner Message lifecycle is unavailable")
 	}
@@ -85,7 +85,7 @@ func (runner *WorkspaceRunner) ensureMessageInboxForDelivery(agentID string) err
 	return nil
 }
 
-func (runner *WorkspaceRunner) messageContextBoundary(agentID, target string) (int64, bool, error) {
+func (runner *WorkspaceDaemon) messageContextBoundary(agentID, target string) (int64, bool, error) {
 	coordinator, _, ok := runner.messageCoordinator(agentID)
 	if !ok {
 		return 0, false, errors.New("Message coordinator is unavailable")
@@ -94,7 +94,7 @@ func (runner *WorkspaceRunner) messageContextBoundary(agentID, target string) (i
 	return seq, known, nil
 }
 
-func (runner *WorkspaceRunner) prepareMessageCoverage(agentID string, request CoverageRequest) (CoverageOffer, error) {
+func (runner *WorkspaceDaemon) prepareMessageCoverage(agentID string, request CoverageRequest) (CoverageOffer, error) {
 	coordinator, _, ok := runner.messageCoordinator(agentID)
 	if !ok {
 		return CoverageOffer{}, errors.New("Message coordinator is unavailable")
@@ -102,7 +102,7 @@ func (runner *WorkspaceRunner) prepareMessageCoverage(agentID string, request Co
 	return coordinator.PrepareCoverage(request)
 }
 
-func (runner *WorkspaceRunner) messageSendBoundarySnapshot(agentID, target string) (int64, error) {
+func (runner *WorkspaceDaemon) messageSendBoundarySnapshot(agentID, target string) (int64, error) {
 	coordinator, _, ok := runner.messageCoordinator(agentID)
 	if !ok {
 		return 0, errors.New("Message coordinator is unavailable")
@@ -110,7 +110,7 @@ func (runner *WorkspaceRunner) messageSendBoundarySnapshot(agentID, target strin
 	return coordinator.SendBoundarySnapshot(target), nil
 }
 
-func (runner *WorkspaceRunner) preflightMessageSend(agentID, target string) (MessageSendFreshness, error) {
+func (runner *WorkspaceDaemon) preflightMessageSend(agentID, target string) (MessageSendFreshness, error) {
 	coordinator, _, ok := runner.messageCoordinator(agentID)
 	if !ok {
 		return MessageSendFreshness{}, errors.New("Message coordinator is unavailable")
@@ -118,7 +118,7 @@ func (runner *WorkspaceRunner) preflightMessageSend(agentID, target string) (Mes
 	return coordinator.PreflightMessageSend(target)
 }
 
-func (runner *WorkspaceRunner) removeMessageInbox(agentID, runtimeID string) {
+func (runner *WorkspaceDaemon) removeMessageInbox(agentID, runtimeID string) {
 	if runner == nil || runner.inboxes == nil {
 		return
 	}
@@ -152,7 +152,7 @@ type messageDeliveryAcceptance struct {
 // attempting provider delivery. A missing live launch is not a terminal NACK:
 // already-consumed, terminal, idle-snapshot, and spawn-cooldown deliveries
 // stay locally responsible. Only "no process and no snapshot" rejects.
-func (runner *WorkspaceRunner) acceptMessageDelivery(ctx context.Context, delivery protocol.AgentDeliverPayload) (messageDeliveryAcceptance, error) {
+func (runner *WorkspaceDaemon) acceptMessageDelivery(ctx context.Context, delivery protocol.AgentDeliverPayload) (messageDeliveryAcceptance, error) {
 	launch, managed := runner.processes.Snapshot(delivery.AgentID)
 	if !managed {
 		if acceptance, consumed := runner.acknowledgeConsumedDelivery(delivery); consumed {
@@ -236,7 +236,7 @@ func (runner *WorkspaceRunner) acceptMessageDelivery(ctx context.Context, delive
 // waiting: an empty Pending queue means nothing is stuck behind the wedge, so
 // there is nothing to recover for yet. See resident_stall_queued_recovery.go
 // for why this check does not require the process to be confirmed dead.
-func (runner *WorkspaceRunner) recoverStalledRuntimeForQueuedMessage(coordinator *MessageCoordinator, agentID, runtimeID string) {
+func (runner *WorkspaceDaemon) recoverStalledRuntimeForQueuedMessage(coordinator *MessageCoordinator, agentID, runtimeID string) {
 	if runner == nil || runner.runtimes == nil || coordinator == nil {
 		return
 	}
@@ -256,7 +256,7 @@ func (runner *WorkspaceRunner) recoverStalledRuntimeForQueuedMessage(coordinator
 	}
 }
 
-func (runner *WorkspaceRunner) acknowledgeConsumedDelivery(delivery protocol.AgentDeliverPayload) (messageDeliveryAcceptance, bool) {
+func (runner *WorkspaceDaemon) acknowledgeConsumedDelivery(delivery protocol.AgentDeliverPayload) (messageDeliveryAcceptance, bool) {
 	coordinator, _, ok := runner.messageCoordinator(delivery.AgentID)
 	if !ok {
 		return messageDeliveryAcceptance{}, false
@@ -271,7 +271,7 @@ func (runner *WorkspaceRunner) acknowledgeConsumedDelivery(delivery protocol.Age
 	}, true
 }
 
-func (runner *WorkspaceRunner) acceptDeliveryWithoutLiveProcess(ctx context.Context, delivery protocol.AgentDeliverPayload) (messageDeliveryAcceptance, error) {
+func (runner *WorkspaceDaemon) acceptDeliveryWithoutLiveProcess(ctx context.Context, delivery protocol.AgentDeliverPayload) (messageDeliveryAcceptance, error) {
 	res, had := runner.residency.get(delivery.AgentID)
 	now := time.Now()
 	if runner.residency != nil && runner.residency.now != nil {
@@ -318,7 +318,7 @@ func (runner *WorkspaceRunner) acceptDeliveryWithoutLiveProcess(ctx context.Cont
 	}
 }
 
-func (runner *WorkspaceRunner) bufferAcceptedDelivery(ctx context.Context, delivery protocol.AgentDeliverPayload) (messageDeliveryAcceptance, error) {
+func (runner *WorkspaceDaemon) bufferAcceptedDelivery(ctx context.Context, delivery protocol.AgentDeliverPayload) (messageDeliveryAcceptance, error) {
 	coordinator, runtimeID, ok := runner.messageCoordinator(delivery.AgentID)
 	if !ok {
 		return messageDeliveryAcceptance{}, fmt.Errorf("%w: agent %s", errDeliveryRejectedNoInbox, delivery.AgentID)
@@ -343,14 +343,14 @@ func (runner *WorkspaceRunner) bufferAcceptedDelivery(ctx context.Context, deliv
 	return result, nil
 }
 
-func (runner *WorkspaceRunner) restartFromIdleSnapshot(agentID string, res agentResidency) error {
+func (runner *WorkspaceDaemon) restartFromIdleSnapshot(agentID string, res agentResidency) error {
 	if runner.processes == nil || res.runtimeID == "" || res.launchID == "" || res.startDispatchID == "" {
 		return fmt.Errorf("idle snapshot for Agent %q is incomplete", agentID)
 	}
 	return runner.processes.RestoreIdle(agentID, res.runtimeID, res.launchID, res.startDispatchID, res.startStopEpoch)
 }
 
-func (runner *WorkspaceRunner) completeIdleSnapshotStart(ctx context.Context, agentID string, res agentResidency) {
+func (runner *WorkspaceDaemon) completeIdleSnapshotStart(ctx context.Context, agentID string, res agentResidency) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -358,7 +358,7 @@ func (runner *WorkspaceRunner) completeIdleSnapshotStart(ctx context.Context, ag
 		runner.processes.completeFailedManagedStart(agentProcessCallback{AgentID: agentID, LaunchID: res.launchID})
 		return
 	}
-	start := protocol.WorkspaceRunnerAgentStartPayload{
+	start := protocol.AgentStartPayload{
 		AgentID: agentID, RuntimeID: res.runtimeID, LaunchID: res.launchID, StartDispatchID: res.startDispatchID,
 	}
 	ack := protocol.AgentStartAckPayload{
@@ -368,7 +368,7 @@ func (runner *WorkspaceRunner) completeIdleSnapshotStart(ctx context.Context, ag
 	runner.startAgentNow(ctx, start, ack, nil, nil, nil, nil)
 }
 
-func (runner *WorkspaceRunner) reportProcessUnavailable(agentID string) {
+func (runner *WorkspaceDaemon) reportProcessUnavailable(agentID string) {
 	if runner == nil || agentID == "" {
 		return
 	}
@@ -403,7 +403,7 @@ func (runner *WorkspaceRunner) reportProcessUnavailable(agentID string) {
 	})
 }
 
-func (runner *WorkspaceRunner) republishTerminalFailure(agentID string, res agentResidency) {
+func (runner *WorkspaceDaemon) republishTerminalFailure(agentID string, res agentResidency) {
 	if runner.activity == nil {
 		return
 	}
@@ -418,14 +418,14 @@ func (runner *WorkspaceRunner) republishTerminalFailure(agentID string, res agen
 	}, "Runtime failure")
 }
 
-func (runner *WorkspaceRunner) notifyPendingMessagesAfterTurn(agentID string) {
+func (runner *WorkspaceDaemon) notifyPendingMessagesAfterTurn(agentID string) {
 	coordinator, _, ok := runner.messageCoordinator(agentID)
 	if ok {
 		coordinator.NotifyPendingAfterTurn()
 	}
 }
 
-func (runner *WorkspaceRunner) commitMessageCoverage(key InboxKey, receiptID string) error {
+func (runner *WorkspaceDaemon) commitMessageCoverage(key InboxKey, receiptID string) error {
 	coordinator, _, ok := runner.messageCoordinator(key.AgentID)
 	if !ok || !coordinator.hasInboxKey(key) {
 		return ErrCoverageReceiptInvalid
@@ -436,7 +436,7 @@ func (runner *WorkspaceRunner) commitMessageCoverage(key InboxKey, receiptID str
 	return coordinator.CommitCoverage(receiptID)
 }
 
-func (runner *WorkspaceRunner) ownsMessageCoverageReceipt(receiptID string) bool {
+func (runner *WorkspaceDaemon) ownsMessageCoverageReceipt(receiptID string) bool {
 	if runner == nil || runner.inboxes == nil {
 		return false
 	}
@@ -451,7 +451,7 @@ func (runner *WorkspaceRunner) ownsMessageCoverageReceipt(receiptID string) bool
 // handleMessageDelivery owns the wire half of one durable Message transition.
 // The deep acceptance module above decides whether the provider or per-Agent
 // Pending projection accepted the body; only then may this caller ACK.
-func (runner *WorkspaceRunner) handleMessageDelivery(
+func (runner *WorkspaceDaemon) handleMessageDelivery(
 	ctx context.Context,
 	delivery protocol.AgentDeliverPayload,
 	writeFrame func(string, any) error,
@@ -524,7 +524,7 @@ func (runner *WorkspaceRunner) handleMessageDelivery(
 // shouldPersistDeliveryAck decides whether the server ledger may mark this
 // delivery acked. Channel targets keep Raft's accept-into-Pending ACK. Standalone
 // chat: targets only ACK after provider handoff or a true consumed boundary.
-func (runner *WorkspaceRunner) shouldPersistDeliveryAck(delivery protocol.AgentDeliverPayload, acceptance messageDeliveryAcceptance) bool {
+func (runner *WorkspaceDaemon) shouldPersistDeliveryAck(delivery protocol.AgentDeliverPayload, acceptance messageDeliveryAcceptance) bool {
 	if !strings.HasPrefix(strings.TrimSpace(delivery.Target), "chat:") {
 		return true
 	}
@@ -539,11 +539,11 @@ func (runner *WorkspaceRunner) shouldPersistDeliveryAck(delivery protocol.AgentD
 	}
 }
 
-func (runner *WorkspaceRunner) sendAgentFrame(eventType string, payload any) bool {
+func (runner *WorkspaceDaemon) sendAgentFrame(eventType string, payload any) bool {
 	return runner != nil && runner.sendOnCurrentConnection(eventType, payload) == nil
 }
 
-func (runner *WorkspaceRunner) hasRuntime(runtimeID string) bool {
+func (runner *WorkspaceDaemon) hasRuntime(runtimeID string) bool {
 	if runner == nil || runner.runtimeIDs == nil {
 		return false
 	}

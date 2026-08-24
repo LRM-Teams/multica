@@ -39,7 +39,6 @@ type agentProcessManager struct {
 const agentStartDispatchReceiptCacheSize = 1024
 
 type agentStartDispatchReceipt struct {
-	runtimeID       string
 	acknowledgement protocol.AgentStartAckPayload
 }
 
@@ -192,25 +191,19 @@ func (m *agentProcessManager) startWithDisposition(request agentProcessStartRequ
 	if stopping := m.stopping[request.AgentID]; stopping != nil {
 		return agentProcessStartResult{}, errors.New("managed Agent stop has not settled")
 	}
-	if receipt, replayed := m.dispatches[request.StartDispatchID]; replayed {
-		if receipt.acknowledgement.AgentID != request.AgentID || receipt.acknowledgement.LaunchID != request.LaunchID || receipt.runtimeID != request.RuntimeID {
-			return agentProcessStartResult{}, errors.New("start dispatch identity conflicts with its accepted receipt")
-		}
-		return agentProcessStartResult{Acknowledgement: receipt.acknowledgement, Replayed: true}, nil
-	}
 	if existing := m.agents[request.AgentID]; existing != nil && existing.managed {
 		if existing.runtimeID != request.RuntimeID {
 			return agentProcessStartResult{}, errors.New("managed Agent must stop its current Runtime before starting another")
 		} else {
 			if existing.launchID == request.LaunchID {
-				if existing.startDispatchID != request.StartDispatchID {
-					return agentProcessStartResult{}, errors.New("managed Agent launch is already owned by another start dispatch")
-				}
 				return agentProcessStartResult{Acknowledgement: m.rememberAcceptanceLocked(request, m.acceptanceLocked(existing, existing.queueState)), Replayed: true}, nil
 			}
 			m.rebindLaunchLocked(existing, request.LaunchID, request.StartDispatchID)
 			return agentProcessStartResult{Acknowledgement: m.rememberAcceptanceLocked(request, m.acceptanceLocked(existing, protocol.AgentStartQueueRebound))}, nil
 		}
+	}
+	if receipt, replayed := m.dispatches[request.AgentID]; replayed && receipt.acknowledgement.LaunchID == request.LaunchID {
+		return agentProcessStartResult{Acknowledgement: receipt.acknowledgement, Replayed: true}, nil
 	}
 
 	managed := &managedAgentProcess{
@@ -416,6 +409,7 @@ func (m *agentProcessManager) settleManagedStart(callback agentProcessCallback, 
 	}
 	if managed != nil && failed && managed.launchID == callback.LaunchID {
 		managed.startupFailed = true
+		m.forgetAcceptanceLocked(managed)
 	}
 	if managed != nil && managed.startupOwners[callback.LaunchID] > 0 {
 		managed.startupOwners[callback.LaunchID]--
@@ -431,6 +425,23 @@ func (m *agentProcessManager) settleManagedStart(callback agentProcessCallback, 
 		}
 	}
 	m.mu.Unlock()
+}
+
+// forgetAcceptanceLocked makes a failed start retryable. A start receipt is
+// an idempotency guard only while its provider startup is still owned or has
+// completed successfully; retaining it after failure turns a later reconcile
+// into an ACK-only replay with no provider to restart.
+func (m *agentProcessManager) forgetAcceptanceLocked(managed *managedAgentProcess) {
+	if managed == nil || managed.agentID == "" {
+		return
+	}
+	delete(m.dispatches, managed.agentID)
+	for index, agentID := range m.dispatchOrder {
+		if agentID == managed.agentID {
+			m.dispatchOrder = append(m.dispatchOrder[:index], m.dispatchOrder[index+1:]...)
+			return
+		}
+	}
 }
 
 // failManagedProcess claims an ordinary provider failure only while the exact
@@ -449,6 +460,7 @@ func (m *agentProcessManager) failManagedProcess(callback agentProcessCallback) 
 	if managed == nil || !managed.managed || managed.launchID != callback.LaunchID {
 		return false
 	}
+	m.forgetAcceptanceLocked(managed)
 	m.stopLocked(managed)
 	return true
 }
@@ -721,10 +733,10 @@ func (m *agentProcessManager) startLocked(request agentProcessStartRequest) (pro
 
 func (m *agentProcessManager) rememberAcceptanceLocked(request agentProcessStartRequest, acknowledgement protocol.AgentStartAckPayload) protocol.AgentStartAckPayload {
 	acknowledgement.StartDispatchID = request.StartDispatchID
-	if _, exists := m.dispatches[request.StartDispatchID]; !exists {
-		m.dispatchOrder = append(m.dispatchOrder, request.StartDispatchID)
+	if _, exists := m.dispatches[request.AgentID]; !exists {
+		m.dispatchOrder = append(m.dispatchOrder, request.AgentID)
 	}
-	m.dispatches[request.StartDispatchID] = agentStartDispatchReceipt{runtimeID: request.RuntimeID, acknowledgement: acknowledgement}
+	m.dispatches[request.AgentID] = agentStartDispatchReceipt{acknowledgement: acknowledgement}
 	for len(m.dispatchOrder) > agentStartDispatchReceiptCacheSize {
 		oldest := m.dispatchOrder[0]
 		m.dispatchOrder = m.dispatchOrder[1:]
@@ -804,6 +816,7 @@ func (m *agentProcessManager) readyLocked(managed *managedAgentProcess) {
 
 func (m *agentProcessManager) stopLocked(managed *managedAgentProcess) {
 	m.signalAdmissionLocked(managed)
+	m.forgetAcceptanceLocked(managed)
 	m.releaseLocked(managed)
 	m.queued = removeQueuedAgent(m.queued, managed.agentID)
 	m.closeAllLocked(managed, "terminal")

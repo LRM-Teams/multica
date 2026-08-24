@@ -39,7 +39,7 @@ func (p *CredentialProxy) CommitCoverage(agentProxyToken, receiptID string) erro
 		p.daemon.recordCoverageCommitDiagnostic(credential, err)
 		return err
 	}
-	runner := p.daemon.currentWorkspaceRunner(credential.Inbox.WorkspaceID)
+	runner := p.daemon.currentWorkspaceDaemon(credential.Inbox.WorkspaceID)
 	if runner == nil {
 		err = ErrCoverageReceiptInvalid
 		p.daemon.recordCoverageCommitDiagnostic(credential, err)
@@ -47,7 +47,7 @@ func (p *CredentialProxy) CommitCoverage(agentProxyToken, receiptID string) erro
 	}
 	err = runner.commitMessageCoverage(credential.Inbox, receiptID)
 	if errors.Is(err, ErrCoverageReceiptInvalid) {
-		for _, candidateRunner := range p.daemon.currentWorkspaceRunners() {
+		for _, candidateRunner := range p.daemon.currentWorkspaceDaemons() {
 			if candidateRunner == runner {
 				continue
 			}

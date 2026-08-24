@@ -62,7 +62,7 @@ func TestDaemonAliveByRunner(t *testing.T) {
 		h := &Handler{DaemonHub: hub}
 		// No Runner socket is registered for these daemons: even a fresh
 		// heartbeat must not make them "alive" for convergence. A live second
-		// machine holds a socket and is skipped by HasWorkspaceRunner (covered
+		// machine holds a socket and is skipped by HasWorkspaceDaemon (covered
 		// by daemonws unit tests); here we assert the authoritative override.
 		if h.daemonAliveByRunner(context.Background(), "old-live-hb", "ws", beats) != false {
 			t.Fatalf("hub without Runner should report dead even with fresh heartbeat")

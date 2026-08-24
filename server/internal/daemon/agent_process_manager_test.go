@@ -30,8 +30,8 @@ func TestAgentProcessManagerIdempotentStartQueueAndRecovery(t *testing.T) {
 	if first.LaunchID != "launch-a" || first.StartDispatchID != "dispatch-a" {
 		t.Fatalf("start identities = %+v, want separate launch and dispatch ids", first)
 	}
-	if _, err := manager.startWithDisposition(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1", LaunchID: "launch-a", StartDispatchID: "dispatch-other"}); err == nil {
-		t.Fatal("same launch accepted a second start-dispatch owner")
+	if replayed, err := manager.startWithDisposition(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1", LaunchID: "launch-a", StartDispatchID: "dispatch-other"}); err != nil || !replayed.Replayed {
+		t.Fatalf("same launch with a different delivery receipt = %+v, %v; want the same launch replay", replayed, err)
 	}
 	if _, err := manager.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-other", LaunchID: "launch-a", StartDispatchID: "dispatch-a"}); err == nil {
 		t.Fatal("conflicting reuse of accepted start dispatch was allowed")
@@ -68,6 +68,86 @@ func TestAgentProcessManagerIdempotentStartQueueAndRecovery(t *testing.T) {
 		t.Fatalf("queued Agent was not promoted: %+v, exists=%v", promoted, ok)
 	}
 	assertSingleEnterAndClose(t, transitions)
+}
+
+func TestAgentProcessManagerFailedStartCanBeRetriedWithSameDispatch(t *testing.T) {
+	manager := newAgentProcessManager("workspace-1", newTestProcessAdmission(1), time.Now, nil)
+	request := agentProcessStartRequest{
+		AgentID: "agent-a", RuntimeID: "runtime-1", LaunchID: "launch-a", StartDispatchID: "dispatch-a",
+	}
+	first, err := manager.startWithDisposition(request)
+	if err != nil {
+		t.Fatalf("first start: %v", err)
+	}
+	if first.Replayed {
+		t.Fatal("first start was unexpectedly replayed")
+	}
+
+	manager.completeFailedManagedStart(agentProcessCallback{AgentID: request.AgentID, LaunchID: request.LaunchID})
+
+	retry, err := manager.startWithDisposition(request)
+	if err != nil {
+		t.Fatalf("retry start: %v", err)
+	}
+	if retry.Replayed {
+		t.Fatal("failed start retained an ACK-only replay receipt")
+	}
+	if retry.Acknowledgement.AgentID != request.AgentID || retry.Acknowledgement.LaunchID != request.LaunchID {
+		t.Fatalf("retry acknowledgement = %+v, want request identity", retry.Acknowledgement)
+	}
+}
+
+func TestAgentProcessManagerProviderFailureCanBeRetriedWithSameDispatch(t *testing.T) {
+	manager := newAgentProcessManager("workspace-1", newTestProcessAdmission(1), time.Now, nil)
+	request := agentProcessStartRequest{
+		AgentID: "agent-a", RuntimeID: "runtime-1", LaunchID: "launch-a", StartDispatchID: "dispatch-a",
+	}
+	first, err := manager.startWithDisposition(request)
+	if err != nil {
+		t.Fatalf("first start: %v", err)
+	}
+	callback := agentProcessCallback{AgentID: request.AgentID, LaunchID: request.LaunchID, ProcessInstanceID: "process-a"}
+	if err := manager.ProcessSpawned(callback); err != nil {
+		t.Fatalf("process spawned: %v", err)
+	}
+	if err := manager.RuntimeReady(callback); err != nil {
+		t.Fatalf("runtime ready: %v", err)
+	}
+	if !manager.failManagedProcess(callback) {
+		t.Fatal("provider failure did not claim the managed process")
+	}
+
+	retry, err := manager.startWithDisposition(request)
+	if err != nil {
+		t.Fatalf("retry start: %v", err)
+	}
+	if retry.Replayed || retry.Acknowledgement.LaunchID != first.Acknowledgement.LaunchID {
+		t.Fatalf("retry result = %+v, want a fresh start for the same Agent command", retry)
+	}
+}
+
+func TestAgentProcessManagerStopClearsAgentStartReceipt(t *testing.T) {
+	manager := newAgentProcessManager("workspace-1", newTestProcessAdmission(1), time.Now, nil)
+	firstRequest := agentProcessStartRequest{
+		AgentID: "agent-a", RuntimeID: "runtime-1", LaunchID: "launch-a", StartDispatchID: "dispatch-a",
+	}
+	if _, err := manager.Start(firstRequest); err != nil {
+		t.Fatalf("first start: %v", err)
+	}
+	if err := manager.Stop(agentProcessCallback{AgentID: firstRequest.AgentID, LaunchID: firstRequest.LaunchID}); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+
+	secondRequest := agentProcessStartRequest{
+		AgentID: "agent-a", RuntimeID: "runtime-1", LaunchID: "launch-b", StartDispatchID: "dispatch-b",
+	}
+	second, err := manager.Start(secondRequest)
+	if err != nil {
+		t.Fatalf("second start: %v", err)
+	}
+	if second.LaunchID != secondRequest.LaunchID {
+		t.Fatalf("second start = %+v, want the new start to be accepted after Stop", second)
+	}
 }
 
 func TestAgentProcessManagerFencesStaleCallbacksAndCreatesNewLaunches(t *testing.T) {

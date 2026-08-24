@@ -21,7 +21,7 @@ type fakeRunnerPresenceSource struct {
 	current map[string]bool
 }
 
-func (f fakeRunnerPresenceSource) IsCurrentWorkspaceRunner(daemonID, workspaceID, daemonInstanceID string) bool {
+func (f fakeRunnerPresenceSource) IsCurrentWorkspaceDaemon(daemonID, workspaceID, daemonInstanceID string) bool {
 	return f.current[daemonID+"/"+workspaceID+"/"+daemonInstanceID]
 }
 
@@ -225,7 +225,7 @@ func TestRunnerStatusPublishesPresenceOnlyOnSemanticChange(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := h.HandleWorkspaceRunnerFrame(context.Background(), identity, "instance-1", protocol.EventAgentStatus, raw); err != nil {
+		if err := h.HandleWorkspaceDaemonFrame(context.Background(), identity, "instance-1", protocol.EventAgentStatus, raw); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -274,7 +274,7 @@ func TestRunnerStartAcknowledgementAndSessionPersistOneFencedLaunch(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.HandleWorkspaceRunnerFrame(ctx, identity, "instance-1", protocol.EventAgentStartAck, raw); err != nil {
+	if err := h.HandleWorkspaceDaemonFrame(ctx, identity, "instance-1", protocol.EventAgentStartAck, raw); err != nil {
 		t.Fatalf("persist Runner start acknowledgement: %v", err)
 	}
 	if len(presencePayloads) != 0 {
@@ -285,7 +285,7 @@ func TestRunnerStartAcknowledgementAndSessionPersistOneFencedLaunch(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.HandleWorkspaceRunnerFrame(ctx, identity, "instance-1", protocol.EventAgentSession, raw); err != nil {
+	if err := h.HandleWorkspaceDaemonFrame(ctx, identity, "instance-1", protocol.EventAgentSession, raw); err != nil {
 		t.Fatalf("persist Runner session: %v", err)
 	}
 	obs, ok := h.observations().get(testWorkspaceID, agentID)
@@ -302,7 +302,7 @@ func TestRunnerStartAcknowledgementAndSessionPersistOneFencedLaunch(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.HandleWorkspaceRunnerFrame(ctx, identity, "instance-1", protocol.EventAgentStatus, active); err != nil {
+	if err := h.HandleWorkspaceDaemonFrame(ctx, identity, "instance-1", protocol.EventAgentStatus, active); err != nil {
 		t.Fatalf("persist Runner active status: %v", err)
 	}
 	if len(presencePayloads) != 1 || presencePayloads[0].AgentID != agentID || presencePayloads[0].Presence != AgentPresenceOnline {
@@ -311,12 +311,12 @@ func TestRunnerStartAcknowledgementAndSessionPersistOneFencedLaunch(t *testing.T
 	stale := session
 	stale.LaunchID, stale.ProviderSessionID = "launch-stale", "provider-session-stale"
 	raw, _ = json.Marshal(stale)
-	if err := h.HandleWorkspaceRunnerFrame(ctx, identity, "instance-1", protocol.EventAgentSession, raw); err == nil {
+	if err := h.HandleWorkspaceDaemonFrame(ctx, identity, "instance-1", protocol.EventAgentSession, raw); err == nil {
 		t.Fatal("stale Runner session was accepted")
 	}
 	staleStatus := protocol.AgentStatusPayload{AgentID: agentID, LaunchID: "launch-stale", Status: protocol.AgentStatusActive}
 	raw, _ = json.Marshal(staleStatus)
-	if err := h.HandleWorkspaceRunnerFrame(ctx, identity, "instance-1", protocol.EventAgentStatus, raw); err == nil {
+	if err := h.HandleWorkspaceDaemonFrame(ctx, identity, "instance-1", protocol.EventAgentStatus, raw); err == nil {
 		t.Fatal("stale Runner launch status was accepted")
 	}
 }
@@ -352,7 +352,7 @@ func TestRunnerStartAcknowledgementPresenceStaysOfflineUntilActive(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.HandleWorkspaceRunnerFrame(ctx, identity, "instance-1", protocol.EventAgentStartAck, raw); err != nil {
+	if err := h.HandleWorkspaceDaemonFrame(ctx, identity, "instance-1", protocol.EventAgentStartAck, raw); err != nil {
 		t.Fatalf("persist Runner start acknowledgement: %v", err)
 	}
 	if len(presencePayloads) != 0 {
@@ -366,7 +366,7 @@ func TestRunnerStartAcknowledgementPresenceStaysOfflineUntilActive(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.HandleWorkspaceRunnerFrame(ctx, identity, "instance-1", protocol.EventAgentStatus, active); err != nil {
+	if err := h.HandleWorkspaceDaemonFrame(ctx, identity, "instance-1", protocol.EventAgentStatus, active); err != nil {
 		t.Fatalf("persist Runner active status: %v", err)
 	}
 	if len(presencePayloads) != 1 || presencePayloads[0].AgentID != agentID || presencePayloads[0].Presence != AgentPresenceOnline {
@@ -425,15 +425,15 @@ func TestPendingRunnerLaunchDispatchUsesDesiredLaunchID(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	readyPayload, _ := json.Marshal(protocol.WorkspaceRunnerReadyPayload{
-		WorkspaceID: testWorkspaceID, DaemonInstanceID: "instance-1", ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceRunnerAgentProcess},
+	readyPayload, _ := json.Marshal(protocol.WorkspaceReadyPayload{
+		WorkspaceID: testWorkspaceID, DaemonInstanceID: "instance-1", ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceDaemonAgentProcess},
 	})
-	ready, _ := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceRunnerReady, Payload: readyPayload})
+	ready, _ := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceDaemonReady, Payload: readyPayload})
 	if err := conn.WriteMessage(websocket.TextMessage, ready); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(time.Second)
-	for hub.WorkspaceRunnerConnectionCount("daemon-1", testWorkspaceID) != 1 {
+	for hub.WorkspaceDaemonConnectionCount("daemon-1", testWorkspaceID) != 1 {
 		if time.Now().After(deadline) {
 			t.Fatal("Runner did not become ready")
 		}
@@ -455,7 +455,7 @@ func TestPendingRunnerLaunchDispatchUsesDesiredLaunchID(t *testing.T) {
 		if err := json.Unmarshal(raw, &frame); err != nil || frame.Type != protocol.EventDaemonAgentStart {
 			t.Fatalf("Runner launch frame=%+v err=%v", frame, err)
 		}
-		var start protocol.WorkspaceRunnerAgentStartPayload
+		var start protocol.AgentStartPayload
 		if err := json.Unmarshal(frame.Payload, &start); err != nil {
 			t.Fatal(err)
 		}
@@ -510,16 +510,16 @@ func TestPendingAgentLifecycleOperationDoesNotDispatchParallelRunnerStop(t *test
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	readyPayload, _ := json.Marshal(protocol.WorkspaceRunnerReadyPayload{
-		WorkspaceID: testWorkspaceID, DaemonInstanceID: "instance-1", ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceRunnerAgentProcess},
+	readyPayload, _ := json.Marshal(protocol.WorkspaceReadyPayload{
+		WorkspaceID: testWorkspaceID, DaemonInstanceID: "instance-1", ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceDaemonAgentProcess},
 	})
-	ready, _ := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceRunnerReady, Payload: readyPayload})
+	ready, _ := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceDaemonReady, Payload: readyPayload})
 	if err := conn.WriteMessage(websocket.TextMessage, ready); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(time.Second)
-	for hub.WorkspaceRunnerConnectionCount(daemonID, testWorkspaceID) != 1 ||
-		!hub.WorkspaceRunnerSupportsCapability(daemonID, testWorkspaceID, protocol.DaemonCapabilityWorkspaceRunnerAgentProcess) {
+	for hub.WorkspaceDaemonConnectionCount(daemonID, testWorkspaceID) != 1 ||
+		!hub.WorkspaceDaemonSupportsCapability(daemonID, testWorkspaceID, protocol.DaemonCapabilityWorkspaceDaemonAgentProcess) {
 		if time.Now().After(deadline) {
 			t.Fatal("Runner did not become ready")
 		}
@@ -530,7 +530,7 @@ func TestPendingAgentLifecycleOperationDoesNotDispatchParallelRunnerStop(t *test
 	h.DaemonHub = hub
 	h.observations().putStatus(testWorkspaceID, daemonID, "instance-1", agentID, runtimeID, launchID, protocol.AgentStatusActive)
 	identity := daemonws.ClientIdentity{DaemonID: daemonID, WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}}
-	if err := h.reconcileWorkspaceRunnerLaunches(ctx, identity); err != nil {
+	if err := h.reconcileWorkspaceDaemonLaunches(ctx, identity); err != nil {
 		t.Fatalf("reconcile while lifecycle stop is active: %v", err)
 	}
 	conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
@@ -569,7 +569,7 @@ func TestRunnerDisconnectFencesExactInstanceAndPublishesOnce(t *testing.T) {
 	h.observations().putStatus(testWorkspaceID, "daemon-1", "replacement", agentID, runtimeID, "launch-new", protocol.AgentStatusActive)
 	identity := daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID}
 
-	if err := h.HandleWorkspaceRunnerDisconnect(ctx, identity, "old-instance"); err != nil {
+	if err := h.HandleWorkspaceDaemonDisconnect(ctx, identity, "old-instance"); err != nil {
 		t.Fatal(err)
 	}
 	obs, ok := h.observations().get(testWorkspaceID, agentID)
@@ -577,10 +577,10 @@ func TestRunnerDisconnectFencesExactInstanceAndPublishesOnce(t *testing.T) {
 		t.Fatalf("late old disconnect changed replacement observation=%+v ok=%v", obs, ok)
 	}
 
-	if err := h.HandleWorkspaceRunnerDisconnect(ctx, identity, "replacement"); err != nil {
+	if err := h.HandleWorkspaceDaemonDisconnect(ctx, identity, "replacement"); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.HandleWorkspaceRunnerDisconnect(ctx, identity, "replacement"); err != nil {
+	if err := h.HandleWorkspaceDaemonDisconnect(ctx, identity, "replacement"); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := h.observations().get(testWorkspaceID, agentID); ok {

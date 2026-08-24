@@ -116,8 +116,8 @@ type Daemon struct {
 	agentCredentialManager     *agentCredentialManager
 	messageSendMu              sync.Mutex
 	messageSends               map[string]int
-	workspaceRunnerMu          sync.RWMutex
-	workspaceRunners           map[string]*WorkspaceRunner
+	workspaceDaemonMu          sync.RWMutex
+	workspaceDaemons           map[string]*WorkspaceDaemon
 	mixedRunActivityOutbox     *mixedRunActivityOutbox
 	mixedRunActivityReporter   func(protocol.MixedRunActivityTransitionPayload) bool
 	lifecycleDiagnostics       *lifecycleDiagnosticWriter
@@ -294,7 +294,7 @@ func newDaemonForRole(cfg Config, logger *slog.Logger, role daemonProcessRole) *
 }
 
 func (d *Daemon) initializeBindingExecution(bindingStateRoot string) {
-	d.workspaceRunners = make(map[string]*WorkspaceRunner)
+	d.workspaceDaemons = make(map[string]*WorkspaceDaemon)
 	d.canonicalRuntimes = newCanonicalAgentRuntimePool()
 	d.canonicalRuntimes.setResidentStallWatchdog(d.cfg.RuntimeProgressStale)
 	d.canonicalRuntimes.setMaxAgentProcesses(d.cfg.MaxAgentProcesses)
@@ -688,8 +688,8 @@ func daemonRegistrationCapabilities(includeCredentialTransport bool) []string {
 		protocol.DaemonCapabilityRestrictedExecution,
 		protocol.DaemonCapabilityReminderVersionedCache,
 		protocol.DaemonCapabilityReminderFireRequest,
-		protocol.DaemonCapabilityWorkspaceRunnerAgentProcess,
-		protocol.DaemonCapabilityWorkspaceRunnerAgentReset,
+		protocol.DaemonCapabilityWorkspaceDaemonAgentProcess,
+		protocol.DaemonCapabilityWorkspaceDaemonAgentReset,
 		// Binding children advertise the wire capability so the server can
 		// deliver the machine action. They only forward it to Computer Host;
 		// acceptance and execution do not live in this package.

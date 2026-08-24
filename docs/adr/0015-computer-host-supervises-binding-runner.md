@@ -13,7 +13,7 @@ is the real execution owner, not a lifetime sentinel. The executable
 Computer process
 ├── Host (internal/computer)
 ├── Binding execution A (internal/daemon)
-│   ├── WorkspaceRunner A
+│   ├── WorkspaceDaemon A
 │   ├── AgentProcessManager
 │   ├── Inbox / MessageCoordinator
 │   ├── Activity
@@ -42,7 +42,7 @@ preserving Binding as Multica's domain term.
 
 `internal/daemon` owns one Binding child's execution behavior:
 
-- Workspace authentication and `WorkspaceRunner.Run`;
+- Workspace authentication and `WorkspaceDaemon.Run`;
 - Agent Process Manager and canonical provider runtime pool;
 - Inbox, MessageCoordinator, Activity, Attachments and Reminder execution;
 - child-local Credential Proxy and child-local durable execution state;

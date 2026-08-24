@@ -33,10 +33,10 @@ func TestStopManagedAgentPublishesInactiveDespiteResidentTerminationTimeout(t *t
 	d.mu.Lock()
 	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
 	d.mu.Unlock()
-	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, nil)
+	runner, _ := attachTestWorkspaceDaemon(t, d, workspaceID, nil)
 	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error { return nil }
 
-	_, status, _, err := runner.startManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStartPayload{
+	_, status, _, err := runner.startManagedAgent(context.Background(), protocol.AgentStartPayload{
 		AgentID: agentID, RuntimeID: runtimeID, LaunchID: launchID, StartDispatchID: "dispatch-a",
 	})
 	if err != nil || status.Status != protocol.AgentStatusActive {
@@ -66,7 +66,7 @@ func TestStopManagedAgentPublishesInactiveDespiteResidentTerminationTimeout(t *t
 	statuses := make(chan protocol.AgentStatusPayload, 2)
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	stopErr := runner.stopManagedAgent(ctx, protocol.WorkspaceRunnerAgentStopPayload{
+	stopErr := runner.stopManagedAgent(ctx, protocol.AgentStopPayload{
 		AgentID: agentID, LaunchID: launchID,
 	}, nil, func(eventType string, payload any) error {
 		if eventType == protocol.EventAgentStatus {
@@ -108,10 +108,10 @@ func TestStopManagedAgentSingleClearSurvivesRacingProviderStartupWrite(t *testin
 	d.mu.Lock()
 	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
 	d.mu.Unlock()
-	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, nil)
+	runner, _ := attachTestWorkspaceDaemon(t, d, workspaceID, nil)
 	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error { return nil }
 
-	_, status, _, err := runner.startManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStartPayload{
+	_, status, _, err := runner.startManagedAgent(context.Background(), protocol.AgentStartPayload{
 		AgentID: agentID, RuntimeID: runtimeID, LaunchID: launchID, StartDispatchID: "dispatch-a",
 	})
 	if err != nil || status.Status != protocol.AgentStatusActive {
@@ -161,7 +161,7 @@ func TestStopManagedAgentSingleClearSurvivesRacingProviderStartupWrite(t *testin
 
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
-	stopErr := runner.stopManagedAgent(ctx, protocol.WorkspaceRunnerAgentStopPayload{
+	stopErr := runner.stopManagedAgent(ctx, protocol.AgentStopPayload{
 		AgentID: agentID, LaunchID: launchID,
 	}, pause, func(string, any) error { return nil })
 	if stopErr != nil {
@@ -451,7 +451,7 @@ func (b *hungSpawnTestBackend) forceKillCount() int {
 // d.ensureResidentMessageRuntime: it acquires+releases a resident slot (as
 // production does before EnsureResidentProcess) and then blocks in the
 // spawn, on spawnCtx rather than the caller's ctx -- modeling runner.life.
-func hungProviderSpawnEnsureResidentRuntime(runner *WorkspaceRunner, backend *hungSpawnTestBackend, spawnCtx context.Context, spawnStarted chan<- struct{}) func(context.Context, string, string, *agent.PiRunIdentity) error {
+func hungProviderSpawnEnsureResidentRuntime(runner *WorkspaceDaemon, backend *hungSpawnTestBackend, spawnCtx context.Context, spawnStarted chan<- struct{}) func(context.Context, string, string, *agent.PiRunIdentity) error {
 	var once sync.Once
 	return func(_ context.Context, agentID, runtimeID string, _ *agent.PiRunIdentity) error {
 		identity, err := newCanonicalAgentRuntimeIdentity(canonicalAgentRuntimeIdentityParams{
@@ -494,7 +494,7 @@ func TestStopManagedAgentDispatchesKillBeforeWaitingOnHungProviderSpawn(t *testi
 	d.mu.Lock()
 	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
 	d.mu.Unlock()
-	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, nil)
+	runner, _ := attachTestWorkspaceDaemon(t, d, workspaceID, nil)
 
 	backend := newHungSpawnTestBackend()
 	spawnStarted := make(chan struct{})
@@ -504,7 +504,7 @@ func TestStopManagedAgentDispatchesKillBeforeWaitingOnHungProviderSpawn(t *testi
 
 	startDone := make(chan error, 1)
 	go func() {
-		_, _, _, err := runner.startManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStartPayload{
+		_, _, _, err := runner.startManagedAgent(context.Background(), protocol.AgentStartPayload{
 			AgentID: agentID, RuntimeID: runtimeID, LaunchID: launchID, StartDispatchID: "dispatch-a",
 		})
 		startDone <- err
@@ -519,7 +519,7 @@ func TestStopManagedAgentDispatchesKillBeforeWaitingOnHungProviderSpawn(t *testi
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	start := time.Now()
-	stopErr := runner.stopManagedAgent(ctx, protocol.WorkspaceRunnerAgentStopPayload{
+	stopErr := runner.stopManagedAgent(ctx, protocol.AgentStopPayload{
 		AgentID: agentID, LaunchID: launchID,
 	}, nil, func(string, any) error { return nil })
 	elapsed := time.Since(start)

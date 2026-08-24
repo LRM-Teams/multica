@@ -16,7 +16,7 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-func TestWorkspaceRunnerIdleDeliveryAcknowledgesAfterRuntimeAcceptance(t *testing.T) {
+func TestWorkspaceDaemonIdleDeliveryAcknowledgesAfterRuntimeAcceptance(t *testing.T) {
 	var order []string
 	d := New(Config{}, nil)
 	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
@@ -55,7 +55,7 @@ func TestWorkspaceRunnerIdleDeliveryAcknowledgesAfterRuntimeAcceptance(t *testin
 	}
 }
 
-func TestWorkspaceRunnerDeliveryWriterFailureRetainsDurableConsumedBoundary(t *testing.T) {
+func TestWorkspaceDaemonDeliveryWriterFailureRetainsDurableConsumedBoundary(t *testing.T) {
 	var handoffs int
 	d := New(Config{}, nil)
 	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
@@ -94,7 +94,7 @@ func TestWorkspaceRunnerDeliveryWriterFailureRetainsDurableConsumedBoundary(t *t
 	}
 }
 
-func TestWorkspaceRunnerAckWriterFailureDoesNotRepeatProviderAcceptance(t *testing.T) {
+func TestWorkspaceDaemonAckWriterFailureDoesNotRepeatProviderAcceptance(t *testing.T) {
 	var handoffs int
 	d := New(Config{}, nil)
 	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
@@ -148,7 +148,7 @@ func TestWorkspaceRunnerAckWriterFailureDoesNotRepeatProviderAcceptance(t *testi
 	}
 }
 
-func TestWorkspaceRunnerUnacceptedDeliveryIsRetriedAfterManagedStart(t *testing.T) {
+func TestWorkspaceDaemonUnacceptedDeliveryIsRetriedAfterManagedStart(t *testing.T) {
 	var handoffs int
 	d := New(Config{}, nil)
 	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
@@ -199,7 +199,7 @@ func TestWorkspaceRunnerUnacceptedDeliveryIsRetriedAfterManagedStart(t *testing.
 	}
 }
 
-func TestWorkspaceRunnerConsumedDeliveryAcknowledgesWithoutProcess(t *testing.T) {
+func TestWorkspaceDaemonConsumedDeliveryAcknowledgesWithoutProcess(t *testing.T) {
 	var handoffs int
 	d := New(Config{}, nil)
 	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
@@ -244,7 +244,7 @@ func TestWorkspaceRunnerConsumedDeliveryAcknowledgesWithoutProcess(t *testing.T)
 	}
 }
 
-func TestWorkspaceRunnerTerminalFailureDeliveryAcknowledgesAndKeepsPending(t *testing.T) {
+func TestWorkspaceDaemonTerminalFailureDeliveryAcknowledgesAndKeepsPending(t *testing.T) {
 	var handoffs int
 	d := New(Config{}, nil)
 	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
@@ -289,18 +289,18 @@ func TestWorkspaceRunnerTerminalFailureDeliveryAcknowledgesAndKeepsPending(t *te
 	}
 }
 
-func TestWorkspaceRunnerIdleSnapshotDeliveryRestartsAndAcknowledges(t *testing.T) {
+func TestWorkspaceDaemonIdleSnapshotDeliveryRestartsAndAcknowledges(t *testing.T) {
 	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
 	d.mu.Lock()
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
 	d.mu.Unlock()
 	providerStarts := 0
-	runner, _ := attachTestWorkspaceRunner(t, d, "workspace-1", nil)
+	runner, _ := attachTestWorkspaceDaemon(t, d, "workspace-1", nil)
 	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error {
 		providerStarts++
 		return nil
 	}
-	if _, _, _, err := runner.startManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStartPayload{
+	if _, _, _, err := runner.startManagedAgent(context.Background(), protocol.AgentStartPayload{
 		AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1",
 	}); err != nil {
 		t.Fatalf("start managed Agent: %v", err)
@@ -333,18 +333,18 @@ func TestWorkspaceRunnerIdleSnapshotDeliveryRestartsAndAcknowledges(t *testing.T
 	}
 }
 
-func TestWorkspaceRunnerIdleSnapshotCompleteRespectsCancel(t *testing.T) {
+func TestWorkspaceDaemonIdleSnapshotCompleteRespectsCancel(t *testing.T) {
 	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
 	d.mu.Lock()
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
 	d.mu.Unlock()
 	providerStarts := 0
-	runner, _ := attachTestWorkspaceRunner(t, d, "workspace-1", nil)
+	runner, _ := attachTestWorkspaceDaemon(t, d, "workspace-1", nil)
 	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error {
 		providerStarts++
 		return nil
 	}
-	if _, _, _, err := runner.startManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStartPayload{
+	if _, _, _, err := runner.startManagedAgent(context.Background(), protocol.AgentStartPayload{
 		AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1",
 	}); err != nil {
 		t.Fatalf("start managed Agent: %v", err)
@@ -377,9 +377,9 @@ func TestWorkspaceRunnerIdleSnapshotCompleteRespectsCancel(t *testing.T) {
 	}
 }
 
-func TestWorkspaceRunnerIdleSnapshotRequiresStartDispatchIdentity(t *testing.T) {
+func TestWorkspaceDaemonIdleSnapshotRequiresStartDispatchIdentity(t *testing.T) {
 	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
-	runner, _ := attachTestWorkspaceRunner(t, d, "workspace-1", nil)
+	runner, _ := attachTestWorkspaceDaemon(t, d, "workspace-1", nil)
 	err := runner.restartFromIdleSnapshot("agent-1", agentResidency{
 		runtimeID: "runtime-1", launchID: "launch-1",
 	})
@@ -388,16 +388,16 @@ func TestWorkspaceRunnerIdleSnapshotRequiresStartDispatchIdentity(t *testing.T) 
 	}
 }
 
-func TestWorkspaceRunnerIdleSnapshotFailureLogsLifecycleIdentity(t *testing.T) {
+func TestWorkspaceDaemonIdleSnapshotFailureLogsLifecycleIdentity(t *testing.T) {
 	var logs strings.Builder
 	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	d := New(Config{DaemonID: "computer-1", WorkspacesRoot: t.TempDir()}, logger)
 	d.mu.Lock()
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
 	d.mu.Unlock()
-	runner, _ := attachTestWorkspaceRunner(t, d, "workspace-1", nil)
+	runner, _ := attachTestWorkspaceDaemon(t, d, "workspace-1", nil)
 	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error { return nil }
-	if _, _, _, err := runner.startManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStartPayload{
+	if _, _, _, err := runner.startManagedAgent(context.Background(), protocol.AgentStartPayload{
 		AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1",
 	}); err != nil {
 		t.Fatalf("seed managed Agent: %v", err)
@@ -431,18 +431,18 @@ func TestWorkspaceRunnerIdleSnapshotFailureLogsLifecycleIdentity(t *testing.T) {
 	}
 }
 
-func TestWorkspaceRunnerSpawnCooldownDeliveryAcknowledgesWithoutRestart(t *testing.T) {
+func TestWorkspaceDaemonSpawnCooldownDeliveryAcknowledgesWithoutRestart(t *testing.T) {
 	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
 	d.mu.Lock()
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
 	d.mu.Unlock()
 	providerStarts := 0
-	runner, _ := attachTestWorkspaceRunner(t, d, "workspace-1", nil)
+	runner, _ := attachTestWorkspaceDaemon(t, d, "workspace-1", nil)
 	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error {
 		providerStarts++
 		return fmt.Errorf("spawn cursor: executable unavailable")
 	}
-	if _, _, _, err := runner.startManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStartPayload{
+	if _, _, _, err := runner.startManagedAgent(context.Background(), protocol.AgentStartPayload{
 		AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1",
 	}); err == nil {
 		t.Fatal("spawn failure was accepted")
@@ -466,7 +466,7 @@ func TestWorkspaceRunnerSpawnCooldownDeliveryAcknowledgesWithoutRestart(t *testi
 	}
 }
 
-func TestWorkspaceRunnerQueuedAPMAcceptsDeliveryWithoutStartingProvider(t *testing.T) {
+func TestWorkspaceDaemonQueuedAPMAcceptsDeliveryWithoutStartingProvider(t *testing.T) {
 	var handoffs int
 	d := New(Config{MaxAgentProcesses: 1}, nil)
 	d.mu.Lock()
@@ -510,7 +510,7 @@ func TestWorkspaceRunnerQueuedAPMAcceptsDeliveryWithoutStartingProvider(t *testi
 	}
 }
 
-func TestWorkspaceRunnerStartingLaunchBuffersWithoutProviderDelivery(t *testing.T) {
+func TestWorkspaceDaemonStartingLaunchBuffersWithoutProviderDelivery(t *testing.T) {
 	var handoffs int
 	d := New(Config{}, nil)
 	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
@@ -558,7 +558,7 @@ func TestWorkspaceRunnerStartingLaunchBuffersWithoutProviderDelivery(t *testing.
 	}
 }
 
-func TestWorkspaceRunnerStandaloneChatDefersAckWhileStarting(t *testing.T) {
+func TestWorkspaceDaemonStandaloneChatDefersAckWhileStarting(t *testing.T) {
 	// §1.5: chat: must not ACK on pending_buffered — otherwise agent_chat_delivery
 	// acked_at blocks redelivery and a stuck Starting launch never recovers.
 	d := New(Config{}, nil)
@@ -608,7 +608,7 @@ func TestWorkspaceRunnerStandaloneChatDefersAckWhileStarting(t *testing.T) {
 	}
 }
 
-func TestWorkspaceRunnerDeliveryAfterManagedStartReachesProvider(t *testing.T) {
+func TestWorkspaceDaemonDeliveryAfterManagedStartReachesProvider(t *testing.T) {
 	var handoffs int
 	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
 	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
@@ -624,7 +624,7 @@ func TestWorkspaceRunnerDeliveryAfterManagedStartReachesProvider(t *testing.T) {
 	d.mu.Unlock()
 	runner := registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
 	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error { return nil }
-	if _, _, _, err := runner.startManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStartPayload{
+	if _, _, _, err := runner.startManagedAgent(context.Background(), protocol.AgentStartPayload{
 		AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "test-launch-agent-1", StartDispatchID: "test-launch-agent-1-dispatch",
 	}); err != nil {
 		t.Fatalf("managed start: %v", err)
@@ -641,7 +641,7 @@ func TestWorkspaceRunnerDeliveryAfterManagedStartReachesProvider(t *testing.T) {
 	}
 }
 
-func TestWorkspaceRunnerMissingProcessReportsRestartRequired(t *testing.T) {
+func TestWorkspaceDaemonMissingProcessReportsRestartRequired(t *testing.T) {
 	d := New(Config{}, nil)
 	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
 		t.Fatal("missing process must not hand off")
@@ -656,7 +656,7 @@ func TestWorkspaceRunnerMissingProcessReportsRestartRequired(t *testing.T) {
 	d.mu.Unlock()
 	var statuses []protocol.AgentStatusPayload
 	var activities []protocol.AgentActivityPayload
-	runner, _ := attachTestWorkspaceRunner(t, d, "workspace-1", func(eventType string, payload any) error {
+	runner, _ := attachTestWorkspaceDaemon(t, d, "workspace-1", func(eventType string, payload any) error {
 		switch eventType {
 		case protocol.EventAgentStatus:
 			statuses = append(statuses, payload.(protocol.AgentStatusPayload))
@@ -690,7 +690,7 @@ func TestWorkspaceRunnerMissingProcessReportsRestartRequired(t *testing.T) {
 	}
 }
 
-func TestWorkspaceRunnerDeliveryAcknowledgesBusyRuntime(t *testing.T) {
+func TestWorkspaceDaemonDeliveryAcknowledgesBusyRuntime(t *testing.T) {
 	var logs strings.Builder
 	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	d := New(Config{}, logger)
@@ -738,7 +738,7 @@ func TestWorkspaceRunnerDeliveryAcknowledgesBusyRuntime(t *testing.T) {
 	}
 }
 
-func TestWorkspaceRunnerDeliveryDoesNotAcknowledgeProviderRejection(t *testing.T) {
+func TestWorkspaceDaemonDeliveryDoesNotAcknowledgeProviderRejection(t *testing.T) {
 	d := New(Config{}, nil)
 	attempts := 0
 	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
@@ -796,14 +796,14 @@ func TestWorkspaceRunnerDeliveryDoesNotAcknowledgeProviderRejection(t *testing.T
 	}
 }
 
-func TestWorkspaceRunnerDeliveryDispatcherDoesNotBlockAnotherAgent(t *testing.T) {
+func TestWorkspaceDaemonDeliveryDispatcherDoesNotBlockAnotherAgent(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	agentAStarted := make(chan struct{})
 	releaseAgentA := make(chan struct{})
 	agentBHandled := make(chan struct{})
-	dispatcher := newWorkspaceRunnerDeliveryDispatcher(ctx, func(_ context.Context, delivery protocol.AgentDeliverPayload) {
+	dispatcher := newWorkspaceDaemonDeliveryDispatcher(ctx, func(_ context.Context, delivery protocol.AgentDeliverPayload) {
 		switch delivery.AgentID {
 		case "agent-a":
 			close(agentAStarted)
@@ -824,11 +824,11 @@ func TestWorkspaceRunnerDeliveryDispatcherDoesNotBlockAnotherAgent(t *testing.T)
 	close(releaseAgentA)
 }
 
-func TestWorkspaceRunnerDeliveryDispatcherBuffersOnlyStartingAgent(t *testing.T) {
+func TestWorkspaceDaemonDeliveryDispatcherBuffersOnlyStartingAgent(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	handled := make(chan string, 2)
-	dispatcher := newWorkspaceRunnerDeliveryDispatcher(ctx, func(_ context.Context, delivery protocol.AgentDeliverPayload) {
+	dispatcher := newWorkspaceDaemonDeliveryDispatcher(ctx, func(_ context.Context, delivery protocol.AgentDeliverPayload) {
 		handled <- delivery.AgentID
 	})
 	if !dispatcher.Pause("agent-a", "launch-a") {
@@ -860,11 +860,11 @@ func TestWorkspaceRunnerDeliveryDispatcherBuffersOnlyStartingAgent(t *testing.T)
 	}
 }
 
-func TestWorkspaceRunnerDeliveryDispatcherFencesSupersededStart(t *testing.T) {
+func TestWorkspaceDaemonDeliveryDispatcherFencesSupersededStart(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	handled := make(chan string, 1)
-	dispatcher := newWorkspaceRunnerDeliveryDispatcher(ctx, func(_ context.Context, delivery protocol.AgentDeliverPayload) {
+	dispatcher := newWorkspaceDaemonDeliveryDispatcher(ctx, func(_ context.Context, delivery protocol.AgentDeliverPayload) {
 		handled <- delivery.DeliveryID
 	})
 	if !dispatcher.Pause("agent-a", "launch-old") || !dispatcher.Pause("agent-a", "launch-new") {
@@ -889,14 +889,14 @@ func TestWorkspaceRunnerDeliveryDispatcherFencesSupersededStart(t *testing.T) {
 	}
 }
 
-func TestWorkspaceRunnerDeliveryDispatcherPreservesPerAgentOrder(t *testing.T) {
+func TestWorkspaceDaemonDeliveryDispatcherPreservesPerAgentOrder(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	var mu sync.Mutex
 	var handled []string
 	done := make(chan struct{})
-	dispatcher := newWorkspaceRunnerDeliveryDispatcher(ctx, func(_ context.Context, delivery protocol.AgentDeliverPayload) {
+	dispatcher := newWorkspaceDaemonDeliveryDispatcher(ctx, func(_ context.Context, delivery protocol.AgentDeliverPayload) {
 		mu.Lock()
 		handled = append(handled, delivery.DeliveryID)
 		if len(handled) == 3 {
@@ -930,7 +930,7 @@ func TestDeliveryRepairsCoordinatorFromAcceptedStart(t *testing.T) {
 	d.mu.Lock()
 	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
 	d.mu.Unlock()
-	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, func(string, any) error { return nil })
+	runner, _ := attachTestWorkspaceDaemon(t, d, workspaceID, func(string, any) error { return nil })
 	if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: agentID, RuntimeID: runtimeID, LaunchID: "launch-1", StartDispatchID: "dispatch-1"}); err != nil {
 		t.Fatalf("accept start: %v", err)
 	}
@@ -959,7 +959,7 @@ func TestDeliveryDoesNotRepairCoordinatorAcrossWorkspace(t *testing.T) {
 		Message: protocol.AgentMessageProjection{ID: "message-1", Target: "channel:one", Seq: 1},
 	}
 	var acknowledgements int
-	runner, _ := attachTestWorkspaceRunner(t, d, runnerWorkspaceID, nil)
+	runner, _ := attachTestWorkspaceDaemon(t, d, runnerWorkspaceID, nil)
 	if err := runner.handleMessageDelivery(context.Background(), delivery, func(eventType string, _ any) error {
 		if eventType == protocol.EventAgentDeliverAck {
 			acknowledgements++
@@ -971,7 +971,7 @@ func TestDeliveryDoesNotRepairCoordinatorAcrossWorkspace(t *testing.T) {
 	if acknowledgements != 0 {
 		t.Fatalf("cross-Workspace acknowledgements = %d, want 0", acknowledgements)
 	}
-	if runner := d.currentWorkspaceRunner(runnerWorkspaceID); runner != nil {
+	if runner := d.currentWorkspaceDaemon(runnerWorkspaceID); runner != nil {
 		if runner.hasMessageInbox(agentID) {
 			t.Fatal("cross-Workspace Delivery recreated an Inbox coordinator")
 		}
@@ -993,7 +993,7 @@ func TestDeliveryDoesNotRepairCoordinatorWithoutAcceptedStart(t *testing.T) {
 		Message: protocol.AgentMessageProjection{ID: "message-1", Target: "channel:one", Seq: 1},
 	}
 	var acknowledgements int
-	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, nil)
+	runner, _ := attachTestWorkspaceDaemon(t, d, workspaceID, nil)
 	if err := runner.handleMessageDelivery(context.Background(), delivery, func(eventType string, _ any) error {
 		if eventType == protocol.EventAgentDeliverAck {
 			acknowledgements++
@@ -1005,21 +1005,21 @@ func TestDeliveryDoesNotRepairCoordinatorWithoutAcceptedStart(t *testing.T) {
 	if acknowledgements != 0 {
 		t.Fatalf("unstarted Agent acknowledgements = %d, want 0", acknowledgements)
 	}
-	if runner := d.currentWorkspaceRunner(workspaceID); runner != nil {
+	if runner := d.currentWorkspaceDaemon(workspaceID); runner != nil {
 		if runner.hasMessageInbox(agentID) {
 			t.Fatal("unstarted Agent Delivery recreated an Inbox coordinator")
 		}
 	}
 }
 
-func TestWorkspaceRunnerWriterFencesReplacedConnection(t *testing.T) {
+func TestWorkspaceDaemonWriterFencesReplacedConnection(t *testing.T) {
 	d := New(Config{}, nil)
 	d.mu.Lock()
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
 	d.mu.Unlock()
 
 	var first, second int
-	runner, firstConnection := attachTestWorkspaceRunner(t, d, "workspace-1", func(string, any) error {
+	runner, firstConnection := attachTestWorkspaceDaemon(t, d, "workspace-1", func(string, any) error {
 		first++
 		return nil
 	})
@@ -1040,34 +1040,34 @@ func TestWorkspaceRunnerWriterFencesReplacedConnection(t *testing.T) {
 	if err := staleSend(); err == nil {
 		t.Fatal("callback from replaced connection remained writable")
 	}
-	if !d.sendWorkspaceRunnerAgentFrame("agent-1", protocol.EventAgentDeliverAck, map[string]any{"request": 1}) {
+	if !d.sendWorkspaceDaemonAgentFrame("agent-1", protocol.EventAgentDeliverAck, map[string]any{"request": 1}) {
 		t.Fatal("current Runner connection did not receive Message frame")
 	}
 	if first != 0 || second != 1 {
 		t.Fatalf("Message frame delivery first=%d second=%d, want 0/1", first, second)
 	}
-	d.detachWorkspaceRunner(runner)
-	if d.sendWorkspaceRunnerAgentFrame("agent-1", protocol.EventAgentDeliverAck, nil) {
+	d.detachWorkspaceDaemon(runner)
+	if d.sendWorkspaceDaemonAgentFrame("agent-1", protocol.EventAgentDeliverAck, nil) {
 		t.Fatal("detached Runner accepted Message frame")
 	}
 }
 
-func TestBindingChildWorkspaceRunnerIsTheCredentialProxyInbox(t *testing.T) {
+func TestBindingChildWorkspaceDaemonIsTheCredentialProxyInbox(t *testing.T) {
 	d := New(Config{WorkspacesRoot: t.TempDir(), DaemonID: "computer-1"}, nil)
 	d.mu.Lock()
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
 	d.mu.Unlock()
 
-	owned, err := d.newWorkspaceRunner("workspace-1")
+	owned, err := d.newWorkspaceDaemon("workspace-1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		d.detachWorkspaceRunner(owned)
+		d.detachWorkspaceDaemon(owned)
 		owned.Close()
 		owned.inboxes.Close()
 	})
-	if err := d.adoptWorkspaceRunner(owned); err != nil {
+	if err := d.adoptWorkspaceDaemon(owned); err != nil {
 		t.Fatalf("adopt Binding child Workspace Runner: %v", err)
 	}
 
@@ -1079,7 +1079,7 @@ func TestBindingChildWorkspaceRunnerIsTheCredentialProxyInbox(t *testing.T) {
 	}
 	registerTestRunnerInbox(t, owned, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
 
-	resolved, err := d.resolveWorkspaceRunnerByAgent("agent-1")
+	resolved, err := d.resolveWorkspaceDaemonByAgent("agent-1")
 	if err != nil {
 		t.Fatalf("Credential Proxy could not find Binding child Inbox: %v", err)
 	}
@@ -1087,7 +1087,7 @@ func TestBindingChildWorkspaceRunnerIsTheCredentialProxyInbox(t *testing.T) {
 		t.Fatal("Credential Proxy resolved a different Workspace Runner than the Binding child")
 	}
 
-	ensured, err := d.ensureWorkspaceRunner("workspace-1")
+	ensured, err := d.ensureWorkspaceDaemon("workspace-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1100,13 +1100,13 @@ func TestBindingChildWorkspaceRunnerIsTheCredentialProxyInbox(t *testing.T) {
 	}
 }
 
-func TestUnadoptedBindingChildWorkspaceRunnerLeavesMessageSendUnavailable(t *testing.T) {
+func TestUnadoptedBindingChildWorkspaceDaemonLeavesMessageSendUnavailable(t *testing.T) {
 	d := New(Config{WorkspacesRoot: t.TempDir(), DaemonID: "computer-1"}, nil)
 	d.mu.Lock()
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
 	d.mu.Unlock()
 
-	owned, err := d.newWorkspaceRunner("workspace-1")
+	owned, err := d.newWorkspaceDaemon("workspace-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1127,7 +1127,7 @@ func TestUnadoptedBindingChildWorkspaceRunnerLeavesMessageSendUnavailable(t *tes
 		t.Fatalf("unadopted Binding child send = %v, want Message coordinator is unavailable", err)
 	}
 
-	ensured, err := d.ensureWorkspaceRunner("workspace-1")
+	ensured, err := d.ensureWorkspaceDaemon("workspace-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1135,17 +1135,17 @@ func TestUnadoptedBindingChildWorkspaceRunnerLeavesMessageSendUnavailable(t *tes
 		t.Fatal("unadopted Binding child Runner was already on the Daemon lookup map")
 	}
 	t.Cleanup(func() {
-		d.detachWorkspaceRunner(ensured)
+		d.detachWorkspaceDaemon(ensured)
 		ensured.Close()
 		ensured.inboxes.Close()
 	})
 }
 
-func TestWorkspaceRunnerDeliveryStopFenceRejectsLateStartResume(t *testing.T) {
+func TestWorkspaceDaemonDeliveryStopFenceRejectsLateStartResume(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	handled := make(chan string, 2)
-	dispatcher := newWorkspaceRunnerDeliveryDispatcher(ctx, func(_ context.Context, delivery protocol.AgentDeliverPayload) {
+	dispatcher := newWorkspaceDaemonDeliveryDispatcher(ctx, func(_ context.Context, delivery protocol.AgentDeliverPayload) {
 		handled <- delivery.DeliveryID
 	})
 	if !dispatcher.Pause("agent-1", "launch-1") {

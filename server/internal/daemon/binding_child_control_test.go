@@ -322,7 +322,7 @@ func TestBindingChildForwardsRestartToHost(t *testing.T) {
 
 	child := New(Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	child.bindingHostControl = control
-	child.handleWorkspaceRunnerControlAck(context.Background(), &HeartbeatResponse{
+	child.handleWorkspaceDaemonControlAck(context.Background(), &HeartbeatResponse{
 		RuntimeID:      "runtime-a",
 		PendingRestart: &PendingRestart{ID: "restart-a"},
 	})

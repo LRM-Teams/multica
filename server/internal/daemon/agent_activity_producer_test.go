@@ -305,7 +305,7 @@ func TestReplayManagedAgentStartDoesNotRepaintLiveActivity(t *testing.T) {
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
 	d.mu.Unlock()
 	runner := installTestRunnerActivity(t, d, "workspace-1", producer)
-	start := protocol.WorkspaceRunnerAgentStartPayload{
+	start := protocol.AgentStartPayload{
 		AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1",
 	}
 	if _, err := runner.processes.Start(agentProcessStartRequest{
@@ -475,7 +475,7 @@ func TestReplayManagedStartDoesNotRepaintStarting(t *testing.T) {
 	runner.broadcastActivity("agent-a", "runtime-1", "starting")
 	runner.observeResidentRuntimeReady("agent-a", "runtime-1")
 	before := len(activities)
-	if !runner.replayManagedAgentStartPublication(protocol.WorkspaceRunnerAgentStartPayload{
+	if !runner.replayManagedAgentStartPublication(protocol.AgentStartPayload{
 		AgentID: "agent-a", RuntimeID: "runtime-1", LaunchID: ack.LaunchID, StartDispatchID: "launch-a-dispatch",
 	}, nil) {
 		t.Fatal("replay did not succeed")
@@ -495,7 +495,7 @@ func TestMessageAcceptanceWithoutManagedLaunchDoesNotInventActivityIdentity(t *t
 	d.runnerInstanceID = "daemon-instance-1"
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
 
-	runner, _ := attachTestWorkspaceRunner(t, d, "workspace-1", func(string, any) error { return nil })
+	runner, _ := attachTestWorkspaceDaemon(t, d, "workspace-1", func(string, any) error { return nil })
 	runner.activity = producer
 	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
 	if err != nil {
@@ -521,7 +521,7 @@ func TestPendingAndProviderAcceptancePublishOneMessageReceivedActivity(t *testin
 	d.runnerInstanceID = "daemon-instance-1"
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
 
-	runner, _ := attachTestWorkspaceRunner(t, d, "workspace-1", func(string, any) error { return nil })
+	runner, _ := attachTestWorkspaceDaemon(t, d, "workspace-1", func(string, any) error { return nil })
 	runner.activity = producer
 	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
 	if err != nil {
@@ -618,7 +618,7 @@ func TestResidentRuntimeEventsPublishRaftActivityLifecycle(t *testing.T) {
 
 func TestResidentRuntimeEventPersistsProviderSessionWithoutManagedActivity(t *testing.T) {
 	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
-	runner, _ := attachTestWorkspaceRunner(t, d, "workspace-1", nil)
+	runner, _ := attachTestWorkspaceDaemon(t, d, "workspace-1", nil)
 	runner.observeResidentMessageRuntime("agent-1", "runtime-1", agent.Message{Type: agent.MessageText, SessionID: "provider-session-1"})
 
 	got, err := d.agentRuntimeSessions.Get("agent-1", "runtime-1")
@@ -636,7 +636,7 @@ func TestResidentRuntimeEventProjectsChangedProviderSession(t *testing.T) {
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
 	d.mu.Unlock()
 	sessions := make(chan protocol.AgentSessionPayload, 2)
-	runner, _ := attachTestWorkspaceRunner(t, d, "workspace-1", func(eventType string, payload any) error {
+	runner, _ := attachTestWorkspaceDaemon(t, d, "workspace-1", func(eventType string, payload any) error {
 		if session, ok := payload.(protocol.AgentSessionPayload); ok && eventType == protocol.EventAgentSession {
 			sessions <- session
 		}
@@ -816,7 +816,7 @@ func TestIdleMessageAcceptanceFailurePublishesVisibleErrorActivity(t *testing.T)
 
 func TestObserveResidentMessageRuntimeClearsPoisonedPiSession(t *testing.T) {
 	sessions := map[string]string{}
-	runner := &WorkspaceRunner{
+	runner := &WorkspaceDaemon{
 		recordProviderSession: func(agentID, runtimeID, sessionID string) {
 			key := agentID + "/" + runtimeID
 			if sessionID == "" {

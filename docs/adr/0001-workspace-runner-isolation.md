@@ -23,7 +23,7 @@ Agent process lifecycle transitions stay behind Runner methods. Machine-local
 callers may resolve an unambiguous Runner, but never receive its Inbox,
 Process Manager, or Activity producer internals.
 
-`WorkspaceRunner.Run(ctx)` owns Workspace authentication, dial/reconnect
+`WorkspaceDaemon.Run(ctx)` owns Workspace authentication, dial/reconnect
 backoff, ready identity, connection cancellation, ping/pong, and the single
 serialized frame writer. Reconnect replaces and closes the prior connection
 context before installing a new writer. Socket callbacks remain private Runner

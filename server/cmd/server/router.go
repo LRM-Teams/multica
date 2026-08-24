@@ -431,8 +431,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	daemonHub.SetAgentDeliveryAckHandler(h.HandleAgentDeliveryAck)
 	// The current fenced Workspace Runner owns Attachment, launch, Message, and
 	// typed Activity intake for one daemon/workspace pair.
-	daemonHub.SetWorkspaceRunnerHandler(h.HandleWorkspaceRunnerFrame)
-	daemonHub.SetWorkspaceRunnerDisconnectHandler(h.HandleWorkspaceRunnerDisconnect)
+	daemonHub.SetWorkspaceDaemonHandler(h.HandleWorkspaceDaemonFrame)
+	daemonHub.SetWorkspaceDaemonDisconnectHandler(h.HandleWorkspaceDaemonDisconnect)
 	health := newServerHealth(pool)
 
 	r := chi.NewRouter()

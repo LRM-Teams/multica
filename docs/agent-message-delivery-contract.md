@@ -114,14 +114,14 @@ module interfaces, or logs.
   Message recovery events;
 - migration `340_agent_message_delivery_ack` adds durable ACK state and the
   unacknowledged-delivery index;
-- `TestWorkspaceRunnerReadyRedeliversUnacknowledgedMessagesInSequenceOrder`
+- `TestWorkspaceDaemonReadyRedeliversUnacknowledgedMessagesInSequenceOrder`
   proves reconnect redelivery preserves sequence;
 - `TestAgentDeliveryAcknowledgementRequiresExactSequenceAndStopsRedelivery`
   proves wrong-sequence rejection, durable ACK, and the no-redelivery control.
-- `TestWorkspaceRunnerDeliveryDoesNotAcknowledgeProviderRejection` proves a
+- `TestWorkspaceDaemonDeliveryDoesNotAcknowledgeProviderRejection` proves a
   provider rejection is retained without ACK and succeeds exactly once after a
   later retry;
-- `TestWorkspaceRunnerProviderSpawnFailureReportsInactiveAndOffline` and
+- `TestWorkspaceDaemonProviderSpawnFailureReportsInactiveAndOffline` and
   `TestIdleMessageAcceptanceFailurePublishesVisibleErrorActivity` enforce the
   two Raft failure phases;
 - `requiredDeliveryRouteTests` plus

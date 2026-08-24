@@ -46,7 +46,7 @@ func (d *Daemon) handleWSHeartbeatAck(ctx context.Context, ack *HeartbeatRespons
 	d.handleHeartbeatActions(ctx, ack.RuntimeID, ack)
 }
 
-func (d *Daemon) handleWorkspaceRunnerControlAck(ctx context.Context, ack *HeartbeatResponse) {
+func (d *Daemon) handleWorkspaceDaemonControlAck(ctx context.Context, ack *HeartbeatResponse) {
 	if d == nil || ack == nil {
 		return
 	}

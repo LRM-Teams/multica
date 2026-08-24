@@ -18,7 +18,7 @@ const (
 // needs. The daemon Hub implements it; tests may substitute the transport
 // boundary without replacing database or projection behavior.
 type RunnerPresenceSource interface {
-	IsCurrentWorkspaceRunner(daemonID, workspaceID, daemonInstanceID string) bool
+	IsCurrentWorkspaceDaemon(daemonID, workspaceID, daemonInstanceID string) bool
 }
 
 type AgentPresenceItem struct {
@@ -66,7 +66,7 @@ func (h *Handler) projectRunnerLaunchPresence(workspaceID string, launch *runner
 		return AgentPresenceOffline
 	}
 	source := h.currentRunnerPresenceSource()
-	if source == nil || !source.IsCurrentWorkspaceRunner(launch.daemonID, workspaceID, launch.daemonInstanceID) {
+	if source == nil || !source.IsCurrentWorkspaceDaemon(launch.daemonID, workspaceID, launch.daemonInstanceID) {
 		return AgentPresenceOffline
 	}
 	return AgentPresenceOnline

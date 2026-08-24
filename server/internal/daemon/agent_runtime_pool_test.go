@@ -1293,7 +1293,7 @@ type aliveNonStarterBackend struct {
 
 func (*aliveNonStarterBackend) RuntimeAlive() (bool, bool) { return true, true }
 
-func TestCanonicalAgentRuntimePoolIsActivatedByWorkspaceRunnerMessageDelivery(t *testing.T) {
+func TestCanonicalAgentRuntimePoolIsActivatedByWorkspaceDaemonMessageDelivery(t *testing.T) {
 	// Resident Runtime activation belongs to the same Runner method that owns
 	// Message acceptance, acknowledgement, and handoff ordering.
 	raw, err := os.ReadFile("workspace_runner_message.go")

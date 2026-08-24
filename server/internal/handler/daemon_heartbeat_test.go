@@ -27,7 +27,7 @@ func createTestAgentRuntimeWithDaemonID(t *testing.T, daemonID string) db.AgentR
 			'',  '{}'::jsonb,  'private',  now()
 		)
 		RETURNING id
-	`,  testWorkspaceID,  daemonID,  "heartbeat-runtime-"+randomID()).Scan(&runtimeID); err != nil {
+	`, testWorkspaceID, daemonID, "heartbeat-runtime-"+randomID()).Scan(&runtimeID); err != nil {
 		t.Fatalf("create test agent_runtime: %v", err)
 	}
 	t.Cleanup(func() {
@@ -186,7 +186,7 @@ func TestRecordHeartbeat_WritesDaemonHeartbeatOnFirstCall(t *testing.T) {
 	}
 }
 
-func TestWorkspaceRunnerHeartbeatRejectsRuntimeAssignedToAnotherComputer(t *testing.T) {
+func TestWorkspaceDaemonHeartbeatRejectsRuntimeAssignedToAnotherComputer(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}

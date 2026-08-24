@@ -46,11 +46,11 @@ func TestDaemonRegistrationCapabilities_GatesCredentialTransport(t *testing.T) {
 	if !containsString(capable, protocol.DaemonCapabilityAgentCredentialTransport) {
 		t.Fatalf("capable registration missing %q: %#v", protocol.DaemonCapabilityAgentCredentialTransport, capable)
 	}
-	if !containsString(legacy, protocol.DaemonCapabilityWorkspaceRunnerAgentProcess) || !containsString(capable, protocol.DaemonCapabilityWorkspaceRunnerAgentProcess) {
-		t.Fatalf("registration missing %q: legacy=%#v capable=%#v", protocol.DaemonCapabilityWorkspaceRunnerAgentProcess, legacy, capable)
+	if !containsString(legacy, protocol.DaemonCapabilityWorkspaceDaemonAgentProcess) || !containsString(capable, protocol.DaemonCapabilityWorkspaceDaemonAgentProcess) {
+		t.Fatalf("registration missing %q: legacy=%#v capable=%#v", protocol.DaemonCapabilityWorkspaceDaemonAgentProcess, legacy, capable)
 	}
-	if !containsString(legacy, protocol.DaemonCapabilityWorkspaceRunnerAgentReset) || !containsString(capable, protocol.DaemonCapabilityWorkspaceRunnerAgentReset) {
-		t.Fatalf("registration missing %q: legacy=%#v capable=%#v", protocol.DaemonCapabilityWorkspaceRunnerAgentReset, legacy, capable)
+	if !containsString(legacy, protocol.DaemonCapabilityWorkspaceDaemonAgentReset) || !containsString(capable, protocol.DaemonCapabilityWorkspaceDaemonAgentReset) {
+		t.Fatalf("registration missing %q: legacy=%#v capable=%#v", protocol.DaemonCapabilityWorkspaceDaemonAgentReset, legacy, capable)
 	}
 }
 

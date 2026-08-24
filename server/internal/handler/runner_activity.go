@@ -51,16 +51,16 @@ type runnerActivityTimelineEntry struct {
 	OccurredAt time.Time
 }
 
-// HandleWorkspaceRunnerFrame accepts frames only from the current ready Runner.
+// HandleWorkspaceDaemonFrame accepts frames only from the current ready Runner.
 // It adds durable Agent, launch, daemon-instance, fact, and sequence fencing
 // before persistence.
-func (h *Handler) HandleWorkspaceRunnerFrame(ctx context.Context, identity daemonws.ClientIdentity, daemonInstanceID, eventType string, raw json.RawMessage) error {
+func (h *Handler) HandleWorkspaceDaemonFrame(ctx context.Context, identity daemonws.ClientIdentity, daemonInstanceID, eventType string, raw json.RawMessage) error {
 	if h == nil || h.DB == nil {
 		return errors.New("handler database is unavailable")
 	}
 	switch eventType {
-	case protocol.EventWorkspaceRunnerReady:
-		var ready protocol.WorkspaceRunnerReadyPayload
+	case protocol.EventWorkspaceDaemonReady:
+		var ready protocol.WorkspaceReadyPayload
 		if err := json.Unmarshal(raw, &ready); err != nil {
 			return fmt.Errorf("decode Runner ready: %w", err)
 		}
@@ -70,14 +70,14 @@ func (h *Handler) HandleWorkspaceRunnerFrame(ctx context.Context, identity daemo
 		if err := h.persistComputerReadyMetadata(ctx, identity.DaemonID, ready); err != nil {
 			return err
 		}
-		if err := h.recordWorkspaceRunnerReady(ctx, identity, daemonInstanceID, ready.RunningAgents); err != nil {
+		if err := h.recordWorkspaceDaemonReady(ctx, identity, daemonInstanceID, ready.RunningAgents); err != nil {
 			return err
 		}
 		// Raft establishes APM ownership before it offers durable deliveries.
 		// Channel messages may ACK into the Agent's starting Inbox before the
 		// Provider is Running. Standalone chat: (FAB) does not — see §1.5 —
 		// so redeliver unacked chat: lines once launches are converging.
-		if err := h.reconcileWorkspaceRunnerLaunches(ctx, identity); err != nil {
+		if err := h.reconcileWorkspaceDaemonLaunches(ctx, identity); err != nil {
 			return err
 		}
 		if err := h.redeliverUnacknowledgedComputerAgentMessages(ctx, identity); err != nil {
@@ -103,7 +103,7 @@ func (h *Handler) HandleWorkspaceRunnerFrame(ctx context.Context, identity daemo
 			return nil
 		}
 		if status.Status == protocol.AgentStatusInactive && h.DaemonHub != nil {
-			return h.reconcileWorkspaceRunnerLaunches(ctx, identity)
+			return h.reconcileWorkspaceDaemonLaunches(ctx, identity)
 		}
 		return nil
 	case protocol.EventAgentStartAck:
@@ -119,7 +119,7 @@ func (h *Handler) HandleWorkspaceRunnerFrame(ctx context.Context, identity daemo
 		// as Runner ready, not a fake ACK.
 		return h.redeliverUnacknowledgedStandaloneChat(ctx, identity)
 	case protocol.EventAgentResetWorkspaceResult:
-		var result protocol.WorkspaceRunnerAgentResetWorkspaceResultPayload
+		var result protocol.AgentWorkspaceResetResultPayload
 		if err := json.Unmarshal(raw, &result); err != nil {
 			return fmt.Errorf("decode Agent workspace reset result: %w", err)
 		}
@@ -180,7 +180,7 @@ func (h *Handler) HandleWorkspaceRunnerFrame(ctx context.Context, identity daemo
 	}
 }
 
-func (h *Handler) persistComputerReadyMetadata(ctx context.Context, daemonID string, ready protocol.WorkspaceRunnerReadyPayload) error {
+func (h *Handler) persistComputerReadyMetadata(ctx context.Context, daemonID string, ready protocol.WorkspaceReadyPayload) error {
 	_, err := h.DB.Exec(ctx, `
 UPDATE computers
    SET device_name = COALESCE(NULLIF($2, ''), device_name),
@@ -338,11 +338,11 @@ func (h *Handler) recordMixedRunActivityTransition(ctx context.Context, identity
 	return nil
 }
 
-// recordWorkspaceRunnerReady forgets Activity owned by an older Computer
+// recordWorkspaceDaemonReady forgets Activity owned by an older Computer
 // process. Launch status is not durable residency: a leftover active row must
 // not block the replacement process from reporting agent:status, so this
 // handler only retires snapshots/probes from a previous daemonInstanceID.
-func (h *Handler) recordWorkspaceRunnerReady(ctx context.Context, identity daemonws.ClientIdentity, daemonInstanceID string, runningAgentIDs []string) error {
+func (h *Handler) recordWorkspaceDaemonReady(ctx context.Context, identity daemonws.ClientIdentity, daemonInstanceID string, runningAgentIDs []string) error {
 	return h.runnerPresenceLocked(func() error {
 		workspaceID, err := util.ParseUUID(identity.WorkspaceID)
 		if err != nil {
@@ -411,7 +411,7 @@ func (h *Handler) recordRunnerLaunch(ctx context.Context, identity daemonws.Clie
 	}
 	return h.runnerPresenceLocked(func() error {
 		source := h.currentRunnerPresenceSource()
-		if source == nil || !source.IsCurrentWorkspaceRunner(identity.DaemonID, identity.WorkspaceID, daemonInstanceID) {
+		if source == nil || !source.IsCurrentWorkspaceDaemon(identity.DaemonID, identity.WorkspaceID, daemonInstanceID) {
 			return errors.New("stale Workspace Runner status")
 		}
 		_, _, runtimeID, err := h.runnerActivityAgentScope(ctx, identity.WorkspaceID, status.AgentID)
@@ -439,7 +439,7 @@ func (h *Handler) recordRunnerStartAcknowledgement(ctx context.Context, identity
 	}
 	return h.runnerPresenceLocked(func() error {
 		source := h.currentRunnerPresenceSource()
-		if source == nil || !source.IsCurrentWorkspaceRunner(identity.DaemonID, identity.WorkspaceID, daemonInstanceID) {
+		if source == nil || !source.IsCurrentWorkspaceDaemon(identity.DaemonID, identity.WorkspaceID, daemonInstanceID) {
 			return errors.New("stale Workspace Runner start acknowledgement")
 		}
 		workspaceID, agentID, runtimeID, err := h.runnerActivityAgentScope(ctx, identity.WorkspaceID, acknowledgement.AgentID)
@@ -493,7 +493,7 @@ func (h *Handler) recoverRunnerObservation(ctx context.Context, identity daemonw
 		return runnerObservedAgent{}, false
 	}
 	source := h.currentRunnerPresenceSource()
-	if source == nil || !source.IsCurrentWorkspaceRunner(identity.DaemonID, identity.WorkspaceID, daemonInstanceID) {
+	if source == nil || !source.IsCurrentWorkspaceDaemon(identity.DaemonID, identity.WorkspaceID, daemonInstanceID) {
 		return runnerObservedAgent{}, false
 	}
 	var runtimeID string
@@ -531,7 +531,7 @@ func (h *Handler) recordRunnerSession(ctx context.Context, identity daemonws.Cli
 	}
 	return h.runnerPresenceLocked(func() error {
 		source := h.currentRunnerPresenceSource()
-		if source == nil || !source.IsCurrentWorkspaceRunner(identity.DaemonID, identity.WorkspaceID, daemonInstanceID) {
+		if source == nil || !source.IsCurrentWorkspaceDaemon(identity.DaemonID, identity.WorkspaceID, daemonInstanceID) {
 			return errors.New("stale Workspace Runner session")
 		}
 		if _, _, _, err := h.runnerActivityAgentScope(ctx, identity.WorkspaceID, session.AgentID); err != nil {
@@ -766,7 +766,7 @@ func (h *Handler) sendRunnerActivityProbes(ctx context.Context, now time.Time) e
 		if command.RowsAffected() != 1 {
 			continue
 		}
-		if h.DaemonHub == nil || !h.DaemonHub.NotifyWorkspaceRunner(candidate.daemonID, util.UUIDToString(candidate.workspaceID), protocol.EventAgentActivityProbe, protocol.AgentActivityProbePayload{AgentID: util.UUIDToString(candidate.agentID), LaunchID: candidate.launchID, ProbeID: probeID}) {
+		if h.DaemonHub == nil || !h.DaemonHub.NotifyWorkspaceDaemon(candidate.daemonID, util.UUIDToString(candidate.workspaceID), protocol.EventAgentActivityProbe, protocol.AgentActivityProbePayload{AgentID: util.UUIDToString(candidate.agentID), LaunchID: candidate.launchID, ProbeID: probeID}) {
 			if err := h.markRunnerActivityOfflineForComputerDisconnect(ctx, candidate.workspaceID, candidate.agentID, candidate.daemonID, candidate.daemonInstanceID, candidate.launchID); err != nil {
 				return err
 			}
@@ -803,7 +803,7 @@ func (h *Handler) timeoutRunnerActivityProbes(ctx context.Context, now time.Time
 	rows.Close()
 	for _, candidate := range timedOut {
 		if h.DaemonHub != nil {
-			h.DaemonHub.CloseWorkspaceRunner(candidate.daemonID, util.UUIDToString(candidate.workspaceID), candidate.daemonInstanceID)
+			h.DaemonHub.CloseWorkspaceDaemon(candidate.daemonID, util.UUIDToString(candidate.workspaceID), candidate.daemonInstanceID)
 		}
 		if err := h.markRunnerActivityOfflineForComputerDisconnect(ctx, candidate.workspaceID, candidate.agentID, candidate.daemonID, candidate.daemonInstanceID, candidate.launchID); err != nil {
 			return err
@@ -812,10 +812,10 @@ func (h *Handler) timeoutRunnerActivityProbes(ctx context.Context, now time.Time
 	return nil
 }
 
-// HandleWorkspaceRunnerDisconnect is invoked only for the socket that still
+// HandleWorkspaceDaemonDisconnect is invoked only for the socket that still
 // owns the current ready Runner slot. Exact daemon-instance fencing prevents a
 // late teardown from deactivating a replacement Runner's launches.
-func (h *Handler) HandleWorkspaceRunnerDisconnect(ctx context.Context, identity daemonws.ClientIdentity, daemonInstanceID string) error {
+func (h *Handler) HandleWorkspaceDaemonDisconnect(ctx context.Context, identity daemonws.ClientIdentity, daemonInstanceID string) error {
 	return h.runnerPresenceLocked(func() error {
 		workspaceID, err := util.ParseUUID(identity.WorkspaceID)
 		if err != nil {
@@ -921,7 +921,7 @@ func (h *Handler) liveRunnerOwnsActivitySnapshot(daemonID, workspaceID string, s
 		return false
 	}
 	source := h.currentRunnerPresenceSource()
-	return source != nil && source.IsCurrentWorkspaceRunner(daemonID, workspaceID, snapshot.DaemonInstanceID)
+	return source != nil && source.IsCurrentWorkspaceDaemon(daemonID, workspaceID, snapshot.DaemonInstanceID)
 }
 
 // GetRunnerActivity is the Workspace-authorized presentation API for typed

@@ -6,7 +6,7 @@ keep the previous installed binary as a reversible backup.
 
 | Scenario | Operation | Required evidence |
 | --- | --- | --- |
-| Single carrier | Start one Computer with one Workspace and inspect daemon/Server traffic | The current Runner advertises `workspace_runner_control_plane_v1`; heartbeat acknowledgements arrive on that Runner; the process makes no `/api/daemon/heartbeat` calls and the legacy runtime socket sends no `daemon:heartbeat`. |
+| Single carrier | Start one Computer with one Workspace and inspect daemon/Server traffic | The current Runner advertises `workspace_daemon_control_plane_v1`; heartbeat acknowledgements arrive on that Runner; the process makes no `/api/daemon/heartbeat` calls and the legacy runtime socket sends no `daemon:heartbeat`. |
 | Reconnect fence | Interrupt the Runner socket while keeping the process alive, then wait for reconnect | The old socket stops producing or consuming control frames; the replacement becomes current and resumes one heartbeat stream; a queued non-destructive action is delivered once. |
 | Workspace isolation | Connect at least two Workspace bindings on one Computer and request one action per Workspace | Each Runner sends only its Workspace Runtime IDs. Cross-Workspace and cross-Computer Runtime IDs are rejected, while both legitimate actions complete independently. |
 | Historical Runtime residue | Keep an offline Runtime row for an uninstalled provider, then restart the Computer with the remaining current providers | The current Runner starts its heartbeat from the current Runtime set, rejects foreign Runtime IDs, and does not wait for or revive the historical row. |

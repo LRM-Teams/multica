@@ -39,7 +39,7 @@ func (n *capturedAgentDeliveryNotifier) NotifyWorkspaceAgentDelivery(workspaceID
 	return true
 }
 
-func TestWorkspaceRunnerReadyRedeliversUnacknowledgedMessagesInSequenceOrder(t *testing.T) {
+func TestWorkspaceDaemonReadyRedeliversUnacknowledgedMessagesInSequenceOrder(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -81,13 +81,13 @@ func TestWorkspaceRunnerReadyRedeliversUnacknowledgedMessagesInSequenceOrder(t *
 	h.RunnerPresenceSource = fakeRunnerPresenceSource{current: map[string]bool{
 		daemonID + "/" + testWorkspaceID + "/instance-1": true,
 	}}
-	ready := protocol.WorkspaceRunnerReadyPayload{WorkspaceID: testWorkspaceID, DaemonInstanceID: "instance-1"}
+	ready := protocol.WorkspaceReadyPayload{WorkspaceID: testWorkspaceID, DaemonInstanceID: "instance-1"}
 	raw, err := json.Marshal(ready)
 	if err != nil {
 		t.Fatal(err)
 	}
 	identity := daemonws.ClientIdentity{DaemonID: daemonID, WorkspaceID: testWorkspaceID}
-	if err := h.HandleWorkspaceRunnerFrame(ctx, identity, "instance-1", protocol.EventWorkspaceRunnerReady, raw); err != nil {
+	if err := h.HandleWorkspaceDaemonFrame(ctx, identity, "instance-1", protocol.EventWorkspaceDaemonReady, raw); err != nil {
 		t.Fatalf("accept Workspace Runner ready: %v", err)
 	}
 	if len(notifier.deliveries) != 2 {
@@ -143,11 +143,11 @@ func TestAgentDeliveryAcknowledgementRequiresExactSequenceAndStopsRedelivery(t *
 	h.RunnerPresenceSource = fakeRunnerPresenceSource{current: map[string]bool{
 		daemonID + "/" + testWorkspaceID + "/instance-1": true,
 	}}
-	ready, err := json.Marshal(protocol.WorkspaceRunnerReadyPayload{WorkspaceID: testWorkspaceID, DaemonInstanceID: "instance-1"})
+	ready, err := json.Marshal(protocol.WorkspaceReadyPayload{WorkspaceID: testWorkspaceID, DaemonInstanceID: "instance-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.HandleWorkspaceRunnerFrame(ctx, identity, "instance-1", protocol.EventWorkspaceRunnerReady, ready); err != nil {
+	if err := h.HandleWorkspaceDaemonFrame(ctx, identity, "instance-1", protocol.EventWorkspaceDaemonReady, ready); err != nil {
 		t.Fatalf("accept Workspace Runner ready after acknowledgement: %v", err)
 	}
 	if len(notifier.deliveries) != 0 {
@@ -634,7 +634,7 @@ func TestMixedRunLifecycleTransitionReportsPersistCountersIdempotently(t *testin
 		if err != nil {
 			return err
 		}
-		return testHandler.HandleWorkspaceRunnerFrame(fixture.ctx, identity, "runner-instance", protocol.EventMixedRunActivityTransition, raw)
+		return testHandler.HandleWorkspaceDaemonFrame(fixture.ctx, identity, "runner-instance", protocol.EventMixedRunActivityTransition, raw)
 	}
 	report := func(dimension string, delta int, eventID string) {
 		t.Helper()

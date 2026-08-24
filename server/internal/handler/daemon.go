@@ -738,7 +738,7 @@ const orphanDeadWindow = 5 * time.Minute
 // unavailable (legacy / test composition), mirroring computerConnectedByRunner.
 func (h *Handler) daemonAliveByRunner(ctx context.Context, daemonID, workspaceID string, beats []db.DaemonHeartbeat) bool {
 	if h != nil && h.DaemonHub != nil && strings.TrimSpace(daemonID) != "" && strings.TrimSpace(workspaceID) != "" {
-		return h.DaemonHub.HasWorkspaceRunner(daemonID, workspaceID)
+		return h.DaemonHub.HasWorkspaceDaemon(daemonID, workspaceID)
 	}
 	now := time.Now()
 	for _, hb := range beats {
@@ -1225,7 +1225,7 @@ func (h *Handler) HandleDaemonWSHeartbeat(ctx context.Context, identity daemonws
 	// its fenced socket. Do not also return the legacy first-start envelope on
 	// the heartbeat: both paths share the same durable intent, but only one may
 	// be active for a given connection generation.
-	if h.DaemonHub != nil && h.DaemonHub.WorkspaceRunnerSupportsCapability(identity.DaemonID, identity.WorkspaceID, protocol.DaemonCapabilityWorkspaceRunnerAgentProcess) {
+	if h.DaemonHub != nil && h.DaemonHub.WorkspaceDaemonSupportsCapability(identity.DaemonID, identity.WorkspaceID, protocol.DaemonCapabilityWorkspaceDaemonAgentProcess) {
 		if err := h.dispatchPendingRunnerLaunches(ctx, identity); err != nil {
 			return nil, err
 		}

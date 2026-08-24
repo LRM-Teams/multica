@@ -11,7 +11,7 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-func TestWorkspaceRunnerInactiveLaunchAcceptsOnlyStoppedActivityAndFencesReplacement(t *testing.T) {
+func TestWorkspaceDaemonInactiveLaunchAcceptsOnlyStoppedActivityAndFencesReplacement(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -38,7 +38,7 @@ func TestWorkspaceRunnerInactiveLaunchAcceptsOnlyStoppedActivityAndFencesReplace
 		if err != nil {
 			t.Fatal(err)
 		}
-		return h.HandleWorkspaceRunnerFrame(ctx, identity, daemonInstanceID, eventType, raw)
+		return h.HandleWorkspaceDaemonFrame(ctx, identity, daemonInstanceID, eventType, raw)
 	}
 	if err := writeFrame(protocol.EventAgentStatus, protocol.AgentStatusPayload{
 		AgentID: agentID, LaunchID: oldLaunchID, Status: protocol.AgentStatusInactive,
@@ -167,7 +167,7 @@ func TestReapStaleRunnerActivityMarksAgentOfflineForComputerDisconnect(t *testin
 	}
 }
 
-func TestWorkspaceRunnerReadyFencesPriorDaemonInstanceAgentsOffline(t *testing.T) {
+func TestWorkspaceDaemonReadyFencesPriorDaemonInstanceAgentsOffline(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -183,7 +183,7 @@ func TestWorkspaceRunnerReadyFencesPriorDaemonInstanceAgentsOffline(t *testing.T
 		VALUES ($1, $2, $3, 'daemon-1', 'old-instance', $4, 1, 'fact-1', 'online', now())`, testWorkspaceID, agentID, handlerTestRuntimeID(t), launchID); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.recordWorkspaceRunnerReady(ctx, daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID}, "new-instance", nil); err != nil {
+	if err := h.recordWorkspaceDaemonReady(ctx, daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID}, "new-instance", nil); err != nil {
 		t.Fatal(err)
 	}
 	var kind, detail string
@@ -203,7 +203,7 @@ func TestWorkspaceRunnerReadyFencesPriorDaemonInstanceAgentsOffline(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.HandleWorkspaceRunnerFrame(ctx, daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID}, "new-instance", protocol.EventAgentStatus, active); err != nil {
+	if err := h.HandleWorkspaceDaemonFrame(ctx, daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID}, "new-instance", protocol.EventAgentStatus, active); err != nil {
 		t.Fatalf("replacement agent:status: %v", err)
 	}
 	obs, ok := h.observations().get(testWorkspaceID, agentID)
@@ -212,7 +212,7 @@ func TestWorkspaceRunnerReadyFencesPriorDaemonInstanceAgentsOffline(t *testing.T
 	}
 }
 
-func TestWorkspaceRunnerReadyKeepsSameInstanceRunningLaunchActive(t *testing.T) {
+func TestWorkspaceDaemonReadyKeepsSameInstanceRunningLaunchActive(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -225,7 +225,7 @@ func TestWorkspaceRunnerReadyKeepsSameInstanceRunningLaunchActive(t *testing.T) 
 	h.observations().putStatus(testWorkspaceID, "daemon-1", "instance-1", agentID, handlerTestRuntimeID(t), launchID, protocol.AgentStatusActive)
 	// Same-process reconnect reports ready before it can replay agent:status.
 	// An empty runningAgents list must not deactivate that still-live launch.
-	if err := h.recordWorkspaceRunnerReady(ctx, daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID}, "instance-1", nil); err != nil {
+	if err := h.recordWorkspaceDaemonReady(ctx, daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID}, "instance-1", nil); err != nil {
 		t.Fatal(err)
 	}
 	obs, ok := h.observations().get(testWorkspaceID, agentID)
@@ -239,7 +239,7 @@ func TestWorkspaceRunnerReadyKeepsSameInstanceRunningLaunchActive(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.HandleWorkspaceRunnerFrame(ctx, daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID}, "instance-1", protocol.EventAgentStatus, active); err != nil {
+	if err := h.HandleWorkspaceDaemonFrame(ctx, daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID}, "instance-1", protocol.EventAgentStatus, active); err != nil {
 		t.Fatalf("replayed agent:status after same-instance ready: %v", err)
 	}
 }

@@ -156,13 +156,13 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 	d.mu.Lock()
 	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
 	d.mu.Unlock()
-	runner, err := d.newWorkspaceRunner(workspaceID)
+	runner, err := d.newWorkspaceDaemon(workspaceID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.attachWorkspaceRunner(runner)
+	d.attachWorkspaceDaemon(runner)
 	t.Cleanup(func() {
-		d.detachWorkspaceRunner(runner)
+		d.detachWorkspaceDaemon(runner)
 		runner.inboxes.Close()
 	})
 	d.canonicalRuntimes.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{
@@ -341,10 +341,10 @@ func seedIdleMessageAcceptanceFixture(t *testing.T, pool *pgxpool.Pool) (workspa
 func startIdleMessageAcceptanceRunner(t *testing.T, d *Daemon, hub *daemonws.Hub, workspaceID, daemonID string) func() {
 	t.Helper()
 	d.cfg.DaemonID = daemonID
-	runner := d.currentWorkspaceRunner(workspaceID)
+	runner := d.currentWorkspaceDaemon(workspaceID)
 	if runner == nil {
 		var err error
-		runner, err = d.newWorkspaceRunner(workspaceID)
+		runner, err = d.newWorkspaceDaemon(workspaceID)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -356,10 +356,10 @@ func startIdleMessageAcceptanceRunner(t *testing.T, d *Daemon, hub *daemonws.Hub
 		close(done)
 	}()
 	deadline := time.Now().Add(2 * time.Second)
-	for hub.WorkspaceRunnerConnectionCount(daemonID, workspaceID) != 1 && time.Now().Before(deadline) {
+	for hub.WorkspaceDaemonConnectionCount(daemonID, workspaceID) != 1 && time.Now().Before(deadline) {
 		runtime.Gosched()
 	}
-	if hub.WorkspaceRunnerConnectionCount(daemonID, workspaceID) != 1 {
+	if hub.WorkspaceDaemonConnectionCount(daemonID, workspaceID) != 1 {
 		cancel()
 		select {
 		case <-done:
@@ -369,7 +369,7 @@ func startIdleMessageAcceptanceRunner(t *testing.T, d *Daemon, hub *daemonws.Hub
 		}
 	}
 	return func() {
-		hub.CloseWorkspaceRunner(daemonID, workspaceID, d.runnerInstanceID)
+		hub.CloseWorkspaceDaemon(daemonID, workspaceID, d.runnerInstanceID)
 		cancel()
 		select {
 		case <-done:
@@ -501,11 +501,11 @@ func TestIdleMessageRealWebSocketCrashRestartRehandsDeliveredMessage(t *testing.
 		d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
 		d.workspaces[workspaceID] = newWorkspaceState(workspaceID, []string{runtimeID})
 		d.mu.Unlock()
-		runner, err := d.newWorkspaceRunner(workspaceID)
+		runner, err := d.newWorkspaceDaemon(workspaceID)
 		if err != nil {
 			t.Fatal(err)
 		}
-		d.attachWorkspaceRunner(runner)
+		d.attachWorkspaceDaemon(runner)
 		d.canonicalRuntimes.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{
 			backend: normal,
 		}
@@ -524,7 +524,7 @@ func TestIdleMessageRealWebSocketCrashRestartRehandsDeliveredMessage(t *testing.
 		stopRunner := startIdleMessageAcceptanceRunner(t, d, hub, workspaceID, daemonID)
 		teardown = func() {
 			stopRunner()
-			d.detachWorkspaceRunner(runner)
+			d.detachWorkspaceDaemon(runner)
 			// Crash teardown must terminate any resident provider process before
 			// the workspace root is released. closeAll only closes idle backends;
 			// a late provider write can otherwise race testing.T's TempDir cleanup.
@@ -625,7 +625,7 @@ func TestIdleMessageRealWebSocketCrashRestartRehandsDeliveredMessage(t *testing.
 	if got := waitBatch(observedA, batchesA, idA); len(got) != 1 || len(got[0]) != 1 || got[0][0].ID != idA {
 		t.Fatalf("rejected runtime handoff attempt = %+v, want %s", got, idA)
 	}
-	runnerA, err := dA.resolveWorkspaceRunnerByAgent(agentID)
+	runnerA, err := dA.resolveWorkspaceDaemonByAgent(agentID)
 	if err != nil {
 		t.Fatalf("resolve runner before delivery: %v", err)
 	}

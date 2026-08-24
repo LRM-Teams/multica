@@ -21,7 +21,7 @@ type ProcessCapacityRequest struct {
 }
 
 // ProcessCapacity is the Computer Host's machine-wide admission ledger. It
-// deliberately knows nothing about WorkspaceRunner or provider implementations.
+// deliberately knows nothing about WorkspaceDaemon or provider implementations.
 type ProcessCapacity struct {
 	mu      sync.Mutex
 	max     int

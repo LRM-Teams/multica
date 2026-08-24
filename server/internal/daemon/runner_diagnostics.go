@@ -156,7 +156,7 @@ func (d *Daemon) recordAgentMessageResponse(
 		return
 	}
 	runtimeID := ""
-	if runner := d.currentWorkspaceRunner(workspaceID); runner != nil {
+	if runner := d.currentWorkspaceDaemon(workspaceID); runner != nil {
 		runtimeID = runner.messageRuntimeID(agentID)
 	}
 	messageID, channelID := responseMessageIdentity(response)

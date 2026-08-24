@@ -302,7 +302,7 @@ func (c *MessageCoordinator) Flush(ctx context.Context) error {
 // NotifyPendingAfterTurn schedules a content-free Notice when Pending remains
 // after a resident turn ends. Raft-aligned: do not auto-deliver the next body
 // batch solely because Pending exists. Body delivery stays on idle Accept→Flush
-// (workspace runner) and recovery Flush; the agent may also `message check`.
+// (workspace daemon) and recovery Flush; the agent may also `message check`.
 func (c *MessageCoordinator) NotifyPendingAfterTurn() {
 	c.mu.Lock()
 	defer c.mu.Unlock()

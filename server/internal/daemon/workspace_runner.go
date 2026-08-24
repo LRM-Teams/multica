@@ -11,9 +11,9 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-const workspaceRunnerWriteTimeout = 10 * time.Second
+const workspaceDaemonWriteTimeout = 10 * time.Second
 
-func (runner *WorkspaceRunner) serveConnection(connection *DaemonConnection, conn *websocket.Conn) error {
+func (runner *WorkspaceDaemon) serveConnection(connection *DaemonConnection, conn *websocket.Conn) error {
 	workspaceID := connection.workspaceID
 	writeFrame := func(eventType string, payload any) error {
 		return runner.sendOnConnection(connection, eventType, payload)
@@ -27,7 +27,7 @@ func (runner *WorkspaceRunner) serveConnection(connection *DaemonConnection, con
 		}
 		connection.Close()
 	}
-	connection.deliveries = newWorkspaceRunnerDeliveryDispatcher(connection.ctx, func(deliveryCtx context.Context, delivery protocol.AgentDeliverPayload) {
+	connection.deliveries = newWorkspaceDaemonDeliveryDispatcher(connection.ctx, func(deliveryCtx context.Context, delivery protocol.AgentDeliverPayload) {
 		if err := runner.handleMessageDelivery(deliveryCtx, delivery, writeFrame); err != nil {
 			failConnection(err)
 		}
@@ -41,7 +41,7 @@ func (runner *WorkspaceRunner) serveConnection(connection *DaemonConnection, con
 	}
 	transportGeneration, _ := producer.AttachTransport(func(activity protocol.AgentActivityPayload) {
 		if err := writeFrame(protocol.EventAgentActivity, activity); err != nil && runner.logger != nil {
-			runner.logger.Debug("workspace runner Activity publish failed", "workspace_id", workspaceID, "error", err)
+			runner.logger.Debug("workspace daemon Activity publish failed", "workspace_id", workspaceID, "error", err)
 		}
 	})
 	defer producer.DetachTransport(transportGeneration)
@@ -92,12 +92,12 @@ func (runner *WorkspaceRunner) serveConnection(connection *DaemonConnection, con
 			continue
 		}
 		switch message.Type {
-		case protocol.EventWorkspaceRunnerPing:
-			var ping protocol.WorkspaceRunnerPingPayload
+		case protocol.EventWorkspaceDaemonPing:
+			var ping protocol.WorkspacePingPayload
 			if json.Unmarshal(message.Payload, &ping) != nil || ping.Validate() != nil {
 				continue
 			}
-			if err := writeFrame(protocol.EventWorkspaceRunnerPong, protocol.WorkspaceRunnerPongPayload{PingID: ping.PingID}); err != nil {
+			if err := writeFrame(protocol.EventWorkspaceDaemonPong, protocol.WorkspacePongPayload{PingID: ping.PingID}); err != nil {
 				return err
 			}
 		case protocol.EventComputerWorkDigest:
@@ -184,8 +184,20 @@ func (runner *WorkspaceRunner) serveConnection(connection *DaemonConnection, con
 				runner.controlHeartbeatAck(lifetime, &ack)
 			}
 		case protocol.EventDaemonAgentStart:
-			var start protocol.WorkspaceRunnerAgentStartPayload
+			var start protocol.AgentStartPayload
 			if json.Unmarshal(message.Payload, &start) != nil || start.Validate() != nil || !connection.deliveries.Pause(start.AgentID, start.LaunchID) {
+				continue
+			}
+			if err := runner.restartAgentForRuntimeChange(connection.ctx, start, func() {
+				if current, ok := runner.processes.Snapshot(start.AgentID); ok {
+					connection.deliveries.FenceStop(start.AgentID, current.LaunchID)
+				}
+			}, writeFrame); err != nil {
+				connection.deliveries.RejectStart(start.AgentID, start.LaunchID)
+				if runner.logger != nil {
+					runner.logger.Warn("Workspace Runner runtime change rejected", "workspace_id", workspaceID, "agent_id", start.AgentID, "runtime_id", start.RuntimeID, "reason", "restart_failed", "error", err)
+				}
+				failConnection(err)
 				continue
 			}
 			ack, replayed, releaseStartupPublication, _, startupPublished, err := runner.acceptManagedAgentStart(start, failConnection)
@@ -219,7 +231,7 @@ func (runner *WorkspaceRunner) serveConnection(connection *DaemonConnection, con
 				}
 			}()
 		case protocol.EventDaemonAgentStop:
-			var stop protocol.WorkspaceRunnerAgentStopPayload
+			var stop protocol.AgentStopPayload
 			if json.Unmarshal(message.Payload, &stop) != nil || stop.Validate() != nil {
 				continue
 			}
@@ -233,7 +245,7 @@ func (runner *WorkspaceRunner) serveConnection(connection *DaemonConnection, con
 				continue
 			}
 		case protocol.EventDaemonAgentResetWorkspace:
-			var reset protocol.WorkspaceRunnerAgentResetWorkspacePayload
+			var reset protocol.AgentWorkspaceResetPayload
 			if json.Unmarshal(message.Payload, &reset) != nil || reset.Validate() != nil {
 				continue
 			}
@@ -275,7 +287,7 @@ func (runner *WorkspaceRunner) serveConnection(connection *DaemonConnection, con
 	}
 }
 
-func (runner *WorkspaceRunner) ownsRuntime(runtimeID string) bool {
+func (runner *WorkspaceDaemon) ownsRuntime(runtimeID string) bool {
 	if runner == nil || runner.runtimeIDs == nil || runtimeID == "" {
 		return false
 	}
@@ -287,7 +299,7 @@ func (runner *WorkspaceRunner) ownsRuntime(runtimeID string) bool {
 	return false
 }
 
-func (runner *WorkspaceRunner) runControlPlaneHeartbeats(ctx context.Context, connection *DaemonConnection) {
+func (runner *WorkspaceDaemon) runControlPlaneHeartbeats(ctx context.Context, connection *DaemonConnection) {
 	if runner == nil || runner.controlHeartbeatPayload == nil {
 		return
 	}

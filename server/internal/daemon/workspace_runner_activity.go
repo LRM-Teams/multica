@@ -18,7 +18,7 @@ const (
 	managedRuntimeFailureRuntime managedRuntimeFailureStage = "runtime"
 )
 
-func (runner *WorkspaceRunner) managedLaunch(agentID, runtimeID string) (agentProcessManagerSnapshot, bool) {
+func (runner *WorkspaceDaemon) managedLaunch(agentID, runtimeID string) (agentProcessManagerSnapshot, bool) {
 	if runner == nil || runner.processes == nil {
 		return agentProcessManagerSnapshot{}, false
 	}
@@ -33,8 +33,8 @@ func (runner *WorkspaceRunner) managedLaunch(agentID, runtimeID string) (agentPr
 // Starting and the next delivery lazily recreates the provider process, same
 // as ProcessExited(recover=true) always did. It exists so callers outside
 // the workspace_runner_* module never reach runner.processes directly — see
-// TestWorkspaceRunnerInternalsDoNotEscapeRunnerModule.
-func (runner *WorkspaceRunner) retryManagedLaunchAfterExit(agentID string, launch agentProcessManagerSnapshot) error {
+// TestWorkspaceDaemonInternalsDoNotEscapeRunnerModule.
+func (runner *WorkspaceDaemon) retryManagedLaunchAfterExit(agentID string, launch agentProcessManagerSnapshot) error {
 	if runner == nil || runner.processes == nil {
 		return nil
 	}
@@ -51,7 +51,7 @@ func (runner *WorkspaceRunner) retryManagedLaunchAfterExit(agentID string, launc
 // AgentStatusInactive + error Activity that a mid-turn provider failure
 // already gets, which a bare ProcessExited(recover=false) never did. Calling
 // both would tear the same launch down twice.
-func (runner *WorkspaceRunner) retireManagedLaunchAfterExit(agentID, runtimeID string, launch agentProcessManagerSnapshot, reasonCode string) error {
+func (runner *WorkspaceDaemon) retireManagedLaunchAfterExit(agentID, runtimeID string, launch agentProcessManagerSnapshot, reasonCode string) error {
 	if runner == nil || runner.processes == nil || runner.activity == nil {
 		return errors.New("Workspace Runner is unavailable")
 	}
@@ -63,7 +63,7 @@ func (runner *WorkspaceRunner) retireManagedLaunchAfterExit(agentID, runtimeID s
 // broadcastActivity is Raft 1.0.16's spawn Activity boundary. Starting is
 // broadcast only after the provider process exists and active status has been
 // published; replaying a start never calls this method.
-func (runner *WorkspaceRunner) broadcastActivity(agentID, runtimeID, detailKind string) {
+func (runner *WorkspaceDaemon) broadcastActivity(agentID, runtimeID, detailKind string) {
 	if detailKind != "starting" {
 		return
 	}
@@ -82,7 +82,7 @@ func (runner *WorkspaceRunner) broadcastActivity(agentID, runtimeID, detailKind 
 // its spawn always carries an initial turn. A resident provider can initialize
 // and sit idle without a turn, so APM readiness itself is the terminal startup
 // fact and must settle Activity to Online instead of waiting for a Message.
-func (runner *WorkspaceRunner) observeResidentRuntimeReady(agentID, runtimeID string) {
+func (runner *WorkspaceDaemon) observeResidentRuntimeReady(agentID, runtimeID string) {
 	launch, found := runner.managedLaunch(agentID, runtimeID)
 	if !found || runner.activity == nil || launch.QueueState != protocol.AgentStartQueueRunning || launch.ProcessInstanceID == "" {
 		return
@@ -94,13 +94,13 @@ func (runner *WorkspaceRunner) observeResidentRuntimeReady(agentID, runtimeID st
 }
 
 // resolveManagedLaunch is the single runtimeIndex -> workspace ->
-// currentWorkspaceRunner -> managedLaunch lookup shared by every resident
+// currentWorkspaceDaemon -> managedLaunch lookup shared by every resident
 // process event route that needs to reach the APM-owned launch for an
 // (agentID, runtimeID) pair (observeResidentRuntimeStalled, the "exited"
 // route in resident_crash_watch.go). A missing runtime, runner, or launch is
 // normal — e.g. the workspace detached, or the launch never reached APM —
 // and callers treat a false as "nothing to route to", not an error.
-func (d *Daemon) resolveManagedLaunch(agentID, runtimeID string) (agentProcessManagerSnapshot, *WorkspaceRunner, bool) {
+func (d *Daemon) resolveManagedLaunch(agentID, runtimeID string) (agentProcessManagerSnapshot, *WorkspaceDaemon, bool) {
 	if d == nil {
 		return agentProcessManagerSnapshot{}, nil, false
 	}
@@ -110,7 +110,7 @@ func (d *Daemon) resolveManagedLaunch(agentID, runtimeID string) (agentProcessMa
 	if !ok {
 		return agentProcessManagerSnapshot{}, nil, false
 	}
-	runner := d.currentWorkspaceRunner(runtime.WorkspaceID)
+	runner := d.currentWorkspaceDaemon(runtime.WorkspaceID)
 	if runner == nil {
 		return agentProcessManagerSnapshot{}, nil, false
 	}
@@ -139,7 +139,7 @@ func (d *Daemon) observeResidentRuntimeStalled(agentID, runtimeID string, staleF
 // lifecycle fact must reach the server before the terminal Stopped Activity;
 // only after both have been published may the local Activity state be
 // forgotten. No second ownership registry participates in this operation.
-func (runner *WorkspaceRunner) stopManagedAgent(ctx context.Context, payload protocol.WorkspaceRunnerAgentStopPayload, pause func(), writeFrame func(string, any) error) error {
+func (runner *WorkspaceDaemon) stopManagedAgent(ctx context.Context, payload protocol.AgentStopPayload, pause func(), writeFrame func(string, any) error) error {
 	if runner == nil || runner.processes == nil || runner.runtimes == nil || runner.inboxes == nil || runner.activity == nil || writeFrame == nil {
 		return errors.New("Workspace Runner stop dependencies are unavailable")
 	}
@@ -222,7 +222,7 @@ func (runner *WorkspaceRunner) stopManagedAgent(ctx context.Context, payload pro
 	return runner.publishManagedAgentInactive(payload, runtimeID, writeFrame)
 }
 
-func (runner *WorkspaceRunner) publishManagedAgentInactive(payload protocol.WorkspaceRunnerAgentStopPayload, runtimeID string, writeFrame func(string, any) error) error {
+func (runner *WorkspaceDaemon) publishManagedAgentInactive(payload protocol.AgentStopPayload, runtimeID string, writeFrame func(string, any) error) error {
 	status := protocol.AgentStatusPayload{AgentID: payload.AgentID, LaunchID: payload.LaunchID, Status: protocol.AgentStatusInactive}
 	if err := runner.activity.SetManaged(status, protocol.AgentSessionPayload{AgentID: payload.AgentID, LaunchID: payload.LaunchID}); err != nil {
 		return fmt.Errorf("record managed stop: %w", err)
@@ -245,7 +245,7 @@ func (runner *WorkspaceRunner) publishManagedAgentInactive(payload protocol.Work
 	return nil
 }
 
-func (runner *WorkspaceRunner) observeResidentMessageRuntime(agentID, runtimeID string, message agent.Message) {
+func (runner *WorkspaceDaemon) observeResidentMessageRuntime(agentID, runtimeID string, message agent.Message) {
 	poisoned := message.Type == agent.MessageError
 	if poisoned {
 		if _, ok := classifyPoisonedError(message.Content); !ok {
@@ -314,7 +314,7 @@ func (runner *WorkspaceRunner) observeResidentMessageRuntime(agentID, runtimeID 
 	runner.observeActivity(AgentObservation{AgentID: agentID, LaunchID: launch.LaunchID, Kind: kind, Data: data, At: at}, "Message Runtime")
 }
 
-func (runner *WorkspaceRunner) observeResidentRuntimeDiagnostic(agentID, runtimeID string, message agent.Message) {
+func (runner *WorkspaceDaemon) observeResidentRuntimeDiagnostic(agentID, runtimeID string, message agent.Message) {
 	if message.Level != "warning" || strings.TrimSpace(message.Title) == "" || strings.TrimSpace(message.Content) == "" {
 		return
 	}
@@ -328,7 +328,7 @@ func (runner *WorkspaceRunner) observeResidentRuntimeDiagnostic(agentID, runtime
 	}, "Runtime diagnostic")
 }
 
-func (runner *WorkspaceRunner) observeMessageTurnCompletion(agentID, runtimeID string, turnErr error) {
+func (runner *WorkspaceDaemon) observeMessageTurnCompletion(agentID, runtimeID string, turnErr error) {
 	launch, found := runner.managedLaunch(agentID, runtimeID)
 	if !found || runner.activity == nil {
 		return
@@ -346,7 +346,7 @@ func (runner *WorkspaceRunner) observeMessageTurnCompletion(agentID, runtimeID s
 // failManagedRuntime owns the Raft-style runtime-error transition. Activity
 // projection remains in agentActivityProducer; this method only coordinates
 // the lifecycle facts that must change together.
-func (runner *WorkspaceRunner) failManagedRuntime(agentID, runtimeID, launchID string, stage managedRuntimeFailureStage, reasonCode, message string, at time.Time) protocol.AgentStatusPayload {
+func (runner *WorkspaceDaemon) failManagedRuntime(agentID, runtimeID, launchID string, stage managedRuntimeFailureStage, reasonCode, message string, at time.Time) protocol.AgentStatusPayload {
 	status := runner.prepareManagedRuntimeFailure(agentID, runtimeID, launchID, stage, reasonCode, message)
 	if status.AgentID != "" {
 		runner.publishManagedRuntimeFailure(status, runtimeID, stage, reasonCode, message, at)
@@ -354,7 +354,7 @@ func (runner *WorkspaceRunner) failManagedRuntime(agentID, runtimeID, launchID s
 	return status
 }
 
-func (runner *WorkspaceRunner) prepareManagedRuntimeFailure(agentID, runtimeID, launchID string, stage managedRuntimeFailureStage, reasonCode, message string) protocol.AgentStatusPayload {
+func (runner *WorkspaceDaemon) prepareManagedRuntimeFailure(agentID, runtimeID, launchID string, stage managedRuntimeFailureStage, reasonCode, message string) protocol.AgentStatusPayload {
 	startStopEpoch, err := runner.processes.startStopEpoch(agentProcessCallback{AgentID: agentID, LaunchID: launchID})
 	if err != nil {
 		return protocol.AgentStatusPayload{}
@@ -370,7 +370,7 @@ func (runner *WorkspaceRunner) prepareManagedRuntimeFailure(agentID, runtimeID, 
 	return protocol.AgentStatusPayload{AgentID: agentID, LaunchID: launchID, Status: protocol.AgentStatusInactive}
 }
 
-func (runner *WorkspaceRunner) publishManagedRuntimeFailure(status protocol.AgentStatusPayload, runtimeID string, stage managedRuntimeFailureStage, reasonCode, message string, at time.Time) {
+func (runner *WorkspaceDaemon) publishManagedRuntimeFailure(status protocol.AgentStatusPayload, runtimeID string, stage managedRuntimeFailureStage, reasonCode, message string, at time.Time) {
 	runner.activity.InterruptCompactionIfActive(status.AgentID, status.LaunchID)
 	_ = runner.activity.SetManaged(status, protocol.AgentSessionPayload{AgentID: status.AgentID, LaunchID: status.LaunchID})
 	runner.sendAgentFrame(protocol.EventAgentStatus, status)
@@ -387,7 +387,7 @@ func (runner *WorkspaceRunner) publishManagedRuntimeFailure(status protocol.Agen
 // broadcastMessageReceivedActivity matches Raft 1.0.16's single write site:
 // the ordinary Message batch has crossed the provider runtime input boundary.
 // Pending acceptance and content-free Notices do not publish this Activity.
-func (runner *WorkspaceRunner) broadcastMessageReceivedActivity(agentID, runtimeID string, messages []protocol.AgentMessageProjection) {
+func (runner *WorkspaceDaemon) broadcastMessageReceivedActivity(agentID, runtimeID string, messages []protocol.AgentMessageProjection) {
 	if len(messages) == 0 {
 		return
 	}
@@ -399,7 +399,7 @@ func (runner *WorkspaceRunner) broadcastMessageReceivedActivity(agentID, runtime
 	}
 }
 
-func (runner *WorkspaceRunner) observeMessageSendHold(agentID, target string, newer int64, reason string) {
+func (runner *WorkspaceDaemon) observeMessageSendHold(agentID, target string, newer int64, reason string) {
 	if runner == nil {
 		return
 	}
@@ -416,7 +416,7 @@ func (runner *WorkspaceRunner) observeMessageSendHold(agentID, target string, ne
 	}, "Message send hold")
 }
 
-func (runner *WorkspaceRunner) observeMessageSendDraftSent(agentID, target string, anyway bool) {
+func (runner *WorkspaceDaemon) observeMessageSendDraftSent(agentID, target string, anyway bool) {
 	if runner == nil {
 		return
 	}
@@ -433,7 +433,7 @@ func (runner *WorkspaceRunner) observeMessageSendDraftSent(agentID, target strin
 	}, "Draft sent")
 }
 
-func (runner *WorkspaceRunner) observeActivity(observation AgentObservation, phase string) {
+func (runner *WorkspaceDaemon) observeActivity(observation AgentObservation, phase string) {
 	if runner == nil || runner.activity == nil {
 		return
 	}

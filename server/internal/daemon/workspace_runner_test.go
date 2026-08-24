@@ -19,21 +19,21 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-func TestWorkspaceRunnerURLIsScopedWithoutRuntimeIDs(t *testing.T) {
-	got, err := workspaceRunnerURL("https://api.example.com/multica", "workspace-1")
+func TestWorkspaceDaemonURLIsScopedWithoutRuntimeIDs(t *testing.T) {
+	got, err := workspaceDaemonURL("https://api.example.com/multica", "workspace-1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	const want = "wss://api.example.com/multica/api/daemon/connect?workspace_id=workspace-1"
 	if got != want {
-		t.Fatalf("workspaceRunnerURL() = %q, want %q", got, want)
+		t.Fatalf("workspaceDaemonURL() = %q, want %q", got, want)
 	}
 }
 
-func TestWorkspaceRunnerReadyPingAndReconnectUseFixedIdentity(t *testing.T) {
+func TestWorkspaceDaemonReadyPingAndReconnectUseFixedIdentity(t *testing.T) {
 	type observation struct {
-		ready protocol.WorkspaceRunnerReadyPayload
-		pong  protocol.WorkspaceRunnerPongPayload
+		ready protocol.WorkspaceReadyPayload
+		pong  protocol.WorkspacePongPayload
 	}
 	observations := make(chan observation, 2)
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
@@ -54,19 +54,19 @@ func TestWorkspaceRunnerReadyPingAndReconnectUseFixedIdentity(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		var ready protocol.WorkspaceRunnerReadyPayload
-		if readyFrame.Type != protocol.EventWorkspaceRunnerReady || json.Unmarshal(readyFrame.Payload, &ready) != nil {
+		var ready protocol.WorkspaceReadyPayload
+		if readyFrame.Type != protocol.EventWorkspaceDaemonReady || json.Unmarshal(readyFrame.Payload, &ready) != nil {
 			t.Errorf("invalid ready frame: %+v", readyFrame)
 			return
 		}
-		ping, _ := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceRunnerPing, Payload: marshalRaw(protocol.WorkspaceRunnerPingPayload{PingID: "ping-1"})})
+		ping, _ := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceDaemonPing, Payload: marshalRaw(protocol.WorkspacePingPayload{PingID: "ping-1"})})
 		if err := conn.WriteMessage(websocket.TextMessage, ping); err != nil {
 			t.Error(err)
 			return
 		}
 		var pongFrame protocol.Message
-		var pong protocol.WorkspaceRunnerPongPayload
-		for pongFrame.Type != protocol.EventWorkspaceRunnerPong {
+		var pong protocol.WorkspacePongPayload
+		for pongFrame.Type != protocol.EventWorkspaceDaemonPong {
 			_, raw, err = conn.ReadMessage()
 			if err != nil {
 				t.Error(err)
@@ -86,7 +86,7 @@ func TestWorkspaceRunnerReadyPingAndReconnectUseFixedIdentity(t *testing.T) {
 	d := New(Config{ServerBaseURL: server.URL, DaemonID: "daemon-1", DeviceName: "ubuntu-build-host", CLIVersion: "0.4.24-alpha.91"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	d.runnerInstanceID = "instance-1"
 	d.client.SetWorkspaceDaemonToken("workspace-1", "workspace-token", time.Now().Add(time.Minute))
-	runner, err := d.newWorkspaceRunner("workspace-1")
+	runner, err := d.newWorkspaceDaemon("workspace-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestWorkspaceRunnerReadyPingAndReconnectUseFixedIdentity(t *testing.T) {
 			for _, capability := range got.ready.ActiveCapabilities {
 				capabilities[capability] = true
 			}
-			if !capabilities[protocol.DaemonCapabilityWorkspaceRunnerAgentProcess] || !capabilities[protocol.DaemonCapabilityWorkspaceRunnerAgentReset] {
+			if !capabilities[protocol.DaemonCapabilityWorkspaceDaemonAgentProcess] || !capabilities[protocol.DaemonCapabilityWorkspaceDaemonAgentReset] {
 				t.Fatalf("Runner capabilities = %v, want Agent process and reset", got.ready.ActiveCapabilities)
 			}
 		case <-ctx.Done():
@@ -112,7 +112,7 @@ func TestWorkspaceRunnerReadyPingAndReconnectUseFixedIdentity(t *testing.T) {
 	}
 }
 
-func TestWorkspaceRunnerRunReturnsWhenBindingContextCancelsLiveSocket(t *testing.T) {
+func TestWorkspaceDaemonRunReturnsWhenBindingContextCancelsLiveSocket(t *testing.T) {
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 	connected := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -137,7 +137,7 @@ func TestWorkspaceRunnerRunReturnsWhenBindingContextCancelsLiveSocket(t *testing
 	d := New(Config{ServerBaseURL: server.URL, DaemonID: "daemon-1"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	d.runnerInstanceID = "instance-1"
 	d.client.SetWorkspaceDaemonToken("workspace-1", "workspace-token", time.Now().Add(time.Minute))
-	runner, err := d.newWorkspaceRunner("workspace-1")
+	runner, err := d.newWorkspaceDaemon("workspace-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,13 +160,13 @@ func TestWorkspaceRunnerRunReturnsWhenBindingContextCancelsLiveSocket(t *testing
 	}
 }
 
-func TestWorkspaceRunnerOwnsOneProcessManagerPerWorkspace(t *testing.T) {
+func TestWorkspaceDaemonOwnsOneProcessManagerPerWorkspace(t *testing.T) {
 	d := New(Config{DaemonID: "daemon-1", MaxAgentProcesses: 1}, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	firstRunner, err := d.newWorkspaceRunner("ws-1")
+	firstRunner, err := d.newWorkspaceDaemon("ws-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondRunner, err := d.newWorkspaceRunner("ws-2")
+	secondRunner, err := d.newWorkspaceDaemon("ws-2")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +188,7 @@ func TestWorkspaceRunnerOwnsOneProcessManagerPerWorkspace(t *testing.T) {
 	}
 }
 
-func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) {
+func TestWorkspaceDaemonAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) {
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 	frames := make(chan protocol.Message, 6)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -213,7 +213,7 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 			return
 		}
 		frames <- ready
-		start, _ := json.Marshal(protocol.Message{Type: protocol.EventDaemonAgentStart, Payload: marshalRaw(protocol.WorkspaceRunnerAgentStartPayload{AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "dispatch-1", StartDispatchID: "dispatch-1" + "-dispatch"})})
+		start, _ := json.Marshal(protocol.Message{Type: protocol.EventDaemonAgentStart, Payload: marshalRaw(protocol.AgentStartPayload{AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "dispatch-1", StartDispatchID: "dispatch-1" + "-dispatch"})})
 		if err := conn.WriteMessage(websocket.TextMessage, start); err != nil {
 			t.Error(err)
 			return
@@ -268,7 +268,7 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 			}
 			frames <- msg
 		}
-		stop, _ := json.Marshal(protocol.Message{Type: protocol.EventDaemonAgentStop, Payload: marshalRaw(protocol.WorkspaceRunnerAgentStopPayload{AgentID: accepted.AgentID, LaunchID: accepted.LaunchID})})
+		stop, _ := json.Marshal(protocol.Message{Type: protocol.EventDaemonAgentStop, Payload: marshalRaw(protocol.AgentStopPayload{AgentID: accepted.AgentID, LaunchID: accepted.LaunchID})})
 		if err := conn.WriteMessage(websocket.TextMessage, stop); err != nil {
 			t.Error(err)
 			return
@@ -296,14 +296,14 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	errCh := make(chan error, 1)
-	runner, err := d.newWorkspaceRunner("ws-1")
+	runner, err := d.newWorkspaceDaemon("ws-1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error { return nil }
-	d.attachWorkspaceRunner(runner)
+	d.attachWorkspaceDaemon(runner)
 	t.Cleanup(func() {
-		d.detachWorkspaceRunner(runner)
+		d.detachWorkspaceDaemon(runner)
 		runner.inboxes.Close()
 	})
 	go func() { errCh <- runner.runConnection(ctx) }()
@@ -317,7 +317,7 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 		select {
 		case msg := <-frames:
 			switch msg.Type {
-			case protocol.EventWorkspaceRunnerReady:
+			case protocol.EventWorkspaceDaemonReady:
 				ready = msg
 			case protocol.EventAgentStartAck:
 				ack = msg
@@ -361,7 +361,7 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 	if onlineActivities != 1 {
 		t.Fatalf("managed resident start emitted %d Online Activities, want one", onlineActivities)
 	}
-	if ready.Type != protocol.EventWorkspaceRunnerReady {
+	if ready.Type != protocol.EventWorkspaceDaemonReady {
 		t.Fatalf("ready frame = %+v", ready)
 	}
 	var accepted protocol.AgentStartAckPayload
@@ -430,16 +430,16 @@ func computerUpgradeDoneTestServer(t *testing.T) (*httptest.Server, chan protoco
 	return server, done
 }
 
-// TestWorkspaceRunnerReportsForwardFailureForComputerUpgrade covers the
+// TestWorkspaceDaemonReportsForwardFailureForComputerUpgrade covers the
 // non-busy failure path: any handleComputerControl error for
 // computer:upgrade must still produce a computer:upgrade:done{ok:false}
 // frame, not just a local log line the cloud never sees.
-func TestWorkspaceRunnerReportsForwardFailureForComputerUpgrade(t *testing.T) {
+func TestWorkspaceDaemonReportsForwardFailureForComputerUpgrade(t *testing.T) {
 	server, done := computerUpgradeDoneTestServer(t)
 	defer server.Close()
 	d := New(Config{ServerBaseURL: server.URL, DaemonID: "daemon-1", WorkspacesRoot: t.TempDir()}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	d.client.SetWorkspaceDaemonToken("ws-1", "workspace-token", time.Now().Add(time.Hour))
-	runner, err := d.newWorkspaceRunner("ws-1")
+	runner, err := d.newWorkspaceDaemon("ws-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -464,14 +464,14 @@ func TestWorkspaceRunnerReportsForwardFailureForComputerUpgrade(t *testing.T) {
 	}
 }
 
-// TestWorkspaceRunnerReportsControlBusyForComputerUpgrade keeps the existing
+// TestWorkspaceDaemonReportsControlBusyForComputerUpgrade keeps the existing
 // "control_busy" code stable: the frontend already special-cases it.
-func TestWorkspaceRunnerReportsControlBusyForComputerUpgrade(t *testing.T) {
+func TestWorkspaceDaemonReportsControlBusyForComputerUpgrade(t *testing.T) {
 	server, done := computerUpgradeDoneTestServer(t)
 	defer server.Close()
 	d := New(Config{ServerBaseURL: server.URL, DaemonID: "daemon-1", WorkspacesRoot: t.TempDir()}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	d.client.SetWorkspaceDaemonToken("ws-1", "workspace-token", time.Now().Add(time.Hour))
-	runner, err := d.newWorkspaceRunner("ws-1")
+	runner, err := d.newWorkspaceDaemon("ws-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -496,7 +496,7 @@ func TestWorkspaceRunnerReportsControlBusyForComputerUpgrade(t *testing.T) {
 	}
 }
 
-func TestWorkspaceRunnerRuntimeReplacementStopsOldLaunchBeforeNewActivity(t *testing.T) {
+func TestWorkspaceDaemonRuntimeReplacementStopsOldLaunchBeforeNewActivity(t *testing.T) {
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 	serverResult := make(chan error, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -531,12 +531,12 @@ func TestWorkspaceRunnerRuntimeReplacementStopsOldLaunchBeforeNewActivity(t *tes
 			return readFrame(func(frame protocol.Message) bool { return frame.Type == eventType })
 		}
 
-		if _, err := waitForType(protocol.EventWorkspaceRunnerReady); err != nil {
+		if _, err := waitForType(protocol.EventWorkspaceDaemonReady); err != nil {
 			serverResult <- fmt.Errorf("read Runner ready: %w", err)
 			return
 		}
 
-		oldStart := protocol.WorkspaceRunnerAgentStartPayload{
+		oldStart := protocol.AgentStartPayload{
 			AgentID: "agent-1", RuntimeID: "runtime-codex", LaunchID: "launch-codex", StartDispatchID: "dispatch-codex",
 		}
 		if err := writeCommand(protocol.EventDaemonAgentStart, oldStart); err != nil {
@@ -571,7 +571,7 @@ func TestWorkspaceRunnerRuntimeReplacementStopsOldLaunchBeforeNewActivity(t *tes
 			}
 		}
 
-		if err := writeCommand(protocol.EventDaemonAgentStop, protocol.WorkspaceRunnerAgentStopPayload{
+		if err := writeCommand(protocol.EventDaemonAgentStop, protocol.AgentStopPayload{
 			AgentID: oldStart.AgentID, LaunchID: oldStart.LaunchID,
 		}); err != nil {
 			serverResult <- err
@@ -609,7 +609,7 @@ func TestWorkspaceRunnerRuntimeReplacementStopsOldLaunchBeforeNewActivity(t *tes
 			}
 		}
 
-		newStart := protocol.WorkspaceRunnerAgentStartPayload{
+		newStart := protocol.AgentStartPayload{
 			AgentID: "agent-1", RuntimeID: "runtime-grok", LaunchID: "launch-grok", StartDispatchID: "dispatch-grok",
 		}
 		if err := writeCommand(protocol.EventDaemonAgentStart, newStart); err != nil {
@@ -643,23 +643,23 @@ func TestWorkspaceRunnerRuntimeReplacementStopsOldLaunchBeforeNewActivity(t *tes
 				return
 			}
 		}
-		if err := writeCommand(protocol.EventDaemonAgentStop, protocol.WorkspaceRunnerAgentStopPayload{
+		if err := writeCommand(protocol.EventDaemonAgentStop, protocol.AgentStopPayload{
 			AgentID: oldStart.AgentID, LaunchID: oldStart.LaunchID,
 		}); err != nil {
 			serverResult <- err
 			return
 		}
-		ping := protocol.WorkspaceRunnerPingPayload{PingID: "after-stale-stop"}
-		if err := writeCommand(protocol.EventWorkspaceRunnerPing, ping); err != nil {
+		ping := protocol.WorkspacePingPayload{PingID: "after-stale-stop"}
+		if err := writeCommand(protocol.EventWorkspaceDaemonPing, ping); err != nil {
 			serverResult <- err
 			return
 		}
-		pongFrame, err := waitForType(protocol.EventWorkspaceRunnerPong)
+		pongFrame, err := waitForType(protocol.EventWorkspaceDaemonPong)
 		if err != nil {
 			serverResult <- fmt.Errorf("wait for pong after stale stop: %w", err)
 			return
 		}
-		var pong protocol.WorkspaceRunnerPongPayload
+		var pong protocol.WorkspacePongPayload
 		if json.Unmarshal(pongFrame.Payload, &pong) != nil || pong.PingID != ping.PingID {
 			serverResult <- fmt.Errorf("pong after stale stop = %+v", pong)
 			return
@@ -675,14 +675,14 @@ func TestWorkspaceRunnerRuntimeReplacementStopsOldLaunchBeforeNewActivity(t *tes
 		d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: "ws-1"}
 	}
 	d.mu.Unlock()
-	runner, err := d.newWorkspaceRunner("ws-1")
+	runner, err := d.newWorkspaceDaemon("ws-1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error { return nil }
-	d.attachWorkspaceRunner(runner)
+	d.attachWorkspaceDaemon(runner)
 	t.Cleanup(func() {
-		d.detachWorkspaceRunner(runner)
+		d.detachWorkspaceDaemon(runner)
 		runner.Close()
 		runner.inboxes.Close()
 	})
@@ -710,7 +710,7 @@ func TestWorkspaceRunnerRuntimeReplacementStopsOldLaunchBeforeNewActivity(t *tes
 	}
 }
 
-func TestWorkspaceRunnerProviderStartSurvivesControlConnectionClose(t *testing.T) {
+func TestWorkspaceDaemonProviderStartSurvivesControlConnectionClose(t *testing.T) {
 	// After a Machine Upgrade the successor reconnects, receives agent:start,
 	// then the control socket that delivered that start can die while Codex is
 	// still booting. Raft still starts the process on the Computer lifetime.
@@ -728,7 +728,7 @@ func TestWorkspaceRunnerProviderStartSurvivesControlConnectionClose(t *testing.T
 			t.Error(err)
 			return
 		}
-		start, _ := json.Marshal(protocol.Message{Type: protocol.EventDaemonAgentStart, Payload: marshalRaw(protocol.WorkspaceRunnerAgentStartPayload{
+		start, _ := json.Marshal(protocol.Message{Type: protocol.EventDaemonAgentStart, Payload: marshalRaw(protocol.AgentStartPayload{
 			AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1",
 		})})
 		if err := conn.WriteMessage(websocket.TextMessage, start); err != nil {
@@ -760,7 +760,7 @@ func TestWorkspaceRunnerProviderStartSurvivesControlConnectionClose(t *testing.T
 	d.mu.Lock()
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "ws-1"}
 	d.mu.Unlock()
-	runner, err := d.newWorkspaceRunner("ws-1")
+	runner, err := d.newWorkspaceDaemon("ws-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -769,9 +769,9 @@ func TestWorkspaceRunnerProviderStartSurvivesControlConnectionClose(t *testing.T
 		started <- ctx
 		return ctx.Err()
 	}
-	d.attachWorkspaceRunner(runner)
+	d.attachWorkspaceDaemon(runner)
 	t.Cleanup(func() {
-		d.detachWorkspaceRunner(runner)
+		d.detachWorkspaceDaemon(runner)
 		runner.inboxes.Close()
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -804,7 +804,7 @@ func TestWorkspaceRunnerProviderStartSurvivesControlConnectionClose(t *testing.T
 	}
 }
 
-func TestWorkspaceRunnerStopEpochCancelsBlockedProviderStart(t *testing.T) {
+func TestWorkspaceDaemonStopEpochCancelsBlockedProviderStart(t *testing.T) {
 	const (
 		workspaceID = "ws-1"
 		runtimeID   = "runtime-1"
@@ -815,7 +815,7 @@ func TestWorkspaceRunnerStopEpochCancelsBlockedProviderStart(t *testing.T) {
 	d.mu.Lock()
 	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
 	d.mu.Unlock()
-	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, nil)
+	runner, _ := attachTestWorkspaceDaemon(t, d, workspaceID, nil)
 
 	providerStarted := make(chan struct{})
 	releaseProvider := make(chan struct{})
@@ -830,7 +830,7 @@ func TestWorkspaceRunnerStopEpochCancelsBlockedProviderStart(t *testing.T) {
 	}
 	startDone := make(chan startResult, 1)
 	go func() {
-		_, status, _, err := runner.startManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStartPayload{
+		_, status, _, err := runner.startManagedAgent(context.Background(), protocol.AgentStartPayload{
 			AgentID: agentID, RuntimeID: runtimeID, LaunchID: launchID, StartDispatchID: "dispatch-1",
 		})
 		startDone <- startResult{status: status, err: err}
@@ -844,7 +844,7 @@ func TestWorkspaceRunnerStopEpochCancelsBlockedProviderStart(t *testing.T) {
 	statuses := make(chan protocol.AgentStatusPayload, 2)
 	stopDone := make(chan error, 1)
 	go func() {
-		stopDone <- runner.stopManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStopPayload{
+		stopDone <- runner.stopManagedAgent(context.Background(), protocol.AgentStopPayload{
 			AgentID: agentID, LaunchID: launchID,
 		}, nil, func(eventType string, payload any) error {
 			if eventType == protocol.EventAgentStatus {
@@ -883,7 +883,7 @@ func TestWorkspaceRunnerStopEpochCancelsBlockedProviderStart(t *testing.T) {
 	}
 
 	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error { return nil }
-	_, status, _, err := runner.startManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStartPayload{
+	_, status, _, err := runner.startManagedAgent(context.Background(), protocol.AgentStartPayload{
 		AgentID: agentID, RuntimeID: runtimeID, LaunchID: "launch-2", StartDispatchID: "dispatch-2",
 	})
 	if err != nil || status.Status != protocol.AgentStatusActive {
@@ -891,10 +891,10 @@ func TestWorkspaceRunnerStopEpochCancelsBlockedProviderStart(t *testing.T) {
 	}
 }
 
-func TestWorkspaceRunnerUnknownLaunchStopDoesNotAdvanceEpoch(t *testing.T) {
+func TestWorkspaceDaemonUnknownLaunchStopDoesNotAdvanceEpoch(t *testing.T) {
 	d := New(Config{WorkspacesRoot: t.TempDir()}, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	runner, _ := attachTestWorkspaceRunner(t, d, "ws-1", nil)
-	if err := runner.stopManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStopPayload{
+	runner, _ := attachTestWorkspaceDaemon(t, d, "ws-1", nil)
+	if err := runner.stopManagedAgent(context.Background(), protocol.AgentStopPayload{
 		AgentID: "agent-1", LaunchID: "stale-launch",
 	}, nil, func(string, any) error { return nil }); err != nil {
 		t.Fatal(err)
@@ -904,7 +904,7 @@ func TestWorkspaceRunnerUnknownLaunchStopDoesNotAdvanceEpoch(t *testing.T) {
 	}
 }
 
-func TestWorkspaceRunnerDuplicateStartDoesNotSpawnProviderTwice(t *testing.T) {
+func TestWorkspaceDaemonDuplicateStartDoesNotSpawnProviderTwice(t *testing.T) {
 	// One Workspace control cycle carries a heartbeat per Runtime. Until the
 	// first start reports Active, the server can therefore replay the same
 	// immutable start dispatch several times in one burst. Raft's hasStarting
@@ -923,7 +923,7 @@ func TestWorkspaceRunnerDuplicateStartDoesNotSpawnProviderTwice(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		start, _ := json.Marshal(protocol.Message{Type: protocol.EventDaemonAgentStart, Payload: marshalRaw(protocol.WorkspaceRunnerAgentStartPayload{
+		start, _ := json.Marshal(protocol.Message{Type: protocol.EventDaemonAgentStart, Payload: marshalRaw(protocol.AgentStartPayload{
 			AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1",
 		})})
 		if err := conn.WriteMessage(websocket.TextMessage, start); err != nil {
@@ -966,7 +966,7 @@ func TestWorkspaceRunnerDuplicateStartDoesNotSpawnProviderTwice(t *testing.T) {
 	d.mu.Lock()
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "ws-1"}
 	d.mu.Unlock()
-	runner, err := d.newWorkspaceRunner("ws-1")
+	runner, err := d.newWorkspaceDaemon("ws-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -983,9 +983,9 @@ func TestWorkspaceRunnerDuplicateStartDoesNotSpawnProviderTwice(t *testing.T) {
 		<-releaseProvider
 		return nil
 	}
-	d.attachWorkspaceRunner(runner)
+	d.attachWorkspaceDaemon(runner)
 	t.Cleanup(func() {
-		d.detachWorkspaceRunner(runner)
+		d.detachWorkspaceDaemon(runner)
 		runner.inboxes.Close()
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -1018,7 +1018,7 @@ func TestWorkspaceRunnerDuplicateStartDoesNotSpawnProviderTwice(t *testing.T) {
 	}
 }
 
-func TestWorkspaceRunnerFailedProviderStartPublishesInactiveOnCurrentConnection(t *testing.T) {
+func TestWorkspaceDaemonFailedProviderStartPublishesInactiveOnCurrentConnection(t *testing.T) {
 	// An accepted start that never becomes Active must not look like residency.
 	// After upgrade the server keeps the desired launch; inactive is what
 	// lets reconcile send agent:start again.
@@ -1035,7 +1035,7 @@ func TestWorkspaceRunnerFailedProviderStartPublishesInactiveOnCurrentConnection(
 			t.Error(err)
 			return
 		}
-		start, _ := json.Marshal(protocol.Message{Type: protocol.EventDaemonAgentStart, Payload: marshalRaw(protocol.WorkspaceRunnerAgentStartPayload{
+		start, _ := json.Marshal(protocol.Message{Type: protocol.EventDaemonAgentStart, Payload: marshalRaw(protocol.AgentStartPayload{
 			AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1",
 		})})
 		if err := conn.WriteMessage(websocket.TextMessage, start); err != nil {
@@ -1069,16 +1069,16 @@ func TestWorkspaceRunnerFailedProviderStartPublishesInactiveOnCurrentConnection(
 	d.mu.Lock()
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "ws-1"}
 	d.mu.Unlock()
-	runner, err := d.newWorkspaceRunner("ws-1")
+	runner, err := d.newWorkspaceDaemon("ws-1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error {
 		return errors.New("codex app-server did not start")
 	}
-	d.attachWorkspaceRunner(runner)
+	d.attachWorkspaceDaemon(runner)
 	t.Cleanup(func() {
-		d.detachWorkspaceRunner(runner)
+		d.detachWorkspaceDaemon(runner)
 		runner.inboxes.Close()
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -1094,7 +1094,7 @@ func TestWorkspaceRunnerFailedProviderStartPublishesInactiveOnCurrentConnection(
 	}
 }
 
-func TestWorkspaceRunnerOwnsCurrentControlPlaneHeartbeat(t *testing.T) {
+func TestWorkspaceDaemonOwnsCurrentControlPlaneHeartbeat(t *testing.T) {
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 	heartbeats := make(chan protocol.DaemonHeartbeatRequestPayload, 1)
 	acks := make(chan *HeartbeatResponse, 1)
@@ -1119,15 +1119,15 @@ func TestWorkspaceRunnerOwnsCurrentControlPlaneHeartbeat(t *testing.T) {
 			if json.Unmarshal(raw, &frame) != nil {
 				continue
 			}
-			if frame.Type == protocol.EventWorkspaceRunnerReady {
-				var ready protocol.WorkspaceRunnerReadyPayload
+			if frame.Type == protocol.EventWorkspaceDaemonReady {
+				var ready protocol.WorkspaceReadyPayload
 				if json.Unmarshal(frame.Payload, &ready) != nil {
 					t.Error("invalid ready payload")
 					return
 				}
 				found := false
 				for _, capability := range ready.ActiveCapabilities {
-					found = found || capability == protocol.DaemonCapabilityWorkspaceRunnerControlPlane
+					found = found || capability == protocol.DaemonCapabilityWorkspaceDaemonControlPlane
 				}
 				if !found {
 					t.Error("ready did not advertise Workspace Runner control plane")
@@ -1165,7 +1165,7 @@ func TestWorkspaceRunnerOwnsCurrentControlPlaneHeartbeat(t *testing.T) {
 	d.mu.Lock()
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "ws-1"}
 	d.mu.Unlock()
-	runner, err := d.newWorkspaceRunner("ws-1")
+	runner, err := d.newWorkspaceDaemon("ws-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1193,7 +1193,7 @@ func TestWorkspaceRunnerOwnsCurrentControlPlaneHeartbeat(t *testing.T) {
 	}
 }
 
-func TestWorkspaceRunnerStartCreatesCoordinatorForCommandRuntime(t *testing.T) {
+func TestWorkspaceDaemonStartCreatesCoordinatorForCommandRuntime(t *testing.T) {
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 	started := make(chan struct{}, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1207,7 +1207,7 @@ func TestWorkspaceRunnerStartCreatesCoordinatorForCommandRuntime(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		start, _ := json.Marshal(protocol.Message{Type: protocol.EventDaemonAgentStart, Payload: marshalRaw(protocol.WorkspaceRunnerAgentStartPayload{
+		start, _ := json.Marshal(protocol.Message{Type: protocol.EventDaemonAgentStart, Payload: marshalRaw(protocol.AgentStartPayload{
 			AgentID: "agent-1", RuntimeID: "runtime-new", LaunchID: "launch-1", StartDispatchID: "dispatch-1",
 		})})
 		if err := conn.WriteMessage(websocket.TextMessage, start); err != nil {
@@ -1236,7 +1236,7 @@ func TestWorkspaceRunnerStartCreatesCoordinatorForCommandRuntime(t *testing.T) {
 	d.runtimeIndex["runtime-old"] = Runtime{ID: "runtime-old", WorkspaceID: "ws-1"}
 	d.runtimeIndex["runtime-new"] = Runtime{ID: "runtime-new", WorkspaceID: "ws-1"}
 	d.mu.Unlock()
-	runner, err := d.newWorkspaceRunner("ws-1")
+	runner, err := d.newWorkspaceDaemon("ws-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1254,7 +1254,7 @@ func TestWorkspaceRunnerStartCreatesCoordinatorForCommandRuntime(t *testing.T) {
 	}
 }
 
-func TestWorkspaceRunnerAcknowledgesCanonicalMessageDeliveryWithoutRuntime(t *testing.T) {
+func TestWorkspaceDaemonAcknowledgesCanonicalMessageDeliveryWithoutRuntime(t *testing.T) {
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 	acknowledgements := make(chan protocol.AgentDeliverAckPayload, 2)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1320,14 +1320,14 @@ func TestWorkspaceRunnerAcknowledgesCanonicalMessageDeliveryWithoutRuntime(t *te
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	errCh := make(chan error, 1)
-	runner, err := d.newWorkspaceRunner("ws-1")
+	runner, err := d.newWorkspaceDaemon("ws-1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	registerTestRunnerInbox(t, runner, InboxKey{WorkspaceID: "ws-1", AgentID: "agent-1"}, "runtime-1", coordinator)
-	d.attachWorkspaceRunner(runner)
+	d.attachWorkspaceDaemon(runner)
 	t.Cleanup(func() {
-		d.detachWorkspaceRunner(runner)
+		d.detachWorkspaceDaemon(runner)
 		runner.inboxes.Close()
 	})
 	go func() { errCh <- runner.runConnection(ctx) }()

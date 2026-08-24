@@ -34,7 +34,7 @@ func (d *Daemon) reportMixedRunActivity(agentID, runtimeID, runID, runAgentID, t
 		}
 		return false
 	}
-	if runner := d.currentWorkspaceRunner(workspaceID); runner != nil {
+	if runner := d.currentWorkspaceDaemon(workspaceID); runner != nil {
 		if err := runner.sendOnCurrentConnection(protocol.EventMixedRunActivityTransition, payload); err != nil && d.logger != nil {
 			d.logger.Debug("mixed-run activity transition send deferred", "error", err, "workspace_id", workspaceID, "run_id", runID, "transition_id", transitionID)
 		}

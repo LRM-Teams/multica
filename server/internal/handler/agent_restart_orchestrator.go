@@ -77,7 +77,7 @@ func (h *Handler) beginAgentRestartOperation(ctx context.Context, state activeAg
 		}
 	}
 	return h.sendAgentRestartCommand(updated, protocol.EventDaemonAgentStop,
-		protocol.WorkspaceRunnerAgentStopPayload{AgentID: updated.agentID, LaunchID: updated.stopLaunchID})
+		protocol.AgentStopPayload{AgentID: updated.agentID, LaunchID: updated.stopLaunchID})
 }
 
 func (h *Handler) advanceAgentRestartAfterStop(ctx context.Context, state activeAgentRestartState) error {
@@ -121,7 +121,7 @@ func (h *Handler) advanceAgentRestartAfterStop(ctx context.Context, state active
 			return nil
 		}
 		err := h.sendAgentRestartCommand(updated, protocol.EventDaemonAgentResetWorkspace,
-			protocol.WorkspaceRunnerAgentResetWorkspacePayload{OperationID: updated.operationID, AgentID: updated.agentID})
+			protocol.AgentWorkspaceResetPayload{OperationID: updated.operationID, AgentID: updated.agentID})
 		restarts.lifecycleMu.Unlock()
 		return err
 	}
@@ -175,7 +175,7 @@ func (h *Handler) dispatchAgentRestartStart(ctx context.Context, state activeAge
 	return h.sendAgentRestartCommand(state, protocol.EventDaemonAgentStart, start)
 }
 
-func prepareAgentRestartStart(ctx context.Context, tx pgx.Tx, state activeAgentRestartState) (protocol.WorkspaceRunnerAgentStartPayload, error) {
+func prepareAgentRestartStart(ctx context.Context, tx pgx.Tx, state activeAgentRestartState) (protocol.AgentStartPayload, error) {
 	sessionID := ""
 	if state.storageKind == agentRestartStorageRestart {
 		sessionID = state.startSessionID
@@ -187,15 +187,15 @@ func prepareAgentRestartStart(ctx context.Context, tx pgx.Tx, state activeAgentR
 		WHERE workspace_id = $3 AND agent_id = $4 AND runtime_id = $5
 	`, launchID, state.operationID, state.workspaceID, state.agentID, state.runtimeID)
 	if err != nil {
-		return protocol.WorkspaceRunnerAgentStartPayload{}, err
+		return protocol.AgentStartPayload{}, err
 	}
 	if command.RowsAffected() != 1 {
-		return protocol.WorkspaceRunnerAgentStartPayload{}, errors.New("desired Agent launch is unavailable")
+		return protocol.AgentStartPayload{}, errors.New("desired Agent launch is unavailable")
 	}
-	return protocol.WorkspaceRunnerAgentStartPayload{
+	return protocol.AgentStartPayload{
 		AgentID: state.agentID, RuntimeID: state.runtimeID,
 		LaunchID: launchID, StartDispatchID: state.operationID,
-		Config: protocol.WorkspaceRunnerAgentStartConfig{SessionID: sessionID},
+		Config: protocol.AgentStartConfig{SessionID: sessionID},
 	}, nil
 }
 
@@ -261,7 +261,7 @@ func (h *Handler) advanceAgentRestartFromStatus(ctx context.Context, identity da
 	}
 }
 
-func (h *Handler) recordAgentWorkspaceResetResult(ctx context.Context, identity daemonws.ClientIdentity, result protocol.WorkspaceRunnerAgentResetWorkspaceResultPayload) error {
+func (h *Handler) recordAgentWorkspaceResetResult(ctx context.Context, identity daemonws.ClientIdentity, result protocol.AgentWorkspaceResetResultPayload) error {
 	if err := result.Validate(); err != nil {
 		return err
 	}

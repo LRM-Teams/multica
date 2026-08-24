@@ -11,9 +11,9 @@ import (
 // daemon-to-server protocol boundary, not an HTTP API, so their field names
 // remain camelCase like agent:deliver.
 const (
-	EventWorkspaceRunnerReady = "ready"
-	EventWorkspaceRunnerPing  = "ping"
-	EventWorkspaceRunnerPong  = "pong"
+	EventWorkspaceDaemonReady = "ready"
+	EventWorkspaceDaemonPing  = "ping"
+	EventWorkspaceDaemonPong  = "pong"
 
 	// Computer control uses Raft 1.0.16 names on the DaemonCore connect
 	// socket. The child does not swap the machine binary; it forwards the
@@ -84,22 +84,22 @@ func IsAgentActivityFactDetailKind(detailKind string) bool {
 }
 
 const (
-	maxWorkspaceRunnerIdentityLength = 200
+	maxWorkspaceDaemonIdentityLength = 200
 	maxActivityDetailKindLength      = 120
 	maxActivityEntryKindLength       = 120
 	maxActivityEntryBytes            = 64 << 10
 	maxActivityEntriesPerFrame       = 64
 )
 
-// WorkspaceRunnerReadyPayload establishes one daemon-instance/Workspace
+// WorkspaceReadyPayload establishes one daemon-instance/Workspace
 // connection. It says that the local Manager has initialized and reconciled;
 // it deliberately says nothing about any individual Agent being ready.
-type WorkspaceRunnerReadyPayload struct {
-	WorkspaceID        string   `json:"workspaceId"`
-	DaemonInstanceID   string   `json:"daemonInstanceId"`
-	DeviceName         string   `json:"deviceName,omitempty"`
-	OS                 string   `json:"os,omitempty"`
-	CLIVersion         string   `json:"cliVersion,omitempty"`
+type WorkspaceReadyPayload struct {
+	WorkspaceID      string `json:"workspaceId"`
+	DaemonInstanceID string `json:"daemonInstanceId"`
+	DeviceName       string `json:"deviceName,omitempty"`
+	OS               string `json:"os,omitempty"`
+	CLIVersion       string `json:"cliVersion,omitempty"`
 	// MachineID is the OS-level persistent machine fingerprint (e.g.
 	// /etc/machine-id on Linux, IOPlatformUUID on macOS, MachineGuid on
 	// Windows). It is an attribute of the Computer, not of any single Workspace
@@ -110,10 +110,10 @@ type WorkspaceRunnerReadyPayload struct {
 	RunningAgents      []string `json:"runningAgents,omitempty"`
 }
 
-// WorkspaceRunnerPingPayload and WorkspaceRunnerPongPayload are connection
+// WorkspacePingPayload and WorkspacePongPayload are connection
 // liveness only. They are not runtime heartbeats and must not project Agent
 // Activity.
-type WorkspaceRunnerPingPayload struct {
+type WorkspacePingPayload struct {
 	PingID string `json:"pingId"`
 }
 
@@ -252,26 +252,26 @@ func (p ComputerWorkJournalDonePayload) Validate() error {
 	return validateRequiredIDs(p.RequestID)
 }
 
-type WorkspaceRunnerPongPayload struct {
+type WorkspacePongPayload struct {
 	PingID string `json:"pingId"`
 }
 
-// WorkspaceRunnerAgentStartConfig mirrors Raft's agent:start config boundary.
+// AgentStartConfig mirrors Raft's agent:start config boundary.
 // A non-empty SessionID resumes that provider session; an omitted SessionID
 // starts fresh.
-type WorkspaceRunnerAgentStartConfig struct {
+type AgentStartConfig struct {
 	SessionID string `json:"sessionId,omitempty"`
 }
 
-// WorkspaceRunnerAgentStartPayload is the server command accepted by a local
+// AgentStartPayload is the server command accepted by a local
 // Agent Process Manager. LaunchID is the server-owned launch epoch and remains
 // stable when the same desired launch is retried after reconnect.
-type WorkspaceRunnerAgentStartPayload struct {
-	AgentID         string                          `json:"agentId"`
-	RuntimeID       string                          `json:"runtimeId"`
-	LaunchID        string                          `json:"launchId"`
-	StartDispatchID string                          `json:"startDispatchId"`
-	Config          WorkspaceRunnerAgentStartConfig `json:"config"`
+type AgentStartPayload struct {
+	AgentID         string           `json:"agentId"`
+	RuntimeID       string           `json:"runtimeId"`
+	LaunchID        string           `json:"launchId"`
+	StartDispatchID string           `json:"startDispatchId"`
+	Config          AgentStartConfig `json:"config"`
 }
 
 // AgentStartAckPayload is an idempotent acceptance receipt. QueueState never
@@ -285,15 +285,15 @@ type AgentStartAckPayload struct {
 	QueueAgeMS      int64  `json:"queueAgeMs"`
 }
 
-type WorkspaceRunnerAgentStopPayload struct {
+type AgentStopPayload struct {
 	AgentID  string `json:"agentId"`
 	LaunchID string `json:"launchId"`
 }
 
-// WorkspaceRunnerAgentResetWorkspacePayload mirrors Raft's
+// AgentWorkspaceResetPayload mirrors Raft's
 // agent:reset-workspace command. OperationID is Multica's correlation fence;
 // Workspace identity remains owned by the authenticated Runner connection.
-type WorkspaceRunnerAgentResetWorkspacePayload struct {
+type AgentWorkspaceResetPayload struct {
 	OperationID string `json:"operationId"`
 	AgentID     string `json:"agentId"`
 }
@@ -303,10 +303,10 @@ const (
 	AgentResetWorkspaceFailed    = "failed"
 )
 
-// WorkspaceRunnerAgentResetWorkspaceResultPayload is Multica's terminal
+// AgentWorkspaceResetResultPayload is Multica's terminal
 // receipt extension for Raft's fire-and-forget reset command. The server must
 // observe success before it is allowed to issue the replacement agent:start.
-type WorkspaceRunnerAgentResetWorkspaceResultPayload struct {
+type AgentWorkspaceResetResultPayload struct {
 	OperationID string `json:"operationId"`
 	AgentID     string `json:"agentId"`
 	Status      string `json:"status"`
@@ -456,7 +456,7 @@ type AgentActivityProbePayload struct {
 	ProbeID  string `json:"probeId"`
 }
 
-func (p WorkspaceRunnerReadyPayload) Validate() error {
+func (p WorkspaceReadyPayload) Validate() error {
 	if err := validateRequiredIDs(p.WorkspaceID, p.DaemonInstanceID); err != nil {
 		return err
 	}
@@ -470,7 +470,7 @@ func (p WorkspaceRunnerReadyPayload) Validate() error {
 		}
 		seen[capability] = struct{}{}
 	}
-	if _, supported := seen[DaemonCapabilityWorkspaceRunnerAgentProcess]; !supported {
+	if _, supported := seen[DaemonCapabilityWorkspaceDaemonAgentProcess]; !supported {
 		return fmt.Errorf("Workspace Runner Agent process capability is required")
 	}
 	running := make(map[string]struct{}, len(p.RunningAgents))
@@ -486,10 +486,10 @@ func (p WorkspaceRunnerReadyPayload) Validate() error {
 	return nil
 }
 
-func (p WorkspaceRunnerPingPayload) Validate() error { return validateRequiredIDs(p.PingID) }
-func (p WorkspaceRunnerPongPayload) Validate() error { return validateRequiredIDs(p.PingID) }
+func (p WorkspacePingPayload) Validate() error { return validateRequiredIDs(p.PingID) }
+func (p WorkspacePongPayload) Validate() error { return validateRequiredIDs(p.PingID) }
 
-func (p WorkspaceRunnerAgentStartPayload) Validate() error {
+func (p AgentStartPayload) Validate() error {
 	return validateRequiredIDs(p.AgentID, p.RuntimeID, p.LaunchID, p.StartDispatchID)
 }
 
@@ -506,15 +506,15 @@ func (p AgentStartAckPayload) Validate() error {
 	return nil
 }
 
-func (p WorkspaceRunnerAgentStopPayload) Validate() error {
+func (p AgentStopPayload) Validate() error {
 	return validateRequiredIDs(p.AgentID, p.LaunchID)
 }
 
-func (p WorkspaceRunnerAgentResetWorkspacePayload) Validate() error {
+func (p AgentWorkspaceResetPayload) Validate() error {
 	return validateRequiredIDs(p.OperationID, p.AgentID)
 }
 
-func (p WorkspaceRunnerAgentResetWorkspaceResultPayload) Validate() error {
+func (p AgentWorkspaceResetResultPayload) Validate() error {
 	if err := validateRequiredIDs(p.OperationID, p.AgentID); err != nil {
 		return err
 	}
@@ -616,7 +616,7 @@ func (p AgentActivityProbePayload) Validate() error {
 
 func validateRequiredIDs(values ...string) error {
 	for _, value := range values {
-		if strings.TrimSpace(value) == "" || len(value) > maxWorkspaceRunnerIdentityLength {
+		if strings.TrimSpace(value) == "" || len(value) > maxWorkspaceDaemonIdentityLength {
 			return fmt.Errorf("invalid required protocol identity")
 		}
 	}
@@ -625,8 +625,8 @@ func validateRequiredIDs(values ...string) error {
 
 func validateOptionalIDs(values ...string) error {
 	for _, value := range values {
-		if len(value) > maxWorkspaceRunnerIdentityLength {
-			return fmt.Errorf("protocol identity exceeds %d bytes", maxWorkspaceRunnerIdentityLength)
+		if len(value) > maxWorkspaceDaemonIdentityLength {
+			return fmt.Errorf("protocol identity exceeds %d bytes", maxWorkspaceDaemonIdentityLength)
 		}
 	}
 	return nil

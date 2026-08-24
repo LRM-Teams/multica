@@ -151,14 +151,14 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 			d.logger.Warn("Binding child orphan recovery failed", "workspace_id", workspaceID, "runtime_id", runtimeID, "error", err)
 		}
 	}
-	runner, err := d.newWorkspaceRunner(workspaceID)
+	runner, err := d.newWorkspaceDaemon(workspaceID)
 	if err != nil {
 		return err
 	}
-	if err := d.adoptWorkspaceRunner(runner); err != nil {
+	if err := d.adoptWorkspaceDaemon(runner); err != nil {
 		return err
 	}
-	defer d.detachWorkspaceRunner(runner)
+	defer d.detachWorkspaceDaemon(runner)
 	var (
 		readyOnce sync.Once
 		readyErr  error

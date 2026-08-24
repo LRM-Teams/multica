@@ -422,7 +422,7 @@ func TestEnsureResidentMessageRuntimeNonStarterDoesNotKeepBackend(t *testing.T) 
 	}
 }
 
-func TestWorkspaceRunnerStartFailsClosedWhenResidentCannotStart(t *testing.T) {
+func TestWorkspaceDaemonStartFailsClosedWhenResidentCannotStart(t *testing.T) {
 	const (
 		workspaceID = "11111111-1111-1111-1111-111111111111"
 		runtimeID   = "22222222-2222-2222-2222-222222222222"
@@ -448,10 +448,10 @@ func TestWorkspaceRunnerStartFailsClosedWhenResidentCannotStart(t *testing.T) {
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
 			d := newResidentStartTestDaemon(t, workspaceID, runtimeID, agentID, test.factory)
-			runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, nil)
+			runner, _ := attachTestWorkspaceDaemon(t, d, workspaceID, nil)
 			var activities []protocol.AgentActivityPayload
 			runner.activity.AttachTransport(func(payload protocol.AgentActivityPayload) { activities = append(activities, payload) })
-			_, status, _, err := runner.startManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStartPayload{
+			_, status, _, err := runner.startManagedAgent(context.Background(), protocol.AgentStartPayload{
 				AgentID: agentID, RuntimeID: runtimeID, LaunchID: "launch-1", StartDispatchID: "dispatch-1",
 			})
 			if err == nil {
@@ -475,7 +475,7 @@ func TestWorkspaceRunnerStartFailsClosedWhenResidentCannotStart(t *testing.T) {
 	}
 }
 
-func TestWorkspaceRunnerStartBecomesActiveAfterResidentProcess(t *testing.T) {
+func TestWorkspaceDaemonStartBecomesActiveAfterResidentProcess(t *testing.T) {
 	const (
 		workspaceID = "11111111-1111-1111-1111-111111111111"
 		runtimeID   = "22222222-2222-2222-2222-222222222222"
@@ -485,10 +485,10 @@ func TestWorkspaceRunnerStartBecomesActiveAfterResidentProcess(t *testing.T) {
 	d := newResidentStartTestDaemon(t, workspaceID, runtimeID, agentID, func(agent.Config) (agent.Backend, func(), error) {
 		return starter, func() {}, nil
 	})
-	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, nil)
+	runner, _ := attachTestWorkspaceDaemon(t, d, workspaceID, nil)
 	var activities []protocol.AgentActivityPayload
 	runner.activity.AttachTransport(func(payload protocol.AgentActivityPayload) { activities = append(activities, payload) })
-	_, status, _, err := runner.startManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStartPayload{
+	_, status, _, err := runner.startManagedAgent(context.Background(), protocol.AgentStartPayload{
 		AgentID: agentID, RuntimeID: runtimeID, LaunchID: "launch-1", StartDispatchID: "dispatch-1",
 	})
 	if err != nil {
@@ -519,7 +519,7 @@ func TestWorkspaceRunnerStartBecomesActiveAfterResidentProcess(t *testing.T) {
 	}
 }
 
-func TestWorkspaceRunnerStartUsesExplicitProviderSession(t *testing.T) {
+func TestWorkspaceDaemonStartUsesExplicitProviderSession(t *testing.T) {
 	const (
 		workspaceID = "11111111-1111-1111-1111-111111111111"
 		runtimeID   = "22222222-2222-2222-2222-222222222222"
@@ -543,11 +543,11 @@ func TestWorkspaceRunnerStartUsesExplicitProviderSession(t *testing.T) {
 				t.Fatal(err)
 			}
 			d.agentRuntimeSessions = sessions
-			runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, nil)
+			runner, _ := attachTestWorkspaceDaemon(t, d, workspaceID, nil)
 
-			_, status, session, err := runner.startManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStartPayload{
+			_, status, session, err := runner.startManagedAgent(context.Background(), protocol.AgentStartPayload{
 				AgentID: agentID, RuntimeID: runtimeID, LaunchID: "launch-1", StartDispatchID: "dispatch-1",
-				Config: protocol.WorkspaceRunnerAgentStartConfig{SessionID: test.sessionID},
+				Config: protocol.AgentStartConfig{SessionID: test.sessionID},
 			})
 			if err != nil {
 				t.Fatalf("managed start: %v", err)

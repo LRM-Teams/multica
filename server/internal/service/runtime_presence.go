@@ -10,8 +10,8 @@ package service
 // first and only degrade to the last_seen_at based RuntimeConnectivity
 // read when the presence source is unavailable.
 type RunnerPresence interface {
-	// HasWorkspaceRunner reports whether the daemon currently holds a live
+	// HasWorkspaceDaemon reports whether the daemon currently holds a live
 	// DaemonCore / Workspace Runner socket for a workspace. Connect is online;
 	// disconnect is offline.
-	HasWorkspaceRunner(daemonID, workspaceID string) bool
+	HasWorkspaceDaemon(daemonID, workspaceID string) bool
 }

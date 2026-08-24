@@ -6,7 +6,7 @@ Align multica Agent Activity to raft 1.0.15 real semantics, no new semantics:
   push + 60s heartbeat. Thinking is a state, NOT a timeline event.
 - **A chain (events)**: timeline entries = hookEventName-driven tool/lifecycle events only.
 - **Transport**: daemon buffers A-chain entries; server pulls them via WS reverse
-  request (reuse the existing NotifyWorkspaceRunner request/response channel), not
+  request (reuse the existing NotifyWorkspaceDaemon request/response channel), not
   daemon real-time pushing each entry.
 
 ## Critical clarification: no "bridge↔plugin local endpoint" layer in multica
@@ -36,11 +36,11 @@ Align multica Agent Activity to raft 1.0.15 real semantics, no new semantics:
 ### 3. Protocol: drain request/response (server→daemon)
 - `EventRunnerActivityDrain` request `{ max int, drain_id string }`.
 - daemon replies with `{ drain_id, entries[], has_more bool, seq int64 }` using the same
-  request/response framing `NotifyWorkspaceRunner` already provides (probe uses this).
+  request/response framing `NotifyWorkspaceDaemon` already provides (probe uses this).
 
 ### 4. Server: drain scheduler + ingest
 - Reuse/extend `ReapStaleRunnerActivity` to send `EventRunnerActivityDrain` for active
-  working/thinking launches via `NotifyWorkspaceRunner`.
+  working/thinking launches via `NotifyWorkspaceDaemon`.
 - Response enters `recordRunnerActivity` (existing fence + UPSERT + UNIQUE).
 - One-time historical cleanup: delete the 1704 stale thinking entries for a-tai.
 
@@ -63,7 +63,7 @@ Align multica Agent Activity to raft 1.0.15 real semantics, no new semantics:
 - 已验证：编译通过、13 个 activity/thinking 测试全绿、本机 daemon 切 v0.4.21 后不再产生 thinking 风暴。
 
 **待办 / 后续演进（不在此分支实现，单独规划）**
-1. A 链 drain 全量对齐：daemon 缓冲 entry → server 经 WS 反向 request drain（复用 NotifyWorkspaceRunner
+1. A 链 drain 全量对齐：daemon 缓冲 entry → server 经 WS 反向 request drain（复用 NotifyWorkspaceDaemon
    request/response 通道），把「实时逐条 push」改为「批量拉取」。
 2. Agent 黑盒化（B 协议 + 优先 Pi，再 cursor/claude/codex）：把 pi/cursor 等从「daemon spawn 子进程 + 管道」
    演进为「本地服务 + 标准 activity/wake 端点」，daemon 作为 bridge 拉取（对等 raft computer↔plugin）。

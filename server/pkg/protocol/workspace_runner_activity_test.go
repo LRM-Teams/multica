@@ -7,22 +7,22 @@ import (
 	"time"
 )
 
-func TestWorkspaceRunnerActivityFramesUseRaftWireNames(t *testing.T) {
+func TestWorkspaceDaemonActivityFramesUseRaftWireNames(t *testing.T) {
 	observedAt := time.Date(2026, time.August, 6, 12, 0, 0, 0, time.UTC)
 	values := []any{
-		WorkspaceRunnerReadyPayload{
+		WorkspaceReadyPayload{
 			WorkspaceID: "workspace-1", DaemonInstanceID: "daemon-instance-1",
 			DeviceName: "ubuntu-build-host", OS: "linux", CLIVersion: "0.4.24-alpha.91",
-			ActiveCapabilities: []string{DaemonCapabilityWorkspaceRunnerAgentProcess},
+			ActiveCapabilities: []string{DaemonCapabilityWorkspaceDaemonAgentProcess},
 			RunningAgents:      []string{"agent-1"},
 		},
-		WorkspaceRunnerPingPayload{PingID: "ping-1"},
-		WorkspaceRunnerPongPayload{PingID: "ping-1"},
-		WorkspaceRunnerAgentStartPayload{AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1"},
+		WorkspacePingPayload{PingID: "ping-1"},
+		WorkspacePongPayload{PingID: "ping-1"},
+		AgentStartPayload{AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1"},
 		AgentStartAckPayload{AgentID: "agent-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1", QueueState: AgentStartQueueQueued},
-		WorkspaceRunnerAgentStopPayload{AgentID: "agent-1", LaunchID: "launch-1"},
-		WorkspaceRunnerAgentResetWorkspacePayload{OperationID: "operation-1", AgentID: "agent-1"},
-		WorkspaceRunnerAgentResetWorkspaceResultPayload{OperationID: "operation-1", AgentID: "agent-1", Status: AgentResetWorkspaceSucceeded},
+		AgentStopPayload{AgentID: "agent-1", LaunchID: "launch-1"},
+		AgentWorkspaceResetPayload{OperationID: "operation-1", AgentID: "agent-1"},
+		AgentWorkspaceResetResultPayload{OperationID: "operation-1", AgentID: "agent-1", Status: AgentResetWorkspaceSucceeded},
 		AgentStatusPayload{AgentID: "agent-1", LaunchID: "launch-1", Status: AgentStatusActive},
 		AgentSessionPayload{AgentID: "agent-1", LaunchID: "launch-1", ProviderSessionID: "session-1", RuntimeGeneration: 2},
 		AgentActivityPayload{Snapshot: AgentActivitySnapshot{AgentID: "agent-1", LaunchID: "launch-1", DaemonInstanceID: "daemon-instance-1", ClientSequence: 1, ProducerFactID: "fact-1", ObservedAt: observedAt, ActivityKind: ActivityKindWorking, DetailKind: "model_response_started"}},
@@ -91,10 +91,10 @@ func TestComputerWorkDigestPayloadRejectsEmptyAndInvertedWindow(t *testing.T) {
 	}
 }
 
-func TestWorkspaceRunnerStartUsesRaftSessionConfig(t *testing.T) {
-	resume, err := json.Marshal(WorkspaceRunnerAgentStartPayload{
+func TestWorkspaceDaemonStartUsesRaftSessionConfig(t *testing.T) {
+	resume, err := json.Marshal(AgentStartPayload{
 		AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1",
-		Config: WorkspaceRunnerAgentStartConfig{SessionID: "provider-session"},
+		Config: AgentStartConfig{SessionID: "provider-session"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -102,9 +102,9 @@ func TestWorkspaceRunnerStartUsesRaftSessionConfig(t *testing.T) {
 	if !strings.Contains(string(resume), `"config":{"sessionId":"provider-session"}`) {
 		t.Fatalf("resume start lost Raft config.sessionId: %s", resume)
 	}
-	fresh, err := json.Marshal(WorkspaceRunnerAgentStartPayload{
+	fresh, err := json.Marshal(AgentStartPayload{
 		AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1",
-		Config: WorkspaceRunnerAgentStartConfig{},
+		Config: AgentStartConfig{},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -158,7 +158,7 @@ func TestAgentActivityPayloadUsesRaftFactOnlyWireEnvelope(t *testing.T) {
 	}
 }
 
-func TestWorkspaceRunnerActivityValidationRejectsInvalidBoundaryData(t *testing.T) {
+func TestWorkspaceDaemonActivityValidationRejectsInvalidBoundaryData(t *testing.T) {
 	observedAt := time.Date(2026, time.August, 6, 12, 0, 0, 0, time.UTC)
 	validSnapshot := AgentActivitySnapshot{
 		AgentID: "agent-1", LaunchID: "launch-1", DaemonInstanceID: "daemon-instance-1",
@@ -169,8 +169,8 @@ func TestWorkspaceRunnerActivityValidationRejectsInvalidBoundaryData(t *testing.
 		name  string
 		value interface{ Validate() error }
 	}{
-		{name: "missing ready identity", value: WorkspaceRunnerReadyPayload{WorkspaceID: "workspace-1"}},
-		{name: "missing hard-cut capability", value: WorkspaceRunnerReadyPayload{WorkspaceID: "workspace-1", DaemonInstanceID: "instance-1"}},
+		{name: "missing ready identity", value: WorkspaceReadyPayload{WorkspaceID: "workspace-1"}},
+		{name: "missing hard-cut capability", value: WorkspaceReadyPayload{WorkspaceID: "workspace-1", DaemonInstanceID: "instance-1"}},
 		{name: "unknown start state", value: AgentStartAckPayload{AgentID: "agent-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1", QueueState: "ready"}},
 		{name: "negative queue age", value: AgentStartAckPayload{AgentID: "agent-1", LaunchID: "launch-1", QueueState: AgentStartQueueQueued, QueueAgeMS: -1}},
 		{name: "unknown status", value: AgentStatusPayload{AgentID: "agent-1", LaunchID: "launch-1", Status: "online"}},
@@ -190,16 +190,16 @@ func TestWorkspaceRunnerActivityValidationRejectsInvalidBoundaryData(t *testing.
 	}
 }
 
-func TestWorkspaceRunnerReadyCapabilityValidation(t *testing.T) {
-	valid := WorkspaceRunnerReadyPayload{
+func TestWorkspaceDaemonReadyCapabilityValidation(t *testing.T) {
+	valid := WorkspaceReadyPayload{
 		WorkspaceID: "workspace-1", DaemonInstanceID: "instance-1",
-		ActiveCapabilities: []string{DaemonCapabilityWorkspaceRunnerAgentProcess, DaemonCapabilityWorkspaceRunnerAgentReset},
+		ActiveCapabilities: []string{DaemonCapabilityWorkspaceDaemonAgentProcess, DaemonCapabilityWorkspaceDaemonAgentReset},
 	}
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("valid ready capabilities: %v", err)
 	}
 	duplicate := valid
-	duplicate.ActiveCapabilities = []string{DaemonCapabilityWorkspaceRunnerAgentProcess, DaemonCapabilityWorkspaceRunnerAgentProcess}
+	duplicate.ActiveCapabilities = []string{DaemonCapabilityWorkspaceDaemonAgentProcess, DaemonCapabilityWorkspaceDaemonAgentProcess}
 	if err := duplicate.Validate(); err == nil {
 		t.Fatal("duplicate ready capabilities were accepted")
 	}

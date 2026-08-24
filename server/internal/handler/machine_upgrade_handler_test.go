@@ -162,10 +162,10 @@ func TestMachineUpgrade_DispatchesComputerUpgradeToOneLiveBinding(t *testing.T) 
 		}
 		t.Cleanup(func() { _ = conn.Close() })
 		ready, err := json.Marshal(protocol.Message{
-			Type: protocol.EventWorkspaceRunnerReady,
-			Payload: mustMarshalJSON(protocol.WorkspaceRunnerReadyPayload{
+			Type: protocol.EventWorkspaceDaemonReady,
+			Payload: mustMarshalJSON(protocol.WorkspaceReadyPayload{
 				WorkspaceID: workspaceID, DaemonInstanceID: "instance-" + workspaceID,
-				ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceRunnerAgentProcess},
+				ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceDaemonAgentProcess},
 			}),
 		})
 		if err != nil {
@@ -175,7 +175,7 @@ func TestMachineUpgrade_DispatchesComputerUpgradeToOneLiveBinding(t *testing.T) 
 			t.Fatal(err)
 		}
 		deadline := time.Now().Add(time.Second)
-		for hub.WorkspaceRunnerConnectionCount(daemonID, workspaceID) != 1 {
+		for hub.WorkspaceDaemonConnectionCount(daemonID, workspaceID) != 1 {
 			if time.Now().After(deadline) {
 				t.Fatalf("Binding %s did not become ready", workspaceID)
 			}
@@ -260,10 +260,10 @@ func TestMachineUpgrade_DispatchesComputerUpgradeToNextLiveBinding(t *testing.T)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
 	ready, err := json.Marshal(protocol.Message{
-		Type: protocol.EventWorkspaceRunnerReady,
-		Payload: mustMarshalJSON(protocol.WorkspaceRunnerReadyPayload{
+		Type: protocol.EventWorkspaceDaemonReady,
+		Payload: mustMarshalJSON(protocol.WorkspaceReadyPayload{
 			WorkspaceID: secondWorkspaceID, DaemonInstanceID: "instance-" + secondWorkspaceID,
-			ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceRunnerAgentProcess},
+			ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceDaemonAgentProcess},
 		}),
 	})
 	if err != nil {
@@ -273,7 +273,7 @@ func TestMachineUpgrade_DispatchesComputerUpgradeToNextLiveBinding(t *testing.T)
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(time.Second)
-	for hub.WorkspaceRunnerConnectionCount(daemonID, secondWorkspaceID) != 1 {
+	for hub.WorkspaceDaemonConnectionCount(daemonID, secondWorkspaceID) != 1 {
 		if time.Now().After(deadline) {
 			t.Fatal("live Binding did not become ready")
 		}
@@ -324,7 +324,7 @@ func TestMachineUpgrade_InboundProgressAndDonePublishRealtime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := local.HandleWorkspaceRunnerFrame(context.Background(), identity, "instance-1", protocol.EventComputerUpgradeProgress, progress); err != nil {
+	if err := local.HandleWorkspaceDaemonFrame(context.Background(), identity, "instance-1", protocol.EventComputerUpgradeProgress, progress); err != nil {
 		t.Fatalf("progress frame: %v", err)
 	}
 	select {
@@ -346,7 +346,7 @@ func TestMachineUpgrade_InboundProgressAndDonePublishRealtime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := local.HandleWorkspaceRunnerFrame(context.Background(), identity, "instance-1", protocol.EventComputerUpgradeDone, done); err != nil {
+	if err := local.HandleWorkspaceDaemonFrame(context.Background(), identity, "instance-1", protocol.EventComputerUpgradeDone, done); err != nil {
 		t.Fatalf("done frame: %v", err)
 	}
 	select {

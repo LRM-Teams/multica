@@ -82,7 +82,7 @@ func (d *Daemon) credentialManager() *agentCredentialManager {
 }
 
 func (d *Daemon) messageAgentCredential(ctx context.Context, workspaceID, agentID string) (cachedAgentCredential, error) {
-	runner := d.currentWorkspaceRunner(workspaceID)
+	runner := d.currentWorkspaceDaemon(workspaceID)
 	if runner == nil {
 		return cachedAgentCredential{}, errors.New("Agent message runtime is unavailable")
 	}

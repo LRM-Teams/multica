@@ -9,11 +9,11 @@ import (
 	"github.com/multica-ai/multica/server/pkg/agent"
 )
 
-// MinWorkspaceRunnerProtocolCLIVersion is the first release line for the
+// MinWorkspaceDaemonProtocolCLIVersion is the first release line for the
 // coordinated Workspace Runner Attachment hard cut. Ready validation also
 // requires the Attachment capability, which fences prerelease builds from the
 // same release line that predate the cut.
-const MinWorkspaceRunnerProtocolCLIVersion = "0.4.24"
+const MinWorkspaceDaemonProtocolCLIVersion = "0.4.24"
 
 func (h *Handler) DaemonWebSocket(w http.ResponseWriter, r *http.Request) {
 	if h.DaemonHub == nil {
@@ -33,8 +33,8 @@ func (h *Handler) DaemonWebSocket(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "workspace not found")
 			return
 		}
-		if err := agent.CheckCLIVersionAtLeast(r.Header.Get("X-Client-Version"), MinWorkspaceRunnerProtocolCLIVersion); err != nil {
-			writeJSON(w, http.StatusUpgradeRequired, map[string]any{"code": "workspace_runner_protocol_unsupported", "min_version": MinWorkspaceRunnerProtocolCLIVersion})
+		if err := agent.CheckCLIVersionAtLeast(r.Header.Get("X-Client-Version"), MinWorkspaceDaemonProtocolCLIVersion); err != nil {
+			writeJSON(w, http.StatusUpgradeRequired, map[string]any{"code": "workspace_daemon_protocol_unsupported", "min_version": MinWorkspaceDaemonProtocolCLIVersion})
 			return
 		}
 		h.DaemonHub.HandleWebSocket(w, r, daemonws.ClientIdentity{

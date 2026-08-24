@@ -42,7 +42,7 @@ func deadResidentLease(t *testing.T, pool *canonicalAgentRuntimePool, agentID, r
 // startManagedLaunch registers an APM launch for agentID/runtimeID on runner
 // and marks it Running (spawned + ready), mirroring a resident provider
 // process that is actually up before it dies.
-func startManagedLaunch(t *testing.T, runner *WorkspaceRunner, agentID, runtimeID string) {
+func startManagedLaunch(t *testing.T, runner *WorkspaceDaemon, agentID, runtimeID string) {
 	t.Helper()
 	if _, err := runner.processes.Start(agentProcessStartRequest{
 		AgentID: agentID, RuntimeID: runtimeID,
@@ -67,7 +67,7 @@ func TestResidentProcessDeathClearsAPMRunningState(t *testing.T) {
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
 	d.mu.Unlock()
 
-	runner, _ := attachTestWorkspaceRunner(t, d, "workspace-1", nil)
+	runner, _ := attachTestWorkspaceDaemon(t, d, "workspace-1", nil)
 	startManagedLaunch(t, runner, "agent-1", "runtime-1")
 
 	if snap, ok := runner.processes.Snapshot("agent-1"); !ok || snap.QueueState != protocol.AgentStartQueueRunning {
@@ -119,7 +119,7 @@ func TestResidentProcessExitedBackoffCapReleasesCapacityAndPromotes(t *testing.T
 		return nil
 	}
 
-	runner, _ := attachTestWorkspaceRunner(t, d, "workspace-1", send)
+	runner, _ := attachTestWorkspaceDaemon(t, d, "workspace-1", send)
 	startManagedLaunch(t, runner, "agent-1", "runtime-1")
 
 	// A second launch competing for the same (capped at 1) capacity — it
@@ -244,10 +244,10 @@ func TestResidentProcessEventRoutingIsolatedByWorkspace(t *testing.T) {
 	d.runtimeIndex["runtime-b"] = Runtime{ID: "runtime-b", WorkspaceID: "workspace-b"}
 	d.mu.Unlock()
 
-	runnerA, _ := attachTestWorkspaceRunner(t, d, "workspace-a", nil)
+	runnerA, _ := attachTestWorkspaceDaemon(t, d, "workspace-a", nil)
 	startManagedLaunch(t, runnerA, "agent-1", "runtime-a")
 
-	runnerB, _ := attachTestWorkspaceRunner(t, d, "workspace-b", nil)
+	runnerB, _ := attachTestWorkspaceDaemon(t, d, "workspace-b", nil)
 	startManagedLaunch(t, runnerB, "agent-1", "runtime-b")
 
 	d.canonicalRuntimes.emitResidentProcessEvent(residentProcessEvent{

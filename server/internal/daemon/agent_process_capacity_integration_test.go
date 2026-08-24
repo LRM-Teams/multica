@@ -11,15 +11,15 @@ import (
 // while queue receipts and launch fencing remain Runner-local facts.
 func TestManagedCapacityMultiWorkspaceFIFOAndRunnerRemoval(t *testing.T) {
 	d := New(Config{DaemonID: "daemon-1", MaxAgentProcesses: 1}, nil)
-	first, err := d.newWorkspaceRunner("workspace-a")
+	first, err := d.newWorkspaceDaemon("workspace-a")
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := d.newWorkspaceRunner("workspace-b")
+	second, err := d.newWorkspaceDaemon("workspace-b")
 	if err != nil {
 		t.Fatal(err)
 	}
-	third, err := d.newWorkspaceRunner("workspace-c")
+	third, err := d.newWorkspaceDaemon("workspace-c")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,9 +53,9 @@ func TestManagedCapacityQueuedLaunchRequiresFormalStopAndCrashReplacementFence(t
 		d.runtimeIndex[runtime.ID] = runtime
 		d.mu.Unlock()
 	}
-	first, _ := attachTestWorkspaceRunner(t, d, "workspace-a", nil)
-	second, _ := attachTestWorkspaceRunner(t, d, "workspace-b", nil)
-	third, _ := attachTestWorkspaceRunner(t, d, "workspace-c", nil)
+	first, _ := attachTestWorkspaceDaemon(t, d, "workspace-a", nil)
+	second, _ := attachTestWorkspaceDaemon(t, d, "workspace-b", nil)
+	third, _ := attachTestWorkspaceDaemon(t, d, "workspace-c", nil)
 	firstAck := startManagedForCapacityTest(t, first, "agent-a", "runtime-a", "dispatch-a")
 	secondAck := startManagedForCapacityTest(t, second, "agent-b", "runtime-b", "dispatch-b")
 	if secondAck.QueueState != protocol.AgentStartQueueQueued {
@@ -88,7 +88,7 @@ func TestManagedCapacityQueuedLaunchRequiresFormalStopAndCrashReplacementFence(t
 	}
 }
 
-func startManagedForCapacityTest(t *testing.T, runner *WorkspaceRunner, agentID, runtimeID, dispatchID string) protocol.AgentStartAckPayload {
+func startManagedForCapacityTest(t *testing.T, runner *WorkspaceDaemon, agentID, runtimeID, dispatchID string) protocol.AgentStartAckPayload {
 	t.Helper()
 	ack, err := runner.processes.Start(agentProcessStartRequest{AgentID: agentID, RuntimeID: runtimeID, LaunchID: dispatchID, StartDispatchID: dispatchID + "-dispatch"})
 	if err != nil {

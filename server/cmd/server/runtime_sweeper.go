@@ -248,7 +248,7 @@ func filterStaleRuntimesByPresence(candidates []db.SelectStaleOnlineRuntimesRow,
 	out := make([]db.SelectStaleOnlineRuntimesRow, 0, len(candidates))
 	for _, c := range candidates {
 		daemonID := strings.TrimSpace(c.DaemonID.String)
-		if daemonID != "" && presence.HasWorkspaceRunner(daemonID, util.UUIDToString(c.WorkspaceID)) {
+		if daemonID != "" && presence.HasWorkspaceDaemon(daemonID, util.UUIDToString(c.WorkspaceID)) {
 			continue
 		}
 		out = append(out, c)

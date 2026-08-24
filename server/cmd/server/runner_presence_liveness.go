@@ -108,7 +108,7 @@ func (c *runnerIDCache) prune(now time.Time, ttl time.Duration) {
 // refreshRunnerPresenceLiveness resolves every connected Workspace Runner to
 // its online runtime(s) and bumps liveness + last_seen_at for each.
 func refreshRunnerPresenceLiveness(ctx context.Context, queries *db.Queries, liveness handler.LivenessStore, hub *daemonws.Hub, cache *runnerIDCache) {
-	runners := hub.ListWorkspaceRunners()
+	runners := hub.ListWorkspaceDaemons()
 	if len(runners) == 0 {
 		// No sockets: nothing to refresh; let the cache age out naturally.
 		return

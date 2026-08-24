@@ -22,13 +22,13 @@ import (
 
 const bindingChildRuntimeHelperEnv = "MULTICA_BINDING_CHILD_RUNTIME_HELPER"
 
-func TestBindingChildProcessFallbackRunsTheRealWorkspaceRunner(t *testing.T) {
+func TestBindingChildProcessFallbackRunsTheRealWorkspaceDaemon(t *testing.T) {
 	const (
 		workspaceID  = "workspace-a"
 		computerID   = "computer-a"
 		controlToken = "host-control-token"
 	)
-	readyFrames := make(chan protocol.WorkspaceRunnerReadyPayload, 1)
+	readyFrames := make(chan protocol.WorkspaceReadyPayload, 1)
 	runtimeWakeConnected := make(chan struct{}, 1)
 	var registerCalls atomic.Int32
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
@@ -58,8 +58,8 @@ func TestBindingChildProcessFallbackRunsTheRealWorkspaceRunner(t *testing.T) {
 				return
 			}
 			var frame protocol.Message
-			var ready protocol.WorkspaceRunnerReadyPayload
-			if json.Unmarshal(raw, &frame) != nil || frame.Type != protocol.EventWorkspaceRunnerReady || json.Unmarshal(frame.Payload, &ready) != nil {
+			var ready protocol.WorkspaceReadyPayload
+			if json.Unmarshal(raw, &frame) != nil || frame.Type != protocol.EventWorkspaceDaemonReady || json.Unmarshal(frame.Payload, &ready) != nil {
 				return
 			}
 			readyFrames <- ready
@@ -228,7 +228,7 @@ func TestComputerHostRunsTwoRealIsolatedBindingChildProcesses(t *testing.T) {
 				return
 			}
 			var frame protocol.Message
-			if json.Unmarshal(raw, &frame) != nil || frame.Type != protocol.EventWorkspaceRunnerReady {
+			if json.Unmarshal(raw, &frame) != nil || frame.Type != protocol.EventWorkspaceDaemonReady {
 				return
 			}
 			observedReady = true
@@ -304,7 +304,7 @@ func TestComputerHostRunsTwoRealIsolatedBindingChildProcesses(t *testing.T) {
 		case workspaceID := <-readyFrames:
 			ready[workspaceID] = true
 		case <-ctx.Done():
-			t.Fatalf("WorkspaceRunner Ready set = %v", ready)
+			t.Fatalf("WorkspaceDaemon Ready set = %v", ready)
 		}
 	}
 	if got := registerCalls.Load(); got != int32(len(workspaceIDs)) {
@@ -323,7 +323,7 @@ func TestComputerHostRunsTwoRealIsolatedBindingChildProcesses(t *testing.T) {
 			t.Fatalf("removing B disconnected sibling %q", workspaceID)
 		}
 	case <-ctx.Done():
-		t.Fatal("removed Binding child B did not close its WorkspaceRunner connection")
+		t.Fatal("removed Binding child B did not close its WorkspaceDaemon connection")
 	}
 }
 
@@ -344,7 +344,7 @@ func waitForBindingLifecycle(t *testing.T, ctx context.Context, host *computer.H
 	}
 }
 
-func TestBindingChildPublishesReadyWithoutAgentRuntimesOrWorkspaceRunnerWS(t *testing.T) {
+func TestBindingChildPublishesReadyWithoutAgentRuntimesOrWorkspaceDaemonWS(t *testing.T) {
 	const (
 		workspaceID  = "workspace-a"
 		computerID   = "computer-a"

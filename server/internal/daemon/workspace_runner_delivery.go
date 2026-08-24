@@ -11,34 +11,34 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-// workspaceRunnerDeliveryDispatcher keeps the Runner socket reader independent
+// workspaceDaemonDeliveryDispatcher keeps the Runner socket reader independent
 // from provider startup and Message turns. Deliveries for one Agent remain
 // ordered, while different Agents cannot head-of-line block each other.
-type workspaceRunnerDeliveryDispatcher struct {
+type workspaceDaemonDeliveryDispatcher struct {
 	ctx    context.Context
 	handle func(context.Context, protocol.AgentDeliverPayload)
 
 	mu      sync.Mutex
 	queues  map[string][]protocol.AgentDeliverPayload
 	running map[string]bool
-	paused  map[string]workspaceRunnerDeliveryPause
+	paused  map[string]workspaceDaemonDeliveryPause
 }
 
-type workspaceRunnerDeliveryPause struct {
+type workspaceDaemonDeliveryPause struct {
 	launchID string
 	stop     bool
 }
 
-func newWorkspaceRunnerDeliveryDispatcher(ctx context.Context, handle func(context.Context, protocol.AgentDeliverPayload)) *workspaceRunnerDeliveryDispatcher {
-	return &workspaceRunnerDeliveryDispatcher{
+func newWorkspaceDaemonDeliveryDispatcher(ctx context.Context, handle func(context.Context, protocol.AgentDeliverPayload)) *workspaceDaemonDeliveryDispatcher {
+	return &workspaceDaemonDeliveryDispatcher{
 		ctx: ctx, handle: handle,
-		queues: make(map[string][]protocol.AgentDeliverPayload), running: make(map[string]bool), paused: make(map[string]workspaceRunnerDeliveryPause),
+		queues: make(map[string][]protocol.AgentDeliverPayload), running: make(map[string]bool), paused: make(map[string]workspaceDaemonDeliveryPause),
 	}
 }
 
 // Pause holds only this Agent's deliveries while agent:start establishes its
 // provider. The socket reader and every other Agent remain independent.
-func (d *workspaceRunnerDeliveryDispatcher) Pause(agentID, launchID string) bool {
+func (d *workspaceDaemonDeliveryDispatcher) Pause(agentID, launchID string) bool {
 	if d == nil || strings.TrimSpace(agentID) == "" || strings.TrimSpace(launchID) == "" {
 		return false
 	}
@@ -53,14 +53,14 @@ func (d *workspaceRunnerDeliveryDispatcher) Pause(agentID, launchID string) bool
 		// Keep the buffer paused while allowing the socket reader to ACK it.
 		return true
 	}
-	d.paused[agentID] = workspaceRunnerDeliveryPause{launchID: launchID}
+	d.paused[agentID] = workspaceDaemonDeliveryPause{launchID: launchID}
 	return true
 }
 
 // Resume releases deliveries in their original order after agent:start has
 // published Active, provider session, and initial Activity. No delivery can
 // race those lifecycle facts onto the wire.
-func (d *workspaceRunnerDeliveryDispatcher) Resume(agentID, launchID string) {
+func (d *workspaceDaemonDeliveryDispatcher) Resume(agentID, launchID string) {
 	if d == nil {
 		return
 	}
@@ -79,19 +79,19 @@ func (d *workspaceRunnerDeliveryDispatcher) Resume(agentID, launchID string) {
 
 // FenceStop supersedes a start pause with a stop-owned token. A late startup
 // completion can therefore never Resume deliveries after stop has begun.
-func (d *workspaceRunnerDeliveryDispatcher) FenceStop(agentID, launchID string) {
+func (d *workspaceDaemonDeliveryDispatcher) FenceStop(agentID, launchID string) {
 	if d == nil || strings.TrimSpace(agentID) == "" || strings.TrimSpace(launchID) == "" {
 		return
 	}
 	d.mu.Lock()
-	d.paused[agentID] = workspaceRunnerDeliveryPause{launchID: launchID, stop: true}
+	d.paused[agentID] = workspaceDaemonDeliveryPause{launchID: launchID, stop: true}
 	delete(d.queues, agentID)
 	d.mu.Unlock()
 }
 
 // RejectStart forgets only the volatile buffer. The server still owns every
 // unACKed delivery and will replay it after a later successful start.
-func (d *workspaceRunnerDeliveryDispatcher) RejectStart(agentID, launchID string) {
+func (d *workspaceDaemonDeliveryDispatcher) RejectStart(agentID, launchID string) {
 	if d == nil {
 		return
 	}
@@ -105,7 +105,7 @@ func (d *workspaceRunnerDeliveryDispatcher) RejectStart(agentID, launchID string
 	d.mu.Unlock()
 }
 
-func (d *workspaceRunnerDeliveryDispatcher) Enqueue(delivery protocol.AgentDeliverPayload) bool {
+func (d *workspaceDaemonDeliveryDispatcher) Enqueue(delivery protocol.AgentDeliverPayload) bool {
 	if d == nil || d.ctx == nil || d.handle == nil || delivery.AgentID == "" {
 		return false
 	}
@@ -122,7 +122,7 @@ func (d *workspaceRunnerDeliveryDispatcher) Enqueue(delivery protocol.AgentDeliv
 	return true
 }
 
-func (d *workspaceRunnerDeliveryDispatcher) drain(agentID string) {
+func (d *workspaceDaemonDeliveryDispatcher) drain(agentID string) {
 	for {
 		d.mu.Lock()
 		if d.ctx.Err() != nil {
@@ -154,112 +154,112 @@ func (d *workspaceRunnerDeliveryDispatcher) drain(agentID string) {
 	}
 }
 
-func (d *Daemon) attachWorkspaceRunner(runner *WorkspaceRunner) {
+func (d *Daemon) attachWorkspaceDaemon(runner *WorkspaceDaemon) {
 	if d == nil || runner == nil || runner.WorkspaceID() == "" {
 		return
 	}
-	d.workspaceRunnerMu.Lock()
-	if d.workspaceRunners == nil {
-		d.workspaceRunners = make(map[string]*WorkspaceRunner)
+	d.workspaceDaemonMu.Lock()
+	if d.workspaceDaemons == nil {
+		d.workspaceDaemons = make(map[string]*WorkspaceDaemon)
 	}
-	d.workspaceRunners[runner.WorkspaceID()] = runner
-	d.workspaceRunnerMu.Unlock()
+	d.workspaceDaemons[runner.WorkspaceID()] = runner
+	d.workspaceDaemonMu.Unlock()
 }
 
-// adoptWorkspaceRunner publishes the Binding child's owned Runner as the
+// adoptWorkspaceDaemon publishes the Binding child's owned Runner as the
 // Credential Proxy / handoff lookup. Binding child constructs that Runner
-// before Run; if it stays off this map, ensureWorkspaceRunner mints a second
+// before Run; if it stays off this map, ensureWorkspaceDaemon mints a second
 // empty inbox and message send returns 409 "Message coordinator is unavailable".
-func (d *Daemon) adoptWorkspaceRunner(runner *WorkspaceRunner) error {
+func (d *Daemon) adoptWorkspaceDaemon(runner *WorkspaceDaemon) error {
 	if d == nil {
 		return errors.New("Workspace Runner Daemon is required")
 	}
 	if runner == nil || runner.WorkspaceID() == "" {
 		return errors.New("Workspace Runner identity is required")
 	}
-	d.attachWorkspaceRunner(runner)
+	d.attachWorkspaceDaemon(runner)
 	return nil
 }
 
-func (d *Daemon) detachWorkspaceRunner(runner *WorkspaceRunner) {
+func (d *Daemon) detachWorkspaceDaemon(runner *WorkspaceDaemon) {
 	if d == nil || runner == nil {
 		return
 	}
-	d.workspaceRunnerMu.Lock()
-	if d.workspaceRunners[runner.WorkspaceID()] == runner {
-		delete(d.workspaceRunners, runner.WorkspaceID())
+	d.workspaceDaemonMu.Lock()
+	if d.workspaceDaemons[runner.WorkspaceID()] == runner {
+		delete(d.workspaceDaemons, runner.WorkspaceID())
 	}
-	d.workspaceRunnerMu.Unlock()
+	d.workspaceDaemonMu.Unlock()
 }
 
-func (d *Daemon) currentWorkspaceRunner(workspaceID string) *WorkspaceRunner {
+func (d *Daemon) currentWorkspaceDaemon(workspaceID string) *WorkspaceDaemon {
 	if d == nil {
 		return nil
 	}
-	d.workspaceRunnerMu.RLock()
-	runner := d.workspaceRunners[strings.TrimSpace(workspaceID)]
-	d.workspaceRunnerMu.RUnlock()
+	d.workspaceDaemonMu.RLock()
+	runner := d.workspaceDaemons[strings.TrimSpace(workspaceID)]
+	d.workspaceDaemonMu.RUnlock()
 	return runner
 }
 
-// ensureWorkspaceRunner creates a state-owning Runner before a legacy
+// ensureWorkspaceDaemon creates a state-owning Runner before a legacy
 // lifecycle path opens an Inbox. The Runner is not started here: socket
-// ownership remains exclusively with WorkspaceRunner.Run.
-func (d *Daemon) ensureWorkspaceRunner(workspaceID string) (*WorkspaceRunner, error) {
+// ownership remains exclusively with WorkspaceDaemon.Run.
+func (d *Daemon) ensureWorkspaceDaemon(workspaceID string) (*WorkspaceDaemon, error) {
 	workspaceID = strings.TrimSpace(workspaceID)
 	if workspaceID == "" {
 		return nil, errors.New("Workspace identity is required")
 	}
-	if runner := d.currentWorkspaceRunner(workspaceID); runner != nil {
+	if runner := d.currentWorkspaceDaemon(workspaceID); runner != nil {
 		return runner, nil
 	}
-	runner, err := d.newWorkspaceRunner(workspaceID)
+	runner, err := d.newWorkspaceDaemon(workspaceID)
 	if err != nil {
 		return nil, err
 	}
-	d.workspaceRunnerMu.Lock()
-	if current := d.workspaceRunners[workspaceID]; current != nil {
-		d.workspaceRunnerMu.Unlock()
+	d.workspaceDaemonMu.Lock()
+	if current := d.workspaceDaemons[workspaceID]; current != nil {
+		d.workspaceDaemonMu.Unlock()
 		return current, nil
 	}
-	if d.workspaceRunners == nil {
-		d.workspaceRunners = make(map[string]*WorkspaceRunner)
+	if d.workspaceDaemons == nil {
+		d.workspaceDaemons = make(map[string]*WorkspaceDaemon)
 	}
-	d.workspaceRunners[workspaceID] = runner
-	d.workspaceRunnerMu.Unlock()
+	d.workspaceDaemons[workspaceID] = runner
+	d.workspaceDaemonMu.Unlock()
 	return runner, nil
 }
 
-func (d *Daemon) currentWorkspaceRunners() []*WorkspaceRunner {
+func (d *Daemon) currentWorkspaceDaemons() []*WorkspaceDaemon {
 	if d == nil {
 		return nil
 	}
-	d.workspaceRunnerMu.RLock()
-	workspaceIDs := make([]string, 0, len(d.workspaceRunners))
-	for workspaceID := range d.workspaceRunners {
+	d.workspaceDaemonMu.RLock()
+	workspaceIDs := make([]string, 0, len(d.workspaceDaemons))
+	for workspaceID := range d.workspaceDaemons {
 		workspaceIDs = append(workspaceIDs, workspaceID)
 	}
 	sort.Strings(workspaceIDs)
-	runners := make([]*WorkspaceRunner, 0, len(workspaceIDs))
+	runners := make([]*WorkspaceDaemon, 0, len(workspaceIDs))
 	for _, workspaceID := range workspaceIDs {
-		if runner := d.workspaceRunners[workspaceID]; runner != nil {
+		if runner := d.workspaceDaemons[workspaceID]; runner != nil {
 			runners = append(runners, runner)
 		}
 	}
-	d.workspaceRunnerMu.RUnlock()
+	d.workspaceDaemonMu.RUnlock()
 	return runners
 }
 
-// resolveWorkspaceRunnerByAgent preserves machine-local callers that predate a
+// resolveWorkspaceDaemonByAgent preserves machine-local callers that predate a
 // Workspace parameter. It returns the owning Runner, never its Inbox internals,
 // and fails closed instead of selecting an ambiguous Workspace implicitly.
-func (d *Daemon) resolveWorkspaceRunnerByAgent(agentID string) (*WorkspaceRunner, error) {
+func (d *Daemon) resolveWorkspaceDaemonByAgent(agentID string) (*WorkspaceDaemon, error) {
 	agentID = strings.TrimSpace(agentID)
 	if agentID == "" {
 		return nil, errors.New("Agent identity is required")
 	}
-	var matchedRunner *WorkspaceRunner
-	for _, runner := range d.currentWorkspaceRunners() {
+	var matchedRunner *WorkspaceDaemon
+	for _, runner := range d.currentWorkspaceDaemons() {
 		if !runner.hasMessageInbox(agentID) {
 			continue
 		}
@@ -274,15 +274,15 @@ func (d *Daemon) resolveWorkspaceRunnerByAgent(agentID string) (*WorkspaceRunner
 	return matchedRunner, nil
 }
 
-// sendWorkspaceRunnerAgentFrame resolves one unambiguous Agent Inbox and sends
+// sendWorkspaceDaemonAgentFrame resolves one unambiguous Agent Inbox and sends
 // a frame on that Workspace's current serialized Runner writer.
 // Message delivery, launch reconciliation, and Activity share this current
 // Runner connection without falling back to the legacy Task wakeup socket.
-func (d *Daemon) sendWorkspaceRunnerAgentFrame(agentID, eventType string, payload any) bool {
+func (d *Daemon) sendWorkspaceDaemonAgentFrame(agentID, eventType string, payload any) bool {
 	if d == nil || agentID == "" {
 		return false
 	}
-	runner, err := d.resolveWorkspaceRunnerByAgent(agentID)
+	runner, err := d.resolveWorkspaceDaemonByAgent(agentID)
 	if err != nil {
 		return false
 	}

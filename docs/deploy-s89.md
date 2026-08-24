@@ -214,5 +214,5 @@ AgentRoot, Message Draft, or Context Boundary files.
 The minimum coordinated Server/Computer release line is `0.4.24`. The connected
 Computer must advertise the current Workspace Runner control-plane capability.
 Older CLI versions are
-rejected with `426 workspace_runner_protocol_unsupported`, and a Runner missing
+rejected with `426 workspace_daemon_protocol_unsupported`, and a Runner missing
 the hard-cut capability is closed before it can own the Workspace slot.

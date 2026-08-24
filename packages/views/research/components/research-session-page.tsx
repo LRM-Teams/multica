@@ -535,23 +535,44 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     action: ResearchNodeCommandAction;
     requestId: string;
   } | null>(null);
+  const messageRequestRef = useRef<{
+    identity: string;
+    requestId: string;
+  } | null>(null);
   // Stick-to-bottom while content grows (live stream / new cards); releases if
   // the user scrolls up to read history — no jump-scroll (LRM-820).
   useAutoScroll(chatScrollRef, chatOpen);
 
   const send = useMutation({
-    mutationFn: (body: string) =>
-      api.postResearchMessage(sessionId, {
+    mutationFn: (body: string) => {
+      const targetAgentId = directorV6Enabled
+        ? persistedDirectorAgentId ?? undefined
+        : undefined;
+      const selectedResearchRefs =
+        directorV6Enabled && selectedDirectorReference
+          ? [selectedDirectorReference]
+          : undefined;
+      const requestIdentity = [
+        sessionId,
         body,
-        targetAgentId: directorV6Enabled
-          ? persistedDirectorAgentId ?? undefined
-          : undefined,
-        selectedResearchRefs:
-          directorV6Enabled && selectedDirectorReference
-            ? [selectedDirectorReference]
-            : undefined,
-      }),
+        targetAgentId ?? "",
+        selectedDirectorReference?.stableId ?? "",
+        selectedDirectorReference?.revision ?? "",
+        selectedDirectorReference?.contentHash ?? "",
+      ].join("\n");
+      const current = messageRequestRef.current;
+      const requestId =
+        current?.identity === requestIdentity ? current.requestId : createSafeId();
+      messageRequestRef.current = { identity: requestIdentity, requestId };
+      return api.postResearchMessage(sessionId, {
+        body,
+        clientRequestId: requestId,
+        targetAgentId,
+        selectedResearchRefs,
+      });
+    },
     onSuccess: () => {
+      messageRequestRef.current = null;
       // Focus before clearBody so empty-state native disabled does not dump focus to BODY.
       composerRef.current?.focus();
       dispatch({ type: "clearBody" });

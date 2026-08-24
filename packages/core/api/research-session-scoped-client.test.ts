@@ -86,12 +86,18 @@ describe("ApiClient session-scoped Research reads", () => {
     stubResponse({ id: "m1", session_id: "s1", body: "accepted" });
     const client = new ApiClient("https://api.example.test");
     await expect(
-      client.postResearchMessage("s1", { body: "hello" }),
+      client.postResearchMessage("s1", {
+        body: "hello",
+        clientRequestId: "00000000-0000-4000-8000-000000000001",
+      }),
     ).resolves.toMatchObject({ id: "m1", session_id: "s1" });
 
     stubResponse({ id: "m2", session_id: "s2", body: "foreign" });
     await expect(
-      client.postResearchMessage("s1", { body: "hello" }),
+      client.postResearchMessage("s1", {
+        body: "hello",
+        clientRequestId: "00000000-0000-4000-8000-000000000002",
+      }),
     ).rejects.toThrow("response failed session validation");
   });
 
@@ -112,8 +118,6 @@ describe("ApiClient session-scoped Research reads", () => {
       body: "check this",
       clientRequestId,
       selectedResearchRefs: [selectedRef],
-    } as Parameters<typeof client.postResearchMessage>[1] & {
-      clientRequestId: string;
     });
 
     const fetchMock = vi.mocked(fetch);

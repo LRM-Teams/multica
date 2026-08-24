@@ -331,6 +331,7 @@ export interface ResearchSelectedReference {
 
 export interface PostResearchMessageRequest {
   body: string;
+  clientRequestId: string;
   targetAgentId?: string;
   selectedResearchRefs?: ResearchSelectedReference[];
 }

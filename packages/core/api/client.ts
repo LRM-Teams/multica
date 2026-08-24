@@ -5162,6 +5162,7 @@ export class ApiClient {
       method: "POST",
       body: JSON.stringify({
         body: data.body,
+        client_request_id: data.clientRequestId,
         target_agent_id: data.targetAgentId,
         selected_research_refs: data.selectedResearchRefs?.map((reference) => ({
           stable_id: reference.stableId,

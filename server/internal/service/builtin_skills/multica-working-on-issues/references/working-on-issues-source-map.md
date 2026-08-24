@@ -1,7 +1,9 @@
 # working-on-issues source map
 
-Checkout location: keep clones inside the Agent workspace and discover a
-project-bound `github_repo` via `multica workspace info --projects` (live,
+Checkout location: use an existing project directory or worktree inside the
+Agent workspace. If a bound `github_repo` has no checkout, the Agent clones it
+into that workspace; Multica does not clone repositories or provision checkouts.
+Discover project bindings with `multica workspace info --projects` (live,
 because resident AGENTS.md is not rewritten when resources change). Runtime
 brief contract: `server/internal/daemon/execenv/runtime_config.go`
 (`renderProjectContext`, Agent Memory Scope) and

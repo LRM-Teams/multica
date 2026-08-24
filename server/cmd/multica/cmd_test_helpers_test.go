@@ -25,16 +25,3 @@ func captureStdout(t *testing.T, fn func() error) (string, error) {
 	}
 	return string(out), runErr
 }
-
-func TestSkillCommandExposesReadOnlyInspectionOnly(t *testing.T) {
-	want := map[string]bool{"list": true, "get": true}
-	for _, command := range skillCmd.Commands() {
-		if !want[command.Name()] {
-			t.Errorf("unexpected Agent skill command %q", command.Name())
-		}
-		delete(want, command.Name())
-	}
-	for name := range want {
-		t.Errorf("missing Agent skill command %q", name)
-	}
-}

@@ -394,8 +394,6 @@ skill
 #### CLI 对应命令
 
 ```bash
-multica skill list
-multica skill get <id>
 ```
 
 Agent CLI 仅支持只读 Skill 查看；Skill 导入由管理员通过 workspace API 管理，Agent 侧不提供导入、创建、修改、删除、搜索或文件管理命令。
@@ -658,7 +656,6 @@ multica issue run-messages <task-id>    # 查看某次执行的消息
 
 ```bash
 multica agent list | get | create | update | archive
-multica skill list | get
 multica reminder list | get | schedule | update | cancel
 multica workspace info --projects    # 查看项目及绑定资源
 ```

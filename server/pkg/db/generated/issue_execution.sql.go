@@ -358,6 +358,7 @@ WHERE workspace_id = $2
   AND issue_id = $3
   AND reason = 'issue'
   AND trigger_comment_id IS NULL
+  AND ($4::uuid IS NULL OR id <> $4::uuid)
   AND status IN ('pending', 'failed', 'draining', 'running')
 RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn, issue_run_kind, issue_execution_revision, issue_execution_attempt_number
 `
@@ -366,10 +367,16 @@ type CancelSupersededIssueRunEventsParams struct {
 	Reason      pgtype.Text `json:"reason"`
 	WorkspaceID pgtype.UUID `json:"workspace_id"`
 	IssueID     pgtype.UUID `json:"issue_id"`
+	KeepRunID   pgtype.UUID `json:"keep_run_id"`
 }
 
 func (q *Queries) CancelSupersededIssueRunEvents(ctx context.Context, arg CancelSupersededIssueRunEventsParams) ([]AgentInboxEvent, error) {
-	rows, err := q.db.Query(ctx, cancelSupersededIssueRunEvents, arg.Reason, arg.WorkspaceID, arg.IssueID)
+	rows, err := q.db.Query(ctx, cancelSupersededIssueRunEvents,
+		arg.Reason,
+		arg.WorkspaceID,
+		arg.IssueID,
+		arg.KeepRunID,
+	)
 	if err != nil {
 		return nil, err
 	}

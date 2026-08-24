@@ -51,8 +51,12 @@ type IssueResponse struct {
 	// executors and the group manager can anchor self-verification / review on
 	// a real field instead of parsing prose out of the description.
 	AcceptanceCriteria []string `json:"acceptance_criteria"`
-	CreatedAt          string   `json:"created_at"`
-	UpdatedAt          string   `json:"updated_at"`
+	// ExecutionRevision is the optimistic concurrency fence for the current
+	// Issue work contract. Detail responses expose it so completion clients can
+	// prove they reviewed the same criteria that the active Run received.
+	ExecutionRevision *int64 `json:"execution_revision,omitempty"`
+	CreatedAt         string `json:"created_at"`
+	UpdatedAt         string `json:"updated_at"`
 	// Metadata is the per-issue KV map (see issue_metadata.go). Always emitted
 	// (empty object when unset) so frontend code can `issue.metadata[key]`
 	// without nil-guarding the parent field.
@@ -132,6 +136,7 @@ type IssueSourceMessageRefResponse struct {
 
 func issueToResponse(i db.Issue, issuePrefix string) IssueResponse {
 	identifier := issuePrefix + "-" + strconv.Itoa(int(i.Number))
+	executionRevision := i.ExecutionRevision
 	return IssueResponse{
 		ID:                 uuidToString(i.ID),
 		WorkspaceID:        uuidToString(i.WorkspaceID),
@@ -151,6 +156,7 @@ func issueToResponse(i db.Issue, issuePrefix string) IssueResponse {
 		StartDate:          dateToPtr(i.StartDate),
 		DueDate:            dateToPtr(i.DueDate),
 		AcceptanceCriteria: parseAcceptanceCriteria(i.AcceptanceCriteria),
+		ExecutionRevision:  &executionRevision,
 		CreatedAt:          timestampToString(i.CreatedAt),
 		UpdatedAt:          timestampToString(i.UpdatedAt),
 		Metadata:           parseIssueMetadata(i.Metadata),
@@ -2438,6 +2444,18 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	var req UpdateIssueRequest
 	if err := json.Unmarshal(bodyBytes, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	// Agent-authenticated implementation work must enter the typed completion
+	// and independent review lifecycle. A generic status PATCH cannot provide
+	// criterion evidence, bind the result to the active Run, or prevent an
+	// implementer from approving its own work. Human and platform-owned
+	// compatibility paths remain explicit and continue below.
+	if principal, isAgent := middleware.AgentPrincipalFromContext(r.Context()); isAgent &&
+		req.Status != nil && (*req.Status == "in_review" || *req.Status == "done") {
+		slog.Warn("agent direct issue completion rejected", append(logger.RequestAttrs(r),
+			"issue_id", id, "agent_id", principal.AgentID)...)
+		writeError(w, http.StatusConflict, "agents cannot set an issue directly to in_review or done; submit a completion report for review")
 		return
 	}
 

@@ -974,6 +974,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Put("/metadata/{key}", h.SetIssueMetadataKey)
 					r.Delete("/metadata/{key}", h.DeleteIssueMetadataKey)
 					r.Get("/pull-requests", h.ListPullRequestsForIssue)
+					r.Get("/completion-reports", h.ListIssueCompletionReports)
+					r.Post("/completion-reviews", h.ReviewIssueCompletion)
 				})
 			})
 
@@ -1491,6 +1493,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Get("/issues/{id}/task-runs", h.ListAgentIssueTaskRuns)
 				r.Get("/issues/{id}/pull-requests", h.ListAgentIssuePullRequests)
 				r.Get("/issues/{id}/attachments", h.ListAgentIssueAttachments)
+				r.Post("/issues/{id}/completion", h.SubmitAgentIssueCompletion)
+				r.Get("/issues/{id}/completion-reports", h.ListAgentIssueCompletionReports)
+				r.Post("/issues/{id}/completion-reviews", h.ReviewAgentIssueCompletion)
 				r.Post("/issues/{id}/rerun", h.RerunAgentIssue)
 				r.Put("/issues/{id}/channel", h.SetAgentIssueSourceChannel)
 				r.Get("/tasks/{taskId}/messages", h.ListAgentTaskMessages)

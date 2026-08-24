@@ -146,6 +146,23 @@ Drifted from the prior skill's `github.go:736` citation.
 Net: a bare title prefix (`MUL-2759: ...`) or a branch ref links only;
 `Closes MUL-2759` links **and** records close intent.
 
+## Typed completion and independent review
+
+| Behavior | Source |
+| --- | --- |
+| Agent CLI reads the current criteria/revision and requires evidence for every criterion | `server/cmd/multica/cmd_issue.go`, `runIssueComplete` |
+| Completion identity comes from the task-scoped credential, never a client-supplied Run ID | `server/internal/handler/issue_completion.go`, `SubmitAgentIssueCompletion` |
+| Report, visible comment, `in_review`, claim release, and Run fence commit atomically | `server/internal/service/issue_completion.go`, `SubmitCompletion` |
+| Same Run + same request is idempotent; replay does not republish realtime events | `server/internal/service/issue_completion.go`, `IssueCompletionOutcome.Replayed`; `server/internal/handler/issue_completion.go` |
+| Author cannot self-review; an Agent reviewer needs an independent same-Issue task Run | `server/internal/service/issue_completion.go`, `ReviewCompletion` |
+| Accepted `pull_request` evidence must exist in canonical `issue_pull_request` | `server/internal/service/issue_completion.go`, `ensureCanonicalPullRequestEvidence` |
+| Rejection preserves the report and creates a successor Run with predecessor lineage | `server/internal/service/issue_completion.go`, `ReviewCompletion`; `server/internal/service/issue_execution.go`, `ReconcileTx` |
+| Generic Agent status updates cannot bypass typed completion with `in_review` or `done` | `server/internal/handler/issue.go`, `UpdateIssue` |
+
+Completion and review history is a typed sidecar projected into visible Issue
+comments. It does not create a second task graph or let comments/metadata replace
+canonical Issue, Run, review, or PR-link state.
+
 ## Status side effects (enqueue contracts)
 
 | Behavior | File:line | Drifted from |

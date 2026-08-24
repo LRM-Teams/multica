@@ -484,13 +484,11 @@ export function ResearchListPage() {
   const localizedCreateError =
     createErrorCode === "research.v6.director_runtime_offline"
       ? t(($) => $.home.director_runtime_offline)
-      : createErrorCode === "research.v6.director_runtime_incompatible"
-        ? t(($) => $.home.director_runtime_incompatible)
-        : createErrorCode === "research.v6.bootstrap_pending"
-          ? t(($) => $.home.bootstrap_pending)
-          : createErrorCode?.startsWith("research.v6.director_")
-            ? t(($) => $.home.director_unavailable)
-            : null;
+      : createErrorCode === "research.v6.bootstrap_pending"
+        ? t(($) => $.home.bootstrap_pending)
+        : createErrorCode?.startsWith("research.v6.director_")
+          ? t(($) => $.home.director_unavailable)
+          : null;
   const createError = create.isError
     ? localizedCreateError ??
       (create.error instanceof Error && create.error.message

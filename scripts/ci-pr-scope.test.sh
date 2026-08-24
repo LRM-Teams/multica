@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCOPE="$ROOT_DIR/scripts/ci-pr-scope.sh"
+TURBO_DRY_RUN_PARSER="$ROOT_DIR/scripts/ci-turbo-web-dry-run.py"
 
 fail() {
   echo "$1" >&2
@@ -67,6 +68,29 @@ require_kv "$ci_yml" force_full true
 
 scope_script="$(scope_for scripts/ci-pr-scope.sh)"
 require_kv "$scope_script" force_full true
+
+turbo_parser="$(scope_for scripts/ci-turbo-web-dry-run.py)"
+require_kv "$turbo_parser" force_full true
+
+dry_run_file="$(mktemp)"
+trap 'rm -f "$dry_run_file"' EXIT
+python3 - "$dry_run_file" <<'PY'
+import json
+import pathlib
+import sys
+
+pathlib.Path(sys.argv[1]).write_text(
+    json.dumps({"tasks": [{"taskId": "x" * 300_000}]}),
+    encoding="utf-8",
+)
+PY
+if [[ "$(python3 "$TURBO_DRY_RUN_PARSER" "$dry_run_file")" != true ]]; then
+  fail "expected a large Turbo dry-run payload to retain its scheduled task"
+fi
+printf '%s\n' 'not-json' >"$dry_run_file"
+if python3 "$TURBO_DRY_RUN_PARSER" "$dry_run_file" >/dev/null 2>&1; then
+  fail "expected invalid Turbo dry-run output to fail closed"
+fi
 
 reserved="$(scope_for server/internal/handler/reserved_slugs.json)"
 require_kv "$reserved" run_reserved_slugs true

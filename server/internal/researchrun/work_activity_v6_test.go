@@ -24,6 +24,11 @@ func TestV6WorkActivityReadsAttemptScopedPersistentTimeline(t *testing.T) {
 		"v6WorkActivityTimelineLimit+1",
 		"activityprojection.ProjectTimelineEntry",
 		"progress.updated_at",
+		"v6_work_progress_reported",
+		"event.payload->>'work_item_id'=work.id::text",
+		"event.payload->>'attempt_id'=attempt.id::text",
+		"NULLIF(work.payload->>'mission_prompt','')",
+		"membership.mission_prompt",
 	} {
 		if !strings.Contains(source, required) {
 			t.Fatalf("V6 Work activity read model missing %q", required)

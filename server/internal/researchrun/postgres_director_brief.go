@@ -371,6 +371,7 @@ func (s *PostgresStore) PersistDirectorCycle(ctx context.Context, in StartV6Dire
 	}
 	cycle := V6DirectorCycle{ID: uuid.NewString(), RunID: in.RunID, AssignmentID: assignmentID, BriefID: brief.BriefID, BriefHash: brief.BriefHash, Generation: generation, PageCount: len(brief.Pages), StateVersion: 1, Status: "pending", WorkItemID: uuid.NewString()}
 	directorPayload, err := json.Marshal(map[string]any{"brief_id": brief.BriefID, "brief_hash": brief.BriefHash,
+		"mission_prompt":       "研读最新调研简报，规划并派发下一步调研工作。",
 		"task_specific_schema": map[string]any{"payload_schemas": v6DirectorActionPayloadSchemas()}})
 	if err != nil {
 		return V6DirectorCycle{}, err

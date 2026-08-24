@@ -403,9 +403,9 @@ func materializeV6DisputeReviewTasksTx(ctx context.Context, tx pgx.Tx, state acc
 		}
 		objective := objectiveForDisputeReview(review.Purpose)
 		searchPlan := ResearchV6SearchPlan{ClientKey: "dispute-review-search", Targets: []ResearchV6EntityRef{{Kind: "dispute", Key: "dispute:" + disputeID}},
-			Adapter: "web", QueryStrategy: objective, InclusionCriteria: []string{"Evidence must distinguish or independently test the assigned position."},
-			ExclusionCriteria:  []string{"Exclude unsupported summaries and evidence visible only through another position."},
-			StoppingConditions: []string{"Stop after the position has a reproducible independent test or the search is exhausted."}, StrategyVersion: "dispute-review-v1"}
+			Adapter: "web", QueryStrategy: objective, InclusionCriteria: []string{"证据必须能够区分或独立检验指定立场。"},
+			ExclusionCriteria:  []string{"排除没有来源支撑的摘要，以及只能通过其他立场间接获得的证据。"},
+			StoppingConditions: []string{"获得可复现的独立检验结果或穷尽搜索范围后停止。"}, StrategyVersion: "dispute-review-v1"}
 		criteria, _ := json.Marshal(map[string]any{
 			"mode": "dispute_review", "dispute_id": disputeID, "target_position_id": review.TargetPositionID, "review_purpose": review.Purpose,
 			"routing":      map[string]any{"excluded_agent_ids": review.ExcludedAgentIDs, "independence_required": true},
@@ -455,11 +455,11 @@ func materializeV6DisputeReviewTasksTx(ctx context.Context, tx pgx.Tx, state acc
 func objectiveForDisputeReview(purpose string) string {
 	switch purpose {
 	case "review_measurement_sample_bias_and_comparability":
-		return "Independently review the disputed method, measurement, sample, bias, and comparability."
+		return "独立复核存在争议的方法、测量、样本、偏差和可比性。"
 	case "collect_evidence_that_distinguishes_positions":
-		return "Find new accepted evidence that can distinguish the Dispute Positions."
+		return "查找能够区分不同 Dispute 立场的新有效证据。"
 	default:
-		return "Independently verify one Dispute Position from its isolated canonical inputs."
+		return "仅使用隔离后的规范输入，独立验证一个 Dispute 立场。"
 	}
 }
 

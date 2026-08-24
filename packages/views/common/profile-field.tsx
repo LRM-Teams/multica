@@ -78,9 +78,11 @@ export function ProfileSectionHeading({
 }) {
   return (
     <div className="flex items-center gap-1">
-      <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+      {/* A real heading: these are the panel's landmarks, and screen-reader
+          users navigate by them. */}
+      <h3 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
         {label}
-      </span>
+      </h3>
       {action}
     </div>
   );

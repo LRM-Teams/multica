@@ -337,10 +337,6 @@ func (h *Handler) UploadAgentAttachmentSessionObject(w http.ResponseWriter, r *h
 	if !ok {
 		return
 	}
-	if r.Method != http.MethodPut {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
 	sessionID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "sessionId"), "upload session id")
 	if !ok {
 		return

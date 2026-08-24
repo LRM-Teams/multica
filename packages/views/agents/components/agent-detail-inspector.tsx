@@ -238,22 +238,21 @@ export function AgentDetailInspector({
         </InspectorField>
       </Section>
 
-      {/* LRM-1449 — workspace-admin role (Member/Admin). Standalone block so
-          the owner/admin-only toggle is a full-width control, not a cramped
-          PropRow value. */}
-      <AgentWorkspaceRole
-        wsId={wsId}
-        agent={agent}
-        permission={canChangeRole}
-        onRoleChanged={onRoleChanged}
-      />
+      {/* LRM-1449 — workspace-admin role (Member/Admin). Its own section so the
+          owner/admin-only control is full width, not a cramped inline value. */}
+      <div className="flex flex-col border-b px-5 py-4">
+        <AgentWorkspaceRole
+          wsId={wsId}
+          agent={agent}
+          permission={canChangeRole}
+          onRoleChanged={onRoleChanged}
+        />
+      </div>
 
       {/* Skills */}
       <div className="flex flex-col border-b px-5 py-4">
         <div className="mb-2 flex items-center gap-2">
-          <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-            {t(($) => $.inspector.section_skills)}
-          </span>
+          <InspectorSectionHeading label={t(($) => $.inspector.section_skills)} />
           <span className="font-mono text-[10px] tabular-nums text-muted-foreground/70">
             {agent.skills.length}
           </span>
@@ -282,9 +281,7 @@ export function AgentDetailInspector({
       {canEdit && (
         <div className="flex flex-col px-5 py-4">
           <div className="mb-2 flex items-center gap-2">
-            <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-              {t(($) => $.inspector.section_integrations)}
-            </span>
+            <InspectorSectionHeading label={t(($) => $.inspector.section_integrations)} />
           </div>
           <div className="flex flex-wrap gap-2">
             <LarkAgentBindButton

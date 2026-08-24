@@ -44,14 +44,10 @@ func (m workProgressModule) Report(ctx context.Context, in ReportV6WorkProgressI
 		return fmt.Errorf("%w: work progress store unavailable", ErrInvalidContract)
 	}
 	in.ClientRequestID = strings.TrimSpace(in.ClientRequestID)
-	in.Text = strings.TrimSpace(in.Text)
+	in.Text = PrepareV6WorkProgressText(in.Text)
 	in.Stage = strings.TrimSpace(in.Stage)
 	if in.ClientRequestID == "" || in.Text == "" {
 		return fmt.Errorf("%w: incomplete progress report", ErrInvalidContract)
-	}
-	in.Text = normalizeV6WorkProgressText(in.Text)
-	if text := []rune(in.Text); len(text) > maxV6WorkProgressTextRunes {
-		in.Text = string(text[:maxV6WorkProgressTextRunes])
 	}
 	if stage := []rune(in.Stage); len(stage) > maxV6WorkProgressStageRunes {
 		return fmt.Errorf("%w: progress stage exceeds %d characters", ErrInvalidContract, maxV6WorkProgressStageRunes)
@@ -59,9 +55,18 @@ func (m workProgressModule) Report(ctx context.Context, in ReportV6WorkProgressI
 	return m.store.ReportV6WorkProgress(ctx, in)
 }
 
-func normalizeV6WorkProgressText(text string) string {
+// PrepareV6WorkProgressText returns the exact presentation-safe caption stored
+// and broadcast for a progress report.
+func PrepareV6WorkProgressText(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
 	for _, value := range text {
 		if unicode.Is(unicode.Han, value) {
+			if runes := []rune(text); len(runes) > maxV6WorkProgressTextRunes {
+				return string(runes[:maxV6WorkProgressTextRunes])
+			}
 			return text
 		}
 	}

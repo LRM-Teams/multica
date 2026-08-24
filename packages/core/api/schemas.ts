@@ -3221,6 +3221,9 @@ export const ChannelMentionCandidateSchema = z.object({
   id: z.string().catch(""),
   handle: z.string().catch(""),
   label: z.string().catch(""),
+  // Self-description (user) or configured description (agent). Server sends
+  // "" when unset; older backends omit it entirely.
+  description: z.string().catch(""),
   avatar_url: z.string().nullish(),
 }).loose();
 

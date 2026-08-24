@@ -560,3 +560,52 @@ func TestRunnerDisconnectFencesExactInstanceAndPublishesOnce(t *testing.T) {
 		t.Fatalf("disconnect Presence payloads=%+v, want one exact Offline", payloads)
 	}
 }
+
+func TestWorkspaceDaemonReadyAndDisconnectPublishComputerUpdated(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	daemonID := uuid.NewString()
+	daemonInstanceID := "instance-1"
+	identity := daemonws.ClientIdentity{DaemonID: daemonID, WorkspaceID: testWorkspaceID}
+	bus := events.New()
+	var payloads []map[string]any
+	bus.Subscribe(protocol.EventComputerUpdated, func(event events.Event) {
+		payload, ok := event.Payload.(map[string]any)
+		if !ok {
+			t.Errorf("payload type = %T", event.Payload)
+			return
+		}
+		payloads = append(payloads, payload)
+	})
+	h := *testHandler
+	h.Bus = bus
+	h.DaemonHub = daemonws.NewHub()
+	h.runnerObservations = newRunnerObservationStore()
+	h.RunnerPresenceSource = fakeRunnerPresenceSource{current: map[string]bool{
+		daemonID + "/" + testWorkspaceID + "/" + daemonInstanceID: true,
+	}}
+	ready, err := json.Marshal(protocol.WorkspaceReadyPayload{
+		WorkspaceID:      testWorkspaceID,
+		DaemonInstanceID: daemonInstanceID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := h.HandleWorkspaceDaemonFrame(ctx, identity, daemonInstanceID, protocol.EventWorkspaceDaemonReady, ready); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.HandleWorkspaceDaemonDisconnect(ctx, identity, daemonInstanceID); err != nil {
+		t.Fatal(err)
+	}
+	if len(payloads) != 2 {
+		t.Fatalf("Computer updated payloads=%+v, want Ready and disconnect events", payloads)
+	}
+	for _, payload := range payloads {
+		if payload["computer_id"] != daemonID {
+			t.Fatalf("Computer updated payload=%+v, want computer_id=%s", payload, daemonID)
+		}
+	}
+}

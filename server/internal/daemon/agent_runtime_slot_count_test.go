@@ -4,7 +4,7 @@ import (
 	"testing"
 )
 
-func TestResolveMaxAgentProcessesScalesByCPUAndClamps(t *testing.T) {
+func TestRuntimeSlotCountScalesByCPUAndClamps(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		name string

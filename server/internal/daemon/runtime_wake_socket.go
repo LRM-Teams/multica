@@ -3,7 +3,7 @@ package daemon
 // This file is the leftover runtime wake / reminder socket.
 //
 // Computer liveness and computer:upgrade travel on DaemonConnection
-// (Workspace Runner, /api/daemon/connect?workspace_id=...). This file is
+// (WorkspaceDaemon, /api/daemon/connect?workspace_id=...). This file is
 // not that path. It keeps the older runtime-multiplexed socket
 // (/api/daemon/connect?runtime_ids=...) for reminder snapshot/fire and
 // leftover control-plane heartbeat until those move onto the Runner.
@@ -11,7 +11,7 @@ package daemon
 //
 // TODO(computer-liveness): Remove this leftover wake socket after
 // v0.4.24-alpha.55 is no longer a supported direct self-upgrade source
-// and reminder transport lives on the Workspace Runner.
+// and reminder transport lives on the WorkspaceDaemon.
 
 import (
 	"context"

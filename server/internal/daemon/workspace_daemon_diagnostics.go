@@ -8,6 +8,6 @@ func (runner *WorkspaceDaemon) recordDiagnostic(event diagnosticlog.Event) {
 	}
 	if err := runner.diagnostics.record(runner.config.WorkspaceID, event); err != nil && runner.logger != nil {
 		// Diagnostic persistence never changes product control flow.
-		runner.logger.Warn("Workspace Runner diagnostic record dropped", "reason", "sink_unavailable")
+		runner.logger.Warn("WorkspaceDaemon diagnostic record dropped", "reason", "sink_unavailable")
 	}
 }

@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// Agent process cap (#35): bound how many distinct agents may hold a live
+// Runtime slot count (#35): bound how many distinct Agents may hold a live
 // resident provider process on this daemon. Does NOT limit task concurrency
 // (per-agent wake serialization already does that). Formula is CPU-based so
 // a 2-core laptop and a 32-core host get different defaults without hardcoding 20.

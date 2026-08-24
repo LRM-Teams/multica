@@ -165,10 +165,10 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 		d.detachWorkspaceDaemon(runner)
 		runner.inboxes.Close()
 	})
-	d.canonicalRuntimes.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{
+	d.canonicalRuntimes.slots[agentID+"\x00"+runtimeID] = &agentRuntimeSlot{
 		backend: fakeRuntime,
 	}
-	if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: agentID, RuntimeID: runtimeID, LaunchID: "acceptance-launch", StartDispatchID: "acceptance-launch" + "-dispatch"}); err != nil {
+	if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: agentID, RuntimeID: runtimeID}); err != nil {
 		t.Fatalf("accept test APM launch: %v", err)
 	}
 	if _, err := d.ensureIdleMessageCoordinator(workspaceID, agentID, runtimeID); err != nil {
@@ -363,9 +363,9 @@ func startIdleMessageAcceptanceRunner(t *testing.T, d *Daemon, hub *daemonws.Hub
 		cancel()
 		select {
 		case <-done:
-			t.Fatal("Workspace Runner did not connect")
+			t.Fatal("WorkspaceDaemon did not connect")
 		case <-time.After(time.Second):
-			t.Fatal("Workspace Runner did not connect")
+			t.Fatal("WorkspaceDaemon did not connect")
 		}
 	}
 	return func() {
@@ -374,7 +374,7 @@ func startIdleMessageAcceptanceRunner(t *testing.T, d *Daemon, hub *daemonws.Hub
 		select {
 		case <-done:
 		case <-time.After(2 * time.Second):
-			t.Error("Workspace Runner did not stop")
+			t.Error("WorkspaceDaemon did not stop")
 		}
 	}
 }
@@ -506,10 +506,10 @@ func TestIdleMessageRealWebSocketCrashRestartRehandsDeliveredMessage(t *testing.
 			t.Fatal(err)
 		}
 		d.attachWorkspaceDaemon(runner)
-		d.canonicalRuntimes.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{
+		d.canonicalRuntimes.slots[agentID+"\x00"+runtimeID] = &agentRuntimeSlot{
 			backend: normal,
 		}
-		if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: agentID, RuntimeID: runtimeID, LaunchID: "acceptance-launch", StartDispatchID: "acceptance-launch" + "-dispatch"}); err != nil {
+		if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: agentID, RuntimeID: runtimeID}); err != nil {
 			t.Fatalf("accept test APM launch: %v", err)
 		}
 		if _, err := d.ensureIdleMessageCoordinator(workspaceID, agentID, runtimeID); err != nil {

@@ -31,7 +31,7 @@ func TestEnsurePeriodBriefCollectors_CreatesPerLocalComputer(t *testing.T) {
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent_runtime (workspace_id, daemon_id, name, display_name, runtime_mode, provider, status, device_info, metadata, visibility, last_seen_at) VALUES ($1,  $2,  'cloud-box',  'Cloud Box',  'cloud',  $3,  'online',  '',  '{}'::jsonb,  'public',  now())
 		RETURNING id
-	`,  testWorkspaceID,  cloudDaemon,  "cloud_collect_"+uuid.NewString()).Scan(&cloudRuntimeID); err != nil {
+	`, testWorkspaceID, cloudDaemon, "cloud_collect_"+uuid.NewString()).Scan(&cloudRuntimeID); err != nil {
 		t.Fatalf("seed cloud runtime: %v", err)
 	}
 	// LRM-1570: the cloud runtime is its own Computer, owned via an active
@@ -197,7 +197,7 @@ func TestEnsurePeriodBriefCollectors_SkipsOthersPublicComputers(t *testing.T) {
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, visibility, last_seen_at) VALUES ($1,  $2,  $3,  'local',  $4,  'online',  '',  '{}'::jsonb,  'public',  now())
 		RETURNING id
-	`,  testWorkspaceID,  otherDaemon,  "Other Public Laptop",  "other_pub_"+uuid.NewString()).Scan(&otherRuntimeID); err != nil {
+	`, testWorkspaceID, otherDaemon, "Other Public Laptop", "other_pub_"+uuid.NewString()).Scan(&otherRuntimeID); err != nil {
 		t.Fatalf("seed other public runtime: %v", err)
 	}
 	t.Cleanup(func() {

@@ -9,11 +9,13 @@ import (
 )
 
 func (runner *WorkspaceDaemon) startManagedAgent(ctx context.Context, payload protocol.AgentStartPayload) (protocol.AgentStartAckPayload, protocol.AgentStatusPayload, protocol.AgentSessionPayload, error) {
-	ack, err := runner.registerManagedAgentStart(payload)
+	ack, callback, replayed, err := runner.registerManagedAgentStartOnce(payload)
 	if err != nil {
 		return protocol.AgentStartAckPayload{}, protocol.AgentStatusPayload{}, protocol.AgentSessionPayload{}, err
 	}
-	callback := agentProcessCallback{AgentID: payload.AgentID, LaunchID: payload.LaunchID}
+	if replayed {
+		return ack, protocol.AgentStatusPayload{}, protocol.AgentSessionPayload{}, nil
+	}
 	failed := false
 	defer func() {
 		if failed {
@@ -22,14 +24,14 @@ func (runner *WorkspaceDaemon) startManagedAgent(ctx context.Context, payload pr
 			runner.processes.completeManagedStart(callback)
 		}
 	}()
-	outcome, err := runner.completeManagedAgentStart(ctx, payload, ack)
+	outcome, err := runner.completeManagedAgentStart(ctx, payload, callback, ack)
 	if err != nil {
 		failed = true
-		runner.publishManagedAgentStartFailure(payload, outcome)
+		runner.publishManagedAgentStartFailure(payload, callback, outcome)
 		return ack, outcome.status, outcome.session, err
 	}
 	if err := runner.processes.publishManagedStart(callback, func() error {
-		return runner.establishManagedAgentStart(payload, outcome)
+		return runner.establishManagedAgentStart(payload, callback.AgentInstanceID, outcome)
 	}); err != nil {
 		failed = errors.Is(err, errManagedAgentStartStopped)
 		return ack, protocol.AgentStatusPayload{}, protocol.AgentSessionPayload{}, err
@@ -68,11 +70,11 @@ func registerTestInbox(t *testing.T, d *Daemon, key InboxKey, runtimeID string, 
 	if runner == nil {
 		runner, _ = attachTestWorkspaceDaemon(t, d, key.WorkspaceID, nil)
 	}
-	registerTestRunnerInbox(t, runner, key, runtimeID, coordinator)
+	registerTestWorkspaceDaemonInbox(t, runner, key, runtimeID, coordinator)
 	return runner
 }
 
-func installTestRunnerActivity(t *testing.T, d *Daemon, workspaceID string, producer *agentActivityProducer) *WorkspaceDaemon {
+func installTestAgentActivityProducer(t *testing.T, d *Daemon, workspaceID string, producer *agentActivityProducer) *WorkspaceDaemon {
 	t.Helper()
 	runner := d.currentWorkspaceDaemon(workspaceID)
 	if runner == nil {
@@ -84,11 +86,11 @@ func installTestRunnerActivity(t *testing.T, d *Daemon, workspaceID string, prod
 
 func markTestLaunchRunning(t *testing.T, runner *WorkspaceDaemon, agentID string) {
 	t.Helper()
-	launch, ok := runner.processes.Snapshot(agentID)
+	instance, ok := runner.processes.Snapshot(agentID)
 	if !ok {
 		t.Fatalf("APM launch for %q is missing", agentID)
 	}
-	callback := agentProcessCallback{AgentID: agentID, LaunchID: launch.LaunchID, ProcessInstanceID: "test-process-" + agentID}
+	callback := agentProcessCallback{AgentID: agentID, AgentInstanceID: instance.AgentInstanceID, ProcessInstanceID: "test-process-" + agentID}
 	if err := runner.processes.ProcessSpawned(callback); err != nil {
 		t.Fatalf("ProcessSpawned(%s): %v", agentID, err)
 	}
@@ -97,10 +99,32 @@ func markTestLaunchRunning(t *testing.T, runner *WorkspaceDaemon, agentID string
 	}
 }
 
-func registerTestRunnerInbox(t *testing.T, runner *WorkspaceDaemon, key InboxKey, runtimeID string, coordinator *MessageCoordinator) {
+func startTestManagedAgent(t *testing.T, runner *WorkspaceDaemon, agentID, runtimeID, _ string) agentProcessStartAcceptance {
+	t.Helper()
+	accepted, err := runner.processes.Start(agentProcessStartRequest{AgentID: agentID, RuntimeID: runtimeID})
+	if err != nil {
+		t.Fatalf("start test managed Agent: %v", err)
+	}
+	if runner.residency != nil {
+		startStopEpoch, _ := runner.processes.startStopEpoch(agentProcessCallback{AgentID: agentID, AgentInstanceID: accepted.AgentInstanceID})
+		runner.residency.rememberLaunch(agentID, runtimeID, accepted.AgentInstanceID, startStopEpoch)
+	}
+	return accepted
+}
+
+func currentTestAgentProcessCallback(t *testing.T, runner *WorkspaceDaemon, agentID string) agentProcessCallback {
+	t.Helper()
+	current, found := runner.processes.Snapshot(agentID)
+	if !found {
+		t.Fatalf("APM Agent instance for %q is missing", agentID)
+	}
+	return agentProcessCallback{AgentID: agentID, AgentInstanceID: current.AgentInstanceID, ProcessInstanceID: current.ProcessInstanceID}
+}
+
+func registerTestWorkspaceDaemonInbox(t *testing.T, runner *WorkspaceDaemon, key InboxKey, runtimeID string, coordinator *MessageCoordinator) {
 	t.Helper()
 	if runner == nil || runner.inboxes == nil {
-		t.Fatal("test Workspace Runner has no Inbox registry")
+		t.Fatal("test WorkspaceDaemon has no Inbox registry")
 	}
 	if runner.config.WorkspaceID != key.WorkspaceID {
 		t.Fatalf("Runner Workspace %q cannot register Inbox %+v", runner.config.WorkspaceID, key)
@@ -112,12 +136,13 @@ func registerTestRunnerInbox(t *testing.T, runner *WorkspaceDaemon, key InboxKey
 	runner.inboxes.inboxes[key.AgentID] = inboxRegistryEntry{runtimeID: runtimeID, coordinator: coordinator}
 	runner.inboxes.mu.Unlock()
 	if runner.processes != nil {
-		if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: key.AgentID, RuntimeID: runtimeID, LaunchID: "test-launch-" + key.AgentID, StartDispatchID: "test-launch-" + key.AgentID + "-dispatch"}); err != nil {
+		accepted, err := runner.processes.Start(agentProcessStartRequest{AgentID: key.AgentID, RuntimeID: runtimeID})
+		if err != nil {
 			t.Fatalf("register test APM launch: %v", err)
 		}
 		if runner.residency != nil {
-			startStopEpoch, _ := runner.processes.startStopEpoch(agentProcessCallback{AgentID: key.AgentID, LaunchID: "test-launch-" + key.AgentID})
-			runner.residency.rememberLaunch(key.AgentID, runtimeID, "test-launch-"+key.AgentID, "test-launch-"+key.AgentID+"-dispatch", startStopEpoch)
+			startStopEpoch, _ := runner.processes.startStopEpoch(agentProcessCallback{AgentID: key.AgentID, AgentInstanceID: accepted.AgentInstanceID})
+			runner.residency.rememberLaunch(key.AgentID, runtimeID, accepted.AgentInstanceID, startStopEpoch)
 		}
 	}
 }
@@ -126,7 +151,7 @@ func resolveTestInbox(t *testing.T, d *Daemon, key InboxKey) (*MessageCoordinato
 	t.Helper()
 	runner := d.currentWorkspaceDaemon(key.WorkspaceID)
 	if runner == nil || runner.inboxes == nil {
-		t.Fatalf("Workspace Runner %q is unavailable", key.WorkspaceID)
+		t.Fatalf("WorkspaceDaemon %q is unavailable", key.WorkspaceID)
 	}
 	coordinator, runtimeID, ok := runner.inboxes.Resolve(key.AgentID)
 	if !ok {
@@ -146,10 +171,7 @@ func prepareHeadlessWorkspaceDaemonTestDaemon(d *Daemon, workspacesRoot string) 
 		d.runnerInstanceID = "runner-test"
 	}
 	if d.canonicalRuntimes == nil {
-		d.canonicalRuntimes = newCanonicalAgentRuntimePool()
-	}
-	if d.processAdmission == nil {
-		d.processAdmission = d.canonicalRuntimes.managedProcessAdmission()
+		d.canonicalRuntimes = newAgentRuntimePool()
 	}
 	if d.client == nil {
 		d.client = NewClient("")

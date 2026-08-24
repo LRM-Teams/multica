@@ -83,7 +83,7 @@ func TestEnsureResidentMessageRuntimeUsesOnlyStableAgentConfiguration(t *testing
 		runtimeIndex:      map[string]Runtime{runtimeID: {ID: runtimeID, WorkspaceID: workspaceID, Provider: "codex"}},
 		agentVersions:     make(map[string]string),
 		turnScopeMemory:   newTurnScopeMemoryTracker(),
-		canonicalRuntimes: newCanonicalAgentRuntimePool(),
+		canonicalRuntimes: newAgentRuntimePool(),
 		canonicalResidentFactoryOverride: func(config agent.Config) (agent.Backend, func(), error) {
 			_, closer, err := probe.factory(config)
 			if err != nil {
@@ -215,8 +215,8 @@ func TestEnsureResidentMessageRuntimeSpawnFailureRetiresBusyBackend(t *testing.T
 		residentProcessStartProbe: residentProcessStartProbe{err: errors.New("codex app-server did not start")},
 		done:                      make(chan error, 1),
 	}
-	pool := newCanonicalAgentRuntimePool()
-	pool.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{backend: backend}
+	pool := newAgentRuntimePool()
+	pool.slots[agentID+"\x00"+runtimeID] = &agentRuntimeSlot{backend: backend}
 	d := &Daemon{canonicalRuntimes: pool}
 
 	if err := pool.deliverIdleMessages(context.Background(), agentID, runtimeID, []protocol.AgentMessageProjection{{
@@ -278,7 +278,7 @@ func TestEnsureResidentMessageRuntimeSpawnsProviderProcess(t *testing.T) {
 		client:            client,
 		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 		runtimeIndex:      map[string]Runtime{runtimeID: {ID: runtimeID, WorkspaceID: workspaceID, Provider: "codex"}},
-		canonicalRuntimes: newCanonicalAgentRuntimePool(),
+		canonicalRuntimes: newAgentRuntimePool(),
 		canonicalResidentFactoryOverride: func(agent.Config) (agent.Backend, func(), error) {
 			return starter, func() {}, nil
 		},
@@ -360,7 +360,7 @@ func TestEnsureResidentMessageRuntimeSpawnFailureDoesNotKeepBackend(t *testing.T
 		client:            client,
 		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 		runtimeIndex:      map[string]Runtime{runtimeID: {ID: runtimeID, WorkspaceID: workspaceID, Provider: "codex"}},
-		canonicalRuntimes: newCanonicalAgentRuntimePool(),
+		canonicalRuntimes: newAgentRuntimePool(),
 		canonicalResidentFactoryOverride: func(agent.Config) (agent.Backend, func(), error) {
 			return starter, func() {}, nil
 		},
@@ -409,7 +409,7 @@ func TestEnsureResidentMessageRuntimeNonStarterDoesNotKeepBackend(t *testing.T) 
 		client:            client,
 		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 		runtimeIndex:      map[string]Runtime{runtimeID: {ID: runtimeID, WorkspaceID: workspaceID, Provider: "codex"}},
-		canonicalRuntimes: newCanonicalAgentRuntimePool(),
+		canonicalRuntimes: newAgentRuntimePool(),
 		canonicalResidentFactoryOverride: func(agent.Config) (agent.Backend, func(), error) {
 			return &canonicalRuntimeTestBackend{}, func() {}, nil
 		},
@@ -452,8 +452,7 @@ func TestWorkspaceDaemonStartFailsClosedWhenResidentCannotStart(t *testing.T) {
 			var activities []protocol.AgentActivityPayload
 			runner.activity.AttachTransport(func(payload protocol.AgentActivityPayload) { activities = append(activities, payload) })
 			_, status, _, err := runner.startManagedAgent(context.Background(), protocol.AgentStartPayload{
-				AgentID: agentID, RuntimeID: runtimeID, LaunchID: "launch-1", StartDispatchID: "dispatch-1",
-			})
+				AgentID: agentID, RuntimeID: runtimeID})
 			if err == nil {
 				t.Fatal("managed start succeeded without a resident process")
 			}
@@ -489,8 +488,7 @@ func TestWorkspaceDaemonStartBecomesActiveAfterResidentProcess(t *testing.T) {
 	var activities []protocol.AgentActivityPayload
 	runner.activity.AttachTransport(func(payload protocol.AgentActivityPayload) { activities = append(activities, payload) })
 	_, status, _, err := runner.startManagedAgent(context.Background(), protocol.AgentStartPayload{
-		AgentID: agentID, RuntimeID: runtimeID, LaunchID: "launch-1", StartDispatchID: "dispatch-1",
-	})
+		AgentID: agentID, RuntimeID: runtimeID})
 	if err != nil {
 		t.Fatalf("managed start: %v", err)
 	}
@@ -546,8 +544,7 @@ func TestWorkspaceDaemonStartUsesExplicitProviderSession(t *testing.T) {
 			runner, _ := attachTestWorkspaceDaemon(t, d, workspaceID, nil)
 
 			_, status, session, err := runner.startManagedAgent(context.Background(), protocol.AgentStartPayload{
-				AgentID: agentID, RuntimeID: runtimeID, LaunchID: "launch-1", StartDispatchID: "dispatch-1",
-				Config: protocol.AgentStartConfig{SessionID: test.sessionID},
+				AgentID: agentID, RuntimeID: runtimeID, Config: protocol.AgentStartConfig{SessionID: test.sessionID},
 			})
 			if err != nil {
 				t.Fatalf("managed start: %v", err)
@@ -600,7 +597,7 @@ func newResidentStartTestDaemon(t *testing.T, workspaceID, runtimeID, agentID st
 		client:                           client,
 		logger:                           slog.New(slog.NewTextHandler(io.Discard, nil)),
 		runtimeIndex:                     map[string]Runtime{runtimeID: {ID: runtimeID, WorkspaceID: workspaceID, Provider: "codex"}},
-		canonicalRuntimes:                newCanonicalAgentRuntimePool(),
+		canonicalRuntimes:                newAgentRuntimePool(),
 		canonicalResidentFactoryOverride: factory,
 		agentRuntimeSessions:             newAgentRuntimeSessionStore(workspacesRoot),
 	}
@@ -645,7 +642,7 @@ func TestEnsureResidentMessageRuntimeRotatesPiSessionBetweenRuns(t *testing.T) {
 		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 		runtimeIndex:      map[string]Runtime{runtimeID: {ID: runtimeID, WorkspaceID: workspaceID, Provider: "pi"}},
 		agentVersions:     make(map[string]string),
-		canonicalRuntimes: newCanonicalAgentRuntimePool(),
+		canonicalRuntimes: newAgentRuntimePool(),
 		canonicalResidentFactoryOverride: func(config agent.Config) (agent.Backend, func(), error) {
 			backend := agent.NewPiRPCBackend(config)
 			factoryMu.Lock()
@@ -709,8 +706,8 @@ func TestEnsureResidentMessageRuntimeRotatesPiSessionBetweenRuns(t *testing.T) {
 func TestResidentMessageRuntimeReportsMixedRunTurnCaptureAndToolLifecycle(t *testing.T) {
 	const agentID, runtimeID = "agent-1", "runtime-1"
 	backend := &activityResidentMessageRuntime{done: make(chan error, 1), messages: make(chan agent.Message, 2)}
-	pool := newCanonicalAgentRuntimePool()
-	pool.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{backend: backend}
+	pool := newAgentRuntimePool()
+	pool.slots[agentID+"\x00"+runtimeID] = &agentRuntimeSlot{backend: backend}
 	reports := make(chan protocol.MixedRunActivityTransitionPayload, 8)
 	d := &Daemon{
 		cfg:               Config{WorkspacesRoot: t.TempDir()},

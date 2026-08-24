@@ -23,7 +23,7 @@ func (runner *WorkspaceDaemon) serveConnection(connection *DaemonConnection, con
 			return
 		}
 		if runner.logger != nil {
-			runner.logger.Debug("workspace Runner delivery writer failed", "workspace_id", workspaceID, "error", err)
+			runner.logger.Debug("WorkspaceDaemon delivery writer failed", "workspace_id", workspaceID, "error", err)
 		}
 		connection.Close()
 	}
@@ -34,7 +34,7 @@ func (runner *WorkspaceDaemon) serveConnection(connection *DaemonConnection, con
 	})
 	producer := runner.activity
 	if producer == nil || runner.processes == nil {
-		return errors.New("workspace Runner lifecycle owners are unavailable")
+		return errors.New("WorkspaceDaemon lifecycle owners are unavailable")
 	}
 	if runner.mixedRunActivityReplay != nil {
 		runner.mixedRunActivityReplay(writeFrame)
@@ -185,28 +185,35 @@ func (runner *WorkspaceDaemon) serveConnection(connection *DaemonConnection, con
 			}
 		case protocol.EventDaemonAgentStart:
 			var start protocol.AgentStartPayload
-			if json.Unmarshal(message.Payload, &start) != nil || start.Validate() != nil || !connection.deliveries.Pause(start.AgentID, start.LaunchID) {
+			if json.Unmarshal(message.Payload, &start) != nil || start.Validate() != nil {
 				continue
 			}
 			if err := runner.restartAgentForRuntimeChange(connection.ctx, start, func() {
-				if current, ok := runner.processes.Snapshot(start.AgentID); ok {
-					connection.deliveries.FenceStop(start.AgentID, current.LaunchID)
+				agentInstanceID := ""
+				if runner.residency != nil {
+					if resident, found := runner.residency.get(start.AgentID); found && resident.agentInstanceID != "" {
+						agentInstanceID = resident.agentInstanceID
+					}
 				}
+				connection.deliveries.FenceStop(start.AgentID, agentInstanceID)
 			}, writeFrame); err != nil {
-				connection.deliveries.RejectStart(start.AgentID, start.LaunchID)
 				if runner.logger != nil {
-					runner.logger.Warn("Workspace Runner runtime change rejected", "workspace_id", workspaceID, "agent_id", start.AgentID, "runtime_id", start.RuntimeID, "reason", "restart_failed", "error", err)
+					runner.logger.Warn("WorkspaceDaemon runtime change rejected", "workspace_id", workspaceID, "agent_id", start.AgentID, "runtime_id", start.RuntimeID, "reason", "restart_failed", "error", err)
 				}
 				failConnection(err)
 				continue
 			}
-			ack, replayed, releaseStartupPublication, _, startupPublished, err := runner.acceptManagedAgentStart(start, failConnection)
+			ack, callback, replayed, releaseStartupPublication, _, startupPublished, err := runner.acceptManagedAgentStart(start, failConnection)
 			if err != nil {
-				connection.deliveries.RejectStart(start.AgentID, start.LaunchID)
 				if runner.logger != nil {
-					runner.logger.Warn("Workspace Runner start rejected", "workspace_id", workspaceID, "agent_id", start.AgentID, "runtime_id", start.RuntimeID, "launch_id", start.LaunchID, "reason", "start_rejected", "error", err)
+					runner.logger.Warn("WorkspaceDaemon start rejected", "workspace_id", workspaceID, "agent_id", start.AgentID, "runtime_id", start.RuntimeID, "reason", "start_rejected", "error", err)
 				}
 				failConnection(err)
+				continue
+			}
+			if !connection.deliveries.Pause(start.AgentID, callback.AgentInstanceID) {
+				_ = runner.processes.Stop(callback)
+				failConnection(errors.New("managed Agent delivery pause rejected"))
 				continue
 			}
 			writeErr := writeFrame(protocol.EventAgentStartAck, ack)
@@ -222,12 +229,12 @@ func (runner *WorkspaceDaemon) serveConnection(connection *DaemonConnection, con
 			go func() {
 				published := startupPublished != nil && <-startupPublished
 				if published && replayed {
-					published = runner.replayManagedAgentStartPublication(start, failConnection)
+					published = runner.replayManagedAgentStartPublication(start, callback, failConnection)
 				}
 				if published {
-					connection.deliveries.Resume(start.AgentID, start.LaunchID)
+					connection.deliveries.Resume(start.AgentID, callback.AgentInstanceID)
 				} else {
-					connection.deliveries.RejectStart(start.AgentID, start.LaunchID)
+					connection.deliveries.RejectStart(start.AgentID, callback.AgentInstanceID)
 				}
 			}()
 		case protocol.EventDaemonAgentStop:
@@ -236,10 +243,18 @@ func (runner *WorkspaceDaemon) serveConnection(connection *DaemonConnection, con
 				continue
 			}
 			if err := runner.stopManagedAgent(connection.ctx, stop, func() {
-				connection.deliveries.FenceStop(stop.AgentID, stop.LaunchID)
+				agentInstanceID := ""
+				if current, found := runner.processes.Snapshot(stop.AgentID); found {
+					agentInstanceID = current.AgentInstanceID
+				} else if runner.residency != nil {
+					if resident, found := runner.residency.get(stop.AgentID); found {
+						agentInstanceID = resident.agentInstanceID
+					}
+				}
+				connection.deliveries.FenceStop(stop.AgentID, agentInstanceID)
 			}, writeFrame); err != nil {
 				if runner.logger != nil {
-					runner.logger.Warn("Workspace Runner stop rejected", "workspace_id", workspaceID, "agent_id", stop.AgentID, "launch_id", stop.LaunchID, "reason", "stop_rejected", "error", err)
+					runner.logger.Warn("WorkspaceDaemon stop rejected", "workspace_id", workspaceID, "agent_id", stop.AgentID, "reason", "stop_rejected", "error", err)
 				}
 				failConnection(err)
 				continue
@@ -269,7 +284,7 @@ func (runner *WorkspaceDaemon) serveConnection(connection *DaemonConnection, con
 				continue
 			}
 			if !connection.deliveries.Enqueue(delivery) && runner.logger != nil {
-				runner.logger.Warn("Workspace Runner Agent delivery was not queued", "workspace_id", workspaceID, "agent_id", delivery.AgentID, "delivery_id", delivery.DeliveryID, "seq", delivery.Seq, "reason", "connection_delivery_dispatcher_unavailable")
+				runner.logger.Warn("WorkspaceDaemon Agent delivery was not queued", "workspace_id", workspaceID, "agent_id", delivery.AgentID, "delivery_id", delivery.DeliveryID, "seq", delivery.Seq, "reason", "connection_delivery_dispatcher_unavailable")
 			}
 		case protocol.EventAgentActivityProbe:
 			var probe protocol.AgentActivityProbePayload

@@ -24,12 +24,11 @@ type HostConfig struct {
 	ReconcileInterval time.Duration
 	Logger            *slog.Logger
 	ControlToken      string
-	MaxAgentProcesses int
 	ControlCallbacks  HostControlCallbacks
 }
 
 // Host owns every machine-scoped Binding concern: desired-vs-actual child
-// processes, start-identity/PID fencing, crash policy, capacity admission, local
+// processes, start-identity/PID fencing, crash policy, local
 // control, and cross-child Machine Upgrade preparation.
 type Host struct {
 	supervisor        *BindingSupervisor
@@ -183,7 +182,7 @@ func NewHost(config HostConfig) (*Host, error) {
 	}
 	callbacks.Current = supervisor.Current
 	host.supervisor = supervisor
-	host.control = NewHostControl(config.ControlToken, NewProcessCapacity(config.MaxAgentProcesses), callbacks)
+	host.control = NewHostControl(config.ControlToken, callbacks)
 	host.upgrade = newHostMachineUpgrade(host, hostMachineUpgradeConfig{})
 	return host, nil
 }
@@ -249,7 +248,7 @@ func (host *Host) DesiredWorkspaceIDs() []string {
 }
 
 // WaitReady fences Computer readiness on every desired Binding child reaching
-// its real Workspace Runner Ready seam. A degraded child is terminal for this
+// its real WorkspaceDaemon Ready seam. A degraded child is terminal for this
 // startup attempt; crash/backoff remains retryable until ctx expires.
 func (host *Host) WaitReady(ctx context.Context, desiredWorkspaceIDs []string) error {
 	if host == nil || host.supervisor == nil {

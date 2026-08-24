@@ -2246,17 +2246,16 @@ func TestExecuteAndDrainDoesNotPublishResidentActivity(t *testing.T) {
 	})
 	d := New(Config{}, nil)
 	d.runnerInstanceID = "daemon-1"
-	runner := installTestRunnerActivity(t, d, "workspace-1", producer)
+	runner := installTestAgentActivityProducer(t, d, "workspace-1", producer)
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
-	ack, err := runner.processes.Start(agentProcessStartRequest{
-		AgentID: "agent-a", RuntimeID: "runtime-1", LaunchID: "launch-a", StartDispatchID: "launch-a-dispatch",
-	})
+	_, err := runner.processes.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := producer.SetManaged(
-		protocol.AgentStatusPayload{AgentID: "agent-a", LaunchID: ack.LaunchID, Status: protocol.AgentStatusActive},
-		protocol.AgentSessionPayload{AgentID: "agent-a", LaunchID: ack.LaunchID},
+		"instance-a",
+		protocol.AgentStatusPayload{AgentID: "agent-a", Status: protocol.AgentStatusActive},
+		protocol.AgentSessionPayload{AgentID: "agent-a"},
 	); err != nil {
 		t.Fatal(err)
 	}

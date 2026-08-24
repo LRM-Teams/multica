@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// Workspace Runner frames intentionally use their Raft names. They are a
+// WorkspaceDaemon frames intentionally use their Raft names. They are a
 // daemon-to-server protocol boundary, not an HTTP API, so their field names
 // remain camelCase like agent:deliver.
 const (
@@ -263,31 +263,24 @@ type AgentStartConfig struct {
 	SessionID string `json:"sessionId,omitempty"`
 }
 
-// AgentStartPayload is the server command accepted by a local
-// Agent Process Manager. LaunchID is the server-owned launch epoch and remains
-// stable when the same desired launch is retried after reconnect.
+// AgentStartPayload is the server command accepted by a local Agent Process Manager.
 type AgentStartPayload struct {
-	AgentID         string           `json:"agentId"`
-	RuntimeID       string           `json:"runtimeId"`
-	LaunchID        string           `json:"launchId"`
-	StartDispatchID string           `json:"startDispatchId"`
-	Config          AgentStartConfig `json:"config"`
+	AgentID   string           `json:"agentId"`
+	RuntimeID string           `json:"runtimeId"`
+	Config    AgentStartConfig `json:"config"`
 }
 
 // AgentStartAckPayload is an idempotent acceptance receipt. QueueState never
 // claims spawn, runtime readiness, or initial activation delivery.
 type AgentStartAckPayload struct {
-	AgentID         string `json:"agentId"`
-	LaunchID        string `json:"launchId"`
-	StartDispatchID string `json:"startDispatchId"`
-	QueueState      string `json:"queueState"`
-	QueueDepth      int    `json:"queueDepth"`
-	QueueAgeMS      int64  `json:"queueAgeMs"`
+	AgentID    string `json:"agentId"`
+	QueueState string `json:"queueState"`
+	QueueDepth int    `json:"queueDepth"`
+	QueueAgeMS int64  `json:"queueAgeMs"`
 }
 
 type AgentStopPayload struct {
-	AgentID  string `json:"agentId"`
-	LaunchID string `json:"launchId"`
+	AgentID string `json:"agentId"`
 }
 
 // AgentWorkspaceResetPayload mirrors Raft's
@@ -316,16 +309,14 @@ type AgentWorkspaceResetResultPayload struct {
 // AgentStatusPayload is lifecycle management state, not a user Activity
 // label. active is reported only after a live provider process exists.
 type AgentStatusPayload struct {
-	AgentID  string `json:"agentId"`
-	LaunchID string `json:"launchId"`
-	Status   string `json:"status"`
+	AgentID string `json:"agentId"`
+	Status  string `json:"status"`
 }
 
 // AgentSessionPayload reports a provider session independently from process,
 // launch, turn, and runtime-state generation identities.
 type AgentSessionPayload struct {
 	AgentID           string `json:"agentId"`
-	LaunchID          string `json:"launchId"`
 	ProviderSessionID string `json:"providerSessionId,omitempty"`
 	TurnID            string `json:"turnId,omitempty"`
 	RuntimeGeneration int64  `json:"runtimeGeneration"`
@@ -337,7 +328,6 @@ type AgentSessionPayload struct {
 // execution facts; ActivityKind is derived by the server from DetailKind.
 type AgentActivitySnapshot struct {
 	AgentID           string    `json:"-"`
-	LaunchID          string    `json:"-"`
 	DaemonInstanceID  string    `json:"-"`
 	ClientSequence    int64     `json:"-"`
 	ProducerFactID    string    `json:"-"`
@@ -393,7 +383,6 @@ type agentActivityWirePayload struct {
 	Detail           string               `json:"detail"`
 	DetailKind       string               `json:"detailKind"`
 	Entries          []AgentActivityEntry `json:"entries,omitempty"`
-	LaunchID         string               `json:"launchId,omitempty"`
 	DaemonInstanceID string               `json:"daemonInstanceId,omitempty"`
 	ProbeID          string               `json:"probeId,omitempty"`
 	ClientSeq        int64                `json:"clientSeq,omitempty"`
@@ -413,7 +402,6 @@ func (p AgentActivityPayload) MarshalJSON() ([]byte, error) {
 		Detail:           p.Detail,
 		DetailKind:       p.Snapshot.DetailKind,
 		Entries:          p.Entries,
-		LaunchID:         p.Snapshot.LaunchID,
 		DaemonInstanceID: p.Snapshot.DaemonInstanceID,
 		ProbeID:          p.Snapshot.ProbeID,
 		ClientSeq:        p.Snapshot.ClientSequence,
@@ -434,7 +422,6 @@ func (p *AgentActivityPayload) UnmarshalJSON(data []byte) error {
 	}
 	p.Snapshot = AgentActivitySnapshot{
 		AgentID:          wire.AgentID,
-		LaunchID:         wire.LaunchID,
 		DaemonInstanceID: wire.DaemonInstanceID,
 		ClientSequence:   wire.ClientSeq,
 		ProducerFactID:   wire.ProducerFactID,
@@ -451,9 +438,8 @@ func (p *AgentActivityPayload) UnmarshalJSON(data []byte) error {
 // AgentActivityProbePayload asks a Manager for an actual current observation.
 // Receiving this frame must not change local Activity by itself.
 type AgentActivityProbePayload struct {
-	AgentID  string `json:"agentId"`
-	LaunchID string `json:"launchId"`
-	ProbeID  string `json:"probeId"`
+	AgentID string `json:"agentId"`
+	ProbeID string `json:"probeId"`
 }
 
 func (p WorkspaceReadyPayload) Validate() error {
@@ -463,15 +449,15 @@ func (p WorkspaceReadyPayload) Validate() error {
 	seen := make(map[string]struct{}, len(p.ActiveCapabilities))
 	for _, capability := range p.ActiveCapabilities {
 		if err := validateRequiredIDs(capability); err != nil {
-			return fmt.Errorf("invalid Workspace Runner capability")
+			return fmt.Errorf("invalid WorkspaceDaemon capability")
 		}
 		if _, duplicate := seen[capability]; duplicate {
-			return fmt.Errorf("duplicate Workspace Runner capability %q", capability)
+			return fmt.Errorf("duplicate WorkspaceDaemon capability %q", capability)
 		}
 		seen[capability] = struct{}{}
 	}
 	if _, supported := seen[DaemonCapabilityWorkspaceDaemonAgentProcess]; !supported {
-		return fmt.Errorf("Workspace Runner Agent process capability is required")
+		return fmt.Errorf("WorkspaceDaemon Agent process capability is required")
 	}
 	running := make(map[string]struct{}, len(p.RunningAgents))
 	for _, agentID := range p.RunningAgents {
@@ -490,11 +476,11 @@ func (p WorkspacePingPayload) Validate() error { return validateRequiredIDs(p.Pi
 func (p WorkspacePongPayload) Validate() error { return validateRequiredIDs(p.PingID) }
 
 func (p AgentStartPayload) Validate() error {
-	return validateRequiredIDs(p.AgentID, p.RuntimeID, p.LaunchID, p.StartDispatchID)
+	return validateRequiredIDs(p.AgentID, p.RuntimeID)
 }
 
 func (p AgentStartAckPayload) Validate() error {
-	if err := validateRequiredIDs(p.AgentID, p.LaunchID, p.StartDispatchID); err != nil {
+	if err := validateRequiredIDs(p.AgentID); err != nil {
 		return err
 	}
 	if !isOneOf(p.QueueState, AgentStartQueueQueued, AgentStartQueueStarting, AgentStartQueueRunning, AgentStartQueueRebound) {
@@ -507,7 +493,7 @@ func (p AgentStartAckPayload) Validate() error {
 }
 
 func (p AgentStopPayload) Validate() error {
-	return validateRequiredIDs(p.AgentID, p.LaunchID)
+	return validateRequiredIDs(p.AgentID)
 }
 
 func (p AgentWorkspaceResetPayload) Validate() error {
@@ -531,7 +517,7 @@ func (p AgentWorkspaceResetResultPayload) Validate() error {
 }
 
 func (p AgentStatusPayload) Validate() error {
-	if err := validateRequiredIDs(p.AgentID, p.LaunchID); err != nil {
+	if err := validateRequiredIDs(p.AgentID); err != nil {
 		return err
 	}
 	if !isOneOf(p.Status, AgentStatusActive, AgentStatusInactive) {
@@ -541,7 +527,7 @@ func (p AgentStatusPayload) Validate() error {
 }
 
 func (p AgentSessionPayload) Validate() error {
-	if err := validateRequiredIDs(p.AgentID, p.LaunchID); err != nil {
+	if err := validateRequiredIDs(p.AgentID); err != nil {
 		return err
 	}
 	if p.RuntimeGeneration < 0 {
@@ -569,7 +555,7 @@ func (p AgentActivityPayload) Validate() error {
 }
 
 func (p AgentActivitySnapshot) Validate() error {
-	if err := validateRequiredIDs(p.AgentID, p.LaunchID, p.DaemonInstanceID, p.ProducerFactID); err != nil {
+	if err := validateRequiredIDs(p.AgentID, p.DaemonInstanceID, p.ProducerFactID); err != nil {
 		return err
 	}
 	if p.ClientSequence <= 0 {
@@ -611,7 +597,7 @@ func (e AgentActivityEntry) Validate() error {
 }
 
 func (p AgentActivityProbePayload) Validate() error {
-	return validateRequiredIDs(p.AgentID, p.LaunchID, p.ProbeID)
+	return validateRequiredIDs(p.AgentID, p.ProbeID)
 }
 
 func validateRequiredIDs(values ...string) error {

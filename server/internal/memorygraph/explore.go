@@ -21,9 +21,9 @@ type AgentBackend interface {
 
 // ExploreConfig configures the explore-agent layer (design §6 explore block).
 type ExploreConfig struct {
-	Agents            int           // TTT K parallel trajectories; 1 in non-TTT mode
-	MaxRounds         int           // exploration-round budget per trajectory (one served node = one round)
-	MaxExpandPerRound int           // inline-neighbor cap per served node
+	Agents            int // TTT K parallel trajectories; 1 in non-TTT mode
+	MaxRounds         int // exploration-round budget per trajectory (one served node = one round)
+	MaxExpandPerRound int // inline-neighbor cap per served node
 	// ViewsPerExpansion is retained only for caller compatibility; /explore
 	// has no per-expansion view quota and does not consume it.
 	ViewsPerExpansion int

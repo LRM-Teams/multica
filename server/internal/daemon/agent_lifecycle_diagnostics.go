@@ -26,7 +26,7 @@ type lifecycleDiagnosticWriter struct {
 
 type lifecycleDiagnosticRecord struct {
 	StateInstanceID string    `json:"state_instance_id"`
-	LaunchID        string    `json:"launch_id"`
+	AgentInstanceID string    `json:"agent_instance_id"`
 	Sequence        int64     `json:"sequence"`
 	Phase           string    `json:"phase"`
 	State           string    `json:"state"`
@@ -49,7 +49,7 @@ func (w *lifecycleDiagnosticWriter) Record(transition agentLifecycleTransition) 
 	if w == nil || w.rotatingJSONLWriter == nil || strings.TrimSpace(w.dir) == "" {
 		return nil
 	}
-	record := lifecycleDiagnosticRecord{StateInstanceID: transition.StateInstanceID, LaunchID: transition.LaunchID, Sequence: transition.Sequence, Phase: transition.Phase, State: transition.State, Event: transition.Event, Result: transition.Result, At: transition.At.UTC()}
+	record := lifecycleDiagnosticRecord{StateInstanceID: transition.StateInstanceID, AgentInstanceID: transition.AgentInstanceID, Sequence: transition.Sequence, Phase: transition.Phase, State: transition.State, Event: transition.Event, Result: transition.Result, At: transition.At.UTC()}
 	encoded, err := json.Marshal(record)
 	if err != nil {
 		return fmt.Errorf("marshal lifecycle diagnostic: %w", err)

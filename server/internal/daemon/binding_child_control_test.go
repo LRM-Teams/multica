@@ -89,127 +89,10 @@ func (sink *capturingRunnerDiagnosticSink) record(workspaceID string, event diag
 	return nil
 }
 
-func TestBindingChildrenShareHostProcessCapacity(t *testing.T) {
-	const controlToken = "host-control-token"
-	host := newBindingControlTestHost(t, controlToken, 1, computer.HostControlCallbacks{})
-	installLiveBindingChild(t, host, "workspace-a", 101)
-	installLiveBindingChild(t, host, "workspace-b", 202)
-
-	serverURL := localHostControlRPC(t, host.host)
-
-	firstClient := newBindingHostControlClient(serverURL, controlToken, liveBindingIdentity(t, host, "workspace-a", 101))
-	secondClient := newBindingHostControlClient(serverURL, controlToken, liveBindingIdentity(t, host, "workspace-b", 202))
-	first := newRemoteAgentProcessAdmission(firstClient)
-	second := newRemoteAgentProcessAdmission(secondClient)
-	t.Cleanup(first.Close)
-	t.Cleanup(second.Close)
-
-	firstGrant, admitted := first.Acquire(agentProcessCapacityRequest{
-		WorkspaceID: "workspace-a", AgentID: "agent-a", RuntimeID: "runtime-a", LaunchID: "launch-a",
-	})
-	if !admitted {
-		t.Fatal("first Binding child did not receive Host capacity")
-	}
-	secondGranted := make(chan agentProcessCapacityGrant, 1)
-	secondGrant, admitted := second.Acquire(agentProcessCapacityRequest{
-		WorkspaceID: "workspace-b", AgentID: "agent-b", RuntimeID: "runtime-b", LaunchID: "launch-b",
-		Waiter: func(grant agentProcessCapacityGrant) { secondGranted <- grant },
-	})
-	if admitted {
-		t.Fatal("second Binding child bypassed the machine-wide capacity cap")
-	}
-
-	first.Release(firstGrant)
-	select {
-	case grant := <-secondGranted:
-		if grant != secondGrant || !second.Active(grant) {
-			t.Fatalf("promoted Host grant = %+v active=%v, want %+v active", grant, second.Active(grant), secondGrant)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("Host capacity release did not promote the queued sibling Binding")
-	}
-	second.Release(secondGrant)
-}
-
-func TestProviderRuntimeCreationUsesHostProcessCapacity(t *testing.T) {
-	const controlToken = "host-control-token"
-	host := newBindingControlTestHost(t, controlToken, 1, computer.HostControlCallbacks{})
-	installLiveBindingChild(t, host, "workspace-a", 101)
-	installLiveBindingChild(t, host, "workspace-b", 202)
-	serverURL := localHostControlRPC(t, host.host)
-
-	firstAdmission := newRemoteAgentProcessAdmission(newBindingHostControlClient(serverURL, controlToken, liveBindingIdentity(t, host, "workspace-a", 101)))
-	secondAdmission := newRemoteAgentProcessAdmission(newBindingHostControlClient(serverURL, controlToken, liveBindingIdentity(t, host, "workspace-b", 202)))
-	t.Cleanup(firstAdmission.Close)
-	t.Cleanup(secondAdmission.Close)
-	firstPool := newCanonicalAgentRuntimePool()
-	firstPool.setMachineProcessAdmission("workspace-a", firstAdmission)
-	secondPool := newCanonicalAgentRuntimePool()
-	secondPool.setMachineProcessAdmission("workspace-b", secondAdmission)
-
-	firstGrant, err := firstPool.reserveMachineProcessCapacity(context.Background(), "agent-a", "runtime-a")
-	if err != nil {
-		t.Fatalf("reserve first provider capacity: %v", err)
-	}
-	secondResult := make(chan agentProcessCapacityGrant, 1)
-	secondErr := make(chan error, 1)
-	go func() {
-		grant, err := secondPool.reserveMachineProcessCapacity(context.Background(), "agent-b", "runtime-b")
-		if err != nil {
-			secondErr <- err
-			return
-		}
-		secondResult <- grant
-	}()
-	select {
-	case grant := <-secondResult:
-		t.Fatalf("sibling provider bypassed Host capacity with grant %+v", grant)
-	case err := <-secondErr:
-		t.Fatalf("sibling provider capacity failed instead of queueing: %v", err)
-	case <-time.After(100 * time.Millisecond):
-	}
-	firstAdmission.Release(firstGrant)
-	select {
-	case grant := <-secondResult:
-		secondAdmission.Release(grant)
-	case err := <-secondErr:
-		t.Fatalf("queued sibling provider capacity: %v", err)
-	case <-time.After(2 * time.Second):
-		t.Fatal("Host did not promote queued sibling provider")
-	}
-}
-
-func TestBindingChildCrashReleasesItsHostCapacity(t *testing.T) {
-	const controlToken = "host-control-token"
-	host := newBindingControlTestHost(t, controlToken, 1, computer.HostControlCallbacks{})
-	installLiveBindingChild(t, host, "workspace-a", 101)
-	installLiveBindingChild(t, host, "workspace-b", 202)
-	serverURL := localHostControlRPC(t, host.host)
-
-	first := newRemoteAgentProcessAdmission(newBindingHostControlClient(serverURL, controlToken, liveBindingIdentity(t, host, "workspace-a", 101)))
-	second := newRemoteAgentProcessAdmission(newBindingHostControlClient(serverURL, controlToken, liveBindingIdentity(t, host, "workspace-b", 202)))
-	t.Cleanup(first.Close)
-	t.Cleanup(second.Close)
-	if _, admitted := first.Acquire(agentProcessCapacityRequest{WorkspaceID: "workspace-a", AgentID: "agent-a", RuntimeID: "runtime-a", LaunchID: "launch-a"}); !admitted {
-		t.Fatal("first Binding child did not receive capacity")
-	}
-	granted := make(chan agentProcessCapacityGrant, 1)
-	if _, admitted := second.Acquire(agentProcessCapacityRequest{WorkspaceID: "workspace-b", AgentID: "agent-b", RuntimeID: "runtime-b", LaunchID: "launch-b", Waiter: func(grant agentProcessCapacityGrant) { granted <- grant }}); admitted {
-		t.Fatal("sibling Binding bypassed Host capacity")
-	}
-
-	host.host.Release(liveBindingIdentity(t, host, "workspace-a", 101))
-	select {
-	case <-granted:
-	case <-time.After(2 * time.Second):
-		t.Fatal("crashed Binding child leaked Host capacity")
-	}
-}
-
 func TestBindingChildDiagnosticsAreAggregatedByHost(t *testing.T) {
 	const controlToken = "host-control-token"
 	sink := &capturingRunnerDiagnosticSink{recorded: make(chan struct{}, 1)}
-	host := newBindingControlTestHost(t, controlToken, 0, computer.HostControlCallbacks{
+	host := newBindingControlTestHost(t, controlToken, computer.HostControlCallbacks{
 		Diagnostic: func(_ context.Context, _ computer.BindingChildIdentity, workspaceID string, event diagnosticlog.Event) error {
 			return sink.record(workspaceID, event)
 		},
@@ -244,7 +127,7 @@ func TestStandaloneDaemonIgnoresConnectSocketUpgrade(t *testing.T) {
 
 func TestBindingChildHarvestsWorkDigestFromHostNotUpgradePayload(t *testing.T) {
 	const controlToken = "host-control-token"
-	host := newBindingControlTestHost(t, controlToken, 0, computer.HostControlCallbacks{})
+	host := newBindingControlTestHost(t, controlToken, computer.HostControlCallbacks{})
 	installLiveBindingChild(t, host, "workspace-a", 101)
 	serverURL := localHostControlRPC(t, host.host)
 
@@ -264,7 +147,7 @@ func TestBindingChildHarvestsWorkDigestFromHostNotUpgradePayload(t *testing.T) {
 
 func TestBindingChildForwardsConnectSocketUpgradeToService(t *testing.T) {
 	executed := make(chan protocol.ComputerUpgradePayload, 1)
-	host := newBindingControlTestHost(t, "host-control-token", 0, computer.HostControlCallbacks{
+	host := newBindingControlTestHost(t, "host-control-token", computer.HostControlCallbacks{
 		ComputerUpgrade: func(_ context.Context, _ computer.BindingChildIdentity, raw json.RawMessage) error {
 			var command protocol.ComputerUpgradePayload
 			if err := json.Unmarshal(raw, &command); err != nil {
@@ -298,7 +181,7 @@ func TestBindingChildForwardsConnectSocketUpgradeToService(t *testing.T) {
 func TestBindingChildForwardsRestartToHost(t *testing.T) {
 	const controlToken = "host-control-token"
 	forwarded := make(chan HeartbeatResponse, 1)
-	host := newBindingControlTestHost(t, controlToken, 0, computer.HostControlCallbacks{
+	host := newBindingControlTestHost(t, controlToken, computer.HostControlCallbacks{
 		MachineActions: func(_ context.Context, identity computer.BindingChildIdentity, raw json.RawMessage) error {
 			if identity.WorkspaceID != "workspace-a" {
 				t.Errorf("Host machine action workspace = %q", identity.WorkspaceID)
@@ -340,7 +223,7 @@ func TestBindingChildForwardsRestartToHost(t *testing.T) {
 func TestBindingChildReportsItsRuntimeSetToHost(t *testing.T) {
 	const controlToken = "host-control-token"
 	reported := make(chan struct{}, 1)
-	host := newBindingControlTestHost(t, controlToken, 0, computer.HostControlCallbacks{
+	host := newBindingControlTestHost(t, controlToken, computer.HostControlCallbacks{
 		RuntimeSet: func(_ context.Context, identity computer.BindingChildIdentity, raw json.RawMessage, token string, _ time.Time) error {
 			if identity.WorkspaceID != "workspace-a" || token != "child-daemon-token" {
 				t.Errorf("Runtime report identity=%+v token=%q", identity, token)
@@ -453,11 +336,11 @@ func localHostControlRPCListener(t *testing.T, host *computer.Host) (string, net
 	return endpoint, listener
 }
 
-func newBindingControlTestHost(t *testing.T, controlToken string, maxProcesses int, callbacks computer.HostControlCallbacks) *bindingControlTestHost {
+func newBindingControlTestHost(t *testing.T, controlToken string, callbacks computer.HostControlCallbacks) *bindingControlTestHost {
 	t.Helper()
 	state := &bindingControlTestCurrentSet{pids: make(map[string]int), daemonInstanceIDs: make(map[string]string)}
 	host, err := computer.NewHost(computer.HostConfig{
-		ControlToken: controlToken, MaxAgentProcesses: maxProcesses, ControlCallbacks: callbacks,
+		ControlToken: controlToken, ControlCallbacks: callbacks,
 		Spawn: func(workspaceID string) (computer.BindingChild, error) {
 			state.mu.Lock()
 			pid := state.pids[workspaceID]

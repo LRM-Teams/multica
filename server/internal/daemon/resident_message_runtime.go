@@ -159,7 +159,7 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 	if runtime.Provider == agent.ProviderPi {
 		addPiMemoryFastModeEnv(agentEnv)
 	}
-	residentLaunchID := "resident-" + uuid.NewString()
+	residentAgentInstanceID := "resident-" + uuid.NewString()
 	// Resume only the id last applied by agent:start for this DaemonCore.
 	// Do not invent a disk-backed pointer; a new process starts empty until
 	// the next start payload, same as Raft idleRestartSnapshots.
@@ -202,7 +202,7 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 		return fmt.Errorf("resident Message runtime identity: %w", err)
 	}
 
-	lease, err := d.canonicalRuntimes.acquire(canonicalAgentRuntimeAcquireRequest{
+	lease, err := d.canonicalRuntimes.acquire(agentRuntimeAcquireRequest{
 		Identity:           identity,
 		CanonicalSessionID: resumeSessionID,
 		BackendConfig: agent.Config{
@@ -229,7 +229,7 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 			transport, err := d.prepareAgentProxyCLITransport(
 				InboxKey{WorkspaceID: config.WorkspaceID, AgentID: config.Agent.ID},
 				config.RuntimeID,
-				residentLaunchID,
+				residentAgentInstanceID,
 				selfBin,
 			)
 			if err != nil {

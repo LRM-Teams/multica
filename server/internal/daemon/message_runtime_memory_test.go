@@ -197,7 +197,7 @@ func TestResidentMessageSuccessReportsAndSyncsMemoryWrites(t *testing.T) {
 	d.client.SetRuntimeDaemonToken("runtime-1", "runtime-token", time.Now().Add(time.Hour))
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
 	backend := &sequencedResidentMessageRuntime{accepted: make(chan chan error, 1)}
-	d.canonicalRuntimes.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{backend: backend}
+	d.canonicalRuntimes.slots["agent-1\x00runtime-1"] = &agentRuntimeSlot{backend: backend}
 
 	if err := d.deliverIdleMessageBatch(context.Background(), "agent-1", "runtime-1", []protocol.AgentMessageProjection{{
 		ID: "message-1", Target: "dm:member-1", Seq: 1, Content: "remember this",

@@ -15,11 +15,11 @@ func TestCanDeleteRuntimeRequiresExactOwner(t *testing.T) {
 	ownerID := uuid.NewString()
 	otherID := uuid.NewString()
 	tests := []struct {
-		name       string
-		member     db.Member
-		rtOwnerID  pgtype.UUID
-		runtime    db.AgentRuntime
-		want       bool
+		name      string
+		member    db.Member
+		rtOwnerID pgtype.UUID
+		runtime   db.AgentRuntime
+		want      bool
 	}{
 		{
 			name:      "runtime owner",

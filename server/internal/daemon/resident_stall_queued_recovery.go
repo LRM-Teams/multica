@@ -30,7 +30,7 @@ import (
 // reasons for a live resident to be silent on its control channel for a long
 // time: a long-running tool call, or an in-progress context compaction. A
 // silence-only heuristic would kill those runtimes mid-work.
-func (p *canonicalAgentRuntimePool) recoverStalledSlotForQueuedMessage(agentID, runtimeID string) (bool, error) {
+func (p *agentRuntimePool) recoverStalledSlotForQueuedMessage(agentID, runtimeID string) (bool, error) {
 	if p == nil {
 		return false, nil
 	}
@@ -107,7 +107,7 @@ func (p *canonicalAgentRuntimePool) recoverStalledSlotForQueuedMessage(agentID, 
 // lastRuntimeActivityAt directly, so this stays the only staleness math for
 // both recovery policies. "Unknown" silence (no activity stamp yet) never
 // recovers — we only ever kill a runtime whose silence we can measure.
-func (slot *canonicalAgentRuntimeSlot) stalledRecoveryDueLocked(window time.Duration) (time.Duration, bool) {
+func (slot *agentRuntimeSlot) stalledRecoveryDueLocked(window time.Duration) (time.Duration, bool) {
 	staleFor, known := slot.silentForLocked(time.Now())
 	if !known || staleFor < window {
 		return staleFor, false

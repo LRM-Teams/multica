@@ -18,7 +18,7 @@ import (
 
 // WorkspaceDaemonConfig fixes the identities that must survive socket
 // reconnects. Runtime membership is deliberately absent because it is mutable
-// input, not Runner identity.
+// input, not WorkspaceDaemon identity.
 type WorkspaceDaemonConfig struct {
 	DaemonID         string
 	DaemonInstanceID string
@@ -37,7 +37,7 @@ func (config WorkspaceDaemonConfig) validate() (WorkspaceDaemonConfig, error) {
 	config.DaemonInstanceID = strings.TrimSpace(config.DaemonInstanceID)
 	config.WorkspaceID = strings.TrimSpace(config.WorkspaceID)
 	if config.DaemonID == "" || config.DaemonInstanceID == "" || config.WorkspaceID == "" {
-		return WorkspaceDaemonConfig{}, errors.New("Workspace Runner Daemon, daemon instance, and Workspace identities are required")
+		return WorkspaceDaemonConfig{}, errors.New("WorkspaceDaemon Daemon, daemon instance, and Workspace identities are required")
 	}
 	return config, nil
 }
@@ -49,8 +49,7 @@ type workspaceDaemonDependencies struct {
 	serverBaseURL             string
 	workspacesRoot            string
 	logger                    *slog.Logger
-	runtimes                  *canonicalAgentRuntimePool
-	processAdmission          agentProcessAdmission
+	runtimes                  *agentRuntimePool
 	diagnostics               runnerDiagnosticSink
 	openInbox                 inboxCoordinatorFactory
 	runtimeIDs                func() []string
@@ -93,7 +92,7 @@ type WorkspaceDaemon struct {
 	activity  *agentActivityProducer
 	inboxes   *InboxRegistry
 
-	runtimes    *canonicalAgentRuntimePool
+	runtimes    *agentRuntimePool
 	diagnostics runnerDiagnosticSink
 
 	runtimeIDs                func() []string
@@ -136,8 +135,8 @@ func newWorkspaceDaemon(config WorkspaceDaemonConfig, dependencies workspaceDaem
 	if err != nil {
 		return nil, err
 	}
-	if dependencies.client == nil || dependencies.runtimes == nil || dependencies.processAdmission == nil || dependencies.openInbox == nil || dependencies.runtimeIDs == nil || dependencies.ensureResidentRuntime == nil {
-		return nil, errors.New("Workspace Runner client, Runtime pool, process admission, Inbox factory, Runtime scope, and resident Runtime are required")
+	if dependencies.client == nil || dependencies.runtimes == nil || dependencies.openInbox == nil || dependencies.runtimeIDs == nil || dependencies.ensureResidentRuntime == nil {
+		return nil, errors.New("WorkspaceDaemon client, Runtime pool, Inbox factory, Runtime scope, and resident Runtime are required")
 	}
 	now := dependencies.now
 	if now == nil {
@@ -160,17 +159,12 @@ func newWorkspaceDaemon(config WorkspaceDaemonConfig, dependencies workspaceDaem
 	}
 	life, lifeStop := context.WithCancel(context.Background())
 	return &WorkspaceDaemon{
-		config:         config,
-		client:         dependencies.client,
-		logger:         dependencies.logger,
-		serverBaseURL:  dependencies.serverBaseURL,
-		workspacesRoot: dependencies.workspacesRoot,
-		processes: newAgentProcessManager(
-			config.WorkspaceID,
-			dependencies.processAdmission,
-			now,
-			dependencies.onTransition,
-		),
+		config:                    config,
+		client:                    dependencies.client,
+		logger:                    dependencies.logger,
+		serverBaseURL:             dependencies.serverBaseURL,
+		workspacesRoot:            dependencies.workspacesRoot,
+		processes:                 newAgentProcessManager(now, dependencies.onTransition),
 		activity:                  newAgentActivityProducer(config.DaemonInstanceID, now, nil),
 		inboxes:                   inboxes,
 		runtimes:                  dependencies.runtimes,
@@ -243,7 +237,7 @@ func (runner *WorkspaceDaemon) sendOnConnection(connection *DaemonConnection, ev
 	runner.connectionMu.Lock()
 	defer runner.connectionMu.Unlock()
 	if runner.connection != connection {
-		return errors.New("Workspace Runner connection is stale")
+		return errors.New("WorkspaceDaemon connection is stale")
 	}
 	return connection.Write(eventType, payload)
 }
@@ -252,7 +246,7 @@ func (runner *WorkspaceDaemon) sendOnCurrentConnection(eventType string, payload
 	runner.connectionMu.Lock()
 	defer runner.connectionMu.Unlock()
 	if runner.connection == nil || !runner.connection.Connected() {
-		return errors.New("Workspace Runner connection is unavailable")
+		return errors.New("WorkspaceDaemon connection is unavailable")
 	}
 	return runner.connection.Write(eventType, payload)
 }
@@ -357,7 +351,7 @@ func (runner *WorkspaceDaemon) activeCapabilities() []string {
 
 func (d *Daemon) newWorkspaceDaemon(workspaceID string) (*WorkspaceDaemon, error) {
 	if d == nil {
-		return nil, errors.New("Workspace Runner Daemon is required")
+		return nil, errors.New("WorkspaceDaemon Daemon is required")
 	}
 	onTransition := func(transition agentLifecycleTransition) {
 		d.recordAgentLifecycleTransition(transition)
@@ -371,14 +365,13 @@ func (d *Daemon) newWorkspaceDaemon(workspaceID string) (*WorkspaceDaemon, error
 		CLIVersion:       d.cfg.CLIVersion,
 		MachineID:        d.cfg.MachineID,
 	}, workspaceDaemonDependencies{
-		client:           d.client,
-		serverBaseURL:    d.cfg.ServerBaseURL,
-		workspacesRoot:   d.cfg.WorkspacesRoot,
-		logger:           d.logger,
-		runtimes:         d.canonicalRuntimes,
-		processAdmission: d.processAdmission,
-		diagnostics:      d.runnerDiagnostics,
-		openInbox:        d.openMessageCoordinator,
+		client:         d.client,
+		serverBaseURL:  d.cfg.ServerBaseURL,
+		workspacesRoot: d.cfg.WorkspacesRoot,
+		logger:         d.logger,
+		runtimes:       d.canonicalRuntimes,
+		diagnostics:    d.runnerDiagnostics,
+		openInbox:      d.openMessageCoordinator,
 		runtimeIDs: func() []string {
 			d.mu.Lock()
 			defer d.mu.Unlock()

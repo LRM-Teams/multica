@@ -26,7 +26,7 @@ func TestAgentActivityProductionUsesOnlyTypedMessageObservationSeams(t *testing.
 	}
 
 	allowed := map[string]bool{
-		"workspace_runner_activity.go": true,
+		"workspace_daemon_activity.go": true,
 	}
 	err = filepath.WalkDir(".", func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -75,7 +75,7 @@ func TestRaftStartingActivityHasOneBroadcastCallSite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(callSites) != 1 || callSites[0] != "workspace_runner_agent_process.go" {
+	if len(callSites) != 1 || callSites[0] != "workspace_daemon_agent_process.go" {
 		t.Fatalf("broadcastActivity production call sites = %v, want only Raft startAgentNow", callSites)
 	}
 }

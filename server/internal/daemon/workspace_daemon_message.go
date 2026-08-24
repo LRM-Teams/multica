@@ -10,7 +10,7 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-// messageCoordinator resolves an Inbox only inside this Runner's immutable
+// messageCoordinator resolves an Inbox only inside this WorkspaceDaemon's immutable
 // Workspace scope. Callers never inspect the Runner's Inbox registry directly.
 func (runner *WorkspaceDaemon) messageCoordinator(agentID string) (*MessageCoordinator, string, bool) {
 	if runner == nil || runner.inboxes == nil {
@@ -34,14 +34,14 @@ func (runner *WorkspaceDaemon) agentInboxPendingSnapshot(agentID string) []proto
 
 func (runner *WorkspaceDaemon) ensureMessageInbox(agentID, expectedRuntimeID string) (bool, error) {
 	if runner == nil || runner.inboxes == nil || runner.processes == nil {
-		return false, errors.New("Workspace Runner Inbox registry is unavailable")
+		return false, errors.New("WorkspaceDaemon Inbox registry is unavailable")
 	}
 	launch, ok := runner.processes.Snapshot(agentID)
 	if !ok || !launch.Managed || launch.RuntimeID == "" {
 		return false, fmt.Errorf("no accepted agent:start for Agent %q", agentID)
 	}
 	if expectedRuntimeID != "" && launch.RuntimeID != expectedRuntimeID {
-		return false, fmt.Errorf("Workspace Runner Inbox Runtime mismatch for Agent %q", agentID)
+		return false, fmt.Errorf("WorkspaceDaemon Inbox Runtime mismatch for Agent %q", agentID)
 	}
 	created, err := runner.inboxes.AcceptStart(agentID, launch.RuntimeID)
 	if err != nil {
@@ -50,7 +50,7 @@ func (runner *WorkspaceDaemon) ensureMessageInbox(agentID, expectedRuntimeID str
 	_, runtimeID, ok := runner.messageCoordinator(agentID)
 	if !ok || (expectedRuntimeID != "" && runtimeID != expectedRuntimeID) {
 		runner.inboxes.Remove(agentID, runtimeID)
-		return false, fmt.Errorf("Workspace Runner Inbox Runtime mismatch for Agent %q", agentID)
+		return false, fmt.Errorf("WorkspaceDaemon Inbox Runtime mismatch for Agent %q", agentID)
 	}
 	return created, nil
 }
@@ -70,7 +70,7 @@ func (runner *WorkspaceDaemon) hasAcceptedStart(agentID, runtimeID string) bool 
 
 func (runner *WorkspaceDaemon) ensureMessageInboxForDelivery(agentID string) error {
 	if runner == nil || runner.inboxes == nil || runner.processes == nil {
-		return errors.New("Workspace Runner Message lifecycle is unavailable")
+		return errors.New("WorkspaceDaemon Message lifecycle is unavailable")
 	}
 	if runner.hasMessageInbox(agentID) {
 		return nil
@@ -196,7 +196,7 @@ func (runner *WorkspaceDaemon) acceptMessageDelivery(ctx context.Context, delive
 			runner.config.WorkspaceID, runtimeID, delivery, "runtime_delivery_attempted", "deferred", canonicalMessageFailureReason(err),
 		))
 		if runner.logger != nil {
-			runner.logger.Warn("Workspace Runner resident Message Runtime unavailable before delivery acknowledgement", "error", err, "workspace_id", runner.config.WorkspaceID, "agent_id", delivery.AgentID, "runtime_id", runtimeID, "delivery_id", delivery.DeliveryID, "acceptance", result.outcome)
+			runner.logger.Warn("WorkspaceDaemon resident Message Runtime unavailable before delivery acknowledgement", "error", err, "workspace_id", runner.config.WorkspaceID, "agent_id", delivery.AgentID, "runtime_id", runtimeID, "delivery_id", delivery.DeliveryID, "acceptance", result.outcome)
 		}
 		return result, nil
 	}
@@ -213,9 +213,9 @@ func (runner *WorkspaceDaemon) acceptMessageDelivery(ctx context.Context, delive
 		))
 		if runner.logger != nil {
 			if deferred {
-				runner.logger.Debug("Workspace Runner Agent Message delivery deferred before acknowledgement", "reason", "runtime_busy", "outcome", outcome, "workspace_id", runner.config.WorkspaceID, "agent_id", delivery.AgentID, "runtime_id", runtimeID, "delivery_id", delivery.DeliveryID, "acceptance", result.outcome)
+				runner.logger.Debug("WorkspaceDaemon Agent Message delivery deferred before acknowledgement", "reason", "runtime_busy", "outcome", outcome, "workspace_id", runner.config.WorkspaceID, "agent_id", delivery.AgentID, "runtime_id", runtimeID, "delivery_id", delivery.DeliveryID, "acceptance", result.outcome)
 			} else {
-				runner.logger.Warn("Workspace Runner Agent Message delivery incomplete before acknowledgement", "error", err, "outcome", outcome, "workspace_id", runner.config.WorkspaceID, "agent_id", delivery.AgentID, "runtime_id", runtimeID, "delivery_id", delivery.DeliveryID, "acceptance", result.outcome)
+				runner.logger.Warn("WorkspaceDaemon Agent Message delivery incomplete before acknowledgement", "error", err, "outcome", outcome, "workspace_id", runner.config.WorkspaceID, "agent_id", delivery.AgentID, "runtime_id", runtimeID, "delivery_id", delivery.DeliveryID, "acceptance", result.outcome)
 			}
 		}
 		if deferred {
@@ -247,12 +247,12 @@ func (runner *WorkspaceDaemon) recoverStalledRuntimeForQueuedMessage(coordinator
 	recovered, err := runner.runtimes.recoverStalledSlotForQueuedMessage(agentID, runtimeID)
 	if err != nil {
 		if runner.logger != nil {
-			runner.logger.Warn("Workspace Runner failed to recover stalled resident runtime for queued Messages", "error", err, "workspace_id", runner.config.WorkspaceID, "agent_id", agentID, "runtime_id", runtimeID)
+			runner.logger.Warn("WorkspaceDaemon failed to recover stalled resident runtime for queued Messages", "error", err, "workspace_id", runner.config.WorkspaceID, "agent_id", agentID, "runtime_id", runtimeID)
 		}
 		return
 	}
 	if recovered && runner.logger != nil {
-		runner.logger.Warn("Workspace Runner terminated stalled resident runtime for queued Messages", "workspace_id", runner.config.WorkspaceID, "agent_id", agentID, "runtime_id", runtimeID, "pending_count", pending)
+		runner.logger.Warn("WorkspaceDaemon terminated stalled resident runtime for queued Messages", "workspace_id", runner.config.WorkspaceID, "agent_id", agentID, "runtime_id", runtimeID, "pending_count", pending)
 	}
 }
 
@@ -344,43 +344,46 @@ func (runner *WorkspaceDaemon) bufferAcceptedDelivery(ctx context.Context, deliv
 }
 
 func (runner *WorkspaceDaemon) restartFromIdleSnapshot(agentID string, res agentResidency) error {
-	if runner.processes == nil || res.runtimeID == "" || res.launchID == "" || res.startDispatchID == "" {
+	if runner.processes == nil || res.runtimeID == "" || res.agentInstanceID == "" {
 		return fmt.Errorf("idle snapshot for Agent %q is incomplete", agentID)
 	}
-	return runner.processes.RestoreIdle(agentID, res.runtimeID, res.launchID, res.startDispatchID, res.startStopEpoch)
+	return runner.processes.RestoreIdle(agentID, res.runtimeID, res.startStopEpoch)
 }
 
 func (runner *WorkspaceDaemon) completeIdleSnapshotStart(ctx context.Context, agentID string, res agentResidency) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	current, found := runner.processes.Snapshot(agentID)
+	if !found {
+		return
+	}
+	callback := agentProcessCallback{AgentID: agentID, AgentInstanceID: current.AgentInstanceID}
 	if ctx.Err() != nil {
-		runner.processes.completeFailedManagedStart(agentProcessCallback{AgentID: agentID, LaunchID: res.launchID})
+		runner.processes.completeFailedManagedStart(callback)
 		return
 	}
 	start := protocol.AgentStartPayload{
-		AgentID: agentID, RuntimeID: res.runtimeID, LaunchID: res.launchID, StartDispatchID: res.startDispatchID,
-	}
+		AgentID: agentID, RuntimeID: res.runtimeID}
 	ack := protocol.AgentStartAckPayload{
-		AgentID: agentID, LaunchID: res.launchID, StartDispatchID: res.startDispatchID,
-		QueueState: protocol.AgentStartQueueStarting,
+		AgentID: agentID, QueueState: protocol.AgentStartQueueStarting,
 	}
-	runner.startAgentNow(ctx, start, ack, nil, nil, nil, nil)
+	runner.startAgentNow(ctx, start, callback, ack, nil, nil, nil, nil)
 }
 
 func (runner *WorkspaceDaemon) reportProcessUnavailable(agentID string) {
 	if runner == nil || agentID == "" {
 		return
 	}
-	launchID := ""
+	agentInstanceID := ""
 	if res, ok := runner.residency.get(agentID); ok {
-		launchID = res.launchID
+		agentInstanceID = res.agentInstanceID
 	}
-	if launchID == "" {
+	if agentInstanceID == "" {
 		return
 	}
 	runner.sendAgentFrame(protocol.EventAgentStatus, protocol.AgentStatusPayload{
-		AgentID: agentID, LaunchID: launchID, Status: protocol.AgentStatusInactive,
+		AgentID: agentID, Status: protocol.AgentStatusInactive,
 	})
 	now := time.Now().UTC()
 	entry, err := activityStatusEntry("runtime_unavailable", "Process unavailable; restart required")
@@ -390,7 +393,6 @@ func (runner *WorkspaceDaemon) reportProcessUnavailable(agentID string) {
 	runner.sendAgentFrame(protocol.EventAgentActivity, protocol.AgentActivityPayload{
 		Snapshot: protocol.AgentActivitySnapshot{
 			AgentID:          agentID,
-			LaunchID:         launchID,
 			DaemonInstanceID: runner.config.DaemonInstanceID,
 			ClientSequence:   1,
 			ProducerFactID:   fmt.Sprintf("runtime-unavailable-%s-%d", agentID, now.UnixNano()),
@@ -412,7 +414,7 @@ func (runner *WorkspaceDaemon) republishTerminalFailure(agentID string, res agen
 		kind = AgentObservationOffline
 	}
 	runner.observeActivity(AgentObservation{
-		AgentID: agentID, LaunchID: res.launchID, Kind: kind,
+		AgentID: agentID, Kind: kind,
 		Data: AgentErrorObservationData{RuntimeID: res.runtimeID, ReasonCode: res.terminalReason, Message: res.terminalDetail},
 		At:   time.Now().UTC(),
 	}, "Runtime failure")
@@ -468,7 +470,7 @@ func (runner *WorkspaceDaemon) handleMessageDelivery(
 			runner.config.WorkspaceID, runtimeID, delivery, "coordinator_accepted", "rejected", canonicalMessageFailureReason(err),
 		))
 		if runner.logger != nil {
-			runner.logger.Warn("Workspace Runner Agent delivery not acknowledged", "error", err, "workspace_id", runner.config.WorkspaceID, "agent_id", delivery.AgentID, "delivery_id", delivery.DeliveryID)
+			runner.logger.Warn("WorkspaceDaemon Agent delivery not acknowledged", "error", err, "workspace_id", runner.config.WorkspaceID, "agent_id", delivery.AgentID, "delivery_id", delivery.DeliveryID)
 		}
 		return nil
 	}
@@ -487,7 +489,7 @@ func (runner *WorkspaceDaemon) handleMessageDelivery(
 	// the UI pending forever with no ledger recovery.
 	if !runner.shouldPersistDeliveryAck(delivery, acceptance) {
 		if runner.logger != nil {
-			runner.logger.Info("Workspace Runner deferred standalone chat delivery acknowledgement",
+			runner.logger.Info("WorkspaceDaemon deferred standalone chat delivery acknowledgement",
 				"workspace_id", runner.config.WorkspaceID,
 				"agent_id", delivery.AgentID,
 				"runtime_id", runtimeID,
@@ -508,7 +510,7 @@ func (runner *WorkspaceDaemon) handleMessageDelivery(
 			runner.config.WorkspaceID, runtimeID, delivery, "ack_sent", "failed", "runner_connection_write_failed",
 		))
 		if runner.logger != nil {
-			runner.logger.Warn("Workspace Runner Agent delivery acknowledgement failed", "error", err, "workspace_id", runner.config.WorkspaceID, "agent_id", delivery.AgentID, "runtime_id", runtimeID, "delivery_id", delivery.DeliveryID, "seq", delivery.Seq, "acceptance", acceptance.outcome)
+			runner.logger.Warn("WorkspaceDaemon Agent delivery acknowledgement failed", "error", err, "workspace_id", runner.config.WorkspaceID, "agent_id", delivery.AgentID, "runtime_id", runtimeID, "delivery_id", delivery.DeliveryID, "seq", delivery.Seq, "acceptance", acceptance.outcome)
 		}
 		return err
 	}
@@ -516,7 +518,7 @@ func (runner *WorkspaceDaemon) handleMessageDelivery(
 		runner.config.WorkspaceID, runtimeID, delivery, "ack_sent", string(acceptance.outcome), "",
 	))
 	if runner.logger != nil {
-		runner.logger.Info("Workspace Runner Agent delivery acknowledged", "workspace_id", runner.config.WorkspaceID, "agent_id", delivery.AgentID, "runtime_id", runtimeID, "delivery_id", delivery.DeliveryID, "message_id", delivery.Message.ID, "target", delivery.Target, "seq", delivery.Seq, "acceptance", acceptance.outcome)
+		runner.logger.Info("WorkspaceDaemon Agent delivery acknowledged", "workspace_id", runner.config.WorkspaceID, "agent_id", delivery.AgentID, "runtime_id", runtimeID, "delivery_id", delivery.DeliveryID, "message_id", delivery.Message.ID, "target", delivery.Target, "seq", delivery.Seq, "acceptance", acceptance.outcome)
 	}
 	return nil
 }

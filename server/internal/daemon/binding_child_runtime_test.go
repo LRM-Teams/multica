@@ -102,7 +102,7 @@ func TestBindingChildProcessFallbackRunsTheRealWorkspaceDaemon(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	host := newBindingControlTestHost(t, controlToken, 0, computer.HostControlCallbacks{})
+	host := newBindingControlTestHost(t, controlToken, computer.HostControlCallbacks{})
 	hostServerURL, hostListener := localHostControlRPCListener(t, host.host)
 	t.Setenv(bindingChildRuntimeHelperEnv, providerPath)
 	t.Setenv("MULTICA_BINDING_CHILD_CONTROL_TOKEN", controlToken)
@@ -143,10 +143,10 @@ func TestBindingChildProcessFallbackRunsTheRealWorkspaceDaemon(t *testing.T) {
 	select {
 	case frame := <-readyFrames:
 		if frame.WorkspaceID != workspaceID || frame.DaemonInstanceID == "" {
-			t.Fatalf("real Workspace Runner Ready frame = %+v", frame)
+			t.Fatalf("real WorkspaceDaemon Ready frame = %+v", frame)
 		}
 	case <-ctx.Done():
-		t.Fatal("real child never connected its Workspace Runner")
+		t.Fatal("real child never connected its WorkspaceDaemon")
 	}
 	select {
 	case <-runtimeWakeConnected:
@@ -389,7 +389,7 @@ func TestBindingChildPublishesReadyWithoutAgentRuntimesOrWorkspaceDaemonWS(t *te
 		t.Fatal(err)
 	}
 
-	host := newBindingControlTestHost(t, controlToken, 0, computer.HostControlCallbacks{})
+	host := newBindingControlTestHost(t, controlToken, computer.HostControlCallbacks{})
 	hostServerURL := localHostControlRPC(t, host.host)
 	t.Setenv("MULTICA_BINDING_CHILD_CONTROL_TOKEN", controlToken)
 	t.Setenv("MULTICA_BINDING_CHILD_ZERO_RUNTIME", "1")
@@ -414,7 +414,7 @@ func TestBindingChildPublishesReadyWithoutAgentRuntimesOrWorkspaceDaemonWS(t *te
 	defer cancel()
 	ready, err := child.AwaitReady(ctx)
 	if err != nil {
-		t.Fatalf("zero-runtime DaemonCore must publish Ready after Workspace Runner connect: %v", err)
+		t.Fatalf("zero-runtime DaemonCore must publish Ready after WorkspaceDaemon connect: %v", err)
 	}
 	if ready.PID != child.PID() || ready.WorkspaceID != workspaceID || ready.DaemonInstanceID == "" {
 		t.Fatalf("Binding child Ready = %+v, pid=%d", ready, child.PID())

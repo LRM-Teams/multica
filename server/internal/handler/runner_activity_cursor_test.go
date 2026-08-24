@@ -6,7 +6,7 @@ func TestRunnerActivityCursorAcceptsReplayAndRejectsRegression(t *testing.T) {
 	notes := newRunnerActivityCursorStore()
 	key := runnerActivityCursorKey{
 		workspaceID: "ws", agentID: "agent", daemonID: "daemon",
-		daemonInstanceID: "instance", launchID: "launch",
+		daemonInstanceID: "instance",
 	}
 	if !notes.accept(key, 2, "daemon_activity:agent:launch:instance:2") {
 		t.Fatal("first fact rejected")
@@ -29,7 +29,7 @@ func TestRunnerActivityCursorDiesWithInstance(t *testing.T) {
 	notes := newRunnerActivityCursorStore()
 	oldKey := runnerActivityCursorKey{
 		workspaceID: "ws", agentID: "agent", daemonID: "daemon",
-		daemonInstanceID: "old", launchID: "launch",
+		daemonInstanceID: "old",
 	}
 	newKey := oldKey
 	newKey.daemonInstanceID = "new"

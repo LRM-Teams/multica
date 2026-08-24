@@ -184,7 +184,7 @@ func TestWorkspaceDaemonRoutesOnlyWithinDaemonWorkspaceScope(t *testing.T) {
 	waitForRunner(t, hub, "daemon-1", "workspace-a")
 	waitForRunner(t, hub, "daemon-1", "workspace-b")
 
-	if !hub.NotifyWorkspaceDaemon("daemon-1", "workspace-a", protocol.EventDaemonAgentStart, protocol.AgentStartPayload{AgentID: "agent-a", RuntimeID: "runtime-1", LaunchID: "launch-a", StartDispatchID: "dispatch-a"}) {
+	if !hub.NotifyWorkspaceDaemon("daemon-1", "workspace-a", protocol.EventDaemonAgentStart, protocol.AgentStartPayload{AgentID: "agent-a", RuntimeID: "runtime-1"}) {
 		t.Fatal("workspace-a command was not routed")
 	}
 	workspaceA.SetReadDeadline(time.Now().Add(time.Second))
@@ -297,8 +297,7 @@ func TestLegacyControlPlaneRunnerCanBecomeReadyOnlyForRollingUpgrade(t *testing.
 		t.Fatalf("heartbeat ack = %s, want control-plane heartbeat ack", raw)
 	}
 	if hub.NotifyAgentRestartCommand("workspace-1", "daemon-1", protocol.EventDaemonAgentStart, "dispatch-1", protocol.AgentStartPayload{
-		AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1",
-	}) {
+		AgentID: "agent-1", RuntimeID: "runtime-1"}) {
 		t.Fatal("legacy rolling-upgrade Runner received a new Agent process command")
 	}
 }
@@ -363,7 +362,7 @@ func TestWorkspaceDaemonReadyReplacesConnectionAndFencesInboundFrames(t *testing
 	first := dial()
 	defer first.Close()
 	// An acknowledgement before ready must not reach the new boundary.
-	write(first, protocol.EventAgentStartAck, protocol.AgentStartAckPayload{AgentID: "agent-a", LaunchID: "launch-a", StartDispatchID: "dispatch-a", QueueState: protocol.AgentStartQueueQueued})
+	write(first, protocol.EventAgentStartAck, protocol.AgentStartAckPayload{AgentID: "agent-a", QueueState: protocol.AgentStartQueueQueued})
 	time.Sleep(20 * time.Millisecond)
 	if accepted.Load() != 0 {
 		t.Fatal("unready connection mutated Runner state")
@@ -373,7 +372,7 @@ func TestWorkspaceDaemonReadyReplacesConnectionAndFencesInboundFrames(t *testing
 		ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceDaemonAgentProcess},
 	})
 	waitForRunner(t, hub, "daemon-1", "workspace-1")
-	write(first, protocol.EventAgentStartAck, protocol.AgentStartAckPayload{AgentID: "agent-a", LaunchID: "launch-a", StartDispatchID: "dispatch-a", QueueState: protocol.AgentStartQueueQueued})
+	write(first, protocol.EventAgentStartAck, protocol.AgentStartAckPayload{AgentID: "agent-a", QueueState: protocol.AgentStartQueueQueued})
 	deadline := time.Now().Add(time.Second)
 	for accepted.Load() != 1 {
 		if time.Now().After(deadline) {
@@ -396,7 +395,7 @@ func TestWorkspaceDaemonReadyReplacesConnectionAndFencesInboundFrames(t *testing
 	// The replaced socket either rejects this write locally or the Hub drops it
 	// at the current-ready fence. It must never reach the start receipt handler.
 	staleReceipt, err := json.Marshal(protocol.Message{Type: protocol.EventAgentStartAck, Payload: mustMarshalRaw(protocol.AgentStartAckPayload{
-		AgentID: "agent-a", LaunchID: "launch-a", StartDispatchID: "dispatch-stale", QueueState: protocol.AgentStartQueueQueued,
+		AgentID: "agent-a", QueueState: protocol.AgentStartQueueQueued,
 	})})
 	if err != nil {
 		t.Fatal(err)
@@ -451,7 +450,7 @@ func TestWorkspaceDaemonReadyDispatchesStatusAfterCurrentSlotIsClaimed(t *testin
 		ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceDaemonAgentProcess},
 	})
 	write(protocol.EventAgentStatus, protocol.AgentStatusPayload{
-		AgentID: "agent-1", LaunchID: "launch-1", Status: protocol.AgentStatusActive,
+		AgentID: "agent-1", Status: protocol.AgentStatusActive,
 	})
 	deadline := time.Now().Add(time.Second)
 	for {

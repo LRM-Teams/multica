@@ -7,64 +7,7 @@ import (
 	"time"
 )
 
-func (p *canonicalAgentRuntimePool) setMachineProcessAdmission(workspaceID string, admission agentProcessAdmission) {
-	if p == nil {
-		return
-	}
-	p.machineWorkspaceID = strings.TrimSpace(workspaceID)
-	p.machineAdmission = admission
-}
-
-func (p *canonicalAgentRuntimePool) reserveMachineProcessCapacity(ctx context.Context, agentID, runtimeID string) (agentProcessCapacityGrant, error) {
-	if p == nil || p.machineAdmission == nil {
-		return agentProcessCapacityGrant{}, nil
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	workspaceID := strings.TrimSpace(p.machineWorkspaceID)
-	agentID = strings.TrimSpace(agentID)
-	runtimeID = strings.TrimSpace(runtimeID)
-	if workspaceID == "" || agentID == "" || runtimeID == "" {
-		return agentProcessCapacityGrant{}, fmt.Errorf("machine process capacity identity is incomplete")
-	}
-	granted := make(chan agentProcessCapacityGrant, 1)
-	launchID := "provider:" + workspaceID + ":" + agentID + ":" + runtimeID
-	grant, admitted := p.machineAdmission.Acquire(agentProcessCapacityRequest{
-		WorkspaceID: workspaceID,
-		AgentID:     agentID,
-		RuntimeID:   runtimeID,
-		LaunchID:    launchID,
-		Waiter: func(grant agentProcessCapacityGrant) {
-			select {
-			case granted <- grant:
-			default:
-			}
-		},
-	})
-	if admitted {
-		return grant, nil
-	}
-	select {
-	case <-ctx.Done():
-		p.machineAdmission.Cancel(grant)
-		return agentProcessCapacityGrant{}, fmt.Errorf("machine process capacity wait: %w", ctx.Err())
-	case grant = <-granted:
-		if !p.machineAdmission.Active(grant) {
-			return agentProcessCapacityGrant{}, fmt.Errorf("machine process capacity grant is no longer active")
-		}
-		return grant, nil
-	}
-}
-
-func (p *canonicalAgentRuntimePool) releaseMachineProcessCapacity(grant agentProcessCapacityGrant) {
-	if p == nil || p.machineAdmission == nil || grant.LaunchID == "" {
-		return
-	}
-	go p.machineAdmission.Release(grant)
-}
-
-// reserveAgentProcessCapacity implements #35 for resident acquires:
+// waitForRuntimeSlot implements #35 for resident acquires:
 //  1. Close idle other-runtime slots for this agent (rebind → one live process).
 //  2. If this agent already has a live backend (or a pending create), no new
 //     cap unit is needed.
@@ -72,7 +15,7 @@ func (p *canonicalAgentRuntimePool) releaseMachineProcessCapacity(grant agentPro
 //     over blocking; never evict a running turn.
 //
 // One-shot callers must not call this (they do not retain pool backends).
-func (p *canonicalAgentRuntimePool) reserveAgentProcessCapacity(ctx context.Context, agentID, runtimeID string) error {
+func (p *agentRuntimePool) waitForRuntimeSlot(ctx context.Context, agentID, runtimeID string) error {
 	if p == nil {
 		return fmt.Errorf("canonical agent runtime pool is nil")
 	}
@@ -137,7 +80,7 @@ func (p *canonicalAgentRuntimePool) reserveAgentProcessCapacity(ctx context.Cont
 	}
 }
 
-func (p *canonicalAgentRuntimePool) releaseAgentProcessReservation(agentID string) {
+func (p *agentRuntimePool) cancelRuntimeSlotWait(agentID string) {
 	if p == nil {
 		return
 	}
@@ -153,27 +96,24 @@ func (p *canonicalAgentRuntimePool) releaseAgentProcessReservation(agentID strin
 	}
 }
 
-// clearAgentProcessReservation drops a successful create's pending entry.
-// Same as release, kept named for call-site clarity.
-func (p *canonicalAgentRuntimePool) clearAgentProcessReservation(agentID string) {
-	p.releaseAgentProcessReservation(agentID)
+// finishRuntimeSlotWait drops a successful create's pending entry.
+func (p *agentRuntimePool) finishRuntimeSlotWait(agentID string) {
+	p.cancelRuntimeSlotWait(agentID)
 }
 
 // signalAgentProcessCapacityFreed publishes live count and wakes waiters after
 // a live backend was closed (unhealthy release, cap eviction, rebind, invalidate).
-func (p *canonicalAgentRuntimePool) signalAgentProcessCapacityFreed() {
+func (p *agentRuntimePool) signalRuntimeSlotAvailable() {
 	if p == nil {
 		return
 	}
 	p.mu.Lock()
 	p.publishLiveAgentProcessCountLocked()
 	p.capacityCond.Broadcast()
-	wakeups := p.promoteManagedProcessesLocked()
 	p.mu.Unlock()
-	invokeManagedProcessGrantWakeups(wakeups)
 }
 
-func (p *canonicalAgentRuntimePool) publishLiveAgentProcessCount() {
+func (p *agentRuntimePool) publishLiveAgentProcessCount() {
 	if p == nil {
 		return
 	}
@@ -182,23 +122,18 @@ func (p *canonicalAgentRuntimePool) publishLiveAgentProcessCount() {
 	p.publishLiveAgentProcessCountLocked()
 }
 
-func (p *canonicalAgentRuntimePool) publishLiveAgentProcessCountLocked() {
+func (p *agentRuntimePool) publishLiveAgentProcessCountLocked() {
 	p.liveAgentProcesses.Store(int64(p.countLiveAgentsLocked()))
 }
 
-// agentCountsTowardCapLocked is true when agent already has a live backend, a
-// pending create, or a managed launch grant. Caller must hold p.mu.
-func (p *canonicalAgentRuntimePool) agentCountsTowardCapLocked(agentID string) bool {
+// agentCountsTowardCapLocked is true when an Agent already has a live backend
+// or pending create. Caller must hold p.mu.
+func (p *agentRuntimePool) agentCountsTowardCapLocked(agentID string) bool {
 	if _, ok := p.pendingAgents[agentID]; ok {
 		return true
 	}
 	if p.agentHasLiveBackendLocked(agentID) {
 		return true
-	}
-	for _, grant := range p.managedProcessGrants {
-		if grant.AgentID == agentID {
-			return true
-		}
 	}
 	return false
 }
@@ -206,15 +141,10 @@ func (p *canonicalAgentRuntimePool) agentCountsTowardCapLocked(agentID string) b
 // countCapAgentsLocked is the physical-cap accounting set: an Agent is
 // counted once even when its managed launch and resident backend coexist.
 // Caller must hold p.mu.
-func (p *canonicalAgentRuntimePool) countCapAgentsLocked() int {
+func (p *agentRuntimePool) countCapAgentsLocked() int {
 	agents := make(map[string]struct{})
 	for agentID := range p.pendingAgents {
 		agents[agentID] = struct{}{}
-	}
-	for _, grant := range p.managedProcessGrants {
-		if grant.AgentID != "" {
-			agents[grant.AgentID] = struct{}{}
-		}
 	}
 	for key, slot := range p.slots {
 		slot.mu.Lock()
@@ -232,7 +162,7 @@ func (p *canonicalAgentRuntimePool) countCapAgentsLocked() int {
 
 // agentHasLiveBackendLocked reports whether any slot for agentID holds a
 // resident backend process. Caller must hold p.mu.
-func (p *canonicalAgentRuntimePool) agentHasLiveBackendLocked(agentID string) bool {
+func (p *agentRuntimePool) agentHasLiveBackendLocked(agentID string) bool {
 	for key, slot := range p.slots {
 		aid, _ := splitCanonicalSlotKey(key)
 		if aid != agentID {
@@ -250,7 +180,7 @@ func (p *canonicalAgentRuntimePool) agentHasLiveBackendLocked(agentID string) bo
 
 // countLiveAgentsLocked returns distinct agentIDs with backend != nil.
 // Caller must hold p.mu.
-func (p *canonicalAgentRuntimePool) countLiveAgentsLocked() int {
+func (p *agentRuntimePool) countLiveAgentsLocked() int {
 	agents := make(map[string]struct{})
 	for key, slot := range p.slots {
 		slot.mu.Lock()
@@ -270,7 +200,7 @@ func (p *canonicalAgentRuntimePool) countLiveAgentsLocked() int {
 // closeIdleOtherRuntimesLocked closes and deletes idle live slots for agentID
 // whose runtimeID != keepRuntimeID (rebind). Running slots are left alone.
 // Caller must hold p.mu. Returns number of processes closed.
-func (p *canonicalAgentRuntimePool) closeIdleOtherRuntimesLocked(agentID, keepRuntimeID string) int {
+func (p *agentRuntimePool) closeIdleOtherRuntimesLocked(agentID, keepRuntimeID string) int {
 	closed := 0
 	for key, slot := range p.slots {
 		aid, rid := splitCanonicalSlotKey(key)
@@ -301,10 +231,10 @@ func (p *canonicalAgentRuntimePool) closeIdleOtherRuntimesLocked(agentID, keepRu
 // oldest idleSince (LRU), closes it, and deletes the slot. Never touches
 // running slots or excludeAgentID. Caller must hold p.mu. Returns true if
 // something was evicted.
-func (p *canonicalAgentRuntimePool) evictOldestIdleForCapacityLocked(excludeAgentID string) bool {
+func (p *agentRuntimePool) evictOldestIdleForCapacityLocked(excludeAgentID string) bool {
 	var (
 		bestKey  string
-		bestSlot *canonicalAgentRuntimeSlot
+		bestSlot *agentRuntimeSlot
 		bestIdle time.Time
 		found    bool
 	)

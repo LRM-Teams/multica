@@ -18,15 +18,15 @@ func TestWorkspaceDaemonActivityFramesUseRaftWireNames(t *testing.T) {
 		},
 		WorkspacePingPayload{PingID: "ping-1"},
 		WorkspacePongPayload{PingID: "ping-1"},
-		AgentStartPayload{AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1"},
-		AgentStartAckPayload{AgentID: "agent-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1", QueueState: AgentStartQueueQueued},
-		AgentStopPayload{AgentID: "agent-1", LaunchID: "launch-1"},
+		AgentStartPayload{AgentID: "agent-1", RuntimeID: "runtime-1"},
+		AgentStartAckPayload{AgentID: "agent-1", QueueState: AgentStartQueueQueued},
+		AgentStopPayload{AgentID: "agent-1"},
 		AgentWorkspaceResetPayload{OperationID: "operation-1", AgentID: "agent-1"},
 		AgentWorkspaceResetResultPayload{OperationID: "operation-1", AgentID: "agent-1", Status: AgentResetWorkspaceSucceeded},
-		AgentStatusPayload{AgentID: "agent-1", LaunchID: "launch-1", Status: AgentStatusActive},
-		AgentSessionPayload{AgentID: "agent-1", LaunchID: "launch-1", ProviderSessionID: "session-1", RuntimeGeneration: 2},
-		AgentActivityPayload{Snapshot: AgentActivitySnapshot{AgentID: "agent-1", LaunchID: "launch-1", DaemonInstanceID: "daemon-instance-1", ClientSequence: 1, ProducerFactID: "fact-1", ObservedAt: observedAt, ActivityKind: ActivityKindWorking, DetailKind: "model_response_started"}},
-		AgentActivityProbePayload{AgentID: "agent-1", LaunchID: "launch-1", ProbeID: "probe-1"},
+		AgentStatusPayload{AgentID: "agent-1", Status: AgentStatusActive},
+		AgentSessionPayload{AgentID: "agent-1", ProviderSessionID: "session-1", RuntimeGeneration: 2},
+		AgentActivityPayload{Snapshot: AgentActivitySnapshot{AgentID: "agent-1", DaemonInstanceID: "daemon-instance-1", ClientSequence: 1, ProducerFactID: "fact-1", ObservedAt: observedAt, ActivityKind: ActivityKindWorking, DetailKind: "model_response_started"}},
+		AgentActivityProbePayload{AgentID: "agent-1", ProbeID: "probe-1"},
 		ComputerUpgradePayload{RequestID: "upgrade-1", TargetVersion: "0.4.24-alpha.59"},
 		ComputerRestartPayload{RequestID: "restart-1"},
 		ComputerUpgradeProgressPayload{RequestID: "upgrade-1", Phase: "staging"},
@@ -48,12 +48,12 @@ func TestWorkspaceDaemonActivityFramesUseRaftWireNames(t *testing.T) {
 		encoded.Write(data)
 	}
 	wire := encoded.String()
-	for _, field := range []string{`"workspaceId"`, `"daemonInstanceId"`, `"deviceName"`, `"cliVersion"`, `"runningAgents"`, `"launchId"`, `"queueState"`, `"clientSeq"`, `"producerFactId"`, `"observedAtMs"`, `"probeId"`, `"requestId"`, `"targetVersion"`, `"newVersion"`} {
+	for _, field := range []string{`"workspaceId"`, `"daemonInstanceId"`, `"deviceName"`, `"cliVersion"`, `"runningAgents"`, `"queueState"`, `"clientSeq"`, `"producerFactId"`, `"observedAtMs"`, `"probeId"`, `"requestId"`, `"targetVersion"`, `"newVersion"`} {
 		if !strings.Contains(wire, field) {
 			t.Fatalf("runner Activity wire %s does not contain %s", wire, field)
 		}
 	}
-	for _, field := range []string{`"workspace_id"`, `"daemon_instance_id"`, `"device_name"`, `"cli_version"`, `"start_dispatch_id"`, `"launch_id"`, `"client_sequence"`, `"producer_fact_id"`, `"request_id"`, `"target_version"`, `"new_version"`} {
+	for _, field := range []string{`"workspace_id"`, `"daemon_instance_id"`, `"device_name"`, `"cli_version"`, `"client_sequence"`, `"producer_fact_id"`, `"request_id"`, `"target_version"`, `"new_version"`} {
 		if strings.Contains(wire, field) {
 			t.Fatalf("runner Activity wire %s contains HTTP field %s", wire, field)
 		}
@@ -93,8 +93,7 @@ func TestComputerWorkDigestPayloadRejectsEmptyAndInvertedWindow(t *testing.T) {
 
 func TestWorkspaceDaemonStartUsesRaftSessionConfig(t *testing.T) {
 	resume, err := json.Marshal(AgentStartPayload{
-		AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1",
-		Config: AgentStartConfig{SessionID: "provider-session"},
+		AgentID: "agent-1", RuntimeID: "runtime-1", Config: AgentStartConfig{SessionID: "provider-session"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -103,8 +102,7 @@ func TestWorkspaceDaemonStartUsesRaftSessionConfig(t *testing.T) {
 		t.Fatalf("resume start lost Raft config.sessionId: %s", resume)
 	}
 	fresh, err := json.Marshal(AgentStartPayload{
-		AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1",
-		Config: AgentStartConfig{},
+		AgentID: "agent-1", RuntimeID: "runtime-1", Config: AgentStartConfig{},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -118,7 +116,7 @@ func TestAgentActivityPayloadUsesRaftFactOnlyWireEnvelope(t *testing.T) {
 	observedAt := time.Date(2026, time.August, 14, 1, 2, 3, 456000000, time.UTC)
 	payload := AgentActivityPayload{
 		Snapshot: AgentActivitySnapshot{
-			AgentID: "agent-1", LaunchID: "launch-1", DaemonInstanceID: "daemon-instance-1",
+			AgentID: "agent-1", DaemonInstanceID: "daemon-instance-1",
 			ClientSequence: 7, ProducerFactID: "fact-1", ObservedAt: observedAt,
 			ActivityKind: ActivityKindWorking, DetailKind: "running_command", ProbeID: "probe-1",
 		},
@@ -135,7 +133,7 @@ func TestAgentActivityPayloadUsesRaftFactOnlyWireEnvelope(t *testing.T) {
 	if err := json.Unmarshal(wire, &envelope); err != nil {
 		t.Fatalf("decode Activity fact envelope: %v", err)
 	}
-	for _, field := range []string{"agentId", "launchId", "daemonInstanceId", "clientSeq", "producerFactId", "observedAtMs", "detailKind", "entries", "probeId", "isHeartbeat"} {
+	for _, field := range []string{"agentId", "daemonInstanceId", "clientSeq", "producerFactId", "observedAtMs", "detailKind", "entries", "probeId", "isHeartbeat"} {
 		if _, ok := envelope[field]; !ok {
 			t.Fatalf("Activity fact wire %s is missing Raft field %q", wire, field)
 		}
@@ -161,7 +159,7 @@ func TestAgentActivityPayloadUsesRaftFactOnlyWireEnvelope(t *testing.T) {
 func TestWorkspaceDaemonActivityValidationRejectsInvalidBoundaryData(t *testing.T) {
 	observedAt := time.Date(2026, time.August, 6, 12, 0, 0, 0, time.UTC)
 	validSnapshot := AgentActivitySnapshot{
-		AgentID: "agent-1", LaunchID: "launch-1", DaemonInstanceID: "daemon-instance-1",
+		AgentID: "agent-1", DaemonInstanceID: "daemon-instance-1",
 		ClientSequence: 1, ProducerFactID: "fact-1", ObservedAt: observedAt, ActivityKind: ActivityKindWorking, DetailKind: "model_response_started",
 	}
 
@@ -171,13 +169,13 @@ func TestWorkspaceDaemonActivityValidationRejectsInvalidBoundaryData(t *testing.
 	}{
 		{name: "missing ready identity", value: WorkspaceReadyPayload{WorkspaceID: "workspace-1"}},
 		{name: "missing hard-cut capability", value: WorkspaceReadyPayload{WorkspaceID: "workspace-1", DaemonInstanceID: "instance-1"}},
-		{name: "unknown start state", value: AgentStartAckPayload{AgentID: "agent-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1", QueueState: "ready"}},
-		{name: "negative queue age", value: AgentStartAckPayload{AgentID: "agent-1", LaunchID: "launch-1", QueueState: AgentStartQueueQueued, QueueAgeMS: -1}},
-		{name: "unknown status", value: AgentStatusPayload{AgentID: "agent-1", LaunchID: "launch-1", Status: "online"}},
-		{name: "negative generation", value: AgentSessionPayload{AgentID: "agent-1", LaunchID: "launch-1", RuntimeGeneration: -1}},
-		{name: "zero sequence", value: AgentActivityPayload{Snapshot: AgentActivitySnapshot{AgentID: "agent-1", LaunchID: "launch-1", DaemonInstanceID: "daemon-instance-1", ProducerFactID: "fact-1", ObservedAt: observedAt, ActivityKind: ActivityKindWorking, DetailKind: "model_response_started"}}},
-		{name: "unknown activity kind", value: AgentActivityPayload{Snapshot: AgentActivitySnapshot{AgentID: "agent-1", LaunchID: "launch-1", DaemonInstanceID: "daemon-instance-1", ClientSequence: 1, ProducerFactID: "fact-1", ObservedAt: observedAt, ActivityKind: "idle", DetailKind: "idle"}}},
-		{name: "unknown activity detail kind", value: AgentActivityPayload{Snapshot: AgentActivitySnapshot{AgentID: "agent-1", LaunchID: "launch-1", DaemonInstanceID: "daemon-instance-1", ClientSequence: 1, ProducerFactID: "fact-1", ObservedAt: observedAt, DetailKind: "future_runtime_detail"}}},
+		{name: "unknown start state", value: AgentStartAckPayload{AgentID: "agent-1", QueueState: "ready"}},
+		{name: "negative queue age", value: AgentStartAckPayload{AgentID: "agent-1", QueueState: AgentStartQueueQueued, QueueAgeMS: -1}},
+		{name: "unknown status", value: AgentStatusPayload{AgentID: "agent-1", Status: "online"}},
+		{name: "negative generation", value: AgentSessionPayload{AgentID: "agent-1", RuntimeGeneration: -1}},
+		{name: "zero sequence", value: AgentActivityPayload{Snapshot: AgentActivitySnapshot{AgentID: "agent-1", DaemonInstanceID: "daemon-instance-1", ProducerFactID: "fact-1", ObservedAt: observedAt, ActivityKind: ActivityKindWorking, DetailKind: "model_response_started"}}},
+		{name: "unknown activity kind", value: AgentActivityPayload{Snapshot: AgentActivitySnapshot{AgentID: "agent-1", DaemonInstanceID: "daemon-instance-1", ClientSequence: 1, ProducerFactID: "fact-1", ObservedAt: observedAt, ActivityKind: "idle", DetailKind: "idle"}}},
+		{name: "unknown activity detail kind", value: AgentActivityPayload{Snapshot: AgentActivitySnapshot{AgentID: "agent-1", DaemonInstanceID: "daemon-instance-1", ClientSequence: 1, ProducerFactID: "fact-1", ObservedAt: observedAt, DetailKind: "future_runtime_detail"}}},
 		{name: "scalar open envelope", value: AgentActivityPayload{Snapshot: validSnapshot, Entries: []AgentActivityEntry{{Kind: "provider_event", Body: json.RawMessage(`"not-an-object"`)}}}},
 	}
 
@@ -213,7 +211,7 @@ func TestWorkspaceDaemonReadyCapabilityValidation(t *testing.T) {
 func TestAgentActivityOpenEntryEnvelopePreservesUnknownKinds(t *testing.T) {
 	payload := AgentActivityPayload{
 		Snapshot: AgentActivitySnapshot{
-			AgentID: "agent-1", LaunchID: "launch-1", DaemonInstanceID: "daemon-instance-1",
+			AgentID: "agent-1", DaemonInstanceID: "daemon-instance-1",
 			ClientSequence: 7, ProducerFactID: "fact-1", ObservedAt: time.Now().UTC(), ActivityKind: ActivityKindWorking,
 			DetailKind: "runtime_progress",
 		},

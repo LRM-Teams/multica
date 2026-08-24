@@ -170,7 +170,7 @@ func (l *Lifecycle) Fix(d Diagnosis) Diagnosis {
 	return d
 }
 
-// reclaimOrphanedRunners terminates Workspace Runner processes whose owning
+// reclaimOrphanedRunners terminates WorkspaceDaemon processes whose owning
 // Host is gone, freeing the slot so the next `computer start` spawns a fresh
 // child instead of finding the machine wedged.
 //
@@ -193,10 +193,10 @@ func reclaimOrphanedRunners(root string) []string {
 	applied := make([]string, 0, len(reclaimable))
 	for _, runner := range reclaimable {
 		if err := reclaimRunnerProcess(runner, options); err != nil {
-			applied = append(applied, fmt.Sprintf("could NOT terminate orphaned Workspace Runner pid %d (workspace %s): %v", runner.PID, runner.WorkspaceID, err))
+			applied = append(applied, fmt.Sprintf("could NOT terminate orphaned WorkspaceDaemon pid %d (workspace %s): %v", runner.PID, runner.WorkspaceID, err))
 			continue
 		}
-		applied = append(applied, fmt.Sprintf("terminated orphaned Workspace Runner pid %d (workspace %s)", runner.PID, runner.WorkspaceID))
+		applied = append(applied, fmt.Sprintf("terminated orphaned WorkspaceDaemon pid %d (workspace %s)", runner.PID, runner.WorkspaceID))
 	}
 	return applied
 }

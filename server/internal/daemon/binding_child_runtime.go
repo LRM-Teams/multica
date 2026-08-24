@@ -51,7 +51,7 @@ type BindingChildRunConfig struct {
 	RefreshEvery time.Duration
 }
 
-// RunBindingChild owns one Workspace Runner and all of its workspace-scoped
+// RunBindingChild owns one WorkspaceDaemon and all of its workspace-scoped
 // execution state until ctx ends. It deliberately does not acquire the
 // machine-wide resident lease or bind the Computer health listener.
 func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
@@ -82,10 +82,6 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 		PID:              os.Getpid(),
 	}
 	hostControl := newBindingHostControlClient(bootstrap.ServiceEndpoint, config.Daemon.LocalControlToken, identity)
-	remoteAdmission := newRemoteAgentProcessAdmission(hostControl)
-	defer remoteAdmission.Close()
-	d.processAdmission = remoteAdmission
-	d.canonicalRuntimes.setMachineProcessAdmission(workspaceID, remoteAdmission)
 	d.bindingHostControl = hostControl
 	d.bindingDiagnostics = newBindingChildDiagnosticForwarder(hostControl)
 	defer d.bindingDiagnostics.Close()
@@ -175,7 +171,7 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 			}
 		})
 	}
-	// DaemonCore liveness is the Workspace Runner socket, matching Raft
+	// DaemonCore liveness is the WorkspaceDaemon socket, matching Raft
 	// /daemon/connect. Ready waits for that connect, including zero-runtime
 	// Computers.
 	runner.onReady = publishReady
@@ -219,7 +215,7 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 			return fmt.Errorf("publish Binding child Ready: %w", readyErr)
 		}
 		if ctx.Err() == nil {
-			return errors.New("Binding child Workspace Runner stopped unexpectedly")
+			return errors.New("Binding child WorkspaceDaemon stopped unexpectedly")
 		}
 	}
 	cancel()

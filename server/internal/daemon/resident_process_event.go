@@ -6,9 +6,9 @@ import (
 )
 
 // residentProcessEventKind enumerates the three resident-process facts the
-// canonicalAgentRuntimePool observes about a slot's underlying provider
-// process. "spawned"/"ready" are still pushed by the Workspace Runner
-// orchestrator directly (workspace_runner_agent_process.go) and are
+// agentRuntimePool observes about a slot's underlying provider
+// process. "spawned"/"ready" are still pushed by the WorkspaceDaemon
+// orchestrator directly (workspace_daemon_agent_process.go) and are
 // deliberately not part of this bus.
 type residentProcessEventKind string
 
@@ -19,7 +19,7 @@ const (
 )
 
 // residentProcessEvent is the single fact type carried by every resident
-// process channel out of canonicalAgentRuntimePool. It replaces the previous
+// process channel out of agentRuntimePool. It replaces the previous
 // pair of parallel channels (ResidentRuntimeCrashEvent's crash subscribers
 // and the recovered/stalled callbacks) with one event shape and one
 // subscription point.
@@ -35,7 +35,7 @@ type residentProcessEvent struct {
 // subscribeResidentProcess registers fn to run for every future resident
 // process event, in registration order relative to other subscribers. It
 // does not replay past events.
-func (p *canonicalAgentRuntimePool) subscribeResidentProcess(fn func(residentProcessEvent)) {
+func (p *agentRuntimePool) subscribeResidentProcess(fn func(residentProcessEvent)) {
 	if p == nil || fn == nil {
 		return
 	}
@@ -71,7 +71,7 @@ func (p *canonicalAgentRuntimePool) subscribeResidentProcess(fn func(residentPro
 // self-deadlock on this pool. A subscriber that panics is recovered and
 // logged so it can neither kill the emitter nor prevent later subscribers
 // from receiving the event.
-func (p *canonicalAgentRuntimePool) emitResidentProcessEvent(ev residentProcessEvent) {
+func (p *agentRuntimePool) emitResidentProcessEvent(ev residentProcessEvent) {
 	if p == nil {
 		return
 	}

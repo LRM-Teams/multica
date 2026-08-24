@@ -75,10 +75,10 @@ func TestListRunnerActivitySummariesMatchesPerAgentProjection(t *testing.T) {
 		if _, err := testPool.Exec(ctx, `
 			INSERT INTO agent_activity_snapshot (
 				workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id,
-				launch_id, client_sequence, producer_fact_id, activity_kind,
+				client_sequence, producer_fact_id, activity_kind,
 				detail_kind, observed_at
 			) VALUES ($1, $2, $3, 'daemon-summary', 'instance-summary',
-				'launch-summary', 1, $4, $5, $6, now())`,
+				1, $4, $5, $6, now())`,
 			testWorkspaceID, fixture.agentID, handlerTestRuntimeID(t), fixture.factID,
 			fixture.activityKind, fixture.detailKind); err != nil {
 			t.Fatal(err)
@@ -87,10 +87,10 @@ func TestListRunnerActivitySummariesMatchesPerAgentProjection(t *testing.T) {
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO agent_activity_entry (
 			workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id,
-			launch_id, client_sequence, producer_fact_id, entry_position,
+			client_sequence, producer_fact_id, entry_position,
 			entry_kind, entry_body, observed_at
 		) VALUES ($1, $2, $3, 'daemon-summary', 'instance-summary',
-			'launch-summary', 1, $4, 0, 'status',
+			1, $4, 0, 'status',
 			'{"activity":"error","detail":"payment required","detailKind":"runtime_error"}'::jsonb,
 			now())`, testWorkspaceID, errorAgentID, handlerTestRuntimeID(t), "summary-error-entry-"+uuid.NewString()); err != nil {
 		t.Fatal(err)
@@ -173,10 +173,10 @@ func TestListRunnerActivitySummariesEnforcesWorkspaceAndPrincipalBoundaries(t *t
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO agent_activity_snapshot (
 			workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id,
-			launch_id, client_sequence, producer_fact_id, activity_kind,
+			client_sequence, producer_fact_id, activity_kind,
 			detail_kind, observed_at
 		) VALUES ($1, $2, $3, 'daemon-boundary', 'instance-boundary',
-			'launch-boundary', 1, $4, 'thinking', '', now())`,
+			1, $4, 'thinking', '', now())`,
 		foreignWorkspaceID, foreignAgentID, foreignRuntimeID, "summary-boundary-"+uuid.NewString()); err != nil {
 		t.Fatal(err)
 	}

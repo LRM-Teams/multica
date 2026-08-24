@@ -271,7 +271,7 @@ func createCascadeFixtureRuntime(t *testing.T, ctx context.Context, name string)
 		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at)
 		VALUES ($1,  $2,  $3,  'cloud',  'cascade-test',  'online',  $4,  '{}'::jsonb,  now())
 		RETURNING id
-	`,  testWorkspaceID,  daemonID,  name,  name+" device").Scan(&runtimeID); err != nil {
+	`, testWorkspaceID, daemonID, name, name+" device").Scan(&runtimeID); err != nil {
 		t.Fatalf("insert cascade fixture runtime: %v", err)
 	}
 	bindTestRuntimeOwner(t, daemonID, testUserID)

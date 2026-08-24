@@ -340,7 +340,7 @@ func findReclaimableRunners(root string, logger *slog.Logger) ([]reclaimableRunn
 	return reclaimable, nil
 }
 
-// runnerReclaimOptions bounds one orphaned Workspace Runner reclaim. Drain is
+// runnerReclaimOptions bounds one orphaned WorkspaceDaemon reclaim. Drain is
 // optional: when it is nil, or the runner never published a control endpoint,
 // the reclaim goes straight to signal termination.
 type runnerReclaimOptions struct {
@@ -352,7 +352,7 @@ type runnerReclaimOptions struct {
 	Logger       *slog.Logger
 }
 
-// reclaimRunnerProcess drains and then force-terminates one Workspace Runner
+// reclaimRunnerProcess drains and then force-terminates one WorkspaceDaemon
 // process left behind by a previous Host generation, and on confirmed death
 // removes its persisted state so the slot is free for a fresh child.
 //
@@ -370,7 +370,7 @@ func reclaimRunnerProcess(runner reclaimableRunner, options runnerReclaimOptions
 
 	if runner.RunnerEndpoint != "" && options.Drain != nil && identity.Validate() == nil {
 		if logger != nil {
-			logger.Info("reclaiming orphaned Workspace Runner: requesting drain", "workspace_id", runner.WorkspaceID, "pid", runner.PID, "endpoint", runner.RunnerEndpoint)
+			logger.Info("reclaiming orphaned WorkspaceDaemon: requesting drain", "workspace_id", runner.WorkspaceID, "pid", runner.PID, "endpoint", runner.RunnerEndpoint)
 		}
 		// No extra timeout wrapping here: the local control RPC transport
 		// already bounds this call (see callLocalJSONWithTimeout), and drain
@@ -378,23 +378,23 @@ func reclaimRunnerProcess(runner reclaimableRunner, options runnerReclaimOptions
 		// to finish closing out in-flight work.
 		if err := options.Drain(context.Background(), runner.RunnerEndpoint, identity); err != nil {
 			if logger != nil {
-				logger.Warn("orphaned Workspace Runner drain request failed; will terminate by signal", "workspace_id", runner.WorkspaceID, "pid", runner.PID, "error", err)
+				logger.Warn("orphaned WorkspaceDaemon drain request failed; will terminate by signal", "workspace_id", runner.WorkspaceID, "pid", runner.PID, "error", err)
 			}
 		} else if logger != nil {
-			logger.Info("orphaned Workspace Runner drained via runner:drain", "workspace_id", runner.WorkspaceID, "pid", runner.PID)
+			logger.Info("orphaned WorkspaceDaemon drained via runner:drain", "workspace_id", runner.WorkspaceID, "pid", runner.PID)
 		}
 	} else if logger != nil {
-		logger.Warn("orphaned Workspace Runner has no reachable control endpoint; will terminate by signal", "workspace_id", runner.WorkspaceID, "pid", runner.PID)
+		logger.Warn("orphaned WorkspaceDaemon has no reachable control endpoint; will terminate by signal", "workspace_id", runner.WorkspaceID, "pid", runner.PID)
 	}
 
 	if logger != nil {
-		logger.Info("terminating orphaned Workspace Runner: sending SIGTERM/SIGKILL", "workspace_id", runner.WorkspaceID, "pid", runner.PID)
+		logger.Info("terminating orphaned WorkspaceDaemon: sending SIGTERM/SIGKILL", "workspace_id", runner.WorkspaceID, "pid", runner.PID)
 	}
 	if err := terminateProcess(runner.PID, options.PollInterval, options.Grace, options.Sleep); err != nil {
 		return err
 	}
 	if err := removeRunnerState(options.StateRoot, runner.WorkspaceID, runner.DaemonInstanceID, runner.PID); err != nil && logger != nil {
-		logger.Warn("could not remove reclaimed Workspace Runner state", "workspace_id", runner.WorkspaceID, "pid", runner.PID, "error", err)
+		logger.Warn("could not remove reclaimed WorkspaceDaemon state", "workspace_id", runner.WorkspaceID, "pid", runner.PID, "error", err)
 	}
 	return nil
 }

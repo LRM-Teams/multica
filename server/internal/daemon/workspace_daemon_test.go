@@ -104,7 +104,7 @@ func TestWorkspaceDaemonReadyPingAndReconnectUseFixedIdentity(t *testing.T) {
 				capabilities[capability] = true
 			}
 			if !capabilities[protocol.DaemonCapabilityWorkspaceDaemonAgentProcess] || !capabilities[protocol.DaemonCapabilityWorkspaceDaemonAgentReset] {
-				t.Fatalf("Runner capabilities = %v, want Agent process and reset", got.ready.ActiveCapabilities)
+				t.Fatalf("WorkspaceDaemon capabilities = %v, want Agent process and reset", got.ready.ActiveCapabilities)
 			}
 		case <-ctx.Done():
 			t.Fatalf("timed out waiting for Runner connection %d", attempt+1)
@@ -161,7 +161,7 @@ func TestWorkspaceDaemonRunReturnsWhenBindingContextCancelsLiveSocket(t *testing
 }
 
 func TestWorkspaceDaemonOwnsOneProcessManagerPerWorkspace(t *testing.T) {
-	d := New(Config{DaemonID: "daemon-1", MaxAgentProcesses: 1}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	d := New(Config{DaemonID: "daemon-1"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	firstRunner, err := d.newWorkspaceDaemon("ws-1")
 	if err != nil {
 		t.Fatal(err)
@@ -173,18 +173,18 @@ func TestWorkspaceDaemonOwnsOneProcessManagerPerWorkspace(t *testing.T) {
 	first := firstRunner.processes
 	second := secondRunner.processes
 	if first == nil || second == nil || second == first {
-		t.Fatal("different Workspace Runners unexpectedly share a process manager")
+		t.Fatal("different WorkspaceDaemons unexpectedly share a process manager")
 	}
-	firstAck, err := first.Start(agentProcessStartRequest{AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "dispatch-1", StartDispatchID: "dispatch-1" + "-dispatch"})
+	firstAck, err := first.Start(agentProcessStartRequest{AgentID: "agent-1", RuntimeID: "runtime-1"})
 	if err != nil {
 		t.Fatalf("start in first manager: %v", err)
 	}
-	secondAck, err := second.Start(agentProcessStartRequest{AgentID: "agent-1", RuntimeID: "runtime-2", LaunchID: "dispatch-1", StartDispatchID: "dispatch-1" + "-dispatch"})
+	secondAck, err := second.Start(agentProcessStartRequest{AgentID: "agent-1", RuntimeID: "runtime-2"})
 	if err != nil {
 		t.Fatalf("start in second manager: %v", err)
 	}
-	if firstAck.LaunchID != "dispatch-1" || secondAck.LaunchID != "dispatch-1" || firstAck.QueueState != protocol.AgentStartQueueStarting || secondAck.QueueState != protocol.AgentStartQueueStarting {
-		t.Fatalf("Workspace Runner managers were not isolated: first=%+v second=%+v", firstAck, secondAck)
+	if firstAck.AgentInstanceID == "" || secondAck.AgentInstanceID == "" || firstAck.QueueState != protocol.AgentStartQueueStarting || secondAck.QueueState != protocol.AgentStartQueueStarting {
+		t.Fatalf("WorkspaceDaemon managers were not isolated: first=%+v second=%+v", firstAck, secondAck)
 	}
 }
 
@@ -213,7 +213,7 @@ func TestWorkspaceDaemonAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 			return
 		}
 		frames <- ready
-		start, _ := json.Marshal(protocol.Message{Type: protocol.EventDaemonAgentStart, Payload: marshalRaw(protocol.AgentStartPayload{AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "dispatch-1", StartDispatchID: "dispatch-1" + "-dispatch"})})
+		start, _ := json.Marshal(protocol.Message{Type: protocol.EventDaemonAgentStart, Payload: marshalRaw(protocol.AgentStartPayload{AgentID: "agent-1", RuntimeID: "runtime-1"})})
 		if err := conn.WriteMessage(websocket.TextMessage, start); err != nil {
 			t.Error(err)
 			return
@@ -268,7 +268,7 @@ func TestWorkspaceDaemonAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 			}
 			frames <- msg
 		}
-		stop, _ := json.Marshal(protocol.Message{Type: protocol.EventDaemonAgentStop, Payload: marshalRaw(protocol.AgentStopPayload{AgentID: accepted.AgentID, LaunchID: accepted.LaunchID})})
+		stop, _ := json.Marshal(protocol.Message{Type: protocol.EventDaemonAgentStop, Payload: marshalRaw(protocol.AgentStopPayload{AgentID: accepted.AgentID})})
 		if err := conn.WriteMessage(websocket.TextMessage, stop); err != nil {
 			t.Error(err)
 			return
@@ -372,15 +372,15 @@ func TestWorkspaceDaemonAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 	if err := json.Unmarshal(status.Payload, &active); err != nil {
 		t.Fatal(err)
 	}
-	if accepted.LaunchID == "" || active.LaunchID != accepted.LaunchID || active.Status != protocol.AgentStatusActive {
+	if accepted.AgentID == "" || active.AgentID != accepted.AgentID || active.Status != protocol.AgentStatusActive {
 		t.Fatalf("ack=%+v status=%+v", accepted, active)
 	}
 	var stopped protocol.AgentStatusPayload
 	if err := json.Unmarshal(inactive.Payload, &stopped); err != nil {
 		t.Fatal(err)
 	}
-	if stopped.LaunchID != accepted.LaunchID || stopped.Status != protocol.AgentStatusInactive {
-		t.Fatalf("inactive status=%+v, want launch %q", stopped, accepted.LaunchID)
+	if stopped.AgentID != accepted.AgentID || stopped.Status != protocol.AgentStatusInactive {
+		t.Fatalf("inactive status=%+v, want launch %q", stopped, accepted.AgentID)
 	}
 	<-errCh
 }
@@ -537,8 +537,7 @@ func TestWorkspaceDaemonRuntimeReplacementStopsOldLaunchBeforeNewActivity(t *tes
 		}
 
 		oldStart := protocol.AgentStartPayload{
-			AgentID: "agent-1", RuntimeID: "runtime-codex", LaunchID: "launch-codex", StartDispatchID: "dispatch-codex",
-		}
+			AgentID: "agent-1", RuntimeID: "runtime-codex"}
 		if err := writeCommand(protocol.EventDaemonAgentStart, oldStart); err != nil {
 			serverResult <- err
 			return
@@ -549,17 +548,17 @@ func TestWorkspaceDaemonRuntimeReplacementStopsOldLaunchBeforeNewActivity(t *tes
 				switch frame.Type {
 				case protocol.EventAgentStartAck:
 					var ack protocol.AgentStartAckPayload
-					if json.Unmarshal(frame.Payload, &ack) == nil && ack.LaunchID == oldStart.LaunchID {
+					if json.Unmarshal(frame.Payload, &ack) == nil && ack.AgentID == oldStart.AgentID {
 						oldAck = true
 					}
 				case protocol.EventAgentStatus:
 					var status protocol.AgentStatusPayload
-					if json.Unmarshal(frame.Payload, &status) == nil && status.LaunchID == oldStart.LaunchID && status.Status == protocol.AgentStatusActive {
+					if json.Unmarshal(frame.Payload, &status) == nil && status.AgentID == oldStart.AgentID && status.Status == protocol.AgentStatusActive {
 						oldActive = true
 					}
 				case protocol.EventAgentActivity:
 					var activity protocol.AgentActivityPayload
-					if json.Unmarshal(frame.Payload, &activity) == nil && activity.Snapshot.LaunchID == oldStart.LaunchID {
+					if json.Unmarshal(frame.Payload, &activity) == nil && activity.Snapshot.AgentID == oldStart.AgentID {
 						oldActivity = true
 					}
 				}
@@ -572,8 +571,7 @@ func TestWorkspaceDaemonRuntimeReplacementStopsOldLaunchBeforeNewActivity(t *tes
 		}
 
 		if err := writeCommand(protocol.EventDaemonAgentStop, protocol.AgentStopPayload{
-			AgentID: oldStart.AgentID, LaunchID: oldStart.LaunchID,
-		}); err != nil {
+			AgentID: oldStart.AgentID}); err != nil {
 			serverResult <- err
 			return
 		}
@@ -584,12 +582,12 @@ func TestWorkspaceDaemonRuntimeReplacementStopsOldLaunchBeforeNewActivity(t *tes
 				switch frame.Type {
 				case protocol.EventAgentStatus:
 					var status protocol.AgentStatusPayload
-					if json.Unmarshal(frame.Payload, &status) == nil && status.LaunchID == oldStart.LaunchID && status.Status == protocol.AgentStatusInactive {
+					if json.Unmarshal(frame.Payload, &status) == nil && status.AgentID == oldStart.AgentID && status.Status == protocol.AgentStatusInactive {
 						oldInactive = true
 					}
 				case protocol.EventAgentActivity:
 					var activity protocol.AgentActivityPayload
-					if json.Unmarshal(frame.Payload, &activity) == nil && activity.Snapshot.LaunchID == oldStart.LaunchID && activity.Snapshot.ActivityKind == "" && activity.Snapshot.DetailKind == "stopped" {
+					if json.Unmarshal(frame.Payload, &activity) == nil && activity.Snapshot.AgentID == oldStart.AgentID && activity.Snapshot.ActivityKind == "" && activity.Snapshot.DetailKind == "stopped" {
 						if !oldInactive {
 							stopOrderingErr = errors.New("Stopped Activity arrived before inactive status")
 							return true
@@ -610,8 +608,7 @@ func TestWorkspaceDaemonRuntimeReplacementStopsOldLaunchBeforeNewActivity(t *tes
 		}
 
 		newStart := protocol.AgentStartPayload{
-			AgentID: "agent-1", RuntimeID: "runtime-grok", LaunchID: "launch-grok", StartDispatchID: "dispatch-grok",
-		}
+			AgentID: "agent-1", RuntimeID: "runtime-grok"}
 		if err := writeCommand(protocol.EventDaemonAgentStart, newStart); err != nil {
 			serverResult <- err
 			return
@@ -622,17 +619,17 @@ func TestWorkspaceDaemonRuntimeReplacementStopsOldLaunchBeforeNewActivity(t *tes
 				switch frame.Type {
 				case protocol.EventAgentStartAck:
 					var ack protocol.AgentStartAckPayload
-					if json.Unmarshal(frame.Payload, &ack) == nil && ack.LaunchID == newStart.LaunchID {
+					if json.Unmarshal(frame.Payload, &ack) == nil && ack.AgentID == newStart.AgentID {
 						newAck = true
 					}
 				case protocol.EventAgentStatus:
 					var status protocol.AgentStatusPayload
-					if json.Unmarshal(frame.Payload, &status) == nil && status.LaunchID == newStart.LaunchID && status.Status == protocol.AgentStatusActive {
+					if json.Unmarshal(frame.Payload, &status) == nil && status.AgentID == newStart.AgentID && status.Status == protocol.AgentStatusActive {
 						newActive = true
 					}
 				case protocol.EventAgentActivity:
 					var activity protocol.AgentActivityPayload
-					if json.Unmarshal(frame.Payload, &activity) == nil && activity.Snapshot.LaunchID == newStart.LaunchID {
+					if json.Unmarshal(frame.Payload, &activity) == nil && activity.Snapshot.AgentID == newStart.AgentID {
 						newActivity = true
 					}
 				}
@@ -642,27 +639,6 @@ func TestWorkspaceDaemonRuntimeReplacementStopsOldLaunchBeforeNewActivity(t *tes
 				serverResult <- fmt.Errorf("wait for Grok launch: %w", err)
 				return
 			}
-		}
-		if err := writeCommand(protocol.EventDaemonAgentStop, protocol.AgentStopPayload{
-			AgentID: oldStart.AgentID, LaunchID: oldStart.LaunchID,
-		}); err != nil {
-			serverResult <- err
-			return
-		}
-		ping := protocol.WorkspacePingPayload{PingID: "after-stale-stop"}
-		if err := writeCommand(protocol.EventWorkspaceDaemonPing, ping); err != nil {
-			serverResult <- err
-			return
-		}
-		pongFrame, err := waitForType(protocol.EventWorkspaceDaemonPong)
-		if err != nil {
-			serverResult <- fmt.Errorf("wait for pong after stale stop: %w", err)
-			return
-		}
-		var pong protocol.WorkspacePongPayload
-		if json.Unmarshal(pongFrame.Payload, &pong) != nil || pong.PingID != ping.PingID {
-			serverResult <- fmt.Errorf("pong after stale stop = %+v", pong)
-			return
 		}
 		serverResult <- nil
 	}))
@@ -699,14 +675,14 @@ func TestWorkspaceDaemonRuntimeReplacementStopsOldLaunchBeforeNewActivity(t *tes
 	case <-ctx.Done():
 		t.Fatal("timed out waiting for Raft-aligned Runtime replacement")
 	}
-	if current, found := runner.processes.Snapshot("agent-1"); !found || current.LaunchID != "launch-grok" {
-		t.Fatalf("stale old stop changed replacement launch: %+v found=%v", current, found)
+	if current, found := runner.processes.Snapshot("agent-1"); !found || current.RuntimeID != "runtime-grok" {
+		t.Fatalf("replacement Runtime was not retained: %+v found=%v", current, found)
 	}
 	cancel()
 	select {
 	case <-runnerDone:
 	case <-time.After(time.Second):
-		t.Fatal("Workspace Runner did not stop after replacement test")
+		t.Fatal("WorkspaceDaemon did not stop after replacement test")
 	}
 }
 
@@ -729,8 +705,7 @@ func TestWorkspaceDaemonProviderStartSurvivesControlConnectionClose(t *testing.T
 			return
 		}
 		start, _ := json.Marshal(protocol.Message{Type: protocol.EventDaemonAgentStart, Payload: marshalRaw(protocol.AgentStartPayload{
-			AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1",
-		})})
+			AgentID: "agent-1", RuntimeID: "runtime-1"})})
 		if err := conn.WriteMessage(websocket.TextMessage, start); err != nil {
 			t.Error(err)
 			return
@@ -806,10 +781,10 @@ func TestWorkspaceDaemonProviderStartSurvivesControlConnectionClose(t *testing.T
 
 func TestWorkspaceDaemonStopEpochCancelsBlockedProviderStart(t *testing.T) {
 	const (
-		workspaceID = "ws-1"
-		runtimeID   = "runtime-1"
-		agentID     = "agent-1"
-		launchID    = "launch-1"
+		workspaceID     = "ws-1"
+		runtimeID       = "runtime-1"
+		agentID         = "agent-1"
+		agentInstanceID = "launch-1"
 	)
 	d := New(Config{WorkspacesRoot: t.TempDir()}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	d.mu.Lock()
@@ -831,8 +806,7 @@ func TestWorkspaceDaemonStopEpochCancelsBlockedProviderStart(t *testing.T) {
 	startDone := make(chan startResult, 1)
 	go func() {
 		_, status, _, err := runner.startManagedAgent(context.Background(), protocol.AgentStartPayload{
-			AgentID: agentID, RuntimeID: runtimeID, LaunchID: launchID, StartDispatchID: "dispatch-1",
-		})
+			AgentID: agentID, RuntimeID: runtimeID})
 		startDone <- startResult{status: status, err: err}
 	}()
 	select {
@@ -845,8 +819,7 @@ func TestWorkspaceDaemonStopEpochCancelsBlockedProviderStart(t *testing.T) {
 	stopDone := make(chan error, 1)
 	go func() {
 		stopDone <- runner.stopManagedAgent(context.Background(), protocol.AgentStopPayload{
-			AgentID: agentID, LaunchID: launchID,
-		}, nil, func(eventType string, payload any) error {
+			AgentID: agentID}, nil, func(eventType string, payload any) error {
 			if eventType == protocol.EventAgentStatus {
 				statuses <- payload.(protocol.AgentStatusPayload)
 			}
@@ -872,7 +845,7 @@ func TestWorkspaceDaemonStopEpochCancelsBlockedProviderStart(t *testing.T) {
 	}
 	select {
 	case status := <-statuses:
-		if status.AgentID != agentID || status.LaunchID != launchID || status.Status != protocol.AgentStatusInactive {
+		if status.AgentID != agentID || status.Status != protocol.AgentStatusInactive {
 			t.Fatalf("stop status = %+v", status)
 		}
 	default:
@@ -884,8 +857,7 @@ func TestWorkspaceDaemonStopEpochCancelsBlockedProviderStart(t *testing.T) {
 
 	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error { return nil }
 	_, status, _, err := runner.startManagedAgent(context.Background(), protocol.AgentStartPayload{
-		AgentID: agentID, RuntimeID: runtimeID, LaunchID: "launch-2", StartDispatchID: "dispatch-2",
-	})
+		AgentID: agentID, RuntimeID: runtimeID})
 	if err != nil || status.Status != protocol.AgentStatusActive {
 		t.Fatalf("fresh start after stopped epoch = status %+v, error %v", status, err)
 	}
@@ -895,11 +867,10 @@ func TestWorkspaceDaemonUnknownLaunchStopDoesNotAdvanceEpoch(t *testing.T) {
 	d := New(Config{WorkspacesRoot: t.TempDir()}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	runner, _ := attachTestWorkspaceDaemon(t, d, "ws-1", nil)
 	if err := runner.stopManagedAgent(context.Background(), protocol.AgentStopPayload{
-		AgentID: "agent-1", LaunchID: "stale-launch",
-	}, nil, func(string, any) error { return nil }); err != nil {
+		AgentID: "agent-1"}, nil, func(string, any) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
-	if err := runner.processes.RestoreIdle("agent-1", "runtime-1", "launch-1", "dispatch-1", 0); err != nil {
+	if err := runner.processes.RestoreIdle("agent-1", "runtime-1", 0); err != nil {
 		t.Fatalf("unowned stale Stop advanced stop epoch: %v", err)
 	}
 }
@@ -924,8 +895,7 @@ func TestWorkspaceDaemonDuplicateStartDoesNotSpawnProviderTwice(t *testing.T) {
 			return
 		}
 		start, _ := json.Marshal(protocol.Message{Type: protocol.EventDaemonAgentStart, Payload: marshalRaw(protocol.AgentStartPayload{
-			AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1",
-		})})
+			AgentID: "agent-1", RuntimeID: "runtime-1"})})
 		if err := conn.WriteMessage(websocket.TextMessage, start); err != nil {
 			t.Error(err)
 			return
@@ -1010,7 +980,7 @@ func TestWorkspaceDaemonDuplicateStartDoesNotSpawnProviderTwice(t *testing.T) {
 	providerReleased = true
 	select {
 	case status := <-active:
-		if status.AgentID != "agent-1" || status.LaunchID != "launch-1" {
+		if status.AgentID != "agent-1" {
 			t.Fatalf("active status = %+v", status)
 		}
 	case <-ctx.Done():
@@ -1036,8 +1006,7 @@ func TestWorkspaceDaemonFailedProviderStartPublishesInactiveOnCurrentConnection(
 			return
 		}
 		start, _ := json.Marshal(protocol.Message{Type: protocol.EventDaemonAgentStart, Payload: marshalRaw(protocol.AgentStartPayload{
-			AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1",
-		})})
+			AgentID: "agent-1", RuntimeID: "runtime-1"})})
 		if err := conn.WriteMessage(websocket.TextMessage, start); err != nil {
 			t.Error(err)
 			return
@@ -1086,7 +1055,7 @@ func TestWorkspaceDaemonFailedProviderStartPublishesInactiveOnCurrentConnection(
 	go func() { _ = runner.runConnection(ctx) }()
 	select {
 	case status := <-got:
-		if status.AgentID != "agent-1" || status.LaunchID != "launch-1" || status.Status != protocol.AgentStatusInactive {
+		if status.AgentID != "agent-1" || status.Status != protocol.AgentStatusInactive {
 			t.Fatalf("failed start status = %+v, want inactive launch-1", status)
 		}
 	case <-ctx.Done():
@@ -1130,7 +1099,7 @@ func TestWorkspaceDaemonOwnsCurrentControlPlaneHeartbeat(t *testing.T) {
 					found = found || capability == protocol.DaemonCapabilityWorkspaceDaemonControlPlane
 				}
 				if !found {
-					t.Error("ready did not advertise Workspace Runner control plane")
+					t.Error("ready did not advertise WorkspaceDaemon control plane")
 					return
 				}
 				continue
@@ -1181,7 +1150,7 @@ func TestWorkspaceDaemonOwnsCurrentControlPlaneHeartbeat(t *testing.T) {
 			t.Fatalf("heartbeat = %+v, want runtime-1", heartbeat)
 		}
 	case <-ctx.Done():
-		t.Fatal("Workspace Runner did not send the current control-plane heartbeat")
+		t.Fatal("WorkspaceDaemon did not send the current control-plane heartbeat")
 	}
 	select {
 	case ack := <-acks:
@@ -1189,7 +1158,7 @@ func TestWorkspaceDaemonOwnsCurrentControlPlaneHeartbeat(t *testing.T) {
 			t.Fatalf("consumed heartbeat acknowledgement = %+v", ack)
 		}
 	case <-ctx.Done():
-		t.Fatal("Workspace Runner did not consume its heartbeat acknowledgement")
+		t.Fatal("WorkspaceDaemon did not consume its heartbeat acknowledgement")
 	}
 }
 
@@ -1208,8 +1177,7 @@ func TestWorkspaceDaemonStartCreatesCoordinatorForCommandRuntime(t *testing.T) {
 			return
 		}
 		start, _ := json.Marshal(protocol.Message{Type: protocol.EventDaemonAgentStart, Payload: marshalRaw(protocol.AgentStartPayload{
-			AgentID: "agent-1", RuntimeID: "runtime-new", LaunchID: "launch-1", StartDispatchID: "dispatch-1",
-		})})
+			AgentID: "agent-1", RuntimeID: "runtime-new"})})
 		if err := conn.WriteMessage(websocket.TextMessage, start); err != nil {
 			t.Error(err)
 			return
@@ -1324,7 +1292,7 @@ func TestWorkspaceDaemonAcknowledgesCanonicalMessageDeliveryWithoutRuntime(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	registerTestRunnerInbox(t, runner, InboxKey{WorkspaceID: "ws-1", AgentID: "agent-1"}, "runtime-1", coordinator)
+	registerTestWorkspaceDaemonInbox(t, runner, InboxKey{WorkspaceID: "ws-1", AgentID: "agent-1"}, "runtime-1", coordinator)
 	d.attachWorkspaceDaemon(runner)
 	t.Cleanup(func() {
 		d.detachWorkspaceDaemon(runner)

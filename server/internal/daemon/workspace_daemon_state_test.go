@@ -19,13 +19,12 @@ import (
 var _ interface{ Run(context.Context) } = (*WorkspaceDaemon)(nil)
 
 func TestWorkspaceDaemonConstructionRequiresFixedIdentity(t *testing.T) {
-	runtimes := newCanonicalAgentRuntimePool()
+	runtimes := newAgentRuntimePool()
 	base := WorkspaceDaemonConfig{
 		DaemonID: "daemon-1", DaemonInstanceID: "daemon-instance-1", WorkspaceID: "workspace-1",
 	}
 	dependencies := workspaceDaemonDependencies{
 		client: NewClient(""), runtimes: runtimes,
-		processAdmission:      runtimes.managedProcessAdmission(),
 		openInbox:             func(InboxKey, string) (*MessageCoordinator, error) { return nil, nil },
 		runtimeIDs:            func() []string { return []string{"runtime-1"} },
 		ensureResidentRuntime: func(context.Context, string, string, *agent.PiRunIdentity) error { return nil },
@@ -44,12 +43,11 @@ func TestWorkspaceDaemonConstructionRequiresFixedIdentity(t *testing.T) {
 		})
 	}
 	for name, mutate := range map[string]func(*workspaceDaemonDependencies){
-		"client":            func(dependencies *workspaceDaemonDependencies) { dependencies.client = nil },
-		"runtimes":          func(dependencies *workspaceDaemonDependencies) { dependencies.runtimes = nil },
-		"process admission": func(dependencies *workspaceDaemonDependencies) { dependencies.processAdmission = nil },
-		"Inbox factory":     func(dependencies *workspaceDaemonDependencies) { dependencies.openInbox = nil },
-		"Runtime scope":     func(dependencies *workspaceDaemonDependencies) { dependencies.runtimeIDs = nil },
-		"resident Runtime":  func(dependencies *workspaceDaemonDependencies) { dependencies.ensureResidentRuntime = nil },
+		"client":           func(dependencies *workspaceDaemonDependencies) { dependencies.client = nil },
+		"runtimes":         func(dependencies *workspaceDaemonDependencies) { dependencies.runtimes = nil },
+		"Inbox factory":    func(dependencies *workspaceDaemonDependencies) { dependencies.openInbox = nil },
+		"Runtime scope":    func(dependencies *workspaceDaemonDependencies) { dependencies.runtimeIDs = nil },
+		"resident Runtime": func(dependencies *workspaceDaemonDependencies) { dependencies.ensureResidentRuntime = nil },
 	} {
 		t.Run(name, func(t *testing.T) {
 			candidate := dependencies
@@ -235,7 +233,7 @@ func TestWorkspaceDaemonReconnectReplacesConnectionContextAndWriter(t *testing.T
 }
 
 func TestComputerSupervisesProcessAndBindingChildOwnsWorkspaceDaemon(t *testing.T) {
-	daemonRaw, err := os.ReadFile("workspace_runner.go")
+	daemonRaw, err := os.ReadFile("workspace_daemon.go")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +252,7 @@ func TestComputerSupervisesProcessAndBindingChildOwnsWorkspaceDaemon(t *testing.
 		t.Fatal("Binding child does not own WorkspaceDaemon.Run")
 	}
 	if !strings.Contains(string(childRaw), "adoptWorkspaceDaemon(runner)") {
-		t.Fatal("Binding child does not publish its Workspace Runner for Credential Proxy lookup")
+		t.Fatal("Binding child does not publish its WorkspaceDaemon for Credential Proxy lookup")
 	}
 	if !strings.Contains(string(supervisorRaw), "type BindingSupervisor struct") || !strings.Contains(string(supervisorRaw), "child.Wait()") {
 		t.Fatal("computer package does not own Binding child supervision")
@@ -262,7 +260,7 @@ func TestComputerSupervisesProcessAndBindingChildOwnsWorkspaceDaemon(t *testing.
 }
 
 func TestDaemonHasNoWorkspaceDaemonTransportOrGenerationMaps(t *testing.T) {
-	for _, path := range []string{"daemon.go", "workspace_runner_delivery.go"} {
+	for _, path := range []string{"daemon.go", "workspace_daemon_delivery.go"} {
 		raw, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
@@ -300,7 +298,7 @@ func TestWorkspaceDaemonInternalsDoNotEscapeRunnerModule(t *testing.T) {
 			return nil
 		}
 		name := filepath.Base(path)
-		if strings.HasPrefix(name, "workspace_runner_") || name == "workspace_runner.go" {
+		if strings.HasPrefix(name, "workspace_daemon_") || name == "workspace_daemon.go" {
 			return nil
 		}
 		raw, readErr := os.ReadFile(path)
@@ -324,11 +322,10 @@ func TestWorkspaceDaemonInternalsDoNotEscapeRunnerModule(t *testing.T) {
 }
 
 func TestWorkspaceDaemonOwnsLocalStateAndSharesMachineDependencies(t *testing.T) {
-	runtimes := newCanonicalAgentRuntimePool()
+	runtimes := newAgentRuntimePool()
 	diagnostics := &runnerDiagnosticRegistry{}
 	dependencies := workspaceDaemonDependencies{
 		client: NewClient(""), runtimes: runtimes,
-		processAdmission:      runtimes.managedProcessAdmission(),
 		diagnostics:           diagnostics,
 		openInbox:             func(InboxKey, string) (*MessageCoordinator, error) { return nil, nil },
 		runtimeIDs:            func() []string { return []string{"runtime-1"} },
@@ -353,7 +350,7 @@ func TestWorkspaceDaemonOwnsLocalStateAndSharesMachineDependencies(t *testing.T)
 		t.Fatal("Runner local state was not constructed")
 	}
 	if first.processes == second.processes || first.activity == second.activity || first.inboxes == second.inboxes {
-		t.Fatal("different Workspace Runners share Runner-owned state")
+		t.Fatal("different WorkspaceDaemons share Runner-owned state")
 	}
 	if first.inboxes.workspaceID != "workspace-1" || second.inboxes.workspaceID != "workspace-2" {
 		t.Fatal("Inbox registry slots lost their fixed Workspace scope")
@@ -364,7 +361,7 @@ func TestWorkspaceDaemonOwnsLocalStateAndSharesMachineDependencies(t *testing.T)
 }
 
 func TestDaemonBuildsWorkspaceDaemonFromSharedOwners(t *testing.T) {
-	d := New(Config{DaemonID: "daemon-1", MaxAgentProcesses: 3}, nil)
+	d := New(Config{DaemonID: "daemon-1"}, nil)
 	d.runnerInstanceID = "instance-1"
 	d.runnerDiagnostics = &runnerDiagnosticRegistry{}
 	runner, err := d.newWorkspaceDaemon("workspace-1")
@@ -374,7 +371,7 @@ func TestDaemonBuildsWorkspaceDaemonFromSharedOwners(t *testing.T) {
 	if runner.runtimes != d.canonicalRuntimes || runner.diagnostics != d.runnerDiagnostics {
 		t.Fatal("Daemon did not inject its machine-wide owners")
 	}
-	if runner.processes.admission == nil {
-		t.Fatal("Daemon did not inject machine-wide process admission")
+	if runner.processes == nil {
+		t.Fatal("Daemon did not construct the Agent process manager")
 	}
 }

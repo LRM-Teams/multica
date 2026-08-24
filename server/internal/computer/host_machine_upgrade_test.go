@@ -102,7 +102,7 @@ func TestHostMachineUpgradeDifferentOperationReturnsBusy(t *testing.T) {
 
 func TestHostControlForwardsComputerControlBusy(t *testing.T) {
 	identity := BindingChildIdentity{WorkspaceID: "workspace-a", DaemonInstanceID: "start-3", PID: 8051}
-	control := NewHostControl("owner-secret", NewProcessCapacity(1), HostControlCallbacks{
+	control := NewHostControl("owner-secret", HostControlCallbacks{
 		Current: func(got BindingChildIdentity) bool { return got == identity },
 		MachineActions: func(context.Context, BindingChildIdentity, json.RawMessage) error {
 			return ErrComputerControlBusy

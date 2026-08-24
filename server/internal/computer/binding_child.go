@@ -23,7 +23,7 @@ type BindingChild interface {
 	Stop() error
 }
 
-// ReadyBindingChild exposes one Binding execution's real Workspace Runner
+// ReadyBindingChild exposes one Binding execution's real WorkspaceDaemon
 // readiness through the identity-fenced supervision seam.
 type ReadyBindingChild interface {
 	BindingChild

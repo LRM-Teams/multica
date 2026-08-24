@@ -27,12 +27,12 @@ func identityForAgent(t *testing.T, agentID, runtimeID string) canonicalAgentRun
 	return identity
 }
 
-func acquireResident(t *testing.T, pool *canonicalAgentRuntimePool, probe *canonicalRuntimeFactoryProbe, agentID, runtimeID string, ctx context.Context) *canonicalAgentRuntimeLease {
+func acquireResident(t *testing.T, pool *agentRuntimePool, probe *canonicalRuntimeFactoryProbe, agentID, runtimeID string, ctx context.Context) *agentRuntimeLease {
 	t.Helper()
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	lease, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
+	lease, err := pool.acquire(agentRuntimeAcquireRequest{
 		Identity: identityForAgent(t, agentID, runtimeID),
 		Factory:  probe.factory,
 		Context:  ctx,
@@ -45,8 +45,8 @@ func acquireResident(t *testing.T, pool *canonicalAgentRuntimePool, probe *canon
 }
 
 // 1. cap=N + N+k agents → steady-state live ≤ N
-func TestAgentProcessCapSteadyStateAtMostN(t *testing.T) {
-	pool := newCanonicalAgentRuntimePool()
+func TestAgentRuntimeSlotsSteadyStateAtMostN(t *testing.T) {
+	pool := newAgentRuntimePool()
 	pool.setMaxAgentProcesses(2)
 	probe := &canonicalRuntimeFactoryProbe{}
 
@@ -71,7 +71,7 @@ func TestAgentProcessCapSteadyStateAtMostN(t *testing.T) {
 
 // 2. Same agent rebinds runtime_id → still counts as 1; old process closed.
 func TestAgentProcessCapRebindSameAgentCountsOnce(t *testing.T) {
-	pool := newCanonicalAgentRuntimePool()
+	pool := newAgentRuntimePool()
 	pool.setMaxAgentProcesses(4)
 	probe := &canonicalRuntimeFactoryProbe{}
 
@@ -103,7 +103,7 @@ func TestAgentProcessCapRebindSameAgentCountsOnce(t *testing.T) {
 
 // 3. Pool full + idle present → kick oldest idle; never kick running.
 func TestAgentProcessCapEvictsIdleNotRunning(t *testing.T) {
-	pool := newCanonicalAgentRuntimePool()
+	pool := newAgentRuntimePool()
 	pool.setMaxAgentProcesses(2)
 	probe := &canonicalRuntimeFactoryProbe{}
 
@@ -137,7 +137,7 @@ func TestAgentProcessCapEvictsIdleNotRunning(t *testing.T) {
 
 // 4. All running → new acquire waits / does not steal.
 func TestAgentProcessCapWaitsWhenAllRunning(t *testing.T) {
-	pool := newCanonicalAgentRuntimePool()
+	pool := newAgentRuntimePool()
 	pool.setMaxAgentProcesses(1)
 	probe := &canonicalRuntimeFactoryProbe{}
 
@@ -146,7 +146,7 @@ func TestAgentProcessCapWaitsWhenAllRunning(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
 	defer cancel()
 	started := time.Now()
-	_, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
+	_, err := pool.acquire(agentRuntimeAcquireRequest{
 		Identity: identityForAgent(t, "agent-waiter", "rt"),
 		Factory:  probe.factory,
 		Context:  ctx,
@@ -171,7 +171,7 @@ func TestAgentProcessCapEnvAbsoluteAppliedViaSetMax(t *testing.T) {
 	if got := resolveMaxAgentProcesses(in); got != 3 {
 		t.Fatalf("got %d", got)
 	}
-	pool := newCanonicalAgentRuntimePool()
+	pool := newAgentRuntimePool()
 	got := resolveMaxAgentProcesses(in)
 	pool.setMaxAgentProcesses(got)
 	if pool.maxAgentProcesses != 3 {
@@ -191,7 +191,7 @@ func TestAgentProcessCapFloorCeilWithInjectedCPU(t *testing.T) {
 
 // Concurrent fill under cap never exceeds N live agents for long.
 func TestAgentProcessCapConcurrentDoesNotExceed(t *testing.T) {
-	pool := newCanonicalAgentRuntimePool()
+	pool := newAgentRuntimePool()
 	pool.setMaxAgentProcesses(3)
 	probe := &canonicalRuntimeFactoryProbe{}
 
@@ -204,7 +204,7 @@ func TestAgentProcessCapConcurrentDoesNotExceed(t *testing.T) {
 			id := "agent-" + string(rune('a'+i%12))
 			// unique agent ids
 			id = "agent-" + itoa(i)
-			lease, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
+			lease, err := pool.acquire(agentRuntimeAcquireRequest{
 				Identity: identityForAgent(t, id, "rt"),
 				Factory:  probe.factory,
 				Context:  context.Background(),
@@ -244,13 +244,13 @@ func itoa(i int) string {
 	return string(b[n:])
 }
 
-func (p *canonicalAgentRuntimePool) countLiveAgentsForTest() int {
+func (p *agentRuntimePool) countLiveAgentsForTest() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.countLiveAgentsLocked()
 }
 
-func (p *canonicalAgentRuntimePool) agentHasLiveForTest(agentID string) bool {
+func (p *agentRuntimePool) agentHasLiveForTest(agentID string) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.agentHasLiveBackendLocked(agentID)
@@ -263,7 +263,7 @@ var _ agent.Backend
 // agent can acquire (Alice #1923 nit). Live-process reuse must not kill
 // just because the next factory would fail.
 func TestAgentProcessCapInvalidateCreateFailFreesCapacity(t *testing.T) {
-	pool := newCanonicalAgentRuntimePool()
+	pool := newAgentRuntimePool()
 	pool.setMaxAgentProcesses(1)
 	probe := &canonicalRuntimeFactoryProbe{}
 
@@ -280,7 +280,7 @@ func TestAgentProcessCapInvalidateCreateFailFreesCapacity(t *testing.T) {
 		return nil, nil, errors.New("boom create")
 	}
 	id := identityForAgent(t, "agent-a", "rt")
-	_, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
+	_, err := pool.acquire(agentRuntimeAcquireRequest{
 		Identity: id,
 		Factory:  failFactory,
 		Context:  context.Background(),

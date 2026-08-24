@@ -58,7 +58,7 @@ func (d *Daemon) ensureIdleMessageCoordinator(workspaceID, agentID, runtimeID st
 	}
 	runner, err := d.ensureWorkspaceDaemon(workspaceID)
 	if err != nil {
-		return false, fmt.Errorf("ensure Workspace Runner %q: %w", workspaceID, err)
+		return false, fmt.Errorf("ensure WorkspaceDaemon %q: %w", workspaceID, err)
 	}
 	return runner.ensureMessageInbox(agentID, runtimeID)
 }
@@ -74,13 +74,13 @@ func (d *Daemon) ensureIdleMessageCoordinatorForDelivery(workspaceID, agentID st
 	}
 	runner := d.currentWorkspaceDaemon(workspaceID)
 	if runner == nil {
-		return fmt.Errorf("Workspace Runner %q is unavailable", workspaceID)
+		return fmt.Errorf("WorkspaceDaemon %q is unavailable", workspaceID)
 	}
 	return runner.ensureMessageInboxForDelivery(agentID)
 }
 
 // restoreResidentAgents rebuilds durable Agent roots after a Computer process
-// restart. A durable root alone does not create a Workspace Runner or a Message
+// restart. A durable root alone does not create a WorkspaceDaemon or a Message
 // coordinator; the supervised Binding child receives an explicit managed start
 // when work exists.
 func mixedRunMessageBatchIdentity(messages []protocol.AgentMessageProjection) (string, string, string, bool) {
@@ -347,7 +347,7 @@ func mixedRunCaptureGapIdentity(runAgentID, activityTurnID string, capture *agen
 }
 
 // reportMixedRunToolActivity tracks inflight tool calls of a mixed-run turn.
-// User-facing Activity emission stays with the Workspace Runner; this reports
+// User-facing Activity emission stays with the WorkspaceDaemon; this reports
 // only the durable mixed-run transition deltas.
 func (d *Daemon) reportMixedRunToolActivity(agentID, runtimeID, runID, runAgentID, turnID string, turnToken canonicalActionTurnToken, message agent.Message) {
 	if runID == "" || runAgentID == "" || turnID == "" || strings.TrimSpace(message.CallID) == "" {

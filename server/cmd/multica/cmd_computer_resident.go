@@ -43,10 +43,6 @@ func runComputerResident(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	maxAgentProcesses, err := computer.ResolveHostMaxAgentProcesses()
-	if err != nil {
-		return err
-	}
 	bindingsRoot := computer.RootDir("")
 	serviceGeneration := uuid.NewString()
 	sourceServicePID, err := computer.PendingMachineUpgradeSourceServicePID(bindingsRoot)
@@ -78,7 +74,6 @@ func runComputerResident(cmd *cobra.Command, _ []string) error {
 	}
 	host, err := computer.NewHost(computer.HostConfig{
 		Spawn: launcher.Spawn, ResidentRoot: bindingsRoot, Logger: logger, ControlToken: controlToken,
-		MaxAgentProcesses: maxAgentProcesses,
 	})
 	if err != nil {
 		return err

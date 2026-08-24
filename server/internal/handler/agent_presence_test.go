@@ -111,9 +111,9 @@ func TestGetAgentPresenceReturnsFullWorkspaceRosterFromRunnerManagementTruth(t *
 	h.RunnerPresenceSource = fakeRunnerPresenceSource{current: map[string]bool{
 		"daemon-1/" + testWorkspaceID + "/instance-1": true,
 	}}
-	h.observations().putStatus(testWorkspaceID, "daemon-1", "instance-1", activeID, runtimeID, "launch-active", protocol.AgentStatusActive)
-	h.observations().putStatus(testWorkspaceID, "daemon-1", "instance-1", acceptedID, runtimeID, "launch-accepted", "accepted")
-	h.observations().putStatus(testWorkspaceID, "daemon-1", "instance-1", inactiveID, runtimeID, "launch-inactive", protocol.AgentStatusInactive)
+	h.observations().putStatus(testWorkspaceID, "daemon-1", "instance-1", activeID, runtimeID, protocol.AgentStatusActive)
+	h.observations().putStatus(testWorkspaceID, "daemon-1", "instance-1", acceptedID, runtimeID, "accepted")
+	h.observations().putStatus(testWorkspaceID, "daemon-1", "instance-1", inactiveID, runtimeID, protocol.AgentStatusInactive)
 	rec := httptest.NewRecorder()
 	req := newRequestAs(testUserID, http.MethodGet, "/api/agents/presence", nil)
 	req.Header.Set("X-Workspace-ID", testWorkspaceID)
@@ -221,7 +221,7 @@ func TestRunnerStatusPublishesPresenceOnlyOnSemanticChange(t *testing.T) {
 	identity := daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID}
 	writeStatus := func(status string) {
 		t.Helper()
-		raw, err := json.Marshal(protocol.AgentStatusPayload{AgentID: agentID, LaunchID: "launch-1", Status: status})
+		raw, err := json.Marshal(protocol.AgentStatusPayload{AgentID: agentID, Status: status})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -244,7 +244,7 @@ func TestRunnerStatusPublishesPresenceOnlyOnSemanticChange(t *testing.T) {
 	}
 }
 
-func TestRunnerStartAcknowledgementAndSessionPersistOneFencedLaunch(t *testing.T) {
+func TestRunnerStartAcknowledgementAndSessionPersistForCurrentConnection(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -263,12 +263,8 @@ func TestRunnerStartAcknowledgementAndSessionPersistOneFencedLaunch(t *testing.T
 		"daemon-1/" + testWorkspaceID + "/instance-1": true,
 	}}
 	identity := daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID}
-	var launchID, startDispatchID string
-	if err := testPool.QueryRow(ctx, `SELECT launch_id::text, start_dispatch_id::text FROM agent_runner_launch_projection WHERE agent_id = $1`, parseUUID(agentID)).Scan(&launchID, &startDispatchID); err != nil {
-		t.Fatalf("load desired launch: %v", err)
-	}
 	start := protocol.AgentStartAckPayload{
-		AgentID: agentID, LaunchID: launchID, StartDispatchID: startDispatchID, QueueState: protocol.AgentStartQueueQueued, QueueDepth: 2, QueueAgeMS: 15,
+		AgentID: agentID, QueueState: protocol.AgentStartQueueQueued, QueueDepth: 2, QueueAgeMS: 15,
 	}
 	raw, err := json.Marshal(start)
 	if err != nil {
@@ -280,7 +276,7 @@ func TestRunnerStartAcknowledgementAndSessionPersistOneFencedLaunch(t *testing.T
 	if len(presencePayloads) != 0 {
 		t.Fatalf("start acknowledgement Presence payloads = %+v, want none (ACK is not Online)", presencePayloads)
 	}
-	session := protocol.AgentSessionPayload{AgentID: agentID, LaunchID: launchID, ProviderSessionID: "provider-session-1", TurnID: "turn-1", RuntimeGeneration: 3}
+	session := protocol.AgentSessionPayload{AgentID: agentID, ProviderSessionID: "provider-session-1", TurnID: "turn-1", RuntimeGeneration: 3}
 	raw, err = json.Marshal(session)
 	if err != nil {
 		t.Fatal(err)
@@ -289,16 +285,16 @@ func TestRunnerStartAcknowledgementAndSessionPersistOneFencedLaunch(t *testing.T
 		t.Fatalf("persist Runner session: %v", err)
 	}
 	obs, ok := h.observations().get(testWorkspaceID, agentID)
-	if !ok || obs.status != "accepted" || obs.launchID != launchID || obs.sessionID != "provider-session-1" {
+	if !ok || obs.status != "accepted" || obs.sessionID != "provider-session-1" {
 		t.Fatalf("observed Runner launch=%+v ok=%v", obs, ok)
 	}
 	var persistedSessionID string
 	if err := testPool.QueryRow(ctx, `
-		SELECT provider_session_id FROM agent_runner_launch_projection WHERE agent_id = $1
+		SELECT provider_session_id FROM agent WHERE id = $1
 	`, agentID).Scan(&persistedSessionID); err != nil || persistedSessionID != session.ProviderSessionID {
-		t.Fatalf("desired launch provider session = %q, %v", persistedSessionID, err)
+		t.Fatalf("Agent provider session = %q, %v", persistedSessionID, err)
 	}
-	active, err := json.Marshal(protocol.AgentStatusPayload{AgentID: agentID, LaunchID: launchID, Status: protocol.AgentStatusActive})
+	active, err := json.Marshal(protocol.AgentStatusPayload{AgentID: agentID, Status: protocol.AgentStatusActive})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -309,15 +305,10 @@ func TestRunnerStartAcknowledgementAndSessionPersistOneFencedLaunch(t *testing.T
 		t.Fatalf("active Presence payloads = %+v, want one online transition", presencePayloads)
 	}
 	stale := session
-	stale.LaunchID, stale.ProviderSessionID = "launch-stale", "provider-session-stale"
+	stale.ProviderSessionID = "provider-session-stale"
 	raw, _ = json.Marshal(stale)
-	if err := h.HandleWorkspaceDaemonFrame(ctx, identity, "instance-1", protocol.EventAgentSession, raw); err == nil {
-		t.Fatal("stale Runner session was accepted")
-	}
-	staleStatus := protocol.AgentStatusPayload{AgentID: agentID, LaunchID: "launch-stale", Status: protocol.AgentStatusActive}
-	raw, _ = json.Marshal(staleStatus)
-	if err := h.HandleWorkspaceDaemonFrame(ctx, identity, "instance-1", protocol.EventAgentStatus, raw); err == nil {
-		t.Fatal("stale Runner launch status was accepted")
+	if err := h.HandleWorkspaceDaemonFrame(ctx, identity, "stale-instance", protocol.EventAgentSession, raw); err == nil {
+		t.Fatal("session from stale daemon instance was accepted")
 	}
 }
 
@@ -340,13 +331,8 @@ func TestRunnerStartAcknowledgementPresenceStaysOfflineUntilActive(t *testing.T)
 		"daemon-1/" + testWorkspaceID + "/instance-1": true,
 	}}
 	identity := daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID}
-	var launchID, startDispatchID string
-	if err := testPool.QueryRow(ctx, `SELECT launch_id::text, start_dispatch_id::text FROM agent_runner_launch_projection WHERE agent_id = $1`, parseUUID(agentID)).Scan(&launchID, &startDispatchID); err != nil {
-		t.Fatalf("load desired launch: %v", err)
-	}
 	start := protocol.AgentStartAckPayload{
-		AgentID: agentID, LaunchID: launchID, StartDispatchID: startDispatchID,
-		QueueState: protocol.AgentStartQueueStarting, QueueDepth: 1, QueueAgeMS: 5,
+		AgentID: agentID, QueueState: protocol.AgentStartQueueStarting, QueueDepth: 1, QueueAgeMS: 5,
 	}
 	raw, err := json.Marshal(start)
 	if err != nil {
@@ -362,7 +348,7 @@ func TestRunnerStartAcknowledgementPresenceStaysOfflineUntilActive(t *testing.T)
 		t.Fatalf("Presence after ACK = %q, want offline", got)
 	}
 
-	active, err := json.Marshal(protocol.AgentStatusPayload{AgentID: agentID, LaunchID: launchID, Status: protocol.AgentStatusActive})
+	active, err := json.Marshal(protocol.AgentStatusPayload{AgentID: agentID, Status: protocol.AgentStatusActive})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -399,7 +385,7 @@ func agentPresenceFromHTTP(t *testing.T, h Handler, agentID string) string {
 	return ""
 }
 
-func TestPendingRunnerLaunchDispatchUsesDesiredLaunchID(t *testing.T) {
+func TestWorkspaceDaemonReconcileUsesAgentDesiredRuntime(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -411,10 +397,6 @@ func TestPendingRunnerLaunchDispatchUsesDesiredLaunchID(t *testing.T) {
 	t.Cleanup(func() {
 		_, _ = testPool.Exec(context.Background(), `UPDATE agent_runtime SET daemon_id = NULL WHERE id = $1`, runtimeID)
 	})
-	var launchID string
-	if err := testPool.QueryRow(ctx, `SELECT launch_id::text FROM agent_runner_launch_projection WHERE agent_id = $1`, agentID).Scan(&launchID); err != nil {
-		t.Fatal(err)
-	}
 	hub := daemonws.NewHub()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hub.HandleWebSocket(w, r, daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}})
@@ -442,8 +424,8 @@ func TestPendingRunnerLaunchDispatchUsesDesiredLaunchID(t *testing.T) {
 	h := *testHandler
 	h.DaemonHub = hub
 	identity := daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}}
-	if err := h.dispatchPendingRunnerLaunches(ctx, identity); err != nil {
-		t.Fatalf("dispatch pending Runner launch: %v", err)
+	if err := h.reconcileWorkspaceDaemonLaunches(ctx, identity); err != nil {
+		t.Fatalf("reconcile WorkspaceDaemon launch: %v", err)
 	}
 	conn.SetReadDeadline(time.Now().Add(time.Second))
 	for {
@@ -462,7 +444,7 @@ func TestPendingRunnerLaunchDispatchUsesDesiredLaunchID(t *testing.T) {
 		if start.AgentID != agentID {
 			continue
 		}
-		if start.RuntimeID != runtimeID || start.LaunchID != launchID {
+		if start.RuntimeID != runtimeID {
 			t.Fatalf("Runner launch payload=%+v", start)
 		}
 		break
@@ -477,26 +459,17 @@ func TestPendingAgentLifecycleOperationDoesNotDispatchParallelRunnerStop(t *test
 	daemonID := "daemon-runner-lifecycle-" + uuid.NewString()[:8]
 	runtimeID := seedMachineLockedRuntime(t, daemonID, "runner lifecycle")
 	agentID := createHandlerTestAgentOnRuntime(t, "runner-lifecycle-"+uuid.NewString()[:8], runtimeID)
-	var launchID string
-	if err := testPool.QueryRow(ctx, `
-		SELECT launch_id::text
-		FROM agent_runner_launch_projection
-		WHERE workspace_id = $1 AND agent_id = $2 AND runtime_id = $3
-	`, testWorkspaceID, agentID, runtimeID).Scan(&launchID); err != nil {
-		t.Fatal(err)
-	}
 	operationID := uuid.NewString()
 	h := *testHandler
 	h.agentRestarts = newAgentRestartStore()
 	if _, ok := h.restarts().begin(activeAgentRestartState{
-		operationID:  operationID,
-		workspaceID:  testWorkspaceID,
-		agentID:      agentID,
-		runtimeID:    runtimeID,
-		computerID:   daemonID,
-		storageKind:  agentRestartStorageRestart,
-		step:         agentRestartStepStopping,
-		stopLaunchID: launchID,
+		operationID: operationID,
+		workspaceID: testWorkspaceID,
+		agentID:     agentID,
+		runtimeID:   runtimeID,
+		computerID:  daemonID,
+		storageKind: agentRestartStorageRestart,
+		step:        agentRestartStepStopping,
 	}); !ok {
 		t.Fatal("seed in-flight restart")
 	}
@@ -528,7 +501,7 @@ func TestPendingAgentLifecycleOperationDoesNotDispatchParallelRunnerStop(t *test
 	h.runnerObservations = newRunnerObservationStore()
 	h.runnerActivityCursor = newRunnerActivityCursorStore()
 	h.DaemonHub = hub
-	h.observations().putStatus(testWorkspaceID, daemonID, "instance-1", agentID, runtimeID, launchID, protocol.AgentStatusActive)
+	h.observations().putStatus(testWorkspaceID, daemonID, "instance-1", agentID, runtimeID, protocol.AgentStatusActive)
 	identity := daemonws.ClientIdentity{DaemonID: daemonID, WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}}
 	if err := h.reconcileWorkspaceDaemonLaunches(ctx, identity); err != nil {
 		t.Fatalf("reconcile while lifecycle stop is active: %v", err)
@@ -566,7 +539,7 @@ func TestRunnerDisconnectFencesExactInstanceAndPublishesOnce(t *testing.T) {
 	h.runnerObservations = newRunnerObservationStore()
 	h.runnerActivityCursor = newRunnerActivityCursorStore()
 	h.Bus = bus
-	h.observations().putStatus(testWorkspaceID, "daemon-1", "replacement", agentID, runtimeID, "launch-new", protocol.AgentStatusActive)
+	h.observations().putStatus(testWorkspaceID, "daemon-1", "replacement", agentID, runtimeID, protocol.AgentStatusActive)
 	identity := daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID}
 
 	if err := h.HandleWorkspaceDaemonDisconnect(ctx, identity, "old-instance"); err != nil {

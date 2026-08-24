@@ -26,7 +26,7 @@ const (
 
 // residentCrashWatchLoop periodically checks every idle resident canonical
 // runtime slot for a dead process and evicts/reports any it finds — see
-// canonicalAgentRuntimePool.checkResidentLiveness. Detection here is
+// agentRuntimePool.checkResidentLiveness. Detection here is
 // deliberately decoupled from task dispatch: the pool's existing
 // reuse-or-recreate logic already self-heals the next time a turn is
 // attempted against a slot, but nothing previously noticed a crash before
@@ -63,7 +63,7 @@ func (d *Daemon) residentCrashWatchLoop(ctx context.Context) {
 }
 
 // onResidentProcessEvent is the daemon's single subscriber to the
-// canonicalAgentRuntimePool resident process event bus
+// agentRuntimePool resident process event bus
 // (resident_process_event.go). It routes each kind to its own handler; see
 // §3 of the change that introduced this file for why exited/recovered/
 // stalled are handled here instead of each having their own subscription.

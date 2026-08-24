@@ -39,9 +39,9 @@ type TaskContextForEnv struct {
 	// (system prompt / AGENTS brief). It must not be re-injected on resume.
 	AgentScopeMemories []MemoryContextForEnv
 	ProjectID          string // issue's project, when present
-	ChannelID         string // exact DM/channel surface, when present
-	ChatSessionID     string // standalone FAB/bubble conversation, when present
-	ProjectTitle      string // human-readable project title
+	ChannelID          string // exact DM/channel surface, when present
+	ChatSessionID      string // standalone FAB/bubble conversation, when present
+	ProjectTitle       string // human-readable project title
 	// MessageDelivery marks the durable Agent runtime that handles canonical
 	// Message Deliveries. It is process configuration only: no Task, lease,
 	// execution, session, or current-message identity appears here.

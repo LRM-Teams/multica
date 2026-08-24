@@ -235,12 +235,7 @@ type Daemon struct {
 
 	// canonicalRuntimes owns the one durable provider process for each
 	// Agent×runtime Message coordinator.
-	canonicalRuntimes *canonicalAgentRuntimePool
-	// processAdmission is the machine-wide managed-launch admission seam. The
-	// legacy in-process composition uses the canonical pool; a Binding child
-	// replaces it with a generation-fenced Computer Host control client. A
-	// Computer Host does not construct Binding execution admission.
-	processAdmission agentProcessAdmission
+	canonicalRuntimes *agentRuntimePool
 	// residentCrashBackoff tracks repeated crashes per agent×runtime (task
 	// #42②) so a resident process stuck crash-looping is flagged terminal
 	// instead of silently retried forever.
@@ -295,10 +290,9 @@ func newDaemonForRole(cfg Config, logger *slog.Logger, role daemonProcessRole) *
 
 func (d *Daemon) initializeBindingExecution(bindingStateRoot string) {
 	d.workspaceDaemons = make(map[string]*WorkspaceDaemon)
-	d.canonicalRuntimes = newCanonicalAgentRuntimePool()
+	d.canonicalRuntimes = newAgentRuntimePool()
 	d.canonicalRuntimes.setResidentStallWatchdog(d.cfg.RuntimeProgressStale)
 	d.canonicalRuntimes.setMaxAgentProcesses(d.cfg.MaxAgentProcesses)
-	d.processAdmission = d.canonicalRuntimes.managedProcessAdmission()
 	d.canonicalRuntimes.subscribeResidentProcess(d.onResidentProcessEvent)
 	d.messageDraftStore = NewMessageDraftStore(d.cfg.WorkspacesRoot)
 	d.mixedRunActivityOutbox = newMixedRunActivityOutbox(bindingStateRoot)
@@ -597,7 +591,7 @@ func (d *Daemon) reregisterWorkspaceAfterRuntimeGone(ctx context.Context, worksp
 }
 
 // runtimeSetWatcher is a tiny pub/sub for runtime-set changes. It exists
-// because more than one supervisor (taskWakeupLoop, Workspace Runners, pollLoop)
+// because more than one supervisor (taskWakeupLoop, WorkspaceDaemons, pollLoop)
 // needs to react to runtime-set changes; a single buffered channel would
 // race so only the first listener would learn about each change.
 //
@@ -894,7 +888,7 @@ func (d *Daemon) configuredWorkspaceBindings() (map[string]computer.WorkspaceBin
 }
 
 // handleHeartbeatActions dispatches the pending-action set returned by the
-// current Workspace Runner control plane.
+// current WorkspaceDaemon control plane.
 // Each action is dispatched in its own goroutine so a slow handler cannot
 // block subsequent heartbeats.
 func (d *Daemon) handleHeartbeatActions(ctx context.Context, runtimeID string, resp *HeartbeatResponse) {

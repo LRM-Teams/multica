@@ -257,7 +257,7 @@ func (d *Daemon) localAgentInboxIdentity(w http.ResponseWriter, r *http.Request)
 	runner := d.workspaceDaemons[workspaceID]
 	d.workspaceDaemonMu.RUnlock()
 	if runner == nil {
-		writeAgentInboxError(w, http.StatusConflict, "Workspace Runner is unavailable", "runner_unavailable")
+		writeAgentInboxError(w, http.StatusConflict, "WorkspaceDaemon is unavailable", "runner_unavailable")
 		return "", "", nil, false
 	}
 	return agentID, workspaceID, runner, true

@@ -584,7 +584,7 @@ const (
 	// agent:start / agent:stop process-control boundary.
 	DaemonCapabilityWorkspaceDaemonAgentProcess = "workspace_daemon_agent_process_v1"
 	// DaemonCapabilityWorkspaceDaemonControlPlane selects the current ready
-	// Workspace Runner as the sole carrier for heartbeat actions belonging to
+	// WorkspaceDaemon as the sole carrier for heartbeat actions belonging to
 	// that Workspace. Runtime-multiplexed WS and HTTP heartbeats remain legacy
 	// adapters for older daemons and must not execute actions for this Runner.
 	DaemonCapabilityWorkspaceDaemonControlPlane = "workspace_daemon_control_plane_v1"

@@ -1226,7 +1226,7 @@ func (h *Handler) HandleDaemonWSHeartbeat(ctx context.Context, identity daemonws
 	// the heartbeat: both paths share the same durable intent, but only one may
 	// be active for a given connection generation.
 	if h.DaemonHub != nil && h.DaemonHub.WorkspaceDaemonSupportsCapability(identity.DaemonID, identity.WorkspaceID, protocol.DaemonCapabilityWorkspaceDaemonAgentProcess) {
-		if err := h.dispatchPendingRunnerLaunches(ctx, identity); err != nil {
+		if err := h.reconcileWorkspaceDaemonLaunches(ctx, identity); err != nil {
 			return nil, err
 		}
 	}

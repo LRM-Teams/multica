@@ -11,7 +11,7 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-// workspaceDaemonDeliveryDispatcher keeps the Runner socket reader independent
+// workspaceDaemonDeliveryDispatcher keeps the WorkspaceDaemon socket reader independent
 // from provider startup and Message turns. Deliveries for one Agent remain
 // ordered, while different Agents cannot head-of-line block each other.
 type workspaceDaemonDeliveryDispatcher struct {
@@ -25,8 +25,8 @@ type workspaceDaemonDeliveryDispatcher struct {
 }
 
 type workspaceDaemonDeliveryPause struct {
-	launchID string
-	stop     bool
+	agentInstanceID string
+	stop            bool
 }
 
 func newWorkspaceDaemonDeliveryDispatcher(ctx context.Context, handle func(context.Context, protocol.AgentDeliverPayload)) *workspaceDaemonDeliveryDispatcher {
@@ -38,34 +38,34 @@ func newWorkspaceDaemonDeliveryDispatcher(ctx context.Context, handle func(conte
 
 // Pause holds only this Agent's deliveries while agent:start establishes its
 // provider. The socket reader and every other Agent remain independent.
-func (d *workspaceDaemonDeliveryDispatcher) Pause(agentID, launchID string) bool {
-	if d == nil || strings.TrimSpace(agentID) == "" || strings.TrimSpace(launchID) == "" {
+func (d *workspaceDaemonDeliveryDispatcher) Pause(agentID, agentInstanceID string) bool {
+	if d == nil || strings.TrimSpace(agentID) == "" || strings.TrimSpace(agentInstanceID) == "" {
 		return false
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	current, paused := d.paused[agentID]
-	if d.ctx.Err() != nil || paused && current.stop && current.launchID == launchID {
+	if d.ctx.Err() != nil || paused && current.stop && current.agentInstanceID == agentInstanceID {
 		return false
 	}
-	if paused && !current.stop && current.launchID == launchID {
+	if paused && !current.stop && current.agentInstanceID == agentInstanceID {
 		// The same immutable dispatch may be replayed before startup settles.
 		// Keep the buffer paused while allowing the socket reader to ACK it.
 		return true
 	}
-	d.paused[agentID] = workspaceDaemonDeliveryPause{launchID: launchID}
+	d.paused[agentID] = workspaceDaemonDeliveryPause{agentInstanceID: agentInstanceID}
 	return true
 }
 
 // Resume releases deliveries in their original order after agent:start has
 // published Active, provider session, and initial Activity. No delivery can
 // race those lifecycle facts onto the wire.
-func (d *workspaceDaemonDeliveryDispatcher) Resume(agentID, launchID string) {
+func (d *workspaceDaemonDeliveryDispatcher) Resume(agentID, agentInstanceID string) {
 	if d == nil {
 		return
 	}
 	d.mu.Lock()
-	if pause, ok := d.paused[agentID]; !ok || pause.stop || pause.launchID != launchID {
+	if pause, ok := d.paused[agentID]; !ok || pause.stop || pause.agentInstanceID != agentInstanceID {
 		d.mu.Unlock()
 		return
 	}
@@ -79,24 +79,24 @@ func (d *workspaceDaemonDeliveryDispatcher) Resume(agentID, launchID string) {
 
 // FenceStop supersedes a start pause with a stop-owned token. A late startup
 // completion can therefore never Resume deliveries after stop has begun.
-func (d *workspaceDaemonDeliveryDispatcher) FenceStop(agentID, launchID string) {
-	if d == nil || strings.TrimSpace(agentID) == "" || strings.TrimSpace(launchID) == "" {
+func (d *workspaceDaemonDeliveryDispatcher) FenceStop(agentID, agentInstanceID string) {
+	if d == nil || strings.TrimSpace(agentID) == "" || strings.TrimSpace(agentInstanceID) == "" {
 		return
 	}
 	d.mu.Lock()
-	d.paused[agentID] = workspaceDaemonDeliveryPause{launchID: launchID, stop: true}
+	d.paused[agentID] = workspaceDaemonDeliveryPause{agentInstanceID: agentInstanceID, stop: true}
 	delete(d.queues, agentID)
 	d.mu.Unlock()
 }
 
 // RejectStart forgets only the volatile buffer. The server still owns every
 // unACKed delivery and will replay it after a later successful start.
-func (d *workspaceDaemonDeliveryDispatcher) RejectStart(agentID, launchID string) {
+func (d *workspaceDaemonDeliveryDispatcher) RejectStart(agentID, agentInstanceID string) {
 	if d == nil {
 		return
 	}
 	d.mu.Lock()
-	if pause, ok := d.paused[agentID]; !ok || pause.stop || pause.launchID != launchID {
+	if pause, ok := d.paused[agentID]; !ok || pause.stop || pause.agentInstanceID != agentInstanceID {
 		d.mu.Unlock()
 		return
 	}
@@ -172,10 +172,10 @@ func (d *Daemon) attachWorkspaceDaemon(runner *WorkspaceDaemon) {
 // empty inbox and message send returns 409 "Message coordinator is unavailable".
 func (d *Daemon) adoptWorkspaceDaemon(runner *WorkspaceDaemon) error {
 	if d == nil {
-		return errors.New("Workspace Runner Daemon is required")
+		return errors.New("WorkspaceDaemon Daemon is required")
 	}
 	if runner == nil || runner.WorkspaceID() == "" {
-		return errors.New("Workspace Runner identity is required")
+		return errors.New("WorkspaceDaemon identity is required")
 	}
 	d.attachWorkspaceDaemon(runner)
 	return nil
@@ -264,7 +264,7 @@ func (d *Daemon) resolveWorkspaceDaemonByAgent(agentID string) (*WorkspaceDaemon
 			continue
 		}
 		if matchedRunner != nil {
-			return nil, fmt.Errorf("Message Inbox for Agent %q is ambiguous across Workspace Runners", agentID)
+			return nil, fmt.Errorf("Message Inbox for Agent %q is ambiguous across WorkspaceDaemons", agentID)
 		}
 		matchedRunner = runner
 	}

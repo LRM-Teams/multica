@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/multica-ai/multica/server/internal/daemonws"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -25,8 +24,6 @@ type activeAgentRestartState struct {
 	computerID     string
 	storageKind    agentRestartStorageKind
 	step           string
-	stopLaunchID   string
-	startLaunchID  string
 	startSessionID string
 }
 
@@ -34,17 +31,14 @@ type activeAgentRestartState struct {
 // An observed launch must produce inactive before session/workspace
 // mutation or replacement start can advance.
 func (h *Handler) beginAgentRestartOperation(ctx context.Context, state activeAgentRestartState) error {
+	_ = ctx
 	updated, ok := h.restarts().update(state.agentID, func(current *activeAgentRestartState) bool {
 		if current.operationID != state.operationID || current.step != agentRestartStepStopping {
 			return false
 		}
-		if current.stopLaunchID != "" {
-			return true
-		}
 		if obs, found := h.observations().get(current.workspaceID, current.agentID); found &&
 			obs.runtimeID == current.runtimeID && obs.daemonID == current.computerID &&
 			(obs.status == "accepted" || obs.status == protocol.AgentStatusActive) {
-			current.stopLaunchID = obs.launchID
 			if current.storageKind == agentRestartStorageRestart {
 				current.startSessionID = obs.sessionID
 			}
@@ -55,29 +49,8 @@ func (h *Handler) beginAgentRestartOperation(ctx context.Context, state activeAg
 	if !ok {
 		return nil
 	}
-	if updated.stopLaunchID == "" {
-		if h.DB == nil {
-			return errors.New("Agent restart database is unavailable")
-		}
-		err := h.DB.QueryRow(ctx, `
-			SELECT launch_id::text FROM agent_runner_launch_projection
-			WHERE workspace_id = $1 AND agent_id = $2 AND runtime_id = $3
-		`, updated.workspaceID, updated.agentID, updated.runtimeID).Scan(&updated.stopLaunchID)
-		if err != nil {
-			return fmt.Errorf("resolve Agent stop launch fence: %w", err)
-		}
-		if _, ok := h.restarts().update(updated.agentID, func(current *activeAgentRestartState) bool {
-			if current.operationID != updated.operationID || current.step != agentRestartStepStopping {
-				return false
-			}
-			current.stopLaunchID = updated.stopLaunchID
-			return true
-		}); !ok {
-			return nil
-		}
-	}
 	return h.sendAgentRestartCommand(updated, protocol.EventDaemonAgentStop,
-		protocol.AgentStopPayload{AgentID: updated.agentID, LaunchID: updated.stopLaunchID})
+		protocol.AgentStopPayload{AgentID: updated.agentID})
 }
 
 func (h *Handler) advanceAgentRestartAfterStop(ctx context.Context, state activeAgentRestartState) error {
@@ -138,6 +111,7 @@ func (h *Handler) advanceAgentRestartAfterWorkspaceReset(ctx context.Context, st
 }
 
 func (h *Handler) dispatchAgentRestartStart(ctx context.Context, state activeAgentRestartState) error {
+	_ = ctx
 	restarts := h.restarts()
 	restarts.lifecycleMu.Lock()
 	defer restarts.lifecycleMu.Unlock()
@@ -145,65 +119,36 @@ func (h *Handler) dispatchAgentRestartStart(ctx context.Context, state activeAge
 	if !active || current.operationID != state.operationID || current.step != state.step {
 		return nil
 	}
-	if h.TxStarter == nil {
-		return errors.New("Agent restart transaction store is unavailable")
-	}
-	tx, err := h.TxStarter.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-	start, err := prepareAgentRestartStart(ctx, tx, state)
-	if err != nil {
-		return err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return err
-	}
 	if _, ok := h.restarts().update(state.agentID, func(current *activeAgentRestartState) bool {
 		if current.operationID != state.operationID {
 			return false
 		}
 		current.step = agentRestartStepStarting
-		current.startLaunchID = start.LaunchID
 		return true
 	}); !ok {
 		return nil
 	}
 	state.step = agentRestartStepStarting
-	state.startLaunchID = start.LaunchID
+	start := prepareAgentRestartStart(state)
 	return h.sendAgentRestartCommand(state, protocol.EventDaemonAgentStart, start)
 }
 
-func prepareAgentRestartStart(ctx context.Context, tx pgx.Tx, state activeAgentRestartState) (protocol.AgentStartPayload, error) {
+func prepareAgentRestartStart(state activeAgentRestartState) protocol.AgentStartPayload {
 	sessionID := ""
 	if state.storageKind == agentRestartStorageRestart {
 		sessionID = state.startSessionID
 	}
-	launchID := uuid.NewString()
-	command, err := tx.Exec(ctx, `
-		UPDATE agent_runner_launch_projection
-		SET launch_id = $1, start_dispatch_id = $2, updated_at = now()
-		WHERE workspace_id = $3 AND agent_id = $4 AND runtime_id = $5
-	`, launchID, state.operationID, state.workspaceID, state.agentID, state.runtimeID)
-	if err != nil {
-		return protocol.AgentStartPayload{}, err
-	}
-	if command.RowsAffected() != 1 {
-		return protocol.AgentStartPayload{}, errors.New("desired Agent launch is unavailable")
-	}
 	return protocol.AgentStartPayload{
 		AgentID: state.agentID, RuntimeID: state.runtimeID,
-		LaunchID: launchID, StartDispatchID: state.operationID,
 		Config: protocol.AgentStartConfig{SessionID: sessionID},
-	}, nil
+	}
 }
 
 func clearAgentRuntimeSessionState(ctx context.Context, tx pgx.Tx, agentID, runtimeID string) error {
 	if _, err := tx.Exec(ctx, `
-		UPDATE agent_runner_launch_projection
+		UPDATE agent
 		SET provider_session_id = NULL, updated_at = now()
-		WHERE agent_id = $1 AND runtime_id = $2
+		WHERE id = $1 AND runtime_id = $2
 	`, agentID, runtimeID); err != nil {
 		return fmt.Errorf("clear desired Runner provider session: %w", err)
 	}
@@ -233,8 +178,12 @@ func (h *Handler) advanceAgentRestartFromStatus(ctx context.Context, identity da
 	if !ok {
 		return false, nil
 	}
+	observed, ok := h.observations().get(state.workspaceID, state.agentID)
+	if !ok || observed.daemonID != state.computerID || observed.runtimeID != state.runtimeID || observed.status != status.Status {
+		return false, nil
+	}
 	switch {
-	case state.step == agentRestartStepStopping && status.Status == protocol.AgentStatusInactive && status.LaunchID == state.stopLaunchID:
+	case state.step == agentRestartStepStopping && status.Status == protocol.AgentStatusInactive:
 		return true, h.advanceAgentRestartAfterStop(ctx, state)
 	case state.step == agentRestartStepStarting:
 		restarts := h.restarts()
@@ -245,9 +194,6 @@ func (h *Handler) advanceAgentRestartFromStatus(ctx context.Context, identity da
 			return false, nil
 		}
 		state = current
-		if state.startLaunchID != "" && state.startLaunchID != status.LaunchID {
-			return false, nil
-		}
 		if status.Status == protocol.AgentStatusInactive {
 			h.restarts().finish(state.agentID)
 			return true, nil

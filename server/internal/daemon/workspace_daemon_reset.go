@@ -5,7 +5,7 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-// resetManagedAgentWorkspace owns the local destructive half of Raft's
+// resetManagedAgentWorkspace owns the WorkspaceDaemon-local destructive half of Raft's
 // agent:reset-workspace command. It deliberately refuses to mutate the Agent
 // root until the exact managed launch and provider process are both gone.
 func (runner *WorkspaceDaemon) resetManagedAgentWorkspace(payload protocol.AgentWorkspaceResetPayload) protocol.AgentWorkspaceResetResultPayload {

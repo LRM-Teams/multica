@@ -134,9 +134,9 @@ func TestObserveMessageSendHoldPublishesSystemActivityEntry(t *testing.T) {
 
 	d := New(Config{}, nil)
 	d.runnerInstanceID = "daemon-instance-1"
-	runner := installTestRunnerActivity(t, d, "workspace-1", producer)
-	runner.processes.newID = func() string { return "launch-a" }
-	if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1", LaunchID: "launch-a", StartDispatchID: "launch-a" + "-dispatch"}); err != nil {
+	runner := installTestAgentActivityProducer(t, d, "workspace-1", producer)
+	accepted := startTestManagedAgent(t, runner, "agent-a", "runtime-1", "launch-a")
+	if err := producer.SetManaged(accepted.AgentInstanceID, protocol.AgentStatusPayload{AgentID: "agent-a", Status: protocol.AgentStatusActive}, protocol.AgentSessionPayload{AgentID: "agent-a"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -173,7 +173,7 @@ func TestObserveMessageSendHoldPublishesSystemActivityEntry(t *testing.T) {
 func TestObserveMessageSendHoldIsFailSoftWhenAgentNotManaged(t *testing.T) {
 	d := New(Config{}, nil)
 	d.runnerInstanceID = "daemon-instance-1"
-	runner := installTestRunnerActivity(t, d, "workspace-unknown", newAgentActivityProducer("daemon-instance-1", time.Now, nil))
+	runner := installTestAgentActivityProducer(t, d, "workspace-unknown", newAgentActivityProducer("daemon-instance-1", time.Now, nil))
 	// No managed launch exists for the Agent; observe must not panic.
 	runner.observeMessageSendHold("agent-unknown", "#general", 0, "freshness_unknown")
 }
@@ -186,9 +186,9 @@ func TestObserveMessageSendDraftSentPublishesSystemActivityEntry(t *testing.T) {
 
 	d := New(Config{}, nil)
 	d.runnerInstanceID = "daemon-instance-1"
-	runner := installTestRunnerActivity(t, d, "workspace-1", producer)
-	runner.processes.newID = func() string { return "launch-a" }
-	if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1", LaunchID: "launch-a", StartDispatchID: "launch-a-dispatch"}); err != nil {
+	runner := installTestAgentActivityProducer(t, d, "workspace-1", producer)
+	accepted := startTestManagedAgent(t, runner, "agent-a", "runtime-1", "launch-a")
+	if err := producer.SetManaged(accepted.AgentInstanceID, protocol.AgentStatusPayload{AgentID: "agent-a", Status: protocol.AgentStatusActive}, protocol.AgentSessionPayload{AgentID: "agent-a"}); err != nil {
 		t.Fatal(err)
 	}
 

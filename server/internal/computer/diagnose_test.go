@@ -285,7 +285,7 @@ func TestFixRemovesStaleResidentPIDOnlyWhenResidentIsStopped(t *testing.T) {
 }
 
 // TestReclaimOrphanedRunnersTerminatesDeadOwnerRunner covers the doctor --fix
-// escape hatch: a Workspace Runner whose owning Host is gone is the
+// escape hatch: a WorkspaceDaemon whose owning Host is gone is the
 // self-locking state that previously required a manual kill, so Fix must be
 // able to clear it.
 func TestReclaimOrphanedRunnersTerminatesDeadOwnerRunner(t *testing.T) {
@@ -299,7 +299,7 @@ func TestReclaimOrphanedRunnersTerminatesDeadOwnerRunner(t *testing.T) {
 	if len(applied) != 1 {
 		t.Fatalf("expected one reported mutation, got %v", applied)
 	}
-	if !strings.Contains(applied[0], "terminated orphaned Workspace Runner") {
+	if !strings.Contains(applied[0], "terminated orphaned WorkspaceDaemon") {
 		t.Fatalf("unexpected report: %q", applied[0])
 	}
 	deadline := time.Now().Add(2 * time.Second)

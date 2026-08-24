@@ -423,7 +423,7 @@ func (h *Handler) recordRunnerLaunch(ctx context.Context, identity daemonws.Clie
 			return err
 		}
 		before := h.projectRunnerLaunchPresence(identity.WorkspaceID, beforeLaunch)
-		if !h.observations().acceptStatus(identity.WorkspaceID, identity.DaemonID, daemonInstanceID, status.AgentID, util.UUIDToString(runtimeID), status.LaunchID, status.Status) {
+		if !h.observations().acceptStatus(identity.WorkspaceID, identity.DaemonID, daemonInstanceID, status.AgentID, util.UUIDToString(runtimeID), status.Status) {
 			return errors.New("stale Workspace Runner launch status")
 		}
 		afterLaunch := &runnerLaunchPresence{daemonID: identity.DaemonID, daemonInstanceID: daemonInstanceID, status: status.Status}
@@ -442,7 +442,7 @@ func (h *Handler) recordRunnerStartAcknowledgement(ctx context.Context, identity
 		if source == nil || !source.IsCurrentWorkspaceDaemon(identity.DaemonID, identity.WorkspaceID, daemonInstanceID) {
 			return errors.New("stale Workspace Runner start acknowledgement")
 		}
-		workspaceID, agentID, runtimeID, err := h.runnerActivityAgentScope(ctx, identity.WorkspaceID, acknowledgement.AgentID)
+		_, _, runtimeID, err := h.runnerActivityAgentScope(ctx, identity.WorkspaceID, acknowledgement.AgentID)
 		if err != nil {
 			return err
 		}
@@ -451,16 +451,7 @@ func (h *Handler) recordRunnerStartAcknowledgement(ctx context.Context, identity
 			return err
 		}
 		before := h.projectRunnerLaunchPresence(identity.WorkspaceID, beforeLaunch)
-		var desiredLaunchID, desiredStartDispatchID string
-		if err := h.DB.QueryRow(ctx, `
-			SELECT launch_id::text, start_dispatch_id::text FROM agent_runner_launch_projection
-			WHERE workspace_id = $1 AND agent_id = $2 AND runtime_id = $3`, workspaceID, agentID, runtimeID).Scan(&desiredLaunchID, &desiredStartDispatchID); err != nil {
-			return fmt.Errorf("load desired Runner launch: %w", err)
-		}
-		if desiredLaunchID != acknowledgement.LaunchID || desiredStartDispatchID != acknowledgement.StartDispatchID {
-			return errors.New("stale Workspace Runner start acknowledgement")
-		}
-		status, ok := h.observations().acceptStartAck(identity.WorkspaceID, identity.DaemonID, daemonInstanceID, acknowledgement.AgentID, util.UUIDToString(runtimeID), acknowledgement.LaunchID)
+		status, ok := h.observations().acceptStartAck(identity.WorkspaceID, identity.DaemonID, daemonInstanceID, acknowledgement.AgentID, util.UUIDToString(runtimeID))
 		if !ok {
 			return errors.New("stale Workspace Runner start acknowledgement")
 		}
@@ -475,7 +466,7 @@ func (h *Handler) recordRunnerStartAcknowledgement(ctx context.Context, identity
 }
 
 // recoverRunnerObservation rebuilds a missing in-memory observation from the
-// durable desired-launch projection. The observation store starts empty after
+// Agent's current runtime assignment. The observation store starts empty after
 // a server restart, and deployed daemons only replay agent:status through the
 // start-ACK round trip — which older daemon builds never complete for an
 // already-running Agent. A session or activity frame from the current ready
@@ -483,8 +474,8 @@ func (h *Handler) recordRunnerStartAcknowledgement(ctx context.Context, identity
 // residency report from the live Computer process, so re-admit it with the
 // same projection authority the start-ACK path uses instead of rejecting it
 // (and re-driving agent:start forever).
-func (h *Handler) recoverRunnerObservation(ctx context.Context, identity daemonws.ClientIdentity, daemonInstanceID, agentID, launchID string) (runnerObservedAgent, bool) {
-	if daemonInstanceID == "" || agentID == "" || launchID == "" {
+func (h *Handler) recoverRunnerObservation(ctx context.Context, identity daemonws.ClientIdentity, daemonInstanceID, agentID string) (runnerObservedAgent, bool) {
+	if daemonInstanceID == "" || agentID == "" {
 		return runnerObservedAgent{}, false
 	}
 	// Recovery is only for a true miss. An existing observation — even a
@@ -498,24 +489,24 @@ func (h *Handler) recoverRunnerObservation(ctx context.Context, identity daemonw
 	}
 	var runtimeID string
 	if err := h.DB.QueryRow(ctx, `
-		SELECT desired.runtime_id::text
-		FROM agent_runner_launch_projection desired
-		JOIN agent_runtime runtime ON runtime.id = desired.runtime_id
-		WHERE desired.workspace_id::text = $1 AND desired.agent_id::text = $2
-		  AND desired.launch_id::text = $3 AND runtime.daemon_id = $4`,
-		identity.WorkspaceID, agentID, launchID, identity.DaemonID).Scan(&runtimeID); err != nil {
+		SELECT runtime.id::text
+		FROM agent
+		JOIN agent_runtime runtime ON runtime.id = agent.runtime_id
+		WHERE agent.workspace_id::text = $1 AND agent.id::text = $2
+		  AND runtime.daemon_id = $3`,
+		identity.WorkspaceID, agentID, identity.DaemonID).Scan(&runtimeID); err != nil {
 		return runnerObservedAgent{}, false
 	}
-	if !h.observations().acceptStatus(identity.WorkspaceID, identity.DaemonID, daemonInstanceID, agentID, runtimeID, launchID, protocol.AgentStatusActive) {
+	if !h.observations().acceptStatus(identity.WorkspaceID, identity.DaemonID, daemonInstanceID, agentID, runtimeID, protocol.AgentStatusActive) {
 		return runnerObservedAgent{}, false
 	}
 	obs, ok := h.observations().get(identity.WorkspaceID, agentID)
 	if !ok {
 		return runnerObservedAgent{}, false
 	}
-	slog.Info("Workspace Runner observation recovered from desired launch projection",
+	slog.Info("Workspace Runner observation recovered from current runtime assignment",
 		"workspace_id", identity.WorkspaceID, "daemon_id", identity.DaemonID,
-		"daemon_instance_id", daemonInstanceID, "agent_id", agentID, "launch_id", launchID)
+		"daemon_instance_id", daemonInstanceID, "agent_id", agentID)
 	// No observation existed, so the projected presence before recovery was
 	// necessarily offline.
 	h.publishAgentPresenceChange(identity.WorkspaceID, agentID, AgentPresenceOffline,
@@ -537,22 +528,22 @@ func (h *Handler) recordRunnerSession(ctx context.Context, identity daemonws.Cli
 		if _, _, _, err := h.runnerActivityAgentScope(ctx, identity.WorkspaceID, session.AgentID); err != nil {
 			return err
 		}
-		if !h.observations().acceptSession(identity.WorkspaceID, identity.DaemonID, daemonInstanceID, session.AgentID, session.LaunchID, session.ProviderSessionID) {
-			if _, recovered := h.recoverRunnerObservation(ctx, identity, daemonInstanceID, session.AgentID, session.LaunchID); !recovered ||
-				!h.observations().acceptSession(identity.WorkspaceID, identity.DaemonID, daemonInstanceID, session.AgentID, session.LaunchID, session.ProviderSessionID) {
+		if !h.observations().acceptSession(identity.WorkspaceID, identity.DaemonID, daemonInstanceID, session.AgentID, session.ProviderSessionID) {
+			if _, recovered := h.recoverRunnerObservation(ctx, identity, daemonInstanceID, session.AgentID); !recovered ||
+				!h.observations().acceptSession(identity.WorkspaceID, identity.DaemonID, daemonInstanceID, session.AgentID, session.ProviderSessionID) {
 				return errors.New("stale or unknown Workspace Runner session")
 			}
 		}
 		command, err := h.DB.Exec(ctx, `
-			UPDATE agent_runner_launch_projection
+			UPDATE agent
 			SET provider_session_id = NULLIF($1, ''), updated_at = now()
-			WHERE workspace_id::text = $2 AND agent_id::text = $3 AND launch_id::text = $4
-		`, session.ProviderSessionID, identity.WorkspaceID, session.AgentID, session.LaunchID)
+			WHERE workspace_id::text = $2 AND id::text = $3
+		`, session.ProviderSessionID, identity.WorkspaceID, session.AgentID)
 		if err != nil {
 			return fmt.Errorf("persist Runner provider session: %w", err)
 		}
 		if command.RowsAffected() != 1 {
-			return errors.New("Runner provider session launch is no longer desired")
+			return errors.New("Runner provider session Agent is no longer current")
 		}
 		return nil
 	})
@@ -578,9 +569,9 @@ func (h *Handler) recordRunnerActivity(ctx context.Context, identity daemonws.Cl
 	terminalStopped := snapshot.ActivityKind == protocol.ActivityKindOffline && snapshot.DetailKind == "stopped" && snapshot.ProbeID == ""
 	obs, ok := h.observations().get(identity.WorkspaceID, snapshot.AgentID)
 	if !ok {
-		obs, ok = h.recoverRunnerObservation(ctx, identity, daemonInstanceID, snapshot.AgentID, snapshot.LaunchID)
+		obs, ok = h.recoverRunnerObservation(ctx, identity, daemonInstanceID, snapshot.AgentID)
 	}
-	if !ok || obs.daemonID != identity.DaemonID || obs.daemonInstanceID != daemonInstanceID || obs.launchID != snapshot.LaunchID {
+	if !ok || obs.agentID != snapshot.AgentID || obs.daemonID != identity.DaemonID || obs.daemonInstanceID != daemonInstanceID {
 		return errors.New("stale or unauthorized Runner Activity")
 	}
 	if obs.status != protocol.AgentStatusActive && !terminalStopped {
@@ -588,7 +579,7 @@ func (h *Handler) recordRunnerActivity(ctx context.Context, identity daemonws.Cl
 	}
 	if !h.activityCursor().accept(runnerActivityCursorKey{
 		workspaceID: identity.WorkspaceID, agentID: snapshot.AgentID,
-		daemonID: identity.DaemonID, daemonInstanceID: daemonInstanceID, launchID: snapshot.LaunchID,
+		daemonID: identity.DaemonID, daemonInstanceID: daemonInstanceID,
 	}, snapshot.ClientSequence, snapshot.ProducerFactID) {
 		return errors.New("stale or unauthorized Runner Activity")
 	}
@@ -597,8 +588,8 @@ func (h *Handler) recordRunnerActivity(ctx context.Context, identity daemonws.Cl
 		if err := h.DB.QueryRow(ctx, `
 			SELECT count(*) FROM agent_activity_probe
 			WHERE workspace_id = $1 AND agent_id = $2 AND daemon_id = $3
-			  AND daemon_instance_id = $4 AND launch_id = $5 AND probe_id = $6`,
-			workspaceID, agentID, identity.DaemonID, daemonInstanceID, snapshot.LaunchID, snapshot.ProbeID).Scan(&pending); err != nil {
+			  AND daemon_instance_id = $4 AND probe_id = $5`,
+			workspaceID, agentID, identity.DaemonID, daemonInstanceID, snapshot.ProbeID).Scan(&pending); err != nil {
 			return fmt.Errorf("load Runner Activity probe: %w", err)
 		}
 		if pending == 0 {
@@ -619,28 +610,27 @@ func (h *Handler) recordRunnerActivity(ctx context.Context, identity daemonws.Cl
 	}
 	if terminalStopped {
 		if _, err := h.DB.Exec(ctx, `DELETE FROM agent_activity_probe
-			WHERE workspace_id = $1 AND agent_id = $2 AND daemon_id = $3 AND daemon_instance_id = $4 AND launch_id = $5`,
-			workspaceID, agentID, identity.DaemonID, daemonInstanceID, snapshot.LaunchID); err != nil {
+			WHERE workspace_id = $1 AND agent_id = $2 AND daemon_id = $3 AND daemon_instance_id = $4`,
+			workspaceID, agentID, identity.DaemonID, daemonInstanceID); err != nil {
 			return fmt.Errorf("clear terminal Runner Activity probe: %w", err)
 		}
 	} else if snapshot.ProbeID != "" {
 		if _, err := h.DB.Exec(ctx, `DELETE FROM agent_activity_probe
-			WHERE workspace_id = $1 AND agent_id = $2 AND daemon_id = $3 AND daemon_instance_id = $4 AND launch_id = $5 AND probe_id = $6`,
-			workspaceID, agentID, identity.DaemonID, daemonInstanceID, snapshot.LaunchID, snapshot.ProbeID); err != nil {
+			WHERE workspace_id = $1 AND agent_id = $2 AND daemon_id = $3 AND daemon_instance_id = $4 AND probe_id = $5`,
+			workspaceID, agentID, identity.DaemonID, daemonInstanceID, snapshot.ProbeID); err != nil {
 			return fmt.Errorf("clear Runner Activity probe: %w", err)
 		}
 	}
 	_, err = h.DB.Exec(ctx, `
 		INSERT INTO agent_activity_snapshot (
-			workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id, launch_id,
+			workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id,
 			process_instance_id, client_sequence, producer_fact_id, probe_id,
 			activity_kind, detail_kind, observed_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		ON CONFLICT (workspace_id, agent_id) DO UPDATE SET
 			runtime_id = EXCLUDED.runtime_id,
 			daemon_id = EXCLUDED.daemon_id,
 			daemon_instance_id = EXCLUDED.daemon_instance_id,
-			launch_id = EXCLUDED.launch_id,
 			process_instance_id = EXCLUDED.process_instance_id,
 			client_sequence = EXCLUDED.client_sequence,
 			producer_fact_id = EXCLUDED.producer_fact_id,
@@ -649,7 +639,7 @@ func (h *Handler) recordRunnerActivity(ctx context.Context, identity daemonws.Cl
 			detail_kind = EXCLUDED.detail_kind,
 			observed_at = EXCLUDED.observed_at,
 			received_at = now()`,
-		workspaceID, agentID, runtimeID, identity.DaemonID, daemonInstanceID, snapshot.LaunchID,
+		workspaceID, agentID, runtimeID, identity.DaemonID, daemonInstanceID,
 		snapshot.ProcessInstanceID, snapshot.ClientSequence, snapshot.ProducerFactID, snapshot.ProbeID,
 		snapshot.ActivityKind, snapshot.DetailKind, snapshot.ObservedAt)
 	if err != nil {
@@ -671,12 +661,12 @@ func (h *Handler) recordRunnerActivity(ctx context.Context, identity daemonws.Cl
 	for position, entry := range activity.Entries {
 		_, err := h.DB.Exec(ctx, `
 			INSERT INTO agent_activity_entry (
-				workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id, launch_id,
+				workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id,
 				process_instance_id, client_sequence, producer_fact_id, entry_position,
 				entry_kind, entry_body, observed_at
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-			ON CONFLICT (workspace_id, agent_id, launch_id, producer_fact_id, entry_position) DO NOTHING`,
-			workspaceID, agentID, runtimeID, identity.DaemonID, daemonInstanceID, snapshot.LaunchID,
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+			ON CONFLICT (workspace_id, agent_id, daemon_instance_id, producer_fact_id, entry_position) DO NOTHING`,
+			workspaceID, agentID, runtimeID, identity.DaemonID, daemonInstanceID,
 			snapshot.ProcessInstanceID, snapshot.ClientSequence, snapshot.ProducerFactID, position,
 			entry.Kind, entry.Body, snapshot.ObservedAt)
 		if err != nil {
@@ -720,10 +710,9 @@ func (h *Handler) sendRunnerActivityProbes(ctx context.Context, now time.Time) e
 		agentID          pgtype.UUID
 		daemonID         string
 		daemonInstanceID string
-		launchID         string
 	}
 	rows, err := h.DB.Query(ctx, `
-		SELECT s.workspace_id, s.agent_id, s.daemon_id, s.daemon_instance_id, s.launch_id
+		SELECT s.workspace_id, s.agent_id, s.daemon_id, s.daemon_instance_id
 		FROM agent_activity_snapshot s
 		LEFT JOIN agent_activity_probe p ON p.workspace_id = s.workspace_id AND p.agent_id = s.agent_id
 		WHERE s.activity_kind IN ('working', 'thinking') AND s.received_at <= $1
@@ -734,7 +723,7 @@ func (h *Handler) sendRunnerActivityProbes(ctx context.Context, now time.Time) e
 	var stale []staleRunnerActivity
 	for rows.Next() {
 		var candidate staleRunnerActivity
-		if err := rows.Scan(&candidate.workspaceID, &candidate.agentID, &candidate.daemonID, &candidate.daemonInstanceID, &candidate.launchID); err != nil {
+		if err := rows.Scan(&candidate.workspaceID, &candidate.agentID, &candidate.daemonID, &candidate.daemonInstanceID); err != nil {
 			rows.Close()
 			return fmt.Errorf("scan stale Runner Activity: %w", err)
 		}
@@ -748,26 +737,26 @@ func (h *Handler) sendRunnerActivityProbes(ctx context.Context, now time.Time) e
 	for _, candidate := range stale {
 		probeID := randomID()
 		obs, ok := h.observations().get(util.UUIDToString(candidate.workspaceID), util.UUIDToString(candidate.agentID))
-		if !ok || obs.status != protocol.AgentStatusActive || obs.daemonID != candidate.daemonID || obs.daemonInstanceID != candidate.daemonInstanceID || obs.launchID != candidate.launchID {
+		if !ok || obs.agentID != util.UUIDToString(candidate.agentID) || obs.status != protocol.AgentStatusActive || obs.daemonID != candidate.daemonID || obs.daemonInstanceID != candidate.daemonInstanceID {
 			continue
 		}
 		command, err := h.DB.Exec(ctx, `
-			INSERT INTO agent_activity_probe (workspace_id, agent_id, daemon_id, daemon_instance_id, launch_id, probe_id, sent_at, deadline_at)
-			SELECT $1, $2, $3, $4, $5, $6, $7, $8
+			INSERT INTO agent_activity_probe (workspace_id, agent_id, daemon_id, daemon_instance_id, probe_id, sent_at, deadline_at)
+			SELECT $1, $2, $3, $4, $5, $6, $7
 			WHERE EXISTS (
 				SELECT 1 FROM agent_activity_snapshot s
-				WHERE s.workspace_id = $1 AND s.agent_id = $2 AND s.daemon_id = $3 AND s.daemon_instance_id = $4 AND s.launch_id = $5
-					AND s.activity_kind IN ('working', 'thinking') AND s.received_at <= $9
+				WHERE s.workspace_id = $1 AND s.agent_id = $2 AND s.daemon_id = $3 AND s.daemon_instance_id = $4
+					AND s.activity_kind IN ('working', 'thinking') AND s.received_at <= $8
 			)
-			ON CONFLICT (workspace_id, agent_id) DO NOTHING`, candidate.workspaceID, candidate.agentID, candidate.daemonID, candidate.daemonInstanceID, candidate.launchID, probeID, now, now.Add(runnerActivityProbeWindow), now.Add(-runnerActivityStaleAfter))
+			ON CONFLICT (workspace_id, agent_id) DO NOTHING`, candidate.workspaceID, candidate.agentID, candidate.daemonID, candidate.daemonInstanceID, probeID, now, now.Add(runnerActivityProbeWindow), now.Add(-runnerActivityStaleAfter))
 		if err != nil {
 			return fmt.Errorf("record Runner Activity probe: %w", err)
 		}
 		if command.RowsAffected() != 1 {
 			continue
 		}
-		if h.DaemonHub == nil || !h.DaemonHub.NotifyWorkspaceDaemon(candidate.daemonID, util.UUIDToString(candidate.workspaceID), protocol.EventAgentActivityProbe, protocol.AgentActivityProbePayload{AgentID: util.UUIDToString(candidate.agentID), LaunchID: candidate.launchID, ProbeID: probeID}) {
-			if err := h.markRunnerActivityOfflineForComputerDisconnect(ctx, candidate.workspaceID, candidate.agentID, candidate.daemonID, candidate.daemonInstanceID, candidate.launchID); err != nil {
+		if h.DaemonHub == nil || !h.DaemonHub.NotifyWorkspaceDaemon(candidate.daemonID, util.UUIDToString(candidate.workspaceID), protocol.EventAgentActivityProbe, protocol.AgentActivityProbePayload{AgentID: util.UUIDToString(candidate.agentID), ProbeID: probeID}) {
+			if err := h.markRunnerActivityOfflineForComputerDisconnect(ctx, candidate.workspaceID, candidate.agentID, candidate.daemonID, candidate.daemonInstanceID); err != nil {
 				return err
 			}
 		}
@@ -781,16 +770,15 @@ func (h *Handler) timeoutRunnerActivityProbes(ctx context.Context, now time.Time
 		agentID          pgtype.UUID
 		daemonID         string
 		daemonInstanceID string
-		launchID         string
 	}
-	rows, err := h.DB.Query(ctx, `SELECT workspace_id, agent_id, daemon_id, daemon_instance_id, launch_id FROM agent_activity_probe WHERE deadline_at <= $1`, now)
+	rows, err := h.DB.Query(ctx, `SELECT workspace_id, agent_id, daemon_id, daemon_instance_id FROM agent_activity_probe WHERE deadline_at <= $1`, now)
 	if err != nil {
 		return fmt.Errorf("list timed out Runner Activity probes: %w", err)
 	}
 	var timedOut []timedOutRunnerActivityProbe
 	for rows.Next() {
 		var candidate timedOutRunnerActivityProbe
-		if err := rows.Scan(&candidate.workspaceID, &candidate.agentID, &candidate.daemonID, &candidate.daemonInstanceID, &candidate.launchID); err != nil {
+		if err := rows.Scan(&candidate.workspaceID, &candidate.agentID, &candidate.daemonID, &candidate.daemonInstanceID); err != nil {
 			rows.Close()
 			return fmt.Errorf("scan timed out Runner Activity probe: %w", err)
 		}
@@ -805,7 +793,7 @@ func (h *Handler) timeoutRunnerActivityProbes(ctx context.Context, now time.Time
 		if h.DaemonHub != nil {
 			h.DaemonHub.CloseWorkspaceDaemon(candidate.daemonID, util.UUIDToString(candidate.workspaceID), candidate.daemonInstanceID)
 		}
-		if err := h.markRunnerActivityOfflineForComputerDisconnect(ctx, candidate.workspaceID, candidate.agentID, candidate.daemonID, candidate.daemonInstanceID, candidate.launchID); err != nil {
+		if err := h.markRunnerActivityOfflineForComputerDisconnect(ctx, candidate.workspaceID, candidate.agentID, candidate.daemonID, candidate.daemonInstanceID); err != nil {
 			return err
 		}
 	}
@@ -892,14 +880,14 @@ func (h *Handler) HandleWorkspaceDaemonDisconnect(ctx context.Context, identity 
 	})
 }
 
-func (h *Handler) markRunnerActivityOfflineForComputerDisconnect(ctx context.Context, workspaceID, agentID pgtype.UUID, daemonID, daemonInstanceID, launchID string) error {
+func (h *Handler) markRunnerActivityOfflineForComputerDisconnect(ctx context.Context, workspaceID, agentID pgtype.UUID, daemonID, daemonInstanceID string) error {
 	return h.runnerPresenceLocked(func() error {
-		deactivated := h.observations().deactivate(util.UUIDToString(workspaceID), daemonID, daemonInstanceID, util.UUIDToString(agentID), launchID)
+		deactivated := h.observations().deactivate(util.UUIDToString(workspaceID), daemonID, daemonInstanceID, util.UUIDToString(agentID))
 		if _, err := h.DB.Exec(ctx, `UPDATE agent_activity_snapshot SET activity_kind = 'offline', detail_kind = 'machine_disconnected', received_at = now()
-			WHERE workspace_id = $1 AND agent_id = $2 AND daemon_id = $3 AND daemon_instance_id = $4 AND launch_id = $5`, workspaceID, agentID, daemonID, daemonInstanceID, launchID); err != nil {
+			WHERE workspace_id = $1 AND agent_id = $2 AND daemon_id = $3 AND daemon_instance_id = $4`, workspaceID, agentID, daemonID, daemonInstanceID); err != nil {
 			return fmt.Errorf("project Runner disconnect: %w", err)
 		}
-		if _, err := h.DB.Exec(ctx, `DELETE FROM agent_activity_probe WHERE workspace_id = $1 AND agent_id = $2 AND daemon_id = $3 AND daemon_instance_id = $4 AND launch_id = $5`, workspaceID, agentID, daemonID, daemonInstanceID, launchID); err != nil {
+		if _, err := h.DB.Exec(ctx, `DELETE FROM agent_activity_probe WHERE workspace_id = $1 AND agent_id = $2 AND daemon_id = $3 AND daemon_instance_id = $4`, workspaceID, agentID, daemonID, daemonInstanceID); err != nil {
 			return fmt.Errorf("clear stale Runner Activity probe: %w", err)
 		}
 		if deactivated {
@@ -981,11 +969,11 @@ func (h *Handler) runnerActivityPresentation(ctx context.Context, workspaceID, a
 	var observedAt pgtype.Timestamptz
 	var daemonID string
 	err := h.DB.QueryRow(ctx, `
-		SELECT daemon_id, daemon_instance_id, launch_id, client_sequence, producer_fact_id,
+		SELECT daemon_id, daemon_instance_id, client_sequence, producer_fact_id,
 			observed_at, activity_kind, detail_kind, probe_id, process_instance_id
 		FROM agent_activity_snapshot
 		WHERE workspace_id = $1 AND agent_id = $2`, workspaceID, agentID).Scan(
-		&daemonID, &snapshot.DaemonInstanceID, &snapshot.LaunchID, &snapshot.ClientSequence, &snapshot.ProducerFactID,
+		&daemonID, &snapshot.DaemonInstanceID, &snapshot.ClientSequence, &snapshot.ProducerFactID,
 		&observedAt, &snapshot.ActivityKind, &snapshot.DetailKind, &snapshot.ProbeID, &snapshot.ProcessInstanceID,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {

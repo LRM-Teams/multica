@@ -895,8 +895,8 @@ SELECT id, workspace_id, initiator_user_id, node_id, instance_id, type, status, 
 WHERE job_token_hash = $1 AND job_token_expires_at > now()
 `
 
-func (q *Queries) GetSandboxJobByTokenHash(ctx context.Context, jobTokenHash pgtype.Text) (SandboxJob, error) {
-	row := q.db.QueryRow(ctx, getSandboxJobByTokenHash, jobTokenHash)
+func (q *Queries) GetSandboxJobByTokenHash(ctx context.Context, tokenHash pgtype.Text) (SandboxJob, error) {
+	row := q.db.QueryRow(ctx, getSandboxJobByTokenHash, tokenHash)
 	var i SandboxJob
 	err := row.Scan(
 		&i.ID,
@@ -1330,11 +1330,26 @@ func (q *Queries) ListSandboxSnapshotsByNode(ctx context.Context, arg ListSandbo
 	defer rows.Close()
 	items := []SandboxSnapshot{}
 	for rows.Next() {
-		item, err := scanSandboxSnapshot(rows)
-		if err != nil {
+		var i SandboxSnapshot
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.NodeID,
+			&i.InstanceID,
+			&i.CreatorUserID,
+			&i.CubeSnapshotID,
+			&i.Name,
+			&i.Description,
+			&i.Status,
+			&i.Error,
+			&i.Metadata,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.CheckpointID,
+		); err != nil {
 			return nil, err
 		}
-		items = append(items, item)
+		items = append(items, i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -1362,11 +1377,26 @@ func (q *Queries) ListSandboxSnapshotsForCheckpoint(ctx context.Context, arg Lis
 	defer rows.Close()
 	items := []SandboxSnapshot{}
 	for rows.Next() {
-		item, err := scanSandboxSnapshot(rows)
-		if err != nil {
+		var i SandboxSnapshot
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.NodeID,
+			&i.InstanceID,
+			&i.CreatorUserID,
+			&i.CubeSnapshotID,
+			&i.Name,
+			&i.Description,
+			&i.Status,
+			&i.Error,
+			&i.Metadata,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.CheckpointID,
+		); err != nil {
 			return nil, err
 		}
-		items = append(items, item)
+		items = append(items, i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -2201,14 +2231,3 @@ func (q *Queries) UpsertSandboxWorkspaceBinding(ctx context.Context, arg UpsertS
 	)
 	return i, err
 }
-
-func scanSandboxSnapshot(row interface{ Scan(...interface{}) error }) (SandboxSnapshot, error) {
-	var i SandboxSnapshot
-	err := row.Scan(
-		&i.ID, &i.WorkspaceID, &i.NodeID, &i.InstanceID, &i.CreatorUserID,
-		&i.CubeSnapshotID, &i.Name, &i.Description, &i.Status, &i.Error,
-		&i.Metadata, &i.CreatedAt, &i.UpdatedAt, &i.CheckpointID,
-	)
-	return i, err
-}
-

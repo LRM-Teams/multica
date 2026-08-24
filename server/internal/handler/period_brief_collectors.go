@@ -34,9 +34,9 @@ type PeriodBriefCollectorMissingSlot struct {
 // EnsurePeriodBriefCollectorsResponse is returned by
 // POST /api/members/agents/period-brief-collectors.
 type EnsurePeriodBriefCollectorsResponse struct {
-	Agents  []AgentResponse                    `json:"agents"`
-	Created []string                           `json:"created"`
-	Missing []PeriodBriefCollectorMissingSlot  `json:"missing,omitempty"`
+	Agents  []AgentResponse                   `json:"agents"`
+	Created []string                          `json:"created"`
+	Missing []PeriodBriefCollectorMissingSlot `json:"missing,omitempty"`
 }
 
 type ensurePeriodBriefCollectorsRequest struct {

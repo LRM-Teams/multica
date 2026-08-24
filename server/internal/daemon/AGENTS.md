@@ -102,7 +102,7 @@ the control RPC.
 
 ## Responsibility boundary
 
-Daemon owns one Workspace Runner's execution behavior, drain barrier, provider
+Daemon owns one WorkspaceDaemon's execution behavior, drain barrier, provider
 runtimes, Runtime registration, and child-local state. Computer owns machine
 supervision, process identity fencing, sibling coordination, orphan cleanup,
 and upgrade policy. Cloud Server HTTP/WebSocket is not part of this migration.

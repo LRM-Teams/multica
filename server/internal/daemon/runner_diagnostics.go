@@ -11,7 +11,7 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-// runnerDiagnosticRegistry is the only daemon-side owner of Workspace Runner
+// runnerDiagnosticRegistry is the only daemon-side owner of WorkspaceDaemon
 // diagnostic sinks. Producers supply a Workspace identity and a typed event;
 // they never construct paths or propagate sink failures into product control
 // flow.
@@ -38,14 +38,14 @@ func (d *Daemon) initializeRunnerDiagnostics() {
 	environment := diagnosticlog.Environment(strings.TrimSpace(d.cfg.Environment))
 	if environment != diagnosticlog.EnvironmentProduction && environment != diagnosticlog.EnvironmentTest {
 		if d.logger != nil {
-			d.logger.Warn("Workspace Runner diagnostics disabled", "reason", "invalid_environment")
+			d.logger.Warn("WorkspaceDaemon diagnostics disabled", "reason", "invalid_environment")
 		}
 		return
 	}
 	store, err := diagnosticlog.Open(diagnosticlog.Config{})
 	if err != nil {
 		if d.logger != nil {
-			d.logger.Warn("Workspace Runner diagnostics disabled", "reason", "open_failed")
+			d.logger.Warn("WorkspaceDaemon diagnostics disabled", "reason", "open_failed")
 		}
 		return
 	}
@@ -68,7 +68,7 @@ func (d *Daemon) recordRunnerDiagnostic(workspaceID string, event diagnosticlog.
 	if err := d.runnerDiagnostics.record(workspaceID, event); err != nil && d.logger != nil {
 		// Do not include the storage error or event payload in the fallback log.
 		// Sink health and the later Service summary own those details.
-		d.logger.Warn("Workspace Runner diagnostic record dropped", "reason", "sink_unavailable")
+		d.logger.Warn("WorkspaceDaemon diagnostic record dropped", "reason", "sink_unavailable")
 	}
 }
 

@@ -599,10 +599,10 @@ type switchingExploreBackend struct {
 	t     *testing.T
 	store *Store
 
-	mu                 sync.Mutex
-	viewedBody         string
+	mu                  sync.Mutex
+	viewedBody          string
 	secondExploreStatus int
-	submitStatus       int
+	submitStatus        int
 }
 
 func (b *switchingExploreBackend) Execute(_ context.Context, prompt string, _ agent.ExecOptions) (*agent.Session, error) {

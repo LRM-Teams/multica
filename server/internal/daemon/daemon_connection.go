@@ -104,7 +104,7 @@ func daemonConnectionURL(baseURL, workspaceID string) (string, error) {
 }
 
 // workspaceDaemonURL keeps the previous helper name for call sites that still
-// describe the Workspace Runner connect URL.
+// describe the WorkspaceDaemon connect URL.
 func workspaceDaemonURL(baseURL, workspaceID string) (string, error) {
 	return daemonConnectionURL(baseURL, workspaceID)
 }

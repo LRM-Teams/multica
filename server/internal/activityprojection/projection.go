@@ -44,12 +44,12 @@ func TimelineRowFromSnapshot(snapshot protocol.AgentActivitySnapshot) TimelineRo
 // Message received) do not. Labels only — a detail kind never carries command
 // text, paths, or tool input.
 var workingDetailLabels = map[string]string{
-	"starting":            "Starting…",
-	"message_received":    "Message received",
+	"starting":               "Starting…",
+	"message_received":       "Message received",
 	"model_response_started": "Working...",
-	"compacting_context":  "Compacting context...",
-	"compaction_finished": "Compaction finished",
-	"compaction_stale":    "Compaction still running",
+	"compacting_context":     "Compacting context...",
+	"compaction_finished":    "Compaction finished",
+	"compaction_stale":       "Compaction still running",
 
 	"running_command": "Running command...",
 	"reading_file":    "Reading file...",

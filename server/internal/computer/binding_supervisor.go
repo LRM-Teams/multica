@@ -149,7 +149,7 @@ func NewBindingSupervisor(config BindingSupervisorConfig) (*BindingSupervisor, e
 	return supervisor, nil
 }
 
-// reclaimOrphanedRunner reclaims a Workspace Runner process left behind by a
+// reclaimOrphanedRunner reclaims a WorkspaceDaemon process left behind by a
 // previous Host generation so the first Reconcile can spawn a fresh child this
 // Host owns. One Workspace holds at most one Runner on this machine, and it is
 // always the current Host's own child; a live process found at startup is
@@ -167,13 +167,13 @@ func (supervisor *BindingSupervisor) reclaimOrphanedRunner(runner reclaimableRun
 	})
 	if err != nil {
 		if config.Logger != nil {
-			config.Logger.Warn("orphaned Workspace Runner could not be confirmed dead; leaving this Workspace out of spawn rotation this cycle", "workspace_id", runner.WorkspaceID, "pid", runner.PID, "error", err)
+			config.Logger.Warn("orphaned WorkspaceDaemon could not be confirmed dead; leaving this Workspace out of spawn rotation this cycle", "workspace_id", runner.WorkspaceID, "pid", runner.PID, "error", err)
 		}
 		supervisor.backOffAfterFailedReclaim(runner)
 		return
 	}
 	if config.Logger != nil {
-		config.Logger.Info("orphaned Workspace Runner terminated", "workspace_id", runner.WorkspaceID, "pid", runner.PID, "elapsed", config.Now().Sub(start))
+		config.Logger.Info("orphaned WorkspaceDaemon terminated", "workspace_id", runner.WorkspaceID, "pid", runner.PID, "elapsed", config.Now().Sub(start))
 	}
 }
 
@@ -271,7 +271,7 @@ func (supervisor *BindingSupervisor) spawn(next bindingSupervisorStart) {
 	child, err := supervisor.config.Spawn(next.workspaceID)
 	if err != nil {
 		if supervisor.config.Logger != nil {
-			supervisor.config.Logger.Warn("Workspace Runner child spawn failed", "workspace_id", next.workspaceID, "error", err)
+			supervisor.config.Logger.Warn("WorkspaceDaemon child spawn failed", "workspace_id", next.workspaceID, "error", err)
 		}
 		next.cancel()
 		supervisor.observeExit(next.workspaceID, "", nil, RunnerExitCrash)
@@ -321,7 +321,7 @@ func (supervisor *BindingSupervisor) supervise(workspaceID string, child Binding
 		stopReady()
 		if err != nil {
 			if ctx.Err() == nil && supervisor.config.Logger != nil {
-				supervisor.config.Logger.Warn("Workspace Runner child readiness failed", "workspace_id", workspaceID, "error", err)
+				supervisor.config.Logger.Warn("WorkspaceDaemon child readiness failed", "workspace_id", workspaceID, "error", err)
 			}
 			if ctx.Err() == nil {
 				class = RunnerExitCrash

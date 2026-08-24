@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/diagnosticlog"
@@ -33,7 +32,7 @@ func (identity BindingChildIdentity) Validate() error {
 }
 
 // HostControlCallbacks are adapters into machine services. The Computer owns
-// authentication, generation fencing, capacity, and request routing; it never
+// authentication, generation fencing, and request routing; it never
 // imports the Binding execution package.
 type HostControlCallbacks struct {
 	Current         func(BindingChildIdentity) bool
@@ -50,11 +49,7 @@ type HostControlCallbacks struct {
 // Binding children.
 type HostControl struct {
 	token     string
-	capacity  *ProcessCapacity
 	callbacks HostControlCallbacks
-
-	mu     sync.Mutex
-	grants map[BindingChildIdentity]map[string]ProcessCapacityGrant
 }
 
 // RegisterLocalControlHandlers adds the Host-owned operations to an IPC
@@ -63,10 +58,9 @@ func (control *HostControl) RegisterLocalControlHandlers(registry *LocalControlR
 	control.RegisterRPCHandlers(registry)
 }
 
-func NewHostControl(token string, capacity *ProcessCapacity, callbacks HostControlCallbacks) *HostControl {
+func NewHostControl(token string, callbacks HostControlCallbacks) *HostControl {
 	return &HostControl{
-		token: strings.TrimSpace(token), capacity: capacity, callbacks: callbacks,
-		grants: make(map[BindingChildIdentity]map[string]ProcessCapacityGrant),
+		token: strings.TrimSpace(token), callbacks: callbacks,
 	}
 }
 
@@ -91,49 +85,6 @@ func (control *HostControl) RegisterRPCHandlers(registry *LocalControlRegistry) 
 		decoder.DisallowUnknownFields()
 		return decoder.Decode(target)
 	}
-	register(LocalControlWorkspaceCapacityOperation, func(ctx context.Context, headers map[string]string, raw json.RawMessage) (any, error) {
-		var request capacityControlRequest
-		if err := decode(headers, raw, &request); err != nil {
-			return nil, err
-		}
-		if !control.current(request.Identity) {
-			return nil, errors.New("inactive managed runner process")
-		}
-		if request.WorkspaceID != "" && strings.TrimSpace(request.WorkspaceID) != strings.TrimSpace(request.Identity.WorkspaceID) {
-			return nil, errors.New("capacity request belongs to another Workspace")
-		}
-		if control.capacity == nil {
-			return nil, errors.New("Host capacity admission is unavailable")
-		}
-		response := capacityControlResponse{}
-		switch request.Operation {
-		case "acquire":
-			if control.launchOwnedByOther(request.Identity, strings.TrimSpace(request.LaunchID)) {
-				return nil, errors.New("capacity grant identity conflict")
-			}
-			response.Grant, response.Admitted = control.capacity.Acquire(ProcessCapacityRequest{WorkspaceID: request.Identity.WorkspaceID, AgentID: strings.TrimSpace(request.AgentID), RuntimeID: strings.TrimSpace(request.RuntimeID), LaunchID: strings.TrimSpace(request.LaunchID)})
-			if response.Grant.LaunchID == "" || !control.track(request.Identity, response.Grant) {
-				return nil, errors.New("capacity grant identity conflict")
-			}
-		case "cancel":
-			if !control.owns(request.Identity, request.Grant) {
-				return nil, errors.New("capacity grant belongs to another Binding child")
-			}
-			control.capacity.Cancel(request.Grant)
-			control.untrack(request.Identity, request.Grant)
-		case "release":
-			if !control.owns(request.Identity, request.Grant) {
-				return nil, errors.New("capacity grant belongs to another Binding child")
-			}
-			control.capacity.Release(request.Grant)
-			control.untrack(request.Identity, request.Grant)
-		case "active":
-			response.Active = control.owns(request.Identity, request.Grant) && control.capacity.Active(request.Grant)
-		default:
-			return nil, errors.New("unsupported capacity operation")
-		}
-		return response, nil
-	})
 	register(LocalControlWorkspaceDiagnosticsOperation, func(ctx context.Context, headers map[string]string, raw json.RawMessage) (any, error) {
 		var request diagnosticControlRequest
 		if err := decode(headers, raw, &request); err != nil {
@@ -253,15 +204,6 @@ func (control *HostControl) Release(identity BindingChildIdentity) {
 	if control == nil {
 		return
 	}
-	control.mu.Lock()
-	owned := control.grants[identity]
-	delete(control.grants, identity)
-	control.mu.Unlock()
-	if control.capacity != nil {
-		for _, grant := range owned {
-			control.capacity.Cancel(grant)
-		}
-	}
 	if control.callbacks.Released != nil {
 		control.callbacks.Released(identity)
 	}
@@ -269,22 +211,6 @@ func (control *HostControl) Release(identity BindingChildIdentity) {
 
 func (control *HostControl) current(identity BindingChildIdentity) bool {
 	return control != nil && identity.Validate() == nil && control.callbacks.Current != nil && control.callbacks.Current(identity)
-}
-
-type capacityControlRequest struct {
-	Identity    BindingChildIdentity `json:"identity"`
-	Operation   string               `json:"operation"`
-	WorkspaceID string               `json:"workspaceId,omitempty"`
-	AgentID     string               `json:"agentId,omitempty"`
-	RuntimeID   string               `json:"runtimeId,omitempty"`
-	LaunchID    string               `json:"launchId,omitempty"`
-	Grant       ProcessCapacityGrant `json:"grant,omitempty"`
-}
-
-type capacityControlResponse struct {
-	Grant    ProcessCapacityGrant `json:"grant,omitempty"`
-	Admitted bool                 `json:"admitted,omitempty"`
-	Active   bool                 `json:"active,omitempty"`
 }
 
 type diagnosticControlRequest struct {
@@ -310,55 +236,6 @@ type runtimeSetControlRequest struct {
 	DaemonTokenExpiresAt string               `json:"daemonTokenExpiresAt"`
 }
 
-func (control *HostControl) launchOwnedByOther(identity BindingChildIdentity, launchID string) bool {
-	if launchID == "" {
-		return false
-	}
-	control.mu.Lock()
-	defer control.mu.Unlock()
-	for owner, grants := range control.grants {
-		if _, ok := grants[launchID]; ok && owner != identity {
-			return true
-		}
-	}
-	return false
-}
-
-func (control *HostControl) track(identity BindingChildIdentity, grant ProcessCapacityGrant) bool {
-	control.mu.Lock()
-	defer control.mu.Unlock()
-	for owner, grants := range control.grants {
-		if current, ok := grants[grant.LaunchID]; ok && (owner != identity || current != grant) {
-			return false
-		}
-	}
-	grants := control.grants[identity]
-	if grants == nil {
-		grants = make(map[string]ProcessCapacityGrant)
-		control.grants[identity] = grants
-	}
-	grants[grant.LaunchID] = grant
-	return true
-}
-
-func (control *HostControl) owns(identity BindingChildIdentity, grant ProcessCapacityGrant) bool {
-	control.mu.Lock()
-	defer control.mu.Unlock()
-	return control.grants[identity][grant.LaunchID] == grant && grant.LaunchID != ""
-}
-
-func (control *HostControl) untrack(identity BindingChildIdentity, grant ProcessCapacityGrant) {
-	control.mu.Lock()
-	grants := control.grants[identity]
-	if grants[grant.LaunchID] == grant {
-		delete(grants, grant.LaunchID)
-	}
-	if len(grants) == 0 {
-		delete(control.grants, identity)
-	}
-	control.mu.Unlock()
-}
-
 // HostControlClient is the Binding child's typed process adapter.
 type HostControlClient struct {
 	token    string
@@ -370,29 +247,6 @@ type HostControlClient struct {
 func NewHostControlClient(endpoint, token string, identity BindingChildIdentity) *HostControlClient {
 	controlClient, err := localControlClientFor(endpoint, 5*time.Second)
 	return &HostControlClient{token: strings.TrimSpace(token), identity: identity, control: controlClient, initErr: err}
-}
-
-func (client *HostControlClient) AcquireCapacity(ctx context.Context, request ProcessCapacityRequest) (ProcessCapacityGrant, bool, error) {
-	var response capacityControlResponse
-	err := client.post(ctx, LocalControlWorkspaceCapacityOperation, capacityControlRequest{
-		Identity: client.identity, Operation: "acquire", WorkspaceID: request.WorkspaceID,
-		AgentID: request.AgentID, RuntimeID: request.RuntimeID, LaunchID: request.LaunchID,
-	}, &response)
-	return response.Grant, response.Admitted, err
-}
-
-func (client *HostControlClient) CapacityActive(ctx context.Context, grant ProcessCapacityGrant) (bool, error) {
-	var response capacityControlResponse
-	err := client.post(ctx, LocalControlWorkspaceCapacityOperation, capacityControlRequest{Identity: client.identity, Operation: "active", Grant: grant}, &response)
-	return response.Active, err
-}
-
-func (client *HostControlClient) CancelCapacity(ctx context.Context, grant ProcessCapacityGrant) error {
-	return client.post(ctx, LocalControlWorkspaceCapacityOperation, capacityControlRequest{Identity: client.identity, Operation: "cancel", Grant: grant}, &capacityControlResponse{})
-}
-
-func (client *HostControlClient) ReleaseCapacity(ctx context.Context, grant ProcessCapacityGrant) error {
-	return client.post(ctx, LocalControlWorkspaceCapacityOperation, capacityControlRequest{Identity: client.identity, Operation: "release", Grant: grant}, &capacityControlResponse{})
 }
 
 func (client *HostControlClient) RecordDiagnostic(ctx context.Context, workspaceID string, event diagnosticlog.Event) error {

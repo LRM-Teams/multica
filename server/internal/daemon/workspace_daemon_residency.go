@@ -10,8 +10,7 @@ import (
 // Delivery after APM no longer has a live launch. It is not a Message ledger.
 type agentResidency struct {
 	runtimeID       string
-	launchID        string
-	startDispatchID string
+	agentInstanceID string
 	startStopEpoch  uint64
 	terminal        bool
 	terminalStage   managedRuntimeFailureStage
@@ -27,7 +26,7 @@ type agentResidencyStore struct {
 	// epochFloor is the tombstone left by clear: the highest startStopEpoch
 	// known to belong to an agent's already-cleared launch. It has exactly
 	// one entry per agentID this store has ever cleared -- bounded by the
-	// Workspace Runner's agent roster, not by how many times an agent has
+	// WorkspaceDaemon's Agent roster, not by how many times an Agent has
 	// been stopped -- so it cannot grow without limit.
 	epochFloor map[string]uint64
 	restarts   map[string]context.CancelFunc
@@ -80,7 +79,7 @@ func (s *agentResidencyStore) get(agentID string) (agentResidency, bool) {
 	return res, ok
 }
 
-func (s *agentResidencyStore) rememberLaunch(agentID, runtimeID, launchID, startDispatchID string, startStopEpoch uint64) {
+func (s *agentResidencyStore) rememberLaunch(agentID, runtimeID, agentInstanceID string, startStopEpoch uint64) {
 	if s == nil || agentID == "" {
 		return
 	}
@@ -91,10 +90,7 @@ func (s *agentResidencyStore) rememberLaunch(agentID, runtimeID, launchID, start
 	}
 	current := s.byAgent[agentID]
 	current.runtimeID = runtimeID
-	current.launchID = launchID
-	if startDispatchID != "" {
-		current.startDispatchID = startDispatchID
-	}
+	current.agentInstanceID = agentInstanceID
 	// Record the epoch even though this is a partial update: it is the only
 	// write that can happen before rememberIdle/rememberFailure for this
 	// launch, so it is what makes clear's tombstone accurate if the launch is
@@ -103,7 +99,7 @@ func (s *agentResidencyStore) rememberLaunch(agentID, runtimeID, launchID, start
 	s.byAgent[agentID] = current
 }
 
-func (s *agentResidencyStore) rememberIdle(agentID, runtimeID, launchID, startDispatchID string, startStopEpoch uint64) {
+func (s *agentResidencyStore) rememberIdle(agentID, runtimeID, agentInstanceID string, startStopEpoch uint64) {
 	if s == nil || agentID == "" {
 		return
 	}
@@ -112,14 +108,13 @@ func (s *agentResidencyStore) rememberIdle(agentID, runtimeID, launchID, startDi
 	if !s.epochAllowedLocked(agentID, startStopEpoch) {
 		return
 	}
-	current := s.byAgent[agentID]
 	s.byAgent[agentID] = agentResidency{
-		runtimeID: runtimeID, launchID: launchID, startDispatchID: firstNonEmpty(startDispatchID, current.startDispatchID),
+		runtimeID: runtimeID, agentInstanceID: agentInstanceID,
 		startStopEpoch: startStopEpoch, idle: true,
 	}
 }
 
-func (s *agentResidencyStore) rememberFailure(agentID, runtimeID, launchID string, startStopEpoch uint64, stage managedRuntimeFailureStage, reason, detail string) {
+func (s *agentResidencyStore) rememberFailure(agentID, runtimeID, agentInstanceID string, startStopEpoch uint64, stage managedRuntimeFailureStage, reason, detail string) {
 	if s == nil || agentID == "" {
 		return
 	}
@@ -128,9 +123,8 @@ func (s *agentResidencyStore) rememberFailure(agentID, runtimeID, launchID strin
 	if !s.epochAllowedLocked(agentID, startStopEpoch) {
 		return
 	}
-	current := s.byAgent[agentID]
 	res := agentResidency{
-		runtimeID: runtimeID, launchID: launchID, startDispatchID: current.startDispatchID,
+		runtimeID: runtimeID, agentInstanceID: agentInstanceID,
 		startStopEpoch: startStopEpoch,
 		terminalStage:  stage, terminalReason: reason, terminalDetail: detail,
 	}

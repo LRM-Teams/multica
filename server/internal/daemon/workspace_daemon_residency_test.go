@@ -2,6 +2,8 @@ package daemon
 
 import "testing"
 
+// WorkspaceDaemon residency tests cover local restart state.
+
 // TestAgentResidencyStoreClearThenStaleWriteResurrects pins the bug that
 // stopManagedAgent's second residency.clear used to paper over: a write that
 // belongs to a launch already superseded by a Stop (same startStopEpoch the
@@ -10,7 +12,7 @@ import "testing"
 // (e.g. provider startup losing the race with Stop) simply recreated it.
 func TestAgentResidencyStoreClearThenStaleWriteResurrects(t *testing.T) {
 	store := newAgentResidencyStore(nil)
-	store.rememberIdle("agent-a", "runtime-a", "launch-1", "dispatch-1", 5)
+	store.rememberIdle("agent-a", "runtime-a", "launch-1", 5)
 	store.clear("agent-a")
 	if _, ok := store.get("agent-a"); ok {
 		t.Fatal("clear should remove residency")
@@ -32,16 +34,16 @@ func TestAgentResidencyStoreClearThenStaleWriteResurrects(t *testing.T) {
 // stale writes.
 func TestAgentResidencyStoreClearThenNewerEpochWriteAccepted(t *testing.T) {
 	store := newAgentResidencyStore(nil)
-	store.rememberIdle("agent-a", "runtime-a", "launch-1", "dispatch-1", 5)
+	store.rememberIdle("agent-a", "runtime-a", "launch-1", 5)
 	store.clear("agent-a")
 
-	store.rememberLaunch("agent-a", "runtime-a", "launch-2", "dispatch-2", 6)
+	store.rememberLaunch("agent-a", "runtime-a", "launch-2", 6)
 
 	res, ok := store.get("agent-a")
 	if !ok {
 		t.Fatal("newer-epoch write after clear was dropped, want accepted")
 	}
-	if res.launchID != "launch-2" || res.startStopEpoch != 6 {
+	if res.agentInstanceID != "launch-2" || res.startStopEpoch != 6 {
 		t.Fatalf("residency after newer write = %+v, want launch-2 at epoch 6", res)
 	}
 }
@@ -55,7 +57,7 @@ func TestAgentResidencyStoreClearThenNewerEpochWriteAccepted(t *testing.T) {
 // rememberLaunch itself recorded the epoch.
 func TestAgentResidencyStoreRememberLaunchBackfillsEpochForTombstone(t *testing.T) {
 	store := newAgentResidencyStore(nil)
-	store.rememberLaunch("agent-a", "runtime-a", "launch-1", "dispatch-1", 3)
+	store.rememberLaunch("agent-a", "runtime-a", "launch-1", 3)
 
 	res, ok := store.get("agent-a")
 	if !ok || res.startStopEpoch != 3 {
@@ -73,8 +75,8 @@ func TestAgentResidencyStoreRememberLaunchBackfillsEpochForTombstone(t *testing.
 	}
 
 	// A genuinely new launch (a strictly newer epoch) is accepted.
-	store.rememberLaunch("agent-a", "runtime-a", "launch-2", "dispatch-2", 4)
-	if res, ok := store.get("agent-a"); !ok || res.launchID != "launch-2" {
+	store.rememberLaunch("agent-a", "runtime-a", "launch-2", 4)
+	if res, ok := store.get("agent-a"); !ok || res.agentInstanceID != "launch-2" {
 		t.Fatalf("new launch after clear = %+v (ok=%v), want launch-2 accepted", res, ok)
 	}
 }

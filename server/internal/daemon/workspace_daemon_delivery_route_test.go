@@ -12,7 +12,6 @@ import (
 var requiredDeliveryRouteTests = []string{
 	"TestWorkspaceDaemonConsumedDeliveryAcknowledgesWithoutProcess",
 	"TestWorkspaceDaemonStartingLaunchBuffersWithoutProviderDelivery",
-	"TestWorkspaceDaemonQueuedAPMAcceptsDeliveryWithoutStartingProvider",
 	"TestWorkspaceDaemonTerminalFailureDeliveryAcknowledgesAndKeepsPending",
 	"TestWorkspaceDaemonIdleSnapshotDeliveryRestartsAndAcknowledges",
 	"TestWorkspaceDaemonSpawnCooldownDeliveryAcknowledgesWithoutRestart",
@@ -24,7 +23,7 @@ var requiredDeliveryRouteTests = []string{
 }
 
 func TestDeliveryRouteRequiredCasesRegistered(t *testing.T) {
-	src, err := os.ReadFile(filepath.Join("workspace_runner_delivery_test.go"))
+	src, err := os.ReadFile(filepath.Join("workspace_daemon_delivery_test.go"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +36,7 @@ func TestDeliveryRouteRequiredCasesRegistered(t *testing.T) {
 }
 
 func TestAcceptMessageDeliveryForbidsUnmanagedEarlyNack(t *testing.T) {
-	src, err := os.ReadFile("workspace_runner_message.go")
+	src, err := os.ReadFile("workspace_daemon_message.go")
 	if err != nil {
 		t.Fatal(err)
 	}

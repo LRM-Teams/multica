@@ -545,3 +545,21 @@ func TestConsolidatePersistsFailedTrajectory(t *testing.T) {
 		t.Fatalf("footer = %v, want applied=0 with the execute error", footer)
 	}
 }
+
+// Phase 2: transcript capture in runTrajectory and the trace write both
+// consume the same drain; Messages must be idempotent or the second call
+// blocks forever on the one-shot channel.
+func TestTraceDrainMessagesIdempotent(t *testing.T) {
+	msgs := make(chan agent.Message, 1)
+	msgs <- agent.Message{Type: agent.MessageText, Content: "m"}
+	close(msgs)
+	drain := (*TraceRecorder)(nil).Drain(msgs)
+	first := drain.Messages()
+	second := drain.Messages()
+	if len(first) != 1 || len(second) != 1 || first[0].Content != second[0].Content {
+		t.Fatalf("idempotent Messages: first=%v second=%v", first, second)
+	}
+	if (*TraceDrain)(nil).Messages() != nil {
+		t.Fatalf("nil drain must yield nil")
+	}
+}

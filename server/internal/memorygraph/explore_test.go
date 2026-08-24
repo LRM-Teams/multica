@@ -734,3 +734,42 @@ func TestExplorePinsVersionForWholeCall(t *testing.T) {
 		t.Fatalf("NodeIDs = %v, want [n-target]", res.NodeIDs)
 	}
 }
+
+// Phase 2 §5.1: the adopted run's message stream is captured, sanitized to
+// the allowlisted TraceMessage shape, and exposed on the result for the
+// per-channel prior record. Non-adopted runs drop their buffered streams.
+func TestExploreCapturesAdoptedTranscript(t *testing.T) {
+	store := newExploreStore(t)
+	retr := newExploreRetriever(t, store)
+	finalJSON := `{"found":true,"summary":"s","node_ids":["n-target"],"rounds":1}`
+	backend := &traceFakeBackend{
+		output: finalJSON,
+		msgs: []agent.Message{
+			{Type: agent.MessageText, Content: "exploring the graph"},
+			{Type: agent.MessageDiagnostic, Title: "diag", Diagnostic: "provider-internal", Content: "diag content"},
+		},
+	}
+	ex := NewExplorer(store, retr, backend, testExploreConfig(), "pi", nil)
+
+	res, err := ex.Explore(context.Background(), "dispatch router retries")
+	if err != nil {
+		t.Fatalf("Explore: %v", err)
+	}
+	if !res.Found || res.AdoptedIndex != 0 {
+		t.Fatalf("result found=%v adopted=%d, want found run 0 adopted", res.Found, res.AdoptedIndex)
+	}
+	if len(res.AdoptedTranscript) != 2 {
+		t.Fatalf("AdoptedTranscript = %d records, want 2", len(res.AdoptedTranscript))
+	}
+	if res.AdoptedTranscript[0].Content != "exploring the graph" || res.AdoptedTranscript[0].Sequence != 0 {
+		t.Fatalf("transcript[0] = %+v", res.AdoptedTranscript[0])
+	}
+	// Diagnostic internals stay out: the record carries only the allowlisted
+	// Content column, never Title/Diagnostic/SessionID.
+	if res.AdoptedTranscript[1].Content != "diag content" || res.AdoptedTranscript[1].Type != "diagnostic" {
+		t.Fatalf("transcript[1] = %+v", res.AdoptedTranscript[1])
+	}
+	if len(res.AgentRuns) != 1 || res.AgentRuns[0].Messages != nil {
+		t.Fatalf("run message buffers must be cleared after adoption: %+v", res.AgentRuns[0])
+	}
+}

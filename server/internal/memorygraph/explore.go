@@ -225,9 +225,15 @@ func (e *Explorer) ExploreWithSeeds(ctx context.Context, query string, seedIDs [
 		result.NodeIDs = a.NodeIDs
 		result.Rounds = a.Rounds
 		result.Citations = qualifyRecallCitations(e.store, version, a.NodeIDs)
+		result.AdoptedIndex = adopted
+		result.AdoptedTranscript = sanitizeTranscript(a.Messages)
+	}
+	for i := range runs {
+		runs[i].Messages = nil
+	}
+	if adopted >= 0 {
 		return result, nil
 	}
-	// Miss: report the fewest rounds among parsed runs for observability.
 	for i := range runs {
 		r := &runs[i]
 		if r.Error != "" {
@@ -238,6 +244,16 @@ func (e *Explorer) ExploreWithSeeds(ctx context.Context, query string, seedIDs [
 		}
 	}
 	return result, nil
+}
+
+// sanitizeTranscript maps the adopted run's message stream onto the
+// allowlisted TraceMessage shape (same columns as the trace writer).
+func sanitizeTranscript(msgs []agent.Message) []TraceMessage {
+	out := make([]TraceMessage, 0, len(msgs))
+	for i, m := range msgs {
+		out = append(out, serializeTraceMessage(i, m))
+	}
+	return out
 }
 
 // runTrajectory executes one explore trajectory: one backend.Execute call
@@ -298,6 +314,7 @@ func (e *Explorer) runTrajectory(ctx context.Context, srv *ExploreToolServer, ba
 		run.Error = "agent session ended without a result"
 		return run
 	}
+	run.Messages = drain.Messages()
 	if result.Status != "completed" {
 		reason := strings.TrimSpace(result.Error)
 		if reason == "" {

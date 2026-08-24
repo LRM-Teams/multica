@@ -128,6 +128,7 @@ type V6ProjectionNodeDetail struct {
 	ProjectionHash       string                  `json:"projection_hash"`
 	View                 string                  `json:"view"`
 	Node                 V6ProjectionNode        `json:"node"`
+	ContentLayers        *V6ContentLayers        `json:"content_layers,omitempty"`
 	Incoming             []V6ProjectionEdge      `json:"incoming"`
 	Outgoing             []V6ProjectionEdge      `json:"outgoing"`
 	HistoryRefs          []V6ProjectionEntityRef `json:"history_refs"`

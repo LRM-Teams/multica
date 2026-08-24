@@ -280,10 +280,10 @@ func TestPrepareResidentMessageBatchCoalescesIdenticalGraphRecalls(t *testing.T)
 		}
 	}
 	messages := []protocol.AgentMessageProjection{
-		msg("m-1", "总结一下当前进度"),
-		msg("m-2", "总结一下当前进度"),
-		msg("m-3", "总结一下  当前进度"), // whitespace variant: same key
-		msg("m-4", "列出当前的风险项"),
+		msg("m-1", "summarize current progress"),
+		msg("m-2", "summarize current progress"),
+		msg("m-3", "summarize   current  progress"), // whitespace runs collapse to the same key
+		msg("m-4", "list current risks"),
 	}
 
 	prepared, _, err := d.prepareResidentMessageBatch(context.Background(), "agent-1", "runtime-1", messages)

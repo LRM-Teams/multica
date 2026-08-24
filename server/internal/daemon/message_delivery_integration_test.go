@@ -262,7 +262,7 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 		runtime.Gosched()
 	}
 	notices := fakeRuntime.noticeSnapshot()
-	if len(notices) != 1 || notices[0].TotalPending != 1 || len(notices[0].ChangedTargets) != 1 || notices[0].ChangedTargets[0].Target != target {
+	if len(notices) != 1 || notices[0].TotalPending != 1 || len(notices[0].ChangedTargets) != 1 || !strings.HasPrefix(notices[0].ChangedTargets[0].Target, "#delivery-channel-") {
 		t.Fatalf("busy runtime Notices = %+v", notices)
 	}
 	if got := coordinator.Boundaries()[target]; got != created.Seq {

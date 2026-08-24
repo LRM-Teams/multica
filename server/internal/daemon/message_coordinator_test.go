@@ -849,11 +849,12 @@ func TestRuntimePoolSuppressesUnchangedSameSessionNoticeAndReportsOnlyChangedTar
 	}
 	first := InboxNoticeSnapshot{
 		Notice: agent.ResidentPendingNotice{TotalPending: 2, ChangedTargets: []agent.ResidentPendingTarget{
-			{Target: "channel:one", PendingCount: 1},
-			{Target: "dm:two", PendingCount: 1},
+			{Target: "#one", PendingCount: 1},
+			{Target: "dm:@two", PendingCount: 1},
 		}},
 		Fingerprint:        "all-v1",
 		TargetFingerprints: map[string]string{"channel:one": "one-v1", "dm:two": "two-v1"},
+		TargetKeys:         []string{"channel:one", "dm:two"},
 		CoordinatorID:      "coordinator-1",
 		PendingGeneration:  1,
 	}
@@ -870,11 +871,12 @@ func TestRuntimePoolSuppressesUnchangedSameSessionNoticeAndReportsOnlyChangedTar
 	}
 	second := InboxNoticeSnapshot{
 		Notice: agent.ResidentPendingNotice{TotalPending: 3, ChangedTargets: []agent.ResidentPendingTarget{
-			{Target: "channel:one", PendingCount: 2},
-			{Target: "dm:two", PendingCount: 1},
+			{Target: "#one", PendingCount: 2},
+			{Target: "dm:@two", PendingCount: 1},
 		}},
 		Fingerprint:        "all-v2",
 		TargetFingerprints: map[string]string{"channel:one": "one-v2", "dm:two": "two-v1"},
+		TargetKeys:         []string{"channel:one", "dm:two"},
 		CoordinatorID:      "coordinator-1",
 		PendingGeneration:  3,
 	}
@@ -891,7 +893,7 @@ func TestRuntimePoolSuppressesUnchangedSameSessionNoticeAndReportsOnlyChangedTar
 	if !reflect.DeepEqual(got[1].ChangedTargets, first.Notice.ChangedTargets) {
 		t.Fatalf("new-generation changed targets = %+v", got[1].ChangedTargets)
 	}
-	if want := []agent.ResidentPendingTarget{{Target: "channel:one", PendingCount: 2}}; !reflect.DeepEqual(got[2].ChangedTargets, want) {
+	if want := []agent.ResidentPendingTarget{{Target: "#one", PendingCount: 2}}; !reflect.DeepEqual(got[2].ChangedTargets, want) {
 		t.Fatalf("changed Notice targets = %+v, want %+v", got[2].ChangedTargets, want)
 	}
 }
@@ -1003,9 +1005,10 @@ func TestRuntimePoolDefersBusyNoticeAcrossCompactionBoundary(t *testing.T) {
 	slot := &canonicalAgentRuntimeSlot{backend: backend, running: true}
 	pool.slots["agent-1\x00runtime-1"] = slot
 	snapshot := InboxNoticeSnapshot{
-		Notice:             agent.ResidentPendingNotice{TotalPending: 1, ChangedTargets: []agent.ResidentPendingTarget{{Target: "dm:one", PendingCount: 1}}},
+		Notice:             agent.ResidentPendingNotice{TotalPending: 1, ChangedTargets: []agent.ResidentPendingTarget{{Target: "dm:@one", PendingCount: 1}}},
 		Fingerprint:        "all-v1",
 		TargetFingerprints: map[string]string{"dm:one": "one-v1"},
+		TargetKeys:         []string{"dm:one"},
 	}
 
 	pool.observeResidentRuntimeMessage(slot, agent.Message{Type: agent.MessageCompactionStarted})
@@ -1087,6 +1090,9 @@ func TestMessageCoordinatorCoalescesContentFreeBusyNoticeWithoutConsumption(t *t
 		testDelivery("message-2", "channel:one", 2, "delivery-2"),
 		testDelivery("message-3", "dm:two", 1, "delivery-3"),
 	}
+	deliveries[0].Message.ReplyTarget = "#one"
+	deliveries[1].Message.ReplyTarget = "#one"
+	deliveries[2].Message.ReplyTarget = "dm:@two"
 	deliveries[0].Message.Content = "secret body one"
 	deliveries[1].Message.Content = "secret body two"
 	deliveries[2].Message.Parts = []protocol.MessagePart{{Type: protocol.MessagePartTypeAttachment, AttachmentID: "attachment-secret"}}
@@ -1116,8 +1122,8 @@ func TestMessageCoordinatorCoalescesContentFreeBusyNoticeWithoutConsumption(t *t
 	notice := notices[0]
 	mu.Unlock()
 	if notice.TotalPending != 3 || !reflect.DeepEqual(notice.ChangedTargets, []agent.ResidentPendingTarget{
-		{Target: "channel:one", PendingCount: 2},
-		{Target: "dm:two", PendingCount: 1},
+		{Target: "#one", PendingCount: 2},
+		{Target: "dm:@two", PendingCount: 1},
 	}) {
 		t.Fatalf("Notice = %+v", notice)
 	}

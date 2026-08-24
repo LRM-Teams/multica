@@ -64,19 +64,24 @@ const (
 // may carry. The stream owner supplies environment, Workspace, and generation
 // identity; callers cannot override those routing fields.
 type Identity struct {
-	AgentID         string
-	RuntimeID       string
-	TaskID          string
-	SessionID       string
-	MessageID       string
-	DeliveryID      string
-	RequestID       string
-	TraceID         string
-	ChannelID       string
-	ChatSessionID   string
-	ConversationID  string
-	SourceMessageID string
-	ExecutionID     string
+	EventID           string
+	AgentID           string
+	RuntimeID         string
+	LaunchID          string
+	StartDispatchID   string
+	ProcessInstanceID string
+	InboxEventID      string
+	TaskID            string
+	SessionID         string
+	MessageID         string
+	DeliveryID        string
+	RequestID         string
+	TraceID           string
+	ChannelID         string
+	ChatSessionID     string
+	ConversationID    string
+	SourceMessageID   string
+	ExecutionID       string
 }
 
 // Fields is the closed set of bounded state and outcome metadata accepted by
@@ -95,15 +100,21 @@ type Fields struct {
 	ResponseMode  string
 	ServiceOrigin string
 
-	DurationMS       int64
-	SeqFrom          int64
-	SeqTo            int64
-	AckedSeq         int64
-	FoldedCount      int64
-	AttemptCount     int64
-	SuppressedCount  int64
-	DroppedCount     int64
-	OutageDurationMS int64
+	DurationMS        int64
+	SeqFrom           int64
+	SeqTo             int64
+	AckedSeq          int64
+	FoldedCount       int64
+	AttemptCount      int64
+	SuppressedCount   int64
+	DroppedCount      int64
+	OutageDurationMS  int64
+	RuntimeEpoch      int64
+	ProcessPID        int64
+	ExitCode          int64
+	Signal            string
+	TerminationReason string
+	ForceKilled       bool
 }
 
 // Evidence contains the only untrusted text accepted by the diagnostic API.
@@ -128,9 +139,12 @@ type ServiceOptions struct {
 }
 
 type RunnerOptions struct {
-	Environment       Environment
-	WorkspaceID       string
-	DaemonInstanceID  string
+	Environment      Environment
+	WorkspaceID      string
+	DaemonInstanceID string
+	// StartIdentity is retained as a compatibility alias for older callers.
+	// New code should set DaemonInstanceID.
+	StartIdentity     string
 	ComputerID        string
 	ServiceGeneration string
 }
@@ -215,25 +229,31 @@ type wireRecord struct {
 	Component     string    `json:"component"`
 
 	ComputerID        string      `json:"computerId,omitempty"`
+	DaemonID          string      `json:"daemon_id,omitempty"`
 	ServiceGeneration string      `json:"serviceGeneration,omitempty"`
 	Environment       Environment `json:"environment,omitempty"`
 	WorkspaceID       string      `json:"workspaceId,omitempty"`
 	DaemonInstanceID  string      `json:"daemonInstanceId,omitempty"`
 	StreamSeq         uint64      `json:"streamSeq"`
 
-	AgentID         string `json:"agent_id,omitempty"`
-	RuntimeID       string `json:"runtime_id,omitempty"`
-	TaskID          string `json:"task_id,omitempty"`
-	SessionID       string `json:"session_id,omitempty"`
-	MessageID       string `json:"message_id,omitempty"`
-	DeliveryID      string `json:"delivery_id,omitempty"`
-	RequestID       string `json:"request_id,omitempty"`
-	TraceID         string `json:"trace_id,omitempty"`
-	ChannelID       string `json:"channel_id,omitempty"`
-	ChatSessionID   string `json:"chat_session_id,omitempty"`
-	ConversationID  string `json:"conversation_id,omitempty"`
-	SourceMessageID string `json:"source_message_id,omitempty"`
-	ExecutionID     string `json:"execution_id,omitempty"`
+	EventID           string `json:"event_id,omitempty"`
+	AgentID           string `json:"agent_id,omitempty"`
+	RuntimeID         string `json:"runtime_id,omitempty"`
+	LaunchID          string `json:"launch_id,omitempty"`
+	StartDispatchID   string `json:"start_dispatch_id,omitempty"`
+	ProcessInstanceID string `json:"process_instance_id,omitempty"`
+	InboxEventID      string `json:"inbox_event_id,omitempty"`
+	TaskID            string `json:"task_id,omitempty"`
+	SessionID         string `json:"session_id,omitempty"`
+	MessageID         string `json:"message_id,omitempty"`
+	DeliveryID        string `json:"delivery_id,omitempty"`
+	RequestID         string `json:"request_id,omitempty"`
+	TraceID           string `json:"trace_id,omitempty"`
+	ChannelID         string `json:"channel_id,omitempty"`
+	ChatSessionID     string `json:"chat_session_id,omitempty"`
+	ConversationID    string `json:"conversation_id,omitempty"`
+	SourceMessageID   string `json:"source_message_id,omitempty"`
+	ExecutionID       string `json:"execution_id,omitempty"`
 
 	From          string `json:"from,omitempty"`
 	To            string `json:"to,omitempty"`
@@ -248,15 +268,21 @@ type wireRecord struct {
 	ResponseMode  string `json:"response_mode,omitempty"`
 	ServiceOrigin string `json:"service_origin,omitempty"`
 
-	DurationMS       int64 `json:"duration_ms,omitempty"`
-	SeqFrom          int64 `json:"seq_from,omitempty"`
-	SeqTo            int64 `json:"seq_to,omitempty"`
-	AckedSeq         int64 `json:"acked_seq,omitempty"`
-	FoldedCount      int64 `json:"folded_count,omitempty"`
-	AttemptCount     int64 `json:"attempt_count,omitempty"`
-	SuppressedCount  int64 `json:"suppressed_count,omitempty"`
-	DroppedCount     int64 `json:"dropped_count,omitempty"`
-	OutageDurationMS int64 `json:"outage_duration_ms,omitempty"`
+	DurationMS        int64  `json:"duration_ms,omitempty"`
+	SeqFrom           int64  `json:"seq_from,omitempty"`
+	SeqTo             int64  `json:"seq_to,omitempty"`
+	AckedSeq          int64  `json:"acked_seq,omitempty"`
+	FoldedCount       int64  `json:"folded_count,omitempty"`
+	AttemptCount      int64  `json:"attempt_count,omitempty"`
+	SuppressedCount   int64  `json:"suppressed_count,omitempty"`
+	DroppedCount      int64  `json:"dropped_count,omitempty"`
+	OutageDurationMS  int64  `json:"outage_duration_ms,omitempty"`
+	RuntimeEpoch      int64  `json:"runtime_epoch,omitempty"`
+	ProcessPID        int64  `json:"pid,omitempty"`
+	ExitCode          int64  `json:"exit_code,omitempty"`
+	Signal            string `json:"signal,omitempty"`
+	TerminationReason string `json:"termination_reason,omitempty"`
+	ForceKilled       bool   `json:"force_killed,omitempty"`
 
 	Diagnostic      string   `json:"diagnostic,omitempty"`
 	StderrTail      string   `json:"stderr_tail,omitempty"`

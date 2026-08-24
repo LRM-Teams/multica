@@ -38,14 +38,14 @@ func (d *Daemon) initializeRunnerDiagnostics() {
 	environment := diagnosticlog.Environment(strings.TrimSpace(d.cfg.Environment))
 	if environment != diagnosticlog.EnvironmentProduction && environment != diagnosticlog.EnvironmentTest {
 		if d.logger != nil {
-			d.logger.Warn("Workspace Runner diagnostics disabled", "reason", "invalid_environment")
+			d.logger.Debug("Workspace Runner diagnostics disabled", "reason", "invalid_environment")
 		}
 		return
 	}
 	store, err := diagnosticlog.Open(diagnosticlog.Config{})
 	if err != nil {
 		if d.logger != nil {
-			d.logger.Warn("Workspace Runner diagnostics disabled", "reason", "open_failed")
+			d.logger.Debug("Workspace Runner diagnostics disabled", "reason", "open_failed")
 		}
 		return
 	}
@@ -113,6 +113,7 @@ func canonicalMessageDiagnosticEvent(
 		Level:     diagnosticLevel(outcome),
 		Component: "message_coordinator",
 		Identity: diagnosticlog.Identity{
+			EventID:    delivery.Message.ID,
 			AgentID:    delivery.AgentID,
 			RuntimeID:  runtimeID,
 			MessageID:  delivery.Message.ID,
@@ -130,21 +131,81 @@ func canonicalMessageDiagnosticEvent(
 	}
 }
 
+func canonicalMessageDiagnosticEventForTurn(
+	workspaceID, runtimeID string,
+	delivery protocol.AgentDeliverPayload,
+	phase, outcome, reasonCode, executionID string,
+	runtimeEpoch int64,
+) diagnosticlog.Event {
+	event := canonicalMessageDiagnosticEvent(workspaceID, runtimeID, delivery, phase, outcome, reasonCode)
+	event.Identity.ExecutionID = executionID
+	event.Fields.RuntimeEpoch = runtimeEpoch
+	return event
+}
+
 func (d *Daemon) recordResidentMessageBatch(
 	workspaceID, runtimeID, agentID string,
 	messages []protocol.AgentMessageProjection,
-	phase, outcome, reasonCode string,
+	phase, outcome, reasonCode, executionID string, runtimeEpoch int64, launchID, startDispatchID string,
 ) {
 	for _, message := range messages {
-		event := canonicalMessageDiagnosticEvent(workspaceID, runtimeID, protocol.AgentDeliverPayload{
+		event := canonicalMessageDiagnosticEventForTurn(workspaceID, runtimeID, protocol.AgentDeliverPayload{
 			AgentID: agentID,
 			Target:  message.Target,
 			Seq:     message.Seq,
 			Message: message,
-		}, phase, outcome, reasonCode)
+		}, phase, outcome, reasonCode, executionID, runtimeEpoch)
+		event.Identity.LaunchID = launchID
+		event.Identity.StartDispatchID = startDispatchID
 		event.Component = "resident_runtime"
 		d.recordRunnerDiagnostic(workspaceID, event)
 	}
+}
+
+func (d *Daemon) runtimeEpochForRuntime(runtimeID string) (string, int64) {
+	if d == nil || strings.TrimSpace(runtimeID) == "" {
+		return "", 0
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	runtime, ok := d.runtimeIndex[runtimeID]
+	if !ok {
+		return "", 0
+	}
+	if state := d.workspaces[runtime.WorkspaceID]; state != nil {
+		return runtime.WorkspaceID, state.runtimeEpoch
+	}
+	return runtime.WorkspaceID, 0
+}
+
+// bindInboxLeaseEpoch snapshots the registration generation at lease
+// acquisition. Subsequent renew/ack/terminal events must retain this value
+// even if the workspace registers a replacement runtime in the meantime.
+func (d *Daemon) bindInboxLeaseEpoch(lease *AgentInboxLease) {
+	if d == nil || lease == nil || lease.RuntimeEpoch > 0 || strings.TrimSpace(lease.RuntimeID) == "" {
+		return
+	}
+	_, epoch := d.runtimeEpochForRuntime(lease.RuntimeID)
+	lease.RuntimeEpoch = epoch
+}
+
+func (d *Daemon) recordInboxLeaseDiagnostic(lease AgentInboxLease, phase, outcome, reason string) {
+	if d == nil || strings.TrimSpace(lease.RuntimeID) == "" {
+		return
+	}
+	workspaceID, currentEpoch := d.runtimeEpochForRuntime(lease.RuntimeID)
+	if workspaceID == "" {
+		return
+	}
+	runtimeEpoch := lease.RuntimeEpoch
+	if runtimeEpoch <= 0 {
+		runtimeEpoch = currentEpoch
+	}
+	d.recordRunnerDiagnostic(workspaceID, diagnosticlog.Event{
+		Name: diagnosticlog.EventDeliveryStateChanged, Level: diagnosticLevel(outcome), Component: "agent_inbox",
+		Identity: diagnosticlog.Identity{EventID: lease.ID, InboxEventID: lease.ID, RuntimeID: lease.RuntimeID, DeliveryID: lease.DeliveryID, ExecutionID: lease.ExecutionID, ConversationID: lease.ConversationID, SourceMessageID: lease.SourceMessageID},
+		Fields:   diagnosticlog.Fields{Phase: phase, Outcome: outcome, ReasonCode: reason, SeqFrom: lease.SeqFrom, SeqTo: lease.SeqTo, ResponseMode: lease.ResponseMode, RuntimeEpoch: runtimeEpoch},
+	})
 }
 
 func (d *Daemon) recordAgentMessageResponse(
@@ -209,7 +270,9 @@ func (d *Daemon) recordStandaloneChatCheckpoint(
 			AgentID:         task.AgentID,
 			RuntimeID:       task.RuntimeID,
 			TaskID:          task.ID,
+			EventID:         lease.ID,
 			DeliveryID:      lease.DeliveryID,
+			InboxEventID:    lease.ID,
 			ChatSessionID:   task.ChatSessionID,
 			ConversationID:  lease.ConversationID,
 			SourceMessageID: lease.SourceMessageID,
@@ -226,6 +289,7 @@ func (d *Daemon) recordStandaloneChatCheckpoint(
 			SeqTo:        lease.SeqTo,
 			AckedSeq:     ackedSeq,
 			FoldedCount:  int64(len(task.FoldedInboxEvents)),
+			RuntimeEpoch: lease.RuntimeEpoch,
 		},
 	})
 }
@@ -256,6 +320,21 @@ func diagnosticLevel(outcome string) diagnosticlog.Level {
 		return diagnosticlog.LevelWarn
 	default:
 		return diagnosticlog.LevelInfo
+	}
+}
+
+func terminationReasonFromLifecycle(result string) string {
+	switch result {
+	case "advanced", "":
+		return ""
+	case "timeout":
+		return "startup_timeout"
+	case "superseded":
+		return "superseded"
+	case "terminal":
+		return "natural"
+	default:
+		return "unknown"
 	}
 }
 

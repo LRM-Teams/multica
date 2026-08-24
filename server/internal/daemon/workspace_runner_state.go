@@ -10,8 +10,10 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/multica-ai/multica/server/internal/diagnosticlog"
 	"github.com/multica-ai/multica/server/pkg/agent"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -23,6 +25,7 @@ type WorkspaceRunnerConfig struct {
 	DaemonID         string
 	DaemonInstanceID string
 	WorkspaceID      string
+	RuntimeEpoch     int64
 	DeviceName       string
 	OS               string
 	CLIVersion       string
@@ -82,9 +85,10 @@ type workspaceRunnerDependencies struct {
 // methods; its Inbox, process, Activity, and socket state never
 // escape to the machine-wide Daemon lifecycle owner.
 type WorkspaceRunner struct {
-	config WorkspaceRunnerConfig
-	client *Client
-	logger *slog.Logger
+	config       WorkspaceRunnerConfig
+	runtimeEpoch atomic.Int64
+	client       *Client
+	logger       *slog.Logger
 
 	serverBaseURL  string
 	workspacesRoot string
@@ -124,6 +128,19 @@ type WorkspaceRunner struct {
 	onReady      func()
 }
 
+func (runner *WorkspaceRunner) currentRuntimeEpoch() int64 {
+	if runner == nil {
+		return 0
+	}
+	return runner.runtimeEpoch.Load()
+}
+
+func (runner *WorkspaceRunner) setRuntimeEpoch(epoch int64) {
+	if runner != nil {
+		runner.runtimeEpoch.Store(epoch)
+	}
+}
+
 func (runner *WorkspaceRunner) WorkspaceID() string {
 	if runner == nil {
 		return ""
@@ -159,7 +176,7 @@ func newWorkspaceRunner(config WorkspaceRunnerConfig, dependencies workspaceRunn
 		return nil, err
 	}
 	life, lifeStop := context.WithCancel(context.Background())
-	return &WorkspaceRunner{
+	runner := &WorkspaceRunner{
 		config:         config,
 		client:         dependencies.client,
 		logger:         dependencies.logger,
@@ -196,7 +213,9 @@ func newWorkspaceRunner(config WorkspaceRunnerConfig, dependencies workspaceRunn
 		residency:                 newAgentResidencyStore(now),
 		life:                      life,
 		lifeStop:                  lifeStop,
-	}, nil
+	}
+	runner.setRuntimeEpoch(config.RuntimeEpoch)
+	return runner, nil
 }
 
 func (runner *WorkspaceRunner) Close() {
@@ -359,13 +378,53 @@ func (d *Daemon) newWorkspaceRunner(workspaceID string) (*WorkspaceRunner, error
 	if d == nil {
 		return nil, errors.New("Workspace Runner Daemon is required")
 	}
+	d.mu.Lock()
+	providerByRuntime := make(map[string]string)
+	for runtimeID, runtime := range d.runtimeIndex {
+		if runtime.WorkspaceID == workspaceID {
+			providerByRuntime[runtimeID] = strings.ToLower(strings.TrimSpace(runtime.Provider))
+		}
+	}
+	d.mu.Unlock()
+	d.mu.Lock()
+	runtimeEpoch := int64(0)
+	if state := d.workspaces[workspaceID]; state != nil {
+		runtimeEpoch = state.runtimeEpoch
+	}
+	d.mu.Unlock()
 	onTransition := func(transition agentLifecycleTransition) {
 		d.recordAgentLifecycleTransition(transition)
+		phase := transition.Phase
+		if phase == "process_residency" {
+			phase = "provider_spawn"
+		} else if phase == "runtime_readiness" {
+			phase = "provider_ready"
+		} else if transition.Event == "close" && transition.Result == "terminal" {
+			phase = "provider_exit"
+		}
+		provider := providerByRuntime[transition.RuntimeID]
+		if provider == "codex" {
+			d.recordRunnerDiagnostic(workspaceID, diagnosticlog.Event{
+				Name:  diagnosticlog.EventAgentProcessStateChanged,
+				Level: diagnosticLevel(transition.Result), Component: "provider_process",
+				Identity: diagnosticlog.Identity{
+					EventID: transition.StateInstanceID, AgentID: transition.AgentID,
+					RuntimeID: transition.RuntimeID, StartDispatchID: transition.StartDispatchID,
+					LaunchID: transition.LaunchID, ProcessInstanceID: transition.ProcessInstanceID, ExecutionID: transition.LaunchID,
+				}, Fields: diagnosticlog.Fields{
+					Provider: provider, Phase: phase, Outcome: transition.Event,
+					ReasonCode: transition.Result, ProcessPID: transition.ProcessPID,
+					RuntimeEpoch: transition.RuntimeEpoch, ExitCode: transition.ExitCode, Signal: transition.Signal,
+					TerminationReason: firstNonEmpty(transition.TerminationReason, terminationReasonFromLifecycle(transition.Result)), ForceKilled: transition.ForceKilled,
+				},
+			})
+		}
 	}
 	return newWorkspaceRunner(WorkspaceRunnerConfig{
 		DaemonID:         d.cfg.DaemonID,
 		DaemonInstanceID: d.runnerInstanceID,
 		WorkspaceID:      workspaceID,
+		RuntimeEpoch:     runtimeEpoch,
 		DeviceName:       d.cfg.DeviceName,
 		OS:               normalizeGOOS(runtime.GOOS),
 		CLIVersion:       d.cfg.CLIVersion,

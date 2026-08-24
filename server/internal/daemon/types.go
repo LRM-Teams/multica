@@ -185,6 +185,7 @@ type AgentInboxLease struct {
 	Reason          string `json:"reason,omitempty"`
 	RuntimeID       string `json:"-"`
 	ExecutionID     string `json:"-"`
+	RuntimeEpoch    int64  `json:"-"`
 }
 
 // ChatAttachmentMeta is the structured attachment metadata the daemon

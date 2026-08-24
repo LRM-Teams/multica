@@ -19,6 +19,30 @@ func (runner *WorkspaceRunner) messageCoordinator(agentID string) (*MessageCoord
 	return runner.inboxes.Resolve(agentID)
 }
 
+// residentLaunchIdentity returns the launch fence owned by this Runner. The
+// daemon-level delivery path must not reach into process or residency state
+// directly; keeping this accessor here preserves the WorkspaceRunner module
+// boundary while allowing diagnostics to join a resident turn to provider
+// lifecycle events.
+func (runner *WorkspaceRunner) residentLaunchIdentity(agentID string) (string, string) {
+	if runner == nil {
+		return "", ""
+	}
+	launchID, startDispatchID := "", ""
+	if runner.processes != nil {
+		if snapshot, ok := runner.processes.Snapshot(agentID); ok {
+			launchID, startDispatchID = snapshot.LaunchID, snapshot.StartDispatchID
+		}
+	}
+	if runner.residency != nil && (launchID == "" || startDispatchID == "") {
+		if resident, ok := runner.residency.get(agentID); ok {
+			launchID = firstNonEmpty(launchID, resident.launchID)
+			startDispatchID = firstNonEmpty(startDispatchID, resident.startDispatchID)
+		}
+	}
+	return launchID, startDispatchID
+}
+
 func (runner *WorkspaceRunner) messageRuntimeID(agentID string) string {
 	_, runtimeID, _ := runner.messageCoordinator(agentID)
 	return runtimeID
@@ -347,7 +371,11 @@ func (runner *WorkspaceRunner) restartFromIdleSnapshot(agentID string, res agent
 	if runner.processes == nil || res.runtimeID == "" || res.launchID == "" || res.startDispatchID == "" {
 		return fmt.Errorf("idle snapshot for Agent %q is incomplete", agentID)
 	}
-	return runner.processes.RestoreIdle(agentID, res.runtimeID, res.launchID, res.startDispatchID, res.startStopEpoch)
+	if err := runner.processes.RestoreIdle(agentID, res.runtimeID, res.launchID, res.startDispatchID, res.startStopEpoch); err != nil {
+		return err
+	}
+	runner.processes.SetRuntimeEpoch(agentID, runner.currentRuntimeEpoch())
+	return nil
 }
 
 func (runner *WorkspaceRunner) completeIdleSnapshotStart(ctx context.Context, agentID string, res agentResidency) {

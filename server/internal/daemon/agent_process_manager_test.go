@@ -45,19 +45,41 @@ func TestAgentProcessManagerIdempotentStartQueueAndRecovery(t *testing.T) {
 		t.Fatalf("queued receipt = %+v, want queued depth 1", queued)
 	}
 
-	callback := agentProcessCallback{AgentID: "agent-a", LaunchID: first.LaunchID, ProcessInstanceID: "process-a-1"}
+	callback := agentProcessCallback{AgentID: "agent-a", LaunchID: first.LaunchID, ProcessInstanceID: "process-a-1", ProcessPID: 4242}
 	if err := manager.ProcessSpawned(callback); err != nil {
 		t.Fatalf("ProcessSpawned: %v", err)
 	}
 	if err := manager.RuntimeReady(callback); err != nil {
 		t.Fatalf("RuntimeReady: %v", err)
 	}
+	seenProcess := false
+	for _, transition := range transitions {
+		if transition.Event == "enter" && transition.Phase == "runtime_readiness" {
+			seenProcess = transition.RuntimeID == "runtime-1" && transition.ProcessInstanceID == "process-a-1" && transition.StartDispatchID == "dispatch-a" && transition.ProcessPID == 4242
+		}
+	}
+	if !seenProcess {
+		t.Fatalf("runtime readiness transition lost process correlation: %+v", transitions)
+	}
+	callback.ExitCode = 137
+	callback.Signal = "SIGKILL"
+	callback.TerminationReason = "force_killed"
+	callback.ForceKilled = true
 	if err := manager.ProcessExited(callback, true); err != nil {
 		t.Fatalf("ProcessExited(recover): %v", err)
 	}
 	recovered, ok := manager.Snapshot("agent-a")
 	if !ok || recovered.LaunchID != first.LaunchID || recovered.QueueState != protocol.AgentStartQueueStarting || recovered.ProcessInstanceID != "" {
 		t.Fatalf("recovered snapshot = %+v, exists=%v", recovered, ok)
+	}
+	seenExit := false
+	for _, transition := range transitions {
+		if transition.Event == "close" && transition.Result == "terminal" {
+			seenExit = transition.ExitCode == 137 && transition.Signal == "SIGKILL" && transition.TerminationReason == "force_killed" && transition.ForceKilled
+		}
+	}
+	if !seenExit {
+		t.Fatalf("terminal transition lost WaitStatus fields: %+v", transitions)
 	}
 
 	if err := manager.Stop(agentProcessCallback{AgentID: "agent-a", LaunchID: first.LaunchID}); err != nil {

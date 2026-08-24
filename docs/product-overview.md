@@ -661,7 +661,7 @@ multica issue run-messages <task-id>    # 查看某次执行的消息
 multica agent list | get | create | update | archive
 multica skill list | get | create | update | delete | import | files upsert
 multica reminder list | get | schedule | update | cancel
-multica project list | get | create | update
+multica workspace info --projects    # 查看项目及绑定资源
 ```
 
 #### Runtime

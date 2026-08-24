@@ -15,11 +15,12 @@ description: 项目下可选的链接与本地引用元数据。
 
 ## CLI
 
-项目及资源查看统一使用 workspace 快照：
+使用以下命令查看项目及其绑定资源：
 
 ```bash
 multica workspace info --projects
 multica workspace info --projects --output json
 ```
 
-该快照为只读，不影响执行 cwd。
+旧版 `multica project resource` 命令已移除。资源管理请使用 workspace UI/API，
+且不会影响 Agent 的执行目录。

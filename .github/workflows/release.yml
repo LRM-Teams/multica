@@ -34,16 +34,35 @@ jobs:
         id: release_meta
         shell: bash
         run: |
+          set -euo pipefail
           tag="${GITHUB_REF_NAME}"
           echo "Triggered by tag: $tag"
-          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[0-9]+)?$ ]]; then
-            echo "::error::Release tags must be vX.Y.Z or vX.Y.Z-(alpha|beta|rc).N; got '$tag'."
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)\.[0-9]+)?$ ]]; then
+            echo "::error::Release tags must be vX.Y.Z, vX.Y.Z-alpha.N, or vX.Y.Z-beta.N; got '$tag'."
             exit 1
           fi
           if [[ "$tag" == *-dirty* ]]; then
             echo "::error::Refusing to release from dirty tag '$tag'."
             exit 1
           fi
+
+          required_branch="main"
+          if [[ "$tag" == *-* ]]; then
+            required_branch="dev"
+          fi
+          git fetch --no-tags origin "+refs/heads/${required_branch}:refs/remotes/origin/${required_branch}"
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" "refs/remotes/origin/${required_branch}"; then
+            echo "::error::Tag '$tag' must point to a commit from '$required_branch'."
+            exit 1
+          fi
+          if [[ "$required_branch" == "dev" ]]; then
+            git fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main"
+            if git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main; then
+              echo "::error::Pre-release tag '$tag' must point to dev-only history, not main."
+              exit 1
+            fi
+          fi
+
           echo "tag_name=$tag" >> "$GITHUB_OUTPUT"
           if [[ "$tag" == *-* ]]; then
             echo "is_stable=false" >> "$GITHUB_OUTPUT"
@@ -212,7 +231,7 @@ jobs:
                 [.[][] | select(
                   .draft == false and
                   .tag_name != $current and
-                  (.tag_name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+-(alpha|beta|rc)\\.[0-9]+$"))
+                  (.tag_name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+-(alpha|beta)\\.[0-9]+$"))
                 )][0].tag_name // empty
               ' <<<"$releases")"
               other_environment="test"
@@ -225,7 +244,7 @@ jobs:
               ' <<<"$releases")"
               other_environment="production"
             fi
-            [[ "$other_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[0-9]+)?$ ]]
+            [[ "$other_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)\.[0-9]+)?$ ]]
             other_manifest="${RUNNER_TEMP}/bootstrap-${other_environment}.json"
             aws --endpoint-url "$OSS_ENDPOINT_URL" s3 cp \
               "s3://${OSS_BUCKET}/${RELEASE_PREFIX}/${other_tag#v}/manifest.json" \
@@ -258,7 +277,7 @@ jobs:
           production_tag="$(jq -r '.environments.production.tag // empty' "${RUNNER_TEMP}/metainfo.json")"
           test_tag="$(jq -r '.environments.test.tag // empty' "${RUNNER_TEMP}/metainfo.json")"
           [[ "$production_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          [[ "$test_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-(alpha|beta|rc)\.[0-9]+$ ]]
+          [[ "$test_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-(alpha|beta)\.[0-9]+$ ]]
           jq -e '
             .environments.production.tag == ("v" + .environments.production.version) and
             .environments.test.tag == ("v" + .environments.test.version)

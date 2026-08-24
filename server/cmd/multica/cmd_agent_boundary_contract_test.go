@@ -440,9 +440,7 @@ func TestBoundary_NonessentialAllowlist_InventoryDocumentsNamedSurfaces(t *testi
 }
 
 const boundaryContractIssueID = "1881a167-4bb6-4602-944b-f40ce4192fe6"
-const boundaryContractProjectID = "p1111111-2222-3333-4444-555555555555"
-
-// --- ④ issue + project resource (necessary; still human paths today) ---
+// --- ④ issue (necessary; still human paths today) ---
 
 // TestBoundary_IssueGet_HitsDedicatedAgentAPI asserts issue get uses
 // GET /api/agent/issues/{id} (resolve + read both under dedicated).
@@ -1025,39 +1023,6 @@ func TestBoundary_IssueMetadataList_HitsDedicatedAgentAPI(t *testing.T) {
 	}
 }
 
-// TestBoundary_ProjectResourceList_HitsDedicatedAgentAPI asserts resource list
-// uses GET /api/agent/projects/{id}/resources.
-func TestBoundary_ProjectResourceList_HitsDedicatedAgentAPI(t *testing.T) {
-	wantPath := "/api/agent/projects/" + boundaryContractProjectID + "/resources"
-	var gotPaths []string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPaths = append(gotPaths, r.Method+" "+r.URL.Path)
-		if r.URL.Path == wantPath {
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"resources": []map[string]any{},
-			})
-			return
-		}
-		http.Error(w, "human project path forbidden", http.StatusForbidden)
-	}))
-	t.Cleanup(srv.Close)
-	boundaryCLIEnv(t, srv.URL)
-
-	cmd := &cobra.Command{Use: "list"}
-	cmd.Flags().String("server-url", "", "")
-	cmd.Flags().String("workspace-id", "", "")
-	cmd.Flags().String("profile", "", "")
-	cmd.Flags().String("output", "json", "")
-	cmd.Flags().Bool("full-id", false, "")
-
-	if err := runProjectResourceList(cmd, []string{boundaryContractProjectID}); err != nil {
-		t.Fatalf("runProjectResourceList: %v (paths=%v)", err, gotPaths)
-	}
-	if len(gotPaths) != 1 || gotPaths[0] != "GET "+wantPath {
-		t.Fatalf("paths = %v, want [GET %s]", gotPaths, wantPath)
-	}
-}
-
 // TestBoundary_IssueLabelsList_HitsDedicatedAgentAPI asserts issue labels list
 // uses GET /api/agent/issues/{id}/labels (Ronan tip 2b6c0dde4).
 func TestBoundary_IssueLabelsList_HitsDedicatedAgentAPI(t *testing.T) {
@@ -1390,8 +1355,8 @@ func TestBoundary_NecessaryPathTable_DocumentsDedicatedTargets(t *testing.T) {
 		{"issue pull-requests", []string{"/api/agent/issues/", "/pull-requests"}},
 		{"task run messages", []string{"/api/agent/tasks/", "/messages"}},
 		{"task self-cancel", []string{"/api/agent/tasks/", "/cancel"}},
-		{"project list", []string{"/api/agent/projects"}},
-		{"project resource read", []string{"/api/agent/projects/"}},
+		{"workspace project list", []string{"/api/agent/projects"}},
+		{"workspace project resources", []string{"/api/agent/projects/"}},
 		{"attachment view", []string{"/api/agent/attachments"}},
 		{"attachment upload session", []string{"/api/agent/attachment-upload-sessions"}},
 		{"directory agents", []string{"/api/agent/agents"}},

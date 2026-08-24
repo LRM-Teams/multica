@@ -15,11 +15,11 @@ description: 项目下可选的链接与本地引用元数据。
 
 ## CLI
 
+项目及资源查看统一使用 workspace 快照：
+
 ```bash
-multica project resource list <project-id>
-multica project resource add <project-id> --type <type> --ref '<json>'
-multica project resource update <project-id> <resource-id> --ref '<json>'
-multica project resource remove <project-id> <resource-id>
+multica workspace info --projects
+multica workspace info --projects --output json
 ```
 
-这些命令只修改项目元数据，不影响执行 cwd。
+该快照为只读，不影响执行 cwd。

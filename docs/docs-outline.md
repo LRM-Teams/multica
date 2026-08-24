@@ -785,7 +785,7 @@ multica issue assign <issue-id> --agent <agent-slug>
     - **Setup**：`setup cloud / setup self-host`
     - **Workspace**：`workspace list / get / members`
     - **Issue**：`issue list / get / create / update / assign / status / search / runs / rerun` + 嵌套 `issue comment` / `issue subscriber`
-    - **Project**：`project list / get / create / update / delete / status`
+    - **Project**：`workspace info --projects`
     - **Agent**：`agent list / get / create / update / archive / restore / tasks` + 嵌套 `agent skills`
     - **Skill**：`skill list / get / create / update / delete / import` + 嵌套 `skill files`
     - **Autopilot**（命令名保留，文档里叫 Routines）：`autopilot list / get / create / update / delete / runs` + 嵌套 `autopilot trigger`
@@ -871,7 +871,7 @@ multica issue assign <issue-id> --agent <agent-slug>
   - 8.5 multica setup 详细
   - 8.6 multica workspace 详细
   - 8.7 multica issue（+comment / subscriber）详细
-  - 8.8 multica project 详细
+  - 8.8 workspace info 项目资源
   - 8.9 multica agent（+skills）详细
   - 8.10 multica skill 详细
   - 8.11 multica autopilot 详细

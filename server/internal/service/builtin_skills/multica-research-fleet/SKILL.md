@@ -47,6 +47,11 @@ canonical state。替换后的 Agent 或主理人必须能够只依靠 PostgreSQ
   简体中文；协议 key、枚举值、命令和来源原文保持精确。面向用户的输出不得叙述
   Manifest/Brief 查找、标识符、JSON 拼装、CLI 命令、工具调用或隐藏推理；交接后只输出
   简短的中文调研摘要。
+- Director Brief 节点摘要中的“待回答问题”来自持久化 Result/Insight。主理人必须逐项判断：
+  对仍有价值的问题创建或改派后续 Work，出现能力、容量或独立性缺口时再创建 Agent；
+  不继续的问题在 action reason 中记录收敛理由。存在高价值待回答问题且没有活动 Work
+  覆盖时，不得提交 `no_op`。历史 Brief 若遗漏 Result 的待回答问题，服务端会自动创建
+  一次修复 Cycle；不要要求用户重建 Run。
 - 主理人不得自行暂停整场 Run。单个 Work Item 失败时，先读取 Brief 中的小目标、Attempt
   次数/预算、失败分类、诊断和终止原因，再选择 `retry_work_item`、`reassign_work_item`、
   创建替代 Work，或向用户明确报告。只有用户 Stop 或发布维护控制可以暂停整场调研。

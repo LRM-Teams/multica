@@ -184,7 +184,7 @@ func createDirectorAdjudicationTaskTx(ctx context.Context, tx pgx.Tx, state acce
 		 assigned_agent_id,goal_version,plan_version,max_attempts,timeout_seconds,ready_at)
 		VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,'deliberate',$6,$7,'research_deliberation_v6',$8::jsonb,1,'ready',$9::uuid,$10,$11,1,$12,now())
 		ON CONFLICT (session_id,goal_version,plan_version,client_key) DO NOTHING`, taskID, state.workspaceID, state.run.SessionID, state.task.ID,
-		clientKey, "Adjudicate the deadlocked Dispute from canonical positions and evidence without overriding any position by authority alone. Deadlock reason: "+reason,
+		clientKey, "依据规范立场与证据裁决陷入僵局的 Dispute，不得仅凭权限否定任何立场。僵局原因："+reason,
 		role, criteria, directorID, state.run.GoalVersion, state.targetPlan, state.run.Config.TaskTimeoutSeconds); err != nil {
 		return "", err
 	}

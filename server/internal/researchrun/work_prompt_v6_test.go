@@ -199,6 +199,54 @@ func TestAtomicV6WorkManifestGetsOneBackingTaskAndFrozenMission(t *testing.T) {
 	}
 }
 
+func TestV6BackingTaskMirrorsWorkItemLifecycle(t *testing.T) {
+	run := newTransactionRecoveryRun(t, "Mirror atomic V6 Work lifecycle")
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_session SET orchestrator_version='research-run-v6' WHERE id=$1::uuid`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	_, workItemID := seedV6RecoveryWorkItem(t, run, "ready", time.Now().Add(time.Minute))
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_work_item SET expected_result_schema_id='atomic_result_submission',payload_schema_id='research.finding.v1' WHERE id=$1::uuid`, workItemID); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := run.pool.Begin(run.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskID, err := ensureV6BackingTaskTx(run.ctx, tx, workItemID)
+	if err != nil {
+		_ = tx.Rollback(run.ctx)
+		t.Fatal(err)
+	}
+	if err = tx.Commit(run.ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, transition := range []struct {
+		workStatus string
+		taskStatus string
+	}{
+		{workStatus: "ready", taskStatus: "ready"},
+		{workStatus: "dispatching", taskStatus: "dispatching"},
+		{workStatus: "running", taskStatus: "running"},
+		{workStatus: "cancelled", taskStatus: "cancelled"},
+		{workStatus: "ready", taskStatus: "ready"},
+		{workStatus: "dispatching", taskStatus: "dispatching"},
+		{workStatus: "running", taskStatus: "running"},
+		{workStatus: "succeeded", taskStatus: "succeeded"},
+	} {
+		if _, err = run.pool.Exec(run.ctx, `UPDATE research_work_item SET status=$2,updated_at=now() WHERE id=$1::uuid`, workItemID, transition.workStatus); err != nil {
+			t.Fatalf("set Work Item status %q: %v", transition.workStatus, err)
+		}
+		var got string
+		if err = run.pool.QueryRow(run.ctx, `SELECT status FROM research_task WHERE id=$1::uuid`, taskID).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got != transition.taskStatus {
+			t.Fatalf("Work Item status %q projected Task status %q, want %q", transition.workStatus, got, transition.taskStatus)
+		}
+	}
+}
+
 func validV6DispatchPromptManifest(t *testing.T, overrides map[string]any) V6WorkManifest {
 	t.Helper()
 	value := map[string]any{

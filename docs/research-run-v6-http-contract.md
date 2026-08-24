@@ -175,6 +175,13 @@ non-empty schema ID other than `no_op.v1` and include the exact non-empty
 `payload.task_specific_schema`; otherwise the action proposal is rejected before
 the Work Item is created.
 
+Atomic Work also owns one deterministic `research_task` identity required by the
+submission envelope and provenance ledger. That Task is a derived record, not a
+second execution authority: its assignee and lifecycle mirror the Work Item at
+the database boundary (`pending`, `ready`, `dispatching`, `running`, and terminal
+states). Clients must never interpret a stale backing Task as queued Work when
+the owning Work Item is already running or terminal.
+
 The canonical projection includes Run-scoped `agent` nodes and `assigned_to`
 edges from Work to the assigned Agent. Agent execution state preserves Team
 Membership semantics: `idle` means available without assigned Work, `running`

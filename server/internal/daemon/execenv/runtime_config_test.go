@@ -1194,6 +1194,9 @@ func TestAgentWorkspaceHoldsCodeCheckouts(t *testing.T) {
 		"Do not check out repositories outside this workspace",
 		"Project id: `project-1`",
 		"multica workspace info --projects --output json",
+		"use an existing project directory or worktree inside this workspace",
+		"if the bound `github_repo` has no checkout yet, clone it yourself into this workspace",
+		"Multica does not clone repositories or provision checkouts",
 		"this runtime file is not updated when project resources change",
 	} {
 		if !strings.Contains(out, want) {

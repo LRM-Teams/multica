@@ -102,7 +102,8 @@ POST `/director-brief-acks`；包含 `catalog_access` 的 Manifest 授权 GET `/
 进度不会结算 Work Item，服务端会限制每个 attempt 的数量。进度 POST 失败不得阻塞任务
 或形成重试循环；忽略错误并继续。进度也是存活心跳：每条被接受的进度会把 Work Item
 租约向后延长至少 20 分钟，因此长回合至少每 15 分钟报告一次，否则租约可能在工作中
-过期，attempt 会按 lost 恢复。
+过期，attempt 会按 lost 恢复。被接受的进度会立即显示在调研页面，并从同一条持久化
+Run Event 恢复；无需再调用通用 task 进度接口。
 
 主理人任务必须沿 `next_cursor` 读取每一页 Brief，并用该页返回的精确 ID 和 hash
 逐页确认：

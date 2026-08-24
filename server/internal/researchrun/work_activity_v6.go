@@ -46,9 +46,9 @@ func (s *PostgresStore) ProjectionV6WorkActivity(ctx context.Context, workspaceI
 		       COALESCE(attempt.assigned_agent_id::text,''),
 		       COALESCE(NULLIF(agent.display_name,''),agent.name,''),
 		       COALESCE(attempt.inbox_task_id::text,''),
-		       COALESCE(work.reason,''),
+		       COALESCE(NULLIF(work.payload->>'mission_prompt',''),NULLIF(work.reason,''),NULLIF(membership.mission_prompt,''),''),
 		       work.status,
-		       COALESCE(progress.summary,''),
+		       COALESCE(NULLIF(v6_progress.summary,''),progress.summary,''),
 		       COALESCE(progress.step,0),
 		       COALESCE(progress.total,0),
 		       inbox.started_at,
@@ -59,7 +59,8 @@ func (s *PostgresStore) ProjectionV6WorkActivity(ctx context.Context, workspaceI
 		         COALESCE(inbox.updated_at, work.updated_at),
 		         COALESCE(inbox.started_at, work.updated_at),
 		         COALESCE(inbox.completed_at, work.updated_at),
-		         COALESCE(progress.updated_at, work.updated_at)
+		         COALESCE(progress.updated_at, work.updated_at),
+		         COALESCE(v6_progress.updated_at, work.updated_at)
 		       )
 		FROM research_work_item work
 		LEFT JOIN LATERAL (
@@ -72,10 +73,25 @@ func (s *PostgresStore) ProjectionV6WorkActivity(ctx context.Context, workspaceI
 			LIMIT 1
 		) attempt ON true
 		LEFT JOIN agent ON agent.id=attempt.assigned_agent_id
+		LEFT JOIN research_team_membership membership
+		  ON membership.workspace_id=attempt.workspace_id
+		 AND membership.session_id=attempt.session_id
+		 AND membership.id=attempt.membership_id
 		LEFT JOIN agent_inbox_event inbox
 		  ON inbox.id=attempt.inbox_task_id
 		 AND inbox.agent_id=attempt.assigned_agent_id
 		LEFT JOIN agent_task_progress_snapshot progress ON progress.task_id=attempt.inbox_task_id
+		LEFT JOIN LATERAL (
+			SELECT COALESCE(event.payload->>'text','') summary,event.created_at updated_at
+			FROM research_run_event event
+			WHERE event.workspace_id=work.workspace_id
+			  AND event.session_id=work.session_id
+			  AND event.event_type='v6_work_progress_reported'
+			  AND event.payload->>'work_item_id'=work.id::text
+			  AND event.payload->>'attempt_id'=attempt.id::text
+			ORDER BY event.sequence DESC
+			LIMIT 1
+		) v6_progress ON true
 		WHERE work.workspace_id=$1::uuid AND work.session_id=$2::uuid AND work.id=$3::uuid`,
 		workspaceID, runID, workItemID,
 	).Scan(
@@ -120,7 +136,7 @@ func (s *PostgresStore) ProjectionV6WorkActivity(ctx context.Context, workspaceI
 		return V6WorkActivity{}, err
 	}
 	defer rows.Close()
-	fallback := activityprojection.Summary{Label: "Working...", Tone: "warning", Visibility: "visible"}
+	fallback := activityprojection.Summary{Label: "正在处理任务...", Tone: "warning", Visibility: "visible"}
 	for rows.Next() {
 		var row V6WorkActivityTimelineRow
 		var entry protocol.AgentActivityEntry

@@ -78,7 +78,7 @@ func (s *PostgresStore) AssignV6Director(ctx context.Context, in AssignV6Directo
 		return V6DirectorAssignment{}, err
 	}
 	if !activeMembership {
-		mission := "Serve as the user-selected Research Director for this Run."
+		mission := "担任用户为本次调研指定的调研主理人。"
 		missionHash := ArtifactContentHashFromCanonicalJSON([]byte(`{"mission":"user-selected Research Director"}`))
 		if _, err = tx.Exec(ctx, `INSERT INTO research_team_membership(id,workspace_id,session_id,agent_id,membership_generation,mission_prompt,mission_hash,mission_revision,state)
 			VALUES(gen_random_uuid(),$1::uuid,$2::uuid,$3::uuid,COALESCE((SELECT max(membership_generation)+1 FROM research_team_membership WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND agent_id=$3::uuid),1),$4,$5,1,'idle')`, in.WorkspaceID, in.RunID, in.AgentID, mission, missionHash); err != nil {

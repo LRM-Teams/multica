@@ -150,10 +150,7 @@ func (host *Host) RunProcess(ctx context.Context, config HostProcessConfig) erro
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/health", host.processHealthHandler(state))
-	mux.HandleFunc("/shutdown", host.processShutdownHandler(state))
-	mux.HandleFunc("/environment-switch/prepare", host.processEnvironmentSwitchHandler(true))
-	mux.HandleFunc("/environment-switch/release", host.processEnvironmentSwitchHandler(false))
+	host.registerProcessRoutes(mux, state)
 	registry := host.LocalControlRegistry(state)
 	var server *http.Server
 	serveControl := func() error {
@@ -238,6 +235,13 @@ func (host *Host) RunProcess(ctx context.Context, config HostProcessConfig) erro
 		}
 	}
 	return err
+}
+
+func (host *Host) registerProcessRoutes(mux *http.ServeMux, state *hostProcessState) {
+	mux.HandleFunc("/health", host.processHealthHandler(state))
+	mux.HandleFunc("/shutdown", host.processShutdownHandler(state))
+	mux.HandleFunc("/environment-switch/prepare", host.processEnvironmentSwitchHandler(true))
+	mux.HandleFunc("/environment-switch/release", host.processEnvironmentSwitchHandler(false))
 }
 
 func normalizedWorkspaceIDs(ids []string) []string {

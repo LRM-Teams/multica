@@ -60,7 +60,7 @@ func (w *lifecycleDiagnosticWriter) Record(transition agentLifecycleTransition) 
 // diagnosticsCleanupLoop repeats the writer's best-effort cleanup once a day.
 // Diagnostic retention is never allowed to block Binding execution, process
 // management, or shutdown.
-func (d *Daemon) diagnosticsCleanupLoop(ctx context.Context) {
+func (d *WorkspaceDaemonCore) diagnosticsCleanupLoop(ctx context.Context) {
 	if d == nil || d.lifecycleDiagnostics == nil {
 		return
 	}
@@ -80,7 +80,7 @@ func (d *Daemon) diagnosticsCleanupLoop(ctx context.Context) {
 	}
 }
 
-func (d *Daemon) recordAgentLifecycleTransition(transition agentLifecycleTransition) {
+func (d *WorkspaceDaemonCore) recordAgentLifecycleTransition(transition agentLifecycleTransition) {
 	if d == nil {
 		return
 	}

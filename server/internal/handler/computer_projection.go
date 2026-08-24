@@ -38,7 +38,7 @@ type computerConnectionResponse struct {
 
 // computerRuntimeOption is the provider process, named for picking. It carries
 // no liveness of its own: whether work can run is a Computer-level fact
-// (Connected above), decided by the daemon's Workspace Runner socket.
+// (Connected above), decided by the daemon's WorkspaceDaemon socket.
 type computerRuntimeOption struct {
 	ID       string `json:"id"`
 	Provider string `json:"provider"`

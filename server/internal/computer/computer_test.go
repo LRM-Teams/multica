@@ -482,7 +482,7 @@ func TestBindingChildrenDoNotBindParentDeath(t *testing.T) {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(body), "configureChildParentDeath(") || strings.Contains(string(body), ".Pdeathsig") {
-		t.Fatal("Binding children must not set Pdeathsig; Raft adopts a live runner after Host death")
+		t.Fatal("Binding children must not set Pdeathsig; Raft adopts a live runner after ComputerCore death")
 	}
 }
 

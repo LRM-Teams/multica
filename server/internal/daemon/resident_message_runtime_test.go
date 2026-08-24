@@ -69,7 +69,7 @@ func TestEnsureResidentMessageRuntimeUsesOnlyStableAgentConfiguration(t *testing
 	client.SetRuntimeDaemonToken(runtimeID, "daemon-token", time.Now().Add(time.Hour))
 	probe := &canonicalRuntimeFactoryProbe{}
 	starter := &residentProcessStartProbe{}
-	d := &Daemon{
+	d := &WorkspaceDaemonCore{
 		cfg: Config{
 			ServerBaseURL:  upstream.URL,
 			WorkspacesRoot: root,
@@ -217,7 +217,7 @@ func TestEnsureResidentMessageRuntimeSpawnFailureRetiresBusyBackend(t *testing.T
 	}
 	pool := newCanonicalAgentRuntimePool()
 	pool.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{backend: backend}
-	d := &Daemon{canonicalRuntimes: pool}
+	d := &WorkspaceDaemonCore{canonicalRuntimes: pool}
 
 	if err := pool.deliverIdleMessages(context.Background(), agentID, runtimeID, []protocol.AgentMessageProjection{{
 		ID: "message-1", Target: "dm:one", Seq: 1, Content: "hello",
@@ -268,7 +268,7 @@ func TestEnsureResidentMessageRuntimeSpawnsProviderProcess(t *testing.T) {
 	starter := &residentProcessStartProbe{}
 	client := NewClient(upstream.URL)
 	client.SetRuntimeDaemonToken(runtimeID, "daemon-token", time.Now().Add(time.Hour))
-	d := &Daemon{
+	d := &WorkspaceDaemonCore{
 		cfg: Config{
 			ServerBaseURL:  upstream.URL,
 			WorkspacesRoot: t.TempDir(),
@@ -350,7 +350,7 @@ func TestEnsureResidentMessageRuntimeSpawnFailureDoesNotKeepBackend(t *testing.T
 	starter := &residentProcessStartProbe{err: errors.New("codex app-server did not start")}
 	client := NewClient(upstream.URL)
 	client.SetRuntimeDaemonToken(runtimeID, "daemon-token", time.Now().Add(time.Hour))
-	d := &Daemon{
+	d := &WorkspaceDaemonCore{
 		cfg: Config{
 			ServerBaseURL:  upstream.URL,
 			WorkspacesRoot: t.TempDir(),
@@ -399,7 +399,7 @@ func TestEnsureResidentMessageRuntimeNonStarterDoesNotKeepBackend(t *testing.T) 
 
 	client := NewClient(upstream.URL)
 	client.SetRuntimeDaemonToken(runtimeID, "daemon-token", time.Now().Add(time.Hour))
-	d := &Daemon{
+	d := &WorkspaceDaemonCore{
 		cfg: Config{
 			ServerBaseURL:  upstream.URL,
 			WorkspacesRoot: t.TempDir(),
@@ -422,7 +422,7 @@ func TestEnsureResidentMessageRuntimeNonStarterDoesNotKeepBackend(t *testing.T) 
 	}
 }
 
-func TestWorkspaceRunnerStartFailsClosedWhenResidentCannotStart(t *testing.T) {
+func TestWorkspaceDaemonStartFailsClosedWhenResidentCannotStart(t *testing.T) {
 	const (
 		workspaceID = "11111111-1111-1111-1111-111111111111"
 		runtimeID   = "22222222-2222-2222-2222-222222222222"
@@ -448,10 +448,10 @@ func TestWorkspaceRunnerStartFailsClosedWhenResidentCannotStart(t *testing.T) {
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
 			d := newResidentStartTestDaemon(t, workspaceID, runtimeID, agentID, test.factory)
-			runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, nil)
+			runner, _ := attachTestWorkspaceDaemon(t, d, workspaceID, nil)
 			var activities []protocol.AgentActivityPayload
 			runner.activity.AttachTransport(func(payload protocol.AgentActivityPayload) { activities = append(activities, payload) })
-			_, status, _, err := runner.startManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStartPayload{
+			_, status, _, err := runner.startManagedAgent(context.Background(), protocol.WorkspaceDaemonAgentStartPayload{
 				AgentID: agentID, RuntimeID: runtimeID, LaunchID: "launch-1", StartDispatchID: "dispatch-1",
 			})
 			if err == nil {
@@ -475,7 +475,7 @@ func TestWorkspaceRunnerStartFailsClosedWhenResidentCannotStart(t *testing.T) {
 	}
 }
 
-func TestWorkspaceRunnerStartBecomesActiveAfterResidentProcess(t *testing.T) {
+func TestWorkspaceDaemonStartBecomesActiveAfterResidentProcess(t *testing.T) {
 	const (
 		workspaceID = "11111111-1111-1111-1111-111111111111"
 		runtimeID   = "22222222-2222-2222-2222-222222222222"
@@ -485,10 +485,10 @@ func TestWorkspaceRunnerStartBecomesActiveAfterResidentProcess(t *testing.T) {
 	d := newResidentStartTestDaemon(t, workspaceID, runtimeID, agentID, func(agent.Config) (agent.Backend, func(), error) {
 		return starter, func() {}, nil
 	})
-	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, nil)
+	runner, _ := attachTestWorkspaceDaemon(t, d, workspaceID, nil)
 	var activities []protocol.AgentActivityPayload
 	runner.activity.AttachTransport(func(payload protocol.AgentActivityPayload) { activities = append(activities, payload) })
-	_, status, _, err := runner.startManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStartPayload{
+	_, status, _, err := runner.startManagedAgent(context.Background(), protocol.WorkspaceDaemonAgentStartPayload{
 		AgentID: agentID, RuntimeID: runtimeID, LaunchID: "launch-1", StartDispatchID: "dispatch-1",
 	})
 	if err != nil {
@@ -519,7 +519,7 @@ func TestWorkspaceRunnerStartBecomesActiveAfterResidentProcess(t *testing.T) {
 	}
 }
 
-func TestWorkspaceRunnerStartUsesExplicitProviderSession(t *testing.T) {
+func TestWorkspaceDaemonStartUsesExplicitProviderSession(t *testing.T) {
 	const (
 		workspaceID = "11111111-1111-1111-1111-111111111111"
 		runtimeID   = "22222222-2222-2222-2222-222222222222"
@@ -543,11 +543,11 @@ func TestWorkspaceRunnerStartUsesExplicitProviderSession(t *testing.T) {
 				t.Fatal(err)
 			}
 			d.agentRuntimeSessions = sessions
-			runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, nil)
+			runner, _ := attachTestWorkspaceDaemon(t, d, workspaceID, nil)
 
-			_, status, session, err := runner.startManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStartPayload{
+			_, status, session, err := runner.startManagedAgent(context.Background(), protocol.WorkspaceDaemonAgentStartPayload{
 				AgentID: agentID, RuntimeID: runtimeID, LaunchID: "launch-1", StartDispatchID: "dispatch-1",
-				Config: protocol.WorkspaceRunnerAgentStartConfig{SessionID: test.sessionID},
+				Config: protocol.WorkspaceDaemonAgentStartConfig{SessionID: test.sessionID},
 			})
 			if err != nil {
 				t.Fatalf("managed start: %v", err)
@@ -568,7 +568,7 @@ func TestWorkspaceRunnerStartUsesExplicitProviderSession(t *testing.T) {
 	}
 }
 
-func newResidentStartTestDaemon(t *testing.T, workspaceID, runtimeID, agentID string, factory canonicalRuntimeBackendFactory) *Daemon {
+func newResidentStartTestDaemon(t *testing.T, workspaceID, runtimeID, agentID string, factory canonicalRuntimeBackendFactory) *WorkspaceDaemonCore {
 	t.Helper()
 	expiresAt := time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339Nano)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -590,7 +590,7 @@ func newResidentStartTestDaemon(t *testing.T, workspaceID, runtimeID, agentID st
 	client := NewClient(upstream.URL)
 	client.SetRuntimeDaemonToken(runtimeID, "daemon-token", time.Now().Add(time.Hour))
 	workspacesRoot := t.TempDir()
-	return &Daemon{
+	return &WorkspaceDaemonCore{
 		cfg: Config{
 			ServerBaseURL:  upstream.URL,
 			WorkspacesRoot: workspacesRoot,
@@ -635,7 +635,7 @@ func TestEnsureResidentMessageRuntimeRotatesPiSessionBetweenRuns(t *testing.T) {
 		backends  []agent.PiRPCBackend
 		closed    int
 	)
-	d := &Daemon{
+	d := &WorkspaceDaemonCore{
 		cfg: Config{
 			WorkspacesRoot: t.TempDir(),
 			HealthPort:     19514,
@@ -712,7 +712,7 @@ func TestResidentMessageRuntimeReportsMixedRunTurnCaptureAndToolLifecycle(t *tes
 	pool := newCanonicalAgentRuntimePool()
 	pool.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{backend: backend}
 	reports := make(chan protocol.MixedRunActivityTransitionPayload, 8)
-	d := &Daemon{
+	d := &WorkspaceDaemonCore{
 		cfg:               Config{WorkspacesRoot: t.TempDir()},
 		canonicalRuntimes: pool,
 		runtimeIndex:      map[string]Runtime{runtimeID: {ID: runtimeID, WorkspaceID: "workspace-1"}},

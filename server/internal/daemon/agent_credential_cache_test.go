@@ -171,7 +171,7 @@ func TestAgentCredentialCacheMigratesLegacyWorkspaceCredential(t *testing.T) {
 }
 
 func TestEnsureTaskAgentCredentialMissingBindingFailsBeforeFallback(t *testing.T) {
-	d := &Daemon{cfg: Config{WorkspacesRoot: t.TempDir(), ServerBaseURL: "https://api.example.test"}}
+	d := &WorkspaceDaemonCore{cfg: Config{WorkspacesRoot: t.TempDir(), ServerBaseURL: "https://api.example.test"}}
 	if _, err := d.ensureTaskAgentCredential(context.Background(), Task{WorkspaceID: "workspace-1", RuntimeID: "", AgentID: "agent-1"}, nil); err == nil {
 		t.Fatal("expected missing runtime binding to fail")
 	}
@@ -204,7 +204,7 @@ func TestEnsureTaskAgentCredentialValidatesCachedCredentialEveryRun(t *testing.T
 	}, now); err != nil {
 		t.Fatalf("write cache: %v", err)
 	}
-	d := &Daemon{cfg: cfg, client: NewClient(srv.URL)}
+	d := &WorkspaceDaemonCore{cfg: cfg, client: NewClient(srv.URL)}
 	token, err := d.ensureTaskAgentCredential(
 		context.Background(),
 		Task{WorkspaceID: "workspace-1", RuntimeID: "runtime-1", AgentID: "agent-1"},
@@ -259,7 +259,7 @@ func TestEnsureTaskAgentCredentialClearsCacheOnAgentReassigned(t *testing.T) {
 		t.Fatalf("precondition: stale cache file should exist: %v", err)
 	}
 
-	d := &Daemon{cfg: cfg, client: NewClient(srv.URL)}
+	d := &WorkspaceDaemonCore{cfg: cfg, client: NewClient(srv.URL)}
 	_, err := d.ensureTaskAgentCredential(
 		context.Background(),
 		Task{WorkspaceID: "workspace-1", RuntimeID: "runtime-old", AgentID: "agent-1"},

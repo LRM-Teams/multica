@@ -24,12 +24,12 @@ type hostMachineUpgradeConfig struct {
 	cancel             context.CancelFunc
 }
 
-// ErrComputerControlBusy is the Raft 1.0.17 Host busy signal. DaemonCore maps
+// ErrComputerControlBusy is the Raft 1.0.17 ComputerCore busy signal. DaemonCore maps
 // it onto computer:upgrade:done { error: "control_busy" }.
 var ErrComputerControlBusy = errors.New("Computer Machine Upgrade is already running")
 
 type hostMachineUpgrade struct {
-	host   *Host
+	host   *ComputerCore
 	config hostMachineUpgradeConfig
 
 	stageRelease   func(string, time.Duration, string) (string, error)
@@ -72,7 +72,7 @@ const (
 	MachineUpgradePhaseRollingBack    = "rolling_back"
 )
 
-func newHostMachineUpgrade(host *Host, config hostMachineUpgradeConfig) *hostMachineUpgrade {
+func newHostMachineUpgrade(host *ComputerCore, config hostMachineUpgradeConfig) *hostMachineUpgrade {
 	return &hostMachineUpgrade{
 		host: host, config: config,
 		manifestBaseURL: strings.TrimSpace(config.releaseManifestURL),
@@ -239,13 +239,13 @@ func resolveMachineUpgradeTarget(requested, releaseChannel, manifestURL string) 
 
 func (upgrade *hostMachineUpgrade) emitRunnerEvent(identity BindingChildIdentity, eventType string, payload any) {
 	if identity.Validate() != nil {
-		targets := upgrade.host.supervisor.availableMachineControlTargets()
+		targets := upgrade.host.daemonCore.availableMachineControlTargets()
 		if len(targets) == 0 {
 			return
 		}
 		identity = targets[0].identity
 	}
-	_ = upgrade.host.supervisor.DeliverComputerUpgradeEvent(context.Background(), upgrade.host.control.token, identity, eventType, payload)
+	_ = upgrade.host.daemonCore.DeliverComputerUpgradeEvent(context.Background(), upgrade.host.daemonCore.control.token, identity, eventType, payload)
 }
 
 func (upgrade *hostMachineUpgrade) handleChildAction(ctx context.Context, identity BindingChildIdentity, raw json.RawMessage) error {
@@ -557,9 +557,9 @@ func removeMachineUpgradeJournal(root string) error {
 }
 
 func (upgrade *hostMachineUpgrade) currentRuntime(identity BindingChildIdentity, runtimeID string) (hostBindingRuntime, string, bool) {
-	upgrade.host.runtimeMu.RLock()
-	defer upgrade.host.runtimeMu.RUnlock()
-	report, ok := upgrade.host.runtimeSets[identity.WorkspaceID]
+	upgrade.host.daemonCore.runtimeMu.RLock()
+	defer upgrade.host.daemonCore.runtimeMu.RUnlock()
+	report, ok := upgrade.host.daemonCore.runtimeSets[identity.WorkspaceID]
 	if !ok || report.Identity != identity || report.DaemonToken == "" || (!report.ExpiresAt.IsZero() && time.Now().After(report.ExpiresAt)) {
 		return hostBindingRuntime{}, "", false
 	}
@@ -576,15 +576,15 @@ func (upgrade *hostMachineUpgrade) currentRuntime(identity BindingChildIdentity,
 }
 
 func (upgrade *hostMachineUpgrade) firstCurrentRuntime() (hostBindingRuntime, string, bool) {
-	upgrade.host.runtimeMu.RLock()
-	defer upgrade.host.runtimeMu.RUnlock()
-	workspaces := make([]string, 0, len(upgrade.host.runtimeSets))
-	for workspaceID := range upgrade.host.runtimeSets {
+	upgrade.host.daemonCore.runtimeMu.RLock()
+	defer upgrade.host.daemonCore.runtimeMu.RUnlock()
+	workspaces := make([]string, 0, len(upgrade.host.daemonCore.runtimeSets))
+	for workspaceID := range upgrade.host.daemonCore.runtimeSets {
 		workspaces = append(workspaces, workspaceID)
 	}
 	sort.Strings(workspaces)
 	for _, workspaceID := range workspaces {
-		report := upgrade.host.runtimeSets[workspaceID]
+		report := upgrade.host.daemonCore.runtimeSets[workspaceID]
 		if report.DaemonToken == "" || (!report.ExpiresAt.IsZero() && time.Now().After(report.ExpiresAt)) || !upgrade.host.Current(report.Identity) {
 			continue
 		}
@@ -645,8 +645,8 @@ func versionsMatch(left, right string) bool {
 }
 
 // RestartBinary returns the exact activated Computer launcher selected by a
-// Host-owned Machine Upgrade.
-func (host *Host) RestartBinary() string {
+// ComputerCore-owned Machine Upgrade.
+func (host *ComputerCore) RestartBinary() string {
 	if host == nil || host.upgrade == nil {
 		return ""
 	}

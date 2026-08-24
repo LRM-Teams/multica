@@ -8,7 +8,7 @@ import (
 
 const bindingDrainGracefulTimeout = 10 * time.Second
 
-func (d *Daemon) registerManagedTask(slot int, cancel context.CancelFunc) {
+func (d *WorkspaceDaemonCore) registerManagedTask(slot int, cancel context.CancelFunc) {
 	if cancel == nil {
 		return
 	}
@@ -20,13 +20,13 @@ func (d *Daemon) registerManagedTask(slot int, cancel context.CancelFunc) {
 	d.managedTaskMu.Unlock()
 }
 
-func (d *Daemon) unregisterManagedTask(slot int) {
+func (d *WorkspaceDaemonCore) unregisterManagedTask(slot int) {
 	d.managedTaskMu.Lock()
 	delete(d.managedTaskCancels, int64(slot))
 	d.managedTaskMu.Unlock()
 }
 
-func (d *Daemon) requestManagedTaskTermination() {
+func (d *WorkspaceDaemonCore) requestManagedTaskTermination() {
 	d.managedTaskMu.Lock()
 	cancels := make([]context.CancelFunc, 0, len(d.managedTaskCancels))
 	for _, cancel := range d.managedTaskCancels {
@@ -38,7 +38,7 @@ func (d *Daemon) requestManagedTaskTermination() {
 	}
 }
 
-func (d *Daemon) forceTerminateManagedAgentProcesses() error {
+func (d *WorkspaceDaemonCore) forceTerminateManagedAgentProcesses() error {
 	if d.canonicalRuntimes != nil {
 		if err := d.canonicalRuntimes.forceTerminateAll(); err != nil {
 			return fmt.Errorf("canonical managed runtime: %w", err)
@@ -47,14 +47,14 @@ func (d *Daemon) forceTerminateManagedAgentProcesses() error {
 	return nil
 }
 
-func (d *Daemon) bindingDrainTimeNow() time.Time {
+func (d *WorkspaceDaemonCore) bindingDrainTimeNow() time.Time {
 	if d.bindingDrainNow != nil {
 		return d.bindingDrainNow()
 	}
 	return time.Now()
 }
 
-func (d *Daemon) waitBindingDrain(ctx context.Context, delay time.Duration) error {
+func (d *WorkspaceDaemonCore) waitBindingDrain(ctx context.Context, delay time.Duration) error {
 	if d.bindingDrainWait != nil {
 		return d.bindingDrainWait(ctx, delay)
 	}
@@ -69,11 +69,11 @@ func (d *Daemon) waitBindingDrain(ctx context.Context, delay time.Duration) erro
 }
 
 // beginBindingDrain is the Binding child's complete execution-plane response
-// to a Host prepare request. It closes the claim gate, asks only child-owned
+// to a ComputerCore prepare request. It closes the claim gate, asks only child-owned
 // turns to stop, and bounds their graceful drain before force-terminating only
 // provider processes owned by this child. Machine Upgrade orchestration,
 // journaling, activation, and successor convergence remain Computer-owned.
-func (d *Daemon) beginBindingDrain(ctx context.Context) error {
+func (d *WorkspaceDaemonCore) beginBindingDrain(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}

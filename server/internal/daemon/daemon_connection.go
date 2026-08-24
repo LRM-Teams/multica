@@ -14,9 +14,8 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-// DaemonConnection is the Raft 1.0.16 analogue: one live /api/daemon/connect
-// socket for one DaemonCore / Workspace Binding. Socket open is Computer
-// liveness for this Workspace. WorkspaceRunner owns commands on top of it.
+// DaemonConnection is one live /api/workspace/daemon/connect socket for one
+// WorkspaceDaemonCore. workspaceSession owns commands on top of it.
 type DaemonConnection struct {
 	workspaceID string
 	ctx         context.Context
@@ -28,7 +27,7 @@ type DaemonConnection struct {
 	once    sync.Once
 	closed  atomic.Bool
 
-	deliveries *workspaceRunnerDeliveryDispatcher
+	deliveries *workspaceDaemonDeliveryDispatcher
 }
 
 func newDaemonConnection(workspaceID string, parent context.Context, write func(string, any) error, closeFn func()) *DaemonConnection {
@@ -75,13 +74,13 @@ func writeDaemonConnectionFrame(conn *websocket.Conn, eventType string, payload 
 	if err != nil {
 		return err
 	}
-	if err := conn.SetWriteDeadline(time.Now().Add(workspaceRunnerWriteTimeout)); err != nil {
+	if err := conn.SetWriteDeadline(time.Now().Add(workspaceDaemonWriteTimeout)); err != nil {
 		return err
 	}
 	return conn.WriteMessage(websocket.TextMessage, frame)
 }
 
-func daemonConnectionURL(baseURL, workspaceID string) (string, error) {
+func daemonConnectionURL(baseURL, _ string) (string, error) {
 	u, err := url.Parse(strings.TrimSpace(baseURL))
 	if err != nil {
 		return "", fmt.Errorf("invalid daemon server URL: %w", err)
@@ -95,16 +94,14 @@ func daemonConnectionURL(baseURL, workspaceID string) (string, error) {
 	default:
 		return "", fmt.Errorf("daemon server URL must use http, https, ws, or wss")
 	}
-	u.Path = strings.TrimRight(u.Path, "/") + "/api/daemon/connect"
-	q := u.Query()
-	q.Set("workspace_id", workspaceID)
-	u.RawQuery = q.Encode()
+	u.Path = strings.TrimRight(u.Path, "/") + protocol.WorkspaceDaemonConnectPath
+	u.RawQuery = ""
 	u.Fragment = ""
 	return u.String(), nil
 }
 
-// workspaceRunnerURL keeps the previous helper name for call sites that still
-// describe the Workspace Runner connect URL.
-func workspaceRunnerURL(baseURL, workspaceID string) (string, error) {
+// workspaceDaemonURL keeps the previous helper name for call sites that still
+// describe the WorkspaceDaemon connect URL.
+func workspaceDaemonURL(baseURL, workspaceID string) (string, error) {
 	return daemonConnectionURL(baseURL, workspaceID)
 }

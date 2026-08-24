@@ -15,7 +15,7 @@ import (
 
 // agentProcessManager is the daemon-local owner for managed Agent launches.
 // It does not own Messages or Tasks: callers turn those service-owned facts
-// into start/delivery commands at the Workspace Runner boundary.
+// into start/delivery commands at the WorkspaceDaemon boundary.
 type agentProcessManager struct {
 	mu sync.Mutex
 
@@ -176,7 +176,7 @@ func (m *agentProcessManager) Start(request agentProcessStartRequest) (protocol.
 }
 
 // startWithDisposition keeps the idempotency receipt inside the process
-// manager while telling the Workspace Runner whether it owns provider startup.
+// manager while telling the WorkspaceDaemon whether it owns provider startup.
 // A replay must still return the original wire ACK, but it must not create a
 // second asynchronous provider-start callback for the same immutable dispatch.
 func (m *agentProcessManager) startWithDisposition(request agentProcessStartRequest) (agentProcessStartResult, error) {

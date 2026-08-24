@@ -2,7 +2,7 @@ package daemon
 
 import "strings"
 
-func (d *Daemon) recordProviderSession(agentID, runtimeID, sessionID string) {
+func (d *WorkspaceDaemonCore) recordProviderSession(agentID, runtimeID, sessionID string) {
 	if d == nil || d.agentRuntimeSessions == nil {
 		return
 	}

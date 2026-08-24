@@ -1633,7 +1633,7 @@ func (e *residentTerminationTimeout) Error() string {
 // the bounded wait until some other precondition has resolved, e.g.
 // stopManagedAgent must fire the kill before waiting on a concurrent managed
 // start's startupDone: a start blocked inside provider spawn runs on the
-// Workspace Runner's own lifetime context, not the stop's ctx, so nothing
+// WorkspaceDaemon's own lifetime context, not the stop's ctx, so nothing
 // but an explicit kill can ever unblock it — waiting first would deadlock.
 // If the wait elapses without confirmation, the returned error is a
 // *residentTerminationTimeout reporting which condition(s) were still unmet,

@@ -14,7 +14,7 @@ import (
 )
 
 // TestRegisterRuntimesForWorkspace_DoesNotCallStarting pins the Computer
-// V1 / Raft alignment: machine liveness is the DaemonCore Workspace Runner
+// V1 / Raft alignment: machine liveness is the DaemonCore WorkspaceDaemon
 // socket, not a pre-register HTTP starting signal. Version probing may
 // still delay register; that must not resurrect /api/daemon/starting.
 func TestRegisterRuntimesForWorkspace_DoesNotCallStarting(t *testing.T) {
@@ -53,7 +53,7 @@ func TestRegisterRuntimesForWorkspace_DoesNotCallStarting(t *testing.T) {
 	c := NewClient(srv.URL)
 	c.SetWorkspaceDaemonToken("ws-1", "mdt-workspace", time.Now().Add(time.Hour))
 
-	d := &Daemon{
+	d := &WorkspaceDaemonCore{
 		cfg: Config{
 			DaemonID: "daemon-1",
 			Agents: map[string]AgentEntry{
@@ -106,7 +106,7 @@ func TestRegisterRuntimesForWorkspace_ZeroRegisterableAgentsKeepsComputerConnect
 
 	c := NewClient(srv.URL)
 	c.SetWorkspaceDaemonToken("ws-1", "mdt-workspace", time.Now().Add(time.Hour))
-	d := &Daemon{
+	d := &WorkspaceDaemonCore{
 		cfg: Config{
 			DaemonID: "daemon-1",
 			Agents: map[string]AgentEntry{

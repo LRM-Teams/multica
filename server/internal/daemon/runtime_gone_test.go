@@ -17,8 +17,8 @@ import (
 
 // freshDaemon builds a Daemon with every map field the production New() seeds
 // so callers can exercise handleRuntimeGone without going through Run.
-func freshDaemon(serverURL string) *Daemon {
-	return &Daemon{
+func freshDaemon(serverURL string) *WorkspaceDaemonCore {
+	return &WorkspaceDaemonCore{
 		client:                    NewClient(serverURL),
 		logger:                    slog.New(slog.NewTextHandler(testNopWriter{}, &slog.HandlerOptions{Level: slog.LevelWarn})),
 		workspaces:                make(map[string]*workspaceState),
@@ -124,7 +124,7 @@ func TestRemoveStaleRuntime_PreservesWorkspaceStatePointer(t *testing.T) {
 // answers register/recover-orphans. registerCount is incremented exactly
 // once per /api/daemon/register call so tests can assert on coalescing.
 type handleRuntimeGoneFixture struct {
-	daemon        *Daemon
+	daemon        *WorkspaceDaemonCore
 	server        *httptest.Server
 	registerCount *atomic.Int64
 }
@@ -260,7 +260,7 @@ func TestHandleRuntimeGone_BackoffOnFailure(t *testing.T) {
 }
 
 func TestHandleWSHeartbeatAck_RuntimeGoneTriggersRecovery(t *testing.T) {
-	// A Workspace Runner heartbeat acknowledgement is the runtime-gone
+	// A WorkspaceDaemon heartbeat acknowledgement is the runtime-gone
 	// recovery signal for the current control plane.
 	fx := newHandleRuntimeGoneFixture(t)
 	d := fx.daemon
@@ -327,7 +327,7 @@ func TestWorkspaceNeedsRuntimeRecovery(t *testing.T) {
 // markDeleted(rid) emulates a UI Delete by removing the row server-side and
 // returning a brand-new ID for that provider on the next register call.
 type multiProviderRegisterFixture struct {
-	daemon        *Daemon
+	daemon        *WorkspaceDaemonCore
 	server        *httptest.Server
 	registerCount *atomic.Int64
 	mu            sync.Mutex

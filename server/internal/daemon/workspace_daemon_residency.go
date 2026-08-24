@@ -27,7 +27,7 @@ type agentResidencyStore struct {
 	// epochFloor is the tombstone left by clear: the highest startStopEpoch
 	// known to belong to an agent's already-cleared launch. It has exactly
 	// one entry per agentID this store has ever cleared -- bounded by the
-	// Workspace Runner's agent roster, not by how many times an agent has
+	// WorkspaceDaemon's agent roster, not by how many times an agent has
 	// been stopped -- so it cannot grow without limit.
 	epochFloor map[string]uint64
 	restarts   map[string]context.CancelFunc

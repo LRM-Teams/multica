@@ -85,7 +85,7 @@ func (k InboxKey) normalized() (InboxKey, error) {
 }
 
 // MessageCoordinator owns the receive-side state for one Workspace/Agent root.
-// Accept makes Pending responsible for a valid delivery. The Workspace Runner
+// Accept makes Pending responsible for a valid delivery. The WorkspaceDaemon
 // may ACK only after its deeper acceptance seam has either handed that body to
 // the provider, retained it in Pending, or identified it as a duplicate.
 type MessageCoordinator struct {
@@ -556,7 +556,7 @@ func (c *MessageCoordinator) PendingSnapshot() []protocol.AgentMessageProjection
 }
 
 // Acknowledgement constructs the wire receipt after Accept succeeds. Emission
-// remains the Workspace Runner acceptance seam's responsibility, after it has
+// remains the WorkspaceDaemon acceptance seam's responsibility, after it has
 // classified provider acceptance, Pending retention, or deduplication.
 func (c *MessageCoordinator) Acknowledgement(delivery protocol.AgentDeliverPayload) protocol.AgentDeliverAckPayload {
 	return protocol.AgentDeliverAckPayload{

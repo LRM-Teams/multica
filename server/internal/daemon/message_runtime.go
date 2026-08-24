@@ -21,7 +21,7 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-func (d *Daemon) openMessageCoordinator(key InboxKey, runtimeID string) (*MessageCoordinator, error) {
+func (d *WorkspaceDaemonCore) openMessageCoordinator(key InboxKey, runtimeID string) (*MessageCoordinator, error) {
 	key, err := key.normalized()
 	if err != nil {
 		return nil, err
@@ -49,16 +49,16 @@ func (d *Daemon) openMessageCoordinator(key InboxKey, runtimeID string) (*Messag
 	return coordinator, nil
 }
 
-func (d *Daemon) ensureIdleMessageCoordinator(workspaceID, agentID, runtimeID string) (bool, error) {
+func (d *WorkspaceDaemonCore) ensureIdleMessageCoordinator(workspaceID, agentID, runtimeID string) (bool, error) {
 	workspaceID = strings.TrimSpace(workspaceID)
 	agentID = strings.TrimSpace(agentID)
 	runtimeID = strings.TrimSpace(runtimeID)
 	if d == nil || workspaceID == "" || agentID == "" || runtimeID == "" {
 		return false, errors.New("Workspace, Agent, and Runtime ids are required")
 	}
-	runner, err := d.ensureWorkspaceRunner(workspaceID)
+	runner, err := d.ensureWorkspaceSession(workspaceID)
 	if err != nil {
-		return false, fmt.Errorf("ensure Workspace Runner %q: %w", workspaceID, err)
+		return false, fmt.Errorf("ensure WorkspaceDaemon %q: %w", workspaceID, err)
 	}
 	return runner.ensureMessageInbox(agentID, runtimeID)
 }
@@ -66,21 +66,21 @@ func (d *Daemon) ensureIdleMessageCoordinator(workspaceID, agentID, runtimeID st
 // ensureIdleMessageCoordinatorForDelivery repairs a missing coordinator only
 // from the Agent Process Manager's accepted agent:start. Message delivery never
 // invents placement and never consults a second ownership registry.
-func (d *Daemon) ensureIdleMessageCoordinatorForDelivery(workspaceID, agentID string) error {
+func (d *WorkspaceDaemonCore) ensureIdleMessageCoordinatorForDelivery(workspaceID, agentID string) error {
 	workspaceID = strings.TrimSpace(workspaceID)
 	agentID = strings.TrimSpace(agentID)
 	if d == nil || workspaceID == "" || agentID == "" {
 		return errors.New("workspace and agent ids are required")
 	}
-	runner := d.currentWorkspaceRunner(workspaceID)
+	runner := d.currentWorkspaceSession(workspaceID)
 	if runner == nil {
-		return fmt.Errorf("Workspace Runner %q is unavailable", workspaceID)
+		return fmt.Errorf("WorkspaceDaemon %q is unavailable", workspaceID)
 	}
 	return runner.ensureMessageInboxForDelivery(agentID)
 }
 
 // restoreResidentAgents rebuilds durable Agent roots after a Computer process
-// restart. A durable root alone does not create a Workspace Runner or a Message
+// restart. A durable root alone does not create a WorkspaceDaemon or a Message
 // coordinator; the supervised Binding child receives an explicit managed start
 // when work exists.
 func mixedRunMessageBatchIdentity(messages []protocol.AgentMessageProjection) (string, string, string, bool) {
@@ -100,12 +100,12 @@ func mixedRunMessageBatchIdentity(messages []protocol.AgentMessageProjection) (s
 	return runID, runAgentID, hex.EncodeToString(sum[:]), true
 }
 
-func (d *Daemon) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID string, messages []protocol.AgentMessageProjection) error {
+func (d *WorkspaceDaemonCore) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID string, messages []protocol.AgentMessageProjection) error {
 	runID, runAgentID, turnID, mixed := mixedRunMessageBatchIdentity(messages)
 	d.mu.Lock()
 	workspaceID := d.runtimeIndex[runtimeID].WorkspaceID
 	d.mu.Unlock()
-	runner, _ := d.ensureWorkspaceRunner(workspaceID)
+	runner, _ := d.ensureWorkspaceSession(workspaceID)
 	preparedMessages, memoryTask, err := d.prepareResidentMessageBatch(ctx, agentID, runtimeID, messages)
 	if err != nil {
 		return err
@@ -225,7 +225,7 @@ func (d *Daemon) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID
 // daemon releases the matching unfinished-capture counter. A failed upload is
 // deliberately left unfinished; a successful server gap report is the only
 // alternate terminal outcome.
-func (d *Daemon) reportResidentTurnCapture(workspaceID, agentID, runtimeID, runID, runAgentID, activityTurnID string, turnToken canonicalActionTurnToken, turnErr error, capture *agent.ResidentTurnCapture) bool {
+func (d *WorkspaceDaemonCore) reportResidentTurnCapture(workspaceID, agentID, runtimeID, runID, runAgentID, activityTurnID string, turnToken canonicalActionTurnToken, turnErr error, capture *agent.ResidentTurnCapture) bool {
 	drained := d.endCanonicalActionTurn(agentID, turnToken)
 	if d.client == nil || strings.TrimSpace(d.client.baseURL) == "" {
 		return false
@@ -347,9 +347,9 @@ func mixedRunCaptureGapIdentity(runAgentID, activityTurnID string, capture *agen
 }
 
 // reportMixedRunToolActivity tracks inflight tool calls of a mixed-run turn.
-// User-facing Activity emission stays with the Workspace Runner; this reports
+// User-facing Activity emission stays with the WorkspaceDaemon; this reports
 // only the durable mixed-run transition deltas.
-func (d *Daemon) reportMixedRunToolActivity(agentID, runtimeID, runID, runAgentID, turnID string, turnToken canonicalActionTurnToken, message agent.Message) {
+func (d *WorkspaceDaemonCore) reportMixedRunToolActivity(agentID, runtimeID, runID, runAgentID, turnID string, turnToken canonicalActionTurnToken, message agent.Message) {
 	if runID == "" || runAgentID == "" || turnID == "" || strings.TrimSpace(message.CallID) == "" {
 		return
 	}
@@ -370,7 +370,7 @@ func (d *Daemon) reportMixedRunToolActivity(agentID, runtimeID, runID, runAgentI
 // prepareResidentMessageBatch hydrates the portable memory center once, then
 // renders identity and memory independently for every Message. Keeping the
 // overlay per item prevents a mixed-user batch from sharing personal memory.
-func (d *Daemon) prepareResidentMessageBatch(ctx context.Context, agentID, runtimeID string, messages []protocol.AgentMessageProjection) ([]protocol.AgentMessageProjection, Task, error) {
+func (d *WorkspaceDaemonCore) prepareResidentMessageBatch(ctx context.Context, agentID, runtimeID string, messages []protocol.AgentMessageProjection) ([]protocol.AgentMessageProjection, Task, error) {
 	d.mu.Lock()
 	workspaceID := strings.TrimSpace(d.runtimeIndex[runtimeID].WorkspaceID)
 	d.mu.Unlock()
@@ -511,7 +511,7 @@ func standaloneAssistantFailureReply(err error) string {
 	return "I could not complete that reply (" + detail + "). Please try again."
 }
 
-func (d *Daemon) writebackStandaloneChatTurn(ctx context.Context, sessionID, runtimeID string, turnErr error, capture *agent.ResidentTurnCapture, streamed string) {
+func (d *WorkspaceDaemonCore) writebackStandaloneChatTurn(ctx context.Context, sessionID, runtimeID string, turnErr error, capture *agent.ResidentTurnCapture, streamed string) {
 	if d == nil || d.client == nil || strings.TrimSpace(sessionID) == "" {
 		return
 	}
@@ -579,15 +579,15 @@ func convertResidentMessageMemoriesForEnv(memories []protocol.AgentMessageMemory
 // CredentialProxy is the machine-local freshness boundary. The first repair
 // slice exposes only the internally derived target sequence; it deliberately
 // does not accept an Agent-supplied cursor.
-type CredentialProxy struct{ daemon *Daemon }
+type CredentialProxy struct{ daemon *WorkspaceDaemonCore }
 
-func (d *Daemon) CredentialProxy() *CredentialProxy { return &CredentialProxy{daemon: d} }
+func (d *WorkspaceDaemonCore) CredentialProxy() *CredentialProxy { return &CredentialProxy{daemon: d} }
 
 func (p *CredentialProxy) SeenUpToSeq(agentID, target string) (int64, error) {
 	if p == nil || p.daemon == nil {
 		return 0, errors.New("Credential Proxy is unavailable")
 	}
-	runner, err := p.daemon.resolveWorkspaceRunnerByAgent(agentID)
+	runner, err := p.daemon.resolveWorkspaceSessionByAgent(agentID)
 	if err != nil {
 		return 0, errors.New("Message coordinator is unavailable")
 	}
@@ -605,7 +605,7 @@ func (p *CredentialProxy) CheckMessages(agentID string) (MessageCheckResult, err
 	if p == nil || p.daemon == nil {
 		return MessageCheckResult{}, errors.New("Credential Proxy is unavailable")
 	}
-	runner, err := p.daemon.resolveWorkspaceRunnerByAgent(agentID)
+	runner, err := p.daemon.resolveWorkspaceSessionByAgent(agentID)
 	if err != nil {
 		return MessageCheckResult{}, errors.New("Message coordinator is unavailable")
 	}
@@ -634,7 +634,7 @@ func (p *CredentialProxy) PrepareMessageRead(
 	if p == nil || p.daemon == nil {
 		return CoverageOffer{}, errors.New("Credential Proxy is unavailable")
 	}
-	runner, err := p.daemon.resolveWorkspaceRunnerByAgent(agentID)
+	runner, err := p.daemon.resolveWorkspaceSessionByAgent(agentID)
 	if err != nil {
 		return CoverageOffer{}, errors.New("Message coordinator is unavailable")
 	}
@@ -716,7 +716,7 @@ func (p *CredentialProxy) MessageSendBoundarySnapshot(agentID, target string) (i
 	if p == nil || p.daemon == nil {
 		return 0, errors.New("Credential Proxy is unavailable")
 	}
-	runner, err := p.daemon.resolveWorkspaceRunnerByAgent(agentID)
+	runner, err := p.daemon.resolveWorkspaceSessionByAgent(agentID)
 	if err != nil {
 		return 0, errors.New("Message coordinator is unavailable")
 	}
@@ -727,7 +727,7 @@ func (p *CredentialProxy) PreflightMessageSend(agentID, target string) (MessageS
 	if p == nil || p.daemon == nil {
 		return MessageSendFreshness{}, errors.New("Credential Proxy is unavailable")
 	}
-	runner, err := p.daemon.resolveWorkspaceRunnerByAgent(agentID)
+	runner, err := p.daemon.resolveWorkspaceSessionByAgent(agentID)
 	if err != nil {
 		return MessageSendFreshness{}, errors.New("Message coordinator is unavailable")
 	}
@@ -738,7 +738,7 @@ func (p *CredentialProxy) PrepareHeldMessageContext(agentID, target string, thro
 	if p == nil || p.daemon == nil {
 		return CoverageOffer{}, errors.New("Credential Proxy is unavailable")
 	}
-	runner, err := p.daemon.resolveWorkspaceRunnerByAgent(agentID)
+	runner, err := p.daemon.resolveWorkspaceSessionByAgent(agentID)
 	if err != nil {
 		return CoverageOffer{}, errors.New("Message coordinator is unavailable")
 	}

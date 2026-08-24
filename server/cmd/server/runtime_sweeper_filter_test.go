@@ -78,7 +78,7 @@ func candidateRowWithRunner(t *testing.T, id, daemonID, workspaceID string) db.S
 }
 
 // TestFilterStaleRuntimesByPresence_SkipsConnectedRunner confirms that a stale
-// DB candidate whose daemon currently has a live WorkspaceRunner socket is NOT
+// DB candidate whose daemon currently has a live WorkspaceDaemon socket is NOT
 // marked offline (LRM-1571: WS-connected daemons stop heartbeating; socket
 // presence is the online signal).
 func TestFilterStaleRuntimesByPresence_SkipsConnectedRunner(t *testing.T) {
@@ -125,7 +125,7 @@ type fakePresence struct {
 	hasRunner map[string]bool
 }
 
-func (f *fakePresence) HasWorkspaceRunner(daemonID, workspaceID string) bool {
+func (f *fakePresence) HasWorkspaceDaemon(daemonID, workspaceID string) bool {
 	return f.hasRunner[runnerKey(daemonID, workspaceID)]
 }
 

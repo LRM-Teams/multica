@@ -13,7 +13,7 @@ import (
 
 func TestHandleDeleteDirRequest_ConfinedAndIdempotent(t *testing.T) {
 	root := t.TempDir()
-	d := &Daemon{
+	d := &WorkspaceDaemonCore{
 		cfg:    Config{WorkspacesRoot: root},
 		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}

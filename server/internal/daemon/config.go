@@ -44,8 +44,8 @@ const (
 	MemoryTypeGraph  = "graph"
 	// DefaultMemoryType keeps the legacy memory pipeline active unless the
 	// operator opts into the graph reviewer via MULTICA_MEMORY_TYPE=graph.
-	DefaultMemoryType                = MemoryTypeLegacy
-	DefaultGraphExploreAgents        = 1
+	DefaultMemoryType         = MemoryTypeLegacy
+	DefaultGraphExploreAgents = 1
 	// DefaultGraphExploreMaxRounds matches memorygraph.DefaultExploreConfig:
 	// the merged /explore protocol counts one round per served node, so the
 	// budget is larger than the legacy /view+/expand round count.
@@ -277,7 +277,7 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	// Host info
+	// ComputerCore info
 	host, err := os.Hostname()
 	if err != nil || strings.TrimSpace(host) == "" {
 		host = "local-machine"

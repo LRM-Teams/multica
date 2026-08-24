@@ -431,7 +431,7 @@ func TestCredentialProxyResponseDiagnosticsUseBoundedOutcomes(t *testing.T) {
 	assertDiagnosticFileExcludes(t, path, "reply-content-canary", "held-message-content-canary")
 }
 
-func newStandaloneChatDiagnosticDaemon(t *testing.T, serverURL string) (*Daemon, Task, string) {
+func newStandaloneChatDiagnosticDaemon(t *testing.T, serverURL string) (*WorkspaceDaemonCore, Task, string) {
 	t.Helper()
 	const (
 		workspaceID  = "11111111-1111-4111-8111-111111111111"

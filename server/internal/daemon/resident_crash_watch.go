@@ -46,7 +46,7 @@ const (
 // apart: whether every runtime under the same daemon_id went silent at the
 // same instant (whole-machine/daemon down) vs. just this one agent's
 // resident process (individually recoverable).
-func (d *Daemon) residentCrashWatchLoop(ctx context.Context) {
+func (d *WorkspaceDaemonCore) residentCrashWatchLoop(ctx context.Context) {
 	if d.canonicalRuntimes == nil {
 		return
 	}
@@ -67,7 +67,7 @@ func (d *Daemon) residentCrashWatchLoop(ctx context.Context) {
 // (resident_process_event.go). It routes each kind to its own handler; see
 // §3 of the change that introduced this file for why exited/recovered/
 // stalled are handled here instead of each having their own subscription.
-func (d *Daemon) onResidentProcessEvent(ev residentProcessEvent) {
+func (d *WorkspaceDaemonCore) onResidentProcessEvent(ev residentProcessEvent) {
 	if d == nil {
 		return
 	}
@@ -92,7 +92,7 @@ func (d *Daemon) onResidentProcessEvent(ev residentProcessEvent) {
 // server-facing report, so a concurrent Snapshot/dispatch decision on this
 // daemon never observes "server knows it crashed" before "APM knows the
 // launch is no longer running".
-func (d *Daemon) onResidentRuntimeExited(ev residentProcessEvent) {
+func (d *WorkspaceDaemonCore) onResidentRuntimeExited(ev residentProcessEvent) {
 	if d.residentCrashBackoff == nil {
 		return
 	}
@@ -141,7 +141,7 @@ func (d *Daemon) onResidentRuntimeExited(ev residentProcessEvent) {
 
 // clearAgentProviderCrashedOnServer clears the server-side crashed_since after
 // local recovery (successful resident recreate or lifecycle restart).
-func (d *Daemon) clearAgentProviderCrashedOnServer(runtimeID, agentID string) {
+func (d *WorkspaceDaemonCore) clearAgentProviderCrashedOnServer(runtimeID, agentID string) {
 	if d == nil || d.client == nil || runtimeID == "" || agentID == "" {
 		return
 	}

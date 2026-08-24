@@ -25,15 +25,15 @@ var ErrRuntimeOffline = errors.New("runtime offline")
 var ErrComputerOffline = errors.New("computer offline")
 
 const (
-	writeWait                  = 10 * time.Second
-	pongWait                   = 60 * time.Second
-	pingPeriod                 = (pongWait * 9) / 10
-	agentDeliveryRetryInterval = time.Second
-	runnerInboundWatchdog      = 70 * time.Second
-	runnerPingInterval         = 20 * time.Second
-	legacyRunnerAttachmentCap  = "workspace_runner_attachment_v1"
-	legacyAttachmentReplayReq  = "agent:attachment.replay_request"
-	legacyAttachmentReplayEnd  = "agent:attachment.replay_end"
+	writeWait                      = 10 * time.Second
+	pongWait                       = 60 * time.Second
+	pingPeriod                     = (pongWait * 9) / 10
+	agentDeliveryRetryInterval     = time.Second
+	workspaceDaemonInboundWatchdog = 70 * time.Second
+	workspaceDaemonPingInterval    = 20 * time.Second
+	legacyRunnerAttachmentCap      = "workspace_runner_attachment_v1"
+	legacyAttachmentReplayReq      = "agent:attachment.replay_request"
+	legacyAttachmentReplayEnd      = "agent:attachment.replay_end"
 )
 
 // ClientIdentity captures the already-authenticated daemon connection scope.
@@ -48,36 +48,48 @@ type ClientIdentity struct {
 type client struct {
 	hub      *Hub
 	conn     *websocket.Conn
-	send     chan []byte
+	outbox   *clientOutbox
 	done     chan struct{}
 	identity ClientIdentity
 	runtimes map[string]struct{}
 
 	// Set only after a valid `ready` frame. Until then a connection remains on
-	// the legacy runtime-multiplexed path and cannot receive Runner commands.
-	runnerDaemonInstanceID string
-	runnerCapabilities     map[string]struct{}
-	runnerLastInbound      atomic.Int64
-	runnerWatchdogOnce     sync.Once
+	// the legacy runtime-multiplexed path and cannot receive WorkspaceDaemon commands.
+	workspaceDaemonInstanceID   string
+	workspaceDaemonCapabilities map[string]struct{}
+	workspaceDaemonLastInbound  atomic.Int64
+	workspaceDaemonWatchdogOnce sync.Once
 
 	dedupMu  sync.Mutex
 	seenIDs  map[string]struct{}
 	seenList []string
 }
 
-func (c *client) supportsRunnerCapability(capability string) bool {
+func (c *client) enqueue(frame []byte, priority bool) bool {
+	if c == nil || c.outbox == nil {
+		return false
+	}
+	select {
+	case <-c.done:
+		return false
+	default:
+	}
+	return c.outbox.enqueue(frame, priority)
+}
+
+func (c *client) supportsWorkspaceDaemonCapability(capability string) bool {
 	if c == nil || capability == "" {
 		return false
 	}
-	_, supported := c.runnerCapabilities[capability]
+	_, supported := c.workspaceDaemonCapabilities[capability]
 	return supported
 }
 
-func (c *client) isLegacyUpgradeRunner() bool {
+func (c *client) isLegacyUpgradeWorkspaceDaemon() bool {
 	return c != nil &&
-		c.supportsRunnerCapability(legacyRunnerAttachmentCap) &&
-		c.supportsRunnerCapability(protocol.DaemonCapabilityWorkspaceRunnerControlPlane) &&
-		!c.supportsRunnerCapability(protocol.DaemonCapabilityWorkspaceRunnerAgentProcess)
+		c.supportsWorkspaceDaemonCapability(legacyRunnerAttachmentCap) &&
+		c.supportsWorkspaceDaemonCapability(protocol.DaemonCapabilityWorkspaceDaemonControlPlane) &&
+		!c.supportsWorkspaceDaemonCapability(protocol.DaemonCapabilityWorkspaceDaemonAgentProcess)
 }
 
 const eventDedupCapacity = 128
@@ -116,11 +128,11 @@ type ReminderSnapshotHandler func(ctx context.Context, identity ClientIdentity, 
 type ReminderFireRequestHandler func(ctx context.Context, identity ClientIdentity, payload protocol.ReminderFireRequestPayload) (*protocol.ReminderFireRequestResultPayload, error)
 type AgentDeliveryAckHandler func(ctx context.Context, identity ClientIdentity, payload protocol.AgentDeliverAckPayload) error
 
-// WorkspaceRunnerHandler receives only frames from the current ready
+// WorkspaceDaemonHandler receives only frames from the current ready
 // connection for one daemon and Workspace. It owns no Activity semantics;
 // later intake tickets install typed handlers behind this fenced boundary.
-type WorkspaceRunnerHandler func(ctx context.Context, identity ClientIdentity, daemonInstanceID, eventType string, payload json.RawMessage) error
-type WorkspaceRunnerDisconnectHandler func(ctx context.Context, identity ClientIdentity, daemonInstanceID string) error
+type WorkspaceDaemonHandler func(ctx context.Context, identity ClientIdentity, daemonInstanceID, eventType string, payload json.RawMessage) error
+type WorkspaceDaemonDisconnectHandler func(ctx context.Context, identity ClientIdentity, daemonInstanceID string) error
 
 type ReminderOwnerGoneError struct {
 	AgentID   string
@@ -142,10 +154,10 @@ type MessageKindRecorder interface {
 type Hub struct {
 	upgrader websocket.Upgrader
 
-	mu        sync.RWMutex
-	clients   map[*client]bool
-	byRuntime map[string]map[*client]bool
-	byRunner  map[workspaceRunnerKey]*client
+	mu                sync.RWMutex
+	clients           map[*client]bool
+	byRuntime         map[string]map[*client]bool
+	byWorkspaceDaemon map[workspaceDaemonKey]*client
 
 	hbMu                        sync.RWMutex
 	onHeartbeat                 HeartbeatHandler
@@ -154,9 +166,9 @@ type Hub struct {
 	onReminderFire              ReminderFireRequestHandler
 	deliveryMu                  sync.RWMutex
 	onAgentDeliveryAck          AgentDeliveryAckHandler
-	runnerMu                    sync.RWMutex
-	onWorkspaceRunner           WorkspaceRunnerHandler
-	onWorkspaceRunnerDisconnect WorkspaceRunnerDisconnectHandler
+	workspaceDaemonMu           sync.RWMutex
+	onWorkspaceDaemon           WorkspaceDaemonHandler
+	onWorkspaceDaemonDisconnect WorkspaceDaemonDisconnectHandler
 
 	agentDeliveryMu            sync.Mutex
 	pendingAgentDeliveries     map[string]*pendingAgentDelivery
@@ -172,7 +184,7 @@ type Hub struct {
 	pending map[string]chan json.RawMessage
 }
 
-type workspaceRunnerKey struct {
+type workspaceDaemonKey struct {
 	daemonID    string
 	workspaceID string
 }
@@ -198,46 +210,46 @@ func (h *Hub) SetAgentDeliveryAckHandler(fn AgentDeliveryAckHandler) {
 	h.deliveryMu.Unlock()
 }
 
-// SetWorkspaceRunnerHandler installs the active Runner inbound boundary.
-// Runner frames stay separate from the removed legacy routing and Activity
+// SetWorkspaceDaemonHandler installs the active WorkspaceDaemon inbound boundary.
+// WorkspaceDaemon frames stay separate from the removed legacy routing and Activity
 // contracts.
-func (h *Hub) SetWorkspaceRunnerHandler(fn WorkspaceRunnerHandler) {
+func (h *Hub) SetWorkspaceDaemonHandler(fn WorkspaceDaemonHandler) {
 	if h == nil {
 		return
 	}
-	h.runnerMu.Lock()
-	h.onWorkspaceRunner = fn
-	h.runnerMu.Unlock()
+	h.workspaceDaemonMu.Lock()
+	h.onWorkspaceDaemon = fn
+	h.workspaceDaemonMu.Unlock()
 }
 
-// SetWorkspaceRunnerDisconnectHandler installs the lifecycle boundary used by
+// SetWorkspaceDaemonDisconnectHandler installs the lifecycle boundary used by
 // server-owned Agent Presence. The callback fires only when the disconnected
-// socket still owns the current ready daemon/workspace Runner slot.
-func (h *Hub) SetWorkspaceRunnerDisconnectHandler(fn WorkspaceRunnerDisconnectHandler) {
+// socket still owns the current ready daemon/workspace WorkspaceDaemon slot.
+func (h *Hub) SetWorkspaceDaemonDisconnectHandler(fn WorkspaceDaemonDisconnectHandler) {
 	if h == nil {
 		return
 	}
-	h.runnerMu.Lock()
-	h.onWorkspaceRunnerDisconnect = fn
-	h.runnerMu.Unlock()
+	h.workspaceDaemonMu.Lock()
+	h.onWorkspaceDaemonDisconnect = fn
+	h.workspaceDaemonMu.Unlock()
 }
 
-func (h *Hub) workspaceRunnerHandler() WorkspaceRunnerHandler {
+func (h *Hub) workspaceDaemonHandler() WorkspaceDaemonHandler {
 	if h == nil {
 		return nil
 	}
-	h.runnerMu.RLock()
-	defer h.runnerMu.RUnlock()
-	return h.onWorkspaceRunner
+	h.workspaceDaemonMu.RLock()
+	defer h.workspaceDaemonMu.RUnlock()
+	return h.onWorkspaceDaemon
 }
 
-func (h *Hub) workspaceRunnerDisconnectHandler() WorkspaceRunnerDisconnectHandler {
+func (h *Hub) workspaceDaemonDisconnectHandler() WorkspaceDaemonDisconnectHandler {
 	if h == nil {
 		return nil
 	}
-	h.runnerMu.RLock()
-	defer h.runnerMu.RUnlock()
-	return h.onWorkspaceRunnerDisconnect
+	h.workspaceDaemonMu.RLock()
+	defer h.workspaceDaemonMu.RUnlock()
+	return h.onWorkspaceDaemonDisconnect
 }
 
 func (h *Hub) agentDeliveryAckHandler() AgentDeliveryAckHandler {
@@ -287,7 +299,7 @@ func NewHub() *Hub {
 		},
 		clients:                make(map[*client]bool),
 		byRuntime:              make(map[string]map[*client]bool),
-		byRunner:               make(map[workspaceRunnerKey]*client),
+		byWorkspaceDaemon:      make(map[workspaceDaemonKey]*client),
 		pending:                make(map[string]chan json.RawMessage),
 		pendingAgentDeliveries: make(map[string]*pendingAgentDelivery),
 		scheduleAgentDeliveryRetry: func(delay time.Duration, retry func()) {
@@ -373,7 +385,7 @@ func (h *Hub) retryAgentDelivery(deliveryID string) {
 	if runtimeID != "" {
 		delivered, _ = h.notifyFrame(runtimeID, frame, "")
 	} else {
-		delivered = h.notifyWorkspaceRunnerFrame(daemonID, workspaceID, frame)
+		delivered = h.notifyWorkspaceDaemonFrame(daemonID, workspaceID, frame)
 	}
 	if !delivered {
 		// Once the live connection is gone, reconnect recovery is the durable
@@ -398,7 +410,7 @@ func (h *Hub) acknowledgeAgentDelivery(c *client, ack protocol.AgentDeliverAckPa
 		if _, authorizedRuntime := c.runtimes[pending.runtimeID]; !authorizedRuntime {
 			return
 		}
-	} else if pending.workspaceID != c.identity.WorkspaceID || pending.daemonID != c.identity.DaemonID || !h.isCurrentWorkspaceRunner(c) {
+	} else if pending.workspaceID != c.identity.WorkspaceID || pending.daemonID != c.identity.DaemonID || !h.isCurrentWorkspaceDaemon(c) {
 		return
 	}
 	delete(h.pendingAgentDeliveries, ack.DeliveryID)
@@ -560,7 +572,7 @@ func (h *Hub) RequestComputerWorkDigest(ctx context.Context, daemonID, workspace
 	if err := req.Validate(); err != nil {
 		return protocol.WorkDigest{}, err
 	}
-	raw, err := h.requestWorkspaceRunner(ctx, daemonID, workspaceID, req.RequestID, protocol.EventComputerWorkDigest, req)
+	raw, err := h.requestWorkspaceDaemon(ctx, daemonID, workspaceID, req.RequestID, protocol.EventComputerWorkDigest, req)
 	if err != nil {
 		return protocol.WorkDigest{}, err
 	}
@@ -587,7 +599,7 @@ func (h *Hub) RequestComputerWorkJournal(ctx context.Context, daemonID, workspac
 	if err := req.Validate(); err != nil {
 		return false, err
 	}
-	raw, err := h.requestWorkspaceRunner(ctx, daemonID, workspaceID, req.RequestID, protocol.EventComputerWorkJournal, req)
+	raw, err := h.requestWorkspaceDaemon(ctx, daemonID, workspaceID, req.RequestID, protocol.EventComputerWorkJournal, req)
 	if err != nil {
 		return false, err
 	}
@@ -604,7 +616,7 @@ func (h *Hub) RequestComputerWorkJournal(ctx context.Context, daemonID, workspac
 	return done.Enabled, nil
 }
 
-func (h *Hub) requestWorkspaceRunner(ctx context.Context, daemonID, workspaceID, requestID, msgType string, payload any) (json.RawMessage, error) {
+func (h *Hub) requestWorkspaceDaemon(ctx context.Context, daemonID, workspaceID, requestID, msgType string, payload any) (json.RawMessage, error) {
 	if h == nil {
 		return nil, ErrComputerOffline
 	}
@@ -620,7 +632,7 @@ func (h *Hub) requestWorkspaceRunner(ctx context.Context, daemonID, workspaceID,
 		delete(h.pending, requestID)
 		h.pendMu.Unlock()
 	}()
-	if !h.NotifyWorkspaceRunner(daemonID, workspaceID, msgType, payload) {
+	if !h.NotifyWorkspaceDaemon(daemonID, workspaceID, msgType, payload) {
 		return nil, ErrComputerOffline
 	}
 	select {
@@ -634,7 +646,7 @@ func (h *Hub) requestWorkspaceRunner(ctx context.Context, daemonID, workspaceID,
 // SetHeartbeatHandler installs the callback used for daemon:heartbeat frames.
 // Wiring is done after handler construction because the handler depends on
 // DB queries that aren't available when the hub is built. A nil handler
-// disables heartbeat processing; capable Workspace Runners reconnect until
+// disables heartbeat processing; capable WorkspaceDaemons reconnect until
 // they reach a Server that supports their control plane.
 func (h *Hub) SetHeartbeatHandler(fn HeartbeatHandler) {
 	if h == nil {
@@ -746,7 +758,7 @@ func (h *Hub) HandleWebSocket(w http.ResponseWriter, r *http.Request, identity C
 	c := &client{
 		hub:      h,
 		conn:     conn,
-		send:     make(chan []byte, 16),
+		outbox:   newClientOutbox(),
 		done:     make(chan struct{}),
 		identity: identity,
 		runtimes: runtimes,
@@ -774,7 +786,7 @@ func (h *Hub) NotifyReminderFireReceiptAck(runtimeID string, payload protocol.Re
 	h.notifyReminder(runtimeID, protocol.EventReminderFireReceiptAck, payload, fmt.Sprintf("reminder-fire-receipt-ack:%s:%d", payload.ReminderID, payload.Version))
 }
 
-func (h *Hub) notifyWorkspaceRunnerCommand(workspaceID, daemonID, eventType string, payload any) bool {
+func (h *Hub) notifyWorkspaceDaemonCommand(workspaceID, daemonID, eventType string, payload any) bool {
 	if h == nil || strings.TrimSpace(workspaceID) == "" || strings.TrimSpace(daemonID) == "" {
 		return false
 	}
@@ -782,7 +794,7 @@ func (h *Hub) notifyWorkspaceRunnerCommand(workspaceID, daemonID, eventType stri
 	if err != nil {
 		return false
 	}
-	return h.notifyWorkspaceRunnerFrame(daemonID, workspaceID, frame)
+	return h.notifyWorkspaceDaemonFrame(daemonID, workspaceID, frame)
 }
 
 func (h *Hub) notifyReminder(runtimeID, eventType string, payload any, eventID string) {
@@ -875,14 +887,14 @@ func (h *Hub) DeliverDaemonRuntime(scopeID string, frame []byte, eventID string)
 	}
 }
 
-// DeliverDaemonWorkspaceRunner consumes a relayed Runner-scoped Message or
+// DeliverDaemonWorkspaceDaemon consumes a relayed WorkspaceDaemon-scoped Message or
 // Attachment command. The relay scope is an address only; payload
 // authorization and receipts still happen on the current fenced connection.
-func (h *Hub) DeliverDaemonWorkspaceRunner(scopeID string, frame []byte, eventID string) {
+func (h *Hub) DeliverDaemonWorkspaceDaemon(scopeID string, frame []byte, eventID string) {
 	if h == nil {
 		return
 	}
-	daemonID, workspaceID, ok := parseWorkspaceRunnerRelayScopeID(scopeID)
+	daemonID, workspaceID, ok := parseWorkspaceDaemonRelayScopeID(scopeID)
 	if !ok {
 		M.WakeupDeliveredMiss.Add(1)
 		return
@@ -902,26 +914,26 @@ func (h *Hub) DeliverDaemonWorkspaceRunner(scopeID string, frame []byte, eventID
 		}
 		delivered = h.notifyWorkspaceAgentDelivery(workspaceID, daemonID, payload, frame, eventID)
 	case protocol.EventDaemonAgentStart:
-		var payload protocol.WorkspaceRunnerAgentStartPayload
+		var payload protocol.WorkspaceDaemonAgentStartPayload
 		if err := json.Unmarshal(msg.Payload, &payload); err != nil || payload.Validate() != nil {
 			M.WakeupDeliveredMiss.Add(1)
 			return
 		}
-		delivered = h.notifyCapableWorkspaceRunnerFrame(daemonID, workspaceID, protocol.DaemonCapabilityWorkspaceRunnerAgentProcess, frame)
+		delivered = h.notifyCapableWorkspaceDaemonFrame(daemonID, workspaceID, protocol.DaemonCapabilityWorkspaceDaemonAgentProcess, frame)
 	case protocol.EventDaemonAgentStop:
-		var payload protocol.WorkspaceRunnerAgentStopPayload
+		var payload protocol.WorkspaceDaemonAgentStopPayload
 		if err := json.Unmarshal(msg.Payload, &payload); err != nil || payload.Validate() != nil {
 			M.WakeupDeliveredMiss.Add(1)
 			return
 		}
-		delivered = h.notifyCapableWorkspaceRunnerFrame(daemonID, workspaceID, protocol.DaemonCapabilityWorkspaceRunnerAgentProcess, frame)
+		delivered = h.notifyCapableWorkspaceDaemonFrame(daemonID, workspaceID, protocol.DaemonCapabilityWorkspaceDaemonAgentProcess, frame)
 	case protocol.EventDaemonAgentResetWorkspace:
-		var payload protocol.WorkspaceRunnerAgentResetWorkspacePayload
+		var payload protocol.WorkspaceDaemonAgentResetWorkspacePayload
 		if err := json.Unmarshal(msg.Payload, &payload); err != nil || payload.Validate() != nil {
 			M.WakeupDeliveredMiss.Add(1)
 			return
 		}
-		delivered = h.notifyCapableWorkspaceRunnerFrame(daemonID, workspaceID, protocol.DaemonCapabilityWorkspaceRunnerAgentReset, frame)
+		delivered = h.notifyCapableWorkspaceDaemonFrame(daemonID, workspaceID, protocol.DaemonCapabilityWorkspaceDaemonAgentReset, frame)
 	default:
 		M.WakeupDeliveredMiss.Add(1)
 		return
@@ -941,38 +953,26 @@ func (h *Hub) NotifyAgentRestartCommand(workspaceID, computerID, eventType, comm
 	if err != nil {
 		return false
 	}
-	capability := protocol.DaemonCapabilityWorkspaceRunnerAgentProcess
+	capability := protocol.DaemonCapabilityWorkspaceDaemonAgentProcess
 	if eventType == protocol.EventDaemonAgentResetWorkspace {
-		capability = protocol.DaemonCapabilityWorkspaceRunnerAgentReset
+		capability = protocol.DaemonCapabilityWorkspaceDaemonAgentReset
 	}
-	return h.notifyCapableWorkspaceRunnerFrame(computerID, workspaceID, capability, frame)
+	return h.notifyCapableWorkspaceDaemonFrame(computerID, workspaceID, capability, frame)
 }
 
 func (h *Hub) notifyFrame(runtimeID string, data []byte, eventID string) (delivered bool, deduped bool) {
 	h.mu.RLock()
 	clients := h.byRuntime[runtimeID]
-	slow := make([]*client, 0)
 	for c := range clients {
 		if !c.markSeen(eventID) {
 			deduped = true
 			continue
 		}
-		select {
-		case c.send <- data:
+		if c.enqueue(data, false) {
 			delivered = true
-		default:
-			slow = append(slow, c)
 		}
 	}
 	h.mu.RUnlock()
-
-	for _, c := range slow {
-		h.unregister(c)
-		c.conn.Close()
-	}
-	if len(slow) > 0 {
-		M.SlowEvictionsTotal.Add(int64(len(slow)))
-	}
 	return delivered, deduped
 }
 
@@ -1000,111 +1000,111 @@ func (h *Hub) RuntimeConnectionCount(runtimeID string) int {
 	return len(h.byRuntime[runtimeID])
 }
 
-// WorkspaceRunnerConnectionCount is zero or one: a ready connection is owned
+// WorkspaceDaemonConnectionCount is zero or one: a ready connection is owned
 // by the daemon and Workspace pair, not by each provider registration.
-func (h *Hub) WorkspaceRunnerConnectionCount(daemonID, workspaceID string) int {
+func (h *Hub) WorkspaceDaemonConnectionCount(daemonID, workspaceID string) int {
 	if h == nil {
 		return 0
 	}
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	if h.byRunner[workspaceRunnerKey{daemonID: daemonID, workspaceID: workspaceID}] == nil {
+	if h.byWorkspaceDaemon[workspaceDaemonKey{daemonID: daemonID, workspaceID: workspaceID}] == nil {
 		return 0
 	}
 	return 1
 }
 
-// IsCurrentWorkspaceRunner is the live connection half of Agent Presence.
+// IsCurrentWorkspaceDaemon is the live connection half of Agent Presence.
 // Matching the daemon instance prevents a launch owned by a replaced process
 // from borrowing the replacement socket's liveness.
-func (h *Hub) IsCurrentWorkspaceRunner(daemonID, workspaceID, daemonInstanceID string) bool {
+func (h *Hub) IsCurrentWorkspaceDaemon(daemonID, workspaceID, daemonInstanceID string) bool {
 	if h == nil || daemonID == "" || workspaceID == "" || daemonInstanceID == "" {
 		return false
 	}
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	c := h.byRunner[workspaceRunnerKey{daemonID: daemonID, workspaceID: workspaceID}]
-	return c != nil && c.runnerDaemonInstanceID == daemonInstanceID
+	c := h.byWorkspaceDaemon[workspaceDaemonKey{daemonID: daemonID, workspaceID: workspaceID}]
+	return c != nil && c.workspaceDaemonInstanceID == daemonInstanceID
 }
 
-// HasWorkspaceRunner reports whether this Computer currently holds a live
-// DaemonCore / Workspace Runner socket for the Workspace. Socket presence is
+// HasWorkspaceDaemon reports whether this Computer currently holds a live
+// DaemonCore / WorkspaceDaemon socket for the Workspace. Socket presence is
 // Computer liveness: connect is online, disconnect is offline.
-func (h *Hub) HasWorkspaceRunner(daemonID, workspaceID string) bool {
+func (h *Hub) HasWorkspaceDaemon(daemonID, workspaceID string) bool {
 	if h == nil || strings.TrimSpace(daemonID) == "" || strings.TrimSpace(workspaceID) == "" {
 		return false
 	}
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	return h.byRunner[workspaceRunnerKey{daemonID: daemonID, workspaceID: workspaceID}] != nil
+	return h.byWorkspaceDaemon[workspaceDaemonKey{daemonID: daemonID, workspaceID: workspaceID}] != nil
 }
 
-// WorkspaceRunnerRef is one live Workspace Runner socket identity returned by
-// ListWorkspaceRunners.
-type WorkspaceRunnerRef struct {
+// WorkspaceDaemonRef is one live WorkspaceDaemon socket identity returned by
+// ListWorkspaceDaemons.
+type WorkspaceDaemonRef struct {
 	DaemonID    string
 	WorkspaceID string
 }
 
-// ListWorkspaceRunners returns the currently connected Workspace Runner
+// ListWorkspaceDaemons returns the currently connected WorkspaceDaemon
 // daemon/workspace pairs. LRM-1571 uses this to drive liveness (Redis TTL +
 // DB last_seen freshness) from socket presence instead of heartbeat frames.
-func (h *Hub) ListWorkspaceRunners() []WorkspaceRunnerRef {
+func (h *Hub) ListWorkspaceDaemons() []WorkspaceDaemonRef {
 	if h == nil {
 		return nil
 	}
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	out := make([]WorkspaceRunnerRef, 0, len(h.byRunner))
-	for key := range h.byRunner {
-		out = append(out, WorkspaceRunnerRef{DaemonID: key.daemonID, WorkspaceID: key.workspaceID})
+	out := make([]WorkspaceDaemonRef, 0, len(h.byWorkspaceDaemon))
+	for key := range h.byWorkspaceDaemon {
+		out = append(out, WorkspaceDaemonRef{DaemonID: key.daemonID, WorkspaceID: key.workspaceID})
 	}
 	return out
 }
 
-// WorkspaceRunnerSupportsCapability reports only the active ready connection's
-// declared capabilities. A replaced Runner cannot lend its protocol support to
+// WorkspaceDaemonSupportsCapability reports only the active ready connection's
+// declared capabilities. A replaced WorkspaceDaemon cannot lend its protocol support to
 // its successor.
-func (h *Hub) WorkspaceRunnerSupportsCapability(daemonID, workspaceID, capability string) bool {
+func (h *Hub) WorkspaceDaemonSupportsCapability(daemonID, workspaceID, capability string) bool {
 	if h == nil || strings.TrimSpace(daemonID) == "" || strings.TrimSpace(workspaceID) == "" || strings.TrimSpace(capability) == "" {
 		return false
 	}
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	c := h.byRunner[workspaceRunnerKey{daemonID: daemonID, workspaceID: workspaceID}]
+	c := h.byWorkspaceDaemon[workspaceDaemonKey{daemonID: daemonID, workspaceID: workspaceID}]
 	if c == nil {
 		return false
 	}
-	_, supported := c.runnerCapabilities[capability]
+	_, supported := c.workspaceDaemonCapabilities[capability]
 	return supported
 }
 
-// CurrentWorkspaceRunnerInstance is the live Computer process on this
+// CurrentWorkspaceDaemonInstance is the live Computer process on this
 // daemon/workspace socket. Observed Agent residency is only meaningful for
 // this instance; a persisted active row from a dead process is not residency.
-func (h *Hub) CurrentWorkspaceRunnerInstance(daemonID, workspaceID string) (string, bool) {
+func (h *Hub) CurrentWorkspaceDaemonInstance(daemonID, workspaceID string) (string, bool) {
 	if h == nil || strings.TrimSpace(daemonID) == "" || strings.TrimSpace(workspaceID) == "" {
 		return "", false
 	}
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	c := h.byRunner[workspaceRunnerKey{daemonID: daemonID, workspaceID: workspaceID}]
-	if c == nil || c.runnerDaemonInstanceID == "" {
+	c := h.byWorkspaceDaemon[workspaceDaemonKey{daemonID: daemonID, workspaceID: workspaceID}]
+	if c == nil || c.workspaceDaemonInstanceID == "" {
 		return "", false
 	}
-	return c.runnerDaemonInstanceID, true
+	return c.workspaceDaemonInstanceID, true
 }
 
-// WorkspaceRunnerIdentity returns a copy of the current ready connection's
+// WorkspaceDaemonIdentity returns a copy of the current ready connection's
 // authenticated scope. Mutation handlers use it to run the same reconcile as
 // ready/reconnect immediately after an Agent placement changes.
-func (h *Hub) WorkspaceRunnerIdentity(daemonID, workspaceID string) (ClientIdentity, bool) {
+func (h *Hub) WorkspaceDaemonIdentity(daemonID, workspaceID string) (ClientIdentity, bool) {
 	if h == nil || strings.TrimSpace(daemonID) == "" || strings.TrimSpace(workspaceID) == "" {
 		return ClientIdentity{}, false
 	}
 	h.mu.RLock()
-	c := h.byRunner[workspaceRunnerKey{daemonID: daemonID, workspaceID: workspaceID}]
-	if c == nil || c.runnerDaemonInstanceID == "" {
+	c := h.byWorkspaceDaemon[workspaceDaemonKey{daemonID: daemonID, workspaceID: workspaceID}]
+	if c == nil || c.workspaceDaemonInstanceID == "" {
 		h.mu.RUnlock()
 		return ClientIdentity{}, false
 	}
@@ -1114,10 +1114,10 @@ func (h *Hub) WorkspaceRunnerIdentity(daemonID, workspaceID string) (ClientIdent
 	return identity, true
 }
 
-// NotifyWorkspaceRunner routes a command only to the current ready connection
+// NotifyWorkspaceDaemon routes a command only to the current ready connection
 // for the exact daemon and Workspace. It is deliberately separate from the
 // removed legacy runtime fan-out route.
-func (h *Hub) NotifyWorkspaceRunner(daemonID, workspaceID, eventType string, payload any) bool {
+func (h *Hub) NotifyWorkspaceDaemon(daemonID, workspaceID, eventType string, payload any) bool {
 	if h == nil || strings.TrimSpace(daemonID) == "" || strings.TrimSpace(workspaceID) == "" {
 		return false
 	}
@@ -1125,27 +1125,23 @@ func (h *Hub) NotifyWorkspaceRunner(daemonID, workspaceID, eventType string, pay
 	if err != nil {
 		return false
 	}
-	key := workspaceRunnerKey{daemonID: daemonID, workspaceID: workspaceID}
+	key := workspaceDaemonKey{daemonID: daemonID, workspaceID: workspaceID}
 	h.mu.RLock()
-	c := h.byRunner[key]
+	c := h.byWorkspaceDaemon[key]
 	if c == nil {
 		h.mu.RUnlock()
 		return false
 	}
-	select {
-	case c.send <- frame:
+	if c.enqueue(frame, strings.HasPrefix(eventType, "computer:")) {
 		h.mu.RUnlock()
 		return true
-	default:
-		h.mu.RUnlock()
-		h.unregister(c)
-		_ = c.conn.Close()
-		return false
 	}
+	h.mu.RUnlock()
+	return false
 }
 
 // NotifyWorkspaceAgentDelivery sends an at-least-once canonical Message to
-// the sole current Runner for one daemon/workspace pair.
+// the sole current WorkspaceDaemon for one daemon/workspace pair.
 func (h *Hub) NotifyWorkspaceAgentDelivery(workspaceID, daemonID string, payload protocol.AgentDeliverPayload) bool {
 	if h == nil || strings.TrimSpace(workspaceID) == "" || strings.TrimSpace(daemonID) == "" {
 		return false
@@ -1161,7 +1157,7 @@ func (h *Hub) notifyWorkspaceAgentDelivery(workspaceID, daemonID string, payload
 	if h == nil || !h.stageWorkspaceAgentDelivery(workspaceID, daemonID, payload, frame) {
 		return false
 	}
-	delivered := h.notifyWorkspaceRunnerFrame(daemonID, workspaceID, frame)
+	delivered := h.notifyWorkspaceDaemonFrame(daemonID, workspaceID, frame)
 	if delivered {
 		h.activateAgentDeliveryRetry(payload.DeliveryID)
 	} else {
@@ -1170,61 +1166,53 @@ func (h *Hub) notifyWorkspaceAgentDelivery(workspaceID, daemonID string, payload
 	return delivered
 }
 
-func (h *Hub) notifyWorkspaceRunnerFrame(daemonID, workspaceID string, frame []byte) bool {
-	key := workspaceRunnerKey{daemonID: daemonID, workspaceID: workspaceID}
+func (h *Hub) notifyWorkspaceDaemonFrame(daemonID, workspaceID string, frame []byte) bool {
+	key := workspaceDaemonKey{daemonID: daemonID, workspaceID: workspaceID}
 	h.mu.RLock()
-	c := h.byRunner[key]
+	c := h.byWorkspaceDaemon[key]
 	if c == nil {
 		h.mu.RUnlock()
 		return false
 	}
-	select {
-	case c.send <- frame:
+	if c.enqueue(frame, false) {
 		h.mu.RUnlock()
 		return true
-	default:
-		h.mu.RUnlock()
-		h.unregister(c)
-		_ = c.conn.Close()
-		return false
 	}
+	h.mu.RUnlock()
+	return false
 }
 
-func (h *Hub) notifyCapableWorkspaceRunnerFrame(daemonID, workspaceID, capability string, frame []byte) bool {
-	key := workspaceRunnerKey{daemonID: daemonID, workspaceID: workspaceID}
+func (h *Hub) notifyCapableWorkspaceDaemonFrame(daemonID, workspaceID, capability string, frame []byte) bool {
+	key := workspaceDaemonKey{daemonID: daemonID, workspaceID: workspaceID}
 	h.mu.RLock()
-	c := h.byRunner[key]
+	c := h.byWorkspaceDaemon[key]
 	if c == nil {
 		h.mu.RUnlock()
 		return false
 	}
-	if _, supported := c.runnerCapabilities[capability]; !supported {
+	if _, supported := c.workspaceDaemonCapabilities[capability]; !supported {
 		h.mu.RUnlock()
 		return false
 	}
-	select {
-	case c.send <- frame:
+	if c.enqueue(frame, false) {
 		h.mu.RUnlock()
 		return true
-	default:
-		h.mu.RUnlock()
-		h.unregister(c)
-		_ = c.conn.Close()
-		return false
 	}
+	h.mu.RUnlock()
+	return false
 }
 
-// CloseWorkspaceRunner closes only the still-current Runner for the supplied
+// CloseWorkspaceDaemon closes only the still-current WorkspaceDaemon for the supplied
 // daemon instance. A stale-probe timeout must not disconnect a replacement
 // connection that became ready after the probe was issued.
-func (h *Hub) CloseWorkspaceRunner(daemonID, workspaceID, daemonInstanceID string) bool {
+func (h *Hub) CloseWorkspaceDaemon(daemonID, workspaceID, daemonInstanceID string) bool {
 	if h == nil || strings.TrimSpace(daemonID) == "" || strings.TrimSpace(workspaceID) == "" || strings.TrimSpace(daemonInstanceID) == "" {
 		return false
 	}
-	key := workspaceRunnerKey{daemonID: daemonID, workspaceID: workspaceID}
+	key := workspaceDaemonKey{daemonID: daemonID, workspaceID: workspaceID}
 	h.mu.RLock()
-	c := h.byRunner[key]
-	current := c != nil && c.runnerDaemonInstanceID == daemonInstanceID
+	c := h.byWorkspaceDaemon[key]
+	current := c != nil && c.workspaceDaemonInstanceID == daemonInstanceID
 	h.mu.RUnlock()
 	if !current {
 		return false
@@ -1260,48 +1248,48 @@ func (h *Hub) register(c *client) {
 	)
 }
 
-func (h *Hub) readyWorkspaceRunner(c *client, ready protocol.WorkspaceRunnerReadyPayload) bool {
-	if c == nil || !validWorkspaceRunnerReady(ready) || ready.WorkspaceID != c.identity.WorkspaceID {
+func (h *Hub) readyWorkspaceDaemon(c *client, ready protocol.WorkspaceDaemonReadyPayload) bool {
+	if c == nil || !validWorkspaceDaemonReady(ready) || ready.WorkspaceID != c.identity.WorkspaceID {
 		return false
 	}
-	key := workspaceRunnerKey{daemonID: c.identity.DaemonID, workspaceID: c.identity.WorkspaceID}
+	key := workspaceDaemonKey{daemonID: c.identity.DaemonID, workspaceID: c.identity.WorkspaceID}
 	h.mu.Lock()
-	previous := h.byRunner[key]
-	c.runnerDaemonInstanceID = ready.DaemonInstanceID
-	c.runnerCapabilities = make(map[string]struct{}, len(ready.ActiveCapabilities))
+	previous := h.byWorkspaceDaemon[key]
+	c.workspaceDaemonInstanceID = ready.DaemonInstanceID
+	c.workspaceDaemonCapabilities = make(map[string]struct{}, len(ready.ActiveCapabilities))
 	for _, capability := range ready.ActiveCapabilities {
-		c.runnerCapabilities[capability] = struct{}{}
+		c.workspaceDaemonCapabilities[capability] = struct{}{}
 	}
-	c.runnerLastInbound.Store(time.Now().UnixNano())
-	h.byRunner[key] = c
+	c.workspaceDaemonLastInbound.Store(time.Now().UnixNano())
+	h.byWorkspaceDaemon[key] = c
 	h.mu.Unlock()
 	if previous != nil && previous != c {
 		// The map points to c before the old connection is closed, so old
-		// unregister cannot erase the current Runner ownership.
+		// unregister cannot erase the current WorkspaceDaemon ownership.
 		h.unregister(previous)
 		_ = previous.conn.Close()
 	}
-	c.startRunnerWatchdog()
+	c.startWorkspaceDaemonWatchdog()
 	return true
 }
 
-func validWorkspaceRunnerReady(ready protocol.WorkspaceRunnerReadyPayload) bool {
-	return ready.Validate() == nil || validLegacyUpgradeWorkspaceRunnerReady(ready)
+func validWorkspaceDaemonReady(ready protocol.WorkspaceDaemonReadyPayload) bool {
+	return ready.Validate() == nil || validLegacyUpgradeWorkspaceDaemonReady(ready)
 }
 
-// validLegacyUpgradeWorkspaceRunnerReady is a server-only rolling-upgrade
+// validLegacyUpgradeWorkspaceDaemonReady is a server-only rolling-upgrade
 // adapter for the immediately preceding Computer release. That release can
-// carry machine upgrade actions over the Runner control plane but advertises
+// carry machine upgrade actions over the WorkspaceDaemon control plane but advertises
 // the retired Attachment capability instead of the current Agent process one.
 // Validate a copy with the current capability added, then retain the original
 // capability set on the connection so new Agent process commands stay fenced.
-func validLegacyUpgradeWorkspaceRunnerReady(ready protocol.WorkspaceRunnerReadyPayload) bool {
+func validLegacyUpgradeWorkspaceDaemonReady(ready protocol.WorkspaceDaemonReadyPayload) bool {
 	var supportsLegacyAttachment, supportsControlPlane bool
 	for _, capability := range ready.ActiveCapabilities {
 		switch capability {
 		case legacyRunnerAttachmentCap:
 			supportsLegacyAttachment = true
-		case protocol.DaemonCapabilityWorkspaceRunnerControlPlane:
+		case protocol.DaemonCapabilityWorkspaceDaemonControlPlane:
 			supportsControlPlane = true
 		}
 	}
@@ -1309,64 +1297,66 @@ func validLegacyUpgradeWorkspaceRunnerReady(ready protocol.WorkspaceRunnerReadyP
 		return false
 	}
 	compatible := ready
-	compatible.ActiveCapabilities = append(append([]string(nil), ready.ActiveCapabilities...), protocol.DaemonCapabilityWorkspaceRunnerAgentProcess)
+	compatible.ActiveCapabilities = append(append([]string(nil), ready.ActiveCapabilities...), protocol.DaemonCapabilityWorkspaceDaemonAgentProcess)
 	return compatible.Validate() == nil
 }
 
-func (h *Hub) isCurrentWorkspaceRunner(c *client) bool {
-	if c == nil || c.runnerDaemonInstanceID == "" {
+func (h *Hub) isCurrentWorkspaceDaemon(c *client) bool {
+	if c == nil || c.workspaceDaemonInstanceID == "" {
 		return false
 	}
-	key := workspaceRunnerKey{daemonID: c.identity.DaemonID, workspaceID: c.identity.WorkspaceID}
+	key := workspaceDaemonKey{daemonID: c.identity.DaemonID, workspaceID: c.identity.WorkspaceID}
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	return h.byRunner[key] == c
+	return h.byWorkspaceDaemon[key] == c
 }
 
-func (h *Hub) dispatchWorkspaceRunnerFrame(c *client, eventType string, payload json.RawMessage) {
-	if !h.isCurrentWorkspaceRunner(c) {
+func (h *Hub) dispatchWorkspaceDaemonFrame(c *client, eventType string, payload json.RawMessage) {
+	if !h.isCurrentWorkspaceDaemon(c) {
 		return
 	}
-	c.runnerLastInbound.Store(time.Now().UnixNano())
-	handler := h.workspaceRunnerHandler()
+	c.workspaceDaemonLastInbound.Store(time.Now().UnixNano())
+	handler := h.workspaceDaemonHandler()
 	if handler == nil {
 		return
 	}
-	if err := handler(context.Background(), c.identity, c.runnerDaemonInstanceID, eventType, payload); err != nil {
-		slog.Warn("workspace runner frame rejected", "error", err, "daemon_id", c.identity.DaemonID, "workspace_id", c.identity.WorkspaceID, "event_type", eventType)
+	if err := handler(context.Background(), c.identity, c.workspaceDaemonInstanceID, eventType, payload); err != nil {
+		slog.Warn("workspace daemon frame rejected", "error", err, "daemon_id", c.identity.DaemonID, "workspace_id", c.identity.WorkspaceID, "event_type", eventType)
 	}
 }
 
-func (c *client) startRunnerWatchdog() {
+func (c *client) startWorkspaceDaemonWatchdog() {
 	if c == nil {
 		return
 	}
-	c.runnerWatchdogOnce.Do(func() {
+	c.workspaceDaemonWatchdogOnce.Do(func() {
 		go func() {
-			ticker := time.NewTicker(runnerPingInterval)
+			ticker := time.NewTicker(workspaceDaemonPingInterval)
 			defer ticker.Stop()
 			for {
 				select {
 				case <-c.done:
 					return
 				case <-ticker.C:
-					lastInbound := time.Unix(0, c.runnerLastInbound.Load())
-					if time.Since(lastInbound) > runnerInboundWatchdog {
+					lastInbound := time.Unix(0, c.workspaceDaemonLastInbound.Load())
+					if time.Since(lastInbound) > workspaceDaemonInboundWatchdog {
 						_ = c.conn.Close()
 						return
 					}
 					pingID := fmt.Sprintf("runner-%d", time.Now().UnixNano())
-					frame, err := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceRunnerPing, Payload: mustMarshalRaw(protocol.WorkspaceRunnerPingPayload{PingID: pingID})})
+					frame, err := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceDaemonPing, Payload: mustMarshalRaw(protocol.WorkspaceDaemonPingPayload{PingID: pingID})})
 					if err != nil {
 						continue
 					}
-					select {
-					case c.send <- frame:
-					case <-c.done:
-						return
-					default:
-						_ = c.conn.Close()
-						return
+					if !c.enqueue(frame, true) {
+						select {
+						case <-c.done:
+							return
+						default:
+						}
+						// Queue pressure is not a connection failure. The inbound
+						// watchdog remains the only liveness authority.
+						continue
 					}
 				}
 			}
@@ -1390,21 +1380,22 @@ func (h *Hub) unregister(c *client) {
 		}
 	}
 	wasCurrentRunner := false
-	if c.runnerDaemonInstanceID != "" {
-		key := workspaceRunnerKey{daemonID: c.identity.DaemonID, workspaceID: c.identity.WorkspaceID}
-		if h.byRunner[key] == c {
+	if c.workspaceDaemonInstanceID != "" {
+		key := workspaceDaemonKey{daemonID: c.identity.DaemonID, workspaceID: c.identity.WorkspaceID}
+		if h.byWorkspaceDaemon[key] == c {
 			wasCurrentRunner = true
-			delete(h.byRunner, key)
+			delete(h.byWorkspaceDaemon, key)
 		}
 	}
+	c.outbox.close()
 	close(c.done)
 	total := len(h.clients)
 	h.mu.Unlock()
 
 	if wasCurrentRunner {
-		if handler := h.workspaceRunnerDisconnectHandler(); handler != nil {
-			if err := handler(context.Background(), c.identity, c.runnerDaemonInstanceID); err != nil {
-				slog.Warn("workspace runner disconnect rejected", "error", err, "daemon_id", c.identity.DaemonID, "workspace_id", c.identity.WorkspaceID, "daemon_instance_id", c.runnerDaemonInstanceID)
+		if handler := h.workspaceDaemonDisconnectHandler(); handler != nil {
+			if err := handler(context.Background(), c.identity, c.workspaceDaemonInstanceID); err != nil {
+				slog.Warn("workspace daemon disconnect rejected", "error", err, "daemon_id", c.identity.DaemonID, "workspace_id", c.identity.WorkspaceID, "daemon_instance_id", c.workspaceDaemonInstanceID)
 			}
 		}
 	}
@@ -1466,64 +1457,64 @@ func (c *client) handleFrame(raw []byte) {
 		rec.RecordDaemonWSMessageReceived(kind)
 	}
 	switch msg.Type {
-	case protocol.EventWorkspaceRunnerReady:
-		var payload protocol.WorkspaceRunnerReadyPayload
-		if err := json.Unmarshal(msg.Payload, &payload); err != nil || !c.hub.readyWorkspaceRunner(c, payload) {
-			slog.Warn("workspace runner ready rejected", "daemon_id", c.identity.DaemonID, "workspace_id", c.identity.WorkspaceID)
+	case protocol.EventWorkspaceDaemonReady:
+		var payload protocol.WorkspaceDaemonReadyPayload
+		if err := json.Unmarshal(msg.Payload, &payload); err != nil || !c.hub.readyWorkspaceDaemon(c, payload) {
+			slog.Warn("workspace daemon ready rejected", "daemon_id", c.identity.DaemonID, "workspace_id", c.identity.WorkspaceID)
 			return
 		}
-		c.hub.dispatchWorkspaceRunnerFrame(c, msg.Type, msg.Payload)
-	case protocol.EventWorkspaceRunnerPong:
-		var payload protocol.WorkspaceRunnerPongPayload
+		c.hub.dispatchWorkspaceDaemonFrame(c, msg.Type, msg.Payload)
+	case protocol.EventWorkspaceDaemonPong:
+		var payload protocol.WorkspaceDaemonPongPayload
 		if err := json.Unmarshal(msg.Payload, &payload); err != nil || payload.Validate() != nil {
 			return
 		}
-		c.hub.dispatchWorkspaceRunnerFrame(c, msg.Type, msg.Payload)
+		c.hub.dispatchWorkspaceDaemonFrame(c, msg.Type, msg.Payload)
 	case protocol.EventAgentStartAck:
 		var payload protocol.AgentStartAckPayload
 		if err := json.Unmarshal(msg.Payload, &payload); err != nil || payload.Validate() != nil {
 			return
 		}
-		c.hub.dispatchWorkspaceRunnerFrame(c, msg.Type, msg.Payload)
+		c.hub.dispatchWorkspaceDaemonFrame(c, msg.Type, msg.Payload)
 	case protocol.EventAgentResetWorkspaceResult:
-		var payload protocol.WorkspaceRunnerAgentResetWorkspaceResultPayload
+		var payload protocol.WorkspaceDaemonAgentResetWorkspaceResultPayload
 		if err := json.Unmarshal(msg.Payload, &payload); err != nil || payload.Validate() != nil {
 			return
 		}
-		c.hub.dispatchWorkspaceRunnerFrame(c, msg.Type, msg.Payload)
+		c.hub.dispatchWorkspaceDaemonFrame(c, msg.Type, msg.Payload)
 	case protocol.EventAgentStatus:
 		var payload protocol.AgentStatusPayload
 		if err := json.Unmarshal(msg.Payload, &payload); err != nil || payload.Validate() != nil {
 			return
 		}
-		c.hub.dispatchWorkspaceRunnerFrame(c, msg.Type, msg.Payload)
+		c.hub.dispatchWorkspaceDaemonFrame(c, msg.Type, msg.Payload)
 	case protocol.EventAgentSession:
 		var payload protocol.AgentSessionPayload
 		if err := json.Unmarshal(msg.Payload, &payload); err != nil || payload.Validate() != nil {
 			return
 		}
-		c.hub.dispatchWorkspaceRunnerFrame(c, msg.Type, msg.Payload)
+		c.hub.dispatchWorkspaceDaemonFrame(c, msg.Type, msg.Payload)
 	case protocol.EventAgentActivity:
 		var payload protocol.AgentActivityPayload
 		if err := json.Unmarshal(msg.Payload, &payload); err != nil || payload.Validate() != nil {
 			return
 		}
-		c.hub.dispatchWorkspaceRunnerFrame(c, msg.Type, msg.Payload)
+		c.hub.dispatchWorkspaceDaemonFrame(c, msg.Type, msg.Payload)
 	case protocol.EventMixedRunActivityTransition:
 		var payload protocol.MixedRunActivityTransitionPayload
 		if err := json.Unmarshal(msg.Payload, &payload); err != nil || payload.Validate() != nil {
 			return
 		}
-		if !c.hub.isCurrentWorkspaceRunner(c) {
+		if !c.hub.isCurrentWorkspaceDaemon(c) {
 			return
 		}
-		c.runnerLastInbound.Store(time.Now().UnixNano())
-		handler := c.hub.workspaceRunnerHandler()
+		c.workspaceDaemonLastInbound.Store(time.Now().UnixNano())
+		handler := c.hub.workspaceDaemonHandler()
 		if handler == nil {
 			return
 		}
-		if err := handler(context.Background(), c.identity, c.runnerDaemonInstanceID, msg.Type, msg.Payload); err != nil {
-			slog.Warn("workspace runner frame rejected", "error", err, "daemon_id", c.identity.DaemonID, "workspace_id", c.identity.WorkspaceID, "event_type", msg.Type)
+		if err := handler(context.Background(), c.identity, c.workspaceDaemonInstanceID, msg.Type, msg.Payload); err != nil {
+			slog.Warn("workspace daemon frame rejected", "error", err, "daemon_id", c.identity.DaemonID, "workspace_id", c.identity.WorkspaceID, "event_type", msg.Type)
 			return
 		}
 		ack := protocol.MixedRunActivityTransitionAckPayload{RunID: payload.RunID, TransitionID: payload.TransitionID}
@@ -1531,12 +1522,7 @@ func (c *client) handleFrame(raw []byte) {
 		if err != nil {
 			return
 		}
-		select {
-		case c.send <- frame:
-		default:
-			c.hub.unregister(c)
-			_ = c.conn.Close()
-		}
+		_ = c.enqueue(frame, true)
 	case legacyAttachmentReplayReq:
 		c.handleLegacyUpgradeReplayRequest(msg.Payload)
 	case protocol.EventDaemonHeartbeat:
@@ -1546,12 +1532,7 @@ func (c *client) handleFrame(raw []byte) {
 		if err != nil {
 			return
 		}
-		select {
-		case c.send <- frame:
-		default:
-			c.hub.unregister(c)
-			_ = c.conn.Close()
-		}
+		_ = c.enqueue(frame, true)
 	case protocol.EventAgentWorkspaceFileTree,
 		protocol.EventAgentWorkspaceFileContent,
 		protocol.EventDaemonWriteFileResponse,
@@ -1581,10 +1562,10 @@ func (c *client) handleFrame(raw []byte) {
 		if err := json.Unmarshal(msg.Payload, &done); err != nil || strings.TrimSpace(done.RequestID) == "" {
 			return
 		}
-		if !c.hub.isCurrentWorkspaceRunner(c) {
+		if !c.hub.isCurrentWorkspaceDaemon(c) {
 			return
 		}
-		c.runnerLastInbound.Store(time.Now().UnixNano())
+		c.workspaceDaemonLastInbound.Store(time.Now().UnixNano())
 		c.hub.deliverResponse(done.RequestID, msg.Payload)
 	case protocol.EventReminderSnapshotRequest:
 		c.handleReminderSnapshotRequest(msg.Payload)
@@ -1615,7 +1596,7 @@ func (c *client) handleFrame(raw []byte) {
 // Attachment state. Echoing its validated cursors lets that client start the
 // current control-plane heartbeat.
 func (c *client) handleLegacyUpgradeReplayRequest(raw json.RawMessage) {
-	if c == nil || !c.hub.isCurrentWorkspaceRunner(c) || !c.isLegacyUpgradeRunner() {
+	if c == nil || !c.hub.isCurrentWorkspaceDaemon(c) || !c.isLegacyUpgradeWorkspaceDaemon() {
 		return
 	}
 	var request struct {
@@ -1636,13 +1617,8 @@ func (c *client) handleLegacyUpgradeReplayRequest(raw json.RawMessage) {
 	if err != nil {
 		return
 	}
-	c.runnerLastInbound.Store(time.Now().UnixNano())
-	select {
-	case c.send <- frame:
-	default:
-		c.hub.unregister(c)
-		_ = c.conn.Close()
-	}
+	c.workspaceDaemonLastInbound.Store(time.Now().UnixNano())
+	_ = c.enqueue(frame, true)
 }
 
 func (c *client) handleReminderSnapshotRequest(raw json.RawMessage) {
@@ -1672,11 +1648,7 @@ func (c *client) handleReminderSnapshotRequest(raw json.RawMessage) {
 	if err != nil {
 		return
 	}
-	select {
-	case c.send <- frame:
-	default:
-		c.conn.Close()
-	}
+	_ = c.enqueue(frame, false)
 }
 
 func (c *client) handleReminderFireRequest(raw json.RawMessage) {
@@ -1710,12 +1682,10 @@ func (c *client) sendReminderFrame(eventType string, payload any) error {
 	if err != nil {
 		return err
 	}
-	select {
-	case c.send <- frame:
+	if c.enqueue(frame, false) {
 		return nil
-	case <-c.done:
-		return errors.New("daemon websocket client disconnected")
 	}
+	return errors.New("daemon websocket client outbox unavailable")
 }
 
 // handleHeartbeatFrame processes an inbound daemon:heartbeat from the daemon,
@@ -1736,19 +1706,19 @@ func (c *client) handleHeartbeatFrame(raw json.RawMessage) {
 		return
 	}
 	_, legacyRuntimeAuthorized := c.runtimes[payload.RuntimeID]
-	runnerControlAuthorized := c.hub.isCurrentWorkspaceRunner(c) &&
-		c.supportsRunnerCapability(protocol.DaemonCapabilityWorkspaceRunnerControlPlane)
+	runnerControlAuthorized := c.hub.isCurrentWorkspaceDaemon(c) &&
+		c.supportsWorkspaceDaemonCapability(protocol.DaemonCapabilityWorkspaceDaemonControlPlane)
 	if !legacyRuntimeAuthorized && !runnerControlAuthorized {
 		// Legacy connections authenticate a fixed Runtime set. A current ready
-		// Workspace Runner instead uses dynamic DB authorization in the handler,
-		// because Runtime membership is mutable and not part of Runner identity.
+		// WorkspaceDaemon instead uses dynamic DB authorization in the handler,
+		// because Runtime membership is mutable and not part of WorkspaceDaemon identity.
 		slog.Warn("daemon websocket heartbeat for unauthorized runtime",
 			"daemon_id", c.identity.DaemonID,
 			"runtime_id", payload.RuntimeID)
 		return
 	}
 	if runnerControlAuthorized {
-		c.runnerLastInbound.Store(time.Now().UnixNano())
+		c.workspaceDaemonLastInbound.Store(time.Now().UnixNano())
 	}
 
 	// Intentionally do NOT wrap this ctx with WithTimeout. The handler
@@ -1777,12 +1747,8 @@ func (c *client) handleHeartbeatFrame(raw json.RawMessage) {
 		slog.Debug("daemon websocket heartbeat ack marshal failed", "error", err)
 		return
 	}
-	select {
-	case c.send <- frame:
-	default:
-		// Send buffer is full — slow client. Don't block the read pump; the
-		// next writePump tick or notifyFrame eviction will clean up.
-		slog.Debug("daemon websocket heartbeat ack dropped: send buffer full",
+	if !c.enqueue(frame, true) {
+		slog.Debug("daemon websocket heartbeat ack dropped: outbox unavailable",
 			"daemon_id", c.identity.DaemonID,
 			"runtime_id", payload.RuntimeID)
 	}
@@ -1796,13 +1762,16 @@ func (c *client) writePump() {
 	}()
 
 	for {
-		select {
-		case message := <-c.send:
+		if message, ok := c.outbox.pop(); ok {
 			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if err := c.conn.WriteMessage(websocket.TextMessage, message); err != nil {
 				slog.Debug("daemon websocket write error", "error", err, "daemon_id", c.identity.DaemonID)
 				return
 			}
+			continue
+		}
+		select {
+		case <-c.outbox.wake:
 		case <-ticker.C:
 			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {

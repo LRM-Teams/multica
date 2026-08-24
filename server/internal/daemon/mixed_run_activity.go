@@ -8,7 +8,7 @@ import (
 // best-effort ships it on the workspace Runner connection. The durable outbox
 // is written before any send attempt so a daemon restart cannot lose the
 // counter delta; the server acknowledges with EventMixedRunActivityAck.
-func (d *Daemon) reportMixedRunActivity(agentID, runtimeID, runID, runAgentID, transitionID, dimension string, delta int) bool {
+func (d *WorkspaceDaemonCore) reportMixedRunActivity(agentID, runtimeID, runID, runAgentID, transitionID, dimension string, delta int) bool {
 	payload := protocol.MixedRunActivityTransitionPayload{
 		AgentID: agentID, RuntimeID: runtimeID, RunID: runID, RunAgentID: runAgentID,
 		TransitionID: transitionID, Dimension: dimension, Delta: delta,
@@ -34,7 +34,7 @@ func (d *Daemon) reportMixedRunActivity(agentID, runtimeID, runID, runAgentID, t
 		}
 		return false
 	}
-	if runner := d.currentWorkspaceRunner(workspaceID); runner != nil {
+	if runner := d.currentWorkspaceSession(workspaceID); runner != nil {
 		if err := runner.sendOnCurrentConnection(protocol.EventMixedRunActivityTransition, payload); err != nil && d.logger != nil {
 			d.logger.Debug("mixed-run activity transition send deferred", "error", err, "workspace_id", workspaceID, "run_id", runID, "transition_id", transitionID)
 		}
@@ -45,7 +45,7 @@ func (d *Daemon) reportMixedRunActivity(agentID, runtimeID, runID, runAgentID, t
 // replayMixedRunActivity resends every unacknowledged transition for one
 // Workspace after its Runner connection attaches. A failed send stops the
 // replay; the remaining entries stay durable for the next attachment.
-func (d *Daemon) replayMixedRunActivity(workspaceID string, send func(string, any) error) {
+func (d *WorkspaceDaemonCore) replayMixedRunActivity(workspaceID string, send func(string, any) error) {
 	if d == nil || d.mixedRunActivityOutbox == nil || workspaceID == "" || send == nil {
 		return
 	}
@@ -66,14 +66,14 @@ func (d *Daemon) replayMixedRunActivity(workspaceID string, send func(string, an
 	}
 }
 
-func (d *Daemon) ackMixedRunActivity(ack protocol.MixedRunActivityTransitionAckPayload) error {
+func (d *WorkspaceDaemonCore) ackMixedRunActivity(ack protocol.MixedRunActivityTransitionAckPayload) error {
 	if d == nil || d.mixedRunActivityOutbox == nil {
 		return nil
 	}
 	return d.mixedRunActivityOutbox.acknowledge(ack)
 }
 
-func (d *Daemon) reportMixedRunMessageQueueActivity(agentID, runtimeID string, messages []protocol.AgentMessageProjection, delta int) {
+func (d *WorkspaceDaemonCore) reportMixedRunMessageQueueActivity(agentID, runtimeID string, messages []protocol.AgentMessageProjection, delta int) {
 	phase := "start"
 	if delta < 0 {
 		phase = "end"

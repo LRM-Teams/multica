@@ -73,7 +73,7 @@ func confinedWorkdirPath(workspacesRoot, relPath, filePath string) (root string,
 
 // sendDaemonFrame marshals payload into a typed Message and queues it on the
 // wakeup writer. Best-effort: drops after 5s if the writer is backed up.
-func (d *Daemon) sendDaemonFrame(msgType string, payload any, requestID string, writes chan<- []byte) {
+func (d *WorkspaceDaemonCore) sendDaemonFrame(msgType string, payload any, requestID string, writes chan<- []byte) {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return
@@ -92,7 +92,7 @@ func (d *Daemon) sendDaemonFrame(msgType string, payload any, requestID string, 
 // handleReadFileRequest reads one file from a project workdir for preview. The
 // path is confined to the workdir root (under WorkspacesRoot); content is
 // capped, and non-UTF8/NUL-containing files are reported as binary (no body).
-func (d *Daemon) handleReadFileRequest(req protocol.ReadWorkdirFileRequestPayload, writes chan<- []byte) {
+func (d *WorkspaceDaemonCore) handleReadFileRequest(req protocol.ReadWorkdirFileRequestPayload, writes chan<- []byte) {
 	resp := protocol.ReadWorkdirFileResponsePayload{RequestID: req.RequestID}
 	maxBytes := req.MaxBytes
 	if maxBytes <= 0 || maxBytes > defaultReadFileMaxBytes {
@@ -166,7 +166,7 @@ func (d *Daemon) handleReadFileRequest(req protocol.ReadWorkdirFileRequestPayloa
 	d.sendDaemonFrame(protocol.EventAgentWorkspaceFileContent, resp, req.RequestID, writes)
 }
 
-func (d *Daemon) handleWriteFileRequest(req protocol.WriteWorkdirFileRequestPayload, writes chan<- []byte) {
+func (d *WorkspaceDaemonCore) handleWriteFileRequest(req protocol.WriteWorkdirFileRequestPayload, writes chan<- []byte) {
 	root := filepath.Join(d.cfg.WorkspacesRoot, filepath.FromSlash(req.RelPath))
 	// Default (Create=false) is edit-only under a 256KB per-request cap —
 	// it cannot create new files, so it is not the growth vector the quota
@@ -221,7 +221,7 @@ func isCanonicalUUIDDirName(name string) bool {
 
 // handleDeleteDirRequest removes one confined directory under WorkspacesRoot.
 // Used for agent workspace cleanup (including orphan dirs after agent delete).
-func (d *Daemon) handleDeleteDirRequest(req protocol.DeleteWorkdirDirRequestPayload, writes chan<- []byte) {
+func (d *WorkspaceDaemonCore) handleDeleteDirRequest(req protocol.DeleteWorkdirDirRequestPayload, writes chan<- []byte) {
 	resp := protocol.DeleteWorkdirDirResponsePayload{RequestID: req.RequestID}
 
 	base, err := filepath.Abs(d.cfg.WorkspacesRoot)
@@ -256,7 +256,7 @@ func (d *Daemon) handleDeleteDirRequest(req protocol.DeleteWorkdirDirRequestPayl
 // writes the response frame back over the wakeup socket. Agent Files uses
 // OneLevel (immediate children only). Machine scan still uses the bounded
 // recursive walk. The path is confined to WorkspacesRoot.
-func (d *Daemon) handleListFilesRequest(req protocol.ListWorkdirFilesRequestPayload, writes chan<- []byte) {
+func (d *WorkspaceDaemonCore) handleListFilesRequest(req protocol.ListWorkdirFilesRequestPayload, writes chan<- []byte) {
 	resp := protocol.ListWorkdirFilesResponsePayload{RequestID: req.RequestID}
 
 	base, err := filepath.Abs(d.cfg.WorkspacesRoot)
@@ -480,7 +480,7 @@ func walkWorkdirFilesWithOptions(root string, maxEntries, maxDepth int, opts wor
 	return nodes, truncated, nil
 }
 
-func (d *Daemon) handleSeedAgentContextRequest(req protocol.SeedAgentContextRequestPayload, writes chan<- []byte) {
+func (d *WorkspaceDaemonCore) handleSeedAgentContextRequest(req protocol.SeedAgentContextRequestPayload, writes chan<- []byte) {
 	resp := protocol.SeedAgentContextResponsePayload{RequestID: req.RequestID}
 	root, _, err := confinedWorkdirPath(d.cfg.WorkspacesRoot, req.RelPath, "")
 	if err != nil {

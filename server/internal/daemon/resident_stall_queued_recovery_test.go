@@ -304,7 +304,7 @@ func TestForceInvalidateReleasesWedgedRunningSlot(t *testing.T) {
 }
 
 // TestAcceptMessageDeliveryDeferredRecoversStalledSlot proves the wiring in
-// acceptMessageDelivery (workspace_runner_message.go) actually invokes
+// acceptMessageDelivery (workspace_daemon_message.go) actually invokes
 // recoverStalledRuntimeForQueuedMessage on the deferred-delivery outcome, not
 // just that recoverStalledSlotForQueuedMessage behaves correctly in
 // isolation (the rest of this file). A delivery that lands on a slot silent

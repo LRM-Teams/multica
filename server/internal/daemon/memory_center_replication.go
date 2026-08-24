@@ -48,7 +48,7 @@ func lockMemoryCenterSync(agentRoot string) func() {
 // reconcileAgentMemoryCenter durably queues local changes, flushes them, then
 // applies center changes newer than the local cursor. Local writes always enter
 // the outbox before the local atom index advances.
-func (d *Daemon) reconcileAgentMemoryCenter(ctx context.Context, workspaceID, agentID, runtimeID, taskID, agentRoot string) error {
+func (d *WorkspaceDaemonCore) reconcileAgentMemoryCenter(ctx context.Context, workspaceID, agentID, runtimeID, taskID, agentRoot string) error {
 	if d == nil || d.client == nil {
 		return nil
 	}
@@ -153,7 +153,7 @@ func queueLocalMemoryChanges(agentRoot, taskID string, state *memorySyncState, o
 	return saveMemorySyncState(agentRoot, *state)
 }
 
-func (d *Daemon) flushMemorySyncOutbox(ctx context.Context, agentID, runtimeID, agentRoot string, outbox *memorySyncOutbox) ([]string, error) {
+func (d *WorkspaceDaemonCore) flushMemorySyncOutbox(ctx context.Context, agentID, runtimeID, agentRoot string, outbox *memorySyncOutbox) ([]string, error) {
 	tombstoned := make([]string, 0)
 	for len(outbox.Batches) > 0 {
 		batch := outbox.Batches[0]

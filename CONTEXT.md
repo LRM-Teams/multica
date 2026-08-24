@@ -33,6 +33,14 @@ server origin `https://api.leagent.me` and may manage Workspace Execution Bindin
 for multiple Workspaces.
 _Avoid_: Machine Service, daemon, Profile daemon, Workspace daemon
 
+### ComputerCore
+
+The implementation owner of Computer-level lifecycle: resident service,
+upgrade/restart, work journal, local control, and durable diagnostic writers.
+It contains one local `DaemonCore` but does not execute Agent lifecycle policy
+itself.
+_Avoid_: WorkspaceDaemonCore, server WebSocket, Agent runtime
+
 ### Computer Owner
 
 The human whose OS-user-scoped Computer identity may be restarted, upgraded,
@@ -84,37 +92,40 @@ _Avoid_: Workspace synchronization, automatic binding
 
 ### DaemonCore
 
-The Computer-supervised execution child for one Workspace Execution Binding.
-It is the Raft 1.0.16 `DaemonCore` analogue: one OS child per Binding
-(`computer __runner`), not a second Computer and not a provider runtime.
-At most one DaemonCore is active for a binding; the same Workspace may have
-other DaemonCores on other machines. The Host reconciles the child every 5s,
-backs off 2s after a crash, and degrades after 3 crashes in 60s. A previous
-child generation cannot mutate the live slot.
-_Avoid_: Binding child as a product name, Workspace daemon, profile daemon,
-second Computer, runtime
+The Computer-local Agent-system manager inside `ComputerCore`. It owns desired
+Workspace reconciliation, child process fencing, crash/backoff policy, shared
+Agent-process capacity, and local child control. It has no Server WebSocket and
+does not open durable diagnostic files.
+_Avoid_: ComputerCore, WorkspaceDaemonCore, server connection, provider runtime
 
-### Workspace Runner
+### WorkspaceDaemonCore
 
-The control-plane owner inside one DaemonCore: the live connection and command
-surface for that Binding. Presence is derived from this connection. It is not
-the OS child and not a RuntimeSession.
-_Avoid_: Workspace owner, global Workspace runner, DaemonCore, runtime
+The `DaemonCore`-supervised OS execution child for one Workspace Execution
+Binding. It owns that Workspace's Agent process, Inbox/MessageCoordinator,
+Activity, provider runtimes, and exactly one `/api/workspace/daemon/connect`
+WebSocket. At most one WorkspaceDaemonCore is active for a binding on one
+Computer; a previous process identity cannot mutate the current slot.
+Computer upgrade/restart envelopes may use this WebSocket as transport, but the
+WorkspaceDaemonCore only forwards them over local IPC; `ComputerCore` owns and
+executes the machine operation.
+_Avoid_: Workspace Runner, second Computer, global Workspace owner, RuntimeSession
 
 ### DaemonConnection
 
-The Raft 1.0.16 analogue for one live `/api/daemon/connect` socket inside a
-DaemonCore. Socket open is Computer liveness for that Workspace. Workspace
-Runner owns commands on top of it; `GET /api/computers` only reads the
-server-side Hub registration of this socket.
+The one live `/api/workspace/daemon/connect` socket owned by a
+WorkspaceDaemonCore. Socket open is Computer liveness for that Workspace;
+`GET /api/computers` only reads the server-side Hub registration of this
+socket. `/api/daemon/connect?workspace_id=...` is only a rolling-upgrade bridge
+for released Computers that must receive `computer:upgrade` before they can
+adopt the new endpoint.
 _Avoid_: heartbeat liveness, `/api/computers` as a daemon RPC
 
 ### RuntimeSession
 
-One Agent's live provider execution session inside a DaemonCore: one Agent,
+One Agent's live provider execution session inside a WorkspaceDaemonCore: one Agent,
 one provider runtime, one session. Restarting or replacing it does not create
-a new Computer or a new DaemonCore.
-_Avoid_: Computer, DaemonCore, Workspace Runner, Agent Root
+a new Computer or a new WorkspaceDaemonCore.
+_Avoid_: Computer, DaemonCore, WorkspaceDaemonCore, Agent Root
 
 ### Agent Attachment
 
@@ -170,10 +181,10 @@ All three preserve the server-side Agent identity, configuration, chat history,
 and Issues.
 
 The server operation is the durable product orchestrator. It advances only
-through Raft 1.0.16's discrete Runner boundaries: `agent:stop`, inactive
+through the WorkspaceDaemon WebSocket's discrete Raft boundaries: `agent:stop`, inactive
 status, optional session clear, optional `agent:reset-workspace`, then
 `agent:start(config.sessionId)`. A replacement is complete only after the new
-launch reports active. The Runner never receives a composite restart action;
+launch reports active. WorkspaceDaemonCore never receives a composite restart action;
 heartbeat lifecycle queues and parallel stop/start paths remain retired.
 _Avoid_: Restart boolean, session reset as workspace reset, full reset as Agent deletion
 
@@ -195,7 +206,7 @@ _Avoid_: isolated bubble as a second product, DM bubble, FAB chat, inbox task
 ### Agent Presence
 
 The binary user-facing reachability of a Workspace Agent: `Online` or
-`Offline`. It is derived from the current Workspace Runner connection together
+`Offline`. It is derived from the current WorkspaceDaemon connection together
 with the Manager's current managed/wakeable Agent state. Loading or missing
 evidence is not a third Presence state and must not be presented as Online.
 _Avoid_: Workload, runtime health, Disconnected, Stopped, Blocked, Crashed
@@ -723,4 +734,3 @@ task started from a page bubble
 ADR 0018 Host-path terms. Superseded for Period Work by ADR 0019 Collectors.
 May remain in code temporarily; do not teach them as the Brief contract.
 _Avoid_: new Brief features depending on Host Digest
-

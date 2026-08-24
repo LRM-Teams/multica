@@ -7,7 +7,7 @@ import (
 )
 
 func TestFrictionTrackerForTaskLifecycle(t *testing.T) {
-	d := &Daemon{}
+	d := &WorkspaceDaemonCore{}
 
 	// Same task returns the same tracker instance.
 	first := d.frictionTrackerForTask("task-1")

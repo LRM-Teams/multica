@@ -2,7 +2,7 @@ package handler
 
 import "github.com/multica-ai/multica/server/internal/service"
 
-// runnerPresence is the process-wide Workspace Runner presence source the
+// runnerPresence is the process-wide WorkspaceDaemon presence source the
 // handler's runtimeConnectivity read consults before falling back to
 // heartbeat freshness (LRM-1571: heartbeat retirement). It is assigned once
 // at startup by cmd/server/main.go (which owns the daemon WebSocket Hub);
@@ -17,7 +17,7 @@ import "github.com/multica-ai/multica/server/internal/service"
 // presence through a dozen signatures.
 var runnerPresence service.RunnerPresence
 
-// SetRunnerPresence wires the Workspace Runner presence source once at
+// SetRunnerPresence wires the WorkspaceDaemon presence source once at
 // startup. Call it exactly once before serving; the assignment is not
 // concurrency-safe by design (startup-only).
 func SetRunnerPresence(p service.RunnerPresence) {

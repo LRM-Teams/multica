@@ -102,7 +102,7 @@ func (h *Handler) dispatchComputerUpgradeToRunners(ctx context.Context, computer
 		if err := rows.Scan(&workspaceID); err != nil {
 			return false
 		}
-		if h.DaemonHub.NotifyWorkspaceRunner(computerID, uuidToString(workspaceID), protocol.EventComputerUpgrade, payload) {
+		if h.DaemonHub.NotifyWorkspaceDaemon(computerID, uuidToString(workspaceID), protocol.EventComputerUpgrade, payload) {
 			return true
 		}
 	}

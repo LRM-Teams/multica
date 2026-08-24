@@ -145,14 +145,30 @@ func sandboxNodeFromRow(id pgtype.UUID, nodeKey string, ownerUserID pgtype.UUID,
 		LastSeenAt: lastSeenAt, CreatedAt: createdAt, UpdatedAt: updatedAt, DeletedAt: deletedAt,
 	}
 }
-func sandboxNodeFromCreateRow(r db.CreateSandboxNodeRow) db.SandboxNode          { return sandboxNodeFromRow(r.ID, r.NodeKey, r.OwnerUserID, r.Name, r.Status, r.Capabilities, r.MaxConcurrency, r.Metadata, r.LastSeenAt, r.DeletedAt, r.CreatedAt, r.UpdatedAt) }
-func sandboxNodeFromListRow(r db.ListSandboxNodesByOwnerRow) db.SandboxNode       { return sandboxNodeFromRow(r.ID, r.NodeKey, r.OwnerUserID, r.Name, r.Status, r.Capabilities, r.MaxConcurrency, r.Metadata, r.LastSeenAt, r.DeletedAt, r.CreatedAt, r.UpdatedAt) }
-func sandboxNodeFromRegRow(r db.UpsertSandboxNodeRegistrationRow) db.SandboxNode { return sandboxNodeFromRow(r.ID, r.NodeKey, r.OwnerUserID, r.Name, r.Status, r.Capabilities, r.MaxConcurrency, r.Metadata, r.LastSeenAt, r.DeletedAt, r.CreatedAt, r.UpdatedAt) }
-func sandboxNodeFromNameRow(r db.UpdateSandboxNodeNameForOwnerRow) db.SandboxNode { return sandboxNodeFromRow(r.ID, r.NodeKey, r.OwnerUserID, r.Name, r.Status, r.Capabilities, r.MaxConcurrency, r.Metadata, r.LastSeenAt, r.DeletedAt, r.CreatedAt, r.UpdatedAt) }
-func sandboxNodeFromTplRow(r db.UpdateSandboxNodeDefaultTemplateForOwnerRow) db.SandboxNode { return sandboxNodeFromRow(r.ID, r.NodeKey, r.OwnerUserID, r.Name, r.Status, r.Capabilities, r.MaxConcurrency, r.Metadata, r.LastSeenAt, r.DeletedAt, r.CreatedAt, r.UpdatedAt) }
-func sandboxNodeFromPickRow(r db.PickSandboxNodeForWorkspaceRow) db.SandboxNode { return sandboxNodeFromRow(r.ID, r.NodeKey, r.OwnerUserID, r.Name, r.Status, r.Capabilities, r.MaxConcurrency, r.Metadata, r.LastSeenAt, r.DeletedAt, r.CreatedAt, r.UpdatedAt) }
-func sandboxNodeFromPickAvailRow(r db.PickAvailableSandboxNodeForWorkspaceRow) db.SandboxNode { return sandboxNodeFromRow(r.ID, r.NodeKey, r.OwnerUserID, r.Name, r.Status, r.Capabilities, r.MaxConcurrency, r.Metadata, r.LastSeenAt, r.DeletedAt, r.CreatedAt, r.UpdatedAt) }
-func sandboxNodeFromHeartbeatRow(r db.TouchSandboxNodeHeartbeatRow) db.SandboxNode { return sandboxNodeFromRow(r.ID, r.NodeKey, r.OwnerUserID, r.Name, r.Status, r.Capabilities, r.MaxConcurrency, r.Metadata, r.LastSeenAt, r.DeletedAt, r.CreatedAt, r.UpdatedAt) }
+func sandboxNodeFromCreateRow(r db.CreateSandboxNodeRow) db.SandboxNode {
+	return sandboxNodeFromRow(r.ID, r.NodeKey, r.OwnerUserID, r.Name, r.Status, r.Capabilities, r.MaxConcurrency, r.Metadata, r.LastSeenAt, r.DeletedAt, r.CreatedAt, r.UpdatedAt)
+}
+func sandboxNodeFromListRow(r db.ListSandboxNodesByOwnerRow) db.SandboxNode {
+	return sandboxNodeFromRow(r.ID, r.NodeKey, r.OwnerUserID, r.Name, r.Status, r.Capabilities, r.MaxConcurrency, r.Metadata, r.LastSeenAt, r.DeletedAt, r.CreatedAt, r.UpdatedAt)
+}
+func sandboxNodeFromRegRow(r db.UpsertSandboxNodeRegistrationRow) db.SandboxNode {
+	return sandboxNodeFromRow(r.ID, r.NodeKey, r.OwnerUserID, r.Name, r.Status, r.Capabilities, r.MaxConcurrency, r.Metadata, r.LastSeenAt, r.DeletedAt, r.CreatedAt, r.UpdatedAt)
+}
+func sandboxNodeFromNameRow(r db.UpdateSandboxNodeNameForOwnerRow) db.SandboxNode {
+	return sandboxNodeFromRow(r.ID, r.NodeKey, r.OwnerUserID, r.Name, r.Status, r.Capabilities, r.MaxConcurrency, r.Metadata, r.LastSeenAt, r.DeletedAt, r.CreatedAt, r.UpdatedAt)
+}
+func sandboxNodeFromTplRow(r db.UpdateSandboxNodeDefaultTemplateForOwnerRow) db.SandboxNode {
+	return sandboxNodeFromRow(r.ID, r.NodeKey, r.OwnerUserID, r.Name, r.Status, r.Capabilities, r.MaxConcurrency, r.Metadata, r.LastSeenAt, r.DeletedAt, r.CreatedAt, r.UpdatedAt)
+}
+func sandboxNodeFromPickRow(r db.PickSandboxNodeForWorkspaceRow) db.SandboxNode {
+	return sandboxNodeFromRow(r.ID, r.NodeKey, r.OwnerUserID, r.Name, r.Status, r.Capabilities, r.MaxConcurrency, r.Metadata, r.LastSeenAt, r.DeletedAt, r.CreatedAt, r.UpdatedAt)
+}
+func sandboxNodeFromPickAvailRow(r db.PickAvailableSandboxNodeForWorkspaceRow) db.SandboxNode {
+	return sandboxNodeFromRow(r.ID, r.NodeKey, r.OwnerUserID, r.Name, r.Status, r.Capabilities, r.MaxConcurrency, r.Metadata, r.LastSeenAt, r.DeletedAt, r.CreatedAt, r.UpdatedAt)
+}
+func sandboxNodeFromHeartbeatRow(r db.TouchSandboxNodeHeartbeatRow) db.SandboxNode {
+	return sandboxNodeFromRow(r.ID, r.NodeKey, r.OwnerUserID, r.Name, r.Status, r.Capabilities, r.MaxConcurrency, r.Metadata, r.LastSeenAt, r.DeletedAt, r.CreatedAt, r.UpdatedAt)
+}
 
 func sandboxInstanceToResponse(i db.SandboxInstance) SandboxInstanceResponse {
 	return SandboxInstanceResponse{

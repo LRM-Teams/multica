@@ -143,9 +143,6 @@ func (s *Store) Service(options ServiceOptions) (*Logger, error) {
 }
 
 func (s *Store) Runner(options RunnerOptions) (*Logger, error) {
-	if options.DaemonInstanceID == "" {
-		options.DaemonInstanceID = options.StartIdentity
-	}
 	if options.Environment != EnvironmentProduction && options.Environment != EnvironmentTest {
 		return nil, fmt.Errorf("environment must be production or test")
 	}
@@ -298,19 +295,13 @@ func (l *Logger) buildRecord(event Event, now time.Time) (wireRecord, error) {
 		Event:             event.Name,
 		Component:         event.Component,
 		ComputerID:        l.dest.computerID,
-		DaemonID:          l.dest.computerID,
 		ServiceGeneration: l.dest.serviceGeneration,
 		Environment:       l.dest.environment,
 		WorkspaceID:       l.dest.workspaceID,
 		DaemonInstanceID:  l.dest.daemonInstanceID,
 		StreamSeq:         l.seq.Add(1),
-		EventID:           identity.EventID,
 		AgentID:           identity.AgentID,
 		RuntimeID:         identity.RuntimeID,
-		LaunchID:          identity.LaunchID,
-		StartDispatchID:   identity.StartDispatchID,
-		ProcessInstanceID: identity.ProcessInstanceID,
-		InboxEventID:      identity.InboxEventID,
 		TaskID:            identity.TaskID,
 		SessionID:         identity.SessionID,
 		MessageID:         identity.MessageID,
@@ -343,12 +334,6 @@ func (l *Logger) buildRecord(event Event, now time.Time) (wireRecord, error) {
 		SuppressedCount:   fields.SuppressedCount,
 		DroppedCount:      fields.DroppedCount,
 		OutageDurationMS:  fields.OutageDurationMS,
-		RuntimeEpoch:      fields.RuntimeEpoch,
-		ProcessPID:        fields.ProcessPID,
-		ExitCode:          fields.ExitCode,
-		Signal:            fields.Signal,
-		TerminationReason: fields.TerminationReason,
-		ForceKilled:       fields.ForceKilled,
 		Diagnostic:        diagnostic,
 		StderrTail:        stderr,
 		RedactionFailed:   redactionFailed || evidenceRedactionFailed,
@@ -404,8 +389,7 @@ func validatedIdentity(identity Identity) (Identity, error) {
 		name  string
 		value string
 	}{
-		{"event_id", identity.EventID}, {"agent_id", identity.AgentID}, {"runtime_id", identity.RuntimeID},
-		{"launch_id", identity.LaunchID}, {"start_dispatch_id", identity.StartDispatchID}, {"process_instance_id", identity.ProcessInstanceID}, {"inbox_event_id", identity.InboxEventID}, {"task_id", identity.TaskID},
+		{"agent_id", identity.AgentID}, {"runtime_id", identity.RuntimeID}, {"task_id", identity.TaskID},
 		{"session_id", identity.SessionID}, {"message_id", identity.MessageID}, {"delivery_id", identity.DeliveryID},
 		{"request_id", identity.RequestID}, {"trace_id", identity.TraceID}, {"channel_id", identity.ChannelID},
 		{"chat_session_id", identity.ChatSessionID}, {"conversation_id", identity.ConversationID},
@@ -442,22 +426,10 @@ func validatedFields(fields Fields) (Fields, bool, error) {
 		{"acked_seq", fields.AckedSeq}, {"folded_count", fields.FoldedCount}, {"attempt_count", fields.AttemptCount},
 		{"suppressed_count", fields.SuppressedCount}, {"dropped_count", fields.DroppedCount},
 		{"outage_duration_ms", fields.OutageDurationMS},
-		{"runtime_epoch", fields.RuntimeEpoch}, {"pid", fields.ProcessPID}, {"exit_code", fields.ExitCode},
 	}
 	for _, item := range counts {
 		if item.value < 0 {
 			return Fields{}, false, fmt.Errorf("%s cannot be negative", item.name)
-		}
-	}
-	if fields.Signal != "" {
-		if err := validateOptionalToken("signal", fields.Signal); err != nil {
-			return Fields{}, false, err
-		}
-	}
-	if fields.TerminationReason != "" {
-		allowed := map[string]struct{}{"natural": {}, "force_killed": {}, "lease_lost": {}, "startup_timeout": {}, "crash": {}, "superseded": {}, "unknown": {}}
-		if _, ok := allowed[fields.TerminationReason]; !ok {
-			return Fields{}, false, fmt.Errorf("termination_reason is not a closed-set value")
 		}
 	}
 	if fields.ServiceOrigin != "" {

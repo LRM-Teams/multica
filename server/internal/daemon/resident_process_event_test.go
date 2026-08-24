@@ -18,7 +18,7 @@ func testLogger() *slog.Logger {
 // a confirmed-dead-on-demand test backend, releases it back to the pool
 // idle, and returns the backend so the caller can trigger a "detected dead"
 // pass via checkResidentLiveness.
-func deadResidentLease(t *testing.T, pool *canonicalAgentRuntimePool, agentID, runtimeID string) *canonicalRuntimeLivenessTestBackend {
+func deadResidentLease(t *testing.T, pool *agentRuntimePool, agentID, runtimeID string) *canonicalRuntimeLivenessTestBackend {
 	t.Helper()
 	backend := &canonicalRuntimeLivenessTestBackend{}
 	backend.setLiveness(false, true) // known dead
@@ -29,7 +29,7 @@ func deadResidentLease(t *testing.T, pool *canonicalAgentRuntimePool, agentID, r
 	if err != nil {
 		t.Fatalf("identity for %s/%s: %v", agentID, runtimeID, err)
 	}
-	lease, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
+	lease, err := pool.acquire(agentRuntimeAcquireRequest{
 		Identity: identity, Factory: newLivenessFactory(backend),
 	})
 	if err != nil {
@@ -42,14 +42,9 @@ func deadResidentLease(t *testing.T, pool *canonicalAgentRuntimePool, agentID, r
 // startManagedLaunch registers an APM launch for agentID/runtimeID on runner
 // and marks it Running (spawned + ready), mirroring a resident provider
 // process that is actually up before it dies.
-func startManagedLaunch(t *testing.T, runner *workspaceSession, agentID, runtimeID string) {
+func startManagedLaunch(t *testing.T, runner *WorkspaceDaemon, agentID, runtimeID string) {
 	t.Helper()
-	if _, err := runner.processes.Start(agentProcessStartRequest{
-		AgentID: agentID, RuntimeID: runtimeID,
-		LaunchID: "test-launch-" + agentID, StartDispatchID: "test-launch-" + agentID + "-dispatch",
-	}); err != nil {
-		t.Fatalf("register APM launch for %s: %v", agentID, err)
-	}
+	startTestManagedAgent(t, runner, agentID, runtimeID, "test-launch-"+agentID)
 	markTestLaunchRunning(t, runner, agentID)
 }
 
@@ -57,10 +52,9 @@ func startManagedLaunch(t *testing.T, runner *workspaceSession, agentID, runtime
 // exists for (LRM-1571): once the liveness sweep detects a dead resident
 // process, agentProcessManager must stop reporting that launch as Running —
 // otherwise the local launch layer believes the launch is alive long after
-// the server has already been told it crashed, and the capacity grant it
-// holds is never released. Before this change, onResidentRuntimeCrash never
-// touched runner.processes at all, so this must fail red on the
-// pre-implementation code.
+// the server has already been told it crashed. Before this change,
+// onResidentRuntimeCrash never touched runner.processes at all, so this must
+// fail red on the pre-implementation code.
 func TestResidentProcessDeathClearsAPMRunningState(t *testing.T) {
 	d := New(Config{}, testLogger())
 	d.mu.Lock()
@@ -75,6 +69,12 @@ func TestResidentProcessDeathClearsAPMRunningState(t *testing.T) {
 	}
 
 	deadResidentLease(t, d.canonicalRuntimes, "agent-1", "runtime-1")
+	launch, _ := runner.processes.Snapshot("agent-1")
+	if !d.canonicalRuntimes.bindManagedProcess("agent-1", "runtime-1", agentProcessCallback{
+		AgentID: "agent-1", AgentInstanceID: launch.AgentInstanceID, ProcessInstanceID: launch.ProcessInstanceID,
+	}) {
+		t.Fatal("bind dead resident process")
+	}
 	d.canonicalRuntimes.checkResidentLiveness(time.Now())
 
 	snap, ok := runner.processes.Snapshot("agent-1")
@@ -83,14 +83,34 @@ func TestResidentProcessDeathClearsAPMRunningState(t *testing.T) {
 	}
 }
 
-// TestResidentProcessExitedBackoffCapReleasesCapacityAndPromotes pins task
-// #42②'s retry-cap contract as routed through APM: crashes at or under the
-// cap keep the launch (APM recreates lazily on the next acquire), a crash
-// that pushes the count over the cap releases the launch's capacity grant
-// and promotes the next queued launch.
-func TestResidentProcessExitedBackoffCapReleasesCapacityAndPromotes(t *testing.T) {
+func TestStaleResidentProcessExitDoesNotAffectReplacement(t *testing.T) {
 	d := New(Config{}, testLogger())
-	d.canonicalRuntimes.setMaxAgentProcesses(1)
+	d.mu.Lock()
+	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
+	d.mu.Unlock()
+	runner, _ := attachTestWorkspaceDaemon(t, d, "workspace-1", nil)
+	startManagedLaunch(t, runner, "agent-1", "runtime-1")
+	old, _ := runner.processes.Snapshot("agent-1")
+	if err := runner.processes.Stop(agentProcessCallback{AgentID: old.AgentID, AgentInstanceID: old.AgentInstanceID}); err != nil {
+		t.Fatal(err)
+	}
+	startManagedLaunch(t, runner, "agent-1", "runtime-1")
+	replacement, _ := runner.processes.Snapshot("agent-1")
+
+	d.onResidentRuntimeExited(residentProcessEvent{
+		AgentID: old.AgentID, RuntimeID: old.RuntimeID, AgentInstanceID: old.AgentInstanceID,
+		ProcessInstanceID: old.ProcessInstanceID, Kind: residentProcessExited, At: time.Now(),
+	})
+	got, ok := runner.processes.Snapshot("agent-1")
+	if !ok || got.AgentInstanceID != replacement.AgentInstanceID || got.ProcessInstanceID != replacement.ProcessInstanceID || got.QueueState != protocol.AgentStartQueueRunning {
+		t.Fatalf("stale exit changed replacement: got %+v, found=%v; want %+v", got, ok, replacement)
+	}
+}
+
+// Crashes at or under the retry cap keep the Agent instance; a crash over the
+// cap retires it without disturbing another Agent.
+func TestResidentProcessExitedBackoffCapRetiresFailedAgentWithoutAffectingAnother(t *testing.T) {
+	d := New(Config{}, testLogger())
 	d.mu.Lock()
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
 	d.runtimeIndex["runtime-2"] = Runtime{ID: "runtime-2", WorkspaceID: "workspace-1"}
@@ -122,27 +142,26 @@ func TestResidentProcessExitedBackoffCapReleasesCapacityAndPromotes(t *testing.T
 	runner, _ := attachTestWorkspaceDaemon(t, d, "workspace-1", send)
 	startManagedLaunch(t, runner, "agent-1", "runtime-1")
 
-	// A second launch competing for the same (capped at 1) capacity — it
-	// must be admitted as Queued behind agent-1's live grant.
+	// Another Agent starts independently.
 	if _, err := runner.processes.Start(agentProcessStartRequest{
 		AgentID: "agent-2", RuntimeID: "runtime-2",
-		LaunchID: "test-launch-agent-2", StartDispatchID: "test-launch-agent-2-dispatch",
 	}); err != nil {
 		t.Fatalf("register APM launch for agent-2: %v", err)
 	}
-	if snap, ok := runner.processes.Snapshot("agent-2"); !ok || snap.QueueState != protocol.AgentStartQueueQueued {
-		t.Fatalf("precondition: agent-2 must be Queued behind the capacity cap: %+v ok=%v", snap, ok)
+	if snap, ok := runner.processes.Snapshot("agent-2"); !ok || snap.QueueState != protocol.AgentStartQueueStarting {
+		t.Fatalf("precondition: agent-2 must start independently: %+v ok=%v", snap, ok)
 	}
 
 	now := time.Now()
 	// residentCrashRetryCap crashes within the window are recoverable: the
-	// launch is kept (re-Starting) and never releases capacity, so agent-2
-	// stays Queued throughout. Re-spawn after each kept crash so the next
+	// launch is kept (re-Starting), while agent-2 remains unaffected.
+	// Re-spawn after each kept crash so the next
 	// crash detects a fresh process instance, mirroring the real lazy
 	// recreate on the next acquire().
 	for attempt := 1; attempt <= residentCrashRetryCap; attempt++ {
+		launch, _ := runner.processes.Snapshot("agent-1")
 		d.canonicalRuntimes.emitResidentProcessEvent(residentProcessEvent{
-			AgentID: "agent-1", RuntimeID: "runtime-1", Kind: residentProcessExited,
+			AgentID: "agent-1", RuntimeID: "runtime-1", AgentInstanceID: launch.AgentInstanceID, ProcessInstanceID: launch.ProcessInstanceID, Kind: residentProcessExited,
 			Provider: "opencode", At: now.Add(time.Duration(attempt) * time.Second),
 		})
 		snap, ok := runner.processes.Snapshot("agent-1")
@@ -152,8 +171,8 @@ func TestResidentProcessExitedBackoffCapReleasesCapacityAndPromotes(t *testing.T
 		if snap.QueueState == protocol.AgentStartQueueRunning {
 			t.Fatalf("crash %d: agent-1 launch still reports Running", attempt)
 		}
-		if snap2, ok2 := runner.processes.Snapshot("agent-2"); !ok2 || snap2.QueueState != protocol.AgentStartQueueQueued {
-			t.Fatalf("crash %d: agent-2 must remain Queued under the cap: %+v ok=%v", attempt, snap2, ok2)
+		if snap2, ok2 := runner.processes.Snapshot("agent-2"); !ok2 || snap2.QueueState != protocol.AgentStartQueueStarting {
+			t.Fatalf("crash %d: agent-2 was affected by agent-1: %+v ok=%v", attempt, snap2, ok2)
 		}
 		startManagedLaunch(t, runner, "agent-1", "runtime-1")
 	}
@@ -165,17 +184,18 @@ func TestResidentProcessExitedBackoffCapReleasesCapacityAndPromotes(t *testing.T
 		t.Fatalf("under the retry cap the launch is kept, not retired — no Inactive status should have been published: %+v", inactiveStatuses)
 	}
 
-	launchBeforeRetire, ok := runner.processes.Snapshot("agent-1")
+	_, ok := runner.processes.Snapshot("agent-1")
 	if !ok {
 		t.Fatal("precondition: agent-1 launch must still exist before the over-cap crash")
 	}
 
-	// One more crash exceeds the cap: agent-1's launch is retired (dropped,
-	// capacity released, agent-2 promoted off the queue), and — unlike a
+	// One more crash exceeds the cap: agent-1's launch is retired, while
+	// agent-2 remains unaffected, and — unlike a
 	// kept-launch crash — that retirement must be reported outward exactly
 	// like a mid-turn provider failure is.
+	launch, _ := runner.processes.Snapshot("agent-1")
 	d.canonicalRuntimes.emitResidentProcessEvent(residentProcessEvent{
-		AgentID: "agent-1", RuntimeID: "runtime-1", Kind: residentProcessExited,
+		AgentID: "agent-1", RuntimeID: "runtime-1", AgentInstanceID: launch.AgentInstanceID, ProcessInstanceID: launch.ProcessInstanceID, Kind: residentProcessExited,
 		Provider: "opencode", At: now.Add(time.Duration(residentCrashRetryCap+1) * time.Second),
 	})
 
@@ -183,8 +203,8 @@ func TestResidentProcessExitedBackoffCapReleasesCapacityAndPromotes(t *testing.T
 		t.Fatal("agent-1 launch should have been dropped once it exceeded the retry cap")
 	}
 	snap2, ok2 := runner.processes.Snapshot("agent-2")
-	if !ok2 || snap2.QueueState == protocol.AgentStartQueueQueued {
-		t.Fatalf("agent-2 should have been promoted off the queue once agent-1 released capacity: %+v ok=%v", snap2, ok2)
+	if !ok2 || snap2.QueueState != protocol.AgentStartQueueStarting {
+		t.Fatalf("agent-2 was affected when agent-1 retired: %+v ok=%v", snap2, ok2)
 	}
 
 	statusMu.Lock()
@@ -193,9 +213,9 @@ func TestResidentProcessExitedBackoffCapReleasesCapacityAndPromotes(t *testing.T
 		t.Fatalf("expected exactly one Inactive status for the retired launch (no double teardown), got %d: %+v",
 			len(inactiveStatuses), inactiveStatuses)
 	}
-	if inactiveStatuses[0].AgentID != "agent-1" || inactiveStatuses[0].LaunchID != launchBeforeRetire.LaunchID {
+	if inactiveStatuses[0].AgentID != "agent-1" {
 		t.Fatalf("Inactive status published for the wrong agent/launch: %+v, want agent-1/%s",
-			inactiveStatuses[0], launchBeforeRetire.LaunchID)
+			inactiveStatuses[0], "test-launch-agent-1")
 	}
 }
 
@@ -204,7 +224,7 @@ func TestResidentProcessExitedBackoffCapReleasesCapacityAndPromotes(t *testing.T
 // registration order, and a panicking subscriber is recovered so later
 // subscribers still receive the event.
 func TestResidentProcessEventFanOutOrderAndPanicRecovery(t *testing.T) {
-	pool := newCanonicalAgentRuntimePool()
+	pool := newAgentRuntimePool()
 
 	var mu sync.Mutex
 	var order []string
@@ -238,22 +258,21 @@ func TestResidentProcessEventFanOutOrderAndPanicRecovery(t *testing.T) {
 // workspace's Runner/APM — resolveManagedLaunch's runtimeIndex lookup keeps
 // routing scoped to the event's own runtime.
 func TestResidentProcessEventRoutingIsolatedByWorkspace(t *testing.T) {
-	dA := New(Config{WorkspaceID: "workspace-a"}, testLogger())
-	dA.mu.Lock()
-	dA.runtimeIndex["runtime-a"] = Runtime{ID: "runtime-a", WorkspaceID: "workspace-a"}
-	dA.mu.Unlock()
-	runnerA, _ := attachTestWorkspaceDaemon(t, dA, "workspace-a", nil)
+	d := New(Config{}, testLogger())
+	d.mu.Lock()
+	d.runtimeIndex["runtime-a"] = Runtime{ID: "runtime-a", WorkspaceID: "workspace-a"}
+	d.runtimeIndex["runtime-b"] = Runtime{ID: "runtime-b", WorkspaceID: "workspace-b"}
+	d.mu.Unlock()
+
+	runnerA, _ := attachTestWorkspaceDaemon(t, d, "workspace-a", nil)
 	startManagedLaunch(t, runnerA, "agent-1", "runtime-a")
 
-	dB := New(Config{WorkspaceID: "workspace-b"}, testLogger())
-	dB.mu.Lock()
-	dB.runtimeIndex["runtime-b"] = Runtime{ID: "runtime-b", WorkspaceID: "workspace-b"}
-	dB.mu.Unlock()
-	runnerB, _ := attachTestWorkspaceDaemon(t, dB, "workspace-b", nil)
+	runnerB, _ := attachTestWorkspaceDaemon(t, d, "workspace-b", nil)
 	startManagedLaunch(t, runnerB, "agent-1", "runtime-b")
 
-	dA.canonicalRuntimes.emitResidentProcessEvent(residentProcessEvent{
-		AgentID: "agent-1", RuntimeID: "runtime-a", Kind: residentProcessExited,
+	launch, _ := runnerA.processes.Snapshot("agent-1")
+	d.canonicalRuntimes.emitResidentProcessEvent(residentProcessEvent{
+		AgentID: "agent-1", RuntimeID: "runtime-a", AgentInstanceID: launch.AgentInstanceID, ProcessInstanceID: launch.ProcessInstanceID, Kind: residentProcessExited,
 		Provider: "opencode", At: time.Now(),
 	})
 

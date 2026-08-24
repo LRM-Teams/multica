@@ -26,7 +26,8 @@ func TestAgentActivityProductionUsesOnlyTypedMessageObservationSeams(t *testing.
 	}
 
 	allowed := map[string]bool{
-		"workspace_daemon_activity.go": true,
+		"workspace_daemon_activity.go":      true,
+		"workspace_daemon_agent_process.go": true,
 	}
 	err = filepath.WalkDir(".", func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {

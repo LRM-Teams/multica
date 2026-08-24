@@ -15,7 +15,7 @@ import (
 // graph-memory recall. The daemon never resolves graph paths or runs Explore
 // locally. Any unsuccessful recall remains non-fatal and never restores the
 // legacy project/channel/daily/workspace/team memory paths.
-func (d *WorkspaceDaemonCore) graphExecutionMemories(ctx context.Context, task Task, log *slog.Logger) []execenv.MemoryContextForEnv {
+func (d *Daemon) graphExecutionMemories(ctx context.Context, task Task, log *slog.Logger) []execenv.MemoryContextForEnv {
 	profile := effectiveGraphProfile(d.cfg, task)
 	if profile.memoryType != MemoryTypeGraph {
 		return nil
@@ -117,7 +117,7 @@ func effectiveGraphProfile(cfg Config, task Task) graphMemoryEffectiveProfile {
 // for one workspace (spec §10). Empty memory types never clobber a cached
 // entry: an old server simply leaves the previous value (or the env
 // default) in effect.
-func (d *WorkspaceDaemonCore) rememberGraphProfile(workspaceID, memoryType string, exploreAgents, exploreMaxRounds int) {
+func (d *Daemon) rememberGraphProfile(workspaceID, memoryType string, exploreAgents, exploreMaxRounds int) {
 	switch memoryType {
 	case MemoryTypeLegacy, MemoryTypeGraph:
 	default:
@@ -138,7 +138,7 @@ func (d *WorkspaceDaemonCore) rememberGraphProfile(workspaceID, memoryType strin
 	}
 }
 
-func (d *WorkspaceDaemonCore) graphProfileForWorkspace(workspaceID string) (graphMemoryEffectiveProfile, bool) {
+func (d *Daemon) graphProfileForWorkspace(workspaceID string) (graphMemoryEffectiveProfile, bool) {
 	d.graphProfileMu.Lock()
 	defer d.graphProfileMu.Unlock()
 	p, ok := d.graphProfiles[workspaceID]

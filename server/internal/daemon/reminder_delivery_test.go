@@ -21,7 +21,7 @@ func dueReminderJob(now time.Time) protocol.ReminderTimerJob {
 	return reminderJob("r-due", "owner-a", 3, now.Add(-time.Minute))
 }
 
-func registerReminderNoticeRuntime(t *testing.T, d *WorkspaceDaemonCore, busy bool) *idleMessageFakeRuntime {
+func registerReminderNoticeRuntime(t *testing.T, d *Daemon, busy bool) *idleMessageFakeRuntime {
 	t.Helper()
 	d.mu.Lock()
 	d.runtimeIndex["runtime-a"] = Runtime{ID: "runtime-a", WorkspaceID: "workspace-a"}
@@ -29,13 +29,13 @@ func registerReminderNoticeRuntime(t *testing.T, d *WorkspaceDaemonCore, busy bo
 	runner := registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-a", AgentID: testInboxAgentID}, "runtime-a", &MessageCoordinator{
 		key: InboxKey{WorkspaceID: "workspace-a", AgentID: testInboxAgentID}, pending: make(map[string]map[int64]protocol.AgentMessageProjection),
 	})
-	if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: testInboxAgentID, RuntimeID: "runtime-a", LaunchID: "launch-a", StartDispatchID: "dispatch-a"}); err != nil {
+	if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: testInboxAgentID, RuntimeID: "runtime-a"}); err != nil {
 		t.Fatal(err)
 	}
 	markTestLaunchRunning(t, runner, testInboxAgentID)
 	runtime := &idleMessageFakeRuntime{}
 	d.canonicalRuntimes.mu.Lock()
-	d.canonicalRuntimes.slots[testInboxAgentID+"\x00runtime-a"] = &canonicalAgentRuntimeSlot{backend: runtime, running: busy}
+	d.canonicalRuntimes.slots[testInboxAgentID+"\x00runtime-a"] = &agentRuntimeSlot{backend: runtime, running: busy}
 	d.canonicalRuntimes.mu.Unlock()
 	return runtime
 }
@@ -262,7 +262,7 @@ func TestReminderFireResultAcknowledgesOnlyItsAttemptedOccurrence(t *testing.T) 
 	}
 
 	writes := make(chan []byte, 1)
-	d := &WorkspaceDaemonCore{
+	d := &Daemon{
 		reminderCache:  cache,
 		reminderWrites: writes,
 		reminderWSDone: make(chan struct{}),

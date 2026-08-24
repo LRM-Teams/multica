@@ -84,7 +84,8 @@ describe("ResearchV6NodeDetail", () => {
             occurred_at: "2026-08-17T00:00:01Z",
             title: "Searching web",
             subtext: "WebGPU compatibility",
-            tone: "warning",
+            activity_kind: "working",
+            detail_kind: "searching_web",
             body_kind: "none",
           },
           {
@@ -92,7 +93,8 @@ describe("ResearchV6NodeDetail", () => {
             occurred_at: "2026-08-17T00:00:02Z",
             title: "Running command",
             subtext: "检查 Canvas 兼容性数据",
-            tone: "running",
+            activity_kind: "working",
+            detail_kind: "running_command",
             body_kind: "command",
           },
         ]}

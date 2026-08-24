@@ -169,7 +169,7 @@ func channelGoalStateSlot(task Task) string {
 			if strings.TrimSpace(task.IssueID) == "" {
 				b.WriteString("EXECUTION GATE: this multi-agent Goal is not a code assignment. Do not edit shared project files, create a code branch or commit, push, open/merge a PR, or deploy from this chat task. Only durable control-plane setup and status/review coordination are admitted until this agent is claimed on a channel-linked Issue in the bound Project.\n")
 				if isManager {
-					b.WriteString("As group manager, establish the delivery chain in order: run `multica goal bootstrap --channel <id> --project-title <title> --repository-url <url>` to create/bind one Project and its canonical github_repo; create a channel-linked parent Issue in that Project; decompose non-overlapping child Issues for parallel agents; create one manager-owned integration/release Issue and set metadata `delivery_role=integration`; require implementers to submit typed completion reports and an independent reviewer or human to approve before done. Never assign the same deliverable to two agents.\n")
+					b.WriteString("As group manager, establish the delivery chain in order: run `multica goal bootstrap --channel <id> --project-title <title> --repository-url <url>` to create/bind one Project and its canonical github_repo; create a channel-linked parent Issue in that Project; decompose non-overlapping child Issues for parallel agents; create one manager-owned integration/release Issue and set metadata `delivery_role=integration`; require implementers to submit in_review and an independent reviewer or human to approve before done. Never assign the same deliverable to two agents.\n")
 					b.WriteString(goalManagerParallelAdmission + "\n")
 				} else {
 					b.WriteString("You have no server-owned code deliverable this wake. You may analyze and propose a bounded Issue to the group manager, then wait for assignment; do not start an independent implementation.\n")
@@ -179,7 +179,7 @@ func channelGoalStateSlot(task Task) string {
 			} else if isManager && goalIssueDeliveryRole(task) == "integration" {
 				b.WriteString("Execution admitted on the canonical integration/release Issue. Do not author a competing feature implementation. Integrate only independently reviewed Issue branches, require green CI, deploy the resulting canonical commit, and verify the deployed artifact against every Goal criterion before recording evidence.\n")
 			} else {
-				b.WriteString("Execution admitted only for this claimed implementation Issue. Acquire the Issue's executor work lease, use its canonical non-main branch and bounded paths, submit a typed completion report, and stop at in_review; never merge, deploy, or mark your own implementation done. A separate manager-owned Issue with metadata `delivery_role=integration` owns canonical merge and release.\n")
+				b.WriteString("Execution admitted only for this claimed implementation Issue. Acquire the Issue's executor work lease, use its canonical non-main branch and bounded paths, and stop at in_review; never merge, deploy, or mark your own implementation done. A separate manager-owned Issue with metadata `delivery_role=integration` owns canonical merge and release.\n")
 			}
 			switch c.ExecutionAdmission {
 			case "project_required":
@@ -298,8 +298,8 @@ func buildAssignmentPrompt(task Task) string {
 	fmt.Fprintf(&b, "- Unless your Agent Identity forbids status changes, set `%s` to `in_progress` before substantive work.\n", task.IssueID)
 	b.WriteString("- Choose DIRECT / Issue DAG / Goal Graph before work. Keep tightly coupled delivery DIRECT; when 2+ independently acceptable units can proceed without waiting—including research, data collection, implementation, testing, or review—use parallel Issue DAG roots. No confirmation is needed inside this Issue's scope, permissions, and budget. Open the `multica-working-on-issues` skill for plan format and isolation rules.\n")
 	b.WriteString("- Complete the acceptance criteria and verify proportionately to the change. Run the relevant build, tests, or behavior check; visual comparison is required only for UI or visual acceptance criteria.\n")
-	fmt.Fprintf(&b, "- When every criterion is satisfied, submit the typed report with `multica issue complete %s --summary \"...\" --evidence '0=test:<ref>' ...`; use one zero-based `INDEX=KIND:REF` evidence flag per proof and cover every criterion. This creates the visible Issue comment and moves the Issue to `in_review`; do not separately flip the status. Final assistant output is not the Issue reply.\n", task.IssueID)
-	b.WriteString("- If genuinely blocked, set the Issue to `blocked` and comment with the concrete blocker and required next action.\n")
+	fmt.Fprintf(&b, "- Deliver the outcome with `multica issue comment add %s` using `--content-stdin` with a quoted heredoc or a UTF-8 `--content-file`; never inline generated comment prose in the shell. Final assistant output is not the Issue reply.\n", task.IssueID)
+	fmt.Fprintf(&b, "- When complete, set `%s` to `in_review` unless status changes are forbidden. If genuinely blocked, set it to `blocked` and comment with the concrete blocker and required next action.\n", task.IssueID)
 	return b.String()
 }
 

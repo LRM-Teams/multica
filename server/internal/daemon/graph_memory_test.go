@@ -46,7 +46,7 @@ func TestEffectiveGraphProfilePrecedence(t *testing.T) {
 }
 
 func TestWorkspaceGraphProfileCacheRoundTrip(t *testing.T) {
-	d := &WorkspaceDaemonCore{}
+	d := &Daemon{}
 	d.rememberGraphProfile(testWSID, MemoryTypeGraph, 9, 5)
 	p, ok := d.graphProfileForWorkspace(testWSID)
 	if !ok || p.memoryType != MemoryTypeGraph || p.exploreAgents != 9 || p.exploreMaxRounds != 5 {
@@ -65,7 +65,7 @@ func TestWorkspaceGraphProfileCacheRoundTrip(t *testing.T) {
 // A task-scoped legacy profile skips the graph recall endpoint even when the
 // daemon environment selects graph memory.
 func TestGraphExecutionMemoriesTaskOverrideBeatsEnv(t *testing.T) {
-	d := &WorkspaceDaemonCore{
+	d := &Daemon{
 		cfg:    Config{MemoryType: MemoryTypeGraph},
 		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
@@ -75,7 +75,7 @@ func TestGraphExecutionMemoriesTaskOverrideBeatsEnv(t *testing.T) {
 }
 
 func TestGraphExecutionMemoriesEnvLegacySkipsRecall(t *testing.T) {
-	d := &WorkspaceDaemonCore{
+	d := &Daemon{
 		cfg:    Config{MemoryType: MemoryTypeLegacy},
 		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}

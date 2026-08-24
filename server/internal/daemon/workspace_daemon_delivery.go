@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 
@@ -24,11 +25,11 @@ type workspaceDaemonDeliveryDispatcher struct {
 }
 
 type workspaceDaemonDeliveryPause struct {
-	launchID string
-	stop     bool
+	agentInstanceID string
+	stop            bool
 }
 
-func newWorkspaceSessionDeliveryDispatcher(ctx context.Context, handle func(context.Context, protocol.AgentDeliverPayload)) *workspaceDaemonDeliveryDispatcher {
+func newWorkspaceDaemonDeliveryDispatcher(ctx context.Context, handle func(context.Context, protocol.AgentDeliverPayload)) *workspaceDaemonDeliveryDispatcher {
 	return &workspaceDaemonDeliveryDispatcher{
 		ctx: ctx, handle: handle,
 		queues: make(map[string][]protocol.AgentDeliverPayload), running: make(map[string]bool), paused: make(map[string]workspaceDaemonDeliveryPause),
@@ -37,34 +38,34 @@ func newWorkspaceSessionDeliveryDispatcher(ctx context.Context, handle func(cont
 
 // Pause holds only this Agent's deliveries while agent:start establishes its
 // provider. The socket reader and every other Agent remain independent.
-func (d *workspaceDaemonDeliveryDispatcher) Pause(agentID, launchID string) bool {
-	if d == nil || strings.TrimSpace(agentID) == "" || strings.TrimSpace(launchID) == "" {
+func (d *workspaceDaemonDeliveryDispatcher) Pause(agentID, agentInstanceID string) bool {
+	if d == nil || strings.TrimSpace(agentID) == "" || strings.TrimSpace(agentInstanceID) == "" {
 		return false
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	current, paused := d.paused[agentID]
-	if d.ctx.Err() != nil || paused && current.stop && current.launchID == launchID {
+	if d.ctx.Err() != nil || paused && current.stop && current.agentInstanceID == agentInstanceID {
 		return false
 	}
-	if paused && !current.stop && current.launchID == launchID {
+	if paused && !current.stop && current.agentInstanceID == agentInstanceID {
 		// The same immutable dispatch may be replayed before startup settles.
 		// Keep the buffer paused while allowing the socket reader to ACK it.
 		return true
 	}
-	d.paused[agentID] = workspaceDaemonDeliveryPause{launchID: launchID}
+	d.paused[agentID] = workspaceDaemonDeliveryPause{agentInstanceID: agentInstanceID}
 	return true
 }
 
 // Resume releases deliveries in their original order after agent:start has
 // published Active, provider session, and initial Activity. No delivery can
 // race those lifecycle facts onto the wire.
-func (d *workspaceDaemonDeliveryDispatcher) Resume(agentID, launchID string) {
+func (d *workspaceDaemonDeliveryDispatcher) Resume(agentID, agentInstanceID string) {
 	if d == nil {
 		return
 	}
 	d.mu.Lock()
-	if pause, ok := d.paused[agentID]; !ok || pause.stop || pause.launchID != launchID {
+	if pause, ok := d.paused[agentID]; !ok || pause.stop || pause.agentInstanceID != agentInstanceID {
 		d.mu.Unlock()
 		return
 	}
@@ -78,24 +79,24 @@ func (d *workspaceDaemonDeliveryDispatcher) Resume(agentID, launchID string) {
 
 // FenceStop supersedes a start pause with a stop-owned token. A late startup
 // completion can therefore never Resume deliveries after stop has begun.
-func (d *workspaceDaemonDeliveryDispatcher) FenceStop(agentID, launchID string) {
-	if d == nil || strings.TrimSpace(agentID) == "" || strings.TrimSpace(launchID) == "" {
+func (d *workspaceDaemonDeliveryDispatcher) FenceStop(agentID, agentInstanceID string) {
+	if d == nil || strings.TrimSpace(agentID) == "" || strings.TrimSpace(agentInstanceID) == "" {
 		return
 	}
 	d.mu.Lock()
-	d.paused[agentID] = workspaceDaemonDeliveryPause{launchID: launchID, stop: true}
+	d.paused[agentID] = workspaceDaemonDeliveryPause{agentInstanceID: agentInstanceID, stop: true}
 	delete(d.queues, agentID)
 	d.mu.Unlock()
 }
 
 // RejectStart forgets only the volatile buffer. The server still owns every
 // unACKed delivery and will replay it after a later successful start.
-func (d *workspaceDaemonDeliveryDispatcher) RejectStart(agentID, launchID string) {
+func (d *workspaceDaemonDeliveryDispatcher) RejectStart(agentID, agentInstanceID string) {
 	if d == nil {
 		return
 	}
 	d.mu.Lock()
-	if pause, ok := d.paused[agentID]; !ok || pause.stop || pause.launchID != launchID {
+	if pause, ok := d.paused[agentID]; !ok || pause.stop || pause.agentInstanceID != agentInstanceID {
 		d.mu.Unlock()
 		return
 	}
@@ -153,109 +154,135 @@ func (d *workspaceDaemonDeliveryDispatcher) drain(agentID string) {
 	}
 }
 
-// adoptWorkspaceSession publishes the Binding child's owned session as the
-// Credential Proxy / handoff lookup. The Binding child constructs this session
-// before Run; if it is not adopted, ensureWorkspaceSession could mint a second
-// empty Inbox and message send would return 409 "Message coordinator is unavailable".
-func (d *WorkspaceDaemonCore) adoptWorkspaceSession(runner *workspaceSession) error {
+func (d *Daemon) attachWorkspaceDaemon(runner *WorkspaceDaemon) {
+	if d == nil || runner == nil || runner.WorkspaceID() == "" {
+		return
+	}
+	d.workspaceDaemonMu.Lock()
+	if d.workspaceDaemons == nil {
+		d.workspaceDaemons = make(map[string]*WorkspaceDaemon)
+	}
+	d.workspaceDaemons[runner.WorkspaceID()] = runner
+	d.workspaceDaemonMu.Unlock()
+}
+
+// adoptWorkspaceDaemon publishes the Binding child's owned Runner as the
+// Credential Proxy / handoff lookup. Binding child constructs that Runner
+// before Run; if it stays off this map, ensureWorkspaceDaemon mints a second
+// empty inbox and message send returns 409 "Message coordinator is unavailable".
+func (d *Daemon) adoptWorkspaceDaemon(runner *WorkspaceDaemon) error {
 	if d == nil {
-		return errors.New("WorkspaceDaemonCore is required")
+		return errors.New("WorkspaceDaemon Daemon is required")
 	}
 	if runner == nil || runner.WorkspaceID() == "" {
 		return errors.New("WorkspaceDaemon identity is required")
 	}
-	workspaceID := strings.TrimSpace(runner.WorkspaceID())
-	if configured := strings.TrimSpace(d.cfg.WorkspaceID); configured != "" && configured != workspaceID {
-		return fmt.Errorf("WorkspaceDaemon %q does not belong to WorkspaceDaemonCore %q", workspaceID, configured)
-	}
-	d.workspaceSessionMu.Lock()
-	if current := d.workspaceSession; current != nil && current != runner && current.WorkspaceID() != workspaceID {
-		d.workspaceSessionMu.Unlock()
-		return fmt.Errorf("WorkspaceDaemonCore already owns WorkspaceDaemon %q", current.WorkspaceID())
-	}
-	d.workspaceSession = runner
-	d.workspaceSessionMu.Unlock()
+	d.attachWorkspaceDaemon(runner)
 	return nil
 }
 
-func (d *WorkspaceDaemonCore) detachWorkspaceSession(runner *workspaceSession) {
+func (d *Daemon) detachWorkspaceDaemon(runner *WorkspaceDaemon) {
 	if d == nil || runner == nil {
 		return
 	}
-	d.workspaceSessionMu.Lock()
-	if d.workspaceSession == runner {
-		d.workspaceSession = nil
+	d.workspaceDaemonMu.Lock()
+	if d.workspaceDaemons[runner.WorkspaceID()] == runner {
+		delete(d.workspaceDaemons, runner.WorkspaceID())
 	}
-	d.workspaceSessionMu.Unlock()
+	d.workspaceDaemonMu.Unlock()
 }
 
-func (d *WorkspaceDaemonCore) currentWorkspaceSession(workspaceID string) *workspaceSession {
+func (d *Daemon) currentWorkspaceDaemon(workspaceID string) *WorkspaceDaemon {
 	if d == nil {
 		return nil
 	}
-	d.workspaceSessionMu.RLock()
-	runner := d.workspaceSession
-	d.workspaceSessionMu.RUnlock()
-	if runner == nil || runner.WorkspaceID() != strings.TrimSpace(workspaceID) {
-		return nil
-	}
+	d.workspaceDaemonMu.RLock()
+	runner := d.workspaceDaemons[strings.TrimSpace(workspaceID)]
+	d.workspaceDaemonMu.RUnlock()
 	return runner
 }
 
-// ensureWorkspaceSession creates the state-owning session before a legacy
-// lifecycle path opens an Inbox. The session is not started here: socket
-// ownership remains exclusively with workspaceSession.Run.
-func (d *WorkspaceDaemonCore) ensureWorkspaceSession(workspaceID string) (*workspaceSession, error) {
+// ensureWorkspaceDaemon creates a state-owning Runner before a legacy
+// lifecycle path opens an Inbox. The Runner is not started here: socket
+// ownership remains exclusively with WorkspaceDaemon.Run.
+func (d *Daemon) ensureWorkspaceDaemon(workspaceID string) (*WorkspaceDaemon, error) {
 	workspaceID = strings.TrimSpace(workspaceID)
 	if workspaceID == "" {
 		return nil, errors.New("Workspace identity is required")
 	}
-	if runner := d.currentWorkspaceSession(workspaceID); runner != nil {
+	if runner := d.currentWorkspaceDaemon(workspaceID); runner != nil {
 		return runner, nil
 	}
-	runner, err := d.newWorkspaceSession(workspaceID)
+	runner, err := d.newWorkspaceDaemon(workspaceID)
 	if err != nil {
 		return nil, err
 	}
-	d.workspaceSessionMu.Lock()
-	if current := d.workspaceSession; current != nil {
-		d.workspaceSessionMu.Unlock()
-		if current.WorkspaceID() == workspaceID {
-			return current, nil
-		}
-		return nil, fmt.Errorf("WorkspaceDaemonCore already owns WorkspaceDaemon %q", current.WorkspaceID())
+	d.workspaceDaemonMu.Lock()
+	if current := d.workspaceDaemons[workspaceID]; current != nil {
+		d.workspaceDaemonMu.Unlock()
+		return current, nil
 	}
-	d.workspaceSession = runner
-	d.workspaceSessionMu.Unlock()
+	if d.workspaceDaemons == nil {
+		d.workspaceDaemons = make(map[string]*WorkspaceDaemon)
+	}
+	d.workspaceDaemons[workspaceID] = runner
+	d.workspaceDaemonMu.Unlock()
 	return runner, nil
 }
 
-// resolveWorkspaceSessionByAgent preserves machine-local callers that predate a
-// Workspace parameter. It returns the owning session, never its Inbox internals,
+func (d *Daemon) currentWorkspaceDaemons() []*WorkspaceDaemon {
+	if d == nil {
+		return nil
+	}
+	d.workspaceDaemonMu.RLock()
+	workspaceIDs := make([]string, 0, len(d.workspaceDaemons))
+	for workspaceID := range d.workspaceDaemons {
+		workspaceIDs = append(workspaceIDs, workspaceID)
+	}
+	sort.Strings(workspaceIDs)
+	runners := make([]*WorkspaceDaemon, 0, len(workspaceIDs))
+	for _, workspaceID := range workspaceIDs {
+		if runner := d.workspaceDaemons[workspaceID]; runner != nil {
+			runners = append(runners, runner)
+		}
+	}
+	d.workspaceDaemonMu.RUnlock()
+	return runners
+}
+
+// resolveWorkspaceDaemonByAgent preserves machine-local callers that predate a
+// Workspace parameter. It returns the owning Runner, never its Inbox internals,
 // and fails closed instead of selecting an ambiguous Workspace implicitly.
-func (d *WorkspaceDaemonCore) resolveWorkspaceSessionByAgent(agentID string) (*workspaceSession, error) {
+func (d *Daemon) resolveWorkspaceDaemonByAgent(agentID string) (*WorkspaceDaemon, error) {
 	agentID = strings.TrimSpace(agentID)
 	if agentID == "" {
 		return nil, errors.New("Agent identity is required")
 	}
-	d.workspaceSessionMu.RLock()
-	runner := d.workspaceSession
-	d.workspaceSessionMu.RUnlock()
-	if runner == nil || !runner.hasMessageInbox(agentID) {
+	var matchedRunner *WorkspaceDaemon
+	for _, runner := range d.currentWorkspaceDaemons() {
+		if !runner.hasMessageInbox(agentID) {
+			continue
+		}
+		if matchedRunner != nil {
+			return nil, fmt.Errorf("Message Inbox for Agent %q is ambiguous across WorkspaceDaemons", agentID)
+		}
+		matchedRunner = runner
+	}
+	if matchedRunner == nil {
 		return nil, fmt.Errorf("Message Inbox for Agent %q is unavailable", agentID)
 	}
-	return runner, nil
+	return matchedRunner, nil
 }
 
 // sendWorkspaceDaemonAgentFrame resolves one unambiguous Agent Inbox and sends
-// a frame on that Workspace's current serialized WorkspaceDaemon writer.
+// a frame on that Workspace's current serialized Runner writer.
 // Message delivery, launch reconciliation, and Activity share this current
-// WorkspaceDaemon connection without falling back to the legacy Task wakeup socket.
-func (d *WorkspaceDaemonCore) sendWorkspaceDaemonAgentFrame(agentID, eventType string, payload any) bool {
+// Runner connection without falling back to the legacy Task wakeup socket.
+func (d *Daemon) sendWorkspaceDaemonAgentFrame(agentID, eventType string, payload any) bool {
 	if d == nil || agentID == "" {
 		return false
 	}
-	runner, err := d.resolveWorkspaceSessionByAgent(agentID)
+	runner, err := d.resolveWorkspaceDaemonByAgent(agentID)
 	if err != nil {
 		return false
 	}

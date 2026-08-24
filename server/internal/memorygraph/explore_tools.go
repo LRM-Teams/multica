@@ -466,30 +466,45 @@ type exploreResponse struct {
 // the whole request before TraversalStore consumes a single node round.
 func (s *ExploreToolServer) handleExplore(w http.ResponseWriter, r *http.Request) {
 	var req exploreRequest
-	if !s.decodeExploreRequest(w, r, &req) { return }
+	if !s.decodeExploreRequest(w, r, &req) {
+		return
+	}
 	if strings.TrimSpace(req.TrajectoryID) == "" || len(req.NodeIDs) == 0 {
 		exploreWriteError(w, http.StatusBadRequest, "MISSING_FIELDS", "trajectory_id and node_ids are required")
 		return
 	}
 	g, err := s.loadGraph()
-	if err != nil { exploreWriteError(w, http.StatusInternalServerError, "GRAPH_ERROR", err.Error()); return }
+	if err != nil {
+		exploreWriteError(w, http.StatusInternalServerError, "GRAPH_ERROR", err.Error())
+		return
+	}
 	for _, id := range req.NodeIDs {
 		if IsStagingID(id) {
 			if _, err := s.store.ReadStagingSegment(strings.TrimPrefix(id, stagingDocPrefix)); err != nil {
-				exploreWriteError(w, http.StatusNotFound, "NODE_NOT_FOUND", "node not found"); return
+				exploreWriteError(w, http.StatusNotFound, "NODE_NOT_FOUND", "node not found")
+				return
 			}
 			continue
 		}
 		n := g.Node(id)
-		if n == nil || !s.viewAllows(n) { exploreWriteError(w, http.StatusNotFound, "NODE_NOT_FOUND", "node not found"); return }
+		if n == nil || !s.viewAllows(n) {
+			exploreWriteError(w, http.StatusNotFound, "NODE_NOT_FOUND", "node not found")
+			return
+		}
 	}
 	if _, err := s.state.RegisterTrajectory(r.Context(), req.TrajectoryID, req.NodeIDs, len(req.NodeIDs)); err != nil {
-		writeTraversalError(w, err); return
+		writeTraversalError(w, err)
+		return
 	}
 	served, round, exceeded, err := s.state.Serve(r.Context(), req.TrajectoryID, req.NodeIDs, s.cfg.MaxRounds)
-	if err != nil { writeTraversalError(w, err); return }
+	if err != nil {
+		writeTraversalError(w, err)
+		return
+	}
 	nodes := make([]exploredNode, 0, served)
-	for _, id := range req.NodeIDs[:served] { nodes = append(nodes, s.exploreNode(g, id)) }
+	for _, id := range req.NodeIDs[:served] {
+		nodes = append(nodes, s.exploreNode(g, id))
+	}
 	exploreWriteJSON(w, http.StatusOK, exploreResponse{Round: round, BudgetExceeded: exceeded, Nodes: nodes})
 }
 
@@ -505,7 +520,9 @@ func (s *ExploreToolServer) exploreNode(g *Graph, id string) exploredNode {
 }
 
 func truncateExploreBody(node *exploredNode, max int) exploredNode {
-	if len(node.Body) > max { node.Body, node.Truncated = node.Body[:max], true }
+	if len(node.Body) > max {
+		node.Body, node.Truncated = node.Body[:max], true
+	}
 	return *node
 }
 
@@ -958,19 +975,27 @@ func (m *inMemoryTraversalStore) Serve(_ context.Context, trajectoryID string, n
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	tr, err := m.lookup(trajectoryID)
-	if err != nil { return 0, 0, false, err }
+	if err != nil {
+		return 0, 0, false, err
+	}
 	if tr.rounds >= maxRounds {
 		tr.budgetBlown = true
 		return 0, tr.rounds, true, nil
 	}
 	remaining := maxRounds - tr.rounds
 	served = len(nodeIDs)
-	if served > remaining { served = remaining; tr.budgetBlown = true }
+	if served > remaining {
+		served = remaining
+		tr.budgetBlown = true
+	}
 	tr.rounds += served
 	// The handler has already resolved each served id against the pinned graph.
 	// Synthetic IDs preserve submission validation while retaining observed order.
 	for _, id := range nodeIDs[:served] {
-		if !tr.viewedSet[id] { tr.viewedSet[id] = true; tr.viewed = append(tr.viewed, id) }
+		if !tr.viewedSet[id] {
+			tr.viewedSet[id] = true
+			tr.viewed = append(tr.viewed, id)
+		}
 	}
 	return served, tr.rounds, tr.rounds >= maxRounds, nil
 }

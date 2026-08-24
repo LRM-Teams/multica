@@ -163,7 +163,7 @@ func TestMachineUpgrade_DispatchesComputerUpgradeToOneLiveBinding(t *testing.T) 
 		t.Cleanup(func() { _ = conn.Close() })
 		ready, err := json.Marshal(protocol.Message{
 			Type: protocol.EventWorkspaceDaemonReady,
-			Payload: mustMarshalJSON(protocol.WorkspaceDaemonReadyPayload{
+			Payload: mustMarshalJSON(protocol.WorkspaceReadyPayload{
 				WorkspaceID: workspaceID, DaemonInstanceID: "instance-" + workspaceID,
 				ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceDaemonAgentProcess},
 			}),
@@ -261,7 +261,7 @@ func TestMachineUpgrade_DispatchesComputerUpgradeToNextLiveBinding(t *testing.T)
 	t.Cleanup(func() { _ = conn.Close() })
 	ready, err := json.Marshal(protocol.Message{
 		Type: protocol.EventWorkspaceDaemonReady,
-		Payload: mustMarshalJSON(protocol.WorkspaceDaemonReadyPayload{
+		Payload: mustMarshalJSON(protocol.WorkspaceReadyPayload{
 			WorkspaceID: secondWorkspaceID, DaemonInstanceID: "instance-" + secondWorkspaceID,
 			ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceDaemonAgentProcess},
 		}),

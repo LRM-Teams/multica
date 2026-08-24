@@ -26,7 +26,7 @@ type agentCredentialKey struct {
 }
 
 type agentCredentialManager struct {
-	daemon  *WorkspaceDaemonCore
+	daemon  *Daemon
 	ensures singleflight.Group
 }
 
@@ -74,15 +74,15 @@ func (m *agentCredentialManager) get(ctx context.Context, key agentCredentialKey
 	}
 }
 
-func (d *WorkspaceDaemonCore) credentialManager() *agentCredentialManager {
+func (d *Daemon) credentialManager() *agentCredentialManager {
 	d.agentCredentialManagerOnce.Do(func() {
 		d.agentCredentialManager = &agentCredentialManager{daemon: d}
 	})
 	return d.agentCredentialManager
 }
 
-func (d *WorkspaceDaemonCore) messageAgentCredential(ctx context.Context, workspaceID, agentID string) (cachedAgentCredential, error) {
-	runner := d.currentWorkspaceSession(workspaceID)
+func (d *Daemon) messageAgentCredential(ctx context.Context, workspaceID, agentID string) (cachedAgentCredential, error) {
+	runner := d.currentWorkspaceDaemon(workspaceID)
 	if runner == nil {
 		return cachedAgentCredential{}, errors.New("Agent message runtime is unavailable")
 	}

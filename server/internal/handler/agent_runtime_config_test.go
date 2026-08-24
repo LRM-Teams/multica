@@ -211,7 +211,6 @@ func TestGetAgentRuntimeConfig_UnboundMachineHasNoComputer(t *testing.T) {
 	t.Cleanup(func() {
 		bg := context.Background()
 		_, _ = testPool.Exec(bg, `DELETE FROM agent WHERE id = $1`, agentID)
-		_, _ = testPool.Exec(bg, `DELETE FROM agent_runner_launch_projection WHERE runtime_id = $1`, runtimeID)
 		_, _ = testPool.Exec(bg, `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
 	})
 

@@ -575,19 +575,19 @@ const (
 	DaemonCapabilityReminderFireRequest      = "reminder:fire-request-v2"
 	// DaemonCapabilityWorkspaceDaemonAgentReset gates Raft's discrete
 	// agent:reset-workspace command plus Multica's terminal reset receipt.
-	DaemonCapabilityWorkspaceDaemonAgentReset = "workspace_runner_agent_reset_workspace_v1"
+	DaemonCapabilityWorkspaceDaemonAgentReset = "workspace_daemon_agent_reset_workspace_v1"
 	// DaemonCapabilityMachineUpgrade gates the machine-scoped upgrade
 	// operation protocol. Older daemons continue to receive no machine action
 	// and therefore cannot accidentally claim or complete an operation.
 	DaemonCapabilityMachineUpgrade = "machine_upgrade_v1"
 	// DaemonCapabilityWorkspaceDaemonAgentProcess selects the Raft-shaped
 	// agent:start / agent:stop process-control boundary.
-	DaemonCapabilityWorkspaceDaemonAgentProcess = "workspace_runner_agent_process_v1"
+	DaemonCapabilityWorkspaceDaemonAgentProcess = "workspace_daemon_agent_process_v1"
 	// DaemonCapabilityWorkspaceDaemonControlPlane selects the current ready
 	// WorkspaceDaemon as the sole carrier for heartbeat actions belonging to
 	// that Workspace. Runtime-multiplexed WS and HTTP heartbeats remain legacy
 	// adapters for older daemons and must not execute actions for this Runner.
-	DaemonCapabilityWorkspaceDaemonControlPlane = "workspace_runner_control_plane_v1"
+	DaemonCapabilityWorkspaceDaemonControlPlane = "workspace_daemon_control_plane_v1"
 )
 
 // ReminderTimerJob is the complete server-owned timer projection cached by

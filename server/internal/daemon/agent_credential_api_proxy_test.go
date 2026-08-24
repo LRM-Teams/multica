@@ -59,7 +59,7 @@ func TestCredentialProxyAgentAPIForwardsDurableCredentialAndBusinessRequest(t *t
 	}, time.Now()); err != nil {
 		t.Fatalf("write cached credential: %v", err)
 	}
-	d := &WorkspaceDaemonCore{cfg: cfg}
+	d := &Daemon{cfg: cfg}
 
 	req := httptest.NewRequest(http.MethodPost, "/api/agent/reminders/list?status=active", bytes.NewBufferString(`{"status":"active"}`))
 	req.Header.Set("Authorization", "Bearer agent-controlled-token")
@@ -93,7 +93,7 @@ func TestCredentialProxyAgentAPIRejectsRetiredExecutionHeaders(t *testing.T) {
 	var calls int
 	upstream := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { calls++ }))
 	defer upstream.Close()
-	d := &WorkspaceDaemonCore{cfg: Config{ServerBaseURL: upstream.URL}}
+	d := &Daemon{cfg: Config{ServerBaseURL: upstream.URL}}
 
 	for _, header := range []string{"X-Task-ID", "X-Agent-Inbox-Event-ID", "X-Agent-Inbox-Delivery-ID", "X-Agent-Inbox-Lease-Token"} {
 		t.Run(strings.ToLower(header), func(t *testing.T) {
@@ -305,7 +305,7 @@ func TestCredentialProxyAssociatesResponseWithIngressContextSnapshot(t *testing.
 	}, time.Now()); err != nil {
 		t.Fatalf("write cached credential: %v", err)
 	}
-	d := &WorkspaceDaemonCore{cfg: cfg}
+	d := &Daemon{cfg: cfg}
 	turn1 := d.beginCanonicalActionTurn("agent-1")
 	d.SetActiveProviderToolContext(ActiveProviderToolContext{
 		AgentID: "agent-1", CallID: "tool-1", ToolCallID: "tool-1", TurnToken: turn1,
@@ -332,7 +332,7 @@ func TestCredentialProxyAssociatesResponseWithIngressContextSnapshot(t *testing.
 }
 
 func TestCanonicalActionTurnsMarkSameAgentOverlapAmbiguous(t *testing.T) {
-	d := &WorkspaceDaemonCore{}
+	d := &Daemon{}
 	turn1 := d.beginCanonicalActionTurn("agent-1")
 	context1 := ActiveProviderToolContext{AgentID: "agent-1", CallID: "tool-1", ToolCallID: "tool-1", TurnToken: turn1}
 	d.SetActiveProviderToolContext(context1)
@@ -363,7 +363,7 @@ func TestCanonicalActionTurnsMarkSameAgentOverlapAmbiguous(t *testing.T) {
 }
 
 func TestCanonicalActionTurnMarksParallelToolsAmbiguous(t *testing.T) {
-	d := &WorkspaceDaemonCore{}
+	d := &Daemon{}
 	turn := d.beginCanonicalActionTurn("agent-1")
 	d.SetActiveProviderToolContext(ActiveProviderToolContext{AgentID: "agent-1", CallID: "tool-1", ToolCallID: "tool-1", TurnToken: turn})
 	d.SetActiveProviderToolContext(ActiveProviderToolContext{AgentID: "agent-1", CallID: "tool-2", ToolCallID: "tool-2", TurnToken: turn})
@@ -444,7 +444,7 @@ func TestCredentialProxyOverflowCompletesWithoutAssociation(t *testing.T) {
 	}
 }
 
-func newCredentialProxyTestDaemon(t *testing.T, status int, responseBody string) *WorkspaceDaemonCore {
+func newCredentialProxyTestDaemon(t *testing.T, status int, responseBody string) *Daemon {
 	t.Helper()
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(status)
@@ -459,10 +459,10 @@ func newCredentialProxyTestDaemon(t *testing.T, status int, responseBody string)
 	}, time.Now()); err != nil {
 		t.Fatalf("write cached credential: %v", err)
 	}
-	return &WorkspaceDaemonCore{cfg: cfg}
+	return &Daemon{cfg: cfg}
 }
 
-func serveCredentialProxyTestRequest(t *testing.T, d *WorkspaceDaemonCore, method, path, body string) *httptest.ResponseRecorder {
+func serveCredentialProxyTestRequest(t *testing.T, d *Daemon, method, path, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	req.Header.Set("X-Agent-ID", "agent-1")

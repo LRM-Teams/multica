@@ -141,8 +141,8 @@ func TestAgentAppInboxAckPersistenceFailureKeepsReplayableState(t *testing.T) {
 
 func TestAgentAppInboxNoticeUsesContentFreeIdleInputAndSuppressesDuplicate(t *testing.T) {
 	runtime := &idleMessageFakeRuntime{}
-	pool := newCanonicalAgentRuntimePool()
-	pool.slots[testInboxAgentID+"\x00runtime-1"] = &canonicalAgentRuntimeSlot{backend: runtime}
+	pool := newAgentRuntimePool()
+	pool.slots[testInboxAgentID+"\x00runtime-1"] = &agentRuntimeSlot{backend: runtime}
 	notice := agent.ResidentPendingNotice{PendingAppItems: 2}
 	if err := pool.deliverAppInboxNotice(context.Background(), testInboxAgentID, "runtime-1", notice, "items-a"); err != nil {
 		t.Fatalf("deliver idle App Inbox notice: %v", err)

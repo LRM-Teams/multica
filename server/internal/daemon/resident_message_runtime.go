@@ -33,7 +33,7 @@ func residentPiRunIdentity(runID, runAgentID string) (*agent.PiRunIdentity, erro
 // process needed by the MessageCoordinator. Its input is deliberately only
 // stable Agent placement/configuration; Message delivery never constructs a
 // Task or a current-turn transport envelope.
-func (d *WorkspaceDaemonCore) ensureResidentMessageRuntime(ctx context.Context, agentID, runtimeID string, runIdentity *agent.PiRunIdentity) error {
+func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runtimeID string, runIdentity *agent.PiRunIdentity) error {
 	if d == nil || d.canonicalRuntimes == nil {
 		return errors.New("resident Message runtime is not configured")
 	}
@@ -159,7 +159,7 @@ func (d *WorkspaceDaemonCore) ensureResidentMessageRuntime(ctx context.Context, 
 	if runtime.Provider == agent.ProviderPi {
 		addPiMemoryFastModeEnv(agentEnv)
 	}
-	residentLaunchID := "resident-" + uuid.NewString()
+	residentAgentInstanceID := "resident-" + uuid.NewString()
 	// Resume only the id last applied by agent:start for this DaemonCore.
 	// Do not invent a disk-backed pointer; a new process starts empty until
 	// the next start payload, same as Raft idleRestartSnapshots.
@@ -202,7 +202,7 @@ func (d *WorkspaceDaemonCore) ensureResidentMessageRuntime(ctx context.Context, 
 		return fmt.Errorf("resident Message runtime identity: %w", err)
 	}
 
-	lease, err := d.canonicalRuntimes.acquire(canonicalAgentRuntimeAcquireRequest{
+	lease, err := d.canonicalRuntimes.acquire(agentRuntimeAcquireRequest{
 		Identity:           identity,
 		CanonicalSessionID: resumeSessionID,
 		BackendConfig: agent.Config{
@@ -229,7 +229,7 @@ func (d *WorkspaceDaemonCore) ensureResidentMessageRuntime(ctx context.Context, 
 			transport, err := d.prepareAgentProxyCLITransport(
 				InboxKey{WorkspaceID: config.WorkspaceID, AgentID: config.Agent.ID},
 				config.RuntimeID,
-				residentLaunchID,
+				residentAgentInstanceID,
 				selfBin,
 			)
 			if err != nil {
@@ -239,7 +239,6 @@ func (d *WorkspaceDaemonCore) ensureResidentMessageRuntime(ctx context.Context, 
 			environment["PATH"] = filepath.Dir(transport.wrapperPath) + string(os.PathListSeparator) + environment["PATH"]
 			return func() { _ = transport.Close() }, nil
 		},
-		Context: ctx,
 	})
 	if err != nil {
 		return fmt.Errorf("acquire resident Message runtime: %w", err)
@@ -261,7 +260,7 @@ func (d *WorkspaceDaemonCore) ensureResidentMessageRuntime(ctx context.Context, 
 // a provider that did not start cannot remain registered as resident. Idle
 // backends detach immediately. If an older turn is still draining, force the
 // provider process to exit and let that turn's owner detach the fenced backend.
-func (d *WorkspaceDaemonCore) ensureResidentProviderProcess(ctx context.Context, agentID, runtimeID string) error {
+func (d *Daemon) ensureResidentProviderProcess(ctx context.Context, agentID, runtimeID string) error {
 	if err := d.canonicalRuntimes.ensureResidentProcess(ctx, agentID, runtimeID); err != nil {
 		startErr := fmt.Errorf("start resident provider process: %w", err)
 		cleanupErr := d.canonicalRuntimes.invalidateSession(agentID, runtimeID)
@@ -282,11 +281,11 @@ func (d *WorkspaceDaemonCore) ensureResidentProviderProcess(ctx context.Context,
 
 // ensureResidentAgentCredential is the durable Agent identity for Message
 // delivery. It never creates a task-shaped execution record.
-func (d *WorkspaceDaemonCore) ensureResidentAgentCredential(ctx context.Context, workspaceID, runtimeID, agentID string) (string, error) {
+func (d *Daemon) ensureResidentAgentCredential(ctx context.Context, workspaceID, runtimeID, agentID string) (string, error) {
 	return d.ensureAgentCredential(ctx, workspaceID, runtimeID, agentID, nil)
 }
 
-func (d *WorkspaceDaemonCore) canonicalResidentMessageFactory(provider string) canonicalRuntimeBackendFactory {
+func (d *Daemon) canonicalResidentMessageFactory(provider string) canonicalRuntimeBackendFactory {
 	if d != nil && d.canonicalResidentFactoryOverride != nil {
 		return d.canonicalResidentFactoryOverride
 	}
@@ -303,21 +302,21 @@ func newCanonicalPiResidentBackend(cfg agent.Config) (agent.Backend, func(), err
 	return backend, backend.Close, nil
 }
 
-func (d *WorkspaceDaemonCore) prepareResidentPiRun(ctx context.Context, agentID, runtimeID string, identity agent.PiRunIdentity) (agent.PiRunBinding, error) {
+func (d *Daemon) prepareResidentPiRun(ctx context.Context, agentID, runtimeID string, identity agent.PiRunIdentity) (agent.PiRunBinding, error) {
 	if err := d.ensureResidentMessageRuntime(ctx, agentID, runtimeID, &identity); err != nil {
 		return agent.PiRunBinding{}, err
 	}
 	return d.canonicalRuntimes.bindResidentPiRunIdentity(ctx, agentID, runtimeID, identity)
 }
 
-func (d *WorkspaceDaemonCore) revokeResidentPiRun(agentID, runtimeID string, identity agent.PiRunIdentity) error {
+func (d *Daemon) revokeResidentPiRun(agentID, runtimeID string, identity agent.PiRunIdentity) error {
 	if d == nil || d.canonicalRuntimes == nil {
 		return nil
 	}
 	return d.canonicalRuntimes.revokeResidentPiRunIdentity(agentID, runtimeID, identity)
 }
 
-func (d *WorkspaceDaemonCore) handlePreparePiRunRequest(ctx context.Context, req protocol.PreparePiRunRequestPayload, writes chan<- []byte) {
+func (d *Daemon) handlePreparePiRunRequest(ctx context.Context, req protocol.PreparePiRunRequestPayload, writes chan<- []byte) {
 	response := protocol.PreparePiRunResponsePayload{RequestID: req.RequestID}
 	binding, err := d.prepareResidentPiRun(ctx, req.AgentID, req.RuntimeID, agent.PiRunIdentity{RunID: req.RunID, RunAgentID: req.RunAgentID})
 	if err != nil {
@@ -329,7 +328,7 @@ func (d *WorkspaceDaemonCore) handlePreparePiRunRequest(ctx context.Context, req
 	d.sendDaemonFrame(protocol.EventDaemonPreparePiRunResponse, response, req.RequestID, writes)
 }
 
-func (d *WorkspaceDaemonCore) handleRevokePiRunRequest(req protocol.RevokePiRunRequestPayload, writes chan<- []byte) {
+func (d *Daemon) handleRevokePiRunRequest(req protocol.RevokePiRunRequestPayload, writes chan<- []byte) {
 	response := protocol.RevokePiRunResponsePayload{RequestID: req.RequestID}
 	if err := d.revokeResidentPiRun(req.AgentID, req.RuntimeID, agent.PiRunIdentity{RunID: req.RunID, RunAgentID: req.RunAgentID}); err != nil {
 		response.Error = err.Error()

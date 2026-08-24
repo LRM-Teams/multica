@@ -16,45 +16,43 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-var _ interface{ Run(context.Context) } = (*workspaceSession)(nil)
+var _ interface{ Run(context.Context) } = (*WorkspaceDaemon)(nil)
 
 func TestWorkspaceDaemonConstructionRequiresFixedIdentity(t *testing.T) {
-	runtimes := newCanonicalAgentRuntimePool()
-	base := workspaceSessionConfig{
+	runtimes := newAgentRuntimePool()
+	base := WorkspaceDaemonConfig{
 		DaemonID: "daemon-1", DaemonInstanceID: "daemon-instance-1", WorkspaceID: "workspace-1",
 	}
-	dependencies := workspaceSessionDependencies{
+	dependencies := workspaceDaemonDependencies{
 		client: NewClient(""), runtimes: runtimes,
-		processAdmission:      runtimes.managedProcessAdmission(),
 		openInbox:             func(InboxKey, string) (*MessageCoordinator, error) { return nil, nil },
 		runtimeIDs:            func() []string { return []string{"runtime-1"} },
 		ensureResidentRuntime: func(context.Context, string, string, *agent.PiRunIdentity) error { return nil },
 	}
-	for name, mutate := range map[string]func(*workspaceSessionConfig){
-		"Daemon":          func(config *workspaceSessionConfig) { config.DaemonID = "" },
-		"Daemon instance": func(config *workspaceSessionConfig) { config.DaemonInstanceID = "" },
-		"Workspace":       func(config *workspaceSessionConfig) { config.WorkspaceID = "" },
+	for name, mutate := range map[string]func(*WorkspaceDaemonConfig){
+		"Daemon":          func(config *WorkspaceDaemonConfig) { config.DaemonID = "" },
+		"Daemon instance": func(config *WorkspaceDaemonConfig) { config.DaemonInstanceID = "" },
+		"Workspace":       func(config *WorkspaceDaemonConfig) { config.WorkspaceID = "" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			config := base
 			mutate(&config)
-			if _, err := newWorkspaceSession(config, dependencies); err == nil {
+			if _, err := newWorkspaceDaemon(config, dependencies); err == nil {
 				t.Fatal("constructor accepted missing fixed identity")
 			}
 		})
 	}
-	for name, mutate := range map[string]func(*workspaceSessionDependencies){
-		"client":            func(dependencies *workspaceSessionDependencies) { dependencies.client = nil },
-		"runtimes":          func(dependencies *workspaceSessionDependencies) { dependencies.runtimes = nil },
-		"process admission": func(dependencies *workspaceSessionDependencies) { dependencies.processAdmission = nil },
-		"Inbox factory":     func(dependencies *workspaceSessionDependencies) { dependencies.openInbox = nil },
-		"Runtime scope":     func(dependencies *workspaceSessionDependencies) { dependencies.runtimeIDs = nil },
-		"resident Runtime":  func(dependencies *workspaceSessionDependencies) { dependencies.ensureResidentRuntime = nil },
+	for name, mutate := range map[string]func(*workspaceDaemonDependencies){
+		"client":           func(dependencies *workspaceDaemonDependencies) { dependencies.client = nil },
+		"runtimes":         func(dependencies *workspaceDaemonDependencies) { dependencies.runtimes = nil },
+		"Inbox factory":    func(dependencies *workspaceDaemonDependencies) { dependencies.openInbox = nil },
+		"Runtime scope":    func(dependencies *workspaceDaemonDependencies) { dependencies.runtimeIDs = nil },
+		"resident Runtime": func(dependencies *workspaceDaemonDependencies) { dependencies.ensureResidentRuntime = nil },
 	} {
 		t.Run(name, func(t *testing.T) {
 			candidate := dependencies
 			mutate(&candidate)
-			if _, err := newWorkspaceSession(base, candidate); err == nil {
+			if _, err := newWorkspaceDaemon(base, candidate); err == nil {
 				t.Fatal("constructor accepted missing dependency")
 			}
 		})
@@ -66,7 +64,7 @@ func TestDaemonConnectionURLIsWorkspaceScoped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "wss://api.example.com/multica" + protocol.WorkspaceDaemonConnectPath
+	const want = "wss://api.example.com/multica/api/daemon/connect?workspace_id=workspace-1"
 	if got != want {
 		t.Fatalf("daemonConnectionURL() = %q, want %q", got, want)
 	}
@@ -121,7 +119,7 @@ func TestCurrentComputerDoesNotStartLegacyHTTPHeartbeatControlCarrier(t *testing
 }
 
 func TestWorkspaceDaemonAdvertisesControlPlaneOnlyWithBothDirections(t *testing.T) {
-	hasControl := func(runner *workspaceSession) bool {
+	hasControl := func(runner *WorkspaceDaemon) bool {
 		for _, capability := range runner.activeCapabilities() {
 			if capability == protocol.DaemonCapabilityWorkspaceDaemonControlPlane {
 				return true
@@ -131,13 +129,13 @@ func TestWorkspaceDaemonAdvertisesControlPlaneOnlyWithBothDirections(t *testing.
 	}
 	tests := []struct {
 		name    string
-		runner  *workspaceSession
+		runner  *WorkspaceDaemon
 		control bool
 	}{
-		{name: "neither", runner: &workspaceSession{}},
-		{name: "send only", runner: &workspaceSession{controlHeartbeatPayload: func(string) protocol.DaemonHeartbeatRequestPayload { return protocol.DaemonHeartbeatRequestPayload{} }}},
-		{name: "ack only", runner: &workspaceSession{controlHeartbeatAck: func(context.Context, *HeartbeatResponse) {}}},
-		{name: "both", runner: &workspaceSession{
+		{name: "neither", runner: &WorkspaceDaemon{}},
+		{name: "send only", runner: &WorkspaceDaemon{controlHeartbeatPayload: func(string) protocol.DaemonHeartbeatRequestPayload { return protocol.DaemonHeartbeatRequestPayload{} }}},
+		{name: "ack only", runner: &WorkspaceDaemon{controlHeartbeatAck: func(context.Context, *HeartbeatResponse) {}}},
+		{name: "both", runner: &WorkspaceDaemon{
 			controlHeartbeatPayload: func(string) protocol.DaemonHeartbeatRequestPayload { return protocol.DaemonHeartbeatRequestPayload{} },
 			controlHeartbeatAck:     func(context.Context, *HeartbeatResponse) {},
 		}, control: true},
@@ -158,7 +156,7 @@ func TestWorkspaceDaemonControlHeartbeatUsesExactWorkspaceRuntimeSet(t *testing.
 	d.runtimeIndex["runtime-2"] = Runtime{ID: "runtime-2", WorkspaceID: "workspace-1"}
 	d.runtimeIndex["runtime-other"] = Runtime{ID: "runtime-other", WorkspaceID: "workspace-other"}
 	d.mu.Unlock()
-	runner, err := d.newWorkspaceSession("workspace-1")
+	runner, err := d.newWorkspaceDaemon("workspace-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +204,7 @@ func TestWorkspaceDaemonControlHeartbeatUsesExactWorkspaceRuntimeSet(t *testing.
 }
 
 func TestWorkspaceDaemonReconnectReplacesConnectionContextAndWriter(t *testing.T) {
-	runner := &workspaceSession{}
+	runner := &WorkspaceDaemon{}
 	var firstClosed, secondClosed atomic.Int64
 	first := newDaemonConnection("workspace-1", context.Background(), func(string, any) error { return nil }, func() { firstClosed.Add(1) })
 	second := newDaemonConnection("workspace-1", context.Background(), func(string, any) error { return nil }, func() { secondClosed.Add(1) })
@@ -234,7 +232,7 @@ func TestWorkspaceDaemonReconnectReplacesConnectionContextAndWriter(t *testing.T
 	}
 }
 
-func TestComputerCoreSupervisesWorkspaceDaemonCoreProcess(t *testing.T) {
+func TestComputerSupervisesProcessAndBindingChildOwnsWorkspaceDaemon(t *testing.T) {
 	daemonRaw, err := os.ReadFile("workspace_daemon.go")
 	if err != nil {
 		t.Fatal(err)
@@ -243,21 +241,21 @@ func TestComputerCoreSupervisesWorkspaceDaemonCoreProcess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	supervisorRaw, err := os.ReadFile("../computer/daemon_core.go")
+	supervisorRaw, err := os.ReadFile("../computer/binding_supervisor.go")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(daemonRaw), "superviseWorkspaceDaemon") || strings.Contains(string(daemonRaw), "workspaceDaemonChildren") {
-		t.Fatal("daemon package still contains ComputerCore process supervision")
+		t.Fatal("daemon package still contains Computer Host process supervision")
 	}
 	if !strings.Contains(string(childRaw), "runner.Run(runCtx)") {
-		t.Fatal("Binding child does not own workspaceSession.Run")
+		t.Fatal("Binding child does not own WorkspaceDaemon.Run")
 	}
-	if !strings.Contains(string(childRaw), "adoptWorkspaceSession(runner)") {
+	if !strings.Contains(string(childRaw), "adoptWorkspaceDaemon(runner)") {
 		t.Fatal("Binding child does not publish its WorkspaceDaemon for Credential Proxy lookup")
 	}
-	if !strings.Contains(string(supervisorRaw), "type DaemonCore struct") || !strings.Contains(string(supervisorRaw), "child.Wait()") {
-		t.Fatal("DaemonCore does not own WorkspaceDaemonCore process supervision")
+	if !strings.Contains(string(supervisorRaw), "type BindingSupervisor struct") || !strings.Contains(string(supervisorRaw), "child.Wait()") {
+		t.Fatal("computer package does not own Binding child supervision")
 	}
 }
 
@@ -271,8 +269,8 @@ func TestDaemonHasNoWorkspaceDaemonTransportOrGenerationMaps(t *testing.T) {
 			"runnerMessageTransports",
 			"runnerMessageGeneration",
 			"workspaceDaemonMessageTransport",
-			"attachWorkspaceSessionMessageTransport",
-			"detachWorkspaceSessionMessageTransport",
+			"attachWorkspaceDaemonMessageTransport",
+			"detachWorkspaceDaemonMessageTransport",
 		} {
 			if strings.Contains(string(raw), forbidden) {
 				t.Fatalf("%s still contains obsolete transport ownership %q", path, forbidden)
@@ -281,9 +279,9 @@ func TestDaemonHasNoWorkspaceDaemonTransportOrGenerationMaps(t *testing.T) {
 	}
 }
 
-func TestWorkspaceDaemonSessionInternalsStayInsideWorkspaceDaemonFiles(t *testing.T) {
-	daemonType := reflect.TypeOf((*WorkspaceDaemonCore)(nil))
-	for _, owner := range []reflect.Type{reflect.TypeOf(workspaceSession{}), reflect.TypeOf(workspaceSessionDependencies{})} {
+func TestWorkspaceDaemonInternalsDoNotEscapeRunnerModule(t *testing.T) {
+	daemonType := reflect.TypeOf((*Daemon)(nil))
+	for _, owner := range []reflect.Type{reflect.TypeOf(WorkspaceDaemon{}), reflect.TypeOf(workspaceDaemonDependencies{})} {
 		for i := 0; i < owner.NumField(); i++ {
 			field := owner.Field(i)
 			if field.Type == daemonType {
@@ -313,7 +311,7 @@ func TestWorkspaceDaemonSessionInternalsStayInsideWorkspaceDaemonFiles(t *testin
 			"candidateRunner.activity", "candidateRunner.messageCoordinator",
 		} {
 			if strings.Contains(string(raw), forbidden) {
-				t.Errorf("%s reaches through workspaceSession ownership via %q", path, forbidden)
+				t.Errorf("%s reaches through WorkspaceDaemon ownership via %q", path, forbidden)
 			}
 		}
 		return nil
@@ -324,36 +322,35 @@ func TestWorkspaceDaemonSessionInternalsStayInsideWorkspaceDaemonFiles(t *testin
 }
 
 func TestWorkspaceDaemonOwnsLocalStateAndSharesMachineDependencies(t *testing.T) {
-	runtimes := newCanonicalAgentRuntimePool()
+	runtimes := newAgentRuntimePool()
 	diagnostics := &runnerDiagnosticRegistry{}
-	dependencies := workspaceSessionDependencies{
+	dependencies := workspaceDaemonDependencies{
 		client: NewClient(""), runtimes: runtimes,
-		processAdmission:      runtimes.managedProcessAdmission(),
 		diagnostics:           diagnostics,
 		openInbox:             func(InboxKey, string) (*MessageCoordinator, error) { return nil, nil },
 		runtimeIDs:            func() []string { return []string{"runtime-1"} },
 		ensureResidentRuntime: func(context.Context, string, string, *agent.PiRunIdentity) error { return nil },
 	}
-	first, err := newWorkspaceSession(workspaceSessionConfig{
+	first, err := newWorkspaceDaemon(WorkspaceDaemonConfig{
 		DaemonID: "daemon-1", DaemonInstanceID: "instance-1", WorkspaceID: "workspace-1",
 	}, dependencies)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := newWorkspaceSession(workspaceSessionConfig{
+	second, err := newWorkspaceDaemon(WorkspaceDaemonConfig{
 		DaemonID: "daemon-1", DaemonInstanceID: "instance-1", WorkspaceID: "workspace-2",
 	}, dependencies)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if first.runtimes != runtimes || first.diagnostics != diagnostics {
-		t.Fatal("WorkspaceDaemon copied or replaced a machine-wide dependency")
+		t.Fatal("Runner copied or replaced a machine-wide dependency")
 	}
 	if first.processes == nil || first.activity == nil || first.inboxes == nil {
-		t.Fatal("WorkspaceDaemon local state was not constructed")
+		t.Fatal("Runner local state was not constructed")
 	}
 	if first.processes == second.processes || first.activity == second.activity || first.inboxes == second.inboxes {
-		t.Fatal("different WorkspaceDaemons share WorkspaceDaemon-owned state")
+		t.Fatal("different WorkspaceDaemons share Runner-owned state")
 	}
 	if first.inboxes.workspaceID != "workspace-1" || second.inboxes.workspaceID != "workspace-2" {
 		t.Fatal("Inbox registry slots lost their fixed Workspace scope")
@@ -364,17 +361,17 @@ func TestWorkspaceDaemonOwnsLocalStateAndSharesMachineDependencies(t *testing.T)
 }
 
 func TestDaemonBuildsWorkspaceDaemonFromSharedOwners(t *testing.T) {
-	d := New(Config{DaemonID: "daemon-1", MaxAgentProcesses: 3}, nil)
+	d := New(Config{DaemonID: "daemon-1"}, nil)
 	d.runnerInstanceID = "instance-1"
 	d.runnerDiagnostics = &runnerDiagnosticRegistry{}
-	runner, err := d.newWorkspaceSession("workspace-1")
+	runner, err := d.newWorkspaceDaemon("workspace-1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if runner.runtimes != d.canonicalRuntimes || runner.diagnostics != d.runnerDiagnostics {
 		t.Fatal("Daemon did not inject its machine-wide owners")
 	}
-	if runner.processes.admission == nil {
-		t.Fatal("Daemon did not inject machine-wide process admission")
+	if runner.processes == nil {
+		t.Fatal("Daemon did not construct the Agent process manager")
 	}
 }

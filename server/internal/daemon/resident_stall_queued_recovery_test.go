@@ -14,9 +14,9 @@ import (
 // stalledRecoveryPool returns a pool holding one idle slot with a live test
 // backend, plus the backend itself, so a test can age the slot's activity
 // stamp and drive recoverStalledSlotForQueuedMessage directly.
-func stalledRecoveryPool(t *testing.T, window time.Duration) (*canonicalAgentRuntimePool, *canonicalRuntimeTestBackend, *canonicalAgentRuntimeSlot) {
+func stalledRecoveryPool(t *testing.T, window time.Duration) (*agentRuntimePool, *canonicalRuntimeTestBackend, *agentRuntimeSlot) {
 	t.Helper()
-	pool := newCanonicalAgentRuntimePool()
+	pool := newAgentRuntimePool()
 	pool.setResidentStallWatchdog(window)
 	probe := &canonicalRuntimeFactoryProbe{}
 	identity := canonicalRuntimeIdentityForTest(t, "model-a", map[string]string{
@@ -25,7 +25,7 @@ func stalledRecoveryPool(t *testing.T, window time.Duration) (*canonicalAgentRun
 		"MULTICA_AGENT_ID":     "agent-a",
 		"MULTICA_TASK_ID":      "turn-a",
 	})
-	lease, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
+	lease, err := pool.acquire(agentRuntimeAcquireRequest{
 		Identity: identity,
 		Factory:  probe.factory,
 	})
@@ -46,7 +46,7 @@ func stalledRecoveryPool(t *testing.T, window time.Duration) (*canonicalAgentRun
 	return pool, probe.backends[0], slot
 }
 
-func ageSlotActivity(slot *canonicalAgentRuntimeSlot, age time.Duration) {
+func ageSlotActivity(slot *agentRuntimeSlot, age time.Duration) {
 	slot.mu.Lock()
 	slot.lastRuntimeActivityAt = time.Now().Add(-age)
 	slot.mu.Unlock()
@@ -163,7 +163,7 @@ func TestRecoverStalledSlotForQueuedMessageIsDisabledWithoutWindow(t *testing.T)
 // continuously. Without a re-fire guard that cadence would fire one kill per
 // redelivery while the first teardown is still in flight.
 func TestRecoverStalledSlotForQueuedMessageDoesNotRefireWhileRecovering(t *testing.T) {
-	pool := newCanonicalAgentRuntimePool()
+	pool := newAgentRuntimePool()
 	pool.setResidentStallWatchdog(15 * time.Minute)
 	probe := &canonicalRuntimeFactoryProbe{}
 	identity := canonicalRuntimeIdentityForTest(t, "model-a", map[string]string{
@@ -172,7 +172,7 @@ func TestRecoverStalledSlotForQueuedMessageDoesNotRefireWhileRecovering(t *testi
 		"MULTICA_AGENT_ID":     "agent-a",
 		"MULTICA_TASK_ID":      "turn-a",
 	})
-	lease, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
+	lease, err := pool.acquire(agentRuntimeAcquireRequest{
 		Identity: identity,
 		Factory:  probe.factory,
 	})
@@ -251,7 +251,7 @@ func (b *wedgedResidentBackend) ForceKill() error {
 func (b *wedgedResidentBackend) Close() {}
 
 func TestForceInvalidateReleasesWedgedRunningSlot(t *testing.T) {
-	pool := newCanonicalAgentRuntimePool()
+	pool := newAgentRuntimePool()
 	backend := newWedgedResidentBackend()
 	identity := canonicalRuntimeIdentityForTest(t, "model-a", map[string]string{
 		"MULTICA_SERVER_URL":   "https://multica.example",
@@ -259,7 +259,7 @@ func TestForceInvalidateReleasesWedgedRunningSlot(t *testing.T) {
 		"MULTICA_AGENT_ID":     "agent-a",
 		"MULTICA_TASK_ID":      "turn-a",
 	})
-	lease, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
+	lease, err := pool.acquire(agentRuntimeAcquireRequest{
 		Identity: identity,
 		Factory: func(agent.Config) (agent.Backend, func(), error) {
 			return backend, func() {}, nil
@@ -327,7 +327,7 @@ func TestAcceptMessageDeliveryDeferredRecoversStalledSlot(t *testing.T) {
 	markTestLaunchRunning(t, runner, "agent-1")
 
 	d.canonicalRuntimes.setResidentStallWatchdog(15 * time.Minute)
-	slot := &canonicalAgentRuntimeSlot{backend: &idleMessageFakeRuntime{}}
+	slot := &agentRuntimeSlot{backend: &idleMessageFakeRuntime{}}
 	d.canonicalRuntimes.slots["agent-1\x00runtime-1"] = slot
 	ageSlotActivity(slot, 16*time.Minute)
 
@@ -376,7 +376,7 @@ func TestAcceptMessageDeliveryDeferredSparesRecentlyActiveSlot(t *testing.T) {
 	markTestLaunchRunning(t, runner, "agent-1")
 
 	d.canonicalRuntimes.setResidentStallWatchdog(15 * time.Minute)
-	slot := &canonicalAgentRuntimeSlot{backend: &idleMessageFakeRuntime{}}
+	slot := &agentRuntimeSlot{backend: &idleMessageFakeRuntime{}}
 	d.canonicalRuntimes.slots["agent-1\x00runtime-1"] = slot
 	ageSlotActivity(slot, time.Minute)
 

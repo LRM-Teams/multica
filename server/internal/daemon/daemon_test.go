@@ -41,6 +41,7 @@ func TestDaemonRegistrationCapabilities_GatesCredentialTransport(t *testing.T) {
 	if !containsString(legacy, protocol.DaemonCapabilityReminderFireRequest) {
 		t.Fatalf("registration missing %q: %#v", protocol.DaemonCapabilityReminderFireRequest, legacy)
 	}
+
 	capable := daemonRegistrationCapabilities(true)
 	if !containsString(capable, protocol.DaemonCapabilityAgentCredentialTransport) {
 		t.Fatalf("capable registration missing %q: %#v", protocol.DaemonCapabilityAgentCredentialTransport, capable)
@@ -116,7 +117,7 @@ func TestDaemonRegister_RevokedWorkspaceBindingDoesNotFallbackToSession(t *testi
 	c.SetWorkspaceDaemonToken("ws-1", "mdt-old", time.Now().Add(time.Hour))
 	c.SetRuntimeDaemonToken("old-rt", "mdt-old", time.Now().Add(time.Hour))
 
-	d := &WorkspaceDaemonCore{
+	d := &Daemon{
 		cfg: Config{
 			DaemonID: "daemon-1",
 			Agents: map[string]AgentEntry{
@@ -771,7 +772,7 @@ func TestDrainInboxTaskAttachesLease(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	d := &WorkspaceDaemonCore{
+	d := &Daemon{
 		client: NewClient(srv.URL),
 		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
@@ -846,7 +847,7 @@ func TestDrainInboxTask_FoldsSameConversationBatch(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	d := &WorkspaceDaemonCore{
+	d := &Daemon{
 		client: NewClient(srv.URL),
 		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
@@ -937,7 +938,7 @@ func TestDrainInboxTask_AcksNonRunnableThenFoldsRunnable(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	d := &WorkspaceDaemonCore{
+	d := &Daemon{
 		client: NewClient(srv.URL),
 		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
@@ -1006,7 +1007,7 @@ func TestHandleTask_InboxCompleteUsesInboxEndpoint(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	d := &WorkspaceDaemonCore{
+	d := &Daemon{
 		client:             NewClient(srv.URL),
 		logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
 		workspaces:         make(map[string]*workspaceState),
@@ -1087,7 +1088,7 @@ func TestHandleTask_InboxUsageStartsExecutionBeforeProvider(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	d := &WorkspaceDaemonCore{
+	d := &Daemon{
 		client:             NewClient(srv.URL),
 		logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
 		workspaces:         make(map[string]*workspaceState),
@@ -1172,7 +1173,7 @@ func TestHandleTask_InboxFailureUsesInboxEndpointWithClassifier(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	d := &WorkspaceDaemonCore{
+	d := &Daemon{
 		client:             NewClient(srv.URL),
 		logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
 		workspaces:         make(map[string]*workspaceState),
@@ -1213,7 +1214,7 @@ func TestHandleTask_InboxFailureUsesInboxEndpointWithClassifier(t *testing.T) {
 func TestAcquireAgentWakeSlotSerializesSameLaneAndAllowsDifferentLanes(t *testing.T) {
 	t.Parallel()
 
-	d := &WorkspaceDaemonCore{}
+	d := &Daemon{}
 	firstRelease, err := d.acquireAgentWakeSlot(context.Background(), "agent-a:conversation")
 	if err != nil {
 		t.Fatalf("acquire first agent-a slot: %v", err)
@@ -1296,7 +1297,7 @@ func TestHandleTask_InboxLeaseRejectionStopsBeforeRunner(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	var runnerCalled atomic.Bool
-	d := &WorkspaceDaemonCore{
+	d := &Daemon{
 		client:             NewClient(srv.URL),
 		logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
 		workspaces:         make(map[string]*workspaceState),
@@ -1374,7 +1375,7 @@ func TestHandleTask_InboxLeaseLossAfterRunnerDoesNotCancelTerminalReport(t *test
 	}))
 	t.Cleanup(srv.Close)
 
-	d := &WorkspaceDaemonCore{
+	d := &Daemon{
 		client:             NewClient(srv.URL),
 		logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
 		workspaces:         make(map[string]*workspaceState),
@@ -1446,7 +1447,7 @@ func TestHandleTask_InboxLeaseLossCancelsRunningExecutor(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	var runnerCancelled atomic.Bool
-	d := &WorkspaceDaemonCore{
+	d := &Daemon{
 		client:             NewClient(srv.URL),
 		logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
 		workspaces:         make(map[string]*workspaceState),
@@ -1547,7 +1548,7 @@ func TestWatchTaskCancellation_TaskDeleted(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	d := &WorkspaceDaemonCore{client: NewClient(srv.URL), logger: slog.Default()}
+	d := &Daemon{client: NewClient(srv.URL), logger: slog.Default()}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
@@ -1577,7 +1578,7 @@ func TestWatchTaskCancellation_StatusCancelled(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	d := &WorkspaceDaemonCore{client: NewClient(srv.URL), logger: slog.Default()}
+	d := &Daemon{client: NewClient(srv.URL), logger: slog.Default()}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
@@ -1603,7 +1604,7 @@ func TestWatchTaskCancellation_RunningTaskNotInterrupted(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	d := &WorkspaceDaemonCore{client: NewClient(srv.URL), logger: slog.Default()}
+	d := &Daemon{client: NewClient(srv.URL), logger: slog.Default()}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
@@ -1655,7 +1656,7 @@ func TestHandleTask_CancellingAStuckInboxTaskForceKillsIt(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	var runnerObservedCancellation atomic.Bool
-	d := &WorkspaceDaemonCore{
+	d := &Daemon{
 		client:             NewClient(srv.URL),
 		logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
 		workspaces:         make(map[string]*workspaceState),
@@ -1921,13 +1922,13 @@ func (b *fakeBackend) Execute(_ context.Context, _ string, opts agent.ExecOption
 	return &agent.Session{Messages: msgCh, Result: resCh}, nil
 }
 
-func newTestDaemon(t *testing.T) *WorkspaceDaemonCore {
+func newTestDaemon(t *testing.T) *Daemon {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	t.Cleanup(srv.Close)
-	return &WorkspaceDaemonCore{
+	return &Daemon{
 		client: NewClient(srv.URL),
 		logger: slog.Default(),
 	}
@@ -2195,7 +2196,7 @@ func TestExecuteAndDrain_DoesNotEmitEmptyThinkingPhase(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	d := &WorkspaceDaemonCore{client: NewClient(srv.URL), logger: slog.Default()}
+	d := &Daemon{client: NewClient(srv.URL), logger: slog.Default()}
 	backend := messageStreamBackend{messages: []agent.Message{
 		{Type: agent.MessageThinking, Content: "internal plan"},
 		{Type: agent.MessageToolUse, Tool: "read_file", CallID: "call-1"},
@@ -2245,17 +2246,16 @@ func TestExecuteAndDrainDoesNotPublishResidentActivity(t *testing.T) {
 	})
 	d := New(Config{}, nil)
 	d.runnerInstanceID = "daemon-1"
-	runner := installTestRunnerActivity(t, d, "workspace-1", producer)
+	runner := installTestAgentActivityProducer(t, d, "workspace-1", producer)
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
-	ack, err := runner.processes.Start(agentProcessStartRequest{
-		AgentID: "agent-a", RuntimeID: "runtime-1", LaunchID: "launch-a", StartDispatchID: "launch-a-dispatch",
-	})
+	_, err := runner.processes.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := producer.SetManaged(
-		protocol.AgentStatusPayload{AgentID: "agent-a", LaunchID: ack.LaunchID, Status: protocol.AgentStatusActive},
-		protocol.AgentSessionPayload{AgentID: "agent-a", LaunchID: ack.LaunchID},
+		"instance-a",
+		protocol.AgentStatusPayload{AgentID: "agent-a", Status: protocol.AgentStatusActive},
+		protocol.AgentSessionPayload{AgentID: "agent-a"},
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -2296,7 +2296,7 @@ func TestExecuteAndDrain_PinsTaskSessionOnStatusMessage(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	d := &WorkspaceDaemonCore{client: NewClient(srv.URL), logger: slog.Default()}
+	d := &Daemon{client: NewClient(srv.URL), logger: slog.Default()}
 	d.client.SetRuntimeDaemonToken("rt-pin", "mdt-runtime", time.Now().Add(time.Hour))
 
 	backend := statusStreamBackend{sessionID: "sess-pin-1", statusCount: 1}
@@ -2376,7 +2376,7 @@ func TestExecuteAndDrain_PinsTaskSessionOnlyOnce(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	d := &WorkspaceDaemonCore{client: NewClient(srv.URL), logger: slog.Default()}
+	d := &Daemon{client: NewClient(srv.URL), logger: slog.Default()}
 
 	backend := statusStreamBackend{sessionID: "sess-pin-2", statusCount: 2}
 	result, _, err := d.executeAndDrain(context.Background(), backend, "prompt", agent.ExecOptions{Cwd: "/work/task-pin-2"}, slog.Default(), "task-pin-2")
@@ -2451,7 +2451,7 @@ func TestExecuteAndDrain_CodexInactivityReportsToolResultTranscript(t *testing.T
 	if err != nil {
 		t.Fatalf("new codex backend: %v", err)
 	}
-	d := &WorkspaceDaemonCore{client: NewClient(srv.URL), logger: slog.Default()}
+	d := &Daemon{client: NewClient(srv.URL), logger: slog.Default()}
 	result, tools, err := d.executeAndDrain(context.Background(), backend, "prompt", agent.ExecOptions{
 		Timeout:                   5 * time.Second,
 		SemanticInactivityTimeout: 100 * time.Millisecond,
@@ -2604,7 +2604,7 @@ func TestReportTaskResult_CompletedHitsCompleteEndpoint(t *testing.T) {
 	srv := httptest.NewServer(rec.handler(t))
 	t.Cleanup(srv.Close)
 
-	d := &WorkspaceDaemonCore{client: NewClient(srv.URL), logger: slog.Default()}
+	d := &Daemon{client: NewClient(srv.URL), logger: slog.Default()}
 	d.reportTaskResultForTask(context.Background(), canonicalInboxTaskForTest(Task{ID: "task-1"}), TaskResult{
 		Status:  "completed",
 		Comment: "all good",
@@ -2705,7 +2705,7 @@ func TestReportTaskResult_NonCompletedHitsFailEndpoint(t *testing.T) {
 			srv := httptest.NewServer(rec.handler(t))
 			t.Cleanup(srv.Close)
 
-			d := &WorkspaceDaemonCore{client: NewClient(srv.URL), logger: slog.Default()}
+			d := &Daemon{client: NewClient(srv.URL), logger: slog.Default()}
 			d.reportTaskResultForTask(context.Background(), canonicalInboxTaskForTest(Task{ID: "task-x"}), TaskResult{
 				Status:        tc.status,
 				Comment:       tc.comment,
@@ -2760,7 +2760,7 @@ func TestReportTaskResult_RetriesTransientCompleteThenSucceeds(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	d := &WorkspaceDaemonCore{client: NewClient(srv.URL), logger: slog.Default()}
+	d := &Daemon{client: NewClient(srv.URL), logger: slog.Default()}
 	d.reportTaskResultForTask(context.Background(), canonicalInboxTaskForTest(Task{ID: "task-retry"}), TaskResult{
 		Status:  "completed",
 		Comment: "ok",
@@ -2801,7 +2801,7 @@ func TestReportTaskResult_TransientCompleteExhaustedDoesNotFallback(t *testing.T
 	}))
 	t.Cleanup(srv.Close)
 
-	d := &WorkspaceDaemonCore{client: NewClient(srv.URL), logger: slog.Default()}
+	d := &Daemon{client: NewClient(srv.URL), logger: slog.Default()}
 	d.reportTaskResultForTask(context.Background(), canonicalInboxTaskForTest(Task{ID: "task-stuck"}), TaskResult{
 		Status:  "completed",
 		Comment: "ok",
@@ -2836,7 +2836,7 @@ func TestReportTaskResult_PermanentCompleteFallsBackToFail(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	d := &WorkspaceDaemonCore{client: NewClient(srv.URL), logger: slog.Default()}
+	d := &Daemon{client: NewClient(srv.URL), logger: slog.Default()}
 	d.reportTaskResultForTask(context.Background(), canonicalInboxTaskForTest(Task{ID: "task-bad"}), TaskResult{
 		Status:  "completed",
 		Comment: "ok",
@@ -2878,7 +2878,7 @@ func TestHandleTask_ReportsInboxUsageBeforeCompletion(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	d := &WorkspaceDaemonCore{
+	d := &Daemon{
 		client:             NewClient(srv.URL),
 		logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
 		workspaces:         make(map[string]*workspaceState),
@@ -2966,7 +2966,7 @@ func TestHandleTask_ReportsUsageWhenInboxLeaseIsLost(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	d := &WorkspaceDaemonCore{
+	d := &Daemon{
 		client:             NewClient(srv.URL),
 		logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
 		workspaces:         make(map[string]*workspaceState),

@@ -51,7 +51,7 @@ func TestRunTask_RefusesTurnWhenAgentWorkspaceOverCapacity(t *testing.T) {
 		t.Fatalf("seed oversized file: %v", err)
 	}
 
-	d := &WorkspaceDaemonCore{
+	d := &Daemon{
 		client:       NewClient("http://unused.invalid"),
 		logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
 		workspaces:   make(map[string]*workspaceState),
@@ -100,7 +100,7 @@ func TestRunTask_AllowsTurnWhenAgentWorkspaceUnderCapacity(t *testing.T) {
 		t.Fatalf("seed small file: %v", err)
 	}
 
-	d := &WorkspaceDaemonCore{
+	d := &Daemon{
 		client:       NewClient("http://unused.invalid"),
 		logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
 		workspaces:   make(map[string]*workspaceState),
@@ -160,7 +160,7 @@ func TestRunTask_AllowsTurnWhenAgentWorkspaceQuotaDisabled(t *testing.T) {
 		t.Fatalf("seed large file: %v", err)
 	}
 
-	d := &WorkspaceDaemonCore{
+	d := &Daemon{
 		client:       NewClient("http://unused.invalid"),
 		logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
 		workspaces:   make(map[string]*workspaceState),
@@ -185,7 +185,7 @@ func TestRunTask_AllowsTurnWhenAgentWorkspaceQuotaDisabled(t *testing.T) {
 
 // writeFileRequestResult sends req through handleWriteFileRequest and
 // decodes the response frame it sends back.
-func writeFileRequestResult(t *testing.T, d *WorkspaceDaemonCore, req protocol.WriteWorkdirFileRequestPayload) protocol.WriteWorkdirFileResponsePayload {
+func writeFileRequestResult(t *testing.T, d *Daemon, req protocol.WriteWorkdirFileRequestPayload) protocol.WriteWorkdirFileResponsePayload {
 	t.Helper()
 	writes := make(chan []byte, 1)
 	d.handleWriteFileRequest(req, writes)
@@ -229,7 +229,7 @@ func TestHandleWriteFileRequest_RefusesGrowingEditWhenAgentWorkspaceOverCapacity
 		t.Fatalf("seed oversized existing file: %v", err)
 	}
 
-	d := &WorkspaceDaemonCore{cfg: cfg, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	d := &Daemon{cfg: cfg, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	resp := writeFileRequestResult(t, d, protocol.WriteWorkdirFileRequestPayload{
 		RequestID: "req-grow",
 		RelPath:   agentworkspace.RootRelPath(workspaceID, agentID),
@@ -276,7 +276,7 @@ func TestHandleWriteFileRequest_AllowsShrinkingEditWhenAgentWorkspaceOverCapacit
 		t.Fatalf("seed second oversized file: %v", err)
 	}
 
-	d := &WorkspaceDaemonCore{cfg: cfg, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	d := &Daemon{cfg: cfg, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	resp := writeFileRequestResult(t, d, protocol.WriteWorkdirFileRequestPayload{
 		RequestID: "req-shrink",
 		RelPath:   agentworkspace.RootRelPath(workspaceID, agentID),
@@ -291,7 +291,7 @@ func TestHandleWriteFileRequest_AllowsShrinkingEditWhenAgentWorkspaceOverCapacit
 	}
 }
 
-func seedAgentContextRequestResult(t *testing.T, d *WorkspaceDaemonCore, req protocol.SeedAgentContextRequestPayload) protocol.SeedAgentContextResponsePayload {
+func seedAgentContextRequestResult(t *testing.T, d *Daemon, req protocol.SeedAgentContextRequestPayload) protocol.SeedAgentContextResponsePayload {
 	t.Helper()
 	writes := make(chan []byte, 1)
 	d.handleSeedAgentContextRequest(req, writes)
@@ -335,7 +335,7 @@ func TestHandleSeedAgentContextRequest_RefusesWhenAgentWorkspaceOverCapacity(t *
 		t.Fatalf("seed oversized file: %v", err)
 	}
 
-	d := &WorkspaceDaemonCore{cfg: cfg, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	d := &Daemon{cfg: cfg, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	resp := seedAgentContextRequestResult(t, d, protocol.SeedAgentContextRequestPayload{
 		RequestID: "req-seed-over",
 		RelPath:   agentworkspace.RootRelPath(workspaceID, agentID),
@@ -374,7 +374,7 @@ func TestHandleSeedAgentContextRequest_AllowsWhenUnderCapacity(t *testing.T) {
 		t.Fatalf("seed note: %v", err)
 	}
 
-	d := &WorkspaceDaemonCore{cfg: cfg, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	d := &Daemon{cfg: cfg, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	resp := seedAgentContextRequestResult(t, d, protocol.SeedAgentContextRequestPayload{
 		RequestID: "req-seed-ok",
 		RelPath:   agentworkspace.RootRelPath(workspaceID, agentID),

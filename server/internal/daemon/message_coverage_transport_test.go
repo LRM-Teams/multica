@@ -17,7 +17,7 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-func coverageCommitTestDaemon(t *testing.T) (*WorkspaceDaemonCore, *MessageCoordinator, CoverageOffer, string) {
+func coverageCommitTestDaemon(t *testing.T) (*Daemon, *MessageCoordinator, CoverageOffer, string) {
 	t.Helper()
 	root := t.TempDir()
 	coordinator := newCoverageTestCoordinator(t, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"})
@@ -32,7 +32,7 @@ func coverageCommitTestDaemon(t *testing.T) (*WorkspaceDaemonCore, *MessageCoord
 	return d, coordinator, offer, token
 }
 
-func prepareCoverageCommitCredential(t *testing.T, d *WorkspaceDaemonCore, key InboxKey, runtimeID string) string {
+func prepareCoverageCommitCredential(t *testing.T, d *Daemon, key InboxKey, runtimeID string) string {
 	t.Helper()
 	transport, err := d.prepareAgentProxyCLITransport(key, runtimeID, "coverage-launch", filepath.Join(t.TempDir(), "multica"))
 	if err != nil {
@@ -200,7 +200,7 @@ func TestCredentialProxyCoverageCommitRejectsMissingOrWrongCredential(t *testing
 
 func TestCredentialProxyCoverageCommitRejectsReceiptFromAnotherAuthenticatedInbox(t *testing.T) {
 	d, coordinator, offer, _ := coverageCommitTestDaemon(t)
-	wrongKey := InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-2"}
+	wrongKey := InboxKey{WorkspaceID: "workspace-2", AgentID: "agent-2"}
 	wrongCoordinator := newCoverageTestCoordinator(t, wrongKey)
 	registerTestInbox(t, d, wrongKey, "runtime-2", wrongCoordinator)
 	wrongToken := prepareCoverageCommitCredential(t, d, wrongKey, "runtime-2")

@@ -154,7 +154,7 @@ func setupComputerWorkDigestLiveBinding(t *testing.T, ownerID string) (string, *
 	t.Cleanup(func() { _ = conn.Close() })
 	ready, err := json.Marshal(protocol.Message{
 		Type: protocol.EventWorkspaceDaemonReady,
-		Payload: mustMarshalJSON(protocol.WorkspaceDaemonReadyPayload{
+		Payload: mustMarshalJSON(protocol.WorkspaceReadyPayload{
 			WorkspaceID: testWorkspaceID, DaemonInstanceID: "instance-work-digest",
 			ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceDaemonAgentProcess},
 		}),

@@ -391,11 +391,11 @@ func GetSegmentMessagePageWithKey(ctx context.Context, pager DiagnosisMessagePag
 	}
 
 	rows, err := pager.PageTaskMessagesInRange(ctx, db.PageTaskMessagesInRangeParams{
-		TaskID:   taskID,
-		StartSeq: startSeq,
-		EndSeq:   endSeq,
-		LastSeq:  lastSeq,
-		LastID:   lastID,
+		TaskID:    taskID,
+		StartSeq:  startSeq,
+		EndSeq:    endSeq,
+		LastSeq:   lastSeq,
+		LastID:    lastID,
 		PageLimit: maxDiagnosisSegmentTurns,
 	})
 	if err != nil {

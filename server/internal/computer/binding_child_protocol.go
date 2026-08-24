@@ -11,8 +11,8 @@ import (
 
 const BindingChildProtocolVersion = 1
 
-// BindingChildBootstrap is the ComputerCore-owned launch config for one supervised
-// Binding child. It has no process-instance ticket: the ComputerCore only passes
+// BindingChildBootstrap is the Host-owned launch config for one supervised
+// Binding child. It has no process-instance ticket: the Host only passes
 // launch config, and the child generates daemonInstanceId itself and reports
 // it on Ready. Credentials are absent: the child resolves the scoped
 // credential from the permission-restricted Binding store.

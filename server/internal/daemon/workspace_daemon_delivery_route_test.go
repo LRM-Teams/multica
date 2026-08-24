@@ -12,7 +12,6 @@ import (
 var requiredDeliveryRouteTests = []string{
 	"TestWorkspaceDaemonConsumedDeliveryAcknowledgesWithoutProcess",
 	"TestWorkspaceDaemonStartingLaunchBuffersWithoutProviderDelivery",
-	"TestWorkspaceDaemonQueuedAPMAcceptsDeliveryWithoutStartingProvider",
 	"TestWorkspaceDaemonTerminalFailureDeliveryAcknowledgesAndKeepsPending",
 	"TestWorkspaceDaemonIdleSnapshotDeliveryRestartsAndAcknowledges",
 	"TestWorkspaceDaemonSpawnCooldownDeliveryAcknowledgesWithoutRestart",
@@ -41,7 +40,7 @@ func TestAcceptMessageDeliveryForbidsUnmanagedEarlyNack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fn := extractGoFunc(string(src), "func (runner *workspaceSession) acceptMessageDelivery")
+	fn := extractGoFunc(string(src), "func (runner *WorkspaceDaemon) acceptMessageDelivery")
 	if fn == "" {
 		t.Fatal("acceptMessageDelivery not found")
 	}

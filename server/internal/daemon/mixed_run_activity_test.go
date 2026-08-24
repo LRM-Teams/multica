@@ -20,7 +20,7 @@ func TestMixedRunActivityOutboxPersistsBeforeSendReplaysAfterRestartAndClearsOnA
 		transition  = "turn:stable:active:start"
 	)
 	root := t.TempDir()
-	configure := func(d *WorkspaceDaemonCore) {
+	configure := func(d *Daemon) {
 		d.mu.Lock()
 		d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
 		d.mu.Unlock()

@@ -46,7 +46,7 @@ func TestAgentIDsBelongToWorkspaceRejectsForeignAgent(t *testing.T) {
 		INSERT INTO agent_runtime (workspace_id, name, runtime_mode, provider, device_info)
 		VALUES ($1,  'foreign memory runtime',  'local',  'legacy_local',  'foreign memory runtime')
 		RETURNING id
-	`,  otherWorkspaceID).Scan(&runtimeID); err != nil {
+	`, otherWorkspaceID).Scan(&runtimeID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -159,10 +159,10 @@ func TestMemoryCurationClaimFailsExhaustedStaleRunAndClaimsNext(t *testing.T) {
 		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, visibility, last_seen_at) VALUES ($1,  'memory-curator-stale-daemon',  'Memory Curator Stale Runtime',  'local',  'codex',  'online', 
 		          'memory curator stale test',  jsonb_build_object('capabilities', jsonb_build_array($2::text)),  'private',  now())
 		RETURNING id::text
-	`,  testWorkspaceID,  protocol.DaemonCapabilityMemoryCuration).Scan(&runtimeID); err != nil {
+	`, testWorkspaceID, protocol.DaemonCapabilityMemoryCuration).Scan(&runtimeID); err != nil {
 		t.Fatal(err)
-}
-	
+	}
+
 	bindTestRuntimeOwner(t, "memory-curator-stale-daemon", testUserID)
 
 	var staleRunID, nextRunID string
@@ -220,10 +220,10 @@ func TestMemoryCurationActiveHeartbeatRefreshesBeforeExpirySweep(t *testing.T) {
 		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, visibility, last_seen_at) VALUES ($1,  'memory-curator-active-hb-daemon',  'Memory Curator Active HB Runtime',  'local',  'codex',  'online', 
 		          'memory curator active heartbeat',  jsonb_build_object('capabilities', jsonb_build_array($2::text)),  'private',  now())
 		RETURNING id::text
-	`,  testWorkspaceID,  protocol.DaemonCapabilityMemoryCuration).Scan(&runtimeID); err != nil {
+	`, testWorkspaceID, protocol.DaemonCapabilityMemoryCuration).Scan(&runtimeID); err != nil {
 		t.Fatal(err)
-}
-	
+	}
+
 	bindTestRuntimeOwner(t, "memory-curator-active-hb-daemon", testUserID)
 
 	var parentRunID, agentRunID, agentID string
@@ -302,10 +302,10 @@ func TestWorkspaceMemoryCurationStatusSweepsExpiredRunningRuns(t *testing.T) {
 		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, visibility, last_seen_at) VALUES ($1,  'memory-curator-status-daemon',  'Memory Curator Status Runtime',  'local',  'codex',  'online', 
 		          'memory curator status sweep',  jsonb_build_object('capabilities', jsonb_build_array($2::text)),  'private',  now())
 		RETURNING id::text
-	`,  testWorkspaceID,  protocol.DaemonCapabilityMemoryCuration).Scan(&runtimeID); err != nil {
+	`, testWorkspaceID, protocol.DaemonCapabilityMemoryCuration).Scan(&runtimeID); err != nil {
 		t.Fatal(err)
-}
-	
+	}
+
 	bindTestRuntimeOwner(t, "memory-curator-status-daemon", testUserID)
 
 	var staleRunID string
@@ -359,10 +359,10 @@ func TestMemoryCuratorProfileQueuesAndCompletesDaemonRun(t *testing.T) {
 		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, visibility, last_seen_at) VALUES ($1,  'memory-curator-test-daemon',  'Memory Curator Test Runtime',  'local',  'codex',  'online', 
 		          'memory curator test',  jsonb_build_object('capabilities', jsonb_build_array($2::text)),  'private',  now())
 		RETURNING id::text
-	`,  testWorkspaceID,  protocol.DaemonCapabilityMemoryCuration).Scan(&runtimeID); err != nil {
+	`, testWorkspaceID, protocol.DaemonCapabilityMemoryCuration).Scan(&runtimeID); err != nil {
 		t.Fatal(err)
-}
-	
+	}
+
 	bindTestRuntimeOwner(t, "memory-curator-test-daemon", testUserID)
 
 	var curatorAgentID, targetAgentID string
@@ -713,7 +713,7 @@ func TestDeleteRuntimeFailsIncompleteMemoryCurationRuns(t *testing.T) {
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info) VALUES ($1,  $2,  'Curator Cleanup Runtime',  'local',  'pi',  'online',  'cleanup test')
 		RETURNING id::text
-	`,  testWorkspaceID,  cleanupDaemonID).Scan(&runtimeID); err != nil {
+	`, testWorkspaceID, cleanupDaemonID).Scan(&runtimeID); err != nil {
 		t.Fatal(err)
 	}
 	bindTestRuntimeOwner(t, cleanupDaemonID, testUserID)

@@ -69,7 +69,7 @@ func TestEnsureResidentMessageRuntimeUsesOnlyStableAgentConfiguration(t *testing
 	client.SetRuntimeDaemonToken(runtimeID, "daemon-token", time.Now().Add(time.Hour))
 	probe := &canonicalRuntimeFactoryProbe{}
 	starter := &residentProcessStartProbe{}
-	d := &WorkspaceDaemonCore{
+	d := &Daemon{
 		cfg: Config{
 			ServerBaseURL:  upstream.URL,
 			WorkspacesRoot: root,
@@ -83,7 +83,7 @@ func TestEnsureResidentMessageRuntimeUsesOnlyStableAgentConfiguration(t *testing
 		runtimeIndex:      map[string]Runtime{runtimeID: {ID: runtimeID, WorkspaceID: workspaceID, Provider: "codex"}},
 		agentVersions:     make(map[string]string),
 		turnScopeMemory:   newTurnScopeMemoryTracker(),
-		canonicalRuntimes: newCanonicalAgentRuntimePool(),
+		canonicalRuntimes: newAgentRuntimePool(),
 		canonicalResidentFactoryOverride: func(config agent.Config) (agent.Backend, func(), error) {
 			_, closer, err := probe.factory(config)
 			if err != nil {
@@ -215,9 +215,9 @@ func TestEnsureResidentMessageRuntimeSpawnFailureRetiresBusyBackend(t *testing.T
 		residentProcessStartProbe: residentProcessStartProbe{err: errors.New("codex app-server did not start")},
 		done:                      make(chan error, 1),
 	}
-	pool := newCanonicalAgentRuntimePool()
-	pool.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{backend: backend}
-	d := &WorkspaceDaemonCore{canonicalRuntimes: pool}
+	pool := newAgentRuntimePool()
+	pool.slots[agentID+"\x00"+runtimeID] = &agentRuntimeSlot{backend: backend}
+	d := &Daemon{canonicalRuntimes: pool}
 
 	if err := pool.deliverIdleMessages(context.Background(), agentID, runtimeID, []protocol.AgentMessageProjection{{
 		ID: "message-1", Target: "dm:one", Seq: 1, Content: "hello",
@@ -268,7 +268,7 @@ func TestEnsureResidentMessageRuntimeSpawnsProviderProcess(t *testing.T) {
 	starter := &residentProcessStartProbe{}
 	client := NewClient(upstream.URL)
 	client.SetRuntimeDaemonToken(runtimeID, "daemon-token", time.Now().Add(time.Hour))
-	d := &WorkspaceDaemonCore{
+	d := &Daemon{
 		cfg: Config{
 			ServerBaseURL:  upstream.URL,
 			WorkspacesRoot: t.TempDir(),
@@ -278,7 +278,7 @@ func TestEnsureResidentMessageRuntimeSpawnsProviderProcess(t *testing.T) {
 		client:            client,
 		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 		runtimeIndex:      map[string]Runtime{runtimeID: {ID: runtimeID, WorkspaceID: workspaceID, Provider: "codex"}},
-		canonicalRuntimes: newCanonicalAgentRuntimePool(),
+		canonicalRuntimes: newAgentRuntimePool(),
 		canonicalResidentFactoryOverride: func(agent.Config) (agent.Backend, func(), error) {
 			return starter, func() {}, nil
 		},
@@ -350,7 +350,7 @@ func TestEnsureResidentMessageRuntimeSpawnFailureDoesNotKeepBackend(t *testing.T
 	starter := &residentProcessStartProbe{err: errors.New("codex app-server did not start")}
 	client := NewClient(upstream.URL)
 	client.SetRuntimeDaemonToken(runtimeID, "daemon-token", time.Now().Add(time.Hour))
-	d := &WorkspaceDaemonCore{
+	d := &Daemon{
 		cfg: Config{
 			ServerBaseURL:  upstream.URL,
 			WorkspacesRoot: t.TempDir(),
@@ -360,7 +360,7 @@ func TestEnsureResidentMessageRuntimeSpawnFailureDoesNotKeepBackend(t *testing.T
 		client:            client,
 		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 		runtimeIndex:      map[string]Runtime{runtimeID: {ID: runtimeID, WorkspaceID: workspaceID, Provider: "codex"}},
-		canonicalRuntimes: newCanonicalAgentRuntimePool(),
+		canonicalRuntimes: newAgentRuntimePool(),
 		canonicalResidentFactoryOverride: func(agent.Config) (agent.Backend, func(), error) {
 			return starter, func() {}, nil
 		},
@@ -399,7 +399,7 @@ func TestEnsureResidentMessageRuntimeNonStarterDoesNotKeepBackend(t *testing.T) 
 
 	client := NewClient(upstream.URL)
 	client.SetRuntimeDaemonToken(runtimeID, "daemon-token", time.Now().Add(time.Hour))
-	d := &WorkspaceDaemonCore{
+	d := &Daemon{
 		cfg: Config{
 			ServerBaseURL:  upstream.URL,
 			WorkspacesRoot: t.TempDir(),
@@ -409,7 +409,7 @@ func TestEnsureResidentMessageRuntimeNonStarterDoesNotKeepBackend(t *testing.T) 
 		client:            client,
 		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 		runtimeIndex:      map[string]Runtime{runtimeID: {ID: runtimeID, WorkspaceID: workspaceID, Provider: "codex"}},
-		canonicalRuntimes: newCanonicalAgentRuntimePool(),
+		canonicalRuntimes: newAgentRuntimePool(),
 		canonicalResidentFactoryOverride: func(agent.Config) (agent.Backend, func(), error) {
 			return &canonicalRuntimeTestBackend{}, func() {}, nil
 		},
@@ -451,9 +451,8 @@ func TestWorkspaceDaemonStartFailsClosedWhenResidentCannotStart(t *testing.T) {
 			runner, _ := attachTestWorkspaceDaemon(t, d, workspaceID, nil)
 			var activities []protocol.AgentActivityPayload
 			runner.activity.AttachTransport(func(payload protocol.AgentActivityPayload) { activities = append(activities, payload) })
-			_, status, _, err := runner.startManagedAgent(context.Background(), protocol.WorkspaceDaemonAgentStartPayload{
-				AgentID: agentID, RuntimeID: runtimeID, LaunchID: "launch-1", StartDispatchID: "dispatch-1",
-			})
+			_, status, _, err := runner.startManagedAgent(context.Background(), protocol.AgentStartPayload{
+				AgentID: agentID, RuntimeID: runtimeID})
 			if err == nil {
 				t.Fatal("managed start succeeded without a resident process")
 			}
@@ -488,9 +487,8 @@ func TestWorkspaceDaemonStartBecomesActiveAfterResidentProcess(t *testing.T) {
 	runner, _ := attachTestWorkspaceDaemon(t, d, workspaceID, nil)
 	var activities []protocol.AgentActivityPayload
 	runner.activity.AttachTransport(func(payload protocol.AgentActivityPayload) { activities = append(activities, payload) })
-	_, status, _, err := runner.startManagedAgent(context.Background(), protocol.WorkspaceDaemonAgentStartPayload{
-		AgentID: agentID, RuntimeID: runtimeID, LaunchID: "launch-1", StartDispatchID: "dispatch-1",
-	})
+	_, status, _, err := runner.startManagedAgent(context.Background(), protocol.AgentStartPayload{
+		AgentID: agentID, RuntimeID: runtimeID})
 	if err != nil {
 		t.Fatalf("managed start: %v", err)
 	}
@@ -545,9 +543,8 @@ func TestWorkspaceDaemonStartUsesExplicitProviderSession(t *testing.T) {
 			d.agentRuntimeSessions = sessions
 			runner, _ := attachTestWorkspaceDaemon(t, d, workspaceID, nil)
 
-			_, status, session, err := runner.startManagedAgent(context.Background(), protocol.WorkspaceDaemonAgentStartPayload{
-				AgentID: agentID, RuntimeID: runtimeID, LaunchID: "launch-1", StartDispatchID: "dispatch-1",
-				Config: protocol.WorkspaceDaemonAgentStartConfig{SessionID: test.sessionID},
+			_, status, session, err := runner.startManagedAgent(context.Background(), protocol.AgentStartPayload{
+				AgentID: agentID, RuntimeID: runtimeID, Config: protocol.AgentStartConfig{SessionID: test.sessionID},
 			})
 			if err != nil {
 				t.Fatalf("managed start: %v", err)
@@ -568,7 +565,7 @@ func TestWorkspaceDaemonStartUsesExplicitProviderSession(t *testing.T) {
 	}
 }
 
-func newResidentStartTestDaemon(t *testing.T, workspaceID, runtimeID, agentID string, factory canonicalRuntimeBackendFactory) *WorkspaceDaemonCore {
+func newResidentStartTestDaemon(t *testing.T, workspaceID, runtimeID, agentID string, factory canonicalRuntimeBackendFactory) *Daemon {
 	t.Helper()
 	expiresAt := time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339Nano)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -590,7 +587,7 @@ func newResidentStartTestDaemon(t *testing.T, workspaceID, runtimeID, agentID st
 	client := NewClient(upstream.URL)
 	client.SetRuntimeDaemonToken(runtimeID, "daemon-token", time.Now().Add(time.Hour))
 	workspacesRoot := t.TempDir()
-	return &WorkspaceDaemonCore{
+	return &Daemon{
 		cfg: Config{
 			ServerBaseURL:  upstream.URL,
 			WorkspacesRoot: workspacesRoot,
@@ -600,7 +597,7 @@ func newResidentStartTestDaemon(t *testing.T, workspaceID, runtimeID, agentID st
 		client:                           client,
 		logger:                           slog.New(slog.NewTextHandler(io.Discard, nil)),
 		runtimeIndex:                     map[string]Runtime{runtimeID: {ID: runtimeID, WorkspaceID: workspaceID, Provider: "codex"}},
-		canonicalRuntimes:                newCanonicalAgentRuntimePool(),
+		canonicalRuntimes:                newAgentRuntimePool(),
 		canonicalResidentFactoryOverride: factory,
 		agentRuntimeSessions:             newAgentRuntimeSessionStore(workspacesRoot),
 	}
@@ -635,7 +632,7 @@ func TestEnsureResidentMessageRuntimeRotatesPiSessionBetweenRuns(t *testing.T) {
 		backends  []agent.PiRPCBackend
 		closed    int
 	)
-	d := &WorkspaceDaemonCore{
+	d := &Daemon{
 		cfg: Config{
 			WorkspacesRoot: t.TempDir(),
 			HealthPort:     19514,
@@ -645,7 +642,7 @@ func TestEnsureResidentMessageRuntimeRotatesPiSessionBetweenRuns(t *testing.T) {
 		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 		runtimeIndex:      map[string]Runtime{runtimeID: {ID: runtimeID, WorkspaceID: workspaceID, Provider: "pi"}},
 		agentVersions:     make(map[string]string),
-		canonicalRuntimes: newCanonicalAgentRuntimePool(),
+		canonicalRuntimes: newAgentRuntimePool(),
 		canonicalResidentFactoryOverride: func(config agent.Config) (agent.Backend, func(), error) {
 			backend := agent.NewPiRPCBackend(config)
 			factoryMu.Lock()
@@ -709,10 +706,10 @@ func TestEnsureResidentMessageRuntimeRotatesPiSessionBetweenRuns(t *testing.T) {
 func TestResidentMessageRuntimeReportsMixedRunTurnCaptureAndToolLifecycle(t *testing.T) {
 	const agentID, runtimeID = "agent-1", "runtime-1"
 	backend := &activityResidentMessageRuntime{done: make(chan error, 1), messages: make(chan agent.Message, 2)}
-	pool := newCanonicalAgentRuntimePool()
-	pool.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{backend: backend}
+	pool := newAgentRuntimePool()
+	pool.slots[agentID+"\x00"+runtimeID] = &agentRuntimeSlot{backend: backend}
 	reports := make(chan protocol.MixedRunActivityTransitionPayload, 8)
-	d := &WorkspaceDaemonCore{
+	d := &Daemon{
 		cfg:               Config{WorkspacesRoot: t.TempDir()},
 		canonicalRuntimes: pool,
 		runtimeIndex:      map[string]Runtime{runtimeID: {ID: runtimeID, WorkspaceID: "workspace-1"}},

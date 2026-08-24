@@ -9,10 +9,10 @@ import (
 )
 
 const (
-	ReasonNotMember      = "fleet_member_not_found"
-	ReasonPendingReview  = "fleet_member_pending_review"
-	ReasonArchived       = "fleet_member_archived"
-	ReasonNotActive      = "fleet_member_not_active"
+	ReasonNotMember          = "fleet_member_not_found"
+	ReasonPendingReview      = "fleet_member_pending_review"
+	ReasonArchived           = "fleet_member_archived"
+	ReasonNotActive          = "fleet_member_not_active"
 	ReasonAgentArchived      = "agent_archived"
 	ReasonAgentNoRuntime     = "agent_no_runtime"
 	ReasonAgentModelRequired = "agent_model_required"

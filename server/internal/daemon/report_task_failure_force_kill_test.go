@@ -39,7 +39,7 @@ func TestReportTaskFailure_ForceKilledTurnGetsRestartedByUserReason(t *testing.T
 	defer srv.Close()
 
 	client := NewClient(srv.URL)
-	d := &WorkspaceDaemonCore{client: client, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	d := &Daemon{client: client, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	taskLog := slog.New(slog.NewTextHandler(io.Discard, nil))
 
 	task := Task{
@@ -83,7 +83,7 @@ func TestReportTaskFailure_OrdinaryFailureKeepsItsOwnReason(t *testing.T) {
 	defer srv.Close()
 
 	client := NewClient(srv.URL)
-	d := &WorkspaceDaemonCore{client: client, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	d := &Daemon{client: client, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	taskLog := slog.New(slog.NewTextHandler(io.Discard, nil))
 
 	task := Task{

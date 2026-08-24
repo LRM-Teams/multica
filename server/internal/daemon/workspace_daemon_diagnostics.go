@@ -2,7 +2,7 @@ package daemon
 
 import "github.com/multica-ai/multica/server/internal/diagnosticlog"
 
-func (runner *workspaceSession) recordDiagnostic(event diagnosticlog.Event) {
+func (runner *WorkspaceDaemon) recordDiagnostic(event diagnosticlog.Event) {
 	if runner == nil || runner.diagnostics == nil {
 		return
 	}

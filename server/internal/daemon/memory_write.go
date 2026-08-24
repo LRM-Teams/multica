@@ -207,7 +207,7 @@ func diffAgentMemoryWrites(agentRoot string, prior memoryWriteSnapshot) (memoryW
 
 const memorySignalQueueRel = "sync_queue/memory-signal.jsonl"
 
-func (d *WorkspaceDaemonCore) reportAgentMemoryWrites(ctx context.Context, task Task, friction memorysignal.FrictionVector) {
+func (d *Daemon) reportAgentMemoryWrites(ctx context.Context, task Task, friction memorysignal.FrictionVector) {
 	if d == nil || d.client == nil {
 		return
 	}

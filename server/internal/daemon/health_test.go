@@ -29,7 +29,7 @@ func TestCredentialProxyMessageCheckDrainsCoordinatorWithoutExecutionIdentity(t 
 			t.Fatalf("Accept: %v", err)
 		}
 	}
-	d := &WorkspaceDaemonCore{}
+	d := &Daemon{}
 	registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
 	handler := d.credentialProxyMessageCheckHandler()
 
@@ -117,7 +117,7 @@ func TestCredentialProxyMessageReadUsesCachedCredentialAndWritesTargetBoundary(t
 	}, time.Now()); err != nil {
 		t.Fatalf("writeCachedAgentCredential: %v", err)
 	}
-	d := &WorkspaceDaemonCore{cfg: cfg}
+	d := &Daemon{cfg: cfg}
 	registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
 	handler := d.credentialProxyMessageReadHandler()
 
@@ -193,7 +193,7 @@ func TestCredentialProxySearchAndResolveNeverExposeOrPrepareCoverage(t *testing.
 	}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	d := &WorkspaceDaemonCore{cfg: cfg}
+	d := &Daemon{cfg: cfg}
 	registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", &MessageCoordinator{
 		key: InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, pending: make(map[string]map[int64]protocol.AgentMessageProjection),
 	})
@@ -264,7 +264,7 @@ func TestCredentialProxyMessageSendRefreshesNearExpiryCredential(t *testing.T) {
 	}
 	client := NewClient(upstream.URL)
 	client.SetRuntimeDaemonToken("runtime-1", "daemon-token", time.Now().Add(time.Hour))
-	d := &WorkspaceDaemonCore{cfg: cfg, client: client, messageDraftStore: NewMessageDraftStore(root)}
+	d := &Daemon{cfg: cfg, client: client, messageDraftStore: NewMessageDraftStore(root)}
 	registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
 
 	recorder := httptest.NewRecorder()
@@ -586,7 +586,7 @@ func TestCredentialProxyMessageSendDraftReusesIdentityAndAnywayOnlyOnReplay(t *t
 	}
 }
 
-func credentialProxySendTestDaemon(t *testing.T, root, serverURL string, coordinator *MessageCoordinator) *WorkspaceDaemonCore {
+func credentialProxySendTestDaemon(t *testing.T, root, serverURL string, coordinator *MessageCoordinator) *Daemon {
 	t.Helper()
 	cfg := Config{WorkspacesRoot: root, ServerBaseURL: serverURL}
 	expiresAt := time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339Nano)
@@ -595,7 +595,7 @@ func credentialProxySendTestDaemon(t *testing.T, root, serverURL string, coordin
 	}, time.Now()); err != nil {
 		t.Fatalf("writeCachedAgentCredential: %v", err)
 	}
-	d := &WorkspaceDaemonCore{cfg: cfg, messageDraftStore: NewMessageDraftStore(root)}
+	d := &Daemon{cfg: cfg, messageDraftStore: NewMessageDraftStore(root)}
 	registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
 	return d
 }

@@ -2362,9 +2362,9 @@ export const EMPTY_AGENT_HEALTH_RESPONSE: AgentHealthResponse = {
 };
 
 const RunnerActivitySummarySchema = z.object({
+  activityKind: z.string().default(""),
+  detailKind: z.string().default(""),
   label: z.string().default(""),
-  tone: z.string().default("muted"),
-  visibility: z.string().default("hidden"),
 }).loose();
 
 const RunnerActivityTimelineRowSchema = z.object({
@@ -2372,7 +2372,8 @@ const RunnerActivityTimelineRowSchema = z.object({
   occurred_at: z.string().default(""),
   title: z.string().default("Working..."),
   subtext: z.string().optional(),
-  tone: z.string().default("muted"),
+  activity_kind: z.string().default(""),
+  detail_kind: z.string().default(""),
   body_kind: z.string().default("generic"),
   body: z.string().optional(),
 }).loose();

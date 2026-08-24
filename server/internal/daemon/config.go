@@ -120,13 +120,8 @@ type Config struct {
 	// Q28): pending explore traces whose judge result never arrives are
 	// resolved with the miss penalty after this long.
 	GraphRewardTimeoutSeconds int
-	// MaxAgentProcesses bounds distinct agents with a live resident provider
-	// process on this Computer (#35). 0 = unlimited and is the production
-	// default. MULTICA_MAX_AGENT_PROCESSES enables an explicit operator safety
-	// valve; it is separate from the Raft-aligned start scheduling contract.
-	MaxAgentProcesses int
-	PollInterval      time.Duration
-	HeartbeatInterval time.Duration
+	PollInterval              time.Duration
+	HeartbeatInterval         time.Duration
 	// InboundWatchdog is the daemon-ws silence threshold for probe→terminate
 	// reconnect (default 70s). 0 disables. Override: MULTICA_DAEMON_INBOUND_WATCHDOG.
 	InboundWatchdog                time.Duration
@@ -277,7 +272,7 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	// ComputerCore info
+	// Host info
 	host, err := os.Hostname()
 	if err != nil || strings.TrimSpace(host) == "" {
 		host = "local-machine"
@@ -445,11 +440,6 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	if memoryCurationRunTimeout <= 0 {
 		return Config{}, fmt.Errorf("MULTICA_DAEMON_MEMORY_CURATION_RUN_TIMEOUT: must be positive")
 	}
-	maxAgentProcesses, err := resolveMaxAgentProcessesFromEnv(os.Getenv)
-	if err != nil {
-		return Config{}, err
-	}
-
 	// Graph memory reviewer (design §1/§6). memory_type fails loud on any
 	// value outside legacy|graph: a typo must not silently pin the daemon to
 	// the wrong memory pipeline.
@@ -500,7 +490,6 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		GraphExploreAgents:             graphExploreAgents,
 		GraphExploreMaxRounds:          graphExploreMaxRounds,
 		GraphRewardTimeoutSeconds:      graphRewardTimeoutSeconds,
-		MaxAgentProcesses:              maxAgentProcesses,
 		HealthPort:                     healthPort,
 		PollInterval:                   pollInterval,
 		HeartbeatInterval:              heartbeatInterval,

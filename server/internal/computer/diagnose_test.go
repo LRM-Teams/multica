@@ -285,7 +285,7 @@ func TestFixRemovesStaleResidentPIDOnlyWhenResidentIsStopped(t *testing.T) {
 }
 
 // TestReclaimOrphanedRunnersTerminatesDeadOwnerRunner covers the doctor --fix
-// escape hatch: a WorkspaceDaemon whose owning ComputerCore is gone is the
+// escape hatch: a WorkspaceDaemon whose owning Host is gone is the
 // self-locking state that previously required a manual kill, so Fix must be
 // able to clear it.
 func TestReclaimOrphanedRunnersTerminatesDeadOwnerRunner(t *testing.T) {
@@ -318,7 +318,7 @@ func TestReclaimOrphanedRunnersTerminatesDeadOwnerRunner(t *testing.T) {
 }
 
 // TestReclaimOrphanedRunnersLeavesLiveOwnerAlone is the safety fence: a Runner
-// whose recorded owner is still alive belongs to a running ComputerCore and must never
+// whose recorded owner is still alive belongs to a running Host and must never
 // be signaled by doctor --fix.
 func TestReclaimOrphanedRunnersLeavesLiveOwnerAlone(t *testing.T) {
 	root := t.TempDir()

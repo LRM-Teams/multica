@@ -26,7 +26,7 @@ const (
 
 // residentCrashWatchLoop periodically checks every idle resident canonical
 // runtime slot for a dead process and evicts/reports any it finds — see
-// canonicalAgentRuntimePool.checkResidentLiveness. Detection here is
+// agentRuntimePool.checkResidentLiveness. Detection here is
 // deliberately decoupled from task dispatch: the pool's existing
 // reuse-or-recreate logic already self-heals the next time a turn is
 // attempted against a slot, but nothing previously noticed a crash before
@@ -46,7 +46,7 @@ const (
 // apart: whether every runtime under the same daemon_id went silent at the
 // same instant (whole-machine/daemon down) vs. just this one agent's
 // resident process (individually recoverable).
-func (d *WorkspaceDaemonCore) residentCrashWatchLoop(ctx context.Context) {
+func (d *Daemon) residentCrashWatchLoop(ctx context.Context) {
 	if d.canonicalRuntimes == nil {
 		return
 	}
@@ -63,11 +63,11 @@ func (d *WorkspaceDaemonCore) residentCrashWatchLoop(ctx context.Context) {
 }
 
 // onResidentProcessEvent is the daemon's single subscriber to the
-// canonicalAgentRuntimePool resident process event bus
+// agentRuntimePool resident process event bus
 // (resident_process_event.go). It routes each kind to its own handler; see
 // §3 of the change that introduced this file for why exited/recovered/
 // stalled are handled here instead of each having their own subscription.
-func (d *WorkspaceDaemonCore) onResidentProcessEvent(ev residentProcessEvent) {
+func (d *Daemon) onResidentProcessEvent(ev residentProcessEvent) {
 	if d == nil {
 		return
 	}
@@ -92,8 +92,13 @@ func (d *WorkspaceDaemonCore) onResidentProcessEvent(ev residentProcessEvent) {
 // server-facing report, so a concurrent Snapshot/dispatch decision on this
 // daemon never observes "server knows it crashed" before "APM knows the
 // launch is no longer running".
-func (d *WorkspaceDaemonCore) onResidentRuntimeExited(ev residentProcessEvent) {
+func (d *Daemon) onResidentRuntimeExited(ev residentProcessEvent) {
 	if d.residentCrashBackoff == nil {
+		return
+	}
+	launch, runner, found := d.resolveManagedLaunch(ev.AgentID, ev.RuntimeID)
+	if !found || ev.AgentInstanceID == "" || ev.ProcessInstanceID == "" ||
+		launch.AgentInstanceID != ev.AgentInstanceID || launch.ProcessInstanceID != ev.ProcessInstanceID {
 		return
 	}
 	attempt, backoff, terminal := d.residentCrashBackoff.recordCrash(ev.AgentID, ev.RuntimeID, ev.At)
@@ -105,7 +110,7 @@ func (d *WorkspaceDaemonCore) onResidentRuntimeExited(ev residentProcessEvent) {
 	// succeeds. terminal decides which of the two single-purpose verbs
 	// runs — the decision lives here because this is where terminal is
 	// computed; the runner verbs themselves carry no branch.
-	if launch, runner, found := d.resolveManagedLaunch(ev.AgentID, ev.RuntimeID); found {
+	{
 		var routeErr error
 		if terminal {
 			routeErr = runner.retireManagedLaunchAfterExit(ev.AgentID, ev.RuntimeID, launch, "provider_crash_looping")
@@ -141,7 +146,7 @@ func (d *WorkspaceDaemonCore) onResidentRuntimeExited(ev residentProcessEvent) {
 
 // clearAgentProviderCrashedOnServer clears the server-side crashed_since after
 // local recovery (successful resident recreate or lifecycle restart).
-func (d *WorkspaceDaemonCore) clearAgentProviderCrashedOnServer(runtimeID, agentID string) {
+func (d *Daemon) clearAgentProviderCrashedOnServer(runtimeID, agentID string) {
 	if d == nil || d.client == nil || runtimeID == "" || agentID == "" {
 		return
 	}

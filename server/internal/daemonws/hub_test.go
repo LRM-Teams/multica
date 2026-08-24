@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -66,36 +65,6 @@ func TestNotifyTaskAvailable(t *testing.T) {
 	}
 	if payload.RuntimeID != "runtime-1" || payload.TaskID != "task-1" {
 		t.Fatalf("payload = %+v, want runtime/task IDs", payload)
-	}
-}
-
-func TestWorkspaceDaemonAgentBurstDoesNotDisconnectCurrentSocket(t *testing.T) {
-	hub := NewHub()
-	current := &client{
-		hub: hub, outbox: newClientOutbox(), done: make(chan struct{}),
-		identity:                  ClientIdentity{DaemonID: "computer-1", WorkspaceID: "workspace-1"},
-		workspaceDaemonInstanceID: "instance-1",
-	}
-	key := workspaceDaemonKey{daemonID: "computer-1", workspaceID: "workspace-1"}
-	hub.clients[current] = true
-	hub.byWorkspaceDaemon[key] = current
-
-	for i := 0; i < 48; i++ {
-		if !hub.NotifyWorkspaceDaemon("computer-1", "workspace-1", protocol.EventDaemonAgentStart, protocol.WorkspaceDaemonAgentStartPayload{
-			AgentID: fmt.Sprintf("agent-%d", i), RuntimeID: fmt.Sprintf("runtime-%d", i),
-			LaunchID: fmt.Sprintf("launch-%d", i), StartDispatchID: fmt.Sprintf("dispatch-%d", i),
-		}) {
-			t.Fatalf("agent:start %d was rejected", i)
-		}
-	}
-
-	if !hub.IsCurrentWorkspaceDaemon("computer-1", "workspace-1", "instance-1") {
-		t.Fatal("Agent reconcile burst disconnected the current WorkspaceDaemon")
-	}
-	for i := 0; i < 48; i++ {
-		if _, ok := current.outbox.pop(); !ok {
-			t.Fatalf("outbox contained only %d of 48 Agent frames", i)
-		}
 	}
 }
 
@@ -195,7 +164,7 @@ func TestWorkspaceDaemonRoutesOnlyWithinDaemonWorkspaceScope(t *testing.T) {
 	}
 	ready := func(conn *websocket.Conn, workspaceID string) {
 		t.Helper()
-		frame, err := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceDaemonReady, Payload: mustMarshalRaw(protocol.WorkspaceDaemonReadyPayload{
+		frame, err := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceDaemonReady, Payload: mustMarshalRaw(protocol.WorkspaceReadyPayload{
 			WorkspaceID: workspaceID, DaemonInstanceID: "instance-" + workspaceID,
 			ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceDaemonAgentProcess},
 		})})
@@ -215,7 +184,7 @@ func TestWorkspaceDaemonRoutesOnlyWithinDaemonWorkspaceScope(t *testing.T) {
 	waitForRunner(t, hub, "daemon-1", "workspace-a")
 	waitForRunner(t, hub, "daemon-1", "workspace-b")
 
-	if !hub.NotifyWorkspaceDaemon("daemon-1", "workspace-a", protocol.EventDaemonAgentStart, protocol.WorkspaceDaemonAgentStartPayload{AgentID: "agent-a", RuntimeID: "runtime-1", LaunchID: "launch-a", StartDispatchID: "dispatch-a"}) {
+	if !hub.NotifyWorkspaceDaemon("daemon-1", "workspace-a", protocol.EventDaemonAgentStart, protocol.AgentStartPayload{AgentID: "agent-a", RuntimeID: "runtime-1"}) {
 		t.Fatal("workspace-a command was not routed")
 	}
 	workspaceA.SetReadDeadline(time.Now().Add(time.Second))
@@ -261,9 +230,9 @@ func TestLegacyControlPlaneRunnerCanBecomeReadyOnlyForRollingUpgrade(t *testing.
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	frame, err := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceDaemonReady, Payload: mustMarshalRaw(protocol.WorkspaceDaemonReadyPayload{
+	frame, err := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceDaemonReady, Payload: mustMarshalRaw(protocol.WorkspaceReadyPayload{
 		WorkspaceID: "workspace-1", DaemonInstanceID: "legacy-instance-1",
-		ActiveCapabilities: []string{"workspace_runner_attachment_v1", protocol.DaemonCapabilityWorkspaceDaemonControlPlane},
+		ActiveCapabilities: []string{"workspace_daemon_attachment_v1", protocol.DaemonCapabilityWorkspaceDaemonControlPlane},
 	})})
 	if err != nil {
 		t.Fatal(err)
@@ -275,7 +244,7 @@ func TestLegacyControlPlaneRunnerCanBecomeReadyOnlyForRollingUpgrade(t *testing.
 	select {
 	case <-ready:
 	case <-time.After(time.Second):
-		t.Fatal("legacy control-plane WorkspaceDaemon could not become ready to receive its machine upgrade")
+		t.Fatal("legacy control-plane Runner could not become ready to receive its machine upgrade")
 	}
 	replayRequest, err := json.Marshal(protocol.Message{Type: "agent:attachment.replay_request", Payload: mustMarshalRaw(struct {
 		RuntimeCursors map[string]int64 `json:"runtimeCursors"`
@@ -291,7 +260,7 @@ func TestLegacyControlPlaneRunnerCanBecomeReadyOnlyForRollingUpgrade(t *testing.
 	}
 	_, raw, err := conn.ReadMessage()
 	if err != nil {
-		t.Fatalf("legacy control-plane WorkspaceDaemon did not finish its retired replay handshake: %v", err)
+		t.Fatalf("legacy control-plane Runner did not finish its retired replay handshake: %v", err)
 	}
 	var replayEnd protocol.Message
 	if err := json.Unmarshal(raw, &replayEnd); err != nil {
@@ -317,7 +286,7 @@ func TestLegacyControlPlaneRunnerCanBecomeReadyOnlyForRollingUpgrade(t *testing.
 	}
 	_, raw, err = conn.ReadMessage()
 	if err != nil {
-		t.Fatalf("legacy control-plane WorkspaceDaemon did not receive heartbeat ack: %v", err)
+		t.Fatalf("legacy control-plane Runner did not receive heartbeat ack: %v", err)
 	}
 	var ack protocol.Message
 	if err := json.Unmarshal(raw, &ack); err != nil {
@@ -327,32 +296,31 @@ func TestLegacyControlPlaneRunnerCanBecomeReadyOnlyForRollingUpgrade(t *testing.
 	if ack.Type != protocol.EventDaemonHeartbeatAck || json.Unmarshal(ack.Payload, &heartbeatAck) != nil || heartbeatAck.RuntimeID != "runtime-1" || heartbeatAck.Status != "ok" {
 		t.Fatalf("heartbeat ack = %s, want control-plane heartbeat ack", raw)
 	}
-	if hub.NotifyAgentRestartCommand("workspace-1", "daemon-1", protocol.EventDaemonAgentStart, "dispatch-1", protocol.WorkspaceDaemonAgentStartPayload{
-		AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1",
-	}) {
-		t.Fatal("legacy rolling-upgrade WorkspaceDaemon received a new Agent process command")
+	if hub.NotifyAgentRestartCommand("workspace-1", "daemon-1", protocol.EventDaemonAgentStart, "dispatch-1", protocol.AgentStartPayload{
+		AgentID: "agent-1", RuntimeID: "runtime-1"}) {
+		t.Fatal("legacy rolling-upgrade Runner received a new Agent process command")
 	}
 }
 
 func TestWorkspaceDaemonCapabilityBelongsOnlyToCurrentReadyConnection(t *testing.T) {
 	hub := NewHub()
 	key := workspaceDaemonKey{daemonID: "daemon-1", workspaceID: "workspace-1"}
-	old := &client{workspaceDaemonCapabilities: map[string]struct{}{protocol.DaemonCapabilityWorkspaceDaemonAgentProcess: {}}}
-	current := &client{workspaceDaemonCapabilities: map[string]struct{}{protocol.DaemonCapabilityWorkspaceDaemonAgentReset: {}}}
+	old := &client{runnerCapabilities: map[string]struct{}{protocol.DaemonCapabilityWorkspaceDaemonAgentProcess: {}}}
+	current := &client{runnerCapabilities: map[string]struct{}{protocol.DaemonCapabilityWorkspaceDaemonAgentReset: {}}}
 	hub.mu.Lock()
-	hub.byWorkspaceDaemon[key] = old
+	hub.byRunner[key] = old
 	hub.mu.Unlock()
 	if !hub.WorkspaceDaemonSupportsCapability("daemon-1", "workspace-1", protocol.DaemonCapabilityWorkspaceDaemonAgentProcess) {
-		t.Fatal("current WorkspaceDaemon Attachment capability was not visible")
+		t.Fatal("current Runner Attachment capability was not visible")
 	}
 	hub.mu.Lock()
-	hub.byWorkspaceDaemon[key] = current
+	hub.byRunner[key] = current
 	hub.mu.Unlock()
 	if hub.WorkspaceDaemonSupportsCapability("daemon-1", "workspace-1", protocol.DaemonCapabilityWorkspaceDaemonAgentProcess) {
-		t.Fatal("replaced WorkspaceDaemon lent its Attachment capability to the current connection")
+		t.Fatal("replaced Runner lent its Attachment capability to the current connection")
 	}
 	if !hub.WorkspaceDaemonSupportsCapability("daemon-1", "workspace-1", protocol.DaemonCapabilityWorkspaceDaemonAgentReset) {
-		t.Fatal("current WorkspaceDaemon capability was not visible")
+		t.Fatal("current Runner capability was not visible")
 	}
 }
 
@@ -394,40 +362,40 @@ func TestWorkspaceDaemonReadyReplacesConnectionAndFencesInboundFrames(t *testing
 	first := dial()
 	defer first.Close()
 	// An acknowledgement before ready must not reach the new boundary.
-	write(first, protocol.EventAgentStartAck, protocol.AgentStartAckPayload{AgentID: "agent-a", LaunchID: "launch-a", StartDispatchID: "dispatch-a", QueueState: protocol.AgentStartQueueQueued})
+	write(first, protocol.EventAgentStartAck, protocol.AgentStartAckPayload{AgentID: "agent-a", QueueState: protocol.AgentStartQueueQueued})
 	time.Sleep(20 * time.Millisecond)
 	if accepted.Load() != 0 {
-		t.Fatal("unready connection mutated WorkspaceDaemon state")
+		t.Fatal("unready connection mutated Runner state")
 	}
-	write(first, protocol.EventWorkspaceDaemonReady, protocol.WorkspaceDaemonReadyPayload{
+	write(first, protocol.EventWorkspaceDaemonReady, protocol.WorkspaceReadyPayload{
 		WorkspaceID: "workspace-1", DaemonInstanceID: "instance-1",
 		ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceDaemonAgentProcess},
 	})
 	waitForRunner(t, hub, "daemon-1", "workspace-1")
-	write(first, protocol.EventAgentStartAck, protocol.AgentStartAckPayload{AgentID: "agent-a", LaunchID: "launch-a", StartDispatchID: "dispatch-a", QueueState: protocol.AgentStartQueueQueued})
+	write(first, protocol.EventAgentStartAck, protocol.AgentStartAckPayload{AgentID: "agent-a", QueueState: protocol.AgentStartQueueQueued})
 	deadline := time.Now().Add(time.Second)
 	for accepted.Load() != 1 {
 		if time.Now().After(deadline) {
-			t.Fatal("ready WorkspaceDaemon acknowledgement was not delivered")
+			t.Fatal("ready Runner acknowledgement was not delivered")
 		}
 		time.Sleep(time.Millisecond)
 	}
 	second := dial()
 	defer second.Close()
-	write(second, protocol.EventWorkspaceDaemonReady, protocol.WorkspaceDaemonReadyPayload{
+	write(second, protocol.EventWorkspaceDaemonReady, protocol.WorkspaceReadyPayload{
 		WorkspaceID: "workspace-1", DaemonInstanceID: "instance-2",
 		ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceDaemonAgentProcess},
 	})
 	for runnerReady.Load() != 2 {
 		if time.Now().After(deadline) {
-			t.Fatal("replacement WorkspaceDaemon did not become ready")
+			t.Fatal("replacement Runner did not become ready")
 		}
 		time.Sleep(time.Millisecond)
 	}
 	// The replaced socket either rejects this write locally or the Hub drops it
 	// at the current-ready fence. It must never reach the start receipt handler.
 	staleReceipt, err := json.Marshal(protocol.Message{Type: protocol.EventAgentStartAck, Payload: mustMarshalRaw(protocol.AgentStartAckPayload{
-		AgentID: "agent-a", LaunchID: "launch-a", StartDispatchID: "dispatch-stale", QueueState: protocol.AgentStartQueueQueued,
+		AgentID: "agent-a", QueueState: protocol.AgentStartQueueQueued,
 	})})
 	if err != nil {
 		t.Fatal(err)
@@ -435,14 +403,14 @@ func TestWorkspaceDaemonReadyReplacesConnectionAndFencesInboundFrames(t *testing
 	_ = first.WriteMessage(websocket.TextMessage, staleReceipt)
 	time.Sleep(20 * time.Millisecond)
 	if accepted.Load() != 1 {
-		t.Fatal("replaced WorkspaceDaemon start receipt bypassed current-ready fence")
+		t.Fatal("replaced Runner start receipt bypassed current-ready fence")
 	}
-	if !hub.NotifyWorkspaceDaemon("daemon-1", "workspace-1", protocol.EventWorkspaceDaemonPing, protocol.WorkspaceDaemonPingPayload{PingID: "ping-1"}) {
-		t.Fatal("current WorkspaceDaemon did not receive ping")
+	if !hub.NotifyWorkspaceDaemon("daemon-1", "workspace-1", protocol.EventWorkspaceDaemonPing, protocol.WorkspacePingPayload{PingID: "ping-1"}) {
+		t.Fatal("current Runner did not receive ping")
 	}
 	second.SetReadDeadline(time.Now().Add(time.Second))
 	if _, _, err := second.ReadMessage(); err != nil {
-		t.Fatalf("current WorkspaceDaemon did not receive ping: %v", err)
+		t.Fatalf("current Runner did not receive ping: %v", err)
 	}
 }
 
@@ -477,12 +445,12 @@ func TestWorkspaceDaemonReadyDispatchesStatusAfterCurrentSlotIsClaimed(t *testin
 			t.Fatal(err)
 		}
 	}
-	write(protocol.EventWorkspaceDaemonReady, protocol.WorkspaceDaemonReadyPayload{
+	write(protocol.EventWorkspaceDaemonReady, protocol.WorkspaceReadyPayload{
 		WorkspaceID: "workspace-1", DaemonInstanceID: "instance-1",
 		ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceDaemonAgentProcess},
 	})
 	write(protocol.EventAgentStatus, protocol.AgentStatusPayload{
-		AgentID: "agent-1", LaunchID: "launch-1", Status: protocol.AgentStatusActive,
+		AgentID: "agent-1", Status: protocol.AgentStatusActive,
 	})
 	deadline := time.Now().Add(time.Second)
 	for {
@@ -520,7 +488,7 @@ func TestCloseWorkspaceDaemonFencesReplacementDaemonInstance(t *testing.T) {
 		}
 		return conn
 	}
-	write := func(conn *websocket.Conn, payload protocol.WorkspaceDaemonReadyPayload) {
+	write := func(conn *websocket.Conn, payload protocol.WorkspaceReadyPayload) {
 		t.Helper()
 		frame, err := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceDaemonReady, Payload: mustMarshalRaw(payload)})
 		if err != nil {
@@ -532,29 +500,29 @@ func TestCloseWorkspaceDaemonFencesReplacementDaemonInstance(t *testing.T) {
 	}
 	first := dial()
 	defer first.Close()
-	write(first, protocol.WorkspaceDaemonReadyPayload{
+	write(first, protocol.WorkspaceReadyPayload{
 		WorkspaceID: "workspace-1", DaemonInstanceID: "instance-1",
 		ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceDaemonAgentProcess},
 	})
 	waitForRunner(t, hub, "daemon-1", "workspace-1")
 	second := dial()
 	defer second.Close()
-	write(second, protocol.WorkspaceDaemonReadyPayload{
+	write(second, protocol.WorkspaceReadyPayload{
 		WorkspaceID: "workspace-1", DaemonInstanceID: "instance-2",
 		ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceDaemonAgentProcess},
 	})
 	deadline := time.Now().Add(time.Second)
 	for readyCount.Load() != 2 {
 		if time.Now().After(deadline) {
-			t.Fatal("replacement WorkspaceDaemon did not become ready")
+			t.Fatal("replacement Runner did not become ready")
 		}
 		time.Sleep(time.Millisecond)
 	}
 	if hub.CloseWorkspaceDaemon("daemon-1", "workspace-1", "instance-1") {
-		t.Fatal("stale daemon instance closed the replacement WorkspaceDaemon")
+		t.Fatal("stale daemon instance closed the replacement Runner")
 	}
 	if hub.WorkspaceDaemonConnectionCount("daemon-1", "workspace-1") != 1 {
-		t.Fatal("stale close removed the current WorkspaceDaemon")
+		t.Fatal("stale close removed the current Runner")
 	}
 	if !hub.CloseWorkspaceDaemon("daemon-1", "workspace-1", "instance-2") {
 		t.Fatal("current daemon instance was not closed")
@@ -562,7 +530,7 @@ func TestCloseWorkspaceDaemonFencesReplacementDaemonInstance(t *testing.T) {
 	deadline = time.Now().Add(time.Second)
 	for hub.WorkspaceDaemonConnectionCount("daemon-1", "workspace-1") != 0 {
 		if time.Now().After(deadline) {
-			t.Fatal("current WorkspaceDaemon remained registered after close")
+			t.Fatal("current Runner remained registered after close")
 		}
 		time.Sleep(time.Millisecond)
 	}
@@ -590,7 +558,7 @@ func TestWorkspaceDaemonDisconnectCallbackOnlyObservesCurrentRunner(t *testing.T
 	}
 	ready := func(conn *websocket.Conn, instanceID string) {
 		t.Helper()
-		frame, err := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceDaemonReady, Payload: mustMarshalRaw(protocol.WorkspaceDaemonReadyPayload{
+		frame, err := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceDaemonReady, Payload: mustMarshalRaw(protocol.WorkspaceReadyPayload{
 			WorkspaceID: "workspace-1", DaemonInstanceID: instanceID,
 			ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceDaemonAgentProcess},
 		})})
@@ -610,7 +578,7 @@ func TestWorkspaceDaemonDisconnectCallbackOnlyObservesCurrentRunner(t *testing.T
 		t.Fatal("first ready connection was not current")
 	}
 	if !hub.HasWorkspaceDaemon("daemon-1", "workspace-1") {
-		t.Fatal("current WorkspaceDaemon socket must count as Computer/Workspace liveness")
+		t.Fatal("current Runner socket must count as Computer/Workspace liveness")
 	}
 
 	second := dial()
@@ -619,7 +587,7 @@ func TestWorkspaceDaemonDisconnectCallbackOnlyObservesCurrentRunner(t *testing.T
 	deadline := time.Now().Add(time.Second)
 	for !hub.IsCurrentWorkspaceDaemon("daemon-1", "workspace-1", "instance-2") {
 		if time.Now().After(deadline) {
-			t.Fatal("replacement WorkspaceDaemon did not become current")
+			t.Fatal("replacement Runner did not become current")
 		}
 		time.Sleep(time.Millisecond)
 	}
@@ -630,7 +598,7 @@ func TestWorkspaceDaemonDisconnectCallbackOnlyObservesCurrentRunner(t *testing.T
 	}
 
 	if !hub.CloseWorkspaceDaemon("daemon-1", "workspace-1", "instance-2") {
-		t.Fatal("current WorkspaceDaemon did not close")
+		t.Fatal("current Runner did not close")
 	}
 	select {
 	case instanceID := <-disconnected:
@@ -638,13 +606,13 @@ func TestWorkspaceDaemonDisconnectCallbackOnlyObservesCurrentRunner(t *testing.T
 			t.Fatalf("disconnect instance = %q, want instance-2", instanceID)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("current WorkspaceDaemon disconnect callback was not delivered")
+		t.Fatal("current Runner disconnect callback was not delivered")
 	}
 	if hub.IsCurrentWorkspaceDaemon("daemon-1", "workspace-1", "instance-2") {
-		t.Fatal("closed WorkspaceDaemon remained current")
+		t.Fatal("closed Runner remained current")
 	}
 	if hub.HasWorkspaceDaemon("daemon-1", "workspace-1") {
-		t.Fatal("closed WorkspaceDaemon socket must count as Computer/Workspace offline")
+		t.Fatal("closed Runner socket must count as Computer/Workspace offline")
 	}
 }
 
@@ -665,7 +633,7 @@ func TestWorkspaceDaemonDeliveryRetriesUntilCurrentRunnerAcknowledges(t *testing
 	hub.scheduleAgentDeliveryRetry = func(_ time.Duration, retry func()) { retries <- retry }
 	hub.SetAgentDeliveryAckHandler(func(_ context.Context, identity ClientIdentity, ack protocol.AgentDeliverAckPayload) error {
 		if identity.DaemonID != "daemon-1" || identity.WorkspaceID != "workspace-1" || ack.AgentID != "agent-1" {
-			t.Fatalf("unexpected WorkspaceDaemon acknowledgement: identity=%+v ack=%+v", identity, ack)
+			t.Fatalf("unexpected Runner acknowledgement: identity=%+v ack=%+v", identity, ack)
 		}
 		return nil
 	})
@@ -678,7 +646,7 @@ func TestWorkspaceDaemonDeliveryRetriesUntilCurrentRunnerAcknowledges(t *testing
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	ready, err := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceDaemonReady, Payload: mustMarshalRaw(protocol.WorkspaceDaemonReadyPayload{
+	ready, err := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceDaemonReady, Payload: mustMarshalRaw(protocol.WorkspaceReadyPayload{
 		WorkspaceID: "workspace-1", DaemonInstanceID: "instance-1",
 		ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceDaemonAgentProcess},
 	})})
@@ -691,7 +659,7 @@ func TestWorkspaceDaemonDeliveryRetriesUntilCurrentRunnerAcknowledges(t *testing
 	waitForRunner(t, hub, "daemon-1", "workspace-1")
 	delivery := protocol.AgentDeliverPayload{AgentID: "agent-1", Target: "channel:one", Seq: 7, DeliveryID: "delivery-1", Message: protocol.AgentMessageProjection{ID: "message-1", Target: "channel:one", Seq: 7, Content: "hello"}}
 	if !hub.NotifyWorkspaceAgentDelivery("workspace-1", "daemon-1", delivery) {
-		t.Fatal("WorkspaceDaemon delivery was not queued")
+		t.Fatal("Runner delivery was not queued")
 	}
 	readDelivery := func() protocol.AgentDeliverPayload {
 		t.Helper()
@@ -702,7 +670,7 @@ func TestWorkspaceDaemonDeliveryRetriesUntilCurrentRunnerAcknowledges(t *testing
 		}
 		var msg protocol.Message
 		if err := json.Unmarshal(raw, &msg); err != nil || msg.Type != protocol.EventAgentDeliver {
-			t.Fatalf("WorkspaceDaemon delivery frame = %+v, err=%v", msg, err)
+			t.Fatalf("Runner delivery frame = %+v, err=%v", msg, err)
 		}
 		var got protocol.AgentDeliverPayload
 		if err := json.Unmarshal(msg.Payload, &got); err != nil {
@@ -711,11 +679,11 @@ func TestWorkspaceDaemonDeliveryRetriesUntilCurrentRunnerAcknowledges(t *testing
 		return got
 	}
 	if got := readDelivery(); got.DeliveryID != delivery.DeliveryID {
-		t.Fatalf("initial WorkspaceDaemon delivery = %+v", got)
+		t.Fatalf("initial Runner delivery = %+v", got)
 	}
 	(<-retries)()
 	if got := readDelivery(); got.DeliveryID != delivery.DeliveryID {
-		t.Fatalf("retried WorkspaceDaemon delivery = %+v", got)
+		t.Fatalf("retried Runner delivery = %+v", got)
 	}
 	ack, err := json.Marshal(protocol.Message{Type: protocol.EventAgentDeliverAck, Payload: mustMarshalRaw(protocol.AgentDeliverAckPayload{AgentID: delivery.AgentID, Seq: delivery.Seq, DeliveryID: delivery.DeliveryID})})
 	if err != nil {
@@ -733,7 +701,7 @@ func TestWorkspaceDaemonDeliveryRetriesUntilCurrentRunnerAcknowledges(t *testing
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("WorkspaceDaemon acknowledgement did not clear pending delivery")
+			t.Fatal("Runner acknowledgement did not clear pending delivery")
 		}
 		time.Sleep(time.Millisecond)
 	}
@@ -881,7 +849,7 @@ func TestRelayNotifierPublishesDaemonRuntimeScope(t *testing.T) {
 
 func attachDaemonTestClient(hub *Hub, runtimeID string) *client {
 	c := &client{
-		outbox:   newClientOutbox(),
+		send:     make(chan []byte, 2),
 		done:     make(chan struct{}),
 		runtimes: map[string]struct{}{runtimeID: {}},
 	}
@@ -929,9 +897,9 @@ func (p *localFirstDaemonRelayPublisher) PublishWithID(scopeType, scopeID, exclu
 	p.exclude = exclude
 	p.frame = append([]byte(nil), frame...)
 	p.eventID = id
-	var ok bool
-	p.localFrame, ok = p.client.outbox.pop()
-	if !ok {
+	select {
+	case p.localFrame = <-p.client.send:
+	default:
 		p.t.Fatal("expected local fanout to happen before relay publish")
 	}
 	return nil
@@ -960,8 +928,10 @@ func TestRelayNotifierDedupsLocalRedisLoopback(t *testing.T) {
 
 	hub.DeliverDaemonRuntime(relay.scopeID, relay.frame, relay.eventID)
 
-	if duplicate, ok := client.outbox.pop(); ok {
+	select {
+	case duplicate := <-client.send:
 		t.Fatalf("expected redis loopback to be deduped, got duplicate %s", duplicate)
+	case <-time.After(20 * time.Millisecond):
 	}
 	if M.WakeupDeliveredHit.Load() != 1 {
 		t.Fatalf("delivered hit metric after loopback = %d, want 1", M.WakeupDeliveredHit.Load())
@@ -989,8 +959,10 @@ func TestAgentDeliveryRelayDedupsLocalRedisLoopbackWithoutDroppingRetry(t *testi
 	}
 
 	hub.DeliverDaemonRuntime("runtime-1", relay.frame, relay.eventID)
-	if duplicate, ok := client.outbox.pop(); ok {
+	select {
+	case duplicate := <-client.send:
 		t.Fatalf("expected agent delivery redis loopback to be deduped, got %s", duplicate)
+	default:
 	}
 	hub.agentDeliveryMu.Lock()
 	pending := hub.pendingAgentDeliveries[delivery.DeliveryID]
@@ -1113,7 +1085,7 @@ func TestWorkspaceDaemonControlPlaneHeartbeatRoundTrip(t *testing.T) {
 
 	readyFrame, err := json.Marshal(protocol.Message{
 		Type: protocol.EventWorkspaceDaemonReady,
-		Payload: mustMarshalRaw(protocol.WorkspaceDaemonReadyPayload{
+		Payload: mustMarshalRaw(protocol.WorkspaceReadyPayload{
 			WorkspaceID:      "workspace-1",
 			DaemonInstanceID: "instance-1",
 			ActiveCapabilities: []string{
@@ -1454,7 +1426,7 @@ func TestWorkspaceDaemonMixedRunActivityAcknowledgesOnlyCommittedTransition(t *t
 			t.Fatal(err)
 		}
 	}
-	write(protocol.EventWorkspaceDaemonReady, protocol.WorkspaceDaemonReadyPayload{WorkspaceID: "workspace-1", DaemonInstanceID: "instance-1", ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceDaemonAgentProcess}})
+	write(protocol.EventWorkspaceDaemonReady, protocol.WorkspaceReadyPayload{WorkspaceID: "workspace-1", DaemonInstanceID: "instance-1", ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceDaemonAgentProcess}})
 	waitForRunner(t, hub, "daemon-1", "workspace-1")
 	transition := protocol.MixedRunActivityTransitionPayload{
 		AgentID: "agent-1", RuntimeID: "runtime-1", RunID: "run-1", RunAgentID: "run-agent-1",
@@ -1497,7 +1469,7 @@ func TestWorkspaceDaemonAgentResetCommandAndReceiptUseCurrentCapableRunner(t *te
 	received := make(chan string, 1)
 	hub.SetWorkspaceDaemonHandler(func(_ context.Context, _ ClientIdentity, _ string, eventType string, raw json.RawMessage) error {
 		if eventType == protocol.EventAgentResetWorkspaceResult {
-			var result protocol.WorkspaceDaemonAgentResetWorkspaceResultPayload
+			var result protocol.AgentWorkspaceResetResultPayload
 			if err := json.Unmarshal(raw, &result); err != nil {
 				return err
 			}
@@ -1524,12 +1496,12 @@ func TestWorkspaceDaemonAgentResetCommandAndReceiptUseCurrentCapableRunner(t *te
 			t.Fatal(err)
 		}
 	}
-	write(protocol.EventWorkspaceDaemonReady, protocol.WorkspaceDaemonReadyPayload{
+	write(protocol.EventWorkspaceDaemonReady, protocol.WorkspaceReadyPayload{
 		WorkspaceID: "workspace-1", DaemonInstanceID: "instance-1",
 		ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceDaemonAgentProcess, protocol.DaemonCapabilityWorkspaceDaemonAgentReset},
 	})
 	waitForRunner(t, hub, "daemon-1", "workspace-1")
-	command := protocol.WorkspaceDaemonAgentResetWorkspacePayload{
+	command := protocol.AgentWorkspaceResetPayload{
 		OperationID: "operation-1", AgentID: "agent-1",
 	}
 	if !hub.NotifyAgentRestartCommand("workspace-1", "daemon-1", protocol.EventDaemonAgentResetWorkspace, command.OperationID, command) {
@@ -1544,7 +1516,7 @@ func TestWorkspaceDaemonAgentResetCommandAndReceiptUseCurrentCapableRunner(t *te
 	if err := json.Unmarshal(raw, &frame); err != nil || frame.Type != protocol.EventDaemonAgentResetWorkspace {
 		t.Fatalf("reset frame = %+v, err=%v", frame, err)
 	}
-	write(protocol.EventAgentResetWorkspaceResult, protocol.WorkspaceDaemonAgentResetWorkspaceResultPayload{
+	write(protocol.EventAgentResetWorkspaceResult, protocol.AgentWorkspaceResetResultPayload{
 		OperationID: command.OperationID, AgentID: command.AgentID, Status: protocol.AgentResetWorkspaceSucceeded,
 	})
 	select {

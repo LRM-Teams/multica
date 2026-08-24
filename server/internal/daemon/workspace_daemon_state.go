@@ -10,50 +10,46 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
-	"github.com/multica-ai/multica/server/internal/diagnosticlog"
 	"github.com/multica-ai/multica/server/pkg/agent"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-// workspaceSessionConfig fixes the identities that must survive socket
+// WorkspaceDaemonConfig fixes the identities that must survive socket
 // reconnects. Runtime membership is deliberately absent because it is mutable
 // input, not WorkspaceDaemon identity.
-type workspaceSessionConfig struct {
+type WorkspaceDaemonConfig struct {
 	DaemonID         string
 	DaemonInstanceID string
 	WorkspaceID      string
-	RuntimeEpoch     int64
 	DeviceName       string
 	OS               string
 	CLIVersion       string
 	// MachineID mirrors Config.MachineID: the OS-level machine fingerprint,
-	// reported in the WorkspaceDaemon ready payload so the server can persist it on the
+	// reported in the Runner ready payload so the server can persist it on the
 	// Computer identity and use it for same-machine convergence (LRM-1570).
 	MachineID string
 }
 
-func (config workspaceSessionConfig) validate() (workspaceSessionConfig, error) {
+func (config WorkspaceDaemonConfig) validate() (WorkspaceDaemonConfig, error) {
 	config.DaemonID = strings.TrimSpace(config.DaemonID)
 	config.DaemonInstanceID = strings.TrimSpace(config.DaemonInstanceID)
 	config.WorkspaceID = strings.TrimSpace(config.WorkspaceID)
 	if config.DaemonID == "" || config.DaemonInstanceID == "" || config.WorkspaceID == "" {
-		return workspaceSessionConfig{}, errors.New("WorkspaceDaemon, daemon instance, and Workspace identities are required")
+		return WorkspaceDaemonConfig{}, errors.New("WorkspaceDaemon Daemon, daemon instance, and Workspace identities are required")
 	}
 	return config, nil
 }
 
-// workspaceSessionDependencies are machine-wide owners. workspaceSession keeps
+// workspaceDaemonDependencies are machine-wide owners. WorkspaceDaemon keeps
 // their references but never copies their state or changes their lifetime.
-type workspaceSessionDependencies struct {
+type workspaceDaemonDependencies struct {
 	client                    *Client
 	serverBaseURL             string
 	workspacesRoot            string
 	logger                    *slog.Logger
-	runtimes                  *canonicalAgentRuntimePool
-	processAdmission          agentProcessAdmission
+	runtimes                  *agentRuntimePool
 	diagnostics               runnerDiagnosticSink
 	openInbox                 inboxCoordinatorFactory
 	runtimeIDs                func() []string
@@ -80,15 +76,14 @@ type workspaceSessionDependencies struct {
 	rememberGraphProfile func(memoryType string, exploreAgents, exploreMaxRounds int)
 }
 
-// workspaceSession is one long-lived orchestration boundary for an
-// authenticated Computer-Workspace Binding. Callers interact through WorkspaceDaemon
+// WorkspaceDaemon is one long-lived orchestration boundary for an
+// authenticated Computer-Workspace Binding. Callers interact through Runner
 // methods; its Inbox, process, Activity, and socket state never
 // escape to the machine-wide Daemon lifecycle owner.
-type workspaceSession struct {
-	config       workspaceSessionConfig
-	runtimeEpoch atomic.Int64
-	client       *Client
-	logger       *slog.Logger
+type WorkspaceDaemon struct {
+	config WorkspaceDaemonConfig
+	client *Client
+	logger *slog.Logger
 
 	serverBaseURL  string
 	workspacesRoot string
@@ -97,7 +92,7 @@ type workspaceSession struct {
 	activity  *agentActivityProducer
 	inboxes   *InboxRegistry
 
-	runtimes    *canonicalAgentRuntimePool
+	runtimes    *agentRuntimePool
 	diagnostics runnerDiagnosticSink
 
 	runtimeIDs                func() []string
@@ -128,33 +123,20 @@ type workspaceSession struct {
 	onReady      func()
 }
 
-func (runner *workspaceSession) currentRuntimeEpoch() int64 {
-	if runner == nil {
-		return 0
-	}
-	return runner.runtimeEpoch.Load()
-}
-
-func (runner *workspaceSession) setRuntimeEpoch(epoch int64) {
-	if runner != nil {
-		runner.runtimeEpoch.Store(epoch)
-	}
-}
-
-func (runner *workspaceSession) WorkspaceID() string {
+func (runner *WorkspaceDaemon) WorkspaceID() string {
 	if runner == nil {
 		return ""
 	}
 	return runner.config.WorkspaceID
 }
 
-func newWorkspaceSession(config workspaceSessionConfig, dependencies workspaceSessionDependencies) (*workspaceSession, error) {
+func newWorkspaceDaemon(config WorkspaceDaemonConfig, dependencies workspaceDaemonDependencies) (*WorkspaceDaemon, error) {
 	config, err := config.validate()
 	if err != nil {
 		return nil, err
 	}
-	if dependencies.client == nil || dependencies.runtimes == nil || dependencies.processAdmission == nil || dependencies.openInbox == nil || dependencies.runtimeIDs == nil || dependencies.ensureResidentRuntime == nil {
-		return nil, errors.New("WorkspaceDaemon client, Runtime pool, process admission, Inbox factory, Runtime scope, and resident Runtime are required")
+	if dependencies.client == nil || dependencies.runtimes == nil || dependencies.openInbox == nil || dependencies.runtimeIDs == nil || dependencies.ensureResidentRuntime == nil {
+		return nil, errors.New("WorkspaceDaemon client, Runtime pool, Inbox factory, Runtime scope, and resident Runtime are required")
 	}
 	now := dependencies.now
 	if now == nil {
@@ -176,18 +158,13 @@ func newWorkspaceSession(config workspaceSessionConfig, dependencies workspaceSe
 		return nil, err
 	}
 	life, lifeStop := context.WithCancel(context.Background())
-	runner := &workspaceSession{
-		config:         config,
-		client:         dependencies.client,
-		logger:         dependencies.logger,
-		serverBaseURL:  dependencies.serverBaseURL,
-		workspacesRoot: dependencies.workspacesRoot,
-		processes: newAgentProcessManager(
-			config.WorkspaceID,
-			dependencies.processAdmission,
-			now,
-			dependencies.onTransition,
-		),
+	return &WorkspaceDaemon{
+		config:                    config,
+		client:                    dependencies.client,
+		logger:                    dependencies.logger,
+		serverBaseURL:             dependencies.serverBaseURL,
+		workspacesRoot:            dependencies.workspacesRoot,
+		processes:                 newAgentProcessManager(now, dependencies.onTransition),
 		activity:                  newAgentActivityProducer(config.DaemonInstanceID, now, nil),
 		inboxes:                   inboxes,
 		runtimes:                  dependencies.runtimes,
@@ -213,12 +190,10 @@ func newWorkspaceSession(config workspaceSessionConfig, dependencies workspaceSe
 		residency:                 newAgentResidencyStore(now),
 		life:                      life,
 		lifeStop:                  lifeStop,
-	}
-	runner.setRuntimeEpoch(config.RuntimeEpoch)
-	return runner, nil
+	}, nil
 }
 
-func (runner *workspaceSession) Close() {
+func (runner *WorkspaceDaemon) Close() {
 	if runner == nil {
 		return
 	}
@@ -230,7 +205,7 @@ func (runner *workspaceSession) Close() {
 	}
 }
 
-func (runner *workspaceSession) Run(ctx context.Context) {
+func (runner *WorkspaceDaemon) Run(ctx context.Context) {
 	if runner == nil || runner.client == nil {
 		return
 	}
@@ -258,7 +233,7 @@ func (runner *workspaceSession) Run(ctx context.Context) {
 	}
 }
 
-func (runner *workspaceSession) sendOnConnection(connection *DaemonConnection, eventType string, payload any) error {
+func (runner *WorkspaceDaemon) sendOnConnection(connection *DaemonConnection, eventType string, payload any) error {
 	runner.connectionMu.Lock()
 	defer runner.connectionMu.Unlock()
 	if runner.connection != connection {
@@ -267,7 +242,7 @@ func (runner *workspaceSession) sendOnConnection(connection *DaemonConnection, e
 	return connection.Write(eventType, payload)
 }
 
-func (runner *workspaceSession) sendOnCurrentConnection(eventType string, payload any) error {
+func (runner *WorkspaceDaemon) sendOnCurrentConnection(eventType string, payload any) error {
 	runner.connectionMu.Lock()
 	defer runner.connectionMu.Unlock()
 	if runner.connection == nil || !runner.connection.Connected() {
@@ -276,7 +251,7 @@ func (runner *workspaceSession) sendOnCurrentConnection(eventType string, payloa
 	return runner.connection.Write(eventType, payload)
 }
 
-func (runner *workspaceSession) replaceConnection(next *DaemonConnection) {
+func (runner *WorkspaceDaemon) replaceConnection(next *DaemonConnection) {
 	runner.connectionMu.Lock()
 	previous := runner.connection
 	runner.connection = next
@@ -286,7 +261,7 @@ func (runner *workspaceSession) replaceConnection(next *DaemonConnection) {
 	}
 }
 
-func (runner *workspaceSession) releaseConnection(current *DaemonConnection) {
+func (runner *WorkspaceDaemon) releaseConnection(current *DaemonConnection) {
 	runner.connectionMu.Lock()
 	if runner.connection == current {
 		runner.connection = nil
@@ -295,7 +270,7 @@ func (runner *workspaceSession) releaseConnection(current *DaemonConnection) {
 	current.Close()
 }
 
-func (runner *workspaceSession) runConnection(ctx context.Context) error {
+func (runner *WorkspaceDaemon) runConnection(ctx context.Context) error {
 	if runner.client == nil {
 		return fmt.Errorf("daemon client unavailable")
 	}
@@ -334,7 +309,7 @@ func (runner *workspaceSession) runConnection(ctx context.Context) error {
 		case <-stopWatch:
 		}
 	}()
-	if err := connection.Write(protocol.EventWorkspaceDaemonReady, protocol.WorkspaceDaemonReadyPayload{
+	if err := connection.Write(protocol.EventWorkspaceDaemonReady, protocol.WorkspaceReadyPayload{
 		WorkspaceID: workspaceID, DaemonInstanceID: runner.config.DaemonInstanceID,
 		DeviceName:         runner.config.DeviceName,
 		OS:                 runner.config.OS,
@@ -352,7 +327,7 @@ func (runner *workspaceSession) runConnection(ctx context.Context) error {
 		go runner.retryAppInboxAcks(ctx, workspaceID)
 	}
 	// Replay after ready so the Hub has claimed this socket as the current
-	// WorkspaceDaemon. agent:status active sent before that claim is dropped as stale.
+	// Runner. agent:status active sent before that claim is dropped as stale.
 	if runner.activity != nil {
 		for _, frame := range runner.activity.ReconnectFrames() {
 			if err := connection.Write(frame.EventType, frame.Payload); err != nil {
@@ -363,7 +338,7 @@ func (runner *workspaceSession) runConnection(ctx context.Context) error {
 	return runner.serveConnection(connection, conn)
 }
 
-func (runner *workspaceSession) activeCapabilities() []string {
+func (runner *WorkspaceDaemon) activeCapabilities() []string {
 	capabilities := []string{
 		protocol.DaemonCapabilityWorkspaceDaemonAgentProcess,
 		protocol.DaemonCapabilityWorkspaceDaemonAgentReset,
@@ -374,70 +349,29 @@ func (runner *workspaceSession) activeCapabilities() []string {
 	return capabilities
 }
 
-func (d *WorkspaceDaemonCore) newWorkspaceSession(workspaceID string) (*workspaceSession, error) {
+func (d *Daemon) newWorkspaceDaemon(workspaceID string) (*WorkspaceDaemon, error) {
 	if d == nil {
-		return nil, errors.New("WorkspaceDaemonCore is required")
+		return nil, errors.New("WorkspaceDaemon Daemon is required")
 	}
-	d.mu.Lock()
-	providerByRuntime := make(map[string]string)
-	for runtimeID, runtime := range d.runtimeIndex {
-		if runtime.WorkspaceID == workspaceID {
-			providerByRuntime[runtimeID] = strings.ToLower(strings.TrimSpace(runtime.Provider))
-		}
-	}
-	d.mu.Unlock()
-	d.mu.Lock()
-	runtimeEpoch := int64(0)
-	if state := d.workspaces[workspaceID]; state != nil {
-		runtimeEpoch = state.runtimeEpoch
-	}
-	d.mu.Unlock()
 	onTransition := func(transition agentLifecycleTransition) {
 		d.recordAgentLifecycleTransition(transition)
-		phase := transition.Phase
-		if phase == "process_residency" {
-			phase = "provider_spawn"
-		} else if phase == "runtime_readiness" {
-			phase = "provider_ready"
-		} else if transition.Event == "close" && transition.Result == "terminal" {
-			phase = "provider_exit"
-		}
-		provider := providerByRuntime[transition.RuntimeID]
-		if provider == "codex" {
-			d.recordRunnerDiagnostic(workspaceID, diagnosticlog.Event{
-				Name:  diagnosticlog.EventAgentProcessStateChanged,
-				Level: diagnosticLevel(transition.Result), Component: "provider_process",
-				Identity: diagnosticlog.Identity{
-					EventID: transition.StateInstanceID, AgentID: transition.AgentID,
-					RuntimeID: transition.RuntimeID, StartDispatchID: transition.StartDispatchID,
-					LaunchID: transition.LaunchID, ProcessInstanceID: transition.ProcessInstanceID, ExecutionID: transition.LaunchID,
-				}, Fields: diagnosticlog.Fields{
-					Provider: provider, Phase: phase, Outcome: transition.Event,
-					ReasonCode: transition.Result, ProcessPID: transition.ProcessPID,
-					RuntimeEpoch: transition.RuntimeEpoch, ExitCode: transition.ExitCode, Signal: transition.Signal,
-					TerminationReason: firstNonEmpty(transition.TerminationReason, terminationReasonFromLifecycle(transition.Result)), ForceKilled: transition.ForceKilled,
-				},
-			})
-		}
 	}
-	return newWorkspaceSession(workspaceSessionConfig{
+	return newWorkspaceDaemon(WorkspaceDaemonConfig{
 		DaemonID:         d.cfg.DaemonID,
 		DaemonInstanceID: d.runnerInstanceID,
 		WorkspaceID:      workspaceID,
-		RuntimeEpoch:     runtimeEpoch,
 		DeviceName:       d.cfg.DeviceName,
 		OS:               normalizeGOOS(runtime.GOOS),
 		CLIVersion:       d.cfg.CLIVersion,
 		MachineID:        d.cfg.MachineID,
-	}, workspaceSessionDependencies{
-		client:           d.client,
-		serverBaseURL:    d.cfg.ServerBaseURL,
-		workspacesRoot:   d.cfg.WorkspacesRoot,
-		logger:           d.logger,
-		runtimes:         d.canonicalRuntimes,
-		processAdmission: d.processAdmission,
-		diagnostics:      d.runnerDiagnostics,
-		openInbox:        d.openMessageCoordinator,
+	}, workspaceDaemonDependencies{
+		client:         d.client,
+		serverBaseURL:  d.cfg.ServerBaseURL,
+		workspacesRoot: d.cfg.WorkspacesRoot,
+		logger:         d.logger,
+		runtimes:       d.canonicalRuntimes,
+		diagnostics:    d.runnerDiagnostics,
+		openInbox:      d.openMessageCoordinator,
 		runtimeIDs: func() []string {
 			d.mu.Lock()
 			defer d.mu.Unlock()

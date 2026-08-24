@@ -744,7 +744,6 @@
     "no_available_director": "当前没有可执行 V6 的在线调研主理人。请先启动或升级其绑定的电脑。",
     "director_unavailable": "所选调研主理人已不可用，请改选其他在线主理人。",
     "director_runtime_offline": "调研主理人的电脑当前离线，请启动后重试。",
-    "director_runtime_incompatible": "调研主理人的电脑版本过旧，请升级后再运行 V6 调研。",
     "bootstrap_pending": "调研任务已保存，但主理人暂未成功接单，系统正在自动重试；请重试此操作以进入任务。",
     "templates_label": "快捷模板",
     "templates_hint": "选择模板后补充具体目标，再开始调研",

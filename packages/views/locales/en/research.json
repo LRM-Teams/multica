@@ -744,7 +744,6 @@
     "no_available_director": "No online V6-capable Director is available. Start or upgrade the bound Computer first.",
     "director_unavailable": "The selected Director is no longer available. Choose another online Director.",
     "director_runtime_offline": "The Director's Computer is offline. Start it, then retry.",
-    "director_runtime_incompatible": "The Director's Computer must be upgraded before it can run Research V6.",
     "bootstrap_pending": "The research was saved, but the Director could not be dispatched yet. The system is retrying; retry this action to open it.",
     "templates_label": "Quick templates",
     "templates_hint": "Pick a pill in the composer to prefill a starter — edit, then start",

@@ -270,25 +270,6 @@ describe("ResearchListPage list states (LRM-789)", () => {
     expect(mutationRef.current.mutate).not.toHaveBeenCalled();
   });
 
-  it("maps a V6 runtime capability rejection to actionable localized copy", () => {
-    mutationRef.current = {
-      ...mutationRef.current,
-      isError: true,
-      error: Object.assign(new Error("research Director runtime must be upgraded"), {
-        body: { code: "research.v6.director_runtime_incompatible" },
-      }),
-    };
-
-    render(<ResearchListPage />);
-
-    expect(
-      screen.getByText(enResearch.home.director_runtime_incompatible),
-    ).toBeTruthy();
-    expect(
-      screen.queryByText("research Director runtime must be upgraded"),
-    ).toBeNull();
-  });
-
   it("loading paints row-shaped skeleton list, no group headers or empty state (LRM-781)", () => {
     setQuery({ isLoading: true });
     const { container } = render(<ResearchListPage />);

@@ -8,7 +8,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
-	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 type researchV6DirectorReadinessError struct {
@@ -45,9 +44,6 @@ func (h *Handler) researchV6DirectorReadiness(ctx context.Context, workspaceID, 
 	}
 	if runtimeConnectivity(runtime, time.Now()) != runtimeConnectivityOnline {
 		return &researchV6DirectorReadinessError{status: 409, code: "research.v6.director_runtime_offline", message: "research Director runtime is offline", retryable: true}
-	}
-	if !agentRuntimeHasCapability(runtime, protocol.DaemonCapabilityResearchRunV6) {
-		return &researchV6DirectorReadinessError{status: 409, code: "research.v6.director_runtime_incompatible", message: "research Director runtime must be upgraded for Research V6"}
 	}
 	return nil
 }

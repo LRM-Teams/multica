@@ -87,7 +87,7 @@ var workspaceInfoCmd = &cobra.Command{
 		"  --agents / --computers / --projects  list only those sections (default: all)\n" +
 		"  --query                 filter rows by visible text (name, status, error, resource)\n" +
 		"  --limit / --offset      page list output (0 = unlimited, default; set limit to page)\n\n" +
-		"Project listing and bound resources are available here via --projects; the legacy `multica project` command is no longer supported.\n\n" +
+		"Project listing and bound resources are available via `multica workspace info --projects`; the legacy `multica project` command is no longer supported.\n\n" +
 		"Accepts a full UUID, slug, or short UUID prefix; omit to use the default workspace.",
 	Args: cobra.MaximumNArgs(1),
 	RunE: runWorkspaceInfo,

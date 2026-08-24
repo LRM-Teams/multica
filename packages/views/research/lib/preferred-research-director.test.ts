@@ -11,11 +11,11 @@ describe("preferredResearchDirectorId", () => {
     ).toBe("ronaldo");
   });
 
-  it("falls back to the first available agent when no Ronaldo exists", () => {
+  it("does not silently assign another agent when no Ronaldo exists", () => {
     expect(
       preferredResearchDirectorId([
         { id: "first", name: "director-one", display_name: "Director One" },
       ]),
-    ).toBe("first");
+    ).toBe("");
   });
 });

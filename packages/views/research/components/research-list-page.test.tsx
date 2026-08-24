@@ -188,9 +188,9 @@ beforeEach(() => {
   fleetQueryRef.current = {
     data: [
       {
-        id: "director-1",
-        name: "Director One",
-        display_name: "Director One",
+        id: "ronaldo",
+        name: "luo-na-er-duo",
+        display_name: "罗纳尔多",
         archived_at: null,
         runtime_id: "runtime-1",
         runtime_status: "online",
@@ -231,7 +231,7 @@ describe("ResearchListPage list states (LRM-789)", () => {
     // Critique 2026-08-21 P0: one behavior-named lead control inside the
     // composer footer; the raw orchestrator-version select is gone.
     const lead = screen.getByTestId("research-create-lead");
-    expect(lead).toHaveTextContent("Director One");
+    expect(lead).toHaveTextContent("罗纳尔多");
     expect(screen.queryByTestId("research-create-director-options")).toBeNull();
     expect(screen.queryByText("research-run-v5")).toBeNull();
     expect(screen.queryByText("research-run-v6")).toBeNull();
@@ -242,6 +242,34 @@ describe("ResearchListPage list states (LRM-789)", () => {
     fireEvent.click(screen.getByTestId("research-create-submit"));
 
     expect(mutate).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not silently assign the first online Agent when Ronaldo is unavailable", () => {
+    fleetQueryRef.current = {
+      ...fleetQueryRef.current,
+      data: [
+        {
+          id: "deepseek-test",
+          name: "deepseek-test",
+          display_name: "deepseek-test",
+          archived_at: null,
+          runtime_id: "runtime-deepseek",
+          runtime_status: "online",
+        },
+      ],
+    };
+
+    render(<ResearchListPage />);
+
+    expect(screen.getByTestId("research-create-lead")).not.toHaveTextContent(
+      "deepseek-test",
+    );
+    expect(screen.getByText(enResearch.home.preferred_director_unavailable)).toBeTruthy();
+    fireEvent.change(screen.getByPlaceholderText(enResearch.goal_placeholder), {
+      target: { value: "Compare collaboration modes" },
+    });
+    fireEvent.click(screen.getByTestId("research-create-submit"));
+    expect(mutationRef.current.mutate).not.toHaveBeenCalled();
   });
 
   it("does not offer an offline Agent as a V6 Director", () => {
@@ -262,7 +290,7 @@ describe("ResearchListPage list states (LRM-789)", () => {
     render(<ResearchListPage />);
 
     expect(screen.queryByText("Offline Director")).toBeNull();
-    expect(screen.getByText(enResearch.home.no_available_director)).toBeTruthy();
+    expect(screen.getByText(enResearch.home.preferred_director_unavailable)).toBeTruthy();
     fireEvent.change(screen.getByPlaceholderText(enResearch.goal_placeholder), {
       target: { value: "Compare collaboration modes" },
     });

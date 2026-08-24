@@ -1755,6 +1755,7 @@ func TestPickAssigneeFromFlags(t *testing.T) {
 // project: server/migrations/034_projects.up.sql:10). Without this gating,
 // `multica issue subscriber add --user "<SquadName>"` or project creation
 // would resolve to
+// another project-lead caller would resolve to
 // (squad, ...) and surface as a 500/403 server-side instead of a clean
 // CLI-side resolution error.
 func TestPickAssigneeFromFlagsMemberOrAgentKinds(t *testing.T) {

@@ -45,7 +45,7 @@ For the difference between token types, see [Authentication and tokens](/auth-to
 ## Issues and projects
 
 <Callout type="info">
-`list` commands (such as `multica issue list`) print short, copy-paste-ready IDs by default. Use `multica workspace info --projects --output json` to inspect projects and bound resources.
+`list` commands such as `multica issue list` print short, copy-paste-ready IDs by default. The `<id>` argument on follow-up commands accepts either the short ID or the full UUID. Use `multica workspace info --projects` to inspect projects and their bound resources.
 </Callout>
 
 | Command | Purpose |
@@ -61,6 +61,7 @@ For the difference between token types, see [Authentication and tokens](/auth-to
 | `multica issue rerun <id>` | Re-enqueue a fresh task for the issue's current agent assignee |
 | `multica issue comment <id> ...` | Nested: view / post comments |
 | `multica issue subscriber <id> ...` | Nested: subscribe / unsubscribe |
+| `multica workspace info --projects` | List projects and their bound resources |
 
 ## Agents and skills
 

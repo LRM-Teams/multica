@@ -530,6 +530,18 @@ multica issue run-messages <task-id> --since 42 --output json
 
 The `runs` command shows all past and current executions for an issue, including running tasks. Table output uses short task UUID prefixes by default; pass `--full-id` to print canonical task UUIDs. The `run-messages` command accepts full task UUIDs directly; copied short task prefixes must be scoped with `--issue <issue-id>` so the CLI only checks that issue's runs. It shows the detailed message log (tool calls, thinking, text, errors) for a single run. Use `--since` for efficient polling of in-progress runs.
 
+## Projects
+
+Projects group related issues (e.g. a sprint, an epic, a workstream). Inspect
+projects and their bound resources through the unified workspace snapshot:
+
+```bash
+multica workspace info --projects
+multica workspace info --projects --output json
+```
+
+The legacy `multica project` command is not available.
+
 ### Adaptive channel goals
 
 Goal Mode is opt-in per group channel. Ordinary messages and one-step tasks do

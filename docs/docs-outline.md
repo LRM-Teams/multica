@@ -871,6 +871,7 @@ multica issue assign <issue-id> --agent <agent-slug>
   - 8.5 multica setup 详细
   - 8.6 multica workspace 详细
   - 8.7 multica issue（+comment / subscriber）详细
+  - 8.8 workspace info 项目资源
   - 8.9 multica agent（+skills）详细
   - 8.10 multica skill 详细
   - 8.11 multica autopilot 详细

@@ -440,9 +440,7 @@ func TestBoundary_NonessentialAllowlist_InventoryDocumentsNamedSurfaces(t *testi
 }
 
 const boundaryContractIssueID = "1881a167-4bb6-4602-944b-f40ce4192fe6"
-const boundaryContractProjectID = "p1111111-2222-3333-4444-555555555555"
-
-// --- ④ issue + project resource (necessary; still human paths today) ---
+// --- ④ issue (necessary; still human paths today) ---
 
 // TestBoundary_IssueGet_HitsDedicatedAgentAPI asserts issue get uses
 // GET /api/agent/issues/{id} (resolve + read both under dedicated).
@@ -1357,8 +1355,8 @@ func TestBoundary_NecessaryPathTable_DocumentsDedicatedTargets(t *testing.T) {
 		{"issue pull-requests", []string{"/api/agent/issues/", "/pull-requests"}},
 		{"task run messages", []string{"/api/agent/tasks/", "/messages"}},
 		{"task self-cancel", []string{"/api/agent/tasks/", "/cancel"}},
-		{"project list", []string{"/api/agent/projects"}},
-		{"project resource read", []string{"/api/agent/projects/"}},
+		{"workspace project list", []string{"/api/agent/projects"}},
+		{"workspace project resources", []string{"/api/agent/projects/"}},
 		{"attachment view", []string{"/api/agent/attachments"}},
 		{"attachment upload session", []string{"/api/agent/attachment-upload-sessions"}},
 		{"directory agents", []string{"/api/agent/agents"}},

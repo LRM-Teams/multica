@@ -316,6 +316,15 @@ multica issue run-messages <task-id> --since 42 --output json
 Use `multica workspace info --projects --output json` to inspect projects and
 their bound resources. Project administration is managed through the workspace
 UI/API; the legacy `multica project` command is not available.
+Projects group related issues (e.g. a sprint, an epic, a workstream). Every project
+belongs to a workspace and can optionally have a lead (member or agent).
+
+### Projects
+
+```bash
+multica workspace info --projects
+multica workspace info --projects --output json
+```
 
 ### Associating Issues with Projects
 

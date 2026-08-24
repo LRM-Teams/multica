@@ -59,9 +59,7 @@ func (h *Handler) ListRunnerActivitySummaries(w http.ResponseWriter, r *http.Req
 	}
 	defer rows.Close()
 
-	inFlight := h.workspaceInFlightInboxAgentIDs(r.Context(), workspaceID)
 	response := RunnerActivitySummariesResponse{Items: []RunnerActivitySummaryResponseItem{}}
-	seen := make(map[string]struct{})
 	for rows.Next() {
 		var agentID pgtype.UUID
 		var daemonID string
@@ -79,29 +77,15 @@ func (h *Handler) ListRunnerActivitySummaries(w http.ResponseWriter, r *http.Req
 		if errorText.Valid {
 			summary = runnerActivitySummaryWithError(summary, errorText.String)
 		}
-		if _, busy := inFlight[agentIDStr]; busy {
-			summary = overlayInFlightInboxOnIdleRunnerSummary(summary)
-		}
 		response.Items = append(response.Items, RunnerActivitySummaryResponseItem{
 			AgentID: agentIDStr,
 			Summary: summary,
 		})
-		seen[agentIDStr] = struct{}{}
 	}
 	if err := rows.Err(); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load runner activity summaries")
 		return
 	}
-	for agentID := range inFlight {
-		if _, ok := seen[agentID]; ok {
-			continue
-		}
-		response.Items = append(response.Items, RunnerActivitySummaryResponseItem{
-			AgentID: agentID,
-			Summary: inFlightInboxThinkingSummary(),
-		})
-	}
-
 	writeJSON(w, http.StatusOK, response)
 }
 

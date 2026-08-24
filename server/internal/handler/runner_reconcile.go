@@ -84,7 +84,7 @@ func reduceRunnerLaunches(desired []runnerDesiredLaunch, observed []runnerObserv
 // and runtime moves through one path.
 func (h *Handler) reconcileWorkspaceDaemonLaunches(ctx context.Context, identity daemonws.ClientIdentity) error {
 	if h == nil || h.DB == nil || h.DaemonHub == nil {
-		return errors.New("Workspace Runner reconcile dependencies are unavailable")
+		return errors.New("WorkspaceDaemon reconcile dependencies are unavailable")
 	}
 	if !h.DaemonHub.WorkspaceDaemonSupportsCapability(identity.DaemonID, identity.WorkspaceID, protocol.DaemonCapabilityWorkspaceDaemonAgentProcess) {
 		return nil
@@ -98,7 +98,7 @@ func (h *Handler) reconcileWorkspaceDaemonLaunches(ctx context.Context, identity
 	// cache; treating it as running would skip agent:start after restart.
 	daemonInstanceID, live := h.DaemonHub.CurrentWorkspaceDaemonInstance(identity.DaemonID, identity.WorkspaceID)
 	if !live {
-		return errors.New("current Workspace Runner unavailable during launch reconcile")
+		return errors.New("current WorkspaceDaemon unavailable during process reconcile")
 	}
 	skip := h.restartAgentsOnActiveOperation()
 	eligibleDesired := desired[:0]
@@ -120,9 +120,9 @@ func (h *Handler) reconcileWorkspaceDaemonLaunches(ctx context.Context, identity
 	}
 	for _, action := range reduceRunnerLaunches(desired, observed) {
 		if !h.DaemonHub.NotifyWorkspaceDaemon(identity.DaemonID, identity.WorkspaceID, action.eventType, action.payload) {
-			return errors.New("current Workspace Runner unavailable during launch reconcile")
+			return errors.New("current WorkspaceDaemon unavailable during process reconcile")
 		}
-		slog.Debug("Workspace Runner launch reconciled", "workspace_id", identity.WorkspaceID, "daemon_id", identity.DaemonID, "event_type", action.eventType, "outcome", "sent", "reason", "desired_running_mismatch")
+		slog.Debug("WorkspaceDaemon process reconciled", "workspace_id", identity.WorkspaceID, "daemon_id", identity.DaemonID, "event_type", action.eventType, "outcome", "sent", "reason", "desired_running_mismatch")
 	}
 	return nil
 }
@@ -169,7 +169,7 @@ func (h *Handler) reconcileConnectedRuntime(ctx context.Context, workspaceID str
 }
 
 // reconcileConnectedRuntimes resolves mutable Runtime placement into the
-// immutable Workspace Runner identity and deduplicates by daemon. A move
+// immutable WorkspaceDaemon identity and deduplicates by daemon. A move
 // within one Computer therefore emits one stop/start sequence; a move across
 // Computers reconciles the old and new Runners independently.
 func (h *Handler) reconcileConnectedRuntimes(ctx context.Context, workspaceID string, runtimeIDs ...pgtype.UUID) {
@@ -196,7 +196,7 @@ func (h *Handler) reconcileConnectedRuntimes(ctx context.Context, workspaceID st
 	sort.Strings(daemonIDs)
 	for _, daemonID := range daemonIDs {
 		if err := h.reconcileWorkspaceDaemonLaunches(ctx, identities[daemonID]); err != nil {
-			slog.Warn("Workspace Runner launch reconcile after placement change failed", "workspace_id", workspaceID, "daemon_id", daemonID, "error", err)
+			slog.Warn("WorkspaceDaemon process reconcile after placement change failed", "workspace_id", workspaceID, "daemon_id", daemonID, "error", err)
 		}
 	}
 }

@@ -634,7 +634,7 @@ func (h *Hub) requestWorkspaceDaemon(ctx context.Context, daemonID, workspaceID,
 // SetHeartbeatHandler installs the callback used for daemon:heartbeat frames.
 // Wiring is done after handler construction because the handler depends on
 // DB queries that aren't available when the hub is built. A nil handler
-// disables heartbeat processing; capable Workspace Runners reconnect until
+// disables heartbeat processing; capable WorkspaceDaemons reconnect until
 // they reach a Server that supports their control plane.
 func (h *Hub) SetHeartbeatHandler(fn HeartbeatHandler) {
 	if h == nil {
@@ -1028,7 +1028,7 @@ func (h *Hub) IsCurrentWorkspaceDaemon(daemonID, workspaceID, daemonInstanceID s
 }
 
 // HasWorkspaceDaemon reports whether this Computer currently holds a live
-// DaemonCore / Workspace Runner socket for the Workspace. Socket presence is
+// DaemonCore / WorkspaceDaemon socket for the Workspace. Socket presence is
 // Computer liveness: connect is online, disconnect is offline.
 func (h *Hub) HasWorkspaceDaemon(daemonID, workspaceID string) bool {
 	if h == nil || strings.TrimSpace(daemonID) == "" || strings.TrimSpace(workspaceID) == "" {
@@ -1039,14 +1039,14 @@ func (h *Hub) HasWorkspaceDaemon(daemonID, workspaceID string) bool {
 	return h.byRunner[workspaceDaemonKey{daemonID: daemonID, workspaceID: workspaceID}] != nil
 }
 
-// WorkspaceDaemonRef is one live Workspace Runner socket identity returned by
+// WorkspaceDaemonRef is one live WorkspaceDaemon socket identity returned by
 // ListWorkspaceDaemons.
 type WorkspaceDaemonRef struct {
 	DaemonID    string
 	WorkspaceID string
 }
 
-// ListWorkspaceDaemons returns the currently connected Workspace Runner
+// ListWorkspaceDaemons returns the currently connected WorkspaceDaemon
 // daemon/workspace pairs. LRM-1571 uses this to drive liveness (Redis TTL +
 // DB last_seen freshness) from socket presence instead of heartbeat frames.
 func (h *Hub) ListWorkspaceDaemons() []WorkspaceDaemonRef {
@@ -1740,7 +1740,7 @@ func (c *client) handleHeartbeatFrame(raw json.RawMessage) {
 		c.supportsRunnerCapability(protocol.DaemonCapabilityWorkspaceDaemonControlPlane)
 	if !legacyRuntimeAuthorized && !runnerControlAuthorized {
 		// Legacy connections authenticate a fixed Runtime set. A current ready
-		// Workspace Runner instead uses dynamic DB authorization in the handler,
+		// WorkspaceDaemon instead uses dynamic DB authorization in the handler,
 		// because Runtime membership is mutable and not part of Runner identity.
 		slog.Warn("daemon websocket heartbeat for unauthorized runtime",
 			"daemon_id", c.identity.DaemonID,

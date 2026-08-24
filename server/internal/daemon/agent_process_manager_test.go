@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"errors"
 	"testing"
 	"time"
 
@@ -109,7 +108,7 @@ func TestAgentProcessManagerProviderFailureCanBeRetriedWithSameDispatch(t *testi
 	if err := manager.RuntimeReady(callback); err != nil {
 		t.Fatalf("runtime ready: %v", err)
 	}
-	if !manager.failManagedProcess(callback) {
+	if !manager.failManagedProcess(callback, nil) {
 		t.Fatal("provider failure did not claim the managed process")
 	}
 
@@ -154,10 +153,6 @@ func TestAgentProcessManagerStopThenStartFencesStaleCallbacks(t *testing.T) {
 	if err := manager.ProcessSpawned(process); err != nil {
 		t.Fatalf("ProcessSpawned: %v", err)
 	}
-	firstEpoch, err := manager.startStopEpoch(agentProcessCallback{AgentID: "agent-a", AgentInstanceID: first.AgentInstanceID})
-	if err != nil {
-		t.Fatalf("startStopEpoch(first): %v", err)
-	}
 	if err := manager.Stop(agentProcessCallback{AgentID: "agent-a", AgentInstanceID: first.AgentInstanceID}); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}
@@ -168,21 +163,11 @@ func TestAgentProcessManagerStopThenStartFencesStaleCallbacks(t *testing.T) {
 	if second.AgentInstanceID == first.AgentInstanceID {
 		t.Fatal("replacement start reused Agent instance ID")
 	}
-	if !manager.stopEpochChanged("agent-a", firstEpoch) {
-		t.Fatal("Stop did not advance the stop epoch")
-	}
 	if err := manager.RuntimeReady(process); err == nil {
 		t.Fatal("stale old-process callback was accepted")
 	}
-	epoch, err := manager.startStopEpoch(agentProcessCallback{AgentID: "agent-a", AgentInstanceID: second.AgentInstanceID})
-	if err != nil {
-		t.Fatalf("startStopEpoch(second): %v", err)
-	}
 	if err := manager.Stop(agentProcessCallback{AgentID: "agent-a", AgentInstanceID: first.AgentInstanceID}); err == nil {
 		t.Fatal("stale old-launch stop was accepted")
-	}
-	if manager.stopEpochChanged("agent-a", epoch) {
-		t.Fatal("stale old-launch stop advanced the replacement's stop epoch")
 	}
 }
 
@@ -214,7 +199,7 @@ func TestAgentProcessManagerSameRuntimeStartReplaysWithoutRebinding(t *testing.T
 	}
 }
 
-func TestAgentProcessManagerStopEpochRejectsAcceptedStartReplayUntilSettled(t *testing.T) {
+func TestAgentProcessManagerStoppingRejectsAcceptedStartReplayUntilSettled(t *testing.T) {
 	manager := newAgentProcessManager(time.Now, nil)
 	request := agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1"}
 	accepted, err := manager.Start(request)
@@ -222,32 +207,18 @@ func TestAgentProcessManagerStopEpochRejectsAcceptedStartReplayUntilSettled(t *t
 		t.Fatal(err)
 	}
 	callback := agentProcessCallback{AgentID: request.AgentID, AgentInstanceID: accepted.AgentInstanceID}
-	captured, err := manager.startStopEpoch(callback)
-	if err != nil {
-		t.Fatal(err)
-	}
 	if _, _, found, err := manager.beginManagedStop(callback); err != nil || !found {
 		t.Fatalf("begin managed stop found=%v err=%v", found, err)
 	}
-	if !manager.stopEpochChanged(request.AgentID, captured) {
-		t.Fatal("managed Stop did not advance the per-Agent stop epoch")
-	}
 	if _, err := manager.Start(request); err == nil {
-		t.Fatal("accepted start replay crossed the active stop epoch")
+		t.Fatal("accepted start replay crossed active stopping ownership")
 	}
 	manager.completeManagedStart(callback)
 	manager.completeManagedStop(callback)
 	replacement := agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1"}
-	replacementAccepted, err := manager.Start(replacement)
+	_, err = manager.Start(replacement)
 	if err != nil {
 		t.Fatal(err)
-	}
-	replacementEpoch, err := manager.startStopEpoch(agentProcessCallback{AgentID: replacement.AgentID, AgentInstanceID: replacementAccepted.AgentInstanceID})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if manager.stopEpochChanged(replacement.AgentID, replacementEpoch) {
-		t.Fatal("new explicit Start captured a stale stop epoch")
 	}
 }
 
@@ -291,12 +262,18 @@ func TestAgentProcessManagerStopCannotOvertakeActivePublication(t *testing.T) {
 
 func TestAgentProcessManagerStopWaitsForIdleRestoreStartupOwner(t *testing.T) {
 	manager := newAgentProcessManager(time.Now, nil)
-	if err := manager.RestoreIdle("agent-a", "runtime-1", 0); err != nil {
+	residency := newAgentResidencyStore(nil)
+	residency.rememberLaunch("agent-a", "runtime-1", "idle-1")
+	residency.rememberIdle("agent-a", "runtime-1", "idle-1")
+	if err := manager.RestoreIdle("agent-a", "runtime-1", "idle-1", residency); err != nil {
 		t.Fatal(err)
 	}
 	current, found := manager.Snapshot("agent-a")
 	if !found {
 		t.Fatal("idle restore did not create an Agent instance")
+	}
+	if restored, ok := residency.get("agent-a"); !ok || restored.agentInstanceID != current.AgentInstanceID {
+		t.Fatalf("idle residency = %+v, found %v; want replacement instance %s", restored, ok, current.AgentInstanceID)
 	}
 	callback := agentProcessCallback{AgentID: "agent-a", AgentInstanceID: current.AgentInstanceID}
 	_, startupDone, found, err := manager.beginManagedStop(callback)
@@ -316,21 +293,16 @@ func TestAgentProcessManagerStopWaitsForIdleRestoreStartupOwner(t *testing.T) {
 	}
 }
 
-func TestAgentProcessManagerStopEpochRejectsStaleIdleRestore(t *testing.T) {
-	manager := newAgentProcessManager(time.Now, nil)
-	manager.recordStop("agent-a")
-	if err := manager.RestoreIdle("agent-a", "runtime-1", 0); !errors.Is(err, errManagedAgentStartStopped) {
-		t.Fatalf("RestoreIdle after Stop = %v, want stop-epoch rejection", err)
-	}
-}
-
-func TestAgentProcessManagerMissingLaunchStopDoesNotAdvanceEpoch(t *testing.T) {
+func TestAgentProcessManagerMissingLaunchStopDoesNotBlockIdleRestore(t *testing.T) {
 	manager := newAgentProcessManager(time.Now, nil)
 	if _, _, found, err := manager.beginManagedStop(agentProcessCallback{AgentID: "agent-a", AgentInstanceID: "stale-instance"}); err != nil || found {
 		t.Fatalf("missing Stop found=%v err=%v", found, err)
 	}
-	if err := manager.RestoreIdle("agent-a", "runtime-1", 0); err != nil {
-		t.Fatalf("missing stale Stop advanced epoch: %v", err)
+	residency := newAgentResidencyStore(nil)
+	residency.rememberLaunch("agent-a", "runtime-1", "idle-1")
+	residency.rememberIdle("agent-a", "runtime-1", "idle-1")
+	if err := manager.RestoreIdle("agent-a", "runtime-1", "idle-1", residency); err != nil {
+		t.Fatalf("missing stale Stop blocked restore: %v", err)
 	}
 }
 

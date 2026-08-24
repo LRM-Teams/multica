@@ -12,6 +12,34 @@ import (
 
 var errManagedAgentStartStopped = errors.New("managed start suppressed by stop request")
 
+type managedRuntimeFailureStage string
+
+const (
+	managedRuntimeFailureSpawn   managedRuntimeFailureStage = "spawn"
+	managedRuntimeFailureRuntime managedRuntimeFailureStage = "runtime"
+)
+
+// retryManagedLaunchAfterExit is the resident process event bus's "exited,
+// under the crash retry cap" route.
+func (runner *WorkspaceDaemon) retryManagedLaunchAfterExit(agentID string, launch agentProcessManagerSnapshot) error {
+	if runner == nil || runner.processes == nil {
+		return nil
+	}
+	callback := agentProcessCallback{AgentID: agentID, AgentInstanceID: launch.AgentInstanceID, ProcessInstanceID: launch.ProcessInstanceID}
+	return runner.processes.ProcessExited(callback, true)
+}
+
+// retireManagedLaunchAfterExit is the resident process event bus's "exited,
+// over the crash retry cap" route.
+func (runner *WorkspaceDaemon) retireManagedLaunchAfterExit(agentID, runtimeID string, launch agentProcessManagerSnapshot, reasonCode string) error {
+	if runner == nil || runner.processes == nil || runner.activity == nil {
+		return errors.New("WorkspaceDaemon is unavailable")
+	}
+	runner.failManagedRuntime(agentID, runtimeID, launch.AgentInstanceID, managedRuntimeFailureRuntime, reasonCode,
+		"resident provider process exceeded the crash retry cap", time.Now().UTC())
+	return nil
+}
+
 func (runner *WorkspaceDaemon) acceptManagedAgentStart(start protocol.AgentStartPayload, failConnection func(error)) (protocol.AgentStartAckPayload, agentProcessCallback, bool, func(), <-chan struct{}, <-chan bool, error) {
 	ack, callback, replayed, err := runner.registerManagedAgentStartOnce(start)
 	if err != nil {
@@ -146,12 +174,11 @@ func (runner *WorkspaceDaemon) replayManagedAgentStartPublication(start protocol
 }
 
 type managedAgentStartOutcome struct {
-	status         protocol.AgentStatusPayload
-	session        protocol.AgentSessionPayload
-	startStopEpoch uint64
-	failureStage   managedRuntimeFailureStage
-	failureReason  string
-	failureAt      time.Time
+	status        protocol.AgentStatusPayload
+	session       protocol.AgentSessionPayload
+	failureStage  managedRuntimeFailureStage
+	failureReason string
+	failureAt     time.Time
 }
 
 // registerManagedAgentStart runs on the socket reader before a later stop or
@@ -161,6 +188,106 @@ func (runner *WorkspaceDaemon) registerManagedAgentStart(payload protocol.AgentS
 	return ack, err
 }
 
+// stopManagedAgent owns the complete Raft stop transition. The inactive
+// lifecycle fact must reach the server before the terminal Stopped Activity;
+// only after both have been published may the local Activity state be
+// forgotten. No second ownership registry participates in this operation.
+func (runner *WorkspaceDaemon) stopManagedAgent(ctx context.Context, payload protocol.AgentStopPayload, pause func(), writeFrame func(string, any) error) error {
+	if runner == nil || runner.processes == nil || runner.runtimes == nil || runner.inboxes == nil || runner.activity == nil || writeFrame == nil {
+		return errors.New("WorkspaceDaemon stop dependencies are unavailable")
+	}
+	if err := payload.Validate(); err != nil {
+		return err
+	}
+	current, currentFound := runner.processes.Snapshot(payload.AgentID)
+	if !currentFound {
+		current, currentFound = runner.processes.stoppingSnapshot(payload.AgentID)
+	}
+	callback := agentProcessCallback{AgentID: payload.AgentID}
+	if currentFound {
+		callback.AgentInstanceID = current.AgentInstanceID
+	}
+	launch, startupDone, found, err := runner.processes.beginManagedStop(callback)
+	if err != nil {
+		return nil
+	}
+	runtimeID := launch.RuntimeID
+	if !found {
+		resident, ok := runner.residency.get(payload.AgentID)
+		if !ok {
+			return nil
+		}
+		callback.AgentInstanceID = resident.agentInstanceID
+		runtimeID = resident.runtimeID
+	}
+	if pause != nil {
+		pause()
+	}
+	if runner.residency != nil {
+		runner.residency.clear(payload.AgentID)
+	}
+	runner.inboxes.Remove(payload.AgentID, runtimeID)
+	if runtimeID != "" {
+		// Dispatch before waiting on startupDone: provider spawn uses runner.life,
+		// so the kill is the fence that can settle a blocked startup.
+		_ = runner.runtimes.beginResidentTermination(payload.AgentID, runtimeID)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if found {
+		select {
+		case <-startupDone:
+		case <-ctx.Done():
+			return fmt.Errorf("wait for managed Agent startup to settle: %w", ctx.Err())
+		}
+	}
+	terminationConfirmed := true
+	if runtimeID != "" {
+		if err := runner.runtimes.awaitResidentTerminated(ctx, payload.AgentID, runtimeID); err != nil {
+			terminationConfirmed = false
+			var timeout *residentTerminationTimeout
+			if runner.logger != nil {
+				if errors.As(err, &timeout) {
+					runner.logger.Warn("resident termination unconfirmed, retaining stopping state",
+						"agent_id", payload.AgentID, "runtime_id", runtimeID,
+						"process_alive", timeout.ProcessAlive, "turn_running", timeout.TurnRunning)
+				} else {
+					runner.logger.Warn("resident termination unconfirmed, retaining stopping state",
+						"agent_id", payload.AgentID, "runtime_id", runtimeID, "error", err)
+				}
+			}
+		}
+	}
+	if found && terminationConfirmed {
+		runner.processes.completeManagedStop(callback)
+	}
+	return runner.publishManagedAgentInactive(payload, callback.AgentInstanceID, runtimeID, writeFrame)
+}
+
+func (runner *WorkspaceDaemon) publishManagedAgentInactive(payload protocol.AgentStopPayload, agentInstanceID, runtimeID string, writeFrame func(string, any) error) error {
+	status := protocol.AgentStatusPayload{AgentID: payload.AgentID, Status: protocol.AgentStatusInactive}
+	if err := runner.activity.SetManaged(agentInstanceID, status, protocol.AgentSessionPayload{AgentID: payload.AgentID}); err != nil {
+		return fmt.Errorf("record managed stop: %w", err)
+	}
+	if err := writeFrame(protocol.EventAgentStatus, status); err != nil {
+		return err
+	}
+	runner.activity.InterruptCompactionIfActive(payload.AgentID, agentInstanceID)
+	if runtimeID == "" {
+		runner.activity.RemoveManaged(payload.AgentID, agentInstanceID)
+		return nil
+	}
+	if err := runner.activity.Observe(AgentObservation{
+		AgentID: payload.AgentID, AgentInstanceID: agentInstanceID, Kind: AgentObservationOffline,
+		Data: AgentErrorObservationData{RuntimeID: runtimeID, ReasonCode: "stopped"}, At: runner.activity.now().UTC(),
+	}); err != nil {
+		return fmt.Errorf("publish managed stop Activity: %w", err)
+	}
+	runner.activity.RemoveManaged(payload.AgentID, agentInstanceID)
+	return nil
+}
+
 // restartAgentForRuntimeChange turns a Start intent for a different Runtime
 // into the existing local Stop transition. The caller performs the ordinary
 // Start after this returns, so there is one Stop -> inactive -> Start path.
@@ -168,9 +295,16 @@ func (runner *WorkspaceDaemon) restartAgentForRuntimeChange(ctx context.Context,
 	if runner == nil || runner.processes == nil {
 		return errors.New("WorkspaceDaemon process manager is unavailable")
 	}
-	current, ok := runner.processes.Snapshot(start.AgentID)
-	if !ok || current.RuntimeID == start.RuntimeID {
+	current, active := runner.processes.Snapshot(start.AgentID)
+	if active && current.RuntimeID == start.RuntimeID {
 		return nil
+	}
+	if !active {
+		var stopping bool
+		current, stopping = runner.processes.stoppingSnapshot(start.AgentID)
+		if !stopping {
+			return nil
+		}
 	}
 	if err := runner.stopManagedAgent(ctx, protocol.AgentStopPayload{
 		AgentID: start.AgentID}, pause, writeFrame); err != nil {
@@ -212,24 +346,16 @@ func (runner *WorkspaceDaemon) registerManagedAgentStartOnce(payload protocol.Ag
 		return protocol.AgentStartAckPayload{}, agentProcessCallback{}, false, fmt.Errorf("prepare managed Agent Inbox: %w", err)
 	}
 	if runner.residency != nil {
-		// Best-effort, like prepareManagedAgentStartFailure below: the launch
-		// was just registered in APM above, so this lookup only fails if a
-		// concurrent Stop already superseded it, in which case epoch 0 is
-		// safely rejected by clear's tombstone (or simply overwritten by
-		// whatever legitimate write follows).
-		startStopEpoch, _ := runner.processes.startStopEpoch(callback)
-		runner.residency.rememberLaunch(payload.AgentID, payload.RuntimeID, callback.AgentInstanceID, startStopEpoch)
+		runner.processes.withActiveAgentInstance(callback, func() {
+			runner.residency.rememberLaunch(payload.AgentID, payload.RuntimeID, callback.AgentInstanceID)
+		})
 	}
 	return ack, callback, false, nil
 }
 
 func (runner *WorkspaceDaemon) completeManagedAgentStart(ctx context.Context, payload protocol.AgentStartPayload, callback agentProcessCallback, ack protocol.AgentStartAckPayload) (managedAgentStartOutcome, error) {
-	startStopEpoch, err := runner.processes.startStopEpoch(callback)
-	if err != nil {
-		return managedAgentStartOutcome{}, err
-	}
 	stopRequested := func() bool {
-		return runner.processes.stopEpochChanged(payload.AgentID, startStopEpoch)
+		return !runner.processes.ownsManagedProcess(callback)
 	}
 	if stopRequested() {
 		return managedAgentStartOutcome{}, errManagedAgentStartStopped
@@ -282,7 +408,7 @@ func (runner *WorkspaceDaemon) completeManagedAgentStart(ctx context.Context, pa
 	if stopRequested() {
 		return managedAgentStartOutcome{}, runner.cleanupStoppedManagedAgentStart(payload)
 	}
-	return managedAgentStartOutcome{status: status, session: session, startStopEpoch: startStopEpoch}, nil
+	return managedAgentStartOutcome{status: status, session: session}, nil
 }
 
 func (runner *WorkspaceDaemon) cleanupStoppedManagedAgentStart(payload protocol.AgentStartPayload) error {
@@ -297,7 +423,7 @@ func (runner *WorkspaceDaemon) establishManagedAgentStart(payload protocol.Agent
 		return fmt.Errorf("record managed start: %w", err)
 	}
 	if runner.residency != nil {
-		runner.residency.rememberIdle(payload.AgentID, payload.RuntimeID, agentInstanceID, outcome.startStopEpoch)
+		runner.residency.rememberIdle(payload.AgentID, payload.RuntimeID, agentInstanceID)
 	}
 	return nil
 }
@@ -318,9 +444,10 @@ func (runner *WorkspaceDaemon) flushManagedAgentStartMessages(ctx context.Contex
 
 func (runner *WorkspaceDaemon) prepareManagedAgentStartFailure(payload protocol.AgentStartPayload, callback agentProcessCallback, stage managedRuntimeFailureStage, reason string) managedAgentStartOutcome {
 	at := runner.activity.now().UTC()
-	startStopEpoch, _ := runner.processes.startStopEpoch(callback)
 	if runner.residency != nil {
-		runner.residency.rememberFailure(payload.AgentID, payload.RuntimeID, callback.AgentInstanceID, startStopEpoch, stage, reason, "")
+		runner.processes.withActiveAgentInstance(callback, func() {
+			runner.residency.rememberFailure(payload.AgentID, payload.RuntimeID, callback.AgentInstanceID, stage, reason, "")
+		})
 	}
 	return managedAgentStartOutcome{
 		status:       protocol.AgentStatusPayload{AgentID: payload.AgentID, Status: protocol.AgentStatusInactive},
@@ -333,6 +460,46 @@ func (runner *WorkspaceDaemon) publishManagedAgentStartFailure(payload protocol.
 		return
 	}
 	runner.publishManagedRuntimeFailure(outcome.status, callback.AgentInstanceID, payload.RuntimeID, outcome.failureStage, outcome.failureReason, "", outcome.failureAt)
+}
+
+// failManagedRuntime owns the Raft-style runtime-error transition. Activity
+// projection remains in agentActivityProducer; this method only coordinates
+// the lifecycle facts that must change together.
+func (runner *WorkspaceDaemon) failManagedRuntime(agentID, runtimeID, agentInstanceID string, stage managedRuntimeFailureStage, reasonCode, message string, at time.Time) protocol.AgentStatusPayload {
+	status := runner.prepareManagedRuntimeFailure(agentID, runtimeID, agentInstanceID, stage, reasonCode, message)
+	if status.AgentID != "" {
+		runner.publishManagedRuntimeFailure(status, agentInstanceID, runtimeID, stage, reasonCode, message, at)
+	}
+	return status
+}
+
+func (runner *WorkspaceDaemon) prepareManagedRuntimeFailure(agentID, runtimeID, agentInstanceID string, stage managedRuntimeFailureStage, reasonCode, message string) protocol.AgentStatusPayload {
+	callback := agentProcessCallback{AgentID: agentID, AgentInstanceID: agentInstanceID}
+	rememberFailure := func() {
+		if runner.residency != nil {
+			runner.residency.rememberFailure(agentID, runtimeID, agentInstanceID, stage, reasonCode, message)
+		}
+	}
+	if !runner.processes.failManagedProcess(callback, rememberFailure) {
+		// Lifecycle stop already owns this launch. Its quiescence fence is the
+		// only path allowed to publish inactive for the stop launch.
+		return protocol.AgentStatusPayload{}
+	}
+	return protocol.AgentStatusPayload{AgentID: agentID, Status: protocol.AgentStatusInactive}
+}
+
+func (runner *WorkspaceDaemon) publishManagedRuntimeFailure(status protocol.AgentStatusPayload, agentInstanceID, runtimeID string, stage managedRuntimeFailureStage, reasonCode, message string, at time.Time) {
+	runner.activity.InterruptCompactionIfActive(status.AgentID, agentInstanceID)
+	_ = runner.activity.SetManaged(agentInstanceID, status, protocol.AgentSessionPayload{AgentID: status.AgentID})
+	runner.sendAgentFrame(protocol.EventAgentStatus, status)
+	kind := AgentObservationError
+	if stage == managedRuntimeFailureSpawn {
+		kind = AgentObservationOffline
+	}
+	runner.observeActivity(AgentObservation{
+		AgentID: status.AgentID, AgentInstanceID: agentInstanceID, Kind: kind,
+		Data: AgentErrorObservationData{RuntimeID: runtimeID, ReasonCode: reasonCode, Message: message}, At: at,
+	}, "Runtime failure")
 }
 
 func (runner *WorkspaceDaemon) managedStartLogAttrs(payload protocol.AgentStartPayload, queueState, reason, outcome string, err error) []any {

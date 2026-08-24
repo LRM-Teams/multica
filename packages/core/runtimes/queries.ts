@@ -61,7 +61,7 @@ export function runtimeListOptions(wsId: string, owner?: "me") {
  *
  * Keyed under `runtimeKeys.all(wsId)` so the daemon/computer WS events that
  * already invalidate that prefix refresh this too — the machine's liveness
- * comes from a live Workspace Runner socket, so it has to ride the same
+ * comes from a live WorkspaceDaemon socket, so it has to ride the same
  * refresh chain as the computers list rather than an agent-shaped one.
  */
 export function agentRuntimeConfigOptions(wsId: string, agentId: string) {

@@ -13,7 +13,7 @@ import { runnerActivityToneDotClass } from "../runner-activity-tone";
 
 /**
  * Shared list Activity mark. Labels and tones are supplied by the server-owned
- * Workspace Runner projection; presence and task state are never interpreted.
+ * WorkspaceDaemon projection; presence and task state are never interpreted.
  */
 export function AgentActivityStatus({
   agentId,

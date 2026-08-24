@@ -621,7 +621,7 @@ func waitForRunner(t *testing.T, hub *Hub, daemonID, workspaceID string) {
 	deadline := time.Now().Add(time.Second)
 	for hub.WorkspaceDaemonConnectionCount(daemonID, workspaceID) != 1 {
 		if time.Now().After(deadline) {
-			t.Fatalf("Workspace Runner %s/%s was not ready", daemonID, workspaceID)
+			t.Fatalf("WorkspaceDaemon %s/%s was not ready", daemonID, workspaceID)
 		}
 		time.Sleep(time.Millisecond)
 	}
@@ -1066,7 +1066,7 @@ func TestWorkspaceDaemonControlPlaneHeartbeatRoundTrip(t *testing.T) {
 	hub.SetHeartbeatHandler(func(_ context.Context, identity ClientIdentity, payload protocol.DaemonHeartbeatRequestPayload) (*protocol.DaemonHeartbeatAckPayload, error) {
 		calls.Add(1)
 		if identity.DaemonID != "computer-1" || identity.WorkspaceID != "workspace-1" {
-			t.Errorf("identity = %+v, want current Computer and Workspace Runner", identity)
+			t.Errorf("identity = %+v, want current Computer and WorkspaceDaemon", identity)
 		}
 		return &protocol.DaemonHeartbeatAckPayload{RuntimeID: payload.RuntimeID, Status: "ok"}, nil
 	})
@@ -1104,7 +1104,7 @@ func TestWorkspaceDaemonControlPlaneHeartbeatRoundTrip(t *testing.T) {
 	deadline := time.Now().Add(time.Second)
 	for !hub.IsCurrentWorkspaceDaemon("computer-1", "workspace-1", "instance-1") {
 		if time.Now().After(deadline) {
-			t.Fatal("Workspace Runner did not become current")
+			t.Fatal("WorkspaceDaemon did not become current")
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -1126,7 +1126,7 @@ func TestWorkspaceDaemonControlPlaneHeartbeatRoundTrip(t *testing.T) {
 	}
 	_, raw, err := conn.ReadMessage()
 	if err != nil {
-		t.Fatalf("read Workspace Runner heartbeat ack: %v", err)
+		t.Fatalf("read WorkspaceDaemon heartbeat ack: %v", err)
 	}
 	var message protocol.Message
 	if err := json.Unmarshal(raw, &message); err != nil {

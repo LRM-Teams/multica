@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/multica-ai/multica/server/pkg/agent"
@@ -162,26 +161,11 @@ type agentRuntimeAcquireRequest struct {
 	// nextResume pointer so this acquire cannot continue a poisoned Pi
 	// conversation. Period Brief collect/synth/retry set this on claim.
 	ForceFreshSession bool
-	// Context bounds capacity-wait when the pool is full of running agents
-	// and no idle resident can be evicted. Nil → context.Background().
-	Context context.Context
 }
 
 type agentRuntimePool struct {
 	mu    sync.Mutex
 	slots map[string]*agentRuntimeSlot
-
-	// maxAgentProcesses bounds distinct agents with a live resident backend
-	// (backend != nil). 0 = unlimited. See #35 / resolveMaxAgentProcesses.
-	maxAgentProcesses int
-	// pendingAgents reserves capacity for in-flight creates so concurrent
-	// acquires cannot overshoot the cap between reserve and backend attach.
-	pendingAgents map[string]struct{}
-	capacityCond  *sync.Cond
-
-	// Metrics (#35): live distinct agents with backend; idle-for-cap evictions.
-	liveAgentProcesses atomic.Int64
-	evictForCapTotal   atomic.Int64
 
 	// residentProcessMu guards residentProcessSubscribers and serializes
 	// delivery through emitResidentProcessEvent (resident_process_event.go).
@@ -244,13 +228,10 @@ type agentRuntimeSlot struct {
 }
 
 func newAgentRuntimePool() *agentRuntimePool {
-	p := &agentRuntimePool{
-		slots:         make(map[string]*agentRuntimeSlot),
-		pendingAgents: make(map[string]struct{}),
-		nextResume:    make(map[string]string),
+	return &agentRuntimePool{
+		slots:      make(map[string]*agentRuntimeSlot),
+		nextResume: make(map[string]string),
 	}
-	p.capacityCond = sync.NewCond(&p.mu)
-	return p
 }
 
 func (p *agentRuntimePool) setResidentStallWatchdog(window time.Duration) {
@@ -258,37 +239,6 @@ func (p *agentRuntimePool) setResidentStallWatchdog(window time.Duration) {
 		return
 	}
 	p.residentStallWatchdog = window
-}
-
-// setMaxAgentProcesses configures the #35 live-resident-agent process ceiling.
-// 0 disables the cap (unlimited). Safe to call once at daemon init.
-func (p *agentRuntimePool) setMaxAgentProcesses(n int) {
-	if p == nil {
-		return
-	}
-	p.mu.Lock()
-	if n < 0 {
-		n = 0
-	}
-	p.maxAgentProcesses = n
-	p.capacityCond.Broadcast()
-	p.mu.Unlock()
-}
-
-// LiveAgentProcessCount returns the last published distinct-agent live count.
-func (p *agentRuntimePool) LiveAgentProcessCount() int64 {
-	if p == nil {
-		return 0
-	}
-	return p.liveAgentProcesses.Load()
-}
-
-// EvictForCapTotal returns how many idle residents were closed to free cap.
-func (p *agentRuntimePool) EvictForCapTotal() int64 {
-	if p == nil {
-		return 0
-	}
-	return p.evictForCapTotal.Load()
 }
 
 func (p *agentRuntimePool) acquire(request agentRuntimeAcquireRequest) (*agentRuntimeLease, error) {
@@ -336,18 +286,6 @@ func (p *agentRuntimePool) acquire(request agentRuntimeAcquireRequest) (*agentRu
 		now = time.Now()
 	}
 
-	// #35: reserve capacity (and close idle other-runtime slots) before
-	// locking the target slot.
-	if err := p.waitForRuntimeSlot(request.Context, request.Identity.AgentID, request.Identity.RuntimeID); err != nil {
-		return nil, err
-	}
-	reserved := true
-	defer func() {
-		if reserved {
-			p.cancelRuntimeSlotWait(request.Identity.AgentID)
-		}
-	}()
-
 	p.mu.Lock()
 	slot := p.slots[key]
 	if slot == nil {
@@ -357,20 +295,7 @@ func (p *agentRuntimePool) acquire(request agentRuntimeAcquireRequest) (*agentRu
 	slot.mu.Lock()
 	p.mu.Unlock()
 
-	// After unlock: never call pool methods that take p.mu while holding
-	// slot.mu (reserve/count take p.mu then slot.mu — reverse order deadlocks).
-	publishLiveAfterUnlock := false
-	clearReservationAfterUnlock := false
-	reservationAgentID := request.Identity.AgentID
-	defer func() {
-		slot.mu.Unlock()
-		if clearReservationAfterUnlock {
-			p.finishRuntimeSlotWait(reservationAgentID)
-		}
-		if publishLiveAfterUnlock {
-			p.publishLiveAgentProcessCount()
-		}
-	}()
+	defer slot.mu.Unlock()
 	if slot.running {
 		return nil, ErrCanonicalAgentRuntimeBusy
 	}
@@ -453,14 +378,10 @@ func (p *agentRuntimePool) acquire(request agentRuntimeAcquireRequest) (*agentRu
 		backend:            backend,
 		canonicalSessionID: resumeSessionID,
 	}
-	reserved = false
-	clearReservationAfterUnlock = true
-	publishLiveAfterUnlock = true
 	return &agentRuntimeLease{
 		slot:      slot,
 		backend:   wrapped,
 		turnClose: closeBackend,
-		pool:      p,
 	}, nil
 }
 
@@ -511,7 +432,6 @@ type agentRuntimeLease struct {
 	slot      *agentRuntimeSlot
 	backend   agent.Backend
 	turnClose func()
-	pool      *agentRuntimePool
 	once      sync.Once
 }
 
@@ -533,23 +453,16 @@ func (l *agentRuntimeLease) releaseAt(healthy bool, now time.Time) {
 	}
 	l.once.Do(func() {
 		l.slot.mu.Lock()
-		closedLive := false
 		if !l.slot.running {
 			l.slot.mu.Unlock()
 			return
 		}
 		if !healthy {
-			if l.slot.backend != nil {
-				closedLive = true
-			}
 			l.slot.closeBackend()
 		}
 		l.slot.running = false
 		l.slot.idleSince = now
 		l.slot.mu.Unlock()
-		if closedLive && l.pool != nil {
-			l.pool.signalRuntimeSlotAvailable()
-		}
 	})
 }
 
@@ -937,18 +850,14 @@ func (p *agentRuntimePool) deliverIdleMessages(
 	}
 	if preparation, ok := slot.backend.(agent.ResidentMessagePreparation); ok {
 		if err := preparation.PrepareMessageInput(ctx, observeRuntimeMessage); err != nil {
-			if p.failResidentMessageInputAttempt(slot, attempt) {
-				p.signalRuntimeSlotAvailable()
-			}
+			p.failResidentMessageInputAttempt(slot, attempt)
 			return err
 		}
 		slot.mu.Lock()
 		invalidated := slot.messageInputAttempt != attempt || slot.invalidationGeneration != invalidationGeneration
 		slot.mu.Unlock()
 		if invalidated {
-			if p.failResidentMessageInputAttempt(slot, attempt) {
-				p.signalRuntimeSlotAvailable()
-			}
+			p.failResidentMessageInputAttempt(slot, attempt)
 			return errors.New("canonical resident runtime was invalidated during Message input preparation")
 		}
 	}
@@ -968,29 +877,20 @@ func (p *agentRuntimePool) deliverIdleMessages(
 	slot.mu.Lock()
 	if err != nil {
 		slot.mu.Unlock()
-		freed := p.failResidentMessageInputAttempt(slot, attempt)
+		p.failResidentMessageInputAttempt(slot, attempt)
 		if isResidentAcceptBusyErr(err) {
 			// Busy / unresponsive-to-idle is a queued-and-retry condition, not a
 			// hard failure: hand it back as ErrCanonicalAgentRuntimeBusy so the
 			// coordinator schedules a pending notice and keeps messages queued
 			// (Raft alignment), instead of surfacing a distinct error that the
 			// flush loop would treat as fatal.
-			if freed {
-				p.signalRuntimeSlotAvailable()
-			}
 			return ErrCanonicalAgentRuntimeBusy
-		}
-		if freed {
-			p.signalRuntimeSlotAvailable()
 		}
 		return err
 	}
 	if acceptance.Done == nil {
 		slot.mu.Unlock()
-		freed := p.failResidentMessageInputAttempt(slot, attempt)
-		if freed {
-			p.signalRuntimeSlotAvailable()
-		}
+		p.failResidentMessageInputAttempt(slot, attempt)
 		return errors.New("canonical resident runtime returned no Message input completion receipt")
 	}
 	invalidated := slot.messageInputAttempt != attempt || slot.invalidationGeneration != invalidationGeneration
@@ -1177,20 +1077,15 @@ func (p *agentRuntimePool) deliverAppInboxNotice(ctx context.Context, agentID, r
 	acceptance, err := input.AcceptIdleInboxNotice(acceptCtx, notice)
 	slot.mu.Lock()
 	if err != nil {
-		freed := false
 		if slot.messageInputAttempt == attempt {
 			slot.running = false
 			slot.idleSince = time.Now()
 			if slot.invalidateAfterInput {
-				freed = slot.backend != nil
 				slot.closeBackend()
 
 			}
 		}
 		slot.mu.Unlock()
-		if freed {
-			p.signalRuntimeSlotAvailable()
-		}
 		if isResidentAcceptBusyErr(err) {
 			return ErrCanonicalAgentRuntimeBusy
 		}
@@ -1373,7 +1268,6 @@ func (p *agentRuntimePool) finishResidentMessageInput(slot *agentRuntimeSlot, do
 		}
 	}
 	completed := false
-	freed := false
 	var settleBackend agent.PiRPCBackend
 	var settleIdentity *agent.PiRunIdentity
 	slot.mu.Lock()
@@ -1383,7 +1277,6 @@ func (p *agentRuntimePool) finishResidentMessageInput(slot *agentRuntimeSlot, do
 			slot.running = false
 			slot.compacting = false
 			slot.idleSince = time.Now()
-			freed = slot.backend != nil
 			slot.closeBackend()
 
 			completed = true
@@ -1420,16 +1313,12 @@ func (p *agentRuntimePool) finishResidentMessageInput(slot *agentRuntimeSlot, do
 			slot.compacting = false
 			slot.idleSince = time.Now()
 			if slot.invalidateAfterInput {
-				freed = slot.backend != nil
 				slot.closeBackend()
 
 			}
 			completed = true
 		}
 		slot.mu.Unlock()
-	}
-	if freed {
-		p.signalRuntimeSlotAvailable()
 	}
 	if completed && onComplete != nil {
 		onComplete(turnErr, generation, capture)
@@ -1484,18 +1373,9 @@ func (p *agentRuntimePool) invalidateSession(agentID, runtimeID string) error {
 	}
 	slot.mu.Lock()
 	p.mu.Unlock()
-	freed := false
-	defer func() {
-		slot.mu.Unlock()
-		if freed {
-			p.signalRuntimeSlotAvailable()
-		}
-	}()
+	defer slot.mu.Unlock()
 	if slot.running {
 		return ErrCanonicalAgentRuntimeBusy
-	}
-	if slot.backend != nil {
-		freed = true
 	}
 	slot.closeBackend()
 	slot.idleSince = time.Time{}
@@ -1718,10 +1598,6 @@ func (p *agentRuntimePool) evictIdle(before time.Time) int {
 			removed++
 		}
 		slot.mu.Unlock()
-	}
-	if removed > 0 {
-		p.publishLiveAgentProcessCountLocked()
-		p.capacityCond.Broadcast()
 	}
 	return removed
 }

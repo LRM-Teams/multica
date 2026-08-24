@@ -13,7 +13,7 @@ import (
 const runnerActivityReapInterval = time.Second
 
 // runRunnerActivityReaper owns the server-side liveness arbitration for
-// WorkspaceDaemon activity. The Runner only publishes observations; the
+// WorkspaceDaemon activity. The WorkspaceDaemon only publishes observations; the
 // server alone decides when a stale working state needs a probe or a fenced
 // disconnect projection.
 func runRunnerActivityReaper(ctx context.Context, h *handler.Handler) {

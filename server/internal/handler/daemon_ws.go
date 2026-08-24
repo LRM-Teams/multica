@@ -10,7 +10,7 @@ import (
 )
 
 // MinWorkspaceDaemonProtocolCLIVersion is the first release line for the
-// coordinated Workspace Runner Attachment hard cut. Ready validation also
+// coordinated WorkspaceDaemon Attachment hard cut. Ready validation also
 // requires the Attachment capability, which fences prerelease builds from the
 // same release line that predate the cut.
 const MinWorkspaceDaemonProtocolCLIVersion = "0.4.24"
@@ -23,7 +23,7 @@ func (h *Handler) DaemonWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	runtimeIDs := parseRuntimeIDs(r)
 	if len(runtimeIDs) == 0 {
-		// A Workspace Runner is deliberately not a runtime registration: it
+		// A WorkspaceDaemon is deliberately not a runtime registration: it
 		// remains connected while a workspace has no provider runtime at all.
 		// Its workspace must nevertheless be the exact authenticated daemon
 		// token scope; accepting an arbitrary query value here would turn the

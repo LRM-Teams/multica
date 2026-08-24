@@ -192,7 +192,7 @@ For a migration-sensitive change, also read the exact `schema_migrations` row;
 `/readyz` proves the current migration gate is healthy but is not a substitute
 for an immutable version/timestamp ledger when that exact evidence is required.
 
-### Workspace Runner hard cut
+### WorkspaceDaemon hard cut
 
 Migration `304_drop_legacy_agent_activity_event` is destructive and
 irreversible: it drops the old Activity history table and the down migration
@@ -200,7 +200,7 @@ does not restore it. Run the target server image's migration step before any
 runtime roll, then verify migrations `304` and
 `305_workspace_runner_activity_agent_fk_indexes` are recorded. Migration
 `305` adds the foreign-key indexes required to keep Agent deletion bounded as
-Workspace Runner Activity rows accumulate.
+WorkspaceDaemon Activity rows accumulate.
 
 Apply the server migrations before rolling Computers. Migration
 `386_remove_attachment_and_reminder_projection_protocol` removes the obsolete
@@ -212,7 +212,7 @@ Server and Computer release together; it does not delete machine-local
 AgentRoot, Message Draft, or Context Boundary files.
 
 The minimum coordinated Server/Computer release line is `0.4.24`. The connected
-Computer must advertise the current Workspace Runner control-plane capability.
+Computer must advertise the current WorkspaceDaemon control-plane capability.
 Older CLI versions are
-rejected with `426 workspace_daemon_protocol_unsupported`, and a Runner missing
+rejected with `426 workspace_daemon_protocol_unsupported`, and a WorkspaceDaemon missing
 the hard-cut capability is closed before it can own the Workspace slot.

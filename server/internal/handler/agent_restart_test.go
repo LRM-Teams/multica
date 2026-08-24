@@ -65,13 +65,13 @@ func TestAgentRestartContractPure(t *testing.T) {
 		t.Fatal("unknown mode was accepted")
 	}
 	if !workspaceDaemonAgentProcessCapabilityPresent([]string{"other", "workspace_daemon_agent_process_v1"}) {
-		t.Fatal("Workspace Runner Agent process capability was not detected")
+		t.Fatal("WorkspaceDaemon Agent process capability was not detected")
 	}
 	if workspaceDaemonAgentProcessCapabilityPresent([]string{"other"}) {
-		t.Fatal("missing Workspace Runner Agent process capability was accepted")
+		t.Fatal("missing WorkspaceDaemon Agent process capability was accepted")
 	}
 	if !workspaceDaemonResetCapabilityPresent([]string{"other", "workspace_daemon_agent_reset_workspace_v1"}) {
-		t.Fatal("Workspace Runner reset capability was not detected")
+		t.Fatal("WorkspaceDaemon reset capability was not detected")
 	}
 }
 

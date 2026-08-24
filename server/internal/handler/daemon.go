@@ -733,7 +733,7 @@ func (h *Handler) mergeLegacyRuntimes(r *http.Request, registered db.AgentRuntim
 const orphanDeadWindow = 5 * time.Minute
 
 // daemonAliveByRunner is the one daemon-liveness judgment used by orphan
-// convergence. A current DaemonCore Workspace Runner socket is authoritative;
+// convergence. A current WorkspaceDaemon socket is authoritative;
 // the HTTP heartbeat window is only the fallback when Hub or identity is
 // unavailable (legacy / test composition), mirroring computerConnectedByRunner.
 func (h *Handler) daemonAliveByRunner(ctx context.Context, daemonID, workspaceID string, beats []db.DaemonHeartbeat) bool {
@@ -859,7 +859,7 @@ func (h *Handler) convergeOrphanedRuntime(ctx context.Context, registered db.Age
 		if err != nil || uuidToString(rtOwner) != ownerID {
 			continue
 		}
-		// Live daemon check: a current DaemonCore Workspace Runner socket is
+		// Live daemon check: a current WorkspaceDaemon socket is
 		// authoritative liveness. Only a dead predecessor may be converged — a
 		// live same-owner/same-device daemon is a second machine, never a
 		// re-established identity. Falls back to the heartbeat window when the
@@ -1221,7 +1221,7 @@ func (h *Handler) HandleDaemonWSHeartbeat(ctx context.Context, identity daemonws
 	if err != nil || ack == nil {
 		return ack, err
 	}
-	// A capable current Workspace Runner receives managed launch commands on
+	// A capable current WorkspaceDaemon receives managed process commands on
 	// its fenced socket. Do not also return the legacy first-start envelope on
 	// the heartbeat: both paths share the same durable intent, but only one may
 	// be active for a given connection generation.

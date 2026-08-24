@@ -24,7 +24,7 @@ type AgentDeliveryNotifier interface {
 	NotifyWorkspaceAgentDelivery(workspaceID, daemonID string, payload protocol.AgentDeliverPayload) bool
 }
 
-// AgentRestartNotifier transports only Raft's discrete Workspace Runner
+// AgentRestartNotifier transports only Raft's discrete WorkspaceDaemon
 // commands. Product-level restart/reset orchestration stays on the
 // server and advances from Runner status/reset facts.
 type AgentRestartNotifier interface {
@@ -113,7 +113,7 @@ func (n *RelayNotifier) NotifyAgentRestartCommand(workspaceID, computerID, event
 	if n.relay != nil {
 		scopeID := workspaceDaemonRelayScopeID(computerID, workspaceID)
 		if err := n.relay.PublishWithID(realtime.ScopeDaemonWorkspaceDaemon, scopeID, "", frame, "agent-restart:"+commandID+":"+eventType); err != nil {
-			slog.Warn("Workspace Runner Agent Restart command publish failed", "workspace_id", workspaceID, "computer_id", computerID, "operation_id", commandID, "event_type", eventType, "error", err)
+			slog.Warn("WorkspaceDaemon Agent Restart command publish failed", "workspace_id", workspaceID, "computer_id", computerID, "operation_id", commandID, "event_type", eventType, "error", err)
 		} else {
 			delivered = true
 		}

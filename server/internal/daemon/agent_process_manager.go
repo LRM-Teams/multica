@@ -24,10 +24,6 @@ type agentProcessManager struct {
 
 	agents   map[string]*managedAgentProcess
 	stopping map[string]*managedAgentProcess
-
-	// stopEpochs is Raft's per-Agent monotonic cancellation generation. A
-	// start captures it at acceptance and rechecks it across async startup.
-	stopEpochs map[string]uint64
 }
 
 type agentProcessStartRequest struct {
@@ -88,8 +84,6 @@ type managedAgentProcess struct {
 	agentID         string
 	runtimeID       string
 	agentInstanceID string
-	// startStopEpoch is the stop generation captured by this exact launch.
-	startStopEpoch uint64
 
 	queueState        string
 	processInstanceID string
@@ -119,7 +113,6 @@ func newAgentProcessManager(now func() time.Time, onTransition func(agentLifecyc
 		onTransition: onTransition,
 		agents:       make(map[string]*managedAgentProcess),
 		stopping:     make(map[string]*managedAgentProcess),
-		stopEpochs:   make(map[string]uint64),
 	}
 }
 
@@ -143,7 +136,6 @@ func (m *agentProcessManager) Close() {
 	}
 	m.agents = nil
 	m.stopping = nil
-	m.stopEpochs = nil
 	m.mu.Unlock()
 }
 
@@ -178,7 +170,6 @@ func (m *agentProcessManager) startWithDisposition(request agentProcessStartRequ
 	agentInstanceID := m.newID()
 	managed := &managedAgentProcess{
 		agentID: request.AgentID, runtimeID: request.RuntimeID, agentInstanceID: agentInstanceID, managed: true,
-		startStopEpoch:  m.stopEpochs[request.AgentID],
 		readinessPolicy: request.ReadinessPolicy, deliveryMode: request.DeliveryMode,
 		transitions: make(map[string]*openLifecycleTransition), startupDone: make(chan struct{}),
 	}
@@ -189,7 +180,7 @@ func (m *agentProcessManager) startWithDisposition(request agentProcessStartRequ
 
 // RestoreIdle re-creates a managed Agent instance after the provider process
 // is gone. This is Computer-local idle auto-restart, not a wire agent:start.
-func (m *agentProcessManager) RestoreIdle(agentID, runtimeID string, startStopEpoch uint64) error {
+func (m *agentProcessManager) RestoreIdle(agentID, runtimeID, previousAgentInstanceID string, residency *agentResidencyStore) error {
 	if m == nil {
 		return errors.New("agent process manager is not configured")
 	}
@@ -198,7 +189,7 @@ func (m *agentProcessManager) RestoreIdle(agentID, runtimeID string, startStopEp
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.stopEpochs[agentID] != startStopEpoch || m.stopping[agentID] != nil {
+	if m.stopping[agentID] != nil || residency == nil {
 		return errManagedAgentStartStopped
 	}
 	if existing := m.agents[agentID]; existing != nil && existing.managed {
@@ -208,9 +199,11 @@ func (m *agentProcessManager) RestoreIdle(agentID, runtimeID string, startStopEp
 		return nil
 	}
 	agentInstanceID := m.newID()
+	if !residency.replaceIdleInstance(agentID, runtimeID, previousAgentInstanceID, agentInstanceID) {
+		return errManagedAgentStartStopped
+	}
 	managed := &managedAgentProcess{
 		agentID: agentID, runtimeID: runtimeID, agentInstanceID: agentInstanceID, managed: true,
-		startStopEpoch:  startStopEpoch,
 		readinessPolicy: agentRuntimeReadinessFirstEvent,
 		transitions:     make(map[string]*openLifecycleTransition), startupDone: make(chan struct{}),
 	}
@@ -229,7 +222,6 @@ func (m *agentProcessManager) Stop(callback agentProcessCallback) error {
 	if err != nil {
 		return err
 	}
-	m.recordStopLocked(callback.AgentID)
 	m.stopLocked(managed)
 	return nil
 }
@@ -247,7 +239,6 @@ func (m *agentProcessManager) beginManagedStop(callback agentProcessCallback) (a
 		if stopping.agentInstanceID != callback.AgentInstanceID {
 			return agentProcessManagerSnapshot{}, nil, false, errors.New("stale Agent process callback")
 		}
-		m.recordStopLocked(callback.AgentID)
 		return snapshotManagedAgentProcess(stopping), stopping.startupDone, true, nil
 	}
 	managed := m.agents[callback.AgentID]
@@ -257,19 +248,9 @@ func (m *agentProcessManager) beginManagedStop(callback agentProcessCallback) (a
 	if managed.agentInstanceID != callback.AgentInstanceID {
 		return agentProcessManagerSnapshot{}, nil, false, errors.New("stale Agent process callback")
 	}
-	m.recordStopLocked(callback.AgentID)
 	m.stopLocked(managed)
 	m.stopping[callback.AgentID] = managed
 	return snapshotManagedAgentProcess(managed), managed.startupDone, true, nil
-}
-
-func (m *agentProcessManager) recordStop(agentID string) {
-	if m == nil {
-		return
-	}
-	m.mu.Lock()
-	m.recordStopLocked(agentID)
-	m.mu.Unlock()
 }
 
 func (m *agentProcessManager) completeManagedStop(callback agentProcessCallback) {
@@ -285,37 +266,6 @@ func (m *agentProcessManager) completeManagedStop(callback agentProcessCallback)
 
 func (m *agentProcessManager) completeManagedStart(callback agentProcessCallback) {
 	m.settleManagedStart(callback, false)
-}
-
-func (m *agentProcessManager) startStopEpoch(callback agentProcessCallback) (uint64, error) {
-	if m == nil {
-		return 0, errors.New("agent process manager is not configured")
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	managed := m.agents[callback.AgentID]
-	if managed == nil {
-		managed = m.stopping[callback.AgentID]
-	}
-	if managed == nil || managed.agentInstanceID != callback.AgentInstanceID {
-		return 0, errors.New("managed Agent start was superseded")
-	}
-	return managed.startStopEpoch, nil
-}
-
-func (m *agentProcessManager) stopEpochChanged(agentID string, captured uint64) bool {
-	if m == nil {
-		return true
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.stopEpochs[agentID] != captured
-}
-
-func (m *agentProcessManager) recordStopLocked(agentID string) uint64 {
-	next := m.stopEpochs[agentID] + 1
-	m.stopEpochs[agentID] = next
-	return next
 }
 
 func (m *agentProcessManager) completeFailedManagedStart(callback agentProcessCallback) {
@@ -342,8 +292,8 @@ func (m *agentProcessManager) settleManagedStart(callback agentProcessCallback, 
 
 // failManagedProcess claims an ordinary provider failure only while the exact
 // Agent instance is still active in APM. Once beginManagedStop has moved it into the
-// stopping epoch, that stop exclusively owns cleanup and inactive publication.
-func (m *agentProcessManager) failManagedProcess(callback agentProcessCallback) bool {
+// stopping ownership, that stop exclusively owns cleanup and inactive publication.
+func (m *agentProcessManager) failManagedProcess(callback agentProcessCallback, beforeRelease func()) bool {
 	if m == nil {
 		return false
 	}
@@ -356,7 +306,28 @@ func (m *agentProcessManager) failManagedProcess(callback agentProcessCallback) 
 	if managed == nil || !managed.managed || managed.agentInstanceID != callback.AgentInstanceID {
 		return false
 	}
+	if beforeRelease != nil {
+		beforeRelease()
+	}
 	m.stopLocked(managed)
+	return true
+}
+
+// withActiveAgentInstance runs update while APM still owns the exact active
+// Agent instance. Stop takes the same lock before moving it to stopping.
+func (m *agentProcessManager) withActiveAgentInstance(callback agentProcessCallback, update func()) bool {
+	if m == nil {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	managed := m.agents[callback.AgentID]
+	if managed == nil || !managed.managed || managed.agentInstanceID != callback.AgentInstanceID {
+		return false
+	}
+	if update != nil {
+		update()
+	}
 	return true
 }
 
@@ -386,8 +357,7 @@ func (m *agentProcessManager) publishManagedStart(callback agentProcessCallback,
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	managed := m.agents[callback.AgentID]
-	if managed == nil || !managed.managed || managed.agentInstanceID != callback.AgentInstanceID ||
-		m.stopEpochs[callback.AgentID] != managed.startStopEpoch {
+	if managed == nil || !managed.managed || managed.agentInstanceID != callback.AgentInstanceID {
 		return errManagedAgentStartStopped
 	}
 	return publish()
@@ -539,6 +509,19 @@ func (m *agentProcessManager) Snapshot(agentID string) (agentProcessManagerSnaps
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	managed := m.agents[agentID]
+	if managed == nil {
+		return agentProcessManagerSnapshot{}, false
+	}
+	return snapshotManagedAgentProcess(managed), true
+}
+
+func (m *agentProcessManager) stoppingSnapshot(agentID string) (agentProcessManagerSnapshot, bool) {
+	if m == nil {
+		return agentProcessManagerSnapshot{}, false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	managed := m.stopping[agentID]
 	if managed == nil {
 		return agentProcessManagerSnapshot{}, false
 	}

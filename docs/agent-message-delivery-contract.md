@@ -52,8 +52,8 @@ Verified Raft Computer behavior:
 - Do not ACK unless the coordinator still owns the body (Pending), the target
   is already context-covered, or an idle restore of the original launch is in
   flight.
-- Do not invent a `startDispatchId` for idle restore. Restore is Computer-local
-  and reuses the last server launch identity.
+- Idle restore is Computer-local work under the already accepted Agent process;
+  it does not create a Server-side lifecycle identity.
 - Do not collapse those outcomes into one `has not been accepted by APM` error.
 
 ## Multica contract
@@ -63,7 +63,7 @@ ledger. One row identifies a canonical Message selected for one Agent and
 retains its original target sequence. `acked_at IS NULL` means the Server is
 still responsible for delivery.
 
-When a Workspace Runner becomes ready, the Server reconstructs and sends every
+When a WorkspaceDaemon becomes ready, the Server reconstructs and sends every
 unacknowledged delivery for that Computer and Workspace, ordered by the original
 Message sequence. This is independent of `agent:start:ack`: deliveries may
 arrive before or during Agent start, and the Computer/APM owns the corresponding

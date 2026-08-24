@@ -302,7 +302,7 @@ export interface AgentReminderChangedPayload {
   agentId: string;
 }
 
-// The Workspace Runner Activity read-model is presentation-safe: callers must
+// The WorkspaceDaemon Activity read-model is presentation-safe: callers must
 // display these fields as supplied and never infer runtime state.
 export interface RunnerActivitySummary {
   label: string;

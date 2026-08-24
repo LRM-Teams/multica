@@ -13,16 +13,15 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-// TestStopManagedAgentPublishesInactiveDespiteResidentTerminationTimeout pins
-// the "no half-stop" requirement (LRM-1571 follow-up): a resident that never
+// TestStopManagedAgentPublishesInactiveAndRetainsTerminationFence pins the
+// "no half-stop" requirement (LRM-1571 follow-up): a resident that never
 // confirms its own kill (OS process wedged past SIGKILL, or our own turn
-// goroutine never releasing the slot) must not leave the launch stuck in
-// `stopping` with no terminal status ever published. stopManagedAgent must
-// still clear residency, complete the managed stop, and publish
-// AgentStatusInactive, and it must return nil so the caller
+// goroutine never releasing the slot) must still publish AgentStatusInactive,
+// while retaining the existing APM stopping record so a later Start cannot
+// bypass provider termination. stopManagedAgent must return nil so the caller
 // (workspace_daemon.go's EventDaemonAgentStop handler) does not tear down the
 // whole WorkspaceDaemon connection over one agent's unconfirmed kill.
-func TestStopManagedAgentPublishesInactiveDespiteResidentTerminationTimeout(t *testing.T) {
+func TestStopManagedAgentPublishesInactiveAndRetainsTerminationFence(t *testing.T) {
 	const (
 		workspaceID     = "ws-1"
 		runtimeID       = "runtime-a"
@@ -86,6 +85,9 @@ func TestStopManagedAgentPublishesInactiveDespiteResidentTerminationTimeout(t *t
 	if _, found := runner.processes.Snapshot(agentID); found {
 		t.Fatal("stopped launch survived in the process manager despite a resident termination timeout")
 	}
+	if stopping, found := runner.processes.stoppingSnapshot(agentID); !found || stopping.RuntimeID != runtimeID {
+		t.Fatalf("provider termination fence = %+v, found %v; want stopping Runtime %s", stopping, found, runtimeID)
+	}
 }
 
 func TestRuntimeChangeRejectsStartWhileOldProviderTerminationIsUnconfirmed(t *testing.T) {
@@ -117,10 +119,11 @@ func TestRuntimeChangeRejectsStartWhileOldProviderTerminationIsUnconfirmed(t *te
 		"MULTICA_AGENT_ID":     agentID,
 		"MULTICA_TASK_ID":      "turn-a",
 	})
-	if _, err := runner.runtimes.acquire(agentRuntimeAcquireRequest{
+	oldLease, err := runner.runtimes.acquire(agentRuntimeAcquireRequest{
 		Identity: identity,
 		Factory:  probe.factory,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("acquire old resident slot: %v", err)
 	}
 
@@ -134,15 +137,34 @@ func TestRuntimeChangeRejectsStartWhileOldProviderTerminationIsUnconfirmed(t *te
 	if !runner.runtimes.hasResidentBackend(agentID, oldRuntime) {
 		t.Fatal("test did not retain the old provider past the termination wait")
 	}
+
+	replayCtx, replayCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	err = runner.restartAgentForRuntimeChange(replayCtx, protocol.AgentStartPayload{
+		AgentID: agentID, RuntimeID: newRuntime}, nil, func(string, any) error { return nil })
+	replayCancel()
+	if err == nil {
+		t.Fatal("replayed runtime change bypassed the unsettled old provider termination")
+	}
+	if _, _, _, startErr := runner.startManagedAgent(context.Background(), protocol.AgentStartPayload{
+		AgentID: agentID, RuntimeID: newRuntime}); startErr == nil {
+		t.Fatal("ordinary Start created a replacement while the old provider was still alive")
+	}
+
+	oldLease.release(true)
+	if err := runner.restartAgentForRuntimeChange(context.Background(), protocol.AgentStartPayload{
+		AgentID: agentID, RuntimeID: newRuntime}, nil, func(string, any) error { return nil }); err != nil {
+		t.Fatalf("runtime change remained blocked after old provider exit: %v", err)
+	}
+	_, newStatus, _, err := runner.startManagedAgent(context.Background(), protocol.AgentStartPayload{
+		AgentID: agentID, RuntimeID: newRuntime})
+	if err != nil || newStatus.Status != protocol.AgentStatusActive {
+		t.Fatalf("start new Runtime after old provider exit: status %+v, error %v", newStatus, err)
+	}
 }
 
-// TestStopManagedAgentSingleClearSurvivesRacingProviderStartupWrite pins the
-// residency epoch guard (LRM-1571 follow-up) that made stopManagedAgent's
-// second residency.clear unnecessary: with the guard in place, a
-// provider-startup write racing in with its own (now-stale) startStopEpoch
-// after the sole remaining clear must be dropped rather than resurrecting
-// residency -- exactly the resurrection the removed second clear used to
-// paper over.
+// TestStopManagedAgentSingleClearSurvivesRacingProviderStartupWrite verifies
+// that an old provider callback cannot restore residency after Stop releases
+// the exact AgentInstanceID from active APM ownership.
 func TestStopManagedAgentSingleClearSurvivesRacingProviderStartupWrite(t *testing.T) {
 	const (
 		workspaceID     = "ws-1"
@@ -163,12 +185,7 @@ func TestStopManagedAgentSingleClearSurvivesRacingProviderStartupWrite(t *testin
 		t.Fatalf("start managed Agent: status %+v, error %v", status, err)
 	}
 
-	// The epoch this exact launch started with -- what a racing provider
-	// startup write for this same launch would carry.
-	startEpoch, err := runner.processes.startStopEpoch(currentTestAgentProcessCallback(t, runner, agentID))
-	if err != nil {
-		t.Fatalf("capture launch epoch: %v", err)
-	}
+	callback := currentTestAgentProcessCallback(t, runner, agentID)
 
 	// A real resident slot that never releases gives awaitResidentTerminated
 	// a genuine multi-millisecond window to block in, same as the timeout
@@ -200,7 +217,9 @@ func TestStopManagedAgentSingleClearSurvivesRacingProviderStartupWrite(t *testin
 				}
 				time.Sleep(time.Millisecond)
 			}
-			runner.residency.rememberFailure(agentID, runtimeID, agentInstanceID, startEpoch, managedRuntimeFailureRuntime, "provider_spawn_failed", "")
+			runner.processes.withActiveAgentInstance(callback, func() {
+				runner.residency.rememberFailure(agentID, runtimeID, agentInstanceID, managedRuntimeFailureRuntime, "provider_spawn_failed", "")
+			})
 		}()
 	}
 

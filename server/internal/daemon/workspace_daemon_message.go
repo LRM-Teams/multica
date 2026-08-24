@@ -347,7 +347,7 @@ func (runner *WorkspaceDaemon) restartFromIdleSnapshot(agentID string, res agent
 	if runner.processes == nil || res.runtimeID == "" || res.agentInstanceID == "" {
 		return fmt.Errorf("idle snapshot for Agent %q is incomplete", agentID)
 	}
-	return runner.processes.RestoreIdle(agentID, res.runtimeID, res.startStopEpoch)
+	return runner.processes.RestoreIdle(agentID, res.runtimeID, res.agentInstanceID, runner.residency)
 }
 
 func (runner *WorkspaceDaemon) completeIdleSnapshotStart(ctx context.Context, agentID string, res agentResidency) {

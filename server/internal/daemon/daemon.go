@@ -292,7 +292,6 @@ func (d *Daemon) initializeBindingExecution(bindingStateRoot string) {
 	d.workspaceDaemons = make(map[string]*WorkspaceDaemon)
 	d.canonicalRuntimes = newAgentRuntimePool()
 	d.canonicalRuntimes.setResidentStallWatchdog(d.cfg.RuntimeProgressStale)
-	d.canonicalRuntimes.setMaxAgentProcesses(d.cfg.MaxAgentProcesses)
 	d.canonicalRuntimes.subscribeResidentProcess(d.onResidentProcessEvent)
 	d.messageDraftStore = NewMessageDraftStore(d.cfg.WorkspacesRoot)
 	d.mixedRunActivityOutbox = newMixedRunActivityOutbox(bindingStateRoot)

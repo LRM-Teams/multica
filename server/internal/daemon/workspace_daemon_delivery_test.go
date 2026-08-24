@@ -305,7 +305,7 @@ func TestWorkspaceDaemonIdleSnapshotDeliveryRestartsAndAcknowledges(t *testing.T
 		AgentID: "agent-1", RuntimeID: "runtime-1"}); err != nil {
 		t.Fatalf("start managed Agent: %v", err)
 	}
-	if !runner.processes.failManagedProcess(currentTestAgentProcessCallback(t, runner, "agent-1")) {
+	if !runner.processes.failManagedProcess(currentTestAgentProcessCallback(t, runner, "agent-1"), nil) {
 		t.Fatal("drop live process")
 	}
 	delivery := protocol.AgentDeliverPayload{
@@ -348,7 +348,7 @@ func TestWorkspaceDaemonIdleSnapshotCompleteRespectsCancel(t *testing.T) {
 		AgentID: "agent-1", RuntimeID: "runtime-1"}); err != nil {
 		t.Fatalf("start managed Agent: %v", err)
 	}
-	if !runner.processes.failManagedProcess(currentTestAgentProcessCallback(t, runner, "agent-1")) {
+	if !runner.processes.failManagedProcess(currentTestAgentProcessCallback(t, runner, "agent-1"), nil) {
 		t.Fatal("drop live process")
 	}
 	res, ok := runner.residency.get("agent-1")

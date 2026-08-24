@@ -165,7 +165,7 @@ func (h *Handler) sendAgentRestartCommand(state activeAgentRestartState, eventTy
 	if h.AgentRestartNotifier == nil || !h.AgentRestartNotifier.NotifyAgentRestartCommand(
 		state.workspaceID, state.computerID, eventType, state.operationID, payload,
 	) {
-		return errors.New("current Workspace Runner unavailable during Agent restart operation")
+		return errors.New("current WorkspaceDaemon unavailable during Agent restart operation")
 	}
 	return nil
 }

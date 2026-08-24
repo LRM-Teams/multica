@@ -106,8 +106,7 @@ func startTestManagedAgent(t *testing.T, runner *WorkspaceDaemon, agentID, runti
 		t.Fatalf("start test managed Agent: %v", err)
 	}
 	if runner.residency != nil {
-		startStopEpoch, _ := runner.processes.startStopEpoch(agentProcessCallback{AgentID: agentID, AgentInstanceID: accepted.AgentInstanceID})
-		runner.residency.rememberLaunch(agentID, runtimeID, accepted.AgentInstanceID, startStopEpoch)
+		runner.residency.rememberLaunch(agentID, runtimeID, accepted.AgentInstanceID)
 	}
 	return accepted
 }
@@ -141,8 +140,7 @@ func registerTestWorkspaceDaemonInbox(t *testing.T, runner *WorkspaceDaemon, key
 			t.Fatalf("register test APM launch: %v", err)
 		}
 		if runner.residency != nil {
-			startStopEpoch, _ := runner.processes.startStopEpoch(agentProcessCallback{AgentID: key.AgentID, AgentInstanceID: accepted.AgentInstanceID})
-			runner.residency.rememberLaunch(key.AgentID, runtimeID, accepted.AgentInstanceID, startStopEpoch)
+			runner.residency.rememberLaunch(key.AgentID, runtimeID, accepted.AgentInstanceID)
 		}
 	}
 }

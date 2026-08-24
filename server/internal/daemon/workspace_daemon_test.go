@@ -779,7 +779,7 @@ func TestWorkspaceDaemonProviderStartSurvivesControlConnectionClose(t *testing.T
 	}
 }
 
-func TestWorkspaceDaemonStopEpochCancelsBlockedProviderStart(t *testing.T) {
+func TestWorkspaceDaemonStopCancelsBlockedProviderStart(t *testing.T) {
 	const (
 		workspaceID     = "ws-1"
 		runtimeID       = "runtime-1"
@@ -835,7 +835,7 @@ func TestWorkspaceDaemonStopEpochCancelsBlockedProviderStart(t *testing.T) {
 
 	result := <-startDone
 	if !errors.Is(result.err, errManagedAgentStartStopped) {
-		t.Fatalf("blocked start error = %v, want stop-epoch suppression", result.err)
+		t.Fatalf("blocked start error = %v, want stop suppression", result.err)
 	}
 	if result.status.Status == protocol.AgentStatusActive {
 		t.Fatalf("blocked start published Active after Stop: %+v", result.status)
@@ -859,19 +859,7 @@ func TestWorkspaceDaemonStopEpochCancelsBlockedProviderStart(t *testing.T) {
 	_, status, _, err := runner.startManagedAgent(context.Background(), protocol.AgentStartPayload{
 		AgentID: agentID, RuntimeID: runtimeID})
 	if err != nil || status.Status != protocol.AgentStatusActive {
-		t.Fatalf("fresh start after stopped epoch = status %+v, error %v", status, err)
-	}
-}
-
-func TestWorkspaceDaemonUnknownLaunchStopDoesNotAdvanceEpoch(t *testing.T) {
-	d := New(Config{WorkspacesRoot: t.TempDir()}, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	runner, _ := attachTestWorkspaceDaemon(t, d, "ws-1", nil)
-	if err := runner.stopManagedAgent(context.Background(), protocol.AgentStopPayload{
-		AgentID: "agent-1"}, nil, func(string, any) error { return nil }); err != nil {
-		t.Fatal(err)
-	}
-	if err := runner.processes.RestoreIdle("agent-1", "runtime-1", 0); err != nil {
-		t.Fatalf("unowned stale Stop advanced stop epoch: %v", err)
+		t.Fatalf("fresh start after settled Stop = status %+v, error %v", status, err)
 	}
 }
 

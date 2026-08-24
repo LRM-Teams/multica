@@ -412,7 +412,7 @@ func (h *Handler) recordRunnerLaunch(ctx context.Context, identity daemonws.Clie
 	return h.runnerPresenceLocked(func() error {
 		source := h.currentRunnerPresenceSource()
 		if source == nil || !source.IsCurrentWorkspaceDaemon(identity.DaemonID, identity.WorkspaceID, daemonInstanceID) {
-			return errors.New("stale Workspace Runner status")
+			return errors.New("stale WorkspaceDaemon status")
 		}
 		_, _, runtimeID, err := h.runnerActivityAgentScope(ctx, identity.WorkspaceID, status.AgentID)
 		if err != nil {
@@ -424,7 +424,7 @@ func (h *Handler) recordRunnerLaunch(ctx context.Context, identity daemonws.Clie
 		}
 		before := h.projectRunnerLaunchPresence(identity.WorkspaceID, beforeLaunch)
 		if !h.observations().acceptStatus(identity.WorkspaceID, identity.DaemonID, daemonInstanceID, status.AgentID, util.UUIDToString(runtimeID), status.Status) {
-			return errors.New("stale Workspace Runner launch status")
+			return errors.New("stale WorkspaceDaemon process status")
 		}
 		afterLaunch := &runnerLaunchPresence{daemonID: identity.DaemonID, daemonInstanceID: daemonInstanceID, status: status.Status}
 		after := h.projectRunnerLaunchPresence(identity.WorkspaceID, afterLaunch)
@@ -440,7 +440,7 @@ func (h *Handler) recordRunnerStartAcknowledgement(ctx context.Context, identity
 	return h.runnerPresenceLocked(func() error {
 		source := h.currentRunnerPresenceSource()
 		if source == nil || !source.IsCurrentWorkspaceDaemon(identity.DaemonID, identity.WorkspaceID, daemonInstanceID) {
-			return errors.New("stale Workspace Runner start acknowledgement")
+			return errors.New("stale WorkspaceDaemon start acknowledgement")
 		}
 		_, _, runtimeID, err := h.runnerActivityAgentScope(ctx, identity.WorkspaceID, acknowledgement.AgentID)
 		if err != nil {
@@ -453,7 +453,7 @@ func (h *Handler) recordRunnerStartAcknowledgement(ctx context.Context, identity
 		before := h.projectRunnerLaunchPresence(identity.WorkspaceID, beforeLaunch)
 		status, ok := h.observations().acceptStartAck(identity.WorkspaceID, identity.DaemonID, daemonInstanceID, acknowledgement.AgentID, util.UUIDToString(runtimeID))
 		if !ok {
-			return errors.New("stale Workspace Runner start acknowledgement")
+			return errors.New("stale WorkspaceDaemon start acknowledgement")
 		}
 		after := h.projectRunnerLaunchPresence(identity.WorkspaceID, &runnerLaunchPresence{
 			daemonID:         identity.DaemonID,
@@ -504,7 +504,7 @@ func (h *Handler) recoverRunnerObservation(ctx context.Context, identity daemonw
 	if !ok {
 		return runnerObservedAgent{}, false
 	}
-	slog.Info("Workspace Runner observation recovered from current runtime assignment",
+	slog.Info("WorkspaceDaemon observation recovered from current runtime assignment",
 		"workspace_id", identity.WorkspaceID, "daemon_id", identity.DaemonID,
 		"daemon_instance_id", daemonInstanceID, "agent_id", agentID)
 	// No observation existed, so the projected presence before recovery was
@@ -523,7 +523,7 @@ func (h *Handler) recordRunnerSession(ctx context.Context, identity daemonws.Cli
 	return h.runnerPresenceLocked(func() error {
 		source := h.currentRunnerPresenceSource()
 		if source == nil || !source.IsCurrentWorkspaceDaemon(identity.DaemonID, identity.WorkspaceID, daemonInstanceID) {
-			return errors.New("stale Workspace Runner session")
+			return errors.New("stale WorkspaceDaemon session")
 		}
 		if _, _, _, err := h.runnerActivityAgentScope(ctx, identity.WorkspaceID, session.AgentID); err != nil {
 			return err
@@ -531,7 +531,7 @@ func (h *Handler) recordRunnerSession(ctx context.Context, identity daemonws.Cli
 		if !h.observations().acceptSession(identity.WorkspaceID, identity.DaemonID, daemonInstanceID, session.AgentID, session.ProviderSessionID) {
 			if _, recovered := h.recoverRunnerObservation(ctx, identity, daemonInstanceID, session.AgentID); !recovered ||
 				!h.observations().acceptSession(identity.WorkspaceID, identity.DaemonID, daemonInstanceID, session.AgentID, session.ProviderSessionID) {
-				return errors.New("stale or unknown Workspace Runner session")
+				return errors.New("stale or unknown WorkspaceDaemon session")
 			}
 		}
 		command, err := h.DB.Exec(ctx, `

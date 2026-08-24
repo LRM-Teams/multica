@@ -224,7 +224,7 @@ func (h *Handler) resetAgent(ctx context.Context, agent db.Agent, mode AgentRest
 		return AgentRestartOperation{}, &agentLifecycleRequestError{status: http.StatusConflict, message: "unsupported_runtime_capability"}
 	}
 	if !runtime.DaemonID.Valid {
-		return AgentRestartOperation{}, &agentLifecycleRequestError{status: http.StatusConflict, message: "current Workspace Runner unavailable during Agent restart operation"}
+		return AgentRestartOperation{}, &agentLifecycleRequestError{status: http.StatusConflict, message: "current WorkspaceDaemon unavailable during Agent restart operation"}
 	}
 	now := time.Now().UTC()
 	state, accepted := h.restarts().begin(activeAgentRestartState{

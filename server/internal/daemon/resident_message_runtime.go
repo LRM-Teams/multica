@@ -239,7 +239,6 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 			environment["PATH"] = filepath.Dir(transport.wrapperPath) + string(os.PathListSeparator) + environment["PATH"]
 			return func() { _ = transport.Close() }, nil
 		},
-		Context: ctx,
 	})
 	if err != nil {
 		return fmt.Errorf("acquire resident Message runtime: %w", err)

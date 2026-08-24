@@ -52,10 +52,9 @@ func startManagedLaunch(t *testing.T, runner *WorkspaceDaemon, agentID, runtimeI
 // exists for (LRM-1571): once the liveness sweep detects a dead resident
 // process, agentProcessManager must stop reporting that launch as Running —
 // otherwise the local launch layer believes the launch is alive long after
-// the server has already been told it crashed, and the capacity grant it
-// holds is never released. Before this change, onResidentRuntimeCrash never
-// touched runner.processes at all, so this must fail red on the
-// pre-implementation code.
+// the server has already been told it crashed. Before this change,
+// onResidentRuntimeCrash never touched runner.processes at all, so this must
+// fail red on the pre-implementation code.
 func TestResidentProcessDeathClearsAPMRunningState(t *testing.T) {
 	d := New(Config{}, testLogger())
 	d.mu.Lock()
@@ -113,7 +112,7 @@ func TestResidentProcessExitedBackoffCapRetiresFailedAgentWithoutAffectingAnothe
 	runner, _ := attachTestWorkspaceDaemon(t, d, "workspace-1", send)
 	startManagedLaunch(t, runner, "agent-1", "runtime-1")
 
-	// Capacity is currently unlimited, so another Agent starts independently.
+	// Another Agent starts independently.
 	if _, err := runner.processes.Start(agentProcessStartRequest{
 		AgentID: "agent-2", RuntimeID: "runtime-2",
 	}); err != nil {
@@ -125,8 +124,8 @@ func TestResidentProcessExitedBackoffCapRetiresFailedAgentWithoutAffectingAnothe
 
 	now := time.Now()
 	// residentCrashRetryCap crashes within the window are recoverable: the
-	// launch is kept (re-Starting) and never releases capacity, so agent-2
-	// stays Queued throughout. Re-spawn after each kept crash so the next
+	// launch is kept (re-Starting), while agent-2 remains unaffected.
+	// Re-spawn after each kept crash so the next
 	// crash detects a fresh process instance, mirroring the real lazy
 	// recreate on the next acquire().
 	for attempt := 1; attempt <= residentCrashRetryCap; attempt++ {

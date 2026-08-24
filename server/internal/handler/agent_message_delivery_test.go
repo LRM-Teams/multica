@@ -88,7 +88,7 @@ func TestWorkspaceDaemonReadyRedeliversUnacknowledgedMessagesInSequenceOrder(t *
 	}
 	identity := daemonws.ClientIdentity{DaemonID: daemonID, WorkspaceID: testWorkspaceID}
 	if err := h.HandleWorkspaceDaemonFrame(ctx, identity, "instance-1", protocol.EventWorkspaceDaemonReady, raw); err != nil {
-		t.Fatalf("accept Workspace Runner ready: %v", err)
+		t.Fatalf("accept WorkspaceDaemon ready: %v", err)
 	}
 	if len(notifier.deliveries) != 2 {
 		t.Fatalf("redelivered %d Messages, want 2", len(notifier.deliveries))
@@ -148,7 +148,7 @@ func TestAgentDeliveryAcknowledgementRequiresExactSequenceAndStopsRedelivery(t *
 		t.Fatal(err)
 	}
 	if err := h.HandleWorkspaceDaemonFrame(ctx, identity, "instance-1", protocol.EventWorkspaceDaemonReady, ready); err != nil {
-		t.Fatalf("accept Workspace Runner ready after acknowledgement: %v", err)
+		t.Fatalf("accept WorkspaceDaemon ready after acknowledgement: %v", err)
 	}
 	if len(notifier.deliveries) != 0 {
 		t.Fatalf("redelivered %d acknowledged Messages, want 0", len(notifier.deliveries))

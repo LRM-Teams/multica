@@ -12,15 +12,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newSkillImportTestCmd() *cobra.Command {
-	cmd := &cobra.Command{Use: "import"}
-	cmd.Flags().String("server-url", "", "")
-	cmd.Flags().String("workspace-id", "", "")
-	cmd.Flags().String("profile", "", "")
-	cmd.Flags().String("url", "", "")
-	cmd.Flags().String("on-conflict", "fail", "")
-	cmd.Flags().String("output", "json", "")
-	return cmd
+func TestSkillCommandDoesNotExposeAgentImport(t *testing.T) {
+	for _, command := range skillCmd.Commands() {
+		if command.Name() == "import" {
+			t.Fatal("skill import must not be exposed through the Agent CLI")
+		}
+	}
 }
 
 func captureStdout(t *testing.T, fn func() error) (string, error) {
@@ -42,121 +39,6 @@ func captureStdout(t *testing.T, fn func() error) (string, error) {
 		t.Fatalf("read stdout: %v", err)
 	}
 	return string(out), runErr
-}
-
-func TestRunSkillImportJsonTreatsDuplicateAsConflictResult(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("MULTICA_TOKEN", "test-token")
-	t.Setenv("MULTICA_WORKSPACE_ID", "workspace-123")
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			t.Fatalf("method = %s, want POST", r.Method)
-		}
-		if r.URL.Path != "/api/skills/import" {
-			t.Fatalf("path = %q, want /api/skills/import", r.URL.Path)
-		}
-		if r.Header.Get("X-Workspace-ID") != "workspace-123" {
-			t.Fatalf("X-Workspace-ID = %q, want workspace-123", r.Header.Get("X-Workspace-ID"))
-		}
-		var body map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Fatalf("decode request body: %v", err)
-		}
-		if body["url"] != "https://skills.sh/acme/review-helper" {
-			t.Fatalf("url = %v", body["url"])
-		}
-		if body["on_conflict"] != "fail" {
-			t.Fatalf("on_conflict = %v, want fail", body["on_conflict"])
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusConflict)
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"status": "conflict",
-			"reason": "a skill with this name already exists; use --on-conflict overwrite to replace it or --on-conflict rename to import a copy",
-			"existing_skill": map[string]any{
-				"id":   "skill-123",
-				"name": "review-helper",
-			},
-		})
-	}))
-	defer srv.Close()
-	t.Setenv("MULTICA_SERVER_URL", srv.URL)
-
-	cmd := newSkillImportTestCmd()
-	_ = cmd.Flags().Set("url", "https://skills.sh/acme/review-helper")
-	_ = cmd.Flags().Set("output", "json")
-
-	out, err := captureStdout(t, func() error {
-		return runSkillImport(cmd, nil)
-	})
-	if err == nil {
-		t.Fatal("expected duplicate import to return an error")
-	}
-
-	var got map[string]any
-	if err := json.Unmarshal([]byte(out), &got); err != nil {
-		t.Fatalf("decode stdout JSON %q: %v", out, err)
-	}
-	if got["status"] != "conflict" {
-		t.Fatalf("status = %v", got["status"])
-	}
-	if !strings.Contains(strVal(got, "reason"), "--on-conflict overwrite") {
-		t.Fatalf("reason = %v", got["reason"])
-	}
-	existing, ok := got["existing_skill"].(map[string]any)
-	if !ok {
-		t.Fatalf("existing_skill missing or wrong type: %#v", got["existing_skill"])
-	}
-	if existing["id"] != "skill-123" || existing["name"] != "review-helper" {
-		t.Fatalf("existing_skill = %#v", existing)
-	}
-}
-
-func TestRunSkillImportSendsOnConflictAndPrintsStructuredResult(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("MULTICA_TOKEN", "test-token")
-	t.Setenv("MULTICA_WORKSPACE_ID", "workspace-123")
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Fatalf("decode request body: %v", err)
-		}
-		if body["on_conflict"] != "overwrite" {
-			t.Fatalf("on_conflict = %v, want overwrite", body["on_conflict"])
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"status": "updated",
-			"skill": map[string]any{
-				"id":   "skill-123",
-				"name": "review-helper",
-			},
-		})
-	}))
-	defer srv.Close()
-	t.Setenv("MULTICA_SERVER_URL", srv.URL)
-
-	cmd := newSkillImportTestCmd()
-	_ = cmd.Flags().Set("url", "https://skills.sh/acme/review-helper")
-	_ = cmd.Flags().Set("on-conflict", "overwrite")
-	_ = cmd.Flags().Set("output", "json")
-
-	out, err := captureStdout(t, func() error {
-		return runSkillImport(cmd, nil)
-	})
-	if err != nil {
-		t.Fatalf("runSkillImport returned error: %v", err)
-	}
-	var got map[string]any
-	if err := json.Unmarshal([]byte(out), &got); err != nil {
-		t.Fatalf("decode stdout JSON %q: %v", out, err)
-	}
-	if got["status"] != "updated" {
-		t.Fatalf("status = %v", got["status"])
-	}
 }
 
 func TestRunSkillSearchRequestsSearchEndpoint(t *testing.T) {

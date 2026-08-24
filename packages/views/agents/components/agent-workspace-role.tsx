@@ -77,66 +77,66 @@ export function AgentWorkspaceRole({
 
   const RoleIcon = isAdmin ? ShieldCheck : ShieldOff;
 
+  // No container of its own: the detail inspector and the side panel place
+  // this field inside their own sections, which are laid out differently.
   return (
-    <div className="flex flex-col border-b px-5 py-4">
-      <InspectorField
-        label={t(($) => $.inspector.section_workspace_role)}
-        hint={
-          canChange
-            ? t(($) => $.inspector.workspace_role.role_hint)
-            : t(($) => $.inspector.workspace_role.role_readonly_hint)
-        }
+    <InspectorField
+      label={t(($) => $.inspector.section_workspace_role)}
+      hint={
+        canChange
+          ? t(($) => $.inspector.workspace_role.role_hint)
+          : t(($) => $.inspector.workspace_role.role_readonly_hint)
+      }
       >
-        {canChange ? (
-          <PropertyPicker
-            open={open}
-            onOpenChange={setOpen}
-            width="w-auto min-w-[16rem]"
-            align="start"
-            tooltip={roleLabel(isAdmin)}
-            triggerRender={
-              <button
-                type="button"
-                className={CHIP_CLASS}
-                aria-label={roleLabel(isAdmin)}
-                data-testid="agent-workspace-role-toggle"
-              />
-            }
-            trigger={
-              <>
-                <RoleIcon className="size-3 shrink-0" aria-hidden />
-                <span data-testid="agent-workspace-role-value">
-                  {roleLabel(isAdmin)}
-                </span>
-                <EditPencil />
-              </>
-            }
+      {canChange ? (
+        <PropertyPicker
+          open={open}
+          onOpenChange={setOpen}
+          width="w-auto min-w-[16rem]"
+          align="start"
+          tooltip={roleLabel(isAdmin)}
+          triggerRender={
+            <button
+              type="button"
+              className={CHIP_CLASS}
+              aria-label={roleLabel(isAdmin)}
+              data-testid="agent-workspace-role-toggle"
+            />
+          }
+          trigger={
+            <>
+              <RoleIcon className="size-3 shrink-0" aria-hidden />
+              <span data-testid="agent-workspace-role-value">
+                {roleLabel(isAdmin)}
+              </span>
+              <EditPencil />
+            </>
+          }
+        >
+          <PickerItem
+            selected={!isAdmin}
+            onClick={() => void select("member")}
           >
-            <PickerItem
-              selected={!isAdmin}
-              onClick={() => void select("member")}
-            >
-              <ShieldOff className="size-4 shrink-0" aria-hidden />
-              <span className="text-sm">{roleLabel(false)}</span>
-            </PickerItem>
-            <PickerItem
-              selected={isAdmin}
-              onClick={() => void select("admin")}
-            >
-              <ShieldCheck className="size-4 shrink-0" aria-hidden />
-              <span className="text-sm">{roleLabel(true)}</span>
-            </PickerItem>
-          </PropertyPicker>
-        ) : (
-          <span
-            className="inline-flex items-center gap-1.5"
-            data-testid="agent-workspace-role-value"
+            <ShieldOff className="size-4 shrink-0" aria-hidden />
+            <span className="text-sm">{roleLabel(false)}</span>
+          </PickerItem>
+          <PickerItem
+            selected={isAdmin}
+            onClick={() => void select("admin")}
           >
-            <RoleIcon className="size-3 shrink-0 text-muted-foreground" aria-hidden />
-            {roleLabel(isAdmin)}
-          </span>
-        )}
-      </InspectorField>
-    </div>
+            <ShieldCheck className="size-4 shrink-0" aria-hidden />
+            <span className="text-sm">{roleLabel(true)}</span>
+          </PickerItem>
+        </PropertyPicker>
+      ) : (
+        <span
+          className="inline-flex items-center gap-1.5"
+          data-testid="agent-workspace-role-value"
+        >
+          <RoleIcon className="size-3 shrink-0 text-muted-foreground" aria-hidden />
+          {roleLabel(isAdmin)}
+        </span>
+      )}
+    </InspectorField>
   );
 }

@@ -5,7 +5,7 @@ Status: target contract frozen; user-facing V6 create is open. Omitted
 
 Normative target schema:
 [`contracts/research-run-v6-director.schema.json`](contracts/research-run-v6-director.schema.json),
-SHA-256 `82550bff41365ea6d78973fcd5bc4a8cc6efbeb8dd9f079ca9a01bbd4720bf9c`.
+SHA-256 `2ce8b8af85c9cec5e508fa1c6b01c6963d998899d09b99d33f8110aca3b59f88`.
 Its `$id` is the final `research-run-v6.schema.json` identity.
 
 The code-coupled [`contracts/research-run-v6.schema.json`](contracts/research-run-v6.schema.json)
@@ -111,10 +111,10 @@ mechanical invariants.
 The Research Brief contains each Branch's fresh Frontier summaries and terminal
 aggregate summaries, never absorbed-child full text or terminal-node detail. The
 Control Brief contains current team, Work Item, Discussion, Dispute, Report,
-steering and failure facts. A failed Work Item includes its mission, attempt
-count and budget, latest Attempt state, failure class and bounded diagnostics,
-plus its terminal reason. Page review watermarks are durable; model sessions are
-disposable.
+steering and failure facts. A failed Work Item's bounded `summary` includes its
+mission, attempt count and budget, latest Attempt state, failure class and
+diagnostics, plus its terminal reason. Page review watermarks are durable; model
+sessions are disposable.
 
 One `director_brief` envelope is one bounded page. All pages share Brief ID/hash,
 state version and event watermark. Ronaldo acknowledges a page only after
@@ -141,7 +141,8 @@ Ronaldo's semantic authority does not make unimplemented server operations real.
 Ronaldo cannot pause the whole Run. A failed Work Item is a recovery input: the
 Director must retry it, reassign it, create replacement Work, or report the
 failure to the user. Only the authenticated user Stop operation or the V6 release
-maintenance control may move an active Run to `paused`.
+maintenance control may move an active Run to `paused`. The frozen schema keeps
+the `pause_run` shape token, but the Director execution authorization rejects it.
 
 When Ronaldo decides that no state change is useful, the Proposal contains one
 `no_op` action with its reason and no semantic dependents; `no_op` cannot coexist

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -128,24 +129,10 @@ func (s *PostgresStore) LoadDirectorBriefFacts(ctx context.Context, in StartV6Di
 			return DirectorBriefFacts{}, err
 		}
 		state = directorBriefWorkState(state)
-		item := map[string]any{"id": id, "kind": kind, "state": state, "summary": summary, "updated_at": updated.UTC().Format(time.RFC3339Nano), "attempt_count": attemptCount, "max_attempts": maxAttempts}
+		summary = directorBriefWorkSummary(summary, state, attemptCount, maxAttempts, attemptState, failureClass, failureDiagnostics, terminalReasonCode, terminalReasonDetail)
+		item := map[string]any{"id": id, "kind": kind, "state": state, "summary": summary, "updated_at": updated.UTC().Format(time.RFC3339Nano)}
 		if agentID != "" {
 			item["assigned_agent_id"] = agentID
-		}
-		if attemptState != "" {
-			item["last_attempt_state"] = attemptState
-		}
-		if failureClass != "" {
-			item["failure_class"] = failureClass
-		}
-		if failureDiagnostics != "" {
-			item["failure_diagnostics"] = failureDiagnostics
-		}
-		if terminalReasonCode != "" {
-			item["terminal_reason_code"] = terminalReasonCode
-		}
-		if terminalReasonDetail != "" {
-			item["terminal_reason_detail"] = terminalReasonDetail
 		}
 		facts.WorkItems = append(facts.WorkItems, item)
 	}
@@ -189,6 +176,29 @@ func (s *PostgresStore) LoadDirectorBriefFacts(ctx context.Context, in StartV6Di
 	}
 	rows.Close()
 	return facts, nil
+}
+
+func directorBriefWorkSummary(mission, state string, attemptCount, maxAttempts int, attemptState, failureClass, failureDiagnostics, terminalReasonCode, terminalReasonDetail string) string {
+	parts := []string{strings.TrimSpace(mission)}
+	if state == "failed" || failureClass != "" || terminalReasonCode != "" {
+		parts = append(parts, fmt.Sprintf("尝试 %d/%d", attemptCount, maxAttempts))
+		if attemptState != "" {
+			parts = append(parts, "最近尝试状态 "+attemptState)
+		}
+		if failureClass != "" {
+			parts = append(parts, "失败分类 "+failureClass)
+		}
+		if failureDiagnostics != "" {
+			parts = append(parts, "失败诊断 "+failureDiagnostics)
+		}
+		if terminalReasonCode != "" {
+			parts = append(parts, "终止原因 "+terminalReasonCode)
+		}
+		if terminalReasonDetail != "" && terminalReasonDetail != failureDiagnostics {
+			parts = append(parts, terminalReasonDetail)
+		}
+	}
+	return truncateV6BriefText(strings.Join(parts, "；"), 512)
 }
 
 func (s *PostgresStore) loadV6BranchFrontierBrief(ctx context.Context, workspaceID, runID, branchID string) ([]any, bool, error) {

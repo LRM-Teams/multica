@@ -1352,9 +1352,13 @@ func (p *canonicalAgentRuntimePool) deliverBusyInboxNotice(ctx context.Context, 
 		return errors.New("canonical resident runtime does not support Pending Notice input")
 	}
 	notice := snapshot.Notice
+	if len(snapshot.TargetKeys) != len(snapshot.Notice.ChangedTargets) {
+		return errors.New("pending Notice target metadata is inconsistent")
+	}
 	notice.ChangedTargets = make([]agent.ResidentPendingTarget, 0, len(snapshot.Notice.ChangedTargets))
-	for _, target := range snapshot.Notice.ChangedTargets {
-		if snapshot.TargetFingerprints[target.Target] != slot.lastPendingTargetFingerprint[target.Target] {
+	for i, target := range snapshot.Notice.ChangedTargets {
+		internalTarget := snapshot.TargetKeys[i]
+		if snapshot.TargetFingerprints[internalTarget] != slot.lastPendingTargetFingerprint[internalTarget] {
 			notice.ChangedTargets = append(notice.ChangedTargets, target)
 		}
 	}

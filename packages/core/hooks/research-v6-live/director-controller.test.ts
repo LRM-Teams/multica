@@ -51,6 +51,25 @@ function delta(): ResearchV6DirectorProjectionDelta {
   };
 }
 
+function wireDelta() {
+  const value = delta();
+  return {
+    contract_kind: value.contractKind,
+    schema_version: value.schemaVersion,
+    workspace_id: value.workspaceId,
+    run_id: value.runId,
+    snapshot_id: value.snapshotId,
+    event_sequence: value.eventSequence,
+    previous_projection_hash: value.previousProjectionHash,
+    projection_hash: value.projectionHash,
+    upsert_nodes: value.upsertNodes,
+    remove_node_ids: value.removeNodeIds,
+    upsert_edges: value.upsertEdges,
+    remove_edge_ids: value.removeEdgeIds,
+    invalidate_slice_keys: value.invalidateSliceKeys,
+  };
+}
+
 function bus() {
   let eventHandler: ((payload: unknown) => void) | null = null;
   let reconnectHandler: (() => void) | null = null;
@@ -123,7 +142,7 @@ describe("ResearchV6DirectorLiveController", () => {
     );
     controller.seedSnapshotPage(snapshot());
     controller.connect();
-    live.push({ run_id: RUN_ID, delta: delta() });
+    live.push({ run_id: RUN_ID, delta: wireDelta() });
     expect(controller.getClient().getState().lastConfirmedSequence).toBe(5);
     expect(invalidated).toEqual([["expand:root"]]);
   });

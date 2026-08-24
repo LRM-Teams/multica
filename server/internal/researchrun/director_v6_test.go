@@ -249,8 +249,8 @@ func TestV6DirectorBriefIncludesAtomicResultFrontier(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err = tx.Exec(run.ctx, `INSERT INTO research_result_node(id,workspace_id,session_id,result_artifact_id,artifact_version_id,work_item_attempt_id,
-		catalog_summary,brief_summary,objective,conclusion,content,conclusion_state,integration_state,content_hash)
-		VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6::uuid,'Source landscape','Ten candidate sources found','Find sources','Candidates found','Result content','accepted','unmatched',$7)`,
+		catalog_summary,brief_summary,objective,conclusion,content,open_questions,conclusion_state,integration_state,content_hash)
+		VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6::uuid,'Source landscape','Ten candidate sources found','Find sources','Candidates found','Result content','["Which candidates have independent verification?","What changed after the latest release?"]'::jsonb,'accepted','unmatched',$7)`,
 		resultNodeID, run.fixture.workspaceID, run.fixture.sessionID, resultArtifactID, artifactVersionID, attemptID, contentHash); err != nil {
 		t.Fatal(err)
 	}
@@ -282,6 +282,15 @@ func TestV6DirectorBriefIncludesAtomicResultFrontier(t *testing.T) {
 	if _, legacyRevision := node["revision"]; legacyRevision {
 		t.Fatalf("atomic frontier node contains non-contract revision: %+v", node)
 	}
+	briefSummary, ok := item["brief_summary"].(string)
+	if !ok {
+		t.Fatalf("atomic frontier brief_summary=%T, want string", item["brief_summary"])
+	}
+	for _, question := range []string{"Which candidates have independent verification?", "What changed after the latest release?"} {
+		if !strings.Contains(briefSummary, question) {
+			t.Fatalf("atomic frontier brief summary missing open question %q: %s", question, briefSummary)
+		}
+	}
 
 	_, err = (contextCompilerModule{}).CompileDirectorBrief(DirectorBriefFacts{
 		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
@@ -293,6 +302,24 @@ func TestV6DirectorBriefIncludesAtomicResultFrontier(t *testing.T) {
 	}, time.Unix(1, 0))
 	if err != nil {
 		t.Fatalf("compile Director Brief with atomic frontier: %v", err)
+	}
+}
+
+func TestDirectorBriefFrontierSummaryBoundsOpenQuestions(t *testing.T) {
+	questions := make([]string, 128)
+	for index := range questions {
+		questions[index] = strings.Repeat("问题", 300)
+	}
+	raw, err := json.Marshal(questions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary := directorBriefFrontierSummary("基础摘要", raw)
+	if len([]rune(summary)) > 32768 {
+		t.Fatalf("summary length=%d, want <=32768", len([]rune(summary)))
+	}
+	if !strings.Contains(summary, "待回答问题") || !strings.Contains(summary, "问题") {
+		t.Fatalf("summary does not expose open questions: %s", summary)
 	}
 }
 
@@ -606,8 +633,8 @@ func TestV6EventTriggerRepairsAtomicResultMissingFromCoveredBrief(t *testing.T) 
 		t.Fatal(err)
 	}
 	if _, err = materializeTx.Exec(run.ctx, `INSERT INTO research_result_node(id,workspace_id,session_id,result_artifact_id,artifact_version_id,work_item_attempt_id,
-		catalog_summary,brief_summary,objective,conclusion,content,conclusion_state,integration_state,content_hash)
-		VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6::uuid,'Source landscape','Candidates found','Find sources','Candidates found','Result content','accepted','unmatched',$7)`, resultNodeID, run.fixture.workspaceID, run.fixture.sessionID, resultArtifactID, artifactVersionID, attemptID, contentHash); err != nil {
+		catalog_summary,brief_summary,objective,conclusion,content,conclusion_state,integration_state,open_questions,content_hash)
+		VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6::uuid,'Source landscape','Candidates found','Find sources','Candidates found','Result content','accepted','unmatched',jsonb_build_array('Which unresolved market constraint matters?'),$7)`, resultNodeID, run.fixture.workspaceID, run.fixture.sessionID, resultArtifactID, artifactVersionID, attemptID, contentHash); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = materializeTx.Exec(run.ctx, `INSERT INTO research_node_branch(workspace_id,session_id,node_artifact_version_id,branch_id) VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid)`, run.fixture.workspaceID, run.fixture.sessionID, artifactVersionID, branchID); err != nil {
@@ -635,8 +662,63 @@ func TestV6EventTriggerRepairsAtomicResultMissingFromCoveredBrief(t *testing.T) 
 	if err = run.pool.QueryRow(run.ctx, `SELECT convert_from(p.content_bytes,'UTF8') FROM research_director_brief_page p JOIN research_director_cycle c ON c.id=p.director_cycle_id WHERE p.session_id=$1::uuid ORDER BY c.created_at DESC,p.ordinal LIMIT 1`, run.fixture.sessionID).Scan(&latestBrief); err != nil {
 		t.Fatal(err)
 	}
-	if cycles != 2 || !strings.Contains(latestBrief, artifactVersionID) || !strings.Contains(latestBrief, `"kind":"result_s"`) {
-		t.Fatalf("repair cycles=%d brief contains node=%v kind=%v", cycles, strings.Contains(latestBrief, artifactVersionID), strings.Contains(latestBrief, `"kind":"result_s"`))
+	if cycles != 2 || !strings.Contains(latestBrief, artifactVersionID) || !strings.Contains(latestBrief, `"kind":"result_s"`) || !strings.Contains(latestBrief, "Which unresolved market constraint matters?") {
+		t.Fatalf("repair cycles=%d brief contains node=%v kind=%v question=%v", cycles, strings.Contains(latestBrief, artifactVersionID), strings.Contains(latestBrief, `"kind":"result_s"`), strings.Contains(latestBrief, "Which unresolved market constraint matters?"))
+	}
+
+	// A brief compiled before open-question propagation could contain the Result
+	// frontier node while omitting its unresolved questions. Re-emit the material
+	// event, simulate that historical page shape, and verify reconciliation creates
+	// one fresh cycle whose brief restores the questions.
+	if _, err = run.pool.Exec(run.ctx, `UPDATE research_work_item SET status='succeeded',completed_at=now() WHERE session_id=$1::uuid AND kind='director'`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = run.pool.Exec(run.ctx, `UPDATE research_director_cycle SET status='applied',completed_at=now() WHERE session_id=$1::uuid`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	duplicateTx, err := run.pool.Begin(run.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	duplicateEvent, err := appendEvent(run.ctx, duplicateTx, run.fixture.workspaceID, run.fixture.sessionID,
+		"v6_result_node_accepted", "covered-without-questions:"+uuid.NewString(), "agent", run.fixture.agentID,
+		map[string]any{"artifact_version_id": artifactVersionID, "result_artifact_id": resultArtifactID, "result_node_id": resultNodeID, "work_item_id": workItemID})
+	if err != nil {
+		_ = duplicateTx.Rollback(run.ctx)
+		t.Fatal(err)
+	}
+	if err = duplicateTx.Commit(run.ctx); err != nil {
+		t.Fatal(err)
+	}
+	processed, err = run.store.ProcessV6EventTriggers(run.ctx, 32)
+	if err != nil || processed != 1 {
+		t.Fatalf("historical cycle setup processed=%d err=%v", processed, err)
+	}
+	if _, err = run.pool.Exec(run.ctx, `UPDATE research_work_item SET status='succeeded',completed_at=now() WHERE session_id=$1::uuid AND kind='director'`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = run.pool.Exec(run.ctx, `UPDATE research_director_cycle SET status='applied',completed_at=now() WHERE session_id=$1::uuid`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	var historicalCycleID string
+	if err = run.pool.QueryRow(run.ctx, `SELECT id::text FROM research_director_cycle WHERE session_id=$1::uuid AND trigger_from_sequence=$2 ORDER BY created_at DESC LIMIT 1`, run.fixture.sessionID, duplicateEvent.Sequence).Scan(&historicalCycleID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = run.pool.Exec(run.ctx, `UPDATE research_director_brief_page SET content_bytes=convert_to(replace(convert_from(content_bytes,'UTF8'),$2,''),'UTF8') WHERE director_cycle_id=$1::uuid`, historicalCycleID, directorBriefOpenQuestionsMarker); err != nil {
+		t.Fatal(err)
+	}
+	processed, err = run.store.ProcessV6EventTriggers(run.ctx, 32)
+	if err != nil || processed != 1 {
+		t.Fatalf("open-question repair trigger processed=%d err=%v", processed, err)
+	}
+	if err = run.pool.QueryRow(run.ctx, `SELECT count(*)::int FROM research_director_cycle WHERE session_id=$1::uuid`, run.fixture.sessionID).Scan(&cycles); err != nil {
+		t.Fatal(err)
+	}
+	if err = run.pool.QueryRow(run.ctx, `SELECT convert_from(p.content_bytes,'UTF8') FROM research_director_brief_page p JOIN research_director_cycle c ON c.id=p.director_cycle_id WHERE p.session_id=$1::uuid ORDER BY c.created_at DESC,p.ordinal LIMIT 1`, run.fixture.sessionID).Scan(&latestBrief); err != nil {
+		t.Fatal(err)
+	}
+	if cycles != 4 || !strings.Contains(latestBrief, directorBriefOpenQuestionsMarker) || !strings.Contains(latestBrief, "Which unresolved market constraint matters?") {
+		t.Fatalf("open-question repair cycles=%d marker=%v question=%v", cycles, strings.Contains(latestBrief, directorBriefOpenQuestionsMarker), strings.Contains(latestBrief, "Which unresolved market constraint matters?"))
 	}
 }
 

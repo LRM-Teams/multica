@@ -109,12 +109,22 @@ propose any Research action, but cannot replace itself or bypass server
 mechanical invariants.
 
 The Research Brief contains each Branch's fresh Frontier summaries and terminal
-aggregate summaries, never absorbed-child full text or terminal-node detail. The
-Control Brief contains current team, Work Item, Discussion, Dispute, Report,
-steering and failure facts. A failed Work Item's bounded `summary` includes its
+aggregate summaries, never absorbed-child full text or terminal-node detail.
+Persisted `open_questions` from a fresh Result or Insight are carried into that
+node's bounded Frontier `brief_summary`, so the next Director cycle can create or
+reassign follow-up Work, create an Agent when capacity or capability requires it,
+or record why the question does not justify more research. The Control Brief
+contains current team, Work Item, Discussion, Dispute, Report, steering and
+failure facts. A failed Work Item's bounded `summary` includes its
 mission, attempt count and budget, latest Attempt state, failure class and
 diagnostics, plus its terminal reason. Page review watermarks are durable; model
 sessions are disposable.
+
+For a `v6_result_node_accepted` event with non-empty `open_questions`, a covering
+Director cycle counts as consuming the event only when its persisted Frontier
+summary contains the open-question block. Reconciliation creates one fresh
+repair cycle for historical Briefs that contain the Result node but omitted that
+block.
 
 One `director_brief` envelope is one bounded page. All pages share Brief ID/hash,
 state version and event watermark. Ronaldo acknowledges a page only after

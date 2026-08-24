@@ -45,7 +45,7 @@ Token 类型的详细区分见 [认证与令牌](/auth-tokens)。
 ## Issue 和 Project
 
 <Callout type="info">
-`list` 类命令（`multica issue list`、`project list` 等）表格里默认显示**可直接复制**的短 ID：issue 是 key（如 `MUL-123`），其余资源是 UUID 短前缀。下面表格里的 `<id>` 同时接受短 ID 和完整 UUID，所以典型用法是 `multica issue list` → 复制 key → `multica issue get MUL-123`。需要完整 UUID 时给 `list` 加 `--full-id`。
+`list` 类命令（例如 `multica issue list`）表格里默认显示**可直接复制**的短 ID。后续命令的 `<id>` 同时接受短 ID 和完整 UUID。项目及其绑定资源统一使用 `multica workspace info --projects` 查看。
 </Callout>
 
 | 命令 | 用途 |
@@ -61,7 +61,7 @@ Token 类型的详细区分见 [认证与令牌](/auth-tokens)。
 | `multica issue rerun <id>` | 给该 issue 当前的智能体分配人重新创建一条任务 |
 | `multica issue comment <id> ...` | 嵌套：看 / 发评论 |
 | `multica issue subscriber <id> ...` | 嵌套：订阅 / 取消订阅 |
-| `multica project list/get/create/update/delete/status` | Project CRUD |
+| `multica workspace info --projects` | 列出项目及其绑定资源 |
 
 ## 智能体和 Skill
 

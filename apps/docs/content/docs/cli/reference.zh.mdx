@@ -316,52 +316,11 @@ multica issue run-messages <task-id> --since 42 --output json
 Projects group related issues (e.g. a sprint, an epic, a workstream). Every project
 belongs to a workspace and can optionally have a lead (member or agent).
 
-### List Projects
+### Projects
 
 ```bash
-multica project list
-multica project list --status in_progress
-multica project list --output json
-```
-
-Available filters: `--status`.
-
-### Get Project
-
-```bash
-multica project get <id>
-multica project get <id> --output json
-```
-
-### Create Project
-
-```bash
-multica project create --title "2026 Week 16 Sprint" --icon "🏃" --lead "Lambda"
-```
-
-Flags: `--title` (required), `--description`, `--status`, `--icon`, `--lead`.
-
-### Update Project
-
-```bash
-multica project update <id> --title "New title" --status in_progress
-multica project update <id> --lead "Lambda"
-```
-
-Flags: `--title`, `--description`, `--status`, `--icon`, `--lead`.
-
-### Change Status
-
-```bash
-multica project status <id> in_progress
-```
-
-Valid statuses: `planned`, `in_progress`, `paused`, `completed`, `cancelled`.
-
-### Delete Project
-
-```bash
-multica project delete <id>
+multica workspace info --projects
+multica workspace info --projects --output json
 ```
 
 ### Associating Issues with Projects

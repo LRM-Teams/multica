@@ -277,6 +277,7 @@ type QueryLogEntry struct {
 	Rounds    int       `json:"rounds"`
 	AgentRuns int       `json:"agent_runs"` // K for TTT
 	Found     bool      `json:"found"`
+	PriorUsed bool      `json:"prior_used,omitempty"`
 
 	// Judge write-back (async):
 	JudgeDone     bool     `json:"judge_done"`

@@ -157,7 +157,7 @@ func (h *Handler) retryNotePeriodBriefCollectors(
 			failReason = *projected.FailureReason
 		}
 		packReady := strings.TrimSpace(ref.PackMarkdown) != ""
-		d := classifyPeriodBriefCollectorOutcome(projected.Status, failReason, failReason, packReady, false)
+		d := periodBriefRetryDisposition(projected.Status, failReason, packReady)
 		if packReady || d.Status == "ready" {
 			resp.Skipped = append(resp.Skipped, notePeriodBriefRetrySkipped{AgentID: ref.AgentID, Reason: "already ready"})
 			continue

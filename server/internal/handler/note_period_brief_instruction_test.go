@@ -30,6 +30,10 @@ func TestNotePeriodBriefInstructionRequiresReportingShape(t *testing.T) {
 		"multica-period-work-brief",
 		"--note-write --note-page-id folder-id",
 		"<focus>",
+		"Notes pages are not source material",
+		"MUST call the retry CLI once",
+		"do not write the Brief yet",
+		"Inbox will not auto-retry",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("instruction missing %q:\n%s", want, got)

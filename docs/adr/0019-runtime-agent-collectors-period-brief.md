@@ -179,9 +179,10 @@ retryable stalled), the synthesizer may call:
 
 `multica notes period-brief retry-collectors --draft-page-id <draft>`
 
-Platform enforces: skip permanent failures; **max 3 retries** per collector;
-then re-wait and re-wake the synthesizer. Skill:
-`multica-period-work-brief`.
+Platform enforces: skip permanent failures; **exactly one** Notes-Assistant
+retry per collector; inbox does not auto-retry. After that attempt settles
+(ready or failed), the collector result is received and the synthesizer
+writes the Brief. Skill: `multica-period-work-brief`.
 
 ## Rejected alternatives
 

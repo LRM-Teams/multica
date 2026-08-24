@@ -18,10 +18,10 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-// WorkspaceRunnerConfig fixes the identities that must survive socket
+// workspaceSessionConfig fixes the identities that must survive socket
 // reconnects. Runtime membership is deliberately absent because it is mutable
-// input, not Runner identity.
-type WorkspaceRunnerConfig struct {
+// input, not WorkspaceDaemon identity.
+type workspaceSessionConfig struct {
 	DaemonID         string
 	DaemonInstanceID string
 	WorkspaceID      string
@@ -30,24 +30,24 @@ type WorkspaceRunnerConfig struct {
 	OS               string
 	CLIVersion       string
 	// MachineID mirrors Config.MachineID: the OS-level machine fingerprint,
-	// reported in the Runner ready payload so the server can persist it on the
+	// reported in the WorkspaceDaemon ready payload so the server can persist it on the
 	// Computer identity and use it for same-machine convergence (LRM-1570).
 	MachineID string
 }
 
-func (config WorkspaceRunnerConfig) validate() (WorkspaceRunnerConfig, error) {
+func (config workspaceSessionConfig) validate() (workspaceSessionConfig, error) {
 	config.DaemonID = strings.TrimSpace(config.DaemonID)
 	config.DaemonInstanceID = strings.TrimSpace(config.DaemonInstanceID)
 	config.WorkspaceID = strings.TrimSpace(config.WorkspaceID)
 	if config.DaemonID == "" || config.DaemonInstanceID == "" || config.WorkspaceID == "" {
-		return WorkspaceRunnerConfig{}, errors.New("Workspace Runner Daemon, daemon instance, and Workspace identities are required")
+		return workspaceSessionConfig{}, errors.New("WorkspaceDaemon, daemon instance, and Workspace identities are required")
 	}
 	return config, nil
 }
 
-// workspaceRunnerDependencies are machine-wide owners. WorkspaceRunner keeps
+// workspaceSessionDependencies are machine-wide owners. workspaceSession keeps
 // their references but never copies their state or changes their lifetime.
-type workspaceRunnerDependencies struct {
+type workspaceSessionDependencies struct {
 	client                    *Client
 	serverBaseURL             string
 	workspacesRoot            string
@@ -80,12 +80,12 @@ type workspaceRunnerDependencies struct {
 	rememberGraphProfile func(memoryType string, exploreAgents, exploreMaxRounds int)
 }
 
-// WorkspaceRunner is one long-lived orchestration boundary for an
-// authenticated Computer-Workspace Binding. Callers interact through Runner
+// workspaceSession is one long-lived orchestration boundary for an
+// authenticated Computer-Workspace Binding. Callers interact through WorkspaceDaemon
 // methods; its Inbox, process, Activity, and socket state never
 // escape to the machine-wide Daemon lifecycle owner.
-type WorkspaceRunner struct {
-	config       WorkspaceRunnerConfig
+type workspaceSession struct {
+	config       workspaceSessionConfig
 	runtimeEpoch atomic.Int64
 	client       *Client
 	logger       *slog.Logger
@@ -128,33 +128,33 @@ type WorkspaceRunner struct {
 	onReady      func()
 }
 
-func (runner *WorkspaceRunner) currentRuntimeEpoch() int64 {
+func (runner *workspaceSession) currentRuntimeEpoch() int64 {
 	if runner == nil {
 		return 0
 	}
 	return runner.runtimeEpoch.Load()
 }
 
-func (runner *WorkspaceRunner) setRuntimeEpoch(epoch int64) {
+func (runner *workspaceSession) setRuntimeEpoch(epoch int64) {
 	if runner != nil {
 		runner.runtimeEpoch.Store(epoch)
 	}
 }
 
-func (runner *WorkspaceRunner) WorkspaceID() string {
+func (runner *workspaceSession) WorkspaceID() string {
 	if runner == nil {
 		return ""
 	}
 	return runner.config.WorkspaceID
 }
 
-func newWorkspaceRunner(config WorkspaceRunnerConfig, dependencies workspaceRunnerDependencies) (*WorkspaceRunner, error) {
+func newWorkspaceSession(config workspaceSessionConfig, dependencies workspaceSessionDependencies) (*workspaceSession, error) {
 	config, err := config.validate()
 	if err != nil {
 		return nil, err
 	}
 	if dependencies.client == nil || dependencies.runtimes == nil || dependencies.processAdmission == nil || dependencies.openInbox == nil || dependencies.runtimeIDs == nil || dependencies.ensureResidentRuntime == nil {
-		return nil, errors.New("Workspace Runner client, Runtime pool, process admission, Inbox factory, Runtime scope, and resident Runtime are required")
+		return nil, errors.New("WorkspaceDaemon client, Runtime pool, process admission, Inbox factory, Runtime scope, and resident Runtime are required")
 	}
 	now := dependencies.now
 	if now == nil {
@@ -176,7 +176,7 @@ func newWorkspaceRunner(config WorkspaceRunnerConfig, dependencies workspaceRunn
 		return nil, err
 	}
 	life, lifeStop := context.WithCancel(context.Background())
-	runner := &WorkspaceRunner{
+	runner := &workspaceSession{
 		config:         config,
 		client:         dependencies.client,
 		logger:         dependencies.logger,
@@ -218,7 +218,7 @@ func newWorkspaceRunner(config WorkspaceRunnerConfig, dependencies workspaceRunn
 	return runner, nil
 }
 
-func (runner *WorkspaceRunner) Close() {
+func (runner *workspaceSession) Close() {
 	if runner == nil {
 		return
 	}
@@ -230,7 +230,7 @@ func (runner *WorkspaceRunner) Close() {
 	}
 }
 
-func (runner *WorkspaceRunner) Run(ctx context.Context) {
+func (runner *workspaceSession) Run(ctx context.Context) {
 	if runner == nil || runner.client == nil {
 		return
 	}
@@ -243,7 +243,7 @@ func (runner *WorkspaceRunner) Run(ctx context.Context) {
 	backoff := time.Second
 	for ctx.Err() == nil {
 		if err := runner.runConnection(ctx); err != nil && ctx.Err() == nil && runner.logger != nil {
-			runner.logger.Debug("workspace runner disconnected", "workspace_id", runner.config.WorkspaceID, "error", err)
+			runner.logger.Debug("workspace daemon disconnected", "workspace_id", runner.config.WorkspaceID, "error", err)
 		}
 		timer := time.NewTimer(backoff)
 		select {
@@ -258,25 +258,25 @@ func (runner *WorkspaceRunner) Run(ctx context.Context) {
 	}
 }
 
-func (runner *WorkspaceRunner) sendOnConnection(connection *DaemonConnection, eventType string, payload any) error {
+func (runner *workspaceSession) sendOnConnection(connection *DaemonConnection, eventType string, payload any) error {
 	runner.connectionMu.Lock()
 	defer runner.connectionMu.Unlock()
 	if runner.connection != connection {
-		return errors.New("Workspace Runner connection is stale")
+		return errors.New("WorkspaceDaemon connection is stale")
 	}
 	return connection.Write(eventType, payload)
 }
 
-func (runner *WorkspaceRunner) sendOnCurrentConnection(eventType string, payload any) error {
+func (runner *workspaceSession) sendOnCurrentConnection(eventType string, payload any) error {
 	runner.connectionMu.Lock()
 	defer runner.connectionMu.Unlock()
 	if runner.connection == nil || !runner.connection.Connected() {
-		return errors.New("Workspace Runner connection is unavailable")
+		return errors.New("WorkspaceDaemon connection is unavailable")
 	}
 	return runner.connection.Write(eventType, payload)
 }
 
-func (runner *WorkspaceRunner) replaceConnection(next *DaemonConnection) {
+func (runner *workspaceSession) replaceConnection(next *DaemonConnection) {
 	runner.connectionMu.Lock()
 	previous := runner.connection
 	runner.connection = next
@@ -286,7 +286,7 @@ func (runner *WorkspaceRunner) replaceConnection(next *DaemonConnection) {
 	}
 }
 
-func (runner *WorkspaceRunner) releaseConnection(current *DaemonConnection) {
+func (runner *workspaceSession) releaseConnection(current *DaemonConnection) {
 	runner.connectionMu.Lock()
 	if runner.connection == current {
 		runner.connection = nil
@@ -295,7 +295,7 @@ func (runner *WorkspaceRunner) releaseConnection(current *DaemonConnection) {
 	current.Close()
 }
 
-func (runner *WorkspaceRunner) runConnection(ctx context.Context) error {
+func (runner *workspaceSession) runConnection(ctx context.Context) error {
 	if runner.client == nil {
 		return fmt.Errorf("daemon client unavailable")
 	}
@@ -334,7 +334,7 @@ func (runner *WorkspaceRunner) runConnection(ctx context.Context) error {
 		case <-stopWatch:
 		}
 	}()
-	if err := connection.Write(protocol.EventWorkspaceRunnerReady, protocol.WorkspaceRunnerReadyPayload{
+	if err := connection.Write(protocol.EventWorkspaceDaemonReady, protocol.WorkspaceDaemonReadyPayload{
 		WorkspaceID: workspaceID, DaemonInstanceID: runner.config.DaemonInstanceID,
 		DeviceName:         runner.config.DeviceName,
 		OS:                 runner.config.OS,
@@ -352,7 +352,7 @@ func (runner *WorkspaceRunner) runConnection(ctx context.Context) error {
 		go runner.retryAppInboxAcks(ctx, workspaceID)
 	}
 	// Replay after ready so the Hub has claimed this socket as the current
-	// Runner. agent:status active sent before that claim is dropped as stale.
+	// WorkspaceDaemon. agent:status active sent before that claim is dropped as stale.
 	if runner.activity != nil {
 		for _, frame := range runner.activity.ReconnectFrames() {
 			if err := connection.Write(frame.EventType, frame.Payload); err != nil {
@@ -363,20 +363,20 @@ func (runner *WorkspaceRunner) runConnection(ctx context.Context) error {
 	return runner.serveConnection(connection, conn)
 }
 
-func (runner *WorkspaceRunner) activeCapabilities() []string {
+func (runner *workspaceSession) activeCapabilities() []string {
 	capabilities := []string{
-		protocol.DaemonCapabilityWorkspaceRunnerAgentProcess,
-		protocol.DaemonCapabilityWorkspaceRunnerAgentReset,
+		protocol.DaemonCapabilityWorkspaceDaemonAgentProcess,
+		protocol.DaemonCapabilityWorkspaceDaemonAgentReset,
 	}
 	if runner != nil && runner.controlHeartbeatPayload != nil && runner.controlHeartbeatAck != nil {
-		capabilities = append(capabilities, protocol.DaemonCapabilityWorkspaceRunnerControlPlane)
+		capabilities = append(capabilities, protocol.DaemonCapabilityWorkspaceDaemonControlPlane)
 	}
 	return capabilities
 }
 
-func (d *Daemon) newWorkspaceRunner(workspaceID string) (*WorkspaceRunner, error) {
+func (d *WorkspaceDaemonCore) newWorkspaceSession(workspaceID string) (*workspaceSession, error) {
 	if d == nil {
-		return nil, errors.New("Workspace Runner Daemon is required")
+		return nil, errors.New("WorkspaceDaemonCore is required")
 	}
 	d.mu.Lock()
 	providerByRuntime := make(map[string]string)
@@ -420,7 +420,7 @@ func (d *Daemon) newWorkspaceRunner(workspaceID string) (*WorkspaceRunner, error
 			})
 		}
 	}
-	return newWorkspaceRunner(WorkspaceRunnerConfig{
+	return newWorkspaceSession(workspaceSessionConfig{
 		DaemonID:         d.cfg.DaemonID,
 		DaemonInstanceID: d.runnerInstanceID,
 		WorkspaceID:      workspaceID,
@@ -429,7 +429,7 @@ func (d *Daemon) newWorkspaceRunner(workspaceID string) (*WorkspaceRunner, error
 		OS:               normalizeGOOS(runtime.GOOS),
 		CLIVersion:       d.cfg.CLIVersion,
 		MachineID:        d.cfg.MachineID,
-	}, workspaceRunnerDependencies{
+	}, workspaceSessionDependencies{
 		client:           d.client,
 		serverBaseURL:    d.cfg.ServerBaseURL,
 		workspacesRoot:   d.cfg.WorkspacesRoot,
@@ -478,7 +478,7 @@ func (d *Daemon) newWorkspaceRunner(workspaceID string) (*WorkspaceRunner, error
 		},
 		controlHeartbeatInterval:  d.cfg.HeartbeatInterval,
 		controlHeartbeatPayload:   d.controlPlaneHeartbeatPayload,
-		controlHeartbeatAck:       d.handleWorkspaceRunnerControlAck,
+		controlHeartbeatAck:       d.handleWorkspaceDaemonControlAck,
 		controlHeartbeatChanges:   func() (<-chan struct{}, func()) { return nil, func() {} },
 		handleComputerControl:     d.handleComputerControlCommand,
 		handleComputerWorkDigest:  d.handleComputerWorkDigestCommand,

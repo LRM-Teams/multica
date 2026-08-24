@@ -22,6 +22,6 @@ func canonicalInboxTaskForTest(task Task) Task {
 	return task
 }
 
-func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, prompt string, opts agent.ExecOptions, taskLog *slog.Logger, taskID string) (agent.Result, int32, error) {
+func (d *WorkspaceDaemonCore) executeAndDrain(ctx context.Context, backend agent.Backend, prompt string, opts agent.ExecOptions, taskLog *slog.Logger, taskID string) (agent.Result, int32, error) {
 	return d.executeAndDrainForTask(ctx, backend, prompt, opts, taskLog, canonicalInboxTaskForTest(Task{ID: taskID}))
 }

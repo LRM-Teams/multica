@@ -8,7 +8,16 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-func (runner *WorkspaceRunner) startManagedAgent(ctx context.Context, payload protocol.WorkspaceRunnerAgentStartPayload) (protocol.AgentStartAckPayload, protocol.AgentStatusPayload, protocol.AgentSessionPayload, error) {
+func (d *WorkspaceDaemonCore) attachWorkspaceSession(runner *workspaceSession) {
+	if d == nil || runner == nil || runner.WorkspaceID() == "" {
+		return
+	}
+	d.workspaceSessionMu.Lock()
+	d.workspaceSession = runner
+	d.workspaceSessionMu.Unlock()
+}
+
+func (runner *workspaceSession) startManagedAgent(ctx context.Context, payload protocol.WorkspaceDaemonAgentStartPayload) (protocol.AgentStartAckPayload, protocol.AgentStatusPayload, protocol.AgentSessionPayload, error) {
 	ack, err := runner.registerManagedAgentStart(payload)
 	if err != nil {
 		return protocol.AgentStartAckPayload{}, protocol.AgentStatusPayload{}, protocol.AgentSessionPayload{}, err
@@ -40,21 +49,21 @@ func (runner *WorkspaceRunner) startManagedAgent(ctx context.Context, payload pr
 	return ack, outcome.status, outcome.session, nil
 }
 
-func attachTestWorkspaceRunner(t *testing.T, d *Daemon, workspaceID string, send func(string, any) error) (*WorkspaceRunner, *DaemonConnection) {
+func attachTestWorkspaceDaemon(t *testing.T, d *WorkspaceDaemonCore, workspaceID string, send func(string, any) error) (*workspaceSession, *DaemonConnection) {
 	t.Helper()
 	if send == nil {
 		send = func(string, any) error { return nil }
 	}
-	prepareHeadlessWorkspaceRunnerTestDaemon(d, "")
-	runner, err := d.newWorkspaceRunner(workspaceID)
+	prepareHeadlessWorkspaceDaemonTestDaemon(d, "")
+	runner, err := d.newWorkspaceSession(workspaceID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	connection := newDaemonConnection(workspaceID, context.Background(), send, func() {})
 	runner.replaceConnection(connection)
-	d.attachWorkspaceRunner(runner)
+	d.attachWorkspaceSession(runner)
 	t.Cleanup(func() {
-		d.detachWorkspaceRunner(runner)
+		d.detachWorkspaceSession(runner)
 		runner.releaseConnection(connection)
 		runner.Close()
 		runner.inboxes.Close()
@@ -62,27 +71,27 @@ func attachTestWorkspaceRunner(t *testing.T, d *Daemon, workspaceID string, send
 	return runner, connection
 }
 
-func registerTestInbox(t *testing.T, d *Daemon, key InboxKey, runtimeID string, coordinator *MessageCoordinator) *WorkspaceRunner {
+func registerTestInbox(t *testing.T, d *WorkspaceDaemonCore, key InboxKey, runtimeID string, coordinator *MessageCoordinator) *workspaceSession {
 	t.Helper()
-	runner := d.currentWorkspaceRunner(key.WorkspaceID)
+	runner := d.currentWorkspaceSession(key.WorkspaceID)
 	if runner == nil {
-		runner, _ = attachTestWorkspaceRunner(t, d, key.WorkspaceID, nil)
+		runner, _ = attachTestWorkspaceDaemon(t, d, key.WorkspaceID, nil)
 	}
 	registerTestRunnerInbox(t, runner, key, runtimeID, coordinator)
 	return runner
 }
 
-func installTestRunnerActivity(t *testing.T, d *Daemon, workspaceID string, producer *agentActivityProducer) *WorkspaceRunner {
+func installTestRunnerActivity(t *testing.T, d *WorkspaceDaemonCore, workspaceID string, producer *agentActivityProducer) *workspaceSession {
 	t.Helper()
-	runner := d.currentWorkspaceRunner(workspaceID)
+	runner := d.currentWorkspaceSession(workspaceID)
 	if runner == nil {
-		runner, _ = attachTestWorkspaceRunner(t, d, workspaceID, nil)
+		runner, _ = attachTestWorkspaceDaemon(t, d, workspaceID, nil)
 	}
 	runner.activity = producer
 	return runner
 }
 
-func markTestLaunchRunning(t *testing.T, runner *WorkspaceRunner, agentID string) {
+func markTestLaunchRunning(t *testing.T, runner *workspaceSession, agentID string) {
 	t.Helper()
 	launch, ok := runner.processes.Snapshot(agentID)
 	if !ok {
@@ -97,13 +106,13 @@ func markTestLaunchRunning(t *testing.T, runner *WorkspaceRunner, agentID string
 	}
 }
 
-func registerTestRunnerInbox(t *testing.T, runner *WorkspaceRunner, key InboxKey, runtimeID string, coordinator *MessageCoordinator) {
+func registerTestRunnerInbox(t *testing.T, runner *workspaceSession, key InboxKey, runtimeID string, coordinator *MessageCoordinator) {
 	t.Helper()
 	if runner == nil || runner.inboxes == nil {
-		t.Fatal("test Workspace Runner has no Inbox registry")
+		t.Fatal("test WorkspaceDaemon has no Inbox registry")
 	}
 	if runner.config.WorkspaceID != key.WorkspaceID {
-		t.Fatalf("Runner Workspace %q cannot register Inbox %+v", runner.config.WorkspaceID, key)
+		t.Fatalf("WorkspaceDaemon Workspace %q cannot register Inbox %+v", runner.config.WorkspaceID, key)
 	}
 	runner.inboxes.mu.Lock()
 	if previous := runner.inboxes.inboxes[key.AgentID]; previous.coordinator != nil && previous.coordinator != coordinator {
@@ -122,11 +131,11 @@ func registerTestRunnerInbox(t *testing.T, runner *WorkspaceRunner, key InboxKey
 	}
 }
 
-func resolveTestInbox(t *testing.T, d *Daemon, key InboxKey) (*MessageCoordinator, string) {
+func resolveTestInbox(t *testing.T, d *WorkspaceDaemonCore, key InboxKey) (*MessageCoordinator, string) {
 	t.Helper()
-	runner := d.currentWorkspaceRunner(key.WorkspaceID)
+	runner := d.currentWorkspaceSession(key.WorkspaceID)
 	if runner == nil || runner.inboxes == nil {
-		t.Fatalf("Workspace Runner %q is unavailable", key.WorkspaceID)
+		t.Fatalf("WorkspaceDaemon %q is unavailable", key.WorkspaceID)
 	}
 	coordinator, runtimeID, ok := runner.inboxes.Resolve(key.AgentID)
 	if !ok {
@@ -135,7 +144,7 @@ func resolveTestInbox(t *testing.T, d *Daemon, key InboxKey) (*MessageCoordinato
 	return coordinator, runtimeID
 }
 
-func prepareHeadlessWorkspaceRunnerTestDaemon(d *Daemon, workspacesRoot string) {
+func prepareHeadlessWorkspaceDaemonTestDaemon(d *WorkspaceDaemonCore, workspacesRoot string) {
 	if d.cfg.DaemonID == "" {
 		d.cfg.DaemonID = "daemon-test"
 	}
@@ -159,8 +168,5 @@ func prepareHeadlessWorkspaceRunnerTestDaemon(d *Daemon, workspacesRoot string) 
 	}
 	if d.workspaces == nil {
 		d.workspaces = make(map[string]*workspaceState)
-	}
-	if d.workspaceRunners == nil {
-		d.workspaceRunners = make(map[string]*WorkspaceRunner)
 	}
 }

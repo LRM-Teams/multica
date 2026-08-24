@@ -27,7 +27,7 @@ func startFakeTaskWakeupServer(t *testing.T, onClientFrame func(protocol.Message
 	t.Helper()
 	upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasSuffix(r.URL.Path, "/api/daemon/connect") {
+		if !strings.HasSuffix(r.URL.Path, protocol.DaemonConnectPath) {
 			http.NotFound(w, r)
 			return
 		}

@@ -41,7 +41,7 @@ const (
 	EventComputerStateChanged        EventName = "computer_state_changed"
 	EventEnvironmentStateChanged     EventName = "environment_state_changed"
 	EventSessionStateChanged         EventName = "session_state_changed"
-	EventWorkspaceRunnerStateChanged EventName = "workspace_runner_state_changed"
+	EventWorkspaceDaemonStateChanged EventName = "workspace_runner_state_changed"
 	EventUpgradeStateChanged         EventName = "upgrade_state_changed"
 	EventGenerationFenced            EventName = "generation_fenced"
 	EventRunnerLogSinkDegraded       EventName = "runner_log_sink_degraded"

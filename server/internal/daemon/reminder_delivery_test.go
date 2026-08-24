@@ -21,7 +21,7 @@ func dueReminderJob(now time.Time) protocol.ReminderTimerJob {
 	return reminderJob("r-due", "owner-a", 3, now.Add(-time.Minute))
 }
 
-func registerReminderNoticeRuntime(t *testing.T, d *Daemon, busy bool) *idleMessageFakeRuntime {
+func registerReminderNoticeRuntime(t *testing.T, d *WorkspaceDaemonCore, busy bool) *idleMessageFakeRuntime {
 	t.Helper()
 	d.mu.Lock()
 	d.runtimeIndex["runtime-a"] = Runtime{ID: "runtime-a", WorkspaceID: "workspace-a"}
@@ -262,7 +262,7 @@ func TestReminderFireResultAcknowledgesOnlyItsAttemptedOccurrence(t *testing.T) 
 	}
 
 	writes := make(chan []byte, 1)
-	d := &Daemon{
+	d := &WorkspaceDaemonCore{
 		reminderCache:  cache,
 		reminderWrites: writes,
 		reminderWSDone: make(chan struct{}),

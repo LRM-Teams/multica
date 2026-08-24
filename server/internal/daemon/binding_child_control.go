@@ -33,9 +33,9 @@ func (client *bindingHostControlClient) forwardMachineActions(ctx context.Contex
 
 // handleComputerControlCommand is the Raft 1.0.16 child callback: the
 // DaemonCore connect socket received computer:upgrade / computer:restart.
-// The Binding child executes the machine upgrade in-process. Host only
+// The Binding child executes the machine upgrade in-process. ComputerCore only
 // drains sibling Bindings and respawns after this child exits.
-func (d *Daemon) handleWSHeartbeatAck(ctx context.Context, ack *HeartbeatResponse) {
+func (d *WorkspaceDaemonCore) handleWSHeartbeatAck(ctx context.Context, ack *HeartbeatResponse) {
 	if ack == nil || ack.RuntimeID == "" {
 		return
 	}
@@ -46,7 +46,7 @@ func (d *Daemon) handleWSHeartbeatAck(ctx context.Context, ack *HeartbeatRespons
 	d.handleHeartbeatActions(ctx, ack.RuntimeID, ack)
 }
 
-func (d *Daemon) handleWorkspaceRunnerControlAck(ctx context.Context, ack *HeartbeatResponse) {
+func (d *WorkspaceDaemonCore) handleWorkspaceDaemonControlAck(ctx context.Context, ack *HeartbeatResponse) {
 	if d == nil || ack == nil {
 		return
 	}
@@ -73,11 +73,11 @@ func (d *Daemon) handleWorkspaceRunnerControlAck(ctx context.Context, ack *Heart
 	forwardCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	if err := d.bindingHostControl.forwardMachineActions(forwardCtx, machine); err != nil && d.logger != nil {
-		d.logger.Warn("forward Binding child machine action to Host failed", "runtime_id", ack.RuntimeID, "reason", "host_unavailable")
+		d.logger.Warn("forward Binding child machine action to ComputerCore failed", "runtime_id", ack.RuntimeID, "reason", "host_unavailable")
 	}
 }
 
-func (d *Daemon) controlPlaneHeartbeatPayload(runtimeID string) protocol.DaemonHeartbeatRequestPayload {
+func (d *WorkspaceDaemonCore) controlPlaneHeartbeatPayload(runtimeID string) protocol.DaemonHeartbeatRequestPayload {
 	return protocol.DaemonHeartbeatRequestPayload{
 		RuntimeID:                 runtimeID,
 		SupportsBatchImport:       true,
@@ -86,7 +86,7 @@ func (d *Daemon) controlPlaneHeartbeatPayload(runtimeID string) protocol.DaemonH
 	}
 }
 
-func (d *Daemon) setComputerUpgradeEmit(emit func(string, any) error) {
+func (d *WorkspaceDaemonCore) setComputerUpgradeEmit(emit func(string, any) error) {
 	if d == nil {
 		return
 	}
@@ -95,7 +95,7 @@ func (d *Daemon) setComputerUpgradeEmit(emit func(string, any) error) {
 	d.mu.Unlock()
 }
 
-func (d *Daemon) emitComputerUpgrade(eventType string, payload any) error {
+func (d *WorkspaceDaemonCore) emitComputerUpgrade(eventType string, payload any) error {
 	if d == nil {
 		return errors.New("DaemonCore is unavailable")
 	}
@@ -108,7 +108,7 @@ func (d *Daemon) emitComputerUpgrade(eventType string, payload any) error {
 	return emit(eventType, payload)
 }
 
-func (d *Daemon) handleComputerControlCommand(ctx context.Context, action string, command protocol.ComputerUpgradePayload) error {
+func (d *WorkspaceDaemonCore) handleComputerControlCommand(ctx context.Context, action string, command protocol.ComputerUpgradePayload) error {
 	if d == nil {
 		return errors.New("DaemonCore is unavailable")
 	}
@@ -116,7 +116,7 @@ func (d *Daemon) handleComputerControlCommand(ctx context.Context, action string
 	case protocol.EventComputerUpgrade:
 		if d.bindingHostControl == nil {
 			// Raft 1.0.16: a DaemonCore not constructed by Computer
-			// ignores computer:upgrade instead of inventing a Host path.
+			// ignores computer:upgrade instead of inventing a ComputerCore path.
 			if d.logger != nil {
 				d.logger.Info("ignoring computer:upgrade — not launched by a Computer service")
 			}
@@ -136,7 +136,7 @@ func (d *Daemon) handleComputerControlCommand(ctx context.Context, action string
 	case protocol.EventComputerRestart:
 		ack := HeartbeatResponse{Status: "ok", PendingRestart: &PendingRestart{ID: strings.TrimSpace(command.RequestID)}}
 		if d.bindingHostControl == nil {
-			return errors.New("Computer Host callback is unavailable")
+			return errors.New("ComputerCore callback is unavailable")
 		}
 		forwardCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
@@ -146,22 +146,22 @@ func (d *Daemon) handleComputerControlCommand(ctx context.Context, action string
 	}
 }
 
-func (d *Daemon) handleComputerWorkDigestCommand(ctx context.Context, command protocol.ComputerWorkDigestPayload) (protocol.WorkDigest, error) {
+func (d *WorkspaceDaemonCore) handleComputerWorkDigestCommand(ctx context.Context, command protocol.ComputerWorkDigestPayload) (protocol.WorkDigest, error) {
 	if d == nil {
 		return protocol.WorkDigest{}, errors.New("DaemonCore is unavailable")
 	}
 	if d.bindingHostControl == nil {
-		return protocol.WorkDigest{}, errors.New("Computer Host callback is unavailable")
+		return protocol.WorkDigest{}, errors.New("ComputerCore callback is unavailable")
 	}
 	return d.bindingHostControl.client.HarvestWorkDigest(ctx, command)
 }
 
-func (d *Daemon) handleComputerWorkJournalCommand(ctx context.Context, command protocol.ComputerWorkJournalPayload) (bool, error) {
+func (d *WorkspaceDaemonCore) handleComputerWorkJournalCommand(ctx context.Context, command protocol.ComputerWorkJournalPayload) (bool, error) {
 	if d == nil {
 		return false, errors.New("DaemonCore is unavailable")
 	}
 	if d.bindingHostControl == nil {
-		return false, errors.New("Computer Host callback is unavailable")
+		return false, errors.New("ComputerCore callback is unavailable")
 	}
 	return d.bindingHostControl.client.SetWorkJournalEnabled(ctx, command)
 }
@@ -196,16 +196,16 @@ func newBindingChildDiagnosticForwarder(client *bindingHostControlClient) *bindi
 
 func (forwarder *bindingChildDiagnosticForwarder) record(workspaceID string, event diagnosticlog.Event) error {
 	if forwarder == nil || forwarder.client == nil {
-		return errors.New("Binding Host diagnostic aggregation is unavailable")
+		return errors.New("Binding ComputerCore diagnostic aggregation is unavailable")
 	}
 	envelope := bindingChildDiagnosticEnvelope{workspaceID: workspaceID, event: &event}
 	select {
 	case <-forwarder.ctx.Done():
-		return errors.New("Binding Host diagnostic aggregation is closed")
+		return errors.New("Binding ComputerCore diagnostic aggregation is closed")
 	case forwarder.queue <- envelope:
 		return nil
 	default:
-		return errors.New("Binding Host diagnostic aggregation queue is full")
+		return errors.New("Binding ComputerCore diagnostic aggregation queue is full")
 	}
 }
 

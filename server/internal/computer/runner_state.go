@@ -226,7 +226,7 @@ func readRunnerConnected(path string) (persistedRunnerConnected, error) {
 // listRunnerStates reads every persisted Binding Runner state file under
 // root without mutating anything. It is used by read-only evidence
 // gathering (doctor); findReclaimableRunners is the mutating counterpart
-// used at Host startup. Corrupt or unreadable entries are silently skipped.
+// used at ComputerCore startup. Corrupt or unreadable entries are silently skipped.
 func listRunnerStates(root string) ([]persistedRunnerState, error) {
 	root = strings.TrimSpace(root)
 	if root == "" {
@@ -256,7 +256,7 @@ func listRunnerStates(root string) ([]persistedRunnerState, error) {
 
 // reclaimableRunner is one Workspace slot whose previous-generation Binding
 // Runner process is still alive on this machine. A live process here is
-// never adopted; the current Host drains and terminates it, then spawns its
+// never adopted; the current ComputerCore drains and terminates it, then spawns its
 // own child through the normal CanSpawn/Reconcile path.
 type reclaimableRunner struct {
 	WorkspaceID      string
@@ -271,9 +271,9 @@ type reclaimableRunner struct {
 
 // findReclaimableRunners reads every persisted Binding Runner state
 // directory and reports which ones still have a live OS process to reclaim.
-// It never adopts a live process into this Host's own bookkeeping: a live
+// It never adopts a live process into this ComputerCore's own bookkeeping: a live
 // runner found here is handed back to the caller so it can be drained and
-// killed before this Host spawns a replacement.
+// killed before this ComputerCore spawns a replacement.
 //
 // Side effect: any state directory whose process is already dead is deleted
 // in place as it is scanned (state file, pid file, connected file, and the
@@ -323,7 +323,7 @@ func findReclaimableRunners(root string, logger *slog.Logger) ([]reclaimableRunn
 				endpoint = connected.RunnerEndpoint
 			}
 			if logger != nil {
-				logger.Info("found reclaimable Binding Runner left by a previous Host generation", "workspace_id", state.WorkspaceID, "pid", pid, "has_endpoint", endpoint != "")
+				logger.Info("found reclaimable Binding Runner left by a previous ComputerCore generation", "workspace_id", state.WorkspaceID, "pid", pid, "has_endpoint", endpoint != "")
 			}
 			reclaimable = append(reclaimable, reclaimableRunner{
 				WorkspaceID: state.WorkspaceID, DaemonInstanceID: state.DaemonInstanceID, PID: pid, RunnerEndpoint: endpoint,
@@ -340,7 +340,7 @@ func findReclaimableRunners(root string, logger *slog.Logger) ([]reclaimableRunn
 	return reclaimable, nil
 }
 
-// runnerReclaimOptions bounds one orphaned Workspace Runner reclaim. Drain is
+// runnerReclaimOptions bounds one orphaned WorkspaceDaemon reclaim. Drain is
 // optional: when it is nil, or the runner never published a control endpoint,
 // the reclaim goes straight to signal termination.
 type runnerReclaimOptions struct {
@@ -352,8 +352,8 @@ type runnerReclaimOptions struct {
 	Logger       *slog.Logger
 }
 
-// reclaimRunnerProcess drains and then force-terminates one Workspace Runner
-// process left behind by a previous Host generation, and on confirmed death
+// reclaimRunnerProcess drains and then force-terminates one WorkspaceDaemon
+// process left behind by a previous ComputerCore generation, and on confirmed death
 // removes its persisted state so the slot is free for a fresh child.
 //
 // Drain (runner:drain) only closes the runner's own admission barrier and
@@ -370,7 +370,7 @@ func reclaimRunnerProcess(runner reclaimableRunner, options runnerReclaimOptions
 
 	if runner.RunnerEndpoint != "" && options.Drain != nil && identity.Validate() == nil {
 		if logger != nil {
-			logger.Info("reclaiming orphaned Workspace Runner: requesting drain", "workspace_id", runner.WorkspaceID, "pid", runner.PID, "endpoint", runner.RunnerEndpoint)
+			logger.Info("reclaiming orphaned WorkspaceDaemon: requesting drain", "workspace_id", runner.WorkspaceID, "pid", runner.PID, "endpoint", runner.RunnerEndpoint)
 		}
 		// No extra timeout wrapping here: the local control RPC transport
 		// already bounds this call (see callLocalJSONWithTimeout), and drain
@@ -378,23 +378,23 @@ func reclaimRunnerProcess(runner reclaimableRunner, options runnerReclaimOptions
 		// to finish closing out in-flight work.
 		if err := options.Drain(context.Background(), runner.RunnerEndpoint, identity); err != nil {
 			if logger != nil {
-				logger.Warn("orphaned Workspace Runner drain request failed; will terminate by signal", "workspace_id", runner.WorkspaceID, "pid", runner.PID, "error", err)
+				logger.Warn("orphaned WorkspaceDaemon drain request failed; will terminate by signal", "workspace_id", runner.WorkspaceID, "pid", runner.PID, "error", err)
 			}
 		} else if logger != nil {
-			logger.Info("orphaned Workspace Runner drained via runner:drain", "workspace_id", runner.WorkspaceID, "pid", runner.PID)
+			logger.Info("orphaned WorkspaceDaemon drained via runner:drain", "workspace_id", runner.WorkspaceID, "pid", runner.PID)
 		}
 	} else if logger != nil {
-		logger.Warn("orphaned Workspace Runner has no reachable control endpoint; will terminate by signal", "workspace_id", runner.WorkspaceID, "pid", runner.PID)
+		logger.Warn("orphaned WorkspaceDaemon has no reachable control endpoint; will terminate by signal", "workspace_id", runner.WorkspaceID, "pid", runner.PID)
 	}
 
 	if logger != nil {
-		logger.Info("terminating orphaned Workspace Runner: sending SIGTERM/SIGKILL", "workspace_id", runner.WorkspaceID, "pid", runner.PID)
+		logger.Info("terminating orphaned WorkspaceDaemon: sending SIGTERM/SIGKILL", "workspace_id", runner.WorkspaceID, "pid", runner.PID)
 	}
 	if err := terminateProcess(runner.PID, options.PollInterval, options.Grace, options.Sleep); err != nil {
 		return err
 	}
 	if err := removeRunnerState(options.StateRoot, runner.WorkspaceID, runner.DaemonInstanceID, runner.PID); err != nil && logger != nil {
-		logger.Warn("could not remove reclaimed Workspace Runner state", "workspace_id", runner.WorkspaceID, "pid", runner.PID, "error", err)
+		logger.Warn("could not remove reclaimed WorkspaceDaemon state", "workspace_id", runner.WorkspaceID, "pid", runner.PID, "error", err)
 	}
 	return nil
 }

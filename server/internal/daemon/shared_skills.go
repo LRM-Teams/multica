@@ -20,7 +20,7 @@ import (
 	"github.com/multica-ai/multica/server/pkg/agent"
 )
 
-func (d *Daemon) sharedSkillsSyncLoop(ctx context.Context) {
+func (d *WorkspaceDaemonCore) sharedSkillsSyncLoop(ctx context.Context) {
 	interval := d.cfg.SharedSkillsSyncInterval
 	if interval <= 0 {
 		return
@@ -38,7 +38,7 @@ func (d *Daemon) sharedSkillsSyncLoop(ctx context.Context) {
 	}
 }
 
-func (d *Daemon) localMemoryCurationLoop(ctx context.Context) {
+func (d *WorkspaceDaemonCore) localMemoryCurationLoop(ctx context.Context) {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 	d.runLocalMemoryCurationOnce(ctx)
@@ -52,7 +52,7 @@ func (d *Daemon) localMemoryCurationLoop(ctx context.Context) {
 	}
 }
 
-func (d *Daemon) runLocalMemoryCurationOnce(ctx context.Context) {
+func (d *WorkspaceDaemonCore) runLocalMemoryCurationOnce(ctx context.Context) {
 	if !d.ready.Load() {
 		return
 	}
@@ -66,7 +66,7 @@ func (d *Daemon) runLocalMemoryCurationOnce(ctx context.Context) {
 	}
 }
 
-func (d *Daemon) syncSharedSkillsOnce(ctx context.Context) {
+func (d *WorkspaceDaemonCore) syncSharedSkillsOnce(ctx context.Context) {
 	if !d.ready.Load() {
 		return
 	}
@@ -77,7 +77,7 @@ func (d *Daemon) syncSharedSkillsOnce(ctx context.Context) {
 	}
 }
 
-func (d *Daemon) runLocalMemoryCuration(ctx context.Context, rt Runtime) error {
+func (d *WorkspaceDaemonCore) runLocalMemoryCuration(ctx context.Context, rt Runtime) error {
 	if strings.TrimSpace(rt.WorkspaceID) == "" {
 		return nil
 	}
@@ -140,7 +140,7 @@ func shouldRetryLocalL3(res memorycuration.Result) bool {
 	return res.ReviewDeferred > nonRetryable
 }
 
-func (d *Daemon) claimLocalMemoryCurationRun(workspaceID string, stage memorycuration.Stage, localNow time.Time) bool {
+func (d *WorkspaceDaemonCore) claimLocalMemoryCurationRun(workspaceID string, stage memorycuration.Stage, localNow time.Time) bool {
 	key := workspaceID + "\x00" + string(stage)
 	planDate := localNow.Format("2006-01-02")
 	d.memoryCurationMu.Lock()
@@ -152,13 +152,13 @@ func (d *Daemon) claimLocalMemoryCurationRun(workspaceID string, stage memorycur
 	return true
 }
 
-func (d *Daemon) releaseLocalMemoryCurationRun(workspaceID string, stage memorycuration.Stage) {
+func (d *WorkspaceDaemonCore) releaseLocalMemoryCurationRun(workspaceID string, stage memorycuration.Stage) {
 	d.memoryCurationMu.Lock()
 	delete(d.memoryCurationRuns, workspaceID+"\x00"+string(stage))
 	d.memoryCurationMu.Unlock()
 }
 
-func (d *Daemon) localMemoryCurationRuntimes() []Runtime {
+func (d *WorkspaceDaemonCore) localMemoryCurationRuntimes() []Runtime {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -187,7 +187,7 @@ func (d *Daemon) localMemoryCurationRuntimes() []Runtime {
 
 // sharedSkillSyncRuntimes returns one stable online runtime per workspace so
 // workspace-level scans are synced exactly once per poll.
-func (d *Daemon) sharedSkillSyncRuntimes() []Runtime {
+func (d *WorkspaceDaemonCore) sharedSkillSyncRuntimes() []Runtime {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -253,7 +253,7 @@ func ensureMulticaAgentRoot(root string) error {
 	return os.MkdirAll(root, 0o755)
 }
 
-func (d *Daemon) syncSharedSkillsForRuntime(ctx context.Context, rt Runtime) error {
+func (d *WorkspaceDaemonCore) syncSharedSkillsForRuntime(ctx context.Context, rt Runtime) error {
 	scanRoot, ok := sharedSkillScanRoot(d.cfg, rt.Provider)
 	if ok {
 		if err := d.syncWorkspaceSharedSkillsForRuntime(ctx, rt, scanRoot); err != nil {
@@ -263,7 +263,7 @@ func (d *Daemon) syncSharedSkillsForRuntime(ctx context.Context, rt Runtime) err
 	return d.syncEvolutionSubmissionsForRuntime(ctx, rt)
 }
 
-func (d *Daemon) syncWorkspaceSharedSkillsForRuntime(ctx context.Context, rt Runtime, scanRoot string) error {
+func (d *WorkspaceDaemonCore) syncWorkspaceSharedSkillsForRuntime(ctx context.Context, rt Runtime, scanRoot string) error {
 	if _, err := os.Stat(scanRoot); err != nil {
 		if !os.IsNotExist(err) {
 			d.logger.Warn("shared skills root unavailable", "path", scanRoot, "provider", rt.Provider, "error", err)
@@ -338,7 +338,7 @@ func (d *Daemon) syncWorkspaceSharedSkillsForRuntime(ctx context.Context, rt Run
 	return nil
 }
 
-func (d *Daemon) syncEvolutionSubmissionsForRuntime(ctx context.Context, rt Runtime) error {
+func (d *WorkspaceDaemonCore) syncEvolutionSubmissionsForRuntime(ctx context.Context, rt Runtime) error {
 	if strings.TrimSpace(rt.WorkspaceID) == "" {
 		return nil
 	}
@@ -393,7 +393,7 @@ func (d *Daemon) syncEvolutionSubmissionsForRuntime(ctx context.Context, rt Runt
 	return nil
 }
 
-func (d *Daemon) scanEvolutionSubmissionsRoot(rt Runtime, base string) ([]EvolutionSubmissionBundle, error) {
+func (d *WorkspaceDaemonCore) scanEvolutionSubmissionsRoot(rt Runtime, base string) ([]EvolutionSubmissionBundle, error) {
 	entries, err := os.ReadDir(base)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -436,7 +436,7 @@ func (d *Daemon) scanEvolutionSubmissionsRoot(rt Runtime, base string) ([]Evolut
 	return submissions, nil
 }
 
-func (d *Daemon) loadMemoryCandidateSubmissions(rt Runtime, agentID, agentRoot string) ([]EvolutionSubmissionBundle, error) {
+func (d *WorkspaceDaemonCore) loadMemoryCandidateSubmissions(rt Runtime, agentID, agentRoot string) ([]EvolutionSubmissionBundle, error) {
 	path := agentMemoryCandidatesPath(agentRoot)
 	items, issues, err := readEvolutionCandidateJSONL(path)
 	if err != nil {
@@ -462,7 +462,7 @@ func (d *Daemon) loadMemoryCandidateSubmissions(rt Runtime, agentID, agentRoot s
 	return submissions, nil
 }
 
-func (d *Daemon) loadSkillCandidateSubmissions(rt Runtime, agentID, agentRoot string) ([]EvolutionSubmissionBundle, error) {
+func (d *WorkspaceDaemonCore) loadSkillCandidateSubmissions(rt Runtime, agentID, agentRoot string) ([]EvolutionSubmissionBundle, error) {
 	path := agentSkillCandidatesPath(agentRoot)
 	items, issues, err := readEvolutionCandidateJSONL(path)
 	if err != nil {
@@ -772,7 +772,7 @@ func jsonRawOrEmptyObject(item map[string]json.RawMessage, key string) json.RawM
 	return raw
 }
 
-func (d *Daemon) logSharedSkillSyncResult(rt Runtime, msg string, result *SharedSkillSyncResult) {
+func (d *WorkspaceDaemonCore) logSharedSkillSyncResult(rt Runtime, msg string, result *SharedSkillSyncResult) {
 	if result == nil {
 		return
 	}

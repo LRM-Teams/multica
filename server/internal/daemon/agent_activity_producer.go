@@ -125,7 +125,7 @@ func newAgentActivityProducer(daemonInstanceID string, now func() time.Time, sen
 }
 
 // Close releases activity sequence and managed-launch state with the owning
-// Workspace Runner. Reconnects deliberately use DetachTransport instead.
+// WorkspaceDaemon. Reconnects deliberately use DetachTransport instead.
 func (p *agentActivityProducer) Close() {
 	if p == nil {
 		return
@@ -223,7 +223,7 @@ func (p *agentActivityProducer) RemoveManaged(agentID, launchID string) {
 	delete(p.states, key)
 }
 
-// AttachTransport makes a newly established Workspace Runner connection the
+// AttachTransport makes a newly established WorkspaceDaemon connection the
 // only destination for best-effort Activity. It returns the current managed
 // state for ready reconciliation and a lease that prevents an older replaced
 // socket from marking the new connection disconnected on teardown.
@@ -248,7 +248,7 @@ func (p *agentActivityProducer) AttachTransport(send func(protocol.AgentActivity
 }
 
 // DetachTransport only disconnects the lease that owns it. A late defer from
-// a replaced connection must not silence the current Workspace Runner.
+// a replaced connection must not silence the current WorkspaceDaemon.
 func (p *agentActivityProducer) DetachTransport(generation uint64) {
 	if p == nil {
 		return

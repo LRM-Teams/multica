@@ -220,7 +220,7 @@ func TestObserveMessageSendDraftSentPublishesSystemActivityEntry(t *testing.T) {
 // run its local Draft load/save/refresh path. A stub server answers the only
 // network call both paths may make (target resolution) so normal-send also runs
 // without a live backend.
-func newDraftReuseTestDaemon(t *testing.T) (*Daemon, *CredentialProxy) {
+func newDraftReuseTestDaemon(t *testing.T) (*WorkspaceDaemonCore, *CredentialProxy) {
 	t.Helper()
 	root := t.TempDir()
 	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
@@ -238,7 +238,7 @@ func newDraftReuseTestDaemon(t *testing.T) (*Daemon, *CredentialProxy) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"target": "#test", "context_target": "channel:test"})
 	}))
 	t.Cleanup(server.Close)
-	d := &Daemon{
+	d := &WorkspaceDaemonCore{
 		cfg: Config{
 			ServerBaseURL:  server.URL,
 			WorkspacesRoot: root,
@@ -252,7 +252,7 @@ func newDraftReuseTestDaemon(t *testing.T) (*Daemon, *CredentialProxy) {
 
 func TestCredentialProxyDraftStoreDoesNotRequireMessageCoordinator(t *testing.T) {
 	root := t.TempDir()
-	d := &Daemon{
+	d := &WorkspaceDaemonCore{
 		cfg:               Config{WorkspacesRoot: root},
 		messageDraftStore: NewMessageDraftStore(root),
 	}

@@ -22,18 +22,18 @@ func TestReduceRunnerLaunchesConvergesRaftDesiredAndRunningState(t *testing.T) {
 		observed []runnerObservedLaunch
 		want     []runnerReconcileAction
 	}{
-		{name: "first setup starts missing agent", desired: []runnerDesiredLaunch{{agentID: "agent-a", runtimeID: "runtime-new", launchID: "launch-new", startDispatchID: "dispatch-new"}}, want: []runnerReconcileAction{{eventType: protocol.EventDaemonAgentStart, payload: protocol.WorkspaceRunnerAgentStartPayload{AgentID: "agent-a", RuntimeID: "runtime-new", LaunchID: "launch-new", StartDispatchID: "dispatch-new"}}}},
+		{name: "first setup starts missing agent", desired: []runnerDesiredLaunch{{agentID: "agent-a", runtimeID: "runtime-new", launchID: "launch-new", startDispatchID: "dispatch-new"}}, want: []runnerReconcileAction{{eventType: protocol.EventDaemonAgentStart, payload: protocol.WorkspaceDaemonAgentStartPayload{AgentID: "agent-a", RuntimeID: "runtime-new", LaunchID: "launch-new", StartDispatchID: "dispatch-new"}}}},
 		{name: "matching reconnect is no-op", desired: []runnerDesiredLaunch{{agentID: "agent-a", runtimeID: "runtime-new", launchID: "launch-new"}}, observed: []runnerObservedLaunch{{agentID: "agent-a", runtimeID: "runtime-new", launchID: "launch-new", status: protocol.AgentStatusActive}}},
-		{name: "accepted start is not residency", desired: []runnerDesiredLaunch{{agentID: "agent-a", runtimeID: "runtime-new", launchID: "launch-new", startDispatchID: "dispatch-new"}}, observed: []runnerObservedLaunch{{agentID: "agent-a", runtimeID: "runtime-new", launchID: "launch-new", status: "accepted"}}, want: []runnerReconcileAction{{eventType: protocol.EventDaemonAgentStart, payload: protocol.WorkspaceRunnerAgentStartPayload{AgentID: "agent-a", RuntimeID: "runtime-new", LaunchID: "launch-new", StartDispatchID: "dispatch-new"}}}},
+		{name: "accepted start is not residency", desired: []runnerDesiredLaunch{{agentID: "agent-a", runtimeID: "runtime-new", launchID: "launch-new", startDispatchID: "dispatch-new"}}, observed: []runnerObservedLaunch{{agentID: "agent-a", runtimeID: "runtime-new", launchID: "launch-new", status: "accepted"}}, want: []runnerReconcileAction{{eventType: protocol.EventDaemonAgentStart, payload: protocol.WorkspaceDaemonAgentStartPayload{AgentID: "agent-a", RuntimeID: "runtime-new", LaunchID: "launch-new", StartDispatchID: "dispatch-new"}}}},
 		{name: "runtime move stops mismatched accepted start before replacement", desired: []runnerDesiredLaunch{{agentID: "agent-a", runtimeID: "runtime-new", launchID: "launch-new", startDispatchID: "dispatch-new"}}, observed: []runnerObservedLaunch{{agentID: "agent-a", runtimeID: "runtime-old", launchID: "launch-old", status: "accepted"}}, want: []runnerReconcileAction{
-			{eventType: protocol.EventDaemonAgentStop, payload: protocol.WorkspaceRunnerAgentStopPayload{AgentID: "agent-a", LaunchID: "launch-old"}},
+			{eventType: protocol.EventDaemonAgentStop, payload: protocol.WorkspaceDaemonAgentStopPayload{AgentID: "agent-a", LaunchID: "launch-old"}},
 		}},
-		{name: "restart reconnect preserves Raft session config", desired: []runnerDesiredLaunch{{agentID: "agent-a", runtimeID: "runtime-new", launchID: "launch-new", startDispatchID: "dispatch-new", sessionID: "provider-session"}}, want: []runnerReconcileAction{{eventType: protocol.EventDaemonAgentStart, payload: protocol.WorkspaceRunnerAgentStartPayload{AgentID: "agent-a", RuntimeID: "runtime-new", LaunchID: "launch-new", StartDispatchID: "dispatch-new", Config: protocol.WorkspaceRunnerAgentStartConfig{SessionID: "provider-session"}}}}},
-		{name: "reset reconnect preserves fresh Raft config", desired: []runnerDesiredLaunch{{agentID: "agent-a", runtimeID: "runtime-new", launchID: "launch-new", startDispatchID: "dispatch-new"}}, want: []runnerReconcileAction{{eventType: protocol.EventDaemonAgentStart, payload: protocol.WorkspaceRunnerAgentStartPayload{AgentID: "agent-a", RuntimeID: "runtime-new", LaunchID: "launch-new", StartDispatchID: "dispatch-new", Config: protocol.WorkspaceRunnerAgentStartConfig{}}}}},
+		{name: "restart reconnect preserves Raft session config", desired: []runnerDesiredLaunch{{agentID: "agent-a", runtimeID: "runtime-new", launchID: "launch-new", startDispatchID: "dispatch-new", sessionID: "provider-session"}}, want: []runnerReconcileAction{{eventType: protocol.EventDaemonAgentStart, payload: protocol.WorkspaceDaemonAgentStartPayload{AgentID: "agent-a", RuntimeID: "runtime-new", LaunchID: "launch-new", StartDispatchID: "dispatch-new", Config: protocol.WorkspaceDaemonAgentStartConfig{SessionID: "provider-session"}}}}},
+		{name: "reset reconnect preserves fresh Raft config", desired: []runnerDesiredLaunch{{agentID: "agent-a", runtimeID: "runtime-new", launchID: "launch-new", startDispatchID: "dispatch-new"}}, want: []runnerReconcileAction{{eventType: protocol.EventDaemonAgentStart, payload: protocol.WorkspaceDaemonAgentStartPayload{AgentID: "agent-a", RuntimeID: "runtime-new", LaunchID: "launch-new", StartDispatchID: "dispatch-new", Config: protocol.WorkspaceDaemonAgentStartConfig{}}}}},
 		{name: "runtime move stops old before a later reconcile starts new", desired: []runnerDesiredLaunch{{agentID: "agent-a", runtimeID: "runtime-new", launchID: "launch-new", startDispatchID: "dispatch-new"}}, observed: []runnerObservedLaunch{{agentID: "agent-a", runtimeID: "runtime-old", launchID: "launch-old", status: protocol.AgentStatusActive}}, want: []runnerReconcileAction{
-			{eventType: protocol.EventDaemonAgentStop, payload: protocol.WorkspaceRunnerAgentStopPayload{AgentID: "agent-a", LaunchID: "launch-old"}},
+			{eventType: protocol.EventDaemonAgentStop, payload: protocol.WorkspaceDaemonAgentStopPayload{AgentID: "agent-a", LaunchID: "launch-old"}},
 		}},
-		{name: "removed agent stops stale residency", observed: []runnerObservedLaunch{{agentID: "agent-a", runtimeID: "runtime-old", launchID: "launch-old", status: protocol.AgentStatusActive}}, want: []runnerReconcileAction{{eventType: protocol.EventDaemonAgentStop, payload: protocol.WorkspaceRunnerAgentStopPayload{AgentID: "agent-a", LaunchID: "launch-old"}}}},
+		{name: "removed agent stops stale residency", observed: []runnerObservedLaunch{{agentID: "agent-a", runtimeID: "runtime-old", launchID: "launch-old", status: protocol.AgentStatusActive}}, want: []runnerReconcileAction{{eventType: protocol.EventDaemonAgentStop, payload: protocol.WorkspaceDaemonAgentStopPayload{AgentID: "agent-a", LaunchID: "launch-old"}}}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -138,15 +138,15 @@ func TestReconcileConnectedRuntimesDeduplicatesSameComputerMove(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	readyPayload, _ := json.Marshal(protocol.WorkspaceRunnerReadyPayload{
-		WorkspaceID: testWorkspaceID, DaemonInstanceID: "instance-same", ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceRunnerAgentProcess},
+	readyPayload, _ := json.Marshal(protocol.WorkspaceDaemonReadyPayload{
+		WorkspaceID: testWorkspaceID, DaemonInstanceID: "instance-same", ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceDaemonAgentProcess},
 	})
-	ready, _ := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceRunnerReady, Payload: readyPayload})
+	ready, _ := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceDaemonReady, Payload: readyPayload})
 	if err := conn.WriteMessage(websocket.TextMessage, ready); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(time.Second)
-	for hub.WorkspaceRunnerConnectionCount("daemon-same", testWorkspaceID) != 1 {
+	for hub.WorkspaceDaemonConnectionCount("daemon-same", testWorkspaceID) != 1 {
 		if time.Now().After(deadline) {
 			t.Fatal("Runner did not become ready")
 		}
@@ -176,7 +176,7 @@ func TestReconcileConnectedRuntimesDeduplicatesSameComputerMove(t *testing.T) {
 	if want[0].Type != protocol.EventDaemonAgentStop {
 		t.Fatalf("reconcile frame = %q", want[0].Type)
 	}
-	var stop protocol.WorkspaceRunnerAgentStopPayload
+	var stop protocol.WorkspaceDaemonAgentStopPayload
 	if err := json.Unmarshal(want[0].Payload, &stop); err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +184,7 @@ func TestReconcileConnectedRuntimesDeduplicatesSameComputerMove(t *testing.T) {
 		t.Fatalf("stop payload = %+v", stop)
 	}
 	inactive, _ := json.Marshal(protocol.AgentStatusPayload{AgentID: agentID, LaunchID: oldLaunchID, Status: protocol.AgentStatusInactive})
-	if err := h.HandleWorkspaceRunnerFrame(ctx, daemonws.ClientIdentity{DaemonID: "daemon-same", WorkspaceID: testWorkspaceID}, "instance-same", protocol.EventAgentStatus, inactive); err != nil {
+	if err := h.HandleWorkspaceDaemonFrame(ctx, daemonws.ClientIdentity{DaemonID: "daemon-same", WorkspaceID: testWorkspaceID}, "instance-same", protocol.EventAgentStatus, inactive); err != nil {
 		t.Fatalf("record matching inactive: %v", err)
 	}
 	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
@@ -198,7 +198,7 @@ func TestReconcileConnectedRuntimesDeduplicatesSameComputerMove(t *testing.T) {
 	if err := json.Unmarshal(raw, &startMessage); err != nil {
 		t.Fatal(err)
 	}
-	var start protocol.WorkspaceRunnerAgentStartPayload
+	var start protocol.WorkspaceDaemonAgentStartPayload
 	if startMessage.Type != protocol.EventDaemonAgentStart || json.Unmarshal(startMessage.Payload, &start) != nil {
 		t.Fatalf("post-inactive frame = %+v", startMessage)
 	}

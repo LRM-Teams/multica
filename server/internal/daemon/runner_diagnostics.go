@@ -4,103 +4,25 @@ import (
 	"errors"
 	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/diagnosticlog"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-// runnerDiagnosticRegistry is the only daemon-side owner of Workspace Runner
-// diagnostic sinks. Producers supply a Workspace identity and a typed event;
-// they never construct paths or propagate sink failures into product control
-// flow.
-type runnerDiagnosticRegistry struct {
-	store             *diagnosticlog.Store
-	environment       diagnosticlog.Environment
-	daemonInstanceID  string
-	computerID        string
-	serviceGeneration string
-
-	mu      sync.Mutex
-	loggers map[string]*diagnosticlog.Logger
-	failed  map[string]struct{}
-}
-
 type runnerDiagnosticSink interface {
 	record(string, diagnosticlog.Event) error
 }
 
-func (d *Daemon) initializeRunnerDiagnostics() {
-	if d == nil || d.runnerDiagnostics != nil {
-		return
-	}
-	environment := diagnosticlog.Environment(strings.TrimSpace(d.cfg.Environment))
-	if environment != diagnosticlog.EnvironmentProduction && environment != diagnosticlog.EnvironmentTest {
-		if d.logger != nil {
-			d.logger.Debug("Workspace Runner diagnostics disabled", "reason", "invalid_environment")
-		}
-		return
-	}
-	store, err := diagnosticlog.Open(diagnosticlog.Config{})
-	if err != nil {
-		if d.logger != nil {
-			d.logger.Debug("Workspace Runner diagnostics disabled", "reason", "open_failed")
-		}
-		return
-	}
-	computerID := strings.TrimSpace(d.cfg.DaemonID)
-	if _, err := uuid.Parse(computerID); err != nil {
-		computerID = ""
-	}
-	d.runnerDiagnostics = &runnerDiagnosticRegistry{
-		store: store, environment: environment,
-		daemonInstanceID: d.runnerInstanceID, computerID: computerID,
-		loggers: make(map[string]*diagnosticlog.Logger), failed: make(map[string]struct{}),
-	}
-	d.runnerDiagnosticStore = store
-}
-
-func (d *Daemon) recordRunnerDiagnostic(workspaceID string, event diagnosticlog.Event) {
+func (d *WorkspaceDaemonCore) recordRunnerDiagnostic(workspaceID string, event diagnosticlog.Event) {
 	if d == nil || d.runnerDiagnostics == nil {
 		return
 	}
 	if err := d.runnerDiagnostics.record(workspaceID, event); err != nil && d.logger != nil {
 		// Do not include the storage error or event payload in the fallback log.
 		// Sink health and the later Service summary own those details.
-		d.logger.Warn("Workspace Runner diagnostic record dropped", "reason", "sink_unavailable")
+		d.logger.Warn("WorkspaceDaemon diagnostic record dropped", "reason", "sink_unavailable")
 	}
-}
-
-func (r *runnerDiagnosticRegistry) record(workspaceID string, event diagnosticlog.Event) error {
-	workspaceID = strings.TrimSpace(workspaceID)
-	if r == nil || r.store == nil {
-		return errors.New("diagnostic store is unavailable")
-	}
-	r.mu.Lock()
-	logger := r.loggers[workspaceID]
-	_, failed := r.failed[workspaceID]
-	if logger == nil && !failed {
-		var err error
-		logger, err = r.store.Runner(diagnosticlog.RunnerOptions{
-			Environment:       r.environment,
-			WorkspaceID:       workspaceID,
-			DaemonInstanceID:  r.daemonInstanceID,
-			ComputerID:        r.computerID,
-			ServiceGeneration: r.serviceGeneration,
-		})
-		if err != nil {
-			r.failed[workspaceID] = struct{}{}
-			r.mu.Unlock()
-			return err
-		}
-		r.loggers[workspaceID] = logger
-	}
-	r.mu.Unlock()
-	if logger == nil {
-		return errors.New("diagnostic logger is unavailable")
-	}
-	return logger.Record(event)
 }
 
 func canonicalMessageDiagnosticEvent(
@@ -143,7 +65,7 @@ func canonicalMessageDiagnosticEventForTurn(
 	return event
 }
 
-func (d *Daemon) recordResidentMessageBatch(
+func (d *WorkspaceDaemonCore) recordResidentMessageBatch(
 	workspaceID, runtimeID, agentID string,
 	messages []protocol.AgentMessageProjection,
 	phase, outcome, reasonCode, executionID string, runtimeEpoch int64, launchID, startDispatchID string,
@@ -162,7 +84,7 @@ func (d *Daemon) recordResidentMessageBatch(
 	}
 }
 
-func (d *Daemon) runtimeEpochForRuntime(runtimeID string) (string, int64) {
+func (d *WorkspaceDaemonCore) runtimeEpochForRuntime(runtimeID string) (string, int64) {
 	if d == nil || strings.TrimSpace(runtimeID) == "" {
 		return "", 0
 	}
@@ -181,7 +103,7 @@ func (d *Daemon) runtimeEpochForRuntime(runtimeID string) (string, int64) {
 // bindInboxLeaseEpoch snapshots the registration generation at lease
 // acquisition. Subsequent renew/ack/terminal events must retain this value
 // even if the workspace registers a replacement runtime in the meantime.
-func (d *Daemon) bindInboxLeaseEpoch(lease *AgentInboxLease) {
+func (d *WorkspaceDaemonCore) bindInboxLeaseEpoch(lease *AgentInboxLease) {
 	if d == nil || lease == nil || lease.RuntimeEpoch > 0 || strings.TrimSpace(lease.RuntimeID) == "" {
 		return
 	}
@@ -189,7 +111,7 @@ func (d *Daemon) bindInboxLeaseEpoch(lease *AgentInboxLease) {
 	lease.RuntimeEpoch = epoch
 }
 
-func (d *Daemon) recordInboxLeaseDiagnostic(lease AgentInboxLease, phase, outcome, reason string) {
+func (d *WorkspaceDaemonCore) recordInboxLeaseDiagnostic(lease AgentInboxLease, phase, outcome, reason string) {
 	if d == nil || strings.TrimSpace(lease.RuntimeID) == "" {
 		return
 	}
@@ -208,7 +130,7 @@ func (d *Daemon) recordInboxLeaseDiagnostic(lease AgentInboxLease, phase, outcom
 	})
 }
 
-func (d *Daemon) recordAgentMessageResponse(
+func (d *WorkspaceDaemonCore) recordAgentMessageResponse(
 	workspaceID, agentID, requestID, contextTarget string,
 	response map[string]any,
 	phase, outcome, reasonCode string,
@@ -217,7 +139,7 @@ func (d *Daemon) recordAgentMessageResponse(
 		return
 	}
 	runtimeID := ""
-	if runner := d.currentWorkspaceRunner(workspaceID); runner != nil {
+	if runner := d.currentWorkspaceSession(workspaceID); runner != nil {
 		runtimeID = runner.messageRuntimeID(agentID)
 	}
 	messageID, channelID := responseMessageIdentity(response)
@@ -243,7 +165,7 @@ func (d *Daemon) recordAgentMessageResponse(
 // Ordinary DM/group messages never satisfy this predicate: they use the
 // canonical MessageCoordinator agent:deliver path and have their own delivery
 // checkpoints above.
-func (d *Daemon) recordStandaloneChatCheckpoint(
+func (d *WorkspaceDaemonCore) recordStandaloneChatCheckpoint(
 	task Task,
 	phase, outcome, status, reasonCode, executionID, provider string,
 	ackedSeq int64,

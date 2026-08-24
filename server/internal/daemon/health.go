@@ -14,7 +14,7 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-func (d *Daemon) localControlAuthorized(r *http.Request) bool {
+func (d *WorkspaceDaemonCore) localControlAuthorized(r *http.Request) bool {
 	token := strings.TrimSpace(d.cfg.LocalControlToken)
 	provided := strings.TrimSpace(r.Header.Get("X-Multica-Control-Token"))
 	return token != "" && provided != "" && subtle.ConstantTimeCompare([]byte(token), []byte(provided)) == 1
@@ -65,7 +65,7 @@ type credentialProxyMessageReactRequest struct {
 	Remove      bool   `json:"remove"`
 }
 
-func (d *Daemon) credentialProxyMessageCheckHandler() http.HandlerFunc {
+func (d *WorkspaceDaemonCore) credentialProxyMessageCheckHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var request credentialProxyMessageCheckRequest
 		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10))
@@ -95,7 +95,7 @@ func (d *Daemon) credentialProxyMessageCheckHandler() http.HandlerFunc {
 	}
 }
 
-func (d *Daemon) credentialProxyMessageReadHandler() http.HandlerFunc {
+func (d *WorkspaceDaemonCore) credentialProxyMessageReadHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var request credentialProxyMessageReadRequest
 		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10))
@@ -186,7 +186,7 @@ func (d *Daemon) credentialProxyMessageReadHandler() http.HandlerFunc {
 
 // credentialProxyAgentMessageClient resolves the durable credential locally.
 // The Agent process never receives it, nor any task/lease/execution envelope.
-func (d *Daemon) credentialProxyAgentMessageClient(ctx context.Context, workspaceID, agentID string) (*cli.APIClient, error) {
+func (d *WorkspaceDaemonCore) credentialProxyAgentMessageClient(ctx context.Context, workspaceID, agentID string) (*cli.APIClient, error) {
 	credential, err := d.messageAgentCredential(ctx, workspaceID, agentID)
 	if err != nil {
 		return nil, err
@@ -212,7 +212,7 @@ func normalizeCredentialProxyIdentity(agentID, workspaceID *string) bool {
 	return *agentID != "" && *workspaceID != ""
 }
 
-func (d *Daemon) credentialProxyMessageSearchHandler() http.HandlerFunc {
+func (d *WorkspaceDaemonCore) credentialProxyMessageSearchHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var request credentialProxyMessageSearchRequest
 		if !decodeCredentialProxyRequest(w, r, &request) || !normalizeCredentialProxyIdentity(&request.AgentID, &request.WorkspaceID) {
@@ -244,19 +244,19 @@ func (d *Daemon) credentialProxyMessageSearchHandler() http.HandlerFunc {
 	}
 }
 
-func (d *Daemon) credentialProxyMessageResolveHandler() http.HandlerFunc {
+func (d *WorkspaceDaemonCore) credentialProxyMessageResolveHandler() http.HandlerFunc {
 	return d.credentialProxyMessageMutationHandler("/api/agent/messages/resolve", func(request credentialProxyMessageResolveRequest) map[string]any {
 		return map[string]any{"message_id": strings.TrimSpace(request.MessageID)}
 	})
 }
 
-func (d *Daemon) credentialProxyMessageReactHandler() http.HandlerFunc {
+func (d *WorkspaceDaemonCore) credentialProxyMessageReactHandler() http.HandlerFunc {
 	return d.credentialProxyMessageMutationHandler("/api/agent/messages/react", func(request credentialProxyMessageReactRequest) map[string]any {
 		return map[string]any{"message_id": strings.TrimSpace(request.MessageID), "emoji": strings.TrimSpace(request.Emoji), "remove": request.Remove}
 	})
 }
 
-func (d *Daemon) credentialProxyMessageMutationHandler(path string, bodyFor any) http.HandlerFunc {
+func (d *WorkspaceDaemonCore) credentialProxyMessageMutationHandler(path string, bodyFor any) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var agentID, workspaceID string
 		var body map[string]any
@@ -300,7 +300,7 @@ func (d *Daemon) credentialProxyMessageMutationHandler(path string, bodyFor any)
 	}
 }
 
-func (d *Daemon) registerCredentialProxyRoutes(mux *http.ServeMux) {
+func (d *WorkspaceDaemonCore) registerCredentialProxyRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/internal/agent-api/inbox", d.agentAppInboxHandler())
 	mux.HandleFunc("/internal/agent-api/inbox/ack", d.agentAppInboxAckHandler())
 	mux.HandleFunc("POST /credential-proxy/messages/check", d.credentialProxyMessageCheckHandler())
@@ -313,7 +313,7 @@ func (d *Daemon) registerCredentialProxyRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/", d.credentialProxyAgentAPIHandler())
 }
 
-func (d *Daemon) serveLocalHTTP(ctx context.Context, ln net.Listener, handler http.Handler, name string) {
+func (d *WorkspaceDaemonCore) serveLocalHTTP(ctx context.Context, ln net.Listener, handler http.Handler, name string) {
 	srv := &http.Server{Handler: handler}
 
 	go func() {

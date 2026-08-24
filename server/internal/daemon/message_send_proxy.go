@@ -42,7 +42,7 @@ type credentialProxyMessageTargetResponse struct {
 	ContextTarget string `json:"context_target"`
 }
 
-func (d *Daemon) credentialProxyMessageSendHandler() http.HandlerFunc {
+func (d *WorkspaceDaemonCore) credentialProxyMessageSendHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var request credentialProxyMessageSendRequest
 		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
@@ -66,7 +66,7 @@ func (d *Daemon) credentialProxyMessageSendHandler() http.HandlerFunc {
 		}
 
 		proxy := d.CredentialProxy()
-		runner := d.currentWorkspaceRunner(request.WorkspaceID)
+		runner := d.currentWorkspaceSession(request.WorkspaceID)
 		now := time.Now()
 		draft, status, err := d.prepareMessageSendDraft(r.Context(), proxy, credential, request, now)
 		if err != nil {
@@ -239,7 +239,7 @@ func (request *credentialProxyMessageSendRequest) validate() error {
 	return nil
 }
 
-func (d *Daemon) prepareMessageSendDraft(ctx context.Context, proxy *CredentialProxy, credential cachedAgentCredential, request credentialProxyMessageSendRequest, now time.Time) (MessageDraft, int, error) {
+func (d *WorkspaceDaemonCore) prepareMessageSendDraft(ctx context.Context, proxy *CredentialProxy, credential cachedAgentCredential, request credentialProxyMessageSendRequest, now time.Time) (MessageDraft, int, error) {
 	var draft MessageDraft
 	var err error
 	if request.SendDraft {
@@ -306,7 +306,7 @@ func (d *Daemon) prepareMessageSendDraft(ctx context.Context, proxy *CredentialP
 	return draft, http.StatusOK, nil
 }
 
-func (d *Daemon) resolveMessageSendTarget(ctx context.Context, token string, request credentialProxyMessageSendRequest, target string) (string, int, error) {
+func (d *WorkspaceDaemonCore) resolveMessageSendTarget(ctx context.Context, token string, request credentialProxyMessageSendRequest, target string) (string, int, error) {
 	client := d.agentCredentialClient(token, request)
 	apiCtx, cancel := cli.APIContext(ctx)
 	defer cancel()
@@ -321,7 +321,7 @@ func (d *Daemon) resolveMessageSendTarget(ctx context.Context, token string, req
 	return contextTarget, http.StatusOK, nil
 }
 
-func (d *Daemon) agentCredentialClient(token string, request credentialProxyMessageSendRequest) *cli.APIClient {
+func (d *WorkspaceDaemonCore) agentCredentialClient(token string, request credentialProxyMessageSendRequest) *cli.APIClient {
 	client := cli.NewAPIClient(d.cfg.ServerBaseURL, request.WorkspaceID, token)
 	client.AgentID = request.AgentID
 	return client
@@ -408,7 +408,7 @@ func credentialProxyMessageOutputIsHeld(response map[string]any) bool {
 
 // observeOverlappingMessageSend deliberately observes but never serializes
 // sends.  The signal carries no authored content, credential, or identity.
-func (d *Daemon) observeOverlappingMessageSend(agentID, target string) func() {
+func (d *WorkspaceDaemonCore) observeOverlappingMessageSend(agentID, target string) func() {
 	key := strings.TrimSpace(agentID) + "\x00" + strings.TrimSpace(target)
 	d.messageSendMu.Lock()
 	if d.messageSends == nil {

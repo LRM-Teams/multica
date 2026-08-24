@@ -85,7 +85,7 @@ type computerHeartbeatRequest struct {
 }
 
 // ComputerHeartbeat is a compatibility writer for older residents that still
-// publish HTTP liveness. Current DaemonCore liveness is the Workspace Runner
+// publish HTTP liveness. Current DaemonCore liveness is the WorkspaceDaemon
 // socket (connect = alive), matching Raft 1.0.16 /daemon/connect.
 //
 // TODO(computer-liveness): Remove after v0.4.24-alpha.55 is no

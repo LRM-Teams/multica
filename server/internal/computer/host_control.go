@@ -17,7 +17,7 @@ import (
 
 const bindingChildControlBusyCode = "control_busy"
 
-// BindingChildIdentity fences every child-to-Host request by the child-reported
+// BindingChildIdentity fences every child-to-ComputerCore request by the child-reported
 // daemonInstanceId and OS process identity the Computer supervises.
 type BindingChildIdentity struct {
 	WorkspaceID      string `json:"workspaceId"`
@@ -57,7 +57,7 @@ type HostControl struct {
 	grants map[BindingChildIdentity]map[string]ProcessCapacityGrant
 }
 
-// RegisterLocalControlHandlers adds the Host-owned operations to an IPC
+// RegisterLocalControlHandlers adds the ComputerCore-owned operations to an IPC
 // registry. The process runner uses this to compose the service registry.
 func (control *HostControl) RegisterLocalControlHandlers(registry *LocalControlRegistry) {
 	control.RegisterRPCHandlers(registry)
@@ -103,7 +103,7 @@ func (control *HostControl) RegisterRPCHandlers(registry *LocalControlRegistry) 
 			return nil, errors.New("capacity request belongs to another Workspace")
 		}
 		if control.capacity == nil {
-			return nil, errors.New("Host capacity admission is unavailable")
+			return nil, errors.New("ComputerCore capacity admission is unavailable")
 		}
 		response := capacityControlResponse{}
 		switch request.Operation {
@@ -143,7 +143,7 @@ func (control *HostControl) RegisterRPCHandlers(registry *LocalControlRegistry) 
 			return nil, errors.New("diagnostic identity is invalid")
 		}
 		if control.callbacks.Diagnostic == nil {
-			return nil, errors.New("Host diagnostic aggregation failed")
+			return nil, errors.New("ComputerCore diagnostic aggregation failed")
 		}
 		return nil, control.callbacks.Diagnostic(ctx, request.Identity, request.WorkspaceID, request.Event)
 	})
@@ -457,7 +457,7 @@ func (client *HostControlClient) postRaw(ctx context.Context, operation string, 
 
 func (client *HostControlClient) post(ctx context.Context, operation string, input, output any) error {
 	if client == nil || client.initErr != nil || client.control == nil || client.token == "" || client.identity.Validate() != nil {
-		return errors.New("Binding Host control client is not configured")
+		return errors.New("Binding ComputerCore control client is not configured")
 	}
 	var raw json.RawMessage
 	if err := client.control.Call(ctx, operation, map[string]string{
@@ -472,7 +472,7 @@ func (client *HostControlClient) post(ctx context.Context, operation string, inp
 		return nil
 	}
 	if err := json.Unmarshal(raw, output); err != nil {
-		return fmt.Errorf("decode Binding Host control %s: %w", operation, err)
+		return fmt.Errorf("decode Binding ComputerCore control %s: %w", operation, err)
 	}
 	return nil
 }

@@ -28,7 +28,7 @@ type runtimeLocalSkillBundle struct {
 	Files       []SkillFileData `json:"files,omitempty"`
 }
 
-func (d *Daemon) handleAgentSkillsList(req protocol.AgentSkillsListPayload, writes chan<- []byte) {
+func (d *WorkspaceDaemonCore) handleAgentSkillsList(req protocol.AgentSkillsListPayload, writes chan<- []byte) {
 	resp := protocol.AgentSkillsListResultPayload{AgentID: req.AgentID, RequestID: req.RequestID, Global: []protocol.AgentSkillSummary{}, Workspace: []protocol.AgentSkillSummary{}}
 	d.mu.Lock()
 	runtime, runtimeOK := d.runtimeIndex[req.Runtime]

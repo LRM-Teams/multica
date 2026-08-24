@@ -7,8 +7,8 @@ import (
 
 // residentProcessEventKind enumerates the three resident-process facts the
 // canonicalAgentRuntimePool observes about a slot's underlying provider
-// process. "spawned"/"ready" are still pushed by the Workspace Runner
-// orchestrator directly (workspace_runner_agent_process.go) and are
+// process. "spawned"/"ready" are still pushed by the WorkspaceDaemon
+// orchestrator directly (workspace_daemon_agent_process.go) and are
 // deliberately not part of this bus.
 type residentProcessEventKind string
 

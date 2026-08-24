@@ -16,7 +16,7 @@ func TestBindingDrainWaitsThenForcesOnlyManagedProcess(t *testing.T) {
 	gracefulCancelled := false
 	pool := newCanonicalAgentRuntimePool()
 	pool.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{backend: backend, running: true}
-	d := &Daemon{
+	d := &WorkspaceDaemonCore{
 		canonicalRuntimes: pool,
 		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 		bindingDrainNow:   func() time.Time { return now },
@@ -53,7 +53,7 @@ func TestBindingDrainNeverForcesUnownedBackend(t *testing.T) {
 	pool := newCanonicalAgentRuntimePool()
 	pool.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{backend: &canonicalRuntimeNonForceKillableTestBackend{}, running: true}
 	now := time.Unix(1_700_000_010, 0)
-	d := &Daemon{
+	d := &WorkspaceDaemonCore{
 		canonicalRuntimes: pool,
 		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 		bindingDrainNow:   func() time.Time { return now },
@@ -70,7 +70,7 @@ func TestBindingDrainNeverForcesUnownedBackend(t *testing.T) {
 
 func TestBindingDrainFailsClosedWhenClaimIsStillInFlight(t *testing.T) {
 	now := time.Unix(1_700_000_020, 0)
-	d := &Daemon{
+	d := &WorkspaceDaemonCore{
 		logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
 		bindingDrainNow: func() time.Time { return now },
 		bindingDrainWait: func(_ context.Context, delay time.Duration) error {

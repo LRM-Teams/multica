@@ -3,7 +3,7 @@ package daemon
 // This file is the leftover runtime wake / reminder socket.
 //
 // Computer liveness and computer:upgrade travel on DaemonConnection
-// (Workspace Runner, /api/daemon/connect?workspace_id=...). This file is
+// (WorkspaceDaemonCore, /api/workspace/daemon/connect). This file is
 // not that path. It keeps the older runtime-multiplexed socket
 // (/api/daemon/connect?runtime_ids=...) for reminder snapshot/fire and
 // leftover control-plane heartbeat until those move onto the Runner.
@@ -11,7 +11,7 @@ package daemon
 //
 // TODO(computer-liveness): Remove this leftover wake socket after
 // v0.4.24-alpha.55 is no longer a supported direct self-upgrade source
-// and reminder transport lives on the Workspace Runner.
+// and reminder transport lives on the WorkspaceDaemon.
 
 import (
 	"context"
@@ -40,7 +40,7 @@ type taskWakeup struct {
 	runtimeID string
 }
 
-func (d *Daemon) taskWakeupLoop(ctx context.Context, taskWakeups chan<- taskWakeup) {
+func (d *WorkspaceDaemonCore) taskWakeupLoop(ctx context.Context, taskWakeups chan<- taskWakeup) {
 	backoff := time.Second
 	runtimeSetCh, unsub := d.runtimeSet.Subscribe()
 	defer unsub()
@@ -109,7 +109,7 @@ func jitterDuration(d time.Duration) time.Duration {
 	return d + delta
 }
 
-func (d *Daemon) runTaskWakeupConnection(ctx context.Context, runtimeIDs []string, taskWakeups chan<- taskWakeup, runtimeSetCh <-chan struct{}) error {
+func (d *WorkspaceDaemonCore) runTaskWakeupConnection(ctx context.Context, runtimeIDs []string, taskWakeups chan<- taskWakeup, runtimeSetCh <-chan struct{}) error {
 	// Connection owns connecting/open only. Outer taskWakeupLoop owns backoff
 	// across retry sleep and final closed on loop exit.
 	d.setWSConnState("connecting")
@@ -216,7 +216,7 @@ func taskWakeupDialer() websocket.Dialer {
 	}
 }
 
-func (d *Daemon) setWSConnState(state string) {
+func (d *WorkspaceDaemonCore) setWSConnState(state string) {
 	if d == nil {
 		return
 	}
@@ -229,7 +229,7 @@ func (d *Daemon) setWSConnState(state string) {
 	}
 }
 
-func (d *Daemon) getWSConnState() string {
+func (d *WorkspaceDaemonCore) getWSConnState() string {
 	if d == nil {
 		return ""
 	}
@@ -238,7 +238,7 @@ func (d *Daemon) getWSConnState() string {
 	return d.wsConnState
 }
 
-func (d *Daemon) inboundWatchdogInterval() time.Duration {
+func (d *WorkspaceDaemonCore) inboundWatchdogInterval() time.Duration {
 	if d == nil {
 		return DefaultInboundWatchdog
 	}
@@ -254,7 +254,7 @@ func (d *Daemon) inboundWatchdogInterval() time.Duration {
 // terminate (force reconnect) after a second full interval still silent.
 // On terminate it closes conn and returns errInboundWatchdogTimeout so the
 // connection loop can surface the cause (not a bare network close error).
-func (d *Daemon) runInboundWatchdog(ctx context.Context, conn *websocket.Conn, state *inboundWatchdogState, writes chan<- []byte, timedOut *atomic.Bool) error {
+func (d *WorkspaceDaemonCore) runInboundWatchdog(ctx context.Context, conn *websocket.Conn, state *inboundWatchdogState, writes chan<- []byte, timedOut *atomic.Bool) error {
 	interval := d.cfg.InboundWatchdog
 	if interval < 0 {
 		interval = DefaultInboundWatchdog
@@ -315,7 +315,7 @@ func (d *Daemon) runInboundWatchdog(ctx context.Context, conn *websocket.Conn, s
 	}
 }
 
-func (d *Daemon) reconcileReminderRuntimeSet(runtimeIDs []string) error {
+func (d *WorkspaceDaemonCore) reconcileReminderRuntimeSet(runtimeIDs []string) error {
 	allowed := make(map[string]bool, len(runtimeIDs))
 	for _, runtimeID := range runtimeIDs {
 		if runtimeID != "" {
@@ -330,7 +330,7 @@ func (d *Daemon) reconcileReminderRuntimeSet(runtimeIDs []string) error {
 	return err
 }
 
-func (d *Daemon) runWSWriter(conn *websocket.Conn, writes <-chan []byte, done chan<- struct{}) {
+func (d *WorkspaceDaemonCore) runWSWriter(conn *websocket.Conn, writes <-chan []byte, done chan<- struct{}) {
 	defer close(done)
 	for frame := range writes {
 		conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
@@ -360,7 +360,7 @@ func marshalRaw(v any) json.RawMessage {
 // "websocket: read limit exceeded", leaving server-side claimed runs as zombies.
 const taskWakeupReadLimit = 10 << 20
 
-func (d *Daemon) readTaskWakeupMessages(conn *websocket.Conn, taskWakeups chan<- taskWakeup, writes chan<- []byte, watchdog *inboundWatchdogState) error {
+func (d *WorkspaceDaemonCore) readTaskWakeupMessages(conn *websocket.Conn, taskWakeups chan<- taskWakeup, writes chan<- []byte, watchdog *inboundWatchdogState) error {
 	conn.SetReadLimit(taskWakeupReadLimit)
 	for {
 		_, raw, err := conn.ReadMessage()
@@ -491,7 +491,7 @@ func (d *Daemon) readTaskWakeupMessages(conn *websocket.Conn, taskWakeups chan<-
 	}
 }
 
-func (d *Daemon) setReminderWS(writes chan<- []byte, done <-chan struct{}, closeFn func() error) {
+func (d *WorkspaceDaemonCore) setReminderWS(writes chan<- []byte, done <-chan struct{}, closeFn func() error) {
 	d.reminderWSMu.Lock()
 	d.reminderWrites = writes
 	d.reminderWSDone = done
@@ -505,7 +505,7 @@ func (d *Daemon) setReminderWS(writes chan<- []byte, done <-chan struct{}, close
 	}
 }
 
-func (d *Daemon) clearReminderWS(writes chan<- []byte) {
+func (d *WorkspaceDaemonCore) clearReminderWS(writes chan<- []byte) {
 	d.reminderWSMu.Lock()
 	if d.reminderWrites == writes {
 		d.reminderWrites = nil
@@ -518,7 +518,7 @@ func (d *Daemon) clearReminderWS(writes chan<- []byte) {
 	d.reminderGateMu.Unlock()
 }
 
-func (d *Daemon) queueTaskWakeupFrame(writes chan<- []byte, eventType string, payload any) error {
+func (d *WorkspaceDaemonCore) queueTaskWakeupFrame(writes chan<- []byte, eventType string, payload any) error {
 	frame, err := json.Marshal(protocol.Message{Type: eventType, Payload: marshalRaw(payload)})
 	if err != nil {
 		return fmt.Errorf("marshal %s frame: %w", eventType, err)
@@ -542,7 +542,7 @@ func (d *Daemon) queueTaskWakeupFrame(writes chan<- []byte, eventType string, pa
 	}
 }
 
-func (d *Daemon) queueReminderFrame(eventType string, payload any) bool {
+func (d *WorkspaceDaemonCore) queueReminderFrame(eventType string, payload any) bool {
 	if err := d.queueTaskWakeupFrame(nil, eventType, payload); err != nil {
 		d.logger.Warn("reminder websocket frame not queued", "type", eventType, "error", err)
 		return false
@@ -550,7 +550,7 @@ func (d *Daemon) queueReminderFrame(eventType string, payload any) bool {
 	return true
 }
 
-func (d *Daemon) startReminderSnapshotSync(runtimeIDs []string) bool {
+func (d *WorkspaceDaemonCore) startReminderSnapshotSync(runtimeIDs []string) bool {
 	if d == nil || d.reminderCache == nil {
 		return true
 	}
@@ -580,7 +580,7 @@ func (d *Daemon) startReminderSnapshotSync(runtimeIDs []string) bool {
 	return true
 }
 
-func (d *Daemon) ownsReminderRuntime(runtimeID string) bool {
+func (d *WorkspaceDaemonCore) ownsReminderRuntime(runtimeID string) bool {
 	if d == nil || runtimeID == "" {
 		return false
 	}
@@ -590,7 +590,7 @@ func (d *Daemon) ownsReminderRuntime(runtimeID string) bool {
 	return ok
 }
 
-func (d *Daemon) handleReminderSnapshot(payload protocol.ReminderSnapshotPayload) error {
+func (d *WorkspaceDaemonCore) handleReminderSnapshot(payload protocol.ReminderSnapshotPayload) error {
 	if d == nil || d.reminderCache == nil || !d.ownsReminderRuntime(payload.RuntimeID) {
 		return nil
 	}
@@ -607,7 +607,7 @@ func (d *Daemon) handleReminderSnapshot(payload protocol.ReminderSnapshotPayload
 	return nil
 }
 
-func (d *Daemon) handleReminderUpsert(payload protocol.ReminderUpsertPayload) error {
+func (d *WorkspaceDaemonCore) handleReminderUpsert(payload protocol.ReminderUpsertPayload) error {
 	if d == nil || d.reminderCache == nil || !d.ownsReminderRuntime(payload.RuntimeID) {
 		return nil
 	}
@@ -618,7 +618,7 @@ func (d *Daemon) handleReminderUpsert(payload protocol.ReminderUpsertPayload) er
 	return err
 }
 
-func (d *Daemon) handleReminderCancel(payload protocol.ReminderCancelPayload) error {
+func (d *WorkspaceDaemonCore) handleReminderCancel(payload protocol.ReminderCancelPayload) error {
 	if d == nil || d.reminderCache == nil || !d.ownsReminderRuntime(payload.RuntimeID) {
 		return nil
 	}
@@ -626,7 +626,7 @@ func (d *Daemon) handleReminderCancel(payload protocol.ReminderCancelPayload) er
 	return err
 }
 
-func (d *Daemon) handleReminderFireRequestResult(payload protocol.ReminderFireRequestResultPayload) error {
+func (d *WorkspaceDaemonCore) handleReminderFireRequestResult(payload protocol.ReminderFireRequestResultPayload) error {
 	if d == nil || d.reminderCache == nil || payload.AgentID == "" || payload.ReminderID == "" || payload.Version < 1 || payload.RequestID == "" {
 		return nil
 	}
@@ -647,7 +647,7 @@ func (d *Daemon) handleReminderFireRequestResult(payload protocol.ReminderFireRe
 	return nil
 }
 
-func (d *Daemon) queueReminderFireReceipt(receipt reminderDueReceipt) bool {
+func (d *WorkspaceDaemonCore) queueReminderFireReceipt(receipt reminderDueReceipt) bool {
 	if _, ok := d.reminderCache.runtimeFor(receipt.Job); !ok {
 		return false
 	}
@@ -682,7 +682,7 @@ func taskWakeupURL(baseURL string, runtimeIDs []string) (string, error) {
 		return "", fmt.Errorf("daemon server URL must use http, https, ws, or wss")
 	}
 
-	u.Path = strings.TrimRight(u.Path, "/") + "/api/daemon/connect"
+	u.Path = strings.TrimRight(u.Path, "/") + protocol.DaemonConnectPath
 	u.RawPath = ""
 	q := u.Query()
 	ids := append([]string(nil), runtimeIDs...)

@@ -12,7 +12,7 @@ import (
 
 var errManagedAgentStartStopped = errors.New("managed start suppressed by stop request")
 
-func (runner *WorkspaceRunner) acceptManagedAgentStart(start protocol.WorkspaceRunnerAgentStartPayload, failConnection func(error)) (protocol.AgentStartAckPayload, bool, func(), <-chan struct{}, <-chan bool, error) {
+func (runner *workspaceSession) acceptManagedAgentStart(start protocol.WorkspaceDaemonAgentStartPayload, failConnection func(error)) (protocol.AgentStartAckPayload, bool, func(), <-chan struct{}, <-chan bool, error) {
 	ack, replayed, err := runner.registerManagedAgentStartOnce(start)
 	if err != nil {
 		return ack, false, nil, nil, nil, err
@@ -45,7 +45,7 @@ func (runner *WorkspaceRunner) acceptManagedAgentStart(start protocol.WorkspaceR
 // wire acknowledgement is attempted. This is Raft 1.0.16's startAgentNow
 // boundary: a broken socket may lose the ACK, but it cannot leave a launch with
 // no goroutine capable of settling startupDone.
-func (runner *WorkspaceRunner) startAgentNow(startCtx context.Context, start protocol.WorkspaceRunnerAgentStartPayload, ack protocol.AgentStartAckPayload, publicationReady <-chan struct{}, startupSettled chan<- struct{}, publicationSettled chan<- bool, failConnection func(error)) {
+func (runner *workspaceSession) startAgentNow(startCtx context.Context, start protocol.WorkspaceDaemonAgentStartPayload, ack protocol.AgentStartAckPayload, publicationReady <-chan struct{}, startupSettled chan<- struct{}, publicationSettled chan<- bool, failConnection func(error)) {
 	callback := agentProcessCallback{AgentID: start.AgentID, LaunchID: start.LaunchID}
 	failed := false
 	published := false
@@ -76,7 +76,7 @@ func (runner *WorkspaceRunner) startAgentNow(startCtx context.Context, start pro
 	if err != nil {
 		failed = true
 		if runner.logger != nil && !errors.Is(err, errManagedAgentStartStopped) {
-			runner.logger.Warn("Workspace Runner provider start failed", runner.managedStartLogAttrs(start, ack.QueueState, "provider_start_failed", "failed", err)...)
+			runner.logger.Warn("WorkspaceDaemon provider start failed", runner.managedStartLogAttrs(start, ack.QueueState, "provider_start_failed", "failed", err)...)
 		}
 		runner.publishManagedAgentStartFailure(start, outcome)
 		return
@@ -117,7 +117,7 @@ func (runner *WorkspaceRunner) startAgentNow(startCtx context.Context, start pro
 	published = true
 }
 
-func (runner *WorkspaceRunner) replayManagedAgentStartPublication(start protocol.WorkspaceRunnerAgentStartPayload, failConnection func(error)) bool {
+func (runner *workspaceSession) replayManagedAgentStartPublication(start protocol.WorkspaceDaemonAgentStartPayload, failConnection func(error)) bool {
 	current, ok := runner.processes.Snapshot(start.AgentID)
 	if !ok || current.LaunchID != start.LaunchID || current.QueueState != protocol.AgentStartQueueRunning {
 		return false
@@ -157,20 +157,20 @@ type managedAgentStartOutcome struct {
 
 // registerManagedAgentStart runs on the socket reader before a later stop or
 // replacement command can overtake this launch. Provider startup stays async.
-func (runner *WorkspaceRunner) registerManagedAgentStart(payload protocol.WorkspaceRunnerAgentStartPayload) (protocol.AgentStartAckPayload, error) {
+func (runner *workspaceSession) registerManagedAgentStart(payload protocol.WorkspaceDaemonAgentStartPayload) (protocol.AgentStartAckPayload, error) {
 	ack, _, err := runner.registerManagedAgentStartOnce(payload)
 	return ack, err
 }
 
-func (runner *WorkspaceRunner) registerManagedAgentStartOnce(payload protocol.WorkspaceRunnerAgentStartPayload) (protocol.AgentStartAckPayload, bool, error) {
+func (runner *workspaceSession) registerManagedAgentStartOnce(payload protocol.WorkspaceDaemonAgentStartPayload) (protocol.AgentStartAckPayload, bool, error) {
 	if runner == nil || runner.processes == nil || runner.activity == nil {
-		return protocol.AgentStartAckPayload{}, false, errors.New("Workspace Runner launch dependencies are unavailable")
+		return protocol.AgentStartAckPayload{}, false, errors.New("WorkspaceDaemon launch dependencies are unavailable")
 	}
 	if err := payload.Validate(); err != nil {
 		return protocol.AgentStartAckPayload{}, false, fmt.Errorf("validate managed start: %w", err)
 	}
 	if !runner.hasRuntime(payload.RuntimeID) {
-		return protocol.AgentStartAckPayload{}, false, errors.New("managed start Runtime is outside Workspace Runner scope")
+		return protocol.AgentStartAckPayload{}, false, errors.New("managed start Runtime is outside WorkspaceDaemon scope")
 	}
 	result, err := runner.processes.startWithDisposition(agentProcessStartRequest{AgentID: payload.AgentID, RuntimeID: payload.RuntimeID, LaunchID: payload.LaunchID, StartDispatchID: payload.StartDispatchID, RuntimeEpoch: runner.currentRuntimeEpoch(), ReadinessPolicy: agentRuntimeReadinessFirstEvent})
 	if err != nil {
@@ -199,7 +199,7 @@ func (runner *WorkspaceRunner) registerManagedAgentStartOnce(payload protocol.Wo
 	return ack, false, nil
 }
 
-func (runner *WorkspaceRunner) completeManagedAgentStart(ctx context.Context, payload protocol.WorkspaceRunnerAgentStartPayload, ack protocol.AgentStartAckPayload) (managedAgentStartOutcome, error) {
+func (runner *workspaceSession) completeManagedAgentStart(ctx context.Context, payload protocol.WorkspaceDaemonAgentStartPayload, ack protocol.AgentStartAckPayload) (managedAgentStartOutcome, error) {
 	callback := agentProcessCallback{AgentID: payload.AgentID, LaunchID: payload.LaunchID}
 	startStopEpoch, err := runner.processes.startStopEpoch(callback)
 	if err != nil {
@@ -266,14 +266,14 @@ func (runner *WorkspaceRunner) completeManagedAgentStart(ctx context.Context, pa
 	return managedAgentStartOutcome{status: status, session: session, startStopEpoch: startStopEpoch}, nil
 }
 
-func (runner *WorkspaceRunner) cleanupStoppedManagedAgentStart(payload protocol.WorkspaceRunnerAgentStartPayload) error {
+func (runner *workspaceSession) cleanupStoppedManagedAgentStart(payload protocol.WorkspaceDaemonAgentStartPayload) error {
 	if err := runner.runtimes.beginResidentTermination(payload.AgentID, payload.RuntimeID); err != nil {
 		return fmt.Errorf("clean up managed Agent start after Stop: %w", err)
 	}
 	return errManagedAgentStartStopped
 }
 
-func (runner *WorkspaceRunner) establishManagedAgentStart(payload protocol.WorkspaceRunnerAgentStartPayload, outcome managedAgentStartOutcome) error {
+func (runner *workspaceSession) establishManagedAgentStart(payload protocol.WorkspaceDaemonAgentStartPayload, outcome managedAgentStartOutcome) error {
 	if err := runner.activity.SetManaged(outcome.status, outcome.session); err != nil {
 		return fmt.Errorf("record managed start: %w", err)
 	}
@@ -283,21 +283,21 @@ func (runner *WorkspaceRunner) establishManagedAgentStart(payload protocol.Works
 	return nil
 }
 
-func (runner *WorkspaceRunner) flushManagedAgentStartMessages(ctx context.Context, payload protocol.WorkspaceRunnerAgentStartPayload, ack protocol.AgentStartAckPayload) {
+func (runner *workspaceSession) flushManagedAgentStartMessages(ctx context.Context, payload protocol.WorkspaceDaemonAgentStartPayload, ack protocol.AgentStartAckPayload) {
 	if coordinator, runtimeID, ok := runner.messageCoordinator(payload.AgentID); ok && runtimeID == payload.RuntimeID {
 		if _, err := coordinator.flushWithResult(ctx, true); err != nil {
 			if runner.logger != nil {
 				if errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
-					runner.logger.Debug("Workspace Runner buffered Message flush deferred", runner.managedStartLogAttrs(payload, ack.QueueState, "runtime_busy", "deferred", err)...)
+					runner.logger.Debug("WorkspaceDaemon buffered Message flush deferred", runner.managedStartLogAttrs(payload, ack.QueueState, "runtime_busy", "deferred", err)...)
 				} else {
-					runner.logger.Warn("Workspace Runner buffered Message flush failed", runner.managedStartLogAttrs(payload, ack.QueueState, "message_flush_failed", "failed", err)...)
+					runner.logger.Warn("WorkspaceDaemon buffered Message flush failed", runner.managedStartLogAttrs(payload, ack.QueueState, "message_flush_failed", "failed", err)...)
 				}
 			}
 		}
 	}
 }
 
-func (runner *WorkspaceRunner) prepareManagedAgentStartFailure(payload protocol.WorkspaceRunnerAgentStartPayload, stage managedRuntimeFailureStage, reason string) managedAgentStartOutcome {
+func (runner *workspaceSession) prepareManagedAgentStartFailure(payload protocol.WorkspaceDaemonAgentStartPayload, stage managedRuntimeFailureStage, reason string) managedAgentStartOutcome {
 	at := runner.activity.now().UTC()
 	startStopEpoch, _ := runner.processes.startStopEpoch(agentProcessCallback{AgentID: payload.AgentID, LaunchID: payload.LaunchID})
 	if runner.residency != nil {
@@ -309,14 +309,14 @@ func (runner *WorkspaceRunner) prepareManagedAgentStartFailure(payload protocol.
 	}
 }
 
-func (runner *WorkspaceRunner) publishManagedAgentStartFailure(payload protocol.WorkspaceRunnerAgentStartPayload, outcome managedAgentStartOutcome) {
+func (runner *workspaceSession) publishManagedAgentStartFailure(payload protocol.WorkspaceDaemonAgentStartPayload, outcome managedAgentStartOutcome) {
 	if outcome.status.AgentID == "" || !runner.processes.ownsManagedProcess(agentProcessCallback{AgentID: payload.AgentID, LaunchID: payload.LaunchID}) {
 		return
 	}
 	runner.publishManagedRuntimeFailure(outcome.status, payload.RuntimeID, outcome.failureStage, outcome.failureReason, "", outcome.failureAt)
 }
 
-func (runner *WorkspaceRunner) managedStartLogAttrs(payload protocol.WorkspaceRunnerAgentStartPayload, queueState, reason, outcome string, err error) []any {
+func (runner *workspaceSession) managedStartLogAttrs(payload protocol.WorkspaceDaemonAgentStartPayload, queueState, reason, outcome string, err error) []any {
 	args := []any{
 		"computer_id", runner.config.DaemonID,
 		"workspace_id", runner.config.WorkspaceID,
@@ -337,9 +337,9 @@ func (runner *WorkspaceRunner) managedStartLogAttrs(payload protocol.WorkspaceRu
 // admitManagedProviderProcess is Raft's this.agents.set after spawn: the
 // launch is Running only once the provider process exists. Starting Activity
 // is a separate frame and does not mean the process is missing.
-func (runner *WorkspaceRunner) admitManagedProviderProcess(payload protocol.WorkspaceRunnerAgentStartPayload) error {
+func (runner *workspaceSession) admitManagedProviderProcess(payload protocol.WorkspaceDaemonAgentStartPayload) error {
 	if runner == nil || runner.processes == nil {
-		return errors.New("Workspace Runner process manager is unavailable")
+		return errors.New("WorkspaceDaemon process manager is unavailable")
 	}
 	current, ok := runner.processes.Snapshot(payload.AgentID)
 	if !ok || current.LaunchID != payload.LaunchID {

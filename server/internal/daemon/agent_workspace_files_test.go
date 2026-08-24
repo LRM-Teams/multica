@@ -79,7 +79,7 @@ func decodeReadFile(t *testing.T, frame []byte) protocol.ReadWorkdirFileResponse
 	return resp
 }
 
-func listAgentDir(t *testing.T, d *Daemon, relPath, dirPath string, includeHidden bool) protocol.ListWorkdirFilesResponsePayload {
+func listAgentDir(t *testing.T, d *WorkspaceDaemonCore, relPath, dirPath string, includeHidden bool) protocol.ListWorkdirFilesResponsePayload {
 	t.Helper()
 	writes := make(chan []byte, 1)
 	d.handleListFilesRequest(protocol.ListWorkdirFilesRequestPayload{
@@ -98,7 +98,7 @@ func listAgentDir(t *testing.T, d *Daemon, relPath, dirPath string, includeHidde
 	return protocol.ListWorkdirFilesResponsePayload{}
 }
 
-func readAgentFile(t *testing.T, d *Daemon, relPath, filePath string) protocol.ReadWorkdirFileResponsePayload {
+func readAgentFile(t *testing.T, d *WorkspaceDaemonCore, relPath, filePath string) protocol.ReadWorkdirFileResponsePayload {
 	t.Helper()
 	writes := make(chan []byte, 1)
 	d.handleReadFileRequest(protocol.ReadWorkdirFileRequestPayload{
@@ -125,7 +125,7 @@ func nodePaths(nodes []protocol.WorkdirFileNode) map[string]protocol.WorkdirFile
 
 func TestHandleListFilesRequest_OneLevelRaftVisibility(t *testing.T) {
 	workspacesRoot, relPath := agentFilesFixture(t)
-	d := &Daemon{
+	d := &WorkspaceDaemonCore{
 		cfg:    Config{WorkspacesRoot: workspacesRoot},
 		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
@@ -214,7 +214,7 @@ func containsSlash(s string) bool {
 
 func TestHandleReadFileRequest_RefusesNeverVisibleAndSecrets(t *testing.T) {
 	workspacesRoot, relPath := agentFilesFixture(t)
-	d := &Daemon{
+	d := &WorkspaceDaemonCore{
 		cfg:    Config{WorkspacesRoot: workspacesRoot},
 		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}

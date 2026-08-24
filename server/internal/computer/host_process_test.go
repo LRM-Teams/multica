@@ -17,7 +17,7 @@ import (
 
 func TestProcessShutdownHandlerLogsAuditMetadata(t *testing.T) {
 	var logs bytes.Buffer
-	host := &Host{logger: slog.New(slog.NewTextHandler(&logs, nil))}
+	host := &ComputerCore{logger: slog.New(slog.NewTextHandler(&logs, nil))}
 	canceled := make(chan struct{})
 	state := &hostProcessState{cancel: func() { close(canceled) }}
 	handler := host.processShutdownHandler(state)
@@ -51,7 +51,7 @@ func TestProcessShutdownHandlerLogsAuditMetadata(t *testing.T) {
 }
 
 func TestProcessRoutesPreserveControlMethodErrors(t *testing.T) {
-	host := &Host{}
+	host := &ComputerCore{}
 	state := &hostProcessState{}
 	mux := http.NewServeMux()
 	host.registerProcessRoutes(mux, state)
@@ -80,7 +80,7 @@ func TestProcessRoutesPreserveControlMethodErrors(t *testing.T) {
 
 func TestHostProcessOwnsResidentControlAndDesiredBindings(t *testing.T) {
 	child := &readySupervisorChild{supervisorTestChild: newSupervisorTestChild(7101)}
-	host, err := NewHost(HostConfig{
+	host, err := NewComputerCore(ComputerCoreConfig{
 		Spawn: func(workspaceID string) (BindingChild, error) {
 			if workspaceID != "workspace-a" {
 				t.Fatalf("spawn workspace = %q", workspaceID)
@@ -118,7 +118,7 @@ func TestHostProcessOwnsResidentControlAndDesiredBindings(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	if record, pid, ok := host.Snapshot("workspace-a"); !ok || record.Lifecycle != RunnerLifecycleRunning || pid != 7101 {
-		t.Fatalf("Binding child was not supervised by Computer Host: record=%+v pid=%d ok=%v", record, pid, ok)
+		t.Fatalf("WorkspaceDaemonCore was not supervised by ComputerCore: record=%+v pid=%d ok=%v", record, pid, ok)
 	}
 	waitForHostHealth(t, endpoint)
 	cancel()
@@ -128,7 +128,7 @@ func TestHostProcessOwnsResidentControlAndDesiredBindings(t *testing.T) {
 			t.Fatalf("RunProcess: %v", err)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("Computer Host process did not stop")
+		t.Fatal("ComputerCore process did not stop")
 	}
 }
 
@@ -145,7 +145,7 @@ func TestHostProcessOwnsMachineUpgradeAndReregistersBindingChild(t *testing.T) {
 	defer upstream.Close()
 
 	child := &readySupervisorChild{supervisorTestChild: newSupervisorTestChild(7201), controlEndpoint: childControl}
-	host, err := NewHost(HostConfig{
+	host, err := NewComputerCore(ComputerCoreConfig{
 		Spawn: func(workspaceID string) (BindingChild, error) {
 			child.workspaceID, child.daemonInstanceID = workspaceID, "child-7201"
 			return child, nil
@@ -197,7 +197,7 @@ func TestHostProcessOwnsMachineUpgradeAndReregistersBindingChild(t *testing.T) {
 	}
 }
 
-func waitForHostCurrent(t *testing.T, host *Host, identity BindingChildIdentity) {
+func waitForHostCurrent(t *testing.T, host *ComputerCore, identity BindingChildIdentity) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
@@ -221,5 +221,5 @@ func waitForHostHealth(t *testing.T, endpoint string) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("Computer Host never reported running at %s", endpoint)
+	t.Fatalf("ComputerCore never reported running at %s", endpoint)
 }

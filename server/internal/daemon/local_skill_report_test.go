@@ -25,7 +25,7 @@ func withFastLocalSkillReportBackoffs(t *testing.T) {
 // that records every inbound request and lets the test script status codes
 // to return. That lets us exercise the retry path end-to-end against the
 // real daemon.Client code, not a mock.
-func localSkillReportDaemon(t *testing.T, handler http.HandlerFunc) (*Daemon, *int32) {
+func localSkillReportDaemon(t *testing.T, handler http.HandlerFunc) (*WorkspaceDaemonCore, *int32) {
 	t.Helper()
 	var calls int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -33,7 +33,7 @@ func localSkillReportDaemon(t *testing.T, handler http.HandlerFunc) (*Daemon, *i
 		handler(w, r)
 	}))
 	t.Cleanup(srv.Close)
-	return &Daemon{
+	return &WorkspaceDaemonCore{
 		client: NewClient(srv.URL),
 		logger: slog.Default(),
 	}, &calls

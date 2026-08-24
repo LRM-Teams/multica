@@ -430,7 +430,7 @@ func wsFreshRuntimeIDs(ctx context.Context, pool *pgxpool.Pool, presence service
 		if err := rows.Scan(&runtimeID, &daemonID, &workspaceID); err != nil {
 			return nil, err
 		}
-		if daemonID != "" && workspaceID != "" && presence.HasWorkspaceRunner(daemonID, workspaceID) {
+		if daemonID != "" && workspaceID != "" && presence.HasWorkspaceDaemon(daemonID, workspaceID) {
 			fresh[runtimeID] = true
 		}
 	}

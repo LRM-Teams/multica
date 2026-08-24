@@ -667,7 +667,7 @@ func reminderReceiptComplete(receipt reminderDueReceipt) bool {
 // materializeReminderFire projects one authorized Reminder due fact into the
 // generic per-Agent App Inbox. It never injects Reminder content into a
 // provider runtime or advances Message coverage.
-func (d *Daemon) materializeReminderFire(job protocol.ReminderTimerJob) bool {
+func (d *WorkspaceDaemonCore) materializeReminderFire(job protocol.ReminderTimerJob) bool {
 	if d == nil || d.agentAppInboxes == nil || strings.TrimSpace(job.Title) == "" {
 		return false
 	}

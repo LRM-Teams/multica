@@ -183,7 +183,7 @@ func (l *Lifecycle) requestLiveUpgrade(
 		return UpgradeResult{}, fmt.Errorf("Computer upgrade lifecycle intent has request id %q, want %q", operationRequestID, requestID)
 	}
 	// The cloud POST already sent computer:upgrade on the current Binding
-	// socket. Do not re-deliver through Host /machine-upgrades.
+	// socket. Do not re-deliver through ComputerCore /machine-upgrades.
 	return UpgradeResult{
 		Route:           UpgradeRouteLive,
 		RequestedTarget: targetVersion,

@@ -39,24 +39,17 @@ func (p *CredentialProxy) CommitCoverage(agentProxyToken, receiptID string) erro
 		p.daemon.recordCoverageCommitDiagnostic(credential, err)
 		return err
 	}
-	runner := p.daemon.currentWorkspaceRunner(credential.Inbox.WorkspaceID)
+	runner := p.daemon.currentWorkspaceSession(credential.Inbox.WorkspaceID)
 	if runner == nil {
 		err = ErrCoverageReceiptInvalid
 		p.daemon.recordCoverageCommitDiagnostic(credential, err)
 		return err
 	}
 	err = runner.commitMessageCoverage(credential.Inbox, receiptID)
-	if errors.Is(err, ErrCoverageReceiptInvalid) {
-		for _, candidateRunner := range p.daemon.currentWorkspaceRunners() {
-			if candidateRunner == runner {
-				continue
-			}
-			if candidateRunner.ownsMessageCoverageReceipt(receiptID) {
-				err = ErrCoverageReceiptScope
-				p.daemon.recordCoverageCommitDiagnostic(credential, err)
-				return err
-			}
-		}
+	if errors.Is(err, ErrCoverageReceiptInvalid) && runner.receiptOwnedByAnotherMessageInbox(credential.Inbox, receiptID) {
+		err = ErrCoverageReceiptScope
+		p.daemon.recordCoverageCommitDiagnostic(credential, err)
+		return err
 	}
 	p.daemon.recordCoverageCommitDiagnostic(credential, err)
 	return err
@@ -71,7 +64,7 @@ func (c *MessageCoordinator) hasInboxKey(key InboxKey) bool {
 	return !c.closed && c.key == key
 }
 
-func (d *Daemon) recordCoverageCommitDiagnostic(credential authenticatedAgentProxy, err error) {
+func (d *WorkspaceDaemonCore) recordCoverageCommitDiagnostic(credential authenticatedAgentProxy, err error) {
 	outcome := "accepted"
 	reasonCode := ""
 	switch {
@@ -100,7 +93,7 @@ func (d *Daemon) recordCoverageCommitDiagnostic(credential authenticatedAgentPro
 	})
 }
 
-func (d *Daemon) credentialProxyMessageCoverageCommitHandler() http.HandlerFunc {
+func (d *WorkspaceDaemonCore) credentialProxyMessageCoverageCommitHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var request credentialProxyCoverageCommitRequest
 		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10))

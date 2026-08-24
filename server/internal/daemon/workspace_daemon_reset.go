@@ -8,13 +8,13 @@ import (
 // resetManagedAgentWorkspace owns the local destructive half of Raft's
 // agent:reset-workspace command. It deliberately refuses to mutate the Agent
 // root until the exact managed launch and provider process are both gone.
-func (runner *WorkspaceRunner) resetManagedAgentWorkspace(payload protocol.WorkspaceRunnerAgentResetWorkspacePayload) protocol.WorkspaceRunnerAgentResetWorkspaceResultPayload {
-	result := protocol.WorkspaceRunnerAgentResetWorkspaceResultPayload{
+func (runner *workspaceSession) resetManagedAgentWorkspace(payload protocol.WorkspaceDaemonAgentResetWorkspacePayload) protocol.WorkspaceDaemonAgentResetWorkspaceResultPayload {
+	result := protocol.WorkspaceDaemonAgentResetWorkspaceResultPayload{
 		OperationID: payload.OperationID,
 		AgentID:     payload.AgentID,
 		Status:      protocol.AgentResetWorkspaceFailed,
 	}
-	fail := func(reason string) protocol.WorkspaceRunnerAgentResetWorkspaceResultPayload {
+	fail := func(reason string) protocol.WorkspaceDaemonAgentResetWorkspaceResultPayload {
 		result.ReasonCode = reason
 		return result
 	}

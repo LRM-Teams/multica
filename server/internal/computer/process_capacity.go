@@ -2,7 +2,7 @@ package computer
 
 import "sync"
 
-// ProcessCapacityGrant is the opaque Host-owned lease for one managed launch.
+// ProcessCapacityGrant is the opaque ComputerCore-owned lease for one managed launch.
 type ProcessCapacityGrant struct {
 	ID        string `json:"id"`
 	LaunchID  string `json:"launch_id"`
@@ -20,8 +20,8 @@ type ProcessCapacityRequest struct {
 	Waiter      func(ProcessCapacityGrant)
 }
 
-// ProcessCapacity is the Computer Host's machine-wide admission ledger. It
-// deliberately knows nothing about WorkspaceRunner or provider implementations.
+// ProcessCapacity is the ComputerCore's machine-wide admission ledger. It
+// deliberately knows nothing about WorkspaceDaemon or provider implementations.
 type ProcessCapacity struct {
 	mu      sync.Mutex
 	max     int

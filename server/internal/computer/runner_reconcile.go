@@ -37,9 +37,9 @@ const (
 // RunnerRecord is one Binding's desired-vs-actual slot on the Computer host.
 // BindingRunner is the OS-child adapter; CanSpawn / ObserveExit stay shared.
 //
-// The Host does not mint a spawn ticket. The Binding child generates
+// The ComputerCore does not mint a spawn ticket. The Binding child generates
 // daemonInstanceId itself and reports it on Ready; ObserveReady records
-// that value against the process handle this Host spawned. Stale Ready/exit
+// that value against the process handle this ComputerCore spawned. Stale Ready/exit
 // is fenced by that recorded identity plus the child handle/PID.
 type RunnerRecord struct {
 	Lifecycle    RunnerLifecycle

@@ -20,7 +20,7 @@ func TestConfiguredWorkspaceBindingsUseOnlyCurrentEnvironment(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	d := &Daemon{cfg: Config{Environment: "test", BindingsRoot: root, DaemonID: "computer-1"}}
+	d := &WorkspaceDaemonCore{cfg: Config{Environment: "test", BindingsRoot: root, DaemonID: "computer-1"}}
 	got, err := d.configuredWorkspaceBindings()
 	if err != nil {
 		t.Fatal(err)

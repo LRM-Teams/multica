@@ -24,7 +24,7 @@ type bindingControlTestCurrentSet struct {
 }
 
 type bindingControlTestHost struct {
-	host  *computer.Host
+	host  *computer.ComputerCore
 	state *bindingControlTestCurrentSet
 }
 
@@ -108,7 +108,7 @@ func TestBindingChildrenShareHostProcessCapacity(t *testing.T) {
 		WorkspaceID: "workspace-a", AgentID: "agent-a", RuntimeID: "runtime-a", LaunchID: "launch-a",
 	})
 	if !admitted {
-		t.Fatal("first Binding child did not receive Host capacity")
+		t.Fatal("first Binding child did not receive ComputerCore capacity")
 	}
 	secondGranted := make(chan agentProcessCapacityGrant, 1)
 	secondGrant, admitted := second.Acquire(agentProcessCapacityRequest{
@@ -123,10 +123,10 @@ func TestBindingChildrenShareHostProcessCapacity(t *testing.T) {
 	select {
 	case grant := <-secondGranted:
 		if grant != secondGrant || !second.Active(grant) {
-			t.Fatalf("promoted Host grant = %+v active=%v, want %+v active", grant, second.Active(grant), secondGrant)
+			t.Fatalf("promoted ComputerCore grant = %+v active=%v, want %+v active", grant, second.Active(grant), secondGrant)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("Host capacity release did not promote the queued sibling Binding")
+		t.Fatal("ComputerCore capacity release did not promote the queued sibling Binding")
 	}
 	second.Release(secondGrant)
 }
@@ -163,7 +163,7 @@ func TestProviderRuntimeCreationUsesHostProcessCapacity(t *testing.T) {
 	}()
 	select {
 	case grant := <-secondResult:
-		t.Fatalf("sibling provider bypassed Host capacity with grant %+v", grant)
+		t.Fatalf("sibling provider bypassed ComputerCore capacity with grant %+v", grant)
 	case err := <-secondErr:
 		t.Fatalf("sibling provider capacity failed instead of queueing: %v", err)
 	case <-time.After(100 * time.Millisecond):
@@ -175,7 +175,7 @@ func TestProviderRuntimeCreationUsesHostProcessCapacity(t *testing.T) {
 	case err := <-secondErr:
 		t.Fatalf("queued sibling provider capacity: %v", err)
 	case <-time.After(2 * time.Second):
-		t.Fatal("Host did not promote queued sibling provider")
+		t.Fatal("ComputerCore did not promote queued sibling provider")
 	}
 }
 
@@ -195,14 +195,14 @@ func TestBindingChildCrashReleasesItsHostCapacity(t *testing.T) {
 	}
 	granted := make(chan agentProcessCapacityGrant, 1)
 	if _, admitted := second.Acquire(agentProcessCapacityRequest{WorkspaceID: "workspace-b", AgentID: "agent-b", RuntimeID: "runtime-b", LaunchID: "launch-b", Waiter: func(grant agentProcessCapacityGrant) { granted <- grant }}); admitted {
-		t.Fatal("sibling Binding bypassed Host capacity")
+		t.Fatal("sibling Binding bypassed ComputerCore capacity")
 	}
 
 	host.host.Release(liveBindingIdentity(t, host, "workspace-a", 101))
 	select {
 	case <-granted:
 	case <-time.After(2 * time.Second):
-		t.Fatal("crashed Binding child leaked Host capacity")
+		t.Fatal("crashed Binding child leaked ComputerCore capacity")
 	}
 }
 
@@ -225,10 +225,10 @@ func TestBindingChildDiagnosticsAreAggregatedByHost(t *testing.T) {
 	select {
 	case <-sink.recorded:
 	case <-time.After(time.Second):
-		t.Fatal("Host did not aggregate Binding child diagnostic")
+		t.Fatal("ComputerCore did not aggregate Binding child diagnostic")
 	}
 	if sink.workspaceID != "workspace-a" || sink.event.Name != event.Name || sink.event.Component != event.Component {
-		t.Fatalf("Host diagnostic = workspace %q event %+v", sink.workspaceID, sink.event)
+		t.Fatalf("ComputerCore diagnostic = workspace %q event %+v", sink.workspaceID, sink.event)
 	}
 }
 
@@ -301,7 +301,7 @@ func TestBindingChildForwardsRestartToHost(t *testing.T) {
 	host := newBindingControlTestHost(t, controlToken, 0, computer.HostControlCallbacks{
 		MachineActions: func(_ context.Context, identity computer.BindingChildIdentity, raw json.RawMessage) error {
 			if identity.WorkspaceID != "workspace-a" {
-				t.Errorf("Host machine action workspace = %q", identity.WorkspaceID)
+				t.Errorf("ComputerCore machine action workspace = %q", identity.WorkspaceID)
 			}
 			var ack HeartbeatResponse
 			if err := json.Unmarshal(raw, &ack); err != nil {
@@ -322,7 +322,7 @@ func TestBindingChildForwardsRestartToHost(t *testing.T) {
 
 	child := New(Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	child.bindingHostControl = control
-	child.handleWorkspaceRunnerControlAck(context.Background(), &HeartbeatResponse{
+	child.handleWorkspaceDaemonControlAck(context.Background(), &HeartbeatResponse{
 		RuntimeID:      "runtime-a",
 		PendingRestart: &PendingRestart{ID: "restart-a"},
 	})
@@ -330,10 +330,10 @@ func TestBindingChildForwardsRestartToHost(t *testing.T) {
 	select {
 	case ack := <-forwarded:
 		if ack.PendingRestart == nil || ack.PendingRestart.ID != "restart-a" {
-			t.Fatalf("Host machine action = %+v", ack)
+			t.Fatalf("ComputerCore machine action = %+v", ack)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("Binding child did not forward restart to Host")
+		t.Fatal("Binding child did not forward restart to ComputerCore")
 	}
 }
 
@@ -369,7 +369,7 @@ func TestBindingChildReportsItsRuntimeSetToHost(t *testing.T) {
 	select {
 	case <-reported:
 	case <-time.After(time.Second):
-		t.Fatal("Host did not aggregate the Binding child Runtime identity")
+		t.Fatal("ComputerCore did not aggregate the Binding child Runtime identity")
 	}
 
 	staleIdentity := liveBindingIdentity(t, host, "workspace-a", 101)
@@ -378,7 +378,7 @@ func TestBindingChildReportsItsRuntimeSetToHost(t *testing.T) {
 	if err := stale.reportRuntimeSet(context.Background(), []Runtime{
 		{ID: "runtime-stale", WorkspaceID: "workspace-a", Provider: "pi"},
 	}, "stale-token", expiresAt); err == nil {
-		t.Fatal("Host accepted a Runtime set from a stale Binding child generation")
+		t.Fatal("ComputerCore accepted a Runtime set from a stale Binding child generation")
 	}
 }
 
@@ -434,14 +434,14 @@ func liveBindingIdentity(t *testing.T, current *bindingControlTestHost, workspac
 	return bindingChildControlIdentity{WorkspaceID: workspaceID, DaemonInstanceID: daemonInstanceID, PID: pid}
 }
 
-func localHostControlRPC(t *testing.T, host *computer.Host) string {
+func localHostControlRPC(t *testing.T, host *computer.ComputerCore) string {
 	t.Helper()
 	endpoint, listener := localHostControlRPCListener(t, host)
 	t.Cleanup(func() { _ = listener.Close() })
 	return endpoint
 }
 
-func localHostControlRPCListener(t *testing.T, host *computer.Host) (string, net.Listener) {
+func localHostControlRPCListener(t *testing.T, host *computer.ComputerCore) (string, net.Listener) {
 	t.Helper()
 	registry := host.LocalControlRegistry(nil)
 	endpoint := computer.ServiceControlEndpoint(t.TempDir())
@@ -456,7 +456,7 @@ func localHostControlRPCListener(t *testing.T, host *computer.Host) (string, net
 func newBindingControlTestHost(t *testing.T, controlToken string, maxProcesses int, callbacks computer.HostControlCallbacks) *bindingControlTestHost {
 	t.Helper()
 	state := &bindingControlTestCurrentSet{pids: make(map[string]int), daemonInstanceIDs: make(map[string]string)}
-	host, err := computer.NewHost(computer.HostConfig{
+	host, err := computer.NewComputerCore(computer.ComputerCoreConfig{
 		ControlToken: controlToken, MaxAgentProcesses: maxProcesses, ControlCallbacks: callbacks,
 		Spawn: func(workspaceID string) (computer.BindingChild, error) {
 			state.mu.Lock()

@@ -12,7 +12,7 @@ import (
 
 // syncAgentMemoryCenter reconciles the complete portable atom projection after
 // local memory files changed. The durable outbox makes network failure safe.
-func (d *Daemon) syncAgentMemoryCenter(ctx context.Context, task Task, _ []memoryWriteChange) {
+func (d *WorkspaceDaemonCore) syncAgentMemoryCenter(ctx context.Context, task Task, _ []memoryWriteChange) {
 	if d == nil {
 		return
 	}
@@ -31,7 +31,7 @@ func (d *Daemon) syncAgentMemoryCenter(ctx context.Context, task Task, _ []memor
 
 // hydrateAgentMemoryCenter performs one incremental push/pull round before a
 // turn. The persisted cursor replaces the old one-shot hydrate marker.
-func (d *Daemon) hydrateAgentMemoryCenter(ctx context.Context, workspaceID, agentID, runtimeID, agentRoot string) {
+func (d *WorkspaceDaemonCore) hydrateAgentMemoryCenter(ctx context.Context, workspaceID, agentID, runtimeID, agentRoot string) {
 	if d == nil {
 		return
 	}

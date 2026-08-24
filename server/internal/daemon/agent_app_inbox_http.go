@@ -51,7 +51,7 @@ type agentAppSourceAckResponse struct {
 	Replayed          bool                   `json:"replayed"`
 }
 
-func (d *Daemon) agentAppInboxHandler() http.HandlerFunc {
+func (d *WorkspaceDaemonCore) agentAppInboxHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			writeAgentInboxError(w, http.StatusMethodNotAllowed, "method not allowed", "method_not_allowed")
@@ -86,7 +86,7 @@ func (d *Daemon) agentAppInboxHandler() http.HandlerFunc {
 	}
 }
 
-func (d *Daemon) agentAppInboxAckHandler() http.HandlerFunc {
+func (d *WorkspaceDaemonCore) agentAppInboxAckHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeAgentInboxError(w, http.StatusMethodNotAllowed, "method not allowed", "method_not_allowed")
@@ -143,7 +143,7 @@ func (d *Daemon) agentAppInboxAckHandler() http.HandlerFunc {
 	}
 }
 
-func (d *Daemon) authorizeAgentAppSourceAck(ctx context.Context, workspaceID, agentID string, item AgentAppInboxItem, intent AgentAppInboxAckIntent) (int, map[string]any, bool, bool) {
+func (d *WorkspaceDaemonCore) authorizeAgentAppSourceAck(ctx context.Context, workspaceID, agentID string, item AgentAppInboxItem, intent AgentAppInboxAckIntent) (int, map[string]any, bool, bool) {
 	credential, ok := readCachedAgentCredentialForMessage(d.cfg, workspaceID, agentID, time.Now())
 	if !ok {
 		return http.StatusConflict, map[string]any{"error": "agent credential is unavailable", "code": "agent_credential_unavailable"}, false, false
@@ -189,7 +189,7 @@ func (d *Daemon) authorizeAgentAppSourceAck(ctx context.Context, workspaceID, ag
 	return response.StatusCode, body, true, false
 }
 
-func (d *Daemon) retryAgentAppInboxAckIntents(ctx context.Context, workspaceID string) {
+func (d *WorkspaceDaemonCore) retryAgentAppInboxAckIntents(ctx context.Context, workspaceID string) {
 	if d == nil || d.agentAppInboxes == nil {
 		return
 	}
@@ -217,7 +217,7 @@ func (d *Daemon) retryAgentAppInboxAckIntents(ctx context.Context, workspaceID s
 			}
 			if accepted {
 				if store.CompleteServerAuthorizedAck(item.ItemID, intent.AckAttemptID) {
-					if runner := d.currentWorkspaceRunner(workspaceID); runner != nil {
+					if runner := d.currentWorkspaceSession(workspaceID); runner != nil {
 						d.canonicalRuntimes.clearAppInboxNoticeMemo(agentID, runner.messageRuntimeID(agentID))
 					}
 				}
@@ -246,18 +246,16 @@ func isAuthoritativeAppSourceAckReject(status int, body map[string]any) bool {
 	return want[code] == status
 }
 
-func (d *Daemon) localAgentInboxIdentity(w http.ResponseWriter, r *http.Request) (string, string, *WorkspaceRunner, bool) {
+func (d *WorkspaceDaemonCore) localAgentInboxIdentity(w http.ResponseWriter, r *http.Request) (string, string, *workspaceSession, bool) {
 	agentID := strings.TrimSpace(r.Header.Get("X-Agent-ID"))
 	workspaceID := strings.TrimSpace(r.Header.Get("X-Workspace-ID"))
 	if agentID == "" || workspaceID == "" {
 		writeAgentInboxError(w, http.StatusBadRequest, "agent_id and workspace_id are required", "identity_required")
 		return "", "", nil, false
 	}
-	d.workspaceRunnerMu.RLock()
-	runner := d.workspaceRunners[workspaceID]
-	d.workspaceRunnerMu.RUnlock()
+	runner := d.currentWorkspaceSession(workspaceID)
 	if runner == nil {
-		writeAgentInboxError(w, http.StatusConflict, "Workspace Runner is unavailable", "runner_unavailable")
+		writeAgentInboxError(w, http.StatusConflict, "WorkspaceDaemon is unavailable", "runner_unavailable")
 		return "", "", nil, false
 	}
 	return agentID, workspaceID, runner, true

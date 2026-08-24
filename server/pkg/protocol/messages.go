@@ -573,21 +573,21 @@ const (
 	DaemonCapabilityRestrictedExecution      = "restricted_execution_profiles_v1"
 	DaemonCapabilityReminderVersionedCache   = "reminder_versioned_cache_v1"
 	DaemonCapabilityReminderFireRequest      = "reminder:fire-request-v2"
-	// DaemonCapabilityWorkspaceRunnerAgentReset gates Raft's discrete
+	// DaemonCapabilityWorkspaceDaemonAgentReset gates Raft's discrete
 	// agent:reset-workspace command plus Multica's terminal reset receipt.
-	DaemonCapabilityWorkspaceRunnerAgentReset = "workspace_runner_agent_reset_workspace_v1"
+	DaemonCapabilityWorkspaceDaemonAgentReset = "workspace_runner_agent_reset_workspace_v1"
 	// DaemonCapabilityMachineUpgrade gates the machine-scoped upgrade
 	// operation protocol. Older daemons continue to receive no machine action
 	// and therefore cannot accidentally claim or complete an operation.
 	DaemonCapabilityMachineUpgrade = "machine_upgrade_v1"
-	// DaemonCapabilityWorkspaceRunnerAgentProcess selects the Raft-shaped
+	// DaemonCapabilityWorkspaceDaemonAgentProcess selects the Raft-shaped
 	// agent:start / agent:stop process-control boundary.
-	DaemonCapabilityWorkspaceRunnerAgentProcess = "workspace_runner_agent_process_v1"
-	// DaemonCapabilityWorkspaceRunnerControlPlane selects the current ready
-	// Workspace Runner as the sole carrier for heartbeat actions belonging to
+	DaemonCapabilityWorkspaceDaemonAgentProcess = "workspace_runner_agent_process_v1"
+	// DaemonCapabilityWorkspaceDaemonControlPlane selects the current ready
+	// WorkspaceDaemon as the sole carrier for heartbeat actions belonging to
 	// that Workspace. Runtime-multiplexed WS and HTTP heartbeats remain legacy
 	// adapters for older daemons and must not execute actions for this Runner.
-	DaemonCapabilityWorkspaceRunnerControlPlane = "workspace_runner_control_plane_v1"
+	DaemonCapabilityWorkspaceDaemonControlPlane = "workspace_runner_control_plane_v1"
 )
 
 // ReminderTimerJob is the complete server-owned timer projection cached by
@@ -1138,7 +1138,7 @@ type AgentMemoryHydrateEntry struct {
 
 // TurnCaptureUpload is the daemon-to-server, agent-credential-authenticated
 // record of one settled resident Pi turn. The daemon, rather than the
-// workspace runner, is the trust boundary which creates this payload.
+// workspace daemon, is the trust boundary which creates this payload.
 type TurnCaptureUpload struct {
 	AgentID        string                     `json:"agent_id"`
 	RuntimeID      string                     `json:"runtime_id"`

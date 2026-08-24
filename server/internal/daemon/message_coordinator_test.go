@@ -716,7 +716,7 @@ func TestResidentMessageTurnCompletionDoesNotAutoDeliverPending(t *testing.T) {
 	d.mu.Lock()
 	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
 	d.mu.Unlock()
-	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, func(string, any) error { return nil })
+	runner, _ := attachTestWorkspaceDaemon(t, d, workspaceID, func(string, any) error { return nil })
 	if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: agentID, RuntimeID: runtimeID, LaunchID: "launch-1", StartDispatchID: "dispatch-1"}); err != nil {
 		t.Fatal(err)
 	}
@@ -790,7 +790,7 @@ func TestResidentMessageTurnErrorDoesNotAutoDeliverPending(t *testing.T) {
 	d.mu.Lock()
 	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
 	d.mu.Unlock()
-	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, func(string, any) error { return nil })
+	runner, _ := attachTestWorkspaceDaemon(t, d, workspaceID, func(string, any) error { return nil })
 	if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: agentID, RuntimeID: runtimeID, LaunchID: "launch-1", StartDispatchID: "dispatch-1"}); err != nil {
 		t.Fatal(err)
 	}
@@ -1690,7 +1690,7 @@ func TestDaemonAcceptsIdleDeliveryThroughProviderBeforeAcknowledgement(t *testin
 	runtimePool.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{
 		backend: &residentProcessStartProbe{},
 	}
-	daemon := &Daemon{canonicalRuntimes: runtimePool}
+	daemon := &WorkspaceDaemonCore{canonicalRuntimes: runtimePool}
 	completeCoordinatorRecovery(t, coordinator)
 	delivery := testDelivery("message-1", "channel-1", 1, "delivery-1")
 	daemon.mu.Lock()
@@ -1735,7 +1735,7 @@ func TestCoordinatorReplacementInvalidatesInFlightDelivery(t *testing.T) {
 	if _, err := oldCoordinator.Accept(context.Background(), testDelivery("message-1", "channel-1", 1, "delivery-1")); err != nil {
 		t.Fatal(err)
 	}
-	daemon := &Daemon{canonicalRuntimes: newCanonicalAgentRuntimePool()}
+	daemon := &WorkspaceDaemonCore{canonicalRuntimes: newCanonicalAgentRuntimePool()}
 	runner := registerTestInbox(t, daemon, InboxKey{WorkspaceID: "workspace-test", AgentID: "agent-1"}, "runtime-old", oldCoordinator)
 	runner.inboxes.ownsRuntime = func(string) bool { return true }
 	runner.inboxes.open = func(key InboxKey, runtimeID string) (*MessageCoordinator, error) {

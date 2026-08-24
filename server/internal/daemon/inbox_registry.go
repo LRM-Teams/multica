@@ -24,7 +24,7 @@ type inboxRegistryDependencies struct {
 }
 
 // InboxRegistry owns every in-memory Message coordinator for one immutable
-// Workspace Runner scope. Lifecycle creation is owned by an APM-accepted
+// WorkspaceDaemon scope. Lifecycle creation is owned by an APM-accepted
 // server start.
 type InboxRegistry struct {
 	workspaceID string

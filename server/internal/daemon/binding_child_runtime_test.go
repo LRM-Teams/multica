@@ -22,13 +22,13 @@ import (
 
 const bindingChildRuntimeHelperEnv = "MULTICA_BINDING_CHILD_RUNTIME_HELPER"
 
-func TestBindingChildProcessFallbackRunsTheRealWorkspaceRunner(t *testing.T) {
+func TestBindingChildProcessFallbackRunsTheRealWorkspaceDaemon(t *testing.T) {
 	const (
 		workspaceID  = "workspace-a"
 		computerID   = "computer-a"
 		controlToken = "host-control-token"
 	)
-	readyFrames := make(chan protocol.WorkspaceRunnerReadyPayload, 1)
+	readyFrames := make(chan protocol.WorkspaceDaemonReadyPayload, 1)
 	runtimeWakeConnected := make(chan struct{}, 1)
 	var registerCalls atomic.Int32
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
@@ -47,7 +47,7 @@ func TestBindingChildProcessFallbackRunsTheRealWorkspaceRunner(t *testing.T) {
 			w.WriteHeader(http.StatusNoContent)
 		case r.URL.Path == "/api/daemon/deregister":
 			w.WriteHeader(http.StatusNoContent)
-		case r.URL.Path == "/api/daemon/connect" && r.URL.Query().Get("workspace_id") == workspaceID:
+		case r.URL.Path == protocol.WorkspaceDaemonConnectPath:
 			conn, err := upgrader.Upgrade(w, r, nil)
 			if err != nil {
 				return
@@ -58,8 +58,8 @@ func TestBindingChildProcessFallbackRunsTheRealWorkspaceRunner(t *testing.T) {
 				return
 			}
 			var frame protocol.Message
-			var ready protocol.WorkspaceRunnerReadyPayload
-			if json.Unmarshal(raw, &frame) != nil || frame.Type != protocol.EventWorkspaceRunnerReady || json.Unmarshal(frame.Payload, &ready) != nil {
+			var ready protocol.WorkspaceDaemonReadyPayload
+			if json.Unmarshal(raw, &frame) != nil || frame.Type != protocol.EventWorkspaceDaemonReady || json.Unmarshal(frame.Payload, &ready) != nil {
 				return
 			}
 			readyFrames <- ready
@@ -68,7 +68,7 @@ func TestBindingChildProcessFallbackRunsTheRealWorkspaceRunner(t *testing.T) {
 					return
 				}
 			}
-		case r.URL.Path == "/api/daemon/connect" && r.URL.Query().Get("runtime_ids") == "runtime-a":
+		case r.URL.Path == protocol.DaemonConnectPath && r.URL.Query().Get("runtime_ids") == "runtime-a":
 			if got := r.Header.Get("Authorization"); got != "Bearer scoped-daemon-token" {
 				http.Error(w, "runtime wake socket used the wrong Binding credential", http.StatusUnauthorized)
 				return
@@ -143,10 +143,10 @@ func TestBindingChildProcessFallbackRunsTheRealWorkspaceRunner(t *testing.T) {
 	select {
 	case frame := <-readyFrames:
 		if frame.WorkspaceID != workspaceID || frame.DaemonInstanceID == "" {
-			t.Fatalf("real Workspace Runner Ready frame = %+v", frame)
+			t.Fatalf("real WorkspaceDaemon Ready frame = %+v", frame)
 		}
 	case <-ctx.Done():
-		t.Fatal("real child never connected its Workspace Runner")
+		t.Fatal("real child never connected its WorkspaceDaemon")
 	}
 	select {
 	case <-runtimeWakeConnected:
@@ -158,11 +158,11 @@ func TestBindingChildProcessFallbackRunsTheRealWorkspaceRunner(t *testing.T) {
 	go func() { exited <- child.Wait() }()
 	select {
 	case class := <-exited:
-		t.Fatalf("Binding child exited after Host loss with class %s", class)
+		t.Fatalf("Binding child exited after ComputerCore loss with class %s", class)
 	case <-time.After(1500 * time.Millisecond):
 	}
 	if err := child.Stop(); err != nil {
-		t.Fatalf("stop Binding child after Host loss: %v", err)
+		t.Fatalf("stop Binding child after ComputerCore loss: %v", err)
 	}
 	select {
 	case <-exited:
@@ -210,8 +210,8 @@ func TestComputerHostRunsTwoRealIsolatedBindingChildProcesses(t *testing.T) {
 			w.WriteHeader(http.StatusNoContent)
 		case r.URL.Path == "/api/daemon/deregister":
 			w.WriteHeader(http.StatusNoContent)
-		case r.URL.Path == "/api/daemon/connect":
-			workspaceID := strings.TrimSpace(r.URL.Query().Get("workspace_id"))
+		case r.URL.Path == protocol.WorkspaceDaemonConnectPath:
+			workspaceID := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer scoped-token-")
 			conn, err := upgrader.Upgrade(w, r, nil)
 			if err != nil {
 				return
@@ -228,7 +228,7 @@ func TestComputerHostRunsTwoRealIsolatedBindingChildProcesses(t *testing.T) {
 				return
 			}
 			var frame protocol.Message
-			if json.Unmarshal(raw, &frame) != nil || frame.Type != protocol.EventWorkspaceRunnerReady {
+			if json.Unmarshal(raw, &frame) != nil || frame.Type != protocol.EventWorkspaceDaemonReady {
 				return
 			}
 			observedReady = true
@@ -267,7 +267,7 @@ func TestComputerHostRunsTwoRealIsolatedBindingChildProcesses(t *testing.T) {
 	t.Setenv(bindingChildRuntimeHelperEnv, providerPath)
 	t.Setenv("MULTICA_BINDING_CHILD_CONTROL_TOKEN", controlToken)
 	var serviceEndpoint string
-	host, err := computer.NewHost(computer.HostConfig{
+	host, err := computer.NewComputerCore(computer.ComputerCoreConfig{
 		ControlToken: controlToken,
 		Spawn: func(workspaceID string) (computer.BindingChild, error) {
 			return computer.StartBindingProcess(os.Args[0], []string{"-test.run=TestRunBindingChildProcessHelper"}, computer.BindingChildBootstrap{
@@ -296,7 +296,7 @@ func TestComputerHostRunsTwoRealIsolatedBindingChildProcesses(t *testing.T) {
 		t.Fatalf("real Binding children not running: A=%+v/%t B=%+v/%t", recordA, okA, recordB, okB)
 	}
 	if pidA <= 0 || pidB <= 0 || pidA == pidB || pidA == os.Getpid() || pidB == os.Getpid() {
-		t.Fatalf("Binding child PIDs = %d/%d, Host PID = %d", pidA, pidB, os.Getpid())
+		t.Fatalf("Binding child PIDs = %d/%d, ComputerCore PID = %d", pidA, pidB, os.Getpid())
 	}
 	ready := map[string]bool{}
 	for len(ready) < len(workspaceIDs) {
@@ -304,7 +304,7 @@ func TestComputerHostRunsTwoRealIsolatedBindingChildProcesses(t *testing.T) {
 		case workspaceID := <-readyFrames:
 			ready[workspaceID] = true
 		case <-ctx.Done():
-			t.Fatalf("WorkspaceRunner Ready set = %v", ready)
+			t.Fatalf("workspaceSession Ready set = %v", ready)
 		}
 	}
 	if got := registerCalls.Load(); got != int32(len(workspaceIDs)) {
@@ -323,11 +323,11 @@ func TestComputerHostRunsTwoRealIsolatedBindingChildProcesses(t *testing.T) {
 			t.Fatalf("removing B disconnected sibling %q", workspaceID)
 		}
 	case <-ctx.Done():
-		t.Fatal("removed Binding child B did not close its WorkspaceRunner connection")
+		t.Fatal("removed Binding child B did not close its workspaceSession connection")
 	}
 }
 
-func waitForBindingLifecycle(t *testing.T, ctx context.Context, host *computer.Host, workspaceID string, want computer.RunnerLifecycle) {
+func waitForBindingLifecycle(t *testing.T, ctx context.Context, host *computer.ComputerCore, workspaceID string, want computer.RunnerLifecycle) {
 	t.Helper()
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
@@ -344,7 +344,7 @@ func waitForBindingLifecycle(t *testing.T, ctx context.Context, host *computer.H
 	}
 }
 
-func TestBindingChildPublishesReadyWithoutAgentRuntimesOrWorkspaceRunnerWS(t *testing.T) {
+func TestBindingChildPublishesReadyWithoutAgentRuntimesOrWorkspaceDaemonWS(t *testing.T) {
 	const (
 		workspaceID  = "workspace-a"
 		computerID   = "computer-a"
@@ -359,7 +359,7 @@ func TestBindingChildPublishesReadyWithoutAgentRuntimesOrWorkspaceRunnerWS(t *te
 		case r.URL.Path == "/api/daemon/register":
 			registerCalls.Add(1)
 			http.Error(w, `{"error":"at least one runtime is required"}`, http.StatusBadRequest)
-		case r.URL.Path == "/api/daemon/connect":
+		case r.URL.Path == protocol.WorkspaceDaemonConnectPath:
 			upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 			conn, err := upgrader.Upgrade(w, r, nil)
 			if err != nil {
@@ -414,7 +414,7 @@ func TestBindingChildPublishesReadyWithoutAgentRuntimesOrWorkspaceRunnerWS(t *te
 	defer cancel()
 	ready, err := child.AwaitReady(ctx)
 	if err != nil {
-		t.Fatalf("zero-runtime DaemonCore must publish Ready after Workspace Runner connect: %v", err)
+		t.Fatalf("zero-runtime DaemonCore must publish Ready after WorkspaceDaemon connect: %v", err)
 	}
 	if ready.PID != child.PID() || ready.WorkspaceID != workspaceID || ready.DaemonInstanceID == "" {
 		t.Fatalf("Binding child Ready = %+v, pid=%d", ready, child.PID())
@@ -507,7 +507,7 @@ func TestBindingChildCredentialProxyHasAChildOwnedListener(t *testing.T) {
 	}
 	_ = health.Body.Close()
 	if health.StatusCode != http.StatusNotFound {
-		t.Fatalf("Binding child exposed Host /health with status %d", health.StatusCode)
+		t.Fatalf("Binding child exposed ComputerCore /health with status %d", health.StatusCode)
 	}
 }
 

@@ -36,7 +36,7 @@ func (identity HostProcessIdentity) releaseChannel() cli.ReleaseChannel {
 	return cli.ReleaseChannelForEnvironment(cli.ServiceEnvironment(identity.Environment))
 }
 
-// HostProcessConfig is the process boundary around Host. It contains only
+// HostProcessConfig is the process boundary around ComputerCore. It contains only
 // machine-wide dependencies; no daemon or Workspace execution object crosses
 // this interface.
 type HostProcessConfig struct {
@@ -59,12 +59,12 @@ type hostProcessState struct {
 	cancel    context.CancelFunc
 }
 
-// RunProcess owns the resident Computer control plane around Host. The
-// execution plane is never constructed here: Host can only supervise Binding
+// RunProcess owns the resident Computer control plane around ComputerCore. The
+// execution plane is never constructed here: ComputerCore can only supervise Binding
 // child process handles and expose machine-scoped control.
-func (host *Host) RunProcess(ctx context.Context, config HostProcessConfig) error {
-	if host == nil || host.supervisor == nil || host.control == nil {
-		return errors.New("Computer Host is unavailable")
+func (host *ComputerCore) RunProcess(ctx context.Context, config HostProcessConfig) error {
+	if host == nil || host.daemonCore == nil || host.daemonCore.control == nil {
+		return errors.New("ComputerCore is unavailable")
 	}
 	if config.DesiredWorkspaceIDs == nil {
 		return errors.New("Computer desired Binding source is required")
@@ -237,7 +237,7 @@ func (host *Host) RunProcess(ctx context.Context, config HostProcessConfig) erro
 	return err
 }
 
-func (host *Host) registerProcessRoutes(mux *http.ServeMux, state *hostProcessState) {
+func (host *ComputerCore) registerProcessRoutes(mux *http.ServeMux, state *hostProcessState) {
 	mux.HandleFunc("/health", host.processHealthHandler(state))
 	mux.HandleFunc("/shutdown", host.processShutdownHandler(state))
 	mux.HandleFunc("/environment-switch/prepare", host.processEnvironmentSwitchHandler(true))
@@ -262,7 +262,7 @@ func normalizedWorkspaceIDs(ids []string) []string {
 	return out
 }
 
-func (host *Host) processHealthHandler(state *hostProcessState) http.HandlerFunc {
+func (host *ComputerCore) processHealthHandler(state *hostProcessState) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
 		state.mu.RLock()
 		identity := state.identity
@@ -299,10 +299,10 @@ func (host *Host) processHealthHandler(state *hostProcessState) http.HandlerFunc
 	}
 }
 
-func (host *Host) runtimeIDs(workspaceID string) []string {
-	host.runtimeMu.RLock()
-	report := host.runtimeSets[strings.TrimSpace(workspaceID)]
-	host.runtimeMu.RUnlock()
+func (host *ComputerCore) runtimeIDs(workspaceID string) []string {
+	host.daemonCore.runtimeMu.RLock()
+	report := host.daemonCore.runtimeSets[strings.TrimSpace(workspaceID)]
+	host.daemonCore.runtimeMu.RUnlock()
 	ids := make([]string, 0, len(report.Runtimes))
 	for _, runtime := range report.Runtimes {
 		ids = append(ids, runtime.ID)
@@ -311,7 +311,7 @@ func (host *Host) runtimeIDs(workspaceID string) []string {
 	return ids
 }
 
-func (host *Host) recordBindingDiagnostic(_ BindingChildIdentity, workspaceID string, event diagnosticlog.Event) {
+func (host *ComputerCore) recordBindingDiagnostic(_ BindingChildIdentity, workspaceID string, event diagnosticlog.Event) {
 	if host == nil || host.diagnosticStore == nil {
 		return
 	}
@@ -338,7 +338,7 @@ func (host *Host) recordBindingDiagnostic(_ BindingChildIdentity, workspaceID st
 	}
 }
 
-func (host *Host) processShutdownHandler(state *hostProcessState) http.HandlerFunc {
+func (host *ComputerCore) processShutdownHandler(state *hostProcessState) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -370,14 +370,14 @@ func (host *Host) processShutdownHandler(state *hostProcessState) http.HandlerFu
 	}
 }
 
-func (host *Host) processEnvironmentSwitchHandler(prepare bool) http.HandlerFunc {
+func (host *ComputerCore) processEnvironmentSwitchHandler(prepare bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 		provided := strings.TrimSpace(r.Header.Get("X-Multica-Control-Token"))
-		expected := strings.TrimSpace(host.control.token)
+		expected := strings.TrimSpace(host.daemonCore.control.token)
 		if provided == "" || expected == "" || subtle.ConstantTimeCompare([]byte(provided), []byte(expected)) != 1 {
 			http.Error(w, "local control authentication failed", http.StatusUnauthorized)
 			return

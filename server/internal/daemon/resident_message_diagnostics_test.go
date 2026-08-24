@@ -36,7 +36,7 @@ func TestResidentMessageDiagnosticTurnCarriesExecutionAndRuntimeEpoch(t *testing
 
 func TestResidentMessageDiagnosticCarriesLaunchJoinFields(t *testing.T) {
 	capture := &residentDiagnosticCapture{}
-	d := &Daemon{runnerDiagnostics: capture}
+	d := &WorkspaceDaemonCore{runnerDiagnostics: capture}
 	d.recordResidentMessageBatch("workspace-1", "runtime-1", "agent-1", []protocol.AgentMessageProjection{{ID: "message-1"}}, "execution_started", "accepted", "", "execution-1", 4, "launch-1", "dispatch-1")
 	if capture.event.Identity.LaunchID != "launch-1" || capture.event.Identity.StartDispatchID != "dispatch-1" {
 		t.Fatalf("launch join fields = %+v", capture.event.Identity)
@@ -44,7 +44,7 @@ func TestResidentMessageDiagnosticCarriesLaunchJoinFields(t *testing.T) {
 }
 
 func TestInboxLeaseEpochRemainsBoundAfterReregister(t *testing.T) {
-	d := &Daemon{
+	d := &WorkspaceDaemonCore{
 		runtimeIndex: map[string]Runtime{"runtime-1": {ID: "runtime-1", WorkspaceID: "workspace-1"}},
 		workspaces:   map[string]*workspaceState{"workspace-1": {workspaceID: "workspace-1", runtimeEpoch: 2}},
 	}

@@ -27,7 +27,7 @@ func createTestAgentRuntimeWithDaemonID(t *testing.T, daemonID string) db.AgentR
 			'',  '{}'::jsonb,  'private',  now()
 		)
 		RETURNING id
-	`,  testWorkspaceID,  daemonID,  "heartbeat-runtime-"+randomID()).Scan(&runtimeID); err != nil {
+	`, testWorkspaceID, daemonID, "heartbeat-runtime-"+randomID()).Scan(&runtimeID); err != nil {
 		t.Fatalf("create test agent_runtime: %v", err)
 	}
 	t.Cleanup(func() {
@@ -186,7 +186,7 @@ func TestRecordHeartbeat_WritesDaemonHeartbeatOnFirstCall(t *testing.T) {
 	}
 }
 
-func TestWorkspaceRunnerHeartbeatRejectsRuntimeAssignedToAnotherComputer(t *testing.T) {
+func TestWorkspaceDaemonHeartbeatRejectsRuntimeAssignedToAnotherComputer(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -197,7 +197,7 @@ func TestWorkspaceRunnerHeartbeatRejectsRuntimeAssignedToAnotherComputer(t *test
 			WorkspaceID: testWorkspaceID,
 		}, protocol.DaemonHeartbeatRequestPayload{RuntimeID: uuidToString(rt.ID)})
 		if err == nil || !strings.Contains(err.Error(), "runtime not assigned to connection Computer") {
-			t.Fatalf("Workspace Runner daemon_id %q error = %v", daemonID, err)
+			t.Fatalf("WorkspaceDaemon daemon_id %q error = %v", daemonID, err)
 		}
 	}
 }

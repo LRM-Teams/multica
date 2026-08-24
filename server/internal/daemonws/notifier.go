@@ -24,9 +24,9 @@ type AgentDeliveryNotifier interface {
 	NotifyWorkspaceAgentDelivery(workspaceID, daemonID string, payload protocol.AgentDeliverPayload) bool
 }
 
-// AgentRestartNotifier transports only Raft's discrete Workspace Runner
+// AgentRestartNotifier transports only Raft's discrete WorkspaceDaemon
 // commands. Product-level restart/reset orchestration stays on the
-// server and advances from Runner status/reset facts.
+// server and advances from WorkspaceDaemon status/reset facts.
 type AgentRestartNotifier interface {
 	NotifyAgentRestartCommand(workspaceID, computerID, eventType, commandID string, payload any) bool
 }
@@ -39,11 +39,11 @@ type RelayNotifier struct {
 	relay realtime.RelayPublisher
 }
 
-func workspaceRunnerRelayScopeID(daemonID, workspaceID string) string {
+func workspaceDaemonRelayScopeID(daemonID, workspaceID string) string {
 	return daemonID + "\x00" + workspaceID
 }
 
-func parseWorkspaceRunnerRelayScopeID(scopeID string) (daemonID, workspaceID string, ok bool) {
+func parseWorkspaceDaemonRelayScopeID(scopeID string) (daemonID, workspaceID string, ok bool) {
 	daemonID, workspaceID, ok = strings.Cut(scopeID, "\x00")
 	return daemonID, workspaceID, ok && daemonID != "" && workspaceID != ""
 }
@@ -72,8 +72,8 @@ func (n *RelayNotifier) NotifyAgentDelivery(runtimeID string, payload protocol.A
 }
 
 // NotifyWorkspaceAgentDelivery places canonical Messages at the Workspace
-// Runner boundary. Runtime IDs are provider placement, not Message transport
-// addresses; the Runner's one Manager owns local receipt and handoff.
+// WorkspaceDaemon boundary. Runtime IDs are provider placement, not Message transport
+// addresses; the WorkspaceDaemon's one Manager owns local receipt and handoff.
 func (n *RelayNotifier) NotifyWorkspaceAgentDelivery(workspaceID, daemonID string, payload protocol.AgentDeliverPayload) bool {
 	if workspaceID == "" || daemonID == "" {
 		return false
@@ -88,9 +88,9 @@ func (n *RelayNotifier) NotifyWorkspaceAgentDelivery(workspaceID, daemonID strin
 		delivered = n.local.notifyWorkspaceAgentDelivery(workspaceID, daemonID, payload, frame, eventID)
 	}
 	if n.relay != nil {
-		scopeID := workspaceRunnerRelayScopeID(daemonID, workspaceID)
-		if err := n.relay.PublishWithID(realtime.ScopeDaemonWorkspaceRunner, scopeID, "", frame, eventID); err != nil {
-			slog.Warn("workspace Runner agent delivery relay publish failed", "error", err, "workspace_id", workspaceID, "daemon_id", daemonID, "delivery_id", payload.DeliveryID)
+		scopeID := workspaceDaemonRelayScopeID(daemonID, workspaceID)
+		if err := n.relay.PublishWithID(realtime.ScopeWorkspaceDaemon, scopeID, "", frame, eventID); err != nil {
+			slog.Warn("workspace WorkspaceDaemon agent delivery relay publish failed", "error", err, "workspace_id", workspaceID, "daemon_id", daemonID, "delivery_id", payload.DeliveryID)
 		} else {
 			delivered = true
 		}
@@ -111,9 +111,9 @@ func (n *RelayNotifier) NotifyAgentRestartCommand(workspaceID, computerID, event
 		delivered = n.local.NotifyAgentRestartCommand(workspaceID, computerID, eventType, commandID, payload)
 	}
 	if n.relay != nil {
-		scopeID := workspaceRunnerRelayScopeID(computerID, workspaceID)
-		if err := n.relay.PublishWithID(realtime.ScopeDaemonWorkspaceRunner, scopeID, "", frame, "agent-restart:"+commandID+":"+eventType); err != nil {
-			slog.Warn("Workspace Runner Agent Restart command publish failed", "workspace_id", workspaceID, "computer_id", computerID, "operation_id", commandID, "event_type", eventType, "error", err)
+		scopeID := workspaceDaemonRelayScopeID(computerID, workspaceID)
+		if err := n.relay.PublishWithID(realtime.ScopeWorkspaceDaemon, scopeID, "", frame, "agent-restart:"+commandID+":"+eventType); err != nil {
+			slog.Warn("WorkspaceDaemon Agent Restart command publish failed", "workspace_id", workspaceID, "computer_id", computerID, "operation_id", commandID, "event_type", eventType, "error", err)
 		} else {
 			delivered = true
 		}
@@ -123,11 +123,11 @@ func (n *RelayNotifier) NotifyAgentRestartCommand(workspaceID, computerID, event
 
 func validAgentRestartCommand(eventType string, payload any) bool {
 	switch command := payload.(type) {
-	case protocol.WorkspaceRunnerAgentStopPayload:
+	case protocol.WorkspaceDaemonAgentStopPayload:
 		return eventType == protocol.EventDaemonAgentStop && command.Validate() == nil
-	case protocol.WorkspaceRunnerAgentResetWorkspacePayload:
+	case protocol.WorkspaceDaemonAgentResetWorkspacePayload:
 		return eventType == protocol.EventDaemonAgentResetWorkspace && command.Validate() == nil
-	case protocol.WorkspaceRunnerAgentStartPayload:
+	case protocol.WorkspaceDaemonAgentStartPayload:
 		return eventType == protocol.EventDaemonAgentStart && command.Validate() == nil
 	default:
 		return false

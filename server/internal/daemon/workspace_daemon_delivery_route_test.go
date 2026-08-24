@@ -10,21 +10,21 @@ import (
 // requiredDeliveryRouteTests is the executable Raft 1.0.16 deliverMessage
 // table. Deleting a name without replacing the branch is a contract break.
 var requiredDeliveryRouteTests = []string{
-	"TestWorkspaceRunnerConsumedDeliveryAcknowledgesWithoutProcess",
-	"TestWorkspaceRunnerStartingLaunchBuffersWithoutProviderDelivery",
-	"TestWorkspaceRunnerQueuedAPMAcceptsDeliveryWithoutStartingProvider",
-	"TestWorkspaceRunnerTerminalFailureDeliveryAcknowledgesAndKeepsPending",
-	"TestWorkspaceRunnerIdleSnapshotDeliveryRestartsAndAcknowledges",
-	"TestWorkspaceRunnerSpawnCooldownDeliveryAcknowledgesWithoutRestart",
-	"TestWorkspaceRunnerMissingProcessReportsRestartRequired",
-	"TestWorkspaceRunnerUnacceptedDeliveryIsRetriedAfterManagedStart",
-	"TestWorkspaceRunnerIdleDeliveryAcknowledgesAfterRuntimeAcceptance",
-	"TestWorkspaceRunnerDeliveryAcknowledgesBusyRuntime",
-	"TestWorkspaceRunnerDeliveryDoesNotAcknowledgeProviderRejection",
+	"TestWorkspaceDaemonConsumedDeliveryAcknowledgesWithoutProcess",
+	"TestWorkspaceDaemonStartingLaunchBuffersWithoutProviderDelivery",
+	"TestWorkspaceDaemonQueuedAPMAcceptsDeliveryWithoutStartingProvider",
+	"TestWorkspaceDaemonTerminalFailureDeliveryAcknowledgesAndKeepsPending",
+	"TestWorkspaceDaemonIdleSnapshotDeliveryRestartsAndAcknowledges",
+	"TestWorkspaceDaemonSpawnCooldownDeliveryAcknowledgesWithoutRestart",
+	"TestWorkspaceDaemonMissingProcessReportsRestartRequired",
+	"TestWorkspaceDaemonUnacceptedDeliveryIsRetriedAfterManagedStart",
+	"TestWorkspaceDaemonIdleDeliveryAcknowledgesAfterRuntimeAcceptance",
+	"TestWorkspaceDaemonDeliveryAcknowledgesBusyRuntime",
+	"TestWorkspaceDaemonDeliveryDoesNotAcknowledgeProviderRejection",
 }
 
 func TestDeliveryRouteRequiredCasesRegistered(t *testing.T) {
-	src, err := os.ReadFile(filepath.Join("workspace_runner_delivery_test.go"))
+	src, err := os.ReadFile(filepath.Join("workspace_daemon_delivery_test.go"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,11 +37,11 @@ func TestDeliveryRouteRequiredCasesRegistered(t *testing.T) {
 }
 
 func TestAcceptMessageDeliveryForbidsUnmanagedEarlyNack(t *testing.T) {
-	src, err := os.ReadFile("workspace_runner_message.go")
+	src, err := os.ReadFile("workspace_daemon_message.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	fn := extractGoFunc(string(src), "func (runner *WorkspaceRunner) acceptMessageDelivery")
+	fn := extractGoFunc(string(src), "func (runner *workspaceSession) acceptMessageDelivery")
 	if fn == "" {
 		t.Fatal("acceptMessageDelivery not found")
 	}

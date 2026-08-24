@@ -16,7 +16,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/util"
 )
 
-// runComputerResident is the CLI bootstrap for the machine-wide Computer Host.
+// runComputerResident is the CLI bootstrap for the machine-wide ComputerCore.
 // It wires only internal/computer owners; one Binding's execution is spawned
 // separately through computer.BindingRunnerLauncher.
 func runComputerResident(cmd *cobra.Command, _ []string) error {
@@ -76,7 +76,7 @@ func runComputerResident(cmd *cobra.Command, _ []string) error {
 		ServiceEndpoint: serviceEndpoint,
 		BindingsRoot:    bindingsRoot, WorkspacesRoot: workspacesRoot,
 	}
-	host, err := computer.NewHost(computer.HostConfig{
+	host, err := computer.NewComputerCore(computer.ComputerCoreConfig{
 		Spawn: launcher.Spawn, ResidentRoot: bindingsRoot, Logger: logger, ControlToken: controlToken,
 		MaxAgentProcesses: maxAgentProcesses,
 	})

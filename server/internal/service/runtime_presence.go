@@ -1,6 +1,6 @@
 package service
 
-// RunnerPresence is the "is this Computer's Workspace Runner socket live
+// RunnerPresence is the "is this Computer's WorkspaceDaemon socket live
 // right now" judgment used across the server for WS-authoritative liveness.
 //
 // LRM-1571: heartbeat retirement — for WS-capable daemons the Workspace
@@ -10,8 +10,8 @@ package service
 // first and only degrade to the last_seen_at based RuntimeConnectivity
 // read when the presence source is unavailable.
 type RunnerPresence interface {
-	// HasWorkspaceRunner reports whether the daemon currently holds a live
-	// DaemonCore / Workspace Runner socket for a workspace. Connect is online;
+	// HasWorkspaceDaemon reports whether the daemon currently holds a live
+	// DaemonCore / WorkspaceDaemon socket for a workspace. Connect is online;
 	// disconnect is offline.
-	HasWorkspaceRunner(daemonID, workspaceID string) bool
+	HasWorkspaceDaemon(daemonID, workspaceID string) bool
 }

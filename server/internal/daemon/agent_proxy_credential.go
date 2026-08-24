@@ -34,7 +34,7 @@ type authenticatedAgentProxy struct {
 }
 
 type agentProxyCLITransport struct {
-	daemon      *Daemon
+	daemon      *WorkspaceDaemonCore
 	credential  [32]byte
 	inbox       InboxKey
 	runtimeID   string
@@ -49,7 +49,7 @@ type agentProxyCLITransport struct {
 // carrier used by generated Agent CLI wrappers. Authentication state belongs
 // to the Machine Service and process launch; Message coordinators never see the
 // token or its file path.
-func (d *Daemon) prepareAgentProxyCLITransport(
+func (d *WorkspaceDaemonCore) prepareAgentProxyCLITransport(
 	key InboxKey,
 	runtimeID, launchID, multicaBin string,
 ) (*agentProxyCLITransport, error) {
@@ -168,7 +168,7 @@ func (d *Daemon) prepareAgentProxyCLITransport(
 	return transport, nil
 }
 
-func (d *Daemon) authenticateAgentProxyToken(token string) (authenticatedAgentProxy, error) {
+func (d *WorkspaceDaemonCore) authenticateAgentProxyToken(token string) (authenticatedAgentProxy, error) {
 	if d == nil {
 		return authenticatedAgentProxy{}, ErrAgentProxyCredentialInvalid
 	}
@@ -216,7 +216,7 @@ func (t *agentProxyCLITransport) Close() error {
 	return t.closeErr
 }
 
-func (d *Daemon) recordAgentProxyCredentialLifecycle(key InboxKey, runtimeID, phase, outcome, reasonCode string) {
+func (d *WorkspaceDaemonCore) recordAgentProxyCredentialLifecycle(key InboxKey, runtimeID, phase, outcome, reasonCode string) {
 	d.recordRunnerDiagnostic(key.WorkspaceID, diagnosticlog.Event{
 		Name:      diagnosticlog.EventAgentProcessStateChanged,
 		Level:     diagnosticLevel(outcome),

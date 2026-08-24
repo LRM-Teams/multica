@@ -60,7 +60,10 @@ import { useChatResize } from "./use-chat-resize";
 import { useNoteBubbleSidebarWidth } from "./use-note-bubble-sidebar-width";
 import {
   NOTE_ASSISTANT_SIDEBAR_EXIT_MS,
+  chatWindowClosesOnEscape,
   chatWindowClosesOnOutsideClick,
+  chatWindowEscapeClosesNoteBubble,
+  chatWindowEscapeLayerSelector,
   chatWindowMainPane,
   chatWindowMainPaneClassName,
   chatWindowShellClassName,
@@ -982,23 +985,7 @@ export function ChatWindow({
       const target = event.target;
       if (!(target instanceof Element)) return;
       if (windowRef.current?.contains(target)) return;
-      if (
-        target.closest(
-          [
-            '[data-slot="popover-content"]',
-            '[data-slot="dialog-content"]',
-            '[data-slot="dialog-overlay"]',
-            '[data-slot="alert-dialog-content"]',
-            '[data-slot="alert-dialog-overlay"]',
-            '[data-slot="dropdown-menu-content"]',
-            '[data-slot="dropdown-menu-sub-content"]',
-            '[data-slot="select-content"]',
-            '[data-slot="tooltip-content"]',
-            '[data-slot="sheet-content"]',
-            '[data-slot="sheet-overlay"]',
-          ].join(","),
-        )
-      ) {
+      if (target.closest(chatWindowEscapeLayerSelector() + ', [data-slot="tooltip-content"]')) {
         return;
       }
       handleMinimize();
@@ -1006,6 +993,20 @@ export function ChatWindow({
 
     document.addEventListener("pointerdown", onPointerDown);
     return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [isNoteBubble, isOpen, effectiveLayout, handleMinimize]);
+
+  useEffect(() => {
+    if (!isNoteBubble || !isOpen || !chatWindowClosesOnEscape(effectiveLayout)) return;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!chatWindowEscapeClosesNoteBubble(event)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      handleMinimize();
+    };
+
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
   }, [isNoteBubble, isOpen, effectiveLayout, handleMinimize]);
 
   // Fullscreen sheet must cover the *viewport*, not just the DM `<main>`.

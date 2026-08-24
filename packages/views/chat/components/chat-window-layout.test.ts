@@ -3,7 +3,9 @@ import {
   CHAT_WINDOW_SIDEBAR_DEFAULT_WIDTH,
   CHAT_WINDOW_SIDEBAR_MAX_WIDTH,
   CHAT_WINDOW_SIDEBAR_MIN_WIDTH,
+  chatWindowClosesOnEscape,
   chatWindowClosesOnOutsideClick,
+  chatWindowEscapeClosesNoteBubble,
   chatWindowShellClassName,
   chatWindowSidebarClipClassName,
   chatWindowSidebarSlideClassName,
@@ -62,6 +64,32 @@ describe("chat window layout chrome", () => {
     expect(chatWindowClosesOnOutsideClick("floating")).toBe(true);
     expect(chatWindowUsesFloatingChrome("sidebar")).toBe(false);
     expect(chatWindowUsesFloatingChrome("floating")).toBe(true);
+  });
+
+  it("lets Escape dismiss the notes rail and the mobile sheet", () => {
+    expect(chatWindowClosesOnEscape("sidebar")).toBe(true);
+    expect(chatWindowClosesOnEscape("fullscreen")).toBe(true);
+    expect(chatWindowClosesOnEscape("floating")).toBe(false);
+  });
+
+  it("closes the notes rail on Escape unless a dialog or menu owns it", () => {
+    expect(
+      chatWindowEscapeClosesNoteBubble({ key: "Escape", defaultPrevented: false }, document),
+    ).toBe(true);
+    expect(
+      chatWindowEscapeClosesNoteBubble({ key: "Enter", defaultPrevented: false }, document),
+    ).toBe(false);
+    expect(
+      chatWindowEscapeClosesNoteBubble({ key: "Escape", defaultPrevented: true }, document),
+    ).toBe(false);
+
+    const dialog = document.createElement("div");
+    dialog.setAttribute("data-slot", "dialog-content");
+    document.body.appendChild(dialog);
+    expect(
+      chatWindowEscapeClosesNoteBubble({ key: "Escape", defaultPrevented: false }, document),
+    ).toBe(false);
+    dialog.remove();
   });
 
   it("reserves the rail width only when the desktop sidebar is open", () => {

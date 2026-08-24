@@ -11,7 +11,7 @@ to these sources.
 | Collect / retry / synth one-shot session | `persistPeriodBriefNoteBriefContext`; daemon `ForceFreshSession` |
 | Status board fields (status/retryable/abandon_why) | `formatNotePeriodBriefPacks`, `classifyPeriodBriefCollectorOutcome` |
 | Permanent vs retryable classification | `server/internal/handler/note_period_brief_classify.go` |
-| Max 3 retries per collector | `notePeriodBriefCollectorMaxRetries` |
+| One Notes-Assistant retry per collector; inbox does not auto-retry | `notePeriodBriefCollectorMaxRetries`; `SetAgentTaskMaxAttempts(..., 1)` |
 | Narrow retry API | `POST /api/agent/notes/period-briefs/{draftPageId}/retry-collectors` → `RetryAgentNotePeriodBriefCollectors` |
 | Collector submit-pack API | `POST /api/agent/notes/period-briefs/{draftPageId}/submit-pack` → `SubmitAgentNotePeriodBriefPack` |
 | CLI | `multica notes period-brief retry-collectors` → `server/cmd/multica/cmd_notes.go` |
@@ -31,4 +31,7 @@ to these sources.
 | Wake system_contract repeats Summary board + Mermaid | `buildNotePeriodBriefPrompt` |
 | Synthesizer identity is 笔记助手 | `resolvePeriodBriefSynthesizerId`; `EnsurePeriodBriefAgent` archives leftover `weekly-report` |
 | Work Summary expands collector Work groups (main title + nested work) | this skill `Work Summary grouping`; `notePeriodBriefInstruction` |
+| Notes are not Period Brief source material | `normalizeNotePeriodBriefSources` always skips `touched_notes`; `formatNotePeriodBriefFacts` omits notes; instruction §12; this skill `Notes pages are not a source` |
+| `agent_runs` excludes 写汇报 machinery | `loadNotePeriodBriefRunFacts` (`note_worker`, `notes-assistant`, `period-collect-*`, `weekly-report`); `TestLoadNotePeriodBriefFactsExcludesMachineryAndNotes` |
+| Fact lines never paste `trigger_summary` | `formatNotePeriodBriefRunLine`; `TestFormatNotePeriodBriefFactsOmitsNotesAndPromptBlobs` |
 

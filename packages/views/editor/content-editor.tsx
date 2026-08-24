@@ -98,6 +98,12 @@ interface ContentEditorProps {
   onAskAboutSelection?: (text: string) => void;
   /** Optional Notion-style empty-line AI action for editing the current page. */
   onEditPageWithAI?: PageEditAIAction;
+  /**
+   * Called when the empty-line prompt is sent. Return false to handle the
+   * request elsewhere — e.g. open the Notes assistant sidebar so the human
+   * can configure 笔记助手. Space still opens the in-note input bar.
+   */
+  onRequestPageAI?: () => boolean;
   /** Applies an AI-suggested title only after the user confirms an edit. */
   onApplyAITitle?: (title: string) => void;
   /** Current title snapshot used to undo AI title suggestions. */
@@ -239,6 +245,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
       onOptimizeSelection,
       onAskAboutSelection,
       onEditPageWithAI,
+      onRequestPageAI,
       onApplyAITitle,
       currentAITitle,
       showEmptyLinePlaceholder = false,
@@ -762,6 +769,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
               state={emptyLineAiState}
               onChange={setEmptyLineAiState}
               onEditPageWithAI={onEditPageWithAI}
+              onRequestPageAI={onRequestPageAI}
               onApplyTitle={onApplyAITitle}
               currentTitle={currentAITitle}
               onClose={() => {

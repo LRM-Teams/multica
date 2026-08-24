@@ -175,6 +175,14 @@ SELECT context FROM agent_inbox_event WHERE id = $1`, *resp.Job.TaskID).Scan(&co
 			t.Fatalf("collector job missing task_id: %#v", job)
 		}
 		assertPeriodBriefInboxForceFresh(t, *job.TaskID)
+		var maxAttempts int32
+		if err := testPool.QueryRow(context.Background(), `
+SELECT max_attempts FROM agent_inbox_event WHERE id = $1`, *job.TaskID).Scan(&maxAttempts); err != nil {
+			t.Fatalf("load collector max_attempts: %v", err)
+		}
+		if maxAttempts != 1 {
+			t.Fatalf("collector inbox max_attempts = %d, want 1 (no automatic re-collect)", maxAttempts)
+		}
 	}
 	if resp.Job.ChannelMessageID == nil {
 		t.Fatal("expected synthesizer channel_message_id")

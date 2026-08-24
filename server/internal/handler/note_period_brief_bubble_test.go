@@ -146,7 +146,7 @@ func TestCreateNotePeriodBriefPostsBubbleTranscriptAndInsertsUnderSourcePage(t *
 		t.Skip("database not available")
 	}
 	prevWait := notePeriodBriefCollectorMaxWait
-	notePeriodBriefCollectorMaxWait = 0
+	notePeriodBriefCollectorMaxWait = 2 * time.Second
 	prevBG := notePeriodBriefFinishInBackground
 	notePeriodBriefFinishInBackground = false
 	t.Cleanup(func() {
@@ -167,6 +167,7 @@ RETURNING id`, testWorkspaceID, testUserID, "Source page "+uuid.NewString()[:8])
 
 	synthID := createHandlerTestAgent(t, "Period Brief Synth "+uuid.NewString()[:8], nil)
 	collectorA := createPeriodBriefCollectorTestAgent(t, "Laptop A")
+	injectPeriodBriefCollectorPackMarkdown(t, collectorA, "## Work groups\n\n### Ready\n- injected pack\n")
 
 	day := time.Now().UTC().Format("2006-01-02")
 	rec := httptest.NewRecorder()
@@ -459,12 +460,106 @@ FROM chat_message WHERE chat_session_id = $1`, sessionID).Scan(&after); err != n
 	_ = collector
 }
 
-func TestPeriodBriefBubbleResultIgnoresPriorFolderWrite(t *testing.T) {
+func TestCreateNotePeriodBriefRetriesOnceBeforeMaterialsReady(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
 	prevWait := notePeriodBriefCollectorMaxWait
 	notePeriodBriefCollectorMaxWait = 0
+	prevBG := notePeriodBriefFinishInBackground
+	notePeriodBriefFinishInBackground = false
+	t.Cleanup(func() {
+		notePeriodBriefCollectorMaxWait = prevWait
+		notePeriodBriefFinishInBackground = prevBG
+	})
+
+	var sourcePageID string
+	if err := testPool.QueryRow(context.Background(), `
+INSERT INTO note_page (workspace_id, owner_user_id, title, content, sort_key, created_by, updated_by)
+VALUES ($1, $2, $3, '', lpad((extract(epoch from now()) * 1000000)::bigint::text, 20, '0'), $2, $2)
+RETURNING id`, testWorkspaceID, testUserID, "Retry page "+uuid.NewString()[:8]).Scan(&sourcePageID); err != nil {
+		t.Fatalf("create source page: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM note_page WHERE id = $1`, sourcePageID)
+	})
+
+	synthID := createHandlerTestAgent(t, "Period Brief Retry "+uuid.NewString()[:8], nil)
+	collectorID := createPeriodBriefCollectorTestAgent(t, "Laptop Retry")
+
+	rec := httptest.NewRecorder()
+	testHandler.CreateNotePeriodBrief(rec, newRequest(http.MethodPost, "/api/notes/period-briefs", map[string]any{
+		"window":               "day",
+		"date":                 time.Now().UTC().Format("2006-01-02"),
+		"timezone":             "UTC",
+		"agent_id":             synthID,
+		"collector_agent_ids":  []string{collectorID},
+		"context_note_page_id": sourcePageID,
+	}))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("period brief = %d: %s", rec.Code, rec.Body.String())
+	}
+	var created createNotePeriodBriefResponse
+	if err := json.NewDecoder(rec.Body).Decode(&created); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	joined := loadPeriodBriefBubbleTranscript(t, created.ChatSessionID)
+	if !strings.Contains(joined, "再发起一次采集") {
+		t.Fatalf("first stall must wait for the Notes Assistant retry:\n%s", joined)
+	}
+	if strings.Contains(joined, "汇报稿整理完成了") {
+		t.Fatalf("must not finish the Brief before the assistant retry:\n%s", joined)
+	}
+
+	retryReq := withURLParam(withAgentCredentialPrincipal(
+		newRequest(http.MethodPost, "/api/agent/notes/period-briefs/"+created.Page.ID+"/retry-collectors", map[string]any{}),
+		synthID, testWorkspaceID, testUserID,
+	), "draftPageId", created.Page.ID)
+	retryRec := httptest.NewRecorder()
+	testHandler.RetryAgentNotePeriodBriefCollectors(retryRec, retryReq)
+	if retryRec.Code != http.StatusOK {
+		t.Fatalf("retry-collectors = %d: %s", retryRec.Code, retryRec.Body.String())
+	}
+	var retryResp retryNotePeriodBriefCollectorsResponse
+	if err := json.Unmarshal(retryRec.Body.Bytes(), &retryResp); err != nil {
+		t.Fatalf("decode retry: %v body=%s", err, retryRec.Body.String())
+	}
+	if len(retryResp.Retried) == 0 {
+		t.Fatalf("assistant retry must re-dispatch: %#v", retryResp)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		joined = loadPeriodBriefBubbleTranscript(t, created.ChatSessionID)
+		if strings.Contains(joined, "汇报稿整理完成了") {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("after one assistant retry the collector result is final:\n%s", joined)
+		}
+		time.Sleep(40 * time.Millisecond)
+	}
+}
+
+func loadPeriodBriefBubbleTranscript(t *testing.T, sessionID string) string {
+	t.Helper()
+	var joined string
+	if err := testPool.QueryRow(context.Background(), `
+SELECT COALESCE(string_agg(role || ':' || content, E'\n' ORDER BY created_at, id), '')
+FROM chat_message
+WHERE chat_session_id = $1`, sessionID).Scan(&joined); err != nil {
+		t.Fatalf("load transcript: %v", err)
+	}
+	return joined
+}
+
+func TestPeriodBriefBubbleResultIgnoresPriorFolderWrite(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	prevWait := notePeriodBriefCollectorMaxWait
+	notePeriodBriefCollectorMaxWait = 2 * time.Second
 	prevBG := notePeriodBriefFinishInBackground
 	notePeriodBriefFinishInBackground = false
 	t.Cleanup(func() {
@@ -485,6 +580,7 @@ RETURNING id`, testWorkspaceID, testUserID, "Source page "+uuid.NewString()[:8])
 
 	synthID := createHandlerTestAgent(t, "Period Brief Stale "+uuid.NewString()[:8], nil)
 	collectorID := createPeriodBriefCollectorTestAgent(t, "Laptop Stale")
+	injectPeriodBriefCollectorPackMarkdown(t, collectorID, "## Work groups\n\n### Ready\n- this-run pack\n")
 	folderID, err := testHandler.ensureNotePeriodBriefFolder(context.Background(), parseUUID(testWorkspaceID), parseUUID(testUserID))
 	if err != nil {
 		t.Fatalf("ensure folder: %v", err)

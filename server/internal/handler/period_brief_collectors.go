@@ -34,9 +34,9 @@ type PeriodBriefCollectorMissingSlot struct {
 // EnsurePeriodBriefCollectorsResponse is returned by
 // POST /api/members/agents/period-brief-collectors.
 type EnsurePeriodBriefCollectorsResponse struct {
-	Agents  []AgentResponse                    `json:"agents"`
-	Created []string                           `json:"created"`
-	Missing []PeriodBriefCollectorMissingSlot  `json:"missing,omitempty"`
+	Agents  []AgentResponse                   `json:"agents"`
+	Created []string                          `json:"created"`
+	Missing []PeriodBriefCollectorMissingSlot `json:"missing,omitempty"`
 }
 
 type ensurePeriodBriefCollectorsRequest struct {
@@ -194,6 +194,10 @@ func (h *Handler) EnsurePeriodBriefCollectors(w http.ResponseWriter, r *http.Req
 			writeError(w, http.StatusBadRequest, "name must be 1-32 lowercase letters, digits, or hyphens")
 			return
 		}
+		if identityUniqueViolation(err, "agent_workspace_name_unique") {
+			writeError(w, http.StatusConflict, "name is already in use")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "failed to create period brief collector: "+err.Error())
 		return
 	}
@@ -342,6 +346,14 @@ func (h *Handler) ensureOnePeriodBriefCollector(
 		updated, err := h.rebindPeriodBriefCollector(ctx, agent, slot.runtime, model)
 		return updated, false, err
 	}
+	// UNIQUE (workspace_id, name) includes archived rows. Soft-delete leaves
+	// the canonical collector name occupied; ListAgents cannot see it, so a
+	// fresh INSERT 23505s. Restore + rebind, same as 笔记助手.
+	if restored, okRestore, restoreErr := h.restoreArchivedPeriodBriefCollector(ctx, wsUUID, name, slot.runtime, model); restoreErr != nil {
+		return db.Agent{}, false, restoreErr
+	} else if okRestore {
+		return restored, true, nil
+	}
 
 	createParams := db.CreateAgentParams{
 		WorkspaceID:   wsUUID,
@@ -362,6 +374,9 @@ func (h *Handler) ensureOnePeriodBriefCollector(
 	created, err := h.createAgentManagedCommit(ctx, wsUUID, createParams, displayName)
 	if err != nil {
 		if identityUniqueViolation(err, "agent_workspace_name_unique") {
+			if restored, okRestore, restoreErr := h.restoreArchivedPeriodBriefCollector(ctx, wsUUID, name, slot.runtime, model); restoreErr == nil && okRestore {
+				return restored, true, nil
+			}
 			if agent, found, findErr := h.findAgentByName(ctx, wsUUID, name); findErr == nil && found {
 				updated, rebindErr := h.rebindPeriodBriefCollector(ctx, agent, slot.runtime, model)
 				return updated, false, rebindErr
@@ -370,6 +385,48 @@ func (h *Handler) ensureOnePeriodBriefCollector(
 		return db.Agent{}, false, err
 	}
 	return created, true, nil
+}
+
+func (h *Handler) findPeriodBriefCollectorByNameIncludingArchived(
+	ctx context.Context,
+	workspaceID pgtype.UUID,
+	name string,
+) (db.Agent, bool, error) {
+	agents, err := h.Queries.ListAllAgents(ctx, workspaceID)
+	if err != nil {
+		return db.Agent{}, false, err
+	}
+	for _, agent := range agents {
+		if agent.Name == name {
+			return agent, true, nil
+		}
+	}
+	return db.Agent{}, false, nil
+}
+
+// restoreArchivedPeriodBriefCollector un-archives the collector that still
+// holds the canonical name (if any) and rebinds it to the requested
+// runtime/model. Returns ok=false when none archived.
+func (h *Handler) restoreArchivedPeriodBriefCollector(
+	ctx context.Context,
+	workspaceID pgtype.UUID,
+	name string,
+	runtime db.AgentRuntime,
+	model string,
+) (db.Agent, bool, error) {
+	agent, found, err := h.findPeriodBriefCollectorByNameIncludingArchived(ctx, workspaceID, name)
+	if err != nil || !found || !agent.ArchivedAt.Valid {
+		return db.Agent{}, false, err
+	}
+	restored, err := h.Queries.RestoreAgent(ctx, agent.ID)
+	if err != nil {
+		return db.Agent{}, false, err
+	}
+	updated, rebindErr := h.rebindPeriodBriefCollector(ctx, restored, runtime, model)
+	if rebindErr != nil {
+		return restored, true, rebindErr
+	}
+	return updated, true, nil
 }
 
 func (h *Handler) findAgentByName(ctx context.Context, workspaceID pgtype.UUID, name string) (db.Agent, bool, error) {

@@ -299,8 +299,8 @@ func formatPeriodBriefRetryHint(draftPageID string) string {
 	return fmt.Sprintf(
 		"Retry only retryable collectors (never permanent config/auth/key failures) with:\n"+
 			"`multica notes period-brief retry-collectors --draft-page-id %s [--collector-agent-id <id>]`\n"+
-			"Max %d retries per collector. Platform rejects permanent failures and over-cap retries.\n"+
+			"Exactly one retry per collector. Inbox will not auto-retry. After that attempt settles, the result is final.\n"+
 			"After a successful retry call, stop and wait — the platform re-wakes you when packs settle.",
-		draftPageID, notePeriodBriefCollectorMaxRetries,
+		draftPageID,
 	)
 }

@@ -302,6 +302,74 @@ func TestLegacyControlPlaneRunnerCanBecomeReadyOnlyForRollingUpgrade(t *testing.
 	}
 }
 
+func TestAlpha7WorkspaceDaemonCanReconnectForMachineUpgrade(t *testing.T) {
+	hub := NewHub()
+	ready := make(chan struct{}, 1)
+	hub.SetWorkspaceDaemonHandler(func(_ context.Context, _ ClientIdentity, _ string, eventType string, _ json.RawMessage) error {
+		if eventType == protocol.EventWorkspaceDaemonReady {
+			ready <- struct{}{}
+		}
+		return nil
+	})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hub.HandleWebSocket(w, r, ClientIdentity{DaemonID: "daemon-alpha7", WorkspaceID: "workspace-1", ClientVersion: "0.4.25-alpha.7"})
+	}))
+	defer server.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	frame, err := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceDaemonReady, Payload: mustMarshalRaw(protocol.WorkspaceReadyPayload{
+		WorkspaceID: "workspace-1", DaemonInstanceID: "alpha7-instance-1",
+		ActiveCapabilities: []string{
+			"workspace_runner_agent_process_v1",
+			"workspace_runner_agent_reset_workspace_v1",
+			"workspace_runner_control_plane_v1",
+		},
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, frame); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case <-ready:
+	case <-time.After(time.Second):
+		t.Fatal("v0.4.25-alpha.7 WorkspaceDaemon could not reconnect for its machine upgrade")
+	}
+	if !hub.HasWorkspaceDaemon("daemon-alpha7", "workspace-1") {
+		t.Fatal("v0.4.25-alpha.7 WorkspaceDaemon was not reported online")
+	}
+	if hub.NotifyAgentRestartCommand("workspace-1", "daemon-alpha7", protocol.EventDaemonAgentStart, "dispatch-1", protocol.AgentStartPayload{
+		AgentID: "agent-1", RuntimeID: "runtime-1"}) {
+		t.Fatal("v0.4.25-alpha.7 WorkspaceDaemon received an incompatible Agent process command")
+	}
+
+	upgrade := protocol.ComputerUpgradePayload{RequestID: "upgrade-1", TargetVersion: "v0.4.25-alpha.8"}
+	if !hub.NotifyWorkspaceDaemon("daemon-alpha7", "workspace-1", protocol.EventComputerUpgrade, upgrade) {
+		t.Fatal("v0.4.25-alpha.7 WorkspaceDaemon could not receive its machine upgrade")
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	_, raw, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("v0.4.25-alpha.7 WorkspaceDaemon did not receive its machine upgrade: %v", err)
+	}
+	var message protocol.Message
+	if err := json.Unmarshal(raw, &message); err != nil {
+		t.Fatal(err)
+	}
+	var payload protocol.ComputerUpgradePayload
+	if message.Type != protocol.EventComputerUpgrade || json.Unmarshal(message.Payload, &payload) != nil || payload.RequestID != upgrade.RequestID || payload.TargetVersion != upgrade.TargetVersion {
+		t.Fatalf("machine upgrade = %s, want v0.4.25-alpha.7-compatible command", raw)
+	}
+}
+
 func TestWorkspaceDaemonCapabilityBelongsOnlyToCurrentReadyConnection(t *testing.T) {
 	hub := NewHub()
 	key := workspaceDaemonKey{daemonID: "daemon-1", workspaceID: "workspace-1"}

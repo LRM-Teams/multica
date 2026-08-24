@@ -25,15 +25,17 @@ var ErrRuntimeOffline = errors.New("runtime offline")
 var ErrComputerOffline = errors.New("computer offline")
 
 const (
-	writeWait                  = 10 * time.Second
-	pongWait                   = 60 * time.Second
-	pingPeriod                 = (pongWait * 9) / 10
-	agentDeliveryRetryInterval = time.Second
-	runnerInboundWatchdog      = 70 * time.Second
-	runnerPingInterval         = 20 * time.Second
-	legacyRunnerAttachmentCap  = "workspace_daemon_attachment_v1"
-	legacyAttachmentReplayReq  = "agent:attachment.replay_request"
-	legacyAttachmentReplayEnd  = "agent:attachment.replay_end"
+	writeWait                   = 10 * time.Second
+	pongWait                    = 60 * time.Second
+	pingPeriod                  = (pongWait * 9) / 10
+	agentDeliveryRetryInterval  = time.Second
+	runnerInboundWatchdog       = 70 * time.Second
+	runnerPingInterval          = 20 * time.Second
+	legacyRunnerAttachmentCap   = "workspace_daemon_attachment_v1"
+	legacyAlpha7AgentProcessCap = "workspace_runner_agent_process_v1"
+	legacyAlpha7ControlPlaneCap = "workspace_runner_control_plane_v1"
+	legacyAttachmentReplayReq   = "agent:attachment.replay_request"
+	legacyAttachmentReplayEnd   = "agent:attachment.replay_end"
 )
 
 // ClientIdentity captures the already-authenticated daemon connection scope.
@@ -1290,22 +1292,25 @@ func validWorkspaceDaemonReady(ready protocol.WorkspaceReadyPayload) bool {
 }
 
 // validLegacyUpgradeWorkspaceDaemonReady is a server-only rolling-upgrade
-// adapter for the immediately preceding Computer release. That release can
-// carry machine upgrade actions over the Runner control plane but advertises
-// the retired Attachment capability instead of the current Agent process one.
-// Validate a copy with the current capability added, then retain the original
-// capability set on the connection so new Agent process commands stay fenced.
+// adapter for Computers that can carry machine upgrade actions but advertise
+// a retired capability generation. Validate a copy with the current Agent
+// process capability added, then retain the original capability set on the
+// connection so incompatible Agent process commands stay fenced.
 func validLegacyUpgradeWorkspaceDaemonReady(ready protocol.WorkspaceReadyPayload) bool {
-	var supportsLegacyAttachment, supportsControlPlane bool
+	var supportsLegacyAttachment, supportsControlPlane, supportsAlpha7AgentProcess, supportsAlpha7ControlPlane bool
 	for _, capability := range ready.ActiveCapabilities {
 		switch capability {
 		case legacyRunnerAttachmentCap:
 			supportsLegacyAttachment = true
 		case protocol.DaemonCapabilityWorkspaceDaemonControlPlane:
 			supportsControlPlane = true
+		case legacyAlpha7AgentProcessCap:
+			supportsAlpha7AgentProcess = true
+		case legacyAlpha7ControlPlaneCap:
+			supportsAlpha7ControlPlane = true
 		}
 	}
-	if !supportsLegacyAttachment || !supportsControlPlane {
+	if !(supportsLegacyAttachment && supportsControlPlane) && !(supportsAlpha7AgentProcess && supportsAlpha7ControlPlane) {
 		return false
 	}
 	compatible := ready

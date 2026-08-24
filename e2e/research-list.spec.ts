@@ -19,6 +19,7 @@ const WS_SLUG = `e2e-research-ws-${Date.now()}`;
 let api: TestApiClient;
 let slug: string;
 let workspaceId = "";
+let rowSessionId = "";
 
 async function dbQuery(sql: string, params: unknown[] = []) {
   const client = new pg.Client(DATABASE_URL);
@@ -177,20 +178,20 @@ test.describe.serial("research list page — LRM-789 slice C", () => {
     await page.evaluate((t) => localStorage.setItem("multica_token", t), api.getToken());
     await gotoResearch(page);
 
-    const headers = page.locator("section h2");
-    await expect(headers).toHaveCount(2, { timeout: 15000 });
-    const inProgress = headers.first();
-    const completed = headers.last();
+    const inProgressGroup = page.getByTestId("research-session-group-in-progress");
+    const completedGroup = page.getByTestId("research-session-group-completed");
+    const inProgress = inProgressGroup.getByRole("heading");
+    const completed = completedGroup.getByRole("heading");
+    await expect(inProgressGroup).toBeVisible({ timeout: 15000 });
+    await expect(completedGroup).toBeVisible();
     await expect(inProgress).toContainText(/In progress\s*2/);
     await expect(completed).toContainText(/Completed\s*1/);
 
-    // Filter out the notification toaster, which is also a <section>.
-    const sections = page.locator("section").filter({ has: page.locator("h2") });
-    await expect(sections.first()).toContainText("Alpha market map");
-    await expect(sections.first()).toContainText("Beta competitor scan");
-    await expect(sections.first()).not.toContainText("Gamma done report");
-    await expect(sections.last()).toContainText("Gamma done report");
-    await expect(sections.last()).not.toContainText("Alpha market map");
+    await expect(inProgressGroup).toContainText("Alpha market map");
+    await expect(inProgressGroup).toContainText("Beta competitor scan");
+    await expect(inProgressGroup).not.toContainText("Gamma done report");
+    await expect(completedGroup).toContainText("Gamma done report");
+    await expect(completedGroup).not.toContainText("Alpha market map");
 
     await page.screenshot({ path: "e2e/artifacts/lrm789-grouped-desktop.png", fullPage: true });
   });
@@ -201,10 +202,11 @@ test.describe.serial("research list page — LRM-789 slice C", () => {
     await page.evaluate((t) => localStorage.setItem("multica_token", t), api.getToken());
     await gotoResearch(page);
 
-    const headers = page.locator("section h2");
-    await expect(headers).toHaveCount(2, { timeout: 15000 });
-    const groupSections = page.locator("section").filter({ has: page.locator("h2") });
-    await expect(groupSections.first()).toContainText("Alpha market map");
+    const inProgressGroup = page.getByTestId("research-session-group-in-progress");
+    const completedGroup = page.getByTestId("research-session-group-completed");
+    await expect(inProgressGroup).toBeVisible({ timeout: 15000 });
+    await expect(completedGroup).toBeVisible();
+    await expect(inProgressGroup).toContainText("Alpha market map");
     await page.screenshot({ path: "e2e/artifacts/lrm789-grouped-narrow.png", fullPage: true });
   });
 });
@@ -215,14 +217,21 @@ test.describe.serial("research list rows — LRM-788 slice B", () => {
   // chevron; the whole row is a link.
 
   test("row shows status dot, stage chip, avatar stack, and time (desktop)", async ({ page }) => {
-    await seedSession("Map the alpha market", "running", "s2_sources", "Alpha market map");
+    rowSessionId = await seedSession(
+      "Map the alpha market",
+      "running",
+      "s2_sources",
+      "Alpha market map",
+    );
     await seedSession("Delta delivered report", "completed", "s4_delivery");
 
     await page.goto("/login");
     await page.evaluate((t) => localStorage.setItem("multica_token", t), api.getToken());
     await gotoResearch(page);
 
-    const runningRow = page.locator("div.group", { hasText: "Alpha market map" }).first();
+    const runningRow = page.locator(
+      `[data-testid="research-session-row"][data-session-id="${rowSessionId}"]`,
+    );
     await expect(runningRow).toBeVisible({ timeout: 15000 });
 
     // Semantic status dot: brand + pulse for running.
@@ -236,7 +245,9 @@ test.describe.serial("research list rows — LRM-788 slice B", () => {
     // Fleet avatar stack renders at least one head.
     await expect(runningRow.locator("span.rounded-full.ring-2").first()).toBeVisible();
 
-    const completedRow = page.locator("div.group", { hasText: "Delta delivered report" }).first();
+    const completedRow = page
+      .getByTestId("research-session-row")
+      .filter({ hasText: "Delta delivered report" });
     const doneDot = completedRow.locator("span.rounded-full.size-2").first();
     await expect(doneDot).not.toHaveClass(/animate-pulse/);
     await expect(completedRow).toContainText(/S[1-4]\s*·/);
@@ -249,7 +260,9 @@ test.describe.serial("research list rows — LRM-788 slice B", () => {
     await page.evaluate((t) => localStorage.setItem("multica_token", t), api.getToken());
     await gotoResearch(page);
 
-    const row = page.locator("div.group", { hasText: "Alpha market map" }).first();
+    const row = page.locator(
+      `[data-testid="research-session-row"][data-session-id="${rowSessionId}"]`,
+    );
     await expect(row).toBeVisible({ timeout: 15000 });
 
     const actions = row.getByRole("button", { name: "Research actions" });
@@ -258,7 +271,7 @@ test.describe.serial("research list rows — LRM-788 slice B", () => {
     await row.hover();
     await expect(actionsShell).toHaveCSS("opacity", "1");
 
-    await row.locator("a").first().click();
+    await row.getByRole("link").first().click();
     await expect(page).toHaveURL(/\/research\/[0-9a-f-]{36}/, { timeout: 15000 });
   });
 
@@ -268,7 +281,9 @@ test.describe.serial("research list rows — LRM-788 slice B", () => {
     await page.evaluate((t) => localStorage.setItem("multica_token", t), api.getToken());
     await gotoResearch(page);
 
-    const row = page.locator("div.group", { hasText: "Alpha market map" }).first();
+    const row = page.locator(
+      `[data-testid="research-session-row"][data-session-id="${rowSessionId}"]`,
+    );
     await expect(row).toBeVisible({ timeout: 15000 });
     await expect(row).toContainText(/S[1-4]\s*·/);
     await page.screenshot({ path: "e2e/artifacts/lrm788-rows-narrow.png", fullPage: true });
@@ -280,7 +295,9 @@ test.describe.serial("research list rows — LRM-788 slice B", () => {
     await page.evaluate((t) => localStorage.setItem("multica_token", t), api.getToken());
     await gotoResearch(page);
 
-    const row = page.locator("div.group", { hasText: "Alpha market map" }).first();
+    const row = page.locator(
+      `[data-testid="research-session-row"][data-session-id="${rowSessionId}"]`,
+    );
     await expect(row).toBeVisible({ timeout: 15000 });
     await expect(page.locator("html")).toHaveClass(/dark/);
     await page.screenshot({ path: "e2e/artifacts/lrm788-rows-dark.png", fullPage: true });

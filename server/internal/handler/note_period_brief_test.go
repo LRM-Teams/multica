@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -175,6 +176,14 @@ SELECT context FROM agent_inbox_event WHERE id = $1`, *resp.Job.TaskID).Scan(&co
 			t.Fatalf("collector job missing task_id: %#v", job)
 		}
 		assertPeriodBriefInboxForceFresh(t, *job.TaskID)
+		var maxAttempts int32
+		if err := testPool.QueryRow(context.Background(), `
+SELECT max_attempts FROM agent_inbox_event WHERE id = $1`, *job.TaskID).Scan(&maxAttempts); err != nil {
+			t.Fatalf("load collector max_attempts: %v", err)
+		}
+		if maxAttempts != 1 {
+			t.Fatalf("collector inbox max_attempts = %d, want 1 (no automatic re-collect)", maxAttempts)
+		}
 	}
 	if resp.Job.ChannelMessageID == nil {
 		t.Fatal("expected synthesizer channel_message_id")
@@ -767,4 +776,85 @@ func TestCreateNotePeriodBriefFocusHonorsCollectPlanSkip(t *testing.T) {
 	if resp.CollectorJobs[0].AgentID != collectorA {
 		t.Fatalf("dispatched %s, want %s", resp.CollectorJobs[0].AgentID, collectorA)
 	}
+}
+
+func TestSubmitAgentNotePeriodBriefPackDoesNotClobberSibling(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	synthID := createHandlerTestAgent(t, "Pack Race Synth "+uuid.NewString()[:8], nil)
+	collectorA := createPeriodBriefCollectorTestAgent(t, "Pack Race A")
+	collectorB := createPeriodBriefCollectorTestAgent(t, "Pack Race B")
+
+	createRec := httptest.NewRecorder()
+	testHandler.CreateNotePeriodBrief(createRec, newRequest(http.MethodPost, "/api/notes/period-briefs", map[string]any{
+		"window":              "day",
+		"date":                time.Now().UTC().Format("2006-01-02"),
+		"timezone":            "UTC",
+		"agent_id":            synthID,
+		"collector_agent_ids": []string{collectorA, collectorB},
+	}))
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create = %d: %s", createRec.Code, createRec.Body.String())
+	}
+	var created createNotePeriodBriefResponse
+	if err := json.NewDecoder(createRec.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create: %v", err)
+	}
+
+	submit := func(agentID, body string) int {
+		req := withURLParam(withAgentCredentialPrincipal(
+			newRequest(http.MethodPost, "/api/agent/notes/period-briefs/"+created.Page.ID+"/submit-pack", map[string]any{
+				"markdown": body,
+			}),
+			agentID, testWorkspaceID, testUserID,
+		), "draftPageId", created.Page.ID)
+		rec := httptest.NewRecorder()
+		testHandler.SubmitAgentNotePeriodBriefPack(rec, req)
+		return rec.Code
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		if code := submit(collectorA, "## Work groups\n\n### A\n- from A\n"); code != http.StatusOK {
+			t.Errorf("submit A = %d", code)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		if code := submit(collectorB, "## Work groups\n\n### B\n- from B\n"); code != http.StatusOK {
+			t.Errorf("submit B = %d", code)
+		}
+	}()
+	wg.Wait()
+
+	var packs []string
+	rows, err := testPool.Query(context.Background(), `
+SELECT c->>'agent_id', c->>'pack_markdown'
+FROM note_period_brief_run r,
+     jsonb_array_elements(r.collectors) AS c
+WHERE r.draft_page_id = $1::uuid
+ORDER BY c->>'agent_id'`, created.Page.ID)
+	if err != nil {
+		t.Fatalf("load packs: %v", err)
+	}
+	defer rows.Close()
+	got := map[string]string{}
+	for rows.Next() {
+		var agentID, markdown string
+		if err := rows.Scan(&agentID, &markdown); err != nil {
+			t.Fatalf("scan pack: %v", err)
+		}
+		got[agentID] = markdown
+		packs = append(packs, agentID)
+	}
+	if !strings.Contains(got[collectorA], "from A") {
+		t.Fatalf("collector A pack lost: %#v", got)
+	}
+	if !strings.Contains(got[collectorB], "from B") {
+		t.Fatalf("collector B pack lost: %#v", got)
+	}
+	_ = packs
 }

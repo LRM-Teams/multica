@@ -10,8 +10,10 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/multica-ai/multica/server/internal/diagnosticlog"
 	"github.com/multica-ai/multica/server/pkg/agent"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -23,6 +25,7 @@ type workspaceSessionConfig struct {
 	DaemonID         string
 	DaemonInstanceID string
 	WorkspaceID      string
+	RuntimeEpoch     int64
 	DeviceName       string
 	OS               string
 	CLIVersion       string
@@ -82,9 +85,10 @@ type workspaceSessionDependencies struct {
 // methods; its Inbox, process, Activity, and socket state never
 // escape to the machine-wide Daemon lifecycle owner.
 type workspaceSession struct {
-	config workspaceSessionConfig
-	client *Client
-	logger *slog.Logger
+	config       workspaceSessionConfig
+	runtimeEpoch atomic.Int64
+	client       *Client
+	logger       *slog.Logger
 
 	serverBaseURL  string
 	workspacesRoot string
@@ -124,6 +128,19 @@ type workspaceSession struct {
 	onReady      func()
 }
 
+func (runner *workspaceSession) currentRuntimeEpoch() int64 {
+	if runner == nil {
+		return 0
+	}
+	return runner.runtimeEpoch.Load()
+}
+
+func (runner *workspaceSession) setRuntimeEpoch(epoch int64) {
+	if runner != nil {
+		runner.runtimeEpoch.Store(epoch)
+	}
+}
+
 func (runner *workspaceSession) WorkspaceID() string {
 	if runner == nil {
 		return ""
@@ -159,7 +176,7 @@ func newWorkspaceSession(config workspaceSessionConfig, dependencies workspaceSe
 		return nil, err
 	}
 	life, lifeStop := context.WithCancel(context.Background())
-	return &workspaceSession{
+	runner := &workspaceSession{
 		config:         config,
 		client:         dependencies.client,
 		logger:         dependencies.logger,
@@ -196,7 +213,9 @@ func newWorkspaceSession(config workspaceSessionConfig, dependencies workspaceSe
 		residency:                 newAgentResidencyStore(now),
 		life:                      life,
 		lifeStop:                  lifeStop,
-	}, nil
+	}
+	runner.setRuntimeEpoch(config.RuntimeEpoch)
+	return runner, nil
 }
 
 func (runner *workspaceSession) Close() {
@@ -359,13 +378,53 @@ func (d *WorkspaceDaemonCore) newWorkspaceSession(workspaceID string) (*workspac
 	if d == nil {
 		return nil, errors.New("WorkspaceDaemonCore is required")
 	}
+	d.mu.Lock()
+	providerByRuntime := make(map[string]string)
+	for runtimeID, runtime := range d.runtimeIndex {
+		if runtime.WorkspaceID == workspaceID {
+			providerByRuntime[runtimeID] = strings.ToLower(strings.TrimSpace(runtime.Provider))
+		}
+	}
+	d.mu.Unlock()
+	d.mu.Lock()
+	runtimeEpoch := int64(0)
+	if state := d.workspaces[workspaceID]; state != nil {
+		runtimeEpoch = state.runtimeEpoch
+	}
+	d.mu.Unlock()
 	onTransition := func(transition agentLifecycleTransition) {
 		d.recordAgentLifecycleTransition(transition)
+		phase := transition.Phase
+		if phase == "process_residency" {
+			phase = "provider_spawn"
+		} else if phase == "runtime_readiness" {
+			phase = "provider_ready"
+		} else if transition.Event == "close" && transition.Result == "terminal" {
+			phase = "provider_exit"
+		}
+		provider := providerByRuntime[transition.RuntimeID]
+		if provider == "codex" {
+			d.recordRunnerDiagnostic(workspaceID, diagnosticlog.Event{
+				Name:  diagnosticlog.EventAgentProcessStateChanged,
+				Level: diagnosticLevel(transition.Result), Component: "provider_process",
+				Identity: diagnosticlog.Identity{
+					EventID: transition.StateInstanceID, AgentID: transition.AgentID,
+					RuntimeID: transition.RuntimeID, StartDispatchID: transition.StartDispatchID,
+					LaunchID: transition.LaunchID, ProcessInstanceID: transition.ProcessInstanceID, ExecutionID: transition.LaunchID,
+				}, Fields: diagnosticlog.Fields{
+					Provider: provider, Phase: phase, Outcome: transition.Event,
+					ReasonCode: transition.Result, ProcessPID: transition.ProcessPID,
+					RuntimeEpoch: transition.RuntimeEpoch, ExitCode: transition.ExitCode, Signal: transition.Signal,
+					TerminationReason: firstNonEmpty(transition.TerminationReason, terminationReasonFromLifecycle(transition.Result)), ForceKilled: transition.ForceKilled,
+				},
+			})
+		}
 	}
 	return newWorkspaceSession(workspaceSessionConfig{
 		DaemonID:         d.cfg.DaemonID,
 		DaemonInstanceID: d.runnerInstanceID,
 		WorkspaceID:      workspaceID,
+		RuntimeEpoch:     runtimeEpoch,
 		DeviceName:       d.cfg.DeviceName,
 		OS:               normalizeGOOS(runtime.GOOS),
 		CLIVersion:       d.cfg.CLIVersion,

@@ -172,7 +172,7 @@ func (runner *workspaceSession) registerManagedAgentStartOnce(payload protocol.W
 	if !runner.hasRuntime(payload.RuntimeID) {
 		return protocol.AgentStartAckPayload{}, false, errors.New("managed start Runtime is outside WorkspaceDaemon scope")
 	}
-	result, err := runner.processes.startWithDisposition(agentProcessStartRequest{AgentID: payload.AgentID, RuntimeID: payload.RuntimeID, LaunchID: payload.LaunchID, StartDispatchID: payload.StartDispatchID, ReadinessPolicy: agentRuntimeReadinessFirstEvent})
+	result, err := runner.processes.startWithDisposition(agentProcessStartRequest{AgentID: payload.AgentID, RuntimeID: payload.RuntimeID, LaunchID: payload.LaunchID, StartDispatchID: payload.StartDispatchID, RuntimeEpoch: runner.currentRuntimeEpoch(), ReadinessPolicy: agentRuntimeReadinessFirstEvent})
 	if err != nil {
 		return protocol.AgentStartAckPayload{}, false, fmt.Errorf("start managed Agent: %w", err)
 	}

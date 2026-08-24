@@ -483,6 +483,10 @@ func (h *Handler) CreateResearchSession(w http.ResponseWriter, r *http.Request) 
 		if !valid {
 			return
 		}
+		if readinessErr := h.researchV6DirectorReadiness(r.Context(), wsUUID, directorID); readinessErr != nil {
+			writeRonaldoV6Error(w, readinessErr.status, readinessErr.code, readinessErr.message, readinessErr.retryable)
+			return
+		}
 		if _, valid = parseUUIDOrBadRequest(w, req.ClientRequestID, "client_request_id"); !valid {
 			return
 		}
@@ -501,7 +505,14 @@ func (h *Handler) CreateResearchSession(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		if createErr != nil {
-			slog.Warn("research V6 bootstrap persisted but follow-up failed", "session_id", createdRun.SessionID, "will_retry", researchRunStartWillRetry(createErr), "error", createErr)
+			retryable := researchRunStartWillRetry(createErr)
+			slog.Warn("research V6 bootstrap persisted but follow-up failed", "session_id", createdRun.SessionID, "will_retry", retryable, "error", createErr)
+			if retryable {
+				writeRonaldoV6Error(w, http.StatusServiceUnavailable, "research.v6.bootstrap_pending", "research V6 initialization is persisted and will be retried", true)
+			} else {
+				writeResearchV6DomainError(w, createErr)
+			}
+			return
 		}
 		session, loadErr := h.Queries.GetResearchSession(r.Context(), db.GetResearchSessionParams{ID: parseUUID(createdRun.SessionID), WorkspaceID: wsUUID})
 		if loadErr != nil {
@@ -518,13 +529,6 @@ func (h *Handler) CreateResearchSession(w http.ResponseWriter, r *http.Request) 
 			response["run"] = runSnapshot
 		} else {
 			slog.Warn("research V6 create snapshot failed", "session_id", createdRun.SessionID, "error", snapshotErr)
-		}
-		if createErr != nil {
-			if researchRunStartWillRetry(createErr) {
-				response["warning"] = "research V6 run was persisted but immediate director dispatch failed; the reconciler will retry"
-			} else {
-				response["warning"] = "research V6 run was created but initial director dispatch failed and will not be retried automatically; review run diagnostics before retrying"
-			}
 		}
 		writeJSON(w, http.StatusCreated, response)
 		return

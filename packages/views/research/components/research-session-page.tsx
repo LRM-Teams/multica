@@ -8,7 +8,9 @@ import { toast } from "sonner";
 import { api, ApiError } from "@multica/core/api";
 import { createResearchV6DirectorProjectionTransport } from "@multica/core/api/research-v6-director";
 import {
+  isResearchV6ProjectionResyncError,
   researchV6DirectorNodeDetailOptions,
+  researchV6DirectorProjectionKeys,
 } from "@multica/core/research-v6/director-queries";
 import { RESEARCH_V6_DIRECTOR_DELTA_EVENT } from "@multica/core/research-v6-live/director-controller";
 import {
@@ -249,6 +251,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     (s) => s.selectSessionNode,
   );
   const appliedNodeLinkRef = useRef<string | null>(null);
+  const nodeDetailResyncSnapshotRef = useRef<string | null>(null);
   const lastCanvasChangeMessageIdRef = useRef<string | null>(null);
   const canvasChangeSessionIdRef = useRef(sessionId);
   const typedGraph = useMemo(
@@ -304,6 +307,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     data: directorNodeDetailData,
     isLoading: directorNodeDetailLoading,
     isError: directorNodeDetailError,
+    error: directorNodeDetailFailure,
     refetch: refetchDirectorNodeDetail,
   } = useQuery({
     ...researchV6DirectorNodeDetailOptions(
@@ -318,6 +322,26 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
       directorV6Enabled &&
       Boolean(directorCanvas.snapshotId && selectedDirectorProjectionNode),
   });
+  useEffect(() => {
+    const expiredSnapshotId = directorCanvas.snapshotId;
+    if (
+      !expiredSnapshotId ||
+      !isResearchV6ProjectionResyncError(directorNodeDetailFailure) ||
+      nodeDetailResyncSnapshotRef.current === expiredSnapshotId
+    ) {
+      return;
+    }
+    nodeDetailResyncSnapshotRef.current = expiredSnapshotId;
+    void qc.invalidateQueries({
+      queryKey: researchV6DirectorProjectionKeys.snapshot(wsId, sessionId),
+    });
+  }, [
+    directorCanvas.snapshotId,
+    directorNodeDetailFailure,
+    qc,
+    sessionId,
+    wsId,
+  ]);
   const {
     data: directorWorkActivityData,
     isLoading: directorWorkActivityLoading,
@@ -535,23 +559,44 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     action: ResearchNodeCommandAction;
     requestId: string;
   } | null>(null);
+  const messageRequestRef = useRef<{
+    identity: string;
+    requestId: string;
+  } | null>(null);
   // Stick-to-bottom while content grows (live stream / new cards); releases if
   // the user scrolls up to read history — no jump-scroll (LRM-820).
   useAutoScroll(chatScrollRef, chatOpen);
 
   const send = useMutation({
-    mutationFn: (body: string) =>
-      api.postResearchMessage(sessionId, {
+    mutationFn: (body: string) => {
+      const targetAgentId = directorV6Enabled
+        ? persistedDirectorAgentId ?? undefined
+        : undefined;
+      const selectedResearchRefs =
+        directorV6Enabled && selectedDirectorReference
+          ? [selectedDirectorReference]
+          : undefined;
+      const requestIdentity = [
+        sessionId,
         body,
-        targetAgentId: directorV6Enabled
-          ? persistedDirectorAgentId ?? undefined
-          : undefined,
-        selectedResearchRefs:
-          directorV6Enabled && selectedDirectorReference
-            ? [selectedDirectorReference]
-            : undefined,
-      }),
+        targetAgentId ?? "",
+        selectedDirectorReference?.stableId ?? "",
+        selectedDirectorReference?.revision ?? "",
+        selectedDirectorReference?.contentHash ?? "",
+      ].join("\n");
+      const current = messageRequestRef.current;
+      const requestId =
+        current?.identity === requestIdentity ? current.requestId : createSafeId();
+      messageRequestRef.current = { identity: requestIdentity, requestId };
+      return api.postResearchMessage(sessionId, {
+        body,
+        clientRequestId: requestId,
+        targetAgentId,
+        selectedResearchRefs,
+      });
+    },
     onSuccess: () => {
+      messageRequestRef.current = null;
       // Focus before clearBody so empty-state native disabled does not dump focus to BODY.
       composerRef.current?.focus();
       dispatch({ type: "clearBody" });
@@ -674,7 +719,11 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
 
   // LRM-840 — reject stage-gate confirm: tip → agent + status resumes via BE.
   const rejectConfirm = useMutation({
-    mutationFn: (body: string) => api.postResearchMessage(sessionId, { body }),
+    mutationFn: (body: string) =>
+      api.postResearchMessage(sessionId, {
+        body,
+        clientRequestId: createSafeId(),
+      }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) });
       void qc.invalidateQueries({ queryKey: researchKeys.sessions(wsId) });
@@ -742,7 +791,10 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     interruptRetryPriorIdRef.current = sessionInterrupt.messageId;
     setInterruptPhase("pending");
     void api
-      .postResearchMessage(sessionId, { body })
+      .postResearchMessage(sessionId, {
+        body,
+        clientRequestId: createSafeId(),
+      })
       .then(() =>
         qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) }),
       )
@@ -1101,7 +1153,10 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
 
   const postFleetAction = (body: string) => {
     void api
-      .postResearchMessage(sessionId, { body })
+      .postResearchMessage(sessionId, {
+        body,
+        clientRequestId: createSafeId(),
+      })
       .then(() =>
         qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) }),
       )
@@ -1239,7 +1294,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
                   id: bin.id,
                   bounds: bin.bounds,
                   total: bin.total,
-                  execution_counts: bin.executionCounts,
+                  executionCounts: bin.executionCounts,
                 }))
               : undefined
           }

@@ -6,9 +6,9 @@ import (
 	"github.com/multica-ai/multica/server/pkg/taskfailure"
 )
 
-// Max retries the synthesizer may trigger per collector within one Brief run
-// (initial dispatch does not count as a retry).
-const notePeriodBriefCollectorMaxRetries = 3
+// Max retries the Notes Assistant may trigger per collector within one Brief
+// run (initial dispatch does not count). Inbox must not auto-retry collectors.
+const notePeriodBriefCollectorMaxRetries = 1
 
 // periodBriefCollectorDisposition is the platform verdict exposed on the
 // status board so the synthesizer can abandon vs retry without guessing.
@@ -158,4 +158,61 @@ func periodBriefFailureIsPermanent(combined, failureReason string) (permanent bo
 	}
 
 	return false, string(classified), ""
+}
+
+// periodBriefRetryDisposition is the retry-collectors verdict. After the
+// platform already released a slot to the Notes Assistant, a still-running
+// inbox row must not block the one allowed retry.
+func periodBriefRetryDisposition(jobStatus, failureReason string, packReady bool) periodBriefCollectorDisposition {
+	d := classifyPeriodBriefCollectorOutcome(jobStatus, failureReason, failureReason, packReady, false)
+	if packReady || d.Status == "ready" || d.Status != "running" {
+		return d
+	}
+	return classifyPeriodBriefCollectorOutcome(jobStatus, failureReason, failureReason, false, true)
+}
+
+// periodBriefCollectorNeedsAssistantRetry is true when the Notes Assistant
+// still owes exactly one retry-collectors call for this slot. After that
+// attempt settles (ready or failed), the result is received.
+func periodBriefCollectorNeedsAssistantRetry(pack notePeriodBriefPackResult) bool {
+	if !pack.Retryable || pack.RetryCount >= notePeriodBriefCollectorMaxRetries {
+		return false
+	}
+	switch pack.Status {
+	case "failed", "empty", "stalled":
+		return true
+	default:
+		return false
+	}
+}
+
+func periodBriefAllCollectorResultsFinal(packs []notePeriodBriefPackResult) bool {
+	for _, pack := range packs {
+		if periodBriefCollectorNeedsAssistantRetry(pack) {
+			return false
+		}
+	}
+	return true
+}
+
+func periodBriefAnyCollectorReady(packs []notePeriodBriefPackResult) bool {
+	for _, pack := range packs {
+		if pack.Status == "ready" {
+			return true
+		}
+	}
+	return false
+}
+
+func periodBriefMaterialsProgressCopy(packs []notePeriodBriefPackResult) string {
+	if !periodBriefAllCollectorResultsFinal(packs) {
+		return "有采集没有成功，笔记助手会再发起一次采集。"
+	}
+	if periodBriefAnyCollectorReady(packs) {
+		return "我已经收到了所有需要的材料，下面将根据这些材料整理一份汇报稿。"
+	}
+	if len(packs) == 0 {
+		return "这次没有派出采集员，下面只根据平台 Facts 整理汇报稿。"
+	}
+	return "这次没有采到可用材料，下面只根据已有材料整理汇报稿。"
 }

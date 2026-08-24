@@ -105,6 +105,30 @@ func TestServiceAndRunnerStreamsAreScopedAndVersioned(t *testing.T) {
 	}
 }
 
+func TestCodexLifecycleFieldsAreStructuredAndTerminationReasonIsClosed(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "logs")
+	store := openTestStore(t, root, time.Now, Limits{})
+	runner, err := store.Runner(RunnerOptions{Environment: EnvironmentProduction, WorkspaceID: testWorkspaceID, StartIdentity: "start-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = runner.Record(Event{
+		Name: EventAgentProcessStateChanged, Level: LevelInfo, Component: "provider_process",
+		Identity: Identity{EventID: "event-1", RuntimeID: "runtime-1", StartDispatchID: "dispatch-1", ProcessInstanceID: "process-1", InboxEventID: "inbox-1"},
+		Fields:   Fields{Provider: "codex", Phase: "provider_exit", Outcome: "close", RuntimeEpoch: 2, ProcessPID: 1234, ExitCode: 137, Signal: "SIGKILL", TerminationReason: "force_killed", ForceKilled: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := readOneRecord(t, filepath.Join(root, "runners", string(EnvironmentProduction), testWorkspaceID+".log"))
+	for key, want := range map[string]any{"event_id": "event-1", "runtime_id": "runtime-1", "start_dispatch_id": "dispatch-1", "process_instance_id": "process-1", "inbox_event_id": "inbox-1", "runtime_epoch": float64(2), "pid": float64(1234), "exit_code": float64(137), "signal": "SIGKILL", "termination_reason": "force_killed", "force_killed": true} {
+		assertField(t, record, key, want)
+	}
+	if err := runner.Record(Event{Name: EventAgentProcessStateChanged, Level: LevelInfo, Component: "provider_process", Fields: Fields{TerminationReason: "prompt_body"}}); err == nil {
+		t.Fatal("accepted non-closed termination reason")
+	}
+}
+
 func TestRunnerRejectsInvalidDestination(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "logs")
 	store := openTestStore(t, root, time.Now, Limits{})

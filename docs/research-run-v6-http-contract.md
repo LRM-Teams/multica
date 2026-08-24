@@ -329,7 +329,13 @@ The response contains stable/canonical refs, current three-dimensional state,
 reason detail, Agent/Task/Attempt, Branches, evidence refs, Discussion refs,
 successor/history refs and Report refs permitted for the user. Default `brief`
 does not inline full source snapshots or Discussion transcripts. `full` and
-`history` are paginated and return exact Artifact Version IDs/hashes.
+`history` are paginated and return exact Artifact Version IDs/hashes. For a
+`result_s` or `insight` node, `full` and `history` also return the immutable
+`content_layers` bound to the node's Artifact Version, including `objective`,
+`conclusion`, supporting content, scope, uncertainties, conflicts and open
+questions. Clients render `objective` and `conclusion` as the node's primary
+purpose and outcome; `catalog_summary` remains bounded projection chrome and
+must not substitute for either field.
 
 ## 6. Report metadata
 

@@ -31,7 +31,7 @@ func TestEnsurePeriodBriefCollectors_CreatesPerLocalComputer(t *testing.T) {
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent_runtime (workspace_id, daemon_id, name, display_name, runtime_mode, provider, status, device_info, metadata, visibility, last_seen_at) VALUES ($1,  $2,  'cloud-box',  'Cloud Box',  'cloud',  $3,  'online',  '',  '{}'::jsonb,  'public',  now())
 		RETURNING id
-	`,  testWorkspaceID,  cloudDaemon,  "cloud_collect_"+uuid.NewString()).Scan(&cloudRuntimeID); err != nil {
+	`, testWorkspaceID, cloudDaemon, "cloud_collect_"+uuid.NewString()).Scan(&cloudRuntimeID); err != nil {
 		t.Fatalf("seed cloud runtime: %v", err)
 	}
 	// LRM-1570: the cloud runtime is its own Computer, owned via an active
@@ -197,7 +197,7 @@ func TestEnsurePeriodBriefCollectors_SkipsOthersPublicComputers(t *testing.T) {
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, visibility, last_seen_at) VALUES ($1,  $2,  $3,  'local',  $4,  'online',  '',  '{}'::jsonb,  'public',  now())
 		RETURNING id
-	`,  testWorkspaceID,  otherDaemon,  "Other Public Laptop",  "other_pub_"+uuid.NewString()).Scan(&otherRuntimeID); err != nil {
+	`, testWorkspaceID, otherDaemon, "Other Public Laptop", "other_pub_"+uuid.NewString()).Scan(&otherRuntimeID); err != nil {
 		t.Fatalf("seed other public runtime: %v", err)
 	}
 	t.Cleanup(func() {
@@ -273,6 +273,67 @@ func TestEnsurePeriodBriefCollectors_SkipsOthersPublicComputers(t *testing.T) {
 	}
 	if !sawOwn {
 		t.Fatalf("expected own collector %q among %#v", wantOwn, resp.Agents)
+	}
+}
+
+func TestEnsurePeriodBriefCollectors_RestoresArchivedSameName(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	_ = ensureSystemGeneralForTest(t)
+
+	daemon := "pc-daemon-" + uuid.NewString()[:8]
+	runtimeID := seedMachineLockedRuntime(t, daemon, "Laptop Restore")
+	create := func() *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		req := newRequestAs(testUserID, http.MethodPost, "/api/agents/period-brief-collectors", map[string]string{
+			"model":      "collector-model",
+			"runtime_id": runtimeID,
+		})
+		req.Header.Set("X-Workspace-ID", testWorkspaceID)
+		testHandler.EnsurePeriodBriefCollectors(rec, req)
+		return rec
+	}
+
+	createdRec := create()
+	if createdRec.Code != http.StatusCreated {
+		t.Fatalf("create=%d body=%s", createdRec.Code, createdRec.Body.String())
+	}
+	var created EnsurePeriodBriefCollectorsResponse
+	if err := json.Unmarshal(createdRec.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if len(created.Agents) != 1 {
+		t.Fatalf("agents=%#v", created.Agents)
+	}
+	agentID := created.Agents[0].ID
+	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, agentID) })
+
+	if _, err := testPool.Exec(ctx, `UPDATE agent SET archived_at = now(), archived_by = $2 WHERE id = $1`, agentID, testUserID); err != nil {
+		t.Fatalf("archive: %v", err)
+	}
+
+	restoredRec := create()
+	if restoredRec.Code != http.StatusOK && restoredRec.Code != http.StatusCreated {
+		t.Fatalf("restore after archive=%d body=%s", restoredRec.Code, restoredRec.Body.String())
+	}
+	if strings.Contains(restoredRec.Body.String(), "agent_workspace_name_unique") {
+		t.Fatalf("archived collector still collided on name: %s", restoredRec.Body.String())
+	}
+	var restored EnsurePeriodBriefCollectorsResponse
+	if err := json.Unmarshal(restoredRec.Body.Bytes(), &restored); err != nil {
+		t.Fatal(err)
+	}
+	if len(restored.Agents) != 1 || restored.Agents[0].ID != agentID {
+		t.Fatalf("expected same collector restored, got %#v", restored.Agents)
+	}
+	var archivedAt any
+	if err := testPool.QueryRow(ctx, `SELECT archived_at FROM agent WHERE id = $1`, agentID).Scan(&archivedAt); err != nil {
+		t.Fatal(err)
+	}
+	if archivedAt != nil {
+		t.Fatalf("expected archived_at NULL, got %v", archivedAt)
 	}
 }
 

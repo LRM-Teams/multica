@@ -385,7 +385,7 @@ const ownerMember: MemberWithUser = {
   display_name: "Owner",
   email: "owner@example.com",
   avatar_url: null,
-  profile_description: "",
+  description: "",
   created_at: "2026-01-01T00:00:00Z",
 };
 

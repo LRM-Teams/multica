@@ -188,6 +188,20 @@ export const ResearchV6DirectorAssignmentSchema = z.object({
 }).strict();
 
 const entityRefs = z.array(ResearchV6DirectorEntityRefSchema).max(10_000);
+const contentText = z.string().min(1).max(32_768);
+const ResearchV6DirectorContentLayersSchema = z
+  .object({
+    catalog_summary: z.string().min(1).max(512),
+    brief_summary: contentText,
+    objective: contentText,
+    conclusion: contentText,
+    content: z.string().min(1).max(1_048_576),
+    scope: z.record(z.string(), z.unknown()),
+    uncertainties: z.array(contentText).max(128),
+    conflicts: z.array(contentText).max(128),
+    open_questions: z.array(contentText).max(128),
+  })
+  .strict();
 
 export const ResearchV6DirectorNodeDetailSchema = z
   .object({
@@ -196,6 +210,7 @@ export const ResearchV6DirectorNodeDetailSchema = z
     projection_hash: hash,
     view: forwardCompatibleToken,
     node: ResearchV6DirectorProjectionNodeSchema,
+    content_layers: ResearchV6DirectorContentLayersSchema.optional(),
     incoming: z.array(ResearchV6DirectorProjectionEdgeSchema).max(20_000),
     outgoing: z.array(ResearchV6DirectorProjectionEdgeSchema).max(20_000),
     history_refs: entityRefs,
@@ -412,6 +427,19 @@ function nodeDetailFromWire(value: WireNodeDetail): ResearchV6DirectorNodeDetail
     projectionHash: value.projection_hash,
     view: value.view,
     node: projectionNodeFromWire(value.node),
+    contentLayers: value.content_layers
+      ? {
+          catalogSummary: value.content_layers.catalog_summary,
+          briefSummary: value.content_layers.brief_summary,
+          objective: value.content_layers.objective,
+          conclusion: value.content_layers.conclusion,
+          content: value.content_layers.content,
+          scope: value.content_layers.scope,
+          uncertainties: value.content_layers.uncertainties,
+          conflicts: value.content_layers.conflicts,
+          openQuestions: value.content_layers.open_questions,
+        }
+      : undefined,
     incoming: value.incoming.map(projectionEdgeFromWire),
     outgoing: value.outgoing.map(projectionEdgeFromWire),
     historyRefs: value.history_refs.map(entityRefFromWire),

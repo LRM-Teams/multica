@@ -401,7 +401,7 @@ describe("resolveChannelAuthorDisplayName", () => {
               display_name: "Frank An",
               email: "frank@example.test",
               avatar_url: null,
-              profile_description: "",
+              description: "",
             },
           ],
         },

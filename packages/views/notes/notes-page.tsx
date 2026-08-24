@@ -12,7 +12,7 @@ import { noteFormatCssVars, noteFormatExportCss, sanitizeTextStyle, type NoteFor
 import { useNoteFormatStore } from "@multica/core/notes/format-store";
 import { syncNotePageRefsFromContent } from "@multica/core/notes/issue-refs";
 import { useCreateNotePage, useDeleteNotePage, useDuplicateNotePage, useMoveNotePage, usePermanentlyDeleteNotePage, useRestoreNotePage, useUpdateNotePage, useUpdateNotePageShares } from "@multica/core/notes/mutations";
-import { resolveNotesAssistantAgent } from "@multica/core/notes/notes-assistant-agent";
+import { requestInlineNotePageAI, resolveNotesAssistantAgent } from "@multica/core/notes/notes-assistant-agent";
 import { noteAIJobOptions, noteDetailOptions, noteListOptions, noteTrashOptions } from "@multica/core/notes/queries";
 import { useWorkspacePaths } from "@multica/core/paths";
 import type { Agent, MemberWithUser, NoteAIEditResult, NoteAIJobStatus, NotePage } from "@multica/core/types";
@@ -759,6 +759,7 @@ function NoteEditor({
   onEditPageWithAI: (request: PageEditAIRequest, options?: { signal?: AbortSignal; onStatus?: (status: NoteAIJobStatus) => void }) => Promise<NoteAIEditResult>;
 }) {
   const { t } = useT("layout");
+  const setNoteBubbleOpenPageId = useChatStore((s) => s.setNoteBubbleOpenPageId);
   const editorRef = useRef<ContentEditorRef | null>(null);
   const fontFamily = useNoteFormatStore((s) => s.fontFamily);
   const fontSize = useNoteFormatStore((s) => s.fontSize);
@@ -984,6 +985,10 @@ function NoteEditor({
         contentCssVars={contentCssVars}
         onAskAboutSelection={onAskAboutSelection}
         onEditPageWithAI={onEditPageWithAI}
+        onRequestPageAI={() => requestInlineNotePageAI({
+          agents,
+          openNotesBubble: () => setNoteBubbleOpenPageId(selected.id),
+        })}
         onApplyAITitle={(title) => setDraft((current) => ({ ...current, title }))}
         currentAITitle={draft.title}
       />

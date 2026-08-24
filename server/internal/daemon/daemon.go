@@ -20,6 +20,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/agentworkspace"
 	"github.com/multica-ai/multica/server/internal/computer"
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
+	"github.com/multica-ai/multica/server/internal/diagnosticlog"
 	"github.com/multica-ai/multica/server/internal/memoryflush"
 	"github.com/multica-ai/multica/server/internal/secretscoped"
 	skillpkg "github.com/multica-ai/multica/server/internal/skill"
@@ -97,6 +98,8 @@ type workspaceState struct {
 	workspaceID        string
 	runtimeIDs         []string
 	serverCapabilities []string
+	runtimeEpoch       int64
+	registeredAt       time.Time
 }
 
 // Daemon implements one Workspace execution runtime. A Computer Binding child
@@ -851,6 +854,38 @@ func (d *WorkspaceDaemonCore) registerRuntimesForWorkspace(ctx context.Context, 
 	if len(resp.Runtimes) == 0 {
 		return nil, fmt.Errorf("register runtimes: empty response")
 	}
+	// A successful registration is the Codex observability boundary (T0). A
+	// re-register/rebuild advances the epoch so consumers can discard all
+	// pre-T0 launches without inspecting historical payloads.
+	d.mu.Lock()
+	if d.workspaces == nil {
+		d.workspaces = make(map[string]*workspaceState)
+	}
+	ws := d.workspaces[workspaceID]
+	if ws == nil {
+		ws = newWorkspaceState(workspaceID, nil)
+		d.workspaces[workspaceID] = ws
+	}
+	ws.runtimeEpoch++
+	ws.registeredAt = time.Now().UTC()
+	epoch := ws.runtimeEpoch
+	d.mu.Unlock()
+	if runner := d.currentWorkspaceSession(workspaceID); runner != nil {
+		runner.setRuntimeEpoch(epoch)
+	}
+	for _, runtime := range resp.Runtimes {
+		if strings.EqualFold(strings.TrimSpace(runtime.Provider), "codex") {
+			d.recordRunnerDiagnostic(workspaceID, diagnosticlog.Event{
+				Name: diagnosticlog.EventRuntimeDetected, Level: diagnosticlog.LevelInfo,
+				Component: "runtime_registration", Identity: diagnosticlog.Identity{
+					EventID: uuid.NewString(), RuntimeID: runtime.ID,
+				}, Fields: diagnosticlog.Fields{
+					Provider: "codex", Phase: "register", Outcome: "accepted",
+					ReasonCode: "register_success", RuntimeEpoch: epoch,
+				},
+			})
+		}
+	}
 	d.logger.Debug("register response", "workspace_id", workspaceID, "runtimes", len(resp.Runtimes))
 	return resp, nil
 }
@@ -1457,6 +1492,7 @@ func (d *WorkspaceDaemonCore) drainInboxTask(ctx context.Context, runtimeID stri
 				continue
 			}
 			lease := agentInboxLeaseFromEvent(event, runtimeID)
+			d.bindInboxLeaseEpoch(&lease)
 			// Residual dual-write channel chat reasons must not execute.
 			// Standalone bubble (chat_session) and product tasks still run.
 			if event.Task == nil || protocol.IsResidualChannelChatInboxReason(event.Reason) {
@@ -1491,6 +1527,7 @@ func (d *WorkspaceDaemonCore) drainInboxTask(ctx context.Context, runtimeID stri
 
 		task := primary.Task
 		primaryLease := agentInboxLeaseFromEvent(primary, runtimeID)
+		d.bindInboxLeaseEpoch(&primaryLease)
 		// Merge seq range across the whole conversation batch so the agent sees
 		// the full exchange in one turn (turn-fold / one exchange = one turn).
 		seqFrom, seqTo := primaryLease.SeqFrom, primaryLease.SeqTo
@@ -1506,6 +1543,12 @@ func (d *WorkspaceDaemonCore) drainInboxTask(ctx context.Context, runtimeID stri
 		primaryLease.SeqTo = seqTo
 		task.InboxEvent = &primaryLease
 		task.FoldedInboxEvents = folded
+		d.recordInboxLeaseDiagnostic(primaryLease, "lease_acquired", "accepted", "drain")
+		for _, foldedLease := range folded {
+			if foldedLease != nil {
+				d.recordInboxLeaseDiagnostic(*foldedLease, "lease_acquired", "accepted", "folded")
+			}
+		}
 		if len(folded) > 0 {
 			d.logger.Info("turn-fold: one exchange as one turn",
 				"runtime_id", runtimeID,
@@ -1565,7 +1608,10 @@ func (d *WorkspaceDaemonCore) ackFoldedInboxLeasesBestEffort(ctx context.Context
 			continue
 		}
 		if err := d.client.AckAgentInboxEvent(ctx, *lease); err != nil {
+			d.recordInboxLeaseDiagnostic(*lease, "lease_ack", "failed", "ack_error")
 			d.logger.Warn("fail-soft ack of folded inbox lease failed", "event", shortID(lease.ID), "error", err)
+		} else {
+			d.recordInboxLeaseDiagnostic(*lease, "lease_ack", "accepted", "ok")
 		}
 	}
 }
@@ -2094,6 +2140,7 @@ func (d *WorkspaceDaemonCore) reportTaskResultForTask(ctx context.Context, task 
 		}
 		receipt, err := d.client.CompleteAgentInboxEvent(ctx, *task.InboxEvent, result)
 		if err == nil {
+			d.recordInboxLeaseDiagnostic(*task.InboxEvent, "terminal_ack", "accepted", "ok")
 			d.recordStandaloneChatCheckpoint(task, "terminal_accepted", "accepted", "completed", "", result.ExecutionID, "", receipt.AckedSeq)
 			// Primary completed with agent output; ack folded leases so none
 			// remain leased for reclaim (Alice boundary #1).
@@ -2115,11 +2162,13 @@ func (d *WorkspaceDaemonCore) reportTaskResultForTask(ctx context.Context, task 
 		// has already refused this task and the only useful UI signal
 		// left is a concrete failure.
 		if isTransientError(err) {
+			d.recordInboxLeaseDiagnostic(*task.InboxEvent, "terminal_ack", "deferred", "transient_error")
 			d.recordStandaloneChatCheckpoint(task, "terminal_rejected", "rejected", "running", "terminal_transient_error", result.ExecutionID, "", 0)
 			taskLog.Error("complete task failed after retries; leaving task in running rather than falling back to fail", "error", err)
 			return
 		}
 		d.recordStandaloneChatCheckpoint(task, "terminal_rejected", "rejected", "running", "terminal_permanent_error", result.ExecutionID, "", 0)
+		d.recordInboxLeaseDiagnostic(*task.InboxEvent, "terminal_ack", "rejected", "permanent_error")
 		taskLog.Error("complete task rejected by server, falling back to fail", "error", err)
 		// MUL-2946: this fallback fires when a server-side complete
 		// callback was permanently rejected (4xx other than 408/429)
@@ -2177,14 +2226,17 @@ func (d *WorkspaceDaemonCore) watchInboxLeases(ctx context.Context, leases []Age
 		for _, lease := range leases {
 			if err := d.client.RenewAgentInboxEvent(ctx, lease); err != nil {
 				if isTransientError(err) {
+					d.recordInboxLeaseDiagnostic(lease, "lease_renew", "deferred", "transient_error")
 					taskLog.Debug("agent inbox lease renew transient failure", "event", shortID(lease.ID), "error", err)
 					// keep trying other leases; transient does not prove loss
 					continue
 				}
+				d.recordInboxLeaseDiagnostic(lease, "lease_lost", "rejected", "lease_rejected")
 				taskLog.Warn("agent inbox lease renew rejected; cancelling stale executor", "event", shortID(lease.ID), "error", err)
 				close(lost)
 				return false
 			}
+			d.recordInboxLeaseDiagnostic(lease, "lease_renew", "renewed", "ok")
 			taskLog.Debug("agent inbox lease renewed", "event", shortID(lease.ID))
 		}
 		return true
@@ -2227,9 +2279,11 @@ func (d *WorkspaceDaemonCore) reportTaskFailure(ctx context.Context, task Task, 
 		reasonCode = "restarted_by_user"
 	}
 	if err := d.client.FailAgentInboxEvent(ctx, *task.InboxEvent, errMsg, sessionID, workDir, failureReason, reasonCode); err != nil {
+		d.recordInboxLeaseDiagnostic(*task.InboxEvent, "terminal_fail", "rejected", "transport_error")
 		d.recordStandaloneChatCheckpoint(task, "terminal_rejected", "rejected", "running", "terminal_fail_error", "", "", 0)
 		taskLog.Error("report failed inbox event failed", "error", err)
 	} else {
+		d.recordInboxLeaseDiagnostic(*task.InboxEvent, "terminal_fail", "accepted", reasonCode)
 		d.recordStandaloneChatCheckpoint(task, "terminal_accepted", "accepted", "failed", reasonCode, "", "", 0)
 	}
 	// Folded leases must not stay leased after primary failure (no orphan reclaim).
@@ -2242,7 +2296,10 @@ func (d *WorkspaceDaemonCore) ackFoldedInboxLeases(ctx context.Context, task Tas
 			continue
 		}
 		if err := d.client.AckAgentInboxEvent(ctx, *lease); err != nil {
+			d.recordInboxLeaseDiagnostic(*lease, "lease_ack", "failed", "ack_error")
 			taskLog.Warn("ack folded inbox lease failed", "event", shortID(lease.ID), "error", err)
+		} else {
+			d.recordInboxLeaseDiagnostic(*lease, "lease_ack", "accepted", "ok")
 		}
 	}
 }
@@ -2255,8 +2312,10 @@ func (d *WorkspaceDaemonCore) failFoldedInboxLeases(ctx context.Context, task Ta
 		if err := d.client.FailAgentInboxEvent(ctx, *lease, errMsg, sessionID, workDir, failureReason, reasonCode); err != nil {
 			// Fallback: ack so the lease is not reclaimed into a second turn.
 			if ackErr := d.client.AckAgentInboxEvent(ctx, *lease); ackErr != nil {
+				d.recordInboxLeaseDiagnostic(*lease, "lease_ack", "failed", "ack_error")
 				taskLog.Error("fail/ack folded inbox lease failed", "event", shortID(lease.ID), "fail_error", err, "ack_error", ackErr)
 			} else {
+				d.recordInboxLeaseDiagnostic(*lease, "lease_ack", "accepted", "after_fail")
 				taskLog.Warn("folded inbox lease acked after fail rejected", "event", shortID(lease.ID), "error", err)
 			}
 		}

@@ -88,7 +88,6 @@ export function NoteAssistantBubble({
   const quoteExcerpts = useChatStore((s) => s.noteSelectionQuote?.excerpts);
   const quoteAskedAt = useChatStore((s) => s.noteSelectionQuote?.askedAt ?? 0);
   const excerptsForPage = quotePageId === pageId ? (quoteExcerpts ?? EMPTY_SELECTION_EXCERPTS) : EMPTY_SELECTION_EXCERPTS;
-  const noteBubbleActiveSessionByPage = useChatStore((s) => s.noteBubbleActiveSessionByPage);
   const { data: activePeriodBrief } = useQuery(notePeriodBriefActiveOptions(wsId, pageId));
   const { data: sessions = [] } = useQuery(chatSessionsOptions(wsId));
   const { data: pending } = useQuery(pendingChatTasksOptions(wsId));
@@ -114,7 +113,7 @@ export function NoteAssistantBubble({
     sessions.filter((s) => s.context_note_page_id === pageId),
   );
   const unreadSessionCount = pageSessions.filter((s) => s.has_unread).length;
-  const isRunning = (pending?.tasks ?? []).some((task) =>
+  const chatTaskRunning = (pending?.tasks ?? []).some((task) =>
     pageSessions.some((s) => s.id === task.chat_session_id),
   );
 
@@ -134,6 +133,7 @@ export function NoteAssistantBubble({
   const periodBriefResolvedRef = React.useRef<NotePeriodBriefResolved | null>(null);
   const composerLocked =
     periodBriefRunLocksComposer(activePeriodBrief?.run?.status) || periodBriefSubmitting;
+  const isRunning = chatTaskRunning || composerLocked;
 
   React.useEffect(() => {
     if (excerptsForPage.length === 0 || !quoteAskedAt) return;
@@ -319,7 +319,6 @@ export function NoteAssistantBubble({
     }
     setPeriodBriefSubmitting(true);
     try {
-      const sessionId = noteBubbleActiveSessionByPage[pageId];
       const result = await api.createNotePeriodBrief({
         window: request.window,
         date: request.date,
@@ -329,7 +328,6 @@ export function NoteAssistantBubble({
         agent_id: resolved.agentId,
         collector_agent_ids: request.collector_ids,
         context_note_page_id: pageId,
-        ...(sessionId ? { chat_session_id: sessionId } : {}),
         ...(request.focus ? { focus: request.focus } : {}),
       });
       if (!result.job?.id) {
@@ -357,7 +355,7 @@ export function NoteAssistantBubble({
     } finally {
       setPeriodBriefSubmitting(false);
     }
-  }, [noteBubbleActiveSessionByPage, pageId, queryClient, setNoteBubbleActiveSession, t, wsId]);
+  }, [pageId, queryClient, setNoteBubbleActiveSession, t, wsId]);
 
   const interceptPeriodBriefCompose = React.useCallback((text: string) => {
     if (periodBriefOpen || composerLocked) return false;

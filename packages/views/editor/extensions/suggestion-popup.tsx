@@ -14,6 +14,13 @@ interface SuggestionPopupRenderOptions<
 > {
   pluginKey: PluginKey;
   component: ComponentType<TComponentProps>;
+  /**
+   * Anchor the popup horizontally to the editor element instead of the caret,
+   * and publish that width as `--suggestion-anchor-width` so the list can size
+   * itself to the composer. Off by default: a caret-anchored menu (slash
+   * commands) should stay where the caret is.
+   */
+  anchorToEditorWidth?: boolean;
   getProps: (props: SuggestionProps<TItem, TSelected>) => TComponentProps;
   onKeyDown?: (
     ref: TRef | null | undefined,
@@ -31,6 +38,7 @@ export function createSuggestionPopupRender<
   component,
   getProps,
   onKeyDown,
+  anchorToEditorWidth = false,
 }: SuggestionPopupRenderOptions<TItem, TSelected, TRef, TComponentProps>) {
   return () => {
     let renderer: ReactRenderer<TRef> | null = null;
@@ -91,14 +99,37 @@ export function createSuggestionPopupRender<
       };
     };
 
+    const anchorRect = (
+      clientRect: () => DOMRect | null,
+      editorDom: HTMLElement | null,
+    ): DOMRect => {
+      const caret = clientRect() ?? new DOMRect();
+      if (!anchorToEditorWidth || !editorDom) return caret;
+      const host = editorDom.getBoundingClientRect();
+      // Horizontal edge and width from the composer, vertical band from the
+      // caret: the list opens on the composer's left edge at the caret's line.
+      // The match is exact on purpose, with no floor — on a phone browser the
+      // composer is roughly viewport-wide, so a minimum wider than the composer
+      // would push the popup past the very edge this anchoring exists to
+      // respect. Narrow widths are absorbed by the row's truncation order.
+      return new DOMRect(host.left, caret.top, host.width, caret.height);
+    };
+
     const updatePosition = (
       el: HTMLDivElement,
       clientRect: (() => DOMRect | null) | null | undefined,
+      editorDom: HTMLElement | null,
     ) => {
       if (!clientRect) return;
       const virtualEl = {
-        getBoundingClientRect: () => clientRect() ?? new DOMRect(),
+        getBoundingClientRect: () => anchorRect(clientRect, editorDom),
       };
+      if (anchorToEditorWidth && editorDom) {
+        el.style.setProperty(
+          "--suggestion-anchor-width",
+          `${anchorRect(clientRect, editorDom).width}px`,
+        );
+      }
       computePosition(virtualEl, el, {
         placement: "bottom-start",
         strategy: "fixed",
@@ -124,14 +155,15 @@ export function createSuggestionPopupRender<
     const trackPosition = (
       el: HTMLDivElement,
       clientRect: (() => DOMRect | null) | null | undefined,
+      editorDom: HTMLElement | null,
     ) => {
       removeAutoUpdate?.();
       removeAutoUpdate = null;
       if (!clientRect) return;
       const virtualEl = {
-        getBoundingClientRect: () => clientRect() ?? new DOMRect(),
+        getBoundingClientRect: () => anchorRect(clientRect, editorDom),
       };
-      removeAutoUpdate = autoUpdate(virtualEl, el, () => updatePosition(el, clientRect), {
+      removeAutoUpdate = autoUpdate(virtualEl, el, () => updatePosition(el, clientRect, editorDom), {
         ancestorResize: true,
         ancestorScroll: true,
         elementResize: true,
@@ -154,15 +186,15 @@ export function createSuggestionPopupRender<
         doc.body.appendChild(popup);
 
         installOutsideListeners(props);
-        trackPosition(popup, props.clientRect);
-        updatePosition(popup, props.clientRect);
+        trackPosition(popup, props.clientRect, props.editor.view.dom as HTMLElement);
+        updatePosition(popup, props.clientRect, props.editor.view.dom as HTMLElement);
       },
 
       onUpdate: (props: SuggestionProps<TItem, TSelected>) => {
         renderer?.updateProps(getProps(props));
         if (popup) {
-          trackPosition(popup, props.clientRect);
-          updatePosition(popup, props.clientRect);
+          trackPosition(popup, props.clientRect, props.editor.view.dom as HTMLElement);
+          updatePosition(popup, props.clientRect, props.editor.view.dom as HTMLElement);
         }
       },
 

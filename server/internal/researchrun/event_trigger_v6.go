@@ -26,7 +26,7 @@ func (s *PostgresStore) ProcessV6EventTriggers(ctx context.Context, limit int) (
 			JOIN research_director_assignment a ON a.id=s.current_director_assignment_id AND a.status='active'
 			WHERE s.orchestrator_version='research-run-v6' AND s.status='running'
 			AND e.event_type IN (
-				'v6_result_node_accepted','v6_plan_materialized','v6_evidence_screened','v6_integration_materialized',
+				'v6_run_bootstrapped','v6_result_node_accepted','v6_plan_materialized','v6_evidence_screened','v6_integration_materialized',
 				'v6_deliberation_materialized','v6_director_adjudication_materialized','v6_work_item_succeeded',
 				'v6_work_item_recovered','v6_work_submission_rejected','v6_agent_creation_requested',
 				'v6_team_member_joined','v6_team_member_archived','v6_work_item_created','v6_branch_created',

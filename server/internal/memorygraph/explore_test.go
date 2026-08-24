@@ -287,6 +287,49 @@ func TestExploreUsesServerRounds(t *testing.T) {
 	}
 }
 
+// P0 §4.1: persisted seed ids replace the internal hybrid search. The
+// internal search for this query hits n-target; explicit n-other seeds
+// must win, proving ExploreWithSeeds skipped the search.
+func TestExploreWithSeedsUsesProvidedSeeds(t *testing.T) {
+	store := newExploreStore(t)
+	retr := newExploreRetriever(t, store)
+	backend := &fakeExploreBackend{t: t}
+	ex := NewExplorer(store, retr, backend, testExploreConfig(), "pi", nil)
+
+	res, err := ex.ExploreWithSeeds(context.Background(), "dispatch router retries", []string{"n-other"})
+	if err != nil {
+		t.Fatalf("ExploreWithSeeds: %v", err)
+	}
+	if len(backend.errs) > 0 {
+		t.Fatalf("fake backend tool errors: %v", backend.errs)
+	}
+	// The fake backend explores and submits the FIRST prompt seed node, so
+	// an adopted n-other proves the provided seeds reached the trajectory.
+	if !res.Found || len(res.NodeIDs) != 1 || res.NodeIDs[0] != "n-other" {
+		t.Fatalf("result = %+v, want found run adopting provided seed n-other", res)
+	}
+}
+
+// Empty seed ids fall back to the internal hybrid search (backtest and
+// direct-caller compatibility).
+func TestExploreWithSeedsEmptySeedsFallsBackToSearch(t *testing.T) {
+	store := newExploreStore(t)
+	retr := newExploreRetriever(t, store)
+	backend := &fakeExploreBackend{t: t}
+	ex := NewExplorer(store, retr, backend, testExploreConfig(), "pi", nil)
+
+	res, err := ex.ExploreWithSeeds(context.Background(), "dispatch router retries", nil)
+	if err != nil {
+		t.Fatalf("ExploreWithSeeds: %v", err)
+	}
+	if len(backend.errs) > 0 {
+		t.Fatalf("fake backend tool errors: %v", backend.errs)
+	}
+	if !res.Found || len(res.NodeIDs) != 1 || res.NodeIDs[0] != "n-target" {
+		t.Fatalf("result = %+v, want internal-search hit n-target", res)
+	}
+}
+
 func TestExploreGarbageOutputMarkedFailed(t *testing.T) {
 	store := newExploreStore(t)
 	retr := newExploreRetriever(t, store)
@@ -599,10 +642,10 @@ type switchingExploreBackend struct {
 	t     *testing.T
 	store *Store
 
-	mu                 sync.Mutex
-	viewedBody         string
+	mu                  sync.Mutex
+	viewedBody          string
 	secondExploreStatus int
-	submitStatus       int
+	submitStatus        int
 }
 
 func (b *switchingExploreBackend) Execute(_ context.Context, prompt string, _ agent.ExecOptions) (*agent.Session, error) {

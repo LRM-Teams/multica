@@ -21,9 +21,9 @@ type AgentBackend interface {
 
 // ExploreConfig configures the explore-agent layer (design §6 explore block).
 type ExploreConfig struct {
-	Agents            int           // TTT K parallel trajectories; 1 in non-TTT mode
-	MaxRounds         int           // exploration-round budget per trajectory (one served node = one round)
-	MaxExpandPerRound int           // inline-neighbor cap per served node
+	Agents            int // TTT K parallel trajectories; 1 in non-TTT mode
+	MaxRounds         int // exploration-round budget per trajectory (one served node = one round)
+	MaxExpandPerRound int // inline-neighbor cap per served node
 	// ViewsPerExpansion is retained only for caller compatibility; /explore
 	// has no per-expansion view quota and does not consume it.
 	ViewsPerExpansion int
@@ -123,7 +123,20 @@ type exploreOutput struct {
 // Explore recalls memory relevant to query. A miss (no trajectory found
 // relevant information, or every trajectory failed) is data, not an error:
 // it returns Found=false with a nil error.
+// Explore recalls memory relevant to query, computing hybrid-retrieval
+// seeds internally. It is ExploreWithSeeds with a nil seed list.
 func (e *Explorer) Explore(ctx context.Context, query string) (*RecallResult, error) {
+	return e.ExploreWithSeeds(ctx, query, nil)
+}
+
+// ExploreWithSeeds runs Explore against server-persisted round-0 seed node
+// ids, skipping the internal hybrid search when they are present: the
+// recall Begin already computed the authoritative seed batch for this
+// pinned version (spec P0 §4.1). An empty list falls back to the internal
+// search so direct callers (backtests) keep their behavior. A miss (no
+// trajectory found relevant information, or every trajectory failed) is
+// data, not an error: it returns Found=false with a nil error.
+func (e *Explorer) ExploreWithSeeds(ctx context.Context, query string, seedIDs []string) (*RecallResult, error) {
 	if e.backend == nil {
 		return nil, fmt.Errorf("explore: agent backend not configured")
 	}
@@ -133,9 +146,9 @@ func (e *Explorer) Explore(ctx context.Context, query string) (*RecallResult, er
 
 	// Version pinning (design R5/R12): resolve the graph version ONCE — the
 	// pinned version when set, else the current pointer — and serve the
-	// whole call (seed retrieval, /explore, /submit validation) from
-	// that version, so a mid-explore consolidation switch never swaps the
-	// graph under an in-flight trajectory.
+	// whole call (seed hydration, /explore, /submit validation) from that
+	// version, so a mid-explore consolidation switch never swaps the graph
+	// under an in-flight trajectory.
 	version := e.pinnedVersion
 	if version <= 0 {
 		var err error
@@ -149,12 +162,18 @@ func (e *Explorer) Explore(ctx context.Context, query string) (*RecallResult, er
 		return nil, fmt.Errorf("explore: pin retriever to v%d: %w", version, err)
 	}
 
-	// (a) Hybrid retrieval seeds.
-	hits, err := retr.Search(ctx, query)
-	if err != nil {
-		return nil, fmt.Errorf("explore: seed retrieval: %w", err)
+	// (a) Round-0 seeds: the persisted batch when provided, else internal
+	// hybrid retrieval.
+	var seeds []exploreSeed
+	if len(seedIDs) > 0 {
+		seeds = e.seedsFromIDs(seedIDs, version)
+	} else {
+		hits, err := retr.Search(ctx, query)
+		if err != nil {
+			return nil, fmt.Errorf("explore: seed retrieval: %w", err)
+		}
+		seeds = e.seedSnippets(hits, version)
 	}
-	seeds := e.seedSnippets(hits, version)
 
 	// Tool server shared by all trajectories of this Explore call.
 	srv, err := NewExploreToolServer(e.store, retr, e.cfg, version)
@@ -342,29 +361,40 @@ func qualifyRecallCitations(store *Store, version int, ids []string) []Citation 
 // seedSnippets resolves retrieval hits to prompt snippets, reading graph
 // node bodies of the pinned version and staging segment bodies.
 func (e *Explorer) seedSnippets(hits []ScoredDoc, version int) []exploreSeed {
+	ids := make([]string, 0, len(hits))
+	for _, h := range hits {
+		ids = append(ids, h.ID)
+	}
+	return e.seedsFromIDs(ids, version)
+}
+
+// seedsFromIDs hydrates seed node ids into prompt seeds by reading each
+// node's body from the pinned version (staging segments included), so a
+// persisted seed batch and a fresh hybrid batch produce identical seeds.
+func (e *Explorer) seedsFromIDs(ids []string, version int) []exploreSeed {
 	var g *Graph
 	if e.store != nil {
 		if loaded, err := LoadGraph(e.store, version); err == nil {
 			g = loaded
 		}
 	}
-	seeds := make([]exploreSeed, 0, len(hits))
-	for _, h := range hits {
+	seeds := make([]exploreSeed, 0, len(ids))
+	for _, id := range ids {
 		var body string
 		switch {
-		case IsStagingID(h.ID) && e.store != nil:
-			if b, err := e.store.ReadStagingSegment(strings.TrimPrefix(h.ID, stagingDocPrefix)); err == nil {
+		case IsStagingID(id) && e.store != nil:
+			if b, err := e.store.ReadStagingSegment(strings.TrimPrefix(id, stagingDocPrefix)); err == nil {
 				body = string(b)
 			}
 		case g != nil:
-			if n := g.Node(h.ID); n != nil {
+			if n := g.Node(id); n != nil {
 				body = n.Body
 			}
 		}
 		if len(body) > expandSnippetChars {
 			body = body[:expandSnippetChars] + "..."
 		}
-		seeds = append(seeds, exploreSeed{id: h.ID, snippet: body})
+		seeds = append(seeds, exploreSeed{id: id, snippet: body})
 	}
 	return seeds
 }

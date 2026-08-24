@@ -91,7 +91,7 @@ func (e *GraphMemoryRecallExecutor) Execute(ctx context.Context, plan *GraphMemo
 	cfg.Model = e.model
 	explorer := memorygraph.NewExplorer(store, retr, backend, cfg, "pi", e.traces)
 	explorer.PinVersion(plan.GraphVersion)
-	result, err := explorer.Explore(ctx, plan.Query)
+	result, err := explorer.ExploreWithSeeds(ctx, plan.Query, plan.Seeds)
 	if err != nil {
 		return e.executionFailure(ctx, plan, "explore: "+err.Error())
 	}

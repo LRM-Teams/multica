@@ -85,6 +85,11 @@ type GraphMemoryRecallPlan struct {
 	TTTEnabled   bool
 	Query        string
 	TraceID      string
+	// Seeds are the authoritative round-0 hybrid hit node ids computed by
+	// Begin's seeder against GraphVersion and persisted to the ledger; the
+	// executor hands them to Explorer.ExploreWithSeeds so the hybrid search
+	// runs exactly once per recall (spec P0 §4.1).
+	Seeds []string
 	// Replayed marks a plan adopted from the already-committed ledger row
 	// (idempotent replay): no new rows were written and no provider work
 	// happened for it (A23).
@@ -288,6 +293,7 @@ func (s *GraphMemoryRecallService) Begin(ctx context.Context, req GraphMemoryRec
 		TTTEnabled:   tttEnabled,
 		Query:        req.Query,
 		TraceID:      req.TraceID,
+		Seeds:        seeds,
 	}
 	if err := s.persistPlan(ctx, plan, wsUUID, taskUUID, rtUUID, graphOwnerID, seeds); err != nil {
 		return nil, err

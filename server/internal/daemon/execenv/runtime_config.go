@@ -1169,7 +1169,7 @@ func renderProjectContext(b *strings.Builder, ctx TaskContextForEnv) {
 		return
 	}
 	fmt.Fprintf(b, "Project id: `%s`.\n", projectID)
-	fmt.Fprintf(b, "Inspect live project bindings with `multica workspace info --projects --output json` (filter with `--query` if needed). For this project (`%s`), clone each `github_repo` into this workspace if it is not already present, then work inside that checkout. Re-run the command when the binding may have changed — this runtime file is not updated when project resources change.\n\n", projectID)
+	fmt.Fprintf(b, "Inspect live project bindings with `multica workspace info --projects --output json` (filter with `--query` if needed). For this project (`%s`), use an existing project directory or worktree inside this workspace; if the bound `github_repo` has no checkout yet, clone it yourself into this workspace, then work inside that checkout. Multica does not clone repositories or provision checkouts. Re-run the command when the binding may have changed — this runtime file is not updated when project resources change.\n\n", projectID)
 }
 
 func renderLazyReferences(b *strings.Builder, isChat, chatCLIAvailable, hasSkills bool) {

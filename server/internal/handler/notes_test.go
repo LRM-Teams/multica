@@ -453,3 +453,83 @@ func TestNoteAIJobCancelSuppressesTask(t *testing.T) {
 		t.Fatalf("task status = %q, want suppressed", got)
 	}
 }
+
+func createNoteTrashTestMember(t *testing.T) string {
+	t.Helper()
+	var userID string
+	if err := testPool.QueryRow(context.Background(), `
+		INSERT INTO "user" (name, email)
+		VALUES ($1, $2)
+		RETURNING id
+	`, "Note trash other "+uuid.NewString()[:8], "note-trash-"+uuid.NewString()+"@multica.test").Scan(&userID); err != nil {
+		t.Fatalf("create other user: %v", err)
+	}
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO member (workspace_id, user_id, role)
+		VALUES ($1, $2, 'member')
+	`, testWorkspaceID, userID); err != nil {
+		t.Fatalf("add other member: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM "user" WHERE id = $1`, userID) })
+	return userID
+}
+
+func insertNotePageForTrashTest(t *testing.T, ownerID, title string, parentID *string, deleted bool) string {
+	t.Helper()
+	var noteID string
+	var parent any
+	if parentID != nil {
+		parent = *parentID
+	}
+	deletedAt := any(nil)
+	if deleted {
+		deletedAt = "2026-08-01T00:00:00Z"
+	}
+	if err := testPool.QueryRow(context.Background(), `
+		INSERT INTO note_page (workspace_id, parent_id, owner_user_id, title, content, sort_key, created_by, updated_by, deleted_at)
+		VALUES ($1, $2, $3, $4, 'body', '00000000000000000001', $3, $3, $5)
+		RETURNING id
+	`, testWorkspaceID, parent, ownerID, title, deletedAt).Scan(&noteID); err != nil {
+		t.Fatalf("create note page: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM note_page WHERE id = $1`, noteID) })
+	return noteID
+}
+
+func TestEmptyNoteTrashDeletesOwnDeletedPagesOnly(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	liveID := insertNotePageForTrashTest(t, testUserID, "Live note "+uuid.NewString(), nil, false)
+	deletedRoot := insertNotePageForTrashTest(t, testUserID, "Deleted root "+uuid.NewString(), nil, true)
+	deletedChild := insertNotePageForTrashTest(t, testUserID, "Deleted child "+uuid.NewString(), &deletedRoot, true)
+
+	otherUserID := createNoteTrashTestMember(t)
+	otherDeleted := insertNotePageForTrashTest(t, otherUserID, "Other trash "+uuid.NewString(), nil, true)
+
+	req := newRequest(http.MethodDelete, "/api/notes/pages/trash", nil)
+	rec := httptest.NewRecorder()
+	testHandler.EmptyNoteTrash(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("EmptyNoteTrash: expected 204, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	exists := func(id string) bool {
+		t.Helper()
+		var found bool
+		if err := testPool.QueryRow(context.Background(), `SELECT EXISTS(SELECT 1 FROM note_page WHERE id = $1)`, id).Scan(&found); err != nil {
+			t.Fatalf("exists %s: %v", id, err)
+		}
+		return found
+	}
+	if !exists(liveID) {
+		t.Fatal("empty trash deleted a live note")
+	}
+	if exists(deletedRoot) || exists(deletedChild) {
+		t.Fatal("empty trash left own deleted pages")
+	}
+	if !exists(otherDeleted) {
+		t.Fatal("empty trash deleted another owner's deleted note")
+	}
+}

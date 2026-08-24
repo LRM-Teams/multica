@@ -899,6 +899,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/", h.ListNotePages)
 					r.Post("/", h.CreateNotePage)
 					r.Get("/trash", h.ListDeletedNotePages)
+					r.Delete("/trash", h.EmptyNoteTrash)
 					r.Route("/{id}", func(r chi.Router) {
 						r.Get("/", h.GetNotePage)
 						r.Patch("/", h.UpdateNotePage)

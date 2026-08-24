@@ -146,7 +146,7 @@ func canonicalMessageDiagnosticEventForTurn(
 func (d *Daemon) recordResidentMessageBatch(
 	workspaceID, runtimeID, agentID string,
 	messages []protocol.AgentMessageProjection,
-	phase, outcome, reasonCode, executionID string, runtimeEpoch int64,
+	phase, outcome, reasonCode, executionID string, runtimeEpoch int64, launchID, startDispatchID string,
 ) {
 	for _, message := range messages {
 		event := canonicalMessageDiagnosticEventForTurn(workspaceID, runtimeID, protocol.AgentDeliverPayload{
@@ -155,6 +155,8 @@ func (d *Daemon) recordResidentMessageBatch(
 			Seq:     message.Seq,
 			Message: message,
 		}, phase, outcome, reasonCode, executionID, runtimeEpoch)
+		event.Identity.LaunchID = launchID
+		event.Identity.StartDispatchID = startDispatchID
 		event.Component = "resident_runtime"
 		d.recordRunnerDiagnostic(workspaceID, event)
 	}

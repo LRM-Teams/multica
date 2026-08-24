@@ -400,7 +400,7 @@ func (d *Daemon) newWorkspaceRunner(workspaceID string) (*WorkspaceRunner, error
 				Identity: diagnosticlog.Identity{
 					EventID: transition.StateInstanceID, AgentID: transition.AgentID,
 					RuntimeID: transition.RuntimeID, StartDispatchID: transition.StartDispatchID,
-					ProcessInstanceID: transition.ProcessInstanceID, ExecutionID: transition.LaunchID,
+					LaunchID: transition.LaunchID, ProcessInstanceID: transition.ProcessInstanceID, ExecutionID: transition.LaunchID,
 				}, Fields: diagnosticlog.Fields{
 					Provider: provider, Phase: phase, Outcome: transition.Event,
 					ReasonCode: transition.Result, ProcessPID: transition.ProcessPID,

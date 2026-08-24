@@ -67,6 +67,7 @@ type Identity struct {
 	EventID           string
 	AgentID           string
 	RuntimeID         string
+	LaunchID          string
 	StartDispatchID   string
 	ProcessInstanceID string
 	InboxEventID      string
@@ -235,6 +236,7 @@ type wireRecord struct {
 	EventID           string `json:"event_id,omitempty"`
 	AgentID           string `json:"agent_id,omitempty"`
 	RuntimeID         string `json:"runtime_id,omitempty"`
+	LaunchID          string `json:"launch_id,omitempty"`
 	StartDispatchID   string `json:"start_dispatch_id,omitempty"`
 	ProcessInstanceID string `json:"process_instance_id,omitempty"`
 	InboxEventID      string `json:"inbox_event_id,omitempty"`

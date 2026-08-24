@@ -304,6 +304,7 @@ func (l *Logger) buildRecord(event Event, now time.Time) (wireRecord, error) {
 		EventID:           identity.EventID,
 		AgentID:           identity.AgentID,
 		RuntimeID:         identity.RuntimeID,
+		LaunchID:          identity.LaunchID,
 		StartDispatchID:   identity.StartDispatchID,
 		ProcessInstanceID: identity.ProcessInstanceID,
 		InboxEventID:      identity.InboxEventID,
@@ -401,7 +402,7 @@ func validatedIdentity(identity Identity) (Identity, error) {
 		value string
 	}{
 		{"event_id", identity.EventID}, {"agent_id", identity.AgentID}, {"runtime_id", identity.RuntimeID},
-		{"start_dispatch_id", identity.StartDispatchID}, {"process_instance_id", identity.ProcessInstanceID}, {"inbox_event_id", identity.InboxEventID}, {"task_id", identity.TaskID},
+		{"launch_id", identity.LaunchID}, {"start_dispatch_id", identity.StartDispatchID}, {"process_instance_id", identity.ProcessInstanceID}, {"inbox_event_id", identity.InboxEventID}, {"task_id", identity.TaskID},
 		{"session_id", identity.SessionID}, {"message_id", identity.MessageID}, {"delivery_id", identity.DeliveryID},
 		{"request_id", identity.RequestID}, {"trace_id", identity.TraceID}, {"channel_id", identity.ChannelID},
 		{"chat_session_id", identity.ChatSessionID}, {"conversation_id", identity.ConversationID},

@@ -3,8 +3,18 @@ package daemon
 import (
 	"testing"
 
+	"github.com/multica-ai/multica/server/internal/diagnosticlog"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
+
+type residentDiagnosticCapture struct {
+	event diagnosticlog.Event
+}
+
+func (capture *residentDiagnosticCapture) record(_ string, event diagnosticlog.Event) error {
+	capture.event = event
+	return nil
+}
 
 func TestResidentMessageDiagnosticTurnCarriesExecutionAndRuntimeEpoch(t *testing.T) {
 	message := protocol.AgentMessageProjection{ID: "message-1", ChannelID: "channel-1", Seq: 7}
@@ -21,6 +31,15 @@ func TestResidentMessageDiagnosticTurnCarriesExecutionAndRuntimeEpoch(t *testing
 	}
 	if event.Fields.Phase != "execution_started" || event.Fields.Outcome != "accepted" {
 		t.Fatalf("phase/outcome = %q/%q", event.Fields.Phase, event.Fields.Outcome)
+	}
+}
+
+func TestResidentMessageDiagnosticCarriesLaunchJoinFields(t *testing.T) {
+	capture := &residentDiagnosticCapture{}
+	d := &Daemon{runnerDiagnostics: capture}
+	d.recordResidentMessageBatch("workspace-1", "runtime-1", "agent-1", []protocol.AgentMessageProjection{{ID: "message-1"}}, "execution_started", "accepted", "", "execution-1", 4, "launch-1", "dispatch-1")
+	if capture.event.Identity.LaunchID != "launch-1" || capture.event.Identity.StartDispatchID != "dispatch-1" {
+		t.Fatalf("launch join fields = %+v", capture.event.Identity)
 	}
 }
 

@@ -259,7 +259,7 @@ func compileV6WorkManifestTx(ctx context.Context, tx pgx.Tx, workspaceID, runID,
 			rows.Close()
 			return nil, "", err
 		}
-		artifacts = append(artifacts, map[string]any{"artifact_version_id": id, "kind": kind, "representation": "full", "representation_hash": hash, "use_kind": "integration_input", "reason": "Frozen Work Item input."})
+		artifacts = append(artifacts, map[string]any{"artifact_version_id": id, "kind": kind, "representation": "full", "representation_hash": hash, "use_kind": "integration_input", "reason": "已冻结的 Work Item 输入。"})
 	}
 	if err = rows.Err(); err != nil {
 		rows.Close()
@@ -290,7 +290,7 @@ func compileV6WorkManifestTx(ctx context.Context, tx pgx.Tx, workspaceID, runID,
 			if err = tx.QueryRow(ctx, `SELECT p.entity_kind,v.content_hash FROM research_artifact_version v JOIN research_artifact_passport p ON p.id=v.artifact_id WHERE v.workspace_id=$1::uuid AND v.session_id=$2::uuid AND v.id=$3::uuid AND p.lifecycle_status='accepted'`, workspaceID, runID, id).Scan(&kind, &hash); err != nil {
 				return nil, "", err
 			}
-			artifacts = append(artifacts, map[string]any{"artifact_version_id": id, "kind": kind, "representation": "full", "representation_hash": hash, "use_kind": "frozen_input", "reason": "Director-authorized Work Item input."})
+			artifacts = append(artifacts, map[string]any{"artifact_version_id": id, "kind": kind, "representation": "full", "representation_hash": hash, "use_kind": "frozen_input", "reason": "调研主理人授权的 Work Item 输入。"})
 		}
 	}
 	taskSchema := any(nil)

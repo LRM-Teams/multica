@@ -51,6 +51,25 @@ function delta(): ResearchV6DirectorProjectionDelta {
   };
 }
 
+function wireDelta() {
+  const value = delta();
+  return {
+    contract_kind: value.contractKind,
+    schema_version: value.schemaVersion,
+    workspace_id: value.workspaceId,
+    run_id: value.runId,
+    snapshot_id: value.snapshotId,
+    event_sequence: value.eventSequence,
+    previous_projection_hash: value.previousProjectionHash,
+    projection_hash: value.projectionHash,
+    upsert_nodes: value.upsertNodes,
+    remove_node_ids: value.removeNodeIds,
+    upsert_edges: value.upsertEdges,
+    remove_edge_ids: value.removeEdgeIds,
+    invalidate_slice_keys: value.invalidateSliceKeys,
+  };
+}
+
 function bus() {
   let eventHandler: ((payload: unknown) => void) | null = null;
   let reconnectHandler: (() => void) | null = null;
@@ -112,28 +131,18 @@ function transport(options?: {
 }
 
 describe("ResearchV6DirectorLiveController", () => {
-  it("applies a resumed run-scoped delta and forwards slice invalidation", async () => {
+  it("applies a strict run-scoped delta and forwards slice invalidation", () => {
     const live = bus();
     const invalidated: Array<readonly string[]> = [];
-    const wire = transport({
-      resumePage: {
-        runId: RUN_ID,
-        deltas: [delta()],
-        nextCursor: null,
-        resyncRequired: false,
-      },
-    });
     const controller = new ResearchV6DirectorLiveController(
       { workspaceId: WORKSPACE_ID, runId: RUN_ID },
-      wire.value,
+      transport().value,
       live.realtime,
       { onInvalidateSliceKeys: (keys) => invalidated.push(keys) },
     );
     controller.seedSnapshotPage(snapshot());
     controller.connect();
-    live.push({ run_id: RUN_ID, through_sequence: 5 });
-    await Promise.resolve();
-    await Promise.resolve();
+    live.push({ run_id: RUN_ID, delta: wireDelta() });
     expect(controller.getClient().getState().lastConfirmedSequence).toBe(5);
     expect(invalidated).toEqual([["expand:root"]]);
   });

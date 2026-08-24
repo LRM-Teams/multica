@@ -13,8 +13,7 @@ import {
   User,
 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { AGENT_DESCRIPTION_MAX_LENGTH, agentDetailKeys } from "@multica/core/agents";
-import { api } from "@multica/core/api";
+import { AGENT_DESCRIPTION_MAX_LENGTH } from "@multica/core/agents";
 import type {
   Agent,
   AgentPresence,
@@ -28,8 +27,6 @@ import {
 } from "@multica/core/runtimes";
 import { useAgentPermissions } from "@multica/core/permissions";
 import { workspaceKeys } from "@multica/core/workspace/queries";
-import { showErrorToast } from "@multica/ui/lib/error-toast";
-import { toast } from "sonner";
 import {
   formatActorHandleLabel,
   resolveActorDisplayName,
@@ -48,13 +45,13 @@ import {
   InspectorField,
   InspectorSectionHeading,
 } from "../../agents/components/inspector/inspector-field";
+import { AgentWorkspaceRole } from "../../agents/components/agent-workspace-role";
 import { RuntimeConfigBlock } from "../../agents/components/inspector/runtime-config-block";
 import { RuntimeConfigDialog } from "../../agents/components/runtime-config-dialog";
 import { MemoryGrowthField } from "../../agents/components/memory-growth-field";
 import { AgentProfileActions } from "../../agents/components/agent-profile-actions";
 import { InlineFieldEditor } from "../../agents/components/inline-field-editor";
 import { useUpdateAgent } from "../../agents/hooks/use-update-agent";
-import { RolesDialog } from "../../settings/components/roles-dialog";
 import { ConversationSidePanelShell } from "../../common/conversation-side-panel-shell";
 import { ActorStyledName } from "../../common/actor-styled-name";
 import { AgentFilesPanel } from "./agent-files-panel";
@@ -389,45 +386,6 @@ function AgentProfileTabContent({
   const update = (data: Record<string, unknown>) => handleUpdate(agent.id, data);
   const displayName = resolveActorDisplayName(agent, agent.id);
   const [runtimeDialogOpen, setRuntimeDialogOpen] = useState(false);
-  const [roleDialogOpen, setRoleDialogOpen] = useState(false);
-  const [roleSaving, setRoleSaving] = useState(false);
-
-  const updateWorkspaceRole = async (role: "member" | "admin") => {
-    if (role === agent.workspace_role || roleSaving) return;
-
-    const listKey = workspaceKeys.agents(wsId);
-    const detailKey = agentDetailKeys.detail(wsId, agent.id);
-    const previousRole = agent.workspace_role;
-    const patchRole = (workspace_role: "member" | "admin") => {
-      qc.setQueryData<Agent[]>(listKey, (current) =>
-        current?.map((item) =>
-          item.id === agent.id ? { ...item, workspace_role } : item,
-        ),
-      );
-      qc.setQueryData<Agent>(detailKey, (current) =>
-        current ? { ...current, workspace_role } : current,
-      );
-    };
-
-    setRoleSaving(true);
-    patchRole(role);
-    try {
-      await api.updateAgentWorkspaceRole(wsId, agent.id, role);
-      toast.success(t(($) => $.profile_card.role_updated));
-      setRoleDialogOpen(false);
-    } catch (error) {
-      patchRole(previousRole);
-      showErrorToast(
-        error instanceof Error
-          ? error.message
-          : t(($) => $.profile_card.role_update_failed),
-      );
-    } finally {
-      setRoleSaving(false);
-      void qc.invalidateQueries({ queryKey: listKey });
-      void qc.invalidateQueries({ queryKey: detailKey });
-    }
-  };
 
   return (
     <div className="flex min-w-0 flex-col" data-testid="agent-profile-tab-content">
@@ -475,35 +433,29 @@ function AgentProfileTabContent({
           <div className="mb-2">
             <InspectorSectionHeading label={t(($) => $.side_panel.info_section)} />
           </div>
-          <div className="grid grid-cols-[100px_minmax(0,1fr)] gap-x-3 gap-y-2 text-[13px]">
-            <span className="pt-0.5 text-muted-foreground">
-              {t(($) => $.profile_card.role_label)}
-            </span>
-            <div className="flex min-w-0 items-center gap-1">
-              <span className="truncate" data-testid="agent-workspace-role-value">
-                {agent.workspace_role === "admin" ? "Admin" : "Member"}
-              </span>
-              {canChangeRole.allowed && !agent.archived_at ? (
-                <button
-                  type="button"
-                  className="inline-flex shrink-0 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  onClick={() => setRoleDialogOpen(true)}
-                  aria-label={t(($) => $.profile_card.role_dialog_title)}
-                  data-testid="agent-workspace-role-edit"
-                >
-                  <Pencil className="size-3.5" aria-hidden />
-                </button>
-              ) : null}
-            </div>
-            <span className="text-muted-foreground">{t(($) => $.side_panel.created_label)}</span>
-            <Time kind="date" value={agent.created_at} className="truncate" />
-            <span className="text-muted-foreground">{t(($) => $.side_panel.owner_label)}</span>
-            <Tooltip>
-              <TooltipTrigger render={<span className="truncate" />}>
-                {ownerName(agent, members)}
-              </TooltipTrigger>
-              <TooltipContent side="top">{ownerName(agent, members)}</TooltipContent>
-            </Tooltip>
+          <div className="flex flex-wrap gap-x-7 gap-y-4">
+            {/* Same picker the detail inspector renders — role used to be a
+                pencil into a modal here and a picker there, for one value with
+                two possible states. */}
+            <AgentWorkspaceRole
+              wsId={agent.workspace_id}
+              agent={agent}
+              permission={canChangeRole}
+              onRoleChanged={() =>
+                qc.invalidateQueries({ queryKey: workspaceKeys.agents(agent.workspace_id) })
+              }
+            />
+            <InspectorField label={t(($) => $.side_panel.created_label)}>
+              <Time kind="date" value={agent.created_at} className="truncate" />
+            </InspectorField>
+            <InspectorField label={t(($) => $.side_panel.owner_label)}>
+              <Tooltip>
+                <TooltipTrigger render={<span className="truncate" />}>
+                  {ownerName(agent, members)}
+                </TooltipTrigger>
+                <TooltipContent side="top">{ownerName(agent, members)}</TooltipContent>
+              </Tooltip>
+            </InspectorField>
           </div>
           {/* Honor moved into the Info section (Frank 2026-08-19): rich panel
               stays unchanged, only its position moved under Info. */}
@@ -519,9 +471,7 @@ function AgentProfileTabContent({
           data-testid="agent-profile-runtime-config"
         >
           <div className="mb-2 flex items-center gap-1">
-            <h3 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-              {t(($) => $.side_panel.runtime_section)}
-            </h3>
+            <InspectorSectionHeading label={t(($) => $.side_panel.runtime_section)} />
             {canEditRuntime ? (
               <button
                 type="button"
@@ -559,22 +509,6 @@ function AgentProfileTabContent({
           workspaceSkills={profileSkills?.workspace ?? []}
         />
 
-        <RolesDialog
-          open={roleDialogOpen}
-          onOpenChange={setRoleDialogOpen}
-          mode="select"
-          value={agent.workspace_role}
-          allowedRoles={["member", "admin"]}
-          saving={roleSaving}
-          onSave={(role) => {
-            if (role === "owner") {
-              return Promise.resolve();
-            }
-            return updateWorkspaceRole(role);
-          }}
-          title={t(($) => $.profile_card.role_dialog_title)}
-          subtitle={t(($) => $.profile_card.role_dialog_subtitle)}
-        />
         {/* Memory growth is its own panel block, kept separated by the same
             thin divider used elsewhere in the profile. */}
         {agent.memory_growth ? (
@@ -741,13 +675,12 @@ function AgentUsageSection({ agent }: { agent: Agent }) {
 
   return (
     <section aria-label={t(($) => $.side_panel.usage_section)}>
-      <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-        {t(($) => $.side_panel.usage_section)}
-        <span className="font-medium normal-case tracking-normal">
-          {" "}
+      <div className="mb-2 flex items-baseline gap-1.5">
+        <InspectorSectionHeading label={t(($) => $.side_panel.usage_section)} />
+        <span className="text-[11px] text-muted-foreground">
           · {t(($) => $.side_panel.usage_reported_window)}
         </span>
-      </h3>
+      </div>
 
       {isLoading ? (
         <p className="text-xs text-muted-foreground">{t(($) => $.side_panel.usage_loading)}</p>

@@ -227,7 +227,7 @@ func firstNonEmptyV6(values ...string) string {
 			return strings.TrimSpace(value)
 		}
 	}
-	return "Director decision"
+	return "调研主理人决定"
 }
 
 func withV6ActionKind(raw json.RawMessage, kind string) json.RawMessage {

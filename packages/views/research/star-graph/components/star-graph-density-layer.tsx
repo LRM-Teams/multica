@@ -4,6 +4,7 @@ export interface StarGraphDensityBin {
   id: string;
   bounds: { x: number; y: number; width: number; height: number };
   total: number;
+  /** camelCase to match the Director wire type this is always fed from. */
   executionCounts: Readonly<Record<string, number>>;
 }
 

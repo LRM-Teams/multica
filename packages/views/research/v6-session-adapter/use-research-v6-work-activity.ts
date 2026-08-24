@@ -3,6 +3,7 @@
 import { useEffect, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useRunnerActivity } from "@multica/core/agents";
+import { RESEARCH_V6_DIRECTOR_DELTA_EVENT } from "@multica/core/research-v6-live/director-controller";
 import { researchV6DirectorWorkActivityOptions } from "@multica/core/research-v6/director-queries";
 import type {
   ResearchV6DirectorDetailTransport,
@@ -69,6 +70,28 @@ export function useResearchV6WorkActivity({
       for (const unsubscribe of unsubscribers) unsubscribe();
     };
   }, [enabled, query.data?.inboxTaskId, query.refetch, subscribe]);
+
+  useEffect(() => {
+    if (!enabled || !workItemId) return;
+    return subscribe(RESEARCH_V6_DIRECTOR_DELTA_EVENT, (payload) => {
+      const envelope = payload as { run_id?: unknown };
+      if (envelope.run_id === runId) void query.refetch();
+    });
+  }, [enabled, query.refetch, runId, subscribe, workItemId]);
+
+  useEffect(() => {
+    const agentId = query.data?.agentId;
+    if (!enabled || !agentId || !workItemId) return;
+    return subscribe("research_session:presence", (payload) => {
+      const presence = payload as {
+        session_id?: unknown;
+        agent_id?: unknown;
+      };
+      if (presence.session_id === runId && presence.agent_id === agentId) {
+        void query.refetch();
+      }
+    });
+  }, [enabled, query.data?.agentId, query.refetch, runId, subscribe, workItemId]);
 
   const runnerActivity = useRunnerActivity(
     enabled ? workspaceId : undefined,

@@ -7,10 +7,12 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/multica-ai/multica/server/internal/logger"
 	"github.com/multica-ai/multica/server/internal/researchrun"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 const maxResearchV6SubmissionBytes int64 = 2 << 20
@@ -219,6 +221,12 @@ func (h *Handler) ReportAgentResearchV6WorkProgress(w http.ResponseWriter, r *ht
 		writeResearchV6DomainError(w, err)
 		return
 	}
+	h.publish(protocol.EventResearchSessionPresence, access.WorkspaceID, "agent", access.AgentID, map[string]any{
+		"session_id": access.RunID,
+		"agent_id":   access.AgentID,
+		"activity":   researchrun.PrepareV6WorkProgressText(request.Text),
+		"updated_at": time.Now().UTC().UnixMilli(),
+	})
 	writeJSON(w, http.StatusOK, map[string]any{"recorded": true})
 }
 

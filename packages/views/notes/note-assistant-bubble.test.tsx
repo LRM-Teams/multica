@@ -118,10 +118,16 @@ vi.mock("@multica/ui/hooks/use-mobile", () => ({
 vi.mock("./note-assistant-fab-cluster", () => ({
   NoteAssistantFabCluster: ({
     onAction,
+    isRunning,
   }: {
     onAction: (action: "period_brief" | "highlights" | "chat") => void;
+    isRunning: boolean;
   }) => (
-    <button type="button" onClick={() => onAction("period_brief")}>
+    <button
+      type="button"
+      data-running={isRunning ? "true" : "false"}
+      onClick={() => onAction("period_brief")}
+    >
       open-period
     </button>
   ),
@@ -299,10 +305,120 @@ describe("NoteAssistantBubble period brief", () => {
         }),
       );
     });
+    expect(createNotePeriodBrief.mock.calls[0]?.[0]).not.toHaveProperty("chat_session_id");
     expect(setNoteBubbleActiveSession).toHaveBeenCalledWith("page-1", "session-brief");
     expect(screen.queryByTestId("period-brief-compose")).toBeNull();
     expect(screen.queryByTestId("period-brief-cancel")).toBeNull();
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("starts 写汇报 in a new thread even when a Q&A session is already open", async () => {
+    chatState.noteBubbleActiveSessionByPage = { "page-1": "old-qa-session" };
+    const user = userEvent.setup();
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    renderWithI18n(
+      <QueryClientProvider client={qc}>
+        <NoteAssistantBubble pageId="page-1" pageTitle="Note" />
+      </QueryClientProvider>,
+      { locale: "zh-Hans" },
+    );
+
+    await user.click(screen.getByRole("button", { name: "open-period" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("period-brief-collector-collector-b")).toBeTruthy();
+    });
+    await user.click(screen.getByRole("button", { name: "send-override" }));
+    await waitFor(() => {
+      expect(createNotePeriodBrief).toHaveBeenCalled();
+    });
+    expect(createNotePeriodBrief.mock.calls[0]?.[0]).not.toHaveProperty("chat_session_id");
+    expect(setNoteBubbleActiveSession).toHaveBeenCalledWith("page-1", "session-brief");
+  });
+
+  it("marks the FAB running while a page chat task is in flight", async () => {
+    listChatSessions.mockResolvedValue([
+      {
+        id: "sess-qa",
+        workspace_id: "ws-1",
+        agent_id: "notes-1",
+        creator_id: "user-1",
+        title: "Note chat",
+        status: "active",
+        context_note_page_id: "page-1",
+        has_unread: false,
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+      },
+    ]);
+    listPendingChatTasks.mockResolvedValue({
+      tasks: [{ chat_session_id: "sess-qa" }],
+    });
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    renderWithI18n(
+      <QueryClientProvider client={qc}>
+        <NoteAssistantBubble pageId="page-1" pageTitle="Note" />
+      </QueryClientProvider>,
+      { locale: "zh-Hans" },
+    );
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "open-period" })).toHaveAttribute(
+        "data-running",
+        "true",
+      );
+    });
+  });
+
+  it("marks the FAB running while a period brief is collecting", async () => {
+    getActiveNotePeriodBrief.mockResolvedValue({
+      run: { id: "run-1", status: "collecting", chat_session_id: "session-brief" },
+    });
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    renderWithI18n(
+      <QueryClientProvider client={qc}>
+        <NoteAssistantBubble pageId="page-1" pageTitle="Note" />
+      </QueryClientProvider>,
+      { locale: "zh-Hans" },
+    );
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "open-period" })).toHaveAttribute(
+        "data-running",
+        "true",
+      );
+    });
+  });
+
+  it("does not lock the composer when only the insert card is waiting", async () => {
+    getActiveNotePeriodBrief.mockResolvedValue({
+      run: { id: "run-1", status: "awaiting_confirm", chat_session_id: "session-brief" },
+    });
+    const user = userEvent.setup();
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    renderWithI18n(
+      <QueryClientProvider client={qc}>
+        <NoteAssistantBubble pageId="page-1" pageTitle="Note" />
+      </QueryClientProvider>,
+      { locale: "zh-Hans" },
+    );
+
+    await waitFor(() => {
+      expect(getActiveNotePeriodBrief).toHaveBeenCalled();
+      expect(screen.getByRole("button", { name: "open-period" })).toHaveAttribute(
+        "data-running",
+        "false",
+      );
+    });
+    await user.click(screen.getByRole("button", { name: "open-period" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("period-brief-compose")).toBeTruthy();
+    });
   });
 
   it("cancels the compose chips without starting a run", async () => {

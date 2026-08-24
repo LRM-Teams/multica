@@ -195,9 +195,24 @@ func periodBriefAllCollectorResultsFinal(packs []notePeriodBriefPackResult) bool
 	return true
 }
 
+func periodBriefAnyCollectorReady(packs []notePeriodBriefPackResult) bool {
+	for _, pack := range packs {
+		if pack.Status == "ready" {
+			return true
+		}
+	}
+	return false
+}
+
 func periodBriefMaterialsProgressCopy(packs []notePeriodBriefPackResult) string {
-	if periodBriefAllCollectorResultsFinal(packs) {
+	if !periodBriefAllCollectorResultsFinal(packs) {
+		return "有采集没有成功，笔记助手会再发起一次采集。"
+	}
+	if periodBriefAnyCollectorReady(packs) {
 		return "我已经收到了所有需要的材料，下面将根据这些材料整理一份汇报稿。"
 	}
-	return "有采集没有成功，笔记助手会再发起一次采集。"
+	if len(packs) == 0 {
+		return "这次没有派出采集员，下面只根据平台 Facts 整理汇报稿。"
+	}
+	return "这次没有采到可用材料，下面只根据已有材料整理汇报稿。"
 }

@@ -10,10 +10,10 @@ allowed-tools: Bash(multica *)
 You turn **platform Facts** + **collector packs** into one Period Work Brief
 **for other people to read** (manager / colleague). The platform waits until
 collectors settle before waking you — you do **not** busy-wait. Inbox will
-**not** auto-retry. If any collector is retryable and `retry_count` is 0, you
-**MUST** `retry-collectors` once and stop — do not write the Brief yet. After
-the platform re-wake, that result is final; then you **narrate for humans**.
-Do not paste packs or show how you verified anything.
+**not** auto-retry. There are two synthesizer wakes: a **retry-only** wake
+(`retry-collectors` once, then stop — no `--note-write`) and a later **write**
+wake (results are final; narrate for humans). Do not paste packs or show how
+you verified anything.
 
 ## Audience (non-negotiable)
 
@@ -199,19 +199,21 @@ multica notes period-brief retry-collectors \
 
 Rules:
 
-1. If any collector is `retryable: true` and `retry_count` is 0, you **MUST**
-   call this CLI once now and **stop**. Do not write the Brief yet.
+1. On a **retry-only** wake (instruction says do not `--note-write`): if any
+   collector is `retryable: true` and `retry_count` is 0, you **MUST** call
+   this CLI once now and **stop**. Do not write the Brief.
 2. Prefer listing specific `--collector-agent-id` values; omit to retry all eligible.
 3. Inbox will **not** auto-retry collectors. Platform rejects permanent failures
    and a second retry — do not argue.
 4. After a successful retry response: **stop and wait**. Platform re-wakes you
-   when that attempt settles. Then the result is final — write the Brief; do
-   not retry again.
-5. Never re-collect the OS yourself unless the wake explicitly makes you a collector.
+   for the **write** wake when that attempt settles. Then the result is final —
+   write the Brief; do not retry again.
+5. On a **write** wake, do **not** call retry-collectors. Deliver the Brief.
+6. Never re-collect the OS yourself unless the wake explicitly makes you a collector.
 
 ## Deliver the Brief
 
-Same as wake instruction: `--note-write` onto the **工作介绍/** folder page id
-(not the draft). Body = Brief markdown only.
+Only on the write wake: `--note-write` onto the **工作介绍/** folder page id
+(not the draft). Body = Brief markdown only. Retry-only wakes must not write.
 
 Source map: `references/period-work-brief-source-map.md`

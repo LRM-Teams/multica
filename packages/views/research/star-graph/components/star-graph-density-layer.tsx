@@ -4,7 +4,7 @@ export interface StarGraphDensityBin {
   id: string;
   bounds: { x: number; y: number; width: number; height: number };
   total: number;
-  execution_counts: Readonly<Record<string, number>>;
+  executionCounts: Readonly<Record<string, number>>;
 }
 
 interface DensityStyle extends CSSProperties {
@@ -27,7 +27,7 @@ export function StarGraphDensityLayer({
       aria-hidden="true"
     >
       {bins.map((bin) => {
-        const status = dominantExecutionStatus(bin.execution_counts);
+        const status = dominantExecutionStatus(bin.executionCounts);
         return (
           <div
             key={bin.id}

@@ -112,18 +112,28 @@ function transport(options?: {
 }
 
 describe("ResearchV6DirectorLiveController", () => {
-  it("applies a strict run-scoped delta and forwards slice invalidation", () => {
+  it("applies a resumed run-scoped delta and forwards slice invalidation", async () => {
     const live = bus();
     const invalidated: Array<readonly string[]> = [];
+    const wire = transport({
+      resumePage: {
+        runId: RUN_ID,
+        deltas: [delta()],
+        nextCursor: null,
+        resyncRequired: false,
+      },
+    });
     const controller = new ResearchV6DirectorLiveController(
       { workspaceId: WORKSPACE_ID, runId: RUN_ID },
-      transport().value,
+      wire.value,
       live.realtime,
       { onInvalidateSliceKeys: (keys) => invalidated.push(keys) },
     );
     controller.seedSnapshotPage(snapshot());
     controller.connect();
-    live.push({ run_id: RUN_ID, delta: delta() });
+    live.push({ run_id: RUN_ID, through_sequence: 5 });
+    await Promise.resolve();
+    await Promise.resolve();
     expect(controller.getClient().getState().lastConfirmedSequence).toBe(5);
     expect(invalidated).toEqual([["expand:root"]]);
   });

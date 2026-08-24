@@ -35,6 +35,8 @@ function rendererStatus(node: ResearchV6DirectorProjectionNode): string {
     return "failed";
   }
   if (node.state.execution === "cancelled") return "cancelled";
+  if (node.state.execution === "idle") return "idle";
+  if (node.state.execution === "offline") return "offline";
   if (node.state.conclusion === "accepted") return "accepted";
   if (node.state.execution === "succeeded") return "succeeded";
   return "pending";

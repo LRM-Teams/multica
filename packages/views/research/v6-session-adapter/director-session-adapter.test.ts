@@ -110,6 +110,45 @@ describe("Director V6 canvas adapter", () => {
     });
   });
 
+  it("preserves completed results and idle or offline Agent execution states", () => {
+    const result = adaptResearchV6DirectorCanvas({
+      runId: RUN_ID,
+      eventSequence: 11,
+      nodes: [
+        node("result", "S", {
+          state: {
+            execution: "succeeded",
+            conclusion: "proposed",
+            integration: "candidate",
+          },
+        }),
+        node("idle-agent", "S", {
+          kind: "agent",
+          state: {
+            execution: "idle",
+            conclusion: "proposed",
+            integration: "unmatched",
+          },
+        }),
+        node("offline-agent", "S", {
+          kind: "agent",
+          state: {
+            execution: "offline",
+            conclusion: "proposed",
+            integration: "unmatched",
+          },
+        }),
+      ],
+      edges: [],
+    });
+
+    expect(result.graph.nodes.map((item) => item.status)).toEqual([
+      "succeeded",
+      "idle",
+      "offline",
+    ]);
+  });
+
   it("groups nodes into server-declared Branch territories", () => {
     const branchA = "00000000-0000-4000-8000-000000000101";
     const branchB = "00000000-0000-4000-8000-000000000102";

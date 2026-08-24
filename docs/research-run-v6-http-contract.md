@@ -176,7 +176,11 @@ non-empty schema ID other than `no_op.v1` and include the exact non-empty
 the Work Item is created.
 
 The canonical projection includes Run-scoped `agent` nodes and `assigned_to`
-edges from Work to the assigned Agent. Work activity responses are scoped by the
+edges from Work to the assigned Agent. Agent execution state preserves Team
+Membership semantics: `idle` means available without assigned Work, `running`
+means actively assigned, and `offline` means unavailable. Clients must not map
+`idle` or completed `succeeded`/`accepted` nodes to queued or waiting Work.
+Work activity responses are scoped by the
 exact Work Attempt and Inbox Task. A matching `task:message` causes clients to
 refetch durable activity; it is not rendered as an uncommitted stream frame.
 Only bounded user-facing tool/error summaries are returned—never hidden model

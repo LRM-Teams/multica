@@ -222,8 +222,8 @@ func TestBuildPromptAssignmentCarriesTurnWorkflowAndLazyDecomposition(t *testing
 		"Open the `multica-working-on-issues` skill",
 		"DIRECT / Issue DAG / Goal Graph",
 		"verify proportionately",
-		"multica issue comment add issue-active-1",
-		"set `issue-active-1` to `in_review`",
+		"multica issue complete issue-active-1",
+		"moves the Issue to `in_review`",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("assignment turn prompt missing %q\n--- output ---\n%s", want, out)

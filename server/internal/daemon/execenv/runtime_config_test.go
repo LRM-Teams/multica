@@ -401,7 +401,8 @@ func TestAssignmentTriggeredProtocolHonorsAgentIdentity(t *testing.T) {
 		"Issue description + acceptance criteria + attachments = spec.",
 		"Challenge a bad spec with its owner",
 		"Do not investigate, implement, create issues, update issues, or delegate if your Agent Identity forbids that action",
-		"When done, run `multica issue status " + issueID + " in_review` unless your Agent Identity forbids issue status changes; if it does, skip this step.",
+		"Submit the typed completion report",
+		"multica issue complete " + issueID,
 		"If blocked, run `multica issue status " + issueID + " blocked` unless your Agent Identity forbids issue status changes.",
 	} {
 		if !strings.Contains(out, want) {
@@ -881,7 +882,8 @@ func TestIssueRuntimeBriefKeepsIssueWorkflowContract(t *testing.T) {
 		"## Comment Formatting",
 		"## Issue Metadata",
 		"## Sub-issue Creation",
-		"Final results MUST be delivered via `multica issue comment add`",
+		"Final results MUST be delivered via `multica issue complete`",
+		"Submit the typed completion report",
 		"You are responsible for managing the issue status throughout your work",
 		compactCloseoutStatusInstruction,
 	} {

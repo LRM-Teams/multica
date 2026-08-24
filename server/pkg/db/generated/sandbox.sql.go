@@ -2211,4 +2211,3 @@ func scanSandboxSnapshot(row interface{ Scan(...interface{}) error }) (SandboxSn
 	)
 	return i, err
 }
-

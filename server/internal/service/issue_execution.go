@@ -34,8 +34,17 @@ type IssueExecutionReconcileOptions struct {
 	ForceFreshSession bool
 	ParentRunID       pgtype.UUID
 	PreserveRunID     pgtype.UUID
-	DeliveryAttempt   int32
-	MaxAttempts       int32
+	// KeepTerminalRunID excludes the authenticated provider turn from
+	// supersession while a completion report moves its Issue to in_review.
+	// The claim/owner lease are still released; daemon terminal callbacks remain
+	// the sole owner of the real Run/execution outcome.
+	KeepTerminalRunID pgtype.UUID
+	// KeepCompletionReportRunID protects the report being inserted by the
+	// completion transaction itself. Every other pending report is superseded
+	// when its Issue work contract/revision is invalidated.
+	KeepCompletionReportRunID pgtype.UUID
+	DeliveryAttempt           int32
+	MaxAttempts               int32
 }
 
 // IssueExecutionReconcileOutcome contains only post-commit side effects. The
@@ -135,6 +144,14 @@ func (s *IssueExecutionService) ReconcileTx(ctx context.Context, tx pgx.Tx, issu
 	}
 
 	if opts.Invalidate {
+		if _, supersedeErr := tx.Exec(ctx, `
+			UPDATE issue_completion_report
+			SET review_status='superseded', updated_at=now()
+			WHERE workspace_id=$1 AND issue_id=$2 AND review_status='pending'
+			  AND ($3::uuid IS NULL OR run_id <> $3::uuid)`,
+			state.WorkspaceID, state.ID, opts.KeepCompletionReportRunID); supersedeErr != nil {
+			return outcome, fmt.Errorf("supersede stale completion reports: %w", supersedeErr)
+		}
 		advanced, advanceErr := q.AdvanceIssueExecutionRevision(ctx, db.AdvanceIssueExecutionRevisionParams{
 			IssueID: state.ID, WorkspaceID: state.WorkspaceID,
 			ExpectedExecutionRevision: state.ExecutionRevision,
@@ -157,6 +174,7 @@ func (s *IssueExecutionService) ReconcileTx(ctx context.Context, tx pgx.Tx, issu
 		}
 		cancelled, cancelErr := q.CancelSupersededIssueRunEvents(ctx, db.CancelSupersededIssueRunEventsParams{
 			Reason: pgtype.Text{String: reason, Valid: true}, WorkspaceID: state.WorkspaceID, IssueID: state.ID,
+			KeepRunID: opts.KeepTerminalRunID,
 		})
 		if cancelErr != nil {
 			return outcome, fmt.Errorf("cancel superseded issue runs: %w", cancelErr)
@@ -445,6 +463,17 @@ func (s *IssueExecutionService) DispatchRun(ctx context.Context, workspaceID, ru
 		return nil, err
 	}
 	if err := s.deliverOutbox(ctx, outbox, leaseToken); err != nil {
+		delay := time.Duration(outbox.DeliveryAttempts) * time.Second
+		if delay < time.Second {
+			delay = time.Second
+		}
+		if delay > time.Minute {
+			delay = time.Minute
+		}
+		_, _ = s.Queries.RescheduleIssueDispatchOutbox(ctx, db.RescheduleIssueDispatchOutboxParams{
+			NextDeliveryAt: pgtype.Timestamptz{Time: time.Now().UTC().Add(delay), Valid: true},
+			LastError:      err.Error(), WorkspaceID: outbox.WorkspaceID, OutboxID: outbox.ID, LeaseToken: leaseToken,
+		})
 		return nil, err
 	}
 	event, err := s.Queries.GetAgentInboxEvent(ctx, runID)

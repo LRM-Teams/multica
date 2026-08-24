@@ -721,8 +721,8 @@ POST /api/agent/issues/{issueId}/completion
 
 同一事务必须：
 
-1. 验证当前 task credential、runId、assignee 和 active Issue claim；
-2. 验证 expected issue execution revision 和 Goal version；
+1. 只从当前 task credential 解析 canonical Run，拒绝客户端自报或替换 `run_id`；
+2. 验证该 Run 的 workspace、Issue、assignee、active claim 和 expected issue execution revision；
 3. 校验每条 acceptance criterion 都有结果和 evidence；
 4. 插入 completion report；
 5. 插入可见 comment；
@@ -733,6 +733,11 @@ POST /api/agent/issues/{issueId}/completion
 该 API **不写 `agent_execution.status=completed`**。daemon 的真实 turn completion / failure callback继续拥有 execution
 终态。如果 report 已提交后 turn 又失败，report 仍保留并可 review；审计同时显示“产出已提交，执行终结失败”。
 
+首版 CLI 为 `multica issue complete <issueId> --summary ... --evidence INDEX=KIND:REF`。它先读取当前 Issue 的
+criteria / revision，再构造完整 typed request；缺项、重复项、过期 criterion 文本、无 evidence 或不属于当前 task 的
+Run 都必须服务端拒绝，不能依赖 CLI 校验兜底。同一 Run 的相同 request hash 幂等返回已有 report且不重复发布
+realtime event，不同内容冲突。
+
 ### 12.3 Review
 
 - Agent 实现者不能接受自己的 report；
@@ -740,7 +745,14 @@ POST /api/agent/issues/{issueId}/completion
 - 发布、集成、权限、安全和 Goal 最终 completion 由独立 reviewer 或人接受；
 - accepted verdict 原子推进 Issue `in_review -> done` 并解锁 dependency；
 - rejected verdict 记录 reason，推进 `in_review -> todo/blocked`，递增 execution revision，并由 reconciler 创建新 Run；
-- 直接 PATCH Agent Issue 到 `done` 必须拒绝，历史 / 人类兼容路径另行显式授权。
+- rejected successor Run 必须以原 report 的 Run 为 `parent_run_id`；旧 Run、report、review verdict 继续留在 History；
+- Agent 通过通用 Issue PATCH 直接进入 `in_review` 或 `done` 必须拒绝，历史 / 人类兼容路径另行显式授权；
+- `pull_request` evidence 只有在该 URL 已存在于 canonical `issue_pull_request -> github_pull_request` 关系时才能被
+  accepted review 接受；标题、正文、分支、comment 或 Issue metadata 中的 PR 号/URL 都只能作为待修复线索；
+- report author 不能 review 自己的 report；Agent reviewer 也必须使用同一 Issue 上独立的 task-scoped Run；
+- Issue 删除可以级联删除 report，但不得因 canonical Run 的历史字段与 `ON DELETE SET NULL` 冲突而失败；Run 审计历史保留。
+- 永久删除 Agent 不得删除或阻塞 completion/review 审计；report 保留提交者 UUID 作为 tombstone identity，授权时仍由
+  task-scoped Run 验证 workspace / Agent 归属，而不是依赖可被删除的 actor 外键。
 
 ## 13. Goal controller
 

@@ -280,6 +280,7 @@ WHERE workspace_id = @workspace_id
   AND issue_id = @issue_id
   AND reason = 'issue'
   AND trigger_comment_id IS NULL
+  AND (sqlc.narg('keep_run_id')::uuid IS NULL OR id <> sqlc.narg('keep_run_id')::uuid)
   AND status IN ('pending', 'failed', 'draining', 'running')
 RETURNING *;
 

@@ -11,7 +11,7 @@ An active multi-agent channel Goal is not itself a code assignment. Repository
 mutation requires a claimed Issue that is linked to the Goal channel and belongs
 to the channel's bound Git-backed Project. Chat wakes without such an Issue may
 coordinate the control plane but must not create competing implementations.
-Implementation Issues stop at `in_review`. Canonical merge and deployment
+Implementation Issues submit a typed completion report and stop at `in_review`. Canonical merge and deployment
 belong to a separate manager-owned integration Issue whose metadata includes
 `delivery_role=integration`; that lane integrates only independently reviewed,
 green-CI branches and verifies the deployed commit against the parent Goal.
@@ -303,8 +303,13 @@ on it. These are the contracts, not advice:
 - **`backlog`** parks an agent-assigned issue: the assignee is set but no task
   fires. Moving `backlog → todo` (or any non-done/non-cancelled status) enqueues
   the assigned agent then.
-- **`in_review`** is an accepted issue status. Some workflows use it while a PR
-  is open and awaiting review; moving to it is an explicit mutation.
+- **`in_review`** for Agent implementation work is entered only through
+  `multica issue complete <id> --summary ... --evidence 'INDEX=KIND:REF'`.
+  The command binds every criterion/evidence result to the authenticated Run,
+  creates the visible report comment, and prevents an empty review state.
+- **`done`** cannot be self-approved by an implementation Agent. An independent
+  Agent/human uses `multica issue review`; rejection preserves the old report
+  and creates a successor Run.
 - **`done`** on a child issue posts a system comment on its parent. If a PR
   carries close intent (`Closes MUL-XXXX`), it advances the issue to `done`
   itself on merge — you do not also need to flip it manually.

@@ -24,12 +24,14 @@ const (
 // and the recovered/stalled callbacks) with one event shape and one
 // subscription point.
 type residentProcessEvent struct {
-	AgentID   string
-	RuntimeID string
-	Kind      residentProcessEventKind
-	Provider  string        // exited only, where known
-	SilentFor time.Duration // stalled only
-	At        time.Time
+	AgentID           string
+	RuntimeID         string
+	AgentInstanceID   string
+	ProcessInstanceID string
+	Kind              residentProcessEventKind
+	Provider          string        // exited only, where known
+	SilentFor         time.Duration // stalled only
+	At                time.Time
 }
 
 // subscribeResidentProcess registers fn to run for every future resident

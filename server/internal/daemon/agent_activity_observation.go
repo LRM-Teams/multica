@@ -13,11 +13,10 @@ import (
 // processInstanceID is local launch fencing; the remaining fields are the
 // activity state and timeline fact.
 type activityBroadcast struct {
-	activityKind      string
-	detail            string
-	detailKind        string
-	processInstanceID string
-	trajectory        []protocol.AgentActivityEntry
+	activityKind string
+	detail       string
+	detailKind   string
+	trajectory   []protocol.AgentActivityEntry
 }
 
 // Observe is the only typed Message/runtime-fact to Activity presentation
@@ -55,20 +54,15 @@ func (p *agentActivityProducer) observeLocked(observation AgentObservation) erro
 
 	snapshot := state.snapshot
 	snapshot.AgentID = observation.AgentID
-	snapshot.AgentID = observation.AgentID
 	snapshot.DaemonInstanceID = p.daemonInstanceID
 	if broadcast.activityKind != "" {
 		snapshot.ActivityKind = broadcast.activityKind
 		snapshot.DetailKind = broadcast.detailKind
-		snapshot.ProcessInstanceID = broadcast.processInstanceID
 	} else if snapshot.ActivityKind == "" {
 		snapshot.ActivityKind = protocol.ActivityKindOnline
 		snapshot.DetailKind = broadcast.detailKind
 	}
-	snapshot.ClientSequence = 0
-	snapshot.ProducerFactID = ""
 	snapshot.ObservedAt = observation.At.UTC()
-	snapshot.ProbeID = ""
 	if err := p.publishLocked(key, snapshot, broadcast); err != nil {
 		return err
 	}
@@ -187,8 +181,7 @@ func activityBroadcastForObservation(observation AgentObservation) (activityBroa
 
 	switch observation.Kind {
 	case AgentObservationRuntimeReady:
-		data := observation.Data.(AgentRuntimeObservationData)
-		broadcast.activityKind, broadcast.detailKind, broadcast.processInstanceID, broadcast.detail = protocol.ActivityKindOnline, "idle", data.ProcessInstanceID, "Online"
+		broadcast.activityKind, broadcast.detailKind, broadcast.detail = protocol.ActivityKindOnline, "idle", "Online"
 		entry, err = activityStatusEntry(broadcast.detailKind, broadcast.detail)
 	case AgentObservationRuntimeStarting:
 		broadcast.activityKind, broadcast.detailKind, broadcast.detail = protocol.ActivityKindWorking, "starting", "Starting…"
@@ -254,7 +247,7 @@ func activityBroadcastForObservation(observation AgentObservation) (activityBroa
 		entry, err = activitySystemEntry(messageSendDraftSentTitle(), messageSendDraftSentSubtext(data.Target, data.Anyway))
 	case AgentObservationError:
 		data := observation.Data.(AgentErrorObservationData)
-		broadcast.activityKind, broadcast.detailKind, broadcast.processInstanceID, broadcast.detail = protocol.ActivityKindError, "runtime_error", data.ProcessInstanceID, strings.TrimSpace(data.Message)
+		broadcast.activityKind, broadcast.detailKind, broadcast.detail = protocol.ActivityKindError, "runtime_error", strings.TrimSpace(data.Message)
 		entry, err = activityStatusEntry(broadcast.detailKind, broadcast.detail)
 	case AgentObservationOffline:
 		data := observation.Data.(AgentErrorObservationData)

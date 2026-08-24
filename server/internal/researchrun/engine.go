@@ -60,11 +60,11 @@ func (e *Engine) ProjectionV6NodeDetail(ctx context.Context, workspaceID, runID,
 	return e.store.ProjectionV6NodeDetail(ctx, workspaceID, runID, snapshotID, nodeID, view)
 }
 
-func (e *Engine) ProjectionV6WorkActivity(ctx context.Context, workspaceID, runID, workItemID string) (V6WorkActivity, error) {
+func (e *Engine) ProjectionWorkActivity(ctx context.Context, workspaceID, runID, workItemID string) (WorkActivity, error) {
 	if e == nil || e.store == nil {
-		return V6WorkActivity{}, ErrV6DirectorUnavailable
+		return WorkActivity{}, ErrV6DirectorUnavailable
 	}
-	return e.store.ProjectionV6WorkActivity(ctx, workspaceID, runID, workItemID)
+	return e.store.ProjectionWorkActivity(ctx, workspaceID, runID, workItemID)
 }
 
 func NewEngineWithReportStorage(store *PostgresStore, dispatcher Dispatcher, projector Projector, reportStorage ReportPackageStorage) ResearchRun {

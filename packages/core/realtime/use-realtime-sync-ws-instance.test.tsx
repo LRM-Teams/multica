@@ -194,12 +194,13 @@ describe("useRealtimeSync — ws instance change", () => {
         wrapper: createWrapper(qc),
       });
       const activity: RunnerActivityResponse = {
-        summary: { label: "Running command...", tone: "info", visibility: "visible" },
+        summary: { label: "Running command...", activityKind: "working", detailKind: "running_command" },
         timeline: [{
           id: "entry-1",
           occurred_at: "2026-08-10T00:00:00Z",
           title: "Running command...",
-          tone: "info",
+          activity_kind: "working",
+          detail_kind: "running_command",
           body_kind: "text",
           body: "Safe narrative",
         }],

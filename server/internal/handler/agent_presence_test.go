@@ -107,7 +107,6 @@ func TestGetAgentPresenceReturnsFullWorkspaceRosterFromRunnerManagementTruth(t *
 
 	h := *testHandler
 	h.runnerObservations = newRunnerObservationStore()
-	h.runnerActivityCursor = newRunnerActivityCursorStore()
 	h.RunnerPresenceSource = fakeRunnerPresenceSource{current: map[string]bool{
 		"daemon-1/" + testWorkspaceID + "/instance-1": true,
 	}}
@@ -213,7 +212,6 @@ func TestRunnerStatusPublishesPresenceOnlyOnSemanticChange(t *testing.T) {
 	})
 	h := *testHandler
 	h.runnerObservations = newRunnerObservationStore()
-	h.runnerActivityCursor = newRunnerActivityCursorStore()
 	h.Bus = bus
 	h.RunnerPresenceSource = fakeRunnerPresenceSource{current: map[string]bool{
 		"daemon-1/" + testWorkspaceID + "/instance-1": true,
@@ -252,7 +250,6 @@ func TestRunnerStartAcknowledgementAndSessionPersistForCurrentConnection(t *test
 	agentID := createHandlerTestAgent(t, "runner-launch-"+uuid.NewString()[:8], nil)
 	h := *testHandler
 	h.runnerObservations = newRunnerObservationStore()
-	h.runnerActivityCursor = newRunnerActivityCursorStore()
 	bus := events.New()
 	var presencePayloads []AgentPresenceRealtimePayload
 	bus.Subscribe(protocol.EventAgentPresence, func(event events.Event) {
@@ -320,7 +317,6 @@ func TestRunnerStartAcknowledgementPresenceStaysOfflineUntilActive(t *testing.T)
 	agentID := createHandlerTestAgent(t, "runner-ack-presence-"+uuid.NewString()[:8], nil)
 	h := *testHandler
 	h.runnerObservations = newRunnerObservationStore()
-	h.runnerActivityCursor = newRunnerActivityCursorStore()
 	bus := events.New()
 	var presencePayloads []AgentPresenceRealtimePayload
 	bus.Subscribe(protocol.EventAgentPresence, func(event events.Event) {
@@ -499,7 +495,6 @@ func TestPendingAgentLifecycleOperationDoesNotDispatchParallelRunnerStop(t *test
 		time.Sleep(time.Millisecond)
 	}
 	h.runnerObservations = newRunnerObservationStore()
-	h.runnerActivityCursor = newRunnerActivityCursorStore()
 	h.DaemonHub = hub
 	h.observations().putStatus(testWorkspaceID, daemonID, "instance-1", agentID, runtimeID, protocol.AgentStatusActive)
 	identity := daemonws.ClientIdentity{DaemonID: daemonID, WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}}
@@ -537,7 +532,6 @@ func TestRunnerDisconnectFencesExactInstanceAndPublishesOnce(t *testing.T) {
 	})
 	h := *testHandler
 	h.runnerObservations = newRunnerObservationStore()
-	h.runnerActivityCursor = newRunnerActivityCursorStore()
 	h.Bus = bus
 	h.observations().putStatus(testWorkspaceID, "daemon-1", "replacement", agentID, runtimeID, protocol.AgentStatusActive)
 	identity := daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID}

@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -57,33 +56,17 @@ func TestAgentActivityProducerObserveGoldenMappings(t *testing.T) {
 				t.Fatalf("sent = %d, want 1", len(sent))
 			}
 			payload := sent[0]
-			if payload.Snapshot.ActivityKind != test.kind || payload.Snapshot.DetailKind != test.detail || payload.Snapshot.ProcessInstanceID != test.processID || !payload.Snapshot.ObservedAt.Equal(at) {
+			if payload.Snapshot.ActivityKind != test.kind || payload.Snapshot.DetailKind != test.detail || !payload.Snapshot.ObservedAt.Equal(at) {
 				t.Fatalf("Snapshot = %+v", payload.Snapshot)
 			}
 			if test.entryKind == "" {
-				if len(payload.Entries) != 0 {
-					t.Fatalf("Entries = %+v, want none", payload.Entries)
+				if len(payload.Timeline) != 0 {
+					t.Fatalf("Timeline = %+v, want none", payload.Timeline)
 				}
 				return
 			}
-			if len(payload.Entries) != 1 || payload.Entries[0].Kind != test.entryKind {
-				t.Fatalf("Entries = %+v", payload.Entries)
-			}
-			if test.entryKind == "tool_start" {
-				var body protocol.AgentActivityToolStartBody
-				if err := json.Unmarshal(payload.Entries[0].Body, &body); err != nil || body.ToolInput != test.entryText {
-					t.Fatalf("tool entry body = %+v err=%v", body, err)
-				}
-			} else if test.entryKind == "system" {
-				var body protocol.AgentActivitySystemBody
-				if err := json.Unmarshal(payload.Entries[0].Body, &body); err != nil || body.Text != test.entryText {
-					t.Fatalf("system entry body = %+v err=%v", body, err)
-				}
-			} else {
-				var body protocol.AgentActivityStatusBody
-				if err := json.Unmarshal(payload.Entries[0].Body, &body); err != nil || body.Detail != test.entryText {
-					t.Fatalf("status entry body = %+v err=%v", body, err)
-				}
+			if len(payload.Timeline) != 1 {
+				t.Fatalf("Timeline = %+v", payload.Timeline)
 			}
 		})
 	}
@@ -132,37 +115,6 @@ func TestAgentActivityProducerShowsUnknownTool(t *testing.T) {
 	}
 }
 
-func TestActivityProducerFactIDMatchesDaemonInstanceSeq(t *testing.T) {
-	got := activityProducerFactID("agent-a", "daemon-1", 3)
-	if got != "daemon_activity:agent-a:daemon-1:3" {
-		t.Fatalf("fact id = %q", got)
-	}
-	if got := activityProducerFactID("agent-a", "daemon-2", 1); got != "daemon_activity:agent-a:daemon-2:1" {
-		t.Fatalf("fact id = %q", got)
-	}
-}
-
-func TestAgentActivityProducerObserveUsesRaftSeqFactIdentity(t *testing.T) {
-	at := time.Date(2026, time.August, 11, 1, 0, 0, 0, time.UTC)
-	observation := AgentObservation{
-		AgentID: "agent-a", AgentInstanceID: "instance-a", Kind: AgentObservationRuntimeThinking,
-		Data: AgentRuntimeStageObservationData{RuntimeID: "runtime-1"}, At: at,
-	}
-	var sent []protocol.AgentActivityPayload
-	producer := newAgentActivityProducer("daemon-1", func() time.Time { return at }, func(payload protocol.AgentActivityPayload) { sent = append(sent, payload) })
-	installActivityProducerAgent(t, producer)
-	if err := producer.Observe(observation); err != nil {
-		t.Fatal(err)
-	}
-	if err := producer.Observe(observation); err != nil {
-		t.Fatal(err)
-	}
-	wantFactID := "daemon_activity:agent-a:daemon-1:1"
-	if len(sent) != 1 || sent[0].Snapshot.ClientSequence != 1 || sent[0].Snapshot.ProducerFactID != wantFactID {
-		t.Fatalf("observed payloads = %+v, want one Raft seq-derived fact %q", sent, wantFactID)
-	}
-}
-
 func TestAgentActivityProducerCoalescesTextStagesAndPreservesToolEvents(t *testing.T) {
 	at := time.Date(2026, time.August, 16, 9, 41, 19, 0, time.UTC)
 	var sent []protocol.AgentActivityPayload
@@ -208,11 +160,11 @@ func TestAgentActivityProducerCoalescesTextStagesAndPreservesToolEvents(t *testi
 			t.Fatalf("Activity[%d] detail = %q, want %q", i, sent[i].Snapshot.DetailKind, detail)
 		}
 	}
-	if len(sent[0].Entries) != 1 || sent[0].Entries[0].Kind != "status" {
-		t.Fatalf("thinking Activity entries = %+v, want one status", sent[0].Entries)
+	if len(sent[0].Timeline) != 1 {
+		t.Fatalf("thinking Activity timeline = %+v, want one status", sent[0].Timeline)
 	}
-	if len(sent[1].Entries) != 0 {
-		t.Fatalf("working Activity entries = %+v, want current-state update only", sent[1].Entries)
+	if len(sent[1].Timeline) != 0 {
+		t.Fatalf("working Activity timeline = %+v, want current-state update only", sent[1].Timeline)
 	}
 }
 
@@ -241,8 +193,8 @@ func TestAgentActivityProducerDoesNotPutFinalReplyAfterCommandsOnTimeline(t *tes
 	}
 	wantEntryCounts := []int{1, 1, 0, 1}
 	for index, want := range wantEntryCounts {
-		if len(sent[index].Entries) != want {
-			t.Fatalf("Activity[%d] entries = %+v, want %d", index, sent[index].Entries, want)
+		if len(sent[index].Timeline) != want {
+			t.Fatalf("Activity[%d] timeline = %+v, want %d", index, sent[index].Timeline, want)
 		}
 	}
 	if sent[2].Snapshot.DetailKind != "model_response_started" || sent[3].Snapshot.DetailKind != "idle" {
@@ -275,33 +227,7 @@ func TestAgentActivityProducerObserveRejectsMissingOrStaleInstance(t *testing.T)
 	}
 }
 
-func TestAgentActivityProducerReplacementKeepsAgentSequenceMonotonic(t *testing.T) {
-	at := time.Date(2026, time.August, 11, 1, 0, 0, 0, time.UTC)
-	var sent []protocol.AgentActivityPayload
-	producer := newAgentActivityProducer("daemon-1", func() time.Time { return at }, func(payload protocol.AgentActivityPayload) {
-		sent = append(sent, payload)
-	})
-	status := protocol.AgentStatusPayload{AgentID: "agent-a", Status: protocol.AgentStatusActive}
-	session := protocol.AgentSessionPayload{AgentID: "agent-a"}
-	if err := producer.SetManaged("instance-1", status, session); err != nil {
-		t.Fatal(err)
-	}
-	stage := AgentRuntimeStageObservationData{RuntimeID: "runtime-1"}
-	if err := producer.Observe(AgentObservation{AgentID: "agent-a", AgentInstanceID: "instance-1", Kind: AgentObservationRuntimeThinking, Data: stage, At: at}); err != nil {
-		t.Fatal(err)
-	}
-	if err := producer.SetManaged("instance-2", status, session); err != nil {
-		t.Fatal(err)
-	}
-	if err := producer.Observe(AgentObservation{AgentID: "agent-a", AgentInstanceID: "instance-2", Kind: AgentObservationRuntimeThinking, Data: stage, At: at.Add(time.Second)}); err != nil {
-		t.Fatal(err)
-	}
-	if len(sent) != 2 || sent[0].Snapshot.ClientSequence != 1 || sent[1].Snapshot.ClientSequence != 2 || sent[0].Snapshot.ProducerFactID == sent[1].Snapshot.ProducerFactID {
-		t.Fatalf("replacement Activity identities = %+v", sent)
-	}
-}
-
-func TestAgentActivityProducerObserveKeepsSessionAndProcessIdentitiesDistinct(t *testing.T) {
+func TestAgentActivityProducerObserveKeepsSessionIdentity(t *testing.T) {
 	at := time.Date(2026, time.August, 11, 1, 0, 0, 0, time.UTC)
 	producer := newAgentActivityProducer("daemon-1", func() time.Time { return at }, nil)
 	installActivityProducerAgent(t, producer)
@@ -315,12 +241,12 @@ func TestAgentActivityProducerObserveKeepsSessionAndProcessIdentitiesDistinct(t 
 		t.Fatal(err)
 	}
 	state := producer.states[agentActivityProducerKey{agentID: "agent-a", agentInstanceID: "instance-a"}]
-	if state.snapshot.ProcessInstanceID != "process-1" || state.session.ProviderSessionID != "session-1" || state.session.TurnID != "turn-1" || state.session.RuntimeGeneration != 4 {
+	if state.session.ProviderSessionID != "session-1" || state.session.TurnID != "turn-1" || state.session.RuntimeGeneration != 4 {
 		t.Fatalf("managed identities = snapshot:%+v session:%+v", state.snapshot, state.session)
 	}
 }
 
-func TestReplayManagedAgentStartDoesNotRepaintLiveActivity(t *testing.T) {
+func TestManagedStartPublicationPreservesLiveActivity(t *testing.T) {
 	now := time.Date(2026, time.August, 15, 12, 0, 0, 0, time.UTC)
 	var activities []protocol.AgentActivityPayload
 	producer := newAgentActivityProducer("daemon-1", func() time.Time { return now }, func(payload protocol.AgentActivityPayload) {
@@ -378,12 +304,12 @@ func TestResidentTextUpdatesWorkingWithoutAddingTimelineEntry(t *testing.T) {
 	if len(activities) != 1 || activities[0].Snapshot.ActivityKind != protocol.ActivityKindWorking || activities[0].Snapshot.DetailKind != "model_response_started" {
 		t.Fatalf("text Activity = %+v, want Raft model_response_started", activities)
 	}
-	if len(activities[0].Entries) != 0 {
-		t.Fatalf("text Activity entries = %+v, want final reply kept out of Timeline", activities[0].Entries)
+	if len(activities[0].Timeline) != 0 {
+		t.Fatalf("text Activity timeline = %+v, want final reply kept out of Timeline", activities[0].Timeline)
 	}
 }
 
-func TestAgentActivityProducerReplaysLatestCompleteActivityWhileDisconnected(t *testing.T) {
+func TestReconnectFramesRetainLatestCompleteActivity(t *testing.T) {
 	now := time.Date(2026, time.August, 6, 12, 0, 0, 0, time.UTC)
 	var sent []protocol.AgentActivityPayload
 	producer := newAgentActivityProducer("daemon-1", func() time.Time { return now }, func(payload protocol.AgentActivityPayload) { sent = append(sent, payload) })
@@ -411,43 +337,11 @@ func TestAgentActivityProducerReplaysLatestCompleteActivityWhileDisconnected(t *
 		t.Fatalf("reconnect frames = %d, want status/session/latest Activity", len(frames))
 	}
 	payload, ok := frames[2].Payload.(protocol.AgentActivityPayload)
-	if !ok || payload.Snapshot.DetailKind != "editing_file" || len(payload.Entries) != 1 {
+	if !ok || payload.Snapshot.DetailKind != "editing_file" || len(payload.Timeline) != 1 {
 		t.Fatalf("replayed payload = %+v", frames[2].Payload)
 	}
-	var body protocol.AgentActivityToolStartBody
-	if err := json.Unmarshal(payload.Entries[0].Body, &body); err != nil || body.ToolName != "edit_file" || body.ToolInput != "/repo/out.go" {
-		t.Fatalf("replayed editing entry = %+v err=%v", body, err)
-	}
-}
-
-func TestAgentActivityProducerHeartbeatsAndProbeDoNotInventState(t *testing.T) {
-	now := time.Date(2026, time.August, 6, 12, 0, 0, 0, time.UTC)
-	var sent []protocol.AgentActivityPayload
-	producer := newAgentActivityProducer("daemon-1", func() time.Time { return now }, func(payload protocol.AgentActivityPayload) { sent = append(sent, payload) })
-	installActivityProducerAgent(t, producer)
-	if err := producer.Observe(AgentObservation{AgentID: "agent-a", AgentInstanceID: "instance-a", Kind: AgentObservationRuntimeStarting, Data: AgentRuntimeStageObservationData{RuntimeID: "runtime-1"}, At: now}); err != nil {
-		t.Fatal(err)
-	}
-	now = now.Add(59 * time.Second)
-	producer.Tick()
-	if len(sent) != 1 {
-		t.Fatalf("heartbeat before 60 seconds sent %d payloads", len(sent))
-	}
-	now = now.Add(time.Second)
-	producer.Tick()
-	if len(sent) != 2 || sent[1].Snapshot.ClientSequence != 2 || sent[1].Snapshot.ProducerFactID != "daemon_activity:agent-a:daemon-1:2" || len(sent[1].Entries) != 0 || sent[1].Detail != "Starting…" || !sent[1].IsHeartbeat {
-		t.Fatalf("heartbeat payload = %+v", sent)
-	}
-	probe, err := producer.Probe(protocol.AgentActivityProbePayload{AgentID: "agent-a", ProbeID: "probe-1"})
-	if err != nil {
-		t.Fatalf("Probe: %v", err)
-	}
-	if probe.Snapshot.ProbeID != "probe-1" || probe.Snapshot.ActivityKind != protocol.ActivityKindWorking || probe.Snapshot.ClientSequence != 2 || probe.Detail != "Starting…" || probe.IsHeartbeat {
-		t.Fatalf("probe = %+v", probe.Snapshot)
-	}
-	state, ok := producer.states[agentActivityProducerKey{agentID: "agent-a", agentInstanceID: "instance-a"}]
-	if !ok || state.snapshot.ProbeID != "" || state.lastClientSequence != 2 {
-		t.Fatalf("probe mutated producer state: %+v", state)
+	if payload.Timeline[0].Subtext != "/repo/out.go" {
+		t.Fatalf("replayed editing row = %+v", payload.Timeline[0])
 	}
 }
 
@@ -467,7 +361,7 @@ func TestAgentActivityProducerReplacedTransportKeepsNewestRunnerConnected(t *tes
 	}
 }
 
-func TestReplayManagedStartDoesNotRepaintStarting(t *testing.T) {
+func TestManagedStartReconciliationDoesNotRepaintStarting(t *testing.T) {
 	now := time.Date(2026, time.August, 16, 11, 54, 25, 0, time.UTC)
 	var activities []protocol.AgentActivityPayload
 	producer := newAgentActivityProducer("daemon-1", func() time.Time { return now }, func(payload protocol.AgentActivityPayload) {
@@ -501,7 +395,6 @@ func TestReplayManagedStartDoesNotRepaintStarting(t *testing.T) {
 		t.Fatalf("replay painted %d extra Activity facts, want 0", len(activities)-before)
 	}
 }
-
 func TestMessageAcceptanceWithoutManagedLaunchDoesNotInventActivityIdentity(t *testing.T) {
 	now := time.Date(2026, time.August, 7, 0, 0, 0, 0, time.UTC)
 	var activities []protocol.AgentActivityPayload
@@ -609,29 +502,17 @@ func TestResidentRuntimeEventsPublishRaftActivityLifecycle(t *testing.T) {
 			t.Fatalf("Activity[%d] = %+v", index, activities[index].Snapshot)
 		}
 	}
-	if len(activities[1].Entries) != 0 {
-		t.Fatalf("text Activity entries = %+v, want current-state update without a Timeline row", activities[1].Entries)
+	if len(activities[1].Timeline) != 0 {
+		t.Fatalf("text Activity timeline = %+v, want current-state update without a Timeline row", activities[1].Timeline)
 	}
-	var toolBody protocol.AgentActivityToolStartBody
-	if err := json.Unmarshal(activities[2].Entries[0].Body, &toolBody); err != nil {
-		t.Fatal(err)
+	if activities[2].Timeline[0].Subtext != "ls -la" {
+		t.Fatalf("tool-use Activity row = %+v", activities[2].Timeline[0])
 	}
-	if toolBody.ToolName != "bash" || toolBody.ToolInput != "ls -la" {
-		t.Fatalf("tool-use Activity body = %+v", toolBody)
+	if activities[3].Timeline[0].Title != "Runtime warning" || activities[3].Timeline[0].Subtext != "Provider reported a warning" {
+		t.Fatalf("runtime diagnostic Activity = %+v", activities[3].Timeline[0])
 	}
-	var diagnostic protocol.AgentActivitySystemBody
-	if err := json.Unmarshal(activities[3].Entries[0].Body, &diagnostic); err != nil {
-		t.Fatal(err)
-	}
-	if activities[3].Entries[0].Kind != "system" || diagnostic.Title != "Runtime warning" || diagnostic.Text != "Provider reported a warning" {
-		t.Fatalf("runtime diagnostic Activity = kind:%q body:%+v", activities[3].Entries[0].Kind, diagnostic)
-	}
-	var errorBody protocol.AgentActivityStatusBody
-	if err := json.Unmarshal(activities[len(activities)-1].Entries[0].Body, &errorBody); err != nil {
-		t.Fatal(err)
-	}
-	if errorBody.Detail != "sensitive provider text" || errorBody.DetailKind != "runtime_error" {
-		t.Fatalf("runtime error Activity = %+v, want provider error text", errorBody)
+	if activities[len(activities)-1].Timeline[0].Subtext != "sensitive provider text" {
+		t.Fatalf("runtime error Activity = %+v, want provider error text", activities[len(activities)-1].Timeline[0])
 	}
 }
 
@@ -722,7 +603,7 @@ func TestResidentCompactionPublishesOneStaleEntryAndFinishesBeforeResumedOutput(
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
 
 	runner.observeResidentMessageRuntime("agent-a", "runtime-1", agent.Message{Type: agent.MessageCompactionStarted})
-	if len(activities) != 1 || activities[0].Snapshot.ActivityKind != protocol.ActivityKindWorking || activities[0].Snapshot.DetailKind != "compacting_context" || len(activities[0].Entries) != 1 {
+	if len(activities) != 1 || activities[0].Snapshot.ActivityKind != protocol.ActivityKindWorking || activities[0].Snapshot.DetailKind != "compacting_context" || len(activities[0].Timeline) != 1 {
 		t.Fatalf("compaction start Activity = %+v", activities)
 	}
 	if staleDelay != 5*time.Minute || fireStale == nil {
@@ -731,57 +612,50 @@ func TestResidentCompactionPublishesOneStaleEntryAndFinishesBeforeResumedOutput(
 
 	now = now.Add(5 * time.Minute)
 	fireStale()
-	if len(activities) != 2 || activities[1].Snapshot.ActivityKind != protocol.ActivityKindWorking || activities[1].Snapshot.DetailKind != "compaction_stale" || len(activities[1].Entries) != 1 {
+	if len(activities) != 2 || activities[1].Snapshot.ActivityKind != protocol.ActivityKindWorking || activities[1].Snapshot.DetailKind != "compaction_stale" || len(activities[1].Timeline) != 1 {
 		t.Fatalf("stale compaction Activity = %+v, want one Timeline entry after five minutes", activities)
 	}
 
-	now = now.Add(time.Minute)
-	producer.Tick()
-	if len(activities) != 3 || activities[2].Snapshot.DetailKind != "compaction_stale" || len(activities[2].Entries) != 0 {
-		t.Fatalf("post-stale heartbeat = %+v, want Snapshot-only heartbeat", activities)
-	}
-
 	runner.observeResidentMessageRuntime("agent-a", "runtime-1", agent.Message{Type: agent.MessageThinking})
-	if len(activities) != 5 {
+	if len(activities) != 4 {
 		t.Fatalf("Activity count after resumed output = %d, want inferred finish plus thinking", len(activities))
 	}
-	finish := activities[3]
-	if finish.Snapshot.ActivityKind != protocol.ActivityKindWorking || finish.Snapshot.DetailKind != "compaction_finished" || len(finish.Entries) != 1 {
+	finish := activities[2]
+	if finish.Snapshot.ActivityKind != protocol.ActivityKindWorking || finish.Snapshot.DetailKind != "compaction_finished" || len(finish.Timeline) != 1 {
 		t.Fatalf("inferred compaction finish = %+v", finish)
 	}
-	if thinking := activities[4]; thinking.Snapshot.ActivityKind != protocol.ActivityKindThinking || len(thinking.Entries) != 1 {
+	if thinking := activities[3]; thinking.Snapshot.ActivityKind != protocol.ActivityKindThinking || len(thinking.Timeline) != 1 {
 		t.Fatalf("resumed thinking Activity = %+v", thinking)
 	}
 
 	runner.observeResidentMessageRuntime("agent-a", "runtime-1", agent.Message{Type: agent.MessageCompactionFinished})
-	if len(activities) != 6 || activities[5].Snapshot.ActivityKind != protocol.ActivityKindWorking || activities[5].Snapshot.DetailKind != "compaction_finished" {
+	if len(activities) != 5 || activities[4].Snapshot.ActivityKind != protocol.ActivityKindWorking || activities[4].Snapshot.DetailKind != "compaction_finished" {
 		t.Fatalf("late explicit provider finish Activity = %+v", activities)
 	}
 
 	runner.observeResidentMessageRuntime("agent-a", "runtime-1", agent.Message{Type: agent.MessageCompactionStarted})
 	runner.observeResidentMessageRuntime("agent-a", "runtime-1", agent.Message{Type: agent.MessageCompactionFinished})
-	if len(activities) != 8 {
-		t.Fatalf("explicit compaction lifecycle Activity count = %d, want 8", len(activities))
+	if len(activities) != 7 {
+		t.Fatalf("explicit compaction lifecycle Activity count = %d, want 7", len(activities))
 	}
-	explicitFinish := activities[7]
-	if explicitFinish.Snapshot.ActivityKind != protocol.ActivityKindWorking || explicitFinish.Snapshot.DetailKind != "compaction_finished" || len(explicitFinish.Entries) != 1 {
+	explicitFinish := activities[6]
+	if explicitFinish.Snapshot.ActivityKind != protocol.ActivityKindWorking || explicitFinish.Snapshot.DetailKind != "compaction_finished" || len(explicitFinish.Timeline) != 1 {
 		t.Fatalf("explicit compaction finish = %+v", explicitFinish)
 	}
 
 	runner.observeResidentMessageRuntime("agent-a", "runtime-1", agent.Message{Type: agent.MessageCompactionStarted})
 	runner.observeResidentMessageRuntime("agent-a", "runtime-1", agent.Message{Type: agent.MessageError, Content: "compaction failed"})
 	runner.observeResidentMessageRuntime("agent-a", "runtime-1", agent.Message{Type: agent.MessageThinking})
-	if len(activities) != 11 || activities[9].Snapshot.ActivityKind != protocol.ActivityKindError || activities[10].Snapshot.ActivityKind != protocol.ActivityKindThinking {
-		t.Fatalf("interrupted compaction Activity = %+v", activities[8:])
+	if len(activities) != 10 || activities[8].Snapshot.ActivityKind != protocol.ActivityKindError || activities[9].Snapshot.ActivityKind != protocol.ActivityKindThinking {
+		t.Fatalf("interrupted compaction Activity = %+v", activities[7:])
 	}
 
 	runner.observeResidentMessageRuntime("agent-a", "runtime-1", agent.Message{Type: agent.MessageCompactionStarted})
 	runner.observeMessageTurnCompletion("agent-a", "runtime-1", nil)
-	if len(activities) != 14 || activities[12].Snapshot.DetailKind != "compaction_finished" || activities[13].Snapshot.ActivityKind != protocol.ActivityKindOnline || activities[13].Snapshot.DetailKind != "idle" {
-		t.Fatalf("turn-end compaction completion Activity = %+v", activities[11:])
+	if len(activities) != 13 || activities[11].Snapshot.DetailKind != "compaction_finished" || activities[12].Snapshot.ActivityKind != protocol.ActivityKindOnline || activities[12].Snapshot.DetailKind != "idle" {
+		t.Fatalf("turn-end compaction completion Activity = %+v", activities[10:])
 	}
 }
-
 func TestIdleMessageAcceptanceFailurePublishesVisibleErrorActivity(t *testing.T) {
 	var activities []protocol.AgentActivityPayload
 	producer := newAgentActivityProducer("daemon-1", time.Now, func(payload protocol.AgentActivityPayload) {
@@ -810,15 +684,11 @@ func TestIdleMessageAcceptanceFailurePublishesVisibleErrorActivity(t *testing.T)
 		t.Fatalf("activities = %d, want one visible Error", len(activities))
 	}
 	got := activities[0]
-	if got.Snapshot.ActivityKind != protocol.ActivityKindError || got.Snapshot.DetailKind != "runtime_error" || len(got.Entries) != 1 {
+	if got.Snapshot.ActivityKind != protocol.ActivityKindError || got.Snapshot.DetailKind != "runtime_error" || len(got.Timeline) != 1 {
 		t.Fatalf("failure Activity = %+v", got)
 	}
-	var body protocol.AgentActivityStatusBody
-	if err := json.Unmarshal(got.Entries[0].Body, &body); err != nil {
-		t.Fatal(err)
-	}
-	if body.Detail != "runtime Message handoff unavailable (simulated crash window)" {
-		t.Fatalf("failure status = %q", body.Detail)
+	if got.Timeline[0].Subtext != "runtime Message handoff unavailable (simulated crash window)" {
+		t.Fatalf("failure status = %q", got.Timeline[0].Subtext)
 	}
 	if _, found := runner.processes.Snapshot("agent-a"); found {
 		t.Fatal("provider startup-request failure retained APM launch")
@@ -860,7 +730,7 @@ func TestObserveResidentMessageRuntimeClearsPoisonedPiSession(t *testing.T) {
 	}
 }
 
-func installActivityProducerAgent(t *testing.T, producer *agentActivityProducer) {
+func installLegacyActivityProducerAgent(t *testing.T, producer *agentActivityProducer) {
 	t.Helper()
 	if err := producer.SetManaged("instance-a", protocol.AgentStatusPayload{AgentID: "agent-a", Status: protocol.AgentStatusActive}, protocol.AgentSessionPayload{AgentID: "agent-a", RuntimeGeneration: 1}); err != nil {
 		t.Fatalf("SetManaged: %v", err)

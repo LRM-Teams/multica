@@ -1,6 +1,4 @@
-// Package activityprojection contains the server-owned semantic projection
-// from Runner Activity facts to UI-ready summaries and timeline rows.
-package activityprojection
+package daemon
 
 import (
 	"encoding/json"
@@ -10,33 +8,6 @@ import (
 )
 
 const maxTimelineBodyBytes = 4000
-
-type Summary struct {
-	Label      string `json:"label"`
-	Tone       string `json:"tone"`
-	Visibility string `json:"visibility"`
-}
-
-type TimelineRow struct {
-	Title    string `json:"title"`
-	Subtext  string `json:"subtext,omitempty"`
-	Tone     string `json:"tone"`
-	BodyKind string `json:"body_kind"`
-	Body     string `json:"body,omitempty"`
-}
-
-// TimelineRowFromSnapshot is the server-owned presentation for the current
-// replaceable observation. It deliberately has no body: compact and header
-// surfaces must never receive provider detail merely because no summary
-// Entry accompanied the observation.
-func TimelineRowFromSnapshot(snapshot protocol.AgentActivitySnapshot) TimelineRow {
-	summary := ProjectSummary(snapshot)
-	return TimelineRow{
-		Title:    summary.Label,
-		Tone:     summary.Tone,
-		BodyKind: "none",
-	}
-}
 
 // workingDetailLabels owns the Raft-aligned activity label for every working
 // detail kind the daemon can emit (see daemon toolDetailKind). Tool actions
@@ -110,11 +81,9 @@ var toolStartDetailKinds = map[string]string{
 	"list_issue_comments": "listing_issue_comments", "comment_issue": "commenting_issue", "delete_issue_comment": "deleting_issue_comment",
 }
 
-// ActivityKindFromDetailKind is the one server-owned reduction from Raft's
-// execution fact vocabulary to Multica's compact lifecycle vocabulary. The
-// daemon may track an ActivityKind locally for heartbeat scheduling, but that
-// presentation state never crosses the WorkspaceDaemon wire.
-func ActivityKindFromDetailKind(detailKind string) string {
+// activityKindFromDetailKind reduces the daemon execution vocabulary to the
+// compact Activity vocabulary sent to clients.
+func activityKindFromDetailKind(detailKind string) string {
 	switch detailKind {
 	case "idle", "ready":
 		return protocol.ActivityKindOnline
@@ -129,43 +98,39 @@ func ActivityKindFromDetailKind(detailKind string) string {
 	}
 }
 
-// ProjectSummary deliberately never reads command text, paths, tool input,
+// projectActivitySummary deliberately never reads command text, paths, tool input,
 // prompts, stderr, or Entry bodies. Those facts cannot reach compact surfaces.
-func ProjectSummary(snapshot protocol.AgentActivitySnapshot) Summary {
+func projectActivitySummary(snapshot protocol.AgentActivitySnapshot) protocol.AgentActivitySummary {
+	summary := protocol.AgentActivitySummary{ActivityKind: snapshot.ActivityKind, DetailKind: snapshot.DetailKind}
 	switch snapshot.ActivityKind {
 	case protocol.ActivityKindOnline:
-		return Summary{Label: "Online", Tone: "success", Visibility: "visible"}
+		summary.Label = "Online"
 	case protocol.ActivityKindThinking:
-		return Summary{Label: "Thinking...", Tone: "info", Visibility: "visible"}
+		summary.Label = "Thinking..."
 	case protocol.ActivityKindError:
-		return Summary{Label: "Error", Tone: "error", Visibility: "visible"}
+		summary.Label = "Error"
 	case protocol.ActivityKindOffline:
 		// Lifecycle reasons remain Timeline/diagnostic facts. Compact Agent
 		// Activity uses the same Offline word for stop, crash, disconnect, and
 		// every future offline detail.
-		return Summary{Label: "Offline", Tone: "neutral", Visibility: "visible"}
+		summary.Label = "Offline"
 	case protocol.ActivityKindWorking:
 		if label, ok := workingDetailLabels[snapshot.DetailKind]; ok {
-			tone := "warning"
-			if snapshot.DetailKind == "running_command" {
-				tone = "running"
-			}
-			if snapshot.DetailKind == "model_response_started" {
-				tone = "info"
-			}
-			return Summary{Label: label, Tone: tone, Visibility: "visible"}
+			summary.Label = label
+			return summary
 		}
-		return Summary{Label: "Working...", Tone: "warning", Visibility: "visible"}
+		summary.Label = "Working..."
 	default:
-		return Summary{Label: "Working...", Tone: "warning", Visibility: "visible"}
+		summary.Label = "Working..."
 	}
+	return summary
 }
 
-// ProjectTimelineEntry preserves a bounded, safe user-facing string from a
+// projectActivityTimelineEntry preserves a bounded, safe user-facing string from a
 // known generic body. Unknown or malformed envelopes get a useful generic row
 // without exposing raw provider data.
-func ProjectTimelineEntry(entry protocol.AgentActivityEntry, summary Summary) TimelineRow {
-	row := TimelineRow{Title: summary.Label, Tone: summary.Tone, BodyKind: "generic"}
+func projectActivityTimelineEntry(entry protocol.AgentActivityEntry, summary protocol.AgentActivitySummary) protocol.AgentActivityTimelineRow {
+	row := protocol.AgentActivityTimelineRow{ActivityKind: summary.ActivityKind, DetailKind: summary.DetailKind, Title: summary.Label, BodyKind: "generic"}
 	if entry.Kind == "tool_start" {
 		var body protocol.AgentActivityToolStartBody
 		if json.Unmarshal(entry.Body, &body) == nil {
@@ -173,18 +138,15 @@ func ProjectTimelineEntry(entry protocol.AgentActivityEntry, summary Summary) Ti
 			if detailKind == "" {
 				detailKind = "tool_started"
 			}
-			toolSummary := Summary{Label: "Working...", Tone: "warning", Visibility: "visible"}
+			toolSummary := protocol.AgentActivitySummary{ActivityKind: protocol.ActivityKindWorking, DetailKind: detailKind, Label: "Working..."}
 			if label, ok := workingDetailLabels[detailKind]; ok {
 				toolSummary.Label = label
-			}
-			if detailKind == "running_command" {
-				toolSummary.Tone = "running"
 			}
 			bodyKind := "none"
 			if body.ToolName == "bash" {
 				bodyKind = "command"
 			}
-			row = TimelineRow{Title: strings.TrimSuffix(toolSummary.Label, "..."), Tone: toolSummary.Tone, BodyKind: bodyKind}
+			row = protocol.AgentActivityTimelineRow{ActivityKind: toolSummary.ActivityKind, DetailKind: detailKind, Title: strings.TrimSuffix(toolSummary.Label, "..."), BodyKind: bodyKind}
 			if body.ToolInput != "" {
 				row.Subtext = boundedText(body.ToolInput)
 			}
@@ -194,7 +156,7 @@ func ProjectTimelineEntry(entry protocol.AgentActivityEntry, summary Summary) Ti
 	if entry.Kind == "status" {
 		var body protocol.AgentActivityStatusBody
 		if json.Unmarshal(entry.Body, &body) == nil {
-			return projectStatusTimelineRow(body, summary)
+			return projectActivityStatusTimelineRow(body, summary)
 		}
 	}
 	if entry.Kind == "system" {
@@ -204,24 +166,24 @@ func ProjectTimelineEntry(entry protocol.AgentActivityEntry, summary Summary) Ti
 			if title == "" {
 				title = "Runtime warning"
 			}
-			return TimelineRow{Title: title, Subtext: boundedText(body.Text), Tone: "warning", BodyKind: "none"}
+			return protocol.AgentActivityTimelineRow{ActivityKind: protocol.ActivityKindError, DetailKind: "runtime_diagnostic", Title: title, Subtext: boundedText(body.Text), BodyKind: "none"}
 		}
 	}
 	return row
 }
 
-func projectStatusTimelineRow(body protocol.AgentActivityStatusBody, fallback Summary) TimelineRow {
+func projectActivityStatusTimelineRow(body protocol.AgentActivityStatusBody, fallback protocol.AgentActivitySummary) protocol.AgentActivityTimelineRow {
 	text := boundedText(body.Detail)
 	if strings.TrimSpace(body.DetailKind) == "" {
-		return TimelineRow{Title: fallback.Label, Subtext: text, Tone: fallback.Tone, BodyKind: "none"}
+		return protocol.AgentActivityTimelineRow{ActivityKind: fallback.ActivityKind, DetailKind: fallback.DetailKind, Title: fallback.Label, Subtext: text, BodyKind: "none"}
 	}
 
-	activityKind := ActivityKindFromDetailKind(body.DetailKind)
-	summary := ProjectSummary(protocol.AgentActivitySnapshot{
+	activityKind := activityKindFromDetailKind(body.DetailKind)
+	summary := projectActivitySummary(protocol.AgentActivitySnapshot{
 		ActivityKind: activityKind,
 		DetailKind:   body.DetailKind,
 	})
-	row := TimelineRow{Title: strings.TrimSuffix(summary.Label, "..."), Tone: summary.Tone, BodyKind: "none"}
+	row := protocol.AgentActivityTimelineRow{ActivityKind: activityKind, DetailKind: body.DetailKind, Title: strings.TrimSuffix(summary.Label, "..."), BodyKind: "none"}
 	switch activityKind {
 	case protocol.ActivityKindError:
 		row.Title = "Error"

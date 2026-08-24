@@ -236,7 +236,7 @@ func (m *agentProcessManager) beginManagedStop(callback agentProcessCallback) (a
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if stopping := m.stopping[callback.AgentID]; stopping != nil {
-		if stopping.agentInstanceID != callback.AgentInstanceID {
+		if callback.AgentInstanceID != "" && stopping.agentInstanceID != callback.AgentInstanceID {
 			return agentProcessManagerSnapshot{}, nil, false, errors.New("stale Agent process callback")
 		}
 		return snapshotManagedAgentProcess(stopping), stopping.startupDone, true, nil
@@ -245,7 +245,7 @@ func (m *agentProcessManager) beginManagedStop(callback agentProcessCallback) (a
 	if managed == nil || !managed.managed {
 		return agentProcessManagerSnapshot{}, nil, false, nil
 	}
-	if managed.agentInstanceID != callback.AgentInstanceID {
+	if callback.AgentInstanceID != "" && managed.agentInstanceID != callback.AgentInstanceID {
 		return agentProcessManagerSnapshot{}, nil, false, errors.New("stale Agent process callback")
 	}
 	m.stopLocked(managed)
@@ -380,6 +380,14 @@ func (m *agentProcessManager) managedStartupDone(callback agentProcessCallback) 
 }
 
 func (m *agentProcessManager) ProcessSpawned(callback agentProcessCallback) error {
+	return m.processSpawned(callback, nil)
+}
+
+// processSpawned records the process identity only if bind can attach that
+// same identity to the resident pool slot. Both operations run while APM owns
+// the Agent instance, so Stop cannot claim the launch between the pool bind
+// and process admission.
+func (m *agentProcessManager) processSpawned(callback agentProcessCallback, bind func() bool) error {
 	if m == nil {
 		return errors.New("agent process manager is not configured")
 	}
@@ -392,10 +400,31 @@ func (m *agentProcessManager) ProcessSpawned(callback agentProcessCallback) erro
 	if managed.queueState != protocol.AgentStartQueueStarting || callback.ProcessInstanceID == "" {
 		return errors.New("process spawn is not valid for the current launch")
 	}
+	if bind != nil && !bind() {
+		return errors.New("resident process slot is unavailable for managed process bind")
+	}
 	managed.processInstanceID = callback.ProcessInstanceID
 	m.closeLocked(managed, "process_residency", "advanced")
 	m.enterLocked(managed, "runtime_readiness", "waiting")
 	return nil
+}
+
+// withActiveManagedProcess fences process-owned callback side effects against
+// Stop, replacement Agent instances, and a respawn within the same instance.
+func (m *agentProcessManager) withActiveManagedProcess(callback agentProcessCallback, update func()) bool {
+	if m == nil || callback.AgentInstanceID == "" || callback.ProcessInstanceID == "" {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	managed := m.agents[callback.AgentID]
+	if managed == nil || !managed.managed || managed.agentInstanceID != callback.AgentInstanceID || managed.processInstanceID != callback.ProcessInstanceID {
+		return false
+	}
+	if update != nil {
+		update()
+	}
+	return true
 }
 
 func (m *agentProcessManager) RuntimeReady(callback agentProcessCallback) error {

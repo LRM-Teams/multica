@@ -10,10 +10,10 @@ import (
 	"github.com/multica-ai/multica/server/internal/researchrun"
 )
 
-// GetResearchV6WorkActivity exposes the presentation-safe execution identity
+// GetResearchWorkActivity exposes the presentation-safe execution identity
 // and Attempt time window needed to attach Runner Activity to a Work S node.
-func (h *Handler) GetResearchV6WorkActivity(w http.ResponseWriter, r *http.Request) {
-	service, available := h.ResearchRun.(researchrun.V6WorkActivityReader)
+func (h *Handler) GetResearchWorkActivity(w http.ResponseWriter, r *http.Request) {
+	service, available := h.ResearchRun.(researchrun.WorkActivityReader)
 	if !available {
 		writeRonaldoV6Error(w, http.StatusServiceUnavailable, "research.v6.capability_unavailable", "research V6 work activity unavailable", true)
 		return
@@ -27,7 +27,7 @@ func (h *Handler) GetResearchV6WorkActivity(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	workspaceID := h.resolveWorkspaceID(r)
-	response, err := service.ProjectionV6WorkActivity(
+	response, err := service.ProjectionWorkActivity(
 		r.Context(),
 		workspaceID,
 		uuidToString(runID),

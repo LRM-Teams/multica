@@ -185,6 +185,8 @@ type agentRuntimePool struct {
 type agentRuntimeSlot struct {
 	mu                             sync.Mutex
 	provider                       string
+	agentInstanceID                string
+	processInstanceID              string
 	running                        bool
 	idleSince                      time.Time
 	backend                        agent.Backend
@@ -356,6 +358,8 @@ func (p *agentRuntimePool) acquire(request agentRuntimeAcquireRequest) (*agentRu
 		slot.backend = created
 		slot.close = closeBackend
 		slot.provider = request.Identity.Provider
+		slot.agentInstanceID = ""
+		slot.processInstanceID = ""
 		// Re-arm the termination signal for this new process. A stale closed
 		// channel from a previous backend on this same slot must never make
 		// the next awaitTerminated return instantly.
@@ -496,6 +500,8 @@ func (slot *agentRuntimeSlot) closeBackend() {
 	}
 	slot.backend = nil
 	slot.close = nil
+	slot.agentInstanceID = ""
+	slot.processInstanceID = ""
 	slot.piRunIdentity = nil
 	slot.lastPendingNoticeFingerprint = ""
 	slot.lastPendingTargetFingerprint = nil
@@ -525,6 +531,50 @@ func (slot *agentRuntimeSlot) closeBackend() {
 			close(slot.terminated)
 		}
 	}
+}
+
+func (p *agentRuntimePool) bindManagedProcess(agentID, runtimeID string, callback agentProcessCallback) bool {
+	if p == nil || callback.AgentInstanceID == "" || callback.ProcessInstanceID == "" {
+		return false
+	}
+	key := strings.TrimSpace(agentID) + "\x00" + strings.TrimSpace(runtimeID)
+	p.mu.Lock()
+	slot := p.slots[key]
+	if slot == nil {
+		p.mu.Unlock()
+		return false
+	}
+	slot.mu.Lock()
+	p.mu.Unlock()
+	defer slot.mu.Unlock()
+	if slot.backend == nil {
+		return false
+	}
+	slot.agentInstanceID = callback.AgentInstanceID
+	slot.processInstanceID = callback.ProcessInstanceID
+	return true
+}
+
+func (p *agentRuntimePool) managedProcessCallback(agentID, runtimeID string) (agentProcessCallback, bool) {
+	if p == nil {
+		return agentProcessCallback{}, false
+	}
+	key := strings.TrimSpace(agentID) + "\x00" + strings.TrimSpace(runtimeID)
+	p.mu.Lock()
+	slot := p.slots[key]
+	if slot == nil {
+		p.mu.Unlock()
+		return agentProcessCallback{}, false
+	}
+	slot.mu.Lock()
+	p.mu.Unlock()
+	defer slot.mu.Unlock()
+	if slot.agentInstanceID == "" || slot.processInstanceID == "" {
+		return agentProcessCallback{}, false
+	}
+	return agentProcessCallback{
+		AgentID: agentID, AgentInstanceID: slot.agentInstanceID, ProcessInstanceID: slot.processInstanceID,
+	}, true
 }
 
 // awaitTerminated blocks until this slot's resident process is confirmed
@@ -558,10 +608,6 @@ func (p *agentRuntimePool) slotCount() int {
 	return len(p.slots)
 }
 
-// hasResidentBackend reports whether the Agent×runtime slot already owns a
-// usable resident provider process. It intentionally does not expose whether
-// the process is currently handling a Message; MessageCoordinator retains
-// that admission boundary.
 func (p *agentRuntimePool) setNextResumeSession(agentID, runtimeID, sessionID string) {
 	if p == nil {
 		return
@@ -1651,16 +1697,16 @@ func (p *agentRuntimePool) checkResidentLiveness(now time.Time) []residentProces
 			continue
 		}
 		provider := ref.slot.provider
+		agentInstanceID := ref.slot.agentInstanceID
+		processInstanceID := ref.slot.processInstanceID
 		ref.slot.closeBackend()
 		ref.slot.mu.Unlock()
 
 		agentID, runtimeID := splitCanonicalSlotKey(ref.key)
 		events = append(events, residentProcessEvent{
-			AgentID:   agentID,
-			RuntimeID: runtimeID,
-			Kind:      residentProcessExited,
-			Provider:  provider,
-			At:        now,
+			AgentID: agentID, RuntimeID: runtimeID,
+			AgentInstanceID: agentInstanceID, ProcessInstanceID: processInstanceID,
+			Kind: residentProcessExited, Provider: provider, At: now,
 		})
 	}
 

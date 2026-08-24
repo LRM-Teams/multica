@@ -103,30 +103,20 @@ type AgentActionCardArchive struct {
 }
 
 type AgentActivityEntry struct {
-	ID                pgtype.UUID        `json:"id"`
-	WorkspaceID       pgtype.UUID        `json:"workspace_id"`
-	AgentID           pgtype.UUID        `json:"agent_id"`
-	RuntimeID         pgtype.UUID        `json:"runtime_id"`
-	DaemonID          string             `json:"daemon_id"`
-	DaemonInstanceID  string             `json:"daemon_instance_id"`
-	ProcessInstanceID string             `json:"process_instance_id"`
-	ClientSequence    int64              `json:"client_sequence"`
-	ProducerFactID    string             `json:"producer_fact_id"`
-	EntryPosition     int32              `json:"entry_position"`
-	EntryKind         string             `json:"entry_kind"`
-	EntryBody         []byte             `json:"entry_body"`
-	ObservedAt        pgtype.Timestamptz `json:"observed_at"`
-	ReceivedAt        pgtype.Timestamptz `json:"received_at"`
-}
-
-type AgentActivityProbe struct {
+	ID               pgtype.UUID        `json:"id"`
 	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
 	AgentID          pgtype.UUID        `json:"agent_id"`
+	RuntimeID        pgtype.UUID        `json:"runtime_id"`
 	DaemonID         string             `json:"daemon_id"`
 	DaemonInstanceID string             `json:"daemon_instance_id"`
-	ProbeID          string             `json:"probe_id"`
-	SentAt           pgtype.Timestamptz `json:"sent_at"`
-	DeadlineAt       pgtype.Timestamptz `json:"deadline_at"`
+	ObservedAt       pgtype.Timestamptz `json:"observed_at"`
+	ReceivedAt       pgtype.Timestamptz `json:"received_at"`
+	Title            string             `json:"title"`
+	Subtext          string             `json:"subtext"`
+	ActivityKind     string             `json:"activity_kind"`
+	DetailKind       string             `json:"detail_kind"`
+	BodyKind         string             `json:"body_kind"`
+	Body             string             `json:"body"`
 }
 
 type AgentActivitySnapshot struct {
@@ -135,17 +125,14 @@ type AgentActivitySnapshot struct {
 	RuntimeID         pgtype.UUID        `json:"runtime_id"`
 	DaemonID          string             `json:"daemon_id"`
 	DaemonInstanceID  string             `json:"daemon_instance_id"`
-	ProcessInstanceID string             `json:"process_instance_id"`
 	ProviderSessionID string             `json:"provider_session_id"`
 	TurnID            string             `json:"turn_id"`
 	RuntimeGeneration int64              `json:"runtime_generation"`
-	ClientSequence    int64              `json:"client_sequence"`
-	ProducerFactID    string             `json:"producer_fact_id"`
-	ProbeID           string             `json:"probe_id"`
 	ActivityKind      string             `json:"activity_kind"`
 	DetailKind        string             `json:"detail_kind"`
 	ObservedAt        pgtype.Timestamptz `json:"observed_at"`
 	ReceivedAt        pgtype.Timestamptz `json:"received_at"`
+	SummaryLabel      string             `json:"summary_label"`
 }
 
 type AgentAppSourceAck struct {
@@ -2294,6 +2281,30 @@ type Issue struct {
 	ExecutionAttemptSequence int64              `json:"execution_attempt_sequence"`
 }
 
+type IssueCompletionReport struct {
+	ID                     pgtype.UUID        `json:"id"`
+	WorkspaceID            pgtype.UUID        `json:"workspace_id"`
+	IssueID                pgtype.UUID        `json:"issue_id"`
+	RunID                  pgtype.UUID        `json:"run_id"`
+	IssueExecutionRevision int64              `json:"issue_execution_revision"`
+	SubmittedByAgentID     pgtype.UUID        `json:"submitted_by_agent_id"`
+	Summary                string             `json:"summary"`
+	AcceptanceResults      []byte             `json:"acceptance_results"`
+	ArtifactRefs           []byte             `json:"artifact_refs"`
+	Risks                  []byte             `json:"risks"`
+	RequestHash            string             `json:"request_hash"`
+	VisibleCommentID       pgtype.UUID        `json:"visible_comment_id"`
+	ReviewStatus           string             `json:"review_status"`
+	ReviewerType           pgtype.Text        `json:"reviewer_type"`
+	ReviewerID             pgtype.UUID        `json:"reviewer_id"`
+	ReviewReason           pgtype.Text        `json:"review_reason"`
+	ReviewResults          []byte             `json:"review_results"`
+	ReviewCommentID        pgtype.UUID        `json:"review_comment_id"`
+	ReviewedAt             pgtype.Timestamptz `json:"reviewed_at"`
+	CreatedAt              pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt              pgtype.Timestamptz `json:"updated_at"`
+}
+
 type IssueDecomposeChild struct {
 	WorkspaceID   pgtype.UUID        `json:"workspace_id"`
 	ParentIssueID pgtype.UUID        `json:"parent_issue_id"`
@@ -2697,6 +2708,20 @@ type NotePageRunRef struct {
 type NotePageShare struct {
 	PageID    pgtype.UUID        `json:"page_id"`
 	UserID    pgtype.UUID        `json:"user_id"`
+	CreatedBy pgtype.UUID        `json:"created_by"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+type NotePageShareAgent struct {
+	PageID    pgtype.UUID        `json:"page_id"`
+	AgentID   pgtype.UUID        `json:"agent_id"`
+	CreatedBy pgtype.UUID        `json:"created_by"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+type NotePageShareChannel struct {
+	PageID    pgtype.UUID        `json:"page_id"`
+	ChannelID pgtype.UUID        `json:"channel_id"`
 	CreatedBy pgtype.UUID        `json:"created_by"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }

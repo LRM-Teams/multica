@@ -12,17 +12,17 @@ import (
 	"github.com/multica-ai/multica/server/internal/researchrun"
 )
 
-type researchV6WorkActivityRunStub struct {
+type researchWorkActivityRunStub struct {
 	researchrun.ResearchRun
-	researchrun.V6WorkActivityReader
+	researchrun.WorkActivityReader
 	receivedRunID  string
 	receivedWorkID string
 }
 
-func (s *researchV6WorkActivityRunStub) ProjectionV6WorkActivity(_ context.Context, _, runID, workItemID string) (researchrun.V6WorkActivity, error) {
+func (s *researchWorkActivityRunStub) ProjectionWorkActivity(_ context.Context, _, runID, workItemID string) (researchrun.WorkActivity, error) {
 	s.receivedRunID = runID
 	s.receivedWorkID = workItemID
-	return researchrun.V6WorkActivity{
+	return researchrun.WorkActivity{
 		WorkItemID:  workItemID,
 		AttemptID:   "00000000-0000-4000-8000-000000000213",
 		AgentID:     "00000000-0000-4000-8000-000000000009",
@@ -31,7 +31,7 @@ func (s *researchV6WorkActivityRunStub) ProjectionV6WorkActivity(_ context.Conte
 		Mission:     "核查浏览器兼容性",
 		Status:      "running",
 		UpdatedAt:   time.Date(2026, 8, 21, 0, 0, 0, 0, time.UTC),
-		Timeline: []researchrun.V6WorkActivityTimelineRow{
+		Timeline: []researchrun.WorkActivityTimelineRow{
 			{
 				ID:         "00000000-0000-4000-8000-000000000215",
 				OccurredAt: time.Date(2026, 8, 21, 0, 1, 0, 0, time.UTC),
@@ -40,15 +40,15 @@ func (s *researchV6WorkActivityRunStub) ProjectionV6WorkActivity(_ context.Conte
 	}, nil
 }
 
-func TestGetResearchV6WorkActivityReturnsExecutionIdentity(t *testing.T) {
+func TestGetResearchWorkActivityReturnsExecutionIdentity(t *testing.T) {
 	const (
 		runID  = "1855232b-bb5f-49cf-9c7a-1348bc34f3c9"
 		workID = "08234d35-5a10-4b24-80ab-2f9d6b8965d3"
 	)
-	service := &researchV6WorkActivityRunStub{}
+	service := &researchWorkActivityRunStub{}
 	h := &Handler{ResearchRun: service}
 	router := chi.NewRouter()
-	router.Get("/api/research/v6/runs/{runId}/work-items/{workItemId}/activity", h.GetResearchV6WorkActivity)
+	router.Get("/api/research/v6/runs/{runId}/work-items/{workItemId}/activity", h.GetResearchWorkActivity)
 	req := newRequest(http.MethodGet, "/api/research/v6/runs/"+runID+"/work-items/"+workID+"/activity", nil)
 	w := httptest.NewRecorder()
 
@@ -67,8 +67,8 @@ func TestGetResearchV6WorkActivityReturnsExecutionIdentity(t *testing.T) {
 	}
 }
 
-func TestGetResearchV6WorkActivityRejectsInvalidWorkItemID(t *testing.T) {
-	service := &researchV6WorkActivityRunStub{}
+func TestGetResearchWorkActivityRejectsInvalidWorkItemID(t *testing.T) {
+	service := &researchWorkActivityRunStub{}
 	h := &Handler{ResearchRun: service}
 	req := withURLParams(
 		newRequest(http.MethodGet, "/api/research/v6/runs/1855232b-bb5f-49cf-9c7a-1348bc34f3c9/work-items/not-a-uuid/activity", nil),
@@ -77,7 +77,7 @@ func TestGetResearchV6WorkActivityRejectsInvalidWorkItemID(t *testing.T) {
 	)
 	w := httptest.NewRecorder()
 
-	h.GetResearchV6WorkActivity(w, req)
+	h.GetResearchWorkActivity(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d; body=%s", w.Code, http.StatusBadRequest, w.Body.String())

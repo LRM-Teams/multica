@@ -259,8 +259,8 @@ func TestWorkspaceDaemonAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 					t.Error(err)
 					return
 				}
-				if activity.Snapshot.ActivityKind != "" {
-					t.Errorf("Raft Activity wire leaked daemon presentation kind %q", activity.Snapshot.ActivityKind)
+				if activity.Snapshot.ActivityKind == "" || activity.Summary.Label == "" {
+					t.Error("Activity wire omitted daemon presentation")
 					return
 				}
 				sawStartingActivity = sawStartingActivity || activity.Snapshot.DetailKind == "starting"
@@ -339,8 +339,8 @@ func TestWorkspaceDaemonAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 				if err := json.Unmarshal(msg.Payload, &activity); err != nil {
 					t.Fatal(err)
 				}
-				if activity.Snapshot.ActivityKind != "" {
-					t.Fatalf("Raft Activity wire leaked daemon presentation kind %q", activity.Snapshot.ActivityKind)
+				if activity.Snapshot.ActivityKind == "" || activity.Summary.Label == "" {
+					t.Fatal("Activity wire omitted daemon presentation")
 				}
 				switch activity.Snapshot.DetailKind {
 				case "starting":
@@ -575,9 +575,9 @@ func TestWorkspaceDaemonRuntimeReplacementStopsOldLaunchBeforeNewActivity(t *tes
 			serverResult <- err
 			return
 		}
-		var oldInactive, oldStopped bool
+		var oldInactive bool
 		var stopOrderingErr error
-		for !oldInactive || !oldStopped {
+		for !oldInactive {
 			_, err := readFrame(func(frame protocol.Message) bool {
 				switch frame.Type {
 				case protocol.EventAgentStatus:
@@ -587,15 +587,14 @@ func TestWorkspaceDaemonRuntimeReplacementStopsOldLaunchBeforeNewActivity(t *tes
 					}
 				case protocol.EventAgentActivity:
 					var activity protocol.AgentActivityPayload
-					if json.Unmarshal(frame.Payload, &activity) == nil && activity.Snapshot.AgentID == oldStart.AgentID && activity.Snapshot.ActivityKind == "" && activity.Snapshot.DetailKind == "stopped" {
+					if json.Unmarshal(frame.Payload, &activity) == nil && activity.Snapshot.AgentID == oldStart.AgentID && activity.Snapshot.ActivityKind == protocol.ActivityKindOffline && activity.Snapshot.DetailKind == "stopped" {
 						if !oldInactive {
 							stopOrderingErr = errors.New("Stopped Activity arrived before inactive status")
 							return true
 						}
-						oldStopped = true
 					}
 				}
-				return oldInactive && oldStopped
+				return oldInactive
 			})
 			if err != nil {
 				serverResult <- fmt.Errorf("wait for Codex stop: %w", err)

@@ -142,6 +142,46 @@ func TestAgentProcessManagerStopAllowsNewAgentInstance(t *testing.T) {
 	}
 }
 
+func TestAgentProcessManagerWireStopClaimsCurrentInstanceByAgentID(t *testing.T) {
+	manager := newAgentProcessManager(time.Now, nil)
+	accepted, err := manager.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot, _, found, err := manager.beginManagedStop(agentProcessCallback{AgentID: "agent-a"})
+	if err != nil {
+		t.Fatalf("begin wire Stop: %v", err)
+	}
+	if !found || snapshot.AgentInstanceID != accepted.AgentInstanceID {
+		t.Fatalf("claimed process = %+v, found=%v; want current instance %q", snapshot, found, accepted.AgentInstanceID)
+	}
+	if _, active := manager.Snapshot("agent-a"); active {
+		t.Fatal("wire Stop left the current instance active")
+	}
+}
+
+func TestAgentProcessManagerWireStopAtomicallyClaimsIdleRestoreReplacement(t *testing.T) {
+	manager := newAgentProcessManager(time.Now, nil)
+	residency := newAgentResidencyStore(nil)
+	residency.rememberLaunch("agent-a", "runtime-1", "old-instance")
+	residency.rememberIdle("agent-a", "runtime-1", "old-instance")
+	if err := manager.RestoreIdle("agent-a", "runtime-1", "old-instance", residency); err != nil {
+		t.Fatal(err)
+	}
+	replacement, _ := manager.Snapshot("agent-a")
+	claimed, startupDone, found, err := manager.beginManagedStop(agentProcessCallback{AgentID: "agent-a"})
+	if err != nil || !found {
+		t.Fatalf("wire Stop claim found=%v err=%v", found, err)
+	}
+	if claimed.AgentInstanceID != replacement.AgentInstanceID || startupDone == nil {
+		t.Fatalf("wire Stop claimed %+v; want idle replacement %+v with startup fence", claimed, replacement)
+	}
+	if _, active := manager.Snapshot("agent-a"); active {
+		t.Fatal("idle replacement remained active after atomic wire Stop claim")
+	}
+}
+
 func TestAgentProcessManagerStopThenStartFencesStaleCallbacks(t *testing.T) {
 	manager := newAgentProcessManager(time.Now, nil)
 	manager.newID = sequentialIDs()

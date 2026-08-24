@@ -96,6 +96,11 @@ func (d *Daemon) onResidentRuntimeExited(ev residentProcessEvent) {
 	if d.residentCrashBackoff == nil {
 		return
 	}
+	launch, runner, found := d.resolveManagedLaunch(ev.AgentID, ev.RuntimeID)
+	if !found || ev.AgentInstanceID == "" || ev.ProcessInstanceID == "" ||
+		launch.AgentInstanceID != ev.AgentInstanceID || launch.ProcessInstanceID != ev.ProcessInstanceID {
+		return
+	}
 	attempt, backoff, terminal := d.residentCrashBackoff.recordCrash(ev.AgentID, ev.RuntimeID, ev.At)
 
 	// 1. Local launch fact: tell APM the process behind this launch exited.
@@ -105,7 +110,7 @@ func (d *Daemon) onResidentRuntimeExited(ev residentProcessEvent) {
 	// succeeds. terminal decides which of the two single-purpose verbs
 	// runs — the decision lives here because this is where terminal is
 	// computed; the runner verbs themselves carry no branch.
-	if launch, runner, found := d.resolveManagedLaunch(ev.AgentID, ev.RuntimeID); found {
+	{
 		var routeErr error
 		if terminal {
 			routeErr = runner.retireManagedLaunchAfterExit(ev.AgentID, ev.RuntimeID, launch, "provider_crash_looping")

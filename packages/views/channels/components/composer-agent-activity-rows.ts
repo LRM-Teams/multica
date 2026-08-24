@@ -1,9 +1,10 @@
 import { projectRunnerActivitySummary } from "../../agents/use-agent-live-status";
+import { runnerActivityVisuals } from "../../agents/runner-activity-visuals";
 import { isCompactActivityLabel } from "./is-compact-activity-label";
 
 type SummaryItem = {
   agent_id: string;
-  summary: { label: string; tone: string; visibility: string };
+  summary: { label: string; activityKind: string; detailKind: string };
 };
 
 export type ComposerActivityAgent = {
@@ -16,23 +17,10 @@ export type ComposerActivityRow = {
   name: string;
   label: string;
   dotClass: string;
-  tone: string;
-};
-
-const TONE_RANK: Record<string, number> = {
-  active: 0,
-  running: 1,
-  info: 1,
-  warning: 2,
-  error: 3,
-  success: 4,
+  rank: number;
 };
 
 const PRESENCE_ONLY_LABELS = new Set(["Online", "Offline", "Idle", "Working"]);
-
-function toneRank(tone: string): number {
-  return TONE_RANK[tone] ?? 5;
-}
 
 function labelBase(label: string): string {
   return label.replace(/[.…]+$/u, "").trim();
@@ -45,7 +33,7 @@ export function isComposerPresenceOnlyLabel(label: string): boolean {
 
 /**
  * Compact composer Activity rows for the given conversation agents.
- * Visible compact verbs only; live tones (active/info) sort first.
+ * Visible compact verbs only; active Activity facts sort first.
  *
  * A single-agent conversation carries no names: the one peer is unambiguous,
  * so its verb reads as "Thinking..." rather than "Peer Thinking...".
@@ -68,7 +56,7 @@ export function selectComposerAgentActivityRows(
       name: named ? agent.name.trim() : "",
       label: projection.label,
       dotClass: projection.dotClass,
-      tone: summary?.tone ?? "",
+      rank: runnerActivityVisuals({ activity_kind: summary!.activityKind, detail_kind: summary!.detailKind }).rank,
     });
   }
 
@@ -77,7 +65,7 @@ export function selectComposerAgentActivityRows(
   const visible = rows.filter((row) => !isComposerPresenceOnlyLabel(row.label));
 
   visible.sort((a, b) => {
-    const rank = toneRank(a.tone) - toneRank(b.tone);
+    const rank = a.rank - b.rank;
     if (rank !== 0) return rank;
     return a.name.localeCompare(b.name) || a.agentId.localeCompare(b.agentId);
   });
@@ -100,7 +88,7 @@ export const COMPOSER_ACTIVITY_MAX_LINES = 2;
 export const COMPOSER_ACTIVITY_MAX_NAMES = 2;
 
 type LineDraft = Omit<ComposerActivityLine, "hiddenNameCount"> & {
-  tone: string;
+  rank: number;
   agentCount: number;
 };
 
@@ -112,7 +100,7 @@ type LineDraft = Omit<ComposerActivityLine, "hiddenNameCount"> & {
  * cap becomes a single "+N more agents" tail, so the strip never grows past
  * COMPOSER_ACTIVITY_MAX_LINES + 1 lines.
  *
- * Expects tone-sorted rows (selectComposerAgentActivityRows output) — a line
+ * Expects fact-priority-sorted rows (selectComposerAgentActivityRows output) — a line
  * takes its dot from the first member it sees.
  */
 export function groupComposerAgentActivityRows(
@@ -132,15 +120,15 @@ export function groupComposerAgentActivityRows(
       label: row.label,
       dotClass: row.dotClass,
       names: row.name ? [row.name] : [],
-      tone: row.tone,
+      rank: row.rank,
       agentCount: 1,
     });
   }
 
-  // Liveliest tone first, then the verb the most agents share — line order must
+  // Most active fact first, then the verb the most agents share — line order must
   // not hinge on which member happens to sort first alphabetically.
   const drafts = [...byVerb.values()].sort((a, b) => {
-    const rank = toneRank(a.tone) - toneRank(b.tone);
+    const rank = a.rank - b.rank;
     if (rank !== 0) return rank;
     return b.agentCount - a.agentCount || a.key.localeCompare(b.key);
   });

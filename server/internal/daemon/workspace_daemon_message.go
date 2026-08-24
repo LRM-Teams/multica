@@ -390,18 +390,18 @@ func (runner *WorkspaceDaemon) reportProcessUnavailable(agentID string) {
 	if err != nil {
 		return
 	}
+	snapshot := protocol.AgentActivitySnapshot{
+		AgentID:          agentID,
+		DaemonInstanceID: runner.config.DaemonInstanceID,
+		ObservedAt:       now,
+		ActivityKind:     protocol.ActivityKindOffline,
+		DetailKind:       "runtime_unavailable",
+	}
+	summary := projectActivitySummary(snapshot)
 	runner.sendAgentFrame(protocol.EventAgentActivity, protocol.AgentActivityPayload{
-		Snapshot: protocol.AgentActivitySnapshot{
-			AgentID:          agentID,
-			DaemonInstanceID: runner.config.DaemonInstanceID,
-			ClientSequence:   1,
-			ProducerFactID:   fmt.Sprintf("runtime-unavailable-%s-%d", agentID, now.UnixNano()),
-			ObservedAt:       now,
-			ActivityKind:     protocol.ActivityKindOffline,
-			DetailKind:       "runtime_unavailable",
-		},
-		Detail:  "Process unavailable; restart required",
-		Entries: []protocol.AgentActivityEntry{entry},
+		Snapshot: snapshot,
+		Summary:  summary,
+		Timeline: []protocol.AgentActivityTimelineRow{projectActivityTimelineEntry(entry, summary)},
 	})
 }
 

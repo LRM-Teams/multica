@@ -45,20 +45,6 @@ func (runner *WorkspaceDaemon) serveConnection(connection *DaemonConnection, con
 		}
 	})
 	defer producer.DetachTransport(transportGeneration)
-	activityTickerDone := make(chan struct{})
-	defer close(activityTickerDone)
-	go func() {
-		ticker := time.NewTicker(agentActivityHeartbeatInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-activityTickerDone:
-				return
-			case <-ticker.C:
-				producer.Tick()
-			}
-		}
-	}()
 	var controlStarted bool
 	var stopControl context.CancelFunc
 	var controlDone chan struct{}
@@ -285,18 +271,6 @@ func (runner *WorkspaceDaemon) serveConnection(connection *DaemonConnection, con
 			}
 			if !connection.deliveries.Enqueue(delivery) && runner.logger != nil {
 				runner.logger.Warn("WorkspaceDaemon Agent delivery was not queued", "workspace_id", workspaceID, "agent_id", delivery.AgentID, "delivery_id", delivery.DeliveryID, "seq", delivery.Seq, "reason", "connection_delivery_dispatcher_unavailable")
-			}
-		case protocol.EventAgentActivityProbe:
-			var probe protocol.AgentActivityProbePayload
-			if json.Unmarshal(message.Payload, &probe) != nil || probe.Validate() != nil {
-				continue
-			}
-			activity, err := producer.Probe(probe)
-			if err != nil {
-				continue
-			}
-			if err := writeFrame(protocol.EventAgentActivity, activity); err != nil {
-				return err
 			}
 		}
 	}

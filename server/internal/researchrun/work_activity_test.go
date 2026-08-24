@@ -6,8 +6,8 @@ import (
 	"testing"
 )
 
-func TestV6WorkActivityReadsAttemptScopedPersistentTimeline(t *testing.T) {
-	raw, err := os.ReadFile("work_activity_v6.go")
+func TestWorkActivityReadsAttemptScopedPersistentTimeline(t *testing.T) {
+	raw, err := os.ReadFile("work_activity.go")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -21,8 +21,9 @@ func TestV6WorkActivityReadsAttemptScopedPersistentTimeline(t *testing.T) {
 		"COALESCE(inbox.completed_at, work.updated_at)",
 		"entry.observed_at >= $3::timestamptz",
 		"entry.observed_at <= $4::timestamptz",
-		"v6WorkActivityTimelineLimit+1",
-		"activityprojection.ProjectTimelineEntry",
+		"workActivityTimelineLimit+1",
+		"entry.title",
+		"entry.body_kind",
 		"progress.updated_at",
 		"v6_work_progress_reported",
 		"event.payload->>'work_item_id'=work.id::text",

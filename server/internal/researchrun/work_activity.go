@@ -3,43 +3,45 @@ package researchrun
 import (
 	"context"
 	"time"
-
-	"github.com/multica-ai/multica/server/internal/activityprojection"
-	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-const v6WorkActivityTimelineLimit = 100
+const workActivityTimelineLimit = 100
 
-type V6WorkActivityTimelineRow struct {
-	ID         string    `json:"id"`
-	OccurredAt time.Time `json:"occurred_at"`
-	activityprojection.TimelineRow
+type WorkActivityTimelineRow struct {
+	ID           string    `json:"id"`
+	OccurredAt   time.Time `json:"occurred_at"`
+	Title        string    `json:"title"`
+	Subtext      string    `json:"subtext,omitempty"`
+	ActivityKind string    `json:"activity_kind"`
+	DetailKind   string    `json:"detail_kind"`
+	BodyKind     string    `json:"body_kind"`
+	Body         string    `json:"body,omitempty"`
 }
 
-type V6WorkActivity struct {
-	WorkItemID      string                      `json:"work_item_id"`
-	AttemptID       string                      `json:"attempt_id"`
-	AgentID         string                      `json:"agent_id"`
-	AgentName       string                      `json:"agent_name"`
-	InboxTaskID     string                      `json:"inbox_task_id"`
-	Mission         string                      `json:"mission"`
-	Status          string                      `json:"status"`
-	Progress        string                      `json:"progress"`
-	ProgressStep    int32                       `json:"progress_step"`
-	ProgressTotal   int32                       `json:"progress_total"`
-	StartedAt       *time.Time                  `json:"started_at,omitempty"`
-	CompletedAt     *time.Time                  `json:"completed_at,omitempty"`
-	UpdatedAt       time.Time                   `json:"updated_at"`
-	Timeline        []V6WorkActivityTimelineRow `json:"timeline"`
-	TimelineHasMore bool                        `json:"timeline_has_more"`
+type WorkActivity struct {
+	WorkItemID      string                    `json:"work_item_id"`
+	AttemptID       string                    `json:"attempt_id"`
+	AgentID         string                    `json:"agent_id"`
+	AgentName       string                    `json:"agent_name"`
+	InboxTaskID     string                    `json:"inbox_task_id"`
+	Mission         string                    `json:"mission"`
+	Status          string                    `json:"status"`
+	Progress        string                    `json:"progress"`
+	ProgressStep    int32                     `json:"progress_step"`
+	ProgressTotal   int32                     `json:"progress_total"`
+	StartedAt       *time.Time                `json:"started_at,omitempty"`
+	CompletedAt     *time.Time                `json:"completed_at,omitempty"`
+	UpdatedAt       time.Time                 `json:"updated_at"`
+	Timeline        []WorkActivityTimelineRow `json:"timeline"`
+	TimelineHasMore bool                      `json:"timeline_has_more"`
 }
 
-type V6WorkActivityReader interface {
-	ProjectionV6WorkActivity(context.Context, string, string, string) (V6WorkActivity, error)
+type WorkActivityReader interface {
+	ProjectionWorkActivity(context.Context, string, string, string) (WorkActivity, error)
 }
 
-func (s *PostgresStore) ProjectionV6WorkActivity(ctx context.Context, workspaceID, runID, workItemID string) (V6WorkActivity, error) {
-	var activity V6WorkActivity
+func (s *PostgresStore) ProjectionWorkActivity(ctx context.Context, workspaceID, runID, workItemID string) (WorkActivity, error) {
+	var activity WorkActivity
 	err := s.pool.QueryRow(ctx, `
 		SELECT work.id::text,
 		       COALESCE(attempt.id::text,''),
@@ -112,25 +114,26 @@ func (s *PostgresStore) ProjectionV6WorkActivity(ctx context.Context, workspaceI
 	if err != nil {
 		return activity, err
 	}
-	activity.Timeline = make([]V6WorkActivityTimelineRow, 0)
+	activity.Timeline = make([]WorkActivityTimelineRow, 0)
 	if activity.AgentID == "" || activity.StartedAt == nil {
 		return activity, nil
 	}
 
 	rows, err := s.pool.Query(ctx, `
-		SELECT entry.id::text, entry.entry_kind, entry.entry_body, entry.observed_at
+		SELECT entry.id::text, entry.activity_kind, entry.detail_kind, entry.title, entry.subtext,
+		       entry.body_kind, entry.body, entry.observed_at
 		FROM agent_activity_entry entry
 		WHERE entry.workspace_id=$1::uuid
 		  AND entry.agent_id=$2::uuid
 		  AND entry.observed_at >= $3::timestamptz
 		  AND ($4::timestamptz IS NULL OR entry.observed_at <= $4::timestamptz)
-		ORDER BY entry.observed_at DESC, entry.client_sequence DESC, entry.entry_position DESC, entry.id DESC
+		ORDER BY entry.observed_at DESC, entry.id DESC
 		LIMIT $5`,
 		workspaceID,
 		activity.AgentID,
 		activity.StartedAt,
 		activity.CompletedAt,
-		v6WorkActivityTimelineLimit+1,
+		workActivityTimelineLimit+1,
 	)
 	if err != nil {
 		// Runner Activity is presentation-only. Keep the Work mission and
@@ -138,19 +141,16 @@ func (s *PostgresStore) ProjectionV6WorkActivity(ctx context.Context, workspaceI
 		return activity, nil
 	}
 	defer rows.Close()
-	fallback := activityprojection.Summary{Label: "正在处理任务...", Tone: "warning", Visibility: "visible"}
 	for rows.Next() {
-		var row V6WorkActivityTimelineRow
-		var entry protocol.AgentActivityEntry
-		if err := rows.Scan(&row.ID, &entry.Kind, &entry.Body, &row.OccurredAt); err != nil {
+		var row WorkActivityTimelineRow
+		if err := rows.Scan(&row.ID, &row.ActivityKind, &row.DetailKind, &row.Title, &row.Subtext, &row.BodyKind, &row.Body, &row.OccurredAt); err != nil {
 			activity.Timeline = activity.Timeline[:0]
 			return activity, nil
 		}
-		if len(activity.Timeline) == v6WorkActivityTimelineLimit {
+		if len(activity.Timeline) == workActivityTimelineLimit {
 			activity.TimelineHasMore = true
 			continue
 		}
-		row.TimelineRow = activityprojection.ProjectTimelineEntry(entry, fallback)
 		activity.Timeline = append(activity.Timeline, row)
 	}
 	if err := rows.Err(); err != nil {

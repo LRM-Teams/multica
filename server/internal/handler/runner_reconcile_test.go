@@ -29,3 +29,34 @@ func TestReduceRunnerLaunchesConvergesDesiredAndObservedState(t *testing.T) {
 		})
 	}
 }
+
+func TestReduceRunnerLaunchesCrossDaemonMoveDoesNotWaitForOldInactive(t *testing.T) {
+	oldActions := reduceRunnerLaunches(nil, []runnerObservedLaunch{{
+		agentID: "agent-a", runtimeID: "runtime-old", status: protocol.AgentStatusActive,
+	}})
+	targetActions := reduceRunnerLaunches([]runnerDesiredLaunch{{
+		agentID: "agent-a", runtimeID: "runtime-new",
+	}}, nil)
+
+	wantOld := []runnerReconcileAction{{eventType: protocol.EventDaemonAgentStop, payload: protocol.AgentStopPayload{AgentID: "agent-a"}}}
+	wantTarget := []runnerReconcileAction{{eventType: protocol.EventDaemonAgentStart, payload: protocol.AgentStartPayload{AgentID: "agent-a", RuntimeID: "runtime-new"}}}
+	if !reflect.DeepEqual(oldActions, wantOld) {
+		t.Fatalf("old daemon actions = %#v, want %#v", oldActions, wantOld)
+	}
+	if !reflect.DeepEqual(targetActions, wantTarget) {
+		t.Fatalf("target daemon actions = %#v, want %#v", targetActions, wantTarget)
+	}
+}
+
+func TestReduceRunnerLaunchesSameDaemonMoveWaitsForInactive(t *testing.T) {
+	desired := []runnerDesiredLaunch{{agentID: "agent-a", runtimeID: "runtime-new"}}
+	activeOld := []runnerObservedLaunch{{agentID: "agent-a", runtimeID: "runtime-old", status: protocol.AgentStatusActive}}
+	wantStop := []runnerReconcileAction{{eventType: protocol.EventDaemonAgentStop, payload: protocol.AgentStopPayload{AgentID: "agent-a"}}}
+	if got := reduceRunnerLaunches(desired, activeOld); !reflect.DeepEqual(got, wantStop) {
+		t.Fatalf("actions before inactive = %#v, want %#v", got, wantStop)
+	}
+	wantStart := []runnerReconcileAction{{eventType: protocol.EventDaemonAgentStart, payload: protocol.AgentStartPayload{AgentID: "agent-a", RuntimeID: "runtime-new"}}}
+	if got := reduceRunnerLaunches(desired, nil); !reflect.DeepEqual(got, wantStart) {
+		t.Fatalf("actions after inactive = %#v, want %#v", got, wantStart)
+	}
+}

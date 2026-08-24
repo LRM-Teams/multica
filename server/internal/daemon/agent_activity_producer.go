@@ -3,7 +3,6 @@ package daemon
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -13,7 +12,7 @@ import (
 
 func activityStatusEntry(detailKind, text string) (protocol.AgentActivityEntry, error) {
 	body, err := json.Marshal(protocol.AgentActivityStatusBody{
-		Activity:   activityKindFromDetail(detailKind),
+		Activity:   activityKindFromDetailKind(detailKind),
 		Detail:     text,
 		DetailKind: detailKind,
 	})
@@ -21,22 +20,6 @@ func activityStatusEntry(detailKind, text string) (protocol.AgentActivityEntry, 
 		return protocol.AgentActivityEntry{}, err
 	}
 	return protocol.AgentActivityEntry{Kind: "status", Body: body}, nil
-}
-
-func activityKindFromDetail(detailKind string) string {
-	if detailKind == "idle" || detailKind == "ready" {
-		return protocol.ActivityKindOnline
-	}
-	if detailKind == "thinking_started" {
-		return protocol.ActivityKindThinking
-	}
-	if detailKind == "runtime_error" || detailKind == "runtime_crashed" || detailKind == "runtime_stalled" {
-		return protocol.ActivityKindError
-	}
-	if detailKind == "runtime_unavailable" || detailKind == "stopped" {
-		return protocol.ActivityKindOffline
-	}
-	return protocol.ActivityKindWorking
 }
 
 func activityToolStartEntry(toolName, toolInput string) (protocol.AgentActivityEntry, error) {
@@ -60,8 +43,7 @@ func activitySystemEntry(title, text string) (protocol.AgentActivityEntry, error
 }
 
 const (
-	agentActivityHeartbeatInterval = time.Minute
-	compactionStaleTimeout         = 5 * time.Minute
+	compactionStaleTimeout = 5 * time.Minute
 )
 
 // agentActivityProducer is a best-effort daemon-side Activity publisher. It
@@ -76,7 +58,6 @@ type agentActivityProducer struct {
 	daemonInstanceID    string
 	transportGeneration uint64
 	states              map[agentActivityProducerKey]*agentActivityProducerState
-	lastClientSequences map[string]int64
 }
 
 type agentActivityProducerKey struct {
@@ -85,15 +66,13 @@ type agentActivityProducerKey struct {
 }
 
 type agentActivityProducerState struct {
-	snapshot           protocol.AgentActivitySnapshot
-	detail             string
-	latestActivity     protocol.AgentActivityPayload
-	status             protocol.AgentStatusPayload
-	session            protocol.AgentSessionPayload
-	connected          bool
-	lastHeartbeatAt    time.Time
-	lastClientSequence int64
-	compaction         agentActivityCompactionState
+	snapshot       protocol.AgentActivitySnapshot
+	detail         string
+	latestActivity protocol.AgentActivityPayload
+	status         protocol.AgentStatusPayload
+	session        protocol.AgentSessionPayload
+	connected      bool
+	compaction     agentActivityCompactionState
 }
 
 type agentActivityCompactionState struct {
@@ -120,13 +99,12 @@ func newAgentActivityProducer(daemonInstanceID string, now func() time.Time, sen
 			timer := time.AfterFunc(delay, callback)
 			return func() { timer.Stop() }
 		},
-		send:                send,
-		states:              make(map[agentActivityProducerKey]*agentActivityProducerState),
-		lastClientSequences: make(map[string]int64),
+		send:   send,
+		states: make(map[agentActivityProducerKey]*agentActivityProducerState),
 	}
 }
 
-// Close releases activity sequence and managed-launch state with the owning
+// Close releases Activity and managed-launch state with the owning
 // WorkspaceDaemon. Reconnects deliberately use DetachTransport instead.
 func (p *agentActivityProducer) Close() {
 	if p == nil {
@@ -138,7 +116,6 @@ func (p *agentActivityProducer) Close() {
 	}
 	p.send = nil
 	p.states = nil
-	p.lastClientSequences = nil
 	p.mu.Unlock()
 }
 
@@ -290,12 +267,6 @@ func (p *agentActivityProducer) publishLocked(key agentActivityProducerKey, snap
 	if snapshot.ObservedAt.IsZero() {
 		snapshot.ObservedAt = p.now().UTC()
 	}
-	if snapshot.ClientSequence == 0 {
-		snapshot.ClientSequence = p.lastClientSequences[snapshot.AgentID] + 1
-	}
-	if snapshot.ProducerFactID == "" {
-		snapshot.ProducerFactID = activityProducerFactID(snapshot.AgentID, snapshot.DaemonInstanceID, snapshot.ClientSequence)
-	}
 	detail := broadcast.detail
 	if snapshot.DetailKind == state.snapshot.DetailKind {
 		if detail == "" {
@@ -315,82 +286,22 @@ func (p *agentActivityProducer) publishLocked(key agentActivityProducerKey, snap
 	if detail == "" {
 		detail = defaultAgentActivityDetail(snapshot.DetailKind)
 	}
-	payload := protocol.AgentActivityPayload{Snapshot: snapshot, Detail: detail, Entries: broadcast.trajectory}
+	summary := projectActivitySummary(snapshot)
+	timeline := make([]protocol.AgentActivityTimelineRow, 0, len(broadcast.trajectory))
+	for _, entry := range broadcast.trajectory {
+		timeline = append(timeline, projectActivityTimelineEntry(entry, summary))
+	}
+	payload := protocol.AgentActivityPayload{Snapshot: snapshot, Summary: summary, Timeline: timeline}
 	if err := payload.Validate(); err != nil {
 		return err
-	}
-	if snapshot.ClientSequence <= state.lastClientSequence {
-		return fmt.Errorf("Activity sequence regression: %d <= %d", snapshot.ClientSequence, state.lastClientSequence)
 	}
 	state.snapshot = snapshot
 	state.detail = detail
 	state.latestActivity = payload
-	state.lastClientSequence = snapshot.ClientSequence
-	p.lastClientSequences[snapshot.AgentID] = snapshot.ClientSequence
-	state.lastHeartbeatAt = snapshot.ObservedAt
 	if state.connected && p.send != nil {
 		p.send(payload)
 	}
 	return nil
-}
-
-// Tick emits heartbeat Snapshots only for working/thinking state. It never
-// emits an Entry, so the timeline does not fill with synthetic progress rows.
-func (p *agentActivityProducer) Tick() {
-	if p == nil {
-		return
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	now := p.now().UTC()
-	for _, state := range p.states {
-		kind := state.snapshot.ActivityKind
-		if (kind != protocol.ActivityKindWorking && kind != protocol.ActivityKindThinking) || state.snapshot.ObservedAt.IsZero() || now.Sub(state.lastHeartbeatAt) < agentActivityHeartbeatInterval {
-			continue
-		}
-		heartbeat := state.snapshot
-		heartbeat.ClientSequence = p.lastClientSequences[heartbeat.AgentID] + 1
-		heartbeat.ProducerFactID = activityProducerFactID(heartbeat.AgentID, heartbeat.DaemonInstanceID, heartbeat.ClientSequence)
-		heartbeat.ObservedAt = now
-		state.snapshot = heartbeat
-		state.lastClientSequence = heartbeat.ClientSequence
-		p.lastClientSequences[heartbeat.AgentID] = heartbeat.ClientSequence
-		state.lastHeartbeatAt = now
-		state.latestActivity = protocol.AgentActivityPayload{Snapshot: heartbeat, Detail: state.detail, IsHeartbeat: true}
-		if state.connected && p.send != nil {
-			p.send(state.latestActivity)
-		}
-	}
-}
-
-// Probe returns the last actual observation with a matching probe identity.
-// It does not advance sequence, alter current Activity, or fabricate Online.
-func (p *agentActivityProducer) Probe(probe protocol.AgentActivityProbePayload) (protocol.AgentActivityPayload, error) {
-	if p == nil {
-		return protocol.AgentActivityPayload{}, errors.New("Activity producer is not configured")
-	}
-	if err := probe.Validate(); err != nil {
-		return protocol.AgentActivityPayload{}, err
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	var state *agentActivityProducerState
-	for key, candidate := range p.states {
-		if key.agentID == probe.AgentID {
-			state = candidate
-			break
-		}
-	}
-	if state == nil || state.snapshot.ObservedAt.IsZero() {
-		return protocol.AgentActivityPayload{}, errors.New("no current Activity observation for probe")
-	}
-	snapshot := state.snapshot
-	snapshot.ProbeID = probe.ProbeID
-	payload := protocol.AgentActivityPayload{Snapshot: snapshot, Detail: state.detail}
-	if err := payload.Validate(); err != nil {
-		return protocol.AgentActivityPayload{}, err
-	}
-	return payload, nil
 }
 
 // ReconnectFrames reports current status, session, and Raft's latest complete
@@ -412,12 +323,6 @@ func (p *agentActivityProducer) ReconnectFrames() []agentActivityReconnectFrame 
 		}
 	}
 	return frames
-}
-
-// activityProducerFactID is stable across replay on one daemon connection.
-// Local AgentInstanceID is deliberately excluded from the wire identity.
-func activityProducerFactID(agentID, daemonInstanceID string, clientSeq int64) string {
-	return fmt.Sprintf("daemon_activity:%s:%s:%d", strings.TrimSpace(agentID), strings.TrimSpace(daemonInstanceID), clientSeq)
 }
 
 func defaultAgentActivityDetail(detailKind string) string {

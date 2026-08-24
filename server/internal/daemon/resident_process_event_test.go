@@ -69,11 +69,41 @@ func TestResidentProcessDeathClearsAPMRunningState(t *testing.T) {
 	}
 
 	deadResidentLease(t, d.canonicalRuntimes, "agent-1", "runtime-1")
+	launch, _ := runner.processes.Snapshot("agent-1")
+	if !d.canonicalRuntimes.bindManagedProcess("agent-1", "runtime-1", agentProcessCallback{
+		AgentID: "agent-1", AgentInstanceID: launch.AgentInstanceID, ProcessInstanceID: launch.ProcessInstanceID,
+	}) {
+		t.Fatal("bind dead resident process")
+	}
 	d.canonicalRuntimes.checkResidentLiveness(time.Now())
 
 	snap, ok := runner.processes.Snapshot("agent-1")
 	if ok && snap.QueueState == protocol.AgentStartQueueRunning {
 		t.Fatalf("APM still reports the launch Running after its resident process died: %+v", snap)
+	}
+}
+
+func TestStaleResidentProcessExitDoesNotAffectReplacement(t *testing.T) {
+	d := New(Config{}, testLogger())
+	d.mu.Lock()
+	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
+	d.mu.Unlock()
+	runner, _ := attachTestWorkspaceDaemon(t, d, "workspace-1", nil)
+	startManagedLaunch(t, runner, "agent-1", "runtime-1")
+	old, _ := runner.processes.Snapshot("agent-1")
+	if err := runner.processes.Stop(agentProcessCallback{AgentID: old.AgentID, AgentInstanceID: old.AgentInstanceID}); err != nil {
+		t.Fatal(err)
+	}
+	startManagedLaunch(t, runner, "agent-1", "runtime-1")
+	replacement, _ := runner.processes.Snapshot("agent-1")
+
+	d.onResidentRuntimeExited(residentProcessEvent{
+		AgentID: old.AgentID, RuntimeID: old.RuntimeID, AgentInstanceID: old.AgentInstanceID,
+		ProcessInstanceID: old.ProcessInstanceID, Kind: residentProcessExited, At: time.Now(),
+	})
+	got, ok := runner.processes.Snapshot("agent-1")
+	if !ok || got.AgentInstanceID != replacement.AgentInstanceID || got.ProcessInstanceID != replacement.ProcessInstanceID || got.QueueState != protocol.AgentStartQueueRunning {
+		t.Fatalf("stale exit changed replacement: got %+v, found=%v; want %+v", got, ok, replacement)
 	}
 }
 
@@ -129,8 +159,9 @@ func TestResidentProcessExitedBackoffCapRetiresFailedAgentWithoutAffectingAnothe
 	// crash detects a fresh process instance, mirroring the real lazy
 	// recreate on the next acquire().
 	for attempt := 1; attempt <= residentCrashRetryCap; attempt++ {
+		launch, _ := runner.processes.Snapshot("agent-1")
 		d.canonicalRuntimes.emitResidentProcessEvent(residentProcessEvent{
-			AgentID: "agent-1", RuntimeID: "runtime-1", Kind: residentProcessExited,
+			AgentID: "agent-1", RuntimeID: "runtime-1", AgentInstanceID: launch.AgentInstanceID, ProcessInstanceID: launch.ProcessInstanceID, Kind: residentProcessExited,
 			Provider: "opencode", At: now.Add(time.Duration(attempt) * time.Second),
 		})
 		snap, ok := runner.processes.Snapshot("agent-1")
@@ -162,8 +193,9 @@ func TestResidentProcessExitedBackoffCapRetiresFailedAgentWithoutAffectingAnothe
 	// agent-2 remains unaffected, and — unlike a
 	// kept-launch crash — that retirement must be reported outward exactly
 	// like a mid-turn provider failure is.
+	launch, _ := runner.processes.Snapshot("agent-1")
 	d.canonicalRuntimes.emitResidentProcessEvent(residentProcessEvent{
-		AgentID: "agent-1", RuntimeID: "runtime-1", Kind: residentProcessExited,
+		AgentID: "agent-1", RuntimeID: "runtime-1", AgentInstanceID: launch.AgentInstanceID, ProcessInstanceID: launch.ProcessInstanceID, Kind: residentProcessExited,
 		Provider: "opencode", At: now.Add(time.Duration(residentCrashRetryCap+1) * time.Second),
 	})
 
@@ -238,8 +270,9 @@ func TestResidentProcessEventRoutingIsolatedByWorkspace(t *testing.T) {
 	runnerB, _ := attachTestWorkspaceDaemon(t, d, "workspace-b", nil)
 	startManagedLaunch(t, runnerB, "agent-1", "runtime-b")
 
+	launch, _ := runnerA.processes.Snapshot("agent-1")
 	d.canonicalRuntimes.emitResidentProcessEvent(residentProcessEvent{
-		AgentID: "agent-1", RuntimeID: "runtime-a", Kind: residentProcessExited,
+		AgentID: "agent-1", RuntimeID: "runtime-a", AgentInstanceID: launch.AgentInstanceID, ProcessInstanceID: launch.ProcessInstanceID, Kind: residentProcessExited,
 		Provider: "opencode", At: time.Now(),
 	})
 

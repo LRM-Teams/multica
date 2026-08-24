@@ -29,7 +29,6 @@ const (
 	EventComputerWorkJournalDone = "computer:work-journal:done"
 	EventAgentStartAck           = "agent:start:ack"
 	EventAgentActivity           = "agent:activity"
-	EventAgentActivityProbe      = "agent:activity_probe"
 	EventAgentSession            = "agent:session"
 
 	AgentStatusActive   = "active"
@@ -322,29 +321,20 @@ type AgentSessionPayload struct {
 	RuntimeGeneration int64  `json:"runtimeGeneration"`
 }
 
-// AgentActivitySnapshot is the server's replaceable current presentation
-// evidence. The daemon keeps the same shape internally for heartbeat and
-// reconnect state, but AgentActivityPayload's JSON boundary sends only Raft
-// execution facts; ActivityKind is derived by the server from DetailKind.
+// AgentActivitySnapshot is the daemon-owned current Activity presentation.
 type AgentActivitySnapshot struct {
-	AgentID           string    `json:"-"`
-	DaemonInstanceID  string    `json:"-"`
-	ClientSequence    int64     `json:"-"`
-	ProducerFactID    string    `json:"-"`
-	ObservedAt        time.Time `json:"-"`
-	ActivityKind      string    `json:"-"`
-	DetailKind        string    `json:"-"`
-	ProbeID           string    `json:"-"`
-	ProcessInstanceID string    `json:"-"`
+	AgentID          string    `json:"agentId"`
+	DaemonInstanceID string    `json:"daemonInstanceId"`
+	ObservedAt       time.Time `json:"observedAt"`
+	ActivityKind     string    `json:"activityKind"`
+	DetailKind       string    `json:"detailKind"`
 }
 
-// AgentActivityEntry keeps its body as an open envelope. Like Raft, its array
-// order is its position; the server derives the persistence ordinal instead of
-// carrying a duplicate position field on the wire. Server presentation owns
-// known-kind parsing and the generic fallback used for future kinds.
+// AgentActivityEntry is the daemon-local fact envelope used while producing
+// display-ready presentation. It never crosses the WorkspaceDaemon wire.
 type AgentActivityEntry struct {
-	Kind string          `json:"kind"`
-	Body json.RawMessage `json:"body"`
+	Kind string          `json:"-"`
+	Body json.RawMessage `json:"-"`
 }
 
 // AgentActivityStatusBody matches Raft 1.0.17's non-tool timeline entry.
@@ -369,77 +359,25 @@ type AgentActivitySystemBody struct {
 	Text  string `json:"text"`
 }
 
+type AgentActivitySummary struct {
+	ActivityKind string `json:"activityKind"`
+	DetailKind   string `json:"detailKind"`
+	Label        string `json:"label"`
+}
+
+type AgentActivityTimelineRow struct {
+	ActivityKind string `json:"activityKind"`
+	DetailKind   string `json:"detailKind"`
+	Title        string `json:"title"`
+	Subtext      string `json:"subtext,omitempty"`
+	BodyKind     string `json:"bodyKind"`
+	Body         string `json:"body,omitempty"`
+}
+
 type AgentActivityPayload struct {
-	Snapshot    AgentActivitySnapshot `json:"-"`
-	Detail      string                `json:"-"`
-	Entries     []AgentActivityEntry  `json:"-"`
-	IsHeartbeat bool                  `json:"-"`
-}
-
-// agentActivityWirePayload is Raft v1.0.16's fact-only agent:activity body.
-// It intentionally has no snapshot, activityKind, or processInstanceId.
-type agentActivityWirePayload struct {
-	AgentID          string               `json:"agentId"`
-	Detail           string               `json:"detail"`
-	DetailKind       string               `json:"detailKind"`
-	Entries          []AgentActivityEntry `json:"entries,omitempty"`
-	DaemonInstanceID string               `json:"daemonInstanceId,omitempty"`
-	ProbeID          string               `json:"probeId,omitempty"`
-	ClientSeq        int64                `json:"clientSeq,omitempty"`
-	ProducerFactID   string               `json:"producerFactId,omitempty"`
-	ObservedAtMS     *int64               `json:"observedAtMs,omitempty"`
-	IsHeartbeat      bool                 `json:"isHeartbeat"`
-}
-
-func (p AgentActivityPayload) MarshalJSON() ([]byte, error) {
-	var observedAtMS *int64
-	if !p.Snapshot.ObservedAt.IsZero() {
-		value := p.Snapshot.ObservedAt.UnixMilli()
-		observedAtMS = &value
-	}
-	return json.Marshal(agentActivityWirePayload{
-		AgentID:          p.Snapshot.AgentID,
-		Detail:           p.Detail,
-		DetailKind:       p.Snapshot.DetailKind,
-		Entries:          p.Entries,
-		DaemonInstanceID: p.Snapshot.DaemonInstanceID,
-		ProbeID:          p.Snapshot.ProbeID,
-		ClientSeq:        p.Snapshot.ClientSequence,
-		ProducerFactID:   p.Snapshot.ProducerFactID,
-		ObservedAtMS:     observedAtMS,
-		IsHeartbeat:      p.IsHeartbeat,
-	})
-}
-
-func (p *AgentActivityPayload) UnmarshalJSON(data []byte) error {
-	var wire agentActivityWirePayload
-	if err := json.Unmarshal(data, &wire); err != nil {
-		return err
-	}
-	observedAt := time.Time{}
-	if wire.ObservedAtMS != nil {
-		observedAt = time.UnixMilli(*wire.ObservedAtMS).UTC()
-	}
-	p.Snapshot = AgentActivitySnapshot{
-		AgentID:          wire.AgentID,
-		DaemonInstanceID: wire.DaemonInstanceID,
-		ClientSequence:   wire.ClientSeq,
-		ProducerFactID:   wire.ProducerFactID,
-		ObservedAt:       observedAt,
-		DetailKind:       wire.DetailKind,
-		ProbeID:          wire.ProbeID,
-	}
-	p.Detail = wire.Detail
-	p.Entries = wire.Entries
-	p.IsHeartbeat = wire.IsHeartbeat
-	return nil
-}
-
-// AgentActivityProbePayload asks a Manager for an actual current observation.
-// Receiving this frame must not change local Activity by itself.
-type AgentActivityProbePayload struct {
-	AgentID string `json:"agentId"`
-	ProbeID string `json:"probeId"`
+	Snapshot AgentActivitySnapshot      `json:"snapshot"`
+	Summary  AgentActivitySummary       `json:"summary"`
+	Timeline []AgentActivityTimelineRow `json:"timeline,omitempty"`
 }
 
 func (p WorkspaceReadyPayload) Validate() error {
@@ -540,26 +478,29 @@ func (p AgentActivityPayload) Validate() error {
 	if err := p.Snapshot.Validate(); err != nil {
 		return err
 	}
-	if len(p.Detail) > maxActivityEntryBytes {
-		return fmt.Errorf("activity detail exceeds %d bytes", maxActivityEntryBytes)
+	if strings.TrimSpace(p.Summary.ActivityKind) == "" || strings.TrimSpace(p.Summary.DetailKind) == "" || strings.TrimSpace(p.Summary.Label) == "" {
+		return fmt.Errorf("activity summary facts and label are required")
 	}
-	if len(p.Entries) > maxActivityEntriesPerFrame {
-		return fmt.Errorf("too many activity entries: %d", len(p.Entries))
+	if len(p.Summary.Label) > maxActivityEntryBytes {
+		return fmt.Errorf("activity summary exceeds %d bytes", maxActivityEntryBytes)
 	}
-	for _, entry := range p.Entries {
-		if err := entry.Validate(); err != nil {
-			return err
+	if len(p.Timeline) > maxActivityEntriesPerFrame {
+		return fmt.Errorf("too many activity timeline rows: %d", len(p.Timeline))
+	}
+	for _, row := range p.Timeline {
+		if strings.TrimSpace(row.ActivityKind) == "" || strings.TrimSpace(row.DetailKind) == "" || strings.TrimSpace(row.Title) == "" || strings.TrimSpace(row.BodyKind) == "" {
+			return fmt.Errorf("activity timeline presentation is required")
+		}
+		if len(row.Title)+len(row.Subtext)+len(row.Body) > maxActivityEntryBytes {
+			return fmt.Errorf("activity timeline row exceeds %d bytes", maxActivityEntryBytes)
 		}
 	}
 	return nil
 }
 
 func (p AgentActivitySnapshot) Validate() error {
-	if err := validateRequiredIDs(p.AgentID, p.DaemonInstanceID, p.ProducerFactID); err != nil {
+	if err := validateRequiredIDs(p.AgentID, p.DaemonInstanceID); err != nil {
 		return err
-	}
-	if p.ClientSequence <= 0 {
-		return fmt.Errorf("activity client sequence must be positive")
 	}
 	if p.ObservedAt.IsZero() {
 		return fmt.Errorf("activity observation time is required")
@@ -576,7 +517,7 @@ func (p AgentActivitySnapshot) Validate() error {
 	if !IsAgentActivityFactDetailKind(p.DetailKind) {
 		return fmt.Errorf("invalid or non-fact activity detail kind %q", p.DetailKind)
 	}
-	return validateOptionalIDs(p.DetailKind, p.ProbeID, p.ProcessInstanceID)
+	return validateOptionalIDs(p.DetailKind)
 }
 
 func (e AgentActivityEntry) Validate() error {
@@ -594,10 +535,6 @@ func (e AgentActivityEntry) Validate() error {
 		return fmt.Errorf("activity entry body must be a JSON object")
 	}
 	return nil
-}
-
-func (p AgentActivityProbePayload) Validate() error {
-	return validateRequiredIDs(p.AgentID, p.ProbeID)
 }
 
 func validateRequiredIDs(values ...string) error {

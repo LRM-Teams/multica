@@ -27,6 +27,15 @@ func (runner *WorkspaceDaemon) managedLaunch(agentID, runtimeID string) (managed
 	return managedAgentLifecycle{agentProcessManagerSnapshot: process}, true
 }
 
+func (runner *WorkspaceDaemon) managedLaunchForProcess(callback agentProcessCallback, runtimeID string) (managedAgentLifecycle, bool) {
+	launch, found := runner.managedLaunch(callback.AgentID, runtimeID)
+	if !found || callback.AgentInstanceID == "" || callback.ProcessInstanceID == "" ||
+		launch.AgentInstanceID != callback.AgentInstanceID || launch.ProcessInstanceID != callback.ProcessInstanceID {
+		return managedAgentLifecycle{}, false
+	}
+	return launch, true
+}
+
 // broadcastActivity is Raft 1.0.16's spawn Activity boundary. Starting is
 // broadcast only after the provider process exists and active status has been
 // published; replaying a start never calls this method.
@@ -107,33 +116,57 @@ func (d *Daemon) observeResidentRuntimeStalled(agentID, runtimeID string, staleF
 }
 
 func (runner *WorkspaceDaemon) observeResidentMessageRuntime(agentID, runtimeID string, message agent.Message) {
+	launch, _ := runner.managedLaunch(agentID, runtimeID)
+	runner.observeResidentMessageRuntimeForLaunch(agentID, runtimeID, message, launch)
+}
+
+func (runner *WorkspaceDaemon) observeResidentMessageRuntimeForProcess(callback agentProcessCallback, runtimeID string, message agent.Message) {
+	launch, found := runner.managedLaunchForProcess(callback, runtimeID)
+	if !found {
+		return
+	}
+	runner.observeResidentMessageRuntimeForLaunch(callback.AgentID, runtimeID, message, launch, callback)
+}
+
+func (runner *WorkspaceDaemon) observeResidentMessageRuntimeForLaunch(agentID, runtimeID string, message agent.Message, launch managedAgentLifecycle, callbacks ...agentProcessCallback) {
 	poisoned := message.Type == agent.MessageError
 	if poisoned {
 		if _, ok := classifyPoisonedError(message.Content); !ok {
 			poisoned = false
 		}
 	}
-	if poisoned {
-		if runner.recordProviderSession != nil {
-			runner.recordProviderSession(agentID, runtimeID, "")
-		}
-	} else if message.SessionID != "" {
-		if runner.recordProviderSession != nil {
-			runner.recordProviderSession(agentID, runtimeID, message.SessionID)
-		}
-		if launch, found := runner.managedLaunch(agentID, runtimeID); found && runner.activity != nil {
-			session := protocol.AgentSessionPayload{AgentID: agentID, ProviderSessionID: message.SessionID}
-			if changed, err := runner.activity.UpdateProviderSession(launch.AgentInstanceID, session); err == nil && changed {
-				runner.sendAgentFrame(protocol.EventAgentSession, session)
+	updateSession := func() {
+		if poisoned {
+			if runner.recordProviderSession != nil {
+				runner.recordProviderSession(agentID, runtimeID, "")
+			}
+		} else if message.SessionID != "" {
+			if runner.recordProviderSession != nil {
+				runner.recordProviderSession(agentID, runtimeID, message.SessionID)
+			}
+			if runner.activity != nil && launch.AgentInstanceID != "" {
+				session := protocol.AgentSessionPayload{AgentID: agentID, ProviderSessionID: message.SessionID}
+				if changed, err := runner.activity.UpdateProviderSession(launch.AgentInstanceID, session); err == nil && changed {
+					runner.sendAgentFrame(protocol.EventAgentSession, session)
+				}
 			}
 		}
 	}
-	if message.Type == agent.MessageDiagnostic {
-		runner.observeResidentRuntimeDiagnostic(agentID, runtimeID, message)
+	if len(callbacks) != 0 {
+		if !runner.processes.withActiveManagedProcess(callbacks[0], updateSession) {
+			return
+		}
+	} else {
+		updateSession()
+	}
+	if launch.AgentInstanceID == "" {
 		return
 	}
-	launch, found := runner.managedLaunch(agentID, runtimeID)
-	if !found || runner.activity == nil {
+	if message.Type == agent.MessageDiagnostic {
+		runner.observeResidentRuntimeDiagnosticForLaunch(agentID, runtimeID, message, launch)
+		return
+	}
+	if runner.activity == nil {
 		return
 	}
 
@@ -172,19 +205,26 @@ func (runner *WorkspaceDaemon) observeResidentMessageRuntime(agentID, runtimeID 
 	} else if kind == AgentObservationRuntimeTool {
 		data = AgentRuntimeStageObservationData{RuntimeID: runtimeID, ToolName: message.Tool, ToolCallID: message.CallID, ToolInput: message.Input}
 	}
-	runner.observeActivity(AgentObservation{AgentID: agentID, Kind: kind, Data: data, At: at}, "Message Runtime")
+	runner.observeActivity(AgentObservation{AgentID: agentID, AgentInstanceID: launch.AgentInstanceID, Kind: kind, Data: data, At: at}, "Message Runtime")
 }
 
 func (runner *WorkspaceDaemon) observeResidentRuntimeDiagnostic(agentID, runtimeID string, message agent.Message) {
+	launch, found := runner.managedLaunch(agentID, runtimeID)
+	if !found {
+		return
+	}
+	runner.observeResidentRuntimeDiagnosticForLaunch(agentID, runtimeID, message, launch)
+}
+
+func (runner *WorkspaceDaemon) observeResidentRuntimeDiagnosticForLaunch(agentID, runtimeID string, message agent.Message, launch managedAgentLifecycle) {
 	if message.Level != "warning" || strings.TrimSpace(message.Title) == "" || strings.TrimSpace(message.Content) == "" {
 		return
 	}
-	_, found := runner.managedLaunch(agentID, runtimeID)
-	if !found || runner.activity == nil {
+	if runner.activity == nil {
 		return
 	}
 	runner.observeActivity(AgentObservation{
-		AgentID: agentID, Kind: AgentObservationRuntimeDiagnostic,
+		AgentID: agentID, AgentInstanceID: launch.AgentInstanceID, Kind: AgentObservationRuntimeDiagnostic,
 		Data: AgentRuntimeStageObservationData{RuntimeID: runtimeID}, At: time.Now().UTC(),
 	}, "Runtime diagnostic")
 }
@@ -202,6 +242,21 @@ func (runner *WorkspaceDaemon) observeMessageTurnCompletion(agentID, runtimeID s
 	}
 	_, _ = runner.activity.CompleteCompactionIfActive(agentID, launch.AgentInstanceID, stage, at)
 	runner.observeActivity(AgentObservation{AgentID: agentID, Kind: AgentObservationRuntimeIdle, Data: stage, At: at}, "Message completion")
+}
+
+func (runner *WorkspaceDaemon) observeMessageTurnCompletionForProcess(callback agentProcessCallback, runtimeID string, turnErr error) {
+	_, found := runner.managedLaunchForProcess(callback, runtimeID)
+	if !found || runner.activity == nil {
+		return
+	}
+	at := time.Now().UTC()
+	stage := AgentRuntimeStageObservationData{RuntimeID: runtimeID}
+	if turnErr != nil {
+		runner.failManagedRuntime(callback.AgentID, runtimeID, callback.AgentInstanceID, managedRuntimeFailureRuntime, "provider_turn_failed", turnErr.Error(), at)
+		return
+	}
+	_, _ = runner.activity.CompleteCompactionIfActive(callback.AgentID, callback.AgentInstanceID, stage, at)
+	runner.observeActivity(AgentObservation{AgentID: callback.AgentID, AgentInstanceID: callback.AgentInstanceID, Kind: AgentObservationRuntimeIdle, Data: stage, At: at}, "Message completion")
 }
 
 // broadcastMessageReceivedActivity matches Raft 1.0.16's single write site:

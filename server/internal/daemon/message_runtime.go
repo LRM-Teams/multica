@@ -124,6 +124,7 @@ func (d *Daemon) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID
 	// here per delivery batch (friction-gated memory spec).
 	var frictionMu sync.Mutex
 	frictionTracker := memorysignal.NewFrictionTracker()
+	processCallback, managedProcess := d.canonicalRuntimes.managedProcessCallback(agentID, runtimeID)
 	err = d.canonicalRuntimes.deliverIdleMessages(ctx, agentID, runtimeID, preparedMessages, nil, func() {
 		if mixed {
 			d.activateCanonicalActionTurn(agentID, canonicalActionTurn)
@@ -153,7 +154,11 @@ func (d *Daemon) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID
 		}
 		frictionMu.Unlock()
 		d.reportMixedRunToolActivity(agentID, runtimeID, runID, runAgentID, turnID, canonicalActionTurn, message)
-		runner.observeResidentMessageRuntime(agentID, runtimeID, message)
+		if managedProcess {
+			runner.observeResidentMessageRuntimeForProcess(processCallback, runtimeID, message)
+		} else {
+			runner.observeResidentMessageRuntime(agentID, runtimeID, message)
+		}
 	}, func(turnErr error, generation uint64, capture *agent.ResidentTurnCapture) {
 		if mixed {
 			d.reportMixedRunActivity(agentID, runtimeID, runID, runAgentID, "turn:"+turnID+":active:end", protocol.MixedRunActivityActiveTurn, -1)
@@ -191,7 +196,11 @@ func (d *Daemon) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID
 			_ = runner.notifyAppInbox(context.Background(), agentID, runtimeID)
 		}
 		d.canonicalRuntimes.publishIfMessageTurnStillIdle(agentID, runtimeID, generation, func() {
-			runner.observeMessageTurnCompletion(agentID, runtimeID, turnErr)
+			if managedProcess {
+				runner.observeMessageTurnCompletionForProcess(processCallback, runtimeID, turnErr)
+			} else {
+				runner.observeMessageTurnCompletion(agentID, runtimeID, turnErr)
+			}
 		})
 	})
 	if err != nil {
@@ -209,7 +218,11 @@ func (d *Daemon) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID
 		// receipt exists, so the onComplete path above cannot publish them.
 		// Project the failure explicitly instead of leaving it only in daemon
 		// logs while the user waits for an Agent response that cannot arrive.
-		runner.observeMessageTurnCompletion(agentID, runtimeID, err)
+		if managedProcess {
+			runner.observeMessageTurnCompletionForProcess(processCallback, runtimeID, err)
+		} else {
+			runner.observeMessageTurnCompletion(agentID, runtimeID, err)
+		}
 		// Same for standalone bubbles: without an assistant row the UI stays on
 		// 排队中 forever after provider timeout / accept failure.
 		if sessionID, ok := standaloneChatSessionIDFromMessages(messages); ok && d.client != nil && strings.TrimSpace(d.client.baseURL) != "" {

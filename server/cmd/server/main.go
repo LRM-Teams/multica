@@ -486,7 +486,7 @@ func main() {
 	// keeps Redis liveness + DB last_seen_at fresh for it — the WS connection
 	// state drives liveness for daemons that no longer send heartbeat frames.
 	go runRunnerPresenceLivenessTicker(sweepCtx, queries, liveness, daemonHub)
-	go runRunnerActivityReaper(sweepCtx, h)
+	go runMixedRLQuiescenceReaper(sweepCtx, h)
 	go runCollaborationTurnWorkers(sweepCtx, h)
 	go runChannelOnboardingPublisher(sweepCtx, h)
 	go heartbeatScheduler.Run(sweepCtx)

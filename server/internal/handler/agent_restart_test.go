@@ -312,7 +312,6 @@ func TestAgentRestartRestartAdvancesStopThenStartThenActive(t *testing.T) {
 	identity := daemonws.ClientIdentity{DaemonID: "agent-restart-test-daemon", WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}}
 	runnerHandler := *testHandler
 	runnerHandler.runnerObservations = newRunnerObservationStore()
-	runnerHandler.runnerActivityCursor = newRunnerActivityCursorStore()
 	runnerHandler.RunnerPresenceSource = fakeRunnerPresenceSource{current: map[string]bool{
 		"agent-restart-test-daemon/" + testWorkspaceID + "/runner-instance": true,
 	}}

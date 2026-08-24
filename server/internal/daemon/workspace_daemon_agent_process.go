@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -199,19 +200,15 @@ func (runner *WorkspaceDaemon) stopManagedAgent(ctx context.Context, payload pro
 	if err := payload.Validate(); err != nil {
 		return err
 	}
-	current, currentFound := runner.processes.Snapshot(payload.AgentID)
-	if !currentFound {
-		current, currentFound = runner.processes.stoppingSnapshot(payload.AgentID)
-	}
 	callback := agentProcessCallback{AgentID: payload.AgentID}
-	if currentFound {
-		callback.AgentInstanceID = current.AgentInstanceID
-	}
 	launch, startupDone, found, err := runner.processes.beginManagedStop(callback)
 	if err != nil {
-		return nil
+		return err
 	}
 	runtimeID := launch.RuntimeID
+	if found {
+		callback.AgentInstanceID = launch.AgentInstanceID
+	}
 	if !found {
 		resident, ok := runner.residency.get(payload.AgentID)
 		if !ok {
@@ -535,8 +532,15 @@ func (runner *WorkspaceDaemon) admitManagedProviderProcess(payload protocol.Agen
 	if current.QueueState != protocol.AgentStartQueueStarting {
 		return fmt.Errorf("managed start is not admitted for process spawn: %s", current.QueueState)
 	}
-	callback.ProcessInstanceID = "resident-" + callback.AgentInstanceID
-	if err := runner.processes.ProcessSpawned(callback); err != nil {
+	callback.ProcessInstanceID = uuid.NewString()
+	if err := runner.processes.processSpawned(callback, func() bool {
+		if runner.runtimes.bindManagedProcess(payload.AgentID, payload.RuntimeID, callback) {
+			return true
+		}
+		// Test/provider adapters may satisfy ensureResidentRuntime without the
+		// canonical pool. A real resident backend must always be bindable.
+		return !runner.runtimes.hasResidentBackend(payload.AgentID, payload.RuntimeID)
+	}); err != nil {
 		return err
 	}
 	return runner.processes.RuntimeReady(callback)

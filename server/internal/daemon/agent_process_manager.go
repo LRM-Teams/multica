@@ -80,6 +80,7 @@ type agentProcessManagerSnapshot struct {
 	AgentID           string
 	RuntimeID         string
 	LaunchID          string
+	StartDispatchID   string
 	ProcessInstanceID string
 	QueueState        string
 	Managed           bool
@@ -726,7 +727,7 @@ func snapshotManagedAgentProcess(managed *managedAgentProcess) agentProcessManag
 	if managed == nil {
 		return agentProcessManagerSnapshot{}
 	}
-	return agentProcessManagerSnapshot{AgentID: managed.agentID, RuntimeID: managed.runtimeID, LaunchID: managed.launchID, ProcessInstanceID: managed.processInstanceID, QueueState: managed.queueState, Managed: managed.managed}
+	return agentProcessManagerSnapshot{AgentID: managed.agentID, RuntimeID: managed.runtimeID, LaunchID: managed.launchID, StartDispatchID: managed.startDispatchID, ProcessInstanceID: managed.processInstanceID, QueueState: managed.queueState, Managed: managed.managed}
 }
 
 func (m *agentProcessManager) RunningAgentIDs() []string {

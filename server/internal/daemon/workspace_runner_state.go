@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/diagnosticlog"
@@ -80,9 +81,10 @@ type workspaceRunnerDependencies struct {
 // methods; its Inbox, process, Activity, and socket state never
 // escape to the machine-wide Daemon lifecycle owner.
 type WorkspaceRunner struct {
-	config WorkspaceRunnerConfig
-	client *Client
-	logger *slog.Logger
+	config       WorkspaceRunnerConfig
+	runtimeEpoch atomic.Int64
+	client       *Client
+	logger       *slog.Logger
 
 	serverBaseURL  string
 	workspacesRoot string
@@ -120,6 +122,19 @@ type WorkspaceRunner struct {
 	onReady      func()
 }
 
+func (runner *WorkspaceRunner) currentRuntimeEpoch() int64 {
+	if runner == nil {
+		return 0
+	}
+	return runner.runtimeEpoch.Load()
+}
+
+func (runner *WorkspaceRunner) setRuntimeEpoch(epoch int64) {
+	if runner != nil {
+		runner.runtimeEpoch.Store(epoch)
+	}
+}
+
 func (runner *WorkspaceRunner) WorkspaceID() string {
 	if runner == nil {
 		return ""
@@ -155,7 +170,7 @@ func newWorkspaceRunner(config WorkspaceRunnerConfig, dependencies workspaceRunn
 		return nil, err
 	}
 	life, lifeStop := context.WithCancel(context.Background())
-	return &WorkspaceRunner{
+	runner := &WorkspaceRunner{
 		config:         config,
 		client:         dependencies.client,
 		logger:         dependencies.logger,
@@ -190,7 +205,9 @@ func newWorkspaceRunner(config WorkspaceRunnerConfig, dependencies workspaceRunn
 		residency:                 newAgentResidencyStore(now),
 		life:                      life,
 		lifeStop:                  lifeStop,
-	}, nil
+	}
+	runner.setRuntimeEpoch(config.RuntimeEpoch)
+	return runner, nil
 }
 
 func (runner *WorkspaceRunner) Close() {
@@ -387,7 +404,7 @@ func (d *Daemon) newWorkspaceRunner(workspaceID string) (*WorkspaceRunner, error
 				}, Fields: diagnosticlog.Fields{
 					Provider: provider, Phase: phase, Outcome: transition.Event,
 					ReasonCode: transition.Result, ProcessPID: transition.ProcessPID,
-					RuntimeEpoch: runtimeEpoch, ExitCode: transition.ExitCode, Signal: transition.Signal,
+					RuntimeEpoch: transition.RuntimeEpoch, ExitCode: transition.ExitCode, Signal: transition.Signal,
 					TerminationReason: firstNonEmpty(transition.TerminationReason, terminationReasonFromLifecycle(transition.Result)), ForceKilled: transition.ForceKilled,
 				},
 			})

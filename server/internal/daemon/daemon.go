@@ -818,6 +818,9 @@ func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID s
 	ws.registeredAt = time.Now().UTC()
 	epoch := ws.runtimeEpoch
 	d.mu.Unlock()
+	if runner := d.currentWorkspaceRunner(workspaceID); runner != nil {
+		runner.setRuntimeEpoch(epoch)
+	}
 	for _, runtime := range resp.Runtimes {
 		if strings.EqualFold(strings.TrimSpace(runtime.Provider), "codex") {
 			d.recordRunnerDiagnostic(workspaceID, diagnosticlog.Event{
@@ -1437,6 +1440,7 @@ func (d *Daemon) drainInboxTask(ctx context.Context, runtimeID string) (*Task, e
 				continue
 			}
 			lease := agentInboxLeaseFromEvent(event, runtimeID)
+			d.bindInboxLeaseEpoch(&lease)
 			// Residual dual-write channel chat reasons must not execute.
 			// Standalone bubble (chat_session) and product tasks still run.
 			if event.Task == nil || protocol.IsResidualChannelChatInboxReason(event.Reason) {
@@ -1471,6 +1475,7 @@ func (d *Daemon) drainInboxTask(ctx context.Context, runtimeID string) (*Task, e
 
 		task := primary.Task
 		primaryLease := agentInboxLeaseFromEvent(primary, runtimeID)
+		d.bindInboxLeaseEpoch(&primaryLease)
 		// Merge seq range across the whole conversation batch so the agent sees
 		// the full exchange in one turn (turn-fold / one exchange = one turn).
 		seqFrom, seqTo := primaryLease.SeqFrom, primaryLease.SeqTo

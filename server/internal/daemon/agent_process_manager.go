@@ -50,6 +50,7 @@ type agentProcessStartRequest struct {
 	StartDispatchID string
 	ReadinessPolicy string
 	DeliveryMode    string
+	RuntimeEpoch    int64
 }
 
 type agentProcessStartResult struct {
@@ -96,6 +97,7 @@ type agentLifecycleTransition struct {
 	Signal            string
 	TerminationReason string
 	ForceKilled       bool
+	RuntimeEpoch      int64
 	StartDispatchID   string
 	StateInstanceID   string
 	LaunchID          string
@@ -122,6 +124,7 @@ type managedAgentProcess struct {
 	signal            string
 	terminationReason string
 	forceKilled       bool
+	runtimeEpoch      int64
 	readinessPolicy   string
 	deliveryMode      string
 	capacityGrant     agentProcessCapacityGrant
@@ -234,6 +237,7 @@ func (m *agentProcessManager) startWithDisposition(request agentProcessStartRequ
 
 	managed := &managedAgentProcess{
 		agentID: request.AgentID, runtimeID: request.RuntimeID, launchID: request.LaunchID, startDispatchID: request.StartDispatchID, managed: true,
+		runtimeEpoch:    request.RuntimeEpoch,
 		startStopEpoch:  m.stopEpochs[request.AgentID],
 		readinessPolicy: request.ReadinessPolicy, deliveryMode: request.DeliveryMode,
 		admitted: make(chan struct{}), transitions: make(map[string]*openLifecycleTransition), startupDone: make(chan struct{}),
@@ -275,6 +279,7 @@ func (m *agentProcessManager) RestoreIdle(agentID, runtimeID, launchID, startDis
 	}
 	managed := &managedAgentProcess{
 		agentID: agentID, runtimeID: runtimeID, launchID: launchID, startDispatchID: startDispatchID, managed: true,
+		runtimeEpoch:    0,
 		startStopEpoch:  startStopEpoch,
 		readinessPolicy: agentRuntimeReadinessFirstEvent,
 		admitted:        make(chan struct{}), transitions: make(map[string]*openLifecycleTransition), startupDone: make(chan struct{}),
@@ -289,6 +294,17 @@ func (m *agentProcessManager) RestoreIdle(agentID, runtimeID, launchID, startDis
 	}
 	m.beginProcessLocked(managed)
 	return nil
+}
+
+func (m *agentProcessManager) SetRuntimeEpoch(agentID string, epoch int64) {
+	if m == nil || strings.TrimSpace(agentID) == "" {
+		return
+	}
+	m.mu.Lock()
+	if managed := m.agents[agentID]; managed != nil {
+		managed.runtimeEpoch = epoch
+	}
+	m.mu.Unlock()
 }
 
 // WaitForAdmission blocks until the exact managed launch is selected by the
@@ -732,6 +748,7 @@ func (m *agentProcessManager) RunningAgentIDs() []string {
 func (m *agentProcessManager) startLocked(request agentProcessStartRequest) (protocol.AgentStartAckPayload, error) {
 	managed := &managedAgentProcess{
 		agentID: request.AgentID, runtimeID: request.RuntimeID, launchID: request.LaunchID, startDispatchID: request.StartDispatchID,
+		runtimeEpoch:    request.RuntimeEpoch,
 		startStopEpoch:  m.stopEpochs[request.AgentID],
 		readinessPolicy: request.ReadinessPolicy, deliveryMode: request.DeliveryMode, admitted: make(chan struct{}), managed: true,
 		transitions: make(map[string]*openLifecycleTransition), startupDone: make(chan struct{}),
@@ -924,7 +941,7 @@ func (m *agentProcessManager) enterLocked(managed *managedAgentProcess, phase, s
 	managed.sequence++
 	open := &openLifecycleTransition{id: m.newID(), phase: phase, state: state, sequence: managed.sequence}
 	managed.transitions[phase] = open
-	m.emitLocked(agentLifecycleTransition{AgentID: managed.agentID, RuntimeID: managed.runtimeID, ProcessInstanceID: managed.processInstanceID, ProcessPID: managed.processPID, ExitCode: managed.exitCode, Signal: managed.signal, TerminationReason: managed.terminationReason, ForceKilled: managed.forceKilled, StartDispatchID: managed.startDispatchID, StateInstanceID: open.id, LaunchID: managed.launchID, Sequence: open.sequence, Phase: phase, State: state, Event: "enter", At: m.now().UTC()})
+	m.emitLocked(agentLifecycleTransition{AgentID: managed.agentID, RuntimeID: managed.runtimeID, ProcessInstanceID: managed.processInstanceID, ProcessPID: managed.processPID, ExitCode: managed.exitCode, Signal: managed.signal, TerminationReason: managed.terminationReason, ForceKilled: managed.forceKilled, RuntimeEpoch: managed.runtimeEpoch, StartDispatchID: managed.startDispatchID, StateInstanceID: open.id, LaunchID: managed.launchID, Sequence: open.sequence, Phase: phase, State: state, Event: "enter", At: m.now().UTC()})
 }
 
 func (m *agentProcessManager) closeLocked(managed *managedAgentProcess, phase, result string) {
@@ -933,7 +950,7 @@ func (m *agentProcessManager) closeLocked(managed *managedAgentProcess, phase, r
 		return
 	}
 	delete(managed.transitions, phase)
-	m.emitLocked(agentLifecycleTransition{AgentID: managed.agentID, RuntimeID: managed.runtimeID, ProcessInstanceID: managed.processInstanceID, ProcessPID: managed.processPID, ExitCode: managed.exitCode, Signal: managed.signal, TerminationReason: managed.terminationReason, ForceKilled: managed.forceKilled, StartDispatchID: managed.startDispatchID, StateInstanceID: open.id, LaunchID: managed.launchID, Sequence: open.sequence, Phase: phase, State: open.state, Event: "close", Result: result, At: m.now().UTC()})
+	m.emitLocked(agentLifecycleTransition{AgentID: managed.agentID, RuntimeID: managed.runtimeID, ProcessInstanceID: managed.processInstanceID, ProcessPID: managed.processPID, ExitCode: managed.exitCode, Signal: managed.signal, TerminationReason: managed.terminationReason, ForceKilled: managed.forceKilled, RuntimeEpoch: managed.runtimeEpoch, StartDispatchID: managed.startDispatchID, StateInstanceID: open.id, LaunchID: managed.launchID, Sequence: open.sequence, Phase: phase, State: open.state, Event: "close", Result: result, At: m.now().UTC()})
 }
 
 func (m *agentProcessManager) closeAllLocked(managed *managedAgentProcess, result string) {

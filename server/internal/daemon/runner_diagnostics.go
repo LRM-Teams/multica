@@ -131,39 +131,73 @@ func canonicalMessageDiagnosticEvent(
 	}
 }
 
+func canonicalMessageDiagnosticEventForTurn(
+	workspaceID, runtimeID string,
+	delivery protocol.AgentDeliverPayload,
+	phase, outcome, reasonCode, executionID string,
+	runtimeEpoch int64,
+) diagnosticlog.Event {
+	event := canonicalMessageDiagnosticEvent(workspaceID, runtimeID, delivery, phase, outcome, reasonCode)
+	event.Identity.ExecutionID = executionID
+	event.Fields.RuntimeEpoch = runtimeEpoch
+	return event
+}
+
 func (d *Daemon) recordResidentMessageBatch(
 	workspaceID, runtimeID, agentID string,
 	messages []protocol.AgentMessageProjection,
-	phase, outcome, reasonCode string,
+	phase, outcome, reasonCode, executionID string, runtimeEpoch int64,
 ) {
 	for _, message := range messages {
-		event := canonicalMessageDiagnosticEvent(workspaceID, runtimeID, protocol.AgentDeliverPayload{
+		event := canonicalMessageDiagnosticEventForTurn(workspaceID, runtimeID, protocol.AgentDeliverPayload{
 			AgentID: agentID,
 			Target:  message.Target,
 			Seq:     message.Seq,
 			Message: message,
-		}, phase, outcome, reasonCode)
+		}, phase, outcome, reasonCode, executionID, runtimeEpoch)
 		event.Component = "resident_runtime"
 		d.recordRunnerDiagnostic(workspaceID, event)
 	}
+}
+
+func (d *Daemon) runtimeEpochForRuntime(runtimeID string) (string, int64) {
+	if d == nil || strings.TrimSpace(runtimeID) == "" {
+		return "", 0
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	runtime, ok := d.runtimeIndex[runtimeID]
+	if !ok {
+		return "", 0
+	}
+	if state := d.workspaces[runtime.WorkspaceID]; state != nil {
+		return runtime.WorkspaceID, state.runtimeEpoch
+	}
+	return runtime.WorkspaceID, 0
+}
+
+// bindInboxLeaseEpoch snapshots the registration generation at lease
+// acquisition. Subsequent renew/ack/terminal events must retain this value
+// even if the workspace registers a replacement runtime in the meantime.
+func (d *Daemon) bindInboxLeaseEpoch(lease *AgentInboxLease) {
+	if d == nil || lease == nil || lease.RuntimeEpoch > 0 || strings.TrimSpace(lease.RuntimeID) == "" {
+		return
+	}
+	_, epoch := d.runtimeEpochForRuntime(lease.RuntimeID)
+	lease.RuntimeEpoch = epoch
 }
 
 func (d *Daemon) recordInboxLeaseDiagnostic(lease AgentInboxLease, phase, outcome, reason string) {
 	if d == nil || strings.TrimSpace(lease.RuntimeID) == "" {
 		return
 	}
-	d.mu.Lock()
-	workspaceID := ""
-	runtimeEpoch := int64(0)
-	if runtime, ok := d.runtimeIndex[lease.RuntimeID]; ok {
-		workspaceID = runtime.WorkspaceID
-		if state := d.workspaces[workspaceID]; state != nil {
-			runtimeEpoch = state.runtimeEpoch
-		}
-	}
-	d.mu.Unlock()
+	workspaceID, currentEpoch := d.runtimeEpochForRuntime(lease.RuntimeID)
 	if workspaceID == "" {
 		return
+	}
+	runtimeEpoch := lease.RuntimeEpoch
+	if runtimeEpoch <= 0 {
+		runtimeEpoch = currentEpoch
 	}
 	d.recordRunnerDiagnostic(workspaceID, diagnosticlog.Event{
 		Name: diagnosticlog.EventDeliveryStateChanged, Level: diagnosticLevel(outcome), Component: "agent_inbox",
@@ -253,6 +287,7 @@ func (d *Daemon) recordStandaloneChatCheckpoint(
 			SeqTo:        lease.SeqTo,
 			AckedSeq:     ackedSeq,
 			FoldedCount:  int64(len(task.FoldedInboxEvents)),
+			RuntimeEpoch: lease.RuntimeEpoch,
 		},
 	})
 }

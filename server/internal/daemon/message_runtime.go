@@ -101,9 +101,11 @@ func mixedRunMessageBatchIdentity(messages []protocol.AgentMessageProjection) (s
 
 func (d *Daemon) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID string, messages []protocol.AgentMessageProjection) error {
 	runID, runAgentID, turnID, mixed := mixedRunMessageBatchIdentity(messages)
-	d.mu.Lock()
-	workspaceID := d.runtimeIndex[runtimeID].WorkspaceID
-	d.mu.Unlock()
+	workspaceID, runtimeEpoch := d.runtimeEpochForRuntime(runtimeID)
+	if workspaceID == "" {
+		return fmt.Errorf("runtime %q is not registered", runtimeID)
+	}
+	executionID := "resident-" + uuid.NewString()
 	runner, _ := d.ensureWorkspaceRunner(workspaceID)
 	preparedMessages, memoryTask, err := d.prepareResidentMessageBatch(ctx, agentID, runtimeID, messages)
 	if err != nil {
@@ -127,7 +129,8 @@ func (d *Daemon) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID
 			// only after the trusted upload (or capture-gap) is acknowledged.
 			d.reportMixedRunActivity(agentID, runtimeID, runID, runAgentID, "turn:"+turnID+":capture:start", protocol.MixedRunActivityUnfinishedCaptureBatch, 1)
 		}
-		d.recordResidentMessageBatch(workspaceID, runtimeID, agentID, preparedMessages, "runtime_delivery_accepted", "accepted", "")
+		d.recordResidentMessageBatch(workspaceID, runtimeID, agentID, preparedMessages, "runtime_delivery_accepted", "accepted", "", executionID, runtimeEpoch)
+		d.recordResidentMessageBatch(workspaceID, runtimeID, agentID, preparedMessages, "execution_started", "accepted", "", executionID, runtimeEpoch)
 		runner.broadcastMessageReceivedActivity(agentID, runtimeID, preparedMessages)
 	}, func(message agent.Message) {
 		if message.Type == agent.MessageText && message.Content != "" {
@@ -148,7 +151,12 @@ func (d *Daemon) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID
 		if turnErr != nil {
 			outcome, reasonCode = "failed", "provider_turn_failed"
 		}
-		d.recordResidentMessageBatch(workspaceID, runtimeID, agentID, preparedMessages, "provider_finished", outcome, reasonCode)
+		d.recordResidentMessageBatch(workspaceID, runtimeID, agentID, preparedMessages, "provider_finished", outcome, reasonCode, executionID, runtimeEpoch)
+		terminalPhase, terminalOutcome, terminalReason := "terminal_accepted", "accepted", ""
+		if turnErr != nil {
+			terminalPhase, terminalOutcome, terminalReason = "terminal_rejected", "rejected", reasonCode
+		}
+		d.recordResidentMessageBatch(workspaceID, runtimeID, agentID, preparedMessages, terminalPhase, terminalOutcome, terminalReason, executionID, runtimeEpoch)
 		if turnErr == nil && d.client != nil && strings.TrimSpace(d.client.baseURL) != "" {
 			reportCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			d.reportAgentMemoryWrites(reportCtx, memoryTask)
@@ -184,7 +192,11 @@ func (d *Daemon) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID
 		if errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
 			outcome = "deferred"
 		}
-		d.recordResidentMessageBatch(workspaceID, runtimeID, agentID, messages, "runtime_delivery_accepted", outcome, canonicalMessageFailureReason(err))
+		diagnosticExecutionID := executionID
+		if outcome == "deferred" {
+			diagnosticExecutionID = ""
+		}
+		d.recordResidentMessageBatch(workspaceID, runtimeID, agentID, messages, "runtime_delivery_accepted", outcome, canonicalMessageFailureReason(err), diagnosticExecutionID, runtimeEpoch)
 	}
 	if err != nil && !errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
 		// Setup and native-acceptance failures happen before a completion

@@ -60,6 +60,19 @@ func TestV6WorkProjectionUsesAssignedBranchScope(t *testing.T) {
 	}
 }
 
+func TestV6WorkProjectionPreservesAttemptFailureDiagnostics(t *testing.T) {
+	termination := projectionTerminationForWork("failed", true, "attempt_budget_exhausted", "", "contract_rejected", "content_layers.conclusion is required")
+	if termination == nil {
+		t.Fatal("failed Work projection omitted termination")
+	}
+	if termination.ReasonCode != "resource_failure" || termination.ReasonDetail != "attempt_budget_exhausted：content_layers.conclusion is required" {
+		t.Fatalf("termination=%+v", termination)
+	}
+	if got := projectionTerminationForWork("succeeded", true, "", "", "", ""); got != nil {
+		t.Fatalf("successful Work has termination=%+v", got)
+	}
+}
+
 func BenchmarkV6ProjectionPagination(b *testing.B) {
 	for _, size := range []int{1000, 10000, 50000} {
 		b.Run(fmt.Sprintf("nodes_%d", size), func(b *testing.B) {

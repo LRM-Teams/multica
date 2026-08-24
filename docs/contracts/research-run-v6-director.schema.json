@@ -188,7 +188,14 @@
         "state": { "enum": ["pending", "ready", "running", "awaiting_input", "succeeded", "failed", "cancelled", "stale"] },
         "summary": { "$ref": "#/$defs/short_text" },
         "updated_at": { "$ref": "#/$defs/timestamp" },
-        "assigned_agent_id": { "$ref": "#/$defs/uuid" }
+        "assigned_agent_id": { "$ref": "#/$defs/uuid" },
+        "attempt_count": { "type": "integer", "minimum": 0 },
+        "max_attempts": { "type": "integer", "minimum": 1 },
+        "last_attempt_state": { "enum": ["dispatching", "running", "succeeded", "failed", "cancelled", "lost"] },
+        "failure_class": { "$ref": "#/$defs/key" },
+        "failure_diagnostics": { "$ref": "#/$defs/text" },
+        "terminal_reason_code": { "$ref": "#/$defs/key" },
+        "terminal_reason_detail": { "$ref": "#/$defs/text" }
       }
     },
     "change_summary": {
@@ -279,7 +286,7 @@
             "create_match", "open_discussion", "create_dispute", "adjudicate_discussion",
             "create_integration", "create_review", "assign_steward", "record_decision",
             "revise_goal", "challenge_node", "terminate_node",
-            "create_report", "revise_report", "reject_report", "publish_report", "pause_run",
+            "create_report", "revise_report", "reject_report", "publish_report",
             "resume_run", "complete_run", "fail_run", "no_op"
           ]
         },

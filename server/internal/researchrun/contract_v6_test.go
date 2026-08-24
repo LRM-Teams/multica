@@ -93,6 +93,24 @@ func TestDecodeV6ContractRejectsSelfHashMismatchAndMissingSecondValidator(t *tes
 	}
 }
 
+func TestDecodeV6ContractRejectsDirectorPauseRun(t *testing.T) {
+	raw := readV6Fixture(t, filepath.Join("..", "..", "..", "docs", "research", "fixtures", "director-action-v6.example.json"))
+	var root map[string]any
+	if err := json.Unmarshal(raw, &root); err != nil {
+		t.Fatal(err)
+	}
+	input := mutateV6Fixture(t, root, func(value map[string]any) {
+		actions := value["actions"].([]any)
+		action := actions[0].(map[string]any)
+		action["kind"] = "pause_run"
+		action["payload_schema"] = "run.action.v1"
+		action["payload"] = map[string]any{"reason": "A Work Item failed."}
+	})
+	if _, err := DecodeV6Contract(input, V6ContractDirectorActionProposal, acceptingV6SecondStage{}); !errors.Is(err, ErrInvalidContract) {
+		t.Fatalf("Director pause_run error=%v", err)
+	}
+}
+
 func TestV6CanonicalJSONRejectsPostgresUnrepresentableNullCharacter(t *testing.T) {
 	_, err := marshalV6CanonicalJSON(map[string]any{
 		"content_layers": map[string]any{"content": "before\x00after"},

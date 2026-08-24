@@ -211,6 +211,7 @@
     "work_activity_failed": "The Agent's work activity could not be loaded.",
     "retry_activity": "Retry",
     "latest_progress": "Latest progress",
+    "work_result": "Execution result",
     "work_process": "Work process",
     "using_tool": "Using {{tool}}",
     "tool_finished": "Finished {{tool}}",

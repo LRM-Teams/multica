@@ -5,17 +5,15 @@ Status: target contract frozen; user-facing V6 create is open. Omitted
 
 Normative target schema:
 [`contracts/research-run-v6-director.schema.json`](contracts/research-run-v6-director.schema.json),
-SHA-256 `2ce8b8af85c9cec5e508fa1c6b01c6963d998899d09b99d33f8110aca3b59f88`.
-Its `$id` is already the final `research-run-v6.schema.json` identity so Slice 0
-can replace the code-coupled file byte-for-byte without changing the hash.
+SHA-256 `82550bff41365ea6d78973fcd5bc4a8cc6efbeb8dd9f079ca9a01bbd4720bf9c`.
+Its `$id` is the final `research-run-v6.schema.json` identity.
 
 The code-coupled [`contracts/research-run-v6.schema.json`](contracts/research-run-v6.schema.json)
-and its Go hash test still describe the superseded, never-enabled draft. They are
-replaced atomically in implementation slice 0 so this documentation-only change
-does not make the current V5 build fail. ADR-0017 authorizes that one in-place V6
-replacement. V1–V5 remain immutable. Clients that omit `orchestrator_version`
-still create V5. Explicit V6 + Director creates a V6 Run. `AssessV6Activation`
-is an audit of remaining evidence; it does not flip that omitted-version default.
+and the Go-embedded schema are byte-identical to the normative target. ADR-0017
+authorizes this in-place V6 replacement. V1–V5 remain immutable. Clients that
+omit `orchestrator_version` still create V5. Explicit V6 + Director creates a V6
+Run. `AssessV6Activation` is an audit of remaining evidence; it does not flip
+that omitted-version default.
 
 The product and development authority is
 [`superpowers/specs/2026-08-14-ronaldo-research-director-development-spec.zh-CN.md`](superpowers/specs/2026-08-14-ronaldo-research-director-development-spec.zh-CN.md).
@@ -113,8 +111,10 @@ mechanical invariants.
 The Research Brief contains each Branch's fresh Frontier summaries and terminal
 aggregate summaries, never absorbed-child full text or terminal-node detail. The
 Control Brief contains current team, Work Item, Discussion, Dispute, Report,
-steering and failure facts. Page review watermarks are durable; model sessions
-are disposable.
+steering and failure facts. A failed Work Item includes its mission, attempt
+count and budget, latest Attempt state, failure class and bounded diagnostics,
+plus its terminal reason. Page review watermarks are durable; model sessions are
+disposable.
 
 One `director_brief` envelope is one bounded page. All pages share Brief ID/hash,
 state version and event watermark. Ronaldo acknowledges a page only after
@@ -137,6 +137,11 @@ workflow. `create_task` and `create_work_item` accept Director-authored types an
 second-stage payload Schemas, so adding a research method or Agent role does not
 require a new orchestrator version. Unknown platform verbs still fail closed;
 Ronaldo's semantic authority does not make unimplemented server operations real.
+
+Ronaldo cannot pause the whole Run. A failed Work Item is a recovery input: the
+Director must retry it, reassign it, create replacement Work, or report the
+failure to the user. Only the authenticated user Stop operation or the V6 release
+maintenance control may move an active Run to `paused`.
 
 When Ronaldo decides that no state change is useful, the Proposal contains one
 `no_op` action with its reason and no semantic dependents; `no_op` cannot coexist
@@ -289,6 +294,11 @@ Execution, conclusion, integration and termination are separate state axes.
 explanation. Terminal unabsorbed nodes remain permanently user-visible, but do
 not enter matching, Discussion, promotion, Director research content or Report
 inputs.
+
+For failed Work projection, a missing Work terminal reason falls back to the
+latest Attempt failure class and diagnostics. Platform failure classes normalize
+to `resource_failure`, while the exact bounded class and diagnostic remain in
+`reason_detail`; the UI must not replace them with a generic terminal-state label.
 
 High-level termination cancels active descendant Work, Match, Discussion and
 Integration. Completed descendants remain historical. Low unabsorbed failure

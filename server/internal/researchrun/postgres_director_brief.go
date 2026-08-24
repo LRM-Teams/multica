@@ -101,22 +101,51 @@ func (s *PostgresStore) LoadDirectorBriefFacts(ctx context.Context, in StartV6Di
 		}
 		facts.Branches = append(facts.Branches, item)
 	}
-	rows, err = s.pool.Query(ctx, `SELECT w.id::text,w.kind,w.status,COALESCE(NULLIF(w.target_kind,''),w.kind),w.updated_at,COALESCE(w.assigned_agent_id::text,''),COALESCE((SELECT array_agg(b.branch_id::text ORDER BY b.branch_id) FROM research_v6_work_item_branch b WHERE b.workspace_id=w.workspace_id AND b.session_id=w.session_id AND b.work_item_id=w.id),'{}') FROM research_work_item w WHERE w.workspace_id=$1::uuid AND w.session_id=$2::uuid AND w.kind IN ('research','match','discussion','integration','director','report','review') ORDER BY w.updated_at,w.id LIMIT 512`, in.WorkspaceID, in.RunID)
+	rows, err = s.pool.Query(ctx, `SELECT w.id::text,w.kind,w.status,
+		COALESCE(NULLIF(left(w.reason,512),''),NULLIF(w.target_kind,''),w.kind),w.updated_at,
+		COALESCE(w.assigned_agent_id::text,''),w.attempt_count,w.max_attempts,
+		COALESCE(latest_attempt.status,''),COALESCE(latest_attempt.failure_class,''),COALESCE(left(latest_attempt.diagnostics,32768),''),
+		COALESCE(w.terminal_reason_code,''),COALESCE(left(w.terminal_reason_detail,32768),''),
+		COALESCE((SELECT array_agg(b.branch_id::text ORDER BY b.branch_id) FROM research_v6_work_item_branch b WHERE b.workspace_id=w.workspace_id AND b.session_id=w.session_id AND b.work_item_id=w.id),'{}')
+		FROM research_work_item w
+		LEFT JOIN LATERAL (
+			SELECT attempt.status,attempt.failure_class,attempt.diagnostics
+			FROM research_work_item_attempt attempt
+			WHERE attempt.workspace_id=w.workspace_id AND attempt.session_id=w.session_id AND attempt.work_item_id=w.id
+			ORDER BY attempt.attempt_number DESC LIMIT 1
+		) latest_attempt ON true
+		WHERE w.workspace_id=$1::uuid AND w.session_id=$2::uuid AND w.kind IN ('research','match','discussion','integration','director','report','review') ORDER BY w.updated_at,w.id LIMIT 512`, in.WorkspaceID, in.RunID)
 	if err != nil {
 		return DirectorBriefFacts{}, err
 	}
 	for rows.Next() {
-		var id, kind, state, summary, agentID string
+		var id, kind, state, summary, agentID, attemptState, failureClass, failureDiagnostics, terminalReasonCode, terminalReasonDetail string
+		var attemptCount, maxAttempts int
 		var branchIDs []string
 		var updated time.Time
-		if err = rows.Scan(&id, &kind, &state, &summary, &updated, &agentID, &branchIDs); err != nil {
+		if err = rows.Scan(&id, &kind, &state, &summary, &updated, &agentID, &attemptCount, &maxAttempts, &attemptState, &failureClass, &failureDiagnostics, &terminalReasonCode, &terminalReasonDetail, &branchIDs); err != nil {
 			rows.Close()
 			return DirectorBriefFacts{}, err
 		}
 		state = directorBriefWorkState(state)
-		item := map[string]any{"id": id, "kind": kind, "state": state, "summary": summary, "updated_at": updated.UTC().Format(time.RFC3339Nano)}
+		item := map[string]any{"id": id, "kind": kind, "state": state, "summary": summary, "updated_at": updated.UTC().Format(time.RFC3339Nano), "attempt_count": attemptCount, "max_attempts": maxAttempts}
 		if agentID != "" {
 			item["assigned_agent_id"] = agentID
+		}
+		if attemptState != "" {
+			item["last_attempt_state"] = attemptState
+		}
+		if failureClass != "" {
+			item["failure_class"] = failureClass
+		}
+		if failureDiagnostics != "" {
+			item["failure_diagnostics"] = failureDiagnostics
+		}
+		if terminalReasonCode != "" {
+			item["terminal_reason_code"] = terminalReasonCode
+		}
+		if terminalReasonDetail != "" {
+			item["terminal_reason_detail"] = terminalReasonDetail
 		}
 		facts.WorkItems = append(facts.WorkItems, item)
 	}

@@ -129,6 +129,75 @@ func TestV6DirectorBriefBoundsTeamMissionSummary(t *testing.T) {
 	}
 }
 
+func TestV6DirectorBriefIncludesWorkFailureRecoveryFacts(t *testing.T) {
+	run := newTransactionRecoveryRun(t, "V6 Director Brief work failure recovery")
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_session SET orchestrator_version='research-run-v6' WHERE id=$1::uuid`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.store.AssignV6Director(run.ctx, AssignV6DirectorInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+		AgentID: run.fixture.agentID, UserID: run.fixture.userID,
+		Reason: "Recover failed work", ClientRequestID: uuid.NewString(), ExpectedStateVersion: 0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var membershipID string
+	if err := run.pool.QueryRow(run.ctx, `SELECT id::text FROM research_team_membership WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND agent_id=$3::uuid`, run.fixture.workspaceID, run.fixture.sessionID, run.fixture.agentID).Scan(&membershipID); err != nil {
+		t.Fatal(err)
+	}
+	workItemID, attemptID := uuid.NewString(), uuid.NewString()
+	mission := "独立复核关键来源并解释冲突。"
+	if _, err := run.pool.Exec(run.ctx, `INSERT INTO research_work_item (
+		id,workspace_id,session_id,kind,status,assigned_agent_id,goal_version,idempotency_key,
+		payload_schema_id,state_version,reason,attempt_count,max_attempts,terminal_reason_code,terminal_reason_detail
+	) VALUES ($1::uuid,$2::uuid,$3::uuid,'research','failed',$4::uuid,1,$5,'research.finding.v1',1,$6,3,3,'attempt_budget_exhausted','连续提交未通过合同校验。')`,
+		workItemID, run.fixture.workspaceID, run.fixture.sessionID, run.fixture.agentID, "brief-failure:"+workItemID, mission); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.pool.Exec(run.ctx, `INSERT INTO research_work_item_attempt (
+		id,workspace_id,session_id,work_item_id,attempt_number,assigned_agent_id,membership_id,
+		dispatch_key,manifest_id,manifest_hash,status,failure_class,diagnostics,manifest
+	) VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,3,$5::uuid,$6::uuid,$7,$8::uuid,$9,'failed','contract_rejected','content_layers.conclusion is required','{}'::jsonb)`,
+		attemptID, run.fixture.workspaceID, run.fixture.sessionID, workItemID, run.fixture.agentID, membershipID,
+		"brief-failure-dispatch:"+attemptID, uuid.NewString(), "sha256:"+strings.Repeat("4", 64)); err != nil {
+		t.Fatal(err)
+	}
+	var stateVersion int64
+	if err := run.pool.QueryRow(run.ctx, `SELECT state_version FROM research_session WHERE id=$1::uuid`, run.fixture.sessionID).Scan(&stateVersion); err != nil {
+		t.Fatal(err)
+	}
+	facts, err := run.store.LoadDirectorBriefFacts(run.ctx, StartV6DirectorCycleInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID, ExpectedStateVersion: stateVersion,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var failed map[string]any
+	for _, raw := range facts.WorkItems {
+		item := raw.(map[string]any)
+		if item["id"] == workItemID {
+			failed = item
+			break
+		}
+	}
+	if failed == nil {
+		t.Fatal("failed Work Item missing from Director Brief")
+	}
+	for key, want := range map[string]any{
+		"summary": mission, "attempt_count": 3, "max_attempts": 3,
+		"last_attempt_state": "failed", "failure_class": "contract_rejected",
+		"failure_diagnostics":  "content_layers.conclusion is required",
+		"terminal_reason_code": "attempt_budget_exhausted", "terminal_reason_detail": "连续提交未通过合同校验。",
+	} {
+		if got := failed[key]; got != want {
+			t.Fatalf("%s=%v, want %v; item=%+v", key, got, want, failed)
+		}
+	}
+	if _, err = (contextCompilerModule{}).CompileDirectorBrief(facts, time.Unix(1, 0)); err != nil {
+		t.Fatalf("compile Director Brief with failure recovery facts: %v", err)
+	}
+}
+
 func TestV6DirectorBriefIncludesAtomicResultFrontier(t *testing.T) {
 	run := newTransactionRecoveryRun(t, "V6 Director Brief atomic frontier")
 	membershipID, workItemID := seedV6RecoveryWorkItem(t, run, "running", time.Now().Add(time.Minute))

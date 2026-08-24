@@ -199,7 +199,10 @@ func (s *PostgresStore) executeV6RunLifecycleAction(ctx context.Context, proposa
 	if json.Unmarshal(action.Payload, &payload) != nil {
 		return ErrInvalidContract
 	}
-	target := map[string]string{"pause_run": "paused", "resume_run": "running", "complete_run": "completed", "fail_run": "failed"}[action.Kind]
+	target := map[string]string{"resume_run": "running", "complete_run": "completed", "fail_run": "failed"}[action.Kind]
+	if target == "" {
+		return ErrInvalidContract
+	}
 	tx, err := s.beginResearchTx(ctx, txOpV6DirectorProposalComplete, pgx.TxOptions{})
 	if err != nil {
 		return err

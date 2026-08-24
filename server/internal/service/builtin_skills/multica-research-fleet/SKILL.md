@@ -47,6 +47,9 @@ canonical state。替换后的 Agent 或主理人必须能够只依靠 PostgreSQ
   简体中文；协议 key、枚举值、命令和来源原文保持精确。面向用户的输出不得叙述
   Manifest/Brief 查找、标识符、JSON 拼装、CLI 命令、工具调用或隐藏推理；交接后只输出
   简短的中文调研摘要。
+- 主理人不得自行暂停整场 Run。单个 Work Item 失败时，先读取 Brief 中的小目标、Attempt
+  次数/预算、失败分类、诊断和终止原因，再选择 `retry_work_item`、`reassign_work_item`、
+  创建替代 Work，或向用户明确报告。只有用户 Stop 或发布维护控制可以暂停整场调研。
 - V6 Report 是不可变的 Goal 附件，不是图节点。只有主理人发布工作流可以发布通过验证的
   package。报告资源不得输出外部 URL、凭据、应用同源依赖或 bridge 调用。
 

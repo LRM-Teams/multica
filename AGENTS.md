@@ -390,21 +390,17 @@ make check
 
 ## CLI Release
 
-**Web-only CI policy (Frank, 2026-07-29):** cross-platform CLI/daemon release
-artifacts are suspended to control Actions usage. Re-enable an explicitly
-reviewed release workflow before the next production deployment that requires
-a CLI release.
+Release maturity is determined by the source branch:
 
-1. Create a tag on the `main` branch: `git tag v0.x.x`
-2. Push the tag: `git push origin v0.x.x`
-3. GitHub Actions automatically triggers `release.yml`: runs Go tests → builds Linux amd64 backend/web images → publishes the Helm chart
+- `dev` publishes test releases only: `vX.Y.Z-alpha.N` or `vX.Y.Z-beta.N`.
+- `main` publishes stable releases only: `vX.Y.Z`.
+- Never tag a feature branch or publish a stable tag from `dev`.
 
-By default, bump the patch version each release (e.g. `v0.1.12` → `v0.1.13`), unless the user specifies a specific version.
-
-The main release is Web-focused: its gates are Go verification, Linux amd64
-backend and web images, and the Helm chart. Mobile, Linux ARM, and
-CLI/daemon artifacts are outside this release scope and must not be treated as
-release gates.
+Tag the current remote commit of the intended branch, not the agent's local
+working branch. Pushing the tag triggers `.github/workflows/release.yml`, which
+validates the tag format and source branch before publishing. Follow the
+version selection, commands, verification, and failure guidance in
+`docs/release.md`.
 
 ## Multi-tenancy
 

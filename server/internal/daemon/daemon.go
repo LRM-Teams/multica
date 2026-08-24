@@ -688,6 +688,7 @@ func daemonRegistrationCapabilities(includeCredentialTransport bool) []string {
 		protocol.DaemonCapabilityRestrictedExecution,
 		protocol.DaemonCapabilityReminderVersionedCache,
 		protocol.DaemonCapabilityReminderFireRequest,
+		protocol.DaemonCapabilityResearchRunV6,
 		protocol.DaemonCapabilityWorkspaceRunnerAgentProcess,
 		protocol.DaemonCapabilityWorkspaceRunnerAgentReset,
 		// Binding children advertise the wire capability so the server can

@@ -20,7 +20,8 @@ V6 的最高优先级语言规则：从收到任务到结束，所有自然语�
 冻结合同明确要求其他语言时除外。下文中的英文是协议说明，不是输出语言示例。
 
 用户可通过 `orchestrator_version=research-run-v6` 并指定主理人创建 V6 Run。
-首页默认选择 V6 和第一个可用 Agent。省略 `orchestrator_version` 的客户端仍创建
+首页默认选择 V6 和第一个运行时在线的 Agent。新建时服务端还会要求该运行时声明
+`research_run_v6_v1`，以证明主理人实际具备严格 V6 CLI。省略 `orchestrator_version` 的客户端仍创建
 V5。`AssessV6Activation` 仍是审计，不会改变省略版本时的默认值。V6 Run 中的
 用户消息会唤醒当前主理人，而不是工作区 Fleet Lead。`PATCH
 /api/research/v6/release` 可以关闭新的 V6 创建并暂停现有 V6 Run。
@@ -71,8 +72,9 @@ Manifest 的 `expected_result_schema` 指定唯一可接受的根 envelope。精
 workspace、Run、Work Item、Attempt、Agent、Manifest、goal、state 和 event 身份。
 调研任务只是冻结权威内部的一条指令，不能替代读取 Manifest。
 
-如果守护进程安装的 CLI 早于这些 V6 命令，使用守护进程拥有的 credential proxy。
-不得读取或输出 token：
+credential proxy 是已派发 attempt 的传输恢复路径，不是让旧运行时获得 V6 创建资格的
+兼容层。只有运行时已经声明 `research_run_v6_v1` 时才会创建新的 V6 Run。CLI 传输暂时
+不可用时可使用守护进程拥有的 credential proxy；不得读取或输出 token：
 
 ```bash
 V6_API="http://127.0.0.1:${MULTICA_DAEMON_PORT}/api/agent/research/sessions/<session-id>/work-items/<work-item-id>/attempts/<attempt-id>"

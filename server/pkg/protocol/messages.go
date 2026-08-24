@@ -573,6 +573,9 @@ const (
 	DaemonCapabilityRestrictedExecution      = "restricted_execution_profiles_v1"
 	DaemonCapabilityReminderVersionedCache   = "reminder_versioned_cache_v1"
 	DaemonCapabilityReminderFireRequest      = "reminder:fire-request-v2"
+	// DaemonCapabilityResearchRunV6 proves that the runtime ships the strict
+	// Research V6 CLI commands used by Director and worker task prompts.
+	DaemonCapabilityResearchRunV6 = "research_run_v6_v1"
 	// DaemonCapabilityWorkspaceRunnerAgentReset gates Raft's discrete
 	// agent:reset-workspace command plus Multica's terminal reset receipt.
 	DaemonCapabilityWorkspaceRunnerAgentReset = "workspace_runner_agent_reset_workspace_v1"

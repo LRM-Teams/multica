@@ -561,7 +561,7 @@ func TestRunnerDisconnectFencesExactInstanceAndPublishesOnce(t *testing.T) {
 	}
 }
 
-func TestWorkspaceDaemonReadyAndDisconnectPublishComputerUpdated(t *testing.T) {
+func TestWorkspaceDaemonReadyAndDisconnectPublishComputerStatus(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -571,7 +571,7 @@ func TestWorkspaceDaemonReadyAndDisconnectPublishComputerUpdated(t *testing.T) {
 	identity := daemonws.ClientIdentity{DaemonID: daemonID, WorkspaceID: testWorkspaceID}
 	bus := events.New()
 	var payloads []map[string]any
-	bus.Subscribe(protocol.EventComputerUpdated, func(event events.Event) {
+	bus.Subscribe(protocol.EventComputerStatus, func(event events.Event) {
 		payload, ok := event.Payload.(map[string]any)
 		if !ok {
 			t.Errorf("payload type = %T", event.Payload)
@@ -601,11 +601,25 @@ func TestWorkspaceDaemonReadyAndDisconnectPublishComputerUpdated(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(payloads) != 2 {
-		t.Fatalf("Computer updated payloads=%+v, want Ready and disconnect events", payloads)
+		t.Fatalf("Computer status payloads=%+v, want Ready and disconnect events", payloads)
 	}
-	for _, payload := range payloads {
+	for index, payload := range payloads {
 		if payload["computer_id"] != daemonID {
-			t.Fatalf("Computer updated payload=%+v, want computer_id=%s", payload, daemonID)
+			t.Fatalf("Computer status payload=%+v, want computer_id=%s", payload, daemonID)
+		}
+		wantStatus := "disconnected"
+		if index == 0 {
+			wantStatus = "connected"
+		}
+		if payload["status"] != wantStatus {
+			t.Fatalf("Computer status payload[%d]=%+v, want status=%q", index, payload, wantStatus)
+		}
+		changedAt, ok := payload["changed_at"].(string)
+		if !ok {
+			t.Fatalf("Computer status payload[%d]=%+v, want changed_at", index, payload)
+		}
+		if _, err := time.Parse(time.RFC3339Nano, changedAt); err != nil {
+			t.Fatalf("Computer status changed_at=%q: %v", changedAt, err)
 		}
 	}
 }

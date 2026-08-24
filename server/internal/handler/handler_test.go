@@ -367,18 +367,14 @@ func setupHandlerTestFixture(ctx context.Context, pool *pgxpool.Pool) (string, s
 }
 
 func cleanupHandlerTestFixture(ctx context.Context, pool *pgxpool.Pool) error {
-	// research_artifact_policy_mutation / lifecycle_event are append-only
-	// (BEFORE DELETE guards from migration 318). Workspace cascade would hit
-	// those triggers and fail suite teardown after any research fixture ran.
-	// session_replication_role=replica disables user triggers for this tx only.
+	// Workspace deletion is the canonical tenant-aggregate cleanup boundary.
+	// The artifact guards explicitly allow this cascade; disabling every trigger
+	// here would also disable foreign-key cascades and leave orphaned test rows.
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, `SET LOCAL session_replication_role = replica`); err != nil {
-		return err
-	}
 	if _, err := tx.Exec(ctx, `DELETE FROM workspace WHERE slug = $1`, handlerTestWorkspaceSlug); err != nil {
 		return err
 	}

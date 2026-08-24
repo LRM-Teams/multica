@@ -388,6 +388,59 @@ func TestV6EventTriggerWaitsForMaterialRuntimeEffects(t *testing.T) {
 	}
 }
 
+func TestV6EventTriggerRecoversBootstrapWithoutDirectorCycle(t *testing.T) {
+	run := newTransactionRecoveryRun(t, "Recover V6 bootstrap without Director cycle")
+	title := "Recover bootstrap " + uuid.NewString()
+	bootstrapped, _, err := run.store.BootstrapV6(run.ctx, V6BootstrapInput{
+		WorkspaceID:     run.fixture.workspaceID,
+		CreatedBy:       run.fixture.userID,
+		DirectorAgentID: run.fixture.agentID,
+		Goal:            title,
+		Title:           title,
+		DepthTier:       "standard",
+		Language:        "Simplified Chinese",
+		ClientRequestID: uuid.NewString(),
+	}, DefaultRunConfig("standard"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var cycles int
+	if err = run.pool.QueryRow(run.ctx, `SELECT count(*)::int FROM research_director_cycle WHERE session_id=$1::uuid`, bootstrapped.SessionID).Scan(&cycles); err != nil {
+		t.Fatal(err)
+	}
+	if cycles != 0 {
+		t.Fatalf("bootstrap unexpectedly created %d Director cycles", cycles)
+	}
+
+	processed, err := run.store.ProcessV6EventTriggers(run.ctx, 32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if processed != 1 {
+		t.Fatalf("processed %d bootstrap triggers, want 1", processed)
+	}
+	if err = run.pool.QueryRow(run.ctx, `SELECT count(*)::int FROM research_director_cycle WHERE session_id=$1::uuid`, bootstrapped.SessionID).Scan(&cycles); err != nil {
+		t.Fatal(err)
+	}
+	if cycles != 1 {
+		t.Fatalf("bootstrap recovery created %d Director cycles, want 1", cycles)
+	}
+	var triggerType string
+	if err = run.pool.QueryRow(run.ctx, `
+		SELECT event.event_type
+		FROM research_director_cycle cycle
+		JOIN research_run_event event
+		  ON event.session_id=cycle.session_id AND event.sequence=cycle.trigger_from_sequence
+		WHERE cycle.session_id=$1::uuid
+	`, bootstrapped.SessionID).Scan(&triggerType); err != nil {
+		t.Fatal(err)
+	}
+	if triggerType != "v6_run_bootstrapped" {
+		t.Fatalf("bootstrap recovery used trigger %q, want v6_run_bootstrapped", triggerType)
+	}
+}
+
 func TestV6EventTriggerRepairsAtomicResultMissingFromCoveredBrief(t *testing.T) {
 	run := newTransactionRecoveryRun(t, "Repair covered V6 atomic frontier")
 	if _, err := run.pool.Exec(run.ctx, `UPDATE research_session SET orchestrator_version='research-run-v6' WHERE id=$1::uuid`, run.fixture.sessionID); err != nil {

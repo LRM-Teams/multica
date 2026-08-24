@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -101,19 +102,34 @@ func (s *PostgresStore) LoadDirectorBriefFacts(ctx context.Context, in StartV6Di
 		}
 		facts.Branches = append(facts.Branches, item)
 	}
-	rows, err = s.pool.Query(ctx, `SELECT w.id::text,w.kind,w.status,COALESCE(NULLIF(w.target_kind,''),w.kind),w.updated_at,COALESCE(w.assigned_agent_id::text,''),COALESCE((SELECT array_agg(b.branch_id::text ORDER BY b.branch_id) FROM research_v6_work_item_branch b WHERE b.workspace_id=w.workspace_id AND b.session_id=w.session_id AND b.work_item_id=w.id),'{}') FROM research_work_item w WHERE w.workspace_id=$1::uuid AND w.session_id=$2::uuid AND w.kind IN ('research','match','discussion','integration','director','report','review') ORDER BY w.updated_at,w.id LIMIT 512`, in.WorkspaceID, in.RunID)
+	rows, err = s.pool.Query(ctx, `SELECT w.id::text,w.kind,w.status,
+		COALESCE(NULLIF(left(w.reason,512),''),NULLIF(w.target_kind,''),w.kind),w.updated_at,
+		COALESCE(w.assigned_agent_id::text,''),w.attempt_count,w.max_attempts,
+		COALESCE(latest_attempt.status,''),COALESCE(latest_attempt.failure_class,''),COALESCE(left(latest_attempt.diagnostics,32768),''),
+		COALESCE(w.terminal_reason_code,''),COALESCE(left(w.terminal_reason_detail,32768),''),
+		COALESCE((SELECT array_agg(b.branch_id::text ORDER BY b.branch_id) FROM research_v6_work_item_branch b WHERE b.workspace_id=w.workspace_id AND b.session_id=w.session_id AND b.work_item_id=w.id),'{}')
+		FROM research_work_item w
+		LEFT JOIN LATERAL (
+			SELECT attempt.status,attempt.failure_class,attempt.diagnostics
+			FROM research_work_item_attempt attempt
+			WHERE attempt.workspace_id=w.workspace_id AND attempt.session_id=w.session_id AND attempt.work_item_id=w.id
+			ORDER BY attempt.attempt_number DESC LIMIT 1
+		) latest_attempt ON true
+		WHERE w.workspace_id=$1::uuid AND w.session_id=$2::uuid AND w.kind IN ('research','match','discussion','integration','director','report','review') ORDER BY w.updated_at,w.id LIMIT 512`, in.WorkspaceID, in.RunID)
 	if err != nil {
 		return DirectorBriefFacts{}, err
 	}
 	for rows.Next() {
-		var id, kind, state, summary, agentID string
+		var id, kind, state, summary, agentID, attemptState, failureClass, failureDiagnostics, terminalReasonCode, terminalReasonDetail string
+		var attemptCount, maxAttempts int
 		var branchIDs []string
 		var updated time.Time
-		if err = rows.Scan(&id, &kind, &state, &summary, &updated, &agentID, &branchIDs); err != nil {
+		if err = rows.Scan(&id, &kind, &state, &summary, &updated, &agentID, &attemptCount, &maxAttempts, &attemptState, &failureClass, &failureDiagnostics, &terminalReasonCode, &terminalReasonDetail, &branchIDs); err != nil {
 			rows.Close()
 			return DirectorBriefFacts{}, err
 		}
 		state = directorBriefWorkState(state)
+		summary = directorBriefWorkSummary(summary, state, attemptCount, maxAttempts, attemptState, failureClass, failureDiagnostics, terminalReasonCode, terminalReasonDetail)
 		item := map[string]any{"id": id, "kind": kind, "state": state, "summary": summary, "updated_at": updated.UTC().Format(time.RFC3339Nano)}
 		if agentID != "" {
 			item["assigned_agent_id"] = agentID
@@ -160,6 +176,29 @@ func (s *PostgresStore) LoadDirectorBriefFacts(ctx context.Context, in StartV6Di
 	}
 	rows.Close()
 	return facts, nil
+}
+
+func directorBriefWorkSummary(mission, state string, attemptCount, maxAttempts int, attemptState, failureClass, failureDiagnostics, terminalReasonCode, terminalReasonDetail string) string {
+	parts := []string{strings.TrimSpace(mission)}
+	if state == "failed" || failureClass != "" || terminalReasonCode != "" {
+		parts = append(parts, fmt.Sprintf("尝试 %d/%d", attemptCount, maxAttempts))
+		if attemptState != "" {
+			parts = append(parts, "最近尝试状态 "+attemptState)
+		}
+		if failureClass != "" {
+			parts = append(parts, "失败分类 "+failureClass)
+		}
+		if failureDiagnostics != "" {
+			parts = append(parts, "失败诊断 "+failureDiagnostics)
+		}
+		if terminalReasonCode != "" {
+			parts = append(parts, "终止原因 "+terminalReasonCode)
+		}
+		if terminalReasonDetail != "" && terminalReasonDetail != failureDiagnostics {
+			parts = append(parts, terminalReasonDetail)
+		}
+	}
+	return truncateV6BriefText(strings.Join(parts, "；"), 512)
 }
 
 func (s *PostgresStore) loadV6BranchFrontierBrief(ctx context.Context, workspaceID, runID, branchID string) ([]any, bool, error) {

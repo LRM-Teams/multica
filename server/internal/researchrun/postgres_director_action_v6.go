@@ -241,7 +241,7 @@ func (s *PostgresStore) executeV6DirectorProposal(ctx context.Context, submissio
 			} else {
 				err = s.executeV6BranchLifecycleAction(ctx, proposal, action, liveStateVersion)
 			}
-		case "pause_run", "resume_run", "complete_run", "fail_run":
+		case "resume_run", "complete_run", "fail_run":
 			err = s.executeV6RunLifecycleAction(ctx, proposal, action, liveStateVersion)
 		default:
 			return fmt.Errorf("%w: unsupported Director action %q", ErrInvalidContract, action.Kind)

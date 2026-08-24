@@ -211,6 +211,7 @@
     "work_activity_failed": "智能体工作动态加载失败。",
     "retry_activity": "重试",
     "latest_progress": "最新进展",
+    "work_result": "执行结果",
     "work_process": "工作过程",
     "using_tool": "正在使用 {{tool}}",
     "tool_finished": "已完成 {{tool}}",

@@ -70,6 +70,15 @@ func TestV6DirectorFailureValidation(t *testing.T) {
 	}
 }
 
+func TestV6DirectorRunLifecycleRejectsAutonomousPause(t *testing.T) {
+	if target, allowed := v6DirectorRunLifecycleTarget("pause_run"); allowed || target != "" {
+		t.Fatalf("pause_run target=%q allowed=%v", target, allowed)
+	}
+	if target, allowed := v6DirectorRunLifecycleTarget("resume_run"); !allowed || target != "running" {
+		t.Fatalf("resume_run target=%q allowed=%v", target, allowed)
+	}
+}
+
 func TestV6DirectorBriefIsBoundedAndPaged(t *testing.T) {
 	branches := make([]any, 257)
 	for i := range branches {
@@ -126,6 +135,70 @@ func TestV6DirectorBriefBoundsTeamMissionSummary(t *testing.T) {
 	}
 	if _, err = (contextCompilerModule{}).CompileDirectorBrief(facts, time.Unix(1, 0)); err != nil {
 		t.Fatalf("compile Director Brief with bounded team mission: %v", err)
+	}
+}
+
+func TestV6DirectorBriefIncludesWorkFailureRecoveryFacts(t *testing.T) {
+	run := newTransactionRecoveryRun(t, "V6 Director Brief work failure recovery")
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_session SET orchestrator_version='research-run-v6' WHERE id=$1::uuid`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.store.AssignV6Director(run.ctx, AssignV6DirectorInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+		AgentID: run.fixture.agentID, UserID: run.fixture.userID,
+		Reason: "Recover failed work", ClientRequestID: uuid.NewString(), ExpectedStateVersion: 0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var membershipID string
+	if err := run.pool.QueryRow(run.ctx, `SELECT id::text FROM research_team_membership WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND agent_id=$3::uuid`, run.fixture.workspaceID, run.fixture.sessionID, run.fixture.agentID).Scan(&membershipID); err != nil {
+		t.Fatal(err)
+	}
+	workItemID := uuid.NewString()
+	mission := "独立复核关键来源并解释冲突。"
+	if _, err := run.pool.Exec(run.ctx, `INSERT INTO research_work_item (
+		id,workspace_id,session_id,kind,status,assigned_agent_id,goal_version,idempotency_key,
+		payload_schema_id,state_version,reason,attempt_count,max_attempts,terminal_reason_code,terminal_reason_detail
+	) VALUES ($1::uuid,$2::uuid,$3::uuid,'research','failed',$4::uuid,1,$5,'research.finding.v1',1,$6,3,3,'attempt_budget_exhausted','连续提交未通过合同校验。')`,
+		workItemID, run.fixture.workspaceID, run.fixture.sessionID, run.fixture.agentID, "brief-failure:"+workItemID, mission); err != nil {
+		t.Fatal(err)
+	}
+	attemptID := seedV6RecoveryAttempt(t, run, membershipID, workItemID)
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_work_item_attempt SET status='failed',failure_class='contract_rejected',diagnostics='content_layers.conclusion is required',completed_at=now() WHERE id=$1::uuid`, attemptID); err != nil {
+		t.Fatal(err)
+	}
+	var stateVersion int64
+	if err := run.pool.QueryRow(run.ctx, `SELECT state_version FROM research_session WHERE id=$1::uuid`, run.fixture.sessionID).Scan(&stateVersion); err != nil {
+		t.Fatal(err)
+	}
+	facts, err := run.store.LoadDirectorBriefFacts(run.ctx, StartV6DirectorCycleInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID, ExpectedStateVersion: stateVersion,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var failed map[string]any
+	for _, raw := range facts.WorkItems {
+		item := raw.(map[string]any)
+		if item["id"] == workItemID {
+			failed = item
+			break
+		}
+	}
+	if failed == nil {
+		t.Fatal("failed Work Item missing from Director Brief")
+	}
+	summary, ok := failed["summary"].(string)
+	if !ok {
+		t.Fatalf("summary=%T, want string", failed["summary"])
+	}
+	for _, want := range []string{mission, "尝试 3/3", "最近尝试状态 failed", "失败分类 contract_rejected", "失败诊断 content_layers.conclusion is required", "终止原因 attempt_budget_exhausted", "连续提交未通过合同校验。"} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("summary missing %q: %s", want, summary)
+		}
+	}
+	if _, err = (contextCompilerModule{}).CompileDirectorBrief(facts, time.Unix(1, 0)); err != nil {
+		t.Fatalf("compile Director Brief with failure recovery facts: %v", err)
 	}
 }
 

@@ -319,7 +319,7 @@ export function ResearchV6NodeDetail({
               {workActivityLoading
                 ? t(($) => $.v6_detail.work_activity_loading)
                 : workActivityError
-                  ? t(($) => $.v6_detail.work_activity_failed)
+                  ? node.catalogSummary || t(($) => $.v6_detail.task_waiting)
                   : workActivity?.mission ||
                     node.catalogSummary ||
                     t(($) => $.v6_detail.task_waiting)}
@@ -347,6 +347,19 @@ export function ResearchV6NodeDetail({
                 </div>
               ) : null}
               <p className="mt-1 text-xs leading-relaxed">{workActivity.progress}</p>
+            </div>
+          ) : null}
+          {state.termination ? (
+            <div className="rounded-lg bg-destructive/10 px-2.5 py-2">
+              <h3 className="text-xs font-medium text-foreground">
+                {t(($) => $.v6_detail.work_result)}
+              </h3>
+              <p className="mt-1 text-xs font-medium text-destructive">
+                {stateValueLabel(state.execution)} · {state.termination.reasonCode}
+              </p>
+              <p className="mt-1 break-words text-xs leading-relaxed text-muted-foreground">
+                {state.termination.reasonDetail}
+              </p>
             </div>
           ) : null}
           <div className="space-y-2" aria-live="polite" aria-atomic="false">
@@ -477,7 +490,7 @@ export function ResearchV6NodeDetail({
         </div>
       </dl>
 
-      {state.termination ? (
+      {state.termination && node.kind !== "work_s" ? (
         <div className="space-y-1 rounded-xl bg-muted/45 px-3 py-2.5">
           <p className="text-xs font-medium">{state.termination.reasonCode}</p>
           <p className="break-words text-xs leading-relaxed text-muted-foreground">

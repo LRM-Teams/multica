@@ -29,6 +29,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/service"
 
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/issueguard"
@@ -305,6 +306,16 @@ func (h *Handler) BootstrapOnboardingRuntime(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusInternalServerError, "failed to record starter content state")
 		return
 	}
+	var executionOutcome service.IssueExecutionReconcileOutcome
+	if issueCreated {
+		executionOutcome, err = h.IssueExecution.ReconcileTx(r.Context(), tx, issue, service.IssueExecutionReconcileOptions{
+			TriggerKind: "onboarding_issue_created",
+		})
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to schedule onboarding issue")
+			return
+		}
+	}
 
 	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to finish onboarding")
@@ -329,9 +340,7 @@ func (h *Handler) BootstrapOnboardingRuntime(w http.ResponseWriter, r *http.Requ
 			uuidToString(assistant.ID), "", "", analytics.SourceOnboarding,
 			platform,
 		))
-		if h.shouldEnqueueAgentTask(r.Context(), issue) {
-			h.TaskService.EnqueueTaskForIssue(r.Context(), issue)
-		}
+		h.IssueExecution.PublishOutcome(r.Context(), executionOutcome)
 	}
 	if firstCompletion {
 		onboardedAt := ""

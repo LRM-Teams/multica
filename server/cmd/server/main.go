@@ -579,6 +579,11 @@ func main() {
 	} else {
 		schedulerRegistered = true
 	}
+	if err := schedulerMgr.Register(scheduler.IssueExecutionReconcileJob(h.IssueExecution)); err != nil {
+		slog.Warn("scheduler: failed to register issue execution reconciliation job", "error", err)
+	} else {
+		schedulerRegistered = true
+	}
 	if schedulerRegistered {
 		go func() {
 			_ = schedulerMgr.Run(sweepCtx)

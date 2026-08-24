@@ -72,6 +72,9 @@ type TaskService struct {
 	Analytics analytics.Client
 	Metrics   *obsmetrics.BusinessMetrics
 	Wakeup    TaskWakeupNotifier
+	// IssueExecution is wired after construction because the canonical
+	// reconciler publishes through this TaskService.
+	IssueExecution *IssueExecutionService
 
 	// OnChildTaskCreated is an optional callback fired when a retry child
 	// task is created (subagent lifecycle). When set, it receives the parent
@@ -2009,6 +2012,28 @@ func (s *TaskService) MaybeRetryFailedTask(ctx context.Context, parent db.AgentI
 	if !parent.IssueID.Valid && !parent.ChatSessionID.Valid && !parent.ChannelID.Valid {
 		return nil, nil
 	}
+	if parent.IssueRunKind.Valid && parent.IssueRunKind.String == "canonical" &&
+		parent.IssueID.Valid && s.IssueExecution != nil {
+		outcome, retryErr := s.IssueExecution.Reconcile(ctx, parent.WorkspaceID, parent.IssueID, IssueExecutionReconcileOptions{
+			TriggerKind:       "infrastructure_retry",
+			NewAttempt:        true,
+			ForceFreshSession: resumeUnsafeFailureReason(reason),
+			ParentRunID:       parent.ID,
+			DeliveryAttempt:   parent.Attempt + 1,
+			MaxAttempts:       parent.MaxAttempts,
+		})
+		if retryErr != nil {
+			return nil, retryErr
+		}
+		child, retryErr := s.IssueExecution.DispatchRun(ctx, parent.WorkspaceID, outcome.RunID)
+		if retryErr != nil {
+			return nil, retryErr
+		}
+		if s.OnChildTaskCreated != nil {
+			s.OnChildTaskCreated(ctx, parent, *child)
+		}
+		return child, nil
+	}
 
 	var retryResources *EphemeralRetryResources
 	var err error
@@ -2219,6 +2244,41 @@ func (s *TaskService) RerunIssue(ctx context.Context, issueID pgtype.UUID, sourc
 			return nil, fmt.Errorf("issue is not assigned to an agent")
 		}
 		agentID = issue.AssigneeID
+	}
+
+	// A rerun of the current assignee's assignment lane is a new canonical
+	// Run attempt. Comment/mention reruns remain interaction-lane events and
+	// keep the legacy target-agent semantics below.
+	if s.IssueExecution != nil && !triggerCommentID.Valid &&
+		issue.AssigneeType.String == "agent" && issue.AssigneeID.Valid && issue.AssigneeID == agentID {
+		opts := IssueExecutionReconcileOptions{
+			TriggerKind: "manual_rerun", NewAttempt: true, ForceFreshSession: true,
+			ParentRunID: sourceTaskID,
+		}
+		var runID pgtype.UUID
+		if issueExecutionStatusRunnable(issue.Status) {
+			outcome, reconcileErr := s.IssueExecution.Reconcile(ctx, issue.WorkspaceID, issue.ID, opts)
+			if reconcileErr != nil {
+				return nil, reconcileErr
+			}
+			runID = outcome.RunID
+		} else {
+			if _, updateErr := s.IssueExecution.UpdateStatus(ctx, issue, "todo", opts); updateErr != nil {
+				return nil, updateErr
+			}
+			claim, claimErr := s.Queries.GetActiveIssueExecution(ctx, db.GetActiveIssueExecutionParams{
+				WorkspaceID: issue.WorkspaceID, IssueID: issue.ID,
+			})
+			if claimErr != nil {
+				return nil, claimErr
+			}
+			runID = claim.RunID
+		}
+		task, dispatchErr := s.IssueExecution.DispatchRun(ctx, issue.WorkspaceID, runID)
+		if dispatchErr != nil {
+			return nil, dispatchErr
+		}
+		return task, nil
 	}
 
 	// Cancel only the target agent's active/queued tasks on this issue.
@@ -2488,11 +2548,27 @@ func (s *TaskService) HandleFailedTasks(ctx context.Context, tasks []db.AgentInb
 							"error", checkErr,
 						)
 					} else if !hasActive {
-						if _, updateErr := s.Queries.UpdateIssueStatus(ctx, db.UpdateIssueStatusParams{
-							ID:          t.IssueID,
-							Status:      "todo",
-							WorkspaceID: issue.WorkspaceID,
-						}); updateErr != nil {
+						recoveryStatus := "todo"
+						triggerKind := "task_failure_recovery"
+						// Do not let the canonical reconciler reset an exhausted
+						// delivery budget by minting a fresh attempt=1 Run forever.
+						// Expose the exhausted boundary as blocked for controller or
+						// human intervention; an explicit reopen can start new work.
+						if retryableReasons[failureReason] && t.Attempt >= t.MaxAttempts {
+							recoveryStatus = "blocked"
+							triggerKind = "task_retry_budget_exhausted"
+						}
+						var updateErr error
+						if s.IssueExecution != nil {
+							_, updateErr = s.IssueExecution.UpdateStatus(ctx, issue, recoveryStatus, IssueExecutionReconcileOptions{
+								TriggerKind: triggerKind, Invalidate: true,
+							})
+						} else {
+							_, updateErr = s.Queries.UpdateIssueStatus(ctx, db.UpdateIssueStatusParams{
+								ID: t.IssueID, Status: recoveryStatus, WorkspaceID: issue.WorkspaceID,
+							})
+						}
+						if updateErr != nil {
 							slog.Warn("handle failed tasks: reset stuck issue failed",
 								"issue_id", issueKey,
 								"error", updateErr,

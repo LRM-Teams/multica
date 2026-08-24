@@ -285,6 +285,164 @@ func (q *Queries) CancelIssueDispatchOutbox(ctx context.Context, arg CancelIssue
 	return i, err
 }
 
+const cancelIssueDispatchOutboxesForIssue = `-- name: CancelIssueDispatchOutboxesForIssue :many
+UPDATE issue_dispatch_outbox
+SET status = 'cancelled',
+    lease_token = NULL,
+    lease_expires_at = NULL,
+    last_error = $1,
+    updated_at = now()
+WHERE workspace_id = $2
+  AND issue_id = $3
+  AND status IN ('pending', 'delivering', 'failed')
+RETURNING id, workspace_id, issue_id, run_id, agent_id, issue_execution_revision, attempt_number, dispatch_key, trigger_kind, request_payload, request_hash, status, delivery_attempts, next_delivery_at, lease_token, lease_expires_at, last_error, delivered_event_id, delivered_at, created_at, updated_at
+`
+
+type CancelIssueDispatchOutboxesForIssueParams struct {
+	Reason      string      `json:"reason"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	IssueID     pgtype.UUID `json:"issue_id"`
+}
+
+func (q *Queries) CancelIssueDispatchOutboxesForIssue(ctx context.Context, arg CancelIssueDispatchOutboxesForIssueParams) ([]IssueDispatchOutbox, error) {
+	rows, err := q.db.Query(ctx, cancelIssueDispatchOutboxesForIssue, arg.Reason, arg.WorkspaceID, arg.IssueID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []IssueDispatchOutbox{}
+	for rows.Next() {
+		var i IssueDispatchOutbox
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.IssueID,
+			&i.RunID,
+			&i.AgentID,
+			&i.IssueExecutionRevision,
+			&i.AttemptNumber,
+			&i.DispatchKey,
+			&i.TriggerKind,
+			&i.RequestPayload,
+			&i.RequestHash,
+			&i.Status,
+			&i.DeliveryAttempts,
+			&i.NextDeliveryAt,
+			&i.LeaseToken,
+			&i.LeaseExpiresAt,
+			&i.LastError,
+			&i.DeliveredEventID,
+			&i.DeliveredAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const cancelSupersededIssueRunEvents = `-- name: CancelSupersededIssueRunEvents :many
+UPDATE agent_inbox_event
+SET status = 'suppressed',
+    terminal_outcome = COALESCE(terminal_outcome, 'cancelled'),
+    terminal_at = COALESCE(terminal_at, now()),
+    completed_at = COALESCE(completed_at, now()),
+    last_error = $1,
+    updated_at = now()
+WHERE workspace_id = $2
+  AND issue_id = $3
+  AND reason = 'issue'
+  AND trigger_comment_id IS NULL
+  AND status IN ('pending', 'failed', 'draining', 'running')
+RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn, issue_run_kind, issue_execution_revision, issue_execution_attempt_number
+`
+
+type CancelSupersededIssueRunEventsParams struct {
+	Reason      pgtype.Text `json:"reason"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	IssueID     pgtype.UUID `json:"issue_id"`
+}
+
+func (q *Queries) CancelSupersededIssueRunEvents(ctx context.Context, arg CancelSupersededIssueRunEventsParams) ([]AgentInboxEvent, error) {
+	rows, err := q.db.Query(ctx, cancelSupersededIssueRunEvents, arg.Reason, arg.WorkspaceID, arg.IssueID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AgentInboxEvent{}
+	for rows.Next() {
+		var i AgentInboxEvent
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.AgentSessionID,
+			&i.ConversationID,
+			&i.ChannelID,
+			&i.ChatSessionID,
+			&i.AgentID,
+			&i.SourceMessageID,
+			&i.Reason,
+			&i.RequiresWake,
+			&i.Status,
+			&i.Priority,
+			&i.SeqFrom,
+			&i.SeqTo,
+			&i.Attempt,
+			&i.LastError,
+			&i.ClaimedAt,
+			&i.AckedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.TerminalOutcome,
+			&i.TerminalDeliveryID,
+			&i.Retryable,
+			&i.TerminalAt,
+			&i.RuntimeID,
+			&i.ExecutionConfig,
+			&i.DeliveryMode,
+			&i.ResponseMode,
+			&i.ChannelOnboardingID,
+			&i.IssueID,
+			&i.SourceChatMessageID,
+			&i.Context,
+			&i.DispatchedAt,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.Result,
+			&i.Error,
+			&i.SessionID,
+			&i.WorkDir,
+			&i.TriggerCommentID,
+			&i.AutopilotRunID,
+			&i.MaxAttempts,
+			&i.ParentTaskID,
+			&i.FailureReason,
+			&i.TriggerSummary,
+			&i.ForceFreshSession,
+			&i.IsLeaderTask,
+			&i.WaitReason,
+			&i.InitiatorUserID,
+			&i.AgentDmExchangeID,
+			&i.AgentDmTurn,
+			&i.IssueRunKind,
+			&i.IssueExecutionRevision,
+			&i.IssueExecutionAttemptNumber,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const claimIssueDispatchOutbox = `-- name: ClaimIssueDispatchOutbox :many
 WITH candidates AS (
   SELECT candidate.id
@@ -324,6 +482,134 @@ func (q *Queries) ClaimIssueDispatchOutbox(ctx context.Context, arg ClaimIssueDi
 		arg.WorkspaceID,
 		arg.ClaimLimit,
 	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []IssueDispatchOutbox{}
+	for rows.Next() {
+		var i IssueDispatchOutbox
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.IssueID,
+			&i.RunID,
+			&i.AgentID,
+			&i.IssueExecutionRevision,
+			&i.AttemptNumber,
+			&i.DispatchKey,
+			&i.TriggerKind,
+			&i.RequestPayload,
+			&i.RequestHash,
+			&i.Status,
+			&i.DeliveryAttempts,
+			&i.NextDeliveryAt,
+			&i.LeaseToken,
+			&i.LeaseExpiresAt,
+			&i.LastError,
+			&i.DeliveredEventID,
+			&i.DeliveredAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const claimIssueDispatchOutboxByRun = `-- name: ClaimIssueDispatchOutboxByRun :one
+UPDATE issue_dispatch_outbox
+SET status = 'delivering',
+    delivery_attempts = delivery_attempts + 1,
+    lease_token = $1,
+    lease_expires_at = $2,
+    last_error = '',
+    updated_at = now()
+WHERE workspace_id = $3
+  AND run_id = $4
+  AND (
+    (status = 'pending' AND next_delivery_at <= now())
+    OR (status = 'delivering' AND lease_expires_at <= now())
+  )
+RETURNING id, workspace_id, issue_id, run_id, agent_id, issue_execution_revision, attempt_number, dispatch_key, trigger_kind, request_payload, request_hash, status, delivery_attempts, next_delivery_at, lease_token, lease_expires_at, last_error, delivered_event_id, delivered_at, created_at, updated_at
+`
+
+type ClaimIssueDispatchOutboxByRunParams struct {
+	LeaseToken     pgtype.UUID        `json:"lease_token"`
+	LeaseExpiresAt pgtype.Timestamptz `json:"lease_expires_at"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	RunID          pgtype.UUID        `json:"run_id"`
+}
+
+func (q *Queries) ClaimIssueDispatchOutboxByRun(ctx context.Context, arg ClaimIssueDispatchOutboxByRunParams) (IssueDispatchOutbox, error) {
+	row := q.db.QueryRow(ctx, claimIssueDispatchOutboxByRun,
+		arg.LeaseToken,
+		arg.LeaseExpiresAt,
+		arg.WorkspaceID,
+		arg.RunID,
+	)
+	var i IssueDispatchOutbox
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.IssueID,
+		&i.RunID,
+		&i.AgentID,
+		&i.IssueExecutionRevision,
+		&i.AttemptNumber,
+		&i.DispatchKey,
+		&i.TriggerKind,
+		&i.RequestPayload,
+		&i.RequestHash,
+		&i.Status,
+		&i.DeliveryAttempts,
+		&i.NextDeliveryAt,
+		&i.LeaseToken,
+		&i.LeaseExpiresAt,
+		&i.LastError,
+		&i.DeliveredEventID,
+		&i.DeliveredAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const claimIssueDispatchOutboxGlobal = `-- name: ClaimIssueDispatchOutboxGlobal :many
+WITH candidates AS (
+  SELECT candidate.id
+  FROM issue_dispatch_outbox AS candidate
+  WHERE (candidate.status = 'pending' AND candidate.next_delivery_at <= now())
+     OR (candidate.status = 'delivering' AND candidate.lease_expires_at <= now())
+  ORDER BY candidate.next_delivery_at ASC, candidate.created_at ASC, candidate.id ASC
+  FOR UPDATE SKIP LOCKED
+  LIMIT $3
+)
+UPDATE issue_dispatch_outbox AS outbox
+SET status = 'delivering',
+    delivery_attempts = outbox.delivery_attempts + 1,
+    lease_token = $1,
+    lease_expires_at = $2,
+    last_error = '',
+    updated_at = now()
+FROM candidates
+WHERE outbox.id = candidates.id
+RETURNING outbox.id, outbox.workspace_id, outbox.issue_id, outbox.run_id, outbox.agent_id, outbox.issue_execution_revision, outbox.attempt_number, outbox.dispatch_key, outbox.trigger_kind, outbox.request_payload, outbox.request_hash, outbox.status, outbox.delivery_attempts, outbox.next_delivery_at, outbox.lease_token, outbox.lease_expires_at, outbox.last_error, outbox.delivered_event_id, outbox.delivered_at, outbox.created_at, outbox.updated_at
+`
+
+type ClaimIssueDispatchOutboxGlobalParams struct {
+	LeaseToken     pgtype.UUID        `json:"lease_token"`
+	LeaseExpiresAt pgtype.Timestamptz `json:"lease_expires_at"`
+	ClaimLimit     int32              `json:"claim_limit"`
+}
+
+func (q *Queries) ClaimIssueDispatchOutboxGlobal(ctx context.Context, arg ClaimIssueDispatchOutboxGlobalParams) ([]IssueDispatchOutbox, error) {
+	rows, err := q.db.Query(ctx, claimIssueDispatchOutboxGlobal, arg.LeaseToken, arg.LeaseExpiresAt, arg.ClaimLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -419,6 +705,240 @@ func (q *Queries) CreateActiveIssueExecution(ctx context.Context, arg CreateActi
 	return i, err
 }
 
+const createCanonicalIssueRunEvent = `-- name: CreateCanonicalIssueRunEvent :one
+WITH eligible AS (
+  SELECT
+    outbox.run_id,
+    outbox.workspace_id,
+    outbox.issue_id,
+    outbox.agent_id,
+    outbox.issue_execution_revision,
+    outbox.attempt_number,
+    outbox.lease_token,
+    agent.runtime_id,
+    agent.model,
+    agent.thinking_level
+  FROM issue_dispatch_outbox outbox
+  JOIN active_issue_execution claim
+    ON claim.workspace_id = outbox.workspace_id
+   AND claim.issue_id = outbox.issue_id
+   AND claim.run_id = outbox.run_id
+   AND claim.agent_id = outbox.agent_id
+   AND claim.issue_execution_revision = outbox.issue_execution_revision
+   AND claim.attempt_number = outbox.attempt_number
+   AND claim.status = 'dispatching'
+  JOIN issue issue_row
+    ON issue_row.workspace_id = outbox.workspace_id
+   AND issue_row.id = outbox.issue_id
+   AND issue_row.execution_revision = outbox.issue_execution_revision
+   AND issue_row.status IN ('todo', 'in_progress')
+   AND issue_row.assignee_type = 'agent'
+   AND issue_row.assignee_id = outbox.agent_id
+  JOIN agent
+    ON agent.workspace_id = outbox.workspace_id
+   AND agent.id = outbox.agent_id
+   AND agent.archived_at IS NULL
+   AND agent.runtime_id IS NOT NULL
+  WHERE outbox.id = $1
+    AND outbox.workspace_id = $2
+    AND outbox.status = 'delivering'
+    AND outbox.lease_token = $3
+    AND NOT EXISTS (
+      SELECT 1
+      FROM issue_dependency dependency
+      JOIN issue upstream ON upstream.id = dependency.depends_on_issue_id
+      WHERE dependency.issue_id = outbox.issue_id
+        AND dependency.type = 'blocked_by'
+        AND upstream.status NOT IN ('done', 'cancelled')
+    )
+), inserted AS (
+  INSERT INTO agent_inbox_event (
+    id, workspace_id, agent_session_id, agent_id, runtime_id, execution_config,
+    issue_id, reason, requires_wake, status, priority, force_fresh_session,
+    context, parent_task_id, attempt, max_attempts,
+    issue_run_kind, issue_execution_revision,
+    issue_execution_attempt_number
+  )
+  SELECT
+    eligible.run_id,
+    eligible.workspace_id,
+    ensure_agent_wake_session(eligible.agent_id),
+    eligible.agent_id,
+    eligible.runtime_id,
+    $4,
+    eligible.issue_id,
+    'issue',
+    true,
+    'pending',
+    $5,
+    $6,
+    $4,
+    $7,
+    CASE WHEN $8::integer > 0 THEN $8::integer ELSE 1 END,
+    CASE WHEN $9::integer > 0 THEN $9::integer ELSE 3 END,
+    'canonical',
+    eligible.issue_execution_revision,
+    eligible.attempt_number
+  FROM eligible
+  ON CONFLICT (id) DO NOTHING
+  RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn, issue_run_kind, issue_execution_revision, issue_execution_attempt_number
+)
+SELECT id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn, issue_run_kind, issue_execution_revision, issue_execution_attempt_number FROM inserted
+UNION ALL
+SELECT event.id, event.workspace_id, event.agent_session_id, event.conversation_id, event.channel_id, event.chat_session_id, event.agent_id, event.source_message_id, event.reason, event.requires_wake, event.status, event.priority, event.seq_from, event.seq_to, event.attempt, event.last_error, event.claimed_at, event.acked_at, event.created_at, event.updated_at, event.terminal_outcome, event.terminal_delivery_id, event.retryable, event.terminal_at, event.runtime_id, event.execution_config, event.delivery_mode, event.response_mode, event.channel_onboarding_id, event.issue_id, event.source_chat_message_id, event.context, event.dispatched_at, event.started_at, event.completed_at, event.result, event.error, event.session_id, event.work_dir, event.trigger_comment_id, event.autopilot_run_id, event.max_attempts, event.parent_task_id, event.failure_reason, event.trigger_summary, event.force_fresh_session, event.is_leader_task, event.wait_reason, event.initiator_user_id, event.agent_dm_exchange_id, event.agent_dm_turn, event.issue_run_kind, event.issue_execution_revision, event.issue_execution_attempt_number
+FROM agent_inbox_event event
+JOIN eligible
+  ON event.id = eligible.run_id
+ AND event.workspace_id = eligible.workspace_id
+ AND event.issue_id = eligible.issue_id
+ AND event.agent_id = eligible.agent_id
+ AND event.issue_run_kind = 'canonical'
+ AND event.issue_execution_revision = eligible.issue_execution_revision
+ AND event.issue_execution_attempt_number = eligible.attempt_number
+LIMIT 1
+`
+
+type CreateCanonicalIssueRunEventParams struct {
+	OutboxID          pgtype.UUID `json:"outbox_id"`
+	WorkspaceID       pgtype.UUID `json:"workspace_id"`
+	LeaseToken        pgtype.UUID `json:"lease_token"`
+	TaskContext       []byte      `json:"task_context"`
+	Priority          int32       `json:"priority"`
+	ForceFreshSession bool        `json:"force_fresh_session"`
+	ParentRunID       pgtype.UUID `json:"parent_run_id"`
+	DeliveryAttempt   int32       `json:"delivery_attempt"`
+	MaxAttempts       int32       `json:"max_attempts"`
+}
+
+type CreateCanonicalIssueRunEventRow struct {
+	ID                          pgtype.UUID        `json:"id"`
+	WorkspaceID                 pgtype.UUID        `json:"workspace_id"`
+	AgentSessionID              pgtype.UUID        `json:"agent_session_id"`
+	ConversationID              pgtype.UUID        `json:"conversation_id"`
+	ChannelID                   pgtype.UUID        `json:"channel_id"`
+	ChatSessionID               pgtype.UUID        `json:"chat_session_id"`
+	AgentID                     pgtype.UUID        `json:"agent_id"`
+	SourceMessageID             pgtype.UUID        `json:"source_message_id"`
+	Reason                      string             `json:"reason"`
+	RequiresWake                bool               `json:"requires_wake"`
+	Status                      string             `json:"status"`
+	Priority                    int32              `json:"priority"`
+	SeqFrom                     int64              `json:"seq_from"`
+	SeqTo                       int64              `json:"seq_to"`
+	Attempt                     int32              `json:"attempt"`
+	LastError                   pgtype.Text        `json:"last_error"`
+	ClaimedAt                   pgtype.Timestamptz `json:"claimed_at"`
+	AckedAt                     pgtype.Timestamptz `json:"acked_at"`
+	CreatedAt                   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt                   pgtype.Timestamptz `json:"updated_at"`
+	TerminalOutcome             pgtype.Text        `json:"terminal_outcome"`
+	TerminalDeliveryID          pgtype.UUID        `json:"terminal_delivery_id"`
+	Retryable                   bool               `json:"retryable"`
+	TerminalAt                  pgtype.Timestamptz `json:"terminal_at"`
+	RuntimeID                   pgtype.UUID        `json:"runtime_id"`
+	ExecutionConfig             []byte             `json:"execution_config"`
+	DeliveryMode                string             `json:"delivery_mode"`
+	ResponseMode                string             `json:"response_mode"`
+	ChannelOnboardingID         pgtype.UUID        `json:"channel_onboarding_id"`
+	IssueID                     pgtype.UUID        `json:"issue_id"`
+	SourceChatMessageID         pgtype.UUID        `json:"source_chat_message_id"`
+	Context                     []byte             `json:"context"`
+	DispatchedAt                pgtype.Timestamptz `json:"dispatched_at"`
+	StartedAt                   pgtype.Timestamptz `json:"started_at"`
+	CompletedAt                 pgtype.Timestamptz `json:"completed_at"`
+	Result                      []byte             `json:"result"`
+	Error                       pgtype.Text        `json:"error"`
+	SessionID                   pgtype.Text        `json:"session_id"`
+	WorkDir                     pgtype.Text        `json:"work_dir"`
+	TriggerCommentID            pgtype.UUID        `json:"trigger_comment_id"`
+	AutopilotRunID              pgtype.UUID        `json:"autopilot_run_id"`
+	MaxAttempts                 int32              `json:"max_attempts"`
+	ParentTaskID                pgtype.UUID        `json:"parent_task_id"`
+	FailureReason               pgtype.Text        `json:"failure_reason"`
+	TriggerSummary              pgtype.Text        `json:"trigger_summary"`
+	ForceFreshSession           bool               `json:"force_fresh_session"`
+	IsLeaderTask                bool               `json:"is_leader_task"`
+	WaitReason                  pgtype.Text        `json:"wait_reason"`
+	InitiatorUserID             pgtype.UUID        `json:"initiator_user_id"`
+	AgentDmExchangeID           pgtype.UUID        `json:"agent_dm_exchange_id"`
+	AgentDmTurn                 pgtype.Int4        `json:"agent_dm_turn"`
+	IssueRunKind                pgtype.Text        `json:"issue_run_kind"`
+	IssueExecutionRevision      pgtype.Int8        `json:"issue_execution_revision"`
+	IssueExecutionAttemptNumber pgtype.Int8        `json:"issue_execution_attempt_number"`
+}
+
+func (q *Queries) CreateCanonicalIssueRunEvent(ctx context.Context, arg CreateCanonicalIssueRunEventParams) (CreateCanonicalIssueRunEventRow, error) {
+	row := q.db.QueryRow(ctx, createCanonicalIssueRunEvent,
+		arg.OutboxID,
+		arg.WorkspaceID,
+		arg.LeaseToken,
+		arg.TaskContext,
+		arg.Priority,
+		arg.ForceFreshSession,
+		arg.ParentRunID,
+		arg.DeliveryAttempt,
+		arg.MaxAttempts,
+	)
+	var i CreateCanonicalIssueRunEventRow
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.AgentSessionID,
+		&i.ConversationID,
+		&i.ChannelID,
+		&i.ChatSessionID,
+		&i.AgentID,
+		&i.SourceMessageID,
+		&i.Reason,
+		&i.RequiresWake,
+		&i.Status,
+		&i.Priority,
+		&i.SeqFrom,
+		&i.SeqTo,
+		&i.Attempt,
+		&i.LastError,
+		&i.ClaimedAt,
+		&i.AckedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.TerminalOutcome,
+		&i.TerminalDeliveryID,
+		&i.Retryable,
+		&i.TerminalAt,
+		&i.RuntimeID,
+		&i.ExecutionConfig,
+		&i.DeliveryMode,
+		&i.ResponseMode,
+		&i.ChannelOnboardingID,
+		&i.IssueID,
+		&i.SourceChatMessageID,
+		&i.Context,
+		&i.DispatchedAt,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.Result,
+		&i.Error,
+		&i.SessionID,
+		&i.WorkDir,
+		&i.TriggerCommentID,
+		&i.AutopilotRunID,
+		&i.MaxAttempts,
+		&i.ParentTaskID,
+		&i.FailureReason,
+		&i.TriggerSummary,
+		&i.ForceFreshSession,
+		&i.IsLeaderTask,
+		&i.WaitReason,
+		&i.InitiatorUserID,
+		&i.AgentDmExchangeID,
+		&i.AgentDmTurn,
+		&i.IssueRunKind,
+		&i.IssueExecutionRevision,
+		&i.IssueExecutionAttemptNumber,
+	)
+	return i, err
+}
+
 const createIssueDispatchOutbox = `-- name: CreateIssueDispatchOutbox :one
 INSERT INTO issue_dispatch_outbox (
   workspace_id,
@@ -508,6 +1028,25 @@ func (q *Queries) CreateIssueDispatchOutbox(ctx context.Context, arg CreateIssue
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const deleteActiveIssueExecutionForIssue = `-- name: DeleteActiveIssueExecutionForIssue :execrows
+DELETE FROM active_issue_execution
+WHERE workspace_id = $1
+  AND issue_id = $2
+`
+
+type DeleteActiveIssueExecutionForIssueParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	IssueID     pgtype.UUID `json:"issue_id"`
+}
+
+func (q *Queries) DeleteActiveIssueExecutionForIssue(ctx context.Context, arg DeleteActiveIssueExecutionForIssueParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteActiveIssueExecutionForIssue, arg.WorkspaceID, arg.IssueID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deleteReleasedIssueExecution = `-- name: DeleteReleasedIssueExecution :execrows
@@ -821,6 +1360,116 @@ func (q *Queries) GetIssueExecutionStateForUpdate(ctx context.Context, arg GetIs
 	return i, err
 }
 
+const hasIncompleteIssueExecutionDependencies = `-- name: HasIncompleteIssueExecutionDependencies :one
+SELECT EXISTS (
+  SELECT 1
+  FROM issue_dependency dependency
+  JOIN issue upstream ON upstream.id = dependency.depends_on_issue_id
+  WHERE dependency.issue_id = $1
+    AND dependency.type = 'blocked_by'
+    AND upstream.status NOT IN ('done', 'cancelled')
+)
+`
+
+func (q *Queries) HasIncompleteIssueExecutionDependencies(ctx context.Context, issueID pgtype.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, hasIncompleteIssueExecutionDependencies, issueID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
+const listRunnableIssuesMissingExecution = `-- name: ListRunnableIssuesMissingExecution :many
+SELECT issue_row.id, issue_row.workspace_id, issue_row.title, issue_row.description, issue_row.status, issue_row.priority, issue_row.assignee_type, issue_row.assignee_id, issue_row.creator_type, issue_row.creator_id, issue_row.parent_issue_id, issue_row.acceptance_criteria, issue_row.context_refs, issue_row.position, issue_row.due_date, issue_row.created_at, issue_row.updated_at, issue_row.number, issue_row.project_id, issue_row.origin_type, issue_row.origin_id, issue_row.first_executed_at, issue_row.start_date, issue_row.metadata, issue_row.forked_from_issue_id, issue_row.forked_at_seq, issue_row.forked_at_task_id, issue_row.channel_goal_id, issue_row.goal_required, issue_row.execution_revision, issue_row.execution_attempt_sequence
+FROM issue issue_row
+JOIN agent
+  ON agent.workspace_id = issue_row.workspace_id
+ AND agent.id = issue_row.assignee_id
+ AND agent.archived_at IS NULL
+ AND agent.runtime_id IS NOT NULL
+WHERE issue_row.status IN ('todo', 'in_progress')
+  AND issue_row.assignee_type = 'agent'
+  AND issue_row.assignee_id IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM active_issue_execution claim WHERE claim.issue_id = issue_row.id
+  )
+  -- During rollout, do not replace an assignment wake that the legacy path
+  -- already queued or started. Once that wake becomes terminal, the next
+  -- recovery scan can establish the canonical claim without overlapping work.
+  AND NOT EXISTS (
+    SELECT 1
+    FROM agent_inbox_event legacy_event
+    WHERE legacy_event.workspace_id = issue_row.workspace_id
+      AND legacy_event.issue_id = issue_row.id
+      AND legacy_event.reason = 'issue'
+      AND legacy_event.trigger_comment_id IS NULL
+      AND legacy_event.issue_run_kind IS NULL
+      AND legacy_event.status IN ('pending', 'failed', 'draining', 'running')
+      AND legacy_event.terminal_outcome IS NULL
+  )
+  AND NOT EXISTS (
+    SELECT 1
+    FROM issue_dependency dependency
+    JOIN issue upstream ON upstream.id = dependency.depends_on_issue_id
+    WHERE dependency.issue_id = issue_row.id
+      AND dependency.type = 'blocked_by'
+      AND upstream.status NOT IN ('done', 'cancelled')
+  )
+ORDER BY issue_row.updated_at, issue_row.id
+LIMIT $1
+`
+
+func (q *Queries) ListRunnableIssuesMissingExecution(ctx context.Context, rowLimit int32) ([]Issue, error) {
+	rows, err := q.db.Query(ctx, listRunnableIssuesMissingExecution, rowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Issue{}
+	for rows.Next() {
+		var i Issue
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.Title,
+			&i.Description,
+			&i.Status,
+			&i.Priority,
+			&i.AssigneeType,
+			&i.AssigneeID,
+			&i.CreatorType,
+			&i.CreatorID,
+			&i.ParentIssueID,
+			&i.AcceptanceCriteria,
+			&i.ContextRefs,
+			&i.Position,
+			&i.DueDate,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Number,
+			&i.ProjectID,
+			&i.OriginType,
+			&i.OriginID,
+			&i.FirstExecutedAt,
+			&i.StartDate,
+			&i.Metadata,
+			&i.ForkedFromIssueID,
+			&i.ForkedAtSeq,
+			&i.ForkedAtTaskID,
+			&i.ChannelGoalID,
+			&i.GoalRequired,
+			&i.ExecutionRevision,
+			&i.ExecutionAttemptSequence,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const markIssueDispatchOutboxDelivered = `-- name: MarkIssueDispatchOutboxDelivered :one
 UPDATE issue_dispatch_outbox
 SET status = 'delivered',
@@ -877,6 +1526,39 @@ func (q *Queries) MarkIssueDispatchOutboxDelivered(ctx context.Context, arg Mark
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const releaseExecutorWorkOwnerLeaseForHandoff = `-- name: ReleaseExecutorWorkOwnerLeaseForHandoff :execrows
+UPDATE work_owner_lease
+SET status = 'released',
+    handoff_to = $1,
+    updated_at = now()
+WHERE workspace_id = $2
+  AND issue_id = $3
+  AND role = 'executor'
+  AND status = 'active'
+  AND ($4::uuid IS NULL
+       OR owner_agent_id <> $4::uuid)
+`
+
+type ReleaseExecutorWorkOwnerLeaseForHandoffParams struct {
+	HandoffTo        pgtype.UUID `json:"handoff_to"`
+	WorkspaceID      pgtype.UUID `json:"workspace_id"`
+	IssueID          pgtype.UUID `json:"issue_id"`
+	KeepOwnerAgentID pgtype.UUID `json:"keep_owner_agent_id"`
+}
+
+func (q *Queries) ReleaseExecutorWorkOwnerLeaseForHandoff(ctx context.Context, arg ReleaseExecutorWorkOwnerLeaseForHandoffParams) (int64, error) {
+	result, err := q.db.Exec(ctx, releaseExecutorWorkOwnerLeaseForHandoff,
+		arg.HandoffTo,
+		arg.WorkspaceID,
+		arg.IssueID,
+		arg.KeepOwnerAgentID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const rescheduleIssueDispatchOutbox = `-- name: RescheduleIssueDispatchOutbox :one

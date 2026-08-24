@@ -24,6 +24,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/middleware"
+	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -1251,10 +1252,8 @@ func (h *Handler) lookupIssueByIdentifier(ctx context.Context, workspaceID pgtyp
 }
 
 func (h *Handler) advanceIssueToDone(ctx context.Context, issue db.Issue, workspaceID string) {
-	updated, err := h.Queries.UpdateIssueStatus(ctx, db.UpdateIssueStatusParams{
-		ID:          issue.ID,
-		Status:      "done",
-		WorkspaceID: issue.WorkspaceID,
+	updated, err := h.IssueExecution.UpdateStatus(ctx, issue, "done", service.IssueExecutionReconcileOptions{
+		TriggerKind: "github_pr_merged",
 	})
 	if err != nil {
 		slog.Warn("github: advance issue to done failed", "err", err)

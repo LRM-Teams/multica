@@ -153,7 +153,8 @@ research Work itself. Atomic Work uses `atomic_result_submission`, a non-empty
 payload schema ID other than `no_op.v1`, and an exact non-empty
 `payload.task_specific_schema`. A contract-rejected assignment with idle
 run-scoped workers must be corrected and retried rather than followed by
-`no_op`.
+`no_op`. A failed run-scoped Agent Work with no active Agent Work is likewise
+not a valid `no_op` state: the Director must retry or reassign it.
 
 Ronaldo cannot pause the whole Run. A failed Work Item is a recovery input: the
 Director must retry it, reassign it, create replacement Work, or report the
@@ -166,7 +167,7 @@ When Ronaldo decides that no state change is useful, the Proposal contains one
 with another action. An empty or missing action list is invalid. While a Run is
 active, `no_op` is also invalid when no non-Director member exists and no Agent
 creation is pending, or when idle members remain unassigned after a rejected
-Work contract.
+Work contract, or when failed Agent Work remains and no Agent Work is active.
 
 External Agent creation, Inbox dispatch, storage upload and notification use
 durable outbox intents. Database facts commit before an Adapter call. Unknown

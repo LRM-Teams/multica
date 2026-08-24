@@ -54,7 +54,8 @@ canonical state。替换后的 Agent 或主理人必须能够只依靠 PostgreSQ
   一次修复 Cycle；不要要求用户重建 Run。
 - 主理人不得自行暂停整场 Run。单个 Work Item 失败时，先读取 Brief 中的小目标、Attempt
   次数/预算、失败分类、诊断和终止原因，再选择 `retry_work_item`、`reassign_work_item`、
-  创建替代 Work，或向用户明确报告。只有用户 Stop 或发布维护控制可以暂停整场调研。
+  创建替代 Work，或向用户明确报告。存在失败的专属 Agent Work 且当前没有活动 Agent
+  Work 时不得 `no_op`。只有用户 Stop 或发布维护控制可以暂停整场调研。
 - V6 Report 是不可变的 Goal 附件，不是图节点。只有主理人发布工作流可以发布通过验证的
   package。报告资源不得输出外部 URL、凭据、应用同源依赖或 bridge 调用。
 
@@ -136,7 +137,8 @@ cycle。主理人只负责规划、组队、派工和整合，不得把原子调
 Work 使用 `atomic_result_submission`，`payload_schema_id` 必须非空且不得为
 `no_op.v1`，并在 `payload.task_specific_schema` 中携带精确、非空的结果校验器。派工
 发生合同拒绝且已有空闲专属 Agent 时，下一轮必须修正合同并重新派工，不得提交
-`no_op`；运行中尚无专属 Agent 且无 Agent 创建待处理时也不得 `no_op`。
+`no_op`；运行中尚无专属 Agent 且无 Agent 创建待处理时也不得 `no_op`。专属 Agent
+Work 已失败且当前无活动 Agent Work 时，必须重试或改派失败 Work，不得等待。
 
 存在 `catalog_access` 时，逐页读取授权 view，并确认结果实际使用的每一页：
 

@@ -506,6 +506,13 @@ scope is a platform-invalid dispatch. Recovery marks that Attempt lost with
 `attempt_count` before recompiling; it does not wait for the runtime timeout or
 spend the Agent retry budget.
 
+When every terminal Attempt for an exhausted non-Director Work reports the
+same Inbox failure as retryable `agent_error.model_not_found_or_unavailable`,
+recovery reopens that Work exactly once after a two-minute delay and records a
+stable Run Event fence. This absorbs transient provider capacity incidents but
+cannot create an unbounded retry loop. A terminal Attempt also releases its
+membership back to `idle` whenever that membership has no other active Attempt.
+
 ## 7. Transaction operation registry
 
 Implementation registers at least these stable operation labels with the

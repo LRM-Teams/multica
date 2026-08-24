@@ -919,3 +919,46 @@ func TestV6DirectorCannotNoOpAfterRejectedAssignmentWithIdleWorkers(t *testing.T
 		t.Fatalf("post-rejection no-op error=%v, want assignment recovery requirement", err)
 	}
 }
+
+func TestV6DirectorCannotNoOpWithFailedWorkerWork(t *testing.T) {
+	run := newTransactionRecoveryRun(t, "Recover failed V6 Agent Work")
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_session SET orchestrator_version='research-run-v6' WHERE id=$1::uuid`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.store.AssignV6Director(run.ctx, AssignV6DirectorInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+		AgentID: run.fixture.agentID, UserID: run.fixture.userID,
+		Reason: "Recover failed Agent Work", ClientRequestID: uuid.NewString(), ExpectedStateVersion: 0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.store.AddV6TeamMember(run.ctx, AddV6TeamMemberInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+		AgentID: run.fixture.reporterID, MissionPrompt: "Research Manus technology",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.pool.Exec(run.ctx, `INSERT INTO research_work_item(
+		id,workspace_id,session_id,kind,status,assigned_agent_id,goal_version,idempotency_key,
+		payload_schema_id,expected_result_schema_id,payload,state_version,terminal_reason_code
+	) VALUES($1::uuid,$2::uuid,$3::uuid,'research','failed',$4::uuid,1,$5,
+		'research.manus.v1','atomic_result_submission','{}'::jsonb,1,'attempt_budget_exhausted')`,
+		uuid.NewString(), run.fixture.workspaceID, run.fixture.sessionID, run.fixture.reporterID,
+		"failed-worker:"+uuid.NewString()); err != nil {
+		t.Fatal(err)
+	}
+	var stateVersion int64
+	if err := run.pool.QueryRow(run.ctx, `SELECT state_version FROM research_session WHERE id=$1::uuid`, run.fixture.sessionID).Scan(&stateVersion); err != nil {
+		t.Fatal(err)
+	}
+	action := v6DirectorAction{
+		ActionID: uuid.NewString(), Kind: "no_op", IdempotencyKey: "failed-worker-no-op:" + uuid.NewString(),
+		PayloadSchema: "no_op.v1", Reason: "Wait for the next brief",
+	}
+	err := run.store.recordV6DirectorNoOp(run.ctx, v6DirectorProposal{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+	}, uuid.NewString(), action, stateVersion, action.Reason)
+	if !errors.Is(err, ErrInvalidContract) || !strings.Contains(err.Error(), "retry or reassign failed Work") {
+		t.Fatalf("failed-worker no-op error=%v, want recovery requirement", err)
+	}
+}

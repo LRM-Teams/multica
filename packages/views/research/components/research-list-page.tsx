@@ -105,6 +105,7 @@ type ComposerDraft = {
  * surface in the UI — the user picks a behavior, not an orchestrator tag.
  */
 const CLASSIC_FLEET_VALUE = "__classic_fleet__";
+const PREFERRED_DIRECTOR_UNAVAILABLE_VALUE = "__preferred_director_unavailable__";
 
 function emptyComposer(uiLanguage?: string): ComposerDraft {
   return {
@@ -221,7 +222,7 @@ export function ResearchListPage() {
       ? t(($) => $.home.lead_fleet_option)
       : selectedDirector
         ? selectedDirector.display_name || selectedDirector.name || selectedDirector.id
-        : t(($) => $.d5.rail.director_fallback);
+        : t(($) => $.home.preferred_director_unavailable_label);
   const { data, isLoading, isFetching, isError, error, refetch } = useQuery(
     researchSessionListOptions(wsId),
   );
@@ -750,11 +751,18 @@ export function ResearchListPage() {
                     <Select
                       value={
                         orchestratorVersion === "research-run-v6"
-                          ? selectedDirectorId
+                          ? selectedDirectorId || PREFERRED_DIRECTOR_UNAVAILABLE_VALUE
                           : CLASSIC_FLEET_VALUE
                       }
                       onValueChange={(next) => {
-                        if (createBusy || typeof next !== "string" || next === "") return;
+                        if (
+                          createBusy ||
+                          typeof next !== "string" ||
+                          next === "" ||
+                          next === PREFERRED_DIRECTOR_UNAVAILABLE_VALUE
+                        ) {
+                          return;
+                        }
                         setComposer((prev) => ({
                           ...prev,
                           orchestratorVersion:
@@ -776,6 +784,11 @@ export function ResearchListPage() {
                         <SelectValue>{leadLabel}</SelectValue>
                       </SelectTrigger>
                       <SelectContent align="start">
+                        {!selectedDirectorId ? (
+                          <SelectItem disabled value={PREFERRED_DIRECTOR_UNAVAILABLE_VALUE}>
+                            {t(($) => $.home.preferred_director_unavailable_label)}
+                          </SelectItem>
+                        ) : null}
                         {availableDirectors.map((agent) => (
                           <SelectItem key={agent.id} value={agent.id}>
                             {agent.display_name || agent.name || agent.id}
@@ -835,9 +848,9 @@ export function ResearchListPage() {
                 </div>
                 {orchestratorVersion === "research-run-v6" &&
                 !agentsQuery.isLoading &&
-                availableDirectors.length === 0 ? (
+                !selectedDirectorId ? (
                   <p className="border-t px-3 py-2 text-xs text-destructive md:px-3.5" role="alert">
-                    {t(($) => $.home.no_available_director)}
+                    {t(($) => $.home.preferred_director_unavailable)}
                   </p>
                 ) : null}
               </div>

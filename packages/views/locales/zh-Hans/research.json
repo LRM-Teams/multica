@@ -750,6 +750,8 @@
     "creating": "组建舰队中…",
     "create_failed": "调研会话创建失败",
     "no_available_director": "当前没有可执行 V6 的在线调研主理人。请先启动或升级其绑定的电脑。",
+    "preferred_director_unavailable": "默认调研主理人罗纳尔多当前不在线。请先启动其绑定的电脑再创建 V6 调研，或主动选择其他主理人。",
+    "preferred_director_unavailable_label": "罗纳尔多暂不可用",
     "director_unavailable": "所选调研主理人已不可用，请改选其他在线主理人。",
     "director_runtime_offline": "调研主理人的电脑当前离线，请启动后重试。",
     "bootstrap_pending": "调研任务已保存，但主理人暂未成功接单，系统正在自动重试；请重试此操作以进入任务。",

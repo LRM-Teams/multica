@@ -167,11 +167,6 @@ type canonicalAgentRuntimeAcquireRequest struct {
 	Context context.Context
 }
 
-// ResidentRuntimeRecoveredSubscriber is notified when a resident backend is
-// successfully factory-created for an agent×runtime slot (not on reuse).
-// Used to clear the server-side crashed_since after local recovery.
-type ResidentRuntimeRecoveredSubscriber func(agentID, runtimeID string)
-
 type canonicalAgentRuntimePool struct {
 	mu                      sync.Mutex
 	slots                   map[string]*canonicalAgentRuntimeSlot
@@ -193,11 +188,10 @@ type canonicalAgentRuntimePool struct {
 	liveAgentProcesses atomic.Int64
 	evictForCapTotal   atomic.Int64
 
-	crashMu          sync.Mutex
-	crashSubscribers []ResidentRuntimeCrashSubscriber
-
-	recoverMu          sync.Mutex
-	recoverSubscribers []ResidentRuntimeRecoveredSubscriber
+	// residentProcessMu guards residentProcessSubscribers and serializes
+	// delivery through emitResidentProcessEvent (resident_process_event.go).
+	residentProcessMu          sync.Mutex
+	residentProcessSubscribers []func(residentProcessEvent)
 
 	// nextResume is the composer-applied provider session for the next
 	// acquire when the caller does not pass CanonicalSessionID. An explicit
@@ -207,7 +201,6 @@ type canonicalAgentRuntimePool struct {
 	// Message turn. Zero disables the recovery watchdog (used by tests and
 	// operators that opt out).
 	residentStallWatchdog time.Duration
-	residentStallObserver func(agentID, runtimeID string, staleFor time.Duration)
 }
 
 type canonicalAgentRuntimeSlot struct {
@@ -228,6 +221,31 @@ type canonicalAgentRuntimeSlot struct {
 	lastPendingTargetFingerprint   map[string]string
 	lastPendingNoticeCoordinatorID string
 	lastPendingNoticeGeneration    uint64
+	lastAppInboxNoticeFingerprint  string
+	// lastRuntimeActivityAt is the slot-level silence clock. Unlike the
+	// per-turn watchdog stamp it survives across turns, so a delivery that
+	// never reaches native acceptance can still tell how long this resident
+	// runtime has been silent. Stamped at process create and on every
+	// observed provider Message; zero means "unknown", which never recovers.
+	lastRuntimeActivityAt time.Time
+	// outstandingToolCalls tracks tool calls this process started but has not
+	// reported a result for. Raft 1.0.17 refuses stalled recovery while any
+	// is in flight (a live Pi may legitimately be running a long tool).
+	outstandingToolCalls map[string]struct{}
+	// stalledRecovering is Raft's alreadyRecovering fence. The server
+	// redelivers roughly every 20s, so without it each redelivery would fire
+	// another kill while the first teardown is still in flight.
+	stalledRecovering bool
+	// terminated signals that this slot's resident process is confirmed gone
+	// AND slot.running has been released — the single completion fact
+	// awaitTerminated waits on instead of polling hasRunningTurn/
+	// residentProcessAlive separately. It is created fresh whenever a new
+	// backend is attached (see acquire()'s create-only branch) and closed by
+	// closeBackend(), the one place both halves of that fact are always
+	// settled together before slot.mu is released (see closeBackend's
+	// comment for why). A nil channel means this slot has never had a
+	// backend, so there is nothing to await.
+	terminated chan struct{}
 }
 
 func newCanonicalAgentRuntimePool() *canonicalAgentRuntimePool {
@@ -247,13 +265,6 @@ func (p *canonicalAgentRuntimePool) setResidentStallWatchdog(window time.Duratio
 		return
 	}
 	p.residentStallWatchdog = window
-}
-
-func (p *canonicalAgentRuntimePool) setResidentStallObserver(observer func(agentID, runtimeID string, staleFor time.Duration)) {
-	if p == nil {
-		return
-	}
-	p.residentStallObserver = observer
 }
 
 // setMaxAgentProcesses configures the #35 live-resident-agent process ceiling.
@@ -442,12 +453,23 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 		slot.backend = created
 		slot.close = closeBackend
 		slot.provider = request.Identity.Provider
+		// Re-arm the termination signal for this new process. A stale closed
+		// channel from a previous backend on this same slot must never make
+		// the next awaitTerminated return instantly.
+		slot.terminated = make(chan struct{})
+		// Stamp the silence clock at spawn. A zero value would make the very
+		// first deferred delivery treat a still-booting process as stalled.
+		slot.lastRuntimeActivityAt = now
+		slot.outstandingToolCalls = nil
+		slot.stalledRecovering = false
 		machineGrantAttached = true
 		// New resident process is up — clear any server-side "crashed"
 		// fact from a prior idle death. First-ever create is a no-op clear.
 		// Fire async: we still hold slot.mu here and subscribers may do I/O.
 		agentID, runtimeID := request.Identity.AgentID, request.Identity.RuntimeID
-		go p.notifyResidentRecovered(agentID, runtimeID)
+		go p.emitResidentProcessEvent(residentProcessEvent{
+			AgentID: agentID, RuntimeID: runtimeID, Kind: residentProcessRecovered, At: now,
+		})
 	}
 
 	wrapped := &canonicalSessionBackend{
@@ -554,6 +576,30 @@ func (l *canonicalAgentRuntimeLease) releaseAt(healthy bool, now time.Time) {
 	})
 }
 
+// silentFor reports how long this resident runtime has produced no provider
+// activity, reading the single lastRuntimeActivityAt clock. ok is false when
+// the slot has no activity stamp yet (no process, or one that has not been
+// stamped), which never counts as stalled. This is the sole staleness
+// accessor: both startResidentStallWatchdog (resident_stall_watch.go) and
+// recoverStalledSlotForQueuedMessage (resident_stall_queued_recovery.go)
+// read the same clock through this method rather than tracking their own.
+func (slot *canonicalAgentRuntimeSlot) silentFor(now time.Time) (time.Duration, bool) {
+	if slot == nil {
+		return 0, false
+	}
+	slot.mu.Lock()
+	defer slot.mu.Unlock()
+	return slot.silentForLocked(now)
+}
+
+// silentForLocked is silentFor for callers that already hold slot.mu.
+func (slot *canonicalAgentRuntimeSlot) silentForLocked(now time.Time) (time.Duration, bool) {
+	if slot.lastRuntimeActivityAt.IsZero() {
+		return 0, false
+	}
+	return now.Sub(slot.lastRuntimeActivityAt), true
+}
+
 func (slot *canonicalAgentRuntimeSlot) closeBackend() {
 	if slot.close != nil {
 		slot.close()
@@ -565,7 +611,52 @@ func (slot *canonicalAgentRuntimeSlot) closeBackend() {
 	slot.lastPendingTargetFingerprint = nil
 	slot.lastPendingNoticeCoordinatorID = ""
 	slot.lastPendingNoticeGeneration = 0
+	slot.lastAppInboxNoticeFingerprint = ""
 	slot.invalidateAfterInput = false
+	slot.lastRuntimeActivityAt = time.Time{}
+	slot.outstandingToolCalls = nil
+	slot.stalledRecovering = false
+	// Every closeBackend() caller either already has slot.running false or
+	// sets it false in the same slot.mu critical section as this call (see
+	// releaseAt's unhealthy branch, failResidentMessageInputAttempt,
+	// finishResidentMessageInput), so by the time slot.mu is released both
+	// halves of the terminated fact — process gone, running released — are
+	// always settled together; no waiter can observe them out of order. Every
+	// call site is a real process teardown (an idle-path close, a
+	// force-killed turn's own detach, idle eviction, or a confirmed-dead
+	// liveness sweep), so this is the single correct place to close the
+	// signal. Guard against a double close: closeBackend() is idempotent by
+	// design (e.g. beginResidentTermination's idle path can run again
+	// against an already-closed slot).
+	if slot.terminated != nil {
+		select {
+		case <-slot.terminated:
+		default:
+			close(slot.terminated)
+		}
+	}
+}
+
+// awaitTerminated blocks until this slot's resident process is confirmed
+// gone and slot.running has been released (see the terminated field), or
+// until ctx is done. A slot that has never had a backend has nothing to
+// await and returns immediately.
+func (slot *canonicalAgentRuntimeSlot) awaitTerminated(ctx context.Context) error {
+	if slot == nil {
+		return nil
+	}
+	slot.mu.Lock()
+	ch := slot.terminated
+	slot.mu.Unlock()
+	if ch == nil {
+		return nil
+	}
+	select {
+	case <-ch:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (p *canonicalAgentRuntimePool) slotCount() int {
@@ -612,7 +703,7 @@ func (p *canonicalAgentRuntimePool) takeNextResumeSession(agentID, runtimeID str
 	return sessionID, true
 }
 
-func (p *canonicalAgentRuntimePool) hasLiveLease(agentID, runtimeID string) bool {
+func (p *canonicalAgentRuntimePool) hasRunningTurn(agentID, runtimeID string) bool {
 	if p == nil {
 		return false
 	}
@@ -858,10 +949,7 @@ func (p *canonicalAgentRuntimePool) deliverIdleMessages(
 	slot.mu.Unlock()
 
 	compactedThisInput := false
-	var lastActivityAt atomic.Int64
-	lastActivityAt.Store(time.Now().UnixNano())
 	observeRuntimeMessage := func(message agent.Message) {
-		lastActivityAt.Store(time.Now().UnixNano())
 		if message.Type == agent.MessageCompactionStarted {
 			compactedThisInput = true
 		}
@@ -933,6 +1021,7 @@ func (p *canonicalAgentRuntimePool) deliverIdleMessages(
 	// processing that accepted input afterward, so retain pool-level admission
 	// until its completion receipt resolves without delaying boundary persistence.
 	slot.messageInputDone = acceptance.Done
+	slot.lastRuntimeActivityAt = time.Now()
 	var generation uint64
 	if !invalidated {
 		slot.messageInputGeneration++
@@ -970,7 +1059,7 @@ func (p *canonicalAgentRuntimePool) deliverIdleMessages(
 				onComplete(turnErr, gen, capture)
 			}
 		})
-		p.startResidentStallWatchdog(agentID, runtimeID, slot, &lastActivityAt, turnDone)
+		p.startResidentStallWatchdog(agentID, runtimeID, slot, turnDone)
 		return nil
 	}
 	// Raft: compaction does not cover inbox. After a prepare-time compact,
@@ -987,7 +1076,7 @@ func (p *canonicalAgentRuntimePool) deliverIdleMessages(
 			onComplete(turnErr, gen, capture)
 		}
 	})
-	p.startResidentStallWatchdog(agentID, runtimeID, slot, &lastActivityAt, turnDone)
+	p.startResidentStallWatchdog(agentID, runtimeID, slot, turnDone)
 	turnErr := <-finished
 	if turnErr != nil {
 		return turnErr
@@ -1025,21 +1114,36 @@ func (p *canonicalAgentRuntimePool) observeResidentRuntimeMessage(slot *canonica
 	}
 	slot.mu.Lock()
 	defer slot.mu.Unlock()
+	slot.lastRuntimeActivityAt = time.Now()
 	switch message.Type {
 	case agent.MessageCompactionStarted:
 		slot.compacting = true
-	case agent.MessageCompactionFinished, agent.MessageThinking, agent.MessageText, agent.MessageToolUse, agent.MessageError:
+	case agent.MessageToolUse:
+		slot.compacting = false
+		if callID := strings.TrimSpace(message.CallID); callID != "" {
+			if slot.outstandingToolCalls == nil {
+				slot.outstandingToolCalls = make(map[string]struct{}, 1)
+			}
+			slot.outstandingToolCalls[callID] = struct{}{}
+		}
+	case agent.MessageToolResult:
+		if callID := strings.TrimSpace(message.CallID); callID != "" {
+			delete(slot.outstandingToolCalls, callID)
+		}
+	case agent.MessageCompactionFinished, agent.MessageThinking, agent.MessageText, agent.MessageError:
 		slot.compacting = false
 	}
 }
 
-// handoffIdleReminderInput crosses the same single resident-turn admission
-// lock as canonical Messages but owns no MessageCoordinator state. Busy and
-// native-acceptance failures are returned directly to the transient caller;
-// nothing here queues, retries, or schedules an idle-boundary replay.
-func (p *canonicalAgentRuntimePool) handoffIdleReminderInput(ctx context.Context, agentID, runtimeID string, inputValue agent.ResidentReminderInput) error {
+// deliverAppInboxNotice crosses the resident input boundary without carrying
+// any App item body. The durable App Inbox owns retry and consumption; this
+// method owns only per-process notice suppression.
+func (p *canonicalAgentRuntimePool) deliverAppInboxNotice(ctx context.Context, agentID, runtimeID string, notice agent.ResidentPendingNotice, fingerprint string) error {
 	if p == nil {
 		return errors.New("canonical agent runtime pool is nil")
+	}
+	if strings.TrimSpace(fingerprint) == "" || notice.PendingAppItems < 1 {
+		return errors.New("App Inbox notice identity and positive item count are required")
 	}
 	key := strings.TrimSpace(agentID) + "\x00" + strings.TrimSpace(runtimeID)
 	p.mu.Lock()
@@ -1050,18 +1154,36 @@ func (p *canonicalAgentRuntimePool) handoffIdleReminderInput(ctx context.Context
 	}
 	slot.mu.Lock()
 	p.mu.Unlock()
-	if slot.running {
-		slot.mu.Unlock()
-		return ErrCanonicalAgentRuntimeBusy
-	}
 	if slot.backend == nil {
 		slot.mu.Unlock()
 		return errors.New("canonical resident runtime is unavailable")
 	}
-	input, ok := slot.backend.(agent.ResidentReminderInputReceiver)
+	if slot.lastAppInboxNoticeFingerprint == fingerprint {
+		slot.mu.Unlock()
+		return nil
+	}
+	if slot.running {
+		if slot.compacting {
+			slot.mu.Unlock()
+			return ErrCanonicalAgentRuntimeBusy
+		}
+		input, ok := slot.backend.(agent.ResidentPendingNoticeInput)
+		if !ok {
+			slot.mu.Unlock()
+			return errors.New("canonical resident runtime does not support busy Inbox Notice input")
+		}
+		if err := input.AcceptPendingNotice(ctx, notice); err != nil {
+			slot.mu.Unlock()
+			return err
+		}
+		slot.lastAppInboxNoticeFingerprint = fingerprint
+		slot.mu.Unlock()
+		return nil
+	}
+	input, ok := slot.backend.(agent.ResidentIdleInboxNoticeInput)
 	if !ok {
 		slot.mu.Unlock()
-		return errors.New("canonical resident runtime does not support transient Reminder input")
+		return errors.New("canonical resident runtime does not support idle Inbox Notice input")
 	}
 	slot.running = true
 	slot.messageInputAttempt++
@@ -1075,7 +1197,7 @@ func (p *canonicalAgentRuntimePool) handoffIdleReminderInput(ctx context.Context
 		acceptCtx, cancel = context.WithTimeout(ctx, canonicalIdleAcceptTimeout)
 		defer cancel()
 	}
-	acceptance, err := input.AcceptReminderInput(acceptCtx, inputValue)
+	acceptance, err := input.AcceptIdleInboxNotice(acceptCtx, notice)
 	slot.mu.Lock()
 	if err != nil {
 		freed := false
@@ -1103,17 +1225,38 @@ func (p *canonicalAgentRuntimePool) handoffIdleReminderInput(ctx context.Context
 			slot.idleSince = time.Now()
 		}
 		slot.mu.Unlock()
-		return errors.New("canonical resident runtime returned no Reminder input completion receipt")
+		return errors.New("canonical resident runtime returned no Inbox Notice completion receipt")
 	}
 	invalidated := slot.messageInputAttempt != attempt || slot.invalidationGeneration != invalidationGeneration
 	slot.messageInputDone = acceptance.Done
+	if !invalidated {
+		slot.lastAppInboxNoticeFingerprint = fingerprint
+	}
 	slot.mu.Unlock()
 	activityDone := drainResidentActivity(acceptance.Messages, nil)
 	go p.finishResidentMessageInput(slot, acceptance.Done, activityDone, drainResidentCapture(acceptance.Capture), 0, nil)
 	if invalidated {
-		return errors.New("canonical resident runtime was invalidated during Reminder input acceptance")
+		return errors.New("canonical resident runtime was invalidated during Inbox Notice acceptance")
 	}
 	return nil
+}
+
+func (p *canonicalAgentRuntimePool) clearAppInboxNoticeMemo(agentID, runtimeID string) {
+	if p == nil {
+		return
+	}
+	key := strings.TrimSpace(agentID) + "\x00" + strings.TrimSpace(runtimeID)
+	p.mu.Lock()
+	slot := p.slots[key]
+	if slot != nil {
+		slot.mu.Lock()
+	}
+	p.mu.Unlock()
+	if slot == nil {
+		return
+	}
+	slot.lastAppInboxNoticeFingerprint = ""
+	slot.mu.Unlock()
 }
 
 func drainResidentActivity(messages <-chan agent.Message, onMessage func(agent.Message)) <-chan struct{} {
@@ -1209,9 +1352,13 @@ func (p *canonicalAgentRuntimePool) deliverBusyInboxNotice(ctx context.Context, 
 		return errors.New("canonical resident runtime does not support Pending Notice input")
 	}
 	notice := snapshot.Notice
+	if len(snapshot.TargetKeys) != len(snapshot.Notice.ChangedTargets) {
+		return errors.New("pending Notice target metadata is inconsistent")
+	}
 	notice.ChangedTargets = make([]agent.ResidentPendingTarget, 0, len(snapshot.Notice.ChangedTargets))
-	for _, target := range snapshot.Notice.ChangedTargets {
-		if snapshot.TargetFingerprints[target.Target] != slot.lastPendingTargetFingerprint[target.Target] {
+	for i, target := range snapshot.Notice.ChangedTargets {
+		internalTarget := snapshot.TargetKeys[i]
+		if snapshot.TargetFingerprints[internalTarget] != slot.lastPendingTargetFingerprint[internalTarget] {
 			notice.ChangedTargets = append(notice.ChangedTargets, target)
 		}
 	}
@@ -1378,21 +1525,25 @@ func (p *canonicalAgentRuntimePool) invalidateSession(agentID, runtimeID string)
 	return nil
 }
 
-// forceInvalidateSession interrupts a busy slot instead of refusing it
+// beginResidentTermination interrupts a busy slot instead of refusing it
 // (task #62 — invalidateSession is deliberately for the already-idle case
-// only). It never calls closeBackend() on a running slot: that would race
-// with whatever goroutine currently holds Execute() against the same
-// backend. Instead it asks the backend itself to force-kill its process via
-// agent.ResidentRuntimeForceKillable, then returns — the in-flight turn's own
-// goroutine is expected to observe the failure and release the slot, exactly
-// as it already does for an unexpected crash (task #42②'s self-heal path).
+// only) and requests termination without waiting for it. It never calls
+// closeBackend() on a running slot: that would race with whatever goroutine
+// currently holds Execute() against the same backend. Instead it asks the
+// backend itself to force-kill its process via agent.ResidentRuntimeForceKillable,
+// then returns — the in-flight turn's own goroutine is expected to observe
+// the failure and release the slot, exactly as it already does for an
+// unexpected crash (task #42②'s self-heal path).
 //
 // If the slot is idle, this behaves exactly like invalidateSession (no
 // force-kill needed, nothing to interrupt). If the backend does not
 // implement ResidentRuntimeForceKillable, this fails closed with
 // ErrCanonicalAgentRuntimeBusy rather than silently no-op'ing — a missing
 // capability must be loud, not indistinguishable from "nothing to do."
-func (p *canonicalAgentRuntimePool) forceInvalidateSession(agentID, runtimeID string) error {
+//
+// This is the non-blocking half of resident termination. Callers that need
+// to know the process is actually gone want terminateResident instead.
+func (p *canonicalAgentRuntimePool) beginResidentTermination(agentID, runtimeID string) error {
 	if p == nil {
 		return nil
 	}
@@ -1436,25 +1587,99 @@ func (p *canonicalAgentRuntimePool) forceInvalidateSession(agentID, runtimeID st
 	return killable.ForceKill()
 }
 
-// awaitSessionQuiescence turns ForceKill's request receipt into Raft's stop
-// completion boundary: no inactive status may be emitted while the old turn
-// still owns its lease or the resident provider process is still alive.
-func (p *canonicalAgentRuntimePool) awaitSessionQuiescence(ctx context.Context, agentID, runtimeID string) error {
+// residentTerminationWait bounds terminateResident's wait for confirmation
+// that a resident process is actually gone. Internal to the pool: callers
+// pass their own ctx for cancellation, but must never be able to make this
+// wait unbounded (a caller's connection ctx living far longer than any
+// process teardown should is exactly the bug this replaces).
+const residentTerminationWait = 5 * time.Second
+
+// residentTerminationTimeout reports the state of each condition that was
+// still unmet when terminateResident's bounded wait elapsed. Both conditions
+// are independent and can be true at once, which is why this is a struct and
+// not a pair of sentinel errors: ProcessAlive means the OS process itself is
+// still present (usually uninterruptible sleep, a process-level problem);
+// TurnRunning means our own turn goroutine never released the slot (a code
+// wedge). Distinguishing them is the entire diagnostic value of this type.
+type residentTerminationTimeout struct {
+	AgentID, RuntimeID string
+	// ProcessAlive is true when the OS process is still present.
+	ProcessAlive bool
+	// TurnRunning is true when slot.running was never released.
+	TurnRunning bool
+}
+
+func (e *residentTerminationTimeout) Error() string {
+	var unmet []string
+	if e.ProcessAlive {
+		unmet = append(unmet, "OS process still alive")
+	}
+	if e.TurnRunning {
+		unmet = append(unmet, "turn goroutine never released the slot")
+	}
+	if len(unmet) == 0 {
+		unmet = []string{"unknown condition"}
+	}
+	return fmt.Sprintf("resident termination timed out for agent %s runtime %s: %s",
+		e.AgentID, e.RuntimeID, strings.Join(unmet, ", "))
+}
+
+// awaitResidentTerminated is the confirm-only half of resident termination:
+// it blocks until the resident process for agentID/runtimeID is confirmed
+// gone and the slot has been released, bounded internally to
+// residentTerminationWait (intersected with ctx, whichever is shorter). It
+// does not itself request termination — call beginResidentTermination first.
+// Splitting the two lets a caller dispatch the kill immediately and defer
+// the bounded wait until some other precondition has resolved, e.g.
+// stopManagedAgent must fire the kill before waiting on a concurrent managed
+// start's startupDone: a start blocked inside provider spawn runs on the
+// Workspace Runner's own lifetime context, not the stop's ctx, so nothing
+// but an explicit kill can ever unblock it — waiting first would deadlock.
+// If the wait elapses without confirmation, the returned error is a
+// *residentTerminationTimeout reporting which condition(s) were still unmet,
+// so a caller can tell a wedged OS process apart from a wedged turn
+// goroutine.
+func (p *canonicalAgentRuntimePool) awaitResidentTerminated(ctx context.Context, agentID, runtimeID string) error {
+	if p == nil {
+		return nil
+	}
+	agentID = strings.TrimSpace(agentID)
+	runtimeID = strings.TrimSpace(runtimeID)
+	key := agentID + "\x00" + runtimeID
+	p.mu.Lock()
+	slot := p.slots[key]
+	p.mu.Unlock()
+	if slot == nil {
+		return nil
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		if !p.hasLiveLease(agentID, runtimeID) && !p.residentProcessAlive(agentID, runtimeID) {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
+	waitCtx, cancel := context.WithTimeout(ctx, residentTerminationWait)
+	defer cancel()
+	if err := slot.awaitTerminated(waitCtx); err != nil {
+		return &residentTerminationTimeout{
+			AgentID:      agentID,
+			RuntimeID:    runtimeID,
+			ProcessAlive: p.residentProcessAlive(agentID, runtimeID),
+			TurnRunning:  p.hasRunningTurn(agentID, runtimeID),
 		}
 	}
+	return nil
+}
+
+// terminateResident terminates the resident process and returns once it is
+// actually gone and the slot has been released. It is beginResidentTermination
+// plus awaitResidentTerminated — no polling — for callers that do not need
+// the kill and the confirm wait split across some other precondition.
+func (p *canonicalAgentRuntimePool) terminateResident(ctx context.Context, agentID, runtimeID string) error {
+	if p == nil {
+		return nil
+	}
+	if err := p.beginResidentTermination(agentID, runtimeID); err != nil {
+		return err
+	}
+	return p.awaitResidentTerminated(ctx, agentID, runtimeID)
 }
 
 // revokeResidentPiRunIdentity retires only the requested run binding. A stale
@@ -1524,68 +1749,23 @@ func (p *canonicalAgentRuntimePool) evictIdle(before time.Time) int {
 	return removed
 }
 
-// ResidentRuntimeCrashEvent describes a resident provider process found dead
-// while idle between turns — the case task #42 exists for. A turn's own
-// error path already surfaces a dead process; this is the proactive path for
-// when no turn happens to be running at the moment it died, which is exactly
-// how the ui-designer agent's opencode process sat crashed for 8 hours with
-// nothing noticing.
-type ResidentRuntimeCrashEvent struct {
-	AgentID    string
-	RuntimeID  string
-	Provider   string
-	DetectedAt time.Time
-}
-
-// ResidentRuntimeCrashSubscriber receives every crash checkResidentLiveness
-// finds. Multiple independent consumers (crash-recovery restart, external
-// status reporting) subscribe to the same detection pass instead of each
-// polling process liveness themselves.
-type ResidentRuntimeCrashSubscriber func(ResidentRuntimeCrashEvent)
-
-// subscribeResidentRuntimeCrash registers fn to run for every future crash
-// event. It does not replay past events.
-func (p *canonicalAgentRuntimePool) subscribeResidentRuntimeCrash(fn ResidentRuntimeCrashSubscriber) {
-	if p == nil || fn == nil {
-		return
-	}
-	p.crashMu.Lock()
-	defer p.crashMu.Unlock()
-	p.crashSubscribers = append(p.crashSubscribers, fn)
-}
-
-// subscribeResidentRuntimeRecovered registers fn for successful resident
-// backend creates (not reuse). Idempotent ClearAgentCrashed on the server
-// is safe even when there was no prior crash.
-func (p *canonicalAgentRuntimePool) subscribeResidentRuntimeRecovered(fn ResidentRuntimeRecoveredSubscriber) {
-	if p == nil || fn == nil {
-		return
-	}
-	p.recoverMu.Lock()
-	defer p.recoverMu.Unlock()
-	p.recoverSubscribers = append(p.recoverSubscribers, fn)
-}
-
-func (p *canonicalAgentRuntimePool) notifyResidentRecovered(agentID, runtimeID string) {
-	if p == nil {
-		return
-	}
-	p.recoverMu.Lock()
-	subs := append([]ResidentRuntimeRecoveredSubscriber(nil), p.recoverSubscribers...)
-	p.recoverMu.Unlock()
-	for _, sub := range subs {
-		sub(agentID, runtimeID)
-	}
-}
-
 // checkResidentLiveness polls every idle resident slot's process liveness and
-// evicts + reports any found definitively dead (known=true, alive=false).
-// This must fail open: an in-flight turn, a non-resident slot, a backend that
-// doesn't implement agent.ResidentRuntimeLivenessChecker, or an unknown
+// evicts + reports any found definitively dead (known=true, alive=false) —
+// the case task #42 exists for. A turn's own error path already surfaces a
+// dead process; this is the proactive path for when no turn happens to be
+// running at the moment it died, which is exactly how the ui-designer
+// agent's opencode process sat crashed for 8 hours with nothing noticing.
+//
+// This must fail open: an in-flight turn, a non-resident slot, a backend
+// that doesn't implement agent.ResidentRuntimeLivenessChecker, or an unknown
 // liveness answer are all left untouched — none of those are proof of a
 // crash, and misclassifying a merely-quiet process as dead would kill a
-// perfectly healthy resident session.
-func (p *canonicalAgentRuntimePool) checkResidentLiveness(now time.Time) []ResidentRuntimeCrashEvent {
+// perfectly healthy resident session. Every confirmed-dead slot is both
+// returned and delivered through emitResidentProcessEvent as a
+// residentProcessExited event, so callers that want the detection pass
+// itself and callers that only want the notification can each be served
+// without polling liveness twice.
+func (p *canonicalAgentRuntimePool) checkResidentLiveness(now time.Time) []residentProcessEvent {
 	if p == nil {
 		return nil
 	}
@@ -1600,7 +1780,7 @@ func (p *canonicalAgentRuntimePool) checkResidentLiveness(now time.Time) []Resid
 	}
 	p.mu.Unlock()
 
-	var events []ResidentRuntimeCrashEvent
+	var events []residentProcessEvent
 	for _, ref := range refs {
 		ref.slot.mu.Lock()
 		if ref.slot.running || ref.slot.backend == nil {
@@ -1622,24 +1802,17 @@ func (p *canonicalAgentRuntimePool) checkResidentLiveness(now time.Time) []Resid
 		ref.slot.mu.Unlock()
 
 		agentID, runtimeID := splitCanonicalSlotKey(ref.key)
-		events = append(events, ResidentRuntimeCrashEvent{
-			AgentID:    agentID,
-			RuntimeID:  runtimeID,
-			Provider:   provider,
-			DetectedAt: now,
+		events = append(events, residentProcessEvent{
+			AgentID:   agentID,
+			RuntimeID: runtimeID,
+			Kind:      residentProcessExited,
+			Provider:  provider,
+			At:        now,
 		})
 	}
 
-	if len(events) == 0 {
-		return nil
-	}
-	p.crashMu.Lock()
-	subs := append([]ResidentRuntimeCrashSubscriber(nil), p.crashSubscribers...)
-	p.crashMu.Unlock()
 	for _, ev := range events {
-		for _, sub := range subs {
-			sub(ev)
-		}
+		p.emitResidentProcessEvent(ev)
 	}
 	return events
 }

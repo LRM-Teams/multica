@@ -173,7 +173,10 @@ mismatch fails before domain mutation.
 A Work Manifest binds immutable protocol version, Director-authored mission,
 Goal version, Branch state versions, artifact versions, representations and
 expected result schema. The Agent cannot cite platform-supplied material absent
-from that Manifest.
+from that Manifest. For Director-created Work, the persisted Work-to-Branch
+associations are the scope authority; dispatch resolves those associations to
+the current Branch versions and freezes them as `branch_refs`. The Agent copies
+those references exactly and never substitutes the Run state version.
 
 V6 dispatch uses `research-v6-context-v1`, distinct from the V1–V5 legacy
 compatibility policy. It admits only current `registered | accepted` artifacts
@@ -342,8 +345,24 @@ workers, nested frames, external network and a generic parent bridge are not.
 
 Projection is rebuilt from canonical tables and Events. Report never appears in
 the graph node enum. Default Snapshot includes Goal, Branch Frontier M+, terminal
-high nodes, every unabsorbed Work/Result S, and no absorbed node. Expansion reads
+high nodes, active Work S, unabsorbed Result S, and no absorbed node. A terminal
+research Work S that already produced a Result S is represented by one
+non-canonical `collapsed_path`; terminal Director control work stays in the
+canonical slice but is omitted from the default research canvas. Expansion reads
 one Derivation layer at a time.
+
+Work S branch scope comes from the assigned `research_v6_work_item_branch` rows,
+not from a future Result. The presentation-only work-activity read model resolves
+the latest Attempt, assigned Agent, Inbox Task and durable progress for a selected
+Work S. That same read model reads a bounded process history directly from
+persisted Runner Activity entries, filtered to the Attempt's exact Inbox Task
+`started_at` / `completed_at` lifecycle window; dispatch time is not an
+execution boundary. The existing `agent:activity` Query-cache
+write path overlays new live entries. Matching `task:running`, progress and
+terminal events refetch the selected activity read model, and the work Projection
+revision includes the latest Attempt, Inbox Task lifecycle and durable progress
+timestamps for reconnect recovery. Neither activity nor canvas coordinates
+become canonical Research state.
 
 `collapsed_path` and density bins are explicitly non-canonical. Snapshot pages
 share one `snapshot_id + through_event_sequence`; Delta sequence is continuous.
@@ -354,11 +373,13 @@ forces Snapshot reload.
 ## Version and rollout rules
 
 1. The target schema hash above is frozen by this documentation phase.
-2. Implementation slice 0 replaces the old code-coupled V6 schema and its hash
-   test in one commit while V6 remains unsupported.
+2. Implementation slice 0 replaced the old code-coupled V6 schema and its hash
+   test in one commit before explicit user V6 create opened.
 3. V1–V5 decoders reject all V6 envelopes and do not receive V6 optional fields.
 4. Historical V1–V5 Run rows remain on their pinned orchestrator version.
-5. Activation applies only to new Runs and requires an exercised V5 rollback.
+5. Changing the omitted-version default to V6 applies only to new Runs and
+   requires an exercised V5 rollback. Explicit V6 create is independently
+   controlled by the workspace release policy.
 6. After implementation slice 0 freezes the target under the canonical filename,
    an incompatible hash change requires V7.
 

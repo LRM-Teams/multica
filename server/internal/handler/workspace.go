@@ -391,7 +391,7 @@ type MemberWithUserResponse struct {
 	DisplayName        string                 `json:"display_name"`
 	Email              string                 `json:"email"`
 	AvatarURL          *string                `json:"avatar_url"`
-	ProfileDescription string                 `json:"profile_description"`
+	ProfileDescription string                 `json:"description"`
 	Honor              *honorSnapshotResponse `json:"honor,omitempty"`
 }
 

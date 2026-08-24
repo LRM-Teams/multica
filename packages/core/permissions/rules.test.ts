@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Agent, Comment, Member, RuntimeDevice, Skill } from "../types";
+import { makeRuntime as sharedRuntime } from "../runtimes/runtime-fixture";
 import {
   canAssignAgentToIssue,
   canChangeAgentWorkspaceRole,
@@ -34,7 +35,6 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
     custom_args: [],
     status: "idle",
     workspace_role: "member",
-    max_concurrent_tasks: 1,
     model: "default",
     owner_id: ALICE,
     skills: [],
@@ -82,25 +82,21 @@ function makeComment(overrides: Partial<Comment> = {}): Comment {
 }
 
 function makeRuntime(ownerId: string | null): RuntimeDevice {
-  return {
+  // Ownership is the only field these rules read; everything else comes from
+  // the shared fixture so a new column never reaches this file.
+  return sharedRuntime({
     id: "rt_1",
     workspace_id: "ws_1",
     daemon_id: null,
     name: "runtime",
-    runtime_mode: "local",
     provider: "anthropic",
-    launch_header: "",
-    status: "online",
-    device_info: "",
-    metadata: {},
     current_version: null,
-    update_state: "idle",
-    runtime_health: "ok",
+    target_version: null,
     owner_id: ownerId,
     last_seen_at: null,
     created_at: "2026-04-01T00:00:00Z",
     updated_at: "2026-04-01T00:00:00Z",
-  };
+  });
 }
 
 describe("canEditAgent", () => {

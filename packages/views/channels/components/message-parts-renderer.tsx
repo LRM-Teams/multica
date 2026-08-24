@@ -14,6 +14,7 @@ import { usePrefersReducedMotion } from "../../common/use-prefers-reduced-motion
 import { useT } from "../../i18n/use-t";
 import { ChoiceCard, ChoiceReplyPart } from "./choice-card";
 import { AgentCreationProposalCard } from "../../common/agent-creation-proposal-card";
+import { PeriodBriefInsertActions } from "../../notes/period-brief-insert-actions";
 import { AppLink } from "../../navigation";
 import { useWorkspacePaths } from "@multica/core/paths";
 
@@ -72,6 +73,9 @@ export function MessagePartsRenderer({
         }
         if (part.type === "note_write") {
           return null;
+        }
+        if (part.type === "period_brief_insert") {
+          return <PeriodBriefInsertActions key={key} part={part} />;
         }
         if (part.type === "reference") {
           if (part.ref_type === "agent:create" && choiceContext?.messageId) {
@@ -215,6 +219,8 @@ function createMessagePartKey(part: MessagePart, counts: Map<string, number>): s
     base = `note-brief-${part.ref_id}-${hashString(part.label ?? "")}`;
   } else if (part.type === "note_write") {
     base = `note-write-${part.ref_id ?? "create"}-${hashString(part.label ?? "")}`;
+  } else if (part.type === "period_brief_insert") {
+    base = `period-brief-insert-${part.ref_id}-${part.selected_option_id ?? "open"}`;
   } else {
     base = `attachment-${part.attachment_id}`;
   }

@@ -72,7 +72,7 @@ vi.mock("./agent-xp-burst", () => ({
   AgentXpBurst: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 vi.mock("@multica/ui/components/common/actor-avatar", () => ({
-  ActorAvatar: () => <div data-testid="actor-avatar" />,
+  ActorAvatarBase: () => <div data-testid="actor-avatar" />,
 }));
 vi.mock("./avatar-crop-dialog", () => ({
   AvatarCropDialog: ({ onConfirm }: { onConfirm: (file: File) => void }) => (
@@ -108,7 +108,6 @@ function makeAgent(): Agent {
     runtime_config: {},
     custom_args: [],
     status: "idle",
-    max_concurrent_tasks: 1,
     model: "",
     owner_id: "u-1",
     skills: [],

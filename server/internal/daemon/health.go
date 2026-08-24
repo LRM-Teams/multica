@@ -4,13 +4,11 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/multica-ai/multica/server/internal/cli"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -69,10 +67,6 @@ type credentialProxyMessageReactRequest struct {
 
 func (d *Daemon) credentialProxyMessageCheckHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
 		var request credentialProxyMessageCheckRequest
 		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10))
 		decoder.DisallowUnknownFields()
@@ -103,10 +97,6 @@ func (d *Daemon) credentialProxyMessageCheckHandler() http.HandlerFunc {
 
 func (d *Daemon) credentialProxyMessageReadHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
 		var request credentialProxyMessageReadRequest
 		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10))
 		decoder.DisallowUnknownFields()
@@ -125,9 +115,9 @@ func (d *Daemon) credentialProxyMessageReadHandler() http.HandlerFunc {
 			http.Error(w, "agent_id, workspace_id, and target are required", http.StatusBadRequest)
 			return
 		}
-		credential, ok := readCachedAgentCredentialForMessage(d.cfg, request.WorkspaceID, request.AgentID, time.Now())
-		if !ok {
-			http.Error(w, "Agent credential is unavailable", http.StatusConflict)
+		credential, err := d.messageAgentCredential(r.Context(), request.WorkspaceID, request.AgentID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}
 
@@ -196,10 +186,10 @@ func (d *Daemon) credentialProxyMessageReadHandler() http.HandlerFunc {
 
 // credentialProxyAgentMessageClient resolves the durable credential locally.
 // The Agent process never receives it, nor any task/lease/execution envelope.
-func (d *Daemon) credentialProxyAgentMessageClient(workspaceID, agentID string) (*cli.APIClient, error) {
-	credential, ok := readCachedAgentCredentialForMessage(d.cfg, workspaceID, agentID, time.Now())
-	if !ok {
-		return nil, errors.New("Agent credential is unavailable")
+func (d *Daemon) credentialProxyAgentMessageClient(ctx context.Context, workspaceID, agentID string) (*cli.APIClient, error) {
+	credential, err := d.messageAgentCredential(ctx, workspaceID, agentID)
+	if err != nil {
+		return nil, err
 	}
 	client := cli.NewAPIClient(d.cfg.ServerBaseURL, workspaceID, credential.Token)
 	client.AgentID = agentID
@@ -224,10 +214,6 @@ func normalizeCredentialProxyIdentity(agentID, workspaceID *string) bool {
 
 func (d *Daemon) credentialProxyMessageSearchHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
 		var request credentialProxyMessageSearchRequest
 		if !decodeCredentialProxyRequest(w, r, &request) || !normalizeCredentialProxyIdentity(&request.AgentID, &request.WorkspaceID) {
 			if request.AgentID == "" || request.WorkspaceID == "" {
@@ -235,7 +221,7 @@ func (d *Daemon) credentialProxyMessageSearchHandler() http.HandlerFunc {
 			}
 			return
 		}
-		client, err := d.credentialProxyAgentMessageClient(request.WorkspaceID, request.AgentID)
+		client, err := d.credentialProxyAgentMessageClient(r.Context(), request.WorkspaceID, request.AgentID)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
@@ -272,10 +258,6 @@ func (d *Daemon) credentialProxyMessageReactHandler() http.HandlerFunc {
 
 func (d *Daemon) credentialProxyMessageMutationHandler(path string, bodyFor any) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
 		var agentID, workspaceID string
 		var body map[string]any
 		switch makeBody := bodyFor.(type) {
@@ -301,7 +283,7 @@ func (d *Daemon) credentialProxyMessageMutationHandler(path string, bodyFor any)
 			http.Error(w, "agent_id, workspace_id, and message identity are required", http.StatusBadRequest)
 			return
 		}
-		client, err := d.credentialProxyAgentMessageClient(workspaceID, agentID)
+		client, err := d.credentialProxyAgentMessageClient(r.Context(), workspaceID, agentID)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
@@ -319,13 +301,15 @@ func (d *Daemon) credentialProxyMessageMutationHandler(path string, bodyFor any)
 }
 
 func (d *Daemon) registerCredentialProxyRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("/credential-proxy/messages/check", d.credentialProxyMessageCheckHandler())
-	mux.HandleFunc("/credential-proxy/messages/read", d.credentialProxyMessageReadHandler())
-	mux.HandleFunc("/credential-proxy/messages/send", d.credentialProxyMessageSendHandler())
-	mux.HandleFunc("/credential-proxy/messages/search", d.credentialProxyMessageSearchHandler())
-	mux.HandleFunc("/credential-proxy/messages/resolve", d.credentialProxyMessageResolveHandler())
-	mux.HandleFunc("/credential-proxy/messages/react", d.credentialProxyMessageReactHandler())
-	mux.HandleFunc(MessageCoverageCommitPath, d.credentialProxyMessageCoverageCommitHandler())
+	mux.HandleFunc("/internal/agent-api/inbox", d.agentAppInboxHandler())
+	mux.HandleFunc("/internal/agent-api/inbox/ack", d.agentAppInboxAckHandler())
+	mux.HandleFunc("POST /credential-proxy/messages/check", d.credentialProxyMessageCheckHandler())
+	mux.HandleFunc("POST /credential-proxy/messages/read", d.credentialProxyMessageReadHandler())
+	mux.HandleFunc("POST /credential-proxy/messages/send", d.credentialProxyMessageSendHandler())
+	mux.HandleFunc("POST /credential-proxy/messages/search", d.credentialProxyMessageSearchHandler())
+	mux.HandleFunc("POST /credential-proxy/messages/resolve", d.credentialProxyMessageResolveHandler())
+	mux.HandleFunc("POST /credential-proxy/messages/react", d.credentialProxyMessageReactHandler())
+	mux.HandleFunc("POST "+MessageCoverageCommitPath, d.credentialProxyMessageCoverageCommitHandler())
 	mux.HandleFunc("/api/", d.credentialProxyAgentAPIHandler())
 }
 

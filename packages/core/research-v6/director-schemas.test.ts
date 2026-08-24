@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   parseResearchV6DirectorProjectionDeltaPage,
   parseResearchV6DirectorProjectionSnapshot,
-  parseResearchV6DirectorProjectionSliceRequest,
+  encodeResearchV6DirectorProjectionSliceRequest,
 } from "./director-schemas";
 
 const ID = "00000000-0000-4000-8000-000000000003";
@@ -48,9 +48,35 @@ function snapshot() {
 
 describe("Director V6 projection wire schemas", () => {
   it("accepts the exact strict projection snapshot", () => {
-    expect(parseResearchV6DirectorProjectionSnapshot(snapshot()).slice_key).toBe(
+    expect(parseResearchV6DirectorProjectionSnapshot(snapshot()).sliceKey).toBe(
       "default",
     );
+  });
+
+  it("accepts a running Director Work node with an empty catalog summary", () => {
+    const value = snapshot();
+    value.nodes[0] = {
+      ...value.nodes[0]!,
+      id: "work_s:director",
+      kind: "work_s",
+      tier: "S",
+      canonical_ref: { kind: "work_item", id: ID },
+      branch_ids: [],
+      state: {
+        execution: "running",
+        conclusion: "proposed",
+        integration: "unmatched",
+      },
+      title: "director",
+      catalog_summary: "",
+      terminal: false,
+      expandable: false,
+      hidden_child_count: 0,
+    };
+
+    const parsed = parseResearchV6DirectorProjectionSnapshot(value);
+    expect(parsed.sliceKey).toBe("default");
+    expect(parsed.nodes[0]?.catalogSummary).toBe("");
   });
 
   it("degrades the legacy experimental projection shape without throwing", () => {
@@ -61,7 +87,7 @@ describe("Director V6 projection wire schemas", () => {
         graph_content_hash: { nodes: HASH, edges: HASH },
         nodes: [],
         edges: [],
-      }).slice_key,
+      }).sliceKey,
     ).toBe("invalid-response");
   });
 
@@ -70,7 +96,7 @@ describe("Director V6 projection wire schemas", () => {
       parseResearchV6DirectorProjectionSnapshot({
         ...snapshot(),
         direction: "both",
-      }).slice_key,
+      }).sliceKey,
     ).toBe("invalid-response");
   });
 
@@ -89,7 +115,7 @@ describe("Director V6 projection wire schemas", () => {
     };
 
     const parsed = parseResearchV6DirectorProjectionSnapshot(value);
-    expect(parsed.slice_key).toBe("default");
+    expect(parsed.sliceKey).toBe("default");
     expect(parsed.nodes[0]?.kind).toBe("future_result");
     expect(parsed.nodes[0]?.state.execution).toBe("queued_remote");
   });
@@ -101,7 +127,7 @@ describe("Director V6 projection wire schemas", () => {
         deltas: [],
         next_cursor: null,
         resync_required: true,
-      }).resync_required,
+      }).resyncRequired,
     ).toBe(true);
   });
 
@@ -109,7 +135,7 @@ describe("Director V6 projection wire schemas", () => {
     const schemas = await import("./director-schemas");
     expect(schemas.parseResearchV6DirectorNodeDetail({}).node.id).toBe("invalid-response");
     expect(schemas.parseResearchV6DirectorReportDetail({}).id).toBeTruthy();
-    expect(schemas.parseResearchV6DirectorProjectionDelta({}).event_sequence).toBe(0);
+    expect(schemas.parseResearchV6DirectorProjectionDelta({}).eventSequence).toBe(0);
   });
 
   it("keeps an unknown node detail view forward-compatible", async () => {
@@ -133,19 +159,65 @@ describe("Director V6 projection wire schemas", () => {
     expect(parsed.view).toBe("future_audit_view");
   });
 
+  it("keeps the immutable objective and conclusion in result node detail", async () => {
+    const schemas = await import("./director-schemas");
+    const parsed = schemas.parseResearchV6DirectorNodeDetail({
+      snapshot_id: SNAPSHOT_ID,
+      through_event_sequence: 47,
+      projection_hash: HASH,
+      view: "full",
+      node: {
+        ...snapshot().nodes[0],
+        id: "result_s:one",
+        kind: "result_s",
+        tier: "S",
+        canonical_ref: { kind: "result", id: ID, revision: 1 },
+      },
+      content_layers: {
+        catalog_summary: "Bounded catalog summary",
+        brief_summary: "Brief result summary",
+        objective: "Verify which AI employee products are active.",
+        conclusion: "Three products have public evidence of active development.",
+        content: "The evidence and comparison behind the conclusion.",
+        scope: { market: "global" },
+        uncertainties: ["Private deployments are not observable."],
+        conflicts: [],
+        open_questions: ["Which products publish retention data?"],
+      },
+      incoming: [],
+      outgoing: [],
+      history_refs: [],
+      agent_refs: [],
+      work_item_refs: [],
+      attempt_refs: [],
+      evidence_refs: [],
+      discussion_refs: [],
+      report_refs: [],
+    }) as ReturnType<typeof schemas.parseResearchV6DirectorNodeDetail> & {
+      contentLayers?: { objective: string; conclusion: string };
+    };
+
+    expect(parsed.contentLayers?.objective).toBe(
+      "Verify which AI employee products are active.",
+    );
+    expect(parsed.contentLayers?.conclusion).toBe(
+      "Three products have public evidence of active development.",
+    );
+  });
+
   it("fixes derivation expansion depth to exactly one layer", () => {
     expect(
-      parseResearchV6DirectorProjectionSliceRequest({
+      encodeResearchV6DirectorProjectionSliceRequest({
         root: "insight:one",
         depth: 1,
-        snapshot_id: SNAPSHOT_ID,
+        snapshotId: SNAPSHOT_ID,
       }).depth,
     ).toBe(1);
     expect(() =>
-      parseResearchV6DirectorProjectionSliceRequest({
+      encodeResearchV6DirectorProjectionSliceRequest({
         root: "insight:one",
-        depth: 2,
-        snapshot_id: SNAPSHOT_ID,
+        depth: 2 as 1,
+        snapshotId: SNAPSHOT_ID,
       }),
     ).toThrow();
   });

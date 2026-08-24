@@ -26,24 +26,29 @@ type notePeriodBriefCollectorRef struct {
 }
 
 type notePeriodBriefRunRow struct {
-	ID                  pgtype.UUID
-	WorkspaceID         pgtype.UUID
-	OwnerUserID         pgtype.UUID
-	DraftPageID         pgtype.UUID
-	FolderPageID        pgtype.UUID
-	SynthesizerAgentID  pgtype.UUID
-	WindowLabel         string
-	WindowStart         time.Time
-	WindowEnd           time.Time
-	Timezone            string
-	WindowKind          string
-	ChannelID           pgtype.UUID
-	FactsText           string
-	SourcesUsed         []string
-	SourcesEmpty        []string
-	SourcesSkipped      []string
-	Collectors          []notePeriodBriefCollectorRef
-	Status              string
+	ID                 pgtype.UUID
+	WorkspaceID        pgtype.UUID
+	OwnerUserID        pgtype.UUID
+	DraftPageID        pgtype.UUID
+	FolderPageID       pgtype.UUID
+	SynthesizerAgentID pgtype.UUID
+	WindowLabel        string
+	WindowStart        time.Time
+	WindowEnd          time.Time
+	Timezone           string
+	WindowKind         string
+	ChannelID          pgtype.UUID
+	FactsText          string
+	SourcesUsed        []string
+	SourcesEmpty       []string
+	SourcesSkipped     []string
+	Collectors         []notePeriodBriefCollectorRef
+	Status             string
+	UserFocus          string
+	CollectPlan        *notePeriodBriefCollectPlan
+	PlannerJobID       pgtype.UUID
+	ChatSessionID      pgtype.UUID
+	SourcePageID       pgtype.UUID
 }
 
 func (h *Handler) insertNotePeriodBriefRun(
@@ -53,6 +58,8 @@ func (h *Handler) insertNotePeriodBriefRun(
 	channelID, factsText string,
 	used, empty, skipped []string,
 	collectors []notePeriodBriefCollectorRef,
+	userFocus, status string,
+	chatSessionID, sourcePageID pgtype.UUID,
 ) error {
 	raw, err := json.Marshal(collectors)
 	if err != nil {
@@ -71,22 +78,26 @@ func (h *Handler) insertNotePeriodBriefRun(
 	if trimmed := strings.TrimSpace(channelID); trimmed != "" {
 		channelArg = parseUUID(trimmed)
 	}
+	if strings.TrimSpace(status) == "" {
+		status = "collecting"
+	}
 	_, err = h.DB.Exec(ctx, `
 INSERT INTO note_period_brief_run (
   workspace_id, owner_user_id, draft_page_id, folder_page_id, synthesizer_agent_id,
   window_label, window_start, window_end, timezone, window_kind,
   channel_id, facts_text, sources_used, sources_empty, sources_skipped,
-  collectors, status
+  collectors, status, user_focus, chat_session_id, source_page_id
 ) VALUES (
   $1,$2,$3,$4,$5,
   $6,$7,$8,$9,$10,
   $11,$12,$13,$14,$15,
-  $16::jsonb, 'collecting'
+  $16::jsonb, $17, $18, $19, $20
 )`,
 		workspaceID, userID, draftID, folderID, synthAgentID,
 		window.Label, window.Start.UTC(), window.End.UTC(), window.Timezone, string(window.Kind),
 		channelArg, factsText, used, empty, skipped,
-		raw,
+		raw, status, strings.TrimSpace(userFocus),
+		nullableUUIDArg(chatSessionID), nullableUUIDArg(sourcePageID),
 	)
 	return err
 }
@@ -97,18 +108,21 @@ func (h *Handler) loadNotePeriodBriefRunByDraft(
 ) (notePeriodBriefRunRow, error) {
 	var row notePeriodBriefRunRow
 	var collectorsRaw []byte
+	var planRaw []byte
 	var channelID pgtype.UUID
 	err := h.DB.QueryRow(ctx, `
 SELECT id, workspace_id, owner_user_id, draft_page_id, folder_page_id, synthesizer_agent_id,
        window_label, window_start, window_end, timezone, window_kind,
        channel_id, facts_text, sources_used, sources_empty, sources_skipped,
-       collectors, status
+       collectors, status, user_focus, collect_plan, planner_job_id,
+       chat_session_id, source_page_id
 FROM note_period_brief_run
 WHERE draft_page_id = $1 AND workspace_id = $2`, draftPageID, workspaceID).Scan(
 		&row.ID, &row.WorkspaceID, &row.OwnerUserID, &row.DraftPageID, &row.FolderPageID, &row.SynthesizerAgentID,
 		&row.WindowLabel, &row.WindowStart, &row.WindowEnd, &row.Timezone, &row.WindowKind,
 		&channelID, &row.FactsText, &row.SourcesUsed, &row.SourcesEmpty, &row.SourcesSkipped,
-		&collectorsRaw, &row.Status,
+		&collectorsRaw, &row.Status, &row.UserFocus, &planRaw, &row.PlannerJobID,
+		&row.ChatSessionID, &row.SourcePageID,
 	)
 	if err != nil {
 		return row, err
@@ -117,7 +131,88 @@ WHERE draft_page_id = $1 AND workspace_id = $2`, draftPageID, workspaceID).Scan(
 	if len(collectorsRaw) > 0 {
 		_ = json.Unmarshal(collectorsRaw, &row.Collectors)
 	}
+	if len(planRaw) > 0 && string(planRaw) != "null" {
+		var plan notePeriodBriefCollectPlan
+		if json.Unmarshal(planRaw, &plan) == nil {
+			row.CollectPlan = &plan
+		}
+	}
 	return row, nil
+}
+
+func (h *Handler) loadNotePeriodBriefRunByID(
+	ctx context.Context,
+	workspaceID, userID, runID pgtype.UUID,
+) (notePeriodBriefRunRow, error) {
+	var row notePeriodBriefRunRow
+	var collectorsRaw []byte
+	var planRaw []byte
+	var channelID pgtype.UUID
+	err := h.DB.QueryRow(ctx, `
+SELECT id, workspace_id, owner_user_id, draft_page_id, folder_page_id, synthesizer_agent_id,
+       window_label, window_start, window_end, timezone, window_kind,
+       channel_id, facts_text, sources_used, sources_empty, sources_skipped,
+       collectors, status, user_focus, collect_plan, planner_job_id,
+       chat_session_id, source_page_id
+FROM note_period_brief_run
+WHERE id = $1 AND workspace_id = $2 AND owner_user_id = $3`, runID, workspaceID, userID).Scan(
+		&row.ID, &row.WorkspaceID, &row.OwnerUserID, &row.DraftPageID, &row.FolderPageID, &row.SynthesizerAgentID,
+		&row.WindowLabel, &row.WindowStart, &row.WindowEnd, &row.Timezone, &row.WindowKind,
+		&channelID, &row.FactsText, &row.SourcesUsed, &row.SourcesEmpty, &row.SourcesSkipped,
+		&collectorsRaw, &row.Status, &row.UserFocus, &planRaw, &row.PlannerJobID,
+		&row.ChatSessionID, &row.SourcePageID,
+	)
+	if err != nil {
+		return row, err
+	}
+	row.ChannelID = channelID
+	if len(collectorsRaw) > 0 {
+		_ = json.Unmarshal(collectorsRaw, &row.Collectors)
+	}
+	if len(planRaw) > 0 && string(planRaw) != "null" {
+		var plan notePeriodBriefCollectPlan
+		if json.Unmarshal(planRaw, &plan) == nil {
+			row.CollectPlan = &plan
+		}
+	}
+	return row, nil
+}
+
+func (h *Handler) updateNotePeriodBriefRunPlannerJob(ctx context.Context, runID, plannerJobID pgtype.UUID) error {
+	_, err := h.DB.Exec(ctx, `
+UPDATE note_period_brief_run
+SET planner_job_id = $1, updated_at = now()
+WHERE id = $2`, plannerJobID, runID)
+	return err
+}
+
+func (h *Handler) updateNotePeriodBriefRunPlan(
+	ctx context.Context,
+	runID pgtype.UUID,
+	plan *notePeriodBriefCollectPlan,
+	collectors []notePeriodBriefCollectorRef,
+	status string,
+) error {
+	var planArg any
+	if plan != nil {
+		raw, err := json.Marshal(plan)
+		if err != nil {
+			return err
+		}
+		planArg = raw
+	}
+	raw, err := json.Marshal(collectors)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(status) == "" {
+		status = "collecting"
+	}
+	_, err = h.DB.Exec(ctx, `
+UPDATE note_period_brief_run
+SET collect_plan = $1::jsonb, collectors = $2::jsonb, status = $3, updated_at = now()
+WHERE id = $4`, planArg, raw, status, runID)
+	return err
 }
 
 func (h *Handler) updateNotePeriodBriefRunCollectors(
@@ -141,7 +236,7 @@ func collectorRefsFromJobs(jobs []NoteWorkerJobResponse, windowLabel, windowStar
 	out := make([]notePeriodBriefCollectorRef, 0, len(jobs))
 	for _, job := range jobs {
 		ref := notePeriodBriefCollectorRef{
-			AgentID:     job.AgentID,
+			AgentID: job.AgentID,
 			// Job.PageID is the draft page (Worker ACL / notes get). Packs are
 			// stored in PackMarkdown, not as child Notes pages.
 			PackPageID:  "",
@@ -204,8 +299,8 @@ func formatPeriodBriefRetryHint(draftPageID string) string {
 	return fmt.Sprintf(
 		"Retry only retryable collectors (never permanent config/auth/key failures) with:\n"+
 			"`multica notes period-brief retry-collectors --draft-page-id %s [--collector-agent-id <id>]`\n"+
-			"Max %d retries per collector. Platform rejects permanent failures and over-cap retries.\n"+
+			"Exactly one retry per collector. Inbox will not auto-retry. After that attempt settles, the result is final.\n"+
 			"After a successful retry call, stop and wait — the platform re-wakes you when packs settle.",
-		draftPageID, notePeriodBriefCollectorMaxRetries,
+		draftPageID,
 	)
 }

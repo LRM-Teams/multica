@@ -53,11 +53,18 @@ func (e *Engine) ProjectionV6Deltas(ctx context.Context, request V6ProjectionDel
 	return e.store.ProjectionV6Deltas(ctx, request)
 }
 
-func (e *Engine) ProjectionV6NodeDetail(ctx context.Context, workspaceID, runID, nodeID, view string) (V6ProjectionNodeDetail, error) {
+func (e *Engine) ProjectionV6NodeDetail(ctx context.Context, workspaceID, runID, snapshotID, nodeID, view string) (V6ProjectionNodeDetail, error) {
 	if e == nil || e.store == nil {
 		return V6ProjectionNodeDetail{}, ErrV6DirectorUnavailable
 	}
-	return e.store.ProjectionV6NodeDetail(ctx, workspaceID, runID, nodeID, view)
+	return e.store.ProjectionV6NodeDetail(ctx, workspaceID, runID, snapshotID, nodeID, view)
+}
+
+func (e *Engine) ProjectionV6WorkActivity(ctx context.Context, workspaceID, runID, workItemID string) (V6WorkActivity, error) {
+	if e == nil || e.store == nil {
+		return V6WorkActivity{}, ErrV6DirectorUnavailable
+	}
+	return e.store.ProjectionV6WorkActivity(ctx, workspaceID, runID, workItemID)
 }
 
 func NewEngineWithReportStorage(store *PostgresStore, dispatcher Dispatcher, projector Projector, reportStorage ReportPackageStorage) ResearchRun {
@@ -118,6 +125,20 @@ func (e *Engine) Create(ctx context.Context, in StartInput) (Run, error) {
 		return run, err
 	}
 	return e.store.GetRun(ctx, run.SessionID, in.WorkspaceID)
+}
+
+func (e *Engine) PersistSourceIngestion(ctx context.Context, in PersistSourceIngestionInput) (PersistSourceIngestionResult, error) {
+	if e == nil || e.store == nil {
+		return PersistSourceIngestionResult{}, errors.New("research run engine is unavailable")
+	}
+	return e.store.PersistSourceIngestion(ctx, in)
+}
+
+func (e *Engine) RebuildCanonicalRun(ctx context.Context, sessionID, workspaceID string) (RebuiltCanonicalRun, error) {
+	if e == nil || e.store == nil {
+		return RebuiltCanonicalRun{}, errors.New("research run engine is unavailable")
+	}
+	return e.store.RebuildCanonicalRun(ctx, sessionID, workspaceID)
 }
 
 func (e *Engine) BootstrapV6(ctx context.Context, in V6BootstrapInput) (Run, error) {
@@ -234,6 +255,10 @@ func (e *Engine) AcknowledgeWorkCatalog(ctx context.Context, in AcknowledgeV6Cat
 	return (workCatalogModule{store: e.store}).Acknowledge(ctx, in)
 }
 
+func (e *Engine) ReportWorkProgress(ctx context.Context, in ReportV6WorkProgressInput) error {
+	return (workProgressModule{store: e.store}).Report(ctx, in)
+}
+
 func (e *Engine) SubmitV6Work(ctx context.Context, in V6SubmissionInput) (V6SubmissionOutcome, error) {
 	return (v6SubmissionModule{store: e.store}).Submit(ctx, in)
 }
@@ -247,11 +272,14 @@ func (e *Engine) ReconcileV6Work(ctx context.Context, limit int) (int, error) {
 	reports, reportErr := e.store.ApplyReceivedV6ReportPackages(ctx, limit)
 	applied, applyErr := e.store.ApplyReceivedV6Submissions(ctx, limit)
 	recovered, err := e.store.RecoverExpiredV6WorkItems(ctx, limit)
+	cancelled, cancellationErr := cancelLostV6InboxTasks(ctx, e.store, e.dispatcher, limit)
+	settled, settledCancellationErr := cancelSettledV6InboxTasks(ctx, e.store, e.dispatcher, limit)
 	events, eventErr := e.store.ProcessV6EventTriggers(ctx, limit)
+	idleWakes, idleErr := e.store.ProcessV6IdleRuns(ctx, limit)
 	prepared, prepareErr := e.store.PrepareV6Dispatches(ctx, limit)
 	delivered, deliveryErr := (v6RuntimeModule{store: e.store, team: e.store, agents: e.v6Agents, inbox: e.v6Inbox, clock: e.clock}).Deliver(ctx, limit)
 	ingested, ingestErr := e.IngestPendingScreenedSources(ctx, limit)
-	return recovered + steering + proposals + reports + applied + events + prepared + delivered + ingested, errors.Join(err, steeringErr, proposalErr, reportErr, applyErr, eventErr, prepareErr, deliveryErr, ingestErr)
+	return recovered + cancelled + settled + steering + proposals + reports + applied + events + idleWakes + prepared + delivered + ingested, errors.Join(err, cancellationErr, settledCancellationErr, steeringErr, proposalErr, reportErr, applyErr, eventErr, idleErr, prepareErr, deliveryErr, ingestErr)
 }
 
 func (e *Engine) AssignV6Director(ctx context.Context, in AssignV6DirectorInput) (V6DirectorAssignment, error) {
@@ -376,15 +404,15 @@ func (e *Engine) ReconcileSession(ctx context.Context, sessionID string) (retErr
 		return e.failureModule().HandleBudgetExhaustion(ctx, run, "wall_time", fmt.Sprintf("run exceeded %d seconds", run.Config.MaxRunSeconds))
 	}
 
-	if err = e.executionModule().SyncAttempts(ctx, sessionID); err != nil {
+	if err = e.executionModule().SyncAttempts(ctx, sessionID, run.WorkspaceID); err != nil {
 		return e.failureModule().HandleDispatchFailure(ctx, sessionID, err)
 	}
 
-	tasks, err := e.store.ListTasks(ctx, sessionID)
+	tasks, err := e.store.ListTasks(ctx, sessionID, run.WorkspaceID)
 	if err != nil {
 		return err
 	}
-	attempts, err := e.store.ListAttempts(ctx, sessionID)
+	attempts, err := e.store.ListAttempts(ctx, sessionID, run.WorkspaceID)
 	if err != nil {
 		return err
 	}
@@ -421,11 +449,11 @@ func (e *Engine) ReconcileSession(ctx context.Context, sessionID string) (retErr
 	if err = e.executionModule().ActivateReadyTasks(ctx, sessionID); err != nil {
 		return err
 	}
-	tasks, err = e.store.ListTasks(ctx, sessionID)
+	tasks, err = e.store.ListTasks(ctx, sessionID, run.WorkspaceID)
 	if err != nil {
 		return err
 	}
-	attempts, err = e.store.ListAttempts(ctx, sessionID)
+	attempts, err = e.store.ListAttempts(ctx, sessionID, run.WorkspaceID)
 	if err != nil {
 		return err
 	}
@@ -487,10 +515,7 @@ func (e *Engine) Pause(ctx context.Context, sessionID, workspaceID, userID strin
 	if err != nil {
 		return Run{}, err
 	}
-	if _, err = e.cancelPendingAttempts(ctx, run, "research_run_paused"); err != nil {
-		return run, err
-	}
-	return run, reconcileHandoff(e.ReconcileSession(ctx, sessionID))
+	return run, e.finishTerminalTransition(ctx, run, sessionID, "research_run_paused")
 }
 
 func (e *Engine) Resume(ctx context.Context, sessionID, workspaceID, userID string) (Run, error) {
@@ -506,10 +531,7 @@ func (e *Engine) Cancel(ctx context.Context, sessionID, workspaceID, userID, rea
 	if err != nil {
 		return Run{}, err
 	}
-	if _, err = e.cancelPendingAttempts(ctx, run, "research_run_cancelled"); err != nil {
-		return run, err
-	}
-	return run, reconcileHandoff(e.ReconcileSession(ctx, sessionID))
+	return run, e.finishTerminalTransition(ctx, run, sessionID, "research_run_cancelled")
 }
 
 func (e *Engine) Archive(ctx context.Context, sessionID, workspaceID, userID, reason string) (Run, error) {
@@ -517,10 +539,20 @@ func (e *Engine) Archive(ctx context.Context, sessionID, workspaceID, userID, re
 	if err != nil {
 		return Run{}, err
 	}
-	if _, err = e.cancelPendingAttempts(ctx, run, "research_run_archived"); err != nil {
-		return run, err
+	return run, e.finishTerminalTransition(ctx, run, sessionID, "research_run_archived")
+}
+
+// finishTerminalTransition keeps a persisted terminal transition successful
+// for V6 even when projection/reconcile is still catching up.
+func (e *Engine) finishTerminalTransition(ctx context.Context, run Run, sessionID, reason string) error {
+	if run.OrchestratorVersion == OrchestratorVersionV6 {
+		_ = reconcileHandoff(e.ReconcileSession(ctx, sessionID))
+		return nil
 	}
-	return run, reconcileHandoff(e.ReconcileSession(ctx, sessionID))
+	if _, err := e.cancelPendingAttempts(ctx, run, reason); err != nil {
+		return err
+	}
+	return reconcileHandoff(e.ReconcileSession(ctx, sessionID))
 }
 
 func (e *Engine) Confirm(ctx context.Context, sessionID, workspaceID, userID string) (Run, error) {
@@ -544,31 +576,31 @@ func (e *Engine) Snapshot(ctx context.Context, sessionID, workspaceID string) (R
 	if err != nil {
 		return RunSnapshot{}, err
 	}
-	questions, err := e.store.ListQuestions(ctx, sessionID)
+	questions, err := e.store.ListQuestions(ctx, sessionID, workspaceID)
 	if err != nil {
 		return RunSnapshot{}, err
 	}
-	tasks, err := e.store.ListTasks(ctx, sessionID)
+	tasks, err := e.store.ListTasks(ctx, sessionID, workspaceID)
 	if err != nil {
 		return RunSnapshot{}, err
 	}
-	attempts, err := e.store.ListAttempts(ctx, sessionID)
+	attempts, err := e.store.ListAttempts(ctx, sessionID, workspaceID)
 	if err != nil {
 		return RunSnapshot{}, err
 	}
-	sources, err := e.store.ListSourceSnapshots(ctx, sessionID)
+	sources, err := e.store.ListSourceSnapshots(ctx, sessionID, workspaceID)
 	if err != nil {
 		return RunSnapshot{}, err
 	}
-	observations, err := e.store.ListObservations(ctx, sessionID)
+	observations, err := e.store.ListObservations(ctx, sessionID, workspaceID)
 	if err != nil {
 		return RunSnapshot{}, err
 	}
-	claims, err := e.store.ListClaims(ctx, sessionID)
+	claims, err := e.store.ListClaims(ctx, sessionID, workspaceID)
 	if err != nil {
 		return RunSnapshot{}, err
 	}
-	gate, err := e.gateModule().Evaluate(ctx, sessionID)
+	gate, err := e.gateModule().Evaluate(ctx, sessionID, workspaceID)
 	if err != nil {
 		return RunSnapshot{}, err
 	}
@@ -589,6 +621,7 @@ func (e *Engine) Snapshot(ctx context.Context, sessionID, workspaceID string) (R
 		}
 		snapshot.ArtifactProjection = &projection
 	}
+	normalizeRunSnapshot(&snapshot)
 	return snapshot, nil
 }
 
@@ -607,11 +640,11 @@ type projectionSnapshotStore interface {
 	GetRun(context.Context, string, string) (Run, error)
 	GetCurrentContract(context.Context, string, string) (ResearchContract, error)
 	GetCurrentMethod(context.Context, string, string) (*ResearchMethod, error)
-	ListQuestions(context.Context, string) ([]Question, error)
-	ListTasks(context.Context, string) ([]Task, error)
-	ListAttempts(context.Context, string) ([]Attempt, error)
-	ListClaims(context.Context, string) ([]Claim, error)
-	EvaluateGate(context.Context, string) (GateResult, error)
+	ListQuestions(context.Context, string, string) ([]Question, error)
+	ListTasks(context.Context, string, string) ([]Task, error)
+	ListAttempts(context.Context, string, string) ([]Attempt, error)
+	ListClaims(context.Context, string, string) ([]Claim, error)
+	EvaluateGate(context.Context, string, string) (GateResult, error)
 }
 
 func loadProjectionSnapshot(ctx context.Context, store projectionSnapshotStore, sessionID, workspaceID string) (RunSnapshot, error) {
@@ -627,26 +660,29 @@ func loadProjectionSnapshot(ctx context.Context, store projectionSnapshotStore, 
 	if err != nil {
 		return RunSnapshot{}, err
 	}
-	questions, err := store.ListQuestions(ctx, sessionID)
+	questions, err := store.ListQuestions(ctx, sessionID, workspaceID)
 	if err != nil {
 		return RunSnapshot{}, err
 	}
-	tasks, err := store.ListTasks(ctx, sessionID)
+	tasks, err := store.ListTasks(ctx, sessionID, workspaceID)
 	if err != nil {
 		return RunSnapshot{}, err
 	}
-	attempts, err := store.ListAttempts(ctx, sessionID)
+	attempts, err := store.ListAttempts(ctx, sessionID, workspaceID)
 	if err != nil {
 		return RunSnapshot{}, err
 	}
-	claims, err := store.ListClaims(ctx, sessionID)
+	claims, err := store.ListClaims(ctx, sessionID, workspaceID)
 	if err != nil {
 		return RunSnapshot{}, err
 	}
-	gate, err := store.EvaluateGate(ctx, sessionID)
+	gate, err := store.EvaluateGate(ctx, sessionID, workspaceID)
 	if err != nil {
 		return RunSnapshot{}, err
 	}
+	// Projection is an internal read model: do not normalize nil slices here.
+	// Empty Sources/Observations must stay nil so the projection surface stays
+	// least-privilege. HTTP snapshots go through Engine.Snapshot instead.
 	return RunSnapshot{
 		Run: run, Contract: contract, Method: method, Questions: questions,
 		Tasks: tasks, Attempts: attempts, Claims: claims, Gate: gate,
@@ -664,6 +700,7 @@ func (e *Engine) SnapshotForAttempt(ctx context.Context, sessionID, workspaceID,
 	if snapshot.Run.SessionID != sessionID {
 		return RunSnapshot{}, ErrRunNotFound
 	}
+	normalizeRunSnapshot(&snapshot)
 	return snapshot, nil
 }
 

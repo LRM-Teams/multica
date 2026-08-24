@@ -37,6 +37,10 @@ type ResearchPresenceEntry struct {
 	Phase         string  `json:"phase"`
 	Role          string  `json:"role,omitempty"`
 	FleetMemberID string  `json:"fleet_member_id,omitempty"`
+	// Name/AvatarURL identify roster members that are not workspace fleet
+	// members (V6 run-scoped team agents). Additive; legacy clients ignore.
+	Name      string `json:"name,omitempty"`
+	AvatarURL string `json:"avatar_url,omitempty"`
 	TaskID        *string `json:"task_id"`
 	NodeID        *string `json:"node_id"`
 	BranchID      *string `json:"branch_id"`

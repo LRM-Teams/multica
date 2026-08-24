@@ -426,7 +426,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	daemonHub.SetHeartbeatHandler(h.HandleDaemonWSHeartbeat)
 	daemonHub.SetReminderHandlers(
 		h.HandleDaemonReminderSnapshot,
-		h.HandleDaemonReminderFireAttempt,
+		h.HandleDaemonReminderFireRequest,
 	)
 	daemonHub.SetAgentDeliveryAckHandler(h.HandleAgentDeliveryAck)
 	// The current fenced Workspace Runner owns Attachment, launch, Message, and
@@ -584,7 +584,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Post("/agent-memory-writes", h.ReportAgentMemoryWrites)
 		r.Post("/agent-memory-center/sync", h.SyncAgentMemoryCenter)
 		r.Post("/agent-memory-center/hydrate", h.HydrateAgentMemoryCenter)
-		r.Post("/graph-memory/judge", h.ReportGraphMemoryJudge)
+		r.Post("/graph-memory/recalls", h.RequestGraphMemoryRecall)
 
 		r.Get("/tasks/{taskId}/status", h.GetTaskStatus)
 		r.Post("/tasks/{taskId}/progress", h.ReportTaskProgress)
@@ -691,6 +691,12 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Put("/memory-curation/profile", h.UpdateMemoryCuratorProfile)
 					r.Get("/graph-memory/profile", h.GetGraphMemoryProfile)
 					r.Put("/graph-memory/profile", h.UpdateGraphMemoryProfile)
+					r.Get("/graph-memory/status", h.GetGraphMemoryStatus)
+					r.Post("/graph-memory/consolidations", h.StartGraphMemoryConsolidation)
+					r.Get("/graph-memory/consolidations", h.ListGraphMemoryConsolidations)
+					r.Get("/graph-memory/consolidations/{runId}", h.GetGraphMemoryConsolidation)
+					r.Get("/graph-memory/audit", h.GetGraphMemoryAudit)
+					r.Get("/graph-memory/channels/{channelId}/lineage", h.GetGraphMemoryChannelLineage)
 					r.Get("/memory-curation/daily-summary", h.ListMemoryCurationDailySummary)
 					r.Get("/memory-curation/candidates", h.ListMemoryCurationCandidates)
 					r.Get("/memory-curation/candidates/{candidateId}", h.GetMemoryCurationCandidate)
@@ -885,6 +891,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Route("/api/notes", func(r chi.Router) {
 				r.Post("/retrospectives", h.CreateNoteRetrospective)
 				r.Post("/period-briefs", h.CreateNotePeriodBrief)
+				r.Get("/period-briefs/active", h.GetActiveNotePeriodBrief)
+				r.Post("/period-briefs/{runId}/insert", h.InsertNotePeriodBrief)
 				r.Route("/pages", func(r chi.Router) {
 					r.Get("/", h.ListNotePages)
 					r.Post("/", h.CreateNotePage)
@@ -912,7 +920,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 						r.Get("/channel-refs", h.ListNotePageChannelRefs)
 						r.Post("/channel-refs", h.CreateNotePageChannelRef)
 						r.Delete("/channel-refs/{channelId}", h.DeleteNotePageChannelRef)
-						r.Post("/issues", h.CreateNotePageIssue)
 						r.Get("/writebacks", h.ListNotePageWritebacks)
 						r.Post("/writebacks", h.CreateNotePageWriteback)
 					})
@@ -1060,6 +1067,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Post("/resume", h.PostResearchV6ProjectionResume)
 				})
 				r.Get("/v6/runs/{runId}/reports", h.GetResearchV6Reports)
+				r.Get("/v6/runs/{runId}/work-items/{workItemId}/activity", h.GetResearchV6WorkActivity)
 				r.Get("/v6/runs/{runId}/reports/{reportId}/compiled", h.GetResearchV6ReportCompiled)
 				r.Get("/v6/runs/{runId}/reports/{reportId}", h.GetResearchV6Report)
 				r.Get("/fleet", h.GetResearchFleet)
@@ -1067,6 +1075,12 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Post("/fleet/members", h.HireResearchFleetMember)
 				r.Post("/fleet/members/{memberId}/optimize", h.OptimizeResearchFleetMember)
 				r.Post("/fleet/members/{memberId}/archive", h.ArchiveResearchFleetMemberHandler)
+				r.Get("/v6/release", h.GetResearchV6Release)
+				r.Patch("/v6/release", h.PatchResearchV6Release)
+				r.Get("/v6/monitors", h.ListResearchMonitors)
+				r.Post("/v6/monitors", h.CreateResearchMonitor)
+				r.Patch("/v6/monitors/{monitorId}", h.PatchResearchMonitor)
+				r.Get("/v6/production-window", h.GetResearchV6ProductionWindow)
 				r.Get("/sessions", h.ListResearchSessions)
 				r.Post("/sessions", h.CreateResearchSession)
 				r.Route("/sessions/{id}", func(r chi.Router) {
@@ -1076,6 +1090,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/presence", h.GetResearchPresence)
 					r.Delete("/", h.DeleteResearchSession)
 					r.Post("/messages", h.PostResearchMessage)
+					r.Post("/sources/ingest", h.PostResearchSourceIngestion)
+					r.Get("/canonical-rebuild", h.GetResearchCanonicalRebuild)
 					r.Put("/messages/{messageId}/match-decision", h.PutResearchMessageMatchDecision)
 					r.Post("/steer", h.SteerResearchRun)
 					r.Post("/stop", h.StopResearchSession)
@@ -1141,7 +1157,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Post("/windy", h.EnsureWindy)
 				r.Post("/period-brief", h.EnsurePeriodBriefAgent)
 				r.Post("/period-brief-collectors", h.EnsurePeriodBriefCollectors)
+				r.Post("/notes-assistant", h.EnsureNotesAssistantAgent)
 				r.Post("/drafts", h.CreateAgentDraft)
+				r.Put("/runtime-config", h.BulkUpdateAgentRuntimeConfig)
+				r.Post("/lifecycle", h.BulkAgentLifecycle)
 				r.Get("/drafts/{draftId}", h.GetAgentDraft)
 				// Agent templates: pre-configured instructions + skill refs.
 				// Picking a template imports the referenced skills into the
@@ -1159,8 +1178,12 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Post("/archive", h.ArchiveAgent)
 					r.Post("/restore", h.RestoreAgent)
 					r.Post("/cancel-tasks", h.CancelAgentTasks)
-				r.Post("/start", h.StartAgent)
+					r.Post("/start", h.StartAgent)
 					r.Post("/stop", h.StopAgent)
+					// Assembled Computer + runtime + model + thinking for the
+					// inspector's Runtime config block, so no client has to
+					// join a runtime id against a list it may not fully see.
+					r.Get("/runtime-config", h.GetAgentRuntimeConfig)
 					r.Get("/health", h.GetAgentHealth)
 					r.Get("/reset", h.GetAgentRestart)
 					r.Post("/reset", h.ResetAgent)
@@ -1334,12 +1357,16 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// (spec 005); lets operators/AReaL track runs without the
 			// per-run capability token.
 			r.Get("/api/v1/env-dispatch/{projectID}/diagnosis/latest", h.GetLatestEnvDispatchDiagnosis)
+			r.Get("/api/v1/env-dispatch/{projectID}/files", h.DownloadEnvDispatchFile)
+			r.Post("/api/v1/env-dispatch/{projectID}/files", h.UploadEnvDispatchFile)
 			// Channel-first facades for dispatch_type=message: resolve the bound
 			// project internally. Project-first routes above remain available.
 			r.Get("/api/v1/env-dispatch/channels/{channelID}/dag", h.GetEnvDispatchChannelDag)
 			r.Post("/api/v1/env-dispatch/channels/{channelID}/diagnosis", h.DiagnoseEnvDispatchChannel)
 			r.Get("/api/v1/env-dispatch/channels/{channelID}/diagnosis/latest", h.GetLatestEnvDispatchChannelDiagnosis)
 			r.Delete("/api/v1/env-dispatch/channels/{channelID}", h.DeleteEnvDispatchChannel)
+			r.Get("/api/v1/env-dispatch/channels/{channelID}/files", h.DownloadEnvDispatchChannelFile)
+			r.Post("/api/v1/env-dispatch/channels/{channelID}/files", h.UploadEnvDispatchChannelFile)
 			r.Get("/api/v1/channels/{channelID}/env-checkpoints", h.ListChannelEnvCheckpoints)
 
 			// Env-checkpoint APIs. Gated by ENV_CHECKPOINTS_ENABLED; handlers
@@ -1444,6 +1471,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Get("/notes/pages/{id}/tree", h.ListAgentNoteTree)
 				r.Post("/notes/period-briefs/{draftPageId}/retry-collectors", h.RetryAgentNotePeriodBriefCollectors)
 				r.Post("/notes/period-briefs/{draftPageId}/submit-pack", h.SubmitAgentNotePeriodBriefPack)
+				r.Post("/notes/period-briefs/{draftPageId}/submit-collect-plan", h.SubmitAgentNotePeriodBriefCollectPlan)
 				r.Post("/issues", h.CreateAgentIssue)
 				r.Post("/issues/{id}/decompose", h.DecomposeAgentIssue)
 				r.Put("/issues/{id}", h.UpdateAgentIssue)
@@ -1495,6 +1523,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 							r.Post("/director-brief-acks", h.AcknowledgeAgentResearchV6DirectorBrief)
 							r.Get("/catalog", h.GetAgentResearchV6WorkCatalog)
 							r.Post("/catalog-acks", h.AcknowledgeAgentResearchV6WorkCatalog)
+							r.Post("/progress", h.ReportAgentResearchV6WorkProgress)
 							r.Post("/submission", h.SubmitAgentResearchV6Work)
 							r.Post("/report-uploads", h.CreateAgentResearchV6ReportUpload)
 							r.Put("/report-uploads/{uploadId}/content", h.PutAgentResearchV6ReportUpload)
@@ -1516,6 +1545,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Post("/api/agent/reminders/update", h.AgentTransportUpdateReminder)
 			r.Post("/api/agent/reminders/cancel", h.AgentTransportCancelReminder)
 			r.Post("/api/agent/reminders/log", h.AgentTransportReminderLog)
+			r.Post("/api/agent/app-sources/ack", h.AgentTransportAckAppSource)
 			r.Post("/api/agent/actions/prepare", h.AgentTransportPrepareAction)
 			r.Post("/api/agent/migrations/reserve", h.AgentMigrationLeaseReserve)
 			r.Post("/api/agent/migrations/release", h.AgentMigrationLeaseRelease)

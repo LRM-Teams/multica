@@ -16,19 +16,19 @@ function node(
     id,
     kind: tier === "S" ? "result_s" : "insight",
     tier,
-    canonical_ref: { kind: tier === "S" ? "result" : "insight", id: RUN_ID },
-    branch_ids: [],
+    canonicalRef: { kind: tier === "S" ? "result" : "insight", id: RUN_ID },
+    branchIds: [],
     state: {
       execution: "succeeded",
       conclusion: "accepted",
       integration: "candidate",
     },
-    catalog_summary: `summary ${id}`,
+    catalogSummary: `summary ${id}`,
     absorbed: false,
     terminal: true,
     expandable: false,
-    hidden_child_count: 0,
-    updated_at: "2026-08-17T08:00:00Z",
+    hiddenChildCount: 0,
+    updatedAt: "2026-08-17T08:00:00Z",
     ...overrides,
   };
 }
@@ -42,10 +42,10 @@ function edge(
   return {
     id,
     kind,
-    from_node_id: from,
-    to_node_id: to,
+    fromNodeId: from,
+    toNodeId: to,
     canonical: true,
-    hidden_count: 0,
+    hiddenCount: 0,
     expandable: false,
   };
 }
@@ -86,8 +86,8 @@ describe("Director V6 canvas adapter", () => {
       runId: RUN_ID,
       eventSequence: 9,
       nodes: [
-        node("one", "M", { branch_ids: [branchA] }),
-        node("two", "L", { branch_ids: [branchB, branchA] }),
+        node("one", "M", { branchIds: [branchA] }),
+        node("two", "L", { branchIds: [branchB, branchA] }),
       ],
       edges: [],
     });
@@ -104,14 +104,14 @@ describe("Director V6 canvas adapter", () => {
     ]);
   });
 
-  it("keeps the Goal tier canonical while using the top-size D5 presentation", () => {
+  it("keeps the Goal tier canonical while leaving room for a larger synthesis", () => {
     const result = adaptResearchV6DirectorCanvas({
       runId: RUN_ID,
       eventSequence: 8,
       nodes: [node("goal", "GOAL", { kind: "goal" })],
       edges: [],
     });
-    expect(result.graph.nodes[0]?.level).toBe("xxl");
+    expect(result.graph.nodes[0]?.level).toBe("l");
     expect(result.graph.nodes[0]?.payload).toMatchObject({
       projection_tier: "GOAL",
       semantic_role: "goal",
@@ -139,8 +139,8 @@ describe("Director V6 canvas adapter", () => {
       runId: RUN_ID,
       eventSequence: 8,
       nodes: [
-        node("expand", "L", { expandable: true, hidden_child_count: 4 }),
-        node("leaf", "M", { expandable: false, hidden_child_count: 0 }),
+        node("expand", "L", { expandable: true, hiddenChildCount: 4 }),
+        node("leaf", "M", { expandable: false, hiddenChildCount: 0 }),
       ],
       edges: [],
     });

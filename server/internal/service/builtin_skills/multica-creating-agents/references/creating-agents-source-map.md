@@ -38,6 +38,8 @@ Create / update / archive / skills / env management: **Web UI + HTTP** only.
 | Avatar verification | `agent.go` + `agent_avatar.go` | omit → assigned; picked/uploaded verified; raw URL rejected |
 | `UpdateAgent` rejects `custom_env` | ~929–938 / 1476 | 400 → use `PUT /api/agents/{id}/env` |
 | `UpdateAgent` rejects `name` / `username` | `agent.go:UpdateAgent` | permanent name can only be set during creation; edit display_name instead |
+| Bulk runtime config | `agent_bulk_runtime_config.go:BulkUpdateAgentRuntimeConfig` | `PUT /api/members/agents/runtime-config`; validates all selected Agents, then atomically writes one runtime/model/thinking tuple |
+| Bulk lifecycle | `agent_bulk_lifecycle.go:BulkAgentLifecycle`, `agent_restart.go` | `POST /api/members/agents/lifecycle`; one request applies Start, Stop, Restart, Reset session, or Full reset to multiple Agents and returns a per-Agent acceptance result |
 
 ## LRM-2343 Proposal and first-start lifecycle
 
@@ -51,6 +53,7 @@ Create / update / archive / skills / env management: **Web UI + HTTP** only.
 | Durable first start | `handler/runner_reconcile.go`, `daemon/agent_process_manager.go` | the server-owned `launch_id` is retried through `agent:start` until the current Workspace Runner accepts it; setup, reconnect, daemon restart, and Runtime moves use the same desired-vs-observed reconcile |
 | Human read model | Agent Presence and Activity APIs | accepted/active/inactive residency is the current Computer process, reported independently from user-visible Message Activity |
 | Human manual Start / Stop | `handler/agent_restart.go:StartAgent/StopAgent`, `cmd/server/router.go`, `packages/core/api/client.ts`, `packages/views/agents/components/agent-profile-actions.tsx` | owner/admin Agent Panel action; Start persists fresh launch/dispatch identities, Stop targets the current launch without durable Stop intent, and the single button follows Runner process Presence |
+| Human bulk lifecycle | `handler/agent_bulk_lifecycle.go`, `handler/agent_restart.go`, `packages/core/api/client.ts`, `packages/views/runtimes/components/runtimes-page.tsx` | owner/admin Computer action; one API request selects an action for multiple Agents and reuses the same Start/Stop/Restart state machine without client request fan-out |
 | Computer cancellation fence | `daemon/agent_process_manager.go`, `daemon/workspace_runner_agent_process.go`, `daemon/workspace_runner_message.go` | per-Agent numeric `stopEpoch` cancels async provider setup and idle auto-restart; `launchId` remains the exact-launch fence |
 
 See `docs/agent-creation-proposal-cutover.md` for the production migration

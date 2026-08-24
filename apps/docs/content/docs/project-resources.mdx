@@ -15,11 +15,13 @@ Multica leaves repository layout and Git operations to the Agent. An Agent may c
 
 ## CLI
 
+Inspect projects and bound resources with:
+
 ```bash
-multica project resource list <project-id>
-multica project resource add <project-id> --type <type> --ref '<json>'
-multica project resource update <project-id> <resource-id> --ref '<json>'
-multica project resource remove <project-id> <resource-id>
+multica workspace info --projects
+multica workspace info --projects --output json
 ```
 
-These commands only update project metadata. They do not affect execution cwd.
+The legacy `multica project resource` commands are not available. Resource
+administration is managed through the workspace UI/API and does not affect
+execution cwd.

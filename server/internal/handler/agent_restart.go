@@ -68,6 +68,15 @@ type createAgentRestartRequest struct {
 	Mode AgentRestartMode `json:"mode"`
 }
 
+type agentLifecycleRequestError struct {
+	status  int
+	message string
+}
+
+func writeAgentLifecycleRequestError(w http.ResponseWriter, err *agentLifecycleRequestError) {
+	writeError(w, err.status, err.message)
+}
+
 // StartAgent allocates a fresh immutable launch and dispatch identity before
 // asking the current Workspace Runner to start it. Reusing a failed dispatch
 // would only replay Raft's original acceptance receipt without spawning.
@@ -79,33 +88,37 @@ func (h *Handler) StartAgent(w http.ResponseWriter, r *http.Request) {
 	restarts := h.restarts()
 	restarts.lifecycleMu.Lock()
 	defer restarts.lifecycleMu.Unlock()
-	if !agent.RuntimeID.Valid {
-		writeError(w, http.StatusConflict, "agent_runtime_missing")
+	if err := h.startAgent(r.Context(), agent); err != nil {
+		writeAgentLifecycleRequestError(w, err)
 		return
 	}
-	runtime, err := h.Queries.GetAgentRuntimeForWorkspace(r.Context(), db.GetAgentRuntimeForWorkspaceParams{
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "starting"})
+}
+
+func (h *Handler) startAgent(ctx context.Context, agent db.Agent) *agentLifecycleRequestError {
+	if !agent.RuntimeID.Valid {
+		return &agentLifecycleRequestError{status: http.StatusConflict, message: "agent_runtime_missing"}
+	}
+	runtime, err := h.Queries.GetAgentRuntimeForWorkspace(ctx, db.GetAgentRuntimeForWorkspaceParams{
 		ID: agent.RuntimeID, WorkspaceID: agent.WorkspaceID,
 	})
 	if err != nil {
-		writeError(w, http.StatusConflict, "agent_runtime_missing")
-		return
+		return &agentLifecycleRequestError{status: http.StatusConflict, message: "agent_runtime_missing"}
 	}
 	if !runtime.DaemonID.Valid {
-		writeError(w, http.StatusConflict, "agent_runtime_offline")
-		return
+		return &agentLifecycleRequestError{status: http.StatusConflict, message: "agent_runtime_offline"}
 	}
 	launchID := uuid.NewString()
 	dispatchID := uuid.NewString()
 	var sessionID string
-	err = h.DB.QueryRow(r.Context(), `
+	err = h.DB.QueryRow(ctx, `
 		UPDATE agent_runner_launch_projection
 		SET launch_id = $1, start_dispatch_id = $2, updated_at = now()
 		WHERE workspace_id = $3 AND agent_id = $4 AND runtime_id = $5
 		RETURNING COALESCE(provider_session_id, '')
 	`, launchID, dispatchID, agent.WorkspaceID, agent.ID, runtime.ID).Scan(&sessionID)
 	if err != nil {
-		writeError(w, http.StatusConflict, "agent_launch_unavailable")
-		return
+		return &agentLifecycleRequestError{status: http.StatusConflict, message: "agent_launch_unavailable"}
 	}
 	h.restarts().finish(uuidToString(agent.ID))
 	if h.AgentRestartNotifier == nil || !h.AgentRestartNotifier.NotifyAgentRestartCommand(
@@ -118,10 +131,9 @@ func (h *Handler) StartAgent(w http.ResponseWriter, r *http.Request) {
 		// The desired launch and immutable dispatch are already recorded.
 		// Reconnect reconciliation replays that exact Start; it must not turn an
 		// unavailable first delivery into manual Stop intent.
-		writeJSON(w, http.StatusAccepted, map[string]string{"status": "starting"})
-		return
+		return nil
 	}
-	writeJSON(w, http.StatusAccepted, map[string]string{"status": "starting"})
+	return nil
 }
 
 func (h *Handler) StopAgent(w http.ResponseWriter, r *http.Request) {
@@ -132,18 +144,24 @@ func (h *Handler) StopAgent(w http.ResponseWriter, r *http.Request) {
 	restarts := h.restarts()
 	restarts.lifecycleMu.Lock()
 	defer restarts.lifecycleMu.Unlock()
+	if err := h.stopAgent(r.Context(), agent); err != nil {
+		writeAgentLifecycleRequestError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "stopping"})
+}
+
+func (h *Handler) stopAgent(ctx context.Context, agent db.Agent) *agentLifecycleRequestError {
 	workspaceID := uuidToString(agent.WorkspaceID)
 	agentID := uuidToString(agent.ID)
 	if !agent.RuntimeID.Valid {
-		writeError(w, http.StatusConflict, "agent_runtime_missing")
-		return
+		return &agentLifecycleRequestError{status: http.StatusConflict, message: "agent_runtime_missing"}
 	}
-	runtime, err := h.Queries.GetAgentRuntimeForWorkspace(r.Context(), db.GetAgentRuntimeForWorkspaceParams{
+	runtime, err := h.Queries.GetAgentRuntimeForWorkspace(ctx, db.GetAgentRuntimeForWorkspaceParams{
 		ID: agent.RuntimeID, WorkspaceID: agent.WorkspaceID,
 	})
 	if err != nil || !runtime.DaemonID.Valid {
-		writeError(w, http.StatusConflict, "agent_runtime_offline")
-		return
+		return &agentLifecycleRequestError{status: http.StatusConflict, message: "agent_runtime_offline"}
 	}
 	var launchID string
 	if restart, active := h.restarts().get(agentID); active && restart.workspaceID == workspaceID &&
@@ -156,23 +174,21 @@ func (h *Handler) StopAgent(w http.ResponseWriter, r *http.Request) {
 		h.restarts().finish(agentID)
 	}
 	if launchID == "" {
-		err = h.DB.QueryRow(r.Context(), `
+		err = h.DB.QueryRow(ctx, `
 			SELECT launch_id::text FROM agent_runner_launch_projection
 			WHERE workspace_id = $1 AND agent_id = $2 AND runtime_id = $3
 		`, agent.WorkspaceID, agent.ID, runtime.ID).Scan(&launchID)
 		if err != nil || launchID == "" {
-			writeError(w, http.StatusConflict, "agent_launch_unavailable")
-			return
+			return &agentLifecycleRequestError{status: http.StatusConflict, message: "agent_launch_unavailable"}
 		}
 	}
 	if h.AgentRestartNotifier == nil || !h.AgentRestartNotifier.NotifyAgentRestartCommand(
 		workspaceID, runtime.DaemonID.String, protocol.EventDaemonAgentStop, launchID,
 		protocol.WorkspaceRunnerAgentStopPayload{AgentID: agentID, LaunchID: launchID},
 	) {
-		writeError(w, http.StatusConflict, "agent_runtime_offline")
-		return
+		return &agentLifecycleRequestError{status: http.StatusConflict, message: "agent_runtime_offline"}
 	}
-	writeJSON(w, http.StatusAccepted, map[string]string{"status": "stopping"})
+	return nil
 }
 
 // GetAgentRestart returns the server-authoritative capability for Raft's
@@ -213,23 +229,28 @@ func (h *Handler) ResetAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid mode")
 		return
 	}
-	runtime, supported, reason, err := h.agentRestartRuntimeSupport(r.Context(), agent)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to start Agent restart")
+	operation, requestErr := h.resetAgent(r.Context(), agent, req.Mode, storageKind)
+	if requestErr != nil {
+		writeAgentLifecycleRequestError(w, requestErr)
 		return
+	}
+	writeJSON(w, http.StatusAccepted, operation)
+}
+
+func (h *Handler) resetAgent(ctx context.Context, agent db.Agent, mode AgentRestartMode, storageKind agentRestartStorageKind) (AgentRestartOperation, *agentLifecycleRequestError) {
+	runtime, supported, reason, err := h.agentRestartRuntimeSupport(ctx, agent)
+	if err != nil {
+		return AgentRestartOperation{}, &agentLifecycleRequestError{status: http.StatusInternalServerError, message: "failed to start Agent restart"}
 	}
 	if !supported {
-		writeError(w, http.StatusConflict, reason)
-		return
+		return AgentRestartOperation{}, &agentLifecycleRequestError{status: http.StatusConflict, message: reason}
 	}
-	if req.Mode == agentRestartModeFull &&
+	if mode == agentRestartModeFull &&
 		!workspaceRunnerResetCapabilityPresent(runtimeCapabilities(runtimeMetadata(runtime))) {
-		writeError(w, http.StatusConflict, "unsupported_runtime_capability")
-		return
+		return AgentRestartOperation{}, &agentLifecycleRequestError{status: http.StatusConflict, message: "unsupported_runtime_capability"}
 	}
 	if !runtime.DaemonID.Valid {
-		writeError(w, http.StatusConflict, "current Workspace Runner unavailable during Agent restart operation")
-		return
+		return AgentRestartOperation{}, &agentLifecycleRequestError{status: http.StatusConflict, message: "current Workspace Runner unavailable during Agent restart operation"}
 	}
 	now := time.Now().UTC()
 	state, accepted := h.restarts().begin(activeAgentRestartState{
@@ -242,10 +263,9 @@ func (h *Handler) ResetAgent(w http.ResponseWriter, r *http.Request) {
 		step:        agentRestartStepStopping,
 	})
 	if !accepted {
-		writeError(w, http.StatusConflict, "an Agent restart is already active")
-		return
+		return AgentRestartOperation{}, &agentLifecycleRequestError{status: http.StatusConflict, message: "an Agent restart is already active"}
 	}
-	if err := h.beginAgentRestartOperation(r.Context(), state); err != nil {
+	if err := h.beginAgentRestartOperation(ctx, state); err != nil {
 		slog.Warn(
 			"Agent Restart command not yet delivered",
 			"workspace_id", state.workspaceID,
@@ -253,22 +273,22 @@ func (h *Handler) ResetAgent(w http.ResponseWriter, r *http.Request) {
 			"runtime_id", state.runtimeID,
 			"agent_id", state.agentID,
 			"operation_id", state.operationID,
-			"mode", req.Mode,
+			"mode", mode,
 			"step", state.step,
 			"error", err,
 		)
 	}
 	startedAt := now.Format(time.RFC3339Nano)
-	writeJSON(w, http.StatusAccepted, AgentRestartOperation{
+	return AgentRestartOperation{
 		ID:        state.operationID,
 		AgentID:   state.agentID,
 		RuntimeID: uuidToPtr(runtime.ID),
-		Mode:      req.Mode,
+		Mode:      mode,
 		Status:    agentRestartRunning,
 		Step:      state.step,
 		CreatedAt: startedAt,
 		StartedAt: &startedAt,
-	})
+	}, nil
 }
 
 func (h *Handler) loadAgentRestartTarget(w http.ResponseWriter, r *http.Request) (db.Agent, bool) {

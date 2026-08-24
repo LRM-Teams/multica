@@ -27,8 +27,17 @@ export function createResearchV6DirectorProjectionTransport(
       api.resumeResearchV6DirectorProjection(workspaceId, runId, request, {
         signal,
       }),
-    loadNodeDetail: (workspaceId, runId, nodeId, view, signal) =>
-      api.getResearchV6DirectorProjectionNodeDetail(workspaceId, runId, nodeId, view, {
+    loadNodeDetail: (workspaceId, runId, snapshotId, nodeId, view, signal) =>
+      api.getResearchV6DirectorProjectionNodeDetail(
+        workspaceId,
+        runId,
+        snapshotId,
+        nodeId,
+        view,
+        { signal },
+      ),
+    loadWorkActivity: (workspaceId, runId, workItemId, signal) =>
+      api.getResearchV6DirectorWorkActivity(workspaceId, runId, workItemId, {
         signal,
       }),
     listReports: (workspaceId, runId, signal) =>

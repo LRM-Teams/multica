@@ -110,7 +110,8 @@ export type WSEventType =
   | "research_session:message"
   | "research_session:stage_eval"
   | "research_session:status_changed"
-  | "research_session:product_round";
+  | "research_session:product_round"
+  | "research_projection_v6:delta";
 
 export interface WSMessage<T = unknown> {
   type: WSEventType;
@@ -298,7 +299,7 @@ export interface TaskMessagePayload {
 
 /** `agent_reminder:changed` — a pure invalidate signal (schedule/snooze/update/cancel/fire/terminalize, emitted post-commit). Minimal on purpose: no title/anchor/reminder data broadcast, just the scope to refetch. */
 export interface AgentReminderChangedPayload {
-  agent_id: string;
+  agentId: string;
 }
 
 // The Workspace Runner Activity read-model is presentation-safe: callers must
@@ -639,6 +640,11 @@ export interface WSEventPayloadMap {
   "research_session:message": unknown;
   "research_session:stage_eval": unknown;
   "research_session:status_changed": unknown;
+  "research_projection_v6:delta": {
+    run_id: string;
+    through_sequence?: number;
+    delta?: unknown;
+  };
 }
 
 /**

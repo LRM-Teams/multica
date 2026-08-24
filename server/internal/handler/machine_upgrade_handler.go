@@ -165,7 +165,8 @@ func (h *Handler) requireMachineUpgradeManager(w http.ResponseWriter, r *http.Re
 	if !ok {
 		return db.AgentRuntime{}, db.Member{}, false
 	}
-	if !canManageMachineUpgrade(member, rt) {
+	rtOwnerID, _ := h.resolveRuntimeOwnerQuery(r.Context(), rt)
+	if !canManageMachineUpgrade(member, rt, rtOwnerID) {
 		writeError(w, http.StatusForbidden, "only the Computer owner can manage this upgrade")
 		return db.AgentRuntime{}, db.Member{}, false
 	}

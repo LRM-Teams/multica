@@ -1,10 +1,9 @@
 package memorygraph_test
 
 // End-to-end smoke test of the graph memory reviewer against the REAL pi
-// agent backend (no fakes): ingest -> consolidate (non-TTT) -> recall ->
-// judge -> reward. This is the test that would have caught the dormant
-// wiring bugs R1 (trajectory-less ingest), R3 (judge->reward chain no-op)
-// and R10 (hard-coded judge baseline) from the review.
+// agent backend (no fakes): ingest -> consolidate (non-TTT) -> recall.
+// This is the test that would have caught the dormant wiring bug R1
+// (trajectory-less ingest) from the review.
 //
 // Guarded by GRAPH_MEMORY_E2E=1 so CI never runs it. The pi binary is
 // resolved from PI_E2E_BIN, defaulting to "pi" on PATH.
@@ -17,7 +16,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math"
 	"os"
 	"strings"
 	"testing"
@@ -208,45 +206,6 @@ func TestGraphMemoryE2ESmoke(t *testing.T) {
 		t.Fatalf("stage 3: recall summary does not mention planted keyword %q: %q", e2eKeyword, recall.Summary)
 	}
 
-	// ── Stage 4: judge + reward composition ────────────────────────────
-	stageStart = time.Now()
-	judge := mg.NewJudge(backend, mg.JudgeConfig{Timeout: 4 * time.Minute}, "pi")
-	history := []mg.Message{
-		{Role: "user", Content: "We're seeing `fatal error: concurrent map writes` from the " + e2eKeyword + " scheduler in staging again. Do we already know the root cause?"},
-		{Role: "assistant", Content: "Yes. " + recall.Summary},
-	}
-	jres, err := judge.Judge(ctx, query, recall, history)
-	if err != nil {
-		t.Fatalf("stage 4: judge: %v", err)
-	}
-	t.Logf("stage 4: judge done in %s: score=%.3f relevant_nodes=%v rationale=%q",
-		time.Since(stageStart).Round(time.Millisecond), jres.Score, jres.RelevantNodes, truncateForLog(jres.Rationale, 300))
-	if jres.Score < 0 || jres.Score > 1 {
-		t.Fatalf("stage 4: judge score %.3f outside [0,1]", jres.Score)
-	}
-
-	sink := &fakeRewardSink{rewards: make(map[string]float64)}
-	params := mg.DefaultRewardParams()
-	composer := mg.NewRewardComposer(sink, params, time.Minute)
-	if err := composer.Submit(ctx, recall.TraceID, recall, nil); err != nil {
-		t.Fatalf("stage 4: reward submit: %v", err)
-	}
-	if err := composer.OnJudgeResult(ctx, recall.TraceID, jres); err != nil {
-		t.Fatalf("stage 4: reward on-judge-result: %v", err)
-	}
-	got, ok := sink.rewards[recall.TraceID]
-	if !ok {
-		t.Fatalf("stage 4: no reward pushed for trace %s", recall.TraceID)
-	}
-	want := expectedReward(recall, jres.Score, params)
-	if math.Abs(got-want) > 1e-9 {
-		t.Fatalf("stage 4: reward %.6f does not match formula value %.6f (score=%.3f rounds=%d)", got, want, jres.Score, recall.Rounds)
-	}
-	if composer.PendingCount() != 0 {
-		t.Fatalf("stage 4: composer still has %d pending traces after composition", composer.PendingCount())
-	}
-	t.Logf("stage 4: reward %.6f pushed for trace %s (formula value %.6f)", got, recall.TraceID, want)
-
 	total := time.Since(testStart)
 	if total > e2eWallBudget {
 		t.Fatalf("E2E exceeded wall budget: %s > %s", total.Round(time.Second), e2eWallBudget)
@@ -294,42 +253,6 @@ func e2eTrajectory(t *testing.T) json.RawMessage {
 		t.Fatalf("marshal trajectory: %v", err)
 	}
 	return raw
-}
-
-// fakeRewardSink records pushed rewards by key.
-type fakeRewardSink struct {
-	rewards map[string]float64
-}
-
-func (s *fakeRewardSink) SetReward(_ context.Context, key string, reward float64) error {
-	s.rewards[key] = reward
-	return nil
-}
-
-// expectedReward mirrors RewardComposer.composeReward for the parsed score
-// and the recorded runs of the recall (design §2 补充 formula:
-// score < τ -> MissPenalty, else mean of Base - WeightRound*rounds over
-// non-errored runs).
-func expectedReward(recall *mg.RecallResult, score float64, p mg.RewardParams) float64 {
-	if score < p.Tau {
-		return p.MissPenalty
-	}
-	if len(recall.AgentRuns) == 0 {
-		return p.Base - p.WeightRound*float64(recall.Rounds)
-	}
-	total := 0.0
-	successful := 0
-	for _, run := range recall.AgentRuns {
-		if run.Error != "" {
-			continue
-		}
-		total += p.Base - p.WeightRound*float64(run.Rounds)
-		successful++
-	}
-	if successful == 0 {
-		return p.MissPenalty
-	}
-	return total / float64(successful)
 }
 
 // truncateForLog bounds a string for log output.

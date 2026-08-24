@@ -93,10 +93,11 @@ func channelMessageIsHumanAuthored(authorType string) bool {
 	}
 }
 
-// leaseAgentInboxEventForRuntime admits one eligible per-agent priority head.
-// Pending events use priority DESC and FIFO within equal priority. After
-// locking the chosen agent, a second statement revalidates that same ordering
-// and the active-delivery predicate against a fresh READ COMMITTED snapshot.
+// leaseAgentInboxEventForRuntime admits one eligible lane priority head.
+// Pending events use priority DESC and FIFO within each issue lane or the
+// issue-less conversation lane. After locking the chosen agent, a second
+// statement revalidates that same ordering and the active-delivery predicate
+// against a fresh READ COMMITTED snapshot.
 //
 // Any membership-poison rows terminalized in this transaction are committed
 // even when no delivery is leased (poison-only / drained-to-empty / hit max),
@@ -104,7 +105,7 @@ func channelMessageIsHumanAuthored(authorType string) bool {
 func (h *Handler) channelAgentMembersWithDB(ctx context.Context, exec db.DBTX, workspaceID, channelID string) ([]db.Agent, error) {
 	rows, err := exec.Query(ctx, `
 		SELECT a.id, a.workspace_id, a.name, a.avatar_url, a.runtime_mode, a.runtime_config, a.status,
-		       a.max_concurrent_tasks, a.owner_id, a.created_at, a.updated_at, a.description, a.runtime_id,
+		       a.owner_id, a.created_at, a.updated_at, a.description, a.runtime_id,
 		       a.instructions, a.archived_at, a.display_name, a.model, a.thinking_level
 		FROM channel_member cm
 		JOIN agent a ON cm.member_type = 'agent' AND a.id = cm.member_id
@@ -117,7 +118,7 @@ func (h *Handler) channelAgentMembersWithDB(ctx context.Context, exec db.DBTX, w
 	var out []db.Agent
 	for rows.Next() {
 		var agent db.Agent
-		if err := rows.Scan(&agent.ID, &agent.WorkspaceID, &agent.Name, &agent.AvatarUrl, &agent.RuntimeMode, &agent.RuntimeConfig, &agent.Status, &agent.MaxConcurrentTasks, &agent.OwnerID, &agent.CreatedAt, &agent.UpdatedAt, &agent.Description, &agent.RuntimeID, &agent.Instructions, &agent.ArchivedAt, &agent.DisplayName, &agent.Model, &agent.ThinkingLevel); err != nil {
+		if err := rows.Scan(&agent.ID, &agent.WorkspaceID, &agent.Name, &agent.AvatarUrl, &agent.RuntimeMode, &agent.RuntimeConfig, &agent.Status, &agent.OwnerID, &agent.CreatedAt, &agent.UpdatedAt, &agent.Description, &agent.RuntimeID, &agent.Instructions, &agent.ArchivedAt, &agent.DisplayName, &agent.Model, &agent.ThinkingLevel); err != nil {
 			return nil, err
 		}
 		out = append(out, agent)
@@ -163,10 +164,11 @@ func upsertChannelObserveInboxEventTx(ctx context.Context, tx pgx.Tx, workspaceI
 		sourceMessageID, seqFrom, seqTo).Scan(&eventID)
 }
 
-// leaseAgentInboxEventForRuntime admits one eligible per-agent priority head.
-// Pending events use priority DESC and FIFO within equal priority. After
-// locking the chosen agent, a second statement revalidates that same ordering
-// and the active-delivery predicate against a fresh READ COMMITTED snapshot.
+// leaseAgentInboxEventForRuntime admits one eligible lane priority head.
+// Pending events use priority DESC and FIFO within each issue lane or the
+// issue-less conversation lane. After locking the chosen agent, a second
+// statement revalidates that same ordering and the active-delivery predicate
+// against a fresh READ COMMITTED snapshot.
 //
 // Any membership-poison rows terminalized in this transaction are committed
 // even when no delivery is leased (poison-only / drained-to-empty / hit max),
@@ -237,6 +239,10 @@ func (h *Handler) leaseAgentInboxConversationBatchForRuntime(ctx context.Context
 
 	for attempt := 0; attempt <= maxPoisonTerminalizations; attempt++ {
 		var eventID, agentID pgtype.UUID
+		// Admission mirrors the daemon's execution lanes: all issue-less work
+		// shares one conversation lane, while issue work is serialized only
+		// within the same issue and consumes the agent's configured task slots.
+		// Keep this predicate identical in the post-agent-lock revalidation below.
 		err = tx.QueryRow(ctx, `
 			SELECT event.id, event.agent_id
 			FROM agent_inbox_event event
@@ -258,6 +264,7 @@ func (h *Handler) leaseAgentInboxConversationBatchForRuntime(ctx context.Context
 			    WHERE blocking_event.agent_id = event.agent_id
 			      AND blocking_session.status = 'active'
 			      AND blocking_event.status IN ('pending', 'failed')
+			      AND blocking_event.issue_id IS NOT DISTINCT FROM event.issue_id
 			      AND (
 			        blocking_event.priority > event.priority
 			        OR (
@@ -270,9 +277,26 @@ func (h *Handler) leaseAgentInboxConversationBatchForRuntime(ctx context.Context
 			    SELECT 1
 			    FROM agent_event_delivery active_delivery
 			    JOIN agent_session active_session ON active_session.id = active_delivery.agent_session_id
+			    JOIN agent_inbox_event active_event ON active_event.id = active_delivery.inbox_event_id
 			    WHERE active_session.agent_id = event.agent_id
+			      AND active_event.status = 'draining'
+			      AND active_event.issue_id IS NOT DISTINCT FROM event.issue_id
 			      AND active_delivery.status IN ('leased', 'processing')
 			      AND active_delivery.lease_expires_at > now()
+			  )
+			  AND (
+			    event.issue_id IS NULL
+			    OR (
+			      SELECT count(DISTINCT active_event.id)
+			      FROM agent_event_delivery active_delivery
+			      JOIN agent_session active_session ON active_session.id = active_delivery.agent_session_id
+			      JOIN agent_inbox_event active_event ON active_event.id = active_delivery.inbox_event_id
+			      WHERE active_session.agent_id = event.agent_id
+			        AND active_event.status = 'draining'
+			        AND active_event.issue_id IS NOT NULL
+			        AND active_delivery.status IN ('leased', 'processing')
+			        AND active_delivery.lease_expires_at > now()
+			    ) < GREATEST(agent_row.max_concurrent_tasks, 1)
 			  )
 			ORDER BY event.priority DESC, event.requires_wake DESC, event.created_at, event.id
 			LIMIT 1`, runtime.ID).Scan(&eventID, &agentID)
@@ -330,6 +354,7 @@ func (h *Handler) leaseAgentInboxConversationBatchForRuntime(ctx context.Context
 			SELECT event.id
 			FROM agent_inbox_event event
 			JOIN agent_session session ON session.id = event.agent_session_id
+			JOIN agent agent_row ON agent_row.id = event.agent_id
 			WHERE event.id = $1
 			  AND event.agent_id = $2
 			  AND COALESCE(event.runtime_id, session.runtime_id) = $3
@@ -343,6 +368,7 @@ func (h *Handler) leaseAgentInboxConversationBatchForRuntime(ctx context.Context
 			    WHERE blocking_event.agent_id = event.agent_id
 			      AND blocking_session.status = 'active'
 			      AND blocking_event.status IN ('pending', 'failed')
+			      AND blocking_event.issue_id IS NOT DISTINCT FROM event.issue_id
 			      AND (
 			        blocking_event.priority > event.priority
 			        OR (
@@ -355,9 +381,26 @@ func (h *Handler) leaseAgentInboxConversationBatchForRuntime(ctx context.Context
 			    SELECT 1
 			    FROM agent_event_delivery active_delivery
 			    JOIN agent_session active_session ON active_session.id = active_delivery.agent_session_id
+			    JOIN agent_inbox_event active_event ON active_event.id = active_delivery.inbox_event_id
 			    WHERE active_session.agent_id = event.agent_id
+			      AND active_event.status = 'draining'
+			      AND active_event.issue_id IS NOT DISTINCT FROM event.issue_id
 			      AND active_delivery.status IN ('leased', 'processing')
 			      AND active_delivery.lease_expires_at > now()
+			  )
+			  AND (
+			    event.issue_id IS NULL
+			    OR (
+			      SELECT count(DISTINCT active_event.id)
+			      FROM agent_event_delivery active_delivery
+			      JOIN agent_session active_session ON active_session.id = active_delivery.agent_session_id
+			      JOIN agent_inbox_event active_event ON active_event.id = active_delivery.inbox_event_id
+			      WHERE active_session.agent_id = event.agent_id
+			        AND active_event.status = 'draining'
+			        AND active_event.issue_id IS NOT NULL
+			        AND active_delivery.status IN ('leased', 'processing')
+			        AND active_delivery.lease_expires_at > now()
+			    ) < GREATEST(agent_row.max_concurrent_tasks, 1)
 			  )
 			FOR UPDATE OF event`, eventID, agentID, runtime.ID).Scan(&eventID)
 		if err != nil {

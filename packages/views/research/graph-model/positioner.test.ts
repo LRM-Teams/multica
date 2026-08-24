@@ -1,14 +1,13 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { adaptV6Snapshot } from "@multica/core/adapters";
 import {
+  canvasFixtureSnapshot,
   twoComponentSnapshot,
-  v6FixtureSnapshot,
 } from "@multica/core/adapters/fixtures";
 import { deterministicPositions, recomputeScoped } from "./positioner";
 
 const baseView = () => {
-  const snap = adaptV6Snapshot(v6FixtureSnapshot());
+  const snap = canvasFixtureSnapshot();
   return { nodes: snap.nodes, edges: snap.edges };
 };
 

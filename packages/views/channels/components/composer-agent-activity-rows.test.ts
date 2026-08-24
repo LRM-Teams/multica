@@ -1,6 +1,9 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { selectComposerAgentActivityRows } from "./composer-agent-activity-rows";
+import {
+  groupComposerAgentActivityRows,
+  selectComposerAgentActivityRows,
+} from "./composer-agent-activity-rows";
 
 function item(
   agentId: string,
@@ -58,6 +61,15 @@ describe("selectComposerAgentActivityRows", () => {
     expect(rows[0]?.label).toBe("Thinking...");
   });
 
+  it("drops names in a single-agent conversation — the peer is unambiguous", () => {
+    const rows = selectComposerAgentActivityRows(
+      [{ agentId: "agent-think", name: "Collector" }],
+      [item("agent-think", "Thinking...", "active")],
+    );
+
+    expect(rows[0]?.name).toBe("");
+  });
+
   it("drops Working, hidden, and agents with no observation", () => {
     const rows = selectComposerAgentActivityRows(agents, [
       item("agent-think", "Working", "active"),
@@ -81,5 +93,100 @@ describe("selectComposerAgentActivityRows", () => {
     );
 
     expect(rows[0]?.dotClass).toBe("bg-amber-500");
+  });
+});
+
+describe("groupComposerAgentActivityRows", () => {
+  function row(agentId: string, name: string, label: string, tone = "active") {
+    const dotClass = tone === "active" ? "bg-brand" : "bg-running";
+    return { agentId, name, label, dotClass, tone };
+  }
+
+  it("merges same-verb agents onto one line", () => {
+    const { lines, hiddenAgentCount } = groupComposerAgentActivityRows([
+      row("a", "里维", "Thinking..."),
+      row("b", "leo", "Running command...", "info"),
+      row("c", "owen", "Running command...", "info"),
+    ]);
+
+    expect(hiddenAgentCount).toBe(0);
+    expect(lines).toEqual([
+      {
+        key: "Thinking",
+        label: "Thinking...",
+        dotClass: "bg-brand",
+        names: ["里维"],
+        hiddenNameCount: 0,
+      },
+      {
+        key: "Running command",
+        label: "Running command...",
+        dotClass: "bg-running",
+        names: ["leo", "owen"],
+        hiddenNameCount: 0,
+      },
+    ]);
+  });
+
+  it("caps lines and reports how many agents the tail hides", () => {
+    const { lines, hiddenAgentCount } = groupComposerAgentActivityRows([
+      row("a", "leo", "Running command..."),
+      row("b", "里维", "Thinking..."),
+      row("c", "dante", "Reading history..."),
+      row("d", "kevin", "Checking messages..."),
+      row("e", "gpt", "Checking messages..."),
+    ]);
+
+    // Same tone everywhere, so the verb the most agents share leads.
+    expect(lines.map((line) => line.label)).toEqual([
+      "Checking messages...",
+      "Reading history...",
+    ]);
+    expect(hiddenAgentCount).toBe(2);
+  });
+
+  it("puts the liveliest tone first regardless of line size", () => {
+    const { lines } = groupComposerAgentActivityRows([
+      row("a", "里维", "Thinking..."),
+      row("b", "leo", "Running command...", "info"),
+      row("c", "owen", "Running command...", "info"),
+    ]);
+
+    expect(lines.map((line) => line.label)).toEqual([
+      "Thinking...",
+      "Running command...",
+    ]);
+  });
+
+  it("caps names inside one line", () => {
+    const { lines } = groupComposerAgentActivityRows([
+      row("a", "leo", "Thinking..."),
+      row("b", "owen", "Thinking..."),
+      row("c", "kevin", "Thinking..."),
+      row("d", "dante", "Thinking..."),
+    ]);
+
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({
+      names: ["leo", "owen"],
+      hiddenNameCount: 2,
+    });
+  });
+
+  it("treats trailing ellipsis variants as the same verb", () => {
+    const { lines } = groupComposerAgentActivityRows([
+      row("a", "leo", "Thinking…"),
+      row("b", "owen", "Thinking..."),
+    ]);
+
+    expect(lines).toHaveLength(1);
+    expect(lines[0]?.names).toEqual(["leo", "owen"]);
+  });
+
+  it("returns nothing for an empty row list", () => {
+    expect(groupComposerAgentActivityRows([])).toEqual({
+      lines: [],
+      hiddenAgentCount: 0,
+    });
   });
 });

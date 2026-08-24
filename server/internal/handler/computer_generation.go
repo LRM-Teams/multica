@@ -68,7 +68,7 @@ func (h *Handler) authorizeComputerOwnerRequest(ctx context.Context, r *http.Req
 	var exists bool
 	if err := h.DB.QueryRow(ctx, `
 SELECT EXISTS (
-  SELECT 1 FROM computer_identity_owner WHERE daemon_id=$1 AND user_id=$2
+  SELECT 1 FROM computers WHERE id=$1 AND user_id=$2
 )`, daemonID, userID).Scan(&exists); err != nil {
 		return err
 	}

@@ -6,7 +6,9 @@ import {
   filterDirectoryAgents,
   filterMembersDirectoryRoster,
   isMembersDirectoryRosterReady,
+  listVisibleDirectoryRows,
   resolveMembersSelection,
+  stepDirectorySelection,
 } from "./members-directory-model";
 
 function agent(partial: Partial<Agent> & Pick<Agent, "id" | "name">): Agent {
@@ -265,5 +267,72 @@ describe("default and resolve selection", () => {
     expect(
       resolveMembersSelection(roster, { kind: "agent", id: "a1" }),
     ).toEqual({ kind: "agent", id: "a1" });
+  });
+});
+
+describe("keyboard traversal over visible rail rows", () => {
+  const runtimes = [
+    runtime({ id: "rt-1", name: "Pi", daemon_id: "d1", device_name: "s144" }),
+  ];
+  const roster = buildMembersDirectoryRoster(
+    [
+      agent({ id: "a1", name: "Alice", runtime_id: "rt-1" }),
+      agent({ id: "a2", name: "Bob", runtime_id: "rt-1" }),
+    ],
+    [member({ user_id: "u1", name: "Frank" })],
+    runtimes,
+  );
+
+  it("lists agents then humans, honouring collapsed sections", () => {
+    expect(
+      listVisibleDirectoryRows(roster, { agentsOpen: true, humansOpen: true }),
+    ).toEqual([
+      { kind: "agent", id: "a1" },
+      { kind: "agent", id: "a2" },
+      { kind: "user", id: "u1" },
+    ]);
+    expect(
+      listVisibleDirectoryRows(roster, { agentsOpen: false, humansOpen: true }),
+    ).toEqual([{ kind: "user", id: "u1" }]);
+    expect(
+      listVisibleDirectoryRows(roster, { agentsOpen: true, humansOpen: false }),
+    ).toEqual([
+      { kind: "agent", id: "a1" },
+      { kind: "agent", id: "a2" },
+    ]);
+  });
+
+  it("steps across the agent/human boundary and stops at the ends", () => {
+    const rows = listVisibleDirectoryRows(roster, {
+      agentsOpen: true,
+      humansOpen: true,
+    });
+    expect(stepDirectorySelection(rows, { kind: "agent", id: "a2" }, 1)).toEqual(
+      { kind: "user", id: "u1" },
+    );
+    expect(stepDirectorySelection(rows, { kind: "user", id: "u1" }, -1)).toEqual(
+      { kind: "agent", id: "a2" },
+    );
+    expect(stepDirectorySelection(rows, { kind: "agent", id: "a1" }, -1)).toBeNull();
+    expect(stepDirectorySelection(rows, { kind: "user", id: "u1" }, 1)).toBeNull();
+  });
+
+  it("enters the list when the selection is filtered out or absent", () => {
+    const rows = listVisibleDirectoryRows(roster, {
+      agentsOpen: true,
+      humansOpen: true,
+    });
+    expect(stepDirectorySelection(rows, null, 1)).toEqual({
+      kind: "agent",
+      id: "a1",
+    });
+    expect(stepDirectorySelection(rows, null, -1)).toEqual({
+      kind: "user",
+      id: "u1",
+    });
+    expect(
+      stepDirectorySelection(rows, { kind: "agent", id: "gone" }, 1),
+    ).toEqual({ kind: "agent", id: "a1" });
+    expect(stepDirectorySelection([], { kind: "agent", id: "a1" }, 1)).toBeNull();
   });
 });

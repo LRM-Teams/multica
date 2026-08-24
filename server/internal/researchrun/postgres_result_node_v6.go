@@ -156,7 +156,7 @@ func (s *PostgresStore) acceptAtomicResultV6Tx(ctx context.Context, tx pgx.Tx, s
 	if _, err = tx.Exec(ctx, `UPDATE research_team_membership SET state='idle' WHERE id=$1::uuid AND state='working'`, membershipID); err != nil {
 		return V6AcceptedResultNode{}, err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE research_v6_work_submission SET status='accepted',outcome=jsonb_build_object('result_node_id',$2,'result_artifact_id',$3,'artifact_version_id',$4),updated_at=now() WHERE id=$1::uuid`, submissionID, resultNodeID, resultArtifactID, artifactVersionID); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE research_v6_work_submission SET status='accepted',outcome=jsonb_build_object('result_node_id',$2::text,'result_artifact_id',$3::text,'artifact_version_id',$4::text),updated_at=now() WHERE id=$1::uuid`, submissionID, resultNodeID, resultArtifactID, artifactVersionID); err != nil {
 		return V6AcceptedResultNode{}, err
 	}
 	return V6AcceptedResultNode{ID: resultNodeID, ResultArtifactID: resultArtifactID, ArtifactVersionID: artifactVersionID, WorkItemAttemptID: in.AttemptID, ContentHash: decoded.ContentHash}, nil

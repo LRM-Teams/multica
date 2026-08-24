@@ -1,6 +1,6 @@
 ---
 name: multica-period-work-brief
-description: "Use when synthesizing a Period Work Brief / 本期工作介绍 / 周报 from platform Facts and collector packs. Covers audience-facing reporting (no evidence layer), fixed section shape (Summary with Work Summary + Next Steps; optional Technique / Achievements / Research), titles, Mermaid for intuition, status board, abandon vs retry, the narrow retry-collectors CLI (max 3), and --note-write delivery under 工作介绍/. Do not use for collecting OS work (that is multica-period-work-collect)."
+description: "Use when the Notes Assistant (笔记助手) is woken as the 写汇报 synthesizer from platform Facts and collector packs. Covers audience-facing reporting (no evidence layer), honoring optional human <focus>, fixed section shape (Summary with Work Summary + Next Steps; optional Technique / Achievements / Research), titles, Mermaid for intuition, status board, abandon vs one Notes-Assistant retry-collectors call, and --note-write delivery under 工作介绍/. Do not use for Notes FAB bubble chat (multica-notes-assistant), collect-plan command (multica-period-work-plan), or collecting OS work (multica-period-work-collect)."
 user-invocable: false
 allowed-tools: Bash(multica *)
 ---
@@ -9,9 +9,11 @@ allowed-tools: Bash(multica *)
 
 You turn **platform Facts** + **collector packs** into one Period Work Brief
 **for other people to read** (manager / colleague). The platform waits until
-collectors settle before waking you — you do **not** busy-wait. You **do**
-read the status board and decide abandon vs retry. Then you **narrate for
-humans**, you do not paste packs or show how you verified anything.
+collectors settle before waking you — you do **not** busy-wait. Inbox will
+**not** auto-retry. If any collector is retryable and `retry_count` is 0, you
+**MUST** `retry-collectors` once and stop — do not write the Brief yet. After
+the platform re-wake, that result is final; then you **narrate for humans**.
+Do not paste packs or show how you verified anything.
 
 ## Audience (non-negotiable)
 
@@ -21,6 +23,17 @@ matters **without** seeing engineering forensics.
 
 Facts and collector packs are **private source material**. Digest them; do
 not reprint their evidence layer.
+
+**Notes pages are not a source.** Do not `notes` read / search / quote
+workspace notes (current page, 工作介绍 drafts, or any other page) to fill
+the Brief. Platform Facts for 写汇报 are Issues/PRs and real agent runs
+only — never `touched_notes`, never previous 写汇报 / collector
+`note_worker` wakes.
+
+If the wake includes a `<focus>` partition (human request and/or planner
+summary), **honor that scope** when integrating. Cover the requested paths,
+topics, or aspects. Do not pad the Brief with unrelated pack material just
+because a collector mentioned it.
 
 ## Reporting shape (non-negotiable)
 
@@ -144,7 +157,7 @@ Each collector has:
 | `retryable` | platform verdict — trust it |
 | `abandon_why` | why retry is forbidden |
 | `detail` | error / stall text |
-| `retry_count` | retries already used (max 3) |
+| `retry_count` | assistant retries already used (max 1) |
 
 `ready` includes a collector that already proposed `--note-write` even if the
 job later failed (Pi/OpenAI `input[n].status` 400). Use that pack; do not
@@ -186,11 +199,14 @@ multica notes period-brief retry-collectors \
 
 Rules:
 
-1. Only retry collectors with `retryable: true` and `retry_count < 3`.
+1. If any collector is `retryable: true` and `retry_count` is 0, you **MUST**
+   call this CLI once now and **stop**. Do not write the Brief yet.
 2. Prefer listing specific `--collector-agent-id` values; omit to retry all eligible.
-3. Platform **rejects** permanent failures and over-cap retries — do not argue.
+3. Inbox will **not** auto-retry collectors. Platform rejects permanent failures
+   and a second retry — do not argue.
 4. After a successful retry response: **stop and wait**. Platform re-wakes you
-   with an updated board. Do not invent packs while waiting.
+   when that attempt settles. Then the result is final — write the Brief; do
+   not retry again.
 5. Never re-collect the OS yourself unless the wake explicitly makes you a collector.
 
 ## Deliver the Brief

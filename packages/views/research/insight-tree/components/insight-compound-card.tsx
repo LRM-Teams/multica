@@ -18,6 +18,7 @@
 import { ChevronRight } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
+import { AgentAvatarStack } from "../../../agents/components/agent-avatar-stack";
 import type {
   InsightDerivationNode,
   InsightStaleReason,
@@ -39,14 +40,6 @@ const STALE_REASON_LABEL: Record<InsightStaleReason, string> = {
   scope_changed: "范围改变",
   access_revoked: "访问已撤销",
 };
-
-/** 取贡献 Agent id 的首字母作为头像腔（不依赖 workspace 身份解析，保持纯渲染）。 */
-function initials(id: string | undefined): string {
-  if (!id) return "?";
-  const trimmed = id.trim();
-  if (!trimmed) return "?";
-  return trimmed.slice(0, 2).toUpperCase();
-}
 
 export function InsightCompoundCard({
   node,
@@ -222,28 +215,15 @@ export function InsightCompoundCard({
       {/* 底部行：贡献者与展开开关 */}
       <div className="mt-2 flex items-center justify-between gap-2">
         {node.contributingAgentIds && node.contributingAgentIds.length > 0 ? (
-          <div
-            className="flex items-center gap-1"
-            aria-label={agentLabel}
-            data-testid="contributor-stack"
-          >
-            {node.contributingAgentIds.slice(0, 3).map((id) => (
-              <Tooltip key={id}>
-                <TooltipTrigger
-                  render={
-                    <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-primary/15 text-[9px] font-bold text-primary-foreground" />
-                  }
-                >
-                  {initials(id)}
-                </TooltipTrigger>
-                <TooltipContent side="top">{id}</TooltipContent>
-              </Tooltip>
-            ))}
-            {node.contributingAgentIds.length > 3 ? (
-              <span className="text-[10px] text-muted-foreground">
-                +{node.contributingAgentIds.length - 3}
-              </span>
-            ) : null}
+          <div aria-label={agentLabel} data-testid="contributor-stack">
+            {/* One site-wide actor face. The local disc showed a two-letter
+                slice of the raw agent id — LRM-201 forbids that fake face,
+                and the id is not a name. */}
+            <AgentAvatarStack
+              agentIds={node.contributingAgentIds}
+              size={20}
+              max={3}
+            />
           </div>
         ) : (
           <span className="text-[10px] text-muted-foreground">—</span>

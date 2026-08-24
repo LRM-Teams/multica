@@ -24,7 +24,7 @@ type resultSubmission struct {
 type resultAcceptanceStore interface {
 	GetRun(context.Context, string, string) (Run, error)
 	GetTask(context.Context, string, string) (Task, error)
-	ListAttempts(context.Context, string) ([]Attempt, error)
+	ListAttempts(context.Context, string, string) ([]Attempt, error)
 	ListFleetMembers(context.Context, string, string) ([]FleetMember, error)
 	GetCurrentContract(context.Context, string, string) (ResearchContract, error)
 	AcceptResult(context.Context, AcceptResultInput) (AcceptResultOutcome, error)
@@ -45,7 +45,7 @@ func (module resultAcceptanceModule) Accept(ctx context.Context, submission resu
 	if err != nil {
 		return AcceptResultOutcome{}, err
 	}
-	attempts, err := module.store.ListAttempts(ctx, submission.SessionID)
+	attempts, err := module.store.ListAttempts(ctx, submission.SessionID, submission.WorkspaceID)
 	if err != nil {
 		return AcceptResultOutcome{}, err
 	}

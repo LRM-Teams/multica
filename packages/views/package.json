@@ -41,7 +41,6 @@
     "./knowledge": "./knowledge/index.ts",
     "./research": "./research/index.ts",
     "./research/components": "./research/components/index.ts",
-    "./research/v6-common": "./research/v6-common/index.ts",
     "./research/graph-model": "./research/graph-model/index.ts",
     "./research/v6-session-adapter": "./research/v6-session-adapter/index.ts",
     "./workspace/workspace-avatar": "./workspace/workspace-avatar.tsx",

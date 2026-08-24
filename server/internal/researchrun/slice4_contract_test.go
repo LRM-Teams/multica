@@ -47,5 +47,10 @@ func TestV6DispatchPreparationTransactionBoundary(t *testing.T) {
 }
 
 func TestV6DispatchCompletionTransactionBoundary(t *testing.T) {
-	requireSourceFragments(t, "postgres_work_dispatch_v6.go", "txOpV6DispatchComplete", "inbox_task_id", "v6_work_item_dispatched")
+	requireSourceFragments(t, "postgres_work_dispatch_v6.go", "txOpV6DispatchComplete", "inbox_task_id", "v6_work_item_dispatched",
+		"jsonb_build_object('inbox_task_id',$2::text)")
+}
+
+func TestV6ExpiredDispatchStopsItsOutboxRetryLoop(t *testing.T) {
+	requireSourceFragments(t, "postgres_work_item_recovery.go", "research_v6_outbox", "status='failed'", "stale dispatch attempt")
 }

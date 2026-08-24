@@ -150,10 +150,7 @@ func (host *Host) RunProcess(ctx context.Context, config HostProcessConfig) erro
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/health", host.processHealthHandler(state))
-	mux.HandleFunc("/shutdown", host.processShutdownHandler(state))
-	mux.HandleFunc("/environment-switch/prepare", host.processEnvironmentSwitchHandler(true))
-	mux.HandleFunc("/environment-switch/release", host.processEnvironmentSwitchHandler(false))
+	host.registerProcessRoutes(mux, state)
 	registry := host.LocalControlRegistry(state)
 	var server *http.Server
 	serveControl := func() error {
@@ -240,6 +237,13 @@ func (host *Host) RunProcess(ctx context.Context, config HostProcessConfig) erro
 	return err
 }
 
+func (host *Host) registerProcessRoutes(mux *http.ServeMux, state *hostProcessState) {
+	mux.HandleFunc("/health", host.processHealthHandler(state))
+	mux.HandleFunc("/shutdown", host.processShutdownHandler(state))
+	mux.HandleFunc("/environment-switch/prepare", host.processEnvironmentSwitchHandler(true))
+	mux.HandleFunc("/environment-switch/release", host.processEnvironmentSwitchHandler(false))
+}
+
 func normalizedWorkspaceIDs(ids []string) []string {
 	seen := make(map[string]struct{}, len(ids))
 	out := make([]string, 0, len(ids))
@@ -275,7 +279,7 @@ func (host *Host) processHealthHandler(state *hostProcessState) http.HandlerFunc
 			record, pid, ok := host.Snapshot(workspaceID)
 			entry := map[string]any{"id": workspaceID, "runtimes": host.runtimeIDs(workspaceID)}
 			if ok {
-				entry["startIdentity"] = record.StartIdentity()
+				entry["daemonInstanceId"] = record.DaemonInstanceID()
 				entry["runnerPid"] = pid
 				entry["runnerStatus"] = record.Lifecycle
 			}
@@ -316,7 +320,7 @@ func (host *Host) recordBindingDiagnostic(_ BindingChildIdentity, workspaceID st
 	if logger == nil {
 		created, err := host.diagnosticStore.Runner(diagnosticlog.RunnerOptions{
 			Environment: diagnosticlog.Environment(host.processIdentity.Environment),
-			WorkspaceID: workspaceID, StartIdentity: host.processIdentity.ServiceGeneration,
+			WorkspaceID: workspaceID, DaemonInstanceID: host.processIdentity.ServiceGeneration,
 			ComputerID: host.processIdentity.ComputerID, ServiceGeneration: host.processIdentity.ServiceGeneration,
 		})
 		if err == nil {

@@ -3,12 +3,14 @@
 import { useQuery } from "@tanstack/react-query";
 import type { RuntimeModel } from "@multica/core/types";
 import { runtimeModelsOptions } from "@multica/core/runtimes";
-import { PropRow } from "../../../common/prop-row";
+import { InspectorField } from "./inspector-field";
 import { useT } from "../../../i18n";
 import { ThinkingPicker } from "./thinking-picker";
 
 /**
- * Thinking row for the agent inspector. Hidden when the runtime doesn't
+ * Thinking field for the agent inspector's Runtime config block. (It renders
+ * an InspectorField now, not a PropRow — the block moved to label-above-value
+ * so that Model could stop trailing Runtime without a label of its own.) Hidden when the runtime doesn't
  * expose a reasoning/effort catalog at all (`thinkingDiscovery`, #59 —
  * backend-owned, never a hardcoded provider list) OR the active model
  * specifically has no `supported_levels` advertised, AND nothing is
@@ -53,14 +55,14 @@ export function ThinkingPropRow({
   if (!value && (!thinkingDiscovery || levels.length === 0)) return null;
 
   return (
-    <PropRow label={t(($) => $.inspector.prop_thinking)} interactive={false}>
+    <InspectorField label={t(($) => $.inspector.prop_thinking)}>
       <ThinkingPicker
         value={value}
         levels={levels}
         canEdit={canEdit}
         onChange={onChange}
       />
-    </PropRow>
+    </InspectorField>
   );
 }
 

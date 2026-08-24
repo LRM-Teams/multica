@@ -8,7 +8,49 @@ import (
 )
 
 type V6AttemptAccess struct {
-	WorkspaceID, RunID, WorkItemID, AttemptID, AgentID, InboxTaskID string
+	WorkspaceID string `json:"workspace_id"`
+	RunID       string `json:"run_id"`
+	WorkItemID  string `json:"work_item_id"`
+	AttemptID   string `json:"attempt_id"`
+	AgentID     string `json:"agent_id"`
+	InboxTaskID string `json:"inbox_task_id"`
+}
+
+func (a *V6AttemptAccess) UnmarshalJSON(data []byte) error {
+	type typed V6AttemptAccess
+	var current typed
+	if err := json.Unmarshal(data, &current); err != nil {
+		return err
+	}
+	var legacy struct {
+		WorkspaceID string `json:"WorkspaceID"`
+		RunID       string `json:"RunID"`
+		WorkItemID  string `json:"WorkItemID"`
+		AttemptID   string `json:"AttemptID"`
+		AgentID     string `json:"AgentID"`
+		InboxTaskID string `json:"InboxTaskID"`
+	}
+	if err := json.Unmarshal(data, &legacy); err != nil {
+		return err
+	}
+	*a = V6AttemptAccess{
+		WorkspaceID: firstFilled(current.WorkspaceID, legacy.WorkspaceID),
+		RunID:       firstFilled(current.RunID, legacy.RunID),
+		WorkItemID:  firstFilled(current.WorkItemID, legacy.WorkItemID),
+		AttemptID:   firstFilled(current.AttemptID, legacy.AttemptID),
+		AgentID:     firstFilled(current.AgentID, legacy.AgentID),
+		InboxTaskID: firstFilled(current.InboxTaskID, legacy.InboxTaskID),
+	}
+	return nil
+}
+
+func firstFilled(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 type V6WorkManifest struct {

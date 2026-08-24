@@ -192,7 +192,8 @@ func (h *Handler) BootstrapOnboardingRuntime(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusBadRequest, "invalid runtime_id")
 		return
 	}
-	if !canUseRuntimeForAgent(member, runtime) {
+	runtimeOwnerID, _ := h.resolveRuntimeOwnerQuery(r.Context(), runtime)
+	if !canUseRuntimeForAgent(member, runtime, runtimeOwnerID) {
 		writeError(w, http.StatusForbidden, "this runtime is private; only its owner or a workspace admin can create agents on it")
 		return
 	}
@@ -213,20 +214,19 @@ func (h *Handler) BootstrapOnboardingRuntime(w http.ResponseWriter, r *http.Requ
 	}
 	if !assistant.ID.Valid {
 		assistant, err = h.createAgentWithIdentityTx(r.Context(), tx, qtx, db.CreateAgentParams{
-			WorkspaceID:        wsUUID,
-			Description:        onboardingAssistantDescription,
-			AvatarUrl:          pgtype.Text{String: onboardingAssistantAvatarURL, Valid: true},
-			AvatarSource:       agentAvatarSourceAssigned,
-			RuntimeMode:        runtime.RuntimeMode,
-			RuntimeConfig:      []byte("{}"),
-			RuntimeID:          runtime.ID,
-			MaxConcurrentTasks: 6,
-			OwnerID:            parseUUID(userID),
-			Instructions:       onboardingAssistantInstructions,
-			CustomEnv:          []byte("{}"),
-			CustomArgs:         []byte("[]"),
-			McpConfig:          nil,
-			Model:              pgTextModelForRuntime(runtime.Provider),
+			WorkspaceID:   wsUUID,
+			Description:   onboardingAssistantDescription,
+			AvatarUrl:     pgtype.Text{String: onboardingAssistantAvatarURL, Valid: true},
+			AvatarSource:  agentAvatarSourceAssigned,
+			RuntimeMode:   runtime.RuntimeMode,
+			RuntimeConfig: []byte("{}"),
+			RuntimeID:     runtime.ID,
+			OwnerID:       parseUUID(userID),
+			Instructions:  onboardingAssistantInstructions,
+			CustomEnv:     []byte("{}"),
+			CustomArgs:    []byte("[]"),
+			McpConfig:     nil,
+			Model:         pgTextModelForRuntime(runtime.Provider),
 		}, onboardingAssistantName, onboardingAssistantName)
 		if err != nil {
 			slog.Warn("bootstrap onboarding (shim): create assistant failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", req.WorkspaceID)...)

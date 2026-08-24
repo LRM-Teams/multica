@@ -16,10 +16,7 @@
     "placeholder_default": "Start a message…",
     "send_tooltip": "Send",
     "stop_tooltip": "Stop",
-    "send_failed_toast": "Failed to send message",
-    "project_label": "Project",
-    "project_none": "No project",
-    "project_tooltip": "Set the project for this chat"
+    "send_failed_toast": "Failed to send message"
   },
   "message_list": {
     "show_details": "Show details",
@@ -40,6 +37,12 @@
     "copy_action": "Copy",
     "copied_toast": "Copied",
     "copy_failed_toast": "Copy failed",
+    "insert_below_action": "Insert below note",
+    "insert_child_action": "Insert as child note",
+    "insert_below_success": "Inserted below the note",
+    "insert_child_success": "Inserted child note “{{title}}”",
+    "insert_failed": "Could not insert into the note",
+    "insert_title_fallback": "Chat message",
     "expand_action": "See more",
     "collapse_action": "See less",
     "loading_older": "Loading older messages…",
@@ -87,6 +90,7 @@
     "restore_tooltip": "Restore",
     "expand_tooltip": "Expand",
     "minimize_tooltip": "Minimize",
+    "resize_sidebar_aria": "Resize assistant sidebar",
     "another_running": "Another chat is running",
     "another_unread": "Another chat has unread replies",
     "running": "Running",
@@ -125,22 +129,7 @@
   "status_pill": {
     "stages": {
       "offline": "Offline",
-      "reconnecting": "Reconnecting",
-      "queued": "Queued",
-      "starting_up": "Working",
-      "thinking": "Thinking",
-      "typing": "Output"
-    },
-    "tools": {
-      "running_command": "Running command…",
-      "reading_files": "Reading file…",
-      "searching_code": "Searching code…",
-      "making_edits": "Editing file…",
-      "searching_web": "Searching web…",
-      "updating_todos": "Updating todos…",
-      "running_subagent": "Running subagent…",
-      "planning": "Planning…",
-      "fallback": "Working"
+      "thinking": "Thinking"
     }
   },
   "bubble_cursor": {

@@ -87,6 +87,8 @@ var currentStateSlots = []func(Task) string{
 	channelGoalStateSlot,
 }
 
+const goalManagerParallelAdmission = "Parallel admission: if 2+ independently acceptable units can proceed without waiting (research, data/source collection, implementation, testing, or review), create/reuse one channel-linked parent and run `multica issue decompose <parent-issue-id> --plan-file <path> --idempotency-key <uuid>`; independent roots start together. Use `depends_on` only for prerequisites; never fake a parent with peer top-level Issues or park an independent root in backlog. No confirmation inside the Goal's scope, permissions, and budget; DIRECT only for coupled work; ask only for material boundary expansion."
+
 func currentStateOverlay(task Task) string {
 	var b strings.Builder
 	for _, slot := range currentStateSlots {
@@ -126,6 +128,7 @@ func channelGoalStateSlot(task Task) string {
 	if goal == nil || strings.TrimSpace(task.ChannelID) == "" {
 		return ""
 	}
+	isManager := agentManagesChannel(task.Agent, task.ChannelID)
 	completed := make(map[string]struct{}, len(goal.CompletedCriteria))
 	for _, criterion := range goal.CompletedCriteria {
 		completed[criterion] = struct{}{}
@@ -163,11 +166,11 @@ func channelGoalStateSlot(task Task) string {
 			c.ChannelIssueTotal, c.ChannelProjectIssueTotal, c.ProjectIssueTotal, c.OpenProjectIssueTotal,
 			c.InReviewProjectIssueTotal, c.SubgoalTotal, c.OpenSubgoalTotal)
 		if c.AgentMemberCount > 1 || c.ExecutionAdmission == "unavailable" {
-			isManager := agentManagesChannel(task.Agent, task.ChannelID)
 			if strings.TrimSpace(task.IssueID) == "" {
 				b.WriteString("EXECUTION GATE: this multi-agent Goal is not a code assignment. Do not edit shared project files, create a code branch or commit, push, open/merge a PR, or deploy from this chat task. Only durable control-plane setup and status/review coordination are admitted until this agent is claimed on a channel-linked Issue in the bound Project.\n")
 				if isManager {
 					b.WriteString("As group manager, establish the delivery chain in order: run `multica goal bootstrap --channel <id> --project-title <title> --repository-url <url>` to create/bind one Project and its canonical github_repo; create a channel-linked parent Issue in that Project; decompose non-overlapping child Issues for parallel agents; create one manager-owned integration/release Issue and set metadata `delivery_role=integration`; require implementers to submit in_review and an independent reviewer or human to approve before done. Never assign the same deliverable to two agents.\n")
+					b.WriteString(goalManagerParallelAdmission + "\n")
 				} else {
 					b.WriteString("You have no server-owned code deliverable this wake. You may analyze and propose a bounded Issue to the group manager, then wait for assignment; do not start an independent implementation.\n")
 				}
@@ -195,6 +198,9 @@ func channelGoalStateSlot(task Task) string {
 			}
 			b.WriteString("Long-running delivery is durable across turns: use parallel Issue runs, Issue comments/status, Goal checkpoints, and Reminder wakes. Do not keep one chat turn alive as the scheduler and do not redo terminal Issue work after resume.\n")
 		}
+	}
+	if isManager {
+		fmt.Fprintf(&b, "Manager process document: before changing the long-form plan, inspect your current document with `multica goal process list --channel %s --output json`. After meaningful planning, delegation, review, milestone, scope, or blocker changes, preserve useful prior context and create or update your own document with `multica goal process put --channel %s --expected-version <current-process-version-or-0> --content-file <path> --output json` (use 0 only when no document exists). Do not write a no-change placeholder. The process document and the authoritative short Goal checkpoint are separate; when both changed, update both.\n", task.ChannelID, task.ChannelID)
 	}
 	b.WriteString("Advance only the work requested in this turn toward the goal. Preserve the objective and success standard; do not revise or lower the parent goal.\n")
 	fmt.Fprintf(&b, "After concrete progress, checkpoint it with `multica goal checkpoint --channel %s --expected-version %d --progress \"...\" --current-step \"...\"` plus repeatable `--evidence`, `--completed-criterion`, or `--blocker` flags as needed. If the command reports a stale version, run `multica goal get --channel %s` and reconcile before retrying.\n", task.ChannelID, goal.Version, task.ChannelID)
@@ -290,7 +296,7 @@ func buildAssignmentPrompt(task Task) string {
 	}
 	b.WriteString("\nCurrent-turn execution contract:\n")
 	fmt.Fprintf(&b, "- Unless your Agent Identity forbids status changes, set `%s` to `in_progress` before substantive work.\n", task.IssueID)
-	b.WriteString("- Default to direct execution. If the work has independently acceptable units or needs isolated workers, first open the `multica-working-on-issues` skill and follow its current DIRECT / Issue DAG / Goal Graph boundary; do not reconstruct graph rules from an old session.\n")
+	b.WriteString("- Choose DIRECT / Issue DAG / Goal Graph before work. Keep tightly coupled delivery DIRECT; when 2+ independently acceptable units can proceed without waiting—including research, data collection, implementation, testing, or review—use parallel Issue DAG roots. No confirmation is needed inside this Issue's scope, permissions, and budget. Open the `multica-working-on-issues` skill for plan format and isolation rules.\n")
 	b.WriteString("- Complete the acceptance criteria and verify proportionately to the change. Run the relevant build, tests, or behavior check; visual comparison is required only for UI or visual acceptance criteria.\n")
 	fmt.Fprintf(&b, "- Deliver the outcome with `multica issue comment add %s` using `--content-stdin` with a quoted heredoc or a UTF-8 `--content-file`; never inline generated comment prose in the shell. Final assistant output is not the Issue reply.\n", task.IssueID)
 	fmt.Fprintf(&b, "- When complete, set `%s` to `in_review` unless status changes are forbidden. If genuinely blocked, set it to `blocked` and comment with the concrete blocker and required next action.\n", task.IssueID)

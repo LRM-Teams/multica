@@ -25,7 +25,7 @@ For building mention links, load `multica-mentioning` instead — not this skill
 Every contract below is traced to source in
 `references/working-on-issues-source-map.md`.
 
-## Choose the lightest coordination layer
+## Choose the lightest coordination layer without serializing independent work
 
 The assignment runtime requires one decision before substantive execution:
 
@@ -40,11 +40,21 @@ The assignment runtime requires one decision before substantive execution:
   `anchor_kind=channel_goal` when the work needs repeated evidence-driven
   replanning, independent verification, epochs, or a long-running loop.
 
-Do not use task length by itself as the trigger. A greeting, one tool call, or a
-small edit stays direct. An Issue DAG declares `depends_on`, starts all roots,
-and promotes downstream Issues after all prerequisites become reviewable. The
-same Agent may own multiple roots: they use independent Issue sessions and
-execution roots and can run in parallel up to its concurrency cap.
+Do not minimize Issue count as an objective. When two or more independently
+acceptable units can make progress without waiting—especially research, source
+or data collection, implementation, testing, or review—default to an Issue DAG
+whose independent roots start in parallel. Do not ask for confirmation merely
+to parallelize work already within the current Issue's scope, permissions, and
+committed budget; ask only when decomposition materially expands one of those
+boundaries. Do not use task length by itself as the trigger. A greeting, one
+tool call, or a small edit stays direct.
+
+An Issue DAG declares `depends_on`, starts all roots, and promotes downstream
+Issues after all prerequisites become reviewable. Do not park an independent
+root in `backlog`; express real prerequisites with `depends_on` and let the
+server park downstream nodes. The same Agent may own multiple roots: they use
+independent Issue sessions and execution roots and can run in parallel up to
+its concurrency cap.
 
 Use `worker_mode: derived_agent` only when the node needs strong identity or
 memory isolation: independent candidate implementations, blind/adversarial
@@ -146,11 +156,12 @@ records close intent; on merge, that close intent can move the linked issue to
 
 ### Default for code-changing issue work
 
-When an issue run changes code, keep the checkout inside this Agent workspace
-and work in that project directory or worktree. If the issue's project binds a
-`github_repo` and no checkout exists yet, list it with
-`multica workspace info --projects --output json` and clone it here first. The default handoff
-is then to open or update a PR before posting the final Multica issue comment,
+When an issue run changes code, use an existing checkout inside this Agent
+workspace and work in that project directory or worktree. If the bound
+`github_repo` has no checkout yet, inspect the current project resource with
+`multica workspace info --projects --output json`, then clone it yourself into
+this Agent workspace. Multica does not clone repositories or provision
+checkouts. The default handoff is then to open or update a PR before posting the final Multica issue comment,
 unless the user explicitly asked for a local-only change or no PR. This is a default, not
 an unconditional command: if no code changed, say no PR is needed;
 if PR creation is blocked by auth, failing tests, or missing remote state,

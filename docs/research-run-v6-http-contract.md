@@ -1,7 +1,10 @@
 # Research Run V6 HTTP and realtime contract
 
 Status: target transport contract frozen; user-facing V6 create is open. Clients
-that omit `orchestrator_version` still create V5.
+that omit `orchestrator_version` still create V5. Product-close routes:
+`GET/PATCH /api/research/v6/release`, `GET/POST /api/research/v6/monitors`,
+`PATCH /api/research/v6/monitors/{monitorId}`, `GET /api/research/v6/production-window`,
+`POST /api/research/sessions/{id}/sources/ingest`, `GET /api/research/sessions/{id}/canonical-rebuild`.
 
 Authority: [`superpowers/specs/2026-08-14-ronaldo-research-director-development-spec.zh-CN.md`](superpowers/specs/2026-08-14-ronaldo-research-director-development-spec.zh-CN.md), [`research-run-v6-contract.md`](research-run-v6-contract.md), and [`research-run-v6-storage-contract.md`](research-run-v6-storage-contract.md).
 
@@ -160,6 +163,14 @@ sends merge, stop, replan or tier commands.
 Returns one strict `work_manifest` envelope. `ETag` is the Manifest hash. The
 server returns 409 if the Attempt is no longer executable and 403 if the current
 task credential is not bound to it. A successful retry returns identical bytes.
+`branch_refs` is the frozen Branch scope for this Attempt, including each
+Branch's exact state version; submissions copy it byte-for-value rather than
+deriving versions from the Run watermark.
+For atomic Work, `task_specific_schema.payload_schemas` contains the exact single
+`payload_schema_id` key and its frozen validator. The Agent copies that key
+verbatim into `atomic_result_submission.task_specific_schema`; it never invents
+or renames the schema ID. A mismatch is rejected with the authorized ID named in
+the bounded validation error.
 
 ### 4.2 Review a paged Director Brief
 
@@ -308,13 +319,23 @@ sequence and hash must agree; sequence alone is insufficient.
 
 ### 5.3 Node detail
 
-`GET /api/research/v6/runs/{runId}/projection/nodes/{nodeId}?view=brief|full|history`
+`GET /api/research/v6/runs/{runId}/projection/nodes/{nodeId}?snapshot_id={snapshotId}&view=brief|full|history`
+
+`snapshot_id` is required and pins the lookup to the exact canonical Snapshot
+currently rendered by the caller. Node detail never creates or silently switches
+to a newer Snapshot. An expired or unknown Snapshot requires a projection resync.
 
 The response contains stable/canonical refs, current three-dimensional state,
 reason detail, Agent/Task/Attempt, Branches, evidence refs, Discussion refs,
 successor/history refs and Report refs permitted for the user. Default `brief`
 does not inline full source snapshots or Discussion transcripts. `full` and
-`history` are paginated and return exact Artifact Version IDs/hashes.
+`history` are paginated and return exact Artifact Version IDs/hashes. For a
+`result_s` or `insight` node, `full` and `history` also return the immutable
+`content_layers` bound to the node's Artifact Version, including `objective`,
+`conclusion`, supporting content, scope, uncertainties, conflicts and open
+questions. Clients render `objective` and `conclusion` as the node's primary
+purpose and outcome; `catalog_summary` remains bounded projection chrome and
+must not substitute for either field.
 
 ## 6. Report metadata
 
@@ -344,22 +365,30 @@ package hash alone does not grant access.
 
 ## 7. Realtime
 
-The authenticated existing realtime bus publishes:
+The authenticated existing realtime bus publishes a run-scoped
+sequence-advance signal for every committed Run Event:
 
 ```json
 {
   "event": "research_projection_v6:delta",
   "payload": {
     "run_id": "00000000-0000-4000-8000-000000000003",
-    "delta": {}
+    "through_sequence": 47
   }
 }
 ```
 
-`delta` is a strict `projection_delta`. Clients ignore other Runs, apply events
-only in contiguous sequence/hash order and call resume after reconnect. Malformed
-frames, a gap timeout, snapshot mismatch or hash mismatch cause a full Snapshot
-reload; clients never repair canonical state locally.
+The frame carries no delta payload: Director Projection Delta identity
+(`snapshot_id` + projection hash chain) is pinned to each client's own
+snapshot, so a broadcast frame cannot carry a delta that validates for every
+subscriber. On receiving a signal ahead of its confirmed sequence, a client
+calls the authenticated resume route, which computes the incremental
+`projection_delta` chain against that client's snapshot. Clients ignore other
+Runs and apply resumed deltas only in contiguous sequence/hash order. A gap
+timeout, snapshot mismatch or hash mismatch cause a full Snapshot reload;
+clients never repair canonical state locally. If a future payload does carry
+a `delta` field, it must be a strict `projection_delta`; unparseable deltas
+degrade to the incremental resume path, not to a full reload.
 
 User-visible control changes that do not alter graph content may still emit an
 empty Delta with a new sequence and hash chain. Notifications such as
@@ -398,6 +427,7 @@ termination removes the iframe.
   generic Work Item submission endpoint.
 - Existing Markdown Report reader remains available for legacy revisions.
 - Web/Desktop select the transport by the Run's pinned orchestrator version.
-- Until activation succeeds, attempts to create a production V6 Run return the
-  existing unsupported-version response and none of these routes authorize V6
-  mutation.
+- Explicit V6 + Director create authorizes these V6 routes. Omitted-version
+  create remains V5 until activation evidence supports changing that default;
+  workspace release control may independently close new V6 creates and pause
+  existing V6 Runs.

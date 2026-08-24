@@ -119,12 +119,11 @@ func (h *Handler) GetAgentTemplate(w http.ResponseWriter, r *http.Request) {
 // --- Create-from-template handler ---
 
 type CreateAgentFromTemplateRequest struct {
-	TemplateSlug       string `json:"template_slug"`
-	Name               string `json:"name"`
-	DisplayName        string `json:"display_name"`
-	RuntimeID          string `json:"runtime_id"`
-	Model              string `json:"model,omitempty"`
-	MaxConcurrentTasks int32  `json:"max_concurrent_tasks,omitempty"`
+	TemplateSlug string `json:"template_slug"`
+	Name         string `json:"name"`
+	DisplayName  string `json:"display_name"`
+	RuntimeID    string `json:"runtime_id"`
+	Model        string `json:"model,omitempty"`
 	// Optional overrides — let the picker UI customise the template before
 	// creation without forcing a second round-trip to the detail page.
 	// When nil/empty, the template's own values are used.
@@ -180,10 +179,6 @@ func (h *Handler) CreateAgentFromTemplate(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "runtime_id is required")
 		return
 	}
-	if req.MaxConcurrentTasks == 0 {
-		req.MaxConcurrentTasks = 6
-	}
-
 	tmpl, found := agentTemplates.Get(req.TemplateSlug)
 	if !found {
 		writeError(w, http.StatusBadRequest, "template not found: "+req.TemplateSlug)
@@ -224,7 +219,8 @@ func (h *Handler) CreateAgentFromTemplate(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	if !canUseRuntimeForAgent(member, runtime) {
+	runtimeOwnerID, _ := h.resolveRuntimeOwnerQuery(r.Context(), runtime)
+	if !canUseRuntimeForAgent(member, runtime, runtimeOwnerID) {
 		writeError(w, http.StatusForbidden, "this runtime is private; only its owner or a workspace admin can create agents on it")
 		return
 	}
@@ -444,18 +440,17 @@ func (h *Handler) CreateAgentFromTemplate(w http.ResponseWriter, r *http.Request
 		instructions = *req.Instructions
 	}
 	createParams := db.CreateAgentParams{
-		WorkspaceID:        wsUUID,
-		Description:        description,
-		Instructions:       instructions,
-		RuntimeMode:        runtime.RuntimeMode,
-		RuntimeConfig:      rc,
-		RuntimeID:          runtime.ID,
-		MaxConcurrentTasks: req.MaxConcurrentTasks,
-		OwnerID:            creatorUUID,
-		CustomEnv:          ce,
-		CustomArgs:         ca,
-		McpConfig:          nil,
-		Model:              pgtype.Text{String: strings.TrimSpace(req.Model), Valid: strings.TrimSpace(req.Model) != ""},
+		WorkspaceID:   wsUUID,
+		Description:   description,
+		Instructions:  instructions,
+		RuntimeMode:   runtime.RuntimeMode,
+		RuntimeConfig: rc,
+		RuntimeID:     runtime.ID,
+		OwnerID:       creatorUUID,
+		CustomEnv:     ce,
+		CustomArgs:    ca,
+		McpConfig:     nil,
+		Model:         pgtype.Text{String: strings.TrimSpace(req.Model), Valid: strings.TrimSpace(req.Model) != ""},
 	}
 	if err := service.RequireAgentModel(createParams.Model.String); err != nil {
 		writeError(w, http.StatusBadRequest, "model is required")

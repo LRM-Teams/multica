@@ -50,14 +50,42 @@ func TestProcessShutdownHandlerLogsAuditMetadata(t *testing.T) {
 	}
 }
 
+func TestProcessRoutesPreserveControlMethodErrors(t *testing.T) {
+	host := &Host{}
+	state := &hostProcessState{}
+	mux := http.NewServeMux()
+	host.registerProcessRoutes(mux, state)
+
+	for _, path := range []string{
+		"/shutdown",
+		"/environment-switch/prepare",
+		"/environment-switch/release",
+	} {
+		t.Run(path, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+
+			if recorder.Code != http.StatusMethodNotAllowed {
+				t.Fatalf("status = %d, want %d", recorder.Code, http.StatusMethodNotAllowed)
+			}
+			if got := recorder.Body.String(); got != "method not allowed\n" {
+				t.Fatalf("body = %q, want %q", got, "method not allowed\n")
+			}
+			if allow := recorder.Header().Get("Allow"); allow != "" {
+				t.Fatalf("Allow = %q, want empty", allow)
+			}
+		})
+	}
+}
+
 func TestHostProcessOwnsResidentControlAndDesiredBindings(t *testing.T) {
 	child := &readySupervisorChild{supervisorTestChild: newSupervisorTestChild(7101)}
 	host, err := NewHost(HostConfig{
-		Spawn: func(workspaceID, startIdentity string) (BindingChild, error) {
-			if workspaceID != "workspace-a" || startIdentity == "" {
-				t.Fatalf("spawn identity = (%q, %q)", workspaceID, startIdentity)
+		Spawn: func(workspaceID string) (BindingChild, error) {
+			if workspaceID != "workspace-a" {
+				t.Fatalf("spawn workspace = %q", workspaceID)
 			}
-			child.workspaceID, child.startIdentity = workspaceID, startIdentity
+			child.workspaceID, child.daemonInstanceID = workspaceID, "child-7201"
 			return child, nil
 		},
 		ControlToken: "owner-secret",
@@ -118,8 +146,8 @@ func TestHostProcessOwnsMachineUpgradeAndReregistersBindingChild(t *testing.T) {
 
 	child := &readySupervisorChild{supervisorTestChild: newSupervisorTestChild(7201), controlEndpoint: childControl}
 	host, err := NewHost(HostConfig{
-		Spawn: func(workspaceID, startIdentity string) (BindingChild, error) {
-			child.workspaceID, child.startIdentity = workspaceID, startIdentity
+		Spawn: func(workspaceID string) (BindingChild, error) {
+			child.workspaceID, child.daemonInstanceID = workspaceID, "child-7201"
 			return child, nil
 		}, ControlToken: token,
 	})
@@ -142,15 +170,15 @@ func TestHostProcessOwnsMachineUpgradeAndReregistersBindingChild(t *testing.T) {
 	var record RunnerRecord
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
-		if current, _, ok := host.Snapshot("workspace-a"); ok && current.StartIdentity() != "" {
+		if current, _, ok := host.Snapshot("workspace-a"); ok && current.DaemonInstanceID() != "" {
 			record = current
 			break
 		}
 		time.Sleep(time.Millisecond)
 	}
-	waitForHostCurrent(t, host, BindingChildIdentity{WorkspaceID: "workspace-a", StartIdentity: record.StartIdentity(), PID: 7201})
+	waitForHostCurrent(t, host, BindingChildIdentity{WorkspaceID: "workspace-a", DaemonInstanceID: record.DaemonInstanceID(), PID: 7201})
 	hostClient := NewHostControlClient(endpoint, token, BindingChildIdentity{
-		WorkspaceID: "workspace-a", StartIdentity: record.StartIdentity(), PID: 7201,
+		WorkspaceID: "workspace-a", DaemonInstanceID: record.DaemonInstanceID(), PID: 7201,
 	})
 	if err := hostClient.ReportRuntimeSet(context.Background(), []map[string]string{{
 		"id": "runtime-a", "workspace_id": "workspace-a", "provider": "pi",

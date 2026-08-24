@@ -46,7 +46,7 @@ func TimelineRowFromSnapshot(snapshot protocol.AgentActivitySnapshot) TimelineRo
 var workingDetailLabels = map[string]string{
 	"starting":            "Starting…",
 	"message_received":    "Message received",
-	"model_response_started": "Thinking...",
+	"model_response_started": "Working...",
 	"compacting_context":  "Compacting context...",
 	"compaction_finished": "Compaction finished",
 	"compaction_stale":    "Compaction still running",

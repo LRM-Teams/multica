@@ -28,13 +28,14 @@ import {
   TooltipContent,
 } from "@multica/ui/components/ui/tooltip";
 import { ChevronRight, ChevronDown, ChevronUp, Brain, AlertCircle, AlertTriangle, Copy } from "lucide-react";
+import { ChatMessageHoverShell } from "./chat-message-hover-actions";
 import { useScrollFade } from "@multica/ui/hooks/use-scroll-fade";
 import { chatTranscriptOptions, isStandaloneSessionOutstanding, isTaskMessageTaskId } from "@multica/core/chat/queries";
 import { Markdown } from "@multica/views/common/markdown";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { AttachmentList } from "../../issues/components/comment-card";
 import type { AgentPresence } from "@multica/core/agents";
-import type { ChatMessage, ChatPendingTask, TaskFailureReason, TaskMessagePayload } from "@multica/core/types";
+import type { ChatMessage, ChatPendingTask, TaskFailureReason } from "@multica/core/types";
 import type { ChatTimelineItem } from "@multica/core/chat";
 import { parseStickerMessage } from "@multica/core/chat";
 import { failureReasonLabel } from "../../agents/components/tabs/task-failure";
@@ -60,6 +61,7 @@ import {
   BubbleSubagentPanel,
   BubbleTodoPanel,
 } from "./bubble-cursor-panels";
+import { shouldPinChatToLatest } from "../lib/pin-chat-to-latest";
 import { useT } from "../../i18n";
 import type { MessagePart } from "@multica/core/types";
 
@@ -72,16 +74,10 @@ import type { MessagePart } from "@multica/core/types";
 
 interface ChatListChrome {
   isFetchingOlderMessages: boolean;
-  hasLive: boolean;
-  liveTimeline: ChatTimelineItem[];
-  isDmBubble: boolean;
   showStatusPill: boolean;
   pendingTask: ChatPendingTask | null | undefined;
-  liveTaskMessages: readonly TaskMessagePayload[];
   availability: AgentPresence | undefined;
   loadingOlderLabel: string;
-  /** Stable key so process-fold open state survives live remounts (LRM-690). */
-  liveFoldKey?: string;
 }
 
 const ChatListChromeContext = createContext<ChatListChrome | null>(null);
@@ -104,20 +100,9 @@ function ChatMessageListFooter() {
   if (!chrome) return null;
   return (
     <div className="mx-auto w-full max-w-4xl px-5 pb-4 space-y-4">
-      {chrome.hasLive && (
-        <div className="w-full space-y-1.5">
-          <TimelineView
-            items={chrome.liveTimeline}
-            isStreaming
-            enhanced={chrome.isDmBubble}
-            foldKey={chrome.liveFoldKey}
-          />
-        </div>
-      )}
       {chrome.showStatusPill && chrome.pendingTask && (
         <TaskStatusPill
           pendingTask={chrome.pendingTask}
-          taskMessages={chrome.liveTaskMessages}
           availability={chrome.availability}
         />
       )}
@@ -152,6 +137,13 @@ interface ChatMessageListProps {
    * tool steps. Global FAB / non-bubble chat keeps the compact fold.
    */
   isDmBubble?: boolean;
+  /**
+   * Notes bubble: copy lives on the Messages-style hover overlay, not a
+   * fixed footer slot under every reply.
+   */
+  hoverMessageActions?: boolean;
+  /** Notes page id for hover insert-below / insert-child. */
+  noteInsertPageId?: string | null;
 }
 
 export function ChatMessageList({
@@ -164,8 +156,12 @@ export function ChatMessageList({
   isFetchingOlderMessages = false,
   onLoadOlderMessages,
   isDmBubble = false,
+  hoverMessageActions = false,
+  noteInsertPageId,
 }: ChatMessageListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const lastTailIdRef = useRef<string | undefined>(undefined);
+  const pinToLatestRef = useRef(true);
   const [scrollContainerEl, setScrollContainerEl] = useState<HTMLDivElement | null>(null);
   const [isNearTop, setIsNearTop] = useState(true);
   const [isNearBottom, setIsNearBottom] = useState(true);
@@ -179,12 +175,11 @@ export function ChatMessageList({
   const turnOutstanding = isStandaloneSessionOutstanding(pendingTask);
   const lastMessage = messages[messages.length - 1];
   const pendingAlreadyPersisted = turnOutstanding && lastMessage?.role === "assistant";
-  const liveTaskMessages: TaskMessagePayload[] = [];
-  const liveTimeline: ChatTimelineItem[] = [];
-  const hasLive = false;
+  // Standalone Raft deliver has no live task:message stream — StatusPill alone
+  // covers the outstanding wait until chat:done lands the assistant message.
   const showStatusPill = turnOutstanding && !pendingAlreadyPersisted && !!pendingTask;
 
-  const totalCount = messages.length + (hasLive || showStatusPill ? 1 : 0);
+  const totalCount = messages.length + (showStatusPill ? 1 : 0);
   const firstIndex = totalCount > 0 ? firstItemIndex : 0;
   const showScrollControls = totalCount > 0 && (!isNearTop || !isNearBottom);
 
@@ -193,8 +188,28 @@ export function ChatMessageList({
     if (!scrollEl) return;
 
     const distanceFromBottom = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight;
+    const nearBottom = distanceFromBottom <= 120;
     setIsNearTop(scrollEl.scrollTop <= 120);
-    setIsNearBottom(distanceFromBottom <= 120);
+    setIsNearBottom(nearBottom);
+    if (!nearBottom) pinToLatestRef.current = false;
+  }, []);
+
+  const scrollToBoundary = useCallback((top: number) => {
+    scrollRef.current?.scrollTo({ top, behavior: "smooth" });
+  }, []);
+
+  const scrollToLatest = useCallback((behavior: ScrollBehavior) => {
+    const el = scrollRef.current;
+    if (!el) return;
+    pinToLatestRef.current = true;
+    setIsNearBottom(true);
+    const jump = () => {
+      el.scrollTo({ top: el.scrollHeight, behavior });
+    };
+    jump();
+    // Virtuoso may grow the scroller after the first paint of a new row
+    // (status pill / optimistic bubble). A second frame lands on the real end.
+    window.requestAnimationFrame(jump);
   }, []);
 
   useEffect(() => {
@@ -206,12 +221,20 @@ export function ChatMessageList({
   }, [scrollContainerEl, updateScrollPosition]);
 
   useEffect(() => {
-    updateScrollPosition();
-  }, [totalCount, hasLive, showStatusPill, updateScrollPosition]);
+    const tail = messages[messages.length - 1];
+    const previousTailId = lastTailIdRef.current;
+    if (shouldPinChatToLatest(previousTailId, tail)) {
+      scrollToLatest(previousTailId === undefined ? "auto" : "smooth");
+    }
+    lastTailIdRef.current = tail?.id;
+  }, [messages, scrollToLatest]);
 
-  const scrollToBoundary = useCallback((top: number) => {
-    scrollRef.current?.scrollTo({ top, behavior: "smooth" });
-  }, []);
+  useEffect(() => {
+    updateScrollPosition();
+    if (pinToLatestRef.current && showStatusPill) {
+      scrollToLatest("smooth");
+    }
+  }, [totalCount, showStatusPill, updateScrollPosition, scrollToLatest]);
 
   const handleMessageBodyLayoutChange = useCallback(() => {
     const shouldKeepBottom = isNearBottom;
@@ -228,24 +251,15 @@ export function ChatMessageList({
   const chromeValue = useMemo<ChatListChrome>(
     () => ({
       isFetchingOlderMessages,
-      hasLive,
-      liveTimeline,
-      isDmBubble,
       showStatusPill,
       pendingTask,
-      liveTaskMessages: liveTaskMessages ?? [],
       availability,
       loadingOlderLabel: t(($) => $.message_list.loading_older),
-      liveFoldKey: undefined,
     }),
     [
       isFetchingOlderMessages,
-      hasLive,
-      liveTimeline,
-      isDmBubble,
       showStatusPill,
       pendingTask,
-      liveTaskMessages,
       availability,
       t,
     ],
@@ -272,8 +286,15 @@ export function ChatMessageList({
             firstItemIndex={firstIndex}
             increaseViewportBy={{ top: 400, bottom: 600 }}
             atBottomThreshold={120}
-            atBottomStateChange={setIsNearBottom}
-            followOutput={() => (!isFetchingOlderMessages && isNearBottom ? "smooth" : false)}
+            atBottomStateChange={(atBottom) => {
+              setIsNearBottom(atBottom);
+              if (!atBottom) pinToLatestRef.current = false;
+            }}
+            followOutput={() => {
+              if (isFetchingOlderMessages) return false;
+              if (pinToLatestRef.current || isNearBottom) return "smooth";
+              return false;
+            }}
             startReached={() => {
               if (hasOlderMessages && !isFetchingOlderMessages) {
                 onLoadOlderMessages?.();
@@ -288,6 +309,8 @@ export function ChatMessageList({
                   message={msg}
                   isPending={false}
                   enhanced={isDmBubble}
+                  hoverMessageActions={hoverMessageActions}
+                  noteInsertPageId={noteInsertPageId}
                 />
               </div>
             )}
@@ -372,39 +395,51 @@ function MessageBubble({
   message,
   isPending,
   enhanced,
+  hoverMessageActions,
+  noteInsertPageId,
 }: {
   sessionId: string;
   message: ChatMessage;
   isPending: boolean;
   enhanced?: boolean;
+  hoverMessageActions?: boolean;
+  noteInsertPageId?: string | null;
 }) {
   if (message.role === "user") {
     return (
       <div className="flex justify-end">
-        <div className="max-w-[80%] space-y-1">
-          <div className={cn("rounded-2xl bg-muted px-3.5 py-2 text-sm break-words", selectableMessageTextClass)}>
-            {/* User messages are authored as markdown in ContentEditor, so
-             * render them through the same pipeline as assistant replies.
-             * Neutralise prose's leading/trailing margin so single-line
-             * bubbles stay as compact as the plain-text version used to. */}
-            <ChatCollapsibleBody
-              contentKey={`user:${message.id}:${message.content.length}`}
-              fadeVariant="muted"
-            >
-              <div className="prose prose-sm dark:prose-invert max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
-                <Markdown attachments={message.attachments} mentionVariant="plain">{message.content}</Markdown>
+        <ChatMessageHoverShell
+          enabled={!!hoverMessageActions}
+          copyTextValue={extractCopyText(message, [])}
+          noteInsertPageId={noteInsertPageId}
+        >
+          <div className="max-w-[80%] space-y-1">
+            <div className={cn("rounded-2xl bg-muted px-3.5 py-2 text-sm break-words", selectableMessageTextClass)}>
+              {/* User messages are authored as markdown in ContentEditor, so
+               * render them through the same pipeline as assistant replies.
+               * Neutralise prose's leading/trailing margin so single-line
+               * bubbles stay as compact as the plain-text version used to. */}
+              <ChatCollapsibleBody
+                contentKey={`user:${message.id}:${message.content.length}`}
+                fadeVariant="muted"
+              >
+                <div className="prose prose-sm dark:prose-invert max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+                  <Markdown attachments={message.attachments} mentionVariant="plain">{message.content}</Markdown>
+                </div>
+              </ChatCollapsibleBody>
+              <AttachmentList
+                attachments={message.attachments}
+                content={message.content}
+                className="mt-1.5"
+              />
+            </div>
+            {!hoverMessageActions && (
+              <div className="flex justify-end">
+                <MessageCopyButton message={message} timeline={[]} />
               </div>
-            </ChatCollapsibleBody>
-            <AttachmentList
-              attachments={message.attachments}
-              content={message.content}
-              className="mt-1.5"
-            />
+            )}
           </div>
-          <div className="flex justify-end">
-            <MessageCopyButton message={message} timeline={[]} />
-          </div>
-        </div>
+        </ChatMessageHoverShell>
       </div>
     );
   }
@@ -415,6 +450,8 @@ function MessageBubble({
       message={message}
       isPending={isPending}
       enhanced={enhanced}
+      hoverMessageActions={hoverMessageActions}
+      noteInsertPageId={noteInsertPageId}
     />
   );
 }
@@ -424,11 +461,15 @@ function AssistantMessage({
   message,
   isPending,
   enhanced,
+  hoverMessageActions,
+  noteInsertPageId,
 }: {
   sessionId: string;
   message: ChatMessage;
   isPending: boolean;
   enhanced?: boolean;
+  hoverMessageActions?: boolean;
+  noteInsertPageId?: string | null;
 }) {
   const taskId = message.task_id;
   const canFetchTaskMessages = !!sessionId && isTaskMessageTaskId(taskId);
@@ -449,44 +490,57 @@ function AssistantMessage({
   // so the user can see exactly where the run broke.
   if (message.failure_reason) {
     return (
-      <FailureBubble
-        reason={message.failure_reason}
-        rawError={message.content}
-        timeline={timeline}
-        elapsedMs={message.elapsed_ms}
-        enhanced={enhanced}
-      />
+      <ChatMessageHoverShell
+        enabled={!!hoverMessageActions}
+        copyTextValue={extractCopyText(message, timeline)}
+        noteInsertPageId={noteInsertPageId}
+      >
+        <FailureBubble
+          reason={message.failure_reason}
+          rawError={message.content}
+          timeline={timeline}
+          elapsedMs={message.elapsed_ms}
+          enhanced={enhanced}
+        />
+      </ChatMessageHoverShell>
     );
   }
 
   return (
-    <div className="w-full space-y-1.5">
-      {timeline.length > 0 ? (
-        <TimelineView
-          items={timeline}
+    <ChatMessageHoverShell
+      enabled={!!hoverMessageActions && !isPending}
+      copyTextValue={extractCopyText(message, timeline)}
+      noteInsertPageId={noteInsertPageId}
+    >
+      <div className="w-full space-y-1.5">
+        {timeline.length > 0 ? (
+          <TimelineView
+            items={timeline}
+            attachments={message.attachments}
+            enhanced={enhanced}
+            messageParts={message.parts}
+            messageContent={message.content}
+            foldKey={taskId ? `task:${taskId}` : `msg:${message.id}`}
+          />
+        ) : (
+          <MessageProse
+            content={message.content}
+            parts={message.parts}
+            attachments={message.attachments}
+          />
+        )}
+        <AttachmentList
           attachments={message.attachments}
-          enhanced={enhanced}
-          messageParts={message.parts}
-          messageContent={message.content}
-          foldKey={taskId ? `task:${taskId}` : `msg:${message.id}`}
-        />
-      ) : (
-        <MessageProse
           content={message.content}
-          parts={message.parts}
-          attachments={message.attachments}
         />
-      )}
-      <AttachmentList
-        attachments={message.attachments}
-        content={message.content}
-      />
-      <MessageFooter
-        message={message}
-        timeline={timeline}
-        isPending={isPending}
-      />
-    </div>
+        <MessageFooter
+          message={message}
+          timeline={timeline}
+          isPending={isPending}
+          hideCopy={hoverMessageActions}
+        />
+      </div>
+    </ChatMessageHoverShell>
   );
 }
 
@@ -499,12 +553,14 @@ function MessageFooter({
   message,
   timeline,
   isPending,
+  hideCopy,
 }: {
   message: ChatMessage;
   timeline: ChatTimelineItem[];
   isPending: boolean;
+  hideCopy?: boolean;
 }) {
-  const showCopy = !isPending;
+  const showCopy = !isPending && !hideCopy;
   if (message.elapsed_ms == null && !showCopy) return null;
   return (
     <div className="flex items-center gap-1.5">

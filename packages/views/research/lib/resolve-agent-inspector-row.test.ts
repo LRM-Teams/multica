@@ -16,7 +16,6 @@ describe("resolveAgentInspectorRow", () => {
       id: "agent-archived",
       name: "Ada",
       role: "researcher",
-      initials: "AD",
       status: "done",
       actionKey: "recent_done",
     } as ExecutionRow;
@@ -29,7 +28,6 @@ describe("resolveAgentInspectorRow", () => {
       id: "agent-archived",
       name: "agent-archived",
       role: "Agent",
-      initials: "AG",
       status: "unknown",
       actionKey: "unknown",
       currentNodeId: "node-s-1",

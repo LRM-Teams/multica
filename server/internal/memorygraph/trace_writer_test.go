@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,15 +35,32 @@ func completedSessionWithMessages(output string, msgs ...agent.Message) *agent.S
 
 // traceFakeBackend replays a fixed completed session: output as the final
 // response, msgs streamed before it. executeErr fails the Execute call.
+// Because the tool-server submission is authoritative, the backend drives a
+// minimal real trajectory against the tool server coordinates in the prompt
+// (view the first seed, one expand, submit citing the seed) before replaying
+// the scripted session.
 type traceFakeBackend struct {
 	output     string
 	msgs       []agent.Message
 	executeErr error
 }
 
-func (f *traceFakeBackend) Execute(_ context.Context, _ string, _ agent.ExecOptions) (*agent.Session, error) {
+func (f *traceFakeBackend) Execute(_ context.Context, prompt string, _ agent.ExecOptions) (*agent.Session, error) {
 	if f.executeErr != nil {
 		return nil, f.executeErr
+	}
+	base := promptField(prompt, "Tool server base URL: ")
+	token := promptField(prompt, "Bearer token: ")
+	traj := promptField(prompt, "Trajectory ID: ")
+	node := firstSeedNode(prompt)
+	if base == "" || token == "" || traj == "" || node == "" {
+		return nil, fmt.Errorf("prompt missing tool coordinates")
+	}
+	if status, body := explorePost(base, token, "/explore", map[string]any{"trajectory_id": traj, "node_ids": []string{node}}); status != http.StatusOK {
+		return nil, fmt.Errorf("explore %s: status %d body %s", node, status, body)
+	}
+	if status, body := explorePost(base, token, "/submit", map[string]any{"trajectory_id": traj, "found": true, "summary": "s", "node_ids": []string{node}}); status != http.StatusOK {
+		return nil, fmt.Errorf("submit: status %d body %s", status, body)
 	}
 	return completedSessionWithMessages(f.output, f.msgs...), nil
 }
@@ -86,7 +104,7 @@ func TestTraceRecorderExploreFileShape(t *testing.T) {
 
 	msgs := make(chan agent.Message, 4)
 	msgs <- agent.Message{Type: agent.MessageText, Content: "exploring the graph"}
-	msgs <- agent.Message{Type: agent.MessageToolUse, Tool: "shell", CallID: "c1", Input: map[string]any{"cmd": "curl /expand"}, SessionID: "secret-session"}
+	msgs <- agent.Message{Type: agent.MessageToolUse, Tool: "shell", CallID: "c1", Input: map[string]any{"cmd": "curl /explore"}, SessionID: "secret-session"}
 	msgs <- agent.Message{Type: agent.MessageToolResult, Tool: "shell", CallID: "c1", Output: `{"round":1}`}
 	// Diagnostic internals must never reach the trace file.
 	msgs <- agent.Message{Type: agent.MessageDiagnostic, Title: "diag", Diagnostic: "provider-internal", Content: "diag content"}
@@ -137,7 +155,7 @@ func TestTraceRecorderExploreFileShape(t *testing.T) {
 	if records[1]["content"] != "exploring the graph" || records[1]["input"] != "" {
 		t.Fatalf("text message = %v", records[1])
 	}
-	if records[2]["tool"] != "shell" || records[2]["input"] != `{"cmd":"curl /expand"}` {
+	if records[2]["tool"] != "shell" || records[2]["input"] != `{"cmd":"curl /explore"}` {
 		t.Fatalf("tool-use message = %v", records[2])
 	}
 	if records[3]["output"] != `{"round":1}` {
@@ -324,8 +342,12 @@ func TestExplorePersistsTrajectoryTrace(t *testing.T) {
 		}
 	}
 	footer := records[4]
+	// The backend drives a real trajectory: one /explore serving the first
+	// seed (1 round) plus a submit, then replays the scripted session. The
+	// footer's rounds come from the server-authoritative counter, not from
+	// the replayed JSON's rounds:1 claim (spec §4.2).
 	if footer["found"] != true || footer["rounds"] != 1.0 || footer["error"] != "" {
-		t.Fatalf("footer = %v, want found/rounds=1", footer)
+		t.Fatalf("footer = %v, want found with server-counted rounds=1", footer)
 	}
 	ids, _ := footer["node_ids"].([]any)
 	if len(ids) != 1 || ids[0] != "n-target" {

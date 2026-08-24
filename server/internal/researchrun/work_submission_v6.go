@@ -60,15 +60,17 @@ func (v boundV6SecondStage) ValidateV6Payload(schemaID string, payload json.RawM
 	if strings.TrimSpace(schemaID) == "" {
 		return fmt.Errorf("task schema %q is not authorized", schemaID)
 	}
+	var registry struct {
+		PayloadSchemas map[string]json.RawMessage `json:"payload_schemas"`
+	}
+	if json.Unmarshal(v.schema, &registry) != nil {
+		return fmt.Errorf("task schema %q has an invalid frozen validator", schemaID)
+	}
 	schema := v.schema
-	if schemaID != v.schemaID {
-		var registry struct {
-			PayloadSchemas map[string]json.RawMessage `json:"payload_schemas"`
-		}
-		if json.Unmarshal(v.schema, &registry) != nil {
-			return fmt.Errorf("task schema %q is not authorized", schemaID)
-		}
+	if len(registry.PayloadSchemas) > 0 {
 		schema = registry.PayloadSchemas[schemaID]
+	} else if schemaID != v.schemaID {
+		return fmt.Errorf("task schema %q is not authorized; use %q", schemaID, v.schemaID)
 	}
 	if len(schema) == 0 || string(schema) == "null" || string(schema) == "{}" {
 		return fmt.Errorf("task schema %q has no frozen validator", schemaID)

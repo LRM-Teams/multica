@@ -317,6 +317,58 @@ func TestFormatResidentMessageBatchCarriesDeliveryContract(t *testing.T) {
 	}
 }
 
+// engineering-principles.md §1.5: chat: targets are standalone bubble delivery,
+// not Credential Proxy transport. The idle wake must look like a chat turn —
+// never a Canonical Message JSON batch with --target (that made Notes FAB
+// agents call `message send --target chat:…` → 400).
+func TestFormatResidentMessageBatchStandaloneChatUsesAutomaticDelivery(t *testing.T) {
+	prompt, err := formatResidentMessageBatch([]ResidentMessage{{
+		ID: "message-1", Target: "chat:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", Seq: 1,
+		Content: "<note_chat_context>\ncontext_note_title: todo\n</note_chat_context>\n\nwhat is the note title?",
+		RuntimeContext: "## Current Task Initiator\n\nAlice",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"Standalone Agent Chat",
+		"private bubble conversation",
+		"final assistant output only",
+		"written back to the bubble automatically",
+		"Do not run `multica message send`",
+		"Do not run Issue commands unless",
+		"Human:",
+		"what is the note title?",
+		"<note_chat_context>",
+		"## Current Task Initiator",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("standalone chat turn prompt missing %q\n--- prompt ---\n%s", want, prompt)
+		}
+	}
+	for _, banned := range []string{
+		"Final assistant output is not delivered",
+		"Reply visibly with `multica message send --target <target>`",
+		"Canonical Messages received while the runtime was idle",
+		`"target":"chat:`,
+		"scoped only to its own Message",
+	} {
+		if strings.Contains(prompt, banned) {
+			t.Errorf("standalone chat turn prompt leaked channel Message ceremony %q\n--- prompt ---\n%s", banned, prompt)
+		}
+	}
+}
+
+func TestFormatResidentMessageBatchRejectsMixedStandaloneAndTransportTargets(t *testing.T) {
+	_, err := formatResidentMessageBatch([]ResidentMessage{
+		{ID: "m1", Target: "chat:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", Seq: 1, Content: "bubble"},
+		{ID: "m2", Target: "dm:@alice", Seq: 2, Content: "dm"},
+	})
+	if err == nil {
+		t.Fatal("expected error for mixed standalone/transport batch")
+	}
+}
+
 func TestPiRPCBackendAcceptsIdleMessageBatchAtNativePromptBoundary(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "pi")
@@ -906,6 +958,111 @@ func TestPiRPCBackendFreshRunIdentityAndResidentTurnReuse(t *testing.T) {
 	}
 	if otherBound.SessionID == bound.SessionID || otherBound.CaptureBoundary == bound.CaptureBoundary {
 		t.Fatalf("dispatches reused Pi identity: first=%+v second=%+v", bound, otherBound)
+	}
+}
+
+func TestPiRPCBackendBindRunIdentityOnFreshBackend(t *testing.T) {
+	backend := newPiRPCBackend(Config{})
+	t.Cleanup(backend.Close)
+
+	identity := PiRunIdentity{RunID: "run-1", RunAgentID: "run-agent-1"}
+	binding, err := backend.BindRunIdentity(identity)
+	if err != nil {
+		t.Fatalf("BindRunIdentity: %v", err)
+	}
+	if binding.PiRunIdentity != identity || binding.SessionID == "" || binding.CaptureBoundary == "" {
+		t.Fatalf("binding = %+v, want complete native run identity", binding)
+	}
+	if got := backend.cfg.ResidentOptions.ResumeSessionID; got != binding.SessionID {
+		t.Fatalf("resident resume session = %q, want %q", got, binding.SessionID)
+	}
+}
+
+func TestPiRPCBackendBindRunIdentityReplacesIdleUnboundProcess(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pi")
+	startsPath := filepath.Join(dir, "starts")
+	writeTestExecutable(t, path, []byte(fakePiRPCProcessScript()))
+	backend := newPiRPCBackend(Config{ExecutablePath: path, ResidentOptions: ExecOptions{Cwd: dir}, Env: map[string]string{
+		"PI_RPC_TEST_STARTS": startsPath,
+	}})
+	t.Cleanup(backend.Close)
+
+	if err := backend.EnsureResidentProcess(context.Background()); err != nil {
+		t.Fatalf("EnsureResidentProcess: %v", err)
+	}
+	waitForPiRPCTestPath(t, startsPath)
+	unboundSessionID := backend.ProviderSessionID()
+	identity := PiRunIdentity{RunID: "run-1", RunAgentID: "run-agent-1"}
+	binding, err := backend.BindRunIdentity(identity)
+	if err != nil {
+		t.Fatalf("BindRunIdentity with idle unbound process: %v", err)
+	}
+	if binding.SessionID == unboundSessionID {
+		t.Fatalf("binding reused unbound resident session %q", binding.SessionID)
+	}
+	if got := backend.ProviderSessionID(); got != "" {
+		t.Fatalf("idle unbound process was not disposed, session = %q", got)
+	}
+	if _, err := backend.PrepareRun(context.Background(), identity); err != nil {
+		t.Fatalf("PrepareRun after bind: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		data, err := os.ReadFile(startsPath)
+		if err == nil && strings.Count(string(data), "x") == 2 {
+			break
+		}
+		if err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for replacement Pi RPC process")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := backend.ProviderSessionID(); got != binding.SessionID {
+		t.Fatalf("replacement provider session = %q, want bound session %q", got, binding.SessionID)
+	}
+}
+
+func TestPiRPCBackendBindRunIdentityRejectsDifferentBoundIdentity(t *testing.T) {
+	backend := newPiRPCBackend(Config{})
+	t.Cleanup(backend.Close)
+
+	if _, err := backend.BindRunIdentity(PiRunIdentity{RunID: "run-1", RunAgentID: "run-agent-1"}); err != nil {
+		t.Fatalf("bind first identity: %v", err)
+	}
+	_, err := backend.BindRunIdentity(PiRunIdentity{RunID: "run-2", RunAgentID: "run-agent-1"})
+	if !errors.Is(err, ErrPiRPCRunIdentityRequiresFreshSession) {
+		t.Fatalf("different bound identity error = %v, want fresh-session sentinel", err)
+	}
+}
+
+func TestPiRPCBackendBindRunIdentityRejectsUnboundProcessAfterTurn(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pi")
+	writeTestExecutable(t, path, []byte(fakePiRPCProcessScript()))
+	backend := newPiRPCBackend(Config{ExecutablePath: path, ResidentOptions: ExecOptions{Cwd: dir}, Env: map[string]string{
+		"PI_RPC_TEST_STARTS": filepath.Join(dir, "starts"),
+	}})
+	t.Cleanup(backend.Close)
+
+	if err := backend.EnsureResidentProcess(context.Background()); err != nil {
+		t.Fatalf("EnsureResidentProcess: %v", err)
+	}
+	unboundSessionID := backend.ProviderSessionID()
+	session, err := backend.Execute(context.Background(), "user turn", ExecOptions{Cwd: dir})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	waitPiRPCResult(t, session, unboundSessionID)
+
+	// A completed prompt is still a served turn: its unbound native session
+	// must never be repurposed for a dispatch run identity.
+	_, err = backend.BindRunIdentity(PiRunIdentity{RunID: "run-1", RunAgentID: "run-agent-1"})
+	if !errors.Is(err, ErrPiRPCRunIdentityRequiresFreshSession) {
+		t.Fatalf("bind after unbound user turn error = %v, want fresh-session sentinel", err)
 	}
 }
 

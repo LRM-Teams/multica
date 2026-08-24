@@ -1,0 +1,2 @@
+-- Irreversible data repair: the malformed unknown-end Codex locks cannot be
+-- distinguished from valid locks after they have been cleared.

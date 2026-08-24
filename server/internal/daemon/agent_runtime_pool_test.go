@@ -21,7 +21,7 @@ type canonicalRuntimeTestBackend struct {
 }
 
 // ForceKill implements ResidentRuntimeForceKillable for tests exercising
-// forceInvalidateSession without a real OS process.
+// beginResidentTermination without a real OS process.
 func (b *canonicalRuntimeTestBackend) ForceKill() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -883,14 +883,14 @@ func TestCanonicalAgentRuntimeSessionResetRejectsBusySlot(t *testing.T) {
 	}
 }
 
-// TestCanonicalAgentRuntimeForceInvalidateSessionKillsBusySlot pins task
-// #62's core requirement: unlike invalidateSession, forceInvalidateSession
+// TestCanonicalAgentRuntimeBeginResidentTerminationKillsBusySlot pins task
+// #62's core requirement: unlike invalidateSession, beginResidentTermination
 // must not refuse a busy slot — it must call the backend's ForceKill()
 // instead of closeBackend(), leaving the in-flight turn's own goroutine
 // responsible for releasing the slot once it observes the failure (see
 // the design doc's §3/§4 for why closeBackend() itself stays off-limits
 // while running=true).
-func TestCanonicalAgentRuntimeForceInvalidateSessionKillsBusySlot(t *testing.T) {
+func TestCanonicalAgentRuntimeBeginResidentTerminationKillsBusySlot(t *testing.T) {
 	pool := newCanonicalAgentRuntimePool()
 	probe := &canonicalRuntimeFactoryProbe{}
 	identity := canonicalRuntimeIdentityForTest(t, "model-a", map[string]string{
@@ -908,15 +908,15 @@ func TestCanonicalAgentRuntimeForceInvalidateSessionKillsBusySlot(t *testing.T) 
 	}
 	backend := probe.backends[0]
 
-	if err := pool.forceInvalidateSession("agent-a", "runtime-a"); err != nil {
-		t.Fatalf("forceInvalidateSession on busy slot: %v", err)
+	if err := pool.beginResidentTermination("agent-a", "runtime-a"); err != nil {
+		t.Fatalf("beginResidentTermination on busy slot: %v", err)
 	}
 	if got := backend.forceKillCount(); got != 1 {
 		t.Fatalf("ForceKill called %d times, want 1", got)
 	}
 	created, closed := probe.counts()
 	if created != 1 || closed != 0 {
-		t.Fatalf("forceInvalidateSession touched closeBackend: created %d closed %d — it must not call closeBackend() on a running slot, only ForceKill()", created, closed)
+		t.Fatalf("beginResidentTermination touched closeBackend: created %d closed %d — it must not call closeBackend() on a running slot, only ForceKill()", created, closed)
 	}
 
 	// The in-flight "turn" (simulated by not having released the lease yet)
@@ -932,12 +932,12 @@ func TestCanonicalAgentRuntimeForceInvalidateSessionKillsBusySlot(t *testing.T) 
 	_ = created
 }
 
-// TestCanonicalAgentRuntimeForceInvalidateSessionRejectsNonForceKillableBackend
+// TestCanonicalAgentRuntimeBeginResidentTerminationRejectsNonForceKillableBackend
 // pins the fail-closed requirement from the design doc: a backend that
 // doesn't implement ResidentRuntimeForceKillable must not be silently
-// no-op'd — forceInvalidateSession falls back to the existing busy
+// no-op'd — beginResidentTermination falls back to the existing busy
 // rejection so a missing capability is loud, not silent.
-func TestCanonicalAgentRuntimeForceInvalidateSessionRejectsNonForceKillableBackend(t *testing.T) {
+func TestCanonicalAgentRuntimeBeginResidentTerminationRejectsNonForceKillableBackend(t *testing.T) {
 	pool := newCanonicalAgentRuntimePool()
 	notForceKillable := &canonicalRuntimeNonForceKillableTestBackend{}
 	factory := func(_ agent.Config) (agent.Backend, func(), error) {
@@ -957,8 +957,8 @@ func TestCanonicalAgentRuntimeForceInvalidateSessionRejectsNonForceKillableBacke
 		t.Fatalf("acquire: %v", err)
 	}
 	defer lease.release(true)
-	if err := pool.forceInvalidateSession("agent-a", "runtime-a"); !errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
-		t.Fatalf("forceInvalidateSession error = %v, want busy (fail closed, not silent no-op)", err)
+	if err := pool.beginResidentTermination("agent-a", "runtime-a"); !errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
+		t.Fatalf("beginResidentTermination error = %v, want busy (fail closed, not silent no-op)", err)
 	}
 }
 
@@ -1146,8 +1146,16 @@ func TestCheckResidentLivenessEvictsAndReportsOnlyConfirmedDeadIdleSlots(t *test
 	}
 
 	var mu sync.Mutex
-	var received []ResidentRuntimeCrashEvent
-	pool.subscribeResidentRuntimeCrash(func(ev ResidentRuntimeCrashEvent) {
+	var received []residentProcessEvent
+	pool.subscribeResidentProcess(func(ev residentProcessEvent) {
+		// Acquiring agent-alive/unknown/busy above each also fires an async
+		// "recovered" notice on this same bus (task #42②'s first-ever-create
+		// clear) with no ordering guarantee relative to this subscription —
+		// filter to the exited events this test actually pins, so it does
+		// not flake on a recovered notice landing mid-assertion.
+		if ev.Kind != residentProcessExited {
+			return
+		}
 		mu.Lock()
 		defer mu.Unlock()
 		received = append(received, ev)
@@ -1160,8 +1168,11 @@ func TestCheckResidentLivenessEvictsAndReportsOnlyConfirmedDeadIdleSlots(t *test
 	if events[0].AgentID != "agent-dead" || events[0].RuntimeID != "runtime-dead" || events[0].Provider != "opencode" {
 		t.Fatalf("unexpected event: %+v", events[0])
 	}
-	if !events[0].DetectedAt.Equal(time.Unix(500, 0)) {
-		t.Fatalf("DetectedAt = %v, want %v", events[0].DetectedAt, time.Unix(500, 0))
+	if events[0].Kind != residentProcessExited {
+		t.Fatalf("Kind = %v, want %v", events[0].Kind, residentProcessExited)
+	}
+	if !events[0].At.Equal(time.Unix(500, 0)) {
+		t.Fatalf("At = %v, want %v", events[0].At, time.Unix(500, 0))
 	}
 
 	mu.Lock()
@@ -1216,12 +1227,21 @@ func TestCheckResidentLivenessSupportsMultipleSubscribers(t *testing.T) {
 
 	var mu sync.Mutex
 	var firstSeen, secondSeen int
-	pool.subscribeResidentRuntimeCrash(func(ResidentRuntimeCrashEvent) {
+	// Filtered to exited for the same reason as the test above: the earlier
+	// acquire() also fires an async "recovered" notice on this bus with no
+	// ordering guarantee relative to this subscription.
+	pool.subscribeResidentProcess(func(ev residentProcessEvent) {
+		if ev.Kind != residentProcessExited {
+			return
+		}
 		mu.Lock()
 		firstSeen++
 		mu.Unlock()
 	})
-	pool.subscribeResidentRuntimeCrash(func(ResidentRuntimeCrashEvent) {
+	pool.subscribeResidentProcess(func(ev residentProcessEvent) {
+		if ev.Kind != residentProcessExited {
+			return
+		}
 		mu.Lock()
 		secondSeen++
 		mu.Unlock()
@@ -1375,7 +1395,7 @@ func (b *piRPCRaceBackend) PrepareMessageInput(_ context.Context, _ func(agent.M
 	return nil
 }
 
-func (b *piRPCRaceBackend) AcceptReminderInput(_ context.Context, _ agent.ResidentReminderInput) (agent.ResidentMessageAcceptance, error) {
+func (b *piRPCRaceBackend) AcceptIdleInboxNotice(_ context.Context, _ agent.ResidentPendingNotice) (agent.ResidentMessageAcceptance, error) {
 	return agent.ResidentMessageAcceptance{}, nil
 }
 

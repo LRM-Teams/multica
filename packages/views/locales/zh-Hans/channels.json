@@ -140,6 +140,8 @@
     "control_plane": "交付控制面",
     "control_plane_ready": "可以执行",
     "control_plane_blocked": "需要初始化",
+    "control_plane_issues_required": "需要创建 Issue",
+    "control_plane_unavailable": "状态不可用",
     "control_plane_complete_blocked": "请先完成 Git 项目下全部 Issue 的审核流程",
     "control_plane_project": "项目",
     "control_plane_git": "Git 仓库",
@@ -542,7 +544,7 @@
     "overflow": "{{a}}、{{b}} 等 {{count}} 人正在输入"
   },
   "conversation_activity": {
-    "more_agents": "还有 {{count}} 个 Agent 在工作"
+    "more_agents_other": "还有 {{count}} 个 Agent 在工作"
   },
   "agent_status": {
     "queued": "排队中",
@@ -635,6 +637,11 @@
     "note_brief_empty": "（空笔记）",
     "note_brief_open_note": "打开笔记",
     "note_worker_insert_below": "插入笔记下方",
+    "period_brief_insert_below": "插入笔记下面",
+    "period_brief_insert_child": "插入子笔记",
+    "period_brief_insert_below_success": "已插入当前笔记下面",
+    "period_brief_insert_child_success": "已插入子笔记「{{title}}」",
+    "period_brief_insert_failed": "无法插入汇报稿",
     "note_worker_create_child": "新建子笔记",
     "note_worker_create_note": "新建笔记",
     "note_worker_create_note_success": "已新建笔记",

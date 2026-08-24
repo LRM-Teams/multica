@@ -22,9 +22,12 @@ type AgentBackend interface {
 // ExploreConfig configures the explore-agent layer (design §6 explore block).
 type ExploreConfig struct {
 	Agents            int           // TTT K parallel trajectories; 1 in non-TTT mode
-	MaxRounds         int           // exploration-round budget per trajectory
-	MaxExpandPerRound int           // candidate cap per /expand call
-	MaxNodeChars      int           // node-body truncation served by /view
+	MaxRounds         int           // exploration-round budget per trajectory (one served node = one round)
+	MaxExpandPerRound int           // inline-neighbor cap per served node
+	// ViewsPerExpansion is retained only for caller compatibility; /explore
+	// has no per-expansion view quota and does not consume it.
+	ViewsPerExpansion int
+	MaxNodeChars      int           // node-body truncation served by /explore
 	Temperature       float64       // trajectory sampling temperature (wired at integration time)
 	Model             string        // model name passed to the agent backend
 	Timeout           time.Duration // per-trajectory wall-clock timeout
@@ -34,8 +37,9 @@ type ExploreConfig struct {
 func DefaultExploreConfig() ExploreConfig {
 	return ExploreConfig{
 		Agents:            1,
-		MaxRounds:         3,
+		MaxRounds:         6,
 		MaxExpandPerRound: 5,
+		ViewsPerExpansion: 1,
 		MaxNodeChars:      2000,
 		Timeout:           5 * time.Minute,
 	}
@@ -129,7 +133,7 @@ func (e *Explorer) Explore(ctx context.Context, query string) (*RecallResult, er
 
 	// Version pinning (design R5/R12): resolve the graph version ONCE — the
 	// pinned version when set, else the current pointer — and serve the
-	// whole call (seed retrieval, /view, /expand, /submit validation) from
+	// whole call (seed retrieval, /explore, /submit validation) from
 	// that version, so a mid-explore consolidation switch never swaps the
 	// graph under an in-flight trajectory.
 	version := e.pinnedVersion
@@ -201,6 +205,7 @@ func (e *Explorer) Explore(ctx context.Context, query string) (*RecallResult, er
 		result.Summary = a.Summary
 		result.NodeIDs = a.NodeIDs
 		result.Rounds = a.Rounds
+		result.Citations = qualifyRecallCitations(e.store, version, a.NodeIDs)
 		return result, nil
 	}
 	// Miss: report the fewest rounds among parsed runs for observability.
@@ -289,10 +294,16 @@ func (e *Explorer) runTrajectory(ctx context.Context, srv *ExploreToolServer, ba
 		run.Error = "final response is not a valid explore JSON object"
 		return run
 	}
-	run.Found = out.Found
-	run.Summary = out.Summary
-	run.NodeIDs = out.NodeIDs
-	run.Rounds = max(out.Rounds, srv.trajectoryRounds(trajectoryID))
+	sub := srv.trajectorySubmission(trajectoryID)
+	if sub == nil {
+		run.Error = "agent completed without a tool-server submission"
+		return run
+	}
+	run.Found = sub.Found
+	run.Summary = sub.Summary
+	run.NodeIDs = sub.NodeIDs
+	run.ViewedNodeIDs = srv.trajectoryViewed(trajectoryID)
+	run.Rounds = srv.trajectoryRounds(trajectoryID)
 	// Budget enforcement cross-check (design Q15/A6): a trajectory that kept
 	// expanding past the round budget is never adopted, no matter what the
 	// agent's final response claims.
@@ -300,6 +311,32 @@ func (e *Explorer) runTrajectory(ctx context.Context, srv *ExploreToolServer, ba
 		run.Found = false
 	}
 	return run
+}
+
+// qualifyRecallCitations attaches level/epistemic qualifiers from the pinned
+// graph version to each adopted node id (spec §3 step 8). Best-effort: ids
+// that are not graph nodes (staging segments) — or every id when the pinned
+// graph cannot be read — yield bare citations with Level -1.
+func qualifyRecallCitations(store *Store, version int, ids []string) []Citation {
+	if len(ids) == 0 {
+		return nil
+	}
+	var g *Graph
+	if graph, err := LoadGraph(store, version); err == nil {
+		g = graph
+	}
+	out := make([]Citation, 0, len(ids))
+	for _, id := range ids {
+		c := Citation{NodeID: id, Level: -1}
+		if g != nil {
+			if n := g.Node(id); n != nil {
+				c.Level = n.Level
+				c.Epistemic = n.Epistemic
+			}
+		}
+		out = append(out, c)
+	}
+	return out
 }
 
 // seedSnippets resolves retrieval hits to prompt snippets, reading graph
@@ -353,16 +390,15 @@ func (e *Explorer) buildPrompt(baseURL, token, trajectoryID, query string, seed 
 	fmt.Fprintf(&b, "\nTool server base URL: %s\n", baseURL)
 	fmt.Fprintf(&b, "Bearer token: %s\n\n", token)
 	b.WriteString("Call it with your shell tool using curl. Every request needs the Authorization header and a JSON body, e.g.:\n")
-	fmt.Fprintf(&b, "  curl -s -X POST %s/view -H \"Authorization: Bearer %s\" -H \"Content-Type: application/json\" -d '{\"trajectory_id\":\"%s\",\"node_id\":\"<node_id>\"}'\n\n", baseURL, token, trajectoryID)
+	fmt.Fprintf(&b, "  curl -s -X POST %s/explore -H \"Authorization: Bearer %s\" -H \"Content-Type: application/json\" -d '{\"trajectory_id\":\"%s\",\"node_ids\":[\"<node_id>\"]}'\n\n", baseURL, token, trajectoryID)
 
 	b.WriteString("Endpoints:\n")
-	fmt.Fprintf(&b, "- POST /view   {\"trajectory_id\",\"node_id\"} -> node body (truncated to %d chars) plus level, epistemic_status, tags. \"seg:\" ids are staging segments.\n", e.cfg.MaxNodeChars)
-	fmt.Fprintf(&b, "- POST /expand {\"trajectory_id\",\"node_id\",\"relation\"?} -> neighbor candidates ordered by relevance (hierarchy parents/children, entity co-occurrence, typed relations, embedding neighbors). One call = one exploration round; at most %d candidates per call; response has {\"round\",\"budget_exceeded\",\"candidates\"}. Once the round budget is spent the server rejects further expands with budget_exceeded=true and empty candidates.\n", e.cfg.MaxExpandPerRound)
+	fmt.Fprintf(&b, "- POST /explore {\"trajectory_id\",\"node_ids\":[...]} -> for each requested node: its body (truncated to %d chars) plus level, epistemic_status, tags, and inline neighbors ordered by relevance (hierarchy parents/children, entity co-occurrence, typed relations, embedding neighbors) each with id/via/level/snippet. \"seg:\" ids are staging segments (body only, no neighbors). At most %d neighbors per node; response has {\"round\",\"budget_exceeded\",\"nodes\"}. Reading a neighbor's full body costs one more /explore on that id.\n", e.cfg.MaxNodeChars, e.cfg.MaxExpandPerRound)
 	b.WriteString("- POST /submit {\"trajectory_id\",\"found\":bool,\"summary\",\"node_ids\":[...]} -> record your final answer.\n\n")
 
 	b.WriteString("Budget rules (hard limits):\n")
-	fmt.Fprintf(&b, "- At most %d exploration rounds; each /expand call consumes one round.\n", e.cfg.MaxRounds)
-	fmt.Fprintf(&b, "- Each round expands at most %d candidates.\n", e.cfg.MaxExpandPerRound)
+	fmt.Fprintf(&b, "- At most %d exploration rounds; each node served by /explore consumes one round (a batch of N nodes consumes N rounds). Once the budget is spent the server rejects further explores with budget_exceeded=true and empty nodes.\n", e.cfg.MaxRounds)
+	fmt.Fprintf(&b, "- Each served node lists at most %d neighbors.\n", e.cfg.MaxExpandPerRound)
 	fmt.Fprintf(&b, "- Node bodies are truncated to %d characters.\n\n", e.cfg.MaxNodeChars)
 
 	b.WriteString("When you find information relevant to the query, call /submit with found=true, a concise summary, and the supporting node ids. If the budget is exhausted without finding relevant information, call /submit with found=false.\n\n")

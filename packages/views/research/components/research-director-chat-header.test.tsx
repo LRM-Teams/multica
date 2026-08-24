@@ -3,6 +3,14 @@ import { describe, expect, it, vi } from "vitest";
 import enResearch from "../../locales/en/research.json";
 import { ResearchDirectorChatHeader } from "./research-director-chat-header";
 
+// The header now renders the site-wide smart avatar, which resolves identity
+// through workspace queries. This suite is about the header's own copy.
+vi.mock("../../common/actor-avatar", () => ({
+  ActorAvatar: ({ actorId }: { actorId: string }) => (
+    <div data-testid={`actor-avatar-${actorId}`} />
+  ),
+}));
+
 vi.mock("../../i18n/use-t", () => ({
   useT: () => ({
     t: (selector: (bundle: typeof enResearch) => unknown) => selector(enResearch),

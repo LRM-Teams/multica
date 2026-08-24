@@ -65,7 +65,18 @@ func (a *envSandboxLifecycleDepsAdapter) GetSandboxInstanceRef(ctx context.Conte
 	if err != nil {
 		return service.SandboxInstanceRef{}, fmt.Errorf("get sandbox instance: %w", err)
 	}
-	return sandboxInstanceRowToRef(row), nil
+	return sandboxInstanceRowToRef(sandboxInstanceFromGetRow(row)), nil
+}
+
+// sandboxInstanceFromGetRow normalizes the identical GetSandboxInstanceForWorkspace
+// row (regenerated sqlc emits a per-query Row) to the ListSandboxInstancesByWorkspace
+// row shape the ref mapper consumes.
+func sandboxInstanceFromGetRow(r db.GetSandboxInstanceForWorkspaceRow) db.ListSandboxInstancesByWorkspaceRow {
+	return db.ListSandboxInstancesByWorkspaceRow{
+		ID: r.ID, WorkspaceID: r.WorkspaceID, CreatorUserID: r.CreatorUserID, NodeID: r.NodeID,
+		Status: r.Status, Template: r.Template, LocalRef: r.LocalRef, EndpointInfo: r.EndpointInfo,
+		Limits: r.Limits, Metadata: r.Metadata, Error: r.Error, CreatedAt: r.CreatedAt,
+	}
 }
 
 // MintSandboxRuntimeEnv satisfies EnvSandboxLifecycleDeps. It mints the daemon

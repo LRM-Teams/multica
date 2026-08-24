@@ -1,7 +1,9 @@
 # working-on-issues source map
 
-Checkout location: keep clones inside the Agent workspace and discover a
-project-bound `github_repo` via `multica workspace info --projects` (live,
+Checkout location: use an existing project directory or worktree inside the
+Agent workspace. If a bound `github_repo` has no checkout, the Agent clones it
+into that workspace; Multica does not clone repositories or provision checkouts.
+Discover project bindings with `multica workspace info --projects` (live,
 because resident AGENTS.md is not rewritten when resources change). Runtime
 brief contract: `server/internal/daemon/execenv/runtime_config.go`
 (`renderProjectContext`, Agent Memory Scope) and
@@ -18,6 +20,8 @@ at the bottom before relying on an exact line.
 | Behavior | Source |
 | --- | --- |
 | Assignment runs receive the `DIRECT / ISSUE_DAG / GOAL_GRAPH` decision boundary before substantive execution | `server/internal/daemon/execenv/runtime_config.go`, assignment-triggered branch and `Work Decomposition Gate` |
+| Independently acceptable research, data collection, implementation, testing, or review defaults to parallel Issue roots without a second confirmation when it remains inside the admitted scope, permissions, and budget | `server/internal/daemon/execenv/runtime_config.go`, `Work Decomposition Gate`; `server/internal/daemon/prompt.go`, assignment current-turn contract; guarded by `TestAssignmentBriefIncludesWorkDecompositionGate` and `TestBuildPromptAssignmentCarriesTurnWorkflowAndLazyDecomposition` |
+| An active multi-Agent Goal manager receives the parallel admission before creating or dispatching Issues, including the atomic `issue decompose` command and the prohibition on prose-only parents / peer top-level substitutes | `server/internal/daemon/prompt.go`, `channelGoalStateSlot`; guarded by `TestBuildPromptChannelManagerDefaultsIndependentGoalWorkToIssueDAG` |
 | Runtime advertises the shipped atomic graph CLI but not an unavailable `issue verify` command | `server/internal/daemon/execenv/runtime_config_test.go`, `TestAssignmentBriefIncludesWorkDecompositionGate` |
 | Atomic graph CLI and stable idempotency key | `server/cmd/multica/cmd_issue_graph.go`; `server/internal/handler/agent_work_graph.go`; `server/internal/workgraph/runtime.go` |
 | Canonical DAG validation, ready calculation and downstream invalidation | `server/internal/workgraph/runtime.go`; `server/internal/workgraph/runtime_test.go`; `server/internal/workgraph/runtime_postgres_test.go` |

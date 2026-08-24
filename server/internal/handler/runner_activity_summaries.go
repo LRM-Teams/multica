@@ -59,7 +59,6 @@ func (h *Handler) ListRunnerActivitySummaries(w http.ResponseWriter, r *http.Req
 	}
 	defer rows.Close()
 
-	inFlight := h.workspaceInFlightInboxAgentIDs(r.Context(), workspaceID)
 	response := RunnerActivitySummariesResponse{Items: []RunnerActivitySummaryResponseItem{}}
 	for rows.Next() {
 		var agentID pgtype.UUID
@@ -70,6 +69,7 @@ func (h *Handler) ListRunnerActivitySummaries(w http.ResponseWriter, r *http.Req
 			writeError(w, http.StatusInternalServerError, "failed to load runner activity summaries")
 			return
 		}
+		agentIDStr := util.UUIDToString(agentID)
 		if !h.liveRunnerOwnsActivitySnapshot(daemonID, util.UUIDToString(workspaceID), snapshot) {
 			continue
 		}
@@ -77,11 +77,8 @@ func (h *Handler) ListRunnerActivitySummaries(w http.ResponseWriter, r *http.Req
 		if errorText.Valid {
 			summary = runnerActivitySummaryWithError(summary, errorText.String)
 		}
-		if _, busy := inFlight[util.UUIDToString(agentID)]; busy {
-			summary = overlayInFlightInboxOnIdleRunnerSummary(summary)
-		}
 		response.Items = append(response.Items, RunnerActivitySummaryResponseItem{
-			AgentID: util.UUIDToString(agentID),
+			AgentID: agentIDStr,
 			Summary: summary,
 		})
 	}
@@ -89,7 +86,6 @@ func (h *Handler) ListRunnerActivitySummaries(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusInternalServerError, "failed to load runner activity summaries")
 		return
 	}
-
 	writeJSON(w, http.StatusOK, response)
 }
 

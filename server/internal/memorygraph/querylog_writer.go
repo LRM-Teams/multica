@@ -35,6 +35,14 @@ type BaselineSignal struct {
 	TopK    []string
 }
 
+// JudgeResult is the asynchronous judgment data written to a query-log entry.
+// The writer retains this transport type after the judge runtime was removed.
+type JudgeResult struct {
+	Score         float64  `json:"score"`
+	RelevantNodes []string `json:"relevant_nodes"`
+	Rationale     string   `json:"rationale"`
+}
+
 // ApplyJudge writes the judge result back onto the entry with the given trace
 // id: it marks the entry judged, records the score, the relevant-node ground
 // truth set, and the judge-time baseline coverage signal (design §5.3). It
@@ -56,17 +64,33 @@ func (r *QueryRecorder) ApplyJudge(traceID string, res *JudgeResult, baseline Ba
 	return found, nil
 }
 
-// QueriesBetween returns the judged entries of the current window whose graph
-// version falls in (aVersion, bVersion] — the backtest input for a version
-// transition (design Q26).
-func (r *QueryRecorder) QueriesBetween(aVersion, bVersion int) ([]*QueryLogEntry, error) {
+// EntriesBetween returns every entry of the current window whose graph
+// version falls in (aVersion, bVersion].
+func (r *QueryRecorder) EntriesBetween(aVersion, bVersion int) ([]*QueryLogEntry, error) {
 	entries, err := r.store.ReadQueryLog(r.windowID)
 	if err != nil {
 		return nil, fmt.Errorf("query recorder: read window %s: %w", r.windowID, err)
 	}
 	var out []*QueryLogEntry
 	for _, e := range entries {
-		if e.Version > aVersion && e.Version <= bVersion && e.JudgeDone {
+		if e.Version > aVersion && e.Version <= bVersion {
+			out = append(out, e)
+		}
+	}
+	return out, nil
+}
+
+// QueriesBetween returns the judged entries of the current window whose graph
+// version falls in (aVersion, bVersion] — the backtest input for a version
+// transition (design Q26).
+func (r *QueryRecorder) QueriesBetween(aVersion, bVersion int) ([]*QueryLogEntry, error) {
+	entries, err := r.EntriesBetween(aVersion, bVersion)
+	if err != nil {
+		return nil, err
+	}
+	var out []*QueryLogEntry
+	for _, e := range entries {
+		if e.JudgeDone {
 			out = append(out, e)
 		}
 	}

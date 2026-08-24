@@ -61,9 +61,10 @@ type workspaceRunnerDependencies struct {
 	configureProviderSession  func(string, string, string) error
 	currentProviderSession    func(string, string) (string, error)
 	recordProviderSession     func(string, string, string)
+	notifyAppInbox            func(context.Context, string, string) error
+	retryAppInboxAcks         func(context.Context, string)
 	mixedRunActivityAck       func(protocol.MixedRunActivityTransitionAckPayload) error
 	mixedRunActivityReplay    func(send func(string, any) error)
-	handleReminderInput       func(context.Context, protocol.ReminderOwnerInputPayload)
 	controlHeartbeatInterval  time.Duration
 	controlHeartbeatPayload   func(string) protocol.DaemonHeartbeatRequestPayload
 	controlHeartbeatAck       func(context.Context, *HeartbeatResponse)
@@ -74,6 +75,9 @@ type workspaceRunnerDependencies struct {
 	setComputerUpgradeEmit    func(func(string, any) error)
 	now                       func() time.Time
 	onTransition              func(agentLifecycleTransition)
+	// rememberGraphProfile caches the server-delivered effective graph
+	// memory profile for this runner's workspace (spec §10). Nil disables.
+	rememberGraphProfile func(memoryType string, exploreAgents, exploreMaxRounds int)
 }
 
 // WorkspaceRunner is one long-lived orchestration boundary for an
@@ -101,9 +105,10 @@ type WorkspaceRunner struct {
 	configureProviderSession  func(string, string, string) error
 	currentProviderSession    func(string, string) (string, error)
 	recordProviderSession     func(string, string, string)
+	notifyAppInbox            func(context.Context, string, string) error
+	retryAppInboxAcks         func(context.Context, string)
 	mixedRunActivityAck       func(protocol.MixedRunActivityTransitionAckPayload) error
 	mixedRunActivityReplay    func(send func(string, any) error)
-	handleReminderInput       func(context.Context, protocol.ReminderOwnerInputPayload)
 	controlHeartbeatInterval  time.Duration
 	controlHeartbeatPayload   func(string) protocol.DaemonHeartbeatRequestPayload
 	controlHeartbeatAck       func(context.Context, *HeartbeatResponse)
@@ -112,6 +117,7 @@ type WorkspaceRunner struct {
 	handleComputerWorkDigest  func(context.Context, protocol.ComputerWorkDigestPayload) (protocol.WorkDigest, error)
 	handleComputerWorkJournal func(context.Context, protocol.ComputerWorkJournalPayload) (bool, error)
 	setComputerUpgradeEmit    func(func(string, any) error)
+	rememberGraphProfile      func(memoryType string, exploreAgents, exploreMaxRounds int)
 
 	residency *agentResidencyStore
 	life      context.Context
@@ -191,9 +197,11 @@ func newWorkspaceRunner(config WorkspaceRunnerConfig, dependencies workspaceRunn
 		configureProviderSession:  dependencies.configureProviderSession,
 		currentProviderSession:    dependencies.currentProviderSession,
 		recordProviderSession:     dependencies.recordProviderSession,
+		notifyAppInbox:            dependencies.notifyAppInbox,
+		retryAppInboxAcks:         dependencies.retryAppInboxAcks,
 		mixedRunActivityAck:       dependencies.mixedRunActivityAck,
 		mixedRunActivityReplay:    dependencies.mixedRunActivityReplay,
-		handleReminderInput:       dependencies.handleReminderInput,
+		rememberGraphProfile:      dependencies.rememberGraphProfile,
 		controlHeartbeatInterval:  dependencies.controlHeartbeatInterval,
 		controlHeartbeatPayload:   dependencies.controlHeartbeatPayload,
 		controlHeartbeatAck:       dependencies.controlHeartbeatAck,
@@ -340,6 +348,9 @@ func (runner *WorkspaceRunner) runConnection(ctx context.Context) error {
 	if runner.onReady != nil {
 		runner.onReady()
 	}
+	if runner.retryAppInboxAcks != nil {
+		go runner.retryAppInboxAcks(ctx, workspaceID)
+	}
 	// Replay after ready so the Hub has claimed this socket as the current
 	// Runner. agent:status active sent before that claim is dropped as stale.
 	if runner.activity != nil {
@@ -356,7 +367,6 @@ func (runner *WorkspaceRunner) activeCapabilities() []string {
 	capabilities := []string{
 		protocol.DaemonCapabilityWorkspaceRunnerAgentProcess,
 		protocol.DaemonCapabilityWorkspaceRunnerAgentReset,
-		protocol.DaemonCapabilityReminderTransientInput,
 	}
 	if runner != nil && runner.controlHeartbeatPayload != nil && runner.controlHeartbeatAck != nil {
 		capabilities = append(capabilities, protocol.DaemonCapabilityWorkspaceRunnerControlPlane)
@@ -457,12 +467,14 @@ func (d *Daemon) newWorkspaceRunner(workspaceID string) (*WorkspaceRunner, error
 			return d.agentRuntimeSessions.Get(agentID, runtimeID)
 		},
 		recordProviderSession: d.recordProviderSession,
+		notifyAppInbox:        d.notifyAgentAppInbox,
+		retryAppInboxAcks:     d.retryAgentAppInboxAckIntents,
 		mixedRunActivityAck:   d.ackMixedRunActivity,
 		mixedRunActivityReplay: func(send func(string, any) error) {
 			d.replayMixedRunActivity(workspaceID, send)
 		},
-		handleReminderInput: func(ctx context.Context, payload protocol.ReminderOwnerInputPayload) {
-			d.handleReminderOwnerInput(ctx, payload)
+		rememberGraphProfile: func(memoryType string, exploreAgents, exploreMaxRounds int) {
+			d.rememberGraphProfile(workspaceID, memoryType, exploreAgents, exploreMaxRounds)
 		},
 		controlHeartbeatInterval:  d.cfg.HeartbeatInterval,
 		controlHeartbeatPayload:   d.controlPlaneHeartbeatPayload,

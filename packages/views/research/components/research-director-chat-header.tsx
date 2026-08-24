@@ -2,11 +2,8 @@
 
 import type { ReactNode } from "react";
 import type { ResearchFleetMember } from "@multica/core/types";
-import {
-  Avatar,
-  AvatarFallback,
-  AvatarImage,
-} from "@multica/ui/components/ui/avatar";
+import { ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
+import { ActorAvatar } from "../../common/actor-avatar";
 import { useT } from "../../i18n/use-t";
 
 export function ResearchDirectorChatHeader({
@@ -26,7 +23,6 @@ export function ResearchDirectorChatHeader({
   const name = director?.display_name || director?.name || director?.role || null;
   const resolvedName =
     name ?? fallbackName ?? t(($) => $.d5.rail.director_fallback);
-  const fallback = resolvedName.trim().charAt(0).toUpperCase() || "D";
   const status = activity?.trim()
     ? activity
     : director?.status === "active"
@@ -40,14 +36,26 @@ export function ResearchDirectorChatHeader({
       data-chat-mode={mode}
     >
       <div className="relative shrink-0">
-        <Avatar className="size-9 border border-primary/35 bg-primary/10">
-          {director?.avatar_url ? (
-            <AvatarImage src={director.avatar_url} alt="" />
-          ) : null}
-          <AvatarFallback className="bg-primary/10 text-xs font-semibold text-primary">
-            {fallback}
-          </AvatarFallback>
-        </Avatar>
+        {/* One site-wide actor face. No status dot: the green pip below is
+            live *activity*, a different vocabulary from Agent Presence. */}
+        {director?.agent_id ? (
+          <ActorAvatar
+            actorType="agent"
+            actorId={director.agent_id}
+            name={resolvedName}
+            avatarUrlHint={director.avatar_url}
+            size={36}
+            profileLink={false}
+          />
+        ) : (
+          <ActorAvatarBase
+            name={resolvedName}
+            initials={resolvedName}
+            isAgent
+            size={36}
+            toneSeed={`agent:${resolvedName}`}
+          />
+        )}
         {activity?.trim() ? (
           <span
             className="absolute right-0 bottom-0 size-2.5 rounded-full border-2 border-card bg-emerald-400"

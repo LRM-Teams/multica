@@ -72,7 +72,7 @@ func TestAcceptResultConcurrentOppositePayloadOrderNoDeadlock(t *testing.T) {
 	}
 	insertLockOrderSharedClaims(t, ctx, pool, fixture.workspaceID, run.SessionID)
 
-	tasks, err := store.ListTasks(ctx, run.SessionID)
+	tasks, err := store.ListTasks(ctx, run.SessionID, run.WorkspaceID)
 	if err != nil || len(tasks) != 1 {
 		t.Fatalf("ListTasks: %v len=%d", err, len(tasks))
 	}
@@ -100,7 +100,7 @@ func TestAcceptResultConcurrentOppositePayloadOrderNoDeadlock(t *testing.T) {
 		t.Fatalf("AcceptResult plan: %v", err)
 	}
 
-	discoverTasks, err := listDiscoverTasks(ctx, store, run.SessionID)
+	discoverTasks, err := listDiscoverTasks(ctx, store, run.SessionID, run.WorkspaceID)
 	if err != nil || len(discoverTasks) == 0 {
 		t.Fatalf("listDiscoverTasks: %v len=%d", err, len(discoverTasks))
 	}
@@ -119,7 +119,7 @@ func TestAcceptResultConcurrentOppositePayloadOrderNoDeadlock(t *testing.T) {
 			FROM research_task t
 			WHERE t.id = $2::uuid
 		`, []any{secondTaskID, discoverTasks[0].ID}, []string{secondTaskID})
-		discoverTasks, err = listDiscoverTasks(ctx, store, run.SessionID)
+		discoverTasks, err = listDiscoverTasks(ctx, store, run.SessionID, run.WorkspaceID)
 		if err != nil || len(discoverTasks) < 2 {
 			t.Fatalf("listDiscoverTasks after insert: %v len=%d", err, len(discoverTasks))
 		}
@@ -282,8 +282,8 @@ func insertLockOrderSharedClaims(
 	}
 }
 
-func listDiscoverTasks(ctx context.Context, store *PostgresStore, sessionID string) ([]Task, error) {
-	tasks, err := store.ListTasks(ctx, sessionID)
+func listDiscoverTasks(ctx context.Context, store *PostgresStore, sessionID, workspaceID string) ([]Task, error) {
+	tasks, err := store.ListTasks(ctx, sessionID, workspaceID)
 	if err != nil {
 		return nil, err
 	}

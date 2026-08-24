@@ -65,10 +65,10 @@ func TestMemoryCurationProfileDriven_SingleConnPoolDoesNotDeadlock(t *testing.T)
 		t.Fatal(err)
 	}
 	if err := setupPool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, owner_id, last_seen_at)
-		VALUES ($1, $2, 'Deadlock Profile Runtime', 'local', 'codex', 'online', 'test', $3, now())
+		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, last_seen_at)
+		VALUES ($1, $2, 'Deadlock Profile Runtime', 'local', 'codex', 'online', 'test', now())
 		RETURNING id::text
-	`, workspaceID, "deadlock-profile-"+suffix, userID).Scan(&runtimeID); err != nil {
+	`, workspaceID, "deadlock-profile-"+suffix).Scan(&runtimeID); err != nil {
 		t.Fatal(err)
 	}
 	if err := setupPool.QueryRow(ctx, `

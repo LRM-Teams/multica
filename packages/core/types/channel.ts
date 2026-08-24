@@ -240,6 +240,8 @@ export interface ChannelMentionCandidate {
   id: string;
   handle: string;
   label: string;
+  /** Self-description (user) or configured description (agent); "" when unset. */
+  description: string;
   avatar_url?: string | null;
 }
 

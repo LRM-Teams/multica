@@ -46,6 +46,15 @@ func (r *idleMessageFakeRuntime) AcceptPendingNotice(_ context.Context, notice a
 	return nil
 }
 
+func (r *idleMessageFakeRuntime) AcceptIdleInboxNotice(_ context.Context, notice agent.ResidentPendingNotice) (agent.ResidentMessageAcceptance, error) {
+	r.mu.Lock()
+	r.notices = append(r.notices, notice)
+	r.mu.Unlock()
+	done := make(chan error)
+	close(done)
+	return agent.ResidentMessageAcceptance{Done: done}, nil
+}
+
 func (r *idleMessageFakeRuntime) Execute(context.Context, string, agent.ExecOptions) (*agent.Session, error) {
 	return nil, nil
 }
@@ -253,7 +262,7 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 		runtime.Gosched()
 	}
 	notices := fakeRuntime.noticeSnapshot()
-	if len(notices) != 1 || notices[0].TotalPending != 1 || len(notices[0].ChangedTargets) != 1 || notices[0].ChangedTargets[0].Target != target {
+	if len(notices) != 1 || notices[0].TotalPending != 1 || len(notices[0].ChangedTargets) != 1 || !strings.HasPrefix(notices[0].ChangedTargets[0].Target, "#delivery-channel-") {
 		t.Fatalf("busy runtime Notices = %+v", notices)
 	}
 	if got := coordinator.Boundaries()[target]; got != created.Seq {
@@ -312,7 +321,7 @@ func seedIdleMessageAcceptanceFixture(t *testing.T, pool *pgxpool.Pool) (workspa
 		t.Fatal(err)
 	}
 	daemonID = "delivery-daemon-" + suffix[:8]
-	if err := pool.QueryRow(ctx, `INSERT INTO agent_runtime (workspace_id,name,runtime_mode,provider,status,device_info,daemon_id,owner_id,last_seen_at) VALUES ($1,$2,'cloud','pi','online','acceptance',$3,$4,now()) RETURNING id`, workspaceID, "delivery-runtime-"+suffix[:8], daemonID, userID).Scan(&runtimeID); err != nil {
+	if err := pool.QueryRow(ctx, `INSERT INTO agent_runtime (workspace_id,name,runtime_mode,provider,status,device_info,daemon_id,last_seen_at) VALUES ($1,$2,'cloud','pi','online','acceptance',$3,now()) RETURNING id`, workspaceID, "delivery-runtime-"+suffix[:8], daemonID).Scan(&runtimeID); err != nil {
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(ctx, `INSERT INTO agent (workspace_id,name,description,runtime_mode,runtime_config,runtime_id,max_concurrent_tasks,owner_id,instructions,custom_env,custom_args,model) VALUES ($1,$2,'','cloud','{}',$3,1,$4,'','{}','[]','composer-1.5') RETURNING id`, workspaceID, "delivery_agent_"+suffix[:8], runtimeID, userID).Scan(&agentID); err != nil {

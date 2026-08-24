@@ -36,8 +36,15 @@ export function UnicodeSpinner({ name = "braille", className, paused }: Props) {
       style={{
         fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
         display: "inline-block",
-        minWidth: "1ch",
+        // Hard box, not minWidth: braille frames (especially `breathe`
+        // empty → full) paint at different advances and would shove
+        // neighbouring labels sideways.
+        width: "1em",
+        height: "1em",
+        overflow: "hidden",
+        lineHeight: "1em",
         textAlign: "center",
+        flexShrink: 0,
         fontVariantNumeric: "tabular-nums",
       }}
     >

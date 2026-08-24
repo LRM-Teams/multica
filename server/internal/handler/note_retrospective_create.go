@@ -387,7 +387,7 @@ func (h *Handler) loadNoteRetrospectiveRunFacts(
 	start, end time.Time,
 ) ([]noteRetrospectiveRunFact, error) {
 	rows, err := h.DB.Query(ctx, `
-SELECT e.id, e.agent_id, COALESCE(a.name, ''), COALESCE(e.trigger_summary, ''),
+SELECT e.id, e.agent_id, COALESCE(a.name, ''), COALESCE(e.reason, ''), COALESCE(e.trigger_summary, ''),
        COALESCE(e.terminal_outcome, ''), e.status,
        e.issue_id, i.number, COALESCE(i.title, ''), COALESCE(w.issue_prefix, ''),
        COALESCE(e.completed_at, e.terminal_at, e.created_at) AS happened_at
@@ -411,19 +411,22 @@ LIMIT 200`, workspaceID, userID, start, end)
 		return nil, err
 	}
 	defer rows.Close()
+	return scanNoteRetrospectiveRunFacts(rows)
+}
 
+func scanNoteRetrospectiveRunFacts(rows pgx.Rows) ([]noteRetrospectiveRunFact, error) {
 	out := make([]noteRetrospectiveRunFact, 0)
 	for rows.Next() {
 		var (
-			runID, agentID                             pgtype.UUID
-			agentName, triggerSummary, outcome, status string
-			issueID                                    pgtype.UUID
-			issueNumber                                pgtype.Int4
-			issueTitle, prefix                         string
-			happenedAt                                 time.Time
+			runID, agentID                                     pgtype.UUID
+			agentName, reason, triggerSummary, outcome, status string
+			issueID                                            pgtype.UUID
+			issueNumber                                        pgtype.Int4
+			issueTitle, prefix                                 string
+			happenedAt                                         time.Time
 		)
 		if err := rows.Scan(
-			&runID, &agentID, &agentName, &triggerSummary, &outcome, &status,
+			&runID, &agentID, &agentName, &reason, &triggerSummary, &outcome, &status,
 			&issueID, &issueNumber, &issueTitle, &prefix, &happenedAt,
 		); err != nil {
 			return nil, err
@@ -432,6 +435,7 @@ LIMIT 200`, workspaceID, userID, start, end)
 			RunID:       uuidToString(runID),
 			AgentID:     uuidToString(agentID),
 			AgentName:   agentName,
+			Reason:      reason,
 			Summary:     formatNoteRetrospectiveRunSummary(triggerSummary, outcome, status),
 			Outcome:     outcome,
 			At:          happenedAt.UTC(),

@@ -25,10 +25,10 @@ type BindingRunnerLauncher struct {
 	WorkspacesRoot  string
 }
 
-func (launcher BindingRunnerLauncher) Spawn(workspaceID, startIdentity string) (BindingChild, error) {
+func (launcher BindingRunnerLauncher) Spawn(workspaceID string) (BindingChild, error) {
 	bootstrap := BindingChildBootstrap{
 		ProtocolVersion: BindingChildProtocolVersion, WorkspaceID: workspaceID,
-		ComputerID: launcher.ComputerID, StartIdentity: startIdentity,
+		ComputerID:  launcher.ComputerID,
 		Environment: launcher.Environment, Profile: launcher.Profile,
 		ServerBaseURL: launcher.ServerBaseURL, ServiceEndpoint: launcher.ServiceEndpoint,
 		BindingsRoot: launcher.BindingsRoot, WorkspacesRoot: launcher.WorkspacesRoot,
@@ -44,7 +44,7 @@ func (launcher BindingRunnerLauncher) Spawn(workspaceID, startIdentity string) (
 	return StartBindingRunner(exe, bootstrap)
 }
 
-type BindingChildSpawner func(workspaceID, startIdentity string) (BindingChild, error)
+type BindingChildSpawner func(workspaceID string) (BindingChild, error)
 
 type activatableBindingChild interface {
 	Activate()
@@ -57,6 +57,26 @@ type BindingSupervisorConfig struct {
 	ReadyTimeout time.Duration
 	Logger       *slog.Logger
 	Released     func(BindingChildIdentity)
+
+	// DrainRunner asks a Binding Runner to close its own admission barrier and
+	// cancel in-flight work before this Host terminates it (runner:drain).
+	// Injected by the Host, which owns control-plane credentials; the
+	// supervisor only knows "ask this endpoint to drain", never a token. nil
+	// (or a runner with no known endpoint) skips straight to termination by
+	// signal.
+	DrainRunner func(ctx context.Context, endpoint string, identity BindingChildIdentity) error
+	// Sleep blocks between terminateProcess's exit-confirmation polls;
+	// defaults to time.Sleep. Tests substitute a no-op alongside a tiny
+	// TerminatePollInterval/TerminateGrace.
+	Sleep func(time.Duration)
+	// TerminatePollInterval is how often terminateProcess re-checks whether
+	// an orphaned Binding Runner has exited after SIGTERM/SIGKILL; defaults
+	// to 200ms.
+	TerminatePollInterval time.Duration
+	// TerminateGrace bounds how long terminateProcess waits after SIGTERM
+	// (and again after SIGKILL, to confirm exit) before giving up; defaults
+	// to 2s.
+	TerminateGrace time.Duration
 }
 
 // BindingSupervisor is the Computer Host's desired-vs-actual Binding Module.
@@ -73,10 +93,9 @@ type BindingSupervisor struct {
 }
 
 type bindingSupervisorStart struct {
-	workspaceID   string
-	startIdentity string
-	ctx           context.Context
-	cancel        context.CancelFunc
+	workspaceID string
+	ctx         context.Context
+	cancel      context.CancelFunc
 }
 
 type bindingMachineControlTarget struct {
@@ -91,10 +110,19 @@ func NewBindingSupervisor(config BindingSupervisorConfig) (*BindingSupervisor, e
 	if config.Now == nil {
 		config.Now = time.Now
 	}
+	if config.Sleep == nil {
+		config.Sleep = time.Sleep
+	}
 	if config.ReadyTimeout <= 0 {
 		config.ReadyTimeout = 30 * time.Second
 	}
-	adopted, err := recoverRunnerStates(config.StateRoot, config.Logger)
+	if config.TerminatePollInterval <= 0 {
+		config.TerminatePollInterval = 200 * time.Millisecond
+	}
+	if config.TerminateGrace <= 0 {
+		config.TerminateGrace = 2 * time.Second
+	}
+	reclaimable, err := findReclaimableRunners(config.StateRoot, config.Logger)
 	if err != nil {
 		return nil, fmt.Errorf("recover persisted Binding Runner state: %w", err)
 	}
@@ -102,15 +130,64 @@ func NewBindingSupervisor(config BindingSupervisorConfig) (*BindingSupervisor, e
 		config: config, records: make(map[string]*RunnerRecord),
 		children: make(map[string]BindingChild), cancels: make(map[string]context.CancelFunc), controls: make(map[string]string), desired: make(map[string]struct{}),
 	}
-	for _, runner := range adopted {
-		record := supervisor.recordLocked(runner.WorkspaceID)
-		record.startIdentity = runner.StartIdentity
-		record.AdoptExternalPID(runner.PID)
-		if config.Logger != nil {
-			config.Logger.Info("adopted still-live Binding Runner", "workspace_id", runner.WorkspaceID, "pid", runner.PID)
-		}
+	// Reclaim every orphaned Runner concurrently — each one is an
+	// independent drain+terminate against its own pid/endpoint, and doing
+	// them one at a time would multiply Host startup latency by the orphan
+	// count. NewBindingSupervisor still blocks on wg.Wait(): every orphan
+	// must be confirmed dead (or backed off) before this function returns,
+	// so Reconcile can never spawn a replacement while its predecessor is
+	// still being killed.
+	var wg sync.WaitGroup
+	for _, runner := range reclaimable {
+		wg.Add(1)
+		go func(runner reclaimableRunner) {
+			defer wg.Done()
+			supervisor.reclaimOrphanedRunner(runner)
+		}(runner)
 	}
+	wg.Wait()
 	return supervisor, nil
+}
+
+// reclaimOrphanedRunner reclaims a Workspace Runner process left behind by a
+// previous Host generation so the first Reconcile can spawn a fresh child this
+// Host owns. One Workspace holds at most one Runner on this machine, and it is
+// always the current Host's own child; a live process found at startup is
+// reclaimed here, never adopted.
+func (supervisor *BindingSupervisor) reclaimOrphanedRunner(runner reclaimableRunner) {
+	config := supervisor.config
+	start := config.Now()
+	err := reclaimRunnerProcess(runner, runnerReclaimOptions{
+		StateRoot:    config.StateRoot,
+		Drain:        config.DrainRunner,
+		PollInterval: config.TerminatePollInterval,
+		Grace:        config.TerminateGrace,
+		Sleep:        config.Sleep,
+		Logger:       config.Logger,
+	})
+	if err != nil {
+		if config.Logger != nil {
+			config.Logger.Warn("orphaned Workspace Runner could not be confirmed dead; leaving this Workspace out of spawn rotation this cycle", "workspace_id", runner.WorkspaceID, "pid", runner.PID, "error", err)
+		}
+		supervisor.backOffAfterFailedReclaim(runner)
+		return
+	}
+	if config.Logger != nil {
+		config.Logger.Info("orphaned Workspace Runner terminated", "workspace_id", runner.WorkspaceID, "pid", runner.PID, "elapsed", config.Now().Sub(start))
+	}
+}
+
+// backOffAfterFailedReclaim leaves the persisted state in place (so a later
+// Host generation can retry reclaiming it) and puts this Workspace's record
+// into the normal crash/backoff state instead of leaving it immediately
+// spawnable, so this reconcile cycle cannot start a second runner next to a
+// still-live one.
+func (supervisor *BindingSupervisor) backOffAfterFailedReclaim(runner reclaimableRunner) {
+	supervisor.mu.Lock()
+	record := supervisor.recordLocked(runner.WorkspaceID)
+	record.Lifecycle = RunnerLifecycleCrashed
+	record.BackoffUntil = supervisor.config.Now().Add(RunnerRestartBackoff)
+	supervisor.mu.Unlock()
 }
 
 func (supervisor *BindingSupervisor) Reconcile(parent context.Context, desiredWorkspaceIDs []string) {
@@ -142,14 +219,10 @@ func (supervisor *BindingSupervisor) Reconcile(parent context.Context, desiredWo
 			continue
 		}
 		record := supervisor.records[workspaceID]
-		if record != nil && record.ExternalPID > 0 && !record.HasChild() {
-			// Adopted runners are not this Host's children. Leave them alive.
-			continue
-		}
 		child := supervisor.children[workspaceID]
 		identity := BindingChildIdentity{WorkspaceID: workspaceID}
 		if record != nil {
-			identity.StartIdentity = record.StartIdentity()
+			identity.DaemonInstanceID = record.DaemonInstanceID()
 			record.ObserveExit(now, RunnerExitGraceful)
 		}
 		if child != nil {
@@ -170,23 +243,17 @@ func (supervisor *BindingSupervisor) Reconcile(parent context.Context, desiredWo
 			continue
 		}
 		record := supervisor.recordLocked(workspaceID)
-		if record.ExternalPID > 0 {
-			alive, known := processAlive(record.ExternalPID)
-			if known && record.ClearExternalPIDIfDead(alive) && supervisor.config.Logger != nil {
-				supervisor.config.Logger.Info("adopted Binding Runner exited; will respawn if still desired", "workspace_id", workspaceID)
-			}
-		}
 		if !record.CanSpawn(true, now) {
 			continue
 		}
 		childCtx, cancel := context.WithCancel(parent)
-		startIdentity := record.ObserveSpawn()
+		record.ObserveSpawn()
 		supervisor.cancels[workspaceID] = cancel
-		starts = append(starts, bindingSupervisorStart{workspaceID: workspaceID, startIdentity: startIdentity, ctx: childCtx, cancel: cancel})
+		starts = append(starts, bindingSupervisorStart{workspaceID: workspaceID, ctx: childCtx, cancel: cancel})
 	}
 	supervisor.mu.Unlock()
 	for _, stopped := range stops {
-		_ = removeRunnerState(supervisor.config.StateRoot, stopped.identity.WorkspaceID, stopped.identity.StartIdentity, stopped.identity.PID)
+		_ = removeRunnerState(supervisor.config.StateRoot, stopped.identity.WorkspaceID, stopped.identity.DaemonInstanceID, stopped.identity.PID)
 		if stopped.identity.Validate() == nil && supervisor.config.Released != nil {
 			supervisor.config.Released(stopped.identity)
 		}
@@ -201,30 +268,30 @@ func (supervisor *BindingSupervisor) Reconcile(parent context.Context, desiredWo
 }
 
 func (supervisor *BindingSupervisor) spawn(next bindingSupervisorStart) {
-	child, err := supervisor.config.Spawn(next.workspaceID, next.startIdentity)
+	child, err := supervisor.config.Spawn(next.workspaceID)
 	if err != nil {
 		if supervisor.config.Logger != nil {
 			supervisor.config.Logger.Warn("Workspace Runner child spawn failed", "workspace_id", next.workspaceID, "error", err)
 		}
 		next.cancel()
-		supervisor.observeExit(next.workspaceID, next.startIdentity, nil, RunnerExitCrash)
+		supervisor.observeExit(next.workspaceID, "", nil, RunnerExitCrash)
 		return
 	}
 	supervisor.mu.Lock()
 	record := supervisor.records[next.workspaceID]
-	if record == nil || !record.HasChild() || record.StartIdentity() != next.startIdentity {
+	if record == nil || !record.HasChild() || supervisor.children[next.workspaceID] != nil {
 		supervisor.mu.Unlock()
 		next.cancel()
 		_ = child.Stop()
-		_ = discardRunnerStateAfterSpawnFailure(supervisor.config.StateRoot, next.workspaceID, next.startIdentity, child.PID())
-		supervisor.observeExit(next.workspaceID, next.startIdentity, child, RunnerExitCrash)
+		_ = discardRunnerStateAfterSpawnFailure(supervisor.config.StateRoot, next.workspaceID, "", child.PID())
+		supervisor.observeExit(next.workspaceID, "", child, RunnerExitCrash)
 		return
 	}
 	supervisor.children[next.workspaceID] = child
 	supervisor.mu.Unlock()
 	stateErr := writeRunnerState(supervisor.config.StateRoot, persistedRunnerState{
-		WorkspaceID: next.workspaceID, StartIdentity: next.startIdentity,
-		OwnerPID: os.Getpid(), RunnerPID: child.PID(), StartedAt: supervisor.config.Now().UTC(),
+		WorkspaceID: next.workspaceID,
+		OwnerPID:    os.Getpid(), RunnerPID: child.PID(), StartedAt: supervisor.config.Now().UTC(),
 	})
 	if stateErr == nil {
 		stateErr = writeRunnerPID(supervisor.config.StateRoot, next.workspaceID, child.PID())
@@ -235,18 +302,19 @@ func (supervisor *BindingSupervisor) spawn(next bindingSupervisorStart) {
 		}
 		next.cancel()
 		_ = child.Stop()
-		_ = discardRunnerStateAfterSpawnFailure(supervisor.config.StateRoot, next.workspaceID, next.startIdentity, child.PID())
-		supervisor.observeExit(next.workspaceID, next.startIdentity, child, RunnerExitCrash)
+		_ = discardRunnerStateAfterSpawnFailure(supervisor.config.StateRoot, next.workspaceID, "", child.PID())
+		supervisor.observeExit(next.workspaceID, "", child, RunnerExitCrash)
 		return
 	}
 	if activatable, ok := child.(activatableBindingChild); ok {
 		activatable.Activate()
 	}
-	go supervisor.supervise(next.workspaceID, next.startIdentity, child, next.ctx, next.cancel)
+	go supervisor.supervise(next.workspaceID, child, next.ctx, next.cancel)
 }
 
-func (supervisor *BindingSupervisor) supervise(workspaceID, startIdentity string, child BindingChild, ctx context.Context, cancel context.CancelFunc) {
+func (supervisor *BindingSupervisor) supervise(workspaceID string, child BindingChild, ctx context.Context, cancel context.CancelFunc) {
 	class := RunnerExitGraceful
+	recordedIdentity := ""
 	if readyChild, ok := child.(ReadyBindingChild); ok {
 		readyCtx, stopReady := context.WithTimeout(ctx, supervisor.config.ReadyTimeout)
 		ready, err := readyChild.AwaitReady(readyCtx)
@@ -260,10 +328,11 @@ func (supervisor *BindingSupervisor) supervise(workspaceID, startIdentity string
 			}
 			_ = child.Stop()
 		} else {
-			supervisor.observeReady(workspaceID, startIdentity, child, ready.RunnerEndpoint)
+			recordedIdentity = ready.DaemonInstanceID
+			supervisor.observeReady(workspaceID, child, ready)
 		}
 	} else {
-		supervisor.observeReady(workspaceID, startIdentity, child, "")
+		supervisor.observeReady(workspaceID, child, BindingChildReady{PID: child.PID()})
 	}
 	waitClass := child.Wait()
 	if ctx.Err() == nil && class != RunnerExitCrash {
@@ -272,18 +341,30 @@ func (supervisor *BindingSupervisor) supervise(workspaceID, startIdentity string
 	if cancel != nil {
 		cancel()
 	}
-	supervisor.observeExit(workspaceID, startIdentity, child, class)
+	if recordedIdentity == "" {
+		if record, _, ok := supervisor.Snapshot(workspaceID); ok {
+			recordedIdentity = record.DaemonInstanceID()
+		}
+	}
+	supervisor.observeExit(workspaceID, recordedIdentity, child, class)
 }
 
-func (supervisor *BindingSupervisor) observeReady(workspaceID, startIdentity string, child BindingChild, controlEndpoint string) {
+func (supervisor *BindingSupervisor) observeReady(workspaceID string, child BindingChild, ready BindingChildReady) {
 	supervisor.mu.Lock()
 	defer supervisor.mu.Unlock()
 	record := supervisor.records[workspaceID]
 	if record == nil || supervisor.children[workspaceID] != child {
 		return
 	}
-	if record.ObserveReady(startIdentity) && controlEndpoint != "" {
-		supervisor.controls[workspaceID] = controlEndpoint
+	if child != nil && ready.PID != 0 && ready.PID != child.PID() {
+		return
+	}
+	daemonInstanceID := strings.TrimSpace(ready.DaemonInstanceID)
+	if daemonInstanceID == "" {
+		return
+	}
+	if record.ObserveReady(daemonInstanceID) && ready.RunnerEndpoint != "" {
+		supervisor.controls[workspaceID] = ready.RunnerEndpoint
 	}
 	if child != nil {
 		startedAt := supervisor.config.Now().UTC()
@@ -292,18 +373,18 @@ func (supervisor *BindingSupervisor) observeReady(workspaceID, startIdentity str
 			startedAt = state.StartedAt
 		}
 		state = persistedRunnerState{
-			WorkspaceID: workspaceID, StartIdentity: startIdentity,
+			WorkspaceID: workspaceID, DaemonInstanceID: daemonInstanceID,
 			OwnerPID: os.Getpid(), RunnerPID: child.PID(), StartedAt: startedAt,
 		}
 		_ = writeRunnerState(supervisor.config.StateRoot, state)
-		_ = writeRunnerConnected(supervisor.config.StateRoot, workspaceID, persistedRunnerConnected{PID: child.PID(), ConnectedAt: supervisor.config.Now().UTC(), RunnerEndpoint: controlEndpoint})
+		_ = writeRunnerConnected(supervisor.config.StateRoot, workspaceID, persistedRunnerConnected{PID: child.PID(), ConnectedAt: supervisor.config.Now().UTC(), RunnerEndpoint: ready.RunnerEndpoint})
 	}
 }
 
-func (supervisor *BindingSupervisor) observeExit(workspaceID, startIdentity string, child BindingChild, class RunnerExitClass) {
+func (supervisor *BindingSupervisor) observeExit(workspaceID, daemonInstanceID string, child BindingChild, class RunnerExitClass) {
 	supervisor.mu.Lock()
 	record := supervisor.records[workspaceID]
-	if record == nil || !record.HasChild() || record.StartIdentity() != startIdentity {
+	if record == nil || !record.HasChild() || record.DaemonInstanceID() != daemonInstanceID {
 		supervisor.mu.Unlock()
 		return
 	}
@@ -311,7 +392,7 @@ func (supervisor *BindingSupervisor) observeExit(workspaceID, startIdentity stri
 		supervisor.mu.Unlock()
 		return
 	}
-	identity := BindingChildIdentity{WorkspaceID: workspaceID, StartIdentity: startIdentity}
+	identity := BindingChildIdentity{WorkspaceID: workspaceID, DaemonInstanceID: daemonInstanceID}
 	if child != nil {
 		identity.PID = child.PID()
 	}
@@ -321,28 +402,21 @@ func (supervisor *BindingSupervisor) observeExit(workspaceID, startIdentity stri
 	delete(supervisor.controls, workspaceID)
 	supervisor.mu.Unlock()
 	if child != nil {
-		_ = removeRunnerState(supervisor.config.StateRoot, workspaceID, startIdentity, child.PID())
+		_ = removeRunnerState(supervisor.config.StateRoot, workspaceID, daemonInstanceID, child.PID())
 	}
 	if identity.Validate() == nil && supervisor.config.Released != nil {
 		supervisor.config.Released(identity)
 	}
 }
 
+// Stop tears down every Binding Runner this Host spawned. There is no
+// adopted-but-unowned state to special-case: a live runner this Host did not
+// spawn itself was already drained and terminated at startup, before this
+// Host ever recorded it.
 func (supervisor *BindingSupervisor) Stop() {
 	if supervisor == nil {
 		return
 	}
-	// Raft 1.0.17 shutdown kills only children this Host spawned. An adopted
-	// externalPid is unproven ownership and is left alive for the successor.
-	supervisor.mu.Lock()
-	for workspaceID, record := range supervisor.records {
-		if record != nil && record.ExternalPID > 0 && !record.HasChild() {
-			if supervisor.config.Logger != nil {
-				supervisor.config.Logger.Warn("leaving adopted Binding Runner alive at shutdown", "workspace_id", workspaceID, "pid", record.ExternalPID)
-			}
-		}
-	}
-	supervisor.mu.Unlock()
 	supervisor.Reconcile(context.Background(), nil)
 }
 
@@ -353,7 +427,12 @@ func (supervisor *BindingSupervisor) Current(identity BindingChildIdentity) bool
 	supervisor.mu.RLock()
 	record := supervisor.records[identity.WorkspaceID]
 	child := supervisor.children[identity.WorkspaceID]
-	current := record != nil && record.HasChild() && record.StartIdentity() == identity.StartIdentity && child != nil && child.PID() == identity.PID
+	if record == nil || !record.HasChild() || child == nil || child.PID() != identity.PID {
+		supervisor.mu.RUnlock()
+		return false
+	}
+	recorded := record.DaemonInstanceID()
+	current := recorded == "" || recorded == identity.DaemonInstanceID
 	supervisor.mu.RUnlock()
 	return current
 }
@@ -414,7 +493,7 @@ func (supervisor *BindingSupervisor) PrepareSiblingMachineUpgrade(ctx context.Co
 	}
 	prepared := make([]bindingMachineControlTarget, 0, len(targets))
 	for _, current := range targets {
-		if err := RequestBindingPrepareMachineUpgrade(ctx, current.controlURL, controlToken, current.identity); err != nil {
+		if err := RequestBindingRunnerDrain(ctx, current.controlURL, controlToken, current.identity); err != nil {
 			for _, prior := range prepared {
 				_ = RequestBindingReleaseMachineUpgrade(context.Background(), prior.controlURL, controlToken, prior.identity)
 			}
@@ -479,7 +558,7 @@ func (supervisor *BindingSupervisor) DeliverComputerUpgradeEvent(ctx context.Con
 	child := supervisor.children[identity.WorkspaceID]
 	record := supervisor.records[identity.WorkspaceID]
 	supervisor.mu.RUnlock()
-	if child == nil || record == nil || record.Lifecycle != RunnerLifecycleRunning || endpoint == "" || record.StartIdentity() != identity.StartIdentity || child.PID() != identity.PID {
+	if child == nil || record == nil || record.Lifecycle != RunnerLifecycleRunning || endpoint == "" || record.DaemonInstanceID() != identity.DaemonInstanceID || child.PID() != identity.PID {
 		return errors.New("Computer runner is unavailable for upgrade event")
 	}
 	return RequestBindingComputerUpgradeEvent(ctx, endpoint, controlToken, identity, eventType, payload)
@@ -520,7 +599,7 @@ func (supervisor *BindingSupervisor) machineControlTargets(wanted map[string]str
 			return nil, fmt.Errorf("Binding %s is not ready for machine control", workspaceID)
 		}
 		targets = append(targets, bindingMachineControlTarget{
-			identity:   BindingChildIdentity{WorkspaceID: workspaceID, StartIdentity: record.StartIdentity(), PID: child.PID()},
+			identity:   BindingChildIdentity{WorkspaceID: workspaceID, DaemonInstanceID: record.DaemonInstanceID(), PID: child.PID()},
 			controlURL: controlURL,
 		})
 	}
@@ -539,7 +618,7 @@ func (supervisor *BindingSupervisor) availableMachineControlTargets() []bindingM
 			continue
 		}
 		targets = append(targets, bindingMachineControlTarget{
-			identity:   BindingChildIdentity{WorkspaceID: workspaceID, StartIdentity: record.StartIdentity(), PID: child.PID()},
+			identity:   BindingChildIdentity{WorkspaceID: workspaceID, DaemonInstanceID: record.DaemonInstanceID(), PID: child.PID()},
 			controlURL: controlURL,
 		})
 	}

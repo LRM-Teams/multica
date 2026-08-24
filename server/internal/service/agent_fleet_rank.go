@@ -268,7 +268,6 @@ func (s *AgentFleetRankService) RefreshWorkspace(
 		return nil, err
 	}
 	window := int32(rules.FleetWindowDays)
-	params := db.GetFleetDeliveryStatsParams{WorkspaceID: workspaceID, WindowDays: window}
 
 	activeIDs, err := s.Queries.ListWorkspaceActiveAgentIDs(ctx, workspaceID)
 	if err != nil {
@@ -283,23 +282,23 @@ func (s *AgentFleetRankService) RefreshWorkspace(
 		previousByAgent[util.UUIDToString(row.AgentID)] = row
 	}
 
-	deliveryRows, err := s.Queries.GetFleetDeliveryStats(ctx, params)
+	deliveryRows, err := s.Queries.GetFleetDeliveryStats(ctx, db.GetFleetDeliveryStatsParams{WorkspaceID: workspaceID, WindowDays: window})
 	if err != nil {
 		return nil, err
 	}
-	evolutionFeedback, err := s.Queries.GetFleetEvolutionFeedbackStats(ctx, params)
+	evolutionFeedback, err := s.Queries.GetFleetEvolutionFeedbackStats(ctx, db.GetFleetEvolutionFeedbackStatsParams{WorkspaceID: workspaceID, WindowDays: window})
 	if err != nil {
 		return nil, err
 	}
-	evolutionPromos, err := s.Queries.GetFleetEvolutionPromotionStats(ctx, params)
+	evolutionPromos, err := s.Queries.GetFleetEvolutionPromotionStats(ctx, db.GetFleetEvolutionPromotionStatsParams{WorkspaceID: workspaceID, WindowDays: window})
 	if err != nil {
 		return nil, err
 	}
-	growthRows, err := s.Queries.GetFleetGrowthStats(ctx, params)
+	growthRows, err := s.Queries.GetFleetGrowthStats(ctx, db.GetFleetGrowthStatsParams{WorkspaceID: workspaceID, WindowDays: window})
 	if err != nil {
 		return nil, err
 	}
-	efficiencyRows, err := s.Queries.GetFleetEfficiencyStats(ctx, params)
+	efficiencyRows, err := s.Queries.GetFleetEfficiencyStats(ctx, db.GetFleetEfficiencyStatsParams{WorkspaceID: workspaceID, WindowDays: window})
 	if err != nil {
 		return nil, err
 	}

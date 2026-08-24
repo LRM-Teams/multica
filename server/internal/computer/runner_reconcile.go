@@ -1,9 +1,8 @@
 package computer
 
 import (
+	"strings"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 const (
@@ -38,24 +37,24 @@ const (
 // RunnerRecord is one Binding's desired-vs-actual slot on the Computer host.
 // BindingRunner is the OS-child adapter; CanSpawn / ObserveExit stay shared.
 //
-// startIdentity is generated before each spawn. Ready and exit observations
-// must carry that exact identity, so stale process events cannot mutate the
-// replacement slot.
+// The Host does not mint a spawn ticket. The Binding child generates
+// daemonInstanceId itself and reports it on Ready; ObserveReady records
+// that value against the process handle this Host spawned. Stale Ready/exit
+// is fenced by that recorded identity plus the child handle/PID.
 type RunnerRecord struct {
 	Lifecycle    RunnerLifecycle
 	BackoffUntil time.Time
-	ExternalPID  int
 
-	startIdentity string
-	child         bool
-	crashes       []time.Time
+	daemonInstanceID string
+	child            bool
+	crashes          []time.Time
 }
 
-func (r *RunnerRecord) StartIdentity() string {
+func (r *RunnerRecord) DaemonInstanceID() string {
 	if r == nil {
 		return ""
 	}
-	return r.startIdentity
+	return r.daemonInstanceID
 }
 
 func (r *RunnerRecord) HasChild() bool {
@@ -66,7 +65,7 @@ func (r *RunnerRecord) CanSpawn(wanted bool, now time.Time) bool {
 	if r == nil {
 		return wanted
 	}
-	if !wanted || r.child || r.ExternalPID > 0 {
+	if !wanted || r.child {
 		return false
 	}
 	if r.Lifecycle != RunnerLifecycleCrashed && r.Lifecycle != RunnerLifecycleStopped {
@@ -75,47 +74,22 @@ func (r *RunnerRecord) CanSpawn(wanted bool, now time.Time) bool {
 	return !now.Before(r.BackoffUntil)
 }
 
-// AdoptExternalPID records a still-live runner that a successor Host found
-// through pidfile evidence. Raft 1.0.17 does the same: adopt instead of
-// spawning a second child, and do not kill that pid on Host shutdown.
-func (r *RunnerRecord) AdoptExternalPID(pid int) {
-	if r == nil || pid < 1 {
+func (r *RunnerRecord) ObserveSpawn() {
+	if r == nil {
 		return
 	}
-	r.child = false
-	r.ExternalPID = pid
-	r.Lifecycle = RunnerLifecycleRunning
-	r.BackoffUntil = time.Time{}
-}
-
-// ClearExternalPIDIfDead drops a previously adopted runner after it exits so
-// the next reconcile may spawn a replacement.
-func (r *RunnerRecord) ClearExternalPIDIfDead(alive bool) bool {
-	if r == nil || r.ExternalPID < 1 || alive {
-		return false
-	}
-	r.ExternalPID = 0
-	if r.Lifecycle == RunnerLifecycleRunning {
-		r.Lifecycle = RunnerLifecycleStopped
-	}
-	return true
-}
-
-func (r *RunnerRecord) ObserveSpawn() string {
-	if r == nil {
-		return ""
-	}
-	r.startIdentity = uuid.NewString()
+	r.daemonInstanceID = ""
 	r.child = true
 	r.Lifecycle = RunnerLifecycleStarting
 	r.BackoffUntil = time.Time{}
-	return r.startIdentity
 }
 
-func (r *RunnerRecord) ObserveReady(startIdentity string) bool {
-	if r == nil || !r.child || r.startIdentity != startIdentity || r.Lifecycle != RunnerLifecycleStarting {
+func (r *RunnerRecord) ObserveReady(daemonInstanceID string) bool {
+	daemonInstanceID = strings.TrimSpace(daemonInstanceID)
+	if r == nil || !r.child || daemonInstanceID == "" || r.Lifecycle != RunnerLifecycleStarting {
 		return false
 	}
+	r.daemonInstanceID = daemonInstanceID
 	r.Lifecycle = RunnerLifecycleRunning
 	return true
 }

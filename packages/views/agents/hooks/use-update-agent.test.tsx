@@ -126,7 +126,7 @@ function cachedDetail(qc: QueryClient, id: string): Agent | undefined {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  // Execution-config saves (model/runtime/thinking) call preflight after PATCH.
+  // Runtime-config saves (model/runtime/thinking) call preflight after PATCH.
   // Default happy path so cache-mapping tests keep working without re-stating it.
   mockGetPreflight.mockResolvedValue(makePreflight());
   mockStartLifecycle.mockResolvedValue({ id: "op-1", status: "running" });
@@ -226,7 +226,7 @@ describe("useUpdateAgent — agent detail cache (LRM-292 profile / panel)", () =
   });
 });
 
-describe("useUpdateAgent — restart after execution-config save", () => {
+describe("useUpdateAgent — restart after runtime-config save", () => {
   it("model change → preflight + Raft restart mode", async () => {
     const { result } = setup([makeAgent()]);
     mockUpdateAgent.mockResolvedValue(makeAgent({ model: "claude-opus-4-8" }));

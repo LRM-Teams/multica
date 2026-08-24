@@ -46,24 +46,3 @@ func TestProjectRunnerActivityTimelineEntryKeepsCommandText(t *testing.T) {
 		t.Fatalf("row = %+v, want command text preserved", row)
 	}
 }
-
-func TestOverlayInFlightInboxOnIdleRunnerSummary(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		in, want string
-	}{
-		{"Online", "Thinking..."},
-		{"Idle", "Thinking..."},
-		{"Working...", "Thinking..."},
-		{"Running command...", "Running command..."},
-		{"Thinking...", "Thinking..."},
-	}
-	for _, tc := range cases {
-		got := overlayInFlightInboxOnIdleRunnerSummary(activityprojection.Summary{
-			Label: tc.in, Tone: "success", Visibility: "visible",
-		})
-		if got.Label != tc.want {
-			t.Fatalf("%q → %q, want %q", tc.in, got.Label, tc.want)
-		}
-	}
-}

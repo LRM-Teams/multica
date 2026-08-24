@@ -18,7 +18,7 @@ func ServiceControlEndpoint(residentRoot string) string {
 // endpoint. Its name is bounded even when Workspace identifiers are long.
 func RunnerControlEndpoint(residentRoot string, identity BindingChildIdentity) string {
 	return localControlEndpoint(residentRoot, strings.Join([]string{
-		"runner", identity.WorkspaceID, identity.StartIdentity,
+		"runner", identity.WorkspaceID, identity.DaemonInstanceID,
 	}, "-"))
 }
 

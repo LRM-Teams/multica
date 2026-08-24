@@ -6,16 +6,16 @@ import (
 
 const sourceSnapshotExcerptChars = 4096
 
-func (s *PostgresStore) ListSourceSnapshots(ctx context.Context, sessionID string) ([]SourceSnapshotView, error) {
+func (s *PostgresStore) ListSourceSnapshots(ctx context.Context, sessionID, workspaceID string) ([]SourceSnapshotView, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT id::text, COALESCE(produced_by_task_id::text, ''), canonical_url,
 		       title, publisher, source_class, evidence_traits, independence_key, retrieved_at,
-		       content_hash, left(snapshot_text, $2), metadata,
+		       content_hash, left(snapshot_text, $3), metadata,
 		       verification_status, created_at
 		FROM research_source_snapshot
-		WHERE session_id = $1::uuid
+		WHERE session_id = $1::uuid AND workspace_id = $2::uuid
 		ORDER BY created_at, id
-	`, sessionID, sourceSnapshotExcerptChars)
+	`, sessionID, workspaceID, sourceSnapshotExcerptChars)
 	if err != nil {
 		return nil, err
 	}
@@ -36,15 +36,15 @@ func (s *PostgresStore) ListSourceSnapshots(ctx context.Context, sessionID strin
 	return out, rows.Err()
 }
 
-func (s *PostgresStore) ListObservations(ctx context.Context, sessionID string) ([]Observation, error) {
+func (s *PostgresStore) ListObservations(ctx context.Context, sessionID, workspaceID string) ([]Observation, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT id::text, source_snapshot_id::text,
 		       COALESCE(produced_by_task_id::text, ''), quote, datum, locator,
 		       interpretation, verification_status, created_at
 		FROM research_observation
-		WHERE session_id = $1::uuid
+		WHERE session_id = $1::uuid AND workspace_id = $2::uuid
 		ORDER BY created_at, id
-	`, sessionID)
+	`, sessionID, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -64,15 +64,15 @@ func (s *PostgresStore) ListObservations(ctx context.Context, sessionID string) 
 	return out, rows.Err()
 }
 
-func (s *PostgresStore) ListClaims(ctx context.Context, sessionID string) ([]Claim, error) {
+func (s *PostgresStore) ListClaims(ctx context.Context, sessionID, workspaceID string) ([]Claim, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT id::text, COALESCE(produced_by_task_id::text, ''), client_key, evidence_standard_key,
 		       claim_text, significance, confidence, status, goal_version,
 		       plan_version, resolution, created_at, updated_at
 		FROM research_claim
-		WHERE session_id = $1::uuid
+		WHERE session_id = $1::uuid AND workspace_id = $2::uuid
 		ORDER BY goal_version, plan_version, created_at, id
-	`, sessionID)
+	`, sessionID, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -102,9 +102,9 @@ func (s *PostgresStore) ListClaims(ctx context.Context, sessionID string) ([]Cla
 		SELECT id::text, claim_id::text, observation_id::text, relation, strength, directness, method_fit,
 		       verification_status, COALESCE(verified_by_task_id::text, ''), rationale
 		FROM research_claim_evidence
-		WHERE session_id = $1::uuid
+		WHERE session_id = $1::uuid AND workspace_id = $2::uuid
 		ORDER BY created_at, claim_id, observation_id, relation, id
-	`, sessionID)
+	`, sessionID, workspaceID)
 	if err != nil {
 		return nil, err
 	}

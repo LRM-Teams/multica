@@ -1504,9 +1504,10 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 			ThinkingLevel:   thinkingLevel,
 		}
 	}
-	usesAgentCredentialTransport := runtime.OwnerID.Valid && agentRuntimeHasCapability(runtime, protocol.DaemonCapabilityAgentCredentialTransport)
-	if runtime.OwnerID.Valid {
-		if owner, err := h.Queries.GetUser(ctx, runtime.OwnerID); err == nil {
+	runtimeOwnerID, ownerErr := h.resolveRuntimeOwnerQuery(ctx, runtime)
+	usesAgentCredentialTransport := ownerErr == nil && agentRuntimeHasCapability(runtime, protocol.DaemonCapabilityAgentCredentialTransport)
+	if ownerErr == nil {
+		if owner, err := h.Queries.GetUser(ctx, runtimeOwnerID); err == nil {
 			resp.RequestingUserName = userDisplayName(owner)
 			resp.RequestingUserProfileDescription = owner.ProfileDescription
 		}
@@ -1525,7 +1526,7 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 				DeliveryID:   delivery.ID,
 				AgentID:      event.AgentID,
 				WorkspaceID:  event.WorkspaceID,
-				UserID:       runtime.OwnerID,
+				UserID:       runtimeOwnerID,
 				ExpiresAt:    pgtype.Timestamptz{Time: time.Now().Add(24 * time.Hour), Valid: true},
 			}); err != nil {
 				slog.Error("agent inbox claim: failed to persist inbox token",
@@ -1541,10 +1542,12 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 	if ws, err := h.Queries.GetWorkspace(ctx, event.WorkspaceID); err == nil && ws.Context.Valid {
 		resp.WorkspaceContext = ws.Context.String
 	}
-	// Per-workspace graph memory reviewer override (design §1/A4): the
-	// daemon treats this as a task-scoped override of its env default.
-	if memoryType := h.graphMemoryTypeForWorkspace(ctx, event.WorkspaceID); memoryType != "" {
-		resp.MemoryType = memoryType
+	// Per-workspace graph memory profile override (spec §10): the daemon
+	// treats these as task-scoped overrides of its env defaults.
+	if profile := h.graphMemoryProfileForWorkspace(ctx, event.WorkspaceID); profile.memoryType != "" {
+		resp.MemoryType = profile.memoryType
+		resp.ExploreAgents = profile.exploreAgents
+		resp.ExploreMaxRounds = profile.exploreMaxRounds
 	}
 	if resp.Agent != nil {
 		resp.Agent.Memories = h.TaskService.LoadAgentMemoriesForExecution(ctx, event.AgentID, event.WorkspaceID, service.MemoryExecutionScope{

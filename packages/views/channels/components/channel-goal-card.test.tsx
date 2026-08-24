@@ -92,13 +92,16 @@ const graph: WorkGraphDetail = {
 const state = vi.hoisted(() => ({
   graphQuery: vi.fn(async () => graph),
   bootstrapMutate: vi.fn(),
+  goal: null as ChannelGoal | null,
 }));
+
+state.goal = goal;
 
 vi.mock("@multica/core/channels", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@multica/core/channels")>()),
   channelGoalOptions: (channelId: string) => ({
     queryKey: ["channel-goal", channelId],
-    queryFn: async () => ({ goal }),
+    queryFn: async () => ({ goal: state.goal }),
   }),
   channelGoalProcessesOptions: (channelId: string) => ({
     queryKey: ["channel-goal", channelId, "processes"],
@@ -143,6 +146,7 @@ describe("ChannelGoalCard work graph", () => {
   beforeEach(() => {
     state.graphQuery.mockClear();
     state.bootstrapMutate.mockClear();
+    state.goal = goal;
   });
 
   it("loads the graph only after expansion and renders live node states", async () => {
@@ -192,5 +196,23 @@ describe("ChannelGoalCard work graph", () => {
       },
       expect.objectContaining({ onSuccess: expect.any(Function), onError: expect.any(Function) }),
     );
+  });
+
+  it("distinguishes missing Issues from missing Project or Git setup", async () => {
+    state.goal = {
+      ...goal,
+      coordination: {
+        ...goal.coordination!,
+        project_id: "project-1",
+        git_repository_bound: true,
+        execution_admission: "issues_required",
+      },
+    };
+    renderCard();
+
+    expect(await screen.findByTestId("channel-goal-control-plane-badge")).toHaveTextContent(
+      "Issues required",
+    );
+    expect(screen.queryByText("Setup required")).not.toBeInTheDocument();
   });
 });

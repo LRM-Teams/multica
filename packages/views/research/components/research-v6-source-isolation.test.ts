@@ -7,18 +7,24 @@ const source = readFileSync(
   join(dirname(fileURLToPath(import.meta.url)), "research-session-page.tsx"),
   "utf8",
 );
+const workActivitySource = readFileSync(
+  join(
+    dirname(fileURLToPath(import.meta.url)),
+    "../v6-session-adapter/use-research-v6-work-activity.ts",
+  ),
+  "utf8",
+);
 
 describe("Research D5 canonical projection source isolation", () => {
-  it("scopes V5 query state and pagination to an active V5 gateway", () => {
+  it("uses only V5 or the authoritative Director V6 projection", () => {
     expect(source).toContain(
-      'const canvasUsesV5 = !directorV6Enabled && projectionGateway.status === "v5"',
+      'const projectionSource = directorV6Enabled ? "v6" : "v5"',
     );
-    expect(source).toContain("canvasUsesV5 && typedGraphLoading");
-    expect(source).toContain("canvasUsesV5 && typedGraphError");
     expect(source).toContain(
-      ": canvasUsesV5 && typedGraphHasNextPage === true",
+      "directorV6Enabled ? directorCanvas.canvas?.graph : typedGraph",
     );
-    expect(source).toContain("canvasUsesV5 && typedGraphHasNextPage");
+    expect(source).not.toContain("projectionGateway");
+    expect(source).not.toContain("getResearchV6ProjectionSnapshot");
   });
 
   it("uses the selected projection source for chrome and node detail resolution", () => {
@@ -38,5 +44,23 @@ describe("Research D5 canonical projection source isolation", () => {
     expect(source).toMatch(
       /fallbackName=\{[\s\S]*directorV6Enabled[\s\S]*assignedDirectorAgent/,
     );
+  });
+
+  it("refetches the selected durable Work activity on matching task progress", () => {
+    expect(source).toContain("useResearchV6WorkActivity({");
+    for (const event of [
+      '"task:running"',
+      '"task:progress"',
+      '"task:completed"',
+      '"task:failed"',
+      '"task:cancelled"',
+    ]) {
+      expect(workActivitySource).toContain(event);
+    }
+    expect(workActivitySource).toContain("progress.task_id === inboxTaskId");
+    expect(workActivitySource).toContain("void query.refetch()");
+    expect(workActivitySource).toContain("RESEARCH_V6_DIRECTOR_DELTA_EVENT");
+    expect(workActivitySource).toContain("envelope.run_id === runId");
+    expect(workActivitySource).toContain('subscribe("research_session:presence"');
   });
 });

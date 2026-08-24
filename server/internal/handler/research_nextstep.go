@@ -401,7 +401,7 @@ func (h *Handler) processResearchSessionNextSteps(
 			c.Kind, c.Reason, uuidToString(item.ID), uuidToString(c.TargetNodeID), uuidToString(session.ID),
 		)
 		if assignee.Valid {
-			if werr := h.enqueueResearchAgentWake(ctx, session.WorkspaceID, session, assignee, session.CreatedBy, wakeBody, "system"); werr != nil {
+			if werr := h.enqueueResearchAgentWake(ctx, session.WorkspaceID, session, assignee, session.CreatedBy, wakeBody, "system", true); werr != nil {
 				slog.Warn("research nextstep: wake failed", "error", werr)
 				_, _ = h.Queries.UpdateResearchWorkItemStatus(ctx, db.UpdateResearchWorkItemStatusParams{
 					ID:          item.ID,

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -73,8 +74,9 @@ func (h *Handler) HandleWorkspaceRunnerFrame(ctx context.Context, identity daemo
 			return err
 		}
 		// Raft establishes APM ownership before it offers durable deliveries.
-		// The Computer can then accept messages into the Agent's starting Inbox
-		// and ACK them without requiring the Provider to be ready yet.
+		// Channel messages may ACK into the Agent's starting Inbox before the
+		// Provider is Running. Standalone chat: (FAB) does not — see §1.5 —
+		// so redeliver unacked chat: lines once launches are converging.
 		if err := h.reconcileWorkspaceRunnerLaunches(ctx, identity); err != nil {
 			return err
 		}
@@ -180,12 +182,12 @@ func (h *Handler) HandleWorkspaceRunnerFrame(ctx context.Context, identity daemo
 
 func (h *Handler) persistComputerReadyMetadata(ctx context.Context, daemonID string, ready protocol.WorkspaceRunnerReadyPayload) error {
 	_, err := h.DB.Exec(ctx, `
-UPDATE computer_identity_owner
+UPDATE computers
    SET device_name = COALESCE(NULLIF($2, ''), device_name),
        os = COALESCE(NULLIF($3, ''), os),
        cli_version = COALESCE(NULLIF($4, ''), cli_version),
        machine_id = COALESCE(NULLIF($5, ''), machine_id)
- WHERE daemon_id = $1`,
+ WHERE id = $1`,
 		strings.TrimSpace(daemonID),
 		strings.TrimSpace(ready.DeviceName),
 		strings.TrimSpace(ready.OS),
@@ -472,6 +474,57 @@ func (h *Handler) recordRunnerStartAcknowledgement(ctx context.Context, identity
 	})
 }
 
+// recoverRunnerObservation rebuilds a missing in-memory observation from the
+// durable desired-launch projection. The observation store starts empty after
+// a server restart, and deployed daemons only replay agent:status through the
+// start-ACK round trip — which older daemon builds never complete for an
+// already-running Agent. A session or activity frame from the current ready
+// connection whose launch matches the desired projection is itself a
+// residency report from the live Computer process, so re-admit it with the
+// same projection authority the start-ACK path uses instead of rejecting it
+// (and re-driving agent:start forever).
+func (h *Handler) recoverRunnerObservation(ctx context.Context, identity daemonws.ClientIdentity, daemonInstanceID, agentID, launchID string) (runnerObservedAgent, bool) {
+	if daemonInstanceID == "" || agentID == "" || launchID == "" {
+		return runnerObservedAgent{}, false
+	}
+	// Recovery is only for a true miss. An existing observation — even a
+	// conflicting one — keeps full fencing authority.
+	if _, ok := h.observations().get(identity.WorkspaceID, agentID); ok {
+		return runnerObservedAgent{}, false
+	}
+	source := h.currentRunnerPresenceSource()
+	if source == nil || !source.IsCurrentWorkspaceRunner(identity.DaemonID, identity.WorkspaceID, daemonInstanceID) {
+		return runnerObservedAgent{}, false
+	}
+	var runtimeID string
+	if err := h.DB.QueryRow(ctx, `
+		SELECT desired.runtime_id::text
+		FROM agent_runner_launch_projection desired
+		JOIN agent_runtime runtime ON runtime.id = desired.runtime_id
+		WHERE desired.workspace_id::text = $1 AND desired.agent_id::text = $2
+		  AND desired.launch_id::text = $3 AND runtime.daemon_id = $4`,
+		identity.WorkspaceID, agentID, launchID, identity.DaemonID).Scan(&runtimeID); err != nil {
+		return runnerObservedAgent{}, false
+	}
+	if !h.observations().acceptStatus(identity.WorkspaceID, identity.DaemonID, daemonInstanceID, agentID, runtimeID, launchID, protocol.AgentStatusActive) {
+		return runnerObservedAgent{}, false
+	}
+	obs, ok := h.observations().get(identity.WorkspaceID, agentID)
+	if !ok {
+		return runnerObservedAgent{}, false
+	}
+	slog.Info("Workspace Runner observation recovered from desired launch projection",
+		"workspace_id", identity.WorkspaceID, "daemon_id", identity.DaemonID,
+		"daemon_instance_id", daemonInstanceID, "agent_id", agentID, "launch_id", launchID)
+	// No observation existed, so the projected presence before recovery was
+	// necessarily offline.
+	h.publishAgentPresenceChange(identity.WorkspaceID, agentID, AgentPresenceOffline,
+		h.projectRunnerLaunchPresence(identity.WorkspaceID, &runnerLaunchPresence{
+			daemonID: identity.DaemonID, daemonInstanceID: daemonInstanceID, status: protocol.AgentStatusActive,
+		}))
+	return obs, true
+}
+
 func (h *Handler) recordRunnerSession(ctx context.Context, identity daemonws.ClientIdentity, daemonInstanceID string, session protocol.AgentSessionPayload) error {
 	if err := session.Validate(); err != nil {
 		return err
@@ -485,7 +538,10 @@ func (h *Handler) recordRunnerSession(ctx context.Context, identity daemonws.Cli
 			return err
 		}
 		if !h.observations().acceptSession(identity.WorkspaceID, identity.DaemonID, daemonInstanceID, session.AgentID, session.LaunchID, session.ProviderSessionID) {
-			return errors.New("stale or unknown Workspace Runner session")
+			if _, recovered := h.recoverRunnerObservation(ctx, identity, daemonInstanceID, session.AgentID, session.LaunchID); !recovered ||
+				!h.observations().acceptSession(identity.WorkspaceID, identity.DaemonID, daemonInstanceID, session.AgentID, session.LaunchID, session.ProviderSessionID) {
+				return errors.New("stale or unknown Workspace Runner session")
+			}
 		}
 		command, err := h.DB.Exec(ctx, `
 			UPDATE agent_runner_launch_projection
@@ -521,6 +577,9 @@ func (h *Handler) recordRunnerActivity(ctx context.Context, identity daemonws.Cl
 	}
 	terminalStopped := snapshot.ActivityKind == protocol.ActivityKindOffline && snapshot.DetailKind == "stopped" && snapshot.ProbeID == ""
 	obs, ok := h.observations().get(identity.WorkspaceID, snapshot.AgentID)
+	if !ok {
+		obs, ok = h.recoverRunnerObservation(ctx, identity, daemonInstanceID, snapshot.AgentID, snapshot.LaunchID)
+	}
 	if !ok || obs.daemonID != identity.DaemonID || obs.daemonInstanceID != daemonInstanceID || obs.launchID != snapshot.LaunchID {
 		return errors.New("stale or unauthorized Runner Activity")
 	}
@@ -939,9 +998,6 @@ func (h *Handler) runnerActivityPresentation(ctx context.Context, workspaceID, a
 	snapshot.ObservedAt = observedAt.Time
 	summary := activityprojection.ProjectSummary(snapshot)
 	if h.liveRunnerOwnsActivitySnapshot(daemonID, util.UUIDToString(workspaceID), snapshot) {
-		if h.agentHasInFlightInboxTask(ctx, workspaceID, agentID) {
-			summary = overlayInFlightInboxOnIdleRunnerSummary(summary)
-		}
 		response.Summary = &summary
 	}
 
@@ -998,55 +1054,6 @@ func runnerActivitySummaryWithError(summary activityprojection.Summary, errorTex
 		summary.Label = "Error: " + truncateRunnerActivitySummary(errorText, 240)
 	}
 	return summary
-}
-
-// overlayInFlightInboxOnIdleRunnerSummary keeps compact Activity from saying
-// Online/Idle/Working while an inbox task (e.g. Period Work collector) is still
-// draining. Presence stays on the avatar; the composer strip needs a live verb.
-func overlayInFlightInboxOnIdleRunnerSummary(summary activityprojection.Summary) activityprojection.Summary {
-	base := strings.TrimRight(strings.TrimSpace(summary.Label), ".…")
-	switch base {
-	case "Online", "Idle", "Working":
-		return activityprojection.Summary{Label: "Thinking...", Tone: "info", Visibility: "visible"}
-	default:
-		return summary
-	}
-}
-
-func (h *Handler) agentHasInFlightInboxTask(ctx context.Context, workspaceID, agentID pgtype.UUID) bool {
-	if h == nil || h.DB == nil {
-		return false
-	}
-	var found bool
-	err := h.DB.QueryRow(ctx, `
-SELECT EXISTS (
-  SELECT 1 FROM agent_inbox_event
-  WHERE workspace_id = $1 AND agent_id = $2 AND status IN ('pending', 'draining')
-)`, workspaceID, agentID).Scan(&found)
-	return err == nil && found
-}
-
-func (h *Handler) workspaceInFlightInboxAgentIDs(ctx context.Context, workspaceID pgtype.UUID) map[string]struct{} {
-	out := map[string]struct{}{}
-	if h == nil || h.DB == nil {
-		return out
-	}
-	rows, err := h.DB.Query(ctx, `
-SELECT DISTINCT agent_id
-FROM agent_inbox_event
-WHERE workspace_id = $1 AND status IN ('pending', 'draining')`, workspaceID)
-	if err != nil {
-		return out
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var id pgtype.UUID
-		if err := rows.Scan(&id); err != nil {
-			return out
-		}
-		out[util.UUIDToString(id)] = struct{}{}
-	}
-	return out
 }
 
 func truncateRunnerActivitySummary(value string, maxRunes int) string {

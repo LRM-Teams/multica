@@ -60,7 +60,7 @@ func TestResearchRunDispatcherBindsTypedInboxContext(t *testing.T) {
 		{`INSERT INTO "user" (id, name, email) VALUES ($1::uuid, $2, $3)`, []any{creatorIDText, "Research dispatch test user", suffix + "@dispatch.test"}},
 		{`INSERT INTO workspace (id, name, slug) VALUES ($1::uuid, $2, $3)`, []any{workspaceIDText, "Research dispatch test", "research-dispatch-" + suffix}},
 		{`INSERT INTO member (workspace_id, user_id, role) VALUES ($1::uuid, $2::uuid, 'owner')`, []any{workspaceIDText, creatorIDText}},
-		{`INSERT INTO agent_runtime (id, workspace_id, name, runtime_mode, provider, status, owner_id) VALUES ($1::uuid, $2::uuid, $3, 'cloud', 'codex', 'online', $4::uuid)`, []any{runtimeIDText, workspaceIDText, "research-dispatch-runtime-" + suffix, creatorIDText}},
+		{`INSERT INTO agent_runtime (id, workspace_id, name, runtime_mode, provider, status) VALUES ($1::uuid, $2::uuid, $3, 'cloud', 'codex', 'online')`, []any{runtimeIDText, workspaceIDText, "research-dispatch-runtime-" + suffix}},
 		{`INSERT INTO agent (id, workspace_id, name, runtime_mode, runtime_id, status, owner_id, model) VALUES ($1::uuid, $2::uuid, $3, 'cloud', $4::uuid, 'idle', $5::uuid, 'test-model')`, []any{agentIDText, workspaceIDText, "research-dispatch-agent-" + suffix, runtimeIDText, creatorIDText}},
 	}
 	for _, statement := range setup {

@@ -77,9 +77,9 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 	d := newDaemonForRole(config.Daemon, config.Logger, daemonProcessBindingChild)
 	d.rootCtx = ctx
 	identity := bindingChildControlIdentity{
-		WorkspaceID:   workspaceID,
-		StartIdentity: bootstrap.StartIdentity,
-		PID:           os.Getpid(),
+		WorkspaceID:      workspaceID,
+		DaemonInstanceID: d.runnerInstanceID,
+		PID:              os.Getpid(),
 	}
 	hostControl := newBindingHostControlClient(bootstrap.ServiceEndpoint, config.Daemon.LocalControlToken, identity)
 	remoteAdmission := newRemoteAgentProcessAdmission(hostControl)
@@ -175,7 +175,7 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 		readyOnce.Do(func() {
 			readyErr = config.PublishReady(computer.BindingChildReady{
 				ProtocolVersion: computer.BindingChildProtocolVersion,
-				WorkspaceID:     workspaceID, StartIdentity: bootstrap.StartIdentity,
+				WorkspaceID:     workspaceID, DaemonInstanceID: identity.DaemonInstanceID,
 				PID: os.Getpid(), RunnerEndpoint: runnerEndpoint,
 			})
 			if readyErr != nil {
@@ -316,7 +316,7 @@ func (d *Daemon) bindingMachineControlRegistry(bootstrap computer.BindingChildBo
 		var request computer.BindingMachineControlRequest
 		decoder := json.NewDecoder(bytes.NewReader(raw))
 		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&request); err != nil || request.Identity.WorkspaceID != bootstrap.WorkspaceID || request.Identity.StartIdentity != bootstrap.StartIdentity || request.Identity.PID != os.Getpid() {
+		if err := decoder.Decode(&request); err != nil || request.Identity.WorkspaceID != bootstrap.WorkspaceID || request.Identity.DaemonInstanceID != d.runnerInstanceID || request.Identity.PID != os.Getpid() {
 			return computer.BindingChildIdentity{}, errors.New("inactive managed runner process")
 		}
 		return request.Identity, nil
@@ -349,7 +349,7 @@ func (d *Daemon) bindingMachineControlRegistry(bootstrap computer.BindingChildBo
 		}
 		decoder := json.NewDecoder(bytes.NewReader(raw))
 		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&request); err != nil || request.Identity.WorkspaceID != bootstrap.WorkspaceID || request.Identity.StartIdentity != bootstrap.StartIdentity || request.Identity.PID != os.Getpid() {
+		if err := decoder.Decode(&request); err != nil || request.Identity.WorkspaceID != bootstrap.WorkspaceID || request.Identity.DaemonInstanceID != d.runnerInstanceID || request.Identity.PID != os.Getpid() {
 			return nil, errors.New("inactive managed runner process")
 		}
 		return nil, d.handleComputerControlCommand(ctx, protocol.EventComputerUpgrade, request.Command)
@@ -365,7 +365,7 @@ func (d *Daemon) bindingMachineControlRegistry(bootstrap computer.BindingChildBo
 		}
 		decoder := json.NewDecoder(bytes.NewReader(raw))
 		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&request); err != nil || request.Identity.WorkspaceID != bootstrap.WorkspaceID || request.Identity.StartIdentity != bootstrap.StartIdentity || request.Identity.PID != os.Getpid() {
+		if err := decoder.Decode(&request); err != nil || request.Identity.WorkspaceID != bootstrap.WorkspaceID || request.Identity.DaemonInstanceID != d.runnerInstanceID || request.Identity.PID != os.Getpid() {
 			return nil, errors.New("inactive managed runner process")
 		}
 		var payload any

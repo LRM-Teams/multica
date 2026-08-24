@@ -21,7 +21,17 @@ func (s *PostgresStore) AuthorizeV6Submission(ctx context.Context, access V6Atte
 		JOIN research_team_membership m ON (m.workspace_id,m.session_id,m.id)=(a.workspace_id,a.session_id,a.membership_id)
 		WHERE a.workspace_id=$1::uuid AND a.session_id=$2::uuid AND a.work_item_id=$3::uuid AND a.id=$4::uuid
 		  AND a.assigned_agent_id=$5::uuid AND m.agent_id=$5::uuid AND m.state NOT IN ('archived','failed')
-		  AND a.status IN ('dispatching','running') AND w.status IN ('dispatching','running','awaiting_input')
+		  AND (
+		    (a.status IN ('dispatching','running') AND w.status IN ('dispatching','running','awaiting_input'))
+		    OR (
+		      a.status IN ('succeeded','failed','cancelled')
+		      AND EXISTS (
+		        SELECT 1 FROM research_v6_work_submission sub
+		        WHERE (sub.workspace_id,sub.session_id,sub.work_item_id,sub.attempt_id)=
+		              (a.workspace_id,a.session_id,a.work_item_id,a.id)
+		      )
+		    )
+		  )
 		  AND ($6='' OR a.inbox_task_id=$6::uuid)
 	`, access.WorkspaceID, access.RunID, access.WorkItemID, access.AttemptID, access.AgentID, access.InboxTaskID).Scan(
 		&binding.ManifestID, &binding.ManifestHash, &manifest, &binding.ExpectedKind, &binding.TaskSchema, &binding.TaskSchemaID,

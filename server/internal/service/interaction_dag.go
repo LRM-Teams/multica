@@ -57,7 +57,7 @@ type InteractionDAGStore interface {
 // MessageStore is the DB seam for accessing task messages.
 // *db.Queries satisfies it; tests inject a fake.
 type MessageStore interface {
-	MessagesForTaskInRange(ctx context.Context, taskID string, startSeq, endSeq int32) ([]db.TaskMessage, error)
+	MessagesForTaskInRange(ctx context.Context, arg db.MessagesForTaskInRangeParams) ([]db.TaskMessage, error)
 	GetProjectInWorkspace(ctx context.Context, arg db.GetProjectInWorkspaceParams) (db.Project, error)
 	GetIssueForTask(ctx context.Context, taskID string) (db.Issue, error)
 }
@@ -346,7 +346,9 @@ func (s *InteractionDAGService) RecordLocalSegmentForEvent(
 	// Read persisted task messages in the range and serialize the allowlisted
 	// fields: sequence, type, tool, content, input, output. Provider API keys and
 	// sandbox runtime configuration never enter this snapshot.
-	msgs, err := s.msgs.MessagesForTaskInRange(ctx, agentRunID, startSeq, endSeq)
+	msgs, err := s.msgs.MessagesForTaskInRange(ctx, db.MessagesForTaskInRangeParams{
+		TaskID: agentRunID, StartSeq: startSeq, EndSeq: endSeq,
+	})
 	if err != nil {
 		return "", nil, fmt.Errorf("interaction_dag: read messages for %s [%d,%d]: %w", agentRunID, startSeq, endSeq, err)
 	}

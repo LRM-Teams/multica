@@ -18,10 +18,12 @@ import (
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/handler"
 	"github.com/multica-ai/multica/server/internal/logger"
+	"github.com/multica-ai/multica/server/internal/memorygraph"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/realtime"
 	"github.com/multica-ai/multica/server/internal/scheduler"
 	"github.com/multica-ai/multica/server/internal/service"
+	agentpkg "github.com/multica-ai/multica/server/pkg/agent"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/redis/go-redis/v9"
 )
@@ -30,6 +32,20 @@ var (
 	version = "dev"
 	commit  = "unknown"
 )
+
+// graphMemoryDiveModelBackend keeps the process Explore-model default for
+// empty Dive overrides while allowing an approved Dive model to win per run.
+type graphMemoryDiveModelBackend struct {
+	memorygraph.AgentBackend
+	defaultModel string
+}
+
+func (b graphMemoryDiveModelBackend) Execute(ctx context.Context, prompt string, opts agentpkg.ExecOptions) (*agentpkg.Session, error) {
+	if opts.Model == "" {
+		opts.Model = b.defaultModel
+	}
+	return b.AgentBackend.Execute(ctx, prompt, opts)
+}
 
 func newNamedRedisClient(base *redis.Options, suffix string) *redis.Client {
 	opts := *base
@@ -176,7 +192,6 @@ func main() {
 	handler.SetRunnerPresence(daemonHub)
 	var daemonWakeup service.TaskWakeupNotifier = daemonHub
 	var reminderNotifier daemonws.ReminderNotifier = daemonHub
-	var reminderOwnerInputNotifier daemonws.ReminderOwnerInputNotifier = daemonHub
 	var agentDeliveryNotifier daemonws.AgentDeliveryNotifier = daemonHub
 	var agentRestartNotifier daemonws.AgentRestartNotifier = daemonHub
 
@@ -233,7 +248,6 @@ func main() {
 				relayNotifier := daemonws.NewRelayNotifier(daemonHub, sharded)
 				daemonWakeup = relayNotifier
 				reminderNotifier = relayNotifier
-				reminderOwnerInputNotifier = relayNotifier
 				agentDeliveryNotifier = relayNotifier
 				agentRestartNotifier = relayNotifier
 			default:
@@ -244,7 +258,6 @@ func main() {
 				relayNotifier := daemonws.NewRelayNotifier(daemonHub, sharded)
 				daemonWakeup = relayNotifier
 				reminderNotifier = relayNotifier
-				reminderOwnerInputNotifier = relayNotifier
 				agentDeliveryNotifier = relayNotifier
 				agentRestartNotifier = relayNotifier
 			}
@@ -371,7 +384,6 @@ func main() {
 		HeartbeatScheduler: heartbeatScheduler,
 	})
 	h.ReminderNotifier = reminderNotifier
-	h.ReminderOwnerInputNotifier = reminderOwnerInputNotifier
 	h.AgentDeliveryNotifier = agentDeliveryNotifier
 	h.AgentRestartNotifier = agentRestartNotifier
 
@@ -387,26 +399,71 @@ func main() {
 	taskSvc.Analytics = analyticsClient
 	taskSvc.Metrics = businessMetrics
 	tc := service.LoadTrainingConfig()
+	var rlSvc *service.GraphMemoryRLSessionService
+	var rewardSink *arealrl.RewardSink
 	if tc.BridgeStubURL != "" {
+		arealClient := arealrl.New(tc.BridgeStubURL, tc.AdminAPIKey)
+		rlSvc = service.NewGraphMemoryRLSessionService(pool, arealClient, arealClient)
+		rewardSink = arealrl.NewRewardSink(rlSvc, arealClient)
 		taskSvc.WithTraining(service.NewTrainingSessionDeps(tc, queries))
 		slog.Info("training bridge configured", "stub_url", tc.BridgeStubURL)
 	} else {
 		slog.Info("training bridge not configured (AREAL_BRIDGE_STUB_URL unset) — training hooks disabled")
 	}
 
-	// Graph memory reviewer activation (design §5.1/§5.3, review P0-1/P0-2):
-	// the ingest hook routes closed interaction-dag segments into the
-	// per-workspace memory_graph staging area, and the judge service runs
-	// the async judge + delayed-reward flow for daemon-reported recalls.
-	// Both are nil-safe per workspace (no memory_graph dir -> skip).
-	taskSvc.SetSegmentIngestHook(service.NewGraphMemoryIngestHook(queries, "", businessMetrics))
-	var graphRewardClient *arealrl.Client
-	if tc.BridgeStubURL != "" {
-		graphRewardClient = arealrl.New(tc.BridgeStubURL, tc.AdminAPIKey)
-	}
-	graphJudge := service.NewGraphMemoryJudgeService(queries, "", businessMetrics, graphRewardClient, 0)
-	h.GraphMemoryJudge = graphJudge
-	go graphJudge.RunRewardSweep(sweepCtx, time.Minute)
+	// The Dive backend follows the PI environment contract. An approved provider
+	// selects its registered backend; the approved model wins per execution and
+	// an empty override inherits MULTICA_PI_MODEL through the adapter above.
+	diveWorker := service.NewGraphMemoryDiveWorker(
+		pool, service.NewGraphMemoryDiveService(pool), rlSvc, service.LoadGraphMemoryLimits(os.Getenv), "",
+		func(_ context.Context, model, provider string) (memorygraph.AgentBackend, error) {
+			provider = strings.TrimSpace(provider)
+			if provider == "" {
+				provider = "pi"
+			}
+			cfg := agentpkg.Config{}
+			if provider == "pi" {
+				path := strings.TrimSpace(os.Getenv("MULTICA_PI_PATH"))
+				if path == "" {
+					path = "pi"
+				}
+				cfg.ExecutablePath = path
+			}
+			backend, err := agentpkg.New(provider, cfg)
+			if err != nil {
+				return nil, err
+			}
+			return graphMemoryDiveModelBackend{
+				AgentBackend: backend, defaultModel: strings.TrimSpace(os.Getenv("MULTICA_PI_MODEL")),
+			}, nil
+		},
+	)
+
+	// Graph memory reviewer activation (design §5.1, review P0-1): the
+	// ingest hook routes closed interaction-dag segments into the
+	// per-workspace memory_graph staging area. Nil-safe per workspace (no
+	// memory_graph dir -> skip).
+	taskSvc.SetSegmentIngestHook(service.NewGraphMemoryIngestHook(queries, pool, "", businessMetrics))
+	// Server-authoritative graph memory recall (spec §1/§3/§14): the daemon
+	// recall endpoint resolves identity/scope/version/K server-side and
+	// answers 202 only after the durable ledger commit. The env default
+	// memory type stays empty (fail-safe): a workspace profile row in graph
+	// mode is what enables recalls.
+	h.GraphMemoryRecall = service.NewGraphMemoryRecallService(
+		pool, service.LoadGraphMemoryLimits(os.Getenv), "", "", service.GraphMemoryHybridSeeder{})
+	// Recall execution uses the same PI environment contract as the graph
+	// scheduler. The model is also passed through to Explore audit records.
+	h.GraphMemoryRecallExecutor = service.NewGraphMemoryRecallExecutor(
+		pool, service.NewGraphMemoryDiveService(pool),
+		func(context.Context, *service.GraphMemoryRecallPlan) (memorygraph.AgentBackend, error) {
+			path := strings.TrimSpace(os.Getenv("MULTICA_PI_PATH"))
+			if path == "" {
+				path = "pi"
+			}
+			return agentpkg.New("pi", agentpkg.Config{ExecutablePath: path})
+		},
+		nil, nil, strings.TrimSpace(os.Getenv("MULTICA_PI_MODEL")),
+	)
 	// LRM-1049: Autopilot scheduler/listeners/failure-monitor are retired.
 	// Reminder owns agent self-wake; API paths return 410.
 
@@ -473,13 +530,18 @@ func main() {
 			schedulerRegistered = true
 		}
 	}
-	// Graph memory consolidation (design §5.4) is opt-in while the reviewer
-	// rolls out: MULTICA_GRAPH_CONSOLIDATION_ENABLED gates registration, and
-	// the handler additionally requires a graph reviewer per workspace
-	// (graph_memory_profile, falling back to MULTICA_MEMORY_TYPE; A4).
-	if enabled := strings.ToLower(strings.TrimSpace(os.Getenv("MULTICA_GRAPH_CONSOLIDATION_ENABLED"))); enabled == "true" || enabled == "1" || enabled == "on" {
-		if err := schedulerMgr.Register(scheduler.GraphMemoryJobs(pool, businessMetrics)); err != nil {
-			slog.Warn("scheduler: failed to register graph memory consolidation job", "error", err)
+	// Graph memory consolidation registers unconditionally (spec §10): the
+	// per-workspace scoped_writer_ready gate (jobs_graph_memory.go) keeps it
+	// inert until the scoped writer acceptance gates pass, so no
+	// process-level switch is needed or permitted to activate it early.
+	if err := schedulerMgr.Register(scheduler.GraphMemoryJobs(pool, businessMetrics)); err != nil {
+		slog.Warn("scheduler: failed to register graph memory consolidation job", "error", err)
+	} else {
+		schedulerRegistered = true
+	}
+	for _, job := range scheduler.GraphMemoryDiveJobs(pool, diveWorker, rewardSink, rlSvc) {
+		if err := schedulerMgr.Register(job); err != nil {
+			slog.Warn("scheduler: failed to register graph memory Dive job", "job", job.Name, "error", err)
 		} else {
 			schedulerRegistered = true
 		}
@@ -501,6 +563,16 @@ func main() {
 	}
 	if err := schedulerMgr.Register(scheduler.ResearchRunReconcileJob(h)); err != nil {
 		slog.Warn("scheduler: failed to register research run reconciliation job", "error", err)
+	}
+	if err := schedulerMgr.Register(scheduler.ResearchMonitorJob(h)); err != nil {
+		slog.Warn("scheduler: failed to register research monitor job", "error", err)
+	} else {
+		schedulerRegistered = true
+	}
+	if err := schedulerMgr.Register(scheduler.ResearchProductionWindowJob(h)); err != nil {
+		slog.Warn("scheduler: failed to register research production window job", "error", err)
+	} else {
+		schedulerRegistered = true
 	}
 	if err := schedulerMgr.Register(scheduler.EnvCheckpointLaneSweepJob(pool)); err != nil {
 		slog.Warn("scheduler: failed to register env checkpoint lane sweep job", "error", err)

@@ -1,6 +1,6 @@
 import { forwardRef, useRef, useImperativeHandle } from "react";
 import { beforeEach, describe, it, expect, vi } from "vitest";
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { I18nProvider } from "@multica/core/i18n/react";
 import type { UploadResult } from "@multica/core/hooks/use-file-upload";
 import enCommon from "../../locales/en/common.json";
@@ -39,6 +39,10 @@ const dropHandlers = vi.hoisted(() => ({
 const editorProps = vi.hoisted(() => ({
   last: null as null | Record<string, unknown>,
 }));
+const editorSpies = vi.hoisted(() => ({
+  blur: vi.fn(),
+  focus: vi.fn(),
+}));
 
 vi.mock("../../editor", () => ({
   useFileDropZone: ({ onDrop }: { onDrop: (files: File[]) => void }) => {
@@ -71,8 +75,12 @@ vi.mock("../../editor", () => ({
       clearContent: () => {
         valueRef.current = "";
       },
-      blur: () => {},
-      focus: () => {},
+      blur: () => {
+        editorSpies.blur();
+      },
+      focus: () => {
+        editorSpies.focus();
+      },
       uploadFile: async (file: File) => {
         uploadingRef.current += 1;
         try {
@@ -135,6 +143,8 @@ import { useChatStore } from "@multica/core/chat";
 beforeEach(() => {
   dropHandlers.onDrop = null;
   editorProps.last = null;
+  editorSpies.blur.mockClear();
+  editorSpies.focus.mockClear();
   const state = useChatStore.getState() as unknown as {
     activeSessionId: string | null;
     selectedAgentId: string;
@@ -165,7 +175,6 @@ function renderInput(props: Partial<React.ComponentProps<typeof ChatInput>> = {}
         onUploadFile={onUploadFile}
         agentName={props.agentName ?? "Multica"}
         agentId={props.agentId ?? "agent-1"}
-        wsId={props.wsId ?? "ws-1"}
       />
     </I18nProvider>,
   );
@@ -189,6 +198,27 @@ describe("ChatInput Enter-to-send", () => {
   it("enables bare Enter submit for FAB / chat bubbles", () => {
     renderInput();
     expect(editorProps.last?.submitOnEnter).toBe(true);
+  });
+
+  it("renders a quote chip inside the composer card", () => {
+    renderInput({
+      composerPrefix: <div data-testid="quote-chip">quoted excerpt</div>,
+    });
+    expect(screen.getByTestId("quote-chip").textContent).toBe("quoted excerpt");
+  });
+
+  it("keeps composer focus after a successful send", async () => {
+    const onSend = vi.fn(async () => undefined);
+    renderInput({ onSend });
+    const editor = screen.getByTestId("editor");
+    fireEvent.change(editor, { target: { value: "hello" } });
+    const onSubmit = editorProps.last?.onSubmit as (() => void | Promise<void>) | undefined;
+    expect(onSubmit).toBeTypeOf("function");
+    await act(async () => {
+      await onSubmit?.();
+    });
+    expect(onSend).toHaveBeenCalledWith("hello", undefined);
+    expect(editorSpies.blur).not.toHaveBeenCalled();
   });
 });
 

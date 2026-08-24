@@ -25,6 +25,7 @@ import type {
   AgentCreationDraft,
   EnsureWindyResponse,
   EnsurePeriodBriefAgentResponse,
+  EnsureNotesAssistantAgentResponse,
   EnsurePeriodBriefCollectorsResponse,
   AgentTemplate,
   AgentTemplateSummary,
@@ -50,6 +51,10 @@ import type {
   UpdateMemoryCuratorProfileRequest,
   GraphMemoryProfile,
   UpdateGraphMemoryProfileRequest,
+  GraphMemoryStatus,
+  GraphMemoryAuditSummary,
+  GraphMemoryChannelLineage,
+  GraphMemoryConsolidationRun,
   StartMemoryCurationRunRequest,
   StartMemoryCurationRunResponse,
   MemoryCurationBackfillRequest,
@@ -64,6 +69,10 @@ import type {
   PromoteKnowledgeResponse,
   PromoteEvolutionReviewSubmissionResponse,
   UpdateAgentRequest,
+  BulkUpdateAgentRuntimeConfigRequest,
+  BulkUpdateAgentRuntimeConfigResponse,
+  BulkAgentLifecycleRequest,
+  BulkAgentLifecycleResponse,
   AgentEnvResponse,
   UpdateAgentEnvRequest,
   RuntimeEnvResponse,
@@ -85,6 +94,7 @@ import type {
   AgentHonorRulesView,
   UpdateAgentHonorShowcaseRequest,
   AgentRuntime,
+  AgentRuntimeConfig,
   RuntimeAgentWorkspacesResponse,
   InboxItem,
   UserActivityListResponse,
@@ -242,16 +252,12 @@ import type {
   UpdateNotePageSharesRequest,
   CreateNoteAIJobRequest,
   NoteAIJob,
-  CreateNoteWorkerJobRequest,
-  NoteWorkerJob,
   NotePageIssueRef,
   NotePageIssueRefListResponse,
   CreateNotePageIssueRefRequest,
   CreateNotePageAgentRefRequest,
   CreateNotePageRunRefRequest,
   CreateNotePageChannelRefRequest,
-  CreateNotePageIssueRequest,
-  CreateNotePageIssueResponse,
   NoteWriteback,
   NoteWritebackListResponse,
   CreateNoteWritebackRequest,
@@ -259,12 +265,15 @@ import type {
   CreateNoteRetrospectiveResponse,
   CreateNotePeriodBriefRequest,
   CreateNotePeriodBriefResponse,
+  NotePeriodBriefActiveResponse,
+  InsertNotePeriodBriefRequest,
+  InsertNotePeriodBriefResponse,
   IssueNoteRefListResponse,
 } from "../types";
 import type { OnboardingCompletionPath } from "../onboarding/types";
 import type { DMItem, CreateOrFindDMBody } from "../dm/types";
 import type { ConversationHandleLookup, ConversationListResponse } from "../conversations/types";
-import type { RawReminderPage } from "../agents/reminder-view-model";
+import type { AgentReminderListResponse } from "../agents/reminder-view-model";
 import type {
   CloudRuntimeNode,
   CreateCloudRuntimeNodeRequest,
@@ -308,6 +317,7 @@ import {
   CreateAgentFromTemplateResponseSchema,
   EnsureWindyResponseSchema,
   EnsurePeriodBriefAgentResponseSchema,
+  EnsureNotesAssistantAgentResponseSchema,
   EnsurePeriodBriefCollectorsResponseSchema,
   DashboardAgentRunTimeListSchema,
   DashboardRunTimeDailyListSchema,
@@ -319,6 +329,7 @@ import {
   EMPTY_AGENT_HEALTH_RESPONSE,
   EMPTY_AGENT_RESTART_OPERATION,
   EMPTY_AGENT_RESTART_PREFLIGHT,
+  EMPTY_AGENT_RUNTIME_CONFIG,
   EMPTY_AGENT_RUNTIME_LIST,
   EMPTY_COMPUTER_CONNECTION_LIST,
   EMPTY_COMPUTER_WORK_JOURNAL_SETTING,
@@ -349,6 +360,7 @@ import {
   EMPTY_RUNNER_ACTIVITY_SUMMARIES_RESPONSE,
   AgentPresenceResponseSchema,
   EMPTY_AGENT_PRESENCE_RESPONSE,
+  AgentRuntimeConfigSchema,
   AgentRuntimeListSchema,
   ComputerConnectionListSchema,
   ComputerWorkJournalSettingSchema,
@@ -420,6 +432,14 @@ import {
   EMPTY_MEMORY_CURATION_RUN_DETAIL,
   EMPTY_MEMORY_CURATOR_PROFILE,
   EMPTY_GRAPH_MEMORY_PROFILE,
+  GraphMemoryStatusSchema,
+  EMPTY_GRAPH_MEMORY_STATUS,
+  GraphMemoryAuditSummarySchema,
+  EMPTY_GRAPH_MEMORY_AUDIT,
+  GraphMemoryChannelLineageSchema,
+  GraphMemoryConsolidationRunSchema,
+  GraphMemoryConsolidationListSchema,
+  EMPTY_GRAPH_MEMORY_CONSOLIDATION_RUN,
   EvolutionMetricsSchema,
   EvolutionTrainingExampleListSchema,
   EvolutionTrainingExampleSchema,
@@ -461,8 +481,8 @@ import {
   EMPTY_CREATE_VOICE_CALL_RESPONSE,
   EMPTY_GET_VOICE_CALL_RESPONSE,
   EMPTY_START_VOICE_CALL_DUPLEX_RESPONSE,
-  RawReminderPageSchema,
-  EMPTY_REMINDER_PAGE,
+  AgentReminderListResponseSchema,
+  EMPTY_AGENT_REMINDER_LIST,
   EMPTY_WEB_PUSH_PUBLIC_KEY,
   EMPTY_WEB_PUSH_SUBSCRIPTION,
   EMPTY_WEB_PUSH_TEST,
@@ -478,13 +498,10 @@ import {
   EMPTY_NOTE_PAGE_LIST,
   NoteAIJobSchema,
   EMPTY_NOTE_AI_JOB,
-  NoteWorkerJobSchema,
-  EMPTY_NOTE_WORKER_JOB,
   NotePageIssueRefSchema,
   NotePageIssueRefListResponseSchema,
   EMPTY_NOTE_PAGE_ISSUE_REF,
   EMPTY_NOTE_PAGE_ISSUE_REF_LIST,
-  CreateNotePageIssueResponseSchema,
   NoteWritebackSchema,
   NoteWritebackListResponseSchema,
   EMPTY_NOTE_WRITEBACK,
@@ -493,6 +510,10 @@ import {
   EMPTY_CREATE_NOTE_RETROSPECTIVE_RESPONSE,
   CreateNotePeriodBriefResponseSchema,
   EMPTY_CREATE_NOTE_PERIOD_BRIEF_RESPONSE,
+  NotePeriodBriefActiveResponseSchema,
+  EMPTY_NOTE_PERIOD_BRIEF_ACTIVE,
+  InsertNotePeriodBriefResponseSchema,
+  EMPTY_INSERT_NOTE_PERIOD_BRIEF_RESPONSE,
 } from "./schemas";
 
 /** Identifies the calling client to the server.
@@ -1135,31 +1156,6 @@ export class ApiClient {
     });
   }
 
-  async createNoteWorkerJob(
-    pageId: string,
-    data: CreateNoteWorkerJobRequest,
-    init?: { signal?: AbortSignal },
-  ): Promise<NoteWorkerJob> {
-    const raw = await this.fetch<unknown>(`/api/notes/pages/${encodeURIComponent(pageId)}/worker-jobs`, {
-      method: "POST",
-      body: JSON.stringify(data),
-      signal: init?.signal,
-    });
-    return parseWithFallback(raw, NoteWorkerJobSchema, EMPTY_NOTE_WORKER_JOB, {
-      endpoint: "POST /api/notes/pages/{id}/worker-jobs",
-    });
-  }
-
-  async getNoteWorkerJob(jobId: string, init?: { signal?: AbortSignal }): Promise<NoteWorkerJob> {
-    const raw = await this.fetch<unknown>(
-      `/api/notes/worker-jobs/${encodeURIComponent(jobId)}`,
-      init?.signal ? { signal: init.signal } : undefined,
-    );
-    return parseWithFallback(raw, NoteWorkerJobSchema, EMPTY_NOTE_WORKER_JOB, {
-      endpoint: "GET /api/notes/worker-jobs/{id}",
-    });
-  }
-
   async listNotePageIssueRefs(pageId: string): Promise<NotePageIssueRefListResponse> {
     const raw = await this.fetch<unknown>(`/api/notes/pages/${encodeURIComponent(pageId)}/issue-refs`);
     return parseWithFallback(raw, NotePageIssueRefListResponseSchema, EMPTY_NOTE_PAGE_ISSUE_REF_LIST, {
@@ -1252,43 +1248,6 @@ export class ApiClient {
     });
   }
 
-  async createNotePageIssue(pageId: string, data: CreateNotePageIssueRequest = {}): Promise<CreateNotePageIssueResponse> {
-    const raw = await this.fetch<unknown>(`/api/notes/pages/${encodeURIComponent(pageId)}/issues`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    });
-    return parseWithFallback(
-      raw,
-      CreateNotePageIssueResponseSchema,
-      {
-        issue: {
-          id: "",
-          workspace_id: "",
-          number: 0,
-          identifier: "",
-          title: "",
-          description: null,
-          status: "todo",
-          priority: "none",
-          assignee_type: null,
-          assignee_id: null,
-          creator_type: "member",
-          creator_id: "",
-          parent_issue_id: null,
-          project_id: null,
-          position: 0,
-          start_date: null,
-          due_date: null,
-          metadata: {},
-          created_at: "",
-          updated_at: "",
-        },
-        ref: EMPTY_NOTE_PAGE_ISSUE_REF,
-      },
-      { endpoint: "POST /api/notes/pages/{id}/issues" },
-    );
-  }
-
   async createNoteRetrospective(data: CreateNoteRetrospectiveRequest): Promise<CreateNoteRetrospectiveResponse> {
     const raw = await this.fetch<unknown>("/api/notes/retrospectives", {
       method: "POST",
@@ -1296,6 +1255,28 @@ export class ApiClient {
     });
     return parseWithFallback(raw, CreateNoteRetrospectiveResponseSchema, EMPTY_CREATE_NOTE_RETROSPECTIVE_RESPONSE, {
       endpoint: "POST /api/notes/retrospectives",
+    });
+  }
+
+  async getActiveNotePeriodBrief(pageId: string): Promise<NotePeriodBriefActiveResponse> {
+    const raw = await this.fetch<unknown>(
+      `/api/notes/period-briefs/active?page_id=${encodeURIComponent(pageId)}`,
+    );
+    return parseWithFallback(raw, NotePeriodBriefActiveResponseSchema, EMPTY_NOTE_PERIOD_BRIEF_ACTIVE, {
+      endpoint: "GET /api/notes/period-briefs/active",
+    });
+  }
+
+  async insertNotePeriodBrief(
+    runId: string,
+    data: InsertNotePeriodBriefRequest,
+  ): Promise<InsertNotePeriodBriefResponse> {
+    const raw = await this.fetch<unknown>(`/api/notes/period-briefs/${runId}/insert`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, InsertNotePeriodBriefResponseSchema, EMPTY_INSERT_NOTE_PERIOD_BRIEF_RESPONSE, {
+      endpoint: "POST /api/notes/period-briefs/{runId}/insert",
     });
   }
 
@@ -1593,25 +1574,9 @@ export class ApiClient {
     return this.fetch(`/api/members/agents/${id}`);
   }
 
-  // #656 Agent Card Reminders tab: read-only, per the V2 product contract
-  // (docs/superpowers/specs/2026-07-22-raft-reminder-parity.md). `status`
-  // selects which section this page belongs to server-side — "scheduled"
-  // populates only active `definitions`, "fired" populates only `occurrences`
-  // (History, cursor-paginated newest-first) — not a
-  // client-side filter of one bigger list. Matches task #655's committed
-  // `ListAgentReminders` read-page contract (product baseline
-  // `product/654-reminder-parity@4937f3841`) — locked independent of #870's
-  // open fire/migration-correctness review.
-  async getAgentReminders(
-    agentId: string,
-    params: { status: "scheduled" | "fired"; cursor?: string; limit?: number },
-  ): Promise<RawReminderPage> {
-    const search = new URLSearchParams();
-    search.set("status", params.status);
-    if (params.cursor) search.set("cursor", params.cursor);
-    if (params.limit) search.set("limit", String(params.limit));
-    const raw = await this.fetch<unknown>(`/api/members/agents/${agentId}/reminders?${search}`);
-    return parseWithFallback(raw, RawReminderPageSchema, EMPTY_REMINDER_PAGE, {
+  async getAgentReminders(agentId: string): Promise<AgentReminderListResponse> {
+    const raw = await this.fetch<unknown>(`/api/members/agents/${agentId}/reminders`);
+    return parseWithFallback(raw, AgentReminderListResponseSchema, EMPTY_AGENT_REMINDER_LIST, {
       endpoint: "GET /api/members/agents/{agentId}/reminders",
     });
   }
@@ -1639,24 +1604,33 @@ export class ApiClient {
     return EnsureWindyResponseSchema.parse(raw);
   }
 
-  async ensurePeriodBriefAgent(
-    runtimeId: string,
-    model: string,
-  ): Promise<EnsurePeriodBriefAgentResponse> {
+  async ensurePeriodBriefAgent(): Promise<EnsurePeriodBriefAgentResponse> {
     const raw = await this.fetch<unknown>("/api/members/agents/period-brief", {
       method: "POST",
-      body: JSON.stringify({
-        runtime_id: runtimeId,
-        model,
-      }),
+      body: JSON.stringify({}),
     });
     return EnsurePeriodBriefAgentResponseSchema.parse(raw);
   }
 
-  async ensurePeriodBriefCollectors(model: string): Promise<EnsurePeriodBriefCollectorsResponse> {
+  async ensureNotesAssistantAgent(input?: {
+    clone_onboarding?: boolean;
+    runtime_id?: string;
+    model?: string;
+  }): Promise<EnsureNotesAssistantAgentResponse> {
+    const raw = await this.fetch<unknown>("/api/members/agents/notes-assistant", {
+      method: "POST",
+      body: JSON.stringify(input ?? {}),
+    });
+    return EnsureNotesAssistantAgentResponseSchema.parse(raw);
+  }
+
+  async ensurePeriodBriefCollectors(input: {
+    model: string;
+    runtime_id?: string;
+  }): Promise<EnsurePeriodBriefCollectorsResponse> {
     const raw = await this.fetch<unknown>("/api/members/agents/period-brief-collectors", {
       method: "POST",
-      body: JSON.stringify({ model }),
+      body: JSON.stringify(input),
     });
     return parseWithFallback(
       raw,
@@ -1725,6 +1699,24 @@ export class ApiClient {
   async updateAgent(id: string, data: UpdateAgentRequest): Promise<Agent> {
     return this.fetch(`/api/members/agents/${id}`, {
       method: "PUT",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async bulkUpdateAgentRuntimeConfig(
+    data: BulkUpdateAgentRuntimeConfigRequest,
+  ): Promise<BulkUpdateAgentRuntimeConfigResponse> {
+    return this.fetch("/api/members/agents/runtime-config", {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async bulkAgentLifecycle(
+    data: BulkAgentLifecycleRequest,
+  ): Promise<BulkAgentLifecycleResponse> {
+    return this.fetch("/api/members/agents/lifecycle", {
+      method: "POST",
       body: JSON.stringify(data),
     });
   }
@@ -1930,6 +1922,24 @@ export class ApiClient {
       EMPTY_AGENT_RUNTIME_LIST,
       { endpoint: "GET /api/runtimes" },
     );
+  }
+
+  /**
+   * The agent's assembled runtime config. Separate from getAgent because it
+   * joins Computer-level facts (name, liveness) that no agent row carries,
+   * and because it must stay readable for an agent bound to a runtime the
+   * caller cannot manage.
+   */
+  async getAgentRuntimeConfig(agentId: string): Promise<AgentRuntimeConfig> {
+    const raw = await this.fetch<unknown>(
+      `/api/agents/${encodeURIComponent(agentId)}/runtime-config`,
+    );
+    return parseWithFallback(
+      raw,
+      AgentRuntimeConfigSchema,
+      EMPTY_AGENT_RUNTIME_CONFIG,
+      { endpoint: "GET /api/agents/:id/runtime-config" },
+    ) as AgentRuntimeConfig;
   }
 
   async listComputers(workspaceId: string): Promise<ComputerConnection[]> {
@@ -3253,6 +3263,53 @@ export class ApiClient {
     return parseWithFallback(raw, GraphMemoryProfileSchema, EMPTY_GRAPH_MEMORY_PROFILE, {
       endpoint: "PUT /api/workspaces/{id}/graph-memory/profile",
     });
+  }
+
+  async getGraphMemoryStatus(workspaceId: string): Promise<GraphMemoryStatus> {
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/graph-memory/status`,
+    );
+    return parseWithFallback(raw, GraphMemoryStatusSchema, EMPTY_GRAPH_MEMORY_STATUS, {
+      endpoint: "GET /api/workspaces/{id}/graph-memory/status",
+    });
+  }
+
+  async getGraphMemoryAudit(workspaceId: string): Promise<GraphMemoryAuditSummary> {
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/graph-memory/audit`,
+    );
+    return parseWithFallback(raw, GraphMemoryAuditSummarySchema, EMPTY_GRAPH_MEMORY_AUDIT, {
+      endpoint: "GET /api/workspaces/{id}/graph-memory/audit",
+    });
+  }
+
+  async getGraphMemoryChannelLineage(workspaceId: string, channelId: string): Promise<GraphMemoryChannelLineage> {
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/graph-memory/channels/${encodeURIComponent(channelId)}/lineage`,
+    );
+    return parseWithFallback(raw, GraphMemoryChannelLineageSchema, {
+      workspace_id: workspaceId, channel_id: channelId, routing_mode: "", current: null, lineage: [],
+    }, { endpoint: "GET /api/workspaces/{id}/graph-memory/channels/{channelId}/lineage" });
+  }
+
+  async startGraphMemoryConsolidation(workspaceId: string): Promise<{ id: string; status: string }> {
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/graph-memory/consolidations`,
+      { method: "POST", body: JSON.stringify({}) },
+    );
+    return parseWithFallback(raw, GraphMemoryConsolidationRunSchema, EMPTY_GRAPH_MEMORY_CONSOLIDATION_RUN, {
+      endpoint: "POST /api/workspaces/{id}/graph-memory/consolidations",
+    });
+  }
+
+  async listGraphMemoryConsolidations(workspaceId: string): Promise<GraphMemoryConsolidationRun[]> {
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/graph-memory/consolidations`,
+    );
+    const parsed = parseWithFallback(raw, GraphMemoryConsolidationListSchema, { runs: [] }, {
+      endpoint: "GET /api/workspaces/{id}/graph-memory/consolidations",
+    });
+    return parsed.runs;
   }
 
   async startMemoryCurationRun(
@@ -4903,9 +4960,12 @@ export class ApiClient {
       rawSessions.some((session) => {
         if (!session || typeof session !== "object" || Array.isArray(session)) return true;
         const value = session as Record<string, unknown>;
-        return ["id", "workspace_id", "fleet_id", "status", "current_stage"].some(
-          (key) => typeof value[key] !== "string" || value[key] === "",
-        );
+        const required = ["id", "workspace_id", "status", "current_stage"];
+        if (required.some((key) => typeof value[key] !== "string" || value[key] === "")) {
+          return true;
+        }
+        // V6 runs have no fleet; empty/missing fleet_id is valid.
+        return value.fleet_id != null && typeof value.fleet_id !== "string";
       })
     ) {
       throw new Error("GET /api/research/sessions response failed schema validation");
@@ -4937,7 +4997,16 @@ export class ApiClient {
     const { CreateResearchSessionResponseSchema } = await import("../research/schemas");
     const raw = await this.fetch("/api/research/sessions", {
       method: "POST",
-      body: JSON.stringify(data),
+      body: JSON.stringify({
+        goal: data.goal,
+        title: data.title,
+        client_request_id: data.clientRequestId,
+        depth_tier: data.depthTier,
+        language: data.language,
+        source_weights: data.sourceWeights,
+        orchestrator_version: data.orchestratorVersion,
+        director_agent_id: data.directorAgentId,
+      }),
     });
     const parsed = CreateResearchSessionResponseSchema.safeParse(raw);
     if (!parsed.success) {
@@ -5090,7 +5159,18 @@ export class ApiClient {
     const { ResearchMessageSchema } = await import("../research/schemas");
     const raw = await this.fetch(`/api/research/sessions/${id}/messages`, {
       method: "POST",
-      body: JSON.stringify(data),
+      body: JSON.stringify({
+        body: data.body,
+        target_agent_id: data.targetAgentId,
+        selected_research_refs: data.selectedResearchRefs?.map((reference) => ({
+          stable_id: reference.stableId,
+          kind: reference.kind,
+          entity_id: reference.entityId,
+          revision: reference.revision,
+          content_hash: reference.contentHash,
+          display_summary: reference.displaySummary,
+        })),
+      }),
     });
     const result = ResearchMessageSchema.safeParse(raw);
     if (!result.success) {
@@ -5257,61 +5337,6 @@ export class ApiClient {
     };
   }
 
-  // ---- Research V6 Graph Projection (design doc 7.1 / 7.2) ----
-
-  async getResearchV6ProjectionSnapshot(
-    runId: string,
-    init?: { signal?: AbortSignal },
-  ): Promise<import("../types/research-v6").ResearchV6Snapshot> {
-    const { parseResearchV6SnapshotStrict } = await import("../research-v6/schemas");
-    const raw = await this.fetch(`/api/research/v6/runs/${runId}/projection/snapshot`, {
-      signal: init?.signal,
-    });
-    const snapshot = parseResearchV6SnapshotStrict(raw);
-    const nodeIds = snapshot.nodes.map((node) => node.id);
-    const edgeIds = snapshot.edges.map((edge) => edge.id);
-    if (
-      !snapshot.snapshot_id ||
-      snapshot.run_id !== runId ||
-      snapshot.next_cursor !== null ||
-      !Number.isInteger(snapshot.through_event_sequence) ||
-      snapshot.through_event_sequence < 0 ||
-      snapshot.nodes.some((node) => !node.id || node.run_id !== runId) ||
-      snapshot.edges.some((edge) => !edge.id || edge.run_id !== runId) ||
-      new Set(nodeIds).size !== nodeIds.length ||
-      new Set(edgeIds).size !== edgeIds.length
-    ) {
-      throw new Error(
-        "GET /api/research/v6/runs/:runId/projection/snapshot response failed complete snapshot identity validation",
-      );
-    }
-    return snapshot;
-  }
-
-  async getResearchV6ProjectionDeltaPage(
-    runId: string,
-    fromSequenceExclusive: number,
-  ): Promise<import("../types/research-v6").ResearchV6Delta | null> {
-    const { parseResearchV6Delta } = await import("../research-v6/schemas");
-    const raw = await this.fetch(
-      `/api/research/v6/runs/${runId}/projection/deltas?from_sequence_exclusive=${fromSequenceExclusive}`,
-    );
-    if (raw == null) return null;
-    return parseResearchV6Delta(raw);
-  }
-
-  async resumeResearchV6Projection(
-    runId: string,
-    lastConfirmedSequence: number,
-  ): Promise<import("../types/research-v6").ResearchV6ResumeVerdict> {
-    const { parseResearchV6ResumeVerdict } = await import("../research-v6/schemas");
-    const raw = await this.fetch(`/api/research/v6/runs/${runId}/projection/resume`, {
-      method: "POST",
-      body: JSON.stringify({ last_confirmed_sequence: lastConfirmedSequence }),
-    });
-    return parseResearchV6ResumeVerdict(raw);
-  }
-
   // ---- Ronaldo / Director V6 Projection (authoritative unreleased contract) ----
 
   async getResearchV6DirectorProjectionSnapshot(
@@ -5330,7 +5355,7 @@ export class ApiClient {
       { signal: options?.signal },
     );
     const snapshot = parseResearchV6DirectorProjectionSnapshot(raw);
-    if (snapshot.workspace_id !== workspaceId || snapshot.run_id !== runId) {
+    if (snapshot.workspaceId !== workspaceId || snapshot.runId !== runId) {
       throw new Error("Director V6 projection snapshot identity mismatch");
     }
     return snapshot;
@@ -5382,25 +5407,25 @@ export class ApiClient {
     options?: { signal?: AbortSignal },
   ): Promise<import("../types/research-v6-director").ResearchV6DirectorProjectionSnapshot> {
     const {
-      parseResearchV6DirectorProjectionSliceRequest,
+      encodeResearchV6DirectorProjectionSliceRequest,
       parseResearchV6DirectorProjectionSnapshot,
     } = await import("../research-v6/director-schemas");
-    const validated = parseResearchV6DirectorProjectionSliceRequest(request);
+    const encoded = encodeResearchV6DirectorProjectionSliceRequest(request);
     const params = new URLSearchParams({
-      root: validated.root,
-      depth: String(validated.depth),
-      snapshot_id: validated.snapshot_id,
+      root: encoded.root,
+      depth: String(encoded.depth),
+      snapshot_id: encoded.snapshot_id,
     });
-    if (validated.cursor) params.set("cursor", validated.cursor);
+    if (encoded.cursor) params.set("cursor", encoded.cursor);
     const raw = await this.fetch(
       `/api/research/v6/runs/${encodeURIComponent(runId)}/projection/slice?${params.toString()}`,
       { signal: options?.signal },
     );
     const snapshot = parseResearchV6DirectorProjectionSnapshot(raw);
-    if (snapshot.workspace_id !== workspaceId || snapshot.run_id !== runId) {
+    if (snapshot.workspaceId !== workspaceId || snapshot.runId !== runId) {
       throw new Error("Director V6 projection slice identity mismatch");
     }
-    if (snapshot.snapshot_id !== validated.snapshot_id) {
+    if (snapshot.snapshotId !== encoded.snapshot_id) {
       throw new Error("Director V6 projection slice snapshot mismatch");
     }
     return snapshot;
@@ -5425,12 +5450,12 @@ export class ApiClient {
       { signal: options?.signal },
     );
     const page = parseResearchV6DirectorProjectionDeltaPage(raw);
-    if (page.run_id !== runId || page.deltas.some((delta) => delta.workspace_id !== workspaceId || delta.run_id !== runId)) {
+    if (page.runId !== runId || page.deltas.some((delta) => delta.workspaceId !== workspaceId || delta.runId !== runId)) {
       return {
-        run_id: runId,
+        runId,
         deltas: [],
-        next_cursor: null,
-        resync_required: true,
+        nextCursor: null,
+        resyncRequired: true,
       };
     }
     return page;
@@ -5444,9 +5469,9 @@ export class ApiClient {
   ): Promise<import("../types/research-v6-director").ResearchV6DirectorProjectionDeltaPage> {
     const {
       parseResearchV6DirectorProjectionDeltaPage,
-      parseResearchV6DirectorProjectionResumeRequest,
+      encodeResearchV6DirectorProjectionResumeRequest,
     } = await import("../research-v6/director-schemas");
-    const body = parseResearchV6DirectorProjectionResumeRequest(request);
+    const body = encodeResearchV6DirectorProjectionResumeRequest(request);
     const raw = await this.fetch(
       `/api/research/v6/runs/${encodeURIComponent(runId)}/projection/resume`,
       {
@@ -5456,12 +5481,12 @@ export class ApiClient {
       },
     );
     const page = parseResearchV6DirectorProjectionDeltaPage(raw);
-    if (page.run_id !== runId || page.deltas.some((delta) => delta.workspace_id !== workspaceId || delta.run_id !== runId)) {
+    if (page.runId !== runId || page.deltas.some((delta) => delta.workspaceId !== workspaceId || delta.runId !== runId)) {
       return {
-        run_id: runId,
+        runId,
         deltas: [],
-        next_cursor: null,
-        resync_required: true,
+        nextCursor: null,
+        resyncRequired: true,
       };
     }
     return page;
@@ -5470,6 +5495,7 @@ export class ApiClient {
   async getResearchV6DirectorProjectionNodeDetail(
     workspaceId: string,
     runId: string,
+    snapshotId: string,
     nodeId: string,
     view: import("../types/research-v6-director").ResearchV6DirectorNodeDetailView = "brief",
     options?: { signal?: AbortSignal },
@@ -5477,8 +5503,9 @@ export class ApiClient {
     const { parseResearchV6DirectorNodeDetail } = await import(
       "../research-v6/director-schemas"
     );
+    const query = new URLSearchParams({ snapshot_id: snapshotId, view });
     const raw = await this.fetch(
-      `/api/research/v6/runs/${encodeURIComponent(runId)}/projection/nodes/${encodeURIComponent(nodeId)}?view=${encodeURIComponent(view)}`,
+      `/api/research/v6/runs/${encodeURIComponent(runId)}/projection/nodes/${encodeURIComponent(nodeId)}?${query.toString()}`,
       { signal: options?.signal },
     );
     const detail = parseResearchV6DirectorNodeDetail(raw);
@@ -5487,6 +5514,27 @@ export class ApiClient {
     }
     void workspaceId;
     return detail;
+  }
+
+  async getResearchV6DirectorWorkActivity(
+    workspaceId: string,
+    runId: string,
+    workItemId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<import("../types/research-v6-director").ResearchV6DirectorWorkActivity> {
+    const { parseResearchV6DirectorWorkActivity } = await import(
+      "../research-v6/director-schemas"
+    );
+    const raw = await this.fetch(
+      `/api/research/v6/runs/${encodeURIComponent(runId)}/work-items/${encodeURIComponent(workItemId)}/activity`,
+      { signal: options?.signal },
+    );
+    const activity = parseResearchV6DirectorWorkActivity(raw);
+    if (activity === null || activity.workItemId !== workItemId) {
+      throw new Error("Director V6 work activity identity mismatch");
+    }
+    void workspaceId;
+    return activity;
   }
 
   async getResearchV6DirectorReports(
@@ -5546,5 +5594,42 @@ export class ApiClient {
     }
     void workspaceId;
     return html;
+  }
+
+  async getResearchV6Release(): Promise<{
+    workspace_id: string;
+    create_enabled: boolean;
+    maintenance_reason: string;
+    paused_run_count: number;
+  }> {
+    const { ResearchV6ReleaseSchema } = await import("../research/schemas");
+    const raw = await this.fetch("/api/research/v6/release");
+    return parseWithFallback(raw, ResearchV6ReleaseSchema, {
+      workspace_id: "",
+      create_enabled: true,
+      maintenance_reason: "",
+      paused_run_count: 0,
+    }, { endpoint: "GET /api/research/v6/release" });
+  }
+
+  async listResearchMonitors(): Promise<{ monitors: Array<{ id: string; status: string; last_cycle_status?: string }> }> {
+    const { ResearchMonitorListSchema } = await import("../research/schemas");
+    const raw = await this.fetch("/api/research/v6/monitors");
+    return parseWithFallback(raw, ResearchMonitorListSchema, { monitors: [] }, {
+      endpoint: "GET /api/research/v6/monitors",
+    });
+  }
+
+  async getResearchProductionWindow(): Promise<{
+    llm_judge: boolean;
+    quality_signal: string;
+    report?: { sufficient_data?: boolean; within_bounds?: boolean };
+  }> {
+    const { ResearchProductionWindowSchema } = await import("../research/schemas");
+    const raw = await this.fetch("/api/research/v6/production-window");
+    return parseWithFallback(raw, ResearchProductionWindowSchema, {
+      llm_judge: false,
+      quality_signal: "user_confirmed_delivery",
+    }, { endpoint: "GET /api/research/v6/production-window" });
   }
 }

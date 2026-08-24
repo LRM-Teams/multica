@@ -205,7 +205,7 @@ func TestWriteWorkdirTextFileRejectsHashMismatch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	resp := writeWorkdirTextFile(root, "memory/STATE.md", "new", "not-the-current-hash", 0)
+	resp := writeWorkdirTextFile(root, "memory/STATE.md", "new", "not-the-current-hash", 0, false)
 	if !resp.Conflict {
 		t.Fatalf("expected hash conflict, got %+v", resp)
 	}
@@ -215,5 +215,31 @@ func TestWriteWorkdirTextFileRejectsHashMismatch(t *testing.T) {
 	}
 	if string(got) != "old" {
 		t.Fatalf("hash conflict must not modify file, got %q", got)
+	}
+}
+
+func TestWriteWorkdirTextFileCreateMakesMissingFile(t *testing.T) {
+	root := t.TempDir()
+	resp := writeWorkdirTextFile(root, "output/answer.json", `{"ok":true}`, "", 0, true)
+	if resp.Error != "" || resp.Missing || resp.Conflict {
+		t.Fatalf("create write failed: %+v", resp)
+	}
+	got, err := os.ReadFile(filepath.Join(root, "output", "answer.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != `{"ok":true}` {
+		t.Fatalf("created content = %q", got)
+	}
+}
+
+func TestWriteWorkdirTextFileEditOnlyLeavesMissing(t *testing.T) {
+	root := t.TempDir()
+	resp := writeWorkdirTextFile(root, "output/answer.json", "{}", "", 0, false)
+	if !resp.Missing {
+		t.Fatalf("edit-only write must report Missing, got %+v", resp)
+	}
+	if _, err := os.Stat(filepath.Join(root, "output", "answer.json")); !os.IsNotExist(err) {
+		t.Fatalf("edit-only write must not create the file, err=%v", err)
 	}
 }

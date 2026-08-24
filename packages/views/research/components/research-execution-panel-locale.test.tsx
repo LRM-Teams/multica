@@ -7,6 +7,14 @@ import {
 } from "../lib/research-execution-panel-fixture";
 import { ResearchExecutionPanel } from "./research-execution-panel";
 
+// The row/inspector now render the site-wide smart avatar, which resolves
+// identity through workspace queries. These suites are about execution copy.
+vi.mock("../../common/actor-avatar", () => ({
+  ActorAvatar: ({ actorId }: { actorId: string }) => (
+    <span data-testid={`actor-avatar-${actorId}`} />
+  ),
+}));
+
 // Localised render probe for LRM-1434: the Research execution panel must not
 // leak Chinese chrome into en/ja/ko. This mirrors the real `en/research.json`
 // `panel.execution` bundle (kept in sync by the locale parity test) and renders
@@ -85,7 +93,6 @@ const semanticAgents: ResearchExecutionAgent[] = researchExecutionPanelFixture.m
   ...agent,
   name: `Agent ${index}`,
   role: "worker",
-  initials: `A${index}`,
   action: undefined,
   actionKey: ACTION_KEY_BY_STATUS[agent.status],
   actionDetail: undefined,

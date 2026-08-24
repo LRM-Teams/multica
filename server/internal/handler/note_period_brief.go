@@ -37,6 +37,12 @@ var notePeriodBriefCollectorMaxWait = 2 * time.Hour
 // Tests set this false so the response includes the synthesizer job.
 var notePeriodBriefFinishInBackground = true
 
+// How long the background synthesizer wait will poll for a --note-write
+// that belongs to this run (created_at >= run.created_at). Tests that run
+// synthesis inline (FinishInBackground=false) skip the wait.
+var notePeriodBriefSynthWriteMaxWait = 30 * time.Minute
+var notePeriodBriefSynthWritePollEvery = 2 * time.Second
+
 // Stable English instruction locked to the period_brief playbook (J3-T1 / J3-T4).
 // folderPageID is the private 工作介绍/ folder — Brief lands as a child via human confirm.
 // draftPageID is the Facts+packs draft; synthesizer uses it for status / retry.
@@ -51,9 +57,9 @@ func notePeriodBriefInstruction(folderPageID, draftPageID, windowLabel string) s
 	if draft != "" {
 		retryHint = "\n10) Collector status board: each pack has status + retryable. " +
 			"Permanent failures (missing API key / model config / auth / quota / blocked) → abandon that collector; do not retry. " +
-			"Transient failures (runtime offline, network, capacity, empty pack, stalled) → retry with the narrow CLI below, at most " +
-			fmt.Sprintf("%d", notePeriodBriefCollectorMaxRetries) + " retries per collector. " +
-			"After retry, wait for the platform re-wake — do not invent OS work.\n" +
+			"Inbox will not auto-retry collectors. " +
+			"If any collector is retryable and retry_count is 0, you MUST call the retry CLI once now and stop — do not write the Brief yet. " +
+			"After the platform re-wake, that collector's result is final: write the Brief; do not retry again.\n" +
 			formatPeriodBriefRetryHint(draft)
 	}
 	return "Write a Period Work Brief for **other people to read** (manager / colleague) — polished reporting narrative with clear structure. Not a pack dump, not a standup wrap-up, not slide-deck copy, not an engineering evidence log. Follow skill `multica-period-work-brief` for section shape, titles, and diagrams.\n" +
@@ -69,7 +75,9 @@ func notePeriodBriefInstruction(folderPageID, draftPageID, windowLabel string) s
 		"9) Deliver the Brief with `multica message send --target <Message target for chat transport> --note-write --note-page-id " + folder +
 		"`. The body must be only the Brief markdown. Title it like `工作介绍 " + label +
 		"`. The human confirms 「新建子笔记」 under 工作介绍/ — never treat the draft Facts page as the finished Brief, and never pass the draft page id to --note-page-id." +
-		retryHint
+		retryHint +
+		"\n11) If a <focus> partition is present, honor the human request when integrating packs. Cover the requested paths/topics/aspects; do not pad the Brief with unrelated work just because a pack mentioned it.\n" +
+		"12) Notes pages are not source material. Do not read, search, or quote workspace notes to fill the Brief. Do not treat the current Notes page, 工作介绍 drafts, or note titles as work evidence. Only platform Issues/PRs/agent-runs Facts and collector packs."
 }
 
 // notePeriodBriefCollectorInstruction tells a runtime Agent to gather OS work
@@ -91,7 +99,7 @@ func notePeriodBriefCollectorInstruction(draftPageID, windowLabel, windowStart, 
 		"OWN COMPUTER ONLY: harvest only this bound Computer. Do not collect from another member's laptop/cloud box.\n" +
 		"STRICT TIME WINDOW: only include commits, file changes, and claims whose activity falls inside start→end from the wake `<window>` partition (RFC3339, half-open: include start, exclude end). Drop anything outside that range — do not widen to \"recent\" or \"this week\" on your own.\n" +
 		"Follow the built-in skill `multica-period-work-collect` (read SKILL.md and `references/collect-recipes.md`) before collecting — use its shell recipes with the wake `$START` / `$END`.\n" +
-		"Scope: whole-machine HOME for local runtimes; the cloud runtime environment for cloud. Prefer git status, commits in-window, dirty trees with in-window mtimes, and project dirs you can see.\n" +
+		"Scope: run the collect-recipes SCAN_ROOTS snippet first. Scan `$HOME` and `/workspace` when that directory exists, plus other visible project dirs — HOME-only is incomplete on container sandboxes. Also harvest non-git source files whose mtime is in-window. Prefer git status, commits in-window, and dirty trees with in-window mtimes.\n" +
 		"PRELIMINARY GROUPING (required): after harvesting evidence, build `## Work groups`. Default: one group per git repo / project root. If work in different repos, files, or surfaces shares one outcome/initiative, put them in **one** group and state why. Unrelated work stays in separate groups — never glue by calendar. Completeness first — Highlights and Repos stay as the evidence layer; Work groups organize them. Every Highlight belongs to exactly one group; every group claim must be in-window.\n" +
 		"When a multi-step flow needs it, add Mermaid diagrams under Diagrams.\n" +
 		"Allowed detail: short diffs, file summaries, and key snippets when needed to explain work. Prefer bounded excerpts over whole files.\n" +
@@ -121,6 +129,31 @@ func notePeriodBriefCollectorInstruction(draftPageID, windowLabel, windowStart, 
 		"`. Body = pack markdown only (stdin or JSON `{\"markdown\":\"...\"}`)."
 }
 
+func notePeriodBriefCollectorInstructionScoped(draftPageID, windowLabel, windowStart, windowEnd string, scope notePeriodBriefCollectorScope) string {
+	base := notePeriodBriefCollectorInstruction(draftPageID, windowLabel, windowStart, windowEnd)
+	if scope.Empty() {
+		return base
+	}
+	return base + "\nSCOPED COLLECT (Notes Assistant collect plan — honor this over a full-machine wander):\n" +
+		"If a <focus> partition is present, harvest only work that matches those paths, topics, and aspects.\n" +
+		"Do not scan unrelated trees when a path is specified. Still respect denylist, OWN COMPUTER, and STRICT WINDOW.\n" +
+		"Work groups and Highlights must stay inside the requested scope."
+}
+
+func notePeriodBriefPlannerInstruction(draftPageID string) string {
+	draft := strings.TrimSpace(draftPageID)
+	return "You are the 写汇报 collect-plan commander (笔记助手). Do NOT write the Period Work Brief and do NOT collect the OS.\n" +
+		"Read skill `multica-period-work-plan` and follow it exactly.\n" +
+		"1) Read the untrusted <focus> partition (human request) and the <roster> of human-selected collectors.\n" +
+		"2) Restate the request as paths / topics / aspects (or unconstrained).\n" +
+		"3) Assign collection tasks only to collectors that can help. Set skip=true for the rest. You cannot add collectors that are not on the roster.\n" +
+		"4) For each assigned collector, give a short brief plus optional paths/topics/aspects so they scan narrowly.\n" +
+		"5) If the request is unconstrained, assign every roster collector with empty paths/topics/aspects (full SCAN_ROOTS).\n" +
+		"Deliver JSON with `multica notes period-brief submit-collect-plan --draft-page-id " + draft + "`.\n" +
+		`Shape: {"summary":"...","assignments":[{"collector_agent_id":"<uuid>","skip":false,"paths":[],"topics":[],"aspects":[],"brief":"..."}]}` +
+		"\nDo not --note-write. Do not submit-pack."
+}
+
 type createNotePeriodBriefRequest struct {
 	Window            string   `json:"window"` // day | week | month | custom
 	Date              string   `json:"date"`
@@ -131,6 +164,10 @@ type createNotePeriodBriefRequest struct {
 	CollectorAgentIDs []string `json:"collector_agent_ids"`
 	Sources           []string `json:"sources"`
 	ChannelID         string   `json:"channel_id"`
+	Focus             string   `json:"focus"`
+	ContextNotePageID string   `json:"context_note_page_id"`
+	ChatSessionID     string   `json:"chat_session_id"`
+	FromChat          bool     `json:"from_chat"`
 }
 
 type createNotePeriodBriefResponse struct {
@@ -143,6 +180,7 @@ type createNotePeriodBriefResponse struct {
 	FactCount         int                             `json:"fact_count"`
 	CollectorAgentIDs []string                        `json:"collector_agent_ids"`
 	CollectorJobs     []NoteWorkerJobResponse         `json:"collector_jobs"`
+	ChatSessionID     string                          `json:"chat_session_id,omitempty"`
 }
 
 // CreateNotePeriodBrief gathers platform Facts, dispatches collector Agents to
@@ -156,6 +194,7 @@ func (h *Handler) CreateNotePeriodBrief(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
+	h.archiveRetiredWeeklyReportAgents(r.Context(), workspaceID, userID)
 	var req createNotePeriodBriefRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -182,11 +221,7 @@ func (h *Handler) CreateNotePeriodBrief(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	sources := req.Sources
-	if len(sources) == 0 {
-		sources = append([]string(nil), notePeriodWorkDefaultSources...)
-	}
-	bundle, err := h.loadNoteRetrospectiveFactsBundle(r.Context(), workspaceID, userID, window.Start, window.End, sources)
+	bundle, err := h.loadNotePeriodBriefFactsBundle(r.Context(), workspaceID, userID, window.Start, window.End, req.Sources)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load retrospective facts")
 		return
@@ -209,6 +244,19 @@ func (h *Handler) CreateNotePeriodBrief(w http.ResponseWriter, r *http.Request) 
 		Label:    window.Label,
 	}
 	channelID := strings.TrimSpace(req.ChannelID)
+	sourcePageID, ok := h.resolvePeriodBriefSourcePage(w, r, workspaceID, userID, req.ContextNotePageID)
+	if !ok {
+		return
+	}
+	var bubbleSessionID pgtype.UUID
+	if sourcePageID.Valid {
+		sessionID, sessErr := h.ensurePeriodBriefBubbleSession(r.Context(), workspaceID, userID, agentID, sourcePageID, req.ChatSessionID)
+		if sessErr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to open notes bubble session")
+			return
+		}
+		bubbleSessionID = sessionID
+	}
 	used := append([]string(nil), bundle.SourcesUsed...)
 	empty := append([]string(nil), bundle.SourcesEmpty...)
 	skipped := append([]string(nil), bundle.SourcesSkipped...)
@@ -237,31 +285,97 @@ RETURNING id, workspace_id, parent_id, owner_user_id, title, content, sort_key, 
 		return
 	}
 
-	collectorJobs := make([]NoteWorkerJobResponse, 0, len(collectorIDs))
-	for _, collectorID := range collectorIDs {
-		collectorUUID := parseUUID(collectorID)
-		collector, err := h.Queries.GetAgentInWorkspace(r.Context(), db.GetAgentInWorkspaceParams{
-			ID:          collectorUUID,
-			WorkspaceID: workspaceID,
-		})
-		if err != nil || collector.ArchivedAt.Valid {
-			writeError(w, http.StatusBadRequest, "collector agent not found: "+collectorID)
+	focus := normalizePeriodBriefUserFocus(req.Focus)
+
+	if focus != "" {
+		pendingRefs := make([]notePeriodBriefCollectorRef, 0, len(collectorIDs))
+		for _, id := range collectorIDs {
+			pendingRefs = append(pendingRefs, notePeriodBriefCollectorRef{
+				AgentID:     id,
+				WindowLabel: window.Label,
+				WindowStart: windowStart,
+				WindowEnd:   windowEnd,
+			})
+		}
+		if err := h.insertNotePeriodBriefRun(r.Context(), workspaceID, userID, draft.ID, folderID, agentID, window, channelID, factsText, used, empty, skipped, pendingRefs, focus, "planning", bubbleSessionID, sourcePageID); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to create period brief run: "+err.Error())
 			return
 		}
-		job, ok := h.dispatchNotePeriodBriefCollector(
-			w, r, workspaceID, userID, userIDString, draft, collector, window.Label, windowStart, windowEnd,
+		h.startPeriodBriefBubbleTranscript(r.Context(), workspaceID, userID, bubbleSessionID, userIDString, window.Label, focus, collectorIDs, req.FromChat)
+		plannerJob, ok := h.dispatchNotePeriodBriefPlanner(
+			w, r, workspaceID, userID, userIDString, draft, agentID, window.Label, windowStart, windowEnd, channelID, focus, collectorIDs,
 		)
 		if !ok {
 			return
 		}
-		collectorJobs = append(collectorJobs, job)
+		if run, loadErr := h.loadNotePeriodBriefRunByDraft(r.Context(), workspaceID, draft.ID); loadErr == nil && plannerJob.ID != "" {
+			_ = h.updateNotePeriodBriefRunPlannerJob(r.Context(), run.ID, parseUUID(plannerJob.ID))
+		}
+		h.postPeriodBriefBubbleAssigned(r.Context(), workspaceID, userID, bubbleSessionID, userIDString, collectorIDs)
+		if notePeriodBriefFinishInBackground {
+			writeJSON(w, http.StatusCreated, createNotePeriodBriefResponse{
+				Page:              notePageToResponse(draft, userID, []string{}, nil),
+				Job:               plannerJob,
+				Window:            windowInfo,
+				SourcesUsed:       used,
+				SourcesEmpty:      empty,
+				SourcesSkipped:    skipped,
+				FactCount:         bundle.FactCount(),
+				CollectorAgentIDs: collectorIDs,
+				CollectorJobs:     nil,
+				ChatSessionID:     uuidToString(bubbleSessionID),
+			})
+			bg := context.WithoutCancel(r.Context())
+			go h.finishNotePeriodBriefAfterPlan(bg, workspaceID, userID, userIDString, agentID, folderID, draft, window, channelID, factsText, collectorIDs, used, empty, skipped)
+			return
+		}
+		collectorJobs, ok := h.completePeriodBriefPlanAndDispatch(
+			w, r, workspaceID, userID, userIDString, draft, window, collectorIDs,
+		)
+		if !ok {
+			return
+		}
+		packResults := h.awaitPeriodBriefCollectorPacks(r.Context(), workspaceID, userID, draft.ID, collectorJobs)
+		page, job, usedOut, emptyOut, skippedOut, ok := h.synthesizeNotePeriodBrief(
+			w, r, workspaceID, userID, userIDString, agentID, folderID, draft, window, channelID, factsText, packResults, used, empty, skipped,
+		)
+		if !ok {
+			return
+		}
+		if periodBriefAllCollectorResultsFinal(packResults) {
+			if run, loadErr := h.loadNotePeriodBriefRunByDraft(r.Context(), workspaceID, page.ID); loadErr == nil {
+				h.completePeriodBriefRunAfterSynth(r.Context(), run, userIDString)
+			}
+		}
+		writeJSON(w, http.StatusCreated, createNotePeriodBriefResponse{
+			Page:              notePageToResponse(page, userID, []string{}, nil),
+			Job:               job,
+			Window:            windowInfo,
+			SourcesUsed:       usedOut,
+			SourcesEmpty:      emptyOut,
+			SourcesSkipped:    skippedOut,
+			FactCount:         bundle.FactCount(),
+			CollectorAgentIDs: collectorIDs,
+			CollectorJobs:     collectorJobs,
+			ChatSessionID:     uuidToString(bubbleSessionID),
+		})
+		return
+	}
+
+	collectorJobs, ok := h.dispatchPeriodBriefCollectorsForIDs(
+		w, r, workspaceID, userID, userIDString, draft, window.Label, windowStart, windowEnd, collectorIDs, nil,
+	)
+	if !ok {
+		return
 	}
 
 	refs := collectorRefsFromJobs(collectorJobs, window.Label, windowStart, windowEnd)
-	if err := h.insertNotePeriodBriefRun(r.Context(), workspaceID, userID, draft.ID, folderID, agentID, window, channelID, factsText, used, empty, skipped, refs); err != nil {
+	if err := h.insertNotePeriodBriefRun(r.Context(), workspaceID, userID, draft.ID, folderID, agentID, window, channelID, factsText, used, empty, skipped, refs, "", "collecting", bubbleSessionID, sourcePageID); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create period brief run: "+err.Error())
 		return
 	}
+	h.startPeriodBriefBubbleTranscript(r.Context(), workspaceID, userID, bubbleSessionID, userIDString, window.Label, "", collectorIDs, req.FromChat)
+	h.postPeriodBriefBubbleAssigned(r.Context(), workspaceID, userID, bubbleSessionID, userIDString, collectorIDs)
 
 	if notePeriodBriefFinishInBackground {
 		primaryJob := collectorJobs[0]
@@ -275,6 +389,7 @@ RETURNING id, workspace_id, parent_id, owner_user_id, title, content, sort_key, 
 			FactCount:         bundle.FactCount(),
 			CollectorAgentIDs: collectorIDs,
 			CollectorJobs:     collectorJobs,
+			ChatSessionID:     uuidToString(bubbleSessionID),
 		})
 		bg := context.WithoutCancel(r.Context())
 		go h.finishNotePeriodBriefAfterCollectors(bg, workspaceID, userID, userIDString, agentID, folderID, draft, window, channelID, factsText, collectorJobs, used, empty, skipped)
@@ -288,8 +403,10 @@ RETURNING id, workspace_id, parent_id, owner_user_id, title, content, sort_key, 
 	if !ok {
 		return
 	}
-	if run, loadErr := h.loadNotePeriodBriefRunByDraft(r.Context(), workspaceID, page.ID); loadErr == nil {
-		_ = h.updateNotePeriodBriefRunCollectors(r.Context(), run.ID, clearCollectorPackMarkdown(run.Collectors), "done")
+	if periodBriefAllCollectorResultsFinal(packResults) {
+		if run, loadErr := h.loadNotePeriodBriefRunByDraft(r.Context(), workspaceID, page.ID); loadErr == nil {
+			h.completePeriodBriefRunAfterSynth(r.Context(), run, userIDString)
+		}
 	}
 	writeJSON(w, http.StatusCreated, createNotePeriodBriefResponse{
 		Page:              notePageToResponse(page, userID, []string{}, nil),
@@ -301,7 +418,98 @@ RETURNING id, workspace_id, parent_id, owner_user_id, title, content, sort_key, 
 		FactCount:         bundle.FactCount(),
 		CollectorAgentIDs: collectorIDs,
 		CollectorJobs:     collectorJobs,
+		ChatSessionID:     uuidToString(bubbleSessionID),
 	})
+}
+
+func (h *Handler) dispatchPeriodBriefCollectorsForIDs(
+	w http.ResponseWriter,
+	r *http.Request,
+	workspaceID, userID pgtype.UUID,
+	userIDString string,
+	draft notePageRow,
+	windowLabel, windowStart, windowEnd string,
+	collectorIDs []string,
+	scopes map[string]notePeriodBriefCollectorScope,
+) ([]NoteWorkerJobResponse, bool) {
+	collectorJobs := make([]NoteWorkerJobResponse, 0, len(collectorIDs))
+	for _, collectorID := range collectorIDs {
+		collectorUUID := parseUUID(collectorID)
+		collector, err := h.Queries.GetAgentInWorkspace(r.Context(), db.GetAgentInWorkspaceParams{
+			ID:          collectorUUID,
+			WorkspaceID: workspaceID,
+		})
+		if err != nil || collector.ArchivedAt.Valid {
+			writeError(w, http.StatusBadRequest, "collector agent not found: "+collectorID)
+			return nil, false
+		}
+		scope := notePeriodBriefCollectorScope{}
+		if scopes != nil {
+			scope = scopes[collectorID]
+		}
+		job, ok := h.dispatchNotePeriodBriefCollector(
+			w, r, workspaceID, userID, userIDString, draft, collector, windowLabel, windowStart, windowEnd, scope,
+		)
+		if !ok {
+			return nil, false
+		}
+		collectorJobs = append(collectorJobs, job)
+	}
+	return collectorJobs, true
+}
+
+func (h *Handler) finishNotePeriodBriefAfterPlan(
+	ctx context.Context,
+	workspaceID, userID pgtype.UUID,
+	userIDString string,
+	agentID, folderID pgtype.UUID,
+	draft notePageRow,
+	window noteRetrospectiveWindow,
+	channelID, factsText string,
+	collectorIDs []string,
+	used, empty, skipped []string,
+) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/api/notes/period-briefs", nil)
+	jobs, ok := h.completePeriodBriefPlanAndDispatch(rec, req, workspaceID, userID, userIDString, draft, window, collectorIDs)
+	if !ok || len(jobs) == 0 {
+		jobs = nil
+	}
+	h.finishNotePeriodBriefAfterCollectors(ctx, workspaceID, userID, userIDString, agentID, folderID, draft, window, channelID, factsText, jobs, used, empty, skipped)
+}
+
+func (h *Handler) completePeriodBriefPlanAndDispatch(
+	w http.ResponseWriter,
+	r *http.Request,
+	workspaceID, userID pgtype.UUID,
+	userIDString string,
+	draft notePageRow,
+	window noteRetrospectiveWindow,
+	selectedIDs []string,
+) ([]NoteWorkerJobResponse, bool) {
+	plan := h.awaitPeriodBriefCollectPlan(r.Context(), workspaceID, draft.ID)
+	applied := applyNotePeriodBriefCollectPlan(selectedIDs, plan)
+	stored := plan
+	if applied.Fallback {
+		assignments := make([]notePeriodBriefCollectAssignment, 0, len(applied.DispatchIDs))
+		for _, id := range applied.DispatchIDs {
+			assignments = append(assignments, notePeriodBriefCollectAssignment{CollectorAgentID: id})
+		}
+		stored = &notePeriodBriefCollectPlan{Summary: applied.Summary, Assignments: assignments}
+	}
+	windowStart := window.Start.UTC().Format(time.RFC3339)
+	windowEnd := window.End.UTC().Format(time.RFC3339)
+	jobs, ok := h.dispatchPeriodBriefCollectorsForIDs(
+		w, r, workspaceID, userID, userIDString, draft, window.Label, windowStart, windowEnd, applied.DispatchIDs, applied.Scopes,
+	)
+	if !ok {
+		return nil, false
+	}
+	refs := collectorRefsFromJobs(jobs, window.Label, windowStart, windowEnd)
+	if run, err := h.loadNotePeriodBriefRunByDraft(r.Context(), workspaceID, draft.ID); err == nil {
+		_ = h.updateNotePeriodBriefRunPlan(r.Context(), run.ID, stored, refs, "collecting")
+	}
+	return jobs, true
 }
 
 func (h *Handler) finishNotePeriodBriefAfterCollectors(
@@ -320,13 +528,7 @@ func (h *Handler) finishNotePeriodBriefAfterCollectors(
 	defer cancel()
 
 	packResults := h.awaitPeriodBriefCollectorPacks(ctx, workspaceID, userID, draft.ID, collectorJobs)
-	if run, err := h.loadNotePeriodBriefRunByDraft(ctx, workspaceID, draft.ID); err == nil {
-		for i := range packResults {
-			if ref, _, ok := findCollectorRef(run.Collectors, packResults[i].AgentID); ok {
-				packResults[i].RetryCount = ref.RetryCount
-			}
-		}
-	}
+	h.attachPeriodBriefRetryCounts(ctx, workspaceID, draft.ID, packResults)
 	packsText := formatNotePeriodBriefPacks(packResults)
 	packsReady := 0
 	for _, pack := range packResults {
@@ -352,6 +554,7 @@ UPDATE note_page SET content = $1, updated_at = now(), updated_by = $2 WHERE id 
 
 	if run, err := h.loadNotePeriodBriefRunByDraft(ctx, workspaceID, draft.ID); err == nil {
 		_ = h.updateNotePeriodBriefRunCollectors(ctx, run.ID, run.Collectors, "synthesizing")
+		h.postPeriodBriefBubbleProgress(ctx, run, userIDString, periodBriefMaterialsProgressCopy(packResults))
 	}
 
 	agent, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: agentID, WorkspaceID: workspaceID})
@@ -361,10 +564,13 @@ UPDATE note_page SET content = $1, updated_at = now(), updated_by = $2 WHERE id 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/api/notes/period-briefs", nil)
 	_, _ = h.dispatchNotePeriodBriefWorker(rec, req, workspaceID, userID, userIDString, folderID, draft, agent, window.Label, channelID, factsText, packsText)
+	if !periodBriefAllCollectorResultsFinal(packResults) {
+		return
+	}
 	if run, err := h.loadNotePeriodBriefRunByDraft(ctx, workspaceID, draft.ID); err == nil {
 		// Purge ephemeral pack artifacts once the synthesizer has been woken
 		// with packsText in the prompt.
-		_ = h.updateNotePeriodBriefRunCollectors(ctx, run.ID, clearCollectorPackMarkdown(run.Collectors), "done")
+		h.completePeriodBriefRunAfterSynth(ctx, run, userIDString)
 	}
 }
 
@@ -391,6 +597,7 @@ func (h *Handler) synthesizeNotePeriodBrief(
 	packResults []notePeriodBriefPackResult,
 	usedIn, emptyIn, skippedIn []string,
 ) (notePageRow, NoteWorkerJobResponse, []string, []string, []string, bool) {
+	h.attachPeriodBriefRetryCounts(r.Context(), workspaceID, draft.ID, packResults)
 	packsText := formatNotePeriodBriefPacks(packResults)
 	used := append([]string(nil), usedIn...)
 	empty := append([]string(nil), emptyIn...)
@@ -422,6 +629,7 @@ UPDATE note_page SET content = $1, updated_at = now(), updated_by = $2 WHERE id 
 
 	if run, loadErr := h.loadNotePeriodBriefRunByDraft(r.Context(), workspaceID, draft.ID); loadErr == nil {
 		_ = h.updateNotePeriodBriefRunCollectors(r.Context(), run.ID, run.Collectors, "synthesizing")
+		h.postPeriodBriefBubbleProgress(r.Context(), run, userIDString, periodBriefMaterialsProgressCopy(packResults))
 	}
 
 	agent, err := h.Queries.GetAgentInWorkspace(r.Context(), db.GetAgentInWorkspaceParams{ID: agentID, WorkspaceID: workspaceID})
@@ -488,7 +696,8 @@ func (h *Handler) parsePeriodBriefCollectorAgentIDs(
 			writeError(w, http.StatusBadRequest, "collector agent runtime not in workspace: "+trimmed)
 			return nil, false
 		}
-		if !rt.OwnerID.Valid || uuidToString(rt.OwnerID) != uuidToString(callerUserID) {
+		rtOwnerID, ownerErr := h.resolveRuntimeOwnerQuery(ctx, rt)
+		if ownerErr != nil || uuidToString(rtOwnerID) != uuidToString(callerUserID) {
 			writeError(w, http.StatusBadRequest, "collector agent must be on a computer you own: "+trimmed)
 			return nil, false
 		}
@@ -538,6 +747,7 @@ func (h *Handler) dispatchNotePeriodBriefCollector(
 	draft notePageRow,
 	agent db.Agent,
 	windowLabel, windowStart, windowEnd string,
+	scope notePeriodBriefCollectorScope,
 ) (NoteWorkerJobResponse, bool) {
 	ch, ok := h.resolveNoteWorkerChannel(w, r, workspaceID, userIDString, agent, "")
 	if !ok {
@@ -545,7 +755,16 @@ func (h *Handler) dispatchNotePeriodBriefCollector(
 	}
 
 	draftPageID := uuidToString(draft.ID)
-	instruction := notePeriodBriefCollectorInstruction(draftPageID, windowLabel, windowStart, windowEnd)
+	instruction := notePeriodBriefCollectorInstructionScoped(draftPageID, windowLabel, windowStart, windowEnd, scope)
+	userFocus := ""
+	planSummary := ""
+	if run, err := h.loadNotePeriodBriefRunByDraft(r.Context(), workspaceID, draft.ID); err == nil {
+		userFocus = run.UserFocus
+		if run.CollectPlan != nil {
+			planSummary = run.CollectPlan.Summary
+		}
+	}
+	focusText := formatNotePeriodBriefFocusPartition(userFocus, planSummary, scope)
 
 	jobID := uuid.New()
 	jobUUID := parseUUID(jobID.String())
@@ -587,7 +806,7 @@ VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7)`,
 
 	workerPrompt := wrapNoteWorkerChannelWakePrompt(
 		buildNotePeriodBriefCollectorPrompt(
-			instruction, draftPageID, windowLabel, windowStart, windowEnd, draft.Title, "",
+			instruction, draftPageID, windowLabel, windowStart, windowEnd, draft.Title, "", focusText,
 		),
 		h.agentMessageThreadTargetForPrompt(r.Context(), ch, msg),
 	)
@@ -610,6 +829,13 @@ VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7)`,
 	}
 	if err := h.persistPeriodBriefNoteBriefContext(r.Context(), task.ID, mergedContext); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to persist collector note brief")
+		return NoteWorkerJobResponse{}, false
+	}
+	if err := h.Queries.SetAgentTaskMaxAttempts(r.Context(), db.SetAgentTaskMaxAttemptsParams{
+		ID:          task.ID,
+		MaxAttempts: 1,
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to disable collector inbox auto-retry")
 		return NoteWorkerJobResponse{}, false
 	}
 	if _, err := h.DB.Exec(r.Context(), `
@@ -644,6 +870,15 @@ func (h *Handler) dispatchNotePeriodBriefWorker(
 
 	folderPageID := uuidToString(folderID)
 	instruction := notePeriodBriefInstruction(folderPageID, uuidToString(page.ID), windowLabel)
+	userFocus := ""
+	planSummary := ""
+	if run, err := h.loadNotePeriodBriefRunByDraft(r.Context(), workspaceID, page.ID); err == nil {
+		userFocus = run.UserFocus
+		if run.CollectPlan != nil {
+			planSummary = run.CollectPlan.Summary
+		}
+	}
+	focusText := formatNotePeriodBriefFocusPartition(userFocus, planSummary, notePeriodBriefCollectorScope{})
 
 	jobID := uuid.New()
 	jobUUID := parseUUID(jobID.String())
@@ -684,7 +919,7 @@ VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7)`,
 	h.publishToUsers(protocol.EventChannelMessage, uuidToString(workspaceID), "member", userIDString, recipientIDs, msg)
 
 	workerPrompt := wrapNoteWorkerChannelWakePrompt(
-		buildNotePeriodBriefPrompt(instruction, uuidToString(page.ID), folderPageID, windowLabel, page.Title, page.Content, factsText, packsText),
+		buildNotePeriodBriefPrompt(instruction, uuidToString(page.ID), folderPageID, windowLabel, page.Title, page.Content, factsText, packsText, focusText),
 		h.agentMessageThreadTargetForPrompt(r.Context(), ch, msg),
 	)
 	task, err := h.enqueueChannelAgentPrompt(
@@ -766,7 +1001,9 @@ func (h *Handler) buildNotePeriodBriefChannelMessage(
 func formatNotePeriodBriefFacts(facts noteRetrospectiveFacts) string {
 	var b strings.Builder
 	b.WriteString("## Platform Facts\n")
-	if len(facts.Issues) == 0 && len(facts.Notes) == 0 && len(facts.Runs) == 0 {
+	// Notes are never Period Brief source material, even if a caller stuffed
+	// them onto the struct.
+	if len(facts.Issues) == 0 && len(facts.Runs) == 0 {
 		b.WriteString("(none)\n")
 		return b.String()
 	}
@@ -783,19 +1020,36 @@ func formatNotePeriodBriefFacts(facts noteRetrospectiveFacts) string {
 			b.WriteByte('\n')
 		}
 	}
-	if len(facts.Notes) > 0 {
-		b.WriteString("\n### Touched notes\n")
-		for _, fact := range facts.Notes {
-			fmt.Fprintf(&b, "- %s (%s)\n", fact.Title, fact.PageID)
-		}
-	}
 	if len(facts.Runs) > 0 {
 		b.WriteString("\n### Agent runs\n")
 		for _, fact := range facts.Runs {
-			fmt.Fprintf(&b, "- %s: %s\n", fact.AgentName, fact.Summary)
+			fmt.Fprintf(&b, "- %s\n", formatNotePeriodBriefRunLine(fact))
 		}
 	}
 	return b.String()
+}
+
+func formatNotePeriodBriefRunLine(fact noteRetrospectiveRunFact) string {
+	agent := strings.TrimSpace(fact.AgentName)
+	if agent == "" {
+		agent = "agent"
+	}
+	outcome := strings.TrimSpace(fact.Outcome)
+	if outcome == "" {
+		outcome = "done"
+	}
+	if id := strings.TrimSpace(fact.IssueIdentifier); id != "" {
+		title := strings.TrimSpace(fact.IssueTitle)
+		if title != "" {
+			return fmt.Sprintf("%s: %s %s (%s)", agent, id, title, outcome)
+		}
+		return fmt.Sprintf("%s: %s (%s)", agent, id, outcome)
+	}
+	reason := strings.TrimSpace(fact.Reason)
+	if reason == "" {
+		reason = "run"
+	}
+	return fmt.Sprintf("%s · %s · %s", agent, reason, outcome)
 }
 
 type notePeriodBriefPackResult struct {
@@ -964,12 +1218,24 @@ LIMIT 1`, parseUUID(channelID), packPageID).Scan(&content)
 	return strings.TrimSpace(content)
 }
 
+func (h *Handler) attachPeriodBriefRetryCounts(ctx context.Context, workspaceID, draftPageID pgtype.UUID, packs []notePeriodBriefPackResult) {
+	run, err := h.loadNotePeriodBriefRunByDraft(ctx, workspaceID, draftPageID)
+	if err != nil {
+		return
+	}
+	for i := range packs {
+		if ref, _, ok := findCollectorRef(run.Collectors, packs[i].AgentID); ok {
+			packs[i].RetryCount = ref.RetryCount
+		}
+	}
+}
+
 func formatNotePeriodBriefPacks(packs []notePeriodBriefPackResult) string {
 	var b strings.Builder
 	b.WriteString("## Collector packs\n")
 	b.WriteString("Platform waited until each collector settled (ready/failed/cancelled/empty/stalled).\n")
-	b.WriteString("retryable=true → you may call the narrow retry CLI (max retries enforced server-side).\n")
-	b.WriteString("retryable=false permanent → abandon that collector; do not invent its OS work.\n")
+	b.WriteString("Inbox will not auto-retry. retryable=true and retry_count 0 → MUST call the retry CLI once, then stop.\n")
+	b.WriteString("After that one retry settles, the collector result is final. Permanent failures: abandon; do not invent OS work.\n")
 	if len(packs) == 0 {
 		b.WriteString("status: empty\n(no collectors)\n")
 		return b.String()
@@ -998,8 +1264,10 @@ func formatNotePeriodBriefPacks(packs []notePeriodBriefPackResult) string {
 			b.WriteByte('\n')
 		case "failed":
 			b.WriteString("调用采集 Agent 失败了 — do not treat this collector as Brief evidence; do not invent OS work.\n")
-			if pack.Retryable {
-				b.WriteString("(retryable — consider narrow retry)\n")
+			if pack.Retryable && pack.RetryCount < notePeriodBriefCollectorMaxRetries {
+				b.WriteString("(retryable — MUST call the retry CLI once, then stop)\n")
+			} else if pack.Retryable {
+				b.WriteString("(assistant retry already used — this result is final)\n")
 			} else {
 				b.WriteString("(permanent — abandon this collector)\n")
 			}

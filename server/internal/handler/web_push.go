@@ -267,7 +267,7 @@ func (h *Handler) SendTestWebPush(w http.ResponseWriter, r *http.Request) {
 	if len(goneEndpoints) > 0 {
 		if _, err := h.Queries.DeleteWebPushSubscriptionsByEndpoints(r.Context(), db.DeleteWebPushSubscriptionsByEndpointsParams{
 			UserID:    userUUID,
-			Endpoints: goneEndpoints,
+			Column2:   goneEndpoints,
 		}); err != nil {
 			slog.Warn("web push test: cleanup gone failed", append(logger.RequestAttrs(r), "error", err)...)
 		}

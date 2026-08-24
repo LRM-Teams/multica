@@ -18,7 +18,7 @@ import (
 type runnerDiagnosticRegistry struct {
 	store             *diagnosticlog.Store
 	environment       diagnosticlog.Environment
-	startIdentity     string
+	daemonInstanceID  string
 	computerID        string
 	serviceGeneration string
 
@@ -55,7 +55,7 @@ func (d *Daemon) initializeRunnerDiagnostics() {
 	}
 	d.runnerDiagnostics = &runnerDiagnosticRegistry{
 		store: store, environment: environment,
-		startIdentity: d.runnerInstanceID, computerID: computerID,
+		daemonInstanceID: d.runnerInstanceID, computerID: computerID,
 		loggers: make(map[string]*diagnosticlog.Logger), failed: make(map[string]struct{}),
 	}
 	d.runnerDiagnosticStore = store
@@ -85,7 +85,7 @@ func (r *runnerDiagnosticRegistry) record(workspaceID string, event diagnosticlo
 		logger, err = r.store.Runner(diagnosticlog.RunnerOptions{
 			Environment:       r.environment,
 			WorkspaceID:       workspaceID,
-			StartIdentity:     r.startIdentity,
+			DaemonInstanceID:  r.daemonInstanceID,
 			ComputerID:        r.computerID,
 			ServiceGeneration: r.serviceGeneration,
 		})

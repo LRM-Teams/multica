@@ -48,6 +48,14 @@ func (runner *WorkspaceRunner) messageRuntimeID(agentID string) string {
 	return runtimeID
 }
 
+func (runner *WorkspaceRunner) agentInboxPendingSnapshot(agentID string) []protocol.AgentMessageProjection {
+	coordinator, _, ok := runner.messageCoordinator(agentID)
+	if !ok {
+		return nil
+	}
+	return coordinator.PendingSnapshot()
+}
+
 func (runner *WorkspaceRunner) ensureMessageInbox(agentID, expectedRuntimeID string) (bool, error) {
 	if runner == nil || runner.inboxes == nil || runner.processes == nil {
 		return false, errors.New("Workspace Runner Inbox registry is unavailable")
@@ -235,6 +243,7 @@ func (runner *WorkspaceRunner) acceptMessageDelivery(ctx context.Context, delive
 			}
 		}
 		if deferred {
+			runner.recoverStalledRuntimeForQueuedMessage(coordinator, delivery.AgentID, runtimeID)
 			return result, nil
 		}
 		return messageDeliveryAcceptance{}, fmt.Errorf("%w: %v", errDeliveryProviderRejected, err)
@@ -243,6 +252,32 @@ func (runner *WorkspaceRunner) acceptMessageDelivery(ctx context.Context, delive
 		runner.config.WorkspaceID, runtimeID, delivery, "context_boundary_advanced", "accepted", "",
 	))
 	return result, nil
+}
+
+// recoverStalledRuntimeForQueuedMessage asks the resident pool to terminate a
+// silent-past-window runtime now that a Message has been queued against it
+// (ErrCanonicalAgentRuntimeBusy). It only bothers when Messages are actually
+// waiting: an empty Pending queue means nothing is stuck behind the wedge, so
+// there is nothing to recover for yet. See resident_stall_queued_recovery.go
+// for why this check does not require the process to be confirmed dead.
+func (runner *WorkspaceRunner) recoverStalledRuntimeForQueuedMessage(coordinator *MessageCoordinator, agentID, runtimeID string) {
+	if runner == nil || runner.runtimes == nil || coordinator == nil {
+		return
+	}
+	pending := coordinator.PendingCount()
+	if pending == 0 {
+		return
+	}
+	recovered, err := runner.runtimes.recoverStalledSlotForQueuedMessage(agentID, runtimeID)
+	if err != nil {
+		if runner.logger != nil {
+			runner.logger.Warn("Workspace Runner failed to recover stalled resident runtime for queued Messages", "error", err, "workspace_id", runner.config.WorkspaceID, "agent_id", agentID, "runtime_id", runtimeID)
+		}
+		return
+	}
+	if recovered && runner.logger != nil {
+		runner.logger.Warn("Workspace Runner terminated stalled resident runtime for queued Messages", "workspace_id", runner.config.WorkspaceID, "agent_id", agentID, "runtime_id", runtimeID, "pending_count", pending)
+	}
 }
 
 func (runner *WorkspaceRunner) acknowledgeConsumedDelivery(delivery protocol.AgentDeliverPayload) (messageDeliveryAcceptance, bool) {
@@ -465,9 +500,37 @@ func (runner *WorkspaceRunner) handleMessageDelivery(
 		}
 		return nil
 	}
+	// Cache the delivery's effective graph memory profile for this workspace
+	// (spec §10): resident-message memory prep applies it per call. An empty
+	// profile from an old server never clobbers the cached entry.
+	if runner.rememberGraphProfile != nil {
+		runner.rememberGraphProfile(delivery.MemoryType, delivery.ExploreAgents, delivery.ExploreMaxRounds)
+	}
 	runner.recordDiagnostic(canonicalMessageDiagnosticEvent(
 		runner.config.WorkspaceID, runtimeID, delivery, "ack_attempted", string(acceptance.outcome), "",
 	))
+	// engineering-principles.md §1.5: channel Raft may ACK into Pending before
+	// the provider is Running. Standalone chat: (FAB / Notes bubble) must not —
+	// acked_at stops server redelivery, and a stuck Starting launch then leaves
+	// the UI pending forever with no ledger recovery.
+	if !runner.shouldPersistDeliveryAck(delivery, acceptance) {
+		if runner.logger != nil {
+			runner.logger.Info("Workspace Runner deferred standalone chat delivery acknowledgement",
+				"workspace_id", runner.config.WorkspaceID,
+				"agent_id", delivery.AgentID,
+				"runtime_id", runtimeID,
+				"delivery_id", delivery.DeliveryID,
+				"message_id", delivery.Message.ID,
+				"target", delivery.Target,
+				"seq", delivery.Seq,
+				"acceptance", acceptance.outcome,
+			)
+		}
+		runner.recordDiagnostic(canonicalMessageDiagnosticEvent(
+			runner.config.WorkspaceID, runtimeID, delivery, "ack_deferred", string(acceptance.outcome), "",
+		))
+		return nil
+	}
 	if err := writeFrame(protocol.EventAgentDeliverAck, acceptance.ack); err != nil {
 		runner.recordDiagnostic(canonicalMessageDiagnosticEvent(
 			runner.config.WorkspaceID, runtimeID, delivery, "ack_sent", "failed", "runner_connection_write_failed",
@@ -484,6 +547,24 @@ func (runner *WorkspaceRunner) handleMessageDelivery(
 		runner.logger.Info("Workspace Runner Agent delivery acknowledged", "workspace_id", runner.config.WorkspaceID, "agent_id", delivery.AgentID, "runtime_id", runtimeID, "delivery_id", delivery.DeliveryID, "message_id", delivery.Message.ID, "target", delivery.Target, "seq", delivery.Seq, "acceptance", acceptance.outcome)
 	}
 	return nil
+}
+
+// shouldPersistDeliveryAck decides whether the server ledger may mark this
+// delivery acked. Channel targets keep Raft's accept-into-Pending ACK. Standalone
+// chat: targets only ACK after provider handoff or a true consumed boundary.
+func (runner *WorkspaceRunner) shouldPersistDeliveryAck(delivery protocol.AgentDeliverPayload, acceptance messageDeliveryAcceptance) bool {
+	if !strings.HasPrefix(strings.TrimSpace(delivery.Target), "chat:") {
+		return true
+	}
+	switch acceptance.outcome {
+	case messageDeliveryProviderAccepted:
+		return true
+	case messageDeliveryDeduplicated:
+		seq, known, err := runner.messageContextBoundary(delivery.AgentID, delivery.Target)
+		return err == nil && known && delivery.Seq <= seq
+	default:
+		return false
+	}
 }
 
 func (runner *WorkspaceRunner) sendAgentFrame(eventType string, payload any) bool {

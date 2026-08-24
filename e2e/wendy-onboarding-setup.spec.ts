@@ -65,6 +65,20 @@ test("workspace creation is gated through explicit Wendy setup and seeded #gener
       }),
     });
   });
+  // The in-process E2E server has a live Runner hub, so socket presence is
+  // authoritative and a database-only heartbeat cannot represent a connected
+  // Computer. Keep this test focused on the Wendy setup flow by projecting
+  // the fixture runtime as connected at the HTTP boundary.
+  await page.route(/\/api\/runtimes\?[^/]*$/, async (route) => {
+    const response = await route.fetch();
+    const runtimes = (await response.json()) as Array<Record<string, unknown>>;
+    await route.fulfill({
+      response,
+      json: runtimes.map((item) =>
+        item.id === runtimeId ? { ...item, computer_connected: true } : item,
+      ),
+    });
+  });
 
   try {
     await authenticate(page, api.getToken()!);

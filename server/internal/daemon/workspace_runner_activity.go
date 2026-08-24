@@ -26,6 +26,40 @@ func (runner *WorkspaceRunner) managedLaunch(agentID, runtimeID string) (agentPr
 	return launch, found && (runtimeID == "" || launch.RuntimeID == runtimeID)
 }
 
+// retryManagedLaunchAfterExit is the resident process event bus's "exited,
+// under the crash retry cap" route (resident_crash_watch.go's
+// onResidentRuntimeExited is the subscriber; this is what it calls into for
+// the recoverable case). The launch is kept — queueState returns to
+// Starting and the next delivery lazily recreates the provider process, same
+// as ProcessExited(recover=true) always did. It exists so callers outside
+// the workspace_runner_* module never reach runner.processes directly — see
+// TestWorkspaceRunnerInternalsDoNotEscapeRunnerModule.
+func (runner *WorkspaceRunner) retryManagedLaunchAfterExit(agentID string, launch agentProcessManagerSnapshot) error {
+	if runner == nil || runner.processes == nil {
+		return nil
+	}
+	callback := agentProcessCallback{AgentID: agentID, LaunchID: launch.LaunchID, ProcessInstanceID: launch.ProcessInstanceID}
+	return runner.processes.ProcessExited(callback, true)
+}
+
+// retireManagedLaunchAfterExit is the resident process event bus's "exited,
+// over the crash retry cap" route. Unlike retryManagedLaunchAfterExit it
+// never calls processes.ProcessExited — failManagedRuntime's
+// prepareManagedRuntimeFailure -> failManagedProcess -> stopLocked already
+// performs the launch teardown (release capacity grant, drop the launch,
+// promote the next queued agent), and it additionally publishes the
+// AgentStatusInactive + error Activity that a mid-turn provider failure
+// already gets, which a bare ProcessExited(recover=false) never did. Calling
+// both would tear the same launch down twice.
+func (runner *WorkspaceRunner) retireManagedLaunchAfterExit(agentID, runtimeID string, launch agentProcessManagerSnapshot, reasonCode string) error {
+	if runner == nil || runner.processes == nil || runner.activity == nil {
+		return errors.New("Workspace Runner is unavailable")
+	}
+	runner.failManagedRuntime(agentID, runtimeID, launch.LaunchID, managedRuntimeFailureRuntime, reasonCode,
+		"resident provider process exceeded the crash retry cap", time.Now().UTC())
+	return nil
+}
+
 // broadcastActivity is Raft 1.0.16's spawn Activity boundary. Starting is
 // broadcast only after the provider process exists and active status has been
 // published; replaying a start never calls this method.
@@ -59,21 +93,39 @@ func (runner *WorkspaceRunner) observeResidentRuntimeReady(agentID, runtimeID st
 	}, "Resident runtime ready")
 }
 
-func (d *Daemon) observeResidentRuntimeStalled(agentID, runtimeID string, staleFor time.Duration) {
+// resolveManagedLaunch is the single runtimeIndex -> workspace ->
+// currentWorkspaceRunner -> managedLaunch lookup shared by every resident
+// process event route that needs to reach the APM-owned launch for an
+// (agentID, runtimeID) pair (observeResidentRuntimeStalled, the "exited"
+// route in resident_crash_watch.go). A missing runtime, runner, or launch is
+// normal — e.g. the workspace detached, or the launch never reached APM —
+// and callers treat a false as "nothing to route to", not an error.
+func (d *Daemon) resolveManagedLaunch(agentID, runtimeID string) (agentProcessManagerSnapshot, *WorkspaceRunner, bool) {
 	if d == nil {
-		return
+		return agentProcessManagerSnapshot{}, nil, false
 	}
 	d.mu.Lock()
 	runtime, ok := d.runtimeIndex[runtimeID]
 	d.mu.Unlock()
 	if !ok {
-		return
+		return agentProcessManagerSnapshot{}, nil, false
 	}
 	runner := d.currentWorkspaceRunner(runtime.WorkspaceID)
 	if runner == nil {
-		return
+		return agentProcessManagerSnapshot{}, nil, false
 	}
 	launch, found := runner.managedLaunch(agentID, runtimeID)
+	if !found {
+		return agentProcessManagerSnapshot{}, nil, false
+	}
+	return launch, runner, true
+}
+
+func (d *Daemon) observeResidentRuntimeStalled(agentID, runtimeID string, staleFor time.Duration) {
+	if d == nil {
+		return
+	}
+	launch, runner, found := d.resolveManagedLaunch(agentID, runtimeID)
 	if !found || runner.activity == nil {
 		return
 	}
@@ -121,9 +173,15 @@ func (runner *WorkspaceRunner) stopManagedAgent(ctx context.Context, payload pro
 	}
 	runner.inboxes.Remove(payload.AgentID, runtimeID)
 	if runtimeID != "" {
-		if err := runner.runtimes.forceInvalidateSession(payload.AgentID, runtimeID); err != nil {
-			return fmt.Errorf("stop managed Agent provider: %w", err)
-		}
+		// Dispatch the kill immediately, before waiting on startupDone: a
+		// managed start blocked inside provider spawn runs on the Workspace
+		// Runner's own lifetime context (runner.life), not this stop's ctx,
+		// so nothing else can ever interrupt it. Waiting first would
+		// deadlock the stop against its own precondition. The dispatch is
+		// fire-and-forget here (fire-and-forget everywhere else this pool
+		// method is called) — its own failure (e.g. a non-ForceKillable
+		// backend) still shows up in the confirm wait below.
+		_ = runner.runtimes.beginResidentTermination(payload.AgentID, runtimeID)
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -136,15 +194,27 @@ func (runner *WorkspaceRunner) stopManagedAgent(ctx context.Context, payload pro
 		}
 	}
 	if runtimeID != "" {
-		if err := runner.runtimes.awaitSessionQuiescence(ctx, payload.AgentID, runtimeID); err != nil {
-			return fmt.Errorf("wait for managed Agent provider stop: %w", err)
+		if err := runner.runtimes.awaitResidentTerminated(ctx, payload.AgentID, runtimeID); err != nil {
+			// A stop that cannot confirm the kill must still leave the system
+			// in a consistent, reported state. Falling through here (instead
+			// of returning) is the fix for the half-stop: the Inbox and
+			// residency are already cleared above, so an early return at this
+			// point would strand the launch in `stopping` with no terminal
+			// status ever published, and workspace_runner.go's caller would
+			// additionally call failConnection and tear down every other
+			// agent on this connection over one unconfirmed kill.
+			var timeout *residentTerminationTimeout
+			if runner.logger != nil {
+				if errors.As(err, &timeout) {
+					runner.logger.Warn("resident termination unconfirmed, completing Stop anyway",
+						"agent_id", payload.AgentID, "runtime_id", runtimeID, "launch_id", payload.LaunchID,
+						"process_alive", timeout.ProcessAlive, "turn_running", timeout.TurnRunning)
+				} else {
+					runner.logger.Warn("resident termination unconfirmed, completing Stop anyway",
+						"agent_id", payload.AgentID, "runtime_id", runtimeID, "launch_id", payload.LaunchID, "error", err)
+				}
+			}
 		}
-	}
-	// Provider startup may have recorded a terminal residency after the stop
-	// first cleared it. Re-clear only after startup and provider quiescence so a
-	// late failure cannot survive the stop epoch.
-	if runner.residency != nil {
-		runner.residency.clear(payload.AgentID)
 	}
 	if found {
 		runner.processes.completeManagedStop(callback)

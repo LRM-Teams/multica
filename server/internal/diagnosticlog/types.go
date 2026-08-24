@@ -139,8 +139,11 @@ type ServiceOptions struct {
 }
 
 type RunnerOptions struct {
-	Environment       Environment
-	WorkspaceID       string
+	Environment      Environment
+	WorkspaceID      string
+	DaemonInstanceID string
+	// StartIdentity is retained as a compatibility alias for older callers.
+	// New code should set DaemonInstanceID.
 	StartIdentity     string
 	ComputerID        string
 	ServiceGeneration string
@@ -230,7 +233,7 @@ type wireRecord struct {
 	ServiceGeneration string      `json:"serviceGeneration,omitempty"`
 	Environment       Environment `json:"environment,omitempty"`
 	WorkspaceID       string      `json:"workspaceId,omitempty"`
-	StartIdentity     string      `json:"startIdentity,omitempty"`
+	DaemonInstanceID  string      `json:"daemonInstanceId,omitempty"`
 	StreamSeq         uint64      `json:"streamSeq"`
 
 	EventID           string `json:"event_id,omitempty"`

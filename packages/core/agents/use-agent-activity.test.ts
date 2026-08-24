@@ -42,7 +42,6 @@ const fullHistoryAgent: Agent = {
   custom_args: [],
   status: "idle",
   workspace_role: "member",
-  max_concurrent_tasks: 1,
   model: "",
   owner_id: null,
   skills: [],

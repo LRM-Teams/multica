@@ -4,13 +4,24 @@ WHERE workspace_id = $1
 ORDER BY created_at ASC;
 
 -- name: ListVisibleAgentRuntimes :many
--- Privacy-scoped list: a member sees their own runtimes plus every public
--- runtime; another member's private runtime is never returned. There is NO
--- owner/admin override here — visibility is per-user even for workspace
--- admins (the unscoped ListAgentRuntimes stays for internal callers).
-SELECT * FROM agent_runtime
-WHERE workspace_id = $1 AND (owner_id = $2 OR visibility = 'public')
-ORDER BY created_at ASC;
+-- Privacy-scoped list: a member sees runtimes on their own machines plus
+-- every public runtime; another member's private runtime is never returned.
+-- Ownership is machine-level: a runtime is "mine" when its daemon has an
+-- active computer_workspace_bindings row in this workspace owned by $2.
+-- There is NO owner/admin override here — visibility is per-user even for
+-- workspace admins (the unscoped ListAgentRuntimes stays for internal callers).
+SELECT r.* FROM agent_runtime r
+WHERE r.workspace_id = $1 AND (
+    visibility = 'public'
+    OR EXISTS (
+        SELECT 1 FROM computer_workspace_bindings b
+        WHERE b.workspace_id = r.workspace_id
+          AND b.daemon_id = r.daemon_id
+          AND b.user_id = $2
+          AND b.active = TRUE
+    )
+)
+ORDER BY r.created_at ASC;
 
 -- name: GetAgentRuntime :one
 SELECT * FROM agent_runtime
@@ -87,10 +98,7 @@ WHERE a.id = @agent_id AND a.workspace_id = @workspace_id
 -- /api/daemon/starting write path is gone, but leftover rows from older
 -- daemons must still drop the stamp on the next successful register.
 --
--- owner_id uses first-owner-wins: COALESCE(existing, excluded). A later PAT
--- re-register (e.g. admin helping install-service) must not steal ownership
--- from the machine's original owner — FE upgrade alerts filter owner=me.
---
+
 -- pinned_version (task #81) mirrors the same "refresh on every register"
 -- rule: the daemon sends its current MULTICA_PINNED_VERSION (empty string
 -- when unset) on every call, so unpinning a machine (removing the env var
@@ -106,10 +114,20 @@ INSERT INTO agent_runtime (
     status,
     device_info,
     metadata,
-    owner_id,
     last_seen_at,
     pinned_version
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now(), NULLIF($10, ''))
+) VALUES (
+    sqlc.arg(workspace_id),
+    sqlc.arg(daemon_id),
+    sqlc.arg(name),
+    sqlc.arg(runtime_mode),
+    sqlc.arg(provider),
+    sqlc.arg(status),
+    sqlc.arg(device_info),
+    sqlc.arg(metadata),
+    now(),
+    NULLIF(sqlc.arg(pinned_version), '')
+)
 ON CONFLICT (workspace_id, daemon_id, provider)
 DO UPDATE SET
     name = EXCLUDED.name,
@@ -117,12 +135,11 @@ DO UPDATE SET
     status = EXCLUDED.status,
     device_info = EXCLUDED.device_info,
     metadata = EXCLUDED.metadata,
-    owner_id = COALESCE(agent_runtime.owner_id, EXCLUDED.owner_id),
     offline_reason = NULL,
     last_seen_at = now(),
     updated_at = now(),
     starting_since = NULL,
-    pinned_version = NULLIF($10, '')
+    pinned_version = NULLIF(sqlc.arg(pinned_version), '')
 RETURNING *, (xmax = 0) AS inserted;
 
 -- name: PrecreateAgentRuntime :one
@@ -143,10 +160,9 @@ INSERT INTO agent_runtime (
     status,
     device_info,
     metadata,
-    owner_id,
     last_seen_at
-) VALUES ($1, $2, $3, 'local', $4, 'offline', '', '{}', $5, now())
-RETURNING id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, visibility;
+) VALUES ($1, $2, $3, 'local', $4, 'offline', '', '{}', now())
+RETURNING id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, legacy_daemon_id, visibility;
 
 -- name: UpdateAgentRuntimeVisibility :one
 -- Toggles a runtime between 'private' (only owner can bind agents) and
@@ -175,7 +191,6 @@ UPDATE agent_runtime
 SET custom_env = @custom_env, updated_at = now()
 WHERE id = @id
 RETURNING *;
-
 
 -- name: TouchAgentRuntimeLastSeen :execrows
 -- Bumps last_seen_at on an already-online runtime. Deliberately does NOT
@@ -233,7 +248,7 @@ WHERE id = @id;
 -- sweeper uses this as a candidate set, then optionally filters via the
 -- LivenessStore before flipping rows to offline (a fresh Redis liveness
 -- record means the DB row is just lagging, not actually dead).
-SELECT id, workspace_id, owner_id, daemon_id, provider FROM agent_runtime
+SELECT id, workspace_id, daemon_id, provider FROM agent_runtime
 WHERE status = 'online'
   AND last_seen_at < now() - make_interval(secs => @stale_seconds::double precision);
 
@@ -254,7 +269,7 @@ SET status = 'offline', updated_at = now()
 WHERE status = 'online'
   AND id = ANY(@ids::uuid[])
   AND last_seen_at < now() - make_interval(secs => @stale_seconds::double precision)
-RETURNING id, workspace_id, owner_id, daemon_id, provider;
+RETURNING id, workspace_id, daemon_id, provider;
 
 -- name: FailTasksForOfflineRuntimes :many
 -- Requeues in-flight tasks when their runtime is offline. This cleans up
@@ -270,8 +285,19 @@ WHERE status = 'draining'
 RETURNING *;
 
 -- name: ListAgentRuntimesByOwner :many
+-- Lists runtimes owned by $2 at the machine level (active binding rows on
+-- that user's computers in this workspace) in addition to public runtimes.
 SELECT * FROM agent_runtime
-WHERE workspace_id = $1 AND owner_id = $2
+WHERE agent_runtime.workspace_id = $1 AND (
+    visibility = 'public'
+    OR EXISTS (
+        SELECT 1 FROM computer_workspace_bindings b
+        WHERE b.workspace_id = agent_runtime.workspace_id
+          AND b.daemon_id = agent_runtime.daemon_id
+          AND b.user_id = $2
+          AND b.active = TRUE
+    )
+)
 ORDER BY created_at ASC;
 
 -- name: ForceOfflineRuntimesByIDs :many
@@ -284,7 +310,7 @@ ORDER BY created_at ASC;
 UPDATE agent_runtime
 SET status = 'offline', updated_at = now()
 WHERE id = ANY(@runtime_ids::uuid[]) AND status = 'online'
-RETURNING id, workspace_id, owner_id, daemon_id, provider;
+RETURNING id, workspace_id, daemon_id, provider;
 
 -- name: CancelAgentTasksByRuntimeOrAgent :many
 -- Cancels every active task that either lives on one of the given runtimes

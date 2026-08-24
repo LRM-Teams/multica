@@ -80,54 +80,54 @@ export class ResearchV6DirectorProjectionClient {
   applySnapshotPage(snapshot: ResearchV6DirectorProjectionSnapshot): void {
     if (
       this.runId !== null &&
-      (this.runId !== snapshot.run_id || this.workspaceId !== snapshot.workspace_id)
+      (this.runId !== snapshot.runId || this.workspaceId !== snapshot.workspaceId)
     ) {
       this.requireResync("projection_identity_mismatch");
       return;
     }
     if (
-      this.snapshotId === snapshot.snapshot_id &&
-      (this.projectionHash !== snapshot.projection_hash ||
-        this.lastConfirmedSequence !== snapshot.through_event_sequence)
+      this.snapshotId === snapshot.snapshotId &&
+      (this.projectionHash !== snapshot.projectionHash ||
+        this.lastConfirmedSequence !== snapshot.throughEventSequence)
     ) {
       this.requireResync("stale_snapshot_page");
       return;
     }
     const sameProjection =
-      this.snapshotId === snapshot.snapshot_id &&
-      this.workspaceId === snapshot.workspace_id &&
-      this.runId === snapshot.run_id &&
-      this.projectionHash === snapshot.projection_hash &&
-      this.lastConfirmedSequence === snapshot.through_event_sequence;
+      this.snapshotId === snapshot.snapshotId &&
+      this.workspaceId === snapshot.workspaceId &&
+      this.runId === snapshot.runId &&
+      this.projectionHash === snapshot.projectionHash &&
+      this.lastConfirmedSequence === snapshot.throughEventSequence;
 
     if (!sameProjection) {
       this.views.clear();
       this.pendingDeltas.clear();
       this.committedInvalidatedSliceKeys.clear();
-      this.workspaceId = snapshot.workspace_id;
-      this.runId = snapshot.run_id;
-      this.snapshotId = snapshot.snapshot_id;
-      this.projectionHash = snapshot.projection_hash;
-      this.lastConfirmedSequence = snapshot.through_event_sequence;
-      this.primarySliceKey = snapshot.slice_key;
+      this.workspaceId = snapshot.workspaceId;
+      this.runId = snapshot.runId;
+      this.snapshotId = snapshot.snapshotId;
+      this.projectionHash = snapshot.projectionHash;
+      this.lastConfirmedSequence = snapshot.throughEventSequence;
+      this.primarySliceKey = snapshot.sliceKey;
       this.resyncRequired = false;
       this.cancelGapTimer();
     }
 
-    const current = this.views.get(snapshot.slice_key);
+    const current = this.views.get(snapshot.sliceKey);
     const nodes = new Map(current?.nodes ?? []);
     const edges = new Map(current?.edges ?? []);
     const densityBins = new Map(current?.densityBins ?? []);
     for (const node of snapshot.nodes) nodes.set(node.id, node);
     for (const edge of snapshot.edges) edges.set(edge.id, edge);
-    for (const bin of snapshot.density_bins) densityBins.set(bin.id, bin);
-    this.views.set(snapshot.slice_key, {
-      sliceKey: snapshot.slice_key,
+    for (const bin of snapshot.densityBins) densityBins.set(bin.id, bin);
+    this.views.set(snapshot.sliceKey, {
+      sliceKey: snapshot.sliceKey,
       nodes,
       edges,
       densityBins,
-      hasMore: snapshot.has_more,
-      nextCursor: snapshot.next_cursor ?? null,
+      hasMore: snapshot.hasMore,
+      nextCursor: snapshot.nextCursor ?? null,
     });
   }
 
@@ -161,25 +161,25 @@ export class ResearchV6DirectorProjectionClient {
     if (!this.matchesProjection(delta)) {
       return this.requireResync("projection_identity_mismatch");
     }
-    if (delta.event_sequence <= this.lastConfirmedSequence) {
+    if (delta.eventSequence <= this.lastConfirmedSequence) {
       return { kind: "duplicate" };
     }
     const expected = this.lastConfirmedSequence + 1;
-    if (delta.event_sequence > expected) {
-      const existing = this.pendingDeltas.get(delta.event_sequence);
-      if (existing && existing.projection_hash !== delta.projection_hash) {
+    if (delta.eventSequence > expected) {
+      const existing = this.pendingDeltas.get(delta.eventSequence);
+      if (existing && existing.projectionHash !== delta.projectionHash) {
         return this.requireResync("conflicting_buffered_delta");
       }
-      this.pendingDeltas.set(delta.event_sequence, delta);
+      this.pendingDeltas.set(delta.eventSequence, delta);
       this.armGapTimer();
       return { kind: "buffered", awaitingSequence: expected };
     }
-    if (delta.previous_projection_hash !== this.projectionHash) {
+    if (delta.previousProjectionHash !== this.projectionHash) {
       return this.requireResync("projection_hash_chain_mismatch");
     }
     if (
       this.primarySliceKey !== null &&
-      delta.invalidate_slice_keys.includes(this.primarySliceKey)
+      delta.invalidateSliceKeys.includes(this.primarySliceKey)
     ) {
       return this.requireResync("primary_slice_invalidated");
     }
@@ -211,40 +211,40 @@ export class ResearchV6DirectorProjectionClient {
   private matchesProjection(delta: ResearchV6DirectorProjectionDelta): boolean {
     return (
       this.snapshotId !== null &&
-      delta.workspace_id === this.workspaceId &&
-      delta.run_id === this.runId &&
-      delta.snapshot_id === this.snapshotId
+      delta.workspaceId === this.workspaceId &&
+      delta.runId === this.runId &&
+      delta.snapshotId === this.snapshotId
     );
   }
 
   private commit(delta: ResearchV6DirectorProjectionDelta): void {
-    for (const sliceKey of delta.invalidate_slice_keys) {
+    for (const sliceKey of delta.invalidateSliceKeys) {
       this.committedInvalidatedSliceKeys.add(sliceKey);
     }
     for (const [sliceKey, view] of this.views) {
-      if (delta.invalidate_slice_keys.includes(sliceKey)) {
+      if (delta.invalidateSliceKeys.includes(sliceKey)) {
         this.views.delete(sliceKey);
         continue;
       }
       const nodes = new Map(view.nodes);
       const edges = new Map(view.edges);
-      for (const node of delta.upsert_nodes) {
+      for (const node of delta.upsertNodes) {
         if (sliceKey === this.primarySliceKey || nodes.has(node.id)) {
           nodes.set(node.id, node);
         }
       }
-      for (const nodeId of delta.remove_node_ids) nodes.delete(nodeId);
-      for (const edge of delta.upsert_edges) {
+      for (const nodeId of delta.removeNodeIds) nodes.delete(nodeId);
+      for (const edge of delta.upsertEdges) {
         if (sliceKey === this.primarySliceKey || edges.has(edge.id)) {
           edges.set(edge.id, edge);
         }
       }
-      for (const edgeId of delta.remove_edge_ids) edges.delete(edgeId);
+      for (const edgeId of delta.removeEdgeIds) edges.delete(edgeId);
       this.views.set(sliceKey, { ...view, nodes, edges });
     }
-    this.projectionHash = delta.projection_hash;
-    this.lastConfirmedSequence = delta.event_sequence;
-    this.pendingDeltas.delete(delta.event_sequence);
+    this.projectionHash = delta.projectionHash;
+    this.lastConfirmedSequence = delta.eventSequence;
+    this.pendingDeltas.delete(delta.eventSequence);
     this.cancelGapTimer();
   }
 
@@ -252,12 +252,12 @@ export class ResearchV6DirectorProjectionClient {
     let next = this.pendingDeltas.get(this.lastConfirmedSequence + 1);
     while (next) {
       if (
-        next.previous_projection_hash !== this.projectionHash ||
+        next.previousProjectionHash !== this.projectionHash ||
         (this.primarySliceKey !== null &&
-          next.invalidate_slice_keys.includes(this.primarySliceKey))
+          next.invalidateSliceKeys.includes(this.primarySliceKey))
       ) {
         this.requireResync(
-          next.previous_projection_hash !== this.projectionHash
+          next.previousProjectionHash !== this.projectionHash
             ? "projection_hash_chain_mismatch"
             : "primary_slice_invalidated",
         );

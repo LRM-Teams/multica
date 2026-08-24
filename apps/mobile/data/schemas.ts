@@ -437,7 +437,7 @@ export const UserSchema: z.ZodType<User> = z.object({
   onboarding_questionnaire: z.record(z.string(), z.unknown()).default({}),
   starter_content_state: z.string().nullable().default(null),
   language: z.string().nullable().default(null),
-  profile_description: z.string().default(""),
+  description: z.string().default(""),
   timezone: z.string().nullable().default(null),
   created_at: z.string().default(""),
   updated_at: z.string().default(""),
@@ -456,7 +456,7 @@ export const EMPTY_USER: User = {
   onboarding_questionnaire: {},
   starter_content_state: null,
   language: null,
-  profile_description: "",
+  description: "",
   timezone: null,
   created_at: "",
   updated_at: "",
@@ -542,7 +542,7 @@ export const MemberWithUserSchema: z.ZodType<MemberWithUser> = z.object({
   display_name: z.string().default(""),
   email: z.string().default(""),
   avatar_url: z.string().nullable().default(null),
-  profile_description: z.string().default(""),
+  description: z.string().default(""),
 }).loose();
 
 export const MemberListSchema = z.array(MemberWithUserSchema).default([]);
@@ -577,7 +577,6 @@ export const AgentSchema: z.ZodType<Agent> = z.object({
     Agent["visibility"]
   >,
   status: z.string().catch("active") as unknown as z.ZodType<Agent["status"]>,
-  max_concurrent_tasks: z.number().default(1),
   model: z.string().default(""),
   owner_id: z.string().nullable().default(null),
   skills: z.array(z.unknown()).default([]) as unknown as z.ZodType<

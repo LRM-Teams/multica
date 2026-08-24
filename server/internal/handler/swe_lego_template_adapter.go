@@ -173,7 +173,7 @@ func (a *sweLegoTemplateDepsAdapter) CompleteBuild(ctx context.Context, nodeID, 
 		return fmt.Errorf("parse node_id: %w", err)
 	}
 	_, err = a.h.Queries.CompleteSweLegoTemplateBuild(ctx, db.CompleteSweLegoTemplateBuildParams{
-		NodeID: nodeUUID, CacheKey: cacheKey, TaskTemplateID: taskTemplateID,
+		NodeID: nodeUUID, CacheKey: cacheKey, TaskTemplateID: pgtype.Text{String: taskTemplateID, Valid: taskTemplateID != ""},
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("template build is not in building state")

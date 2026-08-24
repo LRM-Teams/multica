@@ -1,6 +1,7 @@
 package memorygraph
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -20,20 +21,31 @@ import (
 // reviewer (design §4.1). The layout under Root is:
 //
 //	current                    small file containing the current version number
+//	protocol                   protocol-generation marker (stale generations are wiped on Init)
 //	versions/v<N>/             manifest.json + nodes/ + edges/
 //	shared/embeddings/         cross-version embedding cache (<content_hash>.vec)
+//	shared/sources/            append-only source layer (nodes/, edges.jsonl, journal.jsonl)
 //	staging/segments/          immutable source segment summaries
 //	query_log/                 per-window query logs (<window_id>.jsonl)
 //	op_log/                    per-version consolidation audit logs
-//	regression_set.jsonl       permanent regression query set
 //
-// A Store is safe for concurrent use within one process; cross-process
-// coordination is out of scope (the consolidator is a single writer).
+// A Store is safe for concurrent use within one process. GC also takes a
+// store-root gc.lock so concurrent processes fail busy or reclaim a stale lock.
 type Store struct {
 	// Root is the memory_graph/ directory.
 	Root string
 
 	mu sync.Mutex
+
+	// testHookBeforeJournal, if set, runs after a source node is prepared
+	// under pending/ and before the atomic rename + journal commit. Tests
+	// use it to inject a crash between the two publish phases.
+	testHookBeforeJournal func()
+
+	// testHookBeforeExtractionIndex, if set, runs after an extraction
+	// artifact is renamed into place and before its index.jsonl append.
+	// Tests use it to inject a crash between the two durability phases.
+	testHookBeforeExtractionIndex func()
 }
 
 // NewStore returns a Store rooted at root. Call Init before use.
@@ -41,16 +53,37 @@ func NewStore(root string) *Store {
 	return &Store{Root: root}
 }
 
+// GraphProtocolGeneration identifies the explore/backtest protocol generation
+// a store's data belongs to. Generation 1 is the legacy /view+/expand
+// protocol; generation 2 (2026-08-21) is the merged /explore protocol whose
+// round accounting, budget allocation and gates are incompatible with
+// generation-1 baselines. Init wipes stores from an older generation and
+// starts cold (spec §7: 删除旧图，不做向后兼容).
+const GraphProtocolGeneration = 2
+
+// protocolFile marks the protocol generation of the data under Root.
+func (s *Store) protocolFile() string { return filepath.Join(s.Root, "protocol") }
+
 // Init creates the directory layout, the initial empty version v1 (manifest
 // CreatedBy "init") and the current pointer file. It is idempotent: an
-// existing current pointer is left untouched.
+// existing current pointer of the current protocol generation is left
+// untouched. A store holding data from an older protocol generation is
+// wiped first and rebuilt empty (cold start, spec §7): old graph versions,
+// query-log rounds and the regression set are all incompatible with the
+// merged-/explore backtest and must not seed its baselines.
 func (s *Store) Init() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if err := s.wipeIfStaleGenerationLocked(); err != nil {
+		return err
+	}
 	for _, dir := range []string{
 		s.versionsDir(),
 		s.embeddingsDir(),
+		s.sourcesDir(),
+		s.sourceNodesDir(),
+		s.sourcePendingDir(),
 		s.stagingDir(),
 		s.queryLogDir(),
 		s.opLogDir(),
@@ -60,7 +93,7 @@ func (s *Store) Init() error {
 		}
 	}
 	if _, err := s.currentVersionLocked(); err == nil {
-		return nil // already initialized
+		return s.writeProtocolMarkerLocked() // already initialized
 	} else if !os.IsNotExist(err) {
 		return err
 	}
@@ -82,7 +115,69 @@ func (s *Store) Init() error {
 		}
 		versions = []int{1}
 	}
-	return s.writeCurrentLocked(versions[len(versions)-1])
+	if err := s.writeCurrentLocked(versions[len(versions)-1]); err != nil {
+		return err
+	}
+	return s.writeProtocolMarkerLocked()
+}
+
+// wipeIfStaleGenerationLocked removes every file under Root when the stored
+// data belongs to an older protocol generation. A missing marker on a
+// non-empty store means generation-1 data (the marker did not exist yet).
+// Fresh or already-current stores are left alone.
+func (s *Store) wipeIfStaleGenerationLocked() error {
+	data, err := os.ReadFile(s.protocolFile())
+	switch {
+	case err == nil:
+		gen, parseErr := strconv.Atoi(string(bytes.TrimSpace(data)))
+		if parseErr != nil {
+			return fmt.Errorf("init memory graph: unreadable protocol marker %q: %w", string(data), parseErr)
+		}
+		if gen == GraphProtocolGeneration {
+			return nil // current generation, nothing to do
+		}
+		if gen > GraphProtocolGeneration {
+			return fmt.Errorf("init memory graph: protocol generation %d is newer than supported %d", gen, GraphProtocolGeneration)
+		}
+		// Older generation: fall through to the wipe.
+	case os.IsNotExist(err):
+		// No marker: only a store with core layout (current pointer or
+		// version dirs) predates the marker. A dir holding anything else —
+		// e.g. just the identity file written by EnsureScopedDir — is fresh
+		// and must not be wiped (the identity is immutable, spec §3).
+		if _, statErr := os.Stat(s.currentPath()); statErr != nil {
+			if _, statErr := os.Stat(s.versionsDir()); statErr != nil {
+				return nil
+			}
+		}
+	default:
+		return fmt.Errorf("init memory graph: read protocol marker: %w", err)
+	}
+
+	// Wipe every entry except the immutable identity marker (spec §3):
+	// the directory keeps its scoped identity while all data goes.
+	entries, err := os.ReadDir(s.Root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("init memory graph: read root for wipe: %w", err)
+	}
+	for _, e := range entries {
+		if e.Name() == graphIdentityFile {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(s.Root, e.Name())); err != nil {
+			return fmt.Errorf("init memory graph: wipe stale generation: %w", err)
+		}
+	}
+	return nil
+}
+
+// writeProtocolMarkerLocked records the current protocol generation; called
+// once the store holds current-generation data.
+func (s *Store) writeProtocolMarkerLocked() error {
+	return os.WriteFile(s.protocolFile(), []byte(strconv.Itoa(GraphProtocolGeneration)), 0o644)
 }
 
 // CurrentVersion returns the version number stored in the current pointer.
@@ -136,14 +231,19 @@ func (s *Store) CreateVersionFrom(parentV int, createdBy string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	watermark, err := s.currentSourceSeqLocked()
+	if err != nil {
+		return 0, err
+	}
 	m := &Manifest{
-		Version:       newV,
-		ParentVersion: parentV,
-		CreatedAt:     time.Now().UTC(),
-		CreatedBy:     createdBy,
-		NodeCount:     nodeCount,
-		HierEdgeCount: len(hier),
-		RelEdgeCount:  len(rel),
+		Version:         newV,
+		ParentVersion:   parentV,
+		CreatedAt:       time.Now().UTC(),
+		CreatedBy:       createdBy,
+		NodeCount:       nodeCount,
+		HierEdgeCount:   len(hier),
+		RelEdgeCount:    len(rel),
+		SourceWatermark: watermark,
 	}
 	if err := s.saveManifestLocked(newV, m); err != nil {
 		return 0, err
@@ -225,32 +325,7 @@ func (s *Store) SaveNode(v int, n *Node) error {
 func (s *Store) LoadNodes(v int) ([]*Node, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	entries, err := os.ReadDir(s.nodesDir(v))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("read nodes dir v%d: %w", v, err)
-	}
-	var nodes []*Node
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
-			continue
-		}
-		path := filepath.Join(s.nodesDir(v), entry.Name())
-		b, err := os.ReadFile(path)
-		if err != nil {
-			return nil, fmt.Errorf("read node file %s: %w", path, err)
-		}
-		n, err := parseNodeFile(b)
-		if err != nil {
-			return nil, fmt.Errorf("parse node file %s: %w", path, err)
-		}
-		nodes = append(nodes, n)
-	}
-	sort.Slice(nodes, func(i, j int) bool { return nodes[i].NodeID < nodes[j].NodeID })
-	return nodes, nil
+	return s.loadNodesLocked(v)
 }
 
 // SaveEdges rewrites edges/hierarchy.jsonl and edges/relations.jsonl of
@@ -283,36 +358,7 @@ func (s *Store) LoadEdges(v int) (hier, rel []*Edge, err error) {
 // The current version is never deleted, even when it falls outside the
 // keep window (design §5.5).
 func (s *Store) GC(keep int) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	versions, err := s.listVersionsLocked()
-	if err != nil {
-		return err
-	}
-	if len(versions) <= keep {
-		return nil
-	}
-	current, err := s.currentVersionLocked()
-	if err != nil {
-		return fmt.Errorf("gc: read current version: %w", err)
-	}
-	keepSet := map[int]bool{current: true}
-	for i := len(versions) - 1; i >= 0 && keep > 0; i-- {
-		if !keepSet[versions[i]] {
-			keepSet[versions[i]] = true
-			keep--
-		}
-	}
-	for _, v := range versions {
-		if keepSet[v] {
-			continue
-		}
-		if err := os.RemoveAll(s.VersionDir(v)); err != nil {
-			return fmt.Errorf("gc: remove version v%d: %w", v, err)
-		}
-	}
-	return nil
+	return s.GCWithPinned(keep, nil)
 }
 
 // EmbeddingPath returns shared/embeddings/<hash>.vec for a content hash,
@@ -347,6 +393,58 @@ func (s *Store) WriteStagingSegment(segmentID string, content []byte) error {
 		return fmt.Errorf("write staging segment %s: %w", segmentID, err)
 	}
 	return nil
+}
+
+// WriteStagingSegmentMeta persists the scope/provenance sidecar
+// staging/segments/<segment_id>.scope.json. Like the segment body it
+// accompanies, the sidecar is immutable: it fails if the meta already
+// exists.
+func (s *Store) WriteStagingSegmentMeta(segmentID string, meta *SegmentMeta) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := validateFileID("segment_id", segmentID); err != nil {
+		return err
+	}
+	body, err := json.Marshal(meta)
+	if err != nil {
+		return fmt.Errorf("marshal staging segment meta %s: %w", segmentID, err)
+	}
+	if err := os.MkdirAll(s.stagingDir(), 0o755); err != nil {
+		return err
+	}
+	path := filepath.Join(s.stagingDir(), segmentID+".scope.json")
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		if os.IsExist(err) {
+			return fmt.Errorf("staging segment meta %s already exists", segmentID)
+		}
+		return fmt.Errorf("write staging segment meta %s: %w", segmentID, err)
+	}
+	defer f.Close()
+	if _, err := f.Write(body); err != nil {
+		return fmt.Errorf("write staging segment meta %s: %w", segmentID, err)
+	}
+	return nil
+}
+
+// ReadStagingSegmentMeta reads staging/segments/<segment_id>.scope.json.
+func (s *Store) ReadStagingSegmentMeta(segmentID string) (*SegmentMeta, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := validateFileID("segment_id", segmentID); err != nil {
+		return nil, err
+	}
+	body, err := os.ReadFile(filepath.Join(s.stagingDir(), segmentID+".scope.json"))
+	if err != nil {
+		return nil, fmt.Errorf("read staging segment meta %s: %w", segmentID, err)
+	}
+	var meta SegmentMeta
+	if err := json.Unmarshal(body, &meta); err != nil {
+		return nil, fmt.Errorf("parse staging segment meta %s: %w", segmentID, err)
+	}
+	return &meta, nil
 }
 
 // ReadStagingSegment reads staging/segments/<segment_id>.md.
@@ -459,26 +557,6 @@ func (s *Store) UpdateQueryLogEntry(windowID, traceID string, mutate func(*Query
 	return true, nil
 }
 
-// AppendRegression appends one entry to regression_set.jsonl (design Q26).
-func (s *Store) AppendRegression(e *RegressionEntry) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return appendJSONL(filepath.Join(s.Root, "regression_set.jsonl"), e)
-}
-
-// ReadRegression reads the permanent regression set. A missing file yields
-// an empty list.
-func (s *Store) ReadRegression() ([]*RegressionEntry, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	var entries []*RegressionEntry
-	if err := readJSONL(filepath.Join(s.Root, "regression_set.jsonl"), &entries); err != nil {
-		return nil, fmt.Errorf("read regression set: %w", err)
-	}
-	return entries, nil
-}
-
 // ---------------------------------------------------------------------------
 // path helpers
 // ---------------------------------------------------------------------------
@@ -572,6 +650,34 @@ func (s *Store) listVersionsLocked() ([]int, error) {
 	}
 	sort.Ints(versions)
 	return versions, nil
+}
+
+func (s *Store) loadNodesLocked(v int) ([]*Node, error) {
+	entries, err := os.ReadDir(s.nodesDir(v))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read nodes dir v%d: %w", v, err)
+	}
+	var nodes []*Node
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+			continue
+		}
+		path := filepath.Join(s.nodesDir(v), entry.Name())
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("read node file %s: %w", path, err)
+		}
+		n, err := parseNodeFile(b)
+		if err != nil {
+			return nil, fmt.Errorf("parse node file %s: %w", path, err)
+		}
+		nodes = append(nodes, n)
+	}
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].NodeID < nodes[j].NodeID })
+	return nodes, nil
 }
 
 func (s *Store) loadManifestLocked(v int) (*Manifest, error) {

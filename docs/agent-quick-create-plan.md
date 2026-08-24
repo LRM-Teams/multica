@@ -387,7 +387,7 @@ func (h *Handler) createSkillWithFiles(
 
 **影响范围**:Phase 2
 
-**方案**:加一个 CLI 子命令,模仿 `multica skill import` 的实现(`server/cmd/multica/cmd_skill.go:55-60, 323-357`)。**注意**:这个命令不发 HTTP 请求,只是 LLM agent 用来"输出推荐结果"的 channel——它把 LLM 推荐的 JSON 写到 daemon 指定的临时文件,daemon 读完塞进 inbox notification。
+**方案**:该规划依赖的 Agent skill import CLI 已移除；如仍需要 Skill 导入，应走管理员 workspace API，不再新增 Agent CLI 入口。
 
 **工作量**:小(~80 行)
 

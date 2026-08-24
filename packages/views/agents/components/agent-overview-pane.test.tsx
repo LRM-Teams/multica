@@ -80,7 +80,6 @@ const baseAgent: Agent = {
   runtime_config: {},
   custom_args: [],
   status: "idle",
-  max_concurrent_tasks: 1,
   model: "",
   owner_id: "user-1",
   skills: [],

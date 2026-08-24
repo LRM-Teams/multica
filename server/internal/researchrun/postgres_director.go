@@ -78,7 +78,7 @@ func (s *PostgresStore) AssignV6Director(ctx context.Context, in AssignV6Directo
 		return V6DirectorAssignment{}, err
 	}
 	if !activeMembership {
-		mission := "Serve as the user-selected Research Director for this Run."
+		mission := "担任用户为本次调研指定的调研主理人。"
 		missionHash := ArtifactContentHashFromCanonicalJSON([]byte(`{"mission":"user-selected Research Director"}`))
 		if _, err = tx.Exec(ctx, `INSERT INTO research_team_membership(id,workspace_id,session_id,agent_id,membership_generation,mission_prompt,mission_hash,mission_revision,state)
 			VALUES(gen_random_uuid(),$1::uuid,$2::uuid,$3::uuid,COALESCE((SELECT max(membership_generation)+1 FROM research_team_membership WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND agent_id=$3::uuid),1),$4,$5,1,'idle')`, in.WorkspaceID, in.RunID, in.AgentID, mission, missionHash); err != nil {
@@ -134,7 +134,7 @@ func (s *PostgresStore) MarkV6DirectorUnavailable(ctx context.Context, in MarkV6
 	if _, err = tx.Exec(ctx, `UPDATE research_session SET status='awaiting_director',director_state_version=director_state_version+1,updated_at=now() WHERE workspace_id=$1::uuid AND id=$2::uuid`, in.WorkspaceID, in.RunID); err != nil {
 		return V6DirectorAssignment{}, err
 	}
-	if _, err = tx.Exec(ctx, `INSERT INTO research_v6_outbox(workspace_id,session_id,kind,idempotency_key,payload) VALUES($1::uuid,$2::uuid,'notify_user',$3,jsonb_build_object('assignment_id',$4,'failure_class',$5,'diagnostics',$6)) ON CONFLICT DO NOTHING`, in.WorkspaceID, in.RunID, key, assignment.ID, in.FailureClass, in.Diagnostics); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO research_v6_outbox(workspace_id,session_id,kind,idempotency_key,payload) VALUES($1::uuid,$2::uuid,'notify_user',$3,jsonb_build_object('assignment_id',$4::text,'failure_class',$5::text,'diagnostics',$6::text)) ON CONFLICT DO NOTHING`, in.WorkspaceID, in.RunID, key, assignment.ID, in.FailureClass, in.Diagnostics); err != nil {
 		return V6DirectorAssignment{}, err
 	}
 	if _, err = appendEvent(ctx, tx, in.WorkspaceID, in.RunID, "v6_director_unavailable", key, "system", "", map[string]any{"assignment_id": assignment.ID, "failure_class": in.FailureClass, "diagnostics": in.Diagnostics}); err != nil {

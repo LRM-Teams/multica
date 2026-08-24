@@ -406,15 +406,22 @@ func (d *Daemon) readTaskWakeupMessages(conn *websocket.Conn, taskWakeups chan<-
 			if err := d.handleReminderCancel(payload); err != nil {
 				return err
 			}
-		case protocol.EventReminderFireResult:
-			var payload protocol.ReminderFireResultPayload
+		case protocol.EventReminderFireRequestResult:
+			var payload protocol.ReminderFireRequestResultPayload
 			if err := json.Unmarshal(msg.Payload, &payload); err != nil {
-				d.logger.Debug("reminder fire result invalid payload", "error", err)
+				d.logger.Debug("reminder fire request result invalid payload", "error", err)
 				continue
 			}
-			if err := d.handleReminderFireResult(payload); err != nil {
+			if err := d.handleReminderFireRequestResult(payload); err != nil {
 				return err
 			}
+		case protocol.EventReminderFireReceiptAck:
+			var payload protocol.ReminderFireReceiptAckPayload
+			if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+				d.logger.Debug("reminder fire receipt ACK invalid payload", "error", err)
+				continue
+			}
+			d.reminderCache.ackFireReceipt(reminderDueIdentity{OwnerAgentID: payload.AgentID, ReminderID: payload.ReminderID, Version: payload.Version})
 		case protocol.EventReminderSnapshot:
 			var payload protocol.ReminderSnapshotPayload
 			if err := json.Unmarshal(msg.Payload, &payload); err != nil {
@@ -619,57 +626,36 @@ func (d *Daemon) handleReminderCancel(payload protocol.ReminderCancelPayload) er
 	return err
 }
 
-func (d *Daemon) handleReminderFireResult(payload protocol.ReminderFireResultPayload) error {
-	if d == nil || d.reminderCache == nil || payload.Ack.AgentID == "" || payload.Ack.ReminderID == "" || payload.Ack.Version < 1 {
+func (d *Daemon) handleReminderFireRequestResult(payload protocol.ReminderFireRequestResultPayload) error {
+	if d == nil || d.reminderCache == nil || payload.AgentID == "" || payload.ReminderID == "" || payload.Version < 1 || payload.RequestID == "" {
 		return nil
 	}
-	d.reminderCache.ackFireReceipt(reminderDueIdentity{
-		OwnerAgentID: payload.Ack.AgentID,
-		ReminderID:   payload.Ack.ReminderID,
-		Version:      payload.Ack.Version,
-	})
-	if payload.Upsert != nil && payload.Cancel != nil {
-		return errors.New("reminder fire result contains both upsert and cancel")
-	}
-	if payload.Upsert != nil {
-		return d.handleReminderUpsert(*payload.Upsert)
-	}
-	if payload.Cancel != nil {
-		return d.handleReminderCancel(*payload.Cancel)
+	identity := reminderDueIdentity{OwnerAgentID: payload.AgentID, ReminderID: payload.ReminderID, Version: payload.Version}
+	switch payload.Outcome {
+	case "accepted":
+		d.reminderCache.acceptFireRequest(identity, payload.RequestID, payload.Fired, payload.Catchup)
+	case "premature":
+		if payload.RetryAfterMS <= 0 {
+			return errors.New("reminder premature result requires retryAfterMs")
+		}
+		d.reminderCache.rearmFireRequest(identity, payload.RequestID, time.Duration(payload.RetryAfterMS)*time.Millisecond)
+	case "obsolete":
+		d.reminderCache.discardFireRequest(identity, payload.RequestID)
+	default:
+		return errors.New("invalid reminder fire request outcome")
 	}
 	return nil
 }
 
-func (d *Daemon) onReminderTimer(job protocol.ReminderTimerJob) bool {
-	runtimeID, ok := d.reminderCache.runtimeFor(job)
-	if !ok {
-		// Raft 1.0.16: a due fact stays local and retries until the owner wake
-		// can be enqueued. Do not tell the server a FIRED occurrence exists.
-		if d.logger != nil {
-			d.logger.Warn("reminder timer fired without a current Runtime snapshot; retrying until sync completes",
-				"reminder_id", job.ReminderID, "agent_id", job.OwnerAgentID, "version", job.Version)
-		}
-		return false
-	}
-	return d.queueReminderFrame(protocol.EventReminderFireAttempt, protocol.ReminderFireAttemptPayload{
-		AgentID:       job.OwnerAgentID,
-		RuntimeID:     runtimeID,
-		ReminderID:    job.ReminderID,
-		Version:       job.Version,
-		FiredAtClient: time.Now().UTC().Format(time.RFC3339Nano),
-	})
-}
-
 func (d *Daemon) queueReminderFireReceipt(receipt reminderDueReceipt) bool {
-	runtimeID, ok := d.reminderCache.runtimeFor(receipt.Job)
-	if !ok {
+	if _, ok := d.reminderCache.runtimeFor(receipt.Job); !ok {
 		return false
 	}
-	return d.queueReminderFrame(protocol.EventReminderFireAttempt, protocol.ReminderFireAttemptPayload{
+	return d.queueReminderFrame(protocol.EventReminderFireRequest, protocol.ReminderFireRequestPayload{
 		AgentID:       receipt.Job.OwnerAgentID,
-		RuntimeID:     runtimeID,
 		ReminderID:    receipt.Job.ReminderID,
 		Version:       receipt.Job.Version,
+		RequestID:     receipt.RequestID,
 		FiredAtClient: receipt.FiredAtClient,
 	})
 }

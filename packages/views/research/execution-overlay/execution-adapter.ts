@@ -36,7 +36,6 @@ export type ExecutionRow = {
   id: string;
   name: string;
   role: string;
-  initials: string;
   avatarUrl?: string;
   status: ExecutionStatus;
   /** Live server activity text (locale-appropriate); undefined when none. */
@@ -76,17 +75,6 @@ export type ExecutionRow = {
   staleReason?: string | null;
   waitingReason?: string | null;
 };
-
-function initials(name: string): string {
-  const compact = name.trim();
-  if (!compact) return "AI";
-  return compact
-    .split(/\s+/)
-    .map((part) => part[0])
-    .join("")
-    .slice(0, 2)
-    .toUpperCase();
-}
 
 function toUnixMs(value: number | string | null | undefined): number | undefined {
   if (value == null) return undefined;
@@ -260,8 +248,28 @@ export function buildExecutionOverlayRows(input: {
     if (node) attemptNodeByAgent.set(agentId, node);
   }
 
-  return (input.members ?? [])
-    .filter((member) => member.status !== "archived")
+  const rosterMembers = (input.members ?? []).filter(
+    (member) => member.status !== "archived",
+  );
+  // V6 run-scoped team agents are not workspace fleet members, so the fleet
+  // roster never lists them. The V6 presence projection carries their display
+  // identity (name/avatar/role) — append a row for every presence entry whose
+  // agent is missing from the fleet roster.
+  const fleetAgentIds = new Set(rosterMembers.map((member) => member.agent_id));
+  const presenceOnlyMembers: ResearchFleetMember[] = Object.entries(input.presence)
+    .filter(([agentId, entry]) => !fleetAgentIds.has(agentId) && entry.name !== "")
+    .map(([agentId, entry]) => ({
+      id: agentId,
+      agent_id: agentId,
+      role: entry.role,
+      status: "active",
+      is_lead: entry.role === "lead",
+      name: entry.name,
+      display_name: entry.name,
+      avatar_url: entry.avatarUrl,
+    }));
+
+  return [...rosterMembers, ...presenceOnlyMembers]
     .map((member) => {
       const signal = input.presence[member.agent_id];
       const status = deriveStatus(
@@ -296,7 +304,6 @@ export function buildExecutionOverlayRows(input: {
         id: member.agent_id,
         name,
         role: member.role || signal?.role || "worker",
-        initials: initials(name),
         avatarUrl: member.avatar_url ?? undefined,
         status,
         action: signal?.activity || undefined,

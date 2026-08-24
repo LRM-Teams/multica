@@ -2,13 +2,17 @@
 
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { I18nProvider } from "@multica/core/i18n/react";
+import enCommon from "../../locales/en/common.json";
+import enAgents from "../../locales/en/agents.json";
+import enIssues from "../../locales/en/issues.json";
 import { AgentWorkspaceRole } from "./agent-workspace-role";
 
-vi.mock("../../i18n/use-t", () => ({
-  useT: () => ({
-    t: (selector: (r: typeof RESOURCES) => string) => selector(RESOURCES),
-  }),
-}));
+// Real locale files, like thinking-prop-row.test.tsx: this component now
+// renders a PropertyPicker, which reads its own `issues` namespace.
+const TEST_RESOURCES = {
+  en: { common: enCommon, agents: enAgents, issues: enIssues },
+};
 
 const apiUpdate = vi.fn();
 
@@ -18,23 +22,7 @@ vi.mock("@multica/core/api", () => ({
   },
 }));
 
-const RESOURCES = {
-  inspector: {
-    section_workspace_role: "Workspace role",
-    role_member: "Member",
-    role_admin: "Admin",
-    workspace_role: {
-      make_admin_trigger: "Set as workspace admin",
-      remove_admin_trigger: "Remove workspace admin",
-      make_admin_confirm_title: "Set this agent as workspace Admin?",
-      remove_admin_confirm_title: "Remove workspace Admin from this agent?",
-      confirm: "Confirm",
-      cancel: "Cancel",
-      role_updated_toast: "Workspace role updated",
-      role_readonly_hint: "Only workspace owners and admins can change an agent's workspace role.",
-    },
-  },
-};
+const COPY = enAgents.inspector.workspace_role;
 
 const ALLOW = { allowed: true, reason: "allowed" as const, message: "" };
 const DENY = { allowed: false, reason: "not_admin_role" as const, message: "nope" };
@@ -43,67 +31,99 @@ function makeAgent(workspace_role: "member" | "admin") {
   return { id: "agt_1", workspace_id: "ws_1", workspace_role } as const;
 }
 
-describe("AgentWorkspaceRole (LRM-1449)", () => {
-  it("shows Member and a make-admin control for an owner/admin viewer", () => {
-    render(
+function renderRole(
+  workspace_role: "member" | "admin",
+  permission: typeof ALLOW | typeof DENY,
+  onRoleChanged?: () => void,
+) {
+  render(
+    <I18nProvider locale="en" resources={TEST_RESOURCES}>
       <AgentWorkspaceRole
         wsId="ws_1"
-        agent={makeAgent("member") as never}
-        permission={ALLOW}
-      />,
-    );
+        agent={makeAgent(workspace_role) as never}
+        permission={permission}
+        onRoleChanged={onRoleChanged}
+      />
+    </I18nProvider>,
+  );
+}
+
+/**
+ * Click an option inside the open popover.
+ *
+ * The trigger carries the current role as its accessible name, so a plain
+ * `getByRole("button", { name })` matches both it and the matching option.
+ * PickerItem is shared with the issue pickers and takes no testid, so filter
+ * by the trigger's instead of changing that component for a test's sake.
+ *
+ * Anchor the pattern (`/^Admin$/`): the label's help button carries the whole
+ * hint sentence as its accessible name, which contains "Admin" too.
+ */
+async function pickOption(name: RegExp) {
+  const buttons = await screen.findAllByRole("button", { name });
+  const option = buttons.find(
+    (b) => b.getAttribute("data-testid") !== "agent-workspace-role-toggle",
+  );
+  if (!option) throw new Error(`no option matched ${name}`);
+  fireEvent.click(option);
+}
+
+// LRM-1449, reshaped 2026-08-21: a two-value choice used to cost a button plus
+// a confirm dialog. It is a picker now, like every other single value in the
+// panel — what Admin grants moved into the label's hint, readable *before*
+// choosing rather than in a dialog that interrupts afterwards.
+describe("AgentWorkspaceRole (LRM-1449)", () => {
+  it("shows the current role for an owner/admin viewer", () => {
+    renderRole("member", ALLOW);
     expect(screen.getByTestId("agent-workspace-role-value")).toHaveTextContent("Member");
-    expect(
-      screen.getByRole("button", { name: "Set as workspace admin" }),
-    ).toBeInTheDocument();
+    expect(screen.getByTestId("agent-workspace-role-toggle")).toBeInTheDocument();
   });
 
-  it("shows Admin and a remove-admin control when the agent is already admin", () => {
-    render(
-      <AgentWorkspaceRole
-        wsId="ws_1"
-        agent={makeAgent("admin") as never}
-        permission={ALLOW}
-      />,
-    );
+  it("shows Admin when the agent is already admin", () => {
+    renderRole("admin", ALLOW);
     expect(screen.getByTestId("agent-workspace-role-value")).toHaveTextContent("Admin");
-    expect(
-      screen.getByRole("button", { name: "Remove workspace admin" }),
-    ).toBeInTheDocument();
+  });
+
+  it("explains what Admin grants without spending a line on it", () => {
+    renderRole("member", ALLOW);
+    // The hint rides the label's question mark, so it is reachable before the
+    // choice is made rather than shown after it.
+    expect(screen.getByLabelText(COPY.role_hint)).toBeInTheDocument();
   });
 
   it("is read-only with a hint for non-owner/admin viewers", () => {
-    render(
-      <AgentWorkspaceRole
-        wsId="ws_1"
-        agent={makeAgent("member") as never}
-        permission={DENY}
-      />,
-    );
+    renderRole("member", DENY);
     expect(screen.getByTestId("agent-workspace-role-value")).toHaveTextContent("Member");
-    expect(
-      screen.queryByRole("button", { name: "Set as workspace admin" }),
-    ).not.toBeInTheDocument();
-    expect(screen.getByText(RESOURCES.inspector.workspace_role.role_readonly_hint)).toBeInTheDocument();
+    expect(screen.queryByTestId("agent-workspace-role-toggle")).not.toBeInTheDocument();
+    expect(screen.getByLabelText(COPY.role_readonly_hint)).toBeInTheDocument();
   });
 
-  it("calls the PATCH endpoint on confirm and fires onRoleChanged", async () => {
+  it("PATCHes on selection — no confirm step in between", async () => {
+    apiUpdate.mockClear();
     apiUpdate.mockResolvedValue({ status: "ok" });
     const onRoleChanged = vi.fn();
-    render(
-      <AgentWorkspaceRole
-        wsId="ws_1"
-        agent={makeAgent("member") as never}
-        permission={ALLOW}
-        onRoleChanged={onRoleChanged}
-      />,
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Set as workspace admin" }));
-    expect(screen.getByTestId("agent-workspace-role-confirm")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    renderRole("member", ALLOW, onRoleChanged);
+
+    fireEvent.click(screen.getByTestId("agent-workspace-role-toggle"));
+    await pickOption(/^Admin$/);
+
     await waitFor(() => {
       expect(apiUpdate).toHaveBeenCalledWith("ws_1", "agt_1", "admin");
     });
     expect(onRoleChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not PATCH when the current role is re-selected", async () => {
+    apiUpdate.mockClear();
+    renderRole("member", ALLOW);
+
+    fireEvent.click(screen.getByTestId("agent-workspace-role-toggle"));
+    await pickOption(/^Member$/);
+
+    // Re-picking the current value closes the popover and issues no write.
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: /^Admin$/ })).not.toBeInTheDocument();
+    });
+    expect(apiUpdate).not.toHaveBeenCalled();
   });
 });

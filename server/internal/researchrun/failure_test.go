@@ -130,7 +130,7 @@ func (store *failureTestStore) RecordBudgetExhausted(_ context.Context, _ string
 	return RunEvent{}, store.budgetErr
 }
 
-func (store *failureTestStore) EvaluateGate(context.Context, string) (GateResult, error) {
+func (store *failureTestStore) EvaluateGate(context.Context, string, string) (GateResult, error) {
 	store.calls = append(store.calls, "evaluate_gate")
 	return store.gate, store.gateErr
 }

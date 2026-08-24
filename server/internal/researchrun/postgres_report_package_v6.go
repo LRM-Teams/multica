@@ -162,7 +162,7 @@ func (s *PostgresStore) applyReportPackageV6(ctx context.Context, submissionID s
 	if err != nil {
 		return "", err
 	}
-	_, err = tx.Exec(ctx, `UPDATE research_v6_work_submission SET status='accepted',outcome=jsonb_build_object('report_id',$2,'revision',$3,'package_hash',$4),updated_at=now() WHERE id=$1::uuid`, submissionID, reportID, revision, compiled.PackageHash)
+	_, err = tx.Exec(ctx, `UPDATE research_v6_work_submission SET status='accepted',outcome=jsonb_build_object('report_id',$2::text,'revision',$3::int,'package_hash',$4::text),updated_at=now() WHERE id=$1::uuid`, submissionID, reportID, revision, compiled.PackageHash)
 	if err != nil {
 		return "", err
 	}
@@ -223,7 +223,7 @@ func (s *PostgresStore) rejectV6ReportPackage(ctx context.Context, submissionID,
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if _, err = tx.Exec(ctx, `UPDATE research_v6_work_submission SET status='rejected',outcome=jsonb_build_object('error',$2),updated_at=now() WHERE id=$1::uuid`, submissionID, reason); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE research_v6_work_submission SET status='rejected',outcome=jsonb_build_object('error',$2::text),updated_at=now() WHERE id=$1::uuid`, submissionID, reason); err != nil {
 		return err
 	}
 	if _, err = tx.Exec(ctx, `UPDATE research_work_item_attempt a SET status='failed',failure_class='contract_rejected',diagnostics=$2,completed_at=now(),updated_at=now() FROM research_v6_work_submission sub WHERE sub.id=$1::uuid AND a.id=sub.attempt_id AND a.status IN ('dispatching','running')`, submissionID, reason); err != nil {

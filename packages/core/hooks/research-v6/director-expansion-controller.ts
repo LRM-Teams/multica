@@ -70,7 +70,7 @@ export class ResearchV6DirectorExpansionController {
     const cached = this.queryClient.getQueryData<SlicePages>(key);
     const previousPages = cached?.pages ?? [];
     const lastPage = previousPages.at(-1);
-    if (nextPage && (!lastPage?.has_more || !lastPage.next_cursor)) return;
+    if (nextPage && (!lastPage?.hasMore || !lastPage.nextCursor)) return;
 
     this.controllers.get(rootNodeId)?.abort();
     const controller = new AbortController();
@@ -92,12 +92,12 @@ export class ResearchV6DirectorExpansionController {
           {
             root: rootNodeId,
             depth: 1,
-            snapshot_id: this.identity.snapshotId,
-            cursor: nextPage ? lastPage?.next_cursor : undefined,
+            snapshotId: this.identity.snapshotId,
+            cursor: nextPage ? lastPage?.nextCursor : undefined,
           },
           controller.signal,
         );
-        if (lastPage && page.slice_key !== lastPage.slice_key) {
+        if (lastPage && page.sliceKey !== lastPage.sliceKey) {
           throw new Error("Director V6 slice pagination changed slice identity");
         }
         pages = nextPage ? [...previousPages, page] : [page];
@@ -105,14 +105,14 @@ export class ResearchV6DirectorExpansionController {
         this.queryClient.setQueryData<SlicePages>(key, {
           pages: [...pages],
           pageParams: pages.map((_, index) =>
-            index === 0 ? null : (pages[index - 1]?.next_cursor ?? null),
+            index === 0 ? null : (pages[index - 1]?.nextCursor ?? null),
           ),
         });
       }
       const revealedNodeIds = pages.flatMap((page) =>
         page.nodes.map((node) => node.id),
       );
-      const sliceKey = pages[0]?.slice_key;
+      const sliceKey = pages[0]?.sliceKey;
       if (!sliceKey) throw new Error("Director V6 slice response was empty");
       useResearchV6DirectorDisplayStore
         .getState()

@@ -1,6 +1,6 @@
 ---
 name: multica-period-work-collect
-description: "Use when collecting Period Work / 本期工作介绍 / collector packs on the OS where this runtime runs. Covers HOME (local) or cloud env git discovery, recent commits, dirty trees, short diffs, preliminary Work groups (same project + related cross-repo), optional Mermaid diagrams, denylist, pack markdown shape, and submit-pack delivery onto the Period Brief run. Do not use for writing the final Period Work Brief."
+description: "Use when collecting Period Work / 写汇报 / collector packs on the OS where this runtime runs. Covers HOME (local) or cloud env git discovery, recent commits, dirty trees, short diffs, preliminary Work groups (same project + related cross-repo), optional Mermaid diagrams, denylist, pack markdown shape, and submit-pack delivery onto the Period Brief run. Do not use for writing the final Period Work Brief."
 user-invocable: false
 allowed-tools: Bash(multica *), Bash(git *), Bash(hostname *), Bash(uname *), Bash(find *), Bash(ls *), Bash(head *), Bash(tail *), Bash(wc *), Bash(date *)
 ---
@@ -19,15 +19,20 @@ honestly.
 
 ## Scope
 
-| Runtime | Scan root |
+| Runtime | Scan roots |
 | --- | --- |
-| local | Owner `$HOME` (whole machine home) |
-| cloud | That cloud runtime environment (`$HOME` / workspace dirs you can see) |
+| local laptop | Owner `$HOME` **and** any extra roots from the recipes (`/workspace`, `$PWD` outside HOME) |
+| container / cloud sandbox | `$HOME` **plus** `/workspace` when that directory exists — HOME-only is incomplete |
 
-Prefer **git repositories under the scan root** that have commits or dirty
-files **inside the wake `<window>`** (RFC3339 start → end, half-open). Also
-note obvious project dirs that are not git if they clearly changed **in that
-same window**. Never pad the pack with earlier/later history.
+Resolve `SCAN_ROOTS` with `references/collect-recipes.md` **before** any
+`find`. If a `<focus>` partition is present (Notes Assistant collect plan),
+**narrow** harvest to those paths / topics / aspects — do not wander the
+whole machine. Prefer **git repositories under those roots** that have commits or
+dirty files **inside the wake `<window>`** (RFC3339 start → end, half-open).
+Also harvest **non-git** source files whose mtime is in-window (a lone
+`/workspace/multica/*.py` counts). Never pad the pack with earlier/later
+history. Do not treat an empty `$HOME` as “no user work” when `/workspace`
+has files.
 
 ## Hard rules
 
@@ -67,9 +72,11 @@ same window**. Never pad the pack with earlier/later history.
 
 ## Required procedure (do in order)
 
-1. **Identify runtime** — hostname, `uname -s`, `$HOME`, local vs cloud (best effort).
-2. **Discover git roots** under the scan root (see recipes). Cap exploration:
-   prefer depth-limited `find`, skip denylist dirs, stop after ~40 roots.
+1. **Identify runtime** — hostname, `uname -s`, `$HOME`, `$PWD`, `SCAN_ROOTS`,
+   local vs cloud (best effort).
+2. **Resolve `SCAN_ROOTS` then discover git roots** under **every** root (see
+   recipes). Cap exploration: prefer depth-limited `find`, skip denylist
+   dirs, stop after ~40 roots. Then run the non-git in-window file recipe.
 3. **Per repo in the window** collect:
    - remotes (`git remote -v`)
    - commits in window (`git log --after="$START" --before="$END"`, subject + short hash) — **required filter**
@@ -105,7 +112,7 @@ than inventing work.
 ## Runtime
 - mode: local|cloud
 - hostname / env: …
-- home / scan root: …
+- home / scan roots: …
 - window: <start> → <end>
 
 ## Repos / roots
@@ -163,7 +170,7 @@ You may still `multica message send --target …` for a short visible status rep
 
 ## Out of scope
 
-- Final Period Work Brief / 工作介绍 synthesis (周报 Agent)
+- Final Period Work Brief / 工作介绍 synthesis (笔记助手, skill `multica-period-work-brief`)
 - `multica computer` lifecycle / upgrade / doctor (see `multica-runtimes`)
 - Platform Facts loading (server already did that)
 

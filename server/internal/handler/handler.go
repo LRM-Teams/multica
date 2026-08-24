@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/netip"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -136,18 +137,35 @@ type Handler struct {
 	// session for the current socket. It is not durable.
 	runnerObservations *runnerObservationStore
 	// agentRestarts is one in-flight Agent Restart on this process.
-	agentRestarts              *agentRestartStore
-	ReminderNotifier           daemonws.ReminderNotifier
-	ReminderOwnerInputNotifier daemonws.ReminderOwnerInputNotifier
-	AgentDeliveryNotifier      daemonws.AgentDeliveryNotifier
-	AgentRestartNotifier       daemonws.AgentRestartNotifier
-	SandboxHub                 *sandboxws.Hub
-	Bus                        *events.Bus
-	TaskService                *service.TaskService
-	// GraphMemoryJudge runs the server-side async judge + delayed-reward
-	// flow for graph-memory recalls reported by daemons (design §5.3).
-	// Nil-safe: the endpoint accepts and drops reports when unwired.
-	GraphMemoryJudge      *service.GraphMemoryJudgeService
+	agentRestarts         *agentRestartStore
+	ReminderNotifier      daemonws.ReminderNotifier
+	AgentDeliveryNotifier daemonws.AgentDeliveryNotifier
+	AgentRestartNotifier  daemonws.AgentRestartNotifier
+	SandboxHub            *sandboxws.Hub
+	Bus                   *events.Bus
+	TaskService           *service.TaskService
+	// GraphMemoryRecall backs the daemon's server-authoritative recall
+	// endpoint (spec §1/§3/§14). Nil-safe: the endpoint answers 503 when
+	// unwired.
+	GraphMemoryRecall *service.GraphMemoryRecallService
+	// GraphMemoryRecallExecutor synchronously runs accepted recalls and returns
+	// only their bounded injection. Nil preserves the pre-execution response.
+	GraphMemoryRecallExecutor *service.GraphMemoryRecallExecutor
+	// GraphMemoryStatus backs the graph governance status API (spec §10).
+	GraphMemoryStatus *service.GraphMemoryStatusService
+	// GraphMemoryConsolidation runs manual consolidations behind the
+	// graph+ready gate (spec §10). Nil when the handler has no DB pool.
+	GraphMemoryConsolidation *service.GraphMemoryConsolidationService
+	// GraphMemoryAudit backs the query/judge/backtest audit API (spec §10).
+	GraphMemoryAudit *service.GraphMemoryAuditService
+	// GraphMemoryLimits carries the env-configured graph memory tunable
+	// defaults/ceilings and Dive model allow-lists (spec §2/§16).
+	GraphMemoryLimits service.GraphMemoryLimits
+	// GraphMemoryBlobs owns physical-byte retention so DeleteAttachment
+	// does not delete clone-shared or graph-memory-referenced bytes
+	// (spec §15, A28/D32). Nil when the handler has no DB pool: the
+	// delete path then keeps today's unconditional S3 delete.
+	GraphMemoryBlobs      *service.GraphMemoryBlobService
 	AgentFleetRankService *service.AgentFleetRankService
 	AgentHonorService     *service.AgentHonorService
 	IssueService          *service.IssueService
@@ -319,6 +337,9 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		Bus:                    bus,
 		TaskService:            taskSvc,
 		AgentFleetRankService:  agentFleetRankService,
+		GraphMemoryStatus:      service.NewGraphMemoryStatusService(queries, ""),
+		GraphMemoryAudit:       service.NewGraphMemoryAuditService(""),
+		GraphMemoryLimits:      service.LoadGraphMemoryLimits(os.Getenv),
 		AgentHonorService:      service.NewAgentHonorService(queries, agentFleetRankService),
 		IssueService:           service.NewIssueService(queries, txStarter, bus, analyticsClient, taskSvc),
 		HonorService:           service.NewHonorService(queries),
@@ -346,6 +367,9 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		cfg: cfg,
 	}
 	if pool, ok := txStarter.(*pgxpool.Pool); ok {
+		h.GraphMemoryConsolidation = service.NewGraphMemoryConsolidationService(queries, pool, "")
+		h.GraphMemoryAudit = service.NewGraphMemoryAuditServiceWithPool(pool, "")
+		h.GraphMemoryBlobs = service.NewGraphMemoryBlobService(pool)
 		h.WorkGraph = workgraph.NewStore(pool)
 		h.WorkGraph.OnNodesReady = func(ctx context.Context, workspaceID string, issueIDs []string) {
 			for _, issueID := range issueIDs {

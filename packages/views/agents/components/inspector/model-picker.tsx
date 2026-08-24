@@ -12,6 +12,7 @@ import {
 } from "../../../issues/components/pickers";
 import { CustomModelIdRow } from "../custom-model-id-row";
 import { CHIP_CLASS } from "./chip";
+import { EditPencil } from "./inspector-field";
 import { useT } from "../../../i18n";
 
 /**
@@ -114,9 +115,12 @@ export function ModelPicker({
         />
       }
       trigger={
-        <span className="min-w-0 truncate font-mono text-[11px]">
-          {triggerLabel}
-        </span>
+        <>
+          <span className="min-w-0 truncate font-mono text-[11px]">
+            {triggerLabel}
+          </span>
+          <EditPencil />
+        </>
       }
       header={
         <div className="p-1.5">

@@ -56,7 +56,7 @@ func (h *Handler) PatchComputerWorkJournal(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if _, err := h.DB.Exec(ctx, `
-UPDATE computer_identity_owner SET work_journal_enabled = $2 WHERE daemon_id = $1`, daemonID, enabled); err != nil {
+UPDATE computers SET work_journal_enabled = $2 WHERE id = $1`, daemonID, enabled); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to project work journal setting")
 		return
 	}

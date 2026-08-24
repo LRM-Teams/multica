@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/cli"
@@ -34,7 +35,23 @@ type Diagnosis struct {
 	SelectedWorkspaceID      string   `json:"selected_workspace_id,omitempty"`
 	SelectedWorkspaceSlug    string   `json:"selected_workspace_slug,omitempty"`
 	SelectedConnectionActive bool     `json:"selected_connection_active,omitempty"`
-	FixApplied               []string `json:"fix_applied,omitempty"`
+	// Runners is one entry per persisted Binding Runner slot on this machine.
+	// Owned is true only when the currently running resident (identified by
+	// its own live pid, from the health probe) is the one that persisted
+	// this pid as its child. A pid that is Alive but not Owned is a Binding
+	// Runner nothing on this machine currently controls.
+	Runners     []RunnerOwnership `json:"runners,omitempty"`
+	UnownedLive []RunnerOwnership `json:"unownedLive,omitempty"`
+	FixApplied  []string          `json:"fix_applied,omitempty"`
+}
+
+// RunnerOwnership is one on-disk Binding Runner slot's live-pid evidence
+// against the current resident's ownership record.
+type RunnerOwnership struct {
+	WorkspaceID string `json:"workspaceId"`
+	PID         int    `json:"pid"`
+	Alive       bool   `json:"alive"`
+	Owned       bool   `json:"owned"`
 }
 
 // Diagnose gathers local Computer evidence without mutating any state.
@@ -93,7 +110,37 @@ func (l *Lifecycle) Diagnose() Diagnosis {
 	if err == nil {
 		d.WorkspaceConnections = len(bindings)
 	}
+
+	residentPID, residentPIDKnown := healthPID(health)
+	if states, err := listRunnerStates(RootDir("")); err == nil {
+		for _, state := range states {
+			alive, known := processAlive(state.RunnerPID)
+			alive = known && alive
+			owned := alive && d.Resident == "running" && residentPIDKnown && residentPID == state.OwnerPID
+			ownership := RunnerOwnership{WorkspaceID: state.WorkspaceID, PID: state.RunnerPID, Alive: alive, Owned: owned}
+			d.Runners = append(d.Runners, ownership)
+			if alive && !owned {
+				d.UnownedLive = append(d.UnownedLive, ownership)
+			}
+		}
+	}
 	return d
+}
+
+// healthPID extracts the resident's own pid from a health probe map. The
+// value is a float64 after a real JSON round trip and may be an int in
+// tests that build the map directly.
+func healthPID(health map[string]any) (int, bool) {
+	switch value := health["pid"].(type) {
+	case float64:
+		return int(value), true
+	case int:
+		return value, true
+	case int64:
+		return int(value), true
+	default:
+		return 0, false
+	}
 }
 
 // Fix applies only provably safe stale-state cleanup and reports every
@@ -118,8 +165,40 @@ func (l *Lifecycle) Fix(d Diagnosis) Diagnosis {
 	now := time.Now()
 	applied = append(applied, cleanupAbandonedBindingState(RootDir(""), now)...)
 	applied = append(applied, cleanupExpiredUpgradeStaging(now)...)
+	applied = append(applied, reclaimOrphanedRunners(RootDir(""))...)
 	d.FixApplied = applied
 	return d
+}
+
+// reclaimOrphanedRunners terminates Workspace Runner processes whose owning
+// Host is gone, freeing the slot so the next `computer start` spawns a fresh
+// child instead of finding the machine wedged.
+//
+// This is the one Fix step that signals a live process, so its fence matters:
+// findReclaimableRunners refuses any slot whose recorded owner pid is still
+// alive, which means a Runner the running Host supervises can never be a
+// candidate here. Only a Runner whose parent Host is confirmed dead — the
+// self-locking state that used to require a manual kill — is reclaimed.
+func reclaimOrphanedRunners(root string) []string {
+	reclaimable, err := findReclaimableRunners(root, nil)
+	if err != nil || len(reclaimable) == 0 {
+		return nil
+	}
+	options := runnerReclaimOptions{StateRoot: root, PollInterval: 200 * time.Millisecond, Grace: 2 * time.Second}
+	if token, err := ReadControlToken(""); err == nil && strings.TrimSpace(token) != "" {
+		options.Drain = func(ctx context.Context, endpoint string, identity BindingChildIdentity) error {
+			return RequestBindingRunnerDrain(ctx, endpoint, token, identity)
+		}
+	}
+	applied := make([]string, 0, len(reclaimable))
+	for _, runner := range reclaimable {
+		if err := reclaimRunnerProcess(runner, options); err != nil {
+			applied = append(applied, fmt.Sprintf("could NOT terminate orphaned Workspace Runner pid %d (workspace %s): %v", runner.PID, runner.WorkspaceID, err))
+			continue
+		}
+		applied = append(applied, fmt.Sprintf("terminated orphaned Workspace Runner pid %d (workspace %s)", runner.PID, runner.WorkspaceID))
+	}
+	return applied
 }
 
 func cleanupAbandonedBindingState(root string, now time.Time) []string {

@@ -2,9 +2,12 @@ package memorygraph
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 )
 
 // FullBacktestRunner executes a full explore-agent backtest for one query
@@ -29,7 +32,7 @@ const DefaultBacktestRoundsTolerance = 1
 // BacktestConfig configures candidate evaluation (design §5.4 steps 3-4).
 type BacktestConfig struct {
 	RecallTolerance float64 // allowed recall-rate drop vs baseline (default 0.02)
-	JudgeThreshold  float64 // τ: only judge-passed queries feed mean/p95 rounds (default 0.6)
+	JudgeThreshold  float64 // retained for compatibility with recorded query metadata (default 0.6)
 	// RoundsTolerance is the rounds-overflow tolerance for the regression
 	// gate (default DefaultBacktestRoundsTolerance).
 	RoundsTolerance int
@@ -40,7 +43,22 @@ type BacktestConfig struct {
 	// retrieval. nil is allowed: backtests then run BM25-only through the
 	// same two-channel merge as production (retriever.go hybridSearch).
 	Embedder *CachedEmbedder
-	Runner   FullBacktestRunner
+	// ColdStart disables statistical recall and rounds-regression gates while
+	// the adjacent query-log window is too small to provide a trustworthy baseline.
+	ColdStart bool
+	Runner    FullBacktestRunner
+	// Confirmer semantically verifies a replacement node when deterministic
+	// historical-node matching cannot satisfy an authoritative item.
+	Confirmer BacktestConfirmer
+	// MaxConfirmationCandidates caps semantic checks per item (default 200).
+	MaxConfirmationCandidates int
+	// RequireFullBacktest rejects a candidate when no runner is configured.
+	RequireFullBacktest bool
+}
+
+// BacktestConfirmer semantically confirms that node fully expresses statement.
+type BacktestConfirmer interface {
+	ConfirmNode(ctx context.Context, statement string, node *Node) (bool, error)
 }
 
 // normalized fills zero/negative fields with defaults.
@@ -49,7 +67,7 @@ func (c BacktestConfig) normalized() BacktestConfig {
 		c.RecallTolerance = DefaultConsolidateConfig().RecallTolerance
 	}
 	if c.JudgeThreshold <= 0 {
-		c.JudgeThreshold = DefaultJudgeConfig().RelevanceThreshold
+		c.JudgeThreshold = 0.6
 	}
 	if c.RoundsTolerance <= 0 {
 		c.RoundsTolerance = DefaultBacktestRoundsTolerance
@@ -57,39 +75,55 @@ func (c BacktestConfig) normalized() BacktestConfig {
 	if c.Retrieval.TopK <= 0 {
 		c.Retrieval = DefaultRetrievalConfig()
 	}
+	if c.MaxConfirmationCandidates <= 0 {
+		c.MaxConfirmationCandidates = 200
+	}
 	return c
 }
 
-// BacktestQuery is one backtest input: a judged window query (design Q26)
-// or a permanent regression-set entry. BaselineRounds is the number of
-// explore rounds the original query needed (QueryLogEntry.Rounds of the
-// adopted path for window queries; RegressionEntry.BaselineRounds for
-// regression entries, defaulting to DefaultBacktestBaselineRounds when
-// absent). BaselineFound records whether the query passed baseline-side:
-// QueryLogEntry.Found for window queries, true for regression entries
-// (the regression set holds critical queries expected to pass).
+// BacktestQuery is one judged query in the adjacent version window.
+// Items are server-authoritative ground truth; RelevantNodes remains the
+// legacy representation used when catalog items are unavailable.
+// BacktestItem is one necessary information item. NodeIDs are equivalent
+// expressions of the same fact, so one matching ID satisfies the item.
+type BacktestItem struct {
+	ID         string   `json:"id,omitempty"`
+	Statement  string   `json:"statement"`
+	NodeIDs    []string `json:"node_ids,omitempty"`
+	SourceRefs []string `json:"source_refs,omitempty"`
+}
+
 type BacktestQuery struct {
-	TraceID        string   // empty for regression entries
-	Query          string   `json:"query"`
-	RelevantNodes  []string // ground truth set
+	TraceID        string
+	Query          string         `json:"query"`
+	RelevantNodes  []string       // legacy ground truth set
+	Items          []BacktestItem `json:"items,omitempty"`
 	BaselineRounds int
 	BaselineFound  bool
 	JudgeScore     float64
 	JudgeDone      bool
-	Regression     bool
 }
 
 // QueryBacktestStat records the per-query outcome on one candidate.
 type QueryBacktestStat struct {
-	TraceID        string  `json:"trace_id,omitempty"`
-	Query          string  `json:"query"`
-	Regression     bool    `json:"regression"`
-	BaselineRounds int     `json:"baseline_rounds"` // n: rounds the original query needed
-	BaselineFound  bool    `json:"baseline_found"`  // baseline-side pass
-	Covered        bool    `json:"covered"`         // all ground truth within the n-hop hit neighborhood
-	Found          bool    `json:"found"`           // candidate-side pass (recall unit)
-	Rounds         float64 `json:"rounds"`          // candidate rounds (runner result, else n estimate)
-	Regressed      bool    `json:"regressed"`       // baseline pass -> candidate miss, or rounds overflow
+	TraceID          string            `json:"trace_id,omitempty"`
+	Query            string            `json:"query"`
+	BaselineRounds   int               `json:"baseline_rounds"` // n: rounds the original query needed
+	BaselineFound    bool              `json:"baseline_found"`  // baseline-side pass
+	Covered          bool              `json:"covered"`         // all ground truth within the n-hop hit neighborhood
+	Found            bool              `json:"found"`           // candidate-side pass (recall unit)
+	Rounds           float64           `json:"rounds"`          // candidate rounds (runner result, else n estimate)
+	Regressed        bool              `json:"regressed"`       // baseline pass -> candidate miss, or rounds overflow
+	ItemsTotal       int               `json:"items_total"`
+	ItemsSatisfied   int               `json:"items_satisfied"`
+	ItemMisses       []string          `json:"item_misses,omitempty"`
+	ConfirmedNodeIDs map[string]string `json:"confirmed_node_ids,omitempty"`
+
+	// Skipped means the query fell outside every candidate's top-B union. It
+	// is audited but excluded from recall and round statistics.
+	Skipped    bool    `json:"skipped"`
+	Dq         float64 `json:"dq"`
+	SkipReason string  `json:"skip_reason,omitempty"`
 
 	RequiresFullBacktest   bool `json:"requires_full_backtest"`
 	FullBacktestRan        bool `json:"full_backtest_ran"`
@@ -111,8 +145,8 @@ type CandidateStats struct {
 	Queries        []QueryBacktestStat `json:"queries,omitempty"`
 	Recall         float64             `json:"recall"`          // fraction of queries with finite distance
 	BaselineRecall float64             `json:"baseline_recall"` // fraction of queries with finite baseline
-	MeanRounds     float64             `json:"mean_rounds"`     // judge-passed queries only
-	P95Rounds      float64             `json:"p95_rounds"`      // judge-passed queries only
+	MeanRounds     float64             `json:"mean_rounds"`     // every successful full-backtest run, including misses
+	P95Rounds      float64             `json:"p95_rounds"`      // every successful full-backtest run, including misses
 
 	// Cost components. EmbedBytes approximates embedding-token cost by the
 	// total body bytes of changed nodes: tokens are not available offline,
@@ -124,17 +158,12 @@ type CandidateStats struct {
 	Cost         float64 `json:"cost"`
 }
 
-// BacktestQueries collects the backtest input for a consolidation away from
-// fromVersion (design Q26): every judged query-log entry recorded against
-// fromVersion across all windows (the adjacent-version window) plus the
-// permanent regression set. Window baselines come from the recorded entry
-// (Rounds of the adopted path, Found); regression baselines come from the
-// entry's baseline_rounds (defaulting to DefaultBacktestBaselineRounds for
-// pre-A2 files) and are treated as baseline-passing by construction.
-func BacktestQueries(store *Store, fromVersion int) ([]*BacktestQuery, error) {
+// backtestWindowBounds returns the adjacent graph-version interval used by a
+// consolidation away from fromVersion.
+func backtestWindowBounds(store *Store, fromVersion int) (int, error) {
 	versions, err := store.ListVersions()
 	if err != nil {
-		return nil, fmt.Errorf("backtest queries: list versions: %w", err)
+		return 0, fmt.Errorf("backtest queries: list versions: %w", err)
 	}
 	prev := fromVersion - 1
 	for _, v := range versions {
@@ -142,8 +171,22 @@ func BacktestQueries(store *Store, fromVersion int) ([]*BacktestQuery, error) {
 			prev = v
 		}
 	}
+	return prev, nil
+}
+
+// BacktestQueries collects judged, authoritative entries from the adjacent
+// query-log window. The permanent regression set was intentionally removed
+// with protocol generation 2.
+func BacktestQueries(store *Store, fromVersion int) ([]*BacktestQuery, error) {
+	prev, err := backtestWindowBounds(store, fromVersion)
+	if err != nil {
+		return nil, err
+	}
 
 	var out []*BacktestQuery
+	// Trace IDs are stable recall identities. A trace recorded in multiple
+	// windows enters once; the first window occurrence wins deterministically.
+	seenTraceIDs := make(map[string]bool)
 	windows, err := store.ListQueryLogWindows()
 	if err != nil {
 		return nil, fmt.Errorf("backtest queries: list windows: %w", err)
@@ -154,10 +197,20 @@ func BacktestQueries(store *Store, fromVersion int) ([]*BacktestQuery, error) {
 			return nil, err
 		}
 		for _, e := range entries {
+			if e.LegacyNonAuthoritative {
+				continue
+			}
+			if e.TraceID != "" && seenTraceIDs[e.TraceID] {
+				continue
+			}
+			if e.TraceID != "" {
+				seenTraceIDs[e.TraceID] = true
+			}
 			out = append(out, &BacktestQuery{
 				TraceID:        e.TraceID,
 				Query:          e.Query,
 				RelevantNodes:  e.RelevantNodes,
+				Items:          e.InfoItems,
 				BaselineRounds: baselineRounds(e.Rounds),
 				BaselineFound:  e.Found,
 				JudgeScore:     e.JudgeScore,
@@ -166,23 +219,29 @@ func BacktestQueries(store *Store, fromVersion int) ([]*BacktestQuery, error) {
 		}
 	}
 
-	regression, err := store.ReadRegression()
-	if err != nil {
-		return nil, err
-	}
-	for _, re := range regression {
-		if len(re.RelevantNodes) == 0 {
-			continue
-		}
-		out = append(out, &BacktestQuery{
-			Query:          re.Query,
-			RelevantNodes:  re.RelevantNodes,
-			BaselineRounds: baselineRounds(re.BaselineRounds),
-			BaselineFound:  true,
-			Regression:     true,
-		})
-	}
 	return out, nil
+}
+
+// BacktestWindowQueryCount returns every query-log entry in the adjacent
+// version window, including entries whose asynchronous judge has not run.
+func BacktestWindowQueryCount(store *Store, fromVersion int) (int, error) {
+	prev, err := backtestWindowBounds(store, fromVersion)
+	if err != nil {
+		return 0, err
+	}
+	windows, err := store.ListQueryLogWindows()
+	if err != nil {
+		return 0, fmt.Errorf("backtest window query count: list windows: %w", err)
+	}
+	count := 0
+	for _, w := range windows {
+		entries, err := NewQueryRecorder(store, w).EntriesBetween(prev, fromVersion)
+		if err != nil {
+			return 0, err
+		}
+		count += len(entries)
+	}
+	return count, nil
 }
 
 // baselineRounds normalizes a recorded baseline-rounds value: absent/zero
@@ -235,91 +294,58 @@ func NewBacktester(store *Store, cfg BacktestConfig) *Backtester {
 	return &Backtester{store: store, cfg: cfg.normalized()}
 }
 
-// EvaluateCandidate runs the backtest and the hard gates for one candidate
-// version and returns its stats. parentVersion is the version the candidate
-// was copied from, used for the cost diffs. A candidate that fails any hard
-// gate has Passed=false and the failures listed in GateFailures; evaluation
-// still completes so the stats remain auditable.
-//
-// Retrieval note (design Q13/A2): each candidate is evaluated with a
-// per-candidate HybridRetriever built over the candidate's version — the
-// same two-channel merge (retriever.go hybridSearch), TopK and BM25Weight
-// as production, BM25-only when no embedder is configured. The per-query
-// gate is neighborhood coverage: the ground truth set must lie within the
-// n-hop graph neighborhood of the hybrid top-k hits, where n is the number
-// of explore rounds the original query needed. Uncovered queries fail
-// outright (recall miss, and regression when the query passed
-// baseline-side); covered queries run the full explore backtest when a
-// FullBacktestRunner is wired, and conservatively pass on coverage alone
-// otherwise.
+// EvaluateCandidate runs the backtest and hard gates for one candidate.
 func (b *Backtester) EvaluateCandidate(ctx context.Context, version, parentVersion int, queries []*BacktestQuery) CandidateStats {
 	stats := CandidateStats{Version: version, Passed: true}
 	fail := func(format string, args ...any) {
 		stats.Passed = false
 		stats.GateFailures = append(stats.GateFailures, fmt.Sprintf(format, args...))
 	}
-
+	if b.cfg.RequireFullBacktest && b.cfg.Runner == nil {
+		fail("full_backtest_runner_required")
+	}
 	g, err := LoadGraph(b.store, version)
 	if err != nil {
 		fail("load graph: %v", err)
 		return stats
 	}
-
-	// Hard gate 1: schema/graph validation.
 	if err := g.Validate(); err != nil {
 		fail("validate: %v", err)
 	}
-
-	// Hard gate 2: every staging segment is referenced by >= 1 node
-	// (新 segment 已处理).
 	b.checkStagingCoverage(g, fail)
-
-	// Per-candidate hybrid retriever identical to production (A2).
 	retr := NewHybridRetriever(b.store, b.cfg.Embedder, b.cfg.Retrieval)
 	if err := retr.RebuildForVersion(ctx, version); err != nil {
 		fail("build candidate retriever: %v", err)
 		return stats
 	}
 
-	// Per-query backtest.
 	stats.Queries = make([]QueryBacktestStat, 0, len(queries))
 	for _, q := range queries {
+		if len(resolveBacktestItems(q)) == 0 {
+			continue
+		}
 		stats.Queries = append(stats.Queries, b.evalQuery(ctx, retr, g, version, q))
 	}
-
-	// Hard gate 3: recall rate >= baseline - tolerance. Recall is the
-	// fraction of backtest queries passing candidate-side (neighborhood
-	// coverage, plus explore found=true when a runner is wired); the
-	// baseline is the fraction passing baseline-side.
-	stats.Recall, stats.BaselineRecall = recallRates(stats.Queries)
-	if stats.Recall < stats.BaselineRecall-b.cfg.RecallTolerance {
+	var ok bool
+	stats.Recall, stats.BaselineRecall, ok = recallRates(stats.Queries)
+	if !ok {
+		if !b.cfg.ColdStart { fail("no_eligible_backtest_ground_truth") }
+	} else if !b.cfg.ColdStart && stats.Recall < stats.BaselineRecall-b.cfg.RecallTolerance {
 		fail("recall %.4f below baseline %.4f - tolerance %.4f", stats.Recall, stats.BaselineRecall, b.cfg.RecallTolerance)
 	}
-
-	// Hard gate 4: no regression-set query may regress (关键 query 不退化):
-	// a regression entry that passed baseline-side but misses
-	// candidate-side, or whose full-backtest rounds exceed the recorded
-	// baseline rounds plus RoundsTolerance, fails the gate.
-	for _, qs := range stats.Queries {
-		if qs.Regression && qs.Regressed {
-			fail("regression query %q regressed (covered=%v found=%v rounds=%.0f baseline_rounds=%d)",
-				qs.Query, qs.Covered, qs.Found, qs.Rounds, qs.BaselineRounds)
-		}
-	}
-
-	// Rounds stats over judge-passed queries only (design §5.4 step 6).
 	var rounds []float64
-	for i, q := range queries {
-		qs := stats.Queries[i]
-		if q.Regression || !q.JudgeDone || q.JudgeScore < b.cfg.JudgeThreshold || !qs.Found {
+	for _, qs := range stats.Queries {
+		// Honest-skip semantics (spec §5.2): queries outside the measured
+		// union carry Rounds=0 and never enter Mean/P95. Full backtests are
+		// the only agent-run round measurements; coverage-only acceptance
+		// (no runner) is an estimate, not an observation, and is excluded.
+		if qs.Skipped || !qs.FullBacktestRan {
 			continue
 		}
 		rounds = append(rounds, qs.Rounds)
 	}
 	stats.MeanRounds = mean(rounds)
 	stats.P95Rounds = percentile(rounds, 95)
-
-	// Cost diffs against the parent version.
 	changed, embedBytes, churn, err := diffVersions(b.store, parentVersion, g)
 	if err != nil {
 		fail("cost diff: %v", err)
@@ -355,34 +381,54 @@ func (b *Backtester) checkStagingCoverage(g *Graph, fail func(string, ...any)) {
 	}
 }
 
-// evalQuery runs the A2 neighborhood-coverage backtest for one query
-// (design Q13):
-//  1. hybrid retrieval against the candidate version (same pipeline as
-//     production),
-//  2. the ground truth set must lie within the n-hop neighborhood of the
-//     top-k hit node ids, where n = the rounds the original query needed —
-//     otherwise the query fails outright (no agent run),
-//  3. covered queries run the full explore backtest via the configured
-//     FullBacktestRunner; without a runner, coverage alone stands as the
-//     pass signal (documented conservative default: the coverage check is
-//     the signal, the agent run only refines the rounds stats).
-//
-// A query regresses when it passed baseline-side but misses candidate-side,
-// or when its full-backtest rounds exceed baseline rounds + RoundsTolerance.
+// resolvedBacktestItem is one AND-required fact after legacy conversion.
+type resolvedBacktestItem struct {
+	BacktestItem
+	missID string
+}
+
+// resolveBacktestItems makes catalog items authoritative when present. Legacy
+// nodes retain their historical AND semantics by becoming single-node items.
+func resolveBacktestItems(q *BacktestQuery) []resolvedBacktestItem {
+	if len(q.Items) > 0 {
+		out := make([]resolvedBacktestItem, 0, len(q.Items))
+		for i, item := range q.Items {
+			out = append(out, resolvedBacktestItem{BacktestItem: item, missID: stableItemMissID(item, i)})
+		}
+		return out
+	}
+	out := make([]resolvedBacktestItem, 0, len(q.RelevantNodes))
+	for i, id := range q.RelevantNodes {
+		if id == "" {
+			continue
+		}
+		item := BacktestItem{ID: id, NodeIDs: []string{id}}
+		out = append(out, resolvedBacktestItem{BacktestItem: item, missID: stableItemMissID(item, i)})
+	}
+	return out
+}
+
+// stableItemMissID uses an item ID when available, otherwise the normalized
+// statement SHA-256, and finally its stable query-item index for blank facts.
+func stableItemMissID(item BacktestItem, index int) string {
+	if item.ID != "" {
+		return item.ID
+	}
+	normalized := strings.Join(strings.Fields(strings.ToLower(item.Statement)), " ")
+	if normalized != "" {
+		sum := sha256.Sum256([]byte(normalized))
+		return "statement:" + hex.EncodeToString(sum[:])
+	}
+	return fmt.Sprintf("item:%d", index)
+}
+
+// evalQuery evaluates AND-required items with OR-equivalent node groups.
 func (b *Backtester) evalQuery(ctx context.Context, retr *HybridRetriever, g *Graph, version int, q *BacktestQuery) QueryBacktestStat {
 	n := baselineRounds(q.BaselineRounds)
-	stat := QueryBacktestStat{
-		TraceID:        q.TraceID,
-		Query:          q.Query,
-		Regression:     q.Regression,
-		BaselineRounds: n,
-		BaselineFound:  q.BaselineFound,
-	}
-	gt := nodeSet(q.RelevantNodes)
-
+	items := resolveBacktestItems(q)
+	stat := QueryBacktestStat{TraceID: q.TraceID, Query: q.Query, BaselineRounds: n, BaselineFound: q.BaselineFound, ItemsTotal: len(items)}
 	hits, err := retr.Search(ctx, q.Query)
 	if err != nil {
-		// A retrieval failure is a conservative miss, not a gate error.
 		stat.Regressed = q.BaselineFound
 		return stat
 	}
@@ -393,31 +439,72 @@ func (b *Backtester) evalQuery(ctx context.Context, retr *HybridRetriever, g *Gr
 		}
 	}
 	neighborhood := g.KHopNeighborhood(hitIDs, n)
-	stat.Covered = len(gt) > 0 && allInSet(gt, neighborhood)
+	candidateIDs := make([]string, 0, len(neighborhood))
+	for id := range neighborhood {
+		candidateIDs = append(candidateIDs, id)
+	}
+	sort.Strings(candidateIDs)
+	if len(candidateIDs) > b.cfg.MaxConfirmationCandidates {
+		candidateIDs = candidateIDs[:b.cfg.MaxConfirmationCandidates]
+	}
+	for _, item := range items {
+		satisfied := false
+		for _, id := range item.NodeIDs {
+			if neighborhood[id] {
+				satisfied = true
+				break
+			}
+		}
+		if !satisfied && b.cfg.Confirmer != nil {
+			statement := strings.Join(strings.Fields(strings.ToLower(item.Statement)), " ")
+			for _, id := range candidateIDs {
+				node := g.Node(id)
+				if node == nil {
+					continue
+				}
+				confirmed, err := b.cfg.Confirmer.ConfirmNode(ctx, statement, node)
+				if err != nil || !confirmed {
+					continue
+				}
+				if stat.ConfirmedNodeIDs == nil {
+					stat.ConfirmedNodeIDs = make(map[string]string)
+				}
+				stat.ConfirmedNodeIDs[item.missID] = id
+				satisfied = true
+				break
+			}
+		}
+		if satisfied {
+			stat.ItemsSatisfied++
+		} else if len(stat.ItemMisses) < 20 {
+			stat.ItemMisses = append(stat.ItemMisses, item.missID)
+		}
+	}
+	stat.Covered = stat.ItemsTotal > 0 && stat.ItemsSatisfied == stat.ItemsTotal
 	if !stat.Covered {
 		stat.Regressed = q.BaselineFound
 		return stat
 	}
-
 	if b.cfg.Runner == nil {
-		// Runner-absent conservative default: coverage stands as the pass
-		// signal; the rounds estimate is the n the original query needed.
 		stat.Found = true
 		stat.Rounds = float64(n)
 		stat.AcceptedWithoutExplore = true
 		return stat
 	}
-
 	stat.RequiresFullBacktest = true
 	rounds, found, err := b.cfg.Runner.RunExplore(ctx, version, q.Query)
-	stat.FullBacktestRan = true
-	if err != nil || !found {
+	if err != nil {
 		stat.Regressed = q.BaselineFound
 		return stat
 	}
-	stat.Found = true
+	stat.FullBacktestRan = true
 	stat.Rounds = float64(rounds)
-	if q.BaselineFound && rounds > n+b.cfg.RoundsTolerance {
+	stat.Found = found
+	if !found {
+		stat.Regressed = q.BaselineFound
+		return stat
+	}
+	if q.BaselineFound && rounds > n+b.cfg.RoundsTolerance && !b.cfg.ColdStart {
 		stat.Regressed = true
 	}
 	return stat
@@ -436,12 +523,15 @@ func allInSet(set, container map[string]bool) bool {
 // recallRates computes candidate and baseline recall over the evaluated
 // queries: the fraction passing candidate-side (Found) resp. baseline-side
 // (BaselineFound).
-func recallRates(stats []QueryBacktestStat) (recall, baseline float64) {
+func recallRates(stats []QueryBacktestStat) (recall, baseline float64, ok bool) {
 	if len(stats) == 0 {
-		return 1, 1
+		return 0, 0, false
 	}
 	var hits, baseHits int
 	for _, qs := range stats {
+		if qs.Skipped {
+			continue
+		}
 		if qs.Found {
 			hits++
 		}
@@ -449,8 +539,13 @@ func recallRates(stats []QueryBacktestStat) (recall, baseline float64) {
 			baseHits++
 		}
 	}
-	n := float64(len(stats))
-	return float64(hits) / n, float64(baseHits) / n
+	eligible := 0
+	for _, qs := range stats {
+		if !qs.Skipped { eligible++ }
+	}
+	if eligible == 0 { return 0, 0, false }
+	n := float64(eligible)
+	return float64(hits) / n, float64(baseHits) / n, true
 }
 
 // nodeSet builds a set from node ids.

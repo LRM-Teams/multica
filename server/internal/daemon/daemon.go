@@ -112,6 +112,8 @@ type Daemon struct {
 	messageDraftStore          *MessageDraftStore
 	agentProxyCredentialMu     sync.RWMutex
 	agentProxyCredentials      map[[32]byte]authenticatedAgentProxy
+	agentCredentialManagerOnce sync.Once
+	agentCredentialManager     *agentCredentialManager
 	messageSendMu              sync.Mutex
 	messageSends               map[string]int
 	workspaceRunnerMu          sync.RWMutex
@@ -1998,8 +2000,20 @@ func (d *Daemon) ensureTaskAgentCredential(ctx context.Context, task Task, taskL
 }
 
 func (d *Daemon) ensureAgentCredential(ctx context.Context, workspaceID, runtimeID, agentID string, taskLog *slog.Logger) (string, error) {
+	credential, err := d.credentialManager().get(ctx, agentCredentialKey{
+		WorkspaceID: workspaceID,
+		RuntimeID:   runtimeID,
+		AgentID:     agentID,
+	}, agentCredentialRevalidate, taskLog)
+	if err != nil {
+		return "", err
+	}
+	return credential.Token, nil
+}
+
+func (d *Daemon) ensureAgentCredentialOnce(ctx context.Context, workspaceID, runtimeID, agentID string, taskLog *slog.Logger) (cachedAgentCredential, error) {
 	if strings.TrimSpace(workspaceID) == "" || strings.TrimSpace(runtimeID) == "" || strings.TrimSpace(agentID) == "" {
-		return "", fmt.Errorf("workspace_id, runtime_id, and agent_id are required")
+		return cachedAgentCredential{}, fmt.Errorf("workspace_id, runtime_id, and agent_id are required")
 	}
 	cached, cacheOK := readCachedAgentCredential(d.cfg, workspaceID, runtimeID, agentID, time.Now())
 	cachedCredentialID := ""
@@ -2018,7 +2032,7 @@ func (d *Daemon) ensureAgentCredential(ctx context.Context, workspaceID, runtime
 				taskLog.Debug("agent runtime transition in progress; will retry",
 					"agent_id", shortID(agentID), "runtime_id", shortID(runtimeID))
 			}
-			return "", fmt.Errorf("%w: %s", errRuntimeTransitionInProgress, err.Error())
+			return cachedAgentCredential{}, fmt.Errorf("%w: %s", errRuntimeTransitionInProgress, err.Error())
 		}
 		if isAgentNotBoundToRuntimeError(err) {
 			// This agent was reassigned to a different runtime (agent.runtime_id
@@ -2033,22 +2047,22 @@ func (d *Daemon) ensureAgentCredential(ctx context.Context, workspaceID, runtime
 				taskLog.Warn("agent no longer bound to this runtime; this task's agent has moved elsewhere",
 					"agent_id", shortID(agentID), "runtime_id", shortID(runtimeID))
 			}
-			return "", fmt.Errorf("%w: %s", errAgentReassignedElsewhere, err.Error())
+			return cachedAgentCredential{}, fmt.Errorf("%w: %s", errAgentReassignedElsewhere, err.Error())
 		}
-		return "", fmt.Errorf("ensure daemon agent credential: %w", err)
+		return cachedAgentCredential{}, fmt.Errorf("ensure daemon agent credential: %w", err)
 	}
 	if resp.Reused {
 		if !cacheOK || resp.ID != cached.CredentialID {
-			return "", fmt.Errorf("ensure response reused an unexpected credential")
+			return cachedAgentCredential{}, fmt.Errorf("ensure response reused an unexpected credential")
 		}
 		if taskLog != nil {
 			taskLog.Info("agent credential cache validated", "credential_id", shortID(cached.CredentialID), "token_prefix", cached.Prefix)
 		}
-		return cached.Token, nil
+		return cached, nil
 	}
 	cached, err = writeCachedAgentCredential(d.cfg, workspaceID, runtimeID, agentID, *resp, time.Now())
 	if err != nil {
-		return "", err
+		return cachedAgentCredential{}, err
 	}
 	if taskLog != nil {
 		taskLog.Info("agent credential ensured",
@@ -2057,7 +2071,7 @@ func (d *Daemon) ensureAgentCredential(ctx context.Context, workspaceID, runtime
 			"rotation_reason", resp.RotationReason,
 		)
 	}
-	return cached.Token, nil
+	return cached, nil
 }
 
 // reportTaskResult writes the final task disposition back to the server.

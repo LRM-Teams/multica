@@ -230,15 +230,19 @@ func (d *Daemon) reportResidentTurnCapture(workspaceID, agentID, runtimeID, runI
 	if d.client == nil || strings.TrimSpace(d.client.baseURL) == "" {
 		return false
 	}
-	credential, ok := readCachedAgentCredential(d.cfg, workspaceID, runtimeID, agentID, time.Now())
-	if !ok {
+	reportCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	credential, err := d.credentialManager().Get(reportCtx, agentCredentialKey{
+		WorkspaceID: workspaceID,
+		RuntimeID:   runtimeID,
+		AgentID:     agentID,
+	}, agentCredentialCacheFirst)
+	if err != nil {
 		if d.logger != nil {
-			d.logger.Warn("mixed-run capture credential unavailable", "run_id", runID, "run_agent_id", runAgentID)
+			d.logger.Warn("mixed-run capture credential unavailable", "run_id", runID, "run_agent_id", runAgentID, "error", err)
 		}
 		return false
 	}
-	reportCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
 	gapReason := "capture_unavailable"
 	if turnErr != nil {
 		gapReason = "provider_turn_failed"

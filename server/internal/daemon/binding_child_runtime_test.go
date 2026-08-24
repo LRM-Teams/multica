@@ -494,8 +494,11 @@ func TestBindingChildCredentialProxyHasAChildOwnedListener(t *testing.T) {
 		t.Fatalf("GET Binding child Credential Proxy: %v", err)
 	}
 	_ = response.Body.Close()
-	if response.StatusCode == http.StatusNotFound {
-		t.Fatal("Binding child Credential Proxy route is not installed")
+	if response.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("GET Binding child Credential Proxy status = %d, want 405", response.StatusCode)
+	}
+	if allow := response.Header.Get("Allow"); allow != http.MethodPost {
+		t.Fatalf("GET Binding child Credential Proxy Allow = %q, want POST", allow)
 	}
 
 	health, err := http.Get("http://" + listener.Addr().String() + "/health")

@@ -38,14 +38,14 @@ func (d *Daemon) initializeRunnerDiagnostics() {
 	environment := diagnosticlog.Environment(strings.TrimSpace(d.cfg.Environment))
 	if environment != diagnosticlog.EnvironmentProduction && environment != diagnosticlog.EnvironmentTest {
 		if d.logger != nil {
-			d.logger.Warn("Workspace Runner diagnostics disabled", "reason", "invalid_environment")
+			d.logger.Debug("Workspace Runner diagnostics disabled", "reason", "invalid_environment")
 		}
 		return
 	}
 	store, err := diagnosticlog.Open(diagnosticlog.Config{})
 	if err != nil {
 		if d.logger != nil {
-			d.logger.Warn("Workspace Runner diagnostics disabled", "reason", "open_failed")
+			d.logger.Debug("Workspace Runner diagnostics disabled", "reason", "open_failed")
 		}
 		return
 	}

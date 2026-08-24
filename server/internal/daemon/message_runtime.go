@@ -108,16 +108,8 @@ func (d *Daemon) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID
 	executionID := "resident-" + uuid.NewString()
 	runner, _ := d.ensureWorkspaceRunner(workspaceID)
 	launchID, startDispatchID := "", ""
-	if runner != nil && runner.processes != nil {
-		if snapshot, ok := runner.processes.Snapshot(agentID); ok {
-			launchID, startDispatchID = snapshot.LaunchID, snapshot.StartDispatchID
-		}
-	}
-	if runner != nil && (launchID == "" || startDispatchID == "") && runner.residency != nil {
-		if resident, ok := runner.residency.get(agentID); ok {
-			launchID = firstNonEmpty(launchID, resident.launchID)
-			startDispatchID = firstNonEmpty(startDispatchID, resident.startDispatchID)
-		}
+	if runner != nil {
+		launchID, startDispatchID = runner.residentLaunchIdentity(agentID)
 	}
 	preparedMessages, memoryTask, err := d.prepareResidentMessageBatch(ctx, agentID, runtimeID, messages)
 	if err != nil {

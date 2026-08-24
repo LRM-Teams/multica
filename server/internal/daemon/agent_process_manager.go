@@ -691,7 +691,20 @@ func (m *agentProcessManager) ProcessExited(callback agentProcessCallback, recov
 	managed.signal = callback.Signal
 	managed.terminationReason = callback.TerminationReason
 	managed.forceKilled = callback.ForceKilled
+	hadOpenTransition := len(managed.transitions) > 0
 	m.closeAllLocked(managed, "terminal")
+	if !hadOpenTransition {
+		managed.sequence++
+		m.emitLocked(agentLifecycleTransition{
+			AgentID: managed.agentID, RuntimeID: managed.runtimeID,
+			ProcessInstanceID: managed.processInstanceID, ProcessPID: managed.processPID,
+			ExitCode: managed.exitCode, Signal: managed.signal,
+			TerminationReason: managed.terminationReason, ForceKilled: managed.forceKilled,
+			RuntimeEpoch: managed.runtimeEpoch, StartDispatchID: managed.startDispatchID,
+			StateInstanceID: m.newID(), LaunchID: managed.launchID, Sequence: managed.sequence,
+			Phase: "process_exit", State: "terminal", Event: "close", Result: "terminal", At: m.now().UTC(),
+		})
+	}
 	managed.processInstanceID = ""
 	managed.processPID = 0
 	managed.exitCode = 0

@@ -106,16 +106,21 @@ describe("ApiClient session-scoped Research reads", () => {
       contentHash: `sha256:${"c".repeat(64)}`,
       displaySummary: "Latency boundary",
     };
+    const clientRequestId = "00000000-0000-4000-8000-000000000021";
 
     await client.postResearchMessage("s1", {
       body: "check this",
+      clientRequestId,
       selectedResearchRefs: [selectedRef],
+    } as Parameters<typeof client.postResearchMessage>[1] & {
+      clientRequestId: string;
     });
 
     const fetchMock = vi.mocked(fetch);
     const request = fetchMock.mock.calls[0]?.[1];
     expect(JSON.parse(String(request?.body))).toEqual({
       body: "check this",
+      client_request_id: clientRequestId,
       selected_research_refs: [
         {
           stable_id: selectedRef.stableId,

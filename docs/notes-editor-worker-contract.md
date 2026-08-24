@@ -101,8 +101,8 @@ Do not show Create note / Insert below on ordinary agent replies (a poem request
 - CLI: `multica notes tree <page-id>` — flat outline of that page and descendants
 - API: `GET /api/agent/notes/pages/{id}`
 - API: `GET /api/agent/notes/pages/{id}/tree`
-- ACL: current task must authorize the page via `note_worker_job`, matching `note_brief`, **or** an active `chat_session.context_note_page_id` (Notes assistant bubble). The human viewer (`creator_id` / initiator) must still pass `noteAccess`. Agent `OwnerUserID` is never the note viewer.
-- **Subtree:** authorization on a root page also covers its descendants. Agents may `notes get` / `notes tree` any page under the authorized root.
+- ACL: current task must authorize the page via `note_worker_job`, matching `note_brief`, **or** an active `chat_session.context_note_page_id` (Notes assistant bubble), **or** an exact-page virtual share (`note_page_share_agent` / membership in `note_page_share_channel`). The human viewer (`creator_id` / initiator) must still pass `noteAccess`. Agent `OwnerUserID` is never the note viewer.
+- **Subtree:** Worker / `note_brief` / notes-assistant grants on a root also cover descendants. A **share grant is the current page only** — `notes get` / `notes tree` must not walk children from that share.
 
 ## Notes assistant bubble (page FAB)
 

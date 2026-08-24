@@ -1193,6 +1193,8 @@
     "status_run": "进行中",
     "status_fail": "失败",
     "status_wait": "等待",
+    "status_idle": "空闲",
+    "status_offline": "离线",
     "status_abandoned": "已放弃",
     "status_mute": "已搁置"
   },

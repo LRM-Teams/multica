@@ -59,6 +59,9 @@ func TestV6ProjectionIncludesRunScopedAgentsAndWorkAssignments(t *testing.T) {
 	if !ok || workerNode.Title == "" || workerNode.CatalogSummary != "Research Manus product and market developments" {
 		t.Fatalf("worker Agent projection=%+v, present=%v", workerNode, ok)
 	}
+	if workerNode.State.Execution != "idle" {
+		t.Fatalf("idle worker Agent execution=%q, want idle", workerNode.State.Execution)
+	}
 	if workNodeID == "" {
 		t.Fatal("assigned Work projection node is missing")
 	}

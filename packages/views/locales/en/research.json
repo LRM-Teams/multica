@@ -1193,6 +1193,8 @@
     "status_run": "running",
     "status_fail": "failed",
     "status_wait": "waiting",
+    "status_idle": "idle",
+    "status_offline": "offline",
     "status_abandoned": "abandoned",
     "status_mute": "muted"
   },

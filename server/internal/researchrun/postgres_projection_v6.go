@@ -230,9 +230,14 @@ func appendV6AgentProjectionTx(ctx context.Context, tx pgx.Tx, build *v6Projecti
 			return err
 		}
 		execution := "pending"
-		if membershipState == "working" {
+		switch membershipState {
+		case "idle":
+			execution = "idle"
+		case "working":
 			execution = "running"
-		} else if membershipState == "retiring" {
+		case "offline":
+			execution = "offline"
+		case "retiring":
 			execution = "cancelled"
 		}
 		nodeID := v6ProjectionStableID("agent", agentID, generation)

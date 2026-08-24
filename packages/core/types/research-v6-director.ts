@@ -58,6 +58,8 @@ export type ResearchV6DirectorProjectionTier =
 
 export type ResearchV6DirectorExecutionState =
   | "pending"
+  | "idle"
+  | "offline"
   | "running"
   | "succeeded"
   | "failed"

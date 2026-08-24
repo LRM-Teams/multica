@@ -788,8 +788,19 @@ func (h *Handler) rescanGitHubCheckSuites(
 	if status/100 != 2 {
 		return fmt.Errorf("GitHub check-suites returned status %d", status)
 	}
+	// Keep REST recovery aligned with the webhook contract: queued and
+	// in-progress suites do not carry an actionable conclusion, and some
+	// third-party Apps leave empty suites queued indefinitely. Older versions
+	// of the rescan path briefly persisted those rows, so remove them from the
+	// current-head snapshot before applying terminal results.
+	if _, err = h.DB.Exec(ctx, `
+		DELETE FROM github_pull_request_check_suite
+		WHERE pr_id = $1 AND head_sha = $2 AND status <> 'completed'`,
+		pullRequestID, headSHA); err != nil {
+		return err
+	}
 	for _, suite := range response.CheckSuites {
-		if suite.ID == 0 || suite.App.ID == 0 || suite.Status == "" {
+		if suite.ID == 0 || suite.App.ID == 0 || suite.Status != "completed" {
 			continue
 		}
 		if err = h.Queries.UpsertPullRequestCheckSuite(ctx, db.UpsertPullRequestCheckSuiteParams{

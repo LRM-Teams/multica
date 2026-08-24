@@ -1239,7 +1239,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
                   id: bin.id,
                   bounds: bin.bounds,
                   total: bin.total,
-                  execution_counts: bin.executionCounts,
+                  executionCounts: bin.executionCounts,
                 }))
               : undefined
           }

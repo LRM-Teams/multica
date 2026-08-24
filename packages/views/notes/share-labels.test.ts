@@ -13,7 +13,7 @@ function member(overrides: Partial<MemberWithUser>): MemberWithUser {
     display_name: "User One",
     email: "user1@example.com",
     avatar_url: null,
-    profile_description: "",
+    description: "",
     ...overrides,
   };
 }

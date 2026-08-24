@@ -2784,7 +2784,7 @@ export const EMPTY_CONVERSATION_HANDLE_LOOKUP: ConversationHandleLookup = {
 // trust this shape — a drift here would knock both surfaces out. Kept
 // lenient by the same rules as IssueSchema: enums stay `z.string()`,
 // nullable fields are unioned with `null`, unknown server fields pass
-// through via `.loose()`. `profile_description` is the field added in
+// through via `.loose()`. `description` is the field added in
 // MUL-2406; the server emits `""` when unset (NOT NULL DEFAULT ''), so
 // the schema defaults to `""` too — keeps the type tight without
 // breaking older backends that don't return the column yet.
@@ -2800,7 +2800,7 @@ export const UserSchema = z.object({
   onboarding_questionnaire: z.record(z.string(), z.unknown()).default({}),
   starter_content_state: z.string().nullable().default(null),
   language: z.string().nullable().default(null),
-  profile_description: z.string().default(""),
+  description: z.string().default(""),
   timezone: z.string().nullable().default(null),
   created_at: z.string().default(""),
   updated_at: z.string().default(""),
@@ -2816,7 +2816,7 @@ export const EMPTY_USER: User = {
   onboarding_questionnaire: {},
   starter_content_state: null,
   language: null,
-  profile_description: "",
+  description: "",
   timezone: null,
   created_at: "",
   updated_at: "",
@@ -3221,6 +3221,9 @@ export const ChannelMentionCandidateSchema = z.object({
   id: z.string().catch(""),
   handle: z.string().catch(""),
   label: z.string().catch(""),
+  // Self-description (user) or configured description (agent). Server sends
+  // "" when unset; older backends omit it entirely.
+  description: z.string().catch(""),
   avatar_url: z.string().nullish(),
 }).loose();
 

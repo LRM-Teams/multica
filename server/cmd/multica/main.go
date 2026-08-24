@@ -51,7 +51,6 @@ func init() {
 	issueCmd.GroupID = groupCore
 	labelCmd.GroupID = groupCore
 	workspaceCmd.GroupID = groupCore
-	skillCmd.GroupID = groupCore
 	memoryCmd.GroupID = groupCore
 	notesCmd.GroupID = groupCore
 	messageCmd.GroupID = groupCore
@@ -81,7 +80,6 @@ func init() {
 	rootCmd.AddCommand(researchCmd)
 	rootCmd.AddCommand(labelCmd)
 	rootCmd.AddCommand(workspaceCmd)
-	rootCmd.AddCommand(skillCmd)
 	rootCmd.AddCommand(memoryCmd)
 	rootCmd.AddCommand(notesCmd)
 	rootCmd.AddCommand(messageCmd)

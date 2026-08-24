@@ -50,6 +50,34 @@ func TestProcessShutdownHandlerLogsAuditMetadata(t *testing.T) {
 	}
 }
 
+func TestProcessRoutesPreserveControlMethodErrors(t *testing.T) {
+	host := &Host{}
+	state := &hostProcessState{}
+	mux := http.NewServeMux()
+	host.registerProcessRoutes(mux, state)
+
+	for _, path := range []string{
+		"/shutdown",
+		"/environment-switch/prepare",
+		"/environment-switch/release",
+	} {
+		t.Run(path, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+
+			if recorder.Code != http.StatusMethodNotAllowed {
+				t.Fatalf("status = %d, want %d", recorder.Code, http.StatusMethodNotAllowed)
+			}
+			if got := recorder.Body.String(); got != "method not allowed\n" {
+				t.Fatalf("body = %q, want %q", got, "method not allowed\n")
+			}
+			if allow := recorder.Header().Get("Allow"); allow != "" {
+				t.Fatalf("Allow = %q, want empty", allow)
+			}
+		})
+	}
+}
+
 func TestHostProcessOwnsResidentControlAndDesiredBindings(t *testing.T) {
 	child := &readySupervisorChild{supervisorTestChild: newSupervisorTestChild(7101)}
 	host, err := NewHost(HostConfig{

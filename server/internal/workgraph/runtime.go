@@ -366,14 +366,19 @@ func (s *Store) Create(ctx context.Context, input CreateInput) (CreateResult, er
 	if _, err = tx.Exec(ctx, `INSERT INTO work_graph_create_request (workspace_id,actor_type,actor_id,idempotency_key,request_digest,graph_id,response) VALUES ($1,$2,$3,$4,$5,$6,$7)`, workspaceID, in.ActorType, actorID, idempotencyKey, requestDigest, graphID, encoded); err != nil {
 		return CreateResult{}, err
 	}
-	if err = tx.Commit(ctx); err != nil {
-		return CreateResult{}, err
-	}
 	readyIssues := []string{}
 	for _, node := range created.Graph.Nodes {
 		if node.ExecutionStatus == "ready" {
 			readyIssues = append(readyIssues, node.IssueID)
 		}
+	}
+	if s.OnNodesReadyTx != nil && len(readyIssues) > 0 {
+		if err = s.OnNodesReadyTx(ctx, tx, in.WorkspaceID, readyIssues); err != nil {
+			return CreateResult{}, err
+		}
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return CreateResult{}, err
 	}
 	if s.OnNodesReady != nil && len(readyIssues) > 0 {
 		s.OnNodesReady(ctx, in.WorkspaceID, readyIssues)
@@ -518,7 +523,12 @@ func (s *Store) ReconcileReady(ctx context.Context, workspaceID, graphID string)
 	if err != nil {
 		return nil, ErrInvalidGraph
 	}
-	rows, err := s.pool.Query(ctx, `UPDATE work_graph_node n SET execution_status='ready',updated_at=now()
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	rows, err := tx.Query(ctx, `UPDATE work_graph_node n SET execution_status='ready',updated_at=now()
 		WHERE n.workspace_id=$1 AND n.graph_id=$2
 		  AND n.execution_status IN ('queued','waiting') AND n.validity_status='valid'
 		  AND NOT (n.role='verifier' AND n.review_status='blocked')
@@ -549,33 +559,50 @@ func (s *Store) ReconcileReady(ctx context.Context, workspaceID, graphID string)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	ids := []string{}
 	for rows.Next() {
 		var id string
 		if err = rows.Scan(&id); err != nil {
+			rows.Close()
 			return nil, err
 		}
 		ids = append(ids, id)
 	}
 	if err = rows.Err(); err != nil {
+		rows.Close()
 		return nil, err
 	}
-	if s.OnNodesReady != nil && len(ids) > 0 {
-		issueRows, qerr := s.pool.Query(ctx, `SELECT issue_id::text FROM work_graph_node WHERE id=ANY($1::uuid[])`, ids)
-		if qerr == nil {
-			issueIDs := []string{}
-			for issueRows.Next() {
-				var id string
-				if issueRows.Scan(&id) == nil {
-					issueIDs = append(issueIDs, id)
-				}
-			}
-			issueRows.Close()
-			if len(issueIDs) > 0 {
-				s.OnNodesReady(ctx, workspaceID, issueIDs)
-			}
+	rows.Close()
+	issueIDs := []string{}
+	if len(ids) > 0 {
+		issueRows, qerr := tx.Query(ctx, `SELECT issue_id::text FROM work_graph_node WHERE id=ANY($1::uuid[])`, ids)
+		if qerr != nil {
+			return nil, qerr
 		}
+		for issueRows.Next() {
+			var id string
+			if scanErr := issueRows.Scan(&id); scanErr != nil {
+				issueRows.Close()
+				return nil, scanErr
+			}
+			issueIDs = append(issueIDs, id)
+		}
+		if qerr = issueRows.Err(); qerr != nil {
+			issueRows.Close()
+			return nil, qerr
+		}
+		issueRows.Close()
+	}
+	if s.OnNodesReadyTx != nil && len(issueIDs) > 0 {
+		if err = s.OnNodesReadyTx(ctx, tx, workspaceID, issueIDs); err != nil {
+			return nil, err
+		}
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	if s.OnNodesReady != nil && len(issueIDs) > 0 {
+		s.OnNodesReady(ctx, workspaceID, issueIDs)
 	}
 	return ids, nil
 }

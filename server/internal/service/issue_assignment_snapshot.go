@@ -28,7 +28,11 @@ type issueAssignmentSnapshotContext struct {
 }
 
 func (s *TaskService) buildIssueAssignmentSnapshot(ctx context.Context, issue db.Issue) (issueAssignmentSnapshotContext, error) {
-	commentCount, err := s.Queries.CountComments(ctx, db.CountCommentsParams{
+	return buildIssueAssignmentSnapshotWithQueries(ctx, s.Queries, issue)
+}
+
+func buildIssueAssignmentSnapshotWithQueries(ctx context.Context, q *db.Queries, issue db.Issue) (issueAssignmentSnapshotContext, error) {
+	commentCount, err := q.CountComments(ctx, db.CountCommentsParams{
 		IssueID:     issue.ID,
 		WorkspaceID: issue.WorkspaceID,
 	})

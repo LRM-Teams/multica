@@ -98,6 +98,11 @@ func (s *Store) UnlockIssueDependents(ctx context.Context, workspaceID, complete
 			return nil, fmt.Errorf("write dependency handoff: %w", err)
 		}
 	}
+	if s.OnNodesReadyTx != nil && len(ready) > 0 {
+		if err = s.OnNodesReadyTx(ctx, tx, workspaceID, ready); err != nil {
+			return nil, err
+		}
+	}
 	if err = tx.Commit(ctx); err != nil {
 		return nil, err
 	}

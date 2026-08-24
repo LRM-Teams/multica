@@ -12,6 +12,7 @@ to these sources.
 | CLI `notes get` / `notes tree` | `server/cmd/multica/cmd_notes.go`; `GET /api/agent/notes/pages/{id}` (+ `/tree`) |
 | Subtree authorization | `notePageIsUnderRoot`; `agentNoteGrantAllowsSubtree`; contract `docs/notes-editor-worker-contract.md` § Agent read path |
 | No `notes write` in bubble — propose markdown in final output | `SKILL.md` Delivery/Writes; chat bubble has no `note_write` renderer |
+| Editor `note_ai_job` formulas use `$` / `$$` only | `buildNotePageEditPrompt`; `note-ai-edit-prompt.test.ts`; contract § Editor formula markdown |
 | Bubble Q&A = final assistant output (not `message send --target chat:`) | `formatStandaloneChatTurnPrompt`; `writebackStandaloneChatTurn`; engineering-principles §1.5 |
 | Wake prefix rebuilt on redelivery | `redeliverUnacknowledgedStandaloneChat` + `buildNoteChatWakePrefix` |
 | Workspace Notes Assistant persona | template `notes-assistant.json`; `EnsureNotesAssistantAgent` |

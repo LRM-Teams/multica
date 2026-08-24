@@ -95,6 +95,16 @@ UI (human click writes with the clicker's note ACL):
 
 Do not show Create note / Insert below on ordinary agent replies (a poem request with no save intent stays button-free). A one-line ack after “写入笔记” also stays button-free.
 
+## Editor formula markdown
+
+Empty-line / in-note Editor jobs (`note_ai_job`) insert `markdown` through the Notes TipTap parser. The editor only tokenizes `$...$` (inline) and `$$...$$` (display). `buildNotePageEditPrompt` must tell the agent:
+
+- Use those delimiters.
+- Do not emit `\(...\)`, `\[...\]`, or fenced `latex` / `math` — those stay raw source.
+- Inside the JSON string, double every LaTeX backslash (`\\nabla`).
+
+FE: `packages/views/notes/note-ai-edit-prompt.ts`.
+
 ## Agent read path (S2-C2)
 
 - CLI: `multica notes get <page-id> --output json` (agent task token only)

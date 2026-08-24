@@ -238,6 +238,8 @@ func appendV6WorkProjectionTx(ctx context.Context, tx pgx.Tx, build *v6Projectio
 		       COALESCE(w.reason,''),
 		       COALESCE(w.terminal_reason_code,''),
 		       COALESCE(w.terminal_reason_detail,''),
+		       COALESCE(latest_attempt.failure_class,''),
+		       COALESCE(latest_attempt.diagnostics,''),
 		       GREATEST(
 		         w.updated_at,
 		         COALESCE(latest_attempt.updated_at,w.updated_at),
@@ -256,7 +258,7 @@ func appendV6WorkProjectionTx(ctx context.Context, tx pgx.Tx, build *v6Projectio
 		       COALESCE(NULLIF(agent.display_name,''),agent.name,w.kind)
 		FROM research_work_item w
 		LEFT JOIN LATERAL (
-		  SELECT attempt.assigned_agent_id,attempt.inbox_task_id,attempt.updated_at
+		  SELECT attempt.assigned_agent_id,attempt.inbox_task_id,attempt.updated_at,attempt.failure_class,attempt.diagnostics
 		  FROM research_work_item_attempt attempt
 		  WHERE attempt.workspace_id=w.workspace_id
 		    AND attempt.session_id=w.session_id
@@ -276,17 +278,15 @@ func appendV6WorkProjectionTx(ctx context.Context, tx pgx.Tx, build *v6Projectio
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var id, kind, status, reason, reasonCode, reasonDetail, agentName string
+		var id, kind, status, reason, reasonCode, reasonDetail, attemptFailureClass, attemptDiagnostics, agentName string
 		var updated time.Time
 		var branches []string
-		if err = rows.Scan(&id, &kind, &status, &reason, &reasonCode, &reasonDetail, &updated, &branches, &agentName); err != nil {
+		if err = rows.Scan(&id, &kind, &status, &reason, &reasonCode, &reasonDetail, &attemptFailureClass, &attemptDiagnostics, &updated, &branches, &agentName); err != nil {
 			return err
 		}
 		execution, terminal := projectionExecutionForWork(status)
 		state := V6ProjectionState{Execution: execution, Conclusion: "proposed", Integration: "unmatched"}
-		if terminal && reasonCode != "" {
-			state.Termination = &V6ProjectionTermination{ReasonCode: normalizeProjectionReason(reasonCode), ReasonDetail: nonemptyProjectionReason(reasonDetail)}
-		}
+		state.Termination = projectionTerminationForWork(execution, terminal, reasonCode, reasonDetail, attemptFailureClass, attemptDiagnostics)
 		nodeID := v6ProjectionStableID("work_s", id, 0)
 		build.nodes = append(build.nodes, V6ProjectionNode{ID: nodeID, Kind: "work_s", Tier: "S", CanonicalRef: V6ProjectionEntityRef{Kind: "work_item", ID: id}, BranchIDs: branches, State: state, Title: truncateProjectionText(agentName, 160), CatalogSummary: truncateProjectionText(reason, 512), Terminal: terminal, Expandable: false, UpdatedAt: normalizeProjectionTime(updated)})
 		build.defaultVisible[nodeID] = kind != "director" || !terminal
@@ -432,7 +432,35 @@ func normalizeProjectionReason(value string) string {
 	if allowed[value] {
 		return value
 	}
+	resourceFailures := map[string]bool{"attempt_budget_exhausted": true, "contract_rejected": true, "dispatch_failed": true, "runtime_failure": true, "runtime_unavailable": true, "task_timeout": true, "lost": true}
+	if resourceFailures[value] {
+		return "resource_failure"
+	}
 	return "other"
+}
+
+func projectionTerminationForWork(execution string, terminal bool, reasonCode, reasonDetail, failureClass, diagnostics string) *V6ProjectionTermination {
+	if !terminal || (execution == "succeeded" && reasonCode == "" && failureClass == "") {
+		return nil
+	}
+	canonicalReason := reasonCode
+	if canonicalReason == "" {
+		canonicalReason = failureClass
+	}
+	detail := reasonDetail
+	if detail == "" {
+		detail = diagnostics
+	}
+	if canonicalReason == "" {
+		canonicalReason = "other"
+	}
+	if detail == "" {
+		detail = "未记录具体失败原因。"
+	}
+	return &V6ProjectionTermination{
+		ReasonCode:   normalizeProjectionReason(canonicalReason),
+		ReasonDetail: truncateProjectionText(fmt.Sprintf("%s：%s", canonicalReason, detail), 32768),
+	}
 }
 
 func nonemptyProjectionReason(value string) string {

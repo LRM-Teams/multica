@@ -413,7 +413,7 @@ func runnerKeyForTest(daemonID, workspaceID string) string {
 
 // TestRuntimeConnectivity_WSConnectedOverridesStaleHeartbeat is the LRM-1571
 // contract for the read-time online judgment: a runtime whose daemon holds a
-// live Workspace Runner socket is Online even when last_seen_at is far past
+// live WorkspaceDaemon socket is Online even when last_seen_at is far past
 // the stale threshold (WS-capable daemons stop heartbeating). Disconnected,
 // the legacy heartbeat ramp applies unchanged.
 func TestRuntimeConnectivity_WSConnectedOverridesStaleHeartbeat(t *testing.T) {

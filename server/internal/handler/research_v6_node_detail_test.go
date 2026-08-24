@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -15,11 +16,15 @@ type researchV6NodeDetailRunStub struct {
 	researchrun.V6ProjectionReader
 	receivedSnapshotID string
 	receivedNodeID     string
+	err                error
 }
 
 func (s *researchV6NodeDetailRunStub) ProjectionV6NodeDetail(_ context.Context, _, _, snapshotID, nodeID, view string) (researchrun.V6ProjectionNodeDetail, error) {
 	s.receivedSnapshotID = snapshotID
 	s.receivedNodeID = nodeID
+	if s.err != nil {
+		return researchrun.V6ProjectionNodeDetail{}, s.err
+	}
 	return researchrun.V6ProjectionNodeDetail{
 		SnapshotID:           "3d8ce6bb-208a-4d3e-88e6-a8e7d149e036",
 		ThroughEventSequence: 1,
@@ -45,6 +50,31 @@ func (s *researchV6NodeDetailRunStub) ProjectionV6NodeDetail(_ context.Context, 
 		DiscussionRefs: []researchrun.V6ProjectionEntityRef{},
 		ReportRefs:     []researchrun.V6ProjectionEntityRef{},
 	}, nil
+}
+
+func TestGetResearchV6ProjectionNodeDetailReturnsResyncRequired(t *testing.T) {
+	const (
+		runID      = "ecfab91c-7fe7-4e65-b636-f4d7ea65088b"
+		snapshotID = "3d8ce6bb-208a-4d3e-88e6-a8e7d149e036"
+		nodeID     = "pv6:goal:60f8f7f3-82e6-48f0-a3f7-b5c0d8a012a2:1"
+	)
+	service := &researchV6NodeDetailRunStub{err: researchrun.ErrProjectionResyncRequired}
+	h := &Handler{ResearchRun: service}
+	req := withURLParams(
+		newRequest(http.MethodGet, "/api/research/v6/runs/"+runID+"/projection/nodes/"+nodeID+"?snapshot_id="+snapshotID, nil),
+		"runId", runID,
+		"nodeId", nodeID,
+	)
+	w := httptest.NewRecorder()
+
+	h.GetResearchV6ProjectionNodeDetail(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d; body=%s", w.Code, http.StatusConflict, w.Body.String())
+	}
+	if body := w.Body.String(); !strings.Contains(body, `"code":"research.v6.projection_resync_required"`) || !strings.Contains(body, `"retryable":true`) {
+		t.Fatalf("body = %s, want structured retryable resync error", body)
+	}
 }
 
 func TestGetResearchV6ProjectionNodeDetailRouteDecodesStableNodeID(t *testing.T) {

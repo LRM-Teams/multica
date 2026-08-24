@@ -58,6 +58,10 @@ func TestRonaldoV6DirectorProtocolRequiresParallelChineseResearch(t *testing.T) 
 		"多个独立方向",
 		"同一 proposal",
 		"不得叙述合同查找",
+		"不得自行暂停整场调研",
+		"失败分类和诊断",
+		"待回答问题",
+		"不得在存在高价值待回答问题",
 	} {
 		if !strings.Contains(RonaldoV6DirectorSystemProtocol, want) {
 			t.Fatalf("director protocol missing %q", want)

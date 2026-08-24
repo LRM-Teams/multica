@@ -139,7 +139,7 @@ func init() {
 	f.String("cube-proxy-http", "", "Cube proxy HTTP URL for /execute (overrides config)")
 	f.String("cube-domain", "", "Cube sandbox domain (overrides config)")
 	f.String("cube-template-id", "", "Default Cube template id (overrides config)")
-	f.String("docker-public-host", "", "Host/IP used in Docker sandbox service URLs (overrides config docker_public_host)")
+	f.String("docker-public-host", "", "ComputerCore/IP used in Docker sandbox service URLs (overrides config docker_public_host)")
 	f.Int("concurrency", 1, "Max jobs claimed per poll")
 	f.Duration("poll-interval", 5*time.Second, "Fallback job poll interval")
 }
@@ -1675,7 +1675,7 @@ func (c *sandboxdClient) cubeJSONWithClient(ctx context.Context, client *http.Cl
 	}
 	if host != "" {
 		req.Host = host
-		req.Header.Set("Host", host)
+		req.Header.Set("ComputerCore", host)
 	}
 	res, err := client.Do(req)
 	if err != nil {

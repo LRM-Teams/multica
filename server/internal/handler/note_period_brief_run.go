@@ -23,6 +23,7 @@ type notePeriodBriefCollectorRef struct {
 	WindowStart  string `json:"window_start"`
 	WindowEnd    string `json:"window_end"`
 	PackMarkdown string `json:"pack_markdown,omitempty"`
+	PackJobID    string `json:"pack_job_id,omitempty"`
 }
 
 type notePeriodBriefRunRow struct {
@@ -232,6 +233,53 @@ WHERE id = $3`, raw, status, runID)
 	return err
 }
 
+func (h *Handler) updateNotePeriodBriefRunStatus(ctx context.Context, runID pgtype.UUID, status string) error {
+	if strings.TrimSpace(status) == "" {
+		return nil
+	}
+	_, err := h.DB.Exec(ctx, `
+UPDATE note_period_brief_run
+SET status = $1, updated_at = now()
+WHERE id = $2`, status, runID)
+	return err
+}
+
+// mergeNotePeriodBriefCollector patches one collector object in place so two
+// machines submitting at once cannot clobber each other's pack or job_id.
+func (h *Handler) mergeNotePeriodBriefCollector(
+	ctx context.Context,
+	runID pgtype.UUID,
+	agentID string,
+	patch map[string]any,
+	status string,
+) error {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return fmt.Errorf("collector agent id is required")
+	}
+	raw, err := json.Marshal(patch)
+	if err != nil {
+		return err
+	}
+	_, err = h.DB.Exec(ctx, `
+UPDATE note_period_brief_run
+SET collectors = (
+      SELECT COALESCE(jsonb_agg(elem ORDER BY ord), '[]'::jsonb)
+      FROM (
+        SELECT
+          CASE WHEN c->>'agent_id' = $2 THEN c || $3::jsonb ELSE c END AS elem,
+          ordinality AS ord
+        FROM jsonb_array_elements(collectors) WITH ORDINALITY AS t(c, ordinality)
+      ) s
+    ),
+    status = CASE WHEN $4 <> '' THEN $4 ELSE status END,
+    updated_at = now()
+WHERE id = $1
+  AND collectors @> jsonb_build_array(jsonb_build_object('agent_id', $2::text))`,
+		runID, agentID, raw, strings.TrimSpace(status))
+	return err
+}
+
 func collectorRefsFromJobs(jobs []NoteWorkerJobResponse, windowLabel, windowStart, windowEnd string) []notePeriodBriefCollectorRef {
 	out := make([]notePeriodBriefCollectorRef, 0, len(jobs))
 	for _, job := range jobs {
@@ -299,8 +347,8 @@ func formatPeriodBriefRetryHint(draftPageID string) string {
 	return fmt.Sprintf(
 		"Retry only retryable collectors (never permanent config/auth/key failures) with:\n"+
 			"`multica notes period-brief retry-collectors --draft-page-id %s [--collector-agent-id <id>]`\n"+
-			"Max %d retries per collector. Platform rejects permanent failures and over-cap retries.\n"+
+			"Exactly one retry per collector. Inbox will not auto-retry. After that attempt settles, the result is final.\n"+
 			"After a successful retry call, stop and wait — the platform re-wakes you when packs settle.",
-		draftPageID, notePeriodBriefCollectorMaxRetries,
+		draftPageID,
 	)
 }

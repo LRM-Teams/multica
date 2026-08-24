@@ -5,20 +5,20 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, Copy, Download, FileText, Lock, MoreHorizontal, Plus, Settings2, Share2, Trash2, Undo2, Users } from "lucide-react";
 import { api } from "@multica/core/api";
 import { useAuthStore } from "@multica/core/auth";
+import { channelsOptions } from "@multica/core/channels/queries";
 import { useChatStore } from "@multica/core/chat";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { noteFormatCssVars, noteFormatExportCss, sanitizeTextStyle, type NoteFormatDefaults } from "@multica/core/notes/format";
 import { useNoteFormatStore } from "@multica/core/notes/format-store";
 import { syncNotePageRefsFromContent } from "@multica/core/notes/issue-refs";
-import { useCreateNotePage, useDeleteNotePage, useDuplicateNotePage, useMoveNotePage, usePermanentlyDeleteNotePage, useRestoreNotePage, useUpdateNotePage, useUpdateNotePageShares } from "@multica/core/notes/mutations";
-import { resolveNotesAssistantAgent } from "@multica/core/notes/notes-assistant-agent";
+import { useCreateNotePage, useDeleteNotePage, useDuplicateNotePage, useMoveNotePage, usePermanentlyDeleteNotePage, useRestoreNotePage, useUpdateNotePage } from "@multica/core/notes/mutations";
+import { requestInlineNotePageAI, resolveNotesAssistantAgent } from "@multica/core/notes/notes-assistant-agent";
 import { noteAIJobOptions, noteDetailOptions, noteListOptions, noteTrashOptions } from "@multica/core/notes/queries";
 import { useWorkspacePaths } from "@multica/core/paths";
-import type { Agent, MemberWithUser, NoteAIEditResult, NoteAIJobStatus, NotePage } from "@multica/core/types";
+import type { Agent, NoteAIEditResult, NoteAIJobStatus, NotePage } from "@multica/core/types";
 import { agentListOptions, memberListOptions, workspaceListOptions } from "@multica/core/workspace/queries";
 import { Button } from "@multica/ui/components/ui/button";
-import { Checkbox } from "@multica/ui/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@multica/ui/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@multica/ui/components/ui/dropdown-menu";
 import { Separator } from "@multica/ui/components/ui/separator";
@@ -32,6 +32,7 @@ import { PageHeader } from "../layout/page-header";
 import { useT } from "../i18n/use-t";
 import { noteAssistantSidebarReservePx } from "../chat/components/chat-window-layout";
 import { useNoteBubbleSidebarWidth } from "../chat/components/use-note-bubble-sidebar-width";
+import { NoteShareDialog } from "./note-share-dialog";
 import { NoteShareSummary } from "./note-share-summary";
 import { NoteWritebackReview } from "./note-writeback-review";
 import { NoteAssistantBubble } from "./note-assistant-bubble";
@@ -560,117 +561,6 @@ function NoteTreeRow({
   );
 }
 
-function ShareDialogBody({
-  page,
-  members,
-  workspaceName,
-  onOpenChange,
-}: {
-  page: NotePage;
-  members: MemberWithUser[];
-  workspaceName: string;
-  onOpenChange: (open: boolean) => void;
-}) {
-  const { t } = useT("layout");
-  const [selected, setSelected] = useState<Set<string>>(() => new Set(page.share_user_ids));
-  const updateShares = useUpdateNotePageShares();
-  const shareableMembers = members.filter((member) => member.user_id !== page.owner_user_id);
-  const allShareableSelected = shareableMembers.length > 0 && shareableMembers.every((member) => selected.has(member.user_id));
-
-  const save = async () => {
-    try {
-      await updateShares.mutateAsync({ id: page.id, data: { user_ids: [...selected] } });
-      toast.success(t(($) => $.notes_page.share_saved));
-      onOpenChange(false);
-    } catch (error) {
-      showErrorToast(error instanceof Error ? error.message : t(($) => $.notes_page.share_save_failed));
-    }
-  };
-
-  return (
-    <DialogContent>
-      <DialogHeader>
-        <DialogTitle>{t(($) => $.notes_page.share_title)}</DialogTitle>
-        <DialogDescription>{t(($) => $.notes_page.share_description)}</DialogDescription>
-      </DialogHeader>
-      <div className="max-h-72 space-y-2 overflow-y-auto py-2">
-        {shareableMembers.length === 0 ? (
-          <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">{t(($) => $.notes_page.no_other_members)}</div>
-        ) : (
-          shareableMembers.map((member) => {
-            const checked = selected.has(member.user_id);
-            const displayName = memberLabel(member);
-            const label = workspaceName
-              ? t(($) => $.notes_page.share_member_workspace_label, { name: displayName, workspace: workspaceName })
-              : displayName;
-            return (
-              <label key={member.user_id} className="flex cursor-pointer items-center gap-3 rounded-md px-2 py-2 hover:bg-muted/60">
-                <Checkbox
-                  checked={checked}
-                  onCheckedChange={(value) => {
-                    setSelected((current) => {
-                      const next = new Set(current);
-                      if (value) next.add(member.user_id);
-                      else next.delete(member.user_id);
-                      return next;
-                    });
-                  }}
-                />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-medium">{label}</span>
-                  <span className="block truncate text-xs text-muted-foreground">{member.email}</span>
-                </span>
-              </label>
-            );
-          })
-        )}
-      </div>
-      <DialogFooter>
-        {shareableMembers.length > 0 && (
-          <label className="mr-auto flex cursor-pointer items-center gap-2 rounded-md px-1 py-1 text-sm font-medium text-foreground hover:text-foreground/80">
-            <Checkbox
-              checked={allShareableSelected}
-              onCheckedChange={(value) => {
-                setSelected((current) => {
-                  const next = new Set(current);
-                  shareableMembers.forEach((member) => {
-                    if (value) next.add(member.user_id);
-                    else next.delete(member.user_id);
-                  });
-                  return next;
-                });
-              }}
-            />
-            <span>{t(($) => $.notes_page.select_all)}</span>
-          </label>
-        )}
-        <Button variant="outline" onClick={() => onOpenChange(false)}>{t(($) => $.notes_page.cancel)}</Button>
-        <Button onClick={save} disabled={updateShares.isPending}>{t(($) => $.notes_page.save)}</Button>
-      </DialogFooter>
-    </DialogContent>
-  );
-}
-
-function ShareDialog({
-  page,
-  members,
-  workspaceName,
-  open,
-  onOpenChange,
-}: {
-  page: NotePage | null;
-  members: MemberWithUser[];
-  workspaceName: string;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-}) {
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      {page ? <ShareDialogBody key={page.id} page={page} members={members} workspaceName={workspaceName} onOpenChange={onOpenChange} /> : null}
-    </Dialog>
-  );
-}
-
 function ExportDialog({
   page,
   open,
@@ -759,6 +649,7 @@ function NoteEditor({
   onEditPageWithAI: (request: PageEditAIRequest, options?: { signal?: AbortSignal; onStatus?: (status: NoteAIJobStatus) => void }) => Promise<NoteAIEditResult>;
 }) {
   const { t } = useT("layout");
+  const setNoteBubbleOpenPageId = useChatStore((s) => s.setNoteBubbleOpenPageId);
   const editorRef = useRef<ContentEditorRef | null>(null);
   const fontFamily = useNoteFormatStore((s) => s.fontFamily);
   const fontSize = useNoteFormatStore((s) => s.fontSize);
@@ -984,6 +875,10 @@ function NoteEditor({
         contentCssVars={contentCssVars}
         onAskAboutSelection={onAskAboutSelection}
         onEditPageWithAI={onEditPageWithAI}
+        onRequestPageAI={() => requestInlineNotePageAI({
+          agents,
+          openNotesBubble: () => setNoteBubbleOpenPageId(selected.id),
+        })}
         onApplyAITitle={(title) => setDraft((current) => ({ ...current, title }))}
         currentAITitle={draft.title}
       />
@@ -1002,6 +897,7 @@ export function NotesPage({ pageId }: { pageId?: string }) {
   const { data: trash = { pages: [] } } = useQuery(noteTrashOptions(wsId));
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
+  const { data: channels = [] } = useQuery(channelsOptions(wsId));
   const { data: workspaces = [] } = useQuery(workspaceListOptions());
   const selectedFromList = findNote(list.pages, pageId);
   const selectedId = pageId ?? selectedFromList?.id;
@@ -1048,11 +944,15 @@ export function NotesPage({ pageId }: { pageId?: string }) {
     () => selected ? buildNoteShareNames({
       shareUserIds: selected.share_user_ids,
       membersByUserId: selectedMembersByUserId,
+      shareAgentIds: selected.share_agent_ids ?? [],
+      agentsById: new Map(agents.map((agent) => [agent.id, agent])),
+      shareChannelIds: selected.share_channel_ids ?? [],
+      channelsById: new Map(channels.map((channel) => [channel.id, channel])),
       workspaceName: selectedWorkspaceName,
       unknownMemberLabel: t(($) => $.notes_page.share_member_unknown),
       formatName: (name, workspace) => t(($) => $.notes_page.share_member_workspace_label, { name, workspace }),
     }) : [],
-    [selected, selectedMembersByUserId, selectedWorkspaceName, t],
+    [agents, channels, selected, selectedMembersByUserId, selectedWorkspaceName, t],
   );
   const selectedOwnerName = selected ? memberLabel(currentMembersByUserId.get(selected.owner_user_id) ?? selectedMembersByUserId.get(selected.owner_user_id), selected.owner_user_id) : "";
   const createPage = useCreateNotePage();
@@ -1421,9 +1321,17 @@ export function NotesPage({ pageId }: { pageId?: string }) {
           style={{ width: sidebarReservePx }}
         />
       </div>
-      <ShareDialog page={sharePage} members={shareWorkspaceMembers} workspaceName={shareWorkspaceName} open={!!sharePage} onOpenChange={(open) => {
-        if (!open) setUiState((current) => ({ ...current, sharePage: null }));
-      }} />
+      <NoteShareDialog
+        page={sharePage}
+        members={shareWorkspaceMembers}
+        agents={agents}
+        channels={channels}
+        workspaceName={shareWorkspaceName}
+        open={!!sharePage}
+        onOpenChange={(open) => {
+          if (!open) setUiState((current) => ({ ...current, sharePage: null }));
+        }}
+      />
       <ExportDialog page={selected} open={exportOpen} onOpenChange={(open) => setUiState((current) => ({ ...current, exportOpen: open }))} />
       <NoteFormatDefaultsDialog open={formatDefaultsOpen} onOpenChange={(open) => setUiState((current) => ({ ...current, formatDefaultsOpen: open }))} />
       {selected && !showTrash ? (

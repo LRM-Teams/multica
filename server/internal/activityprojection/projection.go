@@ -113,7 +113,7 @@ var toolStartDetailKinds = map[string]string{
 // ActivityKindFromDetailKind is the one server-owned reduction from Raft's
 // execution fact vocabulary to Multica's compact lifecycle vocabulary. The
 // daemon may track an ActivityKind locally for heartbeat scheduling, but that
-// presentation state never crosses the Workspace Runner wire.
+// presentation state never crosses the WorkspaceDaemon wire.
 func ActivityKindFromDetailKind(detailKind string) string {
 	switch detailKind {
 	case "idle", "ready":

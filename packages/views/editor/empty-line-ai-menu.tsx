@@ -115,6 +115,7 @@ function EmptyLineAiMenu({
   state,
   onChange,
   onEditPageWithAI,
+  onRequestPageAI,
   onApplyTitle,
   currentTitle,
   onClose,
@@ -123,6 +124,7 @@ function EmptyLineAiMenu({
   state: EmptyLineAiState;
   onChange: (state: EmptyLineAiState) => void;
   onEditPageWithAI: PageEditAIAction;
+  onRequestPageAI?: () => boolean;
   onApplyTitle?: (title: string) => void;
   currentTitle?: string;
   onClose: () => void;
@@ -216,6 +218,10 @@ function EmptyLineAiMenu({
 
   const submit = useCallback(async () => {
     if (state.status === "loading" || closedRef.current) return;
+    if (onRequestPageAI && !onRequestPageAI()) {
+      close();
+      return;
+    }
     const request = buildRequest(editor, state);
     const abort = new AbortController();
     abortRef.current = abort;
@@ -244,7 +250,7 @@ function EmptyLineAiMenu({
     } finally {
       if (abortRef.current === abort) abortRef.current = null;
     }
-  }, [editor, onChange, onEditPageWithAI, state, t]);
+  }, [close, editor, onChange, onEditPageWithAI, onRequestPageAI, state, t]);
 
   const cancelLoading = () => {
     if (state.status !== "loading") return;

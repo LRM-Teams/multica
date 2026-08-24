@@ -95,7 +95,7 @@ const (
 // stale window — that is the original behavior.
 //
 // LRM-1571: presence (the daemon WebSocket Hub) is consulted first. A
-// runtime whose Workspace Runner socket is currently connected is alive by
+// runtime whose WorkspaceDaemon socket is currently connected is alive by
 // definition — WS-capable daemons no longer heartbeat on the socket path,
 // so their last_seen_at goes stale without meaning they are dead. Legacy
 // daemons (no socket) keep the heartbeat/liveness path below untouched.
@@ -147,7 +147,7 @@ func sweepStaleRuntimes(ctx context.Context, queries *db.Queries, liveness handl
 		return
 	}
 
-	// LRM-1571: skip candidates with a live Workspace Runner socket — those
+	// LRM-1571: skip candidates with a live WorkspaceDaemon socket — those
 	// are WS-capable daemons that simply stopped heartbeating; they are alive.
 	candidates = filterStaleRuntimesByPresence(candidates, presence)
 	if len(candidates) == 0 {
@@ -236,7 +236,7 @@ func sweepStaleSandboxNodes(ctx context.Context, queries *db.Queries) {
 }
 
 // filterStaleRuntimesByPresence drops stale-DB candidates whose Computer
-// currently has a live Workspace Runner socket for their daemon/workspace.
+// currently has a live WorkspaceDaemon socket for their daemon/workspace.
 // Socket presence is computer liveness (LRM-1571): a WS-connected runtime is
 // online even when last_seen_at is old because WS-capable daemons no longer
 // send heartbeat frames. A nil presence (no Hub wired, e.g. unit tests)

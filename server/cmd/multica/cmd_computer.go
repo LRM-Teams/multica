@@ -258,7 +258,7 @@ func runBindingChild(ctx context.Context, bootstrap computer.BindingChildBootstr
 	cfg.WorkspacesRoot = bootstrap.WorkspacesRoot
 	controlToken, err := computer.ReadControlToken(bootstrap.Profile)
 	if err != nil {
-		return fmt.Errorf("read Computer Host control token: %w", err)
+		return fmt.Errorf("read ComputerCore control token: %w", err)
 	}
 	cfg.LocalControlToken = controlToken
 	logger := logger_pkg.NewLogger("runner").With("workspace_id", bootstrap.WorkspaceID)

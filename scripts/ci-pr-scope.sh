@@ -64,6 +64,7 @@ FORCE_FULL_FILES=(
   scripts/ci-pr-scope.sh
   scripts/ci-expand-go-packages.sh
   scripts/ci-turbo-web.sh
+  scripts/ci-turbo-web-dry-run.py
 )
 
 for path in "${FORCE_FULL_FILES[@]}"; do

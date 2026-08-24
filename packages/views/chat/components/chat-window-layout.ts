@@ -90,6 +90,42 @@ export function chatWindowClosesOnOutsideClick(layout: ChatWindowLayout): boolea
   return layout === "floating";
 }
 
+/** Notes rail (desktop) and the mobile notes sheet. Not the global FAB card. */
+export function chatWindowClosesOnEscape(layout: ChatWindowLayout): boolean {
+  return layout === "sidebar" || layout === "fullscreen";
+}
+
+/**
+ * Portals that consume Escape themselves (dialog, menu, session popover).
+ * Tooltips are omitted — they must not block closing the rail.
+ */
+export const CHAT_WINDOW_ESCAPE_LAYER_OWNERS = [
+  '[data-slot="popover-content"]',
+  '[data-slot="dialog-content"]',
+  '[data-slot="dialog-overlay"]',
+  '[data-slot="alert-dialog-content"]',
+  '[data-slot="alert-dialog-overlay"]',
+  '[data-slot="dropdown-menu-content"]',
+  '[data-slot="dropdown-menu-sub-content"]',
+  '[data-slot="select-content"]',
+  '[data-slot="sheet-content"]',
+  '[data-slot="sheet-overlay"]',
+] as const;
+
+export function chatWindowEscapeLayerSelector(): string {
+  return CHAT_WINDOW_ESCAPE_LAYER_OWNERS.join(",");
+}
+
+/** True when this Escape should minimize the notes bubble (same as the header Minus). */
+export function chatWindowEscapeClosesNoteBubble(
+  event: Pick<KeyboardEvent, "key" | "defaultPrevented">,
+  root: ParentNode | null = typeof document === "undefined" ? null : document,
+): boolean {
+  if (event.key !== "Escape" || event.defaultPrevented) return false;
+  if (!root) return true;
+  return root.querySelector(chatWindowEscapeLayerSelector()) === null;
+}
+
 /** Width the Notes page must reserve so the editor recenters beside the rail. */
 export function noteAssistantSidebarReservePx(
   open: boolean,

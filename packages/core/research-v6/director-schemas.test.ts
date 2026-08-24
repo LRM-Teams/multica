@@ -159,6 +159,52 @@ describe("Director V6 projection wire schemas", () => {
     expect(parsed.view).toBe("future_audit_view");
   });
 
+  it("keeps the immutable objective and conclusion in result node detail", async () => {
+    const schemas = await import("./director-schemas");
+    const parsed = schemas.parseResearchV6DirectorNodeDetail({
+      snapshot_id: SNAPSHOT_ID,
+      through_event_sequence: 47,
+      projection_hash: HASH,
+      view: "full",
+      node: {
+        ...snapshot().nodes[0],
+        id: "result_s:one",
+        kind: "result_s",
+        tier: "S",
+        canonical_ref: { kind: "result", id: ID, revision: 1 },
+      },
+      content_layers: {
+        catalog_summary: "Bounded catalog summary",
+        brief_summary: "Brief result summary",
+        objective: "Verify which AI employee products are active.",
+        conclusion: "Three products have public evidence of active development.",
+        content: "The evidence and comparison behind the conclusion.",
+        scope: { market: "global" },
+        uncertainties: ["Private deployments are not observable."],
+        conflicts: [],
+        open_questions: ["Which products publish retention data?"],
+      },
+      incoming: [],
+      outgoing: [],
+      history_refs: [],
+      agent_refs: [],
+      work_item_refs: [],
+      attempt_refs: [],
+      evidence_refs: [],
+      discussion_refs: [],
+      report_refs: [],
+    }) as ReturnType<typeof schemas.parseResearchV6DirectorNodeDetail> & {
+      contentLayers?: { objective: string; conclusion: string };
+    };
+
+    expect(parsed.contentLayers?.objective).toBe(
+      "Verify which AI employee products are active.",
+    );
+    expect(parsed.contentLayers?.conclusion).toBe(
+      "Three products have public evidence of active development.",
+    );
+  });
+
   it("fixes derivation expansion depth to exactly one layer", () => {
     expect(
       encodeResearchV6DirectorProjectionSliceRequest({

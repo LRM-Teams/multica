@@ -204,7 +204,10 @@ export function ResearchListPage() {
   const fleetQuery = useQuery(researchFleetOptions(wsId));
   const agentsQuery = useQuery(agentListOptions(wsId));
   const availableDirectors = (agentsQuery.data ?? []).filter(
-    (agent) => agent.archived_at == null,
+    (agent) =>
+      agent.archived_at == null &&
+      Boolean(agent.runtime_id) &&
+      agent.runtime_status === "online",
   );
   const selectedDirectorId =
     orchestratorVersion === "research-run-v6"
@@ -467,12 +470,31 @@ export function ResearchListPage() {
   };
 
   // LRM-787: keep the draft on failure and surface the error inside the card.
-  const createError =
-    create.isError && create.error instanceof Error && create.error.message
-      ? create.error.message
-      : create.isError
-        ? t(($) => $.home.create_failed)
-        : null;
+  const createErrorBody =
+    create.isError &&
+    typeof create.error === "object" &&
+    create.error != null &&
+    "body" in create.error &&
+    typeof create.error.body === "object" &&
+    create.error.body != null
+      ? (create.error.body as { code?: unknown })
+      : null;
+  const createErrorCode =
+    typeof createErrorBody?.code === "string" ? createErrorBody.code : null;
+  const localizedCreateError =
+    createErrorCode === "research.v6.director_runtime_offline"
+      ? t(($) => $.home.director_runtime_offline)
+      : createErrorCode === "research.v6.bootstrap_pending"
+        ? t(($) => $.home.bootstrap_pending)
+        : createErrorCode?.startsWith("research.v6.director_")
+          ? t(($) => $.home.director_unavailable)
+          : null;
+  const createError = create.isError
+    ? localizedCreateError ??
+      (create.error instanceof Error && create.error.message
+        ? create.error.message
+        : t(($) => $.home.create_failed))
+    : null;
   if (createError) lastCreateErrorRef.current = createError;
   const visibleCreateError =
     createError ?? (createRetrying ? lastCreateErrorRef.current : null);
@@ -529,7 +551,7 @@ export function ResearchListPage() {
     return (
       <div className="space-y-6">
         {inProgress.length > 0 && (
-          <section>
+          <section data-testid="research-session-group-in-progress">
             <h2 className="px-3 text-xs font-medium text-muted-foreground">
               {t(($) => $.groups.in_progress)}
               <span className="ml-1.5 tabular-nums font-medium">
@@ -540,7 +562,7 @@ export function ResearchListPage() {
           </section>
         )}
         {completed.length > 0 && (
-          <section>
+          <section data-testid="research-session-group-completed">
             <h2 className="px-3 text-xs font-medium text-muted-foreground">
               {t(($) => $.groups.completed)}
               <span className="ml-1.5 tabular-nums font-medium">
@@ -551,7 +573,7 @@ export function ResearchListPage() {
           </section>
         )}
         {failed.length > 0 && (
-          <section>
+          <section data-testid="research-session-group-failed">
             <h2 className="px-3 text-xs font-medium text-muted-foreground">
               {t(($) => $.filter.status_failed)}
               <span className="ml-1.5 tabular-nums font-medium">
@@ -811,6 +833,13 @@ export function ResearchListPage() {
                     </Button>
                   </div>
                 </div>
+                {orchestratorVersion === "research-run-v6" &&
+                !agentsQuery.isLoading &&
+                availableDirectors.length === 0 ? (
+                  <p className="border-t px-3 py-2 text-xs text-destructive md:px-3.5" role="alert">
+                    {t(($) => $.home.no_available_director)}
+                  </p>
+                ) : null}
               </div>
 
               <ResearchCreateParamsPanel

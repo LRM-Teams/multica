@@ -133,7 +133,9 @@ func (s *PostgresStore) ProjectionV6WorkActivity(ctx context.Context, workspaceI
 		v6WorkActivityTimelineLimit+1,
 	)
 	if err != nil {
-		return V6WorkActivity{}, err
+		// Runner Activity is presentation-only. Keep the Work mission and
+		// canonical status available when its auxiliary timeline is unavailable.
+		return activity, nil
 	}
 	defer rows.Close()
 	fallback := activityprojection.Summary{Label: "正在处理任务...", Tone: "warning", Visibility: "visible"}
@@ -141,7 +143,8 @@ func (s *PostgresStore) ProjectionV6WorkActivity(ctx context.Context, workspaceI
 		var row V6WorkActivityTimelineRow
 		var entry protocol.AgentActivityEntry
 		if err := rows.Scan(&row.ID, &entry.Kind, &entry.Body, &row.OccurredAt); err != nil {
-			return V6WorkActivity{}, err
+			activity.Timeline = activity.Timeline[:0]
+			return activity, nil
 		}
 		if len(activity.Timeline) == v6WorkActivityTimelineLimit {
 			activity.TimelineHasMore = true
@@ -151,7 +154,9 @@ func (s *PostgresStore) ProjectionV6WorkActivity(ctx context.Context, workspaceI
 		activity.Timeline = append(activity.Timeline, row)
 	}
 	if err := rows.Err(); err != nil {
-		return V6WorkActivity{}, err
+		activity.Timeline = activity.Timeline[:0]
+		activity.TimelineHasMore = false
+		return activity, nil
 	}
 	return activity, nil
 }

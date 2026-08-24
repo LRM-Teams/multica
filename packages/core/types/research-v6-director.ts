@@ -200,12 +200,25 @@ export type ResearchV6DirectorNodeDetailView =
   | "history"
   | (string & {});
 
+export interface ResearchV6DirectorContentLayers {
+  catalogSummary: string;
+  briefSummary: string;
+  objective: string;
+  conclusion: string;
+  content: string;
+  scope: Record<string, unknown>;
+  uncertainties: string[];
+  conflicts: string[];
+  openQuestions: string[];
+}
+
 export interface ResearchV6DirectorNodeDetail {
   snapshotId: string;
   throughEventSequence: number;
   projectionHash: string;
   view: ResearchV6DirectorNodeDetailView;
   node: ResearchV6DirectorProjectionNode;
+  contentLayers?: ResearchV6DirectorContentLayers;
   incoming: ResearchV6DirectorProjectionEdge[];
   outgoing: ResearchV6DirectorProjectionEdge[];
   historyRefs: ResearchV6DirectorEntityRef[];

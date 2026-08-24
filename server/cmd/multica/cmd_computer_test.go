@@ -86,7 +86,7 @@ func TestComputerResidentConstructsComputerHostWithoutDaemonContainer(t *testing
 					if owner.Name == "daemon" {
 						t.Errorf("%s: Computer resident must not depend on internal/daemon (%s)", filename, selector.Sel.Name)
 					}
-					if owner.Name == "computer" && selector.Sel.Name == "NewHost" {
+					if owner.Name == "computer" && selector.Sel.Name == "NewComputerCore" {
 						foundComputerHost = true
 					}
 					return true
@@ -96,7 +96,7 @@ func TestComputerResidentConstructsComputerHostWithoutDaemonContainer(t *testing
 		}
 	}
 	if !foundComputerHost {
-		t.Fatal("Computer resident does not construct computer.Host")
+		t.Fatal("Computer resident does not construct computer.ComputerCore")
 	}
 }
 

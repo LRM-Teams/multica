@@ -209,7 +209,7 @@ UPDATE agent_inbox_event
 SET status = 'suppressed', terminal_outcome = 'cancelled',
     completed_at = now(), terminal_at = now(), acked_at = now()
 WHERE id = $1 AND status IN ('pending', 'draining', 'failed')
-RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn
+RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn, issue_run_kind, issue_execution_revision, issue_execution_attempt_number
 `
 
 func (q *Queries) CancelAgentTask(ctx context.Context, id pgtype.UUID) (AgentInboxEvent, error) {
@@ -267,6 +267,9 @@ func (q *Queries) CancelAgentTask(ctx context.Context, id pgtype.UUID) (AgentInb
 		&i.InitiatorUserID,
 		&i.AgentDmExchangeID,
 		&i.AgentDmTurn,
+		&i.IssueRunKind,
+		&i.IssueExecutionRevision,
+		&i.IssueExecutionAttemptNumber,
 	)
 	return i, err
 }
@@ -276,7 +279,7 @@ UPDATE agent_inbox_event
 SET status = 'suppressed', terminal_outcome = 'cancelled',
     completed_at = now(), terminal_at = now(), acked_at = now()
 WHERE agent_id = $1 AND status IN ('pending', 'draining', 'failed')
-RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn
+RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn, issue_run_kind, issue_execution_revision, issue_execution_attempt_number
 `
 
 // Bulk-cancel every active (queued/dispatched/running) task for an agent.
@@ -345,6 +348,9 @@ func (q *Queries) CancelAgentTasksByAgent(ctx context.Context, agentID pgtype.UU
 			&i.InitiatorUserID,
 			&i.AgentDmExchangeID,
 			&i.AgentDmTurn,
+			&i.IssueRunKind,
+			&i.IssueExecutionRevision,
+			&i.IssueExecutionAttemptNumber,
 		); err != nil {
 			return nil, err
 		}
@@ -361,7 +367,7 @@ UPDATE agent_inbox_event
 SET status = 'suppressed', terminal_outcome = 'cancelled',
     completed_at = now(), terminal_at = now(), acked_at = now()
 WHERE chat_session_id = $1 AND status IN ('pending', 'draining', 'failed')
-RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn
+RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn, issue_run_kind, issue_execution_revision, issue_execution_attempt_number
 `
 
 // Cancels active tasks belonging to a chat session. Called from
@@ -430,6 +436,9 @@ func (q *Queries) CancelAgentTasksByChatSession(ctx context.Context, chatSession
 			&i.InitiatorUserID,
 			&i.AgentDmExchangeID,
 			&i.AgentDmTurn,
+			&i.IssueRunKind,
+			&i.IssueExecutionRevision,
+			&i.IssueExecutionAttemptNumber,
 		); err != nil {
 			return nil, err
 		}
@@ -446,7 +455,7 @@ UPDATE agent_inbox_event
 SET status = 'suppressed', terminal_outcome = 'cancelled',
     completed_at = now(), terminal_at = now(), acked_at = now()
 WHERE issue_id = $1 AND status IN ('pending', 'draining', 'failed')
-RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn
+RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn, issue_run_kind, issue_execution_revision, issue_execution_attempt_number
 `
 
 // Cancels every active task on the issue and returns the affected rows so the
@@ -515,6 +524,9 @@ func (q *Queries) CancelAgentTasksByIssue(ctx context.Context, issueID pgtype.UU
 			&i.InitiatorUserID,
 			&i.AgentDmExchangeID,
 			&i.AgentDmTurn,
+			&i.IssueRunKind,
+			&i.IssueExecutionRevision,
+			&i.IssueExecutionAttemptNumber,
 		); err != nil {
 			return nil, err
 		}
@@ -531,7 +543,7 @@ UPDATE agent_inbox_event
 SET status = 'suppressed', terminal_outcome = 'cancelled',
     completed_at = now(), terminal_at = now(), acked_at = now()
 WHERE issue_id = $1 AND agent_id = $2 AND status IN ('pending', 'draining', 'failed')
-RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn
+RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn, issue_run_kind, issue_execution_revision, issue_execution_attempt_number
 `
 
 type CancelAgentTasksByIssueAndAgentParams struct {
@@ -604,6 +616,9 @@ func (q *Queries) CancelAgentTasksByIssueAndAgent(ctx context.Context, arg Cance
 			&i.InitiatorUserID,
 			&i.AgentDmExchangeID,
 			&i.AgentDmTurn,
+			&i.IssueRunKind,
+			&i.IssueExecutionRevision,
+			&i.IssueExecutionAttemptNumber,
 		); err != nil {
 			return nil, err
 		}
@@ -620,7 +635,7 @@ UPDATE agent_inbox_event
 SET status = 'suppressed', terminal_outcome = 'cancelled',
     completed_at = now(), terminal_at = now(), acked_at = now()
 WHERE trigger_comment_id = $1 AND status IN ('pending', 'draining', 'failed')
-RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn
+RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn, issue_run_kind, issue_execution_revision, issue_execution_attempt_number
 `
 
 // Cancels active tasks whose trigger is the given comment. Called when a
@@ -689,6 +704,9 @@ func (q *Queries) CancelAgentTasksByTriggerComment(ctx context.Context, triggerC
 			&i.InitiatorUserID,
 			&i.AgentDmExchangeID,
 			&i.AgentDmTurn,
+			&i.IssueRunKind,
+			&i.IssueExecutionRevision,
+			&i.IssueExecutionAttemptNumber,
 		); err != nil {
 			return nil, err
 		}
@@ -706,7 +724,7 @@ SET status = 'suppressed', terminal_outcome = 'cancelled',
     completed_at = now(), terminal_at = now(), acked_at = now(),
     failure_reason = 'followup_interrupt'
 WHERE chat_session_id = $1 AND agent_id = $2 AND id <> $3 AND status = 'draining'
-RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn
+RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn, issue_run_kind, issue_execution_revision, issue_execution_attempt_number
 `
 
 type CancelInFlightChatTasksBySessionAndAgentParams struct {
@@ -778,6 +796,9 @@ func (q *Queries) CancelInFlightChatTasksBySessionAndAgent(ctx context.Context, 
 			&i.InitiatorUserID,
 			&i.AgentDmExchangeID,
 			&i.AgentDmTurn,
+			&i.IssueRunKind,
+			&i.IssueExecutionRevision,
+			&i.IssueExecutionAttemptNumber,
 		); err != nil {
 			return nil, err
 		}
@@ -795,7 +816,7 @@ SET status = 'suppressed', terminal_outcome = 'cancelled',
     completed_at = now(), terminal_at = now(), acked_at = now(),
     failure_reason = 'followup_interrupt'
 WHERE issue_id = $1 AND agent_id = $2 AND id <> $3 AND status = 'draining'
-RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn
+RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn, issue_run_kind, issue_execution_revision, issue_execution_attempt_number
 `
 
 type CancelInFlightTasksByIssueAndAgentParams struct {
@@ -868,6 +889,9 @@ func (q *Queries) CancelInFlightTasksByIssueAndAgent(ctx context.Context, arg Ca
 			&i.InitiatorUserID,
 			&i.AgentDmExchangeID,
 			&i.AgentDmTurn,
+			&i.IssueRunKind,
+			&i.IssueExecutionRevision,
+			&i.IssueExecutionAttemptNumber,
 		); err != nil {
 			return nil, err
 		}
@@ -1010,7 +1034,7 @@ SET status = 'acked', completed_at = now(), terminal_at = now(),
     terminal_outcome = 'completed', retryable = false, acked_at = now(),
     result = $2, session_id = $3, work_dir = $4
 WHERE id = $1 AND status = 'draining'
-RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn
+RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn, issue_run_kind, issue_execution_revision, issue_execution_attempt_number
 `
 
 type CompleteAgentTaskParams struct {
@@ -1080,6 +1104,9 @@ func (q *Queries) CompleteAgentTask(ctx context.Context, arg CompleteAgentTaskPa
 		&i.InitiatorUserID,
 		&i.AgentDmExchangeID,
 		&i.AgentDmTurn,
+		&i.IssueRunKind,
+		&i.IssueExecutionRevision,
+		&i.IssueExecutionAttemptNumber,
 	)
 	return i, err
 }
@@ -1228,7 +1255,7 @@ SELECT
     $2
 FROM agent a
 WHERE a.id = $9
-RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn
+RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn, issue_run_kind, issue_execution_revision, issue_execution_attempt_number
 `
 
 type CreateAgentTaskParams struct {
@@ -1308,6 +1335,9 @@ func (q *Queries) CreateAgentTask(ctx context.Context, arg CreateAgentTaskParams
 		&i.InitiatorUserID,
 		&i.AgentDmExchangeID,
 		&i.AgentDmTurn,
+		&i.IssueRunKind,
+		&i.IssueExecutionRevision,
+		&i.IssueExecutionAttemptNumber,
 	)
 	return i, err
 }
@@ -1323,7 +1353,7 @@ SELECT
   NULL, 'quick_create', true, 'pending', $3, $2
 FROM agent a
 WHERE a.id = $4
-RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn
+RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn, issue_run_kind, issue_execution_revision, issue_execution_attempt_number
 `
 
 type CreateQuickCreateTaskParams struct {
@@ -1396,6 +1426,9 @@ func (q *Queries) CreateQuickCreateTask(ctx context.Context, arg CreateQuickCrea
 		&i.InitiatorUserID,
 		&i.AgentDmExchangeID,
 		&i.AgentDmTurn,
+		&i.IssueRunKind,
+		&i.IssueExecutionRevision,
+		&i.IssueExecutionAttemptNumber,
 	)
 	return i, err
 }
@@ -1423,7 +1456,7 @@ SELECT
     p.is_leader_task
 FROM agent_inbox_event p
 WHERE p.id = $3
-RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn
+RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn, issue_run_kind, issue_execution_revision, issue_execution_attempt_number
 `
 
 type CreateRetryTaskParams struct {
@@ -1496,6 +1529,9 @@ func (q *Queries) CreateRetryTask(ctx context.Context, arg CreateRetryTaskParams
 		&i.InitiatorUserID,
 		&i.AgentDmExchangeID,
 		&i.AgentDmTurn,
+		&i.IssueRunKind,
+		&i.IssueExecutionRevision,
+		&i.IssueExecutionAttemptNumber,
 	)
 	return i, err
 }
@@ -1527,7 +1563,7 @@ WHERE t.id = v.id
   AND NULLIF(t.context->'ephemeral_sandbox'->>'sandbox_instance_id', '') IS NOT NULL
   AND t.created_at < now() - make_interval(secs => $1::double precision)
   AND EXISTS (SELECT 1 FROM agent_runtime r WHERE r.id = t.runtime_id AND r.status = 'offline')
-RETURNING t.id, t.workspace_id, t.agent_session_id, t.conversation_id, t.channel_id, t.chat_session_id, t.agent_id, t.source_message_id, t.reason, t.requires_wake, t.status, t.priority, t.seq_from, t.seq_to, t.attempt, t.last_error, t.claimed_at, t.acked_at, t.created_at, t.updated_at, t.terminal_outcome, t.terminal_delivery_id, t.retryable, t.terminal_at, t.runtime_id, t.execution_config, t.delivery_mode, t.response_mode, t.channel_onboarding_id, t.issue_id, t.source_chat_message_id, t.context, t.dispatched_at, t.started_at, t.completed_at, t.result, t.error, t.session_id, t.work_dir, t.trigger_comment_id, t.autopilot_run_id, t.max_attempts, t.parent_task_id, t.failure_reason, t.trigger_summary, t.force_fresh_session, t.is_leader_task, t.wait_reason, t.initiator_user_id, t.agent_dm_exchange_id, t.agent_dm_turn
+RETURNING t.id, t.workspace_id, t.agent_session_id, t.conversation_id, t.channel_id, t.chat_session_id, t.agent_id, t.source_message_id, t.reason, t.requires_wake, t.status, t.priority, t.seq_from, t.seq_to, t.attempt, t.last_error, t.claimed_at, t.acked_at, t.created_at, t.updated_at, t.terminal_outcome, t.terminal_delivery_id, t.retryable, t.terminal_at, t.runtime_id, t.execution_config, t.delivery_mode, t.response_mode, t.channel_onboarding_id, t.issue_id, t.source_chat_message_id, t.context, t.dispatched_at, t.started_at, t.completed_at, t.result, t.error, t.session_id, t.work_dir, t.trigger_comment_id, t.autopilot_run_id, t.max_attempts, t.parent_task_id, t.failure_reason, t.trigger_summary, t.force_fresh_session, t.is_leader_task, t.wait_reason, t.initiator_user_id, t.agent_dm_exchange_id, t.agent_dm_turn, t.issue_run_kind, t.issue_execution_revision, t.issue_execution_attempt_number
 `
 
 type ExpireQueuedTasksOnOfflineRuntimesParams struct {
@@ -1615,6 +1651,9 @@ func (q *Queries) ExpireQueuedTasksOnOfflineRuntimes(ctx context.Context, arg Ex
 			&i.InitiatorUserID,
 			&i.AgentDmExchangeID,
 			&i.AgentDmTurn,
+			&i.IssueRunKind,
+			&i.IssueExecutionRevision,
+			&i.IssueExecutionAttemptNumber,
 		); err != nil {
 			return nil, err
 		}
@@ -1660,7 +1699,7 @@ WHERE t.id = v.id
       AND r.last_seen_at IS NOT NULL
       AND r.last_seen_at < now() - make_interval(secs => $2::double precision)
   )
-RETURNING t.id, t.workspace_id, t.agent_session_id, t.conversation_id, t.channel_id, t.chat_session_id, t.agent_id, t.source_message_id, t.reason, t.requires_wake, t.status, t.priority, t.seq_from, t.seq_to, t.attempt, t.last_error, t.claimed_at, t.acked_at, t.created_at, t.updated_at, t.terminal_outcome, t.terminal_delivery_id, t.retryable, t.terminal_at, t.runtime_id, t.execution_config, t.delivery_mode, t.response_mode, t.channel_onboarding_id, t.issue_id, t.source_chat_message_id, t.context, t.dispatched_at, t.started_at, t.completed_at, t.result, t.error, t.session_id, t.work_dir, t.trigger_comment_id, t.autopilot_run_id, t.max_attempts, t.parent_task_id, t.failure_reason, t.trigger_summary, t.force_fresh_session, t.is_leader_task, t.wait_reason, t.initiator_user_id, t.agent_dm_exchange_id, t.agent_dm_turn
+RETURNING t.id, t.workspace_id, t.agent_session_id, t.conversation_id, t.channel_id, t.chat_session_id, t.agent_id, t.source_message_id, t.reason, t.requires_wake, t.status, t.priority, t.seq_from, t.seq_to, t.attempt, t.last_error, t.claimed_at, t.acked_at, t.created_at, t.updated_at, t.terminal_outcome, t.terminal_delivery_id, t.retryable, t.terminal_at, t.runtime_id, t.execution_config, t.delivery_mode, t.response_mode, t.channel_onboarding_id, t.issue_id, t.source_chat_message_id, t.context, t.dispatched_at, t.started_at, t.completed_at, t.result, t.error, t.session_id, t.work_dir, t.trigger_comment_id, t.autopilot_run_id, t.max_attempts, t.parent_task_id, t.failure_reason, t.trigger_summary, t.force_fresh_session, t.is_leader_task, t.wait_reason, t.initiator_user_id, t.agent_dm_exchange_id, t.agent_dm_turn, t.issue_run_kind, t.issue_execution_revision, t.issue_execution_attempt_number
 `
 
 type ExpireStaleQueuedTasksParams struct {
@@ -1781,6 +1820,9 @@ func (q *Queries) ExpireStaleQueuedTasks(ctx context.Context, arg ExpireStaleQue
 			&i.InitiatorUserID,
 			&i.AgentDmExchangeID,
 			&i.AgentDmTurn,
+			&i.IssueRunKind,
+			&i.IssueExecutionRevision,
+			&i.IssueExecutionAttemptNumber,
 		); err != nil {
 			return nil, err
 		}
@@ -1805,7 +1847,7 @@ SET status = 'acked',
     session_id = COALESCE($4, session_id),
     work_dir = COALESCE($5, work_dir)
 WHERE id = $1 AND status = 'draining'
-RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn
+RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn, issue_run_kind, issue_execution_revision, issue_execution_attempt_number
 `
 
 type FailAgentTaskParams struct {
@@ -1886,6 +1928,9 @@ func (q *Queries) FailAgentTask(ctx context.Context, arg FailAgentTaskParams) (A
 		&i.InitiatorUserID,
 		&i.AgentDmExchangeID,
 		&i.AgentDmTurn,
+		&i.IssueRunKind,
+		&i.IssueExecutionRevision,
+		&i.IssueExecutionAttemptNumber,
 	)
 	return i, err
 }
@@ -1906,7 +1951,7 @@ WHERE status = 'draining'
     (started_at IS NULL AND claimed_at < now() - make_interval(secs => $1::double precision))
     OR (started_at < now() - make_interval(secs => $2::double precision))
   )
-RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn
+RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn, issue_run_kind, issue_execution_revision, issue_execution_attempt_number
 `
 
 type FailStaleTasksParams struct {
@@ -1978,6 +2023,9 @@ func (q *Queries) FailStaleTasks(ctx context.Context, arg FailStaleTasksParams) 
 			&i.InitiatorUserID,
 			&i.AgentDmExchangeID,
 			&i.AgentDmTurn,
+			&i.IssueRunKind,
+			&i.IssueExecutionRevision,
+			&i.IssueExecutionAttemptNumber,
 		); err != nil {
 			return nil, err
 		}
@@ -2085,7 +2133,7 @@ func (q *Queries) GetAgentInWorkspace(ctx context.Context, arg GetAgentInWorkspa
 }
 
 const getAgentTask = `-- name: GetAgentTask :one
-SELECT id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn FROM agent_inbox_event
+SELECT id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn, issue_run_kind, issue_execution_revision, issue_execution_attempt_number FROM agent_inbox_event
 WHERE id = $1
 `
 
@@ -2144,12 +2192,15 @@ func (q *Queries) GetAgentTask(ctx context.Context, id pgtype.UUID) (AgentInboxE
 		&i.InitiatorUserID,
 		&i.AgentDmExchangeID,
 		&i.AgentDmTurn,
+		&i.IssueRunKind,
+		&i.IssueExecutionRevision,
+		&i.IssueExecutionAttemptNumber,
 	)
 	return i, err
 }
 
 const getAgentTaskInWorkspace = `-- name: GetAgentTaskInWorkspace :one
-SELECT atq.id, atq.workspace_id, atq.agent_session_id, atq.conversation_id, atq.channel_id, atq.chat_session_id, atq.agent_id, atq.source_message_id, atq.reason, atq.requires_wake, atq.status, atq.priority, atq.seq_from, atq.seq_to, atq.attempt, atq.last_error, atq.claimed_at, atq.acked_at, atq.created_at, atq.updated_at, atq.terminal_outcome, atq.terminal_delivery_id, atq.retryable, atq.terminal_at, atq.runtime_id, atq.execution_config, atq.delivery_mode, atq.response_mode, atq.channel_onboarding_id, atq.issue_id, atq.source_chat_message_id, atq.context, atq.dispatched_at, atq.started_at, atq.completed_at, atq.result, atq.error, atq.session_id, atq.work_dir, atq.trigger_comment_id, atq.autopilot_run_id, atq.max_attempts, atq.parent_task_id, atq.failure_reason, atq.trigger_summary, atq.force_fresh_session, atq.is_leader_task, atq.wait_reason, atq.initiator_user_id, atq.agent_dm_exchange_id, atq.agent_dm_turn FROM agent_inbox_event atq
+SELECT atq.id, atq.workspace_id, atq.agent_session_id, atq.conversation_id, atq.channel_id, atq.chat_session_id, atq.agent_id, atq.source_message_id, atq.reason, atq.requires_wake, atq.status, atq.priority, atq.seq_from, atq.seq_to, atq.attempt, atq.last_error, atq.claimed_at, atq.acked_at, atq.created_at, atq.updated_at, atq.terminal_outcome, atq.terminal_delivery_id, atq.retryable, atq.terminal_at, atq.runtime_id, atq.execution_config, atq.delivery_mode, atq.response_mode, atq.channel_onboarding_id, atq.issue_id, atq.source_chat_message_id, atq.context, atq.dispatched_at, atq.started_at, atq.completed_at, atq.result, atq.error, atq.session_id, atq.work_dir, atq.trigger_comment_id, atq.autopilot_run_id, atq.max_attempts, atq.parent_task_id, atq.failure_reason, atq.trigger_summary, atq.force_fresh_session, atq.is_leader_task, atq.wait_reason, atq.initiator_user_id, atq.agent_dm_exchange_id, atq.agent_dm_turn, atq.issue_run_kind, atq.issue_execution_revision, atq.issue_execution_attempt_number FROM agent_inbox_event atq
 JOIN agent a ON a.id = atq.agent_id
 WHERE atq.id = $1 AND a.workspace_id = $2
 `
@@ -2221,6 +2272,9 @@ func (q *Queries) GetAgentTaskInWorkspace(ctx context.Context, arg GetAgentTaskI
 		&i.InitiatorUserID,
 		&i.AgentDmExchangeID,
 		&i.AgentDmTurn,
+		&i.IssueRunKind,
+		&i.IssueExecutionRevision,
+		&i.IssueExecutionAttemptNumber,
 	)
 	return i, err
 }
@@ -2710,7 +2764,7 @@ func (q *Queries) ListActiveAgentsByRuntimesForUpdate(ctx context.Context, runti
 }
 
 const listActiveTasksByIssue = `-- name: ListActiveTasksByIssue :many
-SELECT id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn FROM agent_inbox_event
+SELECT id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn, issue_run_kind, issue_execution_revision, issue_execution_attempt_number FROM agent_inbox_event
 WHERE issue_id = $1 AND status IN ('pending', 'draining', 'failed')
 ORDER BY created_at DESC
 `
@@ -2781,6 +2835,9 @@ func (q *Queries) ListActiveTasksByIssue(ctx context.Context, issueID pgtype.UUI
 			&i.InitiatorUserID,
 			&i.AgentDmExchangeID,
 			&i.AgentDmTurn,
+			&i.IssueRunKind,
+			&i.IssueExecutionRevision,
+			&i.IssueExecutionAttemptNumber,
 		); err != nil {
 			return nil, err
 		}
@@ -2865,7 +2922,7 @@ func (q *Queries) ListAgentProviderBlockByIDs(ctx context.Context, dollar_1 []pg
 }
 
 const listAgentTasks = `-- name: ListAgentTasks :many
-SELECT id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn FROM agent_inbox_event
+SELECT id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn, issue_run_kind, issue_execution_revision, issue_execution_attempt_number FROM agent_inbox_event
 WHERE agent_id = $1
 ORDER BY created_at DESC
 LIMIT 50
@@ -2932,6 +2989,9 @@ func (q *Queries) ListAgentTasks(ctx context.Context, agentID pgtype.UUID) ([]Ag
 			&i.InitiatorUserID,
 			&i.AgentDmExchangeID,
 			&i.AgentDmTurn,
+			&i.IssueRunKind,
+			&i.IssueExecutionRevision,
+			&i.IssueExecutionAttemptNumber,
 		); err != nil {
 			return nil, err
 		}
@@ -3062,7 +3122,7 @@ func (q *Queries) ListAllAgents(ctx context.Context, workspaceID pgtype.UUID) ([
 }
 
 const listInFlightTasksForProject = `-- name: ListInFlightTasksForProject :many
-SELECT atq.id, atq.workspace_id, atq.agent_session_id, atq.conversation_id, atq.channel_id, atq.chat_session_id, atq.agent_id, atq.source_message_id, atq.reason, atq.requires_wake, atq.status, atq.priority, atq.seq_from, atq.seq_to, atq.attempt, atq.last_error, atq.claimed_at, atq.acked_at, atq.created_at, atq.updated_at, atq.terminal_outcome, atq.terminal_delivery_id, atq.retryable, atq.terminal_at, atq.runtime_id, atq.execution_config, atq.delivery_mode, atq.response_mode, atq.channel_onboarding_id, atq.issue_id, atq.source_chat_message_id, atq.context, atq.dispatched_at, atq.started_at, atq.completed_at, atq.result, atq.error, atq.session_id, atq.work_dir, atq.trigger_comment_id, atq.autopilot_run_id, atq.max_attempts, atq.parent_task_id, atq.failure_reason, atq.trigger_summary, atq.force_fresh_session, atq.is_leader_task, atq.wait_reason, atq.initiator_user_id, atq.agent_dm_exchange_id, atq.agent_dm_turn FROM agent_inbox_event atq
+SELECT atq.id, atq.workspace_id, atq.agent_session_id, atq.conversation_id, atq.channel_id, atq.chat_session_id, atq.agent_id, atq.source_message_id, atq.reason, atq.requires_wake, atq.status, atq.priority, atq.seq_from, atq.seq_to, atq.attempt, atq.last_error, atq.claimed_at, atq.acked_at, atq.created_at, atq.updated_at, atq.terminal_outcome, atq.terminal_delivery_id, atq.retryable, atq.terminal_at, atq.runtime_id, atq.execution_config, atq.delivery_mode, atq.response_mode, atq.channel_onboarding_id, atq.issue_id, atq.source_chat_message_id, atq.context, atq.dispatched_at, atq.started_at, atq.completed_at, atq.result, atq.error, atq.session_id, atq.work_dir, atq.trigger_comment_id, atq.autopilot_run_id, atq.max_attempts, atq.parent_task_id, atq.failure_reason, atq.trigger_summary, atq.force_fresh_session, atq.is_leader_task, atq.wait_reason, atq.initiator_user_id, atq.agent_dm_exchange_id, atq.agent_dm_turn, atq.issue_run_kind, atq.issue_execution_revision, atq.issue_execution_attempt_number FROM agent_inbox_event atq
 LEFT JOIN issue i ON atq.issue_id = i.id
 LEFT JOIN chat_session cs ON atq.chat_session_id = cs.id
 WHERE (i.project_id = $1 OR cs.project_id = $1)
@@ -3134,6 +3194,9 @@ func (q *Queries) ListInFlightTasksForProject(ctx context.Context, projectID pgt
 			&i.InitiatorUserID,
 			&i.AgentDmExchangeID,
 			&i.AgentDmTurn,
+			&i.IssueRunKind,
+			&i.IssueExecutionRevision,
+			&i.IssueExecutionAttemptNumber,
 		); err != nil {
 			return nil, err
 		}
@@ -3146,7 +3209,7 @@ func (q *Queries) ListInFlightTasksForProject(ctx context.Context, projectID pgt
 }
 
 const listPendingTasksByRuntime = `-- name: ListPendingTasksByRuntime :many
-SELECT id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn FROM agent_inbox_event
+SELECT id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn, issue_run_kind, issue_execution_revision, issue_execution_attempt_number FROM agent_inbox_event
 WHERE runtime_id = $1 AND status IN ('pending', 'draining', 'failed')
 ORDER BY priority DESC, created_at ASC
 `
@@ -3212,6 +3275,9 @@ func (q *Queries) ListPendingTasksByRuntime(ctx context.Context, runtimeID pgtyp
 			&i.InitiatorUserID,
 			&i.AgentDmExchangeID,
 			&i.AgentDmTurn,
+			&i.IssueRunKind,
+			&i.IssueExecutionRevision,
+			&i.IssueExecutionAttemptNumber,
 		); err != nil {
 			return nil, err
 		}
@@ -3224,7 +3290,7 @@ func (q *Queries) ListPendingTasksByRuntime(ctx context.Context, runtimeID pgtyp
 }
 
 const listTasksByIssue = `-- name: ListTasksByIssue :many
-SELECT id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn FROM agent_inbox_event
+SELECT id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn, issue_run_kind, issue_execution_revision, issue_execution_attempt_number FROM agent_inbox_event
 WHERE issue_id = $1
 ORDER BY created_at DESC
 `
@@ -3290,6 +3356,9 @@ func (q *Queries) ListTasksByIssue(ctx context.Context, issueID pgtype.UUID) ([]
 			&i.InitiatorUserID,
 			&i.AgentDmExchangeID,
 			&i.AgentDmTurn,
+			&i.IssueRunKind,
+			&i.IssueExecutionRevision,
+			&i.IssueExecutionAttemptNumber,
 		); err != nil {
 			return nil, err
 		}
@@ -3626,7 +3695,7 @@ SET status = 'acked',
     retryable = false,
     wait_reason = NULL
 WHERE runtime_id = $1 AND status = 'draining'
-RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn
+RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn, issue_run_kind, issue_execution_revision, issue_execution_attempt_number
 `
 
 // Called by the daemon at startup. Atomically fails any in-flight delivery
@@ -3692,6 +3761,9 @@ func (q *Queries) RecoverOrphanedTasksForRuntime(ctx context.Context, runtimeID 
 			&i.InitiatorUserID,
 			&i.AgentDmExchangeID,
 			&i.AgentDmTurn,
+			&i.IssueRunKind,
+			&i.IssueExecutionRevision,
+			&i.IssueExecutionAttemptNumber,
 		); err != nil {
 			return nil, err
 		}
@@ -3772,7 +3844,7 @@ SET status = 'pending', started_at = NULL, dispatched_at = NULL,
 WHERE id = $1
   AND runtime_id = $2
   AND status = 'draining'
-RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn
+RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn, issue_run_kind, issue_execution_revision, issue_execution_attempt_number
 `
 
 type ResetInFlightTaskForResumeParams struct {
@@ -3841,6 +3913,9 @@ func (q *Queries) ResetInFlightTaskForResume(ctx context.Context, arg ResetInFli
 		&i.InitiatorUserID,
 		&i.AgentDmExchangeID,
 		&i.AgentDmTurn,
+		&i.IssueRunKind,
+		&i.IssueExecutionRevision,
+		&i.IssueExecutionAttemptNumber,
 	)
 	return i, err
 }
@@ -3934,7 +4009,7 @@ UPDATE agent_inbox_event AS atq
 SET started_at = COALESCE(started_at, now()), wait_reason = NULL
 WHERE atq.id = $1
   AND atq.status = 'draining'
-RETURNING atq.id, atq.workspace_id, atq.agent_session_id, atq.conversation_id, atq.channel_id, atq.chat_session_id, atq.agent_id, atq.source_message_id, atq.reason, atq.requires_wake, atq.status, atq.priority, atq.seq_from, atq.seq_to, atq.attempt, atq.last_error, atq.claimed_at, atq.acked_at, atq.created_at, atq.updated_at, atq.terminal_outcome, atq.terminal_delivery_id, atq.retryable, atq.terminal_at, atq.runtime_id, atq.execution_config, atq.delivery_mode, atq.response_mode, atq.channel_onboarding_id, atq.issue_id, atq.source_chat_message_id, atq.context, atq.dispatched_at, atq.started_at, atq.completed_at, atq.result, atq.error, atq.session_id, atq.work_dir, atq.trigger_comment_id, atq.autopilot_run_id, atq.max_attempts, atq.parent_task_id, atq.failure_reason, atq.trigger_summary, atq.force_fresh_session, atq.is_leader_task, atq.wait_reason, atq.initiator_user_id, atq.agent_dm_exchange_id, atq.agent_dm_turn
+RETURNING atq.id, atq.workspace_id, atq.agent_session_id, atq.conversation_id, atq.channel_id, atq.chat_session_id, atq.agent_id, atq.source_message_id, atq.reason, atq.requires_wake, atq.status, atq.priority, atq.seq_from, atq.seq_to, atq.attempt, atq.last_error, atq.claimed_at, atq.acked_at, atq.created_at, atq.updated_at, atq.terminal_outcome, atq.terminal_delivery_id, atq.retryable, atq.terminal_at, atq.runtime_id, atq.execution_config, atq.delivery_mode, atq.response_mode, atq.channel_onboarding_id, atq.issue_id, atq.source_chat_message_id, atq.context, atq.dispatched_at, atq.started_at, atq.completed_at, atq.result, atq.error, atq.session_id, atq.work_dir, atq.trigger_comment_id, atq.autopilot_run_id, atq.max_attempts, atq.parent_task_id, atq.failure_reason, atq.trigger_summary, atq.force_fresh_session, atq.is_leader_task, atq.wait_reason, atq.initiator_user_id, atq.agent_dm_exchange_id, atq.agent_dm_turn, atq.issue_run_kind, atq.issue_execution_revision, atq.issue_execution_attempt_number
 `
 
 // Transitions a claimed delivery to running and clears any generic wait hint.
@@ -3993,6 +4068,9 @@ func (q *Queries) StartAgentTask(ctx context.Context, id pgtype.UUID) (AgentInbo
 		&i.InitiatorUserID,
 		&i.AgentDmExchangeID,
 		&i.AgentDmTurn,
+		&i.IssueRunKind,
+		&i.IssueExecutionRevision,
+		&i.IssueExecutionAttemptNumber,
 	)
 	return i, err
 }

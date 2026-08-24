@@ -1,4 +1,5 @@
 import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
+import { ApiError } from "../../api/client";
 import type {
   ResearchV6DirectorNodeDetailView,
   ResearchV6DirectorDetailTransport,
@@ -79,6 +80,15 @@ export const researchV6DirectorProjectionKeys = {
       "compiled",
     ] as const,
 };
+
+export function isResearchV6ProjectionResyncError(error: unknown): boolean {
+  if (!(error instanceof ApiError) || error.status !== 409) return false;
+  if (!error.body || typeof error.body !== "object") return false;
+  return (
+    (error.body as Record<string, unknown>).code ===
+    "research.v6.projection_resync_required"
+  );
+}
 
 export function researchV6DirectorSlicePageRequest(
   input: Omit<ResearchV6DirectorProjectionSliceRequest, "cursor" | "depth">,
@@ -197,6 +207,8 @@ export function researchV6DirectorNodeDetailOptions(
       }
       return detail;
     },
+    retry: (failureCount, error) =>
+      !isResearchV6ProjectionResyncError(error) && failureCount < 3,
   });
 }
 

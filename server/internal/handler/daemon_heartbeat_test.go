@@ -197,7 +197,7 @@ func TestWorkspaceDaemonHeartbeatRejectsRuntimeAssignedToAnotherComputer(t *test
 			WorkspaceID: testWorkspaceID,
 		}, protocol.DaemonHeartbeatRequestPayload{RuntimeID: uuidToString(rt.ID)})
 		if err == nil || !strings.Contains(err.Error(), "runtime not assigned to connection Computer") {
-			t.Fatalf("Workspace Runner daemon_id %q error = %v", daemonID, err)
+			t.Fatalf("WorkspaceDaemon daemon_id %q error = %v", daemonID, err)
 		}
 	}
 }

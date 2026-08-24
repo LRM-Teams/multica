@@ -19,14 +19,14 @@ func (s *PostgresStore) ProcessV6EventTriggers(ctx context.Context, limit int) (
 		var fromSequence, throughSequence, stateVersion int64
 		var previouslyCovered bool
 		err := s.pool.QueryRow(ctx, `SELECT e.id::text,e.workspace_id::text,e.session_id::text,e.sequence,
-			(SELECT max(last.sequence) FROM research_run_event last WHERE last.session_id=e.session_id),s.state_version,
-			EXISTS (SELECT 1 FROM research_director_cycle previous WHERE previous.session_id=e.session_id
+			(SELECT max(last.sequence) FROM research_run_event last WHERE last.workspace_id=e.workspace_id AND last.session_id=e.session_id),s.state_version,
+			EXISTS (SELECT 1 FROM research_director_cycle previous WHERE previous.workspace_id=e.workspace_id AND previous.session_id=e.session_id
 				AND previous.trigger_from_sequence<=e.sequence AND previous.trigger_through_sequence>=e.sequence)
 			FROM research_run_event e JOIN research_session s ON s.workspace_id=e.workspace_id AND s.id=e.session_id
 			JOIN research_director_assignment a ON a.id=s.current_director_assignment_id AND a.status='active'
 			WHERE s.orchestrator_version='research-run-v6' AND s.status='running'
 			AND e.event_type IN (
-				'v6_result_node_accepted','v6_plan_materialized','v6_evidence_screened','v6_integration_materialized',
+				'v6_run_bootstrapped','v6_result_node_accepted','v6_plan_materialized','v6_evidence_screened','v6_integration_materialized',
 				'v6_deliberation_materialized','v6_director_adjudication_materialized','v6_work_item_succeeded',
 				'v6_work_item_recovered','v6_work_submission_rejected','v6_agent_creation_requested',
 				'v6_team_member_joined','v6_team_member_archived','v6_work_item_created','v6_branch_created',
@@ -36,22 +36,31 @@ func (s *PostgresStore) ProcessV6EventTriggers(ctx context.Context, limit int) (
 				'v6_director_assigned',
 				'task_result_accepted','task_attempt_failed','task_blocked','budget_exhausted','run_resumed'
 			)
-			AND NOT EXISTS (SELECT 1 FROM research_director_cycle covered WHERE covered.session_id=e.session_id
+			AND NOT EXISTS (SELECT 1 FROM research_director_cycle covered WHERE covered.workspace_id=e.workspace_id AND covered.session_id=e.session_id
 				AND covered.trigger_from_sequence<=e.sequence AND covered.trigger_through_sequence>=e.sequence
 				AND (e.event_type<>'v6_result_node_accepted' OR EXISTS (
 					SELECT 1 FROM research_director_brief_page page
 					CROSS JOIN LATERAL jsonb_array_elements(COALESCE(convert_from(page.content_bytes,'UTF8')::jsonb #> '{research,branches}','[]'::jsonb)) branch
 					CROSS JOIN LATERAL jsonb_array_elements(COALESCE(branch #> '{frontier_nodes}','[]'::jsonb)) frontier
-					WHERE page.director_cycle_id=covered.id
+					WHERE page.workspace_id=e.workspace_id AND page.session_id=e.session_id AND page.director_cycle_id=covered.id
 					AND frontier #>> '{node,version_id}'=e.payload->>'artifact_version_id'
+					AND (
+						NOT EXISTS (
+							SELECT 1 FROM research_result_node unresolved
+							WHERE unresolved.workspace_id=e.workspace_id AND unresolved.session_id=e.session_id
+							AND unresolved.artifact_version_id::text=e.payload->>'artifact_version_id'
+							AND jsonb_array_length(COALESCE(unresolved.open_questions,'[]'::jsonb))>0
+						)
+						OR strpos(COALESCE(frontier #>> '{brief_summary}',''),$1)>0
+					)
 				)))
-			AND NOT EXISTS (SELECT 1 FROM research_work_item active WHERE active.session_id=e.session_id AND active.kind='director'
+			AND NOT EXISTS (SELECT 1 FROM research_work_item active WHERE active.workspace_id=e.workspace_id AND active.session_id=e.session_id AND active.kind='director'
 				AND active.status IN ('ready','dispatching','enqueued','running','awaiting_input'))
 			AND NOT EXISTS (SELECT 1 FROM research_v6_outbox material_effect
-				WHERE material_effect.session_id=e.session_id
+				WHERE material_effect.workspace_id=e.workspace_id AND material_effect.session_id=e.session_id
 				AND material_effect.kind IN ('create_agent','archive_agent')
 				AND material_effect.status IN ('pending','delivering'))
-			ORDER BY e.created_at,e.sequence,e.id LIMIT 1`).Scan(&eventID, &workspaceID, &runID, &fromSequence, &throughSequence, &stateVersion, &previouslyCovered)
+			ORDER BY e.created_at,e.sequence,e.id LIMIT 1`, directorBriefOpenQuestionsMarker).Scan(&eventID, &workspaceID, &runID, &fromSequence, &throughSequence, &stateVersion, &previouslyCovered)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return processed, nil
 		}

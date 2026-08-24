@@ -7,6 +7,8 @@ export interface NotePage {
   content: string;
   sort_key: string;
   share_user_ids: string[];
+  share_agent_ids?: string[];
+  share_channel_ids?: string[];
   can_manage_shares: boolean;
   created_at: string;
   updated_at: string;
@@ -40,6 +42,8 @@ export interface DuplicateNotePageRequest {
 
 export interface UpdateNotePageSharesRequest {
   user_ids: string[];
+  agent_ids?: string[];
+  channel_ids?: string[];
 }
 
 export type NoteAIJobStatus = "queued" | "dispatched" | "running" | "completed" | "failed" | "cancelled";

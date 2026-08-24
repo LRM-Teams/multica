@@ -148,6 +148,26 @@ export function ResearchV6NodeDetail({
           ),
         )
       : null;
+  const contentLayers = detail?.contentLayers;
+  const showsResultMeaning =
+    Boolean(contentLayers) && (node.kind === "result_s" || node.kind === "insight");
+  const resultSupplementals: Array<{ label: string; entries: string[] }> =
+    contentLayers
+      ? [
+          {
+            label: t(($) => $.v6_detail.uncertainties),
+            entries: contentLayers.uncertainties,
+          },
+          {
+            label: t(($) => $.v6_detail.conflicts),
+            entries: contentLayers.conflicts,
+          },
+          {
+            label: t(($) => $.v6_detail.open_questions),
+            entries: contentLayers.openQuestions,
+          },
+        ]
+      : [];
 
   return (
     <section
@@ -175,6 +195,60 @@ export function ResearchV6NodeDetail({
           </p>
         ) : null}
       </header>
+
+      {showsResultMeaning && contentLayers ? (
+        <section
+          className="space-y-3 rounded-xl border border-primary/20 bg-primary/[0.04] p-3"
+          aria-label={t(($) => $.v6_detail.result_meaning)}
+        >
+          <div className="space-y-1">
+            <h3 className="text-xs font-semibold text-primary">
+              {t(($) => $.v6_detail.result_objective)}
+            </h3>
+            <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground">
+              {contentLayers.objective}
+            </p>
+          </div>
+          <div className="space-y-1 rounded-lg bg-background/70 px-3 py-2.5">
+            <h3 className="text-xs font-semibold text-primary">
+              {t(($) => $.v6_detail.result_conclusion)}
+            </h3>
+            <p className="whitespace-pre-wrap break-words text-sm font-medium leading-relaxed text-foreground">
+              {contentLayers.conclusion}
+            </p>
+          </div>
+          {contentLayers.briefSummary !== contentLayers.conclusion ? (
+            <p className="whitespace-pre-wrap break-words text-xs leading-relaxed text-muted-foreground">
+              {contentLayers.briefSummary}
+            </p>
+          ) : null}
+          {contentLayers.content !== contentLayers.conclusion &&
+          contentLayers.content !== contentLayers.briefSummary ? (
+            <details className="rounded-lg bg-muted/35 px-3 py-2">
+              <summary className="cursor-pointer text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                {t(($) => $.v6_detail.result_details)}
+              </summary>
+              <p className="mt-2 whitespace-pre-wrap break-words text-xs leading-relaxed text-muted-foreground">
+                {contentLayers.content}
+              </p>
+            </details>
+          ) : null}
+          {resultSupplementals.map(({ label, entries }) =>
+            entries.length > 0 ? (
+              <div key={label} className="space-y-1.5">
+                <h3 className="text-xs font-medium text-foreground">{label}</h3>
+                <ul className="list-disc space-y-1 pl-4 text-xs leading-relaxed text-muted-foreground">
+                  {entries.map((entry, index) => (
+                    <li key={`${index}:${entry}`} className="whitespace-pre-wrap break-words">
+                      {entry}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null,
+          )}
+        </section>
+      ) : null}
 
       {liveActivity ? (
         <div
@@ -245,7 +319,7 @@ export function ResearchV6NodeDetail({
               {workActivityLoading
                 ? t(($) => $.v6_detail.work_activity_loading)
                 : workActivityError
-                  ? t(($) => $.v6_detail.work_activity_failed)
+                  ? node.catalogSummary || t(($) => $.v6_detail.task_waiting)
                   : workActivity?.mission ||
                     node.catalogSummary ||
                     t(($) => $.v6_detail.task_waiting)}
@@ -273,6 +347,19 @@ export function ResearchV6NodeDetail({
                 </div>
               ) : null}
               <p className="mt-1 text-xs leading-relaxed">{workActivity.progress}</p>
+            </div>
+          ) : null}
+          {state.termination ? (
+            <div className="rounded-lg bg-destructive/10 px-2.5 py-2">
+              <h3 className="text-xs font-medium text-foreground">
+                {t(($) => $.v6_detail.work_result)}
+              </h3>
+              <p className="mt-1 text-xs font-medium text-destructive">
+                {stateValueLabel(state.execution)} · {state.termination.reasonCode}
+              </p>
+              <p className="mt-1 break-words text-xs leading-relaxed text-muted-foreground">
+                {state.termination.reasonDetail}
+              </p>
             </div>
           ) : null}
           <div className="space-y-2" aria-live="polite" aria-atomic="false">
@@ -403,7 +490,7 @@ export function ResearchV6NodeDetail({
         </div>
       </dl>
 
-      {state.termination ? (
+      {state.termination && node.kind !== "work_s" ? (
         <div className="space-y-1 rounded-xl bg-muted/45 px-3 py-2.5">
           <p className="text-xs font-medium">{state.termination.reasonCode}</p>
           <p className="break-words text-xs leading-relaxed text-muted-foreground">

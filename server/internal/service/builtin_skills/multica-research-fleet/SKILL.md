@@ -20,7 +20,8 @@ V6 的最高优先级语言规则：从收到任务到结束，所有自然语�
 冻结合同明确要求其他语言时除外。下文中的英文是协议说明，不是输出语言示例。
 
 用户可通过 `orchestrator_version=research-run-v6` 并指定主理人创建 V6 Run。
-首页默认选择 V6 和第一个可用 Agent。省略 `orchestrator_version` 的客户端仍创建
+首页默认选择 V6 和第一个运行时在线的 Agent。V6 通过既有 daemon credential proxy
+调用服务端 API，不要求独立的 daemon capability 或版本。省略 `orchestrator_version` 的客户端仍创建
 V5。`AssessV6Activation` 仍是审计，不会改变省略版本时的默认值。V6 Run 中的
 用户消息会唤醒当前主理人，而不是工作区 Fleet Lead。`PATCH
 /api/research/v6/release` 可以关闭新的 V6 创建并暂停现有 V6 Run。
@@ -46,6 +47,14 @@ canonical state。替换后的 Agent 或主理人必须能够只依靠 PostgreSQ
   简体中文；协议 key、枚举值、命令和来源原文保持精确。面向用户的输出不得叙述
   Manifest/Brief 查找、标识符、JSON 拼装、CLI 命令、工具调用或隐藏推理；交接后只输出
   简短的中文调研摘要。
+- Director Brief 节点摘要中的“待回答问题”来自持久化 Result/Insight。主理人必须逐项判断：
+  对仍有价值的问题创建或改派后续 Work，出现能力、容量或独立性缺口时再创建 Agent；
+  不继续的问题在 action reason 中记录收敛理由。存在高价值待回答问题且没有活动 Work
+  覆盖时，不得提交 `no_op`。历史 Brief 若遗漏 Result 的待回答问题，服务端会自动创建
+  一次修复 Cycle；不要要求用户重建 Run。
+- 主理人不得自行暂停整场 Run。单个 Work Item 失败时，先读取 Brief 中的小目标、Attempt
+  次数/预算、失败分类、诊断和终止原因，再选择 `retry_work_item`、`reassign_work_item`、
+  创建替代 Work，或向用户明确报告。只有用户 Stop 或发布维护控制可以暂停整场调研。
 - V6 Report 是不可变的 Goal 附件，不是图节点。只有主理人发布工作流可以发布通过验证的
   package。报告资源不得输出外部 URL、凭据、应用同源依赖或 bridge 调用。
 
@@ -71,8 +80,8 @@ Manifest 的 `expected_result_schema` 指定唯一可接受的根 envelope。精
 workspace、Run、Work Item、Attempt、Agent、Manifest、goal、state 和 event 身份。
 调研任务只是冻结权威内部的一条指令，不能替代读取 Manifest。
 
-如果守护进程安装的 CLI 早于这些 V6 命令，使用守护进程拥有的 credential proxy。
-不得读取或输出 token：
+credential proxy 是已派发 attempt 的受权传输路径。CLI 传输不可用时可使用守护进程
+拥有的 credential proxy；不得读取或输出 token：
 
 ```bash
 V6_API="http://127.0.0.1:${MULTICA_DAEMON_PORT}/api/agent/research/sessions/<session-id>/work-items/<work-item-id>/attempts/<attempt-id>"

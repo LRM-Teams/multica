@@ -42,6 +42,10 @@ func (h *Handler) GetResearchV6ProjectionNodeDetail(w http.ResponseWriter, r *ht
 		writeRonaldoV6Error(w, http.StatusNotFound, "research.v6.not_found", "research V6 projection node not found", false)
 		return
 	}
+	if errors.Is(err, researchrun.ErrProjectionResyncRequired) {
+		writeRonaldoV6Error(w, http.StatusConflict, "research.v6.projection_resync_required", "projection snapshot expired; resync required", true)
+		return
+	}
 	if errors.Is(err, researchrun.ErrInvalidContract) {
 		writeRonaldoV6Error(w, http.StatusBadRequest, "research.v6.invalid_contract", "view must be brief, full, or history", false)
 		return

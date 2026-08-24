@@ -5152,6 +5152,7 @@ export class ApiClient {
     });
   }
 
+  /** Posts one user message to the selected Research Director. */
   async postResearchMessage(
     id: string,
     data: import("../types/research").PostResearchMessageRequest,

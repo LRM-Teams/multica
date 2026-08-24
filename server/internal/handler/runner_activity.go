@@ -65,8 +65,10 @@ func (h *Handler) HandleWorkspaceDaemonFrame(ctx context.Context, identity daemo
 		if err := h.recordWorkspaceDaemonReady(ctx, identity, daemonInstanceID, ready.RunningAgents); err != nil {
 			return err
 		}
-		h.publish(protocol.EventComputerUpdated, identity.WorkspaceID, "system", "", map[string]any{
+		h.publish(protocol.EventComputerStatus, identity.WorkspaceID, "system", "", map[string]any{
 			"computer_id": identity.DaemonID,
+			"status":      "connected",
+			"changed_at":  time.Now().UTC().Format(time.RFC3339Nano),
 		})
 		// Raft establishes APM ownership before it offers durable deliveries.
 		// Channel messages may ACK into the Agent's starting Inbox before the
@@ -605,8 +607,10 @@ func (h *Handler) HandleWorkspaceDaemonDisconnect(ctx context.Context, identity 
 	if err != nil {
 		return err
 	}
-	h.publish(protocol.EventComputerUpdated, identity.WorkspaceID, "system", "", map[string]any{
+	h.publish(protocol.EventComputerStatus, identity.WorkspaceID, "system", "", map[string]any{
 		"computer_id": identity.DaemonID,
+		"status":      "disconnected",
+		"changed_at":  time.Now().UTC().Format(time.RFC3339Nano),
 	})
 	return nil
 }

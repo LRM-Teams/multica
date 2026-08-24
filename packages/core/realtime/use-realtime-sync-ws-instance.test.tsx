@@ -270,7 +270,7 @@ describe("useRealtimeSync — ws instance change", () => {
     }
   });
 
-  it("invalidates the Workspace Computer projection on computer:updated", () => {
+  it("invalidates the Workspace Computer projection on computer:status", () => {
     vi.useFakeTimers();
     try {
       const ws = createMockWs();
@@ -284,8 +284,12 @@ describe("useRealtimeSync — ws instance change", () => {
       invalidateSpy.mockClear();
       act(() => {
         anyHandler?.({
-          type: "computer:updated",
-          payload: { computer_id: "computer-1" },
+          type: "computer:status",
+          payload: {
+            computer_id: "computer-1",
+            status: "connected",
+            changed_at: "2026-08-24T22:30:00Z",
+          },
         });
         vi.advanceTimersByTime(100);
       });

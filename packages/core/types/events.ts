@@ -55,7 +55,7 @@ export type WSEventType =
   | "daemon:heartbeat"
   | "daemon:register"
   | "daemon:runtime_updated"
-  | "computer:updated"
+  | "computer:status"
   | "computer:upgrade:progress"
   | "computer:upgrade:done"
   | "skill:created"
@@ -170,8 +170,10 @@ export interface DaemonRuntimeUpdatedPayload {
   runtime: AgentRuntime;
 }
 
-export interface ComputerUpdatedPayload {
+export interface ComputerStatusPayload {
   computer_id: string;
+  status: "connected" | "disconnected";
+  changed_at: string;
 }
 
 export interface ComputerUpgradeProgressPayload {
@@ -617,7 +619,7 @@ export interface WSEventPayloadMap {
   "daemon:heartbeat": unknown;
   "daemon:register": unknown;
   "daemon:runtime_updated": DaemonRuntimeUpdatedPayload;
-  "computer:updated": ComputerUpdatedPayload;
+  "computer:status": ComputerStatusPayload;
   "computer:upgrade:progress": ComputerUpgradeProgressPayload;
   "computer:upgrade:done": ComputerUpgradeDonePayload;
   "skill:created": unknown;

@@ -36,26 +36,17 @@ filters=(
   --filter='!@multica/docs'
 )
 
-dry_json="$(pnpm exec turbo "$@" --dry-run=json "${filters[@]}" "${concurrency_args[@]}" || true)"
-if ! python3 - "$dry_json" <<'PY'
-import json, sys
-raw = sys.argv[1].strip()
-if not raw:
-    raise SystemExit(1)
-try:
-    payload = json.loads(raw)
-except json.JSONDecodeError:
-    # turbo may print a banner before JSON
-    start = raw.find("{")
-    if start < 0:
-        raise SystemExit(1)
-    payload = json.loads(raw[start:])
-tasks = payload.get("tasks") or payload.get("packages") or []
-raise SystemExit(0 if tasks else 1)
-PY
-then
+dry_run_file="$(mktemp)"
+trap 'rm -f "$dry_run_file"' EXIT
+pnpm exec turbo "$@" --dry-run=json "${filters[@]}" "${concurrency_args[@]}" >"$dry_run_file"
+has_tasks="$(python3 scripts/ci-turbo-web-dry-run.py "$dry_run_file")"
+if [[ "$has_tasks" == false ]]; then
   echo "No affected web packages for $* (base=$base); skipping"
   exit 0
+fi
+if [[ "$has_tasks" != true ]]; then
+  echo "Invalid affected-package result: $has_tasks" >&2
+  exit 1
 fi
 
 exec pnpm exec turbo "$@" "${filters[@]}" "${concurrency_args[@]}"

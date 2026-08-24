@@ -6,8 +6,8 @@ import (
 	"testing"
 )
 
-func TestMigration444StoresActivityFactsAndBoundedText(t *testing.T) {
-	raw, err := os.ReadFile("../../migrations/444_daemon_owned_agent_activity_presentation.up.sql")
+func TestMigration445StoresActivityFactsAndBoundedText(t *testing.T) {
+	raw, err := os.ReadFile("../../migrations/445_daemon_owned_agent_activity_presentation.up.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -25,12 +25,12 @@ func TestMigration444StoresActivityFactsAndBoundedText(t *testing.T) {
 		"DROP COLUMN IF EXISTS entry_body",
 	} {
 		if !strings.Contains(sql, required) {
-			t.Fatalf("migration 444 missing %q", required)
+			t.Fatalf("migration 445 missing %q", required)
 		}
 	}
 	for _, forbidden := range []string{"summary_tone", "summary_visibility", "tone TEXT"} {
 		if strings.Contains(sql, forbidden) {
-			t.Fatalf("migration 444 contains server-owned visual semantic %q", forbidden)
+			t.Fatalf("migration 445 contains server-owned visual semantic %q", forbidden)
 		}
 	}
 }

@@ -40,10 +40,20 @@ func TestRescanIssuePullRequestWithoutGitHubApp(t *testing.T) {
 				"user": map[string]any{"login": "octocat", "avatar_url": "https://avatars.example/octocat"},
 			})
 		case fmt.Sprintf("/repos/acme/%s/commits/%s/check-suites", repo, headSHA):
-			writeJSON(w, http.StatusOK, map[string]any{"check_suites": []map[string]any{{
-				"id": 901, "head_sha": headSHA, "status": "completed", "conclusion": "success",
-				"updated_at": "2026-08-24T09:01:00Z", "app": map[string]any{"id": 77},
-			}}})
+			writeJSON(w, http.StatusOK, map[string]any{"check_suites": []map[string]any{
+				{
+					"id": 899, "head_sha": headSHA, "status": "queued", "conclusion": nil,
+					"updated_at": "2026-08-24T08:59:00Z", "app": map[string]any{"id": 75},
+				},
+				{
+					"id": 900, "head_sha": headSHA, "status": "in_progress", "conclusion": nil,
+					"updated_at": "2026-08-24T09:00:00Z", "app": map[string]any{"id": 76},
+				},
+				{
+					"id": 901, "head_sha": headSHA, "status": "completed", "conclusion": "success",
+					"updated_at": "2026-08-24T09:01:00Z", "app": map[string]any{"id": 77},
+				},
+			}})
 		default:
 			http.NotFound(w, r)
 		}
@@ -79,6 +89,15 @@ func TestRescanIssuePullRequestWithoutGitHubApp(t *testing.T) {
 	if linked[0].ChecksPassed != 1 || linked[0].ChecksFailed != 0 || linked[0].ChecksPending != 0 {
 		t.Fatalf("check counts = passed:%d failed:%d pending:%d", linked[0].ChecksPassed, linked[0].ChecksFailed, linked[0].ChecksPending)
 	}
+	// Simulate a row written by the original REST recovery implementation.
+	// A repeated scan must remove this non-terminal suite from the current
+	// head rather than leaving a permanent false-pending gate.
+	if _, err = testPool.Exec(ctx, `
+		INSERT INTO github_pull_request_check_suite
+			(pr_id, suite_id, head_sha, app_id, conclusion, status, updated_at)
+		VALUES ($1, 898, $2, 74, NULL, 'queued', now())`, linked[0].ID, headSHA); err != nil {
+		t.Fatalf("seed stale queued suite: %v", err)
+	}
 
 	// Retrying the same authoritative scan is idempotent.
 	rec = httptest.NewRecorder()
@@ -93,6 +112,9 @@ func TestRescanIssuePullRequestWithoutGitHubApp(t *testing.T) {
 	linked, err = testHandler.Queries.ListPullRequestsByIssue(ctx, parseUUID(issue.ID))
 	if err != nil || len(linked) != 1 {
 		t.Fatalf("idempotent linked PRs = %d, err=%v", len(linked), err)
+	}
+	if linked[0].ChecksPassed != 1 || linked[0].ChecksPending != 0 {
+		t.Fatalf("idempotent check counts = passed:%d pending:%d, want 1/0", linked[0].ChecksPassed, linked[0].ChecksPending)
 	}
 }
 

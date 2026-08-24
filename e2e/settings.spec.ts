@@ -24,7 +24,7 @@ test.describe("Settings", () => {
     // Save
     await generalPanel.getByRole("button", { name: "Save" }).click();
 
-    await expect(page.getByText("Workspace settings saved")).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText("Workspace settings saved").last()).toBeVisible({ timeout: 5000 });
 
     // Sidebar should reflect the new name WITHOUT page refresh
     await expect(sidebarName).toContainText(newName);
@@ -33,6 +33,7 @@ test.describe("Settings", () => {
     await nameInput.clear();
     await nameInput.fill(originalName.trim());
     await generalPanel.getByRole("button", { name: "Save" }).click();
-    await expect(page.getByText("Workspace settings saved")).toBeVisible({ timeout: 5000 });
+    // The first success toast can still be exiting when the restore toast appears.
+    await expect(page.getByText("Workspace settings saved").last()).toBeVisible({ timeout: 5000 });
   });
 });

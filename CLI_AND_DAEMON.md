@@ -530,53 +530,6 @@ multica issue run-messages <task-id> --since 42 --output json
 
 The `runs` command shows all past and current executions for an issue, including running tasks. Table output uses short task UUID prefixes by default; pass `--full-id` to print canonical task UUIDs. The `run-messages` command accepts full task UUIDs directly; copied short task prefixes must be scoped with `--issue <issue-id>` so the CLI only checks that issue's runs. It shows the detailed message log (tool calls, thinking, text, errors) for a single run. Use `--since` for efficient polling of in-progress runs.
 
-## Projects
-
-Projects group related issues (e.g. a sprint, an epic, a workstream). Every project
-belongs to a workspace and can optionally have a lead (member or agent).
-
-### List Projects
-
-```bash
-multica project list
-multica project list --status in_progress
-multica project list --output json
-```
-
-Available filters: `--status`.
-
-### Get Project
-
-```bash
-multica project get <id>
-multica project get <id> --output json
-```
-
-### Create Project
-
-```bash
-multica project create --title "2026 Week 16 Sprint" --icon "🏃" --lead "Lambda"
-```
-
-Flags: `--title` (required), `--description`, `--status`, `--icon`, `--lead`.
-
-### Update Project
-
-```bash
-multica project update <id> --title "New title" --status in_progress
-multica project update <id> --lead "Lambda"
-```
-
-Flags: `--title`, `--description`, `--status`, `--icon`, `--lead`.
-
-### Change Status
-
-```bash
-multica project status <id> in_progress
-```
-
-Valid statuses: `planned`, `in_progress`, `paused`, `completed`, `cancelled`.
-
 ### Adaptive channel goals
 
 Goal Mode is opt-in per group channel. Ordinary messages and one-step tasks do
@@ -615,12 +568,6 @@ Goal writes use optimistic concurrency. On a stale-version conflict, read the
 goal again and reconcile before retrying. Completing a goal is rejected until
 every current success criterion is present in `completed_criteria`. Paused,
 completed, and cancelled goals are not injected into later agent turns.
-
-### Delete Project
-
-```bash
-multica project delete <id>
-```
 
 ### Associating Issues with Projects
 

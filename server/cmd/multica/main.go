@@ -49,7 +49,6 @@ func init() {
 
 	// Core commands
 	issueCmd.GroupID = groupCore
-	projectCmd.GroupID = groupCore
 	labelCmd.GroupID = groupCore
 	workspaceCmd.GroupID = groupCore
 	skillCmd.GroupID = groupCore
@@ -79,7 +78,6 @@ func init() {
 	versionCmd.GroupID = groupAdditional
 
 	rootCmd.AddCommand(issueCmd)
-	rootCmd.AddCommand(projectCmd)
 	rootCmd.AddCommand(researchCmd)
 	rootCmd.AddCommand(labelCmd)
 	rootCmd.AddCommand(workspaceCmd)

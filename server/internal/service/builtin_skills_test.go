@@ -491,7 +491,7 @@ func TestRuntimesSkillCoversClaimChain(t *testing.T) {
 	}
 }
 
-func TestProjectsSkillCoversProjectOperations(t *testing.T) {
+func TestProjectsSkillUsesWorkspaceInfo(t *testing.T) {
 	skill, ok := findSkill(t, "multica-projects")
 	if !ok {
 		return
@@ -507,7 +507,8 @@ func TestProjectsSkillCoversProjectOperations(t *testing.T) {
 
 	mustContain := []string{
 		"Projects group issues",
-		"multica project create --title",
+		"multica workspace info --projects --output json",
+		"CLI no longer exposes",
 		"Agent memory",
 		"AGENTS.md",
 		"references/projects-source-map.md",

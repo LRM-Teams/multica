@@ -1025,39 +1025,6 @@ func TestBoundary_IssueMetadataList_HitsDedicatedAgentAPI(t *testing.T) {
 	}
 }
 
-// TestBoundary_ProjectResourceList_HitsDedicatedAgentAPI asserts resource list
-// uses GET /api/agent/projects/{id}/resources.
-func TestBoundary_ProjectResourceList_HitsDedicatedAgentAPI(t *testing.T) {
-	wantPath := "/api/agent/projects/" + boundaryContractProjectID + "/resources"
-	var gotPaths []string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPaths = append(gotPaths, r.Method+" "+r.URL.Path)
-		if r.URL.Path == wantPath {
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"resources": []map[string]any{},
-			})
-			return
-		}
-		http.Error(w, "human project path forbidden", http.StatusForbidden)
-	}))
-	t.Cleanup(srv.Close)
-	boundaryCLIEnv(t, srv.URL)
-
-	cmd := &cobra.Command{Use: "list"}
-	cmd.Flags().String("server-url", "", "")
-	cmd.Flags().String("workspace-id", "", "")
-	cmd.Flags().String("profile", "", "")
-	cmd.Flags().String("output", "json", "")
-	cmd.Flags().Bool("full-id", false, "")
-
-	if err := runProjectResourceList(cmd, []string{boundaryContractProjectID}); err != nil {
-		t.Fatalf("runProjectResourceList: %v (paths=%v)", err, gotPaths)
-	}
-	if len(gotPaths) != 1 || gotPaths[0] != "GET "+wantPath {
-		t.Fatalf("paths = %v, want [GET %s]", gotPaths, wantPath)
-	}
-}
-
 // TestBoundary_IssueLabelsList_HitsDedicatedAgentAPI asserts issue labels list
 // uses GET /api/agent/issues/{id}/labels (Ronan tip 2b6c0dde4).
 func TestBoundary_IssueLabelsList_HitsDedicatedAgentAPI(t *testing.T) {

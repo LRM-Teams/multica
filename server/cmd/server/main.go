@@ -523,7 +523,7 @@ func main() {
 	} else {
 		schedulerRegistered = true
 	}
-	for _, job := range scheduler.MemoryCurationJobs(pool) {
+	for _, job := range scheduler.MemoryCurationJobsWithPresence(pool, presence) {
 		if err := schedulerMgr.Register(job); err != nil {
 			slog.Warn("scheduler: failed to register memory curation job", "job", job.Name, "error", err)
 		} else {

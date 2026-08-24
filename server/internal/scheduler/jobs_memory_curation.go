@@ -27,13 +27,22 @@ const (
 )
 
 func MemoryCurationJobs(pool *pgxpool.Pool) []JobSpec {
+	return MemoryCurationJobsWithPresence(pool, nil)
+}
+
+// MemoryCurationJobsWithPresence makes WS runner presence available to the
+// curation scheduler. A connected Workspace Runner is considered fresh even
+// when its legacy last_seen_at column has aged past the heartbeat window.
+// A nil presence source preserves the legacy heartbeat-only behavior used by
+// tests and deployments without a daemon WebSocket Hub.
+func MemoryCurationJobsWithPresence(pool *pgxpool.Pool, presence service.RunnerPresence) []JobSpec {
 	return []JobSpec{
-		memoryCurationJob(pool, JobNameAgentMemorySelfReview, "agent_self_review", 0),
-		memoryCurationJob(pool, JobNameTeamMemoryCuration, "team_curation", 1),
+		memoryCurationJob(pool, presence, JobNameAgentMemorySelfReview, "agent_self_review", 0),
+		memoryCurationJob(pool, presence, JobNameTeamMemoryCuration, "team_curation", 1),
 	}
 }
 
-func memoryCurationJob(pool *pgxpool.Pool, name, stage string, hourOffset int) JobSpec {
+func memoryCurationJob(pool *pgxpool.Pool, presence service.RunnerPresence, name, stage string, hourOffset int) JobSpec {
 	return JobSpec{
 		Name:              name,
 		Cadence:           time.Hour,
@@ -48,25 +57,33 @@ func memoryCurationJob(pool *pgxpool.Pool, name, stage string, hourOffset int) J
 		MaxAttempts:       3,
 		RetryBackoff:      []time.Duration{5 * time.Minute, 15 * time.Minute, 30 * time.Minute},
 		Scopes:            StaticScopes(ScopeGlobal),
-		Handler:           makeMemoryCurationIntentHandler(pool, stage, hourOffset),
+		Handler:           makeMemoryCurationIntentHandlerWithPresence(pool, presence, stage, hourOffset),
 	}
+}
+
+func makeMemoryCurationIntentHandler(pool *pgxpool.Pool, stage any, hourOffset int) Handler {
+	return makeMemoryCurationIntentHandlerWithPresence(pool, nil, stage, hourOffset)
 }
 
 // makeMemoryCurationIntentHandler schedules self-review by default for active
 // agents. Team curation remains profile-backed so a workspace can choose one
 // curator runtime/agent for shared governance.
-func makeMemoryCurationIntentHandler(pool *pgxpool.Pool, stage any, hourOffset int) Handler {
+func makeMemoryCurationIntentHandlerWithPresence(pool *pgxpool.Pool, presence service.RunnerPresence, stage any, hourOffset int) Handler {
 	stageName := normalizeScheduledMemoryCurationStage(stage)
 	return func(ctx context.Context, in HandlerInput) (HandlerResult, error) {
 		if pool == nil {
 			return HandlerResult{Result: map[string]any{"skipped": true, "reason": "database_unavailable", "stage": stageName}}, nil
+		}
+		freshRuntimeIDs, err := wsFreshRuntimeIDs(ctx, pool, presence)
+		if err != nil {
+			return HandlerResult{}, err
 		}
 		agentRunTableAvailable, err := memoryCurationAgentRunTableExists(ctx, pool)
 		if err != nil {
 			return HandlerResult{}, err
 		}
 		if stageName == "agent_self_review" && agentRunTableAvailable {
-			return scheduleDefaultAgentSelfReviewRuns(ctx, pool, in.PlanTime, hourOffset, in.Heartbeat)
+			return scheduleDefaultAgentSelfReviewRuns(ctx, pool, in.PlanTime, hourOffset, in.Heartbeat, freshRuntimeIDs)
 		}
 		enabledColumn := "team_curation_enabled"
 		if stageName == "agent_self_review" {
@@ -147,7 +164,7 @@ func makeMemoryCurationIntentHandler(pool *pgxpool.Pool, stage any, hourOffset i
 				}
 			}
 			planDate, windowStart, windowEnd := priorLocalCurationDay(cycleLocal)
-			agentIDs, err := activeMemoryCurationAgentIDs(ctx, pool, workspaceID, userID, targetScope, profileID, windowStart, windowEnd)
+			agentIDs, err := activeMemoryCurationAgentIDs(ctx, pool, workspaceID, userID, targetScope, profileID, windowStart, windowEnd, freshRuntimeIDs)
 			if err != nil {
 				return HandlerResult{}, err
 			}
@@ -155,7 +172,7 @@ func makeMemoryCurationIntentHandler(pool *pgxpool.Pool, stage any, hourOffset i
 				continue
 			}
 			runStatus := "queued"
-			if time.Since(runtimeLastSeenAt) > service.AgentHealthStaleThreshold {
+			if !runtimeFresh(runtimeID, runtimeLastSeenAt, freshRuntimeIDs) {
 				runStatus = "waiting_runtime"
 			}
 			if stageName == "agent_self_review" && agentRunTableAvailable {
@@ -175,9 +192,9 @@ func makeMemoryCurationIntentHandler(pool *pgxpool.Pool, stage any, hourOffset i
 						  parent_run_id, workspace_id, agent_id, runtime_id, stage, status, error, finished_at
 						)
 						SELECT i.id, i.workspace_id, a.id, COALESCE(a.runtime_id, i.runtime_id), 'agent_self_review',
-						       CASE WHEN rt.last_seen_at >= now() - make_interval(secs => $14::double precision) THEN 'queued' ELSE 'skipped' END,
-						       CASE WHEN rt.last_seen_at >= now() - make_interval(secs => $14::double precision) THEN '' ELSE 'runtime offline; skipped' END,
-						       CASE WHEN rt.last_seen_at >= now() - make_interval(secs => $14::double precision) THEN NULL ELSE now() END
+						       CASE WHEN (rt.id = ANY($15::uuid[]) OR rt.last_seen_at >= now() - make_interval(secs => $14::double precision)) THEN 'queued' ELSE 'skipped' END,
+						       CASE WHEN (rt.id = ANY($15::uuid[]) OR rt.last_seen_at >= now() - make_interval(secs => $14::double precision)) THEN '' ELSE 'runtime offline; skipped' END,
+						       CASE WHEN (rt.id = ANY($15::uuid[]) OR rt.last_seen_at >= now() - make_interval(secs => $14::double precision)) THEN NULL ELSE now() END
 						  FROM inserted i
 						  JOIN agent a ON a.workspace_id = i.workspace_id AND a.id = ANY($13::uuid[])
 						  LEFT JOIN agent_runtime rt ON rt.id = COALESCE(a.runtime_id, i.runtime_id)
@@ -185,7 +202,7 @@ func makeMemoryCurationIntentHandler(pool *pgxpool.Pool, stage any, hourOffset i
 						RETURNING 1
 					)
 					SELECT count(*) FROM inserted
-				`, workspaceID, stageName, runStatus, planDate, profileID, userID, runtimeID, curatorAgentID, model, mode, confidenceThreshold, configVersion, agentIDs, service.AgentHealthStaleThreshold.Seconds()).Scan(&inserted)
+				`, workspaceID, stageName, runStatus, planDate, profileID, userID, runtimeID, curatorAgentID, model, mode, confidenceThreshold, configVersion, agentIDs, service.AgentHealthStaleThreshold.Seconds(), freshRuntimeIDsAsSlice(freshRuntimeIDs)).Scan(&inserted)
 				if err != nil {
 					return HandlerResult{}, err
 				}
@@ -213,7 +230,11 @@ func makeMemoryCurationIntentHandler(pool *pgxpool.Pool, stage any, hourOffset i
 	}
 }
 
-func scheduleDefaultAgentSelfReviewRuns(ctx context.Context, pool *pgxpool.Pool, planTime time.Time, hourOffset int, heartbeat func(context.Context) error) (HandlerResult, error) {
+func scheduleDefaultAgentSelfReviewRuns(ctx context.Context, pool *pgxpool.Pool, planTime time.Time, hourOffset int, heartbeat func(context.Context) error, freshIDs ...map[string]bool) (HandlerResult, error) {
+	var freshRuntimeIDs map[string]bool
+	if len(freshIDs) > 0 {
+		freshRuntimeIDs = freshIDs[0]
+	}
 	loc, err := time.LoadLocation(defaultMemoryCurationTimezone)
 	if err != nil {
 		return HandlerResult{}, err
@@ -231,8 +252,8 @@ func scheduleDefaultAgentSelfReviewRuns(ctx context.Context, pool *pgxpool.Pool,
 	var created int64
 	err = pool.QueryRow(ctx, `
 		WITH active_agents AS MATERIALIZED (
-		  SELECT DISTINCT a.workspace_id, a.id AS agent_id, a.runtime_id,
-		         rt.last_seen_at >= now() - make_interval(secs => $4::double precision) AS runtime_fresh
+			   SELECT DISTINCT a.workspace_id, a.id AS agent_id, a.runtime_id,
+			         (rt.id = ANY($5::uuid[]) OR rt.last_seen_at >= now() - make_interval(secs => $4::double precision)) AS runtime_fresh
 		    FROM agent a
 		    JOIN agent_runtime rt ON rt.id = a.runtime_id
 		    JOIN (`+activeSources+`
@@ -283,7 +304,7 @@ func scheduleDefaultAgentSelfReviewRuns(ctx context.Context, pool *pgxpool.Pool,
 		  RETURNING 1
 		)
 		SELECT count(*) FROM inserted
-	`, planDate, defaultAgentSelfReviewMode, defaultAgentSelfReviewConfidence, service.AgentHealthStaleThreshold.Seconds(), windowStart, windowEnd).Scan(&created)
+	`, planDate, defaultAgentSelfReviewMode, defaultAgentSelfReviewConfidence, service.AgentHealthStaleThreshold.Seconds(), freshRuntimeIDsAsSlice(freshRuntimeIDs), windowStart, windowEnd).Scan(&created)
 	if err != nil {
 		return HandlerResult{}, err
 	}
@@ -294,7 +315,7 @@ func scheduleDefaultAgentSelfReviewRuns(ctx context.Context, pool *pgxpool.Pool,
 }
 
 func defaultSelfReviewActiveSources(ctx context.Context, pool *pgxpool.Pool) (string, error) {
-	return memoryCurationActiveSources(ctx, pool, "$5", "$6")
+	return memoryCurationActiveSources(ctx, pool, "$6", "$7")
 }
 
 func memoryCurationActiveSources(ctx context.Context, pool *pgxpool.Pool, windowStartArg, windowEndArg string) (string, error) {
@@ -387,6 +408,52 @@ func relationExists(ctx context.Context, pool *pgxpool.Pool, name string) (bool,
 	return exists, err
 }
 
+// wsFreshRuntimeIDs snapshots the runtimes currently backed by a live WS
+// runner. The scheduler still uses last_seen_at for runtimes that are not
+// represented by a presence source, preserving legacy daemon behavior.
+func wsFreshRuntimeIDs(ctx context.Context, pool *pgxpool.Pool, presence service.RunnerPresence) (map[string]bool, error) {
+	if presence == nil {
+		return nil, nil
+	}
+	rows, err := pool.Query(ctx, `
+		SELECT id::text, COALESCE(daemon_id, ''), workspace_id::text
+		  FROM agent_runtime
+		 WHERE status = 'online'
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	fresh := make(map[string]bool)
+	for rows.Next() {
+		var runtimeID, daemonID, workspaceID string
+		if err := rows.Scan(&runtimeID, &daemonID, &workspaceID); err != nil {
+			return nil, err
+		}
+		if daemonID != "" && workspaceID != "" && presence.HasWorkspaceRunner(daemonID, workspaceID) {
+			fresh[runtimeID] = true
+		}
+	}
+	return fresh, rows.Err()
+}
+
+func runtimeFresh(runtimeID string, lastSeen time.Time, wsFresh map[string]bool) bool {
+	if wsFresh[runtimeID] {
+		return true
+	}
+	return time.Since(lastSeen) <= service.AgentHealthStaleThreshold
+}
+
+func freshRuntimeIDsAsSlice(ids map[string]bool) []string {
+	out := make([]string, 0, len(ids))
+	for id, fresh := range ids {
+		if fresh {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
 func normalizeScheduledMemoryCurationStage(stage any) string {
 	switch fmt.Sprint(stage) {
 	case "l1", "l2", "l1_daily", "l2_review", "agent_self_review":
@@ -398,7 +465,11 @@ func normalizeScheduledMemoryCurationStage(stage any) string {
 	}
 }
 
-func activeMemoryCurationAgentIDs(ctx context.Context, pool *pgxpool.Pool, workspaceID, userID, targetScope, profileID string, windowStart, windowEnd time.Time) ([]string, error) {
+func activeMemoryCurationAgentIDs(ctx context.Context, pool *pgxpool.Pool, workspaceID, userID, targetScope, profileID string, windowStart, windowEnd time.Time, freshIDs ...map[string]bool) ([]string, error) {
+	var freshRuntimeIDs map[string]bool
+	if len(freshIDs) > 0 {
+		freshRuntimeIDs = freshIDs[0]
+	}
 	activeSources, err := memoryCurationActiveSources(ctx, pool, "$3", "$4")
 	if err != nil {
 		return nil, err
@@ -419,9 +490,9 @@ func activeMemoryCurationAgentIDs(ctx context.Context, pool *pgxpool.Pool, works
 		  FROM targets t
 		  JOIN active act ON act.agent_id = t.id
 		  JOIN agent_runtime rt ON rt.id = t.runtime_id
-		   AND rt.last_seen_at >= now() - make_interval(secs => $7::double precision)
+		   AND (rt.id = ANY($8::uuid[]) OR rt.last_seen_at >= now() - make_interval(secs => $7::double precision))
 		 ORDER BY t.id
-	`, workspaceID, userID, windowStart, windowEnd, targetScope, profileID, service.AgentHealthStaleThreshold.Seconds())
+	`, workspaceID, userID, windowStart, windowEnd, targetScope, profileID, service.AgentHealthStaleThreshold.Seconds(), freshRuntimeIDsAsSlice(freshRuntimeIDs))
 	if err != nil {
 		return nil, err
 	}

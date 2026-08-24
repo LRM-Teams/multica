@@ -8,7 +8,9 @@ import { toast } from "sonner";
 import { api, ApiError } from "@multica/core/api";
 import { createResearchV6DirectorProjectionTransport } from "@multica/core/api/research-v6-director";
 import {
+  isResearchV6ProjectionResyncError,
   researchV6DirectorNodeDetailOptions,
+  researchV6DirectorProjectionKeys,
 } from "@multica/core/research-v6/director-queries";
 import { RESEARCH_V6_DIRECTOR_DELTA_EVENT } from "@multica/core/research-v6-live/director-controller";
 import {
@@ -249,6 +251,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     (s) => s.selectSessionNode,
   );
   const appliedNodeLinkRef = useRef<string | null>(null);
+  const nodeDetailResyncSnapshotRef = useRef<string | null>(null);
   const lastCanvasChangeMessageIdRef = useRef<string | null>(null);
   const canvasChangeSessionIdRef = useRef(sessionId);
   const typedGraph = useMemo(
@@ -304,6 +307,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     data: directorNodeDetailData,
     isLoading: directorNodeDetailLoading,
     isError: directorNodeDetailError,
+    error: directorNodeDetailFailure,
     refetch: refetchDirectorNodeDetail,
   } = useQuery({
     ...researchV6DirectorNodeDetailOptions(
@@ -318,6 +322,26 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
       directorV6Enabled &&
       Boolean(directorCanvas.snapshotId && selectedDirectorProjectionNode),
   });
+  useEffect(() => {
+    const expiredSnapshotId = directorCanvas.snapshotId;
+    if (
+      !expiredSnapshotId ||
+      !isResearchV6ProjectionResyncError(directorNodeDetailFailure) ||
+      nodeDetailResyncSnapshotRef.current === expiredSnapshotId
+    ) {
+      return;
+    }
+    nodeDetailResyncSnapshotRef.current = expiredSnapshotId;
+    void qc.invalidateQueries({
+      queryKey: researchV6DirectorProjectionKeys.snapshot(wsId, sessionId),
+    });
+  }, [
+    directorCanvas.snapshotId,
+    directorNodeDetailFailure,
+    qc,
+    sessionId,
+    wsId,
+  ]);
   const {
     data: directorWorkActivityData,
     isLoading: directorWorkActivityLoading,

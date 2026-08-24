@@ -146,6 +146,31 @@ describe("EmptyLineAiMenu dismiss interactions", () => {
     expect(onEditPageWithAI).not.toHaveBeenCalled();
   });
 
+  it("opens the notes-assistant setup path on send when onRequestPageAI returns false", () => {
+    const onClose = vi.fn();
+    const onChange = vi.fn();
+    const onEditPageWithAI = vi.fn();
+    const onRequestPageAI = vi.fn(() => false);
+
+    render(
+      <EmptyLineAiMenu
+        editor={makeEditor()}
+        state={makeState({ instruction: "rewrite this page" })}
+        onChange={onChange}
+        onEditPageWithAI={onEditPageWithAI}
+        onRequestPageAI={onRequestPageAI}
+        onClose={onClose}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(onRequestPageAI).toHaveBeenCalledTimes(1);
+    expect(onEditPageWithAI).not.toHaveBeenCalled();
+    expect(onChange).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps typing spaces inside a non-empty AI instruction", () => {
     const editor = makeEditor();
     const onClose = vi.fn();

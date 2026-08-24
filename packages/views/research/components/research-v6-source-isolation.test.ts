@@ -59,5 +59,8 @@ describe("Research D5 canonical projection source isolation", () => {
     }
     expect(workActivitySource).toContain("progress.task_id === inboxTaskId");
     expect(workActivitySource).toContain("void query.refetch()");
+    expect(workActivitySource).toContain("RESEARCH_V6_DIRECTOR_DELTA_EVENT");
+    expect(workActivitySource).toContain("envelope.run_id === runId");
+    expect(workActivitySource).toContain('subscribe("research_session:presence"');
   });
 });

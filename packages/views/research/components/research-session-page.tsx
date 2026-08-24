@@ -10,6 +10,7 @@ import { createResearchV6DirectorProjectionTransport } from "@multica/core/api/r
 import {
   researchV6DirectorNodeDetailOptions,
 } from "@multica/core/research-v6/director-queries";
+import { RESEARCH_V6_DIRECTOR_DELTA_EVENT } from "@multica/core/research-v6-live/director-controller";
 import {
   researchV6DirectorSelectedRefFromNode,
   researchV6DirectorSelectionIdentity,
@@ -283,6 +284,19 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     expansionFailureLabel: t(($) => $.panel.expansion_failed),
     realtimeBus: directorRealtimeBus,
   });
+  useEffect(() => {
+    if (!directorV6Enabled) return;
+    return directorRealtimeBus.subscribeEvent(
+      RESEARCH_V6_DIRECTOR_DELTA_EVENT,
+      (payload) => {
+        const envelope = payload as { run_id?: unknown };
+        if (envelope.run_id !== sessionId) return;
+        void qc.invalidateQueries({
+          queryKey: researchKeys.presence(wsId, sessionId),
+        });
+      },
+    );
+  }, [directorRealtimeBus, directorV6Enabled, qc, sessionId, wsId]);
   const selectedDirectorProjectionNode = selectedNodeId
     ? directorCanvas.canvas?.projectionNodeById.get(selectedNodeId) ?? null
     : null;
@@ -1010,8 +1024,49 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     waiting: t(($) => $.step_card.generated.waiting),
   };
   const chatFeed = buildFleetChatFeed(messages, fleetStepLabels);
+  const directorPresence = assignedDirectorAgentId
+    ? presence[assignedDirectorAgentId]
+    : undefined;
+  const v6DirectorActivityCard: FleetStepCardModel | null =
+    directorV6Enabled && directorPresence?.activity.trim()
+      ? {
+          kind: "step",
+          id: `v6-director-presence-${assignedDirectorAgentId}`,
+          status:
+            directorPresence.phase === "failed" ||
+            directorPresence.phase === "stale"
+              ? "failed"
+              : directorPresence.phase === "done"
+                ? "done"
+                : directorPresence.phase === "idle"
+                  ? "waiting"
+                  : "running",
+          title:
+            assignedDirectorAgent?.display_name ||
+            assignedDirectorAgent?.name ||
+            directorPresence.name ||
+            t(($) => $.d5.rail.director_fallback),
+          stepLabel: t(($) => $.d5.rail.director_role),
+          summaryHeadline: directorPresence.activity,
+          summaryDetail: "",
+          bullets: [],
+          evidence: null,
+          mergeCount: 1,
+          reason: directorPresence.staleReason,
+          recoveryHint: null,
+          actorAgentId: assignedDirectorAgentId,
+          createdAt:
+            directorPresence.updatedAt == null
+              ? ""
+              : new Date(directorPresence.updatedAt).toISOString(),
+          showRetry: false,
+          showReassign: false,
+        }
+      : null;
   const runningCards = directorV6Enabled
-    ? []
+    ? v6DirectorActivityCard
+      ? [v6DirectorActivityCard]
+      : []
     : presenceRunningCards(presence, fleet.members);
   const waitingCard = directorV6Enabled
     ? null
@@ -1029,14 +1084,18 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     runningCards.length > 0 ||
     !!waitingCard ||
     showStop;
-  const chatMode = resolveChatDrawerMode(chatHasFeed ? 1 : 0, session.status, {
-    loading: send.isPending && !chatHasFeed,
-    error: send.isError
-      ? send.error instanceof Error
-        ? send.error.message
-        : t(($) => $.session_page.send_failed)
-      : null,
-  });
+  const chatMode = resolveChatDrawerMode(
+    chatHasFeed ? 1 : 0,
+    directorV6Enabled ? undefined : session.status,
+    {
+      loading: send.isPending && !chatHasFeed,
+      error: send.isError
+        ? send.error instanceof Error
+          ? send.error.message
+          : t(($) => $.session_page.send_failed)
+        : null,
+    },
+  );
   const chatErrorMessage =
     send.error instanceof Error ? send.error.message : null;
 
@@ -1301,9 +1360,11 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
                   : undefined
               }
               activity={
-                directorMember
-                  ? presence[directorMember.agent_id]?.activity
-                  : null
+                directorV6Enabled
+                  ? directorPresence?.activity
+                  : directorMember
+                    ? presence[directorMember.agent_id]?.activity
+                    : null
               }
               modeChip={<ResearchChatModeChip mode={chatMode} />}
               mode={chatMode}

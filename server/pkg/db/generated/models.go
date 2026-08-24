@@ -10,6 +10,18 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type ActiveIssueExecution struct {
+	IssueID                pgtype.UUID        `json:"issue_id"`
+	WorkspaceID            pgtype.UUID        `json:"workspace_id"`
+	RunID                  pgtype.UUID        `json:"run_id"`
+	AgentID                pgtype.UUID        `json:"agent_id"`
+	IssueExecutionRevision int64              `json:"issue_execution_revision"`
+	AttemptNumber          int64              `json:"attempt_number"`
+	Status                 string             `json:"status"`
+	CreatedAt              pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt              pgtype.Timestamptz `json:"updated_at"`
+}
+
 type ActivityLog struct {
 	ID          pgtype.UUID        `json:"id"`
 	WorkspaceID pgtype.UUID        `json:"workspace_id"`
@@ -388,52 +400,55 @@ type AgentInboxEvent struct {
 	ConversationID pgtype.UUID `json:"conversation_id"`
 	ChannelID      pgtype.UUID `json:"channel_id"`
 	// Optional legacy bridge. Channel product wakes use channel_id + context.channel_wake; chat_session_id may be NULL.
-	ChatSessionID       pgtype.UUID        `json:"chat_session_id"`
-	AgentID             pgtype.UUID        `json:"agent_id"`
-	SourceMessageID     pgtype.UUID        `json:"source_message_id"`
-	Reason              string             `json:"reason"`
-	RequiresWake        bool               `json:"requires_wake"`
-	Status              string             `json:"status"`
-	Priority            int32              `json:"priority"`
-	SeqFrom             int64              `json:"seq_from"`
-	SeqTo               int64              `json:"seq_to"`
-	Attempt             int32              `json:"attempt"`
-	LastError           pgtype.Text        `json:"last_error"`
-	ClaimedAt           pgtype.Timestamptz `json:"claimed_at"`
-	AckedAt             pgtype.Timestamptz `json:"acked_at"`
-	CreatedAt           pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
-	TerminalOutcome     pgtype.Text        `json:"terminal_outcome"`
-	TerminalDeliveryID  pgtype.UUID        `json:"terminal_delivery_id"`
-	Retryable           bool               `json:"retryable"`
-	TerminalAt          pgtype.Timestamptz `json:"terminal_at"`
-	RuntimeID           pgtype.UUID        `json:"runtime_id"`
-	ExecutionConfig     []byte             `json:"execution_config"`
-	DeliveryMode        string             `json:"delivery_mode"`
-	ResponseMode        string             `json:"response_mode"`
-	ChannelOnboardingID pgtype.UUID        `json:"channel_onboarding_id"`
-	IssueID             pgtype.UUID        `json:"issue_id"`
-	SourceChatMessageID pgtype.UUID        `json:"source_chat_message_id"`
-	Context             []byte             `json:"context"`
-	DispatchedAt        pgtype.Timestamptz `json:"dispatched_at"`
-	StartedAt           pgtype.Timestamptz `json:"started_at"`
-	CompletedAt         pgtype.Timestamptz `json:"completed_at"`
-	Result              []byte             `json:"result"`
-	Error               pgtype.Text        `json:"error"`
-	SessionID           pgtype.Text        `json:"session_id"`
-	WorkDir             pgtype.Text        `json:"work_dir"`
-	TriggerCommentID    pgtype.UUID        `json:"trigger_comment_id"`
-	AutopilotRunID      pgtype.UUID        `json:"autopilot_run_id"`
-	MaxAttempts         int32              `json:"max_attempts"`
-	ParentTaskID        pgtype.UUID        `json:"parent_task_id"`
-	FailureReason       pgtype.Text        `json:"failure_reason"`
-	TriggerSummary      pgtype.Text        `json:"trigger_summary"`
-	ForceFreshSession   bool               `json:"force_fresh_session"`
-	IsLeaderTask        bool               `json:"is_leader_task"`
-	WaitReason          pgtype.Text        `json:"wait_reason"`
-	InitiatorUserID     pgtype.UUID        `json:"initiator_user_id"`
-	AgentDmExchangeID   pgtype.UUID        `json:"agent_dm_exchange_id"`
-	AgentDmTurn         pgtype.Int4        `json:"agent_dm_turn"`
+	ChatSessionID               pgtype.UUID        `json:"chat_session_id"`
+	AgentID                     pgtype.UUID        `json:"agent_id"`
+	SourceMessageID             pgtype.UUID        `json:"source_message_id"`
+	Reason                      string             `json:"reason"`
+	RequiresWake                bool               `json:"requires_wake"`
+	Status                      string             `json:"status"`
+	Priority                    int32              `json:"priority"`
+	SeqFrom                     int64              `json:"seq_from"`
+	SeqTo                       int64              `json:"seq_to"`
+	Attempt                     int32              `json:"attempt"`
+	LastError                   pgtype.Text        `json:"last_error"`
+	ClaimedAt                   pgtype.Timestamptz `json:"claimed_at"`
+	AckedAt                     pgtype.Timestamptz `json:"acked_at"`
+	CreatedAt                   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt                   pgtype.Timestamptz `json:"updated_at"`
+	TerminalOutcome             pgtype.Text        `json:"terminal_outcome"`
+	TerminalDeliveryID          pgtype.UUID        `json:"terminal_delivery_id"`
+	Retryable                   bool               `json:"retryable"`
+	TerminalAt                  pgtype.Timestamptz `json:"terminal_at"`
+	RuntimeID                   pgtype.UUID        `json:"runtime_id"`
+	ExecutionConfig             []byte             `json:"execution_config"`
+	DeliveryMode                string             `json:"delivery_mode"`
+	ResponseMode                string             `json:"response_mode"`
+	ChannelOnboardingID         pgtype.UUID        `json:"channel_onboarding_id"`
+	IssueID                     pgtype.UUID        `json:"issue_id"`
+	SourceChatMessageID         pgtype.UUID        `json:"source_chat_message_id"`
+	Context                     []byte             `json:"context"`
+	DispatchedAt                pgtype.Timestamptz `json:"dispatched_at"`
+	StartedAt                   pgtype.Timestamptz `json:"started_at"`
+	CompletedAt                 pgtype.Timestamptz `json:"completed_at"`
+	Result                      []byte             `json:"result"`
+	Error                       pgtype.Text        `json:"error"`
+	SessionID                   pgtype.Text        `json:"session_id"`
+	WorkDir                     pgtype.Text        `json:"work_dir"`
+	TriggerCommentID            pgtype.UUID        `json:"trigger_comment_id"`
+	AutopilotRunID              pgtype.UUID        `json:"autopilot_run_id"`
+	MaxAttempts                 int32              `json:"max_attempts"`
+	ParentTaskID                pgtype.UUID        `json:"parent_task_id"`
+	FailureReason               pgtype.Text        `json:"failure_reason"`
+	TriggerSummary              pgtype.Text        `json:"trigger_summary"`
+	ForceFreshSession           bool               `json:"force_fresh_session"`
+	IsLeaderTask                bool               `json:"is_leader_task"`
+	WaitReason                  pgtype.Text        `json:"wait_reason"`
+	InitiatorUserID             pgtype.UUID        `json:"initiator_user_id"`
+	AgentDmExchangeID           pgtype.UUID        `json:"agent_dm_exchange_id"`
+	AgentDmTurn                 pgtype.Int4        `json:"agent_dm_turn"`
+	IssueRunKind                pgtype.Text        `json:"issue_run_kind"`
+	IssueExecutionRevision      pgtype.Int8        `json:"issue_execution_revision"`
+	IssueExecutionAttemptNumber pgtype.Int8        `json:"issue_execution_attempt_number"`
 }
 
 type AgentInboxToken struct {
@@ -914,26 +929,27 @@ type ChannelDecisionAudit struct {
 }
 
 type ChannelGoal struct {
-	ID                pgtype.UUID        `json:"id"`
-	WorkspaceID       pgtype.UUID        `json:"workspace_id"`
-	ChannelID         pgtype.UUID        `json:"channel_id"`
-	Title             string             `json:"title"`
-	Objective         string             `json:"objective"`
-	SuccessCriteria   []byte             `json:"success_criteria"`
-	Status            string             `json:"status"`
-	Version           int64              `json:"version"`
-	ProgressSummary   string             `json:"progress_summary"`
-	CurrentStep       string             `json:"current_step"`
-	Blocker           string             `json:"blocker"`
-	EvidenceRefs      []byte             `json:"evidence_refs"`
-	CompletedCriteria []byte             `json:"completed_criteria"`
-	CreatedByType     string             `json:"created_by_type"`
-	CreatedByID       pgtype.UUID        `json:"created_by_id"`
-	UpdatedByType     string             `json:"updated_by_type"`
-	UpdatedByID       pgtype.UUID        `json:"updated_by_id"`
-	CreatedAt         pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
-	CompletedAt       pgtype.Timestamptz `json:"completed_at"`
+	ID                     pgtype.UUID        `json:"id"`
+	WorkspaceID            pgtype.UUID        `json:"workspace_id"`
+	ChannelID              pgtype.UUID        `json:"channel_id"`
+	Title                  string             `json:"title"`
+	Objective              string             `json:"objective"`
+	SuccessCriteria        []byte             `json:"success_criteria"`
+	Status                 string             `json:"status"`
+	Version                int64              `json:"version"`
+	ProgressSummary        string             `json:"progress_summary"`
+	CurrentStep            string             `json:"current_step"`
+	Blocker                string             `json:"blocker"`
+	EvidenceRefs           []byte             `json:"evidence_refs"`
+	CompletedCriteria      []byte             `json:"completed_criteria"`
+	CreatedByType          string             `json:"created_by_type"`
+	CreatedByID            pgtype.UUID        `json:"created_by_id"`
+	UpdatedByType          string             `json:"updated_by_type"`
+	UpdatedByID            pgtype.UUID        `json:"updated_by_id"`
+	CreatedAt              pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt              pgtype.Timestamptz `json:"updated_at"`
+	CompletedAt            pgtype.Timestamptz `json:"completed_at"`
+	ExecutionGraphRevision int64              `json:"execution_graph_revision"`
 }
 
 type ChannelGoalProcessMarkdown struct {
@@ -2243,33 +2259,37 @@ type InteractionDagStepReward struct {
 }
 
 type Issue struct {
-	ID                 pgtype.UUID        `json:"id"`
-	WorkspaceID        pgtype.UUID        `json:"workspace_id"`
-	Title              string             `json:"title"`
-	Description        pgtype.Text        `json:"description"`
-	Status             string             `json:"status"`
-	Priority           string             `json:"priority"`
-	AssigneeType       pgtype.Text        `json:"assignee_type"`
-	AssigneeID         pgtype.UUID        `json:"assignee_id"`
-	CreatorType        string             `json:"creator_type"`
-	CreatorID          pgtype.UUID        `json:"creator_id"`
-	ParentIssueID      pgtype.UUID        `json:"parent_issue_id"`
-	AcceptanceCriteria []byte             `json:"acceptance_criteria"`
-	ContextRefs        []byte             `json:"context_refs"`
-	Position           float64            `json:"position"`
-	DueDate            pgtype.Date        `json:"due_date"`
-	CreatedAt          pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
-	Number             int32              `json:"number"`
-	ProjectID          pgtype.UUID        `json:"project_id"`
-	OriginType         pgtype.Text        `json:"origin_type"`
-	OriginID           pgtype.UUID        `json:"origin_id"`
-	FirstExecutedAt    pgtype.Timestamptz `json:"first_executed_at"`
-	StartDate          pgtype.Date        `json:"start_date"`
-	Metadata           []byte             `json:"metadata"`
-	ForkedFromIssueID  pgtype.UUID        `json:"forked_from_issue_id"`
-	ForkedAtSeq        pgtype.Int4        `json:"forked_at_seq"`
-	ForkedAtTaskID     pgtype.UUID        `json:"forked_at_task_id"`
+	ID                       pgtype.UUID        `json:"id"`
+	WorkspaceID              pgtype.UUID        `json:"workspace_id"`
+	Title                    string             `json:"title"`
+	Description              pgtype.Text        `json:"description"`
+	Status                   string             `json:"status"`
+	Priority                 string             `json:"priority"`
+	AssigneeType             pgtype.Text        `json:"assignee_type"`
+	AssigneeID               pgtype.UUID        `json:"assignee_id"`
+	CreatorType              string             `json:"creator_type"`
+	CreatorID                pgtype.UUID        `json:"creator_id"`
+	ParentIssueID            pgtype.UUID        `json:"parent_issue_id"`
+	AcceptanceCriteria       []byte             `json:"acceptance_criteria"`
+	ContextRefs              []byte             `json:"context_refs"`
+	Position                 float64            `json:"position"`
+	DueDate                  pgtype.Date        `json:"due_date"`
+	CreatedAt                pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt                pgtype.Timestamptz `json:"updated_at"`
+	Number                   int32              `json:"number"`
+	ProjectID                pgtype.UUID        `json:"project_id"`
+	OriginType               pgtype.Text        `json:"origin_type"`
+	OriginID                 pgtype.UUID        `json:"origin_id"`
+	FirstExecutedAt          pgtype.Timestamptz `json:"first_executed_at"`
+	StartDate                pgtype.Date        `json:"start_date"`
+	Metadata                 []byte             `json:"metadata"`
+	ForkedFromIssueID        pgtype.UUID        `json:"forked_from_issue_id"`
+	ForkedAtSeq              pgtype.Int4        `json:"forked_at_seq"`
+	ForkedAtTaskID           pgtype.UUID        `json:"forked_at_task_id"`
+	ChannelGoalID            pgtype.UUID        `json:"channel_goal_id"`
+	GoalRequired             pgtype.Bool        `json:"goal_required"`
+	ExecutionRevision        int64              `json:"execution_revision"`
+	ExecutionAttemptSequence int64              `json:"execution_attempt_sequence"`
 }
 
 type IssueDecomposeChild struct {
@@ -2309,6 +2329,30 @@ type IssueDerivedAgentAssignment struct {
 	Status          string             `json:"status"`
 	ArchivedAt      pgtype.Timestamptz `json:"archived_at"`
 	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+}
+
+type IssueDispatchOutbox struct {
+	ID                     pgtype.UUID        `json:"id"`
+	WorkspaceID            pgtype.UUID        `json:"workspace_id"`
+	IssueID                pgtype.UUID        `json:"issue_id"`
+	RunID                  pgtype.UUID        `json:"run_id"`
+	AgentID                pgtype.UUID        `json:"agent_id"`
+	IssueExecutionRevision int64              `json:"issue_execution_revision"`
+	AttemptNumber          int64              `json:"attempt_number"`
+	DispatchKey            string             `json:"dispatch_key"`
+	TriggerKind            string             `json:"trigger_kind"`
+	RequestPayload         []byte             `json:"request_payload"`
+	RequestHash            string             `json:"request_hash"`
+	Status                 string             `json:"status"`
+	DeliveryAttempts       int32              `json:"delivery_attempts"`
+	NextDeliveryAt         pgtype.Timestamptz `json:"next_delivery_at"`
+	LeaseToken             pgtype.UUID        `json:"lease_token"`
+	LeaseExpiresAt         pgtype.Timestamptz `json:"lease_expires_at"`
+	LastError              string             `json:"last_error"`
+	DeliveredEventID       pgtype.UUID        `json:"delivered_event_id"`
+	DeliveredAt            pgtype.Timestamptz `json:"delivered_at"`
+	CreatedAt              pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt              pgtype.Timestamptz `json:"updated_at"`
 }
 
 type IssueLabel struct {

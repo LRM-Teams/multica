@@ -102,10 +102,6 @@ func (d *Daemon) recordCoverageCommitDiagnostic(credential authenticatedAgentPro
 
 func (d *Daemon) credentialProxyMessageCoverageCommitHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
 		var request credentialProxyCoverageCommitRequest
 		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10))
 		decoder.DisallowUnknownFields()

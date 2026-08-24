@@ -44,10 +44,6 @@ type credentialProxyMessageTargetResponse struct {
 
 func (d *Daemon) credentialProxyMessageSendHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
 		var request credentialProxyMessageSendRequest
 		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
 		decoder.DisallowUnknownFields()

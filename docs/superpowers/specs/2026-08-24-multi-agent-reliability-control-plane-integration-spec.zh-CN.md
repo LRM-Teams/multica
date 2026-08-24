@@ -102,6 +102,13 @@ Message / state event
    标准 Issue path 只有在 active Run 唯一 claim 和恢复装置上线后才能移除它。Participation Gate 不得继续把它
    写成标准路径的长期前提。
 
+9. **“Git 仓库已绑定”不等于 canonical PR 链路可用。**
+   真实案例中，Goal 页面因存在 `project_resource(resource_type='github_repo')` 显示“Git 仓库：已绑定”，但 Workspace
+   的 GitHub App installation 实际未配置；PR #65 的标题、正文和分支都包含 `LRM-1621`，`edited` webhook 重扫后
+   `issue_pull_request` 仍为空。当前 webhook handler 在找不到 installation→Workspace 映射时静默返回，既不补偿扫描，
+   也不产生可见等待原因。这不是引用正则失败，而是连接健康状态混用和静默丢事件。执行图必须把“资源地址存在”、
+   “事件源已连接”和“canonical link 已收敛”分成三个事实，不能以 metadata 中的 `pr_url/pr_number` 代替 canonical link。
+
 ## 3. Canonical 对象与非 canonical 对象
 
 ### 3.1 Canonical 产品状态
@@ -264,6 +271,63 @@ Issue 后才显示完整执行链，避免长程 Goal 变成不可读的“意�
 Parent Issue 的进度由 required child Issue 的 accepted verdict 派生，不允许客户端或 Agent直接写百分比。点击节点的
 任何修改操作都调用原 Goal / Issue / completion / review API；projection 只读。每个图节点必须保存 canonical
 `source_kind + source_id + source_version`，保证 UI 中的每一条结论都能回到原始事实。
+
+### 4.6 只读画布交互合同
+
+Goal Execution Graph 是可以探索的无限画布，但拓扑严格只读：
+
+- 按住画布拖动可向上、下、左、右平移，不把手势传给页面滚动容器；
+- 鼠标滚轮围绕指针位置连续缩放，触控板支持平移和 pinch zoom；缩放范围、步进和惯性必须有界；
+- 提供 `适应屏幕`、`100%`、`聚焦当前 Run` 和 `返回选中节点`；首次进入只自动 fit 一次，实时 delta 不得反复抢走视口；
+- 用户不能在画布上创建、删除、重连或拖动 canonical 节点和边；节点位置只属于本地/瞬时布局，不回写服务端关系；
+- 点击节点只打开审计详情，展示它做了什么、输入/输出、Agent、Run/execution attempt、review、evidence、PR 和等待原因；
+- 大图使用稳定分层布局、Parent Issue 折叠、分支聚焦和状态过滤；新增 delta 尽量保持既有节点位置，避免整图跳动；
+- 边必须按 `contains`、`depends_on`、`attempted_by`、`reviewed_by`、`produced`、`supersedes` 等类型提供图例，
+  方向、虚实线和颜色不能只靠单一视觉编码；
+- 键盘用户可以依次聚焦节点、打开详情、缩放和 fit；`prefers-reduced-motion` 下取消持续位移动效但功能不降级。
+
+服务端 projection API 不提供通用 `PATCH node/edge`。产品中的拆分、依赖、reopen、review、Gate 和 supersede 操作
+只能调用对应 canonical API，成功提交后再由 projection delta 反映到图上。这样“人不能改图”不等于“人不能管理任务”，
+而是所有改变都经过有权限、有校验、有审计的领域命令。
+
+### 4.7 真实“网页游戏开发”验收图
+
+首个产品验收 fixture 不使用抽象 A/B/C 节点，直接复刻真实 Goal 的结构与异常：
+
+```text
+恢复原版视觉基线与世界连续性（Goal）
+  -> 世界地形连续性（Parent Issue）
+       -> 旧世界/新世界地形连续
+       -> 森林生态与默认 HUD 恢复
+  -> 游戏玩法与交互（Parent Issue）
+       -> 移动/碰撞/交互
+       -> 玩法验收
+  -> 部署与真实视觉门禁（Parent Issue）
+       -> LRM-1621 修复
+            -> Run / execution attempt
+            -> Completion report
+            -> Review: accepted
+            -> PR #65: merged
+            -> canonical PR link: missing
+                 -> waiting_on: github_installation_binding
+       -> LRM-1624 man A-F 独立截图验收
+```
+
+该 fixture 必须同时验证正常链和异常链。PR #65 已 merged、Issue metadata 含 PR 信息，只能作为发现线索；只要
+canonical `issue_pull_request` 仍为空，图就显示独立的红/橙色 `integration_gap` 节点或状态，不能把该 Issue/Goal
+渲染成完整可审计。详情至少显示：repo resource 已绑定、GitHub App event source 未连接、最近 webhook 未建立 link、
+建议动作（安装/绑定 GitHub App 后补偿扫描）。修复后由 canonical link delta 原地收敛，不创建第二个 PR 节点。
+
+连接健康状态冻结为三个正交字段：
+
+| 字段 | 真值来源 | 可以证明 | 不能证明 |
+| --- | --- | --- | --- |
+| `repository_bound` | project resource | 知道目标 repo 地址 | webhook 可达、installation 有效 |
+| `event_source_connected` | current GitHub installation→Workspace binding | 平台能接收并归属事件 | 某个 PR 已完成映射 |
+| `canonical_link_state` | `issue_pull_request` / link reconciler | Issue↔PR canonical 关系已收敛 | PR 内容正确、review 已通过 |
+
+任一层缺失都要显示自己的原因和最后检查时间。webhook 遇到未知 installation 不得静默成功：必须写可观测诊断事件，
+并由补偿 reconciler 在绑定恢复后按 repo + PR 更新时间游标重扫；重复 webhook/重扫对 canonical link 幂等。
 
 ## 5. Run 的精确模型
 
@@ -784,10 +848,12 @@ Controller tick 结束不等于 Goal 停止。Issue terminal、review、runtime�
 4. 建 Goal Execution Graph projection，覆盖 Issue、Run、decision、review、artifact 和 failure；
 5. 增加 per-Goal snapshot / delta、projection revision 和 existing Workspace event push；
 6. 上线 Plan / Live / History 三种折叠视图和 canonical source drill-down；
-7. 普通 Goal 停止写 Work Graph / Subgoal；
-8. `advance graph` 收敛为幂等 `AdvanceGoal` / `ReconcileGoalExecutionGraph`；
-9. Research legacy 通过唯一 adapter 创建或绑定 Issue / Run，消除双重 wake；
-10. 最后移除标准 Issue 的 `work_owner_lease`。
+7. 上线只读无限画布：二维平移、指针中心缩放、fit/100%/当前 Run、稳定增量布局和键盘可达；
+8. 将 repo resource、GitHub event source 和 canonical PR link 健康状态分层，并为未知 installation 增加诊断与补偿重扫；
+9. 普通 Goal 停止写 Work Graph / Subgoal；
+10. `advance graph` 收敛为幂等 `AdvanceGoal` / `ReconcileGoalExecutionGraph`；
+11. Research legacy 通过唯一 adapter 创建或绑定 Issue / Run，消除双重 wake；
+12. 最后移除标准 Issue 的 `work_owner_lease`。
 
 Provider scheduler 在 Participation Gate enforce 前上线，避免 Gate / Probe rollout 自身制造新的 provider burst。
 
@@ -844,6 +910,14 @@ Research 场景还必须证明：
 - 客户端漏掉 delta、乱序收到 event 或断线重连时，通过 revision gap 强制重取 snapshot；
 - projection 延迟、损坏或重建不能创建 Run、改变 Issue status 或完成 Goal；
 - 任一节点都能通过 `source_kind + source_id + source_version` 打开 canonical 详情。
+- 画布可向四向平移，滚轮以指针为中心缩放；画布内手势不误滚整页，fit/100%/当前 Run 可恢复导航；
+- 用户无法拖动拓扑、连边或删除节点，节点布局变化不产生服务端 canonical mutation；
+- 实时 delta 到达时保留用户视口和既有节点心智地图，只有用户明确请求时才重新 fit；
+- Parent Issue 折叠、分支聚焦和状态过滤在大图中不改变 canonical 节点/边数量；
+- 真实网页游戏 fixture 能从 Goal 展开到 major Issue、child Issue、Run、report、review、evidence 和 PR；
+- PR #65 merged 且 metadata 有 `pr_url`、但 canonical link 为空时，图必须显示 `integration_gap`，不得以 metadata 补齐；
+- `repository_bound=true`、`event_source_connected=false` 时 UI 不得只显示“Git 仓库已绑定”的绿色正常态；
+- 安装绑定恢复并补偿重扫后，PR #65 的 canonical link 幂等收敛，异常节点消失且历史诊断仍可审计。
 
 ### 16.5 长程 benchmark
 
@@ -860,11 +934,13 @@ Research 场景还必须证明：
 9. `sticky-quota-needs-you`；
 10. `multi-day-controller-resume`；
 11. `research-genealogy-isolation`；
-12. `single-failure-domain-warning`。
+12. `single-failure-domain-warning`；
+13. `web-game-goal-execution-graph`；
+14. `github-canonical-link-recovery`。
 
 指标包括 Goal 完成率、人工“继续”次数、runnable-without-run、重复 Run、重复公开回答、review 返工率、
 provider queue P50/P95、429、hard-block 重试次数、runtime 恢复时间、Research duplicate wake、genealogy provenance
-完整率、token、成本和真实并行重叠。
+完整率、canonical integration gap 平均发现/恢复时间、视口稳定率、图中不可追溯节点数、token、成本和真实并行重叠。
 
 ## 17. 已确认方向与待确认实现决定
 

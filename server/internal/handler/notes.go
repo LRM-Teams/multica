@@ -724,6 +724,20 @@ WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NOT NULL`, pageUUID, user
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (h *Handler) EmptyNoteTrash(w http.ResponseWriter, r *http.Request) {
+	_, userID, _, ok := h.notesWorkspaceAndUser(w, r)
+	if !ok {
+		return
+	}
+	if _, err := h.DB.Exec(r.Context(), `
+DELETE FROM note_page
+WHERE owner_user_id = $1 AND deleted_at IS NOT NULL`, userID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to empty note trash")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h *Handler) RestoreNotePage(w http.ResponseWriter, r *http.Request) {
 	_, userID, _, ok := h.notesWorkspaceAndUser(w, r)
 	if !ok {

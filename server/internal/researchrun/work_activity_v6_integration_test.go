@@ -113,7 +113,7 @@ func attachV6WorkActivityInbox(t *testing.T, run *transactionRecoveryRun, attemp
 	if _, err := run.pool.Exec(run.ctx, `
 		INSERT INTO agent_inbox_event (
 			id,workspace_id,agent_id,reason,status,context,started_at
-		) VALUES ($1::uuid,$2::uuid,$3::uuid,'quick_create','running',
+		) VALUES ($1::uuid,$2::uuid,$3::uuid,'quick_create','draining',
 		          '{"type":"research_run_work_item"}'::jsonb,now())`,
 		inboxID, run.fixture.workspaceID, run.fixture.agentID,
 	); err != nil {

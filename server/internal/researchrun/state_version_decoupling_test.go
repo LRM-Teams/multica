@@ -86,6 +86,12 @@ func setupV6DirectorProposalFixture(t *testing.T, title string) directorProposal
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := run.store.AddV6TeamMember(run.ctx, AddV6TeamMemberInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+		AgentID: run.fixture.reporterID, MissionPrompt: "Continue the in-flight research",
+	}); err != nil {
+		t.Fatal(err)
+	}
 	var stateVersion, throughSequence int64
 	if err := run.pool.QueryRow(run.ctx, `SELECT state_version,
 		COALESCE((SELECT max(sequence) FROM research_run_event WHERE session_id=$1::uuid),0)

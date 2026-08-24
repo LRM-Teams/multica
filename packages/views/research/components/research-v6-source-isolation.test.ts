@@ -49,6 +49,7 @@ describe("Research D5 canonical projection source isolation", () => {
   it("refetches the selected durable Work activity on matching task progress", () => {
     expect(source).toContain("useResearchV6WorkActivity({");
     for (const event of [
+      '"task:message"',
       '"task:running"',
       '"task:progress"',
       '"task:completed"',
@@ -58,9 +59,15 @@ describe("Research D5 canonical projection source isolation", () => {
       expect(workActivitySource).toContain(event);
     }
     expect(workActivitySource).toContain("progress.task_id === inboxTaskId");
-    expect(workActivitySource).toContain("void query.refetch()");
+    expect(workActivitySource).toContain("void refetch()");
     expect(workActivitySource).toContain("RESEARCH_V6_DIRECTOR_DELTA_EVENT");
     expect(workActivitySource).toContain("envelope.run_id === runId");
     expect(workActivitySource).toContain('subscribe("research_session:presence"');
+  });
+
+  it("uses only the Inbox Task-scoped durable timeline for Work activity", () => {
+    expect(workActivitySource).not.toContain("useRunnerActivity");
+    expect(workActivitySource).not.toContain("runnerActivity");
+    expect(workActivitySource).toContain("data?.timeline ?? []");
   });
 });

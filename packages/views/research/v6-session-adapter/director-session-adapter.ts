@@ -104,7 +104,8 @@ export function adaptResearchV6DirectorCanvas(
         title: node.title ?? node.catalogSummary,
         summary: node.catalogSummary,
         status: rendererStatus(node),
-        actor_agent_id: null,
+        actor_agent_id:
+          node.canonicalRef.kind === "agent" ? node.canonicalRef.id : null,
         payload: {
           canonical_ref: node.canonicalRef,
           branch_ids: node.branchIds,

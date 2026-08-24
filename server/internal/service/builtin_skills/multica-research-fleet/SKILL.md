@@ -132,8 +132,11 @@ assignment/generation、Brief 身份、页数、state version 和 event sequence
 必须使用根合同允许的 action kind，以及 `manifest.task_specific_schema.payload_schemas`
 中冻结的一个 payload schema。不得猜测旧 `research.*` schema 名。Agent 创建是异步的：
 不得把 Work 分给同一个 proposal 中刚申请的 Agent；等待 joined 事件和下一次 Director
-cycle。原子 Work 使用 `atomic_result_submission`、非空 `payload_schema_id`，并在
-`payload.task_specific_schema` 中携带精确的结果校验器。
+cycle。主理人只负责规划、组队、派工和整合，不得把原子调研 Work 指派给自己。原子
+Work 使用 `atomic_result_submission`，`payload_schema_id` 必须非空且不得为
+`no_op.v1`，并在 `payload.task_specific_schema` 中携带精确、非空的结果校验器。派工
+发生合同拒绝且已有空闲专属 Agent 时，下一轮必须修正合同并重新派工，不得提交
+`no_op`；运行中尚无专属 Agent 且无 Agent 创建待处理时也不得 `no_op`。
 
 存在 `catalog_access` 时，逐页读取授权 view，并确认结果实际使用的每一页：
 

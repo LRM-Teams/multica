@@ -20,6 +20,7 @@ func TestRonaldoV6StorageMigrationSlicesAreContiguousAndGuarded(t *testing.T) {
 		397: {"research_v6_artifact_class", "v6_insight_version"},
 		398: {"research_v6_activation_evidence", "research_v6_append_only_guard"},
 		425: {"research_v6_bootstrap_request_session_fk", "ON DELETE CASCADE"},
+		443: {"research_work_item_activity_entry", "work_item_attempt_id", "message_sequence"},
 	}
 	root := filepath.Join("..", "..", "migrations")
 	for number, fragments := range wants {

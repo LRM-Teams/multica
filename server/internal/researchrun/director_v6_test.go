@@ -780,6 +780,12 @@ func TestV6DirectorCreatedWorkStartsAtVersionOne(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := run.store.AddV6TeamMember(run.ctx, AddV6TeamMemberInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+		AgentID: run.fixture.reporterID, MissionPrompt: "Investigate the assigned question",
+	}); err != nil {
+		t.Fatal(err)
+	}
 	var stateVersion, throughSequence int64
 	if err := run.pool.QueryRow(run.ctx, `SELECT state_version,
 		COALESCE((SELECT max(sequence) FROM research_run_event WHERE session_id=$1::uuid),0)
@@ -798,7 +804,7 @@ func TestV6DirectorCreatedWorkStartsAtVersionOne(t *testing.T) {
 		t.Fatal(err)
 	}
 	actionPayload, err := json.Marshal(map[string]any{
-		"kind": "deep_read", "assignee_agent_id": run.fixture.agentID, "mission": "Investigate the assigned question",
+		"kind": "deep_read", "assignee_agent_id": run.fixture.reporterID, "mission": "Investigate the assigned question",
 		"expected_result_schema_id": "atomic_result_submission", "payload_schema_id": "research.test.v1",
 		"payload":  map[string]any{"task_specific_schema": map[string]any{"type": "object"}},
 		"priority": 0.5, "max_attempts": 1, "branch_ids": []string{},
@@ -826,5 +832,90 @@ func TestV6DirectorCreatedWorkStartsAtVersionOne(t *testing.T) {
 	}
 	if persistedKind != "research" || taskKind != "deep_read" {
 		t.Fatalf("created Work kind=%q task_kind=%q want research/deep_read", persistedKind, taskKind)
+	}
+}
+
+func TestV6DirectorRejectsUnusableAtomicWorkSchemaWithActionableDiagnostic(t *testing.T) {
+	run := newTransactionRecoveryRun(t, "Reject unusable V6 atomic Work schema")
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_session SET orchestrator_version='research-run-v6' WHERE id=$1::uuid`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.store.AssignV6Director(run.ctx, AssignV6DirectorInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+		AgentID: run.fixture.agentID, UserID: run.fixture.userID,
+		Reason: "Coordinate atomic research", ClientRequestID: uuid.NewString(), ExpectedStateVersion: 0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.store.AddV6TeamMember(run.ctx, AddV6TeamMemberInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+		AgentID: run.fixture.reporterID, MissionPrompt: "Research Manus technology",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var stateVersion int64
+	if err := run.pool.QueryRow(run.ctx, `SELECT state_version FROM research_session WHERE id=$1::uuid`, run.fixture.sessionID).Scan(&stateVersion); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(map[string]any{
+		"kind": "research", "assignee_agent_id": run.fixture.reporterID,
+		"mission": "Research Manus technology", "expected_result_schema_id": "atomic_result_submission",
+		"payload_schema_id": "no_op.v1", "payload": map[string]any{"reason": "technology"},
+		"priority": 0.9, "max_attempts": 2, "branch_ids": []string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = run.store.executeV6CreateWorkAction(run.ctx, v6DirectorProposal{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+	}, uuid.NewString(), v6DirectorAction{
+		ActionID: uuid.NewString(), Kind: "create_work_item", IdempotencyKey: "invalid-atomic:" + uuid.NewString(),
+		PayloadSchema: "collaboration.create.v1", Payload: payload,
+	}, stateVersion)
+	if !errors.Is(err, ErrInvalidContract) || !strings.Contains(err.Error(), "no_op.v1") || !strings.Contains(err.Error(), "payload.task_specific_schema") {
+		t.Fatalf("invalid atomic Work error=%v, want actionable schema diagnostic", err)
+	}
+}
+
+func TestV6DirectorCannotNoOpAfterRejectedAssignmentWithIdleWorkers(t *testing.T) {
+	run := newTransactionRecoveryRun(t, "Recover rejected V6 Agent assignment")
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_session SET orchestrator_version='research-run-v6' WHERE id=$1::uuid`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.store.AssignV6Director(run.ctx, AssignV6DirectorInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+		AgentID: run.fixture.agentID, UserID: run.fixture.userID,
+		Reason: "Recover rejected team assignment", ClientRequestID: uuid.NewString(), ExpectedStateVersion: 0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.store.AddV6TeamMember(run.ctx, AddV6TeamMemberInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+		AgentID: run.fixture.reporterID, MissionPrompt: "Research Manus technology",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.pool.Exec(run.ctx, `INSERT INTO research_work_item(
+		id,workspace_id,session_id,kind,status,assigned_agent_id,goal_version,idempotency_key,
+		payload_schema_id,expected_result_schema_id,payload,state_version,terminal_reason_code,terminal_reason_detail
+	) VALUES($1::uuid,$2::uuid,$3::uuid,'director','failed',$4::uuid,1,$5,
+		'director.action.registry.v1','director_action_proposal','{}'::jsonb,1,'contract_rejected','atomic Work schema was invalid')`,
+		uuid.NewString(), run.fixture.workspaceID, run.fixture.sessionID, run.fixture.agentID,
+		"rejected-assignment:"+uuid.NewString()); err != nil {
+		t.Fatal(err)
+	}
+	var stateVersion int64
+	if err := run.pool.QueryRow(run.ctx, `SELECT state_version FROM research_session WHERE id=$1::uuid`, run.fixture.sessionID).Scan(&stateVersion); err != nil {
+		t.Fatal(err)
+	}
+	action := v6DirectorAction{
+		ActionID: uuid.NewString(), Kind: "no_op", IdempotencyKey: "invalid-no-op:" + uuid.NewString(),
+		PayloadSchema: "no_op.v1", Reason: "Wait for the next brief",
+	}
+	err := run.store.recordV6DirectorNoOp(run.ctx, v6DirectorProposal{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+	}, uuid.NewString(), action, stateVersion, action.Reason)
+	if !errors.Is(err, ErrInvalidContract) || !strings.Contains(err.Error(), "assign Work to an idle run-scoped Agent") {
+		t.Fatalf("post-rejection no-op error=%v, want assignment recovery requirement", err)
 	}
 }

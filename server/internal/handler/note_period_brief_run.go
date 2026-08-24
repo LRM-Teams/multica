@@ -23,6 +23,7 @@ type notePeriodBriefCollectorRef struct {
 	WindowStart  string `json:"window_start"`
 	WindowEnd    string `json:"window_end"`
 	PackMarkdown string `json:"pack_markdown,omitempty"`
+	PackJobID    string `json:"pack_job_id,omitempty"`
 }
 
 type notePeriodBriefRunRow struct {
@@ -229,6 +230,53 @@ func (h *Handler) updateNotePeriodBriefRunCollectors(
 UPDATE note_period_brief_run
 SET collectors = $1::jsonb, status = $2, updated_at = now()
 WHERE id = $3`, raw, status, runID)
+	return err
+}
+
+func (h *Handler) updateNotePeriodBriefRunStatus(ctx context.Context, runID pgtype.UUID, status string) error {
+	if strings.TrimSpace(status) == "" {
+		return nil
+	}
+	_, err := h.DB.Exec(ctx, `
+UPDATE note_period_brief_run
+SET status = $1, updated_at = now()
+WHERE id = $2`, status, runID)
+	return err
+}
+
+// mergeNotePeriodBriefCollector patches one collector object in place so two
+// machines submitting at once cannot clobber each other's pack or job_id.
+func (h *Handler) mergeNotePeriodBriefCollector(
+	ctx context.Context,
+	runID pgtype.UUID,
+	agentID string,
+	patch map[string]any,
+	status string,
+) error {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return fmt.Errorf("collector agent id is required")
+	}
+	raw, err := json.Marshal(patch)
+	if err != nil {
+		return err
+	}
+	_, err = h.DB.Exec(ctx, `
+UPDATE note_period_brief_run
+SET collectors = (
+      SELECT COALESCE(jsonb_agg(elem ORDER BY ord), '[]'::jsonb)
+      FROM (
+        SELECT
+          CASE WHEN c->>'agent_id' = $2 THEN c || $3::jsonb ELSE c END AS elem,
+          ordinality AS ord
+        FROM jsonb_array_elements(collectors) WITH ORDINALITY AS t(c, ordinality)
+      ) s
+    ),
+    status = CASE WHEN $4 <> '' THEN $4 ELSE status END,
+    updated_at = now()
+WHERE id = $1
+  AND collectors @> jsonb_build_array(jsonb_build_object('agent_id', $2::text))`,
+		runID, agentID, raw, strings.TrimSpace(status))
 	return err
 }
 

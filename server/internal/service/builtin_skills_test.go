@@ -491,6 +491,8 @@ func TestPeriodWorkBriefSkillRequiresReportingShape(t *testing.T) {
 		"nested sub-points",
 		"Mermaid",
 		"retry-collectors",
+		"retry-only",
+		"write wake",
 		"Inbox will",
 		"--note-write",
 		"references/period-work-brief-source-map.md",

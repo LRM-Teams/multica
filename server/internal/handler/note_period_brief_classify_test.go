@@ -129,8 +129,33 @@ func TestPeriodBriefCollectorNeedsAssistantRetryOnce(t *testing.T) {
 	}
 	if got := periodBriefMaterialsProgressCopy([]notePeriodBriefPackResult{
 		{Status: "failed", Retryable: true, RetryCount: 1},
-	}); !strings.Contains(got, "收到了所有需要的材料") {
+	}); !strings.Contains(got, "没有采到可用材料") {
 		t.Fatalf("final failure copy = %q", got)
+	}
+	if got := periodBriefMaterialsProgressCopy(nil); !strings.Contains(got, "没有派出采集员") {
+		t.Fatalf("empty plan copy = %q", got)
+	}
+	if got := periodBriefMaterialsProgressCopy([]notePeriodBriefPackResult{
+		{Status: "ready"},
+	}); !strings.Contains(got, "收到了所有需要的材料") {
+		t.Fatalf("ready copy = %q", got)
+	}
+}
+
+func TestPeriodBriefPackBelongsToJob(t *testing.T) {
+	t.Parallel()
+	current := "job-2"
+	if periodBriefPackBelongsToJob(notePeriodBriefCollectorRef{PackJobID: "job-1", JobID: current}, current) {
+		t.Fatal("a pack from the previous job must not settle this retry")
+	}
+	if !periodBriefPackBelongsToJob(notePeriodBriefCollectorRef{PackJobID: current, JobID: current}, current) {
+		t.Fatal("this job's pack must settle")
+	}
+	if !periodBriefPackBelongsToJob(notePeriodBriefCollectorRef{JobID: current}, current) {
+		t.Fatal("legacy pack without pack_job_id still counts for the current job")
+	}
+	if periodBriefPackBelongsToJob(notePeriodBriefCollectorRef{JobID: current}, "job-1") {
+		t.Fatal("legacy pack must not count for a different waited job")
 	}
 }
 

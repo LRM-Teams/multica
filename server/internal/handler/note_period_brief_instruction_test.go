@@ -31,8 +31,8 @@ func TestNotePeriodBriefInstructionRequiresReportingShape(t *testing.T) {
 		"--note-write --note-page-id folder-id",
 		"<focus>",
 		"Notes pages are not source material",
-		"MUST call the retry CLI once",
-		"do not write the Brief yet",
+		"This is the write wake",
+		"Do not call retry-collectors",
 		"Inbox will not auto-retry",
 	} {
 		if !strings.Contains(got, want) {
@@ -47,6 +47,26 @@ func TestNotePeriodBriefInstructionRequiresReportingShape(t *testing.T) {
 	}
 	if strings.Contains(got, "at most 3 bullets") {
 		t.Fatal("old 3-bullet cap must not flatten reporting threads")
+	}
+	if strings.Contains(got, "MUST call the retry CLI once now") {
+		t.Fatal("write wake must not also order a retry")
+	}
+}
+
+func TestNotePeriodBriefRetryInstructionForbidsWrite(t *testing.T) {
+	t.Parallel()
+	got := notePeriodBriefRetryInstruction("draft-id")
+	for _, want := range []string{
+		"retry-collectors --draft-page-id draft-id",
+		"Do not write the Brief",
+		"Do not --note-write",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("retry instruction missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "--note-write --note-page-id") {
+		t.Fatal("retry wake must not deliver the Brief")
 	}
 }
 

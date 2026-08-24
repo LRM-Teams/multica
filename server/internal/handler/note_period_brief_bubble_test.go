@@ -95,8 +95,17 @@ func TestLooksLikePeriodBriefRequest(t *testing.T) {
 	if !looksLikePeriodBriefRequest("帮我写汇报") {
 		t.Fatal("expected 写汇报 intent")
 	}
+	if !looksLikePeriodBriefRequest("Write report") {
+		t.Fatal("expected satellite Write report intent")
+	}
+	if !looksLikePeriodBriefRequest("Report") {
+		t.Fatal("expected satellite Report intent")
+	}
 	if looksLikePeriodBriefRequest("这段笔记的标题怎么改") {
 		t.Fatal("ordinary note chat should not start 写汇报")
+	}
+	if looksLikePeriodBriefRequest("I want to report a bug") {
+		t.Fatal("ordinary English report should not start 写汇报")
 	}
 }
 
@@ -112,6 +121,155 @@ func TestParsePeriodBriefIntakeWindowAndCollectors(t *testing.T) {
 	}
 	if got := periodBriefIntakeFocus("本周，全部", owned); got != "" {
 		t.Fatalf("window+computers answer should not be focus, got %q", got)
+	}
+}
+
+func TestCreateNotePeriodBriefRejectsActiveRunOnSamePage(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	var sourcePageID string
+	if err := testPool.QueryRow(context.Background(), `
+INSERT INTO note_page (workspace_id, owner_user_id, title, content, sort_key, created_by, updated_by)
+VALUES ($1, $2, $3, '', lpad((extract(epoch from now()) * 1000000)::bigint::text, 20, '0'), $2, $2)
+RETURNING id`, testWorkspaceID, testUserID, "Active run page "+uuid.NewString()[:8]).Scan(&sourcePageID); err != nil {
+		t.Fatalf("create source page: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM note_page WHERE id = $1`, sourcePageID)
+	})
+
+	synthID := createHandlerTestAgent(t, "Period Brief Active "+uuid.NewString()[:8], nil)
+	collectorID := createPeriodBriefCollectorTestAgent(t, "Laptop Active")
+	body := map[string]any{
+		"window":               "day",
+		"date":                 time.Now().UTC().Format("2006-01-02"),
+		"timezone":             "UTC",
+		"agent_id":             synthID,
+		"collector_agent_ids":  []string{collectorID},
+		"context_note_page_id": sourcePageID,
+	}
+	first := httptest.NewRecorder()
+	testHandler.CreateNotePeriodBrief(first, newRequest(http.MethodPost, "/api/notes/period-briefs", body))
+	if first.Code != http.StatusCreated {
+		t.Fatalf("first create = %d: %s", first.Code, first.Body.String())
+	}
+	second := httptest.NewRecorder()
+	testHandler.CreateNotePeriodBrief(second, newRequest(http.MethodPost, "/api/notes/period-briefs", body))
+	if second.Code != http.StatusConflict {
+		t.Fatalf("second create = %d, want 409: %s", second.Code, second.Body.String())
+	}
+}
+
+func TestCreateNotePeriodBriefAllowsNewRunAfterInsertCard(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	var sourcePageID string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO note_page (workspace_id, owner_user_id, title, content, sort_key, created_by, updated_by)
+VALUES ($1, $2, $3, '', lpad((extract(epoch from now()) * 1000000)::bigint::text, 20, '0'), $2, $2)
+RETURNING id`, testWorkspaceID, testUserID, "Insert card page "+uuid.NewString()[:8]).Scan(&sourcePageID); err != nil {
+		t.Fatalf("create source page: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(ctx, `DELETE FROM note_period_brief_run WHERE source_page_id = $1`, sourcePageID)
+		_, _ = testPool.Exec(ctx, `DELETE FROM note_page WHERE id = $1`, sourcePageID)
+	})
+	synthID := createHandlerTestAgent(t, "Insert Card Synth "+uuid.NewString()[:8], nil)
+	collectorID := createPeriodBriefCollectorTestAgent(t, "Laptop Insert Card")
+	folderID, err := testHandler.ensureNotePeriodBriefFolder(ctx, parseUUID(testWorkspaceID), parseUUID(testUserID))
+	if err != nil {
+		t.Fatalf("folder: %v", err)
+	}
+	draftID := insertPeriodBriefFixtureDraft(t, "awaiting draft")
+	insertPeriodBriefFixtureRun(t, sourcePageID, uuidToString(folderID), synthID, draftID, "awaiting_confirm", time.Now())
+
+	rec := httptest.NewRecorder()
+	testHandler.CreateNotePeriodBrief(rec, newRequest(http.MethodPost, "/api/notes/period-briefs", map[string]any{
+		"window":               "day",
+		"date":                 time.Now().UTC().Format("2006-01-02"),
+		"timezone":             "UTC",
+		"agent_id":             synthID,
+		"collector_agent_ids":  []string{collectorID},
+		"context_note_page_id": sourcePageID,
+	}))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create after insert card = %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestGetActiveNotePeriodBriefIgnoresStaleAwaitingConfirmAfterNewerDone(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	var sourcePageID string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO note_page (workspace_id, owner_user_id, title, content, sort_key, created_by, updated_by)
+VALUES ($1, $2, $3, '', lpad((extract(epoch from now()) * 1000000)::bigint::text, 20, '0'), $2, $2)
+RETURNING id`, testWorkspaceID, testUserID, "Stale active page "+uuid.NewString()[:8]).Scan(&sourcePageID); err != nil {
+		t.Fatalf("create source page: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(ctx, `DELETE FROM note_period_brief_run WHERE source_page_id = $1`, sourcePageID)
+		_, _ = testPool.Exec(ctx, `DELETE FROM note_page WHERE id = $1`, sourcePageID)
+	})
+	synthID := createHandlerTestAgent(t, "Stale Active Synth "+uuid.NewString()[:8], nil)
+	folderID, err := testHandler.ensureNotePeriodBriefFolder(ctx, parseUUID(testWorkspaceID), parseUUID(testUserID))
+	if err != nil {
+		t.Fatalf("folder: %v", err)
+	}
+	oldDraft := insertPeriodBriefFixtureDraft(t, "old draft")
+	newDraft := insertPeriodBriefFixtureDraft(t, "new draft")
+	insertPeriodBriefFixtureRun(t, sourcePageID, uuidToString(folderID), synthID, oldDraft, "awaiting_confirm", time.Now().Add(-time.Hour))
+	insertPeriodBriefFixtureRun(t, sourcePageID, uuidToString(folderID), synthID, newDraft, "done", time.Now())
+
+	activeRec := httptest.NewRecorder()
+	testHandler.GetActiveNotePeriodBrief(activeRec, newRequest(http.MethodGet, "/api/notes/period-briefs/active?page_id="+sourcePageID, nil))
+	if activeRec.Code != http.StatusOK {
+		t.Fatalf("active = %d: %s", activeRec.Code, activeRec.Body.String())
+	}
+	var active struct {
+		Run *notePeriodBriefActiveResponse `json:"run"`
+	}
+	if err := json.NewDecoder(activeRec.Body).Decode(&active); err != nil {
+		t.Fatalf("decode active: %v", err)
+	}
+	if active.Run != nil {
+		t.Fatalf("active run = %#v, want nil after a newer done run", active.Run)
+	}
+}
+
+func insertPeriodBriefFixtureDraft(t *testing.T, title string) string {
+	t.Helper()
+	var id string
+	if err := testPool.QueryRow(context.Background(), `
+INSERT INTO note_page (workspace_id, owner_user_id, title, content, sort_key, created_by, updated_by)
+VALUES ($1, $2, $3, '', lpad((extract(epoch from now()) * 1000000)::bigint::text, 20, '0'), $2, $2)
+RETURNING id`, testWorkspaceID, testUserID, title+" "+uuid.NewString()[:8]).Scan(&id); err != nil {
+		t.Fatalf("create draft: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM note_page WHERE id = $1`, id)
+	})
+	return id
+}
+
+func insertPeriodBriefFixtureRun(t *testing.T, sourcePageID, folderID, synthID, draftID, status string, createdAt time.Time) {
+	t.Helper()
+	if _, err := testPool.Exec(context.Background(), `
+INSERT INTO note_period_brief_run (
+  workspace_id, owner_user_id, draft_page_id, folder_page_id, synthesizer_agent_id,
+  window_label, window_start, window_end, timezone, window_kind,
+  facts_text, collectors, status, source_page_id, created_at, updated_at
+) VALUES (
+  $1, $2, $3, $4, $5,
+  'week', now() - interval '7 days', now(), 'UTC', 'week',
+  '', '[]'::jsonb, $6, $7, $8, $8
+)`, testWorkspaceID, testUserID, draftID, folderID, synthID, status, sourcePageID, createdAt); err != nil {
+		t.Fatalf("insert run %s: %v", status, err)
 	}
 }
 
@@ -628,7 +786,7 @@ ORDER BY created_at DESC LIMIT 1`, created.ChatSessionID).Scan(&runID); err != n
 		t.Fatalf("load run row: %v", err)
 	}
 	plantPeriodBriefFolderNoteWrite(t, synthID, uuidToString(folderID), "# THIS RUN BRIEF\n\nCurrent synthesizer output.")
-	if got := testHandler.loadPeriodBriefSynthesizerWrite(context.Background(), run); !strings.Contains(got, "THIS RUN BRIEF") {
+	if got := testHandler.loadPeriodBriefSynthesizerWrite(context.Background(), run, time.Time{}); !strings.Contains(got, "THIS RUN BRIEF") {
 		t.Fatalf("this-run folder write not harvested: %q", got)
 	}
 }

@@ -48,4 +48,22 @@ describe("NoteAssistantFabCluster", () => {
     expect(onAction).toHaveBeenCalledWith("chat");
     expect(highlights).toBeTruthy();
   });
+
+  it("pulses the chat FAB while a task is running", () => {
+    renderWithI18n(
+      <div className="relative h-64 w-64">
+        <NoteAssistantFabCluster
+          tooltip="Notes Assistant is working…"
+          isRunning
+          unreadCount={0}
+          reducedMotion={false}
+          onAction={vi.fn()}
+        />
+      </div>,
+    );
+
+    expect(screen.getByRole("button", { name: "Notes Assistant is working…" }).className).toContain(
+      "animate-chat-impulse",
+    );
+  });
 });

@@ -15,11 +15,11 @@ description: 项目下可选的链接与本地引用元数据。
 
 ## CLI
 
+使用以下命令查看项目及其绑定资源：
+
 ```bash
-multica project resource list <project-id>
-multica project resource add <project-id> --type <type> --ref '<json>'
-multica project resource update <project-id> <resource-id> --ref '<json>'
-multica project resource remove <project-id> <resource-id>
+multica workspace info --projects --output json
 ```
 
-这些命令只修改项目元数据，不影响执行 cwd。
+旧版 `multica project resource` 命令已移除。资源管理请使用 workspace UI/API，
+且不会影响 Agent 的执行目录。

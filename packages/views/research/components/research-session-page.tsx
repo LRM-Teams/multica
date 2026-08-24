@@ -1175,7 +1175,14 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
             directorV6Enabled ? directorCanvas.expansionControl : undefined
           }
           densityBins={
-            directorV6Enabled ? directorCanvas.canvas?.densityBins : undefined
+            directorV6Enabled
+              ? directorCanvas.canvas?.densityBins.map((bin) => ({
+                  id: bin.id,
+                  bounds: bin.bounds,
+                  total: bin.total,
+                  execution_counts: bin.executionCounts,
+                }))
+              : undefined
           }
           typedGraphHasNextPage={
             directorV6Enabled

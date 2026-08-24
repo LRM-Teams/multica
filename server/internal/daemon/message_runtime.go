@@ -121,6 +121,9 @@ func (d *Daemon) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID
 	}
 	preparedMessages, memoryTask, err := d.prepareResidentMessageBatch(ctx, agentID, runtimeID, messages)
 	if err != nil {
+		reason := canonicalMessageFailureReason(err)
+		d.recordResidentMessageBatch(workspaceID, runtimeID, agentID, messages, "runtime_delivery_accepted", "rejected", reason, executionID, runtimeEpoch, launchID, startDispatchID)
+		d.recordResidentMessageBatch(workspaceID, runtimeID, agentID, messages, "terminal_rejected", "rejected", reason, executionID, runtimeEpoch, launchID, startDispatchID)
 		return err
 	}
 	var canonicalActionTurn canonicalActionTurnToken

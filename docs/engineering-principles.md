@@ -253,6 +253,20 @@
 - **授权边界**：在当前 Goal/Issue 已授权 scope、permissions 和 committed budget 内做并行拆分，不额外请求确认；只有拆分会实质扩大任一边界时才提案。小任务、紧耦合交付或拆分成本高于 wall-clock 收益时保持 DIRECT。
 - **物**：`channelGoalStateSlot` 的 manager-only `Parallel admission`（新增热路径文案有 600-byte 上限）；assignment prompt/runtime 的同义 `Work Decomposition Gate`；`multica issue decompose` 的原子父子/依赖写入。回归为 `TestBuildPromptChannelManagerDefaultsIndependentGoalWorkToIssueDAG`、`TestBuildPromptWithoutChannelGoalKeepsOrdinaryChatUnchanged` 和 `TestAssignmentBriefIncludesWorkDecompositionGate`。
 
+### 4.0.c Active Goal 路由、session 并行与完成边界 — `仅文档`（2026-08-24 已拍板，待实现）
+- **manager-first**：active Goal 频道里，人类没有明确 `@Agent` 时只完整唤醒群管，其他智能体只 observe；明确 `@Agent` 和 Issue assignment 仍定向唤醒负责人。
+- **并行按 session，不按运行时数量**：多个智能体共用同一运行时时，各自的独立 session 可以并行。只有 session 可被并发 claim 或 Run 的 running 时间窗口真实重叠，才能宣称可并行 / 正在并行。`distinct_runtime_count` 只衡量故障域和容灾，不能拿来限制并行度；同一个智能体是否允许多个 session 并发由智能体 scheduler policy 另行规定。
+- **智能体不自关单**：智能体完成叶子 Issue 必须提交带 acceptance evidence 的 completion report 并进入 `in_review`；低风险项由群管验收，发布 / 集成由独立 reviewer 或人验收，不能从执行直接写 `done`。
+- **指针**：完整提案、状态 invariant、迁移和验收见 [`docs/superpowers/specs/2026-08-24-goal-issue-run-controller-spec.zh-CN.md`](superpowers/specs/2026-08-24-goal-issue-run-controller-spec.zh-CN.md)。实现及 owner 尚未落地，因此当前诚实标为 `仅文档`。
+
+### 4.0.d Goal Execution Graph 与 Research Genealogy 分层 — `仅文档`（2026-08-24 方向已拍板，待实现）
+- **统一执行控制面**：每个 Goal 都提供 Goal Execution Graph，但它只是 Goal、Issue、dependency、Run、completion/review、decision、artifact/evidence 和 failure 的版本化 read model。Issue parent/dependency 是唯一可写任务拓扑，Issue 是唯一可分配工作，Run intent 由 `agent_inbox_event` 承担；每次真实 Provider start 使用独立 `agent_execution`，同一 Run 可以有多个不可变 execution attempt。图投影不得拥有独立 assignee、lease、retry 或完成状态，也不得为普通 Goal 镜像创建 Work Graph。
+- **Research 是嵌套领域图**：Research Issue 可拥有 Research Genealogy，记录 candidate、hypothesis、experiment、evidence、score、parent-child、reference/mechanism transfer、crossover、failure 和 pruning。candidate 不是 Issue，谱系边也不等于执行依赖；需要智能体工作时必须经唯一 adapter 创建或绑定 Issue/Run，研究结论只能提交 completion report 进入 `in_review`，不能直接完成 Issue 或 Goal。
+- **legacy 边界**：现有 Work Graph、artifact revision、verification、invalidation 和 epoch 暂作为 `research_legacy` 内部实现保留，不迁移、不作为用户可选的 Goal 高级模式。禁止 Issue DAG 与 Work Graph 节点级双写，禁止 Work Graph wake 与 Issue wake 对同一工作重复派发；后续是否演进 schema 由 Research 专项 spec 决定。本条覆盖 4.0.a 将 Work Graph 发展为通用 Goal 调度真相的未来方向，但不宣称当前代码已完成迁移。
+- **推进语义**：`advance graph` 是 Goal controller 的幂等 `AdvanceGoal` / `ReconcileGoalExecutionGraph` 操作：消费 controller event，重算 frontier，按需创建、拆分、重新打开或 supersede Issue，并写 checkpoint / projection revision。它不能直接启动 Provider、绕过 Issue 派工或用投影覆盖 canonical 状态。
+- **动态可视化**：服务端按 per-Goal projection revision 生成可重建 snapshot / delta，前端只消费投影并在 revision 缺口时重取 snapshot。默认展示 Issue hierarchy / dependency，按需展开 Run、completion report、review、返工、decision、artifact/evidence 和 failed/superseded 历史；每个节点必须回链 `source_kind + source_id + source_version`。图上写操作仍调用 canonical Goal/Issue/completion/review API，禁止客户端写投影状态或自行推导完成。
+- **指针**：整合契约、过渡顺序和验收见 [`docs/superpowers/specs/2026-08-24-multi-agent-reliability-control-plane-integration-spec.zh-CN.md`](superpowers/specs/2026-08-24-multi-agent-reliability-control-plane-integration-spec.zh-CN.md)。
+
 ### 4.0 服务环境决定连接目标与 Computer 包源 — `可执行`（⑤，owner: @Barry；Web origin 门：`scripts/assert-baked-web-public-origins.sh` + `deploy-test.yml`）
 - **服务环境**：`production` 是 leagent.me 正式服务，browser/API 的 canonical origin 分别是 `https://www.leagent.me` 与 `https://api.leagent.me`；`test` 是腾讯云测试服务，首版以 `https://82.157.184.89` 同时承担 app/API，之后可只改部署配置切到 `https://test.leagent.me`。服务端用 `APP_ENV=production|test` 声明身份，并通过公共 `/api/config.environment` 明确告诉页面，禁止根据域名或 IP 猜环境。旧服务缺字段或字段非法时，前端保守降级为 production。
 - **Web 公开 origin 是构建期常量**：`NEXT_PUBLIC_API_URL` / `NEXT_PUBLIC_APP_URL` / `NEXT_PUBLIC_ENVIRONMENT` 烤进浏览器 JS，容器启动后再改环境变量无效。test 镜像必须烤 `https://82.157.184.89`（或当时的 test origin），不得出现 `api.leagent.me` / `www.leagent.me`。`/health` 探活发现不了这件事。门禁是 `scripts/assert-baked-web-public-origins.sh`，由 `deploy-test.yml` 在 s89 验收登录页 layout chunk；`scripts/assert-baked-web-public-origins.test.sh` 先见红再生产包。test web 构建禁用 Buildx cache，Dockerfile 设 `TURBO_FORCE=1`，避免复用生产烤过的 `.next`。

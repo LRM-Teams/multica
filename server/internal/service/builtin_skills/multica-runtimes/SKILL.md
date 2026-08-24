@@ -78,7 +78,8 @@ Computer owners can perform this action. A Workspace owner/admin does not gain
 lifecycle control over another person's Computer; the initiating Workspace is
 only an entry point, and every active Workspace connection observes the same
 Computer upgrade. The Computer's active Workspace Binding is the ownership and
-dispatch authority; no Agent Runtime is required for the Computer to upgrade.
+dispatch authority; Agent Runtime cardinality, pinning, and provider launch
+metadata do not gate the machine-wide Computer lifecycle.
 Upgrade changes are projected to those Workspaces as `computer:updated`; the
 event carries only `computer_id`, and clients refetch their Workspace-scoped
 Computer projection. It is not a Runtime update event.

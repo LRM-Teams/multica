@@ -121,8 +121,8 @@ func TestMachineUpgrade_AllowsOnlyComputerOwner(t *testing.T) {
 	if pinnedW.Code != http.StatusConflict {
 		t.Fatalf("canonical create on pinned runtime = %d: %s", pinnedW.Code, pinnedW.Body.String())
 	}
-	if err := json.Unmarshal(pinnedW.Body.Bytes(), &body); err != nil || body["code"] != "runtime_pinned" {
-		t.Fatalf("pinned response = %s err=%v", pinnedW.Body.String(), err)
+	if err := json.Unmarshal(pinnedW.Body.Bytes(), &body); err != nil || body["code"] != "no_current_socket" {
+		t.Fatalf("Runtime pin incorrectly gated Computer upgrade = %s err=%v", pinnedW.Body.String(), err)
 	}
 
 	if _, err := testPool.Exec(context.Background(), `UPDATE agent_runtime SET pinned_version = NULL, metadata = '{"launched_by":"desktop","capabilities":["machine_upgrade_v1"]}'::jsonb WHERE id = $1`, runtimeID); err != nil {
@@ -132,8 +132,8 @@ func TestMachineUpgrade_AllowsOnlyComputerOwner(t *testing.T) {
 	if desktopW.Code != http.StatusConflict {
 		t.Fatalf("canonical create on desktop-managed runtime = %d: %s", desktopW.Code, desktopW.Body.String())
 	}
-	if err := json.Unmarshal(desktopW.Body.Bytes(), &body); err != nil || body["code"] != "desktop_managed" {
-		t.Fatalf("desktop response = %s err=%v", desktopW.Body.String(), err)
+	if err := json.Unmarshal(desktopW.Body.Bytes(), &body); err != nil || body["code"] != "no_current_socket" {
+		t.Fatalf("Runtime launch metadata incorrectly gated Computer upgrade = %s err=%v", desktopW.Body.String(), err)
 	}
 }
 

@@ -250,3 +250,50 @@ func TestResidentMessageMemoryTaskKeepsInitiatorOnlyForSingleSubject(t *testing.
 		t.Fatalf("resident memory task = %+v", task)
 	}
 }
+
+// P0 §4.2: identical recall queries within one resident message batch
+// coalesce into a single server recall; whitespace/case variants share the
+// normalized key, distinct queries do not.
+func TestPrepareResidentMessageBatchCoalescesIdenticalGraphRecalls(t *testing.T) {
+	var recalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/daemon/graph-memory/recalls" {
+			http.NotFound(w, r)
+			return
+		}
+		recalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"found":true,"injection":"## Graph Memory Recall\ndispatch retries use exponential backoff","status":"explore_terminal"}`))
+	}))
+	defer server.Close()
+
+	root := t.TempDir()
+	d := New(Config{WorkspacesRoot: root, MemoryType: MemoryTypeGraph}, nil)
+	d.client = NewClient(server.URL)
+	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
+
+	msg := func(id, content string) protocol.AgentMessageProjection {
+		return protocol.AgentMessageProjection{
+			ID: id, Target: "channel:group-1", Seq: 1, Content: content,
+			ChannelID: "channel-group", ChannelKind: "group",
+			InitiatorType: "member", InitiatorID: "member-1", InitiatorName: "JHP",
+		}
+	}
+	messages := []protocol.AgentMessageProjection{
+		msg("m-1", "总结一下当前进度"),
+		msg("m-2", "总结一下当前进度"),
+		msg("m-3", "总结一下  当前进度"), // whitespace variant: same key
+		msg("m-4", "列出当前的风险项"),
+	}
+
+	prepared, _, err := d.prepareResidentMessageBatch(context.Background(), "agent-1", "runtime-1", messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prepared) != 4 {
+		t.Fatalf("prepared messages = %d, want 4", len(prepared))
+	}
+	if got := recalls.Load(); got != 2 {
+		t.Fatalf("recall calls = %d, want 2 (identical queries coalesced)", got)
+	}
+}

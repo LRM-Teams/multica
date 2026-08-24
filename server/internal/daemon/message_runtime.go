@@ -407,6 +407,7 @@ func (d *WorkspaceDaemonCore) prepareResidentMessageBatch(ctx context.Context, a
 
 	prepared := make([]protocol.AgentMessageProjection, 0, len(messages))
 	sessionKey := residentTurnScopeSessionKey(agentID, runtimeID)
+	graphRecallMemo := map[string][]execenv.MemoryContextForEnv{}
 	for _, message := range messages {
 		messageTask := residentMessageMemoryTask(workspaceID, agentID, runtimeID, []protocol.AgentMessageProjection{message})
 		if profile, ok := d.graphProfileForWorkspace(workspaceID); ok {
@@ -422,7 +423,7 @@ func (d *WorkspaceDaemonCore) prepareResidentMessageBatch(ctx context.Context, a
 			// Agent-scope rows stay out of per-message context.
 			combined := mergeGraphModeExecutionMemory(
 				agentRoot, messageTask, serverMemories,
-				d.graphExecutionMemories(ctx, messageTask, d.logger),
+				d.memoizedGraphExecutionMemories(ctx, messageTask, graphRecallMemo, d.logger),
 			)
 			memories = withoutAgentScopeMemories(combined)
 		} else {

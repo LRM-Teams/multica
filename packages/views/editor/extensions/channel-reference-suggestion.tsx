@@ -5,6 +5,7 @@ import { getCurrentWsId } from "@multica/core/platform";
 import {
   conversationGroupChannels,
   conversationKeys,
+  conversationsOptions,
   flattenConversationPages,
   type ConversationListResponse,
 } from "@multica/core/conversations";
@@ -38,22 +39,29 @@ function matchesChannel(item: Pick<Channel, "name" | "description">, query: stri
   );
 }
 
-// No server search — filter the loaded pages of the unified Conversations
-// cache, which is also the Messages sidebar's single source of truth. Mirrors
-// createIssueReferenceSuggestion's shape and popup
-// (issue-reference-suggestion.tsx) minus its server-search fallback.
+// Filter the unified Conversations cache, which is also the Messages sidebar's
+// single source of truth. If the composer opens before that cache exists, the
+// suggestion performs one normal infinite-query fetch instead of permanently
+// showing an empty picker until the user types another character.
 export function createChannelReferenceSuggestion(
   qc: QueryClient,
 ): Omit<SuggestionOptions<MentionItem>, "editor"> {
   const pluginKey = new PluginKey("channelReferenceSuggestion");
 
-  function buildItems(query: string): MentionItem[] {
+  async function buildItems(query: string): Promise<MentionItem[]> {
     const wsId = getCurrentWsId();
     if (!wsId) return [];
 
-    const cached = qc.getQueryData<InfiniteData<ConversationListResponse>>(
+    let cached = qc.getQueryData<InfiniteData<ConversationListResponse>>(
       conversationKeys.list(wsId),
     );
+    if (!cached) {
+      try {
+        cached = await qc.fetchInfiniteQuery(conversationsOptions(wsId));
+      } catch {
+        return [];
+      }
+    }
     const channels = cached
       ? conversationGroupChannels(flattenConversationPages(cached))
       : [];

@@ -34,7 +34,6 @@ import {
   type CanvasNodeA11yCopy,
 } from "../lib/canvas-keyboard-nav";
 import { summarizeTypedGraph } from "../lib/research-d5-summary";
-import { resolveAgentInspectorRow } from "../lib/resolve-agent-inspector-row";
 import {
   mergeResearchCanvasNodes,
   resolveResearchCanvasNode,
@@ -42,7 +41,6 @@ import {
 import { firstOrderNeighborIds } from "../lib/typed-graph-neighborhood";
 import type { CanvasBodyMode } from "../lib/canvas-body-mode";
 import type { ResearchD5Lens } from "../lib/research-d5-lens";
-import type { ExecutionRow } from "../execution-overlay";
 import { capTransitionGlowDirectives } from "../motion/glow-budget";
 import { semanticMotionCss } from "../motion/directives";
 import { useSemanticTransition } from "../motion/use-semantic-transition";
@@ -57,12 +55,15 @@ import {
   STAR_GRAPH_SEMANTIC_NODE_BUDGET,
   selectVisibleEntityIds,
 } from "../star-graph/lib/star-graph-visible-budget";
-import { ResearchAgentInspector } from "./research-agent-inspector";
 import { ResearchCanvasEmptyState } from "./research-canvas-empty-state";
 import { ResearchCanvasForming } from "./research-canvas-forming";
 import { ResearchCanvasProjectionMismatch } from "./research-canvas-projection-mismatch";
 import { ResearchCanvasStaleNotice } from "./research-canvas-stale-notice";
-import { ResearchD5MobileRail, ResearchD5Rail } from "./research-d5-rail";
+import {
+  ResearchD5MobileRail,
+  ResearchD5Rail,
+  type ResearchD5RailMode,
+} from "./research-d5-rail";
 import { ResearchNodeReportModal } from "./research-node-report-modal";
 import { ResearchPendingRetryButton } from "./research-pending-retry-button";
 import "./research-d5-layout.css";
@@ -87,7 +88,6 @@ export function ResearchConstellationWorkspace({
   snapshotNodes,
   selectedNode,
   onSelectNode,
-  executionRows,
   onOpenAgentPanel,
   onCloseAgentPanel,
   canvasMode,
@@ -104,6 +104,7 @@ export function ResearchConstellationWorkspace({
   formingMessages,
   chatPanel,
   detailPanel,
+  agentPanel,
   composer,
   registerReportController,
   typedGraphHasNextPage = false,
@@ -133,7 +134,6 @@ export function ResearchConstellationWorkspace({
   snapshotNodes: ResearchGraphNode[];
   selectedNode: ResearchGraphNode | null;
   onSelectNode: (node: ResearchGraphNode | null) => void;
-  executionRows: ExecutionRow[];
   onOpenAgentPanel: OpenAgentPanelFn;
   onCloseAgentPanel?: () => void;
   canvasMode: CanvasBodyMode;
@@ -150,6 +150,7 @@ export function ResearchConstellationWorkspace({
   formingMessages?: Parameters<typeof ResearchCanvasForming>[0]["messages"];
   chatPanel: ReactNode;
   detailPanel: ReactNode;
+  agentPanel?: ReactNode;
   composer: ReactNode;
   registerReportController?: (controller: ResearchReportController) => void;
   className?: string;
@@ -174,19 +175,12 @@ export function ResearchConstellationWorkspace({
     typedGraphSessionId ?? typedGraph?.session_id ?? generatedOverlaySessionId;
   const activeOverlay =
     d5Overlay?.sessionId === overlaySessionId ? d5Overlay : null;
-  const inspectorAgentId =
-    activeOverlay?.kind === "agent" ? activeOverlay.agentId : null;
   const reportOpen = activeOverlay?.kind === "report" && selectedNode != null;
   const closeOverlay = useCallback(() => {
     if (d5Overlay?.sessionId === overlaySessionId) setD5Overlay(null);
   }, [d5Overlay?.sessionId, overlaySessionId, setD5Overlay]);
   const openReport = useCallback(
     () => setD5Overlay({ sessionId: overlaySessionId, kind: "report" }),
-    [overlaySessionId, setD5Overlay],
-  );
-  const openAgentInspector = useCallback(
-    (agentId: string) =>
-      setD5Overlay({ sessionId: overlaySessionId, kind: "agent", agentId }),
     [overlaySessionId, setD5Overlay],
   );
   const motion = useSemanticTransition();
@@ -521,10 +515,20 @@ export function ResearchConstellationWorkspace({
     selectedNode && typedGraph
       ? typedGraph.nodes.find((node) => node.id === selectedNode.id) ?? null
       : null;
-  const inspectorRow =
-    inspectorAgentId != null && selectedTypedNode?.actor_agent_id === inspectorAgentId
-      ? resolveAgentInspectorRow(executionRows, selectedTypedNode)
-      : null;
+  const selectedAgentId =
+    selectedTypedNode?.actor_agent_id ?? selectedNode?.actor_agent_id ?? null;
+  const agentAvailable = Boolean(selectedAgentId || agentPanel);
+
+  const handleRailModeChange = useCallback(
+    (mode: ResearchD5RailMode) => {
+      if (mode === "agent") {
+        if (selectedAgentId) onOpenAgentPanel(selectedAgentId, undefined);
+        else if (!agentPanel) return;
+      }
+      setRailMode(mode);
+    },
+    [agentPanel, onOpenAgentPanel, selectedAgentId, setRailMode],
+  );
 
   const handleCanvasSelect = useCallback(
     (nodeId: string) => {
@@ -534,34 +538,10 @@ export function ResearchConstellationWorkspace({
       });
       onSelectNode(resolved);
       setRailMode("detail");
-
-      if (projectionSource === "v6") {
-        const v6Node = typedGraph?.nodes.find((node) => node.id === nodeId);
-        const v6Level = (v6Node?.level || "").toLowerCase();
-        if (v6Level === "s" && v6Node?.actor_agent_id) {
-          setRailOpen(false);
-          onCloseAgentPanel?.();
-          openAgentInspector(v6Node.actor_agent_id);
-          return;
-        }
-        if (v6Level === "l" || v6Level === "xl" || v6Level === "xxl") {
-          if (isMobile) setRailOpen(false);
-          openReport();
-          return;
-        }
-        setRailOpen(true);
-        closeOverlay();
-        return;
-      }
+      onCloseAgentPanel?.();
 
       const typedNode = typedGraph?.nodes.find((node) => node.id === nodeId);
       const level = (typedNode?.level || "").toLowerCase();
-      if (level === "s" && typedNode?.actor_agent_id) {
-        setRailOpen(false);
-        onCloseAgentPanel?.();
-        openAgentInspector(typedNode.actor_agent_id);
-        return;
-      }
       if (level === "l" || level === "xl" || level === "xxl") {
         if (isMobile) setRailOpen(false);
         openReport();
@@ -575,9 +555,7 @@ export function ResearchConstellationWorkspace({
       isMobile,
       onCloseAgentPanel,
       onSelectNode,
-      openAgentInspector,
       openReport,
-      projectionSource,
       setRailMode,
       setRailOpen,
       snapshotNodes,
@@ -595,10 +573,12 @@ export function ResearchConstellationWorkspace({
       );
       setRailMode("detail");
       setRailOpen(true);
+      onCloseAgentPanel?.();
       closeOverlay();
     },
     [
       closeOverlay,
+      onCloseAgentPanel,
       onSelectNode,
       setRailMode,
       setRailOpen,
@@ -609,9 +589,10 @@ export function ResearchConstellationWorkspace({
 
   const handleCanvasBackground = useCallback(() => {
     closeOverlay();
+    onCloseAgentPanel?.();
     onSelectNode(null);
     setRailMode("chat");
-  }, [closeOverlay, onSelectNode, setRailMode]);
+  }, [closeOverlay, onCloseAgentPanel, onSelectNode, setRailMode]);
 
   const handleTrajectorySelect = useCallback(
     (nodeId: string | null) => {
@@ -777,7 +758,7 @@ export function ResearchConstellationWorkspace({
                 to_node_id: edge.to_node_id,
                 edge_type: edge.edge_type,
               })),
-              overlay: reportOpen || inspectorRow ? "detail" : null,
+              overlay: reportOpen ? "detail" : null,
               onCloseOverlay: closeOverlay,
             }}
           />
@@ -800,20 +781,6 @@ export function ResearchConstellationWorkspace({
         ) : null}
         {showEmpty ? <ResearchCanvasEmptyState /> : null}
 
-        <ResearchAgentInspector
-          row={inspectorRow}
-          typedNode={selectedTypedNode}
-          open={Boolean(inspectorRow) && !reportOpen}
-          onClose={closeOverlay}
-          onOpenAgentConfig={
-            inspectorRow
-              ? () => {
-                  onOpenAgentPanel(inspectorRow.id, undefined);
-                  closeOverlay();
-                }
-              : undefined
-          }
-        />
       </section>
 
       {isMobile || !railOpen ? (
@@ -838,9 +805,11 @@ export function ResearchConstellationWorkspace({
         <ResearchD5Rail
           id={contextRailId}
           mode={railMode}
-          onModeChange={setRailMode}
+          onModeChange={handleRailModeChange}
           chatPanel={chatPanel}
           detailPanel={detailPanel}
+          agentPanel={agentPanel}
+          agentAvailable={agentAvailable}
           composer={composer}
           onClose={closeContextRail}
           {...(backgroundInert ? { inert: true } : {})}
@@ -852,9 +821,11 @@ export function ResearchConstellationWorkspace({
           open={railOpen}
           onOpenChange={setRailOpen}
           mode={railMode}
-          onModeChange={setRailMode}
+          onModeChange={handleRailModeChange}
           chatPanel={chatPanel}
           detailPanel={detailPanel}
+          agentPanel={agentPanel}
+          agentAvailable={agentAvailable}
           composer={composer}
         />
       ) : null}

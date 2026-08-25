@@ -79,7 +79,7 @@ describe("Director V6 canvas adapter", () => {
     expect(result.graph.nodes.map((item) => item.level)).toEqual(["s", "xl"]);
   });
 
-  it("keeps run-scoped Agent identity and Work assignment edges visible", () => {
+  it("folds assigned Agent identity into its Work node", () => {
     const agentId = "00000000-0000-4000-8000-000000000201";
     const result = adaptResearchV6DirectorCanvas({
       runId: RUN_ID,
@@ -99,18 +99,21 @@ describe("Director V6 canvas adapter", () => {
       edges: [edge("assignment", "work-node", "agent-node", "assigned_to")],
     });
 
-    expect(
-      result.graph.nodes.find((item) => item.id === "agent-node")
-        ?.actor_agent_id,
-    ).toBe(agentId);
-    expect(result.graph.edges[0]).toMatchObject({
-      from_node_id: "work-node",
-      to_node_id: "agent-node",
-      edge_type: "assigned_to",
+    expect(result.graph.nodes).toHaveLength(1);
+    expect(result.graph.nodes[0]).toMatchObject({
+      id: "work-node",
+      actor_agent_id: agentId,
+      payload: {
+        assigned_agent: {
+          id: agentId,
+          name: "Manus 技术研究员",
+        },
+      },
     });
+    expect(result.graph.edges).toEqual([]);
   });
 
-  it("preserves completed results and idle or offline Agent execution states", () => {
+  it("omits standalone Agent roster nodes while preserving completed results", () => {
     const result = adaptResearchV6DirectorCanvas({
       runId: RUN_ID,
       eventSequence: 11,
@@ -142,11 +145,8 @@ describe("Director V6 canvas adapter", () => {
       edges: [],
     });
 
-    expect(result.graph.nodes.map((item) => item.status)).toEqual([
-      "succeeded",
-      "idle",
-      "offline",
-    ]);
+    expect(result.graph.nodes.map((item) => item.id)).toEqual(["result"]);
+    expect(result.graph.nodes[0]?.status).toBe("succeeded");
   });
 
   it("groups nodes into server-declared Branch territories", () => {

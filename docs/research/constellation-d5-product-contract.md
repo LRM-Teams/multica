@@ -29,11 +29,11 @@ bounded rendering rather than copying the prototype's hard-coded fixtures.
    the default canvas, and V6 does not project canonical confidence values.
 2. **Constellation canvas** — dotted research field, summary badge, organic
    relation graph, cluster boundaries, map key, and zoom/fit controls.
-3. **Context rail** — switchable fleet chat and selected-node detail. It may be
-   hidden to restore a full-width canvas.
-4. **Agent inspector** — opens from an Agent work node and shows the current
-   task/attempt facts plus the shared Agent configuration entry.
-5. **Node report** — opens from result nodes and explains the local objective,
+3. **Context rail** — three parallel tabs for fleet chat, selected-node detail,
+   and the selected Work node's Agent settings. It may be hidden to restore a
+   full-width canvas. Agent settings reuse the shared Agent panel; they are not
+   a floating card or a second side rail.
+4. **Node report** — opens from result nodes and explains the local objective,
    findings, evidence, review history, contributors, and lineage. It is not a
    replacement for the final session delivery.
 
@@ -48,7 +48,7 @@ sheet. The canvas camera must account for the visible rail's safe region.
 | XL | fused or stable result | tier, title, summary when present, metrics |
 | L | important result | tier, title, summary when present, metrics |
 | M | intermediate result or scoped direction | tier, title, summary when present |
-| S | active Agent work node | short task title, Agent badge, execution state |
+| S | active Work node | short task title, assigned Agent badge, execution state |
 
 Tier comes from the typed projection. The kind classifier is only a documented
 fallback; unknown kinds degrade to M. Title, summary, metrics, Agent identity,
@@ -61,6 +61,13 @@ The V6 node contract therefore carries `level`, nullable `cluster_id` and
 `conclusion_count`. Missing metrics are `null`, never a fabricated zero.
 `importance` and `confidence` remain canonical ratios in `[0,1]`; visual size
 comes exclusively from `level`, not from a client-side numeric threshold.
+
+Canonical Agent nodes and `assigned_to` edges remain available in the typed
+projection, but the D5 canvas folds that identity into the assigned Work node.
+It must not render a second standalone Agent circle for the same execution.
+The Work node carries the Agent's canonical id and display name. A stable Agent
+identity colour may accent the badge, while lifecycle borders and glyphs remain
+reserved for execution state so identity and status never compete.
 
 The origin is always a distinct `{node_kind: "goal", level: "m"}` node. A
 master synthesis is emitted only for a uniquely highest, accepted Insight with
@@ -94,7 +101,7 @@ They are not canonical Insights and are never written back as research facts.
 The canonical `goal` is the visual origin at the leading edge of the field;
 an XXL master synthesis is a separate convergence destination. Goal-led graphs
 therefore progress left-to-right through result clusters instead of placing the
-largest node at the centre of a generic 360-degree radial map. S-tier Agent
+largest node at the centre of a generic 360-degree radial map. S-tier Work
 nodes remain inside the visual territory of their parent result. A New Frontier
 territory is rendered only when a canonical new-direction relation exists.
 
@@ -143,8 +150,8 @@ research state. Refresh must reconstruct the same terminal graph.
 
 - Click/focus a node: select it, move it into the rail-safe camera centre, and
   open detail.
-- Open an S node: show Agent inspector; Agent configuration uses the shared
-  `ResolvedAgentSidePanel`.
+- Open an S Work node: show node detail. Its Agent settings tab opens the shared
+  `ResolvedAgentSidePanel` in the same context rail.
 - Open an L/XL/XXL result: show its local node report.
 - Pan, wheel zoom, buttons, fit-to-content, keyboard adjacency navigation, and
   Escape focus restoration must work.
@@ -176,8 +183,8 @@ tracked separately in §11 and are not counted as integrated until merged.
 | Shared Web/Desktop routes | Integrated | Keep parity gate |
 | Top command bar and goal history | Integrated | Validate deployed visual density against target |
 | Five-tier star graph, camera, clusters, relations | Integrated | Improve fact density and edge degradation |
-| Context rail, chat, node detail | Integrated | Validate deployed responsive and deep-link flows |
-| Agent inspector and shared Agent panel | Integrated | Validate the deployed responsive matrix |
+| Context rail, chat, node detail, Agent settings | Integrated | Validate deployed responsive and deep-link flows |
+| Work-node Agent identity | Integrated | Validate deployed colour distinction and assigned-Agent labels |
 | Local node report | Integrated | Project quality/citation review decisions; canonical contributor, Attempt, evidence, and lineage sections are integrated |
 | Typed graph pagination/filter/lens/DOM budget | Integrated | Add viewport slice gateway when backend exists |
 | V6 schema, API, adapter | Integrated behind capability detection | Validate against a real server route when available |

@@ -18,13 +18,15 @@ import {
 } from "@multica/ui/components/ui/sheet";
 import { useT } from "../../i18n/use-t";
 
-export type ResearchD5RailMode = "chat" | "detail";
+export type ResearchD5RailMode = "chat" | "detail" | "agent";
 
 type ResearchD5RailContentProps = {
   mode: ResearchD5RailMode;
   onModeChange: (mode: ResearchD5RailMode) => void;
   chatPanel: ReactNode;
   detailPanel: ReactNode;
+  agentPanel?: ReactNode;
+  agentAvailable?: boolean;
   composer?: ReactNode;
 };
 
@@ -33,6 +35,8 @@ export function ResearchD5Rail({
   onModeChange,
   chatPanel,
   detailPanel,
+  agentPanel,
+  agentAvailable = false,
   composer,
   onClose,
   className,
@@ -47,10 +51,13 @@ export function ResearchD5Rail({
   const railId = id ?? `research-d5-rail-${generatedId}`;
   const chatTabId = `${railId}-chat-tab`;
   const detailTabId = `${railId}-detail-tab`;
+  const agentTabId = `${railId}-agent-tab`;
   const chatPanelId = `${railId}-chat-panel`;
   const detailPanelId = `${railId}-detail-panel`;
+  const agentPanelId = `${railId}-agent-panel`;
   const chatTabRef = useRef<HTMLButtonElement>(null);
   const detailTabRef = useRef<HTMLButtonElement>(null);
+  const agentTabRef = useRef<HTMLButtonElement>(null);
   const handleTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
     if (
       event.key !== "ArrowLeft" &&
@@ -61,12 +68,25 @@ export function ResearchD5Rail({
       return;
     }
     event.preventDefault();
-    let nextMode: ResearchD5RailMode;
-    if (event.key === "Home") nextMode = "chat";
-    else if (event.key === "End") nextMode = "detail";
-    else nextMode = event.currentTarget === chatTabRef.current ? "detail" : "chat";
+    const modes: ResearchD5RailMode[] = agentAvailable
+      ? ["chat", "detail", "agent"]
+      : ["chat", "detail"];
+    const currentIndex = Math.max(0, modes.indexOf(mode));
+    let nextMode = modes[0]!;
+    if (event.key === "End") nextMode = modes.at(-1)!;
+    else if (event.key === "ArrowRight") {
+      nextMode = modes[(currentIndex + 1) % modes.length]!;
+    } else if (event.key === "ArrowLeft") {
+      nextMode = modes[(currentIndex - 1 + modes.length) % modes.length]!;
+    }
     onModeChange(nextMode);
-    (nextMode === "chat" ? chatTabRef : detailTabRef).current?.focus();
+    const nextRef =
+      nextMode === "chat"
+        ? chatTabRef
+        : nextMode === "detail"
+          ? detailTabRef
+          : agentTabRef;
+    nextRef.current?.focus();
   };
 
   return (
@@ -106,6 +126,21 @@ export function ResearchD5Rail({
         >
           {t(($) => $.d5.rail.detail_tab)}
         </button>
+        <button
+          ref={agentTabRef}
+          id={agentTabId}
+          type="button"
+          role="tab"
+          aria-selected={mode === "agent"}
+          aria-controls={agentPanelId}
+          tabIndex={mode === "agent" ? 0 : -1}
+          disabled={!agentAvailable}
+          className={cn("d5-rail-tab", mode === "agent" && "d5-rail-tab-active")}
+          onClick={() => onModeChange("agent")}
+          onKeyDown={handleTabKeyDown}
+        >
+          {t(($) => $.d5.rail.agent_tab)}
+        </button>
         {onClose ? (
           <button
             type="button"
@@ -135,6 +170,15 @@ export function ResearchD5Rail({
         hidden={mode !== "detail"}
       >
         {detailPanel}
+      </div>
+      <div
+        id={agentPanelId}
+        role="tabpanel"
+        aria-labelledby={agentTabId}
+        className="d5-rail-body"
+        hidden={mode !== "agent"}
+      >
+        {agentPanel}
       </div>
       {mode === "chat" && composer ? (
         <div className="d5-rail-footer">{composer}</div>

@@ -25,18 +25,7 @@ describe("useResearchUiStore", () => {
     expect(useResearchUiStore.getState().chatDrawerOpen).toBe(false);
   });
 
-  it("owns a session-scoped transient D5 inspector surface", () => {
-    useResearchUiStore.getState().setD5Overlay({
-      sessionId: "session-a",
-      kind: "agent",
-      agentId: "agent-1",
-    });
-    expect(useResearchUiStore.getState().d5Overlay).toEqual({
-      sessionId: "session-a",
-      kind: "agent",
-      agentId: "agent-1",
-    });
-
+  it("owns a session-scoped transient D5 report surface", () => {
     useResearchUiStore.getState().setD5Overlay({
       sessionId: "session-b",
       kind: "report",
@@ -54,10 +43,10 @@ describe("useResearchUiStore", () => {
     expect(useResearchUiStore.getState().d5RailMode).toBe("chat");
     expect(useResearchUiStore.getState().d5Lens).toBe("agent");
     useResearchUiStore.getState().setD5RailOpen(false);
-    useResearchUiStore.getState().setD5RailMode("detail");
+    useResearchUiStore.getState().setD5RailMode("agent");
     useResearchUiStore.getState().setD5Lens("lineage");
     expect(useResearchUiStore.getState().d5RailOpen).toBe(false);
-    expect(useResearchUiStore.getState().d5RailMode).toBe("detail");
+    expect(useResearchUiStore.getState().d5RailMode).toBe("agent");
     expect(useResearchUiStore.getState().d5Lens).toBe("lineage");
   });
 

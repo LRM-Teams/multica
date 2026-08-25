@@ -54,7 +54,7 @@ export interface StarGraphNodeInput {
   title: string;
   /** Bounded summary — real value, may be empty. */
   summary?: string;
-  /** Agent short handle for S-tier nodes (real value, may be null). */
+  /** Canonical id of the Agent assigned to an S-tier Work node. */
   actor_agent_id?: string | null;
   /** Opaque detail payload — only exact, known keys are read; never guessed. */
   detail?: unknown;
@@ -73,6 +73,7 @@ export interface StarGraphNodeView {
   title: string;
   subLabel?: string;
   headerLabel?: string;
+  agentId?: string;
   agentBadge?: string;
   metrics?: {
     documentCount?: number;

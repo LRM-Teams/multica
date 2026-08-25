@@ -101,7 +101,7 @@ describe("mapMetrics — never synthesised", () => {
 });
 
 describe("toStarGraphNodeView — full view", () => {
-  it("produces presentation props for an S-tier agent with real badge", () => {
+  it("shows the assigned Agent identity on an S-tier Work node", () => {
     const v = toStarGraphNodeView(
       node({
         node_kind: "attempt",
@@ -109,11 +109,13 @@ describe("toStarGraphNodeView — full view", () => {
         actor_agent_id: "agent:lindberg",
         title: "核验来源",
         typed: { confidence: 0.5 },
+        detail: { assigned_agent: { name: "林德伯格" } },
       }),
     );
     expect(v.tier).toBe("s");
     expect(v.state).toBe("run");
-    expect(v.agentBadge).toBe("LIN");
+    expect(v.agentId).toBe("agent:lindberg");
+    expect(v.agentBadge).toBe("林德伯格");
     expect(v.headerLabel).toBeUndefined();
   });
 

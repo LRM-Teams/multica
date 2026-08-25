@@ -1,9 +1,8 @@
 // @vitest-environment jsdom
 
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Agent } from "@multica/core/types";
-import { TooltipProvider } from "@multica/ui/components/ui/tooltip";
 import { AgentProfileActions } from "./agent-profile-actions";
 import { pickStoppableDmTask, type StoppableAgentTask } from "./agent-profile-stoppable-task";
 
@@ -69,6 +68,7 @@ const RESOURCES = {
   },
   side_panel: {
     actions_section: "Actions",
+    actions_more_aria: "More actions",
     message_button: "Message",
     message_opening: "Opening…",
     actions_delete: "Delete",
@@ -189,10 +189,11 @@ describe("AgentProfileActions", () => {
     expect(mocks.toastSuccess).not.toHaveBeenCalled();
   });
 
-  it("opens DM from the chrome Message icon, not the stack", () => {
+  it("opens the DM from the chrome ⋯ menu's Message item, not the stack", () => {
     render(
       <AgentProfileActions agent={agent} canManage presence={mocks.presence} layout="icons" />,
     );
+    fireEvent.click(screen.getByTestId("agent-profile-chrome-actions-menu"));
     fireEvent.click(screen.getByTestId("agent-profile-chrome-action-message"));
     expect(mocks.openDM).toHaveBeenCalledWith({ peer_type: "agent", peer_id: "agent-1" });
     expect(screen.queryByTestId("agent-profile-action-message")).not.toBeInTheDocument();
@@ -213,31 +214,28 @@ describe("AgentProfileActions", () => {
     expect(screen.queryByText("Stop all")).not.toBeInTheDocument();
   });
 
-  it("copies Message, Start/Stop, and Restart/Reset as compact chrome icons without Delete", async () => {
+  it("lists Message, Start/Stop, and Restart/Reset as labeled items in the chrome ⋯ menu, without Delete", () => {
     render(
-      <TooltipProvider delay={0}>
-        <AgentProfileActions agent={agent} canManage presence={mocks.presence} layout="icons" />
-      </TooltipProvider>,
+      <AgentProfileActions agent={agent} canManage presence={mocks.presence} layout="icons" />,
     );
+    // Only the ⋯ trigger sits in the chrome row until it's opened — no
+    // outline icon buttons are rendered inline any more.
+    const trigger = screen.getByTestId("agent-profile-chrome-actions-menu");
+    expect(trigger).toHaveAttribute("aria-label", "More actions");
+    expect(screen.queryByTestId("agent-profile-chrome-action-message")).not.toBeInTheDocument();
+
+    fireEvent.click(trigger);
+
     const message = screen.getByTestId("agent-profile-chrome-action-message");
     const lifecycle = screen.getByTestId("agent-profile-chrome-action-start");
     const restart = screen.getByTestId("agent-profile-chrome-action-restart");
-    expect(message).not.toHaveTextContent("Message");
-    expect(lifecycle).not.toHaveTextContent("Start Agent");
-    expect(restart).not.toHaveTextContent("Restart/Reset");
-    expect(lifecycle).toHaveAttribute("aria-label", "Start Agent");
-    expect(restart).toHaveAttribute("aria-label", "Restart/Reset");
-    fireEvent.pointerMove(lifecycle);
-    fireEvent.mouseEnter(lifecycle);
-    fireEvent.focus(lifecycle);
-    await waitFor(() => {
-      expect(document.querySelector("[data-slot='tooltip-content']")).toHaveTextContent("Start Agent");
-    });
-    expect(screen.getAllByTestId("agent-profile-chrome-action-start")).toHaveLength(1);
+    // Menu items carry visible text labels — that's the point of the
+    // Linear-style menu (unlike the old bare icon buttons).
+    expect(message).toHaveTextContent("Message");
+    expect(lifecycle).toHaveTextContent("Start Agent");
+    expect(restart).toHaveTextContent("Restart/Reset");
     expect(screen.queryByTestId("agent-profile-action-delete")).not.toBeInTheDocument();
     expect(screen.queryByTestId("agent-profile-chrome-action-delete")).not.toBeInTheDocument();
-    expect(lifecycle.className).toMatch(/size-8/);
-    expect(restart.className).toMatch(/size-8/);
 
     fireEvent.click(restart);
     expect(screen.getByTestId("agent-restart-modal")).toHaveTextContent("Restart and reset choices");

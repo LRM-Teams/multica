@@ -559,6 +559,7 @@
   },
   "side_panel": {
     "close_aria": "Close agent panel",
+    "actions_more_aria": "More actions",
     "back_to_member_aria": "Back to {{name}}",
     "back_to_messages": "Back to messages",
     "resize_aria": "Resize profile panel",

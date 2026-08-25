@@ -94,10 +94,11 @@ interface AgentSidePanelProps {
  * conversation — mutually exclusive with the thread panel (same slot,
  * per Frank's direction 2026-07-09: inline panel, not a route jump).
  *
- * Profile chrome copies Message + Start/Stop + Restart/Reset as compact
- * icons. Profile tab keeps the labeled ACTIONS stack without Message
- * (LRM-448), plus editable Display name / Description, Info, Runtime
- * Config (LRM-470). Usage is its own tab — never stacked in Profile.
+ * Profile chrome exposes Message + Start/Stop + Restart/Reset behind a
+ * single `⋯` dropdown menu next to the panel's ✕. Profile tab keeps the
+ * labeled ACTIONS stack without Message (LRM-448), plus editable Display
+ * name / Description, Info, Runtime Config (LRM-470). Usage is its own
+ * tab — never stacked in Profile.
  */
 export function AgentSidePanel({
   agent,
@@ -217,16 +218,16 @@ export function AgentSidePanel({
           "flex shrink-0 items-center gap-3 pb-3 pl-4 pt-3.5",
           variant === "page" && "pl-0",
           // Floating chrome sits over this row. Archived / Close-only keeps
-          // the original inset; live agents also reserve the copied icons.
+          // the original inset; live agents also reserve room for the `⋯`
+          // menu + ✕ pair (2 × 32px icons + gap-0.5 + the 10px corner
+          // offset ≈ 76px, rounded up to pr-20 / 80px).
           stackedBack
             ? "pr-4 pt-2"
             : agent.archived_at
               ? variant === "page"
                 ? "pr-14"
                 : "pr-10"
-              : variant === "page"
-                ? "pr-36"
-                : "pr-32",
+              : "pr-20",
         )}
         data-testid="agent-profile-identity"
       >

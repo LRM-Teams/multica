@@ -549,6 +549,7 @@
   },
   "side_panel": {
     "close_aria": "关闭 agent 面板",
+    "actions_more_aria": "更多操作",
     "back_to_member_aria": "返回 {{name}}",
     "back_to_messages": "回消息",
     "resize_aria": "调整 Profile 面板宽度",

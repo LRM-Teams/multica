@@ -155,6 +155,15 @@ research state. Refresh must reconstruct the same terminal graph.
 
 - Click/focus a node: select it, move it into the rail-safe camera centre, and
   open detail.
+- Expansion is a separate disclosure command. Activating the node body or
+  pressing Enter/Space never changes graph membership; activating the node's
+  disclosure affordance or pressing Shift+Enter expands/collapses one
+  server-declared layer.
+- Expansion intent is scoped to the Run, not an immutable Projection Snapshot.
+  When live refresh rebases the canvas onto a new Snapshot, the last confirmed
+  expanded layer remains visible while the client resolves the same root
+  against the new Snapshot, then replaces it in place. A refresh must not
+  silently collapse the graph.
 - Open an S Work node: show node detail. Its Agent settings tab opens the shared
   `ResolvedAgentSidePanel` in the same context rail.
 - Open an L/XL/XXL result: show its local node report.

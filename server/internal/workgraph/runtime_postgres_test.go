@@ -390,6 +390,10 @@ func TestDecomposeIssueCreatesParallelRootsAndParkedJoin(t *testing.T) {
 		t.Fatal(err)
 	}
 	parent := createWorkgraphIssue(t, ctx, workspace, agentID, 1, "Parent", "in_progress")
+	goalID := createGoalAnchor(t, ctx, workspace, agentID)
+	if _, err := testPool.Exec(ctx, `UPDATE issue SET channel_goal_id=$2,goal_required=true WHERE id=$1`, parent.ID, goalID); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := testPool.Exec(ctx, `UPDATE workspace SET issue_counter=1 WHERE id=$1`, workspace); err != nil {
 		t.Fatal(err)
 	}
@@ -398,9 +402,9 @@ func TestDecomposeIssueCreatesParallelRootsAndParkedJoin(t *testing.T) {
 		WorkspaceID: uuidToTestString(workspace), ParentIssueID: uuidToTestString(parent.ID), ActorAgentID: uuidToTestString(agentID),
 		IdempotencyKey: uuid.NewString(), Reason: "parallel research and synthesis",
 		Nodes: []IssuePlanNode{
-			{TempID: "a", Title: "Research A", AssigneeID: uuidToTestString(agentID), WorkerMode: WorkerModeDerivedAgent, CloneReason: "independent research lane"},
-			{TempID: "b", Title: "Research B", AssigneeID: uuidToTestString(agentID)},
-			{TempID: "merge", Title: "Merge", AssigneeID: uuidToTestString(agentID), DependsOn: []string{"a", "b"}},
+			{TempID: "a", Title: "Research A", AcceptanceCriteria: []string{"evidence A recorded"}, AssigneeID: uuidToTestString(agentID), WorkerMode: WorkerModeDerivedAgent, CloneReason: "independent research lane"},
+			{TempID: "b", Title: "Research B", AcceptanceCriteria: []string{"evidence B recorded"}, AssigneeID: uuidToTestString(agentID)},
+			{TempID: "merge", Title: "Merge", AcceptanceCriteria: []string{"A and B reconciled"}, AssigneeID: uuidToTestString(agentID), DependsOn: []string{"a", "b"}},
 		},
 	})
 	if err != nil {
@@ -436,6 +440,27 @@ func TestDecomposeIssueCreatesParallelRootsAndParkedJoin(t *testing.T) {
 	if dependencies != 2 {
 		t.Fatalf("dependencies=%d, want 2", dependencies)
 	}
+	var controllerIssueEvents, controllerDependencyEvents int
+	if err = testPool.QueryRow(ctx, `
+		SELECT count(*) FILTER (WHERE event_kind='issue_created'),
+		       count(*) FILTER (WHERE event_kind='dependency_changed')
+		FROM goal_controller_event WHERE goal_id=$1`, goalID).Scan(&controllerIssueEvents, &controllerDependencyEvents); err != nil {
+		t.Fatal(err)
+	}
+	if controllerIssueEvents != 3 || controllerDependencyEvents != 2 {
+		t.Fatalf("Goal events issue=%d dependency=%d, want 3/2", controllerIssueEvents, controllerDependencyEvents)
+	}
+	var childGoalID pgtype.UUID
+	var childGoalRequired bool
+	var firstCriterion string
+	if err = testPool.QueryRow(ctx, `
+		SELECT channel_goal_id,goal_required,acceptance_criteria->>0
+		FROM issue WHERE id=$1::uuid`, result.IssueIDs["a"]).Scan(&childGoalID, &childGoalRequired, &firstCriterion); err != nil {
+		t.Fatal(err)
+	}
+	if childGoalID != goalID || !childGoalRequired || firstCriterion != "evidence A recorded" {
+		t.Fatalf("child Goal contract goal=%v required=%v criterion=%q", childGoalID, childGoalRequired, firstCriterion)
+	}
 	var managedChildren int
 	if err = testPool.QueryRow(ctx, `SELECT count(*) FROM issue_decompose_child WHERE parent_issue_id=$1`, parent.ID).Scan(&managedChildren); err != nil || managedChildren != 3 {
 		t.Fatalf("managed children=%d err=%v, want 3", managedChildren, err)
@@ -448,8 +473,8 @@ func TestDecomposeIssueCreatesParallelRootsAndParkedJoin(t *testing.T) {
 		WorkspaceID: uuidToTestString(workspace), ParentIssueID: uuidToTestString(parent.ID), ActorAgentID: uuidToTestString(agentID),
 		IdempotencyKey: uuid.NewString(), Reason: "forbidden cross-agent snapshot",
 		Nodes: []IssuePlanNode{
-			{TempID: "foreign", Title: "Foreign", AssigneeID: uuidToTestString(foreignAgent), WorkerMode: WorkerModeDerivedAgent, CloneReason: "must not copy private memory"},
-			{TempID: "local", Title: "Local", AssigneeID: uuidToTestString(agentID)},
+			{TempID: "foreign", Title: "Foreign", AcceptanceCriteria: []string{"verified"}, AssigneeID: uuidToTestString(foreignAgent), WorkerMode: WorkerModeDerivedAgent, CloneReason: "must not copy private memory"},
+			{TempID: "local", Title: "Local", AcceptanceCriteria: []string{"verified"}, AssigneeID: uuidToTestString(agentID)},
 		},
 	})
 	if !errors.Is(err, ErrGraphForbidden) {

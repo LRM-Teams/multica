@@ -113,13 +113,14 @@ type CreateResult struct {
 }
 
 type IssuePlanNode struct {
-	TempID      string   `json:"temp_id"`
-	Title       string   `json:"title"`
-	Description string   `json:"description,omitempty"`
-	AssigneeID  string   `json:"assignee_id"`
-	WorkerMode  string   `json:"worker_mode,omitempty"`
-	CloneReason string   `json:"clone_reason,omitempty"`
-	DependsOn   []string `json:"depends_on,omitempty"`
+	TempID             string   `json:"temp_id"`
+	Title              string   `json:"title"`
+	Description        string   `json:"description,omitempty"`
+	AcceptanceCriteria []string `json:"acceptance_criteria"`
+	AssigneeID         string   `json:"assignee_id"`
+	WorkerMode         string   `json:"worker_mode,omitempty"`
+	CloneReason        string   `json:"clone_reason,omitempty"`
+	DependsOn          []string `json:"depends_on,omitempty"`
 }
 
 type DecomposeInput struct {

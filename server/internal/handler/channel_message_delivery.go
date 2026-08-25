@@ -682,6 +682,26 @@ func (h *Handler) canonicalMessageDeliveryRecipients(ctx context.Context, ch Cha
 		}
 		return h.filterCanonicalMessageDeliveryRecipients(ctx, ch, message, h.channelThreadFollowerAgents(ctx, ch.WorkspaceID, ch.ID, threadRootID), true)
 	}
+	// An active Goal changes only top-level group execution admission. The
+	// canonical Message remains visible to every channel member, but an
+	// unaddressed Message must not start one provider turn per Agent. A direct
+	// mention still executes its explicit targets; the Goal controller receives
+	// a separate durable state event and decides whether the plan must change.
+	//
+	// Fail open to the established channel policy when an active Goal has no
+	// runnable Agent manager. Silently dropping a human Message is worse than the
+	// bounded legacy fanout, and the controller safety scan will surface the
+	// missing-manager condition.
+	if ch.Kind == "group" {
+		if managers, active := h.activeGoalManagerAgents(ctx, ch.WorkspaceID, ch.ID); active {
+			if len(mentioned) > 0 {
+				return h.filterCanonicalMessageDeliveryRecipients(ctx, ch, message, mentioned, false)
+			}
+			if len(managers) > 0 {
+				return h.filterCanonicalMessageDeliveryRecipients(ctx, ch, message, managers[:1], false)
+			}
+		}
+	}
 	if channelMessageIsHumanAuthored(message.Type) && channelMessageIsGroupCommand(message.Content, message.Parts) {
 		return h.filterCanonicalMessageDeliveryRecipients(ctx, ch, message, h.channelAgentMembers(ctx, ch.WorkspaceID, ch.ID), true)
 	}
@@ -700,6 +720,48 @@ func (h *Handler) canonicalMessageDeliveryRecipients(ctx context.Context, ch Cha
 		return nil
 	}
 	return h.filterCanonicalMessageDeliveryRecipients(ctx, ch, message, h.channelAgentMembers(ctx, ch.WorkspaceID, ch.ID), true)
+}
+
+// activeGoalManagerAgents returns the ordered Agent managers for an active
+// channel Goal. The Goal creator wins when it is still an eligible manager;
+// owner then manager role order is the deterministic fallback. The bool says
+// whether an active Goal exists independently of manager availability.
+func (h *Handler) activeGoalManagerAgents(ctx context.Context, workspaceID, channelID string) ([]db.Agent, bool) {
+	var creatorType string
+	var creatorID pgtype.UUID
+	if err := h.DB.QueryRow(ctx, `
+		SELECT created_by_type, created_by_id
+		FROM channel_goal
+		WHERE workspace_id=$1 AND channel_id=$2 AND status='active'
+		ORDER BY created_at DESC
+		LIMIT 1`, parseUUID(workspaceID), parseUUID(channelID)).Scan(&creatorType, &creatorID); err != nil {
+		return nil, false
+	}
+	rows, err := h.DB.Query(ctx, `
+		SELECT a.id, a.workspace_id, a.name, a.avatar_url, a.runtime_mode, a.runtime_config, a.status,
+		       a.owner_id, a.created_at, a.updated_at, a.description, a.runtime_id,
+		       a.instructions, a.archived_at, a.display_name, a.model, a.thinking_level
+		FROM channel_member cm
+		JOIN agent a ON cm.member_type='agent' AND a.id=cm.member_id
+		WHERE cm.workspace_id=$1 AND cm.channel_id=$2
+		  AND cm.role IN ('owner','manager')
+		  AND a.archived_at IS NULL AND a.runtime_id IS NOT NULL
+		ORDER BY CASE WHEN $3='agent' AND a.id=$4 THEN 0
+		              WHEN cm.role='owner' THEN 1 ELSE 2 END,
+		         cm.created_at, a.id`, parseUUID(workspaceID), parseUUID(channelID), creatorType, nullableUUID(creatorID))
+	if err != nil {
+		return nil, true
+	}
+	defer rows.Close()
+	var managers []db.Agent
+	for rows.Next() {
+		var a db.Agent
+		if err := rows.Scan(&a.ID, &a.WorkspaceID, &a.Name, &a.AvatarUrl, &a.RuntimeMode, &a.RuntimeConfig, &a.Status, &a.OwnerID, &a.CreatedAt, &a.UpdatedAt, &a.Description, &a.RuntimeID, &a.Instructions, &a.ArchivedAt, &a.DisplayName, &a.Model, &a.ThinkingLevel); err != nil {
+			continue
+		}
+		managers = append(managers, a)
+	}
+	return managers, true
 }
 
 func (h *Handler) mergeCanonicalMessageDeliveryRecipients(parts ...[]db.Agent) []db.Agent {

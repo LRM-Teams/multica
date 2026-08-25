@@ -215,7 +215,7 @@ func (s *PostgresStore) loadV6BranchFrontierBrief(ctx context.Context, workspace
 			iv.created_at,iv.id
 		FROM research_insight_version iv WHERE iv.workspace_id=$1::uuid AND iv.session_id=$2::uuid
 	)
-		SELECT v.id::text,v.artifact_id::text,v.content_hash,content.node_kind,content.tier,content.catalog_summary,content.brief_summary,content.open_questions,
+		SELECT v.id::text,content.content_id::text,v.content_hash,content.node_kind,content.tier,content.catalog_summary,content.brief_summary,content.open_questions,
 		COALESCE((SELECT steward.agent_id::text FROM research_node_steward_assignment steward WHERE steward.session_id=f.session_id AND steward.node_artifact_version_id=f.node_artifact_version_id AND steward.status='active' ORDER BY steward.generation DESC LIMIT 1),
 		         (SELECT assignment.director_agent_id::text FROM research_session session JOIN research_director_assignment assignment ON assignment.id=session.current_director_assignment_id WHERE session.id=f.session_id)),
 		content.conclusion_state,content.integration_state,
@@ -482,6 +482,11 @@ func v6DirectorActionPayloadSchemas() map[string]any {
 	uuidValue := map[string]any{"type": "string", "format": "uuid"}
 	hashValue := map[string]any{"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
 	jsonObject := map[string]any{"type": "object"}
+	nodeRef := map[string]any{"type": "object", "additionalProperties": false, "required": []string{"kind", "id", "version_id", "tier", "content_hash"}, "properties": map[string]any{
+		"kind": map[string]any{"enum": []string{"result_s", "insight"}}, "id": uuidValue, "version_id": uuidValue,
+		"tier": map[string]any{"enum": []string{"S", "M", "L", "XL", "XXL"}}, "content_hash": hashValue}}
+	branchRef := map[string]any{"type": "object", "additionalProperties": false, "required": []string{"id", "state_version"}, "properties": map[string]any{
+		"id": uuidValue, "state_version": map[string]any{"type": "integer", "minimum": 0}}}
 	return map[string]any{
 		"no_op.v1": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"reason"}, "properties": map[string]any{"message_id": map[string]any{"type": "string", "format": "uuid"}, "reason": text}},
 		"steering_assessment.v1": map[string]any{"type": "object", "additionalProperties": false,
@@ -504,6 +509,9 @@ func v6DirectorActionPayloadSchemas() map[string]any {
 		"collaboration.create.v1": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"assignee_agent_id", "mission", "expected_result_schema_id", "payload_schema_id", "payload", "priority", "max_attempts"}, "properties": map[string]any{
 			"kind": map[string]any{"type": "string"}, "assignee_agent_id": uuidValue, "mission": text, "expected_result_schema_id": map[string]any{"type": "string"}, "payload_schema_id": map[string]any{"type": "string"}, "payload": jsonObject,
 			"priority": map[string]any{"type": "number", "minimum": 0, "maximum": 1}, "max_attempts": map[string]any{"type": "integer", "minimum": 1, "maximum": 100}, "branch_ids": map[string]any{"type": "array", "maxItems": 128, "items": uuidValue}}},
+		"integration.create.v1": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"inputs", "branch_refs"}, "properties": map[string]any{
+			"inputs":      map[string]any{"type": "array", "minItems": 2, "maxItems": 256, "items": nodeRef},
+			"branch_refs": map[string]any{"type": "array", "minItems": 1, "maxItems": 128, "items": branchRef}}},
 		"branch.create.v1": map[string]any{"type": "object", "additionalProperties": false,
 			"required": []string{"objective", "scope", "budget_share"}, "properties": map[string]any{
 				"objective": text, "scope": jsonObject, "budget_share": map[string]any{"type": "number", "minimum": 0, "maximum": 1}, "parent_branch_id": uuidValue}},

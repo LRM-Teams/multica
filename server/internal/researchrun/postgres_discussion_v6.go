@@ -59,15 +59,22 @@ func (s *PostgresStore) OpenV6Discussion(ctx context.Context, in OpenV6Discussio
 			return V6Discussion{}, ErrWorkItemChanged
 		}
 	}
-	participants := map[string]struct{}{}
+	type discussionParticipant struct {
+		agentID string
+	}
+	participants := map[string]discussionParticipant{}
 	for ordinal, input := range inputs {
-		var tier, hash, stewardID, agentID, membershipID string
-		err = tx.QueryRow(ctx, `SELECT f.tier,v.content_hash,st.id::text,st.agent_id::text,st.membership_id::text
+		var tier, hash, nodeKind, nodeID, stewardID, agentID, membershipID string
+		err = tx.QueryRow(ctx, `SELECT f.tier,v.content_hash,
+			CASE WHEN rn.id IS NOT NULL THEN 'result_s' ELSE 'insight' END,
+			COALESCE(rn.id::text,iv.insight_id::text),st.id::text,st.agent_id::text,st.membership_id::text
 			FROM research_branch_frontier f JOIN research_artifact_version v ON v.id=f.node_artifact_version_id
+			LEFT JOIN research_result_node rn ON rn.artifact_version_id=v.id
+			LEFT JOIN research_insight_version iv ON iv.artifact_version_id=v.id
 			JOIN research_node_steward_assignment st ON st.node_artifact_version_id=f.node_artifact_version_id AND st.status='active'
 			WHERE f.workspace_id=$1::uuid AND f.session_id=$2::uuid AND f.node_artifact_version_id=$3::uuid
-			AND f.removed_by_event_sequence IS NULL LIMIT 1 FOR UPDATE OF f,st`, in.WorkspaceID, in.RunID, input.VersionID).Scan(&tier, &hash, &stewardID, &agentID, &membershipID)
-		if err != nil || tier != string(input.Tier) || hash != input.ContentHash {
+			AND f.removed_by_event_sequence IS NULL LIMIT 1 FOR UPDATE OF f,st`, in.WorkspaceID, in.RunID, input.VersionID).Scan(&tier, &hash, &nodeKind, &nodeID, &stewardID, &agentID, &membershipID)
+		if err != nil || tier != string(input.Tier) || hash != input.ContentHash || nodeKind != input.Kind || nodeID != input.ID {
 			return V6Discussion{}, ErrWorkItemChanged
 		}
 		var inScope bool
@@ -84,7 +91,22 @@ func (s *PostgresStore) OpenV6Discussion(ctx context.Context, in OpenV6Discussio
 				VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6::uuid,$7,'active')`, in.WorkspaceID, in.RunID, discussion.ID, agentID, membershipID, stewardID, len(participants)); err != nil {
 				return V6Discussion{}, err
 			}
-			participants[agentID] = struct{}{}
+			participants[agentID] = discussionParticipant{agentID: agentID}
+		}
+	}
+	for _, participant := range participants {
+		key := "discussion-turn:" + discussion.ID + ":" + participant.agentID + ":" + fmt.Sprint(discussion.Revision)
+		if _, err = tx.Exec(ctx, `INSERT INTO research_work_item(workspace_id,session_id,kind,status,target_kind,target_id,
+			client_key,idempotency_key,goal_version,input_state_version,input_event_sequence,assigned_agent_id,priority,max_attempts,
+			payload_schema_id,expected_result_schema_id,payload,ready_at,reason)
+			SELECT $1::uuid,$2::uuid,'discussion','ready','discussion',$3::uuid,$4,$4,$5,s.state_version,$6,$7::uuid,0.9,3,
+			'discussion.turn.v1','discussion_turn_submission',jsonb_build_object('task_context',jsonb_build_object(
+			'discussion_id',$3::text,'discussion_revision',$8,'input_set_hash',$9,'branch_scope_hash',$10)),now(),
+			'复核候选节点是否具有可融合的语义增益，并提交可见的结构化意见与投票。'
+			FROM research_session s WHERE s.workspace_id=$1::uuid AND s.id=$2::uuid ON CONFLICT DO NOTHING`,
+			in.WorkspaceID, in.RunID, discussion.ID, key, in.GoalVersion, in.ThroughEventSequence, participant.agentID,
+			discussion.Revision, discussion.InputSetHash, discussion.BranchScopeHash); err != nil {
+			return V6Discussion{}, err
 		}
 	}
 	if _, err = appendEvent(ctx, tx, in.WorkspaceID, in.RunID, "v6_discussion_open", "v6-discussion:"+in.InputSetHash, "director", "",
@@ -117,11 +139,11 @@ func (s *PostgresStore) applyDiscussionTurnV6Tx(ctx context.Context, tx pgx.Tx, 
 		return ErrWorkItemChanged
 	}
 	var participant bool
-	var manifestID, manifestHash string
+	var manifestID, manifestHash, membershipID string
 	var manifest json.RawMessage
-	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM research_discussion_participant WHERE discussion_id=$1::uuid AND agent_id=$2::uuid AND state='active'),a.manifest_id::text,a.manifest_hash,a.manifest
+	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM research_discussion_participant WHERE discussion_id=$1::uuid AND agent_id=$2::uuid AND state='active'),a.manifest_id::text,a.manifest_hash,a.manifest,a.membership_id::text
 		FROM research_work_item_attempt a WHERE a.id=$3::uuid AND a.work_item_id=$4::uuid AND a.assigned_agent_id=$2::uuid AND a.status='running' FOR UPDATE`,
-		in.DiscussionID, in.AgentID, in.AttemptID, in.WorkItemID).Scan(&participant, &manifestID, &manifestHash, &manifest); err != nil {
+		in.DiscussionID, in.AgentID, in.AttemptID, in.WorkItemID).Scan(&participant, &manifestID, &manifestHash, &manifest, &membershipID); err != nil {
 		return err
 	}
 	if !participant || manifestID != in.ManifestID || manifestHash != in.ManifestHash {
@@ -156,6 +178,9 @@ func (s *PostgresStore) applyDiscussionTurnV6Tx(ctx context.Context, tx pgx.Tx, 
 		return err
 	}
 	if _, err = tx.Exec(ctx, `UPDATE research_work_item SET status='succeeded',state_version=state_version+1,completed_at=now(),updated_at=now() WHERE id=$1::uuid`, in.WorkItemID); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE research_team_membership SET state='idle' WHERE id=$1::uuid AND state='working'`, membershipID); err != nil {
 		return err
 	}
 	if _, err = tx.Exec(ctx, `UPDATE research_v6_work_submission SET status='accepted',outcome=jsonb_build_object('turn_id',$2::text),updated_at=now() WHERE id=$1::uuid`, submissionID, turnID); err != nil {
@@ -210,8 +235,8 @@ func (s *PostgresStore) closeV6DiscussionIfReadyTx(ctx context.Context, tx pgx.T
 		if _, err = tx.Exec(ctx, `INSERT INTO research_work_item(workspace_id,session_id,kind,status,target_kind,target_id,
 			client_key,idempotency_key,goal_version,input_state_version,input_event_sequence,assigned_agent_id,payload_schema_id,expected_result_schema_id,payload,ready_at)
 			SELECT d.workspace_id,d.session_id,'integration','ready','discussion',d.id,$2,$2,d.goal_version,s.state_version,
-			d.through_event_sequence,$3::uuid,'integration.task.v1','integration_submission',jsonb_build_object('discussion_id',d.id,
-			'discussion_revision',d.revision,'input_set_hash',d.input_set_hash,'branch_scope_hash',d.branch_scope_hash),now()
+			d.through_event_sequence,$3::uuid,'integration.task.v1','integration_submission',jsonb_build_object('task_context',jsonb_build_object(
+			'discussion_id',d.id::text,'discussion_revision',d.revision,'input_set_hash',d.input_set_hash,'branch_scope_hash',d.branch_scope_hash)),now()
 			FROM research_discussion d JOIN research_session s ON s.id=d.session_id WHERE d.id=$1::uuid ON CONFLICT DO NOTHING`,
 			discussionID, key, integratorAgentID); err != nil {
 			return err

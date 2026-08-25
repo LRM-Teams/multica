@@ -58,6 +58,112 @@ func TestChannelGroupCommandWakesAllAgentsRestoresAndongDefault(t *testing.T) {
 	}
 }
 
+func TestActiveGoalTopLevelMessagesExecuteManagerFirst(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	suffix := strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
+	channelID := seedChannelForTest(t, "goal-manager-first-"+suffix, testUserID)
+	managerID := createHandlerTestAgent(t, "goal-manager-"+suffix, nil)
+	workerID := createHandlerTestAgent(t, "goal-worker-"+suffix, nil)
+	for _, member := range []struct {
+		agentID string
+		role    string
+	}{
+		{agentID: managerID, role: "manager"},
+		{agentID: workerID, role: "member"},
+	} {
+		if _, err := testPool.Exec(ctx, `
+			INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, role)
+			VALUES ($1, $2, 'agent', $3, $4)
+			ON CONFLICT (channel_id, member_type, member_id)
+			DO UPDATE SET role=EXCLUDED.role`, channelID, testWorkspaceID, member.agentID, member.role); err != nil {
+			t.Fatalf("seed goal member %s: %v", member.agentID, err)
+		}
+	}
+	var goalID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO channel_goal (
+			workspace_id, channel_id, title, objective, success_criteria, status,
+			created_by_type, created_by_id, updated_by_type, updated_by_id
+		) VALUES ($1,$2,'Long goal','Ship the complete result','["verified"]','active','agent',$3,'agent',$3)
+		RETURNING id`, testWorkspaceID, channelID, managerID).Scan(&goalID); err != nil {
+		t.Fatalf("seed active Goal: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM channel_goal WHERE id=$1`, goalID) })
+
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("channel not found after seed")
+	}
+	unaddressed, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "继续推进这个长期任务", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatalf("insert unaddressed Goal message: %v", err)
+	}
+	if err := testHandler.deliverCanonicalMessageToChannelAgents(ctx, ch, unaddressed); err != nil {
+		t.Fatalf("deliver unaddressed Goal message: %v", err)
+	}
+	assertChannelAgentDeliveryCount(t, managerID, unaddressed.ID, 1)
+	assertChannelAgentDeliveryCount(t, workerID, unaddressed.ID, 0)
+
+	mentionParts := []protocol.MessagePart{{Type: protocol.MessagePartTypeReference, RefType: "mention", RefSubType: "agent", RefID: workerID, Label: "@worker"}}
+	directed, err := testHandler.insertChannelMessageWithParts(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "@worker 请处理你的工单", mentionParts, "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatalf("insert directed Goal message: %v", err)
+	}
+	if err := testHandler.deliverCanonicalMessageToChannelAgents(ctx, ch, directed); err != nil {
+		t.Fatalf("deliver directed Goal message: %v", err)
+	}
+	assertChannelAgentDeliveryCount(t, workerID, directed.ID, 1)
+	assertChannelAgentDeliveryCount(t, managerID, directed.ID, 0)
+
+	processed, err := testHandler.DispatchGoalControllerEvents(ctx, 1)
+	if err != nil {
+		t.Fatalf("dispatch Goal controller: %v", err)
+	}
+	if processed != 1 {
+		t.Fatalf("Goal controller processed=%d, want 1", processed)
+	}
+	var controllerRuns int
+	if err = testPool.QueryRow(ctx, `
+		SELECT count(*) FROM agent_inbox_event
+		WHERE workspace_id=$1 AND channel_id=$2 AND agent_id=$3
+		  AND reason='goal_controller' AND status='pending'`,
+		testWorkspaceID, channelID, managerID).Scan(&controllerRuns); err != nil {
+		t.Fatal(err)
+	}
+	if controllerRuns != 1 {
+		t.Fatalf("manager Goal controller Runs=%d, want 1", controllerRuns)
+	}
+	var firstRunID string
+	if err = testPool.QueryRow(ctx, `
+		SELECT id FROM agent_inbox_event
+		WHERE workspace_id=$1 AND channel_id=$2 AND agent_id=$3
+		  AND reason='goal_controller' AND status='pending'`,
+		testWorkspaceID, channelID, managerID).Scan(&firstRunID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = testPool.Exec(ctx, `
+		INSERT INTO goal_controller_event(workspace_id,goal_id,event_kind,source_kind)
+		VALUES($1,$2,'issue_changed','test')`, testWorkspaceID, goalID); err != nil {
+		t.Fatal(err)
+	}
+	if processed, err = testHandler.DispatchGoalControllerEvents(ctx, 1); err != nil || processed != 0 {
+		t.Fatalf("live Run fence processed=%d err=%v, want 0", processed, err)
+	}
+	if _, err = testPool.Exec(ctx, `
+		UPDATE agent_inbox_event
+		SET status='acked',terminal_outcome='completed',terminal_at=now(),acked_at=now(),completed_at=now()
+		WHERE id=$1`, firstRunID); err != nil {
+		t.Fatal(err)
+	}
+	if processed, err = testHandler.DispatchGoalControllerEvents(ctx, 1); err != nil || processed != 1 {
+		t.Fatalf("post-ack reconciliation processed=%d err=%v, want 1", processed, err)
+	}
+}
+
 func TestChannelHumanMentionDirectsTargetAndOrdinaryWakesOnlyUnmutedBystanders(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

@@ -42,6 +42,11 @@ func TestValidateV6ParallelResearchPlanRequiresStaffingAndParallelWork(t *testin
 			name:  "pending Agent creation permits a staffing cycle",
 			facts: v6DirectorPreflightFacts{maxParallelTasks: 5, workerCount: 1, pendingAgentCount: 2, proposedAtomicWork: 1},
 		},
+		{
+			name: "convergence may consume unresolved frontier nodes before more research",
+			facts: v6DirectorPreflightFacts{maxParallelTasks: 5, workerCount: 3, resultCount: 2,
+				unresolvedQuestions: 4, proposedConvergence: 1},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

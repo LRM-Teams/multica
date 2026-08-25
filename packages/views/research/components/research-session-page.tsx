@@ -52,7 +52,6 @@ import { Button } from "@multica/ui/components/ui/button";
 import { Textarea } from "@multica/ui/components/ui/textarea";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { useAutoScroll } from "@multica/ui/hooks/use-auto-scroll";
-import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { cn } from "@multica/ui/lib/utils";
 import { AgentPanelProvider } from "../../common/agent-panel-context";
@@ -204,7 +203,6 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   const nav = useNavigation();
   const qc = useQueryClient();
   const { subscribe, onReconnect, onConnectionStatus } = useWS();
-  const isMobile = useIsMobile();
   const currentUserId = useAuthStore((s) => s.user?.id ?? null);
   const chatOpen = useResearchUiStore((s) => s.chatDrawerOpen);
   const d5Lens = useResearchUiStore((s) => s.d5Lens);

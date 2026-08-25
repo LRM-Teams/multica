@@ -13,6 +13,7 @@ export * from "./star-graph-viewport";
 export * from "./trajectory-lane-layout";
 export * from "./ui-store";
 export * from "./canvas-store";
+export * from "./star-search";
 export * from "./d5-lens";
 export * from "./typed-graph-cache";
 export * from "./ws-updaters";

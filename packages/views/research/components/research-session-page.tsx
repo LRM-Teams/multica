@@ -1577,6 +1577,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
                           <ResearchChatCard
                             message={item.message}
                             members={fleet.members}
+                            presence={presence}
                             messages={messages}
                             currentGoal={session.goal}
                             roundPending={send.isPending}

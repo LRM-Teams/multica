@@ -34,7 +34,9 @@ The assignment runtime requires one decision before substantive execution:
 - `ISSUE_DAG`: for bounded parallel or staged work, atomically create child
   Issues with `multica issue decompose <issue-id> --plan-file <path>
   --idempotency-key <uuid>`. Use this for ordinary development, review, or a
-  one-off multi-source investigation. It creates no Work Graph.
+  one-off multi-source investigation. Every plan node must include a non-empty
+  `acceptance_criteria` array. It creates no Work Graph; children inherit the
+  parent Issue's active Goal scope when one exists.
 - `GOAL_GRAPH`: only while an explicit active channel Goal exists, and only for
   a manager/coordinator. Use `multica issue graph create` with
   `anchor_kind=channel_goal` when the work needs repeated evidence-driven
@@ -55,6 +57,12 @@ root in `backlog`; express real prerequisites with `depends_on` and let the
 server park downstream nodes. The same Agent may own multiple roots: they use
 independent Issue sessions and execution roots and can run in parallel up to
 its concurrency cap.
+
+For an active Goal, ordinary top-level group messages execute manager-first.
+Workers start from their assigned Issues, not from duplicate chat fanout. The
+standard Goal controller durably coalesces Goal, Issue, dependency, and Run
+changes into a directed manager reconciliation Run; use those reconciliations
+to adjust the DAG and Goal checkpoint, not to chat-wake every worker.
 
 Use `worker_mode: derived_agent` only when the node needs strong identity or
 memory isolation: independent candidate implementations, blind/adversarial

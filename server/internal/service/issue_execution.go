@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -79,6 +80,19 @@ func issueExecutionStatusRunnable(status string) bool {
 	return status == "todo" || status == "in_progress"
 }
 
+func issueExecutionHasAcceptanceCriteria(raw []byte) bool {
+	var criteria []string
+	if len(raw) == 0 || json.Unmarshal(raw, &criteria) != nil || len(criteria) == 0 {
+		return false
+	}
+	for _, criterion := range criteria {
+		if strings.TrimSpace(criterion) == "" {
+			return false
+		}
+	}
+	return true
+}
+
 func issueExecutionPayload(opts IssueExecutionReconcileOptions) ([]byte, string, error) {
 	payload, err := json.Marshal(map[string]any{
 		"force_fresh_session": opts.ForceFreshSession,
@@ -107,6 +121,11 @@ func (s *IssueExecutionService) ReconcileTx(ctx context.Context, tx pgx.Tx, issu
 
 	runnable := issueExecutionStatusRunnable(state.Status) &&
 		state.AssigneeType.Valid && state.AssigneeType.String == "agent" && state.AssigneeID.Valid
+	if runnable && state.ChannelGoalID.Valid {
+		// Goal-scoped leaves require an explicit completion contract. This keeps
+		// the scheduler from spending a Run on work the controller cannot verify.
+		runnable = issueExecutionHasAcceptanceCriteria(state.AcceptanceCriteria)
+	}
 	if runnable {
 		blocked, depErr := q.HasIncompleteIssueExecutionDependencies(ctx, state.ID)
 		if depErr != nil {

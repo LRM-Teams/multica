@@ -76,7 +76,9 @@ offline means Start. Message work/activity status is not lifecycle truth.
 
 `POST /api/members/agents/{id}/start` dispatches the Agent's desired Runtime to
 the current WorkspaceDaemon. `POST /api/members/agents/{id}/stop` targets the
-Agent and requires the current WorkspaceDaemon; it does not persist manual Stop intent.
+Agent and requires the current WorkspaceDaemon. An accepted Stop persists the
+Agent's stopped intent so reconnect reconciliation does not immediately start
+it again. Explicit Start or Reset clears that intent.
 These are human product actions, not `multica agent *` CLI commands.
 
 For multiple Agents, `POST /api/members/agents/lifecycle` accepts one

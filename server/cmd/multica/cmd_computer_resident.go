@@ -49,6 +49,9 @@ func runComputerResident(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return fmt.Errorf("read Computer upgrade predecessor identity: %w", err)
 	}
+	if explicitSourcePID, flagErr := cmd.Flags().GetInt("source-service-pid"); flagErr == nil && explicitSourcePID > 0 {
+		sourceServicePID = explicitSourcePID
+	}
 	controlToken, err := computer.EnsureControlToken(profile)
 	if err != nil {
 		return err
@@ -117,7 +120,8 @@ func runComputerResident(cmd *cobra.Command, _ []string) error {
 	}); err != nil && !errors.Is(err, context.Canceled) {
 		return err
 	}
-	if restartBin := host.RestartBinary(); restartBin != "" {
+	if restartPlan := host.RestartPlan(); restartPlan.BinaryPath != "" {
+		restartBin := restartPlan.BinaryPath
 		if err := bestEffortSyncInstalledServiceUnit(profile, restartBin); err != nil {
 			logger.Warn("could not rewrite OS service unit to activated Computer binary",
 				"path", restartBin, "error", err)
@@ -125,6 +129,13 @@ func runComputerResident(cmd *cobra.Command, _ []string) error {
 		if runningUnderSupervision() {
 			logger.Info("restarting Computer with updated binary via supervisor handoff", "path", restartBin)
 			os.Exit(daemonHandoffExitCode)
+		}
+		if handoff := restartPlan.CurrentBinaryHandoff; handoff != nil {
+			if err := spawnDetachedRestartCoordinator(restartBin, profile, *handoff); err != nil {
+				return fmt.Errorf("start detached Computer restart coordinator: %w", err)
+			}
+			logger.Info("started detached Computer restart coordinator", "path", restartBin)
+			return nil
 		}
 		if err := spawnDetachedUpgradeCoordinator(restartBin, profile); err != nil {
 			return fmt.Errorf("start detached Computer upgrade coordinator: %w", err)

@@ -71,6 +71,14 @@ var computerUpgradeCoordinatorCmd = &cobra.Command{
 	RunE:   runComputerUpgradeCoordinator,
 }
 
+var computerRestartCoordinatorCmd = &cobra.Command{
+	Use:    computer.ResidentRestartArg + " <handoff>",
+	Hidden: true,
+	Short:  "Run the detached current-binary restart coordinator",
+	Args:   cobra.ExactArgs(1),
+	RunE:   runComputerRestartCoordinator,
+}
+
 var computerStartCmd = &cobra.Command{
 	Use:   "start [/<workspace>]",
 	Short: "Start the resident Computer",
@@ -203,12 +211,14 @@ func init() {
 	computerDoctorCmd.Flags().String("output", "table", "Output format: table or json")
 
 	addComputerResidentFlags(computerServiceCmd)
+	computerServiceCmd.Flags().Int("source-service-pid", 0, "Predecessor Computer service PID")
 	computerRunnerCmd.Flags().String("workspace-id", "", "Workspace Binding identity")
 	_ = computerRunnerCmd.MarkFlagRequired("workspace-id")
 
 	computerCmd.AddCommand(computerServiceCmd)
 	computerCmd.AddCommand(computerRunnerCmd)
 	computerCmd.AddCommand(computerUpgradeCoordinatorCmd)
+	computerCmd.AddCommand(computerRestartCoordinatorCmd)
 	computerSuperviseCmd.Hidden = true
 	computerCmd.AddCommand(computerSuperviseCmd)
 	computerCmd.AddCommand(computerStartCmd)

@@ -100,6 +100,8 @@ multica computer doctor     # read-only diagnostics (--fix only clears a confirm
 Stop first requests graceful resident shutdown. If local control fails, its
 forced fallback terminates the resident and every persisted WorkspaceDaemon
 child; it reports an error rather than claiming success while a child remains.
+Web-triggered same-binary Restart uses a dedicated predecessor/successor
+handoff and does not require or create a Machine Upgrade journal.
 Interactive lifecycle commands render colored spinners and concise completion
 summaries; redirected output and CI automatically use stable plain-text lines.
 

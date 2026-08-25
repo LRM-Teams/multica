@@ -135,6 +135,9 @@ const (
 	// ResidentUpgradeArg is the hidden argv for the detached Machine Upgrade
 	// coordinator. The incumbent Computer must not own successor spawn.
 	ResidentUpgradeArg = "__upgrade"
+	// ResidentRestartArg is the hidden argv for a same-binary restart
+	// coordinator. Unlike Machine Upgrade, it does not use an upgrade journal.
+	ResidentRestartArg = "__restart"
 )
 
 // ResidentServicePrefix is the Computer-owned process contract. Workspace

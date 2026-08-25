@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/daemonws"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -407,6 +408,63 @@ func TestAgentManualStopCancelsStartingRestartAndTargetsReplacement(t *testing.T
 	}
 }
 
+func TestAgentManualStopPersistsDesiredStoppedState(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	agentID, runtimeID := createAgentRestartFixture(t, true)
+	notifier := &capturedAgentRestartNotifier{}
+	previous := testHandler.AgentRestartNotifier
+	testHandler.AgentRestartNotifier = notifier
+	t.Cleanup(func() { testHandler.AgentRestartNotifier = previous })
+
+	stop := invokeAgentLifecycleAction(t, agentID, "stop")
+	if stop.Code != http.StatusAccepted {
+		t.Fatalf("manual stop status=%d body=%s", stop.Code, stop.Body.String())
+	}
+	var stoppedAt pgtype.Timestamptz
+	if err := testPool.QueryRow(context.Background(), `SELECT stopped_at FROM agent WHERE id = $1`, agentID).Scan(&stoppedAt); err != nil {
+		t.Fatal(err)
+	}
+	if !stoppedAt.Valid {
+		t.Fatal("manual Stop did not persist the desired stopped state")
+	}
+	desired, err := testHandler.loadRunnerDesiredLaunches(context.Background(), daemonws.ClientIdentity{
+		DaemonID: "agent-restart-test-daemon", WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, launch := range desired {
+		if launch.agentID == agentID {
+			t.Fatalf("manually stopped Agent remained a desired launch: %+v", launch)
+		}
+	}
+
+	start := invokeAgentLifecycleAction(t, agentID, "start")
+	if start.Code != http.StatusAccepted {
+		t.Fatalf("manual start status=%d body=%s", start.Code, start.Body.String())
+	}
+	if err := testPool.QueryRow(context.Background(), `SELECT stopped_at FROM agent WHERE id = $1`, agentID).Scan(&stoppedAt); err != nil {
+		t.Fatal(err)
+	}
+	if stoppedAt.Valid {
+		t.Fatal("manual Start did not clear the desired stopped state")
+	}
+	desired, err = testHandler.loadRunnerDesiredLaunches(context.Background(), daemonws.ClientIdentity{
+		DaemonID: "agent-restart-test-daemon", WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, launch := range desired {
+		if launch.agentID == agentID {
+			return
+		}
+	}
+	t.Fatal("manually started Agent was not restored as a desired launch")
+}
+
 func TestAgentManualStopFailsWhenRunnerIsUnavailable(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
@@ -419,6 +477,13 @@ func TestAgentManualStopFailsWhenRunnerIsUnavailable(t *testing.T) {
 	stop := invokeAgentLifecycleAction(t, agentID, "stop")
 	if stop.Code != http.StatusConflict || !containsResponseBody(stop, "agent_runtime_offline") {
 		t.Fatalf("manual stop status=%d body=%s, want 409 agent_runtime_offline", stop.Code, stop.Body.String())
+	}
+	var stoppedAt pgtype.Timestamptz
+	if err := testPool.QueryRow(context.Background(), `SELECT stopped_at FROM agent WHERE id = $1`, agentID).Scan(&stoppedAt); err != nil {
+		t.Fatal(err)
+	}
+	if stoppedAt.Valid {
+		t.Fatal("failed manual Stop left the Agent in desired stopped state")
 	}
 }
 
@@ -445,10 +510,20 @@ func TestAgentRestartSessionClearsSessionThenStartsFresh(t *testing.T) {
 	previous := testHandler.AgentRestartNotifier
 	testHandler.AgentRestartNotifier = notifier
 	t.Cleanup(func() { testHandler.AgentRestartNotifier = previous })
+	if _, err := testPool.Exec(context.Background(), `UPDATE agent SET stopped_at = now() WHERE id = $1`, agentID); err != nil {
+		t.Fatal(err)
+	}
 
 	create := invokeCreateAgentRestart(t, agentID, uuid.NewString(), agentRestartStorageSession)
 	if create.Code != http.StatusAccepted {
 		t.Fatalf("create status=%d body=%s", create.Code, create.Body.String())
+	}
+	var stoppedAt pgtype.Timestamptz
+	if err := testPool.QueryRow(context.Background(), `SELECT stopped_at FROM agent WHERE id = $1`, agentID).Scan(&stoppedAt); err != nil {
+		t.Fatal(err)
+	}
+	if stoppedAt.Valid {
+		t.Fatal("explicit Reset did not clear the desired stopped state")
 	}
 	var operation AgentRestartOperation
 	if err := json.Unmarshal(create.Body.Bytes(), &operation); err != nil {

@@ -385,6 +385,28 @@ func TestRecoverSuccessorClearsAbortedActivationOnFromVersion(t *testing.T) {
 	}
 }
 
+func TestCurrentBinaryRestartCapturesDedicatedHandoff(t *testing.T) {
+	host := &Host{}
+	upgrade := newHostMachineUpgrade(host, hostMachineUpgradeConfig{
+		identity: HostProcessIdentity{Version: "alpha.8"},
+	})
+	host.upgrade = upgrade
+	upgrade.installPath = func() (string, error) { return "/tmp/current-computer", nil }
+
+	upgrade.scheduleCurrentBinaryRestart()
+	plan := host.RestartPlan()
+	if plan.BinaryPath != "/tmp/current-computer" {
+		t.Fatalf("restart binary = %q", plan.BinaryPath)
+	}
+	handoff := plan.CurrentBinaryHandoff
+	if handoff == nil {
+		t.Fatal("same-binary restart did not capture a dedicated handoff")
+	}
+	if handoff.Version != "alpha.8" || handoff.SourceServicePID != os.Getpid() || handoff.AcceptedManagedSetRevision == "" {
+		t.Fatalf("same-binary restart handoff = %+v", handoff)
+	}
+}
+
 func TestRecoverSuccessorKeepsActiveHandoffOnUnrelatedFromVersion(t *testing.T) {
 	root := t.TempDir()
 	if err := writeMachineUpgradeJournal(root, hostMachineUpgradeJournal{

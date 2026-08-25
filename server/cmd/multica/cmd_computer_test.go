@@ -164,6 +164,21 @@ func TestComputerUpgradeCoordinatorCommandIsHidden(t *testing.T) {
 	}
 }
 
+func TestComputerRestartCoordinatorCommandIsHidden(t *testing.T) {
+	if !computerRestartCoordinatorCmd.Hidden {
+		t.Fatal("computer __restart must stay hidden")
+	}
+	if err := computerRestartCoordinatorCmd.Args(computerRestartCoordinatorCmd, nil); err == nil {
+		t.Fatal("computer __restart accepts a missing handoff")
+	}
+	if err := computerRestartCoordinatorCmd.Args(computerRestartCoordinatorCmd, []string{"handoff"}); err != nil {
+		t.Fatalf("computer __restart rejects its handoff: %v", err)
+	}
+	if !hasSubcommand(computerCmd, computer.ResidentRestartArg) {
+		t.Fatal("computer command is missing the hidden restart coordinator entry")
+	}
+}
+
 func TestComputerUpgradeCommandUsesBoundComputer(t *testing.T) {
 	if got, want := computerUpgradeCmd.Use, "upgrade"; got != want {
 		t.Fatalf("computer upgrade use = %q, want %q", got, want)

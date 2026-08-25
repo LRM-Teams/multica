@@ -14,7 +14,7 @@ import (
 const archiveAgent = `-- name: ArchiveAgent :one
 UPDATE agent SET archived_at = now(), archived_by = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail, provider_session_id
+RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail, provider_session_id, stopped_at
 `
 
 type ArchiveAgentParams struct {
@@ -58,6 +58,7 @@ func (q *Queries) ArchiveAgent(ctx context.Context, arg ArchiveAgentParams) (Age
 		&i.ProviderBlockedUntil,
 		&i.ProviderBlockDetail,
 		&i.ProviderSessionID,
+		&i.StoppedAt,
 	)
 	return i, err
 }
@@ -66,7 +67,7 @@ const archiveAgentsByIDs = `-- name: ArchiveAgentsByIDs :many
 UPDATE agent
 SET archived_at = now(), archived_by = $1, updated_at = now()
 WHERE id = ANY($2::uuid[]) AND archived_at IS NULL
-RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail, provider_session_id
+RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail, provider_session_id, stopped_at
 `
 
 type ArchiveAgentsByIDsParams struct {
@@ -124,6 +125,7 @@ func (q *Queries) ArchiveAgentsByIDs(ctx context.Context, arg ArchiveAgentsByIDs
 			&i.ProviderBlockedUntil,
 			&i.ProviderBlockDetail,
 			&i.ProviderSessionID,
+			&i.StoppedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -139,7 +141,7 @@ const archiveAgentsByRuntime = `-- name: ArchiveAgentsByRuntime :many
 UPDATE agent
 SET archived_at = now(), archived_by = $1, updated_at = now()
 WHERE runtime_id = ANY($2::uuid[]) AND archived_at IS NULL
-RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail, provider_session_id
+RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail, provider_session_id, stopped_at
 `
 
 type ArchiveAgentsByRuntimeParams struct {
@@ -193,6 +195,7 @@ func (q *Queries) ArchiveAgentsByRuntime(ctx context.Context, arg ArchiveAgentsB
 			&i.ProviderBlockedUntil,
 			&i.ProviderBlockDetail,
 			&i.ProviderSessionID,
+			&i.StoppedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -921,7 +924,7 @@ func (q *Queries) ClearAgentCrashed(ctx context.Context, id pgtype.UUID) error {
 const clearAgentMcpConfig = `-- name: ClearAgentMcpConfig :one
 UPDATE agent SET mcp_config = NULL, updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail, provider_session_id
+RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail, provider_session_id, stopped_at
 `
 
 func (q *Queries) ClearAgentMcpConfig(ctx context.Context, id pgtype.UUID) (Agent, error) {
@@ -960,6 +963,7 @@ func (q *Queries) ClearAgentMcpConfig(ctx context.Context, id pgtype.UUID) (Agen
 		&i.ProviderBlockedUntil,
 		&i.ProviderBlockDetail,
 		&i.ProviderSessionID,
+		&i.StoppedAt,
 	)
 	return i, err
 }
@@ -982,7 +986,7 @@ func (q *Queries) ClearAgentProviderBlocked(ctx context.Context, id pgtype.UUID)
 const clearAgentThinkingLevel = `-- name: ClearAgentThinkingLevel :one
 UPDATE agent SET thinking_level = NULL, updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail, provider_session_id
+RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail, provider_session_id, stopped_at
 `
 
 // Explicit NULL-clear for thinking_level. COALESCE-based UpdateAgent cannot
@@ -1024,6 +1028,7 @@ func (q *Queries) ClearAgentThinkingLevel(ctx context.Context, id pgtype.UUID) (
 		&i.ProviderBlockedUntil,
 		&i.ProviderBlockDetail,
 		&i.ProviderSessionID,
+		&i.StoppedAt,
 	)
 	return i, err
 }
@@ -1151,7 +1156,7 @@ INSERT INTO agent (
     $17, $5, $6, $7, $8, $9, $10, $11,
     $12, $13, $14
 )
-RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail, provider_session_id
+RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail, provider_session_id, stopped_at
 `
 
 type CreateAgentParams struct {
@@ -1228,6 +1233,7 @@ func (q *Queries) CreateAgent(ctx context.Context, arg CreateAgentParams) (Agent
 		&i.ProviderBlockedUntil,
 		&i.ProviderBlockDetail,
 		&i.ProviderSessionID,
+		&i.StoppedAt,
 	)
 	return i, err
 }
@@ -2038,7 +2044,7 @@ func (q *Queries) FailStaleTasks(ctx context.Context, arg FailStaleTasksParams) 
 }
 
 const getAgent = `-- name: GetAgent :one
-SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail, provider_session_id FROM agent
+SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail, provider_session_id, stopped_at FROM agent
 WHERE id = $1
 `
 
@@ -2078,12 +2084,13 @@ func (q *Queries) GetAgent(ctx context.Context, id pgtype.UUID) (Agent, error) {
 		&i.ProviderBlockedUntil,
 		&i.ProviderBlockDetail,
 		&i.ProviderSessionID,
+		&i.StoppedAt,
 	)
 	return i, err
 }
 
 const getAgentInWorkspace = `-- name: GetAgentInWorkspace :one
-SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail, provider_session_id FROM agent
+SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail, provider_session_id, stopped_at FROM agent
 WHERE id = $1 AND workspace_id = $2
 `
 
@@ -2128,6 +2135,7 @@ func (q *Queries) GetAgentInWorkspace(ctx context.Context, arg GetAgentInWorkspa
 		&i.ProviderBlockedUntil,
 		&i.ProviderBlockDetail,
 		&i.ProviderSessionID,
+		&i.StoppedAt,
 	)
 	return i, err
 }
@@ -2569,7 +2577,7 @@ func (q *Queries) LinkTaskToIssue(ctx context.Context, arg LinkTaskToIssueParams
 }
 
 const listActiveAgentsByRuntime = `-- name: ListActiveAgentsByRuntime :many
-SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail, provider_session_id FROM agent
+SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail, provider_session_id, stopped_at FROM agent
 WHERE runtime_id = $1 AND archived_at IS NULL
 ORDER BY name ASC
 `
@@ -2622,6 +2630,7 @@ func (q *Queries) ListActiveAgentsByRuntime(ctx context.Context, runtimeID pgtyp
 			&i.ProviderBlockedUntil,
 			&i.ProviderBlockDetail,
 			&i.ProviderSessionID,
+			&i.StoppedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -2634,7 +2643,7 @@ func (q *Queries) ListActiveAgentsByRuntime(ctx context.Context, runtimeID pgtyp
 }
 
 const listActiveAgentsByRuntimeForUpdate = `-- name: ListActiveAgentsByRuntimeForUpdate :many
-SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail, provider_session_id FROM agent
+SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail, provider_session_id, stopped_at FROM agent
 WHERE runtime_id = $1 AND archived_at IS NULL
 ORDER BY name ASC
 FOR UPDATE
@@ -2690,6 +2699,7 @@ func (q *Queries) ListActiveAgentsByRuntimeForUpdate(ctx context.Context, runtim
 			&i.ProviderBlockedUntil,
 			&i.ProviderBlockDetail,
 			&i.ProviderSessionID,
+			&i.StoppedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -2702,7 +2712,7 @@ func (q *Queries) ListActiveAgentsByRuntimeForUpdate(ctx context.Context, runtim
 }
 
 const listActiveAgentsByRuntimesForUpdate = `-- name: ListActiveAgentsByRuntimesForUpdate :many
-SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail, provider_session_id FROM agent
+SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail, provider_session_id, stopped_at FROM agent
 WHERE runtime_id = ANY($1::uuid[]) AND archived_at IS NULL
 ORDER BY name ASC, id ASC
 FOR UPDATE
@@ -2752,6 +2762,7 @@ func (q *Queries) ListActiveAgentsByRuntimesForUpdate(ctx context.Context, runti
 			&i.ProviderBlockedUntil,
 			&i.ProviderBlockDetail,
 			&i.ProviderSessionID,
+			&i.StoppedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -3004,7 +3015,7 @@ func (q *Queries) ListAgentTasks(ctx context.Context, agentID pgtype.UUID) ([]Ag
 }
 
 const listAgents = `-- name: ListAgents :many
-SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail, provider_session_id FROM agent
+SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail, provider_session_id, stopped_at FROM agent
 WHERE workspace_id = $1 AND archived_at IS NULL
 ORDER BY created_at ASC
 `
@@ -3051,6 +3062,7 @@ func (q *Queries) ListAgents(ctx context.Context, workspaceID pgtype.UUID) ([]Ag
 			&i.ProviderBlockedUntil,
 			&i.ProviderBlockDetail,
 			&i.ProviderSessionID,
+			&i.StoppedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -3063,7 +3075,7 @@ func (q *Queries) ListAgents(ctx context.Context, workspaceID pgtype.UUID) ([]Ag
 }
 
 const listAllAgents = `-- name: ListAllAgents :many
-SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail, provider_session_id FROM agent
+SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail, provider_session_id, stopped_at FROM agent
 WHERE workspace_id = $1
 ORDER BY created_at ASC
 `
@@ -3110,6 +3122,7 @@ func (q *Queries) ListAllAgents(ctx context.Context, workspaceID pgtype.UUID) ([
 			&i.ProviderBlockedUntil,
 			&i.ProviderBlockDetail,
 			&i.ProviderSessionID,
+			&i.StoppedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -3790,7 +3803,7 @@ SET status = CASE
 END,
     updated_at = now()
 WHERE a.id = $1
-RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail, provider_session_id
+RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail, provider_session_id, stopped_at
 `
 
 // Provider-quota lock (tasks #64/#77) wins over workload: a blocked agent
@@ -3833,6 +3846,7 @@ func (q *Queries) RefreshAgentStatusFromTasks(ctx context.Context, id pgtype.UUI
 		&i.ProviderBlockedUntil,
 		&i.ProviderBlockDetail,
 		&i.ProviderSessionID,
+		&i.StoppedAt,
 	)
 	return i, err
 }
@@ -3923,7 +3937,7 @@ func (q *Queries) ResetInFlightTaskForResume(ctx context.Context, arg ResetInFli
 const restoreAgent = `-- name: RestoreAgent :one
 UPDATE agent SET archived_at = NULL, archived_by = NULL, updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail, provider_session_id
+RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail, provider_session_id, stopped_at
 `
 
 func (q *Queries) RestoreAgent(ctx context.Context, id pgtype.UUID) (Agent, error) {
@@ -3962,6 +3976,7 @@ func (q *Queries) RestoreAgent(ctx context.Context, id pgtype.UUID) (Agent, erro
 		&i.ProviderBlockedUntil,
 		&i.ProviderBlockDetail,
 		&i.ProviderSessionID,
+		&i.StoppedAt,
 	)
 	return i, err
 }
@@ -4123,7 +4138,7 @@ UPDATE agent SET
     thinking_level = COALESCE($18, thinking_level),
     updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail, provider_session_id
+RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail, provider_session_id, stopped_at
 `
 
 type UpdateAgentParams struct {
@@ -4202,6 +4217,7 @@ func (q *Queries) UpdateAgent(ctx context.Context, arg UpdateAgentParams) (Agent
 		&i.ProviderBlockedUntil,
 		&i.ProviderBlockDetail,
 		&i.ProviderSessionID,
+		&i.StoppedAt,
 	)
 	return i, err
 }
@@ -4210,7 +4226,7 @@ const updateAgentCustomEnv = `-- name: UpdateAgentCustomEnv :one
 UPDATE agent
 SET custom_env = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail, provider_session_id
+RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail, provider_session_id, stopped_at
 `
 
 type UpdateAgentCustomEnvParams struct {
@@ -4259,6 +4275,7 @@ func (q *Queries) UpdateAgentCustomEnv(ctx context.Context, arg UpdateAgentCusto
 		&i.ProviderBlockedUntil,
 		&i.ProviderBlockDetail,
 		&i.ProviderSessionID,
+		&i.StoppedAt,
 	)
 	return i, err
 }
@@ -4266,7 +4283,7 @@ func (q *Queries) UpdateAgentCustomEnv(ctx context.Context, arg UpdateAgentCusto
 const updateAgentStatus = `-- name: UpdateAgentStatus :one
 UPDATE agent SET status = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail, provider_session_id
+RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role, runtime_reassigned_at, crashed_since, provider_blocked_until, provider_block_detail, provider_session_id, stopped_at
 `
 
 type UpdateAgentStatusParams struct {
@@ -4310,6 +4327,7 @@ func (q *Queries) UpdateAgentStatus(ctx context.Context, arg UpdateAgentStatusPa
 		&i.ProviderBlockedUntil,
 		&i.ProviderBlockDetail,
 		&i.ProviderSessionID,
+		&i.StoppedAt,
 	)
 	return i, err
 }

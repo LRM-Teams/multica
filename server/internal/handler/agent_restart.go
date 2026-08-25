@@ -112,6 +112,9 @@ func (h *Handler) startAgent(ctx context.Context, agent db.Agent) *agentLifecycl
 	if err != nil {
 		return &agentLifecycleRequestError{status: http.StatusConflict, message: "agent_runtime_missing"}
 	}
+	if _, err := h.DB.Exec(ctx, `UPDATE agent SET stopped_at = NULL, updated_at = now() WHERE id = $1`, agent.ID); err != nil {
+		return &agentLifecycleRequestError{status: http.StatusInternalServerError, message: "failed to start Agent"}
+	}
 	h.restarts().finish(uuidToString(agent.ID))
 	if h.AgentRestartNotifier == nil || !h.AgentRestartNotifier.NotifyAgentRestartCommand(
 		uuidToString(agent.WorkspaceID), runtime.DaemonID.String, protocol.EventDaemonAgentStart, uuid.NewString(),
@@ -156,10 +159,16 @@ func (h *Handler) stopAgent(ctx context.Context, agent db.Agent) *agentLifecycle
 		restart.runtimeID == uuidToString(runtime.ID) && restart.computerID == runtime.DaemonID.String {
 		h.restarts().finish(agentID)
 	}
+	if _, err := h.DB.Exec(ctx, `UPDATE agent SET stopped_at = now(), updated_at = now() WHERE id = $1`, agent.ID); err != nil {
+		return &agentLifecycleRequestError{status: http.StatusInternalServerError, message: "failed to stop Agent"}
+	}
 	if h.AgentRestartNotifier == nil || !h.AgentRestartNotifier.NotifyAgentRestartCommand(
 		workspaceID, runtime.DaemonID.String, protocol.EventDaemonAgentStop, uuid.NewString(),
 		protocol.AgentStopPayload{AgentID: agentID},
 	) {
+		if _, err := h.DB.Exec(ctx, `UPDATE agent SET stopped_at = NULL, updated_at = now() WHERE id = $1`, agent.ID); err != nil {
+			slog.Error("failed to roll back Agent stopped state", "agent_id", agentID, "error", err)
+		}
 		return &agentLifecycleRequestError{status: http.StatusConflict, message: "agent_runtime_offline"}
 	}
 	return nil
@@ -238,6 +247,10 @@ func (h *Handler) resetAgent(ctx context.Context, agent db.Agent, mode AgentRest
 	})
 	if !accepted {
 		return AgentRestartOperation{}, &agentLifecycleRequestError{status: http.StatusConflict, message: "an Agent restart is already active"}
+	}
+	if _, err := h.DB.Exec(ctx, `UPDATE agent SET stopped_at = NULL, updated_at = now() WHERE id = $1`, agent.ID); err != nil {
+		h.restarts().finish(uuidToString(agent.ID))
+		return AgentRestartOperation{}, &agentLifecycleRequestError{status: http.StatusInternalServerError, message: "failed to start Agent restart"}
 	}
 	if err := h.beginAgentRestartOperation(ctx, state); err != nil {
 		slog.Warn(

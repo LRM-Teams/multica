@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,6 +23,7 @@ const detachedSuccessorReadyTimeout = 45 * time.Second
 
 var spawnDetachedComputerBinary = startDetachedComputerBinary
 var spawnDetachedUpgradeCoordinator = startDetachedUpgradeCoordinator
+var spawnDetachedRestartCoordinator = startDetachedRestartCoordinator
 var probeDetachedSuccessorAttestation = func(profile string) (computer.MachineAttestation, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -33,12 +37,28 @@ func startDetachedUpgradeCoordinator(binaryPath, profile string) error {
 	if binaryPath == "" {
 		return fmt.Errorf("detached upgrade coordinator binary is required")
 	}
+	return startDetachedCoordinator(binaryPath, profile, computer.ResidentCommand, computer.ResidentUpgradeArg)
+}
+
+func startDetachedRestartCoordinator(binaryPath, profile string, handoff computer.ComputerRestartHandoff) error {
+	if binaryPath == "" {
+		return fmt.Errorf("detached restart coordinator binary is required")
+	}
+	payload, err := json.Marshal(handoff)
+	if err != nil {
+		return fmt.Errorf("encode Computer restart handoff: %w", err)
+	}
+	encoded := base64.RawURLEncoding.EncodeToString(payload)
+	return startDetachedCoordinator(binaryPath, profile, computer.ResidentCommand, computer.ResidentRestartArg, encoded)
+}
+
+func startDetachedCoordinator(binaryPath, profile string, args ...string) error {
 	logFile, err := os.OpenFile(computer.LogPath(profile), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return fmt.Errorf("open daemon log: %w", err)
 	}
 	defer logFile.Close()
-	child := exec.Command(binaryPath, computer.ResidentCommand, computer.ResidentUpgradeArg)
+	child := exec.Command(binaryPath, args...)
 	child.Stdout = logFile
 	child.Stderr = logFile
 	child.SysProcAttr = computer.SysProcAttr(true)
@@ -46,7 +66,7 @@ func startDetachedUpgradeCoordinator(binaryPath, profile string) error {
 		if !computer.IsAccessDeniedSpawnErr(err) {
 			return err
 		}
-		child = exec.Command(binaryPath, computer.ResidentCommand, computer.ResidentUpgradeArg)
+		child = exec.Command(binaryPath, args...)
 		child.Stdout = logFile
 		child.Stderr = logFile
 		child.SysProcAttr = computer.SysProcAttr(false)
@@ -57,8 +77,8 @@ func startDetachedUpgradeCoordinator(binaryPath, profile string) error {
 	return child.Process.Release()
 }
 
-// startDetachedComputerBinary launches the committed target only after the
-// journalled predecessor service and old runners are dead. The incumbent must
+// startDetachedComputerBinary launches the target only after the captured
+// predecessor service and old Binding children are dead. The incumbent must
 // not call this while it is still alive.
 func startDetachedComputerBinary(binaryPath, profile, expectedVersion string, handoff computer.PendingMachineUpgradeHandoff) error {
 	if binaryPath == "" {
@@ -80,6 +100,7 @@ func startDetachedComputerBinary(binaryPath, profile, expectedVersion string, ha
 	}
 	defer logFile.Close()
 	args := computer.ResidentArgs(computer.StartOptions{})
+	args = append(args, "--source-service-pid", strconv.Itoa(handoff.SourceServicePID))
 	child := exec.Command(binaryPath, args...)
 	child.Stdout = logFile
 	child.Stderr = logFile
@@ -151,6 +172,38 @@ func runComputerUpgradeCoordinator(_ *cobra.Command, _ []string) error {
 		return err
 	}
 	return completeDetachedMachineUpgrade("", installPath)
+}
+
+func runComputerRestartCoordinator(_ *cobra.Command, args []string) error {
+	util.EnsureHiddenConsole()
+	payload, err := base64.RawURLEncoding.DecodeString(args[0])
+	if err != nil {
+		return fmt.Errorf("decode Computer restart handoff: %w", err)
+	}
+	var handoff computer.ComputerRestartHandoff
+	if err := json.Unmarshal(payload, &handoff); err != nil {
+		return fmt.Errorf("decode Computer restart handoff: %w", err)
+	}
+	installPath, err := cli.InstallPath()
+	if err != nil {
+		return err
+	}
+	return completeDetachedComputerRestart("", installPath, handoff)
+}
+
+func completeDetachedComputerRestart(profile, binaryPath string, handoff computer.ComputerRestartHandoff) error {
+	owned := computer.PendingMachineUpgradeHandoff{
+		TargetVersion: handoff.Version, SourceServicePID: handoff.SourceServicePID,
+		OldRunnerPIDs:               append([]int(nil), handoff.OldBindingPIDs...),
+		AcceptedManagedWorkspaceIDs: append([]string(nil), handoff.AcceptedManagedWorkspaceIDs...),
+		AcceptedManagedSetRevision:  handoff.AcceptedManagedSetRevision,
+		KeepOwnedProcess:            true,
+	}
+	ownedDetachedProcess = nil
+	if err := spawnDetachedComputerBinary(binaryPath, profile, handoff.Version, owned); err != nil {
+		return fmt.Errorf("restart detached Computer: %w", err)
+	}
+	return waitOwnedDetachedProcess()
 }
 
 func completeDetachedMachineUpgrade(profile, binaryPath string) error {

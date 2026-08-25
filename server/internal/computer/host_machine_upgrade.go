@@ -45,6 +45,7 @@ type hostMachineUpgrade struct {
 	initiatorWorkspaceID string
 	activeCancel         context.CancelFunc
 	restartBinary        string
+	restartHandoff       *ComputerRestartHandoff
 	targetVersion        string
 	manifestBaseURL      string
 	lastStatus           MachineUpgradeStatus
@@ -554,6 +555,23 @@ type PendingMachineUpgradeHandoff struct {
 	KeepOwnedProcess            bool
 }
 
+// ComputerRestartHandoff is the in-memory predecessor snapshot used to
+// restart the current binary without pretending that an upgrade is active.
+type ComputerRestartHandoff struct {
+	Version                     string   `json:"version"`
+	SourceServicePID            int      `json:"sourceServicePid"`
+	OldBindingPIDs              []int    `json:"oldBindingPids,omitempty"`
+	AcceptedManagedWorkspaceIDs []string `json:"acceptedManagedWorkspaceIds"`
+	AcceptedManagedSetRevision  string   `json:"acceptedManagedSetRevision"`
+}
+
+// ComputerRestartPlan is the one post-shutdown launch decision returned by
+// Host. CurrentBinaryHandoff is nil for a real Machine Upgrade.
+type ComputerRestartPlan struct {
+	BinaryPath           string
+	CurrentBinaryHandoff *ComputerRestartHandoff
+}
+
 func WritePendingMachineUpgradeHandoffForTest(root string, handoff PendingMachineUpgradeHandoff) error {
 	requestID := strings.TrimSpace(handoff.RequestID)
 	if requestID == "" {
@@ -695,7 +713,14 @@ func (upgrade *hostMachineUpgrade) scheduleCurrentBinaryRestart() {
 	}
 	upgrade.mu.Lock()
 	if upgrade.restartBinary == "" {
+		workspaceIDs := upgrade.acceptedManagedWorkspaceIDs()
 		upgrade.restartBinary = path
+		upgrade.restartHandoff = &ComputerRestartHandoff{
+			Version: upgrade.config.identity.Version, SourceServicePID: os.Getpid(),
+			OldBindingPIDs:              upgrade.runnerPIDs(workspaceIDs),
+			AcceptedManagedWorkspaceIDs: workspaceIDs,
+			AcceptedManagedSetRevision:  managedSetRevision(workspaceIDs),
+		}
 		upgrade.targetVersion = upgrade.config.identity.Version
 	}
 	upgrade.mu.Unlock()
@@ -730,13 +755,21 @@ func versionsMatch(left, right string) bool {
 	return normalize(left) != "" && normalize(left) == normalize(right)
 }
 
-// RestartBinary returns the exact activated Computer launcher selected by a
-// Host-owned Machine Upgrade.
-func (host *Host) RestartBinary() string {
+// RestartPlan atomically returns the activated launcher and, for a same-binary
+// restart, its predecessor snapshot. Real Machine Upgrade uses its journal.
+func (host *Host) RestartPlan() ComputerRestartPlan {
 	if host == nil || host.upgrade == nil {
-		return ""
+		return ComputerRestartPlan{}
 	}
 	host.upgrade.mu.Lock()
 	defer host.upgrade.mu.Unlock()
-	return host.upgrade.restartBinary
+	plan := ComputerRestartPlan{BinaryPath: host.upgrade.restartBinary}
+	if host.upgrade.restartHandoff == nil {
+		return plan
+	}
+	handoff := *host.upgrade.restartHandoff
+	handoff.OldBindingPIDs = append([]int(nil), handoff.OldBindingPIDs...)
+	handoff.AcceptedManagedWorkspaceIDs = append([]string(nil), handoff.AcceptedManagedWorkspaceIDs...)
+	plan.CurrentBinaryHandoff = &handoff
+	return plan
 }

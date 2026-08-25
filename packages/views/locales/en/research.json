@@ -309,7 +309,7 @@
     "module_detail_ico": "Detail",
     "aux_close": "Close panel",
     "aux_detail_empty": "Select a node on the canvas to inspect it.",
-    "expansion_failed": "Couldn’t reveal this layer. Activate the node again to retry.",
+    "expansion_failed": "Couldn’t reveal this layer. Use the disclosure control again to retry.",
     "confirm": "Confirm research complete",
     "confirm_continue": "Confirm & continue",
     "gate_approve": "Approve",

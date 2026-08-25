@@ -8,6 +8,7 @@ import {
 } from "@tanstack/react-query";
 import {
   researchV6DirectorDisplayIdentity,
+  researchV6DirectorDisplayScope,
   useResearchV6DirectorDisplayStore,
 } from "@multica/core/research-v6/director-display-store";
 import { ResearchV6DirectorExpansionController } from "@multica/core/research-v6/director-expansion-controller";
@@ -80,6 +81,12 @@ export function useResearchV6DirectorCanvas({
         firstPage.snapshotId,
       )
     : null;
+  const expectedDisplayScope = firstPage
+    ? researchV6DirectorDisplayScope(workspaceId, runId)
+    : null;
+  const displayScope = useResearchV6DirectorDisplayStore(
+    (state) => state.scope,
+  );
   const displayIdentity = useResearchV6DirectorDisplayStore(
     (state) => state.identity,
   );
@@ -95,8 +102,8 @@ export function useResearchV6DirectorCanvas({
   const transition = useResearchV6DirectorDisplayStore(
     (state) => state.transition,
   );
-  const displayMatches =
-    expectedDisplayIdentity !== null && displayIdentity === expectedDisplayIdentity;
+  const displayScopeMatches =
+    expectedDisplayScope !== null && displayScope === expectedDisplayScope;
 
   const controller = useMemo(
     () =>
@@ -110,6 +117,54 @@ export function useResearchV6DirectorCanvas({
     [queryClient, runId, snapshotId, transport, workspaceId],
   );
   useEffect(() => () => controller?.dispose(), [controller]);
+
+  const defaultExpandableNodeIds = useMemo(
+    () =>
+      new Set(
+        (snapshotQuery.data?.pages ?? [])
+          .flatMap((page) => page.nodes)
+          .filter((node) => node.expandable)
+          .map((node) => node.id),
+      ),
+    [snapshotQuery.data?.pages],
+  );
+  // Snapshot IDs are immutable transport identities, not user display intent.
+  // Re-resolve expanded roots against each new Snapshot while the store keeps
+  // their last confirmed slices visible, avoiding a collapse/re-expand flash.
+  useEffect(() => {
+    if (
+      !controller ||
+      !snapshotId ||
+      !expectedDisplayIdentity ||
+      !expectedDisplayScope ||
+      displayIdentity === expectedDisplayIdentity
+    ) {
+      return;
+    }
+    const store = useResearchV6DirectorDisplayStore.getState();
+    const rootsToRestore =
+      store.scope === expectedDisplayScope
+        ? Object.keys(store.expandedByRoot)
+        : [];
+    store.setProjectionIdentity(workspaceId, runId, snapshotId);
+    for (const rootNodeId of rootsToRestore) {
+      if (!defaultExpandableNodeIds.has(rootNodeId)) {
+        useResearchV6DirectorDisplayStore.getState().collapseRoot(rootNodeId);
+        continue;
+      }
+      void controller.refresh(rootNodeId, expansionFailureLabel);
+    }
+  }, [
+    controller,
+    defaultExpandableNodeIds,
+    displayIdentity,
+    expectedDisplayIdentity,
+    expectedDisplayScope,
+    expansionFailureLabel,
+    runId,
+    snapshotId,
+    workspaceId,
+  ]);
 
   const liveController = useMemo(
     () =>
@@ -183,13 +238,13 @@ export function useResearchV6DirectorCanvas({
     const densityBins: ResearchV6DirectorDensityBin[] = liveView
       ? [...liveView.densityBins.values()]
       : defaultPages.flatMap((page) => page.densityBins);
-    if (displayMatches) {
-      for (const rootNodeId of Object.keys(expandedByRoot)) {
+    if (displayScopeMatches) {
+      for (const [rootNodeId, expansion] of Object.entries(expandedByRoot)) {
         const pages = queryClient.getQueryData<SlicePages>(
           researchV6DirectorProjectionKeys.slice(
             workspaceId,
             runId,
-            firstPage.snapshotId,
+            expansion.snapshotId,
             rootNodeId,
           ),
         );
@@ -209,7 +264,7 @@ export function useResearchV6DirectorCanvas({
       densityBins: dedupeById(densityBins),
     });
   }, [
-    displayMatches,
+    displayScopeMatches,
     expandedByRoot,
     firstPage,
     liveController,
@@ -223,19 +278,19 @@ export function useResearchV6DirectorCanvas({
 
   const expansionControl = useMemo<StarGraphExpansionControl | undefined>(() => {
     if (!canvas || !controller) return undefined;
-    const expandedRoots = displayMatches ? Object.keys(expandedByRoot) : [];
+    const expandedRoots = displayScopeMatches ? Object.keys(expandedByRoot) : [];
     return {
       expandableNodeIds: canvas.expandableNodeIds,
       expandedNodeIds: new Set(expandedRoots),
       loadingNodeIds: new Set(
-        displayMatches ? Object.keys(requestTokenByRoot) : [],
+        displayScopeMatches ? Object.keys(requestTokenByRoot) : [],
       ),
       failedNodeIds: new Set(
-        displayMatches ? Object.keys(failureByRoot) : [],
+        displayScopeMatches ? Object.keys(failureByRoot) : [],
       ),
       failureLabel: expansionFailureLabel,
       transition:
-        displayMatches && transition
+        displayScopeMatches && transition
           ? {
               sequence: transition.sequence,
               kind: transition.kind,
@@ -251,7 +306,7 @@ export function useResearchV6DirectorCanvas({
   }, [
     canvas,
     controller,
-    displayMatches,
+    displayScopeMatches,
     expandedByRoot,
     expansionFailureLabel,
     failureByRoot,

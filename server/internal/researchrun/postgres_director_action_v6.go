@@ -68,10 +68,14 @@ func (s *PostgresStore) ApplyReceivedV6DirectorProposals(ctx context.Context, li
 		}
 		applyErr := s.executeV6DirectorProposal(ctx, submissionID, envelope)
 		if applyErr != nil {
-			if !isTerminalV6SubmissionError(applyErr) {
+			if !isTerminalV6SubmissionError(applyErr) && !isPermanentV6ProcessingError(ctx, applyErr) {
 				return applied, applyErr
 			}
-			if err = s.rejectV6DirectorProposal(context.WithoutCancel(ctx), submissionID, applyErr.Error()); err != nil {
+			reason := applyErr.Error()
+			if !isTerminalV6SubmissionError(applyErr) {
+				reason = v6SubmissionApplyDiagnostic(applyErr)
+			}
+			if err = s.rejectV6DirectorProposal(context.WithoutCancel(ctx), submissionID, reason); err != nil {
 				return applied, err
 			}
 		}

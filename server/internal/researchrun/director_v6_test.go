@@ -835,6 +835,57 @@ func TestV6DirectorCreatedWorkStartsAtVersionOne(t *testing.T) {
 	}
 }
 
+func TestV6DirectorRejectsWorkWhoseBranchIsOutsideTheRun(t *testing.T) {
+	run := newTransactionRecoveryRun(t, "Reject invalid V6 Work branch scope")
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_session SET orchestrator_version='research-run-v6' WHERE id=$1::uuid`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.store.AssignV6Director(run.ctx, AssignV6DirectorInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+		AgentID: run.fixture.agentID, UserID: run.fixture.userID,
+		Reason: "Validate Work branch scope", ClientRequestID: uuid.NewString(), ExpectedStateVersion: 0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.store.AddV6TeamMember(run.ctx, AddV6TeamMemberInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+		AgentID: run.fixture.reporterID, MissionPrompt: "Investigate the assigned question",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var stateVersion int64
+	if err := run.pool.QueryRow(run.ctx, `SELECT state_version FROM research_session WHERE id=$1::uuid`, run.fixture.sessionID).Scan(&stateVersion); err != nil {
+		t.Fatal(err)
+	}
+	idempotencyKey := "invalid-branch-work:" + uuid.NewString()
+	payload, err := json.Marshal(map[string]any{
+		"kind": "research", "assignee_agent_id": run.fixture.reporterID,
+		"mission": "Investigate the assigned question", "expected_result_schema_id": "atomic_result_submission",
+		"payload_schema_id": "research.test.v1", "payload": map[string]any{"task_specific_schema": map[string]any{"type": "object"}},
+		"priority": 0.5, "max_attempts": 1, "branch_ids": []string{uuid.NewString()},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = run.store.executeV6CreateWorkAction(run.ctx, v6DirectorProposal{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+	}, uuid.NewString(), v6DirectorAction{
+		ActionID: uuid.NewString(), Kind: "create_work_item", IdempotencyKey: idempotencyKey,
+		PayloadSchema: "work.create.v1", Payload: payload,
+	}, stateVersion)
+	if !errors.Is(err, ErrInvalidContract) || !strings.Contains(err.Error(), "branch_ids") {
+		t.Fatalf("invalid branch scope error=%v", err)
+	}
+	var created int
+	if err = run.pool.QueryRow(run.ctx, `SELECT count(*)::int FROM research_work_item
+		WHERE session_id=$1::uuid AND idempotency_key=$2`, run.fixture.sessionID, idempotencyKey).Scan(&created); err != nil {
+		t.Fatal(err)
+	}
+	if created != 0 {
+		t.Fatalf("created invalid branch-scoped Work=%d want 0", created)
+	}
+}
+
 func TestV6DirectorRejectsUnusableAtomicWorkSchemaWithActionableDiagnostic(t *testing.T) {
 	run := newTransactionRecoveryRun(t, "Reject unusable V6 atomic Work schema")
 	if _, err := run.pool.Exec(run.ctx, `UPDATE research_session SET orchestrator_version='research-run-v6' WHERE id=$1::uuid`, run.fixture.sessionID); err != nil {

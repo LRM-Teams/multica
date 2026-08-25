@@ -58,6 +58,20 @@ prints the raw `{"pull_requests": [...]}` body. Only `--output` is accepted; the
 default `table` shows `NUMBER STATE GATE TITLE URL`; `GATE` is the canonical
 `checks_conclusion`, with null rendered as `none`.
 
+## `multica issue pull-requests rescan` — recover a missed canonical link
+
+| Behavior | Source |
+|---|---|
+| CLI `pull-requests rescan <issue-id> <pull-request-number>` and positive-number validation | `server/cmd/multica/cmd_issue.go:119,764` |
+| Agent tokens use only the dedicated Agent API path | `server/cmd/multica/cmd_issue.go:783-785`; guarded by `server/cmd/multica/cmd_agent_boundary_contract_test.go:1211` |
+| Human route remains workspace `owner`/`admin` only | `server/internal/handler/github.go:620`; guarded by `server/internal/handler/github_rescan_test.go:222` |
+| Agent route binds access to the principal workspace | `server/internal/handler/agent_issues.go:241`; guarded by `server/internal/handler/agent_issue_pr_list_boundary_test.go:51` |
+| Project-bound repo, exact Issue-key guard, authoritative PR/check fetch, idempotent upsert, and close-intent derivation | `server/internal/handler/github.go:631`; guarded by `server/internal/handler/github_rescan_test.go:14,178` |
+
+The rescan is a deterministic recovery path for webhook gaps. It does not write
+Issue metadata or Graph state. Multiple PRs for one Issue remain distinct;
+branch-only identifiers link without setting `close_intent`.
+
 ## `multica issue mine --with-prs --with-gates` — aggregate my work
 
 | Behavior | File:line |

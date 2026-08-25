@@ -39,7 +39,7 @@ func runComputerStart(cmd *cobra.Command, args []string) error {
 	foreground, _ := cmd.Flags().GetBool("foreground")
 	if foreground {
 		fmt.Fprintln(os.Stderr, "Starting Computer in the foreground...")
-		return runComputerResident(cmd, args)
+		return run(cmd, args)
 	}
 	if err := runDaemonBackground(cmd); err != nil {
 		return err

@@ -232,30 +232,30 @@ func TestWorkspaceDaemonReconnectReplacesConnectionContextAndWriter(t *testing.T
 	}
 }
 
-func TestComputerSupervisesProcessAndBindingChildOwnsWorkspaceDaemon(t *testing.T) {
+func TestDaemonCoreSupervisesProcessAndWorkspaceDaemonOwnsExecution(t *testing.T) {
 	daemonRaw, err := os.ReadFile("workspace_daemon.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	childRaw, err := os.ReadFile("binding_child_runtime.go")
+	processRaw, err := os.ReadFile("workspace_daemon_process.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	supervisorRaw, err := os.ReadFile("../computer/binding_supervisor.go")
+	daemonCoreRaw, err := os.ReadFile("../computer/daemon_core.go")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(daemonRaw), "superviseWorkspaceDaemon") || strings.Contains(string(daemonRaw), "workspaceDaemonChildren") {
-		t.Fatal("daemon package still contains Computer Host process supervision")
+		t.Fatal("daemon package still contains ComputerCore process supervision")
 	}
-	if !strings.Contains(string(childRaw), "runner.Run(runCtx)") {
-		t.Fatal("Binding child does not own WorkspaceDaemon.Run")
+	if !strings.Contains(string(processRaw), "runner.Run(runCtx)") {
+		t.Fatal("WorkspaceDaemon process does not own WorkspaceDaemon.Run")
 	}
-	if !strings.Contains(string(childRaw), "adoptWorkspaceDaemon(runner)") {
-		t.Fatal("Binding child does not publish its WorkspaceDaemon for Credential Proxy lookup")
+	if !strings.Contains(string(processRaw), "adoptWorkspaceDaemon(runner)") {
+		t.Fatal("WorkspaceDaemon process does not publish its execution core for Credential Proxy lookup")
 	}
-	if !strings.Contains(string(supervisorRaw), "type BindingSupervisor struct") || !strings.Contains(string(supervisorRaw), "child.Wait()") {
-		t.Fatal("computer package does not own Binding child supervision")
+	if !strings.Contains(string(daemonCoreRaw), "type DaemonCore struct") || !strings.Contains(string(daemonCoreRaw), "child.Wait()") {
+		t.Fatal("DaemonCore does not own WorkspaceDaemon process supervision")
 	}
 }
 
@@ -362,7 +362,7 @@ func TestWorkspaceDaemonOwnsLocalStateAndSharesMachineDependencies(t *testing.T)
 
 func TestDaemonBuildsWorkspaceDaemonFromSharedOwners(t *testing.T) {
 	d := New(Config{DaemonID: "daemon-1"}, nil)
-	d.runnerInstanceID = "instance-1"
+	d.instanceID = "instance-1"
 	d.runnerDiagnostics = &runnerDiagnosticRegistry{}
 	runner, err := d.newWorkspaceDaemon("workspace-1")
 	if err != nil {

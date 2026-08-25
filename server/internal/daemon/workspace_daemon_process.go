@@ -20,85 +20,85 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-func (d *Daemon) listenBindingCredentialProxy() (net.Listener, error) {
+func (d *Daemon) listenWorkspaceDaemonCredentialProxy() (net.Listener, error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		return nil, fmt.Errorf("listen for Binding child Credential Proxy: %w", err)
+		return nil, fmt.Errorf("listen for WorkspaceDaemon Credential Proxy: %w", err)
 	}
 	addr, ok := listener.Addr().(*net.TCPAddr)
 	if !ok || addr.Port < 1 {
 		_ = listener.Close()
-		return nil, errors.New("Binding child Credential Proxy did not receive a TCP port")
+		return nil, errors.New("WorkspaceDaemon Credential Proxy did not receive a TCP port")
 	}
 	d.cfg.HealthPort = addr.Port
 	return listener, nil
 }
 
-func (d *Daemon) serveBindingCredentialProxy(ctx context.Context, listener net.Listener) {
+func (d *Daemon) serveWorkspaceDaemonCredentialProxy(ctx context.Context, listener net.Listener) {
 	mux := http.NewServeMux()
 	d.registerLocalControlRoutes(mux)
-	d.serveLocalHTTP(ctx, listener, mux, "Binding child Credential Proxy")
+	d.serveLocalHTTP(ctx, listener, mux, "WorkspaceDaemon Credential Proxy")
 }
 
-// BindingChildRunConfig contains the complete process-level interface for one
-// Workspace Execution Binding child. The bootstrap fixes immutable identity;
-// Config supplies provider implementation settings inherited from the host.
-type BindingChildRunConfig struct {
+// WorkspaceDaemonProcessConfig contains the process-level interface for one
+// WorkspaceDaemon. The bootstrap fixes immutable identity; Config supplies
+// provider settings inherited from ComputerCore.
+type WorkspaceDaemonProcessConfig struct {
 	Daemon       Config
-	Bootstrap    computer.BindingChildBootstrap
+	Bootstrap    computer.WorkspaceDaemonBootstrap
 	Logger       *slog.Logger
-	PublishReady func(computer.BindingChildReady) error
+	PublishReady func(computer.WorkspaceDaemonReady) error
 	RefreshEvery time.Duration
 }
 
-// RunBindingChild owns one WorkspaceDaemon and all of its workspace-scoped
+// RunWorkspaceDaemonProcess owns one WorkspaceDaemon and all workspace-scoped
 // execution state until ctx ends. It deliberately does not acquire the
 // machine-wide resident lease or bind the Computer health listener.
-func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
+func RunWorkspaceDaemonProcess(ctx context.Context, config WorkspaceDaemonProcessConfig) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if config.Logger == nil {
-		return errors.New("Binding child logger is required")
+		return errors.New("WorkspaceDaemon logger is required")
 	}
 	if config.PublishReady == nil {
-		return errors.New("Binding child Ready publisher is required")
+		return errors.New("WorkspaceDaemon Ready publisher is required")
 	}
 	bootstrap := config.Bootstrap
 	workspaceID := strings.TrimSpace(bootstrap.WorkspaceID)
 	if workspaceID == "" || strings.TrimSpace(config.Daemon.DaemonID) != strings.TrimSpace(bootstrap.ComputerID) {
-		return errors.New("Binding child identity does not match daemon config")
+		return errors.New("WorkspaceDaemon identity does not match daemon config")
 	}
 	if config.Daemon.Environment != bootstrap.Environment || config.Daemon.ServerBaseURL != bootstrap.ServerBaseURL || config.Daemon.BindingsRoot != bootstrap.BindingsRoot || config.Daemon.WorkspacesRoot != bootstrap.WorkspacesRoot {
-		return errors.New("Binding child bootstrap does not match daemon config")
+		return errors.New("WorkspaceDaemon bootstrap does not match daemon config")
 	}
 	config.Daemon.BindingStateRoot = filepath.Join(bootstrap.BindingsRoot, "binding-children", bootstrap.Environment, workspaceID)
 	config.Daemon.WorkspaceID = workspaceID
-	d := newDaemonForRole(config.Daemon, config.Logger, daemonProcessBindingChild)
+	d := newDaemonForRole(config.Daemon, config.Logger, daemonProcessWorkspaceDaemon)
 	d.rootCtx = ctx
-	identity := bindingChildControlIdentity{
+	identity := workspaceDaemonControlIdentity{
 		WorkspaceID:      workspaceID,
-		DaemonInstanceID: d.runnerInstanceID,
+		DaemonInstanceID: d.instanceID,
 		PID:              os.Getpid(),
 	}
-	hostControl := newBindingHostControlClient(bootstrap.ServiceEndpoint, config.Daemon.LocalControlToken, identity)
-	d.bindingHostControl = hostControl
-	d.bindingDiagnostics = newBindingChildDiagnosticForwarder(hostControl)
-	defer d.bindingDiagnostics.Close()
-	d.runnerDiagnostics = d.bindingDiagnostics
-	credentialProxyListener, err := d.listenBindingCredentialProxy()
+	computerControl := newWorkspaceDaemonComputerControl(bootstrap.ServiceEndpoint, config.Daemon.LocalControlToken, identity)
+	d.computerControl = computerControl
+	d.workspaceDaemonDiagnostics = newWorkspaceDaemonDiagnosticForwarder(computerControl)
+	defer d.workspaceDaemonDiagnostics.Close()
+	d.runnerDiagnostics = d.workspaceDaemonDiagnostics
+	credentialProxyListener, err := d.listenWorkspaceDaemonCredentialProxy()
 	if err != nil {
 		return err
 	}
 	defer credentialProxyListener.Close()
-	go d.serveBindingCredentialProxy(ctx, credentialProxyListener)
-	runnerEndpoint := computer.RunnerControlEndpoint(bootstrap.BindingsRoot, identity)
-	childControlListener, err := computer.ListenLocalControl(runnerEndpoint)
+	go d.serveWorkspaceDaemonCredentialProxy(ctx, credentialProxyListener)
+	controlEndpoint := computer.WorkspaceDaemonControlEndpoint(bootstrap.BindingsRoot, identity)
+	controlListener, err := computer.ListenLocalControl(controlEndpoint)
 	if err != nil {
-		return fmt.Errorf("listen for Binding child IPC: %w", err)
+		return fmt.Errorf("listen for WorkspaceDaemon IPC: %w", err)
 	}
-	defer childControlListener.Close()
-	go d.serveBindingMachineControlRPC(ctx, childControlListener, bootstrap)
+	defer controlListener.Close()
+	go d.serveWorkspaceDaemonControlRPC(ctx, controlListener, bootstrap)
 	defer func() { _ = d.canonicalRuntimes.closeAll() }()
 
 	bindings, err := d.configuredWorkspaceBindings()
@@ -133,8 +133,8 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 	}
 	d.workspaces[workspaceID].runtimeIDs = append([]string(nil), runtimeIDs...)
 	d.mu.Unlock()
-	if err := hostControl.reportRuntimeSet(ctx, response.Runtimes, response.DaemonToken, response.DaemonTokenExpiresAt); err != nil {
-		return fmt.Errorf("report Binding child Runtime set: %w", err)
+	if err := computerControl.reportRuntimeSet(ctx, response.Runtimes, response.DaemonToken, response.DaemonTokenExpiresAt); err != nil {
+		return fmt.Errorf("report WorkspaceDaemon Runtime set: %w", err)
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -144,27 +144,27 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 	}
 	for _, runtimeID := range runtimeIDs {
 		if err := d.client.RecoverOrphans(ctx, runtimeID); err != nil && d.logger != nil {
-			d.logger.Warn("Binding child orphan recovery failed", "workspace_id", workspaceID, "runtime_id", runtimeID, "error", err)
+			d.logger.Warn("WorkspaceDaemon orphan recovery failed", "workspace_id", workspaceID, "runtime_id", runtimeID, "error", err)
 		}
 	}
-	runner, err := d.newWorkspaceDaemon(workspaceID)
+	workspaceDaemon, err := d.newWorkspaceDaemon(workspaceID)
 	if err != nil {
 		return err
 	}
-	if err := d.adoptWorkspaceDaemon(runner); err != nil {
+	if err := d.adoptWorkspaceDaemon(workspaceDaemon); err != nil {
 		return err
 	}
-	defer d.detachWorkspaceDaemon(runner)
+	defer d.detachWorkspaceDaemon(workspaceDaemon)
 	var (
 		readyOnce sync.Once
 		readyErr  error
 	)
 	publishReady := func() {
 		readyOnce.Do(func() {
-			readyErr = config.PublishReady(computer.BindingChildReady{
-				ProtocolVersion: computer.BindingChildProtocolVersion,
+			readyErr = config.PublishReady(computer.WorkspaceDaemonReady{
+				ProtocolVersion: computer.WorkspaceDaemonProtocolVersion,
 				WorkspaceID:     workspaceID, DaemonInstanceID: identity.DaemonInstanceID,
-				PID: os.Getpid(), RunnerEndpoint: runnerEndpoint,
+				PID: os.Getpid(), RunnerEndpoint: controlEndpoint,
 			})
 			if readyErr != nil {
 				cancel()
@@ -174,7 +174,7 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 	// DaemonCore liveness is the WorkspaceDaemon socket, matching Raft
 	// /daemon/connect. Ready waits for that connect, including zero-runtime
 	// Computers.
-	runner.onReady = publishReady
+	workspaceDaemon.onReady = publishReady
 	taskWakeups := make(chan taskWakeup, 256)
 	go d.taskWakeupLoop(runCtx, taskWakeups)
 	go d.residentCrashWatchLoop(runCtx)
@@ -189,39 +189,39 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 	}
 	refreshDone := make(chan error, 1)
 	go func() {
-		refreshDone <- d.bindingWorkspaceRefreshLoop(runCtx, workspaceID, response.DaemonToken, refreshEvery)
+		refreshDone <- d.workspaceRefreshLoop(runCtx, workspaceID, response.DaemonToken, refreshEvery)
 	}()
-	runnerDone := make(chan struct{})
+	workspaceDaemonDone := make(chan struct{})
 	go func() {
-		defer close(runnerDone)
-		runner.Run(runCtx)
+		defer close(workspaceDaemonDone)
+		workspaceDaemon.Run(runCtx)
 	}()
 	select {
 	case <-ctx.Done():
 	case err := <-pollDone:
 		if err != nil && !errors.Is(err, context.Canceled) {
 			cancel()
-			<-runnerDone
-			return fmt.Errorf("Binding child task execution: %w", err)
+			<-workspaceDaemonDone
+			return fmt.Errorf("WorkspaceDaemon task execution: %w", err)
 		}
 	case err := <-refreshDone:
 		if err != nil && !errors.Is(err, context.Canceled) {
 			cancel()
-			<-runnerDone
-			return fmt.Errorf("Binding child membership refresh: %w", err)
+			<-workspaceDaemonDone
+			return fmt.Errorf("WorkspaceDaemon membership refresh: %w", err)
 		}
-	case <-runnerDone:
+	case <-workspaceDaemonDone:
 		if readyErr != nil {
-			return fmt.Errorf("publish Binding child Ready: %w", readyErr)
+			return fmt.Errorf("publish WorkspaceDaemon Ready: %w", readyErr)
 		}
 		if ctx.Err() == nil {
-			return errors.New("Binding child WorkspaceDaemon stopped unexpectedly")
+			return errors.New("WorkspaceDaemon stopped unexpectedly")
 		}
 	}
 	cancel()
-	<-runnerDone
+	<-workspaceDaemonDone
 	if readyErr != nil {
-		return fmt.Errorf("publish Binding child Ready: %w", readyErr)
+		return fmt.Errorf("publish WorkspaceDaemon Ready: %w", readyErr)
 	}
 	return nil
 }
@@ -235,7 +235,7 @@ func (d *Daemon) prepareBindingExecutionCredential(binding computer.WorkspaceBin
 	return nil
 }
 
-func (d *Daemon) bindingWorkspaceRefreshLoop(ctx context.Context, workspaceID, initialCredential string, interval time.Duration) error {
+func (d *Daemon) workspaceRefreshLoop(ctx context.Context, workspaceID, initialCredential string, interval time.Duration) error {
 	if interval <= 0 {
 		interval = DefaultWorkspaceSyncInterval
 	}
@@ -250,7 +250,7 @@ func (d *Daemon) bindingWorkspaceRefreshLoop(ctx context.Context, workspaceID, i
 			bindings, err := d.configuredWorkspaceBindings()
 			if err != nil {
 				if d.logger != nil {
-					d.logger.Warn("Binding child could not read its connection", "workspace_id", workspaceID, "error", err)
+					d.logger.Warn("WorkspaceDaemon could not read its connection", "workspace_id", workspaceID, "error", err)
 				}
 				continue
 			}
@@ -260,9 +260,9 @@ func (d *Daemon) bindingWorkspaceRefreshLoop(ctx context.Context, workspaceID, i
 			}
 			credentialChanged := strings.TrimSpace(binding.Credential) != lastBindingCredential
 			if credentialChanged || d.client.WorkspaceDaemonTokenNeedsRefresh(workspaceID, time.Now()) {
-				if err := d.reregisterBindingWorkspace(ctx, workspaceID); err != nil {
+				if err := d.reregisterWorkspace(ctx, workspaceID); err != nil {
 					if d.logger != nil {
-						d.logger.Warn("Binding child Runtime refresh failed; will retry", "workspace_id", workspaceID, "error", err)
+						d.logger.Warn("WorkspaceDaemon Runtime refresh failed; will retry", "workspace_id", workspaceID, "error", err)
 					}
 					continue
 				}
@@ -273,21 +273,21 @@ func (d *Daemon) bindingWorkspaceRefreshLoop(ctx context.Context, workspaceID, i
 			// longer a supported direct self-upgrade source. Socket ownership
 			// is liveness; this HTTP probe only refreshes leftover last_seen.
 			if err := d.client.ComputerHeartbeat(ctx, workspaceID, d.cfg.DaemonID); err != nil && d.logger != nil {
-				d.logger.Warn("Binding child heartbeat failed; will retry", "workspace_id", workspaceID, "error", err)
+				d.logger.Warn("WorkspaceDaemon heartbeat failed; will retry", "workspace_id", workspaceID, "error", err)
 			}
 		}
 	}
 }
 
-func (d *Daemon) serveBindingMachineControlRPC(ctx context.Context, listener net.Listener, bootstrap computer.BindingChildBootstrap) {
-	registry := d.bindingMachineControlRegistry(bootstrap)
-	d.logger.Info("Binding child IPC listening", "addr", listener.Addr().String())
+func (d *Daemon) serveWorkspaceDaemonControlRPC(ctx context.Context, listener net.Listener, bootstrap computer.WorkspaceDaemonBootstrap) {
+	registry := d.workspaceDaemonControlRegistry(bootstrap)
+	d.logger.Info("WorkspaceDaemon IPC listening", "addr", listener.Addr().String())
 	if err := computer.ServeLocalControlRPC(ctx, listener, registry); err != nil && d.logger != nil {
-		d.logger.Warn("Binding child IPC error", "error", err)
+		d.logger.Warn("WorkspaceDaemon IPC error", "error", err)
 	}
 }
 
-func (d *Daemon) bindingMachineControlRegistry(bootstrap computer.BindingChildBootstrap) *computer.LocalControlRegistry {
+func (d *Daemon) workspaceDaemonControlRegistry(bootstrap computer.WorkspaceDaemonBootstrap) *computer.LocalControlRegistry {
 	registry := computer.NewLocalControlRegistry()
 	authorized := func(headers map[string]string) error {
 		token := strings.TrimSpace(d.cfg.LocalControlToken)
@@ -297,15 +297,15 @@ func (d *Daemon) bindingMachineControlRegistry(bootstrap computer.BindingChildBo
 		}
 		return nil
 	}
-	decodeIdentity := func(headers map[string]string, raw json.RawMessage) (computer.BindingChildIdentity, error) {
+	decodeIdentity := func(headers map[string]string, raw json.RawMessage) (computer.WorkspaceDaemonIdentity, error) {
 		if err := authorized(headers); err != nil {
-			return computer.BindingChildIdentity{}, err
+			return computer.WorkspaceDaemonIdentity{}, err
 		}
-		var request computer.BindingMachineControlRequest
+		var request computer.WorkspaceDaemonControlRequest
 		decoder := json.NewDecoder(bytes.NewReader(raw))
 		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&request); err != nil || request.Identity.WorkspaceID != bootstrap.WorkspaceID || request.Identity.DaemonInstanceID != d.runnerInstanceID || request.Identity.PID != os.Getpid() {
-			return computer.BindingChildIdentity{}, errors.New("inactive managed runner process")
+		if err := decoder.Decode(&request); err != nil || request.Identity.WorkspaceID != bootstrap.WorkspaceID || request.Identity.DaemonInstanceID != d.instanceID || request.Identity.PID != os.Getpid() {
+			return computer.WorkspaceDaemonIdentity{}, errors.New("inactive WorkspaceDaemon process")
 		}
 		return request.Identity, nil
 	}
@@ -318,7 +318,7 @@ func (d *Daemon) bindingMachineControlRegistry(bootstrap computer.BindingChildBo
 		if _, err := decodeIdentity(headers, raw); err != nil {
 			return nil, err
 		}
-		return nil, d.beginBindingDrain(ctx)
+		return nil, d.beginWorkspaceDaemonDrain(ctx)
 	})
 	register(computer.LocalControlRunnerReleaseOperation, func(_ context.Context, headers map[string]string, raw json.RawMessage) (any, error) {
 		if _, err := decodeIdentity(headers, raw); err != nil {
@@ -332,13 +332,13 @@ func (d *Daemon) bindingMachineControlRegistry(bootstrap computer.BindingChildBo
 			return nil, err
 		}
 		var request struct {
-			Identity computer.BindingChildIdentity   `json:"identity"`
-			Command  protocol.ComputerUpgradePayload `json:"command"`
+			Identity computer.WorkspaceDaemonIdentity `json:"identity"`
+			Command  protocol.ComputerUpgradePayload  `json:"command"`
 		}
 		decoder := json.NewDecoder(bytes.NewReader(raw))
 		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&request); err != nil || request.Identity.WorkspaceID != bootstrap.WorkspaceID || request.Identity.DaemonInstanceID != d.runnerInstanceID || request.Identity.PID != os.Getpid() {
-			return nil, errors.New("inactive managed runner process")
+		if err := decoder.Decode(&request); err != nil || request.Identity.WorkspaceID != bootstrap.WorkspaceID || request.Identity.DaemonInstanceID != d.instanceID || request.Identity.PID != os.Getpid() {
+			return nil, errors.New("inactive WorkspaceDaemon process")
 		}
 		return nil, d.handleComputerControlCommand(ctx, protocol.EventComputerUpgrade, request.Command)
 	})
@@ -347,14 +347,14 @@ func (d *Daemon) bindingMachineControlRegistry(bootstrap computer.BindingChildBo
 			return nil, err
 		}
 		var request struct {
-			Identity  computer.BindingChildIdentity `json:"identity"`
-			EventType string                        `json:"eventType"`
-			Payload   json.RawMessage               `json:"payload"`
+			Identity  computer.WorkspaceDaemonIdentity `json:"identity"`
+			EventType string                           `json:"eventType"`
+			Payload   json.RawMessage                  `json:"payload"`
 		}
 		decoder := json.NewDecoder(bytes.NewReader(raw))
 		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&request); err != nil || request.Identity.WorkspaceID != bootstrap.WorkspaceID || request.Identity.DaemonInstanceID != d.runnerInstanceID || request.Identity.PID != os.Getpid() {
-			return nil, errors.New("inactive managed runner process")
+		if err := decoder.Decode(&request); err != nil || request.Identity.WorkspaceID != bootstrap.WorkspaceID || request.Identity.DaemonInstanceID != d.instanceID || request.Identity.PID != os.Getpid() {
+			return nil, errors.New("inactive WorkspaceDaemon process")
 		}
 		var payload any
 		if err := json.Unmarshal(request.Payload, &payload); err != nil {
@@ -369,8 +369,8 @@ func (d *Daemon) bindingMachineControlRegistry(bootstrap computer.BindingChildBo
 			return nil, err
 		}
 		var request struct {
-			Identity computer.BindingChildIdentity `json:"identity"`
-			Action   string                        `json:"action"`
+			Identity computer.WorkspaceDaemonIdentity `json:"identity"`
+			Action   string                           `json:"action"`
 		}
 		if err := json.Unmarshal(raw, &request); err != nil || request.Identity != identity {
 			return nil, errors.New("invalid environment switch request")
@@ -409,12 +409,12 @@ func (d *Daemon) bindingMachineControlRegistry(bootstrap computer.BindingChildBo
 		if err != nil {
 			return nil, err
 		}
-		return nil, d.reregisterBindingWorkspace(ctx, identity.WorkspaceID)
+		return nil, d.reregisterWorkspace(ctx, identity.WorkspaceID)
 	})
 	return registry
 }
 
-func (d *Daemon) reregisterBindingWorkspace(ctx context.Context, workspaceID string) error {
+func (d *Daemon) reregisterWorkspace(ctx context.Context, workspaceID string) error {
 	bindings, err := d.configuredWorkspaceBindings()
 	if err != nil {
 		return err
@@ -426,18 +426,18 @@ func (d *Daemon) reregisterBindingWorkspace(ctx context.Context, workspaceID str
 	d.client.SetWorkspaceDaemonToken(workspaceID, binding.Credential, binding.CredentialExpiresAt)
 	// TODO(computer-liveness): Remove after v0.4.24-alpha.55 is no
 	// longer a supported direct self-upgrade source. Binding validity is
-	// the credential plus the Runner socket, not this HTTP probe.
+	// the credential plus the WorkspaceDaemon socket, not this HTTP probe.
 	if err := d.client.ComputerHeartbeat(ctx, workspaceID, d.cfg.DaemonID); err != nil && d.logger != nil {
-		d.logger.Warn("Binding child heartbeat failed during Runtime refresh", "workspace_id", workspaceID, "error", err)
+		d.logger.Warn("WorkspaceDaemon heartbeat failed during Runtime refresh", "workspace_id", workspaceID, "error", err)
 	}
 	if len(d.cfg.Agents) > 0 {
 		return d.reregisterWorkspaceAfterRuntimeGone(ctx, workspaceID)
 	}
 	expiresAt := binding.CredentialExpiresAt.UTC().Format(time.RFC3339Nano)
-	if d.bindingHostControl == nil {
-		return errors.New("Binding child Host control is unavailable")
+	if d.computerControl == nil {
+		return errors.New("WorkspaceDaemon Computer control is unavailable")
 	}
-	if err := d.bindingHostControl.reportRuntimeSet(ctx, []Runtime{}, binding.Credential, expiresAt); err != nil {
+	if err := d.computerControl.reportRuntimeSet(ctx, []Runtime{}, binding.Credential, expiresAt); err != nil {
 		return fmt.Errorf("report zero-Agent Binding Runtime set: %w", err)
 	}
 	return nil

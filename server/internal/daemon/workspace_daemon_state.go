@@ -358,7 +358,7 @@ func (d *Daemon) newWorkspaceDaemon(workspaceID string) (*WorkspaceDaemon, error
 	}
 	return newWorkspaceDaemon(WorkspaceDaemonConfig{
 		DaemonID:         d.cfg.DaemonID,
-		DaemonInstanceID: d.runnerInstanceID,
+		DaemonInstanceID: d.instanceID,
 		WorkspaceID:      workspaceID,
 		DeviceName:       d.cfg.DeviceName,
 		OS:               normalizeGOOS(runtime.GOOS),

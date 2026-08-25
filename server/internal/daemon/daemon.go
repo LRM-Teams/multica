@@ -81,7 +81,7 @@ type daemonProcessRole uint8
 
 const (
 	daemonProcessTestHarness daemonProcessRole = iota
-	daemonProcessBindingChild
+	daemonProcessWorkspaceDaemon
 )
 
 var (
@@ -100,9 +100,8 @@ type workspaceState struct {
 	serverCapabilities []string
 }
 
-// Daemon implements one Workspace execution runtime. A Computer Binding child
-// uses the scoped role; the public Computer Host is composed in
-// internal/computer and never constructs this type.
+// Daemon implements one WorkspaceDaemon's execution runtime. ComputerCore is
+// composed in internal/computer and never owns Workspace execution details.
 type Daemon struct {
 	cfg    Config
 	client *Client
@@ -121,14 +120,12 @@ type Daemon struct {
 	mixedRunActivityOutbox     *mixedRunActivityOutbox
 	mixedRunActivityReporter   func(protocol.MixedRunActivityTransitionPayload) bool
 	lifecycleDiagnostics       *lifecycleDiagnosticWriter
-	runnerInstanceID           string
+	instanceID                 string
 	runnerDiagnostics          runnerDiagnosticSink
 	runnerDiagnosticStore      *diagnosticlog.Store
-	bindingHostControl         *bindingHostControlClient
-	bindingDiagnostics         *bindingChildDiagnosticForwarder
-	bindingMachineUpgrade      func(context.Context, protocol.ComputerUpgradePayload) error
+	computerControl            *workspaceDaemonComputerControl
+	workspaceDaemonDiagnostics *workspaceDaemonDiagnosticForwarder
 	computerUpgradeEmit        func(string, any) error
-	bindingChildMachineActions func(context.Context, string, *HeartbeatResponse)
 
 	mu           sync.Mutex
 	workspaces   map[string]*workspaceState
@@ -166,20 +163,20 @@ type Daemon struct {
 	reregisterNextAttempt     map[string]time.Time // workspace_id -> earliest time the next re-register attempt may run
 	reregisterLastCompletedAt map[string]time.Time // workspace_id -> wall-clock at which the last SUCCESSFUL re-register call returned (failures intentionally not stamped — see recordRegisterCompletion)
 
-	rootCtx     context.Context // Binding child lifetime used by long-running recoveries that must survive per-runtime ctx cancellation
+	rootCtx     context.Context // WorkspaceDaemon lifetime used by long-running recoveries that must survive per-runtime ctx cancellation
 	activeTasks atomic.Int64    // number of tasks currently in handleTask
-	// managedTaskCancels contains only task contexts created by this Binding
-	// child. Host-requested drains may stop those turns, but can never infer
+	// managedTaskCancels contains only task contexts created by this
+	// WorkspaceDaemon. Computer-requested drains may stop those turns, but can never infer
 	// ownership of, or signal, an arbitrary local process.
 	managedTaskMu      sync.Mutex
 	managedTaskCancels map[int64]context.CancelFunc
 	taskSlotCounter    atomic.Int64 // ever-increasing task sequence number exposed as MULTICA_TASK_SLOT (informational only, tasks are not capacity-limited — see nextTaskSlot)
-	ready              atomic.Bool  // true after Binding child preflight completes
+	ready              atomic.Bool  // true after WorkspaceDaemon preflight completes
 
 	// claimMu guards pauseClaims and claimsInFlight. It is held only for the
 	// microseconds it takes to make a decision; ClaimTask itself runs without
-	// the lock so a slow per-runtime claim cannot stall a Host-requested
-	// Binding drain or any other poller.
+	// the lock so a slow per-runtime claim cannot stall a Computer-requested
+	// WorkspaceDaemon drain or any other poller.
 	//
 	// The pair is the Binding handoff barrier against the requirement
 	// that "升级过程中如果有 task 进来，会延后升级而不是中断 task":
@@ -192,7 +189,7 @@ type Daemon struct {
 	pauseClaims    bool // when true, runRuntimePoller skips ClaimTask
 	claimsInFlight int  // pollers that have decided to claim but haven't yet handed the task off to handleTask
 	// environmentSwitchPrepared records ownership of pauseClaims by the local
-	// config-switch control flow. It prevents one Host request from clearing a
+	// config-switch control flow. It prevents one Computer request from clearing a
 	// barrier held by another.
 	environmentSwitchPrepared atomic.Bool
 
@@ -247,7 +244,7 @@ type Daemon struct {
 }
 
 // New creates an in-package execution test harness. Production composition
-// enters through RunBindingChild; the Computer never constructs this type.
+// enters through RunWorkspaceDaemonProcess; ComputerCore never constructs this type.
 func New(cfg Config, logger *slog.Logger) *Daemon {
 	return newDaemonForRole(cfg, logger, daemonProcessTestHarness)
 }
@@ -279,7 +276,7 @@ func newDaemonForRole(cfg Config, logger *slog.Logger, role daemonProcessRole) *
 		memoryCurationRuns:        make(map[string]string),
 		activeCurationRuns:        make(map[string]string),
 		turnScopeMemory:           newTurnScopeMemoryTracker(),
-		runnerInstanceID:          uuid.NewString(),
+		instanceID:                uuid.NewString(),
 	}
 	d.initializeBindingExecution(bindingStateRoot)
 	agent.MemoryFlushBeforeCompaction = func(agentRoot string) {
@@ -566,9 +563,9 @@ func (d *Daemon) reregisterWorkspaceAfterRuntimeGone(ctx context.Context, worksp
 	ws.runtimeIDs = newIDs
 	ws.serverCapabilities = append([]string(nil), resp.ServerCapabilities...)
 	d.mu.Unlock()
-	if d.bindingHostControl != nil {
-		if err := d.bindingHostControl.reportRuntimeSet(ctx, resp.Runtimes, resp.DaemonToken, resp.DaemonTokenExpiresAt); err != nil {
-			return fmt.Errorf("report re-registered Binding child Runtime set: %w", err)
+	if d.computerControl != nil {
+		if err := d.computerControl.reportRuntimeSet(ctx, resp.Runtimes, resp.DaemonToken, resp.DaemonTokenExpiresAt); err != nil {
+			return fmt.Errorf("report re-registered WorkspaceDaemon Runtime set: %w", err)
 		}
 	}
 
@@ -683,8 +680,8 @@ func daemonRegistrationCapabilities(includeCredentialTransport bool) []string {
 		protocol.DaemonCapabilityReminderFireRequest,
 		protocol.DaemonCapabilityWorkspaceDaemonAgentProcess,
 		protocol.DaemonCapabilityWorkspaceDaemonAgentReset,
-		// Binding children advertise the wire capability so the server can
-		// deliver the machine action. They only forward it to Computer Host;
+		// WorkspaceDaemons advertise the wire capability so the server can
+		// deliver the machine action. They only forward it to ComputerCore;
 		// acceptance and execution do not live in this package.
 		protocol.DaemonCapabilityMachineUpgrade,
 	}
@@ -1231,9 +1228,9 @@ func (d *Daemon) claimBarrierDrained() bool {
 	return d.pauseClaims && d.claimsInFlight == 0 && d.activeTasks.Load() == 0
 }
 
-// releaseClaimBarrier clears a Host-held Binding barrier so pollers may resume
-// claiming. A successful prepare leaves the barrier set until Host explicitly
-// releases it or terminates the child.
+// releaseClaimBarrier clears a Computer-held WorkspaceDaemon barrier so pollers
+// may resume claiming. A successful prepare leaves the barrier set until the
+// Computer explicitly releases it or terminates the WorkspaceDaemon.
 func (d *Daemon) releaseClaimBarrier() {
 	d.claimMu.Lock()
 	defer d.claimMu.Unlock()

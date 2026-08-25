@@ -166,10 +166,9 @@ func (h *Handler) stopAgent(ctx context.Context, agent db.Agent) *agentLifecycle
 		workspaceID, runtime.DaemonID.String, protocol.EventDaemonAgentStop, uuid.NewString(),
 		protocol.AgentStopPayload{AgentID: agentID},
 	) {
-		if _, err := h.DB.Exec(ctx, `UPDATE agent SET stopped_at = NULL, updated_at = now() WHERE id = $1`, agent.ID); err != nil {
-			slog.Error("failed to roll back Agent stopped state", "agent_id", agentID, "error", err)
-		}
-		return &agentLifecycleRequestError{status: http.StatusConflict, message: "agent_runtime_offline"}
+		// stopped_at is the user's desired state. Reconnect reconciliation
+		// enforces it even when the immediate command cannot be delivered.
+		return nil
 	}
 	return nil
 }

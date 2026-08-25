@@ -78,7 +78,7 @@ func startDetachedCoordinator(binaryPath, profile string, args ...string) error 
 }
 
 // startDetachedComputerBinary launches the target only after the captured
-// predecessor service and old Binding children are dead. The incumbent must
+// predecessor Computer and old WorkspaceDaemon processes are dead. The incumbent must
 // not call this while it is still alive.
 func startDetachedComputerBinary(binaryPath, profile, expectedVersion string, handoff computer.PendingMachineUpgradeHandoff) error {
 	if binaryPath == "" {

@@ -13,9 +13,9 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-// LocalControlRegistry builds the Computer's production control surface. The
+// LocalControlRegistry builds ComputerCore's production control surface. The
 // HTTP mux is deliberately not involved in this path.
-func (host *Host) LocalControlRegistry(state *hostProcessState) *LocalControlRegistry {
+func (computerCore *ComputerCore) LocalControlRegistry(state *computerProcessState) *LocalControlRegistry {
 	registry := NewLocalControlRegistry()
 	register := func(name string, fn LocalControlHandler) {
 		if err := registry.Register(name, fn); err != nil {
@@ -23,7 +23,7 @@ func (host *Host) LocalControlRegistry(state *hostProcessState) *LocalControlReg
 		}
 	}
 	register(LocalControlServiceStatusOperation, func(context.Context, map[string]string, json.RawMessage) (any, error) {
-		return host.processHealthResult(state), nil
+		return computerCore.processHealthResult(state), nil
 	})
 	register(LocalControlMachineAttestationOperation, func(context.Context, map[string]string, json.RawMessage) (any, error) {
 		state.mu.RLock()
@@ -38,14 +38,14 @@ func (host *Host) LocalControlRegistry(state *hostProcessState) *LocalControlReg
 		}, nil
 	})
 	register(LocalControlRestartServiceOperation, func(_ context.Context, headers map[string]string, _ json.RawMessage) (any, error) {
-		if !host.authorizeLocal(headers) {
+		if !computerCore.authorizeLocal(headers) {
 			return nil, errors.New("local control authentication failed")
 		}
 		go state.cancel()
 		return map[string]string{"status": "shutting down"}, nil
 	})
 	register(LocalControlWorkspaceEnvironmentOperation, func(ctx context.Context, headers map[string]string, raw json.RawMessage) (any, error) {
-		if !host.authorizeLocal(headers) {
+		if !computerCore.authorizeLocal(headers) {
 			return nil, errors.New("local control authentication failed")
 		}
 		var request struct {
@@ -56,19 +56,19 @@ func (host *Host) LocalControlRegistry(state *hostProcessState) *LocalControlReg
 		}
 		var err error
 		if request.Prepare {
-			err = host.PrepareEnvironmentSwitch(ctx)
+			err = computerCore.PrepareEnvironmentSwitch(ctx)
 		} else {
-			err = host.ReleaseEnvironmentSwitch(ctx)
+			err = computerCore.ReleaseEnvironmentSwitch(ctx)
 		}
 		return map[string]string{"status": "prepared"}, err
 	})
 	register(LocalControlUpgradeStartOperation, func(ctx context.Context, headers map[string]string, raw json.RawMessage) (any, error) {
-		if !host.authorizeLocal(headers) {
+		if !computerCore.authorizeLocal(headers) {
 			return nil, errors.New("local control authentication failed")
 		}
 		var request struct {
-			Identity BindingChildIdentity `json:"identity"`
-			Command  json.RawMessage      `json:"command"`
+			Identity WorkspaceDaemonIdentity `json:"identity"`
+			Command  json.RawMessage         `json:"command"`
 		}
 		if err := json.Unmarshal(raw, &request); err != nil {
 			return nil, err
@@ -80,13 +80,13 @@ func (host *Host) LocalControlRegistry(state *hostProcessState) *LocalControlReg
 		if err := json.Unmarshal(request.Command, &command); err != nil {
 			return nil, err
 		}
-		if request.Identity.Validate() != nil || !host.control.current(request.Identity) {
-			return nil, errors.New("inactive managed runner process")
+		if request.Identity.Validate() != nil || !computerCore.control.current(request.Identity) {
+			return nil, errors.New("inactive WorkspaceDaemon process")
 		}
-		if host.control.callbacks.ComputerUpgrade == nil {
+		if computerCore.control.callbacks.ComputerUpgrade == nil {
 			return nil, errors.New("Computer upgrade is unavailable")
 		}
-		if err := host.control.callbacks.ComputerUpgrade(ctx, request.Identity, request.Command); err != nil {
+		if err := computerCore.control.callbacks.ComputerUpgrade(ctx, request.Identity, request.Command); err != nil {
 			return nil, err
 		}
 		return map[string]string{"id": command.Operation(), "phase": "starting"}, nil
@@ -94,22 +94,22 @@ func (host *Host) LocalControlRegistry(state *hostProcessState) *LocalControlReg
 	// Status/cancel are retained as explicit RPC operations; their journal
 	// implementation is owned by the upgrade coordinator.
 	register(LocalControlUpgradeStatusOperation, func(context.Context, map[string]string, json.RawMessage) (any, error) {
-		return host.upgrade.status(), nil
+		return computerCore.upgrade.status(), nil
 	})
 	register(LocalControlUpgradeCancelOperation, func(_ context.Context, headers map[string]string, _ json.RawMessage) (any, error) {
-		if !host.authorizeLocal(headers) {
+		if !computerCore.authorizeLocal(headers) {
 			return nil, errors.New("local control authentication failed")
 		}
-		if err := host.upgrade.cancelActive(); err != nil {
+		if err := computerCore.upgrade.cancelActive(); err != nil {
 			return nil, err
 		}
-		return host.upgrade.status(), nil
+		return computerCore.upgrade.status(), nil
 	})
-	host.control.RegisterRPCHandlers(registry)
+	computerCore.control.RegisterRPCHandlers(registry)
 	return registry
 }
 
-func (host *Host) processHealthResult(state *hostProcessState) map[string]any {
+func (computerCore *ComputerCore) processHealthResult(state *computerProcessState) map[string]any {
 	state.mu.RLock()
 	identity, ready, desired := state.identity, state.ready, append([]string(nil), state.desired...)
 	started := state.startedAt
@@ -130,7 +130,7 @@ func (host *Host) processHealthResult(state *hostProcessState) map[string]any {
 	}
 }
 
-func (host *Host) authorizeLocal(headers map[string]string) bool {
+func (computerCore *ComputerCore) authorizeLocal(headers map[string]string) bool {
 	provided := strings.TrimSpace(headers["X-Multica-Control-Token"])
-	return host != nil && host.control != nil && provided != "" && host.control.token != "" && subtle.ConstantTimeCompare([]byte(provided), []byte(host.control.token)) == 1
+	return computerCore != nil && computerCore.control != nil && provided != "" && computerCore.control.token != "" && subtle.ConstantTimeCompare([]byte(provided), []byte(computerCore.control.token)) == 1
 }

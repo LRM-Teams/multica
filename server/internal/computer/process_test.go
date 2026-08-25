@@ -17,10 +17,10 @@ import (
 
 func TestProcessShutdownHandlerLogsAuditMetadata(t *testing.T) {
 	var logs bytes.Buffer
-	host := &Host{logger: slog.New(slog.NewTextHandler(&logs, nil))}
+	computerCore := &ComputerCore{logger: slog.New(slog.NewTextHandler(&logs, nil))}
 	canceled := make(chan struct{})
-	state := &hostProcessState{cancel: func() { close(canceled) }}
-	handler := host.processShutdownHandler(state)
+	state := &computerProcessState{cancel: func() { close(canceled) }}
+	handler := computerCore.processShutdownHandler(state)
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/shutdown", nil)
 	request.Header.Set(shutdownSourceHeader, "desktop")
@@ -51,10 +51,10 @@ func TestProcessShutdownHandlerLogsAuditMetadata(t *testing.T) {
 }
 
 func TestProcessRoutesPreserveControlMethodErrors(t *testing.T) {
-	host := &Host{}
-	state := &hostProcessState{}
+	computerCore := &ComputerCore{}
+	state := &computerProcessState{}
 	mux := http.NewServeMux()
-	host.registerProcessRoutes(mux, state)
+	computerCore.registerProcessRoutes(mux, state)
 
 	for _, path := range []string{
 		"/shutdown",
@@ -78,10 +78,10 @@ func TestProcessRoutesPreserveControlMethodErrors(t *testing.T) {
 	}
 }
 
-func TestHostProcessOwnsResidentControlAndDesiredBindings(t *testing.T) {
-	child := &readySupervisorChild{supervisorTestChild: newSupervisorTestChild(7101)}
-	host, err := NewHost(HostConfig{
-		Spawn: func(workspaceID string) (BindingChild, error) {
+func TestComputerProcessOwnsResidentControlAndDesiredWorkspaces(t *testing.T) {
+	child := &readyWorkspaceDaemonTestProcess{workspaceDaemonTestProcess: newWorkspaceDaemonTestProcess(7101)}
+	computerCore, err := NewComputerCore(ComputerCoreConfig{
+		Spawn: func(workspaceID string) (WorkspaceDaemonProcess, error) {
 			if workspaceID != "workspace-a" {
 				t.Fatalf("spawn workspace = %q", workspaceID)
 			}
@@ -97,9 +97,9 @@ func TestHostProcessOwnsResidentControlAndDesiredBindings(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- host.RunProcess(ctx, HostProcessConfig{
+		done <- computerCore.Run(ctx, ComputerProcessConfig{
 			ServiceEndpoint: endpoint,
-			Identity: HostProcessIdentity{
+			Identity: ComputerIdentity{
 				ComputerID:        "computer-a",
 				ServiceGeneration: "service-9",
 				Environment:       "test",
@@ -111,16 +111,16 @@ func TestHostProcessOwnsResidentControlAndDesiredBindings(t *testing.T) {
 
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
-		record, pid, ok := host.Snapshot("workspace-a")
-		if ok && record.Lifecycle == RunnerLifecycleRunning && pid == 7101 {
+		record, pid, ok := computerCore.Snapshot("workspace-a")
+		if ok && record.Status == WorkspaceDaemonRunning && pid == 7101 {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if record, pid, ok := host.Snapshot("workspace-a"); !ok || record.Lifecycle != RunnerLifecycleRunning || pid != 7101 {
-		t.Fatalf("Binding child was not supervised by Computer Host: record=%+v pid=%d ok=%v", record, pid, ok)
+	if record, pid, ok := computerCore.Snapshot("workspace-a"); !ok || record.Status != WorkspaceDaemonRunning || pid != 7101 {
+		t.Fatalf("WorkspaceDaemon was not supervised by DaemonCore: record=%+v pid=%d ok=%v", record, pid, ok)
 	}
-	waitForHostHealth(t, endpoint)
+	waitForComputerHealth(t, endpoint)
 	cancel()
 	select {
 	case err := <-done:
@@ -128,11 +128,11 @@ func TestHostProcessOwnsResidentControlAndDesiredBindings(t *testing.T) {
 			t.Fatalf("RunProcess: %v", err)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("Computer Host process did not stop")
+		t.Fatal("Computer process did not stop")
 	}
 }
 
-func TestHostProcessOwnsMachineUpgradeAndReregistersBindingChild(t *testing.T) {
+func TestComputerProcessOwnsMachineUpgradeAndReregistersWorkspaceDaemon(t *testing.T) {
 	const token = "owner-secret"
 	childControl := localControlTestServer(t, func(_ context.Context, operation string, headers map[string]string, _ json.RawMessage) (any, error) {
 		if operation != "runner-ready" || headers["X-Multica-Control-Token"] != token {
@@ -144,9 +144,9 @@ func TestHostProcessOwnsMachineUpgradeAndReregistersBindingChild(t *testing.T) {
 	upstream := httptest.NewServer(http.NotFoundHandler())
 	defer upstream.Close()
 
-	child := &readySupervisorChild{supervisorTestChild: newSupervisorTestChild(7201), controlEndpoint: childControl}
-	host, err := NewHost(HostConfig{
-		Spawn: func(workspaceID string) (BindingChild, error) {
+	child := &readyWorkspaceDaemonTestProcess{workspaceDaemonTestProcess: newWorkspaceDaemonTestProcess(7201), controlEndpoint: childControl}
+	computerCore, err := NewComputerCore(ComputerCoreConfig{
+		Spawn: func(workspaceID string) (WorkspaceDaemonProcess, error) {
 			child.workspaceID, child.daemonInstanceID = workspaceID, "child-7201"
 			return child, nil
 		}, ControlToken: token,
@@ -158,34 +158,34 @@ func TestHostProcessOwnsMachineUpgradeAndReregistersBindingChild(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- host.RunProcess(ctx, HostProcessConfig{
+		done <- computerCore.Run(ctx, ComputerProcessConfig{
 			ServiceEndpoint: endpoint,
-			Identity: HostProcessIdentity{
+			Identity: ComputerIdentity{
 				ComputerID: "computer-a", ServiceGeneration: "service-9", Environment: "test",
 				Version: "v1.0.0", ServerURL: upstream.URL,
 			},
 			DesiredWorkspaceIDs: func() ([]string, error) { return []string{"workspace-a"}, nil },
 		})
 	}()
-	var record RunnerRecord
+	var record WorkspaceDaemonSnapshot
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
-		if current, _, ok := host.Snapshot("workspace-a"); ok && current.DaemonInstanceID() != "" {
+		if current, _, ok := computerCore.Snapshot("workspace-a"); ok && current.DaemonInstanceID != "" {
 			record = current
 			break
 		}
 		time.Sleep(time.Millisecond)
 	}
-	waitForHostCurrent(t, host, BindingChildIdentity{WorkspaceID: "workspace-a", DaemonInstanceID: record.DaemonInstanceID(), PID: 7201})
-	hostClient := NewHostControlClient(endpoint, token, BindingChildIdentity{
-		WorkspaceID: "workspace-a", DaemonInstanceID: record.DaemonInstanceID(), PID: 7201,
+	waitForComputerCurrent(t, computerCore, WorkspaceDaemonIdentity{WorkspaceID: "workspace-a", DaemonInstanceID: record.DaemonInstanceID, PID: 7201})
+	computerClient := NewComputerControlClient(endpoint, token, WorkspaceDaemonIdentity{
+		WorkspaceID: "workspace-a", DaemonInstanceID: record.DaemonInstanceID, PID: 7201,
 	})
-	if err := hostClient.ReportRuntimeSet(context.Background(), []map[string]string{{
+	if err := computerClient.ReportRuntimeSet(context.Background(), []map[string]string{{
 		"id": "runtime-a", "workspace_id": "workspace-a", "provider": "pi",
 	}}, "runtime-token", time.Now().Add(time.Hour).Format(time.RFC3339Nano)); err != nil {
 		t.Fatalf("report Runtime set: %v", err)
 	}
-	if err := hostClient.RequestComputerUpgrade(context.Background(), protocol.ComputerUpgradePayload{
+	if err := computerClient.RequestComputerUpgrade(context.Background(), protocol.ComputerUpgradePayload{
 		RequestID: "upgrade-a", TargetVersion: "v1.0.0",
 	}); err != nil {
 		t.Fatalf("request Computer upgrade: %v", err)
@@ -197,21 +197,21 @@ func TestHostProcessOwnsMachineUpgradeAndReregistersBindingChild(t *testing.T) {
 	}
 }
 
-func waitForHostCurrent(t *testing.T, host *Host, identity BindingChildIdentity) {
+func waitForComputerCurrent(t *testing.T, computerCore *ComputerCore, identity WorkspaceDaemonIdentity) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
-		if host.Current(identity) {
+		if computerCore.Current(identity) {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("Binding child never became current: %+v", identity)
+	t.Fatalf("WorkspaceDaemon never became current: %+v", identity)
 }
 
 func stringPointer(value string) *string { return &value }
 
-func waitForHostHealth(t *testing.T, endpoint string) {
+func waitForComputerHealth(t *testing.T, endpoint string) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
@@ -221,5 +221,5 @@ func waitForHostHealth(t *testing.T, endpoint string) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("Computer Host never reported running at %s", endpoint)
+	t.Fatalf("Computer never reported running at %s", endpoint)
 }

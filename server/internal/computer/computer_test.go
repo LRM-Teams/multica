@@ -484,13 +484,13 @@ func TestStartResidentProcessDoesNotBindParentDeath(t *testing.T) {
 	}
 }
 
-func TestBindingChildrenDoNotBindParentDeath(t *testing.T) {
-	body, err := os.ReadFile("binding_child.go")
+func TestWorkspaceDaemonProcessesDoNotBindParentDeath(t *testing.T) {
+	body, err := os.ReadFile("workspace_daemon_process.go")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(body), "configureChildParentDeath(") || strings.Contains(string(body), ".Pdeathsig") {
-		t.Fatal("Binding children must not set Pdeathsig; Raft adopts a live runner after Host death")
+		t.Fatal("WorkspaceDaemon processes must survive a forced Computer exit so lifecycle cleanup can identify and terminate them")
 	}
 }
 

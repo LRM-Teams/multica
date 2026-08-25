@@ -7,7 +7,7 @@ import (
 	"syscall"
 )
 
-func stopBindingProcess(proc *os.Process) error {
+func stopWorkspaceDaemonProcess(proc *os.Process) error {
 	if proc == nil {
 		return nil
 	}

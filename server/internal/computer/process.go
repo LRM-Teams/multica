@@ -20,9 +20,9 @@ import (
 	"github.com/multica-ai/multica/server/internal/diagnosticlog"
 )
 
-// HostProcessIdentity is the immutable machine identity projected by the
-// Computer resident. Binding execution identity remains inside each child.
-type HostProcessIdentity struct {
+// ComputerIdentity is the immutable machine identity projected by the
+// Computer process. WorkspaceDaemon execution identity remains in each process.
+type ComputerIdentity struct {
 	ComputerID        string
 	ServiceGeneration string
 	Environment       string
@@ -32,39 +32,37 @@ type HostProcessIdentity struct {
 	SourceServicePID  int
 }
 
-func (identity HostProcessIdentity) releaseChannel() cli.ReleaseChannel {
+func (identity ComputerIdentity) releaseChannel() cli.ReleaseChannel {
 	return cli.ReleaseChannelForEnvironment(cli.ServiceEnvironment(identity.Environment))
 }
 
-// HostProcessConfig is the process boundary around Host. It contains only
-// machine-wide dependencies; no daemon or Workspace execution object crosses
-// this interface.
-type HostProcessConfig struct {
+// ComputerProcessConfig contains the machine-wide dependencies for running
+// ComputerCore. No Workspace execution object crosses this interface.
+type ComputerProcessConfig struct {
 	Listener            net.Listener // test adapter; production binds ServiceEndpoint
 	ServiceEndpoint     string
 	ResidentRoot        string
-	Identity            HostProcessIdentity
+	Identity            ComputerIdentity
 	DesiredWorkspaceIDs func() ([]string, error)
 	Changes             <-chan struct{}
 	ReadyTimeout        time.Duration
 	ReleaseManifestURL  string
 }
 
-type hostProcessState struct {
+type computerProcessState struct {
 	mu        sync.RWMutex
-	identity  HostProcessIdentity
+	identity  ComputerIdentity
 	startedAt time.Time
 	ready     bool
 	desired   []string
 	cancel    context.CancelFunc
 }
 
-// RunProcess owns the resident Computer control plane around Host. The
-// execution plane is never constructed here: Host can only supervise Binding
-// child process handles and expose machine-scoped control.
-func (host *Host) RunProcess(ctx context.Context, config HostProcessConfig) error {
-	if host == nil || host.supervisor == nil || host.control == nil {
-		return errors.New("Computer Host is unavailable")
+// Run owns the resident Computer control plane and waits for DaemonCore to
+// finish stopping every WorkspaceDaemon before returning.
+func (computerCore *ComputerCore) Run(ctx context.Context, config ComputerProcessConfig) error {
+	if computerCore == nil || computerCore.daemonCore == nil || computerCore.control == nil {
+		return errors.New("ComputerCore is unavailable")
 	}
 	if config.DesiredWorkspaceIDs == nil {
 		return errors.New("Computer desired Binding source is required")
@@ -98,45 +96,45 @@ func (host *Host) RunProcess(ctx context.Context, config HostProcessConfig) erro
 	initial = normalizedWorkspaceIDs(initial)
 	processCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	state := &hostProcessState{
+	state := &computerProcessState{
 		identity: config.Identity, startedAt: time.Now(), desired: append([]string(nil), initial...),
 		cancel: cancel,
 	}
 	if err := writeServiceState(config.ResidentRoot, persistedServiceState{
 		ComputerID: config.Identity.ComputerID, ServiceGeneration: config.Identity.ServiceGeneration,
 		PID: os.Getpid(), StartedAt: state.startedAt,
-	}); err != nil && host.logger != nil {
-		host.logger.Warn("could not persist Computer Service state", "error", err)
+	}); err != nil && computerCore.logger != nil {
+		computerCore.logger.Warn("could not persist Computer Service state", "error", err)
 	}
 	defer func() { _ = removeServiceState(config.ResidentRoot, os.Getpid()) }()
-	host.processIdentity = config.Identity
+	computerCore.processIdentity = config.Identity
 	if strings.TrimSpace(config.ResidentRoot) != "" {
 		store, storeErr := diagnosticlog.Open(diagnosticlog.Config{Root: filepath.Join(config.ResidentRoot, "logs")})
 		if storeErr != nil {
-			if host.logger != nil {
-				host.logger.Warn("Computer diagnostic aggregation is degraded", "error", storeErr)
+			if computerCore.logger != nil {
+				computerCore.logger.Warn("Computer diagnostic aggregation is degraded", "error", storeErr)
 			}
 		} else {
-			host.diagnosticStore = store
+			computerCore.diagnosticStore = store
 			defer store.Close()
 			go store.RunCleanup(processCtx)
 		}
 	}
-	if host.upgrade == nil {
-		host.upgrade = newHostMachineUpgrade(host, hostMachineUpgradeConfig{})
+	if computerCore.upgrade == nil {
+		computerCore.upgrade = newComputerMachineUpgrade(computerCore, computerMachineUpgradeConfig{})
 	}
-	host.upgrade.config.identity = config.Identity
-	host.upgrade.config.releaseManifestURL = config.ReleaseManifestURL
-	host.upgrade.config.residentRoot = config.ResidentRoot
-	host.upgrade.config.cancel = cancel
-	host.workJournalRoot = config.ResidentRoot
-	host.loadWorkJournalSetting()
+	computerCore.upgrade.config.identity = config.Identity
+	computerCore.upgrade.config.releaseManifestURL = config.ReleaseManifestURL
+	computerCore.upgrade.config.residentRoot = config.ResidentRoot
+	computerCore.upgrade.config.cancel = cancel
+	computerCore.workJournalRoot = config.ResidentRoot
+	computerCore.loadWorkJournalSetting()
 
 	loadDesired := func() []string {
 		ids, loadErr := config.DesiredWorkspaceIDs()
 		if loadErr != nil {
-			if host.logger != nil {
-				host.logger.Warn("Computer could not refresh desired Bindings", "error", loadErr)
+			if computerCore.logger != nil {
+				computerCore.logger.Warn("Computer could not refresh desired Bindings", "error", loadErr)
 			}
 			state.mu.RLock()
 			defer state.mu.RUnlock()
@@ -150,8 +148,8 @@ func (host *Host) RunProcess(ctx context.Context, config HostProcessConfig) erro
 	}
 
 	mux := http.NewServeMux()
-	host.registerProcessRoutes(mux, state)
-	registry := host.LocalControlRegistry(state)
+	computerCore.registerProcessRoutes(mux, state)
+	registry := computerCore.LocalControlRegistry(state)
 	var server *http.Server
 	serveControl := func() error {
 		if strings.TrimSpace(config.ServiceEndpoint) == "" || strings.HasPrefix(config.ServiceEndpoint, "http://") {
@@ -170,17 +168,17 @@ func (host *Host) RunProcess(ctx context.Context, config HostProcessConfig) erro
 		serveErr <- nil
 	}()
 
-	hostDone := make(chan struct{})
+	daemonCoreDone := make(chan struct{})
 	go func() {
-		defer close(hostDone)
-		host.Run(processCtx, loadDesired, config.Changes)
+		defer close(daemonCoreDone)
+		computerCore.daemonCore.Run(processCtx, loadDesired, config.Changes, computerCore.reconcileInterval)
 	}()
 	readyTimeout := config.ReadyTimeout
 	if readyTimeout <= 0 {
 		readyTimeout = 35 * time.Second
 	}
 	readyCtx, stopReady := context.WithTimeout(processCtx, readyTimeout)
-	err = host.WaitReady(readyCtx, initial)
+	err = computerCore.WaitReady(readyCtx, initial)
 	stopReady()
 	if err != nil {
 		cancel()
@@ -189,18 +187,18 @@ func (host *Host) RunProcess(ctx context.Context, config HostProcessConfig) erro
 		} else {
 			_ = config.Listener.Close()
 		}
-		<-hostDone
+		<-daemonCoreDone
 		<-serveErr
 		return err
 	}
-	if err := host.upgrade.recoverSuccessor(processCtx); err != nil {
+	if err := computerCore.upgrade.recoverSuccessor(processCtx); err != nil {
 		cancel()
 		if server != nil {
 			_ = server.Close()
 		} else {
 			_ = config.Listener.Close()
 		}
-		<-hostDone
+		<-daemonCoreDone
 		<-serveErr
 		return fmt.Errorf("recover Computer Machine Upgrade: %w", err)
 	}
@@ -211,8 +209,8 @@ func (host *Host) RunProcess(ctx context.Context, config HostProcessConfig) erro
 	serveResultRead := false
 	select {
 	case <-processCtx.Done():
-		if host.logger != nil {
-			host.logger.Info("Computer shutdown context canceled", "source", "context_cancellation", "error", processCtx.Err())
+		if computerCore.logger != nil {
+			computerCore.logger.Info("Computer shutdown context canceled", "source", "context_cancellation", "error", processCtx.Err())
 		}
 	case err = <-serveErr:
 		serveResultRead = true
@@ -227,7 +225,7 @@ func (host *Host) RunProcess(ctx context.Context, config HostProcessConfig) erro
 		_ = config.Listener.Close()
 	}
 	stopShutdown()
-	<-hostDone
+	<-daemonCoreDone
 	if !serveResultRead {
 		serveResult := <-serveErr
 		if err == nil {
@@ -237,11 +235,11 @@ func (host *Host) RunProcess(ctx context.Context, config HostProcessConfig) erro
 	return err
 }
 
-func (host *Host) registerProcessRoutes(mux *http.ServeMux, state *hostProcessState) {
-	mux.HandleFunc("/health", host.processHealthHandler(state))
-	mux.HandleFunc("/shutdown", host.processShutdownHandler(state))
-	mux.HandleFunc("/environment-switch/prepare", host.processEnvironmentSwitchHandler(true))
-	mux.HandleFunc("/environment-switch/release", host.processEnvironmentSwitchHandler(false))
+func (computerCore *ComputerCore) registerProcessRoutes(mux *http.ServeMux, state *computerProcessState) {
+	mux.HandleFunc("/health", computerCore.processHealthHandler(state))
+	mux.HandleFunc("/shutdown", computerCore.processShutdownHandler(state))
+	mux.HandleFunc("/environment-switch/prepare", computerCore.processEnvironmentSwitchHandler(true))
+	mux.HandleFunc("/environment-switch/release", computerCore.processEnvironmentSwitchHandler(false))
 }
 
 func normalizedWorkspaceIDs(ids []string) []string {
@@ -262,7 +260,7 @@ func normalizedWorkspaceIDs(ids []string) []string {
 	return out
 }
 
-func (host *Host) processHealthHandler(state *hostProcessState) http.HandlerFunc {
+func (computerCore *ComputerCore) processHealthHandler(state *computerProcessState) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
 		state.mu.RLock()
 		identity := state.identity
@@ -276,12 +274,12 @@ func (host *Host) processHealthHandler(state *hostProcessState) http.HandlerFunc
 		}
 		workspaces := make([]map[string]any, 0, len(desired))
 		for _, workspaceID := range desired {
-			record, pid, ok := host.Snapshot(workspaceID)
-			entry := map[string]any{"id": workspaceID, "runtimes": host.runtimeIDs(workspaceID)}
+			snapshot, pid, ok := computerCore.Snapshot(workspaceID)
+			entry := map[string]any{"id": workspaceID, "runtimes": computerCore.runtimeIDs(workspaceID)}
 			if ok {
-				entry["daemonInstanceId"] = record.DaemonInstanceID()
+				entry["daemonInstanceId"] = snapshot.DaemonInstanceID
 				entry["runnerPid"] = pid
-				entry["runnerStatus"] = record.Lifecycle
+				entry["runnerStatus"] = snapshot.Status
 			}
 			workspaces = append(workspaces, entry)
 		}
@@ -299,10 +297,10 @@ func (host *Host) processHealthHandler(state *hostProcessState) http.HandlerFunc
 	}
 }
 
-func (host *Host) runtimeIDs(workspaceID string) []string {
-	host.runtimeMu.RLock()
-	report := host.runtimeSets[strings.TrimSpace(workspaceID)]
-	host.runtimeMu.RUnlock()
+func (computerCore *ComputerCore) runtimeIDs(workspaceID string) []string {
+	computerCore.runtimeMu.RLock()
+	report := computerCore.runtimeSets[strings.TrimSpace(workspaceID)]
+	computerCore.runtimeMu.RUnlock()
 	ids := make([]string, 0, len(report.Runtimes))
 	for _, runtime := range report.Runtimes {
 		ids = append(ids, runtime.ID)
@@ -311,34 +309,34 @@ func (host *Host) runtimeIDs(workspaceID string) []string {
 	return ids
 }
 
-func (host *Host) recordBindingDiagnostic(_ BindingChildIdentity, workspaceID string, event diagnosticlog.Event) {
-	if host == nil || host.diagnosticStore == nil {
+func (computerCore *ComputerCore) recordBindingDiagnostic(_ WorkspaceDaemonIdentity, workspaceID string, event diagnosticlog.Event) {
+	if computerCore == nil || computerCore.diagnosticStore == nil {
 		return
 	}
-	host.diagnosticMu.Lock()
-	logger := host.diagnosticLoggers[workspaceID]
+	computerCore.diagnosticMu.Lock()
+	logger := computerCore.diagnosticLoggers[workspaceID]
 	if logger == nil {
-		created, err := host.diagnosticStore.Runner(diagnosticlog.RunnerOptions{
-			Environment: diagnosticlog.Environment(host.processIdentity.Environment),
-			WorkspaceID: workspaceID, DaemonInstanceID: host.processIdentity.ServiceGeneration,
-			ComputerID: host.processIdentity.ComputerID, ServiceGeneration: host.processIdentity.ServiceGeneration,
+		created, err := computerCore.diagnosticStore.Runner(diagnosticlog.RunnerOptions{
+			Environment: diagnosticlog.Environment(computerCore.processIdentity.Environment),
+			WorkspaceID: workspaceID, DaemonInstanceID: computerCore.processIdentity.ServiceGeneration,
+			ComputerID: computerCore.processIdentity.ComputerID, ServiceGeneration: computerCore.processIdentity.ServiceGeneration,
 		})
 		if err == nil {
 			logger = created
-			host.diagnosticLoggers[workspaceID] = logger
-		} else if host.logger != nil {
-			host.logger.Warn("Computer could not open Binding diagnostic stream", "workspace_id", workspaceID, "error", err)
+			computerCore.diagnosticLoggers[workspaceID] = logger
+		} else if computerCore.logger != nil {
+			computerCore.logger.Warn("Computer could not open Binding diagnostic stream", "workspace_id", workspaceID, "error", err)
 		}
 	}
-	host.diagnosticMu.Unlock()
+	computerCore.diagnosticMu.Unlock()
 	if logger != nil {
-		if err := logger.Record(event); err != nil && host.logger != nil {
-			host.logger.Warn("Computer could not aggregate Binding diagnostic", "workspace_id", workspaceID, "error", err)
+		if err := logger.Record(event); err != nil && computerCore.logger != nil {
+			computerCore.logger.Warn("Computer could not aggregate Binding diagnostic", "workspace_id", workspaceID, "error", err)
 		}
 	}
 }
 
-func (host *Host) processShutdownHandler(state *hostProcessState) http.HandlerFunc {
+func (computerCore *ComputerCore) processShutdownHandler(state *computerProcessState) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -356,8 +354,8 @@ func (host *Host) processShutdownHandler(state *hostProcessState) http.HandlerFu
 		if requestPID == "" {
 			requestPID = "unknown"
 		}
-		if host.logger != nil {
-			host.logger.Info("Computer shutdown requested",
+		if computerCore.logger != nil {
+			computerCore.logger.Info("Computer shutdown requested",
 				"source", source,
 				"action", action,
 				"request_pid", requestPID,
@@ -370,23 +368,23 @@ func (host *Host) processShutdownHandler(state *hostProcessState) http.HandlerFu
 	}
 }
 
-func (host *Host) processEnvironmentSwitchHandler(prepare bool) http.HandlerFunc {
+func (computerCore *ComputerCore) processEnvironmentSwitchHandler(prepare bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 		provided := strings.TrimSpace(r.Header.Get("X-Multica-Control-Token"))
-		expected := strings.TrimSpace(host.control.token)
+		expected := strings.TrimSpace(computerCore.control.token)
 		if provided == "" || expected == "" || subtle.ConstantTimeCompare([]byte(provided), []byte(expected)) != 1 {
 			http.Error(w, "local control authentication failed", http.StatusUnauthorized)
 			return
 		}
 		var err error
 		if prepare {
-			err = host.PrepareEnvironmentSwitch(r.Context())
+			err = computerCore.PrepareEnvironmentSwitch(r.Context())
 		} else {
-			err = host.ReleaseEnvironmentSwitch(r.Context())
+			err = computerCore.ReleaseEnvironmentSwitch(r.Context())
 		}
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)

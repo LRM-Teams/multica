@@ -35,19 +35,19 @@ type Diagnosis struct {
 	SelectedWorkspaceID      string   `json:"selected_workspace_id,omitempty"`
 	SelectedWorkspaceSlug    string   `json:"selected_workspace_slug,omitempty"`
 	SelectedConnectionActive bool     `json:"selected_connection_active,omitempty"`
-	// Runners is one entry per persisted Binding Runner slot on this machine.
+	// WorkspaceDaemons is one entry per persisted WorkspaceDaemon on this machine.
 	// Owned is true only when the currently running resident (identified by
 	// its own live pid, from the health probe) is the one that persisted
-	// this pid as its child. A pid that is Alive but not Owned is a Binding
-	// Runner nothing on this machine currently controls.
-	Runners     []RunnerOwnership `json:"runners,omitempty"`
-	UnownedLive []RunnerOwnership `json:"unownedLive,omitempty"`
-	FixApplied  []string          `json:"fix_applied,omitempty"`
+	// this pid as its child. A pid that is Alive but not Owned is a
+	// WorkspaceDaemon nothing on this machine currently controls.
+	WorkspaceDaemons []WorkspaceDaemonOwnership `json:"workspaceDaemons,omitempty"`
+	UnownedLive      []WorkspaceDaemonOwnership `json:"unownedLive,omitempty"`
+	FixApplied       []string                   `json:"fix_applied,omitempty"`
 }
 
-// RunnerOwnership is one on-disk Binding Runner slot's live-pid evidence
+// WorkspaceDaemonOwnership is one on-disk WorkspaceDaemon's live-pid evidence
 // against the current resident's ownership record.
-type RunnerOwnership struct {
+type WorkspaceDaemonOwnership struct {
 	WorkspaceID string `json:"workspaceId"`
 	PID         int    `json:"pid"`
 	Alive       bool   `json:"alive"`
@@ -117,8 +117,8 @@ func (l *Lifecycle) Diagnose() Diagnosis {
 			alive, known := processAlive(state.RunnerPID)
 			alive = known && alive
 			owned := alive && d.Resident == "running" && residentPIDKnown && residentPID == state.OwnerPID
-			ownership := RunnerOwnership{WorkspaceID: state.WorkspaceID, PID: state.RunnerPID, Alive: alive, Owned: owned}
-			d.Runners = append(d.Runners, ownership)
+			ownership := WorkspaceDaemonOwnership{WorkspaceID: state.WorkspaceID, PID: state.RunnerPID, Alive: alive, Owned: owned}
+			d.WorkspaceDaemons = append(d.WorkspaceDaemons, ownership)
 			if alive && !owned {
 				d.UnownedLive = append(d.UnownedLive, ownership)
 			}
@@ -171,14 +171,15 @@ func (l *Lifecycle) Fix(d Diagnosis) Diagnosis {
 }
 
 // reclaimOrphanedRunners terminates WorkspaceDaemon processes whose owning
-// Host is gone, freeing the slot so the next `computer start` spawns a fresh
-// child instead of finding the machine wedged.
+// Computer is gone, freeing the slot so the next `computer start` spawns a
+// fresh process instead of finding the machine wedged.
 //
 // This is the one Fix step that signals a live process, so its fence matters:
 // findReclaimableRunners refuses any slot whose recorded owner pid is still
-// alive, which means a Runner the running Host supervises can never be a
-// candidate here. Only a Runner whose parent Host is confirmed dead — the
-// self-locking state that used to require a manual kill — is reclaimed.
+// alive, which means a WorkspaceDaemon the running Computer supervises can
+// never be a candidate here. Only a WorkspaceDaemon whose owning Computer is
+// confirmed dead — the self-locking state that used to require a manual kill —
+// is reclaimed.
 func reclaimOrphanedRunners(root string) []string {
 	reclaimable, err := findReclaimableRunners(root, nil)
 	if err != nil || len(reclaimable) == 0 {
@@ -186,8 +187,8 @@ func reclaimOrphanedRunners(root string) []string {
 	}
 	options := runnerReclaimOptions{StateRoot: root, PollInterval: 200 * time.Millisecond, Grace: 2 * time.Second}
 	if token, err := ReadControlToken(""); err == nil && strings.TrimSpace(token) != "" {
-		options.Drain = func(ctx context.Context, endpoint string, identity BindingChildIdentity) error {
-			return RequestBindingRunnerDrain(ctx, endpoint, token, identity)
+		options.Drain = func(ctx context.Context, endpoint string, identity WorkspaceDaemonIdentity) error {
+			return RequestWorkspaceDaemonDrain(ctx, endpoint, token, identity)
 		}
 	}
 	applied := make([]string, 0, len(reclaimable))

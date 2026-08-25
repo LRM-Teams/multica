@@ -16,28 +16,28 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-type bindingControlTestCurrentSet struct {
+type workspaceDaemonTestCurrentSet struct {
 	mu                sync.RWMutex
 	pids              map[string]int
 	daemonInstanceIDs map[string]string
 	delayReady        []string
 }
 
-type bindingControlTestHost struct {
-	host  *computer.Host
-	state *bindingControlTestCurrentSet
+type computerControlTestHarness struct {
+	computerCore *computer.ComputerCore
+	state        *workspaceDaemonTestCurrentSet
 }
 
-type bindingControlTestChild struct {
+type workspaceDaemonTestProcess struct {
 	pid        int
-	state      *bindingControlTestCurrentSet
+	state      *workspaceDaemonTestCurrentSet
 	workspace  string
-	wait       chan computer.RunnerExitClass
+	wait       chan computer.WorkspaceDaemonExitClass
 	stopOnce   sync.Once
 	readyDelay bool
 }
 
-func (child *bindingControlTestChild) PID() int {
+func (child *workspaceDaemonTestProcess) PID() int {
 	if child.state == nil {
 		return child.pid
 	}
@@ -45,18 +45,18 @@ func (child *bindingControlTestChild) PID() int {
 	defer child.state.mu.RUnlock()
 	return child.state.pids[child.workspace]
 }
-func (child *bindingControlTestChild) Wait() computer.RunnerExitClass {
+func (child *workspaceDaemonTestProcess) Wait() computer.WorkspaceDaemonExitClass {
 	return <-child.wait
 }
-func (child *bindingControlTestChild) Stop() error {
-	child.stopOnce.Do(func() { child.wait <- computer.RunnerExitGraceful })
+func (child *workspaceDaemonTestProcess) Stop() error {
+	child.stopOnce.Do(func() { child.wait <- computer.WorkspaceDaemonExitGraceful })
 	return nil
 }
 
-func (child *bindingControlTestChild) AwaitReady(ctx context.Context) (computer.BindingChildReady, error) {
+func (child *workspaceDaemonTestProcess) AwaitReady(ctx context.Context) (computer.WorkspaceDaemonReady, error) {
 	if child.readyDelay {
 		<-ctx.Done()
-		return computer.BindingChildReady{}, ctx.Err()
+		return computer.WorkspaceDaemonReady{}, ctx.Err()
 	}
 	identity := fmt.Sprintf("child-%s-%d", child.workspace, child.PID())
 	if child.state != nil {
@@ -64,8 +64,8 @@ func (child *bindingControlTestChild) AwaitReady(ctx context.Context) (computer.
 		child.state.daemonInstanceIDs[child.workspace] = identity
 		child.state.mu.Unlock()
 	}
-	return computer.BindingChildReady{
-		ProtocolVersion:  computer.BindingChildProtocolVersion,
+	return computer.WorkspaceDaemonReady{
+		ProtocolVersion:  computer.WorkspaceDaemonProtocolVersion,
 		WorkspaceID:      child.workspace,
 		DaemonInstanceID: identity,
 		PID:              child.PID(),
@@ -73,13 +73,13 @@ func (child *bindingControlTestChild) AwaitReady(ctx context.Context) (computer.
 	}, nil
 }
 
-type capturingRunnerDiagnosticSink struct {
+type capturingWorkspaceDaemonDiagnosticSink struct {
 	workspaceID string
 	event       diagnosticlog.Event
 	recorded    chan struct{}
 }
 
-func (sink *capturingRunnerDiagnosticSink) record(workspaceID string, event diagnosticlog.Event) error {
+func (sink *capturingWorkspaceDaemonDiagnosticSink) record(workspaceID string, event diagnosticlog.Event) error {
 	sink.workspaceID = workspaceID
 	sink.event = event
 	select {
@@ -89,18 +89,18 @@ func (sink *capturingRunnerDiagnosticSink) record(workspaceID string, event diag
 	return nil
 }
 
-func TestBindingChildDiagnosticsAreAggregatedByHost(t *testing.T) {
-	const controlToken = "host-control-token"
-	sink := &capturingRunnerDiagnosticSink{recorded: make(chan struct{}, 1)}
-	host := newBindingControlTestHost(t, controlToken, computer.HostControlCallbacks{
-		Diagnostic: func(_ context.Context, _ computer.BindingChildIdentity, workspaceID string, event diagnosticlog.Event) error {
+func TestWorkspaceDaemonDiagnosticsAreAggregatedByComputer(t *testing.T) {
+	const controlToken = "computer-control-token"
+	sink := &capturingWorkspaceDaemonDiagnosticSink{recorded: make(chan struct{}, 1)}
+	computerCore := newComputerControlTestHarness(t, controlToken, computer.ComputerControlCallbacks{
+		Diagnostic: func(_ context.Context, _ computer.WorkspaceDaemonIdentity, workspaceID string, event diagnosticlog.Event) error {
 			return sink.record(workspaceID, event)
 		},
 	})
-	installLiveBindingChild(t, host, "workspace-a", 101)
-	serverURL := localHostControlRPC(t, host.host)
+	installLiveWorkspaceDaemon(t, computerCore, "workspace-a", 101)
+	serverURL := localComputerControlRPC(t, computerCore.computerCore)
 
-	client := newBindingHostControlClient(serverURL, controlToken, liveBindingIdentity(t, host, "workspace-a", 101))
+	client := newWorkspaceDaemonComputerControl(serverURL, controlToken, liveWorkspaceDaemonIdentity(t, computerCore, "workspace-a", 101))
 	event := diagnosticlog.Event{Name: diagnosticlog.EventDeliveryStateChanged, Component: "message_coordinator"}
 	if err := client.recordDiagnostic(context.Background(), "workspace-a", event); err != nil {
 		t.Fatalf("record child diagnostic: %v", err)
@@ -108,10 +108,10 @@ func TestBindingChildDiagnosticsAreAggregatedByHost(t *testing.T) {
 	select {
 	case <-sink.recorded:
 	case <-time.After(time.Second):
-		t.Fatal("Host did not aggregate Binding child diagnostic")
+		t.Fatal("Computer did not aggregate WorkspaceDaemon diagnostic")
 	}
 	if sink.workspaceID != "workspace-a" || sink.event.Name != event.Name || sink.event.Component != event.Component {
-		t.Fatalf("Host diagnostic = workspace %q event %+v", sink.workspaceID, sink.event)
+		t.Fatalf("Computer diagnostic = workspace %q event %+v", sink.workspaceID, sink.event)
 	}
 }
 
@@ -125,14 +125,14 @@ func TestStandaloneDaemonIgnoresConnectSocketUpgrade(t *testing.T) {
 	}
 }
 
-func TestBindingChildHarvestsWorkDigestFromHostNotUpgradePayload(t *testing.T) {
-	const controlToken = "host-control-token"
-	host := newBindingControlTestHost(t, controlToken, computer.HostControlCallbacks{})
-	installLiveBindingChild(t, host, "workspace-a", 101)
-	serverURL := localHostControlRPC(t, host.host)
+func TestWorkspaceDaemonHarvestsWorkDigestFromComputerNotUpgradePayload(t *testing.T) {
+	const controlToken = "computer-control-token"
+	computerCore := newComputerControlTestHarness(t, controlToken, computer.ComputerControlCallbacks{})
+	installLiveWorkspaceDaemon(t, computerCore, "workspace-a", 101)
+	serverURL := localComputerControlRPC(t, computerCore.computerCore)
 
 	child := New(Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	child.bindingHostControl = newBindingHostControlClient(serverURL, controlToken, liveBindingIdentity(t, host, "workspace-a", 101))
+	child.computerControl = newWorkspaceDaemonComputerControl(serverURL, controlToken, liveWorkspaceDaemonIdentity(t, computerCore, "workspace-a", 101))
 	start := time.Date(2026, time.August, 10, 0, 0, 0, 0, time.UTC)
 	digest, err := child.handleComputerWorkDigestCommand(context.Background(), protocol.ComputerWorkDigestPayload{
 		RequestID: "digest-1", Start: start, End: start.Add(24 * time.Hour),
@@ -145,10 +145,10 @@ func TestBindingChildHarvestsWorkDigestFromHostNotUpgradePayload(t *testing.T) {
 	}
 }
 
-func TestBindingChildForwardsConnectSocketUpgradeToService(t *testing.T) {
+func TestWorkspaceDaemonForwardsConnectSocketUpgradeToComputer(t *testing.T) {
 	executed := make(chan protocol.ComputerUpgradePayload, 1)
-	host := newBindingControlTestHost(t, "host-control-token", computer.HostControlCallbacks{
-		ComputerUpgrade: func(_ context.Context, _ computer.BindingChildIdentity, raw json.RawMessage) error {
+	computerCore := newComputerControlTestHarness(t, "computer-control-token", computer.ComputerControlCallbacks{
+		ComputerUpgrade: func(_ context.Context, _ computer.WorkspaceDaemonIdentity, raw json.RawMessage) error {
 			var command protocol.ComputerUpgradePayload
 			if err := json.Unmarshal(raw, &command); err != nil {
 				return err
@@ -157,11 +157,11 @@ func TestBindingChildForwardsConnectSocketUpgradeToService(t *testing.T) {
 			return nil
 		},
 	})
-	installLiveBindingChild(t, host, "workspace-a", 101)
-	serverURL := localHostControlRPC(t, host.host)
+	installLiveWorkspaceDaemon(t, computerCore, "workspace-a", 101)
+	serverURL := localComputerControlRPC(t, computerCore.computerCore)
 
 	child := New(Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	child.bindingHostControl = newBindingHostControlClient(serverURL, "host-control-token", liveBindingIdentity(t, host, "workspace-a", 101))
+	child.computerControl = newWorkspaceDaemonComputerControl(serverURL, "computer-control-token", liveWorkspaceDaemonIdentity(t, computerCore, "workspace-a", 101))
 	if err := child.handleComputerControlCommand(context.Background(), protocol.EventComputerUpgrade, protocol.ComputerUpgradePayload{
 		RequestID: "upgrade-a", TargetVersion: "v9.9.9",
 	}); err != nil {
@@ -178,13 +178,13 @@ func TestBindingChildForwardsConnectSocketUpgradeToService(t *testing.T) {
 	}
 }
 
-func TestBindingChildForwardsRestartToHost(t *testing.T) {
-	const controlToken = "host-control-token"
+func TestWorkspaceDaemonForwardsRestartToComputer(t *testing.T) {
+	const controlToken = "computer-control-token"
 	forwarded := make(chan HeartbeatResponse, 1)
-	host := newBindingControlTestHost(t, controlToken, computer.HostControlCallbacks{
-		MachineActions: func(_ context.Context, identity computer.BindingChildIdentity, raw json.RawMessage) error {
+	computerCore := newComputerControlTestHarness(t, controlToken, computer.ComputerControlCallbacks{
+		MachineActions: func(_ context.Context, identity computer.WorkspaceDaemonIdentity, raw json.RawMessage) error {
 			if identity.WorkspaceID != "workspace-a" {
-				t.Errorf("Host machine action workspace = %q", identity.WorkspaceID)
+				t.Errorf("Computer machine action workspace = %q", identity.WorkspaceID)
 			}
 			var ack HeartbeatResponse
 			if err := json.Unmarshal(raw, &ack); err != nil {
@@ -194,9 +194,9 @@ func TestBindingChildForwardsRestartToHost(t *testing.T) {
 			return nil
 		},
 	})
-	installLiveBindingChild(t, host, "workspace-a", 101)
-	serverURL := localHostControlRPC(t, host.host)
-	control := newBindingHostControlClient(serverURL, controlToken, liveBindingIdentity(t, host, "workspace-a", 101))
+	installLiveWorkspaceDaemon(t, computerCore, "workspace-a", 101)
+	serverURL := localComputerControlRPC(t, computerCore.computerCore)
+	control := newWorkspaceDaemonComputerControl(serverURL, controlToken, liveWorkspaceDaemonIdentity(t, computerCore, "workspace-a", 101))
 	if err := control.reportRuntimeSet(context.Background(), []Runtime{
 		{ID: "runtime-a", WorkspaceID: "workspace-a", Provider: "pi"},
 	}, "child-daemon-token", time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano)); err != nil {
@@ -204,7 +204,7 @@ func TestBindingChildForwardsRestartToHost(t *testing.T) {
 	}
 
 	child := New(Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	child.bindingHostControl = control
+	child.computerControl = control
 	child.handleWorkspaceDaemonControlAck(context.Background(), &HeartbeatResponse{
 		RuntimeID:      "runtime-a",
 		PendingRestart: &PendingRestart{ID: "restart-a"},
@@ -213,18 +213,18 @@ func TestBindingChildForwardsRestartToHost(t *testing.T) {
 	select {
 	case ack := <-forwarded:
 		if ack.PendingRestart == nil || ack.PendingRestart.ID != "restart-a" {
-			t.Fatalf("Host machine action = %+v", ack)
+			t.Fatalf("Computer machine action = %+v", ack)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("Binding child did not forward restart to Host")
+		t.Fatal("WorkspaceDaemon did not forward restart to Computer")
 	}
 }
 
-func TestBindingChildReportsItsRuntimeSetToHost(t *testing.T) {
-	const controlToken = "host-control-token"
+func TestWorkspaceDaemonReportsItsRuntimeSetToComputer(t *testing.T) {
+	const controlToken = "computer-control-token"
 	reported := make(chan struct{}, 1)
-	host := newBindingControlTestHost(t, controlToken, computer.HostControlCallbacks{
-		RuntimeSet: func(_ context.Context, identity computer.BindingChildIdentity, raw json.RawMessage, token string, _ time.Time) error {
+	computerCore := newComputerControlTestHarness(t, controlToken, computer.ComputerControlCallbacks{
+		RuntimeSet: func(_ context.Context, identity computer.WorkspaceDaemonIdentity, raw json.RawMessage, token string, _ time.Time) error {
 			if identity.WorkspaceID != "workspace-a" || token != "child-daemon-token" {
 				t.Errorf("Runtime report identity=%+v token=%q", identity, token)
 			}
@@ -239,41 +239,41 @@ func TestBindingChildReportsItsRuntimeSetToHost(t *testing.T) {
 			return nil
 		},
 	})
-	installLiveBindingChild(t, host, "workspace-a", 101)
-	serverURL := localHostControlRPC(t, host.host)
+	installLiveWorkspaceDaemon(t, computerCore, "workspace-a", 101)
+	serverURL := localComputerControlRPC(t, computerCore.computerCore)
 
-	client := newBindingHostControlClient(serverURL, controlToken, liveBindingIdentity(t, host, "workspace-a", 101))
+	client := newWorkspaceDaemonComputerControl(serverURL, controlToken, liveWorkspaceDaemonIdentity(t, computerCore, "workspace-a", 101))
 	expiresAt := time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano)
 	if err := client.reportRuntimeSet(context.Background(), []Runtime{
 		{ID: "runtime-a", WorkspaceID: "workspace-a", Provider: "pi"},
 	}, "child-daemon-token", expiresAt); err != nil {
-		t.Fatalf("report Binding child Runtime set: %v", err)
+		t.Fatalf("report WorkspaceDaemon Runtime set: %v", err)
 	}
 	select {
 	case <-reported:
 	case <-time.After(time.Second):
-		t.Fatal("Host did not aggregate the Binding child Runtime identity")
+		t.Fatal("Computer did not aggregate the WorkspaceDaemon Runtime identity")
 	}
 
-	staleIdentity := liveBindingIdentity(t, host, "workspace-a", 101)
+	staleIdentity := liveWorkspaceDaemonIdentity(t, computerCore, "workspace-a", 101)
 	staleIdentity.DaemonInstanceID = "stale-start"
-	stale := newBindingHostControlClient(serverURL, controlToken, staleIdentity)
+	stale := newWorkspaceDaemonComputerControl(serverURL, controlToken, staleIdentity)
 	if err := stale.reportRuntimeSet(context.Background(), []Runtime{
 		{ID: "runtime-stale", WorkspaceID: "workspace-a", Provider: "pi"},
 	}, "stale-token", expiresAt); err == nil {
-		t.Fatal("Host accepted a Runtime set from a stale Binding child generation")
+		t.Fatal("Computer accepted a Runtime set from a stale WorkspaceDaemon generation")
 	}
 }
 
-func installLiveBindingChild(t *testing.T, current *bindingControlTestHost, workspaceID string, pid int) {
-	installBindingChild(t, current, workspaceID, pid, false)
+func installLiveWorkspaceDaemon(t *testing.T, current *computerControlTestHarness, workspaceID string, pid int) {
+	installWorkspaceDaemon(t, current, workspaceID, pid, false)
 }
 
-func installStartingBindingChild(t *testing.T, current *bindingControlTestHost, workspaceID string, pid int) {
-	installBindingChild(t, current, workspaceID, pid, true)
+func installStartingWorkspaceDaemon(t *testing.T, current *computerControlTestHarness, workspaceID string, pid int) {
+	installWorkspaceDaemon(t, current, workspaceID, pid, true)
 }
 
-func installBindingChild(t *testing.T, current *bindingControlTestHost, workspaceID string, pid int, delayReady bool) {
+func installWorkspaceDaemon(t *testing.T, current *computerControlTestHarness, workspaceID string, pid int, delayReady bool) {
 	t.Helper()
 	state := current.state
 	state.mu.Lock()
@@ -286,47 +286,47 @@ func installBindingChild(t *testing.T, current *bindingControlTestHost, workspac
 		desired = append(desired, current)
 	}
 	state.mu.Unlock()
-	current.host.Reconcile(context.Background(), desired)
+	current.computerCore.Reconcile(context.Background(), desired)
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
 		state.mu.RLock()
 		daemonInstanceID := state.daemonInstanceIDs[workspaceID]
 		state.mu.RUnlock()
-		identity := bindingChildControlIdentity{WorkspaceID: workspaceID, DaemonInstanceID: daemonInstanceID, PID: pid}
+		identity := workspaceDaemonControlIdentity{WorkspaceID: workspaceID, DaemonInstanceID: daemonInstanceID, PID: pid}
 		if delayReady {
 			identity.DaemonInstanceID = "pending-child"
-			if current.host.Current(identity) {
+			if current.computerCore.Current(identity) {
 				return
 			}
-		} else if daemonInstanceID != "" && current.host.Current(identity) {
+		} else if daemonInstanceID != "" && current.computerCore.Current(identity) {
 			return
 		}
 		time.Sleep(time.Millisecond)
 	}
-	t.Fatalf("Binding child did not become current: workspace=%s pid=%d", workspaceID, pid)
+	t.Fatalf("WorkspaceDaemon did not become current: workspace=%s pid=%d", workspaceID, pid)
 }
 
-func liveBindingIdentity(t *testing.T, current *bindingControlTestHost, workspaceID string, pid int) bindingChildControlIdentity {
+func liveWorkspaceDaemonIdentity(t *testing.T, current *computerControlTestHarness, workspaceID string, pid int) workspaceDaemonControlIdentity {
 	t.Helper()
 	current.state.mu.RLock()
 	daemonInstanceID := current.state.daemonInstanceIDs[workspaceID]
 	current.state.mu.RUnlock()
 	if daemonInstanceID == "" {
-		t.Fatalf("Binding child %s has no daemon instance", workspaceID)
+		t.Fatalf("WorkspaceDaemon %s has no daemon instance", workspaceID)
 	}
-	return bindingChildControlIdentity{WorkspaceID: workspaceID, DaemonInstanceID: daemonInstanceID, PID: pid}
+	return workspaceDaemonControlIdentity{WorkspaceID: workspaceID, DaemonInstanceID: daemonInstanceID, PID: pid}
 }
 
-func localHostControlRPC(t *testing.T, host *computer.Host) string {
+func localComputerControlRPC(t *testing.T, computerCore *computer.ComputerCore) string {
 	t.Helper()
-	endpoint, listener := localHostControlRPCListener(t, host)
+	endpoint, listener := localComputerControlRPCListener(t, computerCore)
 	t.Cleanup(func() { _ = listener.Close() })
 	return endpoint
 }
 
-func localHostControlRPCListener(t *testing.T, host *computer.Host) (string, net.Listener) {
+func localComputerControlRPCListener(t *testing.T, computerCore *computer.ComputerCore) (string, net.Listener) {
 	t.Helper()
-	registry := host.LocalControlRegistry(nil)
+	registry := computerCore.LocalControlRegistry(nil)
 	endpoint := computer.ServiceControlEndpoint(t.TempDir())
 	listener, err := computer.ListenLocalControl(endpoint)
 	if err != nil {
@@ -336,12 +336,12 @@ func localHostControlRPCListener(t *testing.T, host *computer.Host) (string, net
 	return endpoint, listener
 }
 
-func newBindingControlTestHost(t *testing.T, controlToken string, callbacks computer.HostControlCallbacks) *bindingControlTestHost {
+func newComputerControlTestHarness(t *testing.T, controlToken string, callbacks computer.ComputerControlCallbacks) *computerControlTestHarness {
 	t.Helper()
-	state := &bindingControlTestCurrentSet{pids: make(map[string]int), daemonInstanceIDs: make(map[string]string)}
-	host, err := computer.NewHost(computer.HostConfig{
+	state := &workspaceDaemonTestCurrentSet{pids: make(map[string]int), daemonInstanceIDs: make(map[string]string)}
+	computerCore, err := computer.NewComputerCore(computer.ComputerCoreConfig{
 		ControlToken: controlToken, ControlCallbacks: callbacks,
-		Spawn: func(workspaceID string) (computer.BindingChild, error) {
+		Spawn: func(workspaceID string) (computer.WorkspaceDaemonProcess, error) {
 			state.mu.Lock()
 			pid := state.pids[workspaceID]
 			delayReady := false
@@ -353,14 +353,14 @@ func newBindingControlTestHost(t *testing.T, controlToken string, callbacks comp
 				}
 			}
 			state.mu.Unlock()
-			return &bindingControlTestChild{pid: pid, state: state, workspace: workspaceID, wait: make(chan computer.RunnerExitClass, 1), readyDelay: delayReady}, nil
+			return &workspaceDaemonTestProcess{pid: pid, state: state, workspace: workspaceID, wait: make(chan computer.WorkspaceDaemonExitClass, 1), readyDelay: delayReady}, nil
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		host.Stop()
+		computerCore.Stop()
 	})
-	return &bindingControlTestHost{host: host, state: state}
+	return &computerControlTestHarness{computerCore: computerCore, state: state}
 }

@@ -9,9 +9,9 @@ import (
 	"github.com/multica-ai/multica/server/internal/agentworkspace"
 )
 
-// ResolveHostWorkspacesRoot resolves the machine-wide checkout root without
-// loading daemon execution configuration.
-func ResolveHostWorkspacesRoot() (string, error) {
+// ResolveComputerWorkspacesRoot resolves the machine-wide checkout root without
+// loading WorkspaceDaemon execution configuration.
+func ResolveComputerWorkspacesRoot() (string, error) {
 	root := strings.TrimSpace(os.Getenv("MULTICA_WORKSPACES_ROOT"))
 	if root == "" {
 		home, err := os.UserHomeDir()

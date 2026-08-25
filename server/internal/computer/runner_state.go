@@ -223,10 +223,10 @@ func readRunnerConnected(path string) (persistedRunnerConnected, error) {
 	return connected, nil
 }
 
-// listRunnerStates reads every persisted Binding Runner state file under
+// listRunnerStates reads every persisted WorkspaceDaemon state file under
 // root without mutating anything. It is used by read-only evidence
 // gathering (doctor); findReclaimableRunners is the mutating counterpart
-// used at Host startup. Corrupt or unreadable entries are silently skipped.
+// used at Computer startup. Corrupt or unreadable entries are silently skipped.
 func listRunnerStates(root string) ([]persistedRunnerState, error) {
 	root = strings.TrimSpace(root)
 	if root == "" {
@@ -254,10 +254,10 @@ func listRunnerStates(root string) ([]persistedRunnerState, error) {
 	return states, nil
 }
 
-// reclaimableRunner is one Workspace slot whose previous-generation Binding
-// Runner process is still alive on this machine. A live process here is
-// never adopted; the current Host drains and terminates it, then spawns its
-// own child through the normal CanSpawn/Reconcile path.
+// reclaimableRunner is one Workspace slot whose previous-generation
+// WorkspaceDaemon process is still alive on this machine. A live process here
+// is never adopted; the current Computer drains and terminates it, then spawns
+// its own process through the normal reconciliation path.
 type reclaimableRunner struct {
 	WorkspaceID      string
 	DaemonInstanceID string
@@ -269,11 +269,11 @@ type reclaimableRunner struct {
 	RunnerEndpoint string
 }
 
-// findReclaimableRunners reads every persisted Binding Runner state
+// findReclaimableRunners reads every persisted WorkspaceDaemon state
 // directory and reports which ones still have a live OS process to reclaim.
-// It never adopts a live process into this Host's own bookkeeping: a live
-// runner found here is handed back to the caller so it can be drained and
-// killed before this Host spawns a replacement.
+// It never adopts a live process into the current Computer's bookkeeping: a
+// WorkspaceDaemon found here is handed back to the caller so it can be drained
+// and killed before the Computer spawns a replacement.
 //
 // Side effect: any state directory whose process is already dead is deleted
 // in place as it is scanned (state file, pid file, connected file, and the
@@ -323,7 +323,7 @@ func findReclaimableRunners(root string, logger *slog.Logger) ([]reclaimableRunn
 				endpoint = connected.RunnerEndpoint
 			}
 			if logger != nil {
-				logger.Info("found reclaimable Binding Runner left by a previous Host generation", "workspace_id", state.WorkspaceID, "pid", pid, "has_endpoint", endpoint != "")
+				logger.Info("found reclaimable WorkspaceDaemon left by a previous Computer generation", "workspace_id", state.WorkspaceID, "pid", pid, "has_endpoint", endpoint != "")
 			}
 			reclaimable = append(reclaimable, reclaimableRunner{
 				WorkspaceID: state.WorkspaceID, DaemonInstanceID: state.DaemonInstanceID, PID: pid, RunnerEndpoint: endpoint,
@@ -345,7 +345,7 @@ func findReclaimableRunners(root string, logger *slog.Logger) ([]reclaimableRunn
 // the reclaim goes straight to signal termination.
 type runnerReclaimOptions struct {
 	StateRoot    string
-	Drain        func(context.Context, string, BindingChildIdentity) error
+	Drain        func(context.Context, string, WorkspaceDaemonIdentity) error
 	PollInterval time.Duration
 	Grace        time.Duration
 	Sleep        func(time.Duration)
@@ -353,20 +353,20 @@ type runnerReclaimOptions struct {
 }
 
 // reclaimRunnerProcess drains and then force-terminates one WorkspaceDaemon
-// process left behind by a previous Host generation, and on confirmed death
-// removes its persisted state so the slot is free for a fresh child.
+// process left behind by a previous Computer generation, and on confirmed
+// death removes its persisted state so the slot is free for a fresh process.
 //
-// Drain (runner:drain) only closes the runner's own admission barrier and
-// cancels in-flight work on the runner side; it never makes the runner process
-// exit on its own. So there is nothing to poll for after a drain attempt — the
-// next step is always terminateProcess, which owns its own bounded
+// Drain (runner:drain) only closes the WorkspaceDaemon's admission barrier and
+// cancels its in-flight work; it never makes the process exit on its own. So
+// there is nothing to poll for after a drain attempt — the next step is always
+// terminateProcess, which owns its own bounded
 // SIGTERM/SIGKILL wait and exit confirmation.
 //
 // It returns an error only when the process could not be confirmed dead; the
 // caller decides what that means for its own bookkeeping.
 func reclaimRunnerProcess(runner reclaimableRunner, options runnerReclaimOptions) error {
 	logger := options.Logger
-	identity := BindingChildIdentity{WorkspaceID: runner.WorkspaceID, DaemonInstanceID: runner.DaemonInstanceID, PID: runner.PID}
+	identity := WorkspaceDaemonIdentity{WorkspaceID: runner.WorkspaceID, DaemonInstanceID: runner.DaemonInstanceID, PID: runner.PID}
 
 	if runner.RunnerEndpoint != "" && options.Drain != nil && identity.Validate() == nil {
 		if logger != nil {
@@ -421,7 +421,7 @@ func terminateProcess(pid int, pollInterval, grace time.Duration, sleep func(tim
 	if err != nil {
 		return err
 	}
-	if err := stopBindingProcess(process); err != nil {
+	if err := stopWorkspaceDaemonProcess(process); err != nil {
 		if alive, known := processAlive(pid); known && !alive {
 			return nil
 		}

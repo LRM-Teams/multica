@@ -465,7 +465,7 @@ func TestAgentManualStopPersistsDesiredStoppedState(t *testing.T) {
 	t.Fatal("manually started Agent was not restored as a desired launch")
 }
 
-func TestAgentManualStopFailsWhenRunnerIsUnavailable(t *testing.T) {
+func TestAgentManualStopPersistsWhenWorkspaceDaemonIsUnavailable(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -475,15 +475,15 @@ func TestAgentManualStopFailsWhenRunnerIsUnavailable(t *testing.T) {
 	t.Cleanup(func() { testHandler.AgentRestartNotifier = previous })
 
 	stop := invokeAgentLifecycleAction(t, agentID, "stop")
-	if stop.Code != http.StatusConflict || !containsResponseBody(stop, "agent_runtime_offline") {
-		t.Fatalf("manual stop status=%d body=%s, want 409 agent_runtime_offline", stop.Code, stop.Body.String())
+	if stop.Code != http.StatusAccepted {
+		t.Fatalf("manual stop status=%d body=%s, want accepted desired state", stop.Code, stop.Body.String())
 	}
 	var stoppedAt pgtype.Timestamptz
 	if err := testPool.QueryRow(context.Background(), `SELECT stopped_at FROM agent WHERE id = $1`, agentID).Scan(&stoppedAt); err != nil {
 		t.Fatal(err)
 	}
-	if stoppedAt.Valid {
-		t.Fatal("failed manual Stop left the Agent in desired stopped state")
+	if !stoppedAt.Valid {
+		t.Fatal("undelivered manual Stop did not preserve the desired stopped state")
 	}
 }
 

@@ -88,6 +88,9 @@ func TestBuildPromptInjectsCurrentManagerAuthorityIntoResumedSession(t *testing.
 		"Ignore any other session/brief for roles not listed",
 		"ordinary self-owned Reminder capability",
 		"only when you judge a later follow-up is useful",
+		"Adaptive Goal Mode:",
+		"when a human states a channel-level overall goal/outcome",
+		"Never claim the Goal is set until create succeeds",
 		"User message:\nhello",
 	} {
 		if !strings.Contains(promoted, want) {

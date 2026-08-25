@@ -544,9 +544,10 @@ The legacy `multica project` command is not available.
 
 ### Adaptive channel goals
 
-Goal Mode is opt-in per group channel. Ordinary messages and one-step tasks do
-not create a goal. A channel manager may create one sustained goal when work
-needs multi-step or multi-agent coordination:
+Goal Mode is opt-in per group channel. Greetings, pure questions, and trivial
+one-step asks do not create a goal. When a human states a channel-level overall
+goal/outcome (or explicitly asks the manager to set/start goal mode), the
+channel manager should create one sustained goal if none exists:
 
 ```bash
 multica goal create --channel '#launch' \

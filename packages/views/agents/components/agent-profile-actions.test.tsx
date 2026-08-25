@@ -164,8 +164,13 @@ describe("AgentProfileActions", () => {
   });
 
   it("uses Runner presence, not work status, to offer Start", async () => {
-    render(<AgentProfileActions agent={agent} canManage presence={mocks.presence} />);
-    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Start Agent" })));
+    render(
+      <AgentProfileActions agent={agent} canManage presence={mocks.presence} layout="icons" />,
+    );
+    fireEvent.click(screen.getByTestId("agent-profile-chrome-actions-menu"));
+    await act(async () =>
+      fireEvent.click(screen.getByTestId("agent-profile-chrome-action-start")),
+    );
     expect(mocks.startAgent).toHaveBeenCalledWith("agent-1");
     expect(mocks.stopAgent).not.toHaveBeenCalled();
     expect(mocks.invalidateQueries).toHaveBeenCalledWith({
@@ -181,9 +186,13 @@ describe("AgentProfileActions", () => {
         agent={{ ...agent, status: "offline" }}
         canManage
         presence={mocks.presence}
+        layout="icons"
       />,
     );
-    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Stop Agent" })));
+    fireEvent.click(screen.getByTestId("agent-profile-chrome-actions-menu"));
+    await act(async () =>
+      fireEvent.click(screen.getByTestId("agent-profile-chrome-action-start")),
+    );
     expect(mocks.stopAgent).toHaveBeenCalledWith("agent-1");
     expect(mocks.startAgent).not.toHaveBeenCalled();
     expect(mocks.toastSuccess).not.toHaveBeenCalled();
@@ -199,17 +208,16 @@ describe("AgentProfileActions", () => {
     expect(screen.queryByTestId("agent-profile-action-message")).not.toBeInTheDocument();
   });
 
-  it("renders labeled stack actions including Delete", () => {
+  it("reduces the stack to Delete — lifecycle and restart live only in the chrome menu", () => {
     render(<AgentProfileActions agent={agent} canManage presence={mocks.presence} />);
-    expect(screen.queryByTestId("agent-profile-action-message")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Start Agent" })).toHaveTextContent("Start Agent");
-    expect(screen.getByRole("button", { name: "Restart/Reset" })).toHaveTextContent("Restart/Reset");
-    expect(screen.getByRole("button", { name: "Delete" })).toHaveTextContent("Delete");
     expect(screen.getByText("Actions")).toBeInTheDocument();
-    expect(screen.getAllByTestId("agent-profile-action-start")).toHaveLength(1);
-
-    fireEvent.click(screen.getByRole("button", { name: "Restart/Reset" }));
-    expect(screen.getByTestId("agent-restart-modal")).toHaveTextContent("Restart and reset choices");
+    expect(screen.getByRole("button", { name: "Delete" })).toHaveTextContent("Delete");
+    expect(screen.getAllByTestId("agent-profile-action-delete")).toHaveLength(1);
+    expect(screen.queryByTestId("agent-profile-action-message")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("agent-profile-action-start")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("agent-profile-action-restart")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Start Agent" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Restart/Reset" })).not.toBeInTheDocument();
     expect(screen.queryByTestId("agent-profile-action-stop")).not.toBeInTheDocument();
     expect(screen.queryByText("Stop all")).not.toBeInTheDocument();
   });

@@ -32,8 +32,9 @@ import { AgentRestartModal } from "./agent-restart-modal";
 import { ConfirmDeleteAgent } from "./confirm-delete-agent";
 
 /**
- * Agent profile actions. The Profile body keeps the labeled ACTIONS stack
- * (Start/Stop, Restart/Reset, Delete). Chrome (Linear-style, `layout="icons"`)
+ * Agent profile actions. Every ordinary action lives in exactly one place —
+ * the chrome menu — and the Profile body's ACTIONS stack is reduced to the
+ * destructive Delete alone. Chrome (Linear-style, `layout="icons"`)
  * exposes a single ghost `⋯` trigger that opens a dropdown menu with
  * Message, the Start/Stop toggle, and Restart/Reset as labeled items — the
  * panel's ✕ close control sits next to it, owned by the shared panel shell.
@@ -254,7 +255,7 @@ export function AgentProfileActions({
     );
   }
 
-  if (!showLifecycle && !showRestart && !showDelete) {
+  if (!showDelete) {
     return dialogs;
   }
 
@@ -263,54 +264,21 @@ export function AgentProfileActions({
       <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
         {t(($) => $.side_panel.actions_section)}
       </h3>
-      <div className="flex flex-col gap-2">
-        {showLifecycle ? (
-          <Button
-            type="button"
-            variant="outline"
-            size="lg"
-            className="w-full gap-2"
-            data-testid="agent-profile-action-start"
-            disabled={lifecycleDisabled}
-            onClick={() => void handleLifecycle()}
-          >
-            {lifecycleIcon}
-            {lifecycleLabel}
-          </Button>
-        ) : null}
-
-        {showRestart ? (
-          <Button
-            type="button"
-            variant="outline"
-            size="lg"
-            className="w-full gap-2"
-            data-testid="agent-profile-action-restart"
-            onClick={() => setRestartOpen(true)}
-          >
-            <RotateCcw className="size-4 shrink-0" aria-hidden />
-            {restartLabel}
-          </Button>
-        ) : null}
-
-        {showDelete ? (
-          <div className="mt-1 border-t border-border pt-3">
-            <Button
-              type="button"
-              // LRM-593 lock A: Delete = the ONLY solid destructive (filled
-              // bg-destructive + white text).
-              variant="destructive"
-              size="lg"
-              className="w-full gap-2 bg-destructive text-white hover:bg-destructive/90 dark:bg-destructive dark:hover:bg-destructive/90"
-              data-testid="agent-profile-action-delete"
-              disabled={deleting}
-              onClick={() => setConfirmDelete(true)}
-            >
-              <Trash2 className="size-4 shrink-0" aria-hidden />
-              {t(($) => $.side_panel.actions_delete)}
-            </Button>
-          </div>
-        ) : null}
+      <div className="border-t border-border pt-3">
+        <Button
+          type="button"
+          // LRM-593 lock A: Delete = the ONLY solid destructive (filled
+          // bg-destructive + white text).
+          variant="destructive"
+          size="lg"
+          className="w-full gap-2 bg-destructive text-white hover:bg-destructive/90 dark:bg-destructive dark:hover:bg-destructive/90"
+          data-testid="agent-profile-action-delete"
+          disabled={deleting}
+          onClick={() => setConfirmDelete(true)}
+        >
+          <Trash2 className="size-4 shrink-0" aria-hidden />
+          {t(($) => $.side_panel.actions_delete)}
+        </Button>
       </div>
 
       {dialogs}

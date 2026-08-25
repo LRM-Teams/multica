@@ -387,11 +387,26 @@ func compileV6WorkManifestTx(ctx context.Context, tx pgx.Tx, workspaceID, runID,
 		taskContext = value
 	}
 	manifestMap := map[string]any{"contract_kind": "work_manifest", "schema_version": 6, "manifest_id": manifestID, "workspace_id": workspaceID, "run_id": runID, "work_item_id": workItemID, "attempt_id": attemptID, "assigned_agent_id": agentID, "goal": map[string]any{"goal_version": goalVersion, "goal": goal, "scope": jsonObjectOrEmpty(scope), "audience": audience, "freshness": freshness, "language": language, "source_policy": jsonObjectOrEmpty(sourcePolicy)}, "branch_refs": branchRefs, "runtime_protocol_version": "research-run-v6-runtime-v1", "mission_prompt": mission, "expected_result_schema": expectedSchema, "artifacts": artifacts, "through_state_version": stateVersion, "through_event_sequence": throughSequence}
-	if len(inputNodes) > 0 {
-		manifestMap["input_nodes"] = inputNodes
-	}
-	if taskContext != nil {
-		manifestMap["task_context"] = taskContext
+	// Discussion and integration dispatch context is carried inside the
+	// schema-approved free-form task_specific_schema object.  The frozen V6
+	// work_manifest contract intentionally rejects ad-hoc top-level fields.
+	if expectedSchema == string(V6ContractDiscussionTurnSubmission) || expectedSchema == string(V6ContractIntegrationSubmission) {
+		dispatchContext := map[string]any{}
+		if len(inputNodes) > 0 {
+			dispatchContext["input_nodes"] = inputNodes
+		}
+		if taskContext != nil {
+			dispatchContext["task_context"] = taskContext
+		}
+		if len(dispatchContext) > 0 {
+			if taskSchemaMap, ok := taskSchema.(map[string]any); ok {
+				for key, value := range dispatchContext {
+					taskSchemaMap[key] = value
+				}
+			} else if taskSchema == nil {
+				taskSchema = dispatchContext
+			}
+		}
 	}
 	if expectedSchema == string(V6ContractAtomicResultSubmission) {
 		var taskID string

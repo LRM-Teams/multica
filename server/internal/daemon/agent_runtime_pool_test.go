@@ -1673,3 +1673,18 @@ func TestIsResidentAcceptBusyErr(t *testing.T) {
 		})
 	}
 }
+
+func TestStampRuntimeActivityRefreshesSilenceClock(t *testing.T) {
+	slot := &agentRuntimeSlot{lastRuntimeActivityAt: time.Now().Add(-20 * time.Minute)}
+	stale, ok := slot.silentFor(time.Now())
+	if !ok || stale < 15*time.Minute {
+		t.Fatalf("precondition: stale=%v ok=%v, want >= 15m", stale, ok)
+	}
+	slot.stampRuntimeActivity()
+	if _, ok := slot.silentFor(time.Now()); !ok {
+		t.Fatal("silence clock lost after progress stamp")
+	}
+	if stale, _ = slot.silentFor(time.Now()); stale > time.Minute {
+		t.Fatalf("stale after stamp = %v, want ~0 (progress evidence must reset the clock)", stale)
+	}
+}

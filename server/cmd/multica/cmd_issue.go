@@ -762,14 +762,13 @@ func runIssuePullRequests(cmd *cobra.Command, args []string) error {
 }
 
 func runIssuePullRequestsRescan(cmd *cobra.Command, args []string) error {
-	client, err := newAPIClient(cmd)
-	if err != nil {
-		return err
-	}
-
 	prNumber, err := strconv.ParseInt(args[1], 10, 32)
 	if err != nil || prNumber <= 0 {
 		return fmt.Errorf("pull request number must be a positive integer")
+	}
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
 	}
 
 	ctx, cancel := cli.APIContext(context.Background())

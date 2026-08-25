@@ -584,6 +584,7 @@ export function layoutStarGraph(
       : Math.max(1, members.length);
     const layerStep = Math.max(92, largestDiameter + padding + 24);
     const depthCadence = [0, 42, 14, 58, 26, 48] as const;
+    let legacyRadial = baseRadial;
     for (let i = 0; i < members.length; i += 1) {
       const n = members[i]!;
       // Reuse previous position when signature is stable.
@@ -620,10 +621,17 @@ export function layoutStarGraph(
         : group === "__free__"
           ? orderedPosition * 220
           : depthCadence[orderedPosition % depthCadence.length]!;
-      const radial =
-        baseRadial +
-        layer * layerStep +
-        depthOffset;
+      const legacyCurrentRadius = nodeRadius(n);
+      const legacyPreviousRadius =
+        i > 0 ? nodeRadius(members[i - 1]!) : 0;
+      legacyRadial = Math.max(
+        legacyRadial,
+        rootRadius +
+          (legacyCurrentRadius + legacyPreviousRadius + padding) * 0.4,
+      );
+      const radial = hasCanonicalOrigin
+        ? baseRadial + layer * layerStep + depthOffset
+        : legacyRadial;
       pos.set(n.id, { x: Math.cos(angle) * radial, y: Math.sin(angle) * radial });
       angleOf.set(n.id, angle);
       offsetOf.set(n.id, radial);

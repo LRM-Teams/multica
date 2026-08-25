@@ -2,23 +2,15 @@ package daemon
 
 import (
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"strings"
 
 	"github.com/multica-ai/multica/server/internal/cli"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
-
-func (d *Daemon) localControlAuthorized(r *http.Request) bool {
-	token := strings.TrimSpace(d.cfg.LocalControlToken)
-	provided := strings.TrimSpace(r.Header.Get("X-Multica-Control-Token"))
-	return token != "" && provided != "" && subtle.ConstantTimeCompare([]byte(token), []byte(provided)) == 1
-}
 
 type credentialProxyMessageCheckRequest struct {
 	AgentID string `json:"agent_id"`
@@ -300,9 +292,9 @@ func (d *Daemon) credentialProxyMessageMutationHandler(path string, bodyFor any)
 	}
 }
 
-func (d *Daemon) registerCredentialProxyRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("/internal/agent-api/inbox", d.agentAppInboxHandler())
-	mux.HandleFunc("/internal/agent-api/inbox/ack", d.agentAppInboxAckHandler())
+// registerCredentialProxyMessageRoutes wires only message and coverage
+// endpoints; local listener assembly belongs to local_control.go.
+func (d *Daemon) registerCredentialProxyMessageRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /credential-proxy/messages/check", d.credentialProxyMessageCheckHandler())
 	mux.HandleFunc("POST /credential-proxy/messages/read", d.credentialProxyMessageReadHandler())
 	mux.HandleFunc("POST /credential-proxy/messages/send", d.credentialProxyMessageSendHandler())
@@ -310,19 +302,4 @@ func (d *Daemon) registerCredentialProxyRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /credential-proxy/messages/resolve", d.credentialProxyMessageResolveHandler())
 	mux.HandleFunc("POST /credential-proxy/messages/react", d.credentialProxyMessageReactHandler())
 	mux.HandleFunc("POST "+MessageCoverageCommitPath, d.credentialProxyMessageCoverageCommitHandler())
-	mux.HandleFunc("/api/", d.credentialProxyAgentAPIHandler())
-}
-
-func (d *Daemon) serveLocalHTTP(ctx context.Context, ln net.Listener, handler http.Handler, name string) {
-	srv := &http.Server{Handler: handler}
-
-	go func() {
-		<-ctx.Done()
-		srv.Close()
-	}()
-
-	d.logger.Info(name+" listening", "addr", ln.Addr().String())
-	if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
-		d.logger.Warn(name+" error", "error", err)
-	}
 }

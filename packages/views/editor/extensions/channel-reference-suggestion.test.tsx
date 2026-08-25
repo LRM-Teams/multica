@@ -46,7 +46,7 @@ function fakeQc(channels: Channel[]): QueryClient {
 }
 
 describe("createChannelReferenceSuggestion", () => {
-  it("returns cached group channels matching the query, filtering out DMs and archived channels", () => {
+  it("returns cached group channels matching the query, filtering out DMs and archived channels", async () => {
     const qc = fakeQc([
       fakeChannel({ id: "c1", name: "general" }),
       fakeChannel({ id: "c2", name: "engineering", description: "eng talk" }),
@@ -57,21 +57,21 @@ describe("createChannelReferenceSuggestion", () => {
     ]);
 
     const config = createChannelReferenceSuggestion(qc);
-    const items = config.items!({ query: "eng", editor: {} as never }) as MentionItem[];
+    const items = await config.items!({ query: "eng", editor: {} as never });
 
     expect(items).toEqual([
       expect.objectContaining({ id: "c2", label: "engineering", type: "channel" }),
     ]);
   });
 
-  it("returns every eligible channel when the query is empty", () => {
+  it("returns every eligible channel when the query is empty", async () => {
     const qc = fakeQc([
       fakeChannel({ id: "c1", name: "general" }),
       fakeChannel({ id: "c2", name: "engineering" }),
     ]);
 
     const config = createChannelReferenceSuggestion(qc);
-    const items = config.items!({ query: "", editor: {} as never }) as MentionItem[];
+    const items = await config.items!({ query: "", editor: {} as never });
 
     expect(items.map((i) => i.id)).toEqual(["c1", "c2"]);
   });

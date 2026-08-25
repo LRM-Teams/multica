@@ -44,6 +44,34 @@ func TestRecoverV6ZombieReadyWorkItemFailsBudgetExhausted(t *testing.T) {
 	}
 }
 
+func TestRecoverV6ReleasesWorkingMembershipAfterPreviouslySettledAttempt(t *testing.T) {
+	run := newTransactionRecoveryRun(t, "stale working membership recovery")
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_session SET orchestrator_version='research-run-v6' WHERE id=$1::uuid`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	membershipID, workItemID := seedV6RecoveryWorkItem(t, run, "ready", time.Now())
+	attemptID := seedV6RecoveryAttempt(t, run, membershipID, workItemID)
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_work_item_attempt
+		SET status='failed',failure_class='contract_rejected',completed_at=now(),updated_at=now()
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid`,
+		run.fixture.workspaceID, run.fixture.sessionID, attemptID); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := run.store.RecoverExpiredV6WorkItems(run.ctx, 10); err != nil {
+		t.Fatal(err)
+	}
+	var state string
+	if err := run.pool.QueryRow(run.ctx, `SELECT state FROM research_team_membership
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid`,
+		run.fixture.workspaceID, run.fixture.sessionID, membershipID).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != "idle" {
+		t.Fatalf("membership=%s want idle after the only Attempt settled", state)
+	}
+}
+
 func TestRecoverV6RetryableRuntimeCapacityFailureReopensOnce(t *testing.T) {
 	run := newTransactionRecoveryRun(t, "retryable runtime capacity recovery")
 	if _, err := run.pool.Exec(run.ctx, `UPDATE research_session SET orchestrator_version='research-run-v6' WHERE id=$1::uuid`, run.fixture.sessionID); err != nil {

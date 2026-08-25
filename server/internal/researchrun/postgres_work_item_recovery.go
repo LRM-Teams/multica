@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -431,34 +430,36 @@ func (s *PostgresStore) RecoverExpiredV6WorkItems(ctx context.Context, limit int
 	// Membership state tracks active V6 Work, not the lifetime of the Agent.
 	// Terminal Attempts must release the member or the graph permanently shows
 	// "working" after execution has already ended.
-	workItemIDs := make([]uuid.UUID, 0, len(items))
-	for _, item := range items {
-		workItemID, parseErr := uuid.Parse(item.workItemID)
-		if parseErr != nil {
-			return 0, parseErr
-		}
-		workItemIDs = append(workItemIDs, workItemID)
-	}
-	if len(workItemIDs) > 0 {
-		_, err = tx.Exec(ctx, `
+	_, err = tx.Exec(ctx, `
+		WITH stale AS (
+		  SELECT m.workspace_id,m.session_id,m.id
+		  FROM research_team_membership m
+		  JOIN research_session s ON s.workspace_id=m.workspace_id AND s.id=m.session_id
+		  WHERE s.orchestrator_version='research-run-v6'
+		    AND m.state='working'
+		    AND EXISTS (
+		      SELECT 1 FROM research_work_item_attempt settled
+		      WHERE settled.workspace_id=m.workspace_id AND settled.session_id=m.session_id
+		        AND settled.membership_id=m.id
+		        AND settled.status IN ('succeeded','failed','cancelled','lost')
+		    )
+		    AND NOT EXISTS (
+		      SELECT 1 FROM research_work_item_attempt active
+		      WHERE active.workspace_id=m.workspace_id AND active.session_id=m.session_id
+		        AND active.membership_id=m.id
+		        AND active.status IN ('dispatching','running')
+		    )
+		  ORDER BY m.session_id,m.id
+		  FOR UPDATE OF m SKIP LOCKED
+		  LIMIT $1
+		)
 		UPDATE research_team_membership m
 		SET state='idle'
-		WHERE m.state='working'
-		  AND EXISTS (
-		    SELECT 1 FROM research_work_item_attempt settled
-		    WHERE settled.membership_id=m.id
-		      AND settled.work_item_id=ANY($1::uuid[])
-		      AND settled.status IN ('succeeded','failed','cancelled','lost')
-		  )
-		  AND NOT EXISTS (
-		    SELECT 1 FROM research_work_item_attempt active
-		    WHERE active.membership_id=m.id
-		      AND active.status IN ('dispatching','running')
-		  )
-	`, workItemIDs)
-		if err != nil {
-			return 0, err
-		}
+		FROM stale
+		WHERE m.workspace_id=stale.workspace_id AND m.session_id=stale.session_id AND m.id=stale.id
+	`, limit)
+	if err != nil {
+		return 0, err
 	}
 	for _, item := range items {
 		eventKey := fmt.Sprintf("v6-work-item-recovered:%s:%d", item.workItemID, item.version)

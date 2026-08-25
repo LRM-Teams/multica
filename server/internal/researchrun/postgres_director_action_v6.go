@@ -261,8 +261,10 @@ func (s *PostgresStore) executeV6DirectorProposal(ctx context.Context, submissio
 			err = s.executeV6CreateAgentAction(ctx, proposal, cycleID, action, liveStateVersion)
 		case "create_work_item", "create_task":
 			err = s.executeV6CreateWorkAction(ctx, proposal, cycleID, action, liveStateVersion)
-		case "create_match", "open_discussion", "create_dispute", "create_integration", "create_review":
-			collaborationKind := map[string]string{"create_match": "match", "open_discussion": "discussion", "create_dispute": "resolve_conflict", "create_integration": "integration", "create_review": "review"}[action.Kind]
+		case "open_discussion", "create_integration":
+			err = s.executeV6OpenIntegrationDiscussionAction(ctx, proposal, action, goalVersion, liveStateVersion)
+		case "create_match", "create_dispute", "create_review":
+			collaborationKind := map[string]string{"create_match": "match", "create_dispute": "resolve_conflict", "create_review": "review"}[action.Kind]
 			action.Payload = withV6ActionKind(action.Payload, collaborationKind)
 			err = s.executeV6CreateWorkAction(ctx, proposal, cycleID, action, liveStateVersion)
 		case "create_branch":

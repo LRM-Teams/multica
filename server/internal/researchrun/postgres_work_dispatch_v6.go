@@ -323,17 +323,28 @@ func compileV6WorkManifestTx(ctx context.Context, tx pgx.Tx, workspaceID, runID,
 		rows.Close()
 	}
 	artifacts := []any{}
-	rows, err = tx.Query(ctx, `SELECT DISTINCT v.id::text,p.entity_kind,v.content_hash FROM research_work_item w JOIN research_discussion_input di ON di.discussion_id=w.target_id JOIN research_artifact_version v ON v.id=di.node_artifact_version_id JOIN research_artifact_passport p ON p.id=v.artifact_id WHERE w.id=$1::uuid ORDER BY v.id::text`, workItemID)
+	inputNodes := []V6NodeRef{}
+	rows, err = tx.Query(ctx, `SELECT DISTINCT v.id::text,p.entity_kind,v.content_hash,
+		CASE WHEN rn.id IS NOT NULL THEN 'result_s' ELSE 'insight' END,
+		COALESCE(rn.id::text,iv.insight_id::text),COALESCE(iv.tier,'S')
+		FROM research_work_item w
+		JOIN research_discussion_input di ON di.discussion_id=w.target_id
+		JOIN research_artifact_version v ON v.id=di.node_artifact_version_id
+		JOIN research_artifact_passport p ON p.id=v.artifact_id
+		LEFT JOIN research_result_node rn ON rn.artifact_version_id=v.id
+		LEFT JOIN research_insight_version iv ON iv.artifact_version_id=v.id
+		WHERE w.id=$1::uuid ORDER BY v.id::text`, workItemID)
 	if err != nil {
 		return nil, "", err
 	}
 	for rows.Next() {
-		var id, kind, hash string
-		if err = rows.Scan(&id, &kind, &hash); err != nil {
+		var id, kind, hash, nodeKind, nodeID, tier string
+		if err = rows.Scan(&id, &kind, &hash, &nodeKind, &nodeID, &tier); err != nil {
 			rows.Close()
 			return nil, "", err
 		}
 		artifacts = append(artifacts, map[string]any{"artifact_version_id": id, "kind": kind, "representation": "full", "representation_hash": hash, "use_kind": "integration_input", "reason": "已冻结的 Work Item 输入。"})
+		inputNodes = append(inputNodes, V6NodeRef{Kind: nodeKind, ID: nodeID, VersionID: id, Tier: V6Tier(tier), ContentHash: hash})
 	}
 	if err = rows.Err(); err != nil {
 		rows.Close()
@@ -371,7 +382,17 @@ func compileV6WorkManifestTx(ctx context.Context, tx pgx.Tx, workspaceID, runID,
 	if value, ok := config["task_specific_schema"]; ok {
 		taskSchema = value
 	}
+	taskContext := any(nil)
+	if value, ok := config["task_context"]; ok {
+		taskContext = value
+	}
 	manifestMap := map[string]any{"contract_kind": "work_manifest", "schema_version": 6, "manifest_id": manifestID, "workspace_id": workspaceID, "run_id": runID, "work_item_id": workItemID, "attempt_id": attemptID, "assigned_agent_id": agentID, "goal": map[string]any{"goal_version": goalVersion, "goal": goal, "scope": jsonObjectOrEmpty(scope), "audience": audience, "freshness": freshness, "language": language, "source_policy": jsonObjectOrEmpty(sourcePolicy)}, "branch_refs": branchRefs, "runtime_protocol_version": "research-run-v6-runtime-v1", "mission_prompt": mission, "expected_result_schema": expectedSchema, "artifacts": artifacts, "through_state_version": stateVersion, "through_event_sequence": throughSequence}
+	if len(inputNodes) > 0 {
+		manifestMap["input_nodes"] = inputNodes
+	}
+	if taskContext != nil {
+		manifestMap["task_context"] = taskContext
+	}
 	if expectedSchema == string(V6ContractAtomicResultSubmission) {
 		var taskID string
 		if err = tx.QueryRow(ctx, `SELECT id::text FROM research_task WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND work_item_id=$3::uuid`, workspaceID, runID, workItemID).Scan(&taskID); err != nil {

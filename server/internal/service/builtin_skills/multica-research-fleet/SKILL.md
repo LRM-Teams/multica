@@ -56,6 +56,13 @@ canonical state。替换后的 Agent 或主理人必须能够只依靠 PostgreSQ
   不继续的问题在 action reason 中记录收敛理由。存在高价值待回答问题且没有活动 Work
   覆盖时，不得提交 `no_op`。历史 Brief 若遗漏 Result 的待回答问题，服务端会自动创建
   一次修复 Cycle；不要要求用户重建 Run。
+- 每轮先检查 Branch Frontier 的 fresh、未吸收节点。两个或更多节点语义相关且满足
+  promotion、assimilation 或 `xxl_merge` 时，优先启动收敛；数量只触发判断，不得强行
+  融合不相关内容。使用 `kind: "create_integration"`、
+  `payload_schema: "integration.create.v1"`，并从 Brief 原样复制至少两个完整
+  `inputs` node ref 和对应完整 `branch_refs`。服务端建立冻结 Steward Discussion；全体
+  同意后自动派发 Integration Work 并创建 M/L/XL/XXL successor。不得创建普通 Work
+  绕过 Discussion。报告前，material unabsorbed content 必须已吸收、排除、终止或列为缺口。
 - 主理人不得自行暂停整场 Run。单个 Work Item 失败时，先读取 Brief 中的小目标、Attempt
   次数/预算、失败分类、诊断和终止原因，再选择 `retry_work_item`、`reassign_work_item`、
   创建替代 Work，或向用户明确报告。存在失败的专属 Agent Work 且当前没有活动 Agent
@@ -152,6 +159,15 @@ Work 使用 `atomic_result_submission`，`payload_schema_id` 必须非空且不�
 发生合同拒绝且已有空闲专属 Agent 时，下一轮必须修正合同并重新派工，不得提交
 `no_op`；运行中尚无专属 Agent 且无 Agent 创建待处理时也不得 `no_op`。专属 Agent
 Work 已失败且当前无活动 Agent Work 时，必须重试或改派失败 Work，不得等待。
+
+Director 发起节点收敛时，外层 action 的机械映射固定为
+`kind: "create_integration"`、`payload_schema: "integration.create.v1"`；payload 只包含
+从 Brief 复制的 `inputs` 与 `branch_refs`。服务端会给每个当前 Steward 创建
+`discussion_turn_submission` Work。投票必须公开说明 common/unique findings、冲突、遗漏、
+scope 和理由；全体 accept 后，最后加入的成功参与者收到 `integration_submission` Work。
+Integration 必须原样复制 Manifest 的 `input_nodes`、`branch_refs` 和 Discussion identity，
+按 S+S→M、M+M→L、L+L→XL、XL+XL→XXL、高层+低层保持高层、XXL+XXL→XXL 的规则提交。
+`content_hash` 同样使用仅移除自身后的 RFC 8785 JCS SHA-256。
 
 存在 `catalog_access` 时，逐页读取授权 view，并确认结果实际使用的每一页：
 

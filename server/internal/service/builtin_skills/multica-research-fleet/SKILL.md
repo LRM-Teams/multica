@@ -135,7 +135,12 @@ multica research director-brief-ack <session-id> <work-item-id> <attempt-id> \
 workspace/Run/Work/Attempt 和 Manifest 身份；从 Brief 复制 Director
 assignment/generation、Brief 身份、页数、state version 和 event sequence。每个 action
 必须使用根合同允许的 action kind，以及 `manifest.task_specific_schema.payload_schemas`
-中冻结的一个 payload schema。不得猜测旧 `research.*` schema 名。Agent 创建是异步的：
+中冻结的一个 payload schema。创建 atomic research Work 时，外层 action 的机械映射固定为
+`kind: "create_work_item"`、`payload_schema: "work.create.v1"`；内层 action payload 固定包含
+`kind: "research"` 和 `expected_result_schema_id: "atomic_result_submission"`。不得把
+`work`、`work.create`、`create_work`、`create_collaboration`、`collaboration_create` 或
+`collaboration.create.v1` 当作 action kind，也不得靠重复提交猜测枚举值。不得猜测旧
+`research.*` schema 名。Agent 创建是异步的：
 不得把 Work 分给同一个 proposal 中刚申请的 Agent；等待 joined 事件和下一次 Director
 cycle。主理人只负责规划、组队、派工和整合，不得把原子调研 Work 指派给自己。原子
 Work 使用 `atomic_result_submission`，`payload_schema_id` 必须非空且不得为

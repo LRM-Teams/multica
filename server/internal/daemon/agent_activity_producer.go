@@ -351,7 +351,7 @@ func (p *agentActivityProducer) publishLocked(key agentActivityProducerKey, snap
 	return nil
 }
 
-s reports current status, session, and Raft's latest complete
+// ReconnectFrames reports current status, session, and Raft's latest complete
 // Activity frame for every managed Agent. Replaying the complete frame keeps
 // its Timeline Entry attached to the Snapshot across a connection loss.
 func (p *agentActivityProducer) ReconnectFrames() []agentActivityReconnectFrame {

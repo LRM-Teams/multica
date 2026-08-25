@@ -559,6 +559,8 @@ func TestNotesAssistantSkillRequiresSelectiveReads(t *testing.T) {
 		"final assistant output",
 		"Do **not** run `multica message send`",
 		"context_note_page_id",
+		"Insert below note",
+		"Insert as child note",
 		"references/notes-assistant-source-map.md",
 	} {
 		if !strings.Contains(body, want) && !strings.Contains(skill.Content, want) {

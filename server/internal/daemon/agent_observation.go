@@ -63,6 +63,20 @@ type AgentRuntimeStageObservationData struct {
 
 func (AgentRuntimeStageObservationData) agentObservationData() {}
 
+// AgentRuntimeDiagnosticObservationData keeps the provider's typed warning
+// separate from generic runtime-stage facts. The daemon sanitizes these
+// fields before they become Activity presentation.
+type AgentRuntimeDiagnosticObservationData struct {
+	RuntimeID string
+	Source    string
+	Reference string
+	Name      string
+	Kind      string
+	Detail    string
+}
+
+func (AgentRuntimeDiagnosticObservationData) agentObservationData() {}
+
 type AgentMessageAcceptanceObservationData struct {
 	RuntimeID string
 }
@@ -130,7 +144,7 @@ func (observation AgentObservation) Validate() error {
 		}
 		return nil
 
-	case AgentObservationRuntimeStarting, AgentObservationRuntimeWorking, AgentObservationRuntimeThinking, AgentObservationRuntimeTool, AgentObservationRuntimeCompacting, AgentObservationRuntimeCompacted, AgentObservationRuntimeCompactionStale, AgentObservationRuntimeIdle, AgentObservationRuntimeDiagnostic, AgentObservationRuntimeStalled:
+	case AgentObservationRuntimeStarting, AgentObservationRuntimeWorking, AgentObservationRuntimeThinking, AgentObservationRuntimeTool, AgentObservationRuntimeCompacting, AgentObservationRuntimeCompacted, AgentObservationRuntimeCompactionStale, AgentObservationRuntimeIdle, AgentObservationRuntimeStalled:
 		if err := observation.validateAgentInstanceID(); err != nil {
 			return err
 		}
@@ -143,6 +157,16 @@ func (observation AgentObservation) Validate() error {
 		}
 		if observation.Kind != AgentObservationRuntimeTool && (strings.TrimSpace(data.ToolName) != "" || strings.TrimSpace(data.ToolCallID) != "" || len(data.ToolInput) != 0) {
 			return errors.New("non-tool Agent Runtime stage observation cannot carry tool identity")
+		}
+		return nil
+
+	case AgentObservationRuntimeDiagnostic:
+		if err := observation.validateAgentInstanceID(); err != nil {
+			return err
+		}
+		data, ok := observation.Data.(AgentRuntimeDiagnosticObservationData)
+		if !ok || strings.TrimSpace(data.RuntimeID) == "" || strings.TrimSpace(data.Name) == "" {
+			return observationDataTypeError(observation.Kind)
 		}
 		return nil
 

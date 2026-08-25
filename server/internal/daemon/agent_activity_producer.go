@@ -3,6 +3,7 @@ package daemon
 import (
 	"encoding/json"
 	"errors"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -36,6 +37,42 @@ func activityToolStartEntry(toolName, toolInput string) (protocol.AgentActivityE
 
 func activitySystemEntry(title, text string) (protocol.AgentActivityEntry, error) {
 	body, err := json.Marshal(protocol.AgentActivitySystemBody{Title: title, Text: text})
+	if err != nil {
+		return protocol.AgentActivityEntry{}, err
+	}
+	return protocol.AgentActivityEntry{Kind: "system", Body: body}, nil
+}
+
+var diagnosticSecretPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9._~+\-/=]+`),
+	regexp.MustCompile(`(?i)\b(?:sk|ghp|github_pat|xox[baprs])-[-A-Za-z0-9_]+`),
+	regexp.MustCompile(`(?i)\b(?:api[_-]?key|token|password|secret|authorization)\s*[:=]\s*["']?[^\s"']+`),
+}
+
+func sanitizeDiagnosticText(value string) string {
+	value = strings.TrimSpace(value)
+	for _, pattern := range diagnosticSecretPatterns {
+		value = pattern.ReplaceAllString(value, "[REDACTED]")
+	}
+	return value
+}
+
+func activityDiagnosticEntry(source, reference, title, kind, text string) (protocol.AgentActivityEntry, error) {
+	source = sanitizeDiagnosticText(source)
+	reference = sanitizeDiagnosticText(reference)
+	title = sanitizeDiagnosticText(title)
+	kind = sanitizeDiagnosticText(kind)
+	text = sanitizeDiagnosticText(text)
+	if title == "" {
+		title = "Runtime warning"
+	}
+	if kind != "" && !strings.Contains(strings.ToLower(title), strings.ToLower(kind)) {
+		title += " (" + kind + ")"
+	}
+	if text == "" {
+		text = "Provider reported a warning"
+	}
+	body, err := json.Marshal(protocol.AgentActivitySystemBody{Title: title, Text: text, Source: source, Reference: reference})
 	if err != nil {
 		return protocol.AgentActivityEntry{}, err
 	}

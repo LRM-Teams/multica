@@ -15,6 +15,12 @@ export function formatRuntimeUpdateError({
 }): string {
   const reason = rawError?.trim();
   if (!reason) return "";
+  if (
+    reason === "no_current_socket" ||
+    reason === "Computer upgrade needs the current Binding socket"
+  ) {
+    return "Update failed because the Workspace Daemon is not connected. Reconnect it, then retry.";
+  }
   const versionMismatch =
     reason === "old_version_reported_after_update" ||
     reason.startsWith("binary_version_mismatch_after_update");

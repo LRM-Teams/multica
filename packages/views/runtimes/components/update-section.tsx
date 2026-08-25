@@ -220,7 +220,22 @@ export function UpdateSection({
         return;
       }
       setStatus("failed");
-      setError(t(($) => $.update.initiate_failed));
+      const noCurrentSocket =
+        err instanceof ApiError &&
+        err.status === 409 &&
+        err.body &&
+        typeof err.body === "object" &&
+        (err.body as Record<string, unknown>).code === "no_current_socket";
+      setError(
+        noCurrentSocket
+          ? formatRuntimeUpdateError({
+              rawError: "no_current_socket",
+              currentVersion,
+              targetVersion,
+              t,
+            })
+          : t(($) => $.update.initiate_failed),
+      );
       setUpdating(false);
     }
   };

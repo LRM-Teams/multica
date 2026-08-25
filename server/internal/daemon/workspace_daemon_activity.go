@@ -223,9 +223,16 @@ func (runner *WorkspaceDaemon) observeResidentRuntimeDiagnosticForLaunch(agentID
 	if runner.activity == nil {
 		return
 	}
+	provider, runID := "", ""
+	if runner.runtimes != nil {
+		provider, runID = runner.runtimes.activityContext(agentID, runtimeID)
+	}
 	runner.observeActivity(AgentObservation{
 		AgentID: agentID, AgentInstanceID: launch.AgentInstanceID, Kind: AgentObservationRuntimeDiagnostic,
-		Data: AgentRuntimeStageObservationData{RuntimeID: runtimeID}, At: time.Now().UTC(),
+		Data: AgentRuntimeDiagnosticObservationData{
+			RuntimeID: runtimeID, Source: provider, Reference: runID, Name: message.Title, Kind: message.Diagnostic,
+			Detail: message.Content,
+		}, At: time.Now().UTC(),
 	}, "Runtime diagnostic")
 }
 

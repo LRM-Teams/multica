@@ -186,7 +186,7 @@ func TestPostgresStoreRecoversInterruptedSessionsAtStartup(t *testing.T) {
 	row.ErrorCode = "backend_restart_recovery"
 	queries := &restartRecoveryVoiceCallQueries{
 		fakeVoiceCallQueries: &fakeVoiceCallQueries{},
-		recovered:           []db.VoiceCallSession{row},
+		recovered:            []db.VoiceCallSession{row},
 	}
 	store := &PostgresStore{queries: queries}
 	cutoff := time.Date(2026, time.August, 3, 13, 35, 0, 0, time.FixedZone("CST", 8*60*60))

@@ -26,7 +26,7 @@ type lifecycleDiagnosticWriter struct {
 
 type lifecycleDiagnosticRecord struct {
 	StateInstanceID string    `json:"state_instance_id"`
-	LaunchID        string    `json:"launch_id"`
+	AgentInstanceID string    `json:"agent_instance_id"`
 	Sequence        int64     `json:"sequence"`
 	Phase           string    `json:"phase"`
 	State           string    `json:"state"`
@@ -49,7 +49,7 @@ func (w *lifecycleDiagnosticWriter) Record(transition agentLifecycleTransition) 
 	if w == nil || w.rotatingJSONLWriter == nil || strings.TrimSpace(w.dir) == "" {
 		return nil
 	}
-	record := lifecycleDiagnosticRecord{StateInstanceID: transition.StateInstanceID, LaunchID: transition.LaunchID, Sequence: transition.Sequence, Phase: transition.Phase, State: transition.State, Event: transition.Event, Result: transition.Result, At: transition.At.UTC()}
+	record := lifecycleDiagnosticRecord{StateInstanceID: transition.StateInstanceID, AgentInstanceID: transition.AgentInstanceID, Sequence: transition.Sequence, Phase: transition.Phase, State: transition.State, Event: transition.Event, Result: transition.Result, At: transition.At.UTC()}
 	encoded, err := json.Marshal(record)
 	if err != nil {
 		return fmt.Errorf("marshal lifecycle diagnostic: %w", err)
@@ -60,7 +60,7 @@ func (w *lifecycleDiagnosticWriter) Record(transition agentLifecycleTransition) 
 // diagnosticsCleanupLoop repeats the writer's best-effort cleanup once a day.
 // Diagnostic retention is never allowed to block Binding execution, process
 // management, or shutdown.
-func (d *WorkspaceDaemonCore) diagnosticsCleanupLoop(ctx context.Context) {
+func (d *Daemon) diagnosticsCleanupLoop(ctx context.Context) {
 	if d == nil || d.lifecycleDiagnostics == nil {
 		return
 	}
@@ -80,7 +80,7 @@ func (d *WorkspaceDaemonCore) diagnosticsCleanupLoop(ctx context.Context) {
 	}
 }
 
-func (d *WorkspaceDaemonCore) recordAgentLifecycleTransition(transition agentLifecycleTransition) {
+func (d *Daemon) recordAgentLifecycleTransition(transition agentLifecycleTransition) {
 	if d == nil {
 		return
 	}

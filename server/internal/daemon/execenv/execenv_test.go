@@ -1020,13 +1020,11 @@ func TestInjectRuntimeConfigRequiresExplicitCommentPost(t *testing.T) {
 			}
 			s := string(data)
 
-			// Assignment delivery is a typed completion report; comment-triggered
-			// work still replies to the triggering thread with a normal comment.
-			mustContain := []string{"mandatory"}
-			if tc.name == "assignment-triggered" {
-				mustContain = append(mustContain, "multica issue complete issue-1")
-			} else {
-				mustContain = append(mustContain, "multica issue comment add issue-1")
+			// The workflow must contain an explicit `multica issue comment add`
+			// invocation for this issue — not just a prose mention of posting.
+			mustContain := []string{
+				"multica issue comment add issue-1",
+				"mandatory",
 			}
 			for _, want := range mustContain {
 				if !strings.Contains(s, want) {
@@ -1037,14 +1035,10 @@ func TestInjectRuntimeConfigRequiresExplicitCommentPost(t *testing.T) {
 			// The Output section must carry a hard warning that terminal/log
 			// output is not user-visible. This is the second line of defense
 			// in case the agent skips past the workflow steps.
-			outputContract := "Final results MUST be delivered via `multica issue comment add`"
-			if tc.name == "assignment-triggered" {
-				outputContract = "Final results MUST be delivered via `multica issue complete`"
-			}
-			for _, want := range []string{outputContract, "not user-visible delivery"} {
-				if tc.name != "assignment-triggered" && want == "not user-visible delivery" {
-					want = "does NOT see your terminal output"
-				}
+			for _, want := range []string{
+				"Final results MUST be delivered via `multica issue comment add`",
+				"does NOT see your terminal output",
+			} {
 				if !strings.Contains(s, want) {
 					t.Errorf("%s: Output warning missing %q", tc.name, want)
 				}

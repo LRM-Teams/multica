@@ -50,7 +50,7 @@ type activatableBindingChild interface {
 	Activate()
 }
 
-type daemonCoreConfig struct {
+type BindingSupervisorConfig struct {
 	Spawn        BindingChildSpawner
 	StateRoot    string
 	Now          func() time.Time
@@ -59,8 +59,8 @@ type daemonCoreConfig struct {
 	Released     func(BindingChildIdentity)
 
 	// DrainRunner asks a Binding Runner to close its own admission barrier and
-	// cancel in-flight work before this ComputerCore terminates it (runner:drain).
-	// Injected by the ComputerCore, which owns control-plane credentials; the
+	// cancel in-flight work before this Host terminates it (runner:drain).
+	// Injected by the Host, which owns control-plane credentials; the
 	// supervisor only knows "ask this endpoint to drain", never a token. nil
 	// (or a runner with no known endpoint) skips straight to termination by
 	// signal.
@@ -79,14 +79,10 @@ type daemonCoreConfig struct {
 	TerminateGrace time.Duration
 }
 
-// DaemonCore is the ComputerCore's desired-vs-actual Binding Module.
+// BindingSupervisor is the Computer Host's desired-vs-actual Binding Module.
 // Production children are supervised operating-system processes.
-type DaemonCore struct {
-	config            daemonCoreConfig
-	control           *HostControl
-	reconcileInterval time.Duration
-	runtimeMu         sync.RWMutex
-	runtimeSets       map[string]hostBindingRuntimeSet
+type BindingSupervisor struct {
+	config BindingSupervisorConfig
 
 	mu       sync.RWMutex
 	records  map[string]*RunnerRecord
@@ -107,7 +103,7 @@ type bindingMachineControlTarget struct {
 	controlURL string
 }
 
-func newDaemonCore(config daemonCoreConfig) (*DaemonCore, error) {
+func NewBindingSupervisor(config BindingSupervisorConfig) (*BindingSupervisor, error) {
 	if config.Spawn == nil {
 		return nil, errors.New("Binding child spawner is required")
 	}
@@ -130,15 +126,14 @@ func newDaemonCore(config daemonCoreConfig) (*DaemonCore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("recover persisted Binding Runner state: %w", err)
 	}
-	supervisor := &DaemonCore{
+	supervisor := &BindingSupervisor{
 		config: config, records: make(map[string]*RunnerRecord),
 		children: make(map[string]BindingChild), cancels: make(map[string]context.CancelFunc), controls: make(map[string]string), desired: make(map[string]struct{}),
-		runtimeSets: make(map[string]hostBindingRuntimeSet),
 	}
 	// Reclaim every orphaned Runner concurrently — each one is an
 	// independent drain+terminate against its own pid/endpoint, and doing
-	// them one at a time would multiply ComputerCore startup latency by the orphan
-	// count. newDaemonCore still blocks on wg.Wait(): every orphan
+	// them one at a time would multiply Host startup latency by the orphan
+	// count. NewBindingSupervisor still blocks on wg.Wait(): every orphan
 	// must be confirmed dead (or backed off) before this function returns,
 	// so Reconcile can never spawn a replacement while its predecessor is
 	// still being killed.
@@ -155,11 +150,11 @@ func newDaemonCore(config daemonCoreConfig) (*DaemonCore, error) {
 }
 
 // reclaimOrphanedRunner reclaims a WorkspaceDaemon process left behind by a
-// previous ComputerCore generation so the first Reconcile can spawn a fresh child this
-// ComputerCore owns. One Workspace holds at most one Runner on this machine, and it is
-// always the current ComputerCore's own child; a live process found at startup is
+// previous Host generation so the first Reconcile can spawn a fresh child this
+// Host owns. One Workspace holds at most one Runner on this machine, and it is
+// always the current Host's own child; a live process found at startup is
 // reclaimed here, never adopted.
-func (supervisor *DaemonCore) reclaimOrphanedRunner(runner reclaimableRunner) {
+func (supervisor *BindingSupervisor) reclaimOrphanedRunner(runner reclaimableRunner) {
 	config := supervisor.config
 	start := config.Now()
 	err := reclaimRunnerProcess(runner, runnerReclaimOptions{
@@ -183,11 +178,11 @@ func (supervisor *DaemonCore) reclaimOrphanedRunner(runner reclaimableRunner) {
 }
 
 // backOffAfterFailedReclaim leaves the persisted state in place (so a later
-// ComputerCore generation can retry reclaiming it) and puts this Workspace's record
+// Host generation can retry reclaiming it) and puts this Workspace's record
 // into the normal crash/backoff state instead of leaving it immediately
 // spawnable, so this reconcile cycle cannot start a second runner next to a
 // still-live one.
-func (supervisor *DaemonCore) backOffAfterFailedReclaim(runner reclaimableRunner) {
+func (supervisor *BindingSupervisor) backOffAfterFailedReclaim(runner reclaimableRunner) {
 	supervisor.mu.Lock()
 	record := supervisor.recordLocked(runner.WorkspaceID)
 	record.Lifecycle = RunnerLifecycleCrashed
@@ -195,7 +190,7 @@ func (supervisor *DaemonCore) backOffAfterFailedReclaim(runner reclaimableRunner
 	supervisor.mu.Unlock()
 }
 
-func (supervisor *DaemonCore) Reconcile(parent context.Context, desiredWorkspaceIDs []string) {
+func (supervisor *BindingSupervisor) Reconcile(parent context.Context, desiredWorkspaceIDs []string) {
 	if supervisor == nil {
 		return
 	}
@@ -272,7 +267,7 @@ func (supervisor *DaemonCore) Reconcile(parent context.Context, desiredWorkspace
 	}
 }
 
-func (supervisor *DaemonCore) spawn(next bindingSupervisorStart) {
+func (supervisor *BindingSupervisor) spawn(next bindingSupervisorStart) {
 	child, err := supervisor.config.Spawn(next.workspaceID)
 	if err != nil {
 		if supervisor.config.Logger != nil {
@@ -317,7 +312,7 @@ func (supervisor *DaemonCore) spawn(next bindingSupervisorStart) {
 	go supervisor.supervise(next.workspaceID, child, next.ctx, next.cancel)
 }
 
-func (supervisor *DaemonCore) supervise(workspaceID string, child BindingChild, ctx context.Context, cancel context.CancelFunc) {
+func (supervisor *BindingSupervisor) supervise(workspaceID string, child BindingChild, ctx context.Context, cancel context.CancelFunc) {
 	class := RunnerExitGraceful
 	recordedIdentity := ""
 	if readyChild, ok := child.(ReadyBindingChild); ok {
@@ -354,7 +349,7 @@ func (supervisor *DaemonCore) supervise(workspaceID string, child BindingChild, 
 	supervisor.observeExit(workspaceID, recordedIdentity, child, class)
 }
 
-func (supervisor *DaemonCore) observeReady(workspaceID string, child BindingChild, ready BindingChildReady) {
+func (supervisor *BindingSupervisor) observeReady(workspaceID string, child BindingChild, ready BindingChildReady) {
 	supervisor.mu.Lock()
 	defer supervisor.mu.Unlock()
 	record := supervisor.records[workspaceID]
@@ -386,7 +381,7 @@ func (supervisor *DaemonCore) observeReady(workspaceID string, child BindingChil
 	}
 }
 
-func (supervisor *DaemonCore) observeExit(workspaceID, daemonInstanceID string, child BindingChild, class RunnerExitClass) {
+func (supervisor *BindingSupervisor) observeExit(workspaceID, daemonInstanceID string, child BindingChild, class RunnerExitClass) {
 	supervisor.mu.Lock()
 	record := supervisor.records[workspaceID]
 	if record == nil || !record.HasChild() || record.DaemonInstanceID() != daemonInstanceID {
@@ -414,18 +409,18 @@ func (supervisor *DaemonCore) observeExit(workspaceID, daemonInstanceID string, 
 	}
 }
 
-// Stop tears down every Binding Runner this ComputerCore spawned. There is no
-// adopted-but-unowned state to special-case: a live runner this ComputerCore did not
+// Stop tears down every Binding Runner this Host spawned. There is no
+// adopted-but-unowned state to special-case: a live runner this Host did not
 // spawn itself was already drained and terminated at startup, before this
-// ComputerCore ever recorded it.
-func (supervisor *DaemonCore) Stop() {
+// Host ever recorded it.
+func (supervisor *BindingSupervisor) Stop() {
 	if supervisor == nil {
 		return
 	}
 	supervisor.Reconcile(context.Background(), nil)
 }
 
-func (supervisor *DaemonCore) Current(identity BindingChildIdentity) bool {
+func (supervisor *BindingSupervisor) Current(identity BindingChildIdentity) bool {
 	if supervisor == nil || identity.Validate() != nil {
 		return false
 	}
@@ -442,7 +437,7 @@ func (supervisor *DaemonCore) Current(identity BindingChildIdentity) bool {
 	return current
 }
 
-func (supervisor *DaemonCore) DesiredWorkspaceIDs() []string {
+func (supervisor *BindingSupervisor) DesiredWorkspaceIDs() []string {
 	if supervisor == nil {
 		return nil
 	}
@@ -456,7 +451,7 @@ func (supervisor *DaemonCore) DesiredWorkspaceIDs() []string {
 	return ids
 }
 
-func (supervisor *DaemonCore) Snapshot(workspaceID string) (RunnerRecord, int, bool) {
+func (supervisor *BindingSupervisor) Snapshot(workspaceID string) (RunnerRecord, int, bool) {
 	if supervisor == nil {
 		return RunnerRecord{}, 0, false
 	}
@@ -477,11 +472,11 @@ func (supervisor *DaemonCore) Snapshot(workspaceID string) (RunnerRecord, int, b
 // admission barrier and drain/terminate work through the child's own runtime
 // implementation. If any child rejects preparation, already-prepared siblings
 // are released so a failed machine operation cannot strand them paused.
-func (supervisor *DaemonCore) PrepareMachineUpgrade(ctx context.Context, controlToken string) error {
+func (supervisor *BindingSupervisor) PrepareMachineUpgrade(ctx context.Context, controlToken string) error {
 	return supervisor.PrepareSiblingMachineUpgrade(ctx, controlToken, "")
 }
 
-func (supervisor *DaemonCore) PrepareSiblingMachineUpgrade(ctx context.Context, controlToken, initiatorWorkspaceID string) error {
+func (supervisor *BindingSupervisor) PrepareSiblingMachineUpgrade(ctx context.Context, controlToken, initiatorWorkspaceID string) error {
 	targets, err := supervisor.machineControlTargets(nil)
 	if err != nil {
 		return err
@@ -509,7 +504,7 @@ func (supervisor *DaemonCore) PrepareSiblingMachineUpgrade(ctx context.Context, 
 	return nil
 }
 
-func (supervisor *DaemonCore) ReleaseMachineUpgrade(ctx context.Context, controlToken string) error {
+func (supervisor *BindingSupervisor) ReleaseMachineUpgrade(ctx context.Context, controlToken string) error {
 	targets := supervisor.availableMachineControlTargets()
 	var failures []error
 	for _, current := range targets {
@@ -520,7 +515,7 @@ func (supervisor *DaemonCore) ReleaseMachineUpgrade(ctx context.Context, control
 	return errors.Join(failures...)
 }
 
-func (supervisor *DaemonCore) PrepareEnvironmentSwitch(ctx context.Context, controlToken string) error {
+func (supervisor *BindingSupervisor) PrepareEnvironmentSwitch(ctx context.Context, controlToken string) error {
 	targets, err := supervisor.machineControlTargets(nil)
 	if err != nil {
 		return err
@@ -538,7 +533,7 @@ func (supervisor *DaemonCore) PrepareEnvironmentSwitch(ctx context.Context, cont
 	return nil
 }
 
-func (supervisor *DaemonCore) ReleaseEnvironmentSwitch(ctx context.Context, controlToken string) error {
+func (supervisor *BindingSupervisor) ReleaseEnvironmentSwitch(ctx context.Context, controlToken string) error {
 	targets := supervisor.availableMachineControlTargets()
 	var failures []error
 	for _, current := range targets {
@@ -549,7 +544,7 @@ func (supervisor *DaemonCore) ReleaseEnvironmentSwitch(ctx context.Context, cont
 	return errors.Join(failures...)
 }
 
-func (supervisor *DaemonCore) DeliverComputerUpgrade(ctx context.Context, controlToken string, command protocol.ComputerUpgradePayload) error {
+func (supervisor *BindingSupervisor) DeliverComputerUpgrade(ctx context.Context, controlToken string, command protocol.ComputerUpgradePayload) error {
 	targets := supervisor.availableMachineControlTargets()
 	if len(targets) == 0 {
 		return errors.New("Computer has no ready Binding for Machine Upgrade")
@@ -557,7 +552,7 @@ func (supervisor *DaemonCore) DeliverComputerUpgrade(ctx context.Context, contro
 	return RequestBindingComputerUpgrade(ctx, targets[0].controlURL, controlToken, targets[0].identity, command)
 }
 
-func (supervisor *DaemonCore) DeliverComputerUpgradeEvent(ctx context.Context, controlToken string, identity BindingChildIdentity, eventType string, payload any) error {
+func (supervisor *BindingSupervisor) DeliverComputerUpgradeEvent(ctx context.Context, controlToken string, identity BindingChildIdentity, eventType string, payload any) error {
 	supervisor.mu.RLock()
 	endpoint := supervisor.controls[identity.WorkspaceID]
 	child := supervisor.children[identity.WorkspaceID]
@@ -569,7 +564,7 @@ func (supervisor *DaemonCore) DeliverComputerUpgradeEvent(ctx context.Context, c
 	return RequestBindingComputerUpgradeEvent(ctx, endpoint, controlToken, identity, eventType, payload)
 }
 
-func (supervisor *DaemonCore) ReregisterBindings(ctx context.Context, controlToken string, workspaceIDs []string) error {
+func (supervisor *BindingSupervisor) ReregisterBindings(ctx context.Context, controlToken string, workspaceIDs []string) error {
 	wanted := make(map[string]struct{}, len(workspaceIDs))
 	for _, workspaceID := range workspaceIDs {
 		if workspaceID = strings.TrimSpace(workspaceID); workspaceID != "" {
@@ -588,7 +583,7 @@ func (supervisor *DaemonCore) ReregisterBindings(ctx context.Context, controlTok
 	return nil
 }
 
-func (supervisor *DaemonCore) machineControlTargets(wanted map[string]struct{}) ([]bindingMachineControlTarget, error) {
+func (supervisor *BindingSupervisor) machineControlTargets(wanted map[string]struct{}) ([]bindingMachineControlTarget, error) {
 	supervisor.mu.RLock()
 	defer supervisor.mu.RUnlock()
 	scope := wanted
@@ -612,7 +607,7 @@ func (supervisor *DaemonCore) machineControlTargets(wanted map[string]struct{}) 
 	return targets, nil
 }
 
-func (supervisor *DaemonCore) availableMachineControlTargets() []bindingMachineControlTarget {
+func (supervisor *BindingSupervisor) availableMachineControlTargets() []bindingMachineControlTarget {
 	supervisor.mu.RLock()
 	defer supervisor.mu.RUnlock()
 	targets := make([]bindingMachineControlTarget, 0, len(supervisor.controls))
@@ -631,7 +626,7 @@ func (supervisor *DaemonCore) availableMachineControlTargets() []bindingMachineC
 	return targets
 }
 
-func (supervisor *DaemonCore) recordLocked(workspaceID string) *RunnerRecord {
+func (supervisor *BindingSupervisor) recordLocked(workspaceID string) *RunnerRecord {
 	record := supervisor.records[workspaceID]
 	if record == nil {
 		record = &RunnerRecord{Lifecycle: RunnerLifecycleStopped}

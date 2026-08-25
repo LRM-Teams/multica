@@ -566,7 +566,7 @@ func appInboxNoticeFingerprint(items []AgentAppInboxItem) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func (d *WorkspaceDaemonCore) notifyAgentAppInbox(ctx context.Context, agentID, runtimeID string) error {
+func (d *Daemon) notifyAgentAppInbox(ctx context.Context, agentID, runtimeID string) error {
 	if d == nil || d.agentAppInboxes == nil || d.canonicalRuntimes == nil {
 		return errors.New("Agent App Inbox notice unavailable")
 	}
@@ -589,14 +589,14 @@ func (d *WorkspaceDaemonCore) notifyAgentAppInbox(ctx context.Context, agentID, 
 	}, appInboxNoticeFingerprint(items))
 }
 
-func (d *WorkspaceDaemonCore) enqueueAgentAppInboxNotice(agentID, runtimeID string) bool {
+func (d *Daemon) enqueueAgentAppInboxNotice(agentID, runtimeID string) bool {
 	if d == nil || agentID == "" || runtimeID == "" {
 		return false
 	}
 	d.mu.Lock()
 	workspaceID := d.runtimeIndex[runtimeID].WorkspaceID
 	d.mu.Unlock()
-	runner := d.currentWorkspaceSession(workspaceID)
+	runner := d.currentWorkspaceDaemon(workspaceID)
 	if runner == nil {
 		return false
 	}

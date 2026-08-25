@@ -3,7 +3,7 @@ package daemon
 import "testing"
 
 func TestMemoryCurationRunGuardSerializesPerRuntime(t *testing.T) {
-	d := &WorkspaceDaemonCore{activeCurationRuns: map[string]string{}}
+	d := &Daemon{activeCurationRuns: map[string]string{}}
 	if !d.beginMemoryCurationRun("runtime-1", "run-1") {
 		t.Fatal("first run was not accepted")
 	}

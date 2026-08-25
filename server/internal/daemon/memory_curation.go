@@ -11,7 +11,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/memorycuration"
 )
 
-func (d *WorkspaceDaemonCore) handleMemoryCuration(ctx context.Context, rt Runtime, pending PendingMemoryCuration) {
+func (d *Daemon) handleMemoryCuration(ctx context.Context, rt Runtime, pending PendingMemoryCuration) {
 	defer d.finishMemoryCurationRun(rt.ID, pending.ID)
 	d.logger.Info("memory curation requested", "runtime_id", rt.ID, "run_id", pending.ID, "stage", pending.Stage)
 	payload := map[string]any{"status": "failed", "claim_token": pending.ClaimToken}
@@ -159,7 +159,7 @@ func (d *WorkspaceDaemonCore) handleMemoryCuration(ctx context.Context, rt Runti
 	d.reportMemoryCurationResult(ctx, rt, pending.ID, payload)
 }
 
-func (d *WorkspaceDaemonCore) reportMemoryCurationResult(ctx context.Context, rt Runtime, runID string, payload map[string]any) {
+func (d *Daemon) reportMemoryCurationResult(ctx context.Context, rt Runtime, runID string, payload map[string]any) {
 	// Normalize result through JSON so map payloads and engine structs share the
 	// same daemon callback contract.
 	if result, ok := payload["result"]; ok {
@@ -172,7 +172,7 @@ func (d *WorkspaceDaemonCore) reportMemoryCurationResult(ctx context.Context, rt
 	})
 }
 
-func (d *WorkspaceDaemonCore) beginMemoryCurationRun(runtimeID, runID string) bool {
+func (d *Daemon) beginMemoryCurationRun(runtimeID, runID string) bool {
 	d.memoryCurationMu.Lock()
 	defer d.memoryCurationMu.Unlock()
 	if d.activeCurationRuns == nil {
@@ -185,7 +185,7 @@ func (d *WorkspaceDaemonCore) beginMemoryCurationRun(runtimeID, runID string) bo
 	return true
 }
 
-func (d *WorkspaceDaemonCore) finishMemoryCurationRun(runtimeID, runID string) {
+func (d *Daemon) finishMemoryCurationRun(runtimeID, runID string) {
 	d.memoryCurationMu.Lock()
 	defer d.memoryCurationMu.Unlock()
 	if d.activeCurationRuns[runtimeID] == runID {
@@ -193,7 +193,7 @@ func (d *WorkspaceDaemonCore) finishMemoryCurationRun(runtimeID, runID string) {
 	}
 }
 
-func (d *WorkspaceDaemonCore) activeMemoryCurationRun(runtimeID string) string {
+func (d *Daemon) activeMemoryCurationRun(runtimeID string) string {
 	d.memoryCurationMu.Lock()
 	defer d.memoryCurationMu.Unlock()
 	return d.activeCurationRuns[runtimeID]

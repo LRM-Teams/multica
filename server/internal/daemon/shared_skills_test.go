@@ -14,7 +14,7 @@ import (
 )
 
 func TestLocalMemoryCurationRuntimesSelectConfiguredOnlineProvider(t *testing.T) {
-	d := &WorkspaceDaemonCore{
+	d := &Daemon{
 		cfg: Config{Agents: map[string]AgentEntry{
 			"codex": {Path: "/usr/bin/codex"},
 			"pi":    {Path: "/usr/bin/pi"},
@@ -162,7 +162,7 @@ func TestLocalMemoryCurationPlanDateUsesBeijingYesterday(t *testing.T) {
 }
 
 func TestClaimLocalMemoryCurationRunOncePerBeijingDate(t *testing.T) {
-	d := &WorkspaceDaemonCore{memoryCurationRuns: map[string]string{}}
+	d := &Daemon{memoryCurationRuns: map[string]string{}}
 	now := time.Date(2026, 7, 10, 3, 0, 0, 0, time.FixedZone("CST", 8*60*60))
 	if !d.claimLocalMemoryCurationRun("ws-1", memorycuration.StageL3, now) {
 		t.Fatal("first run was not claimed")

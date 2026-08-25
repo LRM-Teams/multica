@@ -90,7 +90,7 @@ func reclaimTestTimings() (poll, grace time.Duration) {
 	return 5 * time.Millisecond, 50 * time.Millisecond
 }
 
-// testDrainRunner mimics how the ComputerCore wires daemonCoreConfig.DrainRunner
+// testDrainRunner mimics how the Host wires BindingSupervisorConfig.DrainRunner
 // in production: close the control token over RequestBindingRunnerDrain so
 // reclaim tests exercise the real runner:drain RPC round trip.
 func testDrainRunner(token string) func(context.Context, string, BindingChildIdentity) error {
@@ -118,7 +118,7 @@ func writeReclaimableRunnerFixture(t *testing.T, root, workspaceID string, pid i
 	}
 }
 
-func TestDaemonCoreReclaimsDrainedOrphanThenSpawnsOwnChild(t *testing.T) {
+func TestBindingSupervisorReclaimsDrainedOrphanThenSpawnsOwnChild(t *testing.T) {
 	root := t.TempDir()
 	orphan := spawnReclaimTestProcess(t, "sleep", "30")
 
@@ -133,7 +133,7 @@ func TestDaemonCoreReclaimsDrainedOrphanThenSpawnsOwnChild(t *testing.T) {
 
 	poll, grace := reclaimTestTimings()
 	spawned := 0
-	supervisor, err := newDaemonCore(daemonCoreConfig{
+	supervisor, err := NewBindingSupervisor(BindingSupervisorConfig{
 		StateRoot: root, DrainRunner: testDrainRunner("control-token"),
 		TerminatePollInterval: poll, TerminateGrace: grace,
 		Spawn: func(string) (BindingChild, error) {
@@ -166,7 +166,7 @@ func TestDaemonCoreReclaimsDrainedOrphanThenSpawnsOwnChild(t *testing.T) {
 	supervisor.Stop()
 }
 
-func TestDaemonCoreReclaimsOrphanBySignalWhenDrainEndpointUnreachable(t *testing.T) {
+func TestBindingSupervisorReclaimsOrphanBySignalWhenDrainEndpointUnreachable(t *testing.T) {
 	root := t.TempDir()
 	orphan := spawnReclaimTestProcess(t, "sleep", "30")
 	// A dangling unix endpoint nothing is listening on: the drain request
@@ -176,7 +176,7 @@ func TestDaemonCoreReclaimsOrphanBySignalWhenDrainEndpointUnreachable(t *testing
 
 	poll, grace := reclaimTestTimings()
 	spawned := 0
-	supervisor, err := newDaemonCore(daemonCoreConfig{
+	supervisor, err := NewBindingSupervisor(BindingSupervisorConfig{
 		StateRoot: root, DrainRunner: testDrainRunner("control-token"),
 		TerminatePollInterval: poll, TerminateGrace: grace,
 		Spawn: func(string) (BindingChild, error) {
@@ -199,7 +199,7 @@ func TestDaemonCoreReclaimsOrphanBySignalWhenDrainEndpointUnreachable(t *testing
 	supervisor.Stop()
 }
 
-func TestDaemonCoreReclaimsOrphanBySigkillWhenSigtermIsIgnored(t *testing.T) {
+func TestBindingSupervisorReclaimsOrphanBySigkillWhenSigtermIsIgnored(t *testing.T) {
 	root := t.TempDir()
 	// The child ignores SIGTERM (and execs into the ignoring shell so the
 	// disposition survives into the recorded pid), forcing terminateProcess
@@ -209,7 +209,7 @@ func TestDaemonCoreReclaimsOrphanBySigkillWhenSigtermIsIgnored(t *testing.T) {
 
 	poll, grace := reclaimTestTimings()
 	spawned := 0
-	supervisor, err := newDaemonCore(daemonCoreConfig{
+	supervisor, err := NewBindingSupervisor(BindingSupervisorConfig{
 		StateRoot: root, DrainRunner: testDrainRunner("control-token"),
 		TerminatePollInterval: poll, TerminateGrace: grace,
 		Spawn: func(string) (BindingChild, error) {
@@ -232,11 +232,11 @@ func TestDaemonCoreReclaimsOrphanBySigkillWhenSigtermIsIgnored(t *testing.T) {
 	supervisor.Stop()
 }
 
-func TestDaemonCoreLeavesPredecessorOwnerAloneAndDoesNotReclaim(t *testing.T) {
+func TestBindingSupervisorLeavesPredecessorOwnerAloneAndDoesNotReclaim(t *testing.T) {
 	root := t.TempDir()
 	orphan := spawnReclaimTestProcess(t, "sleep", "30")
 	// OwnerPID is this test process's own pid: a live owner means a second
-	// ComputerCore generation is (impossibly, but defensively) still running, so
+	// Host generation is (impossibly, but defensively) still running, so
 	// this instance must not touch the workspace at all.
 	state := persistedRunnerState{
 		WorkspaceID: "workspace-a", DaemonInstanceID: "predecessor-start", OwnerPID: os.Getpid(),
@@ -250,7 +250,7 @@ func TestDaemonCoreLeavesPredecessorOwnerAloneAndDoesNotReclaim(t *testing.T) {
 	}
 
 	spawned := 0
-	supervisor, err := newDaemonCore(daemonCoreConfig{
+	supervisor, err := NewBindingSupervisor(BindingSupervisorConfig{
 		StateRoot: root,
 		Spawn: func(string) (BindingChild, error) {
 			spawned++
@@ -270,15 +270,15 @@ func TestDaemonCoreLeavesPredecessorOwnerAloneAndDoesNotReclaim(t *testing.T) {
 		t.Fatal("supervisor recorded a workspace it must leave to its still-live predecessor owner")
 	}
 	if spawned != 0 {
-		t.Fatalf("spawned %d children while a predecessor ComputerCore owner is still alive", spawned)
+		t.Fatalf("spawned %d children while a predecessor Host owner is still alive", spawned)
 	}
 }
 
-func TestDaemonCoreRegistersChildBeforeActivation(t *testing.T) {
+func TestBindingSupervisorRegistersChildBeforeActivation(t *testing.T) {
 	activated := make(chan bool, 1)
-	var supervisor *DaemonCore
+	var supervisor *BindingSupervisor
 	var err error
-	supervisor, err = newDaemonCore(daemonCoreConfig{
+	supervisor, err = NewBindingSupervisor(BindingSupervisorConfig{
 		Spawn: func(workspaceID string) (BindingChild, error) {
 			const pid = 101
 			return &activatingSupervisorChild{
@@ -306,11 +306,11 @@ func TestDaemonCoreRegistersChildBeforeActivation(t *testing.T) {
 	supervisor.Stop()
 }
 
-func TestDaemonCoreRetainsSiblingAndFencesDaemonInstanceIDPID(t *testing.T) {
+func TestBindingSupervisorRetainsSiblingAndFencesDaemonInstanceIDPID(t *testing.T) {
 	var nextPID atomic.Int32
 	children := make(map[string]*supervisorTestChild)
 	var childrenMu sync.Mutex
-	supervisor, err := newDaemonCore(daemonCoreConfig{
+	supervisor, err := NewBindingSupervisor(BindingSupervisorConfig{
 		Spawn: func(workspaceID string) (BindingChild, error) {
 			child := newSupervisorTestChild(int(nextPID.Add(1)) + 100)
 			childrenMu.Lock()
@@ -348,12 +348,12 @@ func TestDaemonCoreRetainsSiblingAndFencesDaemonInstanceIDPID(t *testing.T) {
 	supervisor.Stop()
 }
 
-func TestDaemonCoreBacksOffThenDegradesCrashLoop(t *testing.T) {
+func TestBindingSupervisorBacksOffThenDegradesCrashLoop(t *testing.T) {
 	base := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
 	var now atomic.Value
 	now.Store(base)
 	var spawns atomic.Int32
-	supervisor, err := newDaemonCore(daemonCoreConfig{
+	supervisor, err := NewBindingSupervisor(BindingSupervisorConfig{
 		Now: func() time.Time { return now.Load().(time.Time) },
 		Spawn: func(string) (BindingChild, error) {
 			return crashingSupervisorChild{pid: int(spawns.Add(1)) + 200}, nil
@@ -388,9 +388,9 @@ func TestDaemonCoreBacksOffThenDegradesCrashLoop(t *testing.T) {
 	}
 }
 
-func TestDaemonCoreIgnoresExitFromPreviousDaemonInstanceID(t *testing.T) {
+func TestBindingSupervisorIgnoresExitFromPreviousDaemonInstanceID(t *testing.T) {
 	var nextPID atomic.Int32
-	supervisor, err := newDaemonCore(daemonCoreConfig{
+	supervisor, err := NewBindingSupervisor(BindingSupervisorConfig{
 		Spawn: func(string) (BindingChild, error) {
 			return newSupervisorTestChild(int(nextPID.Add(1)) + 300), nil
 		},
@@ -419,7 +419,7 @@ func TestDaemonCoreIgnoresExitFromPreviousDaemonInstanceID(t *testing.T) {
 	supervisor.Stop()
 }
 
-func TestDaemonCorePreparesEveryBindingForMachineControls(t *testing.T) {
+func TestBindingSupervisorPreparesEveryBindingForMachineControls(t *testing.T) {
 	var prepares atomic.Int32
 	var releases atomic.Int32
 	var environmentPrepares atomic.Int32
@@ -446,7 +446,7 @@ func TestDaemonCorePreparesEveryBindingForMachineControls(t *testing.T) {
 		return nil, nil
 	})
 
-	supervisor, err := newDaemonCore(daemonCoreConfig{
+	supervisor, err := NewBindingSupervisor(BindingSupervisorConfig{
 		Spawn: func(workspaceID string) (BindingChild, error) {
 			pid := 401
 			if workspaceID == "workspace-b" {
@@ -488,7 +488,7 @@ func TestDaemonCorePreparesEveryBindingForMachineControls(t *testing.T) {
 	supervisor.Stop()
 }
 
-func TestDaemonCoreReleasesPreparedSiblingsWhenMachineUpgradePrepareFails(t *testing.T) {
+func TestBindingSupervisorReleasesPreparedSiblingsWhenMachineUpgradePrepareFails(t *testing.T) {
 	var preparedA atomic.Bool
 	var releasedA atomic.Bool
 	controlA := localControlTestServer(t, func(_ context.Context, operation string, _ map[string]string, _ json.RawMessage) (any, error) {
@@ -505,7 +505,7 @@ func TestDaemonCoreReleasesPreparedSiblingsWhenMachineUpgradePrepareFails(t *tes
 		return nil, ErrComputerControlBusy
 	})
 
-	supervisor, err := newDaemonCore(daemonCoreConfig{
+	supervisor, err := NewBindingSupervisor(BindingSupervisorConfig{
 		Spawn: func(workspaceID string) (BindingChild, error) {
 			controlEndpoint, pid := controlA, 501
 			if workspaceID == "workspace-b" {
@@ -529,7 +529,7 @@ func TestDaemonCoreReleasesPreparedSiblingsWhenMachineUpgradePrepareFails(t *tes
 	supervisor.Stop()
 }
 
-func TestDaemonCoreMachineUpgradeFailsForMissingDesiredChildButReleaseIsBestEffort(t *testing.T) {
+func TestBindingSupervisorMachineUpgradeFailsForMissingDesiredChildButReleaseIsBestEffort(t *testing.T) {
 	var prepares atomic.Int32
 	var releases atomic.Int32
 	control := localControlTestServer(t, func(_ context.Context, operation string, _ map[string]string, _ json.RawMessage) (any, error) {
@@ -542,7 +542,7 @@ func TestDaemonCoreMachineUpgradeFailsForMissingDesiredChildButReleaseIsBestEffo
 		return nil, nil
 	})
 
-	supervisor, err := newDaemonCore(daemonCoreConfig{
+	supervisor, err := NewBindingSupervisor(BindingSupervisorConfig{
 		Spawn: func(workspaceID string) (BindingChild, error) {
 			if workspaceID == "workspace-b" {
 				return crashingSupervisorChild{pid: 702}, nil
@@ -576,7 +576,7 @@ func TestComputerHostWaitsForRealBindingReady(t *testing.T) {
 		return nil, nil
 	})
 
-	host, err := NewComputerCore(ComputerCoreConfig{
+	host, err := NewHost(HostConfig{
 		ControlToken: "control-token",
 		Spawn: func(workspaceID string) (BindingChild, error) {
 			return &readySupervisorChild{supervisorTestChild: newSupervisorTestChild(601), controlEndpoint: control, workspaceID: workspaceID, daemonInstanceID: "child-601"}, nil
@@ -593,12 +593,12 @@ func TestComputerHostWaitsForRealBindingReady(t *testing.T) {
 	}
 	record, _, _ := host.Snapshot("workspace-a")
 	if !host.Current(BindingChildIdentity{WorkspaceID: "workspace-a", DaemonInstanceID: record.DaemonInstanceID(), PID: 601}) {
-		t.Fatal("ComputerCore readiness did not preserve its process identity fence")
+		t.Fatal("Computer Host readiness did not preserve its process identity fence")
 	}
 	host.Stop()
 }
 
-func waitForSupervisorLifecycle(t *testing.T, supervisor *DaemonCore, workspaceID string, want RunnerLifecycle) {
+func waitForSupervisorLifecycle(t *testing.T, supervisor *BindingSupervisor, workspaceID string, want RunnerLifecycle) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {

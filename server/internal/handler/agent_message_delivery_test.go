@@ -81,7 +81,7 @@ func TestWorkspaceDaemonReadyRedeliversUnacknowledgedMessagesInSequenceOrder(t *
 	h.RunnerPresenceSource = fakeRunnerPresenceSource{current: map[string]bool{
 		daemonID + "/" + testWorkspaceID + "/instance-1": true,
 	}}
-	ready := protocol.WorkspaceDaemonReadyPayload{WorkspaceID: testWorkspaceID, DaemonInstanceID: "instance-1"}
+	ready := protocol.WorkspaceReadyPayload{WorkspaceID: testWorkspaceID, DaemonInstanceID: "instance-1"}
 	raw, err := json.Marshal(ready)
 	if err != nil {
 		t.Fatal(err)
@@ -143,7 +143,7 @@ func TestAgentDeliveryAcknowledgementRequiresExactSequenceAndStopsRedelivery(t *
 	h.RunnerPresenceSource = fakeRunnerPresenceSource{current: map[string]bool{
 		daemonID + "/" + testWorkspaceID + "/instance-1": true,
 	}}
-	ready, err := json.Marshal(protocol.WorkspaceDaemonReadyPayload{WorkspaceID: testWorkspaceID, DaemonInstanceID: "instance-1"})
+	ready, err := json.Marshal(protocol.WorkspaceReadyPayload{WorkspaceID: testWorkspaceID, DaemonInstanceID: "instance-1"})
 	if err != nil {
 		t.Fatal(err)
 	}

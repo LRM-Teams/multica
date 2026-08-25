@@ -12,7 +12,7 @@ import (
 )
 
 const getAgentActivitySnapshot = `-- name: GetAgentActivitySnapshot :one
-SELECT workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id, launch_id, process_instance_id, provider_session_id, turn_id, runtime_generation, client_sequence, producer_fact_id, probe_id, activity_kind, detail_kind, observed_at, received_at
+SELECT workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id, provider_session_id, turn_id, runtime_generation, activity_kind, detail_kind, observed_at, received_at, summary_label
 FROM agent_activity_snapshot
 WHERE workspace_id = $1
   AND agent_id = $2
@@ -32,55 +32,44 @@ func (q *Queries) GetAgentActivitySnapshot(ctx context.Context, arg GetAgentActi
 		&i.RuntimeID,
 		&i.DaemonID,
 		&i.DaemonInstanceID,
-		&i.LaunchID,
-		&i.ProcessInstanceID,
 		&i.ProviderSessionID,
 		&i.TurnID,
 		&i.RuntimeGeneration,
-		&i.ClientSequence,
-		&i.ProducerFactID,
-		&i.ProbeID,
 		&i.ActivityKind,
 		&i.DetailKind,
 		&i.ObservedAt,
 		&i.ReceivedAt,
+		&i.SummaryLabel,
 	)
 	return i, err
 }
 
 const insertAgentActivityEntry = `-- name: InsertAgentActivityEntry :one
 INSERT INTO agent_activity_entry (
-    workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id, launch_id,
-    process_instance_id, client_sequence, producer_fact_id, entry_position,
-    entry_kind, entry_body, observed_at
+    workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id,
+    activity_kind, detail_kind, title, subtext, body_kind, body, observed_at
 ) VALUES (
-    $1, $2, $3, $4, $5, $6,
-    $7, $8, $9, $10,
-    $11, $12, $13
+    $1, $2, $3, $4, $5,
+    $6, $7, $8, $9, $10, $11, $12
 )
-ON CONFLICT (workspace_id, agent_id, launch_id, producer_fact_id, entry_position)
-DO NOTHING
-RETURNING id, workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id, launch_id, process_instance_id, client_sequence, producer_fact_id, entry_position, entry_kind, entry_body, observed_at, received_at
+RETURNING id, workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id, observed_at, received_at, title, subtext, activity_kind, detail_kind, body_kind, body
 `
 
 type InsertAgentActivityEntryParams struct {
-	WorkspaceID       pgtype.UUID        `json:"workspace_id"`
-	AgentID           pgtype.UUID        `json:"agent_id"`
-	RuntimeID         pgtype.UUID        `json:"runtime_id"`
-	DaemonID          string             `json:"daemon_id"`
-	DaemonInstanceID  string             `json:"daemon_instance_id"`
-	LaunchID          string             `json:"launch_id"`
-	ProcessInstanceID string             `json:"process_instance_id"`
-	ClientSequence    int64              `json:"client_sequence"`
-	ProducerFactID    string             `json:"producer_fact_id"`
-	EntryPosition     int32              `json:"entry_position"`
-	EntryKind         string             `json:"entry_kind"`
-	EntryBody         []byte             `json:"entry_body"`
-	ObservedAt        pgtype.Timestamptz `json:"observed_at"`
+	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
+	AgentID          pgtype.UUID        `json:"agent_id"`
+	RuntimeID        pgtype.UUID        `json:"runtime_id"`
+	DaemonID         string             `json:"daemon_id"`
+	DaemonInstanceID string             `json:"daemon_instance_id"`
+	ActivityKind     string             `json:"activity_kind"`
+	DetailKind       string             `json:"detail_kind"`
+	Title            string             `json:"title"`
+	Subtext          string             `json:"subtext"`
+	BodyKind         string             `json:"body_kind"`
+	Body             string             `json:"body"`
+	ObservedAt       pgtype.Timestamptz `json:"observed_at"`
 }
 
-// A producer fact plus entry position is the durable deduplication identity.
-// Replays return no row, which lets the intake boundary remain idempotent.
 func (q *Queries) InsertAgentActivityEntry(ctx context.Context, arg InsertAgentActivityEntryParams) (AgentActivityEntry, error) {
 	row := q.db.QueryRow(ctx, insertAgentActivityEntry,
 		arg.WorkspaceID,
@@ -88,13 +77,12 @@ func (q *Queries) InsertAgentActivityEntry(ctx context.Context, arg InsertAgentA
 		arg.RuntimeID,
 		arg.DaemonID,
 		arg.DaemonInstanceID,
-		arg.LaunchID,
-		arg.ProcessInstanceID,
-		arg.ClientSequence,
-		arg.ProducerFactID,
-		arg.EntryPosition,
-		arg.EntryKind,
-		arg.EntryBody,
+		arg.ActivityKind,
+		arg.DetailKind,
+		arg.Title,
+		arg.Subtext,
+		arg.BodyKind,
+		arg.Body,
 		arg.ObservedAt,
 	)
 	var i AgentActivityEntry
@@ -105,21 +93,20 @@ func (q *Queries) InsertAgentActivityEntry(ctx context.Context, arg InsertAgentA
 		&i.RuntimeID,
 		&i.DaemonID,
 		&i.DaemonInstanceID,
-		&i.LaunchID,
-		&i.ProcessInstanceID,
-		&i.ClientSequence,
-		&i.ProducerFactID,
-		&i.EntryPosition,
-		&i.EntryKind,
-		&i.EntryBody,
 		&i.ObservedAt,
 		&i.ReceivedAt,
+		&i.Title,
+		&i.Subtext,
+		&i.ActivityKind,
+		&i.DetailKind,
+		&i.BodyKind,
+		&i.Body,
 	)
 	return i, err
 }
 
 const listAgentActivityEntries = `-- name: ListAgentActivityEntries :many
-SELECT id, workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id, launch_id, process_instance_id, client_sequence, producer_fact_id, entry_position, entry_kind, entry_body, observed_at, received_at
+SELECT id, workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id, observed_at, received_at, title, subtext, activity_kind, detail_kind, body_kind, body
 FROM agent_activity_entry
 WHERE workspace_id = $1
   AND agent_id = $2
@@ -165,15 +152,14 @@ func (q *Queries) ListAgentActivityEntries(ctx context.Context, arg ListAgentAct
 			&i.RuntimeID,
 			&i.DaemonID,
 			&i.DaemonInstanceID,
-			&i.LaunchID,
-			&i.ProcessInstanceID,
-			&i.ClientSequence,
-			&i.ProducerFactID,
-			&i.EntryPosition,
-			&i.EntryKind,
-			&i.EntryBody,
 			&i.ObservedAt,
 			&i.ReceivedAt,
+			&i.Title,
+			&i.Subtext,
+			&i.ActivityKind,
+			&i.DetailKind,
+			&i.BodyKind,
+			&i.Body,
 		); err != nil {
 			return nil, err
 		}
@@ -187,33 +173,27 @@ func (q *Queries) ListAgentActivityEntries(ctx context.Context, arg ListAgentAct
 
 const upsertAgentActivitySnapshot = `-- name: UpsertAgentActivitySnapshot :one
 INSERT INTO agent_activity_snapshot (
-    workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id, launch_id,
-    process_instance_id, provider_session_id, turn_id, runtime_generation,
-    client_sequence, producer_fact_id, probe_id, activity_kind, detail_kind,
-    observed_at
+    workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id,
+    provider_session_id, turn_id, runtime_generation, activity_kind, detail_kind,
+    summary_label, observed_at
 ) VALUES (
-    $1, $2, $3, $4, $5, $6,
-    $7, $8, $9, $10,
-    $11, $12, $13, $14, $15,
-    $16
+    $1, $2, $3, $4, $5,
+    $6, $7, $8, $9, $10,
+    $11, $12
 )
 ON CONFLICT (workspace_id, agent_id) DO UPDATE SET
     runtime_id = EXCLUDED.runtime_id,
     daemon_id = EXCLUDED.daemon_id,
     daemon_instance_id = EXCLUDED.daemon_instance_id,
-    launch_id = EXCLUDED.launch_id,
-    process_instance_id = EXCLUDED.process_instance_id,
     provider_session_id = EXCLUDED.provider_session_id,
     turn_id = EXCLUDED.turn_id,
     runtime_generation = EXCLUDED.runtime_generation,
-    client_sequence = EXCLUDED.client_sequence,
-    producer_fact_id = EXCLUDED.producer_fact_id,
-    probe_id = EXCLUDED.probe_id,
     activity_kind = EXCLUDED.activity_kind,
     detail_kind = EXCLUDED.detail_kind,
+    summary_label = EXCLUDED.summary_label,
     observed_at = EXCLUDED.observed_at,
     received_at = now()
-RETURNING workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id, launch_id, process_instance_id, provider_session_id, turn_id, runtime_generation, client_sequence, producer_fact_id, probe_id, activity_kind, detail_kind, observed_at, received_at
+RETURNING workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id, provider_session_id, turn_id, runtime_generation, activity_kind, detail_kind, observed_at, received_at, summary_label
 `
 
 type UpsertAgentActivitySnapshotParams struct {
@@ -222,16 +202,12 @@ type UpsertAgentActivitySnapshotParams struct {
 	RuntimeID         pgtype.UUID        `json:"runtime_id"`
 	DaemonID          string             `json:"daemon_id"`
 	DaemonInstanceID  string             `json:"daemon_instance_id"`
-	LaunchID          string             `json:"launch_id"`
-	ProcessInstanceID string             `json:"process_instance_id"`
 	ProviderSessionID string             `json:"provider_session_id"`
 	TurnID            string             `json:"turn_id"`
 	RuntimeGeneration int64              `json:"runtime_generation"`
-	ClientSequence    int64              `json:"client_sequence"`
-	ProducerFactID    string             `json:"producer_fact_id"`
-	ProbeID           string             `json:"probe_id"`
 	ActivityKind      string             `json:"activity_kind"`
 	DetailKind        string             `json:"detail_kind"`
+	SummaryLabel      string             `json:"summary_label"`
 	ObservedAt        pgtype.Timestamptz `json:"observed_at"`
 }
 
@@ -245,16 +221,12 @@ func (q *Queries) UpsertAgentActivitySnapshot(ctx context.Context, arg UpsertAge
 		arg.RuntimeID,
 		arg.DaemonID,
 		arg.DaemonInstanceID,
-		arg.LaunchID,
-		arg.ProcessInstanceID,
 		arg.ProviderSessionID,
 		arg.TurnID,
 		arg.RuntimeGeneration,
-		arg.ClientSequence,
-		arg.ProducerFactID,
-		arg.ProbeID,
 		arg.ActivityKind,
 		arg.DetailKind,
+		arg.SummaryLabel,
 		arg.ObservedAt,
 	)
 	var i AgentActivitySnapshot
@@ -264,18 +236,14 @@ func (q *Queries) UpsertAgentActivitySnapshot(ctx context.Context, arg UpsertAge
 		&i.RuntimeID,
 		&i.DaemonID,
 		&i.DaemonInstanceID,
-		&i.LaunchID,
-		&i.ProcessInstanceID,
 		&i.ProviderSessionID,
 		&i.TurnID,
 		&i.RuntimeGeneration,
-		&i.ClientSequence,
-		&i.ProducerFactID,
-		&i.ProbeID,
 		&i.ActivityKind,
 		&i.DetailKind,
 		&i.ObservedAt,
 		&i.ReceivedAt,
+		&i.SummaryLabel,
 	)
 	return i, err
 }

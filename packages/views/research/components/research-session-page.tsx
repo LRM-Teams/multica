@@ -348,7 +348,6 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     isError: directorWorkActivityError,
     refetch: refetchDirectorWorkActivity,
     timeline: directorWorkTimeline,
-    refetchRunnerActivity,
   } = useResearchV6WorkActivity({
     enabled: directorV6Enabled,
     workspaceId: wsId,
@@ -1360,9 +1359,6 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
                   onRetry={() => void refetchDirectorNodeDetail()}
                   onRetryWorkActivity={() => {
                     void refetchDirectorWorkActivity();
-                    if (directorWorkActivityData?.agentId) {
-                      void refetchRunnerActivity();
-                    }
                   }}
                   onFocusNode={(nodeId) => {
                     if (!directorCanvas.canvas?.projectionNodeById.has(nodeId)) return;

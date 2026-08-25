@@ -5,7 +5,7 @@ and ownership boundaries exact; do not add wrapper concepts around them.
 
 ## Agent start
 
-- The production start owner is `(*WorkspaceRunner).startAgentNow`.
+- The production start owner is `(*WorkspaceDaemon).startAgentNow`.
 - Server-commanded starts and idle-snapshot wakeups must converge on
   `startAgentNow`; do not create another production start-completion path.
 - Replayed or rebound starts publish current status/session only. They must not
@@ -14,7 +14,7 @@ and ownership boundaries exact; do not add wrapper concepts around them.
 ## Starting Activity
 
 - Publish the spawn Activity through
-  `(*WorkspaceRunner).broadcastActivity(..., "starting")`.
+  `(*WorkspaceDaemon).broadcastActivity(..., "starting")`.
 - Production code has exactly one `broadcastActivity` call site: inside
   `startAgentNow`, after the provider process exists and `active` status (and a
   present provider session) has been sent.
@@ -28,7 +28,7 @@ and ownership boundaries exact; do not add wrapper concepts around them.
 
 - `TestRaftStartingActivityHasOneBroadcastCallSite` locks the method name and
   sole production call site.
-- `TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus` requires
+- `TestWorkspaceDaemonAcceptsScopedStartAndReturnsAckThenStatus` requires
   exactly one Starting Activity for a managed spawn.
 - `TestReplayManagedStartDoesNotRepaintStarting` locks the replay behavior.
 - Run `go test ./internal/daemon -count=1` from `server/` after changing this
@@ -102,7 +102,7 @@ the control RPC.
 
 ## Responsibility boundary
 
-Daemon owns one Workspace Runner's execution behavior, drain barrier, provider
+Daemon owns one WorkspaceDaemon's execution behavior, drain barrier, provider
 runtimes, Runtime registration, and child-local state. Computer owns machine
 supervision, process identity fencing, sibling coordination, orphan cleanup,
 and upgrade policy. Cloud Server HTTP/WebSocket is not part of this migration.

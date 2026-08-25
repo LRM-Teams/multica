@@ -263,11 +263,74 @@ func (s *PostgresStore) recordV6DirectorNoOp(ctx context.Context, proposal v6Dir
 		return err
 	}
 	var state int64
-	if err = tx.QueryRow(ctx, `SELECT state_version FROM research_session WHERE workspace_id=$1::uuid AND id=$2::uuid`, proposal.WorkspaceID, proposal.RunID).Scan(&state); err != nil {
+	var runStatus string
+	var hasWorker, agentCreationPending, hasIdleWorker bool
+	var hasWorkerWork, hasActiveWorkerWork, hasFailedWorkerWork, hasRejectedAssignment bool
+	if err = tx.QueryRow(ctx, `
+		SELECT s.state_version,
+		       s.status,
+		       EXISTS(
+		         SELECT 1 FROM research_team_membership m
+		         JOIN research_director_assignment d ON d.id=s.current_director_assignment_id AND d.status='active'
+		         WHERE m.workspace_id=s.workspace_id AND m.session_id=s.id
+		           AND m.agent_id<>d.director_agent_id
+		           AND m.state IN ('idle','working','offline','retiring')
+		       ),
+		       EXISTS(
+		         SELECT 1 FROM research_v6_outbox o
+		         WHERE o.workspace_id=s.workspace_id AND o.session_id=s.id
+		           AND o.kind='create_agent' AND o.status IN ('pending','delivering')
+		       ),
+		       EXISTS(
+		         SELECT 1 FROM research_team_membership m
+		         JOIN research_director_assignment d ON d.id=s.current_director_assignment_id AND d.status='active'
+		         WHERE m.workspace_id=s.workspace_id AND m.session_id=s.id
+		           AND m.agent_id<>d.director_agent_id AND m.state='idle'
+		       ),
+		       EXISTS(
+		         SELECT 1 FROM research_work_item w
+		         JOIN research_director_assignment d ON d.id=s.current_director_assignment_id AND d.status='active'
+		         WHERE w.workspace_id=s.workspace_id AND w.session_id=s.id
+		           AND w.kind<>'director' AND w.assigned_agent_id<>d.director_agent_id
+		       ),
+		       EXISTS(
+		         SELECT 1 FROM research_work_item w
+		         JOIN research_director_assignment d ON d.id=s.current_director_assignment_id AND d.status='active'
+		         WHERE w.workspace_id=s.workspace_id AND w.session_id=s.id
+		           AND w.kind<>'director' AND w.assigned_agent_id<>d.director_agent_id
+		           AND w.status IN ('ready','dispatching','enqueued','running','awaiting_input')
+		       ),
+		       EXISTS(
+		         SELECT 1 FROM research_work_item w
+		         JOIN research_director_assignment d ON d.id=s.current_director_assignment_id AND d.status='active'
+		         WHERE w.workspace_id=s.workspace_id AND w.session_id=s.id
+		           AND w.kind<>'director' AND w.assigned_agent_id<>d.director_agent_id
+		           AND w.status='failed'
+		       ),
+		       EXISTS(
+		         SELECT 1 FROM research_work_item w
+		         WHERE w.workspace_id=s.workspace_id AND w.session_id=s.id
+		           AND w.kind='director' AND w.status='failed'
+		           AND w.terminal_reason_code='contract_rejected'
+		       )
+		FROM research_session s
+		WHERE s.workspace_id=$1::uuid AND s.id=$2::uuid`, proposal.WorkspaceID, proposal.RunID).Scan(
+		&state, &runStatus, &hasWorker, &agentCreationPending, &hasIdleWorker,
+		&hasWorkerWork, &hasActiveWorkerWork, &hasFailedWorkerWork, &hasRejectedAssignment,
+	); err != nil {
 		return err
 	}
 	if state != expectedState {
 		return ErrWorkItemChanged
+	}
+	if runStatus == "running" && !hasWorker && !agentCreationPending {
+		return fmt.Errorf("%w: running Research Run has no non-Director member; create a run-scoped Agent before waiting", ErrInvalidContract)
+	}
+	if runStatus == "running" && hasIdleWorker && !hasWorkerWork && hasRejectedAssignment {
+		return fmt.Errorf("%w: the previous Work assignment was rejected; correct its schema and assign Work to an idle run-scoped Agent instead of returning no_op", ErrInvalidContract)
+	}
+	if runStatus == "running" && hasIdleWorker && !hasActiveWorkerWork && hasFailedWorkerWork {
+		return fmt.Errorf("%w: run-scoped Agent Work failed and no Agent Work is active; retry or reassign failed Work instead of returning no_op", ErrInvalidContract)
 	}
 	if _, err = appendEvent(ctx, tx, proposal.WorkspaceID, proposal.RunID, "v6_director_no_op", "v6-director-action:"+action.IdempotencyKey, "director", "", map[string]any{"director_cycle_id": cycleID, "reason": firstNonEmptyV6(reason, action.Reason)}); err != nil {
 		return err

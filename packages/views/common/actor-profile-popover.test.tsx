@@ -172,14 +172,15 @@ describe("ActorProfileContentLoaded", () => {
   it("reuses Activity timeline chrome for the latest five headings without details", () => {
     mockActivity.current = {
       data: {
-        summary: { label: "Running command...", tone: "running", visibility: "visible" },
+        summary: { label: "Running command...", activityKind: "working", detailKind: "running_command" },
         timeline: [
           {
             id: "newest-command",
             occurred_at: "2026-08-14T06:00:00Z",
             title: "Running command",
             subtext: "pnpm test -- --secret",
-            tone: "running",
+            activity_kind: "working",
+            detail_kind: "running_command",
             body_kind: "command",
             body: "pnpm test -- --secret",
           },
@@ -188,7 +189,8 @@ describe("ActorProfileContentLoaded", () => {
             occurred_at: "2026-08-14T05:59:00Z",
             title: "Sending message",
             subtext: "#private-target",
-            tone: "warning",
+            activity_kind: "working",
+            detail_kind: "sending_message",
             body_kind: "none",
           },
           {
@@ -196,7 +198,8 @@ describe("ActorProfileContentLoaded", () => {
             occurred_at: "2026-08-14T05:58:00Z",
             title: "Working",
             subtext: "Message received",
-            tone: "warning",
+            activity_kind: "working",
+            detail_kind: "message_received",
             body_kind: "none",
           },
           {
@@ -204,21 +207,24 @@ describe("ActorProfileContentLoaded", () => {
             occurred_at: "2026-08-14T05:57:00Z",
             title: "Idle",
             subtext: "Idle",
-            tone: "success",
+            activity_kind: "online",
+            detail_kind: "idle",
             body_kind: "none",
           },
           {
             id: "starting",
             occurred_at: "2026-08-14T05:56:00Z",
             title: "Starting",
-            tone: "warning",
+            activity_kind: "working",
+            detail_kind: "starting",
             body_kind: "none",
           },
           {
             id: "older",
             occurred_at: "2026-08-14T05:55:00Z",
             title: "Older omitted activity",
-            tone: "neutral",
+            activity_kind: "offline",
+            detail_kind: "stopped",
             body_kind: "none",
           },
         ],
@@ -291,12 +297,13 @@ describe("ActorProfileContentLoaded", () => {
     profile.profile_access = "identity_only";
     mockActivity.current = {
       data: {
-        summary: { label: "Thinking...", tone: "info", visibility: "visible" },
+        summary: { label: "Thinking...", activityKind: "thinking", detailKind: "thinking_started" },
         timeline: [{
           id: "thinking",
           occurred_at: "2026-08-14T06:00:00Z",
           title: "Thinking...",
-          tone: "info",
+          activity_kind: "thinking",
+          detail_kind: "thinking_started",
           body_kind: "none",
         }],
       },

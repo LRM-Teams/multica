@@ -12,7 +12,7 @@ import (
 // frictionTrackerForTask returns the per-task friction tracker, creating it on
 // first use. The task drain loop is the only writer, so the tracker itself
 // needs no internal locking.
-func (d *WorkspaceDaemonCore) frictionTrackerForTask(taskID string) *memorysignal.FrictionTracker {
+func (d *Daemon) frictionTrackerForTask(taskID string) *memorysignal.FrictionTracker {
 	taskID = strings.TrimSpace(taskID)
 	if d == nil || taskID == "" {
 		return nil
@@ -23,7 +23,7 @@ func (d *WorkspaceDaemonCore) frictionTrackerForTask(taskID string) *memorysigna
 
 // takeTaskFrictionVector removes and returns the task's friction vector.
 // Taking (not peeking) keeps the map from accumulating finished tasks.
-func (d *WorkspaceDaemonCore) takeTaskFrictionVector(taskID string) memorysignal.FrictionVector {
+func (d *Daemon) takeTaskFrictionVector(taskID string) memorysignal.FrictionVector {
 	taskID = strings.TrimSpace(taskID)
 	if d == nil || taskID == "" {
 		return memorysignal.FrictionVector{}

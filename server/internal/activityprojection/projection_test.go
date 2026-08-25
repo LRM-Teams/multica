@@ -147,6 +147,42 @@ func TestProjectTimelineEntryShowsCommandTextAsSubtext(t *testing.T) {
 	}
 }
 
+func TestProjectTaskMessageProjectsOnlyBoundedUserFacingTaskActivity(t *testing.T) {
+	row, ok := ProjectTaskMessage(protocol.TaskMessagePayload{
+		Type:       "tool_use",
+		Tool:       "bash",
+		Visibility: "user_facing",
+		Input: map[string]any{
+			"command": "pnpm test",
+			"secret":  "must not persist",
+		},
+	})
+	if !ok {
+		t.Fatal("user-facing tool message was not projected")
+	}
+	if row.Title != "Running command" || row.Subtext != "pnpm test" || row.Tone != "running" || row.BodyKind != "command" {
+		t.Fatalf("task message row = %+v", row)
+	}
+	if strings.Contains(row.Subtext, "must not persist") || row.Body != "" {
+		t.Fatalf("task message row retained raw provider input: %+v", row)
+	}
+
+	if _, ok := ProjectTaskMessage(protocol.TaskMessagePayload{
+		Type:       "tool_use",
+		Tool:       "bash",
+		Visibility: "diagnostic_only",
+	}); ok {
+		t.Fatal("diagnostic-only task message must not become presentation activity")
+	}
+	if _, ok := ProjectTaskMessage(protocol.TaskMessagePayload{
+		Type:       "text",
+		Visibility: "user_facing",
+		Content:    "provider reasoning must not persist",
+	}); ok {
+		t.Fatal("provider text must not become presentation activity")
+	}
+}
+
 func TestProjectTimelineEntryShowsCompactionLifecycleUnderWorking(t *testing.T) {
 	latest := Summary{Label: "Online", Tone: "success"}
 	cases := []struct {

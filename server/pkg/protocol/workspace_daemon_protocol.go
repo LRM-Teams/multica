@@ -17,7 +17,7 @@ const (
 
 	// Computer control uses Raft 1.0.16 names on the DaemonCore connect
 	// socket. The child does not swap the machine binary; it forwards the
-	// command to ComputerCore through the injected ComputerCore callback.
+	// command to Computer Host through the injected Host callback.
 	EventComputerUpgrade         = "computer:upgrade"
 	EventComputerRestart         = "computer:restart"
 	EventComputerUpgradeProgress = "computer:upgrade:progress"
@@ -29,7 +29,6 @@ const (
 	EventComputerWorkJournalDone = "computer:work-journal:done"
 	EventAgentStartAck           = "agent:start:ack"
 	EventAgentActivity           = "agent:activity"
-	EventAgentActivityProbe      = "agent:activity_probe"
 	EventAgentSession            = "agent:session"
 
 	AgentStatusActive   = "active"
@@ -91,10 +90,10 @@ const (
 	maxActivityEntriesPerFrame       = 64
 )
 
-// WorkspaceDaemonReadyPayload establishes one daemon-instance/Workspace
+// WorkspaceReadyPayload establishes one daemon-instance/Workspace
 // connection. It says that the local Manager has initialized and reconciled;
 // it deliberately says nothing about any individual Agent being ready.
-type WorkspaceDaemonReadyPayload struct {
+type WorkspaceReadyPayload struct {
 	WorkspaceID      string `json:"workspaceId"`
 	DaemonInstanceID string `json:"daemonInstanceId"`
 	DeviceName       string `json:"deviceName,omitempty"`
@@ -103,17 +102,17 @@ type WorkspaceDaemonReadyPayload struct {
 	// MachineID is the OS-level persistent machine fingerprint (e.g.
 	// /etc/machine-id on Linux, IOPlatformUUID on macOS, MachineGuid on
 	// Windows). It is an attribute of the Computer, not of any single Workspace
-	// WorkspaceDaemon, and is used as the authoritative same-machine proof for identity
+	// Runner, and is used as the authoritative same-machine proof for identity
 	// reclaim and agent convergence. Empty when the daemon could not derive one.
 	MachineID          string   `json:"machineId,omitempty"`
 	ActiveCapabilities []string `json:"activeCapabilities,omitempty"`
 	RunningAgents      []string `json:"runningAgents,omitempty"`
 }
 
-// WorkspaceDaemonPingPayload and WorkspaceDaemonPongPayload are connection
+// WorkspacePingPayload and WorkspacePongPayload are connection
 // liveness only. They are not runtime heartbeats and must not project Agent
 // Activity.
-type WorkspaceDaemonPingPayload struct {
+type WorkspacePingPayload struct {
 	PingID string `json:"pingId"`
 }
 
@@ -167,7 +166,7 @@ func (p ComputerRestartPayload) Validate() error {
 }
 
 // ComputerUpgradeProgressPayload and ComputerUpgradeDonePayload are emitted on
-// the same DaemonConnection that received the command. ComputerCore owns the swap;
+// the same DaemonConnection that received the command. Host owns the swap;
 // the child only writes these frames.
 type ComputerUpgradeProgressPayload struct {
 	RequestID string `json:"requestId"`
@@ -192,7 +191,7 @@ func (p ComputerUpgradeDonePayload) Validate() error {
 	return validateRequiredIDs(p.RequestID)
 }
 
-// ComputerWorkDigestPayload asks the ComputerCore for one windowed Work
+// ComputerWorkDigestPayload asks the Computer Host for one windowed Work
 // Digest. It is a new control command; it must not reuse upgrade payloads.
 type ComputerWorkDigestPayload struct {
 	RequestID string    `json:"requestId"`
@@ -214,7 +213,7 @@ func (p ComputerWorkDigestPayload) Window() WorkDigestWindow {
 	return WorkDigestWindow{Start: p.Start, End: p.End}
 }
 
-// ComputerWorkDigestDonePayload is the ComputerCore harvest result on the same
+// ComputerWorkDigestDonePayload is the Host harvest result on the same
 // DaemonConnection that received computer:work-digest.
 type ComputerWorkDigestDonePayload struct {
 	RequestID string      `json:"requestId"`
@@ -252,48 +251,41 @@ func (p ComputerWorkJournalDonePayload) Validate() error {
 	return validateRequiredIDs(p.RequestID)
 }
 
-type WorkspaceDaemonPongPayload struct {
+type WorkspacePongPayload struct {
 	PingID string `json:"pingId"`
 }
 
-// WorkspaceDaemonAgentStartConfig mirrors Raft's agent:start config boundary.
+// AgentStartConfig mirrors Raft's agent:start config boundary.
 // A non-empty SessionID resumes that provider session; an omitted SessionID
 // starts fresh.
-type WorkspaceDaemonAgentStartConfig struct {
+type AgentStartConfig struct {
 	SessionID string `json:"sessionId,omitempty"`
 }
 
-// WorkspaceDaemonAgentStartPayload is the server command accepted by a local
-// Agent Process Manager. LaunchID is the server-owned launch epoch and remains
-// stable when the same desired launch is retried after reconnect.
-type WorkspaceDaemonAgentStartPayload struct {
-	AgentID         string                          `json:"agentId"`
-	RuntimeID       string                          `json:"runtimeId"`
-	LaunchID        string                          `json:"launchId"`
-	StartDispatchID string                          `json:"startDispatchId"`
-	Config          WorkspaceDaemonAgentStartConfig `json:"config"`
+// AgentStartPayload is the server command accepted by a local Agent Process Manager.
+type AgentStartPayload struct {
+	AgentID   string           `json:"agentId"`
+	RuntimeID string           `json:"runtimeId"`
+	Config    AgentStartConfig `json:"config"`
 }
 
 // AgentStartAckPayload is an idempotent acceptance receipt. QueueState never
 // claims spawn, runtime readiness, or initial activation delivery.
 type AgentStartAckPayload struct {
-	AgentID         string `json:"agentId"`
-	LaunchID        string `json:"launchId"`
-	StartDispatchID string `json:"startDispatchId"`
-	QueueState      string `json:"queueState"`
-	QueueDepth      int    `json:"queueDepth"`
-	QueueAgeMS      int64  `json:"queueAgeMs"`
+	AgentID    string `json:"agentId"`
+	QueueState string `json:"queueState"`
+	QueueDepth int    `json:"queueDepth"`
+	QueueAgeMS int64  `json:"queueAgeMs"`
 }
 
-type WorkspaceDaemonAgentStopPayload struct {
-	AgentID  string `json:"agentId"`
-	LaunchID string `json:"launchId"`
+type AgentStopPayload struct {
+	AgentID string `json:"agentId"`
 }
 
-// WorkspaceDaemonAgentResetWorkspacePayload mirrors Raft's
+// AgentWorkspaceResetPayload mirrors Raft's
 // agent:reset-workspace command. OperationID is Multica's correlation fence;
-// Workspace identity remains owned by the authenticated WorkspaceDaemon connection.
-type WorkspaceDaemonAgentResetWorkspacePayload struct {
+// Workspace identity remains owned by the authenticated Runner connection.
+type AgentWorkspaceResetPayload struct {
 	OperationID string `json:"operationId"`
 	AgentID     string `json:"agentId"`
 }
@@ -303,10 +295,10 @@ const (
 	AgentResetWorkspaceFailed    = "failed"
 )
 
-// WorkspaceDaemonAgentResetWorkspaceResultPayload is Multica's terminal
+// AgentWorkspaceResetResultPayload is Multica's terminal
 // receipt extension for Raft's fire-and-forget reset command. The server must
 // observe success before it is allowed to issue the replacement agent:start.
-type WorkspaceDaemonAgentResetWorkspaceResultPayload struct {
+type AgentWorkspaceResetResultPayload struct {
 	OperationID string `json:"operationId"`
 	AgentID     string `json:"agentId"`
 	Status      string `json:"status"`
@@ -316,45 +308,33 @@ type WorkspaceDaemonAgentResetWorkspaceResultPayload struct {
 // AgentStatusPayload is lifecycle management state, not a user Activity
 // label. active is reported only after a live provider process exists.
 type AgentStatusPayload struct {
-	AgentID  string `json:"agentId"`
-	LaunchID string `json:"launchId"`
-	Status   string `json:"status"`
+	AgentID string `json:"agentId"`
+	Status  string `json:"status"`
 }
 
 // AgentSessionPayload reports a provider session independently from process,
 // launch, turn, and runtime-state generation identities.
 type AgentSessionPayload struct {
 	AgentID           string `json:"agentId"`
-	LaunchID          string `json:"launchId"`
 	ProviderSessionID string `json:"providerSessionId,omitempty"`
 	TurnID            string `json:"turnId,omitempty"`
 	RuntimeGeneration int64  `json:"runtimeGeneration"`
 }
 
-// AgentActivitySnapshot is the server's replaceable current presentation
-// evidence. The daemon keeps the same shape internally for heartbeat and
-// reconnect state, but AgentActivityPayload's JSON boundary sends only Raft
-// execution facts; ActivityKind is derived by the server from DetailKind.
+// AgentActivitySnapshot is the daemon-owned current Activity presentation.
 type AgentActivitySnapshot struct {
-	AgentID           string    `json:"-"`
-	LaunchID          string    `json:"-"`
-	DaemonInstanceID  string    `json:"-"`
-	ClientSequence    int64     `json:"-"`
-	ProducerFactID    string    `json:"-"`
-	ObservedAt        time.Time `json:"-"`
-	ActivityKind      string    `json:"-"`
-	DetailKind        string    `json:"-"`
-	ProbeID           string    `json:"-"`
-	ProcessInstanceID string    `json:"-"`
+	AgentID          string    `json:"agentId"`
+	DaemonInstanceID string    `json:"daemonInstanceId"`
+	ObservedAt       time.Time `json:"observedAt"`
+	ActivityKind     string    `json:"activityKind"`
+	DetailKind       string    `json:"detailKind"`
 }
 
-// AgentActivityEntry keeps its body as an open envelope. Like Raft, its array
-// order is its position; the server derives the persistence ordinal instead of
-// carrying a duplicate position field on the wire. Server presentation owns
-// known-kind parsing and the generic fallback used for future kinds.
+// AgentActivityEntry is the daemon-local fact envelope used while producing
+// display-ready presentation. It never crosses the WorkspaceDaemon wire.
 type AgentActivityEntry struct {
-	Kind string          `json:"kind"`
-	Body json.RawMessage `json:"body"`
+	Kind string          `json:"-"`
+	Body json.RawMessage `json:"-"`
 }
 
 // AgentActivityStatusBody matches Raft 1.0.17's non-tool timeline entry.
@@ -379,84 +359,28 @@ type AgentActivitySystemBody struct {
 	Text  string `json:"text"`
 }
 
+type AgentActivitySummary struct {
+	ActivityKind string `json:"activityKind"`
+	DetailKind   string `json:"detailKind"`
+	Label        string `json:"label"`
+}
+
+type AgentActivityTimelineRow struct {
+	ActivityKind string `json:"activityKind"`
+	DetailKind   string `json:"detailKind"`
+	Title        string `json:"title"`
+	Subtext      string `json:"subtext,omitempty"`
+	BodyKind     string `json:"bodyKind"`
+	Body         string `json:"body,omitempty"`
+}
+
 type AgentActivityPayload struct {
-	Snapshot    AgentActivitySnapshot `json:"-"`
-	Detail      string                `json:"-"`
-	Entries     []AgentActivityEntry  `json:"-"`
-	IsHeartbeat bool                  `json:"-"`
+	Snapshot AgentActivitySnapshot      `json:"snapshot"`
+	Summary  AgentActivitySummary       `json:"summary"`
+	Timeline []AgentActivityTimelineRow `json:"timeline,omitempty"`
 }
 
-// agentActivityWirePayload is Raft v1.0.16's fact-only agent:activity body.
-// It intentionally has no snapshot, activityKind, or processInstanceId.
-type agentActivityWirePayload struct {
-	AgentID          string               `json:"agentId"`
-	Detail           string               `json:"detail"`
-	DetailKind       string               `json:"detailKind"`
-	Entries          []AgentActivityEntry `json:"entries,omitempty"`
-	LaunchID         string               `json:"launchId,omitempty"`
-	DaemonInstanceID string               `json:"daemonInstanceId,omitempty"`
-	ProbeID          string               `json:"probeId,omitempty"`
-	ClientSeq        int64                `json:"clientSeq,omitempty"`
-	ProducerFactID   string               `json:"producerFactId,omitempty"`
-	ObservedAtMS     *int64               `json:"observedAtMs,omitempty"`
-	IsHeartbeat      bool                 `json:"isHeartbeat"`
-}
-
-func (p AgentActivityPayload) MarshalJSON() ([]byte, error) {
-	var observedAtMS *int64
-	if !p.Snapshot.ObservedAt.IsZero() {
-		value := p.Snapshot.ObservedAt.UnixMilli()
-		observedAtMS = &value
-	}
-	return json.Marshal(agentActivityWirePayload{
-		AgentID:          p.Snapshot.AgentID,
-		Detail:           p.Detail,
-		DetailKind:       p.Snapshot.DetailKind,
-		Entries:          p.Entries,
-		LaunchID:         p.Snapshot.LaunchID,
-		DaemonInstanceID: p.Snapshot.DaemonInstanceID,
-		ProbeID:          p.Snapshot.ProbeID,
-		ClientSeq:        p.Snapshot.ClientSequence,
-		ProducerFactID:   p.Snapshot.ProducerFactID,
-		ObservedAtMS:     observedAtMS,
-		IsHeartbeat:      p.IsHeartbeat,
-	})
-}
-
-func (p *AgentActivityPayload) UnmarshalJSON(data []byte) error {
-	var wire agentActivityWirePayload
-	if err := json.Unmarshal(data, &wire); err != nil {
-		return err
-	}
-	observedAt := time.Time{}
-	if wire.ObservedAtMS != nil {
-		observedAt = time.UnixMilli(*wire.ObservedAtMS).UTC()
-	}
-	p.Snapshot = AgentActivitySnapshot{
-		AgentID:          wire.AgentID,
-		LaunchID:         wire.LaunchID,
-		DaemonInstanceID: wire.DaemonInstanceID,
-		ClientSequence:   wire.ClientSeq,
-		ProducerFactID:   wire.ProducerFactID,
-		ObservedAt:       observedAt,
-		DetailKind:       wire.DetailKind,
-		ProbeID:          wire.ProbeID,
-	}
-	p.Detail = wire.Detail
-	p.Entries = wire.Entries
-	p.IsHeartbeat = wire.IsHeartbeat
-	return nil
-}
-
-// AgentActivityProbePayload asks a Manager for an actual current observation.
-// Receiving this frame must not change local Activity by itself.
-type AgentActivityProbePayload struct {
-	AgentID  string `json:"agentId"`
-	LaunchID string `json:"launchId"`
-	ProbeID  string `json:"probeId"`
-}
-
-func (p WorkspaceDaemonReadyPayload) Validate() error {
+func (p WorkspaceReadyPayload) Validate() error {
 	if err := validateRequiredIDs(p.WorkspaceID, p.DaemonInstanceID); err != nil {
 		return err
 	}
@@ -486,15 +410,15 @@ func (p WorkspaceDaemonReadyPayload) Validate() error {
 	return nil
 }
 
-func (p WorkspaceDaemonPingPayload) Validate() error { return validateRequiredIDs(p.PingID) }
-func (p WorkspaceDaemonPongPayload) Validate() error { return validateRequiredIDs(p.PingID) }
+func (p WorkspacePingPayload) Validate() error { return validateRequiredIDs(p.PingID) }
+func (p WorkspacePongPayload) Validate() error { return validateRequiredIDs(p.PingID) }
 
-func (p WorkspaceDaemonAgentStartPayload) Validate() error {
-	return validateRequiredIDs(p.AgentID, p.RuntimeID, p.LaunchID, p.StartDispatchID)
+func (p AgentStartPayload) Validate() error {
+	return validateRequiredIDs(p.AgentID, p.RuntimeID)
 }
 
 func (p AgentStartAckPayload) Validate() error {
-	if err := validateRequiredIDs(p.AgentID, p.LaunchID, p.StartDispatchID); err != nil {
+	if err := validateRequiredIDs(p.AgentID); err != nil {
 		return err
 	}
 	if !isOneOf(p.QueueState, AgentStartQueueQueued, AgentStartQueueStarting, AgentStartQueueRunning, AgentStartQueueRebound) {
@@ -506,15 +430,15 @@ func (p AgentStartAckPayload) Validate() error {
 	return nil
 }
 
-func (p WorkspaceDaemonAgentStopPayload) Validate() error {
-	return validateRequiredIDs(p.AgentID, p.LaunchID)
+func (p AgentStopPayload) Validate() error {
+	return validateRequiredIDs(p.AgentID)
 }
 
-func (p WorkspaceDaemonAgentResetWorkspacePayload) Validate() error {
+func (p AgentWorkspaceResetPayload) Validate() error {
 	return validateRequiredIDs(p.OperationID, p.AgentID)
 }
 
-func (p WorkspaceDaemonAgentResetWorkspaceResultPayload) Validate() error {
+func (p AgentWorkspaceResetResultPayload) Validate() error {
 	if err := validateRequiredIDs(p.OperationID, p.AgentID); err != nil {
 		return err
 	}
@@ -531,7 +455,7 @@ func (p WorkspaceDaemonAgentResetWorkspaceResultPayload) Validate() error {
 }
 
 func (p AgentStatusPayload) Validate() error {
-	if err := validateRequiredIDs(p.AgentID, p.LaunchID); err != nil {
+	if err := validateRequiredIDs(p.AgentID); err != nil {
 		return err
 	}
 	if !isOneOf(p.Status, AgentStatusActive, AgentStatusInactive) {
@@ -541,7 +465,7 @@ func (p AgentStatusPayload) Validate() error {
 }
 
 func (p AgentSessionPayload) Validate() error {
-	if err := validateRequiredIDs(p.AgentID, p.LaunchID); err != nil {
+	if err := validateRequiredIDs(p.AgentID); err != nil {
 		return err
 	}
 	if p.RuntimeGeneration < 0 {
@@ -554,26 +478,29 @@ func (p AgentActivityPayload) Validate() error {
 	if err := p.Snapshot.Validate(); err != nil {
 		return err
 	}
-	if len(p.Detail) > maxActivityEntryBytes {
-		return fmt.Errorf("activity detail exceeds %d bytes", maxActivityEntryBytes)
+	if strings.TrimSpace(p.Summary.ActivityKind) == "" || strings.TrimSpace(p.Summary.DetailKind) == "" || strings.TrimSpace(p.Summary.Label) == "" {
+		return fmt.Errorf("activity summary facts and label are required")
 	}
-	if len(p.Entries) > maxActivityEntriesPerFrame {
-		return fmt.Errorf("too many activity entries: %d", len(p.Entries))
+	if len(p.Summary.Label) > maxActivityEntryBytes {
+		return fmt.Errorf("activity summary exceeds %d bytes", maxActivityEntryBytes)
 	}
-	for _, entry := range p.Entries {
-		if err := entry.Validate(); err != nil {
-			return err
+	if len(p.Timeline) > maxActivityEntriesPerFrame {
+		return fmt.Errorf("too many activity timeline rows: %d", len(p.Timeline))
+	}
+	for _, row := range p.Timeline {
+		if strings.TrimSpace(row.ActivityKind) == "" || strings.TrimSpace(row.DetailKind) == "" || strings.TrimSpace(row.Title) == "" || strings.TrimSpace(row.BodyKind) == "" {
+			return fmt.Errorf("activity timeline presentation is required")
+		}
+		if len(row.Title)+len(row.Subtext)+len(row.Body) > maxActivityEntryBytes {
+			return fmt.Errorf("activity timeline row exceeds %d bytes", maxActivityEntryBytes)
 		}
 	}
 	return nil
 }
 
 func (p AgentActivitySnapshot) Validate() error {
-	if err := validateRequiredIDs(p.AgentID, p.LaunchID, p.DaemonInstanceID, p.ProducerFactID); err != nil {
+	if err := validateRequiredIDs(p.AgentID, p.DaemonInstanceID); err != nil {
 		return err
-	}
-	if p.ClientSequence <= 0 {
-		return fmt.Errorf("activity client sequence must be positive")
 	}
 	if p.ObservedAt.IsZero() {
 		return fmt.Errorf("activity observation time is required")
@@ -590,7 +517,7 @@ func (p AgentActivitySnapshot) Validate() error {
 	if !IsAgentActivityFactDetailKind(p.DetailKind) {
 		return fmt.Errorf("invalid or non-fact activity detail kind %q", p.DetailKind)
 	}
-	return validateOptionalIDs(p.DetailKind, p.ProbeID, p.ProcessInstanceID)
+	return validateOptionalIDs(p.DetailKind)
 }
 
 func (e AgentActivityEntry) Validate() error {
@@ -608,10 +535,6 @@ func (e AgentActivityEntry) Validate() error {
 		return fmt.Errorf("activity entry body must be a JSON object")
 	}
 	return nil
-}
-
-func (p AgentActivityProbePayload) Validate() error {
-	return validateRequiredIDs(p.AgentID, p.LaunchID, p.ProbeID)
 }
 
 func validateRequiredIDs(values ...string) error {

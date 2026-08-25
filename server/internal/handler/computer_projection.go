@@ -59,6 +59,7 @@ func computerConnectionProjection(daemonID, ownerID string, lastSeen pgtype.Time
 		DeviceName:         deviceName,
 		OS:                 osName,
 		CLIVersion:         cliVersion,
+		Runtimes:           []computerRuntimeOption{},
 	}
 }
 
@@ -137,7 +138,7 @@ ORDER BY b.created_at, b.daemon_id`, parseUUID(workspaceID))
 		hb := &db.DaemonHeartbeat{LastSeenAt: lastSeen}
 		connected := h.computerConnectedByRunner(daemonID, workspaceID, hb, time.Now())
 		row := computerConnectionProjection(daemonID, ownerID, lastSeen, connected, workJournalEnabled, deviceName, osName, cliVersion)
-		row.Runtimes = bindable[daemonID]
+		row.Runtimes = append(row.Runtimes, bindable[daemonID]...)
 		result = append(result, row)
 	}
 	if err := rows.Err(); err != nil {

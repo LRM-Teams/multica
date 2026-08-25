@@ -160,7 +160,6 @@ func legacyQueryNumbersInRange(entry *QueryLogEntry) bool {
 		entry.JudgeScore >= 0 && entry.JudgeScore <= legacyMaxJudgeScore
 }
 
-
 func (s *Store) legacyMigrationDir() string {
 	return filepath.Join(s.Root, "legacy_migration")
 }

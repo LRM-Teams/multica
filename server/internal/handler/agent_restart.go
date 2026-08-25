@@ -77,9 +77,8 @@ func writeAgentLifecycleRequestError(w http.ResponseWriter, err *agentLifecycleR
 	writeError(w, err.status, err.message)
 }
 
-// StartAgent allocates a fresh immutable launch and dispatch identity before
-// asking the current WorkspaceDaemon to start it. Reusing a failed dispatch
-// would only replay Raft's original acceptance receipt without spawning.
+// StartAgent asks the current Workspace Daemon to converge the Agent's active
+// runtime assignment.
 func (h *Handler) StartAgent(w http.ResponseWriter, r *http.Request) {
 	agent, ok := h.loadAgentRestartTarget(w, r)
 	if !ok {
@@ -108,29 +107,19 @@ func (h *Handler) startAgent(ctx context.Context, agent db.Agent) *agentLifecycl
 	if !runtime.DaemonID.Valid {
 		return &agentLifecycleRequestError{status: http.StatusConflict, message: "agent_runtime_offline"}
 	}
-	launchID := uuid.NewString()
-	dispatchID := uuid.NewString()
 	var sessionID string
-	err = h.DB.QueryRow(ctx, `
-		UPDATE agent_runner_launch_projection
-		SET launch_id = $1, start_dispatch_id = $2, updated_at = now()
-		WHERE workspace_id = $3 AND agent_id = $4 AND runtime_id = $5
-		RETURNING COALESCE(provider_session_id, '')
-	`, launchID, dispatchID, agent.WorkspaceID, agent.ID, runtime.ID).Scan(&sessionID)
+	err = h.DB.QueryRow(ctx, `SELECT COALESCE(provider_session_id, '') FROM agent WHERE id = $1 AND archived_at IS NULL`, agent.ID).Scan(&sessionID)
 	if err != nil {
-		return &agentLifecycleRequestError{status: http.StatusConflict, message: "agent_launch_unavailable"}
+		return &agentLifecycleRequestError{status: http.StatusConflict, message: "agent_runtime_missing"}
 	}
 	h.restarts().finish(uuidToString(agent.ID))
 	if h.AgentRestartNotifier == nil || !h.AgentRestartNotifier.NotifyAgentRestartCommand(
-		uuidToString(agent.WorkspaceID), runtime.DaemonID.String, protocol.EventDaemonAgentStart, dispatchID,
-		protocol.WorkspaceDaemonAgentStartPayload{
-			AgentID: uuidToString(agent.ID), RuntimeID: uuidToString(runtime.ID), LaunchID: launchID, StartDispatchID: dispatchID,
-			Config: protocol.WorkspaceDaemonAgentStartConfig{SessionID: sessionID},
+		uuidToString(agent.WorkspaceID), runtime.DaemonID.String, protocol.EventDaemonAgentStart, uuid.NewString(),
+		protocol.AgentStartPayload{
+			AgentID: uuidToString(agent.ID), RuntimeID: uuidToString(runtime.ID), Config: protocol.AgentStartConfig{SessionID: sessionID},
 		},
 	) {
-		// The desired launch and immutable dispatch are already recorded.
-		// Reconnect reconciliation replays that exact Start; it must not turn an
-		// unavailable first delivery into manual Stop intent.
+		// Desired state remains the Agent row. Reconnect reconciliation retries it.
 		return nil
 	}
 	return nil
@@ -163,28 +152,13 @@ func (h *Handler) stopAgent(ctx context.Context, agent db.Agent) *agentLifecycle
 	if err != nil || !runtime.DaemonID.Valid {
 		return &agentLifecycleRequestError{status: http.StatusConflict, message: "agent_runtime_offline"}
 	}
-	var launchID string
 	if restart, active := h.restarts().get(agentID); active && restart.workspaceID == workspaceID &&
 		restart.runtimeID == uuidToString(runtime.ID) && restart.computerID == runtime.DaemonID.String {
-		if restart.step == agentRestartStepStarting {
-			launchID = restart.startLaunchID
-		} else {
-			launchID = restart.stopLaunchID
-		}
 		h.restarts().finish(agentID)
 	}
-	if launchID == "" {
-		err = h.DB.QueryRow(ctx, `
-			SELECT launch_id::text FROM agent_runner_launch_projection
-			WHERE workspace_id = $1 AND agent_id = $2 AND runtime_id = $3
-		`, agent.WorkspaceID, agent.ID, runtime.ID).Scan(&launchID)
-		if err != nil || launchID == "" {
-			return &agentLifecycleRequestError{status: http.StatusConflict, message: "agent_launch_unavailable"}
-		}
-	}
 	if h.AgentRestartNotifier == nil || !h.AgentRestartNotifier.NotifyAgentRestartCommand(
-		workspaceID, runtime.DaemonID.String, protocol.EventDaemonAgentStop, launchID,
-		protocol.WorkspaceDaemonAgentStopPayload{AgentID: agentID, LaunchID: launchID},
+		workspaceID, runtime.DaemonID.String, protocol.EventDaemonAgentStop, uuid.NewString(),
+		protocol.AgentStopPayload{AgentID: agentID},
 	) {
 		return &agentLifecycleRequestError{status: http.StatusConflict, message: "agent_runtime_offline"}
 	}

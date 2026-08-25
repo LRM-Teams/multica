@@ -15,7 +15,7 @@ import (
 
 // LocalControlRegistry builds the Computer's production control surface. The
 // HTTP mux is deliberately not involved in this path.
-func (host *ComputerCore) LocalControlRegistry(state *hostProcessState) *LocalControlRegistry {
+func (host *Host) LocalControlRegistry(state *hostProcessState) *LocalControlRegistry {
 	registry := NewLocalControlRegistry()
 	register := func(name string, fn LocalControlHandler) {
 		if err := registry.Register(name, fn); err != nil {
@@ -80,13 +80,13 @@ func (host *ComputerCore) LocalControlRegistry(state *hostProcessState) *LocalCo
 		if err := json.Unmarshal(request.Command, &command); err != nil {
 			return nil, err
 		}
-		if request.Identity.Validate() != nil || !host.daemonCore.control.current(request.Identity) {
+		if request.Identity.Validate() != nil || !host.control.current(request.Identity) {
 			return nil, errors.New("inactive managed runner process")
 		}
-		if host.daemonCore.control.callbacks.ComputerUpgrade == nil {
+		if host.control.callbacks.ComputerUpgrade == nil {
 			return nil, errors.New("Computer upgrade is unavailable")
 		}
-		if err := host.daemonCore.control.callbacks.ComputerUpgrade(ctx, request.Identity, request.Command); err != nil {
+		if err := host.control.callbacks.ComputerUpgrade(ctx, request.Identity, request.Command); err != nil {
 			return nil, err
 		}
 		return map[string]string{"id": command.Operation(), "phase": "starting"}, nil
@@ -105,11 +105,11 @@ func (host *ComputerCore) LocalControlRegistry(state *hostProcessState) *LocalCo
 		}
 		return host.upgrade.status(), nil
 	})
-	host.daemonCore.control.RegisterRPCHandlers(registry)
+	host.control.RegisterRPCHandlers(registry)
 	return registry
 }
 
-func (host *ComputerCore) processHealthResult(state *hostProcessState) map[string]any {
+func (host *Host) processHealthResult(state *hostProcessState) map[string]any {
 	state.mu.RLock()
 	identity, ready, desired := state.identity, state.ready, append([]string(nil), state.desired...)
 	started := state.startedAt
@@ -130,7 +130,7 @@ func (host *ComputerCore) processHealthResult(state *hostProcessState) map[strin
 	}
 }
 
-func (host *ComputerCore) authorizeLocal(headers map[string]string) bool {
+func (host *Host) authorizeLocal(headers map[string]string) bool {
 	provided := strings.TrimSpace(headers["X-Multica-Control-Token"])
-	return host != nil && host.daemonCore.control != nil && provided != "" && host.daemonCore.control.token != "" && subtle.ConstantTimeCompare([]byte(provided), []byte(host.daemonCore.control.token)) == 1
+	return host != nil && host.control != nil && provided != "" && host.control.token != "" && subtle.ConstantTimeCompare([]byte(provided), []byte(host.control.token)) == 1
 }

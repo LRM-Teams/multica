@@ -282,7 +282,7 @@ func TestRequestLogger_Distinct400sAreNotCoalesced(t *testing.T) {
 	}{
 		{"/api/v1/env-dispatch", "user-a", `{"error":"validation_failed"}`},
 		{"/api/v1/env-dispatch", "user-b", `{"error":"validation_failed"}`}, // different user
-		{"/api/v1/other", "user-a", `{"error":"validation_failed"}`},         // different path
+		{"/api/v1/other", "user-a", `{"error":"validation_failed"}`},        // different path
 		{"/api/v1/env-dispatch", "user-a", `{"error":"not_found"}`},         // different code
 	}
 	for _, v := range variants {

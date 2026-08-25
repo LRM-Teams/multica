@@ -227,7 +227,7 @@ export interface AgentRuntimeConfig {
     daemon_id: string;
     /** Display-ready: the server already resolved the fallback chain. */
     name: string;
-    /** WS truth — a live Workspace Runner socket for this daemon. */
+    /** WS truth — a live WorkspaceDaemon socket for this daemon. */
     connected: boolean;
     cli_version?: string;
     os?: string;

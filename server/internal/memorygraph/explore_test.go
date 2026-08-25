@@ -287,6 +287,49 @@ func TestExploreUsesServerRounds(t *testing.T) {
 	}
 }
 
+// P0 §4.1: persisted seed ids replace the internal hybrid search. The
+// internal search for this query hits n-target; explicit n-other seeds
+// must win, proving ExploreWithSeeds skipped the search.
+func TestExploreWithSeedsUsesProvidedSeeds(t *testing.T) {
+	store := newExploreStore(t)
+	retr := newExploreRetriever(t, store)
+	backend := &fakeExploreBackend{t: t}
+	ex := NewExplorer(store, retr, backend, testExploreConfig(), "pi", nil)
+
+	res, err := ex.ExploreWithSeeds(context.Background(), "dispatch router retries", []string{"n-other"})
+	if err != nil {
+		t.Fatalf("ExploreWithSeeds: %v", err)
+	}
+	if len(backend.errs) > 0 {
+		t.Fatalf("fake backend tool errors: %v", backend.errs)
+	}
+	// The fake backend explores and submits the FIRST prompt seed node, so
+	// an adopted n-other proves the provided seeds reached the trajectory.
+	if !res.Found || len(res.NodeIDs) != 1 || res.NodeIDs[0] != "n-other" {
+		t.Fatalf("result = %+v, want found run adopting provided seed n-other", res)
+	}
+}
+
+// Empty seed ids fall back to the internal hybrid search (backtest and
+// direct-caller compatibility).
+func TestExploreWithSeedsEmptySeedsFallsBackToSearch(t *testing.T) {
+	store := newExploreStore(t)
+	retr := newExploreRetriever(t, store)
+	backend := &fakeExploreBackend{t: t}
+	ex := NewExplorer(store, retr, backend, testExploreConfig(), "pi", nil)
+
+	res, err := ex.ExploreWithSeeds(context.Background(), "dispatch router retries", nil)
+	if err != nil {
+		t.Fatalf("ExploreWithSeeds: %v", err)
+	}
+	if len(backend.errs) > 0 {
+		t.Fatalf("fake backend tool errors: %v", backend.errs)
+	}
+	if !res.Found || len(res.NodeIDs) != 1 || res.NodeIDs[0] != "n-target" {
+		t.Fatalf("result = %+v, want internal-search hit n-target", res)
+	}
+}
+
 func TestExploreGarbageOutputMarkedFailed(t *testing.T) {
 	store := newExploreStore(t)
 	retr := newExploreRetriever(t, store)
@@ -599,10 +642,10 @@ type switchingExploreBackend struct {
 	t     *testing.T
 	store *Store
 
-	mu                 sync.Mutex
-	viewedBody         string
+	mu                  sync.Mutex
+	viewedBody          string
 	secondExploreStatus int
-	submitStatus       int
+	submitStatus        int
 }
 
 func (b *switchingExploreBackend) Execute(_ context.Context, prompt string, _ agent.ExecOptions) (*agent.Session, error) {
@@ -689,5 +732,109 @@ func TestExplorePinsVersionForWholeCall(t *testing.T) {
 	}
 	if len(res.NodeIDs) != 1 || res.NodeIDs[0] != "n-target" {
 		t.Fatalf("NodeIDs = %v, want [n-target]", res.NodeIDs)
+	}
+}
+
+// Phase 2 §5.1: the adopted run's message stream is captured, sanitized to
+// the allowlisted TraceMessage shape, and exposed on the result for the
+// per-channel prior record. Non-adopted runs drop their buffered streams.
+func TestExploreCapturesAdoptedTranscript(t *testing.T) {
+	store := newExploreStore(t)
+	retr := newExploreRetriever(t, store)
+	finalJSON := `{"found":true,"summary":"s","node_ids":["n-target"],"rounds":1}`
+	backend := &traceFakeBackend{
+		output: finalJSON,
+		msgs: []agent.Message{
+			{Type: agent.MessageText, Content: "exploring the graph"},
+			{Type: agent.MessageDiagnostic, Title: "diag", Diagnostic: "provider-internal", Content: "diag content"},
+		},
+	}
+	ex := NewExplorer(store, retr, backend, testExploreConfig(), "pi", nil)
+
+	res, err := ex.Explore(context.Background(), "dispatch router retries")
+	if err != nil {
+		t.Fatalf("Explore: %v", err)
+	}
+	if !res.Found || res.AdoptedIndex != 0 {
+		t.Fatalf("result found=%v adopted=%d, want found run 0 adopted", res.Found, res.AdoptedIndex)
+	}
+	if len(res.AdoptedTranscript) != 2 {
+		t.Fatalf("AdoptedTranscript = %d records, want 2", len(res.AdoptedTranscript))
+	}
+	if res.AdoptedTranscript[0].Content != "exploring the graph" || res.AdoptedTranscript[0].Sequence != 0 {
+		t.Fatalf("transcript[0] = %+v", res.AdoptedTranscript[0])
+	}
+	// Diagnostic internals stay out: the record carries only the allowlisted
+	// Content column, never Title/Diagnostic/SessionID.
+	if res.AdoptedTranscript[1].Content != "diag content" || res.AdoptedTranscript[1].Type != "diagnostic" {
+		t.Fatalf("transcript[1] = %+v", res.AdoptedTranscript[1])
+	}
+	if len(res.AgentRuns) != 1 || res.AgentRuns[0].Messages != nil {
+		t.Fatalf("run message buffers must be cleared after adoption: %+v", res.AgentRuns[0])
+	}
+}
+
+type promptCaptureBackend struct{ prompt string }
+
+func (b *promptCaptureBackend) Execute(_ context.Context, prompt string, _ agent.ExecOptions) (*agent.Session, error) {
+	b.prompt = prompt
+	return exploreCompletedSession(`{"found":false,"summary":"","node_ids":[],"rounds":0}`), nil
+}
+
+// Phase 2 §5.4: prior node ids merge AFTER the fresh seeds (fresh always
+// first, D1), duplicates are skipped, unknown ids (empty hydration) are
+// dropped, and the tentative evidence block carries the full brief.
+func TestExploreWithPriorPromptCarriesTentativeBlock(t *testing.T) {
+	store := newExploreStore(t)
+	retr := newExploreRetriever(t, store)
+	capture := &promptCaptureBackend{}
+	ex := NewExplorer(store, retr, capture, testExploreConfig(), "pi", nil)
+
+	prior := &PriorBrief{
+		Summary: "S", NodeIDs: []string{"n-ghost", "n-other", "n-target"},
+		Observations: []string{"obs-1"}, Rejected: []string{"rej-1"}, OpenQuestions: []string{"oq-1"},
+	}
+	if _, err := ex.ExploreWithPrior(context.Background(), "dispatch router retries", []string{"n-target"}, prior); err != nil {
+		t.Fatalf("ExploreWithPrior: %v", err)
+	}
+	for _, want := range []string{
+		"MAY BE STALE OR WRONG", "prior summary: S",
+		"observation: obs-1", "rejected branch: rej-1", "open question: oq-1",
+	} {
+		if !strings.Contains(capture.prompt, want) {
+			t.Fatalf("prompt missing %q", want)
+		}
+	}
+	freshAt := strings.Index(capture.prompt, "- n-target:")
+	priorAt := strings.Index(capture.prompt, "- n-other:")
+	if freshAt < 0 || priorAt < 0 || freshAt > priorAt {
+		t.Fatalf("fresh seed must precede merged prior seed (fresh=%d prior=%d)", freshAt, priorAt)
+	}
+	if strings.Count(capture.prompt, "- n-other:") != 1 {
+		t.Fatalf("prior node must appear exactly once (dedup)")
+	}
+	if strings.Contains(capture.prompt, "n-ghost") {
+		t.Fatalf("unknown prior node id must be dropped from seeds")
+	}
+}
+
+// The merged seed list must keep the whole tool-server flow healthy: the
+// fake backend explores and submits the first seed end to end.
+func TestExploreWithPriorToolServerPath(t *testing.T) {
+	store := newExploreStore(t)
+	retr := newExploreRetriever(t, store)
+	backend := &fakeExploreBackend{t: t}
+	ex := NewExplorer(store, retr, backend, testExploreConfig(), "pi", nil)
+
+	prior := &PriorBrief{Summary: "prior summary", NodeIDs: []string{"n-other"}}
+	res, err := ex.ExploreWithPrior(context.Background(), "dispatch router retries", []string{"n-target"}, prior)
+	if err != nil {
+		t.Fatalf("ExploreWithPrior: %v", err)
+	}
+	if len(backend.errs) > 0 {
+		t.Fatalf("fake backend tool errors: %v", backend.errs)
+	}
+	if !res.Found || len(res.NodeIDs) != 1 || res.NodeIDs[0] != "n-target" {
+		t.Fatalf("result = %+v, want first seed n-target explored and adopted", res)
 	}
 }

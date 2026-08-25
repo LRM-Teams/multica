@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/multica-ai/multica/server/pkg/agent"
@@ -43,7 +44,9 @@ func NewTraceRecorder(graphDir string) *TraceRecorder {
 // awaited — because Session.Messages is a 256-cap buffered channel and a
 // long trajectory stalls when nobody reads it.
 type TraceDrain struct {
+	once sync.Once
 	done chan []agent.Message
+	msgs []agent.Message
 }
 
 // Drain starts a goroutine buffering every message of msgs until the channel
@@ -67,12 +70,14 @@ func (r *TraceRecorder) Drain(msgs <-chan agent.Message) *TraceDrain {
 }
 
 // Messages returns the drained messages in arrival order, blocking until the
-// session's message channel closed. A nil drain yields nil.
+// session's message channel closed. Safe to call repeatedly (the buffered
+// slice is handed out once); a nil drain yields nil.
 func (d *TraceDrain) Messages() []agent.Message {
 	if d == nil {
 		return nil
 	}
-	return <-d.done
+	d.once.Do(func() { d.msgs = <-d.done })
+	return d.msgs
 }
 
 // traceHeader is the first record of every trajectory file.
@@ -87,11 +92,11 @@ type traceHeader struct {
 	PromptChars  int       `json:"prompt_chars"`
 }
 
-// traceMessage is the allowlisted per-message record: sequence, type, tool,
+// TraceMessage is the allowlisted per-message record: sequence, type, tool,
 // content, input, output and nothing else (same columns as
 // serializeLocalTrajectory). Input is the JSON-marshaled tool input map,
 // empty when nil.
-type traceMessage struct {
+type TraceMessage struct {
 	Kind     string `json:"kind"` // "message"
 	Sequence int    `json:"sequence"`
 	Type     string `json:"type"`
@@ -271,14 +276,14 @@ func (r *TraceRecorder) writeTrace(path string, header traceHeader, drain *Trace
 
 // serializeTraceMessage maps one agent message onto the allowlisted record
 // shape. Sequence is the 0-based arrival order in the session stream.
-func serializeTraceMessage(seq int, m agent.Message) traceMessage {
+func serializeTraceMessage(seq int, m agent.Message) TraceMessage {
 	input := ""
 	if m.Input != nil {
 		if b, err := json.Marshal(m.Input); err == nil {
 			input = string(b)
 		}
 	}
-	return traceMessage{
+	return TraceMessage{
 		Kind:     "message",
 		Sequence: seq,
 		Type:     string(m.Type),

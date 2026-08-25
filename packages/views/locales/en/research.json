@@ -750,6 +750,8 @@
     "creating": "Assembling fleet…",
     "create_failed": "Couldn't create the research session",
     "no_available_director": "No online V6-capable Director is available. Start or upgrade the bound Computer first.",
+    "preferred_director_unavailable": "The default Research Director (Ronaldo) is offline. Start its Computer before creating V6 research, or explicitly choose another lead.",
+    "preferred_director_unavailable_label": "Ronaldo unavailable",
     "director_unavailable": "The selected Director is no longer available. Choose another online Director.",
     "director_runtime_offline": "The Director's Computer is offline. Start it, then retry.",
     "bootstrap_pending": "The research was saved, but the Director could not be dispatched yet. The system is retrying; retry this action to open it.",
@@ -1193,6 +1195,8 @@
     "status_run": "running",
     "status_fail": "failed",
     "status_wait": "waiting",
+    "status_idle": "idle",
+    "status_offline": "offline",
     "status_abandoned": "abandoned",
     "status_mute": "muted"
   },

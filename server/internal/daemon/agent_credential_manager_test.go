@@ -34,7 +34,7 @@ func TestAgentCredentialManagerCoalescesConcurrentRefresh(t *testing.T) {
 	}
 	client := NewClient(upstream.URL)
 	client.SetRuntimeDaemonToken("runtime-1", "daemon-token", time.Now().Add(time.Hour))
-	d := &WorkspaceDaemonCore{cfg: cfg, client: client}
+	d := &Daemon{cfg: cfg, client: client}
 	key := agentCredentialKey{WorkspaceID: "workspace-1", RuntimeID: "runtime-1", AgentID: "agent-1"}
 
 	const callers = 20
@@ -90,7 +90,7 @@ func TestAgentCredentialManagerRejectsFreshCredentialFromAnotherRuntime(t *testi
 	}
 	client := NewClient(upstream.URL)
 	client.SetRuntimeDaemonToken("runtime-new", "daemon-token", time.Now().Add(time.Hour))
-	d := &WorkspaceDaemonCore{cfg: cfg, client: client}
+	d := &Daemon{cfg: cfg, client: client}
 	credential, err := d.credentialManager().Get(context.Background(), agentCredentialKey{
 		WorkspaceID: "workspace-1", RuntimeID: "runtime-new", AgentID: "agent-1",
 	}, agentCredentialCacheFirst)
@@ -120,7 +120,7 @@ func TestAgentCredentialManagerLeaderCancellationDoesNotCancelSharedRefresh(t *t
 
 	client := NewClient(upstream.URL)
 	client.SetRuntimeDaemonToken("runtime-1", "daemon-token", time.Now().Add(time.Hour))
-	d := &WorkspaceDaemonCore{cfg: Config{WorkspacesRoot: root, ServerBaseURL: upstream.URL}, client: client}
+	d := &Daemon{cfg: Config{WorkspacesRoot: root, ServerBaseURL: upstream.URL}, client: client}
 	key := agentCredentialKey{WorkspaceID: "workspace-1", RuntimeID: "runtime-1", AgentID: "agent-1"}
 	leaderCtx, cancelLeader := context.WithCancel(context.Background())
 	leaderErr := make(chan error, 1)
@@ -165,7 +165,7 @@ func TestAgentCredentialManagerDaemonCancellationStopsSharedRefresh(t *testing.T
 	})
 	client.SetRuntimeDaemonToken("runtime-1", "daemon-token", time.Now().Add(time.Hour))
 	daemonCtx, cancelDaemon := context.WithCancel(context.Background())
-	d := &WorkspaceDaemonCore{
+	d := &Daemon{
 		cfg: Config{WorkspacesRoot: root, ServerBaseURL: "https://api.example.test"}, client: client, rootCtx: daemonCtx,
 	}
 	result := make(chan error, 1)

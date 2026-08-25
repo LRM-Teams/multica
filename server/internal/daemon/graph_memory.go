@@ -15,7 +15,7 @@ import (
 // graph-memory recall. The daemon never resolves graph paths or runs Explore
 // locally. Any unsuccessful recall remains non-fatal and never restores the
 // legacy project/channel/daily/workspace/team memory paths.
-func (d *WorkspaceDaemonCore) graphExecutionMemories(ctx context.Context, task Task, log *slog.Logger) []execenv.MemoryContextForEnv {
+func (d *Daemon) graphExecutionMemories(ctx context.Context, task Task, log *slog.Logger) []execenv.MemoryContextForEnv {
 	profile := effectiveGraphProfile(d.cfg, task)
 	if profile.memoryType != MemoryTypeGraph {
 		return nil
@@ -72,6 +72,36 @@ func graphRecallQuery(task Task) string {
 	return ""
 }
 
+// memoizedGraphExecutionMemories coalesces identical graph recall queries
+// within one resident message batch: the first message pays the recall and
+// later messages whose normalized query matches reuse the result (spec P0
+// §4.2). nil results are memoized too - a recall failure is non-fatal
+// data, not a retryable error, within a near-simultaneous batch.
+func (d *Daemon) memoizedGraphExecutionMemories(
+	ctx context.Context, task Task,
+	memo map[string][]execenv.MemoryContextForEnv, log *slog.Logger,
+) []execenv.MemoryContextForEnv {
+	key := normalizeGraphRecallKey(graphRecallQuery(task))
+	if key == "" {
+		return nil
+	}
+	if cached, ok := memo[key]; ok {
+		if log != nil {
+			log.Info("graph memory recall coalesced within batch", "task_id", task.ID)
+		}
+		return cached
+	}
+	memories := d.graphExecutionMemories(ctx, task, log)
+	memo[key] = memories
+	return memories
+}
+
+// normalizeGraphRecallKey canonicalizes a recall query for exact-match
+// coalescing: case-folding with whitespace runs collapsed.
+func normalizeGraphRecallKey(query string) string {
+	return strings.Join(strings.Fields(strings.ToLower(query)), " ")
+}
+
 // effectiveMemoryType resolves the reviewer type for one task (design
 // §1/A4): a valid task-scoped override from the server payload wins over
 // the process-level env default (cfg.MemoryType, already validated by
@@ -117,7 +147,7 @@ func effectiveGraphProfile(cfg Config, task Task) graphMemoryEffectiveProfile {
 // for one workspace (spec §10). Empty memory types never clobber a cached
 // entry: an old server simply leaves the previous value (or the env
 // default) in effect.
-func (d *WorkspaceDaemonCore) rememberGraphProfile(workspaceID, memoryType string, exploreAgents, exploreMaxRounds int) {
+func (d *Daemon) rememberGraphProfile(workspaceID, memoryType string, exploreAgents, exploreMaxRounds int) {
 	switch memoryType {
 	case MemoryTypeLegacy, MemoryTypeGraph:
 	default:
@@ -138,7 +168,7 @@ func (d *WorkspaceDaemonCore) rememberGraphProfile(workspaceID, memoryType strin
 	}
 }
 
-func (d *WorkspaceDaemonCore) graphProfileForWorkspace(workspaceID string) (graphMemoryEffectiveProfile, bool) {
+func (d *Daemon) graphProfileForWorkspace(workspaceID string) (graphMemoryEffectiveProfile, bool) {
 	d.graphProfileMu.Lock()
 	defer d.graphProfileMu.Unlock()
 	p, ok := d.graphProfiles[workspaceID]

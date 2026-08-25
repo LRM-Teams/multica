@@ -248,10 +248,10 @@ func TestResidentMessageRuntimeCapture_UploadsTrustedBatchAtTurnEnd(t *testing.T
 		done: make(chan error, 1), messages: make(chan agent.Message, 1),
 		capture: make(chan agent.ResidentTurnCapture, 1), emitCapture: capturePayload,
 	}
-	pool := newCanonicalAgentRuntimePool()
-	pool.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{backend: backend}
+	pool := newAgentRuntimePool()
+	pool.slots[agentID+"\x00"+runtimeID] = &agentRuntimeSlot{backend: backend}
 	reports := make(chan protocol.MixedRunActivityTransitionPayload, 8)
-	d := &WorkspaceDaemonCore{
+	d := &Daemon{
 		cfg: cfg, client: NewClient(upstream.URL),
 		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 		canonicalRuntimes: pool,
@@ -340,9 +340,9 @@ func TestResidentMessageRuntimeCapture_BindsProxyActionToProviderCallAndDrainsTu
 		done: make(chan error, 1), messages: make(chan agent.Message, 2),
 		capture: make(chan agent.ResidentTurnCapture, 1), emitCapture: &capture,
 	}
-	pool := newCanonicalAgentRuntimePool()
-	pool.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{backend: backend}
-	d := &WorkspaceDaemonCore{
+	pool := newAgentRuntimePool()
+	pool.slots[agentID+"\x00"+runtimeID] = &agentRuntimeSlot{backend: backend}
+	d := &Daemon{
 		cfg: cfg, client: NewClient(upstream.URL), logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		canonicalRuntimes: pool,
 		runtimeIndex:      map[string]Runtime{runtimeID: {ID: runtimeID, WorkspaceID: workspaceID}},
@@ -409,10 +409,10 @@ func TestResidentMessageRuntimeCapture_ToolLifecycleDuringIdleInput(t *testing.T
 	backend := &captureResidentMessageRuntime{
 		done: make(chan error, 1), messages: make(chan agent.Message, 4),
 	}
-	pool := newCanonicalAgentRuntimePool()
-	pool.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{backend: backend}
+	pool := newAgentRuntimePool()
+	pool.slots[agentID+"\x00"+runtimeID] = &agentRuntimeSlot{backend: backend}
 	reports := make(chan protocol.MixedRunActivityTransitionPayload, 16)
-	d := &WorkspaceDaemonCore{
+	d := &Daemon{
 		cfg:               Config{WorkspacesRoot: isolatedWorkspacesRoot(t)},
 		canonicalRuntimes: pool,
 		runtimeIndex:      map[string]Runtime{runtimeID: {ID: runtimeID, WorkspaceID: "workspace-1"}},
@@ -503,10 +503,10 @@ func TestResidentMessageRuntimeCapture_MissingBatchReportsCaptureGap(t *testing.
 			TurnOrdinal: 1, Complete: false, PayloadHash: "sha256:incomplete",
 		},
 	}
-	pool := newCanonicalAgentRuntimePool()
-	pool.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{backend: backend}
+	pool := newAgentRuntimePool()
+	pool.slots[agentID+"\x00"+runtimeID] = &agentRuntimeSlot{backend: backend}
 	reports := make(chan protocol.MixedRunActivityTransitionPayload, 8)
-	d := &WorkspaceDaemonCore{
+	d := &Daemon{
 		cfg: cfg, client: NewClient(upstream.URL),
 		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 		canonicalRuntimes: pool,
@@ -590,7 +590,7 @@ func TestResidentMessageRuntimeCapture_ActionOverflowReportsGapWithoutUpload(t *
 	}, time.Now()); err != nil {
 		t.Fatalf("write credential: %v", err)
 	}
-	d := &WorkspaceDaemonCore{cfg: cfg, client: NewClient(upstream.URL), logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	d := &Daemon{cfg: cfg, client: NewClient(upstream.URL), logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	turnToken := d.beginCanonicalActionTurn(agentID)
 	toolContext := ActiveProviderToolContext{AgentID: agentID, CallID: "tool-overflow", ToolCallID: "tool-overflow", TurnToken: turnToken}
 	d.SetActiveProviderToolContext(toolContext)
@@ -657,7 +657,7 @@ func TestResidentMessageRuntimeCapture_AmbiguousContextReportsGapAndRecovers(t *
 	}, time.Now()); err != nil {
 		t.Fatalf("write credential: %v", err)
 	}
-	d := &WorkspaceDaemonCore{cfg: cfg, client: NewClient(upstream.URL), logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	d := &Daemon{cfg: cfg, client: NewClient(upstream.URL), logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	turn1 := d.beginCanonicalActionTurn(agentID)
 	turn2 := d.beginCanonicalActionTurn(agentID)
 	for index, token := range []canonicalActionTurnToken{turn1, turn2} {
@@ -745,11 +745,11 @@ func TestResidentMessageRuntimeCapture_NoHistoryReplayAfterNewBoundary(t *testin
 	firstCapture := residentTurnCaptureForBoundaryTest(runID, runAgentID, "capture-1", "turn-1", "batch-1", "call-1", "first")
 	secondCapture := residentTurnCaptureForBoundaryTest(runID, runAgentID, "capture-2", "turn-2", "batch-2", "call-2", "second")
 	backend := newCaptureBoundaryPiRuntime(firstCapture, secondCapture)
-	pool := newCanonicalAgentRuntimePool()
-	pool.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{
+	pool := newAgentRuntimePool()
+	pool.slots[agentID+"\x00"+runtimeID] = &agentRuntimeSlot{
 		backend: backend,
 	}
-	d := &WorkspaceDaemonCore{
+	d := &Daemon{
 		cfg: cfg, client: NewClient(upstream.URL),
 		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 		canonicalRuntimes: pool,

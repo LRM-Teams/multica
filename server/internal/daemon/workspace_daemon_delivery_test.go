@@ -32,7 +32,7 @@ func TestWorkspaceDaemonIdleDeliveryAcknowledgesAfterRuntimeAcceptance(t *testin
 	d.mu.Unlock()
 	runner := registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
 	markTestLaunchRunning(t, runner, "agent-1")
-	d.canonicalRuntimes.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{
+	d.canonicalRuntimes.slots["agent-1\x00runtime-1"] = &agentRuntimeSlot{
 		backend: &idleMessageFakeRuntime{},
 	}
 	delivery := protocol.AgentDeliverPayload{
@@ -110,7 +110,7 @@ func TestWorkspaceDaemonAckWriterFailureDoesNotRepeatProviderAcceptance(t *testi
 	d.mu.Unlock()
 	runner := registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
 	markTestLaunchRunning(t, runner, "agent-1")
-	d.canonicalRuntimes.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{
+	d.canonicalRuntimes.slots["agent-1\x00runtime-1"] = &agentRuntimeSlot{
 		backend: &idleMessageFakeRuntime{},
 	}
 	delivery := protocol.AgentDeliverPayload{
@@ -163,7 +163,7 @@ func TestWorkspaceDaemonUnacceptedDeliveryIsRetriedAfterManagedStart(t *testing.
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
 	d.mu.Unlock()
 	runner := registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
-	if err := runner.processes.Stop(agentProcessCallback{AgentID: "agent-1", LaunchID: "test-launch-agent-1"}); err != nil {
+	if err := runner.processes.Stop(currentTestAgentProcessCallback(t, runner, "agent-1")); err != nil {
 		t.Fatalf("remove managed launch before first delivery: %v", err)
 	}
 	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error { return nil }
@@ -187,7 +187,7 @@ func TestWorkspaceDaemonUnacceptedDeliveryIsRetriedAfterManagedStart(t *testing.
 	if _, err := runner.acceptMessageDelivery(context.Background(), delivery); !errors.Is(err, errDeliveryRejectedNoProcess) {
 		t.Fatalf("unaccepted error = %v, want rejected_no_process", err)
 	}
-	if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "launch-1" + "-dispatch"}); err != nil {
+	if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: "agent-1", RuntimeID: "runtime-1"}); err != nil {
 		t.Fatalf("accept managed start: %v", err)
 	}
 	markTestLaunchRunning(t, runner, "agent-1")
@@ -217,7 +217,7 @@ func TestWorkspaceDaemonConsumedDeliveryAcknowledgesWithoutProcess(t *testing.T)
 	if err := coordinator.MarkRead("channel:one", 1); err != nil {
 		t.Fatalf("cover seq 1: %v", err)
 	}
-	if err := runner.processes.Stop(agentProcessCallback{AgentID: "agent-1", LaunchID: "test-launch-agent-1"}); err != nil {
+	if err := runner.processes.Stop(currentTestAgentProcessCallback(t, runner, "agent-1")); err != nil {
 		t.Fatalf("remove managed launch: %v", err)
 	}
 	delivery := protocol.AgentDeliverPayload{
@@ -261,7 +261,8 @@ func TestWorkspaceDaemonTerminalFailureDeliveryAcknowledgesAndKeepsPending(t *te
 	var activities []protocol.AgentActivityPayload
 	runner := registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
 	runner.activity.AttachTransport(func(payload protocol.AgentActivityPayload) { activities = append(activities, payload) })
-	runner.failManagedRuntime("agent-1", "runtime-1", "test-launch-agent-1", managedRuntimeFailureRuntime, "provider_turn_failed", "provider unavailable", time.Now().UTC())
+	callback := currentTestAgentProcessCallback(t, runner, "agent-1")
+	runner.failManagedRuntime("agent-1", "runtime-1", callback.AgentInstanceID, managedRuntimeFailureRuntime, "provider_turn_failed", "provider unavailable", time.Now().UTC())
 	delivery := protocol.AgentDeliverPayload{
 		AgentID: "agent-1", Target: "channel:one", Seq: 1, DeliveryID: "delivery-1",
 		Message: protocol.AgentMessageProjection{ID: "message-1", Target: "channel:one", Seq: 1, Content: "hi"},
@@ -300,12 +301,11 @@ func TestWorkspaceDaemonIdleSnapshotDeliveryRestartsAndAcknowledges(t *testing.T
 		providerStarts++
 		return nil
 	}
-	if _, _, _, err := runner.startManagedAgent(context.Background(), protocol.WorkspaceDaemonAgentStartPayload{
-		AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1",
-	}); err != nil {
+	if _, _, _, err := runner.startManagedAgent(context.Background(), protocol.AgentStartPayload{
+		AgentID: "agent-1", RuntimeID: "runtime-1"}); err != nil {
 		t.Fatalf("start managed Agent: %v", err)
 	}
-	if !runner.processes.failManagedProcess(agentProcessCallback{AgentID: "agent-1", LaunchID: "launch-1"}) {
+	if !runner.processes.failManagedProcess(currentTestAgentProcessCallback(t, runner, "agent-1"), nil) {
 		t.Fatal("drop live process")
 	}
 	delivery := protocol.AgentDeliverPayload{
@@ -328,8 +328,8 @@ func TestWorkspaceDaemonIdleSnapshotDeliveryRestartsAndAcknowledges(t *testing.T
 	if !managed {
 		t.Fatal("idle snapshot delivery did not restart APM launch")
 	}
-	if launch.LaunchID != "launch-1" {
-		t.Fatalf("idle restore launch = %q, want original launch-1", launch.LaunchID)
+	if launch.AgentInstanceID == "" {
+		t.Fatalf("idle restore Agent instance = %+v, want a local identity", launch)
 	}
 }
 
@@ -344,12 +344,11 @@ func TestWorkspaceDaemonIdleSnapshotCompleteRespectsCancel(t *testing.T) {
 		providerStarts++
 		return nil
 	}
-	if _, _, _, err := runner.startManagedAgent(context.Background(), protocol.WorkspaceDaemonAgentStartPayload{
-		AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1",
-	}); err != nil {
+	if _, _, _, err := runner.startManagedAgent(context.Background(), protocol.AgentStartPayload{
+		AgentID: "agent-1", RuntimeID: "runtime-1"}); err != nil {
 		t.Fatalf("start managed Agent: %v", err)
 	}
-	if !runner.processes.failManagedProcess(agentProcessCallback{AgentID: "agent-1", LaunchID: "launch-1"}) {
+	if !runner.processes.failManagedProcess(currentTestAgentProcessCallback(t, runner, "agent-1"), nil) {
 		t.Fatal("drop live process")
 	}
 	res, ok := runner.residency.get("agent-1")
@@ -359,7 +358,7 @@ func TestWorkspaceDaemonIdleSnapshotCompleteRespectsCancel(t *testing.T) {
 	if err := runner.restartFromIdleSnapshot("agent-1", res); err != nil {
 		t.Fatalf("restore idle snapshot: %v", err)
 	}
-	startupDone, found := runner.processes.managedStartupDone(agentProcessCallback{AgentID: "agent-1", LaunchID: "launch-1"})
+	startupDone, found := runner.processes.managedStartupDone(currentTestAgentProcessCallback(t, runner, "agent-1"))
 	if !found {
 		t.Fatal("restored idle startup owner missing")
 	}
@@ -377,60 +376,6 @@ func TestWorkspaceDaemonIdleSnapshotCompleteRespectsCancel(t *testing.T) {
 	}
 }
 
-func TestWorkspaceDaemonIdleSnapshotRequiresStartDispatchIdentity(t *testing.T) {
-	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
-	runner, _ := attachTestWorkspaceDaemon(t, d, "workspace-1", nil)
-	err := runner.restartFromIdleSnapshot("agent-1", agentResidency{
-		runtimeID: "runtime-1", launchID: "launch-1",
-	})
-	if err == nil {
-		t.Fatal("idle restore synthesized a missing start dispatch identity")
-	}
-}
-
-func TestWorkspaceDaemonIdleSnapshotFailureLogsLifecycleIdentity(t *testing.T) {
-	var logs strings.Builder
-	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	d := New(Config{DaemonID: "computer-1", WorkspacesRoot: t.TempDir()}, logger)
-	d.mu.Lock()
-	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
-	d.mu.Unlock()
-	runner, _ := attachTestWorkspaceDaemon(t, d, "workspace-1", nil)
-	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error { return nil }
-	if _, _, _, err := runner.startManagedAgent(context.Background(), protocol.WorkspaceDaemonAgentStartPayload{
-		AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1",
-	}); err != nil {
-		t.Fatalf("seed managed Agent: %v", err)
-	}
-	if !runner.processes.failManagedProcess(agentProcessCallback{AgentID: "agent-1", LaunchID: "launch-1"}) {
-		t.Fatal("drop seed launch")
-	}
-	res, ok := runner.residency.get("agent-1")
-	if !ok {
-		t.Fatal("idle residency missing")
-	}
-	if err := runner.restartFromIdleSnapshot("agent-1", res); err != nil {
-		t.Fatalf("restore idle snapshot: %v", err)
-	}
-	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error {
-		return errors.New("provider unavailable")
-	}
-	logs.Reset()
-
-	runner.completeIdleSnapshotStart(context.Background(), "agent-1", res)
-
-	got := logs.String()
-	for _, want := range []string{
-		"computer_id=computer-1", "workspace_id=workspace-1", "agent_id=agent-1",
-		"runtime_id=runtime-1", "launch_id=launch-1", "start_dispatch_id=dispatch-1",
-		"queue_state=starting", "reason=provider_start_failed", "outcome=failed",
-	} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("idle snapshot failure log missing %q: %s", want, got)
-		}
-	}
-}
-
 func TestWorkspaceDaemonSpawnCooldownDeliveryAcknowledgesWithoutRestart(t *testing.T) {
 	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
 	d.mu.Lock()
@@ -442,9 +387,8 @@ func TestWorkspaceDaemonSpawnCooldownDeliveryAcknowledgesWithoutRestart(t *testi
 		providerStarts++
 		return fmt.Errorf("spawn cursor: executable unavailable")
 	}
-	if _, _, _, err := runner.startManagedAgent(context.Background(), protocol.WorkspaceDaemonAgentStartPayload{
-		AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1",
-	}); err == nil {
+	if _, _, _, err := runner.startManagedAgent(context.Background(), protocol.AgentStartPayload{
+		AgentID: "agent-1", RuntimeID: "runtime-1"}); err == nil {
 		t.Fatal("spawn failure was accepted")
 	}
 	startsAfterFailure := providerStarts
@@ -463,50 +407,6 @@ func TestWorkspaceDaemonSpawnCooldownDeliveryAcknowledgesWithoutRestart(t *testi
 	}
 	if acknowledgements != 1 || providerStarts != startsAfterFailure {
 		t.Fatalf("cooldown delivery acknowledgements=%d provider_starts=%d, want 1/%d", acknowledgements, providerStarts, startsAfterFailure)
-	}
-}
-
-func TestWorkspaceDaemonQueuedAPMAcceptsDeliveryWithoutStartingProvider(t *testing.T) {
-	var handoffs int
-	d := New(Config{MaxAgentProcesses: 1}, nil)
-	d.mu.Lock()
-	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
-	d.runtimeIndex["runtime-2"] = Runtime{ID: "runtime-2", WorkspaceID: "workspace-1"}
-	d.mu.Unlock()
-	firstCoordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	completeCoordinatorRecovery(t, firstCoordinator)
-	first := registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", firstCoordinator)
-	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
-		handoffs++
-		return nil
-	}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	completeCoordinatorRecovery(t, coordinator)
-	runner := registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-2"}, "runtime-2", coordinator)
-	if first != runner {
-		t.Fatal("test Agents did not share the WorkspaceDaemon")
-	}
-	queued, ok := runner.processes.Snapshot("agent-2")
-	if !ok || queued.QueueState != protocol.AgentStartQueueQueued {
-		t.Fatalf("queued launch = %+v, exists=%v", queued, ok)
-	}
-	providerStarts := 0
-	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error {
-		providerStarts++
-		return nil
-	}
-	delivery := protocol.AgentDeliverPayload{AgentID: "agent-2", Target: "channel:one", Seq: 1, DeliveryID: "delivery-queued", Message: protocol.AgentMessageProjection{ID: "message-queued", Target: "channel:one", Seq: 1}}
-	acceptance, err := runner.acceptMessageDelivery(context.Background(), delivery)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if acceptance.outcome != messageDeliveryPendingBuffered || providerStarts != 0 || handoffs != 0 {
-		t.Fatalf("queued acceptance=%+v provider_starts=%d handoffs=%d", acceptance, providerStarts, handoffs)
 	}
 }
 
@@ -608,39 +508,6 @@ func TestWorkspaceDaemonStandaloneChatDefersAckWhileStarting(t *testing.T) {
 	}
 }
 
-func TestWorkspaceDaemonDeliveryAfterManagedStartReachesProvider(t *testing.T) {
-	var handoffs int
-	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
-	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
-		handoffs++
-		return nil
-	}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	completeCoordinatorRecovery(t, coordinator)
-	d.mu.Lock()
-	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
-	d.mu.Unlock()
-	runner := registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
-	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error { return nil }
-	if _, _, _, err := runner.startManagedAgent(context.Background(), protocol.WorkspaceDaemonAgentStartPayload{
-		AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "test-launch-agent-1", StartDispatchID: "test-launch-agent-1-dispatch",
-	}); err != nil {
-		t.Fatalf("managed start: %v", err)
-	}
-	delivery := protocol.AgentDeliverPayload{
-		AgentID: "agent-1", Target: "channel:one", Seq: 1, DeliveryID: "delivery-1",
-		Message: protocol.AgentMessageProjection{ID: "message-1", Target: "channel:one", Seq: 1, Content: "hi"},
-	}
-	if err := runner.handleMessageDelivery(context.Background(), delivery, func(string, any) error { return nil }); err != nil {
-		t.Fatal(err)
-	}
-	if handoffs != 1 {
-		t.Fatalf("handoffs after managed start = %d, want 1 (Raft delivers once the process exists)", handoffs)
-	}
-}
-
 func TestWorkspaceDaemonMissingProcessReportsRestartRequired(t *testing.T) {
 	d := New(Config{}, nil)
 	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
@@ -665,8 +532,8 @@ func TestWorkspaceDaemonMissingProcessReportsRestartRequired(t *testing.T) {
 		}
 		return nil
 	})
-	registerTestRunnerInbox(t, runner, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
-	if err := runner.processes.Stop(agentProcessCallback{AgentID: "agent-1", LaunchID: "test-launch-agent-1"}); err != nil {
+	registerTestWorkspaceDaemonInbox(t, runner, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
+	if err := runner.processes.Stop(currentTestAgentProcessCallback(t, runner, "agent-1")); err != nil {
 		t.Fatalf("remove managed launch: %v", err)
 	}
 	if err := runner.handleMessageDelivery(context.Background(), protocol.AgentDeliverPayload{
@@ -685,8 +552,8 @@ func TestWorkspaceDaemonMissingProcessReportsRestartRequired(t *testing.T) {
 	if last.ActivityKind != protocol.ActivityKindOffline || last.DetailKind != "runtime_unavailable" {
 		t.Fatalf("missing-process Activity = %+v, want offline/runtime_unavailable", last)
 	}
-	if statuses[len(statuses)-1].LaunchID != "test-launch-agent-1" || last.LaunchID != "test-launch-agent-1" {
-		t.Fatalf("missing-process launch IDs status=%q activity=%q, want test-launch-agent-1", statuses[len(statuses)-1].LaunchID, last.LaunchID)
+	if statuses[len(statuses)-1].AgentID != "agent-1" || last.AgentID != "agent-1" {
+		t.Fatalf("missing-process Agent IDs status=%q activity=%q, want agent-1", statuses[len(statuses)-1].AgentID, last.AgentID)
 	}
 }
 
@@ -706,7 +573,7 @@ func TestWorkspaceDaemonDeliveryAcknowledgesBusyRuntime(t *testing.T) {
 	d.mu.Unlock()
 	runner := registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
 	markTestLaunchRunning(t, runner, "agent-1")
-	d.canonicalRuntimes.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{
+	d.canonicalRuntimes.slots["agent-1\x00runtime-1"] = &agentRuntimeSlot{
 		backend: &idleMessageFakeRuntime{},
 	}
 	delivery := protocol.AgentDeliverPayload{
@@ -757,7 +624,7 @@ func TestWorkspaceDaemonDeliveryDoesNotAcknowledgeProviderRejection(t *testing.T
 	d.mu.Unlock()
 	runner := registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
 	markTestLaunchRunning(t, runner, "agent-1")
-	d.canonicalRuntimes.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{backend: &idleMessageFakeRuntime{}}
+	d.canonicalRuntimes.slots["agent-1\x00runtime-1"] = &agentRuntimeSlot{backend: &idleMessageFakeRuntime{}}
 	delivery := protocol.AgentDeliverPayload{
 		AgentID: "agent-1", Target: "dm:one", Seq: 1, DeliveryID: "delivery-1",
 		Message: protocol.AgentMessageProjection{ID: "message-1", Target: "dm:one", Seq: 1, Content: "hi"},
@@ -770,7 +637,7 @@ func TestWorkspaceDaemonDeliveryDoesNotAcknowledgeProviderRejection(t *testing.T
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("wire handler must keep the WorkspaceDaemon connection alive after provider rejection: %v", err)
+		t.Fatalf("wire handler must keep the Runner connection alive after provider rejection: %v", err)
 	}
 	if acknowledgements != 0 {
 		t.Fatalf("acknowledgements = %d, want none before APM accepts provider input", acknowledgements)
@@ -803,7 +670,7 @@ func TestWorkspaceDaemonDeliveryDispatcherDoesNotBlockAnotherAgent(t *testing.T)
 	agentAStarted := make(chan struct{})
 	releaseAgentA := make(chan struct{})
 	agentBHandled := make(chan struct{})
-	dispatcher := newWorkspaceSessionDeliveryDispatcher(ctx, func(_ context.Context, delivery protocol.AgentDeliverPayload) {
+	dispatcher := newWorkspaceDaemonDeliveryDispatcher(ctx, func(_ context.Context, delivery protocol.AgentDeliverPayload) {
 		switch delivery.AgentID {
 		case "agent-a":
 			close(agentAStarted)
@@ -828,7 +695,7 @@ func TestWorkspaceDaemonDeliveryDispatcherBuffersOnlyStartingAgent(t *testing.T)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	handled := make(chan string, 2)
-	dispatcher := newWorkspaceSessionDeliveryDispatcher(ctx, func(_ context.Context, delivery protocol.AgentDeliverPayload) {
+	dispatcher := newWorkspaceDaemonDeliveryDispatcher(ctx, func(_ context.Context, delivery protocol.AgentDeliverPayload) {
 		handled <- delivery.AgentID
 	})
 	if !dispatcher.Pause("agent-a", "launch-a") {
@@ -864,7 +731,7 @@ func TestWorkspaceDaemonDeliveryDispatcherFencesSupersededStart(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	handled := make(chan string, 1)
-	dispatcher := newWorkspaceSessionDeliveryDispatcher(ctx, func(_ context.Context, delivery protocol.AgentDeliverPayload) {
+	dispatcher := newWorkspaceDaemonDeliveryDispatcher(ctx, func(_ context.Context, delivery protocol.AgentDeliverPayload) {
 		handled <- delivery.DeliveryID
 	})
 	if !dispatcher.Pause("agent-a", "launch-old") || !dispatcher.Pause("agent-a", "launch-new") {
@@ -896,7 +763,7 @@ func TestWorkspaceDaemonDeliveryDispatcherPreservesPerAgentOrder(t *testing.T) {
 	var mu sync.Mutex
 	var handled []string
 	done := make(chan struct{})
-	dispatcher := newWorkspaceSessionDeliveryDispatcher(ctx, func(_ context.Context, delivery protocol.AgentDeliverPayload) {
+	dispatcher := newWorkspaceDaemonDeliveryDispatcher(ctx, func(_ context.Context, delivery protocol.AgentDeliverPayload) {
 		mu.Lock()
 		handled = append(handled, delivery.DeliveryID)
 		if len(handled) == 3 {
@@ -931,7 +798,7 @@ func TestDeliveryRepairsCoordinatorFromAcceptedStart(t *testing.T) {
 	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
 	d.mu.Unlock()
 	runner, _ := attachTestWorkspaceDaemon(t, d, workspaceID, func(string, any) error { return nil })
-	if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: agentID, RuntimeID: runtimeID, LaunchID: "launch-1", StartDispatchID: "dispatch-1"}); err != nil {
+	if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: agentID, RuntimeID: runtimeID}); err != nil {
 		t.Fatalf("accept start: %v", err)
 	}
 	if err := d.ensureIdleMessageCoordinatorForDelivery(workspaceID, agentID); err != nil {
@@ -971,7 +838,7 @@ func TestDeliveryDoesNotRepairCoordinatorAcrossWorkspace(t *testing.T) {
 	if acknowledgements != 0 {
 		t.Fatalf("cross-Workspace acknowledgements = %d, want 0", acknowledgements)
 	}
-	if runner := d.currentWorkspaceSession(runnerWorkspaceID); runner != nil {
+	if runner := d.currentWorkspaceDaemon(runnerWorkspaceID); runner != nil {
 		if runner.hasMessageInbox(agentID) {
 			t.Fatal("cross-Workspace Delivery recreated an Inbox coordinator")
 		}
@@ -1005,7 +872,7 @@ func TestDeliveryDoesNotRepairCoordinatorWithoutAcceptedStart(t *testing.T) {
 	if acknowledgements != 0 {
 		t.Fatalf("unstarted Agent acknowledgements = %d, want 0", acknowledgements)
 	}
-	if runner := d.currentWorkspaceSession(workspaceID); runner != nil {
+	if runner := d.currentWorkspaceDaemon(workspaceID); runner != nil {
 		if runner.hasMessageInbox(agentID) {
 			t.Fatal("unstarted Agent Delivery recreated an Inbox coordinator")
 		}
@@ -1041,14 +908,14 @@ func TestWorkspaceDaemonWriterFencesReplacedConnection(t *testing.T) {
 		t.Fatal("callback from replaced connection remained writable")
 	}
 	if !d.sendWorkspaceDaemonAgentFrame("agent-1", protocol.EventAgentDeliverAck, map[string]any{"request": 1}) {
-		t.Fatal("current WorkspaceDaemon connection did not receive Message frame")
+		t.Fatal("current Runner connection did not receive Message frame")
 	}
 	if first != 0 || second != 1 {
 		t.Fatalf("Message frame delivery first=%d second=%d, want 0/1", first, second)
 	}
-	d.detachWorkspaceSession(runner)
+	d.detachWorkspaceDaemon(runner)
 	if d.sendWorkspaceDaemonAgentFrame("agent-1", protocol.EventAgentDeliverAck, nil) {
-		t.Fatal("detached WorkspaceDaemon accepted Message frame")
+		t.Fatal("detached Runner accepted Message frame")
 	}
 }
 
@@ -1058,16 +925,16 @@ func TestBindingChildWorkspaceDaemonIsTheCredentialProxyInbox(t *testing.T) {
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
 	d.mu.Unlock()
 
-	owned, err := d.newWorkspaceSession("workspace-1")
+	owned, err := d.newWorkspaceDaemon("workspace-1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		d.detachWorkspaceSession(owned)
+		d.detachWorkspaceDaemon(owned)
 		owned.Close()
 		owned.inboxes.Close()
 	})
-	if err := d.adoptWorkspaceSession(owned); err != nil {
+	if err := d.adoptWorkspaceDaemon(owned); err != nil {
 		t.Fatalf("adopt Binding child WorkspaceDaemon: %v", err)
 	}
 
@@ -1077,9 +944,9 @@ func TestBindingChildWorkspaceDaemonIsTheCredentialProxyInbox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	registerTestRunnerInbox(t, owned, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
+	registerTestWorkspaceDaemonInbox(t, owned, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
 
-	resolved, err := d.resolveWorkspaceSessionByAgent("agent-1")
+	resolved, err := d.resolveWorkspaceDaemonByAgent("agent-1")
 	if err != nil {
 		t.Fatalf("Credential Proxy could not find Binding child Inbox: %v", err)
 	}
@@ -1087,7 +954,7 @@ func TestBindingChildWorkspaceDaemonIsTheCredentialProxyInbox(t *testing.T) {
 		t.Fatal("Credential Proxy resolved a different WorkspaceDaemon than the Binding child")
 	}
 
-	ensured, err := d.ensureWorkspaceSession("workspace-1")
+	ensured, err := d.ensureWorkspaceDaemon("workspace-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1106,7 +973,7 @@ func TestUnadoptedBindingChildWorkspaceDaemonLeavesMessageSendUnavailable(t *tes
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
 	d.mu.Unlock()
 
-	owned, err := d.newWorkspaceSession("workspace-1")
+	owned, err := d.newWorkspaceDaemon("workspace-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1121,21 +988,21 @@ func TestUnadoptedBindingChildWorkspaceDaemonLeavesMessageSendUnavailable(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	registerTestRunnerInbox(t, owned, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
+	registerTestWorkspaceDaemonInbox(t, owned, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
 
 	if _, err := d.CredentialProxy().PreflightMessageSend("agent-1", "channel:one"); err == nil || !strings.Contains(err.Error(), "Message coordinator is unavailable") {
 		t.Fatalf("unadopted Binding child send = %v, want Message coordinator is unavailable", err)
 	}
 
-	ensured, err := d.ensureWorkspaceSession("workspace-1")
+	ensured, err := d.ensureWorkspaceDaemon("workspace-1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if ensured == owned {
-		t.Fatal("unadopted Binding child WorkspaceDaemon was already on the Daemon lookup map")
+		t.Fatal("unadopted Binding child Runner was already on the Daemon lookup map")
 	}
 	t.Cleanup(func() {
-		d.detachWorkspaceSession(ensured)
+		d.detachWorkspaceDaemon(ensured)
 		ensured.Close()
 		ensured.inboxes.Close()
 	})
@@ -1145,7 +1012,7 @@ func TestWorkspaceDaemonDeliveryStopFenceRejectsLateStartResume(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	handled := make(chan string, 2)
-	dispatcher := newWorkspaceSessionDeliveryDispatcher(ctx, func(_ context.Context, delivery protocol.AgentDeliverPayload) {
+	dispatcher := newWorkspaceDaemonDeliveryDispatcher(ctx, func(_ context.Context, delivery protocol.AgentDeliverPayload) {
 		handled <- delivery.DeliveryID
 	})
 	if !dispatcher.Pause("agent-1", "launch-1") {

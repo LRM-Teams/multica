@@ -105,6 +105,12 @@ Empty-line / in-note Editor jobs (`note_ai_job`) insert `markdown` through the N
 
 FE: `packages/views/notes/note-ai-edit-prompt.ts`.
 
+## Directory icon
+
+`note_page.icon` stores one native emoji. The tree paints it between the expand chevron and the title; empty rows use a faint `FileText`. Only `can_manage_shares` can change it (`PATCH icon`; empty string clears). Click opens eight local presets immediately; the full emoji-mart gallery loads only after **More emojis**.
+
+FE: `packages/views/notes/note-tree-icon.tsx`. BE: `UpdateNotePage` in `notes.go`. Tests: `note-tree-icon.test.tsx`, `TestUpdateNotePageIconOwnerOnly`. Migration: `447_note_page_icon`.
+
 ## Agent read path (S2-C2)
 
 - CLI: `multica notes get <page-id> --output json` (agent task token only)

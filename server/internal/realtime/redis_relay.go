@@ -116,7 +116,7 @@ func deliverEnvelope(hub *Hub, daemonRuntime DaemonRuntimeDeliverer, ev envelope
 		if daemonRuntime != nil {
 			daemonRuntime.DeliverDaemonRuntime(ev.ScopeID, frame, ev.EventID)
 		}
-	case ScopeWorkspaceDaemon:
+	case ScopeDaemonWorkspaceDaemon:
 		if daemonRunner, ok := daemonRuntime.(DaemonWorkspaceDaemonDeliverer); ok {
 			daemonRunner.DeliverDaemonWorkspaceDaemon(ev.ScopeID, frame, ev.EventID)
 		}

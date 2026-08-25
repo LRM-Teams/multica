@@ -430,7 +430,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		h.HandleDaemonReminderFireRequest,
 	)
 	daemonHub.SetAgentDeliveryAckHandler(h.HandleAgentDeliveryAck)
-	// The current fenced WorkspaceDaemon owns Attachment, launch, Message, and
+	// The current fenced WorkspaceDaemon owns Attachment, process, Message, and
 	// typed Activity intake for one daemon/workspace pair.
 	daemonHub.SetWorkspaceDaemonHandler(h.HandleWorkspaceDaemonFrame)
 	daemonHub.SetWorkspaceDaemonDisconnectHandler(h.HandleWorkspaceDaemonDisconnect)
@@ -975,6 +975,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Put("/metadata/{key}", h.SetIssueMetadataKey)
 					r.Delete("/metadata/{key}", h.DeleteIssueMetadataKey)
 					r.Get("/pull-requests", h.ListPullRequestsForIssue)
+					r.Post("/pull-requests/rescan", h.RescanIssuePullRequest)
 					r.Get("/completion-reports", h.ListIssueCompletionReports)
 					r.Post("/completion-reviews", h.ReviewIssueCompletion)
 				})

@@ -85,7 +85,7 @@ func (registry *InboxRegistry) AcceptStart(agentID, runtimeID string) (bool, err
 	if exists && previous.coordinator != nil {
 		previous.coordinator.Close()
 	}
-	registry.log("workspace Runner Inbox opened", agentID, runtimeID, map[bool]string{true: "lifecycle_replaced", false: "lifecycle_started"}[exists])
+	registry.log("WorkspaceDaemon Inbox opened", agentID, runtimeID, map[bool]string{true: "lifecycle_replaced", false: "lifecycle_started"}[exists])
 	return true, nil
 }
 
@@ -120,7 +120,7 @@ func (registry *InboxRegistry) Remove(agentID, runtimeID string) {
 	registry.mu.Unlock()
 	if ok && entry.coordinator != nil {
 		entry.coordinator.Close()
-		registry.log("workspace Runner Inbox closed", agentID, entry.runtimeID, "removed")
+		registry.log("WorkspaceDaemon Inbox closed", agentID, entry.runtimeID, "removed")
 	}
 }
 
@@ -153,7 +153,7 @@ func (registry *InboxRegistry) Close() {
 	for agentID, entry := range inboxes {
 		if entry.coordinator != nil {
 			entry.coordinator.Close()
-			registry.log("workspace Runner Inbox closed", agentID, entry.runtimeID, "runner_closed")
+			registry.log("WorkspaceDaemon Inbox closed", agentID, entry.runtimeID, "runner_closed")
 		}
 	}
 }

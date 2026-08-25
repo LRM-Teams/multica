@@ -58,9 +58,9 @@ type credentialProxyProvenanceState struct {
 	turns     map[canonicalActionTurnToken]*canonicalActionTurnState
 }
 
-var credentialProxyProvenanceByDaemon sync.Map // *WorkspaceDaemonCore -> *credentialProxyProvenanceState
+var credentialProxyProvenanceByDaemon sync.Map // *Daemon -> *credentialProxyProvenanceState
 
-func provenanceStateFor(d *WorkspaceDaemonCore) *credentialProxyProvenanceState {
+func provenanceStateFor(d *Daemon) *credentialProxyProvenanceState {
 	if d == nil {
 		return &credentialProxyProvenanceState{
 			active: make(map[string]ActiveProviderToolContext),
@@ -80,7 +80,7 @@ func provenanceStateFor(d *WorkspaceDaemonCore) *credentialProxyProvenanceState 
 
 // SetActiveProviderToolContext records the currently observed provider/tool
 // context for an agent. Empty CallID clears any prior context.
-func (d *WorkspaceDaemonCore) SetActiveProviderToolContext(ctx ActiveProviderToolContext) {
+func (d *Daemon) SetActiveProviderToolContext(ctx ActiveProviderToolContext) {
 	state := provenanceStateFor(d)
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -115,13 +115,13 @@ func (d *WorkspaceDaemonCore) SetActiveProviderToolContext(ctx ActiveProviderToo
 
 // beginCanonicalActionTurn creates an isolated provenance boundary. Existing
 // turns for the same agent remain intact until their matching token drains.
-func (d *WorkspaceDaemonCore) beginCanonicalActionTurn(agentID string) canonicalActionTurnToken {
+func (d *Daemon) beginCanonicalActionTurn(agentID string) canonicalActionTurnToken {
 	token := d.allocateCanonicalActionTurnToken()
 	d.activateCanonicalActionTurn(agentID, token)
 	return token
 }
 
-func (d *WorkspaceDaemonCore) allocateCanonicalActionTurnToken() canonicalActionTurnToken {
+func (d *Daemon) allocateCanonicalActionTurnToken() canonicalActionTurnToken {
 	state := provenanceStateFor(d)
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -132,7 +132,7 @@ func (d *WorkspaceDaemonCore) allocateCanonicalActionTurnToken() canonicalAction
 	return state.nextToken
 }
 
-func (d *WorkspaceDaemonCore) activateCanonicalActionTurn(agentID string, token canonicalActionTurnToken) {
+func (d *Daemon) activateCanonicalActionTurn(agentID string, token canonicalActionTurnToken) {
 	state := provenanceStateFor(d)
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -155,7 +155,7 @@ func (d *WorkspaceDaemonCore) activateCanonicalActionTurn(agentID string, token 
 
 // clearActiveProviderToolContext clears only the matching tool. A late result
 // for an older tool must not clear a newer active tool context.
-func (d *WorkspaceDaemonCore) clearActiveProviderToolContext(agentID string, turnToken canonicalActionTurnToken, toolCallID string) {
+func (d *Daemon) clearActiveProviderToolContext(agentID string, turnToken canonicalActionTurnToken, toolCallID string) {
 	state := provenanceStateFor(d)
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -168,7 +168,7 @@ func (d *WorkspaceDaemonCore) clearActiveProviderToolContext(agentID string, tur
 
 // endCanonicalActionTurn atomically clears active context and drains the
 // current turn's associations so they can be uploaded at most once.
-func (d *WorkspaceDaemonCore) endCanonicalActionTurn(agentID string, turnToken canonicalActionTurnToken) canonicalActionTurnDrain {
+func (d *Daemon) endCanonicalActionTurn(agentID string, turnToken canonicalActionTurnToken) canonicalActionTurnDrain {
 	state := provenanceStateFor(d)
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -186,7 +186,7 @@ func (d *WorkspaceDaemonCore) endCanonicalActionTurn(agentID string, turnToken c
 	return canonicalActionTurnDrain{Associations: out, Overflow: turn.overflow, Ambiguous: turn.ambiguous}
 }
 
-func (d *WorkspaceDaemonCore) activeProviderToolContextSnapshot(agentID string) (ActiveProviderToolContext, bool) {
+func (d *Daemon) activeProviderToolContextSnapshot(agentID string) (ActiveProviderToolContext, bool) {
 	state := provenanceStateFor(d)
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -204,7 +204,7 @@ func (d *WorkspaceDaemonCore) activeProviderToolContextSnapshot(agentID string) 
 
 // ObservedCanonicalActionAssociations returns trusted associations recorded for
 // the agent. The slice is a copy and may be empty.
-func (d *WorkspaceDaemonCore) ObservedCanonicalActionAssociations(agentID string) []CanonicalActionAssociation {
+func (d *Daemon) ObservedCanonicalActionAssociations(agentID string) []CanonicalActionAssociation {
 	state := provenanceStateFor(d)
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -221,7 +221,7 @@ func (d *WorkspaceDaemonCore) ObservedCanonicalActionAssociations(agentID string
 // observeCanonicalActionOutcome associates a canonical send/reaction ID with
 // the active provider/tool context only when the upstream canonical operation
 // succeeded. Agent-declared provenance is never consulted.
-func (d *WorkspaceDaemonCore) observeCanonicalActionOutcome(providerContext ActiveProviderToolContext, kind, canonicalID string, succeeded bool) {
+func (d *Daemon) observeCanonicalActionOutcome(providerContext ActiveProviderToolContext, kind, canonicalID string, succeeded bool) {
 	if !succeeded {
 		return
 	}
@@ -266,7 +266,7 @@ func (d *WorkspaceDaemonCore) observeCanonicalActionOutcome(providerContext Acti
 // body, and response while supplying the daemon-owned durable credential.
 // Agent code therefore never receives a bearer token and cannot restore the
 // retired task, inbox-delivery, or lease authorization path.
-func (d *WorkspaceDaemonCore) credentialProxyAgentAPIHandler() http.HandlerFunc {
+func (d *Daemon) credentialProxyAgentAPIHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasPrefix(r.URL.Path, "/api/") {
 			http.NotFound(w, r)

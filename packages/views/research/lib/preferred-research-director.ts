@@ -5,14 +5,14 @@ function normalizeDirectorLabel(value: string): string {
   return value.trim().toLowerCase().replace(/[\s_-]+/g, "");
 }
 
+const NORMALIZED_RONALDO_MARKERS = RONALDO_MARKERS.map(normalizeDirectorLabel);
+
 export function preferredResearchDirectorId<
   T extends { id: string; name?: string | null; display_name?: string | null },
 >(agents: readonly T[]): string {
-  if (agents.length === 0) return "";
-  const markers = RONALDO_MARKERS.map(normalizeDirectorLabel);
   const match = agents.find((agent) => {
     const haystack = normalizeDirectorLabel(`${agent.display_name ?? ""} ${agent.name ?? ""}`);
-    return markers.some((marker) => haystack.includes(marker));
+    return NORMALIZED_RONALDO_MARKERS.some((marker) => haystack.includes(marker));
   });
-  return match?.id ?? agents[0]?.id ?? "";
+  return match?.id ?? "";
 }

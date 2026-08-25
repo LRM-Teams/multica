@@ -18,7 +18,7 @@ import (
 type fakePiRunClient struct {
 	// respond is invoked for every RequestPreparePiRun call with the 1-based
 	// attempt count and returns the response/error for that attempt.
-	respond func(attempt int) (*protocol.PreparePiRunResponsePayload, error)
+	respond  func(attempt int) (*protocol.PreparePiRunResponsePayload, error)
 	attempts int32
 }
 

@@ -64,7 +64,7 @@ func TestRunnerSpawnRecordsChildDaemonInstanceOnReady(t *testing.T) {
 	}
 	rec.ObserveSpawn()
 	if rec.DaemonInstanceID() != "" {
-		t.Fatal("ObserveSpawn must not mint a ComputerCore daemon instance")
+		t.Fatal("ObserveSpawn must not mint a Host daemon instance")
 	}
 	if rec.ObserveReady("") {
 		t.Fatal("empty child Ready must not become running")

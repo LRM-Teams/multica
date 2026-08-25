@@ -20,7 +20,7 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-func (d *WorkspaceDaemonCore) listenBindingCredentialProxy() (net.Listener, error) {
+func (d *Daemon) listenBindingCredentialProxy() (net.Listener, error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, fmt.Errorf("listen for Binding child Credential Proxy: %w", err)
@@ -34,7 +34,7 @@ func (d *WorkspaceDaemonCore) listenBindingCredentialProxy() (net.Listener, erro
 	return listener, nil
 }
 
-func (d *WorkspaceDaemonCore) serveBindingCredentialProxy(ctx context.Context, listener net.Listener) {
+func (d *Daemon) serveBindingCredentialProxy(ctx context.Context, listener net.Listener) {
 	mux := http.NewServeMux()
 	d.registerCredentialProxyRoutes(mux)
 	d.serveLocalHTTP(ctx, listener, mux, "Binding child Credential Proxy")
@@ -82,10 +82,6 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 		PID:              os.Getpid(),
 	}
 	hostControl := newBindingHostControlClient(bootstrap.ServiceEndpoint, config.Daemon.LocalControlToken, identity)
-	remoteAdmission := newRemoteAgentProcessAdmission(hostControl)
-	defer remoteAdmission.Close()
-	d.processAdmission = remoteAdmission
-	d.canonicalRuntimes.setMachineProcessAdmission(workspaceID, remoteAdmission)
 	d.bindingHostControl = hostControl
 	d.bindingDiagnostics = newBindingChildDiagnosticForwarder(hostControl)
 	defer d.bindingDiagnostics.Close()
@@ -130,15 +126,7 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 	}
 	runtimeIDs := make([]string, 0, len(response.Runtimes))
 	d.mu.Lock()
-	previousEpoch := int64(0)
-	previousRegisteredAt := time.Time{}
-	if previous := d.workspaces[workspaceID]; previous != nil {
-		previousEpoch = previous.runtimeEpoch
-		previousRegisteredAt = previous.registeredAt
-	}
 	d.workspaces[workspaceID] = newWorkspaceState(workspaceID, nil, response.ServerCapabilities...)
-	d.workspaces[workspaceID].runtimeEpoch = previousEpoch
-	d.workspaces[workspaceID].registeredAt = previousRegisteredAt
 	for _, runtime := range response.Runtimes {
 		runtimeIDs = append(runtimeIDs, runtime.ID)
 		d.runtimeIndex[runtime.ID] = runtime
@@ -159,14 +147,14 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 			d.logger.Warn("Binding child orphan recovery failed", "workspace_id", workspaceID, "runtime_id", runtimeID, "error", err)
 		}
 	}
-	runner, err := d.newWorkspaceSession(workspaceID)
+	runner, err := d.newWorkspaceDaemon(workspaceID)
 	if err != nil {
 		return err
 	}
-	if err := d.adoptWorkspaceSession(runner); err != nil {
+	if err := d.adoptWorkspaceDaemon(runner); err != nil {
 		return err
 	}
-	defer d.detachWorkspaceSession(runner)
+	defer d.detachWorkspaceDaemon(runner)
 	var (
 		readyOnce sync.Once
 		readyErr  error
@@ -238,7 +226,7 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 	return nil
 }
 
-func (d *WorkspaceDaemonCore) prepareBindingExecutionCredential(binding computer.WorkspaceBinding) error {
+func (d *Daemon) prepareBindingExecutionCredential(binding computer.WorkspaceBinding) error {
 	workspaceID := strings.TrimSpace(binding.WorkspaceID)
 	if strings.TrimSpace(binding.Credential) == "" || !binding.CredentialExpiresAt.After(time.Now()) {
 		return fmt.Errorf("Workspace Binding %q has no live execution credential", workspaceID)
@@ -247,7 +235,7 @@ func (d *WorkspaceDaemonCore) prepareBindingExecutionCredential(binding computer
 	return nil
 }
 
-func (d *WorkspaceDaemonCore) bindingWorkspaceRefreshLoop(ctx context.Context, workspaceID, initialCredential string, interval time.Duration) error {
+func (d *Daemon) bindingWorkspaceRefreshLoop(ctx context.Context, workspaceID, initialCredential string, interval time.Duration) error {
 	if interval <= 0 {
 		interval = DefaultWorkspaceSyncInterval
 	}
@@ -291,7 +279,7 @@ func (d *WorkspaceDaemonCore) bindingWorkspaceRefreshLoop(ctx context.Context, w
 	}
 }
 
-func (d *WorkspaceDaemonCore) serveBindingMachineControlRPC(ctx context.Context, listener net.Listener, bootstrap computer.BindingChildBootstrap) {
+func (d *Daemon) serveBindingMachineControlRPC(ctx context.Context, listener net.Listener, bootstrap computer.BindingChildBootstrap) {
 	registry := d.bindingMachineControlRegistry(bootstrap)
 	d.logger.Info("Binding child IPC listening", "addr", listener.Addr().String())
 	if err := computer.ServeLocalControlRPC(ctx, listener, registry); err != nil && d.logger != nil {
@@ -299,7 +287,7 @@ func (d *WorkspaceDaemonCore) serveBindingMachineControlRPC(ctx context.Context,
 	}
 }
 
-func (d *WorkspaceDaemonCore) bindingMachineControlRegistry(bootstrap computer.BindingChildBootstrap) *computer.LocalControlRegistry {
+func (d *Daemon) bindingMachineControlRegistry(bootstrap computer.BindingChildBootstrap) *computer.LocalControlRegistry {
 	registry := computer.NewLocalControlRegistry()
 	authorized := func(headers map[string]string) error {
 		token := strings.TrimSpace(d.cfg.LocalControlToken)
@@ -426,7 +414,7 @@ func (d *WorkspaceDaemonCore) bindingMachineControlRegistry(bootstrap computer.B
 	return registry
 }
 
-func (d *WorkspaceDaemonCore) reregisterBindingWorkspace(ctx context.Context, workspaceID string) error {
+func (d *Daemon) reregisterBindingWorkspace(ctx context.Context, workspaceID string) error {
 	bindings, err := d.configuredWorkspaceBindings()
 	if err != nil {
 		return err
@@ -447,7 +435,7 @@ func (d *WorkspaceDaemonCore) reregisterBindingWorkspace(ctx context.Context, wo
 	}
 	expiresAt := binding.CredentialExpiresAt.UTC().Format(time.RFC3339Nano)
 	if d.bindingHostControl == nil {
-		return errors.New("Binding child ComputerCore control is unavailable")
+		return errors.New("Binding child Host control is unavailable")
 	}
 	if err := d.bindingHostControl.reportRuntimeSet(ctx, []Runtime{}, binding.Credential, expiresAt); err != nil {
 		return fmt.Errorf("report zero-Agent Binding Runtime set: %w", err)

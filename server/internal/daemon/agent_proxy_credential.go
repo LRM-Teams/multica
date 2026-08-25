@@ -34,7 +34,7 @@ type authenticatedAgentProxy struct {
 }
 
 type agentProxyCLITransport struct {
-	daemon      *WorkspaceDaemonCore
+	daemon      *Daemon
 	credential  [32]byte
 	inbox       InboxKey
 	runtimeID   string
@@ -49,9 +49,9 @@ type agentProxyCLITransport struct {
 // carrier used by generated Agent CLI wrappers. Authentication state belongs
 // to the Machine Service and process launch; Message coordinators never see the
 // token or its file path.
-func (d *WorkspaceDaemonCore) prepareAgentProxyCLITransport(
+func (d *Daemon) prepareAgentProxyCLITransport(
 	key InboxKey,
-	runtimeID, launchID, multicaBin string,
+	runtimeID, agentInstanceID, multicaBin string,
 ) (*agentProxyCLITransport, error) {
 	if d == nil {
 		return nil, errors.New("Machine Service is unavailable")
@@ -71,12 +71,12 @@ func (d *WorkspaceDaemonCore) prepareAgentProxyCLITransport(
 		return nil, err
 	}
 	runtimeID = strings.TrimSpace(runtimeID)
-	launchID = strings.TrimSpace(launchID)
+	agentInstanceID = strings.TrimSpace(agentInstanceID)
 	multicaBin = filepath.Clean(strings.TrimSpace(multicaBin))
-	if runtimeID == "" {
-		return nil, errors.New("Agent Proxy runtime_id and launch_id are required")
+	if runtimeID == "" || agentInstanceID == "" {
+		return nil, errors.New("Agent Proxy Runtime and local Agent instance are required")
 	}
-	if err := validateStatePathPart("launch", launchID); err != nil {
+	if err := validateStatePathPart("agent instance", agentInstanceID); err != nil {
 		return nil, err
 	}
 	if multicaBin == "." || !filepath.IsAbs(multicaBin) {
@@ -91,16 +91,16 @@ func (d *WorkspaceDaemonCore) prepareAgentProxyCLITransport(
 	}
 	credentialHash := sha256.Sum256([]byte(token))
 	stateRoot := workspaceStateRoot(d.cfg.WorkspacesRoot, key.WorkspaceID)
-	root := filepath.Join(stateRoot, "cli-transport", key.AgentID, launchID)
+	root := filepath.Join(stateRoot, "cli-transport", key.AgentID, agentInstanceID)
 	tokenDir := filepath.Join(stateRoot, "agent-proxy-tokens", key.AgentID)
 	binDir := filepath.Join(root, "bin")
 	if _, err := os.Lstat(root); err == nil {
-		return nil, fmt.Errorf("Agent Proxy launch transport already exists: %s", launchID)
+		return nil, fmt.Errorf("Agent Proxy launch transport already exists: %s", agentInstanceID)
 	} else if !os.IsNotExist(err) {
 		return nil, fmt.Errorf("inspect Agent Proxy launch transport: %w", err)
 	}
-	if _, err := os.Lstat(filepath.Join(tokenDir, launchID+".token")); err == nil {
-		return nil, fmt.Errorf("Agent Proxy launch token already exists: %s", launchID)
+	if _, err := os.Lstat(filepath.Join(tokenDir, agentInstanceID+".token")); err == nil {
+		return nil, fmt.Errorf("Agent Proxy launch token already exists: %s", agentInstanceID)
 	} else if !os.IsNotExist(err) {
 		return nil, fmt.Errorf("inspect Agent Proxy launch token: %w", err)
 	}
@@ -109,7 +109,7 @@ func (d *WorkspaceDaemonCore) prepareAgentProxyCLITransport(
 	}
 	if err := os.Mkdir(root, 0o700); err != nil {
 		if os.IsExist(err) {
-			return nil, fmt.Errorf("Agent Proxy launch transport already exists: %s", launchID)
+			return nil, fmt.Errorf("Agent Proxy launch transport already exists: %s", agentInstanceID)
 		}
 		return nil, fmt.Errorf("create Agent Proxy launch transport: %w", err)
 	}
@@ -123,7 +123,7 @@ func (d *WorkspaceDaemonCore) prepareAgentProxyCLITransport(
 	defer func() {
 		if cleanupOnFailure {
 			_ = os.RemoveAll(root)
-			_ = os.Remove(filepath.Join(tokenDir, launchID+".token"))
+			_ = os.Remove(filepath.Join(tokenDir, agentInstanceID+".token"))
 		}
 	}()
 	for _, dir := range []string{root, binDir, tokenDir} {
@@ -131,7 +131,7 @@ func (d *WorkspaceDaemonCore) prepareAgentProxyCLITransport(
 			return nil, fmt.Errorf("protect Agent Proxy transport directory: %w", err)
 		}
 	}
-	tokenFile := filepath.Join(tokenDir, launchID+".token")
+	tokenFile := filepath.Join(tokenDir, agentInstanceID+".token")
 	if err := writeAgentProxyTokenExclusive(tokenFile, []byte(token)); err != nil {
 		return nil, fmt.Errorf("write Agent Proxy token file: %w", err)
 	}
@@ -168,7 +168,7 @@ func (d *WorkspaceDaemonCore) prepareAgentProxyCLITransport(
 	return transport, nil
 }
 
-func (d *WorkspaceDaemonCore) authenticateAgentProxyToken(token string) (authenticatedAgentProxy, error) {
+func (d *Daemon) authenticateAgentProxyToken(token string) (authenticatedAgentProxy, error) {
 	if d == nil {
 		return authenticatedAgentProxy{}, ErrAgentProxyCredentialInvalid
 	}
@@ -216,7 +216,7 @@ func (t *agentProxyCLITransport) Close() error {
 	return t.closeErr
 }
 
-func (d *WorkspaceDaemonCore) recordAgentProxyCredentialLifecycle(key InboxKey, runtimeID, phase, outcome, reasonCode string) {
+func (d *Daemon) recordAgentProxyCredentialLifecycle(key InboxKey, runtimeID, phase, outcome, reasonCode string) {
 	d.recordRunnerDiagnostic(key.WorkspaceID, diagnosticlog.Event{
 		Name:      diagnosticlog.EventAgentProcessStateChanged,
 		Level:     diagnosticLevel(outcome),

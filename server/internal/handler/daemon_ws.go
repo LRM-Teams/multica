@@ -23,20 +23,26 @@ func (h *Handler) DaemonWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	runtimeIDs := parseRuntimeIDs(r)
 	if len(runtimeIDs) == 0 {
-		// TODO(workspace-daemon-connect): Remove this WorkspaceDaemon branch
-		// only after the minimum supported Computer version connects through
-		// protocol.WorkspaceDaemonConnectPath and fleet upgrade coverage proves
-		// no released Computer still needs this path to receive computer:upgrade.
-		// Upgrade bridge: released Computers only know
-		// /api/daemon/connect?workspace_id=... and must remain reachable long
-		// enough to receive computer:upgrade. New Computers use the dedicated
-		// WorkspaceDaemonConnectPath instead.
+		// A WorkspaceDaemon is deliberately not a runtime registration: it
+		// remains connected while a workspace has no provider runtime at all.
+		// Its workspace must nevertheless be the exact authenticated daemon
+		// token scope; accepting an arbitrary query value here would turn the
+		// Runner into a cross-workspace command channel.
 		workspaceID := strings.TrimSpace(r.URL.Query().Get("workspace_id"))
 		if workspaceID == "" || workspaceID != middleware.DaemonWorkspaceIDFromContext(r.Context()) {
 			writeError(w, http.StatusNotFound, "workspace not found")
 			return
 		}
-		h.serveWorkspaceDaemonWebSocket(w, r, workspaceID, "workspace_runner_protocol_unsupported")
+		if err := agent.CheckCLIVersionAtLeast(r.Header.Get("X-Client-Version"), MinWorkspaceDaemonProtocolCLIVersion); err != nil {
+			writeJSON(w, http.StatusUpgradeRequired, map[string]any{"code": "workspace_daemon_protocol_unsupported", "min_version": MinWorkspaceDaemonProtocolCLIVersion})
+			return
+		}
+		h.DaemonHub.HandleWebSocket(w, r, daemonws.ClientIdentity{
+			DaemonID:      middleware.DaemonIDFromContext(r.Context()),
+			UserID:        requestUserID(r),
+			WorkspaceID:   workspaceID,
+			ClientVersion: r.Header.Get("X-Client-Version"),
+		})
 		return
 	}
 
@@ -60,10 +66,7 @@ func (h *Handler) DaemonWebSocket(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// WorkspaceDaemonWebSocket is the single server connection owned by one
-// WorkspaceDaemonCore. It is deliberately separate from the legacy
-// runtime/task transport even though both authenticate with a workspace-scoped
-// daemon token.
+// WorkspaceDaemonWebSocket serves the dedicated WorkspaceDaemon connection.
 func (h *Handler) WorkspaceDaemonWebSocket(w http.ResponseWriter, r *http.Request) {
 	if h.DaemonHub == nil {
 		writeError(w, http.StatusServiceUnavailable, "workspace daemon websocket unavailable")
@@ -74,12 +77,8 @@ func (h *Handler) WorkspaceDaemonWebSocket(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusNotFound, "workspace not found")
 		return
 	}
-	h.serveWorkspaceDaemonWebSocket(w, r, workspaceID, "workspace_daemon_protocol_unsupported")
-}
-
-func (h *Handler) serveWorkspaceDaemonWebSocket(w http.ResponseWriter, r *http.Request, workspaceID, unsupportedCode string) {
 	if err := agent.CheckCLIVersionAtLeast(r.Header.Get("X-Client-Version"), MinWorkspaceDaemonProtocolCLIVersion); err != nil {
-		writeJSON(w, http.StatusUpgradeRequired, map[string]any{"code": unsupportedCode, "min_version": MinWorkspaceDaemonProtocolCLIVersion})
+		writeJSON(w, http.StatusUpgradeRequired, map[string]any{"code": "workspace_daemon_protocol_unsupported", "min_version": MinWorkspaceDaemonProtocolCLIVersion})
 		return
 	}
 	h.DaemonHub.HandleWebSocket(w, r, daemonws.ClientIdentity{

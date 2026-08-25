@@ -33,9 +33,9 @@ func (client *bindingHostControlClient) forwardMachineActions(ctx context.Contex
 
 // handleComputerControlCommand is the Raft 1.0.16 child callback: the
 // DaemonCore connect socket received computer:upgrade / computer:restart.
-// The Binding child executes the machine upgrade in-process. ComputerCore only
+// The Binding child executes the machine upgrade in-process. Host only
 // drains sibling Bindings and respawns after this child exits.
-func (d *WorkspaceDaemonCore) handleWSHeartbeatAck(ctx context.Context, ack *HeartbeatResponse) {
+func (d *Daemon) handleWSHeartbeatAck(ctx context.Context, ack *HeartbeatResponse) {
 	if ack == nil || ack.RuntimeID == "" {
 		return
 	}
@@ -46,7 +46,7 @@ func (d *WorkspaceDaemonCore) handleWSHeartbeatAck(ctx context.Context, ack *Hea
 	d.handleHeartbeatActions(ctx, ack.RuntimeID, ack)
 }
 
-func (d *WorkspaceDaemonCore) handleWorkspaceDaemonControlAck(ctx context.Context, ack *HeartbeatResponse) {
+func (d *Daemon) handleWorkspaceDaemonControlAck(ctx context.Context, ack *HeartbeatResponse) {
 	if d == nil || ack == nil {
 		return
 	}
@@ -73,11 +73,11 @@ func (d *WorkspaceDaemonCore) handleWorkspaceDaemonControlAck(ctx context.Contex
 	forwardCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	if err := d.bindingHostControl.forwardMachineActions(forwardCtx, machine); err != nil && d.logger != nil {
-		d.logger.Warn("forward Binding child machine action to ComputerCore failed", "runtime_id", ack.RuntimeID, "reason", "host_unavailable")
+		d.logger.Warn("forward Binding child machine action to Host failed", "runtime_id", ack.RuntimeID, "reason", "host_unavailable")
 	}
 }
 
-func (d *WorkspaceDaemonCore) controlPlaneHeartbeatPayload(runtimeID string) protocol.DaemonHeartbeatRequestPayload {
+func (d *Daemon) controlPlaneHeartbeatPayload(runtimeID string) protocol.DaemonHeartbeatRequestPayload {
 	return protocol.DaemonHeartbeatRequestPayload{
 		RuntimeID:                 runtimeID,
 		SupportsBatchImport:       true,
@@ -86,7 +86,7 @@ func (d *WorkspaceDaemonCore) controlPlaneHeartbeatPayload(runtimeID string) pro
 	}
 }
 
-func (d *WorkspaceDaemonCore) setComputerUpgradeEmit(emit func(string, any) error) {
+func (d *Daemon) setComputerUpgradeEmit(emit func(string, any) error) {
 	if d == nil {
 		return
 	}
@@ -95,7 +95,7 @@ func (d *WorkspaceDaemonCore) setComputerUpgradeEmit(emit func(string, any) erro
 	d.mu.Unlock()
 }
 
-func (d *WorkspaceDaemonCore) emitComputerUpgrade(eventType string, payload any) error {
+func (d *Daemon) emitComputerUpgrade(eventType string, payload any) error {
 	if d == nil {
 		return errors.New("DaemonCore is unavailable")
 	}
@@ -108,7 +108,7 @@ func (d *WorkspaceDaemonCore) emitComputerUpgrade(eventType string, payload any)
 	return emit(eventType, payload)
 }
 
-func (d *WorkspaceDaemonCore) handleComputerControlCommand(ctx context.Context, action string, command protocol.ComputerUpgradePayload) error {
+func (d *Daemon) handleComputerControlCommand(ctx context.Context, action string, command protocol.ComputerUpgradePayload) error {
 	if d == nil {
 		return errors.New("DaemonCore is unavailable")
 	}
@@ -116,7 +116,7 @@ func (d *WorkspaceDaemonCore) handleComputerControlCommand(ctx context.Context, 
 	case protocol.EventComputerUpgrade:
 		if d.bindingHostControl == nil {
 			// Raft 1.0.16: a DaemonCore not constructed by Computer
-			// ignores computer:upgrade instead of inventing a ComputerCore path.
+			// ignores computer:upgrade instead of inventing a Host path.
 			if d.logger != nil {
 				d.logger.Info("ignoring computer:upgrade — not launched by a Computer service")
 			}
@@ -136,7 +136,7 @@ func (d *WorkspaceDaemonCore) handleComputerControlCommand(ctx context.Context, 
 	case protocol.EventComputerRestart:
 		ack := HeartbeatResponse{Status: "ok", PendingRestart: &PendingRestart{ID: strings.TrimSpace(command.RequestID)}}
 		if d.bindingHostControl == nil {
-			return errors.New("ComputerCore callback is unavailable")
+			return errors.New("Computer Host callback is unavailable")
 		}
 		forwardCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
@@ -146,22 +146,22 @@ func (d *WorkspaceDaemonCore) handleComputerControlCommand(ctx context.Context, 
 	}
 }
 
-func (d *WorkspaceDaemonCore) handleComputerWorkDigestCommand(ctx context.Context, command protocol.ComputerWorkDigestPayload) (protocol.WorkDigest, error) {
+func (d *Daemon) handleComputerWorkDigestCommand(ctx context.Context, command protocol.ComputerWorkDigestPayload) (protocol.WorkDigest, error) {
 	if d == nil {
 		return protocol.WorkDigest{}, errors.New("DaemonCore is unavailable")
 	}
 	if d.bindingHostControl == nil {
-		return protocol.WorkDigest{}, errors.New("ComputerCore callback is unavailable")
+		return protocol.WorkDigest{}, errors.New("Computer Host callback is unavailable")
 	}
 	return d.bindingHostControl.client.HarvestWorkDigest(ctx, command)
 }
 
-func (d *WorkspaceDaemonCore) handleComputerWorkJournalCommand(ctx context.Context, command protocol.ComputerWorkJournalPayload) (bool, error) {
+func (d *Daemon) handleComputerWorkJournalCommand(ctx context.Context, command protocol.ComputerWorkJournalPayload) (bool, error) {
 	if d == nil {
 		return false, errors.New("DaemonCore is unavailable")
 	}
 	if d.bindingHostControl == nil {
-		return false, errors.New("ComputerCore callback is unavailable")
+		return false, errors.New("Computer Host callback is unavailable")
 	}
 	return d.bindingHostControl.client.SetWorkJournalEnabled(ctx, command)
 }
@@ -196,16 +196,16 @@ func newBindingChildDiagnosticForwarder(client *bindingHostControlClient) *bindi
 
 func (forwarder *bindingChildDiagnosticForwarder) record(workspaceID string, event diagnosticlog.Event) error {
 	if forwarder == nil || forwarder.client == nil {
-		return errors.New("Binding ComputerCore diagnostic aggregation is unavailable")
+		return errors.New("Binding Host diagnostic aggregation is unavailable")
 	}
 	envelope := bindingChildDiagnosticEnvelope{workspaceID: workspaceID, event: &event}
 	select {
 	case <-forwarder.ctx.Done():
-		return errors.New("Binding ComputerCore diagnostic aggregation is closed")
+		return errors.New("Binding Host diagnostic aggregation is closed")
 	case forwarder.queue <- envelope:
 		return nil
 	default:
-		return errors.New("Binding ComputerCore diagnostic aggregation queue is full")
+		return errors.New("Binding Host diagnostic aggregation queue is full")
 	}
 }
 
@@ -231,121 +231,4 @@ func (forwarder *bindingChildDiagnosticForwarder) Close() {
 		forwarder.cancel()
 		<-forwarder.done
 	})
-}
-
-type remoteAgentProcessAdmission struct {
-	client *bindingHostControlClient
-	ctx    context.Context
-	cancel context.CancelFunc
-
-	mu    sync.Mutex
-	polls map[string]context.CancelFunc
-}
-
-func newRemoteAgentProcessAdmission(client *bindingHostControlClient) *remoteAgentProcessAdmission {
-	ctx, cancel := context.WithCancel(context.Background())
-	return &remoteAgentProcessAdmission{client: client, ctx: ctx, cancel: cancel, polls: make(map[string]context.CancelFunc)}
-}
-
-func (admission *remoteAgentProcessAdmission) Acquire(request agentProcessCapacityRequest) (agentProcessCapacityGrant, bool) {
-	grant := agentProcessCapacityGrant{ID: request.LaunchID, LaunchID: request.LaunchID, AgentID: request.AgentID, RuntimeID: request.RuntimeID}
-	if admission == nil || admission.client == nil || strings.TrimSpace(request.LaunchID) == "" {
-		return grant, false
-	}
-	remoteGrant, admitted, err := admission.client.client.AcquireCapacity(admission.ctx, computer.ProcessCapacityRequest{
-		WorkspaceID: request.WorkspaceID, AgentID: request.AgentID, RuntimeID: request.RuntimeID, LaunchID: request.LaunchID,
-	})
-	if err == nil && remoteGrant.LaunchID != "" {
-		grant = remoteGrant
-	}
-	if err == nil && admitted {
-		return grant, true
-	}
-	admission.pollUntilActive(grant, request, request.Waiter)
-	return grant, false
-}
-
-func (admission *remoteAgentProcessAdmission) Cancel(grant agentProcessCapacityGrant) {
-	admission.stopPoll(grant.LaunchID)
-	if admission == nil || admission.client == nil || grant.LaunchID == "" {
-		return
-	}
-	_ = admission.client.client.CancelCapacity(context.Background(), grant)
-}
-
-func (admission *remoteAgentProcessAdmission) Release(grant agentProcessCapacityGrant) {
-	admission.stopPoll(grant.LaunchID)
-	if admission == nil || admission.client == nil || grant.LaunchID == "" {
-		return
-	}
-	_ = admission.client.client.ReleaseCapacity(context.Background(), grant)
-}
-
-func (admission *remoteAgentProcessAdmission) Active(grant agentProcessCapacityGrant) bool {
-	if admission == nil || admission.client == nil || grant.LaunchID == "" {
-		return false
-	}
-	active, err := admission.client.client.CapacityActive(admission.ctx, grant)
-	return err == nil && active
-}
-
-func (admission *remoteAgentProcessAdmission) pollUntilActive(grant agentProcessCapacityGrant, request agentProcessCapacityRequest, waiter agentProcessCapacityWaiter) {
-	if admission == nil || grant.LaunchID == "" || waiter == nil {
-		return
-	}
-	admission.mu.Lock()
-	if _, exists := admission.polls[grant.LaunchID]; exists {
-		admission.mu.Unlock()
-		return
-	}
-	ctx, cancel := context.WithCancel(admission.ctx)
-	admission.polls[grant.LaunchID] = cancel
-	admission.mu.Unlock()
-	go func() {
-		ticker := time.NewTicker(25 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				current, active, err := admission.client.client.AcquireCapacity(ctx, computer.ProcessCapacityRequest{
-					WorkspaceID: request.WorkspaceID, AgentID: request.AgentID,
-					RuntimeID: request.RuntimeID, LaunchID: request.LaunchID,
-				})
-				if err != nil || !active {
-					continue
-				}
-				admission.stopPoll(grant.LaunchID)
-				waiter(current)
-				return
-			}
-		}
-	}()
-}
-
-func (admission *remoteAgentProcessAdmission) stopPoll(launchID string) {
-	if admission == nil || launchID == "" {
-		return
-	}
-	admission.mu.Lock()
-	cancel := admission.polls[launchID]
-	delete(admission.polls, launchID)
-	admission.mu.Unlock()
-	if cancel != nil {
-		cancel()
-	}
-}
-
-func (admission *remoteAgentProcessAdmission) Close() {
-	if admission == nil {
-		return
-	}
-	admission.cancel()
-	admission.mu.Lock()
-	for launchID, cancel := range admission.polls {
-		cancel()
-		delete(admission.polls, launchID)
-	}
-	admission.mu.Unlock()
 }

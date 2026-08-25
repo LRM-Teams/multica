@@ -226,7 +226,7 @@ func readRunnerConnected(path string) (persistedRunnerConnected, error) {
 // listRunnerStates reads every persisted Binding Runner state file under
 // root without mutating anything. It is used by read-only evidence
 // gathering (doctor); findReclaimableRunners is the mutating counterpart
-// used at ComputerCore startup. Corrupt or unreadable entries are silently skipped.
+// used at Host startup. Corrupt or unreadable entries are silently skipped.
 func listRunnerStates(root string) ([]persistedRunnerState, error) {
 	root = strings.TrimSpace(root)
 	if root == "" {
@@ -256,7 +256,7 @@ func listRunnerStates(root string) ([]persistedRunnerState, error) {
 
 // reclaimableRunner is one Workspace slot whose previous-generation Binding
 // Runner process is still alive on this machine. A live process here is
-// never adopted; the current ComputerCore drains and terminates it, then spawns its
+// never adopted; the current Host drains and terminates it, then spawns its
 // own child through the normal CanSpawn/Reconcile path.
 type reclaimableRunner struct {
 	WorkspaceID      string
@@ -271,9 +271,9 @@ type reclaimableRunner struct {
 
 // findReclaimableRunners reads every persisted Binding Runner state
 // directory and reports which ones still have a live OS process to reclaim.
-// It never adopts a live process into this ComputerCore's own bookkeeping: a live
+// It never adopts a live process into this Host's own bookkeeping: a live
 // runner found here is handed back to the caller so it can be drained and
-// killed before this ComputerCore spawns a replacement.
+// killed before this Host spawns a replacement.
 //
 // Side effect: any state directory whose process is already dead is deleted
 // in place as it is scanned (state file, pid file, connected file, and the
@@ -323,7 +323,7 @@ func findReclaimableRunners(root string, logger *slog.Logger) ([]reclaimableRunn
 				endpoint = connected.RunnerEndpoint
 			}
 			if logger != nil {
-				logger.Info("found reclaimable Binding Runner left by a previous ComputerCore generation", "workspace_id", state.WorkspaceID, "pid", pid, "has_endpoint", endpoint != "")
+				logger.Info("found reclaimable Binding Runner left by a previous Host generation", "workspace_id", state.WorkspaceID, "pid", pid, "has_endpoint", endpoint != "")
 			}
 			reclaimable = append(reclaimable, reclaimableRunner{
 				WorkspaceID: state.WorkspaceID, DaemonInstanceID: state.DaemonInstanceID, PID: pid, RunnerEndpoint: endpoint,
@@ -353,7 +353,7 @@ type runnerReclaimOptions struct {
 }
 
 // reclaimRunnerProcess drains and then force-terminates one WorkspaceDaemon
-// process left behind by a previous ComputerCore generation, and on confirmed death
+// process left behind by a previous Host generation, and on confirmed death
 // removes its persisted state so the slot is free for a fresh child.
 //
 // Drain (runner:drain) only closes the runner's own admission barrier and

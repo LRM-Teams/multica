@@ -14,9 +14,9 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-// ComputerCoreConfig is the Computer's process-supervision boundary. Binding execution
+// HostConfig is the Computer's process-supervision boundary. Binding execution
 // details enter only through the child process launcher and control callbacks.
-type ComputerCoreConfig struct {
+type HostConfig struct {
 	Spawn             BindingChildSpawner
 	ResidentRoot      string
 	Now               func() time.Time
@@ -24,16 +24,20 @@ type ComputerCoreConfig struct {
 	ReconcileInterval time.Duration
 	Logger            *slog.Logger
 	ControlToken      string
-	MaxAgentProcesses int
 	ControlCallbacks  HostControlCallbacks
 }
 
-// ComputerCore is the Computer-level owner. Machine lifecycle, upgrade, diagnostics,
-// and local service control stay here; Agent-system supervision is delegated to
-// its local DaemonCore.
-type ComputerCore struct {
-	daemonCore         *DaemonCore
-	logger             *slog.Logger
+// Host owns every machine-scoped Binding concern: desired-vs-actual child
+// processes, start-identity/PID fencing, crash policy, local
+// control, and cross-child Machine Upgrade preparation.
+type Host struct {
+	supervisor        *BindingSupervisor
+	control           *HostControl
+	reconcileInterval time.Duration
+	logger            *slog.Logger
+
+	runtimeMu          sync.RWMutex
+	runtimeSets        map[string]hostBindingRuntimeSet
 	upgrade            *hostMachineUpgrade
 	diagnosticStore    *diagnosticlog.Store
 	diagnosticMu       sync.Mutex
@@ -45,9 +49,9 @@ type ComputerCore struct {
 	workJournalRoot    string
 }
 
-func (host *ComputerCore) RegisterControlRPCHandlers(registry *LocalControlRegistry) {
-	if host != nil && host.daemonCore != nil && host.daemonCore.control != nil {
-		host.daemonCore.control.RegisterRPCHandlers(registry)
+func (host *Host) RegisterControlRPCHandlers(registry *LocalControlRegistry) {
+	if host != nil && host.control != nil {
+		host.control.RegisterRPCHandlers(registry)
 	}
 }
 
@@ -64,36 +68,35 @@ type hostBindingRuntimeSet struct {
 	ExpiresAt   time.Time
 }
 
-func NewComputerCore(config ComputerCoreConfig) (*ComputerCore, error) {
+func NewHost(config HostConfig) (*Host, error) {
 	if config.Spawn == nil {
 		return nil, errors.New("Computer Binding child spawner is required")
 	}
 	if config.ReconcileInterval <= 0 {
 		config.ReconcileInterval = RunnerReconcileInterval
 	}
-	host := &ComputerCore{
+	host := &Host{
+		reconcileInterval: config.ReconcileInterval,
 		logger:            config.Logger,
+		runtimeSets:       make(map[string]hostBindingRuntimeSet),
 		diagnosticLoggers: make(map[string]*diagnosticlog.Logger),
 	}
-	var core *DaemonCore
-	core, err := newDaemonCore(daemonCoreConfig{
+	supervisor, err := NewBindingSupervisor(BindingSupervisorConfig{
 		Spawn: config.Spawn, StateRoot: config.ResidentRoot, Now: config.Now, ReadyTimeout: config.ReadyTimeout, Logger: config.Logger,
-		// Computer owns the local credential; DaemonCore only receives the
-		// operation needed to drain one WorkspaceDaemonCore.
+		// The Host owns the control-plane credential; the supervisor only
+		// knows "ask this endpoint to drain", never the token itself.
 		DrainRunner: func(ctx context.Context, endpoint string, identity BindingChildIdentity) error {
 			return RequestBindingRunnerDrain(ctx, endpoint, config.ControlToken, identity)
 		},
 		Released: func(identity BindingChildIdentity) {
-			if core != nil && core.control != nil {
-				core.control.Release(identity)
+			if host.control != nil {
+				host.control.Release(identity)
 			}
 		},
 	})
 	if err != nil {
 		return nil, err
 	}
-	core.reconcileInterval = config.ReconcileInterval
-	host.daemonCore = core
 	external := config.ControlCallbacks
 	callbacks := external
 	callbacks.RuntimeSet = func(ctx context.Context, identity BindingChildIdentity, raw json.RawMessage, token string, expiresAt time.Time) error {
@@ -113,12 +116,12 @@ func NewComputerCore(config ComputerCoreConfig) (*ComputerCore, error) {
 			}
 			seen[runtimes[i].ID] = struct{}{}
 		}
-		core.runtimeMu.Lock()
-		core.runtimeSets[identity.WorkspaceID] = hostBindingRuntimeSet{
+		host.runtimeMu.Lock()
+		host.runtimeSets[identity.WorkspaceID] = hostBindingRuntimeSet{
 			Identity: identity, Runtimes: append([]hostBindingRuntime(nil), runtimes...),
 			DaemonToken: strings.TrimSpace(token), ExpiresAt: expiresAt,
 		}
-		core.runtimeMu.Unlock()
+		host.runtimeMu.Unlock()
 		if external.RuntimeSet != nil {
 			return external.RuntimeSet(ctx, identity, raw, token, expiresAt)
 		}
@@ -168,17 +171,18 @@ func NewComputerCore(config ComputerCoreConfig) (*ComputerCore, error) {
 		return host.upgrade.startServiceUpgrade(identity, command)
 	}
 	callbacks.Released = func(identity BindingChildIdentity) {
-		core.runtimeMu.Lock()
-		if current, ok := core.runtimeSets[identity.WorkspaceID]; ok && current.Identity == identity {
-			delete(core.runtimeSets, identity.WorkspaceID)
+		host.runtimeMu.Lock()
+		if current, ok := host.runtimeSets[identity.WorkspaceID]; ok && current.Identity == identity {
+			delete(host.runtimeSets, identity.WorkspaceID)
 		}
-		core.runtimeMu.Unlock()
+		host.runtimeMu.Unlock()
 		if external.Released != nil {
 			external.Released(identity)
 		}
 	}
-	callbacks.Current = core.Current
-	core.control = NewHostControl(config.ControlToken, NewProcessCapacity(config.MaxAgentProcesses), callbacks)
+	callbacks.Current = supervisor.Current
+	host.supervisor = supervisor
+	host.control = NewHostControl(config.ControlToken, callbacks)
 	host.upgrade = newHostMachineUpgrade(host, hostMachineUpgradeConfig{})
 	return host, nil
 }
@@ -186,17 +190,17 @@ func NewComputerCore(config ComputerCoreConfig) (*ComputerCore, error) {
 // Run continuously reconciles the desired Binding set until the Computer
 // process exits. The periodic repair policy belongs to the Computer, not to a
 // Binding daemon.
-func (host *ComputerCore) Run(ctx context.Context, desired func() []string, changes <-chan struct{}) {
-	if host == nil || host.daemonCore == nil || desired == nil {
+func (host *Host) Run(ctx context.Context, desired func() []string, changes <-chan struct{}) {
+	if host == nil || host.supervisor == nil || desired == nil {
 		return
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	host.daemonCore.Reconcile(ctx, desired())
-	ticker := time.NewTicker(host.daemonCore.reconcileInterval)
+	host.supervisor.Reconcile(ctx, desired())
+	ticker := time.NewTicker(host.reconcileInterval)
 	defer ticker.Stop()
-	defer host.daemonCore.Stop()
+	defer host.supervisor.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -206,49 +210,49 @@ func (host *ComputerCore) Run(ctx context.Context, desired func() []string, chan
 				changes = nil
 				continue
 			}
-			host.daemonCore.Reconcile(ctx, desired())
+			host.supervisor.Reconcile(ctx, desired())
 		case <-ticker.C:
-			host.daemonCore.Reconcile(ctx, desired())
+			host.supervisor.Reconcile(ctx, desired())
 		}
 	}
 }
 
-func (host *ComputerCore) Reconcile(ctx context.Context, desiredWorkspaceIDs []string) {
-	if host != nil && host.daemonCore != nil {
-		host.daemonCore.Reconcile(ctx, desiredWorkspaceIDs)
+func (host *Host) Reconcile(ctx context.Context, desiredWorkspaceIDs []string) {
+	if host != nil && host.supervisor != nil {
+		host.supervisor.Reconcile(ctx, desiredWorkspaceIDs)
 	}
 }
 
-func (host *ComputerCore) Stop() {
-	if host != nil && host.daemonCore != nil {
-		host.daemonCore.Stop()
+func (host *Host) Stop() {
+	if host != nil && host.supervisor != nil {
+		host.supervisor.Stop()
 	}
 }
 
-func (host *ComputerCore) Current(identity BindingChildIdentity) bool {
-	return host != nil && host.daemonCore != nil && host.daemonCore.Current(identity)
+func (host *Host) Current(identity BindingChildIdentity) bool {
+	return host != nil && host.supervisor != nil && host.supervisor.Current(identity)
 }
 
-func (host *ComputerCore) Snapshot(workspaceID string) (RunnerRecord, int, bool) {
-	if host == nil || host.daemonCore == nil {
+func (host *Host) Snapshot(workspaceID string) (RunnerRecord, int, bool) {
+	if host == nil || host.supervisor == nil {
 		return RunnerRecord{}, 0, false
 	}
-	return host.daemonCore.Snapshot(workspaceID)
+	return host.supervisor.Snapshot(workspaceID)
 }
 
-func (host *ComputerCore) DesiredWorkspaceIDs() []string {
-	if host == nil || host.daemonCore == nil {
+func (host *Host) DesiredWorkspaceIDs() []string {
+	if host == nil || host.supervisor == nil {
 		return nil
 	}
-	return host.daemonCore.DesiredWorkspaceIDs()
+	return host.supervisor.DesiredWorkspaceIDs()
 }
 
 // WaitReady fences Computer readiness on every desired Binding child reaching
 // its real WorkspaceDaemon Ready seam. A degraded child is terminal for this
 // startup attempt; crash/backoff remains retryable until ctx expires.
-func (host *ComputerCore) WaitReady(ctx context.Context, desiredWorkspaceIDs []string) error {
-	if host == nil || host.daemonCore == nil {
-		return errors.New("ComputerCore is unavailable")
+func (host *Host) WaitReady(ctx context.Context, desiredWorkspaceIDs []string) error {
+	if host == nil || host.supervisor == nil {
+		return errors.New("Computer Host is unavailable")
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -262,7 +266,7 @@ func (host *ComputerCore) WaitReady(ctx context.Context, desiredWorkspaceIDs []s
 			if workspaceID == "" {
 				continue
 			}
-			record, _, ok := host.daemonCore.Snapshot(workspaceID)
+			record, _, ok := host.supervisor.Snapshot(workspaceID)
 			if ok && record.Lifecycle == RunnerLifecycleDegraded {
 				return fmt.Errorf("Binding %s is degraded", workspaceID)
 			}
@@ -281,57 +285,57 @@ func (host *ComputerCore) WaitReady(ctx context.Context, desiredWorkspaceIDs []s
 	}
 }
 
-func (host *ComputerCore) Release(identity BindingChildIdentity) {
-	if host != nil && host.daemonCore != nil && host.daemonCore.control != nil {
-		host.daemonCore.control.Release(identity)
+func (host *Host) Release(identity BindingChildIdentity) {
+	if host != nil && host.control != nil {
+		host.control.Release(identity)
 	}
 }
 
-func (host *ComputerCore) PrepareMachineUpgrade(ctx context.Context) error {
-	if host == nil || host.daemonCore == nil || host.daemonCore.control == nil {
-		return errors.New("ComputerCore is unavailable")
+func (host *Host) PrepareMachineUpgrade(ctx context.Context) error {
+	if host == nil || host.supervisor == nil || host.control == nil {
+		return errors.New("Computer Host is unavailable")
 	}
-	return host.daemonCore.PrepareMachineUpgrade(ctx, host.daemonCore.control.token)
+	return host.supervisor.PrepareMachineUpgrade(ctx, host.control.token)
 }
 
-func (host *ComputerCore) PrepareSiblingMachineUpgrade(ctx context.Context, initiatorWorkspaceID string) error {
-	if host == nil || host.daemonCore == nil || host.daemonCore.control == nil {
-		return errors.New("ComputerCore is unavailable")
+func (host *Host) PrepareSiblingMachineUpgrade(ctx context.Context, initiatorWorkspaceID string) error {
+	if host == nil || host.supervisor == nil || host.control == nil {
+		return errors.New("Computer Host is unavailable")
 	}
-	return host.daemonCore.PrepareSiblingMachineUpgrade(ctx, host.daemonCore.control.token, initiatorWorkspaceID)
+	return host.supervisor.PrepareSiblingMachineUpgrade(ctx, host.control.token, initiatorWorkspaceID)
 }
 
-func (host *ComputerCore) ReleaseMachineUpgrade(ctx context.Context) error {
-	if host == nil || host.daemonCore == nil || host.daemonCore.control == nil {
-		return errors.New("ComputerCore is unavailable")
+func (host *Host) ReleaseMachineUpgrade(ctx context.Context) error {
+	if host == nil || host.supervisor == nil || host.control == nil {
+		return errors.New("Computer Host is unavailable")
 	}
-	return host.daemonCore.ReleaseMachineUpgrade(ctx, host.daemonCore.control.token)
+	return host.supervisor.ReleaseMachineUpgrade(ctx, host.control.token)
 }
 
-func (host *ComputerCore) PrepareEnvironmentSwitch(ctx context.Context) error {
-	if host == nil || host.daemonCore == nil || host.daemonCore.control == nil {
-		return errors.New("ComputerCore is unavailable")
+func (host *Host) PrepareEnvironmentSwitch(ctx context.Context) error {
+	if host == nil || host.supervisor == nil || host.control == nil {
+		return errors.New("Computer Host is unavailable")
 	}
-	return host.daemonCore.PrepareEnvironmentSwitch(ctx, host.daemonCore.control.token)
+	return host.supervisor.PrepareEnvironmentSwitch(ctx, host.control.token)
 }
 
-func (host *ComputerCore) ReleaseEnvironmentSwitch(ctx context.Context) error {
-	if host == nil || host.daemonCore == nil || host.daemonCore.control == nil {
-		return errors.New("ComputerCore is unavailable")
+func (host *Host) ReleaseEnvironmentSwitch(ctx context.Context) error {
+	if host == nil || host.supervisor == nil || host.control == nil {
+		return errors.New("Computer Host is unavailable")
 	}
-	return host.daemonCore.ReleaseEnvironmentSwitch(ctx, host.daemonCore.control.token)
+	return host.supervisor.ReleaseEnvironmentSwitch(ctx, host.control.token)
 }
 
-func (host *ComputerCore) ReregisterBindings(ctx context.Context, workspaceIDs []string) error {
-	if host == nil || host.daemonCore == nil || host.daemonCore.control == nil {
-		return errors.New("ComputerCore is unavailable")
+func (host *Host) ReregisterBindings(ctx context.Context, workspaceIDs []string) error {
+	if host == nil || host.supervisor == nil || host.control == nil {
+		return errors.New("Computer Host is unavailable")
 	}
-	return host.daemonCore.ReregisterBindings(ctx, host.daemonCore.control.token, workspaceIDs)
+	return host.supervisor.ReregisterBindings(ctx, host.control.token, workspaceIDs)
 }
 
-func (host *ComputerCore) DeliverComputerUpgrade(ctx context.Context, command protocol.ComputerUpgradePayload) error {
-	if host == nil || host.daemonCore == nil || host.daemonCore.control == nil {
-		return errors.New("ComputerCore is unavailable")
+func (host *Host) DeliverComputerUpgrade(ctx context.Context, command protocol.ComputerUpgradePayload) error {
+	if host == nil || host.supervisor == nil || host.control == nil {
+		return errors.New("Computer Host is unavailable")
 	}
-	return host.daemonCore.DeliverComputerUpgrade(ctx, host.daemonCore.control.token, command)
+	return host.supervisor.DeliverComputerUpgrade(ctx, host.control.token, command)
 }

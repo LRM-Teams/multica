@@ -6,7 +6,7 @@ func TestAttemptArtifactContentHashesImmutableDispatchFacts(t *testing.T) {
 	first := Attempt{
 		TaskID: "task-1", AttemptNumber: 2, AssignedAgentID: "agent-1", DispatchKey: "dispatch-2",
 		ExecutionTarget: ExecutionTarget{
-			Adapter: "workspace_runner", RuntimeID: "runtime-1", Provider: "openai", Model: "gpt-5",
+			Adapter: "agent_inbox", AgentID: "agent-1", RuntimeID: "runtime-1", Provider: "openai", Model: "gpt-5",
 			ConfigFingerprint: "target-fp", AgentConfigFingerprint: "agent-fp",
 			RuntimeConfigFingerprint: "runtime-fp", ProviderConfigFingerprint: "provider-fp",
 		},

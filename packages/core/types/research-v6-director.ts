@@ -41,6 +41,7 @@ export interface ResearchV6DirectorEntityRef {
 
 export type ResearchV6DirectorProjectionNodeKind =
   | "goal"
+  | "agent"
   | "work_s"
   | "result_s"
   | "insight"
@@ -57,6 +58,8 @@ export type ResearchV6DirectorProjectionTier =
 
 export type ResearchV6DirectorExecutionState =
   | "pending"
+  | "idle"
+  | "offline"
   | "running"
   | "succeeded"
   | "failed"
@@ -126,6 +129,7 @@ export type ResearchV6DirectorProjectionEdgeKind =
   | "absorbed_into"
   | "produced_by"
   | "belongs_to"
+  | "assigned_to"
   | "challenges"
   | "collapsed_path"
   | (string & {});

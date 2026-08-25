@@ -9,7 +9,7 @@ import (
 )
 
 func TestDaemonProductionOwnsNoComputerLifecycle(t *testing.T) {
-	hostType := regexp.MustCompile(`\*computer\.ComputerCore(?:[^A-Za-z0-9_]|$)`)
+	hostType := regexp.MustCompile(`\*computer\.Host(?:[^A-Za-z0-9_]|$)`)
 	forbiddenFiles := map[string]struct{}{
 		"machine_upgrade.go":          {},
 		"machine_upgrade_log.go":      {},
@@ -20,7 +20,7 @@ func TestDaemonProductionOwnsNoComputerLifecycle(t *testing.T) {
 		"update_observation.go":       {},
 	}
 	forbiddenOwners := []string{
-		"func (d *WorkspaceDaemonCore) Run(",
+		"func (d *Daemon) Run(",
 		"handleMachineUpgrade(",
 		"machineUpgradeJournal",
 		"MachineUpgradeTakeover",
@@ -41,12 +41,10 @@ func TestDaemonProductionOwnsNoComputerLifecycle(t *testing.T) {
 		"humanToken",
 		"func (c *Client) RenewToken(",
 		"func (c *Client) ListWorkspaces(",
-		"func (d *WorkspaceDaemonCore) resolveAuth(",
-		"func (d *WorkspaceDaemonCore) preflightAuth(",
-		"func (d *WorkspaceDaemonCore) tokenRenewalLoop(",
-		"func (d *WorkspaceDaemonCore) tryRenewToken(",
-		"diagnosticlog.Open(",
-		"type runnerDiagnosticRegistry struct",
+		"func (d *Daemon) resolveAuth(",
+		"func (d *Daemon) preflightAuth(",
+		"func (d *Daemon) tokenRenewalLoop(",
+		"func (d *Daemon) tryRenewToken(",
 	}
 
 	err := filepath.WalkDir(".", func(path string, entry os.DirEntry, err error) error {
@@ -68,8 +66,8 @@ func TestDaemonProductionOwnsNoComputerLifecycle(t *testing.T) {
 				t.Errorf("%s owns Computer lifecycle symbol %q", path, owner)
 			}
 		}
-		if hostType.Match(body) || strings.Contains(string(body), "computer.NewComputerCore(") || strings.Contains(string(body), "daemonProcessComputerHost") {
-			t.Errorf("%s mixes ComputerCore into WorkspaceDaemonCore execution", path)
+		if hostType.Match(body) || strings.Contains(string(body), "computer.NewHost(") || strings.Contains(string(body), "daemonProcessComputerHost") {
+			t.Errorf("%s mixes the Computer Host into daemon execution", path)
 		}
 		return nil
 	})

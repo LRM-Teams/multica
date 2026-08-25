@@ -3,8 +3,8 @@ package service
 // RunnerPresence is the "is this Computer's WorkspaceDaemon socket live
 // right now" judgment used across the server for WS-authoritative liveness.
 //
-// LRM-1571: heartbeat retirement — for WS-capable daemons the Workspace
-// Runner socket is the liveness source; HTTP heartbeat freshness is only the
+// LRM-1571: heartbeat retirement — for WS-capable daemons the WorkspaceDaemon
+// socket is the liveness source; HTTP heartbeat freshness is only the
 // fallback for legacy daemons (no Hub / test composition). Consumers that
 // have access to the daemon WebSocket Hub (sweeper, handler) consult this
 // first and only degrade to the last_seen_at based RuntimeConnectivity

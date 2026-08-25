@@ -20,7 +20,7 @@ import (
 
 const graphMemoryRecallPath = "/api/daemon/graph-memory/recalls"
 
-func newGraphRecallTestDaemon(t *testing.T, baseURL string) *WorkspaceDaemonCore {
+func newGraphRecallTestDaemon(t *testing.T, baseURL string) *Daemon {
 	t.Helper()
 	d := New(Config{MemoryType: MemoryTypeGraph, ServerBaseURL: baseURL}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	d.client.SetWorkspaceDaemonToken("workspace-1", "daemon-token", time.Now().Add(time.Hour))

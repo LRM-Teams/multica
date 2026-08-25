@@ -98,14 +98,12 @@ type workspaceState struct {
 	workspaceID        string
 	runtimeIDs         []string
 	serverCapabilities []string
-	runtimeEpoch       int64
-	registeredAt       time.Time
 }
 
 // Daemon implements one Workspace execution runtime. A Computer Binding child
-// uses the scoped role; the public ComputerCore is composed in
+// uses the scoped role; the public Computer Host is composed in
 // internal/computer and never constructs this type.
-type WorkspaceDaemonCore struct {
+type Daemon struct {
 	cfg    Config
 	client *Client
 	logger *slog.Logger
@@ -118,13 +116,14 @@ type WorkspaceDaemonCore struct {
 	agentCredentialManager     *agentCredentialManager
 	messageSendMu              sync.Mutex
 	messageSends               map[string]int
-	workspaceSessionMu         sync.RWMutex
-	workspaceSession           *workspaceSession
+	workspaceDaemonMu          sync.RWMutex
+	workspaceDaemons           map[string]*WorkspaceDaemon
 	mixedRunActivityOutbox     *mixedRunActivityOutbox
 	mixedRunActivityReporter   func(protocol.MixedRunActivityTransitionPayload) bool
 	lifecycleDiagnostics       *lifecycleDiagnosticWriter
 	runnerInstanceID           string
 	runnerDiagnostics          runnerDiagnosticSink
+	runnerDiagnosticStore      *diagnosticlog.Store
 	bindingHostControl         *bindingHostControlClient
 	bindingDiagnostics         *bindingChildDiagnosticForwarder
 	bindingMachineUpgrade      func(context.Context, protocol.ComputerUpgradePayload) error
@@ -170,7 +169,7 @@ type WorkspaceDaemonCore struct {
 	rootCtx     context.Context // Binding child lifetime used by long-running recoveries that must survive per-runtime ctx cancellation
 	activeTasks atomic.Int64    // number of tasks currently in handleTask
 	// managedTaskCancels contains only task contexts created by this Binding
-	// child. ComputerCore-requested drains may stop those turns, but can never infer
+	// child. Host-requested drains may stop those turns, but can never infer
 	// ownership of, or signal, an arbitrary local process.
 	managedTaskMu      sync.Mutex
 	managedTaskCancels map[int64]context.CancelFunc
@@ -179,7 +178,7 @@ type WorkspaceDaemonCore struct {
 
 	// claimMu guards pauseClaims and claimsInFlight. It is held only for the
 	// microseconds it takes to make a decision; ClaimTask itself runs without
-	// the lock so a slow per-runtime claim cannot stall a ComputerCore-requested
+	// the lock so a slow per-runtime claim cannot stall a Host-requested
 	// Binding drain or any other poller.
 	//
 	// The pair is the Binding handoff barrier against the requirement
@@ -193,7 +192,7 @@ type WorkspaceDaemonCore struct {
 	pauseClaims    bool // when true, runRuntimePoller skips ClaimTask
 	claimsInFlight int  // pollers that have decided to claim but haven't yet handed the task off to handleTask
 	// environmentSwitchPrepared records ownership of pauseClaims by the local
-	// config-switch control flow. It prevents one ComputerCore request from clearing a
+	// config-switch control flow. It prevents one Host request from clearing a
 	// barrier held by another.
 	environmentSwitchPrepared atomic.Bool
 
@@ -236,12 +235,7 @@ type WorkspaceDaemonCore struct {
 
 	// canonicalRuntimes owns the one durable provider process for each
 	// Agent×runtime Message coordinator.
-	canonicalRuntimes *canonicalAgentRuntimePool
-	// processAdmission is the machine-wide managed-launch admission seam. The
-	// legacy in-process composition uses the canonical pool; a Binding child
-	// replaces it with a generation-fenced ComputerCore control client. A
-	// ComputerCore does not construct Binding execution admission.
-	processAdmission agentProcessAdmission
+	canonicalRuntimes *agentRuntimePool
 	// residentCrashBackoff tracks repeated crashes per agent×runtime (task
 	// #42②) so a resident process stuck crash-looping is flagged terminal
 	// instead of silently retried forever.
@@ -254,11 +248,11 @@ type WorkspaceDaemonCore struct {
 
 // New creates an in-package execution test harness. Production composition
 // enters through RunBindingChild; the Computer never constructs this type.
-func New(cfg Config, logger *slog.Logger) *WorkspaceDaemonCore {
+func New(cfg Config, logger *slog.Logger) *Daemon {
 	return newDaemonForRole(cfg, logger, daemonProcessTestHarness)
 }
 
-func newDaemonForRole(cfg Config, logger *slog.Logger, role daemonProcessRole) *WorkspaceDaemonCore {
+func newDaemonForRole(cfg Config, logger *slog.Logger, role daemonProcessRole) *Daemon {
 	bindingStateRoot := strings.TrimSpace(cfg.BindingStateRoot)
 	if bindingStateRoot == "" {
 		bindingStateRoot = cfg.WorkspacesRoot
@@ -267,7 +261,7 @@ func newDaemonForRole(cfg Config, logger *slog.Logger, role daemonProcessRole) *
 	// Tag every daemon HTTP request with the daemon's CLI version so the
 	// server can split logs/metrics by client version (parallel to the CLI).
 	client.SetVersion(cfg.CLIVersion)
-	d := &WorkspaceDaemonCore{
+	d := &Daemon{
 		cfg:                       cfg,
 		client:                    client,
 		logger:                    logger,
@@ -294,11 +288,10 @@ func newDaemonForRole(cfg Config, logger *slog.Logger, role daemonProcessRole) *
 	return d
 }
 
-func (d *WorkspaceDaemonCore) initializeBindingExecution(bindingStateRoot string) {
-	d.canonicalRuntimes = newCanonicalAgentRuntimePool()
+func (d *Daemon) initializeBindingExecution(bindingStateRoot string) {
+	d.workspaceDaemons = make(map[string]*WorkspaceDaemon)
+	d.canonicalRuntimes = newAgentRuntimePool()
 	d.canonicalRuntimes.setResidentStallWatchdog(d.cfg.RuntimeProgressStale)
-	d.canonicalRuntimes.setMaxAgentProcesses(d.cfg.MaxAgentProcesses)
-	d.processAdmission = d.canonicalRuntimes.managedProcessAdmission()
 	d.canonicalRuntimes.subscribeResidentProcess(d.onResidentProcessEvent)
 	d.messageDraftStore = NewMessageDraftStore(d.cfg.WorkspacesRoot)
 	d.mixedRunActivityOutbox = newMixedRunActivityOutbox(bindingStateRoot)
@@ -332,7 +325,7 @@ func (d *WorkspaceDaemonCore) initializeBindingExecution(bindingStateRoot string
 
 // setAgentVersion records the detected CLI version for an agent provider so
 // later task-dispatch code (e.g. Codex sandbox policy) can read it.
-func (d *WorkspaceDaemonCore) setAgentVersion(provider, version string) {
+func (d *Daemon) setAgentVersion(provider, version string) {
 	d.versionsMu.Lock()
 	defer d.versionsMu.Unlock()
 	d.agentVersions[provider] = version
@@ -340,20 +333,20 @@ func (d *WorkspaceDaemonCore) setAgentVersion(provider, version string) {
 
 // agentVersion returns the last-detected CLI version for an agent provider,
 // or an empty string if unknown.
-func (d *WorkspaceDaemonCore) agentVersion(provider string) string {
+func (d *Daemon) agentVersion(provider string) string {
 	d.versionsMu.RLock()
 	defer d.versionsMu.RUnlock()
 	return d.agentVersions[provider]
 }
 
-func (d *WorkspaceDaemonCore) notifyRuntimeSetChanged() {
+func (d *Daemon) notifyRuntimeSetChanged() {
 	d.runtimeSet.notify()
 }
 
 const reregisterCoalesceWindow = 30 * time.Second
 const reregisterFailureBackoff = 60 * time.Second
 
-func (d *WorkspaceDaemonCore) handleRuntimeGone(runtimeID string) {
+func (d *Daemon) handleRuntimeGone(runtimeID string) {
 	if runtimeID == "" {
 		return
 	}
@@ -425,7 +418,7 @@ func (d *WorkspaceDaemonCore) handleRuntimeGone(runtimeID string) {
 // entryAt is the wall-clock captured at the top of handleRuntimeGone. now is
 // passed in (rather than read inside) so tests can drive the gate
 // deterministically without sleeping.
-func (d *WorkspaceDaemonCore) tryClaimRegisterSlot(workspaceID string, entryAt, now time.Time) bool {
+func (d *Daemon) tryClaimRegisterSlot(workspaceID string, entryAt, now time.Time) bool {
 	d.runtimeGoneMu.Lock()
 	defer d.runtimeGoneMu.Unlock()
 	if next, ok := d.reregisterNextAttempt[workspaceID]; ok && now.Before(next) {
@@ -448,7 +441,7 @@ func (d *WorkspaceDaemonCore) tryClaimRegisterSlot(workspaceID string, entryAt, 
 // still be allowed to retry once the backoff expires. Binding refresh only
 // retries when the workspace's runtimeIDs fully drain, so partial-deletion
 // recovery has to come from the straggler path.
-func (d *WorkspaceDaemonCore) recordRegisterCompletion(workspaceID string, completedAt time.Time, err error) {
+func (d *Daemon) recordRegisterCompletion(workspaceID string, completedAt time.Time, err error) {
 	d.runtimeGoneMu.Lock()
 	defer d.runtimeGoneMu.Unlock()
 	if err != nil {
@@ -463,7 +456,7 @@ func (d *WorkspaceDaemonCore) recordRegisterCompletion(workspaceID string, compl
 // HTTP calls (re-register, recover-orphans) that must survive a Runner socket
 // generation ending. Falls back to Background when the
 // daemon was not started via Run(), e.g. unit-test fixtures.
-func (d *WorkspaceDaemonCore) recoveryContext() context.Context {
+func (d *Daemon) recoveryContext() context.Context {
 	if d.rootCtx != nil {
 		return d.rootCtx
 	}
@@ -477,7 +470,7 @@ func (d *WorkspaceDaemonCore) recoveryContext() context.Context {
 //
 // Callers mutate workspaceState in place so runtime watchers keep a stable
 // object while registration state converges.
-func (d *WorkspaceDaemonCore) removeStaleRuntime(runtimeID string) (string, bool) {
+func (d *Daemon) removeStaleRuntime(runtimeID string) (string, bool) {
 	d.mu.Lock()
 	var workspaceID string
 	for wsID, ws := range d.workspaces {
@@ -515,7 +508,7 @@ func (d *WorkspaceDaemonCore) removeStaleRuntime(runtimeID string) (string, bool
 // has zero runtime IDs — the state reached when handleRuntimeGone pruned every
 // runtime and its inline re-register failed. Binding refresh calls this so
 // the workspace can recover without waiting for an external trigger.
-func (d *WorkspaceDaemonCore) workspaceNeedsRuntimeRecovery(workspaceID string) bool {
+func (d *Daemon) workspaceNeedsRuntimeRecovery(workspaceID string) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	ws, ok := d.workspaces[workspaceID]
@@ -535,7 +528,7 @@ func (d *WorkspaceDaemonCore) workspaceNeedsRuntimeRecovery(workspaceID string) 
 // duplicates for every provider that wasn't deleted.
 //
 // The workspaceState pointer is never replaced; only fields are mutated.
-func (d *WorkspaceDaemonCore) reregisterWorkspaceAfterRuntimeGone(ctx context.Context, workspaceID string) error {
+func (d *Daemon) reregisterWorkspaceAfterRuntimeGone(ctx context.Context, workspaceID string) error {
 	resp, err := d.registerRuntimesForWorkspace(ctx, workspaceID)
 	if err != nil {
 		return fmt.Errorf("register runtimes: %w", err)
@@ -640,7 +633,7 @@ func (w *runtimeSetWatcher) notify() {
 }
 
 // deregisterRuntimes notifies the server that all runtimes are going offline.
-func (d *WorkspaceDaemonCore) deregisterRuntimes() {
+func (d *Daemon) deregisterRuntimes() {
 	runtimeIDs := d.allRuntimeIDs()
 	if len(runtimeIDs) == 0 {
 		d.logger.Debug("deregister: no runtimes to deregister")
@@ -659,7 +652,7 @@ func (d *WorkspaceDaemonCore) deregisterRuntimes() {
 }
 
 // allRuntimeIDs returns all runtime IDs across all watched workspaces.
-func (d *WorkspaceDaemonCore) allRuntimeIDs() []string {
+func (d *Daemon) allRuntimeIDs() []string {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	var ids []string
@@ -670,7 +663,7 @@ func (d *WorkspaceDaemonCore) allRuntimeIDs() []string {
 }
 
 // findRuntime looks up a Runtime by its ID.
-func (d *WorkspaceDaemonCore) findRuntime(id string) *Runtime {
+func (d *Daemon) findRuntime(id string) *Runtime {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if rt, ok := d.runtimeIndex[id]; ok {
@@ -691,7 +684,7 @@ func daemonRegistrationCapabilities(includeCredentialTransport bool) []string {
 		protocol.DaemonCapabilityWorkspaceDaemonAgentProcess,
 		protocol.DaemonCapabilityWorkspaceDaemonAgentReset,
 		// Binding children advertise the wire capability so the server can
-		// deliver the machine action. They only forward it to ComputerCore;
+		// deliver the machine action. They only forward it to Computer Host;
 		// acceptance and execution do not live in this package.
 		protocol.DaemonCapabilityMachineUpgrade,
 	}
@@ -701,7 +694,7 @@ func daemonRegistrationCapabilities(includeCredentialTransport bool) []string {
 	return capabilities
 }
 
-func (d *WorkspaceDaemonCore) applyRegisterDaemonToken(workspaceID string, resp *RegisterResponse) (bool, error) {
+func (d *Daemon) applyRegisterDaemonToken(workspaceID string, resp *RegisterResponse) (bool, error) {
 	if resp == nil || resp.DaemonToken == "" || resp.DaemonTokenExpiresAt == "" {
 		return false, nil
 	}
@@ -725,7 +718,7 @@ func (d *WorkspaceDaemonCore) applyRegisterDaemonToken(workspaceID string, resp 
 	return true, nil
 }
 
-func (d *WorkspaceDaemonCore) clearDaemonTokensForWorkspace(workspaceID string) {
+func (d *Daemon) clearDaemonTokensForWorkspace(workspaceID string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.client.ClearWorkspaceDaemonToken(workspaceID)
@@ -746,7 +739,7 @@ func probeFailureReason(name string, err error) (reason, selfCheck string) {
 	return "version probe failed", name + " --version"
 }
 
-func (d *WorkspaceDaemonCore) registerRuntimesForWorkspace(ctx context.Context, workspaceID string) (*RegisterResponse, error) {
+func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID string) (*RegisterResponse, error) {
 	d.logger.Debug("registering runtimes for workspace", "workspace_id", workspaceID, "agent_count", len(d.cfg.Agents))
 	var runtimes []map[string]string
 
@@ -854,38 +847,6 @@ func (d *WorkspaceDaemonCore) registerRuntimesForWorkspace(ctx context.Context, 
 	if len(resp.Runtimes) == 0 {
 		return nil, fmt.Errorf("register runtimes: empty response")
 	}
-	// A successful registration is the Codex observability boundary (T0). A
-	// re-register/rebuild advances the epoch so consumers can discard all
-	// pre-T0 launches without inspecting historical payloads.
-	d.mu.Lock()
-	if d.workspaces == nil {
-		d.workspaces = make(map[string]*workspaceState)
-	}
-	ws := d.workspaces[workspaceID]
-	if ws == nil {
-		ws = newWorkspaceState(workspaceID, nil)
-		d.workspaces[workspaceID] = ws
-	}
-	ws.runtimeEpoch++
-	ws.registeredAt = time.Now().UTC()
-	epoch := ws.runtimeEpoch
-	d.mu.Unlock()
-	if runner := d.currentWorkspaceSession(workspaceID); runner != nil {
-		runner.setRuntimeEpoch(epoch)
-	}
-	for _, runtime := range resp.Runtimes {
-		if strings.EqualFold(strings.TrimSpace(runtime.Provider), "codex") {
-			d.recordRunnerDiagnostic(workspaceID, diagnosticlog.Event{
-				Name: diagnosticlog.EventRuntimeDetected, Level: diagnosticlog.LevelInfo,
-				Component: "runtime_registration", Identity: diagnosticlog.Identity{
-					EventID: uuid.NewString(), RuntimeID: runtime.ID,
-				}, Fields: diagnosticlog.Fields{
-					Provider: "codex", Phase: "register", Outcome: "accepted",
-					ReasonCode: "register_success", RuntimeEpoch: epoch,
-				},
-			})
-		}
-	}
 	d.logger.Debug("register response", "workspace_id", workspaceID, "runtimes", len(resp.Runtimes))
 	return resp, nil
 }
@@ -898,7 +859,7 @@ func newWorkspaceState(workspaceID string, runtimeIDs []string, serverCapabiliti
 	}
 }
 
-func (d *WorkspaceDaemonCore) configuredWorkspaceBindings() (map[string]computer.WorkspaceBinding, error) {
+func (d *Daemon) configuredWorkspaceBindings() (map[string]computer.WorkspaceBinding, error) {
 	// Explicitly constructed tests and legacy internal callers may omit the
 	// store seam; retain their one-workspace behavior without letting the public
 	// Computer create profile-selected state.
@@ -929,7 +890,7 @@ func (d *WorkspaceDaemonCore) configuredWorkspaceBindings() (map[string]computer
 // current WorkspaceDaemon control plane.
 // Each action is dispatched in its own goroutine so a slow handler cannot
 // block subsequent heartbeats.
-func (d *WorkspaceDaemonCore) handleHeartbeatActions(ctx context.Context, runtimeID string, resp *HeartbeatResponse) {
+func (d *Daemon) handleHeartbeatActions(ctx context.Context, runtimeID string, resp *HeartbeatResponse) {
 	if resp == nil {
 		return
 	}
@@ -990,7 +951,7 @@ func (d *WorkspaceDaemonCore) handleHeartbeatActions(ctx context.Context, runtim
 // back to the server. Model discovery failures are reported as empty
 // lists rather than errors so the UI can still render a creatable
 // dropdown.
-func (d *WorkspaceDaemonCore) handleModelList(ctx context.Context, rt Runtime, requestID string) {
+func (d *Daemon) handleModelList(ctx context.Context, rt Runtime, requestID string) {
 	d.logger.Info("model list requested", "runtime_id", rt.ID, "request_id", requestID, "provider", rt.Provider)
 
 	entry, ok := d.cfg.Agents[rt.Provider]
@@ -1063,7 +1024,7 @@ func (d *WorkspaceDaemonCore) handleModelList(ctx context.Context, rt Runtime, r
 	})
 }
 
-func (d *WorkspaceDaemonCore) handleLocalSkillList(ctx context.Context, rt Runtime, requestID string) {
+func (d *Daemon) handleLocalSkillList(ctx context.Context, rt Runtime, requestID string) {
 	d.logger.Info("runtime local skills requested", "runtime_id", rt.ID, "request_id", requestID, "provider", rt.Provider)
 
 	skills, supported, err := listRuntimeLocalSkills(rt.Provider)
@@ -1082,7 +1043,7 @@ func (d *WorkspaceDaemonCore) handleLocalSkillList(ctx context.Context, rt Runti
 	})
 }
 
-func (d *WorkspaceDaemonCore) handleLocalSkillImport(ctx context.Context, rt Runtime, pending PendingLocalSkillImport) {
+func (d *Daemon) handleLocalSkillImport(ctx context.Context, rt Runtime, pending PendingLocalSkillImport) {
 	d.logger.Info("runtime local skill import requested", "runtime_id", rt.ID, "request_id", pending.ID, "provider", rt.Provider, "skill_key", pending.SkillKey)
 
 	skill, supported, err := loadRuntimeLocalSkillBundle(rt.Provider, pending.SkillKey)
@@ -1119,7 +1080,7 @@ var runtimeReportBackoffs = []time.Duration{0, 500 * time.Millisecond, 2 * time.
 
 // reportLocalSkillListResult delivers a list-report to the server with retry
 // on transient failures. See reportRuntimeResultWithRetry for semantics.
-func (d *WorkspaceDaemonCore) reportLocalSkillListResult(ctx context.Context, rt Runtime, requestID string, payload map[string]any) {
+func (d *Daemon) reportLocalSkillListResult(ctx context.Context, rt Runtime, requestID string, payload map[string]any) {
 	d.reportRuntimeResultWithRetry(ctx, "local_skill_list", rt.ID, requestID, func(ctx context.Context) error {
 		return d.client.ReportLocalSkillListResult(ctx, rt.ID, requestID, payload)
 	})
@@ -1127,7 +1088,7 @@ func (d *WorkspaceDaemonCore) reportLocalSkillListResult(ctx context.Context, rt
 
 // reportLocalSkillImportResult delivers an import-report to the server with
 // retry on transient failures.
-func (d *WorkspaceDaemonCore) reportLocalSkillImportResult(ctx context.Context, rt Runtime, requestID string, payload map[string]any) {
+func (d *Daemon) reportLocalSkillImportResult(ctx context.Context, rt Runtime, requestID string, payload map[string]any) {
 	d.reportRuntimeResultWithRetry(ctx, "local_skill_import", rt.ID, requestID, func(ctx context.Context) error {
 		return d.client.ReportLocalSkillImportResult(ctx, rt.ID, requestID, payload)
 	})
@@ -1137,7 +1098,7 @@ func (d *WorkspaceDaemonCore) reportLocalSkillImportResult(ctx context.Context, 
 // on transient failures. Without this the daemon used to fire once and
 // swallow any 5xx, leaving the request stranded in "running" on the server
 // until its 60s timeout — defeating the multi-node store fix.
-func (d *WorkspaceDaemonCore) reportModelListResult(ctx context.Context, rt Runtime, requestID string, payload map[string]any) {
+func (d *Daemon) reportModelListResult(ctx context.Context, rt Runtime, requestID string, payload map[string]any) {
 	d.reportRuntimeResultWithRetry(ctx, "model_list", rt.ID, requestID, func(ctx context.Context) error {
 		return d.client.ReportModelListResult(ctx, rt.ID, requestID, payload)
 	})
@@ -1154,7 +1115,7 @@ func (d *WorkspaceDaemonCore) reportModelListResult(ctx context.Context, rt Runt
 // fix was meant to eliminate. 4xx is treated as permanent (request-not-found,
 // cross-workspace token rejected, bad body) — retrying those just wastes
 // heartbeat cycles.
-func (d *WorkspaceDaemonCore) reportRuntimeResultWithRetry(ctx context.Context, kind, runtimeID, requestID string, fn func(context.Context) error) {
+func (d *Daemon) reportRuntimeResultWithRetry(ctx context.Context, kind, runtimeID, requestID string, fn func(context.Context) error) {
 	var lastErr error
 	for attempt, wait := range runtimeReportBackoffs {
 		if wait > 0 {
@@ -1196,7 +1157,7 @@ func (d *WorkspaceDaemonCore) reportRuntimeResultWithRetry(ctx context.Context, 
 		"kind", kind, "runtime_id", runtimeID, "request_id", requestID, "error", lastErr)
 }
 
-func (d *WorkspaceDaemonCore) tryEnterClaim() bool {
+func (d *Daemon) tryEnterClaim() bool {
 	d.claimMu.Lock()
 	defer d.claimMu.Unlock()
 	if d.pauseClaims {
@@ -1207,7 +1168,7 @@ func (d *WorkspaceDaemonCore) tryEnterClaim() bool {
 }
 
 // exitClaim releases the in-flight claim recorded by tryEnterClaim.
-func (d *WorkspaceDaemonCore) exitClaim() {
+func (d *Daemon) exitClaim() {
 	d.claimMu.Lock()
 	defer d.claimMu.Unlock()
 	d.claimsInFlight--
@@ -1218,7 +1179,7 @@ func (d *WorkspaceDaemonCore) exitClaim() {
 // caller now holds the barrier and must release it with releaseClaimBarrier
 // on every non-restart exit path; false if the daemon is busy and the caller
 // should defer until the explicit lifecycle can safely begin handoff.
-func (d *WorkspaceDaemonCore) trySetClaimBarrier() bool {
+func (d *Daemon) trySetClaimBarrier() bool {
 	d.claimMu.Lock()
 	defer d.claimMu.Unlock()
 	if d.claimsInFlight > 0 || d.activeTasks.Load() > 0 {
@@ -1232,7 +1193,7 @@ func (d *WorkspaceDaemonCore) trySetClaimBarrier() bool {
 // trySetClaimBarrier, it deliberately does not require the daemon to be idle:
 // callers use it at a staged-update deadline, then wait for every claim that
 // crossed the barrier and every active task to drain before restarting.
-func (d *WorkspaceDaemonCore) setClaimBarrier() {
+func (d *Daemon) setClaimBarrier() {
 	d.claimMu.Lock()
 	defer d.claimMu.Unlock()
 	d.pauseClaims = true
@@ -1241,7 +1202,7 @@ func (d *WorkspaceDaemonCore) setClaimBarrier() {
 // trySetEnvironmentSwitchBarrier acquires the claim barrier only when no
 // other handoff currently owns it. The environment-switch handler keeps this
 // barrier held across config persistence and process shutdown.
-func (d *WorkspaceDaemonCore) trySetEnvironmentSwitchBarrier() bool {
+func (d *Daemon) trySetEnvironmentSwitchBarrier() bool {
 	d.claimMu.Lock()
 	defer d.claimMu.Unlock()
 	if d.pauseClaims {
@@ -1252,7 +1213,7 @@ func (d *WorkspaceDaemonCore) trySetEnvironmentSwitchBarrier() bool {
 	return true
 }
 
-func (d *WorkspaceDaemonCore) releaseEnvironmentSwitchBarrier() bool {
+func (d *Daemon) releaseEnvironmentSwitchBarrier() bool {
 	if !d.environmentSwitchPrepared.CompareAndSwap(true, false) {
 		return false
 	}
@@ -1264,22 +1225,22 @@ func (d *WorkspaceDaemonCore) releaseEnvironmentSwitchBarrier() bool {
 // work admitted before it has left both the claim handoff and active-task
 // phases. Reading the counters under claimMu preserves the handoff boundary
 // established by tryEnterClaim/exitClaim.
-func (d *WorkspaceDaemonCore) claimBarrierDrained() bool {
+func (d *Daemon) claimBarrierDrained() bool {
 	d.claimMu.Lock()
 	defer d.claimMu.Unlock()
 	return d.pauseClaims && d.claimsInFlight == 0 && d.activeTasks.Load() == 0
 }
 
-// releaseClaimBarrier clears a ComputerCore-held Binding barrier so pollers may resume
-// claiming. A successful prepare leaves the barrier set until ComputerCore explicitly
+// releaseClaimBarrier clears a Host-held Binding barrier so pollers may resume
+// claiming. A successful prepare leaves the barrier set until Host explicitly
 // releases it or terminates the child.
-func (d *WorkspaceDaemonCore) releaseClaimBarrier() {
+func (d *Daemon) releaseClaimBarrier() {
 	d.claimMu.Lock()
 	defer d.claimMu.Unlock()
 	d.pauseClaims = false
 }
 
-func (d *WorkspaceDaemonCore) pollLoop(ctx context.Context, taskWakeups <-chan taskWakeup) error {
+func (d *Daemon) pollLoop(ctx context.Context, taskWakeups <-chan taskWakeup) error {
 	var taskWG sync.WaitGroup   // tracks in-flight handleTask goroutines
 	var pollerWG sync.WaitGroup // tracks runRuntimePoller goroutines
 
@@ -1394,7 +1355,7 @@ func (d *WorkspaceDaemonCore) pollLoop(ctx context.Context, taskWakeups <-chan t
 // passed to handleTask so an in-flight task is not killed just because the
 // runtime set changed mid-flight — the task continues to run until the
 // daemon itself shuts down (or the server cancels it).
-func (d *WorkspaceDaemonCore) runRuntimePoller(
+func (d *Daemon) runRuntimePoller(
 	pollerCtx, parentCtx context.Context,
 	rid string,
 	wakeup <-chan struct{},
@@ -1473,7 +1434,7 @@ func (d *WorkspaceDaemonCore) runRuntimePoller(
 	}
 }
 
-func (d *WorkspaceDaemonCore) drainInboxTask(ctx context.Context, runtimeID string) (*Task, error) {
+func (d *Daemon) drainInboxTask(ctx context.Context, runtimeID string) (*Task, error) {
 	for {
 		batch, err := d.client.DrainAgentInbox(ctx, runtimeID)
 		if err != nil {
@@ -1492,7 +1453,6 @@ func (d *WorkspaceDaemonCore) drainInboxTask(ctx context.Context, runtimeID stri
 				continue
 			}
 			lease := agentInboxLeaseFromEvent(event, runtimeID)
-			d.bindInboxLeaseEpoch(&lease)
 			// Residual dual-write channel chat reasons must not execute.
 			// Standalone bubble (chat_session) and product tasks still run.
 			if event.Task == nil || protocol.IsResidualChannelChatInboxReason(event.Reason) {
@@ -1527,7 +1487,6 @@ func (d *WorkspaceDaemonCore) drainInboxTask(ctx context.Context, runtimeID stri
 
 		task := primary.Task
 		primaryLease := agentInboxLeaseFromEvent(primary, runtimeID)
-		d.bindInboxLeaseEpoch(&primaryLease)
 		// Merge seq range across the whole conversation batch so the agent sees
 		// the full exchange in one turn (turn-fold / one exchange = one turn).
 		seqFrom, seqTo := primaryLease.SeqFrom, primaryLease.SeqTo
@@ -1543,12 +1502,6 @@ func (d *WorkspaceDaemonCore) drainInboxTask(ctx context.Context, runtimeID stri
 		primaryLease.SeqTo = seqTo
 		task.InboxEvent = &primaryLease
 		task.FoldedInboxEvents = folded
-		d.recordInboxLeaseDiagnostic(primaryLease, "lease_acquired", "accepted", "drain")
-		for _, foldedLease := range folded {
-			if foldedLease != nil {
-				d.recordInboxLeaseDiagnostic(*foldedLease, "lease_acquired", "accepted", "folded")
-			}
-		}
 		if len(folded) > 0 {
 			d.logger.Info("turn-fold: one exchange as one turn",
 				"runtime_id", runtimeID,
@@ -1602,16 +1555,13 @@ func remainingLeasesAfter(events []*AgentInboxEvent, after *AgentInboxEvent, run
 	return out
 }
 
-func (d *WorkspaceDaemonCore) ackFoldedInboxLeasesBestEffort(ctx context.Context, leases []*AgentInboxLease) {
+func (d *Daemon) ackFoldedInboxLeasesBestEffort(ctx context.Context, leases []*AgentInboxLease) {
 	for _, lease := range leases {
 		if lease == nil {
 			continue
 		}
 		if err := d.client.AckAgentInboxEvent(ctx, *lease); err != nil {
-			d.recordInboxLeaseDiagnostic(*lease, "lease_ack", "failed", "ack_error")
 			d.logger.Warn("fail-soft ack of folded inbox lease failed", "event", shortID(lease.ID), "error", err)
-		} else {
-			d.recordInboxLeaseDiagnostic(*lease, "lease_ack", "accepted", "ok")
 		}
 	}
 }
@@ -1645,7 +1595,7 @@ func runtimePollOffset(runtimeID string, interval time.Duration) time.Duration {
 // resurrecting this one — this value exists only so spawned tasks/logs can
 // distinguish concurrently running tasks from each other, not to select a
 // bounded resource.
-func (d *WorkspaceDaemonCore) nextTaskSlot() int {
+func (d *Daemon) nextTaskSlot() int {
 	return int(d.taskSlotCounter.Add(1))
 }
 
@@ -1653,7 +1603,7 @@ func (d *WorkspaceDaemonCore) nextTaskSlot() int {
 // state. The key is agent-scoped for chat/channel wakes and
 // (agent, issue)-scoped for Issue work, so independent Issues can run as
 // platform-level subagents while follow-ups on the same Issue remain ordered.
-func (d *WorkspaceDaemonCore) acquireAgentWakeSlot(ctx context.Context, serializationKey string) (func(), error) {
+func (d *Daemon) acquireAgentWakeSlot(ctx context.Context, serializationKey string) (func(), error) {
 	serializationKey = strings.TrimSpace(serializationKey)
 	if serializationKey == "" {
 		return nil, errors.New("agent wake execution requires a serialization key")
@@ -1759,7 +1709,7 @@ func shouldInterruptAgent(status string, err error) bool {
 // interval and returns a channel that is closed when the running agent
 // should be interrupted. The polling goroutine stops when ctx is cancelled,
 // so callers should pass the runCtx that was set up around the agent run.
-func (d *WorkspaceDaemonCore) watchTaskCancellation(ctx context.Context, taskID, runtimeID string, pollInterval time.Duration, taskLog *slog.Logger) <-chan struct{} {
+func (d *Daemon) watchTaskCancellation(ctx context.Context, taskID, runtimeID string, pollInterval time.Duration, taskLog *slog.Logger) <-chan struct{} {
 	cancelled := make(chan struct{})
 	go func() {
 		ticker := time.NewTicker(pollInterval)
@@ -1786,7 +1736,7 @@ func (d *WorkspaceDaemonCore) watchTaskCancellation(ctx context.Context, taskID,
 	return cancelled
 }
 
-func (d *WorkspaceDaemonCore) handleTask(ctx context.Context, task Task, slot int) {
+func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 	reportCtx := ctx
 	d.mu.Lock()
 	rt := d.runtimeIndex[task.RuntimeID]
@@ -2038,11 +1988,11 @@ func taskResultDiscardReason(status string, err error) string {
 	return "task_interrupted_before_terminal"
 }
 
-func (d *WorkspaceDaemonCore) ensureTaskAgentCredential(ctx context.Context, task Task, taskLog *slog.Logger) (string, error) {
+func (d *Daemon) ensureTaskAgentCredential(ctx context.Context, task Task, taskLog *slog.Logger) (string, error) {
 	return d.ensureAgentCredential(ctx, task.WorkspaceID, task.RuntimeID, task.AgentID, taskLog)
 }
 
-func (d *WorkspaceDaemonCore) ensureAgentCredential(ctx context.Context, workspaceID, runtimeID, agentID string, taskLog *slog.Logger) (string, error) {
+func (d *Daemon) ensureAgentCredential(ctx context.Context, workspaceID, runtimeID, agentID string, taskLog *slog.Logger) (string, error) {
 	credential, err := d.credentialManager().get(ctx, agentCredentialKey{
 		WorkspaceID: workspaceID,
 		RuntimeID:   runtimeID,
@@ -2054,7 +2004,7 @@ func (d *WorkspaceDaemonCore) ensureAgentCredential(ctx context.Context, workspa
 	return credential.Token, nil
 }
 
-func (d *WorkspaceDaemonCore) ensureAgentCredentialOnce(ctx context.Context, workspaceID, runtimeID, agentID string, taskLog *slog.Logger) (cachedAgentCredential, error) {
+func (d *Daemon) ensureAgentCredentialOnce(ctx context.Context, workspaceID, runtimeID, agentID string, taskLog *slog.Logger) (cachedAgentCredential, error) {
 	if strings.TrimSpace(workspaceID) == "" || strings.TrimSpace(runtimeID) == "" || strings.TrimSpace(agentID) == "" {
 		return cachedAgentCredential{}, fmt.Errorf("workspace_id, runtime_id, and agent_id are required")
 	}
@@ -2127,7 +2077,7 @@ func (d *WorkspaceDaemonCore) ensureAgentCredentialOnce(ctx context.Context, wor
 // the agent may have built a real session before getting stuck, and we want
 // the next chat turn to resume there rather than start over and "forget"
 // the conversation.
-func (d *WorkspaceDaemonCore) reportTaskResultForTask(ctx context.Context, task Task, result TaskResult, taskLog *slog.Logger) {
+func (d *Daemon) reportTaskResultForTask(ctx context.Context, task Task, result TaskResult, taskLog *slog.Logger) {
 	// Always drain the task's friction tracker here, whatever the status,
 	// so finished tasks never accumulate in the map.
 	friction := d.takeTaskFrictionVector(task.ID)
@@ -2140,7 +2090,6 @@ func (d *WorkspaceDaemonCore) reportTaskResultForTask(ctx context.Context, task 
 		}
 		receipt, err := d.client.CompleteAgentInboxEvent(ctx, *task.InboxEvent, result)
 		if err == nil {
-			d.recordInboxLeaseDiagnostic(*task.InboxEvent, "terminal_ack", "accepted", "ok")
 			d.recordStandaloneChatCheckpoint(task, "terminal_accepted", "accepted", "completed", "", result.ExecutionID, "", receipt.AckedSeq)
 			// Primary completed with agent output; ack folded leases so none
 			// remain leased for reclaim (Alice boundary #1).
@@ -2162,13 +2111,11 @@ func (d *WorkspaceDaemonCore) reportTaskResultForTask(ctx context.Context, task 
 		// has already refused this task and the only useful UI signal
 		// left is a concrete failure.
 		if isTransientError(err) {
-			d.recordInboxLeaseDiagnostic(*task.InboxEvent, "terminal_ack", "deferred", "transient_error")
 			d.recordStandaloneChatCheckpoint(task, "terminal_rejected", "rejected", "running", "terminal_transient_error", result.ExecutionID, "", 0)
 			taskLog.Error("complete task failed after retries; leaving task in running rather than falling back to fail", "error", err)
 			return
 		}
 		d.recordStandaloneChatCheckpoint(task, "terminal_rejected", "rejected", "running", "terminal_permanent_error", result.ExecutionID, "", 0)
-		d.recordInboxLeaseDiagnostic(*task.InboxEvent, "terminal_ack", "rejected", "permanent_error")
 		taskLog.Error("complete task rejected by server, falling back to fail", "error", err)
 		// MUL-2946: this fallback fires when a server-side complete
 		// callback was permanently rejected (4xx other than 408/429)
@@ -2206,14 +2153,14 @@ func (d *WorkspaceDaemonCore) reportTaskResultForTask(ctx context.Context, task 
 
 // watchInboxLease renews a single inbox delivery. Prefer watchInboxLeases when
 // the turn may carry folded same-conversation leases.
-func (d *WorkspaceDaemonCore) watchInboxLease(ctx context.Context, lease AgentInboxLease, interval time.Duration, taskLog *slog.Logger) <-chan struct{} {
+func (d *Daemon) watchInboxLease(ctx context.Context, lease AgentInboxLease, interval time.Duration, taskLog *slog.Logger) <-chan struct{} {
 	return d.watchInboxLeases(ctx, []AgentInboxLease{lease}, interval, taskLog)
 }
 
 // watchInboxLeases renews every lease in the turn-fold batch and closes the
 // returned channel on the first permanent rejection. Holding all leases for the
 // turn's duration is intentional (not a park): they belong to one exchange.
-func (d *WorkspaceDaemonCore) watchInboxLeases(ctx context.Context, leases []AgentInboxLease, interval time.Duration, taskLog *slog.Logger) <-chan struct{} {
+func (d *Daemon) watchInboxLeases(ctx context.Context, leases []AgentInboxLease, interval time.Duration, taskLog *slog.Logger) <-chan struct{} {
 	if interval <= 0 {
 		interval = 5 * time.Second
 	}
@@ -2226,17 +2173,14 @@ func (d *WorkspaceDaemonCore) watchInboxLeases(ctx context.Context, leases []Age
 		for _, lease := range leases {
 			if err := d.client.RenewAgentInboxEvent(ctx, lease); err != nil {
 				if isTransientError(err) {
-					d.recordInboxLeaseDiagnostic(lease, "lease_renew", "deferred", "transient_error")
 					taskLog.Debug("agent inbox lease renew transient failure", "event", shortID(lease.ID), "error", err)
 					// keep trying other leases; transient does not prove loss
 					continue
 				}
-				d.recordInboxLeaseDiagnostic(lease, "lease_lost", "rejected", "lease_rejected")
 				taskLog.Warn("agent inbox lease renew rejected; cancelling stale executor", "event", shortID(lease.ID), "error", err)
 				close(lost)
 				return false
 			}
-			d.recordInboxLeaseDiagnostic(lease, "lease_renew", "renewed", "ok")
 			taskLog.Debug("agent inbox lease renewed", "event", shortID(lease.ID))
 		}
 		return true
@@ -2261,7 +2205,7 @@ func (d *WorkspaceDaemonCore) watchInboxLeases(ctx context.Context, leases []Age
 	return lost
 }
 
-func (d *WorkspaceDaemonCore) reportTaskFailure(ctx context.Context, task Task, errMsg, sessionID, workDir, failureReason string, taskLog *slog.Logger) {
+func (d *Daemon) reportTaskFailure(ctx context.Context, task Task, errMsg, sessionID, workDir, failureReason string, taskLog *slog.Logger) {
 	if !task.isInboxTask() {
 		taskLog.Error("failed task is missing its canonical inbox lease")
 		return
@@ -2279,32 +2223,27 @@ func (d *WorkspaceDaemonCore) reportTaskFailure(ctx context.Context, task Task, 
 		reasonCode = "restarted_by_user"
 	}
 	if err := d.client.FailAgentInboxEvent(ctx, *task.InboxEvent, errMsg, sessionID, workDir, failureReason, reasonCode); err != nil {
-		d.recordInboxLeaseDiagnostic(*task.InboxEvent, "terminal_fail", "rejected", "transport_error")
 		d.recordStandaloneChatCheckpoint(task, "terminal_rejected", "rejected", "running", "terminal_fail_error", "", "", 0)
 		taskLog.Error("report failed inbox event failed", "error", err)
 	} else {
-		d.recordInboxLeaseDiagnostic(*task.InboxEvent, "terminal_fail", "accepted", reasonCode)
 		d.recordStandaloneChatCheckpoint(task, "terminal_accepted", "accepted", "failed", reasonCode, "", "", 0)
 	}
 	// Folded leases must not stay leased after primary failure (no orphan reclaim).
 	d.failFoldedInboxLeases(ctx, task, errMsg, sessionID, workDir, failureReason, reasonCode, taskLog)
 }
 
-func (d *WorkspaceDaemonCore) ackFoldedInboxLeases(ctx context.Context, task Task, taskLog *slog.Logger) {
+func (d *Daemon) ackFoldedInboxLeases(ctx context.Context, task Task, taskLog *slog.Logger) {
 	for _, lease := range task.FoldedInboxEvents {
 		if lease == nil {
 			continue
 		}
 		if err := d.client.AckAgentInboxEvent(ctx, *lease); err != nil {
-			d.recordInboxLeaseDiagnostic(*lease, "lease_ack", "failed", "ack_error")
 			taskLog.Warn("ack folded inbox lease failed", "event", shortID(lease.ID), "error", err)
-		} else {
-			d.recordInboxLeaseDiagnostic(*lease, "lease_ack", "accepted", "ok")
 		}
 	}
 }
 
-func (d *WorkspaceDaemonCore) failFoldedInboxLeases(ctx context.Context, task Task, errMsg, sessionID, workDir, failureReason, reasonCode string, taskLog *slog.Logger) {
+func (d *Daemon) failFoldedInboxLeases(ctx context.Context, task Task, errMsg, sessionID, workDir, failureReason, reasonCode string, taskLog *slog.Logger) {
 	for _, lease := range task.FoldedInboxEvents {
 		if lease == nil {
 			continue
@@ -2312,10 +2251,8 @@ func (d *WorkspaceDaemonCore) failFoldedInboxLeases(ctx context.Context, task Ta
 		if err := d.client.FailAgentInboxEvent(ctx, *lease, errMsg, sessionID, workDir, failureReason, reasonCode); err != nil {
 			// Fallback: ack so the lease is not reclaimed into a second turn.
 			if ackErr := d.client.AckAgentInboxEvent(ctx, *lease); ackErr != nil {
-				d.recordInboxLeaseDiagnostic(*lease, "lease_ack", "failed", "ack_error")
 				taskLog.Error("fail/ack folded inbox lease failed", "event", shortID(lease.ID), "fail_error", err, "ack_error", ackErr)
 			} else {
-				d.recordInboxLeaseDiagnostic(*lease, "lease_ack", "accepted", "after_fail")
 				taskLog.Warn("folded inbox lease acked after fail rejected", "event", shortID(lease.ID), "error", err)
 			}
 		}
@@ -2403,7 +2340,7 @@ func applyForceFreshSession(task *Task, taskLog *slog.Logger) {
 	task.PriorSessionID = ""
 }
 
-func (d *WorkspaceDaemonCore) runTask(ctx context.Context, task Task, provider string, slot int, taskLog *slog.Logger) (TaskResult, error) {
+func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot int, taskLog *slog.Logger) (TaskResult, error) {
 	// Refuse to spawn an agent without a workspace. An empty workspace_id
 	// here would make MULTICA_WORKSPACE_ID empty in the agent env, and the
 	// CLI would otherwise silently fall back to the user-global config — a
@@ -3333,7 +3270,7 @@ func classifyAgentRunFailureReason(provider, errMsg string, taskLog *slog.Logger
 // executeAndDrainForTask runs one inbox/issue task. It reports task messages
 // and logs only. User-facing Runner Activity stays on the resident Message
 // seam; this path must not Observe or overwrite that timeline.
-func (d *WorkspaceDaemonCore) executeAndDrainForTask(ctx context.Context, backend agent.Backend, prompt string, opts agent.ExecOptions, taskLog *slog.Logger, task Task) (agent.Result, int32, error) {
+func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backend, prompt string, opts agent.ExecOptions, taskLog *slog.Logger, task Task) (agent.Result, int32, error) {
 	taskID := task.ID
 	// Wrap the caller's ctx so the agent subprocess and drain loop share
 	// cancellation. Task execution no longer owns a stalled watchdog;

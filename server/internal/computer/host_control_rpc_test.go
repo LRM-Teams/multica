@@ -10,89 +10,9 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-func TestHostControlRPCDispatchesCapacityOperation(t *testing.T) {
-	identity := BindingChildIdentity{WorkspaceID: "ws-1", DaemonInstanceID: "start-2", PID: 1234}
-	control := NewHostControl("control-token", NewProcessCapacity(1), HostControlCallbacks{
-		Current: func(got BindingChildIdentity) bool { return got == identity },
-	})
-	registry := NewLocalControlRegistry()
-	control.RegisterRPCHandlers(registry)
-	handler, ok := registry.handler(LocalControlWorkspaceCapacityOperation)
-	if !ok {
-		t.Fatal("workspace:capacity RPC was not registered")
-	}
-	args, err := json.Marshal(capacityControlRequest{
-		Identity: identity, Operation: "acquire", WorkspaceID: identity.WorkspaceID,
-		AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	result, err := handler(context.Background(), map[string]string{"X-Multica-Control-Token": "control-token"}, args)
-	if err != nil {
-		t.Fatal(err)
-	}
-	response, ok := result.(capacityControlResponse)
-	if !ok || !response.Admitted || response.Grant.LaunchID != "launch-1" {
-		t.Fatalf("result = %#v", result)
-	}
-}
-
-func TestHostControlRPCRejectsStaleDaemonInstanceID(t *testing.T) {
-	active := BindingChildIdentity{WorkspaceID: "ws-1", DaemonInstanceID: "start-2", PID: 1234}
-	control := NewHostControl("control-token", NewProcessCapacity(1), HostControlCallbacks{
-		Current: func(got BindingChildIdentity) bool { return got == active },
-	})
-	registry := NewLocalControlRegistry()
-	control.RegisterRPCHandlers(registry)
-	handler, ok := registry.handler(LocalControlWorkspaceCapacityOperation)
-	if !ok {
-		t.Fatal("workspace:capacity RPC was not registered")
-	}
-	args, err := json.Marshal(capacityControlRequest{
-		Identity:  BindingChildIdentity{WorkspaceID: "ws-1", DaemonInstanceID: "start-1", PID: 1234},
-		Operation: "active", Grant: ProcessCapacityGrant{LaunchID: "launch-1"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := handler(context.Background(), map[string]string{"X-Multica-Control-Token": "control-token"}, args); err == nil {
-		t.Fatal("stale runner generation was accepted")
-	}
-}
-
-func TestHostControlClientUsesLocalRPCTransport(t *testing.T) {
-	root := t.TempDir()
-	identity := BindingChildIdentity{WorkspaceID: "ws-1", DaemonInstanceID: "start-2", PID: 1234}
-	control := NewHostControl("control-token", NewProcessCapacity(1), HostControlCallbacks{
-		Current: func(got BindingChildIdentity) bool { return got == identity },
-	})
-	registry := NewLocalControlRegistry()
-	control.RegisterRPCHandlers(registry)
-	endpoint := ServiceControlEndpoint(root)
-	listener, err := ListenLocalControl(endpoint)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() { _ = ServeLocalControlRPC(ctx, listener, registry) }()
-	client := NewHostControlClient(endpoint, "control-token", identity)
-	grant, admitted, err := client.AcquireCapacity(context.Background(), ProcessCapacityRequest{
-		WorkspaceID: identity.WorkspaceID, AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !admitted || grant.LaunchID != "launch-1" {
-		t.Fatalf("grant = %#v admitted=%v", grant, admitted)
-	}
-	_ = listener.Close()
-}
-
 func TestHostControlRPCCancelRequiresToken(t *testing.T) {
-	control := NewHostControl("control-token", NewProcessCapacity(1), HostControlCallbacks{})
-	host := &ComputerCore{daemonCore: &DaemonCore{control: control}}
+	control := NewHostControl("control-token", HostControlCallbacks{})
+	host := &Host{control: control}
 	host.upgrade = newHostMachineUpgrade(host, hostMachineUpgradeConfig{})
 	registry := host.LocalControlRegistry(&hostProcessState{})
 	handler, ok := registry.handler(LocalControlUpgradeCancelOperation)
@@ -114,7 +34,7 @@ func TestHostProcessHealthRPCPreservesLifecycleFields(t *testing.T) {
 		},
 		startedAt: started, ready: true, desired: []string{"ws-1"},
 	}
-	result := (&ComputerCore{}).processHealthResult(state)
+	result := (&Host{}).processHealthResult(state)
 	for key, want := range map[string]string{
 		"daemonId": "computer-1", "computerId": "computer-1", "serverUrl": "https://test.example",
 		"deviceName": "laptop", "environment": "test", "cliVersion": "v1.2.3", "status": "running",
@@ -165,7 +85,7 @@ func TestHostControlClientUpgradeStartUsesCommandEnvelope(t *testing.T) {
 func TestHostUpgradeStartDecodesCommandEnvelope(t *testing.T) {
 	identity := BindingChildIdentity{WorkspaceID: "ws-1", DaemonInstanceID: "start-2", PID: 1234}
 	var got protocol.ComputerUpgradePayload
-	host := &ComputerCore{daemonCore: &DaemonCore{control: NewHostControl("control-token", NewProcessCapacity(1), HostControlCallbacks{
+	host := &Host{control: NewHostControl("control-token", HostControlCallbacks{
 		Current: func(gotIdentity BindingChildIdentity) bool { return gotIdentity == identity },
 		ComputerUpgrade: func(_ context.Context, gotIdentity BindingChildIdentity, raw json.RawMessage) error {
 			if gotIdentity != identity {
@@ -173,7 +93,7 @@ func TestHostUpgradeStartDecodesCommandEnvelope(t *testing.T) {
 			}
 			return json.Unmarshal(raw, &got)
 		},
-	})}}
+	})}
 	host.upgrade = newHostMachineUpgrade(host, hostMachineUpgradeConfig{})
 	registry := host.LocalControlRegistry(&hostProcessState{})
 	handler, ok := registry.handler(LocalControlUpgradeStartOperation)
@@ -202,12 +122,12 @@ func TestHostUpgradeStartDecodesCommandEnvelope(t *testing.T) {
 
 func TestHostUpgradeStartReturnsRequestIDWhenOperationIDIsEmpty(t *testing.T) {
 	identity := BindingChildIdentity{WorkspaceID: "ws-1", DaemonInstanceID: "start-2", PID: 1234}
-	host := &ComputerCore{daemonCore: &DaemonCore{control: NewHostControl("control-token", NewProcessCapacity(1), HostControlCallbacks{
+	host := &Host{control: NewHostControl("control-token", HostControlCallbacks{
 		Current: func(got BindingChildIdentity) bool { return got == identity },
 		ComputerUpgrade: func(context.Context, BindingChildIdentity, json.RawMessage) error {
 			return nil
 		},
-	})}}
+	})}
 	host.upgrade = newHostMachineUpgrade(host, hostMachineUpgradeConfig{})
 	registry := host.LocalControlRegistry(&hostProcessState{})
 	handler, ok := registry.handler(LocalControlUpgradeStartOperation)
@@ -234,13 +154,13 @@ func TestHostUpgradeStartReturnsRequestIDWhenOperationIDIsEmpty(t *testing.T) {
 func TestHostUpgradeStartRejectsStaleIdentity(t *testing.T) {
 	active := BindingChildIdentity{WorkspaceID: "ws-1", DaemonInstanceID: "start-2", PID: 1234}
 	started := false
-	host := &ComputerCore{daemonCore: &DaemonCore{control: NewHostControl("control-token", NewProcessCapacity(1), HostControlCallbacks{
+	host := &Host{control: NewHostControl("control-token", HostControlCallbacks{
 		Current: func(got BindingChildIdentity) bool { return got == active },
 		ComputerUpgrade: func(context.Context, BindingChildIdentity, json.RawMessage) error {
 			started = true
 			return nil
 		},
-	})}}
+	})}
 	host.upgrade = newHostMachineUpgrade(host, hostMachineUpgradeConfig{})
 	registry := host.LocalControlRegistry(&hostProcessState{})
 	handler, ok := registry.handler(LocalControlUpgradeStartOperation)
@@ -263,7 +183,7 @@ func TestHostUpgradeStartRejectsStaleIdentity(t *testing.T) {
 }
 
 func TestHostUpgradeStartRejectsMissingCommand(t *testing.T) {
-	host := &ComputerCore{daemonCore: &DaemonCore{control: NewHostControl("control-token", NewProcessCapacity(1), HostControlCallbacks{})}}
+	host := &Host{control: NewHostControl("control-token", HostControlCallbacks{})}
 	host.upgrade = newHostMachineUpgrade(host, hostMachineUpgradeConfig{})
 	registry := host.LocalControlRegistry(&hostProcessState{})
 	handler, ok := registry.handler(LocalControlUpgradeStartOperation)

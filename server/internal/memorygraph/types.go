@@ -5,7 +5,11 @@
 // Design authority: docs/superpowers/specs/2026-08-14-graph-memory-reviewer-design.zh-CN.md
 package memorygraph
 
-import "time"
+import (
+	"time"
+
+	"github.com/multica-ai/multica/server/pkg/agent"
+)
 
 // Epistemic status values for nodes (design §4.2).
 const (
@@ -273,6 +277,7 @@ type QueryLogEntry struct {
 	Rounds    int       `json:"rounds"`
 	AgentRuns int       `json:"agent_runs"` // K for TTT
 	Found     bool      `json:"found"`
+	PriorUsed bool      `json:"prior_used,omitempty"`
 
 	// Judge write-back (async):
 	JudgeDone     bool     `json:"judge_done"`
@@ -312,6 +317,11 @@ type ExploreRun struct {
 	ViewedNodeIDs []string `json:"viewed_node_ids,omitempty"`
 	Rounds        int      `json:"rounds"`
 	Error         string   `json:"error,omitempty"`
+	// Messages is the run's drained message stream, captured for every run
+	// and cleared on all runs after adoption (only the sanitized adopted
+	// transcript travels on). Transport for the prior record, never
+	// persisted.
+	Messages []agent.Message `json:"-"`
 }
 
 // Citation is a qualified adopted-node reference (spec §3 step 8): the
@@ -333,6 +343,12 @@ type RecallResult struct {
 	Rounds    int          `json:"rounds"`
 	AgentRuns []ExploreRun `json:"agent_runs,omitempty"`
 	Found     bool         `json:"found"`
+	// AdoptedIndex points into AgentRuns at the adopted trajectory (-1 on
+	// miss). AdoptedTranscript is the adopted run's message stream
+	// sanitized to the allowlisted TraceMessage shape (Phase 2 prior
+	// record input).
+	AdoptedIndex      int            `json:"adopted_index,omitempty"`
+	AdoptedTranscript []TraceMessage `json:"adopted_transcript,omitempty"`
 	// Version is the graph version the explore was pinned to for the whole
 	// call (design Q13/R5: a mid-explore version switch never swaps the
 	// graph under an in-flight trajectory).

@@ -53,7 +53,7 @@ func TestRegisterRuntimesForWorkspace_DoesNotCallStarting(t *testing.T) {
 	c := NewClient(srv.URL)
 	c.SetWorkspaceDaemonToken("ws-1", "mdt-workspace", time.Now().Add(time.Hour))
 
-	d := &WorkspaceDaemonCore{
+	d := &Daemon{
 		cfg: Config{
 			DaemonID: "daemon-1",
 			Agents: map[string]AgentEntry{
@@ -106,7 +106,7 @@ func TestRegisterRuntimesForWorkspace_ZeroRegisterableAgentsKeepsComputerConnect
 
 	c := NewClient(srv.URL)
 	c.SetWorkspaceDaemonToken("ws-1", "mdt-workspace", time.Now().Add(time.Hour))
-	d := &WorkspaceDaemonCore{
+	d := &Daemon{
 		cfg: Config{
 			DaemonID: "daemon-1",
 			Agents: map[string]AgentEntry{

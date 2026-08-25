@@ -53,7 +53,7 @@ func TestHandleTask_DoesNotCallStartTaskItself(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	d := &WorkspaceDaemonCore{
+	d := &Daemon{
 		client:             NewClient(srv.URL),
 		logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
 		workspaces:         make(map[string]*workspaceState),
@@ -99,7 +99,7 @@ func TestRunTask_ChatWithoutRunTokenFailsBeforeAgentExecution(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	d := &WorkspaceDaemonCore{
+	d := &Daemon{
 		client:       NewClient(srv.URL),
 		logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
 		workspaces:   make(map[string]*workspaceState),

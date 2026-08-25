@@ -18,10 +18,10 @@ func TestArealProxyExecOverrideNil(t *testing.T) {
 }
 
 // TestArealProxyExecOverrideFull confirms the override maps the proxy config to
-// pi's real arg/env contract (§4.4): Model "areal/areal-default" (which
-// buildPiArgs splits into `--provider areal --model areal-default`), the
-// api-key injected via pi's `--api-key` flag, and the base_url exported as the
-// env var a deployment's models.json `areal` provider references.
+// pi's real arg/env contract (§4.4): Model "openai/areal-default" (which Pi
+// should preserve as a provider-prefixed model id), the api-key injected via
+// pi's `--api-key` flag, and the base_url exported as the env var a deployment's
+// models.json `areal` provider references.
 func TestArealProxyExecOverrideFull(t *testing.T) {
 	p := &ArealProxy{
 		Provider: "openai",

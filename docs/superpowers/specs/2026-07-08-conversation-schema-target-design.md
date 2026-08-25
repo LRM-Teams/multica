@@ -150,7 +150,7 @@ CREATE TABLE message_mention (
 );
 ```
 
-配套(不在本表域展开):`reminder` 见 `2026-07-08-agent-reminders-design.md`;attachment 在消息域只需 `message_id` 一列;agent 常驻 runtime session 是 **agent 级**属性(v2.4.7"聊天=每 agent 一条 session"),不挂会话;`task_message`(执行遥测)保持独立,合并是错的。
+配套(不在本表域展开):attachment 在消息域只需 `message_id` 一列;agent 常驻 runtime session 是 **agent 级**属性(v2.4.7"聊天=每 agent 一条 session"),不挂会话;`task_message`(执行遥测)保持独立,合并是错的。
 
 ## 3. 不变量(schema 之外必须守住的)
 

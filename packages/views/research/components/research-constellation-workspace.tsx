@@ -101,6 +101,7 @@ export function ResearchConstellationWorkspace({
   onSelectNode,
   executionRows,
   onOpenAgentPanel,
+  onCloseAgentPanel,
   canvasMode,
   activeLens,
   onActiveLensChange,
@@ -146,6 +147,7 @@ export function ResearchConstellationWorkspace({
   onSelectNode: (node: ResearchGraphNode | null) => void;
   executionRows: ExecutionRow[];
   onOpenAgentPanel: OpenAgentPanelFn;
+  onCloseAgentPanel?: () => void;
   canvasMode: CanvasBodyMode;
   activeLens: ResearchD5Lens;
   onActiveLensChange?: (lens: ResearchD5Lens) => void;
@@ -567,6 +569,7 @@ export function ResearchConstellationWorkspace({
         const v6Level = (v6Node?.level || "").toLowerCase();
         if (v6Level === "s" && v6Node?.actor_agent_id) {
           setRailOpen(false);
+          onCloseAgentPanel?.();
           openAgentInspector(v6Node.actor_agent_id);
           return;
         }
@@ -584,6 +587,7 @@ export function ResearchConstellationWorkspace({
       const level = (typedNode?.level || "").toLowerCase();
       if (level === "s" && typedNode?.actor_agent_id) {
         setRailOpen(false);
+        onCloseAgentPanel?.();
         openAgentInspector(typedNode.actor_agent_id);
         return;
       }
@@ -598,6 +602,7 @@ export function ResearchConstellationWorkspace({
     [
       closeOverlay,
       isMobile,
+      onCloseAgentPanel,
       onSelectNode,
       openAgentInspector,
       openReport,
@@ -785,9 +790,9 @@ export function ResearchConstellationWorkspace({
             rightPanelWidth={0}
             nodeAccessibleNames={nodeAccessibleNames}
             relatedNodeIds={isMobile ? mobileNeighborhoodIds : relatedNodeIds}
-            hideUnselectedSTierRelations={projectionSource === "v6"}
+            hideUnselectedSTierRelations={false}
             semanticLandmarkLabels={projectionSource === "v6"}
-            sTierPresentation={projectionSource === "v6" ? "point" : "label"}
+            sTierPresentation="label"
             initialFitEntityIdList={isMobile ? mobileNeighborhoodIdList : undefined}
             entityBudget={isMobile ? STAR_GRAPH_MOBILE_DOM_BUDGET : undefined}
             typedNodes={typedGraph?.nodes}

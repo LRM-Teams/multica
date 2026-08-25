@@ -11,7 +11,7 @@ import (
 type AgentRealtimeContract struct {
 	Scope     string `json:"scope"`
 	ID        string `json:"id"`
-	EventType string `json:"event_type"`
+	EventType string `json:"eventType"`
 	Payload   string `json:"payload"`
 }
 

@@ -20,8 +20,12 @@ import (
 type ProvisionEnvDispatchAgentInput struct {
 	WorkspaceID, UserID, EnvID, ProjectID, ChannelID, AgentID string
 	SourceSandboxInstanceID                                   string
-	SandboxConfig                                             json.RawMessage
-	TrainingMode, TargetPolicy, Tokenizer                     string
+	// SavepointTemplate is the captured source state the new sandbox is created
+	// from. Branch dispatch supplies it; the mention path does not have one and
+	// looks it up from the source instance instead.
+	SavepointTemplate                     string
+	SandboxConfig                         json.RawMessage
+	TrainingMode, TargetPolicy, Tokenizer string
 }
 
 func buildEnvDispatchCloneInput(in ProvisionEnvDispatchAgentInput, bindingID, runtimeID, executionModel string) service.CloneEnvDispatchAgentInput {
@@ -190,9 +194,9 @@ func envDispatchDerivedAgentEnabled() bool {
 // daemon-registered online Pi runtime (WaitForOnlineSandboxRuntime), then
 // clones a derived global agent bound to it (CloneEnvDispatchAgentTx). No
 // agent_runtime row is pre-created - this is the "Pi offline" fix. The branch
-// path (source sandbox filesystem clone) still uses the legacy pre-create flow
-// because CloneSandboxInstance requires a destination runtime_id; migrating it
-// to the pre-create-free discovery flow is a follow-up.
+// path (sandbox created from the source's savepoint) still uses the legacy
+// pre-create flow, which the removed clone required; migrating it to the
+// pre-create-free discovery flow is a follow-up.
 func (h *Handler) provisionEnvDispatchAgent(ctx context.Context, in ProvisionEnvDispatchAgentInput) (ProvisionEnvDispatchAgentResult, error) {
 	if in.TrainingMode != "" {
 		switch in.TrainingMode {
@@ -493,10 +497,35 @@ WHERE id::text = $2
 	return err
 }
 
-// provisionEnvDispatchAgentBranch handles the branch-trigger path (cloning a
-// source sandbox filesystem). It retains the legacy pre-create-runtime flow
-// because CloneSandboxInstance requires a destination runtime_id; migrating it
-// to the pre-create-free discovery flow is a follow-up.
+// branchSavepointTemplate resolves the captured source state a branch sandbox is
+// created from. Branch dispatch already captured it and passes it down. The
+// mention path has no dispatch to inherit from -- it only has the source instance
+// its copied binding records -- so it looks up the savepoint taken for that
+// instance when the branch was dispatched. That lookup is a read because this
+// path runs under a five second deadline, which is nowhere near long enough to
+// capture one now.
+func (h *Handler) branchSavepointTemplate(ctx context.Context, in ProvisionEnvDispatchAgentInput, sourceID string) (string, error) {
+	if in.SavepointTemplate != "" {
+		return in.SavepointTemplate, nil
+	}
+	provider := newBranchSavepointProvider(h)
+	if provider == nil {
+		return "", fmt.Errorf("branch provisioning needs a savepoint provider to continue source sandbox %s", sourceID)
+	}
+	template, err := provider.LookupSavepointTemplate(ctx, in.WorkspaceID, sourceID)
+	if err != nil {
+		// Including ErrNoSavepointForInstance: the binding says this agent
+		// inherits source state, so provisioning it without that state would
+		// silently discard the work it is supposed to continue.
+		return "", fmt.Errorf("resolve savepoint for source sandbox %s: %w", sourceID, err)
+	}
+	return template, nil
+}
+
+// provisionEnvDispatchAgentBranch handles the branch-trigger path, creating the
+// sandbox from the source's captured savepoint. It retains the legacy
+// pre-create-runtime flow, which the removed clone required; migrating it to the
+// pre-create-free discovery flow the scratch path uses is a follow-up.
 func (h *Handler) provisionEnvDispatchAgentBranch(ctx context.Context, in ProvisionEnvDispatchAgentInput, store envDispatchChannelStore, binding envAgentSandboxBinding, config envDispatchSandboxConfig, lifecycle *service.EnvSandboxLifecycleService, sourceID string) (ProvisionEnvDispatchAgentResult, error) {
 	runtimeID, daemonID, err := (&envDispatchDepsAdapter{h: h}).PrecreateAgentRuntime(ctx, in.WorkspaceID, in.UserID, in.AgentID)
 	if err != nil {
@@ -517,24 +546,22 @@ func (h *Handler) provisionEnvDispatchAgentBranch(ctx context.Context, in Provis
 		}
 		return ProvisionEnvDispatchAgentResult{}, cause
 	}
+	template, err := h.branchSavepointTemplate(ctx, in, sourceID)
+	if err != nil {
+		return cleanup(err)
+	}
+	// Create defaults an empty template to the node default, which would look
+	// like a healthy sandbox while holding none of the state this binding says it
+	// continues. The lookup above refuses instead, so this is a last guard.
+	if template == "" {
+		return cleanup(fmt.Errorf("branch provisioning resolved an empty savepoint template for source %s", sourceID))
+	}
+	config.Template = template
 	createInput, err := config.createInput(in.WorkspaceID, daemonID)
 	if err != nil {
 		return cleanup(err)
 	}
-	createJSON, mErr := json.Marshal(createInput)
-	if mErr != nil {
-		return cleanup(fmt.Errorf("encode clone create payload: %w", mErr))
-	}
-	ref, err := lifecycle.CloneSandboxInstance(ctx,
-		service.SandboxInstanceRef{WorkspaceID: in.WorkspaceID, InstanceID: sourceID},
-		service.CloneSandboxInstanceInput{
-			WorkspaceID:   in.WorkspaceID,
-			EnvID:         in.EnvID,
-			AgentID:       in.AgentID,
-			RuntimeID:     runtimeID,
-			DaemonID:      daemonID,
-			CreatePayload: createJSON,
-		}, in.UserID)
+	ref, err := lifecycle.Create(ctx, createInput, in.UserID)
 	if err != nil {
 		return cleanup(err)
 	}

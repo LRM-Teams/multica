@@ -17,6 +17,18 @@
 	@multica_health path /health
 	reverse_proxy @multica_health backend:8080
 
+	# Long-running API (env-dispatch sandbox boot) must not go through the
+	# Next.js 30s rewrite proxy. Caddy default response_header_timeout is also 30s.
+	@multica_api path /api /api/*
+	reverse_proxy @multica_api backend:8080 {
+		transport http {
+			dial_timeout 10s
+			response_header_timeout 180s
+			read_timeout 180s
+			write_timeout 180s
+		}
+	}
+
 	reverse_proxy frontend:3000
 }
 

@@ -18,9 +18,9 @@ import { Label } from "@multica/ui/components/ui/label";
 import { cn } from "@multica/ui/lib/utils";
 import { CustomModelIdRow } from "./custom-model-id-row";
 import {
-  executionFieldClass,
-  executionTriggerClass,
-} from "./execution-picker-styles";
+  runtimeConfigFieldClass,
+  runtimeConfigTriggerClass,
+} from "./runtime-config-picker-styles";
 import { useT } from "../../i18n";
 
 // ModelDropdown: searchable model picker. A selected runtime always starts
@@ -142,7 +142,7 @@ export function ModelDropdown({
 
   if (!supported && !catalogLoading) {
     return (
-      <div className={executionFieldClass}>
+      <div className={runtimeConfigFieldClass}>
         <Label className="text-xs font-medium text-muted-foreground">
           {t(($) => $.model_dropdown.label)}
         </Label>
@@ -159,7 +159,7 @@ export function ModelDropdown({
   const canRescan = !!runtimeId && !disabled && !isFetchingCatalog;
 
   return (
-    <div className={executionFieldClass}>
+    <div className={runtimeConfigFieldClass}>
       <div className="flex items-center justify-between gap-2">
         <Label className="text-xs font-medium text-muted-foreground">
           {t(($) => $.model_dropdown.label)}
@@ -205,7 +205,7 @@ export function ModelDropdown({
         <PopoverTrigger
           disabled={disabled}
           data-testid="model-dropdown-trigger"
-          className={executionTriggerClass}
+          className={runtimeConfigTriggerClass}
           aria-busy={isFetchingCatalog || undefined}
           title={
             !isInitialScan && value

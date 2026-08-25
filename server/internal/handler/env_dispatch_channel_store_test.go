@@ -69,6 +69,62 @@ func TestEnvDispatchChannelStoreMarkDeletingBlocksProvisioning(t *testing.T) {
 	require.Equal(t, "deleting", got.Status)
 }
 
+func TestDeleteAgentRuntimeReclaimsReadyEnvDispatchBinding(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx, store, envID, channelID, agentID := setupEnvDispatchChannelStoreFixture(t)
+
+	var runtimeID, nodeID, sandboxID string
+	require.NoError(t, testPool.QueryRow(ctx, `
+		INSERT INTO agent_runtime (workspace_id, name, runtime_mode, provider, status, metadata, last_seen_at)
+		VALUES ($1, $2, 'cloud', 'pi', 'online', '{}'::jsonb, now())
+		RETURNING id::text`, testWorkspaceID, "env-dispatch-reclaim-"+uuid.NewString()).Scan(&runtimeID))
+	require.NoError(t, testPool.QueryRow(ctx, `
+		INSERT INTO sandbox_node (node_key, name, owner_user_id, capabilities, max_concurrency, metadata)
+		VALUES ($1, 'env dispatch reclaim node', $2, '{}'::jsonb, 1, '{}'::jsonb)
+		RETURNING id::text`, "env-dispatch-reclaim-"+uuid.NewString(), testUserID).Scan(&nodeID))
+	require.NoError(t, testPool.QueryRow(ctx, `
+		INSERT INTO sandbox_instance (workspace_id, creator_user_id, node_id, status, template, limits, metadata)
+		VALUES ($1, $2, $3, 'running', 'default', '{}'::jsonb, '{}'::jsonb)
+		RETURNING id::text`, testWorkspaceID, testUserID, nodeID).Scan(&sandboxID))
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM sandbox_instance WHERE id = $1`, sandboxID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM sandbox_node WHERE id = $1`, nodeID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
+	})
+
+	require.NoError(t, store.insertBinding(ctx, testPool, envAgentSandboxBinding{
+		EnvID: envID, ChannelID: channelID, SourceAgentID: agentID,
+		Status: "pending", SandboxConfig: json.RawMessage(`{"template":"default"}`),
+	}))
+	require.NoError(t, testPool.QueryRow(ctx, `
+		UPDATE environment_agent_sandbox
+		SET status = 'ready', sandbox_instance_id = $3, runtime_id = $4, daemon_id = $5
+		WHERE env_id = $1 AND agent_id = $2
+		RETURNING status`, envID, agentID, sandboxID, runtimeID, uuid.NewString()).Scan(new(string)))
+
+	adapter := &envDispatchDepsAdapter{h: testHandler}
+	require.NoError(t, adapter.DeleteAgentRuntime(ctx, testWorkspaceID, runtimeID))
+	require.NoError(t, adapter.DeleteAgentRuntime(ctx, testWorkspaceID, runtimeID), "repeat reclaim must be a no-op")
+
+	var runtimeCount int
+	require.NoError(t, testPool.QueryRow(ctx, `SELECT count(*) FROM agent_runtime WHERE id = $1`, runtimeID).Scan(&runtimeCount))
+	require.Zero(t, runtimeCount)
+
+	binding, err := store.binding(ctx, testPool, envID, agentID)
+	require.NoError(t, err)
+	require.Equal(t, "failed_retryable", binding.Status)
+	require.Nil(t, binding.SandboxInstanceID)
+	require.Nil(t, binding.RuntimeID)
+	require.Nil(t, binding.DaemonID)
+
+	won, claimed, err := store.claimProvisioning(ctx, testPool, envID, agentID)
+	require.NoError(t, err)
+	require.True(t, won)
+	require.Equal(t, "credential_ready", claimed.Status)
+}
+
 func setupEnvDispatchChannelStoreFixture(t *testing.T) (context.Context, envDispatchChannelStore, string, string, string) {
 	t.Helper()
 	ctx := context.Background()

@@ -115,6 +115,13 @@ backend:
     localUploadBaseUrl: http://api.multica.dev.lan
     webPushVapidPublicKey: ""
     webPushVapidSubject: ""
+    # Independent HTTPS report origin. Leave empty unless a second hostname
+    # exists; do not point this at the main app URL. Capability secret and
+    # renderer token stay in existingSecret as RESEARCH_REPORT_CAPABILITY_SECRET
+    # and RESEARCH_REPORT_RENDERER_TOKEN.
+    researchReportOrigin: ""
+    researchReportFrameAncestors: ""
+    researchReportRendererUrl: ""
   resources:
     requests:
       cpu: 100m

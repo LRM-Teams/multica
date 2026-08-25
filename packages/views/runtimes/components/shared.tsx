@@ -1,6 +1,7 @@
 import { Cloud, Monitor, Wifi, WifiHigh, WifiOff } from "lucide-react";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { cn } from "@multica/ui/lib/utils";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import type { RuntimeHealth, RuntimeHealthPresentation } from "@multica/core/runtimes";
 import { ProviderLogo } from "./provider-logo";
 import { useT } from "../../i18n/use-t";
@@ -166,42 +167,54 @@ export function MachineConnectedStatus({
   const { t } = useT("agents");
   if (health === "loading") {
     return (
-      <span
-        className={cn(
-          "inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground",
-          className,
-        )}
-        title="—"
-      >
-        <span className="h-2 w-2 rounded-full bg-muted-foreground/40" />
-        —
-      </span>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <span
+              className={cn(
+                "inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground",
+                className,
+              )}
+            />
+          }
+        >
+          <span className="h-2 w-2 rounded-full bg-muted-foreground/40" />
+          —
+        </TooltipTrigger>
+        <TooltipContent side="top">—</TooltipContent>
+      </Tooltip>
     );
   }
   const connected = health === "online";
   return (
-    <span
-      className={cn(
-        "inline-flex items-center gap-1.5 text-xs font-medium",
-        connected ? "text-success" : "text-muted-foreground",
-        className,
-      )}
-      title={
-        connected
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span
+            className={cn(
+              "inline-flex items-center gap-1.5 text-xs font-medium",
+              connected ? "text-success" : "text-muted-foreground",
+              className,
+            )}
+          />
+        }
+      >
+        <span
+          className={cn(
+            "h-2 w-2 rounded-full",
+            connected ? "bg-success" : "bg-muted-foreground/40",
+          )}
+        />
+        {connected
           ? t(($) => $.inspector.computer_connected)
-          : t(($) => $.inspector.computer_disconnected)
-      }
-    >
-      <span
-        className={cn(
-          "h-2 w-2 rounded-full",
-          connected ? "bg-success" : "bg-muted-foreground/40",
-        )}
-      />
-      {connected
-        ? t(($) => $.inspector.computer_connected)
-        : t(($) => $.inspector.computer_disconnected)}
-    </span>
+          : t(($) => $.inspector.computer_disconnected)}
+      </TooltipTrigger>
+      <TooltipContent side="top">
+        {connected
+          ? t(($) => $.inspector.computer_connected)
+          : t(($) => $.inspector.computer_disconnected)}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -226,31 +239,43 @@ export function RuntimeConnectivityStatus({
   const labelOf = useHealthLabel();
   if (health === "loading") {
     return (
-      <span
-        className={cn(
-          "inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground",
-          className,
-        )}
-        title="—"
-      >
-        <span className="h-2 w-2 rounded-full bg-muted-foreground/40" />
-        —
-      </span>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <span
+              className={cn(
+                "inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground",
+                className,
+              )}
+            />
+          }
+        >
+          <span className="h-2 w-2 rounded-full bg-muted-foreground/40" />
+          —
+        </TooltipTrigger>
+        <TooltipContent side="top">—</TooltipContent>
+      </Tooltip>
     );
   }
   const v = HEALTH_VISUAL[health];
   return (
-    <span
-      className={cn(
-        "inline-flex items-center gap-1.5 text-xs font-medium",
-        v.text,
-        className,
-      )}
-      title={labelOf(health)}
-    >
-      <span className={cn("h-2 w-2 rounded-full", v.dot)} />
-      {labelOf(health)}
-    </span>
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span
+            className={cn(
+              "inline-flex items-center gap-1.5 text-xs font-medium",
+              v.text,
+              className,
+            )}
+          />
+        }
+      >
+        <span className={cn("h-2 w-2 rounded-full", v.dot)} />
+        {labelOf(health)}
+      </TooltipTrigger>
+      <TooltipContent side="top">{labelOf(health)}</TooltipContent>
+    </Tooltip>
   );
 }
 

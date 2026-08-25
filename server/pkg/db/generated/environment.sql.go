@@ -134,88 +134,6 @@ func (q *Queries) CompleteMixedRLResidentTurn(ctx context.Context, arg CompleteM
 	return i, err
 }
 
-const getMixedRLResidentTurn = `-- name: GetMixedRLResidentTurn :one
-SELECT turn_id, run_id, run_agent_id, turn_ordinal, status, capture_started_at, capture_completed_at, accepted_message_ids, started_at, completed_at FROM env_dispatch_resident_turn
-WHERE turn_id = $1
-`
-
-func (q *Queries) GetMixedRLResidentTurn(ctx context.Context, turnID pgtype.UUID) (EnvDispatchResidentTurn, error) {
-	row := q.db.QueryRow(ctx, getMixedRLResidentTurn, turnID)
-	var i EnvDispatchResidentTurn
-	err := row.Scan(
-		&i.TurnID,
-		&i.RunID,
-		&i.RunAgentID,
-		&i.TurnOrdinal,
-		&i.Status,
-		&i.CaptureStartedAt,
-		&i.CaptureCompletedAt,
-		&i.AcceptedMessageIds,
-		&i.StartedAt,
-		&i.CompletedAt,
-	)
-	return i, err
-}
-
-const getMixedRLTurnCaptureBatch = `-- name: GetMixedRLTurnCaptureBatch :one
-SELECT capture_batch_id, turn_id, capture_boundary, call_count, action_count, consumption_count, payload_hash, accepted_at FROM env_dispatch_turn_capture_batch
-WHERE turn_id = $1
-`
-
-func (q *Queries) GetMixedRLTurnCaptureBatch(ctx context.Context, turnID pgtype.UUID) (EnvDispatchTurnCaptureBatch, error) {
-	row := q.db.QueryRow(ctx, getMixedRLTurnCaptureBatch, turnID)
-	var i EnvDispatchTurnCaptureBatch
-	err := row.Scan(
-		&i.CaptureBatchID,
-		&i.TurnID,
-		&i.CaptureBoundary,
-		&i.CallCount,
-		&i.ActionCount,
-		&i.ConsumptionCount,
-		&i.PayloadHash,
-		&i.AcceptedAt,
-	)
-	return i, err
-}
-
-const listMixedRLActiveResidentTurns = `-- name: ListMixedRLActiveResidentTurns :many
-SELECT turn_id, run_id, run_agent_id, turn_ordinal, status, capture_started_at, capture_completed_at, accepted_message_ids, started_at, completed_at FROM env_dispatch_resident_turn
-WHERE run_id = $1
-  AND status = 'active'
-ORDER BY run_agent_id, turn_ordinal, turn_id
-`
-
-func (q *Queries) ListMixedRLActiveResidentTurns(ctx context.Context, runID pgtype.UUID) ([]EnvDispatchResidentTurn, error) {
-	rows, err := q.db.Query(ctx, listMixedRLActiveResidentTurns, runID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []EnvDispatchResidentTurn{}
-	for rows.Next() {
-		var i EnvDispatchResidentTurn
-		if err := rows.Scan(
-			&i.TurnID,
-			&i.RunID,
-			&i.RunAgentID,
-			&i.TurnOrdinal,
-			&i.Status,
-			&i.CaptureStartedAt,
-			&i.CaptureCompletedAt,
-			&i.AcceptedMessageIds,
-			&i.StartedAt,
-			&i.CompletedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const completeMixedRLRunWithSnapshot = `-- name: CompleteMixedRLRunWithSnapshot :one
 UPDATE env_dispatch_run AS run
 SET status = $1,
@@ -678,24 +596,6 @@ func (q *Queries) DeleteEnvironment(ctx context.Context, arg DeleteEnvironmentPa
 	return err
 }
 
-const deleteMixedRLRunsByAgentIDs = `-- name: DeleteMixedRLRunsByAgentIDs :exec
-DELETE FROM env_dispatch_run AS run
-WHERE EXISTS (
-  SELECT 1
-  FROM env_dispatch_run_agent AS run_agent
-  WHERE run_agent.run_id = run.run_id
-    AND (
-      run_agent.source_agent_id = ANY($1::uuid[])
-      OR run_agent.execution_agent_id = ANY($1::uuid[])
-    )
-)
-`
-
-func (q *Queries) DeleteMixedRLRunsByAgentIDs(ctx context.Context, agentIds []pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteMixedRLRunsByAgentIDs, agentIds)
-	return err
-}
-
 const deleteMixedRLDeliveryObligationsBySourceAgentIDs = `-- name: DeleteMixedRLDeliveryObligationsBySourceAgentIDs :exec
 WITH deleted AS MATERIALIZED (
   DELETE FROM env_dispatch_delivery_obligation
@@ -735,6 +635,24 @@ func (q *Queries) DeleteMixedRLRun(ctx context.Context, arg DeleteMixedRLRunPara
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const deleteMixedRLRunsByAgentIDs = `-- name: DeleteMixedRLRunsByAgentIDs :exec
+DELETE FROM env_dispatch_run AS run
+WHERE EXISTS (
+  SELECT 1
+  FROM env_dispatch_run_agent AS run_agent
+  WHERE run_agent.run_id = run.run_id
+    AND (
+      run_agent.source_agent_id = ANY($1::uuid[])
+      OR run_agent.execution_agent_id = ANY($1::uuid[])
+    )
+)
+`
+
+func (q *Queries) DeleteMixedRLRunsByAgentIDs(ctx context.Context, agentIds []pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteMixedRLRunsByAgentIDs, agentIds)
+	return err
 }
 
 const getEnvDispatchRequest = `-- name: GetEnvDispatchRequest :one
@@ -840,6 +758,32 @@ func (q *Queries) GetEnvironment(ctx context.Context, arg GetEnvironmentParams) 
 	return i, err
 }
 
+const getMixedRLResidentTurn = `-- name: GetMixedRLResidentTurn :one
+SELECT turn_id, run_id, run_agent_id, turn_ordinal, status,
+       capture_started_at, capture_completed_at, accepted_message_ids,
+       started_at, completed_at
+FROM env_dispatch_resident_turn
+WHERE turn_id = $1
+`
+
+func (q *Queries) GetMixedRLResidentTurn(ctx context.Context, turnID pgtype.UUID) (EnvDispatchResidentTurn, error) {
+	row := q.db.QueryRow(ctx, getMixedRLResidentTurn, turnID)
+	var i EnvDispatchResidentTurn
+	err := row.Scan(
+		&i.TurnID,
+		&i.RunID,
+		&i.RunAgentID,
+		&i.TurnOrdinal,
+		&i.Status,
+		&i.CaptureStartedAt,
+		&i.CaptureCompletedAt,
+		&i.AcceptedMessageIds,
+		&i.StartedAt,
+		&i.CompletedAt,
+	)
+	return i, err
+}
+
 const getMixedRLRun = `-- name: GetMixedRLRun :one
 SELECT project_id, workspace_id, training_mode, root_task_id, created_at, run_id, source_task_id, sample_index, local_issue_id, local_channel_id, status, quiet_window_ms, total_timeout_seconds, initial_message_submitted_at, timeout_deadline_at, quiet_candidate_since, active_turn_count, pending_delivery_count, queued_message_count, inflight_tool_count, unfinished_capture_batch_count, capture_gap_count, frozen_snapshot_id, snapshot_hash, frozen_at, updated_at FROM env_dispatch_run
 WHERE run_id = $1
@@ -879,49 +823,6 @@ func (q *Queries) GetMixedRLRun(ctx context.Context, runID pgtype.UUID) (EnvDisp
 	return i, err
 }
 
-const listMixedRLQuiescenceCandidates = `-- name: ListMixedRLQuiescenceCandidates :many
-SELECT project_id, workspace_id, training_mode, root_task_id, created_at, run_id, source_task_id, sample_index, local_issue_id, local_channel_id, status, quiet_window_ms, total_timeout_seconds, initial_message_submitted_at, timeout_deadline_at, quiet_candidate_since, active_turn_count, pending_delivery_count, queued_message_count, inflight_tool_count, unfinished_capture_batch_count, capture_gap_count, frozen_snapshot_id, snapshot_hash, frozen_at, updated_at FROM env_dispatch_run
-WHERE status IN ('running', 'quiet_candidate')
-  AND (
-    timeout_deadline_at <= $1
-    OR (status = 'running'
-        AND active_turn_count = 0
-        AND pending_delivery_count = 0
-        AND queued_message_count = 0
-        AND inflight_tool_count = 0
-        AND unfinished_capture_batch_count = 0)
-    OR status = 'quiet_candidate'
-  )
-ORDER BY timeout_deadline_at NULLS LAST, run_id
-`
-
-func (q *Queries) ListMixedRLQuiescenceCandidates(ctx context.Context, nowAt pgtype.Timestamptz) ([]EnvDispatchRun, error) {
-	rows, err := q.db.Query(ctx, listMixedRLQuiescenceCandidates, nowAt)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []EnvDispatchRun{}
-	for rows.Next() {
-		var i EnvDispatchRun
-		if err := rows.Scan(
-			&i.ProjectID, &i.WorkspaceID, &i.TrainingMode, &i.RootTaskID, &i.CreatedAt,
-			&i.RunID, &i.SourceTaskID, &i.SampleIndex, &i.LocalIssueID, &i.LocalChannelID,
-			&i.Status, &i.QuietWindowMs, &i.TotalTimeoutSeconds, &i.InitialMessageSubmittedAt,
-			&i.TimeoutDeadlineAt, &i.QuietCandidateSince, &i.ActiveTurnCount, &i.PendingDeliveryCount,
-			&i.QueuedMessageCount, &i.InflightToolCount, &i.UnfinishedCaptureBatchCount,
-			&i.CaptureGapCount, &i.FrozenSnapshotID, &i.SnapshotHash, &i.FrozenAt, &i.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const getMixedRLRunAgent = `-- name: GetMixedRLRunAgent :one
 SELECT run_agent_id, run_id, source_agent_id, execution_agent_id, runtime_id, pi_session_id, training_mode, areal_session_id, capture_boundary, next_turn_ordinal, next_call_ordinal, settled_at, created_at FROM env_dispatch_run_agent
 WHERE run_id = $1 AND run_agent_id = $2
@@ -949,6 +850,29 @@ func (q *Queries) GetMixedRLRunAgent(ctx context.Context, arg GetMixedRLRunAgent
 		&i.NextCallOrdinal,
 		&i.SettledAt,
 		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getMixedRLTurnCaptureBatch = `-- name: GetMixedRLTurnCaptureBatch :one
+SELECT capture_batch_id, turn_id, capture_boundary, call_count,
+       action_count, consumption_count, payload_hash, accepted_at
+FROM env_dispatch_turn_capture_batch
+WHERE turn_id = $1
+`
+
+func (q *Queries) GetMixedRLTurnCaptureBatch(ctx context.Context, turnID pgtype.UUID) (EnvDispatchTurnCaptureBatch, error) {
+	row := q.db.QueryRow(ctx, getMixedRLTurnCaptureBatch, turnID)
+	var i EnvDispatchTurnCaptureBatch
+	err := row.Scan(
+		&i.CaptureBatchID,
+		&i.TurnID,
+		&i.CaptureBoundary,
+		&i.CallCount,
+		&i.ActionCount,
+		&i.ConsumptionCount,
+		&i.PayloadHash,
+		&i.AcceptedAt,
 	)
 	return i, err
 }
@@ -1008,6 +932,113 @@ func (q *Queries) InsertMixedRLTurnCaptureBatch(ctx context.Context, arg InsertM
 		&i.AcceptedAt,
 	)
 	return i, err
+}
+
+const listMixedRLActiveResidentTurns = `-- name: ListMixedRLActiveResidentTurns :many
+SELECT turn_id, run_id, run_agent_id, turn_ordinal, status,
+       capture_started_at, capture_completed_at, accepted_message_ids,
+       started_at, completed_at
+FROM env_dispatch_resident_turn
+WHERE run_id = $1
+  AND status = 'active'
+ORDER BY run_agent_id, turn_ordinal, turn_id
+`
+
+// The timeout freezer uses this stable order to convert every in-flight
+// resident turn into an explicit capture gap before publishing a partial DAG.
+func (q *Queries) ListMixedRLActiveResidentTurns(ctx context.Context, runID pgtype.UUID) ([]EnvDispatchResidentTurn, error) {
+	rows, err := q.db.Query(ctx, listMixedRLActiveResidentTurns, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []EnvDispatchResidentTurn{}
+	for rows.Next() {
+		var i EnvDispatchResidentTurn
+		if err := rows.Scan(
+			&i.TurnID,
+			&i.RunID,
+			&i.RunAgentID,
+			&i.TurnOrdinal,
+			&i.Status,
+			&i.CaptureStartedAt,
+			&i.CaptureCompletedAt,
+			&i.AcceptedMessageIds,
+			&i.StartedAt,
+			&i.CompletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMixedRLQuiescenceCandidates = `-- name: ListMixedRLQuiescenceCandidates :many
+SELECT project_id, workspace_id, training_mode, root_task_id, created_at, run_id, source_task_id, sample_index, local_issue_id, local_channel_id, status, quiet_window_ms, total_timeout_seconds, initial_message_submitted_at, timeout_deadline_at, quiet_candidate_since, active_turn_count, pending_delivery_count, queued_message_count, inflight_tool_count, unfinished_capture_batch_count, capture_gap_count, frozen_snapshot_id, snapshot_hash, frozen_at, updated_at FROM env_dispatch_run
+WHERE status IN ('running', 'quiet_candidate')
+  AND (
+    timeout_deadline_at <= $1
+    OR (status = 'running'
+        AND active_turn_count = 0
+        AND pending_delivery_count = 0
+        AND queued_message_count = 0
+        AND inflight_tool_count = 0
+        AND unfinished_capture_batch_count = 0)
+    OR status = 'quiet_candidate'
+  )
+ORDER BY timeout_deadline_at NULLS LAST, run_id
+`
+
+// The evaluator makes the final transition decision after this bounded scan.
+func (q *Queries) ListMixedRLQuiescenceCandidates(ctx context.Context, nowAt pgtype.Timestamptz) ([]EnvDispatchRun, error) {
+	rows, err := q.db.Query(ctx, listMixedRLQuiescenceCandidates, nowAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []EnvDispatchRun{}
+	for rows.Next() {
+		var i EnvDispatchRun
+		if err := rows.Scan(
+			&i.ProjectID,
+			&i.WorkspaceID,
+			&i.TrainingMode,
+			&i.RootTaskID,
+			&i.CreatedAt,
+			&i.RunID,
+			&i.SourceTaskID,
+			&i.SampleIndex,
+			&i.LocalIssueID,
+			&i.LocalChannelID,
+			&i.Status,
+			&i.QuietWindowMs,
+			&i.TotalTimeoutSeconds,
+			&i.InitialMessageSubmittedAt,
+			&i.TimeoutDeadlineAt,
+			&i.QuietCandidateSince,
+			&i.ActiveTurnCount,
+			&i.PendingDeliveryCount,
+			&i.QueuedMessageCount,
+			&i.InflightToolCount,
+			&i.UnfinishedCaptureBatchCount,
+			&i.CaptureGapCount,
+			&i.FrozenSnapshotID,
+			&i.SnapshotHash,
+			&i.FrozenAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listMixedRLRunAgents = `-- name: ListMixedRLRunAgents :many
@@ -1138,6 +1169,49 @@ func (q *Queries) ListOwnedEnvDispatchResources(ctx context.Context, arg ListOwn
 		&i.Status,
 	)
 	return i, err
+}
+
+const listReadyEnvDispatchChannelInstances = `-- name: ListReadyEnvDispatchChannelInstances :many
+SELECT binding.sandbox_instance_id::text AS instance_id
+FROM environment_agent_sandbox binding
+JOIN channel ON channel.id = binding.channel_id
+WHERE binding.channel_id = $1
+  AND channel.workspace_id = $2
+  AND binding.status = 'ready'
+  AND binding.sandbox_instance_id IS NOT NULL
+ORDER BY instance_id
+`
+
+type ListReadyEnvDispatchChannelInstancesParams struct {
+	ChannelID   pgtype.UUID `json:"channel_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+// Every sandbox a branch of this channel would inherit. Copying a branch channel
+// copies each roster member's binding along with the sandbox it was bound to, so
+// the trigger is not the only agent that continues source state. Only ready
+// bindings have a sandbox worth capturing.
+//
+// environment_agent_sandbox carries no workspace of its own; the join is what
+// keeps a caller from reading another workspace's bindings by channel id.
+func (q *Queries) ListReadyEnvDispatchChannelInstances(ctx context.Context, arg ListReadyEnvDispatchChannelInstancesParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, listReadyEnvDispatchChannelInstances, arg.ChannelID, arg.WorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var instance_id string
+		if err := rows.Scan(&instance_id); err != nil {
+			return nil, err
+		}
+		items = append(items, instance_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const lockMixedRLRun = `-- name: LockMixedRLRun :one
@@ -1299,7 +1373,7 @@ WITH input AS (
          $2::timestamptz AS settled_at,
          $3::uuid AS delivery_id
 ), target AS MATERIALIZED (
-  SELECT obligation.*
+  SELECT obligation.delivery_id, obligation.run_id, obligation.channel_message_id, obligation.source_recipient_agent_id, obligation.run_agent_id, obligation.state, obligation.queued_at, obligation.settled_at, obligation.created_at
   FROM env_dispatch_delivery_obligation AS obligation, input
   WHERE obligation.delivery_id = input.delivery_id
   FOR UPDATE OF obligation
@@ -1310,7 +1384,7 @@ WITH input AS (
   WHERE obligation.delivery_id = target.delivery_id
     AND target.state IN ('pending', 'queued', 'accepted')
     AND input.state IN ('completed', 'failed', 'cancelled')
-  RETURNING obligation.*
+  RETURNING obligation.delivery_id, obligation.run_id, obligation.channel_message_id, obligation.source_recipient_agent_id, obligation.run_agent_id, obligation.state, obligation.queued_at, obligation.settled_at, obligation.created_at
 ), counted AS (
   UPDATE env_dispatch_run AS run
   SET pending_delivery_count = GREATEST(run.pending_delivery_count - 1, 0),
@@ -1319,10 +1393,10 @@ WITH input AS (
   WHERE run.run_id = settled.run_id
   RETURNING run.run_id
 ), result AS (
-  SELECT settled.*, true AS transitioned
+  SELECT settled.delivery_id, settled.run_id, settled.channel_message_id, settled.source_recipient_agent_id, settled.run_agent_id, settled.state, settled.queued_at, settled.settled_at, settled.created_at, true AS transitioned
   FROM settled
   UNION ALL
-  SELECT target.*, false AS transitioned
+  SELECT target.delivery_id, target.run_id, target.channel_message_id, target.source_recipient_agent_id, target.run_agent_id, target.state, target.queued_at, target.settled_at, target.created_at, false AS transitioned
   FROM target, input
   WHERE NOT EXISTS (SELECT 1 FROM settled)
     AND target.state IN ('completed', 'failed', 'cancelled')
@@ -1340,9 +1414,21 @@ type SettleMixedRLDeliveryObligationParams struct {
 	DeliveryID pgtype.UUID        `json:"delivery_id"`
 }
 
-func (q *Queries) SettleMixedRLDeliveryObligation(ctx context.Context, arg SettleMixedRLDeliveryObligationParams) (EnvDispatchDeliveryObligation, error) {
+type SettleMixedRLDeliveryObligationRow struct {
+	DeliveryID             pgtype.UUID        `json:"delivery_id"`
+	RunID                  pgtype.UUID        `json:"run_id"`
+	ChannelMessageID       pgtype.UUID        `json:"channel_message_id"`
+	SourceRecipientAgentID pgtype.UUID        `json:"source_recipient_agent_id"`
+	RunAgentID             pgtype.UUID        `json:"run_agent_id"`
+	State                  string             `json:"state"`
+	QueuedAt               pgtype.Timestamptz `json:"queued_at"`
+	SettledAt              pgtype.Timestamptz `json:"settled_at"`
+	CreatedAt              pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) SettleMixedRLDeliveryObligation(ctx context.Context, arg SettleMixedRLDeliveryObligationParams) (SettleMixedRLDeliveryObligationRow, error) {
 	row := q.db.QueryRow(ctx, settleMixedRLDeliveryObligation, arg.State, arg.SettledAt, arg.DeliveryID)
-	var i EnvDispatchDeliveryObligation
+	var i SettleMixedRLDeliveryObligationRow
 	err := row.Scan(
 		&i.DeliveryID,
 		&i.RunID,

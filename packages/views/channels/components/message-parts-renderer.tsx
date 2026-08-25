@@ -8,11 +8,13 @@ import { api } from "@multica/core/api";
 import type { AgentCreationProposal, MessagePart, StickerAsset, StickerCatalogResponse } from "@multica/core/types";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@multica/ui/components/ui/collapsible";
 import { cn } from "@multica/ui/lib/utils";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { MemoizedMarkdown } from "../../common/markdown";
 import { usePrefersReducedMotion } from "../../common/use-prefers-reduced-motion";
 import { useT } from "../../i18n/use-t";
 import { ChoiceCard, ChoiceReplyPart } from "./choice-card";
 import { AgentCreationProposalCard } from "../../common/agent-creation-proposal-card";
+import { PeriodBriefInsertActions } from "../../notes/period-brief-insert-actions";
 import { AppLink } from "../../navigation";
 import { useWorkspacePaths } from "@multica/core/paths";
 
@@ -71,6 +73,9 @@ export function MessagePartsRenderer({
         }
         if (part.type === "note_write") {
           return null;
+        }
+        if (part.type === "period_brief_insert") {
+          return <PeriodBriefInsertActions key={key} part={part} />;
         }
         if (part.type === "reference") {
           if (part.ref_type === "agent:create" && choiceContext?.messageId) {
@@ -214,6 +219,8 @@ function createMessagePartKey(part: MessagePart, counts: Map<string, number>): s
     base = `note-brief-${part.ref_id}-${hashString(part.label ?? "")}`;
   } else if (part.type === "note_write") {
     base = `note-write-${part.ref_id ?? "create"}-${hashString(part.label ?? "")}`;
+  } else if (part.type === "period_brief_insert") {
+    base = `period-brief-insert-${part.ref_id}-${part.selected_option_id ?? "open"}`;
   } else {
     base = `attachment-${part.attachment_id}`;
   }
@@ -288,17 +295,26 @@ function StickerPlaceholder({
   title?: string;
   muted?: boolean;
 }) {
+  const className = cn(
+    "not-prose inline-flex min-h-20 w-fit max-w-32 items-center justify-center rounded-md border border-dashed border-border/80 px-3 py-2 text-center text-xs sm:max-w-40",
+    muted ? "bg-muted/25 text-muted-foreground" : "bg-muted/35 text-muted-foreground",
+  );
+  if (!title) {
+    return (
+      <span data-testid="message-sticker-placeholder" className={className}>
+        {label}
+      </span>
+    );
+  }
   return (
-    <span
-      data-testid="message-sticker-placeholder"
-      title={title}
-      className={cn(
-        "not-prose inline-flex min-h-20 w-fit max-w-32 items-center justify-center rounded-md border border-dashed border-border/80 px-3 py-2 text-center text-xs sm:max-w-40",
-        muted ? "bg-muted/25 text-muted-foreground" : "bg-muted/35 text-muted-foreground",
-      )}
-    >
-      {label}
-    </span>
+    <Tooltip>
+      <TooltipTrigger
+        render={<span data-testid="message-sticker-placeholder" className={className} />}
+      >
+        {label}
+      </TooltipTrigger>
+      <TooltipContent side="top">{title}</TooltipContent>
+    </Tooltip>
   );
 }
 

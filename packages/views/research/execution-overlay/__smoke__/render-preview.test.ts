@@ -6,6 +6,13 @@ import * as fs from "node:fs";
 import { ExecutionOverlayPanel } from "../execution-overlay-panel";
 import type { ExecutionRow } from "../execution-adapter";
 
+// The row renders the site-wide smart avatar, which resolves identity through
+// workspace queries — this SSR smoke test mounts no providers.
+vi.mock("../../../common/actor-avatar", () => ({
+  ActorAvatar: ({ actorId }: { actorId: string }) =>
+    createElement("span", { "data-testid": `actor-avatar-${actorId}` }),
+}));
+
 // Display copy mirrored from `en/research.json` `panel.execution` (the SSR
 // renderer never touches i18n providers; it uses the same dict path the panel
 // reads through `useT` so the string set matches production).
@@ -69,14 +76,14 @@ vi.mock("../../../i18n/use-t", () => ({
 const T0 = 1_700_000_000_000;
 
 const ROWS: ExecutionRow[] = [
-  { id: "r", name: "Ralph", role: "scout", initials: "RA", status: "running", actionKey: "working", action: "Pulling ANN benchmark results", startedAt: T0 - 90_000, elapsedMs: 90_000, updatedAt: T0 - 5_000, recentResult: { id: "c1", title: "Enterprise pricing caps under renewal", acceptedAt: T0 - 40_000 }, currentNodeId: "n1", locationLabel: "Pricing branch" },
-  { id: "rt", name: "Rita", role: "domain", initials: "RI", status: "retrying", actionKey: "retrying", action: "Retrying evidence retrieval after timeout", startedAt: T0 - 30_000, elapsedMs: 30_000, updatedAt: T0 - 3_000, currentNodeId: "n2", locationLabel: "Compliance branch" },
-  { id: "w", name: "Wanda", role: "lead", initials: "WA", status: "queued", actionKey: "waiting", action: "Waiting for a retrieval slot", updatedAt: T0 - 20_000, stage: "exploration", currentNodeId: "n3", locationLabel: "Discovery branch" },
-  { id: "d", name: "Dana", role: "reporter", initials: "DA", status: "done", actionKey: "recent_done", action: "Consolidated 14 user interviews", updatedAt: T0 - 400_000, recentResult: { id: "c2", title: "Migration friction themes", acceptedAt: T0 - 400_000 }, currentNodeId: "n4", locationLabel: "Insight branch" },
-  { id: "f", name: "Felix", role: "analyst", initials: "FE", status: "failed", actionKey: "recent_failed", action: "Computing retention confidence interval", updatedAt: T0 - 200_000, currentNodeId: "n5", locationLabel: "Analysis node 7" },
-  { id: "s", name: "Sam", role: "web", initials: "SA", status: "stale", actionKey: "stale", action: "Reviewing compliance documentation", updatedAt: T0 - 3_600_000, currentNodeId: "n6", locationLabel: "Compliance branch" },
-  { id: "o", name: "Omar", role: "reviewer", initials: "OM", status: "offline", actionKey: "offline", action: "", updatedAt: T0 - 9_000_000 },
-  { id: "u", name: "Uma", role: "advisor", initials: "UM", status: "unknown", actionKey: "unknown", action: "", updatedAt: T0 - 1_000 },
+  { id: "r", name: "Ralph", role: "scout", status: "running", actionKey: "working", action: "Pulling ANN benchmark results", startedAt: T0 - 90_000, elapsedMs: 90_000, updatedAt: T0 - 5_000, recentResult: { id: "c1", title: "Enterprise pricing caps under renewal", acceptedAt: T0 - 40_000 }, currentNodeId: "n1", locationLabel: "Pricing branch" },
+  { id: "rt", name: "Rita", role: "domain", status: "retrying", actionKey: "retrying", action: "Retrying evidence retrieval after timeout", startedAt: T0 - 30_000, elapsedMs: 30_000, updatedAt: T0 - 3_000, currentNodeId: "n2", locationLabel: "Compliance branch" },
+  { id: "w", name: "Wanda", role: "lead", status: "queued", actionKey: "waiting", action: "Waiting for a retrieval slot", updatedAt: T0 - 20_000, stage: "exploration", currentNodeId: "n3", locationLabel: "Discovery branch" },
+  { id: "d", name: "Dana", role: "reporter", status: "done", actionKey: "recent_done", action: "Consolidated 14 user interviews", updatedAt: T0 - 400_000, recentResult: { id: "c2", title: "Migration friction themes", acceptedAt: T0 - 400_000 }, currentNodeId: "n4", locationLabel: "Insight branch" },
+  { id: "f", name: "Felix", role: "analyst", status: "failed", actionKey: "recent_failed", action: "Computing retention confidence interval", updatedAt: T0 - 200_000, currentNodeId: "n5", locationLabel: "Analysis node 7" },
+  { id: "s", name: "Sam", role: "web", status: "stale", actionKey: "stale", action: "Reviewing compliance documentation", updatedAt: T0 - 3_600_000, currentNodeId: "n6", locationLabel: "Compliance branch" },
+  { id: "o", name: "Omar", role: "reviewer", status: "offline", actionKey: "offline", action: "", updatedAt: T0 - 9_000_000 },
+  { id: "u", name: "Uma", role: "advisor", status: "unknown", actionKey: "unknown", action: "", updatedAt: T0 - 1_000 },
 ];
 
 describe("execution-overlay SSR preview renderer (node)", () => {

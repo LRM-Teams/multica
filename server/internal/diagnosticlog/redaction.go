@@ -43,7 +43,11 @@ func sanitizeEvidence(e Evidence) (diagnostic string, stderr string, truncated [
 	return diagnostic, stderr, truncated, false
 }
 
-func sanitizeText(value string) string {
+func sanitizeText(value string) string { return SanitizeText(value) }
+
+// SanitizeText removes credentials and unsafe diagnostics from an observability value.
+// It is the exported form of the package's established redaction behavior.
+func SanitizeText(value string) string {
 	value = strings.ToValidUTF8(value, "�")
 	value = ansiPattern.ReplaceAllString(value, "")
 	value = strings.Map(func(r rune) rune {

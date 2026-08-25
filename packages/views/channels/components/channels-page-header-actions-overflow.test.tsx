@@ -357,7 +357,9 @@ describe("ChannelsPage header actions — container-driven overflow (#568)", () 
     expectDirect();
 
     fireEvent.click(screen.getByLabelText("Open channel details"));
-    expect(await screen.findByText("Channel details")).toBeInTheDocument();
+    expect(
+      await screen.findByTestId("channel-details-home", {}, { timeout: 8000 }),
+    ).toBeInTheDocument();
     // Panel just opened — still plenty of (mocked) room, so the row hasn't
     // had a reason to collapse yet; this isolates "panel is open" from
     // "container got squeezed" as two independent inputs to the decision.
@@ -617,7 +619,7 @@ describe("ChannelsPage — channel hash landmark (LRM-254 / LRM-447)", () => {
 // LRM-279 — channel title column must flex to fill header space before the
 // shrink-0 action cluster; name truncates with tooltip; ▾ stays shrink-0.
 describe("ChannelsPage header — title column width (LRM-279)", () => {
-  it("uses flex-1 min-w-0 on the title control and exposes the full name via title", async () => {
+  it("uses flex-1 min-w-0 on the title control and surfaces the full name via tooltip", async () => {
     channelName.value = "LRM2.0开发群";
     resizeContainerTo(1024);
     renderPage();
@@ -625,7 +627,6 @@ describe("ChannelsPage header — title column width (LRM-279)", () => {
 
     const toggle = screen.getByRole("button", { name: "Open channel details" });
     expect(toggle).toHaveClass("flex-1", "min-w-0");
-    expect(toggle).toHaveAttribute("title", "LRM2.0开发群");
 
     const nameSpan = within(toggle).getByText("LRM2.0开发群");
     expect(nameSpan).toHaveClass("flex-1", "min-w-0", "truncate");

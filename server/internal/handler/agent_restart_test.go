@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/daemonws"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -64,14 +65,14 @@ func TestAgentRestartContractPure(t *testing.T) {
 	if _, ok := agentRestartStorageForMode("delete_agent"); ok {
 		t.Fatal("unknown mode was accepted")
 	}
-	if !workspaceRunnerAgentProcessCapabilityPresent([]string{"other", "workspace_runner_agent_process_v1"}) {
-		t.Fatal("Workspace Runner Agent process capability was not detected")
+	if !workspaceDaemonAgentProcessCapabilityPresent([]string{"other", "workspace_daemon_agent_process_v1"}) {
+		t.Fatal("WorkspaceDaemon Agent process capability was not detected")
 	}
-	if workspaceRunnerAgentProcessCapabilityPresent([]string{"other"}) {
-		t.Fatal("missing Workspace Runner Agent process capability was accepted")
+	if workspaceDaemonAgentProcessCapabilityPresent([]string{"other"}) {
+		t.Fatal("missing WorkspaceDaemon Agent process capability was accepted")
 	}
-	if !workspaceRunnerResetCapabilityPresent([]string{"other", "workspace_runner_agent_reset_workspace_v1"}) {
-		t.Fatal("Workspace Runner reset capability was not detected")
+	if !workspaceDaemonResetCapabilityPresent([]string{"other", "workspace_daemon_agent_reset_workspace_v1"}) {
+		t.Fatal("WorkspaceDaemon reset capability was not detected")
 	}
 }
 
@@ -287,14 +288,15 @@ func TestAgentRestartCreateDispatchesImmediateOperationToDaemon(t *testing.T) {
 	}
 
 	workspaceID, computerID, eventType, commandID, payload := notifier.snapshot()
-	stop, ok := payload.(protocol.WorkspaceRunnerAgentStopPayload)
+	stop, ok := payload.(protocol.AgentStopPayload)
+	_ = stop
 	if !ok {
 		t.Fatalf("command payload = %T, want Agent stop", payload)
 	}
 	if eventType != protocol.EventDaemonAgentStop || commandID != operation.ID {
 		t.Fatalf("command event=%q command=%q payload=%+v", eventType, commandID, stop)
 	}
-	if stop.AgentID != agentID || stop.LaunchID == "" {
+	if stop.AgentID != agentID || stop.AgentID == "" {
 		t.Fatalf("restart stop fence = %+v", stop)
 	}
 	if workspaceID != testWorkspaceID || computerID != "agent-restart-test-daemon" {
@@ -308,28 +310,23 @@ func TestAgentRestartRestartAdvancesStopThenStartThenActive(t *testing.T) {
 	}
 	agentID, runtimeID := createAgentRestartFixture(t, true)
 	const providerSessionID = "provider-session-before-restart"
-	var oldLaunchID string
-	if err := testPool.QueryRow(context.Background(), `SELECT launch_id::text FROM agent_runner_launch_projection WHERE agent_id = $1`, agentID).Scan(&oldLaunchID); err != nil {
-		t.Fatal(err)
-	}
 	identity := daemonws.ClientIdentity{DaemonID: "agent-restart-test-daemon", WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}}
 	runnerHandler := *testHandler
 	runnerHandler.runnerObservations = newRunnerObservationStore()
-	runnerHandler.runnerActivityCursor = newRunnerActivityCursorStore()
 	runnerHandler.RunnerPresenceSource = fakeRunnerPresenceSource{current: map[string]bool{
 		"agent-restart-test-daemon/" + testWorkspaceID + "/runner-instance": true,
 	}}
-	runnerHandler.observations().putStatus(testWorkspaceID, "agent-restart-test-daemon", "runner-instance", agentID, runtimeID, oldLaunchID, protocol.AgentStatusActive)
+	runnerHandler.observations().putStatus(testWorkspaceID, "agent-restart-test-daemon", "runner-instance", agentID, runtimeID, protocol.AgentStatusActive)
 	previousObservations := testHandler.runnerObservations
 	testHandler.runnerObservations = runnerHandler.runnerObservations
 	t.Cleanup(func() { testHandler.runnerObservations = previousObservations })
 	sessionFrame, err := json.Marshal(protocol.AgentSessionPayload{
-		AgentID: agentID, LaunchID: oldLaunchID, ProviderSessionID: providerSessionID,
+		AgentID: agentID, ProviderSessionID: providerSessionID,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := runnerHandler.HandleWorkspaceRunnerFrame(context.Background(), identity, "runner-instance", protocol.EventAgentSession, sessionFrame); err != nil {
+	if err := runnerHandler.HandleWorkspaceDaemonFrame(context.Background(), identity, "runner-instance", protocol.EventAgentSession, sessionFrame); err != nil {
 		t.Fatalf("record live provider session: %v", err)
 	}
 	notifier := &capturedAgentRestartNotifier{}
@@ -346,27 +343,147 @@ func TestAgentRestartRestartAdvancesStopThenStartThenActive(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, _, eventType, commandID, payload := notifier.snapshot()
-	stop, ok := payload.(protocol.WorkspaceRunnerAgentStopPayload)
-	if !ok || eventType != protocol.EventDaemonAgentStop || commandID != operation.ID || stop.AgentID != agentID || stop.LaunchID != oldLaunchID {
+	stop, ok := payload.(protocol.AgentStopPayload)
+	if !ok || eventType != protocol.EventDaemonAgentStop || commandID != operation.ID || stop.AgentID != agentID {
 		t.Fatalf("first restart command event=%q command=%q payload=%+v", eventType, commandID, payload)
 	}
 
-	if handled, err := testHandler.advanceAgentRestartFromStatus(context.Background(), identity, protocol.AgentStatusPayload{AgentID: agentID, LaunchID: uuid.NewString(), Status: protocol.AgentStatusInactive}); err != nil || handled {
+	if handled, err := testHandler.advanceAgentRestartFromStatus(context.Background(), identity, protocol.AgentStatusPayload{AgentID: agentID, Status: protocol.AgentStatusInactive}); err != nil || handled {
 		t.Fatalf("stale inactive advanced stop fence: handled=%v err=%v", handled, err)
 	}
-	if handled, err := testHandler.advanceAgentRestartFromStatus(context.Background(), identity, protocol.AgentStatusPayload{AgentID: agentID, LaunchID: oldLaunchID, Status: protocol.AgentStatusInactive}); err != nil || !handled {
+	testHandler.observations().putStatus(testWorkspaceID, identity.DaemonID, "runner-instance", agentID, runtimeID, protocol.AgentStatusInactive)
+	if handled, err := testHandler.advanceAgentRestartFromStatus(context.Background(), identity, protocol.AgentStatusPayload{AgentID: agentID, Status: protocol.AgentStatusInactive}); err != nil || !handled {
 		t.Fatalf("advance inactive handled=%v err=%v", handled, err)
 	}
 	_, _, eventType, commandID, payload = notifier.snapshot()
-	start, ok := payload.(protocol.WorkspaceRunnerAgentStartPayload)
-	if !ok || eventType != protocol.EventDaemonAgentStart || commandID != operation.ID || start.AgentID != agentID || start.RuntimeID != runtimeID || start.LaunchID == oldLaunchID || start.Config.SessionID != providerSessionID {
+	start, ok := payload.(protocol.AgentStartPayload)
+	if !ok || eventType != protocol.EventDaemonAgentStart || commandID != operation.ID || start.AgentID != agentID || start.RuntimeID != runtimeID || start.Config.SessionID != providerSessionID {
 		t.Fatalf("replacement restart command event=%q command=%q payload=%+v", eventType, commandID, payload)
 	}
-	if handled, err := testHandler.advanceAgentRestartFromStatus(context.Background(), identity, protocol.AgentStatusPayload{AgentID: agentID, LaunchID: start.LaunchID, Status: protocol.AgentStatusActive}); err != nil || !handled {
+	testHandler.observations().putStatus(testWorkspaceID, identity.DaemonID, "runner-instance", agentID, runtimeID, protocol.AgentStatusActive)
+	if handled, err := testHandler.advanceAgentRestartFromStatus(context.Background(), identity, protocol.AgentStatusPayload{AgentID: agentID, Status: protocol.AgentStatusActive}); err != nil || !handled {
 		t.Fatalf("advance active handled=%v err=%v", handled, err)
 	}
 	if _, ok := currentAgentRestart(t, agentID); ok {
 		t.Fatal("finished restart left an in-flight operation")
+	}
+}
+
+func TestAgentManualStopCancelsStartingRestartAndTargetsReplacement(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	agentID, runtimeID := createAgentRestartFixture(t, true)
+	notifier := &capturedAgentRestartNotifier{}
+	previous := testHandler.AgentRestartNotifier
+	testHandler.AgentRestartNotifier = notifier
+	t.Cleanup(func() { testHandler.AgentRestartNotifier = previous })
+
+	create := invokeCreateAgentRestart(t, agentID, uuid.NewString(), agentRestartStorageRestart)
+	if create.Code != http.StatusAccepted {
+		t.Fatalf("create status=%d body=%s", create.Code, create.Body.String())
+	}
+	_, _, _, _, payload := notifier.snapshot()
+	oldStop := payload.(protocol.AgentStopPayload)
+	_ = oldStop
+	identity := daemonws.ClientIdentity{DaemonID: "agent-restart-test-daemon", WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}}
+	setAgentRestartObservation(testHandler, identity, agentID, runtimeID, protocol.AgentStatusInactive)
+	if handled, err := testHandler.advanceAgentRestartFromStatus(context.Background(), identity, protocol.AgentStatusPayload{AgentID: agentID, Status: protocol.AgentStatusInactive}); err != nil || !handled {
+		t.Fatalf("advance stop handled=%v err=%v", handled, err)
+	}
+	_, _, _, _, payload = notifier.snapshot()
+	replacement := payload.(protocol.AgentStartPayload)
+
+	stop := invokeAgentLifecycleAction(t, agentID, "stop")
+	if stop.Code != http.StatusAccepted {
+		t.Fatalf("manual stop status=%d body=%s", stop.Code, stop.Body.String())
+	}
+	_, _, eventType, _, payload := notifier.snapshot()
+	manualStop := payload.(protocol.AgentStopPayload)
+	if eventType != protocol.EventDaemonAgentStop || manualStop.AgentID != agentID || replacement.AgentID != agentID || replacement.RuntimeID != runtimeID {
+		t.Fatalf("manual stop targeted %+v after Start %+v, want Agent %q on Runtime %q", manualStop, replacement, agentID, runtimeID)
+	}
+	if testHandler.restarts().has(agentID) {
+		t.Fatal("manual Stop left restart active")
+	}
+}
+
+func TestAgentManualStopPersistsDesiredStoppedState(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	agentID, runtimeID := createAgentRestartFixture(t, true)
+	notifier := &capturedAgentRestartNotifier{}
+	previous := testHandler.AgentRestartNotifier
+	testHandler.AgentRestartNotifier = notifier
+	t.Cleanup(func() { testHandler.AgentRestartNotifier = previous })
+
+	stop := invokeAgentLifecycleAction(t, agentID, "stop")
+	if stop.Code != http.StatusAccepted {
+		t.Fatalf("manual stop status=%d body=%s", stop.Code, stop.Body.String())
+	}
+	var stoppedAt pgtype.Timestamptz
+	if err := testPool.QueryRow(context.Background(), `SELECT stopped_at FROM agent WHERE id = $1`, agentID).Scan(&stoppedAt); err != nil {
+		t.Fatal(err)
+	}
+	if !stoppedAt.Valid {
+		t.Fatal("manual Stop did not persist the desired stopped state")
+	}
+	desired, err := testHandler.loadRunnerDesiredLaunches(context.Background(), daemonws.ClientIdentity{
+		DaemonID: "agent-restart-test-daemon", WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, launch := range desired {
+		if launch.agentID == agentID {
+			t.Fatalf("manually stopped Agent remained a desired launch: %+v", launch)
+		}
+	}
+
+	start := invokeAgentLifecycleAction(t, agentID, "start")
+	if start.Code != http.StatusAccepted {
+		t.Fatalf("manual start status=%d body=%s", start.Code, start.Body.String())
+	}
+	if err := testPool.QueryRow(context.Background(), `SELECT stopped_at FROM agent WHERE id = $1`, agentID).Scan(&stoppedAt); err != nil {
+		t.Fatal(err)
+	}
+	if stoppedAt.Valid {
+		t.Fatal("manual Start did not clear the desired stopped state")
+	}
+	desired, err = testHandler.loadRunnerDesiredLaunches(context.Background(), daemonws.ClientIdentity{
+		DaemonID: "agent-restart-test-daemon", WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, launch := range desired {
+		if launch.agentID == agentID {
+			return
+		}
+	}
+	t.Fatal("manually started Agent was not restored as a desired launch")
+}
+
+func TestAgentManualStopPersistsWhenWorkspaceDaemonIsUnavailable(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	agentID, _ := createAgentRestartFixture(t, true)
+	previous := testHandler.AgentRestartNotifier
+	testHandler.AgentRestartNotifier = rejectingAgentRestartNotifier{}
+	t.Cleanup(func() { testHandler.AgentRestartNotifier = previous })
+
+	stop := invokeAgentLifecycleAction(t, agentID, "stop")
+	if stop.Code != http.StatusAccepted {
+		t.Fatalf("manual stop status=%d body=%s, want accepted desired state", stop.Code, stop.Body.String())
+	}
+	var stoppedAt pgtype.Timestamptz
+	if err := testPool.QueryRow(context.Background(), `SELECT stopped_at FROM agent WHERE id = $1`, agentID).Scan(&stoppedAt); err != nil {
+		t.Fatal(err)
+	}
+	if !stoppedAt.Valid {
+		t.Fatal("undelivered manual Stop did not preserve the desired stopped state")
 	}
 }
 
@@ -393,26 +510,38 @@ func TestAgentRestartSessionClearsSessionThenStartsFresh(t *testing.T) {
 	previous := testHandler.AgentRestartNotifier
 	testHandler.AgentRestartNotifier = notifier
 	t.Cleanup(func() { testHandler.AgentRestartNotifier = previous })
+	if _, err := testPool.Exec(context.Background(), `UPDATE agent SET stopped_at = now() WHERE id = $1`, agentID); err != nil {
+		t.Fatal(err)
+	}
 
 	create := invokeCreateAgentRestart(t, agentID, uuid.NewString(), agentRestartStorageSession)
 	if create.Code != http.StatusAccepted {
 		t.Fatalf("create status=%d body=%s", create.Code, create.Body.String())
+	}
+	var stoppedAt pgtype.Timestamptz
+	if err := testPool.QueryRow(context.Background(), `SELECT stopped_at FROM agent WHERE id = $1`, agentID).Scan(&stoppedAt); err != nil {
+		t.Fatal(err)
+	}
+	if stoppedAt.Valid {
+		t.Fatal("explicit Reset did not clear the desired stopped state")
 	}
 	var operation AgentRestartOperation
 	if err := json.Unmarshal(create.Body.Bytes(), &operation); err != nil {
 		t.Fatal(err)
 	}
 	_, _, _, _, payload := notifier.snapshot()
-	stop, ok := payload.(protocol.WorkspaceRunnerAgentStopPayload)
+	stop, ok := payload.(protocol.AgentStopPayload)
+	_ = stop
 	if !ok {
 		t.Fatalf("session reset first payload=%T, want stop", payload)
 	}
 	identity := daemonws.ClientIdentity{DaemonID: "agent-restart-test-daemon", WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}}
-	if handled, err := testHandler.advanceAgentRestartFromStatus(context.Background(), identity, protocol.AgentStatusPayload{AgentID: agentID, LaunchID: stop.LaunchID, Status: protocol.AgentStatusInactive}); err != nil || !handled {
+	setAgentRestartObservation(testHandler, identity, agentID, runtimeID, protocol.AgentStatusInactive)
+	if handled, err := testHandler.advanceAgentRestartFromStatus(context.Background(), identity, protocol.AgentStatusPayload{AgentID: agentID, Status: protocol.AgentStatusInactive}); err != nil || !handled {
 		t.Fatalf("advance session stop handled=%v err=%v", handled, err)
 	}
 	_, _, eventType, commandID, payload := notifier.snapshot()
-	start, ok := payload.(protocol.WorkspaceRunnerAgentStartPayload)
+	start, ok := payload.(protocol.AgentStartPayload)
 	if !ok || eventType != protocol.EventDaemonAgentStart || commandID != operation.ID || start.Config.SessionID != "" {
 		t.Fatalf("fresh session start event=%q command=%q payload=%+v", eventType, commandID, payload)
 	}
@@ -428,11 +557,66 @@ func TestAgentRestartSessionClearsSessionThenStartsFresh(t *testing.T) {
 	if chatProviderSessionID != nil || inboxProviderSessionID != nil {
 		t.Fatalf("provider sessions after session reset = chat:%v inbox:%v, want both NULL", chatProviderSessionID, inboxProviderSessionID)
 	}
-	if handled, err := testHandler.advanceAgentRestartFromStatus(context.Background(), identity, protocol.AgentStatusPayload{AgentID: agentID, LaunchID: start.LaunchID, Status: protocol.AgentStatusActive}); err != nil || !handled {
+	setAgentRestartObservation(testHandler, identity, agentID, runtimeID, protocol.AgentStatusActive)
+	if handled, err := testHandler.advanceAgentRestartFromStatus(context.Background(), identity, protocol.AgentStatusPayload{AgentID: agentID, Status: protocol.AgentStatusActive}); err != nil || !handled {
 		t.Fatalf("advance session active handled=%v err=%v", handled, err)
 	}
 	if _, ok := currentAgentRestart(t, agentID); ok {
 		t.Fatal("finished session reset left an in-flight operation")
+	}
+}
+
+func TestAgentRestartSessionInactiveCannotClearAfterLifecycleCancellation(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	agentID, runtimeID := createAgentRestartFixture(t, true)
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE agent
+		SET provider_session_id = 'provider-session-kept'
+		WHERE id = $1 AND runtime_id = $2
+	`, agentID, runtimeID); err != nil {
+		t.Fatal(err)
+	}
+	notifier := &capturedAgentRestartNotifier{}
+	previous := testHandler.AgentRestartNotifier
+	testHandler.AgentRestartNotifier = notifier
+	t.Cleanup(func() { testHandler.AgentRestartNotifier = previous })
+
+	create := invokeCreateAgentRestart(t, agentID, uuid.NewString(), agentRestartStorageSession)
+	if create.Code != http.StatusAccepted {
+		t.Fatalf("create status=%d body=%s", create.Code, create.Body.String())
+	}
+	_, _, _, _, payload := notifier.snapshot()
+	stop := payload.(protocol.AgentStopPayload)
+	_ = stop
+	identity := daemonws.ClientIdentity{DaemonID: "agent-restart-test-daemon", WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}}
+	setAgentRestartObservation(testHandler, identity, agentID, runtimeID, protocol.AgentStatusInactive)
+
+	testHandler.restarts().lifecycleMu.Lock()
+	done := make(chan error, 1)
+	go func() {
+		_, err := testHandler.advanceAgentRestartFromStatus(context.Background(), identity, protocol.AgentStatusPayload{
+			AgentID: agentID, Status: protocol.AgentStatusInactive,
+		})
+		done <- err
+	}()
+	testHandler.restarts().finish(agentID)
+	testHandler.restarts().lifecycleMu.Unlock()
+	if err := <-done; err != nil {
+		t.Fatalf("cancelled session restart status: %v", err)
+	}
+
+	var sessionID string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT COALESCE(provider_session_id, '')
+		FROM agent
+		WHERE id = $1 AND runtime_id = $2
+	`, agentID, runtimeID).Scan(&sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if sessionID != "provider-session-kept" {
+		t.Fatalf("cancelled session restart cleared provider session: %q", sessionID)
 	}
 }
 
@@ -455,30 +639,33 @@ func TestAgentRestartFullResetWaitsForWorkspaceResultBeforeFreshStart(t *testing
 		t.Fatal(err)
 	}
 	_, _, eventType, commandID, payload := notifier.snapshot()
-	stop, ok := payload.(protocol.WorkspaceRunnerAgentStopPayload)
+	stop, ok := payload.(protocol.AgentStopPayload)
+	_ = stop
 	if !ok || eventType != protocol.EventDaemonAgentStop || commandID != operation.ID {
 		t.Fatalf("full reset stop event=%q command=%q payload=%+v", eventType, commandID, payload)
 	}
 	identity := daemonws.ClientIdentity{DaemonID: "agent-restart-test-daemon", WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}}
-	if handled, err := testHandler.advanceAgentRestartFromStatus(context.Background(), identity, protocol.AgentStatusPayload{AgentID: agentID, LaunchID: stop.LaunchID, Status: protocol.AgentStatusInactive}); err != nil || !handled {
+	setAgentRestartObservation(testHandler, identity, agentID, runtimeID, protocol.AgentStatusInactive)
+	if handled, err := testHandler.advanceAgentRestartFromStatus(context.Background(), identity, protocol.AgentStatusPayload{AgentID: agentID, Status: protocol.AgentStatusInactive}); err != nil || !handled {
 		t.Fatalf("advance full reset stop handled=%v err=%v", handled, err)
 	}
 	_, _, eventType, commandID, payload = notifier.snapshot()
-	reset, ok := payload.(protocol.WorkspaceRunnerAgentResetWorkspacePayload)
+	reset, ok := payload.(protocol.AgentWorkspaceResetPayload)
 	if !ok || eventType != protocol.EventDaemonAgentResetWorkspace || commandID != operation.ID || reset.OperationID != operation.ID || reset.AgentID != agentID {
 		t.Fatalf("full reset command event=%q command=%q payload=%+v", eventType, commandID, payload)
 	}
-	if err := testHandler.recordAgentWorkspaceResetResult(context.Background(), identity, protocol.WorkspaceRunnerAgentResetWorkspaceResultPayload{
+	if err := testHandler.recordAgentWorkspaceResetResult(context.Background(), identity, protocol.AgentWorkspaceResetResultPayload{
 		OperationID: operation.ID, AgentID: agentID, Status: protocol.AgentResetWorkspaceSucceeded,
 	}); err != nil {
 		t.Fatalf("record workspace reset result: %v", err)
 	}
 	_, _, eventType, commandID, payload = notifier.snapshot()
-	start, ok := payload.(protocol.WorkspaceRunnerAgentStartPayload)
-	if !ok || eventType != protocol.EventDaemonAgentStart || commandID != operation.ID || start.Config.SessionID != "" {
+	start, ok := payload.(protocol.AgentStartPayload)
+	if !ok || eventType != protocol.EventDaemonAgentStart || commandID != operation.ID || start.AgentID != agentID || start.RuntimeID != runtimeID || start.Config.SessionID != "" {
 		t.Fatalf("fresh replacement command event=%q command=%q payload=%+v", eventType, commandID, payload)
 	}
-	if handled, err := testHandler.advanceAgentRestartFromStatus(context.Background(), identity, protocol.AgentStatusPayload{AgentID: agentID, LaunchID: start.LaunchID, Status: protocol.AgentStatusActive}); err != nil || !handled {
+	setAgentRestartObservation(testHandler, identity, agentID, runtimeID, protocol.AgentStatusActive)
+	if handled, err := testHandler.advanceAgentRestartFromStatus(context.Background(), identity, protocol.AgentStatusPayload{AgentID: agentID, Status: protocol.AgentStatusActive}); err != nil || !handled {
 		t.Fatalf("advance full reset active handled=%v err=%v", handled, err)
 	}
 	if _, ok := currentAgentRestart(t, agentID); ok {
@@ -486,7 +673,7 @@ func TestAgentRestartFullResetWaitsForWorkspaceResultBeforeFreshStart(t *testing
 	}
 }
 
-func TestWorkspaceRunnerActiveStatusCompletesRestartOperation(t *testing.T) {
+func TestWorkspaceDaemonActiveStatusCompletesRestartOperation(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -509,18 +696,17 @@ func TestWorkspaceRunnerActiveStatusCompletesRestartOperation(t *testing.T) {
 		RuntimeIDs:  []string{runtimeID},
 	}
 	_, _, _, _, firstPayload := notifier.snapshot()
-	stop, ok := firstPayload.(protocol.WorkspaceRunnerAgentStopPayload)
+	stop, ok := firstPayload.(protocol.AgentStopPayload)
+	_ = stop
 	if !ok {
 		t.Fatalf("first restart payload=%T, want stop", firstPayload)
 	}
-	if handled, err := testHandler.advanceAgentRestartFromStatus(context.Background(), identity, protocol.AgentStatusPayload{AgentID: agentID, LaunchID: stop.LaunchID, Status: protocol.AgentStatusInactive}); err != nil || !handled {
+	setAgentRestartObservation(testHandler, identity, agentID, runtimeID, protocol.AgentStatusInactive)
+	if handled, err := testHandler.advanceAgentRestartFromStatus(context.Background(), identity, protocol.AgentStatusPayload{AgentID: agentID, Status: protocol.AgentStatusInactive}); err != nil || !handled {
 		t.Fatalf("advance stop handled=%v err=%v", handled, err)
 	}
-	var launchID string
-	if err := testPool.QueryRow(context.Background(), `SELECT launch_id::text FROM agent_runner_launch_projection WHERE agent_id = $1`, agentID).Scan(&launchID); err != nil {
-		t.Fatal(err)
-	}
-	status := protocol.AgentStatusPayload{AgentID: agentID, LaunchID: launchID, Status: protocol.AgentStatusActive}
+	setAgentRestartObservation(testHandler, identity, agentID, runtimeID, protocol.AgentStatusActive)
+	status := protocol.AgentStatusPayload{AgentID: agentID, Status: protocol.AgentStatusActive}
 	for attempt := 0; attempt < 2; attempt++ {
 		if _, err := testHandler.advanceAgentRestartFromStatus(context.Background(), identity, status); err != nil {
 			t.Fatalf("record active status attempt %d: %v", attempt+1, err)
@@ -553,7 +739,7 @@ func TestAgentRestartUnavailableRunnerDoesNotFabricateCompletion(t *testing.T) {
 	notifier := &capturedAgentRestartNotifier{}
 	testHandler.AgentRestartNotifier = notifier
 	identity := daemonws.ClientIdentity{DaemonID: "agent-restart-test-daemon", WorkspaceID: testWorkspaceID}
-	if err := testHandler.recordWorkspaceRunnerReady(context.Background(), identity, "runner-instance", nil); err != nil {
+	if err := testHandler.recordWorkspaceDaemonReady(context.Background(), identity, "runner-instance", nil); err != nil {
 		t.Fatalf("Runner ready after undelivered restart: %v", err)
 	}
 	if _, _, eventType, _, payload := notifier.snapshot(); eventType != "" || payload != nil {
@@ -580,18 +766,20 @@ func TestAgentRestartReadyDoesNotRedriveWorkspaceReset(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, _, _, _, payload := notifier.snapshot()
-	stop, ok := payload.(protocol.WorkspaceRunnerAgentStopPayload)
+	stop, ok := payload.(protocol.AgentStopPayload)
+	_ = stop
 	if !ok {
 		t.Fatalf("full reset first payload=%T, want stop", payload)
 	}
 	identity := daemonws.ClientIdentity{DaemonID: "agent-restart-test-daemon", WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}}
-	if handled, err := testHandler.advanceAgentRestartFromStatus(context.Background(), identity, protocol.AgentStatusPayload{AgentID: agentID, LaunchID: stop.LaunchID, Status: protocol.AgentStatusInactive}); err != nil || !handled {
+	setAgentRestartObservation(testHandler, identity, agentID, runtimeID, protocol.AgentStatusInactive)
+	if handled, err := testHandler.advanceAgentRestartFromStatus(context.Background(), identity, protocol.AgentStatusPayload{AgentID: agentID, Status: protocol.AgentStatusInactive}); err != nil || !handled {
 		t.Fatalf("advance full reset stop handled=%v err=%v", handled, err)
 	}
 
 	redriven := &capturedAgentRestartNotifier{}
 	testHandler.AgentRestartNotifier = redriven
-	if err := testHandler.recordWorkspaceRunnerReady(context.Background(), identity, "runner-instance", nil); err != nil {
+	if err := testHandler.recordWorkspaceDaemonReady(context.Background(), identity, "runner-instance", nil); err != nil {
 		t.Fatalf("Runner ready during workspace reset: %v", err)
 	}
 	if _, _, eventType, _, payload := redriven.snapshot(); eventType != "" || payload != nil {
@@ -614,9 +802,11 @@ func TestAgentRestartReconcileDoesNotRedriveStart(t *testing.T) {
 		t.Fatalf("create status=%d body=%s", create.Code, create.Body.String())
 	}
 	_, _, _, _, payload := notifier.snapshot()
-	stop := payload.(protocol.WorkspaceRunnerAgentStopPayload)
+	stop := payload.(protocol.AgentStopPayload)
+	_ = stop
 	identity := daemonws.ClientIdentity{DaemonID: "agent-restart-test-daemon", WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}}
-	if handled, err := testHandler.advanceAgentRestartFromStatus(context.Background(), identity, protocol.AgentStatusPayload{AgentID: agentID, LaunchID: stop.LaunchID, Status: protocol.AgentStatusInactive}); err != nil || !handled {
+	setAgentRestartObservation(testHandler, identity, agentID, runtimeID, protocol.AgentStatusInactive)
+	if handled, err := testHandler.advanceAgentRestartFromStatus(context.Background(), identity, protocol.AgentStatusPayload{AgentID: agentID, Status: protocol.AgentStatusInactive}); err != nil || !handled {
 		t.Fatalf("advance session stop handled=%v err=%v", handled, err)
 	}
 	if !testHandler.restarts().has(agentID) {
@@ -749,20 +939,17 @@ func createAgentRestartFixtureWithProvider(t *testing.T, capable bool, provider 
 	t.Helper()
 	capabilities := `[]`
 	if capable {
-		capabilities = `["workspace_runner_agent_process_v1","workspace_runner_agent_reset_workspace_v1"]`
+		capabilities = `["workspace_daemon_agent_process_v1","workspace_daemon_agent_reset_workspace_v1"]`
 	}
 	ctx := context.Background()
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (
-			workspace_id, name, runtime_mode, provider, status,
-			device_info, metadata, owner_id, visibility, last_seen_at, daemon_id
-		)
+		INSERT INTO agent_runtime (workspace_id, name, runtime_mode, provider, status, device_info, metadata, visibility, last_seen_at, daemon_id)
 		VALUES (
-			$1, $2, 'local', $3, 'online',
-			'', jsonb_build_object('capabilities', $4::jsonb), $5, 'private', now(), 'agent-restart-test-daemon'
+			$1,  $2,  'local',  $3,  'online', 
+			'',  jsonb_build_object('capabilities', $4::jsonb),  'private',  now(),  'agent-restart-test-daemon'
 		)
 		RETURNING id
-	`, testWorkspaceID, "restart-runtime-"+randomID(), provider, capabilities, testUserID).Scan(&runtimeID); err != nil {
+	`, testWorkspaceID, "restart-runtime-"+randomID(), provider, capabilities).Scan(&runtimeID); err != nil {
 		t.Fatalf("create restart runtime: %v", err)
 	}
 	if err := testPool.QueryRow(ctx, `
@@ -826,6 +1013,29 @@ func invokeCreateAgentRestart(t *testing.T, agentID, _ string, action agentResta
 	req = withURLParam(req, "id", agentID)
 	testHandler.ResetAgent(rec, req)
 	return rec
+}
+
+func invokeAgentLifecycleAction(t *testing.T, agentID, action string) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	req := withURLParam(
+		newRequestAs(testUserID, http.MethodPost, "/api/agents/"+agentID+"/"+action, nil),
+		"id", agentID,
+	)
+	if action == "start" {
+		testHandler.StartAgent(rec, req)
+	} else {
+		testHandler.StopAgent(rec, req)
+	}
+	return rec
+}
+
+func setAgentRestartObservation(h *Handler, identity daemonws.ClientIdentity, agentID, runtimeID, status string) {
+	const daemonInstanceID = "agent-restart-test-instance"
+	h.RunnerPresenceSource = fakeRunnerPresenceSource{current: map[string]bool{
+		identity.DaemonID + "/" + identity.WorkspaceID + "/" + daemonInstanceID: true,
+	}}
+	h.observations().putStatus(identity.WorkspaceID, identity.DaemonID, daemonInstanceID, agentID, runtimeID, status)
 }
 
 func currentAgentRestart(t *testing.T, agentID string) (activeAgentRestartState, bool) {

@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/jackc/pgx/v5/pgtype"
+
 	"github.com/multica-ai/multica/server/internal/auth"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -82,7 +84,7 @@ func SandboxJobAuth(queries *db.Queries) func(http.Handler) http.Handler {
 				writeError(w, http.StatusUnauthorized, "invalid sandbox job token")
 				return
 			}
-			job, err := queries.GetSandboxJobByTokenHash(r.Context(), auth.HashToken(token))
+			job, err := queries.GetSandboxJobByTokenHash(r.Context(), pgtype.Text{String: auth.HashToken(token), Valid: true})
 			if err != nil {
 				slog.Warn("sandbox_auth: invalid job token", "path", r.URL.Path, "error", err)
 				writeError(w, http.StatusUnauthorized, "invalid sandbox job token")

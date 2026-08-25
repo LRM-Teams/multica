@@ -25,6 +25,11 @@ const (
 	// RefID is optional: empty means create a new page; set it to target an
 	// existing note_page. Label may carry a suggested title.
 	MessagePartTypeNoteWrite = "note_write"
+	// MessagePartTypePeriodBriefInsert is the two-button insert card on a
+	// Notes-bubble Period Brief result (append below the issuing page, or
+	// create a child page). RefID is the run id; SelectedOptionID is set
+	// after the human picks append or child.
+	MessagePartTypePeriodBriefInsert = "period_brief_insert"
 	// MessagePartTypeConfirmation is the structured acknowledgement part (LRM-1523
 	// L1). A pure confirmation carries no new information, no @-directive and no
 	// action, and must not wake any agent.
@@ -319,6 +324,13 @@ type AgentDeliverPayload struct {
 	Traceparent string                 `json:"traceparent,omitempty"`
 	RunID       string                 `json:"runId,omitempty"`
 	RunAgentID  string                 `json:"runAgentId,omitempty"`
+	// MemoryType / ExploreAgents / ExploreMaxRounds carry the workspace's
+	// effective graph memory profile at delivery time (spec §10). The daemon
+	// caches them per workspace for the resident-message memory path; empty
+	// means "no workspace profile" (env defaults apply).
+	MemoryType       string `json:"memory_type,omitempty"`
+	ExploreAgents    int    `json:"explore_agents,omitempty"`
+	ExploreMaxRounds int    `json:"explore_max_rounds,omitempty"`
 }
 
 // AgentDeliverAckPayload confirms only per-Agent provider acceptance, Pending
@@ -419,7 +431,9 @@ type ReadWorkdirFileResponsePayload struct {
 // WriteWorkdirFileRequestPayload is pushed server→daemon to replace one UTF-8
 // text file inside a confined workdir root. ExpectedContentHash, when present,
 // must match the current file hash or the daemon returns Conflict without
-// modifying the file.
+// modifying the file. Create, when true, allows the daemon to create a missing
+// file (and parent directories) instead of returning Missing; agent-file
+// callers leave it false so the RPC stays edit-only.
 type WriteWorkdirFileRequestPayload struct {
 	RequestID           string `json:"request_id"`
 	RuntimeID           string `json:"runtime_id"`
@@ -428,6 +442,7 @@ type WriteWorkdirFileRequestPayload struct {
 	Content             string `json:"content"`
 	ExpectedContentHash string `json:"expected_content_hash,omitempty"`
 	MaxBytes            int    `json:"max_bytes,omitempty"`
+	Create              bool   `json:"create,omitempty"`
 }
 
 // WriteWorkdirFileResponsePayload is the daemon→server reply for a text write.
@@ -557,30 +572,22 @@ const (
 	DaemonCapabilityMemoryCrossDeviceSync    = "memory_cross_device_sync_v2"
 	DaemonCapabilityRestrictedExecution      = "restricted_execution_profiles_v1"
 	DaemonCapabilityReminderVersionedCache   = "reminder_versioned_cache_v1"
-	// DaemonCapabilityReminderLocalInbox selects the Raft 1.0.16 delivery
-	// contract: the owner daemon accepts a due item locally and reports only a
-	// fire receipt to the server. A server must not also push transient owner
-	// input to a runtime that advertises this capability.
-	DaemonCapabilityReminderLocalInbox = "reminder_local_inbox_v1"
-	// DaemonCapabilityReminderTransientInput gates the owner-only, idle-only
-	// Reminder system input. Unlike canonical Message delivery, this transport
-	// is best-effort and creates no queue, receipt, or reconnect replay.
-	DaemonCapabilityReminderTransientInput = "reminder_transient_owner_input_v1"
-	// DaemonCapabilityWorkspaceRunnerAgentReset gates Raft's discrete
+	DaemonCapabilityReminderFireRequest      = "reminder:fire-request-v2"
+	// DaemonCapabilityWorkspaceDaemonAgentReset gates Raft's discrete
 	// agent:reset-workspace command plus Multica's terminal reset receipt.
-	DaemonCapabilityWorkspaceRunnerAgentReset = "workspace_runner_agent_reset_workspace_v1"
+	DaemonCapabilityWorkspaceDaemonAgentReset = "workspace_daemon_agent_reset_workspace_v1"
 	// DaemonCapabilityMachineUpgrade gates the machine-scoped upgrade
 	// operation protocol. Older daemons continue to receive no machine action
 	// and therefore cannot accidentally claim or complete an operation.
 	DaemonCapabilityMachineUpgrade = "machine_upgrade_v1"
-	// DaemonCapabilityWorkspaceRunnerAgentProcess selects the Raft-shaped
+	// DaemonCapabilityWorkspaceDaemonAgentProcess selects the Raft-shaped
 	// agent:start / agent:stop process-control boundary.
-	DaemonCapabilityWorkspaceRunnerAgentProcess = "workspace_runner_agent_process_v1"
-	// DaemonCapabilityWorkspaceRunnerControlPlane selects the current ready
-	// Workspace Runner as the sole carrier for heartbeat actions belonging to
+	DaemonCapabilityWorkspaceDaemonAgentProcess = "workspace_daemon_agent_process_v1"
+	// DaemonCapabilityWorkspaceDaemonControlPlane selects the current ready
+	// WorkspaceDaemon as the sole carrier for heartbeat actions belonging to
 	// that Workspace. Runtime-multiplexed WS and HTTP heartbeats remain legacy
 	// adapters for older daemons and must not execute actions for this Runner.
-	DaemonCapabilityWorkspaceRunnerControlPlane = "workspace_runner_control_plane_v1"
+	DaemonCapabilityWorkspaceDaemonControlPlane = "workspace_daemon_control_plane_v1"
 )
 
 // ReminderTimerJob is the complete server-owned timer projection cached by
@@ -590,27 +597,7 @@ type ReminderTimerJob struct {
 	OwnerAgentID string `json:"owner_agent_id"`
 	Version      int64  `json:"version"`
 	FireAt       string `json:"fire_at"`
-	// LocalInput is the bounded, owner-authorized material needed by the
-	// Computer-local Inbox. Nil identifies the legacy server-pushed input
-	// contract and is retained only for rolling upgrade compatibility.
-	LocalInput *ReminderLocalInputPayload `json:"local_input,omitempty"`
-}
-
-// ReminderLocalInputPayload is persisted with one timer revision so the
-// owner Computer can wake its Agent without waiting for a server round trip.
-// It deliberately carries no canonical Message identity or delivery cursor.
-type ReminderLocalInputPayload struct {
-	Title      string                       `json:"title"`
-	Anchor     ReminderOwnerInputAnchor     `json:"anchor"`
-	Occurrence ReminderLocalInputOccurrence `json:"occurrence"`
-}
-
-type ReminderLocalInputOccurrence struct {
-	OccurrenceID string `json:"occurrence_id"`
-	ScheduledFor string `json:"scheduled_for"`
-	DueAt        string `json:"due_at"`
-	Cadence      string `json:"cadence,omitempty"`
-	Timezone     string `json:"timezone,omitempty"`
+	Title        string `json:"title"`
 }
 
 type ReminderUpsertPayload struct {
@@ -635,74 +622,30 @@ type ReminderSnapshotPayload struct {
 	Reminders []ReminderTimerJob `json:"reminders"`
 }
 
-type ReminderFireAttemptPayload struct {
-	AgentID       string `json:"agent_id"`
-	RuntimeID     string `json:"runtime_id"`
-	ReminderID    string `json:"reminder_id"`
+type ReminderFireRequestPayload struct {
+	AgentID       string `json:"agentId"`
+	ReminderID    string `json:"reminderId"`
 	Version       int64  `json:"version"`
-	FiredAtClient string `json:"fired_at_client"`
+	RequestID     string `json:"requestId"`
+	FiredAtClient string `json:"firedAtClient"`
 }
 
-type ReminderFireAckPayload struct {
-	AgentID    string `json:"agent_id"`
-	ReminderID string `json:"reminder_id"`
+type ReminderFireRequestResultPayload struct {
+	AgentID      string `json:"agentId"`
+	ReminderID   string `json:"reminderId"`
+	Version      int64  `json:"version"`
+	RequestID    string `json:"requestId"`
+	Outcome      string `json:"outcome"`
+	Fired        bool   `json:"fired,omitempty"`
+	Catchup      bool   `json:"catchup,omitempty"`
+	RetryAfterMS int64  `json:"retryAfterMs,omitempty"`
+	Reason       string `json:"reason,omitempty"`
+}
+
+type ReminderFireReceiptAckPayload struct {
+	AgentID    string `json:"agentId"`
+	ReminderID string `json:"reminderId"`
 	Version    int64  `json:"version"`
-}
-
-type ReminderFireResultPayload struct {
-	Ack    ReminderFireAckPayload `json:"ack"`
-	Upsert *ReminderUpsertPayload `json:"upsert,omitempty"`
-	Cancel *ReminderCancelPayload `json:"cancel,omitempty"`
-}
-
-// AgentTransientDeliverPayload is the non-durable branch of the Workspace
-// Runner agent:deliver union. Canonical Messages keep AgentDeliverPayload;
-// transient inputs share transport and resident-turn admission without gaining
-// Message identity, cursor, replay, acknowledgement, or Activity semantics.
-type AgentTransientDeliverPayload struct {
-	Kind      string                    `json:"kind"`
-	Transient bool                      `json:"transient"`
-	Reminder  ReminderOwnerInputPayload `json:"reminder"`
-}
-
-const AgentTransientDeliverKindReminder = "reminder"
-
-// ReminderOwnerInputPayload is one post-commit, best-effort Reminder input for
-// the current owner placement. It is deliberately not a Message projection and
-// carries no delivery identity or acknowledgement contract.
-type ReminderOwnerInputPayload struct {
-	WorkspaceID string                       `json:"workspace_id"`
-	AgentID     string                       `json:"agent_id"`
-	RuntimeID   string                       `json:"runtime_id"`
-	ReminderID  string                       `json:"reminder_id"`
-	Version     int64                        `json:"version"`
-	Title       string                       `json:"title"`
-	Anchor      ReminderOwnerInputAnchor     `json:"anchor"`
-	Occurrence  ReminderOwnerInputOccurrence `json:"occurrence"`
-}
-
-// ReminderOwnerInputAnchor is the already-authorized return surface and a
-// bounded excerpt from the immutable Message Anchor. When Available is false,
-// every other field must be empty so unavailable context cannot leak.
-type ReminderOwnerInputAnchor struct {
-	Available           bool   `json:"available"`
-	ChannelID           string `json:"channel_id,omitempty"`
-	MessageID           string `json:"message_id,omitempty"`
-	ThreadRootMessageID string `json:"thread_root_message_id,omitempty"`
-	Target              string `json:"target,omitempty"`
-	ReplyTarget         string `json:"reply_target,omitempty"`
-	Excerpt             string `json:"excerpt,omitempty"`
-}
-
-// ReminderOwnerInputOccurrence supplies only bounded scheduling context for
-// the committed fire. It is diagnostic context inside the private input, not a
-// second lifecycle or delivery record.
-type ReminderOwnerInputOccurrence struct {
-	OccurrenceID string `json:"occurrence_id"`
-	ScheduledFor string `json:"scheduled_for"`
-	DueAt        string `json:"due_at"`
-	Cadence      string `json:"cadence,omitempty"`
-	Timezone     string `json:"timezone,omitempty"`
 }
 
 const (
@@ -797,35 +740,47 @@ type TaskMessagePayload struct {
 	CreatedAt  string         `json:"created_at,omitempty"`
 }
 
-// GraphMemoryJudgeKickPayload is sent from daemon to server after a
-// graph-memory recall was handed to the downstream agent, kicking the
-// asynchronous judge + delayed-reward flow (design §5.3, Q18/Q28). The
-// daemon has no DB access for the judge's downstream history and no RL
-// bridge configuration, so judging and reward composition run server-side
-// (service.GraphMemoryJudgeService); the daemon only reports the recall.
-type GraphMemoryJudgeKickPayload struct {
-	TraceID string   `json:"trace_id"`
-	TaskID  string   `json:"task_id"` // agent_run_id of the downstream task
-	Query   string   `json:"query"`
-	Summary string   `json:"summary,omitempty"`
-	NodeIDs []string `json:"node_ids,omitempty"`
-	Rounds  int      `json:"rounds"`
-	Version int      `json:"version"`
-	// AgentRuns carries the per-trajectory round/error accounting of K-way
-	// explore (Q17) so the server-side reward composer can apply the
-	// round-cost term per run.
-	AgentRuns []GraphMemoryExploreRunPayload `json:"agent_runs,omitempty"`
+// GraphMemoryRecallRequest is the daemon's call to the server-authoritative
+// recall endpoint (spec §1/§3/§14). Only trace_id, task_id, runtime_id and
+// query are inputs; the workspace/daemon identity comes from the
+// authenticated daemon capability. Every remaining field is a caller-side
+// diagnostic hint and is never consulted for resolution (A14).
+type GraphMemoryRecallRequest struct {
+	TraceID   string `json:"trace_id"`
+	TaskID    string `json:"task_id"`
+	RuntimeID string `json:"runtime_id"`
+	Query     string `json:"query"`
+
+	GraphKind    string `json:"graph_kind,omitempty"`
+	GraphOwnerID string `json:"graph_owner_id,omitempty"`
+	GraphVersion int    `json:"graph_version,omitempty"`
+	TrainingMode string `json:"training_mode,omitempty"`
+	K            int    `json:"k,omitempty"`
 }
 
-// GraphMemoryExploreRunPayload is the wire shape of one explore trajectory
-// inside GraphMemoryJudgeKickPayload (mirrors memorygraph.ExploreRun minus
-// the fields the judge/reward flow does not need).
-type GraphMemoryExploreRunPayload struct {
-	RunID  string `json:"run_id"`
-	Seed   int    `json:"seed"`
-	Found  bool   `json:"found"`
-	Rounds int    `json:"rounds"`
-	Error  string `json:"error,omitempty"`
+// GraphMemoryRecallCitation identifies one graph node cited by a bounded
+// server-side recall injection.
+type GraphMemoryRecallCitation struct {
+	NodeID    string `json:"node_id"`
+	Level     int    `json:"level"`
+	Epistemic string `json:"epistemic"`
+}
+
+// GraphMemoryRecallResponse is the bounded outcome returned by the daemon
+// graph-memory recall endpoint.
+type GraphMemoryRecallResponse struct {
+	RecallID     string                      `json:"recall_id"`
+	TraceID      string                      `json:"trace_id"`
+	Status       string                      `json:"status"`
+	Replayed     bool                        `json:"replayed"`
+	K            int                         `json:"k"`
+	GraphKind    string                      `json:"graph_kind"`
+	GraphVersion int                         `json:"graph_version"`
+	Found        bool                        `json:"found"`
+	Summary      string                      `json:"summary"`
+	Citations    []GraphMemoryRecallCitation `json:"citations"`
+	Rounds       int                         `json:"rounds"`
+	Injection    string                      `json:"injection"`
 }
 
 // DaemonRegisterPayload is sent from daemon to server on connection.
@@ -936,7 +891,6 @@ type ChannelTypingPayload struct {
 // identical semantics.
 type DaemonHeartbeatRequestPayload struct {
 	RuntimeID                 string                   `json:"runtime_id"`
-	ComputerGeneration        int64                    `json:"computer_generation,omitempty"` // ignored; liveness is the connect socket
 	SupportsBatchImport       bool                     `json:"supports_batch_import,omitempty"`
 	SupportsMemoryCuration    bool                     `json:"supports_memory_curation,omitempty"`
 	ActiveMemoryCurationRunID string                   `json:"active_memory_curation_run_id,omitempty"`
@@ -958,7 +912,6 @@ type DaemonHeartbeatAckPayload struct {
 	Status                  string                                  `json:"status"`
 	RuntimeGone             bool                                    `json:"runtime_gone,omitempty"`
 	PendingUpdate           *DaemonHeartbeatPendingUpdate           `json:"pending_update,omitempty"`
-	PendingMachineUpgrade   *DaemonHeartbeatPendingMachineUpgrade   `json:"pending_machine_upgrade,omitempty"`
 	PendingModelList        *DaemonHeartbeatPendingModelList        `json:"pending_model_list,omitempty"`
 	PendingLocalSkills      *DaemonHeartbeatPendingLocalSkills      `json:"pending_local_skills,omitempty"`
 	PendingLocalSkillImport *DaemonHeartbeatPendingLocalSkillImport `json:"pending_local_skill_import,omitempty"`
@@ -992,14 +945,6 @@ type DaemonHeartbeatPendingUpdate struct {
 	ID                   string `json:"id"`
 	TargetVersion        string `json:"target_version"`
 	SupportsReadyToApply bool   `json:"supports_ready_to_apply,omitempty"`
-}
-
-// DaemonHeartbeatPendingMachineUpgrade is a machine-owned operation claimed
-// by exactly one capable sibling heartbeat. #2378 uses it only for the
-// already-current tracer bullet; later phases add staging and handoff fields.
-type DaemonHeartbeatPendingMachineUpgrade struct {
-	ID            string `json:"id"`
-	TargetVersion string `json:"target_version"`
 }
 
 // DaemonHeartbeatPendingRestart describes a human-initiated remote restart
@@ -1087,6 +1032,18 @@ type AgentMemoryWriteReport struct {
 	InitiatorID string                  `json:"initiator_id,omitempty"`
 	Signals     []AgentMemorySignal     `json:"signals,omitempty"`
 	Writes      []AgentMemoryWriteEntry `json:"writes"`
+	Friction    *AgentFrictionVector    `json:"friction,omitempty"`
+}
+
+// AgentFrictionVector is the per-task friction episode count vector observed
+// by the daemon (friction-gated memory spec). Counts are episodes, not raw
+// events, and are observability input for server-side guards only.
+type AgentFrictionVector struct {
+	HumanCorrection int `json:"human_correction,omitempty"`
+	ActionRejected  int `json:"action_rejected,omitempty"`
+	RetryLoop       int `json:"retry_loop,omitempty"`
+	Rework          int `json:"rework,omitempty"`
+	SelfErrorStreak int `json:"self_error_streak,omitempty"`
 }
 
 // AgentMemorySignal is an optional co-emitted memory intent. It does not replace
@@ -1181,7 +1138,7 @@ type AgentMemoryHydrateEntry struct {
 
 // TurnCaptureUpload is the daemon-to-server, agent-credential-authenticated
 // record of one settled resident Pi turn. The daemon, rather than the
-// workspace runner, is the trust boundary which creates this payload.
+// workspace daemon, is the trust boundary which creates this payload.
 type TurnCaptureUpload struct {
 	AgentID        string                     `json:"agent_id"`
 	RuntimeID      string                     `json:"runtime_id"`

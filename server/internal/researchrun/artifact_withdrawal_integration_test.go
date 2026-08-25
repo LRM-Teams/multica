@@ -206,7 +206,7 @@ func TestWithdrawArtifactBlocksAffectedInFlightAcceptance(t *testing.T) {
 		t.Fatalf("WithdrawArtifact: %v", err)
 	}
 
-	tasks, err := run.store.ListTasks(run.ctx, run.fixture.sessionID)
+	tasks, err := run.store.ListTasks(run.ctx, run.fixture.sessionID, run.fixture.workspaceID)
 	if err != nil || len(tasks) != 1 {
 		t.Fatalf("ListTasks: %v len=%d", err, len(tasks))
 	}

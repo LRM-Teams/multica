@@ -10,11 +10,13 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/agentworkspace"
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
+	"github.com/multica-ai/multica/server/internal/memorysignal"
 	"github.com/multica-ai/multica/server/pkg/agent"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -54,9 +56,9 @@ func (d *Daemon) ensureIdleMessageCoordinator(workspaceID, agentID, runtimeID st
 	if d == nil || workspaceID == "" || agentID == "" || runtimeID == "" {
 		return false, errors.New("Workspace, Agent, and Runtime ids are required")
 	}
-	runner, err := d.ensureWorkspaceRunner(workspaceID)
+	runner, err := d.ensureWorkspaceDaemon(workspaceID)
 	if err != nil {
-		return false, fmt.Errorf("ensure Workspace Runner %q: %w", workspaceID, err)
+		return false, fmt.Errorf("ensure WorkspaceDaemon %q: %w", workspaceID, err)
 	}
 	return runner.ensureMessageInbox(agentID, runtimeID)
 }
@@ -70,16 +72,16 @@ func (d *Daemon) ensureIdleMessageCoordinatorForDelivery(workspaceID, agentID st
 	if d == nil || workspaceID == "" || agentID == "" {
 		return errors.New("workspace and agent ids are required")
 	}
-	runner := d.currentWorkspaceRunner(workspaceID)
+	runner := d.currentWorkspaceDaemon(workspaceID)
 	if runner == nil {
-		return fmt.Errorf("Workspace Runner %q is unavailable", workspaceID)
+		return fmt.Errorf("WorkspaceDaemon %q is unavailable", workspaceID)
 	}
 	return runner.ensureMessageInboxForDelivery(agentID)
 }
 
 // restoreResidentAgents rebuilds durable Agent roots after a Computer process
-// restart. A durable root alone does not create a Workspace Runner or a Message
-// coordinator; the supervised Binding child receives an explicit managed start
+// restart. A durable root alone does not create a WorkspaceDaemon or a Message
+// coordinator; the supervised WorkspaceDaemon receives an explicit managed start
 // when work exists.
 func mixedRunMessageBatchIdentity(messages []protocol.AgentMessageProjection) (string, string, string, bool) {
 	if len(messages) == 0 || messages[0].RunID == "" || messages[0].RunAgentID == "" {
@@ -103,7 +105,7 @@ func (d *Daemon) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID
 	d.mu.Lock()
 	workspaceID := d.runtimeIndex[runtimeID].WorkspaceID
 	d.mu.Unlock()
-	runner, _ := d.ensureWorkspaceRunner(workspaceID)
+	runner, _ := d.ensureWorkspaceDaemon(workspaceID)
 	preparedMessages, memoryTask, err := d.prepareResidentMessageBatch(ctx, agentID, runtimeID, messages)
 	if err != nil {
 		return err
@@ -112,6 +114,17 @@ func (d *Daemon) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID
 	if mixed {
 		canonicalActionTurn = d.allocateCanonicalActionTurnToken()
 	}
+	// Standalone chat writeback prefers resident capture text, but capture is
+	// only populated for mixed-run (RunID-bound) Pi sessions. Bubble / FAB
+	// turns often have no RunID — accumulate streamed MessageText deltas so
+	// the reply still persists to chat_message (otherwise UI stays on 排队中).
+	var streamedMu sync.Mutex
+	var streamedText strings.Builder
+	// Resident turns bypass the issue-task drain loop, so friction is tracked
+	// here per delivery batch (friction-gated memory spec).
+	var frictionMu sync.Mutex
+	frictionTracker := memorysignal.NewFrictionTracker()
+	processCallback, managedProcess := d.canonicalRuntimes.managedProcessCallback(agentID, runtimeID)
 	err = d.canonicalRuntimes.deliverIdleMessages(ctx, agentID, runtimeID, preparedMessages, nil, func() {
 		if mixed {
 			d.activateCanonicalActionTurn(agentID, canonicalActionTurn)
@@ -123,8 +136,29 @@ func (d *Daemon) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID
 		d.recordResidentMessageBatch(workspaceID, runtimeID, agentID, preparedMessages, "runtime_delivery_accepted", "accepted", "")
 		runner.broadcastMessageReceivedActivity(agentID, runtimeID, preparedMessages)
 	}, func(message agent.Message) {
+		if message.Type == agent.MessageText && message.Content != "" {
+			streamedMu.Lock()
+			streamedText.WriteString(message.Content)
+			streamedMu.Unlock()
+		}
+		frictionMu.Lock()
+		switch message.Type {
+		case agent.MessageToolUse:
+			frictionTracker.ObserveToolUse(message.Tool, frictionToolInputHash(message.Input))
+		case agent.MessageError:
+			frictionTracker.ObserveError()
+		case agent.MessageText, agent.MessageThinking:
+			if message.Content != "" {
+				frictionTracker.ObserveProgress()
+			}
+		}
+		frictionMu.Unlock()
 		d.reportMixedRunToolActivity(agentID, runtimeID, runID, runAgentID, turnID, canonicalActionTurn, message)
-		runner.observeResidentMessageRuntime(agentID, runtimeID, message)
+		if managedProcess {
+			runner.observeResidentMessageRuntimeForProcess(processCallback, runtimeID, message)
+		} else {
+			runner.observeResidentMessageRuntime(agentID, runtimeID, message)
+		}
 	}, func(turnErr error, generation uint64, capture *agent.ResidentTurnCapture) {
 		if mixed {
 			d.reportMixedRunActivity(agentID, runtimeID, runID, runAgentID, "turn:"+turnID+":active:end", protocol.MixedRunActivityActiveTurn, -1)
@@ -137,15 +171,19 @@ func (d *Daemon) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID
 			outcome, reasonCode = "failed", "provider_turn_failed"
 		}
 		d.recordResidentMessageBatch(workspaceID, runtimeID, agentID, preparedMessages, "provider_finished", outcome, reasonCode)
-		if turnErr == nil && d.client != nil && strings.TrimSpace(d.client.baseURL) != "" {
+		if d.client != nil && strings.TrimSpace(d.client.baseURL) != "" {
 			reportCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			d.reportAgentMemoryWrites(reportCtx, memoryTask)
+			if turnErr == nil {
+				frictionMu.Lock()
+				frictionVector := frictionTracker.Vector()
+				frictionMu.Unlock()
+				d.reportAgentMemoryWrites(reportCtx, memoryTask, frictionVector)
+			}
 			if sessionID, ok := standaloneChatSessionIDFromMessages(preparedMessages); ok {
-				if reply := standaloneAssistantTextFromCapture(capture); reply != "" {
-					if err := d.client.ReportStandaloneChatReply(reportCtx, sessionID, reply, runtimeID); err != nil && d.logger != nil {
-						d.logger.Warn("standalone chat reply writeback failed", "session_id", sessionID, "error", err)
-					}
-				}
+				streamedMu.Lock()
+				streamed := streamedText.String()
+				streamedMu.Unlock()
+				d.writebackStandaloneChatTurn(reportCtx, sessionID, runtimeID, turnErr, capture, streamed)
 			}
 			cancel()
 		}
@@ -154,8 +192,15 @@ func (d *Daemon) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID
 		// Notice; body delivery waits for idle Accept→Flush, recovery Flush, or
 		// agent `message check`.
 		runner.notifyPendingMessagesAfterTurn(agentID)
+		if runner != nil && runner.notifyAppInbox != nil {
+			_ = runner.notifyAppInbox(context.Background(), agentID, runtimeID)
+		}
 		d.canonicalRuntimes.publishIfMessageTurnStillIdle(agentID, runtimeID, generation, func() {
-			runner.observeMessageTurnCompletion(agentID, runtimeID, turnErr)
+			if managedProcess {
+				runner.observeMessageTurnCompletionForProcess(processCallback, runtimeID, turnErr)
+			} else {
+				runner.observeMessageTurnCompletion(agentID, runtimeID, turnErr)
+			}
 		})
 	})
 	if err != nil {
@@ -173,7 +218,18 @@ func (d *Daemon) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID
 		// receipt exists, so the onComplete path above cannot publish them.
 		// Project the failure explicitly instead of leaving it only in daemon
 		// logs while the user waits for an Agent response that cannot arrive.
-		runner.observeMessageTurnCompletion(agentID, runtimeID, err)
+		if managedProcess {
+			runner.observeMessageTurnCompletionForProcess(processCallback, runtimeID, err)
+		} else {
+			runner.observeMessageTurnCompletion(agentID, runtimeID, err)
+		}
+		// Same for standalone bubbles: without an assistant row the UI stays on
+		// 排队中 forever after provider timeout / accept failure.
+		if sessionID, ok := standaloneChatSessionIDFromMessages(messages); ok && d.client != nil && strings.TrimSpace(d.client.baseURL) != "" {
+			reportCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			d.writebackStandaloneChatTurn(reportCtx, sessionID, runtimeID, err, nil, "")
+			cancel()
+		}
 	}
 	return err
 }
@@ -187,15 +243,19 @@ func (d *Daemon) reportResidentTurnCapture(workspaceID, agentID, runtimeID, runI
 	if d.client == nil || strings.TrimSpace(d.client.baseURL) == "" {
 		return false
 	}
-	credential, ok := readCachedAgentCredential(d.cfg, workspaceID, runtimeID, agentID, time.Now())
-	if !ok {
+	reportCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	credential, err := d.credentialManager().Get(reportCtx, agentCredentialKey{
+		WorkspaceID: workspaceID,
+		RuntimeID:   runtimeID,
+		AgentID:     agentID,
+	}, agentCredentialCacheFirst)
+	if err != nil {
 		if d.logger != nil {
-			d.logger.Warn("mixed-run capture credential unavailable", "run_id", runID, "run_agent_id", runAgentID)
+			d.logger.Warn("mixed-run capture credential unavailable", "run_id", runID, "run_agent_id", runAgentID, "error", err)
 		}
 		return false
 	}
-	reportCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
 	gapReason := "capture_unavailable"
 	if turnErr != nil {
 		gapReason = "provider_turn_failed"
@@ -300,7 +360,7 @@ func mixedRunCaptureGapIdentity(runAgentID, activityTurnID string, capture *agen
 }
 
 // reportMixedRunToolActivity tracks inflight tool calls of a mixed-run turn.
-// User-facing Activity emission stays with the Workspace Runner; this reports
+// User-facing Activity emission stays with the WorkspaceDaemon; this reports
 // only the durable mixed-run transition deltas.
 func (d *Daemon) reportMixedRunToolActivity(agentID, runtimeID, runID, runAgentID, turnID string, turnToken canonicalActionTurnToken, message agent.Message) {
 	if runID == "" || runAgentID == "" || turnID == "" || strings.TrimSpace(message.CallID) == "" {
@@ -336,14 +396,32 @@ func (d *Daemon) prepareResidentMessageBatch(ctx context.Context, agentID, runti
 	}
 
 	prepared := make([]protocol.AgentMessageProjection, 0, len(messages))
+	sessionKey := residentTurnScopeSessionKey(agentID, runtimeID)
+	graphRecallMemo := map[string][]execenv.MemoryContextForEnv{}
 	for _, message := range messages {
 		messageTask := residentMessageMemoryTask(workspaceID, agentID, runtimeID, []protocol.AgentMessageProjection{message})
-		memories, _ := prepareExecutionMemory(agentRoot, messageTask, convertResidentMessageMemoriesForEnv(message.Memories))
-		// Graph reviewer (design §1 memory_type=graph): same replacement
-		// contract as runTask — graph recall wins on success, legacy stands
-		// on miss or error.
-		if graphMemories := d.graphExecutionMemories(ctx, messageTask, d.logger); graphMemories != nil {
-			memories = graphMemories
+		if profile, ok := d.graphProfileForWorkspace(workspaceID); ok {
+			messageTask.MemoryType = profile.memoryType
+			messageTask.ExploreAgents = profile.exploreAgents
+			messageTask.ExploreMaxRounds = profile.exploreMaxRounds
+		}
+		serverMemories := convertResidentMessageMemoriesForEnv(message.Memories)
+		var memories []execenv.MemoryContextForEnv
+		if effectiveMemoryType(d.cfg.MemoryType, messageTask.MemoryType) == MemoryTypeGraph {
+			// Same merge contract as runTask (spec §8): legacy user/agent
+			// retained, graph blob appended, no legacy project/channel/daily.
+			// Agent-scope rows stay out of per-message context.
+			combined := mergeGraphModeExecutionMemory(
+				agentRoot, messageTask, serverMemories,
+				d.memoizedGraphExecutionMemories(ctx, messageTask, graphRecallMemo, d.logger),
+			)
+			memories = withoutAgentScopeMemories(combined)
+		} else {
+			memories, _ = prepareTurnScopeMemory(agentRoot, messageTask, serverMemories)
+		}
+		if d.turnScopeMemory != nil {
+			memories = d.turnScopeMemory.selectForInject(sessionKey, memories, false)
+			d.turnScopeMemory.markInjected(sessionKey, memories)
 		}
 		chatSessionID, _ := standaloneChatSessionID(message.Target)
 		message.RuntimeContext = execenv.RenderTurnContext(execenv.TaskContextForEnv{
@@ -425,6 +503,49 @@ func standaloneAssistantTextFromCapture(capture *agent.ResidentTurnCapture) stri
 	return ""
 }
 
+// standaloneAssistantReplyText prefers capture final-assistant text (mixed-run
+// path). When capture is empty — typical for standalone bubble/FAB turns
+// without a RunID — fall back to concatenated MessageText deltas from the turn.
+func standaloneAssistantReplyText(capture *agent.ResidentTurnCapture, streamed string) string {
+	if reply := standaloneAssistantTextFromCapture(capture); reply != "" {
+		return reply
+	}
+	return strings.TrimSpace(streamed)
+}
+
+// standaloneAssistantFailureReply is written to chat_message when a standalone
+// bubble turn fails so the UI leaves 排队中 instead of waiting forever.
+func standaloneAssistantFailureReply(err error) string {
+	detail := "unknown error"
+	if err != nil {
+		if msg := strings.TrimSpace(err.Error()); msg != "" {
+			detail = msg
+		}
+	}
+	return "I could not complete that reply (" + detail + "). Please try again."
+}
+
+func (d *Daemon) writebackStandaloneChatTurn(ctx context.Context, sessionID, runtimeID string, turnErr error, capture *agent.ResidentTurnCapture, streamed string) {
+	if d == nil || d.client == nil || strings.TrimSpace(sessionID) == "" {
+		return
+	}
+	reply := ""
+	if turnErr != nil {
+		reply = standaloneAssistantFailureReply(turnErr)
+	} else {
+		reply = standaloneAssistantReplyText(capture, streamed)
+		if reply == "" {
+			if d.logger != nil {
+				d.logger.Warn("standalone chat reply missing after successful turn", "session_id", sessionID, "has_capture", capture != nil)
+			}
+			return
+		}
+	}
+	if err := d.client.ReportStandaloneChatReply(ctx, sessionID, reply, runtimeID); err != nil && d.logger != nil {
+		d.logger.Warn("standalone chat reply writeback failed", "session_id", sessionID, "error", err, "failed_turn", turnErr != nil)
+	}
+}
+
 func standaloneAssistantTextFromJSON(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""
@@ -480,7 +601,7 @@ func (p *CredentialProxy) SeenUpToSeq(agentID, target string) (int64, error) {
 	if p == nil || p.daemon == nil {
 		return 0, errors.New("Credential Proxy is unavailable")
 	}
-	runner, err := p.daemon.resolveWorkspaceRunnerByAgent(agentID)
+	runner, err := p.daemon.resolveWorkspaceDaemonByAgent(agentID)
 	if err != nil {
 		return 0, errors.New("Message coordinator is unavailable")
 	}
@@ -498,7 +619,7 @@ func (p *CredentialProxy) CheckMessages(agentID string) (MessageCheckResult, err
 	if p == nil || p.daemon == nil {
 		return MessageCheckResult{}, errors.New("Credential Proxy is unavailable")
 	}
-	runner, err := p.daemon.resolveWorkspaceRunnerByAgent(agentID)
+	runner, err := p.daemon.resolveWorkspaceDaemonByAgent(agentID)
 	if err != nil {
 		return MessageCheckResult{}, errors.New("Message coordinator is unavailable")
 	}
@@ -527,7 +648,7 @@ func (p *CredentialProxy) PrepareMessageRead(
 	if p == nil || p.daemon == nil {
 		return CoverageOffer{}, errors.New("Credential Proxy is unavailable")
 	}
-	runner, err := p.daemon.resolveWorkspaceRunnerByAgent(agentID)
+	runner, err := p.daemon.resolveWorkspaceDaemonByAgent(agentID)
 	if err != nil {
 		return CoverageOffer{}, errors.New("Message coordinator is unavailable")
 	}
@@ -609,7 +730,7 @@ func (p *CredentialProxy) MessageSendBoundarySnapshot(agentID, target string) (i
 	if p == nil || p.daemon == nil {
 		return 0, errors.New("Credential Proxy is unavailable")
 	}
-	runner, err := p.daemon.resolveWorkspaceRunnerByAgent(agentID)
+	runner, err := p.daemon.resolveWorkspaceDaemonByAgent(agentID)
 	if err != nil {
 		return 0, errors.New("Message coordinator is unavailable")
 	}
@@ -620,7 +741,7 @@ func (p *CredentialProxy) PreflightMessageSend(agentID, target string) (MessageS
 	if p == nil || p.daemon == nil {
 		return MessageSendFreshness{}, errors.New("Credential Proxy is unavailable")
 	}
-	runner, err := p.daemon.resolveWorkspaceRunnerByAgent(agentID)
+	runner, err := p.daemon.resolveWorkspaceDaemonByAgent(agentID)
 	if err != nil {
 		return MessageSendFreshness{}, errors.New("Message coordinator is unavailable")
 	}
@@ -631,7 +752,7 @@ func (p *CredentialProxy) PrepareHeldMessageContext(agentID, target string, thro
 	if p == nil || p.daemon == nil {
 		return CoverageOffer{}, errors.New("Credential Proxy is unavailable")
 	}
-	runner, err := p.daemon.resolveWorkspaceRunnerByAgent(agentID)
+	runner, err := p.daemon.resolveWorkspaceDaemonByAgent(agentID)
 	if err != nil {
 		return CoverageOffer{}, errors.New("Message coordinator is unavailable")
 	}

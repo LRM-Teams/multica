@@ -23,14 +23,18 @@ const COMPONENTS_DIR = __dirname;
 const BUBBLE = join(COMPONENTS_DIR, "channel-message-bubble.tsx");
 const GATE = "[@media(pointer:fine)_and_(min-width:640px)]";
 
-/** Every gate-dependent candidate the desktop hover affordance needs. */
+/**
+ * Every gate-dependent candidate the desktop hover affordance needs. The bar is
+ * a pure hover overlay, so this list covers its visibility only — no geometry
+ * reserve (`pr-[162px]`, the continuation `before:` float, the quote-card
+ * `pr-[158px]`) exists to guard any more.
+ */
 const REQUIRED_LITERAL_CANDIDATES = [
   `${GATE}:flex`,
   `${GATE}:group-hover:pointer-events-auto`,
   `${GATE}:group-hover:opacity-100`,
   `${GATE}:group-focus-within:pointer-events-auto`,
   `${GATE}:group-focus-within:opacity-100`,
-  `${GATE}:pr-[162px]`,
 ];
 
 /**

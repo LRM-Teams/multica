@@ -1,7 +1,9 @@
 # working-on-issues source map
 
-Checkout location: keep clones inside the Agent workspace and discover a
-project-bound `github_repo` via `multica workspace info --projects` (live,
+Checkout location: use an existing project directory or worktree inside the
+Agent workspace. If a bound `github_repo` has no checkout, the Agent clones it
+into that workspace; Multica does not clone repositories or provision checkouts.
+Discover project bindings with `multica workspace info --projects` (live,
 because resident AGENTS.md is not rewritten when resources change). Runtime
 brief contract: `server/internal/daemon/execenv/runtime_config.go`
 (`renderProjectContext`, Agent Memory Scope) and
@@ -18,6 +20,8 @@ at the bottom before relying on an exact line.
 | Behavior | Source |
 | --- | --- |
 | Assignment runs receive the `DIRECT / ISSUE_DAG / GOAL_GRAPH` decision boundary before substantive execution | `server/internal/daemon/execenv/runtime_config.go`, assignment-triggered branch and `Work Decomposition Gate` |
+| Independently acceptable research, data collection, implementation, testing, or review defaults to parallel Issue roots without a second confirmation when it remains inside the admitted scope, permissions, and budget | `server/internal/daemon/execenv/runtime_config.go`, `Work Decomposition Gate`; `server/internal/daemon/prompt.go`, assignment current-turn contract; guarded by `TestAssignmentBriefIncludesWorkDecompositionGate` and `TestBuildPromptAssignmentCarriesTurnWorkflowAndLazyDecomposition` |
+| An active multi-Agent Goal manager receives the parallel admission before creating or dispatching Issues, including the atomic `issue decompose` command and the prohibition on prose-only parents / peer top-level substitutes | `server/internal/daemon/prompt.go`, `channelGoalStateSlot`; guarded by `TestBuildPromptChannelManagerDefaultsIndependentGoalWorkToIssueDAG` |
 | Runtime advertises the shipped atomic graph CLI but not an unavailable `issue verify` command | `server/internal/daemon/execenv/runtime_config_test.go`, `TestAssignmentBriefIncludesWorkDecompositionGate` |
 | Atomic graph CLI and stable idempotency key | `server/cmd/multica/cmd_issue_graph.go`; `server/internal/handler/agent_work_graph.go`; `server/internal/workgraph/runtime.go` |
 | Canonical DAG validation, ready calculation and downstream invalidation | `server/internal/workgraph/runtime.go`; `server/internal/workgraph/runtime_test.go`; `server/internal/workgraph/runtime_postgres_test.go` |
@@ -141,6 +145,23 @@ Drifted from the prior skill's `github.go:736` citation.
 
 Net: a bare title prefix (`MUL-2759: ...`) or a branch ref links only;
 `Closes MUL-2759` links **and** records close intent.
+
+## Typed completion and independent review
+
+| Behavior | Source |
+| --- | --- |
+| Agent CLI reads the current criteria/revision and requires evidence for every criterion | `server/cmd/multica/cmd_issue.go`, `runIssueComplete` |
+| Completion identity comes from the task-scoped credential, never a client-supplied Run ID | `server/internal/handler/issue_completion.go`, `SubmitAgentIssueCompletion` |
+| Report, visible comment, `in_review`, claim release, and Run fence commit atomically | `server/internal/service/issue_completion.go`, `SubmitCompletion` |
+| Same Run + same request is idempotent; replay does not republish realtime events | `server/internal/service/issue_completion.go`, `IssueCompletionOutcome.Replayed`; `server/internal/handler/issue_completion.go` |
+| Author cannot self-review; an Agent reviewer needs an independent same-Issue task Run | `server/internal/service/issue_completion.go`, `ReviewCompletion` |
+| Accepted `pull_request` evidence must exist in canonical `issue_pull_request` | `server/internal/service/issue_completion.go`, `ensureCanonicalPullRequestEvidence` |
+| Rejection preserves the report and creates a successor Run with predecessor lineage | `server/internal/service/issue_completion.go`, `ReviewCompletion`; `server/internal/service/issue_execution.go`, `ReconcileTx` |
+| Generic Agent status updates cannot bypass typed completion with `in_review` or `done` | `server/internal/handler/issue.go`, `UpdateIssue` |
+
+Completion and review history is a typed sidecar projected into visible Issue
+comments. It does not create a second task graph or let comments/metadata replace
+canonical Issue, Run, review, or PR-link state.
 
 ## Status side effects (enqueue contracts)
 

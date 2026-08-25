@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -210,31 +209,6 @@ func claudeStaticModels() []Model {
 		{ID: "claude-sonnet-4-6", Label: "Claude Sonnet 4.6", Provider: "anthropic"},
 		{ID: "claude-haiku-4-5", Label: "Claude Haiku 4.5", Provider: "anthropic"},
 	}
-}
-
-// claudeCompatibilityModels keeps historical, persisted model IDs valid for
-// execution-time validation without turning implementation compatibility into
-// duplicate picker rows.
-func claudeCompatibilityModels() []Model {
-	return []Model{
-		{ID: "claude-sonnet-4-6", Provider: "anthropic"},
-		{ID: "claude-fable-5", Provider: "anthropic"},
-		{ID: "claude-opus-4-8", Provider: "anthropic"},
-		{ID: "claude-opus-4-7", Provider: "anthropic"},
-		{ID: "claude-haiku-4-5-20251001", Provider: "anthropic"},
-		{ID: "claude-opus-4-6", Provider: "anthropic"},
-		{ID: "claude-sonnet-4-5", Provider: "anthropic"},
-		{ID: "claude-sonnet-5", Provider: "anthropic"},
-		{ID: "claude-opus-5", Provider: "anthropic"},
-	}
-}
-
-// claudeModelsWithCompatibility is the internal validation catalog. Keep this
-// separate from claudeStaticModels so old persisted IDs retain their runtime
-// contracts without becoming duplicate rows in the model picker.
-func claudeModelsWithCompatibility() []Model {
-	models := claudeStaticModels()
-	return append(models, claudeCompatibilityModels()...)
 }
 
 // discoverCodexModels builds the user-visible model picker from
@@ -1196,8 +1170,3 @@ func isCatalogModelID(s string) bool {
 	return true
 }
 
-// ── CodeBuddy model discovery ──
-
-// codebuddyModelRe matches the `--model <model> ... Currently supported: (m1, m2, ...)`
-// line in `codebuddy --help` output.
-var codebuddyModelRe = regexp.MustCompile(`--model\s*<[^>]+>\s*.*?Currently supported:\s*\(([^)]+)\)`)

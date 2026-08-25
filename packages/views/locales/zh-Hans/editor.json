@@ -5,6 +5,20 @@
     "strikethrough": "删除线",
     "code": "代码",
     "highlight": "高亮",
+    "color": "颜色",
+    "size": "字号",
+    "size_default": "默认",
+    "color_names": {
+      "default": "默认",
+      "gray": "灰",
+      "red": "红",
+      "orange": "橙",
+      "yellow": "黄",
+      "green": "绿",
+      "blue": "蓝",
+      "purple": "紫",
+      "pink": "粉"
+    },
     "link": "链接",
     "list": "列表",
     "quote": "引用",
@@ -28,6 +42,7 @@
     },
     "optimize": {
       "tooltip": "用 AI 优化文本",
+      "ask_tooltip": "问问选中内容",
       "result_title": "优化后的文本",
       "action_insert": "AI 建议插入到选区后面",
       "action_replace_selection": "AI 建议替换选区",

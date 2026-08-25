@@ -292,6 +292,9 @@ build: ## Build the server, CLI, and migrate binaries into server/bin
 	cd server && go build -ldflags "-X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(DATE)" -o bin/multica ./cmd/multica
 	cd server && go build -o bin/migrate ./cmd/migrate
 
+publish-agent-avatars: ## One-time upload of the v3 agent avatar catalog to OSS (needs S3_* env)
+	cd server && go run ./cmd/publish-agent-avatars
+
 build-prod: ## Build Go binaries and the web app for local production serving
 	@bash scripts/build-prod.sh
 
@@ -311,7 +314,7 @@ test: ## Run Go tests after ensuring the target DB exists and migrations are app
 	cd server && go test -p 1 ./...
 
 test-agent-delivery-route: ## Raft 1.0.16 accept-table tests; required when changing acceptMessageDelivery
-	cd server && go test ./internal/daemon/ -count=1 -run 'TestWorkspaceRunnerConsumedDelivery|TestWorkspaceRunnerStartingLaunch|TestWorkspaceRunnerQueuedAPM|TestWorkspaceRunnerTerminalFailure|TestWorkspaceRunnerIdleSnapshot|TestWorkspaceRunnerSpawnCooldown|TestWorkspaceRunnerMissingProcess|TestWorkspaceRunnerUnacceptedDelivery|TestWorkspaceRunnerIdleDeliveryAcknowledges|TestWorkspaceRunnerDeliveryAcknowledgesBusy|TestWorkspaceRunnerDeliveryDoesNotAcknowledge|TestAcceptMessageDeliveryForbids|TestDeliveryRouteRequiredCases'
+	cd server && go test ./internal/daemon/ -count=1 -run 'TestWorkspaceDaemonConsumedDelivery|TestWorkspaceDaemonStartingLaunch|TestWorkspaceDaemonQueuedAPM|TestWorkspaceDaemonTerminalFailure|TestWorkspaceDaemonIdleSnapshot|TestWorkspaceDaemonSpawnCooldown|TestWorkspaceDaemonMissingProcess|TestWorkspaceDaemonUnacceptedDelivery|TestWorkspaceDaemonIdleDeliveryAcknowledges|TestWorkspaceDaemonDeliveryAcknowledgesBusy|TestWorkspaceDaemonDeliveryDoesNotAcknowledge|TestAcceptMessageDeliveryForbids|TestDeliveryRouteRequiredCases'
 
 check-cursor-deadlock: ## Static check for the #1803 pool-deadlock shape (task #91)
 	cd server && go run ./tools/cursordeadlock ./internal ./cmd ./pkg

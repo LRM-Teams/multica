@@ -26,7 +26,7 @@ import {
   memberListOptions,
   workspaceKeys,
 } from "@multica/core/workspace/queries";
-import { runtimeListOptions } from "@multica/core/runtimes";
+import { agentRuntimeConfigOptions, runtimeListOptions } from "@multica/core/runtimes";
 import { useAgentPermissions } from "@multica/core/permissions";
 import { resolveActorDisplayName } from "@multica/core/identity";
 import { Button } from "@multica/ui/components/ui/button";
@@ -89,6 +89,10 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
     enabled: !agentsLoading && !listedAgent && !!agentId,
   });
   const agent = listedAgent ?? detailAgent ?? null;
+  // Assembled server-side; see AgentDetailInspector's runtimeConfig prop.
+  const { data: runtimeConfig } = useQuery(
+    agentRuntimeConfigOptions(wsId, agent?.id ?? ""),
+  );
   const presence: AgentPresence | null = agent && !presenceLoading
     ? presenceMap.get(agent.id) ?? null
     : null;
@@ -212,9 +216,6 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   }
 
   const isArchived = !!agent.archived_at;
-  const runtime = agent.runtime_id
-    ? runtimes.find((r) => r.id === agent.runtime_id) ?? null
-    : null;
   const owner = agent.owner_id
     ? members.find((m) => m.user_id === agent.owner_id) ?? null
     : null;
@@ -260,7 +261,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
       <div className="flex flex-1 min-h-0 flex-col gap-3 overflow-y-auto p-3 md:grid md:grid-cols-[320px_minmax(0,1fr)] md:gap-4 md:overflow-hidden md:p-6">
         <AgentDetailInspector
           agent={agent}
-          runtime={runtime}
+          runtimeConfig={runtimeConfig}
           owner={owner}
           presence={presence}
           runtimes={runtimes}

@@ -44,6 +44,30 @@ describe("Research list/bootstrap response boundaries", () => {
     );
   });
 
+  it("accepts V6 sessions with an empty or missing fleet_id", async () => {
+    const client = new ApiClient("https://api.example.test");
+    stubResponse({
+      sessions: [
+        {
+          id: "v6-1",
+          workspace_id: "ws1",
+          fleet_id: "",
+          status: "running",
+          current_stage: "s1_plan",
+        },
+        {
+          id: "v6-2",
+          workspace_id: "ws1",
+          status: "running",
+          current_stage: "s1_plan",
+        },
+      ],
+    });
+    await expect(client.listResearchSessions("ws1")).resolves.toMatchObject({
+      sessions: [{ id: "v6-1", fleet_id: "" }, { id: "v6-2", fleet_id: "" }],
+    });
+  });
+
   it("rejects cross-workspace and duplicate sessions", async () => {
     const client = new ApiClient("https://api.example.test");
     stubResponse({ sessions: [session("s1", "ws2")] });

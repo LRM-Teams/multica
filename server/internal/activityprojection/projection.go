@@ -44,11 +44,12 @@ func TimelineRowFromSnapshot(snapshot protocol.AgentActivitySnapshot) TimelineRo
 // Message received) do not. Labels only — a detail kind never carries command
 // text, paths, or tool input.
 var workingDetailLabels = map[string]string{
-	"starting":            "Starting…",
-	"message_received":    "Message received",
-	"compacting_context":  "Compacting context...",
-	"compaction_finished": "Compaction finished",
-	"compaction_stale":    "Compaction still running",
+	"starting":               "Starting…",
+	"message_received":       "Message received",
+	"model_response_started": "Working...",
+	"compacting_context":     "Compacting context...",
+	"compaction_finished":    "Compaction finished",
+	"compaction_stale":       "Compaction still running",
 
 	"running_command": "Running command...",
 	"reading_file":    "Reading file...",
@@ -112,7 +113,7 @@ var toolStartDetailKinds = map[string]string{
 // ActivityKindFromDetailKind is the one server-owned reduction from Raft's
 // execution fact vocabulary to Multica's compact lifecycle vocabulary. The
 // daemon may track an ActivityKind locally for heartbeat scheduling, but that
-// presentation state never crosses the Workspace Runner wire.
+// presentation state never crosses the WorkspaceDaemon wire.
 func ActivityKindFromDetailKind(detailKind string) string {
 	switch detailKind {
 	case "idle", "ready":
@@ -148,6 +149,9 @@ func ProjectSummary(snapshot protocol.AgentActivitySnapshot) Summary {
 			tone := "warning"
 			if snapshot.DetailKind == "running_command" {
 				tone = "running"
+			}
+			if snapshot.DetailKind == "model_response_started" {
+				tone = "info"
 			}
 			return Summary{Label: label, Tone: tone, Visibility: "visible"}
 		}
@@ -204,6 +208,67 @@ func ProjectTimelineEntry(entry protocol.AgentActivityEntry, summary Summary) Ti
 		}
 	}
 	return row
+}
+
+// ProjectTaskMessage converts one task-scoped, user-facing runtime message to
+// the same bounded timeline grammar used by Runner Activity. It never retains
+// raw tool input; only the one presentation-safe field for the tool survives.
+func ProjectTaskMessage(message protocol.TaskMessagePayload) (TimelineRow, bool) {
+	if message.Visibility != "user_facing" {
+		return TimelineRow{}, false
+	}
+	switch message.Type {
+	case "tool_use":
+		body, err := json.Marshal(protocol.AgentActivityToolStartBody{
+			ToolName:  message.Tool,
+			ToolInput: taskMessageToolSummary(message.Tool, message.Input),
+		})
+		if err != nil {
+			return TimelineRow{}, false
+		}
+		return ProjectTimelineEntry(
+			protocol.AgentActivityEntry{Kind: "tool_start", Body: body},
+			Summary{Label: "Working...", Tone: "warning", Visibility: "visible"},
+		), true
+	case "error":
+		return TimelineRow{
+			Title:    "Error",
+			Subtext:  boundedText(message.Content),
+			Tone:     "error",
+			BodyKind: "none",
+		}, true
+	default:
+		return TimelineRow{}, false
+	}
+}
+
+func taskMessageToolSummary(tool string, input map[string]any) string {
+	firstString := func(keys ...string) string {
+		for _, key := range keys {
+			if value, ok := input[key].(string); ok && strings.TrimSpace(value) != "" {
+				return boundedText(value)
+			}
+		}
+		return ""
+	}
+	switch tool {
+	case "bash":
+		return firstString("command", "cmd")
+	case "read_file", "write_file", "edit_file", "upload_file":
+		return firstString("file_path", "filePath", "path")
+	case "glob", "grep":
+		return firstString("pattern", "query")
+	case "web_fetch":
+		return firstString("url")
+	case "web_search", "search_messages", "search_issues":
+		return firstString("query")
+	case "send_message", "read_history", "list_tasks", "create_tasks":
+		return firstString("target", "channel")
+	case "get_issue", "list_issue_comments", "comment_issue", "delete_issue_comment":
+		return firstString("issue", "issue_id")
+	default:
+		return ""
+	}
 }
 
 func projectStatusTimelineRow(body protocol.AgentActivityStatusBody, fallback Summary) TimelineRow {

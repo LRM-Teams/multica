@@ -7,6 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -65,8 +66,8 @@ func (h *Handler) syncWendyWorkGraphAfterTaskSuccess(ctx context.Context, task d
 		slog.Warn("inspect Issue-DAG ownership failed", "issue_id", issue.ID.String(), "error", managedErr)
 	}
 	if managed && issue.Status != "done" && issue.Status != "cancelled" {
-		if updated, updateErr := h.Queries.UpdateIssueStatus(ctx, db.UpdateIssueStatusParams{
-			ID: issue.ID, WorkspaceID: issue.WorkspaceID, Status: "in_review",
+		if updated, updateErr := h.IssueExecution.UpdateStatus(ctx, issue, "in_review", service.IssueExecutionReconcileOptions{
+			TriggerKind: "decomposed_issue_completed",
 		}); updateErr == nil {
 			issue = updated
 		}

@@ -85,15 +85,6 @@ func prepareSkillCandidateMutations(root string, candidate skillCandidate, skill
 		{path: manifestPath, content: manifest},
 	}, nil
 }
-
-func upsertCandidateJSONL(path, localUnitID, encoded string, dryRun bool) (bool, error) {
-	content, err := candidateJSONLContent(path, localUnitID, encoded)
-	if err != nil {
-		return false, err
-	}
-	return writeIfChanged(path, content, dryRun)
-}
-
 func candidateJSONLContent(path, localUnitID, encoded string) (string, error) {
 	var lines []string
 	old, err := os.ReadFile(path)

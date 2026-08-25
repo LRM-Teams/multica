@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/agentworkspace"
+	agentskills "github.com/multica-ai/multica/server/internal/daemon/agent/skills"
 	"github.com/multica-ai/multica/server/internal/memorycuration"
 	"github.com/multica-ai/multica/server/pkg/agent"
 )
@@ -252,15 +253,6 @@ func ensureMulticaAgentRoot(root string) error {
 	return os.MkdirAll(root, 0o755)
 }
 
-func ensureFile(path, content string) error {
-	if _, err := os.Stat(path); err == nil {
-		return nil
-	} else if !os.IsNotExist(err) {
-		return err
-	}
-	return os.WriteFile(path, []byte(content), 0o644)
-}
-
 func (d *Daemon) syncSharedSkillsForRuntime(ctx context.Context, rt Runtime) error {
 	scanRoot, ok := sharedSkillScanRoot(d.cfg, rt.Provider)
 	if ok {
@@ -294,7 +286,7 @@ func (d *Daemon) syncWorkspaceSharedSkillsForRuntime(ctx context.Context, rt Run
 	for _, summary := range summaries {
 		presentKeys = append(presentKeys, summary.Key)
 		skillDir := filepath.Join(scanRoot, filepath.FromSlash(summary.Key))
-		fingerprint, err := localSkillScanFingerprint(skillDir)
+		fingerprint, err := agentskills.LocalFingerprint(skillDir)
 		if err != nil {
 			d.logger.Warn("shared skill fingerprint skipped", "key", summary.Key, "error", err)
 			continue
@@ -412,7 +404,7 @@ func (d *Daemon) scanEvolutionSubmissionsRoot(rt Runtime, base string) ([]Evolut
 
 	var submissions []EvolutionSubmissionBundle
 	for _, entry := range entries {
-		if !entry.IsDir() || isIgnoredLocalSkillEntry(entry.Name()) {
+		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
 			continue
 		}
 		agentID := entry.Name()
@@ -722,24 +714,17 @@ func bundlePathFromCandidate(item map[string]json.RawMessage) string {
 }
 
 func loadSkillDraftBundle(bundleDir string) ([]SkillFileData, string, error) {
-	info, err := os.Stat(bundleDir)
+	bundle, err := agentskills.NewLocalCatalog(filepath.Dir(bundleDir)).Load(filepath.Base(bundleDir))
 	if err != nil {
 		return nil, "", err
 	}
-	if !info.IsDir() {
-		return nil, "", fmt.Errorf("bundle path is not a directory")
+	files := make([]SkillFileData, 0, len(bundle.Files)+1)
+	files = append(files, SkillFileData{Path: agentskills.ContentFilename, Content: bundle.Content})
+	for _, file := range bundle.Files {
+		files = append(files, SkillFileData{Path: file.Path, Content: file.Content})
 	}
-	content, err := readLocalSkillMainFile(bundleDir)
-	if err != nil {
-		return nil, "", err
-	}
-	files, err := collectLocalSkillFiles(bundleDir, true)
-	if err != nil {
-		return nil, "", err
-	}
-	files = append([]SkillFileData{{Path: "SKILL.md", Content: content}}, files...)
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
-	return files, content, nil
+	return files, bundle.Content, nil
 }
 
 func jsonString(item map[string]json.RawMessage, key string) string {

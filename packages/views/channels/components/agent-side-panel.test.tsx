@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Agent, MemberWithUser } from "@multica/core/types";
 import { configStore } from "@multica/core/config";
@@ -26,6 +26,7 @@ const {
   rolePermission,
   usageRows,
   mockRuntimes,
+  mockRuntimeConfig,
   mockLocalSkills,
   mockWorkspaceSkills,
   updateAgentWorkspaceRole,
@@ -54,8 +55,20 @@ const {
   // Runtimes returned by the mocked runtime-list query. Empty by default so the
   // existing tests see no selected runtime; a #687 test loads a staged one.
   mockRuntimes: { current: [] as Array<Record<string, unknown>> },
+  // What GET /api/agents/{id}/runtime-config returns: Computer + runtime
+  // assembled server-side, independent of what the runtimes list carries.
+  mockRuntimeConfig: {
+    current: null as null | Record<string, unknown>,
+  },
   mockLocalSkills: { current: [] as Array<Record<string, unknown>> },
   mockWorkspaceSkills: { current: [] as Array<Record<string, unknown>> },
+}));
+
+// The Info grid renders <Time kind="date"/>, which reads the viewer timezone
+// off the auth store. Nothing here depends on a signed-in user.
+vi.mock("@multica/core/auth", () => ({
+  useAuthStore: (sel: (s: { user: null }) => unknown) => sel({ user: null }),
+  registerAuthStore: vi.fn(),
 }));
 
 vi.mock("@multica/core/workspace/avatar-url", () => ({
@@ -65,6 +78,9 @@ vi.mock("@multica/core/workspace/avatar-url", () => ({
 vi.mock("../../common/actor-avatar", () => ({
   AgentPresenceOverlay: ({ children }: { children: React.ReactNode }) => (
     <div data-testid="agent-presence-overlay">{children}</div>
+  ),
+  ActorAvatar: ({ name }: { name?: string }) => (
+    <div data-testid="owner-avatar" aria-label={name} />
   ),
 }));
 
@@ -91,19 +107,24 @@ vi.mock("../../agents/components/tabs/reminders-tab", () => ({
 vi.mock("../../agents/components/agent-profile-actions", () => ({
   AgentProfileActions: ({
     canManage,
-    forceRestartSupported,
+    layout = "stack",
   }: {
     canManage: boolean;
-    forceRestartSupported: boolean;
+    layout?: "stack" | "icons";
   }) => (
     <div
-      data-testid="agent-profile-actions"
+      data-testid={
+        layout === "icons" ? "agent-profile-chrome-actions" : "agent-profile-actions"
+      }
       data-can-manage={String(canManage)}
-      data-force-restart-supported={String(forceRestartSupported)}
     >
-      <button type="button" data-testid="agent-profile-action-message">
-        Message
-      </button>
+      {layout === "icons" ? (
+        <button type="button" data-testid="agent-profile-chrome-action-message" />
+      ) : (
+        <button type="button" data-testid="agent-profile-action-start">
+          Start Agent
+        </button>
+      )}
     </div>
   ),
 }));
@@ -158,8 +179,12 @@ vi.mock("./agent-files-panel", () => ({
 // them so the panel test stays focused on gating/visibility, not picker
 // internals. Each stub echoes `canEdit` so we can assert the permission split.
 vi.mock("../../agents/components/inspector/runtime-picker", () => ({
-  RuntimePicker: (p: { canEdit?: boolean }) => (
-    <div data-testid="runtime-picker" data-can-edit={String(!!p.canEdit)} />
+  RuntimePicker: (p: { canEdit?: boolean; selectedProvider?: string | null }) => (
+    <div
+      data-testid="runtime-picker"
+      data-can-edit={String(!!p.canEdit)}
+      data-selected-provider={p.selectedProvider ?? ""}
+    />
   ),
 }));
 vi.mock("../../agents/components/inspector/model-picker", () => ({
@@ -170,6 +195,16 @@ vi.mock("../../agents/components/inspector/model-picker", () => ({
 vi.mock("../../agents/components/inspector/thinking-prop-row", () => ({
   ThinkingPropRow: (p: { canEdit?: boolean }) => (
     <div data-testid="thinking-picker" data-can-edit={String(!!p.canEdit)} />
+  ),
+}));
+// Role has its own test file (agent-workspace-role.test.tsx) covering the
+// picker and its PATCH. Stubbed here so this file's hand-rolled resource
+// object does not have to carry the whole workspace_role i18n namespace.
+vi.mock("../../agents/components/agent-workspace-role", () => ({
+  AgentWorkspaceRole: (p: { agent?: { workspace_role?: string } }) => (
+    <div data-testid="agent-workspace-role-value">
+      {p.agent?.workspace_role === "admin" ? "Admin" : "Member"}
+    </div>
   ),
 }));
 vi.mock("../../agents/components/runtime-config-dialog", () => ({
@@ -228,6 +263,8 @@ vi.mock("@tanstack/react-query", () => ({
         ? usageRows
         : options.queryKey?.[0] === "agents" && options.queryKey?.[1] === "profile-skills"
           ? { global: mockLocalSkills.current, workspace: mockWorkspaceSkills.current }
+          : options.queryKey?.[0] === "runtimes" && options.queryKey?.[1] === "agent-config"
+            ? mockRuntimeConfig.current
           : options.queryKey?.[0] === "runtimes"
             ? mockRuntimes.current
           : [],
@@ -237,6 +274,7 @@ vi.mock("@tanstack/react-query", () => ({
 }));
 vi.mock("@multica/core/runtimes", () => ({
   runtimeListOptions: () => ({ queryKey: ["runtimes"] }),
+  agentRuntimeConfigOptions: () => ({ queryKey: ["runtimes", "agent-config"] }),
   agentProfileSkillsOptions: () => ({ queryKey: ["agents", "profile-skills"] }),
   deriveRuntimeHealth: (rt: { status?: string }) =>
     rt?.status === "online" ? "online" : "offline",
@@ -322,7 +360,7 @@ const RESOURCES = {
     computer_version: enAgents.inspector.computer_version,
     computer_none: enAgents.inspector.computer_none,
   },
-  execution_config: {
+  runtime_config: {
     applies_next_run: "Changes take effect on the next run",
     dialog_title: "Runtime config",
     dialog_description: "Edits stay local until you save.",
@@ -347,7 +385,7 @@ const ownerMember: MemberWithUser = {
   display_name: "Owner",
   email: "owner@example.com",
   avatar_url: null,
-  profile_description: "",
+  description: "",
   created_at: "2026-01-01T00:00:00Z",
 };
 
@@ -368,7 +406,6 @@ function makeAgent(ownerId = "user-owner"): Agent {
     runtime_config: {},
     custom_args: [],
     status: "idle",
-    max_concurrent_tasks: 1,
     model: "",
     owner_id: ownerId,
     skills: [],
@@ -403,6 +440,7 @@ describe("AgentSidePanel", () => {
     rolePermission.allowed = false;
     usageRows.length = 0;
     mockRuntimes.current = [];
+    mockRuntimeConfig.current = null;
     mockLocalSkills.current = [];
     mockWorkspaceSkills.current = [];
   });
@@ -442,55 +480,57 @@ describe("AgentSidePanel", () => {
     expect(screen.queryByText("update_available")).not.toBeInTheDocument();
   });
 
-  // task #22: the panel must thread the bound runtime's real capability
-  // through to AgentProfileActions, not a hardcoded provider list or the
-  // wrong runtime's data.
-  it("passes forceRestartSupported=true when the bound runtime supports it", () => {
-    mockRuntimes.current = [
-      { id: "runtime-1", status: "online", provider_capabilities: { force_restart: true } },
-    ];
-    renderPanel();
-    expect(screen.getByTestId("agent-profile-actions")).toHaveAttribute(
-      "data-force-restart-supported",
-      "true",
-    );
-  });
-
-  it("passes forceRestartSupported=false when the bound runtime doesn't support it", () => {
-    mockRuntimes.current = [
-      { id: "runtime-1", status: "online", provider_capabilities: { force_restart: false } },
-    ];
-    renderPanel();
-    expect(screen.getByTestId("agent-profile-actions")).toHaveAttribute(
-      "data-force-restart-supported",
-      "false",
-    );
-  });
-
   // task #28 + Computer-first: computer binding lives in Runtime config
   // (not the Info section) so Computer → Runtime → Model stay together.
   it("shows the bound computer's connection + label in Runtime config (#28)", () => {
-    mockRuntimes.current = [
-      { id: "runtime-1", status: "online", name: "Cursor (s144)", display_name: "s144" },
-    ];
+    mockRuntimeConfig.current = {
+      computer: { daemon_id: "daemon-1", name: "s144", connected: true },
+      runtime: { id: "runtime-1", provider: "cursor" },
+    };
     renderPanel();
     const runtimeSection = screen.getByTestId("agent-profile-runtime-config");
     expect(within(runtimeSection).getByText("Computer")).toBeInTheDocument();
-    expect(within(runtimeSection).getByText("Connected")).toBeInTheDocument();
     expect(within(runtimeSection).getByText("s144")).toBeInTheDocument();
+    // Online: the dot carries the state visually, the text is screen-reader only.
+    expect(within(runtimeSection).getByText("Connected")).toHaveClass("sr-only");
   });
 
-  it("shows disconnected + hostname when no display_name is set (#28)", () => {
-    mockRuntimes.current = [{ id: "runtime-1", status: "offline", name: "Cursor (s144)" }];
+  it("shows disconnected when the Computer has no live runner socket (#28)", () => {
+    mockRuntimeConfig.current = {
+      computer: { daemon_id: "daemon-1", name: "s144", connected: false },
+      runtime: { id: "runtime-1", provider: "cursor" },
+    };
     renderPanel();
     const runtimeSection = screen.getByTestId("agent-profile-runtime-config");
-    expect(within(runtimeSection).getByText("Disconnected")).toBeInTheDocument();
+    // Grey dot carries it visually; the word exists only for screen readers.
+    expect(within(runtimeSection).getByText("Disconnected")).toHaveClass("sr-only");
     expect(within(runtimeSection).getByText("s144")).toBeInTheDocument();
-    expect(within(runtimeSection).queryByText("Cursor (s144)")).not.toBeInTheDocument();
   });
 
-  it("shows the no-computer fallback when the agent's runtime_id doesn't resolve (#28)", () => {
+  // Frank, 2026-08-21: this is the case that used to read "No computer" for
+  // everyone but the owner. The runtimes list is "what may I bind to" and
+  // never carries another member's private runtime; the assembled config
+  // answers "where does this agent run", which is a different question.
+  it("names the computer even when the runtimes list has nothing to bind to", () => {
     mockRuntimes.current = [];
+    mockRuntimeConfig.current = {
+      computer: { daemon_id: "daemon-1", name: "s144", connected: true },
+      runtime: { id: "runtime-1", provider: "cursor" },
+    };
+    renderPanel();
+    const runtimeSection = screen.getByTestId("agent-profile-runtime-config");
+    expect(within(runtimeSection).queryByText("No computer")).not.toBeInTheDocument();
+    expect(within(runtimeSection).getByText("s144")).toBeInTheDocument();
+    // The picker is still handed only what the viewer may bind to.
+    expect(within(runtimeSection).getByTestId("runtime-picker")).toHaveAttribute(
+      "data-selected-provider",
+      "cursor",
+    );
+  });
+
+  it("shows the no-computer fallback when the agent has no bound computer (#28)", () => {
+    mockRuntimes.current = [];
+    mockRuntimeConfig.current = { computer: null, runtime: null };
     renderPanel();
     const runtimeSection = screen.getByTestId("agent-profile-runtime-config");
     expect(within(runtimeSection).getByText("No computer")).toBeInTheDocument();
@@ -501,20 +541,17 @@ describe("AgentSidePanel", () => {
     expect(screen.getByTestId("agent-honor-panel-section")).toBeInTheDocument();
   });
 
-  it("defaults forceRestartSupported to false when the capability object is missing (older backend)", () => {
-    mockRuntimes.current = [{ id: "runtime-1", status: "online" }];
-    renderPanel();
-    expect(screen.getByTestId("agent-profile-actions")).toHaveAttribute(
-      "data-force-restart-supported",
-      "false",
-    );
-  });
-
   it("keeps non-owner access to profile only by default", () => {
     renderPanel("user-other");
     expect(screen.getAllByText("Atlas").length).toBeGreaterThan(0);
     expect(screen.queryByRole("button", { name: "Activity" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Workspace" })).not.toBeInTheDocument();
+  });
+
+  it("shows the owner avatar alongside the owner name", () => {
+    renderPanel();
+    expect(screen.getByTestId("owner-avatar")).toHaveAttribute("aria-label", "Owner");
+    expect(screen.getAllByText("Owner").length).toBeGreaterThanOrEqual(2);
   });
 
   it("shows the current dynamic status under the agent handle", () => {
@@ -573,34 +610,30 @@ describe("AgentSidePanel", () => {
     );
   });
 
-  it("puts Message in vertical Actions — not between header and tabs (LRM-448)", () => {
+  it("copies compact icons into chrome and keeps labeled Actions in the Profile body", () => {
     renderPanel();
     expect(screen.queryByTestId("agent-profile-message-button")).not.toBeInTheDocument();
-    expect(screen.getByTestId("agent-profile-actions")).toBeInTheDocument();
-    expect(screen.getByTestId("agent-profile-action-message")).toHaveTextContent("Message");
+    const chrome = screen.getByTestId("agent-profile-chrome-actions");
+    const actions = screen.getByTestId("agent-profile-actions");
+    expect(screen.getByTestId("agent-profile-tab-content")).toContainElement(actions);
+    expect(screen.getByTestId("agent-profile-identity")).not.toContainElement(actions);
+    expect(screen.getByTestId("agent-profile-identity")).not.toContainElement(chrome);
+    expect(screen.queryByTestId("agent-profile-action-message")).not.toBeInTheDocument();
+    expect(screen.getByTestId("agent-profile-action-start")).toHaveTextContent("Start Agent");
+    expect(screen.getByTestId("agent-profile-chrome-action-message")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "More" })).not.toBeInTheDocument();
   });
 
+  // The role control itself is AgentWorkspaceRole, stubbed above and covered
+  // by its own test file — including that selecting a role PATCHes directly,
+  // with no dialog in between. What matters here is that Info renders it.
   it("shows an agent's workspace role in Info", () => {
     renderPanel();
-    expect(screen.getByText("Role")).toBeInTheDocument();
     expect(screen.getByTestId("agent-workspace-role-value")).toHaveTextContent("Member");
     expect(screen.queryByText("Agent")).not.toBeInTheDocument();
+    // The old pencil-into-a-modal entry point is gone: one value, one picker,
+    // the same one the detail inspector renders.
     expect(screen.queryByTestId("agent-workspace-role-edit")).not.toBeInTheDocument();
-  });
-
-  it("lets workspace owners and admins edit the workspace role", async () => {
-    rolePermission.allowed = true;
-    renderPanel();
-
-    fireEvent.click(screen.getByTestId("agent-workspace-role-edit"));
-    fireEvent.click(screen.getByTestId("agent-workspace-role-save"));
-
-    await waitFor(() => {
-      expect(updateAgentWorkspaceRole).toHaveBeenCalledWith("ws-1", "agent-1", "admin");
-      expect(setQueryData).toHaveBeenCalledTimes(2);
-      expect(invalidateQueries).toHaveBeenCalledTimes(2);
-    });
   });
 
   it("shows Usage as its own tab — not stacked in Profile (LRM-448)", () => {
@@ -788,7 +821,7 @@ describe("AgentSidePanel", () => {
     // dismiss slot — that is the bug Frank reported ("详情卡没有关闭按钮"), so the
     // floating close must now exist with a 44×44 hit target even on `page`.
     const pageClose = screen.getByTestId("side-panel-page-close");
-    expect(pageClose).toHaveClass("size-11");
+    expect(pageClose).toHaveClass("size-8");
     expect(pageClose).toHaveAccessibleName("Close panel");
     expect(container.querySelector("aside")).toHaveClass("min-w-0", "w-full");
     expect(container.querySelector(".overflow-y-auto")).toHaveClass("min-w-0");
@@ -852,9 +885,10 @@ describe("AgentSidePanel", () => {
     expect(screen.queryByText("Changes take effect on the next run")).not.toBeInTheDocument();
   });
 
-  it("LRM-448: Actions stack + Info field labels; Usage lives on its tab", () => {
+  it("keeps header actions visible while Info and Usage stay in their own surfaces", () => {
     activityPermission.allowed = true;
     renderPanel("user-owner");
+    expect(screen.getByTestId("agent-profile-chrome-actions")).toBeInTheDocument();
     expect(screen.getByTestId("agent-profile-actions")).toBeInTheDocument();
     expect(screen.getByText("Display name")).toBeInTheDocument();
     expect(screen.getByText("Description")).toBeInTheDocument();

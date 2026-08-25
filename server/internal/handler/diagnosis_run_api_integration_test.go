@@ -27,7 +27,7 @@ type fakeDiagnosisRunMessageStore struct {
 	issue db.Issue
 }
 
-func (f *fakeDiagnosisRunMessageStore) MessagesForTaskInRange(context.Context, string, int32, int32) ([]db.TaskMessage, error) {
+func (f *fakeDiagnosisRunMessageStore) MessagesForTaskInRange(context.Context, db.MessagesForTaskInRangeParams) ([]db.TaskMessage, error) {
 	return nil, nil
 }
 

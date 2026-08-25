@@ -13,18 +13,20 @@ import {
   User,
 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { AGENT_DESCRIPTION_MAX_LENGTH, agentDetailKeys } from "@multica/core/agents";
-import { api } from "@multica/core/api";
+import { AGENT_DESCRIPTION_MAX_LENGTH } from "@multica/core/agents";
 import type {
   Agent,
+  AgentPresence,
   DashboardUsageByAgent,
   MemberWithUser,
 } from "@multica/core/types";
-import { agentProfileSkillsOptions, runtimeListOptions } from "@multica/core/runtimes";
+import {
+  agentProfileSkillsOptions,
+  agentRuntimeConfigOptions,
+  runtimeListOptions,
+} from "@multica/core/runtimes";
 import { useAgentPermissions } from "@multica/core/permissions";
 import { workspaceKeys } from "@multica/core/workspace/queries";
-import { showErrorToast } from "@multica/ui/lib/error-toast";
-import { toast } from "sonner";
 import {
   formatActorHandleLabel,
   resolveActorDisplayName,
@@ -33,25 +35,29 @@ import {
 import { dashboardUsageByAgentOptions } from "@multica/core/dashboard/queries";
 import { useCustomPricingStore } from "@multica/core/runtimes/custom-pricing-store";
 import { cn } from "@multica/ui/lib/utils";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { AgentHonorPanelSection } from "../../agents/components/agent-honor-panel-section";
 import { AgentActivityStatus } from "../../agents/components/agent-activity-list-item";
 import { ActivityTab } from "../../agents/components/tabs/activity-tab";
 import { RemindersTab } from "../../agents/components/tabs/reminders-tab";
 import { AgentProfileAvatarEditor } from "../../agents/components/agent-profile-avatar-editor";
-import { ModelPicker } from "../../agents/components/inspector/model-picker";
-import { RuntimePicker } from "../../agents/components/inspector/runtime-picker";
-import { ComputerInfoRow } from "../../agents/components/inspector/computer-info-row";
-import { ThinkingPropRow } from "../../agents/components/inspector/thinking-prop-row";
+import {
+  InspectorField,
+  InspectorSectionHeading,
+} from "../../agents/components/inspector/inspector-field";
+import { AgentWorkspaceRole } from "../../agents/components/agent-workspace-role";
+import { RuntimeConfigBlock } from "../../agents/components/inspector/runtime-config-block";
 import { RuntimeConfigDialog } from "../../agents/components/runtime-config-dialog";
 import { MemoryGrowthField } from "../../agents/components/memory-growth-field";
 import { AgentProfileActions } from "../../agents/components/agent-profile-actions";
 import { InlineFieldEditor } from "../../agents/components/inline-field-editor";
 import { useUpdateAgent } from "../../agents/hooks/use-update-agent";
-import { RolesDialog } from "../../settings/components/roles-dialog";
 import { ConversationSidePanelShell } from "../../common/conversation-side-panel-shell";
+import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorStyledName } from "../../common/actor-styled-name";
 import { AgentFilesPanel } from "./agent-files-panel";
 import { useT } from "../../i18n/use-t";
+import { Time } from "../../i18n";
 import { estimateCost, formatTokens, isModelPriced } from "../../runtimes/utils";
 
 type OwnerTab = "activity" | "profile" | "reminders" | "files" | "usage";
@@ -66,6 +72,7 @@ const TAB_ICONS: Record<OwnerTab, typeof Activity> = {
 
 interface AgentSidePanelProps {
   agent: Agent;
+  presence?: AgentPresence;
   currentUserId: string | null;
   members: readonly MemberWithUser[];
   onClose: () => void;
@@ -87,14 +94,14 @@ interface AgentSidePanelProps {
  * conversation — mutually exclusive with the thread panel (same slot,
  * per Frank's direction 2026-07-09: inline panel, not a route jump).
  *
- * LRM-448 Profile v4 (locked A): Computer IA + Multica tokens.
- * Header is Close-only (no Message+⋯). Identity sits under the chrome.
- * Profile tab: editable Display name / Description, Info, Runtime Config
- * section (LRM-470), vertical Actions. Usage is its own tab — never stacked
- * in Profile.
+ * Profile chrome copies Message + Start/Stop + Restart/Reset as compact
+ * icons. Profile tab keeps the labeled ACTIONS stack without Message
+ * (LRM-448), plus editable Display name / Description, Info, Runtime
+ * Config (LRM-470). Usage is its own tab — never stacked in Profile.
  */
 export function AgentSidePanel({
   agent,
+  presence,
   currentUserId,
   members,
   onClose,
@@ -194,14 +201,32 @@ export function AgentSidePanel({
       closeAriaLabel={t(($) => $.side_panel.close_aria)}
       doneLabel={pageDoneLabel}
       leading={leading}
+      actions={
+        !agent.archived_at ? (
+          <AgentProfileActions
+            agent={agent}
+            canManage={canEdit.allowed}
+            presence={presence}
+            layout="icons"
+          />
+        ) : undefined
+      }
     >
       <div
         className={cn(
-          "flex shrink-0 items-center gap-3 pb-3 pl-4 pr-10 pt-3.5",
-          // LRM-1185: the page floating close is now a real 44×44 hit target,
-          // so the identity row must reserve 44 + inset instead of 40.
-          variant === "page" && "pl-0 pr-14",
-          stackedBack && "pr-4 pt-2",
+          "flex shrink-0 items-center gap-3 pb-3 pl-4 pt-3.5",
+          variant === "page" && "pl-0",
+          // Floating chrome sits over this row. Archived / Close-only keeps
+          // the original inset; live agents also reserve the copied icons.
+          stackedBack
+            ? "pr-4 pt-2"
+            : agent.archived_at
+              ? variant === "page"
+                ? "pr-14"
+                : "pr-10"
+              : variant === "page"
+                ? "pr-36"
+                : "pr-32",
         )}
         data-testid="agent-profile-identity"
       >
@@ -226,6 +251,7 @@ export function AgentSidePanel({
           {!agent.archived_at ? (
             <AgentActivityStatus
               agentId={agent.id}
+              presence={presence}
               className="mt-0.5 max-w-none"
               testId="agent-profile-current-status"
             />
@@ -274,6 +300,7 @@ export function AgentSidePanel({
               <div className={tab === "profile" ? undefined : "hidden"}>
                 <AgentProfileTabContent
                   agent={agent}
+                  presence={presence}
                   members={members}
                   currentUserId={currentUserId}
                 />
@@ -310,6 +337,7 @@ export function AgentSidePanel({
         <div className="min-h-0 min-w-0 flex-1 overflow-y-auto">
           <AgentProfileTabContent
             agent={agent}
+            presence={presence}
             members={members}
             currentUserId={currentUserId}
           />
@@ -325,29 +353,24 @@ function ownerName(agent: Agent, members: readonly MemberWithUser[]): string {
   return member?.display_name || member?.name || member?.email || agent.owner_id;
 }
 
-function formatDate(value: string): string {
-  if (!value) return "—";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleDateString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
-}
-
 function AgentProfileTabContent({
   agent,
+  presence,
   members,
   currentUserId,
 }: {
   agent: Agent;
+  presence: AgentPresence | undefined;
   members: readonly MemberWithUser[];
   currentUserId: string | null;
 }) {
   const { t } = useT("agents");
   const wsId = agent.workspace_id;
   const { data: runtimes = [] } = useQuery(runtimeListOptions(wsId));
+  // Server-assembled Computer + runtime + model + thinking. `runtimes` above
+  // stays for the pickers' options — it means "what may I bind to", which is a
+  // different question and a different (filtered) set.
+  const { data: runtimeConfig } = useQuery(agentRuntimeConfigOptions(wsId, agent.id));
   const { data: profileSkills } = useQuery(agentProfileSkillsOptions(agent.id));
   const handleUpdate = useUpdateAgent(wsId);
   const { canEdit, canChangeRole } = useAgentPermissions(agent, wsId);
@@ -361,59 +384,14 @@ function AgentProfileTabContent({
   const canEditRuntime = canEdit.allowed;
   const canEditIdentity = canEdit.allowed;
 
-  const selectedRuntime = runtimes.find((r) => r.id === agent.runtime_id) ?? null;
-  // task #22: gate the profile restart button on the bound runtime's real
-  // capability, never a hardcoded provider list. Missing capabilities object
-  // (older backend, no runtime bound) means false, not "assume supported".
-  const forceRestartSupported =
-    selectedRuntime?.provider_capabilities?.force_restart ?? false;
   const update = (data: Record<string, unknown>) => handleUpdate(agent.id, data);
   const displayName = resolveActorDisplayName(agent, agent.id);
   const [runtimeDialogOpen, setRuntimeDialogOpen] = useState(false);
-  const [roleDialogOpen, setRoleDialogOpen] = useState(false);
-  const [roleSaving, setRoleSaving] = useState(false);
-
-  const updateWorkspaceRole = async (role: "member" | "admin") => {
-    if (role === agent.workspace_role || roleSaving) return;
-
-    const listKey = workspaceKeys.agents(wsId);
-    const detailKey = agentDetailKeys.detail(wsId, agent.id);
-    const previousRole = agent.workspace_role;
-    const patchRole = (workspace_role: "member" | "admin") => {
-      qc.setQueryData<Agent[]>(listKey, (current) =>
-        current?.map((item) =>
-          item.id === agent.id ? { ...item, workspace_role } : item,
-        ),
-      );
-      qc.setQueryData<Agent>(detailKey, (current) =>
-        current ? { ...current, workspace_role } : current,
-      );
-    };
-
-    setRoleSaving(true);
-    patchRole(role);
-    try {
-      await api.updateAgentWorkspaceRole(wsId, agent.id, role);
-      toast.success(t(($) => $.profile_card.role_updated));
-      setRoleDialogOpen(false);
-    } catch (error) {
-      patchRole(previousRole);
-      showErrorToast(
-        error instanceof Error
-          ? error.message
-          : t(($) => $.profile_card.role_update_failed),
-      );
-    } finally {
-      setRoleSaving(false);
-      void qc.invalidateQueries({ queryKey: listKey });
-      void qc.invalidateQueries({ queryKey: detailKey });
-    }
-  };
 
   return (
     <div className="flex min-w-0 flex-col" data-testid="agent-profile-tab-content">
       <div className="space-y-4 p-3 md:p-4">
-        <ProfileField label={t(($) => $.side_panel.display_name_label)}>
+        <InspectorField label={t(($) => $.side_panel.display_name_label)}>
           {canEditIdentity ? (
             <InlineFieldEditor
               value={displayName}
@@ -430,9 +408,9 @@ function AgentProfileTabContent({
           ) : (
             <p className="text-[13px] leading-5">{displayName}</p>
           )}
-        </ProfileField>
+        </InspectorField>
 
-        <ProfileField label={t(($) => $.side_panel.description_label)}>
+        <InspectorField label={t(($) => $.side_panel.description_label)}>
           {canEditIdentity ? (
             <InlineFieldEditor
               value={agent.description ?? ""}
@@ -450,43 +428,50 @@ function AgentProfileTabContent({
               {agent.description || t(($) => $.side_panel.no_description)}
             </p>
           )}
-        </ProfileField>
-
-        <AgentHonorPanelSection agentId={agent.id} workspaceId={agent.workspace_id} />
+        </InspectorField>
 
         <div className="border-t border-border pt-3">
-          <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-            {t(($) => $.side_panel.info_section)}
-          </h3>
-          <div className="grid grid-cols-[100px_minmax(0,1fr)] gap-x-3 gap-y-2 text-[13px]">
-            <span className="pt-0.5 text-muted-foreground">
-              {t(($) => $.profile_card.role_label)}
-            </span>
-            <div className="flex min-w-0 items-center gap-1">
-              <span className="truncate" data-testid="agent-workspace-role-value">
-                {agent.workspace_role === "admin" ? "Admin" : "Member"}
-              </span>
-              {canChangeRole.allowed && !agent.archived_at ? (
-                <button
-                  type="button"
-                  className="inline-flex shrink-0 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  onClick={() => setRoleDialogOpen(true)}
-                  aria-label={t(($) => $.profile_card.role_dialog_title)}
-                  data-testid="agent-workspace-role-edit"
-                >
-                  <Pencil className="size-3.5" aria-hidden />
-                </button>
-              ) : null}
-            </div>
-            <span className="text-muted-foreground">{t(($) => $.side_panel.created_label)}</span>
-            <span className="truncate" title={formatDate(agent.created_at)}>
-              {formatDate(agent.created_at)}
-            </span>
-            <span className="text-muted-foreground">{t(($) => $.side_panel.owner_label)}</span>
-            <span className="truncate" title={ownerName(agent, members)}>
-              {ownerName(agent, members)}
-            </span>
+          <div className="mb-2">
+            <InspectorSectionHeading label={t(($) => $.side_panel.info_section)} />
           </div>
+          <div className="flex flex-wrap gap-x-7 gap-y-4">
+            {/* Same picker the detail inspector renders — role used to be a
+                pencil into a modal here and a picker there, for one value with
+                two possible states. */}
+            <AgentWorkspaceRole
+              wsId={agent.workspace_id}
+              agent={agent}
+              permission={canChangeRole}
+              onRoleChanged={() =>
+                qc.invalidateQueries({ queryKey: workspaceKeys.agents(agent.workspace_id) })
+              }
+            />
+            <InspectorField label={t(($) => $.side_panel.created_label)}>
+              <Time kind="date" value={agent.created_at} className="truncate" />
+            </InspectorField>
+            <InspectorField label={t(($) => $.side_panel.owner_label)}>
+              <Tooltip>
+                <TooltipTrigger
+                  render={<span className="flex min-w-0 items-center gap-1.5" />}
+                >
+                  {agent.owner_id ? (
+                    <ActorAvatar
+                      actorType="member"
+                      actorId={agent.owner_id}
+                      name={ownerName(agent, members)}
+                      avatarUrlHint={members.find((m) => m.user_id === agent.owner_id)?.avatar_url}
+                      size={20}
+                    />
+                  ) : null}
+                  <span className="truncate">{ownerName(agent, members)}</span>
+                </TooltipTrigger>
+                <TooltipContent side="top">{ownerName(agent, members)}</TooltipContent>
+              </Tooltip>
+            </InspectorField>
+          </div>
+          {/* Honor moved into the Info section (Frank 2026-08-19): rich panel
+              stays unchanged, only its position moved under Info. */}
+          <AgentHonorPanelSection agentId={agent.id} workspaceId={agent.workspace_id} />
         </div>
 
         {/* LRM-470 — Runtime Config is its own section (not Info misc rows).
@@ -498,15 +483,13 @@ function AgentProfileTabContent({
           data-testid="agent-profile-runtime-config"
         >
           <div className="mb-2 flex items-center gap-1">
-            <h3 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-              {t(($) => $.side_panel.runtime_section)}
-            </h3>
+            <InspectorSectionHeading label={t(($) => $.side_panel.runtime_section)} />
             {canEditRuntime ? (
               <button
                 type="button"
                 className="-my-1.5 inline-flex shrink-0 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 onClick={() => setRuntimeDialogOpen(true)}
-                aria-label={t(($) => $.execution_config.edit_trigger_aria)}
+                aria-label={t(($) => $.runtime_config.edit_trigger_aria)}
                 data-testid="agent-runtime-config-edit"
               >
                 <Pencil className="size-3.5" aria-hidden />
@@ -517,6 +500,7 @@ function AgentProfileTabContent({
               only the section-heading edit control opens the Dialog. */}
           <RuntimeConfigSummary
             agent={agent}
+            runtimeConfig={runtimeConfig}
             runtimes={runtimes}
             members={members}
             currentUserId={currentUserId}
@@ -537,22 +521,6 @@ function AgentProfileTabContent({
           workspaceSkills={profileSkills?.workspace ?? []}
         />
 
-        <RolesDialog
-          open={roleDialogOpen}
-          onOpenChange={setRoleDialogOpen}
-          mode="select"
-          value={agent.workspace_role}
-          allowedRoles={["member", "admin"]}
-          saving={roleSaving}
-          onSave={(role) => {
-            if (role === "owner") {
-              return Promise.resolve();
-            }
-            return updateWorkspaceRole(role);
-          }}
-          title={t(($) => $.profile_card.role_dialog_title)}
-          subtitle={t(($) => $.profile_card.role_dialog_subtitle)}
-        />
         {/* Memory growth is its own panel block, kept separated by the same
             thin divider used elsewhere in the profile. */}
         {agent.memory_growth ? (
@@ -568,7 +536,7 @@ function AgentProfileTabContent({
           <AgentProfileActions
             agent={agent}
             canManage={canEdit.allowed}
-            forceRestartSupported={forceRestartSupported}
+            presence={presence}
           />
         </div>
       </div>
@@ -591,9 +559,11 @@ function AgentProfileSkills({
       aria-label={t(($) => $.side_panel.skills_section)}
       data-testid="agent-profile-skills"
     >
-      <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-        {t(($) => $.side_panel.skills_section)} ({globalSkills.length + workspaceSkills.length})
-      </h3>
+      <div className="mb-3">
+        <InspectorSectionHeading
+          label={`${t(($) => $.side_panel.skills_section)} (${globalSkills.length + workspaceSkills.length})`}
+        />
+      </div>
       <SkillScopeList
         title={t(($) => $.side_panel.global_skills)}
         emptyLabel={t(($) => $.side_panel.no_global_skills)}
@@ -666,68 +636,26 @@ function SkillScopeList({
 
 function RuntimeConfigSummary({
   agent,
+  runtimeConfig,
   runtimes,
   members,
   currentUserId,
 }: {
   agent: Agent;
+  runtimeConfig: import("@multica/core/types").AgentRuntimeConfig | undefined;
   runtimes: import("@multica/core/types").AgentRuntime[];
   members: readonly MemberWithUser[];
   currentUserId: string | null;
 }) {
-  const { t } = useT("agents");
   return (
-    <>
-      <div className="grid grid-cols-[100px_minmax(0,1fr)] gap-x-3 gap-y-2 text-[13px]">
-        <span className="pt-0.5 text-muted-foreground">
-          {t(($) => $.inspector.prop_computer)}
-        </span>
-        <ComputerInfoRow
-          runtime={
-            runtimes.find((r) => r.id === agent.runtime_id) ?? null
-          }
-        />
-        <span className="pt-0.5 text-muted-foreground">
-          {t(($) => $.inspector.prop_runtime)}
-        </span>
-        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-          <RuntimePicker
-            value={agent.runtime_id}
-            runtimes={runtimes}
-            members={[...members]}
-            currentUserId={currentUserId}
-            canEdit={false}
-            onChange={() => {}}
-          />
-          <ModelPicker
-            runtimeId={agent.runtime_id}
-            value={agent.model ?? ""}
-            canEdit={false}
-            onChange={() => {}}
-          />
-        </div>
-      </div>
-      <div className="mt-2 grid min-w-0 grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
-        <ThinkingPropRow
-          runtimeId={agent.runtime_id}
-          model={agent.model ?? ""}
-          value={agent.thinking_level ?? ""}
-          canEdit={false}
-          onChange={() => {}}
-        />
-      </div>
-    </>
-  );
-}
-
-function ProfileField({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div>
-      <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-        {label}
-      </div>
-      {children}
-    </div>
+    <RuntimeConfigBlock
+      agent={agent}
+      runtimeConfig={runtimeConfig}
+      runtimes={runtimes}
+      members={members}
+      currentUserId={currentUserId}
+      wsId={agent.workspace_id}
+    />
   );
 }
 
@@ -759,13 +687,12 @@ function AgentUsageSection({ agent }: { agent: Agent }) {
 
   return (
     <section aria-label={t(($) => $.side_panel.usage_section)}>
-      <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-        {t(($) => $.side_panel.usage_section)}
-        <span className="font-medium normal-case tracking-normal">
-          {" "}
+      <div className="mb-2 flex items-baseline gap-1.5">
+        <InspectorSectionHeading label={t(($) => $.side_panel.usage_section)} />
+        <span className="text-[11px] text-muted-foreground">
           · {t(($) => $.side_panel.usage_reported_window)}
         </span>
-      </h3>
+      </div>
 
       {isLoading ? (
         <p className="text-xs text-muted-foreground">{t(($) => $.side_panel.usage_loading)}</p>

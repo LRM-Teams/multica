@@ -3,9 +3,25 @@ package researchrun
 import (
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestV6NodeDetailExposesImmutableContentLayers(t *testing.T) {
+	if _, ok := reflect.TypeOf(V6ProjectionNodeDetail{}).FieldByName("ContentLayers"); !ok {
+		t.Fatal("V6 node detail does not expose immutable content layers")
+	}
+	raw, err := os.ReadFile("projection_v6_detail.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"research_result_node", "research_insight_version", "objective", "conclusion"} {
+		if !strings.Contains(string(raw), required) {
+			t.Fatalf("V6 node detail content query missing %q", required)
+		}
+	}
+}
 
 func TestV6ProjectionUsesCanonicalPostgresAndPinnedPages(t *testing.T) {
 	raw, err := os.ReadFile("postgres_projection_v6.go")
@@ -17,6 +33,43 @@ func TestV6ProjectionUsesCanonicalPostgresAndPinnedPages(t *testing.T) {
 		if !strings.Contains(source, required) {
 			t.Fatalf("projection implementation missing %q", required)
 		}
+	}
+}
+
+func TestV6WorkProjectionUsesAssignedBranchScope(t *testing.T) {
+	raw, err := os.ReadFile("postgres_projection_v6.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(raw)
+	for _, required := range []string{
+		"research_v6_work_item_branch",
+		"agent_inbox_event inbox",
+		"inbox.updated_at",
+		"inbox.started_at",
+		"inbox.completed_at",
+		"agent_task_progress_snapshot",
+		"progress.updated_at",
+		`kind != "director" || !terminal`,
+		"build.defaultVisible[workNodeID] = false",
+		`v6ProjectionEdgeID("collapsed_path"`,
+	} {
+		if !strings.Contains(source, required) {
+			t.Fatalf("V6 Work projection missing %q", required)
+		}
+	}
+}
+
+func TestV6WorkProjectionPreservesAttemptFailureDiagnostics(t *testing.T) {
+	termination := projectionTerminationForWork("failed", true, "attempt_budget_exhausted", "", "contract_rejected", "content_layers.conclusion is required")
+	if termination == nil {
+		t.Fatal("failed Work projection omitted termination")
+	}
+	if termination.ReasonCode != "resource_failure" || termination.ReasonDetail != "attempt_budget_exhausted：content_layers.conclusion is required" {
+		t.Fatalf("termination=%+v", termination)
+	}
+	if got := projectionTerminationForWork("succeeded", true, "", "", "", ""); got != nil {
+		t.Fatalf("successful Work has termination=%+v", got)
 	}
 }
 

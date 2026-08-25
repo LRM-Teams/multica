@@ -272,13 +272,13 @@ func (m *evolutionMockDB) QueryRow(_ context.Context, sql string, args ...interf
 		return &evolutionMockRow{values: sharedEvolutionUnitVersionValues(m.version)}
 	case strings.Contains(sql, "SetSharedEvolutionUnitCurrentVersion"):
 		updated := m.unit
-		updated.ID = uuidArg(args, 0)
-		updated.WorkspaceID = uuidArg(args, 1)
-		updated.CurrentVersionID = uuidArg(args, 2)
+		updated.ID = uuidArg(args, 1)
+		updated.WorkspaceID = uuidArg(args, 2)
+		updated.CurrentVersionID = uuidArg(args, 0)
 		for _, unit := range m.activeUnits {
 			if unit.ID == updated.ID {
 				updated = unit
-				updated.CurrentVersionID = uuidArg(args, 2)
+				updated.CurrentVersionID = uuidArg(args, 0)
 				break
 			}
 		}
@@ -289,39 +289,39 @@ func (m *evolutionMockDB) QueryRow(_ context.Context, sql string, args ...interf
 	case strings.Contains(sql, "RejectEvolutionSubmissionWithReview"):
 		updated := m.submission
 		updated.Status = "rejected"
-		updated.RejectReason = stringArg(args, 2)
-		updated.ReviewDecision = stringArg(args, 3)
-		updated.ReviewConfidence = float8Arg(args, 4)
-		updated.ReviewRiskLevel = stringArg(args, 5)
-		updated.ReviewReason = stringArg(args, 6)
-		updated.ReviewMetadata = bytesArg(args, 7)
+		updated.RejectReason = stringArg(args, 0)
+		updated.ReviewDecision = stringArg(args, 1)
+		updated.ReviewConfidence = float8Arg(args, 2)
+		updated.ReviewRiskLevel = stringArg(args, 3)
+		updated.ReviewReason = stringArg(args, 4)
+		updated.ReviewMetadata = bytesArg(args, 5)
 		m.submission = updated
 		return &evolutionMockRow{values: evolutionSubmissionValues(updated)}
 	case strings.Contains(sql, "MarkEvolutionSubmissionNeedsReview"):
 		updated := m.submission
 		updated.Status = "needs_review"
-		updated.ReviewDecision = stringArg(args, 2)
-		updated.ReviewConfidence = float8Arg(args, 3)
-		updated.ReviewRiskLevel = stringArg(args, 4)
-		updated.ReviewReason = stringArg(args, 5)
-		updated.ReviewMetadata = bytesArg(args, 6)
+		updated.ReviewDecision = stringArg(args, 0)
+		updated.ReviewConfidence = float8Arg(args, 1)
+		updated.ReviewRiskLevel = stringArg(args, 2)
+		updated.ReviewReason = stringArg(args, 3)
+		updated.ReviewMetadata = bytesArg(args, 4)
 		m.submission = updated
 		return &evolutionMockRow{values: evolutionSubmissionValues(updated)}
 	case strings.Contains(sql, "MarkEvolutionSubmissionPromotedWithReview"):
 		updated := m.submission
 		updated.Status = "promoted"
-		updated.PromotedUnitID = uuidArg(args, 2)
-		updated.ReviewDecision = stringArg(args, 3)
-		updated.ReviewConfidence = float8Arg(args, 4)
-		updated.ReviewRiskLevel = stringArg(args, 5)
-		updated.ReviewReason = stringArg(args, 6)
-		updated.ReviewMetadata = bytesArg(args, 7)
+		updated.PromotedUnitID = uuidArg(args, 0)
+		updated.ReviewDecision = stringArg(args, 1)
+		updated.ReviewConfidence = float8Arg(args, 2)
+		updated.ReviewRiskLevel = stringArg(args, 3)
+		updated.ReviewReason = stringArg(args, 4)
+		updated.ReviewMetadata = bytesArg(args, 5)
 		m.submission = updated
 		return &evolutionMockRow{values: evolutionSubmissionValues(updated)}
 	case strings.Contains(sql, "MarkEvolutionSubmissionPromoted"):
 		updated := m.submission
 		updated.Status = "promoted"
-		updated.PromotedUnitID = uuidArg(args, 2)
+		updated.PromotedUnitID = uuidArg(args, 0)
 		m.submission = updated
 		return &evolutionMockRow{values: evolutionSubmissionValues(updated)}
 	case strings.Contains(sql, "UpsertSharedEvolutionUnitFile"):
@@ -451,7 +451,7 @@ func evolutionAgentValues(a db.Agent) []any {
 }
 
 func evolutionSubmissionValues(s db.EvolutionUnitSubmission) []any {
-	return []any{s.ID, s.WorkspaceID, s.SourceAgentID, s.SourceMemberID, s.UnitType, s.LocalUnitID, s.Title, s.Summary, s.Content, s.Payload, s.SanitizedPayload, s.ContentHash, s.BundleHash, s.BundleRef, s.Sensitivity, s.Confidence, s.SuggestedScope, s.Evidence, s.Applies, s.Tags, s.Tools, s.TaskTypes, s.ProjectTypes, s.Languages, s.Frameworks, s.Status, s.RejectReason, s.ReviewDecision, s.ReviewConfidence, s.ReviewRiskLevel, s.ReviewReason, s.ReviewMetadata, s.ReviewedAt, s.PromotedUnitID, s.SourceCreatedAt, s.CreatedAt, s.UpdatedAt}
+	return []any{s.ID, s.WorkspaceID, s.SourceAgentID, s.SourceMemberID, s.UnitType, s.LocalUnitID, s.Title, s.Summary, s.Content, s.Payload, s.SanitizedPayload, s.ContentHash, s.BundleHash, s.BundleRef, s.Sensitivity, s.Confidence, s.SuggestedScope, s.Evidence, s.Applies, s.Tags, s.Tools, s.TaskTypes, s.ProjectTypes, s.Languages, s.Frameworks, s.Status, s.RejectReason, s.PromotedUnitID, s.SourceCreatedAt, s.CreatedAt, s.UpdatedAt, s.ReviewDecision, s.ReviewConfidence, s.ReviewRiskLevel, s.ReviewReason, s.ReviewMetadata, s.ReviewedAt}
 }
 
 func evolutionFileValues(f db.EvolutionUnitSubmissionFile) []any {

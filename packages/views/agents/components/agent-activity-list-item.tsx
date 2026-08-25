@@ -9,11 +9,11 @@ import { ActorAvatar } from "../../common/actor-avatar";
 import { ProviderLogo } from "../../runtimes/components/provider-logo";
 import { useT } from "../../i18n";
 import { resolveAgentLiveStatus } from "../resolve-agent-live-status";
-import { runnerActivityToneDotClass } from "../runner-activity-tone";
+import { runnerActivityVisuals } from "../runner-activity-visuals";
 
 /**
- * Shared list Activity mark. Labels and tones are supplied by the server-owned
- * Workspace Runner projection; presence and task state are never interpreted.
+ * Shared list Activity mark. The daemon supplies lifecycle facts and a label;
+ * this view owns visibility, color, and motion.
  */
 export function AgentActivityStatus({
   agentId,
@@ -104,11 +104,12 @@ function AgentActivityStatusView({
   const liveStatus = resolveAgentLiveStatus({ presence, tAgents });
   const isOnline = presence === "online";
   const isOffline = presence === "offline";
-  const hasDynamicActivity =
-    summary?.visibility === "visible" &&
-    summary.tone !== "success" &&
-    summary.tone !== "neutral" &&
-    (isOnline || (isOffline && summary.tone === "error"));
+  const activityVisuals = summary
+    ? runnerActivityVisuals({ activity_kind: summary.activityKind, detail_kind: summary.detailKind })
+    : null;
+  const hasDynamicActivity = Boolean(
+    summary && activityVisuals?.show && (isOnline || (isOffline && summary.activityKind === "error")),
+  );
   if (!liveStatus && !hasDynamicActivity) {
     return (
       <span
@@ -123,15 +124,9 @@ function AgentActivityStatusView({
       </span>
     );
   }
-  const isWorkingTone =
-    hasDynamicActivity &&
-    (summary.tone === "warning" ||
-      summary.tone === "info" ||
-      summary.tone === "active" ||
-      summary.tone === "running");
-  const activityTone = hasDynamicActivity ? summary.tone : "success";
-  const dotClass = runnerActivityToneDotClass(activityTone);
-  const pulses = isWorkingTone;
+  const activityKind = hasDynamicActivity ? summary!.activityKind : "online";
+  const dotClass = activityVisuals?.dotClass ?? "bg-emerald-500";
+  const pulses = hasDynamicActivity && Boolean(activityVisuals?.pulse);
   const showLiveStatus = !!liveStatus && !hasDynamicActivity;
   return (
     <span
@@ -141,7 +136,7 @@ function AgentActivityStatusView({
         className,
       )}
       data-testid={testId}
-      data-activity-tone={activityTone}
+      data-activity-kind={activityKind}
     >
       {showLiveStatus ? (
         <>
@@ -165,7 +160,7 @@ function AgentActivityStatusView({
             ) : null}
             <span className={cn("absolute inset-0 rounded-full", dotClass)} />
           </span>
-          <span className="truncate text-[13px]">{summary.label}</span>
+          <span className="truncate text-[13px]">{summary!.label}</span>
         </>
       ) : null}
     </span>

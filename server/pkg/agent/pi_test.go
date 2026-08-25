@@ -268,7 +268,7 @@ func TestBuildPiArgsBasicFlags(t *testing.T) {
 	}, slog.Default())
 
 	joined := strings.Join(args, " ")
-	for _, want := range []string{"-p", "--mode json", "--session-id " + sessionID, "--session-dir /agent-root/.pi-sessions", "--provider anthropic", "--model claude-sonnet-4-20250514", "--thinking high", "--append-system-prompt"} {
+	for _, want := range []string{"-p", "--mode json", "--session-id " + sessionID, "--session-dir /agent-root/.pi-sessions", "--model anthropic/claude-sonnet-4-20250514", "--thinking high", "--append-system-prompt"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("expected %q in args, got: %v", want, args)
 		}
@@ -296,6 +296,17 @@ func TestBuildPiArgsUsesAgentLocalDirectoryForOpaqueSessionID(t *testing.T) {
 		if strings.Contains(joined, "--session ") {
 			t.Fatalf("%s treated opaque session ID as a path: %v", name, args)
 		}
+	}
+}
+
+func TestBuildPiArgsPreservesProviderPrefixedModel(t *testing.T) {
+	args := buildPiArgs("hello", "019ffcb7-0848-7087-a6fd-c14da72509ea", ExecOptions{Cwd: "/agent-root", Model: "openai/gpt-5.5"}, slog.Default())
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "--model openai/gpt-5.5") {
+		t.Fatalf("prefixed model was split or lost: %v", args)
+	}
+	if strings.Contains(joined, "--provider openai") {
+		t.Fatalf("prefixed model should not be split into provider/model args: %v", args)
 	}
 }
 

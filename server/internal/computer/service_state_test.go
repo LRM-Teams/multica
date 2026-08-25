@@ -8,7 +8,7 @@ import (
 
 func TestServiceStateIsSeparateFromServicePID(t *testing.T) {
 	root := t.TempDir()
-	state := persistedServiceState{ComputerID: "computer-a", ComputerGeneration: 4, PID: 1234, StartedAt: time.Now().UTC()}
+	state := persistedServiceState{ComputerID: "computer-a", ServiceGeneration: "service-4", PID: 1234, StartedAt: time.Now().UTC()}
 	if err := writeServiceState(root, state); err != nil {
 		t.Fatal(err)
 	}

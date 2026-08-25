@@ -85,8 +85,8 @@ func TestHarvestWorkJournalDisabledReturnsEmptyRepos(t *testing.T) {
 
 func TestHostHarvestWorkDigestDisabledReturnsEmptyRepos(t *testing.T) {
 	start := time.Date(2026, time.August, 10, 0, 0, 0, 0, time.UTC)
-	host := &Host{
-		processIdentity:    HostProcessIdentity{ComputerID: "computer-1"},
+	host := &ComputerCore{
+		processIdentity:    ComputerIdentity{ComputerID: "computer-1"},
 		workJournalHome:    t.TempDir(),
 		workJournalEnabled: false,
 	}
@@ -112,8 +112,8 @@ func TestHostWorkJournalToggleChangesHarvestFromEmptyToFixtureRepos(t *testing.T
 		Start:     start,
 		End:       start.Add(7 * 24 * time.Hour),
 	}
-	host := &Host{
-		processIdentity: HostProcessIdentity{ComputerID: "computer-1"},
+	host := &ComputerCore{
+		processIdentity: ComputerIdentity{ComputerID: "computer-1"},
 		workJournalHome: home,
 		workJournalRoot: root,
 	}
@@ -144,7 +144,7 @@ func TestHostWorkJournalToggleChangesHarvestFromEmptyToFixtureRepos(t *testing.T
 	if !again.Disabled || len(again.Repos) != 0 {
 		t.Fatalf("re-disabled journal %+v", again)
 	}
-	reloaded := &Host{workJournalRoot: root}
+	reloaded := &ComputerCore{workJournalRoot: root}
 	reloaded.loadWorkJournalSetting()
 	if reloaded.WorkJournalEnabled() {
 		t.Fatal("persisted setting should be disabled after toggle off")

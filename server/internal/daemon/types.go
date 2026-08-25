@@ -31,6 +31,8 @@ type ResidentAgentRuntimeConfig struct {
 	RuntimeID        string     `json:"runtime_id"`
 	WorkspaceContext string     `json:"workspace_context,omitempty"`
 	Agent            *AgentData `json:"agent"`
+	// RuntimeEnv is the machine-default env injected before agent custom_env.
+	RuntimeEnv map[string]string `json:"runtime_env,omitempty"`
 }
 
 // Task represents a claimed task from the server.
@@ -51,20 +53,30 @@ type Task struct {
 	// by the server from graph_memory_profile (design §1/A4). It overrides
 	// the daemon's MULTICA_MEMORY_TYPE env default for this task only;
 	// empty means the env default applies.
-	MemoryType  string     `json:"memory_type,omitempty"`
-	ThreadName  string     `json:"thread_name,omitempty"` // semantic title for provider-native session/thread history
-	Agent       *AgentData `json:"agent,omitempty"`
-	ProjectID   string     `json:"project_id,omitempty"`   // issue's project, when present
-	ChannelID   string     `json:"channel_id,omitempty"`   // exact DM/channel surface, when present
-	ChannelKind string     `json:"channel_kind,omitempty"` // "dm" | "group" when ChannelID is set; drives personal-memory entry gate
+	MemoryType string `json:"memory_type,omitempty"`
+	// ExploreAgents / ExploreMaxRounds are the task-scoped graph explore
+	// overrides sent with MemoryType; zero means the env default applies.
+	ExploreAgents    int        `json:"explore_agents,omitempty"`
+	ExploreMaxRounds int        `json:"explore_max_rounds,omitempty"`
+	ThreadName       string     `json:"thread_name,omitempty"` // semantic title for provider-native session/thread history
+	Agent            *AgentData `json:"agent,omitempty"`
+	ProjectID        string     `json:"project_id,omitempty"`   // issue's project, when present
+	ChannelID        string     `json:"channel_id,omitempty"`   // exact DM/channel surface, when present
+	ChannelKind      string     `json:"channel_kind,omitempty"` // "dm" | "group" when ChannelID is set; drives personal-memory entry gate
 	// ScopedSecrets are channel/project (and optionally agent) secrets injected
 	// after filtering by the current task channel/project (LRM-953). Agent
 	// custom_env remains separate and is treated as agent-scoped.
-	ScopedSecrets            []ScopedSecret                     `json:"scoped_secrets,omitempty"`
-	ChannelGoal              *protocol.ChannelGoalContext       `json:"channel_goal,omitempty"`                // active channel goal, refreshed on every claim
-	ProjectTitle             string                             `json:"project_title,omitempty"`               // human-readable project title for context injection
-	PriorSessionID           string                             `json:"prior_session_id,omitempty"`            // Claude session ID from a previous task on this issue
-	PriorWorkDir             string                             `json:"prior_work_dir,omitempty"`              // work_dir from a previous task on this issue
+	ScopedSecrets []ScopedSecret `json:"scoped_secrets,omitempty"`
+	// RuntimeEnv is the machine-default env injected before agent custom_env.
+	RuntimeEnv     map[string]string            `json:"runtime_env,omitempty"`
+	ChannelGoal    *protocol.ChannelGoalContext `json:"channel_goal,omitempty"`     // active channel goal, refreshed on every claim
+	ProjectTitle   string                       `json:"project_title,omitempty"`    // human-readable project title for context injection
+	PriorSessionID string                       `json:"prior_session_id,omitempty"` // Claude session ID from a previous task on this issue
+	PriorWorkDir   string                       `json:"prior_work_dir,omitempty"`   // work_dir from a previous task on this issue
+	// ForceFreshSession is true for one-shot wakes (Period Brief
+	// collect/synth/retry, manual rerun). When set, PriorSessionID must not
+	// be resumed and resident Pi must not inherit the last conversation.
+	ForceFreshSession        bool                               `json:"force_fresh_session,omitempty"`
 	TriggerCommentID         string                             `json:"trigger_comment_id,omitempty"`          // comment that triggered this task
 	TriggerThreadID          string                             `json:"trigger_thread_id,omitempty"`           // root comment ID for the triggering thread; falls back to trigger_comment_id on old servers
 	TriggerCommentContent    string                             `json:"trigger_comment_content,omitempty"`     // content of the triggering comment

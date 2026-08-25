@@ -304,7 +304,7 @@ func TestCodexHandleServerRequestFileChangeApproval(t *testing.T) {
 
 	c, fs, _ := newTestCodexClient(t)
 
-	c.handleLine(`{"jsonrpc":"2.0","id":11,"method":"applyPatchApproval","params":{}}`)
+	c.handleLine(`{"jsonrpc":"2.0","id":11,"method":"item/fileChange/requestApproval","params":{}}`)
 
 	lines := fs.Lines()
 	if len(lines) != 1 {
@@ -1065,6 +1065,12 @@ func TestCodexStartOrResumeThreadStartsFresh(t *testing.T) {
 				if params["cwd"] != "/work" {
 					t.Errorf("cwd = %v, want /work", params["cwd"])
 				}
+				if params["approvalPolicy"] != "never" {
+					t.Errorf("approvalPolicy = %v, want never", params["approvalPolicy"])
+				}
+				if params["sandbox"] != "danger-full-access" {
+					t.Errorf("sandbox = %v, want danger-full-access", params["sandbox"])
+				}
 				if params["persistExtendedHistory"] != true {
 					t.Error("expected persistExtendedHistory=true on thread/start")
 				}
@@ -1175,6 +1181,12 @@ func TestCodexStartOrResumeThreadResumesPriorThread(t *testing.T) {
 				}
 				if params["cwd"] != "/work" {
 					t.Errorf("cwd = %v, want /work", params["cwd"])
+				}
+				if params["approvalPolicy"] != "never" {
+					t.Errorf("approvalPolicy = %v, want never", params["approvalPolicy"])
+				}
+				if params["sandbox"] != "danger-full-access" {
+					t.Errorf("sandbox = %v, want danger-full-access", params["sandbox"])
 				}
 			},
 		},

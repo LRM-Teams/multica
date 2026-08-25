@@ -50,7 +50,7 @@ func testEnvironmentSwitcher(t *testing.T, waitReadyErr error) (*environmentSwit
 			return []computer.WorkspaceBinding{{Environment: environment, WorkspaceID: "ws-test", Active: true}}, nil
 		},
 		health: func(context.Context) map[string]any {
-			return map[string]any{"status": "running", "active_task_count": float64(2)}
+			return map[string]any{"status": "running", "activeTaskCount": float64(2)}
 		},
 		withPackageLock: func(_ context.Context, fn func() error) error {
 			events = append(events, "lock")

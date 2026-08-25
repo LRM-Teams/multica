@@ -55,7 +55,7 @@ export type WSEventType =
   | "daemon:heartbeat"
   | "daemon:register"
   | "daemon:runtime_updated"
-  | "computer:updated"
+  | "computer:status"
   | "computer:upgrade:progress"
   | "computer:upgrade:done"
   | "skill:created"
@@ -110,7 +110,8 @@ export type WSEventType =
   | "research_session:message"
   | "research_session:stage_eval"
   | "research_session:status_changed"
-  | "research_session:product_round";
+  | "research_session:product_round"
+  | "research_projection_v6:delta";
 
 export interface WSMessage<T = unknown> {
   type: WSEventType;
@@ -169,8 +170,10 @@ export interface DaemonRuntimeUpdatedPayload {
   runtime: AgentRuntime;
 }
 
-export interface ComputerUpdatedPayload {
+export interface ComputerStatusPayload {
   computer_id: string;
+  status: "connected" | "disconnected";
+  changed_at: string;
 }
 
 export interface ComputerUpgradeProgressPayload {
@@ -298,15 +301,15 @@ export interface TaskMessagePayload {
 
 /** `agent_reminder:changed` — a pure invalidate signal (schedule/snooze/update/cancel/fire/terminalize, emitted post-commit). Minimal on purpose: no title/anchor/reminder data broadcast, just the scope to refetch. */
 export interface AgentReminderChangedPayload {
-  agent_id: string;
+  agentId: string;
 }
 
-// The Workspace Runner Activity read-model is presentation-safe: callers must
-// display these fields as supplied and never infer runtime state.
+// The WorkspaceDaemon Activity read-model carries lifecycle facts and bounded
+// display text. Views derive visual semantics from the fact fields.
 export interface RunnerActivitySummary {
+  activityKind: string;
+  detailKind: string;
   label: string;
-  tone: string;
-  visibility: string;
 }
 
 export interface RunnerActivityTimelineRow {
@@ -314,7 +317,8 @@ export interface RunnerActivityTimelineRow {
   occurred_at: string;
   title: string;
   subtext?: string;
-  tone: string;
+  activity_kind: string;
+  detail_kind: string;
   body_kind: string;
   body?: string;
 }
@@ -615,7 +619,7 @@ export interface WSEventPayloadMap {
   "daemon:heartbeat": unknown;
   "daemon:register": unknown;
   "daemon:runtime_updated": DaemonRuntimeUpdatedPayload;
-  "computer:updated": ComputerUpdatedPayload;
+  "computer:status": ComputerStatusPayload;
   "computer:upgrade:progress": ComputerUpgradeProgressPayload;
   "computer:upgrade:done": ComputerUpgradeDonePayload;
   "skill:created": unknown;
@@ -639,6 +643,11 @@ export interface WSEventPayloadMap {
   "research_session:message": unknown;
   "research_session:stage_eval": unknown;
   "research_session:status_changed": unknown;
+  "research_projection_v6:delta": {
+    run_id: string;
+    through_sequence?: number;
+    delta?: unknown;
+  };
 }
 
 /**

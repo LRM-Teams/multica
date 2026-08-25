@@ -26,20 +26,48 @@ func runComputerStart(cmd *cobra.Command, args []string) error {
 		health := (&computer.Lifecycle{}).Health(ctx)
 		cancel()
 		if computer.Alive(health) {
-			return waitForWorkspaceReady(binding.WorkspaceID, computer.StartupTimeout)
+			fmt.Fprintf(os.Stderr, "Computer is already running (pid %s, version %s).\n", healthValue(health, "pid"), healthValue(health, "cliVersion"))
+			if err := waitWithTerminalProgress(os.Stderr, terminalIsInteractive(os.Stderr),
+				fmt.Sprintf("Waiting for Workspace %s connection", workspaceLabel(binding)),
+				func() error { return waitForWorkspaceReady(binding.WorkspaceID, computer.StartupTimeout) }); err != nil {
+				return err
+			}
+			fmt.Fprintf(os.Stderr, "%s Workspace %s connected.\n", terminalSuccessMark(os.Stderr), workspaceLabel(binding))
+			return nil
 		}
 	}
 	foreground, _ := cmd.Flags().GetBool("foreground")
 	if foreground {
-		return runComputerResident(cmd, args)
+		fmt.Fprintln(os.Stderr, "Starting Computer in the foreground...")
+		return run(cmd, args)
 	}
 	if err := runDaemonBackground(cmd); err != nil {
 		return err
 	}
 	if selected {
-		return waitForWorkspaceReady(binding.WorkspaceID, computer.StartupTimeout)
+		if err := waitWithTerminalProgress(os.Stderr, terminalIsInteractive(os.Stderr),
+			fmt.Sprintf("Waiting for Workspace %s connection", workspaceLabel(binding)),
+			func() error { return waitForWorkspaceReady(binding.WorkspaceID, computer.StartupTimeout) }); err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "%s Workspace %s connected.\n", terminalSuccessMark(os.Stderr), workspaceLabel(binding))
 	}
 	return nil
+}
+
+func workspaceLabel(binding computer.WorkspaceBinding) string {
+	if binding.WorkspaceSlug != "" {
+		return "/" + binding.WorkspaceSlug
+	}
+	return binding.WorkspaceID
+}
+
+func healthValue(health map[string]any, key string) string {
+	value := strings.TrimSpace(fmt.Sprint(health[key]))
+	if value == "" || value == "<nil>" {
+		return "unknown"
+	}
+	return value
 }
 
 func waitForWorkspaceReady(workspaceID string, timeout time.Duration) error {
@@ -57,7 +85,7 @@ func waitForWorkspaceReady(workspaceID string, timeout time.Duration) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		health := lifecycle.Health(ctx)
 		cancel()
-		if health["status"] == "running" && health["connected"] == true && normalizeAPIBaseURL(fmt.Sprint(health["server_url"])) == normalizeAPIBaseURL(target.Origin) && healthContainsWorkspace(health, workspaceID) {
+		if health["status"] == "running" && health["connected"] == true && normalizeAPIBaseURL(fmt.Sprint(health["serverUrl"])) == normalizeAPIBaseURL(target.Origin) && healthContainsWorkspace(health, workspaceID) {
 			return nil
 		}
 		time.Sleep(250 * time.Millisecond)
@@ -67,7 +95,9 @@ func waitForWorkspaceReady(workspaceID string, timeout time.Duration) error {
 
 func runDaemonBackground(cmd *cobra.Command) error {
 	lc := &computer.Lifecycle{}
-	res, err := lc.StartBackground(computerStartOptions(cmd))
+	res, err := runWithTerminalProgress(os.Stderr, terminalIsInteractive(os.Stderr), "Starting Computer", func() (computer.StartResult, error) {
+		return lc.StartBackground(computerStartOptions(cmd))
+	})
 	if err != nil {
 		return err
 	}
@@ -76,8 +106,10 @@ func runDaemonBackground(cmd *cobra.Command) error {
 
 func printComputerStartResult(res computer.StartResult) error {
 	if res.Started {
-		fmt.Fprintf(os.Stderr, "Computer started (pid %d, version %s)\n", res.Pid, version)
-		fmt.Fprintf(os.Stderr, "Logs: %s\n", res.LogPath)
+		fmt.Fprintf(os.Stderr, "%s Computer is running.\n", terminalSuccessMark(os.Stderr))
+		fmt.Fprintf(os.Stderr, "  PID:     %d\n", res.Pid)
+		fmt.Fprintf(os.Stderr, "  Version: %s\n", version)
+		fmt.Fprintf(os.Stderr, "  Logs:    %s\n", res.LogPath)
 		return nil
 	}
 
@@ -136,18 +168,28 @@ func runComputerRestart(cmd *cobra.Command, args []string) error {
 		return err // validate before stopping the one resident
 	}
 	lc := &computer.Lifecycle{}
-	result, err := lc.Restart(computerStartOptions(cmd))
+	result, err := runWithTerminalProgress(os.Stderr, terminalIsInteractive(os.Stderr), "Restarting Computer", func() (computer.RestartResult, error) {
+		return lc.Restart(computerStartOptions(cmd))
+	})
 	if err != nil {
 		return err
 	}
 	if result.Stop.Running && result.Stop.Pid > 0 {
-		fmt.Fprintf(os.Stderr, "Stopping Computer (pid %d)...\n", result.Stop.Pid)
+		fmt.Fprintf(os.Stderr, "  Stopped previous process (pid %d).\n", result.Stop.Pid)
+		if result.Stop.GracefulFailed {
+			fmt.Fprintln(os.Stderr, "  Graceful control was unavailable; forced process cleanup completed.")
+		}
 	}
 	if err := printComputerStartResult(result.Start); err != nil {
 		return err
 	}
 	if selected {
-		return waitForWorkspaceReady(binding.WorkspaceID, computer.StartupTimeout)
+		if err := waitWithTerminalProgress(os.Stderr, terminalIsInteractive(os.Stderr),
+			fmt.Sprintf("Waiting for Workspace %s connection", workspaceLabel(binding)),
+			func() error { return waitForWorkspaceReady(binding.WorkspaceID, computer.StartupTimeout) }); err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "%s Workspace %s connected.\n", terminalSuccessMark(os.Stderr), workspaceLabel(binding))
 	}
 	return nil
 }
@@ -156,23 +198,27 @@ func runComputerRestart(cmd *cobra.Command, args []string) error {
 
 func runComputerStop(cmd *cobra.Command, _ []string) error {
 	lc := &computer.Lifecycle{}
-	label := "Computer"
 
-	res := lc.Stop()
+	res, _ := runWithTerminalProgress(os.Stderr, terminalIsInteractive(os.Stderr), "Stopping Computer", func() (computer.StopResult, error) {
+		return lc.Stop(), nil
+	})
 	if !res.Running {
-		fmt.Fprintf(os.Stderr, "%s is not running.\n", label)
+		fmt.Fprintln(os.Stderr, "Computer is already stopped.")
 		return nil
+	}
+	if res.GracefulFailed {
+		fmt.Fprintln(os.Stderr, "  Graceful control was unavailable; cleaning up processes directly.")
 	}
 	if res.Err != nil {
 		return res.Err
 	}
 	if res.Stopped {
-		fmt.Fprintf(os.Stderr, "Stopping Computer (pid %d)...\n", res.Pid)
-		fmt.Fprintln(os.Stderr, "Computer stopped.")
+		fmt.Fprintf(os.Stderr, "%s Computer stopped (pid %d).\n", terminalSuccessMark(os.Stderr), res.Pid)
 		return nil
 	}
 
 	fmt.Fprintln(os.Stderr, "Computer is still stopping. It may be finishing a running task.")
+	fmt.Fprintln(os.Stderr, "Check: multica computer status")
 	return nil
 }
 
@@ -212,7 +258,7 @@ func printDaemonStatusReport(w io.Writer, label string, health map[string]any) {
 	rows := []row{
 		{label, fmt.Sprintf("running (pid %v, uptime %v)", health["pid"], health["uptime"])},
 	}
-	if id, ok := health["computer_id"].(string); ok && id != "" {
+	if id, ok := health["computerId"].(string); ok && id != "" {
 		rows = append(rows, row{"Computer ID", id})
 	}
 	if session, ok := health["session_present"].(bool); ok {
@@ -257,7 +303,7 @@ func printDaemonStatusReport(w io.Writer, label string, health map[string]any) {
 			})
 		}
 	}
-	if version, ok := health["cli_version"].(string); ok && version != "" {
+	if version, ok := health["cliVersion"].(string); ok && version != "" {
 		rows = append(rows, row{"Version", version})
 	}
 

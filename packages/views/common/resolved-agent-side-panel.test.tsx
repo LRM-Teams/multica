@@ -36,6 +36,9 @@ vi.mock("@multica/core/agents", () => ({
   agentDetailOptions: (wsId: string, agentId: string) => ({
     queryKey: ["workspaces", wsId, "agent", agentId],
   }),
+  agentPresenceOptions: (wsId: string) => ({
+    queryKey: ["workspaces", wsId, "agent-presence"],
+  }),
   memberProfileOptions: (wsId: string, memberType: string, memberId: string) => ({
     queryKey: ["workspaces", wsId, "member-profile", memberType, memberId],
   }),
@@ -116,7 +119,6 @@ function makeAgent(id = "agent-1"): Agent {
     runtime_config: {},
     custom_args: [],
     status: "idle",
-    max_concurrent_tasks: 1,
     model: "",
     thinking_level: "",
     owner_id: "owner-1",

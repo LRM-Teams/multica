@@ -1,23 +1,20 @@
 "use client";
 
-import { useMemo, type ReactNode } from "react";
-import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMemo } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Clock, Link2, Repeat } from "lucide-react";
 import type { Agent } from "@multica/core/types";
 import { ApiError } from "@multica/core/api";
 import {
   agentRemindersKeys,
-  agentRemindersHistoryOptions,
   agentRemindersUpcomingOptions,
 } from "@multica/core/agents/queries";
 import {
-  adaptFiredRow,
-  adaptUpcomingRow,
-  type FiredReminderRow,
+  toUpcomingReminderRow,
   type ReminderDefinitionRow,
   type ReminderCadence,
 } from "@multica/core/agents/reminder-view-model";
-import { Button } from "@multica/ui/components/ui/button";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { useT } from "../../../i18n";
 import { AppLink } from "../../../navigation/app-link";
 import { useOptionalNavigation } from "../../../navigation/context";
@@ -27,66 +24,23 @@ interface RemindersTabProps {
   agent: Agent;
 }
 
-/**
- * Agent Card Reminders tab — human READ-ONLY per Spec #2788. Zero mutation
- * affordances: no schedule/snooze/update/cancel/dismiss/delete button, menu,
- * or inline form anywhere in this file. A human who wants a change asks the
- * Agent; only the owning Agent may act, via its own CLI.
- *
- * Upcoming renders active definitions ordered by next fire; History renders
- * immutable fired occurrences, newest first. Neither section reflects
- * transient delivery results or offers human mutation controls.
- *
- * LRM-505 field/IA alignment (not neo-brutal skin): title; clock + relative
- * + absolute time; one-shot/recurring kind; recurring cadence/timezone;
- * readable anchor (bare `#workspace:shortId` suppressed upstream); status.
- */
 export function RemindersTab({ agent }: RemindersTabProps) {
   const { t } = useT("agents");
   const queryClient = useQueryClient();
   useAgentRemindersRealtime(agent.id);
 
-  const {
-    data: upcomingData,
-    isLoading: upcomingLoading,
-    isError: upcomingIsError,
-    error: upcomingError,
-  } = useQuery(agentRemindersUpcomingOptions(agent.id));
-  const {
-    data: historyData,
-    isLoading: historyLoading,
-    isError: historyIsError,
-    error: historyError,
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage,
-  } = useInfiniteQuery(agentRemindersHistoryOptions(agent.id));
-  const upcomingRows = useMemo<ReminderDefinitionRow[]>(
+  const { data, isLoading, isError, error } = useQuery(
+    agentRemindersUpcomingOptions(agent.id),
+  );
+  const rows = useMemo<ReminderDefinitionRow[]>(
     () =>
-      (upcomingData?.definitions ?? [])
-        .map(adaptUpcomingRow)
+      (data?.definitions ?? [])
+        .map(toUpcomingReminderRow)
         .filter((row): row is ReminderDefinitionRow => row !== null),
-    [upcomingData],
-  );
-  const historyRows = useMemo<FiredReminderRow[]>(
-    () => {
-      const rows: FiredReminderRow[] = [];
-      for (const page of historyData?.pages ?? []) {
-        for (const occurrence of page.occurrences) {
-          const row = adaptFiredRow(occurrence);
-          if (row) rows.push(row);
-        }
-      }
-      return rows;
-    },
-    [historyData],
+    [data],
   );
 
-  const inaccessible =
-    (upcomingError instanceof ApiError && upcomingError.status === 403) ||
-    (historyError instanceof ApiError && historyError.status === 403);
-
-  if (inaccessible) {
+  if (error instanceof ApiError && error.status === 403) {
     return (
       <output className="block p-4 text-xs text-muted-foreground">
         {t(($) => $.reminders.inaccessible)}
@@ -99,85 +53,25 @@ export function RemindersTab({ agent }: RemindersTabProps) {
   };
 
   return (
-    <div className="flex min-w-0 flex-col divide-y" aria-label={t(($) => $.tabs.reminders)}>
-      <ReminderSection id="reminder-upcoming" heading={t(($) => $.reminders.upcoming_heading)}>
-        {upcomingLoading ? (
-          <LoadingState label={t(($) => $.reminders.loading)} />
-        ) : upcomingIsError ? (
-          <ErrorState
-            onRetry={retry}
-            label={t(($) => $.reminders.error_title)}
-            retryLabel={t(($) => $.reminders.retry)}
-          />
-        ) : upcomingRows.length === 0 ? (
-          <EmptyState label={t(($) => $.reminders.empty_upcoming)} />
-        ) : (
-          <ul className="divide-y">
-            {upcomingRows.map((row) => (
-              <UpcomingRowView key={row.id} row={row} />
-            ))}
-          </ul>
-        )}
-      </ReminderSection>
-
-      <ReminderSection id="reminder-history" heading={t(($) => $.reminders.history_heading)}>
-        {historyLoading ? (
-          <LoadingState label={t(($) => $.reminders.loading)} />
-        ) : historyIsError ? (
-          <ErrorState
-            onRetry={retry}
-            label={t(($) => $.reminders.error_title)}
-            retryLabel={t(($) => $.reminders.retry)}
-          />
-        ) : historyRows.length === 0 ? (
-          <EmptyState label={t(($) => $.reminders.empty_history)} />
-        ) : (
-          <>
-            <ul className="divide-y">
-              {historyRows.map((row) => (
-                <HistoryRowView key={row.id} row={row} />
-              ))}
-            </ul>
-            {hasNextPage ? (
-              <div className="px-3 py-3 md:px-4">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={isFetchingNextPage}
-                  onClick={() => void fetchNextPage()}
-                  className="w-full"
-                >
-                  {t(($) => $.reminders.load_more)}
-                </Button>
-              </div>
-            ) : null}
-          </>
-        )}
-      </ReminderSection>
+    <div className="flex min-w-0 flex-col" aria-label={t(($) => $.tabs.reminders)}>
+      {isLoading ? (
+        <LoadingState label={t(($) => $.reminders.loading)} />
+      ) : isError ? (
+        <ErrorState
+          onRetry={retry}
+          label={t(($) => $.reminders.error_title)}
+          retryLabel={t(($) => $.reminders.retry)}
+        />
+      ) : rows.length === 0 ? (
+        <EmptyState label={t(($) => $.reminders.empty_list)} />
+      ) : (
+        <ul className="divide-y">
+          {rows.map((row) => (
+            <UpcomingRowView key={row.id} row={row} />
+          ))}
+        </ul>
+      )}
     </div>
-  );
-}
-
-function ReminderSection({
-  id,
-  heading,
-  children,
-}: {
-  id: string;
-  heading: string;
-  children: ReactNode;
-}) {
-  return (
-    <section className="min-w-0" aria-labelledby={id}>
-      <h3
-        id={id}
-        className="bg-muted/30 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground md:px-4"
-      >
-        {heading}
-      </h3>
-      {children}
-    </section>
   );
 }
 
@@ -201,8 +95,6 @@ function ErrorState({
   return (
     <div className="flex flex-col items-start gap-1.5 px-3 py-3 md:px-4" role="alert">
       <p className="text-xs text-muted-foreground">{label}</p>
-      {/* Retry re-fetches the reminders query — it doesn't mutate any
-          reminder, so it's not a Schedule/Snooze/Update/Cancel affordance. */}
       <button
         type="button"
         onClick={onRetry}
@@ -214,8 +106,9 @@ function ErrorState({
   );
 }
 
-/** Wire `daily@09:00` / `weekly:mon,fri@10:30` / `every:30m` → readable chip text. */
-function formatCadenceChipLabel(cadence: Extract<ReminderCadence, { kind: "recurring" }>): string {
+function formatCadenceChipLabel(
+  cadence: Extract<ReminderCadence, { kind: "recurring" }>,
+): string {
   const raw = cadence.description;
   let body = raw;
   const daily = /^daily@(\d{2}:\d{2})$/i.exec(raw);
@@ -258,19 +151,6 @@ function AnchorLink({ anchor }: { anchor: ReminderDefinitionRow["anchor"] }) {
       </span>
     );
   }
-  // `href` is a server-computed, already-authorized internal path (never
-  // built from raw ids client-side) — `?message=` (kind: "channel") or
-  // `?thread=<root>&message=<reply>` (kind: "thread"). Both group channels
-  // (channels-page.tsx: threadDeepLinkId -> ThreadPanel) and DMs
-  // (dm-conversation.tsx: same-shaped threadDeepLinkId/deepLinkMessageId
-  // props -> its own inline thread reply list) resolve either shape into the
-  // right surface — main-timeline highlight, or opening the thread and
-  // highlighting the reply inside it. Must go through AppLink's client-side
-  // push, not a plain `<a>`: a full page navigation would defeat "open the
-  // EXISTING conversation surface" (it would remount everything from
-  // scratch) and is visibly slower than the SPA route change. Falls back to
-  // a plain `<a>` only if rendered outside a NavigationProvider (matches
-  // channel-system-event-content.tsx's established pattern).
   const className =
     "inline-flex max-w-full items-center gap-1 truncate rounded-md bg-muted px-1.5 py-0.5 text-[10px] text-primary hover:underline";
   const body = (
@@ -280,18 +160,18 @@ function AnchorLink({ anchor }: { anchor: ReminderDefinitionRow["anchor"] }) {
     </>
   );
   return navigation ? (
-    <AppLink href={anchor.href} className={className} title={anchor.label}>
-      {body}
-    </AppLink>
+    <Tooltip>
+      <TooltipTrigger render={<AppLink href={anchor.href} className={className}>{body}</AppLink>} />
+      <TooltipContent side="top">{anchor.label}</TooltipContent>
+    </Tooltip>
   ) : (
-    <a href={anchor.href} className={className} title={anchor.label}>
-      {body}
-    </a>
+    <Tooltip>
+      <TooltipTrigger render={<a href={anchor.href} className={className}>{body}</a>} />
+      <TooltipContent side="top">{anchor.label}</TooltipContent>
+    </Tooltip>
   );
 }
 
-// Hoisted once — rebuilding Intl.* on every row render fails react-doctor
-// (js-hoist-intl). English-first per LRM-504; full locale wiring follows site i18n.
 const absoluteDateFormatter = new Intl.DateTimeFormat("en", { month: "short", day: "numeric" });
 const absoluteTimeFormatter = new Intl.DateTimeFormat("en", {
   hour: "numeric",
@@ -309,14 +189,12 @@ function formatRelativeInstant(iso: string, nowMs = Date.now()): string {
   const target = new Date(iso).getTime();
   if (Number.isNaN(target)) return iso;
   const diffSec = Math.round((target - nowMs) / 1000);
-  const abs = Math.abs(diffSec);
-  if (abs < 60) return relativeTimeFormatter.format(diffSec, "second");
+  if (Math.abs(diffSec) < 60) return relativeTimeFormatter.format(diffSec, "second");
   const diffMin = Math.round(diffSec / 60);
   if (Math.abs(diffMin) < 60) return relativeTimeFormatter.format(diffMin, "minute");
   const diffHour = Math.round(diffSec / 3600);
   if (Math.abs(diffHour) < 48) return relativeTimeFormatter.format(diffHour, "hour");
-  const diffDay = Math.round(diffSec / 86400);
-  return relativeTimeFormatter.format(diffDay, "day");
+  return relativeTimeFormatter.format(Math.round(diffSec / 86400), "day");
 }
 
 function TimeRow({ iso, label }: { iso: string; label?: string }) {
@@ -333,18 +211,12 @@ function TimeRow({ iso, label }: { iso: string; label?: string }) {
 
 type DisplayStatus = "scheduled" | "firing" | "overdue";
 
-function resolveUpcomingStatus(row: ReminderDefinitionRow, nowMs = Date.now()): DisplayStatus {
+function resolveUpcomingStatus(row: ReminderDefinitionRow): DisplayStatus {
   if (row.status === "firing") return "firing";
   const fireAt = new Date(row.nextFireAt).getTime();
-  if (!Number.isNaN(fireAt) && fireAt < nowMs) return "overdue";
-  return "scheduled";
+  return !Number.isNaN(fireAt) && fireAt < Date.now() ? "overdue" : "scheduled";
 }
 
-// Overdue is the only "something is broken" state of the three — it must
-// read as distinct at a glance, not just by the label text (found during
-// the 08-01 reminder-outage incident: the three states were visually
-// identical grey badges, so an overdue reminder didn't stand out even to
-// someone actively looking at this tab).
 function StatusBadge({ status }: { status: DisplayStatus }) {
   const { t } = useT("agents");
   const label =
@@ -360,9 +232,7 @@ function StatusBadge({ status }: { status: DisplayStatus }) {
         ? "border-destructive/30 bg-destructive/10 text-destructive"
         : "border-border text-muted-foreground";
   return (
-    <span
-      className={`inline-flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] uppercase tracking-wide ${toneClass}`}
-    >
+    <span className={`inline-flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] uppercase tracking-wide ${toneClass}`}>
       {status === "overdue" ? <AlertTriangle className="h-3 w-3" aria-hidden /> : null}
       {label}
     </span>
@@ -371,39 +241,18 @@ function StatusBadge({ status }: { status: DisplayStatus }) {
 
 function UpcomingRowView({ row }: { row: ReminderDefinitionRow }) {
   const { t } = useT("agents");
-  const displayStatus = resolveUpcomingStatus(row);
   return (
     <li className="flex flex-col gap-1.5 px-3 py-3 text-xs md:px-4">
       <div className="flex items-start justify-between gap-2">
-        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-          <p className="min-w-0 whitespace-pre-wrap font-medium text-foreground" title={row.title}>
+        <Tooltip>
+          <TooltipTrigger render={<p className="min-w-0 whitespace-pre-wrap font-medium text-foreground" />}>
             {row.title}
-          </p>
-        </div>
-        <StatusBadge status={displayStatus} />
+          </TooltipTrigger>
+          <TooltipContent side="top">{row.title}</TooltipContent>
+        </Tooltip>
+        <StatusBadge status={resolveUpcomingStatus(row)} />
       </div>
       <TimeRow iso={row.nextFireAt} label={t(($) => $.reminders.next_fire_label)} />
-      <div className="flex flex-wrap items-center gap-1.5">
-        <RecurrenceChip cadence={row.cadence} />
-        <AnchorLink anchor={row.anchor} />
-      </div>
-    </li>
-  );
-}
-
-function HistoryRowView({ row }: { row: FiredReminderRow }) {
-  const { t } = useT("agents");
-  return (
-    <li className="flex flex-col gap-1.5 px-3 py-3 text-xs md:px-4">
-      <div className="flex items-start justify-between gap-2">
-        <p className="min-w-0 whitespace-pre-wrap font-medium text-foreground" title={row.title}>
-          {row.title}
-        </p>
-        <span className="inline-flex shrink-0 rounded-md border border-border px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
-          {t(($) => $.reminders.status_fired)}
-        </span>
-      </div>
-      <TimeRow iso={row.firedAt} label={t(($) => $.reminders.fired_label)} />
       <div className="flex flex-wrap items-center gap-1.5">
         <RecurrenceChip cadence={row.cadence} />
         <AnchorLink anchor={row.anchor} />

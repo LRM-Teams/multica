@@ -35,6 +35,8 @@ type ResearchSessionResponse struct {
 	HandoffSummary      *string `json:"handoff_summary"`
 	CreatedAt           string  `json:"created_at"`
 	UpdatedAt           string  `json:"updated_at"`
+	OrchestratorVersion string  `json:"orchestrator_version"`
+	DirectorAgentID     *string `json:"director_agent_id,omitempty"`
 }
 
 // ResearchFleetPreviewMember is a list-row avatar stack item (LRM-805).
@@ -222,6 +224,7 @@ func researchSessionToResponse(s db.ResearchSession) ResearchSessionResponse {
 		HandoffSummary:      textToPtr(s.HandoffSummary),
 		CreatedAt:           timestampToString(s.CreatedAt),
 		UpdatedAt:           timestampToString(s.UpdatedAt),
+		OrchestratorVersion: s.OrchestratorVersion,
 	}
 	if s.LastUserActivityAt.Valid {
 		ts := timestampToString(s.LastUserActivityAt)
@@ -361,6 +364,7 @@ func (h *Handler) ListResearchSessions(w http.ResponseWriter, r *http.Request) {
 		}
 		outcomesBySession[sessionID] = append(outcomesBySession[sessionID], outcome)
 	}
+	v6ListPreview := h.loadV6SessionListPreviews(r.Context(), wsUUID)
 	out := make([]ResearchSessionListItem, 0, len(rows))
 	for _, row := range rows {
 		sessionID := uuidToString(row.ID)
@@ -372,13 +376,22 @@ func (h *Handler) ListResearchSessions(w http.ResponseWriter, r *http.Request) {
 		if outcomes == nil {
 			outcomes = []ResearchLatestOutcome{}
 		}
-		out = append(out, ResearchSessionListItem{
+		item := ResearchSessionListItem{
 			ResearchSessionResponse: researchSessionToResponse(row),
 			FleetPreview:            preview,
 			ListProgress:            progressBySession[sessionID],
 			ActiveAssignments:       assignments,
 			LatestOutcomes:          outcomes,
-		})
+		}
+		if row.OrchestratorVersion == researchrun.OrchestratorVersionV6 {
+			if previewRow, ok := v6ListPreview[sessionID]; ok {
+				item.FleetPreview = previewRow.members
+				item.DirectorAgentID = previewRow.director
+			} else {
+				item.FleetPreview = []ResearchFleetPreviewMember{}
+			}
+		}
+		out = append(out, item)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"sessions": out})
 }
@@ -462,12 +475,16 @@ func (h *Handler) CreateResearchSession(w http.ResponseWriter, r *http.Request) 
 		requestedVersion = researchrun.OrchestratorVersionV5
 	}
 	if requestedVersion == researchrun.OrchestratorVersionV6 {
-		if !h.cfg.ResearchV6BootstrapEnabled {
-			writeRonaldoV6Error(w, http.StatusConflict, "research.v6.not_activated", "research V6 bootstrap is disabled until activation evidence is complete", false)
+		if !h.researchV6CreateAllowed(r.Context(), workspaceID) {
+			writeRonaldoV6Error(w, http.StatusConflict, "research.v6.not_activated", "research V6 create is disabled", false)
 			return
 		}
 		directorID, valid := parseUUIDOrBadRequest(w, req.DirectorAgentID, "director_agent_id")
 		if !valid {
+			return
+		}
+		if readinessErr := h.researchV6DirectorReadiness(r.Context(), wsUUID, directorID); readinessErr != nil {
+			writeRonaldoV6Error(w, readinessErr.status, readinessErr.code, readinessErr.message, readinessErr.retryable)
 			return
 		}
 		if _, valid = parseUUIDOrBadRequest(w, req.ClientRequestID, "client_request_id"); !valid {
@@ -483,8 +500,18 @@ func (h *Handler) CreateResearchSession(w http.ResponseWriter, r *http.Request) 
 			WorkspaceID: workspaceID, CreatedBy: userID, DirectorAgentID: uuidToString(directorID), Goal: req.Goal, Title: title,
 			DepthTier: depthTier, Language: language, SourcePolicy: sourcePolicyJSON, ClientRequestID: req.ClientRequestID,
 		})
-		if createErr != nil {
+		if createErr != nil && createdRun.SessionID == "" {
 			writeResearchV6DomainError(w, createErr)
+			return
+		}
+		if createErr != nil {
+			retryable := researchRunStartWillRetry(createErr)
+			slog.Warn("research V6 bootstrap persisted but follow-up failed", "session_id", createdRun.SessionID, "will_retry", retryable, "error", createErr)
+			if retryable {
+				writeRonaldoV6Error(w, http.StatusServiceUnavailable, "research.v6.bootstrap_pending", "research V6 initialization is persisted and will be retried", true)
+			} else {
+				writeResearchV6DomainError(w, createErr)
+			}
 			return
 		}
 		session, loadErr := h.Queries.GetResearchSession(r.Context(), db.GetResearchSessionParams{ID: parseUUID(createdRun.SessionID), WorkspaceID: wsUUID})
@@ -492,12 +519,18 @@ func (h *Handler) CreateResearchSession(w http.ResponseWriter, r *http.Request) 
 			writeError(w, http.StatusInternalServerError, "failed to load initialized research V6 session")
 			return
 		}
-		writeJSON(w, http.StatusCreated, map[string]any{
+		response := map[string]any{
 			"session":  researchSessionToResponse(session),
 			"nodes":    []any{},
 			"edges":    []any{},
 			"messages": []any{},
-		})
+		}
+		if runSnapshot, snapshotErr := h.ResearchRun.Snapshot(r.Context(), createdRun.SessionID, workspaceID); snapshotErr == nil {
+			response["run"] = runSnapshot
+		} else {
+			slog.Warn("research V6 create snapshot failed", "session_id", createdRun.SessionID, "error", snapshotErr)
+		}
+		writeJSON(w, http.StatusCreated, response)
 		return
 	}
 	if requestedVersion != researchrun.OrchestratorVersionV5 {
@@ -570,6 +603,13 @@ func (h *Handler) CreateResearchSession(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusCreated, response)
 }
 
+// researchV6UserCreateEnabled is the product gate for explicit V6 + Director
+// create. Omitted orchestrator_version still defaults to V5. The bootstrap env
+// flag is not a user-facing gate.
+func researchV6UserCreateEnabled(Config) bool {
+	return true
+}
+
 func researchRunStartWillRetry(err error) bool {
 	if err == nil || errors.Is(err, researchrun.ErrCapabilityUnavailable) {
 		return false
@@ -629,6 +669,10 @@ func (h *Handler) getResearchSessionSnapshot(w http.ResponseWriter, r *http.Requ
 		}
 		members, _ := h.Queries.ListResearchFleetMembers(r.Context(), db.ListResearchFleetMembersParams{FleetID: fleet.ID, WorkspaceID: wsUUID})
 		sessionResponse = researchSessionToResponse(session)
+		if director := h.loadActiveV6DirectorAgentID(r.Context(), session); director.Valid {
+			id := uuidToString(director)
+			sessionResponse.DirectorAgentID = &id
+		}
 		fleetResponse = h.researchFleetToResponse(r.Context(), fleet, members)
 		nodes, _ = h.Queries.ListResearchGraphNodes(r.Context(), db.ListResearchGraphNodesParams{SessionID: sessionID, WorkspaceID: wsUUID})
 		edges, _ = h.Queries.ListResearchGraphEdges(r.Context(), db.ListResearchGraphEdgesParams{SessionID: sessionID, WorkspaceID: wsUUID})

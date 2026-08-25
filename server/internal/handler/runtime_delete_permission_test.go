@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -14,26 +15,30 @@ func TestCanDeleteRuntimeRequiresExactOwner(t *testing.T) {
 	ownerID := uuid.NewString()
 	otherID := uuid.NewString()
 	tests := []struct {
-		name    string
-		member  db.Member
-		runtime db.AgentRuntime
-		want    bool
+		name      string
+		member    db.Member
+		rtOwnerID pgtype.UUID
+		runtime   db.AgentRuntime
+		want      bool
 	}{
 		{
-			name:    "runtime owner",
-			member:  db.Member{UserID: parseUUID(ownerID), Role: "member"},
-			runtime: db.AgentRuntime{OwnerID: parseUUID(ownerID)},
-			want:    true,
+			name:      "runtime owner",
+			member:    db.Member{UserID: parseUUID(ownerID), Role: "member"},
+			rtOwnerID: parseUUID(ownerID),
+			runtime:   db.AgentRuntime{},
+			want:      true,
 		},
 		{
-			name:    "workspace admin is not runtime owner",
-			member:  db.Member{UserID: parseUUID(otherID), Role: "admin"},
-			runtime: db.AgentRuntime{OwnerID: parseUUID(ownerID)},
+			name:      "workspace admin is not runtime owner",
+			member:    db.Member{UserID: parseUUID(otherID), Role: "admin"},
+			rtOwnerID: parseUUID(ownerID),
+			runtime:   db.AgentRuntime{},
 		},
 		{
-			name:    "workspace owner is not runtime owner",
-			member:  db.Member{UserID: parseUUID(otherID), Role: "owner"},
-			runtime: db.AgentRuntime{OwnerID: parseUUID(ownerID)},
+			name:      "workspace owner is not runtime owner",
+			member:    db.Member{UserID: parseUUID(otherID), Role: "owner"},
+			rtOwnerID: parseUUID(ownerID),
+			runtime:   db.AgentRuntime{},
 		},
 		{
 			name:    "orphan runtime has no implicit override",
@@ -44,7 +49,7 @@ func TestCanDeleteRuntimeRequiresExactOwner(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := canDeleteRuntime(tt.member, tt.runtime); got != tt.want {
+			if got := canDeleteRuntime(tt.member, tt.runtime, tt.rtOwnerID); got != tt.want {
 				t.Fatalf("canDeleteRuntime() = %v, want %v", got, tt.want)
 			}
 		})
@@ -62,12 +67,12 @@ func TestRuntimeDeleteEndpointsRequireRuntimeOwner(t *testing.T) {
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent_runtime (
 			workspace_id, daemon_id, name, runtime_mode, provider, status,
-			device_info, metadata, owner_id, last_seen_at
+			device_info, metadata, last_seen_at
 		)
 		VALUES ($1, $2, $3, 'local', 'claude', 'offline',
-		        'Owner Gate Computer', '{}'::jsonb, $4, now())
+		        'Owner Gate Computer', '{}'::jsonb, now())
 		RETURNING id
-	`, testWorkspaceID, daemonID, "Owner Gate "+uuid.NewString(), testUserID).Scan(&runtimeID); err != nil {
+	`, testWorkspaceID, daemonID, "Owner Gate "+uuid.NewString()).Scan(&runtimeID); err != nil {
 		t.Fatalf("create runtime: %v", err)
 	}
 	t.Cleanup(func() {

@@ -15,3 +15,5 @@ export * from "./cli-version";
 export * from "./channel-output-actions";
 export * from "./custom-pricing-store";
 export * from "./cloud-runtime";
+export * from "./computer-upgrade-store";
+

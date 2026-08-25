@@ -155,7 +155,6 @@
     "prop_runtime": "Runtime",
     "prop_model": "Model",
     "prop_thinking": "Thinking",
-    "prop_concurrency": "Concurrency",
     "prop_owner": "Owner",
     "prop_created": "Created",
     "prop_updated": "Updated",
@@ -189,6 +188,7 @@
       "cancel": "Cancel",
       "role_updated_toast": "Workspace role updated",
       "role_update_failed_toast": "Failed to update workspace role",
+      "role_hint": "Admin lets this agent manage channels, invitations, agents & computers, and settings in this workspace. It can never become Owner.",
       "role_readonly_hint": "Only workspace owners and admins can change an agent's workspace role."
     },
     "start_intent_failure": "This agent did not finish starting on its selected computer ({{code}}). Review the runtime configuration, then use the normal human restart flow if appropriate.",
@@ -199,8 +199,6 @@
     "trigger_label": "Attach"
   },
   "pickers": {
-    "concurrency_tooltip": "Concurrency · {{value}} max concurrent tasks",
-    "concurrency_range": "Max concurrent tasks ({{min}}–{{max}})",
     "runtime_none": "No runtime",
     "runtime_tooltip": "Runtime · {{name}} · {{status}}",
     "runtime_tooltip_none": "Runtime · none selected",
@@ -263,6 +261,8 @@
     "title_create": "Create Agent",
     "title_duplicate": "Duplicate Agent",
     "description_create": "Create a new AI agent for your workspace.",
+    "description_identity_locked": "Name and instructions are prefilled. Choose a Computer, runtime, and model to finish.",
+    "description_computer_locked": "This Computer is fixed. Choose a runtime and model to finish.",
     "description_duplicate": "Create a new agent based on \"{{name}}\". Instructions, env, and skills are copied for you.",
     "name_label": "Name",
     "name_hint": "This permanent name is used for @mentions.",
@@ -547,12 +547,15 @@
       "platinum": "Platinum"
     }
   },
-  "execution_config": {
+  "runtime_config": {
     "applies_next_run": "Open the dialog to edit Computer, Runtime, Model, and Reasoning. Saving applies all changes and restarts the agent when available (at most once).",
     "dialog_title": "Runtime config",
     "dialog_description": "Choose Computer → Runtime → Model → Reasoning. Edits stay local until you save. Cancel discards the draft without restarting.",
     "dialog_saving": "Saving…",
-    "edit_trigger_aria": "Edit Computer, Runtime, Model, and Reasoning"
+    "edit_trigger_aria": "Edit Computer, Runtime, Model, and Reasoning",
+    "more": "More",
+    "advanced": "Advanced",
+    "env_vars_title": "Environment Variables"
   },
   "side_panel": {
     "close_aria": "Close agent panel",
@@ -603,6 +606,10 @@
     "actions_stop_success": "Stopped {{name}}",
     "actions_stop_failed": "Failed to stop agent task",
     "actions_delete": "Delete",
+    "actions_start_agent": "Start Agent",
+    "actions_start_failed": "Failed to start agent",
+    "actions_stop_agent": "Stop Agent",
+    "actions_stop_agent_failed": "Failed to stop agent",
     "delete_dialog_title": "Delete agent?",
     "delete_dialog_description": "\"{{name}}\" will be deleted. It won't be assignable or mentionable, but all history is preserved. You can restore it later.",
     "delete_dialog_cancel": "Cancel",
@@ -612,9 +619,10 @@
     "change_avatar_aria": "Change avatar",
     "avatar_updated_toast": "Avatar updated",
     "avatar_picker_title": "Choose an avatar",
-    "avatar_picker_description": "Choose a system avatar or upload your own image.",
+    "avatar_picker_description": "Choose a system avatar, generate a random robot, or upload your own image.",
     "avatar_system_choices_aria": "System avatars",
     "avatar_system_choice_aria": "Choose system avatar",
+    "avatar_random": "Random robot",
     "avatar_upload_custom": "Upload custom avatar",
     "avatar_custom_selected": "Custom avatar selected",
     "avatar_picker_cancel": "Cancel",
@@ -628,7 +636,7 @@
     "avatar_err_dimensions": "Image must be at least 256×256 pixels."
   },
   "restart_modal": {
-    "trigger": "Restart…",
+    "trigger": "Restart/Reset",
     "title": "Restart agent",
     "description": "Choose how to restart {{name}}. Its identity, configuration, chat history, and Issues are always kept.",
     "tier": {
@@ -706,27 +714,17 @@
     "info_status": "Status"
   },
   "reminders": {
-    "upcoming_heading": "Upcoming",
-    "history_heading": "History",
-    "empty_all": "No reminders yet.",
-    "empty_upcoming": "No upcoming reminders.",
-    "empty_history": "No fired reminders yet.",
+    "empty_list": "No reminders.",
     "loading": "Loading reminders…",
     "error_title": "Couldn't load reminders.",
     "retry": "Retry",
-    "load_more": "Load more",
     "inaccessible": "You don't have permission to view this agent's reminders.",
     "anchor_unavailable": "Anchor unavailable",
     "one_shot": "One-time",
     "next_fire_label": "Next",
-    "fired_label": "Fired",
-    "timezone_label": "Timezone",
     "status_scheduled": "Scheduled",
     "status_firing": "Firing",
-    "status_overdue": "Overdue",
-    "status_dormant": "Dormant",
-    "status_cancelled": "Cancelled",
-    "status_fired": "Fired"
+    "status_overdue": "Overdue"
   },
   "task_failure": {
     "agent_error": "Agent execution error",
@@ -962,7 +960,7 @@
     "creation_not_authorized": "Only workspace owners and admins can create this agent.",
     "generated_hint": "Generated by Wendy from the current conversation.",
     "avatar_from_draft_hint": "Avatar from Wendy’s draft — change or clear (clear → random preset).",
-    "avatar_random_hint": "A system avatar is pre-selected — pick another of the 15 faces, or upload your own.",
+    "avatar_random_hint": "A system avatar is pre-selected — pick another face, generate a random robot, or upload your own.",
     "loading_card": "Loading proposal…",
     "load_card_failed": "Failed to load proposal",
     "card_created": "Created: {{name}}",

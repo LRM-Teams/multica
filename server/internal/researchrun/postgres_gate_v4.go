@@ -23,8 +23,8 @@ type evidenceFitnessLink struct {
 	MethodFit       float64
 }
 
-func (s *PostgresStore) evaluateEvidenceFitnessV4(ctx context.Context, sessionID string, goalVersion, planVersion int) ([]GateFinding, error) {
-	method, err := s.loadResearchMethodForGate(ctx, sessionID, goalVersion, planVersion)
+func (s *PostgresStore) evaluateEvidenceFitnessV4(ctx context.Context, sessionID, workspaceID string, goalVersion, planVersion int) ([]GateFinding, error) {
+	method, err := s.loadResearchMethodForGate(ctx, sessionID, workspaceID, goalVersion, planVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -32,15 +32,15 @@ func (s *PostgresStore) evaluateEvidenceFitnessV4(ctx context.Context, sessionID
 	if err != nil {
 		return nil, fmt.Errorf("stored research method has invalid evidence standards: %w", err)
 	}
-	targets, err := s.loadEvidenceFitnessTargets(ctx, sessionID, goalVersion, planVersion)
+	targets, err := s.loadEvidenceFitnessTargets(ctx, sessionID, workspaceID, goalVersion, planVersion)
 	if err != nil {
 		return nil, err
 	}
-	links, err := s.loadEvidenceFitnessLinks(ctx, sessionID, targets)
+	links, err := s.loadEvidenceFitnessLinks(ctx, sessionID, workspaceID, targets)
 	if err != nil {
 		return nil, err
 	}
-	counterSearches, err := s.loadCounterSearchCoverage(ctx, sessionID, goalVersion, planVersion, targets)
+	counterSearches, err := s.loadCounterSearchCoverage(ctx, sessionID, workspaceID, goalVersion, planVersion, targets)
 	if err != nil {
 		return nil, err
 	}
@@ -115,16 +115,16 @@ func (s *PostgresStore) evaluateEvidenceFitnessV4(ctx context.Context, sessionID
 	return findings, nil
 }
 
-func (s *PostgresStore) loadResearchMethodForGate(ctx context.Context, sessionID string, goalVersion, planVersion int) (ResearchMethod, error) {
+func (s *PostgresStore) loadResearchMethodForGate(ctx context.Context, sessionID, workspaceID string, goalVersion, planVersion int) (ResearchMethod, error) {
 	var outcome []byte
 	err := s.pool.QueryRow(ctx, `
 		SELECT outcome
 		FROM research_decision
-		WHERE session_id = $1::uuid AND decision_kind = 'research_method'
+		WHERE session_id = $1::uuid AND workspace_id = $4::uuid AND decision_kind = 'research_method'
 		  AND goal_version = $2 AND plan_version = $3
 		ORDER BY created_at DESC, id DESC
 		LIMIT 1
-	`, sessionID, goalVersion, planVersion).Scan(&outcome)
+	`, sessionID, goalVersion, planVersion, workspaceID).Scan(&outcome)
 	if err != nil {
 		return ResearchMethod{}, err
 	}
@@ -135,30 +135,31 @@ func (s *PostgresStore) loadResearchMethodForGate(ctx context.Context, sessionID
 	return method, nil
 }
 
-func (s *PostgresStore) loadEvidenceFitnessTargets(ctx context.Context, sessionID string, goalVersion, planVersion int) ([]evidenceFitnessTarget, error) {
+func (s *PostgresStore) loadEvidenceFitnessTargets(ctx context.Context, sessionID, workspaceID string, goalVersion, planVersion int) ([]evidenceFitnessTarget, error) {
 	rows, err := s.pool.Query(ctx, `
 		WITH latest_report AS (
 		  SELECT id
 		  FROM research_report
-		  WHERE session_id = $1::uuid AND goal_version = $2 AND plan_version = $3
+		  WHERE session_id = $1::uuid AND workspace_id = $4::uuid AND goal_version = $2 AND plan_version = $3
 		  ORDER BY revision DESC
 		  LIMIT 1
 		), target_claim_ids AS (
 		  SELECT answer_claim_id AS claim_id
 		  FROM research_question
-		  WHERE session_id = $1::uuid AND goal_version = $2 AND plan_version = $3
+		  WHERE session_id = $1::uuid AND workspace_id = $4::uuid AND goal_version = $2 AND plan_version = $3
 		    AND required AND answer_claim_id IS NOT NULL
 		  UNION
 		  SELECT report_claim.claim_id
 		  FROM research_report_claim report_claim
 		  JOIN latest_report report ON report.id = report_claim.report_id
+		  WHERE report_claim.workspace_id = $4::uuid
 		)
 		SELECT claim.id::text, claim.client_key, claim.evidence_standard_key
 		FROM target_claim_ids target
-		JOIN research_claim claim ON claim.id = target.claim_id
+		JOIN research_claim claim ON claim.id = target.claim_id AND claim.workspace_id = $4::uuid
 		WHERE claim.goal_version = $2 AND claim.plan_version = $3
 		ORDER BY claim.client_key, claim.id
-	`, sessionID, goalVersion, planVersion)
+	`, sessionID, goalVersion, planVersion, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -174,7 +175,7 @@ func (s *PostgresStore) loadEvidenceFitnessTargets(ctx context.Context, sessionI
 	return targets, rows.Err()
 }
 
-func (s *PostgresStore) loadEvidenceFitnessLinks(ctx context.Context, sessionID string, targets []evidenceFitnessTarget) (map[string][]evidenceFitnessLink, error) {
+func (s *PostgresStore) loadEvidenceFitnessLinks(ctx context.Context, sessionID, workspaceID string, targets []evidenceFitnessTarget) (map[string][]evidenceFitnessLink, error) {
 	links := make(map[string][]evidenceFitnessLink, len(targets))
 	if len(targets) == 0 {
 		return links, nil
@@ -187,16 +188,17 @@ func (s *PostgresStore) loadEvidenceFitnessLinks(ctx context.Context, sessionID 
 		SELECT evidence.claim_id::text, source.id::text, source.independence_key,
 		       source.evidence_traits, evidence.strength, evidence.directness, evidence.method_fit
 		FROM research_claim_evidence evidence
-		JOIN research_observation observation ON observation.id = evidence.observation_id
-		JOIN research_source_snapshot source ON source.id = observation.source_snapshot_id
+		JOIN research_observation observation ON observation.id = evidence.observation_id AND observation.workspace_id = $3::uuid
+		JOIN research_source_snapshot source ON source.id = observation.source_snapshot_id AND source.workspace_id = $3::uuid
 		WHERE evidence.session_id = $1::uuid
+		  AND evidence.workspace_id = $3::uuid
 		  AND evidence.claim_id::text = ANY($2::text[])
 		  AND evidence.relation = 'supports'
 		  AND evidence.verification_status = 'verified'
 		  AND observation.verification_status = 'verified'
 		  AND source.verification_status = 'verified'
 		ORDER BY evidence.claim_id, source.id, evidence.id
-	`, sessionID, claimIDs)
+	`, sessionID, claimIDs, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -215,7 +217,7 @@ func (s *PostgresStore) loadEvidenceFitnessLinks(ctx context.Context, sessionID 
 	return links, rows.Err()
 }
 
-func (s *PostgresStore) loadCounterSearchCoverage(ctx context.Context, sessionID string, goalVersion, planVersion int, targets []evidenceFitnessTarget) (map[string]bool, error) {
+func (s *PostgresStore) loadCounterSearchCoverage(ctx context.Context, sessionID, workspaceID string, goalVersion, planVersion int, targets []evidenceFitnessTarget) (map[string]bool, error) {
 	coverage := make(map[string]bool, len(targets))
 	if len(targets) == 0 {
 		return coverage, nil
@@ -234,9 +236,9 @@ func (s *PostgresStore) loadCounterSearchCoverage(ctx context.Context, sessionID
 		SELECT target.claim_id, EXISTS (
 		  SELECT 1
 		  FROM research_task task
-		  JOIN research_task_attempt attempt ON attempt.task_id = task.id AND attempt.status = 'succeeded'
-		  LEFT JOIN research_question question ON question.id = task.question_id
-		  WHERE task.session_id = $1::uuid AND task.goal_version = $2 AND task.plan_version = $3
+		  JOIN research_task_attempt attempt ON attempt.task_id = task.id AND attempt.workspace_id = $6::uuid AND attempt.status = 'succeeded'
+		  LEFT JOIN research_question question ON question.id = task.question_id AND question.workspace_id = $6::uuid
+		  WHERE task.session_id = $1::uuid AND task.workspace_id = $6::uuid AND task.goal_version = $2 AND task.plan_version = $3
 		    AND task.kind = 'counter_search' AND task.status = 'succeeded'
 		    AND (
 		      question.answer_claim_id = target.claim_id::uuid
@@ -249,7 +251,7 @@ func (s *PostgresStore) loadCounterSearchCoverage(ctx context.Context, sessionID
 		) AS covered
 		FROM targets target
 		ORDER BY target.claim_id
-	`, sessionID, goalVersion, planVersion, claimIDs, claimKeys)
+	`, sessionID, goalVersion, planVersion, claimIDs, claimKeys, workspaceID)
 	if err != nil {
 		return nil, err
 	}

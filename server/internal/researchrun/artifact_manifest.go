@@ -538,20 +538,6 @@ func filterClaimsByManifest(claims []Claim, allowed map[string]struct{}) []Claim
 	return out
 }
 
-func collectLiveTaskContextArtifactIDs(snapshot RunSnapshot) map[string]struct{} {
-	ids := make(map[string]struct{})
-	for _, s := range snapshot.Sources {
-		ids[s.ID] = struct{}{}
-	}
-	for _, o := range snapshot.Observations {
-		ids[o.ID] = struct{}{}
-	}
-	for _, c := range snapshot.Claims {
-		ids[c.ID] = struct{}{}
-	}
-	return ids
-}
-
 func verifyShadowEquivalenceTx(
 	ctx context.Context,
 	tx pgx.Tx,

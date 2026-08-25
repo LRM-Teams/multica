@@ -5,6 +5,14 @@ import { ExecutionOverlayPanel } from "./execution-overlay-panel";
 import { ExecutionOverlaySyncIndicator } from "./execution-overlay-sync-indicator";
 import type { ExecutionRow } from "./execution-adapter";
 
+// The row/inspector now render the site-wide smart avatar, which resolves
+// identity through workspace queries. These suites are about execution copy.
+vi.mock("../../common/actor-avatar", () => ({
+  ActorAvatar: ({ actorId }: { actorId: string }) => (
+    <span data-testid={`actor-avatar-${actorId}`} />
+  ),
+}));
+
 vi.mock("../../i18n/use-t", () => ({
   useT: () => ({
     t: (fn: (dict: Record<string, unknown>) => unknown, values?: { location?: string; name?: string; count?: number; time?: string; anomaly?: number; running?: number; queued?: number; total?: number }) =>
@@ -72,7 +80,6 @@ const T0 = 1_700_000_000_000;
 function row(overrides: Partial<ExecutionRow> & { id: string; name: string }): ExecutionRow {
   return {
     role: "worker",
-    initials: "AG",
     status: "queued",
     actionKey: "waiting",
     updatedAt: T0,

@@ -182,13 +182,17 @@ func buildCanonicalV6ProjectionTx(ctx context.Context, tx pgx.Tx, workspaceID, r
 	build.defaultVisible[goalID] = true
 	versionNodeIDs := map[string]string{}
 	workNodeIDs := map[string]string{}
+	agentNodeIDs := map[string]string{}
 	if err := appendV6InsightProjectionTx(ctx, tx, &build, versionNodeIDs); err != nil {
 		return build, err
 	}
-	if err := appendV6WorkProjectionTx(ctx, tx, &build, goalID, workNodeIDs); err != nil {
+	if err := appendV6AgentProjectionTx(ctx, tx, &build, goalID, agentNodeIDs); err != nil {
 		return build, err
 	}
-	if err := appendV6ResultProjectionTx(ctx, tx, &build, versionNodeIDs, workNodeIDs); err != nil {
+	if err := appendV6WorkProjectionTx(ctx, tx, &build, goalID, workNodeIDs, agentNodeIDs); err != nil {
+		return build, err
+	}
+	if err := appendV6ResultProjectionTx(ctx, tx, &build, goalID, versionNodeIDs, workNodeIDs); err != nil {
 		return build, err
 	}
 	if err := appendV6AbsorptionEdgesTx(ctx, tx, &build, versionNodeIDs); err != nil {
@@ -198,6 +202,58 @@ func buildCanonicalV6ProjectionTx(ctx context.Context, tx pgx.Tx, workspaceID, r
 		return build, err
 	}
 	return build, nil
+}
+
+func appendV6AgentProjectionTx(ctx context.Context, tx pgx.Tx, build *v6ProjectionBuild, goalID string, agentNodeIDs map[string]string) error {
+	rows, err := tx.Query(ctx, `
+		SELECT m.agent_id::text,
+		       m.membership_generation,
+		       m.state,
+		       m.mission_prompt,
+		       COALESCE(NULLIF(agent.display_name,''),agent.name),
+		       GREATEST(m.created_at,COALESCE(m.left_at,m.created_at))
+		FROM research_team_membership m
+		JOIN agent ON agent.id=m.agent_id AND agent.workspace_id=m.workspace_id
+		WHERE m.workspace_id=$1::uuid
+		  AND m.session_id=$2::uuid
+		  AND m.state IN ('idle','working','offline','retiring')
+		ORDER BY m.membership_generation,m.created_at,m.id`, build.workspaceID, build.runID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var agentID, membershipState, mission, displayName string
+		var generation int
+		var updated time.Time
+		if err = rows.Scan(&agentID, &generation, &membershipState, &mission, &displayName, &updated); err != nil {
+			return err
+		}
+		execution := "pending"
+		switch membershipState {
+		case "idle":
+			execution = "idle"
+		case "working":
+			execution = "running"
+		case "offline":
+			execution = "offline"
+		case "retiring":
+			execution = "cancelled"
+		}
+		nodeID := v6ProjectionStableID("agent", agentID, generation)
+		build.nodes = append(build.nodes, V6ProjectionNode{
+			ID: nodeID, Kind: "agent", Tier: "S",
+			CanonicalRef: V6ProjectionEntityRef{Kind: "agent", ID: agentID, Revision: generation},
+			BranchIDs:    []string{},
+			State:        V6ProjectionState{Execution: execution, Conclusion: "proposed", Integration: "unmatched"},
+			Title:        truncateProjectionText(displayName, 160), CatalogSummary: truncateProjectionText(mission, 512),
+			Terminal: false, Expandable: false, UpdatedAt: normalizeProjectionTime(updated),
+		})
+		build.defaultVisible[nodeID] = true
+		agentNodeIDs[agentID] = nodeID
+		build.edges = append(build.edges, V6ProjectionEdge{ID: v6ProjectionEdgeID("belongs_to", nodeID, goalID), Kind: "belongs_to", FromNodeID: nodeID, ToNodeID: goalID, Canonical: true})
+	}
+	return rows.Err()
 }
 
 func appendV6InsightProjectionTx(ctx context.Context, tx pgx.Tx, build *v6ProjectionBuild, versionNodeIDs map[string]string) error {
@@ -230,34 +286,77 @@ func appendV6InsightProjectionTx(ctx context.Context, tx pgx.Tx, build *v6Projec
 	return rows.Err()
 }
 
-func appendV6WorkProjectionTx(ctx context.Context, tx pgx.Tx, build *v6ProjectionBuild, goalID string, workNodeIDs map[string]string) error {
-	rows, err := tx.Query(ctx, `SELECT w.id::text,w.kind,w.status,COALESCE(w.reason,''),COALESCE(w.terminal_reason_code,''),COALESCE(w.terminal_reason_detail,''),w.updated_at,COALESCE(array_agg(DISTINCT nb.branch_id::text) FILTER(WHERE nb.branch_id IS NOT NULL),'{}') FROM research_work_item w LEFT JOIN research_work_item_attempt a ON a.work_item_id=w.id LEFT JOIN research_result_node rn ON rn.work_item_attempt_id=a.id LEFT JOIN research_node_branch nb ON nb.node_artifact_version_id=rn.artifact_version_id WHERE w.workspace_id=$1::uuid AND w.session_id=$2::uuid GROUP BY w.id ORDER BY w.id`, build.workspaceID, build.runID)
+func appendV6WorkProjectionTx(ctx context.Context, tx pgx.Tx, build *v6ProjectionBuild, goalID string, workNodeIDs, agentNodeIDs map[string]string) error {
+	rows, err := tx.Query(ctx, `
+		SELECT w.id::text,
+		       w.kind,
+		       w.status,
+		       COALESCE(w.reason,''),
+		       COALESCE(w.terminal_reason_code,''),
+		       COALESCE(w.terminal_reason_detail,''),
+		       COALESCE(latest_attempt.failure_class,''),
+		       COALESCE(latest_attempt.diagnostics,''),
+		       GREATEST(
+		         w.updated_at,
+		         COALESCE(latest_attempt.updated_at,w.updated_at),
+		         COALESCE(inbox.updated_at,w.updated_at),
+		         COALESCE(inbox.started_at,w.updated_at),
+		         COALESCE(inbox.completed_at,w.updated_at),
+		         COALESCE(progress.updated_at,w.updated_at)
+		       ),
+		       COALESCE((
+		         SELECT array_agg(scope.branch_id::text ORDER BY scope.branch_id::text)
+		         FROM research_v6_work_item_branch scope
+		         WHERE scope.workspace_id=w.workspace_id
+		           AND scope.session_id=w.session_id
+		           AND scope.work_item_id=w.id
+		       ),'{}'),
+		       COALESCE(w.assigned_agent_id::text,latest_attempt.assigned_agent_id::text,''),
+		       COALESCE(NULLIF(agent.display_name,''),agent.name,w.kind)
+		FROM research_work_item w
+		LEFT JOIN LATERAL (
+		  SELECT attempt.assigned_agent_id,attempt.inbox_task_id,attempt.updated_at,attempt.failure_class,attempt.diagnostics
+		  FROM research_work_item_attempt attempt
+		  WHERE attempt.workspace_id=w.workspace_id
+		    AND attempt.session_id=w.session_id
+		    AND attempt.work_item_id=w.id
+		  ORDER BY attempt.attempt_number DESC
+		  LIMIT 1
+		) latest_attempt ON true
+		LEFT JOIN agent ON agent.id=COALESCE(w.assigned_agent_id,latest_attempt.assigned_agent_id)
+		LEFT JOIN agent_inbox_event inbox
+		  ON inbox.id=latest_attempt.inbox_task_id
+		 AND inbox.agent_id=latest_attempt.assigned_agent_id
+		LEFT JOIN agent_task_progress_snapshot progress ON progress.task_id=latest_attempt.inbox_task_id
+		WHERE w.workspace_id=$1::uuid AND w.session_id=$2::uuid
+		ORDER BY w.id`, build.workspaceID, build.runID)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var id, kind, status, reason, reasonCode, reasonDetail string
+		var id, kind, status, reason, reasonCode, reasonDetail, attemptFailureClass, attemptDiagnostics, assignedAgentID, agentName string
 		var updated time.Time
 		var branches []string
-		if err = rows.Scan(&id, &kind, &status, &reason, &reasonCode, &reasonDetail, &updated, &branches); err != nil {
+		if err = rows.Scan(&id, &kind, &status, &reason, &reasonCode, &reasonDetail, &attemptFailureClass, &attemptDiagnostics, &updated, &branches, &assignedAgentID, &agentName); err != nil {
 			return err
 		}
 		execution, terminal := projectionExecutionForWork(status)
 		state := V6ProjectionState{Execution: execution, Conclusion: "proposed", Integration: "unmatched"}
-		if terminal && reasonCode != "" {
-			state.Termination = &V6ProjectionTermination{ReasonCode: normalizeProjectionReason(reasonCode), ReasonDetail: nonemptyProjectionReason(reasonDetail)}
-		}
+		state.Termination = projectionTerminationForWork(execution, terminal, reasonCode, reasonDetail, attemptFailureClass, attemptDiagnostics)
 		nodeID := v6ProjectionStableID("work_s", id, 0)
-		build.nodes = append(build.nodes, V6ProjectionNode{ID: nodeID, Kind: "work_s", Tier: "S", CanonicalRef: V6ProjectionEntityRef{Kind: "work_item", ID: id}, BranchIDs: branches, State: state, Title: kind, CatalogSummary: truncateProjectionText(reason, 512), Terminal: terminal, Expandable: false, UpdatedAt: normalizeProjectionTime(updated)})
-		build.defaultVisible[nodeID] = true
+		build.nodes = append(build.nodes, V6ProjectionNode{ID: nodeID, Kind: "work_s", Tier: "S", CanonicalRef: V6ProjectionEntityRef{Kind: "work_item", ID: id}, BranchIDs: branches, State: state, Title: truncateProjectionText(firstNonEmptyV6(reason, agentName), 160), CatalogSummary: truncateProjectionText(reason, 512), Terminal: terminal, Expandable: false, UpdatedAt: normalizeProjectionTime(updated)})
+		build.defaultVisible[nodeID] = kind != "director" || !terminal
 		workNodeIDs[id] = nodeID
 		build.edges = append(build.edges, V6ProjectionEdge{ID: v6ProjectionEdgeID("belongs_to", nodeID, goalID), Kind: "belongs_to", FromNodeID: nodeID, ToNodeID: goalID, Canonical: true})
+		if agentNodeID := agentNodeIDs[assignedAgentID]; agentNodeID != "" {
+			build.edges = append(build.edges, V6ProjectionEdge{ID: v6ProjectionEdgeID("assigned_to", nodeID, agentNodeID), Kind: "assigned_to", FromNodeID: nodeID, ToNodeID: agentNodeID, Canonical: true})
+		}
 	}
 	return rows.Err()
 }
 
-func appendV6ResultProjectionTx(ctx context.Context, tx pgx.Tx, build *v6ProjectionBuild, versionNodeIDs, workNodeIDs map[string]string) error {
+func appendV6ResultProjectionTx(ctx context.Context, tx pgx.Tx, build *v6ProjectionBuild, goalID string, versionNodeIDs, workNodeIDs map[string]string) error {
 	rows, err := tx.Query(ctx, `SELECT rn.id::text,rn.artifact_version_id::text,v.artifact_id::text,v.content_hash,rn.catalog_summary,rn.conclusion_state,rn.integration_state,rn.reason_code,rn.reason_detail,rn.accepted_at,a.work_item_id::text,COALESCE(array_agg(DISTINCT nb.branch_id::text) FILTER(WHERE nb.branch_id IS NOT NULL),'{}'),EXISTS(SELECT 1 FROM research_node_absorption absorb WHERE absorb.input_artifact_version_id=rn.artifact_version_id) FROM research_result_node rn JOIN research_artifact_version v ON v.id=rn.artifact_version_id JOIN research_work_item_attempt a ON a.id=rn.work_item_attempt_id LEFT JOIN research_node_branch nb ON nb.node_artifact_version_id=rn.artifact_version_id WHERE rn.workspace_id=$1::uuid AND rn.session_id=$2::uuid GROUP BY rn.id,v.id,a.work_item_id ORDER BY rn.id`, build.workspaceID, build.runID)
 	if err != nil {
 		return err
@@ -284,7 +383,10 @@ func appendV6ResultProjectionTx(ctx context.Context, tx pgx.Tx, build *v6Project
 		build.defaultVisible[nodeID] = terminal || !absorbed
 		versionNodeIDs[versionID] = nodeID
 		if workNodeIDs[workID] != "" {
-			build.edges = append(build.edges, V6ProjectionEdge{ID: v6ProjectionEdgeID("produced_by", nodeID, workNodeIDs[workID]), Kind: "produced_by", FromNodeID: nodeID, ToNodeID: workNodeIDs[workID], Canonical: true})
+			workNodeID := workNodeIDs[workID]
+			build.edges = append(build.edges, V6ProjectionEdge{ID: v6ProjectionEdgeID("produced_by", nodeID, workNodeID), Kind: "produced_by", FromNodeID: nodeID, ToNodeID: workNodeID, Canonical: true})
+			build.defaultVisible[workNodeID] = false
+			build.edges = append(build.edges, V6ProjectionEdge{ID: v6ProjectionEdgeID("collapsed_path", nodeID, goalID), Kind: "collapsed_path", FromNodeID: nodeID, ToNodeID: goalID, Canonical: false, HiddenCount: 1})
 		}
 	}
 	return rows.Err()
@@ -390,7 +492,35 @@ func normalizeProjectionReason(value string) string {
 	if allowed[value] {
 		return value
 	}
+	resourceFailures := map[string]bool{"attempt_budget_exhausted": true, "contract_rejected": true, "dispatch_failed": true, "runtime_failure": true, "runtime_unavailable": true, "task_timeout": true, "lost": true}
+	if resourceFailures[value] {
+		return "resource_failure"
+	}
 	return "other"
+}
+
+func projectionTerminationForWork(execution string, terminal bool, reasonCode, reasonDetail, failureClass, diagnostics string) *V6ProjectionTermination {
+	if !terminal || (execution == "succeeded" && reasonCode == "" && failureClass == "") {
+		return nil
+	}
+	canonicalReason := reasonCode
+	if canonicalReason == "" {
+		canonicalReason = failureClass
+	}
+	detail := reasonDetail
+	if detail == "" {
+		detail = diagnostics
+	}
+	if canonicalReason == "" {
+		canonicalReason = "other"
+	}
+	if detail == "" {
+		detail = "未记录具体失败原因。"
+	}
+	return &V6ProjectionTermination{
+		ReasonCode:   normalizeProjectionReason(canonicalReason),
+		ReasonDetail: truncateProjectionText(fmt.Sprintf("%s：%s", canonicalReason, detail), 32768),
+	}
 }
 
 func nonemptyProjectionReason(value string) string {

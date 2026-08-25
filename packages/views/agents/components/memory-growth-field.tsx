@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { AgentMemoryGrowth } from "@multica/core/types";
 import { cn } from "@multica/ui/lib/utils";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { useT } from "../../i18n/use-t";
 
 /** Card-local tier-up pulse (design ≤400ms; no toast / broadcast). */
@@ -145,18 +146,25 @@ export function MemoryGrowthField({
             ? TIER_DOT[segment.tier.toLowerCase()] ?? dotColor
             : SEGMENT_TRACK;
           return (
-            <div
-              key={segment.tier}
-              title={memoryGrowthTierLabel(segment.tier, segment.tier_label, t)}
-              data-status={status}
-              className={cn(
-                "h-1 flex-1 rounded-sm",
-                isCurrent &&
-                  pulse &&
-                  "motion-safe:animate-[memory-growth-pulse_400ms_ease-out]",
-              )}
-              style={{ backgroundColor: fill }}
-            />
+            <Tooltip key={segment.tier}>
+              <TooltipTrigger
+                render={
+                  <div
+                    data-status={status}
+                    className={cn(
+                      "h-1 flex-1 rounded-sm",
+                      isCurrent &&
+                        pulse &&
+                        "motion-safe:animate-[memory-growth-pulse_400ms_ease-out]",
+                    )}
+                    style={{ backgroundColor: fill }}
+                  />
+                }
+              />
+              <TooltipContent side="top">
+                {memoryGrowthTierLabel(segment.tier, segment.tier_label, t)}
+              </TooltipContent>
+            </Tooltip>
           );
         })}
       </div>

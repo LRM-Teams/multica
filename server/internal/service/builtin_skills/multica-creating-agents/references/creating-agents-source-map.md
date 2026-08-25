@@ -38,6 +38,8 @@ Create / update / archive / skills / env management: **Web UI + HTTP** only.
 | Avatar verification | `agent.go` + `agent_avatar.go` | omit → assigned; picked/uploaded verified; raw URL rejected |
 | `UpdateAgent` rejects `custom_env` | ~929–938 / 1476 | 400 → use `PUT /api/agents/{id}/env` |
 | `UpdateAgent` rejects `name` / `username` | `agent.go:UpdateAgent` | permanent name can only be set during creation; edit display_name instead |
+| Bulk runtime config | `agent_bulk_runtime_config.go:BulkUpdateAgentRuntimeConfig` | `PUT /api/members/agents/runtime-config`; validates all selected Agents, then atomically writes one runtime/model/thinking tuple |
+| Bulk lifecycle | `agent_bulk_lifecycle.go:BulkAgentLifecycle`, `agent_restart.go` | `POST /api/members/agents/lifecycle`; one request applies Start, Stop, Restart, Reset session, or Full reset to multiple Agents and returns a per-Agent acceptance result |
 
 ## LRM-2343 Proposal and first-start lifecycle
 
@@ -47,12 +49,12 @@ Create / update / archive / skills / env management: **Web UI + HTTP** only.
 | Canonical Proposal | `handler/agent_action.go`, `channel_message.parts`, `agent_action` | `agent:create` is one visible Message plus an atomically seeded commit record; no action-card row or dismiss state |
 | Onboarding prepare command | `cmd/multica/cmd_action.go`, `handler/agent_action.go`, `workspace.onboarding_agent_id` | `multica action prepare` calls `/api/agent/actions/prepare`; only the active bound Onboarding Agent is authorized |
 | Commit idempotency | `handler/agent_action_commit.go` | action Message ID + non-secret final-payload hash returns the same Agent on a safe replay and rejects divergent payloads |
-| Atomic provisioning | `createAgentManagedTx`, `createAgentManagedCommit`, `provisionOnboardingAgent`, migration 336 | Human, Proposal, and Onboarding creation share one transaction-scoped primitive for Agent identity, system `#general` membership, and a desired `agent_runner_launch_projection`; onboarding only adds `workspace.onboarding_agent_id` and welcome messages |
-| Durable first start | `handler/runner_reconcile.go`, `daemon/agent_process_manager.go` | the server-owned `launch_id` is retried through `agent:start` until the current Workspace Runner accepts it; setup, reconnect, daemon restart, and Runtime moves use the same desired-vs-observed reconcile |
+| Atomic provisioning | `createAgentManagedTx`, `createAgentManagedCommit`, `provisionOnboardingAgent`, migration 336 | Human, Proposal, and Onboarding creation share one transaction-scoped primitive for Agent identity, desired `agent.runtime_id`, system `#general` membership, and an unarchived running intent; onboarding only adds `workspace.onboarding_agent_id` and welcome messages |
+| Durable first start | `handler/runner_reconcile.go`, `daemon/agent_process_manager.go` | the server-owned desired Runtime is retried through `agent:start` until the current WorkspaceDaemon accepts it; setup, reconnect, daemon restart, and Runtime moves use the same desired-vs-observed reconcile |
 | Human read model | Agent Presence and Activity APIs | accepted/active/inactive residency is the current Computer process, reported independently from user-visible Message Activity |
-
-See `docs/agent-creation-proposal-cutover.md` for the production migration
-preflight and post-deploy verification commands.
+| Human manual Start / Stop | `handler/agent_restart.go:StartAgent/StopAgent`, `handler/runner_reconcile.go`, migration 448, `cmd/server/router.go`, `packages/core/api/client.ts`, `packages/views/agents/components/agent-profile-actions.tsx` | owner/admin Agent Panel action; accepted Stop persists `agent.stopped_at` and excludes the Agent from desired launches, while explicit Start/Reset clears it; the single button follows managed process Presence |
+| Human bulk lifecycle | `handler/agent_bulk_lifecycle.go`, `handler/agent_restart.go`, `packages/core/api/client.ts`, `packages/views/runtimes/components/runtimes-page.tsx` | owner/admin Computer action; one API request selects an action for multiple Agents and reuses the same Start/Stop/Restart state machine without client request fan-out |
+| Computer cancellation fence | `daemon/agent_process_manager.go`, `daemon/workspace_daemon_agent_process.go`, `daemon/workspace_daemon_message.go` | local `AgentInstanceID` and the existing APM active/stopping ownership fence stale Provider callbacks, async setup, and idle auto-restart |
 
 ## Env — `server/internal/handler/agent_env.go`
 

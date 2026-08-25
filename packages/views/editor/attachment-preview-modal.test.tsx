@@ -358,7 +358,7 @@ describe("AttachmentPreviewModal — controls", () => {
     render(<AttachmentPreviewModal source={{ kind: "full", attachment: att }} open onClose={() => {}} />);
     // Two Download CTAs may exist (header + unsupported fallback). The header
     // button is always present, look it up by aria-label/title.
-    const buttons = screen.getAllByTitle("Download");
+    const buttons = screen.getAllByRole("button", { name: "Download" });
     expect(buttons.length).toBeGreaterThan(0);
     fireEvent.click(buttons[0]!);
     expect(downloadMock).toHaveBeenCalledWith("att-1");
@@ -410,7 +410,7 @@ describe("AttachmentPreviewModal — URL-only source", () => {
         onClose={() => {}}
       />,
     );
-    const button = screen.getAllByTitle("Download")[0]!;
+    const button = screen.getAllByRole("button", { name: "Download" })[0]!;
     fireEvent.click(button);
     expect(openExternalMock).toHaveBeenCalledWith(url);
     expect(downloadMock).not.toHaveBeenCalled();
@@ -434,7 +434,7 @@ describe("AttachmentPreviewModal — open-in-new-tab (HTML only)", () => {
         onClose={() => {}}
       />,
     );
-    expect(screen.getByTitle("Open in new tab")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Open in new tab" })).toBeTruthy();
   });
 
   it("invokes navigation.openInNewTab with the preview path and closes the modal (desktop)", async () => {
@@ -454,7 +454,7 @@ describe("AttachmentPreviewModal — open-in-new-tab (HTML only)", () => {
         onClose={onClose}
       />,
     );
-    fireEvent.click(screen.getByTitle("Open in new tab"));
+    fireEvent.click(screen.getByRole("button", { name: "Open in new tab" }));
     expect(openInNewTabMock).toHaveBeenCalledWith(
       "/acme/attachments/att-1/preview?name=report.html",
       "report.html",
@@ -484,7 +484,7 @@ describe("AttachmentPreviewModal — open-in-new-tab (HTML only)", () => {
         onClose={onClose}
       />,
     );
-    fireEvent.click(screen.getByTitle("Open in new tab"));
+    fireEvent.click(screen.getByRole("button", { name: "Open in new tab" }));
     expect(openInNewTabMock).not.toHaveBeenCalled();
     expect(windowOpenSpy).toHaveBeenCalledWith(
       "https://app.example/acme/attachments/att-1/preview?name=report.html",
@@ -506,7 +506,7 @@ describe("AttachmentPreviewModal — open-in-new-tab (HTML only)", () => {
         onClose={() => {}}
       />,
     );
-    expect(screen.queryByTitle("Open in new tab")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Open in new tab" })).toBeNull();
   });
 
   it("does not render the new-tab button for a directly-mounted PDF (#591/#799)", () => {
@@ -518,7 +518,7 @@ describe("AttachmentPreviewModal — open-in-new-tab (HTML only)", () => {
     render(
       <AttachmentPreviewModal source={{ kind: "full", attachment: att }} open onClose={() => {}} />,
     );
-    expect(screen.queryByTitle("Open in new tab")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Open in new tab" })).toBeNull();
   });
 
   it("does not render the new-tab button when there is no workspace slug", async () => {
@@ -538,7 +538,7 @@ describe("AttachmentPreviewModal — open-in-new-tab (HTML only)", () => {
         onClose={() => {}}
       />,
     );
-    expect(screen.queryByTitle("Open in new tab")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Open in new tab" })).toBeNull();
   });
 });
 

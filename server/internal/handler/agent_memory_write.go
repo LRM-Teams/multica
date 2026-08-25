@@ -107,7 +107,7 @@ func (h *Handler) ReportAgentMemoryWrites(w http.ResponseWriter, r *http.Request
 			AgentID:     agentID,
 			RelPath:     rel,
 			ContentHash: write.ContentHash,
-			CreatedAt:   dedupSince,
+			CreatedAt:   pgtype.Timestamptz{Time: dedupSince, Valid: true},
 		})
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "dedup check failed")
@@ -162,7 +162,20 @@ func (h *Handler) ReportAgentMemoryWrites(w http.ResponseWriter, r *http.Request
 			Importance: s.Importance,
 		})
 	}
-	if queued, err := h.enqueueMissedMemoryWrite(r.Context(), wsUUID, agentID, taskID, req.TriggerText, req.InitiatorID, signals, writeEntries); err != nil {
+	friction := memorysignal.FrictionVector{}
+	if req.Friction != nil {
+		friction = memorysignal.FrictionVector{
+			HumanCorrection: req.Friction.HumanCorrection,
+			ActionRejected:  req.Friction.ActionRejected,
+			RetryLoop:       req.Friction.RetryLoop,
+			Rework:          req.Friction.Rework,
+			SelfErrorStreak: req.Friction.SelfErrorStreak,
+		}
+	}
+	// A correcting trigger is server-side observable friction: the turn ran
+	// under a human correction even when the daemon counted nothing.
+	friction = memorysignal.AugmentFrictionFromTrigger(friction, req.TriggerText)
+	if queued, err := h.enqueueMemoryGuardCandidates(r.Context(), wsUUID, agentID, taskID, req.TriggerText, req.InitiatorID, signals, writeEntries, friction); err != nil {
 		writeError(w, http.StatusInternalServerError, "queue missed memory write failed")
 		return
 	} else {
@@ -175,23 +188,57 @@ func (h *Handler) ReportAgentMemoryWrites(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func (h *Handler) enqueueMissedMemoryWrite(
+// enqueueMemoryGuardCandidates runs the missed-write, decision and friction
+// guards for one task report. Each guard queues at most one candidate per turn
+// and dedupes against pending candidates with the same dedupe_key
+// (friction-gated memory spec).
+func (h *Handler) enqueueMemoryGuardCandidates(
 	ctx context.Context,
 	workspaceID, agentID pgtype.UUID,
 	taskID pgtype.UUID,
 	triggerText, initiatorID string,
 	signals []memorysignal.Signal,
 	writes []memorysignal.WriteEntry,
+	friction memorysignal.FrictionVector,
 ) (bool, error) {
-	miss, ok := memorysignal.DetectMissedWrite(triggerText, signals, writes, strings.TrimSpace(initiatorID))
-	if !ok {
-		return false, nil
-	}
 	if h.DB == nil {
 		return false, nil
 	}
+	queuedAny := false
+	if miss, ok := memorysignal.DetectMissedWrite(triggerText, signals, writes, strings.TrimSpace(initiatorID)); ok {
+		queued, err := h.insertMemoryGuardCandidate(ctx, workspaceID, agentID, taskID, triggerText, miss, nil)
+		if err != nil {
+			return queuedAny, err
+		}
+		queuedAny = queuedAny || queued
+	}
+	if miss, ok := memorysignal.DetectMissedDecision(triggerText, signals, writes); ok {
+		queued, err := h.insertMemoryGuardCandidate(ctx, workspaceID, agentID, taskID, triggerText, miss, nil)
+		if err != nil {
+			return queuedAny, err
+		}
+		queuedAny = queuedAny || queued
+	}
+	if miss, ok := memorysignal.DetectFrictionMiss(friction, signals, writes); ok {
+		extra := map[string]any{"friction": friction}
+		queued, err := h.insertMemoryGuardCandidate(ctx, workspaceID, agentID, taskID, triggerText, miss, extra)
+		if err != nil {
+			return queuedAny, err
+		}
+		queuedAny = queuedAny || queued
+	}
+	return queuedAny, nil
+}
 
-	meta, err := json.Marshal(map[string]any{
+func (h *Handler) insertMemoryGuardCandidate(
+	ctx context.Context,
+	workspaceID, agentID pgtype.UUID,
+	taskID pgtype.UUID,
+	triggerText string,
+	miss memorysignal.MissedWrite,
+	extraMeta map[string]any,
+) (bool, error) {
+	metaFields := map[string]any{
 		"source":          miss.Source,
 		"topic":           miss.Topic,
 		"topic_key":       miss.Topic,
@@ -203,7 +250,11 @@ func (h *Handler) enqueueMissedMemoryWrite(
 		"privacy":         "user_private",
 		"task_id":         uuidToString(taskID),
 		"awaiting_stage":  "agent_self_review",
-	})
+	}
+	for k, v := range extraMeta {
+		metaFields[k] = v
+	}
+	meta, err := json.Marshal(metaFields)
 	if err != nil {
 		return false, err
 	}

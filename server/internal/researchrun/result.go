@@ -81,7 +81,7 @@ func DecodeAndValidateResultForVersion(version string, raw json.RawMessage, task
 
 func ensureSupportedOrchestratorVersion(version string) error {
 	switch version {
-	case OrchestratorVersionV1, OrchestratorVersionV2, OrchestratorVersionV3, OrchestratorVersionV4, OrchestratorVersionV5:
+	case OrchestratorVersionV1, OrchestratorVersionV2, OrchestratorVersionV3, OrchestratorVersionV4, OrchestratorVersionV5, OrchestratorVersionV6:
 		return nil
 	default:
 		return fmt.Errorf("%w: %q", ErrUnsupportedVersion, version)

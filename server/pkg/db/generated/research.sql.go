@@ -40,6 +40,24 @@ func (q *Queries) ArchiveResearchFleetMember(ctx context.Context, arg ArchiveRes
 	return i, err
 }
 
+const bumpResearchGraphVersion = `-- name: BumpResearchGraphVersion :one
+UPDATE research_session SET graph_version = graph_version + 1
+WHERE id = $1 AND workspace_id = $2
+RETURNING graph_version
+`
+
+type BumpResearchGraphVersionParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) BumpResearchGraphVersion(ctx context.Context, arg BumpResearchGraphVersionParams) (int64, error) {
+	row := q.db.QueryRow(ctx, bumpResearchGraphVersion, arg.ID, arg.WorkspaceID)
+	var graph_version int64
+	err := row.Scan(&graph_version)
+	return graph_version, err
+}
+
 const cancelInFlightChatTasksByResearchTitle = `-- name: CancelInFlightChatTasksByResearchTitle :many
 UPDATE agent_inbox_event e
 SET status = 'suppressed',
@@ -64,7 +82,8 @@ RETURNING
   e.completed_at, e.result, e.error, e.session_id, e.work_dir,
   e.trigger_comment_id, e.autopilot_run_id, e.max_attempts, e.parent_task_id,
   e.failure_reason, e.trigger_summary, e.force_fresh_session, e.is_leader_task,
-  e.wait_reason, e.initiator_user_id, e.agent_dm_exchange_id, e.agent_dm_turn
+  e.wait_reason, e.initiator_user_id, e.agent_dm_exchange_id, e.agent_dm_turn,
+  e.issue_run_kind, e.issue_execution_revision, e.issue_execution_attempt_number
 `
 
 type CancelInFlightChatTasksByResearchTitleParams struct {
@@ -135,6 +154,9 @@ func (q *Queries) CancelInFlightChatTasksByResearchTitle(ctx context.Context, ar
 			&i.InitiatorUserID,
 			&i.AgentDmExchangeID,
 			&i.AgentDmTurn,
+			&i.IssueRunKind,
+			&i.IssueExecutionRevision,
+			&i.IssueExecutionAttemptNumber,
 		); err != nil {
 			return nil, err
 		}
@@ -144,6 +166,77 @@ func (q *Queries) CancelInFlightChatTasksByResearchTitle(ctx context.Context, ar
 		return nil, err
 	}
 	return items, nil
+}
+
+const countOpenResearchWorkItems = `-- name: CountOpenResearchWorkItems :one
+SELECT COUNT(*)::int AS count
+FROM research_work_item
+WHERE session_id = $1
+  AND workspace_id = $2
+  AND status IN ('pending', 'enqueued')
+`
+
+type CountOpenResearchWorkItemsParams struct {
+	SessionID   pgtype.UUID `json:"session_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) CountOpenResearchWorkItems(ctx context.Context, arg CountOpenResearchWorkItemsParams) (int32, error) {
+	row := q.db.QueryRow(ctx, countOpenResearchWorkItems, arg.SessionID, arg.WorkspaceID)
+	var count int32
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countResearchGraphNodes = `-- name: CountResearchGraphNodes :one
+SELECT COUNT(*)::bigint AS count
+FROM research_graph_node
+WHERE session_id = $1 AND workspace_id = $2
+`
+
+type CountResearchGraphNodesParams struct {
+	SessionID   pgtype.UUID `json:"session_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) CountResearchGraphNodes(ctx context.Context, arg CountResearchGraphNodesParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countResearchGraphNodes, arg.SessionID, arg.WorkspaceID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countResearchOpenBranches = `-- name: CountResearchOpenBranches :one
+SELECT COUNT(*)::int AS count
+FROM research_graph_node n
+WHERE n.session_id = $1
+  AND n.workspace_id = $2
+  AND n.status = 'active'
+  AND n.node_type IN ('subquestion', 'probe')
+  AND NOT EXISTS (
+    SELECT 1
+    FROM research_graph_edge e
+    JOIN research_graph_node c ON c.id = e.to_node_id
+    WHERE e.session_id = n.session_id
+      AND e.from_node_id = n.id
+      AND e.edge_type = 'leads_to'
+      AND c.status = 'active'
+      AND c.node_type IN ('subquestion', 'probe', 'finding', 'conflict')
+  )
+`
+
+type CountResearchOpenBranchesParams struct {
+	SessionID   pgtype.UUID `json:"session_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+// Open branch ≈ active exploration leaves: active subquestion/probe without
+// a child edge of type leads_to to another active subquestion/probe/finding.
+func (q *Queries) CountResearchOpenBranches(ctx context.Context, arg CountResearchOpenBranchesParams) (int32, error) {
+	row := q.db.QueryRow(ctx, countResearchOpenBranches, arg.SessionID, arg.WorkspaceID)
+	var count int32
+	err := row.Scan(&count)
+	return count, err
 }
 
 const createResearchFleet = `-- name: CreateResearchFleet :one
@@ -252,6 +345,58 @@ func (q *Queries) CreateResearchFleetMember(ctx context.Context, arg CreateResea
 	return i, err
 }
 
+const createResearchGraphCommand = `-- name: CreateResearchGraphCommand :one
+INSERT INTO research_graph_command (
+  workspace_id, session_id, op, idempotency_key, result_node_id,
+  input_node_ids, reason, actor_type, actor_id, meta
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+RETURNING id, workspace_id, session_id, op, idempotency_key, result_node_id, input_node_ids, reason, actor_type, actor_id, meta, created_at
+`
+
+type CreateResearchGraphCommandParams struct {
+	WorkspaceID    pgtype.UUID   `json:"workspace_id"`
+	SessionID      pgtype.UUID   `json:"session_id"`
+	Op             string        `json:"op"`
+	IdempotencyKey string        `json:"idempotency_key"`
+	ResultNodeID   pgtype.UUID   `json:"result_node_id"`
+	InputNodeIds   []pgtype.UUID `json:"input_node_ids"`
+	Reason         string        `json:"reason"`
+	ActorType      string        `json:"actor_type"`
+	ActorID        pgtype.UUID   `json:"actor_id"`
+	Meta           []byte        `json:"meta"`
+}
+
+func (q *Queries) CreateResearchGraphCommand(ctx context.Context, arg CreateResearchGraphCommandParams) (ResearchGraphCommand, error) {
+	row := q.db.QueryRow(ctx, createResearchGraphCommand,
+		arg.WorkspaceID,
+		arg.SessionID,
+		arg.Op,
+		arg.IdempotencyKey,
+		arg.ResultNodeID,
+		arg.InputNodeIds,
+		arg.Reason,
+		arg.ActorType,
+		arg.ActorID,
+		arg.Meta,
+	)
+	var i ResearchGraphCommand
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.SessionID,
+		&i.Op,
+		&i.IdempotencyKey,
+		&i.ResultNodeID,
+		&i.InputNodeIds,
+		&i.Reason,
+		&i.ActorType,
+		&i.ActorID,
+		&i.Meta,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const createResearchGraphEdge = `-- name: CreateResearchGraphEdge :one
 INSERT INTO research_graph_edge (
   workspace_id, session_id, from_node_id, to_node_id, edge_type
@@ -292,7 +437,7 @@ const createResearchGraphNode = `-- name: CreateResearchGraphNode :one
 INSERT INTO research_graph_node (
   workspace_id, session_id, node_type, title, summary, status, actor_agent_id, payload
 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-RETURNING id, workspace_id, session_id, node_type, title, summary, status, actor_agent_id, payload, created_at, updated_at
+RETURNING id, workspace_id, session_id, node_type, title, summary, status, actor_agent_id, payload, created_at, updated_at, run_event_id, level, round, cluster_id, confidence, document_count, conclusion_count, goal_version_id, derived_from, merged_from, superseded_by, restart_of, invalidated_by, superseded_at, invalidated_at
 `
 
 type CreateResearchGraphNodeParams struct {
@@ -330,6 +475,108 @@ func (q *Queries) CreateResearchGraphNode(ctx context.Context, arg CreateResearc
 		&i.Payload,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.RunEventID,
+		&i.Level,
+		&i.Round,
+		&i.ClusterID,
+		&i.Confidence,
+		&i.DocumentCount,
+		&i.ConclusionCount,
+		&i.GoalVersionID,
+		&i.DerivedFrom,
+		&i.MergedFrom,
+		&i.SupersededBy,
+		&i.RestartOf,
+		&i.InvalidatedBy,
+		&i.SupersededAt,
+		&i.InvalidatedAt,
+	)
+	return i, err
+}
+
+const createResearchGraphNodeTyped = `-- name: CreateResearchGraphNodeTyped :one
+INSERT INTO research_graph_node (
+  workspace_id, session_id, node_type, title, summary, status, actor_agent_id, level,
+  round, cluster_id, confidence, document_count, conclusion_count, goal_version_id,
+  derived_from, merged_from, superseded_by, restart_of, invalidated_by, payload
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+RETURNING id, workspace_id, session_id, node_type, title, summary, status, actor_agent_id, payload, created_at, updated_at, run_event_id, level, round, cluster_id, confidence, document_count, conclusion_count, goal_version_id, derived_from, merged_from, superseded_by, restart_of, invalidated_by, superseded_at, invalidated_at
+`
+
+type CreateResearchGraphNodeTypedParams struct {
+	WorkspaceID     pgtype.UUID   `json:"workspace_id"`
+	SessionID       pgtype.UUID   `json:"session_id"`
+	NodeType        string        `json:"node_type"`
+	Title           string        `json:"title"`
+	Summary         string        `json:"summary"`
+	Status          string        `json:"status"`
+	ActorAgentID    pgtype.UUID   `json:"actor_agent_id"`
+	Level           string        `json:"level"`
+	Round           int32         `json:"round"`
+	ClusterID       pgtype.UUID   `json:"cluster_id"`
+	Confidence      pgtype.Float8 `json:"confidence"`
+	DocumentCount   int32         `json:"document_count"`
+	ConclusionCount int32         `json:"conclusion_count"`
+	GoalVersionID   pgtype.UUID   `json:"goal_version_id"`
+	DerivedFrom     pgtype.UUID   `json:"derived_from"`
+	MergedFrom      []pgtype.UUID `json:"merged_from"`
+	SupersededBy    pgtype.UUID   `json:"superseded_by"`
+	RestartOf       pgtype.UUID   `json:"restart_of"`
+	InvalidatedBy   pgtype.UUID   `json:"invalidated_by"`
+	Payload         []byte        `json:"payload"`
+}
+
+func (q *Queries) CreateResearchGraphNodeTyped(ctx context.Context, arg CreateResearchGraphNodeTypedParams) (ResearchGraphNode, error) {
+	row := q.db.QueryRow(ctx, createResearchGraphNodeTyped,
+		arg.WorkspaceID,
+		arg.SessionID,
+		arg.NodeType,
+		arg.Title,
+		arg.Summary,
+		arg.Status,
+		arg.ActorAgentID,
+		arg.Level,
+		arg.Round,
+		arg.ClusterID,
+		arg.Confidence,
+		arg.DocumentCount,
+		arg.ConclusionCount,
+		arg.GoalVersionID,
+		arg.DerivedFrom,
+		arg.MergedFrom,
+		arg.SupersededBy,
+		arg.RestartOf,
+		arg.InvalidatedBy,
+		arg.Payload,
+	)
+	var i ResearchGraphNode
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.SessionID,
+		&i.NodeType,
+		&i.Title,
+		&i.Summary,
+		&i.Status,
+		&i.ActorAgentID,
+		&i.Payload,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.RunEventID,
+		&i.Level,
+		&i.Round,
+		&i.ClusterID,
+		&i.Confidence,
+		&i.DocumentCount,
+		&i.ConclusionCount,
+		&i.GoalVersionID,
+		&i.DerivedFrom,
+		&i.MergedFrom,
+		&i.SupersededBy,
+		&i.RestartOf,
+		&i.InvalidatedBy,
+		&i.SupersededAt,
+		&i.InvalidatedAt,
 	)
 	return i, err
 }
@@ -338,7 +585,7 @@ const createResearchMessage = `-- name: CreateResearchMessage :one
 INSERT INTO research_message (
   workspace_id, session_id, sender_type, sender_id, target_agent_id, body, card_kind, meta
 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-RETURNING id, workspace_id, session_id, sender_type, sender_id, target_agent_id, body, created_at, card_kind, meta
+RETURNING id, workspace_id, session_id, sender_type, sender_id, target_agent_id, body, created_at, card_kind, meta, run_event_id
 `
 
 type CreateResearchMessageParams struct {
@@ -375,72 +622,7 @@ func (q *Queries) CreateResearchMessage(ctx context.Context, arg CreateResearchM
 		&i.CreatedAt,
 		&i.CardKind,
 		&i.Meta,
-	)
-	return i, err
-}
-
-const getResearchMessage = `-- name: GetResearchMessage :one
-SELECT id, workspace_id, session_id, sender_type, sender_id, target_agent_id, body, created_at, card_kind, meta FROM research_message
-WHERE id = $1 AND session_id = $2 AND workspace_id = $3
-`
-
-type GetResearchMessageParams struct {
-	ID          pgtype.UUID `json:"id"`
-	SessionID   pgtype.UUID `json:"session_id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-}
-
-func (q *Queries) GetResearchMessage(ctx context.Context, arg GetResearchMessageParams) (ResearchMessage, error) {
-	row := q.db.QueryRow(ctx, getResearchMessage, arg.ID, arg.SessionID, arg.WorkspaceID)
-	var i ResearchMessage
-	err := row.Scan(
-		&i.ID,
-		&i.WorkspaceID,
-		&i.SessionID,
-		&i.SenderType,
-		&i.SenderID,
-		&i.TargetAgentID,
-		&i.Body,
-		&i.CreatedAt,
-		&i.CardKind,
-		&i.Meta,
-	)
-	return i, err
-}
-
-const setResearchMessageMatchDecision = `-- name: SetResearchMessageMatchDecision :one
-UPDATE research_message
-SET meta = jsonb_set(COALESCE(meta, '{}'::jsonb), '{match_decision}', $4::jsonb, true)
-WHERE id = $1 AND session_id = $2 AND workspace_id = $3
-RETURNING id, workspace_id, session_id, sender_type, sender_id, target_agent_id, body, created_at, card_kind, meta
-`
-
-type SetResearchMessageMatchDecisionParams struct {
-	ID            pgtype.UUID `json:"id"`
-	SessionID     pgtype.UUID `json:"session_id"`
-	WorkspaceID   pgtype.UUID `json:"workspace_id"`
-	MatchDecision []byte      `json:"match_decision"`
-}
-
-func (q *Queries) SetResearchMessageMatchDecision(ctx context.Context, arg SetResearchMessageMatchDecisionParams) (ResearchMessage, error) {
-	row := q.db.QueryRow(ctx, setResearchMessageMatchDecision,
-		arg.ID,
-		arg.SessionID,
-		arg.WorkspaceID,
-		arg.MatchDecision,
-	)
-	var i ResearchMessage
-	err := row.Scan(
-		&i.ID,
-		&i.WorkspaceID,
-		&i.SessionID,
-		&i.SenderType,
-		&i.SenderID,
-		&i.TargetAgentID,
-		&i.Body,
-		&i.CreatedAt,
-		&i.CardKind,
-		&i.Meta,
+		&i.RunEventID,
 	)
 	return i, err
 }
@@ -543,7 +725,7 @@ const createResearchReport = `-- name: CreateResearchReport :one
 INSERT INTO research_report (
   workspace_id, session_id, revision, content_md, structured
 ) VALUES ($1, $2, $3, $4, $5)
-RETURNING id, workspace_id, session_id, revision, content_md, structured, created_at, updated_at
+RETURNING id, workspace_id, session_id, revision, content_md, structured, created_at, updated_at, goal_version, plan_version, produced_by_task_id, produced_by_attempt_id, author_agent_id, status, parent_report_id, parent_revision, title, summary, plain_text, package_hash, document_content_hash, document_storage_key, document_storage_generation, document_byte_size, input_snapshot_hash, csp_script_hashes, csp_style_hashes, input_event_sequence, published_at, reviewed_by_director_assignment_id, outline, citations
 `
 
 type CreateResearchReportParams struct {
@@ -572,6 +754,63 @@ func (q *Queries) CreateResearchReport(ctx context.Context, arg CreateResearchRe
 		&i.Structured,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.GoalVersion,
+		&i.PlanVersion,
+		&i.ProducedByTaskID,
+		&i.ProducedByAttemptID,
+		&i.AuthorAgentID,
+		&i.Status,
+		&i.ParentReportID,
+		&i.ParentRevision,
+		&i.Title,
+		&i.Summary,
+		&i.PlainText,
+		&i.PackageHash,
+		&i.DocumentContentHash,
+		&i.DocumentStorageKey,
+		&i.DocumentStorageGeneration,
+		&i.DocumentByteSize,
+		&i.InputSnapshotHash,
+		&i.CspScriptHashes,
+		&i.CspStyleHashes,
+		&i.InputEventSequence,
+		&i.PublishedAt,
+		&i.ReviewedByDirectorAssignmentID,
+		&i.Outline,
+		&i.Citations,
+	)
+	return i, err
+}
+
+const createResearchSchedulerEvent = `-- name: CreateResearchSchedulerEvent :one
+INSERT INTO research_scheduler_event (
+  workspace_id, session_id, event_type, detail
+) VALUES ($1, $2, $3, $4)
+RETURNING id, workspace_id, session_id, event_type, detail, created_at
+`
+
+type CreateResearchSchedulerEventParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	SessionID   pgtype.UUID `json:"session_id"`
+	EventType   string      `json:"event_type"`
+	Detail      []byte      `json:"detail"`
+}
+
+func (q *Queries) CreateResearchSchedulerEvent(ctx context.Context, arg CreateResearchSchedulerEventParams) (ResearchSchedulerEvent, error) {
+	row := q.db.QueryRow(ctx, createResearchSchedulerEvent,
+		arg.WorkspaceID,
+		arg.SessionID,
+		arg.EventType,
+		arg.Detail,
+	)
+	var i ResearchSchedulerEvent
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.SessionID,
+		&i.EventType,
+		&i.Detail,
+		&i.CreatedAt,
 	)
 	return i, err
 }
@@ -581,7 +820,7 @@ INSERT INTO research_session (
   workspace_id, fleet_id, created_by, title, goal, status, current_stage,
   depth_tier, product_round, product_round_budget
 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-RETURNING id, workspace_id, fleet_id, created_by, title, goal, status, current_stage, project_id, channel_id, handoff_summary, created_at, updated_at, depth_tier, product_round, product_round_budget, unattended_enabled, max_open_branches, single_line_confirmed, unattended_auto_steps, last_user_activity_at
+RETURNING id, workspace_id, fleet_id, created_by, title, goal, status, current_stage, project_id, channel_id, handoff_summary, created_at, updated_at, depth_tier, product_round, product_round_budget, unattended_enabled, max_open_branches, single_line_confirmed, unattended_auto_steps, last_user_activity_at, goal_version, plan_version, state_version, orchestrator_version, run_config, run_stats, run_initialized_at, last_progress_at, next_reconcile_at, reconcile_lease_token, reconcile_lease_expires_at, stop_reason, last_error, reconcile_lease_generation, graph_version, artifact_passport_enabled, director_state_version, current_director_assignment_id, v6_projection_version
 `
 
 type CreateResearchSessionParams struct {
@@ -633,6 +872,25 @@ func (q *Queries) CreateResearchSession(ctx context.Context, arg CreateResearchS
 		&i.SingleLineConfirmed,
 		&i.UnattendedAutoSteps,
 		&i.LastUserActivityAt,
+		&i.GoalVersion,
+		&i.PlanVersion,
+		&i.StateVersion,
+		&i.OrchestratorVersion,
+		&i.RunConfig,
+		&i.RunStats,
+		&i.RunInitializedAt,
+		&i.LastProgressAt,
+		&i.NextReconcileAt,
+		&i.ReconcileLeaseToken,
+		&i.ReconcileLeaseExpiresAt,
+		&i.StopReason,
+		&i.LastError,
+		&i.ReconcileLeaseGeneration,
+		&i.GraphVersion,
+		&i.ArtifactPassportEnabled,
+		&i.DirectorStateVersion,
+		&i.CurrentDirectorAssignmentID,
+		&i.V6ProjectionVersion,
 	)
 	return i, err
 }
@@ -675,6 +933,76 @@ func (q *Queries) CreateResearchStageEval(ctx context.Context, arg CreateResearc
 		&i.Findings,
 		&i.Remediation,
 		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const createResearchWorkItem = `-- name: CreateResearchWorkItem :one
+INSERT INTO research_work_item (
+  workspace_id, session_id, kind, target_node_id, assignee_agent_id, status, reason, payload
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+RETURNING id, workspace_id, session_id, kind, target_node_id, assignee_agent_id, status, reason, payload, enqueued_at, completed_at, created_at, updated_at, target_kind, target_id, client_key, idempotency_key, goal_version, input_state_version, input_event_sequence, created_by_director_cycle_id, assigned_agent_id, priority, max_attempts, attempt_count, lease_token, lease_expires_at, payload_schema_id, terminal_reason_code, terminal_reason_detail, ready_at, started_at, cancelled_at, state_version, expected_result_schema_id
+`
+
+type CreateResearchWorkItemParams struct {
+	WorkspaceID     pgtype.UUID `json:"workspace_id"`
+	SessionID       pgtype.UUID `json:"session_id"`
+	Kind            string      `json:"kind"`
+	TargetNodeID    pgtype.UUID `json:"target_node_id"`
+	AssigneeAgentID pgtype.UUID `json:"assignee_agent_id"`
+	Status          string      `json:"status"`
+	Reason          string      `json:"reason"`
+	Payload         []byte      `json:"payload"`
+}
+
+func (q *Queries) CreateResearchWorkItem(ctx context.Context, arg CreateResearchWorkItemParams) (ResearchWorkItem, error) {
+	row := q.db.QueryRow(ctx, createResearchWorkItem,
+		arg.WorkspaceID,
+		arg.SessionID,
+		arg.Kind,
+		arg.TargetNodeID,
+		arg.AssigneeAgentID,
+		arg.Status,
+		arg.Reason,
+		arg.Payload,
+	)
+	var i ResearchWorkItem
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.SessionID,
+		&i.Kind,
+		&i.TargetNodeID,
+		&i.AssigneeAgentID,
+		&i.Status,
+		&i.Reason,
+		&i.Payload,
+		&i.EnqueuedAt,
+		&i.CompletedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.TargetKind,
+		&i.TargetID,
+		&i.ClientKey,
+		&i.IdempotencyKey,
+		&i.GoalVersion,
+		&i.InputStateVersion,
+		&i.InputEventSequence,
+		&i.CreatedByDirectorCycleID,
+		&i.AssignedAgentID,
+		&i.Priority,
+		&i.MaxAttempts,
+		&i.AttemptCount,
+		&i.LeaseToken,
+		&i.LeaseExpiresAt,
+		&i.PayloadSchemaID,
+		&i.TerminalReasonCode,
+		&i.TerminalReasonDetail,
+		&i.ReadyAt,
+		&i.StartedAt,
+		&i.CancelledAt,
+		&i.StateVersion,
+		&i.ExpectedResultSchemaID,
 	)
 	return i, err
 }
@@ -725,7 +1053,7 @@ func (q *Queries) GetLatestResearchPlaybook(ctx context.Context, arg GetLatestRe
 }
 
 const getLatestResearchReport = `-- name: GetLatestResearchReport :one
-SELECT id, workspace_id, session_id, revision, content_md, structured, created_at, updated_at FROM research_report
+SELECT id, workspace_id, session_id, revision, content_md, structured, created_at, updated_at, goal_version, plan_version, produced_by_task_id, produced_by_attempt_id, author_agent_id, status, parent_report_id, parent_revision, title, summary, plain_text, package_hash, document_content_hash, document_storage_key, document_storage_generation, document_byte_size, input_snapshot_hash, csp_script_hashes, csp_style_hashes, input_event_sequence, published_at, reviewed_by_director_assignment_id, outline, citations FROM research_report
 WHERE session_id = $1 AND workspace_id = $2
 ORDER BY revision DESC
 LIMIT 1
@@ -748,6 +1076,30 @@ func (q *Queries) GetLatestResearchReport(ctx context.Context, arg GetLatestRese
 		&i.Structured,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.GoalVersion,
+		&i.PlanVersion,
+		&i.ProducedByTaskID,
+		&i.ProducedByAttemptID,
+		&i.AuthorAgentID,
+		&i.Status,
+		&i.ParentReportID,
+		&i.ParentRevision,
+		&i.Title,
+		&i.Summary,
+		&i.PlainText,
+		&i.PackageHash,
+		&i.DocumentContentHash,
+		&i.DocumentStorageKey,
+		&i.DocumentStorageGeneration,
+		&i.DocumentByteSize,
+		&i.InputSnapshotHash,
+		&i.CspScriptHashes,
+		&i.CspStyleHashes,
+		&i.InputEventSequence,
+		&i.PublishedAt,
+		&i.ReviewedByDirectorAssignmentID,
+		&i.Outline,
+		&i.Citations,
 	)
 	return i, err
 }
@@ -793,1156 +1145,6 @@ func (q *Queries) GetResearchFleetMemberByAgent(ctx context.Context, arg GetRese
 		&i.IsLead,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-	)
-	return i, err
-}
-
-const getResearchGraphNode = `-- name: GetResearchGraphNode :one
-SELECT id, workspace_id, session_id, node_type, title, summary, status, actor_agent_id, payload, created_at, updated_at FROM research_graph_node
-WHERE id = $1 AND workspace_id = $2
-`
-
-type GetResearchGraphNodeParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-}
-
-func (q *Queries) GetResearchGraphNode(ctx context.Context, arg GetResearchGraphNodeParams) (ResearchGraphNode, error) {
-	row := q.db.QueryRow(ctx, getResearchGraphNode, arg.ID, arg.WorkspaceID)
-	var i ResearchGraphNode
-	err := row.Scan(
-		&i.ID,
-		&i.WorkspaceID,
-		&i.SessionID,
-		&i.NodeType,
-		&i.Title,
-		&i.Summary,
-		&i.Status,
-		&i.ActorAgentID,
-		&i.Payload,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
-const getResearchProductRoundCard = `-- name: GetResearchProductRoundCard :one
-SELECT id, workspace_id, session_id, round_number, decision, coverage_gaps, confidence_note, budget_used, budget_remaining, goal_patch_proposal, next_round_focus, decided_by_agent_id, created_at FROM research_product_round_card
-WHERE session_id = $1 AND workspace_id = $2 AND round_number = $3
-`
-
-type GetResearchProductRoundCardParams struct {
-	SessionID   pgtype.UUID `json:"session_id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	RoundNumber int32       `json:"round_number"`
-}
-
-func (q *Queries) GetResearchProductRoundCard(ctx context.Context, arg GetResearchProductRoundCardParams) (ResearchProductRoundCard, error) {
-	row := q.db.QueryRow(ctx, getResearchProductRoundCard, arg.SessionID, arg.WorkspaceID, arg.RoundNumber)
-	var i ResearchProductRoundCard
-	err := row.Scan(
-		&i.ID,
-		&i.WorkspaceID,
-		&i.SessionID,
-		&i.RoundNumber,
-		&i.Decision,
-		&i.CoverageGaps,
-		&i.ConfidenceNote,
-		&i.BudgetUsed,
-		&i.BudgetRemaining,
-		&i.GoalPatchProposal,
-		&i.NextRoundFocus,
-		&i.DecidedByAgentID,
-		&i.CreatedAt,
-	)
-	return i, err
-}
-
-const getResearchSession = `-- name: GetResearchSession :one
-SELECT id, workspace_id, fleet_id, created_by, title, goal, status, current_stage, project_id, channel_id, handoff_summary, created_at, updated_at, depth_tier, product_round, product_round_budget, unattended_enabled, max_open_branches, single_line_confirmed, unattended_auto_steps, last_user_activity_at FROM research_session
-WHERE id = $1 AND workspace_id = $2
-`
-
-type GetResearchSessionParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-}
-
-func (q *Queries) GetResearchSession(ctx context.Context, arg GetResearchSessionParams) (ResearchSession, error) {
-	row := q.db.QueryRow(ctx, getResearchSession, arg.ID, arg.WorkspaceID)
-	var i ResearchSession
-	err := row.Scan(
-		&i.ID,
-		&i.WorkspaceID,
-		&i.FleetID,
-		&i.CreatedBy,
-		&i.Title,
-		&i.Goal,
-		&i.Status,
-		&i.CurrentStage,
-		&i.ProjectID,
-		&i.ChannelID,
-		&i.HandoffSummary,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.DepthTier,
-		&i.ProductRound,
-		&i.ProductRoundBudget,
-		&i.UnattendedEnabled,
-		&i.MaxOpenBranches,
-		&i.SingleLineConfirmed,
-		&i.UnattendedAutoSteps,
-		&i.LastUserActivityAt,
-	)
-	return i, err
-}
-
-const listActiveResearchFleetMemberAgentIDsByWorkspace = `-- name: ListActiveResearchFleetMemberAgentIDsByWorkspace :many
-SELECT agent_id FROM research_fleet_member
-WHERE workspace_id = $1 AND status != 'archived'
-`
-
-func (q *Queries) ListActiveResearchFleetMemberAgentIDsByWorkspace(ctx context.Context, workspaceID pgtype.UUID) ([]pgtype.UUID, error) {
-	rows, err := q.db.Query(ctx, listActiveResearchFleetMemberAgentIDsByWorkspace, workspaceID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []pgtype.UUID{}
-	for rows.Next() {
-		var agent_id pgtype.UUID
-		if err := rows.Scan(&agent_id); err != nil {
-			return nil, err
-		}
-		items = append(items, agent_id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listResearchFleetMembers = `-- name: ListResearchFleetMembers :many
-SELECT id, workspace_id, fleet_id, agent_id, role, status, is_lead, created_at, updated_at FROM research_fleet_member
-WHERE fleet_id = $1 AND workspace_id = $2
-ORDER BY is_lead DESC, created_at ASC
-`
-
-type ListResearchFleetMembersParams struct {
-	FleetID     pgtype.UUID `json:"fleet_id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-}
-
-func (q *Queries) ListResearchFleetMembers(ctx context.Context, arg ListResearchFleetMembersParams) ([]ResearchFleetMember, error) {
-	rows, err := q.db.Query(ctx, listResearchFleetMembers, arg.FleetID, arg.WorkspaceID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ResearchFleetMember{}
-	for rows.Next() {
-		var i ResearchFleetMember
-		if err := rows.Scan(
-			&i.ID,
-			&i.WorkspaceID,
-			&i.FleetID,
-			&i.AgentID,
-			&i.Role,
-			&i.Status,
-			&i.IsLead,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listResearchGraphEdges = `-- name: ListResearchGraphEdges :many
-SELECT id, workspace_id, session_id, from_node_id, to_node_id, edge_type, created_at FROM research_graph_edge
-WHERE session_id = $1 AND workspace_id = $2
-ORDER BY created_at ASC
-`
-
-type ListResearchGraphEdgesParams struct {
-	SessionID   pgtype.UUID `json:"session_id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-}
-
-func (q *Queries) ListResearchGraphEdges(ctx context.Context, arg ListResearchGraphEdgesParams) ([]ResearchGraphEdge, error) {
-	rows, err := q.db.Query(ctx, listResearchGraphEdges, arg.SessionID, arg.WorkspaceID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ResearchGraphEdge{}
-	for rows.Next() {
-		var i ResearchGraphEdge
-		if err := rows.Scan(
-			&i.ID,
-			&i.WorkspaceID,
-			&i.SessionID,
-			&i.FromNodeID,
-			&i.ToNodeID,
-			&i.EdgeType,
-			&i.CreatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listResearchGraphNodes = `-- name: ListResearchGraphNodes :many
-SELECT id, workspace_id, session_id, node_type, title, summary, status, actor_agent_id, payload, created_at, updated_at FROM research_graph_node
-WHERE session_id = $1 AND workspace_id = $2
-ORDER BY created_at ASC
-`
-
-type ListResearchGraphNodesParams struct {
-	SessionID   pgtype.UUID `json:"session_id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-}
-
-func (q *Queries) ListResearchGraphNodes(ctx context.Context, arg ListResearchGraphNodesParams) ([]ResearchGraphNode, error) {
-	rows, err := q.db.Query(ctx, listResearchGraphNodes, arg.SessionID, arg.WorkspaceID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ResearchGraphNode{}
-	for rows.Next() {
-		var i ResearchGraphNode
-		if err := rows.Scan(
-			&i.ID,
-			&i.WorkspaceID,
-			&i.SessionID,
-			&i.NodeType,
-			&i.Title,
-			&i.Summary,
-			&i.Status,
-			&i.ActorAgentID,
-			&i.Payload,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listResearchMessages = `-- name: ListResearchMessages :many
-SELECT id, workspace_id, session_id, sender_type, sender_id, target_agent_id, body, created_at, card_kind, meta FROM research_message
-WHERE session_id = $1 AND workspace_id = $2
-ORDER BY created_at ASC
-`
-
-type ListResearchMessagesParams struct {
-	SessionID   pgtype.UUID `json:"session_id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-}
-
-func (q *Queries) ListResearchMessages(ctx context.Context, arg ListResearchMessagesParams) ([]ResearchMessage, error) {
-	rows, err := q.db.Query(ctx, listResearchMessages, arg.SessionID, arg.WorkspaceID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ResearchMessage{}
-	for rows.Next() {
-		var i ResearchMessage
-		if err := rows.Scan(
-			&i.ID,
-			&i.WorkspaceID,
-			&i.SessionID,
-			&i.SenderType,
-			&i.SenderID,
-			&i.TargetAgentID,
-			&i.Body,
-			&i.CreatedAt,
-			&i.CardKind,
-			&i.Meta,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listResearchProductRoundCards = `-- name: ListResearchProductRoundCards :many
-SELECT id, workspace_id, session_id, round_number, decision, coverage_gaps, confidence_note, budget_used, budget_remaining, goal_patch_proposal, next_round_focus, decided_by_agent_id, created_at FROM research_product_round_card
-WHERE session_id = $1 AND workspace_id = $2
-ORDER BY round_number ASC
-`
-
-type ListResearchProductRoundCardsParams struct {
-	SessionID   pgtype.UUID `json:"session_id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-}
-
-func (q *Queries) ListResearchProductRoundCards(ctx context.Context, arg ListResearchProductRoundCardsParams) ([]ResearchProductRoundCard, error) {
-	rows, err := q.db.Query(ctx, listResearchProductRoundCards, arg.SessionID, arg.WorkspaceID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ResearchProductRoundCard{}
-	for rows.Next() {
-		var i ResearchProductRoundCard
-		if err := rows.Scan(
-			&i.ID,
-			&i.WorkspaceID,
-			&i.SessionID,
-			&i.RoundNumber,
-			&i.Decision,
-			&i.CoverageGaps,
-			&i.ConfidenceNote,
-			&i.BudgetUsed,
-			&i.BudgetRemaining,
-			&i.GoalPatchProposal,
-			&i.NextRoundFocus,
-			&i.DecidedByAgentID,
-			&i.CreatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listResearchReports = `-- name: ListResearchReports :many
-SELECT id, workspace_id, session_id, revision, content_md, structured, created_at, updated_at FROM research_report
-WHERE session_id = $1 AND workspace_id = $2
-ORDER BY revision DESC
-`
-
-type ListResearchReportsParams struct {
-	SessionID   pgtype.UUID `json:"session_id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-}
-
-func (q *Queries) ListResearchReports(ctx context.Context, arg ListResearchReportsParams) ([]ResearchReport, error) {
-	rows, err := q.db.Query(ctx, listResearchReports, arg.SessionID, arg.WorkspaceID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ResearchReport{}
-	for rows.Next() {
-		var i ResearchReport
-		if err := rows.Scan(
-			&i.ID,
-			&i.WorkspaceID,
-			&i.SessionID,
-			&i.Revision,
-			&i.ContentMd,
-			&i.Structured,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listResearchSessions = `-- name: ListResearchSessions :many
-SELECT id, workspace_id, fleet_id, created_by, title, goal, status, current_stage, project_id, channel_id, handoff_summary, created_at, updated_at, depth_tier, product_round, product_round_budget, unattended_enabled, max_open_branches, single_line_confirmed, unattended_auto_steps, last_user_activity_at FROM research_session
-WHERE workspace_id = $1
-ORDER BY updated_at DESC
-`
-
-func (q *Queries) ListResearchSessions(ctx context.Context, workspaceID pgtype.UUID) ([]ResearchSession, error) {
-	rows, err := q.db.Query(ctx, listResearchSessions, workspaceID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ResearchSession{}
-	for rows.Next() {
-		var i ResearchSession
-		if err := rows.Scan(
-			&i.ID,
-			&i.WorkspaceID,
-			&i.FleetID,
-			&i.CreatedBy,
-			&i.Title,
-			&i.Goal,
-			&i.Status,
-			&i.CurrentStage,
-			&i.ProjectID,
-			&i.ChannelID,
-			&i.HandoffSummary,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.DepthTier,
-			&i.ProductRound,
-			&i.ProductRoundBudget,
-			&i.UnattendedEnabled,
-			&i.MaxOpenBranches,
-			&i.SingleLineConfirmed,
-			&i.UnattendedAutoSteps,
-			&i.LastUserActivityAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listResearchSessionProgress = `-- name: ListResearchSessionProgress :many
-WITH task_progress AS (
-  SELECT t.session_id, count(*) FILTER (WHERE t.status <> 'obsolete') AS task_total,
-    count(*) FILTER (WHERE t.status = 'succeeded') AS task_completed,
-    count(*) FILTER (WHERE t.status IN ('dispatching', 'running')) AS task_running,
-    count(*) FILTER (WHERE t.status IN ('blocked', 'failed')) AS task_blocked
-  FROM research_task t JOIN research_session s ON s.id = t.session_id
-  WHERE t.workspace_id = $1 AND t.goal_version = s.goal_version AND t.plan_version = s.plan_version
-  GROUP BY t.session_id
-), evidence_progress AS (
-  SELECT session_id, count(*) AS evidence_count,
-    count(*) FILTER (WHERE created_at >= now() - interval '24 hours') AS today_evidence_count FROM research_observation
-  WHERE workspace_id = $1 AND verification_status <> 'rejected' GROUP BY session_id
-), node_progress AS (
-  SELECT session_id, count(*) AS node_count FROM research_graph_node WHERE workspace_id = $1 GROUP BY session_id
-), question_progress AS (
-  SELECT q.session_id, count(*) AS open_question_count
-  FROM research_question q JOIN research_session s ON s.id = q.session_id
-  WHERE q.workspace_id = $1 AND q.goal_version = s.goal_version AND q.plan_version = s.plan_version
-    AND q.status IN ('open', 'in_progress', 'unresolved') GROUP BY q.session_id
-)
-SELECT s.id AS session_id, COALESCE(tp.task_total, 0)::bigint AS task_total,
-  COALESCE(tp.task_completed, 0)::bigint AS task_completed,
-  COALESCE(tp.task_running, 0)::bigint AS task_running,
-  COALESCE(tp.task_blocked, 0)::bigint AS task_blocked,
-  COALESCE(ep.evidence_count, 0)::bigint AS evidence_count,
-  COALESCE(ep.today_evidence_count, 0)::bigint AS today_evidence_count,
-  COALESCE(np.node_count, 0)::bigint AS node_count,
-  COALESCE(qp.open_question_count, 0)::bigint AS open_question_count,
-  (s.status = 'awaiting_user_confirm') AS awaiting_user_action,
-  COALESCE((CASE WHEN s.status = 'awaiting_user_confirm' THEN 'user_confirmation'
-    WHEN COALESCE(tp.task_blocked, 0) > 0 THEN 'blocked_tasks'
-    WHEN s.status = 'failed' AND length(s.last_error) > 0 THEN 'recoverable_failure'
-    WHEN s.status = 'running' AND COALESCE(tp.task_running, 0) = 0 AND s.last_progress_at < now() - interval '15 minutes' THEN 'stalled' ELSE NULL END)::text, '')::text AS attention_kind,
-  COALESCE((s.status = 'failed' AND length(s.last_error) > 0) OR COALESCE(tp.task_blocked, 0) > 0, false)::boolean AS recoverable,
-  s.last_progress_at
-FROM research_session s
-LEFT JOIN task_progress tp ON tp.session_id = s.id
-LEFT JOIN evidence_progress ep ON ep.session_id = s.id
-LEFT JOIN node_progress np ON np.session_id = s.id
-LEFT JOIN question_progress qp ON qp.session_id = s.id
-WHERE s.workspace_id = $1 ORDER BY s.updated_at DESC
-`
-
-type ListResearchSessionProgressRow struct {
-	SessionID          pgtype.UUID        `json:"session_id"`
-	TaskTotal          int64              `json:"task_total"`
-	TaskCompleted      int64              `json:"task_completed"`
-	TaskRunning        int64              `json:"task_running"`
-	TaskBlocked        int64              `json:"task_blocked"`
-	EvidenceCount      int64              `json:"evidence_count"`
-	TodayEvidenceCount int64              `json:"today_evidence_count"`
-	NodeCount          int64              `json:"node_count"`
-	OpenQuestionCount  int64              `json:"open_question_count"`
-	AwaitingUserAction bool               `json:"awaiting_user_action"`
-	AttentionKind      string             `json:"attention_kind"`
-	Recoverable        bool               `json:"recoverable"`
-	LastProgressAt     pgtype.Timestamptz `json:"last_progress_at"`
-}
-
-func (q *Queries) ListResearchSessionProgress(ctx context.Context, workspaceID pgtype.UUID) ([]ListResearchSessionProgressRow, error) {
-	rows, err := q.db.Query(ctx, listResearchSessionProgress, workspaceID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ListResearchSessionProgressRow{}
-	for rows.Next() {
-		var i ListResearchSessionProgressRow
-		if err := rows.Scan(&i.SessionID, &i.TaskTotal, &i.TaskCompleted, &i.TaskRunning, &i.TaskBlocked, &i.EvidenceCount, &i.TodayEvidenceCount, &i.NodeCount, &i.OpenQuestionCount, &i.AwaitingUserAction, &i.AttentionKind, &i.Recoverable, &i.LastProgressAt); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listResearchActiveAssignments = `-- name: ListResearchActiveAssignments :many
-WITH ranked AS (
-  SELECT t.session_id, t.assigned_agent_id AS agent_id, COALESCE(fm.role, '')::text AS role,
-    t.id AS task_id, t.objective AS task_title, t.status AS state,
-    row_number() OVER (PARTITION BY t.session_id ORDER BY t.priority DESC, t.started_at DESC NULLS LAST, t.created_at DESC) AS position
-  FROM research_task t JOIN research_session s ON s.id = t.session_id
-  LEFT JOIN research_fleet_member fm ON fm.fleet_id = s.fleet_id AND fm.agent_id = t.assigned_agent_id
-  WHERE t.workspace_id = $1 AND t.goal_version = s.goal_version AND t.plan_version = s.plan_version
-    AND t.status IN ('dispatching', 'running') AND t.assigned_agent_id IS NOT NULL
-)
-SELECT session_id, agent_id, role, task_id, task_title, state FROM ranked
-WHERE position <= 4 ORDER BY session_id, position
-`
-
-type ListResearchActiveAssignmentsRow struct {
-	SessionID pgtype.UUID `json:"session_id"`
-	AgentID   pgtype.UUID `json:"agent_id"`
-	Role      string      `json:"role"`
-	TaskID    pgtype.UUID `json:"task_id"`
-	TaskTitle string      `json:"task_title"`
-	State     string      `json:"state"`
-}
-
-func (q *Queries) ListResearchActiveAssignments(ctx context.Context, workspaceID pgtype.UUID) ([]ListResearchActiveAssignmentsRow, error) {
-	rows, err := q.db.Query(ctx, listResearchActiveAssignments, workspaceID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ListResearchActiveAssignmentsRow{}
-	for rows.Next() {
-		var i ListResearchActiveAssignmentsRow
-		if err := rows.Scan(&i.SessionID, &i.AgentID, &i.Role, &i.TaskID, &i.TaskTitle, &i.State); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listResearchLatestOutcomes = `-- name: ListResearchLatestOutcomes :many
-WITH outcomes AS (
-  SELECT c.session_id, c.id, 0 AS outcome_priority, 'claim'::text AS kind, c.claim_text AS title, NULLIF(c.resolution, '')::text AS summary, c.status AS verification_state, c.created_at
-  FROM research_claim c JOIN research_session s ON s.id = c.session_id
-  WHERE c.workspace_id = $1 AND c.goal_version = s.goal_version AND c.plan_version = s.plan_version AND c.status = 'supported'
-  UNION ALL
-  SELECT o.session_id, o.id, 1, 'observation'::text, COALESCE(NULLIF(o.interpretation, ''), NULLIF(o.quote, ''), 'Verified observation'), NULLIF(o.quote, '')::text, o.verification_status, o.created_at
-  FROM research_observation o WHERE o.workspace_id = $1 AND o.verification_status = 'verified'
-  UNION ALL
-  SELECT t.session_id, t.id, 2, 'task'::text, t.objective, NULLIF(t.terminal_reason, '')::text, t.status, t.completed_at
-  FROM research_task t JOIN research_session s ON s.id = t.session_id
-  WHERE t.workspace_id = $1 AND t.goal_version = s.goal_version AND t.plan_version = s.plan_version AND t.status = 'succeeded' AND t.completed_at IS NOT NULL
-), ranked AS (
-  SELECT outcomes.*, row_number() OVER (PARTITION BY session_id ORDER BY outcome_priority, created_at DESC, id) AS position FROM outcomes
-)
-SELECT session_id, id, kind, title, COALESCE(summary, '')::text AS summary, verification_state, created_at FROM ranked
-WHERE position <= 3 ORDER BY session_id, position
-`
-
-type ListResearchLatestOutcomesRow struct {
-	SessionID         pgtype.UUID        `json:"session_id"`
-	ID                pgtype.UUID        `json:"id"`
-	Kind              string             `json:"kind"`
-	Title             string             `json:"title"`
-	Summary           string             `json:"summary"`
-	VerificationState string             `json:"verification_state"`
-	CreatedAt         pgtype.Timestamptz `json:"created_at"`
-}
-
-func (q *Queries) ListResearchLatestOutcomes(ctx context.Context, workspaceID pgtype.UUID) ([]ListResearchLatestOutcomesRow, error) {
-	rows, err := q.db.Query(ctx, listResearchLatestOutcomes, workspaceID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ListResearchLatestOutcomesRow{}
-	for rows.Next() {
-		var i ListResearchLatestOutcomesRow
-		if err := rows.Scan(&i.SessionID, &i.ID, &i.Kind, &i.Title, &i.Summary, &i.VerificationState, &i.CreatedAt); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listResearchSources = `-- name: ListResearchSources :many
-SELECT id, workspace_id, session_id, url, title, source_class, credibility_weight, stance, relevance, summary, excerpt, payload, created_at, updated_at FROM research_source
-WHERE session_id = $1 AND workspace_id = $2
-ORDER BY credibility_weight DESC, created_at ASC
-`
-
-type ListResearchSourcesParams struct {
-	SessionID   pgtype.UUID `json:"session_id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-}
-
-func (q *Queries) ListResearchSources(ctx context.Context, arg ListResearchSourcesParams) ([]ResearchSource, error) {
-	rows, err := q.db.Query(ctx, listResearchSources, arg.SessionID, arg.WorkspaceID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ResearchSource{}
-	for rows.Next() {
-		var i ResearchSource
-		if err := rows.Scan(
-			&i.ID,
-			&i.WorkspaceID,
-			&i.SessionID,
-			&i.Url,
-			&i.Title,
-			&i.SourceClass,
-			&i.CredibilityWeight,
-			&i.Stance,
-			&i.Relevance,
-			&i.Summary,
-			&i.Excerpt,
-			&i.Payload,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listResearchStageEvals = `-- name: ListResearchStageEvals :many
-SELECT id, workspace_id, session_id, stage, passed, score, findings, remediation, created_at FROM research_stage_eval
-WHERE session_id = $1 AND workspace_id = $2
-ORDER BY created_at DESC
-`
-
-type ListResearchStageEvalsParams struct {
-	SessionID   pgtype.UUID `json:"session_id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-}
-
-func (q *Queries) ListResearchStageEvals(ctx context.Context, arg ListResearchStageEvalsParams) ([]ResearchStageEval, error) {
-	rows, err := q.db.Query(ctx, listResearchStageEvals, arg.SessionID, arg.WorkspaceID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ResearchStageEval{}
-	for rows.Next() {
-		var i ResearchStageEval
-		if err := rows.Scan(
-			&i.ID,
-			&i.WorkspaceID,
-			&i.SessionID,
-			&i.Stage,
-			&i.Passed,
-			&i.Score,
-			&i.Findings,
-			&i.Remediation,
-			&i.CreatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const setResearchFleetLead = `-- name: SetResearchFleetLead :one
-UPDATE research_fleet
-SET lead_agent_id = $2, updated_at = now()
-WHERE id = $1 AND workspace_id = $3
-RETURNING id, workspace_id, lead_agent_id, created_at, updated_at
-`
-
-type SetResearchFleetLeadParams struct {
-	ID          pgtype.UUID `json:"id"`
-	LeadAgentID pgtype.UUID `json:"lead_agent_id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-}
-
-func (q *Queries) SetResearchFleetLead(ctx context.Context, arg SetResearchFleetLeadParams) (ResearchFleet, error) {
-	row := q.db.QueryRow(ctx, setResearchFleetLead, arg.ID, arg.LeadAgentID, arg.WorkspaceID)
-	var i ResearchFleet
-	err := row.Scan(
-		&i.ID,
-		&i.WorkspaceID,
-		&i.LeadAgentID,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
-const updateResearchFleetMemberStatus = `-- name: UpdateResearchFleetMemberStatus :one
-UPDATE research_fleet_member
-SET status = $3, updated_at = now()
-WHERE id = $1 AND workspace_id = $2
-RETURNING id, workspace_id, fleet_id, agent_id, role, status, is_lead, created_at, updated_at
-`
-
-type UpdateResearchFleetMemberStatusParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	Status      string      `json:"status"`
-}
-
-func (q *Queries) UpdateResearchFleetMemberStatus(ctx context.Context, arg UpdateResearchFleetMemberStatusParams) (ResearchFleetMember, error) {
-	row := q.db.QueryRow(ctx, updateResearchFleetMemberStatus, arg.ID, arg.WorkspaceID, arg.Status)
-	var i ResearchFleetMember
-	err := row.Scan(
-		&i.ID,
-		&i.WorkspaceID,
-		&i.FleetID,
-		&i.AgentID,
-		&i.Role,
-		&i.Status,
-		&i.IsLead,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
-const updateResearchGraphNode = `-- name: UpdateResearchGraphNode :one
-UPDATE research_graph_node SET
-  title = COALESCE($3, title),
-  summary = COALESCE($4, summary),
-  status = COALESCE($5, status),
-  payload = COALESCE($6, payload),
-  updated_at = now()
-WHERE id = $1 AND workspace_id = $2
-RETURNING id, workspace_id, session_id, node_type, title, summary, status, actor_agent_id, payload, created_at, updated_at
-`
-
-type UpdateResearchGraphNodeParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	Title       pgtype.Text `json:"title"`
-	Summary     pgtype.Text `json:"summary"`
-	Status      pgtype.Text `json:"status"`
-	Payload     []byte      `json:"payload"`
-}
-
-func (q *Queries) UpdateResearchGraphNode(ctx context.Context, arg UpdateResearchGraphNodeParams) (ResearchGraphNode, error) {
-	row := q.db.QueryRow(ctx, updateResearchGraphNode,
-		arg.ID,
-		arg.WorkspaceID,
-		arg.Title,
-		arg.Summary,
-		arg.Status,
-		arg.Payload,
-	)
-	var i ResearchGraphNode
-	err := row.Scan(
-		&i.ID,
-		&i.WorkspaceID,
-		&i.SessionID,
-		&i.NodeType,
-		&i.Title,
-		&i.Summary,
-		&i.Status,
-		&i.ActorAgentID,
-		&i.Payload,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
-const updateResearchSession = `-- name: UpdateResearchSession :one
-UPDATE research_session SET
-  title = COALESCE($3, title),
-  goal = COALESCE($4, goal),
-  status = COALESCE($5, status),
-  current_stage = COALESCE($6, current_stage),
-  project_id = COALESCE($7, project_id),
-  channel_id = COALESCE($8, channel_id),
-  handoff_summary = COALESCE($9, handoff_summary),
-  depth_tier = COALESCE($10, depth_tier),
-  product_round = COALESCE($11, product_round),
-  product_round_budget = COALESCE($12, product_round_budget),
-  unattended_enabled = COALESCE($13, unattended_enabled),
-  max_open_branches = COALESCE($14, max_open_branches),
-  single_line_confirmed = COALESCE($15, single_line_confirmed),
-  unattended_auto_steps = COALESCE($16, unattended_auto_steps),
-  last_user_activity_at = COALESCE($17, last_user_activity_at),
-  updated_at = now()
-WHERE id = $1 AND workspace_id = $2
-RETURNING id, workspace_id, fleet_id, created_by, title, goal, status, current_stage, project_id, channel_id, handoff_summary, created_at, updated_at, depth_tier, product_round, product_round_budget, unattended_enabled, max_open_branches, single_line_confirmed, unattended_auto_steps, last_user_activity_at
-`
-
-type UpdateResearchSessionParams struct {
-	ID                  pgtype.UUID        `json:"id"`
-	WorkspaceID         pgtype.UUID        `json:"workspace_id"`
-	Title               pgtype.Text        `json:"title"`
-	Goal                pgtype.Text        `json:"goal"`
-	Status              pgtype.Text        `json:"status"`
-	CurrentStage        pgtype.Text        `json:"current_stage"`
-	ProjectID           pgtype.UUID        `json:"project_id"`
-	ChannelID           pgtype.UUID        `json:"channel_id"`
-	HandoffSummary      pgtype.Text        `json:"handoff_summary"`
-	DepthTier           pgtype.Text        `json:"depth_tier"`
-	ProductRound        pgtype.Int4        `json:"product_round"`
-	ProductRoundBudget  pgtype.Int4        `json:"product_round_budget"`
-	UnattendedEnabled   pgtype.Bool        `json:"unattended_enabled"`
-	MaxOpenBranches     pgtype.Int4        `json:"max_open_branches"`
-	SingleLineConfirmed pgtype.Bool        `json:"single_line_confirmed"`
-	UnattendedAutoSteps pgtype.Int4        `json:"unattended_auto_steps"`
-	LastUserActivityAt  pgtype.Timestamptz `json:"last_user_activity_at"`
-}
-
-func (q *Queries) UpdateResearchSession(ctx context.Context, arg UpdateResearchSessionParams) (ResearchSession, error) {
-	row := q.db.QueryRow(ctx, updateResearchSession,
-		arg.ID,
-		arg.WorkspaceID,
-		arg.Title,
-		arg.Goal,
-		arg.Status,
-		arg.CurrentStage,
-		arg.ProjectID,
-		arg.ChannelID,
-		arg.HandoffSummary,
-		arg.DepthTier,
-		arg.ProductRound,
-		arg.ProductRoundBudget,
-		arg.UnattendedEnabled,
-		arg.MaxOpenBranches,
-		arg.SingleLineConfirmed,
-		arg.UnattendedAutoSteps,
-		arg.LastUserActivityAt,
-	)
-	var i ResearchSession
-	err := row.Scan(
-		&i.ID,
-		&i.WorkspaceID,
-		&i.FleetID,
-		&i.CreatedBy,
-		&i.Title,
-		&i.Goal,
-		&i.Status,
-		&i.CurrentStage,
-		&i.ProjectID,
-		&i.ChannelID,
-		&i.HandoffSummary,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.DepthTier,
-		&i.ProductRound,
-		&i.ProductRoundBudget,
-		&i.UnattendedEnabled,
-		&i.MaxOpenBranches,
-		&i.SingleLineConfirmed,
-		&i.UnattendedAutoSteps,
-		&i.LastUserActivityAt,
-	)
-	return i, err
-}
-
-const updateResearchSource = `-- name: UpdateResearchSource :one
-UPDATE research_source SET
-  url = COALESCE($3, url),
-  title = COALESCE($4, title),
-  source_class = COALESCE($5, source_class),
-  credibility_weight = COALESCE($6, credibility_weight),
-  stance = COALESCE($7, stance),
-  relevance = COALESCE($8, relevance),
-  summary = COALESCE($9, summary),
-  excerpt = COALESCE($10, excerpt),
-  payload = COALESCE($11, payload),
-  updated_at = now()
-WHERE id = $1 AND workspace_id = $2
-RETURNING id, workspace_id, session_id, url, title, source_class, credibility_weight, stance, relevance, summary, excerpt, payload, created_at, updated_at
-`
-
-type UpdateResearchSourceParams struct {
-	ID                pgtype.UUID   `json:"id"`
-	WorkspaceID       pgtype.UUID   `json:"workspace_id"`
-	Url               pgtype.Text   `json:"url"`
-	Title             pgtype.Text   `json:"title"`
-	SourceClass       pgtype.Text   `json:"source_class"`
-	CredibilityWeight pgtype.Float8 `json:"credibility_weight"`
-	Stance            pgtype.Text   `json:"stance"`
-	Relevance         pgtype.Float8 `json:"relevance"`
-	Summary           pgtype.Text   `json:"summary"`
-	Excerpt           pgtype.Text   `json:"excerpt"`
-	Payload           []byte        `json:"payload"`
-}
-
-func (q *Queries) UpdateResearchSource(ctx context.Context, arg UpdateResearchSourceParams) (ResearchSource, error) {
-	row := q.db.QueryRow(ctx, updateResearchSource,
-		arg.ID,
-		arg.WorkspaceID,
-		arg.Url,
-		arg.Title,
-		arg.SourceClass,
-		arg.CredibilityWeight,
-		arg.Stance,
-		arg.Relevance,
-		arg.Summary,
-		arg.Excerpt,
-		arg.Payload,
-	)
-	var i ResearchSource
-	err := row.Scan(
-		&i.ID,
-		&i.WorkspaceID,
-		&i.SessionID,
-		&i.Url,
-		&i.Title,
-		&i.SourceClass,
-		&i.CredibilityWeight,
-		&i.Stance,
-		&i.Relevance,
-		&i.Summary,
-		&i.Excerpt,
-		&i.Payload,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
-const upsertResearchSource = `-- name: UpsertResearchSource :one
-INSERT INTO research_source (
-  workspace_id, session_id, url, title, source_class, credibility_weight,
-  stance, relevance, summary, excerpt, payload
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-RETURNING id, workspace_id, session_id, url, title, source_class, credibility_weight, stance, relevance, summary, excerpt, payload, created_at, updated_at
-`
-
-type UpsertResearchSourceParams struct {
-	WorkspaceID       pgtype.UUID `json:"workspace_id"`
-	SessionID         pgtype.UUID `json:"session_id"`
-	Url               string      `json:"url"`
-	Title             string      `json:"title"`
-	SourceClass       string      `json:"source_class"`
-	CredibilityWeight float64     `json:"credibility_weight"`
-	Stance            string      `json:"stance"`
-	Relevance         float64     `json:"relevance"`
-	Summary           string      `json:"summary"`
-	Excerpt           string      `json:"excerpt"`
-	Payload           []byte      `json:"payload"`
-}
-
-func (q *Queries) UpsertResearchSource(ctx context.Context, arg UpsertResearchSourceParams) (ResearchSource, error) {
-	row := q.db.QueryRow(ctx, upsertResearchSource,
-		arg.WorkspaceID,
-		arg.SessionID,
-		arg.Url,
-		arg.Title,
-		arg.SourceClass,
-		arg.CredibilityWeight,
-		arg.Stance,
-		arg.Relevance,
-		arg.Summary,
-		arg.Excerpt,
-		arg.Payload,
-	)
-	var i ResearchSource
-	err := row.Scan(
-		&i.ID,
-		&i.WorkspaceID,
-		&i.SessionID,
-		&i.Url,
-		&i.Title,
-		&i.SourceClass,
-		&i.CredibilityWeight,
-		&i.Stance,
-		&i.Relevance,
-		&i.Summary,
-		&i.Excerpt,
-		&i.Payload,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
-const bumpResearchGraphVersion = `-- name: BumpResearchGraphVersion :one
-UPDATE research_session SET graph_version = graph_version + 1
-WHERE id = $1 AND workspace_id = $2
-RETURNING graph_version
-`
-
-type BumpResearchGraphVersionParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-}
-
-func (q *Queries) BumpResearchGraphVersion(ctx context.Context, arg BumpResearchGraphVersionParams) (int64, error) {
-	row := q.db.QueryRow(ctx, bumpResearchGraphVersion, arg.ID, arg.WorkspaceID)
-	var graph_version int64
-	err := row.Scan(&graph_version)
-	return graph_version, err
-}
-
-const createResearchGraphCommand = `-- name: CreateResearchGraphCommand :one
-INSERT INTO research_graph_command (
-  workspace_id, session_id, op, idempotency_key, result_node_id,
-  input_node_ids, reason, actor_type, actor_id, meta
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-RETURNING id, workspace_id, session_id, op, idempotency_key, result_node_id, input_node_ids, reason, actor_type, actor_id, meta, created_at
-`
-
-type CreateResearchGraphCommandParams struct {
-	WorkspaceID    pgtype.UUID   `json:"workspace_id"`
-	SessionID      pgtype.UUID   `json:"session_id"`
-	Op             string        `json:"op"`
-	IdempotencyKey string        `json:"idempotency_key"`
-	ResultNodeID   pgtype.UUID   `json:"result_node_id"`
-	InputNodeIds   []pgtype.UUID `json:"input_node_ids"`
-	Reason         string        `json:"reason"`
-	ActorType      string        `json:"actor_type"`
-	ActorID        pgtype.UUID   `json:"actor_id"`
-	Meta           []byte        `json:"meta"`
-}
-
-func (q *Queries) CreateResearchGraphCommand(ctx context.Context, arg CreateResearchGraphCommandParams) (ResearchGraphCommand, error) {
-	row := q.db.QueryRow(ctx, createResearchGraphCommand,
-		arg.WorkspaceID,
-		arg.SessionID,
-		arg.Op,
-		arg.IdempotencyKey,
-		arg.ResultNodeID,
-		arg.InputNodeIds,
-		arg.Reason,
-		arg.ActorType,
-		arg.ActorID,
-		arg.Meta,
-	)
-	var i ResearchGraphCommand
-	err := row.Scan(
-		&i.ID,
-		&i.WorkspaceID,
-		&i.SessionID,
-		&i.Op,
-		&i.IdempotencyKey,
-		&i.ResultNodeID,
-		&i.InputNodeIds,
-		&i.Reason,
-		&i.ActorType,
-		&i.ActorID,
-		&i.Meta,
-		&i.CreatedAt,
-	)
-	return i, err
-}
-
-const createResearchGraphNodeTyped = `-- name: CreateResearchGraphNodeTyped :one
-INSERT INTO research_graph_node (
-  workspace_id, session_id, node_type, title, summary, status, actor_agent_id, level,
-  round, cluster_id, confidence, document_count, conclusion_count, goal_version_id,
-  derived_from, merged_from, superseded_by, restart_of, invalidated_by, payload
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
-RETURNING id, workspace_id, session_id, node_type, title, summary, status, actor_agent_id, payload, created_at, updated_at, run_event_id, level, round, cluster_id, confidence, document_count, conclusion_count, goal_version_id, derived_from, merged_from, superseded_by, restart_of, invalidated_by, superseded_at, invalidated_at
-`
-
-type CreateResearchGraphNodeTypedParams struct {
-	WorkspaceID     pgtype.UUID   `json:"workspace_id"`
-	SessionID       pgtype.UUID   `json:"session_id"`
-	NodeType        string        `json:"node_type"`
-	Title           string        `json:"title"`
-	Summary         string        `json:"summary"`
-	Status          string        `json:"status"`
-	ActorAgentID    pgtype.UUID   `json:"actor_agent_id"`
-	Level           string        `json:"level"`
-	Round           int32         `json:"round"`
-	ClusterID       pgtype.UUID   `json:"cluster_id"`
-	Confidence      pgtype.Float8 `json:"confidence"`
-	DocumentCount   int32         `json:"document_count"`
-	ConclusionCount int32         `json:"conclusion_count"`
-	GoalVersionID   pgtype.UUID   `json:"goal_version_id"`
-	DerivedFrom     pgtype.UUID   `json:"derived_from"`
-	MergedFrom      []pgtype.UUID `json:"merged_from"`
-	SupersededBy    pgtype.UUID   `json:"superseded_by"`
-	RestartOf       pgtype.UUID   `json:"restart_of"`
-	InvalidatedBy   pgtype.UUID   `json:"invalidated_by"`
-	Payload         []byte        `json:"payload"`
-}
-
-func (q *Queries) CreateResearchGraphNodeTyped(ctx context.Context, arg CreateResearchGraphNodeTypedParams) (ResearchGraphNode, error) {
-	row := q.db.QueryRow(ctx, createResearchGraphNodeTyped,
-		arg.WorkspaceID,
-		arg.SessionID,
-		arg.NodeType,
-		arg.Title,
-		arg.Summary,
-		arg.Status,
-		arg.ActorAgentID,
-		arg.Level,
-		arg.Round,
-		arg.ClusterID,
-		arg.Confidence,
-		arg.DocumentCount,
-		arg.ConclusionCount,
-		arg.GoalVersionID,
-		arg.DerivedFrom,
-		arg.MergedFrom,
-		arg.SupersededBy,
-		arg.RestartOf,
-		arg.InvalidatedBy,
-		arg.Payload,
-	)
-	var i ResearchGraphNode
-	err := row.Scan(
-		&i.ID,
-		&i.WorkspaceID,
-		&i.SessionID,
-		&i.NodeType,
-		&i.Title,
-		&i.Summary,
-		&i.Status,
-		&i.ActorAgentID,
-		&i.Payload,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.RunEventID,
-		&i.Level,
-		&i.Round,
-		&i.ClusterID,
-		&i.Confidence,
-		&i.DocumentCount,
-		&i.ConclusionCount,
-		&i.GoalVersionID,
-		&i.DerivedFrom,
-		&i.MergedFrom,
-		&i.SupersededBy,
-		&i.RestartOf,
-		&i.InvalidatedBy,
-		&i.SupersededAt,
-		&i.InvalidatedAt,
 	)
 	return i, err
 }
@@ -2007,6 +1209,170 @@ func (q *Queries) GetResearchGraphCommandByKey(ctx context.Context, arg GetResea
 	return i, err
 }
 
+const getResearchGraphNode = `-- name: GetResearchGraphNode :one
+SELECT id, workspace_id, session_id, node_type, title, summary, status, actor_agent_id, payload, created_at, updated_at, run_event_id, level, round, cluster_id, confidence, document_count, conclusion_count, goal_version_id, derived_from, merged_from, superseded_by, restart_of, invalidated_by, superseded_at, invalidated_at FROM research_graph_node
+WHERE id = $1 AND workspace_id = $2
+`
+
+type GetResearchGraphNodeParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) GetResearchGraphNode(ctx context.Context, arg GetResearchGraphNodeParams) (ResearchGraphNode, error) {
+	row := q.db.QueryRow(ctx, getResearchGraphNode, arg.ID, arg.WorkspaceID)
+	var i ResearchGraphNode
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.SessionID,
+		&i.NodeType,
+		&i.Title,
+		&i.Summary,
+		&i.Status,
+		&i.ActorAgentID,
+		&i.Payload,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.RunEventID,
+		&i.Level,
+		&i.Round,
+		&i.ClusterID,
+		&i.Confidence,
+		&i.DocumentCount,
+		&i.ConclusionCount,
+		&i.GoalVersionID,
+		&i.DerivedFrom,
+		&i.MergedFrom,
+		&i.SupersededBy,
+		&i.RestartOf,
+		&i.InvalidatedBy,
+		&i.SupersededAt,
+		&i.InvalidatedAt,
+	)
+	return i, err
+}
+
+const getResearchMessage = `-- name: GetResearchMessage :one
+SELECT id, workspace_id, session_id, sender_type, sender_id, target_agent_id, body, created_at, card_kind, meta, run_event_id FROM research_message
+WHERE id = $1 AND session_id = $2 AND workspace_id = $3
+`
+
+type GetResearchMessageParams struct {
+	ID          pgtype.UUID `json:"id"`
+	SessionID   pgtype.UUID `json:"session_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) GetResearchMessage(ctx context.Context, arg GetResearchMessageParams) (ResearchMessage, error) {
+	row := q.db.QueryRow(ctx, getResearchMessage, arg.ID, arg.SessionID, arg.WorkspaceID)
+	var i ResearchMessage
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.SessionID,
+		&i.SenderType,
+		&i.SenderID,
+		&i.TargetAgentID,
+		&i.Body,
+		&i.CreatedAt,
+		&i.CardKind,
+		&i.Meta,
+		&i.RunEventID,
+	)
+	return i, err
+}
+
+const getResearchProductRoundCard = `-- name: GetResearchProductRoundCard :one
+SELECT id, workspace_id, session_id, round_number, decision, coverage_gaps, confidence_note, budget_used, budget_remaining, goal_patch_proposal, next_round_focus, decided_by_agent_id, created_at FROM research_product_round_card
+WHERE session_id = $1 AND workspace_id = $2 AND round_number = $3
+`
+
+type GetResearchProductRoundCardParams struct {
+	SessionID   pgtype.UUID `json:"session_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	RoundNumber int32       `json:"round_number"`
+}
+
+func (q *Queries) GetResearchProductRoundCard(ctx context.Context, arg GetResearchProductRoundCardParams) (ResearchProductRoundCard, error) {
+	row := q.db.QueryRow(ctx, getResearchProductRoundCard, arg.SessionID, arg.WorkspaceID, arg.RoundNumber)
+	var i ResearchProductRoundCard
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.SessionID,
+		&i.RoundNumber,
+		&i.Decision,
+		&i.CoverageGaps,
+		&i.ConfidenceNote,
+		&i.BudgetUsed,
+		&i.BudgetRemaining,
+		&i.GoalPatchProposal,
+		&i.NextRoundFocus,
+		&i.DecidedByAgentID,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getResearchSession = `-- name: GetResearchSession :one
+SELECT id, workspace_id, fleet_id, created_by, title, goal, status, current_stage, project_id, channel_id, handoff_summary, created_at, updated_at, depth_tier, product_round, product_round_budget, unattended_enabled, max_open_branches, single_line_confirmed, unattended_auto_steps, last_user_activity_at, goal_version, plan_version, state_version, orchestrator_version, run_config, run_stats, run_initialized_at, last_progress_at, next_reconcile_at, reconcile_lease_token, reconcile_lease_expires_at, stop_reason, last_error, reconcile_lease_generation, graph_version, artifact_passport_enabled, director_state_version, current_director_assignment_id, v6_projection_version FROM research_session
+WHERE id = $1 AND workspace_id = $2
+`
+
+type GetResearchSessionParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) GetResearchSession(ctx context.Context, arg GetResearchSessionParams) (ResearchSession, error) {
+	row := q.db.QueryRow(ctx, getResearchSession, arg.ID, arg.WorkspaceID)
+	var i ResearchSession
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.FleetID,
+		&i.CreatedBy,
+		&i.Title,
+		&i.Goal,
+		&i.Status,
+		&i.CurrentStage,
+		&i.ProjectID,
+		&i.ChannelID,
+		&i.HandoffSummary,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DepthTier,
+		&i.ProductRound,
+		&i.ProductRoundBudget,
+		&i.UnattendedEnabled,
+		&i.MaxOpenBranches,
+		&i.SingleLineConfirmed,
+		&i.UnattendedAutoSteps,
+		&i.LastUserActivityAt,
+		&i.GoalVersion,
+		&i.PlanVersion,
+		&i.StateVersion,
+		&i.OrchestratorVersion,
+		&i.RunConfig,
+		&i.RunStats,
+		&i.RunInitializedAt,
+		&i.LastProgressAt,
+		&i.NextReconcileAt,
+		&i.ReconcileLeaseToken,
+		&i.ReconcileLeaseExpiresAt,
+		&i.StopReason,
+		&i.LastError,
+		&i.ReconcileLeaseGeneration,
+		&i.GraphVersion,
+		&i.ArtifactPassportEnabled,
+		&i.DirectorStateVersion,
+		&i.CurrentDirectorAssignmentID,
+		&i.V6ProjectionVersion,
+	)
+	return i, err
+}
+
 const getResearchSessionGraphVersion = `-- name: GetResearchSessionGraphVersion :one
 SELECT graph_version FROM research_session
 WHERE id = $1 AND workspace_id = $2
@@ -2022,6 +1388,281 @@ func (q *Queries) GetResearchSessionGraphVersion(ctx context.Context, arg GetRes
 	var graph_version int64
 	err := row.Scan(&graph_version)
 	return graph_version, err
+}
+
+const incrementResearchUnattendedAutoSteps = `-- name: IncrementResearchUnattendedAutoSteps :one
+UPDATE research_session
+SET unattended_auto_steps = unattended_auto_steps + $3,
+    updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, fleet_id, created_by, title, goal, status, current_stage, project_id, channel_id, handoff_summary, created_at, updated_at, depth_tier, product_round, product_round_budget, unattended_enabled, max_open_branches, single_line_confirmed, unattended_auto_steps, last_user_activity_at, goal_version, plan_version, state_version, orchestrator_version, run_config, run_stats, run_initialized_at, last_progress_at, next_reconcile_at, reconcile_lease_token, reconcile_lease_expires_at, stop_reason, last_error, reconcile_lease_generation, graph_version, artifact_passport_enabled, director_state_version, current_director_assignment_id, v6_projection_version
+`
+
+type IncrementResearchUnattendedAutoStepsParams struct {
+	ID                  pgtype.UUID `json:"id"`
+	WorkspaceID         pgtype.UUID `json:"workspace_id"`
+	UnattendedAutoSteps int32       `json:"unattended_auto_steps"`
+}
+
+func (q *Queries) IncrementResearchUnattendedAutoSteps(ctx context.Context, arg IncrementResearchUnattendedAutoStepsParams) (ResearchSession, error) {
+	row := q.db.QueryRow(ctx, incrementResearchUnattendedAutoSteps, arg.ID, arg.WorkspaceID, arg.UnattendedAutoSteps)
+	var i ResearchSession
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.FleetID,
+		&i.CreatedBy,
+		&i.Title,
+		&i.Goal,
+		&i.Status,
+		&i.CurrentStage,
+		&i.ProjectID,
+		&i.ChannelID,
+		&i.HandoffSummary,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DepthTier,
+		&i.ProductRound,
+		&i.ProductRoundBudget,
+		&i.UnattendedEnabled,
+		&i.MaxOpenBranches,
+		&i.SingleLineConfirmed,
+		&i.UnattendedAutoSteps,
+		&i.LastUserActivityAt,
+		&i.GoalVersion,
+		&i.PlanVersion,
+		&i.StateVersion,
+		&i.OrchestratorVersion,
+		&i.RunConfig,
+		&i.RunStats,
+		&i.RunInitializedAt,
+		&i.LastProgressAt,
+		&i.NextReconcileAt,
+		&i.ReconcileLeaseToken,
+		&i.ReconcileLeaseExpiresAt,
+		&i.StopReason,
+		&i.LastError,
+		&i.ReconcileLeaseGeneration,
+		&i.GraphVersion,
+		&i.ArtifactPassportEnabled,
+		&i.DirectorStateVersion,
+		&i.CurrentDirectorAssignmentID,
+		&i.V6ProjectionVersion,
+	)
+	return i, err
+}
+
+const listActiveResearchFleetMemberAgentIDsByWorkspace = `-- name: ListActiveResearchFleetMemberAgentIDsByWorkspace :many
+SELECT agent_id FROM research_fleet_member
+WHERE workspace_id = $1 AND status != 'archived'
+`
+
+func (q *Queries) ListActiveResearchFleetMemberAgentIDsByWorkspace(ctx context.Context, workspaceID pgtype.UUID) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, listActiveResearchFleetMemberAgentIDsByWorkspace, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var agent_id pgtype.UUID
+		if err := rows.Scan(&agent_id); err != nil {
+			return nil, err
+		}
+		items = append(items, agent_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOpenResearchWorkItems = `-- name: ListOpenResearchWorkItems :many
+SELECT id, workspace_id, session_id, kind, target_node_id, assignee_agent_id, status, reason, payload, enqueued_at, completed_at, created_at, updated_at, target_kind, target_id, client_key, idempotency_key, goal_version, input_state_version, input_event_sequence, created_by_director_cycle_id, assigned_agent_id, priority, max_attempts, attempt_count, lease_token, lease_expires_at, payload_schema_id, terminal_reason_code, terminal_reason_detail, ready_at, started_at, cancelled_at, state_version, expected_result_schema_id FROM research_work_item
+WHERE session_id = $1
+  AND workspace_id = $2
+  AND status IN ('pending', 'enqueued')
+ORDER BY created_at ASC
+`
+
+type ListOpenResearchWorkItemsParams struct {
+	SessionID   pgtype.UUID `json:"session_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) ListOpenResearchWorkItems(ctx context.Context, arg ListOpenResearchWorkItemsParams) ([]ResearchWorkItem, error) {
+	rows, err := q.db.Query(ctx, listOpenResearchWorkItems, arg.SessionID, arg.WorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ResearchWorkItem{}
+	for rows.Next() {
+		var i ResearchWorkItem
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.SessionID,
+			&i.Kind,
+			&i.TargetNodeID,
+			&i.AssigneeAgentID,
+			&i.Status,
+			&i.Reason,
+			&i.Payload,
+			&i.EnqueuedAt,
+			&i.CompletedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.TargetKind,
+			&i.TargetID,
+			&i.ClientKey,
+			&i.IdempotencyKey,
+			&i.GoalVersion,
+			&i.InputStateVersion,
+			&i.InputEventSequence,
+			&i.CreatedByDirectorCycleID,
+			&i.AssignedAgentID,
+			&i.Priority,
+			&i.MaxAttempts,
+			&i.AttemptCount,
+			&i.LeaseToken,
+			&i.LeaseExpiresAt,
+			&i.PayloadSchemaID,
+			&i.TerminalReasonCode,
+			&i.TerminalReasonDetail,
+			&i.ReadyAt,
+			&i.StartedAt,
+			&i.CancelledAt,
+			&i.StateVersion,
+			&i.ExpectedResultSchemaID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listResearchActiveAssignments = `-- name: ListResearchActiveAssignments :many
+WITH ranked AS (
+  SELECT
+    t.session_id,
+    t.assigned_agent_id AS agent_id,
+    COALESCE(fm.role, '')::text AS role,
+    t.id AS task_id,
+    t.objective AS task_title,
+    t.status AS state,
+    row_number() OVER (PARTITION BY t.session_id ORDER BY t.priority DESC, t.started_at DESC NULLS LAST, t.created_at DESC) AS position
+  FROM research_task t
+  JOIN research_session s ON s.id = t.session_id
+  LEFT JOIN research_fleet_member fm ON fm.fleet_id = s.fleet_id AND fm.agent_id = t.assigned_agent_id
+  WHERE t.workspace_id = $1
+    AND t.goal_version = s.goal_version
+    AND t.plan_version = s.plan_version
+    AND t.status IN ('dispatching', 'running')
+    AND t.assigned_agent_id IS NOT NULL
+    AND s.orchestrator_version <> 'research-run-v6'
+  UNION ALL
+  SELECT
+    w.session_id,
+    w.assigned_agent_id AS agent_id,
+    'member'::text AS role,
+    w.id AS task_id,
+    COALESCE(NULLIF(w.reason, ''), w.kind)::text AS task_title,
+    w.status AS state,
+    row_number() OVER (PARTITION BY w.session_id ORDER BY w.priority DESC, w.started_at DESC NULLS LAST, w.created_at DESC) AS position
+  FROM research_work_item w
+  JOIN research_session s ON s.id = w.session_id
+  WHERE w.workspace_id = $1
+    AND s.orchestrator_version = 'research-run-v6'
+    AND w.goal_version = s.goal_version
+    AND w.status IN ('dispatching', 'running')
+    AND w.assigned_agent_id IS NOT NULL
+)
+SELECT session_id, agent_id, role, task_id, task_title, state
+FROM ranked
+WHERE position <= 4
+ORDER BY session_id, position
+`
+
+type ListResearchActiveAssignmentsRow struct {
+	SessionID pgtype.UUID `json:"session_id"`
+	AgentID   pgtype.UUID `json:"agent_id"`
+	Role      string      `json:"role"`
+	TaskID    pgtype.UUID `json:"task_id"`
+	TaskTitle string      `json:"task_title"`
+	State     string      `json:"state"`
+}
+
+func (q *Queries) ListResearchActiveAssignments(ctx context.Context, workspaceID pgtype.UUID) ([]ListResearchActiveAssignmentsRow, error) {
+	rows, err := q.db.Query(ctx, listResearchActiveAssignments, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListResearchActiveAssignmentsRow{}
+	for rows.Next() {
+		var i ListResearchActiveAssignmentsRow
+		if err := rows.Scan(
+			&i.SessionID,
+			&i.AgentID,
+			&i.Role,
+			&i.TaskID,
+			&i.TaskTitle,
+			&i.State,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listResearchFleetMembers = `-- name: ListResearchFleetMembers :many
+SELECT id, workspace_id, fleet_id, agent_id, role, status, is_lead, created_at, updated_at FROM research_fleet_member
+WHERE fleet_id = $1 AND workspace_id = $2
+ORDER BY is_lead DESC, created_at ASC
+`
+
+type ListResearchFleetMembersParams struct {
+	FleetID     pgtype.UUID `json:"fleet_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) ListResearchFleetMembers(ctx context.Context, arg ListResearchFleetMembersParams) ([]ResearchFleetMember, error) {
+	rows, err := q.db.Query(ctx, listResearchFleetMembers, arg.FleetID, arg.WorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ResearchFleetMember{}
+	for rows.Next() {
+		var i ResearchFleetMember
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.FleetID,
+			&i.AgentID,
+			&i.Role,
+			&i.Status,
+			&i.IsLead,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listResearchGraphClusters = `-- name: ListResearchGraphClusters :many
@@ -2111,6 +1752,845 @@ func (q *Queries) ListResearchGraphCommands(ctx context.Context, arg ListResearc
 	return items, nil
 }
 
+const listResearchGraphEdges = `-- name: ListResearchGraphEdges :many
+SELECT id, workspace_id, session_id, from_node_id, to_node_id, edge_type, created_at FROM research_graph_edge
+WHERE session_id = $1 AND workspace_id = $2
+ORDER BY created_at ASC
+`
+
+type ListResearchGraphEdgesParams struct {
+	SessionID   pgtype.UUID `json:"session_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) ListResearchGraphEdges(ctx context.Context, arg ListResearchGraphEdgesParams) ([]ResearchGraphEdge, error) {
+	rows, err := q.db.Query(ctx, listResearchGraphEdges, arg.SessionID, arg.WorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ResearchGraphEdge{}
+	for rows.Next() {
+		var i ResearchGraphEdge
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.SessionID,
+			&i.FromNodeID,
+			&i.ToNodeID,
+			&i.EdgeType,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listResearchGraphNodes = `-- name: ListResearchGraphNodes :many
+SELECT id, workspace_id, session_id, node_type, title, summary, status, actor_agent_id, payload, created_at, updated_at, run_event_id, level, round, cluster_id, confidence, document_count, conclusion_count, goal_version_id, derived_from, merged_from, superseded_by, restart_of, invalidated_by, superseded_at, invalidated_at FROM research_graph_node
+WHERE session_id = $1 AND workspace_id = $2
+ORDER BY created_at ASC
+`
+
+type ListResearchGraphNodesParams struct {
+	SessionID   pgtype.UUID `json:"session_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) ListResearchGraphNodes(ctx context.Context, arg ListResearchGraphNodesParams) ([]ResearchGraphNode, error) {
+	rows, err := q.db.Query(ctx, listResearchGraphNodes, arg.SessionID, arg.WorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ResearchGraphNode{}
+	for rows.Next() {
+		var i ResearchGraphNode
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.SessionID,
+			&i.NodeType,
+			&i.Title,
+			&i.Summary,
+			&i.Status,
+			&i.ActorAgentID,
+			&i.Payload,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.RunEventID,
+			&i.Level,
+			&i.Round,
+			&i.ClusterID,
+			&i.Confidence,
+			&i.DocumentCount,
+			&i.ConclusionCount,
+			&i.GoalVersionID,
+			&i.DerivedFrom,
+			&i.MergedFrom,
+			&i.SupersededBy,
+			&i.RestartOf,
+			&i.InvalidatedBy,
+			&i.SupersededAt,
+			&i.InvalidatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listResearchGraphNodesTyped = `-- name: ListResearchGraphNodesTyped :many
+SELECT id, workspace_id, session_id, node_type, title, summary, status, actor_agent_id,
+       payload, created_at, updated_at, run_event_id, level, round, cluster_id, confidence,
+       document_count, conclusion_count, goal_version_id, derived_from, merged_from,
+       superseded_by, restart_of, invalidated_by, superseded_at, invalidated_at
+FROM research_graph_node
+WHERE session_id = $1 AND workspace_id = $2
+ORDER BY created_at ASC
+`
+
+type ListResearchGraphNodesTypedParams struct {
+	SessionID   pgtype.UUID `json:"session_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) ListResearchGraphNodesTyped(ctx context.Context, arg ListResearchGraphNodesTypedParams) ([]ResearchGraphNode, error) {
+	rows, err := q.db.Query(ctx, listResearchGraphNodesTyped, arg.SessionID, arg.WorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ResearchGraphNode{}
+	for rows.Next() {
+		var i ResearchGraphNode
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.SessionID,
+			&i.NodeType,
+			&i.Title,
+			&i.Summary,
+			&i.Status,
+			&i.ActorAgentID,
+			&i.Payload,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.RunEventID,
+			&i.Level,
+			&i.Round,
+			&i.ClusterID,
+			&i.Confidence,
+			&i.DocumentCount,
+			&i.ConclusionCount,
+			&i.GoalVersionID,
+			&i.DerivedFrom,
+			&i.MergedFrom,
+			&i.SupersededBy,
+			&i.RestartOf,
+			&i.InvalidatedBy,
+			&i.SupersededAt,
+			&i.InvalidatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listResearchGraphNodesTypedPaginated = `-- name: ListResearchGraphNodesTypedPaginated :many
+SELECT id, workspace_id, session_id, node_type, title, summary, status, actor_agent_id,
+       payload, created_at, updated_at, run_event_id, level, round, cluster_id, confidence,
+       document_count, conclusion_count, goal_version_id, derived_from, merged_from,
+       superseded_by, restart_of, invalidated_by, superseded_at, invalidated_at
+FROM research_graph_node
+WHERE session_id = $1 AND workspace_id = $2
+ORDER BY created_at ASC
+LIMIT $3 OFFSET $4
+`
+
+type ListResearchGraphNodesTypedPaginatedParams struct {
+	SessionID   pgtype.UUID `json:"session_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	Limit       int32       `json:"limit"`
+	Offset      int32       `json:"offset"`
+}
+
+func (q *Queries) ListResearchGraphNodesTypedPaginated(ctx context.Context, arg ListResearchGraphNodesTypedPaginatedParams) ([]ResearchGraphNode, error) {
+	rows, err := q.db.Query(ctx, listResearchGraphNodesTypedPaginated,
+		arg.SessionID,
+		arg.WorkspaceID,
+		arg.Limit,
+		arg.Offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ResearchGraphNode{}
+	for rows.Next() {
+		var i ResearchGraphNode
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.SessionID,
+			&i.NodeType,
+			&i.Title,
+			&i.Summary,
+			&i.Status,
+			&i.ActorAgentID,
+			&i.Payload,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.RunEventID,
+			&i.Level,
+			&i.Round,
+			&i.ClusterID,
+			&i.Confidence,
+			&i.DocumentCount,
+			&i.ConclusionCount,
+			&i.GoalVersionID,
+			&i.DerivedFrom,
+			&i.MergedFrom,
+			&i.SupersededBy,
+			&i.RestartOf,
+			&i.InvalidatedBy,
+			&i.SupersededAt,
+			&i.InvalidatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listResearchLatestOutcomes = `-- name: ListResearchLatestOutcomes :many
+WITH outcomes AS (
+  SELECT c.session_id, c.id, 0 AS outcome_priority, 'claim'::text AS kind, c.claim_text AS title,
+    NULLIF(c.resolution, '')::text AS summary, c.status AS verification_state, c.created_at
+  FROM research_claim c
+  JOIN research_session s ON s.id = c.session_id
+  WHERE c.workspace_id = $1 AND c.goal_version = s.goal_version AND c.plan_version = s.plan_version AND c.status = 'supported'
+  UNION ALL
+  SELECT o.session_id, o.id, 1, 'observation'::text, COALESCE(NULLIF(o.interpretation, ''), NULLIF(o.quote, ''), 'Verified observation'),
+    NULLIF(o.quote, '')::text, o.verification_status, o.created_at
+  FROM research_observation o
+  JOIN research_task ot ON ot.id = o.produced_by_task_id
+  JOIN research_session os ON os.id = o.session_id
+  WHERE o.workspace_id = $1 AND o.verification_status = 'verified'
+    AND ot.goal_version = os.goal_version AND ot.plan_version = os.plan_version
+    AND os.orchestrator_version <> 'research-run-v6'
+  UNION ALL
+  SELECT t.session_id, t.id, 2, 'task'::text, t.objective, NULLIF(t.terminal_reason, '')::text, t.status, t.completed_at
+  FROM research_task t
+  JOIN research_session s ON s.id = t.session_id
+  WHERE t.workspace_id = $1 AND t.goal_version = s.goal_version AND t.plan_version = s.plan_version AND t.status = 'succeeded' AND t.completed_at IS NOT NULL
+  UNION ALL
+  SELECT n.session_id, n.id, 0, 'result'::text, n.catalog_summary,
+    COALESCE(NULLIF(n.brief_summary, ''), NULLIF(n.conclusion, ''))::text,
+    n.conclusion_state, n.created_at
+  FROM research_result_node n
+  JOIN research_work_item_attempt a ON a.id = n.work_item_attempt_id
+  JOIN research_work_item w ON w.id = a.work_item_id
+  JOIN research_session s ON s.id = n.session_id
+  WHERE n.workspace_id = $1
+    AND s.orchestrator_version = 'research-run-v6'
+    AND w.goal_version = s.goal_version
+    AND n.conclusion_state NOT IN ('refuted', 'invalid')
+), ranked AS (
+  SELECT outcomes.session_id, outcomes.id, outcomes.outcome_priority, outcomes.kind, outcomes.title, outcomes.summary, outcomes.verification_state, outcomes.created_at, row_number() OVER (PARTITION BY session_id ORDER BY outcome_priority, created_at DESC, id) AS position
+  FROM outcomes
+)
+SELECT session_id, id, kind, title, COALESCE(summary, '')::text AS summary, verification_state, created_at
+FROM ranked
+WHERE position <= 3
+ORDER BY session_id, position
+`
+
+type ListResearchLatestOutcomesRow struct {
+	SessionID         pgtype.UUID        `json:"session_id"`
+	ID                pgtype.UUID        `json:"id"`
+	Kind              string             `json:"kind"`
+	Title             string             `json:"title"`
+	Summary           string             `json:"summary"`
+	VerificationState string             `json:"verification_state"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) ListResearchLatestOutcomes(ctx context.Context, workspaceID pgtype.UUID) ([]ListResearchLatestOutcomesRow, error) {
+	rows, err := q.db.Query(ctx, listResearchLatestOutcomes, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListResearchLatestOutcomesRow{}
+	for rows.Next() {
+		var i ListResearchLatestOutcomesRow
+		if err := rows.Scan(
+			&i.SessionID,
+			&i.ID,
+			&i.Kind,
+			&i.Title,
+			&i.Summary,
+			&i.VerificationState,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listResearchMessages = `-- name: ListResearchMessages :many
+SELECT id, workspace_id, session_id, sender_type, sender_id, target_agent_id, body, created_at, card_kind, meta, run_event_id FROM research_message
+WHERE session_id = $1 AND workspace_id = $2
+ORDER BY created_at ASC
+`
+
+type ListResearchMessagesParams struct {
+	SessionID   pgtype.UUID `json:"session_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) ListResearchMessages(ctx context.Context, arg ListResearchMessagesParams) ([]ResearchMessage, error) {
+	rows, err := q.db.Query(ctx, listResearchMessages, arg.SessionID, arg.WorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ResearchMessage{}
+	for rows.Next() {
+		var i ResearchMessage
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.SessionID,
+			&i.SenderType,
+			&i.SenderID,
+			&i.TargetAgentID,
+			&i.Body,
+			&i.CreatedAt,
+			&i.CardKind,
+			&i.Meta,
+			&i.RunEventID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listResearchProductRoundCards = `-- name: ListResearchProductRoundCards :many
+SELECT id, workspace_id, session_id, round_number, decision, coverage_gaps, confidence_note, budget_used, budget_remaining, goal_patch_proposal, next_round_focus, decided_by_agent_id, created_at FROM research_product_round_card
+WHERE session_id = $1 AND workspace_id = $2
+ORDER BY round_number ASC
+`
+
+type ListResearchProductRoundCardsParams struct {
+	SessionID   pgtype.UUID `json:"session_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) ListResearchProductRoundCards(ctx context.Context, arg ListResearchProductRoundCardsParams) ([]ResearchProductRoundCard, error) {
+	rows, err := q.db.Query(ctx, listResearchProductRoundCards, arg.SessionID, arg.WorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ResearchProductRoundCard{}
+	for rows.Next() {
+		var i ResearchProductRoundCard
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.SessionID,
+			&i.RoundNumber,
+			&i.Decision,
+			&i.CoverageGaps,
+			&i.ConfidenceNote,
+			&i.BudgetUsed,
+			&i.BudgetRemaining,
+			&i.GoalPatchProposal,
+			&i.NextRoundFocus,
+			&i.DecidedByAgentID,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listResearchReports = `-- name: ListResearchReports :many
+SELECT id, workspace_id, session_id, revision, content_md, structured, created_at, updated_at, goal_version, plan_version, produced_by_task_id, produced_by_attempt_id, author_agent_id, status, parent_report_id, parent_revision, title, summary, plain_text, package_hash, document_content_hash, document_storage_key, document_storage_generation, document_byte_size, input_snapshot_hash, csp_script_hashes, csp_style_hashes, input_event_sequence, published_at, reviewed_by_director_assignment_id, outline, citations FROM research_report
+WHERE session_id = $1 AND workspace_id = $2
+ORDER BY revision DESC
+`
+
+type ListResearchReportsParams struct {
+	SessionID   pgtype.UUID `json:"session_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) ListResearchReports(ctx context.Context, arg ListResearchReportsParams) ([]ResearchReport, error) {
+	rows, err := q.db.Query(ctx, listResearchReports, arg.SessionID, arg.WorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ResearchReport{}
+	for rows.Next() {
+		var i ResearchReport
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.SessionID,
+			&i.Revision,
+			&i.ContentMd,
+			&i.Structured,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.GoalVersion,
+			&i.PlanVersion,
+			&i.ProducedByTaskID,
+			&i.ProducedByAttemptID,
+			&i.AuthorAgentID,
+			&i.Status,
+			&i.ParentReportID,
+			&i.ParentRevision,
+			&i.Title,
+			&i.Summary,
+			&i.PlainText,
+			&i.PackageHash,
+			&i.DocumentContentHash,
+			&i.DocumentStorageKey,
+			&i.DocumentStorageGeneration,
+			&i.DocumentByteSize,
+			&i.InputSnapshotHash,
+			&i.CspScriptHashes,
+			&i.CspStyleHashes,
+			&i.InputEventSequence,
+			&i.PublishedAt,
+			&i.ReviewedByDirectorAssignmentID,
+			&i.Outline,
+			&i.Citations,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listResearchSessionProgress = `-- name: ListResearchSessionProgress :many
+WITH task_progress AS (
+  SELECT
+    t.session_id,
+    count(*) FILTER (WHERE t.status <> 'obsolete') AS task_total,
+    count(*) FILTER (WHERE t.status = 'succeeded') AS task_completed,
+    count(*) FILTER (WHERE t.status IN ('dispatching', 'running')) AS task_running,
+    count(*) FILTER (WHERE t.status IN ('blocked', 'failed')) AS task_blocked
+  FROM research_task t
+  JOIN research_session s ON s.id = t.session_id
+  WHERE t.workspace_id = $1
+    AND t.goal_version = s.goal_version
+    AND t.plan_version = s.plan_version
+    AND s.orchestrator_version <> 'research-run-v6'
+  GROUP BY t.session_id
+), work_item_progress AS (
+  SELECT
+    w.session_id,
+    count(*) FILTER (WHERE w.status <> 'cancelled') AS task_total,
+    count(*) FILTER (WHERE w.status = 'succeeded') AS task_completed,
+    count(*) FILTER (WHERE w.status IN ('dispatching', 'running', 'ready', 'enqueued', 'pending')) AS task_running,
+    count(*) FILTER (WHERE w.status IN ('failed', 'stale')) AS task_blocked
+  FROM research_work_item w
+  JOIN research_session s ON s.id = w.session_id
+  WHERE w.workspace_id = $1
+    AND s.orchestrator_version = 'research-run-v6'
+    AND w.goal_version = s.goal_version
+  GROUP BY w.session_id
+), evidence_progress AS (
+  SELECT o.session_id, count(*) AS evidence_count,
+    count(*) FILTER (WHERE o.created_at >= now() - interval '24 hours') AS today_evidence_count
+  FROM research_observation o
+  JOIN research_task t ON t.id = o.produced_by_task_id
+  JOIN research_session s ON s.id = o.session_id
+  WHERE o.workspace_id = $1
+    AND o.verification_status <> 'rejected'
+    AND t.goal_version = s.goal_version
+    AND t.plan_version = s.plan_version
+    AND s.orchestrator_version <> 'research-run-v6'
+  GROUP BY o.session_id
+), v6_evidence_progress AS (
+  -- V6 runs never write research_observation; accepted atomic results live in
+  -- research_result_node, so evidence counters must read from there instead.
+  SELECT n.session_id, count(*) AS evidence_count,
+    count(*) FILTER (WHERE n.created_at >= now() - interval '24 hours') AS today_evidence_count
+  FROM research_result_node n
+  JOIN research_work_item_attempt a ON a.id = n.work_item_attempt_id
+  JOIN research_work_item w ON w.id = a.work_item_id
+  JOIN research_session s ON s.id = n.session_id
+  WHERE n.workspace_id = $1
+    AND s.orchestrator_version = 'research-run-v6'
+    AND w.goal_version = s.goal_version
+    AND n.conclusion_state NOT IN ('refuted', 'invalid')
+  GROUP BY n.session_id
+), node_progress AS (
+  SELECT session_id, count(*) AS node_count
+  FROM research_graph_node
+  WHERE workspace_id = $1
+  GROUP BY session_id
+), question_progress AS (
+  SELECT q.session_id, count(*) AS open_question_count
+  FROM research_question q
+  JOIN research_session s ON s.id = q.session_id
+  WHERE q.workspace_id = $1
+    AND q.goal_version = s.goal_version
+    AND q.plan_version = s.plan_version
+    AND q.status IN ('open', 'in_progress', 'unresolved')
+  GROUP BY q.session_id
+)
+SELECT
+  s.id AS session_id,
+  COALESCE(wp.task_total, tp.task_total, 0)::bigint AS task_total,
+  COALESCE(wp.task_completed, tp.task_completed, 0)::bigint AS task_completed,
+  COALESCE(wp.task_running, tp.task_running, 0)::bigint AS task_running,
+  COALESCE(wp.task_blocked, tp.task_blocked, 0)::bigint AS task_blocked,
+  COALESCE(vep.evidence_count, ep.evidence_count, 0)::bigint AS evidence_count,
+  COALESCE(vep.today_evidence_count, ep.today_evidence_count, 0)::bigint AS today_evidence_count,
+  COALESCE(np.node_count, 0)::bigint AS node_count,
+  COALESCE(qp.open_question_count, 0)::bigint AS open_question_count,
+  (s.status = 'awaiting_user_confirm') AS awaiting_user_action,
+  COALESCE((CASE
+    WHEN s.status = 'awaiting_user_confirm' THEN 'user_confirmation'
+    WHEN COALESCE(wp.task_blocked, tp.task_blocked, 0) > 0 THEN 'blocked_tasks'
+    WHEN s.status = 'failed' AND length(s.last_error) > 0 THEN 'recoverable_failure'
+    WHEN s.status = 'running' AND COALESCE(wp.task_running, tp.task_running, 0) = 0 AND s.last_progress_at < now() - interval '15 minutes' THEN 'stalled'
+    ELSE NULL
+  END)::text, '')::text AS attention_kind,
+  COALESCE((s.status = 'failed' AND length(s.last_error) > 0) OR COALESCE(wp.task_blocked, tp.task_blocked, 0) > 0, false)::boolean AS recoverable,
+  s.last_progress_at
+FROM research_session s
+LEFT JOIN task_progress tp ON tp.session_id = s.id
+LEFT JOIN work_item_progress wp ON wp.session_id = s.id
+LEFT JOIN evidence_progress ep ON ep.session_id = s.id
+LEFT JOIN v6_evidence_progress vep ON vep.session_id = s.id
+LEFT JOIN node_progress np ON np.session_id = s.id
+LEFT JOIN question_progress qp ON qp.session_id = s.id
+WHERE s.workspace_id = $1
+ORDER BY s.updated_at DESC
+`
+
+type ListResearchSessionProgressRow struct {
+	SessionID          pgtype.UUID        `json:"session_id"`
+	TaskTotal          int64              `json:"task_total"`
+	TaskCompleted      int64              `json:"task_completed"`
+	TaskRunning        int64              `json:"task_running"`
+	TaskBlocked        int64              `json:"task_blocked"`
+	EvidenceCount      int64              `json:"evidence_count"`
+	TodayEvidenceCount int64              `json:"today_evidence_count"`
+	NodeCount          int64              `json:"node_count"`
+	OpenQuestionCount  int64              `json:"open_question_count"`
+	AwaitingUserAction bool               `json:"awaiting_user_action"`
+	AttentionKind      string             `json:"attention_kind"`
+	Recoverable        bool               `json:"recoverable"`
+	LastProgressAt     pgtype.Timestamptz `json:"last_progress_at"`
+}
+
+func (q *Queries) ListResearchSessionProgress(ctx context.Context, workspaceID pgtype.UUID) ([]ListResearchSessionProgressRow, error) {
+	rows, err := q.db.Query(ctx, listResearchSessionProgress, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListResearchSessionProgressRow{}
+	for rows.Next() {
+		var i ListResearchSessionProgressRow
+		if err := rows.Scan(
+			&i.SessionID,
+			&i.TaskTotal,
+			&i.TaskCompleted,
+			&i.TaskRunning,
+			&i.TaskBlocked,
+			&i.EvidenceCount,
+			&i.TodayEvidenceCount,
+			&i.NodeCount,
+			&i.OpenQuestionCount,
+			&i.AwaitingUserAction,
+			&i.AttentionKind,
+			&i.Recoverable,
+			&i.LastProgressAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listResearchSessions = `-- name: ListResearchSessions :many
+SELECT id, workspace_id, fleet_id, created_by, title, goal, status, current_stage, project_id, channel_id, handoff_summary, created_at, updated_at, depth_tier, product_round, product_round_budget, unattended_enabled, max_open_branches, single_line_confirmed, unattended_auto_steps, last_user_activity_at, goal_version, plan_version, state_version, orchestrator_version, run_config, run_stats, run_initialized_at, last_progress_at, next_reconcile_at, reconcile_lease_token, reconcile_lease_expires_at, stop_reason, last_error, reconcile_lease_generation, graph_version, artifact_passport_enabled, director_state_version, current_director_assignment_id, v6_projection_version FROM research_session
+WHERE workspace_id = $1
+ORDER BY updated_at DESC
+`
+
+func (q *Queries) ListResearchSessions(ctx context.Context, workspaceID pgtype.UUID) ([]ResearchSession, error) {
+	rows, err := q.db.Query(ctx, listResearchSessions, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ResearchSession{}
+	for rows.Next() {
+		var i ResearchSession
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.FleetID,
+			&i.CreatedBy,
+			&i.Title,
+			&i.Goal,
+			&i.Status,
+			&i.CurrentStage,
+			&i.ProjectID,
+			&i.ChannelID,
+			&i.HandoffSummary,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.DepthTier,
+			&i.ProductRound,
+			&i.ProductRoundBudget,
+			&i.UnattendedEnabled,
+			&i.MaxOpenBranches,
+			&i.SingleLineConfirmed,
+			&i.UnattendedAutoSteps,
+			&i.LastUserActivityAt,
+			&i.GoalVersion,
+			&i.PlanVersion,
+			&i.StateVersion,
+			&i.OrchestratorVersion,
+			&i.RunConfig,
+			&i.RunStats,
+			&i.RunInitializedAt,
+			&i.LastProgressAt,
+			&i.NextReconcileAt,
+			&i.ReconcileLeaseToken,
+			&i.ReconcileLeaseExpiresAt,
+			&i.StopReason,
+			&i.LastError,
+			&i.ReconcileLeaseGeneration,
+			&i.GraphVersion,
+			&i.ArtifactPassportEnabled,
+			&i.DirectorStateVersion,
+			&i.CurrentDirectorAssignmentID,
+			&i.V6ProjectionVersion,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listResearchSources = `-- name: ListResearchSources :many
+SELECT id, workspace_id, session_id, url, title, source_class, credibility_weight, stance, relevance, summary, excerpt, payload, created_at, updated_at, source_snapshot_id FROM research_source
+WHERE session_id = $1 AND workspace_id = $2
+ORDER BY credibility_weight DESC, created_at ASC
+`
+
+type ListResearchSourcesParams struct {
+	SessionID   pgtype.UUID `json:"session_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) ListResearchSources(ctx context.Context, arg ListResearchSourcesParams) ([]ResearchSource, error) {
+	rows, err := q.db.Query(ctx, listResearchSources, arg.SessionID, arg.WorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ResearchSource{}
+	for rows.Next() {
+		var i ResearchSource
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.SessionID,
+			&i.Url,
+			&i.Title,
+			&i.SourceClass,
+			&i.CredibilityWeight,
+			&i.Stance,
+			&i.Relevance,
+			&i.Summary,
+			&i.Excerpt,
+			&i.Payload,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.SourceSnapshotID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listResearchStageEvals = `-- name: ListResearchStageEvals :many
+SELECT id, workspace_id, session_id, stage, passed, score, findings, remediation, created_at FROM research_stage_eval
+WHERE session_id = $1 AND workspace_id = $2
+ORDER BY created_at DESC
+`
+
+type ListResearchStageEvalsParams struct {
+	SessionID   pgtype.UUID `json:"session_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) ListResearchStageEvals(ctx context.Context, arg ListResearchStageEvalsParams) ([]ResearchStageEval, error) {
+	rows, err := q.db.Query(ctx, listResearchStageEvals, arg.SessionID, arg.WorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ResearchStageEval{}
+	for rows.Next() {
+		var i ResearchStageEval
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.SessionID,
+			&i.Stage,
+			&i.Passed,
+			&i.Score,
+			&i.Findings,
+			&i.Remediation,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRunningUnattendedResearchSessions = `-- name: ListRunningUnattendedResearchSessions :many
+SELECT rs.id, rs.workspace_id, rs.fleet_id, rs.created_by, rs.title, rs.goal, rs.status, rs.current_stage, rs.project_id, rs.channel_id, rs.handoff_summary, rs.created_at, rs.updated_at, rs.depth_tier, rs.product_round, rs.product_round_budget, rs.unattended_enabled, rs.max_open_branches, rs.single_line_confirmed, rs.unattended_auto_steps, rs.last_user_activity_at, rs.goal_version, rs.plan_version, rs.state_version, rs.orchestrator_version, rs.run_config, rs.run_stats, rs.run_initialized_at, rs.last_progress_at, rs.next_reconcile_at, rs.reconcile_lease_token, rs.reconcile_lease_expires_at, rs.stop_reason, rs.last_error, rs.reconcile_lease_generation, rs.graph_version, rs.artifact_passport_enabled, rs.director_state_version, rs.current_director_assignment_id, rs.v6_projection_version
+FROM research_session AS rs
+JOIN workspace AS w ON w.id = rs.workspace_id
+WHERE rs.status = 'running'
+  AND rs.unattended_enabled = true
+ORDER BY rs.updated_at ASC
+LIMIT $1
+`
+
+// LRM-1076: scanner input — running sessions with unattended default on.
+func (q *Queries) ListRunningUnattendedResearchSessions(ctx context.Context, limit int32) ([]ResearchSession, error) {
+	rows, err := q.db.Query(ctx, listRunningUnattendedResearchSessions, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ResearchSession{}
+	for rows.Next() {
+		var i ResearchSession
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.FleetID,
+			&i.CreatedBy,
+			&i.Title,
+			&i.Goal,
+			&i.Status,
+			&i.CurrentStage,
+			&i.ProjectID,
+			&i.ChannelID,
+			&i.HandoffSummary,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.DepthTier,
+			&i.ProductRound,
+			&i.ProductRoundBudget,
+			&i.UnattendedEnabled,
+			&i.MaxOpenBranches,
+			&i.SingleLineConfirmed,
+			&i.UnattendedAutoSteps,
+			&i.LastUserActivityAt,
+			&i.GoalVersion,
+			&i.PlanVersion,
+			&i.StateVersion,
+			&i.OrchestratorVersion,
+			&i.RunConfig,
+			&i.RunStats,
+			&i.RunInitializedAt,
+			&i.LastProgressAt,
+			&i.NextReconcileAt,
+			&i.ReconcileLeaseToken,
+			&i.ReconcileLeaseExpiresAt,
+			&i.StopReason,
+			&i.LastError,
+			&i.ReconcileLeaseGeneration,
+			&i.GraphVersion,
+			&i.ArtifactPassportEnabled,
+			&i.DirectorStateVersion,
+			&i.CurrentDirectorAssignmentID,
+			&i.V6ProjectionVersion,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const researchGraphCommandExists = `-- name: ResearchGraphCommandExists :one
 SELECT EXISTS(
   SELECT 1 FROM research_graph_command
@@ -2129,6 +2609,223 @@ func (q *Queries) ResearchGraphCommandExists(ctx context.Context, arg ResearchGr
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
+}
+
+const setResearchFleetLead = `-- name: SetResearchFleetLead :one
+UPDATE research_fleet
+SET lead_agent_id = $2, updated_at = now()
+WHERE id = $1 AND workspace_id = $3
+RETURNING id, workspace_id, lead_agent_id, created_at, updated_at
+`
+
+type SetResearchFleetLeadParams struct {
+	ID          pgtype.UUID `json:"id"`
+	LeadAgentID pgtype.UUID `json:"lead_agent_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) SetResearchFleetLead(ctx context.Context, arg SetResearchFleetLeadParams) (ResearchFleet, error) {
+	row := q.db.QueryRow(ctx, setResearchFleetLead, arg.ID, arg.LeadAgentID, arg.WorkspaceID)
+	var i ResearchFleet
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.LeadAgentID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const setResearchMessageMatchDecision = `-- name: SetResearchMessageMatchDecision :one
+UPDATE research_message
+SET meta = jsonb_set(COALESCE(meta, '{}'::jsonb), '{match_decision}', $4::jsonb, true)
+WHERE id = $1 AND session_id = $2 AND workspace_id = $3
+RETURNING id, workspace_id, session_id, sender_type, sender_id, target_agent_id, body, created_at, card_kind, meta, run_event_id
+`
+
+type SetResearchMessageMatchDecisionParams struct {
+	ID          pgtype.UUID `json:"id"`
+	SessionID   pgtype.UUID `json:"session_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	Column4     []byte      `json:"column_4"`
+}
+
+// LRM-1330: persist utterance-scoped match_decision under meta.match_decision.
+func (q *Queries) SetResearchMessageMatchDecision(ctx context.Context, arg SetResearchMessageMatchDecisionParams) (ResearchMessage, error) {
+	row := q.db.QueryRow(ctx, setResearchMessageMatchDecision,
+		arg.ID,
+		arg.SessionID,
+		arg.WorkspaceID,
+		arg.Column4,
+	)
+	var i ResearchMessage
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.SessionID,
+		&i.SenderType,
+		&i.SenderID,
+		&i.TargetAgentID,
+		&i.Body,
+		&i.CreatedAt,
+		&i.CardKind,
+		&i.Meta,
+		&i.RunEventID,
+	)
+	return i, err
+}
+
+const touchResearchSessionUserActivity = `-- name: TouchResearchSessionUserActivity :one
+UPDATE research_session
+SET last_user_activity_at = now(),
+    updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, fleet_id, created_by, title, goal, status, current_stage, project_id, channel_id, handoff_summary, created_at, updated_at, depth_tier, product_round, product_round_budget, unattended_enabled, max_open_branches, single_line_confirmed, unattended_auto_steps, last_user_activity_at, goal_version, plan_version, state_version, orchestrator_version, run_config, run_stats, run_initialized_at, last_progress_at, next_reconcile_at, reconcile_lease_token, reconcile_lease_expires_at, stop_reason, last_error, reconcile_lease_generation, graph_version, artifact_passport_enabled, director_state_version, current_director_assignment_id, v6_projection_version
+`
+
+type TouchResearchSessionUserActivityParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) TouchResearchSessionUserActivity(ctx context.Context, arg TouchResearchSessionUserActivityParams) (ResearchSession, error) {
+	row := q.db.QueryRow(ctx, touchResearchSessionUserActivity, arg.ID, arg.WorkspaceID)
+	var i ResearchSession
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.FleetID,
+		&i.CreatedBy,
+		&i.Title,
+		&i.Goal,
+		&i.Status,
+		&i.CurrentStage,
+		&i.ProjectID,
+		&i.ChannelID,
+		&i.HandoffSummary,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DepthTier,
+		&i.ProductRound,
+		&i.ProductRoundBudget,
+		&i.UnattendedEnabled,
+		&i.MaxOpenBranches,
+		&i.SingleLineConfirmed,
+		&i.UnattendedAutoSteps,
+		&i.LastUserActivityAt,
+		&i.GoalVersion,
+		&i.PlanVersion,
+		&i.StateVersion,
+		&i.OrchestratorVersion,
+		&i.RunConfig,
+		&i.RunStats,
+		&i.RunInitializedAt,
+		&i.LastProgressAt,
+		&i.NextReconcileAt,
+		&i.ReconcileLeaseToken,
+		&i.ReconcileLeaseExpiresAt,
+		&i.StopReason,
+		&i.LastError,
+		&i.ReconcileLeaseGeneration,
+		&i.GraphVersion,
+		&i.ArtifactPassportEnabled,
+		&i.DirectorStateVersion,
+		&i.CurrentDirectorAssignmentID,
+		&i.V6ProjectionVersion,
+	)
+	return i, err
+}
+
+const updateResearchFleetMemberStatus = `-- name: UpdateResearchFleetMemberStatus :one
+UPDATE research_fleet_member
+SET status = $3, updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, fleet_id, agent_id, role, status, is_lead, created_at, updated_at
+`
+
+type UpdateResearchFleetMemberStatusParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	Status      string      `json:"status"`
+}
+
+func (q *Queries) UpdateResearchFleetMemberStatus(ctx context.Context, arg UpdateResearchFleetMemberStatusParams) (ResearchFleetMember, error) {
+	row := q.db.QueryRow(ctx, updateResearchFleetMemberStatus, arg.ID, arg.WorkspaceID, arg.Status)
+	var i ResearchFleetMember
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.FleetID,
+		&i.AgentID,
+		&i.Role,
+		&i.Status,
+		&i.IsLead,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updateResearchGraphNode = `-- name: UpdateResearchGraphNode :one
+UPDATE research_graph_node SET
+  title = COALESCE($3, title),
+  summary = COALESCE($4, summary),
+  status = COALESCE($5, status),
+  payload = COALESCE($6, payload),
+  updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, session_id, node_type, title, summary, status, actor_agent_id, payload, created_at, updated_at, run_event_id, level, round, cluster_id, confidence, document_count, conclusion_count, goal_version_id, derived_from, merged_from, superseded_by, restart_of, invalidated_by, superseded_at, invalidated_at
+`
+
+type UpdateResearchGraphNodeParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	Title       pgtype.Text `json:"title"`
+	Summary     pgtype.Text `json:"summary"`
+	Status      pgtype.Text `json:"status"`
+	Payload     []byte      `json:"payload"`
+}
+
+func (q *Queries) UpdateResearchGraphNode(ctx context.Context, arg UpdateResearchGraphNodeParams) (ResearchGraphNode, error) {
+	row := q.db.QueryRow(ctx, updateResearchGraphNode,
+		arg.ID,
+		arg.WorkspaceID,
+		arg.Title,
+		arg.Summary,
+		arg.Status,
+		arg.Payload,
+	)
+	var i ResearchGraphNode
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.SessionID,
+		&i.NodeType,
+		&i.Title,
+		&i.Summary,
+		&i.Status,
+		&i.ActorAgentID,
+		&i.Payload,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.RunEventID,
+		&i.Level,
+		&i.Round,
+		&i.ClusterID,
+		&i.Confidence,
+		&i.DocumentCount,
+		&i.ConclusionCount,
+		&i.GoalVersionID,
+		&i.DerivedFrom,
+		&i.MergedFrom,
+		&i.SupersededBy,
+		&i.RestartOf,
+		&i.InvalidatedBy,
+		&i.SupersededAt,
+		&i.InvalidatedAt,
+	)
+	return i, err
 }
 
 const updateResearchGraphNodeTyped = `-- name: UpdateResearchGraphNodeTyped :one
@@ -2213,147 +2910,291 @@ func (q *Queries) UpdateResearchGraphNodeTyped(ctx context.Context, arg UpdateRe
 	return i, err
 }
 
-const listResearchGraphNodesTyped = `-- name: ListResearchGraphNodesTyped :many
-SELECT id, workspace_id, session_id, node_type, title, summary, status, actor_agent_id,
-       payload, created_at, updated_at, run_event_id, level, round, cluster_id, confidence,
-       document_count, conclusion_count, goal_version_id, derived_from, merged_from,
-       superseded_by, restart_of, invalidated_by, superseded_at, invalidated_at
-FROM research_graph_node
-WHERE session_id = $1 AND workspace_id = $2
-ORDER BY created_at ASC
+const updateResearchSession = `-- name: UpdateResearchSession :one
+UPDATE research_session SET
+  title = COALESCE($3, title),
+  goal = COALESCE($4, goal),
+  status = COALESCE($5, status),
+  current_stage = COALESCE($6, current_stage),
+  project_id = COALESCE($7, project_id),
+  channel_id = COALESCE($8, channel_id),
+  handoff_summary = COALESCE($9, handoff_summary),
+  depth_tier = COALESCE($10, depth_tier),
+  product_round = COALESCE($11, product_round),
+  product_round_budget = COALESCE($12, product_round_budget),
+  unattended_enabled = COALESCE($13, unattended_enabled),
+  max_open_branches = COALESCE($14, max_open_branches),
+  single_line_confirmed = COALESCE($15, single_line_confirmed),
+  unattended_auto_steps = COALESCE($16, unattended_auto_steps),
+  last_user_activity_at = COALESCE($17, last_user_activity_at),
+  updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, fleet_id, created_by, title, goal, status, current_stage, project_id, channel_id, handoff_summary, created_at, updated_at, depth_tier, product_round, product_round_budget, unattended_enabled, max_open_branches, single_line_confirmed, unattended_auto_steps, last_user_activity_at, goal_version, plan_version, state_version, orchestrator_version, run_config, run_stats, run_initialized_at, last_progress_at, next_reconcile_at, reconcile_lease_token, reconcile_lease_expires_at, stop_reason, last_error, reconcile_lease_generation, graph_version, artifact_passport_enabled, director_state_version, current_director_assignment_id, v6_projection_version
 `
 
-type ListResearchGraphNodesTypedParams struct {
-	SessionID   pgtype.UUID `json:"session_id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+type UpdateResearchSessionParams struct {
+	ID                  pgtype.UUID        `json:"id"`
+	WorkspaceID         pgtype.UUID        `json:"workspace_id"`
+	Title               pgtype.Text        `json:"title"`
+	Goal                pgtype.Text        `json:"goal"`
+	Status              pgtype.Text        `json:"status"`
+	CurrentStage        pgtype.Text        `json:"current_stage"`
+	ProjectID           pgtype.UUID        `json:"project_id"`
+	ChannelID           pgtype.UUID        `json:"channel_id"`
+	HandoffSummary      pgtype.Text        `json:"handoff_summary"`
+	DepthTier           pgtype.Text        `json:"depth_tier"`
+	ProductRound        pgtype.Int4        `json:"product_round"`
+	ProductRoundBudget  pgtype.Int4        `json:"product_round_budget"`
+	UnattendedEnabled   pgtype.Bool        `json:"unattended_enabled"`
+	MaxOpenBranches     pgtype.Int4        `json:"max_open_branches"`
+	SingleLineConfirmed pgtype.Bool        `json:"single_line_confirmed"`
+	UnattendedAutoSteps pgtype.Int4        `json:"unattended_auto_steps"`
+	LastUserActivityAt  pgtype.Timestamptz `json:"last_user_activity_at"`
 }
 
-func (q *Queries) ListResearchGraphNodesTyped(ctx context.Context, arg ListResearchGraphNodesTypedParams) ([]ResearchGraphNode, error) {
-	rows, err := q.db.Query(ctx, listResearchGraphNodesTyped, arg.SessionID, arg.WorkspaceID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ResearchGraphNode
-	for rows.Next() {
-		var i ResearchGraphNode
-		if err := rows.Scan(
-			&i.ID,
-			&i.WorkspaceID,
-			&i.SessionID,
-			&i.NodeType,
-			&i.Title,
-			&i.Summary,
-			&i.Status,
-			&i.ActorAgentID,
-			&i.Payload,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.RunEventID,
-			&i.Level,
-			&i.Round,
-			&i.ClusterID,
-			&i.Confidence,
-			&i.DocumentCount,
-			&i.ConclusionCount,
-			&i.GoalVersionID,
-			&i.DerivedFrom,
-			&i.MergedFrom,
-			&i.SupersededBy,
-			&i.RestartOf,
-			&i.InvalidatedBy,
-			&i.SupersededAt,
-			&i.InvalidatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
+func (q *Queries) UpdateResearchSession(ctx context.Context, arg UpdateResearchSessionParams) (ResearchSession, error) {
+	row := q.db.QueryRow(ctx, updateResearchSession,
+		arg.ID,
+		arg.WorkspaceID,
+		arg.Title,
+		arg.Goal,
+		arg.Status,
+		arg.CurrentStage,
+		arg.ProjectID,
+		arg.ChannelID,
+		arg.HandoffSummary,
+		arg.DepthTier,
+		arg.ProductRound,
+		arg.ProductRoundBudget,
+		arg.UnattendedEnabled,
+		arg.MaxOpenBranches,
+		arg.SingleLineConfirmed,
+		arg.UnattendedAutoSteps,
+		arg.LastUserActivityAt,
+	)
+	var i ResearchSession
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.FleetID,
+		&i.CreatedBy,
+		&i.Title,
+		&i.Goal,
+		&i.Status,
+		&i.CurrentStage,
+		&i.ProjectID,
+		&i.ChannelID,
+		&i.HandoffSummary,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DepthTier,
+		&i.ProductRound,
+		&i.ProductRoundBudget,
+		&i.UnattendedEnabled,
+		&i.MaxOpenBranches,
+		&i.SingleLineConfirmed,
+		&i.UnattendedAutoSteps,
+		&i.LastUserActivityAt,
+		&i.GoalVersion,
+		&i.PlanVersion,
+		&i.StateVersion,
+		&i.OrchestratorVersion,
+		&i.RunConfig,
+		&i.RunStats,
+		&i.RunInitializedAt,
+		&i.LastProgressAt,
+		&i.NextReconcileAt,
+		&i.ReconcileLeaseToken,
+		&i.ReconcileLeaseExpiresAt,
+		&i.StopReason,
+		&i.LastError,
+		&i.ReconcileLeaseGeneration,
+		&i.GraphVersion,
+		&i.ArtifactPassportEnabled,
+		&i.DirectorStateVersion,
+		&i.CurrentDirectorAssignmentID,
+		&i.V6ProjectionVersion,
+	)
+	return i, err
 }
 
-const countResearchGraphNodes = `-- name: CountResearchGraphNodes :one
-SELECT COUNT(*)::bigint AS count
-FROM research_graph_node
-WHERE session_id = $1 AND workspace_id = $2
+const updateResearchSource = `-- name: UpdateResearchSource :one
+UPDATE research_source SET
+  url = COALESCE($3, url),
+  title = COALESCE($4, title),
+  source_class = COALESCE($5, source_class),
+  credibility_weight = COALESCE($6, credibility_weight),
+  stance = COALESCE($7, stance),
+  relevance = COALESCE($8, relevance),
+  summary = COALESCE($9, summary),
+  excerpt = COALESCE($10, excerpt),
+  payload = COALESCE($11, payload),
+  updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, session_id, url, title, source_class, credibility_weight, stance, relevance, summary, excerpt, payload, created_at, updated_at, source_snapshot_id
 `
 
-type CountResearchGraphNodesParams struct {
-	SessionID   pgtype.UUID `json:"session_id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+type UpdateResearchSourceParams struct {
+	ID                pgtype.UUID   `json:"id"`
+	WorkspaceID       pgtype.UUID   `json:"workspace_id"`
+	Url               pgtype.Text   `json:"url"`
+	Title             pgtype.Text   `json:"title"`
+	SourceClass       pgtype.Text   `json:"source_class"`
+	CredibilityWeight pgtype.Float8 `json:"credibility_weight"`
+	Stance            pgtype.Text   `json:"stance"`
+	Relevance         pgtype.Float8 `json:"relevance"`
+	Summary           pgtype.Text   `json:"summary"`
+	Excerpt           pgtype.Text   `json:"excerpt"`
+	Payload           []byte        `json:"payload"`
 }
 
-func (q *Queries) CountResearchGraphNodes(ctx context.Context, arg CountResearchGraphNodesParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countResearchGraphNodes, arg.SessionID, arg.WorkspaceID)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
+func (q *Queries) UpdateResearchSource(ctx context.Context, arg UpdateResearchSourceParams) (ResearchSource, error) {
+	row := q.db.QueryRow(ctx, updateResearchSource,
+		arg.ID,
+		arg.WorkspaceID,
+		arg.Url,
+		arg.Title,
+		arg.SourceClass,
+		arg.CredibilityWeight,
+		arg.Stance,
+		arg.Relevance,
+		arg.Summary,
+		arg.Excerpt,
+		arg.Payload,
+	)
+	var i ResearchSource
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.SessionID,
+		&i.Url,
+		&i.Title,
+		&i.SourceClass,
+		&i.CredibilityWeight,
+		&i.Stance,
+		&i.Relevance,
+		&i.Summary,
+		&i.Excerpt,
+		&i.Payload,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SourceSnapshotID,
+	)
+	return i, err
 }
 
-const listResearchGraphNodesTypedPaginated = `-- name: ListResearchGraphNodesTypedPaginated :many
-SELECT id, workspace_id, session_id, node_type, title, summary, status, actor_agent_id,
-       payload, created_at, updated_at, run_event_id, level, round, cluster_id, confidence,
-       document_count, conclusion_count, goal_version_id, derived_from, merged_from,
-       superseded_by, restart_of, invalidated_by, superseded_at, invalidated_at
-FROM research_graph_node
-WHERE session_id = $1 AND workspace_id = $2
-ORDER BY created_at ASC
-LIMIT $3 OFFSET $4
+const updateResearchWorkItemStatus = `-- name: UpdateResearchWorkItemStatus :one
+UPDATE research_work_item
+SET status = $3,
+    enqueued_at = CASE WHEN $3 = 'enqueued' THEN COALESCE(enqueued_at, now()) ELSE enqueued_at END,
+    completed_at = CASE WHEN $3 IN ('done', 'cancelled', 'failed') THEN COALESCE(completed_at, now()) ELSE completed_at END,
+    updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, session_id, kind, target_node_id, assignee_agent_id, status, reason, payload, enqueued_at, completed_at, created_at, updated_at, target_kind, target_id, client_key, idempotency_key, goal_version, input_state_version, input_event_sequence, created_by_director_cycle_id, assigned_agent_id, priority, max_attempts, attempt_count, lease_token, lease_expires_at, payload_schema_id, terminal_reason_code, terminal_reason_detail, ready_at, started_at, cancelled_at, state_version, expected_result_schema_id
 `
 
-type ListResearchGraphNodesTypedPaginatedParams struct {
-	SessionID   pgtype.UUID `json:"session_id"`
+type UpdateResearchWorkItemStatusParams struct {
+	ID          pgtype.UUID `json:"id"`
 	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	Limit       int32       `json:"limit"`
-	Offset      int32       `json:"offset"`
+	Status      string      `json:"status"`
 }
 
-func (q *Queries) ListResearchGraphNodesTypedPaginated(ctx context.Context, arg ListResearchGraphNodesTypedPaginatedParams) ([]ResearchGraphNode, error) {
-	rows, err := q.db.Query(ctx, listResearchGraphNodesTypedPaginated, arg.SessionID, arg.WorkspaceID, arg.Limit, arg.Offset)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ResearchGraphNode
-	for rows.Next() {
-		var i ResearchGraphNode
-		if err := rows.Scan(
-			&i.ID,
-			&i.WorkspaceID,
-			&i.SessionID,
-			&i.NodeType,
-			&i.Title,
-			&i.Summary,
-			&i.Status,
-			&i.ActorAgentID,
-			&i.Payload,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.RunEventID,
-			&i.Level,
-			&i.Round,
-			&i.ClusterID,
-			&i.Confidence,
-			&i.DocumentCount,
-			&i.ConclusionCount,
-			&i.GoalVersionID,
-			&i.DerivedFrom,
-			&i.MergedFrom,
-			&i.SupersededBy,
-			&i.RestartOf,
-			&i.InvalidatedBy,
-			&i.SupersededAt,
-			&i.InvalidatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
+func (q *Queries) UpdateResearchWorkItemStatus(ctx context.Context, arg UpdateResearchWorkItemStatusParams) (ResearchWorkItem, error) {
+	row := q.db.QueryRow(ctx, updateResearchWorkItemStatus, arg.ID, arg.WorkspaceID, arg.Status)
+	var i ResearchWorkItem
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.SessionID,
+		&i.Kind,
+		&i.TargetNodeID,
+		&i.AssigneeAgentID,
+		&i.Status,
+		&i.Reason,
+		&i.Payload,
+		&i.EnqueuedAt,
+		&i.CompletedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.TargetKind,
+		&i.TargetID,
+		&i.ClientKey,
+		&i.IdempotencyKey,
+		&i.GoalVersion,
+		&i.InputStateVersion,
+		&i.InputEventSequence,
+		&i.CreatedByDirectorCycleID,
+		&i.AssignedAgentID,
+		&i.Priority,
+		&i.MaxAttempts,
+		&i.AttemptCount,
+		&i.LeaseToken,
+		&i.LeaseExpiresAt,
+		&i.PayloadSchemaID,
+		&i.TerminalReasonCode,
+		&i.TerminalReasonDetail,
+		&i.ReadyAt,
+		&i.StartedAt,
+		&i.CancelledAt,
+		&i.StateVersion,
+		&i.ExpectedResultSchemaID,
+	)
+	return i, err
+}
+
+const upsertResearchSource = `-- name: UpsertResearchSource :one
+INSERT INTO research_source (
+  workspace_id, session_id, url, title, source_class, credibility_weight,
+  stance, relevance, summary, excerpt, payload
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+RETURNING id, workspace_id, session_id, url, title, source_class, credibility_weight, stance, relevance, summary, excerpt, payload, created_at, updated_at, source_snapshot_id
+`
+
+type UpsertResearchSourceParams struct {
+	WorkspaceID       pgtype.UUID `json:"workspace_id"`
+	SessionID         pgtype.UUID `json:"session_id"`
+	Url               string      `json:"url"`
+	Title             string      `json:"title"`
+	SourceClass       string      `json:"source_class"`
+	CredibilityWeight float64     `json:"credibility_weight"`
+	Stance            string      `json:"stance"`
+	Relevance         float64     `json:"relevance"`
+	Summary           string      `json:"summary"`
+	Excerpt           string      `json:"excerpt"`
+	Payload           []byte      `json:"payload"`
+}
+
+func (q *Queries) UpsertResearchSource(ctx context.Context, arg UpsertResearchSourceParams) (ResearchSource, error) {
+	row := q.db.QueryRow(ctx, upsertResearchSource,
+		arg.WorkspaceID,
+		arg.SessionID,
+		arg.Url,
+		arg.Title,
+		arg.SourceClass,
+		arg.CredibilityWeight,
+		arg.Stance,
+		arg.Relevance,
+		arg.Summary,
+		arg.Excerpt,
+		arg.Payload,
+	)
+	var i ResearchSource
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.SessionID,
+		&i.Url,
+		&i.Title,
+		&i.SourceClass,
+		&i.CredibilityWeight,
+		&i.Stance,
+		&i.Relevance,
+		&i.Summary,
+		&i.Excerpt,
+		&i.Payload,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SourceSnapshotID,
+	)
+	return i, err
 }

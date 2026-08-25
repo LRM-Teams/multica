@@ -194,7 +194,7 @@ func TestStartupKernelKeepsHotPathsAndExcludesTurnWorkflow(t *testing.T) {
 		"ordinary Issue DAGs",
 		"multica <command> --help",
 		"## Output utility contract",
-		"### Memory Operating Guide (v0.12)",
+		"### Memory Operating Guide (v0.13)",
 		"users/<member-id>/USER.md",
 		"re-reading or stat-checking that exact path",
 		"memory write alone permanently changed Agent identity",
@@ -243,6 +243,72 @@ func TestStartupKernelBoundsConfigurableSections(t *testing.T) {
 	}
 	if len(brief) > 16*1024 {
 		t.Fatalf("maximal startup kernel = %d bytes, want <= 16384", len(brief))
+	}
+}
+
+func TestNonAgentScopeMemoriesAndRenderAgentScopeMemory(t *testing.T) {
+	memories := []MemoryContextForEnv{
+		{Name: "agent global", Content: "global convention", Scope: "agent", SubjectType: "agent", SubjectID: "a1"},
+		{Name: "member private", Content: "call me JHP", Scope: "user", SubjectType: "member", SubjectID: "m1"},
+		{Name: "project", Content: "proj note", Scope: "project", SubjectType: "project", SubjectID: "p1"},
+	}
+	turn := RenderTurnContext(TaskContextForEnv{AgentMemories: memories})
+	if strings.Contains(turn, "global convention") {
+		t.Fatal("agent-scope memory must not appear in per-message context")
+	}
+	for _, want := range []string{"call me JHP", "proj note"} {
+		if !strings.Contains(turn, want) {
+			t.Errorf("per-message context missing %q", want)
+		}
+	}
+	agent := RenderAgentScopeMemory(memories)
+	if !strings.Contains(agent, "global convention") {
+		t.Fatal("agent-scope memory missing from system-prompt renderer")
+	}
+	if strings.Contains(agent, "call me JHP") || strings.Contains(agent, "proj note") {
+		t.Fatal("system-prompt agent memory leaked non-agent scope")
+	}
+	if RenderAgentScopeMemory([]MemoryContextForEnv{{Name: "m", Content: "x", Scope: "user"}}) != "" {
+		t.Fatal("no agent-scope memory must render empty")
+	}
+	if !ShouldInjectAgentScopeSystemPrompt("") || !ShouldInjectAgentScopeSystemPrompt("  ") {
+		t.Fatal("fresh session must inject agent-scope system prompt")
+	}
+	if ShouldInjectAgentScopeSystemPrompt("sess-1") {
+		t.Fatal("resume must not inject agent-scope system prompt")
+	}
+}
+
+func TestRenderTurnContextOmitsEmptyMemorySnapshot(t *testing.T) {
+	turn := RenderTurnContext(TaskContextForEnv{
+		AgentMemories: []MemoryContextForEnv{{
+			Name: "agent only", Content: "global only", Scope: "agent",
+		}},
+	})
+	if strings.Contains(turn, "Effective Promoted Memory Snapshot") {
+		t.Fatalf("agent-only memories must not render empty turn snapshot:\n%s", turn)
+	}
+}
+
+func TestAppendAgentScopeMemoryBriefKeepsDigestStable(t *testing.T) {
+	base := TaskContextForEnv{
+		AgentID:   "a1",
+		AgentName: "Ada",
+		AgentScopeMemories: []MemoryContextForEnv{{
+			Name: "Agent global memory", Content: "Prefer terse replies.", Scope: "agent",
+		}},
+	}
+	without := StartupStaticDigest("codex", base)
+	withMore := base
+	withMore.AgentScopeMemories = append(append([]MemoryContextForEnv{}, base.AgentScopeMemories...), MemoryContextForEnv{
+		Name: "Agent state", Content: "Shipping release.", Scope: "agent",
+	})
+	if StartupStaticDigest("codex", withMore) != without {
+		t.Fatal("AgentScopeMemories must not rotate StartupStaticDigest")
+	}
+	brief := appendAgentScopeMemoryBrief(buildStartupKernelContent("codex", StartupStaticContext(base)), base)
+	if !strings.Contains(brief, "Prefer terse replies") {
+		t.Fatalf("startup brief missing agent-scope memory:\n%s", brief)
 	}
 }
 

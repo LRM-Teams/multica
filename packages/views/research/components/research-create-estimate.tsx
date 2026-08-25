@@ -1,6 +1,7 @@
 "use client";
 
 import { cn } from "@multica/ui/lib/utils";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { useT } from "../../i18n/use-t";
 import {
   resolveCreateEstimate,
@@ -40,24 +41,30 @@ export function ResearchCreateEstimateSummary({
       : t(($) => $.create_estimate.unknown);
 
   return (
-    <p
-      data-testid="research-create-estimate-summary"
-      data-estimate-status={result.status}
-      className={cn("text-xs text-muted-foreground", className)}
-      title={t(($) => $.create_estimate.disclaimer)}
-    >
-      <span className="font-medium text-foreground/80">
-        {t(($) => $.create_estimate.badge)}
-      </span>
-      <span aria-hidden className="mx-1.5 text-border">
-        ·
-      </span>
-      <span data-testid="research-create-estimate-summary-duration">{duration}</span>
-      <span aria-hidden className="mx-1.5 text-border">
-        ·
-      </span>
-      <span data-testid="research-create-estimate-summary-cost">{cost}</span>
-    </p>
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <p
+            data-testid="research-create-estimate-summary"
+            data-estimate-status={result.status}
+            className={cn("text-xs text-muted-foreground", className)}
+          />
+        }
+      >
+        <span className="font-medium text-foreground/80">
+          {t(($) => $.create_estimate.badge)}
+        </span>
+        <span aria-hidden className="mx-1.5 text-border">
+          ·
+        </span>
+        <span data-testid="research-create-estimate-summary-duration">{duration}</span>
+        <span aria-hidden className="mx-1.5 text-border">
+          ·
+        </span>
+        <span data-testid="research-create-estimate-summary-cost">{cost}</span>
+      </TooltipTrigger>
+      <TooltipContent side="top">{t(($) => $.create_estimate.disclaimer)}</TooltipContent>
+    </Tooltip>
   );
 }
 

@@ -9,12 +9,14 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-type agentActivityProjection struct {
-	activityKind      string
-	detailKind        string
-	processInstanceID string
-	entries           []protocol.AgentActivityEntry
-	preserveCurrent   bool
+// activityBroadcast mirrors Raft's broadcastActivity arguments. The
+// processInstanceID is local launch fencing; the remaining fields are the
+// activity state and timeline fact.
+type activityBroadcast struct {
+	activityKind string
+	detail       string
+	detailKind   string
+	trajectory   []protocol.AgentActivityEntry
 }
 
 // Observe is the only typed Message/runtime-fact to Activity presentation
@@ -41,34 +43,27 @@ func (p *agentActivityProducer) observeLocked(observation AgentObservation) erro
 	if err != nil {
 		return err
 	}
-	projection, err := projectAgentObservation(observation)
+	broadcast, err := activityBroadcastForObservation(observation)
 	if err != nil {
 		return err
 	}
-
-	snapshot := state.snapshot
-	snapshot.AgentID = key.agentID
-	snapshot.LaunchID = key.launchID
-	snapshot.DaemonInstanceID = p.daemonInstanceID
-	if !projection.preserveCurrent || snapshot.ActivityKind == "" {
-		snapshot.ActivityKind = projection.activityKind
-		snapshot.DetailKind = projection.detailKind
-		snapshot.ProcessInstanceID = projection.processInstanceID
-	}
-	// Raft 1.0.16 queueTrajectoryText coalesces streaming thinking/text
-	// progress. Tool and lifecycle observations remain distinct timeline facts,
-	// even when consecutive events have the same detail kind.
-	if (observation.Kind == AgentObservationRuntimeThinking || observation.Kind == AgentObservationRuntimeWorking) &&
-		state.snapshot.ActivityKind == snapshot.ActivityKind &&
-		state.snapshot.DetailKind == snapshot.DetailKind &&
-		state.snapshot.ActivityKind != "" {
+	if duplicateRuntimeActivity(state.snapshot, broadcast, observation.Kind) ||
+		duplicateIdleActivity(state.snapshot, broadcast, observation.Kind) {
 		return nil
 	}
-	snapshot.ClientSequence = 0
-	snapshot.ProducerFactID = ""
+
+	snapshot := state.snapshot
+	snapshot.AgentID = observation.AgentID
+	snapshot.DaemonInstanceID = p.daemonInstanceID
+	if broadcast.activityKind != "" {
+		snapshot.ActivityKind = broadcast.activityKind
+		snapshot.DetailKind = broadcast.detailKind
+	} else if snapshot.ActivityKind == "" {
+		snapshot.ActivityKind = protocol.ActivityKindOnline
+		snapshot.DetailKind = broadcast.detailKind
+	}
 	snapshot.ObservedAt = observation.At.UTC()
-	snapshot.ProbeID = ""
-	if err := p.publishLocked(snapshot, projection.entries); err != nil {
+	if err := p.publishLocked(key, snapshot, broadcast); err != nil {
 		return err
 	}
 	if data, ok := observation.Data.(AgentRuntimeObservationData); ok {
@@ -94,20 +89,39 @@ func (p *agentActivityProducer) observeLocked(observation AgentObservation) erro
 	return nil
 }
 
+// duplicateRuntimeActivity mirrors Raft's alreadyLive guard: progress does
+// not repaint an already-working/thinking runtime.
+func duplicateRuntimeActivity(previous protocol.AgentActivitySnapshot, broadcast activityBroadcast, kind AgentObservationKind) bool {
+	progress := kind == AgentObservationRuntimeThinking || kind == AgentObservationRuntimeWorking
+	return progress && previous.ActivityKind != "" &&
+		previous.ActivityKind == broadcast.activityKind &&
+		previous.DetailKind == broadcast.detailKind
+}
+
+// duplicateIdleActivity is the lifecycle-specific guard for the resident
+// readiness path. Raft avoids this at its lifecycle call site; keeping it
+// separate from the runtime-progress guard prevents ready/idle from becoming
+// a generic suppressible category.
+func duplicateIdleActivity(previous protocol.AgentActivitySnapshot, broadcast activityBroadcast, kind AgentObservationKind) bool {
+	return (kind == AgentObservationRuntimeReady || kind == AgentObservationRuntimeIdle) &&
+		previous.ActivityKind == broadcast.activityKind &&
+		previous.DetailKind == broadcast.detailKind
+}
+
 // CompleteCompactionIfActive emits the missing provider finish before the first
 // resumed Message-runtime observation. It is scoped to one concrete launch so
 // a replacement process cannot inherit stale compaction state.
-func (p *agentActivityProducer) CompleteCompactionIfActive(agentID, launchID string, data AgentRuntimeStageObservationData, at time.Time) (bool, error) {
+func (p *agentActivityProducer) CompleteCompactionIfActive(agentID, agentInstanceID string, data AgentRuntimeStageObservationData, at time.Time) (bool, error) {
 	if p == nil {
 		return false, errors.New("Activity producer is not configured")
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	state := p.states[agentActivityProducerKey{agentID: agentID, launchID: launchID}]
+	state := p.states[agentActivityProducerKey{agentID: agentID, agentInstanceID: agentInstanceID}]
 	if state == nil || !state.compaction.active {
 		return false, nil
 	}
-	observation := AgentObservation{AgentID: agentID, LaunchID: launchID, Kind: AgentObservationRuntimeCompacted, Data: data, At: at}
+	observation := AgentObservation{AgentID: agentID, AgentInstanceID: agentInstanceID, Kind: AgentObservationRuntimeCompacted, Data: data, At: at}
 	if err := observation.Validate(); err != nil {
 		return false, err
 	}
@@ -117,13 +131,13 @@ func (p *agentActivityProducer) CompleteCompactionIfActive(agentID, launchID str
 	return true, nil
 }
 
-func (p *agentActivityProducer) InterruptCompactionIfActive(agentID, launchID string) bool {
+func (p *agentActivityProducer) InterruptCompactionIfActive(agentID, agentInstanceID string) bool {
 	if p == nil {
 		return false
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	state := p.states[agentActivityProducerKey{agentID: agentID, launchID: launchID}]
+	state := p.states[agentActivityProducerKey{agentID: agentID, agentInstanceID: agentInstanceID}]
 	if state == nil || !state.compaction.active {
 		return false
 	}
@@ -143,8 +157,7 @@ func (p *agentActivityProducer) markCompactionStale(key agentActivityProducerKey
 	}
 	state.compaction.cancelStale = nil
 	observation := AgentObservation{
-		AgentID: key.agentID, LaunchID: key.launchID,
-		Kind: AgentObservationRuntimeCompactionStale, Data: state.compaction.runtime,
+		AgentID: key.agentID, AgentInstanceID: key.agentInstanceID, Kind: AgentObservationRuntimeCompactionStale, Data: state.compaction.runtime,
 		At: p.now().UTC(),
 	}
 	if observation.Validate() == nil && p.observeLocked(observation) == nil {
@@ -153,7 +166,7 @@ func (p *agentActivityProducer) markCompactionStale(key agentActivityProducerKey
 }
 
 func (p *agentActivityProducer) observationStateLocked(observation AgentObservation) (agentActivityProducerKey, *agentActivityProducerState, error) {
-	key := agentActivityProducerKey{agentID: observation.AgentID, launchID: observation.LaunchID}
+	key := agentActivityProducerKey{agentID: observation.AgentID, agentInstanceID: observation.AgentInstanceID}
 	state := p.states[key]
 	if state == nil {
 		return agentActivityProducerKey{}, nil, errors.New("Activity is not managed for this Agent launch")
@@ -161,31 +174,30 @@ func (p *agentActivityProducer) observationStateLocked(observation AgentObservat
 	return key, state, nil
 }
 
-func projectAgentObservation(observation AgentObservation) (agentActivityProjection, error) {
-	projection := agentActivityProjection{}
+func activityBroadcastForObservation(observation AgentObservation) (activityBroadcast, error) {
+	broadcast := activityBroadcast{}
 	var entry protocol.AgentActivityEntry
 	var err error
 
 	switch observation.Kind {
 	case AgentObservationRuntimeReady:
-		data := observation.Data.(AgentRuntimeObservationData)
-		projection.activityKind, projection.detailKind, projection.processInstanceID = protocol.ActivityKindOnline, "idle", data.ProcessInstanceID
-		entry, err = activityStatusEntry(projection.detailKind, "Online")
+		broadcast.activityKind, broadcast.detailKind, broadcast.detail = protocol.ActivityKindOnline, "idle", "Online"
+		entry, err = activityStatusEntry(broadcast.detailKind, broadcast.detail)
 	case AgentObservationRuntimeStarting:
-		projection.activityKind, projection.detailKind = protocol.ActivityKindWorking, "starting"
-		entry, err = activityStatusEntry(projection.detailKind, "Starting…")
+		broadcast.activityKind, broadcast.detailKind, broadcast.detail = protocol.ActivityKindWorking, "starting", "Starting…"
+		entry, err = activityStatusEntry(broadcast.detailKind, broadcast.detail)
 	case AgentObservationRuntimeWorking:
 		// Runtime text advances Raft's current model-response state, but the
 		// final reply belongs to Chat and does not create a generic Timeline row.
-		projection.activityKind, projection.detailKind = protocol.ActivityKindWorking, "model_response_started"
+		broadcast.activityKind, broadcast.detailKind, broadcast.detail = protocol.ActivityKindWorking, "model_response_started", "Working"
 	case AgentObservationRuntimeThinking:
-		projection.activityKind, projection.detailKind = protocol.ActivityKindThinking, "thinking_started"
-		entry, err = activityStatusEntry(projection.detailKind, "Thinking")
+		broadcast.activityKind, broadcast.detailKind, broadcast.detail = protocol.ActivityKindThinking, "thinking_started", "Thinking"
+		entry, err = activityStatusEntry(broadcast.detailKind, broadcast.detail)
 	case AgentObservationRuntimeTool:
 		data := observation.Data.(AgentRuntimeStageObservationData)
-		projection.activityKind = protocol.ActivityKindWorking
+		broadcast.activityKind = protocol.ActivityKindWorking
 		var summary string
-		projection.detailKind, summary = toolActivityFact(data.ToolName, data.ToolInput)
+		broadcast.detailKind, summary = toolActivityFact(data.ToolName, data.ToolInput)
 		toolName := data.ToolName
 		toolInput := summary
 		if semantic, summary, ok := resolveMulticaCLIInvocation(data.ToolName, data.ToolInput); ok {
@@ -193,68 +205,70 @@ func projectAgentObservation(observation AgentObservation) (agentActivityProject
 		} else if semantic, ok := canonicalToolSemantic(data.ToolName); ok {
 			toolName = semantic
 		}
+		broadcast.detail = summary
 		entry, err = activityToolStartEntry(toolName, toolInput)
 	case AgentObservationRuntimeCompacting:
-		projection.activityKind, projection.detailKind = protocol.ActivityKindWorking, "compacting_context"
-		entry, err = activityStatusEntry(projection.detailKind, "Compacting context")
+		broadcast.activityKind, broadcast.detailKind, broadcast.detail = protocol.ActivityKindWorking, "compacting_context", "Compacting context"
+		entry, err = activityStatusEntry(broadcast.detailKind, broadcast.detail)
 	case AgentObservationRuntimeCompacted:
-		projection.activityKind, projection.detailKind = protocol.ActivityKindWorking, "compaction_finished"
-		entry, err = activityStatusEntry(projection.detailKind, "Context compaction finished")
+		broadcast.activityKind, broadcast.detailKind, broadcast.detail = protocol.ActivityKindWorking, "compaction_finished", "Context compaction finished"
+		entry, err = activityStatusEntry(broadcast.detailKind, broadcast.detail)
 	case AgentObservationRuntimeCompactionStale:
-		projection.activityKind, projection.detailKind = protocol.ActivityKindWorking, "compaction_stale"
-		entry, err = activityStatusEntry(projection.detailKind, "Context compaction still running; no finish event observed")
+		broadcast.activityKind, broadcast.detailKind, broadcast.detail = protocol.ActivityKindWorking, "compaction_stale", "Context compaction still running; no finish event observed"
+		entry, err = activityStatusEntry(broadcast.detailKind, broadcast.detail)
 	case AgentObservationRuntimeStalled:
 		data := observation.Data.(AgentRuntimeStageObservationData)
-		projection.activityKind, projection.detailKind = protocol.ActivityKindError, "runtime_stalled"
+		broadcast.activityKind, broadcast.detailKind = protocol.ActivityKindError, "runtime_stalled"
 		staleMinutes := int(data.StaleFor / time.Minute)
 		if staleMinutes < 1 {
 			staleMinutes = 1
 		}
-		entry, err = activityStatusEntry(projection.detailKind, fmt.Sprintf("Runtime stalled: no runtime events for %dm", staleMinutes))
+		broadcast.detail = fmt.Sprintf("Runtime stalled: no runtime events for %dm", staleMinutes)
+		entry, err = activityStatusEntry(broadcast.detailKind, broadcast.detail)
 	case AgentObservationRuntimeIdle:
-		projection.activityKind, projection.detailKind = protocol.ActivityKindOnline, "idle"
-		entry, err = activityStatusEntry(projection.detailKind, "Idle")
+		broadcast.activityKind, broadcast.detailKind, broadcast.detail = protocol.ActivityKindOnline, "idle", "Idle"
+		entry, err = activityStatusEntry(broadcast.detailKind, broadcast.detail)
 	case AgentObservationRuntimeDiagnostic:
-		projection.activityKind, projection.detailKind, projection.preserveCurrent = protocol.ActivityKindOnline, "idle", true
+		broadcast.detailKind = "idle"
 		entry, err = activitySystemEntry("Runtime warning", "Provider reported a warning")
 	case AgentObservationMessageBodyAccepted:
 		// Raft 1.0.16 shows "Message received" when an ordinary inbox
 		// body is accepted. Keep the presentation detail the UI already
 		// maps; do not wait for native write completion.
-		projection.activityKind, projection.detailKind = protocol.ActivityKindWorking, "message_received"
-		entry, err = activityStatusEntry(projection.detailKind, "Message received")
+		broadcast.activityKind, broadcast.detailKind, broadcast.detail = protocol.ActivityKindWorking, "message_received", "Message received"
+		entry, err = activityStatusEntry(broadcast.detailKind, broadcast.detail)
 	case AgentObservationFreshnessHeld:
 		data := observation.Data.(AgentFreshnessHoldObservationData)
-		projection.activityKind, projection.detailKind, projection.preserveCurrent = protocol.ActivityKindOnline, "idle", true
+		broadcast.detailKind = "idle"
 		entry, err = activitySystemEntry(messageSendHoldTitle(), messageSendHoldSubtext(int64(data.NewMessageCount)))
 	case AgentObservationDraftSent:
 		data := observation.Data.(AgentDraftSentObservationData)
-		projection.activityKind, projection.detailKind, projection.preserveCurrent = protocol.ActivityKindOnline, "idle", true
+		broadcast.detailKind = "idle"
 		entry, err = activitySystemEntry(messageSendDraftSentTitle(), messageSendDraftSentSubtext(data.Target, data.Anyway))
 	case AgentObservationError:
 		data := observation.Data.(AgentErrorObservationData)
-		projection.activityKind, projection.detailKind, projection.processInstanceID = protocol.ActivityKindError, "runtime_error", data.ProcessInstanceID
-		entry, err = activityStatusEntry(projection.detailKind, strings.TrimSpace(data.Message))
+		broadcast.activityKind, broadcast.detailKind, broadcast.detail = protocol.ActivityKindError, "runtime_error", strings.TrimSpace(data.Message)
+		entry, err = activityStatusEntry(broadcast.detailKind, broadcast.detail)
 	case AgentObservationOffline:
 		data := observation.Data.(AgentErrorObservationData)
-		projection.activityKind = protocol.ActivityKindOffline
+		broadcast.activityKind = protocol.ActivityKindOffline
 		if data.ReasonCode == "stopped" {
-			projection.detailKind = "stopped"
-			entry, err = activityStatusEntry(projection.detailKind, "Agent stopped by user")
+			broadcast.detailKind, broadcast.detail = "stopped", "Agent stopped by user"
+			entry, err = activityStatusEntry(broadcast.detailKind, broadcast.detail)
 		} else {
-			projection.detailKind = "runtime_unavailable"
-			entry, err = activityStatusEntry(projection.detailKind, "Offline")
+			broadcast.detailKind, broadcast.detail = "runtime_unavailable", "Offline"
+			entry, err = activityStatusEntry(broadcast.detailKind, broadcast.detail)
 		}
 	default:
-		return agentActivityProjection{}, fmt.Errorf("unknown Agent Observation kind %q", observation.Kind)
+		return activityBroadcast{}, fmt.Errorf("unknown Agent Observation kind %q", observation.Kind)
 	}
 	if err != nil {
-		return agentActivityProjection{}, err
+		return activityBroadcast{}, err
 	}
 	if entry.Kind != "" {
-		projection.entries = []protocol.AgentActivityEntry{entry}
+		broadcast.trajectory = []protocol.AgentActivityEntry{entry}
 	}
-	return projection, nil
+	return broadcast, nil
 }
 
 // messageSendHoldTitle and messageSendHoldSubtext are Activity presentation,

@@ -19,6 +19,8 @@ type DaemonAgentRuntimeConfigResponse struct {
 	RuntimeID        string                  `json:"runtime_id"`
 	WorkspaceContext string                  `json:"workspace_context,omitempty"`
 	Agent            *DaemonAgentRuntimeData `json:"agent"`
+	// RuntimeEnv is the machine-default env injected before agent custom_env.
+	RuntimeEnv map[string]string `json:"runtime_env,omitempty"`
 }
 
 // DaemonAgentRuntimeData is the stable Agent configuration exposed to a
@@ -81,12 +83,20 @@ func (h *Handler) DaemonGetAgentRuntimeConfig(w http.ResponseWriter, r *http.Req
 			return
 		}
 	}
+	var runtimeEnv map[string]string
+	if len(runtime.CustomEnv) > 0 {
+		if err := json.Unmarshal(runtime.CustomEnv, &runtimeEnv); err != nil {
+			writeError(w, http.StatusInternalServerError, "invalid runtime custom_env")
+			return
+		}
+	}
 
 	skills := h.TaskService.LoadAgentSkills(r.Context(), agent.ID)
 	skills = append(skills, h.builtinSkillsForAgent(r.Context(), agent)...)
 	response := DaemonAgentRuntimeConfigResponse{
 		WorkspaceID: util.UUIDToString(runtime.WorkspaceID),
 		RuntimeID:   util.UUIDToString(runtime.ID),
+		RuntimeEnv:  runtimeEnv,
 		Agent: &DaemonAgentRuntimeData{
 			ID:              util.UUIDToString(agent.ID),
 			Name:            agentDisplayName(agent),

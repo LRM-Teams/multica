@@ -174,7 +174,7 @@ RETURNING *;
 INSERT INTO shared_evolution_unit_version (
   workspace_id, unit_id, version, title, content, metadata, applies, source_submission_ids, change_reason
 ) VALUES (
-  @workspace_id, @unit_id, @version, @title, @content, @metadata, @applies, ARRAY[@submission_id]::uuid[], @change_reason
+  @workspace_id, @unit_id, @version, @title, @content, @metadata, @applies, @submission_id::uuid[], @change_reason
 )
 RETURNING *;
 

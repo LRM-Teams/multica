@@ -38,22 +38,19 @@ func TestDaemonRegistrationCapabilities_GatesCredentialTransport(t *testing.T) {
 	if !containsString(legacy, protocol.DaemonCapabilityMemoryCrossDeviceSync) {
 		t.Fatalf("legacy capabilities missing cross-device memory sync support: %#v", legacy)
 	}
-	if !containsString(legacy, protocol.DaemonCapabilityReminderTransientInput) {
-		t.Fatalf("registration missing %q: %#v", protocol.DaemonCapabilityReminderTransientInput, legacy)
-	}
-	if !containsString(legacy, protocol.DaemonCapabilityReminderLocalInbox) {
-		t.Fatalf("registration missing %q: %#v", protocol.DaemonCapabilityReminderLocalInbox, legacy)
+	if !containsString(legacy, protocol.DaemonCapabilityReminderFireRequest) {
+		t.Fatalf("registration missing %q: %#v", protocol.DaemonCapabilityReminderFireRequest, legacy)
 	}
 
 	capable := daemonRegistrationCapabilities(true)
 	if !containsString(capable, protocol.DaemonCapabilityAgentCredentialTransport) {
 		t.Fatalf("capable registration missing %q: %#v", protocol.DaemonCapabilityAgentCredentialTransport, capable)
 	}
-	if !containsString(legacy, protocol.DaemonCapabilityWorkspaceRunnerAgentProcess) || !containsString(capable, protocol.DaemonCapabilityWorkspaceRunnerAgentProcess) {
-		t.Fatalf("registration missing %q: legacy=%#v capable=%#v", protocol.DaemonCapabilityWorkspaceRunnerAgentProcess, legacy, capable)
+	if !containsString(legacy, protocol.DaemonCapabilityWorkspaceDaemonAgentProcess) || !containsString(capable, protocol.DaemonCapabilityWorkspaceDaemonAgentProcess) {
+		t.Fatalf("registration missing %q: legacy=%#v capable=%#v", protocol.DaemonCapabilityWorkspaceDaemonAgentProcess, legacy, capable)
 	}
-	if !containsString(legacy, protocol.DaemonCapabilityWorkspaceRunnerAgentReset) || !containsString(capable, protocol.DaemonCapabilityWorkspaceRunnerAgentReset) {
-		t.Fatalf("registration missing %q: legacy=%#v capable=%#v", protocol.DaemonCapabilityWorkspaceRunnerAgentReset, legacy, capable)
+	if !containsString(legacy, protocol.DaemonCapabilityWorkspaceDaemonAgentReset) || !containsString(capable, protocol.DaemonCapabilityWorkspaceDaemonAgentReset) {
+		t.Fatalf("registration missing %q: legacy=%#v capable=%#v", protocol.DaemonCapabilityWorkspaceDaemonAgentReset, legacy, capable)
 	}
 }
 
@@ -2002,6 +1999,24 @@ func TestGateResumeToReusedWorkdir(t *testing.T) {
 	}
 }
 
+func TestApplyForceFreshSessionDropsPrior(t *testing.T) {
+	t.Parallel()
+	task := Task{PriorSessionID: "poisoned-pi", ForceFreshSession: true}
+	applyForceFreshSession(&task, slog.Default())
+	if task.PriorSessionID != "" {
+		t.Fatalf("PriorSessionID = %q, want empty", task.PriorSessionID)
+	}
+}
+
+func TestApplyForceFreshSessionNoopWhenUnset(t *testing.T) {
+	t.Parallel()
+	task := Task{PriorSessionID: "keep-me"}
+	applyForceFreshSession(&task, slog.Default())
+	if task.PriorSessionID != "keep-me" {
+		t.Fatalf("PriorSessionID = %q, want keep-me", task.PriorSessionID)
+	}
+}
+
 func TestExecuteAndDrain_ResumeFailureFallback(t *testing.T) {
 	t.Parallel()
 
@@ -2230,18 +2245,17 @@ func TestExecuteAndDrainDoesNotPublishResidentActivity(t *testing.T) {
 		activities = append(activities, payload)
 	})
 	d := New(Config{}, nil)
-	d.runnerInstanceID = "daemon-1"
-	runner := installTestRunnerActivity(t, d, "workspace-1", producer)
+	d.instanceID = "daemon-1"
+	runner := installTestAgentActivityProducer(t, d, "workspace-1", producer)
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
-	ack, err := runner.processes.Start(agentProcessStartRequest{
-		AgentID: "agent-a", RuntimeID: "runtime-1", LaunchID: "launch-a", StartDispatchID: "launch-a-dispatch",
-	})
+	_, err := runner.processes.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := producer.SetManaged(
-		protocol.AgentStatusPayload{AgentID: "agent-a", LaunchID: ack.LaunchID, Status: protocol.AgentStatusActive},
-		protocol.AgentSessionPayload{AgentID: "agent-a", LaunchID: ack.LaunchID},
+		"instance-a",
+		protocol.AgentStatusPayload{AgentID: "agent-a", Status: protocol.AgentStatusActive},
+		protocol.AgentSessionPayload{AgentID: "agent-a"},
 	); err != nil {
 		t.Fatal(err)
 	}

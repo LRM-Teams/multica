@@ -19,10 +19,19 @@ func TestAgentProxyCLITransportPinsAuthenticatedLaunchContext(t *testing.T) {
 	transport, err := d.prepareAgentProxyCLITransport(
 		key,
 		"runtime-1",
+		"launch-1",
 		filepath.Join(root, "bin", "multica"),
 	)
 	if err != nil {
 		t.Fatalf("prepare Agent Proxy CLI transport: %v", err)
+	}
+	wantRoot := filepath.Join(workspaceStateRoot(root, "workspace-1"), "cli-transport", "agent-1", "launch-1")
+	if transport.root != wantRoot {
+		t.Fatalf("Agent Proxy wrapper root = %q, want %q", transport.root, wantRoot)
+	}
+	wantTokenFile := filepath.Join(workspaceStateRoot(root, "workspace-1"), "agent-proxy-tokens", "agent-1", "launch-1.token")
+	if transport.tokenFile != wantTokenFile {
+		t.Fatalf("Agent Proxy token file = %q, want %q", transport.tokenFile, wantTokenFile)
 	}
 
 	if info, err := os.Stat(filepath.Dir(transport.tokenFile)); err != nil {
@@ -74,14 +83,55 @@ func TestAgentProxyCLITransportPinsAuthenticatedLaunchContext(t *testing.T) {
 	if err := transport.Close(); err != nil {
 		t.Fatalf("close Agent Proxy CLI transport: %v", err)
 	}
-	if _, err := os.Stat(filepath.Dir(transport.tokenFile)); !os.IsNotExist(err) {
-		t.Fatalf("Agent Proxy credential directory survived cleanup: %v", err)
+	if _, err := os.Stat(transport.tokenFile); !os.IsNotExist(err) {
+		t.Fatalf("Agent Proxy token file survived cleanup: %v", err)
 	}
 	if _, err := d.authenticateAgentProxyToken(strings.TrimSpace(string(token))); err == nil {
 		t.Fatal("revoked Agent Proxy token still authenticates")
 	}
 	if err := transport.Close(); err != nil {
 		t.Fatalf("idempotent Agent Proxy CLI transport close: %v", err)
+	}
+}
+
+func TestAgentProxyCLITransportRejectsDuplicateLaunchWithoutReplacingToken(t *testing.T) {
+	root := t.TempDir()
+	d := New(Config{WorkspacesRoot: root, HealthPort: 19514}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	key := InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}
+	bin := filepath.Join(root, "bin", "multica")
+	first, err := d.prepareAgentProxyCLITransport(key, "runtime-1", "launch-1", bin)
+	if err != nil {
+		t.Fatalf("prepare first transport: %v", err)
+	}
+	defer func() { _ = first.Close() }()
+	firstToken, err := os.ReadFile(first.tokenFile)
+	if err != nil {
+		t.Fatalf("read first token: %v", err)
+	}
+	if _, err := d.prepareAgentProxyCLITransport(key, "runtime-1", "launch-1", bin); err == nil {
+		t.Fatal("duplicate launch should be rejected")
+	}
+	after, err := os.ReadFile(first.tokenFile)
+	if err != nil {
+		t.Fatalf("read token after duplicate: %v", err)
+	}
+	if string(after) != string(firstToken) {
+		t.Fatal("duplicate launch replaced the original token")
+	}
+}
+
+func TestAgentProxyCLITransportRejectsPathTraversal(t *testing.T) {
+	d := New(Config{WorkspacesRoot: t.TempDir(), HealthPort: 19514}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	for _, key := range []InboxKey{
+		{WorkspaceID: "../workspace", AgentID: "agent-1"},
+		{WorkspaceID: "workspace-1", AgentID: "../agent"},
+	} {
+		if _, err := d.prepareAgentProxyCLITransport(key, "runtime-1", "launch-1", "/tmp/multica"); err == nil {
+			t.Fatalf("path traversal key %#v was accepted", key)
+		}
+	}
+	if _, err := d.prepareAgentProxyCLITransport(InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", "../launch", "/tmp/multica"); err == nil {
+		t.Fatal("launch path traversal was accepted")
 	}
 }
 
@@ -98,6 +148,7 @@ func TestAgentProxyCLIWrapperPreservesExistingTaskCredentialTransport(t *testing
 	transport, err := d.prepareAgentProxyCLITransport(
 		InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"},
 		"runtime-1",
+		"launch-1",
 		realBinary,
 	)
 	if err != nil {

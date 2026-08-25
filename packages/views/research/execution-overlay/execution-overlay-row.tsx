@@ -7,7 +7,9 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { cn } from "@multica/ui/lib/utils";
+import { ActorAvatar } from "../../common/actor-avatar";
 import {
   EXECUTION_STATUS_ACTION_KEY,
   EXECUTION_STATUS_PRESENTATION,
@@ -164,16 +166,16 @@ export function ExecutionOverlayRow({
         onClick={activate}
         onKeyDown={navigateRowList}
       >
-        {agent.avatarUrl ? (
-          <img src={agent.avatarUrl} alt="" className="size-8 shrink-0 rounded-lg object-cover" />
-        ) : (
-          <span
-            aria-hidden="true"
-            className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-[11px] font-semibold text-foreground"
-          >
-            {agent.initials}
-          </span>
-        )}
+        {/* One site-wide actor face. `name` overrides the directory so fixture
+            and demo rows still render a real identity. */}
+        <ActorAvatar
+          actorType="agent"
+          actorId={agent.id}
+          name={agent.name}
+          avatarUrlHint={agent.avatarUrl}
+          size={32}
+          profileLink={false}
+        />
         <span className="min-w-0">
           <span className="flex min-w-0 items-baseline gap-1.5">
             <span className={cn("truncate text-xs font-semibold", presentation.textClass)}>
@@ -181,16 +183,22 @@ export function ExecutionOverlayRow({
             </span>
             <span className="truncate text-[11px] text-muted-foreground">{agent.role}</span>
           </span>
-          <span className="mt-0.5 block truncate text-xs leading-5 text-foreground" title={actionText}>
-            {actionText}
-          </span>
+          <Tooltip>
+            <TooltipTrigger render={<span className="mt-0.5 block truncate text-xs leading-5 text-foreground" />}>
+              {actionText}
+            </TooltipTrigger>
+            <TooltipContent side="top">{actionText}</TooltipContent>
+          </Tooltip>
           {/* Task row: current task objective (contract §1) when known. */}
           {agent.taskObjective ? (
             <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
               <span className="shrink-0">{copy.taskObjectiveLabel}:</span>
-              <span className="truncate" title={agent.taskObjective}>
-                {agent.taskObjective}
-              </span>
+              <Tooltip>
+                <TooltipTrigger render={<span className="truncate" />}>
+                  {agent.taskObjective}
+                </TooltipTrigger>
+                <TooltipContent side="top">{agent.taskObjective}</TooltipContent>
+              </Tooltip>
             </span>
           ) : null}
           {/* Time line: start · duration · last update (tabular-nums). */}
@@ -224,9 +232,12 @@ export function ExecutionOverlayRow({
           {agent.recentResult ? (
             <span className="mt-1 flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground">
               <span className="size-1 shrink-0 rounded-full bg-success" aria-hidden="true" />
-              <span className="truncate" title={copy.recentResult}>
-                {copy.recentResult}: {agent.recentResult.title}
-              </span>
+              <Tooltip>
+                <TooltipTrigger render={<span className="truncate" />}>
+                  {copy.recentResult}: {agent.recentResult.title}
+                </TooltipTrigger>
+                <TooltipContent side="top">{copy.recentResult}</TooltipContent>
+              </Tooltip>
             </span>
           ) : null}
         </span>

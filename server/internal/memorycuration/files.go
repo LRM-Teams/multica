@@ -58,16 +58,6 @@ func NormalizeStage(raw string) (Stage, error) {
 func ensureMemoryRoot(root string) error {
 	return os.MkdirAll(root, 0o755)
 }
-
-func ensureFile(path, content string) error {
-	if _, err := os.Stat(path); err == nil {
-		return nil
-	} else if !os.IsNotExist(err) {
-		return err
-	}
-	return os.WriteFile(path, []byte(content), 0o644)
-}
-
 func discoverAgentRoots(workspacesRoot, workspaceID string, agentIDs []string, allAgents bool) ([]agentRoot, error) {
 	workspacesRoot = strings.TrimSpace(workspacesRoot)
 	if workspacesRoot == "" {

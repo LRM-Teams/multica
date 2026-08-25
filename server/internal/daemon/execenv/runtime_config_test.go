@@ -71,11 +71,12 @@ func TestAssignmentBriefIncludesWorkDecompositionGate(t *testing.T) {
 		"DIRECT",
 		"ISSUE_DAG",
 		"GOAL_GRAPH",
-		"one bounded context",
 		"multica issue decompose",
-		"A greeting, one tool call",
-		"must not also implement work already delegated",
-		"The server is authoritative",
+		"research, data collection, implementation, testing, or review",
+		"needs no extra confirmation",
+		"Task length alone is not a split reason",
+		"does not duplicate delegated work",
+		"The server owns readiness",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("assignment brief missing decomposition contract %q\n--- output ---\n%s", want, out)
@@ -1193,6 +1194,9 @@ func TestAgentWorkspaceHoldsCodeCheckouts(t *testing.T) {
 		"Do not check out repositories outside this workspace",
 		"Project id: `project-1`",
 		"multica workspace info --projects --output json",
+		"use an existing project directory or worktree inside this workspace",
+		"if the bound `github_repo` has no checkout yet, clone it yourself into this workspace",
+		"Multica does not clone repositories or provision checkouts",
 		"this runtime file is not updated when project resources change",
 	} {
 		if !strings.Contains(out, want) {
@@ -1219,7 +1223,7 @@ func TestMemoryOperatingGuidePrioritizesExplicitUserPreferences(t *testing.T) {
 	out := buildMetaSkillContent("codex", ctx)
 
 	for _, want := range []string{
-		"### Memory Operating Guide (v0.12)",
+		"### Memory Operating Guide (v0.13)",
 		"All memory and skills move with this agent workspace",
 		"do not depend on separate memory, project, channel, user, device, or skill directory environment variables",
 		"likely to matter in a future run",
@@ -1238,6 +1242,10 @@ func TestMemoryOperatingGuidePrioritizesExplicitUserPreferences(t *testing.T) {
 		"notes/relationship-map.md",
 		"Scope and privacy",
 		"source is provenance, not scope",
+		"On-demand recall",
+		"multica memory search",
+		"multica memory get",
+		"attested scope only",
 		"Claiming memory",
 		"Human and peer-agent durable instructions use the same bar",
 		"Workspace product notes",
@@ -1302,7 +1310,7 @@ func TestMemoryOperatingGuideRequiresAgentLocalScope(t *testing.T) {
 		MessageDelivery: true,
 		AgentRoot:       "/tmp/multica/workspace-1/agents/agent-1",
 	})
-	if !strings.Contains(withRoot, "### Memory Operating Guide (v0.12)") {
+	if !strings.Contains(withRoot, "### Memory Operating Guide (v0.13)") {
 		t.Fatalf("memory operating guide missing when an agent-local root exists:\n%s", withRoot)
 	}
 

@@ -119,7 +119,7 @@ func (r actorIdentityResolver) resolve(actorType, actorID string) ActorIdentity 
 			identity.Status = "deleted"
 		}
 		identity.DisplayName = nonEmptyAgentDisplayName(agent)
-		identity.AvatarURL = textToPtr(agent.AvatarUrl)
+		identity.AvatarURL = &agent.AvatarUrl
 		identity.Handle = optionalHandle(agent.Name)
 		return identity
 	case "member":

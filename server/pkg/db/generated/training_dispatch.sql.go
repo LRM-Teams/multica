@@ -22,7 +22,7 @@ SELECT
   $3, $1
 FROM agent a
 WHERE a.id = $4
-RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id
+RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn, issue_run_kind, issue_execution_revision, issue_execution_attempt_number
 `
 
 type CreateCriticTaskParams struct {
@@ -94,6 +94,11 @@ func (q *Queries) CreateCriticTask(ctx context.Context, arg CreateCriticTaskPara
 		&i.IsLeaderTask,
 		&i.WaitReason,
 		&i.InitiatorUserID,
+		&i.AgentDmExchangeID,
+		&i.AgentDmTurn,
+		&i.IssueRunKind,
+		&i.IssueExecutionRevision,
+		&i.IssueExecutionAttemptNumber,
 	)
 	return i, err
 }
@@ -134,7 +139,7 @@ func (q *Queries) CreateTrainingDispatch(ctx context.Context, arg CreateTraining
 }
 
 const findCriticTaskForTrained = `-- name: FindCriticTaskForTrained :one
-SELECT id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id FROM agent_inbox_event
+SELECT id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, agent_dm_exchange_id, agent_dm_turn, issue_run_kind, issue_execution_revision, issue_execution_attempt_number FROM agent_inbox_event
 WHERE context->'critic_of'->>'trained_task_id' = $1::text
 LIMIT 1
 `
@@ -196,6 +201,11 @@ func (q *Queries) FindCriticTaskForTrained(ctx context.Context, dollar_1 string)
 		&i.IsLeaderTask,
 		&i.WaitReason,
 		&i.InitiatorUserID,
+		&i.AgentDmExchangeID,
+		&i.AgentDmTurn,
+		&i.IssueRunKind,
+		&i.IssueExecutionRevision,
+		&i.IssueExecutionAttemptNumber,
 	)
 	return i, err
 }

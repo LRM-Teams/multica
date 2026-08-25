@@ -188,11 +188,11 @@ export class TestApiClient {
       const runtime = await client.query(
         `INSERT INTO agent_runtime (
            workspace_id, daemon_id, name, runtime_mode, provider, status,
-           device_info, metadata, last_seen_at, owner_id, visibility
+           device_info, metadata, last_seen_at, visibility
          ) VALUES ($1, NULL, $2, 'cloud', 'e2e_workspace_setup', 'online',
-                   'E2E workspace setup runtime', '{}'::jsonb, now(), $3, 'private')
+                   'E2E workspace setup runtime', '{}'::jsonb, now(), 'private')
          RETURNING id`,
-        [workspace.id, `E2E Workspace Setup ${workspace.id}`, this.userId],
+        [workspace.id, `E2E Workspace Setup ${workspace.id}`],
       );
       runtimeId = runtime.rows[0].id as string;
     } finally {

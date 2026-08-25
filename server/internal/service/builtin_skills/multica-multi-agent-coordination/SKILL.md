@@ -105,7 +105,10 @@ The command has no target, cursor, or limit option. It immediately drains at
 most three Pending Messages into the current Agent turn and advances context
 coverage only for those returned Messages. If the output says more remain, run
 the same command again; otherwise `Message check complete.` is the terminal
-marker. A Notice by itself does not mean the Messages were read.
+marker. A Notice by itself does not mean the Messages were read. Message
+commands use the machine-local Credential Proxy, which refreshes a near-expiry
+Agent credential before forwarding the command; do not restart a runtime or
+read a token to renew it.
 
 ## 4. Execute the selected mode
 

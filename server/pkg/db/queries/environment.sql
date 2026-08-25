@@ -444,3 +444,19 @@ WHERE run.run_id = removed_pending.run_id;
 -- name: DeleteMixedRLRun :execrows
 DELETE FROM env_dispatch_run
 WHERE run_id = sqlc.arg(run_id) AND workspace_id = sqlc.arg(workspace_id);
+-- name: ListReadyEnvDispatchChannelInstances :many
+-- Every sandbox a branch of this channel would inherit. Copying a branch channel
+-- copies each roster member's binding along with the sandbox it was bound to, so
+-- the trigger is not the only agent that continues source state. Only ready
+-- bindings have a sandbox worth capturing.
+--
+-- environment_agent_sandbox carries no workspace of its own; the join is what
+-- keeps a caller from reading another workspace's bindings by channel id.
+SELECT binding.sandbox_instance_id::text AS instance_id
+FROM environment_agent_sandbox binding
+JOIN channel ON channel.id = binding.channel_id
+WHERE binding.channel_id = @channel_id
+  AND channel.workspace_id = @workspace_id
+  AND binding.status = 'ready'
+  AND binding.sandbox_instance_id IS NOT NULL
+ORDER BY instance_id;

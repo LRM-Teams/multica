@@ -773,8 +773,7 @@ var piBlockedArgs = map[string]blockedArgMode{
 //	--mode json                 emit one JSON event per line on stdout
 //	--session-id <id>           exact provider session ID (created when missing)
 //	--session-dir <cwd>         Agent-local session storage and lookup
-//	--provider <name>           provider, when Model is "provider/id"
-//	--model <id>                model identifier
+//	--model <id>                model identifier, including an optional provider/id prefix
 //	--append-system-prompt <s>  extra system instructions
 //
 // Custom args are passed on argv; the user prompt is returned separately for
@@ -795,13 +794,9 @@ func buildPiArgs(prompt, sessionID string, opts ExecOptions, logger *slog.Logger
 	}
 	args = appendPiSessionArgs(args, sessionID, opts.Cwd)
 	if opts.Model != "" {
-		provider, model := splitPiModel(opts.Model)
-		if provider != "" {
-			args = append(args, "--provider", provider)
-		}
-		if model != "" {
-			args = append(args, "--model", model)
-		}
+		// Pi resolves provider/model IDs itself. Splitting the prefix here
+		// loses it before the request reaches provider-aware gateways.
+		args = append(args, "--model", opts.Model)
 	}
 	if opts.ThinkingLevel != "" {
 		args = append(args, "--thinking", opts.ThinkingLevel)
@@ -968,16 +963,6 @@ func getenvDefault(key, def string) string {
 		return v
 	}
 	return def
-}
-
-// splitPiModel parses a "provider/model" string into its parts. Plain
-// "model" strings pass through as (provider="", model="model").
-func splitPiModel(s string) (provider, model string) {
-	s = strings.TrimSpace(s)
-	if i := strings.Index(s, "/"); i >= 0 {
-		return strings.TrimSpace(s[:i]), strings.TrimSpace(s[i+1:])
-	}
-	return "", s
 }
 
 // ── Session identity ──

@@ -64,12 +64,12 @@ func (a *envDispatchCloneAdapter) CreateDerivedAgent(ctx context.Context, in ser
 	err := a.exec().QueryRow(ctx, `
 INSERT INTO agent (
     workspace_id, name, display_name, description, avatar_url, runtime_mode,
-    runtime_config, runtime_id, max_concurrent_tasks, owner_id,
+    runtime_config, runtime_id, owner_id,
     instructions, custom_env, custom_args, mcp_config, model, thinking_level,
     source_agent_id
 )
 SELECT workspace_id, $3, display_name, description, avatar_url, runtime_mode,
-       runtime_config, $1, max_concurrent_tasks, owner_id,
+       runtime_config, $1, owner_id,
        instructions, custom_env, custom_args, mcp_config,
        COALESCE(NULLIF($6, ''), model), thinking_level,
        $2

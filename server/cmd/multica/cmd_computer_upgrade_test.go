@@ -86,7 +86,9 @@ func TestComputerUpgradeSubprocessLiveOwnerCreatesHumanIntentBeforeLocalExecutio
 		if err != nil {
 			t.Fatalf("multica computer upgrade subprocess %d: %v\n%s", attempt+1, err, output)
 		}
-		if !strings.Contains(string(output), "live Computer owns download, verification, handoff, and convergence") {
+		if !strings.Contains(string(output), "✓ Upgrade request accepted") ||
+			!strings.Contains(string(output), "restart automatically") ||
+			!strings.Contains(string(output), "multica computer status") {
 			t.Fatalf("subprocess output = %q, want live-owner confirmation", output)
 		}
 		if !strings.Contains(string(output), target.want) {
@@ -121,9 +123,10 @@ func TestComputerUpgradeSubprocessAbsentResidentInstallsForNextStart(t *testing.
 	if err != nil {
 		t.Fatalf("offline multica computer upgrade subprocess: %v\n%s", err, output)
 	}
-	if !strings.Contains(string(output), "Installed v1.2.3 for the next Computer start") ||
-		!strings.Contains(string(output), "No running successor was proven") {
-		t.Fatalf("offline output = %q, want precise next-start/no-successor wording", output)
+	if !strings.Contains(string(output), "✓ Computer v1.2.3 installed") ||
+		!strings.Contains(string(output), "Computer state: stopped") ||
+		!strings.Contains(string(output), "multica computer start") {
+		t.Fatalf("offline output = %q, want installed/stopped/next-step wording", output)
 	}
 
 	installed := filepath.Join(home, ".local", "bin", "multica")
@@ -222,7 +225,7 @@ func TestComputerUpgradeSubprocessStaleDeadPIDAllowsOfflineFallback(t *testing.T
 	if err != nil {
 		t.Fatalf("offline fallback with stale PID: %v\n%s", err, output)
 	}
-	if !strings.Contains(string(output), "Installed v1.2.3 for the next Computer start") {
+	if !strings.Contains(string(output), "✓ Computer v1.2.3 installed") {
 		t.Fatalf("stale-PID fallback output = %q", output)
 	}
 }
@@ -339,7 +342,7 @@ func newComputerUpgradeSubprocessControlServer(t *testing.T) (string, *atomic.In
 	registry := computer.NewLocalControlRegistry()
 	if err := registry.Register(computer.LocalControlServiceStatusOperation,
 		func(context.Context, map[string]string, json.RawMessage) (any, error) {
-			return map[string]string{"status": "running", "daemon_id": "daemon-1"}, nil
+			return map[string]string{"status": "running", "daemonId": "daemon-1"}, nil
 		}); err != nil {
 		t.Fatal(err)
 	}
@@ -432,6 +435,9 @@ func TestComputerUpgradeSubprocessHelper(t *testing.T) {
 	}
 	computerUpgradeServiceEndpoint = func(string) string { return controlEndpoint }
 	args := []string{"computer", "upgrade"}
+	if os.Getenv(computerUpgradeSubprocessModeEnv) == "run" {
+		args = append(args, "--no-wait")
+	}
 	if target := strings.TrimSpace(os.Getenv(testComputerUpgradeTargetEnv)); target != "" {
 		args = append(args, "--target-version", target)
 	}

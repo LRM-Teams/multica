@@ -1,5 +1,6 @@
 "use client";
 
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -65,12 +66,16 @@ export function DeleteAgentWorkspaceDialog({
                 : t(($) => $.machine.workspace_delete_confirm_body)}
             </span>
             {target?.displayPath ? (
-              <span
-                className="block rounded-md border bg-muted/40 px-2 py-1.5 font-mono text-[11.5px] text-muted-foreground"
-                title={target.displayPath}
-              >
-                {target.displayPath}
-              </span>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <span className="block rounded-md border bg-muted/40 px-2 py-1.5 font-mono text-[11.5px] text-muted-foreground" />
+                  }
+                >
+                  {target.displayPath}
+                </TooltipTrigger>
+                <TooltipContent side="top">{target.displayPath}</TooltipContent>
+              </Tooltip>
             ) : null}
           </AlertDialogDescription>
         </AlertDialogHeader>

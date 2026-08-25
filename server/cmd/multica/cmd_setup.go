@@ -68,15 +68,15 @@ func init() {
 		command.Flags().String("app-url", "", "Test Web app origin (required with --environment test)")
 		command.Flags().Bool("yes", false, "Confirm an environment switch without prompting")
 	}
-	setupCmd.Flags().String(callbackHostFlag, "", "Host the OAuth callback URL points at (auto-detected when empty). Use this for Windows WSL / reverse-proxy setups.")
+	setupCmd.Flags().String(callbackHostFlag, "", "ComputerCore the OAuth callback URL points at (auto-detected when empty). Use this for Windows WSL / reverse-proxy setups.")
 	setupCmd.Flags().String("workspace", "", "Set the workspace by id or slug (env: MULTICA_WORKSPACE).")
-	setupCloudCmd.Flags().String(callbackHostFlag, "", "Host the OAuth callback URL points at (auto-detected when empty). Use this for Windows WSL / reverse-proxy setups.")
+	setupCloudCmd.Flags().String(callbackHostFlag, "", "ComputerCore the OAuth callback URL points at (auto-detected when empty). Use this for Windows WSL / reverse-proxy setups.")
 	setupCloudCmd.Flags().String("workspace", "", "Set the workspace by id or slug (env: MULTICA_WORKSPACE).")
 	setupSelfHostCmd.Flags().String("server-url", "", "Backend server URL (e.g. https://api.internal.co) (env: MULTICA_SERVER_URL)")
 	setupSelfHostCmd.Flags().String("app-url", "", "Frontend app URL (e.g. https://app.internal.co) (env: MULTICA_APP_URL)")
 	setupSelfHostCmd.Flags().Int("port", 8080, "Backend server port (used when --server-url is not set)")
 	setupSelfHostCmd.Flags().Int("frontend-port", 3000, "Frontend port (used when --app-url is not set)")
-	setupSelfHostCmd.Flags().String(callbackHostFlag, "", "Host the OAuth callback URL points at (auto-detected when empty). Use this for Windows WSL / reverse-proxy setups.")
+	setupSelfHostCmd.Flags().String(callbackHostFlag, "", "ComputerCore the OAuth callback URL points at (auto-detected when empty). Use this for Windows WSL / reverse-proxy setups.")
 	setupSelfHostCmd.Flags().String("workspace", "", "Set the workspace by id or slug (env: MULTICA_WORKSPACE).")
 
 	setupCmd.AddCommand(setupCloudCmd)
@@ -420,9 +420,9 @@ func residentMatchesSetupTarget(health map[string]any, cfg cli.CLIConfig) (bool,
 	if err != nil {
 		return false, err
 	}
-	return normalizeAPIBaseURL(fmt.Sprint(health["server_url"])) == normalizeAPIBaseURL(target.Origin) &&
+	return normalizeAPIBaseURL(fmt.Sprint(health["serverUrl"])) == normalizeAPIBaseURL(target.Origin) &&
 		fmt.Sprint(health["environment"]) == string(target.Environment) &&
-		fmt.Sprint(health["release_channel"]) == string(channel), nil
+		fmt.Sprint(health["releaseChannel"]) == string(channel), nil
 }
 
 func startDaemonAfterSetup(cmd *cobra.Command) error {
@@ -435,7 +435,7 @@ func startDaemonAfterSetup(cmd *cobra.Command) error {
 	// #2487/#2496: the Computer runs as one machine-wide detached resident that
 	// survives terminal close; setup does NOT install an OS supervisor
 	// (LaunchAgent/systemd/Scheduled Task).
-	fmt.Fprintln(os.Stderr, "\nStarting the resident Computer...")
+	fmt.Fprintln(os.Stderr, "\nEnsuring the resident Computer is running...")
 	if err := startResidentAfterSetup(cmd); err != nil {
 		return fmt.Errorf("Setup incomplete (start resident: %w)", err)
 	}
@@ -454,6 +454,17 @@ func establishWorkspaceBinding(cmd *cobra.Command) error {
 	}
 	if cfg.WorkspaceID == "" {
 		return nil // no workspace selected; nothing to bind yet
+	}
+
+	// After a local identity rebuild (e.g. `~/.multica` wiped), the resident
+	// would otherwise mint a fresh computer_id and orphan every agent still
+	// pinned to the old identity's runtimes. Before minting, ask the server
+	// whether this physical machine (OS machine fingerprint) already has an
+	// identity under this user; if so, reuse it (LRM-1570).
+	if err := reclaimComputerIdentityByMachineID(cfg); err != nil {
+		// Reclaim is best-effort: a lookup failure must not block setup. The
+		// server-side convergence heals the orphan case as a backstop.
+		fmt.Fprintf(os.Stderr, "(computer identity reclaim skipped: %v)\n", err)
 	}
 
 	identity, err := (&computer.Lifecycle{}).Identity()
@@ -516,22 +527,90 @@ func establishWorkspaceConnection(cfg cli.CLIConfig, identity, workspaceID, work
 
 var bindingAcceptanceTimeout = 50 * time.Second
 
+// reclaimComputerIdentityByMachineID restores the Computer identity the server
+// already knows for this physical machine instead of letting the resident mint
+// a fresh UUID after a local identity rebuild (LRM-1570). It is best-effort:
+// failures (network, server error, no match) return nil so setup proceeds and
+// the server-side orphan convergence heals the case as a backstop.
+func reclaimComputerIdentityByMachineID(cfg cli.CLIConfig) error {
+	store := computer.NewIdentityStore(computer.RootDir(""))
+	if state := store.Peek(""); state["computer_id"] != nil {
+		return nil // identity intact; nothing to reclaim
+	}
+	machineID := computer.MachineID()
+	if machineID == "" {
+		return nil // no machine fingerprint available on this platform
+	}
+	if cfg.ServerURL == "" || cfg.Token == "" || cfg.WorkspaceID == "" {
+		return nil // no authenticated session to ask
+	}
+	client := cli.NewAPIClient(cfg.ServerURL, cfg.WorkspaceID, cfg.Token)
+	ctx, cancel := cli.APIContext(context.Background())
+	defer cancel()
+	var resp struct {
+		ComputerID string `json:"computer_id"`
+	}
+	if err := client.PostJSON(ctx, "/api/computers/resolve-by-machine-id", map[string]any{
+		"machine_id": machineID,
+	}, &resp); err != nil {
+		return fmt.Errorf("resolve-by-machine-id: %w", err)
+	}
+	if strings.TrimSpace(resp.ComputerID) == "" {
+		return nil // never seen before → mint fresh
+	}
+	if _, err := store.Reclaim(resp.ComputerID); err != nil {
+		return fmt.Errorf("reclaim identity: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "Reclaimed existing Computer identity %s for this machine\n", resp.ComputerID)
+	return nil
+}
+
 func waitForWorkspaceBindingAcceptance(cmd *cobra.Command) error {
 	cfg, err := cli.LoadCLIConfigForProfile("")
 	if err != nil || cfg.WorkspaceID == "" {
 		return fmt.Errorf("Setup incomplete (selected Workspace is missing)")
 	}
+	computerID, err := (&computer.Lifecycle{}).Identity()
+	if err != nil {
+		return fmt.Errorf("Setup incomplete (resolve Computer identity: %w)", err)
+	}
+	client := cli.NewAPIClient(cfg.ServerURL, cfg.WorkspaceID, cfg.Token)
 	deadline := time.Now().Add(bindingAcceptanceTimeout)
 	for time.Now().Before(deadline) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		health := computer.ProbeHealth(ctx, computer.ServiceControlEndpoint(computer.RootDir("")))
 		cancel()
 		if healthProvesSetupAcceptance(health, cfg, cfg.WorkspaceID) {
-			return nil
+			var connections []setupComputerConnection
+			ctx, cancel = context.WithTimeout(context.Background(), 2*time.Second)
+			err := client.GetJSON(ctx, "/api/computers", &connections)
+			cancel()
+			if err == nil && setupAcceptanceProven(health, cfg, cfg.WorkspaceID, connections, computerID) {
+				return nil
+			}
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
 	return fmt.Errorf("Setup incomplete (timed out waiting for the authenticated Computer and selected Workspace connection); existing session, Workspace connections, and Agent data were preserved")
+}
+
+type setupComputerConnection struct {
+	DaemonID  string `json:"daemon_id"`
+	Connected bool   `json:"connected"`
+}
+
+func setupAcceptanceProven(health map[string]any, cfg cli.CLIConfig, workspaceID string, connections []setupComputerConnection, computerID string) bool {
+	return healthProvesSetupAcceptance(health, cfg, workspaceID) &&
+		computerProjectionProvesSetupAcceptance(connections, computerID)
+}
+
+func computerProjectionProvesSetupAcceptance(connections []setupComputerConnection, computerID string) bool {
+	for _, connection := range connections {
+		if connection.DaemonID == computerID && connection.Connected {
+			return true
+		}
+	}
+	return false
 }
 
 func healthProvesSetupAcceptance(health map[string]any, cfg cli.CLIConfig, workspaceID string) bool {
@@ -542,7 +621,7 @@ func healthProvesSetupAcceptance(health map[string]any, cfg cli.CLIConfig, works
 	connected, _ := health["connected"].(bool)
 	return health["status"] == "running" &&
 		connected &&
-		normalizeAPIBaseURL(fmt.Sprint(health["server_url"])) == normalizeAPIBaseURL(target.Origin) &&
+		normalizeAPIBaseURL(fmt.Sprint(health["serverUrl"])) == normalizeAPIBaseURL(target.Origin) &&
 		fmt.Sprint(health["environment"]) == string(target.Environment) &&
 		healthContainsWorkspace(health, workspaceID)
 }
@@ -553,8 +632,8 @@ func healthContainsWorkspace(health map[string]any, workspaceID string) bool {
 		return false
 	}
 	for _, raw := range workspaces {
-		workspace, ok := raw.(map[string]any)
-		if ok && fmt.Sprint(workspace["id"]) == workspaceID {
+		workspace, ok := raw.(string)
+		if ok && workspace == workspaceID {
 			return true
 		}
 	}

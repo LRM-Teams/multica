@@ -1441,6 +1441,7 @@ export function ChannelsPage({
       handle: candidate.handle,
       type: candidate.type === "agent" ? ("agent" as const) : ("member" as const),
       group,
+      description: candidate.description || undefined,
       secondaryLabel: candidate.handle ? `@${candidate.handle}` : undefined,
     });
     const keep = (candidate: { type: string; id: string }) =>
@@ -3914,13 +3915,21 @@ export function ChannelsPage({
   const channelHeaderDescriptionMeta = useMemo(
     () =>
       channelHeaderDescription ? (
-        <p
-          data-testid="channel-header-description"
-          className="truncate text-xs text-muted-foreground"
-          title={channelHeaderDescription}
-        >
-          {channelHeaderDescription}
-        </p>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <p
+                data-testid="channel-header-description"
+                className="truncate text-xs text-muted-foreground"
+              />
+            }
+          >
+            {channelHeaderDescription}
+          </TooltipTrigger>
+          <TooltipContent side="top">
+            {channelHeaderDescription}
+          </TooltipContent>
+        </Tooltip>
       ) : undefined,
     [channelHeaderDescription],
   );
@@ -3975,20 +3984,24 @@ export function ChannelsPage({
               // caret, soft rounded hover/open wash (not primary recolor).
               // LRM-447 — hash moves to left meta slot on desktop; mobile
               // keeps the inline # landmark beside the name.
-              <button
-                type="button"
-                onClick={() => toggleChannelDetails("about")}
-                aria-label={t(($) => $.details.open_aria)}
-                aria-expanded={channelDetailsOpen && !isMobile}
-                title={active.name}
-                className={cn(
-                  "-ml-1.5 flex min-w-0 flex-1 items-center gap-0.5 rounded-md px-1.5 py-0.5 text-left text-foreground transition-colors",
-                  "hover:bg-black/[0.04] dark:hover:bg-white/[0.06]",
-                  channelDetailsOpen &&
-                    !isMobile &&
-                    "bg-black/[0.06] dark:bg-white/[0.08]",
-                )}
-              >
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <button
+                      type="button"
+                      onClick={() => toggleChannelDetails("about")}
+                      aria-label={t(($) => $.details.open_aria)}
+                      aria-expanded={channelDetailsOpen && !isMobile}
+                      className={cn(
+                        "-ml-1.5 flex min-w-0 flex-1 items-center gap-0.5 rounded-md px-1.5 py-0.5 text-left text-foreground transition-colors",
+                        "hover:bg-black/[0.04] dark:hover:bg-white/[0.06]",
+                        channelDetailsOpen &&
+                          !isMobile &&
+                          "bg-black/[0.06] dark:bg-white/[0.08]",
+                      )}
+                    />
+                  }
+                >
                 {isMobile ? <ChannelHashLandmark size="lg" avatarUrl={active.avatar_url} /> : null}
                 <span className="min-w-0 flex-1 truncate font-bold tracking-tight">
                   {active.name}
@@ -4004,7 +4017,9 @@ export function ChannelsPage({
                     aria-hidden="true"
                   />
                 )}
-              </button>
+                </TooltipTrigger>
+                <TooltipContent side="top">{active.name}</TooltipContent>
+              </Tooltip>
             }
             // LRM-1067 — channel description under the name; empty = no row / no placeholder.
             meta={channelHeaderDescriptionMeta}

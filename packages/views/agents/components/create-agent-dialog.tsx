@@ -2,13 +2,14 @@
 
 import { useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { ExecutionConfigFields } from "./execution-config-fields";
+import { RuntimeConfigFields } from "./runtime-config-fields";
 import {
   firstRuntimeMachine,
   firstRuntimeIdOnMachine,
   machineForRuntime,
 } from "./computer-picker-utils";
 import { isRuntimeUsableForUser } from "./runtime-usability";
+import { useBindableRuntimeIds } from "@multica/core/runtimes";
 import { InstructionsEditor } from "./instructions-editor";
 import { SkillMultiSelect } from "./skill-multi-select";
 import { AvatarPicker, type AvatarPickerSelection } from "./avatar-picker";
@@ -71,7 +72,9 @@ export function CreateAgentDialog({
   template,
   draft,
   proposal,
+  prefill,
   defaultMachineId = null,
+  lockComputer = false,
   onClose,
   onCreate,
 }: {
@@ -82,7 +85,7 @@ export function CreateAgentDialog({
   // When provided, the dialog opens in "Duplicate" mode: the visible
   // fields (name / description / runtime / visibility / model) are
   // pre-populated from this agent, and the hidden fields
-  // (instructions / custom_args / custom_env / max_concurrent_tasks)
+  // (instructions / custom_args / custom_env)
   // are forwarded to the create call so the new agent is a true clone.
   // Skills are copied separately by the caller after createAgent
   // succeeds — they're not part of CreateAgentRequest.
@@ -91,10 +94,24 @@ export function CreateAgentDialog({
   draft?: AgentCreationDraft | null;
   /** Canonical agent:create Proposal — prefills proposal fields and binds action_message_id. */
   proposal?: AgentCreationProposal | null;
+  /**
+   * Lightweight prefill when there is no draft/proposal/template (e.g. Notes
+   * Assistant). `lockIdentity` keeps name/description/instructions fixed so
+   * the human only picks Computer + runtime (+ model).
+   */
+  prefill?: {
+    name: string;
+    description?: string;
+    instructions?: string;
+    model?: string;
+    lockIdentity?: boolean;
+  } | null;
   /** Prefer this group as home when opening on「仅本群」(channel context). */
   defaultHomeChannelId?: string | null;
   /** Prefill computer (machine id from buildRuntimeMachines). */
   defaultMachineId?: string | null;
+  /** Hide Computer changes — the caller already chose this machine. */
+  lockComputer?: boolean;
   onClose: () => void;
   // Returns the created Agent so the dialog can run a follow-up
   // setAgentSkills with the IDs the user picked in the form. Pre-skill-
@@ -107,26 +124,35 @@ export function CreateAgentDialog({
   const creationProposal = proposal && !isDuplicate ? proposal : null;
   const isProposal = !!creationProposal;
   const isDraft = !!draft && !isDuplicate && !isProposal;
+  const identityLocked = Boolean(prefill?.lockIdentity) && !isDuplicate && !isProposal && !isDraft;
   const queryClient = useQueryClient();
   const wsId = useWorkspaceId();
+  // Which runtimes may be bound is the server's answer, delivered per Computer.
+  const bindableIds = useBindableRuntimeIds(wsId);
   // Agent creation establishes the permanent name. The initial display
   // name matches it and remains editable later from Profile.
   const [name, setName] = useState(
     template
       ? duplicateName(template.name)
-      : creationProposal?.name ?? draft?.name ?? "",
+      : creationProposal?.name ?? draft?.name ?? prefill?.name ?? "",
   );
   const [description, setDescription] = useState(
-    template?.description ?? creationProposal?.description ?? draft?.description ?? "",
+    template?.description ??
+      creationProposal?.description ??
+      draft?.description ??
+      prefill?.description ??
+      "",
   );
-  const [model, setModel] = useState(template?.model ?? "");
+  const [model, setModel] = useState(template?.model ?? prefill?.model ?? "");
   const [thinkingLevel, setThinkingLevel] = useState(template?.thinking_level ?? "");
-  const [instructions, setInstructions] = useState(template?.instructions ?? draft?.instructions ?? "");
+  const [instructions, setInstructions] = useState(
+    template?.instructions ?? draft?.instructions ?? prefill?.instructions ?? "",
+  );
   // #599: never submit draft.avatar_url as a raw client URL. Preview it when
   // present; create with draft_id lets the server apply it as assigned. User
   // choices go through avatar_selection (picked preset or uploaded file).
-  // Manual/proposal create seeds a random system face so the 15 built-in
-  // presets show immediately; clear re-seeds another random face (and
+  // Manual/proposal create seeds a random system face so a built-in
+  // preset shows immediately; clear re-seeds another random face (and
   // overrides draft_id face application when the preview came from a draft).
   const seededAvatarRef = useRef<{
     preview: string | null;
@@ -188,7 +214,7 @@ export function CreateAgentDialog({
       : undefined;
     if (
       templateRuntime &&
-      isRuntimeUsableForUser(templateRuntime, currentUserId)
+      isRuntimeUsableForUser(templateRuntime, currentUserId, bindableIds)
     ) {
       return machineForRuntime(templateRuntime, initialMachines)?.id ?? "";
     }
@@ -203,7 +229,7 @@ export function CreateAgentDialog({
       : undefined;
     if (
       templateRuntime &&
-      isRuntimeUsableForUser(templateRuntime, currentUserId)
+      isRuntimeUsableForUser(templateRuntime, currentUserId, bindableIds)
     ) {
       return templateRuntime.id;
     }
@@ -297,9 +323,6 @@ export function CreateAgentDialog({
         // dialog's create call still accepts custom_env at create
         // time, but the source values aren't available here.
         if (template.custom_args.length) data.custom_args = template.custom_args;
-        if (template.max_concurrent_tasks) {
-          data.max_concurrent_tasks = template.max_concurrent_tasks;
-        }
       }
       const createdAgent = await onCreate(data);
       // Follow-up: attach selected skills to the newly created agent.
@@ -348,9 +371,16 @@ export function CreateAgentDialog({
               {t(($) => $.create_dialog.description_duplicate, { name: resolveActorDisplayName(template, template.id) })}
             </DialogDescription>
           )}
-          {!isDuplicate && !isDraft && !isProposal && (
+          {!isDuplicate && !isDraft && !isProposal && !identityLocked && (
             <DialogDescription className="mt-1 text-xs">
               {t(($) => $.create_dialog.description_create)}
+            </DialogDescription>
+          )}
+          {identityLocked && (
+            <DialogDescription className="mt-1 text-xs">
+              {lockComputer
+                ? t(($) => $.create_dialog.description_computer_locked)
+                : t(($) => $.create_dialog.description_identity_locked)}
             </DialogDescription>
           )}
           {(isProposal || isDraft) && (
@@ -369,15 +399,25 @@ export function CreateAgentDialog({
                 same shape as detail-page header so the affordance is
                 instantly familiar. */}
             <div className="flex items-start gap-4">
-              <AvatarPicker value={avatarPreviewUrl} onChange={handleAvatarChange} size={64} />
+              <div className={identityLocked ? "pointer-events-none" : undefined}>
+                <AvatarPicker
+                  value={avatarPreviewUrl}
+                  onChange={handleAvatarChange}
+                  size={64}
+                />
+              </div>
               <div className="flex-1 min-w-0 space-y-3">
                 <div>
                   <Label className="text-xs text-muted-foreground">{t(($) => $.create_dialog.name_label)}</Label>
                   <Input
-                    autoFocus
+                    autoFocus={!identityLocked}
                     type="text"
                     value={name}
-                    onChange={(e) => setName(e.target.value)}
+                    readOnly={identityLocked}
+                    onChange={(e) => {
+                      if (identityLocked) return;
+                      setName(e.target.value);
+                    }}
                     placeholder={t(($) => $.create_dialog.name_placeholder)}
                     maxLength={AGENT_NAME_MAX_LENGTH}
                     aria-invalid={nameError ? true : undefined}
@@ -397,7 +437,11 @@ export function CreateAgentDialog({
                   <Input
                     type="text"
                     value={description}
-                    onChange={(e) => setDescription(e.target.value)}
+                    readOnly={identityLocked}
+                    onChange={(e) => {
+                      if (identityLocked) return;
+                      setDescription(e.target.value);
+                    }}
                     placeholder={t(($) => $.create_dialog.description_placeholder)}
                     maxLength={AGENT_DESCRIPTION_MAX_LENGTH}
                     className="mt-1"
@@ -413,7 +457,7 @@ export function CreateAgentDialog({
             </div>
 
 
-            <ExecutionConfigFields
+            <RuntimeConfigFields
               runtimes={runtimes}
               runtimesLoading={runtimesLoading}
               members={members}
@@ -423,6 +467,7 @@ export function CreateAgentDialog({
               machineRuntimes={machineRuntimes}
               runtimeId={effectiveRuntimeId}
               onRuntimeSelect={handleRuntimeSelect}
+              lockComputer={lockComputer}
               model={model}
               onModelChange={(next) => {
                 if (next === model) return;
@@ -436,21 +481,35 @@ export function CreateAgentDialog({
 
             {/* --- Optional sections (instructions / skills) ---
                 Collapsed by default so quick-create stays fast.
-                Duplicate pre-fills everything from the source agent. */}
-            <InstructionsEditor
-              value={instructions}
-              onChange={setInstructions}
-              placeholder={
-                isDuplicate
-                  ? t(($) => $.create_dialog.instructions.placeholder_duplicate)
-                  : t(($) => $.create_dialog.instructions.placeholder_blank)
-              }
-            />
-
-            <SkillMultiSelect
-              selectedIds={selectedSkillIds}
-              onChange={setSelectedSkillIds}
-            />
+                Duplicate pre-fills everything from the source agent.
+                Identity-locked Notes Assistant: show instructions read-only,
+                hide skills (server template owns them). */}
+            {!identityLocked ? (
+              <>
+                <InstructionsEditor
+                  value={instructions}
+                  onChange={setInstructions}
+                  placeholder={
+                    isDuplicate
+                      ? t(($) => $.create_dialog.instructions.placeholder_duplicate)
+                      : t(($) => $.create_dialog.instructions.placeholder_blank)
+                  }
+                />
+                <SkillMultiSelect
+                  selectedIds={selectedSkillIds}
+                  onChange={setSelectedSkillIds}
+                />
+              </>
+            ) : instructions.trim() ? (
+              <div className="rounded-lg border bg-muted/20 px-3 py-2">
+                <p className="text-xs font-medium text-muted-foreground">
+                  {t(($) => $.create_dialog.instructions.label)}
+                </p>
+                <p className="mt-1 max-h-28 overflow-y-auto whitespace-pre-wrap text-xs leading-5 text-muted-foreground">
+                  {instructions}
+                </p>
+              </div>
+            ) : null}
           </div>
         </div>
 

@@ -1,14 +1,15 @@
-import type { Issue } from "./issue";
-
 export interface NotePage {
   id: string;
   workspace_id: string;
   parent_id: string | null;
   owner_user_id: string;
   title: string;
+  icon?: string | null;
   content: string;
   sort_key: string;
   share_user_ids: string[];
+  share_agent_ids?: string[];
+  share_channel_ids?: string[];
   can_manage_shares: boolean;
   created_at: string;
   updated_at: string;
@@ -29,6 +30,7 @@ export interface CreateNotePageRequest {
 export interface UpdateNotePageRequest {
   title?: string;
   content?: string;
+  icon?: string | null;
 }
 
 export interface MoveNotePageRequest {
@@ -42,6 +44,8 @@ export interface DuplicateNotePageRequest {
 
 export interface UpdateNotePageSharesRequest {
   user_ids: string[];
+  agent_ids?: string[];
+  channel_ids?: string[];
 }
 
 export type NoteAIJobStatus = "queued" | "dispatched" | "running" | "completed" | "failed" | "cancelled";
@@ -172,16 +176,6 @@ export interface CreateNotePageChannelRefRequest {
   kind?: "worker" | "coordination";
 }
 
-export interface CreateNotePageIssueRequest {
-  title?: string;
-  description?: string;
-}
-
-export interface CreateNotePageIssueResponse {
-  issue: Issue;
-  ref: NotePageIssueRef;
-}
-
 /** Pending note writeback proposal (S1-W1 / D1). */
 export type NoteWritebackAction = "append" | "patch" | "replace_page";
 export type NoteWritebackStatus = "pending" | "applied" | "rejected";
@@ -222,6 +216,9 @@ export interface CreateNoteWritebackRequest {
 
 /** S4-S1/S4-S3 on-demand day/week/month retrospective. */
 export type NoteRetrospectiveWindow = "day" | "week" | "month";
+
+/** Period Brief window — calendar presets or inclusive custom range. */
+export type NotePeriodBriefWindow = NoteRetrospectiveWindow | "custom";
 export type NoteRetrospectiveSource = "issue_activity" | "touched_notes" | "agent_runs";
 export type NoteRetrospectiveComposition = "day_raw" | "layered_summaries";
 
@@ -255,8 +252,13 @@ export interface CreateNoteRetrospectiveResponse {
 
 /** Period Work Brief synthesis (ADR 0019 / K0). */
 export interface CreateNotePeriodBriefRequest {
-  window: NoteRetrospectiveWindow;
+  window: NotePeriodBriefWindow;
+  /** Anchor date for day|week|month (YYYY-MM-DD in timezone). */
   date?: string;
+  /** Inclusive start calendar day for `window: "custom"` (YYYY-MM-DD). */
+  start_date?: string;
+  /** Inclusive end calendar day for `window: "custom"` (YYYY-MM-DD). */
+  end_date?: string;
   timezone?: string;
   /** Synthesizer Agent (defaults to Period Brief Agent / 周报 in the UI). */
   agent_id: string;
@@ -264,6 +266,12 @@ export interface CreateNotePeriodBriefRequest {
   collector_agent_ids: string[];
   sources?: NoteRetrospectiveSource[];
   channel_id?: string;
+  /** Optional scoped request (paths / topics / aspects). Empty = full-scope default. */
+  focus?: string;
+  /** Note page whose bubble started this run; the finished brief inserts as its child. */
+  context_note_page_id?: string;
+  /** Existing notes-bubble chat session to continue. */
+  chat_session_id?: string;
 }
 
 export interface CreateNotePeriodBriefResponse {
@@ -278,4 +286,36 @@ export interface CreateNotePeriodBriefResponse {
   collector_agent_ids?: string[];
   /** One Note Worker job per collector (pack page + wake). */
   collector_jobs?: NoteWorkerJob[];
+  /** Notes-bubble session that received the user turn and progress. */
+  chat_session_id?: string;
+}
+
+export type NotePeriodBriefRunStatus =
+  | "planning"
+  | "collecting"
+  | "synthesizing"
+  | "awaiting_confirm"
+  | "done";
+
+export interface NotePeriodBriefActiveRun {
+  id: string;
+  status: NotePeriodBriefRunStatus | string;
+  chat_session_id?: string;
+  source_page_id?: string;
+  draft_page_id: string;
+}
+
+export interface NotePeriodBriefActiveResponse {
+  run: NotePeriodBriefActiveRun | null;
+}
+
+export type NotePeriodBriefInsertMode = "append" | "child";
+
+export interface InsertNotePeriodBriefRequest {
+  mode: NotePeriodBriefInsertMode;
+}
+
+export interface InsertNotePeriodBriefResponse {
+  mode: NotePeriodBriefInsertMode;
+  title?: string;
 }

@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -211,17 +212,17 @@ func TestResidentMatchesSetupTargetRequiresEnvironmentOriginAndChannel(t *testin
 		ServerURL:   "https://test.leagent.me", AppURL: "https://test.leagent.me",
 	}
 	matching := map[string]any{
-		"server_url": "https://test.leagent.me", "environment": "test", "release_channel": "alpha",
+		"serverUrl": "https://test.leagent.me", "environment": "test", "releaseChannel": "alpha",
 	}
 	got, err := residentMatchesSetupTarget(matching, cfg)
 	if err != nil || !got {
 		t.Fatalf("matching resident: got=%v err=%v", got, err)
 	}
 	for key, value := range map[string]any{
-		"server_url": "https://other.example", "environment": "production", "release_channel": "latest",
+		"serverUrl": "https://other.example", "environment": "production", "releaseChannel": "latest",
 	} {
 		drifted := map[string]any{
-			"server_url": "https://test.leagent.me", "environment": "test", "release_channel": "alpha",
+			"serverUrl": "https://test.leagent.me", "environment": "test", "releaseChannel": "alpha",
 		}
 		drifted[key] = value
 		if got, err := residentMatchesSetupTarget(drifted, cfg); err != nil || got {
@@ -239,11 +240,9 @@ func TestSetupAcceptanceRequiresAuthenticatedConnectionNotJustLocalWorkspaceStat
 	health := map[string]any{
 		"status":      "running",
 		"connected":   true,
-		"server_url":  "https://test.leagent.me",
+		"serverUrl":   "https://test.leagent.me",
 		"environment": "test",
-		"workspaces": []any{
-			map[string]any{"id": "ws-123", "runtimes": []any{}},
-		},
+		"workspaces":  []any{"ws-123"},
 	}
 	if !healthProvesSetupAcceptance(health, cfg, "ws-123") {
 		t.Fatal("authenticated zero-Agent Workspace connection should complete setup")
@@ -265,6 +264,54 @@ func TestSetupAcceptanceRequiresAuthenticatedConnectionNotJustLocalWorkspaceStat
 	wrongEnvironment["environment"] = "production"
 	if healthProvesSetupAcceptance(wrongEnvironment, cfg, "ws-123") {
 		t.Fatal("a resident from another environment must not complete setup")
+	}
+}
+
+func TestSetupAcceptanceUsesWorkspaceIDListFromLocalControl(t *testing.T) {
+	cfg := cli.CLIConfig{
+		Environment: "test",
+		ServerURL:   "https://test.leagent.me",
+		AppURL:      "https://test.leagent.me",
+	}
+	health := map[string]any{
+		"status":      "running",
+		"connected":   true,
+		"serverUrl":   "https://test.leagent.me",
+		"environment": "test",
+		"workspaces":  []any{"ws-123"},
+	}
+	if !healthProvesSetupAcceptance(health, cfg, "ws-123") {
+		t.Fatal("local control Workspace ID list should complete repeated setup")
+	}
+	health["workspaces"] = []any{map[string]any{"id": "ws-123"}}
+	if healthProvesSetupAcceptance(health, cfg, "ws-123") {
+		t.Fatal("local control object list is not part of the Workspace health contract")
+	}
+}
+
+func TestSetupAcceptanceRequiresConnectedServerProjection(t *testing.T) {
+	cfg := cli.CLIConfig{
+		Environment: "test",
+		ServerURL:   "https://test.leagent.me",
+		AppURL:      "https://test.leagent.me",
+	}
+	health := map[string]any{
+		"status":      "running",
+		"connected":   true,
+		"serverUrl":   "https://test.leagent.me",
+		"environment": "test",
+		"workspaces":  []any{"ws-123"},
+	}
+	connections := []setupComputerConnection{
+		{DaemonID: "computer-1", Connected: false},
+		{DaemonID: "computer-2", Connected: true},
+	}
+	if setupAcceptanceProven(health, cfg, "ws-123", connections, "computer-1") {
+		t.Fatal("a locally ready Computer must not complete setup while its selected Workspace projection is disconnected")
+	}
+	connections[0].Connected = true
+	if !setupAcceptanceProven(health, cfg, "ws-123", connections, "computer-1") {
+		t.Fatal("the selected Computer's authenticated connected projection should complete setup")
 	}
 }
 
@@ -486,6 +533,7 @@ func TestServerHostIsLocal(t *testing.T) {
 // install an OS supervisor service (LaunchAgent / systemd / Scheduled Task).
 func TestStartDaemonAfterSetupStartsDetachedResidentWithoutService(t *testing.T) {
 	var called bool
+	stderr := captureStderr(t)
 	prevEstablish := establishWorkspaceBindingAfterSetup
 	prev := startResidentAfterSetup
 	prevWait := waitForWorkspaceBindingAcceptanceAfterSetup
@@ -503,6 +551,9 @@ func TestStartDaemonAfterSetupStartsDetachedResidentWithoutService(t *testing.T)
 	}
 	if !called {
 		t.Fatal("setup must start the detached resident, not install an OS service")
+	}
+	if got := stderr.read(); !strings.Contains(got, "Ensuring the resident Computer is running...") {
+		t.Fatalf("setup progress = %q, want idempotent ensure wording", got)
 	}
 }
 

@@ -25,6 +25,12 @@ interface SubmitButtonProps {
   tooltip?: ReactNode;
   /** Tooltip shown over the stop button while a run is in progress. */
   stopTooltip?: ReactNode;
+  /**
+   * Freeze the running impulse at its peak instead of animating.
+   * Callers gate this from `prefers-reduced-motion` — the impulse class
+   * lives in base.css and wins over Tailwind `motion-reduce:`.
+   */
+  reducedMotion?: boolean;
 }
 
 function SubmitButton({
@@ -36,10 +42,19 @@ function SubmitButton({
   onStop,
   tooltip,
   stopTooltip,
+  reducedMotion,
 }: SubmitButtonProps) {
   if (running && !allowSubmitWhileRunning) {
+    const stopLabel = typeof stopTooltip === "string" ? stopTooltip : undefined;
     const stopButton = (
-      <Button size="icon-sm" onClick={onStop}>
+      <Button
+        size="icon-sm"
+        onClick={onStop}
+        aria-label={stopLabel}
+        className={
+          reducedMotion ? "text-brand ring-1 ring-brand/40" : "animate-chat-impulse"
+        }
+      >
         <Square className="fill-current" />
       </Button>
     );

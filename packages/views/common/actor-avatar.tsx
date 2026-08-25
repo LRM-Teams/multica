@@ -2,12 +2,13 @@
 
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@multica/ui/lib/utils";
-import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
+import { ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
 import {
   HoverCard,
   HoverCardTrigger,
   HoverCardContent,
 } from "@multica/ui/components/ui/hover-card";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { useActorName } from "@multica/core/workspace/hooks";
 import { isDirectoryActorMiss } from "@multica/core/workspace/resolved-actor-name";
 import { useMemberOnline } from "@multica/core/workspace/use-member-presence";
@@ -16,7 +17,11 @@ import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
 import { useAgentPanelStore } from "@multica/core/agents/stores";
 import { useMemberPanelStore } from "@multica/core/workspace";
 import { ActorProfileContent } from "./actor-profile-popover";
-import { availabilityConfig, toLiveAvailability } from "../agents/presence";
+import {
+  availabilityConfig,
+  toLiveAvailability,
+  type LiveAvailability,
+} from "../agents/presence";
 import { useNavigation } from "../navigation";
 import { useOpenAgentPanel } from "./agent-panel-context";
 import { useOpenMemberPanel } from "./member-panel-context";
@@ -376,9 +381,9 @@ export function AgentPresenceOverlay({
   return (
     <span
       data-slot="agent-presence"
-      // overflow-visible: keep the corner dot + ring-2 paint from being
-      // rectangular-clipped by overflow:hidden ancestors (DM sidebar scroller /
-      // rounded hit targets). LRM-1119.
+      // overflow-visible: keep the corner badge from being rectangular-clipped
+      // by overflow:hidden ancestors (DM sidebar scroller / rounded hit
+      // targets). LRM-1119.
       className={cn("relative inline-flex shrink-0 overflow-visible", className)}
       style={{ width: boxSize, height: boxSize }}
     >
@@ -388,13 +393,10 @@ export function AgentPresenceOverlay({
   );
 }
 
-// Small presence indicator overlaid on the bottom-right of an agent avatar.
-// Must live inside a fixed-size container (see `AgentPresenceOverlay`) so its
-// absolute anchoring lands on the avatar, not a stretched grid cell. The dot
-// diameter is proportional to the avatar size (≈28%, clamped to a legible
-// minimum) so it reads correctly on both dense participant stacks (14–18px)
-// and large avatars. Exported for surfaces that render the base avatar
-// directly (e.g. comment trigger chips) but still want the standard dot.
+// Presence badge overlaid on the bottom-right of an agent avatar. Must live
+// inside a fixed-size container (see `AgentPresenceOverlay`) so its absolute
+// anchoring lands on the avatar, not a stretched grid cell. Exported for
+// surfaces that render the base avatar directly (e.g. comment trigger chips).
 export function AgentStatusDot({
   agentId,
   size,
@@ -426,34 +428,50 @@ function AgentStatusDotVisual({
   if (presence === "loading") return null;
   const live = toLiveAvailability(presence);
   if (!live) return null;
-  const { dotClass, label } = availabilityConfig[live];
-  // Diameter tracks the avatar so the indicator is proportional everywhere,
-  // with a floor so it never disappears on the smallest (14–16px) avatars.
-  const diameter = Math.max(5, Math.round((size ?? 24) * 0.28));
-  const dotStyle = { width: diameter, height: diameter };
-  // §3-v2 ①: an OFFLINE agent's dot is a HOLLOW gray ring (ring-only, no fill)
-  // so "unavailable" reads distinctly from the filled active states. On tiny
-  // participant-stack dots (~5px) a hollow ring is unreadable, so those fall
-  // back to the filled gray. Loading renders no dot at all.
-  const HOLLOW_MIN_PX = 8;
-  const isOfflineHollow = live === "offline" && diameter >= HOLLOW_MIN_PX;
-  const dotColorClass = isOfflineHollow
-    ? "border-2 border-muted-foreground/50 bg-transparent"
-    : dotClass;
+  return <PresenceBadge live={live} size={size} />;
+}
+
+function presenceBadgeMetrics(size = 20): { badge: number; core: number } {
+  if (size <= 20) return { badge: 6, core: 4 };
+  if (size <= 32) return { badge: 8, core: 6 };
+  if (size <= 48) return { badge: 10, core: 8 };
+  return { badge: 12, core: 10 };
+}
+
+/**
+ * Two-layer presence mark shared by agents and members. The surface-colored
+ * badge separates status from the avatar without a heavy halo; the smaller
+ * core alone carries meaning. Discrete tiers keep large profile avatars from
+ * producing oversized indicators while preserving dense-stack legibility.
+ */
+function PresenceBadge({ live, size }: { live: LiveAvailability; size?: number }) {
+  const { label } = availabilityConfig[live];
+  const { badge, core } = presenceBadgeMetrics(size);
+  const coreClass =
+    live === "online"
+      ? "bg-success"
+      : "border border-muted-foreground/50 bg-transparent";
 
   return (
-    // Inset by 2px (ring-2 width) so the fill + cut-out ring stay inside the
-    // presence box — overflow:hidden ancestors can no longer shave the corner
-    // into a residual arc (LRM-1119).
-    <span className="pointer-events-none absolute bottom-0.5 right-0.5 z-[1] inline-flex">
-      {/* `ring-background` is a cut-out ring the color of the surface behind the
-          dot, so it stays legible on dark/light/hover/selected backgrounds. */}
-      <span
-        aria-label={`Status: ${label}`}
-        title={label}
-        style={dotStyle}
-        className={`relative rounded-full ring-2 ring-background ${dotColorClass}`}
-      />
+    <span className="pointer-events-none absolute bottom-0 right-0 z-[1] inline-flex">
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <span
+              aria-label={`Status: ${label}`}
+              style={{ width: badge, height: badge }}
+              className="relative inline-flex items-center justify-center rounded-full bg-background"
+            >
+              <span
+                data-slot="presence-core"
+                style={{ width: core, height: core }}
+                className={`rounded-full ${coreClass}`}
+              />
+            </span>
+          }
+        />
+        <TooltipContent side="top">{label}</TooltipContent>
+      </Tooltip>
     </span>
   );
 }
@@ -490,26 +508,7 @@ export function MemberStatusDot({ userId, size }: { userId: string; size?: numbe
   if (online === "loading") return null;
 
   const live = online ? "online" : "offline";
-  const { dotClass, label } = availabilityConfig[live];
-  const diameter = Math.max(5, Math.round((size ?? 24) * 0.28));
-  const dotStyle = { width: diameter, height: diameter };
-  const HOLLOW_MIN_PX = 8;
-  const isOfflineHollow = !online && diameter >= HOLLOW_MIN_PX;
-  const dotColorClass = isOfflineHollow
-    ? "border-2 border-muted-foreground/50 bg-transparent"
-    : dotClass;
-
-  return (
-    // Same 2px inset as AgentStatusDot — keep fill + ring inside the box (LRM-1119).
-    <span className="pointer-events-none absolute bottom-0.5 right-0.5 z-[1] inline-flex">
-      <span
-        aria-label={`Status: ${label}`}
-        title={label}
-        style={dotStyle}
-        className={`relative rounded-full ring-2 ring-background ${dotColorClass}`}
-      />
-    </span>
-  );
+  return <PresenceBadge live={live} size={size} />;
 }
 
 /**

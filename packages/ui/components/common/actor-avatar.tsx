@@ -6,7 +6,7 @@ import { cn } from "@multica/ui/lib/utils";
 import { avatarGlyph, avatarToneClass } from "@multica/ui/lib/avatar-fallback";
 import { MulticaIcon } from "./multica-icon";
 
-interface ActorAvatarProps {
+interface ActorAvatarBaseProps {
   name: string;
   initials: string;
   avatarUrl?: string | null;
@@ -27,7 +27,7 @@ interface ActorAvatarProps {
   toneSeed?: string;
 }
 
-function ActorAvatar({
+function ActorAvatarBase({
   name,
   initials,
   avatarUrl,
@@ -36,7 +36,7 @@ function ActorAvatar({
   size = 20,
   className,
   toneSeed,
-}: ActorAvatarProps) {
+}: ActorAvatarBaseProps) {
   const [imgError, setImgError] = useState(false);
 
   useEffect(() => {
@@ -88,4 +88,4 @@ function ActorAvatar({
   );
 }
 
-export { ActorAvatar, type ActorAvatarProps };
+export { ActorAvatarBase, type ActorAvatarBaseProps };

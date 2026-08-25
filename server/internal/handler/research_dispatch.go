@@ -62,6 +62,7 @@ func (h *Handler) enqueueResearchAgentWake(
 	initiatorUserID pgtype.UUID,
 	body string,
 	senderType string,
+	requireFleetMember bool,
 ) error {
 	if h.TaskService == nil {
 		return fmt.Errorf("task service unavailable")
@@ -70,12 +71,14 @@ func (h *Handler) enqueueResearchAgentWake(
 		return fmt.Errorf("target agent required")
 	}
 
-	member, err := h.Queries.GetResearchFleetMemberByAgent(ctx, db.GetResearchFleetMemberByAgentParams{
-		WorkspaceID: workspaceID,
-		AgentID:     targetAgentID,
-	})
-	if statusErr := requireActiveResearchFleetMember(member, err); statusErr != nil {
-		return statusErr
+	if requireFleetMember {
+		member, err := h.Queries.GetResearchFleetMemberByAgent(ctx, db.GetResearchFleetMemberByAgentParams{
+			WorkspaceID: workspaceID,
+			AgentID:     targetAgentID,
+		})
+		if statusErr := requireActiveResearchFleetMember(member, err); statusErr != nil {
+			return statusErr
+		}
 	}
 
 	agent, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{

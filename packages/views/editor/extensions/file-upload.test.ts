@@ -10,6 +10,7 @@ import {
   uploadAndInsertFile,
   type MediaMode,
 } from "./file-upload";
+import { createMarkdownPasteExtension } from "./markdown-paste";
 
 function refOf<T>(value: T): RefObject<T> {
   return { current: value };
@@ -204,9 +205,21 @@ function makeFileList(files: File[]): FileList {
   return list;
 }
 
-function pasteFiles(editor: Editor, files: File[]): boolean {
+function pasteClipboard(
+  editor: Editor,
+  options: { files?: File[]; text?: string; html?: string },
+): boolean {
+  const files = options.files ?? [];
   const event = {
-    clipboardData: { files: makeFileList(files) },
+    clipboardData: {
+      files: makeFileList(files),
+      getData: (type: string) =>
+        type === "text/plain"
+          ? (options.text ?? "")
+          : type === "text/html"
+            ? (options.html ?? "")
+            : "",
+    },
     preventDefault: () => {},
   } as unknown as ClipboardEvent;
   return (
@@ -214,6 +227,10 @@ function pasteFiles(editor: Editor, files: File[]): boolean {
       handler(editor.view, event, editor.view.state.selection.content()),
     ) === true
   );
+}
+
+function pasteFiles(editor: Editor, files: File[]): boolean {
+  return pasteClipboard(editor, { files });
 }
 
 function dropFiles(editor: Editor, files: File[]): boolean {
@@ -331,5 +348,103 @@ describe("createFileUploadExtension — mediaMode external", () => {
 
     expect(onExternalFiles).toHaveBeenCalledTimes(1);
     expect(onExternalFiles.mock.calls[0]?.[0]).toHaveLength(1);
+  });
+});
+
+describe("createFileUploadExtension — Office dual-format clipboard", () => {
+  const officeHtml =
+    '<html xmlns:o="urn:schemas-microsoft-com:office:office">' +
+    "<body><p>季度目标</p></body></html>";
+  const bitmap = new File(["png"], "image.png", { type: "image/png" });
+
+  it("does not consume a PowerPoint text copy that also carries a bitmap", () => {
+    const onUploadFile = vi.fn(async () =>
+      makeUpload({ id: "a1", link: FINAL_URL, filename: "image.png" }),
+    );
+    const editor = makeUploadEditor({
+      onUploadFileRef: refOf(onUploadFile as
+        | ((file: File) => Promise<UploadResult | null>)
+        | undefined),
+    });
+
+    const handled = pasteClipboard(editor, {
+      files: [bitmap],
+      text: "季度目标",
+      html: officeHtml,
+    });
+
+    expect(handled).toBe(false);
+    expect(onUploadFile).not.toHaveBeenCalled();
+    expect(firstImageAttrs(editor)).toBeNull();
+  });
+
+  it("still uploads a screenshot when the clipboard has only an image", () => {
+    const onUploadFile = vi.fn(async () =>
+      makeUpload({ id: "a1", link: FINAL_URL, filename: "image.png" }),
+    );
+    const editor = makeUploadEditor({
+      onUploadFileRef: refOf(onUploadFile as
+        | ((file: File) => Promise<UploadResult | null>)
+        | undefined),
+    });
+
+    const handled = pasteClipboard(editor, { files: [bitmap] });
+
+    expect(handled).toBe(true);
+    expect(onUploadFile).toHaveBeenCalledWith(bitmap);
+  });
+
+  it("pastes PowerPoint text into the editor instead of uploading the bitmap", () => {
+    const onUploadFile = vi.fn(async () =>
+      makeUpload({ id: "a1", link: FINAL_URL, filename: "image.png" }),
+    );
+    const element = document.createElement("div");
+    document.body.appendChild(element);
+    const editor = new Editor({
+      element,
+      extensions: [
+        StarterKit,
+        ImageExtension,
+        Markdown.configure({ indentation: { style: "space", size: 3 } }),
+        createMarkdownPasteExtension(),
+        createFileUploadExtension(
+          refOf(onUploadFile as
+            | ((file: File) => Promise<UploadResult | null>)
+            | undefined),
+        ),
+      ],
+    });
+    editors.push(editor);
+
+    const handled = pasteClipboard(editor, {
+      files: [bitmap],
+      text: "季度目标",
+      html: officeHtml,
+    });
+
+    expect(handled).toBe(true);
+    expect(onUploadFile).not.toHaveBeenCalled();
+    expect(editor.getText()).toContain("季度目标");
+    expect(firstImageAttrs(editor)).toBeNull();
+  });
+
+  it("still uploads a Finder file copy whose text/plain is only the path", () => {
+    const file = new File(["png"], "slide.png", { type: "image/png" });
+    const onUploadFile = vi.fn(async () =>
+      makeUpload({ id: "a1", link: FINAL_URL, filename: "slide.png" }),
+    );
+    const editor = makeUploadEditor({
+      onUploadFileRef: refOf(onUploadFile as
+        | ((file: File) => Promise<UploadResult | null>)
+        | undefined),
+    });
+
+    const handled = pasteClipboard(editor, {
+      files: [file],
+      text: "/Users/me/Desktop/slide.png",
+    });
+
+    expect(handled).toBe(true);
+    expect(onUploadFile).toHaveBeenCalledWith(file);
   });
 });

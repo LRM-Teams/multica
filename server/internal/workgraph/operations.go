@@ -478,6 +478,11 @@ func (s *Store) AddVerification(ctx context.Context, in VerificationInput) (stri
 		w, g, graphVersion, eventType, producer, verifier, "independent review verdict: "+in.Verdict, id, artifact, reviewer, contextPolicy); err != nil {
 		return "", err
 	}
+	if in.Verdict == "FAIL" && s.OnNodesReadyTx != nil {
+		if err = s.OnNodesReadyTx(ctx, tx, in.WorkspaceID, []string{producerIssue.String()}); err != nil {
+			return "", err
+		}
+	}
 	if err = tx.Commit(ctx); err != nil {
 		return "", err
 	}

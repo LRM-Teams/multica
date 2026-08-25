@@ -23,12 +23,12 @@ vi.mock("../../i18n/use-t", () => ({
 }));
 
 const reference: ResearchSelectedReference = {
-  stable_id: "insight:00000000-0000-4000-8000-000000000306",
+  stableId: "insight:00000000-0000-4000-8000-000000000306",
   kind: "insight",
-  entity_id: "00000000-0000-4000-8000-000000000306",
+  entityId: "00000000-0000-4000-8000-000000000306",
   revision: 2,
-  content_hash: `sha256:${"c".repeat(64)}`,
-  display_summary: "Latency boundary under concurrent load",
+  contentHash: `sha256:${"c".repeat(64)}`,
+  displaySummary: "Latency boundary under concurrent load",
 };
 
 describe("ResearchSelectedRefChip", () => {
@@ -38,13 +38,13 @@ describe("ResearchSelectedRefChip", () => {
       <ResearchSelectedRefChip reference={reference} onRemove={onRemove} />,
     );
 
-    expect(screen.getByText(reference.display_summary)).toBeTruthy();
+    expect(screen.getByText(reference.displaySummary)).toBeTruthy();
     expect(screen.getByText("revision 2")).toBeTruthy();
     fireEvent.click(
       screen.getByRole("button", {
-        name: `Remove reference: ${reference.display_summary}`,
+        name: `Remove reference: ${reference.displaySummary}`,
       }),
     );
-    expect(onRemove).toHaveBeenCalledWith(reference.stable_id);
+    expect(onRemove).toHaveBeenCalledWith(reference.stableId);
   });
 });

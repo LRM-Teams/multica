@@ -110,6 +110,10 @@ const (
 	txOpV6ReportReview             researchTxOperation = "v6_report.review"
 	txOpV6ProjectionSnapshot       researchTxOperation = "v6_projection.snapshot"
 	txOpV6ProjectionSlice          researchTxOperation = "v6_projection.slice"
+	txOpV6OutboxReschedule         researchTxOperation = "v6_outbox.reschedule"
+	txOpV6OutboxFail               researchTxOperation = "v6_outbox.fail"
+	txOpV6WorkProgressReport       researchTxOperation = "v6_work_progress.report"
+	txOpV6WorkActivityRecord       researchTxOperation = "v6_work_activity.record"
 )
 
 type researchTxFaultHook func(context.Context, researchTxOperation, researchTxFaultPoint) error

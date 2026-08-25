@@ -11,16 +11,16 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-// runnerDiagnosticRegistry is the only daemon-side owner of Workspace Runner
+// runnerDiagnosticRegistry is the only daemon-side owner of WorkspaceDaemon
 // diagnostic sinks. Producers supply a Workspace identity and a typed event;
 // they never construct paths or propagate sink failures into product control
 // flow.
 type runnerDiagnosticRegistry struct {
-	store              *diagnosticlog.Store
-	environment        diagnosticlog.Environment
-	runnerGeneration   string
-	computerID         string
-	computerGeneration string
+	store             *diagnosticlog.Store
+	environment       diagnosticlog.Environment
+	daemonInstanceID  string
+	computerID        string
+	serviceGeneration string
 
 	mu      sync.Mutex
 	loggers map[string]*diagnosticlog.Logger
@@ -38,14 +38,14 @@ func (d *Daemon) initializeRunnerDiagnostics() {
 	environment := diagnosticlog.Environment(strings.TrimSpace(d.cfg.Environment))
 	if environment != diagnosticlog.EnvironmentProduction && environment != diagnosticlog.EnvironmentTest {
 		if d.logger != nil {
-			d.logger.Warn("Workspace Runner diagnostics disabled", "reason", "invalid_environment")
+			d.logger.Warn("WorkspaceDaemon diagnostics disabled", "reason", "invalid_environment")
 		}
 		return
 	}
 	store, err := diagnosticlog.Open(diagnosticlog.Config{})
 	if err != nil {
 		if d.logger != nil {
-			d.logger.Warn("Workspace Runner diagnostics disabled", "reason", "open_failed")
+			d.logger.Warn("WorkspaceDaemon diagnostics disabled", "reason", "open_failed")
 		}
 		return
 	}
@@ -53,18 +53,10 @@ func (d *Daemon) initializeRunnerDiagnostics() {
 	if _, err := uuid.Parse(computerID); err != nil {
 		computerID = ""
 	}
-	computerGeneration := ""
-	if d.cfg.ComputerGeneration > 0 {
-		computerGeneration = strconv.FormatInt(d.cfg.ComputerGeneration, 10)
-	}
 	d.runnerDiagnostics = &runnerDiagnosticRegistry{
-		store:              store,
-		environment:        environment,
-		runnerGeneration:   d.runnerInstanceID,
-		computerID:         computerID,
-		computerGeneration: computerGeneration,
-		loggers:            make(map[string]*diagnosticlog.Logger),
-		failed:             make(map[string]struct{}),
+		store: store, environment: environment,
+		daemonInstanceID: d.instanceID, computerID: computerID,
+		loggers: make(map[string]*diagnosticlog.Logger), failed: make(map[string]struct{}),
 	}
 	d.runnerDiagnosticStore = store
 }
@@ -76,7 +68,7 @@ func (d *Daemon) recordRunnerDiagnostic(workspaceID string, event diagnosticlog.
 	if err := d.runnerDiagnostics.record(workspaceID, event); err != nil && d.logger != nil {
 		// Do not include the storage error or event payload in the fallback log.
 		// Sink health and the later Service summary own those details.
-		d.logger.Warn("Workspace Runner diagnostic record dropped", "reason", "sink_unavailable")
+		d.logger.Warn("WorkspaceDaemon diagnostic record dropped", "reason", "sink_unavailable")
 	}
 }
 
@@ -91,11 +83,11 @@ func (r *runnerDiagnosticRegistry) record(workspaceID string, event diagnosticlo
 	if logger == nil && !failed {
 		var err error
 		logger, err = r.store.Runner(diagnosticlog.RunnerOptions{
-			Environment:        r.environment,
-			WorkspaceID:        workspaceID,
-			RunnerGeneration:   r.runnerGeneration,
-			ComputerID:         r.computerID,
-			ComputerGeneration: r.computerGeneration,
+			Environment:       r.environment,
+			WorkspaceID:       workspaceID,
+			DaemonInstanceID:  r.daemonInstanceID,
+			ComputerID:        r.computerID,
+			ServiceGeneration: r.serviceGeneration,
 		})
 		if err != nil {
 			r.failed[workspaceID] = struct{}{}
@@ -164,7 +156,7 @@ func (d *Daemon) recordAgentMessageResponse(
 		return
 	}
 	runtimeID := ""
-	if runner := d.currentWorkspaceRunner(workspaceID); runner != nil {
+	if runner := d.currentWorkspaceDaemon(workspaceID); runner != nil {
 		runtimeID = runner.messageRuntimeID(agentID)
 	}
 	messageID, channelID := responseMessageIdentity(response)

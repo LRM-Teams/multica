@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentRuntime } from "@multica/core/types";
+import { useComputerUpgradeStore } from "@multica/core/runtimes";
 import { renderWithI18n } from "../../test/i18n";
 import { ComputerUpdateToastListener } from "./computer-update-toast-listener";
 
@@ -76,17 +77,27 @@ function s143Runtime(): AgentRuntime {
   };
 }
 
+/**
+ * Last toast body sonner was handed. Render it outside `waitFor` — rendering
+ * inside a `waitFor` callback mutates document.body, which re-fires the
+ * MutationObserver `waitFor` polls on and never lets the timeout run.
+ */
+function lastToast(): (id: string | number) => ReactNode {
+  return mocks.toastCustom.mock.lastCall?.[0] as (
+    id: string | number,
+  ) => ReactNode;
+}
+
 describe("ComputerUpdateToastListener", () => {
   beforeEach(() => {
     mocks.runtimes = [s143Runtime()];
     mocks.toastCustom.mockReset();
     mocks.toastDismiss.mockReset();
     mocks.initiateMachineUpgrade.mockReset();
-    mocks.initiateMachineUpgrade.mockImplementation(
-      () => new Promise(() => {}),
-    );
+    mocks.initiateMachineUpgrade.mockResolvedValue({});
     mocks.invalidateQueries.mockReset();
     mocks.wsHandlers.clear();
+    useComputerUpgradeStore.getState().reset();
     window.localStorage.clear();
   });
 
@@ -125,7 +136,9 @@ describe("ComputerUpdateToastListener", () => {
     render(renderPrompt("computer-update:s143"));
     await user.click(screen.getByRole("button", { name: "Update now" }));
 
-    await waitFor(() => expect(mocks.toastCustom).toHaveBeenCalledTimes(3));
+    await waitFor(() =>
+      expect(mocks.initiateMachineUpgrade).toHaveBeenCalled(),
+    );
 
     mocks.runtimes = [
       {
@@ -147,6 +160,75 @@ describe("ComputerUpdateToastListener", () => {
       expect(view.getByText("Now on v0.4.24-alpha.12")).toBeInTheDocument();
       view.unmount();
     });
+  });
+
+  it("clears the updating toast when the daemon returns on the target version after the candidate is gone", async () => {
+    const user = userEvent.setup();
+    const { rerender } = renderWithI18n(<ComputerUpdateToastListener />);
+
+    await waitFor(() => expect(mocks.toastCustom).toHaveBeenCalledTimes(1));
+    const renderPrompt = mocks.toastCustom.mock.calls[0]?.[0] as (
+      id: string | number,
+    ) => ReactNode;
+    const prompt = render(renderPrompt("computer-update:s143"));
+    await user.click(screen.getByRole("button", { name: "Update now" }));
+    await waitFor(() =>
+      expect(
+        useComputerUpgradeStore
+          .getState()
+          .getUpgrade("1298b34b-b7de-4309-bdfb-71043265052d")?.phase,
+      ).toBe("running"),
+    );
+    prompt.unmount();
+
+    // The restarting daemon leaves the candidate list well before the new
+    // version lands, so the candidate fingerprint is already empty here.
+    mocks.runtimes = [
+      {
+        ...s143Runtime(),
+        status: "offline",
+        update_state: "running",
+        runtime_health: "updating",
+      },
+    ];
+    rerender(<ComputerUpdateToastListener />);
+    const updating = render(lastToast()("computer-update:s143"));
+    expect(updating.getByText("Updating s143…")).toBeInTheDocument();
+    updating.unmount();
+
+    // The successor registers on the target version. A restart handoff never
+    // emits computer:upgrade:done, so this version bump — visible only through
+    // the runtime list — is the one signal that can retire the toast.
+    const publishedBefore = mocks.toastCustom.mock.calls.length;
+    mocks.runtimes = [
+      {
+        ...s143Runtime(),
+        current_version: "0.4.24-alpha.12",
+        target_version: null,
+        daemon_target_version: null,
+        update_state: "idle",
+        runtime_health: "ok",
+      },
+    ];
+    rerender(<ComputerUpdateToastListener />);
+
+    await waitFor(() =>
+      expect(mocks.toastCustom.mock.calls.length).toBeGreaterThan(
+        publishedBefore,
+      ),
+    );
+    const success = render(lastToast()("computer-update:s143"));
+    expect(success.getByText("s143 updated")).toBeInTheDocument();
+    expect(success.getByText("Now on v0.4.24-alpha.12")).toBeInTheDocument();
+    success.unmount();
+    // The success toast owns a finite duration; the sync pass that follows the
+    // recordDone store write must not sweep it off screen.
+    // The success toast owns a finite duration; the sync pass that follows the
+    // recordDone store write must not sweep it off screen.
+    expect(mocks.toastDismiss).not.toHaveBeenCalledWith(
+      "computer-update:1298b34b-b7de-4309-bdfb-71043265052d",
+    );
+    expect(mocks.toastCustom.mock.lastCall?.[1]?.duration).toBe(4000);
   });
 
   it("shows the current daemon upgrade phase", async () => {

@@ -113,18 +113,17 @@ func setupRetryTestDB(t *testing.T, failureReason string) *retryTestEnv {
 	require.NoError(t, err)
 
 	agent, err := q.CreateAgent(ctx, db.CreateAgentParams{
-		WorkspaceID:        ws.ID,
-		Name:               "retry-agent",
-		DisplayName:        "Retry Agent",
-		Description:        "test",
-		RuntimeMode:        "cloud",
-		RuntimeConfig:      []byte("{}"),
-		RuntimeID:          rtID,
-		MaxConcurrentTasks: 1,
-		Instructions:       "",
-		CustomEnv:          []byte("{}"),
-		CustomArgs:         []byte("[]"),
-		Model:              pgtype.Text{String: "composer-1.5", Valid: true},
+		WorkspaceID:   ws.ID,
+		Name:          "retry-agent",
+		DisplayName:   "Retry Agent",
+		Description:   "test",
+		RuntimeMode:   "cloud",
+		RuntimeConfig: []byte("{}"),
+		RuntimeID:     rtID,
+		Instructions:  "",
+		CustomEnv:     []byte("{}"),
+		CustomArgs:    []byte("[]"),
+		Model:         pgtype.Text{String: "composer-1.5", Valid: true},
 	})
 	require.NoError(t, err)
 
@@ -366,6 +365,18 @@ func TestMaybeRetryFailedTask_NonRetryableIsTerminal(t *testing.T) {
 		"no child StartSession for a non-retryable failure")
 	assert.Equal(t, -1, callOrderIndex(env.rl, "NotifyTaskEnqueued"),
 		"no NotifyTaskEnqueued when no child is created")
+}
+
+func TestMaybeRetryFailedTaskLeavesResearchRecoveryToWorkScheduler(t *testing.T) {
+	env := setupRetryTestDB(t, "runtime_recovery")
+	env.parent.Context = json.RawMessage(`{
+		"type":"research_run_work_item",
+		"research_dispatch_key":"v6-dispatch:attempt-1"
+	}`)
+
+	child, err := env.svc.MaybeRetryFailedTask(context.Background(), env.parent)
+	require.NoError(t, err)
+	require.Nil(t, child)
 }
 
 // TestMaybeRetryFailedTask_EnvIDFromProjectEnvID verifies the child's StartSession

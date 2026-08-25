@@ -44,6 +44,9 @@ func (h *Handler) materializeNextChannelOnboardingForRuntime(ctx context.Context
 	if err := expireInvalidChannelOnboardingsForRuntimeTx(ctx, tx, runtime.ID); err != nil {
 		return fmt.Errorf("expire invalid channel onboarding: %w", err)
 	}
+	if err := completePublishedSystemGeneralOnboardingsForRuntimeTx(ctx, tx, runtime.ID); err != nil {
+		return fmt.Errorf("complete silent system general onboarding: %w", err)
+	}
 
 	var onboarding channelOnboardingRecord
 	err = tx.QueryRow(ctx, `
@@ -311,13 +314,29 @@ func (h *Handler) publishClaimedChannelOnboardingSystemMessage(ctx context.Conte
 		return err
 	}
 	tag, err := executor.Exec(ctx, `
-		UPDATE channel_agent_onboarding
+		UPDATE channel_agent_onboarding onboarding
 		SET publication_status = 'published',
 		    publication_lease_expires_at = NULL,
 		    published_at = COALESCE(published_at, now()),
+		    status = CASE
+		      WHEN channel_row.system_key = 'general' THEN 'completed'
+		      ELSE onboarding.status
+		    END,
+		    terminal_evidence = CASE
+		      WHEN channel_row.system_key = 'general' THEN
+		        jsonb_build_object('reason', 'system_general_silent_join')
+		      ELSE onboarding.terminal_evidence
+		    END,
+		    terminal_at = CASE
+		      WHEN channel_row.system_key = 'general' THEN COALESCE(onboarding.terminal_at, now())
+		      ELSE onboarding.terminal_at
+		    END,
 		    updated_at = now()
-		WHERE id = $1
-		  AND publication_status = 'publishing'`, publication.OnboardingID)
+		FROM channel channel_row
+		WHERE onboarding.id = $1
+		  AND onboarding.publication_status = 'publishing'
+		  AND channel_row.id = onboarding.channel_id
+		  AND channel_row.workspace_id = onboarding.workspace_id`, publication.OnboardingID)
 	if err != nil {
 		return err
 	}
@@ -325,6 +344,61 @@ func (h *Handler) publishClaimedChannelOnboardingSystemMessage(ctx context.Conte
 		return errors.New("channel onboarding publication lease is no longer active")
 	}
 	return nil
+}
+
+// completePublishedSystemGeneralOnboardingsForRuntimeTx repairs general joins
+// published before the silent-join policy was deployed. System #general is the
+// workspace roster, so joining it is not an invitation that should spend a
+// provider turn. Ordinary group-channel onboarding remains unchanged.
+func completePublishedSystemGeneralOnboardingsForRuntimeTx(ctx context.Context, tx pgx.Tx, runtimeID pgtype.UUID) error {
+	_, err := tx.Exec(ctx, `
+		WITH silent AS (
+		  SELECT onboarding.id
+		  FROM channel_agent_onboarding onboarding
+		  JOIN agent runtime_agent
+		    ON runtime_agent.id = onboarding.agent_id
+		   AND runtime_agent.runtime_id = $1
+		  JOIN channel channel_row
+		    ON channel_row.id = onboarding.channel_id
+		   AND channel_row.workspace_id = onboarding.workspace_id
+		   AND channel_row.system_key = 'general'
+		  WHERE onboarding.status IN ('pending', 'claimed')
+		    AND onboarding.publication_status = 'published'
+		  FOR UPDATE OF onboarding
+		),
+		expired_delivery AS (
+		  UPDATE agent_event_delivery delivery
+		  SET status = 'expired',
+		      last_error = 'system general joins do not start onboarding turns',
+		      updated_at = now()
+		  FROM agent_inbox_event inbox, silent
+		  WHERE inbox.channel_onboarding_id = silent.id
+		    AND delivery.inbox_event_id = inbox.id
+		    AND delivery.status IN ('leased', 'processing')
+		  RETURNING delivery.id
+		),
+		suppressed_inbox AS (
+		  UPDATE agent_inbox_event inbox
+		  SET status = 'suppressed',
+		      terminal_outcome = 'skipped',
+		      retryable = FALSE,
+		      terminal_at = now(),
+		      completed_at = COALESCE(completed_at, now()),
+		      last_error = 'system general joins do not start onboarding turns',
+		      updated_at = now()
+		  FROM silent
+		  WHERE inbox.channel_onboarding_id = silent.id
+		    AND inbox.status IN ('pending', 'draining', 'failed')
+		  RETURNING inbox.id
+		)
+		UPDATE channel_agent_onboarding onboarding
+		SET status = 'completed',
+		    terminal_evidence = jsonb_build_object('reason', 'system_general_silent_join'),
+		    terminal_at = COALESCE(onboarding.terminal_at, now()),
+		    updated_at = now()
+		FROM silent
+		WHERE onboarding.id = silent.id`, runtimeID)
+	return err
 }
 
 func resetChannelOnboardingPublicationAfterFailure(ctx context.Context, executor dbExecutor, onboardingID pgtype.UUID) error {

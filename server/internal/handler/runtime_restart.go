@@ -185,7 +185,8 @@ func (h *Handler) InitiateRestart(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !canOwnRuntime(member, rt) {
+	rtOwnerID, _ := h.resolveRuntimeOwnerQuery(r.Context(), rt)
+	if !canOwnRuntime(member, rt, rtOwnerID) {
 		writeError(w, http.StatusForbidden, "only the computer owner can restart this runtime")
 		return
 	}
@@ -217,7 +218,8 @@ func (h *Handler) GetRestart(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !canOwnRuntime(member, rt) {
+	rtOwnerID, _ := h.resolveRuntimeOwnerQuery(r.Context(), rt)
+	if !canOwnRuntime(member, rt, rtOwnerID) {
 		writeError(w, http.StatusForbidden, "only the computer owner can inspect this restart request")
 		return
 	}

@@ -13,10 +13,10 @@ import (
 
 func TestComputerProductionOwnsNoBindingExecutionTypes(t *testing.T) {
 	forbiddenIdentifiers := map[string]struct{}{
-		"WorkspaceRunner": {}, "AgentProcessManager": {}, "agentProcessManager": {},
+		"WorkspaceDaemon": {}, "AgentProcessManager": {}, "agentProcessManager": {},
 		"MessageCoordinator": {}, "messageCoordinator": {},
-		"LocalReminderInbox": {}, "canonicalAgentRuntimePool": {},
-		"mixedRunActivityOutbox": {}, "agentActivityProducer": {}, "inboxRegistry": {},
+		"canonicalAgentRuntimePool": {},
+		"mixedRunActivityOutbox":    {}, "agentActivityProducer": {}, "inboxRegistry": {},
 		"localAgentAttachmentRegistry": {},
 	}
 	err := filepath.WalkDir(".", func(path string, entry os.DirEntry, err error) error {

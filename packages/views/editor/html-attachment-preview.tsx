@@ -27,6 +27,7 @@
  */
 
 import { Download, ExternalLink, Maximize2, Trash2 } from "lucide-react";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { cn } from "@multica/ui/lib/utils";
 import { paths, useWorkspaceSlug } from "@multica/core/paths";
 import { useT } from "../i18n";
@@ -112,61 +113,71 @@ export function HtmlAttachmentPreview({
             : "opacity-100 [@media(pointer:fine)]:opacity-0 [@media(pointer:fine)]:group-hover/html-preview:opacity-100",
         )}
       >
-        <button
-          type="button"
-          className={toolbarBtn}
-          title={t(($) => $.attachment.preview)}
-          aria-label={t(($) => $.attachment.preview)}
-          onMouseDown={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            onPreview();
-          }}
-        >
-          <Maximize2 className="h-3.5 w-3.5" />
-        </button>
-        {canOpenInNewTab && (
-          <button
+        <Tooltip>
+          <TooltipTrigger
             type="button"
             className={toolbarBtn}
-            title={t(($) => $.attachment.open_in_new_tab)}
-            aria-label={t(($) => $.attachment.open_in_new_tab)}
+            aria-label={t(($) => $.attachment.preview)}
             onMouseDown={(e) => {
               e.preventDefault();
               e.stopPropagation();
-              handleOpenInNewTab();
+              onPreview();
             }}
           >
-            <ExternalLink className="h-3.5 w-3.5" />
-          </button>
+            <Maximize2 className="h-3.5 w-3.5" />
+          </TooltipTrigger>
+          <TooltipContent side="top">{t(($) => $.attachment.preview)}</TooltipContent>
+        </Tooltip>
+        {canOpenInNewTab && (
+          <Tooltip>
+            <TooltipTrigger
+              type="button"
+              className={toolbarBtn}
+              aria-label={t(($) => $.attachment.open_in_new_tab)}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                handleOpenInNewTab();
+              }}
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+            </TooltipTrigger>
+            <TooltipContent side="top">
+              {t(($) => $.attachment.open_in_new_tab)}
+            </TooltipContent>
+          </Tooltip>
         )}
-        <button
-          type="button"
-          className={toolbarBtn}
-          title={t(($) => $.image.download)}
-          aria-label={t(($) => $.image.download)}
-          onMouseDown={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            onDownload();
-          }}
-        >
-          <Download className="h-3.5 w-3.5" />
-        </button>
-        {onDelete && (
-          <button
+        <Tooltip>
+          <TooltipTrigger
             type="button"
-            className={cn(toolbarBtn, "hover:bg-destructive/10 hover:text-destructive")}
-            title={t(($) => $.attachment.remove)}
-            aria-label={t(($) => $.attachment.remove)}
+            className={toolbarBtn}
+            aria-label={t(($) => $.image.download)}
             onMouseDown={(e) => {
               e.preventDefault();
               e.stopPropagation();
-              onDelete();
+              onDownload();
             }}
           >
-            <Trash2 className="h-3.5 w-3.5" />
-          </button>
+            <Download className="h-3.5 w-3.5" />
+          </TooltipTrigger>
+          <TooltipContent side="top">{t(($) => $.image.download)}</TooltipContent>
+        </Tooltip>
+        {onDelete && (
+          <Tooltip>
+            <TooltipTrigger
+              type="button"
+              className={cn(toolbarBtn, "hover:bg-destructive/10 hover:text-destructive")}
+              aria-label={t(($) => $.attachment.remove)}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onDelete();
+              }}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </TooltipTrigger>
+            <TooltipContent side="top">{t(($) => $.attachment.remove)}</TooltipContent>
+          </Tooltip>
         )}
       </div>
     </div>

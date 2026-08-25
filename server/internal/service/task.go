@@ -72,6 +72,9 @@ type TaskService struct {
 	Analytics analytics.Client
 	Metrics   *obsmetrics.BusinessMetrics
 	Wakeup    TaskWakeupNotifier
+	// IssueExecution is wired after construction because the canonical
+	// reconciler publishes through this TaskService.
+	IssueExecution *IssueExecutionService
 
 	// OnChildTaskCreated is an optional callback fired when a retry child
 	// task is created (subagent lifecycle). When set, it receives the parent
@@ -163,10 +166,6 @@ func truncateForSummary(s string, maxRunes int) string {
 
 const (
 	taskAnalyticsContextCacheMax = 4096
-	// claimResponseRecoveryWindow must exceed daemon client.Timeout for
-	// inbox drain (30s) plus execution start (30s) plus scheduling slack, so
-	// an in-flight StartTask cannot be reclaimed and double-dispatched.
-	claimResponseRecoveryWindow = 90 * time.Second
 )
 
 // buildCommentTriggerSummary fetches the comment content and truncates
@@ -2004,8 +2003,36 @@ func (s *TaskService) MaybeRetryFailedTask(ctx context.Context, parent db.AgentI
 		// Autopilot has its own retry semantics; do not double-trigger.
 		return nil, nil
 	}
+	if hasResearchDispatchKey(parent.Context) {
+		// Research Work owns attempt budgets, leases, and redispatch. Cloning
+		// its Inbox delivery here would either violate the dispatch-key
+		// uniqueness fence or execute one Work attempt through two Inbox rows.
+		return nil, nil
+	}
 	if !parent.IssueID.Valid && !parent.ChatSessionID.Valid && !parent.ChannelID.Valid {
 		return nil, nil
+	}
+	if parent.IssueRunKind.Valid && parent.IssueRunKind.String == "canonical" &&
+		parent.IssueID.Valid && s.IssueExecution != nil {
+		outcome, retryErr := s.IssueExecution.Reconcile(ctx, parent.WorkspaceID, parent.IssueID, IssueExecutionReconcileOptions{
+			TriggerKind:       "infrastructure_retry",
+			NewAttempt:        true,
+			ForceFreshSession: resumeUnsafeFailureReason(reason),
+			ParentRunID:       parent.ID,
+			DeliveryAttempt:   parent.Attempt + 1,
+			MaxAttempts:       parent.MaxAttempts,
+		})
+		if retryErr != nil {
+			return nil, retryErr
+		}
+		child, retryErr := s.IssueExecution.DispatchRun(ctx, parent.WorkspaceID, outcome.RunID)
+		if retryErr != nil {
+			return nil, retryErr
+		}
+		if s.OnChildTaskCreated != nil {
+			s.OnChildTaskCreated(ctx, parent, *child)
+		}
+		return child, nil
 	}
 
 	var retryResources *EphemeralRetryResources
@@ -2061,6 +2088,13 @@ func (s *TaskService) MaybeRetryFailedTask(ctx context.Context, parent db.AgentI
 	}
 
 	return &child, nil
+}
+
+func hasResearchDispatchKey(raw json.RawMessage) bool {
+	var taskContext struct {
+		DispatchKey string `json:"research_dispatch_key"`
+	}
+	return json.Unmarshal(raw, &taskContext) == nil && strings.TrimSpace(taskContext.DispatchKey) != ""
 }
 
 // openFreshSessionForRetryChild opens a FRESH areal RL session for a retry child
@@ -2212,6 +2246,41 @@ func (s *TaskService) RerunIssue(ctx context.Context, issueID pgtype.UUID, sourc
 		agentID = issue.AssigneeID
 	}
 
+	// A rerun of the current assignee's assignment lane is a new canonical
+	// Run attempt. Comment/mention reruns remain interaction-lane events and
+	// keep the legacy target-agent semantics below.
+	if s.IssueExecution != nil && !triggerCommentID.Valid &&
+		issue.AssigneeType.String == "agent" && issue.AssigneeID.Valid && issue.AssigneeID == agentID {
+		opts := IssueExecutionReconcileOptions{
+			TriggerKind: "manual_rerun", NewAttempt: true, ForceFreshSession: true,
+			ParentRunID: sourceTaskID,
+		}
+		var runID pgtype.UUID
+		if issueExecutionStatusRunnable(issue.Status) {
+			outcome, reconcileErr := s.IssueExecution.Reconcile(ctx, issue.WorkspaceID, issue.ID, opts)
+			if reconcileErr != nil {
+				return nil, reconcileErr
+			}
+			runID = outcome.RunID
+		} else {
+			if _, updateErr := s.IssueExecution.UpdateStatus(ctx, issue, "todo", opts); updateErr != nil {
+				return nil, updateErr
+			}
+			claim, claimErr := s.Queries.GetActiveIssueExecution(ctx, db.GetActiveIssueExecutionParams{
+				WorkspaceID: issue.WorkspaceID, IssueID: issue.ID,
+			})
+			if claimErr != nil {
+				return nil, claimErr
+			}
+			runID = claim.RunID
+		}
+		task, dispatchErr := s.IssueExecution.DispatchRun(ctx, issue.WorkspaceID, runID)
+		if dispatchErr != nil {
+			return nil, dispatchErr
+		}
+		return task, nil
+	}
+
 	// Cancel only the target agent's active/queued tasks on this issue.
 	cancelled, err := s.Queries.CancelAgentTasksByIssueAndAgent(ctx, db.CancelAgentTasksByIssueAndAgentParams{
 		IssueID: issueID,
@@ -2263,7 +2332,6 @@ func (s *TaskService) enqueueRerunTask(ctx context.Context, issue db.Issue, agen
 // ephemeral_sandbox marker is stored in a task's context JSONB (written at
 // dispatch by mergeEphemeralSandboxContext). It carries the sandbox_instance_id
 // the terminal cleanup hook reads to reclaim the ephemeral Cube sandbox.
-const ephemeralSandboxContextKey = "ephemeral_sandbox"
 
 // EphemeralSandboxMarker holds the Phase 5 sandbox-instance marker stored at
 // context.ephemeral_sandbox on an env-dispatch ephemeral rollout task.
@@ -2480,11 +2548,27 @@ func (s *TaskService) HandleFailedTasks(ctx context.Context, tasks []db.AgentInb
 							"error", checkErr,
 						)
 					} else if !hasActive {
-						if _, updateErr := s.Queries.UpdateIssueStatus(ctx, db.UpdateIssueStatusParams{
-							ID:          t.IssueID,
-							Status:      "todo",
-							WorkspaceID: issue.WorkspaceID,
-						}); updateErr != nil {
+						recoveryStatus := "todo"
+						triggerKind := "task_failure_recovery"
+						// Do not let the canonical reconciler reset an exhausted
+						// delivery budget by minting a fresh attempt=1 Run forever.
+						// Expose the exhausted boundary as blocked for controller or
+						// human intervention; an explicit reopen can start new work.
+						if retryableReasons[failureReason] && t.Attempt >= t.MaxAttempts {
+							recoveryStatus = "blocked"
+							triggerKind = "task_retry_budget_exhausted"
+						}
+						var updateErr error
+						if s.IssueExecution != nil {
+							_, updateErr = s.IssueExecution.UpdateStatus(ctx, issue, recoveryStatus, IssueExecutionReconcileOptions{
+								TriggerKind: triggerKind, Invalidate: true,
+							})
+						} else {
+							_, updateErr = s.Queries.UpdateIssueStatus(ctx, db.UpdateIssueStatusParams{
+								ID: t.IssueID, Status: recoveryStatus, WorkspaceID: issue.WorkspaceID,
+							})
+						}
+						if updateErr != nil {
 							slog.Warn("handle failed tasks: reset stuck issue failed",
 								"issue_id", issueKey,
 								"error", updateErr,
@@ -2768,16 +2852,6 @@ func executionIncludesUserMemory(execution MemoryExecutionScope) bool {
 		return *execution.IncludeUserMemory
 	}
 	return memoryscope.IncludeUserMemory(execution.ChannelKind, execution.ChatSessionID, execution.MessageTexts...)
-}
-
-func teamKnowledgeAppliesForExecution(metadata []byte, execution MemoryExecutionScope) bool {
-	container := struct {
-		Applies memoryApplicability `json:"applies"`
-	}{}
-	if json.Unmarshal(metadata, &container) != nil {
-		return true
-	}
-	return memoryApplicabilityMatches(container.Applies, execution)
 }
 
 func memoryApplicabilityMatches(applies memoryApplicability, execution MemoryExecutionScope) bool {
@@ -3303,9 +3377,8 @@ func (s *TaskService) parseQuickCreateContext(task db.AgentInboxEvent) (QuickCre
 // requester pointing at the issue the agent just created. The issue is
 // stamped with origin_type=quick_create + origin_id=<task_id> by the
 // daemon-injected MULTICA_QUICK_CREATE_TASK_ID env var, so this lookup is
-// deterministic — robust against the same agent creating other issues in
-// parallel (e.g. assignment task running while max_concurrent_tasks > 1
-// permits another quick-create alongside it).
+// deterministic — the origin_id=task.ID key means it can't be confused by
+// other issues the same agent may have created around the same time.
 func (s *TaskService) notifyQuickCreateCompleted(ctx context.Context, task db.AgentInboxEvent, qc QuickCreateContext) {
 	requesterID, err := util.ParseUUID(qc.RequesterID)
 	if err != nil {
@@ -3492,21 +3565,20 @@ func agentToMap(a db.Agent) map[string]any {
 		json.Unmarshal(a.RuntimeConfig, &rc)
 	}
 	return map[string]any{
-		"id":                   util.UUIDToString(a.ID),
-		"workspace_id":         util.UUIDToString(a.WorkspaceID),
-		"runtime_id":           util.UUIDToString(a.RuntimeID),
-		"name":                 a.Name,
-		"description":          a.Description,
-		"avatar_url":           util.TextToPtr(a.AvatarUrl),
-		"runtime_mode":         a.RuntimeMode,
-		"runtime_config":       rc,
-		"status":               a.Status,
-		"max_concurrent_tasks": a.MaxConcurrentTasks,
-		"owner_id":             util.UUIDToPtr(a.OwnerID),
-		"skills":               []any{},
-		"created_at":           util.TimestampToString(a.CreatedAt),
-		"updated_at":           util.TimestampToString(a.UpdatedAt),
-		"archived_at":          util.TimestampToPtr(a.ArchivedAt),
-		"archived_by":          util.UUIDToPtr(a.ArchivedBy),
+		"id":             util.UUIDToString(a.ID),
+		"workspace_id":   util.UUIDToString(a.WorkspaceID),
+		"runtime_id":     util.UUIDToString(a.RuntimeID),
+		"name":           a.Name,
+		"description":    a.Description,
+		"avatar_url":     a.AvatarUrl,
+		"runtime_mode":   a.RuntimeMode,
+		"runtime_config": rc,
+		"status":         a.Status,
+		"owner_id":       util.UUIDToPtr(a.OwnerID),
+		"skills":         []any{},
+		"created_at":     util.TimestampToString(a.CreatedAt),
+		"updated_at":     util.TimestampToString(a.UpdatedAt),
+		"archived_at":    util.TimestampToPtr(a.ArchivedAt),
+		"archived_by":    util.UUIDToPtr(a.ArchivedBy),
 	}
 }

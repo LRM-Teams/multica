@@ -81,6 +81,8 @@
     "basics_pinned_version": "Version pin",
     "agents_section": "Agents on this computer",
     "code_agents_section": "Runtimes on this computer",
+    "code_agents_env": "Environment variables",
+    "code_agents_env_dialog_title": "Environment variables",
     "code_agents_installed": "Installed",
     "code_agents_not_installed": "Not installed",
     "code_agents_installed_empty": "No runtimes detected on this computer yet.",
@@ -190,12 +192,37 @@
     "agents_clear_all": "Clear all",
     "agents_cancel": "Cancel",
     "agents_selected_count": "{{count}} selected",
+    "agents_bulk_configure": "Configure runtime",
+    "agents_bulk_config_title": "Configure {{count}} agents",
+    "agents_bulk_config_description": "Set one runtime, model, and reasoning level for all selected agents in one update.",
+    "agents_bulk_config_save": "Apply to {{count}} agents",
+    "agents_bulk_config_saving": "Applying…",
+    "agents_bulk_config_done": "Updated {{count}} agents.",
+    "agents_bulk_config_failed": "Could not update the selected agents.",
+    "agents_bulk_start": "Start",
     "agents_bulk_stop": "Stop",
-    "agents_bulk_restart": "Restart",
-    "agents_bulk_stop_done": "Stopped tasks on {{count}} agent(s).",
-    "agents_bulk_stop_partial": "Stopped some tasks ({{cancelled}} cancelled, {{failed}} failed).",
-    "agents_bulk_restart_done": "Restarted {{count}} agent(s).",
-    "agents_bulk_restart_partial": "Restarted {{ok}}; {{failed}} failed.",
+    "agents_bulk_restart_reset": "Restart / Reset",
+    "agents_bulk_lifecycle_done": "Applied to {{count}} agents.",
+    "agents_bulk_lifecycle_partial": "Applied to {{accepted}} agents; {{failed}} failed.",
+    "agents_bulk_lifecycle_failed": "Could not apply the action to the selected agents.",
+    "agents_bulk_lifecycle_applying": "Applying…",
+    "agents_bulk_reset_title": "Restart or reset {{count}} agents",
+    "agents_bulk_reset_description": "Choose the same restart scope for every selected agent.",
+    "agents_bulk_reset_apply": "Apply to {{count}} agents",
+    "agents_bulk_reset_mode": {
+      "restart": {
+        "title": "Restart",
+        "description": "Restart the process and preserve its session and workspace."
+      },
+      "session": {
+        "title": "Reset session",
+        "description": "Clear the provider session, preserve the workspace, and restart."
+      },
+      "full": {
+        "title": "Full reset",
+        "description": "Clear the provider session and workspace, then restart."
+      }
+    },
     "sharing": {
       "section": "Sharing",
       "owner_only": "Owner only",
@@ -206,7 +233,8 @@
       }
     },
     "section_team_public_one": "Team public ({{count}})",
-    "section_team_public_other": "Team public ({{count}})"
+    "section_team_public_other": "Team public ({{count}})",
+    "basics_version": "Version"
   },
   "health": {
     "online": {

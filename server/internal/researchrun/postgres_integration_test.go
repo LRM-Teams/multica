@@ -70,6 +70,49 @@ func TestPostgresStoreCreateRunIsAtomic(t *testing.T) {
 	if run.SessionID == "" || run.InitializedAt == nil || event.Type != "run_started" {
 		t.Fatalf("run=%+v event=%+v", run, event)
 	}
+	wrongWorkspaceID := uuid.NewString()
+	for name, list := range map[string]func() (int, error){
+		"questions": func() (int, error) {
+			items, listErr := store.ListQuestions(ctx, run.SessionID, wrongWorkspaceID)
+			return len(items), listErr
+		},
+		"tasks": func() (int, error) {
+			items, listErr := store.ListTasks(ctx, run.SessionID, wrongWorkspaceID)
+			return len(items), listErr
+		},
+		"attempts": func() (int, error) {
+			items, listErr := store.ListAttempts(ctx, run.SessionID, wrongWorkspaceID)
+			return len(items), listErr
+		},
+		"pending cancellations": func() (int, error) {
+			items, listErr := store.ListPendingCancellations(ctx, run.SessionID, wrongWorkspaceID)
+			return len(items), listErr
+		},
+		"sources": func() (int, error) {
+			items, listErr := store.ListSourceSnapshots(ctx, run.SessionID, wrongWorkspaceID)
+			return len(items), listErr
+		},
+		"observations": func() (int, error) {
+			items, listErr := store.ListObservations(ctx, run.SessionID, wrongWorkspaceID)
+			return len(items), listErr
+		},
+		"claims": func() (int, error) {
+			items, listErr := store.ListClaims(ctx, run.SessionID, wrongWorkspaceID)
+			return len(items), listErr
+		},
+	} {
+		if count, listErr := list(); listErr != nil || count != 0 {
+			t.Fatalf("cross-workspace %s count=%d err=%v", name, count, listErr)
+		}
+	}
+	if _, gateErr := store.EvaluateGate(ctx, run.SessionID, wrongWorkspaceID); !errors.Is(gateErr, ErrRunNotFound) {
+		t.Fatalf("cross-workspace gate err=%v want ErrRunNotFound", gateErr)
+	}
+	if cancelErr := store.MarkCancellationsRequested(ctx, run.SessionID, wrongWorkspaceID, []CancellationRequest{{
+		AttemptID: uuid.NewString(), InboxTaskID: uuid.NewString(),
+	}}); !errors.Is(cancelErr, ErrRunNotFound) {
+		t.Fatalf("cross-workspace cancellation err=%v want ErrRunNotFound", cancelErr)
+	}
 	for table, want := range map[string]int{
 		"research_contract_revision": 1,
 		"research_question":          1,
@@ -182,7 +225,7 @@ func TestCancelledAttemptRemainsScheduledUntilInboxCancellationCompletes(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	tasks, err := store.ListTasks(ctx, fixture.sessionID)
+	tasks, err := store.ListTasks(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil || len(tasks) != 1 {
 		t.Fatalf("tasks=%+v err=%v", tasks, err)
 	}
@@ -204,7 +247,7 @@ func TestCancelledAttemptRemainsScheduledUntilInboxCancellationCompletes(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	pending, err := store.ListPendingCancellations(ctx, fixture.sessionID)
+	pending, err := store.ListPendingCancellations(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil || len(pending) != 1 || pending[0].InboxTaskID != "" || pending[0].DispatchKey != attempt.DispatchKey {
 		t.Fatalf("pending=%+v err=%v", pending, err)
 	}
@@ -242,11 +285,11 @@ func TestCancelledAttemptRemainsScheduledUntilInboxCancellationCompletes(t *test
 	} else if pendingStill {
 		t.Fatal("cancellation remained pending after the runtime lease ended")
 	}
-	pending, err = store.ListPendingCancellations(ctx, fixture.sessionID)
+	pending, err = store.ListPendingCancellations(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil || len(pending) != 0 {
 		t.Fatalf("pending after cancellation=%+v err=%v", pending, err)
 	}
-	attempts, err := store.ListAttempts(ctx, fixture.sessionID)
+	attempts, err := store.ListAttempts(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil || len(attempts) != 1 || attempts[0].InboxTaskID != inboxID {
 		t.Fatalf("attempts after cancellation=%+v err=%v", attempts, err)
 	}
@@ -283,7 +326,7 @@ func TestPauseAcknowledgesNeverClaimedDispatchWithoutRuntimeWait(t *testing.T) {
 	}, DefaultRunConfig("standard")); err != nil {
 		t.Fatal(err)
 	}
-	tasks, err := store.ListTasks(ctx, fixture.sessionID)
+	tasks, err := store.ListTasks(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil || len(tasks) != 1 {
 		t.Fatalf("tasks=%+v err=%v", tasks, err)
 	}
@@ -294,11 +337,11 @@ func TestPauseAcknowledgesNeverClaimedDispatchWithoutRuntimeWait(t *testing.T) {
 	if _, _, _, err = store.Pause(ctx, fixture.sessionID, fixture.workspaceID, fixture.userID); err != nil {
 		t.Fatal(err)
 	}
-	pending, err := store.ListPendingCancellations(ctx, fixture.sessionID)
+	pending, err := store.ListPendingCancellations(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil || len(pending) != 0 {
 		t.Fatalf("never-dispatched attempt waited for runtime acknowledgement: pending=%+v err=%v", pending, err)
 	}
-	attempts, err := store.ListAttempts(ctx, fixture.sessionID)
+	attempts, err := store.ListAttempts(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil || len(attempts) != 1 || attempts[0].ID != attempt.ID || attempts[0].Status != AttemptStatusCancelled || attempts[0].CancelCompletedAt == nil {
 		t.Fatalf("cancelled attempt=%+v err=%v", attempts, err)
 	}
@@ -329,7 +372,7 @@ func TestDispatchOutboxFreezesRequestRecoversExpiredLeaseAndHonorsCancellation(t
 	}, DefaultRunConfig("standard")); err != nil {
 		t.Fatal(err)
 	}
-	tasks, err := store.ListTasks(ctx, fixture.sessionID)
+	tasks, err := store.ListTasks(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil || len(tasks) != 1 {
 		t.Fatalf("tasks=%+v err=%v", tasks, err)
 	}
@@ -380,7 +423,7 @@ func TestDispatchOutboxFreezesRequestRecoversExpiredLeaseAndHonorsCancellation(t
 	if events, reconcileErr := store.ReconcileAttempts(ctx, fixture.sessionID, map[string]InboxTaskState{}); reconcileErr != nil || len(events) != 0 {
 		t.Fatalf("undelivered outbox was reconciled as runtime work: events=%+v err=%v", events, reconcileErr)
 	}
-	if attempts, listErr := store.ListAttempts(ctx, fixture.sessionID); listErr != nil || len(attempts) != 1 || attempts[0].Status != AttemptStatusDispatching {
+	if attempts, listErr := store.ListAttempts(ctx, fixture.sessionID, fixture.workspaceID); listErr != nil || len(attempts) != 1 || attempts[0].Status != AttemptStatusDispatching {
 		t.Fatalf("undelivered attempt changed: attempts=%+v err=%v", attempts, listErr)
 	}
 
@@ -702,11 +745,11 @@ func TestNonRetryableDispatchFailureStopsRunWithoutRemediationLoop(t *testing.T)
 	if run.Status != RunStatusFailed {
 		t.Fatalf("run status=%s, want failed", run.Status)
 	}
-	tasks, listErr := store.ListTasks(ctx, fixture.sessionID)
+	tasks, listErr := store.ListTasks(ctx, fixture.sessionID, fixture.workspaceID)
 	if listErr != nil {
 		t.Fatal(listErr)
 	}
-	attempts, listErr := store.ListAttempts(ctx, fixture.sessionID)
+	attempts, listErr := store.ListAttempts(ctx, fixture.sessionID, fixture.workspaceID)
 	if listErr != nil {
 		t.Fatal(listErr)
 	}
@@ -748,7 +791,7 @@ func TestExhaustedInitialPlanStopsRunWithoutCreatingReplan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tasks, err := store.ListTasks(ctx, fixture.sessionID)
+	tasks, err := store.ListTasks(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil || len(tasks) != 1 {
 		t.Fatalf("tasks=%+v err=%v", tasks, err)
 	}
@@ -771,7 +814,7 @@ func TestExhaustedInitialPlanStopsRunWithoutCreatingReplan(t *testing.T) {
 	if run.Status != RunStatusFailed || !strings.Contains(run.StopReason, "result_not_submitted") {
 		t.Fatalf("run=%+v", run)
 	}
-	tasks, err = store.ListTasks(ctx, fixture.sessionID)
+	tasks, err = store.ListTasks(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -841,7 +884,7 @@ func TestPostgresStorePersistsPlanAndReplaysResult(t *testing.T) {
 		t.Fatalf("event replay state_version=%d initial=%d err=%v", runAfterReplay.StateVersion, run.StateVersion, err)
 	}
 
-	tasks, err := store.ListTasks(ctx, fixture.sessionID)
+	tasks, err := store.ListTasks(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil || len(tasks) != 1 || tasks[0].Kind != TaskKindPlan {
 		t.Fatalf("ListTasks=%+v err=%v", tasks, err)
 	}
@@ -898,7 +941,7 @@ func TestPostgresStorePersistsPlanAndReplaysResult(t *testing.T) {
 	if !errors.Is(err, ErrResultConflict) {
 		t.Fatalf("same request ID with different result error=%v, want ErrResultConflict", err)
 	}
-	questions, err := store.ListQuestions(ctx, fixture.sessionID)
+	questions, err := store.ListQuestions(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil || len(questions) != 2 {
 		t.Fatalf("questions=%+v err=%v", questions, err)
 	}
@@ -923,7 +966,7 @@ func TestPostgresStorePersistsPlanAndReplaysResult(t *testing.T) {
 	if questionLineageCount != 1 {
 		t.Fatalf("question typed lineage count=%d want=1", questionLineageCount)
 	}
-	tasks, err = store.ListTasks(ctx, fixture.sessionID)
+	tasks, err = store.ListTasks(ctx, fixture.sessionID, fixture.workspaceID)
 	discoverReady := false
 	for _, task := range tasks {
 		discoverReady = discoverReady || task.Kind == TaskKindDiscover && task.Status == TaskStatusReady
@@ -980,7 +1023,7 @@ func TestPostgresStorePersistsPlanAndReplaysResult(t *testing.T) {
 		"tasks":            len(tasks),
 		"accepted_events":  acceptedEvents,
 	})
-	gate, err := store.EvaluateGate(ctx, fixture.sessionID)
+	gate, err := store.EvaluateGate(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil || gate.Passed || !hasGateFinding(gate, "required_questions_unanswered") {
 		t.Fatalf("gate=%+v err=%v", gate, err)
 	}
@@ -1044,15 +1087,15 @@ func TestPostgresStorePersistsPlanAndReplaysResult(t *testing.T) {
 	if err = tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
-	sources, err := store.ListSourceSnapshots(ctx, fixture.sessionID)
+	sources, err := store.ListSourceSnapshots(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil || len(sources) != 1 || sources[0].SnapshotExcerpt == "" {
 		t.Fatalf("source views=%+v err=%v", sources, err)
 	}
-	observations, err := store.ListObservations(ctx, fixture.sessionID)
+	observations, err := store.ListObservations(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil || len(observations) != 1 {
 		t.Fatalf("observation views=%+v err=%v", observations, err)
 	}
-	claims, err := store.ListClaims(ctx, fixture.sessionID)
+	claims, err := store.ListClaims(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil || len(claims) != 1 || len(claims[0].Evidence) != 1 {
 		t.Fatalf("claim views=%+v err=%v", claims, err)
 	}
@@ -1271,7 +1314,7 @@ func TestPostgresStoreAttemptAttributionSurvivesAgentDeletion(t *testing.T) {
 	}, DefaultRunConfig("standard")); err != nil {
 		t.Fatal(err)
 	}
-	tasks, err := store.ListTasks(ctx, fixture.sessionID)
+	tasks, err := store.ListTasks(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil || len(tasks) != 1 {
 		t.Fatalf("tasks=%+v err=%v", tasks, err)
 	}
@@ -1375,7 +1418,7 @@ func TestPostgresStoreBlocksTasksWhoseDependencyIsTerminal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	attempts, err := store.ListAttempts(ctx, fixture.sessionID)
+	attempts, err := store.ListAttempts(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1478,7 +1521,7 @@ func TestControlTaskBindsGateQuestionAndRecordsRoutingDecision(t *testing.T) {
 	plan.ClientRequestID = "targeted-control-plan"
 	submitStoreTask(t, ctx, pool, store, fixture, "plan:1", plan, run.Config)
 
-	gate, err := store.EvaluateGate(ctx, fixture.sessionID)
+	gate, err := store.EvaluateGate(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1594,7 +1637,7 @@ func TestGateRanksRequiredQuestionFrontierByExpectedValue(t *testing.T) {
 		}
 	}
 	submitStoreTask(t, ctx, pool, store, fixture, "plan:1", plan, run.Config)
-	gate, err := store.EvaluateGate(ctx, fixture.sessionID)
+	gate, err := store.EvaluateGate(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1670,7 +1713,7 @@ func TestInformationGainTracksCanonicalVerificationUpgrade(t *testing.T) {
 		t.Fatalf("dynamic delivery edges=%d parent edges=%d", dynamicDeliveryEdges, dynamicParentEdges)
 	}
 
-	gate, err := store.EvaluateGate(ctx, fixture.sessionID)
+	gate, err := store.EvaluateGate(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1735,7 +1778,7 @@ func TestInformationGainTracksCanonicalVerificationUpgrade(t *testing.T) {
 	if err != nil || math.Abs(run.Stats.LastMeasuredGain-decisions[1].Gain.Score) > 1e-9 || run.Stats.LowGainStreak != 0 {
 		t.Fatalf("run stats=%+v decisions=%+v err=%v", run.Stats, decisions, err)
 	}
-	gate, err = store.EvaluateGate(ctx, fixture.sessionID)
+	gate, err = store.EvaluateGate(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil || hasGateFinding(gate, "required_questions_unanswered") {
 		t.Fatalf("verified answer gate=%+v err=%v", gate, err)
 	}
@@ -1787,15 +1830,15 @@ func TestProductionRegressionDuplicateEvidenceReachesMarginalGainSaturation(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	sources, err := store.ListSourceSnapshots(ctx, fixture.sessionID)
+	sources, err := store.ListSourceSnapshots(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	observations, err := store.ListObservations(ctx, fixture.sessionID)
+	observations, err := store.ListObservations(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	claims, err := store.ListClaims(ctx, fixture.sessionID)
+	claims, err := store.ListClaims(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1803,7 +1846,7 @@ func TestProductionRegressionDuplicateEvidenceReachesMarginalGainSaturation(t *t
 		len(sources) != 3 || len(observations) != 3 || len(claims) != 1 || len(claims[0].Evidence) != 3 {
 		t.Fatalf("run stats=%+v sources=%d observations=%d claims=%+v", run.Stats, len(sources), len(observations), claims)
 	}
-	gate, err := store.EvaluateGate(ctx, fixture.sessionID)
+	gate, err := store.EvaluateGate(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1879,19 +1922,19 @@ func TestPostgresStoreRunsFromPlanThroughConfirmedDelivery(t *testing.T) {
 	if err != nil || runAfterEvidence.Stats.LastMeasuredGain <= 0 {
 		t.Fatalf("run after evidence stats=%+v err=%v", runAfterEvidence.Stats, err)
 	}
-	sourcesAfterEvidence, err := store.ListSourceSnapshots(ctx, fixture.sessionID)
+	sourcesAfterEvidence, err := store.ListSourceSnapshots(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	observationsAfterEvidence, err := store.ListObservations(ctx, fixture.sessionID)
+	observationsAfterEvidence, err := store.ListObservations(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	claimsAfterEvidence, err := store.ListClaims(ctx, fixture.sessionID)
+	claimsAfterEvidence, err := store.ListClaims(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	questionsAfterEvidence, err := store.ListQuestions(ctx, fixture.sessionID)
+	questionsAfterEvidence, err := store.ListQuestions(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1967,7 +2010,7 @@ func TestPostgresStoreRunsFromPlanThroughConfirmedDelivery(t *testing.T) {
 		t.Fatalf("delivery changed measured gain before=%v after=%v err=%v", runAfterEvidence.Stats.LastMeasuredGain, runAfterDelivery.Stats.LastMeasuredGain, err)
 	}
 
-	gate, err := store.EvaluateGate(ctx, fixture.sessionID)
+	gate, err := store.EvaluateGate(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil || !gate.Passed {
 		t.Fatalf("gate=%+v err=%v", gate, err)
 	}
@@ -1985,7 +2028,7 @@ func TestPostgresStoreRunsFromPlanThroughConfirmedDelivery(t *testing.T) {
 		backfillIntegrationDecisionPassport(t, ctx, tx, fixture.workspaceID, fixture.sessionID, gainDecisionID, "information_gain", 1, 1)
 		return nil
 	})
-	if freshGate, freshErr := store.EvaluateGate(ctx, fixture.sessionID); freshErr != nil || !freshGate.Passed {
+	if freshGate, freshErr := store.EvaluateGate(ctx, fixture.sessionID, fixture.workspaceID); freshErr != nil || !freshGate.Passed {
 		t.Fatalf("duplicate evidence invalidated report gate=%+v err=%v", freshGate, freshErr)
 	}
 	awaiting, _, err := store.SetAwaitingConfirmation(ctx, fixture.sessionID, gate)
@@ -2010,7 +2053,7 @@ func TestPostgresStoreRunsFromPlanThroughConfirmedDelivery(t *testing.T) {
 		backfillIntegrationDecisionPassport(t, ctx, tx, fixture.workspaceID, fixture.sessionID, canonicalGainDecisionID, "information_gain", 1, 1)
 		return nil
 	})
-	staleGate, err := store.EvaluateGate(ctx, fixture.sessionID)
+	staleGate, err := store.EvaluateGate(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil || !hasGateFinding(staleGate, "report_stale_after_evidence") {
 		t.Fatalf("stale report gate=%+v err=%v", staleGate, err)
 	}
@@ -2060,11 +2103,11 @@ func TestPostgresStoreV4EvidenceFitnessAcceptsOneControllingRecordAtDeepTier(t *
 	evidence := upgradeResultToV5(authoritativeRecordEvidenceV4())
 	submitStoreTask(t, ctx, pool, store, fixture, "verify-record", evidence, run.Config)
 
-	findings, err := store.evaluateEvidenceFitnessV4(ctx, fixture.sessionID, 1, 1)
+	findings, err := store.evaluateEvidenceFitnessV4(ctx, fixture.sessionID, fixture.workspaceID, 1, 1)
 	if err != nil || len(findings) != 0 {
 		t.Fatalf("evidence fitness findings=%+v err=%v", findings, err)
 	}
-	gate, err := store.EvaluateGate(ctx, fixture.sessionID)
+	gate, err := store.EvaluateGate(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2072,11 +2115,11 @@ func TestPostgresStoreV4EvidenceFitnessAcceptsOneControllingRecordAtDeepTier(t *
 		t.Fatalf("deep run applied a global source quota: %+v", gate.Findings)
 	}
 
-	snapshots, err := store.ListSourceSnapshots(ctx, fixture.sessionID)
+	snapshots, err := store.ListSourceSnapshots(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil || len(snapshots) != 1 || len(snapshots[0].EvidenceTraits) != 1 || snapshots[0].EvidenceTraits[0] != "official_record" {
 		t.Fatalf("snapshots=%+v err=%v", snapshots, err)
 	}
-	claims, err := store.ListClaims(ctx, fixture.sessionID)
+	claims, err := store.ListClaims(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil || len(claims) != 1 || claims[0].EvidenceStandardKey != "authoritative-record" || len(claims[0].Evidence) != 1 || claims[0].Evidence[0].Directness != 1 || claims[0].Evidence[0].MethodFit != 1 {
 		t.Fatalf("claims=%+v err=%v", claims, err)
 	}
@@ -2131,7 +2174,7 @@ func TestPostgresStoreV4RequiresCounterSearchForTheTargetClaim(t *testing.T) {
 
 	evidence := upgradeResultToV5(authoritativeRecordEvidenceV4())
 	submitStoreTask(t, ctx, pool, store, fixture, "verify-record", evidence, run.Config)
-	findings, err := store.evaluateEvidenceFitnessV4(ctx, fixture.sessionID, 1, 1)
+	findings, err := store.evaluateEvidenceFitnessV4(ctx, fixture.sessionID, fixture.workspaceID, 1, 1)
 	if err != nil || !hasFindingCode(findings, "claim_counterevidence_search_missing") {
 		t.Fatalf("findings before targeted counter-search=%+v err=%v", findings, err)
 	}
@@ -2139,7 +2182,7 @@ func TestPostgresStoreV4RequiresCounterSearchForTheTargetClaim(t *testing.T) {
 	evidence.ClientRequestID = "targeted-counter-search-result"
 	evidence.Summary = "No superseding or conflicting controlling record was found in the bounded counter-search."
 	submitStoreTask(t, ctx, pool, store, fixture, "challenge-record", evidence, run.Config)
-	findings, err = store.evaluateEvidenceFitnessV4(ctx, fixture.sessionID, 1, 1)
+	findings, err = store.evaluateEvidenceFitnessV4(ctx, fixture.sessionID, fixture.workspaceID, 1, 1)
 	if err != nil || hasFindingCode(findings, "claim_counterevidence_search_missing") {
 		t.Fatalf("findings after targeted counter-search=%+v err=%v", findings, err)
 	}
@@ -2187,7 +2230,7 @@ func TestEvaluateGateIgnoresReportFromPriorPlanVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	gate, err := store.EvaluateGate(ctx, fixture.sessionID)
+	gate, err := store.EvaluateGate(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2274,7 +2317,7 @@ func TestEvaluateGateProjectsActionableEvaluationFeedback(t *testing.T) {
 		return nil
 	})
 
-	gate, err := store.EvaluateGate(ctx, fixture.sessionID)
+	gate, err := store.EvaluateGate(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2406,7 +2449,7 @@ func TestV5EvaluationDefectsPersistAndReachRemediation(t *testing.T) {
 		Confidence: 0.9, Evaluation: &evaluation,
 	}, DefaultRunConfig("standard"))
 
-	gate, err := store.EvaluateGate(ctx, fixture.sessionID)
+	gate, err := store.EvaluateGate(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2561,7 +2604,7 @@ func TestEvaluateGateBlocksUnreportedRequiredAnswerAndAuthorSelfReview(t *testin
 		return nil
 	})
 
-	gate, err := store.EvaluateGate(ctx, fixture.sessionID)
+	gate, err := store.EvaluateGate(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2577,7 +2620,7 @@ func submitStoreTask(t *testing.T, ctx context.Context, pool *pgxpool.Pool, stor
 	if _, err := store.ActivateReadyTasks(ctx, fixture.sessionID); err != nil {
 		t.Fatal(err)
 	}
-	tasks, err := store.ListTasks(ctx, fixture.sessionID)
+	tasks, err := store.ListTasks(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2898,7 +2941,7 @@ func seedResearchRunFixture(t *testing.T, ctx context.Context, pool *pgxpool.Poo
 	}{
 		{`INSERT INTO "user" (id, name, email) VALUES ($1::uuid, $2, $3)`, []any{fixture.userID, "research-user-" + suffix, suffix + "@example.test"}},
 		{`INSERT INTO workspace (id, name, slug) VALUES ($1::uuid, $2, $3)`, []any{fixture.workspaceID, "Research workspace", "research-" + suffix}},
-		{`INSERT INTO agent_runtime (id, workspace_id, name, runtime_mode, provider, status, owner_id) VALUES ($1::uuid, $2::uuid, $3, 'local', 'codex', 'online', $4::uuid)`, []any{runtimeID, fixture.workspaceID, "research-runtime-" + suffix, fixture.userID}},
+		{`INSERT INTO agent_runtime (id, workspace_id, name, runtime_mode, provider, status) VALUES ($1::uuid, $2::uuid, $3, 'local', 'codex', 'online')`, []any{runtimeID, fixture.workspaceID, "research-runtime-" + suffix}},
 		{`INSERT INTO agent (id, workspace_id, name, avatar_url, runtime_mode, status, owner_id, runtime_id, model, managed_role) VALUES ($1::uuid, $2::uuid, $3, '/avatars/default.png', 'local', 'idle', $4::uuid, $5::uuid, 'test-model', 'research_fleet')`, []any{fixture.agentID, fixture.workspaceID, "research-agent-" + suffix, fixture.userID, runtimeID}},
 		{`INSERT INTO agent (id, workspace_id, name, avatar_url, runtime_mode, status, owner_id, runtime_id, model, managed_role) VALUES ($1::uuid, $2::uuid, $3, '/avatars/default.png', 'local', 'idle', $4::uuid, $5::uuid, 'test-model', 'research_fleet')`, []any{fixture.reporterID, fixture.workspaceID, "research-reporter-" + suffix, fixture.userID, runtimeID}},
 		{`INSERT INTO agent (id, workspace_id, name, avatar_url, runtime_mode, status, owner_id, runtime_id, model, managed_role) VALUES ($1::uuid, $2::uuid, $3, '/avatars/default.png', 'local', 'idle', $4::uuid, $5::uuid, 'test-model', 'research_fleet')`, []any{fixture.validatorID, fixture.workspaceID, "research-validator-" + suffix, fixture.userID, runtimeID}},
@@ -2944,6 +2987,11 @@ func seedResearchRunFixture(t *testing.T, ctx context.Context, pool *pgxpool.Poo
 
 func researchArtifactCleanupTables() []string {
 	return []string{
+		"research_result_node",
+		"research_node_absorption",
+		"research_discussion_turn",
+		"research_report_review",
+		"research_steering_assessment",
 		"research_artifact_version",
 		"research_artifact_policy_mutation",
 		"research_artifact_lifecycle_event",
@@ -3006,6 +3054,12 @@ func cleanupSeedResearchRunFixture(t *testing.T, databaseURL string, fixture res
 	}
 	if err != nil && cleanupErr == nil {
 		cleanupErr = fmt.Errorf("delete research fixture input references: %w", err)
+	}
+	if cleanupErr == nil {
+		_, err = pool.Exec(ctx, `DELETE FROM research_node_steward_assignment WHERE workspace_id = $1::uuid`, fixture.workspaceID)
+	}
+	if err != nil && cleanupErr == nil {
+		cleanupErr = fmt.Errorf("delete research fixture node steward assignments: %w", err)
 	}
 	if cleanupErr == nil {
 		_, err = pool.Exec(ctx, `DELETE FROM workspace WHERE id = $1::uuid`, fixture.workspaceID)
@@ -3152,7 +3206,7 @@ func TestStaleResultPreservesEvidenceWithoutAdvancingCurrentPlan(t *testing.T) {
 	if _, err = store.ActivateReadyTasks(ctx, fixture.sessionID); err != nil {
 		t.Fatal(err)
 	}
-	tasks, err := store.ListTasks(ctx, fixture.sessionID)
+	tasks, err := store.ListTasks(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -16,6 +16,7 @@ import { ActorMentionProfileTrigger } from "./actor-mention-profile-trigger";
 import { AppLink } from "../navigation/app-link";
 import { Attachment as AttachmentRenderer } from "../editor/attachment";
 import { AttachmentDownloadProvider } from "../editor/attachment-download-context";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 
 import { useActorMentionChipLabel } from "./actor-mention-chip-label";
 import {
@@ -114,22 +115,26 @@ export function ActorMention({
   // peek-only via title when we resolved a real name.
   const { name, unresolved, handlePeek } = useActorMentionChipLabel(type, id, label);
   const kind = resolveMentionTokenKind(type, id, viewerUserId);
-  const chip = (
-    <span
-      className={mentionTokenClassName(
-        kind,
-        unresolved
-          ? "bg-muted text-muted-foreground hover:bg-muted focus-visible:bg-muted"
-          : undefined,
-        variant,
-      )}
-      data-mention-kind={kind}
-      data-mention-type={type}
-      data-mention-unresolved={unresolved ? "true" : undefined}
-      title={handlePeek ? `@${handlePeek}` : undefined}
-    >
-      {highlightSearchText(`@${name}`, highlightQuery)}
-    </span>
+  const chipProps = {
+    className: mentionTokenClassName(
+      kind,
+      unresolved
+        ? "bg-muted text-muted-foreground hover:bg-muted focus-visible:bg-muted"
+        : undefined,
+      variant,
+    ),
+    "data-mention-kind": kind,
+    "data-mention-type": type,
+    "data-mention-unresolved": unresolved ? "true" : undefined,
+  };
+  const chipText = highlightSearchText(`@${name}`, highlightQuery);
+  const chip = handlePeek ? (
+    <Tooltip>
+      <TooltipTrigger render={<span {...chipProps} />}>{chipText}</TooltipTrigger>
+      <TooltipContent side="top">{`@${handlePeek}`}</TooltipContent>
+    </Tooltip>
+  ) : (
+    <span {...chipProps}>{chipText}</span>
   );
 
   if (type === "member" || type === "agent") {

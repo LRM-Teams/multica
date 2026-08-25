@@ -1,27 +1,28 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { api, ApiError } from "@multica/core/api";
 import { useWSEvent } from "@multica/core/realtime";
 import { useAuthStore } from "@multica/core/auth";
 import { useWorkspaceId } from "@multica/core/hooks";
 import {
   clearComputerUpdateDismiss,
-  computerUpdateMachineKey,
   computerUpdateCandidatesFingerprint,
   computerUpdateToastContentKey,
   computerUpdateToastId,
+  computerUpgradeVersionsFingerprint,
+  computerVersionsMatch,
   dismissComputerUpdate,
-  isNewerCliVersion,
+  findComputerUpgradeRuntime,
   isComputerUpdateDismissed,
   listComputerUpdateCandidates,
-  runtimeCurrentVersion,
+  useAllComputerUpgrades,
+  useComputerUpgradeStore,
   type ComputerUpdateCandidate,
+  type ComputerUpgradeRecord,
 } from "@multica/core/runtimes";
 import { runtimeListOptions } from "@multica/core/runtimes/queries";
-import { createSafeId } from "@multica/core/utils";
 import type {
   ComputerUpgradeDonePayload,
   ComputerUpgradeProgressPayload,
@@ -36,16 +37,6 @@ import {
   computerUpdateToastOptions,
 } from "./computer-update-toast-options";
 
-type LocalPhase = {
-  phase: Exclude<ComputerUpdateToastPhase, "prompt">;
-  progress?: string | null;
-  error?: string | null;
-  targetVersion: string;
-  machineTitle: string;
-  daemonId: string;
-  runtimeId: string;
-};
-
 type ToastCopy = {
   update: string;
   later: string;
@@ -58,6 +49,7 @@ type ToastCopy = {
   progressVerifying: string;
   progressApplying: string;
   progressRestarting: string;
+  progressReady: string;
   failedGeneric: string;
   pinned: string;
   promptTitle: (name: string) => string;
@@ -66,7 +58,6 @@ type ToastCopy = {
   failedTitle: (name: string) => string;
   successTitle: (name: string) => string;
   successBody: (version: string) => string;
-  rolledBack: (version: string) => string;
 };
 
 function browserStorage(): Storage | null {
@@ -90,31 +81,26 @@ function getOrCreateMap<K, V>(
  * can self-update. Mount once under the dashboard shell (web + desktop).
  *
  * Performance notes:
- * - In-flight phase lives in refs (no React state churn).
  * - Candidate-list identity churn is ignored via fingerprint.
  * - toast.custom is skipped when the content key for a toast id is unchanged
  *   (runtime list refresh while a sticky prompt is already correct).
- * - Upgrade poll only re-syncs when the polled status actually changes.
+ * - Upgrades coordinate through shared useComputerUpgradeStore.
  */
 export function ComputerUpdateToastListener() {
   const wsId = useWorkspaceId();
   const userId = useAuthStore((s) => s.user?.id);
+  const qc = useQueryClient();
   const { t } = useT("layout");
   const { data: runtimes } = useQuery({
     ...runtimeListOptions(wsId ?? ""),
     enabled: !!wsId,
   });
+
   const runtimesRef = useRef(runtimes);
   runtimesRef.current = runtimes;
 
-  const localByMachineRef = useRef<Map<string, LocalPhase> | null>(null);
-  const requestByMachineRef = useRef<Map<string, {
-    requestId: string;
-    daemonId: string;
-    targetVersion: string;
-    machineTitle: string;
-    runtimeId: string;
-  }> | null>(null);
+  const upgrades = useAllComputerUpgrades();
+
   /** toastId → last published content key (skip identical re-push). */
   const publishedContentRef = useRef<Map<string, string> | null>(null);
   const startUpdateRef = useRef<
@@ -122,7 +108,9 @@ export function ComputerUpdateToastListener() {
   >(null);
   const dismissLaterRef = useRef<
     ((
-      candidate: Pick<ComputerUpdateCandidate, "machineKey" | "targetVersion">,
+      candidate: Pick<ComputerUpdateCandidate, "machineKey" | "targetVersion"> & {
+        daemonId?: string | null;
+      },
     ) => void) | null
   >(null);
 
@@ -134,14 +122,10 @@ export function ComputerUpdateToastListener() {
     () => computerUpdateCandidatesFingerprint(candidates),
     [candidates],
   );
-  const runtimeVersionsFingerprint = useMemo(() => {
-    const rows = (runtimes ?? []).map(
-      (runtime) =>
-        `${computerUpdateMachineKey(runtime)}\0${runtimeCurrentVersion(runtime) ?? ""}`,
-    );
-    rows.sort();
-    return rows.join("\n");
-  }, [runtimes]);
+  const upgradeVersionsFingerprint = useMemo(
+    () => computerUpgradeVersionsFingerprint(runtimes, upgrades),
+    [runtimes, upgrades],
+  );
 
   const copy = useMemo<ToastCopy>(
     () => ({
@@ -156,6 +140,7 @@ export function ComputerUpdateToastListener() {
       progressVerifying: t(($) => $.computer_update.progress_verifying),
       progressApplying: t(($) => $.computer_update.progress_applying),
       progressRestarting: t(($) => $.computer_update.progress_restarting),
+      progressReady: t(($) => $.computer_update.progress_ready),
       failedGeneric: t(($) => $.computer_update.failed_generic),
       pinned: t(($) => $.computer_update.pinned),
       promptTitle: (name) =>
@@ -170,19 +155,50 @@ export function ComputerUpdateToastListener() {
         t(($) => $.computer_update.success_title, { name }),
       successBody: (version) =>
         t(($) => $.computer_update.success_body, { version }),
-      rolledBack: (version) =>
-        t(($) => $.computer_update.rolled_back, { version }),
     }),
     [t],
   );
   const copyRef = useRef(copy);
   copyRef.current = copy;
 
+  /**
+   * Success is the one toast with a finite duration, so it must leave the
+   * sticky bookkeeping behind: `syncToasts` sweeps every published id that its
+   * next pass no longer produces, and the pass right after a finished upgrade
+   * produces nothing. Forgetting the id here is what lets the toast live out
+   * its 4s instead of being dismissed a frame later.
+   */
+  const publishSuccessToast = useCallback(
+    (machineKey: string, title: string, versionLine: string) => {
+      const toastId = computerUpdateToastId(machineKey);
+      publishedContentRef.current?.delete(toastId);
+      const c = copyRef.current;
+      toast.custom(
+        (id) => (
+          <ComputerUpdateToast
+            phase="success"
+            title={title}
+            versionLine={versionLine}
+            updateLabel={c.update}
+            laterLabel={c.later}
+            retryLabel={c.retry}
+            dismissLabel={c.dismiss}
+            onDismiss={() => toast.dismiss(id)}
+          />
+        ),
+        { ...computerUpdateSuccessToastOptions, id: toastId },
+      );
+    },
+    [],
+  );
+
   const syncToasts = useCallback(
-    (nextCandidates: ComputerUpdateCandidate[]) => {
+    (
+      nextCandidates: ComputerUpdateCandidate[],
+      currentUpgrades: Record<string, ComputerUpgradeRecord>,
+    ) => {
       if (!wsId || !userId) return;
       const storage = browserStorage();
-      const localByMachine = getOrCreateMap(localByMachineRef);
       const published = getOrCreateMap(publishedContentRef);
       const nextPublished = new Map<string, string>();
       const c = copyRef.current;
@@ -196,17 +212,17 @@ export function ComputerUpdateToastListener() {
           progressLabel?: string | null;
           errorLabel?: string | null;
           candidate?: ComputerUpdateCandidate;
-          local?: LocalPhase;
+          upgrade?: ComputerUpgradeRecord;
         },
       ) => {
         const toastId = computerUpdateToastId(machineKey);
         const busy = phase === "updating";
         const laterTarget =
-          opts.candidate?.targetVersion ?? opts.local?.targetVersion ?? null;
+          opts.candidate?.targetVersion ?? opts.upgrade?.targetVersion ?? null;
         const actionRuntimeId =
-          opts.candidate?.runtimeId ?? opts.local?.runtimeId ?? null;
+          opts.candidate?.runtimeId ?? opts.upgrade?.runtimeId ?? null;
         const actionDaemonId =
-          opts.candidate?.daemonId ?? opts.local?.daemonId ?? null;
+          opts.candidate?.daemonId ?? opts.upgrade?.daemonId ?? null;
 
         const contentKey = computerUpdateToastContentKey({
           phase,
@@ -249,15 +265,15 @@ export function ComputerUpdateToastListener() {
                   : undefined
               }
               onRetry={
-                opts.local
+                opts.upgrade
                   ? () => {
                       startUpdateRef.current?.({
                         machineKey,
-                        daemonId: opts.local!.daemonId,
-                        runtimeId: opts.local!.runtimeId,
-                        machineTitle: opts.local!.machineTitle,
+                        daemonId: opts.upgrade!.daemonId,
+                        runtimeId: opts.upgrade!.runtimeId ?? "",
+                        machineTitle: opts.upgrade!.machineTitle ?? "",
                         currentVersion: null,
-                        targetVersion: opts.local!.targetVersion,
+                        targetVersion: opts.upgrade!.targetVersion,
                       });
                     }
                   : undefined
@@ -268,6 +284,7 @@ export function ComputerUpdateToastListener() {
                       dismissLaterRef.current?.({
                         machineKey,
                         targetVersion: laterTarget,
+                        daemonId: actionDaemonId,
                       });
                     }
                   : undefined
@@ -279,67 +296,81 @@ export function ComputerUpdateToastListener() {
                         dismissLaterRef.current?.({
                           machineKey,
                           targetVersion: laterTarget,
+                          daemonId: actionDaemonId,
                         });
                       } else {
                         toast.dismiss(id);
                       }
                     }
-                  : phase === "success"
-                    ? () => toast.dismiss(id)
-                    : undefined
+                  : undefined
               }
             />
           ),
-          {
-            ...computerUpdateToastOptions,
-            id: toastId,
-            duration:
-              phase === "success"
-                ? computerUpdateSuccessToastOptions.duration
-                : Infinity,
-          },
+          // Sticky by construction — success is published by
+          // publishSuccessToast, the only computer-update toast that expires.
+          { ...computerUpdateToastOptions, id: toastId },
         );
       };
 
-      for (const [machineKey, local] of localByMachine.entries()) {
-        const versionsCaughtUp =
-          local.phase === "updating" &&
-          (runtimesRef.current ?? []).some((runtime) => {
-            if (computerUpdateMachineKey(runtime) !== machineKey) return false;
-            const currentVersion = runtimeCurrentVersion(runtime);
-            return (
-              !!currentVersion &&
-              !isNewerCliVersion(local.targetVersion, currentVersion)
+      for (const upgrade of Object.values(currentUpgrades)) {
+        if (upgrade.phase === "pending" || upgrade.phase === "running") {
+          const runtime = findComputerUpgradeRuntime(
+            runtimesRef.current,
+            upgrade,
+          );
+          const reachedTarget =
+            runtime &&
+            computerVersionsMatch(
+              runtime.current_version,
+              upgrade.targetVersion,
             );
-          });
-        if (versionsCaughtUp) {
-          requestByMachineRef.current?.delete(machineKey);
-          localByMachine.delete(machineKey);
-          if (storage) {
-            dismissComputerUpdate(storage, wsId, machineKey, local.targetVersion);
+
+          if (reachedTarget) {
+            useComputerUpgradeStore.getState().recordDone({
+              computer_id: upgrade.daemonId,
+              ok: true,
+              newVersion: runtime.current_version ?? undefined,
+            });
+            const machineKey = upgrade.machineKey || upgrade.daemonId;
+            publishSuccessToast(
+              machineKey,
+              c.successTitle(upgrade.machineTitle || upgrade.daemonId),
+              c.successBody(upgrade.targetVersion),
+            );
+            if (storage && wsId && upgrade.targetVersion) {
+              dismissComputerUpdate(
+                storage,
+                wsId,
+                machineKey,
+                upgrade.targetVersion,
+              );
+            }
+            continue;
           }
-          upsertToast(machineKey, "success", {
-            title: c.successTitle(local.machineTitle),
-            versionLine: c.successBody(local.targetVersion),
-            local,
+
+          upsertToast(upgrade.machineKey, "updating", {
+            title: c.updatingTitle(upgrade.machineTitle || upgrade.daemonId),
+            progressLabel:
+              upgrade.progress ||
+              (upgrade.phase === "pending"
+                ? c.progressPending
+                : c.progressRunning),
+            upgrade,
           });
-          continue;
-        }
-        if (local.phase === "updating" || local.phase === "failed") {
-          upsertToast(machineKey, local.phase, {
-            title:
-              local.phase === "updating"
-                ? c.updatingTitle(local.machineTitle)
-                : c.failedTitle(local.machineTitle),
-            progressLabel: local.progress,
-            errorLabel: local.error,
-            local,
+        } else if (upgrade.phase === "failed") {
+          upsertToast(upgrade.machineKey, "failed", {
+            title: c.failedTitle(upgrade.machineTitle || upgrade.daemonId),
+            errorLabel:
+              upgrade.error === "runtime_pinned"
+                ? c.pinned
+                : (upgrade.error || c.failedGeneric),
+            upgrade,
           });
         }
       }
 
       for (const candidate of nextCandidates) {
-        if (localByMachine.has(candidate.machineKey)) continue;
+        if (currentUpgrades[candidate.daemonId]) continue;
         if (
           storage &&
           isComputerUpdateDismissed(
@@ -366,7 +397,7 @@ export function ComputerUpdateToastListener() {
       }
       publishedContentRef.current = nextPublished;
     },
-    [userId, wsId],
+    [publishSuccessToast, userId, wsId],
   );
 
   const candidatesRef = useRef(candidates);
@@ -383,177 +414,106 @@ export function ComputerUpdateToastListener() {
         candidate.targetVersion,
       );
     }
-    getOrCreateMap(localByMachineRef).delete(candidate.machineKey);
+    if (candidate.daemonId) {
+      useComputerUpgradeStore.getState().dismissUpgrade(candidate.daemonId);
+    }
     const toastId = computerUpdateToastId(candidate.machineKey);
     toast.dismiss(toastId);
     publishedContentRef.current?.delete(toastId);
-    syncToasts(candidatesRef.current);
+    syncToasts(candidatesRef.current, useComputerUpgradeStore.getState().upgrades);
   };
 
   startUpdateRef.current = (candidate) => {
     if (!wsId) return;
-    const c = copyRef.current;
-    const toastId = computerUpdateToastId(candidate.machineKey);
-    const localByMachine = getOrCreateMap(localByMachineRef);
-    localByMachine.set(candidate.machineKey, {
-      phase: "updating",
-      progress: c.progressPending,
-      targetVersion: candidate.targetVersion,
-      machineTitle: candidate.machineTitle,
+    const storage = browserStorage();
+    if (storage) {
+      clearComputerUpdateDismiss(storage, wsId, candidate.machineKey);
+    }
+    void useComputerUpgradeStore.getState().startUpgrade({
       daemonId: candidate.daemonId,
+      targetVersion: candidate.targetVersion,
+      machineKey: candidate.machineKey,
+      machineTitle: candidate.machineTitle,
       runtimeId: candidate.runtimeId,
+    }).catch(() => {
+      // Store state handles failed state
     });
-    // Force re-publish even if a prompt was showing for the same id.
-    publishedContentRef.current?.delete(toastId);
-    syncToasts(candidatesRef.current);
-
-    void (async () => {
-      try {
-        const requestId = createSafeId();
-        getOrCreateMap(requestByMachineRef).set(candidate.machineKey, {
-          requestId,
-          daemonId: candidate.daemonId,
-          targetVersion: candidate.targetVersion,
-          machineTitle: candidate.machineTitle,
-          runtimeId: candidate.runtimeId,
-        });
-        await api.initiateMachineUpgrade(
-          candidate.daemonId,
-          candidate.targetVersion,
-          requestId,
-        );
-        const storage = browserStorage();
-        if (storage) {
-          clearComputerUpdateDismiss(storage, wsId, candidate.machineKey);
-        }
-        const current = localByMachine.get(candidate.machineKey);
-        if (current?.phase === "updating" && current.progress === c.progressPending) {
-          localByMachine.set(candidate.machineKey, {
-            ...current,
-            progress: c.progressRunning,
-          });
-        }
-        syncToasts(candidatesRef.current);
-      } catch (err) {
-        let message = c.failedGeneric;
-        if (
-          err instanceof ApiError &&
-          err.status === 409 &&
-          err.body &&
-          typeof err.body === "object" &&
-          (err.body as Record<string, unknown>).code === "runtime_pinned"
-        ) {
-          message = c.pinned;
-        } else if (err instanceof Error && err.message.trim()) {
-          message = err.message;
-        }
-        localByMachine.set(candidate.machineKey, {
-          phase: "failed",
-          error: message,
-          targetVersion: candidate.targetVersion,
-          machineTitle: candidate.machineTitle,
-          daemonId: candidate.daemonId,
-          runtimeId: candidate.runtimeId,
-        });
-        publishedContentRef.current?.delete(toastId);
-        syncToasts(candidatesRef.current);
-      }
-    })();
   };
 
   useWSEvent("computer:upgrade:progress", (raw) => {
     const payload = raw as ComputerUpgradeProgressPayload;
-    const requests = requestByMachineRef.current;
-    if (!requests) return;
-    for (const [machineKey, request] of requests) {
-      if (request.daemonId !== payload.computer_id || request.requestId !== payload.requestId) continue;
+    let label: string | null = payload.message ?? null;
+    if (!label && payload.phase) {
       const c = copyRef.current;
-      const progress = (() => {
-        switch (payload.phase) {
-          case "downloading":
-          case "staging":
-            return c.progressDownloading;
-          case "verifying":
-            return c.progressVerifying;
-          case "applying":
-          case "handoff":
-            return c.progressApplying;
-          case "restarting":
-            return c.progressRestarting;
-          default:
-            return c.progressRunning;
-        }
-      })();
-      const localByMachine = getOrCreateMap(localByMachineRef);
-      localByMachine.set(machineKey, {
-        phase: "updating",
-        progress,
-        targetVersion: request.targetVersion,
-        machineTitle: request.machineTitle,
-        daemonId: request.daemonId,
-        runtimeId: request.runtimeId,
-      });
-      syncToasts(candidatesRef.current);
-      return;
+      switch (payload.phase) {
+        case "pending":
+          label = c.progressPending;
+          break;
+        case "downloading":
+          label = c.progressDownloading;
+          break;
+        case "verifying":
+          label = c.progressVerifying;
+          break;
+        case "applying":
+          label = c.progressApplying;
+          break;
+        case "restarting":
+          label = c.progressRestarting;
+          break;
+        case "ready":
+          label = c.progressReady;
+          break;
+        default:
+          label = c.progressRunning;
+          break;
+      }
     }
+    useComputerUpgradeStore.getState().recordProgress({
+      ...payload,
+      message: label ?? undefined,
+    });
   });
+
   useWSEvent("computer:upgrade:done", (raw) => {
     const payload = raw as ComputerUpgradeDonePayload;
-    const requests = requestByMachineRef.current;
-    if (!requests) return;
-    for (const [machineKey, request] of requests) {
-      if (request.daemonId !== payload.computer_id || request.requestId !== payload.requestId) continue;
-      requests.delete(machineKey);
-      const localByMachine = getOrCreateMap(localByMachineRef);
-      const toastId = computerUpdateToastId(machineKey);
-      if (!payload.ok) {
-        localByMachine.set(machineKey, {
-          phase: "failed",
-          error:
-            payload.error?.trim() ||
-            (payload.rolledBack && payload.newVersion
-              ? copyRef.current.rolledBack(payload.newVersion)
-              : copyRef.current.failedGeneric),
-          targetVersion: request.targetVersion,
-          machineTitle: request.machineTitle,
-          daemonId: request.daemonId,
-          runtimeId: request.runtimeId,
-        });
-        publishedContentRef.current?.delete(toastId);
-        syncToasts(candidatesRef.current);
-        return;
-      }
+    useComputerUpgradeStore.getState().recordDone(payload);
+    const upgrade = useComputerUpgradeStore.getState().getUpgrade(payload.computer_id);
+    if (payload.ok) {
       const storage = browserStorage();
-      if (storage && wsId) {
-        dismissComputerUpdate(storage, wsId, machineKey, request.targetVersion);
+      if (storage && wsId && upgrade?.machineKey && upgrade?.targetVersion) {
+        dismissComputerUpdate(storage, wsId, upgrade.machineKey, upgrade.targetVersion);
       }
-      localByMachine.delete(machineKey);
-      publishedContentRef.current?.delete(toastId);
-      toast.custom(
-        (id) => (
-          <ComputerUpdateToast
-            phase="success"
-            title={copyRef.current.successTitle(request.machineTitle)}
-            versionLine={copyRef.current.successBody(request.targetVersion)}
-            updateLabel={copyRef.current.update}
-            laterLabel={copyRef.current.later}
-            retryLabel={copyRef.current.retry}
-            dismissLabel={copyRef.current.dismiss}
-            onDismiss={() => toast.dismiss(id)}
-          />
+      publishSuccessToast(
+        upgrade?.machineKey || payload.computer_id,
+        copyRef.current.successTitle(
+          upgrade?.machineTitle || payload.computer_id,
         ),
-        { ...computerUpdateSuccessToastOptions, id: toastId },
+        copyRef.current.successBody(
+          upgrade?.targetVersion || payload.newVersion || "",
+        ),
       );
-      return;
+      qc.invalidateQueries({
+        predicate: (query) => query.queryKey[0] === "runtimes",
+      });
     }
   });
 
-  // Only re-sync when eligibility fingerprint or locale copy changes —
-  // not on every runtime-list array identity churn. Version changes are also
-  // observed because a reconnect can replace the transient upgrade-done event.
+  // Only re-sync when eligibility fingerprint, locale copy, active upgrades, or
+  // the version an upgrading machine reports change — not on every runtime-list
+  // array identity churn. The version fingerprint is what retires a sticky
+  // "Updating…" toast: a restarted daemon sends no `computer:upgrade:done` and
+  // has already left the candidate list, so its re-registration on the target
+  // version moves no other dependency here.
   useEffect(() => {
-    syncToasts(candidatesRef.current);
-  }, [candidatesFingerprint, copy, runtimeVersionsFingerprint, syncToasts]);
+    syncToasts(candidatesRef.current, upgrades);
+  }, [
+    candidatesFingerprint,
+    copy,
+    syncToasts,
+    upgradeVersionsFingerprint,
+    upgrades,
+  ]);
 
   return null;
 }

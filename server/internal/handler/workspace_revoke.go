@@ -52,7 +52,7 @@ func (h *Handler) revokeAndRemoveMember(ctx context.Context, workspaceID, userID
 
 	runtimes, err := qtx.ListAgentRuntimesByOwner(ctx, db.ListAgentRuntimesByOwnerParams{
 		WorkspaceID: workspaceID,
-		OwnerID:     userID,
+		UserID:      userID,
 	})
 	if err != nil {
 		return empty, err

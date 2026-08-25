@@ -862,17 +862,17 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
                 </dt>
                 <dd className="min-w-0 flex-1">{totalFileCount(skill)}</dd>
               </div>
-              <div
-                className="flex gap-2"
-                title={skill.id}
-              >
-                <dt className="min-w-20 text-muted-foreground">
-                  {t(($) => $.detail.sidebar.id)}
-                </dt>
-                <dd className="min-w-0 flex-1 truncate font-mono text-muted-foreground">
-                  {skill.id.slice(0, 8)}…
-                </dd>
-              </div>
+              <Tooltip>
+                <TooltipTrigger render={<div className="flex gap-2" />}>
+                  <dt className="min-w-20 text-muted-foreground">
+                    {t(($) => $.detail.sidebar.id)}
+                  </dt>
+                  <dd className="min-w-0 flex-1 truncate font-mono text-muted-foreground">
+                    {skill.id.slice(0, 8)}…
+                  </dd>
+                </TooltipTrigger>
+                <TooltipContent side="top">{skill.id}</TooltipContent>
+              </Tooltip>
             </dl>
           </div>
 

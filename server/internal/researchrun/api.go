@@ -34,6 +34,7 @@ type ResearchRunSubmission interface {
 	WorkManifest(context.Context, V6AttemptAccess) (V6WorkManifest, error)
 	WorkCatalog(context.Context, V6CatalogRequest) (V6CatalogPage, error)
 	AcknowledgeWorkCatalog(context.Context, AcknowledgeV6CatalogInput) error
+	ReportWorkProgress(context.Context, ReportV6WorkProgressInput) error
 	SubmitV6Work(context.Context, V6SubmissionInput) (V6SubmissionOutcome, error)
 	DirectorBriefPage(context.Context, V6AttemptAccess, string) (V6DirectorBriefPage, error)
 	AcknowledgeDirectorBrief(context.Context, AcknowledgeV6DirectorBriefInput) error
@@ -44,6 +45,14 @@ type ResearchRunSubmission interface {
 // environments without adding V6 to the supported/default production policy.
 type ResearchRunV6Bootstrap interface {
 	BootstrapV6(context.Context, V6BootstrapInput) (Run, error)
+}
+
+type ResearchSourceIngestion interface {
+	PersistSourceIngestion(context.Context, PersistSourceIngestionInput) (PersistSourceIngestionResult, error)
+}
+
+type ResearchCanonicalRebuild interface {
+	RebuildCanonicalRun(context.Context, string, string) (RebuiltCanonicalRun, error)
 }
 
 type ResearchRunDirectorControl interface {
@@ -65,6 +74,9 @@ type ResearchRunReconciler interface {
 var _ ResearchRun = (*Engine)(nil)
 var _ ResearchRunSubmission = (*Engine)(nil)
 var _ ResearchRunV6Bootstrap = (*Engine)(nil)
+var _ ResearchSourceIngestion = (*Engine)(nil)
+var _ ResearchCanonicalRebuild = (*Engine)(nil)
 var _ ResearchRunReconciler = (*Engine)(nil)
 var _ ResearchRunDirectorControl = (*Engine)(nil)
 var _ V6ProjectionReader = (*Engine)(nil)
+var _ V6WorkActivityWriter = (*Engine)(nil)

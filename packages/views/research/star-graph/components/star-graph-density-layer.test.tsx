@@ -11,7 +11,7 @@ const bins = [
     id: "branch-a:running",
     bounds: { x: 20, y: 30, width: 180, height: 120 },
     total: 24,
-    execution_counts: { running: 18, pending: 6 },
+    executionCounts: { running: 18, pending: 6 },
   },
 ];
 

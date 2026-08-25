@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Agent } from "@multica/core/types";
+import { TooltipProvider } from "@multica/ui/components/ui/tooltip";
 import { AgentProfileActions } from "./agent-profile-actions";
 import { pickStoppableDmTask, type StoppableAgentTask } from "./agent-profile-stoppable-task";
 
@@ -10,16 +11,12 @@ const mocks = vi.hoisted(() => ({
   openDM: vi.fn(),
   isPending: false,
   archiveAgent: vi.fn(async (..._args: unknown[]) => ({})),
+  startAgent: vi.fn(async (..._args: unknown[]) => ({ status: "starting" })),
+  stopAgent: vi.fn(async (..._args: unknown[]) => ({ status: "stopping" })),
   invalidateQueries: vi.fn(),
   toastSuccess: vi.fn(),
   toastError: vi.fn(),
-  // Defaults to "not resolved yet" so every existing test (which doesn't
-  // care about the restart preflight) sees the trigger enabled, exactly
-  // like before this query existed — see `restartBlocked` in the component.
-  restartPreflight: { data: undefined, isSuccess: false } as {
-    data: unknown;
-    isSuccess: boolean;
-  },
+  presence: "offline" as "online" | "offline",
 }));
 
 vi.mock("../../common/use-open-dm", () => ({
@@ -29,25 +26,13 @@ vi.mock("../../common/use-open-dm", () => ({
 vi.mock("@multica/core/api", () => ({
   api: {
     archiveAgent: (...args: unknown[]) => mocks.archiveAgent(...args),
+    startAgent: (...args: unknown[]) => mocks.startAgent(...args),
+    stopAgent: (...args: unknown[]) => mocks.stopAgent(...args),
   },
 }));
 
 vi.mock("@tanstack/react-query", () => ({
   useQueryClient: () => ({ invalidateQueries: mocks.invalidateQueries }),
-  useQuery: () => mocks.restartPreflight,
-}));
-
-vi.mock("@multica/core/agents", () => ({
-  agentRestartPreflightOptions: (agentId: string, enabled: boolean) => ({
-    agentId,
-    enabled,
-  }),
-  agentRestartModeState: (
-    preflight: { actions?: Record<string, { supported: boolean; disabled_reason?: string | null }> } | null | undefined,
-    kind: string,
-  ) => preflight?.actions?.[kind] ?? { supported: false, disabled_reason: "unavailable" },
-  resolveRestartDisabledReasonKey: (reason: string | null | undefined) =>
-    reason ?? "unavailable",
 }));
 
 vi.mock("sonner", () => ({
@@ -57,11 +42,9 @@ vi.mock("sonner", () => ({
   },
 }));
 
-// #633: the three-tier restart modal has its own test; stub it here so this
-// suite only exercises the actions stack (the modal mounts a real restart
-// hook we don't need to wire for these assertions).
 vi.mock("./agent-restart-modal", () => ({
-  AgentRestartModal: () => null,
+  AgentRestartModal: ({ open }: { open: boolean }) =>
+    open ? <div data-testid="agent-restart-modal">Restart and reset choices</div> : null,
 }));
 
 vi.mock("../../i18n/use-t", () => ({
@@ -89,16 +72,15 @@ const RESOURCES = {
     message_button: "Message",
     message_opening: "Opening…",
     actions_delete: "Delete",
+    actions_start_agent: "Start Agent",
+    actions_start_failed: "Failed to start agent",
+    actions_stop_agent: "Stop Agent",
+    actions_stop_agent_failed: "Failed to stop agent",
     agent_deleted_toast: "Deleted",
     delete_failed_toast: "Delete failed",
   },
   restart_modal: {
-    trigger: "Restart…",
-    disabled_reason: {
-      unsupported_runtime_capability: "Requires daemon v0.3.95 or newer.",
-      unavailable: "This action isn't available right now.",
-      no_force_capability: "This code agent can't force-restart yet.",
-    },
+    trigger: "Restart/Reset",
   },
 };
 
@@ -118,7 +100,6 @@ const agent = {
   status: "idle",
   runtime_status: "online",
   runtime_last_seen_at: new Date().toISOString(),
-  max_concurrent_tasks: 1,
   model: "auto",
   thinking_level: "",
   managed_role: undefined,
@@ -169,134 +150,110 @@ describe("pickStoppableDmTask (LRM-589)", () => {
   });
 });
 
-describe("AgentProfileActions (LRM-468 / LRM-909)", () => {
+describe("AgentProfileActions", () => {
   beforeEach(() => {
     mocks.openDM.mockReset();
     mocks.archiveAgent.mockReset().mockResolvedValue({});
+    mocks.startAgent.mockReset().mockResolvedValue({ status: "starting" });
+    mocks.stopAgent.mockReset().mockResolvedValue({ status: "stopping" });
     mocks.toastSuccess.mockReset();
     mocks.toastError.mockReset();
     mocks.invalidateQueries.mockReset();
     mocks.isPending = false;
-    mocks.restartPreflight = { data: undefined, isSuccess: false };
+    mocks.presence = "offline";
   });
 
-  it("renders Message as primary action and opens DM", () => {
-    render(<AgentProfileActions agent={agent} canManage forceRestartSupported />);
-    fireEvent.click(screen.getByTestId("agent-profile-action-message"));
+  it("uses Runner presence, not work status, to offer Start", async () => {
+    render(<AgentProfileActions agent={agent} canManage presence={mocks.presence} />);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Start Agent" })));
+    expect(mocks.startAgent).toHaveBeenCalledWith("agent-1");
+    expect(mocks.stopAgent).not.toHaveBeenCalled();
+    expect(mocks.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["workspaces", "ws-1", "agent-presence"],
+    });
+    expect(mocks.toastSuccess).not.toHaveBeenCalled();
+  });
+
+  it("uses active Runner presence to offer Stop", async () => {
+    mocks.presence = "online";
+    render(
+      <AgentProfileActions
+        agent={{ ...agent, status: "offline" }}
+        canManage
+        presence={mocks.presence}
+      />,
+    );
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Stop Agent" })));
+    expect(mocks.stopAgent).toHaveBeenCalledWith("agent-1");
+    expect(mocks.startAgent).not.toHaveBeenCalled();
+    expect(mocks.toastSuccess).not.toHaveBeenCalled();
+  });
+
+  it("opens DM from the chrome Message icon, not the stack", () => {
+    render(
+      <AgentProfileActions agent={agent} canManage presence={mocks.presence} layout="icons" />,
+    );
+    fireEvent.click(screen.getByTestId("agent-profile-chrome-action-message"));
     expect(mocks.openDM).toHaveBeenCalledWith({ peer_type: "agent", peer_id: "agent-1" });
+    expect(screen.queryByTestId("agent-profile-action-message")).not.toBeInTheDocument();
   });
 
-  it("renders Message → Restart… → Delete and never Stop (LRM-909)", () => {
-    render(<AgentProfileActions agent={agent} canManage forceRestartSupported />);
-    expect(screen.getByTestId("agent-profile-action-message")).toBeInTheDocument();
-    expect(screen.getByTestId("agent-profile-action-restart")).toBeInTheDocument();
-    expect(screen.getByTestId("agent-profile-action-delete")).toBeInTheDocument();
+  it("renders labeled stack actions including Delete", () => {
+    render(<AgentProfileActions agent={agent} canManage presence={mocks.presence} />);
+    expect(screen.queryByTestId("agent-profile-action-message")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start Agent" })).toHaveTextContent("Start Agent");
+    expect(screen.getByRole("button", { name: "Restart/Reset" })).toHaveTextContent("Restart/Reset");
+    expect(screen.getByRole("button", { name: "Delete" })).toHaveTextContent("Delete");
+    expect(screen.getByText("Actions")).toBeInTheDocument();
+    expect(screen.getAllByTestId("agent-profile-action-start")).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Restart/Reset" }));
+    expect(screen.getByTestId("agent-restart-modal")).toHaveTextContent("Restart and reset choices");
     expect(screen.queryByTestId("agent-profile-action-stop")).not.toBeInTheDocument();
-    expect(screen.queryByText("Stop")).not.toBeInTheDocument();
     expect(screen.queryByText("Stop all")).not.toBeInTheDocument();
   });
 
-  it("renders the #633 Restart entry for a manager; Copy diagnostic / Report stay out of scope", () => {
-    render(<AgentProfileActions agent={agent} canManage forceRestartSupported />);
-    expect(screen.getByTestId("agent-profile-action-restart")).toBeInTheDocument();
-    expect(screen.queryByTestId("agent-profile-action-copy")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("agent-profile-action-report")).not.toBeInTheDocument();
-    expect(screen.queryByText("Copy diagnostic info")).not.toBeInTheDocument();
-    expect(screen.queryByText("Report issue")).not.toBeInTheDocument();
-  });
-
-  it("hides the Restart entry for a non-manager", () => {
-    render(<AgentProfileActions agent={agent} canManage={false} forceRestartSupported />);
-    expect(screen.queryByTestId("agent-profile-action-restart")).not.toBeInTheDocument();
-  });
-
-  // Frank, 2026-08-01: restart only makes sense while the computer can
-  // actually receive it — hide it offline, it comes back on its own once
-  // the computer reconnects (derived health, not the raw status column).
-  it("hides the Restart entry when the bound computer is offline", () => {
-    const offlineAgent = { ...agent, runtime_status: "offline" } as Agent;
-    render(<AgentProfileActions agent={offlineAgent} canManage forceRestartSupported />);
-    expect(screen.queryByTestId("agent-profile-action-restart")).not.toBeInTheDocument();
-  });
-
-  it("hides the Restart entry when status says online but the heartbeat is stale (#10)", () => {
-    const staleAgent = {
-      ...agent,
-      runtime_status: "online",
-      runtime_last_seen_at: new Date(Date.now() - 10 * 60_000).toISOString(),
-    } as Agent;
-    render(<AgentProfileActions agent={staleAgent} canManage forceRestartSupported />);
-    expect(screen.queryByTestId("agent-profile-action-restart")).not.toBeInTheDocument();
-  });
-
-  // task #26 / Parker: canManage still sees Restart when force_restart is
-  // false — disabled with human copy, never a missing entry.
-  it("shows Restart disabled with reason when the runtime lacks force_restart", () => {
-    render(<AgentProfileActions agent={agent} canManage forceRestartSupported={false} />);
-    const trigger = screen.getByTestId("agent-profile-action-restart");
-    expect(trigger).toBeDisabled();
-    expect(screen.getByTestId("agent-profile-action-restart-reason")).toHaveTextContent(
-      /can.t force-restart|force-restart/i,
+  it("copies Message, Start/Stop, and Restart/Reset as compact chrome icons without Delete", async () => {
+    render(
+      <TooltipProvider delay={0}>
+        <AgentProfileActions agent={agent} canManage presence={mocks.presence} layout="icons" />
+      </TooltipProvider>,
     );
-  });
-
-  it("shows the Restart entry when the runtime supports forced restart", () => {
-    render(<AgentProfileActions agent={agent} canManage forceRestartSupported={true} />);
-    expect(screen.getByTestId("agent-profile-action-restart")).toBeInTheDocument();
-  });
-
-  // The provider-level gate (forceRestartSupported) only says the provider
-  // CAN be force-restarted in principle — the daemon it's actually running
-  // on might still be too old for the Workspace Runner reset contract. This is
-  // that second, daemon-side gate: button visible, but disabled with a
-  // standing reason instead of a click that silently no-ops.
-  it("disables the trigger with a standing reason when the daemon preflight says unsupported", () => {
-    mocks.restartPreflight = {
-      isSuccess: true,
-      data: {
-        actions: {
-          restart: { supported: false, disabled_reason: "unsupported_runtime_capability" },
-        },
-      },
-    };
-    render(<AgentProfileActions agent={agent} canManage forceRestartSupported />);
-    const trigger = screen.getByTestId("agent-profile-action-restart");
-    expect(trigger).toBeDisabled();
-    expect(screen.getByTestId("agent-profile-action-restart-reason")).toHaveTextContent(
-      "Requires daemon v0.3.95 or newer.",
-    );
-  });
-
-  it("keeps the trigger enabled with no reason once the preflight confirms restart is supported", () => {
-    mocks.restartPreflight = {
-      isSuccess: true,
-      data: { actions: { restart: { supported: true } } },
-    };
-    render(<AgentProfileActions agent={agent} canManage forceRestartSupported />);
-    const trigger = screen.getByTestId("agent-profile-action-restart");
-    expect(trigger).not.toBeDisabled();
-    expect(screen.queryByTestId("agent-profile-action-restart-reason")).not.toBeInTheDocument();
-  });
-
-  it("doesn't flash a disabled reason before the preflight resolves", () => {
-    mocks.restartPreflight = { isSuccess: false, data: undefined };
-    render(<AgentProfileActions agent={agent} canManage forceRestartSupported />);
-    const trigger = screen.getByTestId("agent-profile-action-restart");
-    expect(trigger).not.toBeDisabled();
-    expect(screen.queryByTestId("agent-profile-action-restart-reason")).not.toBeInTheDocument();
-  });
-
-  it("hides Delete when canManage is false; keeps Message", () => {
-    render(<AgentProfileActions agent={agent} canManage={false} forceRestartSupported />);
+    const message = screen.getByTestId("agent-profile-chrome-action-message");
+    const lifecycle = screen.getByTestId("agent-profile-chrome-action-start");
+    const restart = screen.getByTestId("agent-profile-chrome-action-restart");
+    expect(message).not.toHaveTextContent("Message");
+    expect(lifecycle).not.toHaveTextContent("Start Agent");
+    expect(restart).not.toHaveTextContent("Restart/Reset");
+    expect(lifecycle).toHaveAttribute("aria-label", "Start Agent");
+    expect(restart).toHaveAttribute("aria-label", "Restart/Reset");
+    fireEvent.pointerMove(lifecycle);
+    fireEvent.mouseEnter(lifecycle);
+    fireEvent.focus(lifecycle);
+    await waitFor(() => {
+      expect(document.querySelector("[data-slot='tooltip-content']")).toHaveTextContent("Start Agent");
+    });
+    expect(screen.getAllByTestId("agent-profile-chrome-action-start")).toHaveLength(1);
     expect(screen.queryByTestId("agent-profile-action-delete")).not.toBeInTheDocument();
-    expect(screen.getByTestId("agent-profile-action-message")).toBeInTheDocument();
+    expect(screen.queryByTestId("agent-profile-chrome-action-delete")).not.toBeInTheDocument();
+    expect(lifecycle.className).toMatch(/size-8/);
+    expect(restart.className).toMatch(/size-8/);
+
+    fireEvent.click(restart);
+    expect(screen.getByTestId("agent-restart-modal")).toHaveTextContent("Restart and reset choices");
   });
 
-  it("Delete is the only solid destructive in a border-t danger zone (LRM-593 lock A)", () => {
-    render(<AgentProfileActions agent={agent} canManage forceRestartSupported />);
+  it("hides the stack when canManage is false", () => {
+    render(<AgentProfileActions agent={agent} canManage={false} presence={mocks.presence} />);
+    expect(screen.queryByTestId("agent-profile-actions")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("agent-profile-action-delete")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("agent-profile-action-message")).not.toBeInTheDocument();
+  });
+
+  it("keeps Delete as the only solid destructive stack action", () => {
+    render(<AgentProfileActions agent={agent} canManage presence={mocks.presence} />);
     const del = screen.getByTestId("agent-profile-action-delete");
     expect(del.className).toMatch(/text-white/);
-    expect(del.parentElement?.className).toMatch(/border-t/);
+    expect(del.className).toMatch(/bg-destructive/);
   });
-
 });

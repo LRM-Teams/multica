@@ -33,7 +33,7 @@ type PiRPCBackend interface {
 	Backend
 	ResidentMessageInput
 	ResidentMessagePreparation
-	ResidentReminderInputReceiver
+	ResidentIdleInboxNoticeInput
 	ResidentPendingNoticeInput
 	BindRunIdentity(PiRunIdentity) (PiRunBinding, error)
 	PrepareRun(context.Context, PiRunIdentity) (PiRunBinding, error)
@@ -66,6 +66,7 @@ func (b *piRPCBackend) maybeCompactAfterTurn(p *piRPCProcess, model string, msgC
 	ctx, cancel := context.WithTimeout(context.Background(), postTurnCompactionTimeout)
 	defer cancel()
 	trySend(msgCh, Message{Type: MessageCompactionStarted})
+	runMemoryFlushBeforeCompaction(processWorkingDir(p.cmd))
 	compacted, err := b.Compact(ctx, proactiveContextCompactionInstructions)
 	b.compact.recordAttempt(err != nil, p.queryRuntimeStats(context.Background(), nil, model))
 	if err != nil {
@@ -199,11 +200,18 @@ type piRPCProcess struct {
 	sessionID     string
 	mcpConfigPath string // temp file from agent.mcp_config; removed on dispose
 
-	writeMu   sync.Mutex
-	stateMu   sync.Mutex
-	turn      *piRPCTurn
-	idleInput *piRPCIdleInput
-	pending   map[string]chan piRPCResponse // request-ID keyed control responses
+	writeMu       sync.Mutex
+	stateMu       sync.Mutex
+	turn          *piRPCTurn
+	idleInput     *piRPCIdleInput
+	hasServedTurn bool
+	pending       map[string]chan piRPCResponse // request-ID keyed control responses
+}
+
+func (p *piRPCProcess) isUnboundIdle() bool {
+	p.stateMu.Lock()
+	defer p.stateMu.Unlock()
+	return !p.hasServedTurn && p.turn == nil && p.idleInput == nil && len(p.pending) == 0
 }
 
 type piRPCIdleInput struct {
@@ -299,7 +307,13 @@ func (b *piRPCBackend) BindRunIdentity(identity PiRunIdentity) (PiRunBinding, er
 		return *b.runBinding, nil
 	}
 	if b.process != nil {
-		return PiRunBinding{}, fmt.Errorf("%w: Pi run identity must be bound before the resident process starts", ErrPiRPCRunIdentityRequiresFreshSession)
+		// Lifecycle startup may eagerly create an unbound resident before the
+		// dispatch run identity arrives. It is safe to replace only while no
+		// user turn or control request has used the native session.
+		if b.running.Load() || !b.process.isUnboundIdle() {
+			return PiRunBinding{}, fmt.Errorf("%w: Pi run identity must be bound before the resident process serves a turn", ErrPiRPCRunIdentityRequiresFreshSession)
+		}
+		b.disposeLocked(b.process)
 	}
 	sessionID := newPiSessionID()
 	captureExtPath, captureLogPath, err := newPiCaptureExtension()
@@ -431,8 +445,8 @@ func (b *piRPCBackend) AcceptMessageBatch(ctx context.Context, messages []Reside
 	return b.acceptIdleInputPrompt(ctx, prompt)
 }
 
-func (b *piRPCBackend) AcceptReminderInput(ctx context.Context, input ResidentReminderInput) (ResidentMessageAcceptance, error) {
-	prompt, err := formatResidentReminderInput(input)
+func (b *piRPCBackend) AcceptIdleInboxNotice(ctx context.Context, notice ResidentPendingNotice) (ResidentMessageAcceptance, error) {
+	prompt, err := formatResidentPendingNotice(notice)
 	if err != nil {
 		return ResidentMessageAcceptance{}, err
 	}
@@ -493,6 +507,7 @@ func (b *piRPCBackend) acceptIdleInputPrompt(ctx context.Context, prompt string)
 		p.stateMu.Unlock()
 		return ResidentMessageAcceptance{}, fmt.Errorf("%w: Pi RPC native input is active", ErrPiRPCTurnBusy)
 	}
+	p.hasServedTurn = true
 	p.idleInput = idleInput
 	p.stateMu.Unlock()
 	clearIdleInput := func() {
@@ -553,8 +568,11 @@ func (b *piRPCBackend) AcceptPendingNotice(ctx context.Context, notice ResidentP
 }
 
 func formatResidentPendingNotice(notice ResidentPendingNotice) (string, error) {
-	if notice.TotalPending <= 0 || len(notice.ChangedTargets) == 0 {
-		return "", errors.New("Pending Notice requires a positive total and changed targets")
+	if notice.TotalPending < 0 || notice.PendingAppItems < 0 || notice.TotalPending == 0 && notice.PendingAppItems == 0 {
+		return "", errors.New("Pending Notice requires pending Messages or App items")
+	}
+	if notice.TotalPending > 0 && len(notice.ChangedTargets) == 0 {
+		return "", errors.New("Pending Message Notice requires changed targets")
 	}
 	count := 0
 	seen := make(map[string]struct{}, len(notice.ChangedTargets))
@@ -575,7 +593,7 @@ func formatResidentPendingNotice(notice ResidentPendingNotice) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("marshal Pending Notice: %w", err)
 	}
-	return "Content-free Message Notice. Concrete bodies remain Pending. Run `multica message check` at a natural breakpoint to inspect them:\n" + string(raw), nil
+	return "Content-free Inbox Notice. Concrete Message and App item bodies remain local. Run `multica inbox check` at a natural breakpoint to inspect them:\n" + string(raw), nil
 }
 
 func (b *piRPCBackend) finishIdleMessageInput(p *piRPCProcess, idleInput *piRPCIdleInput) {
@@ -629,7 +647,75 @@ func (b *piRPCBackend) finishIdleMessageInput(p *piRPCProcess, idleInput *piRPCI
 	close(idleInput.turnDone)
 }
 
+func residentMessageReplyTarget(message ResidentMessage) string {
+	if replyTarget := strings.TrimSpace(message.ReplyTarget); replyTarget != "" {
+		return replyTarget
+	}
+	return strings.TrimSpace(message.Target)
+}
+
+func isStandaloneChatDeliveryTarget(target string) bool {
+	return strings.HasPrefix(strings.TrimSpace(target), "chat:")
+}
+
 func formatResidentMessageBatch(messages []ResidentMessage) (string, error) {
+	if len(messages) == 0 {
+		return "", errors.New("resident Message batch is empty")
+	}
+	standaloneCount := 0
+	for _, message := range messages {
+		replyTarget := residentMessageReplyTarget(message)
+		if strings.TrimSpace(message.ID) == "" || replyTarget == "" || message.Seq <= 0 {
+			return "", errors.New("resident Message id, target, and positive seq are required")
+		}
+		if len(message.PartsJSON) > 0 && !json.Valid(message.PartsJSON) {
+			return "", errors.New("resident Message parts are invalid JSON")
+		}
+		if isStandaloneChatDeliveryTarget(replyTarget) {
+			standaloneCount++
+		}
+	}
+	if standaloneCount > 0 && standaloneCount < len(messages) {
+		return "", errors.New("resident Message batch mixes standalone chat: targets with channel/DM transport targets")
+	}
+	if standaloneCount == len(messages) {
+		// engineering-principles.md §1.5: standalone bubbles are chat turns, not
+		// channel Messages. Do not frame them as Canonical Message batches with
+		// CLI --target — that contract caused Notes FAB agents to call
+		// `message send --target chat:…` → 400 and leave the UI waiting.
+		return formatStandaloneChatTurnPrompt(messages)
+	}
+	return formatChannelResidentMessageBatch(messages)
+}
+
+// formatStandaloneChatTurnPrompt is the idle-wake shape for FAB / Notes bubble
+// chat_session turns. Final assistant output is auto-written back.
+func formatStandaloneChatTurnPrompt(messages []ResidentMessage) (string, error) {
+	var b strings.Builder
+	b.WriteString("Standalone Agent Chat. This is a private bubble conversation with a human — not a channel or DM Message.\n")
+	b.WriteString("Reply with final assistant output only. It is written back to the bubble automatically.\n")
+	b.WriteString("Do not run `multica message send` or `multica message react`. There is no channel/DM --target for this turn.\n")
+	b.WriteString("Do not run Issue commands unless the human asks for Issue or project work.\n")
+	b.WriteString("If `<note_chat_context>` appears, follow selective note reads (`multica notes tree` / `multica notes get`) before inventing page bodies.\n\n")
+	for i, message := range messages {
+		if i > 0 {
+			b.WriteString("\n---\n\n")
+		}
+		if rc := strings.TrimSpace(message.RuntimeContext); rc != "" {
+			b.WriteString(rc)
+			if !strings.HasSuffix(rc, "\n") {
+				b.WriteString("\n")
+			}
+			b.WriteString("\n")
+		}
+		b.WriteString("Human:\n")
+		b.WriteString(strings.TrimSpace(message.Content))
+		b.WriteString("\n")
+	}
+	return b.String(), nil
+}
+
+func formatChannelResidentMessageBatch(messages []ResidentMessage) (string, error) {
 	type residentMessageInput struct {
 		ID             string          `json:"id"`
 		Target         string          `json:"target"`
@@ -640,16 +726,7 @@ func formatResidentMessageBatch(messages []ResidentMessage) (string, error) {
 	}
 	payload := make([]residentMessageInput, 0, len(messages))
 	for _, message := range messages {
-		replyTarget := strings.TrimSpace(message.ReplyTarget)
-		if replyTarget == "" {
-			replyTarget = strings.TrimSpace(message.Target)
-		}
-		if strings.TrimSpace(message.ID) == "" || replyTarget == "" || message.Seq <= 0 {
-			return "", errors.New("resident Message id, target, and positive seq are required")
-		}
-		if len(message.PartsJSON) > 0 && !json.Valid(message.PartsJSON) {
-			return "", errors.New("resident Message parts are invalid JSON")
-		}
+		replyTarget := residentMessageReplyTarget(message)
 		payload = append(payload, residentMessageInput{
 			ID: message.ID, Target: replyTarget, Seq: message.Seq, Content: message.Content, Parts: message.PartsJSON, RuntimeContext: message.RuntimeContext,
 		})
@@ -713,6 +790,7 @@ func (b *piRPCBackend) executeTurn(ctx context.Context, prompt string, opts Exec
 		},
 	}
 	p.stateMu.Lock()
+	p.hasServedTurn = true
 	p.turn = turn
 	p.stateMu.Unlock()
 	defer func() {
@@ -1203,13 +1281,9 @@ func trySendPiRPCCompletion(ch chan<- piRPCCompletion, completion piRPCCompletio
 func buildPiRPCArgs(sessionID string, opts ExecOptions, logger *slog.Logger) []string {
 	args := appendPiSessionArgs([]string{"--mode", "rpc"}, sessionID, opts.Cwd)
 	if opts.Model != "" {
-		provider, model := splitPiModel(opts.Model)
-		if provider != "" {
-			args = append(args, "--provider", provider)
-		}
-		if model != "" {
-			args = append(args, "--model", model)
-		}
+		// Preserve provider-prefixed model IDs so Pi can hand them through to
+		// provider-aware model routers unchanged.
+		args = append(args, "--model", opts.Model)
 	}
 	if opts.ThinkingLevel != "" {
 		args = append(args, "--thinking", opts.ThinkingLevel)

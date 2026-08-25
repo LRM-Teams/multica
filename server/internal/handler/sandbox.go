@@ -138,6 +138,38 @@ func sandboxNodeToResponse(n db.SandboxNode, instanceCount int64) SandboxNodeRes
 	}
 }
 
+func sandboxNodeFromRow(id pgtype.UUID, nodeKey string, ownerUserID pgtype.UUID, name, status string, capabilities []byte, maxConcurrency int32, metadata []byte, lastSeenAt, deletedAt, createdAt, updatedAt pgtype.Timestamptz) db.SandboxNode {
+	return db.SandboxNode{
+		ID: id, NodeKey: nodeKey, OwnerUserID: ownerUserID, Name: name, Status: status,
+		Capabilities: capabilities, MaxConcurrency: maxConcurrency, Metadata: metadata,
+		LastSeenAt: lastSeenAt, CreatedAt: createdAt, UpdatedAt: updatedAt, DeletedAt: deletedAt,
+	}
+}
+func sandboxNodeFromCreateRow(r db.CreateSandboxNodeRow) db.SandboxNode {
+	return sandboxNodeFromRow(r.ID, r.NodeKey, r.OwnerUserID, r.Name, r.Status, r.Capabilities, r.MaxConcurrency, r.Metadata, r.LastSeenAt, r.DeletedAt, r.CreatedAt, r.UpdatedAt)
+}
+func sandboxNodeFromListRow(r db.ListSandboxNodesByOwnerRow) db.SandboxNode {
+	return sandboxNodeFromRow(r.ID, r.NodeKey, r.OwnerUserID, r.Name, r.Status, r.Capabilities, r.MaxConcurrency, r.Metadata, r.LastSeenAt, r.DeletedAt, r.CreatedAt, r.UpdatedAt)
+}
+func sandboxNodeFromRegRow(r db.UpsertSandboxNodeRegistrationRow) db.SandboxNode {
+	return sandboxNodeFromRow(r.ID, r.NodeKey, r.OwnerUserID, r.Name, r.Status, r.Capabilities, r.MaxConcurrency, r.Metadata, r.LastSeenAt, r.DeletedAt, r.CreatedAt, r.UpdatedAt)
+}
+func sandboxNodeFromNameRow(r db.UpdateSandboxNodeNameForOwnerRow) db.SandboxNode {
+	return sandboxNodeFromRow(r.ID, r.NodeKey, r.OwnerUserID, r.Name, r.Status, r.Capabilities, r.MaxConcurrency, r.Metadata, r.LastSeenAt, r.DeletedAt, r.CreatedAt, r.UpdatedAt)
+}
+func sandboxNodeFromTplRow(r db.UpdateSandboxNodeDefaultTemplateForOwnerRow) db.SandboxNode {
+	return sandboxNodeFromRow(r.ID, r.NodeKey, r.OwnerUserID, r.Name, r.Status, r.Capabilities, r.MaxConcurrency, r.Metadata, r.LastSeenAt, r.DeletedAt, r.CreatedAt, r.UpdatedAt)
+}
+func sandboxNodeFromPickRow(r db.PickSandboxNodeForWorkspaceRow) db.SandboxNode {
+	return sandboxNodeFromRow(r.ID, r.NodeKey, r.OwnerUserID, r.Name, r.Status, r.Capabilities, r.MaxConcurrency, r.Metadata, r.LastSeenAt, r.DeletedAt, r.CreatedAt, r.UpdatedAt)
+}
+func sandboxNodeFromPickAvailRow(r db.PickAvailableSandboxNodeForWorkspaceRow) db.SandboxNode {
+	return sandboxNodeFromRow(r.ID, r.NodeKey, r.OwnerUserID, r.Name, r.Status, r.Capabilities, r.MaxConcurrency, r.Metadata, r.LastSeenAt, r.DeletedAt, r.CreatedAt, r.UpdatedAt)
+}
+func sandboxNodeFromHeartbeatRow(r db.TouchSandboxNodeHeartbeatRow) db.SandboxNode {
+	return sandboxNodeFromRow(r.ID, r.NodeKey, r.OwnerUserID, r.Name, r.Status, r.Capabilities, r.MaxConcurrency, r.Metadata, r.LastSeenAt, r.DeletedAt, r.CreatedAt, r.UpdatedAt)
+}
+
 func sandboxInstanceToResponse(i db.SandboxInstance) SandboxInstanceResponse {
 	return SandboxInstanceResponse{
 		ID:            uuidToString(i.ID),
@@ -260,7 +292,7 @@ func (h *Handler) CreateSandboxNode(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to create sandbox node")
 		return
 	}
-	writeJSON(w, http.StatusCreated, sandboxNodeToResponse(node, 0))
+	writeJSON(w, http.StatusCreated, sandboxNodeToResponse(sandboxNodeFromCreateRow(node), 0))
 }
 
 func (h *Handler) ListSandboxNodes(w http.ResponseWriter, r *http.Request) {
@@ -291,7 +323,7 @@ func (h *Handler) ListSandboxNodes(w http.ResponseWriter, r *http.Request) {
 	}
 	resp := make([]SandboxNodeResponse, 0, len(nodes))
 	for _, n := range nodes {
-		resp = append(resp, sandboxNodeToResponse(n, instanceCounts[uuidToString(n.ID)]))
+		resp = append(resp, sandboxNodeToResponse(sandboxNodeFromListRow(n), instanceCounts[uuidToString(n.ID)]))
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -515,11 +547,15 @@ func (h *Handler) UpdateSandboxNode(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "name is required")
 			return
 		}
-		node, err = h.Queries.UpdateSandboxNodeNameForOwner(r.Context(), db.UpdateSandboxNodeNameForOwnerParams{
+		row, qErr := h.Queries.UpdateSandboxNodeNameForOwner(r.Context(), db.UpdateSandboxNodeNameForOwnerParams{
 			ID:          nodeID,
 			OwnerUserID: ownerUUID,
 			Name:        name,
 		})
+		err = qErr
+		if err == nil {
+			node = sandboxNodeFromNameRow(row)
+		}
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				writeError(w, http.StatusNotFound, "sandbox node not found")
@@ -536,11 +572,15 @@ func (h *Handler) UpdateSandboxNode(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "default_template_id is required")
 			return
 		}
-		node, err = h.Queries.UpdateSandboxNodeDefaultTemplateForOwner(r.Context(), db.UpdateSandboxNodeDefaultTemplateForOwnerParams{
+		row, qErr := h.Queries.UpdateSandboxNodeDefaultTemplateForOwner(r.Context(), db.UpdateSandboxNodeDefaultTemplateForOwnerParams{
 			ID:             nodeID,
 			OwnerUserID:    ownerUUID,
 			CubeTemplateID: templateID,
 		})
+		err = qErr
+		if err == nil {
+			node = sandboxNodeFromTplRow(row)
+		}
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				writeError(w, http.StatusNotFound, "sandbox node not found")
@@ -888,9 +928,17 @@ func (h *Handler) CreateSandboxInstance(w http.ResponseWriter, r *http.Request) 
 		if !ok {
 			return
 		}
-		node, err = h.Queries.PickSandboxNodeForWorkspace(r.Context(), db.PickSandboxNodeForWorkspaceParams{WorkspaceID: wsUUID, NodeID: nodeID})
+		row, qErr := h.Queries.PickSandboxNodeForWorkspace(r.Context(), db.PickSandboxNodeForWorkspaceParams{WorkspaceID: wsUUID, NodeID: nodeID})
+		err = qErr
+		if err == nil {
+			node = sandboxNodeFromPickRow(row)
+		}
 	} else {
-		node, err = h.Queries.PickAvailableSandboxNodeForWorkspace(r.Context(), wsUUID)
+		row, qErr := h.Queries.PickAvailableSandboxNodeForWorkspace(r.Context(), wsUUID)
+		err = qErr
+		if err == nil {
+			node = sandboxNodeFromPickAvailRow(row)
+		}
 	}
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -1225,7 +1273,7 @@ func (h *Handler) GetSandboxInstance(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to get sandbox")
 		return
 	}
-	writeJSON(w, http.StatusOK, sandboxInstanceRowToResponse(row))
+	writeJSON(w, http.StatusOK, sandboxInstanceRowToResponse(sandboxInstanceFromGetRow(row)))
 }
 
 func (h *Handler) UpdateSandboxInstance(w http.ResponseWriter, r *http.Request) {
@@ -1687,41 +1735,60 @@ func (h *Handler) DeleteSandboxSnapshot(w http.ResponseWriter, r *http.Request) 
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	deleting, err := h.Queries.MarkSandboxSnapshotDeleting(r.Context(), db.MarkSandboxSnapshotDeletingParams{
-		ID:          snapshotID,
+	deleting, err := h.scheduleSnapshotTemplateDeletion(r.Context(), snap, wsUUID, userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, sandboxSnapshotToResponse(deleting))
+}
+
+// scheduleSnapshotTemplateDeletion marks the snapshot deleting, enqueues the
+// delete_template job and wakes the owning node. The row itself is removed when
+// the job completes, so a snapshot left in "deleting" is a job that never
+// finished rather than a row that was forgotten.
+//
+// Shared with checkpoint deletion, which releases every savepoint it owns
+// through this same path: a savepoint is a sandbox_snapshot, so releasing one has
+// to enqueue the same job and take the same compensation on failure.
+func (h *Handler) scheduleSnapshotTemplateDeletion(ctx context.Context, snap db.SandboxSnapshot, wsUUID pgtype.UUID, actorUserID string) (db.SandboxSnapshot, error) {
+	cubeID := strings.TrimSpace(snap.CubeSnapshotID)
+	deleting, err := h.Queries.MarkSandboxSnapshotDeleting(ctx, db.MarkSandboxSnapshotDeletingParams{
+		ID:          snap.ID,
 		WorkspaceID: wsUUID,
 	})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to mark sandbox snapshot deleting")
-		return
+		return db.SandboxSnapshot{}, fmt.Errorf("failed to mark sandbox snapshot deleting")
 	}
 	payload, _ := json.Marshal(map[string]any{
 		"snapshot_id":      uuidToString(snap.ID),
 		"cube_snapshot_id": cubeID,
 		"local_ref":        cubeID,
 	})
-	job, err := h.Queries.CreateSandboxJob(r.Context(), db.CreateSandboxJobParams{
+	job, err := h.Queries.CreateSandboxJob(ctx, db.CreateSandboxJobParams{
 		WorkspaceID:     wsUUID,
-		InitiatorUserID: parseUUID(userID),
+		InitiatorUserID: parseUUID(actorUserID),
 		NodeID:          snap.NodeID,
 		InstanceID:      snap.InstanceID, // may be null if source instance was deleted
 		Type:            "delete_template",
 		Payload:         payload,
 	})
 	if err != nil {
-		slog.Error("failed to enqueue delete_template sandbox job", "error", err, "snapshot_id", uuidToString(snapshotID))
-		_, _ = h.Queries.MarkSandboxSnapshotReadyAgain(r.Context(), db.MarkSandboxSnapshotReadyAgainParams{
-			ID:          snapshotID,
+		slog.Error("failed to enqueue delete_template sandbox job", "error", err, "snapshot_id", uuidToString(snap.ID))
+		// Leaving the row in "deleting" would make the template unreclaimable:
+		// nothing retries a deleting snapshot, so it would hold the template
+		// forever with no way to ask again.
+		_, _ = h.Queries.MarkSandboxSnapshotReadyAgain(ctx, db.MarkSandboxSnapshotReadyAgainParams{
+			ID:          snap.ID,
 			WorkspaceID: wsUUID,
 			Error:       pgtype.Text{String: "failed to enqueue delete job", Valid: true},
 		})
-		writeError(w, http.StatusInternalServerError, "failed to enqueue sandbox job")
-		return
+		return db.SandboxSnapshot{}, fmt.Errorf("failed to enqueue sandbox job")
 	}
 	if h.SandboxHub != nil {
 		h.SandboxHub.NotifyJobAvailable(uuidToString(snap.NodeID), uuidToString(job.ID))
 	}
-	writeJSON(w, http.StatusAccepted, sandboxSnapshotToResponse(deleting))
+	return deleting, nil
 }
 
 func (h *Handler) SandboxNodeRegister(w http.ResponseWriter, r *http.Request) {
@@ -1757,7 +1824,7 @@ func (h *Handler) SandboxNodeRegister(w http.ResponseWriter, r *http.Request) {
 	if req.MaxConcurrency <= 0 {
 		req.MaxConcurrency = 1
 	}
-	node, err := h.Queries.UpsertSandboxNodeRegistration(r.Context(), db.UpsertSandboxNodeRegistrationParams{
+	nodeRow, err := h.Queries.UpsertSandboxNodeRegistration(r.Context(), db.UpsertSandboxNodeRegistrationParams{
 		NodeKey:        req.NodeKey,
 		Name:           req.Name,
 		OwnerUserID:    ownerUserID,
@@ -1769,6 +1836,7 @@ func (h *Handler) SandboxNodeRegister(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to register sandbox node")
 		return
 	}
+	node := sandboxNodeFromRegRow(nodeRow)
 	if uuidToString(node.ID) != nodeID {
 		writeError(w, http.StatusForbidden, "sandbox node token does not match node_key")
 		return
@@ -1807,7 +1875,7 @@ func (h *Handler) SandboxNodeHeartbeat(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to record sandbox node heartbeat")
 		return
 	}
-	writeJSON(w, http.StatusOK, sandboxNodeToResponse(node, 0))
+	writeJSON(w, http.StatusOK, sandboxNodeToResponse(sandboxNodeFromHeartbeatRow(node), 0))
 }
 
 func mergeSandboxNodeHeartbeatMetadata(existing, incoming json.RawMessage) json.RawMessage {
@@ -1943,7 +2011,7 @@ func (h *Handler) CompleteSandboxJob(w http.ResponseWriter, r *http.Request) {
 	}
 	var inst db.SandboxInstance
 	switch job.Type {
-	case "create", "clone":
+	case "create":
 		inst, err = h.Queries.CompleteSandboxInstanceCreate(r.Context(), db.CompleteSandboxInstanceCreateParams{ID: job.InstanceID, LocalRef: strToText(req.LocalRef), EndpointInfo: jsonBytesOrDefault(req.EndpointInfo, "{}")})
 	case "stop":
 		inst, err = h.Queries.MarkSandboxInstanceStopped(r.Context(), job.InstanceID)
@@ -2134,7 +2202,7 @@ func (h *Handler) requireSandboxJobTokenJob(w http.ResponseWriter, r *http.Reque
 	}
 	authHeader := r.Header.Get("Authorization")
 	raw := strings.TrimPrefix(authHeader, "Bearer ")
-	job, err := h.Queries.GetSandboxJobByTokenHash(r.Context(), auth.HashToken(raw))
+	job, err := h.Queries.GetSandboxJobByTokenHash(r.Context(), pgtype.Text{String: auth.HashToken(raw), Valid: true})
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, "invalid sandbox job token")
 		return db.SandboxJob{}, false

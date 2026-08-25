@@ -60,7 +60,7 @@ export function AccountTab() {
     user ? resolveActorDisplayName(user, user.name) : "",
   );
   const [profileDescription, setProfileDescription] = useState(
-    user?.profile_description ?? "",
+    user?.description ?? "",
   );
   const [profileSaving, setProfileSaving] = useState(false);
   const { upload, uploading } = useFileUpload(api);
@@ -68,7 +68,7 @@ export function AccountTab() {
 
   useEffect(() => {
     setProfileDisplayName(user ? resolveActorDisplayName(user, user.name) : "");
-    setProfileDescription(user?.profile_description ?? "");
+    setProfileDescription(user?.description ?? "");
   }, [user]);
 
   const descriptionTooLong = profileDescription.length > MAX_PROFILE_DESCRIPTION_LEN;
@@ -125,7 +125,7 @@ export function AccountTab() {
     try {
       const updated = await api.updateMe({
         display_name: profileDisplayName,
-        profile_description: profileDescription,
+        description: profileDescription,
       });
       setUser(updated);
       void refreshMemberLists();

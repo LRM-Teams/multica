@@ -7,6 +7,7 @@ import (
 	"math"
 	"sort"
 	"strconv"
+	"strings"
 	"unicode/utf16"
 )
 
@@ -91,6 +92,9 @@ func appendV6CanonicalJSON(out *bytes.Buffer, value any) error {
 }
 
 func appendV6JSONString(out *bytes.Buffer, value string) error {
+	if strings.ContainsRune(value, '\x00') {
+		return fmt.Errorf("JSON string contains U+0000, which PostgreSQL JSONB cannot represent")
+	}
 	var encoded bytes.Buffer
 	encoder := json.NewEncoder(&encoded)
 	encoder.SetEscapeHTML(false)

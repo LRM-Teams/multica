@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 func TestHTTPMiddlewareUsesRoutePatternLabels(t *testing.T) {
@@ -63,7 +64,10 @@ func TestHTTPMiddlewareOnlyIncludesEligibleAPIRoutesInSLOMetric(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
 	})
-	r.Get("/api/daemon/connect", func(w http.ResponseWriter, _ *http.Request) {
+	r.Get(protocol.DaemonConnectPath, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	r.Get(protocol.WorkspaceDaemonConnectPath, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 
@@ -71,7 +75,8 @@ func TestHTTPMiddlewareOnlyIncludesEligibleAPIRoutesInSLOMetric(t *testing.T) {
 		httptest.NewRequest(http.MethodGet, "/api/issues/issue-1", nil),
 		httptest.NewRequest(http.MethodPost, "/api/upload-file", nil),
 		httptest.NewRequest(http.MethodGet, "/api/events", nil),
-		httptest.NewRequest(http.MethodGet, "/api/daemon/connect", nil),
+		httptest.NewRequest(http.MethodGet, protocol.DaemonConnectPath, nil),
+		httptest.NewRequest(http.MethodGet, protocol.WorkspaceDaemonConnectPath, nil),
 	} {
 		r.ServeHTTP(httptest.NewRecorder(), req)
 	}
@@ -88,7 +93,7 @@ func TestHTTPMiddlewareOnlyIncludesEligibleAPIRoutesInSLOMetric(t *testing.T) {
 	if !strings.Contains(body, `route="/api/issues/{id}"`) {
 		t.Fatalf("SLO metric missing eligible API route:\n%s", body)
 	}
-	for _, excludedRoute := range []string{"/api/upload-file", "/api/events", "/api/daemon/connect"} {
+	for _, excludedRoute := range []string{"/api/upload-file", "/api/events", protocol.DaemonConnectPath, protocol.WorkspaceDaemonConnectPath} {
 		if strings.Contains(body, `route="`+excludedRoute+`"`) {
 			t.Fatalf("SLO metric unexpectedly includes excluded route %q:\n%s", excludedRoute, body)
 		}

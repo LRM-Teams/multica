@@ -22,6 +22,7 @@ removed). Use real replacements:
 |---|---|
 | List agents | `multica workspace info --agents` / `--output json` |
 | Create / edit / archive | Multica **Web UI** → `POST/PUT/DELETE /api/agents` |
+| Start / stop | Agent Panel → one Presence-driven button → `POST /api/members/agents/{id}/start|stop` |
 | Hire (agent → human) | agent-created **agent:create Proposal Message** → owner/admin opens CreateAgentDialog |
 | Skill binding | Web UI agent settings → `POST/PUT /api/agents/{id}/skills…` |
 | Env secrets (owner/admin) | Web UI → `GET/PUT /api/agents/{id}/env` (agent actors denied plaintext) |
@@ -67,6 +68,25 @@ The Workspace Onboarding Agent uses the same generic Agent creation transaction.
 Its additional role is identified only by `workspace.onboarding_agent_id`;
 `Wendy` is a default display name, not an identity or authorization predicate.
 
+## Manual lifecycle
+
+The human Agent Panel exposes one Start/Stop button to members with Agent
+management permission. It reads managed process Presence: active means Stop;
+offline means Start. Message work/activity status is not lifecycle truth.
+
+`POST /api/members/agents/{id}/start` dispatches the Agent's desired Runtime to
+the current WorkspaceDaemon. `POST /api/members/agents/{id}/stop` targets the
+Agent and requires the current WorkspaceDaemon. An accepted Stop persists the
+Agent's stopped intent so reconnect reconciliation does not immediately start
+it again. Explicit Start or Reset clears that intent.
+These are human product actions, not `multica agent *` CLI commands.
+
+For multiple Agents, `POST /api/members/agents/lifecycle` accepts one
+`agent_ids` array and an `action` of `start`, `stop`, or `reset`. Reset also
+requires `mode: restart|session|full`. The response reports acceptance per
+Agent because already-dispatched daemon commands cannot be rolled back. Clients
+must not fan out the single-Agent routes.
+
 Two distinct text fields, often confused:
 
 - `description` is a catalog summary. It is stored and shown in listings; the
@@ -92,7 +112,7 @@ display name is `name`.
 The HTTP body (`CreateAgentRequest`) accepts: `name`, optional `display_name`,
 `description`, `instructions`, `runtime_id`, `runtime_config`,
 `avatar_selection`, `custom_env`, `custom_args`, `model`, `thinking_level`,
-`visibility`, `max_concurrent_tasks`, `mcp_config`.
+`visibility`, `mcp_config`.
 
 ## Field contracts
 
@@ -111,12 +131,11 @@ The HTTP body (`CreateAgentRequest`) accepts: `name`, optional `display_name`,
 | `custom_env` | JSON object | — | daemon process env; see Env & secrets |
 | `mcp_config` | raw JSON | object or `null`; create drops literal `null` | daemon MCP; redacted on read |
 | `visibility` | string | — | access control; default `private` |
-| `max_concurrent_tasks` | int | — | scheduler cap; default `6` |
 
 Defaults when omitted: `display_name` from legacy `name` seed, `runtime_config`
-→ `{}`, `custom_env` → `{}`, `custom_args` → `[]`, `visibility` → `private`,
-`max_concurrent_tasks` → `6`; omitted `avatar_selection` gets one concrete
-preset with `avatar_source=assigned`. Presets are absolute, immutable CDN URLs
+→ `{}`, `custom_env` → `{}`, `custom_args` → `[]`, `visibility` → `private`;
+omitted `avatar_selection` gets one concrete preset with
+`avatar_source=assigned`. Presets are absolute, immutable CDN URLs
 backed by OSS; older `/agent-avatars/human-XX.jpg` selections are normalized to
 the same visual asset in the retained v1 catalog at the write boundary. Raw
 `avatar_url` is rejected.
@@ -124,6 +143,11 @@ the same visual asset in the retained v1 catalog at the write boundary. Raw
 `thinking_level` is validated only at the provider level: unrecognized literal
 → 400; a value valid for the provider but unsupported for the chosen model is
 NOT rejected at create — that surfaces as a daemon task error at run time.
+
+For one shared runtime configuration across multiple existing Agents, use
+`PUT /api/members/agents/runtime-config` with `agent_ids`, `runtime_id`, `model`, and
+`thinking_level`. The server validates every Agent and applies the update
+atomically; clients must not fan out one `PUT /api/agents/{id}` per Agent.
 
 ### model vs custom_args
 
@@ -186,6 +210,8 @@ bindings.
 State-changing (require explicit human instruction — do not run speculatively):
 
 - Web UI / committed agent:create Proposal Message → inserts a new agent row.
+- Agent Panel Start / Stop → requests a process lifecycle transition on the
+  bound Computer; Stop is not durable Server intent.
 - Skill add / set → mutate bindings (`set` is destructive).
 - Env set → overwrites full `custom_env` and writes an audit row.
 

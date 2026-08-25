@@ -26,6 +26,8 @@ function signal(
     updatedAt: 1,
     phase: "idle",
     role: "",
+    name: "",
+    avatarUrl: null,
     fleetMemberId: null,
     taskId: null,
     nodeId: null,

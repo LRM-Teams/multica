@@ -55,6 +55,7 @@ type InboxNoticeSnapshot struct {
 	Notice             agent.ResidentPendingNotice
 	Fingerprint        string
 	TargetFingerprints map[string]string
+	TargetKeys         []string
 	CoordinatorID      string
 	PendingGeneration  uint64
 }
@@ -84,7 +85,7 @@ func (k InboxKey) normalized() (InboxKey, error) {
 }
 
 // MessageCoordinator owns the receive-side state for one Workspace/Agent root.
-// Accept makes Pending responsible for a valid delivery. The Workspace Runner
+// Accept makes Pending responsible for a valid delivery. The WorkspaceDaemon
 // may ACK only after its deeper acceptance seam has either handed that body to
 // the provider, retained it in Pending, or identified it as a duplicate.
 type MessageCoordinator struct {
@@ -301,7 +302,7 @@ func (c *MessageCoordinator) Flush(ctx context.Context) error {
 // NotifyPendingAfterTurn schedules a content-free Notice when Pending remains
 // after a resident turn ends. Raft-aligned: do not auto-deliver the next body
 // batch solely because Pending exists. Body delivery stays on idle Accept→Flush
-// (workspace runner) and recovery Flush; the agent may also `message check`.
+// (workspace daemon) and recovery Flush; the agent may also `message check`.
 func (c *MessageCoordinator) NotifyPendingAfterTurn() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -506,13 +507,19 @@ func (c *MessageCoordinator) pendingNoticeLocked() InboxNoticeSnapshot {
 	notice := agent.ResidentPendingNotice{ChangedTargets: make([]agent.ResidentPendingTarget, 0, len(targets))}
 	identities := make([]string, 0)
 	targetFingerprints := make(map[string]string, len(targets))
+	targetKeys := make([]string, 0, len(targets))
 	for _, target := range targets {
 		sequences := make([]int64, 0, len(c.pending[target]))
 		for sequence := range c.pending[target] {
 			sequences = append(sequences, sequence)
 		}
 		sort.Slice(sequences, func(i, j int) bool { return sequences[i] < sequences[j] })
-		notice.ChangedTargets = append(notice.ChangedTargets, agent.ResidentPendingTarget{Target: target, PendingCount: len(sequences)})
+		replyTarget := ""
+		if len(sequences) > 0 {
+			replyTarget = c.pending[target][sequences[0]].ReplyTarget
+		}
+		notice.ChangedTargets = append(notice.ChangedTargets, agent.ResidentPendingTarget{Target: replyTarget, PendingCount: len(sequences)})
+		targetKeys = append(targetKeys, target)
 		notice.TotalPending += len(sequences)
 		targetIdentities := make([]string, 0, len(sequences))
 		for _, sequence := range sequences {
@@ -525,7 +532,7 @@ func (c *MessageCoordinator) pendingNoticeLocked() InboxNoticeSnapshot {
 	}
 	sum := sha256.Sum256([]byte(strings.Join(identities, "\x01")))
 	return InboxNoticeSnapshot{
-		Notice: notice, Fingerprint: fmt.Sprintf("%x", sum[:]), TargetFingerprints: targetFingerprints,
+		Notice: notice, Fingerprint: fmt.Sprintf("%x", sum[:]), TargetFingerprints: targetFingerprints, TargetKeys: targetKeys,
 		CoordinatorID: c.noticeCoordinatorID, PendingGeneration: c.pendingGeneration,
 	}
 }
@@ -540,8 +547,16 @@ func (c *MessageCoordinator) Boundaries() map[string]int64 {
 	return cloneBoundaries(c.boundaries)
 }
 
+// PendingSnapshot returns a pure copy for aggregate Inbox inspection. Unlike
+// message check/read, it creates no coverage receipt and advances no boundary.
+func (c *MessageCoordinator) PendingSnapshot() []protocol.AgentMessageProjection {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]protocol.AgentMessageProjection(nil), c.pendingBatchLocked()...)
+}
+
 // Acknowledgement constructs the wire receipt after Accept succeeds. Emission
-// remains the Workspace Runner acceptance seam's responsibility, after it has
+// remains the WorkspaceDaemon acceptance seam's responsibility, after it has
 // classified provider acceptance, Pending retention, or deduplication.
 func (c *MessageCoordinator) Acknowledgement(delivery protocol.AgentDeliverPayload) protocol.AgentDeliverAckPayload {
 	return protocol.AgentDeliverAckPayload{
@@ -573,6 +588,16 @@ func (c *MessageCoordinator) emitQueueActivityLocked(messages []protocol.AgentMe
 	if len(messages) > 0 && c.queueActivity != nil {
 		c.queueActivity(messages, delta)
 	}
+}
+
+// PendingCount reports how many Messages are queued for the resident runtime.
+func (c *MessageCoordinator) PendingCount() int {
+	if c == nil {
+		return 0
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.pendingCountLocked()
 }
 
 func (c *MessageCoordinator) pendingCountLocked() int {

@@ -52,7 +52,7 @@ func TestComputerWorkspaceBinding_OneOwnerCanConnectMultipleWorkspaces(t *testin
 	siblingWorkspaceID := createBindingTestWorkspace(t, testUserID, "owner")
 	t.Cleanup(func() {
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_workspace_bindings WHERE daemon_id=$1`, computerID)
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_identity_owner WHERE daemon_id=$1`, computerID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM computers WHERE id=$1`, computerID)
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM daemon_token WHERE daemon_id=$1`, computerID)
 	})
 
@@ -66,7 +66,7 @@ func TestComputerWorkspaceBinding_OneOwnerCanConnectMultipleWorkspaces(t *testin
 	var owners, activeConnections int
 	if err := testPool.QueryRow(context.Background(), `
 		SELECT
-		  (SELECT count(*) FROM computer_identity_owner WHERE daemon_id=$1),
+		  (SELECT count(*) FROM computers WHERE id=$1),
 		  (SELECT count(*) FROM computer_workspace_bindings WHERE daemon_id=$1 AND active)
 	`, computerID).Scan(&owners, &activeConnections); err != nil {
 		t.Fatal(err)
@@ -86,7 +86,7 @@ func TestComputerWorkspaceBinding_ExplicitReconnectClearsDeletionFence(t *testin
 	t.Cleanup(func() {
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM daemon_registration_tombstone WHERE workspace_id=$1 AND daemon_id=lower($2)`, testWorkspaceID, computerID)
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_workspace_bindings WHERE daemon_id=$1`, computerID)
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_identity_owner WHERE daemon_id=$1`, computerID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM computers WHERE id=$1`, computerID)
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM daemon_token WHERE daemon_id=$1`, computerID)
 	})
 
@@ -135,7 +135,7 @@ func TestComputerWorkspaceBinding_RejectsCrossUserComputerTakeover(t *testing.T)
 	}
 	t.Cleanup(func() {
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_workspace_bindings WHERE daemon_id=$1`, computerID)
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_identity_owner WHERE daemon_id=$1`, computerID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM computers WHERE id=$1`, computerID)
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM daemon_token WHERE daemon_id=$1`, computerID)
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM "user" WHERE id=$1`, foreignUserID)
 	})
@@ -157,7 +157,7 @@ func TestComputerWorkspaceBinding_RejectsCrossUserComputerTakeover(t *testing.T)
 	}
 
 	var ownerUserID string
-	if err := testPool.QueryRow(ctx, `SELECT user_id FROM computer_identity_owner WHERE daemon_id=$1`, computerID).Scan(&ownerUserID); err != nil {
+	if err := testPool.QueryRow(ctx, `SELECT user_id FROM computers WHERE id=$1`, computerID).Scan(&ownerUserID); err != nil {
 		t.Fatal(err)
 	}
 	if ownerUserID != testUserID {
@@ -192,7 +192,7 @@ func TestMembershipLossRevokesZeroRuntimeConnectionAndPreservesSibling(t *testin
 	}
 	t.Cleanup(func() {
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_workspace_bindings WHERE daemon_id=$1`, computerID)
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_identity_owner WHERE daemon_id=$1`, computerID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM computers WHERE id=$1`, computerID)
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM daemon_token WHERE daemon_id=$1`, computerID)
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM "user" WHERE id=$1`, userID)
 	})
@@ -252,19 +252,19 @@ func TestMembershipLossRevokesZeroRuntimeConnectionAndPreservesSibling(t *testin
 	}
 }
 
-func TestComputerHeartbeat_AuthorizesConnectionWithoutGenerationFence(t *testing.T) {
+func TestComputerHeartbeatAuthorizesWorkspaceConnectionOwner(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
 	ctx := context.Background()
-	computerID := "computer-generation-fence-" + uuid.NewString()
+	computerID := "computer-connection-owner-" + uuid.NewString()
 	if w := createComputerWorkspaceBindingForTest(t, testUserID, computerID, testWorkspaceID); w.Code != http.StatusOK {
 		t.Fatalf("establish connection: got %d: %s", w.Code, w.Body.String())
 	}
 	t.Cleanup(func() {
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM daemon_heartbeat WHERE daemon_id=$1`, computerID)
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_workspace_bindings WHERE daemon_id=$1`, computerID)
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_identity_owner WHERE daemon_id=$1`, computerID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM computers WHERE id=$1`, computerID)
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM daemon_token WHERE daemon_id=$1`, computerID)
 	})
 
@@ -281,7 +281,7 @@ func TestComputerHeartbeat_AuthorizesConnectionWithoutGenerationFence(t *testing
 		t.Fatalf("owner heartbeat: got %d: %s", w.Code, w.Body.String())
 	}
 
-	foreignEmail := "computer-generation-" + uuid.NewString() + "@multica.ai"
+	foreignEmail := "computer-connection-" + uuid.NewString() + "@multica.ai"
 	var foreignUserID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO "user" (name, email) VALUES ('Generation foreign user', $1) RETURNING id

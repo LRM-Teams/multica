@@ -30,7 +30,7 @@ func TestCreateInquiryGraphPersistsPassportsEventAndReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tasks, err := store.ListTasks(ctx, run.SessionID)
+	tasks, err := store.ListTasks(ctx, run.SessionID, run.WorkspaceID)
 	if err != nil || len(tasks) != 1 {
 		t.Fatalf("tasks=%+v err=%v", tasks, err)
 	}

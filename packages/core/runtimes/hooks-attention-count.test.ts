@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import type { AgentRuntime } from "../types";
+import { makeRuntime as sharedRuntime } from "./runtime-fixture";
 import {
   attentionMachineKey,
   countMyAttentionMachines,
@@ -8,27 +9,7 @@ import {
 } from "./hooks";
 
 function makeRuntime(overrides: Partial<AgentRuntime> = {}): AgentRuntime {
-  return {
-    id: "rt-1",
-    workspace_id: "ws-1",
-    daemon_id: "daemon-1",
-    name: "Runtime",
-    runtime_mode: "local",
-    provider: "claude",
-    launch_header: "",
-    status: "online",
-    device_info: "",
-    metadata: {},
-    current_version: "0.3.0",
-    target_version: "0.4.0",
-    update_state: "idle",
-    runtime_health: "update_available",
-    owner_id: "user-1",
-    last_seen_at: "2026-07-03T00:00:00Z",
-    created_at: "2026-07-03T00:00:00Z",
-    updated_at: "2026-07-03T00:00:00Z",
-    ...overrides,
-  } as AgentRuntime;
+  return sharedRuntime({ runtime_health: "update_available", ...overrides });
 }
 
 describe("countMyAttentionMachines (task #31)", () => {

@@ -14,11 +14,11 @@ import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n";
 import { useState } from "react";
 import {
-  executionFieldClass,
-  executionOptionClass,
-  executionOptionSelectedClass,
-  executionTriggerClass,
-} from "./execution-picker-styles";
+  runtimeConfigFieldClass,
+  runtimeConfigOptionClass,
+  runtimeConfigOptionSelectedClass,
+  runtimeConfigTriggerClass,
+} from "./runtime-config-picker-styles";
 
 export function ThinkingDropdown({
   runtimeId,
@@ -53,12 +53,12 @@ export function ThinkingDropdown({
   };
 
   return (
-    <div className={executionFieldClass}>
+    <div className={runtimeConfigFieldClass}>
       <Label className="text-xs font-medium text-muted-foreground">
         {t(($) => $.create_dialog.thinking_label)}
       </Label>
       <Popover open={open} onOpenChange={setOpen}>
-        <PopoverTrigger disabled={disabled} className={executionTriggerClass}>
+        <PopoverTrigger disabled={disabled} className={runtimeConfigTriggerClass}>
           <Brain className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
           <span className="min-w-0 flex-1 truncate">{triggerLabel}</span>
           <ChevronDown
@@ -105,8 +105,8 @@ function ThinkingRow({
       type="button"
       onClick={onClick}
       className={cn(
-        executionOptionClass,
-        selected && executionOptionSelectedClass,
+        runtimeConfigOptionClass,
+        selected && runtimeConfigOptionSelectedClass,
       )}
     >
       <span className="min-w-0 flex-1 truncate">

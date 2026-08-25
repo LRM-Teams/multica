@@ -4,6 +4,7 @@ import * as React from "react";
 import type { MessagePart } from "@multica/core/types";
 import { MemoizedMarkdown, ActorMention } from "./markdown";
 import { cn } from "@multica/ui/lib/utils";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { mentionTokenClassName } from "./mention-token";
 import { useActorMentionChipLabel } from "./actor-mention-chip-label";
 import { IssueRefLink } from "../issues/components/issue-ref-link";
@@ -278,21 +279,31 @@ function NonInteractiveActorMention({
   variant?: import("./mention-token").MentionTokenVariant;
 }): React.JSX.Element {
   const { name, unresolved, handlePeek } = useActorMentionChipLabel(type, id, label);
-  return (
+  const className = mentionTokenClassName(
+    "default",
+    unresolved
+      ? "bg-muted text-muted-foreground hover:bg-muted focus-visible:bg-muted"
+      : undefined,
+    variant,
+  );
+  const chip = (
     <span
-      className={mentionTokenClassName(
-        "default",
-        unresolved
-          ? "bg-muted text-muted-foreground hover:bg-muted focus-visible:bg-muted"
-          : undefined,
-        variant,
-      )}
+      className={className}
       data-mention-type={type}
       data-mention-unresolved={unresolved ? "true" : undefined}
-      title={handlePeek ? `@${handlePeek}` : undefined}
     >
       @{name}
     </span>
+  );
+  return handlePeek ? (
+    <Tooltip>
+      <TooltipTrigger render={<span className={className} data-mention-type={type} data-mention-unresolved={unresolved ? "true" : undefined} />}>
+        @{name}
+      </TooltipTrigger>
+      <TooltipContent side="top">{`@${handlePeek}`}</TooltipContent>
+    </Tooltip>
+  ) : (
+    chip
   );
 }
 

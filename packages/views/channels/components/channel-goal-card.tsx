@@ -450,6 +450,14 @@ export function ChannelGoalCard({
     coordination.execution_admission === "direct" ||
     coordination.execution_admission === "ready" ||
     coordination.execution_admission === "acceptance_required";
+  const coordinationStatusLabel =
+    coordination?.execution_admission === "issues_required"
+      ? t(($) => $.goal.control_plane_issues_required)
+      : coordination?.execution_admission === "unavailable"
+        ? t(($) => $.goal.control_plane_unavailable)
+        : coordinationReady
+          ? t(($) => $.goal.control_plane_ready)
+          : t(($) => $.goal.control_plane_blocked);
   const coordinationComplete =
     !coordination ||
     coordination.execution_admission === "direct" ||
@@ -487,7 +495,7 @@ export function ChannelGoalCard({
               {coordination && (coordination.agent_member_count > 1 || coordination.execution_admission === "unavailable") ? (
                 <Badge variant={coordinationReady ? "outline" : "destructive"} className="h-5 gap-1 px-1.5 text-[10px]" data-testid="channel-goal-control-plane-badge">
                   {coordinationReady ? <ShieldCheck className="size-3" /> : <ShieldAlert className="size-3" />}
-                  {coordinationReady ? t(($) => $.goal.control_plane_ready) : t(($) => $.goal.control_plane_blocked)}
+                  {coordinationStatusLabel}
                 </Badge>
               ) : null}
               {goal.work_graph ? (

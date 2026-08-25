@@ -1,8 +1,14 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { ChevronDown } from "lucide-react";
 import type { Agent, AgentRuntime, MemberWithUser } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@multica/ui/components/ui/collapsible";
 import {
   Dialog,
   DialogContent,
@@ -11,8 +17,9 @@ import {
   DialogTitle,
 } from "@multica/ui/components/ui/dialog";
 import { useT } from "../../i18n";
-import { ExecutionConfigFields } from "./execution-config-fields";
-import { useExecutionSelection } from "./use-execution-selection";
+import { AgentEnvEditor } from "./agent-env-editor";
+import { RuntimeConfigFields } from "./runtime-config-fields";
+import { useRuntimeConfigSelection } from "./use-runtime-config-selection";
 
 /**
  * LRM-1351 + site-wide Computer → Runtime → Model → Reasoning edit dialog.
@@ -56,7 +63,7 @@ export function RuntimeConfigDialog({
       >
         <DialogHeader>
           <DialogTitle className="text-sm">
-            {t(($) => $.execution_config.dialog_title)}
+            {t(($) => $.runtime_config.dialog_title)}
           </DialogTitle>
         </DialogHeader>
 
@@ -98,7 +105,8 @@ function RuntimeConfigDialogBody({
   onSave: (patch: Record<string, unknown>) => Promise<void>;
 }) {
   const { t } = useT("agents");
-  const selection = useExecutionSelection({
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const selection = useRuntimeConfigSelection({
     runtimes,
     currentUserId,
     initialRuntimeId: agent.runtime_id,
@@ -142,8 +150,8 @@ function RuntimeConfigDialogBody({
 
   return (
     <>
-      <div className="min-w-0 py-1">
-        <ExecutionConfigFields
+      <div className="min-w-0 space-y-4 overflow-y-auto py-1 max-h-[60vh]">
+        <RuntimeConfigFields
           runtimes={runtimes}
           members={members}
           currentUserId={currentUserId}
@@ -159,6 +167,32 @@ function RuntimeConfigDialogBody({
           modelRequired
           disabled={saving}
         />
+
+        <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
+          <CollapsibleTrigger
+            type="button"
+            className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            data-testid="agent-runtime-config-more"
+          >
+            <ChevronDown
+              className={`h-3.5 w-3.5 transition-transform ${advancedOpen ? "rotate-180" : ""}`}
+            />
+            {t(($) => $.runtime_config.more)}
+          </CollapsibleTrigger>
+          <CollapsibleContent className="pt-1">
+            <div className="space-y-3 rounded-lg border p-3">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                {t(($) => $.runtime_config.advanced)}
+              </p>
+              <div className="space-y-2">
+                <p className="text-sm font-medium">
+                  {t(($) => $.runtime_config.env_vars_title)}
+                </p>
+                <AgentEnvEditor agent={agent} />
+              </div>
+            </div>
+          </CollapsibleContent>
+        </Collapsible>
       </div>
 
       <DialogFooter>
@@ -177,7 +211,7 @@ function RuntimeConfigDialogBody({
           onClick={() => void handleSave()}
         >
           {saving
-            ? t(($) => $.execution_config.dialog_saving)
+            ? t(($) => $.runtime_config.dialog_saving)
             : t(($) => $.inspector.save)}
         </Button>
       </DialogFooter>

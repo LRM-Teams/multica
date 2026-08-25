@@ -150,7 +150,6 @@
     "prop_runtime": "运行时",
     "prop_model": "模型",
     "prop_thinking": "思考",
-    "prop_concurrency": "并发",
     "prop_owner": "所有者",
     "prop_created": "创建时间",
     "prop_updated": "更新时间",
@@ -184,6 +183,7 @@
       "cancel": "取消",
       "role_updated_toast": "工作区角色已更新",
       "role_update_failed_toast": "更新工作区角色失败",
+      "role_hint": "管理员可以在本工作区管理通道、邀请、agents & computers 与设置。永远不能成为 Owner。",
       "role_readonly_hint": "仅工作区 owner/admin 可更改 agent 的工作区角色。"
     },
     "start_intent_failure": "此 Agent 未能在所选电脑上完成启动（{{code}}）。请检查运行配置；如合适，再通过正常的人类重启流程处理。",
@@ -194,8 +194,6 @@
     "trigger_label": "附加"
   },
   "pickers": {
-    "concurrency_tooltip": "并发 · 最多 {{value}} 个并行 task",
-    "concurrency_range": "最大并行 task 数（{{min}}–{{max}}）",
     "runtime_none": "无运行时",
     "runtime_tooltip": "运行时 · {{name}} · {{status}}",
     "runtime_tooltip_none": "运行时 · 未选择",
@@ -258,6 +256,8 @@
     "title_create": "创建智能体",
     "title_duplicate": "复制智能体",
     "description_create": "为工作区创建一个新的 AI 智能体。",
+    "description_identity_locked": "名称与指令已填好。请选择电脑、运行时和模型后创建。",
+    "description_computer_locked": "电脑已锁定。请选择运行时和模型后创建。",
     "description_duplicate": "基于\"{{name}}\"创建一个新智能体。指令、环境变量和 skill 会一并复制。",
     "name_label": "名称",
     "name_hint": "这个永久名称用于 @提及。",
@@ -537,12 +537,15 @@
       "platinum": "铂金"
     }
   },
-  "execution_config": {
+  "runtime_config": {
     "applies_next_run": "点击打开弹窗可批量编辑电脑 / Runtime / 模型 / Reasoning；保存后在可用时自动重启 agent（至多一次），使配置立即生效。",
-    "dialog_title": "运行配置",
+    "dialog_title": "运行时配置",
     "dialog_description": "按 Computer → Runtime → Model → Reasoning 选择。编辑仅保存在本地草稿；点保存才落库。取消 / Esc / 点遮罩会丢弃草稿且不重启。",
     "dialog_saving": "保存中…",
-    "edit_trigger_aria": "编辑电脑、Runtime、模型与 Reasoning"
+    "edit_trigger_aria": "编辑电脑、Runtime、模型与 Reasoning",
+    "more": "更多",
+    "advanced": "高级",
+    "env_vars_title": "环境变量"
   },
   "side_panel": {
     "close_aria": "关闭 agent 面板",
@@ -593,6 +596,10 @@
     "actions_stop_success": "已停止 {{name}}",
     "actions_stop_failed": "停止任务失败",
     "actions_delete": "删除",
+    "actions_start_agent": "启动智能体",
+    "actions_start_failed": "启动智能体失败",
+    "actions_stop_agent": "停止智能体",
+    "actions_stop_agent_failed": "停止智能体失败",
     "delete_dialog_title": "删除智能体？",
     "delete_dialog_description": "“{{name}}” 将被删除。删除后不可被指派或 @提及，但所有历史记录都会保留，可在以后恢复。",
     "delete_dialog_cancel": "取消",
@@ -602,9 +609,10 @@
     "change_avatar_aria": "更换头像",
     "avatar_updated_toast": "头像已更新",
     "avatar_picker_title": "选择头像",
-    "avatar_picker_description": "选择系统头像，或上传自己的图片。",
+    "avatar_picker_description": "选择系统头像、随机生成一个机器人，或上传自己的图片。",
     "avatar_system_choices_aria": "系统头像",
     "avatar_system_choice_aria": "选择系统头像",
+    "avatar_random": "随机机器人",
     "avatar_upload_custom": "上传自定义头像",
     "avatar_custom_selected": "已选择自定义头像",
     "avatar_picker_cancel": "取消",
@@ -618,7 +626,7 @@
     "avatar_err_dimensions": "图片尺寸至少为 256×256 像素。"
   },
   "restart_modal": {
-    "trigger": "重启…",
+    "trigger": "重启/重置",
     "title": "重启智能体",
     "description": "选择如何重启 {{name}}。它的身份、配置、聊天历史和 Issue 始终保留。",
     "tier": {
@@ -694,27 +702,17 @@
     "info_status": "状态"
   },
   "reminders": {
-    "upcoming_heading": "待触发",
-    "history_heading": "历史",
-    "empty_all": "还没有提醒。",
-    "empty_upcoming": "没有待触发的提醒。",
-    "empty_history": "还没有已触发的提醒。",
+    "empty_list": "没有提醒。",
     "loading": "正在加载提醒…",
     "error_title": "提醒加载失败。",
     "retry": "重试",
-    "load_more": "加载更多",
     "inaccessible": "你没有权限查看该 Agent 的提醒。",
     "anchor_unavailable": "锚点不可用",
     "one_shot": "一次性",
     "next_fire_label": "下次",
-    "fired_label": "触发于",
-    "timezone_label": "时区",
     "status_scheduled": "已排程",
     "status_firing": "触发中",
-    "status_overdue": "已过期",
-    "status_dormant": "休眠",
-    "status_cancelled": "已取消",
-    "status_fired": "已触发"
+    "status_overdue": "已过期"
   },
   "task_failure": {
     "agent_error": "智能体执行出错",
@@ -950,7 +948,7 @@
     "creation_not_authorized": "仅工作区 owner 和 admin 可创建此 Agent。",
     "generated_hint": "由 Wendy 根据当前对话生成。",
     "avatar_from_draft_hint": "已带上 Wendy 草稿头像——可更换；清除后创建时用随机预设。",
-    "avatar_random_hint": "已预选系统头像——可在 15 个内置头像中更换，或上传自己的图片。",
+    "avatar_random_hint": "已预选系统头像——可更换内置头像、随机生成一个机器人，或上传自己的图片。",
     "loading_card": "正在加载提案…",
     "load_card_failed": "加载提案失败",
     "card_created": "已创建：{{name}}",

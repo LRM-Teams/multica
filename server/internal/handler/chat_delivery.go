@@ -55,6 +55,10 @@ func (h *Handler) deliverStandaloneChatMessage(ctx context.Context, session db.C
 	sessionID := uuidToString(session.ID)
 	deliveryID := standaloneChatDeliveryID(messageID, agentID)
 	target := standaloneChatDeliveryTargetPrefix + sessionID
+	deliverContent := content
+	if prefix := h.buildNoteChatWakePrefix(ctx, session.ID); prefix != "" {
+		deliverContent = prefix + content
+	}
 	var seq int64
 	if err := h.DB.QueryRow(ctx, `
 		SELECT COALESCE(MAX(seq), 0) + 1
@@ -92,7 +96,7 @@ func (h *Handler) deliverStandaloneChatMessage(ctx context.Context, session db.C
 			Target:        target,
 			ReplyTarget:   target,
 			Seq:           seq,
-			Content:       content,
+			Content:       deliverContent,
 			Parts:         parts,
 			InitiatorType: "member",
 			InitiatorID:   initiatorUserID,
@@ -357,6 +361,7 @@ func (h *Handler) notifyStandaloneChatDelivery(ctx context.Context, agent db.Age
 		return
 	}
 	workspaceID := uuidToString(agent.WorkspaceID)
+	h.applyGraphMemoryProfileToDelivery(ctx, workspaceID, &delivery)
 	if daemonID == nil || strings.TrimSpace(*daemonID) == "" || !h.AgentDeliveryNotifier.NotifyWorkspaceAgentDelivery(workspaceID, *daemonID, delivery) {
 		slog.Debug("standalone chat live delivery deferred to recovery",
 			"workspace_id", workspaceID,
@@ -408,13 +413,20 @@ func (h *Handler) redeliverUnacknowledgedStandaloneChat(ctx context.Context, ide
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	// Drain the list cursor before nested QueryRow (note wake prefix + graph
+	// profile) so we cannot hold two pool connections (cursordeadlock / #1803).
+	type pendingStandalone struct {
+		sessionID pgtype.UUID
+		delivery  protocol.AgentDeliverPayload
+	}
+	pending := make([]pendingStandalone, 0)
 	for rows.Next() {
 		var agentID, messageID, sessionID pgtype.UUID
 		var seq int64
 		var target, content string
 		var rawParts []byte
 		if err := rows.Scan(&agentID, &messageID, &seq, &target, &sessionID, &content, &rawParts); err != nil {
+			rows.Close()
 			return err
 		}
 		var parts []protocol.MessagePart
@@ -423,22 +435,43 @@ func (h *Handler) redeliverUnacknowledgedStandaloneChat(ctx context.Context, ide
 		}
 		agentIDText := uuidToString(agentID)
 		messageIDText := uuidToString(messageID)
-		delivery := protocol.AgentDeliverPayload{
-			AgentID:    agentIDText,
-			Target:     target,
-			Seq:        seq,
-			DeliveryID: standaloneChatDeliveryID(messageIDText, agentIDText),
-			Message: protocol.AgentMessageProjection{
-				ID:      messageIDText,
-				Target:  target,
-				Seq:     seq,
-				Content: content,
-				Parts:   parts,
+		pending = append(pending, pendingStandalone{
+			sessionID: sessionID,
+			delivery: protocol.AgentDeliverPayload{
+				AgentID:    agentIDText,
+				Target:     target,
+				Seq:        seq,
+				DeliveryID: standaloneChatDeliveryID(messageIDText, agentIDText),
+				Message: protocol.AgentMessageProjection{
+					ID:          messageIDText,
+					Target:      target,
+					ReplyTarget: target,
+					Seq:         seq,
+					Content:     content,
+					Parts:       parts,
+				},
 			},
+		})
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+
+	for i := range pending {
+		item := &pending[i]
+		// Live deliverStandaloneChatMessage prefixes <note_chat_context> for
+		// Notes FAB sessions. chat_message.content stays raw; redelivery must
+		// rebuild the same prefix or the agent wakes without note root context.
+		content := item.delivery.Message.Content
+		if prefix := h.buildNoteChatWakePrefix(ctx, item.sessionID); prefix != "" && !strings.HasPrefix(content, "<note_chat_context>") {
+			item.delivery.Message.Content = prefix + content
 		}
-		if !h.AgentDeliveryNotifier.NotifyWorkspaceAgentDelivery(identity.WorkspaceID, identity.DaemonID, delivery) {
-			slog.Debug("standalone chat redelivery deferred", "delivery_id", delivery.DeliveryID)
+		h.applyGraphMemoryProfileToDelivery(ctx, identity.WorkspaceID, &item.delivery)
+		if !h.AgentDeliveryNotifier.NotifyWorkspaceAgentDelivery(identity.WorkspaceID, identity.DaemonID, item.delivery) {
+			slog.Debug("standalone chat redelivery deferred", "delivery_id", item.delivery.DeliveryID)
 		}
 	}
-	return rows.Err()
+	return nil
 }

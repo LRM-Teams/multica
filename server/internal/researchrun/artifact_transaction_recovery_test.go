@@ -273,7 +273,7 @@ func resultArtifactRecoveryOperation(t *testing.T, run *transactionRecoveryRun) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	tasks, err := run.store.ListTasks(run.ctx, run.fixture.sessionID)
+	tasks, err := run.store.ListTasks(run.ctx, run.fixture.sessionID, run.fixture.workspaceID)
 	if err != nil || len(tasks) != 1 {
 		t.Fatalf("tasks=%+v err=%v", tasks, err)
 	}

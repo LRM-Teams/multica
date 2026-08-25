@@ -174,6 +174,18 @@ func TestClassifyPoisonedError(t *testing.T) {
 			errMsg: "claude execution timeout after 10m",
 			wantOK: false,
 		},
+		{
+			name:       "pi openai unknown input status",
+			errMsg:     "Unknown parameter: 'input[86].status'",
+			wantOK:     true,
+			wantReason: FailureReasonAPIInvalidRequest,
+		},
+		{
+			name:       "pi openai unknown input status wrapped",
+			errMsg:     `API Error: 400 {"error":{"message":"Unknown parameter: 'input[2].status'","type":"invalid_request_error"}}`,
+			wantOK:     true,
+			wantReason: FailureReasonAPIInvalidRequest,
+		},
 	}
 
 	for _, tc := range cases {

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { MoreHorizontal, Square, Target, Trash2 } from "lucide-react";
+import { Archive, MoreHorizontal, Square, Target, Trash2 } from "lucide-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
@@ -60,6 +60,7 @@ export function ResearchSessionRowActions({
 
   const canStop = STOPPABLE.has(session.status);
   const hasGoal = Boolean(session.goal?.trim());
+  const archivesCanonicalFacts = session.orchestratorVersion === "research-run-v6";
 
   const stop = useMutation({
     mutationFn: () => api.stopResearchSession(session.id),
@@ -77,7 +78,11 @@ export function ResearchSessionRowActions({
     onSuccess: async () => {
       await evictResearchSessionQueries(qc, wsId, session.id);
       void qc.invalidateQueries({ queryKey: researchKeys.sessions(wsId) });
-      toast.success(t(($) => $.actions.delete_done));
+      toast.success(
+        archivesCanonicalFacts
+          ? t(($) => $.actions.archive_done)
+          : t(($) => $.actions.delete_done),
+      );
       setConfirmDelete(false);
     },
     onError: (err) =>
@@ -128,12 +133,18 @@ export function ResearchSessionRowActions({
           ) : null}
           {canStop ? <DropdownMenuSeparator /> : null}
           <DropdownMenuItem
-            variant="destructive"
+            variant={archivesCanonicalFacts ? "default" : "destructive"}
             disabled={del.isPending}
             onClick={() => setConfirmDelete(true)}
           >
-            <Trash2 className="h-3.5 w-3.5" />
-            {t(($) => $.actions.delete)}
+            {archivesCanonicalFacts ? (
+              <Archive className="h-3.5 w-3.5" />
+            ) : (
+              <Trash2 className="h-3.5 w-3.5" />
+            )}
+            {archivesCanonicalFacts
+              ? t(($) => $.actions.archive)
+              : t(($) => $.actions.delete)}
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -177,15 +188,21 @@ export function ResearchSessionRowActions({
         >
           <AlertDialogContent onClick={(e) => e.stopPropagation()}>
             <AlertDialogHeader>
-              <AlertDialogTitle>{t(($) => $.actions.delete_title)}</AlertDialogTitle>
+              <AlertDialogTitle>
+                {archivesCanonicalFacts
+                  ? t(($) => $.actions.archive_title)
+                  : t(($) => $.actions.delete_title)}
+              </AlertDialogTitle>
               <AlertDialogDescription>
-                {t(($) => $.actions.delete_desc)}
+                {archivesCanonicalFacts
+                  ? t(($) => $.actions.archive_desc)
+                  : t(($) => $.actions.delete_desc)}
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
               <AlertDialogCancel>{t(($) => $.actions.cancel)}</AlertDialogCancel>
               <AlertDialogAction
-                variant="destructive"
+                variant={archivesCanonicalFacts ? "default" : "destructive"}
                 // LRM-1246 S2 — keep Confirm focusable while delete is pending
                 // (native `disabled` drops focus to <body>, same as LRM-1213).
                 aria-disabled={del.isPending || undefined}
@@ -196,7 +213,9 @@ export function ResearchSessionRowActions({
                   del.mutate();
                 }}
               >
-                {t(($) => $.actions.delete_confirm)}
+                {archivesCanonicalFacts
+                  ? t(($) => $.actions.archive_confirm)
+                  : t(($) => $.actions.delete_confirm)}
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>

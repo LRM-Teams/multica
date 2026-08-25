@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -126,7 +125,7 @@ func TestStatusIsRedactedReadOnlyComputerProjection(t *testing.T) {
 	lc := &Lifecycle{Probe: func(context.Context, string) map[string]any {
 		return map[string]any{
 			"status": "running", "connected": true, "pid": float64(42),
-			"server_url": "https://api.leagent.me", "environment": "production", "release_channel": "latest",
+			"serverUrl": "https://api.leagent.me", "environment": "production", "releaseChannel": "latest",
 			"agents": []any{"must-not-leak"}, "workspaces": []any{"must-not-drive-status"},
 		}
 	}}
@@ -165,8 +164,8 @@ func TestStatusReportsResidentConfigurationDrift(t *testing.T) {
 	}
 	lc := &Lifecycle{Probe: func(context.Context, string) map[string]any {
 		return map[string]any{
-			"status": "running", "server_url": "https://api.leagent.me",
-			"environment": "production", "release_channel": "latest",
+			"status": "running", "serverUrl": "https://api.leagent.me",
+			"environment": "production", "releaseChannel": "latest",
 		}
 	}}
 	status := lc.Status()
@@ -280,28 +279,31 @@ func TestStopFallsBackToKillWhenShutdownFails(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Spawn a real short-lived process so the kill fallback targets a live
-	// PID (Killing a nonexistent PID errors and would mask the path we want
-	// to exercise).
-	child := exec.Command("sleep", "30")
-	if err := child.Start(); err != nil {
-		t.Skipf("cannot spawn child process: %v", err)
+	resident := spawnReclaimTestProcess(t, "sleep", "30")
+	residentPID := resident.Process.Pid
+	runner := spawnReclaimTestProcess(t, "sleep", "30")
+	runnerPID := runner.Process.Pid
+	root := RootDir("")
+	state := persistedRunnerState{
+		WorkspaceID: "workspace-a", DaemonInstanceID: "start-a",
+		OwnerPID: residentPID, RunnerPID: runnerPID, StartedAt: time.Now().UTC(),
 	}
-	pid := child.Process.Pid
-	defer func() {
-		_ = child.Process.Kill()
-		_, _ = child.Process.Wait()
-	}()
+	if err := writeRunnerState(root, state); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeRunnerPID(root, state.WorkspaceID, runnerPID); err != nil {
+		t.Fatal(err)
+	}
 
 	lc := &Lifecycle{}
-	var calls atomic.Int32
+	var probes atomic.Int32
 	lc.Probe = func(_ context.Context, _ string) map[string]any {
-		if calls.Add(1) == 1 {
-			return map[string]any{"status": "running", "pid": float64(pid)}
+		if probes.Add(1) == 1 {
+			return map[string]any{"status": "running", "pid": float64(residentPID)}
 		}
 		return map[string]any{"status": "stopped"}
 	}
-	lc.Sleep = func(time.Duration) {}
+	lc.Sleep = func(time.Duration) { time.Sleep(5 * time.Millisecond) }
 
 	restore := setRequestShutdown(func(string, ShutdownRequest) error { return os.ErrClosed })
 	defer restore()
@@ -313,9 +315,43 @@ func TestStopFallsBackToKillWhenShutdownFails(t *testing.T) {
 	if !res.Stopped {
 		t.Fatalf("Stop did not reach Stopped after kill fallback: %+v", res)
 	}
+	if alive, known := processAlive(runnerPID); !known || alive {
+		t.Fatalf("WorkspaceDaemon pid %d survived forced Computer stop", runnerPID)
+	}
+	if _, err := os.Stat(runnerStatePath(root, state.WorkspaceID)); !os.IsNotExist(err) {
+		t.Fatalf("WorkspaceDaemon state survived forced Computer stop: %v", err)
+	}
 }
 
 // --- start background already-running guard ---
+
+func TestStartBackgroundRefusesPendingMachineUpgradeHandoff(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := WritePendingMachineUpgradeHandoffForTest(RootDir(""), PendingMachineUpgradeHandoff{
+		RequestID: "upgrade-a", FromVersion: "v1.0.0", TargetVersion: "v2.0.0",
+		SourceServicePID: 101, AcceptedManagedSetRevision: "revision-a",
+		Phase: MachineUpgradePhaseStartingTarget,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	lc := &Lifecycle{Probe: func(context.Context, string) map[string]any {
+		return map[string]any{"status": "stopped"}
+	}}
+	spawned := false
+	restore := setSpawnResident(func(string, []string, *os.File) (procHandle, error) {
+		spawned = true
+		return &fakeProc{pid: 1}, nil
+	})
+	defer restore()
+	_, err := lc.StartBackground(StartOptions{})
+	if err == nil || !strings.Contains(err.Error(), "Machine Upgrade") {
+		t.Fatalf("StartBackground = %v, want pending handoff error", err)
+	}
+	if spawned {
+		t.Fatal("resident spawned across an active Machine Upgrade handoff")
+	}
+}
 
 func TestStartBackgroundRefusesWhenAlreadyRunning(t *testing.T) {
 	lc := &Lifecycle{}
@@ -382,9 +418,6 @@ func setSpawnResident(fn func(string, []string, *os.File) (procHandle, error)) f
 
 func TestStartBackgroundLaunchesWritesPIDAndConfirmsReady(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	if err := os.MkdirAll(filepath.Dir(PIDPath("")), 0o755); err != nil {
-		t.Fatal(err)
-	}
 
 	lc := &Lifecycle{}
 
@@ -400,6 +433,9 @@ func TestStartBackgroundLaunchesWritesPIDAndConfirmsReady(t *testing.T) {
 	lc.Sleep = func(time.Duration) {}
 
 	restore := setSpawnResident(func(exe string, args []string, log *os.File) (procHandle, error) {
+		if info, err := os.Stat(filepath.Dir(PIDPath(""))); err != nil || !info.IsDir() {
+			t.Fatalf("PID directory was not created before spawn: info=%v err=%v", info, err)
+		}
 		return &fakeProc{pid: 7777}, nil
 	})
 	defer restore()
@@ -421,6 +457,40 @@ func TestStartBackgroundLaunchesWritesPIDAndConfirmsReady(t *testing.T) {
 	}
 	if strings.TrimSpace(string(data)) != "7777" {
 		t.Fatalf("pid file = %q, want 7777", data)
+	}
+}
+
+func TestStartResidentProcessDoesNotBindParentDeath(t *testing.T) {
+	body, err := os.ReadFile("computer.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	start := strings.Index(text, "func startResidentProcess(")
+	if start < 0 {
+		t.Fatal("startResidentProcess is missing")
+	}
+	rest := text[start:]
+	end := strings.Index(rest, "\nfunc ")
+	if end < 0 {
+		t.Fatal("could not isolate startResidentProcess")
+	}
+	fn := rest[:end]
+	if !strings.Contains(fn, "SysProcAttr(breakaway)") {
+		t.Fatal("startResidentProcess must still detach with SysProcAttr/Setsid")
+	}
+	if strings.Contains(fn, "configureChildParentDeath(") || strings.Contains(fn, ".Pdeathsig") {
+		t.Fatal("startResidentProcess must not set Pdeathsig; the Computer start CLI is short-lived")
+	}
+}
+
+func TestWorkspaceDaemonProcessesDoNotBindParentDeath(t *testing.T) {
+	body, err := os.ReadFile("workspace_daemon_process.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "configureChildParentDeath(") || strings.Contains(string(body), ".Pdeathsig") {
+		t.Fatal("WorkspaceDaemon processes must survive a forced Computer exit so lifecycle cleanup can identify and terminate them")
 	}
 }
 

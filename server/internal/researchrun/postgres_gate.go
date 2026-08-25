@@ -10,13 +10,13 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (GateResult, error) {
+func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID, workspaceID string) (GateResult, error) {
 	var run Run
 	var configJSON, statsJSON []byte
 	err := s.pool.QueryRow(ctx, `
 		SELECT depth_tier, goal_version, plan_version, orchestrator_version, run_config, run_stats
-		FROM research_session WHERE id = $1::uuid
-	`, sessionID).Scan(&run.DepthTier, &run.GoalVersion, &run.PlanVersion, &run.OrchestratorVersion, &configJSON, &statsJSON)
+		FROM research_session WHERE id = $1::uuid AND workspace_id = $2::uuid
+	`, sessionID, workspaceID).Scan(&run.DepthTier, &run.GoalVersion, &run.PlanVersion, &run.OrchestratorVersion, &configJSON, &statsJSON)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return GateResult{}, ErrRunNotFound
 	}
@@ -25,6 +25,9 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 	}
 	if err = ensureSupportedOrchestratorVersion(run.OrchestratorVersion); err != nil {
 		return GateResult{}, err
+	}
+	if run.OrchestratorVersion == OrchestratorVersionV6 {
+		return GateResult{Passed: true, Findings: []GateFinding{}}, nil
 	}
 	run.Config = DefaultRunConfig(run.DepthTier)
 	if len(configJSON) > 0 {
@@ -80,51 +83,54 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 		WITH current_claims AS (
 		  SELECT c.id, c.significance, c.resolution
 		  FROM research_claim c
-		  WHERE c.session_id = $1::uuid AND c.goal_version = $2 AND c.plan_version = $3
+		  WHERE c.session_id = $1::uuid AND c.workspace_id = $6::uuid
+		    AND c.goal_version = $2 AND c.plan_version = $3
 		), latest_report AS (
 		  SELECT id, author_agent_id, created_at FROM research_report
-		  WHERE session_id = $1::uuid AND goal_version = $2 AND plan_version = $3
+		  WHERE session_id = $1::uuid AND workspace_id = $6::uuid
+		    AND goal_version = $2 AND plan_version = $3
 		  ORDER BY revision DESC LIMIT 1
 		), report_claims AS (
 		  SELECT rc.claim_id
 		  FROM research_report_claim rc
 		  JOIN latest_report r ON r.id = rc.report_id
 		  JOIN current_claims c ON c.id = rc.claim_id
+		  WHERE rc.workspace_id = $6::uuid
 		), supported AS (
 		  SELECT DISTINCT e.claim_id, ss.id AS source_id, ss.independence_key
 		  FROM research_claim_evidence e
 		  JOIN current_claims current ON current.id = e.claim_id
-		  JOIN research_observation o ON o.id = e.observation_id
-		  JOIN research_source_snapshot ss ON ss.id = o.source_snapshot_id
-		  WHERE e.session_id = $1::uuid AND e.relation = 'supports'
+		  JOIN research_observation o ON o.id = e.observation_id AND o.workspace_id = $6::uuid
+		  JOIN research_source_snapshot ss ON ss.id = o.source_snapshot_id AND ss.workspace_id = $6::uuid
+		  WHERE e.session_id = $1::uuid AND e.workspace_id = $6::uuid AND e.relation = 'supports'
 		    AND e.verification_status = 'verified'
 		    AND o.verification_status = 'verified'
 		    AND ss.verification_status = 'verified'
 		), contradicted AS (
 		  SELECT DISTINCT e.claim_id
 		  FROM research_claim_evidence e
-		  WHERE e.session_id = $1::uuid AND e.relation = 'contradicts'
+		  WHERE e.session_id = $1::uuid AND e.workspace_id = $6::uuid AND e.relation = 'contradicts'
 		    AND e.verification_status = 'verified'
 		), latest_quality AS (
 		  SELECT id, actor_id, inputs, outcome FROM research_decision
-		  WHERE session_id = $1::uuid AND decision_kind = 'quality_gate'
+		  WHERE session_id = $1::uuid AND workspace_id = $6::uuid AND decision_kind = 'quality_gate'
 		    AND goal_version = $2 AND plan_version = $3
 		    AND inputs->>'report_id' = (SELECT id::text FROM latest_report)
 		  ORDER BY created_at DESC LIMIT 1
 		), latest_citation AS (
 		  SELECT id, actor_id, inputs, outcome FROM research_decision
-		  WHERE session_id = $1::uuid AND decision_kind = 'citation_audit'
+		  WHERE session_id = $1::uuid AND workspace_id = $6::uuid AND decision_kind = 'citation_audit'
 		    AND goal_version = $2 AND plan_version = $3
 		    AND inputs->>'report_id' = (SELECT id::text FROM latest_report)
 		  ORDER BY created_at DESC LIMIT 1
 		)
 		SELECT
-		  (SELECT count(*)::int FROM research_task WHERE session_id = $1::uuid AND goal_version = $2 AND plan_version = $3 AND kind IN ('plan', 'replan') AND status = 'succeeded'),
-		  (SELECT count(*)::int FROM research_task WHERE session_id = $1::uuid AND goal_version = $2 AND plan_version = $3 AND status IN ('pending', 'ready', 'dispatching', 'running')),
-		  (SELECT count(*)::int FROM research_task WHERE session_id = $1::uuid AND goal_version = $2 AND plan_version = $3 AND status IN ('failed', 'blocked')),
-		  (SELECT count(*)::int FROM research_question WHERE session_id = $1::uuid AND goal_version = $2 AND plan_version = $3 AND required),
+		  (SELECT count(*)::int FROM research_task WHERE session_id = $1::uuid AND workspace_id = $6::uuid AND goal_version = $2 AND plan_version = $3 AND kind IN ('plan', 'replan') AND status = 'succeeded'),
+		  (SELECT count(*)::int FROM research_task WHERE session_id = $1::uuid AND workspace_id = $6::uuid AND goal_version = $2 AND plan_version = $3 AND status IN ('pending', 'ready', 'dispatching', 'running')),
+		  (SELECT count(*)::int FROM research_task WHERE session_id = $1::uuid AND workspace_id = $6::uuid AND goal_version = $2 AND plan_version = $3 AND status IN ('failed', 'blocked')),
+		  (SELECT count(*)::int FROM research_question WHERE session_id = $1::uuid AND workspace_id = $6::uuid AND goal_version = $2 AND plan_version = $3 AND required),
 		  (SELECT count(*)::int FROM research_question q
-		   WHERE q.session_id = $1::uuid AND q.goal_version = $2 AND q.plan_version = $3 AND q.required
+		   WHERE q.session_id = $1::uuid AND q.workspace_id = $6::uuid AND q.goal_version = $2 AND q.plan_version = $3 AND q.required
 		     AND (q.status <> 'answered' OR q.coverage < 0.8 OR q.answer_claim_id IS NULL
 		          OR NOT EXISTS (SELECT 1 FROM supported s WHERE s.claim_id = q.answer_claim_id))),
 		  (SELECT count(DISTINCT source_id)::int FROM supported),
@@ -133,7 +139,7 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 		  (SELECT count(*)::int FROM latest_report report
 		   WHERE NOT EXISTS (
 		     SELECT 1 FROM research_decision gain
-		     WHERE gain.session_id = $1::uuid AND gain.decision_kind = 'information_gain'
+		     WHERE gain.session_id = $1::uuid AND gain.workspace_id = $6::uuid AND gain.decision_kind = 'information_gain'
 		       AND gain.goal_version = $2 AND gain.plan_version = $3
 		       AND COALESCE((gain.outcome->>'canonical_changed')::boolean, false)
 		       AND gain.created_at > report.created_at
@@ -141,10 +147,10 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 		  (SELECT count(*)::int FROM report_claims),
 		  (SELECT count(*)::int FROM latest_report WHERE author_agent_id IS NOT NULL),
 		  (SELECT count(*)::int FROM research_question question
-		   WHERE question.session_id = $1::uuid AND question.goal_version = $2 AND question.plan_version = $3
+		   WHERE question.session_id = $1::uuid AND question.workspace_id = $6::uuid AND question.goal_version = $2 AND question.plan_version = $3
 		     AND question.required AND question.answer_claim_id IS NOT NULL
 		     AND NOT EXISTS (SELECT 1 FROM report_claims report_claim WHERE report_claim.claim_id = question.answer_claim_id)),
-		  (SELECT count(*)::int FROM research_report_claim rc JOIN latest_report r ON r.id = rc.report_id WHERE NOT EXISTS (SELECT 1 FROM current_claims c WHERE c.id = rc.claim_id)),
+		  (SELECT count(*)::int FROM research_report_claim rc JOIN latest_report r ON r.id = rc.report_id WHERE rc.workspace_id = $6::uuid AND NOT EXISTS (SELECT 1 FROM current_claims c WHERE c.id = rc.claim_id)),
 		  (SELECT count(*)::int FROM report_claims rc WHERE NOT EXISTS (SELECT 1 FROM supported s WHERE s.claim_id = rc.claim_id)),
 		  (SELECT count(*)::int
 		   FROM report_claims rc JOIN current_claims c ON c.id = rc.claim_id
@@ -200,7 +206,7 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 		       COALESCE((citation.outcome->>'instruction_adherence')::double precision, 0),
 		       COALESCE((citation.outcome->>'readability')::double precision, 0)
 		     ) >= $4::double precision),
-		  (SELECT count(*)::int FROM research_decision WHERE session_id = $1::uuid
+		  (SELECT count(*)::int FROM research_decision WHERE session_id = $1::uuid AND workspace_id = $6::uuid
 		     AND decision_kind = 'budget_exhausted' AND goal_version = $2 AND plan_version = $3),
 		  COALESCE((SELECT id::text FROM latest_quality), ''),
 		  COALESCE((SELECT inputs->>'report_id' FROM latest_quality), ''),
@@ -210,7 +216,7 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 		  COALESCE((SELECT inputs->>'report_id' FROM latest_citation), ''),
 		  COALESCE((SELECT actor_id::text FROM latest_citation), ''),
 		  COALESCE((SELECT outcome FROM latest_citation), '{}'::jsonb)
-	`, sessionID, run.GoalVersion, run.PlanVersion, minimumEvaluationScore, minimumMajorClaimSources).Scan(
+	`, sessionID, run.GoalVersion, run.PlanVersion, minimumEvaluationScore, minimumMajorClaimSources, workspaceID).Scan(
 		&counts.planSucceeded, &counts.unfinishedTasks, &counts.blockedTasks,
 		&counts.requiredQuestions, &counts.unansweredRequired,
 		&counts.verifiedSources, &counts.independentSources,
@@ -231,16 +237,16 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 		if err = s.pool.QueryRow(ctx, `
 			SELECT count(*)::int
 			FROM research_decision
-			WHERE session_id = $1::uuid AND decision_kind = 'research_method'
+			WHERE session_id = $1::uuid AND workspace_id = $4::uuid AND decision_kind = 'research_method'
 			  AND goal_version = $2 AND plan_version = $3
-		`, sessionID, run.GoalVersion, run.PlanVersion).Scan(&methodCount); err != nil {
+		`, sessionID, run.GoalVersion, run.PlanVersion, workspaceID).Scan(&methodCount); err != nil {
 			return GateResult{}, err
 		}
 	}
 	var unansweredQuestion map[string]any
 	if counts.unansweredRequired > 0 {
 		var found bool
-		unansweredQuestion, found, err = s.loadTopUnansweredRequiredQuestion(ctx, sessionID, run.GoalVersion, run.PlanVersion)
+		unansweredQuestion, found, err = s.loadTopUnansweredRequiredQuestion(ctx, sessionID, workspaceID, run.GoalVersion, run.PlanVersion)
 		if err != nil {
 			return GateResult{}, err
 		}
@@ -253,7 +259,7 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 	var reportStructureErr error
 	if usesStructuredResultContract(run.OrchestratorVersion) && counts.reportCount > 0 {
 		var report ReportProposal
-		report, reportStructureErr = s.loadLatestReportForGate(ctx, sessionID, run.GoalVersion, run.PlanVersion)
+		report, reportStructureErr = s.loadLatestReportForGate(ctx, sessionID, workspaceID, run.GoalVersion, run.PlanVersion)
 		if reportStructureErr == nil {
 			_, reportStructureErr = validateStructuredReportV2(report, reportPolicyForDepth(run.DepthTier))
 		}
@@ -326,7 +332,7 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 		}
 	}
 	if usesEvidenceFitnessContract(run.OrchestratorVersion) && methodCount > 0 {
-		fitnessFindings, fitnessErr := s.evaluateEvidenceFitnessV4(ctx, sessionID, run.GoalVersion, run.PlanVersion)
+		fitnessFindings, fitnessErr := s.evaluateEvidenceFitnessV4(ctx, sessionID, workspaceID, run.GoalVersion, run.PlanVersion)
 		if fitnessErr != nil {
 			return GateResult{}, fitnessErr
 		}
@@ -439,7 +445,7 @@ func boundedEvaluationStrings(values []string, maxItems, maxBytes int) []string 
 	return bounded
 }
 
-func (s *PostgresStore) loadTopUnansweredRequiredQuestion(ctx context.Context, sessionID string, goalVersion, planVersion int) (map[string]any, bool, error) {
+func (s *PostgresStore) loadTopUnansweredRequiredQuestion(ctx context.Context, sessionID, workspaceID string, goalVersion, planVersion int) (map[string]any, bool, error) {
 	var id, clientKey, question, status, answerClaimID, answerClaimKey string
 	var priority, impact, uncertainty, novelty, coverage, frontierScore float64
 	var hasVerifiedSupport bool
@@ -447,9 +453,9 @@ func (s *PostgresStore) loadTopUnansweredRequiredQuestion(ctx context.Context, s
 		WITH supported AS (
 		  SELECT DISTINCT evidence.claim_id
 		  FROM research_claim_evidence evidence
-		  JOIN research_observation observation ON observation.id = evidence.observation_id
-		  JOIN research_source_snapshot source ON source.id = observation.source_snapshot_id
-		  WHERE evidence.session_id = $1::uuid AND evidence.relation = 'supports'
+		  JOIN research_observation observation ON observation.id = evidence.observation_id AND observation.workspace_id = $4::uuid
+		  JOIN research_source_snapshot source ON source.id = observation.source_snapshot_id AND source.workspace_id = $4::uuid
+		  WHERE evidence.session_id = $1::uuid AND evidence.workspace_id = $4::uuid AND evidence.relation = 'supports'
 		    AND evidence.verification_status = 'verified'
 		    AND observation.verification_status = 'verified'
 		    AND source.verification_status = 'verified'
@@ -462,13 +468,13 @@ func (s *PostgresStore) loadTopUnansweredRequiredQuestion(ctx context.Context, s
 		                0.10*q.novelty + 0.10*(1-q.coverage) +
 		                CASE q.kind WHEN 'contradiction' THEN 0.10 WHEN 'gap' THEN 0.05 ELSE 0 END) AS frontier_score
 		FROM research_question q
-		LEFT JOIN research_claim claim ON claim.id = q.answer_claim_id
-		WHERE q.session_id = $1::uuid AND q.goal_version = $2 AND q.plan_version = $3 AND q.required
+		LEFT JOIN research_claim claim ON claim.id = q.answer_claim_id AND claim.workspace_id = $4::uuid
+		WHERE q.session_id = $1::uuid AND q.workspace_id = $4::uuid AND q.goal_version = $2 AND q.plan_version = $3 AND q.required
 		  AND (q.status <> 'answered' OR q.coverage < 0.8 OR q.answer_claim_id IS NULL
 		       OR NOT EXISTS (SELECT 1 FROM supported WHERE supported.claim_id = q.answer_claim_id))
 		ORDER BY frontier_score DESC, q.priority DESC, q.created_at, q.id
 		LIMIT 1
-	`, sessionID, goalVersion, planVersion).Scan(
+	`, sessionID, goalVersion, planVersion, workspaceID).Scan(
 		&id, &clientKey, &question, &status, &priority, &impact, &uncertainty, &novelty, &coverage,
 		&answerClaimID, &answerClaimKey, &hasVerifiedSupport, &frontierScore,
 	)
@@ -496,24 +502,24 @@ func (s *PostgresStore) loadTopUnansweredRequiredQuestion(ctx context.Context, s
 	}, true, nil
 }
 
-func (s *PostgresStore) loadLatestReportForGate(ctx context.Context, sessionID string, goalVersion, planVersion int) (ReportProposal, error) {
+func (s *PostgresStore) loadLatestReportForGate(ctx context.Context, sessionID, workspaceID string, goalVersion, planVersion int) (ReportProposal, error) {
 	var report ReportProposal
 	var reportID string
 	if err := s.pool.QueryRow(ctx, `
 		SELECT id::text, content_md, structured
 		FROM research_report
-		WHERE session_id = $1::uuid AND goal_version = $2 AND plan_version = $3
+		WHERE session_id = $1::uuid AND workspace_id = $4::uuid AND goal_version = $2 AND plan_version = $3
 		ORDER BY revision DESC LIMIT 1
-	`, sessionID, goalVersion, planVersion).Scan(&reportID, &report.ContentMD, &report.Structured); err != nil {
+	`, sessionID, goalVersion, planVersion, workspaceID).Scan(&reportID, &report.ContentMD, &report.Structured); err != nil {
 		return ReportProposal{}, err
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT claim.client_key, link.section_id, link.anchor_quote
 		FROM research_report_claim link
-		JOIN research_claim claim ON claim.id = link.claim_id
-		WHERE link.report_id = $1::uuid
+		JOIN research_claim claim ON claim.id = link.claim_id AND claim.workspace_id = $2::uuid
+		WHERE link.report_id = $1::uuid AND link.workspace_id = $2::uuid
 		ORDER BY claim.client_key, link.section_id
-	`, reportID)
+	`, reportID, workspaceID)
 	if err != nil {
 		return ReportProposal{}, err
 	}

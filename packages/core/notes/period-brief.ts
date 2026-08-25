@@ -29,7 +29,13 @@ export function collectorPackLooksStructured(markdown: string): boolean {
   const text = markdown.trim();
   if (!text) return false;
   if (!/^#\s+采集包(?:\s|$)/m.test(text)) return false;
-  const required = ["## Runtime", "## Repos / roots", "## Highlights", "## Unscoped / unclear"];
+  const required = [
+    "## Runtime",
+    "## Repos / roots",
+    "## Highlights",
+    "## Work groups",
+    "## Unscoped / unclear",
+  ];
   return required.every((heading) => text.includes(heading));
 }
 
@@ -48,6 +54,15 @@ export const PERIOD_BRIEF_COLLECTOR_PACK_FIXTURE = `# 采集包 2026-W33
 ## Highlights
 - wired Facts + collector packs into synthesizer wake (\`<packs>\`)
 - sticky \`note_brief\` targets 工作介绍/ folder for \`--note-write\`
+
+## Work groups
+
+### Period Work Brief 采集与合成链路
+- why: same repo/project (multica)
+- repos/paths: ~/code/multica
+- items:
+  - wired Facts + collector packs into synthesizer wake
+  - sticky note_brief targets 工作介绍/ for --note-write
 
 ## Unscoped / unclear
 - scratch notes under ~/tmp not mapped to Workspace remotes

@@ -41,7 +41,7 @@ const (
 	EventComputerStateChanged        EventName = "computer_state_changed"
 	EventEnvironmentStateChanged     EventName = "environment_state_changed"
 	EventSessionStateChanged         EventName = "session_state_changed"
-	EventWorkspaceRunnerStateChanged EventName = "workspace_runner_state_changed"
+	EventWorkspaceDaemonStateChanged EventName = "workspace_daemon_state_changed"
 	EventUpgradeStateChanged         EventName = "upgrade_state_changed"
 	EventGenerationFenced            EventName = "generation_fenced"
 	EventRunnerLogSinkDegraded       EventName = "runner_log_sink_degraded"
@@ -123,16 +123,16 @@ type Event struct {
 }
 
 type ServiceOptions struct {
-	ComputerID         string
-	ComputerGeneration string
+	ComputerID        string
+	ServiceGeneration string
 }
 
 type RunnerOptions struct {
-	Environment        Environment
-	WorkspaceID        string
-	RunnerGeneration   string
-	ComputerID         string
-	ComputerGeneration string
+	Environment       Environment
+	WorkspaceID       string
+	DaemonInstanceID  string
+	ComputerID        string
+	ServiceGeneration string
 }
 
 type Config struct {
@@ -214,12 +214,12 @@ type wireRecord struct {
 	Event         EventName `json:"event"`
 	Component     string    `json:"component"`
 
-	ComputerID         string      `json:"computer_id,omitempty"`
-	ComputerGeneration string      `json:"computer_generation,omitempty"`
-	Environment        Environment `json:"environment,omitempty"`
-	WorkspaceID        string      `json:"workspace_id,omitempty"`
-	RunnerGeneration   string      `json:"runner_generation,omitempty"`
-	StreamSeq          uint64      `json:"stream_seq"`
+	ComputerID        string      `json:"computerId,omitempty"`
+	ServiceGeneration string      `json:"serviceGeneration,omitempty"`
+	Environment       Environment `json:"environment,omitempty"`
+	WorkspaceID       string      `json:"workspaceId,omitempty"`
+	DaemonInstanceID  string      `json:"daemonInstanceId,omitempty"`
+	StreamSeq         uint64      `json:"streamSeq"`
 
 	AgentID         string `json:"agent_id,omitempty"`
 	RuntimeID       string `json:"runtime_id,omitempty"`

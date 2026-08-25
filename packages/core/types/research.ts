@@ -133,6 +133,8 @@ export interface ResearchSession {
   list_progress?: ResearchSessionListProgress;
   active_assignments?: ResearchActiveAssignment[];
   latest_outcomes?: ResearchLatestOutcome[];
+  orchestratorVersion?: string;
+  directorAgentId?: string | null;
 }
 
 export interface ResearchSessionListProgress {
@@ -319,18 +321,19 @@ export type ResearchMessageCardKind = "chat" | "process" | string;
 
 /** Exact immutable research context attached to one natural-language message. */
 export interface ResearchSelectedReference {
-  stable_id: string;
+  stableId: string;
   kind: string;
-  entity_id: string;
+  entityId: string;
   revision: number;
-  content_hash: string;
-  display_summary: string;
+  contentHash: string;
+  displaySummary: string;
 }
 
 export interface PostResearchMessageRequest {
   body: string;
-  target_agent_id?: string;
-  selected_research_refs?: ResearchSelectedReference[];
+  clientRequestId: string;
+  targetAgentId?: string;
+  selectedResearchRefs?: ResearchSelectedReference[];
 }
 
 /**
@@ -499,8 +502,8 @@ export interface ResearchRun {
   goal_version: number;
   plan_version: number;
   state_version: number;
-  orchestrator_version: string;
-  director_agent_id?: string;
+  orchestratorVersion: string;
+  directorAgentId?: string;
   config: ResearchRunConfig;
   stats: ResearchRunStats;
   initialized_at?: string;
@@ -757,18 +760,18 @@ export interface ResearchSourceWeights {
 export interface CreateResearchSessionRequest {
   goal: string;
   /** Idempotency key for create retries and V6 bootstrap replay safety. */
-  client_request_id?: string;
+  clientRequestId?: string;
   title?: string;
   /** LRM-676 / LRM-838 — shallow|standard|deep product-round caps. */
-  depth_tier?: ResearchDepthTier;
+  depthTier?: ResearchDepthTier;
   /** Report / delivery language preference (LRM-838). */
   language?: string;
   /** Source credibility preference weights (LRM-838). */
-  source_weights?: ResearchSourceWeights;
+  sourceWeights?: ResearchSourceWeights;
   /** Explicit unreleased bootstrap; omitted requests remain V5. */
-  orchestrator_version?: "research-run-v5" | "research-run-v6";
-  /** Required when orchestrator_version is research-run-v6. */
-  director_agent_id?: string;
+  orchestratorVersion?: "research-run-v5" | "research-run-v6";
+  /** Required when orchestratorVersion is research-run-v6. */
+  directorAgentId?: string;
 }
 
 export interface ResearchHandoffRequest {

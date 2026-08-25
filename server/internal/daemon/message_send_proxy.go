@@ -44,10 +44,6 @@ type credentialProxyMessageTargetResponse struct {
 
 func (d *Daemon) credentialProxyMessageSendHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
 		var request credentialProxyMessageSendRequest
 		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
 		decoder.DisallowUnknownFields()
@@ -63,14 +59,14 @@ func (d *Daemon) credentialProxyMessageSendHandler() http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		credential, ok := readCachedAgentCredentialForMessage(d.cfg, request.WorkspaceID, request.AgentID, time.Now())
-		if !ok {
-			http.Error(w, "Agent credential is unavailable", http.StatusConflict)
+		credential, err := d.messageAgentCredential(r.Context(), request.WorkspaceID, request.AgentID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}
 
 		proxy := d.CredentialProxy()
-		runner := d.currentWorkspaceRunner(request.WorkspaceID)
+		runner := d.currentWorkspaceDaemon(request.WorkspaceID)
 		now := time.Now()
 		draft, status, err := d.prepareMessageSendDraft(r.Context(), proxy, credential, request, now)
 		if err != nil {

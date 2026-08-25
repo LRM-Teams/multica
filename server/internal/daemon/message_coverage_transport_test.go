@@ -34,7 +34,7 @@ func coverageCommitTestDaemon(t *testing.T) (*Daemon, *MessageCoordinator, Cover
 
 func prepareCoverageCommitCredential(t *testing.T, d *Daemon, key InboxKey, runtimeID string) string {
 	t.Helper()
-	transport, err := d.prepareAgentProxyCLITransport(key, runtimeID, filepath.Join(t.TempDir(), "multica"))
+	transport, err := d.prepareAgentProxyCLITransport(key, runtimeID, "coverage-launch", filepath.Join(t.TempDir(), "multica"))
 	if err != nil {
 		t.Fatalf("prepare Agent Proxy credential: %v", err)
 	}
@@ -249,9 +249,9 @@ func TestCredentialProxyCoverageCommitRecordsBoundedRunnerDiagnostic(t *testing.
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	d.runnerInstanceID = "runner-generation-1"
+	d.instanceID = "start-identity-1"
 	d.runnerDiagnostics = &runnerDiagnosticRegistry{
-		store: store, environment: diagnosticlog.EnvironmentProduction, runnerGeneration: d.runnerInstanceID,
+		store: store, environment: diagnosticlog.EnvironmentProduction, daemonInstanceID: d.instanceID,
 		loggers: make(map[string]*diagnosticlog.Logger), failed: make(map[string]struct{}),
 	}
 

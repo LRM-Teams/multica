@@ -55,19 +55,19 @@ func TestCommandTestsDoNotConstructRealComputerLifecycle(t *testing.T) {
 	}
 }
 
-func TestComputerResidentConstructsComputerHostWithoutDaemonContainer(t *testing.T) {
+func TestComputerCommandConstructsComputerCoreWithoutDaemonDependency(t *testing.T) {
 	packages, err := parser.ParseDir(token.NewFileSet(), ".", func(info fs.FileInfo) bool {
 		return strings.HasSuffix(info.Name(), ".go") && !strings.HasSuffix(info.Name(), "_test.go")
 	}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var foundComputerHost bool
+	var foundComputerCore bool
 	for _, pkg := range packages {
 		for filename, file := range pkg.Files {
 			ast.Inspect(file, func(node ast.Node) bool {
 				declaration, ok := node.(*ast.FuncDecl)
-				if !ok || declaration.Name.Name != "runComputerResident" {
+				if !ok || declaration.Name.Name != "run" {
 					return true
 				}
 				ast.Inspect(declaration.Body, func(node ast.Node) bool {
@@ -84,10 +84,10 @@ func TestComputerResidentConstructsComputerHostWithoutDaemonContainer(t *testing
 						return true
 					}
 					if owner.Name == "daemon" {
-						t.Errorf("%s: Computer resident must not depend on internal/daemon (%s)", filename, selector.Sel.Name)
+						t.Errorf("%s: Computer command must not depend on internal/daemon (%s)", filename, selector.Sel.Name)
 					}
-					if owner.Name == "computer" && selector.Sel.Name == "NewHost" {
-						foundComputerHost = true
+					if owner.Name == "computer" && selector.Sel.Name == "NewComputerCore" {
+						foundComputerCore = true
 					}
 					return true
 				})
@@ -95,13 +95,13 @@ func TestComputerResidentConstructsComputerHostWithoutDaemonContainer(t *testing
 			})
 		}
 	}
-	if !foundComputerHost {
-		t.Fatal("Computer resident does not construct computer.Host")
+	if !foundComputerCore {
+		t.Fatal("Computer command does not construct computer.ComputerCore")
 	}
 }
 
 func TestComputerMachineLifecycleDoesNotDependOnDaemon(t *testing.T) {
-	for _, filename := range []string{"cmd_computer_resident.go", "machine_upgrade_detached.go", "cmd_daemon.go"} {
+	for _, filename := range []string{"machine_upgrade_detached.go", "cmd_daemon.go"} {
 		body, err := os.ReadFile(filename)
 		if err != nil {
 			t.Fatal(err)
@@ -113,39 +113,69 @@ func TestComputerMachineLifecycleDoesNotDependOnDaemon(t *testing.T) {
 	}
 }
 
-func TestComputerServiceCommandIsHiddenResidentEntry(t *testing.T) {
-	if got, want := computerServiceCmd.Use, computer.ResidentServiceArg; got != want {
+func TestComputerRunCommandUsesHiddenServiceWireEntry(t *testing.T) {
+	if got, want := computerRunCmd.Use, computer.ResidentServiceArg; got != want {
 		t.Fatalf("computer service use = %q, want %q", got, want)
 	}
-	if !computerServiceCmd.Hidden {
+	if !computerRunCmd.Hidden {
 		t.Fatal("computer __service must stay hidden")
 	}
-	if err := computerServiceCmd.Args(computerServiceCmd, nil); err != nil {
+	if err := computerRunCmd.Args(computerRunCmd, nil); err != nil {
 		t.Fatalf("computer __service rejects no arguments: %v", err)
 	}
-	if err := computerServiceCmd.Args(computerServiceCmd, []string{"extra"}); err == nil {
+	if err := computerRunCmd.Args(computerRunCmd, []string{"extra"}); err == nil {
 		t.Fatal("computer __service accepts extra arguments")
 	}
-	if flag := computerServiceCmd.Flags().Lookup("computer-generation"); flag == nil {
-		t.Fatal("computer __service is missing --computer-generation")
-	}
 	if !hasSubcommand(computerCmd, computer.ResidentServiceArg) {
-		t.Fatal("computer command is missing the hidden resident entry")
+		t.Fatal("computer command is missing the hidden run entry")
 	}
 }
 
-func TestComputerRunnerCommandIsHiddenBindingChild(t *testing.T) {
-	if got, want := computerRunnerCmd.Use, computer.ResidentRunnerArg; got != want {
-		t.Fatalf("computer runner use = %q, want %q", got, want)
+func TestComputerWorkspaceDaemonCommandIsHidden(t *testing.T) {
+	if got, want := computerWorkspaceDaemonCmd.Use, computer.WorkspaceDaemonArg; got != want {
+		t.Fatalf("Computer WorkspaceDaemon use = %q, want %q", got, want)
 	}
-	if !computerRunnerCmd.Hidden {
+	if !computerWorkspaceDaemonCmd.Hidden {
 		t.Fatal("computer __run must stay hidden")
 	}
-	if flag := computerRunnerCmd.Flags().Lookup("workspace-id"); flag == nil {
+	if flag := computerWorkspaceDaemonCmd.Flags().Lookup("workspace-id"); flag == nil {
 		t.Fatal("computer __run is missing --workspace-id")
 	}
-	if !hasSubcommand(computerCmd, computer.ResidentRunnerArg) {
-		t.Fatal("computer command is missing the hidden Binding child entry")
+	if !hasSubcommand(computerCmd, computer.WorkspaceDaemonArg) {
+		t.Fatal("computer command is missing the hidden WorkspaceDaemon entry")
+	}
+}
+
+func TestComputerUpgradeCoordinatorCommandIsHidden(t *testing.T) {
+	if got, want := computerUpgradeCoordinatorCmd.Use, computer.ResidentUpgradeArg; got != want {
+		t.Fatalf("computer upgrade coordinator use = %q, want %q", got, want)
+	}
+	if !computerUpgradeCoordinatorCmd.Hidden {
+		t.Fatal("computer __upgrade must stay hidden")
+	}
+	if err := computerUpgradeCoordinatorCmd.Args(computerUpgradeCoordinatorCmd, nil); err != nil {
+		t.Fatalf("computer __upgrade rejects no arguments: %v", err)
+	}
+	if err := computerUpgradeCoordinatorCmd.Args(computerUpgradeCoordinatorCmd, []string{"extra"}); err == nil {
+		t.Fatal("computer __upgrade accepts extra arguments")
+	}
+	if !hasSubcommand(computerCmd, computer.ResidentUpgradeArg) {
+		t.Fatal("computer command is missing the hidden upgrade coordinator entry")
+	}
+}
+
+func TestComputerRestartCoordinatorCommandIsHidden(t *testing.T) {
+	if !computerRestartCoordinatorCmd.Hidden {
+		t.Fatal("computer __restart must stay hidden")
+	}
+	if err := computerRestartCoordinatorCmd.Args(computerRestartCoordinatorCmd, nil); err == nil {
+		t.Fatal("computer __restart accepts a missing handoff")
+	}
+	if err := computerRestartCoordinatorCmd.Args(computerRestartCoordinatorCmd, []string{"handoff"}); err != nil {
+		t.Fatalf("computer __restart rejects its handoff: %v", err)
+	}
+	if !hasSubcommand(computerCmd, computer.ResidentRestartArg) {
+		t.Fatal("computer command is missing the hidden restart coordinator entry")
 	}
 }
 

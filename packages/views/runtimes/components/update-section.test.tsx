@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { render, screen, fireEvent, act } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { I18nProvider } from "@multica/core/i18n/react";
@@ -7,6 +8,7 @@ import enRuntimes from "../../locales/en/runtimes.json";
 import { api, ApiError } from "@multica/core/api";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { configStore } from "@multica/core/config";
+import { useComputerUpgradeStore } from "@multica/core/runtimes";
 import { UpdateSection } from "./update-section";
 
 vi.mock("@multica/core/api", async (importOriginal) => {
@@ -27,6 +29,7 @@ vi.mock("@multica/ui/lib/error-toast", () => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  useComputerUpgradeStore.getState().reset();
   configStore.getState().setDaemonConfig({ environment: "production" });
 });
 
@@ -63,15 +66,19 @@ describe("UpdateSection sandbox gating (task #8)", () => {
     expect(screen.queryByText("Managed by sandbox")).toBeNull();
   });
 
-  it("replaces the Update button with a disabled reason for a sandbox runtime — never silently hidden", () => {
+  it("replaces the Update button with a disabled reason for a sandbox runtime — never silently hidden", async () => {
     renderSection({ isSandbox: true });
     expect(screen.queryByRole("button", { name: "Update" })).toBeNull();
     const reason = screen.getByText("Managed by sandbox");
     expect(reason).toBeInTheDocument();
-    expect(reason).toHaveAttribute(
-      "title",
-      "This machine is managed by its sandbox environment — it can't self-update from here.",
-    );
+    // The native `title` hover affordance is now the shared Tooltip — verify
+    // the full reason surfaces on hover.
+    await userEvent.hover(reason);
+    expect(
+      await screen.findByText(
+        "This machine is managed by its sandbox environment — it can't self-update from here.",
+      ),
+    ).toBeInTheDocument();
   });
 
   it("does not offer a Retry button for a sandbox runtime with a failed update either", () => {

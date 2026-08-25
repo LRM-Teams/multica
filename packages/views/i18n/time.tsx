@@ -1,8 +1,10 @@
 "use client";
 
 import { useT } from "./use-t";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { useTimeAgo } from "./use-time-ago";
 import {
+  formatCalendarDate,
   formatListTime,
   formatMessageTime,
   fullTimestamp,
@@ -17,8 +19,15 @@ import { useViewingTimezone } from "../common/use-viewing-timezone";
 //   message  inline message timestamp   (the frozen message-bubble contract)
 //   relative activity/system surfaces   (刚刚 / N 分钟前 …)
 //   clock    bare HH:MM (group gutter)
+//   date     calendar day only (profile "created" / "joined" rows)
 //   full     absolute locale timestamp
-export type TimeKind = "list" | "message" | "relative" | "clock" | "full";
+export type TimeKind =
+  | "list"
+  | "message"
+  | "relative"
+  | "clock"
+  | "date"
+  | "full";
 
 export function Time({
   kind,
@@ -55,14 +64,23 @@ export function Time({
           ? timeAgo(value)
           : kind === "clock"
             ? localTime(ms, tz)
-            : fullTimestamp(ms, tz, locale);
-  return (
-    <time
-      dateTime={new Date(ms).toISOString()}
-      title={title ? fullTimestamp(ms, tz, locale) : undefined}
-      className={className}
-    >
+            : kind === "date"
+              ? formatCalendarDate(ms, tz, locale)
+              : fullTimestamp(ms, tz, locale);
+  const timestamp = new Date(ms).toISOString();
+  const full = fullTimestamp(ms, tz, locale);
+  const timeEl = (
+    <time dateTime={timestamp} className={className}>
       {text}
     </time>
+  );
+  if (!title) return timeEl;
+  return (
+    <Tooltip>
+      <TooltipTrigger render={<time dateTime={timestamp} className={className} />}>
+        {text}
+      </TooltipTrigger>
+      <TooltipContent side="top">{full}</TooltipContent>
+    </Tooltip>
   );
 }

@@ -72,6 +72,22 @@ describe("MessagePart choice contract", () => {
   });
 });
 
+describe("MessagePart period_brief_insert contract", () => {
+  it("carries the run id and optional selected insert mode", () => {
+    const open: Extract<MessagePart, { type: "period_brief_insert" }> = {
+      type: "period_brief_insert",
+      ref_id: "run-1",
+    };
+    const picked: Extract<MessagePart, { type: "period_brief_insert" }> = {
+      type: "period_brief_insert",
+      ref_id: "run-1",
+      selected_option_id: "append",
+    };
+    expect(open.selected_option_id).toBeUndefined();
+    expect(picked.selected_option_id).toBe("append");
+  });
+});
+
 describe("MessagePart note_write contract", () => {
   it("allows a create proposal without ref_id and a targeted write with one", () => {
     const create: Extract<MessagePart, { type: "note_write" }> = { type: "note_write" };

@@ -205,8 +205,9 @@ services:
   # BRIDGE_USER_ID MUST equal the AReaL-side executor's BRIDGE_USER_ID - the
   # rows this stub enqueues are claimed on the AReaL host under that user, so a
   # mismatch leaves them unclaimed (multica -> AReaL calls hang until 504). It
-  # defaults to the same UUID as MULTICA_BRIDGE_USER_ID so all multica-side
-  # bridge traffic shares one isolation user; override in /data/multica/.env.
+  # defaults to a dedicated UUID for multica-side bridge traffic, kept distinct
+  # from le-agent's bridge user so the two stay isolated in the shared tables;
+  # override in /data/multica/.env.
   # The arealrl client sends no X-Bridge-User-Id header, so this MUST be a
   # valid UUID or the stub rejects every request with 400.
   db-bridge-stub-multica:
@@ -218,7 +219,7 @@ services:
     environment:
       SUPABASE_URL: ${SUPABASE_URL:-http://127.0.0.1:54321}
       SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU}
-      BRIDGE_USER_ID: ${BRIDGE_USER_ID:-c88b46a8-a8b5-4414-82fb-91398bd063b4}
+      BRIDGE_USER_ID: ${BRIDGE_USER_ID:-ae36de93-5969-4629-866d-7a5ffe82f152}
       # Bind 0.0.0.0 in-container so the backend container can reach the stub
       # over the compose network (db-bridge-stub-multica:9100). The host port
       # still maps to 127.0.0.1 only - the stub is not exposed to the internet.

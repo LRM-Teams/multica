@@ -128,7 +128,7 @@ const (
 	EventAutopilotRunDone  = "autopilot:run_done"
 
 	// Computer events
-	EventComputerUpdated = "computer:updated"
+	EventComputerStatus = "computer:status"
 
 	// Daemon events
 	EventDaemonHeartbeat      = "daemon:heartbeat"
@@ -154,8 +154,9 @@ const (
 	EventReminderCancel             = "reminder.cancel"
 	EventReminderSnapshotRequest    = "reminder.snapshot.request"
 	EventReminderSnapshot           = "reminder.snapshot"
-	EventReminderFireAttempt        = "reminder.fire_attempt"
-	EventReminderFireResult         = "reminder.fire_result"
+	EventReminderFireRequest        = "reminder.fire_request"
+	EventReminderFireRequestResult  = "reminder.fire_request.result"
+	EventReminderFireReceiptAck     = "reminder.fire_receipt.ack"
 
 	// Sandbox events. Node-facing events wake shared sandbox infrastructure;
 	// instance events are broadcast to workspace clients for UI refresh.

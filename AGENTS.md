@@ -68,6 +68,20 @@ What lives where for sharing purposes is documented in *Sharing Principles* belo
 
 **pnpm catalog** — `pnpm-workspace.yaml` defines `catalog:` for version pinning. All shared deps use `catalog:` references to guarantee a single version across all packages. When adding new shared deps (including test deps), add to catalog first.
 
+### Daemon App Storage Identity
+
+Daemon-owned App state is scoped by machine, workspace, App, and owner Agent. The canonical per-Agent path is:
+
+```text
+<BindingsRoot>/app-storage/v1/<MachineID>/<WorkspaceID>/<AppID>/agents/<AgentID>/state.json
+```
+
+- `MachineID` is the stable OS-level machine fingerprint from `Config.MachineID`.
+- For this storage model, Multica `WorkspaceID` is semantically equivalent to Raft `serverId`. Do not introduce another `ServerScope`/`ServerID` directory, and never substitute `DaemonID` for it.
+- `AppID` is the App authority boundary. Reminder receipts use `system.reminder`; the aggregate Agent App Inbox uses `system.agent-inbox`.
+- Start from machine-wide `BindingsRoot`, not `BindingStateRoot`: the latter is already workspace-scoped and would duplicate `WorkspaceID` in the path.
+- App state owned by the Computer rather than an Agent uses `<AppID>/computer/state.json` at the same machine/workspace scope.
+
 ### State Management
 
 The architecture relies on a strict split between server state and client state. Mixing them is the most common way to break it.
@@ -120,7 +134,6 @@ pnpm build            # Build the web frontend and its dependencies
 pnpm typecheck        # TypeScript check for web and its dependencies
 pnpm lint             # ESLint
 pnpm test             # TS tests for web and its dependencies
-pnpm react:doctor     # Required after frontend code changes; scans changed React code against origin/dev
 
 # Backend (Go)
 make server           # Run Go server only (port 8080)
@@ -166,15 +179,11 @@ make db-reset         # Drop + recreate current env's DB, then re-run migrations
 
 CI runs on Node 22 and Go 1.26.1 with a `pgvector/pgvector:pg17` PostgreSQL service. See `.github/workflows/ci.yml`.
 
+PR CI tests only the packages affected by the diff (changed packages plus dependents). It does not replay the whole repo. Changing `ci.yml`, lockfiles, `server/go.mod` / `go.sum`, or the scope scripts forces the current web-surface full suite. Test files stay in the repo; `make check` / `pnpm test` / `go test ./...` remain full locally.
+
 ### Frontend PR Gate
 
-Every PR that writes or changes frontend code must include a React Doctor result in the PR/task thread in addition to the relevant lint, typecheck, and test output. Run:
-
-```bash
-pnpm react:doctor
-```
-
-The command uses `react-doctor@0.5.8` in changed-scope mode against `origin/dev`, with score/telemetry disabled and CI failure on new warning/error diagnostics. Use it as a regression gate for new React issues; do not use a full-repository scan to block unrelated historical debt unless the task is explicitly a React Doctor cleanup.
+React Doctor is not a merge or CI gate. Frontend PRs are accepted on typecheck, lint, and the affected-package unit tests.
 
 ### Worktree Support
 
@@ -381,21 +390,17 @@ make check
 
 ## CLI Release
 
-**Web-only CI policy (Frank, 2026-07-29):** cross-platform CLI/daemon release
-artifacts are suspended to control Actions usage. Re-enable an explicitly
-reviewed release workflow before the next production deployment that requires
-a CLI release.
+Release maturity is determined by the source branch:
 
-1. Create a tag on the `main` branch: `git tag v0.x.x`
-2. Push the tag: `git push origin v0.x.x`
-3. GitHub Actions automatically triggers `release.yml`: runs Go tests → builds Linux amd64 backend/web images → publishes the Helm chart
+- `dev` publishes test releases only: `vX.Y.Z-alpha.N` or `vX.Y.Z-beta.N`.
+- `main` publishes stable releases only: `vX.Y.Z`.
+- Never tag a feature branch or publish a stable tag from `dev`.
 
-By default, bump the patch version each release (e.g. `v0.1.12` → `v0.1.13`), unless the user specifies a specific version.
-
-The main release is Web-focused: its gates are Go verification, Linux amd64
-backend and web images, and the Helm chart. Mobile, Linux ARM, and
-CLI/daemon artifacts are outside this release scope and must not be treated as
-release gates.
+Tag the current remote commit of the intended branch, not the agent's local
+working branch. Pushing the tag triggers `.github/workflows/release.yml`, which
+validates the tag format and source branch before publishing. Follow the
+version selection, commands, verification, and failure guidance in
+`docs/release.md`.
 
 ## Multi-tenancy
 
@@ -403,4 +408,4 @@ All queries filter by `workspace_id`. Membership checks gate access. `X-Workspac
 
 ## Agent Assignees
 
-Assignees are polymorphic — can be a member or an agent. `assignee_type` + `assignee_id` on issues. Agents render with distinct styling (purple background, robot icon).
+Assignees are polymorphic — can be a member or an agent. `assignee_type` + `assignee_id` on issues.

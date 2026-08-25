@@ -1,19 +1,19 @@
 # Research Run V6 Ronaldo Director contract
 
-Status: target contract frozen; production disabled.
+Status: target contract frozen; user-facing V6 create is open. Omitted
+`orchestrator_version` still defaults to V5.
 
 Normative target schema:
 [`contracts/research-run-v6-director.schema.json`](contracts/research-run-v6-director.schema.json),
 SHA-256 `2ce8b8af85c9cec5e508fa1c6b01c6963d998899d09b99d33f8110aca3b59f88`.
-Its `$id` is already the final `research-run-v6.schema.json` identity so Slice 0
-can replace the code-coupled file byte-for-byte without changing the hash.
+Its `$id` is the final `research-run-v6.schema.json` identity.
 
 The code-coupled [`contracts/research-run-v6.schema.json`](contracts/research-run-v6.schema.json)
-and its Go hash test still describe the superseded, never-enabled draft. They are
-replaced atomically in implementation slice 0 so this documentation-only change
-does not make the current V5 build fail. ADR-0017 authorizes that one in-place V6
-replacement. V1–V5 remain immutable, V5 remains the default, and production must
-continue to reject V6 until every activation gate below passes.
+and the Go-embedded schema are byte-identical to the normative target. ADR-0017
+authorizes this in-place V6 replacement. V1–V5 remain immutable. Clients that
+omit `orchestrator_version` still create V5. Explicit V6 + Director creates a V6
+Run. `AssessV6Activation` is an audit of remaining evidence; it does not flip
+that omitted-version default.
 
 The product and development authority is
 [`superpowers/specs/2026-08-14-ronaldo-research-director-development-spec.zh-CN.md`](superpowers/specs/2026-08-14-ronaldo-research-director-development-spec.zh-CN.md).
@@ -109,10 +109,22 @@ propose any Research action, but cannot replace itself or bypass server
 mechanical invariants.
 
 The Research Brief contains each Branch's fresh Frontier summaries and terminal
-aggregate summaries, never absorbed-child full text or terminal-node detail. The
-Control Brief contains current team, Work Item, Discussion, Dispute, Report,
-steering and failure facts. Page review watermarks are durable; model sessions
-are disposable.
+aggregate summaries, never absorbed-child full text or terminal-node detail.
+Persisted `open_questions` from a fresh Result or Insight are carried into that
+node's bounded Frontier `brief_summary`, so the next Director cycle can create or
+reassign follow-up Work, create an Agent when capacity or capability requires it,
+or record why the question does not justify more research. The Control Brief
+contains current team, Work Item, Discussion, Dispute, Report, steering and
+failure facts. A failed Work Item's bounded `summary` includes its
+mission, attempt count and budget, latest Attempt state, failure class and
+diagnostics, plus its terminal reason. Page review watermarks are durable; model
+sessions are disposable.
+
+For a `v6_result_node_accepted` event with non-empty `open_questions`, a covering
+Director cycle counts as consuming the event only when its persisted Frontier
+summary contains the open-question block. Reconciliation creates one fresh
+repair cycle for historical Briefs that contain the Result node but omitted that
+block.
 
 One `director_brief` envelope is one bounded page. All pages share Brief ID/hash,
 state version and event watermark. Ronaldo acknowledges a page only after
@@ -136,9 +148,26 @@ second-stage payload Schemas, so adding a research method or Agent role does not
 require a new orchestrator version. Unknown platform verbs still fail closed;
 Ronaldo's semantic authority does not make unimplemented server operations real.
 
+The Director plans, staffs, assigns and integrates; it never executes atomic
+research Work itself. Atomic Work uses `atomic_result_submission`, a non-empty
+payload schema ID other than `no_op.v1`, and an exact non-empty
+`payload.task_specific_schema`. A contract-rejected assignment with idle
+run-scoped workers must be corrected and retried rather than followed by
+`no_op`. A failed run-scoped Agent Work with no active Agent Work is likewise
+not a valid `no_op` state: the Director must retry or reassign it.
+
+Ronaldo cannot pause the whole Run. A failed Work Item is a recovery input: the
+Director must retry it, reassign it, create replacement Work, or report the
+failure to the user. Only the authenticated user Stop operation or the V6 release
+maintenance control may move an active Run to `paused`. The frozen schema keeps
+the `pause_run` shape token, but the Director execution authorization rejects it.
+
 When Ronaldo decides that no state change is useful, the Proposal contains one
 `no_op` action with its reason and no semantic dependents; `no_op` cannot coexist
-with another action. An empty or missing action list is invalid.
+with another action. An empty or missing action list is invalid. While a Run is
+active, `no_op` is also invalid when no non-Director member exists and no Agent
+creation is pending, or when idle members remain unassigned after a rejected
+Work contract, or when failed Agent Work remains and no Agent Work is active.
 
 External Agent creation, Inbox dispatch, storage upload and notification use
 durable outbox intents. Database facts commit before an Adapter call. Unknown
@@ -171,7 +200,10 @@ mismatch fails before domain mutation.
 A Work Manifest binds immutable protocol version, Director-authored mission,
 Goal version, Branch state versions, artifact versions, representations and
 expected result schema. The Agent cannot cite platform-supplied material absent
-from that Manifest.
+from that Manifest. For Director-created Work, the persisted Work-to-Branch
+associations are the scope authority; dispatch resolves those associations to
+the current Branch versions and freezes them as `branch_refs`. The Agent copies
+those references exactly and never substitutes the Run state version.
 
 V6 dispatch uses `research-v6-context-v1`, distinct from the V1–V5 legacy
 compatibility policy. It admits only current `registered | accepted` artifacts
@@ -285,6 +317,11 @@ explanation. Terminal unabsorbed nodes remain permanently user-visible, but do
 not enter matching, Discussion, promotion, Director research content or Report
 inputs.
 
+For failed Work projection, a missing Work terminal reason falls back to the
+latest Attempt failure class and diagnostics. Platform failure classes normalize
+to `resource_failure`, while the exact bounded class and diagnostic remain in
+`reason_detail`; the UI must not replace them with a generic terminal-state label.
+
 High-level termination cancels active descendant Work, Match, Discussion and
 Integration. Completed descendants remain historical. Low unabsorbed failure
 does not invalidate an accepted higher node.
@@ -340,8 +377,24 @@ workers, nested frames, external network and a generic parent bridge are not.
 
 Projection is rebuilt from canonical tables and Events. Report never appears in
 the graph node enum. Default Snapshot includes Goal, Branch Frontier M+, terminal
-high nodes, every unabsorbed Work/Result S, and no absorbed node. Expansion reads
+high nodes, active Work S, unabsorbed Result S, and no absorbed node. A terminal
+research Work S that already produced a Result S is represented by one
+non-canonical `collapsed_path`; terminal Director control work stays in the
+canonical slice but is omitted from the default research canvas. Expansion reads
 one Derivation layer at a time.
+
+Work S branch scope comes from the assigned `research_v6_work_item_branch` rows,
+not from a future Result. The presentation-only work-activity read model resolves
+the latest Attempt, assigned Agent, Inbox Task and durable progress for a selected
+Work S. That same read model reads a bounded process history directly from
+persisted Runner Activity entries, filtered to the Attempt's exact Inbox Task
+`started_at` / `completed_at` lifecycle window; dispatch time is not an
+execution boundary. The existing `agent:activity` Query-cache
+write path overlays new live entries. Matching `task:running`, progress and
+terminal events refetch the selected activity read model, and the work Projection
+revision includes the latest Attempt, Inbox Task lifecycle and durable progress
+timestamps for reconnect recovery. Neither activity nor canvas coordinates
+become canonical Research state.
 
 `collapsed_path` and density bins are explicitly non-canonical. Snapshot pages
 share one `snapshot_id + through_event_sequence`; Delta sequence is continuous.
@@ -352,18 +405,21 @@ forces Snapshot reload.
 ## Version and rollout rules
 
 1. The target schema hash above is frozen by this documentation phase.
-2. Implementation slice 0 replaces the old code-coupled V6 schema and its hash
-   test in one commit while V6 remains unsupported.
+2. Implementation slice 0 replaced the old code-coupled V6 schema and its hash
+   test in one commit before explicit user V6 create opened.
 3. V1–V5 decoders reject all V6 envelopes and do not receive V6 optional fields.
 4. Historical V1–V5 Run rows remain on their pinned orchestrator version.
-5. Activation applies only to new Runs and requires an exercised V5 rollback.
+5. Changing the omitted-version default to V6 applies only to new Runs and
+   requires an exercised V5 rollback. Explicit V6 create is independently
+   controlled by the workspace release policy.
 6. After implementation slice 0 freezes the target under the canonical filename,
    an incompatible hash change requires V7.
 
 ## Activation evidence
 
-`AssessV6Activation` must reject activation until every item has a stable evidence
-ID and revision:
+`AssessV6Activation` is the audit of remaining evidence. It does not enable or
+disable explicit user V6 create, and it must not flip the omitted-version default
+to V6 until every item has a stable evidence ID and revision:
 
 - canonical migrations and up/down/up recovery;
 - strict schema and negative fixtures for all nine envelopes;

@@ -7,6 +7,16 @@ import (
 )
 
 func TestLegacyCompatibilityCommandsRemainAvailable(t *testing.T) {
+	t.Run("project command is removed in favor of workspace info", func(t *testing.T) {
+		cmd, _, err := rootCmd.Find([]string{"project"})
+		if err == nil && cmd != nil && cmd.Name() == "project" {
+			t.Fatal("top-level project command must not exist")
+		}
+		if _, _, err := workspaceCmd.Find([]string{"info"}); err != nil {
+			t.Fatalf("workspace info command must remain available: %v", err)
+		}
+	})
+
 	t.Run("workspace get remains available", func(t *testing.T) {
 		if _, _, err := workspaceCmd.Find([]string{"get"}); err != nil {
 			t.Fatalf("expected workspace get command to exist: %v", err)

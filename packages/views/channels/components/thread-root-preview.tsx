@@ -1,16 +1,16 @@
 "use client";
 
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
-import { Bot } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { useActorName } from "@multica/core/workspace/hooks";
 import type { ChannelMessage } from "@multica/core/types";
 import type { OpenAgentPanelFn } from "@multica/core/agents";
 import { messageCollapseFadeClassName } from "../../common/mention-token";
+import { ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorStyledName } from "../../common/actor-styled-name";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
-import { initialsOf } from "../../common/initials";
 import { useT } from "../../i18n/use-t";
 import { useMessageTime } from "../../i18n/use-message-time";
 import { Time } from "../../i18n/time";
@@ -99,14 +99,16 @@ export function ThreadRootPreview({
       profileLink={false}
     />
   ) : (
-    <span
-      className={cn(
-        "inline-flex size-[30px] shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium text-muted-foreground",
-        isAgent && "bg-primary/[0.08] text-primary",
-      )}
-    >
-      {isAgent ? <Bot className="size-3.5" /> : initialsOf(displayName || "?")}
-    </span>
+    // No resolvable actor id — still the site-wide face. The disc this
+    // replaced used a Bot glyph (#451 retired it) and two-letter initials
+    // (LRM-201 forbids the fake face).
+    <ActorAvatarBase
+      name={displayName || "?"}
+      initials={displayName || "?"}
+      isAgent={isAgent}
+      size={30}
+      toneSeed={`${avatarActorType}:${displayName}`}
+    />
   );
   const avatarNode =
     profileActorType && profileActorId ? (
@@ -185,12 +187,12 @@ export function ThreadRootPreview({
             ) : (
               nameNode
             )}
-            <span
-              className="text-[11px] text-muted-foreground"
-              title={messageTime.full(message.created_at)}
-            >
-              <Time kind="message" value={message.created_at} title={false} />
-            </span>
+            <Tooltip>
+              <TooltipTrigger render={<span className="text-[11px] text-muted-foreground" />}>
+                <Time kind="message" value={message.created_at} title={false} />
+              </TooltipTrigger>
+              <TooltipContent side="top">{messageTime.full(message.created_at)}</TooltipContent>
+            </Tooltip>
           </div>
           <div
             ref={messageBodyRef}

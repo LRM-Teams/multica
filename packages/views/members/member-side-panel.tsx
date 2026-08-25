@@ -48,6 +48,7 @@ import { MemberSelfAvatarEditor } from "./member-self-avatar-editor";
 import { useOpenAgentPanel } from "../common/agent-panel-context";
 import { ActorAvatar } from "../common/actor-avatar";
 import { ActorStyledName } from "../common/actor-styled-name";
+import { ProfileField, ProfileSectionHeading } from "../common/profile-field";
 import { ConversationSidePanelShell } from "../common/conversation-side-panel-shell";
 import { useOpenDM } from "../common/use-open-dm";
 import { AppLink } from "../navigation";
@@ -55,6 +56,7 @@ import { HonorWall } from "../honor/honor-wall";
 import { UserHonorLevelIcon } from "../honor/user-honor-level-icon";
 import { RolesDialog } from "../settings/components/roles-dialog";
 import { useT } from "../i18n/use-t";
+import { Time } from "../i18n";
 
 const MAX_PROFILE_DESCRIPTION_LEN = 2000;
 
@@ -307,8 +309,7 @@ function MemberSidePanelReady({
       })
     : null;
 
-  const description =
-    (profile?.description ?? member?.profile_description ?? "").trim();
+  const description = (profile?.description ?? member?.description ?? "").trim();
   const role = (member?.role ?? profile?.role ?? "") as MemberRole | string;
   const email = member?.email?.trim() || "";
   const joinedAt = member?.created_at ?? null;
@@ -396,7 +397,7 @@ function MemberSidePanelReady({
   };
 
   const saveDescription = async (next: string) => {
-    const updated = await api.updateMe({ profile_description: next });
+    const updated = await api.updateMe({ description: next });
     setUser(updated);
     invalidateProfileCaches();
   };
@@ -558,9 +559,9 @@ function MemberSidePanelReady({
 
           {honorWall ? (
             <section className="border-t border-border pt-3">
-              <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                {t(($) => $.panel.honor_title)}
-              </h3>
+              <div className="mb-2">
+              <ProfileSectionHeading label={t(($) => $.panel.honor_title)} />
+            </div>
               <HonorWall
                 wall={honorWall}
                 completionLabel={t(($) => $.panel.honor_completion, {
@@ -592,9 +593,9 @@ function MemberSidePanelReady({
           ) : null}
 
           <section className="border-t border-border pt-3">
-            <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-              {t(($) => $.panel.info)}
-            </h3>
+            <div className="mb-2">
+              <ProfileSectionHeading label={t(($) => $.panel.info)} />
+            </div>
             <div className="grid grid-cols-[100px_minmax(0,1fr)] gap-x-3 gap-y-2 text-[13px]">
               <span className="pt-0.5 text-muted-foreground">
                 {t(($) => $.panel.role)}
@@ -631,19 +632,19 @@ function MemberSidePanelReady({
                   <span className="text-muted-foreground">
                     {t(($) => $.panel.joined)}
                   </span>
-                  <span className="truncate">{formatJoinedDate(joinedAt)}</span>
+                  <Time kind="date" value={joinedAt} className="truncate" />
                 </>
               ) : null}
             </div>
           </section>
 
           <section className="border-t border-border pt-3">
-            <h3 className="mb-2 flex items-center justify-between gap-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-              <span>{t(($) => $.panel.created_agents)}</span>
-              <span className="font-medium tabular-nums text-muted-foreground/80">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <ProfileSectionHeading label={t(($) => $.panel.created_agents)} />
+              <span className="text-[11px] font-medium tabular-nums text-muted-foreground/80">
                 {ownedAgents.length}
               </span>
-            </h3>
+            </div>
             {ownedAgents.length === 0 ? (
               <p className="text-[13px] text-muted-foreground">
                 {t(($) => $.panel.no_agents)}
@@ -682,9 +683,9 @@ function MemberSidePanelReady({
               aria-label={t(($) => $.panel.actions_section)}
               data-testid="member-profile-actions"
             >
-              <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                {t(($) => $.panel.actions_section)}
-              </h3>
+              <div className="mb-2">
+              <ProfileSectionHeading label={t(($) => $.panel.actions_section)} />
+            </div>
               <div className="flex flex-col gap-2">
                 {showActionMessage ? (
                   <Button
@@ -792,23 +793,6 @@ function MemberSidePanelReady({
   );
 }
 
-function ProfileField({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div>
-      <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-        {label}
-      </div>
-      {children}
-    </div>
-  );
-}
-
 function CreatedAgentRow({
   agent,
   fleet,
@@ -893,12 +877,3 @@ function CreatedAgentRow({
   );
 }
 
-function formatJoinedDate(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
-}

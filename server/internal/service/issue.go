@@ -35,16 +35,19 @@ type IssueService struct {
 	// Metrics as "PostHog only", so leaving it unset is safe.
 	Metrics     *obsmetrics.BusinessMetrics
 	TaskService *TaskService
+	Execution   *IssueExecutionService
 }
 
 func NewIssueService(q *db.Queries, tx TxStarter, bus *events.Bus, ac analytics.Client, ts *TaskService) *IssueService {
-	return &IssueService{
+	service := &IssueService{
 		Queries:     q,
 		TxStarter:   tx,
 		Bus:         bus,
 		Analytics:   ac,
 		TaskService: ts,
 	}
+	service.Execution = NewIssueExecutionService(q, tx, ts)
+	return service
 }
 
 // IssueCreateParams carries the already-validated, already-resolved inputs
@@ -367,6 +370,13 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 		return IssueCreateResult{}, fmt.Errorf("link issue attachments: expected %d bound, got %d", len(attachmentIDs), len(attachments))
 	}
 
+	executionOutcome, err := s.Execution.ReconcileTx(ctx, tx, issue, IssueExecutionReconcileOptions{
+		TriggerKind: "issue_created",
+	})
+	if err != nil {
+		return IssueCreateResult{}, fmt.Errorf("reconcile issue execution: %w", err)
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return IssueCreateResult{}, fmt.Errorf("commit: %w", err)
 	}
@@ -378,7 +388,7 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 
 	s.publishIssueCreated(issue, attachments, p.CreatorType, actorID, opts)
 	s.captureCreatedAnalytics(issue, p.CreatorType, actorID, opts)
-	s.maybeEnqueueOnAssign(ctx, issue, p.CreatorType, actorID)
+	s.Execution.PublishOutcome(ctx, executionOutcome)
 
 	return IssueCreateResult{Issue: issue, Attachments: attachments}, nil
 }
@@ -465,40 +475,4 @@ func classifyOrigin(issue db.Issue, opts IssueCreateOpts) (source, taskID, autop
 		)
 		return analytics.SourceManual, "", ""
 	}
-}
-
-func (s *IssueService) maybeEnqueueOnAssign(ctx context.Context, issue db.Issue, creatorType, actorID string) {
-	if !issue.AssigneeType.Valid || !issue.AssigneeID.Valid {
-		return
-	}
-	if s.shouldEnqueueAgentTask(ctx, issue) {
-		if _, err := s.TaskService.EnqueueTaskForIssue(ctx, issue); err != nil {
-			slog.Warn("enqueue agent task on create failed",
-				"issue_id", util.UUIDToString(issue.ID),
-				"error", err)
-		}
-	}
-}
-
-// shouldEnqueueAgentTask returns true when an issue create or assignment
-// should trigger the assigned agent. Backlog issues are skipped — backlog
-// acts as a parking lot for pre-assigning without immediate execution.
-// Mirrors handler.shouldEnqueueAgentTask; kept here to make the service
-// self-contained, since both code paths must move together.
-func (s *IssueService) shouldEnqueueAgentTask(ctx context.Context, issue db.Issue) bool {
-	if issue.Status == "backlog" {
-		return false
-	}
-	return s.isAgentAssigneeReady(ctx, issue)
-}
-
-func (s *IssueService) isAgentAssigneeReady(ctx context.Context, issue db.Issue) bool {
-	if !issue.AssigneeType.Valid || issue.AssigneeType.String != "agent" || !issue.AssigneeID.Valid {
-		return false
-	}
-	agent, err := s.Queries.GetAgent(ctx, issue.AssigneeID)
-	if err != nil || !agent.RuntimeID.Valid || agent.ArchivedAt.Valid {
-		return false
-	}
-	return true
 }

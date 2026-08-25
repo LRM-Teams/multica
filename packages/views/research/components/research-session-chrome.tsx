@@ -8,6 +8,7 @@ import type {
 } from "@multica/core/types";
 import { Compass } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { useT } from "../../i18n/use-t";
 import {
   DEPTH_TIERS,
@@ -175,7 +176,12 @@ export function ResearchSessionChrome({
               {showDepthChip ? (
                 <span>{t(($) => $.create_params.chip_depth, { label: depthTierLabel })}</span>
               ) : null}
-              {roundLabel ? <span title={t(($) => $.round.subtitle)}>{roundLabel}</span> : null}
+              {roundLabel ? (
+                <Tooltip>
+                  <TooltipTrigger render={<span />}>{roundLabel}</TooltipTrigger>
+                  <TooltipContent side="top">{t(($) => $.round.subtitle)}</TooltipContent>
+                </Tooltip>
+              ) : null}
             </div>
           ) : null}
         </div>

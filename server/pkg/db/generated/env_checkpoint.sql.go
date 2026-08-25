@@ -15,13 +15,15 @@ const createEnvCheckpoint = `-- name: CreateEnvCheckpoint :one
 INSERT INTO env_checkpoint (
     workspace_id, project_id, event_ref, checkpoint_kind,
     env_id_map, sandbox_refs, db_snapshot, entropy_score,
-    save_timeout_ms, save_status, save_error, resume_trigger
+    save_timeout_ms, save_status, save_error, resume_trigger,
+    save_mode
 ) VALUES (
     $1, $2, $3, $4,
     $5, $6, $7, $8,
-    $9, $10, $11, $12
+    $9, $10, $11, $12,
+    $13
 )
-RETURNING id, workspace_id, project_id, event_ref, checkpoint_kind, env_id_map, sandbox_refs, db_snapshot, entropy_score, save_timeout_ms, save_status, save_error, created_at, updated_at, resume_trigger
+RETURNING id, workspace_id, project_id, event_ref, checkpoint_kind, env_id_map, sandbox_refs, db_snapshot, entropy_score, save_timeout_ms, save_status, save_error, created_at, updated_at, resume_trigger, save_mode
 `
 
 type CreateEnvCheckpointParams struct {
@@ -37,6 +39,7 @@ type CreateEnvCheckpointParams struct {
 	SaveStatus     string        `json:"save_status"`
 	SaveError      pgtype.Text   `json:"save_error"`
 	ResumeTrigger  []byte        `json:"resume_trigger"`
+	SaveMode       string        `json:"save_mode"`
 }
 
 func (q *Queries) CreateEnvCheckpoint(ctx context.Context, arg CreateEnvCheckpointParams) (EnvCheckpoint, error) {
@@ -53,6 +56,7 @@ func (q *Queries) CreateEnvCheckpoint(ctx context.Context, arg CreateEnvCheckpoi
 		arg.SaveStatus,
 		arg.SaveError,
 		arg.ResumeTrigger,
+		arg.SaveMode,
 	)
 	var i EnvCheckpoint
 	err := row.Scan(
@@ -71,12 +75,32 @@ func (q *Queries) CreateEnvCheckpoint(ctx context.Context, arg CreateEnvCheckpoi
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ResumeTrigger,
+		&i.SaveMode,
 	)
 	return i, err
 }
 
+const deleteEnvCheckpoint = `-- name: DeleteEnvCheckpoint :exec
+DELETE FROM env_checkpoint
+WHERE id = $1 AND workspace_id = $2
+`
+
+type DeleteEnvCheckpointParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+// Cascades the savepoint ownership rows migration 246 added and the
+// env_checkpoint_lane rows migration 247 added. The Cube templates themselves are
+// scheduled for deletion through delete_template jobs before this runs, since
+// once this row is gone nothing records that they exist.
+func (q *Queries) DeleteEnvCheckpoint(ctx context.Context, arg DeleteEnvCheckpointParams) error {
+	_, err := q.db.Exec(ctx, deleteEnvCheckpoint, arg.ID, arg.WorkspaceID)
+	return err
+}
+
 const getEnvCheckpointForWorkspace = `-- name: GetEnvCheckpointForWorkspace :one
-SELECT id, workspace_id, project_id, event_ref, checkpoint_kind, env_id_map, sandbox_refs, db_snapshot, entropy_score, save_timeout_ms, save_status, save_error, created_at, updated_at, resume_trigger FROM env_checkpoint
+SELECT id, workspace_id, project_id, event_ref, checkpoint_kind, env_id_map, sandbox_refs, db_snapshot, entropy_score, save_timeout_ms, save_status, save_error, created_at, updated_at, resume_trigger, save_mode FROM env_checkpoint
 WHERE id = $1 AND workspace_id = $2
 `
 
@@ -104,12 +128,13 @@ func (q *Queries) GetEnvCheckpointForWorkspace(ctx context.Context, arg GetEnvCh
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ResumeTrigger,
+		&i.SaveMode,
 	)
 	return i, err
 }
 
 const listEnvCheckpointsForProject = `-- name: ListEnvCheckpointsForProject :many
-SELECT id, workspace_id, project_id, event_ref, checkpoint_kind, env_id_map, sandbox_refs, db_snapshot, entropy_score, save_timeout_ms, save_status, save_error, created_at, updated_at, resume_trigger FROM env_checkpoint
+SELECT id, workspace_id, project_id, event_ref, checkpoint_kind, env_id_map, sandbox_refs, db_snapshot, entropy_score, save_timeout_ms, save_status, save_error, created_at, updated_at, resume_trigger, save_mode FROM env_checkpoint
 WHERE workspace_id = $1 AND project_id = $2
 ORDER BY created_at DESC
 `
@@ -144,6 +169,7 @@ func (q *Queries) ListEnvCheckpointsForProject(ctx context.Context, arg ListEnvC
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.ResumeTrigger,
+			&i.SaveMode,
 		); err != nil {
 			return nil, err
 		}
@@ -155,11 +181,48 @@ func (q *Queries) ListEnvCheckpointsForProject(ctx context.Context, arg ListEnvC
 	return items, nil
 }
 
+const updateEnvCheckpointSaveMode = `-- name: UpdateEnvCheckpointSaveMode :one
+UPDATE env_checkpoint
+SET save_mode = $1, updated_at = now()
+WHERE id = $2 AND workspace_id = $3
+RETURNING id, workspace_id, project_id, event_ref, checkpoint_kind, env_id_map, sandbox_refs, db_snapshot, entropy_score, save_timeout_ms, save_status, save_error, created_at, updated_at, resume_trigger, save_mode
+`
+
+type UpdateEnvCheckpointSaveModeParams struct {
+	SaveMode    string      `json:"save_mode"`
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) UpdateEnvCheckpointSaveMode(ctx context.Context, arg UpdateEnvCheckpointSaveModeParams) (EnvCheckpoint, error) {
+	row := q.db.QueryRow(ctx, updateEnvCheckpointSaveMode, arg.SaveMode, arg.ID, arg.WorkspaceID)
+	var i EnvCheckpoint
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.ProjectID,
+		&i.EventRef,
+		&i.CheckpointKind,
+		&i.EnvIDMap,
+		&i.SandboxRefs,
+		&i.DbSnapshot,
+		&i.EntropyScore,
+		&i.SaveTimeoutMs,
+		&i.SaveStatus,
+		&i.SaveError,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ResumeTrigger,
+		&i.SaveMode,
+	)
+	return i, err
+}
+
 const updateEnvCheckpointSaveStatus = `-- name: UpdateEnvCheckpointSaveStatus :one
 UPDATE env_checkpoint
 SET save_status = $1, save_error = $2, updated_at = now()
 WHERE id = $3 AND workspace_id = $4
-RETURNING id, workspace_id, project_id, event_ref, checkpoint_kind, env_id_map, sandbox_refs, db_snapshot, entropy_score, save_timeout_ms, save_status, save_error, created_at, updated_at, resume_trigger
+RETURNING id, workspace_id, project_id, event_ref, checkpoint_kind, env_id_map, sandbox_refs, db_snapshot, entropy_score, save_timeout_ms, save_status, save_error, created_at, updated_at, resume_trigger, save_mode
 `
 
 type UpdateEnvCheckpointSaveStatusParams struct {
@@ -193,6 +256,7 @@ func (q *Queries) UpdateEnvCheckpointSaveStatus(ctx context.Context, arg UpdateE
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ResumeTrigger,
+		&i.SaveMode,
 	)
 	return i, err
 }

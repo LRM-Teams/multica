@@ -8,6 +8,7 @@ import type {
 } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { useT } from "../../i18n/use-t";
 import {
   DeleteAgentWorkspaceDialog,
@@ -265,9 +266,12 @@ function WorkspaceRow({
         </div>
         <div className="mt-1 flex min-w-0 items-center gap-1.5 text-muted-foreground">
           <Folder className="h-3.5 w-3.5 shrink-0" aria-hidden />
-          <span className="truncate font-mono text-[11px]" title={ws.rel_path}>
-            {path}
-          </span>
+          <Tooltip>
+            <TooltipTrigger render={<span className="truncate font-mono text-[11px]" />}>
+              {path}
+            </TooltipTrigger>
+            <TooltipContent side="top">{ws.rel_path}</TooltipContent>
+          </Tooltip>
         </div>
       </div>
       <Button

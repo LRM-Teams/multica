@@ -11,6 +11,96 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+func v6DirectRefExistsTx(ctx context.Context, tx pgx.Tx, kind, workspaceID, runID, entityID string) (bool, error) {
+	var query string
+	switch kind {
+	case "goal":
+		query = `SELECT EXISTS(SELECT 1 FROM research_session WHERE workspace_id=$1::uuid AND id=$2::uuid)`
+	case "branch":
+		query = `SELECT EXISTS(SELECT 1 FROM research_branch WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid)`
+	case "task":
+		query = `SELECT EXISTS(SELECT 1 FROM research_task WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid)`
+	case "attempt":
+		query = `SELECT EXISTS(SELECT 1 FROM research_task_attempt WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid)`
+	case "work_item":
+		query = `SELECT EXISTS(SELECT 1 FROM research_work_item WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid)`
+	case "agent":
+		query = `SELECT EXISTS(SELECT 1 FROM agent a JOIN research_team_membership m ON m.agent_id=a.id AND m.workspace_id=$1::uuid AND m.session_id=$2::uuid WHERE a.workspace_id=$1::uuid AND a.id=$3::uuid)`
+	case "report":
+		query = `SELECT EXISTS(SELECT 1 FROM research_report WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid)`
+	case "source_snapshot":
+		query = `SELECT EXISTS(SELECT 1 FROM research_source_snapshot WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid)`
+	case "observation":
+		query = `SELECT EXISTS(SELECT 1 FROM research_observation WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid)`
+	case "claim":
+		query = `SELECT EXISTS(SELECT 1 FROM research_claim WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid)`
+	default:
+		return false, nil
+	}
+	var exists bool
+	var err error
+	if kind == "goal" {
+		err = tx.QueryRow(ctx, query, workspaceID, entityID).Scan(&exists)
+	} else {
+		err = tx.QueryRow(ctx, query, workspaceID, runID, entityID).Scan(&exists)
+	}
+	return exists, err
+}
+
+func refString(value any) string {
+	valueString, _ := value.(string)
+	return valueString
+}
+
+func resolveV6SelectedRefsTx(ctx context.Context, tx pgx.Tx, workspaceID, runID string, raw json.RawMessage) (json.RawMessage, error) {
+	var refs []map[string]any
+	if err := json.Unmarshal(raw, &refs); err != nil {
+		return nil, fmt.Errorf("%w: selected refs are not an array", ErrInvalidContract)
+	}
+	for _, ref := range refs {
+		status := "unavailable"
+		entityID, idOK := ref["entity_id"].(string)
+		revisionValue, revisionOK := ref["revision"].(float64)
+		hash, hashOK := ref["content_hash"].(string)
+		if idOK && revisionOK && hashOK {
+			if _, err := uuid.Parse(entityID); err == nil && revisionValue >= 1 && revisionValue == float64(int64(revisionValue)) {
+				var lifecycle string
+				var currentVersion int
+				var versionHash *string
+				err = tx.QueryRow(ctx, `SELECT p.lifecycle_status,COALESCE(p.current_version,0),v.content_hash
+					FROM research_artifact_passport p
+					LEFT JOIN research_artifact_version v ON v.workspace_id=p.workspace_id AND v.session_id=p.session_id AND v.artifact_id=p.id AND v.version=$4
+					WHERE p.workspace_id=$1::uuid AND p.session_id=$2::uuid AND p.id=$3::uuid`, workspaceID, runID, entityID, int(revisionValue)).Scan(&lifecycle, &currentVersion, &versionHash)
+				if errors.Is(err, pgx.ErrNoRows) {
+					exists, existsErr := v6DirectRefExistsTx(ctx, tx, refString(ref["kind"]), workspaceID, runID, entityID)
+					if existsErr != nil {
+						return nil, existsErr
+					}
+					if exists {
+						status = "current"
+					}
+				} else if err != nil {
+					return nil, err
+				} else if versionHash != nil && (lifecycle == "registered" || lifecycle == "accepted") {
+					if currentVersion == int(revisionValue) && *versionHash == hash {
+						status = "current"
+					} else {
+						status = "stale"
+					}
+				} else {
+					status = "stale"
+				}
+			}
+		}
+		ref["resolution_status"] = status
+	}
+	resolved, err := marshalV6CanonicalJSON(refs)
+	if err != nil {
+		return nil, err
+	}
+	return resolved, nil
+}
+
 func (s *PostgresStore) ApplyV6SteeringAssessment(ctx context.Context, in ApplyV6SteeringAssessmentInput) (V6SteeringAssessment, error) {
 	tx, err := s.beginResearchTx(ctx, txOpV6SteeringApply, pgx.TxOptions{})
 	if err != nil {
@@ -68,6 +158,10 @@ func (s *PostgresStore) ApplyV6SteeringAssessment(ctx context.Context, in ApplyV
 		}
 	}
 	selected = normalizedV6JSON(selected, `[]`)
+	selected, err = resolveV6SelectedRefsTx(ctx, tx, in.WorkspaceID, in.RunID, selected)
+	if err != nil {
+		return V6SteeringAssessment{}, err
+	}
 	actions, err := json.Marshal(in.AcceptedActionIDs)
 	if err != nil {
 		return V6SteeringAssessment{}, err
@@ -244,7 +338,7 @@ func challengeV6SuccessorsTx(ctx context.Context, tx pgx.Tx, in ApplyV6SteeringA
 		goal_version,input_state_version,input_event_sequence,assigned_agent_id,priority,max_attempts,payload_schema_id,expected_result_schema_id,payload,state_version,ready_at,created_by_director_cycle_id)
 		SELECT gen_random_uuid(),$1::uuid,$2::uuid,'review','ready','artifact_version',$3::uuid,$4,$4,s.goal_version,s.state_version,
 			COALESCE((SELECT max(sequence) FROM research_run_event WHERE session_id=s.id),0),st.agent_id,0.9,3,'research.challenge_repair.v1','atomic_result_submission',
-			jsonb_build_object('artifact_version_ids',jsonb_build_array($3),'challenge_reason',$5,'task_specific_schema',jsonb_build_object(
+			jsonb_build_object('artifact_version_ids',jsonb_build_array($3::text),'challenge_reason',$5::text,'task_specific_schema',jsonb_build_object(
 				'type','object','additionalProperties',false,'required',jsonb_build_array('repair_summary'),
 				'properties',jsonb_build_object('repair_summary',jsonb_build_object('type','string','minLength',1),'recommended_action',jsonb_build_object('type','string')))),1,now(),$6::uuid
 		FROM research_session s JOIN research_node_steward_assignment st ON st.session_id=s.id AND st.node_artifact_version_id=$3::uuid AND st.status='active'

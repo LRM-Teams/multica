@@ -44,6 +44,7 @@ import {
   PreviewUnsupportedError,
 } from "@multica/core/api";
 import { Download, ExternalLink, FileText, Loader2, X } from "lucide-react";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import type { Attachment } from "@multica/core/types";
 import { paths, useWorkspaceSlug } from "@multica/core/paths";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
@@ -508,34 +509,42 @@ export function AttachmentPreviewModal({
           </span>
           <div className="ml-auto flex items-center gap-1">
             {canOpenInNewTab && (
-              <button
+              <Tooltip>
+                <TooltipTrigger
+                  type="button"
+                  className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+                  aria-label={t(($) => $.attachment.open_in_new_tab)}
+                  onClick={handleOpenInNewTab}
+                >
+                  <ExternalLink className="size-4" />
+                </TooltipTrigger>
+                <TooltipContent side="top">
+                  {t(($) => $.attachment.open_in_new_tab)}
+                </TooltipContent>
+              </Tooltip>
+            )}
+            <Tooltip>
+              <TooltipTrigger
                 type="button"
                 className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
-                title={t(($) => $.attachment.open_in_new_tab)}
-                aria-label={t(($) => $.attachment.open_in_new_tab)}
-                onClick={handleOpenInNewTab}
+                aria-label={t(($) => $.image.download)}
+                onClick={handleDownload}
               >
-                <ExternalLink className="size-4" />
-              </button>
-            )}
-            <button
-              type="button"
-              className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
-              title={t(($) => $.image.download)}
-              aria-label={t(($) => $.image.download)}
-              onClick={handleDownload}
-            >
-              <Download className="size-4" />
-            </button>
-            <button
-              type="button"
-              className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
-              title={t(($) => $.attachment.close)}
-              aria-label={t(($) => $.attachment.close)}
-              onClick={onClose}
-            >
-              <X className="size-4" />
-            </button>
+                <Download className="size-4" />
+              </TooltipTrigger>
+              <TooltipContent side="top">{t(($) => $.image.download)}</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger
+                type="button"
+                className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+                aria-label={t(($) => $.attachment.close)}
+                onClick={onClose}
+              >
+                <X className="size-4" />
+              </TooltipTrigger>
+              <TooltipContent side="top">{t(($) => $.attachment.close)}</TooltipContent>
+            </Tooltip>
           </div>
         </div>
         <div className="min-h-0 flex-1 overflow-auto bg-background">

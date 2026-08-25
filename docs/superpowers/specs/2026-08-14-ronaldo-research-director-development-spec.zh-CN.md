@@ -1,6 +1,6 @@
 # 罗纳尔多分层调研系统开发规格
 
-状态：设计冻结，待实施；用户尚未授权修改运行时代码
+状态：设计冻结；用户可创建 V6，产品化收口（消息路由、首页分流、回滚、Monitor、评测接入、来源持久化、事件重建）已接线
 
 日期：2026-08-14
 
@@ -461,7 +461,7 @@ Seam 只放在 provider/Agent creation、Inbox dispatch、object storage、HTML 
 
 - Snapshot 固定 `snapshot_id + through_event_sequence`，支持 Branch、tier、status、viewport Slice 和 one-layer expansion。
 - Delta 只来自 committed `research_run_event`，sequence 必须连续；缺口重新获取 Snapshot。
-- Node Detail 按需返回 brief/full/history/discussion/report refs，不在初始 Snapshot 携带全部正文。
+- Node Detail 必须携带当前画布的 `snapshot_id`，按该快照返回 brief/full/history/discussion/report refs；不得为详情请求新建或静默切换 Snapshot，也不在初始 Snapshot 携带全部正文。
 
 ### 15.4 Report 面
 
@@ -539,7 +539,8 @@ Goal 到 Branch Frontier 使用明确标记的 `collapsed_path` Projection edge�
 ### 17.2 展示
 
 - 点击 Goal 打开 Goal 面板；选择报告后打开接近全屏的 modal。
-- modal 内使用独立 origin 的 sandboxed iframe。
+- modal 内使用独立 origin 的 sandboxed iframe。未部署第二 HTTPS origin 时，已登录成员读取 `GET .../reports/{id}/compiled`，前端用 `blob:` + `sandbox="allow-scripts"` 展示；禁止 `srcdoc`、禁止把带 cookie 的 API URL 当 iframe `src`、禁止把 compiled HTML 塞进 JSON detail。独立 origin 配好后仍走 capability URL。
+- 没有独立 renderer 时，Director 仍可在 HTML/hash/CSP 校验通过后审到 `published`，跳过截图；有 renderer 时必须看真实渲染截图。
 - Report 可以包含动画、图表、目录和前端筛选 JavaScript。
 - 报告关闭后不得继续在后台运行高负载脚本。
 
@@ -579,8 +580,8 @@ Goal 到 Branch Frontier 使用明确标记的 `collapsed_path` Projection edge�
 - V6 新 Run 不创建固定 Fleet，不展示虚构的“预计 Agent 数”或固定角色；首页需按 orchestrator version 做兼容 Projection。
 - `docs/superpowers/specs/2026-08-14-research-home-command-center-spec.zh-CN.md` 中固定 Fleet/阶段展示对 V6 的冲突内容由本规格覆盖，旧 Run 仍按原规格显示。
 - V6 schema、prompt、result、gate、builtin skill 和 source map 必须在同一实现系列中更新。
-- `AssessV6Activation` 所有证据通过前：默认 V5、V6 unsupported、不可创建生产 V6 Run。
-- 激活只影响新 Run。回滚把新建默认恢复 V5；已创建 V6 Run 进入 paused/maintenance，不用 V5 decoder 读取。
+- 省略 `orchestrator_version` 时默认 V5；显式指定 V6 和主理人可以创建 V6 Run。`AssessV6Activation` 审计是否具备把省略版本的默认值切到 V6 的条件，不关闭显式 V6 创建。
+- 默认版本激活只影响新 Run。工作区 release control 可独立关闭新的 V6 创建并暂停现有 V6 Run；回滚不用 V5 decoder 读取已创建的 V6 Run。
 
 ## 20. 测试和验收
 

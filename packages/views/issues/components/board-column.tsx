@@ -239,9 +239,12 @@ function BoardGroupHeading({
   return (
     <div className="flex min-w-0 items-center gap-2">
       {actorIcon}
-      <span className="truncate text-sm font-medium" title={group.title}>
-        {group.title}
-      </span>
+      <Tooltip>
+        <TooltipTrigger render={<span className="truncate text-sm font-medium" />}>
+          {group.title}
+        </TooltipTrigger>
+        <TooltipContent side="top">{group.title}</TooltipContent>
+      </Tooltip>
       <span className="shrink-0 rounded-full bg-background px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-muted-foreground">
         {count}
       </span>

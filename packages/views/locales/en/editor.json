@@ -5,6 +5,20 @@
     "strikethrough": "Strikethrough",
     "code": "Code",
     "highlight": "Highlight",
+    "color": "Color",
+    "size": "Size",
+    "size_default": "Default",
+    "color_names": {
+      "default": "Default",
+      "gray": "Gray",
+      "red": "Red",
+      "orange": "Orange",
+      "yellow": "Yellow",
+      "green": "Green",
+      "blue": "Blue",
+      "purple": "Purple",
+      "pink": "Pink"
+    },
     "link": "Link",
     "list": "List",
     "quote": "Quote",
@@ -28,6 +42,7 @@
     },
     "optimize": {
       "tooltip": "Optimize text with AI",
+      "ask_tooltip": "Ask about this selection",
       "result_title": "Optimized text",
       "action_insert": "AI suggests inserting after the selection",
       "action_replace_selection": "AI suggests replacing the selection",

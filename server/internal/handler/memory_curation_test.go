@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -41,10 +43,10 @@ func TestAgentIDsBelongToWorkspaceRejectsForeignAgent(t *testing.T) {
 
 	var runtimeID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (workspace_id, name, runtime_mode, provider, device_info, owner_id)
-		VALUES ($1, 'foreign memory runtime', 'local', 'legacy_local', 'foreign memory runtime', $2)
+		INSERT INTO agent_runtime (workspace_id, name, runtime_mode, provider, device_info)
+		VALUES ($1,  'foreign memory runtime',  'local',  'legacy_local',  'foreign memory runtime')
 		RETURNING id
-	`, otherWorkspaceID, testUserID).Scan(&runtimeID); err != nil {
+	`, otherWorkspaceID).Scan(&runtimeID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -154,15 +156,15 @@ func TestMemoryCurationClaimFailsExhaustedStaleRunAndClaimsNext(t *testing.T) {
 	ctx := context.Background()
 	var runtimeID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (
-		  workspace_id, daemon_id, name, runtime_mode, provider, status,
-		  device_info, metadata, owner_id, visibility, last_seen_at
-		) VALUES ($1, 'memory-curator-stale-daemon', 'Memory Curator Stale Runtime', 'local', 'codex', 'online',
-		          'memory curator stale test', jsonb_build_object('capabilities', jsonb_build_array($2::text)), $3, 'private', now())
+		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, visibility, last_seen_at) VALUES ($1,  'memory-curator-stale-daemon',  'Memory Curator Stale Runtime',  'local',  'codex',  'online', 
+		          'memory curator stale test',  jsonb_build_object('capabilities', jsonb_build_array($2::text)),  'private',  now())
 		RETURNING id::text
-	`, testWorkspaceID, protocol.DaemonCapabilityMemoryCuration, testUserID).Scan(&runtimeID); err != nil {
+	`, testWorkspaceID, protocol.DaemonCapabilityMemoryCuration).Scan(&runtimeID); err != nil {
 		t.Fatal(err)
 	}
+
+	bindTestRuntimeOwner(t, "memory-curator-stale-daemon", testUserID)
+
 	var staleRunID, nextRunID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO memory_curation_run (
@@ -215,15 +217,15 @@ func TestMemoryCurationActiveHeartbeatRefreshesBeforeExpirySweep(t *testing.T) {
 	ctx := context.Background()
 	var runtimeID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (
-		  workspace_id, daemon_id, name, runtime_mode, provider, status,
-		  device_info, metadata, owner_id, visibility, last_seen_at
-		) VALUES ($1, 'memory-curator-active-hb-daemon', 'Memory Curator Active HB Runtime', 'local', 'codex', 'online',
-		          'memory curator active heartbeat', jsonb_build_object('capabilities', jsonb_build_array($2::text)), $3, 'private', now())
+		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, visibility, last_seen_at) VALUES ($1,  'memory-curator-active-hb-daemon',  'Memory Curator Active HB Runtime',  'local',  'codex',  'online', 
+		          'memory curator active heartbeat',  jsonb_build_object('capabilities', jsonb_build_array($2::text)),  'private',  now())
 		RETURNING id::text
-	`, testWorkspaceID, protocol.DaemonCapabilityMemoryCuration, testUserID).Scan(&runtimeID); err != nil {
+	`, testWorkspaceID, protocol.DaemonCapabilityMemoryCuration).Scan(&runtimeID); err != nil {
 		t.Fatal(err)
 	}
+
+	bindTestRuntimeOwner(t, "memory-curator-active-hb-daemon", testUserID)
+
 	var parentRunID, agentRunID, agentID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (workspace_id, name, display_name, runtime_mode, runtime_id, owner_id, model)
@@ -297,15 +299,15 @@ func TestWorkspaceMemoryCurationStatusSweepsExpiredRunningRuns(t *testing.T) {
 	ctx := context.Background()
 	var runtimeID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (
-		  workspace_id, daemon_id, name, runtime_mode, provider, status,
-		  device_info, metadata, owner_id, visibility, last_seen_at
-		) VALUES ($1, 'memory-curator-status-daemon', 'Memory Curator Status Runtime', 'local', 'codex', 'online',
-		          'memory curator status sweep', jsonb_build_object('capabilities', jsonb_build_array($2::text)), $3, 'private', now())
+		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, visibility, last_seen_at) VALUES ($1,  'memory-curator-status-daemon',  'Memory Curator Status Runtime',  'local',  'codex',  'online', 
+		          'memory curator status sweep',  jsonb_build_object('capabilities', jsonb_build_array($2::text)),  'private',  now())
 		RETURNING id::text
-	`, testWorkspaceID, protocol.DaemonCapabilityMemoryCuration, testUserID).Scan(&runtimeID); err != nil {
+	`, testWorkspaceID, protocol.DaemonCapabilityMemoryCuration).Scan(&runtimeID); err != nil {
 		t.Fatal(err)
 	}
+
+	bindTestRuntimeOwner(t, "memory-curator-status-daemon", testUserID)
+
 	var staleRunID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO memory_curation_run (
@@ -354,15 +356,15 @@ func TestMemoryCuratorProfileQueuesAndCompletesDaemonRun(t *testing.T) {
 	ctx := context.Background()
 	var runtimeID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (
-		  workspace_id, daemon_id, name, runtime_mode, provider, status,
-		  device_info, metadata, owner_id, visibility, last_seen_at
-		) VALUES ($1, 'memory-curator-test-daemon', 'Memory Curator Test Runtime', 'local', 'codex', 'online',
-		          'memory curator test', jsonb_build_object('capabilities', jsonb_build_array($2::text)), $3, 'private', now())
+		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, visibility, last_seen_at) VALUES ($1,  'memory-curator-test-daemon',  'Memory Curator Test Runtime',  'local',  'codex',  'online', 
+		          'memory curator test',  jsonb_build_object('capabilities', jsonb_build_array($2::text)),  'private',  now())
 		RETURNING id::text
-	`, testWorkspaceID, protocol.DaemonCapabilityMemoryCuration, testUserID).Scan(&runtimeID); err != nil {
+	`, testWorkspaceID, protocol.DaemonCapabilityMemoryCuration).Scan(&runtimeID); err != nil {
 		t.Fatal(err)
 	}
+
+	bindTestRuntimeOwner(t, "memory-curator-test-daemon", testUserID)
+
 	var curatorAgentID, targetAgentID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (workspace_id, name, display_name, runtime_mode, runtime_id, owner_id, instructions, model)
@@ -706,15 +708,15 @@ func TestDeleteRuntimeFailsIncompleteMemoryCurationRuns(t *testing.T) {
 		t.Skip("handler test database unavailable")
 	}
 	ctx := context.Background()
+	cleanupDaemonID := "curator-cleanup-" + uuid.NewString()
 	var runtimeID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (
-		  workspace_id, name, runtime_mode, provider, status, device_info, owner_id
-		) VALUES ($1, 'Curator Cleanup Runtime', 'local', 'pi', 'online', 'cleanup test', $2)
+		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info) VALUES ($1,  $2,  'Curator Cleanup Runtime',  'local',  'pi',  'online',  'cleanup test')
 		RETURNING id::text
-	`, testWorkspaceID, testUserID).Scan(&runtimeID); err != nil {
+	`, testWorkspaceID, cleanupDaemonID).Scan(&runtimeID); err != nil {
 		t.Fatal(err)
 	}
+	bindTestRuntimeOwner(t, cleanupDaemonID, testUserID)
 	var queuedRunID, doneRunID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO memory_curation_run (workspace_id, stage, trigger_kind, status, runtime_id)
@@ -755,4 +757,80 @@ func TestDeleteRuntimeFailsIncompleteMemoryCurationRuns(t *testing.T) {
 	if doneStatus != "succeeded" {
 		t.Fatalf("completed run status = %q, want succeeded (should be unchanged)", doneStatus)
 	}
+}
+
+// newGraphCurationWorkspaceFixture builds a dedicated workspace where
+// testUserID is owner and the graph_memory_profile row says memory_type
+// 'graph'. Spec §10: legacy-only curation endpoints answer with the stable
+// not-applicable response instead of queueing legacy runs.
+func newGraphCurationWorkspaceFixture(t *testing.T) string {
+	t.Helper()
+	ctx := context.Background()
+	var workspaceID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO workspace (name, slug)
+		VALUES ($1, $2)
+		RETURNING id::text
+	`, "Graph Curation Not Applicable", "graph-curation-na-"+uuid.NewString()[:8]).Scan(&workspaceID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1`, workspaceID)
+	})
+	if _, err := testPool.Exec(ctx, `INSERT INTO member (workspace_id, user_id, role) VALUES ($1, $2, 'owner')`, workspaceID, testUserID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(ctx,
+		`INSERT INTO graph_memory_profile (workspace_id, memory_type) VALUES ($1, 'graph')`, workspaceID); err != nil {
+		t.Fatal(err)
+	}
+	return workspaceID
+}
+
+func assertLegacyCurationNotApplicable(t *testing.T, rec *httptest.ResponseRecorder) {
+	t.Helper()
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "legacy_curation_not_applicable") {
+		t.Fatalf("body = %s, want stable not-applicable code", rec.Body.String())
+	}
+}
+
+func TestStartMemoryCurationRunNotApplicableForGraphWorkspace(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("handler test database unavailable")
+	}
+	workspaceID := newGraphCurationWorkspaceFixture(t)
+	req := withURLParam(newRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/memory-curation/runs", map[string]any{
+		"stage": "all", "all_agents": true,
+	}), "id", workspaceID)
+	rec := httptest.NewRecorder()
+	testHandler.StartMemoryCurationRun(rec, req)
+	assertLegacyCurationNotApplicable(t, rec)
+}
+
+func TestStartMemoryCurationBackfillNotApplicableForGraphWorkspace(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("handler test database unavailable")
+	}
+	workspaceID := newGraphCurationWorkspaceFixture(t)
+	req := withURLParam(newRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/memory-curation/backfill", map[string]any{
+		"since": "2026-07-01", "until": "2026-07-02",
+	}), "id", workspaceID)
+	rec := httptest.NewRecorder()
+	testHandler.StartMemoryCurationBackfill(rec, req)
+	assertLegacyCurationNotApplicable(t, rec)
+}
+
+func TestPreviewMemoryCurationBackfillNotApplicableForGraphWorkspace(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("handler test database unavailable")
+	}
+	workspaceID := newGraphCurationWorkspaceFixture(t)
+	req := withURLParam(newRequest(http.MethodGet, "/api/workspaces/"+workspaceID+"/memory-curation/backfill/preview?since=2026-07-01&until=2026-07-02", nil),
+		"id", workspaceID)
+	rec := httptest.NewRecorder()
+	testHandler.PreviewMemoryCurationBackfill(rec, req)
+	assertLegacyCurationNotApplicable(t, rec)
 }

@@ -367,18 +367,14 @@ func setupHandlerTestFixture(ctx context.Context, pool *pgxpool.Pool) (string, s
 }
 
 func cleanupHandlerTestFixture(ctx context.Context, pool *pgxpool.Pool) error {
-	// research_artifact_policy_mutation / lifecycle_event are append-only
-	// (BEFORE DELETE guards from migration 318). Workspace cascade would hit
-	// those triggers and fail suite teardown after any research fixture ran.
-	// session_replication_role=replica disables user triggers for this tx only.
+	// Workspace deletion is the canonical tenant-aggregate cleanup boundary.
+	// The artifact guards explicitly allow this cascade; disabling every trigger
+	// here would also disable foreign-key cascades and leave orphaned test rows.
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, `SET LOCAL session_replication_role = replica`); err != nil {
-		return err
-	}
 	if _, err := tx.Exec(ctx, `DELETE FROM workspace WHERE slug = $1`, handlerTestWorkspaceSlug); err != nil {
 		return err
 	}
@@ -523,9 +519,41 @@ func createHandlerTestAgentOnRuntimeWithMcpConfig(t *testing.T, displayName, run
 }
 
 // createPeriodBriefCollectorTestAgent inserts an Agent whose permanent name uses
-// the Period Work collector prefix (required by CreateNotePeriodBrief).
+// the Period Work collector prefix (required by CreateNotePeriodBrief), bound
+// to a Computer owned by the shared test user.
 func createPeriodBriefCollectorTestAgent(t *testing.T, label string) string {
 	t.Helper()
+	return createPeriodBriefCollectorTestAgentForOwner(t, label, testUserID)
+}
+
+// createPeriodBriefCollectorTestAgentForOwner binds the collector to a fresh
+// Computer owned by ownerUserID (Period Brief collection is Computer-owner-only).
+func createPeriodBriefCollectorTestAgentForOwner(t *testing.T, label, ownerUserID string) string {
+	t.Helper()
+	daemonID := "collect-daemon-" + uuid.NewString()[:8]
+	var runtimeID string
+	if err := testPool.QueryRow(context.Background(), `
+		INSERT INTO agent_runtime (
+			workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, visibility, last_seen_at
+		) VALUES ($1, $2, $3, 'local', $4, 'online', '', '{}'::jsonb, 'private', now())
+		RETURNING id
+	`, testWorkspaceID, daemonID, "collect-rt-"+uuid.NewString()[:8], "collect_test_"+uuid.NewString()).Scan(&runtimeID); err != nil {
+		t.Fatalf("seed collector runtime: %v", err)
+	}
+	// LRM-1570: ownership is machine-level via an active binding for the
+	// daemon in this workspace (the Computer owner is ownerUserID).
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO computer_workspace_bindings (
+			daemon_id, workspace_id, user_id, execution_token_hash, active
+		) VALUES ($1, $2, $3, 'collect-test-owner', TRUE)
+	`, daemonID, testWorkspaceID, ownerUserID); err != nil {
+		t.Fatalf("seed collector owner binding: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_workspace_bindings WHERE daemon_id = $1 AND workspace_id = $2`, daemonID, testWorkspaceID)
+	})
+
 	slug := strings.ToLower(strings.ReplaceAll(uuid.NewString()[:8], "-", "a"))
 	name := periodBriefCollectorNamePrefix + slug
 	display := periodBriefCollectorDisplayLead + label
@@ -535,7 +563,7 @@ func createPeriodBriefCollectorTestAgent(t *testing.T, label string) string {
 			workspace_id, name, display_name, description, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id, instructions, custom_env, custom_args, mcp_config, model
 		) VALUES ($1, $2, $3, '', 'local', '{}'::jsonb, $4, 1, $5, '', '{}'::jsonb, '[]'::jsonb, '{}'::jsonb, 'composer-1.5')
 		RETURNING id
-	`, testWorkspaceID, name, display, handlerTestRuntimeID(t), testUserID).Scan(&agentID); err != nil {
+	`, testWorkspaceID, name, display, runtimeID, ownerUserID).Scan(&agentID); err != nil {
 		t.Fatalf("failed to create period brief collector: %v", err)
 	}
 	t.Cleanup(func() {
@@ -562,8 +590,20 @@ func seedMachineLockedRuntime(t *testing.T, daemonID, name string) string {
 	`, testWorkspaceID, daemonID, name+" "+uuid.NewString(), "machine_lock_test_"+uuid.NewString()).Scan(&runtimeID); err != nil {
 		t.Fatalf("seed machine-locked runtime: %v", err)
 	}
+	// LRM-1570: ownership is machine-level via an active binding for the
+	// daemon in this workspace (the machine owner is testUserID).
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO computer_workspace_bindings (
+			daemon_id, workspace_id, user_id, execution_token_hash, active
+		) VALUES ($1, $2, $3, 'machine-lock-test', TRUE)
+		ON CONFLICT (daemon_id, workspace_id)
+		DO UPDATE SET user_id = EXCLUDED.user_id, active = TRUE, revoked_at = NULL
+	`, daemonID, testWorkspaceID, testUserID); err != nil {
+		t.Fatalf("seed machine-locked binding: %v", err)
+	}
 	t.Cleanup(func() {
 		testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
+		testPool.Exec(context.Background(), `DELETE FROM computer_workspace_bindings WHERE daemon_id = $1 AND workspace_id = $2`, daemonID, testWorkspaceID)
 	})
 	return runtimeID
 }
@@ -573,6 +613,33 @@ func seedMachineLockedRuntime(t *testing.T, daemonID, name string) string {
 // tests that need to set X-Task-ID alongside X-Agent-ID — resolveActor now
 // requires the pair to be present and consistent before granting "agent"
 // actor identity.
+
+// bindTestRuntimeOwner seeds an owner binding for a daemon in testWorkspaceID
+// (LRM-1570). Idempotent per (daemon, workspace).
+func bindTestRuntimeOwner(t *testing.T, daemonID, userID string) {
+	t.Helper()
+	bindRuntimeOwnerInWorkspace(t, testWorkspaceID, daemonID, userID)
+}
+
+// bindRuntimeOwnerInWorkspace seeds an active machine-level owner binding for
+// a daemon in an arbitrary workspace (LRM-1570). Idempotent per (daemon,
+// workspace).
+func bindRuntimeOwnerInWorkspace(t *testing.T, workspaceID, daemonID, userID string) {
+	t.Helper()
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO computer_workspace_bindings (
+			daemon_id, workspace_id, user_id, execution_token_hash, active
+		) VALUES ($1, $2, $3, 'handler-test-owner', TRUE)
+		ON CONFLICT (daemon_id, workspace_id)
+		DO UPDATE SET user_id = EXCLUDED.user_id, active = TRUE, revoked_at = NULL
+	`, daemonID, workspaceID, userID); err != nil {
+		t.Fatalf("bind runtime owner: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_workspace_bindings WHERE daemon_id = $1 AND workspace_id = $2`, daemonID, workspaceID)
+	})
+}
+
 func createHandlerTestTaskForAgent(t *testing.T, agentID string) string {
 	return createHandlerTestTaskForAgentOnIssue(t, agentID, "")
 }

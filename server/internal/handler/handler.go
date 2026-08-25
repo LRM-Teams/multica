@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/netip"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -66,8 +67,9 @@ type Config struct {
 	// invitation only. The public /api/config endpoint mirrors this flag so
 	// the UI can hide every "Create workspace" affordance — see #3433.
 	DisableWorkspaceCreation bool
-	// ResearchV6BootstrapEnabled exposes the explicit V6 creation path only in
-	// fixture/acceptance environments. It does not change supported/default versions.
+	// ResearchV6BootstrapEnabled is retained for operators and fixtures. User-facing
+	// V6 create no longer requires this flag. Clients that omit orchestrator_version
+	// still default to V5.
 	ResearchV6BootstrapEnabled bool
 	// PublicURL is the absolute base URL the API is reachable at from the
 	// public internet, with no trailing slash (e.g. "https://app.multica.ai").
@@ -127,29 +129,43 @@ type Handler struct {
 	DaemonHub            *daemonws.Hub
 	RunnerPresenceSource RunnerPresenceSource
 	RunnerPresenceMu     *sync.Mutex
-	// runnerActivityCursor is the in-process sticky note for this connect:
-	// how far this Computer instance has already reported Activity. It is
-	// not durable residency and dies with the process or a new instance.
-	runnerActivityCursor *runnerActivityCursorStore
 	// runnerObservations is the live Computer process: status, launch, and
 	// session for the current socket. It is not durable.
 	runnerObservations *runnerObservationStore
 	// agentRestarts is one in-flight Agent Restart on this process.
-	agentRestarts              *agentRestartStore
-	ReminderNotifier           daemonws.ReminderNotifier
-	ReminderOwnerInputNotifier daemonws.ReminderOwnerInputNotifier
-	AgentDeliveryNotifier      daemonws.AgentDeliveryNotifier
-	AgentRestartNotifier       daemonws.AgentRestartNotifier
-	SandboxHub                 *sandboxws.Hub
-	Bus                        *events.Bus
-	TaskService                *service.TaskService
-	// GraphMemoryJudge runs the server-side async judge + delayed-reward
-	// flow for graph-memory recalls reported by daemons (design §5.3).
-	// Nil-safe: the endpoint accepts and drops reports when unwired.
-	GraphMemoryJudge      *service.GraphMemoryJudgeService
+	agentRestarts         *agentRestartStore
+	ReminderNotifier      daemonws.ReminderNotifier
+	AgentDeliveryNotifier daemonws.AgentDeliveryNotifier
+	AgentRestartNotifier  daemonws.AgentRestartNotifier
+	SandboxHub            *sandboxws.Hub
+	Bus                   *events.Bus
+	TaskService           *service.TaskService
+	// GraphMemoryRecall backs the daemon's server-authoritative recall
+	// endpoint (spec §1/§3/§14). Nil-safe: the endpoint answers 503 when
+	// unwired.
+	GraphMemoryRecall *service.GraphMemoryRecallService
+	// GraphMemoryRecallExecutor synchronously runs accepted recalls and returns
+	// only their bounded injection. Nil preserves the pre-execution response.
+	GraphMemoryRecallExecutor *service.GraphMemoryRecallExecutor
+	// GraphMemoryStatus backs the graph governance status API (spec §10).
+	GraphMemoryStatus *service.GraphMemoryStatusService
+	// GraphMemoryConsolidation runs manual consolidations behind the
+	// graph+ready gate (spec §10). Nil when the handler has no DB pool.
+	GraphMemoryConsolidation *service.GraphMemoryConsolidationService
+	// GraphMemoryAudit backs the query/judge/backtest audit API (spec §10).
+	GraphMemoryAudit *service.GraphMemoryAuditService
+	// GraphMemoryLimits carries the env-configured graph memory tunable
+	// defaults/ceilings and Dive model allow-lists (spec §2/§16).
+	GraphMemoryLimits service.GraphMemoryLimits
+	// GraphMemoryBlobs owns physical-byte retention so DeleteAttachment
+	// does not delete clone-shared or graph-memory-referenced bytes
+	// (spec §15, A28/D32). Nil when the handler has no DB pool: the
+	// delete path then keeps today's unconditional S3 delete.
+	GraphMemoryBlobs      *service.GraphMemoryBlobService
 	AgentFleetRankService *service.AgentFleetRankService
 	AgentHonorService     *service.AgentHonorService
 	IssueService          *service.IssueService
+	IssueExecution        *service.IssueExecutionService
 	HonorService          *service.HonorService
 	EmailService          *service.EmailService
 	EnvCheckpointService  EnvCheckpointServiceAPI
@@ -304,6 +320,8 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 	taskSvc := service.NewTaskService(queries, txStarter, hub, bus, daemonHub)
 	taskSvc.Analytics = analyticsClient
 	agentFleetRankService := service.NewAgentFleetRankService(queries)
+	issueSvc := service.NewIssueService(queries, txStarter, bus, analyticsClient, taskSvc)
+	taskSvc.IssueExecution = issueSvc.Execution
 	h := &Handler{
 		Queries:                queries,
 		DB:                     executor,
@@ -312,14 +330,17 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		DaemonHub:              daemonHub,
 		RunnerPresenceSource:   daemonHub,
 		RunnerPresenceMu:       &sync.Mutex{},
-		runnerActivityCursor:   newRunnerActivityCursorStore(),
 		runnerObservations:     newRunnerObservationStore(),
 		agentRestarts:          newAgentRestartStore(),
 		Bus:                    bus,
 		TaskService:            taskSvc,
 		AgentFleetRankService:  agentFleetRankService,
+		GraphMemoryStatus:      service.NewGraphMemoryStatusService(queries, ""),
+		GraphMemoryAudit:       service.NewGraphMemoryAuditService(""),
+		GraphMemoryLimits:      service.LoadGraphMemoryLimits(os.Getenv),
 		AgentHonorService:      service.NewAgentHonorService(queries, agentFleetRankService),
-		IssueService:           service.NewIssueService(queries, txStarter, bus, analyticsClient, taskSvc),
+		IssueService:           issueSvc,
+		IssueExecution:         issueSvc.Execution,
 		HonorService:           service.NewHonorService(queries),
 		EmailService:           emailService,
 		UpdateStore:            NewPostgresUpdateStore(updateDB),
@@ -345,45 +366,81 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		cfg: cfg,
 	}
 	if pool, ok := txStarter.(*pgxpool.Pool); ok {
+		h.GraphMemoryConsolidation = service.NewGraphMemoryConsolidationService(queries, pool, "")
+		h.GraphMemoryAudit = service.NewGraphMemoryAuditServiceWithPool(pool, "")
+		h.GraphMemoryBlobs = service.NewGraphMemoryBlobService(pool)
 		h.WorkGraph = workgraph.NewStore(pool)
+		h.WorkGraph.OnNodesReadyTx = func(ctx context.Context, tx pgx.Tx, workspaceID string, issueIDs []string) error {
+			qtx := db.New(tx)
+			for _, issueID := range issueIDs {
+				issue, err := qtx.GetIssueInWorkspace(ctx, db.GetIssueInWorkspaceParams{
+					ID: parseUUID(issueID), WorkspaceID: parseUUID(workspaceID),
+				})
+				if err != nil {
+					return err
+				}
+				if issue.Status == "backlog" {
+					issue, err = qtx.UpdateIssueStatus(ctx, db.UpdateIssueStatusParams{
+						ID: issue.ID, WorkspaceID: issue.WorkspaceID, Status: "todo",
+					})
+					if err != nil {
+						return err
+					}
+				}
+				var verifier bool
+				_ = tx.QueryRow(ctx, `SELECT EXISTS(
+					SELECT 1 FROM work_graph_node node
+					JOIN work_graph graph ON graph.id=node.graph_id
+					WHERE node.workspace_id=$1 AND node.issue_id=$2
+					  AND node.role='verifier' AND node.based_on_graph_version=graph.current_version
+				)`, issue.WorkspaceID, issue.ID).Scan(&verifier)
+				if _, err = h.IssueExecution.ReconcileTx(ctx, tx, issue, service.IssueExecutionReconcileOptions{
+					TriggerKind: "work_graph_ready", ForceFreshSession: verifier, Invalidate: true,
+				}); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
 		h.WorkGraph.OnNodesReady = func(ctx context.Context, workspaceID string, issueIDs []string) {
 			for _, issueID := range issueIDs {
 				issue, err := queries.GetIssueInWorkspace(ctx, db.GetIssueInWorkspaceParams{ID: parseUUID(issueID), WorkspaceID: parseUUID(workspaceID)})
 				if err != nil || issue.AssigneeType.String != "agent" || !issue.AssigneeID.Valid {
 					continue
 				}
+				var verifier bool
+				_ = pool.QueryRow(ctx, `SELECT EXISTS(
+					SELECT 1 FROM work_graph_node node
+					JOIN work_graph graph ON graph.id=node.graph_id
+					WHERE node.workspace_id=$1 AND node.issue_id=$2
+					  AND node.role='verifier' AND node.based_on_graph_version=graph.current_version
+				)`, issue.WorkspaceID, issue.ID).Scan(&verifier)
 				if issue.Status == "backlog" {
-					issue, err = queries.UpdateIssueStatus(ctx, db.UpdateIssueStatusParams{ID: issue.ID, Status: "todo", WorkspaceID: parseUUID(workspaceID)})
+					issue, err = h.IssueExecution.UpdateStatus(ctx, issue, "todo", service.IssueExecutionReconcileOptions{
+						TriggerKind: "dependency_ready", ForceFreshSession: verifier,
+					})
 					if err != nil {
 						continue
 					}
+					continue
 				}
-				if h.isAgentAssigneeReady(ctx, issue) {
-					var verifier bool
-					_ = pool.QueryRow(ctx, `SELECT EXISTS(
-						SELECT 1 FROM work_graph_node node
-						JOIN work_graph graph ON graph.id=node.graph_id
-						WHERE node.workspace_id=$1 AND node.issue_id=$2
-						  AND node.role='verifier' AND node.based_on_graph_version=graph.current_version
-					)`, issue.WorkspaceID, issue.ID).Scan(&verifier)
-					if verifier {
-						_, _ = taskSvc.EnqueueFreshTaskForIssue(ctx, issue)
-					} else {
-						_, _ = taskSvc.EnqueueTaskForIssue(ctx, issue)
-					}
-				}
+				_, _ = h.IssueExecution.Reconcile(ctx, issue.WorkspaceID, issue.ID, service.IssueExecutionReconcileOptions{
+					TriggerKind: "dependency_ready", ForceFreshSession: verifier,
+				})
 			}
+			_, _ = h.IssueExecution.DispatchPending(ctx, int32(len(issueIDs)))
 		}
 		h.WorkGraph.OnGraphDelta = h.wakeGoalCoordinatorForGraphDelta
 		researchStore := researchrun.NewPostgresStore(pool)
 		dispatcher := &researchRunDispatcher{handler: h}
-		h.ResearchRun = researchrun.NewEngineWithRuntimeAdapters(researchStore, dispatcher, &researchRunProjector{handler: h}, researchReportStorageAdapter{store: h.Storage}, h.ResearchReportRenderer, cfg.ResearchReportFrameAncestors, &researchV6AgentLifecycleAdapter{handler: h}, &researchV6InboxDispatchAdapter{dispatcher: dispatcher})
+		h.ResearchRun = researchrun.NewEngineWithRuntimeAdapters(researchStore, dispatcher, &researchRunProjector{handler: h}, researchReportStorageAdapter{store: h.Storage}, h.ResearchReportRenderer, cfg.ResearchReportFrameAncestors, &researchV6AgentLifecycleAdapter{handler: h}, &researchV6InboxDispatchAdapter{dispatcher: dispatcher}, researchrun.NewHTTPRetrievalAdapter(researchrun.HTTPRetrievalAdapterConfig{}))
 		taskSvc.OnTaskCompleted = h.syncWendyWorkGraphAfterTaskSuccess
 	}
 	taskSvc.PrepareCanonicalChannelMessageCommit = h.prepareCanonicalChannelMessageCommit
 	taskSvc.OnTaskTerminal = h.maybeStartAutomaticSharedDiagnosis
 	h.wireHonorUnlockEvents()
 	h.wireAgentHonorEvents()
+	h.EnvCheckpointService = newEnvCheckpointService(h)
 	return h
 }
 

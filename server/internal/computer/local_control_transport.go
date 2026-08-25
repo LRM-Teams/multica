@@ -4,22 +4,20 @@ import (
 	"errors"
 	"net"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 )
 
-// ServiceControlEndpoint is the machine-owned IPC endpoint used by Binding
-// children and lifecycle clients.
+// ServiceControlEndpoint is ComputerCore's IPC endpoint for WorkspaceDaemons
+// and lifecycle clients.
 func ServiceControlEndpoint(residentRoot string) string {
 	return localControlEndpoint(residentRoot, "service")
 }
 
-// RunnerControlEndpoint is one generation-fenced Binding runner's IPC
-// endpoint. Its name is bounded even when Workspace identifiers are long.
-func RunnerControlEndpoint(residentRoot string, identity BindingChildIdentity) string {
+// WorkspaceDaemonControlEndpoint is one identity-fenced WorkspaceDaemon IPC endpoint.
+func WorkspaceDaemonControlEndpoint(residentRoot string, identity WorkspaceDaemonIdentity) string {
 	return localControlEndpoint(residentRoot, strings.Join([]string{
-		"runner", identity.WorkspaceID, strconv.FormatInt(identity.RunnerGeneration, 10), strconv.Itoa(identity.PID),
+		"runner", identity.WorkspaceID, identity.DaemonInstanceID,
 	}, "-"))
 }
 
@@ -39,12 +37,12 @@ func validLocalControlEndpoint(endpoint string) bool {
 	return validPlatformLocalControlEndpoint(endpoint)
 }
 
-func localControlClientFor(endpoint string, timeout time.Duration) (*localControlClient, string, error) {
+func localControlClientFor(endpoint string, timeout time.Duration) (*localControlClient, error) {
 	endpoint = strings.TrimSpace(endpoint)
 	if !validLocalControlEndpoint(endpoint) {
-		return nil, "", errors.New("local control endpoint is invalid")
+		return nil, errors.New("local control endpoint is invalid")
 	}
-	return &localControlClient{endpoint: endpoint, timeout: timeout}, "", nil
+	return &localControlClient{endpoint: endpoint, timeout: timeout}, nil
 }
 
 func localControlSocketDir(residentRoot string) string {

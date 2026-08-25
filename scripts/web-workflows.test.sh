@@ -53,7 +53,8 @@ done
 for required in \
   'branches: [main]' \
   "github.ref == 'refs/heads/main'" \
-  'runs-on: [self-hosted, aliyun]' \
+  'SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}' \
+  'run-aliyun-step-over-ssh.sh' \
   'url: https://www.leagent.me'; do
   if ! grep -Fq -- "$required" <<<"$deploy_workflow"; then
     echo "Production deployment contract is missing: $required"
@@ -86,6 +87,30 @@ done
 
 if ! grep -Fq -- 'echo "tag=sha-${sha}"' <<<"$deploy_test_workflow"; then
   echo "Test image tag must be derived only from the deployed source SHA"
+  exit 1
+fi
+
+for required in \
+  'NEXT_PUBLIC_ENVIRONMENT=test' \
+  'no-cache: true' \
+  'assert-baked-web-public-origins.sh' \
+  'install -m 0755 scripts/assert-baked-web-public-origins.sh' \
+  '--forbid https://api.leagent.me' \
+  '--forbid https://www.leagent.me'; do
+  if ! grep -Fq -- "$required" <<<"$deploy_test_workflow"; then
+    echo "Test deployment must refuse a production-baked web image: $required"
+    exit 1
+  fi
+done
+
+if grep -Fq -- 'buildcache-test-amd64' <<<"$deploy_test_workflow" &&
+  awk '
+    /Build and push test web/ { capture = 1 }
+    /^  deploy:/ { capture = 0 }
+    capture && /buildcache-test-amd64/ { found = 1 }
+    END { exit(found ? 0 : 1) }
+  ' .github/workflows/deploy-test.yml; then
+  echo "Test web image must not reuse a Buildx cache that can restore production-baked NEXT_PUBLIC_*"
   exit 1
 fi
 
@@ -129,7 +154,7 @@ for required in \
   'OSS_BUCKET: leagent' \
   'RELEASE_PREFIX: computer' \
   'PUBLIC_BASE_URL: https://cdn.leagent.me/computer' \
-  '^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[0-9]+)?$' \
+  '^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)\.[0-9]+)?$' \
   'canonical_prefix="${RELEASE_PREFIX}/${version}"' \
   'immutable_keys=(' \
   '"${canonical_prefix}/checksums.txt"' \
@@ -210,6 +235,24 @@ if grep -Fq -- 'Ensure release feed directory' .github/workflows/deploy.yml .git
   echo "Deploy workflow must not prepare the removed local release feed"
   exit 1
 fi
+
+# The Actions runner splits a custom `shell:` on whitespace without parsing
+# quotes, so a quoted wrapper such as `bash -c 'exec "$X" "$1"' _ {0}` reaches
+# bash as the command string `'exec` and every step using it dies with
+# "unexpected EOF while looking for matching `'". `$RUNNER_TEMP` is not
+# expanded there either. Keep every custom shell a plain unquoted command.
+while IFS= read -r shell_line; do
+  case "$shell_line" in
+    *[\'\"]*)
+      echo "Custom shell: must not contain quotes - the runner splits it on whitespace: $shell_line"
+      exit 1
+      ;;
+    *'$'*)
+      echo "Custom shell: must not reference variables - the runner does not expand them: $shell_line"
+      exit 1
+      ;;
+  esac
+done < <(grep -h -E '^\s*shell:' .github/workflows/deploy.yml .github/workflows/deploy-test.yml)
 
 goreleaser_config="$(<.goreleaser.yml)"
 if ! grep -Fq -- 'prerelease: auto' <<<"$goreleaser_config"; then

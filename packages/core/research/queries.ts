@@ -17,6 +17,12 @@ export type ResearchPresenceEntry = {
   updatedAt: number | null;
   phase: ResearchPresencePhase;
   role: string;
+  /**
+   * Display identity for roster members that are not workspace fleet members
+   * (V6 run-scoped team agents). Empty for V5 fleet entries.
+   */
+  name: string;
+  avatarUrl: string | null;
   fleetMemberId: string | null;
   taskId: string | null;
   nodeId: string | null;
@@ -39,6 +45,8 @@ export type ResearchPresenceResponse = {
       updatedAt?: number;
       phase?: string;
       role?: string;
+      name?: string;
+      avatar_url?: string;
       fleet_member_id?: string | null;
       task_id?: string | null;
       node_id?: string | null;
@@ -149,6 +157,8 @@ export function normalizeResearchPresenceMap(
     out[agentId] = {
       activity, updatedAt, phase,
       role: typeof entry.role === "string" ? entry.role : "",
+      name: typeof entry.name === "string" ? entry.name : "",
+      avatarUrl: typeof entry.avatar_url === "string" && entry.avatar_url !== "" ? entry.avatar_url : null,
       fleetMemberId: typeof entry.fleet_member_id === "string" ? entry.fleet_member_id : null,
       taskId: typeof entry.task_id === "string" ? entry.task_id : null,
       nodeId: typeof entry.node_id === "string" ? entry.node_id : null,

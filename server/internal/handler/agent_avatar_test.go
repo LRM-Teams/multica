@@ -15,7 +15,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/agentavatar"
 )
 
-var durableAgentAvatarPattern = regexp.MustCompile(`^https://cdn\.leagent\.me/agent-avatars/v2/agent-(0[1-9]|1[0-5])\.png$`)
+var durableAgentAvatarPattern = regexp.MustCompile(`^https://cdn\.leagent\.me/agent-avatars/v3/agent-0[1-6]\.png$`)
 
 func TestAgentAvatar_DurableCreateAndVerifiedUpdateProvenance(t *testing.T) {
 	requireAvatarTestDatabase(t)
@@ -380,7 +380,7 @@ func TestAgentAvatar_ConcurrentUpdatesKeepURLSourceAndAttachmentAtomic(t *testin
 	}
 	updates := []updateCase{
 		{selection: map[string]any{"kind": agentAvatarSourcePicked, "preset_url": "/agent-avatars/human-01.jpg"}, url: agentavatar.LegacyURL(1), source: agentAvatarSourcePicked},
-		{selection: map[string]any{"kind": agentAvatarSourcePicked, "preset_url": agentavatar.URL(15)}, url: agentavatar.URL(15), source: agentAvatarSourcePicked},
+		{selection: map[string]any{"kind": agentAvatarSourcePicked, "preset_url": agentavatar.URL(6)}, url: agentavatar.URL(6), source: agentAvatarSourcePicked},
 	}
 	for _, suffix := range []string{"a", "b"} {
 		url := "/uploads/agents/" + marker + "-" + suffix + ".png"

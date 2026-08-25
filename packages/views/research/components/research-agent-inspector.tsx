@@ -6,8 +6,12 @@ import {
   useRef,
   type RefObject,
 } from "react";
+import { ChevronDown, UserRound, X } from "lucide-react";
 import type { TypedGraphNode } from "@multica/core/research";
-import type { ExecutionRow } from "../execution-overlay";
+import {
+  EXECUTION_STATUS_PRESENTATION,
+  type ExecutionRow,
+} from "../execution-overlay";
 import {
   formatClock,
   formatElapsedDuration,
@@ -22,6 +26,7 @@ import {
 } from "@multica/ui/components/ui/sheet";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { cn } from "@multica/ui/lib/utils";
+import { ActorAvatar } from "../../common/actor-avatar";
 import { useT } from "../../i18n/use-t";
 
 function payloadString(payload: unknown, key: string): string | null {
@@ -80,6 +85,21 @@ function inputFromTypedNode(node: TypedGraphNode | null | undefined): string | n
   return null;
 }
 
+function normalizedText(value: string | null | undefined): string {
+  return (value ?? "").trim().replace(/\s+/g, " ").toLocaleLowerCase();
+}
+
+function distinctText(
+  value: string | null | undefined,
+  comparedWith: Array<string | null | undefined>,
+): string | null {
+  const normalized = normalizedText(value);
+  if (!normalized) return null;
+  return comparedWith.some((candidate) => normalizedText(candidate) === normalized)
+    ? null
+    : (value ?? "").trim();
+}
+
 function ResearchAgentInspectorBody({
   row,
   typedNode,
@@ -93,7 +113,7 @@ function ResearchAgentInspectorBody({
   onClose: () => void;
   onOpenAgentConfig?: () => void;
   closeButtonRef?: RefObject<HTMLButtonElement | null>;
-  titleId?: string;
+  titleId: string;
 }) {
   const { t } = useT("research");
   const payloadObjective = objectiveFromTypedNode(typedNode);
@@ -101,8 +121,18 @@ function ResearchAgentInspectorBody({
   const objective =
     row.taskObjective ||
     payloadObjective ||
-    row.action ||
     t(($) => $.d5.inspector.no_task);
+  const statusPresentation = EXECUTION_STATUS_PRESENTATION[row.status];
+  const StatusIcon = statusPresentation.Icon;
+  const statusLabel = t(($) => $.panel.execution.status[row.status]);
+  const action = distinctText(row.action ?? row.actionDetail, [objective, statusLabel]);
+  const currentAction = row.status === "done" || row.status === "failed" ? null : action;
+  const input = distinctText(payloadInput, [objective, currentAction]);
+  const recentResult = distinctText(
+    row.recentResult?.title ?? (row.status === "done" ? action : null),
+    [objective, currentAction, input],
+  );
+  const failureReason = row.reason ?? (row.status === "failed" ? row.actionDetail : null);
   const executionFacts = [
     row.taskId,
     row.attemptId,
@@ -110,7 +140,6 @@ function ResearchAgentInspectorBody({
     row.startedAt,
     row.updatedAt,
     row.elapsedMs,
-    row.reason,
   ].some((value) => value != null && value !== "");
   const clock = (value: number) =>
     formatClock(value, (time) => t(($) => $.panel.execution.clock_time, { time }));
@@ -122,95 +151,142 @@ function ResearchAgentInspectorBody({
           min: (count) => t(($) => $.panel.execution.elapsed_min, { count }),
           hour: (count) => t(($) => $.panel.execution.elapsed_hour, { count }),
         });
-  const headerStatus =
-    row.action ||
-    row.actionDetail ||
-    t(($) => $.panel.execution.status[row.status]);
 
   return (
     <div
       data-testid="research-agent-inspector-content"
       className="min-w-0 [overflow-wrap:anywhere]"
     >
-      <header className="agent-head">
-        <button
+      <header className="flex items-start gap-3 border-b border-border p-4">
+        <ActorAvatar
+          actorType="agent"
+          actorId={row.id}
+          name={row.name}
+          size={40}
+          profileLink={false}
+        />
+        <div className="min-w-0 flex-1 pt-0.5">
+          <h2 id={titleId} className="truncate text-sm font-medium text-foreground">
+            {row.name}
+          </h2>
+          <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+            <span className={cn("inline-flex items-center gap-1.5", statusPresentation.textClass)}>
+              <StatusIcon className="size-3.5" aria-hidden="true" />
+              {statusLabel}
+            </span>
+            {row.stage ? (
+              <span className="truncate text-muted-foreground">
+                {t(($) => $.d5.inspector.phase, { phase: row.stage })}
+              </span>
+            ) : null}
+          </div>
+        </div>
+        <Button
           ref={closeButtonRef}
           type="button"
-          className="agent-close"
+          size="icon-sm"
+          variant="ghost"
+          className="-mr-1 -mt-1 text-muted-foreground"
           onClick={onClose}
           aria-label={t(($) => $.d5.inspector.close)}
         >
-          ×
-        </button>
-        <div className="who">
-          <div className="agent-big-avatar">{row.initials || row.name.slice(0, 2).toUpperCase()}</div>
-          <div>
-            <b id={titleId}>{row.name}</b>
-            <span>{headerStatus}</span>
-          </div>
-        </div>
+          <X aria-hidden="true" />
+        </Button>
       </header>
-      <div className="agent-body">
-        <div className="agent-objective">
-          <small>{t(($) => $.d5.inspector.objective)}</small>
-          <b>{objective}</b>
-        </div>
-        {payloadInput ? (
-          <section className="work-block">
-            <h4>{t(($) => $.node.input)}</h4>
-            <div className="work-item done">{payloadInput}</div>
+      <div className="space-y-4 p-4">
+        <section aria-labelledby={`${titleId}-objective`}>
+          <h3
+            id={`${titleId}-objective`}
+            className="text-xs font-medium text-muted-foreground"
+          >
+            {t(($) => $.d5.inspector.objective)}
+          </h3>
+          <p className="mt-1.5 text-sm leading-relaxed text-foreground">{objective}</p>
+        </section>
+        {currentAction ? (
+          <section className="border-t border-border pt-4">
+            <h3 className="text-xs font-medium text-muted-foreground">
+              {t(($) => $.d5.inspector.current)}
+            </h3>
+            <p className="mt-1.5 text-sm leading-relaxed text-foreground">
+              {currentAction}
+            </p>
           </section>
         ) : null}
-        {row.stage ? (
-          <p className="mt-3 text-[11px] text-muted-foreground">
-            {t(($) => $.d5.inspector.phase, { phase: row.stage })}
-          </p>
+        {recentResult ? (
+          <section className="border-t border-border pt-4">
+            <h3 className="text-xs font-medium text-muted-foreground">
+              {t(($) => $.d5.inspector.completed)}
+            </h3>
+            <p className="mt-1.5 text-sm leading-relaxed text-foreground">
+              {recentResult}
+            </p>
+          </section>
+        ) : null}
+        {input ? (
+          <section className="border-t border-border pt-4">
+            <h3 className="text-xs font-medium text-muted-foreground">
+              {t(($) => $.node.input)}
+            </h3>
+            <p className="mt-1.5 text-sm leading-relaxed text-foreground">{input}</p>
+          </section>
+        ) : null}
+        {failureReason ? (
+          <section className="border-t border-destructive/30 pt-4">
+            <h3 className="text-xs font-medium text-destructive-strong">
+              {t(($) => $.d5.inspector.reason)}
+            </h3>
+            <p className="mt-1.5 text-sm leading-relaxed text-foreground">
+              {failureReason}
+            </p>
+          </section>
         ) : null}
         {executionFacts ? (
-          <dl className="mt-3 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1.5 rounded-lg border border-border/50 bg-background/30 p-3 text-[11px]">
-            {row.taskId ? (
-              <ExecutionFact label={t(($) => $.panel.execution.task)} value={row.taskId} />
-            ) : null}
-            {row.attemptId ? (
-              <ExecutionFact label={t(($) => $.panel.execution.attempt)} value={row.attemptId} />
-            ) : null}
-            {row.branchId ? (
-              <ExecutionFact label={t(($) => $.d5.inspector.branch)} value={row.branchId} />
-            ) : null}
-            {row.startedAt != null ? (
-              <ExecutionFact label={t(($) => $.panel.execution.started)} value={clock(row.startedAt)} />
-            ) : null}
-            {row.updatedAt != null ? (
-              <ExecutionFact label={t(($) => $.panel.execution.updated)} value={clock(row.updatedAt)} />
-            ) : null}
-            {elapsed ? (
-              <ExecutionFact label={t(($) => $.panel.execution.duration)} value={elapsed} />
-            ) : null}
-            {row.reason ? (
-              <ExecutionFact label={t(($) => $.d5.inspector.reason)} value={row.reason} />
-            ) : null}
-          </dl>
-        ) : null}
-        {row.recentResult ? (
-          <section className="work-block">
-            <h4>{t(($) => $.d5.inspector.completed)}</h4>
-            <div className="work-item done">{row.recentResult.title}</div>
-          </section>
-        ) : null}
-        {row.action ? (
-          <section className="work-block">
-            <h4>{t(($) => $.d5.inspector.current)}</h4>
-            <div className="work-item live">{row.action}</div>
-          </section>
+          <details className="group border-t border-border pt-3">
+            <summary className="flex cursor-pointer list-none items-center justify-between rounded-lg py-1 text-xs font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 [&::-webkit-details-marker]:hidden">
+              {t(($) => $.d5.inspector.execution_details)}
+              <ChevronDown
+                className="size-4 transition-transform group-open:rotate-180"
+                aria-hidden="true"
+              />
+            </summary>
+            <dl className="mt-3 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-2 text-xs">
+              {row.taskId ? (
+                <ExecutionFact label={t(($) => $.panel.execution.task)} value={row.taskId} />
+              ) : null}
+              {row.attemptId ? (
+                <ExecutionFact label={t(($) => $.panel.execution.attempt)} value={row.attemptId} />
+              ) : null}
+              {row.branchId ? (
+                <ExecutionFact label={t(($) => $.d5.inspector.branch)} value={row.branchId} />
+              ) : null}
+              {row.startedAt != null ? (
+                <ExecutionFact label={t(($) => $.panel.execution.started)} value={clock(row.startedAt)} />
+              ) : null}
+              {row.updatedAt != null ? (
+                <ExecutionFact label={t(($) => $.panel.execution.updated)} value={clock(row.updatedAt)} />
+              ) : null}
+              {elapsed ? (
+                <ExecutionFact label={t(($) => $.panel.execution.duration)} value={elapsed} />
+              ) : null}
+            </dl>
+          </details>
         ) : null}
       </div>
-      <footer className="agent-foot">
-        {onOpenAgentConfig ? (
-          <Button type="button" size="sm" variant="outline" onClick={onOpenAgentConfig}>
+      {onOpenAgentConfig ? (
+        <footer className="border-t border-border p-3">
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            className="w-full"
+            onClick={onOpenAgentConfig}
+          >
+            <UserRound data-icon="inline-start" aria-hidden="true" />
             {t(($) => $.d5.inspector.open_agent)}
           </Button>
-        ) : null}
-      </footer>
+        </footer>
+      ) : null}
     </div>
   );
 }
@@ -219,7 +295,7 @@ function ExecutionFact({ label, value }: { label: string; value: string }) {
   return (
     <>
       <dt className="text-muted-foreground">{label}</dt>
-      <dd className="min-w-0 break-words font-mono text-foreground">{value}</dd>
+      <dd className="min-w-0 break-all font-mono text-foreground">{value}</dd>
     </>
   );
 }
@@ -285,6 +361,7 @@ export function ResearchAgentInspector({
           side="bottom"
           data-testid="research-agent-inspector"
           data-placement="sheet"
+          showCloseButton={false}
           className={cn(
             "research-agent-inspector-sheet max-h-[min(72dvh,560px)] gap-0 overflow-y-auto rounded-t-2xl border-t border-border bg-canvas-bg p-0 text-foreground",
             className,
@@ -299,6 +376,7 @@ export function ResearchAgentInspector({
             typedNode={typedNode}
             onClose={onClose}
             onOpenAgentConfig={handleOpenAgentConfig}
+            titleId={titleId}
           />
         </SheetContent>
       </Sheet>

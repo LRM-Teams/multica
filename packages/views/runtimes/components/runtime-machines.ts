@@ -538,15 +538,16 @@ function finalizeRuntimeMachine(
     isCurrent,
     localMachineName: options.localMachineName,
   });
+  const connectionDeviceName = draft.connection?.deviceName?.trim() || null;
   const title =
     runtimes.length === 0 && draft.daemonId
       ? isCurrent && options.localMachineName
         ? options.localMachineName
-        : `Computer ${shortDaemonId(draft.daemonId)}`
+        : connectionDeviceName || `Computer ${shortDaemonId(draft.daemonId)}`
       : runtimeTitle;
   const deviceInfo = first ? formatDeviceInfo(first.device_info ?? null) : null;
-  const deviceName = machineDeviceName(runtimes);
-  const os = machineOperatingSystem(runtimes);
+  const deviceName = machineDeviceName(runtimes) ?? connectionDeviceName;
+  const os = machineOperatingSystem(runtimes) ?? (draft.connection?.os?.trim() || null);
   const subtitle = machineSubtitle({
     title,
     deviceInfo,
@@ -597,7 +598,8 @@ function finalizeRuntimeMachine(
     deviceInfo,
     deviceName,
     os,
-    cliVersion: commonCliVersion(runtimes),
+    cliVersion:
+      commonCliVersion(runtimes) ?? (draft.connection?.cliVersion?.trim() || null),
     mode: draft.mode,
     section: isCurrent ? "local" : draft.mode === "cloud" ? "cloud" : "remote",
     isCurrent,
@@ -792,7 +794,9 @@ function machineTitle(
   if (first.runtime_mode === "cloud") {
     return `${capitalize(first.provider)} cloud`;
   }
-  return first.daemon_id ? shortDaemonId(first.daemon_id) : "Unknown machine";
+  // Never show a bare daemon/computer id as the machine name (Frank
+  // 2026-08-19): a UUID is noise, not a name.
+  return `Unknown machine`;
 }
 
 /** Hostname placeholder when display_name is unset (grey label in rename UI). */
@@ -805,7 +809,8 @@ export function machineHostname(machine: RuntimeMachine): string | null {
   // id as the visible label — keep the create-time sandbox name (machine.title).
   if (machine.pendingCloud) return null;
   if (machine.isCurrent && machine.title) return machine.title;
-  return machine.daemonId ? shortDaemonId(machine.daemonId) : null;
+  // No resolvable device name — hide rather than show a bare id as hostname.
+  return null;
 }
 
 /** Prefer an online runtime id for API calls scoped to one daemon host. */

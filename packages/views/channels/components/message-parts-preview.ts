@@ -57,6 +57,9 @@ export function formatMessagePartsPreview(parts?: MessagePart[] | null): string 
       const title = normalizeText(part.label ?? "");
       return title ? [`笔记「${title}」`] : ["笔记"];
     }
+    if (part.type === "period_brief_insert") {
+      return ["插入汇报稿"];
+    }
     return [];
   });
   return chunks.length > 0 ? chunks.join(" ") : null;

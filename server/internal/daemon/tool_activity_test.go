@@ -154,10 +154,10 @@ func TestToolActivityFact(t *testing.T) {
 			wantSummary: "",
 		},
 		{
-			name:          "wait for message",
-			tool:          "wait_for_message",
-			input:         nil,
-			wantDetail:    "waiting_for_message",
+			name:        "wait for message",
+			tool:        "wait_for_message",
+			input:       nil,
+			wantDetail:  "waiting_for_message",
 			wantSummary: "",
 		},
 		{

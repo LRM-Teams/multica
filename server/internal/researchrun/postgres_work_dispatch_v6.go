@@ -34,10 +34,10 @@ func (s *PostgresStore) prepareNextV6Dispatch(ctx context.Context) (bool, error)
 	var stateVersion, throughSequence int64
 	var payload json.RawMessage
 	err = tx.QueryRow(ctx, `SELECT w.workspace_id::text,w.session_id::text,w.id::text,w.assigned_agent_id::text,m.id::text,
-		m.mission_prompt,w.expected_result_schema_id,w.goal_version,s.state_version,w.input_event_sequence,w.payload
+		COALESCE(NULLIF(w.payload->>'mission_prompt',''),m.mission_prompt),w.expected_result_schema_id,w.goal_version,s.state_version,w.input_event_sequence,w.payload
 		FROM research_work_item w JOIN research_session s ON s.id=w.session_id
 		JOIN research_team_membership m ON m.workspace_id=w.workspace_id AND m.session_id=w.session_id AND m.agent_id=w.assigned_agent_id
-		AND m.state IN('idle','working') WHERE s.orchestrator_version='research-run-v6' AND w.status='ready' AND w.ready_at<=now()
+		AND m.state IN('idle','working') WHERE s.orchestrator_version='research-run-v6' AND s.status='running' AND w.status='ready' AND w.ready_at<=now()
 		AND w.attempt_count<w.max_attempts ORDER BY w.priority DESC,w.ready_at,w.id FOR UPDATE OF s,w,m SKIP LOCKED LIMIT 1`).Scan(
 		&workspaceID, &runID, &workItemID, &agentID, &membershipID, &mission, &expectedSchema, &goalVersion, &stateVersion, &throughSequence, &payload)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -48,6 +48,11 @@ func (s *PostgresStore) prepareNextV6Dispatch(ctx context.Context) (bool, error)
 	}
 	if err = lockRunForMutation(ctx, tx, runID, workspaceID); err != nil {
 		return false, err
+	}
+	if expectedSchema == string(V6ContractAtomicResultSubmission) {
+		if _, err = ensureV6BackingTaskTx(ctx, tx, workItemID); err != nil {
+			return false, err
+		}
 	}
 	attemptID, manifestID := uuid.NewString(), uuid.NewString()
 	manifest, manifestHash, err := compileV6WorkManifestTx(ctx, tx, workspaceID, runID, workItemID, attemptID, manifestID, agentID, mission, expectedSchema, goalVersion, stateVersion, throughSequence, payload)
@@ -84,11 +89,17 @@ func (s *PostgresStore) prepareNextV6Dispatch(ctx context.Context) (bool, error)
 			return false, err
 		}
 	}
-	outboxPayload, _ := json.Marshal(V6DispatchIntentPayload{Access: V6AttemptAccess{WorkspaceID: workspaceID, RunID: runID, WorkItemID: workItemID, AttemptID: attemptID, AgentID: agentID}, Manifest: manifest, Mission: mission})
+	outboxPayload, err := json.Marshal(V6DispatchIntentPayload{Access: V6AttemptAccess{WorkspaceID: workspaceID, RunID: runID, WorkItemID: workItemID, AttemptID: attemptID, AgentID: agentID}, Manifest: manifest, Mission: mission})
+	if err != nil {
+		return false, err
+	}
 	if _, err = tx.Exec(ctx, `INSERT INTO research_v6_outbox(workspace_id,session_id,kind,idempotency_key,payload)VALUES($1::uuid,$2::uuid,'dispatch_work_item',$3,$4::jsonb)`, workspaceID, runID, dispatchKey, outboxPayload); err != nil {
 		return false, err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE research_work_item SET status='dispatching',attempt_count=attempt_count+1,lease_token=$2::uuid,lease_expires_at=now()+interval '15 minutes',state_version=state_version+1,updated_at=now() WHERE id=$1::uuid`, workItemID, uuid.NewString()); err != nil {
+	// Observed Agent turns run 17-30 minutes; a 15-minute lease expired mid-turn
+	// and burned the whole attempt budget on healthy work. Progress reports also
+	// slide this lease (see ReportV6WorkProgress).
+	if _, err = tx.Exec(ctx, `UPDATE research_work_item SET status='dispatching',attempt_count=attempt_count+1,lease_token=$2::uuid,lease_expires_at=now()+interval '45 minutes',state_version=state_version+1,updated_at=now() WHERE id=$1::uuid`, workItemID, uuid.NewString()); err != nil {
 		return false, err
 	}
 	if _, err = tx.Exec(ctx, `UPDATE research_team_membership SET state='working' WHERE id=$1::uuid`, membershipID); err != nil {
@@ -131,7 +142,7 @@ func persistV6CatalogPagesTx(ctx context.Context, tx pgx.Tx, workspaceID, runID,
 		LEFT JOIN research_result_node rn ON rn.artifact_version_id=v.id LEFT JOIN research_insight_version iv ON iv.artifact_version_id=v.id
 		WHERE f.workspace_id=$1::uuid AND f.session_id=$2::uuid AND f.removed_by_event_sequence IS NULL
 		AND (($3='same_tier' AND f.tier='S') OR ($3='higher_candidates' AND f.tier<>'S' AND f.branch_id=ANY($4::uuid[])))
-		ORDER BY v.id`, workspaceID, runID, view, branchIDs)
+		ORDER BY v.id::text`, workspaceID, runID, view, branchIDs)
 		if err != nil {
 			return err
 		}
@@ -190,29 +201,55 @@ func compileV6WorkManifestTx(ctx context.Context, tx pgx.Tx, workspaceID, runID,
 		config = map[string]any{}
 	}
 	branchRefs := []any{}
-	if value, ok := config["branch_refs"].([]any); ok {
-		branchRefs = value
+	rows, qerr := tx.Query(ctx, `SELECT b.id::text,b.state_version
+		FROM research_v6_work_item_branch scope
+		JOIN research_branch b ON (b.workspace_id,b.session_id,b.id)=(scope.workspace_id,scope.session_id,scope.branch_id)
+		WHERE scope.workspace_id=$1::uuid AND scope.session_id=$2::uuid AND scope.work_item_id=$3::uuid
+		ORDER BY b.id::text`, workspaceID, runID, workItemID)
+	if qerr != nil {
+		return nil, "", qerr
+	}
+	for rows.Next() {
+		var id string
+		var version int64
+		if qerr = rows.Scan(&id, &version); qerr != nil {
+			rows.Close()
+			return nil, "", qerr
+		}
+		branchRefs = append(branchRefs, map[string]any{"id": id, "state_version": version})
+	}
+	if qerr = rows.Err(); qerr != nil {
+		rows.Close()
+		return nil, "", qerr
+	}
+	rows.Close()
+	if len(branchRefs) == 0 {
+		if value, ok := config["branch_refs"].([]any); ok {
+			branchRefs = value
+		}
 	}
 	if len(branchRefs) == 0 {
-		rows, qerr := tx.Query(ctx, `SELECT DISTINCT b.id::text,b.state_version FROM research_work_item w JOIN research_discussion_input di ON di.discussion_id=w.target_id JOIN research_node_branch nb ON nb.node_artifact_version_id=di.node_artifact_version_id JOIN research_branch b ON b.id=nb.branch_id WHERE w.id=$1::uuid ORDER BY b.id`, workItemID)
+		rows, qerr = tx.Query(ctx, `SELECT DISTINCT b.id::text,b.state_version FROM research_work_item w JOIN research_discussion_input di ON di.discussion_id=w.target_id JOIN research_node_branch nb ON nb.node_artifact_version_id=di.node_artifact_version_id JOIN research_branch b ON b.id=nb.branch_id WHERE w.id=$1::uuid ORDER BY b.id::text`, workItemID)
 		if qerr != nil {
 			return nil, "", qerr
 		}
-		defer rows.Close()
 		for rows.Next() {
 			var id string
 			var version int64
 			if qerr = rows.Scan(&id, &version); qerr != nil {
+				rows.Close()
 				return nil, "", qerr
 			}
 			branchRefs = append(branchRefs, map[string]any{"id": id, "state_version": version})
 		}
 		if qerr = rows.Err(); qerr != nil {
+			rows.Close()
 			return nil, "", qerr
 		}
+		rows.Close()
 	}
 	artifacts := []any{}
-	rows, err := tx.Query(ctx, `SELECT DISTINCT v.id::text,p.entity_kind,v.content_hash FROM research_work_item w JOIN research_discussion_input di ON di.discussion_id=w.target_id JOIN research_artifact_version v ON v.id=di.node_artifact_version_id JOIN research_artifact_passport p ON p.id=v.artifact_id WHERE w.id=$1::uuid ORDER BY v.id`, workItemID)
+	rows, err = tx.Query(ctx, `SELECT DISTINCT v.id::text,p.entity_kind,v.content_hash FROM research_work_item w JOIN research_discussion_input di ON di.discussion_id=w.target_id JOIN research_artifact_version v ON v.id=di.node_artifact_version_id JOIN research_artifact_passport p ON p.id=v.artifact_id WHERE w.id=$1::uuid ORDER BY v.id::text`, workItemID)
 	if err != nil {
 		return nil, "", err
 	}
@@ -222,7 +259,7 @@ func compileV6WorkManifestTx(ctx context.Context, tx pgx.Tx, workspaceID, runID,
 			rows.Close()
 			return nil, "", err
 		}
-		artifacts = append(artifacts, map[string]any{"artifact_version_id": id, "kind": kind, "representation": "full", "representation_hash": hash, "use_kind": "integration_input", "reason": "Frozen Work Item input."})
+		artifacts = append(artifacts, map[string]any{"artifact_version_id": id, "kind": kind, "representation": "full", "representation_hash": hash, "use_kind": "integration_input", "reason": "已冻结的 Work Item 输入。"})
 	}
 	if err = rows.Err(); err != nil {
 		rows.Close()
@@ -253,7 +290,7 @@ func compileV6WorkManifestTx(ctx context.Context, tx pgx.Tx, workspaceID, runID,
 			if err = tx.QueryRow(ctx, `SELECT p.entity_kind,v.content_hash FROM research_artifact_version v JOIN research_artifact_passport p ON p.id=v.artifact_id WHERE v.workspace_id=$1::uuid AND v.session_id=$2::uuid AND v.id=$3::uuid AND p.lifecycle_status='accepted'`, workspaceID, runID, id).Scan(&kind, &hash); err != nil {
 				return nil, "", err
 			}
-			artifacts = append(artifacts, map[string]any{"artifact_version_id": id, "kind": kind, "representation": "full", "representation_hash": hash, "use_kind": "frozen_input", "reason": "Director-authorized Work Item input."})
+			artifacts = append(artifacts, map[string]any{"artifact_version_id": id, "kind": kind, "representation": "full", "representation_hash": hash, "use_kind": "frozen_input", "reason": "调研主理人授权的 Work Item 输入。"})
 		}
 	}
 	taskSchema := any(nil)
@@ -262,6 +299,11 @@ func compileV6WorkManifestTx(ctx context.Context, tx pgx.Tx, workspaceID, runID,
 	}
 	manifestMap := map[string]any{"contract_kind": "work_manifest", "schema_version": 6, "manifest_id": manifestID, "workspace_id": workspaceID, "run_id": runID, "work_item_id": workItemID, "attempt_id": attemptID, "assigned_agent_id": agentID, "goal": map[string]any{"goal_version": goalVersion, "goal": goal, "scope": jsonObjectOrEmpty(scope), "audience": audience, "freshness": freshness, "language": language, "source_policy": jsonObjectOrEmpty(sourcePolicy)}, "branch_refs": branchRefs, "runtime_protocol_version": "research-run-v6-runtime-v1", "mission_prompt": mission, "expected_result_schema": expectedSchema, "artifacts": artifacts, "through_state_version": stateVersion, "through_event_sequence": throughSequence}
 	if expectedSchema == string(V6ContractAtomicResultSubmission) {
+		var taskID string
+		if err = tx.QueryRow(ctx, `SELECT id::text FROM research_task WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND work_item_id=$3::uuid`, workspaceID, runID, workItemID).Scan(&taskID); err != nil {
+			return nil, "", err
+		}
+		manifestMap["task_id"] = taskID
 		tier := "S"
 		branchIDs := []string{}
 		for _, rawRef := range branchRefs {
@@ -274,6 +316,16 @@ func compileV6WorkManifestTx(ctx context.Context, tx pgx.Tx, workspaceID, runID,
 		manifestMap["catalog_access"] = map[string]any{"same_tier": tier, "higher_candidate_branch_ids": branchIDs, "include_higher_candidates": true, "through_event_sequence": throughSequence, "page_size": 128}
 	}
 	if taskSchema != nil {
+		if expectedSchema == string(V6ContractAtomicResultSubmission) {
+			var payloadSchemaID string
+			if err = tx.QueryRow(ctx, `SELECT payload_schema_id FROM research_work_item WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid`, workspaceID, runID, workItemID).Scan(&payloadSchemaID); err != nil {
+				return nil, "", err
+			}
+			if payloadSchemaID == "" {
+				return nil, "", ErrInvalidContract
+			}
+			taskSchema = map[string]any{"payload_schemas": map[string]any{payloadSchemaID: taskSchema}}
+		}
 		manifestMap["task_specific_schema"] = taskSchema
 	}
 	canonical, err := marshalV6CanonicalJSON(manifestMap)
@@ -298,8 +350,13 @@ func (s *PostgresStore) CompleteV6DispatchOutbox(ctx context.Context, outboxID, 
 		return err
 	}
 	defer tx.Rollback(ctx)
-	var workspaceID, runID, attemptID, workItemID string
-	err = tx.QueryRow(ctx, `SELECT o.workspace_id::text,o.session_id::text,o.payload->'access'->>'attempt_id',o.payload->'access'->>'work_item_id' FROM research_v6_outbox o WHERE o.id=$1::uuid AND o.lease_token=$2::uuid AND o.kind='dispatch_work_item' AND o.status='delivering' FOR UPDATE`, outboxID, token).Scan(&workspaceID, &runID, &attemptID, &workItemID)
+	var workspaceID, runID string
+	var payload []byte
+	err = tx.QueryRow(ctx, `SELECT o.workspace_id::text,o.session_id::text,o.payload FROM research_v6_outbox o WHERE o.id=$1::uuid AND o.lease_token=$2::uuid AND o.kind='dispatch_work_item' AND o.status='delivering' FOR UPDATE`, outboxID, token).Scan(&workspaceID, &runID, &payload)
+	if err != nil {
+		return err
+	}
+	attemptID, workItemID, err := parseV6DispatchAccessIDs(payload)
 	if err != nil {
 		return err
 	}
@@ -313,14 +370,14 @@ func (s *PostgresStore) CompleteV6DispatchOutbox(ctx context.Context, outboxID, 
 	if command.RowsAffected() != 1 {
 		return ErrWorkItemLeaseLost
 	}
-	command, err = tx.Exec(ctx, `UPDATE research_work_item SET status='running',updated_at=now() WHERE id=$1::uuid AND status='dispatching'`, workItemID)
+	command, err = tx.Exec(ctx, `UPDATE research_work_item SET status='running',lease_expires_at=now()+interval '45 minutes',updated_at=now() WHERE id=$1::uuid AND status='dispatching'`, workItemID)
 	if err != nil {
 		return err
 	}
 	if command.RowsAffected() != 1 {
 		return ErrWorkItemChanged
 	}
-	command, err = tx.Exec(ctx, `UPDATE research_v6_outbox SET status='delivered',result=jsonb_build_object('inbox_task_id',$2),lease_token=NULL,lease_expires_at=NULL,updated_at=now() WHERE id=$1::uuid AND lease_token=$3::uuid`, outboxID, inboxTaskID, token)
+	command, err = tx.Exec(ctx, `UPDATE research_v6_outbox SET status='delivered',result=jsonb_build_object('inbox_task_id',$2::text),lease_token=NULL,lease_expires_at=NULL,updated_at=now() WHERE id=$1::uuid AND lease_token=$3::uuid`, outboxID, inboxTaskID, token)
 	if err != nil {
 		return err
 	}

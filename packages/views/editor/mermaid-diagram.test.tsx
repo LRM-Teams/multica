@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
@@ -36,14 +36,21 @@ Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
 });
 
 const { MermaidDiagram } = await import("./mermaid-diagram");
+const { normalizeMermaidChart } = await import("./normalize-mermaid-chart");
+
+describe("normalizeMermaidChart", () => {
+  it("restores Worker-escape lookalike arrows", () => {
+    expect(
+      normalizeMermaidChart(
+        "flowchart TD\n  A --› B\n  B ==› C\n  D -.-› E\n  F ‹--› G\n  H ‹-- I\n",
+      ),
+    ).toBe("flowchart TD\n  A --> B\n  B ==> C\n  D -.-> E\n  F <--> G\n  H <-- I\n");
+  });
+});
 
 describe("MermaidDiagram fullscreen", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-  });
-
-  afterEach(() => {
-    document.body.innerHTML = "";
   });
 
   it(

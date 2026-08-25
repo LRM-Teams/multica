@@ -27,11 +27,11 @@ func seedMigrationGatingReassignedAgent(t *testing.T, reassignedAt time.Time) (a
 	var newRuntimeID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent_runtime (
-			workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, last_seen_at, owner_id
+			workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, last_seen_at
 		)
-		VALUES ($1, $2, $3, 'local', 'migration_gating_test', 'online', 'migration gating new runtime', now(), $4)
+		VALUES ($1, $2, $3, 'local', 'migration_gating_test', 'online', 'migration gating new runtime', now())
 		RETURNING id`,
-		testWorkspaceID, "migration-gating-new-"+uuid.NewString(), "Migration Gating New Runtime "+uuid.NewString(), testUserID,
+		testWorkspaceID, "migration-gating-new-"+uuid.NewString(), "Migration Gating New Runtime "+uuid.NewString(),
 	).Scan(&newRuntimeID); err != nil {
 		t.Fatalf("create new runtime: %v", err)
 	}
@@ -182,11 +182,11 @@ func TestEnsureDaemonAgentCredential_NoReassignmentMarkerReportsTerminalMismatch
 	var newRuntimeID string
 	if err := testPool.QueryRow(context.Background(), `
 		INSERT INTO agent_runtime (
-			workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, last_seen_at, owner_id
+			workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, last_seen_at
 		)
-		VALUES ($1, $2, $3, 'local', 'migration_gating_test', 'online', 'migration gating no-marker runtime', now(), $4)
+		VALUES ($1, $2, $3, 'local', 'migration_gating_test', 'online', 'migration gating no-marker runtime', now())
 		RETURNING id`,
-		testWorkspaceID, "migration-gating-nomarker-"+uuid.NewString(), "Migration Gating No Marker Runtime "+uuid.NewString(), testUserID,
+		testWorkspaceID, "migration-gating-nomarker-"+uuid.NewString(), "Migration Gating No Marker Runtime "+uuid.NewString(),
 	).Scan(&newRuntimeID); err != nil {
 		t.Fatalf("create new runtime: %v", err)
 	}
@@ -229,6 +229,18 @@ func TestEnsureDaemonAgentCredential_SuccessOnNewRuntimeClearsReassignmentMarker
 	if _, err := testPool.Exec(context.Background(), `UPDATE agent_runtime SET daemon_id = $1 WHERE id = $2`, newDaemonID, newRuntimeID); err != nil {
 		t.Fatalf("bind new runtime's daemon id: %v", err)
 	}
+	// LRM-1570: ownership is machine-level; the new runtime resolves its
+	// owner through an active binding for its daemon.
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO computer_workspace_bindings (
+			daemon_id, workspace_id, user_id, execution_token_hash, active
+		) VALUES ($1, $2, $3, 'migration-gating-success', TRUE)
+	`, newDaemonID, testWorkspaceID, testUserID); err != nil {
+		t.Fatalf("bind new runtime's owner: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_workspace_bindings WHERE daemon_id = $1 AND workspace_id = $2`, newDaemonID, testWorkspaceID)
+	})
 
 	rec := ensureDaemonAgentCredentialFor(t, newDaemonID, newRuntimeID, agentID)
 	if rec.Code != http.StatusCreated {

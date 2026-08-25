@@ -27,8 +27,7 @@ describe("Research D5 canonical projection source isolation", () => {
     expect(source).not.toContain("getResearchV6ProjectionSnapshot");
   });
 
-  it("uses the selected projection source for chrome and node detail resolution", () => {
-    expect(source).toContain("typedGraphNodes={displayTypedGraph?.nodes ?? []}");
+  it("uses the selected projection source for node detail resolution", () => {
     expect(source.match(/typedGraph: displayTypedGraph/g)?.length).toBeGreaterThanOrEqual(
       3,
     );

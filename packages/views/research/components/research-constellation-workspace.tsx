@@ -9,18 +9,8 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type {
-  ResearchCanvasFilter,
-  TypedGraphResponse,
-  StarGraphLayoutResult,
-} from "@multica/core/research";
-import {
-  countHiddenByFilter,
-  emptyCanvasFilter,
-  isBlankFilter,
-  useResearchCanvasStore,
-  useResearchUiStore,
-} from "@multica/core/research";
+import type { TypedGraphResponse, StarGraphLayoutResult } from "@multica/core/research";
+import { useResearchUiStore } from "@multica/core/research";
 import type {
   ResearchFleetMember,
   ResearchGraphNode,
@@ -81,8 +71,6 @@ export type ResearchReportController = {
   open: () => void;
   close: () => void;
 };
-
-const EMPTY_CANVAS_FILTER: ResearchCanvasFilter = emptyCanvasFilter();
 
 export function ResearchConstellationWorkspace({
   typedGraph,
@@ -172,11 +160,6 @@ export function ResearchConstellationWorkspace({
   const setRailOpen = useResearchUiStore((s) => s.setD5RailOpen);
   const railMode = useResearchUiStore((s) => s.d5RailMode);
   const setRailMode = useResearchUiStore((s) => s.setD5RailMode);
-  const filterSessionId = typedGraphSessionId ?? typedGraph?.session_id ?? null;
-  const storedCanvasFilter = useResearchCanvasStore((s) =>
-    filterSessionId ? s.filterBySession?.[filterSessionId] : undefined,
-  );
-  const canvasFilter = storedCanvasFilter ?? EMPTY_CANVAS_FILTER;
   const hostRef = useRef<HTMLDivElement>(null);
   const railToggleRef = useRef<HTMLButtonElement>(null);
   const prevGraphRef = useRef<TypedGraphResponse | undefined>(undefined);
@@ -348,11 +331,8 @@ export function ResearchConstellationWorkspace({
   }, [canvasBuild?.layoutForNext]);
 
   const lensHints = useMemo(
-    () =>
-      buildD5LensDisplayHints(activeLens, typedGraph, canvasModel, {
-        filterRound: canvasFilter.round,
-      }),
-    [activeLens, typedGraph, canvasModel, canvasFilter.round],
+    () => buildD5LensDisplayHints(activeLens, typedGraph, canvasModel),
+    [activeLens, typedGraph, canvasModel],
   );
 
   const relatedNodeIds = useMemo(() => {
@@ -475,15 +455,6 @@ export function ResearchConstellationWorkspace({
     newDir: summary.newFrontiers,
     stopped: summary.stoppedDirections,
   });
-  const filterHiddenCount = useMemo(() => {
-    if (!typedGraph?.nodes.length || isBlankFilter(canvasFilter)) return 0;
-    return countHiddenByFilter(typedGraph.nodes, canvasFilter).hidden;
-  }, [canvasFilter, typedGraph?.nodes]);
-  const filterHiddenNote =
-    filterHiddenCount > 0
-      ? t(($) => $.d5.filter.hidden_count, { count: filterHiddenCount })
-      : undefined;
-
   const canvasNodeA11yCopy = useMemo<CanvasNodeA11yCopy>(
     () => ({
       statuses: {
@@ -762,7 +733,7 @@ export function ResearchConstellationWorkspace({
             onSelect={handleTrajectorySelect}
             onOpenNodeDetail={handleCanvasSelect}
             onJumpToCanvas={(nodeId) => {
-              onActiveLensChange?.("relations");
+              onActiveLensChange?.("agent");
               handleCanvasSelect(nodeId);
             }}
           />
@@ -781,7 +752,6 @@ export function ResearchConstellationWorkspace({
             fusionLowPerformance={motion.profile.lowPerformance}
             summaryTitle={summaryTitle}
             summaryDetail={summaryDetail}
-            filterHiddenNote={filterHiddenNote}
             clusterLabels={clusterLabels}
             frontierLabel={t(($) => $.d5.new_frontier_label)}
             lensHints={lensHints}
@@ -796,7 +766,6 @@ export function ResearchConstellationWorkspace({
             initialFitEntityIdList={isMobile ? mobileNeighborhoodIdList : undefined}
             entityBudget={isMobile ? STAR_GRAPH_MOBILE_DOM_BUDGET : undefined}
             typedNodes={typedGraph?.nodes}
-            canvasFilter={canvasFilter}
             hiddenCountLabel={(count) => t(($) => $.d5.cluster_hidden, { count })}
             loadMoreLabel={loadMoreLabel}
             onLoadMore={onLoadMoreTypedGraph}

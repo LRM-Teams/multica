@@ -42,7 +42,7 @@ func activitySystemEntry(title, text string) (protocol.AgentActivityEntry, error
 	return protocol.AgentActivityEntry{Kind: "system", Body: body}, nil
 }
 
-func activityDiagnosticEntry(source, reference, title, kind, text string) (protocol.AgentActivityEntry, error) {
+func formatActivityTimelineEntry(source, reference, title, kind, text string) (protocol.AgentActivityEntry, error) {
 	// Diagnostic messages are already bounded at the provider boundary. Keep
 	// this formatter focused on the Activity contract: title plus the optional
 	// provider/run association, without a second generic text-redaction pass.

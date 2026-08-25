@@ -231,7 +231,7 @@ func activityBroadcastForObservation(observation AgentObservation) (activityBroa
 	case AgentObservationRuntimeDiagnostic:
 		data := observation.Data.(AgentRuntimeDiagnosticObservationData)
 		broadcast.detailKind = "idle"
-		entry, err = activityDiagnosticEntry(data.Source, data.Reference, data.Name, data.Kind, data.Detail)
+		entry, err = formatActivityTimelineEntry(data.Source, data.Reference, data.Name, data.Kind, data.Detail)
 	case AgentObservationMessageBodyAccepted:
 		// Raft 1.0.16 shows "Message received" when an ordinary inbox
 		// body is accepted. Keep the presentation detail the UI already

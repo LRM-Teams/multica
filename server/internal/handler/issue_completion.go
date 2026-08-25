@@ -11,6 +11,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -95,6 +96,35 @@ func writeIssueCompletionError(w http.ResponseWriter, err error) {
 	}
 }
 
+// resolveAgentCompletionRunID binds completion/review identity to a Run.
+// Prefer the task-scoped credential TaskID. When the Credential Proxy
+// forwards with a durable agent_credential (no TaskID), resolve the Run from
+// the server-owned active claim for this Issue — never from client-supplied IDs.
+func (h *Handler) resolveAgentCompletionRunID(
+	w http.ResponseWriter,
+	r *http.Request,
+	principal middleware.AgentPrincipal,
+	issue db.Issue,
+	agentID pgtype.UUID,
+) (pgtype.UUID, bool) {
+	if runID, err := util.ParseUUID(principal.TaskID); err == nil {
+		return runID, true
+	}
+	if principal.ActorSource != "agent_credential" {
+		writeError(w, http.StatusForbidden, "completion requires a task-scoped Agent credential")
+		return pgtype.UUID{}, false
+	}
+	claim, err := h.Queries.GetActiveIssueExecution(r.Context(), db.GetActiveIssueExecutionParams{
+		WorkspaceID: issue.WorkspaceID,
+		IssueID:     issue.ID,
+	})
+	if err != nil || claim.AgentID != agentID {
+		writeError(w, http.StatusForbidden, "completion requires an active Issue claim for this Agent")
+		return pgtype.UUID{}, false
+	}
+	return claim.RunID, true
+}
+
 func (h *Handler) SubmitAgentIssueCompletion(w http.ResponseWriter, r *http.Request) {
 	principal, ok := h.requireAgentPrincipal(w, r)
 	if !ok {
@@ -114,9 +144,8 @@ func (h *Handler) SubmitAgentIssueCompletion(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusForbidden, "invalid Agent principal")
 		return
 	}
-	runID, err := util.ParseUUID(principal.TaskID)
-	if err != nil {
-		writeError(w, http.StatusForbidden, "completion requires a task-scoped Agent credential")
+	runID, ok := h.resolveAgentCompletionRunID(w, r, principal, issue, agentID)
+	if !ok {
 		return
 	}
 	outcome, err := h.IssueExecution.SubmitCompletion(r.Context(), service.SubmitIssueCompletionInput{
@@ -161,9 +190,16 @@ func (h *Handler) reviewIssueCompletion(w http.ResponseWriter, r *http.Request, 
 	if agentPrincipal != nil {
 		actorType = "agent"
 		actorID, err = util.ParseUUID(agentPrincipal.AgentID)
-		if err == nil {
-			actorRunID, err = util.ParseUUID(agentPrincipal.TaskID)
+		if err != nil {
+			writeError(w, http.StatusForbidden, "invalid reviewer principal")
+			return
 		}
+		var ok bool
+		actorRunID, ok = h.resolveAgentCompletionRunID(w, r, *agentPrincipal, issue, actorID)
+		if !ok {
+			return
+		}
+		err = nil
 	}
 	if err != nil {
 		writeError(w, http.StatusForbidden, "invalid reviewer principal")

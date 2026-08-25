@@ -1,4 +1,5 @@
 import type { ChatTimelineItem } from "@multica/core/chat";
+import { isTransportHangError } from "./timeline-error";
 
 export type BubbleToolKind = "todo" | "task" | "plan" | "other";
 
@@ -255,7 +256,9 @@ export function activeBubbleStepSummary(items: ChatTimelineItem[]): string | nul
       const summary = bubbleToolSummary(item);
       return summary ? `${label} · ${summary}` : label;
     }
-    if (item.type === "error") return "Error";
+    if (item.type === "error") {
+      return isTransportHangError(item.content) ? "Connection lost" : "Error";
+    }
   }
   return null;
 }

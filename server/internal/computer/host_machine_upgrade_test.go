@@ -100,6 +100,22 @@ func TestHostMachineUpgradeDifferentOperationReturnsBusy(t *testing.T) {
 	}
 }
 
+func TestHostMachineUpgradeStatusRetainsRealProgressAndFailure(t *testing.T) {
+	upgrade := newHostMachineUpgrade(&Host{}, hostMachineUpgradeConfig{})
+	upgrade.activeID = "upgrade-a"
+	upgrade.targetVersion = "v2.0.0"
+	upgrade.recordProgress("upgrade-a", "verifying", "Verifying binary")
+	if status := upgrade.status(); status.ID != "upgrade-a" || status.Phase != "verifying" || status.TargetVersion != "v2.0.0" {
+		t.Fatalf("active status = %+v", status)
+	}
+
+	upgrade.recordDone("upgrade-a", "", "verification_failed")
+	status := upgrade.status()
+	if status.ID != "upgrade-a" || status.Phase != "failed" || status.Error != "verification_failed" {
+		t.Fatalf("terminal status = %+v", status)
+	}
+}
+
 func TestHostControlForwardsComputerControlBusy(t *testing.T) {
 	identity := BindingChildIdentity{WorkspaceID: "workspace-a", DaemonInstanceID: "start-3", PID: 8051}
 	control := NewHostControl("owner-secret", HostControlCallbacks{

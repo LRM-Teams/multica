@@ -39,11 +39,28 @@ type hostMachineUpgrade struct {
 
 	mu                   sync.Mutex
 	activeID             string
+	activePhase          string
+	activeMessage        string
+	activePhases         []string
 	initiatorWorkspaceID string
 	activeCancel         context.CancelFunc
 	restartBinary        string
 	targetVersion        string
 	manifestBaseURL      string
+	lastStatus           MachineUpgradeStatus
+}
+
+// MachineUpgradeStatus is the read-only local progress projection used by
+// lifecycle clients. It reports only phases the resident has actually
+// entered; terminal status remains available until the next upgrade starts.
+type MachineUpgradeStatus struct {
+	ID            string   `json:"id,omitempty"`
+	Phase         string   `json:"phase"`
+	Message       string   `json:"message,omitempty"`
+	TargetVersion string   `json:"targetVersion,omitempty"`
+	NewVersion    string   `json:"newVersion,omitempty"`
+	Error         string   `json:"error,omitempty"`
+	Phases        []string `json:"phases,omitempty"`
 }
 
 // hostMachineUpgradeJournal is the durable successor handoff marker. Write it
@@ -100,19 +117,71 @@ func (upgrade *hostMachineUpgrade) startServiceUpgrade(identity BindingChildIden
 		return ErrComputerControlBusy
 	}
 	upgrade.activeID = operationID
+	upgrade.activePhase = "accepted"
+	upgrade.activeMessage = "Upgrade request accepted"
+	upgrade.activePhases = []string{"accepted"}
+	upgrade.targetVersion = strings.TrimSpace(command.TargetVersion)
+	upgrade.lastStatus = MachineUpgradeStatus{}
 	upgrade.initiatorWorkspaceID = identity.WorkspaceID
 	upgrade.mu.Unlock()
 	go upgrade.executeServiceUpgrade(identity, command)
 	return nil
 }
 
-func (upgrade *hostMachineUpgrade) status() map[string]string {
+func (upgrade *hostMachineUpgrade) status() MachineUpgradeStatus {
 	upgrade.mu.Lock()
 	defer upgrade.mu.Unlock()
 	if upgrade.activeID == "" {
-		return map[string]string{"phase": "idle"}
+		if upgrade.lastStatus.ID != "" {
+			return upgrade.lastStatus
+		}
+		return MachineUpgradeStatus{Phase: "idle"}
 	}
-	return map[string]string{"id": upgrade.activeID, "phase": "running"}
+	phase := upgrade.activePhase
+	if phase == "" {
+		phase = "running"
+	}
+	return MachineUpgradeStatus{
+		ID: upgrade.activeID, Phase: phase, Message: upgrade.activeMessage,
+		TargetVersion: upgrade.targetVersion, Phases: append([]string(nil), upgrade.activePhases...),
+	}
+}
+
+func (upgrade *hostMachineUpgrade) recordProgress(operationID, phase, message string) {
+	upgrade.mu.Lock()
+	defer upgrade.mu.Unlock()
+	if upgrade.activeID != operationID {
+		return
+	}
+	upgrade.activePhase = phase
+	upgrade.activeMessage = message
+	if len(upgrade.activePhases) == 0 || upgrade.activePhases[len(upgrade.activePhases)-1] != phase {
+		upgrade.activePhases = append(upgrade.activePhases, phase)
+	}
+}
+
+func (upgrade *hostMachineUpgrade) recordDone(operationID, newVersion, upgradeError string) {
+	upgrade.mu.Lock()
+	defer upgrade.mu.Unlock()
+	if upgrade.activeID != operationID {
+		return
+	}
+	phase := "done"
+	message := "Upgrade complete"
+	if upgradeError != "" {
+		phase = "failed"
+		message = "Upgrade failed"
+	}
+	upgrade.lastStatus = MachineUpgradeStatus{
+		ID: operationID, Phase: phase, Message: message,
+		TargetVersion: upgrade.targetVersion, NewVersion: newVersion, Error: upgradeError,
+		Phases: append(append([]string(nil), upgrade.activePhases...), phase),
+	}
+	upgrade.activeID = ""
+	upgrade.activePhase = ""
+	upgrade.activeMessage = ""
+	upgrade.activePhases = nil
+	upgrade.activeCancel = nil
 }
 
 func (upgrade *hostMachineUpgrade) cancelActive() error {
@@ -158,32 +227,46 @@ func (upgrade *hostMachineUpgrade) executeServiceUpgrade(identity BindingChildId
 		}
 	}()
 	if err := upgrade.host.PrepareSiblingMachineUpgrade(ctx, identity.WorkspaceID); err != nil {
+		upgrade.recordDone(operationID, "", "prepare_failed")
 		upgrade.emitRunnerEvent(identity, protocol.EventComputerUpgradeDone, protocol.ComputerUpgradeDonePayload{RequestID: command.RequestID, OK: false, Error: "prepare_failed"})
 		return
 	}
-	upgrade.emitRunnerEvent(identity, protocol.EventComputerUpgradeProgress, protocol.ComputerUpgradeProgressPayload{RequestID: command.RequestID, Phase: "staging", Message: "Downloading release"})
 	target, err := resolveMachineUpgradeTarget(command.TargetVersion, string(upgrade.config.identity.releaseChannel()), upgrade.manifestBaseURL)
 	if err != nil {
+		upgrade.recordDone(operationID, "", "target_resolution_failed")
 		upgrade.emitRunnerEvent(identity, protocol.EventComputerUpgradeDone, protocol.ComputerUpgradeDonePayload{RequestID: command.RequestID, OK: false, Error: "target_resolution_failed"})
 		return
 	}
+	upgrade.mu.Lock()
+	if upgrade.activeID == operationID {
+		upgrade.targetVersion = target
+	}
+	upgrade.mu.Unlock()
 	if versionsMatch(upgrade.config.identity.Version, target) {
+		upgrade.recordDone(operationID, upgrade.config.identity.Version, "")
 		upgrade.emitRunnerEvent(identity, protocol.EventComputerUpgradeDone, protocol.ComputerUpgradeDonePayload{RequestID: command.RequestID, OK: true, NewVersion: upgrade.config.identity.Version})
 		return
 	}
+	upgrade.recordProgress(operationID, "staging", "Downloading release")
+	upgrade.emitRunnerEvent(identity, protocol.EventComputerUpgradeProgress, protocol.ComputerUpgradeProgressPayload{RequestID: command.RequestID, Phase: "staging", Message: "Downloading release"})
 	staged, err := upgrade.stageRelease(target, cli.DefaultUpdateDownloadTimeout, upgrade.manifestBaseURL)
 	if err != nil {
+		upgrade.recordDone(operationID, "", "stage_failed")
 		upgrade.emitRunnerEvent(identity, protocol.EventComputerUpgradeDone, protocol.ComputerUpgradeDonePayload{RequestID: command.RequestID, OK: false, Error: "stage_failed"})
 		return
 	}
+	upgrade.recordProgress(operationID, "verifying", "Verifying binary")
 	upgrade.emitRunnerEvent(identity, protocol.EventComputerUpgradeProgress, protocol.ComputerUpgradeProgressPayload{RequestID: command.RequestID, Phase: "verifying", Message: "Verifying binary"})
 	if err := upgrade.verifyBinary(ctx, staged, target); err != nil {
+		upgrade.recordDone(operationID, "", "verification_failed")
 		upgrade.emitRunnerEvent(identity, protocol.EventComputerUpgradeDone, protocol.ComputerUpgradeDonePayload{RequestID: command.RequestID, OK: false, Error: "verification_failed"})
 		return
 	}
+	upgrade.recordProgress(operationID, "applying", "Installing release")
 	upgrade.emitRunnerEvent(identity, protocol.EventComputerUpgradeProgress, protocol.ComputerUpgradeProgressPayload{RequestID: command.RequestID, Phase: "applying", Message: "Applying release"})
 	installPath, err := upgrade.installPath()
 	if err != nil {
+		upgrade.recordDone(operationID, "", "activation_failed")
 		upgrade.emitRunnerEvent(identity, protocol.EventComputerUpgradeDone, protocol.ComputerUpgradeDonePayload{RequestID: command.RequestID, OK: false, Error: "activation_failed"})
 		return
 	}
@@ -196,15 +279,18 @@ func (upgrade *hostMachineUpgrade) executeServiceUpgrade(identity BindingChildId
 		AcceptedManagedSetRevision:  managedSetRevision(managedWorkspaceIDs),
 		Phase:                       MachineUpgradePhaseAccepted,
 	}); err != nil {
+		upgrade.recordDone(operationID, "", "journal_persist_failed")
 		upgrade.emitRunnerEvent(identity, protocol.EventComputerUpgradeDone, protocol.ComputerUpgradeDonePayload{RequestID: command.RequestID, OK: false, Error: "journal_persist_failed"})
 		return
 	}
 	if err := upgrade.swapExecutable(installPath, staged); err != nil {
 		_ = upgrade.removeJournal()
+		upgrade.recordDone(operationID, "", "activation_failed")
 		upgrade.emitRunnerEvent(identity, protocol.EventComputerUpgradeDone, protocol.ComputerUpgradeDonePayload{RequestID: command.RequestID, OK: false, Error: "activation_failed"})
 		return
 	}
 	prepared = true
+	upgrade.recordProgress(operationID, "restarting", "Restarting Computer")
 	upgrade.emitRunnerEvent(identity, protocol.EventComputerUpgradeProgress, protocol.ComputerUpgradeProgressPayload{RequestID: command.RequestID, Phase: "restarting", Message: "Restarting Computer"})
 	upgrade.mu.Lock()
 	upgrade.restartBinary = installPath

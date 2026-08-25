@@ -2,19 +2,40 @@ package handler
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-// Default sources for Period Work Synthesis (J2 / J3). Retrospectives still
-// default to issue + notes when the client omits sources; Brief always wants
-// the three platform Facts channels when the caller does not narrow them.
+// Default sources for Period Work Synthesis (J2 / J3). Notes are never a
+// Brief source — even when the client asks for touched_notes.
+// Retrospectives still default to issue + notes when the client omits sources.
 var notePeriodWorkDefaultSources = []string{
 	noteRetrospectiveSourceIssue,
-	noteRetrospectiveSourceNotes,
 	noteRetrospectiveSourceRuns,
+}
+
+func normalizeNotePeriodBriefSources(requested []string) (enabled []string, skipped []string) {
+	if len(requested) == 0 {
+		requested = append([]string(nil), notePeriodWorkDefaultSources...)
+	}
+	enabled, skipped = normalizeNoteRetrospectiveSources(requested)
+	kept := enabled[:0]
+	droppedNotes := false
+	for _, source := range enabled {
+		if source == noteRetrospectiveSourceNotes {
+			droppedNotes = true
+			continue
+		}
+		kept = append(kept, source)
+	}
+	enabled = kept
+	if droppedNotes && !containsNoteRetrospectiveSource(skipped, noteRetrospectiveSourceNotes) {
+		skipped = append(skipped, noteRetrospectiveSourceNotes)
+	}
+	return enabled, skipped
 }
 
 // noteRetrospectiveFactsBundle is the reusable window Facts pack: same loaders
@@ -141,4 +162,112 @@ func (h *Handler) attachNoteRetrospectiveIssuePullRequests(
 		facts[i].PullRequests = prs
 	}
 	return nil
+}
+
+func (h *Handler) loadNotePeriodBriefFactsBundle(
+	ctx context.Context,
+	workspaceID, userID pgtype.UUID,
+	start, end time.Time,
+	sources []string,
+) (noteRetrospectiveFactsBundle, error) {
+	enabled, skipped := normalizeNotePeriodBriefSources(sources)
+	out := noteRetrospectiveFactsBundle{
+		SourcesUsed:    make([]string, 0),
+		SourcesEmpty:   make([]string, 0),
+		SourcesSkipped: skipped,
+	}
+	for _, source := range enabled {
+		switch source {
+		case noteRetrospectiveSourceIssue:
+			items, err := h.loadNoteRetrospectiveIssueFacts(ctx, workspaceID, userID, start, end)
+			if err != nil {
+				return noteRetrospectiveFactsBundle{}, err
+			}
+			if err := h.attachNoteRetrospectiveIssuePullRequests(ctx, workspaceID, items); err != nil {
+				return noteRetrospectiveFactsBundle{}, err
+			}
+			out.Facts.Issues = items
+			if len(items) == 0 {
+				out.SourcesEmpty = append(out.SourcesEmpty, source)
+			} else {
+				out.SourcesUsed = append(out.SourcesUsed, source)
+			}
+		case noteRetrospectiveSourceRuns:
+			items, err := h.loadNotePeriodBriefRunFacts(ctx, workspaceID, userID, start, end)
+			if err != nil {
+				return noteRetrospectiveFactsBundle{}, err
+			}
+			out.Facts.Runs = items
+			if len(items) == 0 {
+				out.SourcesEmpty = append(out.SourcesEmpty, source)
+			} else {
+				out.SourcesUsed = append(out.SourcesUsed, source)
+			}
+		}
+	}
+	return out, nil
+}
+
+func (h *Handler) loadNotePeriodBriefRunFacts(
+	ctx context.Context,
+	workspaceID, userID pgtype.UUID,
+	start, end time.Time,
+) ([]noteRetrospectiveRunFact, error) {
+	// Filter in SQL so a week of 写汇报 wakes cannot crowd the LIMIT 200
+	// and hide real issue/channel runs.
+	rows, err := h.DB.Query(ctx, `
+SELECT e.id, e.agent_id, COALESCE(a.name, ''), COALESCE(e.reason, ''), COALESCE(e.trigger_summary, ''),
+       COALESCE(e.terminal_outcome, ''), e.status,
+       e.issue_id, i.number, COALESCE(i.title, ''), COALESCE(w.issue_prefix, ''),
+       COALESCE(e.completed_at, e.terminal_at, e.created_at) AS happened_at
+FROM agent_inbox_event e
+JOIN agent a ON a.id = e.agent_id AND a.workspace_id = e.workspace_id
+JOIN workspace w ON w.id = e.workspace_id
+LEFT JOIN issue i ON i.id = e.issue_id AND i.workspace_id = e.workspace_id
+WHERE e.workspace_id = $1
+  AND a.archived_at IS NULL
+  AND (e.initiator_user_id = $2 OR a.owner_id = $2)
+  AND COALESCE(e.completed_at, e.terminal_at, e.created_at) >= $3
+  AND COALESCE(e.completed_at, e.terminal_at, e.created_at) < $4
+  AND e.reason <> 'note_worker'
+  AND lower(a.name) NOT IN ('notes-assistant', 'weekly-report')
+  AND a.name NOT LIKE 'period-collect-%'
+  AND (
+    e.terminal_outcome IS NOT NULL
+    OR e.completed_at IS NOT NULL
+    OR e.status IN ('completed', 'acked', 'failed', 'cancelled', 'suppressed')
+  )
+ORDER BY COALESCE(e.completed_at, e.terminal_at, e.created_at) ASC, e.id ASC
+LIMIT 200`, workspaceID, userID, start, end)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items, err := scanNoteRetrospectiveRunFacts(rows)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]noteRetrospectiveRunFact, 0, len(items))
+	for _, fact := range items {
+		if isPeriodBriefMachineryRun(fact) {
+			continue
+		}
+		out = append(out, fact)
+	}
+	return out, nil
+}
+
+func isPeriodBriefMachineryRun(fact noteRetrospectiveRunFact) bool {
+	if strings.TrimSpace(fact.Reason) == "note_worker" {
+		return true
+	}
+	return isPeriodBriefMachineryAgentName(fact.AgentName)
+}
+
+func isPeriodBriefMachineryAgentName(name string) bool {
+	n := strings.ToLower(strings.TrimSpace(name))
+	if n == notesAssistantAgentName || n == "weekly-report" {
+		return true
+	}
+	return strings.HasPrefix(n, periodBriefCollectorNamePrefix)
 }

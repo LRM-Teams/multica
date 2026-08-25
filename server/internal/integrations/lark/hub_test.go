@@ -452,13 +452,13 @@ func TestHubDoesNotRestartSupervisorOnUnchangedRow(t *testing.T) {
 // tokens, both old and new supervisors of the same Hub used the same
 // hub-wide nodeID as their lease token. The rotation race went:
 //
-//   1. Old supervisor cancelled by maybeRestartOnRotation.
-//   2. New supervisor started; acquireLease takes the lease.
-//   3. Old supervisor finishes post-cancel unwind and calls
-//      releaseLease(nodeID).
-//   4. DB row's CurrentToken still equals nodeID (because new
-//      supervisor wrote the SAME token). DELETE matches → DB row
-//      cleared → new supervisor's lease silently lost.
+//  1. Old supervisor cancelled by maybeRestartOnRotation.
+//  2. New supervisor started; acquireLease takes the lease.
+//  3. Old supervisor finishes post-cancel unwind and calls
+//     releaseLease(nodeID).
+//  4. DB row's CurrentToken still equals nodeID (because new
+//     supervisor wrote the SAME token). DELETE matches → DB row
+//     cleared → new supervisor's lease silently lost.
 //
 // Per-supervisor tokens (nodeID + "-g" + gen) make step 3's
 // CurrentToken belong to the OLD supervisor, and the DB row's actual
@@ -545,10 +545,10 @@ func TestHubRotationStaleReleaseDoesNotClearSuccessorLease(t *testing.T) {
 // rotation race through the live supervise loop — not just the lease
 // state machine in isolation. Drives a hub through:
 //
-//   1. install row with credentials A → supervisor1 acquires lease(A)
-//   2. credentials rotate to B → maybeRestartOnRotation cancels sup1
-//   3. supervisor2 starts, acquires lease(B)
-//   4. sup1's post-cancel releaseLease(A) runs; must NOT clear lease(B)
+//  1. install row with credentials A → supervisor1 acquires lease(A)
+//  2. credentials rotate to B → maybeRestartOnRotation cancels sup1
+//  3. supervisor2 starts, acquires lease(B)
+//  4. sup1's post-cancel releaseLease(A) runs; must NOT clear lease(B)
 //
 // Even with the timing being non-deterministic (real goroutines), the
 // fake's lease map either ends up with sup2's token or empty — empty
@@ -994,12 +994,12 @@ func waitFor(timeout time.Duration, cond func() bool) bool {
 // invariant: a Reply that exceeds ReplyTimeout MUST get its ctx
 // cancelled instead of running unbounded.
 type slowReplier struct {
-	delay       time.Duration
-	startCh     chan struct{}
-	finishCh    chan struct{}
-	mu          sync.Mutex
-	callCount   int
-	lastCtxErr  error // ctx.Err() observed when Reply returned
+	delay      time.Duration
+	startCh    chan struct{}
+	finishCh   chan struct{}
+	mu         sync.Mutex
+	callCount  int
+	lastCtxErr error // ctx.Err() observed when Reply returned
 }
 
 func newSlowReplier(delay time.Duration) *slowReplier {

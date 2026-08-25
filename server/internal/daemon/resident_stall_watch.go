@@ -21,9 +21,9 @@ const residentStallSettleGrace = 5 * time.Second
 // in what they do about it: this one suppresses on a confirmed-alive process
 // and only ever force-invalidates a confirmed-dead one; the queued-message
 // path never checks liveness at all.
-func (p *canonicalAgentRuntimePool) startResidentStallWatchdog(
+func (p *agentRuntimePool) startResidentStallWatchdog(
 	agentID, runtimeID string,
-	slot *canonicalAgentRuntimeSlot,
+	slot *agentRuntimeSlot,
 	turnDone <-chan struct{},
 ) {
 	if p == nil || p.residentStallWatchdog <= 0 || slot == nil {

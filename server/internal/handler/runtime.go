@@ -1139,13 +1139,6 @@ func canOwnRuntime(member db.Member, rt db.AgentRuntime, rtOwnerID pgtype.UUID) 
 	return rtOwnerID.Valid && uuidToString(rtOwnerID) == uuidToString(member.UserID)
 }
 
-// canManageMachineUpgrade is Computer-owner-only. A Workspace role grants
-// authority over that Workspace, not over another person's machine-wide
-// Computer lifecycle.
-func canManageMachineUpgrade(member db.Member, rt db.AgentRuntime, rtOwnerID pgtype.UUID) bool {
-	return canOwnRuntime(member, rt, rtOwnerID)
-}
-
 // canUseRuntimeForAgent reports whether a workspace member is allowed to
 // bind a new agent to — or move an existing agent onto — the given runtime.
 // Mirrors canEditRuntime but layers on the runtime's visibility flag so a

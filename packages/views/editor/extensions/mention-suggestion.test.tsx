@@ -187,7 +187,7 @@ describe("createMentionSuggestion", () => {
     }));
   });
 
-  it("renders broadcast as a top row and keeps members and agents in one section", () => {
+  it("drops @all and keeps members and agents in one section", () => {
     render(
       <I18nWrapper>
         <MentionList
@@ -202,13 +202,13 @@ describe("createMentionSuggestion", () => {
       </I18nWrapper>,
     );
 
-    expect(screen.getByText("All members")).toBeInTheDocument();
-    expect(screen.getByText("Notify everyone in this conversation")).toBeInTheDocument();
     expect(screen.getByText("Members")).toBeInTheDocument();
     expect(screen.getByText("Alice")).toBeInTheDocument();
     expect(screen.getByText("Aegis")).toBeInTheDocument();
     expect(screen.queryByText("All")).not.toBeInTheDocument();
     expect(screen.queryByText("Users")).not.toBeInTheDocument();
+    expect(screen.queryByText("All members")).not.toBeInTheDocument();
+    expect(screen.queryByText("Notify everyone in this conversation")).not.toBeInTheDocument();
   });
 
   it("keeps the display label when selecting an actor with a duplicate display name", () => {
@@ -226,8 +226,17 @@ describe("createMentionSuggestion", () => {
       </I18nWrapper>,
     );
 
-    expect(screen.getByText("@wendy")).toBeInTheDocument();
-    fireEvent.click(screen.getByText("@wendy_2").closest("button")!);
+    // The <mark> highlight for query="wendy" splits "@wendy"/"@wendy_2" into
+    // multiple text nodes, so match on the handle span's full textContent
+    // instead of a single text node.
+    const handles = Array.from(document.querySelectorAll("span.font-mono")).map(
+      (el) => el.textContent,
+    );
+    expect(handles).toEqual(["@wendy", "@wendy_2"]);
+    const secondRow = Array.from(document.querySelectorAll("button")).find(
+      (button) => button.textContent === "Wendy@wendy_2",
+    );
+    fireEvent.click(secondRow!);
     expect(command).toHaveBeenCalledWith(expect.objectContaining({
       id: "a-wendy-2",
       label: "Wendy",

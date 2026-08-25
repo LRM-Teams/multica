@@ -57,7 +57,14 @@ func TestRonaldoV6DirectorProtocolRequiresParallelChineseResearch(t *testing.T) 
 		"所有自然语言输出",
 		"多个独立方向",
 		"同一 proposal",
+		"payload_schema_id 绝不能使用 no_op.v1",
+		"payload.task_specific_schema",
+		"纠正并重新提交被拒绝的 Work 分配",
 		"不得叙述合同查找",
+		"不得自行暂停整场调研",
+		"失败分类和诊断",
+		"待回答问题",
+		"不得在存在高价值待回答问题",
 	} {
 		if !strings.Contains(RonaldoV6DirectorSystemProtocol, want) {
 			t.Fatalf("director protocol missing %q", want)
@@ -189,6 +196,54 @@ func TestAtomicV6WorkManifestGetsOneBackingTaskAndFrozenMission(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("backing task count=%d want=1", count)
+	}
+}
+
+func TestV6BackingTaskMirrorsWorkItemLifecycle(t *testing.T) {
+	run := newTransactionRecoveryRun(t, "Mirror atomic V6 Work lifecycle")
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_session SET orchestrator_version='research-run-v6' WHERE id=$1::uuid`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	_, workItemID := seedV6RecoveryWorkItem(t, run, "ready", time.Now().Add(time.Minute))
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_work_item SET expected_result_schema_id='atomic_result_submission',payload_schema_id='research.finding.v1' WHERE id=$1::uuid`, workItemID); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := run.pool.Begin(run.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskID, err := ensureV6BackingTaskTx(run.ctx, tx, workItemID)
+	if err != nil {
+		_ = tx.Rollback(run.ctx)
+		t.Fatal(err)
+	}
+	if err = tx.Commit(run.ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, transition := range []struct {
+		workStatus string
+		taskStatus string
+	}{
+		{workStatus: "ready", taskStatus: "ready"},
+		{workStatus: "dispatching", taskStatus: "dispatching"},
+		{workStatus: "running", taskStatus: "running"},
+		{workStatus: "cancelled", taskStatus: "cancelled"},
+		{workStatus: "ready", taskStatus: "ready"},
+		{workStatus: "dispatching", taskStatus: "dispatching"},
+		{workStatus: "running", taskStatus: "running"},
+		{workStatus: "succeeded", taskStatus: "succeeded"},
+	} {
+		if _, err = run.pool.Exec(run.ctx, `UPDATE research_work_item SET status=$2,updated_at=now() WHERE id=$1::uuid`, workItemID, transition.workStatus); err != nil {
+			t.Fatalf("set Work Item status %q: %v", transition.workStatus, err)
+		}
+		var got string
+		if err = run.pool.QueryRow(run.ctx, `SELECT status FROM research_task WHERE id=$1::uuid`, taskID).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got != transition.taskStatus {
+			t.Fatalf("Work Item status %q projected Task status %q, want %q", transition.workStatus, got, transition.taskStatus)
+		}
 	}
 }
 

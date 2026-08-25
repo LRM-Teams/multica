@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 type Engine struct {
@@ -65,6 +66,13 @@ func (e *Engine) ProjectionV6WorkActivity(ctx context.Context, workspaceID, runI
 		return V6WorkActivity{}, ErrV6DirectorUnavailable
 	}
 	return e.store.ProjectionV6WorkActivity(ctx, workspaceID, runID, workItemID)
+}
+
+func (e *Engine) RecordV6WorkActivity(ctx context.Context, workspaceID, inboxTaskID string, messages []protocol.TaskMessagePayload) error {
+	if e == nil || e.store == nil {
+		return ErrV6DirectorUnavailable
+	}
+	return e.store.RecordV6WorkActivity(ctx, workspaceID, inboxTaskID, messages)
 }
 
 func NewEngineWithReportStorage(store *PostgresStore, dispatcher Dispatcher, projector Projector, reportStorage ReportPackageStorage) ResearchRun {

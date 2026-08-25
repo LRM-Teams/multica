@@ -58,9 +58,9 @@ func ResolveAvatarURL(publicBase, avatarURL, attachmentURL string) string {
 }
 
 type StepResult struct {
-	Name      string
+	Name       string
 	Candidates int64
-	Updated   int64
+	Updated    int64
 }
 
 type Result struct {
@@ -99,7 +99,7 @@ func steps(publicBase string) []step {
 			`,
 		},
 		{
-			name: "agent rewrite",
+			name:  "agent rewrite",
 			count: `SELECT count(*) FROM agent WHERE avatar_url LIKE '/uploads/workspaces/%'`,
 			exec: fmt.Sprintf(`
 				UPDATE agent
@@ -108,7 +108,7 @@ func steps(publicBase string) []step {
 			`, base),
 		},
 		{
-			name: "user rewrite",
+			name:  "user rewrite",
 			count: `SELECT count(*) FROM "user" WHERE avatar_url LIKE '/uploads/workspaces/%'`,
 			exec: fmt.Sprintf(`
 				UPDATE "user"
@@ -117,7 +117,7 @@ func steps(publicBase string) []step {
 			`, base),
 		},
 		{
-			name: "workspace rewrite",
+			name:  "workspace rewrite",
 			count: `SELECT count(*) FROM workspace WHERE avatar_url LIKE '/uploads/workspaces/%'`,
 			exec: fmt.Sprintf(`
 				UPDATE workspace
@@ -126,7 +126,7 @@ func steps(publicBase string) []step {
 			`, base),
 		},
 		{
-			name: "channel rewrite",
+			name:  "channel rewrite",
 			count: `SELECT count(*) FROM channel WHERE avatar_url LIKE '/uploads/workspaces/%'`,
 			exec: fmt.Sprintf(`
 				UPDATE channel

@@ -251,6 +251,27 @@ func (h *Handler) leaseAgentInboxConversationBatchForRuntime(ctx context.Context
 			WHERE COALESCE(event.runtime_id, session.runtime_id) = $1
 			  AND session.status = 'active'
 			  AND event.status IN ('pending', 'failed')
+			  AND (
+			    event.issue_run_kind IS NULL
+			    OR EXISTS (
+			      SELECT 1
+			      FROM active_issue_execution claim
+			      JOIN issue issue_row
+			        ON issue_row.workspace_id = claim.workspace_id
+			       AND issue_row.id = claim.issue_id
+			       AND issue_row.execution_revision = claim.issue_execution_revision
+			       AND issue_row.status IN ('todo', 'in_progress')
+			       AND issue_row.assignee_type = 'agent'
+			       AND issue_row.assignee_id = claim.agent_id
+			      WHERE claim.workspace_id = event.workspace_id
+			        AND claim.issue_id = event.issue_id
+			        AND claim.run_id = event.id
+			        AND claim.agent_id = event.agent_id
+			        AND claim.issue_execution_revision = event.issue_execution_revision
+			        AND claim.attempt_number = event.issue_execution_attempt_number
+			        AND claim.status = 'active'
+			    )
+			  )
 			  AND NOT (
 			    btrim(COALESCE(agent_row.provider_block_detail, '')) <> ''
 			    AND lower(btrim(agent_row.provider_block_detail)) NOT IN ('{}', '[]', 'null', 'undefined', '""')
@@ -360,6 +381,27 @@ func (h *Handler) leaseAgentInboxConversationBatchForRuntime(ctx context.Context
 			  AND COALESCE(event.runtime_id, session.runtime_id) = $3
 			  AND session.status = 'active'
 			  AND event.status IN ('pending', 'failed')
+			  AND (
+			    event.issue_run_kind IS NULL
+			    OR EXISTS (
+			      SELECT 1
+			      FROM active_issue_execution claim
+			      JOIN issue issue_row
+			        ON issue_row.workspace_id = claim.workspace_id
+			       AND issue_row.id = claim.issue_id
+			       AND issue_row.execution_revision = claim.issue_execution_revision
+			       AND issue_row.status IN ('todo', 'in_progress')
+			       AND issue_row.assignee_type = 'agent'
+			       AND issue_row.assignee_id = claim.agent_id
+			      WHERE claim.workspace_id = event.workspace_id
+			        AND claim.issue_id = event.issue_id
+			        AND claim.run_id = event.id
+			        AND claim.agent_id = event.agent_id
+			        AND claim.issue_execution_revision = event.issue_execution_revision
+			        AND claim.attempt_number = event.issue_execution_attempt_number
+			        AND claim.status = 'active'
+			    )
+			  )
 			  AND NOT EXISTS (
 			    SELECT 1
 			    FROM agent_inbox_event blocking_event

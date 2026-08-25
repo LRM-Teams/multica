@@ -960,8 +960,8 @@ func TestHTTPClient_GetBotInfo_HappyPath(t *testing.T) {
 			"code": 0,
 			"msg":  "ok",
 			"bot": map[string]any{
-				"open_id":   "ou_bot_42",
-				"app_name":  "PersonalAgent",
+				"open_id":    "ou_bot_42",
+				"app_name":   "PersonalAgent",
 				"avatar_url": "https://example/avatar.png",
 			},
 		})

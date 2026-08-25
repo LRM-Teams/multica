@@ -144,14 +144,15 @@ describe("VoiceTranscriptResponseSchema", () => {
 });
 
 describe("RunnerActivityResponseSchema", () => {
-  it("preserves unknown server presentation values without creating a client semantic branch", () => {
+  it("preserves unknown lifecycle facts and bounded text", () => {
     const parsed = RunnerActivityResponseSchema.parse({
-      summary: { label: "Future state", tone: "future-tone", visibility: "visible" },
+      summary: { label: "Future state", activityKind: "future", detailKind: "future_detail" },
       timeline: [{
         id: "row-1",
         occurred_at: "2026-08-06T00:00:00Z",
         title: "Future row",
-        tone: "future-tone",
+        activity_kind: "future",
+        detail_kind: "future_detail",
         body_kind: "future-body",
       }],
     });
@@ -166,12 +167,12 @@ describe("RunnerActivitySummariesResponseSchema", () => {
     expect(RunnerActivitySummariesResponseSchema.parse({
       items: [{
         agent_id: "agent-1",
-        summary: { label: "Online", tone: "success", visibility: "visible" },
+        summary: { label: "Online", activityKind: "online", detailKind: "idle" },
       }],
     })).toEqual({
       items: [{
         agent_id: "agent-1",
-        summary: { label: "Online", tone: "success", visibility: "visible" },
+        summary: { label: "Online", activityKind: "online", detailKind: "idle" },
       }],
     });
 

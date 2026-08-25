@@ -202,8 +202,8 @@ func TestDiagnoseReportsRunnerOwnedByTheLiveResident(t *testing.T) {
 		return map[string]any{"status": "running", "connected": true, "pid": float64(pid)}
 	}
 	d := lc.Diagnose()
-	if len(d.Runners) != 1 || !d.Runners[0].Alive || !d.Runners[0].Owned || d.Runners[0].WorkspaceID != "workspace-a" || d.Runners[0].PID != pid {
-		t.Fatalf("doctor runners = %+v, want one owned live runner", d.Runners)
+	if len(d.WorkspaceDaemons) != 1 || !d.WorkspaceDaemons[0].Alive || !d.WorkspaceDaemons[0].Owned || d.WorkspaceDaemons[0].WorkspaceID != "workspace-a" || d.WorkspaceDaemons[0].PID != pid {
+		t.Fatalf("doctor WorkspaceDaemons = %+v, want one owned live process", d.WorkspaceDaemons)
 	}
 	if len(d.UnownedLive) != 0 {
 		t.Fatalf("doctor reported an owned runner as unowned: %+v", d.UnownedLive)
@@ -226,8 +226,8 @@ func TestDiagnoseReportsUnownedLiveRunnerAsDegraded(t *testing.T) {
 		return map[string]any{"status": "running", "connected": true, "pid": float64(os.Getpid() + 1)}
 	}
 	d := lc.Diagnose()
-	if len(d.Runners) != 1 || !d.Runners[0].Alive || d.Runners[0].Owned {
-		t.Fatalf("doctor runners = %+v, want one alive, unowned runner", d.Runners)
+	if len(d.WorkspaceDaemons) != 1 || !d.WorkspaceDaemons[0].Alive || d.WorkspaceDaemons[0].Owned {
+		t.Fatalf("doctor WorkspaceDaemons = %+v, want one alive, unowned process", d.WorkspaceDaemons)
 	}
 	if len(d.UnownedLive) != 1 || d.UnownedLive[0].WorkspaceID != "workspace-a" || d.UnownedLive[0].PID != pid {
 		t.Fatalf("doctor UnownedLive = %+v, want the alive unowned runner", d.UnownedLive)
@@ -247,8 +247,8 @@ func TestDiagnoseReportsDeadRunnerAsNotAliveOrOwned(t *testing.T) {
 		return map[string]any{"status": "running", "connected": true, "pid": float64(os.Getpid())}
 	}
 	d := lc.Diagnose()
-	if len(d.Runners) != 1 || d.Runners[0].Alive || d.Runners[0].Owned {
-		t.Fatalf("doctor runners = %+v, want the dead runner reported as neither alive nor owned", d.Runners)
+	if len(d.WorkspaceDaemons) != 1 || d.WorkspaceDaemons[0].Alive || d.WorkspaceDaemons[0].Owned {
+		t.Fatalf("doctor WorkspaceDaemons = %+v, want the dead process reported as neither alive nor owned", d.WorkspaceDaemons)
 	}
 	if len(d.UnownedLive) != 0 {
 		t.Fatalf("doctor flagged a dead runner as unowned-live: %+v", d.UnownedLive)
@@ -285,7 +285,7 @@ func TestFixRemovesStaleResidentPIDOnlyWhenResidentIsStopped(t *testing.T) {
 }
 
 // TestReclaimOrphanedRunnersTerminatesDeadOwnerRunner covers the doctor --fix
-// escape hatch: a Workspace Runner whose owning Host is gone is the
+// escape hatch: a WorkspaceDaemon whose owning Computer is gone is the
 // self-locking state that previously required a manual kill, so Fix must be
 // able to clear it.
 func TestReclaimOrphanedRunnersTerminatesDeadOwnerRunner(t *testing.T) {
@@ -299,7 +299,7 @@ func TestReclaimOrphanedRunnersTerminatesDeadOwnerRunner(t *testing.T) {
 	if len(applied) != 1 {
 		t.Fatalf("expected one reported mutation, got %v", applied)
 	}
-	if !strings.Contains(applied[0], "terminated orphaned Workspace Runner") {
+	if !strings.Contains(applied[0], "terminated orphaned WorkspaceDaemon") {
 		t.Fatalf("unexpected report: %q", applied[0])
 	}
 	deadline := time.Now().Add(2 * time.Second)
@@ -317,9 +317,9 @@ func TestReclaimOrphanedRunnersTerminatesDeadOwnerRunner(t *testing.T) {
 	}
 }
 
-// TestReclaimOrphanedRunnersLeavesLiveOwnerAlone is the safety fence: a Runner
-// whose recorded owner is still alive belongs to a running Host and must never
-// be signaled by doctor --fix.
+// TestReclaimOrphanedRunnersLeavesLiveOwnerAlone is the safety fence: a
+// WorkspaceDaemon whose recorded owner is still alive belongs to a running
+// Computer and must never be signaled by doctor --fix.
 func TestReclaimOrphanedRunnersLeavesLiveOwnerAlone(t *testing.T) {
 	root := t.TempDir()
 	runner := spawnReclaimTestProcess(t, "sleep", "30")

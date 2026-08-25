@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type submitNotePeriodBriefPackRequest struct {
@@ -54,7 +56,7 @@ func (h *Handler) SubmitAgentNotePeriodBriefPack(w http.ResponseWriter, r *http.
 		return
 	}
 
-	_, idx, found := findCollectorRef(run.Collectors, uuidToString(agentUUID))
+	ref, _, found := findCollectorRef(run.Collectors, uuidToString(agentUUID))
 	if !found {
 		writeError(w, http.StatusForbidden, "only a collector on this Period Brief run may submit a pack")
 		return
@@ -73,13 +75,24 @@ func (h *Handler) SubmitAgentNotePeriodBriefPack(w http.ResponseWriter, r *http.
 		return
 	}
 
-	refs := append([]notePeriodBriefCollectorRef(nil), run.Collectors...)
-	refs[idx].PackMarkdown = markdown
+	callerJobID := h.lookupNoteWorkerJobIDByTask(r.Context(), workspaceUUID, firstNonEmpty(principal.InboxEventID, principal.TaskID))
+	if callerJobID != "" && strings.TrimSpace(ref.JobID) != "" && callerJobID != ref.JobID {
+		writeError(w, http.StatusConflict, "stale collector job; this run already retried")
+		return
+	}
+	packJobID := callerJobID
+	if packJobID == "" {
+		packJobID = strings.TrimSpace(ref.JobID)
+	}
+
 	status := run.Status
 	if status == "" {
 		status = "collecting"
 	}
-	if err := h.updateNotePeriodBriefRunCollectors(r.Context(), run.ID, refs, status); err != nil {
+	if err := h.mergeNotePeriodBriefCollector(r.Context(), run.ID, uuidToString(agentUUID), map[string]any{
+		"pack_markdown": markdown,
+		"pack_job_id":   packJobID,
+	}, status); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to store collector pack")
 		return
 	}
@@ -95,6 +108,25 @@ func (h *Handler) SubmitAgentNotePeriodBriefPack(w http.ResponseWriter, r *http.
 		Bytes:       len(markdown),
 		Message:     "Collector pack stored on the Period Brief run. Do not --note-write this pack into Notes.",
 	})
+}
+
+func (h *Handler) lookupNoteWorkerJobIDByTask(ctx context.Context, workspaceID pgtype.UUID, taskID string) string {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return ""
+	}
+	id, ok := parseUUIDQuiet(taskID)
+	if !ok {
+		return ""
+	}
+	var jobID string
+	if err := h.DB.QueryRow(ctx, `
+SELECT id::text FROM note_worker_job
+WHERE workspace_id = $1 AND task_id = $2
+LIMIT 1`, workspaceID, id).Scan(&jobID); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(jobID)
 }
 
 func readPeriodBriefPackMarkdown(w http.ResponseWriter, r *http.Request) (string, bool) {

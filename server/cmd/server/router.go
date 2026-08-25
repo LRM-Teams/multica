@@ -34,6 +34,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/util"
 	"github.com/multica-ai/multica/server/internal/util/secretbox"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 var defaultOrigins = []string{
@@ -429,10 +430,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		h.HandleDaemonReminderFireRequest,
 	)
 	daemonHub.SetAgentDeliveryAckHandler(h.HandleAgentDeliveryAck)
-	// The current fenced Workspace Runner owns Attachment, launch, Message, and
+	// The current fenced WorkspaceDaemon owns Attachment, process, Message, and
 	// typed Activity intake for one daemon/workspace pair.
-	daemonHub.SetWorkspaceRunnerHandler(h.HandleWorkspaceRunnerFrame)
-	daemonHub.SetWorkspaceRunnerDisconnectHandler(h.HandleWorkspaceRunnerDisconnect)
+	daemonHub.SetWorkspaceDaemonHandler(h.HandleWorkspaceDaemonFrame)
+	daemonHub.SetWorkspaceDaemonDisconnectHandler(h.HandleWorkspaceDaemonDisconnect)
 	health := newServerHealth(pool)
 
 	r := chi.NewRouter()
@@ -555,6 +556,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	r.Post(voiceCallLLMPath, h.HandleVoiceCallLLM)
 
 	// Daemon API routes (require daemon token or valid user token)
+	r.With(middleware.DaemonAuth(queries, patCache, daemonTokenCache, cloudPATVerifier)).Get(protocol.DaemonConnectPath, h.DaemonWebSocket)
+	r.With(middleware.DaemonAuth(queries, patCache, daemonTokenCache, cloudPATVerifier)).Get(protocol.WorkspaceDaemonConnectPath, h.WorkspaceDaemonWebSocket)
 	r.Route("/api/daemon", func(r chi.Router) {
 		r.Use(middleware.DaemonAuth(queries, patCache, daemonTokenCache, cloudPATVerifier))
 
@@ -564,7 +567,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		// TODO(computer-liveness): Remove after v0.4.24-alpha.55 is no
 		// longer a supported direct self-upgrade source.
 		r.Post("/computer/heartbeat", h.ComputerHeartbeat)
-		r.Get("/connect", h.DaemonWebSocket)
 		// TODO(computer-liveness): Remove after v0.4.24-alpha.55 is no
 		// longer a supported direct self-upgrade source.
 		r.Get("/ws", h.DaemonWebSocket)
@@ -897,6 +899,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/", h.ListNotePages)
 					r.Post("/", h.CreateNotePage)
 					r.Get("/trash", h.ListDeletedNotePages)
+					r.Delete("/trash", h.EmptyNoteTrash)
 					r.Route("/{id}", func(r chi.Router) {
 						r.Get("/", h.GetNotePage)
 						r.Patch("/", h.UpdateNotePage)
@@ -972,6 +975,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Put("/metadata/{key}", h.SetIssueMetadataKey)
 					r.Delete("/metadata/{key}", h.DeleteIssueMetadataKey)
 					r.Get("/pull-requests", h.ListPullRequestsForIssue)
+					r.Post("/pull-requests/rescan", h.RescanIssuePullRequest)
+					r.Get("/completion-reports", h.ListIssueCompletionReports)
+					r.Post("/completion-reviews", h.ReviewIssueCompletion)
 				})
 			})
 
@@ -1187,7 +1193,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/health", h.GetAgentHealth)
 					r.Get("/reset", h.GetAgentRestart)
 					r.Post("/reset", h.ResetAgent)
-					// Workspace Runner Activity is the only public Agent Activity
+					// WorkspaceDaemon Activity is the only public Agent Activity
 					// contract. It is a server-owned presentation read model; there is
 					// no compatibility translation from the removed event timeline.
 					r.Get("/runner-activity", h.GetRunnerActivity)
@@ -1489,6 +1495,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Get("/issues/{id}/task-runs", h.ListAgentIssueTaskRuns)
 				r.Get("/issues/{id}/pull-requests", h.ListAgentIssuePullRequests)
 				r.Get("/issues/{id}/attachments", h.ListAgentIssueAttachments)
+				r.Post("/issues/{id}/completion", h.SubmitAgentIssueCompletion)
+				r.Get("/issues/{id}/completion-reports", h.ListAgentIssueCompletionReports)
+				r.Post("/issues/{id}/completion-reviews", h.ReviewAgentIssueCompletion)
 				r.Post("/issues/{id}/rerun", h.RerunAgentIssue)
 				r.Put("/issues/{id}/channel", h.SetAgentIssueSourceChannel)
 				r.Get("/tasks/{taskId}/messages", h.ListAgentTaskMessages)

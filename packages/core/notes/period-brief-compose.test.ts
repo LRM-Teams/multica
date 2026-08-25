@@ -106,13 +106,17 @@ describe("looksLikePeriodBriefRequest", () => {
     expect(looksLikePeriodBriefRequest("帮我写汇报")).toBe(true);
     expect(looksLikePeriodBriefRequest("整理一份周报")).toBe(true);
     expect(looksLikePeriodBriefRequest("period brief for this week")).toBe(true);
+    expect(looksLikePeriodBriefRequest("Write report")).toBe(true);
+    expect(looksLikePeriodBriefRequest("Report")).toBe(true);
     expect(looksLikePeriodBriefRequest("这段笔记的标题怎么改")).toBe(false);
+    expect(looksLikePeriodBriefRequest("I want to report a bug")).toBe(false);
   });
 });
 
 describe("periodBriefRunLocksComposer", () => {
-  it("locks the bubble while collectors or synthesis are running", () => {
+  it("unlocks once the insert card is posted, even if the human never inserts", () => {
     expect(periodBriefRunLocksComposer("collecting")).toBe(true);
+    expect(periodBriefRunLocksComposer("synthesizing")).toBe(true);
     expect(periodBriefRunLocksComposer("awaiting_confirm")).toBe(false);
     expect(periodBriefRunLocksComposer("done")).toBe(false);
   });

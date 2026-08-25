@@ -2,9 +2,10 @@ import { test, expect } from "@playwright/test";
 import pg from "pg";
 import { TestApiClient } from "./fixtures";
 
-// Minimal V6 closed loop: bootstrap a Director-led run over the public API,
-// read the Director projection snapshot, then delete the run while it owns
-// integration rows (the cascade added in migration 437).
+// V6 HTTP lifecycle contract: bootstrap a Director-led run over the public
+// API, read the Director projection snapshot, then archive it while retaining
+// canonical research facts. Agent execution is covered separately because it
+// requires a real daemon/provider rather than a synthetic online DB row.
 
 const API_BASE =
   process.env.NEXT_PUBLIC_API_URL ||
@@ -64,7 +65,8 @@ test.beforeAll(async () => {
        visibility, device_info, metadata, last_seen_at
      )
      VALUES ($1, NULL, $2, 'cloud', 'e2e_v6_runtime', 'online',
-             'public', 'E2E V6 runtime', '{}'::jsonb, now())
+             'public', 'E2E V6 runtime',
+             '{"capabilities":["research_run_v6_v1"]}'::jsonb, now())
      RETURNING id`,
     [workspaceId, `e2e v6 runtime ${Date.now()}`],
   );
@@ -80,7 +82,7 @@ test.beforeAll(async () => {
   directorAgentId = director.rows[0].id as string;
 });
 
-test.describe.serial("research V6 closed loop — create, snapshot, delete", () => {
+test.describe.serial("research V6 HTTP lifecycle — create, snapshot, archive", () => {
   let runId = "";
 
   test("bootstrap a V6 run with an explicit Director", async () => {
@@ -117,23 +119,17 @@ test.describe.serial("research V6 closed loop — create, snapshot, delete", () 
       run_id: string;
       projection_hash: string;
       slice_key: string;
-      nodes: Array<{ id: string; entity_kind?: string; node_subtype?: string }>;
+      nodes: Array<{ id: string; kind: string }>;
     };
     expect(snapshot.contract_kind).toBe("projection_snapshot");
     expect(snapshot.run_id).toBe(runId);
     expect(snapshot.projection_hash).toMatch(/^sha256:[0-9a-f]{64}$/);
     expect(snapshot.slice_key).toBeTruthy();
     // A freshly bootstrapped run must already project its goal node.
-    expect(
-      snapshot.nodes.some(
-        (node) => node.entity_kind === "goal" || node.node_subtype === "goal",
-      ),
-    ).toBe(true);
+    expect(snapshot.nodes.some((node) => node.kind === "goal")).toBe(true);
   });
 
-  test("delete removes the run even with integration rows attached", async () => {
-    // Simulate a run whose Director already integrated results: these rows
-    // blocked deletion with an FK violation before migration 437.
+  test("delete archives the run and retains canonical integration facts", async () => {
     const round = await dbQuery(
       `INSERT INTO research_integration_round (
          workspace_id, session_id, trigger_kind, input_event_sequence,
@@ -158,14 +154,16 @@ test.describe.serial("research V6 closed loop — create, snapshot, delete", () 
     expect(res.status, await res.clone().text()).toBe(204);
 
     const session = await dbQuery(
-      `SELECT count(*)::int AS n FROM research_session WHERE id = $1`,
-      [runId],
+      `SELECT status
+       FROM research_session WHERE id = $1 AND workspace_id = $2`,
+      [runId, workspaceId],
     );
-    expect(session.rows[0].n).toBe(0);
+    expect(session.rows[0]?.status).toBe("archived");
     const rounds = await dbQuery(
-      `SELECT count(*)::int AS n FROM research_integration_round WHERE session_id = $1`,
-      [runId],
+      `SELECT count(*)::int AS n FROM research_integration_round
+       WHERE session_id = $1 AND workspace_id = $2`,
+      [runId, workspaceId],
     );
-    expect(rounds.rows[0].n).toBe(0);
+    expect(rounds.rows[0].n).toBe(1);
   });
 });

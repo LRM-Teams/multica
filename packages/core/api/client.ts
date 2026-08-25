@@ -1124,6 +1124,10 @@ export class ApiClient {
     await this.fetch(`/api/notes/pages/${encodeURIComponent(id)}/permanent`, { method: "DELETE" });
   }
 
+  async emptyNoteTrash(): Promise<void> {
+    await this.fetch("/api/notes/pages/trash", { method: "DELETE" });
+  }
+
   async restoreNotePage(id: string): Promise<NotePage> {
     const raw = await this.fetch<unknown>(`/api/notes/pages/${encodeURIComponent(id)}/restore`, { method: "POST" });
     return parseWithFallback(raw, NotePageSchema, EMPTY_NOTE_PAGE, {
@@ -5152,6 +5156,7 @@ export class ApiClient {
     });
   }
 
+  /** Posts one user message to the selected Research Director. */
   async postResearchMessage(
     id: string,
     data: import("../types/research").PostResearchMessageRequest,
@@ -5161,6 +5166,7 @@ export class ApiClient {
       method: "POST",
       body: JSON.stringify({
         body: data.body,
+        client_request_id: data.clientRequestId,
         target_agent_id: data.targetAgentId,
         selected_research_refs: data.selectedResearchRefs?.map((reference) => ({
           stable_id: reference.stableId,

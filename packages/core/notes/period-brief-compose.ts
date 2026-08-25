@@ -5,7 +5,7 @@
 
 /** Same intent as Go `looksLikePeriodBriefRequest` — keep the two in lockstep. */
 const PERIOD_BRIEF_INTENT_RE =
-  /((写|整理|做|生成|帮我).{0,12}(汇报|周报)|period\s*work\s*brief|period\s*brief|weekly\s*report)/i;
+  /((写|整理|做|生成|帮我).{0,12}(汇报|周报)|period\s*work\s*brief|period\s*brief|weekly\s*report|write\s+(a\s+)?(period\s+work\s+)?reports?|^(report|reports)$)/i;
 
 export function looksLikePeriodBriefRequest(text: string): boolean {
   return PERIOD_BRIEF_INTENT_RE.test(text.trim());

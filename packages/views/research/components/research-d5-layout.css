@@ -465,99 +465,18 @@
 .research-agent-inspector {
   position: absolute;
   right: var(--d5-inspector-right);
-  top: 118px;
+  top: 7.5rem;
   z-index: 55;
-  width: 310px;
-  border: 1px solid color-mix(in oklab, var(--primary) 35%, var(--border));
-  border-radius: 17px;
+  width: min(24rem, calc(100% - 2rem));
+  max-height: calc(100% - 8.5rem);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
   background: var(--card);
   color: var(--foreground);
-  box-shadow: 0 24px 70px color-mix(in oklab, var(--foreground) 24%, transparent);
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
   display: none;
 }
 .research-agent-inspector.open {
   display: block;
-}
-.research-agent-inspector-mobile {
-  position: fixed;
-  inset: auto 12px 96px 12px;
-  top: auto;
-  right: auto;
-  width: auto;
-}
-.research-agent-inspector-content .agent-head {
-  position: relative;
-  padding: 15px;
-  border-bottom: 1px solid var(--border);
-  background: linear-gradient(135deg, var(--accent), var(--secondary));
-}
-.research-agent-inspector-content .who {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.research-agent-inspector-content .agent-close {
-  position: absolute;
-  right: 11px;
-  top: 11px;
-  border: 0;
-  background: transparent;
-  color: var(--muted-foreground);
-  cursor: pointer;
-}
-.research-agent-inspector-content .agent-body {
-  padding: 14px;
-}
-.research-agent-inspector-content .agent-objective {
-  padding: 11px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--secondary);
-}
-.research-agent-inspector-content .agent-objective small {
-  display: block;
-  color: var(--muted-foreground);
-  font-size: 8px;
-  font-weight: 800;
-  margin-bottom: 4px;
-}
-.research-agent-inspector-content .work-block h4 {
-  margin: 14px 0 7px;
-  color: var(--muted-foreground);
-  font-size: 8px;
-  font-weight: 800;
-  letter-spacing: 0.1em;
-}
-.research-agent-inspector-content .work-item {
-  padding: 7px 7px 7px 20px;
-  border-bottom: 1px solid var(--border);
-  color: color-mix(in oklab, var(--foreground) 78%, var(--muted-foreground));
-  font-size: 9px;
-  line-height: 1.4;
-}
-.research-agent-inspector-content .work-item.done::before,
-.research-agent-inspector-content .work-item.live::before {
-  content: "";
-  position: absolute;
-  left: 4px;
-  margin-top: 4px;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-}
-.research-agent-inspector-content .work-item {
-  position: relative;
-}
-.research-agent-inspector-content .work-item.done::before {
-  background: var(--success);
-}
-.research-agent-inspector-content .work-item.live::before {
-  background: var(--primary);
-}
-.research-agent-inspector-content .agent-foot {
-  display: flex;
-  gap: 6px;
-  padding: 11px 14px;
-  border-top: 1px solid var(--border);
 }

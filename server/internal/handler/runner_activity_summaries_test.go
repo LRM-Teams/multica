@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"reflect"
 	"testing"
 
 	"github.com/google/uuid"
@@ -67,32 +66,29 @@ func TestListRunnerActivitySummariesMatchesPerAgentProjection(t *testing.T) {
 		agentID      string
 		activityKind string
 		detailKind   string
-		factID       string
+		label        string
 	}{
-		{workingAgentID, "working", "running_command", "summary-working-" + uuid.NewString()},
-		{errorAgentID, "error", "runtime_error", "summary-error-" + uuid.NewString()},
+		{workingAgentID, "working", "running_command", "Running command"},
+		{errorAgentID, "error", "runtime_error", "Payment required"},
 	} {
 		if _, err := testPool.Exec(ctx, `
 			INSERT INTO agent_activity_snapshot (
 				workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id,
-				launch_id, client_sequence, producer_fact_id, activity_kind,
-				detail_kind, observed_at
+				activity_kind, detail_kind, summary_label, observed_at
 			) VALUES ($1, $2, $3, 'daemon-summary', 'instance-summary',
-				'launch-summary', 1, $4, $5, $6, now())`,
-			testWorkspaceID, fixture.agentID, handlerTestRuntimeID(t), fixture.factID,
-			fixture.activityKind, fixture.detailKind); err != nil {
+				$4, $5, $6, now())`,
+			testWorkspaceID, fixture.agentID, handlerTestRuntimeID(t),
+			fixture.activityKind, fixture.detailKind, fixture.label); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO agent_activity_entry (
 			workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id,
-			launch_id, client_sequence, producer_fact_id, entry_position,
-			entry_kind, entry_body, observed_at
+			activity_kind, detail_kind, title, subtext, body_kind, body, observed_at
 		) VALUES ($1, $2, $3, 'daemon-summary', 'instance-summary',
-			'launch-summary', 1, $4, 0, 'status',
-			'{"activity":"error","detail":"payment required","detailKind":"runtime_error"}'::jsonb,
-			now())`, testWorkspaceID, errorAgentID, handlerTestRuntimeID(t), "summary-error-entry-"+uuid.NewString()); err != nil {
+			'error', 'runtime_error', 'Runtime error', 'Payment required',
+			'generic', 'payment required', now())`, testWorkspaceID, errorAgentID, handlerTestRuntimeID(t)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -112,10 +108,18 @@ func TestListRunnerActivitySummariesMatchesPerAgentProjection(t *testing.T) {
 	for _, item := range summaries.Items {
 		byAgent[item.AgentID] = item
 	}
-	for _, agentID := range []string{workingAgentID, errorAgentID} {
-		detailReq := newRequestAs(testUserID, http.MethodGet, "/api/agents/"+agentID+"/runner-activity", nil)
+	for _, expected := range []struct {
+		agentID      string
+		activityKind string
+		detailKind   string
+		label        string
+	}{
+		{workingAgentID, "working", "running_command", "Running command"},
+		{errorAgentID, "error", "runtime_error", "Payment required"},
+	} {
+		detailReq := newRequestAs(testUserID, http.MethodGet, "/api/agents/"+expected.agentID+"/runner-activity", nil)
 		detailReq.Header.Set("X-Workspace-ID", testWorkspaceID)
-		detailReq = withURLParam(detailReq, "id", agentID)
+		detailReq = withURLParam(detailReq, "id", expected.agentID)
 		detailRec := httptest.NewRecorder()
 		h.GetRunnerActivity(detailRec, detailReq)
 		if detailRec.Code != http.StatusOK {
@@ -125,12 +129,18 @@ func TestListRunnerActivitySummariesMatchesPerAgentProjection(t *testing.T) {
 		if err := json.Unmarshal(detailRec.Body.Bytes(), &detail); err != nil {
 			t.Fatal(err)
 		}
-		item, ok := byAgent[agentID]
+		item, ok := byAgent[expected.agentID]
 		if !ok {
-			t.Fatalf("missing summary for agent %s", agentID)
+			t.Fatalf("missing summary for agent %s", expected.agentID)
 		}
-		if detail.Summary == nil || !reflect.DeepEqual(item.Summary, *detail.Summary) {
-			t.Fatalf("summary=%+v detail=%+v want identical projection", item.Summary, detail.Summary)
+		if item.Summary.ActivityKind != expected.activityKind || item.Summary.DetailKind != expected.detailKind || item.Summary.Label != expected.label {
+			t.Fatalf("summary=%+v want ActivityKind=%q DetailKind=%q Label=%q", item.Summary, expected.activityKind, expected.detailKind, expected.label)
+		}
+		if detail.Summary == nil {
+			t.Fatalf("detail summary is nil for agent %s", expected.agentID)
+		}
+		if detail.Summary.ActivityKind != item.Summary.ActivityKind || detail.Summary.DetailKind != item.Summary.DetailKind || detail.Summary.Label != item.Summary.Label {
+			t.Fatalf("summary=%+v detail=%+v want matching ActivityKind, DetailKind, and Label", item.Summary, detail.Summary)
 		}
 	}
 }
@@ -154,8 +164,8 @@ func TestListRunnerActivitySummariesEnforcesWorkspaceAndPrincipalBoundaries(t *t
 	var foreignRuntimeID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent_runtime (
-			workspace_id, name, runtime_mode, provider, status, device_info, metadata, visibility, last_seen_at
-		) VALUES ($1, $2, 'cloud', $3, 'online', '', '{}'::jsonb, 'public', now())
+			workspace_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at
+		) VALUES ($1, $2, 'cloud', $3, 'online', '', '{}'::jsonb, now())
 		RETURNING id`, foreignWorkspaceID, "Runner Summary Boundary Runtime", "runner_summary_boundary_"+uuid.NewString()).Scan(&foreignRuntimeID); err != nil {
 		t.Fatal(err)
 	}
@@ -173,11 +183,9 @@ func TestListRunnerActivitySummariesEnforcesWorkspaceAndPrincipalBoundaries(t *t
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO agent_activity_snapshot (
 			workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id,
-			launch_id, client_sequence, producer_fact_id, activity_kind,
-			detail_kind, observed_at
+			activity_kind, detail_kind, summary_label, observed_at
 		) VALUES ($1, $2, $3, 'daemon-boundary', 'instance-boundary',
-			'launch-boundary', 1, $4, 'thinking', '', now())`,
-		foreignWorkspaceID, foreignAgentID, foreignRuntimeID, "summary-boundary-"+uuid.NewString()); err != nil {
+			'thinking', '', 'Thinking', now())`, foreignWorkspaceID, foreignAgentID, foreignRuntimeID); err != nil {
 		t.Fatal(err)
 	}
 	h := *testHandler
@@ -220,6 +228,9 @@ func TestListRunnerActivitySummariesEnforcesWorkspaceAndPrincipalBoundaries(t *t
 		foreignRec, foreign := read(t, request(testUserID, foreignWorkspaceID))
 		if foreignRec.Code != http.StatusOK || len(foreign.Items) != 1 || foreign.Items[0].AgentID != foreignAgentID {
 			t.Fatalf("status=%d body=%s projection=%+v", foreignRec.Code, foreignRec.Body.String(), foreign)
+		}
+		if foreign.Items[0].Summary.ActivityKind != "thinking" || foreign.Items[0].Summary.DetailKind != "" || foreign.Items[0].Summary.Label != "Thinking" {
+			t.Fatalf("summary=%+v want ActivityKind=thinking DetailKind empty Label=Thinking", foreign.Items[0].Summary)
 		}
 	})
 

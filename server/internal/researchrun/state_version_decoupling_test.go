@@ -86,6 +86,12 @@ func setupV6DirectorProposalFixture(t *testing.T, title string) directorProposal
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := run.store.AddV6TeamMember(run.ctx, AddV6TeamMemberInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+		AgentID: run.fixture.reporterID, MissionPrompt: "Continue the in-flight research",
+	}); err != nil {
+		t.Fatal(err)
+	}
 	var stateVersion, throughSequence int64
 	if err := run.pool.QueryRow(run.ctx, `SELECT state_version,
 		COALESCE((SELECT max(sequence) FROM research_run_event WHERE session_id=$1::uuid),0)
@@ -255,11 +261,12 @@ func TestConflictRejectedResultRequeuesWorkItemWithoutBurningBudget(t *testing.T
 	if attemptStatus != "failed" || failureClass != "contract_rejected" {
 		t.Fatalf("attempt=%s class=%s want failed/contract_rejected (no lease limbo)", attemptStatus, failureClass)
 	}
-	var workStatus, terminalReason string
+	var workStatus, terminalReason, membershipState string
 	var attemptCount int
 	var leaseToken *string
-	if err = run.pool.QueryRow(run.ctx, `SELECT status,COALESCE(terminal_reason_code,''),attempt_count,lease_token::text
-		FROM research_work_item WHERE id=$1::uuid`, workItemID).Scan(&workStatus, &terminalReason, &attemptCount, &leaseToken); err != nil {
+	if err = run.pool.QueryRow(run.ctx, `SELECT w.status,COALESCE(w.terminal_reason_code,''),w.attempt_count,w.lease_token::text,m.state
+		FROM research_work_item w JOIN research_team_membership m ON m.id=$2::uuid WHERE w.id=$1::uuid`, workItemID, membershipID).
+		Scan(&workStatus, &terminalReason, &attemptCount, &leaseToken, &membershipState); err != nil {
 		t.Fatal(err)
 	}
 	if workStatus != "ready" || terminalReason != "" || leaseToken != nil {
@@ -267,6 +274,9 @@ func TestConflictRejectedResultRequeuesWorkItemWithoutBurningBudget(t *testing.T
 	}
 	if attemptCount != 0 {
 		t.Fatalf("attempt_count=%d want 0: conflicts must not burn the attempt budget", attemptCount)
+	}
+	if membershipState != "idle" {
+		t.Fatalf("membership=%s want idle after rejected attempt", membershipState)
 	}
 }
 

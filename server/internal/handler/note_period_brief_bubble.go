@@ -275,16 +275,7 @@ func (h *Handler) GetActiveNotePeriodBrief(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, "page_id is required")
 		return
 	}
-	var row notePeriodBriefRunRow
-	err := h.DB.QueryRow(r.Context(), `
-SELECT id, status, chat_session_id, source_page_id, draft_page_id
-FROM note_period_brief_run
-WHERE workspace_id = $1 AND owner_user_id = $2 AND source_page_id = $3
-  AND status IN ('planning', 'collecting', 'synthesizing', 'awaiting_confirm')
-ORDER BY created_at DESC
-LIMIT 1`, workspaceID, userID, pageID).Scan(
-		&row.ID, &row.Status, &row.ChatSessionID, &row.SourcePageID, &row.DraftPageID,
-	)
+	row, err := h.loadOpenPeriodBriefRunForPage(r.Context(), workspaceID, userID, pageID)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			writeJSON(w, http.StatusOK, map[string]any{"run": nil})
@@ -395,9 +386,13 @@ UPDATE note_period_brief_run SET status = 'done', updated_at = now() WHERE id = 
 	return true
 }
 
-func (h *Handler) loadPeriodBriefSynthesizerWrite(ctx context.Context, run notePeriodBriefRunRow) string {
+func (h *Handler) loadPeriodBriefSynthesizerWrite(ctx context.Context, run notePeriodBriefRunRow, after time.Time) string {
 	if !run.FolderPageID.Valid || !run.ID.Valid {
 		return ""
+	}
+	var afterArg any
+	if !after.IsZero() {
+		afterArg = after.UTC()
 	}
 	var content string
 	err := h.DB.QueryRow(ctx, `
@@ -412,23 +407,23 @@ WHERE m.deleted_at IS NULL
     WHERE part->>'type' = 'note_write'
       AND part->>'ref_id' = $1
   )
-  AND m.created_at >= (SELECT created_at FROM note_period_brief_run WHERE id = $2)
+  AND m.created_at >= COALESCE($3::timestamptz, (SELECT created_at FROM note_period_brief_run WHERE id = $2))
 ORDER BY m.created_at DESC
-LIMIT 1`, uuidToString(run.FolderPageID), run.ID).Scan(&content)
+LIMIT 1`, uuidToString(run.FolderPageID), run.ID, afterArg).Scan(&content)
 	if err != nil {
 		return ""
 	}
 	return strings.TrimSpace(content)
 }
 
-func (h *Handler) awaitPeriodBriefSynthesizerWrite(ctx context.Context, run notePeriodBriefRunRow) string {
+func (h *Handler) awaitPeriodBriefSynthesizerWrite(ctx context.Context, run notePeriodBriefRunRow, after time.Time) string {
 	wait := notePeriodBriefSynthWriteMaxWait
 	if !notePeriodBriefFinishInBackground {
 		wait = 0
 	}
 	deadline := time.Now().Add(wait)
 	for {
-		if got := h.loadPeriodBriefSynthesizerWrite(ctx, run); got != "" {
+		if got := h.loadPeriodBriefSynthesizerWrite(ctx, run, after); got != "" {
 			return got
 		}
 		if wait <= 0 || time.Now().After(deadline) {
@@ -444,13 +439,13 @@ func (h *Handler) awaitPeriodBriefSynthesizerWrite(ctx context.Context, run note
 	}
 }
 
-func (h *Handler) completePeriodBriefRunAfterSynth(ctx context.Context, run notePeriodBriefRunRow, userIDString string) {
+func (h *Handler) completePeriodBriefRunAfterSynth(ctx context.Context, run notePeriodBriefRunRow, userIDString string, writeAfter time.Time) {
 	cleared := clearCollectorPackMarkdown(run.Collectors)
 	if run.ChatSessionID.Valid {
-		harvested := h.awaitPeriodBriefSynthesizerWrite(ctx, run)
+		harvested := h.awaitPeriodBriefSynthesizerWrite(ctx, run, writeAfter)
 		_ = h.updateNotePeriodBriefRunCollectors(ctx, run.ID, cleared, "awaiting_confirm")
 		run.Status = "awaiting_confirm"
-		h.postPeriodBriefResultMessage(ctx, run, userIDString, harvested)
+		h.postPeriodBriefResultMessage(ctx, run, userIDString, harvested, writeAfter)
 		return
 	}
 	_ = h.updateNotePeriodBriefRunCollectors(ctx, run.ID, cleared, "done")
@@ -461,11 +456,11 @@ func (h *Handler) markPeriodBriefAwaitingConfirm(ctx context.Context, workspaceI
 	if err != nil || !run.ChatSessionID.Valid {
 		return
 	}
-	harvested := h.awaitPeriodBriefSynthesizerWrite(ctx, run)
+	harvested := h.awaitPeriodBriefSynthesizerWrite(ctx, run, time.Time{})
 	_, _ = h.DB.Exec(ctx, `
 UPDATE note_period_brief_run SET status = 'awaiting_confirm', updated_at = now() WHERE id = $1`, run.ID)
 	run.Status = "awaiting_confirm"
-	h.postPeriodBriefResultMessage(ctx, run, userIDString, harvested)
+	h.postPeriodBriefResultMessage(ctx, run, userIDString, harvested, time.Time{})
 }
 
 func (h *Handler) postPeriodBriefPackReceived(ctx context.Context, run notePeriodBriefRunRow, collectorName, markdown string) {
@@ -479,8 +474,8 @@ func (h *Handler) postPeriodBriefPackReceived(ctx context.Context, run notePerio
 	)
 }
 
-func (h *Handler) postPeriodBriefResultMessage(ctx context.Context, run notePeriodBriefRunRow, userIDString, harvested string) {
-	title, body := h.periodBriefResultMarkdown(ctx, run, harvested)
+func (h *Handler) postPeriodBriefResultMessage(ctx context.Context, run notePeriodBriefRunRow, userIDString, harvested string, writeAfter time.Time) {
+	title, body := h.periodBriefResultMarkdown(ctx, run, harvested, writeAfter)
 	h.postPeriodBriefBubbleMessage(ctx, run.ChatSessionID, run.WorkspaceID, run.OwnerUserID, userIDString, "assistant",
 		"汇报稿整理完成了。",
 		periodBriefCollapsiblePart(uuidToString(run.DraftPageID), title, body),
@@ -488,7 +483,7 @@ func (h *Handler) postPeriodBriefResultMessage(ctx context.Context, run notePeri
 	)
 }
 
-func (h *Handler) periodBriefResultMarkdown(ctx context.Context, run notePeriodBriefRunRow, harvested string) (string, string) {
+func (h *Handler) periodBriefResultMarkdown(ctx context.Context, run notePeriodBriefRunRow, harvested string, writeAfter time.Time) (string, string) {
 	title := strings.TrimSpace("工作介绍 " + run.WindowLabel)
 	if title == "工作介绍" {
 		title = "工作介绍"
@@ -497,7 +492,7 @@ func (h *Handler) periodBriefResultMarkdown(ctx context.Context, run notePeriodB
 	_ = h.DB.QueryRow(ctx, `SELECT title, content FROM note_page WHERE id = $1`, run.DraftPageID).Scan(&draftTitle, &body)
 	usedHarvest := strings.TrimSpace(harvested)
 	if usedHarvest == "" {
-		usedHarvest = h.loadPeriodBriefSynthesizerWrite(ctx, run)
+		usedHarvest = h.loadPeriodBriefSynthesizerWrite(ctx, run, writeAfter)
 	}
 	if usedHarvest != "" {
 		body = usedHarvest
@@ -532,7 +527,7 @@ func (h *Handler) applyPeriodBriefInsert(
 	if !run.SourcePageID.Valid {
 		return "", errPeriodBriefInsertNoPage
 	}
-	title, body := h.periodBriefResultMarkdown(ctx, run, "")
+	title, body := h.periodBriefResultMarkdown(ctx, run, "", time.Time{})
 	if mode == "append" {
 		var current string
 		if err := h.DB.QueryRow(ctx, `
@@ -552,7 +547,7 @@ WHERE id = $3 AND workspace_id = $4 AND deleted_at IS NULL`,
 	page, err := scanNotePage(h.DB.QueryRow(ctx, `
 INSERT INTO note_page (workspace_id, parent_id, owner_user_id, title, content, sort_key, created_by, updated_by)
 VALUES ($1, $2, $3, $4, $5, lpad((extract(epoch from now()) * 1000000)::bigint::text, 20, '0'), $3, $3)
-RETURNING id, workspace_id, parent_id, owner_user_id, title, content, sort_key, created_at, updated_at, deleted_at`,
+RETURNING id, workspace_id, parent_id, owner_user_id, title, icon, content, sort_key, created_at, updated_at, deleted_at`,
 		workspaceID, run.SourcePageID, userID, normalizeNoteTitle(title), body))
 	if err != nil {
 		return "", err

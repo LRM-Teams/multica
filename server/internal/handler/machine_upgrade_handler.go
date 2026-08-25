@@ -12,7 +12,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/daemonws"
-	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -32,8 +31,7 @@ func (e *machineUpgradeInputError) Error() string { return e.message }
 // on one current Binding socket. It does not create a cloud receipt.
 func (h *Handler) CreateMachineUpgrade(w http.ResponseWriter, r *http.Request) {
 	daemonID := strings.TrimSpace(chi.URLParam(r, "daemonId"))
-	rt, _, ok := h.requireMachineUpgradeManager(w, r, daemonID)
-	if !ok {
+	if !h.requireMachineUpgradeManager(w, r, daemonID) {
 		return
 	}
 	var req createMachineUpgradeRequest
@@ -45,7 +43,7 @@ func (h *Handler) CreateMachineUpgrade(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "request_id is required")
 		return
 	}
-	requestID, err := h.dispatchMachineUpgrade(r, rt, req)
+	requestID, err := h.dispatchMachineUpgrade(r, daemonID, req)
 	if err != nil {
 		h.writeMachineUpgradeError(w, err)
 		return
@@ -55,16 +53,10 @@ func (h *Handler) CreateMachineUpgrade(w http.ResponseWriter, r *http.Request) {
 
 // dispatchMachineUpgrade is the Raft 1.0.16 click path: authorize, then send
 // computer:upgrade on the current Binding socket.
-func (h *Handler) dispatchMachineUpgrade(r *http.Request, rt db.AgentRuntime, req createMachineUpgradeRequest) (string, error) {
-	daemonID := runtimeDaemonKey(rt)
+func (h *Handler) dispatchMachineUpgrade(r *http.Request, daemonID string, req createMachineUpgradeRequest) (string, error) {
+	daemonID = strings.TrimSpace(daemonID)
 	if daemonID == "" {
-		return "", &machineUpgradeInputError{code: "machine_upgrade_identity_missing", message: "runtime has no daemon identity"}
-	}
-	if pinnedVersion, pinned := runtimePinnedVersion(rt); pinned {
-		return "", &machineUpgradeInputError{code: "runtime_pinned", message: "this computer is pinned to version " + pinnedVersion}
-	}
-	if launchedBy(runtimeMetadata(rt)) == "desktop" {
-		return "", &machineUpgradeInputError{code: "desktop_managed", message: "this computer is managed by the Desktop updater"}
+		return "", &machineUpgradeInputError{code: "machine_upgrade_identity_missing", message: "Computer has no daemon identity"}
 	}
 	target := strings.TrimSpace(req.TargetVersion)
 	if target == "" {
@@ -102,7 +94,7 @@ func (h *Handler) dispatchComputerUpgradeToRunners(ctx context.Context, computer
 		if err := rows.Scan(&workspaceID); err != nil {
 			return false
 		}
-		if h.DaemonHub.NotifyWorkspaceRunner(computerID, uuidToString(workspaceID), protocol.EventComputerUpgrade, payload) {
+		if h.DaemonHub.NotifyWorkspaceDaemon(computerID, uuidToString(workspaceID), protocol.EventComputerUpgrade, payload) {
 			return true
 		}
 	}
@@ -119,58 +111,42 @@ func (h *Handler) writeMachineUpgradeError(w http.ResponseWriter, err error) {
 	}
 }
 
-// requireMachineUpgradeViewer resolves a Computer through the current
-// Workspace. Every Workspace member may observe the one machine-wide upgrade;
-// visibility does not grant lifecycle mutation authority.
-func (h *Handler) requireMachineUpgradeViewer(w http.ResponseWriter, r *http.Request, daemonID string) (db.AgentRuntime, db.Member, bool) {
+// requireMachineUpgradeManager resolves the Computer from its authoritative
+// Workspace Binding and enforces machine ownership. Runtime cardinality and
+// metadata do not govern the machine-wide Computer lifecycle.
+func (h *Handler) requireMachineUpgradeManager(w http.ResponseWriter, r *http.Request, daemonID string) bool {
 	if daemonID == "" {
 		writeError(w, http.StatusBadRequest, "daemon_id is required")
-		return db.AgentRuntime{}, db.Member{}, false
+		return false
 	}
 	workspaceID := h.resolveWorkspaceID(r)
 	workspaceUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace_id")
 	if !ok {
-		return db.AgentRuntime{}, db.Member{}, false
+		return false
 	}
-	var runtimeID pgtype.UUID
+	var computerOwnerID pgtype.UUID
 	err := h.DB.QueryRow(r.Context(), `
-		SELECT id FROM agent_runtime
+		SELECT user_id
+		FROM computer_workspace_bindings
 		WHERE workspace_id = $1 AND daemon_id = $2
-		ORDER BY created_at ASC, id ASC
-		LIMIT 1`, workspaceUUID, daemonID).Scan(&runtimeID)
+		  AND active = TRUE AND revoked_at IS NULL`, workspaceUUID, daemonID).Scan(&computerOwnerID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "daemon not found")
-		return db.AgentRuntime{}, db.Member{}, false
+		return false
 	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load daemon")
-		return db.AgentRuntime{}, db.Member{}, false
+		return false
 	}
-	rt, err := h.Queries.GetAgentRuntime(r.Context(), runtimeID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "daemon not found")
-		return db.AgentRuntime{}, db.Member{}, false
-	}
-	member, ok := h.requireWorkspaceMember(w, r, uuidToString(rt.WorkspaceID), "daemon not found")
+	member, ok := h.requireWorkspaceMember(w, r, workspaceID, "daemon not found")
 	if !ok {
-		return db.AgentRuntime{}, db.Member{}, false
+		return false
 	}
-	return rt, member, true
-}
-
-// requireMachineUpgradeManager adds the Computer-owner mutation fence to the
-// Workspace visibility check.
-func (h *Handler) requireMachineUpgradeManager(w http.ResponseWriter, r *http.Request, daemonID string) (db.AgentRuntime, db.Member, bool) {
-	rt, member, ok := h.requireMachineUpgradeViewer(w, r, daemonID)
-	if !ok {
-		return db.AgentRuntime{}, db.Member{}, false
-	}
-	rtOwnerID, _ := h.resolveRuntimeOwnerQuery(r.Context(), rt)
-	if !canManageMachineUpgrade(member, rt, rtOwnerID) {
+	if !computerOwnerID.Valid || uuidToString(computerOwnerID) != uuidToString(member.UserID) {
 		writeError(w, http.StatusForbidden, "only the Computer owner can manage this upgrade")
-		return db.AgentRuntime{}, db.Member{}, false
+		return false
 	}
-	return rt, member, true
+	return true
 }
 
 func (h *Handler) publishComputerUpgradeSocketEvent(identity daemonws.ClientIdentity, eventType string, payload map[string]any) {

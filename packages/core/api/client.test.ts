@@ -120,7 +120,7 @@ describe("ApiClient", () => {
     );
   });
 
-  it("loads one Workspace Runner Activity summary projection and fails closed on drift", async () => {
+  it("loads one WorkspaceDaemon Activity summary projection and fails closed on drift", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ items: [{ agent_id: 42, summary: null }] }), {
         status: 200,

@@ -32,21 +32,21 @@ const (
 // Legacy clients read activity + updated_at; new fields are additive.
 // Presence is a derived view — run.tasks/attempts remain the execution SoT.
 type ResearchPresenceEntry struct {
-	Activity      string  `json:"activity"`
-	UpdatedAt     int64   `json:"updated_at"` // unix ms; 0 when never observed
-	Phase         string  `json:"phase"`
-	Role          string  `json:"role,omitempty"`
-	FleetMemberID string  `json:"fleet_member_id,omitempty"`
+	Activity      string `json:"activity"`
+	UpdatedAt     int64  `json:"updated_at"` // unix ms; 0 when never observed
+	Phase         string `json:"phase"`
+	Role          string `json:"role,omitempty"`
+	FleetMemberID string `json:"fleet_member_id,omitempty"`
 	// Name/AvatarURL identify roster members that are not workspace fleet
 	// members (V6 run-scoped team agents). Additive; legacy clients ignore.
-	Name      string `json:"name,omitempty"`
-	AvatarURL string `json:"avatar_url,omitempty"`
-	TaskID        *string `json:"task_id"`
-	NodeID        *string `json:"node_id"`
-	BranchID      *string `json:"branch_id"`
-	Stage         *string `json:"stage"`
-	ExpiresAt     *int64  `json:"expires_at"` // unix ms; null when unknown
-	StaleReason   *string `json:"stale_reason"`
+	Name        string  `json:"name,omitempty"`
+	AvatarURL   string  `json:"avatar_url,omitempty"`
+	TaskID      *string `json:"task_id"`
+	NodeID      *string `json:"node_id"`
+	BranchID    *string `json:"branch_id"`
+	Stage       *string `json:"stage"`
+	ExpiresAt   *int64  `json:"expires_at"` // unix ms; null when unknown
+	StaleReason *string `json:"stale_reason"`
 }
 
 type researchPresenceMember struct {

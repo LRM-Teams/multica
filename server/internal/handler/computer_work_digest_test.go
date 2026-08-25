@@ -153,10 +153,10 @@ func setupComputerWorkDigestLiveBinding(t *testing.T, ownerID string) (string, *
 	}
 	t.Cleanup(func() { _ = conn.Close() })
 	ready, err := json.Marshal(protocol.Message{
-		Type: protocol.EventWorkspaceRunnerReady,
-		Payload: mustMarshalJSON(protocol.WorkspaceRunnerReadyPayload{
+		Type: protocol.EventWorkspaceDaemonReady,
+		Payload: mustMarshalJSON(protocol.WorkspaceReadyPayload{
 			WorkspaceID: testWorkspaceID, DaemonInstanceID: "instance-work-digest",
-			ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceRunnerAgentProcess},
+			ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceDaemonAgentProcess},
 		}),
 	})
 	if err != nil {
@@ -166,7 +166,7 @@ func setupComputerWorkDigestLiveBinding(t *testing.T, ownerID string) (string, *
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(time.Second)
-	for hub.WorkspaceRunnerConnectionCount(daemonID, testWorkspaceID) != 1 {
+	for hub.WorkspaceDaemonConnectionCount(daemonID, testWorkspaceID) != 1 {
 		if time.Now().After(deadline) {
 			t.Fatal("Binding did not become ready")
 		}

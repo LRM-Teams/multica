@@ -84,7 +84,8 @@ describe("ResearchV6NodeDetail", () => {
             occurred_at: "2026-08-17T00:00:01Z",
             title: "Searching web",
             subtext: "WebGPU compatibility",
-            tone: "warning",
+            activity_kind: "working",
+            detail_kind: "searching_web",
             body_kind: "none",
           },
           {
@@ -92,7 +93,8 @@ describe("ResearchV6NodeDetail", () => {
             occurred_at: "2026-08-17T00:00:02Z",
             title: "Running command",
             subtext: "检查 Canvas 兼容性数据",
-            tone: "running",
+            activity_kind: "working",
+            detail_kind: "running_command",
             body_kind: "command",
           },
         ]}
@@ -143,6 +145,77 @@ describe("ResearchV6NodeDetail", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(onRetryWorkActivity).toHaveBeenCalledOnce();
+  });
+
+  it("shows what a result node set out to do and what it found", () => {
+    const result = {
+      ...node("result-node", "Product landscape"),
+      kind: "result_s",
+      tier: "S",
+      canonicalRef: { kind: "result", id: "result-1", revision: 1 },
+    } satisfies ResearchV6DirectorProjectionNode;
+    const detail = {
+      snapshotId: "snapshot-1",
+      throughEventSequence: 8,
+      projectionHash: "sha256:projection",
+      view: "full",
+      node: result,
+      contentLayers: {
+        catalogSummary: "Bounded catalog summary",
+        briefSummary: "Brief result summary",
+        objective: "Verify which AI employee products are active.",
+        conclusion: "Three products have public evidence of active development.",
+        content: "The evidence and comparison behind the conclusion.",
+        scope: { market: "global" },
+        uncertainties: ["Private deployments are not observable."],
+        conflicts: [],
+        openQuestions: ["Which products publish retention data?"],
+      },
+      incoming: [],
+      outgoing: [],
+      historyRefs: [],
+      agentRefs: [],
+      workItemRefs: [],
+      attemptRefs: [],
+      evidenceRefs: [],
+      discussionRefs: [],
+      reportRefs: [],
+    } as ResearchV6DirectorNodeDetail & {
+      contentLayers: {
+        catalogSummary: string;
+        briefSummary: string;
+        objective: string;
+        conclusion: string;
+        content: string;
+        scope: Record<string, unknown>;
+        uncertainties: string[];
+        conflicts: string[];
+        openQuestions: string[];
+      };
+    };
+
+    render(
+      <ResearchV6NodeDetail
+        node={result}
+        detail={detail}
+        loading={false}
+        error={false}
+        selectedForChat={false}
+        projectionNodeById={new Map()}
+        onRetry={vi.fn()}
+        onReference={vi.fn()}
+        onFocusNode={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("region", { name: "Result meaning" })).toHaveTextContent(
+      "Verify which AI employee products are active.",
+    );
+    expect(screen.getByRole("region", { name: "Result meaning" })).toHaveTextContent(
+      "Three products have public evidence of active development.",
+    );
+    expect(screen.getByText("What this node investigated")).toBeTruthy();
+    expect(screen.getByText("What it found")).toBeTruthy();
   });
 
   it("locates a server-declared related node and exposes immutable history", () => {

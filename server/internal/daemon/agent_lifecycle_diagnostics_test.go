@@ -12,7 +12,7 @@ func TestLifecycleDiagnosticsOwnerOnlyAndRedacted(t *testing.T) {
 	now := time.Date(2026, time.August, 6, 12, 0, 0, 0, time.UTC)
 	dir := t.TempDir()
 	writer := newLifecycleDiagnosticWriter(dir, func() time.Time { return now })
-	if err := writer.Record(agentLifecycleTransition{StateInstanceID: "state-1", LaunchID: "launch-1", Sequence: 1, Phase: "runtime_readiness", State: "waiting", Event: "enter", At: now}); err != nil {
+	if err := writer.Record(agentLifecycleTransition{StateInstanceID: "state-1", AgentInstanceID: "instance-1", Sequence: 1, Phase: "runtime_readiness", State: "waiting", Event: "enter", At: now}); err != nil {
 		t.Fatal(err)
 	}
 	entries, err := os.ReadDir(dir)
@@ -51,14 +51,14 @@ func TestLifecycleDiagnosticsRotateByDateAndSize(t *testing.T) {
 	if err := os.Truncate(writer.currentPath, lifecycleDiagnosticFileBytes); err != nil {
 		t.Fatal(err)
 	}
-	if err := writer.Record(agentLifecycleTransition{StateInstanceID: "state-1", LaunchID: "launch-1", Sequence: 1, Phase: "process_residency", State: "starting", Event: "enter", At: now}); err != nil {
+	if err := writer.Record(agentLifecycleTransition{StateInstanceID: "state-1", AgentInstanceID: "instance-1", Sequence: 1, Phase: "process_residency", State: "starting", Event: "enter", At: now}); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.HasSuffix(writer.currentPath, "-001.jsonl") {
 		t.Fatalf("size rotation path = %s", writer.currentPath)
 	}
 	now = now.Add(24 * time.Hour)
-	if err := writer.Record(agentLifecycleTransition{StateInstanceID: "state-2", LaunchID: "launch-1", Sequence: 2, Phase: "runtime_readiness", State: "waiting", Event: "enter", At: now}); err != nil {
+	if err := writer.Record(agentLifecycleTransition{StateInstanceID: "state-2", AgentInstanceID: "instance-1", Sequence: 2, Phase: "runtime_readiness", State: "waiting", Event: "enter", At: now}); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(writer.currentPath, "2026-08-07") {

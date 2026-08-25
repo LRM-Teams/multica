@@ -15,11 +15,13 @@ Multica leaves repository layout and Git operations to the Agent. An Agent may c
 
 ## CLI
 
-Inspect projects and resources through the unified workspace snapshot:
+Inspect projects and bound resources with:
 
 ```bash
 multica workspace info --projects
 multica workspace info --projects --output json
 ```
 
-The snapshot is read-only and does not affect execution cwd.
+The legacy `multica project resource` commands are not available. Resource
+administration is managed through the workspace UI/API and does not affect
+execution cwd.

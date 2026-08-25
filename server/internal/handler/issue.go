@@ -51,8 +51,12 @@ type IssueResponse struct {
 	// executors and the group manager can anchor self-verification / review on
 	// a real field instead of parsing prose out of the description.
 	AcceptanceCriteria []string `json:"acceptance_criteria"`
-	CreatedAt          string   `json:"created_at"`
-	UpdatedAt          string   `json:"updated_at"`
+	// ExecutionRevision is the optimistic concurrency fence for the current
+	// Issue work contract. Detail responses expose it so completion clients can
+	// prove they reviewed the same criteria that the active Run received.
+	ExecutionRevision *int64 `json:"execution_revision,omitempty"`
+	CreatedAt         string `json:"created_at"`
+	UpdatedAt         string `json:"updated_at"`
 	// Metadata is the per-issue KV map (see issue_metadata.go). Always emitted
 	// (empty object when unset) so frontend code can `issue.metadata[key]`
 	// without nil-guarding the parent field.
@@ -82,6 +86,30 @@ type IssueResponse struct {
 	PullRequests *[]GitHubPullRequestResponse `json:"pull_requests,omitempty"`
 }
 
+// currentAgentIssueRun returns the active assignment Run that authenticated an
+// agent request when it belongs to the Issue being updated. Reconciliation can
+// adopt that Run into the canonical claim, preserving the caller instead of
+// cancelling it and dispatching a duplicate self-wake.
+func (h *Handler) currentAgentIssueRun(r *http.Request, actorType, actorID string, issue db.Issue) pgtype.UUID {
+	if actorType != "agent" || actorID == "" {
+		return pgtype.UUID{}
+	}
+	runID, err := util.ParseUUID(r.Header.Get("X-Task-ID"))
+	if err != nil {
+		return pgtype.UUID{}
+	}
+	agentID, err := util.ParseUUID(actorID)
+	if err != nil {
+		return pgtype.UUID{}
+	}
+	run, err := h.Queries.GetAgentInboxEvent(r.Context(), runID)
+	if err != nil || run.AgentID != agentID || !run.IssueID.Valid || run.IssueID != issue.ID ||
+		run.Reason != "issue" || run.TriggerCommentID.Valid || run.Status != "draining" {
+		return pgtype.UUID{}
+	}
+	return runID
+}
+
 type IssueSourceRefsResponse struct {
 	Channel *IssueSourceChannelRefResponse `json:"channel,omitempty"`
 	Message *IssueSourceMessageRefResponse `json:"message,omitempty"`
@@ -108,6 +136,7 @@ type IssueSourceMessageRefResponse struct {
 
 func issueToResponse(i db.Issue, issuePrefix string) IssueResponse {
 	identifier := issuePrefix + "-" + strconv.Itoa(int(i.Number))
+	executionRevision := i.ExecutionRevision
 	return IssueResponse{
 		ID:                 uuidToString(i.ID),
 		WorkspaceID:        uuidToString(i.WorkspaceID),
@@ -127,6 +156,7 @@ func issueToResponse(i db.Issue, issuePrefix string) IssueResponse {
 		StartDate:          dateToPtr(i.StartDate),
 		DueDate:            dateToPtr(i.DueDate),
 		AcceptanceCriteria: parseAcceptanceCriteria(i.AcceptanceCriteria),
+		ExecutionRevision:  &executionRevision,
 		CreatedAt:          timestampToString(i.CreatedAt),
 		UpdatedAt:          timestampToString(i.UpdatedAt),
 		Metadata:           parseIssueMetadata(i.Metadata),
@@ -2416,6 +2446,18 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	// Agent-authenticated implementation work must enter the typed completion
+	// and independent review lifecycle. A generic status PATCH cannot provide
+	// criterion evidence, bind the result to the active Run, or prevent an
+	// implementer from approving its own work. Human and platform-owned
+	// compatibility paths remain explicit and continue below.
+	if principal, isAgent := middleware.AgentPrincipalFromContext(r.Context()); isAgent &&
+		req.Status != nil && (*req.Status == "in_review" || *req.Status == "done") {
+		slog.Warn("agent direct issue completion rejected", append(logger.RequestAttrs(r),
+			"issue_id", id, "agent_id", principal.AgentID)...)
+		writeError(w, http.StatusConflict, "agents cannot set an issue directly to in_review or done; submit a completion report for review")
+		return
+	}
 
 	// Track which fields were explicitly present in JSON (even if null)
 	var rawFields map[string]json.RawMessage
@@ -2579,7 +2621,28 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		params.AcceptanceCriteria = raw
 	}
 
-	issue, err := h.Queries.UpdateIssue(r.Context(), params)
+	prevRunnable := prevIssue.Status == "todo" || prevIssue.Status == "in_progress"
+	nextStatus := prevIssue.Status
+	if req.Status != nil {
+		nextStatus = *req.Status
+	}
+	nextRunnable := nextStatus == "todo" || nextStatus == "in_progress"
+	executionContractChanged := touchedType || touchedID || req.Title != nil || req.Description != nil ||
+		req.Priority != nil || req.AcceptanceCriteria != nil || req.ParentIssueID != nil || req.ProjectID != nil ||
+		prevRunnable != nextRunnable
+	// Preserve the caller's current same-Issue assignment Run. The execution
+	// reconciler adopts it into the canonical claim instead of cancelling the
+	// Run that is performing this update and creating a self-trigger loop.
+	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	preserveRunID := pgtype.UUID{}
+	if !touchedType && !touchedID {
+		preserveRunID = h.currentAgentIssueRun(r, actorType, actorID, prevIssue)
+	}
+	issue, err := h.IssueExecution.UpdateIssue(r.Context(), params, prevIssue.WorkspaceID, service.IssueExecutionReconcileOptions{
+		TriggerKind:   "issue_updated",
+		Invalidate:    executionContractChanged,
+		PreserveRunID: preserveRunID,
+	})
 	if err != nil {
 		slog.Warn("update issue failed", append(logger.RequestAttrs(r), "error", err, "issue_id", id, "workspace_id", workspaceID)...)
 		writeError(w, http.StatusInternalServerError, "failed to update issue: "+err.Error())
@@ -2607,9 +2670,6 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	dueDateChanged := prevDueDate != resp.DueDate && (prevDueDate == nil) != (resp.DueDate == nil) ||
 		(prevDueDate != nil && resp.DueDate != nil && *prevDueDate != *resp.DueDate)
 
-	// Determine actor identity: agent (via X-Agent-ID header) or member.
-	actorType, actorID := h.resolveActor(r, userID, workspaceID)
-
 	h.publish(protocol.EventIssueUpdated, workspaceID, actorType, actorID, map[string]any{
 		"issue":               resp,
 		"assignee_changed":    assigneeChanged,
@@ -2631,39 +2691,8 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		"creator_id":          uuidToString(prevIssue.CreatorID),
 	})
 
-	// Reconcile task queue when assignee changes.
-	if assigneeChanged {
-		h.TaskService.CancelTasksForIssue(r.Context(), issue.ID)
-
-		if h.shouldEnqueueAgentTask(r.Context(), issue) {
-			h.TaskService.EnqueueTaskForIssue(r.Context(), issue)
-		}
-	}
-
-	// Trigger the assigned agent when an issue moves out of backlog. Backlog
-	// acts as a parking lot — moving to an active status signals the issue is
-	// ready for work. Agent actors are allowed here so the documented
-	// serial sub-task workflow works (parent agent finishes Step 1, then
-	// promotes Step 2 from backlog→todo, regardless of who Step 2 is
-	// assigned to). The only excluded case is the real self-loop: an agent
-	// promoting the same issue its current task is running on. Same-agent,
-	// cross-issue handoff (Agent A finishing one task and promoting another
-	// issue assigned to A) must still fire — that is the documented serial
-	// chain.
-	if statusChanged && !assigneeChanged &&
-		prevIssue.Status == "backlog" && issue.Status != "done" && issue.Status != "cancelled" &&
-		!h.isAgentRunningOnIssue(r, actorType, issue) {
-		if h.isAgentAssigneeReady(r.Context(), issue) {
-			h.TaskService.EnqueueTaskForIssue(r.Context(), issue)
-		}
-	}
-
-	// Cancel active tasks when a human closes the issue. Agent-managed done
-	// transitions happen while the current task is still producing its final
-	// output, so only human-driven done should release the occupied agent slot.
-	if statusChanged && (issue.Status == "cancelled" || (issue.Status == "done" && actorType == "member")) {
-		h.TaskService.CancelTasksForIssue(r.Context(), issue.ID)
-	}
+	// Canonical assignment/status reconciliation was committed atomically with
+	// the Issue update above. Comment and @mention wakes remain independent.
 	if statusChanged && issue.Status == "done" && actorType == "member" {
 		h.awardHonorXP(r.Context(), parseUUID(actorID), "issue.close", uuidToString(issue.ID))
 	}
@@ -2760,18 +2789,6 @@ func (h *Handler) validateAssigneePair(ctx context.Context, workspaceID string, 
 	}
 }
 
-// shouldEnqueueAgentTask returns true when an issue creation or assignment
-// should trigger the assigned agent. Backlog issues are skipped — backlog
-// acts as a parking lot where issues can be pre-assigned without immediately
-// triggering execution. Moving out of backlog is handled separately in
-// UpdateIssue.
-func (h *Handler) shouldEnqueueAgentTask(ctx context.Context, issue db.Issue) bool {
-	if issue.Status == "backlog" {
-		return false
-	}
-	return h.isAgentAssigneeReady(ctx, issue)
-}
-
 // shouldEnqueueOnComment returns true if a member comment on this issue should
 // trigger the assigned agent. Fires for any status — comments are
 // conversational and can happen at any stage, including after completion
@@ -2794,58 +2811,6 @@ func (h *Handler) shouldEnqueueOnComment(ctx context.Context, issue db.Issue) bo
 	if err != nil || hasPending {
 		return false
 	}
-	return true
-}
-
-// isAgentRunningOnIssue reports whether the calling agent's current task
-// (identified by X-Task-ID) is running for the exact issue being promoted.
-// That is the only true self-loop on backlog→active: the agent flipping
-// the same issue its own task is executing for would immediately re-enqueue
-// itself, complete the run, flip again, and so on.
-//
-// Same-agent cross-issue handoff (Agent A finishing a task on issue I1 then
-// promoting issue I2 — even when I2 is also assigned to A) is NOT a loop
-// and must fire; that is the documented serial sub-task chain. Member
-// actors never match.
-//
-// X-Task-ID is guaranteed to be present and consistent when actorType is
-// "agent": resolveActor demotes the actor to "member" otherwise (handler.go
-// resolveActor). We still recheck defensively — a future caller could pass
-// agent identity through a different path.
-func (h *Handler) isAgentRunningOnIssue(r *http.Request, actorType string, issue db.Issue) bool {
-	if actorType != "agent" {
-		return false
-	}
-	taskIDStr := r.Header.Get("X-Task-ID")
-	if taskIDStr == "" {
-		return false
-	}
-	taskUUID, err := util.ParseUUID(taskIDStr)
-	if err != nil {
-		return false
-	}
-	task, err := h.Queries.GetAgentTask(r.Context(), taskUUID)
-	if err != nil {
-		return false
-	}
-	if !task.IssueID.Valid {
-		return false
-	}
-	return uuidToString(task.IssueID) == uuidToString(issue.ID)
-}
-
-// isAgentAssigneeReady checks if an issue is assigned to an active agent
-// with a valid runtime.
-func (h *Handler) isAgentAssigneeReady(ctx context.Context, issue db.Issue) bool {
-	if !issue.AssigneeType.Valid || issue.AssigneeType.String != "agent" || !issue.AssigneeID.Valid {
-		return false
-	}
-
-	agent, err := h.Queries.GetAgent(ctx, issue.AssigneeID)
-	if err != nil || !agent.RuntimeID.Valid || agent.ArchivedAt.Valid {
-		return false
-	}
-
 	return true
 }
 
@@ -3100,7 +3065,25 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		issue, err := h.Queries.UpdateIssue(r.Context(), params)
+		prevRunnable := prevIssue.Status == "todo" || prevIssue.Status == "in_progress"
+		nextStatus := prevIssue.Status
+		if req.Updates.Status != nil {
+			nextStatus = *req.Updates.Status
+		}
+		nextRunnable := nextStatus == "todo" || nextStatus == "in_progress"
+		executionContractChanged := batchTouchedType || batchTouchedID || req.Updates.Title != nil ||
+			req.Updates.Description != nil || req.Updates.Priority != nil || req.Updates.ParentIssueID != nil ||
+			req.Updates.ProjectID != nil || prevRunnable != nextRunnable
+		actorType, actorID := h.resolveActor(r, userID, workspaceID)
+		preserveRunID := pgtype.UUID{}
+		if !batchTouchedType && !batchTouchedID {
+			preserveRunID = h.currentAgentIssueRun(r, actorType, actorID, prevIssue)
+		}
+		issue, err := h.IssueExecution.UpdateIssue(r.Context(), params, prevIssue.WorkspaceID, service.IssueExecutionReconcileOptions{
+			TriggerKind:   "issue_batch_updated",
+			Invalidate:    executionContractChanged,
+			PreserveRunID: preserveRunID,
+		})
 		if err != nil {
 			slog.Warn("batch update issue failed", "issue_id", issueID, "error", err)
 			continue
@@ -3108,8 +3091,6 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 
 		prefix := h.getIssuePrefix(r.Context(), issue.WorkspaceID)
 		resp := issueToResponse(issue, prefix)
-		actorType, actorID := h.resolveActor(r, userID, workspaceID)
-
 		assigneeChanged := (req.Updates.AssigneeType != nil || req.Updates.AssigneeID != nil) &&
 			(prevIssue.AssigneeType.String != issue.AssigneeType.String || uuidToString(prevIssue.AssigneeID) != uuidToString(issue.AssigneeID))
 		statusChanged := req.Updates.Status != nil && prevIssue.Status != issue.Status
@@ -3122,31 +3103,7 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 			"priority_changed": priorityChanged,
 		})
 
-		if assigneeChanged {
-			h.TaskService.CancelTasksForIssue(r.Context(), issue.ID)
-			if h.shouldEnqueueAgentTask(r.Context(), issue) {
-				h.TaskService.EnqueueTaskForIssue(r.Context(), issue)
-			}
-		}
-
-		// Trigger agent when moving out of backlog (batch). Mirrors the
-		// single-update path above — agent actors are allowed so serial
-		// sub-task chains work, and the same task-issue self-loop guard
-		// prevents an agent from re-triggering itself on the same issue.
-		if statusChanged && !assigneeChanged &&
-			prevIssue.Status == "backlog" && issue.Status != "done" && issue.Status != "cancelled" &&
-			!h.isAgentRunningOnIssue(r, actorType, issue) {
-			if h.isAgentAssigneeReady(r.Context(), issue) {
-				h.TaskService.EnqueueTaskForIssue(r.Context(), issue)
-			}
-		}
-
-		// Cancel active tasks when a human closes the issue. Agent-managed done
-		// transitions happen while the current task is still producing its final
-		// output, so only human-driven done should release the occupied agent slot.
-		if statusChanged && (issue.Status == "cancelled" || (issue.Status == "done" && actorType == "member")) {
-			h.TaskService.CancelTasksForIssue(r.Context(), issue.ID)
-		}
+		// Canonical execution reconciliation already committed with the row.
 
 		// Platform-driven parent notification, mirrored from UpdateIssue
 		// (MUL-2538). Best-effort; failure does not abort the batch.

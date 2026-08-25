@@ -287,13 +287,13 @@ func TestQueryChangeIncludesEmbeddingCandidates(t *testing.T) {
 	candidate := candidateVersion(t, store, nil)
 	base := vectorChangeSnapshot(t, store, 1, map[string][]float32{
 		"seed": {1, 0},
-		"a1": {1, 0}, "a2": {1, 0}, "a3": {1, 0}, "a4": {1, 0}, "a5": {1, 0},
+		"a1":   {1, 0}, "a2": {1, 0}, "a3": {1, 0}, "a4": {1, 0}, "a5": {1, 0},
 		"a6": {0, 1},
 	})
 	cand := vectorChangeSnapshot(t, store, candidate, map[string][]float32{
 		"seed": {1, 0},
-		"a1": {0, 1},
-		"a2": {1, 0}, "a3": {1, 0}, "a4": {1, 0}, "a5": {1, 0}, "a6": {1, 0},
+		"a1":   {0, 1},
+		"a2":   {1, 0}, "a3": {1, 0}, "a4": {1, 0}, "a5": {1, 0}, "a6": {1, 0},
 	})
 
 	dq, err := queryChange(context.Background(), base, cand, "seed query", 1, 5, 0.2)

@@ -72,6 +72,36 @@ func graphRecallQuery(task Task) string {
 	return ""
 }
 
+// memoizedGraphExecutionMemories coalesces identical graph recall queries
+// within one resident message batch: the first message pays the recall and
+// later messages whose normalized query matches reuse the result (spec P0
+// §4.2). nil results are memoized too - a recall failure is non-fatal
+// data, not a retryable error, within a near-simultaneous batch.
+func (d *Daemon) memoizedGraphExecutionMemories(
+	ctx context.Context, task Task,
+	memo map[string][]execenv.MemoryContextForEnv, log *slog.Logger,
+) []execenv.MemoryContextForEnv {
+	key := normalizeGraphRecallKey(graphRecallQuery(task))
+	if key == "" {
+		return nil
+	}
+	if cached, ok := memo[key]; ok {
+		if log != nil {
+			log.Info("graph memory recall coalesced within batch", "task_id", task.ID)
+		}
+		return cached
+	}
+	memories := d.graphExecutionMemories(ctx, task, log)
+	memo[key] = memories
+	return memories
+}
+
+// normalizeGraphRecallKey canonicalizes a recall query for exact-match
+// coalescing: case-folding with whitespace runs collapsed.
+func normalizeGraphRecallKey(query string) string {
+	return strings.Join(strings.Fields(strings.ToLower(query)), " ")
+}
+
 // effectiveMemoryType resolves the reviewer type for one task (design
 // §1/A4): a valid task-scoped override from the server payload wins over
 // the process-level env default (cfg.MemoryType, already validated by

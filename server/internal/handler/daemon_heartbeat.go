@@ -17,12 +17,12 @@ func computerConnected(hb *db.DaemonHeartbeat, now time.Time) bool {
 }
 
 // computerConnectedByRunner is the one Computer liveness decision for both
-// Computer list and runtime projections. A current DaemonCore Workspace Runner
+// Computer list and runtime projections. A current DaemonCore WorkspaceDaemon
 // socket is authoritative; HTTP heartbeat freshness is only the fallback when
 // Hub or identity is unavailable (legacy / test composition).
 func (h *Handler) computerConnectedByRunner(daemonID, workspaceID string, hb *db.DaemonHeartbeat, now time.Time) bool {
 	if h != nil && h.DaemonHub != nil && strings.TrimSpace(daemonID) != "" && strings.TrimSpace(workspaceID) != "" {
-		return h.DaemonHub.HasWorkspaceRunner(daemonID, workspaceID)
+		return h.DaemonHub.HasWorkspaceDaemon(daemonID, workspaceID)
 	}
 	// TODO(computer-liveness): Remove after v0.4.24-alpha.55 is no
 	// longer a supported direct self-upgrade source.

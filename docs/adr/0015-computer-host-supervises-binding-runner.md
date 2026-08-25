@@ -13,7 +13,7 @@ is the real execution owner, not a lifetime sentinel. The executable
 Computer process
 ├── Host (internal/computer)
 ├── Binding execution A (internal/daemon)
-│   ├── WorkspaceRunner A
+│   ├── WorkspaceDaemon A
 │   ├── AgentProcessManager
 │   ├── Inbox / MessageCoordinator
 │   ├── Activity
@@ -34,7 +34,6 @@ preserving Binding as Multica's domain term.
 
 - desired Binding reconciliation and runner process start/stop;
 - Runner child-reported `daemonInstanceId`/PID fence, Ready transition, crash budget and backoff;
-- machine-wide provider-process capacity admission;
 - authenticated child control and diagnostic aggregation routing;
 - cross-child environment-switch and Machine Upgrade prepare/release;
 - Machine Upgrade accept, journal, stage, verify, activation, successor
@@ -42,7 +41,7 @@ preserving Binding as Multica's domain term.
 
 `internal/daemon` owns one Binding child's execution behavior:
 
-- Workspace authentication and `WorkspaceRunner.Run`;
+- Workspace authentication and `WorkspaceDaemon.Run`;
 - Agent Process Manager and canonical provider runtime pool;
 - Inbox, MessageCoordinator, Activity, Attachments and Reminder execution;
 - child-local Credential Proxy and child-local durable execution state;
@@ -81,7 +80,7 @@ Windows named pipe. It publishes Ready only after it has:
 1. validated the current Binding credential and bootstrap identity;
 2. registered its provider Runtime set and reported it to the Host;
 3. constructed its child-local execution owners;
-4. opened the Workspace Runner transport and emitted the real Runner Ready
+4. opened the WorkspaceDaemon transport and emitted the real WorkspaceDaemon Ready
    frame.
 
 Ready returns the runner IPC endpoint and the child-generated
@@ -115,7 +114,7 @@ the operation seam before each handler migration.
 
 Each resident start generates an opaque `serviceGeneration`. Each managed
 runner child generates an opaque `daemonInstanceId` and reports it on Ready.
-An exit, Ready, control request, Runtime report, diagnostic, or capacity lease
+An exit, Ready, control request, Runtime report, or diagnostic
 must match the current Workspace + `daemonInstanceId` + PID; a stale process is
 rejected or ignored.
 

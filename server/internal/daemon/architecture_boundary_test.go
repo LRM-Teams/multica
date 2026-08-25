@@ -9,7 +9,7 @@ import (
 )
 
 func TestDaemonProductionOwnsNoComputerLifecycle(t *testing.T) {
-	hostType := regexp.MustCompile(`\*computer\.Host(?:[^A-Za-z0-9_]|$)`)
+	computerCoreType := regexp.MustCompile(`\*computer\.ComputerCore(?:[^A-Za-z0-9_]|$)`)
 	forbiddenFiles := map[string]struct{}{
 		"machine_upgrade.go":          {},
 		"machine_upgrade_log.go":      {},
@@ -66,8 +66,8 @@ func TestDaemonProductionOwnsNoComputerLifecycle(t *testing.T) {
 				t.Errorf("%s owns Computer lifecycle symbol %q", path, owner)
 			}
 		}
-		if hostType.Match(body) || strings.Contains(string(body), "computer.NewHost(") || strings.Contains(string(body), "daemonProcessComputerHost") {
-			t.Errorf("%s mixes the Computer Host into daemon execution", path)
+		if computerCoreType.Match(body) || strings.Contains(string(body), "computer.NewComputerCore(") {
+			t.Errorf("%s mixes ComputerCore into WorkspaceDaemon execution", path)
 		}
 		return nil
 	})

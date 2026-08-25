@@ -82,7 +82,8 @@ RETURNING
   e.completed_at, e.result, e.error, e.session_id, e.work_dir,
   e.trigger_comment_id, e.autopilot_run_id, e.max_attempts, e.parent_task_id,
   e.failure_reason, e.trigger_summary, e.force_fresh_session, e.is_leader_task,
-  e.wait_reason, e.initiator_user_id, e.agent_dm_exchange_id, e.agent_dm_turn
+  e.wait_reason, e.initiator_user_id, e.agent_dm_exchange_id, e.agent_dm_turn,
+  e.issue_run_kind, e.issue_execution_revision, e.issue_execution_attempt_number
 `
 
 type CancelInFlightChatTasksByResearchTitleParams struct {
@@ -153,6 +154,9 @@ func (q *Queries) CancelInFlightChatTasksByResearchTitle(ctx context.Context, ar
 			&i.InitiatorUserID,
 			&i.AgentDmExchangeID,
 			&i.AgentDmTurn,
+			&i.IssueRunKind,
+			&i.IssueExecutionRevision,
+			&i.IssueExecutionAttemptNumber,
 		); err != nil {
 			return nil, err
 		}

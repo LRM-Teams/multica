@@ -9,7 +9,7 @@ import type { AgentLiveStatusView } from "../resolve-agent-live-status";
  *
  * Profile / DM / side-panel headers (LRM-248): pass `showDot={false}` so the
  * avatar badge is the only round indicator; the word is plain "Online" /
- * "Offline" text. Activity composer strip keeps the small tone dot.
+ * "Offline" text. Activity composer strip keeps its fact-derived dot.
  */
 export function AgentLiveStatusMark({
   status,

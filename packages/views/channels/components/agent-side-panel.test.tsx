@@ -79,6 +79,9 @@ vi.mock("../../common/actor-avatar", () => ({
   AgentPresenceOverlay: ({ children }: { children: React.ReactNode }) => (
     <div data-testid="agent-presence-overlay">{children}</div>
   ),
+  ActorAvatar: ({ name }: { name?: string }) => (
+    <div data-testid="owner-avatar" aria-label={name} />
+  ),
 }));
 
 vi.mock("../../agents/components/tabs/activity-tab", () => ({
@@ -382,7 +385,7 @@ const ownerMember: MemberWithUser = {
   display_name: "Owner",
   email: "owner@example.com",
   avatar_url: null,
-  profile_description: "",
+  description: "",
   created_at: "2026-01-01T00:00:00Z",
 };
 
@@ -543,6 +546,12 @@ describe("AgentSidePanel", () => {
     expect(screen.getAllByText("Atlas").length).toBeGreaterThan(0);
     expect(screen.queryByRole("button", { name: "Activity" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Workspace" })).not.toBeInTheDocument();
+  });
+
+  it("shows the owner avatar alongside the owner name", () => {
+    renderPanel();
+    expect(screen.getByTestId("owner-avatar")).toHaveAttribute("aria-label", "Owner");
+    expect(screen.getAllByText("Owner").length).toBeGreaterThanOrEqual(2);
   });
 
   it("shows the current dynamic status under the agent handle", () => {

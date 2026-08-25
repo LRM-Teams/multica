@@ -329,7 +329,9 @@ func (b *Backtester) EvaluateCandidate(ctx context.Context, version, parentVersi
 	var ok bool
 	stats.Recall, stats.BaselineRecall, ok = recallRates(stats.Queries)
 	if !ok {
-		if !b.cfg.ColdStart { fail("no_eligible_backtest_ground_truth") }
+		if !b.cfg.ColdStart {
+			fail("no_eligible_backtest_ground_truth")
+		}
 	} else if !b.cfg.ColdStart && stats.Recall < stats.BaselineRecall-b.cfg.RecallTolerance {
 		fail("recall %.4f below baseline %.4f - tolerance %.4f", stats.Recall, stats.BaselineRecall, b.cfg.RecallTolerance)
 	}
@@ -541,9 +543,13 @@ func recallRates(stats []QueryBacktestStat) (recall, baseline float64, ok bool) 
 	}
 	eligible := 0
 	for _, qs := range stats {
-		if !qs.Skipped { eligible++ }
+		if !qs.Skipped {
+			eligible++
+		}
 	}
-	if eligible == 0 { return 0, 0, false }
+	if eligible == 0 {
+		return 0, 0, false
+	}
 	n := float64(eligible)
 	return float64(hits) / n, float64(baseHits) / n, true
 }

@@ -66,7 +66,7 @@ func (d *Daemon) credentialProxyMessageSendHandler() http.HandlerFunc {
 		}
 
 		proxy := d.CredentialProxy()
-		runner := d.currentWorkspaceRunner(request.WorkspaceID)
+		runner := d.currentWorkspaceDaemon(request.WorkspaceID)
 		now := time.Now()
 		draft, status, err := d.prepareMessageSendDraft(r.Context(), proxy, credential, request, now)
 		if err != nil {

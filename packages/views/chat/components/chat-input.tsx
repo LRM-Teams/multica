@@ -16,6 +16,7 @@ import { createLogger } from "@multica/core/logger";
 import { enterKey } from "@multica/core/platform";
 import type { UploadResult } from "@multica/core/hooks/use-file-upload";
 import type { MentionItem } from "../../editor/extensions/mention-suggestion";
+import { usePrefersReducedMotion } from "../../common/use-prefers-reduced-motion";
 import { useT } from "../../i18n";
 
 const logger = createLogger("chat.ui");
@@ -84,6 +85,7 @@ export function ChatInput({
   composerPrefix,
 }: ChatInputProps) {
   const { t } = useT("chat");
+  const prefersReducedMotion = usePrefersReducedMotion();
   const editorRef = useRef<ContentEditorRef>(null);
   // ChatWindow always passes sessionId/agentId. Prefer those for draft
   // scoping so DM-bubble mode never bleeds into the global desktop chat store.
@@ -355,6 +357,7 @@ export function ChatInput({
               onClick={() => {}}
               running
               onStop={onStop}
+              reducedMotion={prefersReducedMotion}
               stopTooltip={t(($) => $.input.stop_tooltip)}
             />
           )}

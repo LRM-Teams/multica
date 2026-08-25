@@ -426,8 +426,8 @@ func TestResearchArtifactReciprocalGuards320RoundTrips(t *testing.T) {
 		})
 	}
 
-	if _, err = conn.Exec(ctx, `DELETE FROM workspace WHERE id = $1::uuid`, workspaceID); err != nil {
-		t.Fatalf("workspace cascade delete: %v", err)
+	if _, err = conn.Exec(ctx, `DELETE FROM research_session WHERE id = $1::uuid`, sessionID); err != nil {
+		t.Fatalf("session cascade delete: %v", err)
 	}
 	var remainingTasks int
 	if err = conn.QueryRow(ctx, `SELECT count(*)::int FROM research_task`).Scan(&remainingTasks); err != nil || remainingTasks != 0 {
@@ -436,6 +436,9 @@ func TestResearchArtifactReciprocalGuards320RoundTrips(t *testing.T) {
 	var remainingPassports int
 	if err = conn.QueryRow(ctx, `SELECT count(*)::int FROM research_artifact_passport`).Scan(&remainingPassports); err != nil || remainingPassports != 0 {
 		t.Fatalf("passports after cascade=%d err=%v", remainingPassports, err)
+	}
+	if _, err = conn.Exec(ctx, `DELETE FROM workspace WHERE id = $1::uuid`, workspaceID); err != nil {
+		t.Fatalf("delete empty workspace: %v", err)
 	}
 
 	if _, err = conn.Exec(ctx, down320); err != nil {

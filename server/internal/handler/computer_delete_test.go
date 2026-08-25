@@ -36,7 +36,7 @@ func TestTeardownRuntimeWithoutActiveAgents_ProductionScaleSelfFKLookup(t *testi
 			INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at)
 			VALUES ($1,  $2,  $3,  'local',  $4,  'offline',  $3,  '{}'::jsonb,  now())
 			RETURNING id
-		`,  testWorkspaceID,  scaleDaemon,  "Scale "+provider+" "+uuid.NewString()[:8],  provider).Scan(target); err != nil {
+		`, testWorkspaceID, scaleDaemon, "Scale "+provider+" "+uuid.NewString()[:8], provider).Scan(target); err != nil {
 			t.Fatalf("insert %s scale runtime: %v", provider, err)
 		}
 		bindTestRuntimeOwner(t, scaleDaemon, testUserID)

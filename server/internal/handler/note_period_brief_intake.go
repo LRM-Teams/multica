@@ -11,13 +11,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 var (
-	periodBriefIntentRe       = regexp.MustCompile(`(?i)(写|整理|做|生成|帮我).{0,12}(汇报|周报)|period\s*work\s*brief|period\s*brief|weekly\s*report`)
+	periodBriefIntentRe       = regexp.MustCompile(`(?i)(写|整理|做|生成|帮我).{0,12}(汇报|周报)|period\s*work\s*brief|period\s*brief|weekly\s*report|write\s+(a\s+)?(period\s+work\s+)?reports?|^(report|reports)$`)
 	periodBriefAllComputersRe = regexp.MustCompile(`(?i)全部|所有电脑|都要|都行|都可以|all(\s+computers?)?`)
 	periodBriefCancelRe       = regexp.MustCompile(`(?i)^(取消|算了|先不写|不用写了|不要写了)`)
 	periodBriefYMDRe          = regexp.MustCompile(`\d{4}-\d{2}-\d{2}`)
@@ -404,19 +405,52 @@ func periodBriefRunLocksComposerStatus(status string) bool {
 	}
 }
 
-func (h *Handler) loadActivePeriodBriefRunForPage(
+func periodBriefRunIsOpen(status string) bool {
+	return periodBriefRunLocksComposerStatus(status) || status == "awaiting_confirm"
+}
+
+func (h *Handler) loadLatestPeriodBriefRunForPage(
 	ctx context.Context,
 	workspaceID, userID, pageID pgtype.UUID,
 ) (notePeriodBriefRunRow, error) {
 	var row notePeriodBriefRunRow
 	err := h.DB.QueryRow(ctx, `
-SELECT id, status
+SELECT id, status, chat_session_id, source_page_id, draft_page_id
 FROM note_period_brief_run
 WHERE workspace_id = $1 AND owner_user_id = $2 AND source_page_id = $3
-  AND status IN ('planning', 'collecting', 'synthesizing', 'awaiting_confirm')
 ORDER BY created_at DESC
-LIMIT 1`, workspaceID, userID, pageID).Scan(&row.ID, &row.Status)
+LIMIT 1`, workspaceID, userID, pageID).Scan(
+		&row.ID, &row.Status, &row.ChatSessionID, &row.SourcePageID, &row.DraftPageID,
+	)
 	return row, err
+}
+
+func (h *Handler) loadActivePeriodBriefRunForPage(
+	ctx context.Context,
+	workspaceID, userID, pageID pgtype.UUID,
+) (notePeriodBriefRunRow, error) {
+	row, err := h.loadLatestPeriodBriefRunForPage(ctx, workspaceID, userID, pageID)
+	if err != nil {
+		return row, err
+	}
+	if !periodBriefRunLocksComposerStatus(row.Status) {
+		return notePeriodBriefRunRow{}, pgx.ErrNoRows
+	}
+	return row, nil
+}
+
+func (h *Handler) loadOpenPeriodBriefRunForPage(
+	ctx context.Context,
+	workspaceID, userID, pageID pgtype.UUID,
+) (notePeriodBriefRunRow, error) {
+	row, err := h.loadLatestPeriodBriefRunForPage(ctx, workspaceID, userID, pageID)
+	if err != nil {
+		return row, err
+	}
+	if !periodBriefRunIsOpen(row.Status) {
+		return notePeriodBriefRunRow{}, pgx.ErrNoRows
+	}
+	return row, nil
 }
 
 func (h *Handler) startPeriodBriefFromChat(

@@ -13,7 +13,7 @@ import { useT } from "../../../i18n";
  *
  * Everything here is served assembled by GET /api/agents/{id}/runtime-config.
  * The name arrives display-ready and connectivity is the daemon's live
- * Workspace Runner socket — this component no longer looks a runtime id up in
+ * WorkspaceDaemon socket — this component no longer looks a runtime id up in
  * a list (which silently missed for another member's private runtime) and no
  * longer derives liveness from a runtime's status/heartbeat (Computer-level
  * fact, and runtimes moved to WS presence anyway).

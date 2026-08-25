@@ -540,6 +540,8 @@ multica workspace info --projects
 multica workspace info --projects --output json
 ```
 
+The legacy `multica project` command is not available.
+
 ### Adaptive channel goals
 
 Goal Mode is opt-in per group channel. Ordinary messages and one-step tasks do

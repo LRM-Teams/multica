@@ -23,10 +23,10 @@ func TestMemoryCuratorRunStatus_StaleHeartbeatIsWaitingRuntime(t *testing.T) {
 		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, visibility, last_seen_at, updated_at) VALUES ($1,  'memory-curator-run-status-stale-daemon',  'Memory Curator Run Status Stale Runtime',  'local',  'codex',  'online', 
 		          '',  '{}'::jsonb,  'private',  now() - interval '10 minutes',  now() - interval '9 minutes')
 		RETURNING id::text
-	`,  testWorkspaceID).Scan(&staleRuntimeID); err != nil {
+	`, testWorkspaceID).Scan(&staleRuntimeID); err != nil {
 		t.Fatal(err)
-}
-	
+	}
+
 	bindTestRuntimeOwner(t, "memory-curator-run-status-stale-daemon", testUserID)
 
 	var curatorAgentID string
@@ -73,10 +73,10 @@ func TestResolveActiveMemoryCurationTargetAgentIDs_StaleHeartbeatExcluded(t *tes
 		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, visibility, last_seen_at, updated_at) VALUES ($1,  'memory-curator-active-targets-stale-daemon',  'Memory Curator Active Targets Stale Runtime',  'local',  'codex',  'online', 
 		          '',  '{}'::jsonb,  'private',  now() - interval '10 minutes',  now() - interval '9 minutes')
 		RETURNING id::text
-	`,  testWorkspaceID).Scan(&staleRuntimeID); err != nil {
+	`, testWorkspaceID).Scan(&staleRuntimeID); err != nil {
 		t.Fatal(err)
-}
-	
+	}
+
 	bindTestRuntimeOwner(t, "memory-curator-active-targets-stale-daemon", testUserID)
 
 	var targetAgentID string

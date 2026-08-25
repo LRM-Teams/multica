@@ -53,6 +53,7 @@ import { AgentProfileActions } from "../../agents/components/agent-profile-actio
 import { InlineFieldEditor } from "../../agents/components/inline-field-editor";
 import { useUpdateAgent } from "../../agents/hooks/use-update-agent";
 import { ConversationSidePanelShell } from "../../common/conversation-side-panel-shell";
+import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorStyledName } from "../../common/actor-styled-name";
 import { AgentFilesPanel } from "./agent-files-panel";
 import { useT } from "../../i18n/use-t";
@@ -450,8 +451,19 @@ function AgentProfileTabContent({
             </InspectorField>
             <InspectorField label={t(($) => $.side_panel.owner_label)}>
               <Tooltip>
-                <TooltipTrigger render={<span className="truncate" />}>
-                  {ownerName(agent, members)}
+                <TooltipTrigger
+                  render={<span className="flex min-w-0 items-center gap-1.5" />}
+                >
+                  {agent.owner_id ? (
+                    <ActorAvatar
+                      actorType="member"
+                      actorId={agent.owner_id}
+                      name={ownerName(agent, members)}
+                      avatarUrlHint={members.find((m) => m.user_id === agent.owner_id)?.avatar_url}
+                      size={20}
+                    />
+                  ) : null}
+                  <span className="truncate">{ownerName(agent, members)}</span>
                 </TooltipTrigger>
                 <TooltipContent side="top">{ownerName(agent, members)}</TooltipContent>
               </Tooltip>

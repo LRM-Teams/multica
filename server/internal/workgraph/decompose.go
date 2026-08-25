@@ -230,6 +230,11 @@ func (s *Store) DecomposeIssue(ctx context.Context, input DecomposeInput) (Decom
 	if _, err = tx.Exec(ctx, `INSERT INTO issue_decompose_request(workspace_id,parent_issue_id,actor_agent_id,idempotency_key,request_digest,response) VALUES($1,$2,$3,$4,$5,$6)`, w, parent, actor, key, digest, encoded); err != nil {
 		return DecomposeResult{}, err
 	}
+	if s.OnNodesReadyTx != nil && len(result.ReadyIssueIDs) > 0 {
+		if err = s.OnNodesReadyTx(ctx, tx, in.WorkspaceID, result.ReadyIssueIDs); err != nil {
+			return DecomposeResult{}, err
+		}
+	}
 	if err = tx.Commit(ctx); err != nil {
 		return DecomposeResult{}, err
 	}

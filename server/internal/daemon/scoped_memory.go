@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	executionMemoryBudgetBytes = 16 * 1024
+	executionMemoryBudgetBytes  = 16 * 1024
 	agentScopeMemoryBudgetBytes = 6 * 1024
 )
 

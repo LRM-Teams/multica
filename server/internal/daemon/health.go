@@ -245,41 +245,68 @@ func (d *Daemon) credentialProxyMessageSearchHandler() http.HandlerFunc {
 }
 
 func (d *Daemon) credentialProxyMessageResolveHandler() http.HandlerFunc {
-	return d.credentialProxyMessageMutationHandler("/api/agent/messages/resolve", func(request credentialProxyMessageResolveRequest) map[string]any {
-		return map[string]any{"message_id": strings.TrimSpace(request.MessageID)}
+	return d.credentialProxyMessageMutationHandler("/api/agent/messages/resolve", func() credentialProxyMessageMutationRequest {
+		return &credentialProxyMessageResolveRequest{}
 	})
 }
 
 func (d *Daemon) credentialProxyMessageReactHandler() http.HandlerFunc {
-	return d.credentialProxyMessageMutationHandler("/api/agent/messages/react", func(request credentialProxyMessageReactRequest) map[string]any {
-		return map[string]any{"message_id": strings.TrimSpace(request.MessageID), "emoji": strings.TrimSpace(request.Emoji), "remove": request.Remove}
+	return d.credentialProxyMessageMutationHandler("/api/agent/messages/react", func() credentialProxyMessageMutationRequest {
+		return &credentialProxyMessageReactRequest{}
 	})
 }
 
-func (d *Daemon) credentialProxyMessageMutationHandler(path string, bodyFor any) http.HandlerFunc {
+type credentialProxyMessageMutationRequest interface {
+	identity() (agentID, workspaceID string)
+	upstreamBody() (map[string]any, error)
+}
+
+func (request *credentialProxyMessageResolveRequest) identity() (string, string) {
+	return request.AgentID, request.WorkspaceID
+}
+
+func (request *credentialProxyMessageResolveRequest) upstreamBody() (map[string]any, error) {
+	messageID := strings.TrimSpace(request.MessageID)
+	if messageID == "" {
+		return nil, fmt.Errorf("message identity is required")
+	}
+	return map[string]any{"message_id": messageID}, nil
+}
+
+func (request *credentialProxyMessageReactRequest) identity() (string, string) {
+	return request.AgentID, request.WorkspaceID
+}
+
+func (request *credentialProxyMessageReactRequest) upstreamBody() (map[string]any, error) {
+	messageID := strings.TrimSpace(request.MessageID)
+	emoji := strings.TrimSpace(request.Emoji)
+	if messageID == "" || emoji == "" {
+		return nil, fmt.Errorf("message identity is required")
+	}
+	return map[string]any{"message_id": messageID, "emoji": emoji, "remove": request.Remove}, nil
+}
+
+func (d *Daemon) credentialProxyMessageMutationHandler(path string, newRequest func() credentialProxyMessageMutationRequest) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var agentID, workspaceID string
-		var body map[string]any
-		switch makeBody := bodyFor.(type) {
-		case func(credentialProxyMessageResolveRequest) map[string]any:
-			var request credentialProxyMessageResolveRequest
-			if !decodeCredentialProxyRequest(w, r, &request) {
-				return
-			}
-			agentID, workspaceID = request.AgentID, request.WorkspaceID
-			body = makeBody(request)
-		case func(credentialProxyMessageReactRequest) map[string]any:
-			var request credentialProxyMessageReactRequest
-			if !decodeCredentialProxyRequest(w, r, &request) {
-				return
-			}
-			agentID, workspaceID = request.AgentID, request.WorkspaceID
-			body = makeBody(request)
-		default:
+		if newRequest == nil {
 			http.Error(w, "Credential Proxy misconfigured", http.StatusInternalServerError)
 			return
 		}
-		if !normalizeCredentialProxyIdentity(&agentID, &workspaceID) || strings.TrimSpace(fmt.Sprint(body["message_id"])) == "" || (path == "/api/agent/messages/react" && strings.TrimSpace(fmt.Sprint(body["emoji"])) == "") {
+		request := newRequest()
+		if request == nil {
+			http.Error(w, "Credential Proxy misconfigured", http.StatusInternalServerError)
+			return
+		}
+		if !decodeCredentialProxyRequest(w, r, request) {
+			return
+		}
+		agentID, workspaceID := request.identity()
+		if !normalizeCredentialProxyIdentity(&agentID, &workspaceID) {
+			http.Error(w, "agent_id, workspace_id, and message identity are required", http.StatusBadRequest)
+			return
+		}
+		body, err := request.upstreamBody()
+		if err != nil {
 			http.Error(w, "agent_id, workspace_id, and message identity are required", http.StatusBadRequest)
 			return
 		}

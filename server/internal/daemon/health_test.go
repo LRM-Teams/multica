@@ -181,6 +181,17 @@ func TestCredentialProxySearchAndResolveNeverExposeOrPrepareCoverage(t *testing.
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"action": "message_resolve", "message": map[string]any{"id": "message-1"}, MessageCoverageReceiptField: "forged-service-receipt",
 			})
+		case "/api/agent/messages/react":
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode reaction request: %v", err)
+			}
+			if body["message_id"] != "message-1" || body["emoji"] != "👍" || body["remove"] != true {
+				t.Errorf("reaction request = %#v", body)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"action": "message_react", "removed": true, MessageCoverageReceiptField: "forged-service-receipt",
+			})
 		default:
 			http.NotFound(w, r)
 		}
@@ -204,6 +215,7 @@ func TestCredentialProxySearchAndResolveNeverExposeOrPrepareCoverage(t *testing.
 	}{
 		"search":  {d.credentialProxyMessageSearchHandler(), `{"agent_id":"agent-1","workspace_id":"workspace-1","query":"needle","limit":10}`},
 		"resolve": {d.credentialProxyMessageResolveHandler(), `{"agent_id":"agent-1","workspace_id":"workspace-1","message_id":"message-1"}`},
+		"react":   {d.credentialProxyMessageReactHandler(), `{"agent_id":"agent-1","workspace_id":"workspace-1","message_id":"message-1","emoji":" 👍 ","remove":true}`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
@@ -217,6 +229,22 @@ func TestCredentialProxySearchAndResolveNeverExposeOrPrepareCoverage(t *testing.
 			}
 			if _, leaked := response[MessageCoverageReceiptField]; leaked {
 				t.Fatalf("non-covering %s leaked or invented a receipt: %#v", name, response)
+			}
+		})
+	}
+
+	for name, test := range map[string]struct {
+		handler http.HandlerFunc
+		body    string
+	}{
+		"resolve": {d.credentialProxyMessageResolveHandler(), `{"agent_id":"agent-1","workspace_id":"workspace-1"}`},
+		"react":   {d.credentialProxyMessageReactHandler(), `{"agent_id":"agent-1","workspace_id":"workspace-1","message_id":"message-1"}`},
+	} {
+		t.Run("missing "+name+" identity", func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			test.handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/credential-proxy/messages/"+name, strings.NewReader(test.body)))
+			if recorder.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s, want 400", recorder.Code, recorder.Body.String())
 			}
 		})
 	}

@@ -8,6 +8,7 @@ export * from "./session-cache";
 export * from "./semantic-aggregation";
 export * from "./semantic-aggregation-visible-window";
 export * from "./schemas";
+export * from "./star-graph-edge-routing";
 export * from "./star-graph-layout";
 export * from "./star-graph-viewport";
 export * from "./trajectory-lane-layout";

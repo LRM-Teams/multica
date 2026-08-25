@@ -83,10 +83,12 @@ func TestRonaldoV6DirectorProtocolRequiresParallelChineseResearch(t *testing.T) 
 func TestBuildV6WorkDispatchPromptMakesDiscussionExecutable(t *testing.T) {
 	manifest := validV6DispatchPromptManifest(t, map[string]any{
 		"expected_result_schema": string(V6ContractDiscussionTurnSubmission),
-		"task_context": map[string]any{
-			"discussion_id":       "00000000-0000-4000-8000-000000000301",
-			"discussion_revision": 1,
-			"input_set_hash":      "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"task_specific_schema": map[string]any{
+			"task_context": map[string]any{
+				"discussion_id":       "00000000-0000-4000-8000-000000000301",
+				"discussion_revision": 1,
+				"input_set_hash":      "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			},
 		},
 	})
 	prompt, err := BuildV6WorkDispatchPrompt(manifest)
@@ -112,14 +114,16 @@ func TestBuildV6WorkDispatchPromptMakesIntegrationExecutable(t *testing.T) {
 		"branch_refs": []any{
 			map[string]any{"id": "00000000-0000-4000-8000-000000000302", "state_version": 2},
 		},
-		"input_nodes": []any{
-			map[string]any{"kind": "result_s", "id": "00000000-0000-4000-8000-000000000303", "version_id": "00000000-0000-4000-8000-000000000304", "tier": "S", "content_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
-			map[string]any{"kind": "result_s", "id": "00000000-0000-4000-8000-000000000305", "version_id": "00000000-0000-4000-8000-000000000306", "tier": "S", "content_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},
-		},
-		"task_context": map[string]any{
-			"discussion_id":       "00000000-0000-4000-8000-000000000301",
-			"discussion_revision": 1,
-			"input_set_hash":      "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+		"task_specific_schema": map[string]any{
+			"input_nodes": []any{
+				map[string]any{"kind": "result_s", "id": "00000000-0000-4000-8000-000000000303", "version_id": "00000000-0000-4000-8000-000000000304", "tier": "S", "content_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+				map[string]any{"kind": "result_s", "id": "00000000-0000-4000-8000-000000000305", "version_id": "00000000-0000-4000-8000-000000000306", "tier": "S", "content_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},
+			},
+			"task_context": map[string]any{
+				"discussion_id":       "00000000-0000-4000-8000-000000000301",
+				"discussion_revision": 1,
+				"input_set_hash":      "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+			},
 		},
 	})
 	prompt, err := BuildV6WorkDispatchPrompt(manifest)

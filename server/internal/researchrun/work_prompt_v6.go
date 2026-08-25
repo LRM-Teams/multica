@@ -21,10 +21,13 @@ type v6WorkDispatchIdentity struct {
 		GoalVersion int `json:"goal_version"`
 	} `json:"goal"`
 	BranchRefs    []V6BranchRef   `json:"branch_refs"`
-	InputNodes    []V6NodeRef     `json:"input_nodes"`
 	CatalogAccess json.RawMessage `json:"catalog_access"`
 	TaskSchema    json.RawMessage `json:"task_specific_schema"`
-	TaskContext   json.RawMessage `json:"task_context"`
+}
+
+type v6DispatchContext struct {
+	InputNodes  []V6NodeRef     `json:"input_nodes"`
+	TaskContext json.RawMessage `json:"task_context"`
 }
 
 // BuildV6WorkDispatchPrompt turns a frozen Work Manifest into an executable
@@ -38,6 +41,12 @@ func BuildV6WorkDispatchPrompt(manifest V6WorkManifest) (string, error) {
 	var identity v6WorkDispatchIdentity
 	if err = json.Unmarshal(decoded.Envelope, &identity); err != nil {
 		return "", fmt.Errorf("%w: decode V6 work identity", ErrInvalidContract)
+	}
+	var dispatchContext v6DispatchContext
+	if len(identity.TaskSchema) > 0 && string(identity.TaskSchema) != "null" {
+		if err = json.Unmarshal(identity.TaskSchema, &dispatchContext); err != nil {
+			return "", fmt.Errorf("%w: decode V6 dispatch context", ErrInvalidContract)
+		}
 	}
 	if strings.TrimSpace(identity.RunID) == "" || strings.TrimSpace(identity.WorkItemID) == "" || strings.TrimSpace(identity.AttemptID) == "" ||
 		strings.TrimSpace(identity.ManifestID) == "" || strings.TrimSpace(identity.ManifestHash) == "" || strings.TrimSpace(string(identity.ExpectedResult)) == "" {
@@ -99,7 +108,7 @@ func BuildV6WorkDispatchPrompt(manifest V6WorkManifest) (string, error) {
 			DiscussionRevision int    `json:"discussion_revision"`
 			InputSetHash       string `json:"input_set_hash"`
 		}
-		if json.Unmarshal(identity.TaskContext, &discussion) != nil || discussion.DiscussionID == "" || discussion.DiscussionRevision < 1 || discussion.InputSetHash == "" {
+		if json.Unmarshal(dispatchContext.TaskContext, &discussion) != nil || discussion.DiscussionID == "" || discussion.DiscussionRevision < 1 || discussion.InputSetHash == "" {
 			return "", fmt.Errorf("%w: incomplete V6 discussion identity", ErrInvalidContract)
 		}
 		prompt.WriteString("你是候选节点的当前 Steward。逐项比较 Manifest 中冻结的 input_nodes，判断它们是否存在足够的共同语义与新增价值；不得因为数量足够就同意融合。提交下面的精确结构：\n\n")
@@ -114,10 +123,10 @@ func BuildV6WorkDispatchPrompt(manifest V6WorkManifest) (string, error) {
 			DiscussionRevision int    `json:"discussion_revision"`
 			InputSetHash       string `json:"input_set_hash"`
 		}
-		if json.Unmarshal(identity.TaskContext, &integration) != nil || integration.DiscussionID == "" || integration.DiscussionRevision < 1 || integration.InputSetHash == "" || len(identity.InputNodes) < 2 || len(identity.BranchRefs) == 0 {
+		if json.Unmarshal(dispatchContext.TaskContext, &integration) != nil || integration.DiscussionID == "" || integration.DiscussionRevision < 1 || integration.InputSetHash == "" || len(dispatchContext.InputNodes) < 2 || len(identity.BranchRefs) == 0 {
 			return "", fmt.Errorf("%w: incomplete V6 integration identity", ErrInvalidContract)
 		}
-		inputNodes, _ := json.Marshal(identity.InputNodes)
+		inputNodes, _ := json.Marshal(dispatchContext.InputNodes)
 		branchRefs, _ := json.Marshal(identity.BranchRefs)
 		prompt.WriteString("Discussion 已全体同意。综合冻结 input_nodes，生成一个有明确语义增益、可独立阅读的 successor。两个同级输入晋升一级；一个最高层输入加低层输入为 assimilation 且保持最高 tier；两个 XXL 为 xxl_merge。提交下面的精确结构：\n\n")
 		prompt.WriteString("```json\n{\n  \"contract_kind\": \"integration_submission\",\n  \"schema_version\": 6,\n  \"client_request_id\": \"<new-uuid>\",\n")

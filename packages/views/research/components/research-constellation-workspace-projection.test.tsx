@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ResearchConstellationWorkspace } from "./research-constellation-workspace";
@@ -389,12 +389,11 @@ describe("ResearchConstellationWorkspace local theme", () => {
       />,
     );
 
+    const node = screen.getByRole("button", { name: /Expandable synthesis/ });
     await userEvent.click(
-      screen.getByRole("button", { name: /Expandable synthesis/ }),
+      within(node).getByTestId("star-graph-disclosure"),
     );
-    expect(onSelectNode).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "goal-1" }),
-    );
+    expect(onSelectNode).not.toHaveBeenCalled();
     expect(onToggleNode).toHaveBeenCalledWith("goal-1");
     expect(screen.queryByRole("dialog")).toBeNull();
   });

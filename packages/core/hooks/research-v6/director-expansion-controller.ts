@@ -35,7 +35,12 @@ export class ResearchV6DirectorExpansionController {
 
   async loadMore(rootNodeId: string, failureMessage: string): Promise<void> {
     this.ensureIdentity();
-    await this.load(rootNodeId, true, failureMessage);
+    await this.load(rootNodeId, true, failureMessage, true);
+  }
+
+  async refresh(rootNodeId: string, failureMessage: string): Promise<void> {
+    this.ensureIdentity();
+    await this.load(rootNodeId, false, failureMessage, false);
   }
 
   collapse(rootNodeId: string): void {
@@ -65,6 +70,7 @@ export class ResearchV6DirectorExpansionController {
     rootNodeId: string,
     nextPage: boolean,
     failureMessage: string,
+    animate = true,
   ): Promise<void> {
     const key = this.key(rootNodeId);
     const cached = this.queryClient.getQueryData<SlicePages>(key);
@@ -119,9 +125,10 @@ export class ResearchV6DirectorExpansionController {
         .commitExpansion(
           rootNodeId,
           requestToken,
+          this.identity.snapshotId,
           sliceKey,
           revealedNodeIds,
-          newNodeIds,
+          animate ? newNodeIds : [],
         );
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") return;

@@ -154,11 +154,6 @@ export function StarGraphEntityLayer({
               ...motion?.style,
             }}
             onOpen={() => {
-              if (expandable && expansionControl) {
-                onSelectNode?.(entity.id);
-                expansionControl.onToggleNode(entity.id);
-                return;
-              }
               // Opening is a single semantic command. The open owner also
               // writes selection before presenting detail; calling both here
               // duplicates store writes when the session uses one handler for
@@ -167,6 +162,11 @@ export function StarGraphEntityLayer({
               if (onOpenNode) onOpenNode(entity.id);
               else onSelectNode?.(entity.id);
             }}
+            onToggleExpanded={
+              expandable && expansionControl
+                ? () => expansionControl.onToggleNode(entity.id)
+                : undefined
+            }
           />
         );
       })}

@@ -1,6 +1,11 @@
 import { create } from "zustand";
 
 export interface ResearchV6DirectorExpansionDisplay {
+  /**
+   * Owning immutable Projection Snapshot; retained until the replacement
+   * slice commits.
+   */
+  snapshotId: string;
   sliceKey: string;
   revealedNodeIds: readonly string[];
 }
@@ -13,6 +18,7 @@ export interface ResearchV6DirectorExpansionTransition {
 }
 
 interface ResearchV6DirectorDisplayState {
+  scope: string | null;
   identity: string | null;
   selectedNodeId: string | null;
   expandedByRoot: Record<string, ResearchV6DirectorExpansionDisplay>;
@@ -30,6 +36,7 @@ interface ResearchV6DirectorDisplayState {
   commitExpansion: (
     rootNodeId: string,
     requestToken: string,
+    snapshotId: string,
     sliceKey: string,
     revealedNodeIds: readonly string[],
     transitionNodeIds?: readonly string[],
@@ -52,7 +59,15 @@ export function researchV6DirectorDisplayIdentity(
   return `${workspaceId}:${runId}:${snapshotId}`;
 }
 
+export function researchV6DirectorDisplayScope(
+  workspaceId: string,
+  runId: string,
+): string {
+  return `${workspaceId}:${runId}`;
+}
+
 const EMPTY_DISPLAY = {
+  scope: null,
   identity: null,
   selectedNodeId: null,
   expandedByRoot: {},
@@ -68,6 +83,7 @@ export const useResearchV6DirectorDisplayStore =
     ...EMPTY_DISPLAY,
 
     setProjectionIdentity(workspaceId, runId, snapshotId) {
+      const scope = researchV6DirectorDisplayScope(workspaceId, runId);
       const identity = researchV6DirectorDisplayIdentity(
         workspaceId,
         runId,
@@ -76,7 +92,15 @@ export const useResearchV6DirectorDisplayStore =
       set((state) =>
         state.identity === identity
           ? state
-          : { ...EMPTY_DISPLAY, identity },
+          : {
+              ...EMPTY_DISPLAY,
+              scope,
+              identity,
+              // Expansion is a Run-scoped user intent. Keep the last confirmed
+              // slice visible while its replacement loads for the new Snapshot.
+              expandedByRoot:
+                state.scope === scope ? state.expandedByRoot : {},
+            },
       );
     },
 
@@ -97,6 +121,7 @@ export const useResearchV6DirectorDisplayStore =
     commitExpansion(
       rootNodeId,
       requestToken,
+      snapshotId,
       sliceKey,
       revealedNodeIds,
       transitionNodeIds,
@@ -112,7 +137,11 @@ export const useResearchV6DirectorDisplayStore =
         return {
           expandedByRoot: {
             ...state.expandedByRoot,
-            [rootNodeId]: { sliceKey, revealedNodeIds: revealed },
+            [rootNodeId]: {
+              snapshotId,
+              sliceKey,
+              revealedNodeIds: revealed,
+            },
           },
           requestTokenByRoot: withoutKey(
             state.requestTokenByRoot,

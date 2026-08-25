@@ -727,12 +727,8 @@ export function StarGraphCanvas({
         }
         case "openDetail":
           if (!focusId) return;
-          if (expansionControl?.expandableNodeIds.has(focusId)) {
-            onSelectNode?.(focusId);
-            expansionControl.onToggleNode(focusId);
-          } else {
-            onOpenNode?.(focusId);
-          }
+          if (onOpenNode) onOpenNode(focusId);
+          else onSelectNode?.(focusId);
           return;
         case "closeOverlay":
           keyboardNav?.onCloseOverlay?.(action.layer);

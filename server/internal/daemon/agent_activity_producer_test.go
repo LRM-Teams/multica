@@ -35,7 +35,7 @@ func TestAgentActivityProducerObserveGoldenMappings(t *testing.T) {
 		{name: "runtime compacted", observation: AgentObservation{AgentID: "agent-a", Kind: AgentObservationRuntimeCompacted, Data: stage, At: at}, kind: protocol.ActivityKindWorking, detail: "compaction_finished", entryKind: "status", entryText: "Context compaction finished"},
 		{name: "runtime stalled", observation: AgentObservation{AgentID: "agent-a", Kind: AgentObservationRuntimeStalled, Data: stalledStage, At: at}, kind: protocol.ActivityKindError, detail: "runtime_stalled", entryKind: "status", entryText: "Runtime stalled: no runtime events for 7m"},
 		{name: "runtime idle", observation: AgentObservation{AgentID: "agent-a", Kind: AgentObservationRuntimeIdle, Data: stage, At: at}, kind: protocol.ActivityKindOnline, detail: "idle", entryKind: "status", entryText: "Idle"},
-		{name: "runtime diagnostic", observation: AgentObservation{AgentID: "agent-a", Kind: AgentObservationRuntimeDiagnostic, Data: stage, At: at}, kind: protocol.ActivityKindOnline, detail: "idle", entryKind: "system", entryText: "Provider reported a warning"},
+		{name: "runtime diagnostic", observation: AgentObservation{AgentID: "agent-a", Kind: AgentObservationRuntimeDiagnostic, Data: AgentRuntimeDiagnosticObservationData{RuntimeID: "runtime-1", Name: "Codex config warning", Kind: "configWarning", Detail: "User namespaces are unavailable"}, At: at}, kind: protocol.ActivityKindOnline, detail: "idle", entryKind: "system", entryText: "User namespaces are unavailable"},
 		{name: "message accepted", observation: AgentObservation{AgentID: "agent-a", Kind: AgentObservationMessageBodyAccepted, Data: AgentMessageAcceptanceObservationData{RuntimeID: "runtime-1"}, At: at}, kind: protocol.ActivityKindWorking, detail: "message_received", entryKind: "status", entryText: "Message received"},
 		{name: "freshness held", observation: AgentObservation{AgentID: "agent-a", Kind: AgentObservationFreshnessHeld, Data: AgentFreshnessHoldObservationData{RuntimeID: "runtime-1", Target: "channel:one", NewMessageCount: 2, ReasonCode: "local_pending"}, At: at}, kind: protocol.ActivityKindOnline, detail: "idle", entryKind: "system", entryText: "2 newer messages available — review then resend"},
 		{name: "draft sent", observation: AgentObservation{AgentID: "agent-a", Kind: AgentObservationDraftSent, Data: AgentDraftSentObservationData{RuntimeID: "runtime-1", Target: "#one"}, At: at}, kind: protocol.ActivityKindOnline, detail: "idle", entryKind: "system", entryText: "target: #one\nfreshness updates: 0 newer messages\ndecision: saved draft freshness check passed when sent"},
@@ -508,11 +508,38 @@ func TestResidentRuntimeEventsPublishRaftActivityLifecycle(t *testing.T) {
 	if activities[2].Timeline[0].Subtext != "ls -la" {
 		t.Fatalf("tool-use Activity row = %+v", activities[2].Timeline[0])
 	}
-	if activities[3].Timeline[0].Title != "Runtime warning" || activities[3].Timeline[0].Subtext != "Provider reported a warning" {
+	if activities[3].Timeline[0].Title != "Codex config warning (configWarning)" || activities[3].Timeline[0].Subtext != "User namespaces are unavailable" {
 		t.Fatalf("runtime diagnostic Activity = %+v", activities[3].Timeline[0])
 	}
 	if activities[len(activities)-1].Timeline[0].Subtext != "sensitive provider text" {
 		t.Fatalf("runtime error Activity = %+v, want provider error text", activities[len(activities)-1].Timeline[0])
+	}
+}
+
+func TestRuntimeDiagnosticActivityPreservesWarningDetails(t *testing.T) {
+	var activities []protocol.AgentActivityPayload
+	producer := newAgentActivityProducer("daemon-1", time.Now, func(payload protocol.AgentActivityPayload) {
+		activities = append(activities, payload)
+	})
+	installActivityProducerAgent(t, producer)
+	if err := producer.Observe(AgentObservation{
+		AgentID: "agent-a", AgentInstanceID: "instance-a", Kind: AgentObservationRuntimeDiagnostic,
+		Data: AgentRuntimeDiagnosticObservationData{
+			RuntimeID: "runtime-1", Source: "codex", Reference: "run-4193709a", Name: "Bubblewrap PATH warning", Kind: "bubblewrap_path",
+			Detail: "bubblewrap is not on PATH; model refresh timeout is 30s",
+		}, At: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(activities) != 1 || len(activities[0].Timeline) != 1 {
+		t.Fatalf("diagnostic Activity = %+v", activities)
+	}
+	row := activities[0].Timeline[0]
+	if row.Title != "Bubblewrap PATH warning (bubblewrap_path)" {
+		t.Fatalf("diagnostic title = %q", row.Title)
+	}
+	if !strings.Contains(row.Subtext, "Provider: codex") || !strings.Contains(row.Subtext, "Run: run-4193709a") || !strings.Contains(row.Subtext, "model refresh timeout is 30s") {
+		t.Fatalf("diagnostic subtext = %q", row.Subtext)
 	}
 }
 

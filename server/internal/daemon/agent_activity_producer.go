@@ -42,6 +42,37 @@ func activitySystemEntry(title, text string) (protocol.AgentActivityEntry, error
 	return protocol.AgentActivityEntry{Kind: "system", Body: body}, nil
 }
 
+func formatActivityTimelineEntry(source, reference, title, kind, text string) (protocol.AgentActivityEntry, error) {
+	// Diagnostic messages are already bounded at the provider boundary. Keep
+	// this formatter focused on the Activity contract: title plus the optional
+	// provider/run association, without a second generic text-redaction pass.
+	source = strings.TrimSpace(source)
+	reference = strings.TrimSpace(reference)
+	title = strings.TrimSpace(title)
+	kind = strings.TrimSpace(kind)
+	text = strings.TrimSpace(text)
+	if title == "" {
+		title = "Runtime warning"
+	}
+	if kind != "" && !strings.Contains(strings.ToLower(title), strings.ToLower(kind)) {
+		title += " (" + kind + ")"
+	}
+	if text == "" {
+		text = "Provider reported a warning"
+	}
+	if source != "" {
+		text = "Provider: " + source + "\n" + text
+	}
+	if reference != "" {
+		text += "\nRun: " + reference
+	}
+	body, err := json.Marshal(protocol.AgentActivitySystemBody{Title: title, Text: text})
+	if err != nil {
+		return protocol.AgentActivityEntry{}, err
+	}
+	return protocol.AgentActivityEntry{Kind: "system", Body: body}, nil
+}
+
 const (
 	compactionStaleTimeout = 5 * time.Minute
 )

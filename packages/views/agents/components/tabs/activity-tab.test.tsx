@@ -30,6 +30,27 @@ describe("ActivityTab", () => {
     expect(screen.getByTestId("activity-command-block")).toHaveTextContent("git status");
   });
 
+  it("renders concrete provider warning type and message with its timestamp", () => {
+    runnerActivity.mockReturnValue({ data: { summary: null, timeline: [
+      {
+        id: "warning",
+        occurred_at: "2026-08-06T12:02:00Z",
+        title: "Bubblewrap PATH warning (bubblewrap_path)",
+        subtext: "Provider: codex\nbubblewrap is not on PATH; model refresh timeout is 30s\nRun: run-4193709a",
+        activity_kind: "error",
+        detail_kind: "runtime_diagnostic",
+        body_kind: "none",
+      },
+    ] }, isLoading: false, isError: false, refetch: vi.fn() });
+    renderTab();
+    const row = screen.getByTestId("runner-activity-row");
+    expect(row).toHaveTextContent("Bubblewrap PATH warning (bubblewrap_path)");
+    expect(row).toHaveTextContent("Provider: codex");
+    expect(row).toHaveTextContent("bubblewrap is not on PATH; model refresh timeout is 30s");
+    expect(row).toHaveTextContent("Run: run-4193709a");
+    expect(row.querySelector("time")).toHaveAttribute("datetime", "2026-08-06T12:02:00Z");
+  });
+
   it("renders loading, error/retry, and empty states", () => {
     runnerActivity.mockReturnValue({ isLoading: true, isError: false, refetch: vi.fn() });
     const view = renderTab();

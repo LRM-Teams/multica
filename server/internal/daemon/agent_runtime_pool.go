@@ -750,6 +750,31 @@ func (p *agentRuntimePool) residentProviderSession(agentID, runtimeID string) st
 	return strings.TrimSpace(session.ProviderSessionID())
 }
 
+// activityContext returns only stable, user-safe association labels for a
+// resident warning. Run identity is present only while a run is actively
+// bound; no synthetic reference is created for idle diagnostics.
+func (p *agentRuntimePool) activityContext(agentID, runtimeID string) (provider, runID string) {
+	if p == nil {
+		return "", ""
+	}
+	key := strings.TrimSpace(agentID) + "\x00" + strings.TrimSpace(runtimeID)
+	p.mu.Lock()
+	slot := p.slots[key]
+	if slot != nil {
+		slot.mu.Lock()
+	}
+	p.mu.Unlock()
+	if slot == nil {
+		return "", ""
+	}
+	defer slot.mu.Unlock()
+	provider = strings.TrimSpace(slot.provider)
+	if slot.piRunIdentity != nil {
+		runID = strings.TrimSpace(slot.piRunIdentity.RunID)
+	}
+	return provider, runID
+}
+
 func (p *agentRuntimePool) hasResidentBackend(agentID, runtimeID string) bool {
 	if p == nil {
 		return false

@@ -179,7 +179,11 @@ describe("UpdateSection starting state", () => {
     expect(
       screen.queryByText("Queued — will start when this runtime is next online."),
     ).toBeNull();
-    expect(screen.getByText("Failed to initiate update")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Update failed because the Workspace Daemon is not connected. Reconnect it, then retry.",
+      ),
+    ).toBeInTheDocument();
   });
 });
 

@@ -451,6 +451,8 @@ func main() {
 	// mode is what enables recalls.
 	h.GraphMemoryRecall = service.NewGraphMemoryRecallService(
 		pool, service.LoadGraphMemoryLimits(os.Getenv), "", "", service.GraphMemoryHybridSeeder{})
+	h.GraphMemoryAgentControl = service.NewPostgresGraphMemoryAgentControlPlane(pool)
+	h.GraphMemoryAgentGateway = service.NewGraphMemoryAgentGateway(pool)
 	// Recall execution uses the same PI environment contract as the graph
 	// scheduler. The model is also passed through to Explore audit records.
 	h.GraphMemoryRecallExecutor = service.NewGraphMemoryRecallExecutor(
@@ -536,6 +538,11 @@ func main() {
 	// process-level switch is needed or permitted to activate it early.
 	if err := schedulerMgr.Register(scheduler.GraphMemoryJobs(pool, businessMetrics)); err != nil {
 		slog.Warn("scheduler: failed to register graph memory consolidation job", "error", err)
+	} else {
+		schedulerRegistered = true
+	}
+	if err := schedulerMgr.Register(scheduler.GraphMemoryAgentReconcileJob(pool, h.GraphMemoryAgentControl)); err != nil {
+		slog.Warn("scheduler: failed to register graph memory agent reconciliation job", "error", err)
 	} else {
 		schedulerRegistered = true
 	}

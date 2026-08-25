@@ -101,12 +101,48 @@ type TraversalStore interface {
 //
 // Endpoints (all require "Authorization: Bearer <token>"):
 //
-//	POST /view    {trajectory_id, expansion_id, node_id} -> node body + frontmatter subset
-//	POST /expand  {trajectory_id, node_id, relation?, request_key} -> ordered candidates
-//	    plus a unique expansion_id; beyond the round budget: 200
-//	    {"budget_exceeded":true,"candidates":[]} (Q15/A6)
-//	POST /submit  {trajectory_id, found, summary, node_ids} -> the single
-//	    immutable final answer (identical replay idempotent, conflicting rejected)
+
+// AgentToolOperationReservation is the durable idempotency result for one
+// native Agent Graph operation.
+type AgentToolOperationReservation struct {
+	OperationID string
+	Replay      bool
+	Pending     bool
+	Response    json.RawMessage
+	Error       string
+}
+
+// AgentToolLedger binds one ExploreToolServer to one fenced PostgreSQL Agent
+// run. A nil ledger preserves the in-memory recall/backtest behavior.
+type AgentToolLedger interface {
+	TrajectoryID() string
+	Reserve(context.Context, string, string, json.RawMessage) (AgentToolOperationReservation, error)
+	Complete(context.Context, string, json.RawMessage, string) error
+	RecordViewed(context.Context, []string) error
+	Finish(context.Context, string, string, json.RawMessage, []Citation, json.RawMessage) error
+}
+
+// AgentToolQuota is an optional durable pre-reservation quota gate. Agent mode
+// ledgers implement it; recall/backtest ledgers remain unaffected.
+type AgentToolQuota interface {
+	ValidateOperation(context.Context, string, string, json.RawMessage) error
+}
+
+// AgentToolProgress optionally exposes durable trajectory progress so a
+// stateless gateway response does not reset round accounting per HTTP request.
+type AgentToolProgress interface {
+	ExplorationRounds(context.Context) (int, error)
+}
+
+// POST /view    {trajectory_id, expansion_id, node_id} -> node body + frontmatter subset
+// POST /expand  {trajectory_id, node_id, relation?, request_key} -> ordered candidates
+//
+//	plus a unique expansion_id; beyond the round budget: 200
+//	{"budget_exceeded":true,"candidates":[]} (Q15/A6)
+//
+// POST /submit  {trajectory_id, found, summary, node_ids} -> the single
+//
+//	immutable final answer (identical replay idempotent, conflicting rejected)
 type ExploreToolServer struct {
 	store *Store
 	retr  *HybridRetriever // may be nil; embedding neighbors are then skipped
@@ -116,10 +152,15 @@ type ExploreToolServer struct {
 	// Explore call and never re-resolve the current pointer.
 	version int
 	state   TraversalStore
+	ledger  AgentToolLedger
 
 	httpServer  *http.Server
 	baseURL     string
 	bearerToken string
+	terminalMu  sync.Mutex
+	checkpoints map[string]json.RawMessage
+	queries     map[string]string
+	startByKey  map[string]memoryGraphStartResponse
 }
 
 // submitRecord is the validated /submit payload kept server-side.
@@ -141,6 +182,12 @@ func NewExploreToolServer(store *Store, retr *HybridRetriever, cfg ExploreConfig
 // traversal-state store; a nil state store falls back to the in-memory
 // implementation.
 func NewExploreToolServerWithState(store *Store, retr *HybridRetriever, cfg ExploreConfig, version int, state TraversalStore) (*ExploreToolServer, error) {
+	return NewExploreToolServerWithAgentLedger(store, retr, cfg, version, state, nil)
+}
+
+// NewExploreToolServerWithAgentLedger binds native tools to one fenced durable
+// Agent run while retaining an injectable traversal store for tests.
+func NewExploreToolServerWithAgentLedger(store *Store, retr *HybridRetriever, cfg ExploreConfig, version int, state TraversalStore, ledger AgentToolLedger) (*ExploreToolServer, error) {
 	cfg = cfg.normalized()
 	if state == nil {
 		state = newInMemoryTraversalStore()
@@ -155,12 +202,19 @@ func NewExploreToolServerWithState(store *Store, retr *HybridRetriever, cfg Expl
 		cfg:         cfg,
 		version:     version,
 		state:       state,
+		ledger:      ledger,
 		bearerToken: fmt.Sprintf("%x", token),
+		checkpoints: make(map[string]json.RawMessage),
+		queries:     make(map[string]string),
+		startByKey:  make(map[string]memoryGraphStartResponse),
 	}
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("POST /start", s.handleStart)
 	mux.HandleFunc("POST /explore", s.handleExplore)
+	mux.HandleFunc("POST /redirect", s.handleRedirect)
 	mux.HandleFunc("POST /submit", s.handleSubmit)
+	mux.HandleFunc("POST /checkpoint", s.handleCheckpoint)
 
 	s.httpServer = &http.Server{
 		Handler:      mux,
@@ -192,6 +246,22 @@ func (s *ExploreToolServer) Shutdown(ctx context.Context) error {
 	return s.httpServer.Shutdown(ctx)
 }
 
+// ServeAuthorizedHTTP executes one gateway request against the five-operation
+// mux. Authentication to the public Agent API has already happened; this method
+// replaces it with the execution-local bearer without exposing that secret to
+// the resident model or daemon.
+func (s *ExploreToolServer) ServeAuthorizedHTTP(w http.ResponseWriter, r *http.Request, operation string) {
+	operation = strings.TrimSpace(operation)
+	clone := r.Clone(r.Context())
+	urlCopy := *r.URL
+	urlCopy.Path = "/" + operation
+	urlCopy.RawPath = ""
+	clone.URL = &urlCopy
+	clone.Header = r.Header.Clone()
+	clone.Header.Set("Authorization", "Bearer "+s.bearerToken)
+	s.httpServer.Handler.ServeHTTP(w, clone)
+}
+
 // RegisterTrajectory creates the trajectory's traversal state with its
 // round-0 seed batch and returns the seed expansion id the agent cites in
 // /view calls.
@@ -200,6 +270,63 @@ func (s *ExploreToolServer) RegisterTrajectory(ctx context.Context, trajectoryID
 }
 
 // trajectoryRounds returns the server-side round count for a trajectory
+
+func (s *ExploreToolServer) reserveAgentOperation(ctx context.Context, operation, key string, request any) (AgentToolOperationReservation, bool, error) {
+	if s.ledger == nil {
+		return AgentToolOperationReservation{}, false, nil
+	}
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return AgentToolOperationReservation{}, true, errors.New("idempotency_key is required for Agent tools")
+	}
+	raw, err := json.Marshal(request)
+	if err != nil {
+		return AgentToolOperationReservation{}, true, err
+	}
+	reservation, err := s.ledger.Reserve(ctx, key, operation, raw)
+	if err != nil {
+		return reservation, true, err
+	}
+	if !reservation.Replay && !reservation.Pending {
+		if quota, ok := s.ledger.(AgentToolQuota); ok {
+			if err := quota.ValidateOperation(ctx, operation, key, raw); err != nil {
+				_ = s.ledger.Complete(ctx, reservation.OperationID, json.RawMessage(`{}`), err.Error())
+				return reservation, true, err
+			}
+		}
+	}
+	return reservation, true, nil
+}
+
+func (s *ExploreToolServer) writeAgentOperationReplay(w http.ResponseWriter, reservation AgentToolOperationReservation) bool {
+	if reservation.Pending {
+		exploreWriteError(w, http.StatusConflict, "OPERATION_PENDING", "the idempotent operation is still pending")
+		return true
+	}
+	if !reservation.Replay {
+		return false
+	}
+	if reservation.Error != "" {
+		exploreWriteError(w, http.StatusConflict, "OPERATION_FAILED", reservation.Error)
+		return true
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(reservation.Response)
+	return true
+}
+
+func (s *ExploreToolServer) completeAgentOperation(ctx context.Context, reservation AgentToolOperationReservation, response any, operationErr string) error {
+	if s.ledger == nil || reservation.OperationID == "" {
+		return nil
+	}
+	raw, err := json.Marshal(response)
+	if err != nil {
+		return err
+	}
+	return s.ledger.Complete(ctx, reservation.OperationID, raw, operationErr)
+}
+
 // (zero for unknown trajectories).
 func (s *ExploreToolServer) trajectoryRounds(trajectoryID string) int {
 	n, err := s.state.Rounds(context.Background(), trajectoryID)
@@ -433,6 +560,252 @@ type expandCandidate struct {
 	Snippet string `json:"snippet"`
 }
 
+// memoryGraphStartRequest begins one server-pinned trajectory. Scope, graph
+// owner, and version are intentionally absent: they belong to this delegated
+// server instance and can never be supplied by the model.
+type memoryGraphStartRequest struct {
+	Query          string `json:"query"`
+	IdempotencyKey string `json:"idempotency_key,omitempty"`
+}
+
+type memoryGraphStartResponse struct {
+	TrajectoryID string         `json:"trajectory_id"`
+	GraphVersion int            `json:"graph_version"`
+	Query        string         `json:"query"`
+	Nodes        []exploredNode `json:"nodes"`
+}
+
+func (s *ExploreToolServer) handleStart(w http.ResponseWriter, r *http.Request) {
+	var req memoryGraphStartRequest
+	if !s.decodeExploreRequest(w, r, &req) {
+		return
+	}
+	req.Query = strings.TrimSpace(req.Query)
+	req.IdempotencyKey = strings.TrimSpace(req.IdempotencyKey)
+	if req.Query == "" {
+		exploreWriteError(w, http.StatusBadRequest, "MISSING_FIELDS", "query is required")
+		return
+	}
+	reservation, durable, err := s.reserveAgentOperation(r.Context(), "start", req.IdempotencyKey, req)
+	if err != nil {
+		status := http.StatusConflict
+		if strings.Contains(err.Error(), "idempotency_key is required") {
+			status = http.StatusBadRequest
+		}
+		exploreWriteError(w, status, "OPERATION_RESERVATION_FAILED", err.Error())
+		return
+	}
+	if durable && s.writeAgentOperationReplay(w, reservation) {
+		return
+	}
+	if req.IdempotencyKey != "" && !durable {
+		s.terminalMu.Lock()
+		existing, ok := s.startByKey[req.IdempotencyKey]
+		s.terminalMu.Unlock()
+		if ok {
+			if existing.Query != req.Query {
+				exploreWriteError(w, http.StatusConflict, "IDEMPOTENCY_CONFLICT", "idempotency_key was already used with another query")
+				return
+			}
+			exploreWriteJSON(w, http.StatusOK, existing)
+			return
+		}
+	}
+	if s.retr == nil {
+		exploreWriteError(w, http.StatusServiceUnavailable, "RETRIEVER_UNAVAILABLE", "hybrid retrieval is unavailable")
+		return
+	}
+	hits, err := s.retr.Search(r.Context(), req.Query)
+	if err != nil {
+		exploreWriteError(w, http.StatusInternalServerError, "RETRIEVAL_ERROR", err.Error())
+		return
+	}
+	ids := make([]string, 0, min(4, len(hits)))
+	for _, hit := range hits {
+		if len(ids) == 4 {
+			break
+		}
+		if s.retr.AllowsNodeID(hit.ID) {
+			ids = append(ids, hit.ID)
+		}
+	}
+	trajectoryID := ""
+	if s.ledger != nil {
+		trajectoryID = strings.TrimSpace(s.ledger.TrajectoryID())
+		if trajectoryID == "" {
+			exploreWriteError(w, http.StatusInternalServerError, "TRAJECTORY_ERROR", "durable trajectory is unavailable")
+			return
+		}
+	} else {
+		idBytes := make([]byte, 16)
+		if _, err := rand.Read(idBytes); err != nil {
+			exploreWriteError(w, http.StatusInternalServerError, "TRAJECTORY_ERROR", "cannot allocate trajectory")
+			return
+		}
+		trajectoryID = hex.EncodeToString(idBytes)
+	}
+	if _, err := s.state.RegisterTrajectory(r.Context(), trajectoryID, ids, s.cfg.ViewsPerExpansion); err != nil {
+		writeTraversalError(w, err)
+		return
+	}
+	g, err := s.loadGraph()
+	if err != nil {
+		exploreWriteError(w, http.StatusInternalServerError, "GRAPH_ERROR", err.Error())
+		return
+	}
+	nodes := make([]exploredNode, 0, len(ids))
+	for _, id := range ids {
+		nodes = append(nodes, s.exploreNode(g, id))
+	}
+	response := memoryGraphStartResponse{TrajectoryID: trajectoryID, GraphVersion: s.version, Query: req.Query, Nodes: nodes}
+	if err := s.completeAgentOperation(r.Context(), reservation, response, ""); err != nil {
+		exploreWriteError(w, http.StatusConflict, "OPERATION_COMPLETION_FAILED", err.Error())
+		return
+	}
+	s.terminalMu.Lock()
+	s.queries[trajectoryID] = req.Query
+	if req.IdempotencyKey != "" && !durable {
+		s.startByKey[req.IdempotencyKey] = response
+	}
+	s.terminalMu.Unlock()
+	exploreWriteJSON(w, http.StatusOK, response)
+}
+
+type memoryGraphRedirectRequest struct {
+	TrajectoryID      string `json:"trajectory_id"`
+	Query             string `json:"query"`
+	SteeringMessageID string `json:"steering_message_id"`
+	IdempotencyKey    string `json:"idempotency_key,omitempty"`
+}
+
+func (s *ExploreToolServer) handleRedirect(w http.ResponseWriter, r *http.Request) {
+	var req memoryGraphRedirectRequest
+	if !s.decodeExploreRequest(w, r, &req) {
+		return
+	}
+	if strings.TrimSpace(req.TrajectoryID) == "" || strings.TrimSpace(req.Query) == "" || strings.TrimSpace(req.SteeringMessageID) == "" {
+		exploreWriteError(w, http.StatusBadRequest, "MISSING_FIELDS", "trajectory_id, query and steering_message_id are required")
+		return
+	}
+	if s.ledger != nil && req.TrajectoryID != s.ledger.TrajectoryID() {
+		exploreWriteError(w, http.StatusConflict, "TRAJECTORY_FENCED", "trajectory does not match the active run")
+		return
+	}
+	if req.IdempotencyKey == "" {
+		req.IdempotencyKey = "redirect:" + strings.TrimSpace(req.SteeringMessageID)
+	}
+	reservation, durable, err := s.reserveAgentOperation(r.Context(), "redirect", req.IdempotencyKey, req)
+	if err != nil {
+		exploreWriteError(w, http.StatusConflict, "OPERATION_RESERVATION_FAILED", err.Error())
+		return
+	}
+	if durable && s.writeAgentOperationReplay(w, reservation) {
+		return
+	}
+	if s.ledger == nil {
+		if _, err := s.state.Rounds(r.Context(), req.TrajectoryID); err != nil {
+			writeTraversalError(w, err)
+			return
+		}
+	}
+	s.terminalMu.Lock()
+	_, known := s.queries[req.TrajectoryID]
+	_, checkpointed := s.checkpoints[req.TrajectoryID]
+	s.terminalMu.Unlock()
+	if !known && s.ledger == nil {
+		writeTraversalError(w, ErrTrajectoryNotFound)
+		return
+	}
+	if checkpointed || s.trajectorySubmission(req.TrajectoryID) != nil {
+		exploreWriteError(w, http.StatusConflict, "TRAJECTORY_TERMINAL", "trajectory is already terminal")
+		return
+	}
+	hits, err := s.retr.Search(r.Context(), strings.TrimSpace(req.Query))
+	if err != nil {
+		exploreWriteError(w, http.StatusInternalServerError, "RETRIEVAL_ERROR", err.Error())
+		return
+	}
+	g, err := s.loadGraph()
+	if err != nil {
+		exploreWriteError(w, http.StatusInternalServerError, "GRAPH_ERROR", err.Error())
+		return
+	}
+	nodes := make([]exploredNode, 0, min(4, len(hits)))
+	for _, hit := range hits {
+		if len(nodes) == 4 {
+			break
+		}
+		if s.retr.AllowsNodeID(hit.ID) {
+			nodes = append(nodes, s.exploreNode(g, hit.ID))
+		}
+	}
+	response := memoryGraphStartResponse{TrajectoryID: req.TrajectoryID, GraphVersion: s.version, Query: strings.TrimSpace(req.Query), Nodes: nodes}
+	if err := s.completeAgentOperation(r.Context(), reservation, response, ""); err != nil {
+		exploreWriteError(w, http.StatusConflict, "OPERATION_COMPLETION_FAILED", err.Error())
+		return
+	}
+	exploreWriteJSON(w, http.StatusOK, response)
+}
+
+type memoryGraphCheckpointRequest struct {
+	TrajectoryID   string          `json:"trajectory_id"`
+	State          json.RawMessage `json:"state"`
+	IdempotencyKey string          `json:"idempotency_key,omitempty"`
+}
+
+func (s *ExploreToolServer) handleCheckpoint(w http.ResponseWriter, r *http.Request) {
+	var req memoryGraphCheckpointRequest
+	if !s.decodeExploreRequest(w, r, &req) {
+		return
+	}
+	if strings.TrimSpace(req.TrajectoryID) == "" || len(req.State) == 0 || !json.Valid(req.State) {
+		exploreWriteError(w, http.StatusBadRequest, "MISSING_FIELDS", "trajectory_id and valid state are required")
+		return
+	}
+	if s.ledger != nil && req.TrajectoryID != s.ledger.TrajectoryID() {
+		exploreWriteError(w, http.StatusConflict, "TRAJECTORY_FENCED", "trajectory does not match the active run")
+		return
+	}
+	reservation, durable, err := s.reserveAgentOperation(r.Context(), "checkpoint", req.IdempotencyKey, req)
+	if err != nil {
+		exploreWriteError(w, http.StatusBadRequest, "OPERATION_RESERVATION_FAILED", err.Error())
+		return
+	}
+	if durable && s.writeAgentOperationReplay(w, reservation) {
+		return
+	}
+	response := map[string]any{"trajectory_id": req.TrajectoryID, "status": "checkpointed"}
+	if s.ledger != nil {
+		raw, _ := json.Marshal(response)
+		if err := s.ledger.Finish(r.Context(), reservation.OperationID, "checkpointed", req.State, nil, raw); err != nil {
+			exploreWriteError(w, http.StatusConflict, "CHECKPOINT_FAILED", err.Error())
+			return
+		}
+		exploreWriteJSON(w, http.StatusOK, response)
+		return
+	}
+	s.terminalMu.Lock()
+	defer s.terminalMu.Unlock()
+	if _, ok := s.queries[req.TrajectoryID]; !ok {
+		writeTraversalError(w, ErrTrajectoryNotFound)
+		return
+	}
+	if existing, ok := s.checkpoints[req.TrajectoryID]; ok {
+		if string(existing) != string(req.State) {
+			exploreWriteError(w, http.StatusConflict, "CHECKPOINT_CONFLICT", "conflicting checkpoint replay")
+			return
+		}
+		exploreWriteJSON(w, http.StatusOK, response)
+		return
+	}
+	if sub, _ := s.state.Submission(r.Context(), req.TrajectoryID); sub != nil {
+		exploreWriteError(w, http.StatusConflict, "TRAJECTORY_TERMINAL", "trajectory is already submitted")
+		return
+	}
+	s.checkpoints[req.TrajectoryID] = append(json.RawMessage(nil), req.State...)
+	exploreWriteJSON(w, http.StatusOK, response)
+}
+
 type expandResponse struct {
 	ExpansionID    string            `json:"expansion_id"`
 	Round          int               `json:"round"`
@@ -441,8 +814,9 @@ type expandResponse struct {
 }
 
 type exploreRequest struct {
-	TrajectoryID string   `json:"trajectory_id"`
-	NodeIDs      []string `json:"node_ids"`
+	TrajectoryID   string   `json:"trajectory_id"`
+	NodeIDs        []string `json:"node_ids"`
+	IdempotencyKey string   `json:"idempotency_key,omitempty"`
 }
 
 type exploredNode struct {
@@ -471,6 +845,18 @@ func (s *ExploreToolServer) handleExplore(w http.ResponseWriter, r *http.Request
 	}
 	if strings.TrimSpace(req.TrajectoryID) == "" || len(req.NodeIDs) == 0 {
 		exploreWriteError(w, http.StatusBadRequest, "MISSING_FIELDS", "trajectory_id and node_ids are required")
+		return
+	}
+	if s.ledger != nil && req.TrajectoryID != s.ledger.TrajectoryID() {
+		exploreWriteError(w, http.StatusConflict, "TRAJECTORY_FENCED", "trajectory does not match the active run")
+		return
+	}
+	reservation, durable, err := s.reserveAgentOperation(r.Context(), "explore", req.IdempotencyKey, req)
+	if err != nil {
+		exploreWriteError(w, http.StatusBadRequest, "OPERATION_RESERVATION_FAILED", err.Error())
+		return
+	}
+	if durable && s.writeAgentOperationReplay(w, reservation) {
 		return
 	}
 	g, err := s.loadGraph()
@@ -505,7 +891,28 @@ func (s *ExploreToolServer) handleExplore(w http.ResponseWriter, r *http.Request
 	for _, id := range req.NodeIDs[:served] {
 		nodes = append(nodes, s.exploreNode(g, id))
 	}
-	exploreWriteJSON(w, http.StatusOK, exploreResponse{Round: round, BudgetExceeded: exceeded, Nodes: nodes})
+	response := exploreResponse{Round: round, BudgetExceeded: exceeded, Nodes: nodes}
+	if s.ledger != nil {
+		viewed := append([]string(nil), req.NodeIDs[:served]...)
+		if err := s.ledger.RecordViewed(r.Context(), viewed); err != nil {
+			exploreWriteError(w, http.StatusConflict, "VIEW_RECORD_FAILED", err.Error())
+			return
+		}
+		if progress, ok := s.ledger.(AgentToolProgress); ok {
+			durableRounds, err := progress.ExplorationRounds(r.Context())
+			if err != nil {
+				exploreWriteError(w, http.StatusConflict, "ROUND_RECORD_FAILED", err.Error())
+				return
+			}
+			response.Round = durableRounds
+			response.BudgetExceeded = durableRounds >= s.cfg.MaxRounds
+		}
+	}
+	if err := s.completeAgentOperation(r.Context(), reservation, response, ""); err != nil {
+		exploreWriteError(w, http.StatusConflict, "OPERATION_COMPLETION_FAILED", err.Error())
+		return
+	}
+	exploreWriteJSON(w, http.StatusOK, response)
 }
 
 func (s *ExploreToolServer) exploreNode(g *Graph, id string) exploredNode {
@@ -700,17 +1107,19 @@ func (s *ExploreToolServer) snippet(g *Graph, id string) string {
 // ---------------------------------------------------------------------------
 
 type submitRequest struct {
-	TrajectoryID string   `json:"trajectory_id"`
-	Found        bool     `json:"found"`
-	Summary      string   `json:"summary"`
-	NodeIDs      []string `json:"node_ids"`
+	TrajectoryID   string   `json:"trajectory_id"`
+	Found          bool     `json:"found"`
+	Summary        string   `json:"summary"`
+	NodeIDs        []string `json:"node_ids"`
+	IdempotencyKey string   `json:"idempotency_key,omitempty"`
 }
 
 type submitResponse struct {
-	Status   string   `json:"status"`
-	Found    bool     `json:"found"`
-	NodeIDs  []string `json:"node_ids"`
-	Warnings []string `json:"warnings,omitempty"`
+	Status    string     `json:"status"`
+	Found     bool       `json:"found"`
+	NodeIDs   []string   `json:"node_ids"`
+	Warnings  []string   `json:"warnings,omitempty"`
+	Citations []Citation `json:"citations,omitempty"`
 }
 
 func (s *ExploreToolServer) handleSubmit(w http.ResponseWriter, r *http.Request) {
@@ -722,17 +1131,71 @@ func (s *ExploreToolServer) handleSubmit(w http.ResponseWriter, r *http.Request)
 		exploreWriteError(w, http.StatusBadRequest, "MISSING_TRAJECTORY_ID", "trajectory_id is required")
 		return
 	}
-	rec, err := s.state.Submit(r.Context(), req.TrajectoryID, req.Found, req.Summary, req.NodeIDs)
-	if err != nil {
-		writeTraversalError(w, err)
+	if s.ledger != nil && req.TrajectoryID != s.ledger.TrajectoryID() {
+		exploreWriteError(w, http.StatusConflict, "TRAJECTORY_FENCED", "trajectory does not match the active run")
 		return
 	}
-	exploreWriteJSON(w, http.StatusOK, submitResponse{
-		Status:   "recorded",
-		Found:    rec.Found,
-		NodeIDs:  rec.NodeIDs,
-		Warnings: rec.Warnings,
-	})
+	reservation, durable, err := s.reserveAgentOperation(r.Context(), "submit", req.IdempotencyKey, req)
+	if err != nil {
+		exploreWriteError(w, http.StatusBadRequest, "OPERATION_RESERVATION_FAILED", err.Error())
+		return
+	}
+	if durable && s.writeAgentOperationReplay(w, reservation) {
+		return
+	}
+
+	s.terminalMu.Lock()
+	_, checkpointed := s.checkpoints[req.TrajectoryID]
+	s.terminalMu.Unlock()
+	if checkpointed {
+		exploreWriteError(w, http.StatusConflict, "TRAJECTORY_TERMINAL", "trajectory is already checkpointed")
+		return
+	}
+	var rec submitRecord
+	if s.ledger != nil {
+		seen := make(map[string]struct{}, len(req.NodeIDs))
+		for _, nodeID := range req.NodeIDs {
+			nodeID = strings.TrimSpace(nodeID)
+			if nodeID == "" {
+				exploreWriteError(w, http.StatusBadRequest, "INVALID_NODE_ID", "node_ids cannot contain an empty id")
+				return
+			}
+			if _, duplicate := seen[nodeID]; duplicate {
+				writeTraversalError(w, fmt.Errorf("%w: %q", ErrSubmitDuplicateNodes, nodeID))
+				return
+			}
+			seen[nodeID] = struct{}{}
+		}
+		rec = submitRecord{Found: req.Found, Summary: req.Summary, NodeIDs: append([]string(nil), req.NodeIDs...)}
+	} else {
+		rec, err = s.state.Submit(r.Context(), req.TrajectoryID, req.Found, req.Summary, req.NodeIDs)
+		if err != nil {
+			writeTraversalError(w, err)
+			return
+		}
+	}
+	citations := qualifyRecallCitations(s.store, s.version, rec.NodeIDs)
+	response := submitResponse{
+		Status:    "recorded",
+		Found:     rec.Found,
+		NodeIDs:   rec.NodeIDs,
+		Warnings:  rec.Warnings,
+		Citations: citations,
+	}
+	if s.ledger != nil {
+		statePatch, _ := json.Marshal(map[string]any{
+			"objective": rec.Summary,
+		})
+		raw, _ := json.Marshal(response)
+		if err := s.ledger.Finish(r.Context(), reservation.OperationID, "submitted", statePatch, citations, raw); err != nil {
+			exploreWriteError(w, http.StatusConflict, "SUBMIT_FAILED", err.Error())
+			return
+		}
+	} else if err := s.completeAgentOperation(r.Context(), reservation, response, ""); err != nil {
+		exploreWriteError(w, http.StatusConflict, "OPERATION_COMPLETION_FAILED", err.Error())
+		return
+	}
+	exploreWriteJSON(w, http.StatusOK, response)
 }
 
 // ---------------------------------------------------------------------------

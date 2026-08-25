@@ -485,6 +485,24 @@ func (h *Handler) removeChannelMemberService(
 	}
 
 	if target.Kind == PrincipalKindAgent {
+		var managedMemoryAgent bool
+		if err := tx.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM graph_memory_channel_agent
+				WHERE channel_id = $1 AND workspace_id = $2
+				  AND agent_id = $3 AND status = 'active'
+			)`, channelID, actor.WorkspaceID, target.ID).Scan(&managedMemoryAgent); err != nil {
+			return memberManagementMutationResult{}, err
+		}
+		if managedMemoryAgent {
+			return memberManagementMutationResult{}, memberManagementError(
+				http.StatusConflict,
+				"active Graph Memory Agent membership is managed by channel memory settings",
+			)
+		}
+	}
+
+	if target.Kind == PrincipalKindAgent {
 		if _, err := tx.Exec(ctx, `
 			SELECT pg_advisory_xact_lock(
 				hashtext('agent_channel_membership_revoke'),

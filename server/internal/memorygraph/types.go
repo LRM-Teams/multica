@@ -329,9 +329,16 @@ type ExploreRun struct {
 // version. Level is -1 for non-graph ids (staging segments) or when the
 // pinned graph could not be read.
 type Citation struct {
-	NodeID    string `json:"node_id"`
-	Level     int    `json:"level"`
-	Epistemic string `json:"epistemic_status,omitempty"`
+	NodeID         string    `json:"node_id"`
+	GraphVersion   int       `json:"graph_version,omitempty"`
+	Level          int       `json:"level"`
+	Epistemic      string    `json:"epistemic_status,omitempty"`
+	Tags           []string  `json:"tags,omitempty"`
+	Title          string    `json:"title,omitempty"`
+	FirstParagraph string    `json:"first_paragraph,omitempty"`
+	Excerpt        string    `json:"excerpt,omitempty"`
+	ContentHash    string    `json:"content_hash,omitempty"`
+	CapturedAt     time.Time `json:"captured_at,omitempty"`
 }
 
 // RecallResult is what Retrieve returns to the downstream agent (Q25).

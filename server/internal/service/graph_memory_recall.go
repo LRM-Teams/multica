@@ -187,17 +187,24 @@ func (s *GraphMemoryRecallService) Begin(ctx context.Context, req GraphMemoryRec
 	// Effective profile: the workspace row wins over the env default.
 	q := db.New(s.pool)
 	memoryType := s.envType
+	graphMemoryMode := "inject"
 	tunables := s.limits.Defaults
 	tttEnabled := false
 	if profile, perr := q.GetGraphMemoryProfile(ctx, wsUUID); perr == nil {
 		if profile.MemoryType == "graph" || profile.MemoryType == "legacy" {
 			memoryType = profile.MemoryType
 		}
+		if profile.GraphMemoryMode == "inject" || profile.GraphMemoryMode == "agent" {
+			graphMemoryMode = profile.GraphMemoryMode
+		}
 		tunables = graphMemoryTunablesFromProfile(profile)
-		tttEnabled = profile.TttEnabled
+		tttEnabled = profile.RecallTttEnabled
 	}
 	if memoryType != "graph" {
 		return nil, fmt.Errorf("%w: memory_type is %s", ErrGraphMemoryRecallDisabled, memoryType)
+	}
+	if graphMemoryMode != "inject" {
+		return nil, fmt.Errorf("%w: graph_memory_mode is %s", ErrGraphMemoryRecallDisabled, graphMemoryMode)
 	}
 
 	// Memory-agent training behavior (spec §5): the invoking agent's active

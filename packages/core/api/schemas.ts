@@ -1519,6 +1519,17 @@ export const GraphMemoryProfileSchema = z.object({
   // Spec §2/§16: an unsupported memory_type must fail validation (surfaced
   // via parseWithFallback) rather than silently coerce to legacy mode.
   memory_type: z.enum(["legacy", "graph"]),
+  graph_memory_mode: z.enum(["inject", "agent"]).default("agent"),
+  memory_agent_runtime_id: z.string().default(""),
+  memory_agent_model: z.string().default(""),
+  memory_agent_thinking: z.string().default(""),
+  recall_ttt_enabled: z.boolean().default(false),
+  consolidation_ttt_enabled: z.boolean().default(false),
+  memory_agent_idle_grace_seconds: z.number().int().default(120),
+  memory_agent_max_nodes_per_call: z.number().int().default(4),
+  memory_agent_max_nodes_per_minute: z.number().int().default(30),
+  memory_agent_max_continuous_turn_seconds: z.number().int().default(600),
+  memory_agent_max_tokens_per_hour: z.number().int().default(200000),
   explore_agents: z.number().int().default(4),
   explore_max_rounds: z.number().int().default(3),
   ttt_enabled: z.boolean().default(false),
@@ -1544,6 +1555,17 @@ export const GraphMemoryProfileSchema = z.object({
 export const EMPTY_GRAPH_MEMORY_PROFILE = {
   workspace_id: "",
   memory_type: "legacy" as const,
+  graph_memory_mode: "agent" as const,
+  memory_agent_runtime_id: "",
+  memory_agent_model: "",
+  memory_agent_thinking: "",
+  recall_ttt_enabled: false,
+  consolidation_ttt_enabled: false,
+  memory_agent_idle_grace_seconds: 120,
+  memory_agent_max_nodes_per_call: 4,
+  memory_agent_max_nodes_per_minute: 30,
+  memory_agent_max_continuous_turn_seconds: 600,
+  memory_agent_max_tokens_per_hour: 200000,
   explore_agents: 4,
   explore_max_rounds: 3,
   ttt_enabled: false,
@@ -1565,6 +1587,36 @@ export const EMPTY_GRAPH_MEMORY_PROFILE = {
   config_version: 0,
   updated_at: "",
 };
+
+export const GraphMemoryChannelModeSchema = z.object({
+  workspace_id: z.string(),
+  channel_id: z.string(),
+  override: z.enum(["inherit", "inject", "agent"]),
+  effective_mode: z.enum(["inject", "agent"]),
+  status: z.enum(["provisioning", "active", "blocked", "inactive"]),
+  blocked_reason: z.string().default(""),
+  agent_id: z.string().default(""),
+  runtime_id: z.string().default(""),
+}).loose();
+
+export const GraphMemoryCitationSchema = z.object({
+  id: z.string(),
+  node_id: z.string(),
+  graph_version: z.number().int(),
+  level: z.string().default(""),
+  epistemic_status: z.string().default(""),
+  tags: z.array(z.string()).default([]),
+  title: z.string().default(""),
+  first_paragraph: z.string().default(""),
+  excerpt: z.string().default(""),
+  content_hash: z.string(),
+  captured_at: z.string(),
+}).loose();
+
+export const GraphMemoryMessageCitationsSchema = z.object({
+  message_id: z.string(),
+  items: z.array(GraphMemoryCitationSchema).default([]),
+}).loose();
 
 export const GraphMemoryGraphStatusSchema = z.object({
   kind: z.enum(["project", "channel"]).catch("project"),

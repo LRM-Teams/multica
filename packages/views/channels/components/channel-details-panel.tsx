@@ -32,6 +32,7 @@ import { ChannelDetailsMemberStack } from "./channel-details-member-stack";
 import { GroupManagerHint } from "./group-manager-hint";
 import { MotionContent } from "../../common/motion-content";
 import { ChannelDetailsSectionCard } from "./channel-details-section-card";
+import { ChannelGraphMemorySettings } from "./channel-graph-memory-settings";
 import { ChannelProjectSettingsPanel } from "./channel-project-settings-panel";
 import { isConversationMuted } from "./conversation-muted";
 import { ChannelNotifyPrefsOptions } from "./channel-notify-prefs";
@@ -652,6 +653,8 @@ export function ChannelDetailsPanel({
               </div>
             </div>
           </div>
+
+          <ChannelGraphMemorySettings wsId={wsId} channelId={channel.id} disabled={!settingsEditable} />
 
           <ChannelProjectSettingsPanel
             wsId={wsId}

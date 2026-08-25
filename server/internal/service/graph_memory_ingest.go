@@ -77,6 +77,12 @@ func (h *GraphMemoryIngestHook) projectForTask(ctx context.Context, task db.Agen
 	return "", nil
 }
 
+// graphMemoryDerivativeAgent prevents the managed Memory Agent's synthesized
+// output from recursively becoming source evidence for the same graph.
+func graphMemoryDerivativeAgent(agent db.Agent) bool {
+	return agent.ManagedRole.Valid && strings.EqualFold(strings.TrimSpace(agent.ManagedRole.String), "graph_memory_channel")
+}
+
 // ingestScopeForTask derives the write target and segment scope metadata
 // from the canonical task scope and the server-resolved route (spec §4/§5).
 // The route argument is only consulted when the task has a channel; it must
@@ -124,6 +130,13 @@ func (h *GraphMemoryIngestHook) Ingest(ctx context.Context, seg memorygraph.Segm
 	task, err := h.queries.GetAgentTask(ctx, taskUUID)
 	if err != nil {
 		return fmt.Errorf("graph memory ingest: load task %s: %w", seg.AgentRunID, err)
+	}
+	producer, err := h.queries.GetAgent(ctx, task.AgentID)
+	if err != nil {
+		return fmt.Errorf("graph memory ingest: load producer agent for task %s: %w", seg.AgentRunID, err)
+	}
+	if graphMemoryDerivativeAgent(producer) {
+		return nil
 	}
 
 	// Per-workspace memory_type gate (design §1/A4): legacy workspaces

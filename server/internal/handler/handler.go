@@ -144,6 +144,12 @@ type Handler struct {
 	// endpoint (spec §1/§3/§14). Nil-safe: the endpoint answers 503 when
 	// unwired.
 	GraphMemoryRecall *service.GraphMemoryRecallService
+	// GraphMemoryAgentControl owns managed per-channel Memory Agent lifecycle,
+	// lease state, and reset/recovery transitions.
+	GraphMemoryAgentControl service.GraphMemoryAgentControlPlane
+	// GraphMemoryAgentGateway exposes only the five Channel-scoped Graph
+	// operations to the managed Agent data plane.
+	GraphMemoryAgentGateway *service.GraphMemoryAgentGateway
 	// GraphMemoryRecallExecutor synchronously runs accepted recalls and returns
 	// only their bounded injection. Nil preserves the pre-execution response.
 	GraphMemoryRecallExecutor *service.GraphMemoryRecallExecutor

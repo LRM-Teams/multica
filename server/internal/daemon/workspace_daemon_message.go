@@ -181,6 +181,21 @@ func (runner *WorkspaceDaemon) acceptMessageDelivery(ctx context.Context, delive
 	runner.recordDiagnostic(canonicalMessageDiagnosticEvent(
 		runner.config.WorkspaceID, runtimeID, delivery, "coordinator_accepted", string(result.outcome), "",
 	))
+	if delivery.Message.Directed && launch.QueueState == protocol.AgentStartQueueRunning {
+		if err := runner.runtimes.deliverActiveDirectedProjection(ctx, delivery.AgentID, runtimeID, delivery.Message); err == nil {
+			if markErr := coordinator.MarkRead(delivery.Target, delivery.Seq); markErr != nil {
+				return messageDeliveryAcceptance{}, fmt.Errorf("persist directed Message boundary: %w", markErr)
+			}
+			result.ack = coordinator.Acknowledgement(delivery)
+			result.outcome = messageDeliveryProviderAccepted
+			runner.recordDiagnostic(canonicalMessageDiagnosticEvent(
+				runner.config.WorkspaceID, runtimeID, delivery, "directed_steering_accepted", "accepted", "",
+			))
+			return result, nil
+		} else if runner.logger != nil {
+			runner.logger.Debug("directed Message steering unavailable; retaining queued delivery", "workspace_id", runner.config.WorkspaceID, "agent_id", delivery.AgentID, "runtime_id", runtimeID, "delivery_id", delivery.DeliveryID, "error", err)
+		}
+	}
 	if launch.QueueState != protocol.AgentStartQueueRunning {
 		return result, nil
 	}

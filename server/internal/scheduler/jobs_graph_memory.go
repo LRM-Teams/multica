@@ -163,7 +163,7 @@ func graphMemoryProfileForPool(pool *pgxpool.Pool) graphMemoryProfileLookup {
 		if rounds <= 0 {
 			rounds = defaultRounds
 		}
-		return rounds, profile.TttEnabled
+		return rounds, profile.RecallTttEnabled
 	}
 }
 

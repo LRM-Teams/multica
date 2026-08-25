@@ -209,6 +209,7 @@ type ChannelMessageResponse struct {
 	Source              string                 `json:"source"`
 	ExternalMessageID   *string                `json:"external_message_id"`
 	ClientMessageID     *string                `json:"client_message_id"`
+	Evaluation          *protocol.EvaluationControl `json:"evaluation,omitempty"`
 	ReplyToMessageID    *string                `json:"reply_to_message_id,omitempty"`
 	ReplyTo             *ChannelMessageReply   `json:"reply_to,omitempty"`
 	QuoteMessageID      *string                `json:"quote_message_id,omitempty"`
@@ -230,6 +231,9 @@ type ChannelMessageResponse struct {
 	// Attachments referenced by this message. The chat bubble renders
 	// file/image cards from these canonical associations.
 	Attachments []AttachmentResponse `json:"attachments,omitempty"`
+	// GraphMemoryCitationCount exposes only immutable snapshot availability;
+	// citation bodies are loaded lazily through the member-authorized endpoint.
+	GraphMemoryCitationCount int `json:"graph_memory_citation_count,omitempty"`
 	// UndeliveredMentions lists structured @ targets who are not channel
 	// members yet. Message is still stored; delivery is withheld until the
 	// sender invites (Raft undelivered / invite). Omit when empty.
@@ -400,6 +404,7 @@ type SendChannelMessageRequest struct {
 	QuoteMessageIDCamel *string                         `json:"quoteMessageId"`
 	Quote               *SendChannelMessageQuoteRequest `json:"quote"`
 	ClientMessageID     *string                         `json:"client_message_id"`
+	Evaluation          *channelMessageEvaluationRequest `json:"evaluation,omitempty"`
 }
 
 type SendChannelMessageQuoteRequest struct {
@@ -2285,6 +2290,7 @@ func (h *Handler) ListChannelMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	attachChannelMessageExtras := func(msgs []ChannelMessageResponse) {
 		h.attachChannelMessageAttachments(r.Context(), workspaceID, msgs)
+		h.attachGraphMemoryCitationCounts(r.Context(), workspaceID, msgs)
 		h.attachChannelMessageReactions(r.Context(), workspaceID, msgs)
 		h.attachChannelMessageReplySummaries(r.Context(), workspaceID, msgs)
 		h.attachChannelMessageQuotes(r.Context(), workspaceID, msgs)
@@ -2455,6 +2461,7 @@ func (h *Handler) listChannelMessagesAround(w http.ResponseWriter, r *http.Reque
 	// Attach extras
 	attachChannelMessageExtras := func(msgs []ChannelMessageResponse) {
 		h.attachChannelMessageAttachments(r.Context(), workspaceIDStr, msgs)
+		h.attachGraphMemoryCitationCounts(r.Context(), workspaceIDStr, msgs)
 		h.attachChannelMessageReactions(r.Context(), workspaceIDStr, msgs)
 		h.attachChannelMessageReplySummaries(r.Context(), workspaceIDStr, msgs)
 		h.attachChannelMessageQuotes(r.Context(), workspaceIDStr, msgs)
@@ -3096,6 +3103,7 @@ func (h *Handler) attachSingleChannelMessageDetails(ctx context.Context, workspa
 	h.attachChannelMessageThreadMetadata(ctx, workspaceID, userID, messages)
 	h.attachChannelMessageThreadReadModel(ctx, workspaceID, messages)
 	h.attachChannelMessageAttachments(ctx, workspaceID, messages)
+	h.attachGraphMemoryCitationCounts(ctx, workspaceID, messages)
 	msg = messages[0]
 	applyChannelMessageTombstone(&msg)
 	return msg
@@ -3115,6 +3123,42 @@ func (h *Handler) attachChannelMessageAttachments(ctx context.Context, workspace
 	grouped := h.groupChannelMessageAttachments(ctx, workspaceID, messageIDs)
 	for i := range messages {
 		messages[i].Attachments = grouped[messages[i].ID]
+	}
+}
+
+func (h *Handler) attachGraphMemoryCitationCounts(ctx context.Context, workspaceID string, messages []ChannelMessageResponse) {
+	if len(messages) == 0 {
+		return
+	}
+	ids := make([]pgtype.UUID, 0, len(messages))
+	for _, message := range messages {
+		if message.DeletedAt == nil {
+			ids = append(ids, parseUUID(message.ID))
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	rows, err := h.DB.Query(ctx, `
+		SELECT message_id,count(*)::int
+		FROM graph_memory_agent_citation
+		WHERE workspace_id=$1::uuid AND message_id=ANY($2::uuid[])
+		GROUP BY message_id`, workspaceID, ids)
+	if err != nil {
+		slog.Warn("graph memory citation count hydration failed", "workspace_id", workspaceID, "error", err)
+		return
+	}
+	defer rows.Close()
+	counts := make(map[string]int)
+	for rows.Next() {
+		var messageID pgtype.UUID
+		var count int
+		if rows.Scan(&messageID, &count) == nil {
+			counts[uuidToString(messageID)] = count
+		}
+	}
+	for i := range messages {
+		messages[i].GraphMemoryCitationCount = counts[messages[i].ID]
 	}
 }
 
@@ -3889,6 +3933,7 @@ func (h *Handler) ListChannelMessageThread(w http.ResponseWriter, r *http.Reques
 		out = append(out, repliesDesc[i])
 	}
 	h.attachChannelMessageAttachments(r.Context(), workspaceID, out)
+	h.attachGraphMemoryCitationCounts(r.Context(), workspaceID, out)
 	h.attachChannelMessageReactions(r.Context(), workspaceID, out)
 	h.attachChannelMessageReplySummaries(r.Context(), workspaceID, out)
 	h.attachChannelMessageQuotes(r.Context(), workspaceID, out)
@@ -3920,6 +3965,20 @@ func (h *Handler) SendChannelMessageThreadReply(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	evaluation, err := normalizeChannelMessageEvaluation(req.Evaluation)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if evaluation != nil {
+		if evaluation.TurnIndex == 0 {
+			writeError(w, http.StatusBadRequest, "evaluation thread reply requires turn_index greater than zero")
+			return
+		}
+		if !h.authorizeChannelEvaluation(w, r, workspaceID) {
+			return
+		}
+	}
 	content, parts, err := messageparts.Normalize(req.Content, req.Parts)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid message parts: "+err.Error())
@@ -3948,6 +4007,10 @@ func (h *Handler) SendChannelMessageThreadReply(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusNotFound, "channel not found")
 		return
 	}
+	if evaluation != nil && !strings.EqualFold(ch.Kind, "group") {
+		writeError(w, http.StatusBadRequest, "evaluation messages require a group channel")
+		return
+	}
 	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
 		return
 	}
@@ -3964,6 +4027,16 @@ func (h *Handler) SendChannelMessageThreadReply(w http.ResponseWriter, r *http.R
 	}
 	root, ok := h.loadChannelThreadRoot(w, r.Context(), workspaceID, channelID, rootID)
 	if !ok {
+		return
+	}
+	rootEvaluation, err := loadChannelMessageEvaluation(r.Context(), h.DB, root.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load evaluation thread metadata")
+		return
+	}
+	if (rootEvaluation != nil || evaluation != nil) &&
+		(rootEvaluation == nil || rootEvaluation.TurnIndex != 0 || !sameEvaluationEpisode(rootEvaluation, evaluation)) {
+		writeError(w, http.StatusConflict, errEvaluationThread.Error())
 		return
 	}
 	replyToMessageID, ok := h.validateChannelThreadReplyTarget(w, r.Context(), workspaceID, channelID, rootID, req.ReplyToMessageID)
@@ -3984,7 +4057,7 @@ func (h *Handler) SendChannelMessageThreadReply(w http.ResponseWriter, r *http.R
 		Content: content, Parts: parts, AttachmentIDs: attachmentIDs,
 		ReplyToMessageID: replyToMessageID, QuoteMessageID: quoteMessageID,
 		QuoteSnapshot: quoteSnapshot, ThreadRootMessageID: rootID,
-		ThreadID: threadID, ClientMessageID: clientMessageID,
+		ThreadID: threadID, ClientMessageID: clientMessageID, Evaluation: evaluation,
 		BeforeRecipientPlanning: func(txHandler *Handler, ctx context.Context, msg ChannelMessageResponse, created bool) error {
 			if !created {
 				return nil
@@ -4006,7 +4079,7 @@ func (h *Handler) SendChannelMessageThreadReply(w http.ResponseWriter, r *http.R
 		},
 	})
 	if err != nil {
-		if errors.Is(err, errChannelClientMessageConflict) {
+		if errors.Is(err, errChannelClientMessageConflict) || errors.Is(err, errEvaluationConflict) {
 			writeError(w, http.StatusConflict, "client_message_id conflicts with an existing channel message")
 			return
 		}
@@ -4635,6 +4708,7 @@ type canonicalChannelMessageInput struct {
 	ThreadRootMessageID     pgtype.UUID
 	ThreadID                *string
 	ClientMessageID         *string
+	Evaluation              *protocol.EvaluationControl
 	BeforeRecipientPlanning func(*Handler, context.Context, ChannelMessageResponse, bool) error
 }
 
@@ -4737,6 +4811,22 @@ func (h *Handler) persistPreparedCanonicalChannelMessage(ctx context.Context, in
 		txHandler.Queries = h.Queries.WithTx(tx)
 	}
 
+	if result.Created {
+		if err := persistChannelMessageEvaluation(ctx, tx, result.Message.ID, input.Evaluation); err != nil {
+			return zero, err
+		}
+		result.Message.Evaluation = input.Evaluation
+	} else {
+		persistedEvaluation, err := loadChannelMessageEvaluation(ctx, tx, result.Message.ID)
+		if err != nil {
+			return zero, err
+		}
+		if !sameEvaluationControl(persistedEvaluation, input.Evaluation) {
+			return zero, errEvaluationConflict
+		}
+		result.Message.Evaluation = persistedEvaluation
+	}
+
 	if input.BeforeRecipientPlanning != nil {
 		if err := input.BeforeRecipientPlanning(&txHandler, ctx, result.Message, result.Created); err != nil {
 			return zero, err
@@ -4806,6 +4896,20 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	evaluation, err := normalizeChannelMessageEvaluation(req.Evaluation)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if evaluation != nil {
+		if evaluation.TurnIndex != 0 {
+			writeError(w, http.StatusBadRequest, "evaluation top-level message requires turn_index=0")
+			return
+		}
+		if !h.authorizeChannelEvaluation(w, r, workspaceID) {
+			return
+		}
+	}
 	content, parts, err := messageparts.Normalize(req.Content, req.Parts)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid message parts: "+err.Error())
@@ -4834,6 +4938,10 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 	ch, found := h.getChannel(r.Context(), workspaceID, channelID)
 	if !found {
 		writeError(w, http.StatusNotFound, "channel not found")
+		return
+	}
+	if evaluation != nil && !strings.EqualFold(ch.Kind, "group") {
+		writeError(w, http.StatusBadRequest, "evaluation messages require a group channel")
 		return
 	}
 	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
@@ -4873,9 +4981,10 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 		QuoteMessageID:   quoteMessageID,
 		QuoteSnapshot:    quoteSnapshot,
 		ClientMessageID:  clientMessageID,
+		Evaluation:       evaluation,
 	})
 	if err != nil {
-		if errors.Is(err, errChannelClientMessageConflict) {
+		if errors.Is(err, errChannelClientMessageConflict) || errors.Is(err, errEvaluationConflict) {
 			writeError(w, http.StatusConflict, "client_message_id conflicts with an existing channel message")
 			return
 		}

@@ -207,6 +207,29 @@ type ResidentPendingNoticeInput interface {
 	AcceptPendingNotice(context.Context, ResidentPendingNotice) error
 }
 
+// ResidentDirectedMessage carries a complete canonical directed Message into
+// an already-running turn. RunID and TurnID fence delayed writes so a Message
+// can never steer a later logical turn.
+type ResidentDirectedMessage struct {
+	RunID          string          `json:"runId"`
+	TurnID         string          `json:"turnId"`
+	MessageID      string          `json:"messageId"`
+	Target         string          `json:"target"`
+	ActorType      string          `json:"actorType"`
+	ActorID        string          `json:"actorId,omitempty"`
+	ActorName      string          `json:"actorName"`
+	Content        string          `json:"content"`
+	Parts          json.RawMessage `json:"parts,omitempty"`
+	BoundedContext json.RawMessage `json:"boundedContext,omitempty"`
+}
+
+// ResidentDirectedMessageInput is intentionally separate from the
+// content-free Pending Notice capability. Only providers that preserve a safe
+// in-flight steering boundary should implement it.
+type ResidentDirectedMessageInput interface {
+	AcceptDirectedMessage(context.Context, ResidentDirectedMessage) error
+}
+
 // ResidentIdleInboxNoticeInput accepts the same content-free Inbox notice at
 // the provider's native idle boundary. Acceptance starts a turn, so Done keeps
 // the same admission meaning as ResidentMessageAcceptance.

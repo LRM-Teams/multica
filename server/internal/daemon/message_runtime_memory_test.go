@@ -297,3 +297,39 @@ func TestPrepareResidentMessageBatchCoalescesIdenticalGraphRecalls(t *testing.T)
 		t.Fatalf("recall calls = %d, want 2 (identical queries coalesced)", got)
 	}
 }
+
+func TestGraphMemoryAgentToolContextProjectsOnlyFiveScopedOperations(t *testing.T) {
+	context := graphMemoryAgentToolContext(protocol.AgentMessageProjection{
+		ID: "message-1", ChannelID: "channel-1", GraphMemoryTools: true,
+	})
+	for _, operation := range []string{"start", "explore", "redirect", "submit", "checkpoint"} {
+		if !strings.Contains(context, operation) {
+			t.Fatalf("tool context missing %q: %s", operation, context)
+		}
+	}
+	for _, forbidden := range []string{"graph owner in a tool body", "Authorization: Bearer"} {
+		if strings.Contains(context, forbidden) {
+			t.Fatalf("tool context leaks forbidden authority %q: %s", forbidden, context)
+		}
+	}
+	if !strings.Contains(context, "/api/agent/channels/channel-1/graph-memory/") || !strings.Contains(context, "message-1") {
+		t.Fatalf("tool context is not bound to channel/message: %s", context)
+	}
+}
+
+func TestGraphMemoryUsageDeltaUsesResidentTurnDelta(t *testing.T) {
+	input, output := graphMemoryUsageDelta(
+		&agent.RuntimeTokenStats{InputTokens: 100, OutputTokens: 20},
+		&agent.RuntimeTokenStats{InputTokens: 135, OutputTokens: 29},
+	)
+	if input != 35 || output != 9 {
+		t.Fatalf("usage delta input=%d output=%d", input, output)
+	}
+	input, output = graphMemoryUsageDelta(
+		&agent.RuntimeTokenStats{InputTokens: 200, OutputTokens: 40},
+		&agent.RuntimeTokenStats{InputTokens: 10, OutputTokens: 5},
+	)
+	if input != 0 || output != 0 {
+		t.Fatalf("reset stats must clamp to zero: input=%d output=%d", input, output)
+	}
+}

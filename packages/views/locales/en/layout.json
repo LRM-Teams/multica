@@ -73,6 +73,8 @@
     "collapse_page": "Collapse {{title}}",
     "create_child": "Create child page",
     "change_icon": "Change icon",
+    "loading_emojis": "Loading emojis…",
+    "more_emojis": "More emojis",
     "share_title": "Share note",
     "share_members_section": "Members",
     "share_agents_section": "Agents",

@@ -364,9 +364,7 @@
         "mission_prompt": { "$ref": "#/$defs/long_text" },
         "expected_result_schema": { "$ref": "#/$defs/key" },
         "task_specific_schema": { "$ref": "#/$defs/free_object" },
-        "task_context": { "$ref": "#/$defs/free_object" },
         "artifacts": { "type": "array", "maxItems": 2048, "items": { "$ref": "#/$defs/manifest_artifact" } },
-        "input_nodes": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/node_ref" } },
         "catalog_access": { "$ref": "#/$defs/catalog_access" },
         "through_state_version": { "$ref": "#/$defs/sequence" },
         "through_event_sequence": { "$ref": "#/$defs/sequence" }

@@ -4,6 +4,7 @@ export interface NotePage {
   parent_id: string | null;
   owner_user_id: string;
   title: string;
+  icon?: string | null;
   content: string;
   sort_key: string;
   share_user_ids: string[];
@@ -29,6 +30,7 @@ export interface CreateNotePageRequest {
 export interface UpdateNotePageRequest {
   title?: string;
   content?: string;
+  icon?: string | null;
 }
 
 export interface MoveNotePageRequest {

@@ -533,3 +533,73 @@ func TestEmptyNoteTrashDeletesOwnDeletedPagesOnly(t *testing.T) {
 		t.Fatal("empty trash deleted another owner's deleted note")
 	}
 }
+
+func TestUpdateNotePageIconOwnerOnly(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	noteID := createNotePageForAITest(t, "Icon note "+uuid.NewString())
+	memberID := createWorkspaceMemberForNoteACL(t, "icon-viewer")
+	shareNoteWithUser(t, noteID, memberID)
+
+	ownerRec := httptest.NewRecorder()
+	testHandler.UpdateNotePage(ownerRec, withURLParam(newRequest(http.MethodPatch, "/api/notes/pages/"+noteID, map[string]any{
+		"icon": "📌",
+	}), "id", noteID))
+	if ownerRec.Code != http.StatusOK {
+		t.Fatalf("owner set icon: expected 200, got %d: %s", ownerRec.Code, ownerRec.Body.String())
+	}
+	var owned NotePageResponse
+	if err := json.NewDecoder(ownerRec.Body).Decode(&owned); err != nil {
+		t.Fatalf("decode owner update: %v", err)
+	}
+	if owned.Icon == nil || *owned.Icon != "📌" {
+		t.Fatalf("owner update icon = %#v, want 📌", owned.Icon)
+	}
+
+	listRec := httptest.NewRecorder()
+	testHandler.ListNotePages(listRec, newRequest(http.MethodGet, "/api/notes/pages", nil))
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("ListNotePages: expected 200, got %d: %s", listRec.Code, listRec.Body.String())
+	}
+	var listResp struct {
+		Pages []NotePageResponse `json:"pages"`
+	}
+	if err := json.NewDecoder(listRec.Body).Decode(&listResp); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	var listed *NotePageResponse
+	for i := range listResp.Pages {
+		if listResp.Pages[i].ID == noteID {
+			listed = &listResp.Pages[i]
+			break
+		}
+	}
+	if listed == nil || listed.Icon == nil || *listed.Icon != "📌" {
+		t.Fatalf("listed icon = %#v, want 📌", listed)
+	}
+
+	sharedRec := httptest.NewRecorder()
+	testHandler.UpdateNotePage(sharedRec, withURLParam(newRequestAs(memberID, http.MethodPatch, "/api/notes/pages/"+noteID, map[string]any{
+		"icon": "🔥",
+	}), "id", noteID))
+	if sharedRec.Code != http.StatusForbidden {
+		t.Fatalf("shared member set icon: expected 403, got %d: %s", sharedRec.Code, sharedRec.Body.String())
+	}
+
+	clearRec := httptest.NewRecorder()
+	testHandler.UpdateNotePage(clearRec, withURLParam(newRequest(http.MethodPatch, "/api/notes/pages/"+noteID, map[string]any{
+		"icon": "",
+	}), "id", noteID))
+	if clearRec.Code != http.StatusOK {
+		t.Fatalf("owner clear icon: expected 200, got %d: %s", clearRec.Code, clearRec.Body.String())
+	}
+	var cleared NotePageResponse
+	if err := json.NewDecoder(clearRec.Body).Decode(&cleared); err != nil {
+		t.Fatalf("decode clear: %v", err)
+	}
+	if cleared.Icon != nil && *cleared.Icon != "" {
+		t.Fatalf("cleared icon = %#v, want empty", cleared.Icon)
+	}
+}

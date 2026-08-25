@@ -47,6 +47,7 @@ import { NoteFormatDefaultsDialog } from "./note-format-defaults-dialog";
 import { NoteShareDialog } from "./note-share-dialog";
 import { NoteShareSummary } from "./note-share-summary";
 import { NoteTrashDock, noteCanDropOnTrash } from "./note-trash-dock";
+import { NoteTreeIcon } from "./note-tree-icon";
 import { NoteTrashView } from "./note-trash-view";
 import { NoteWritebackReview } from "./note-writeback-review";
 import { buildNoteShareNames, memberLabel, workspaceLabel } from "./share-labels";
@@ -347,6 +348,15 @@ function NoteTreeRow({
         ) : (
           <span className="relative z-10 size-5 shrink-0" aria-hidden="true" />
         )}
+        <NoteTreeIcon
+          icon={node.icon}
+          canManage={node.can_manage_shares}
+          onChange={(emoji) => {
+            void updatePage.mutateAsync({ id: node.id, data: { icon: emoji } }).catch((error) => {
+              showErrorToast(error instanceof Error ? error.message : t(($) => $.notes_page.note_save_failed));
+            });
+          }}
+        />
         {editingTitle ? (
           <input
             ref={titleInputRef}

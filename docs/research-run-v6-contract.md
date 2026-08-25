@@ -187,6 +187,16 @@ research dimensions therefore use distinct Agents instead of accumulating
 multiple ready/running Work Items behind one Agent and presenting that queue as
 parallel execution.
 
+A standard V6 Run staffs and dispatches at least three independent atomic
+research directions in its first research round, capped by
+`max_parallel_tasks`. Staffing and Work creation happen in separate Director
+cycles because Agent creation is asynchronous. Each unresolved open question
+on a frontier node requires its own follow-up Work and distinct Agent, up to the
+same parallel cap. The server preflights the complete Proposal before applying
+any action and rejects missing Branch references, duplicate/busy assignees,
+understaffed first rounds and uncovered open questions. A rejected Proposal is
+isolated to its Run and cannot block the global Director-Proposal queue.
+
 Agent archive is soft. Task, Attempt, Result, Discussion, Steward and Report
 attribution cannot be deleted or nulled by later Agent lifecycle changes.
 

@@ -49,22 +49,22 @@ type CostWeights struct {
 // ConsolidateConfig configures the Consolidator (design §6 consolidation
 // block plus the graph shape limits).
 type ConsolidateConfig struct {
-	TriggerSegments  int     // new staging segments that trigger consolidation (default 50)
-	TriggerQueries   int     // queries since last consolidation that trigger it (default 200)
-	OpBudget         int     // max operations per consolidation trajectory (default 50)
-	RoundBudget      int     // max agent working rounds per trajectory (default 10)
-	TTVTrajectories  int     // T parallel candidate trajectories; 1 = non-TTT in-place mode (default 4)
-	RecallTolerance  float64 // allowed recall-rate drop vs baseline (default 0.02)
-	CostWeights      CostWeights
-	MaxLevels        int           // hierarchy depth cap; levels are 0..MaxLevels-1 (default 4)
-	MaxFanout        int           // max summarizes children per node (default 8)
-	MaxRelationEdges int           // max incident countable relation edges per node (default 8)
-	VersionsKeep     int           // versions retained by the post-consolidation GC (default 5)
-	Budget          BacktestBudget // per-candidate D_q top-B allocation
-	ExploreMaxRounds         int // L2 closure radius; must match runner budget
-	ExploreMaxExpandPerRound int // L3 candidate cap; must match /explore
-	Model            string        // model name passed to the agent backend
-	Timeout          time.Duration // per-trajectory wall-clock timeout
+	TriggerSegments          int     // new staging segments that trigger consolidation (default 50)
+	TriggerQueries           int     // queries since last consolidation that trigger it (default 200)
+	OpBudget                 int     // max operations per consolidation trajectory (default 50)
+	RoundBudget              int     // max agent working rounds per trajectory (default 10)
+	TTVTrajectories          int     // T parallel candidate trajectories; 1 = non-TTT in-place mode (default 4)
+	RecallTolerance          float64 // allowed recall-rate drop vs baseline (default 0.02)
+	CostWeights              CostWeights
+	MaxLevels                int            // hierarchy depth cap; levels are 0..MaxLevels-1 (default 4)
+	MaxFanout                int            // max summarizes children per node (default 8)
+	MaxRelationEdges         int            // max incident countable relation edges per node (default 8)
+	VersionsKeep             int            // versions retained by the post-consolidation GC (default 5)
+	Budget                   BacktestBudget // per-candidate D_q top-B allocation
+	ExploreMaxRounds         int            // L2 closure radius; must match runner budget
+	ExploreMaxExpandPerRound int            // L3 candidate cap; must match /explore
+	Model                    string         // model name passed to the agent backend
+	Timeout                  time.Duration  // per-trajectory wall-clock timeout
 	// BacktestGroundTruth attaches server-authoritative catalog items and
 	// ledger baselines before candidate evaluation. Nil preserves legacy input.
 	BacktestGroundTruth func(ctx context.Context, store *Store, fromVersion int, queries []*BacktestQuery) error
@@ -73,21 +73,21 @@ type ConsolidateConfig struct {
 // DefaultConsolidateConfig returns the design §6 defaults.
 func DefaultConsolidateConfig() ConsolidateConfig {
 	return ConsolidateConfig{
-		TriggerSegments:  50,
-		TriggerQueries:   200,
-		OpBudget:         50,
-		RoundBudget:      10,
-		TTVTrajectories:  4,
-		RecallTolerance:  0.02,
-		CostWeights:      CostWeights{Round: 1.0, Tail: 0.5, Embed: 0.2, Node: 0.1, Graph: 0.05},
-		MaxLevels:        4,
-		MaxFanout:        8,
-		MaxRelationEdges: 8,
-		VersionsKeep:     5,
-		Budget:           DefaultBacktestBudget(),
-		ExploreMaxRounds: DefaultExploreConfig().MaxRounds,
+		TriggerSegments:          50,
+		TriggerQueries:           200,
+		OpBudget:                 50,
+		RoundBudget:              10,
+		TTVTrajectories:          4,
+		RecallTolerance:          0.02,
+		CostWeights:              CostWeights{Round: 1.0, Tail: 0.5, Embed: 0.2, Node: 0.1, Graph: 0.05},
+		MaxLevels:                4,
+		MaxFanout:                8,
+		MaxRelationEdges:         8,
+		VersionsKeep:             5,
+		Budget:                   DefaultBacktestBudget(),
+		ExploreMaxRounds:         DefaultExploreConfig().MaxRounds,
 		ExploreMaxExpandPerRound: DefaultExploreConfig().MaxExpandPerRound,
-		Timeout:          30 * time.Minute,
+		Timeout:                  30 * time.Minute,
 	}
 }
 
@@ -128,8 +128,12 @@ func (c ConsolidateConfig) normalized() ConsolidateConfig {
 		c.VersionsKeep = d.VersionsKeep
 	}
 	c.Budget = c.Budget.normalized()
-	if c.ExploreMaxRounds <= 0 { c.ExploreMaxRounds = d.ExploreMaxRounds }
-	if c.ExploreMaxExpandPerRound <= 0 { c.ExploreMaxExpandPerRound = d.ExploreMaxExpandPerRound }
+	if c.ExploreMaxRounds <= 0 {
+		c.ExploreMaxRounds = d.ExploreMaxRounds
+	}
+	if c.ExploreMaxExpandPerRound <= 0 {
+		c.ExploreMaxExpandPerRound = d.ExploreMaxExpandPerRound
+	}
 	if c.Timeout <= 0 {
 		c.Timeout = d.Timeout
 	}

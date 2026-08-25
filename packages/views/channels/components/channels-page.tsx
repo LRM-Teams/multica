@@ -1441,6 +1441,7 @@ export function ChannelsPage({
       handle: candidate.handle,
       type: candidate.type === "agent" ? ("agent" as const) : ("member" as const),
       group,
+      description: candidate.description || undefined,
       secondaryLabel: candidate.handle ? `@${candidate.handle}` : undefined,
     });
     const keep = (candidate: { type: string; id: string }) =>

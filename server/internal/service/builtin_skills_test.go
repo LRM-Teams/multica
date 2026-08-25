@@ -309,71 +309,6 @@ func TestWorkingOnIssuesSkillCoversIssueLoopContracts(t *testing.T) {
 	}
 }
 
-func TestSkillImportingSkillCoversWorkspaceImportContracts(t *testing.T) {
-	skill, ok := findSkill(t, "multica-skill-importing")
-	if !ok {
-		return
-	}
-	fm, body, _ := splitFrontmatter(skill.Content)
-
-	if got := strings.TrimSpace(fm["user-invocable"]); got != "false" {
-		t.Errorf("user-invocable = %q, want false (skill import guidance triggers from context)", got)
-	}
-	if got := strings.TrimSpace(fm["allowed-tools"]); !strings.Contains(got, "Bash(multica *)") {
-		t.Errorf("allowed-tools = %q, want access to the Multica CLI", got)
-	}
-
-	mustContain := []string{
-		"multica skill import --url <url> --output json",
-		"/api/skills/import",
-		"clawhub.ai",
-		"skills.sh",
-		"github.com",
-		"config.origin",
-		"--on-conflict fail",
-		"--on-conflict overwrite",
-		"--on-conflict rename",
-		"--on-conflict skip",
-		"status",
-		"conflict",
-		"skipped",
-		"409",
-		"existing_skill",
-		"id",
-		"name",
-		"legacy",
-		"multica skill list --output json",
-		"npx skills add",
-		"POST /api/agents/{id}/skills/add",
-		"GET  /api/agents/{id}/skills",
-		"PUT /api/agents/{id}/skills",
-		"replace-all",
-		"`set` is the replacement path",
-		"references/skill-importing-source-map.md",
-	}
-	for _, want := range mustContain {
-		if !strings.Contains(body, want) {
-			t.Errorf("skill-importing skill missing %q", want)
-		}
-	}
-
-	mustNotContain := []string{
-		"multica agent skills add",
-		"multica agent skills set",
-		"multica agent skills list",
-		"merge the new skill id with the existing ids",
-	}
-	for _, forbidden := range mustNotContain {
-		if strings.Contains(body, forbidden) {
-			t.Errorf("skill-importing skill should not teach stale or removed agent CLI %q", forbidden)
-		}
-	}
-
-	if !skillHasFile(skill, "references/skill-importing-source-map.md") {
-		t.Errorf("skill-importing skill missing supporting file references/skill-importing-source-map.md")
-	}
-}
-
 func TestCreatingAgentsSkillCoversAgentCreationContracts(t *testing.T) {
 	skill, ok := findSkill(t, "multica-creating-agents")
 	if !ok {
@@ -491,7 +426,7 @@ func TestRuntimesSkillCoversClaimChain(t *testing.T) {
 	}
 }
 
-func TestProjectsSkillCoversProjectOperations(t *testing.T) {
+func TestProjectsSkillUsesWorkspaceInfo(t *testing.T) {
 	skill, ok := findSkill(t, "multica-projects")
 	if !ok {
 		return
@@ -507,7 +442,8 @@ func TestProjectsSkillCoversProjectOperations(t *testing.T) {
 
 	mustContain := []string{
 		"Projects group issues",
-		"multica project create --title",
+		"multica workspace info --projects --output json",
+		"CLI no longer exposes",
 		"Agent memory",
 		"AGENTS.md",
 		"references/projects-source-map.md",
@@ -555,6 +491,9 @@ func TestPeriodWorkBriefSkillRequiresReportingShape(t *testing.T) {
 		"nested sub-points",
 		"Mermaid",
 		"retry-collectors",
+		"retry-only",
+		"write wake",
+		"Inbox will",
 		"--note-write",
 		"references/period-work-brief-source-map.md",
 	}

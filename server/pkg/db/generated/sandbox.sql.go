@@ -895,8 +895,8 @@ SELECT id, workspace_id, initiator_user_id, node_id, instance_id, type, status, 
 WHERE job_token_hash = $1 AND job_token_expires_at > now()
 `
 
-func (q *Queries) GetSandboxJobByTokenHash(ctx context.Context, jobTokenHash pgtype.Text) (SandboxJob, error) {
-	row := q.db.QueryRow(ctx, getSandboxJobByTokenHash, jobTokenHash)
+func (q *Queries) GetSandboxJobByTokenHash(ctx context.Context, tokenHash pgtype.Text) (SandboxJob, error) {
+	row := q.db.QueryRow(ctx, getSandboxJobByTokenHash, tokenHash)
 	var i SandboxJob
 	err := row.Scan(
 		&i.ID,
@@ -2211,4 +2211,3 @@ func scanSandboxSnapshot(row interface{ Scan(...interface{}) error }) (SandboxSn
 	)
 	return i, err
 }
-

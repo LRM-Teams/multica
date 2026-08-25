@@ -35,6 +35,8 @@ function rendererStatus(node: ResearchV6DirectorProjectionNode): string {
     return "failed";
   }
   if (node.state.execution === "cancelled") return "cancelled";
+  if (node.state.execution === "idle") return "idle";
+  if (node.state.execution === "offline") return "offline";
   if (node.state.conclusion === "accepted") return "accepted";
   if (node.state.execution === "succeeded") return "succeeded";
   return "pending";
@@ -104,7 +106,8 @@ export function adaptResearchV6DirectorCanvas(
         title: node.title ?? node.catalogSummary,
         summary: node.catalogSummary,
         status: rendererStatus(node),
-        actor_agent_id: null,
+        actor_agent_id:
+          node.canonicalRef.kind === "agent" ? node.canonicalRef.id : null,
         payload: {
           canonical_ref: node.canonicalRef,
           branch_ids: node.branchIds,

@@ -24,3 +24,18 @@ export function resolveNotesAssistantAgent<T extends Pick<Agent, "id" | "name">>
 export function notesAssistantSetupDismissKey(workspaceId: string): string {
   return `multica:notes-assistant-setup-dismissed:${workspaceId}`;
 }
+
+/**
+ * Empty-line send: proceed with the Editor job only when 笔记助手 exists.
+ * Otherwise open the bubble sidebar so the human can configure it — same
+ * first-open setup card as clicking the FAB. The in-note prompt still opens
+ * on Space; this gate runs only when they send.
+ */
+export function requestInlineNotePageAI(input: {
+  agents: readonly Pick<Agent, "id" | "name">[];
+  openNotesBubble: () => void;
+}): boolean {
+  if (resolveNotesAssistantAgent(input.agents)) return true;
+  input.openNotesBubble();
+  return false;
+}

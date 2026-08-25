@@ -121,8 +121,8 @@ func TestMachineUpgrade_AllowsOnlyComputerOwner(t *testing.T) {
 	if pinnedW.Code != http.StatusConflict {
 		t.Fatalf("canonical create on pinned runtime = %d: %s", pinnedW.Code, pinnedW.Body.String())
 	}
-	if err := json.Unmarshal(pinnedW.Body.Bytes(), &body); err != nil || body["code"] != "runtime_pinned" {
-		t.Fatalf("pinned response = %s err=%v", pinnedW.Body.String(), err)
+	if err := json.Unmarshal(pinnedW.Body.Bytes(), &body); err != nil || body["code"] != "no_current_socket" {
+		t.Fatalf("Runtime pin incorrectly gated Computer upgrade = %s err=%v", pinnedW.Body.String(), err)
 	}
 
 	if _, err := testPool.Exec(context.Background(), `UPDATE agent_runtime SET pinned_version = NULL, metadata = '{"launched_by":"desktop","capabilities":["machine_upgrade_v1"]}'::jsonb WHERE id = $1`, runtimeID); err != nil {
@@ -132,8 +132,88 @@ func TestMachineUpgrade_AllowsOnlyComputerOwner(t *testing.T) {
 	if desktopW.Code != http.StatusConflict {
 		t.Fatalf("canonical create on desktop-managed runtime = %d: %s", desktopW.Code, desktopW.Body.String())
 	}
-	if err := json.Unmarshal(desktopW.Body.Bytes(), &body); err != nil || body["code"] != "desktop_managed" {
-		t.Fatalf("desktop response = %s err=%v", desktopW.Body.String(), err)
+	if err := json.Unmarshal(desktopW.Body.Bytes(), &body); err != nil || body["code"] != "no_current_socket" {
+		t.Fatalf("Runtime launch metadata incorrectly gated Computer upgrade = %s err=%v", desktopW.Body.String(), err)
+	}
+}
+
+func TestMachineUpgrade_WithoutRuntimeDispatchesToOwnedComputer(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	daemonID := "machine-upgrade-no-runtime-" + uuid.NewString()
+	bindMachineUpgradeWorkspace(t, daemonID, testWorkspaceID, testUserID)
+
+	hub := daemonws.NewHub()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hub.HandleWebSocket(w, r, daemonws.ClientIdentity{DaemonID: daemonID, WorkspaceID: testWorkspaceID})
+	}))
+	t.Cleanup(server.Close)
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	ready, err := json.Marshal(protocol.Message{
+		Type: protocol.EventWorkspaceDaemonReady,
+		Payload: mustMarshalJSON(protocol.WorkspaceReadyPayload{
+			WorkspaceID: testWorkspaceID, DaemonInstanceID: "instance-no-runtime",
+			ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceDaemonAgentProcess},
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, ready); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for !hub.HasWorkspaceDaemon(daemonID, testWorkspaceID) {
+		if time.Now().After(deadline) {
+			t.Fatal("Computer without a Runtime did not become ready")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	local := *testHandler
+	local.DaemonHub = hub
+	nonOwnerID := createRuntimeLocalSkillTestMember(t, "member")
+	nonOwnerReq := newRequestAsUser(nonOwnerID, http.MethodPost, "/api/daemons/"+daemonID+"/upgrades", map[string]string{
+		"target_version": "v0.4.25-alpha.8",
+		"request_id":     uuid.NewString(),
+	})
+	nonOwnerReq = withURLParam(nonOwnerReq, "daemonId", daemonID)
+	nonOwnerW := httptest.NewRecorder()
+	local.CreateMachineUpgrade(nonOwnerW, nonOwnerReq)
+	if nonOwnerW.Code != http.StatusForbidden {
+		t.Fatalf("upgrade without a Runtime by non-owner = %d: %s", nonOwnerW.Code, nonOwnerW.Body.String())
+	}
+
+	requestID := uuid.NewString()
+	ownerReq := newRequestAsUser(testUserID, http.MethodPost, "/api/daemons/"+daemonID+"/upgrades", map[string]string{
+		"target_version": "v0.4.25-alpha.8",
+		"request_id":     requestID,
+	})
+	ownerReq = withURLParam(ownerReq, "daemonId", daemonID)
+	ownerW := httptest.NewRecorder()
+	local.CreateMachineUpgrade(ownerW, ownerReq)
+	if ownerW.Code != http.StatusAccepted {
+		t.Fatalf("upgrade without a Runtime by Computer owner = %d: %s", ownerW.Code, ownerW.Body.String())
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	_, raw, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("Computer without a Runtime did not receive computer:upgrade: %v", err)
+	}
+	var message protocol.Message
+	if err := json.Unmarshal(raw, &message); err != nil || message.Type != protocol.EventComputerUpgrade {
+		t.Fatalf("Computer without a Runtime frame = %+v err=%v", message, err)
+	}
+	var payload protocol.ComputerUpgradePayload
+	if err := json.Unmarshal(message.Payload, &payload); err != nil || payload.RequestID != requestID || payload.TargetVersion != "v0.4.25-alpha.8" {
+		t.Fatalf("Computer without a Runtime upgrade payload = %+v err=%v", payload, err)
 	}
 }
 
@@ -162,10 +242,10 @@ func TestMachineUpgrade_DispatchesComputerUpgradeToOneLiveBinding(t *testing.T) 
 		}
 		t.Cleanup(func() { _ = conn.Close() })
 		ready, err := json.Marshal(protocol.Message{
-			Type: protocol.EventWorkspaceRunnerReady,
-			Payload: mustMarshalJSON(protocol.WorkspaceRunnerReadyPayload{
+			Type: protocol.EventWorkspaceDaemonReady,
+			Payload: mustMarshalJSON(protocol.WorkspaceReadyPayload{
 				WorkspaceID: workspaceID, DaemonInstanceID: "instance-" + workspaceID,
-				ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceRunnerAgentProcess},
+				ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceDaemonAgentProcess},
 			}),
 		})
 		if err != nil {
@@ -175,7 +255,7 @@ func TestMachineUpgrade_DispatchesComputerUpgradeToOneLiveBinding(t *testing.T) 
 			t.Fatal(err)
 		}
 		deadline := time.Now().Add(time.Second)
-		for hub.WorkspaceRunnerConnectionCount(daemonID, workspaceID) != 1 {
+		for hub.WorkspaceDaemonConnectionCount(daemonID, workspaceID) != 1 {
 			if time.Now().After(deadline) {
 				t.Fatalf("Binding %s did not become ready", workspaceID)
 			}
@@ -260,10 +340,10 @@ func TestMachineUpgrade_DispatchesComputerUpgradeToNextLiveBinding(t *testing.T)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
 	ready, err := json.Marshal(protocol.Message{
-		Type: protocol.EventWorkspaceRunnerReady,
-		Payload: mustMarshalJSON(protocol.WorkspaceRunnerReadyPayload{
+		Type: protocol.EventWorkspaceDaemonReady,
+		Payload: mustMarshalJSON(protocol.WorkspaceReadyPayload{
 			WorkspaceID: secondWorkspaceID, DaemonInstanceID: "instance-" + secondWorkspaceID,
-			ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceRunnerAgentProcess},
+			ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceDaemonAgentProcess},
 		}),
 	})
 	if err != nil {
@@ -273,7 +353,7 @@ func TestMachineUpgrade_DispatchesComputerUpgradeToNextLiveBinding(t *testing.T)
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(time.Second)
-	for hub.WorkspaceRunnerConnectionCount(daemonID, secondWorkspaceID) != 1 {
+	for hub.WorkspaceDaemonConnectionCount(daemonID, secondWorkspaceID) != 1 {
 		if time.Now().After(deadline) {
 			t.Fatal("live Binding did not become ready")
 		}
@@ -324,7 +404,7 @@ func TestMachineUpgrade_InboundProgressAndDonePublishRealtime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := local.HandleWorkspaceRunnerFrame(context.Background(), identity, "instance-1", protocol.EventComputerUpgradeProgress, progress); err != nil {
+	if err := local.HandleWorkspaceDaemonFrame(context.Background(), identity, "instance-1", protocol.EventComputerUpgradeProgress, progress); err != nil {
 		t.Fatalf("progress frame: %v", err)
 	}
 	select {
@@ -346,7 +426,7 @@ func TestMachineUpgrade_InboundProgressAndDonePublishRealtime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := local.HandleWorkspaceRunnerFrame(context.Background(), identity, "instance-1", protocol.EventComputerUpgradeDone, done); err != nil {
+	if err := local.HandleWorkspaceDaemonFrame(context.Background(), identity, "instance-1", protocol.EventComputerUpgradeDone, done); err != nil {
 		t.Fatalf("done frame: %v", err)
 	}
 	select {

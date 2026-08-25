@@ -71,13 +71,14 @@ Its additional role is identified only by `workspace.onboarding_agent_id`;
 ## Manual lifecycle
 
 The human Agent Panel exposes one Start/Stop button to members with Agent
-management permission. It reads Runner process Presence: active means Stop;
+management permission. It reads managed process Presence: active means Stop;
 offline means Start. Message work/activity status is not lifecycle truth.
 
-`POST /api/members/agents/{id}/start` records a fresh `launchId` and
-`startDispatchId` before dispatch, so it never reuses an accepted Start
-receipt. `POST /api/members/agents/{id}/stop` targets the current launch and
-requires the current Workspace Runner; it does not persist manual Stop intent.
+`POST /api/members/agents/{id}/start` dispatches the Agent's desired Runtime to
+the current WorkspaceDaemon. `POST /api/members/agents/{id}/stop` targets the
+Agent and requires the current WorkspaceDaemon. An accepted Stop persists the
+Agent's stopped intent so reconnect reconciliation does not immediately start
+it again. Explicit Start or Reset clears that intent.
 These are human product actions, not `multica agent *` CLI commands.
 
 For multiple Agents, `POST /api/members/agents/lifecycle` accepts one

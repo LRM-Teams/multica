@@ -29,13 +29,13 @@ func registerReminderNoticeRuntime(t *testing.T, d *Daemon, busy bool) *idleMess
 	runner := registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-a", AgentID: testInboxAgentID}, "runtime-a", &MessageCoordinator{
 		key: InboxKey{WorkspaceID: "workspace-a", AgentID: testInboxAgentID}, pending: make(map[string]map[int64]protocol.AgentMessageProjection),
 	})
-	if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: testInboxAgentID, RuntimeID: "runtime-a", LaunchID: "launch-a", StartDispatchID: "dispatch-a"}); err != nil {
+	if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: testInboxAgentID, RuntimeID: "runtime-a"}); err != nil {
 		t.Fatal(err)
 	}
 	markTestLaunchRunning(t, runner, testInboxAgentID)
 	runtime := &idleMessageFakeRuntime{}
 	d.canonicalRuntimes.mu.Lock()
-	d.canonicalRuntimes.slots[testInboxAgentID+"\x00runtime-a"] = &canonicalAgentRuntimeSlot{backend: runtime, running: busy}
+	d.canonicalRuntimes.slots[testInboxAgentID+"\x00runtime-a"] = &agentRuntimeSlot{backend: runtime, running: busy}
 	d.canonicalRuntimes.mu.Unlock()
 	return runtime
 }

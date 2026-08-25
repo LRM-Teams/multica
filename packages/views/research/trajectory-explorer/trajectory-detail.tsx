@@ -36,6 +36,10 @@ export function TrajectoryDetail({
         return t((s) => s.trajectory_explorer.status_wait);
       case "abandoned":
         return t((s) => s.trajectory_explorer.status_abandoned);
+      case "idle":
+        return t((s) => s.trajectory_explorer.status_idle);
+      case "offline":
+        return t((s) => s.trajectory_explorer.status_offline);
       default:
         return statusTone;
     }

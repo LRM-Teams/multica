@@ -120,6 +120,36 @@ describe("deriveTrajectoryCommits (LRM-1480 / UI-06 adapter)", () => {
     expect(done?.status).toBe("ok");
   });
 
+  it("keeps completed results and idle Agent presence distinct from waiting Work", () => {
+    const commits = deriveTrajectoryCommits(
+      [
+        node({ id: "result", title: "Verified result", status: "succeeded" }),
+        node({ id: "accepted", title: "Accepted result", status: "accepted" }),
+        node({
+          id: "idle-agent",
+          title: "Idle Agent",
+          node_type: "agent",
+          status: "idle",
+        }),
+        node({
+          id: "offline-agent",
+          title: "Offline Agent",
+          node_type: "agent",
+          status: "offline",
+        }),
+        node({ id: "queued-work", title: "Queued Work", status: "pending" }),
+      ],
+      [],
+    );
+    const byId = new Map(commits.map((commit) => [commit.id, commit.status]));
+
+    expect(byId.get("result")).toBe("ok");
+    expect(byId.get("accepted")).toBe("ok");
+    expect(byId.get("idle-agent")).toBe("idle");
+    expect(byId.get("offline-agent")).toBe("offline");
+    expect(byId.get("queued-work")).toBe("wait");
+  });
+
   it("does not synthesize edges for missing parents", () => {
     const { nodes } = build8BranchGraph();
     // Drop the root so b1's parent is missing.

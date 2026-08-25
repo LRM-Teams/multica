@@ -113,6 +113,7 @@ const (
 	txOpV6OutboxReschedule         researchTxOperation = "v6_outbox.reschedule"
 	txOpV6OutboxFail               researchTxOperation = "v6_outbox.fail"
 	txOpV6WorkProgressReport       researchTxOperation = "v6_work_progress.report"
+	txOpV6WorkActivityRecord       researchTxOperation = "v6_work_activity.record"
 )
 
 type researchTxFaultHook func(context.Context, researchTxOperation, researchTxFaultPoint) error

@@ -170,7 +170,28 @@ For atomic Work, `task_specific_schema.payload_schemas` contains the exact singl
 `payload_schema_id` key and its frozen validator. The Agent copies that key
 verbatim into `atomic_result_submission.task_specific_schema`; it never invents
 or renames the schema ID. A mismatch is rejected with the authorized ID named in
-the bounded validation error.
+the bounded validation error. Director-created atomic Work must itself freeze a
+non-empty schema ID other than `no_op.v1` and include the exact non-empty
+`payload.task_specific_schema`; otherwise the action proposal is rejected before
+the Work Item is created.
+
+Atomic Work also owns one deterministic `research_task` identity required by the
+submission envelope and provenance ledger. That Task is a derived record, not a
+second execution authority: its assignee and lifecycle mirror the Work Item at
+the database boundary (`pending`, `ready`, `dispatching`, `running`, and terminal
+states). Clients must never interpret a stale backing Task as queued Work when
+the owning Work Item is already running or terminal.
+
+The canonical projection includes Run-scoped `agent` nodes and `assigned_to`
+edges from Work to the assigned Agent. Agent execution state preserves Team
+Membership semantics: `idle` means available without assigned Work, `running`
+means actively assigned, and `offline` means unavailable. Clients must not map
+`idle` or completed `succeeded`/`accepted` nodes to queued or waiting Work.
+Work activity responses are scoped by the
+exact Work Attempt and Inbox Task. A matching `task:message` causes clients to
+refetch durable activity; it is not rendered as an uncommitted stream frame.
+Only bounded user-facing tool/error summaries are returned—never hidden model
+reasoning, raw tool output or unrecognized sensitive arguments.
 
 ### 4.2 Review a paged Director Brief
 
@@ -329,7 +350,13 @@ The response contains stable/canonical refs, current three-dimensional state,
 reason detail, Agent/Task/Attempt, Branches, evidence refs, Discussion refs,
 successor/history refs and Report refs permitted for the user. Default `brief`
 does not inline full source snapshots or Discussion transcripts. `full` and
-`history` are paginated and return exact Artifact Version IDs/hashes.
+`history` are paginated and return exact Artifact Version IDs/hashes. For a
+`result_s` or `insight` node, `full` and `history` also return the immutable
+`content_layers` bound to the node's Artifact Version, including `objective`,
+`conclusion`, supporting content, scope, uncertainties, conflicts and open
+questions. Clients render `objective` and `conclusion` as the node's primary
+purpose and outcome; `catalog_summary` remains bounded projection chrome and
+must not substitute for either field.
 
 ## 6. Report metadata
 

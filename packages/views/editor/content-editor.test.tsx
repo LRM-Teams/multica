@@ -305,6 +305,34 @@ describe("ContentEditor", () => {
     expect(document.querySelector("textarea")).toBeInTheDocument();
   });
 
+  it("still opens the empty-line AI prompt when onRequestPageAI would block send", () => {
+    const onEditPageWithAI = vi.fn(async () => ({ action: "insert" as const, markdown: "AI result" }));
+    const onRequestPageAI = vi.fn(() => false);
+    const preventDefault = vi.fn();
+    const emptyParagraph = {
+      depth: 1,
+      parent: { type: { name: "paragraph" }, content: { size: 0 } },
+      before: vi.fn(() => 4),
+      after: vi.fn(() => 6),
+    };
+    editorState.selection = { empty: true, from: 5, to: 5, $from: emptyParagraph };
+
+    render(<ContentEditor onEditPageWithAI={onEditPageWithAI} onRequestPageAI={onRequestPageAI} />);
+
+    let handled: boolean | undefined;
+    act(() => {
+      handled = editorOptions.current?.editorProps?.handleKeyDown?.(
+        { state: { selection: editorState.selection } },
+        { key: " ", preventDefault, metaKey: false, ctrlKey: false, altKey: false, isComposing: false } as unknown as KeyboardEvent,
+      );
+    });
+
+    expect(onRequestPageAI).not.toHaveBeenCalled();
+    expect(handled).toBe(true);
+    expect(preventDefault).toHaveBeenCalledTimes(1);
+    expect(document.querySelector("textarea")).toBeInTheDocument();
+  });
+
   it("dismisses the empty-line AI prompt on a second Space so a literal space can be inserted", () => {
     const onEditPageWithAI = vi.fn(async () => ({ action: "insert" as const, markdown: "AI result" }));
     const emptyParagraph = {

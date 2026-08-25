@@ -309,8 +309,7 @@ function MemberSidePanelReady({
       })
     : null;
 
-  const description =
-    (profile?.description ?? member?.profile_description ?? "").trim();
+  const description = (profile?.description ?? member?.description ?? "").trim();
   const role = (member?.role ?? profile?.role ?? "") as MemberRole | string;
   const email = member?.email?.trim() || "";
   const joinedAt = member?.created_at ?? null;
@@ -398,7 +397,7 @@ function MemberSidePanelReady({
   };
 
   const saveDescription = async (next: string) => {
-    const updated = await api.updateMe({ profile_description: next });
+    const updated = await api.updateMe({ description: next });
     setUser(updated);
     invalidateProfileCaches();
   };

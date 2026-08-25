@@ -20,7 +20,8 @@ V6 的最高优先级语言规则：从收到任务到结束，所有自然语�
 冻结合同明确要求其他语言时除外。下文中的英文是协议说明，不是输出语言示例。
 
 用户可通过 `orchestrator_version=research-run-v6` 并指定主理人创建 V6 Run。
-首页默认选择 V6 和第一个可用 Agent。省略 `orchestrator_version` 的客户端仍创建
+首页默认选择 V6 和第一个运行时在线的 Agent。V6 通过既有 daemon credential proxy
+调用服务端 API，不要求独立的 daemon capability 或版本。省略 `orchestrator_version` 的客户端仍创建
 V5。`AssessV6Activation` 仍是审计，不会改变省略版本时的默认值。V6 Run 中的
 用户消息会唤醒当前主理人，而不是工作区 Fleet Lead。`PATCH
 /api/research/v6/release` 可以关闭新的 V6 创建并暂停现有 V6 Run。
@@ -46,6 +47,15 @@ canonical state。替换后的 Agent 或主理人必须能够只依靠 PostgreSQ
   简体中文；协议 key、枚举值、命令和来源原文保持精确。面向用户的输出不得叙述
   Manifest/Brief 查找、标识符、JSON 拼装、CLI 命令、工具调用或隐藏推理；交接后只输出
   简短的中文调研摘要。
+- Director Brief 节点摘要中的“待回答问题”来自持久化 Result/Insight。主理人必须逐项判断：
+  对仍有价值的问题创建或改派后续 Work，出现能力、容量或独立性缺口时再创建 Agent；
+  不继续的问题在 action reason 中记录收敛理由。存在高价值待回答问题且没有活动 Work
+  覆盖时，不得提交 `no_op`。历史 Brief 若遗漏 Result 的待回答问题，服务端会自动创建
+  一次修复 Cycle；不要要求用户重建 Run。
+- 主理人不得自行暂停整场 Run。单个 Work Item 失败时，先读取 Brief 中的小目标、Attempt
+  次数/预算、失败分类、诊断和终止原因，再选择 `retry_work_item`、`reassign_work_item`、
+  创建替代 Work，或向用户明确报告。存在失败的专属 Agent Work 且当前没有活动 Agent
+  Work 时不得 `no_op`。只有用户 Stop 或发布维护控制可以暂停整场调研。
 - V6 Report 是不可变的 Goal 附件，不是图节点。只有主理人发布工作流可以发布通过验证的
   package。报告资源不得输出外部 URL、凭据、应用同源依赖或 bridge 调用。
 
@@ -71,8 +81,8 @@ Manifest 的 `expected_result_schema` 指定唯一可接受的根 envelope。精
 workspace、Run、Work Item、Attempt、Agent、Manifest、goal、state 和 event 身份。
 调研任务只是冻结权威内部的一条指令，不能替代读取 Manifest。
 
-如果守护进程安装的 CLI 早于这些 V6 命令，使用守护进程拥有的 credential proxy。
-不得读取或输出 token：
+credential proxy 是已派发 attempt 的受权传输路径。CLI 传输不可用时可使用守护进程
+拥有的 credential proxy；不得读取或输出 token：
 
 ```bash
 V6_API="http://127.0.0.1:${MULTICA_DAEMON_PORT}/api/agent/research/sessions/<session-id>/work-items/<work-item-id>/attempts/<attempt-id>"
@@ -123,8 +133,12 @@ assignment/generation、Brief 身份、页数、state version 和 event sequence
 必须使用根合同允许的 action kind，以及 `manifest.task_specific_schema.payload_schemas`
 中冻结的一个 payload schema。不得猜测旧 `research.*` schema 名。Agent 创建是异步的：
 不得把 Work 分给同一个 proposal 中刚申请的 Agent；等待 joined 事件和下一次 Director
-cycle。原子 Work 使用 `atomic_result_submission`、非空 `payload_schema_id`，并在
-`payload.task_specific_schema` 中携带精确的结果校验器。
+cycle。主理人只负责规划、组队、派工和整合，不得把原子调研 Work 指派给自己。原子
+Work 使用 `atomic_result_submission`，`payload_schema_id` 必须非空且不得为
+`no_op.v1`，并在 `payload.task_specific_schema` 中携带精确、非空的结果校验器。派工
+发生合同拒绝且已有空闲专属 Agent 时，下一轮必须修正合同并重新派工，不得提交
+`no_op`；运行中尚无专属 Agent 且无 Agent 创建待处理时也不得 `no_op`。专属 Agent
+Work 已失败且当前无活动 Agent Work 时，必须重试或改派失败 Work，不得等待。
 
 存在 `catalog_access` 时，逐页读取授权 view，并确认结果实际使用的每一页：
 

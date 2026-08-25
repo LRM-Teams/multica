@@ -56,11 +56,18 @@ There is **no** notes write CLI and **no** bubble Message-send write path.
 Propose markdown in final assistant output and let the human apply it in
 the editor. Never claim a silent page replace succeeded.
 
+If this wake is Editor `note_ai_job` (empty-line / in-note JSON edit, not
+this bubble): formulas in `markdown` must use `$...$` / `$$...$$` so the
+Notes editor can render them. Do not use `\(...\)`, `\[...\]`, or fenced
+`latex` / `math`. In the JSON string, double every LaTeX backslash.
+
 ## ACL
 
 Agent token + active bubble session authorize the **context root and its
 descendants**. Stay in that subtree unless the human points at another
-authorized page.
+authorized page. A page shared to this Agent (or a group channel it belongs
+to) authorizes **that page only** — `notes tree` will not list children from
+a share.
 
 ## Do not confuse
 

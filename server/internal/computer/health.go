@@ -37,6 +37,14 @@ func ProbeHealth(ctx context.Context, endpoint string) map[string]any {
 	return result
 }
 
+// RequestMachineUpgradeStatus reads the resident's current or most recent
+// upgrade phase. It is unauthenticated and read-only, like service status.
+func RequestMachineUpgradeStatus(ctx context.Context, endpoint string) (MachineUpgradeStatus, error) {
+	var status MachineUpgradeStatus
+	err := callLocalJSON(ctx, endpoint, LocalControlUpgradeStatusOperation, 2*time.Second, nil, nil, &status)
+	return status, err
+}
+
 // RequestEnvironmentSwitch asks the live resident to stop taking new work
 // and waits until work admitted before that barrier finishes naturally.
 func RequestEnvironmentSwitch(ctx context.Context, endpoint, controlToken string) error {

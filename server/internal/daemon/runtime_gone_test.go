@@ -260,7 +260,7 @@ func TestHandleRuntimeGone_BackoffOnFailure(t *testing.T) {
 }
 
 func TestHandleWSHeartbeatAck_RuntimeGoneTriggersRecovery(t *testing.T) {
-	// A Workspace Runner heartbeat acknowledgement is the runtime-gone
+	// A WorkspaceDaemon heartbeat acknowledgement is the runtime-gone
 	// recovery signal for the current control plane.
 	fx := newHandleRuntimeGoneFixture(t)
 	d := fx.daemon

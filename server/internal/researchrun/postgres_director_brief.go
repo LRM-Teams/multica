@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -101,19 +102,34 @@ func (s *PostgresStore) LoadDirectorBriefFacts(ctx context.Context, in StartV6Di
 		}
 		facts.Branches = append(facts.Branches, item)
 	}
-	rows, err = s.pool.Query(ctx, `SELECT w.id::text,w.kind,w.status,COALESCE(NULLIF(w.target_kind,''),w.kind),w.updated_at,COALESCE(w.assigned_agent_id::text,''),COALESCE((SELECT array_agg(b.branch_id::text ORDER BY b.branch_id) FROM research_v6_work_item_branch b WHERE b.workspace_id=w.workspace_id AND b.session_id=w.session_id AND b.work_item_id=w.id),'{}') FROM research_work_item w WHERE w.workspace_id=$1::uuid AND w.session_id=$2::uuid AND w.kind IN ('research','match','discussion','integration','director','report','review') ORDER BY w.updated_at,w.id LIMIT 512`, in.WorkspaceID, in.RunID)
+	rows, err = s.pool.Query(ctx, `SELECT w.id::text,w.kind,w.status,
+		COALESCE(NULLIF(left(w.reason,512),''),NULLIF(w.target_kind,''),w.kind),w.updated_at,
+		COALESCE(w.assigned_agent_id::text,''),w.attempt_count,w.max_attempts,
+		COALESCE(latest_attempt.status,''),COALESCE(latest_attempt.failure_class,''),COALESCE(left(latest_attempt.diagnostics,32768),''),
+		COALESCE(w.terminal_reason_code,''),COALESCE(left(w.terminal_reason_detail,32768),''),
+		COALESCE((SELECT array_agg(b.branch_id::text ORDER BY b.branch_id) FROM research_v6_work_item_branch b WHERE b.workspace_id=w.workspace_id AND b.session_id=w.session_id AND b.work_item_id=w.id),'{}')
+		FROM research_work_item w
+		LEFT JOIN LATERAL (
+			SELECT attempt.status,attempt.failure_class,attempt.diagnostics
+			FROM research_work_item_attempt attempt
+			WHERE attempt.workspace_id=w.workspace_id AND attempt.session_id=w.session_id AND attempt.work_item_id=w.id
+			ORDER BY attempt.attempt_number DESC LIMIT 1
+		) latest_attempt ON true
+		WHERE w.workspace_id=$1::uuid AND w.session_id=$2::uuid AND w.kind IN ('research','match','discussion','integration','director','report','review') ORDER BY w.updated_at,w.id LIMIT 512`, in.WorkspaceID, in.RunID)
 	if err != nil {
 		return DirectorBriefFacts{}, err
 	}
 	for rows.Next() {
-		var id, kind, state, summary, agentID string
+		var id, kind, state, summary, agentID, attemptState, failureClass, failureDiagnostics, terminalReasonCode, terminalReasonDetail string
+		var attemptCount, maxAttempts int
 		var branchIDs []string
 		var updated time.Time
-		if err = rows.Scan(&id, &kind, &state, &summary, &updated, &agentID, &branchIDs); err != nil {
+		if err = rows.Scan(&id, &kind, &state, &summary, &updated, &agentID, &attemptCount, &maxAttempts, &attemptState, &failureClass, &failureDiagnostics, &terminalReasonCode, &terminalReasonDetail, &branchIDs); err != nil {
 			rows.Close()
 			return DirectorBriefFacts{}, err
 		}
 		state = directorBriefWorkState(state)
+		summary = directorBriefWorkSummary(summary, state, attemptCount, maxAttempts, attemptState, failureClass, failureDiagnostics, terminalReasonCode, terminalReasonDetail)
 		item := map[string]any{"id": id, "kind": kind, "state": state, "summary": summary, "updated_at": updated.UTC().Format(time.RFC3339Nano)}
 		if agentID != "" {
 			item["assigned_agent_id"] = agentID
@@ -162,21 +178,44 @@ func (s *PostgresStore) LoadDirectorBriefFacts(ctx context.Context, in StartV6Di
 	return facts, nil
 }
 
+func directorBriefWorkSummary(mission, state string, attemptCount, maxAttempts int, attemptState, failureClass, failureDiagnostics, terminalReasonCode, terminalReasonDetail string) string {
+	parts := []string{strings.TrimSpace(mission)}
+	if state == "failed" || failureClass != "" || terminalReasonCode != "" {
+		parts = append(parts, fmt.Sprintf("尝试 %d/%d", attemptCount, maxAttempts))
+		if attemptState != "" {
+			parts = append(parts, "最近尝试状态 "+attemptState)
+		}
+		if failureClass != "" {
+			parts = append(parts, "失败分类 "+failureClass)
+		}
+		if failureDiagnostics != "" {
+			parts = append(parts, "失败诊断 "+failureDiagnostics)
+		}
+		if terminalReasonCode != "" {
+			parts = append(parts, "终止原因 "+terminalReasonCode)
+		}
+		if terminalReasonDetail != "" && terminalReasonDetail != failureDiagnostics {
+			parts = append(parts, terminalReasonDetail)
+		}
+	}
+	return truncateV6BriefText(strings.Join(parts, "；"), 512)
+}
+
 func (s *PostgresStore) loadV6BranchFrontierBrief(ctx context.Context, workspaceID, runID, branchID string) ([]any, bool, error) {
 	rows, err := s.pool.Query(ctx, `WITH frontier_content AS (
-		SELECT rn.artifact_version_id,'result_s'::text AS node_kind,'S'::text AS tier,rn.catalog_summary,rn.brief_summary,
+		SELECT rn.artifact_version_id,'result_s'::text AS node_kind,'S'::text AS tier,rn.catalog_summary,rn.brief_summary,rn.open_questions,
 			rn.conclusion_state,
 			CASE rn.integration_state WHEN 'candidate' THEN 'candidate' WHEN 'discussing' THEN 'discussing' WHEN 'excluded' THEN 'excluded' WHEN 'absorbed' THEN 'excluded' ELSE 'unmatched' END AS integration_state,
 			rn.accepted_at AS content_created_at,rn.id AS content_id
 		FROM research_result_node rn WHERE rn.workspace_id=$1::uuid AND rn.session_id=$2::uuid
 		UNION ALL
-		SELECT iv.artifact_version_id,'insight'::text,iv.tier,iv.catalog_summary,iv.brief_summary,
+		SELECT iv.artifact_version_id,'insight'::text,iv.tier,iv.catalog_summary,iv.brief_summary,iv.open_questions,
 			CASE iv.status WHEN 'accepted' THEN 'accepted' WHEN 'challenged' THEN 'challenged' WHEN 'refuted' THEN 'refuted' ELSE 'invalid' END,
 			CASE WHEN iv.status IN ('refuted','invalid','terminal') THEN 'excluded' WHEN iv.discussion_id IS NOT NULL THEN 'discussing' WHEN iv.integration_round_id IS NOT NULL THEN 'candidate' ELSE 'unmatched' END,
 			iv.created_at,iv.id
 		FROM research_insight_version iv WHERE iv.workspace_id=$1::uuid AND iv.session_id=$2::uuid
 	)
-		SELECT v.id::text,v.artifact_id::text,v.content_hash,content.node_kind,content.tier,content.catalog_summary,content.brief_summary,
+		SELECT v.id::text,v.artifact_id::text,v.content_hash,content.node_kind,content.tier,content.catalog_summary,content.brief_summary,content.open_questions,
 		COALESCE((SELECT steward.agent_id::text FROM research_node_steward_assignment steward WHERE steward.session_id=f.session_id AND steward.node_artifact_version_id=f.node_artifact_version_id AND steward.status='active' ORDER BY steward.generation DESC LIMIT 1),
 		         (SELECT assignment.director_agent_id::text FROM research_session session JOIN research_director_assignment assignment ON assignment.id=session.current_director_assignment_id WHERE session.id=f.session_id)),
 		content.conclusion_state,content.integration_state,
@@ -192,8 +231,9 @@ func (s *PostgresStore) loadV6BranchFrontierBrief(ctx context.Context, workspace
 	frontier := []any{}
 	for rows.Next() {
 		var versionID, artifactID, contentHash, nodeKind, tier, catalog, brief, steward, conclusion, integration string
+		var openQuestions json.RawMessage
 		var branchIDs []string
-		if err = rows.Scan(&versionID, &artifactID, &contentHash, &nodeKind, &tier, &catalog, &brief, &steward, &conclusion, &integration, &branchIDs); err != nil {
+		if err = rows.Scan(&versionID, &artifactID, &contentHash, &nodeKind, &tier, &catalog, &brief, &openQuestions, &steward, &conclusion, &integration, &branchIDs); err != nil {
 			return nil, false, err
 		}
 		if len(frontier) == 64 {
@@ -201,11 +241,37 @@ func (s *PostgresStore) loadV6BranchFrontierBrief(ctx context.Context, workspace
 		}
 		frontier = append(frontier, map[string]any{
 			"node":            map[string]any{"kind": nodeKind, "id": artifactID, "version_id": versionID, "tier": tier, "content_hash": contentHash},
-			"catalog_summary": catalog, "brief_summary": brief, "steward_agent_id": steward, "branch_ids": branchIDs,
+			"catalog_summary": catalog, "brief_summary": directorBriefFrontierSummary(brief, openQuestions), "steward_agent_id": steward, "branch_ids": branchIDs,
 			"conclusion_state": conclusion, "integration_state": integration,
 		})
 	}
 	return frontier, false, rows.Err()
+}
+
+const directorBriefOpenQuestionsMarker = "待回答问题："
+
+func directorBriefFrontierSummary(summary string, rawOpenQuestions json.RawMessage) string {
+	base := truncateV6BriefText(summary, 32768)
+	var questions []string
+	if json.Unmarshal(rawOpenQuestions, &questions) != nil {
+		return base
+	}
+	clean := make([]string, 0, len(questions))
+	for _, question := range questions {
+		if question = strings.TrimSpace(question); question != "" {
+			clean = append(clean, question)
+		}
+	}
+	if len(clean) == 0 {
+		return base
+	}
+	questionText := truncateV6BriefText(strings.Join(clean, "\n- "), 8192)
+	questionBlock := directorBriefOpenQuestionsMarker + "\n- " + questionText
+	baseLimit := 32768 - len([]rune(questionBlock)) - 2
+	if baseLimit < 1 {
+		return truncateV6BriefText(questionBlock, 32768)
+	}
+	return truncateV6BriefText(base, baseLimit) + "\n\n" + questionBlock
 }
 
 func (s *PostgresStore) loadV6DirectorControlFacts(ctx context.Context, workspaceID, runID string, facts *DirectorBriefFacts) error {

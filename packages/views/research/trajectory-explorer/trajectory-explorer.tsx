@@ -216,6 +216,8 @@ function statusToneOf(node: ResearchGraphNode): string {
   if (s === "failed" || s === "error") return "failed";
   if (s === "abandoned" || s === "cancelled") return "abandoned";
   if (s === "done" || s === "completed" || s === "resolved") return "ok";
+  if (s === "success" || s === "succeeded" || s === "accepted") return "ok";
   if (s === "active" || s === "running" || s === "in_progress") return "running";
+  if (node.node_type === "agent" && (s === "idle" || s === "offline")) return s;
   return "waiting";
 }

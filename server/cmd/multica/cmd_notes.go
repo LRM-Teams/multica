@@ -49,10 +49,11 @@ var notesPeriodBriefCmd = &cobra.Command{
 
 var notesPeriodBriefRetryCollectorsCmd = &cobra.Command{
 	Use:   "retry-collectors",
-	Short: "Re-dispatch retryable Period Work collectors for a draft (max 3 retries each)",
-	Long: "Narrow tool for the Period Brief synthesizer. Platform skips permanent failures " +
-		"(missing API key / model config / auth / quota) and collectors already at the retry cap. " +
-		"After success, stop and wait — the platform re-wakes you when packs settle.",
+	Short: "Re-dispatch retryable Period Work collectors for a draft (one retry each)",
+	Long: "Narrow tool for the Period Brief synthesizer. Call once after a transient failure. " +
+		"Platform skips permanent failures (missing API key / model config / auth / quota) and " +
+		"collectors that already used their one retry. Inbox will not auto-retry. " +
+		"After success, stop and wait — the platform re-wakes you when that attempt settles.",
 	Args: cobra.NoArgs,
 	RunE: runNotesPeriodBriefRetryCollectors,
 }

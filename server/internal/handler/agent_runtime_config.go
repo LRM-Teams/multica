@@ -48,7 +48,7 @@ type AgentRuntimeConfigComputer struct {
 	DaemonID string `json:"daemon_id"`
 	// Name is already resolved for display — callers must not re-derive it.
 	Name string `json:"name"`
-	// Connected is WS truth: a live DaemonCore Workspace Runner socket, the
+	// Connected is WS truth: a live DaemonCore WorkspaceDaemon socket, the
 	// same source the computers list uses. Runtime-level status/last_seen is
 	// deliberately absent — liveness is a Computer-level fact.
 	Connected  bool   `json:"connected"`

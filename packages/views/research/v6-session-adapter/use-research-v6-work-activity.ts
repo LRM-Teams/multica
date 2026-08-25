@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useRunnerActivity } from "@multica/core/agents";
 import { RESEARCH_V6_DIRECTOR_DELTA_EVENT } from "@multica/core/research-v6-live/director-controller";
 import { researchV6DirectorWorkActivityOptions } from "@multica/core/research-v6/director-queries";
 import type {
@@ -17,6 +16,7 @@ import type {
 const WORK_ACTIVITY_EVENTS = [
   "task:running",
   "task:progress",
+  "task:message",
   "task:completed",
   "task:failed",
   "task:cancelled",
@@ -55,13 +55,14 @@ export function useResearchV6WorkActivity({
     ),
     enabled: enabled && Boolean(workItemId),
   });
+  const { data, isError, isLoading, refetch } = query;
 
   useEffect(() => {
-    const inboxTaskId = query.data?.inboxTaskId;
+    const inboxTaskId = data?.inboxTaskId;
     if (!enabled || !inboxTaskId) return;
     const refetchMatchingActivity = (payload: unknown) => {
       const progress = payload as { task_id?: unknown };
-      if (progress.task_id === inboxTaskId) void query.refetch();
+      if (progress.task_id === inboxTaskId) void refetch();
     };
     const unsubscribers = WORK_ACTIVITY_EVENTS.map((event) =>
       subscribe(event, refetchMatchingActivity),
@@ -69,18 +70,18 @@ export function useResearchV6WorkActivity({
     return () => {
       for (const unsubscribe of unsubscribers) unsubscribe();
     };
-  }, [enabled, query.data?.inboxTaskId, query.refetch, subscribe]);
+  }, [data?.inboxTaskId, enabled, refetch, subscribe]);
 
   useEffect(() => {
     if (!enabled || !workItemId) return;
     return subscribe(RESEARCH_V6_DIRECTOR_DELTA_EVENT, (payload) => {
       const envelope = payload as { run_id?: unknown };
-      if (envelope.run_id === runId) void query.refetch();
+      if (envelope.run_id === runId) void refetch();
     });
-  }, [enabled, query.refetch, runId, subscribe, workItemId]);
+  }, [enabled, refetch, runId, subscribe, workItemId]);
 
   useEffect(() => {
-    const agentId = query.data?.agentId;
+    const agentId = data?.agentId;
     if (!enabled || !agentId || !workItemId) return;
     return subscribe("research_session:presence", (payload) => {
       const presence = payload as {
@@ -88,52 +89,26 @@ export function useResearchV6WorkActivity({
         agent_id?: unknown;
       };
       if (presence.session_id === runId && presence.agent_id === agentId) {
-        void query.refetch();
+        void refetch();
       }
     });
-  }, [enabled, query.data?.agentId, query.refetch, runId, subscribe, workItemId]);
+  }, [data?.agentId, enabled, refetch, runId, subscribe, workItemId]);
 
-  const runnerActivity = useRunnerActivity(
-    enabled ? workspaceId : undefined,
-    query.data?.agentId || undefined,
-  );
   const timeline = useMemo<RunnerActivityTimelineRow[]>(() => {
-    const startedAt = Date.parse(query.data?.startedAt ?? "");
-    const persistedTimeline = query.data?.timeline ?? [];
-    if (!Number.isFinite(startedAt)) return persistedTimeline.slice(0, 8);
-    const completedAt = Date.parse(query.data?.completedAt ?? "");
-    const upperBound = Number.isFinite(completedAt)
-      ? completedAt
-      : Number.POSITIVE_INFINITY;
-    const timelineById = new Map(
-      persistedTimeline.map((row) => [row.id, row] as const),
-    );
-    for (const row of runnerActivity.data?.timeline ?? []) {
-      timelineById.set(row.id, row);
-    }
-    return [...timelineById.values()]
-      .filter((row) => {
-        const occurredAt = Date.parse(row.occurred_at);
-        return occurredAt >= startedAt && occurredAt <= upperBound;
-      })
+    const persistedTimeline = data?.timeline ?? [];
+    return [...persistedTimeline]
       .sort(
         (left, right) =>
           Date.parse(right.occurred_at) - Date.parse(left.occurred_at),
       )
       .slice(0, 8);
-  }, [
-    query.data?.completedAt,
-    query.data?.startedAt,
-    query.data?.timeline,
-    runnerActivity.data?.timeline,
-  ]);
+  }, [data?.timeline]);
 
   return {
-    data: query.data,
-    isLoading: query.isLoading,
-    isError: query.isError,
-    refetch: query.refetch,
+    data,
+    isLoading,
+    isError,
+    refetch,
     timeline,
-    refetchRunnerActivity: runnerActivity.refetch,
   };
 }

@@ -11,6 +11,7 @@ export interface ResearchV6DirectorKindDiagnostic {
 
 const NODE_KINDS = new Set<ResearchV6DirectorProjectionNodeKind>([
   "goal",
+  "agent",
   "work_s",
   "result_s",
   "insight",
@@ -20,6 +21,7 @@ const EDGE_KINDS = new Set<ResearchV6DirectorProjectionEdgeKind>([
   "absorbed_into",
   "produced_by",
   "belongs_to",
+  "assigned_to",
   "challenges",
   "collapsed_path",
 ]);

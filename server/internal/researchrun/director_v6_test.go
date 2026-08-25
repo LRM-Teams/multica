@@ -70,6 +70,15 @@ func TestV6DirectorFailureValidation(t *testing.T) {
 	}
 }
 
+func TestV6DirectorRunLifecycleRejectsAutonomousPause(t *testing.T) {
+	if target, allowed := v6DirectorRunLifecycleTarget("pause_run"); allowed || target != "" {
+		t.Fatalf("pause_run target=%q allowed=%v", target, allowed)
+	}
+	if target, allowed := v6DirectorRunLifecycleTarget("resume_run"); !allowed || target != "running" {
+		t.Fatalf("resume_run target=%q allowed=%v", target, allowed)
+	}
+}
+
 func TestV6DirectorBriefIsBoundedAndPaged(t *testing.T) {
 	branches := make([]any, 257)
 	for i := range branches {
@@ -129,6 +138,70 @@ func TestV6DirectorBriefBoundsTeamMissionSummary(t *testing.T) {
 	}
 }
 
+func TestV6DirectorBriefIncludesWorkFailureRecoveryFacts(t *testing.T) {
+	run := newTransactionRecoveryRun(t, "V6 Director Brief work failure recovery")
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_session SET orchestrator_version='research-run-v6' WHERE id=$1::uuid`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.store.AssignV6Director(run.ctx, AssignV6DirectorInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+		AgentID: run.fixture.agentID, UserID: run.fixture.userID,
+		Reason: "Recover failed work", ClientRequestID: uuid.NewString(), ExpectedStateVersion: 0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var membershipID string
+	if err := run.pool.QueryRow(run.ctx, `SELECT id::text FROM research_team_membership WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND agent_id=$3::uuid`, run.fixture.workspaceID, run.fixture.sessionID, run.fixture.agentID).Scan(&membershipID); err != nil {
+		t.Fatal(err)
+	}
+	workItemID := uuid.NewString()
+	mission := "独立复核关键来源并解释冲突。"
+	if _, err := run.pool.Exec(run.ctx, `INSERT INTO research_work_item (
+		id,workspace_id,session_id,kind,status,assigned_agent_id,goal_version,idempotency_key,
+		payload_schema_id,state_version,reason,attempt_count,max_attempts,terminal_reason_code,terminal_reason_detail
+	) VALUES ($1::uuid,$2::uuid,$3::uuid,'research','failed',$4::uuid,1,$5,'research.finding.v1',1,$6,3,3,'attempt_budget_exhausted','连续提交未通过合同校验。')`,
+		workItemID, run.fixture.workspaceID, run.fixture.sessionID, run.fixture.agentID, "brief-failure:"+workItemID, mission); err != nil {
+		t.Fatal(err)
+	}
+	attemptID := seedV6RecoveryAttempt(t, run, membershipID, workItemID)
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_work_item_attempt SET status='failed',failure_class='contract_rejected',diagnostics='content_layers.conclusion is required',completed_at=now() WHERE id=$1::uuid`, attemptID); err != nil {
+		t.Fatal(err)
+	}
+	var stateVersion int64
+	if err := run.pool.QueryRow(run.ctx, `SELECT state_version FROM research_session WHERE id=$1::uuid`, run.fixture.sessionID).Scan(&stateVersion); err != nil {
+		t.Fatal(err)
+	}
+	facts, err := run.store.LoadDirectorBriefFacts(run.ctx, StartV6DirectorCycleInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID, ExpectedStateVersion: stateVersion,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var failed map[string]any
+	for _, raw := range facts.WorkItems {
+		item := raw.(map[string]any)
+		if item["id"] == workItemID {
+			failed = item
+			break
+		}
+	}
+	if failed == nil {
+		t.Fatal("failed Work Item missing from Director Brief")
+	}
+	summary, ok := failed["summary"].(string)
+	if !ok {
+		t.Fatalf("summary=%T, want string", failed["summary"])
+	}
+	for _, want := range []string{mission, "尝试 3/3", "最近尝试状态 failed", "失败分类 contract_rejected", "失败诊断 content_layers.conclusion is required", "终止原因 attempt_budget_exhausted", "连续提交未通过合同校验。"} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("summary missing %q: %s", want, summary)
+		}
+	}
+	if _, err = (contextCompilerModule{}).CompileDirectorBrief(facts, time.Unix(1, 0)); err != nil {
+		t.Fatalf("compile Director Brief with failure recovery facts: %v", err)
+	}
+}
+
 func TestV6DirectorBriefIncludesAtomicResultFrontier(t *testing.T) {
 	run := newTransactionRecoveryRun(t, "V6 Director Brief atomic frontier")
 	membershipID, workItemID := seedV6RecoveryWorkItem(t, run, "running", time.Now().Add(time.Minute))
@@ -176,8 +249,8 @@ func TestV6DirectorBriefIncludesAtomicResultFrontier(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err = tx.Exec(run.ctx, `INSERT INTO research_result_node(id,workspace_id,session_id,result_artifact_id,artifact_version_id,work_item_attempt_id,
-		catalog_summary,brief_summary,objective,conclusion,content,conclusion_state,integration_state,content_hash)
-		VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6::uuid,'Source landscape','Ten candidate sources found','Find sources','Candidates found','Result content','accepted','unmatched',$7)`,
+		catalog_summary,brief_summary,objective,conclusion,content,open_questions,conclusion_state,integration_state,content_hash)
+		VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6::uuid,'Source landscape','Ten candidate sources found','Find sources','Candidates found','Result content','["Which candidates have independent verification?","What changed after the latest release?"]'::jsonb,'accepted','unmatched',$7)`,
 		resultNodeID, run.fixture.workspaceID, run.fixture.sessionID, resultArtifactID, artifactVersionID, attemptID, contentHash); err != nil {
 		t.Fatal(err)
 	}
@@ -209,6 +282,15 @@ func TestV6DirectorBriefIncludesAtomicResultFrontier(t *testing.T) {
 	if _, legacyRevision := node["revision"]; legacyRevision {
 		t.Fatalf("atomic frontier node contains non-contract revision: %+v", node)
 	}
+	briefSummary, ok := item["brief_summary"].(string)
+	if !ok {
+		t.Fatalf("atomic frontier brief_summary=%T, want string", item["brief_summary"])
+	}
+	for _, question := range []string{"Which candidates have independent verification?", "What changed after the latest release?"} {
+		if !strings.Contains(briefSummary, question) {
+			t.Fatalf("atomic frontier brief summary missing open question %q: %s", question, briefSummary)
+		}
+	}
 
 	_, err = (contextCompilerModule{}).CompileDirectorBrief(DirectorBriefFacts{
 		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
@@ -220,6 +302,24 @@ func TestV6DirectorBriefIncludesAtomicResultFrontier(t *testing.T) {
 	}, time.Unix(1, 0))
 	if err != nil {
 		t.Fatalf("compile Director Brief with atomic frontier: %v", err)
+	}
+}
+
+func TestDirectorBriefFrontierSummaryBoundsOpenQuestions(t *testing.T) {
+	questions := make([]string, 128)
+	for index := range questions {
+		questions[index] = strings.Repeat("问题", 300)
+	}
+	raw, err := json.Marshal(questions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary := directorBriefFrontierSummary("基础摘要", raw)
+	if len([]rune(summary)) > 32768 {
+		t.Fatalf("summary length=%d, want <=32768", len([]rune(summary)))
+	}
+	if !strings.Contains(summary, "待回答问题") || !strings.Contains(summary, "问题") {
+		t.Fatalf("summary does not expose open questions: %s", summary)
 	}
 }
 
@@ -388,6 +488,59 @@ func TestV6EventTriggerWaitsForMaterialRuntimeEffects(t *testing.T) {
 	}
 }
 
+func TestV6EventTriggerRecoversBootstrapWithoutDirectorCycle(t *testing.T) {
+	run := newTransactionRecoveryRun(t, "Recover V6 bootstrap without Director cycle")
+	title := "Recover bootstrap " + uuid.NewString()
+	bootstrapped, _, err := run.store.BootstrapV6(run.ctx, V6BootstrapInput{
+		WorkspaceID:     run.fixture.workspaceID,
+		CreatedBy:       run.fixture.userID,
+		DirectorAgentID: run.fixture.agentID,
+		Goal:            title,
+		Title:           title,
+		DepthTier:       "standard",
+		Language:        "Simplified Chinese",
+		ClientRequestID: uuid.NewString(),
+	}, DefaultRunConfig("standard"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var cycles int
+	if err = run.pool.QueryRow(run.ctx, `SELECT count(*)::int FROM research_director_cycle WHERE session_id=$1::uuid`, bootstrapped.SessionID).Scan(&cycles); err != nil {
+		t.Fatal(err)
+	}
+	if cycles != 0 {
+		t.Fatalf("bootstrap unexpectedly created %d Director cycles", cycles)
+	}
+
+	processed, err := run.store.ProcessV6EventTriggers(run.ctx, 32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if processed != 1 {
+		t.Fatalf("processed %d bootstrap triggers, want 1", processed)
+	}
+	if err = run.pool.QueryRow(run.ctx, `SELECT count(*)::int FROM research_director_cycle WHERE session_id=$1::uuid`, bootstrapped.SessionID).Scan(&cycles); err != nil {
+		t.Fatal(err)
+	}
+	if cycles != 1 {
+		t.Fatalf("bootstrap recovery created %d Director cycles, want 1", cycles)
+	}
+	var triggerType string
+	if err = run.pool.QueryRow(run.ctx, `
+		SELECT event.event_type
+		FROM research_director_cycle cycle
+		JOIN research_run_event event
+		  ON event.session_id=cycle.session_id AND event.sequence=cycle.trigger_from_sequence
+		WHERE cycle.session_id=$1::uuid
+	`, bootstrapped.SessionID).Scan(&triggerType); err != nil {
+		t.Fatal(err)
+	}
+	if triggerType != "v6_run_bootstrapped" {
+		t.Fatalf("bootstrap recovery used trigger %q, want v6_run_bootstrapped", triggerType)
+	}
+}
+
 func TestV6EventTriggerRepairsAtomicResultMissingFromCoveredBrief(t *testing.T) {
 	run := newTransactionRecoveryRun(t, "Repair covered V6 atomic frontier")
 	if _, err := run.pool.Exec(run.ctx, `UPDATE research_session SET orchestrator_version='research-run-v6' WHERE id=$1::uuid`, run.fixture.sessionID); err != nil {
@@ -480,8 +633,8 @@ func TestV6EventTriggerRepairsAtomicResultMissingFromCoveredBrief(t *testing.T) 
 		t.Fatal(err)
 	}
 	if _, err = materializeTx.Exec(run.ctx, `INSERT INTO research_result_node(id,workspace_id,session_id,result_artifact_id,artifact_version_id,work_item_attempt_id,
-		catalog_summary,brief_summary,objective,conclusion,content,conclusion_state,integration_state,content_hash)
-		VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6::uuid,'Source landscape','Candidates found','Find sources','Candidates found','Result content','accepted','unmatched',$7)`, resultNodeID, run.fixture.workspaceID, run.fixture.sessionID, resultArtifactID, artifactVersionID, attemptID, contentHash); err != nil {
+		catalog_summary,brief_summary,objective,conclusion,content,conclusion_state,integration_state,open_questions,content_hash)
+		VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6::uuid,'Source landscape','Candidates found','Find sources','Candidates found','Result content','accepted','unmatched',jsonb_build_array('Which unresolved market constraint matters?'),$7)`, resultNodeID, run.fixture.workspaceID, run.fixture.sessionID, resultArtifactID, artifactVersionID, attemptID, contentHash); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = materializeTx.Exec(run.ctx, `INSERT INTO research_node_branch(workspace_id,session_id,node_artifact_version_id,branch_id) VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid)`, run.fixture.workspaceID, run.fixture.sessionID, artifactVersionID, branchID); err != nil {
@@ -509,8 +662,63 @@ func TestV6EventTriggerRepairsAtomicResultMissingFromCoveredBrief(t *testing.T) 
 	if err = run.pool.QueryRow(run.ctx, `SELECT convert_from(p.content_bytes,'UTF8') FROM research_director_brief_page p JOIN research_director_cycle c ON c.id=p.director_cycle_id WHERE p.session_id=$1::uuid ORDER BY c.created_at DESC,p.ordinal LIMIT 1`, run.fixture.sessionID).Scan(&latestBrief); err != nil {
 		t.Fatal(err)
 	}
-	if cycles != 2 || !strings.Contains(latestBrief, artifactVersionID) || !strings.Contains(latestBrief, `"kind":"result_s"`) {
-		t.Fatalf("repair cycles=%d brief contains node=%v kind=%v", cycles, strings.Contains(latestBrief, artifactVersionID), strings.Contains(latestBrief, `"kind":"result_s"`))
+	if cycles != 2 || !strings.Contains(latestBrief, artifactVersionID) || !strings.Contains(latestBrief, `"kind":"result_s"`) || !strings.Contains(latestBrief, "Which unresolved market constraint matters?") {
+		t.Fatalf("repair cycles=%d brief contains node=%v kind=%v question=%v", cycles, strings.Contains(latestBrief, artifactVersionID), strings.Contains(latestBrief, `"kind":"result_s"`), strings.Contains(latestBrief, "Which unresolved market constraint matters?"))
+	}
+
+	// A brief compiled before open-question propagation could contain the Result
+	// frontier node while omitting its unresolved questions. Re-emit the material
+	// event, simulate that historical page shape, and verify reconciliation creates
+	// one fresh cycle whose brief restores the questions.
+	if _, err = run.pool.Exec(run.ctx, `UPDATE research_work_item SET status='succeeded',completed_at=now() WHERE session_id=$1::uuid AND kind='director'`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = run.pool.Exec(run.ctx, `UPDATE research_director_cycle SET status='applied',completed_at=now() WHERE session_id=$1::uuid`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	duplicateTx, err := run.pool.Begin(run.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	duplicateEvent, err := appendEvent(run.ctx, duplicateTx, run.fixture.workspaceID, run.fixture.sessionID,
+		"v6_result_node_accepted", "covered-without-questions:"+uuid.NewString(), "agent", run.fixture.agentID,
+		map[string]any{"artifact_version_id": artifactVersionID, "result_artifact_id": resultArtifactID, "result_node_id": resultNodeID, "work_item_id": workItemID})
+	if err != nil {
+		_ = duplicateTx.Rollback(run.ctx)
+		t.Fatal(err)
+	}
+	if err = duplicateTx.Commit(run.ctx); err != nil {
+		t.Fatal(err)
+	}
+	processed, err = run.store.ProcessV6EventTriggers(run.ctx, 32)
+	if err != nil || processed != 1 {
+		t.Fatalf("historical cycle setup processed=%d err=%v", processed, err)
+	}
+	if _, err = run.pool.Exec(run.ctx, `UPDATE research_work_item SET status='succeeded',completed_at=now() WHERE session_id=$1::uuid AND kind='director'`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = run.pool.Exec(run.ctx, `UPDATE research_director_cycle SET status='applied',completed_at=now() WHERE session_id=$1::uuid`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	var historicalCycleID string
+	if err = run.pool.QueryRow(run.ctx, `SELECT id::text FROM research_director_cycle WHERE session_id=$1::uuid AND trigger_from_sequence=$2 ORDER BY created_at DESC LIMIT 1`, run.fixture.sessionID, duplicateEvent.Sequence).Scan(&historicalCycleID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = run.pool.Exec(run.ctx, `UPDATE research_director_brief_page SET content_bytes=convert_to(replace(convert_from(content_bytes,'UTF8'),$2,''),'UTF8') WHERE director_cycle_id=$1::uuid`, historicalCycleID, directorBriefOpenQuestionsMarker); err != nil {
+		t.Fatal(err)
+	}
+	processed, err = run.store.ProcessV6EventTriggers(run.ctx, 32)
+	if err != nil || processed != 1 {
+		t.Fatalf("open-question repair trigger processed=%d err=%v", processed, err)
+	}
+	if err = run.pool.QueryRow(run.ctx, `SELECT count(*)::int FROM research_director_cycle WHERE session_id=$1::uuid`, run.fixture.sessionID).Scan(&cycles); err != nil {
+		t.Fatal(err)
+	}
+	if err = run.pool.QueryRow(run.ctx, `SELECT convert_from(p.content_bytes,'UTF8') FROM research_director_brief_page p JOIN research_director_cycle c ON c.id=p.director_cycle_id WHERE p.session_id=$1::uuid ORDER BY c.created_at DESC,p.ordinal LIMIT 1`, run.fixture.sessionID).Scan(&latestBrief); err != nil {
+		t.Fatal(err)
+	}
+	if cycles != 4 || !strings.Contains(latestBrief, directorBriefOpenQuestionsMarker) || !strings.Contains(latestBrief, "Which unresolved market constraint matters?") {
+		t.Fatalf("open-question repair cycles=%d marker=%v question=%v", cycles, strings.Contains(latestBrief, directorBriefOpenQuestionsMarker), strings.Contains(latestBrief, "Which unresolved market constraint matters?"))
 	}
 }
 
@@ -572,6 +780,12 @@ func TestV6DirectorCreatedWorkStartsAtVersionOne(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := run.store.AddV6TeamMember(run.ctx, AddV6TeamMemberInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+		AgentID: run.fixture.reporterID, MissionPrompt: "Investigate the assigned question",
+	}); err != nil {
+		t.Fatal(err)
+	}
 	var stateVersion, throughSequence int64
 	if err := run.pool.QueryRow(run.ctx, `SELECT state_version,
 		COALESCE((SELECT max(sequence) FROM research_run_event WHERE session_id=$1::uuid),0)
@@ -590,7 +804,7 @@ func TestV6DirectorCreatedWorkStartsAtVersionOne(t *testing.T) {
 		t.Fatal(err)
 	}
 	actionPayload, err := json.Marshal(map[string]any{
-		"kind": "deep_read", "assignee_agent_id": run.fixture.agentID, "mission": "Investigate the assigned question",
+		"kind": "deep_read", "assignee_agent_id": run.fixture.reporterID, "mission": "Investigate the assigned question",
 		"expected_result_schema_id": "atomic_result_submission", "payload_schema_id": "research.test.v1",
 		"payload":  map[string]any{"task_specific_schema": map[string]any{"type": "object"}},
 		"priority": 0.5, "max_attempts": 1, "branch_ids": []string{},
@@ -618,5 +832,133 @@ func TestV6DirectorCreatedWorkStartsAtVersionOne(t *testing.T) {
 	}
 	if persistedKind != "research" || taskKind != "deep_read" {
 		t.Fatalf("created Work kind=%q task_kind=%q want research/deep_read", persistedKind, taskKind)
+	}
+}
+
+func TestV6DirectorRejectsUnusableAtomicWorkSchemaWithActionableDiagnostic(t *testing.T) {
+	run := newTransactionRecoveryRun(t, "Reject unusable V6 atomic Work schema")
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_session SET orchestrator_version='research-run-v6' WHERE id=$1::uuid`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.store.AssignV6Director(run.ctx, AssignV6DirectorInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+		AgentID: run.fixture.agentID, UserID: run.fixture.userID,
+		Reason: "Coordinate atomic research", ClientRequestID: uuid.NewString(), ExpectedStateVersion: 0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.store.AddV6TeamMember(run.ctx, AddV6TeamMemberInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+		AgentID: run.fixture.reporterID, MissionPrompt: "Research Manus technology",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var stateVersion int64
+	if err := run.pool.QueryRow(run.ctx, `SELECT state_version FROM research_session WHERE id=$1::uuid`, run.fixture.sessionID).Scan(&stateVersion); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(map[string]any{
+		"kind": "research", "assignee_agent_id": run.fixture.reporterID,
+		"mission": "Research Manus technology", "expected_result_schema_id": "atomic_result_submission",
+		"payload_schema_id": "no_op.v1", "payload": map[string]any{"reason": "technology"},
+		"priority": 0.9, "max_attempts": 2, "branch_ids": []string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = run.store.executeV6CreateWorkAction(run.ctx, v6DirectorProposal{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+	}, uuid.NewString(), v6DirectorAction{
+		ActionID: uuid.NewString(), Kind: "create_work_item", IdempotencyKey: "invalid-atomic:" + uuid.NewString(),
+		PayloadSchema: "collaboration.create.v1", Payload: payload,
+	}, stateVersion)
+	if !errors.Is(err, ErrInvalidContract) || !strings.Contains(err.Error(), "no_op.v1") || !strings.Contains(err.Error(), "payload.task_specific_schema") {
+		t.Fatalf("invalid atomic Work error=%v, want actionable schema diagnostic", err)
+	}
+}
+
+func TestV6DirectorCannotNoOpAfterRejectedAssignmentWithIdleWorkers(t *testing.T) {
+	run := newTransactionRecoveryRun(t, "Recover rejected V6 Agent assignment")
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_session SET orchestrator_version='research-run-v6' WHERE id=$1::uuid`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.store.AssignV6Director(run.ctx, AssignV6DirectorInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+		AgentID: run.fixture.agentID, UserID: run.fixture.userID,
+		Reason: "Recover rejected team assignment", ClientRequestID: uuid.NewString(), ExpectedStateVersion: 0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.store.AddV6TeamMember(run.ctx, AddV6TeamMemberInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+		AgentID: run.fixture.reporterID, MissionPrompt: "Research Manus technology",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.pool.Exec(run.ctx, `INSERT INTO research_work_item(
+		id,workspace_id,session_id,kind,status,assigned_agent_id,goal_version,idempotency_key,
+		payload_schema_id,expected_result_schema_id,payload,state_version,terminal_reason_code,terminal_reason_detail
+	) VALUES($1::uuid,$2::uuid,$3::uuid,'director','failed',$4::uuid,1,$5,
+		'director.action.registry.v1','director_action_proposal','{}'::jsonb,1,'contract_rejected','atomic Work schema was invalid')`,
+		uuid.NewString(), run.fixture.workspaceID, run.fixture.sessionID, run.fixture.agentID,
+		"rejected-assignment:"+uuid.NewString()); err != nil {
+		t.Fatal(err)
+	}
+	var stateVersion int64
+	if err := run.pool.QueryRow(run.ctx, `SELECT state_version FROM research_session WHERE id=$1::uuid`, run.fixture.sessionID).Scan(&stateVersion); err != nil {
+		t.Fatal(err)
+	}
+	action := v6DirectorAction{
+		ActionID: uuid.NewString(), Kind: "no_op", IdempotencyKey: "invalid-no-op:" + uuid.NewString(),
+		PayloadSchema: "no_op.v1", Reason: "Wait for the next brief",
+	}
+	err := run.store.recordV6DirectorNoOp(run.ctx, v6DirectorProposal{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+	}, uuid.NewString(), action, stateVersion, action.Reason)
+	if !errors.Is(err, ErrInvalidContract) || !strings.Contains(err.Error(), "assign Work to an idle run-scoped Agent") {
+		t.Fatalf("post-rejection no-op error=%v, want assignment recovery requirement", err)
+	}
+}
+
+func TestV6DirectorCannotNoOpWithFailedWorkerWork(t *testing.T) {
+	run := newTransactionRecoveryRun(t, "Recover failed V6 Agent Work")
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_session SET orchestrator_version='research-run-v6' WHERE id=$1::uuid`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.store.AssignV6Director(run.ctx, AssignV6DirectorInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+		AgentID: run.fixture.agentID, UserID: run.fixture.userID,
+		Reason: "Recover failed Agent Work", ClientRequestID: uuid.NewString(), ExpectedStateVersion: 0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.store.AddV6TeamMember(run.ctx, AddV6TeamMemberInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+		AgentID: run.fixture.reporterID, MissionPrompt: "Research Manus technology",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.pool.Exec(run.ctx, `INSERT INTO research_work_item(
+		id,workspace_id,session_id,kind,status,assigned_agent_id,goal_version,idempotency_key,
+		payload_schema_id,expected_result_schema_id,payload,state_version,terminal_reason_code
+	) VALUES($1::uuid,$2::uuid,$3::uuid,'research','failed',$4::uuid,1,$5,
+		'research.manus.v1','atomic_result_submission','{}'::jsonb,1,'attempt_budget_exhausted')`,
+		uuid.NewString(), run.fixture.workspaceID, run.fixture.sessionID, run.fixture.reporterID,
+		"failed-worker:"+uuid.NewString()); err != nil {
+		t.Fatal(err)
+	}
+	var stateVersion int64
+	if err := run.pool.QueryRow(run.ctx, `SELECT state_version FROM research_session WHERE id=$1::uuid`, run.fixture.sessionID).Scan(&stateVersion); err != nil {
+		t.Fatal(err)
+	}
+	action := v6DirectorAction{
+		ActionID: uuid.NewString(), Kind: "no_op", IdempotencyKey: "failed-worker-no-op:" + uuid.NewString(),
+		PayloadSchema: "no_op.v1", Reason: "Wait for the next brief",
+	}
+	err := run.store.recordV6DirectorNoOp(run.ctx, v6DirectorProposal{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+	}, uuid.NewString(), action, stateVersion, action.Reason)
+	if !errors.Is(err, ErrInvalidContract) || !strings.Contains(err.Error(), "retry or reassign failed Work") {
+		t.Fatalf("failed-worker no-op error=%v, want recovery requirement", err)
 	}
 }

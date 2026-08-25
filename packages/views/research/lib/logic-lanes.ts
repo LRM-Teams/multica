@@ -96,7 +96,14 @@ export function resolveLogicStatus(node: ResearchGraphNode): {
   const s = (node.status || "").toLowerCase();
   if (s === "failed" || s === "error") return { key: "failed", tone: "fail" };
   if (s === "abandoned" || s === "cancelled") return { key: "abandoned", tone: "mute" };
-  if (s === "done" || s === "completed" || s === "resolved" || s === "success") {
+  if (
+    s === "done" ||
+    s === "completed" ||
+    s === "resolved" ||
+    s === "success" ||
+    s === "succeeded" ||
+    s === "accepted"
+  ) {
     return { key: "done", tone: "ok" };
   }
   if (s === "waiting" || s === "pending" || s === "blocked" || s === "queued") {

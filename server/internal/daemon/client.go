@@ -314,7 +314,7 @@ func (c *Client) WorkspaceDaemonTokenAvailable(workspaceID string, now time.Time
 }
 
 // WorkspaceDaemonToken returns the currently valid workspace-scoped daemon
-// credential for a long-lived Workspace Runner connection. The profile token
+// credential for a long-lived WorkspaceDaemon connection. The profile token
 // must never be substituted here because the server uses this token's
 // workspace claim as the Runner routing fence.
 func (c *Client) WorkspaceDaemonToken(workspaceID string, now time.Time) string {
@@ -643,7 +643,7 @@ func (c *Client) GetTaskStatus(ctx context.Context, taskID, runtimeID string) (s
 	return resp.Status, nil
 }
 
-// HeartbeatResponse and pending-action aliases keep the Workspace Runner wire
+// HeartbeatResponse and pending-action aliases keep the WorkspaceDaemon wire
 // contract readable inside the daemon action coordinator.
 type (
 	HeartbeatResponse       = protocol.DaemonHeartbeatAckPayload
@@ -657,7 +657,7 @@ type (
 
 // TODO(computer-liveness): Remove after v0.4.24-alpha.55 is no
 // longer a supported direct self-upgrade source. Current DaemonCore liveness
-// is the Workspace Runner socket, not this HTTP heartbeat.
+// is the WorkspaceDaemon socket, not this HTTP heartbeat.
 func (c *Client) ComputerHeartbeat(ctx context.Context, workspaceID, daemonID string) error {
 	return c.postJSONWithToken(ctx, "/api/daemon/computer/heartbeat", map[string]any{
 		"workspace_id": workspaceID, "daemon_id": daemonID,

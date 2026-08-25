@@ -244,7 +244,7 @@ func (h *Handler) attachCanonicalMessageMemories(ctx context.Context, workspaceI
 }
 
 // redeliverUnacknowledgedComputerAgentMessages rebuilds the Computer's
-// at-least-once transport queue whenever its Workspace Runner becomes ready.
+// at-least-once transport queue whenever its WorkspaceDaemon becomes ready.
 // The persisted delivery sequence remains the canonical target sequence; this
 // path neither invents a recovery cursor nor changes local context coverage.
 func (h *Handler) redeliverUnacknowledgedComputerAgentMessages(ctx context.Context, identity daemonws.ClientIdentity) error {

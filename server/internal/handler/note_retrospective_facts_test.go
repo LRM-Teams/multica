@@ -86,7 +86,11 @@ RETURNING id`,
 
 	ws := parseUUID(testWorkspaceID)
 	user := parseUUID(testUserID)
-	bundle, err := testHandler.loadNoteRetrospectiveFactsBundle(ctx, ws, user, start, end, notePeriodWorkDefaultSources)
+	bundle, err := testHandler.loadNoteRetrospectiveFactsBundle(ctx, ws, user, start, end, []string{
+		noteRetrospectiveSourceIssue,
+		noteRetrospectiveSourceNotes,
+		noteRetrospectiveSourceRuns,
+	})
 	if err != nil {
 		t.Fatalf("load facts: %v", err)
 	}
@@ -95,7 +99,7 @@ RETURNING id`,
 			bundle.FactCount(), bundle.SourcesUsed, bundle.SourcesEmpty,
 			len(bundle.Facts.Issues), len(bundle.Facts.Notes), len(bundle.Facts.Runs))
 	}
-	for _, source := range notePeriodWorkDefaultSources {
+	for _, source := range []string{noteRetrospectiveSourceIssue, noteRetrospectiveSourceNotes, noteRetrospectiveSourceRuns} {
 		if !containsNoteRetrospectiveSource(bundle.SourcesUsed, source) {
 			t.Fatalf("sources_used=%v missing %s", bundle.SourcesUsed, source)
 		}

@@ -271,4 +271,3 @@ func TestMergeExecutionMemoriesKeepsLegacyAndAddsGraph(t *testing.T) {
 		t.Fatalf("merge dropped legacy or graph:\n%s", content)
 	}
 }
-

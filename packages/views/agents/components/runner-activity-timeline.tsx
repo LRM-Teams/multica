@@ -14,7 +14,7 @@ import {
   isLongActivityCommand,
 } from "./tabs/activity-command-body";
 import { ActivitySubtext } from "./tabs/activity-subtext";
-import { runnerActivityToneDotClass } from "../runner-activity-tone";
+import { runnerActivityVisuals } from "../runner-activity-visuals";
 
 const TIMESTAMP_CLASS =
   "ml-auto shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground/55";
@@ -134,7 +134,7 @@ function RunnerActivityTimelineItem({
         <span
           className={cn(
             "relative z-[1] mt-1.5 size-1.5 shrink-0 rounded-full",
-            runnerActivityToneDotClass(row.tone),
+            runnerActivityVisuals(row).dotClass,
           )}
           aria-hidden
         />

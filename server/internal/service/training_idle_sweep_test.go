@@ -46,8 +46,8 @@ func TestCountActiveTrainingTasks_Integration(t *testing.T) {
 		Description: "test", RuntimeMode: "cloud", RuntimeConfig: []byte("{}"),
 		RuntimeID:    rtID,
 		Instructions: "", CustomEnv: []byte("{}"), CustomArgs: []byte("[]"),
-			Model:              pgtype.Text{String: "composer-1.5", Valid: true},
-})
+		Model: pgtype.Text{String: "composer-1.5", Valid: true},
+	})
 	require.NoError(t, err)
 
 	// newTask mirrors a rollout task: the session_run row is what binds it to a

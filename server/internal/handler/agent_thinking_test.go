@@ -370,7 +370,7 @@ func createCodexProviderRuntime(t *testing.T) string {
 		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at)
 		VALUES ($1,  NULL,  $2,  'cloud',  'codex',  'online',  $3,  '{}'::jsonb,  now())
 		RETURNING id
-	`,  testWorkspaceID,  "Codex Thinking Runtime",  "Codex thinking-level test runtime").Scan(&runtimeID)
+	`, testWorkspaceID, "Codex Thinking Runtime", "Codex thinking-level test runtime").Scan(&runtimeID)
 	if err != nil {
 		t.Fatalf("create codex runtime: %v", err)
 	}
@@ -391,7 +391,7 @@ func createClaudeProviderRuntime(t *testing.T) string {
 		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at)
 		VALUES ($1,  NULL,  $2,  'cloud',  'claude',  'online',  $3,  '{}'::jsonb,  now())
 		RETURNING id
-	`,  testWorkspaceID,  "Claude Thinking Runtime",  "Claude thinking-level test runtime").Scan(&runtimeID)
+	`, testWorkspaceID, "Claude Thinking Runtime", "Claude thinking-level test runtime").Scan(&runtimeID)
 	if err != nil {
 		t.Fatalf("create claude runtime: %v", err)
 	}

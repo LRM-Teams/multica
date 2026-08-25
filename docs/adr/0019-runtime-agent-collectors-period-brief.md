@@ -5,6 +5,18 @@ supersedes: docs/adr/0018-machine-work-journal-period-brief.md
 
 # Runtime Agents collect machine work; a dedicated Brief Agent synthesizes
 
+> **Amendment (2026-08-24):** Failure no longer shares a write wake. If a
+> collector still owes the one assistant retry, the platform wakes **retry-only**
+> (`notePeriodBriefRetryInstruction` — no `--note-write`). After that attempt
+> settles, a separate write wake delivers the Brief. Harvest ignores folder
+> `note_write` before that write wake. `submit-pack` patches one collector via
+> `jsonb ||` so two machines cannot clobber each other; await counts a pack only
+> when `pack_job_id` matches this job. 「材料齐了」 requires at least one ready
+> pack. Composer unlocks when the insert card is posted (`awaiting_confirm`) —
+> the human may discard the Brief without inserting. Satellite `Write
+> report` / `Report` is period-brief intent. FAB create omits `chat_session_id`
+> so progress does not append onto an old Q&A thread.
+>
 > **Amendment (2026-08-21):** The bubble result card must show **this run**.
 > Do not harvest the latest `note_write` on `工作介绍/` — that is usually
 > last week's brief, posted the moment the synthesizer is woken. Scope
@@ -179,9 +191,10 @@ retryable stalled), the synthesizer may call:
 
 `multica notes period-brief retry-collectors --draft-page-id <draft>`
 
-Platform enforces: skip permanent failures; **max 3 retries** per collector;
-then re-wait and re-wake the synthesizer. Skill:
-`multica-period-work-brief`.
+Platform enforces: skip permanent failures; **exactly one** Notes-Assistant
+retry per collector; inbox does not auto-retry. After that attempt settles
+(ready or failed), the collector result is received and the synthesizer
+writes the Brief. Skill: `multica-period-work-brief`.
 
 ## Rejected alternatives
 

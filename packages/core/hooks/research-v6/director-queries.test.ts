@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { ApiError } from "../../api/client";
 import {
+  isResearchV6ProjectionResyncError,
   researchV6DirectorProjectionKeys,
   researchV6DirectorSlicePageRequest,
 } from "./director-queries";
@@ -9,6 +11,30 @@ const RUN_ID = "00000000-0000-4000-8000-000000000003";
 const SNAPSHOT_ID = "00000000-0000-4000-8000-000000000601";
 
 describe("Director V6 projection query identities", () => {
+  it("recognizes only the structured expired-snapshot response", () => {
+    expect(
+      isResearchV6ProjectionResyncError(
+        new ApiError("expired", 409, "Conflict", {
+          code: "research.v6.projection_resync_required",
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isResearchV6ProjectionResyncError(
+        new ApiError("other conflict", 409, "Conflict", {
+          code: "research.v6.state_version_conflict",
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isResearchV6ProjectionResyncError(
+        new ApiError("wrong status", 500, "Internal Server Error", {
+          code: "research.v6.projection_resync_required",
+        }),
+      ),
+    ).toBe(false);
+  });
+
   it("separates workspace, run, snapshot, root, and fixed depth", () => {
     expect(
       researchV6DirectorProjectionKeys.slice(

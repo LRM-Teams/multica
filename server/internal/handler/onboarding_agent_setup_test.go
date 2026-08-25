@@ -58,15 +58,12 @@ func TestEnsureWindy_RequiresOwnerExplicitRuntimeAndModelThenSeedsGeneral(t *tes
 	}
 	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, agentID) })
 
-	var launchID, launchRuntimeID string
-	if err := testPool.QueryRow(ctx, `
-		SELECT launch_id::text, runtime_id::text
-		FROM agent_runner_launch_projection
-		WHERE agent_id = $1`, agentID).Scan(&launchID, &launchRuntimeID); err != nil {
-		t.Fatalf("load Wendy desired launch: %v", err)
+	var launchRuntimeID string
+	if err := testPool.QueryRow(ctx, `SELECT runtime_id::text FROM agent WHERE id = $1`, agentID).Scan(&launchRuntimeID); err != nil {
+		t.Fatalf("load Wendy desired Runtime: %v", err)
 	}
-	if launchID == "" || launchRuntimeID != testRuntimeID {
-		t.Fatalf("Wendy desired launch = id=%q runtime=%q", launchID, launchRuntimeID)
+	if launchRuntimeID != testRuntimeID {
+		t.Fatalf("Wendy desired Runtime = %q", launchRuntimeID)
 	}
 
 	var membershipCount, welcomeCount int
@@ -139,15 +136,12 @@ func TestEnsureWindy_IdempotentRetryPreservesDesiredLaunch(t *testing.T) {
 		t.Fatalf("bound onboarding Agent was renamed from Alice to %q", response.Agent.DisplayName)
 	}
 
-	var launchID, gotRuntimeID string
-	if err := testPool.QueryRow(ctx, `
-		SELECT launch_id::text, runtime_id::text
-		FROM agent_runner_launch_projection
-		WHERE agent_id = $1`, agentID).Scan(&launchID, &gotRuntimeID); err != nil {
-		t.Fatalf("load Wendy desired launch: %v", err)
+	var gotRuntimeID string
+	if err := testPool.QueryRow(ctx, `SELECT runtime_id::text FROM agent WHERE id = $1`, agentID).Scan(&gotRuntimeID); err != nil {
+		t.Fatalf("load Wendy desired Runtime: %v", err)
 	}
-	if launchID == "" || gotRuntimeID != runtimeID {
-		t.Fatalf("Wendy desired launch = id=%q runtime=%q", launchID, gotRuntimeID)
+	if gotRuntimeID != runtimeID {
+		t.Fatalf("Wendy desired Runtime = %q", gotRuntimeID)
 	}
 }
 

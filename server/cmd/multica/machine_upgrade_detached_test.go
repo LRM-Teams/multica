@@ -166,3 +166,41 @@ func TestCompleteDetachedMachineUpgradeKeepsOwnedSuccessor(t *testing.T) {
 		t.Fatalf("successful coordinator must finalize journal = %+v", got)
 	}
 }
+
+func TestCompleteDetachedComputerRestartDoesNotRequireUpgradeJournal(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	originalSpawn := spawnDetachedComputerBinary
+	t.Cleanup(func() { spawnDetachedComputerBinary = originalSpawn })
+
+	called := false
+	spawnDetachedComputerBinary = func(binaryPath, profile, expectedVersion string, handoff computer.PendingMachineUpgradeHandoff) error {
+		called = true
+		if binaryPath != "/tmp/current-computer" || profile != "" || expectedVersion != "alpha.8" {
+			t.Fatalf("restart spawn path=%q profile=%q version=%q", binaryPath, profile, expectedVersion)
+		}
+		if handoff.SourceServicePID != 101 || len(handoff.OldRunnerPIDs) != 1 || handoff.OldRunnerPIDs[0] != 202 {
+			t.Fatalf("restart predecessor handoff = %+v", handoff)
+		}
+		if !handoff.KeepOwnedProcess {
+			t.Fatal("restart coordinator must own the successor")
+		}
+		return nil
+	}
+	err := completeDetachedComputerRestart("", "/tmp/current-computer", computer.ComputerRestartHandoff{
+		Version: "alpha.8", SourceServicePID: 101, OldBindingPIDs: []int{202},
+		AcceptedManagedWorkspaceIDs: []string{"workspace-a"}, AcceptedManagedSetRevision: "revision-a",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("same-binary restart did not spawn a successor")
+	}
+	journal, err := computer.ReadPendingMachineUpgradeHandoff(computer.RootDir(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal != nil {
+		t.Fatalf("same-binary restart created an upgrade journal: %+v", journal)
+	}
+}

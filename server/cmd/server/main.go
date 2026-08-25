@@ -482,11 +482,11 @@ func main() {
 	// last_seen_at.
 	var presence service.RunnerPresence = daemonHub
 	go runRuntimeSweeper(sweepCtx, queries, liveness, presence, taskSvc, bus)
-	// LRM-1571: while a Workspace Runner socket is connected, the server
+	// LRM-1571: while a WorkspaceDaemon socket is connected, the server
 	// keeps Redis liveness + DB last_seen_at fresh for it — the WS connection
 	// state drives liveness for daemons that no longer send heartbeat frames.
 	go runRunnerPresenceLivenessTicker(sweepCtx, queries, liveness, daemonHub)
-	go runRunnerActivityReaper(sweepCtx, h)
+	go runMixedRLQuiescenceReaper(sweepCtx, h)
 	go runCollaborationTurnWorkers(sweepCtx, h)
 	go runChannelOnboardingPublisher(sweepCtx, h)
 	go heartbeatScheduler.Run(sweepCtx)
@@ -576,6 +576,11 @@ func main() {
 	}
 	if err := schedulerMgr.Register(scheduler.EnvCheckpointLaneSweepJob(pool)); err != nil {
 		slog.Warn("scheduler: failed to register env checkpoint lane sweep job", "error", err)
+	} else {
+		schedulerRegistered = true
+	}
+	if err := schedulerMgr.Register(scheduler.IssueExecutionReconcileJob(h.IssueExecution)); err != nil {
+		slog.Warn("scheduler: failed to register issue execution reconciliation job", "error", err)
 	} else {
 		schedulerRegistered = true
 	}

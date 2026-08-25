@@ -2,7 +2,7 @@
 
 When a user loses Workspace membership, the service revokes every Workspace
 Execution Binding that the user established for that Workspace. The affected
-Workspace Runner stops accepting work and its execution credential becomes
+WorkspaceDaemon stops accepting work and its execution credential becomes
 invalid. Membership loss, Binding revocation, and Runner shutdown are explicit
 authorization events rather than inferred from a transient login or network
 failure.

@@ -378,6 +378,16 @@ type AgentActivityPayload struct {
 	Snapshot AgentActivitySnapshot      `json:"snapshot"`
 	Summary  AgentActivitySummary       `json:"summary"`
 	Timeline []AgentActivityTimelineRow `json:"timeline,omitempty"`
+	Timing   *AgentActivityTiming       `json:"timing,omitempty"`
+}
+
+// AgentActivityTiming is optional, provider-neutral diagnostic evidence. It
+// never drives lifecycle projection; the browser adds receive/cache marks.
+type AgentActivityTiming struct {
+	ColdStartAtMS      int64 `json:"coldStartAtMs,omitempty"`
+	AcceptedAtMS       int64 `json:"acceptedAtMs,omitempty"`
+	FirstACPUpdateAtMS int64 `json:"firstAcpUpdateAtMs,omitempty"`
+	DaemonSentAtMS     int64 `json:"daemonSentAtMs,omitempty"`
 }
 
 func (p WorkspaceReadyPayload) Validate() error {

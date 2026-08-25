@@ -25,6 +25,14 @@ const runnerActivityTimelineLimit = 100
 type RunnerActivityResponse struct {
 	Summary  *protocol.AgentActivitySummary      `json:"summary"`
 	Timeline []RunnerActivityTimelineResponseRow `json:"timeline"`
+	Timing   *RunnerActivityTimingResponse       `json:"timing,omitempty"`
+}
+
+type RunnerActivityTimingResponse struct {
+	ColdStartAtMS      int64 `json:"cold_start_at_ms,omitempty"`
+	AcceptedAtMS       int64 `json:"accepted_at_ms,omitempty"`
+	FirstACPUpdateAtMS int64 `json:"first_acp_update_at_ms,omitempty"`
+	DaemonSentAtMS     int64 `json:"daemon_sent_at_ms,omitempty"`
 }
 
 type RunnerActivityTimelineResponseRow struct {
@@ -43,10 +51,18 @@ type RunnerActivityRealtimePayload struct {
 	Activity RunnerActivityResponse `json:"activity"`
 }
 
+func runnerActivityTimingResponse(t *protocol.AgentActivityTiming) *RunnerActivityTimingResponse {
+	if t == nil {
+		return nil
+	}
+	return &RunnerActivityTimingResponse{ColdStartAtMS: t.ColdStartAtMS, AcceptedAtMS: t.AcceptedAtMS, FirstACPUpdateAtMS: t.FirstACPUpdateAtMS, DaemonSentAtMS: t.DaemonSentAtMS}
+}
+
 // HandleWorkspaceDaemonFrame accepts frames only from the current ready
 // WorkspaceDaemon. Activity is best-effort observation; unlike lifecycle
 // frames, it has no server-owned ordering or replay fence.
 func (h *Handler) HandleWorkspaceDaemonFrame(ctx context.Context, identity daemonws.ClientIdentity, daemonInstanceID, eventType string, raw json.RawMessage) error {
+
 	if h == nil || h.DB == nil {
 		return errors.New("handler database is unavailable")
 	}
@@ -553,6 +569,7 @@ func (h *Handler) recordRunnerActivity(ctx context.Context, identity daemonws.Cl
 		return fmt.Errorf("upsert Runner Activity snapshot: %w", err)
 	}
 	for _, row := range activity.Timeline {
+
 		_, err := h.DB.Exec(ctx, `
 			INSERT INTO agent_activity_entry (
 				workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id,
@@ -569,6 +586,7 @@ func (h *Handler) recordRunnerActivity(ctx context.Context, identity daemonws.Cl
 		if err != nil {
 			return err
 		}
+		projected.Timing = runnerActivityTimingResponse(activity.Timing)
 		h.publish(protocol.EventAgentActivity, identity.WorkspaceID, "system", "", RunnerActivityRealtimePayload{
 			AgentID:  snapshot.AgentID,
 			Activity: projected,
@@ -729,6 +747,7 @@ func (h *Handler) runnerActivityPresentation(ctx context.Context, workspaceID, a
 
 	return response, nil
 }
+
 
 func (h *Handler) runnerActivityAgentScope(ctx context.Context, workspaceIDText, agentIDText string) (pgtype.UUID, pgtype.UUID, pgtype.UUID, error) {
 	workspaceID, err := util.ParseUUID(workspaceIDText)

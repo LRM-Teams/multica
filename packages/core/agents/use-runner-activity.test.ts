@@ -1,5 +1,5 @@
 import { QueryClient } from "@tanstack/react-query";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { RunnerActivityResponse, RunnerActivitySummariesResponse } from "../types";
 import { runnerActivityKeys, runnerActivitySummaryKeys } from "./queries";
 import { applyRunnerActivityRealtime } from "./runner-activity-updaters";
@@ -10,6 +10,27 @@ const current: RunnerActivityResponse = {
 };
 
 describe("applyRunnerActivityRealtime", () => {
+  it("records WS receive and cache marks without changing provider timing", () => {
+    vi.spyOn(Date, "now").mockReturnValueOnce(200).mockReturnValueOnce(203);
+    const client = new QueryClient();
+    applyRunnerActivityRealtime(client, "workspace-1", {
+      agent_id: "agent-1",
+      activity: {
+        summary: null,
+        timeline: [],
+        timing: { accepted_at_ms: 100, first_acp_update_at_ms: 150, daemon_sent_at_ms: 180 },
+      },
+    });
+    expect(client.getQueryData<RunnerActivityResponse>(runnerActivityKeys.all("workspace-1", "agent-1"))?.timing).toEqual({
+      accepted_at_ms: 100,
+      first_acp_update_at_ms: 150,
+      daemon_sent_at_ms: 180,
+      frontend_received_at_ms: 200,
+      frontend_cached_at_ms: 203,
+    });
+    vi.restoreAllMocks();
+  });
+
   it("replaces the canonical cache without invalidating it", () => {
     const client = new QueryClient();
     const key = runnerActivityKeys.all("workspace-1", "agent-1");

@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // ── acpClient: ACP JSON-RPC 2.0 transport ──
@@ -53,6 +54,8 @@ type acpClient struct {
 
 	runtimeStatsMu sync.Mutex
 	runtimeStats   *RuntimeTokenStats
+	firstUpdateMu  sync.Mutex
+	firstUpdateAt  time.Time
 }
 
 // pendingToolCall buffers state for a tool call while its arguments
@@ -429,24 +432,42 @@ func (c *acpClient) handleNotification(raw map[string]json.RawMessage) {
 	}
 
 	updateType, updateData := normalizeACPUpdate(params.Update)
+	firstUpdateAt := c.markFirstUpdate()
 	if c.acceptNotification != nil && !c.acceptNotification(updateType) {
 		return
 	}
 
 	switch updateType {
 	case "agent_message_chunk":
-		c.handleAgentMessage(updateData)
+		c.handleAgentMessage(updateData, firstUpdateAt)
 	case "agent_thought_chunk":
-		c.handleAgentThought(updateData)
+		c.handleAgentThought(updateData, firstUpdateAt)
 	case "tool_call":
-		c.handleToolCallStart(updateData)
+		c.handleToolCallStart(updateData, firstUpdateAt)
 	case "tool_call_update":
-		c.handleToolCallUpdate(updateData)
+		c.handleToolCallUpdate(updateData, firstUpdateAt)
 	case "usage_update":
 		c.handleUsageUpdate(updateData)
 	case "turn_end":
 		c.extractPromptResult(updateData)
 	}
+}
+
+func (c *acpClient) resetFirstUpdate() {
+	c.firstUpdateMu.Lock()
+	c.firstUpdateAt = time.Time{}
+	c.firstUpdateMu.Unlock()
+}
+
+func (c *acpClient) markFirstUpdate() time.Time {
+	now := time.Now().UTC()
+	c.firstUpdateMu.Lock()
+	defer c.firstUpdateMu.Unlock()
+	if c.firstUpdateAt.IsZero() {
+		c.firstUpdateAt = now
+		return now
+	}
+	return c.firstUpdateAt
 }
 
 func normalizeACPUpdate(data json.RawMessage) (string, json.RawMessage) {
@@ -494,7 +515,8 @@ func normalizeACPUpdateType(t string) string {
 	}
 }
 
-func (c *acpClient) handleAgentMessage(data json.RawMessage) {
+func (c *acpClient) handleAgentMessage(data json.RawMessage, providerEvent ...time.Time) {
+	providerEventAt := firstACPEventTime(providerEvent)
 	var msg struct {
 		Content struct {
 			Type string `json:"type"`
@@ -505,11 +527,12 @@ func (c *acpClient) handleAgentMessage(data json.RawMessage) {
 		return
 	}
 	if c.onMessage != nil {
-		c.onMessage(Message{Type: MessageText, Content: msg.Content.Text})
+		c.onMessage(Message{Type: MessageText, Content: msg.Content.Text, ProviderEventAt: providerEventAt})
 	}
 }
 
-func (c *acpClient) handleAgentThought(data json.RawMessage) {
+func (c *acpClient) handleAgentThought(data json.RawMessage, providerEvent ...time.Time) {
+	providerEventAt := firstACPEventTime(providerEvent)
 	var msg struct {
 		Content struct {
 			Type string `json:"type"`
@@ -520,11 +543,12 @@ func (c *acpClient) handleAgentThought(data json.RawMessage) {
 		return
 	}
 	if c.onMessage != nil {
-		c.onMessage(Message{Type: MessageThinking, Content: msg.Content.Text})
+		c.onMessage(Message{Type: MessageThinking, Content: msg.Content.Text, ProviderEventAt: providerEventAt})
 	}
 }
 
-func (c *acpClient) handleToolCallStart(data json.RawMessage) {
+func (c *acpClient) handleToolCallStart(data json.RawMessage, providerEvent ...time.Time) {
+	providerEventAt := firstACPEventTime(providerEvent)
 	var msg struct {
 		ToolCallID string            `json:"toolCallId"`
 		Name       string            `json:"name"`
@@ -570,11 +594,13 @@ func (c *acpClient) handleToolCallStart(data json.RawMessage) {
 			Tool:   toolName,
 			CallID: msg.ToolCallID,
 			Input:  rawInput,
+			ProviderEventAt: providerEventAt,
 		})
 	}
 }
 
-func (c *acpClient) handleToolCallUpdate(data json.RawMessage) {
+func (c *acpClient) handleToolCallUpdate(data json.RawMessage, providerEvent ...time.Time) {
+	providerEventAt := firstACPEventTime(providerEvent)
 	var msg struct {
 		ToolCallID string            `json:"toolCallId"`
 		Status     string            `json:"status"`
@@ -623,6 +649,7 @@ func (c *acpClient) handleToolCallUpdate(data json.RawMessage) {
 					Tool:   toolName,
 					CallID: msg.ToolCallID,
 					Input:  rawInput,
+					ProviderEventAt: providerEventAt,
 				})
 			}
 		} else if text := extractACPToolCallText(msg.Content); text != "" {
@@ -701,8 +728,16 @@ func (c *acpClient) handleToolCallUpdate(data json.RawMessage) {
 			CallID: msg.ToolCallID,
 			Input:  input,
 			Output: output,
+			ProviderEventAt: providerEventAt,
 		})
 	}
+}
+
+func firstACPEventTime(values []time.Time) time.Time {
+	if len(values) > 0 {
+		return values[0]
+	}
+	return time.Time{}
 }
 
 func (c *acpClient) resetToolCallFailure() {

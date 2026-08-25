@@ -326,6 +326,16 @@ export interface RunnerActivityTimelineRow {
 export interface RunnerActivityResponse {
   summary: RunnerActivitySummary | null;
   timeline: RunnerActivityTimelineRow[];
+  timing?: RunnerActivityTiming;
+}
+
+export interface RunnerActivityTiming {
+  cold_start_at_ms?: number;
+  accepted_at_ms?: number;
+  first_acp_update_at_ms?: number;
+  daemon_sent_at_ms?: number;
+  frontend_received_at_ms?: number;
+  frontend_cached_at_ms?: number;
 }
 
 export interface RunnerActivitySummaryItem {

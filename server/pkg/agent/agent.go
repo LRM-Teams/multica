@@ -356,6 +356,10 @@ type Message struct {
 	Diagnostic string         // provider diagnostic kind (Diagnostic)
 	Lineage    string         // runtime subagent lineage (Thinking, Text)
 	SessionID  string         // backend session id (Status), for early resume-pointer pinning
+	// ProviderEventAt is set by resident ACP adapters on the first native
+	// session/update observed for a turn. It is diagnostic timing evidence,
+	// not a synthetic Thinking event.
+	ProviderEventAt time.Time
 }
 
 // TokenUsage tracks token consumption for a single model.

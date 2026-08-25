@@ -577,7 +577,7 @@ export function ChannelGoalCard({
                 <span>{t(($) => $.goal.process)}</span>
                 {hasProcessUpdates ? (
                   <span
-                    className="size-1.5 rounded-full bg-running"
+                    className="size-1.5 rounded-full bg-dot-working"
                     aria-label={t(($) => $.goal.process_updating)}
                   />
                 ) : null}

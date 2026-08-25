@@ -243,7 +243,7 @@ describe("ActorProfileContentLoaded", () => {
     ["Starting", "Idle", "Working", "Sending message", "Running command"].forEach(
       (title, index) => expect(rows[index]).toHaveTextContent(title),
     );
-    expect(rows[4]?.querySelector(".bg-running")).not.toBeNull();
+    expect(rows[4]?.querySelector(".bg-dot-working")).not.toBeNull();
     expect(screen.queryByText("Older omitted activity")).toBeNull();
     expect(screen.queryByText("pnpm test -- --secret")).toBeNull();
     expect(screen.queryByText("#private-target")).toBeNull();

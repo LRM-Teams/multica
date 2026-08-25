@@ -22,8 +22,11 @@ bounded rendering rather than copying the prototype's hard-coded fixtures.
 
 ## 2. Canonical composition
 
-1. **Top command bar** — product identity, current goal/version/round, canvas
-   filters and lenses, then session actions.
+1. **Top command bar** — product identity, current goal/version/round, Agent
+   and round-lineage lenses, then session actions. The canvas filter, generic
+   relations lens, and confidence lens are not exposed: the first was
+   ineffective for the root-centered projection, the relations lens duplicated
+   the default canvas, and V6 does not project canonical confidence values.
 2. **Constellation canvas** — dotted research field, summary badge, organic
    relation graph, cluster boundaries, map key, and zoom/fit controls.
 3. **Context rail** — switchable fleet chat and selected-node detail. It may be

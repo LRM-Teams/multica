@@ -7,7 +7,7 @@ describe("useResearchUiStore", () => {
       chatDrawerOpen: false,
       d5RailOpen: true,
       d5RailMode: "chat",
-      d5Lens: "relations",
+      d5Lens: "agent",
       d5Overlay: null,
       goalCollapsedBySession: {},
       completionGuideDismissedBySession: {},
@@ -52,13 +52,13 @@ describe("useResearchUiStore", () => {
   it("owns D5 rail chrome", () => {
     expect(useResearchUiStore.getState().d5RailOpen).toBe(true);
     expect(useResearchUiStore.getState().d5RailMode).toBe("chat");
-    expect(useResearchUiStore.getState().d5Lens).toBe("relations");
+    expect(useResearchUiStore.getState().d5Lens).toBe("agent");
     useResearchUiStore.getState().setD5RailOpen(false);
     useResearchUiStore.getState().setD5RailMode("detail");
-    useResearchUiStore.getState().setD5Lens("agent");
+    useResearchUiStore.getState().setD5Lens("lineage");
     expect(useResearchUiStore.getState().d5RailOpen).toBe(false);
     expect(useResearchUiStore.getState().d5RailMode).toBe("detail");
-    expect(useResearchUiStore.getState().d5Lens).toBe("agent");
+    expect(useResearchUiStore.getState().d5Lens).toBe("lineage");
   });
 
   it("owns bounded session preferences", () => {

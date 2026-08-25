@@ -28,6 +28,7 @@ import { useWorkspacePaths } from "@multica/core/paths";
 import { useWS } from "@multica/core/realtime";
 import type { WSEventType } from "@multica/core/types/events";
 import {
+  DEFAULT_RESEARCH_D5_LENS,
   dedupeResearchFleetMembers,
   isResearchD5Lens,
   mergeTypedGraphPages,
@@ -408,15 +409,27 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   }, [data?.edges, displayTypedGraph?.edges]);
   useEffect(() => {
     const fromUrl = nav.searchParams.get("lens");
-    if (isResearchD5Lens(fromUrl) && fromUrl !== d5Lens) {
-      setD5Lens(fromUrl);
+    if (isResearchD5Lens(fromUrl)) {
+      if (fromUrl !== d5Lens) setD5Lens(fromUrl);
+      return;
     }
-  }, [d5Lens, nav.searchParams, sessionId, setD5Lens]);
+
+    const hiddenLensSelected = !isResearchD5Lens(d5Lens);
+    if (hiddenLensSelected || fromUrl !== null) {
+      setD5Lens(DEFAULT_RESEARCH_D5_LENS);
+    }
+    if (fromUrl !== null) {
+      const params = new URLSearchParams(nav.searchParams.toString());
+      params.delete("lens");
+      const qs = params.toString();
+      nav.replace(qs ? `${nav.pathname}?${qs}` : nav.pathname);
+    }
+  }, [d5Lens, nav, nav.searchParams, sessionId, setD5Lens]);
   const handleD5LensChange = useCallback(
     (lens: ResearchD5Lens) => {
       setD5Lens(lens);
       const params = new URLSearchParams(nav.searchParams.toString());
-      if (lens === "relations") params.delete("lens");
+      if (lens === DEFAULT_RESEARCH_D5_LENS) params.delete("lens");
       else params.set("lens", lens);
       const qs = params.toString();
       nav.replace(qs ? `${nav.pathname}?${qs}` : nav.pathname);
@@ -1211,7 +1224,6 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
         goalVersion={goalVersion}
         goalHistory={goalHistory}
         goalImpact={goalImpact}
-        typedGraphNodes={displayTypedGraph?.nodes ?? []}
         projectionSource={projectionSource}
         session={session}
         contract={data.run?.contract}

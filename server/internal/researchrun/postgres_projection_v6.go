@@ -194,10 +194,11 @@ func buildCanonicalV6ProjectionTx(ctx context.Context, tx pgx.Tx, workspaceID, r
 		return build, err
 	}
 	goalExecution, goalTerminal := projectionExecutionForRun(runStatus)
-	build.territoryByBranch, err = loadV6ProjectionTerritoriesTx(ctx, tx, workspaceID, runID, rootBranchID)
+	territoryByBranch, err := loadV6ProjectionTerritoriesTx(ctx, tx, workspaceID, runID, rootBranchID)
 	if err != nil {
 		return build, err
 	}
+	build.territoryByBranch = territoryByBranch
 	goalID := v6ProjectionStableID("goal", contractID, goalVersion)
 	goalBranchIDs := []string{}
 	if rootBranchID != "" {

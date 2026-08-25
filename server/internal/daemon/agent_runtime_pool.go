@@ -1052,6 +1052,9 @@ func (p *agentRuntimePool) deliverIdleMessages(
 			compactedThisInput = true
 		}
 		p.observeResidentRuntimeMessage(slot, message)
+		if message.Type == agent.MessageProgress {
+			return
+		}
 		if onMessage != nil {
 			onMessage(message)
 		}

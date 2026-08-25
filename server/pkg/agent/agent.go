@@ -358,6 +358,10 @@ const (
 	MessageError      MessageType = "error"
 	MessageLog        MessageType = "log"
 	MessageDiagnostic MessageType = "diagnostic"
+	// MessageProgress is an internal provider-liveness signal. It refreshes
+	// the daemon's runtime activity clock without producing a user-facing
+	// Activity entry or assistant output.
+	MessageProgress MessageType = "progress"
 	// MessageCompactionStarted and MessageCompactionFinished preserve the
 	// provider's explicit context-compaction lifecycle. They are Activity
 	// events, not generated assistant text.

@@ -219,6 +219,8 @@ type piRPCIdleInput struct {
 	turnDone         chan error
 	messages         chan Message
 	captures         chan ResidentTurnCapture
+	progressDone     chan struct{}
+	progressStopped  chan struct{}
 	stream           *piRPCTurn
 	captureOffset    int64
 	captureBinding   PiRunBinding
@@ -233,6 +235,7 @@ type piRPCTurn struct {
 	response chan piRPCResponse
 	done     chan piRPCCompletion
 	message  func(Message)
+	progress func()
 }
 
 // PiCompactionResult is the outcome of an explicit compaction call.
@@ -490,6 +493,8 @@ func (b *piRPCBackend) acceptIdleInputPrompt(ctx context.Context, prompt string)
 		turnDone:         make(chan error, 1),
 		messages:         make(chan Message, 256),
 		captures:         make(chan ResidentTurnCapture, 1),
+		progressDone:     make(chan struct{}),
+		progressStopped:  make(chan struct{}),
 		captureOffset:    captureOffset,
 		captureBinding:   binding,
 		captureTurn:      captureTurn,
@@ -500,6 +505,9 @@ func (b *piRPCBackend) acceptIdleInputPrompt(ctx context.Context, prompt string)
 		message: func(message Message) {
 			message.SessionID = p.sessionID
 			trySend(idleInput.messages, message)
+		},
+		progress: func() {
+			trySend(idleInput.messages, Message{Type: MessageProgress})
 		},
 	}
 	p.stateMu.Lock()
@@ -535,8 +543,40 @@ func (b *piRPCBackend) acceptIdleInputPrompt(ctx context.Context, prompt string)
 	// has already obtained the provider-native input receipt and may persist its
 	// Context Boundary; a concurrent canonical turn must not overlap the Pi turn.
 	releaseAdmission = false
+	b.startIdleProgressProbe(p, idleInput)
 	go b.finishIdleMessageInput(p, idleInput)
 	return ResidentMessageAcceptance{Done: idleInput.turnDone, Messages: idleInput.messages, Capture: idleInput.captures}, nil
+}
+
+const (
+	// Pi can spend a long time in a model call without emitting a tool or text
+	// event. Probe the still-live RPC process so the daemon can distinguish that
+	// valid quiet work from a wedged resident instead of extending the watchdog
+	// window blindly.
+	piRPCProgressProbeInterval = 30 * time.Second
+	piRPCProgressProbeTimeout  = 2 * time.Second
+)
+
+func (b *piRPCBackend) startIdleProgressProbe(p *piRPCProcess, idleInput *piRPCIdleInput) {
+	go func() {
+		defer close(idleInput.progressStopped)
+		ticker := time.NewTicker(piRPCProgressProbeInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-idleInput.progressDone:
+				return
+			case <-ticker.C:
+				ctx, cancel := context.WithTimeout(context.Background(), piRPCProgressProbeTimeout)
+				id := fmt.Sprintf("multica-progress-%d", time.Now().UnixNano())
+				response, ok := p.queryPiRPCResponse(ctx, id, map[string]any{"type": "get_state"})
+				cancel()
+				if ok && response.Success {
+					trySend(idleInput.messages, Message{Type: MessageProgress})
+				}
+			}
+		}
+	}()
 }
 
 // AcceptPendingNotice queues a content-free steering input while Pi is busy.
@@ -635,6 +675,8 @@ func formatResidentPendingNotice(notice ResidentPendingNotice) (string, error) {
 
 func (b *piRPCBackend) finishIdleMessageInput(p *piRPCProcess, idleInput *piRPCIdleInput) {
 	completion := <-idleInput.done
+	close(idleInput.progressDone)
+	<-idleInput.progressStopped
 	p.stateMu.Lock()
 	if p.idleInput == idleInput {
 		p.idleInput = nil
@@ -1056,6 +1098,9 @@ type piRPCEvent struct {
 }
 
 func piRPCDispatchEvent(event piRPCEvent, turn *piRPCTurn) {
+	if turn.progress != nil {
+		turn.progress()
+	}
 	switch event.Type {
 	case "agent_start":
 		turn.message(Message{Type: MessageStatus, Status: "running"})

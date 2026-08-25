@@ -324,6 +324,17 @@ func TestFormatResidentMessageBatchCarriesDeliveryContract(t *testing.T) {
 	}
 }
 
+func TestPiRPCDispatchEventReportsNativeProgress(t *testing.T) {
+	progress := make(chan struct{}, 1)
+	turn := &piRPCTurn{progress: func() { progress <- struct{}{} }}
+	piRPCDispatchEvent(piRPCEvent{piStreamEvent: piStreamEvent{Type: "provider_wait"}}, turn)
+	select {
+	case <-progress:
+	case <-time.After(time.Second):
+		t.Fatal("Pi RPC event did not report native progress")
+	}
+}
+
 // engineering-principles.md §1.5: chat: targets are standalone bubble delivery,
 // not Credential Proxy transport. The idle wake must look like a chat turn —
 // never a Canonical Message JSON batch with --target (that made Notes FAB
@@ -416,8 +427,20 @@ func TestPiRPCBackendAcceptsIdleMessageBatchAtNativePromptBoundary(t *testing.T)
 		t.Fatalf("native Message turn completion: %v", err)
 	}
 	<-activityDone
-	if len(activity) != 3 || activity[0].Type != MessageStatus || activity[0].SessionID != filepath.Join(dir, "session.jsonl") || activity[1].Type != MessageToolUse || activity[1].Tool != "bash" || activity[1].Input["command"] != "pwd" || activity[2].Type != MessageToolResult {
-		t.Fatalf("native Message activity = %+v, want status, tool use, and tool result", activity)
+	visible := make([]Message, 0, len(activity))
+	progressCount := 0
+	for _, message := range activity {
+		if message.Type == MessageProgress {
+			progressCount++
+			continue
+		}
+		visible = append(visible, message)
+	}
+	if progressCount == 0 {
+		t.Fatalf("native Message activity = %+v, want at least one internal progress signal", activity)
+	}
+	if len(visible) != 3 || visible[0].Type != MessageStatus || visible[0].SessionID != filepath.Join(dir, "session.jsonl") || visible[1].Type != MessageToolUse || visible[1].Tool != "bash" || visible[1].Input["command"] != "pwd" || visible[2].Type != MessageToolResult {
+		t.Fatalf("native Message activity = %+v, want status, tool use, and tool result", visible)
 	}
 	waitForPiRPCTestPath(t, inputPath)
 	raw, err := os.ReadFile(inputPath)

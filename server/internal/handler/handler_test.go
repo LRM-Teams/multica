@@ -154,7 +154,7 @@ func ensureAgentInboxTestFixtureDefaults(ctx context.Context, pool *pgxpool.Pool
 		    'agent_radar', 'training', 'environment_dispatch',
 		    'memory_curation', 'reminder', 'channel_role_changed',
 		    'chat_session', 'voice_call', 'issue_thread_backflow',
-		    'goal_graph_delta', 'note_worker'
+		    'goal_graph_delta', 'goal_controller', 'note_worker'
 		  ));
 
 		CREATE OR REPLACE FUNCTION test_agent_inbox_fixture_defaults()
@@ -180,7 +180,7 @@ func ensureAgentInboxTestFixtureDefaults(ctx context.Context, pool *pgxpool.Pool
 		    'agent_radar', 'training', 'environment_dispatch',
 		    'memory_curation', 'reminder', 'channel_role_changed',
 		    'chat_session', 'voice_call', 'issue_thread_backflow',
-		    'goal_graph_delta', 'note_worker'
+		    'goal_graph_delta', 'goal_controller', 'note_worker'
 		  ) THEN
 		    NEW.reason := CASE
 		      WHEN NEW.chat_session_id IS NOT NULL THEN 'chat_session'

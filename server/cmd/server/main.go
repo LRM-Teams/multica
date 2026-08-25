@@ -584,6 +584,11 @@ func main() {
 	} else {
 		schedulerRegistered = true
 	}
+	if err := schedulerMgr.Register(scheduler.GoalControllerJob(h)); err != nil {
+		slog.Warn("scheduler: failed to register Goal controller", "error", err)
+	} else {
+		schedulerRegistered = true
+	}
 	if schedulerRegistered {
 		go func() {
 			_ = schedulerMgr.Run(sweepCtx)

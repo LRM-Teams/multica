@@ -27,6 +27,15 @@ func normalizeDecompose(in DecomposeInput) (DecomposeInput, error) {
 		n.AssigneeID = strings.TrimSpace(n.AssigneeID)
 		n.WorkerMode = strings.TrimSpace(n.WorkerMode)
 		n.CloneReason = strings.TrimSpace(n.CloneReason)
+		if len(n.AcceptanceCriteria) == 0 || len(n.AcceptanceCriteria) > 50 {
+			return in, ErrInvalidGraph
+		}
+		for criterionIndex := range n.AcceptanceCriteria {
+			n.AcceptanceCriteria[criterionIndex] = strings.TrimSpace(n.AcceptanceCriteria[criterionIndex])
+			if n.AcceptanceCriteria[criterionIndex] == "" || len(n.AcceptanceCriteria[criterionIndex]) > 2000 {
+				return in, ErrInvalidGraph
+			}
+		}
 		if n.WorkerMode == "" {
 			n.WorkerMode = WorkerModeReuseAgent
 		}
@@ -140,17 +149,19 @@ func (s *Store) DecomposeIssue(ctx context.Context, input DecomposeInput) (Decom
 		return DecomposeResult{}, err
 	}
 
-	var projectID, sourceChannelID, sourceMessageID pgtype.UUID
+	var projectID, sourceChannelID, sourceMessageID, channelGoalID pgtype.UUID
+	var goalRequired pgtype.Bool
 	var parentStatus string
 	err = tx.QueryRow(ctx, `
-		SELECT parent.project_id,source.channel_id,source.message_id,parent.status
+		SELECT parent.project_id,source.channel_id,source.message_id,parent.status,
+		       parent.channel_goal_id,parent.goal_required
 		FROM issue parent
 		LEFT JOIN issue_source_message source ON source.issue_id=parent.id
 		WHERE parent.workspace_id=$1 AND parent.id=$2
 		  AND parent.status NOT IN ('done','cancelled')
 		  AND ((parent.assignee_type='agent' AND parent.assignee_id=$3)
 		       OR (parent.creator_type='agent' AND parent.creator_id=$3))
-	`, w, parent, actor).Scan(&projectID, &sourceChannelID, &sourceMessageID, &parentStatus)
+	`, w, parent, actor).Scan(&projectID, &sourceChannelID, &sourceMessageID, &parentStatus, &channelGoalID, &goalRequired)
 	if err != nil {
 		return DecomposeResult{}, ErrGraphForbidden
 	}
@@ -158,6 +169,10 @@ func (s *Store) DecomposeIssue(ctx context.Context, input DecomposeInput) (Decom
 	issueByTemp := make(map[string]uuid.UUID, len(in.Nodes))
 	result := DecomposeResult{ParentIssueID: parent.String(), IssueIDs: map[string]string{}, AgentIDs: map[string]string{}, ReadyIssueIDs: []string{}}
 	for _, node := range in.Nodes {
+		acceptanceCriteria, marshalErr := json.Marshal(node.AcceptanceCriteria)
+		if marshalErr != nil {
+			return DecomposeResult{}, ErrInvalidGraph
+		}
 		sourceAgentID, parseErr := uuid.Parse(node.AssigneeID)
 		if parseErr != nil {
 			return DecomposeResult{}, ErrInvalidGraph
@@ -191,11 +206,12 @@ func (s *Store) DecomposeIssue(ctx context.Context, input DecomposeInput) (Decom
 			INSERT INTO issue(
 				workspace_id,title,description,status,priority,assignee_type,assignee_id,
 				creator_type,creator_id,parent_issue_id,project_id,
-				acceptance_criteria,position,number
-			) VALUES($1,$2,$3,$4,'none','agent',$5,'agent',$6,$7,$8,'[]'::jsonb,
-				COALESCE((SELECT min(position)-1 FROM issue WHERE workspace_id=$1 AND status=$4),0),$9)
+				acceptance_criteria,channel_goal_id,goal_required,position,number
+			) VALUES($1,$2,$3,$4,'none','agent',$5,'agent',$6,$7,$8,$9,
+				$10,$11,COALESCE((SELECT min(position)-1 FROM issue WHERE workspace_id=$1 AND status=$4),0),$12)
 			RETURNING id
-		`, w, node.Title, node.Description, status, agentID, actor, parent, projectID, number).Scan(&issueID)
+		`, w, node.Title, node.Description, status, agentID, actor, parent, projectID,
+			acceptanceCriteria, channelGoalID, goalRequired, number).Scan(&issueID)
 		if err != nil {
 			return DecomposeResult{}, err
 		}

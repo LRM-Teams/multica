@@ -36,7 +36,7 @@ func (d *Daemon) listenBindingCredentialProxy() (net.Listener, error) {
 
 func (d *Daemon) serveBindingCredentialProxy(ctx context.Context, listener net.Listener) {
 	mux := http.NewServeMux()
-	d.registerCredentialProxyRoutes(mux)
+	d.registerLocalControlRoutes(mux)
 	d.serveLocalHTTP(ctx, listener, mux, "Binding child Credential Proxy")
 }
 

@@ -1500,6 +1500,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Post("/issues/{id}/unsubscribe", h.UnsubscribeAgentFromIssue)
 				r.Get("/issues/{id}/task-runs", h.ListAgentIssueTaskRuns)
 				r.Get("/issues/{id}/pull-requests", h.ListAgentIssuePullRequests)
+				r.Post("/issues/{id}/pull-requests/rescan", h.RescanAgentIssuePullRequest)
 				r.Get("/issues/{id}/attachments", h.ListAgentIssueAttachments)
 				r.Post("/issues/{id}/completion", h.SubmitAgentIssueCompletion)
 				r.Get("/issues/{id}/completion-reports", h.ListAgentIssueCompletionReports)

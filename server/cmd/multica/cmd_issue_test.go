@@ -914,6 +914,8 @@ func TestRunIssuePullRequestsRescanUsesCanonicalEndpoint(t *testing.T) {
 }
 
 func TestRunIssuePullRequestsRescanRejectsInvalidNumber(t *testing.T) {
+	t.Setenv("MULTICA_SERVER_URL", "http://example.invalid")
+	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
 	t.Setenv("MULTICA_TOKEN", "test-token")
 	t.Setenv("MULTICA_TOKEN_FILE", "")
 	t.Setenv("MULTICA_AGENT_ID", "")

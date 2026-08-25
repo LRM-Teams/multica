@@ -111,6 +111,7 @@ function toLayoutNode(n: TypedGraphNode): StarGraphLayoutNode {
     title: n.title,
     summary: n.summary,
     actor_agent_id: n.actor_agent_id ?? undefined,
+    detail: n.payload,
     typed: {
       level: n.level || undefined,
       round: n.round,
@@ -228,6 +229,7 @@ export function buildStarCanvasViewModel(
         title: n.title,
         summary: n.summary,
         actor_agent_id: n.actor_agent_id ?? undefined,
+        detail: n.payload,
         typed: {
           level: n.level || undefined,
           round: n.round,

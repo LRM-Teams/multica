@@ -113,7 +113,6 @@ describe("ResearchConstellationWorkspace projection mismatch", () => {
         snapshotNodes={snapshotNodes}
         selectedNode={null}
         onSelectNode={() => {}}
-        executionRows={[]}
         onOpenAgentPanel={() => {}}
         canvasMode="ready"
         activeLens="relations"
@@ -163,7 +162,6 @@ describe("ResearchConstellationWorkspace projection mismatch", () => {
         snapshotNodes={snapshotNodes}
         selectedNode={null}
         onSelectNode={() => {}}
-        executionRows={[]}
         onOpenAgentPanel={() => {}}
         canvasMode="ready"
         activeLens="relations"
@@ -201,7 +199,6 @@ describe("ResearchConstellationWorkspace typed graph recovery", () => {
         snapshotNodes={[]}
         selectedNode={null}
         onSelectNode={() => {}}
-        executionRows={[]}
         onOpenAgentPanel={() => {}}
         canvasMode="ready"
         activeLens="relations"
@@ -230,7 +227,6 @@ describe("ResearchConstellationWorkspace typed graph recovery", () => {
         snapshotNodes={[]}
         selectedNode={null}
         onSelectNode={() => {}}
-        executionRows={[]}
         onOpenAgentPanel={() => {}}
         canvasMode="ready"
         activeLens="relations"
@@ -253,7 +249,7 @@ describe("ResearchConstellationWorkspace typed graph recovery", () => {
 });
 
 describe("ResearchConstellationWorkspace local theme", () => {
-  it("closes the global Agent panel before opening a canvas Agent inspector", async () => {
+  it("closes a previously opened Agent panel when selecting another Work node", async () => {
     const onCloseAgentPanel = vi.fn();
     render(
       <ResearchConstellationWorkspace
@@ -306,7 +302,6 @@ describe("ResearchConstellationWorkspace local theme", () => {
         snapshotNodes={[]}
         selectedNode={null}
         onSelectNode={() => {}}
-        executionRows={[]}
         onOpenAgentPanel={() => {}}
         onCloseAgentPanel={onCloseAgentPanel}
         canvasMode="ready"
@@ -378,7 +373,6 @@ describe("ResearchConstellationWorkspace local theme", () => {
         snapshotNodes={[]}
         selectedNode={null}
         onSelectNode={onSelectNode}
-        executionRows={[]}
         onOpenAgentPanel={() => {}}
         canvasMode="ready"
         activeLens="relations"
@@ -460,7 +454,6 @@ describe("ResearchConstellationWorkspace local theme", () => {
         snapshotNodes={snapshotNodes}
         selectedNode={null}
         onSelectNode={() => {}}
-        executionRows={[]}
         onOpenAgentPanel={() => {}}
         canvasMode="ready"
         activeLens="relations"

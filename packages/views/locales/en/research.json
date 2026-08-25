@@ -1308,6 +1308,7 @@
       "mobile_description": "Fleet conversation and selected research node details.",
       "chat_tab": "Chat with director",
       "detail_tab": "Node detail",
+      "agent_tab": "Agent settings",
       "director_role": "Director",
       "director_fallback": "Research Director",
       "director_ronaldo": "Ronaldo",
@@ -1411,14 +1412,14 @@
       "map_key": {
         "aria_label": "Constellation map key",
         "title": "Map key",
-        "agent_tier": "Agent",
+        "agent_tier": "Work",
         "help": "Reopen constellation guide",
         "tiers": {
           "xxl": "Final synthesis with the broadest scope and strongest visual emphasis.",
           "xl": "Stable fused result with supporting evidence and conclusions.",
           "l": "Important result with its available round and metrics.",
           "m": "Intermediate result or scoped research direction.",
-          "s": "Agent work node showing its current execution state."
+          "s": "Work node showing its assigned Agent and current execution state."
         },
         "relations": {
           "decompose": {

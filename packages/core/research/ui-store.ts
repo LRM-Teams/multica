@@ -7,10 +7,8 @@ import {
 import { defaultStorage } from "../platform/storage";
 import { DEFAULT_RESEARCH_D5_LENS, type ResearchD5Lens } from "./d5-lens";
 
-export type ResearchD5RailMode = "chat" | "detail";
-export type ResearchD5Overlay =
-  | { sessionId: string; kind: "agent"; agentId: string }
-  | { sessionId: string; kind: "report" };
+export type ResearchD5RailMode = "chat" | "detail" | "agent";
+export type ResearchD5Overlay = { sessionId: string; kind: "report" };
 
 const MAX_SESSION_PREFERENCES = 20;
 
@@ -87,7 +85,7 @@ export const useResearchUiStore = create<ResearchUiState>()(
       name: "multica_research_ui_v5",
       storage: createJSONStorage(() => createWorkspaceAwareStorage(defaultStorage)),
       partialize: (s) => ({
-        d5RailMode: s.d5RailMode,
+        d5RailMode: s.d5RailMode === "agent" ? "detail" : s.d5RailMode,
         d5Lens: s.d5Lens,
         goalCollapsedBySession: s.goalCollapsedBySession,
         completionGuideDismissedBySession:

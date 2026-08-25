@@ -58,10 +58,6 @@ import { cn } from "@multica/ui/lib/utils";
 import { AgentPanelProvider } from "../../common/agent-panel-context";
 import { ResolvedAgentSidePanel } from "../../common/resolved-agent-side-panel";
 import { useT } from "../../i18n/use-t";
-import {
-  CHANNEL_DETAIL_SIDE_WIDTH_STORAGE_KEY,
-  useProfilePanelWidth,
-} from "../../layout/use-profile-panel-width";
 import { useNavigation } from "../../navigation/context";
 import {
   formatClarificationFormReply,
@@ -76,7 +72,6 @@ import {
   type FleetStepCardModel,
 } from "../lib/fleet-step-cards";
 import { resolveCanvasBodyMode } from "../lib/canvas-body-mode";
-import { buildExecutionOverlayRows } from "../execution-overlay/index";
 import { resolveChatDrawerMode } from "../lib/chat-drawer-mode";
 import { resolveCompletionGuideKind } from "../lib/completion-guide";
 import { deliveryContentCount } from "../lib/delivery-mode";
@@ -204,7 +199,6 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
 
 function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   const { t } = useT("research");
-  const { t: tAgents } = useT("agents");
   const wsId = useWorkspaceId();
   const paths = useWorkspacePaths();
   const nav = useNavigation();
@@ -552,16 +546,17 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   } | null>(null);
   const handleOpenAgentPanel = useCallback<OpenAgentPanelFn>((agentId, snapshot) => {
     setAgentDock({ agentId, snapshot: snapshot ?? null });
-  }, []);
-  const handleCloseAgentPanel = useCallback(() => setAgentDock(null), []);
+    setD5RailMode("agent");
+    setD5RailOpen(true);
+  }, [setD5RailMode, setD5RailOpen]);
+  const handleCloseAgentPanel = useCallback(() => {
+    setAgentDock(null);
+    setD5RailMode("detail");
+  }, [setD5RailMode]);
   const { data: workspaceMembers = [] } = useQuery({
     ...memberListOptions(wsId),
     enabled: !!agentDock,
   });
-  const {
-    width: agentSideWidth,
-    onResizePointerDown: onAgentSideResizePointerDown,
-  } = useProfilePanelWidth(CHANNEL_DETAIL_SIDE_WIDTH_STORAGE_KEY);
   const chatScrollRef = useRef<HTMLDivElement>(null);
   // LRM-1250 / LRM-1248 AC4 — focus restore target after successful send.
   const composerRef = useRef<HTMLTextAreaElement>(null);
@@ -945,13 +940,6 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     });
     return base ? enrichResearchNodeForDetail(base, displayTypedGraph) : null;
   })();
-  const executionRows = buildExecutionOverlayRows({
-    members: fleet.members,
-    presence,
-    presenceAvailable: presenceData != null,
-    nodes: data.nodes,
-    run: data.run,
-  });
   // Live executor caption for the selected V6 projection node: match the
   // presence roster by executing agent, by the node's own work item identity,
   // or by any work item linked from the node detail.
@@ -1204,10 +1192,8 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
       currentUserId={currentUserId}
       members={workspaceMembers}
       onClose={handleCloseAgentPanel}
-      variant={isMobile ? "page" : "panel"}
-      doneLabel={
-        isMobile ? tAgents(($) => $.side_panel.back_to_messages) : undefined
-      }
+      variant="panel"
+      hideDismiss
     />
   ) : null;
 
@@ -1330,7 +1316,6 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
           snapshotNodes={data.nodes}
           selectedNode={selectedNode}
           onSelectNode={handleSelectCanvasNode}
-          executionRows={executionRows}
           onOpenAgentPanel={handleOpenAgentPanel}
           onCloseAgentPanel={handleCloseAgentPanel}
           canvasMode={canvasMode}
@@ -1376,7 +1361,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
                   }}
                   onFocusNode={(nodeId) => {
                     if (!directorCanvas.canvas?.projectionNodeById.has(nodeId)) return;
-                    handleD5LensChange("relations");
+                    handleD5LensChange("agent");
                     selectSessionCanvasNode(sessionId, nodeId);
                   }}
                   onReference={() => {
@@ -1422,6 +1407,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
               </p>
             )
           }
+          agentPanel={agentPanelNode}
           chatPanel={
             <>
             <ResearchDirectorChatHeader
@@ -1784,22 +1770,6 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
           }
         />
 
-        {!isMobile && agentPanelNode ? (
-          <div
-            data-testid="research-agent-side-slot"
-            className="relative flex shrink-0 flex-col border-l border-border/30 bg-background"
-            style={{ width: agentSideWidth }}
-          >
-            <button
-              type="button"
-              data-testid="research-agent-side-resize"
-              aria-label={tAgents(($) => $.side_panel.resize_aria)}
-              className="absolute inset-y-0 left-0 z-10 w-1.5 cursor-col-resize border-0 bg-transparent p-0 hover:bg-foreground/10"
-              onPointerDown={onAgentSideResizePointerDown}
-            />
-            {agentPanelNode}
-          </div>
-        ) : null}
       </div>
 
       {/* LRM-832 — terminal next-step guide (dismiss persists; below Delivery z-80). */}
@@ -1901,7 +1871,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   return (
     <ResearchConnectivityShell>
       <AgentPanelProvider onOpenAgent={handleOpenAgentPanel}>
-        {isMobile && agentPanelNode ? agentPanelNode : sessionBody}
+        {sessionBody}
       </AgentPanelProvider>
     </ResearchConnectivityShell>
   );

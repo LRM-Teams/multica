@@ -205,9 +205,6 @@
   outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
-.d5-workspace[data-d5-rail-open="false"] .research-agent-inspector-sheet {
-  background: var(--card);
-}
 .d5-lens-btn {
   border: 1px solid var(--border);
   border-radius: 9px;
@@ -222,14 +219,10 @@
   background: var(--accent);
 }
 .d5-workspace {
-  --d5-inspector-right: 24px;
   position: relative;
   display: flex;
   min-height: 0;
   flex: 1;
-}
-.d5-workspace[data-d5-rail-open="true"] {
-  --d5-inspector-right: 376px;
 }
 .d5-canvas-host {
   position: relative;
@@ -259,23 +252,35 @@
 }
 .d5-rail-tab {
   flex: 1;
+  min-width: 0;
+  overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--secondary);
   color: var(--muted-foreground);
   padding: 7px;
   font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .d5-rail-tab-active {
   border-color: color-mix(in oklab, var(--primary) 55%, var(--border));
   background: var(--accent);
   color: var(--accent-foreground);
 }
+.d5-rail-tab:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
 .d5-rail-body {
   min-height: 0;
   overflow: auto;
   scrollbar-color: #294257 transparent;
   scrollbar-width: thin;
+}
+.d5-rail-body > aside {
+  height: 100%;
+  border-left: 0;
 }
 .d5-rail-footer {
   border-top: 1px solid var(--border);
@@ -390,9 +395,6 @@
   .d5-chrome-controls {
     margin-left: 0;
   }
-  .d5-workspace[data-d5-rail-open="true"] {
-    --d5-inspector-right: 336px;
-  }
   .d5-rail {
     width: 320px;
   }
@@ -421,9 +423,6 @@
   }
   .d5-lens-overflow-trigger {
     display: inline-flex;
-  }
-  .d5-workspace[data-d5-rail-open="true"] {
-    --d5-inspector-right: 336px;
   }
   .d5-rail {
     width: 320px;
@@ -460,23 +459,4 @@
   .d5-lens-overflow-trigger {
     display: inline-flex;
   }
-}
-
-.research-agent-inspector {
-  position: absolute;
-  right: var(--d5-inspector-right);
-  top: 7.5rem;
-  z-index: 55;
-  width: min(24rem, calc(100% - 2rem));
-  max-height: calc(100% - 8.5rem);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xl);
-  background: var(--card);
-  color: var(--foreground);
-  overflow-x: hidden;
-  overflow-y: auto;
-  display: none;
-}
-.research-agent-inspector.open {
-  display: block;
 }

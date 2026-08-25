@@ -35,6 +35,8 @@ CREATE TABLE goal_controller_event (
 CREATE INDEX goal_controller_event_pending_idx
   ON goal_controller_event(available_at, created_at, goal_id)
   WHERE status = 'pending';
+CREATE INDEX goal_controller_event_goal_idx
+  ON goal_controller_event(workspace_id, goal_id);
 CREATE INDEX goal_controller_event_run_idx
   ON goal_controller_event(run_id)
   WHERE run_id IS NOT NULL;
@@ -61,10 +63,12 @@ AS $$
 BEGIN
   INSERT INTO goal_controller_event(
     workspace_id, goal_id, event_kind, source_kind, source_id, payload
-  ) VALUES (
+  )
+  SELECT
     event_workspace_id, event_goal_id, event_kind_value, event_source_kind,
     event_source_id, COALESCE(event_payload, '{}'::jsonb)
-  );
+  FROM channel_goal goal
+  WHERE goal.workspace_id=event_workspace_id AND goal.id=event_goal_id;
 END;
 $$;
 

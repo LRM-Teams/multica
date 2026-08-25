@@ -56,7 +56,6 @@ import { StarGraphClusterLayer } from "./star-graph-cluster-layer";
 import { StarGraphCollapseRelationLayer } from "./star-graph-collapse-relation-layer";
 import { StarGraphCollapseGhostLayer } from "./star-graph-collapse-ghost-layer";
 import {
-  computeEntityBounds,
   computeEntityBoundsForIds,
   computeConstellationBounds,
   fitCameraToBounds,

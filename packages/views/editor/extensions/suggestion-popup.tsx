@@ -21,6 +21,8 @@ interface SuggestionPopupRenderOptions<
    * commands) should stay where the caret is.
    */
   anchorToEditorWidth?: boolean;
+  /** Prefer the editor's top edge as the popup anchor instead of the caret. */
+  anchorToEditorTop?: boolean;
   getProps: (props: SuggestionProps<TItem, TSelected>) => TComponentProps;
   onKeyDown?: (
     ref: TRef | null | undefined,
@@ -39,6 +41,7 @@ export function createSuggestionPopupRender<
   getProps,
   onKeyDown,
   anchorToEditorWidth = false,
+  anchorToEditorTop = false,
 }: SuggestionPopupRenderOptions<TItem, TSelected, TRef, TComponentProps>) {
   return () => {
     let renderer: ReactRenderer<TRef> | null = null;
@@ -106,8 +109,14 @@ export function createSuggestionPopupRender<
       const caret = clientRect() ?? new DOMRect();
       if (!anchorToEditorWidth || !editorDom) return caret;
       const host = editorDom.getBoundingClientRect();
+      if (anchorToEditorTop) {
+        // Use the whole editor rect so `top-start` places the popup above the
+        // composer and a fallback `bottom-start` places it below the composer,
+        // rather than overlapping the input when the viewport is short.
+        return new DOMRect(host.left, host.top, host.width, host.height);
+      }
       // Horizontal edge and width from the composer, vertical band from the
-      // caret: the list opens on the composer's left edge at the caret's line.
+      // caret: this keeps caret-anchored suggestion menus aligned to the input.
       // The match is exact on purpose, with no floor — on a phone browser the
       // composer is roughly viewport-wide, so a minimum wider than the composer
       // would push the popup past the very edge this anchoring exists to
@@ -131,7 +140,7 @@ export function createSuggestionPopupRender<
         );
       }
       computePosition(virtualEl, el, {
-        placement: "bottom-start",
+        placement: anchorToEditorTop ? "top-start" : "bottom-start",
         strategy: "fixed",
         middleware: [
           offset(6),

@@ -992,8 +992,10 @@ export function createMentionSuggestion(
       pluginKey,
       component: MentionList,
       // The roster reads as an extension of what you are typing, so it spans
-      // the composer exactly rather than hanging off the caret.
+      // the composer exactly and stays above it rather than following the
+      // caret vertically.
       anchorToEditorWidth: true,
+      anchorToEditorTop: true,
       getProps: (props) => ({
         items: props.items,
         query: props.query,

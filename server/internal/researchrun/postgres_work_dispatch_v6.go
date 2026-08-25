@@ -6,27 +6,46 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func (s *PostgresStore) PrepareV6Dispatches(ctx context.Context, limit int) (int, error) {
 	prepared := 0
-	for prepared < limit {
-		ok, err := s.prepareNextV6Dispatch(ctx)
-		if err != nil || !ok {
-			return prepared, err
+	for inspected := 0; inspected < limit; inspected++ {
+		ok, candidate, err := s.prepareNextV6Dispatch(ctx)
+		if err != nil {
+			if candidate.workItemID == "" || !isPermanentV6DispatchPreparationError(ctx, err) {
+				return prepared, err
+			}
+			quarantined, quarantineErr := s.quarantineV6DispatchPreparationFailure(ctx, candidate, err)
+			if quarantineErr != nil {
+				return prepared, errors.Join(err, quarantineErr)
+			}
+			if !quarantined {
+				continue
+			}
+			continue
+		}
+		if !ok {
+			return prepared, nil
 		}
 		prepared++
 	}
 	return prepared, nil
 }
 
-func (s *PostgresStore) prepareNextV6Dispatch(ctx context.Context) (bool, error) {
+type v6DispatchCandidate struct {
+	workspaceID, runID, workItemID, agentID, membershipID string
+}
+
+func (s *PostgresStore) prepareNextV6Dispatch(ctx context.Context) (bool, v6DispatchCandidate, error) {
 	tx, err := s.beginResearchTx(ctx, txOpV6DispatchPrepare, pgx.TxOptions{})
 	if err != nil {
-		return false, err
+		return false, v6DispatchCandidate{}, err
 	}
 	defer tx.Rollback(ctx)
 	var workspaceID, runID, workItemID, agentID, membershipID, mission, expectedSchema string
@@ -35,44 +54,45 @@ func (s *PostgresStore) prepareNextV6Dispatch(ctx context.Context) (bool, error)
 	var payload json.RawMessage
 	err = tx.QueryRow(ctx, `SELECT w.workspace_id::text,w.session_id::text,w.id::text,w.assigned_agent_id::text,m.id::text,
 		COALESCE(NULLIF(w.payload->>'mission_prompt',''),m.mission_prompt),w.expected_result_schema_id,w.goal_version,s.state_version,w.input_event_sequence,w.payload
-		FROM research_work_item w JOIN research_session s ON s.id=w.session_id
+		FROM research_work_item w JOIN research_session s ON s.workspace_id=w.workspace_id AND s.id=w.session_id
 		JOIN research_team_membership m ON m.workspace_id=w.workspace_id AND m.session_id=w.session_id AND m.agent_id=w.assigned_agent_id
-		AND m.state IN('idle','working') WHERE s.orchestrator_version='research-run-v6' AND s.status='running' AND w.status='ready' AND w.ready_at<=now()
+		AND m.state='idle' WHERE s.orchestrator_version='research-run-v6' AND s.status='running' AND w.status='ready' AND w.ready_at<=now()
 		AND w.attempt_count<w.max_attempts ORDER BY w.priority DESC,w.ready_at,w.id FOR UPDATE OF s,w,m SKIP LOCKED LIMIT 1`).Scan(
 		&workspaceID, &runID, &workItemID, &agentID, &membershipID, &mission, &expectedSchema, &goalVersion, &stateVersion, &throughSequence, &payload)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return false, nil
+		return false, v6DispatchCandidate{}, nil
 	}
 	if err != nil {
-		return false, err
+		return false, v6DispatchCandidate{}, err
 	}
+	candidate := v6DispatchCandidate{workspaceID: workspaceID, runID: runID, workItemID: workItemID, agentID: agentID, membershipID: membershipID}
 	if err = lockRunForMutation(ctx, tx, runID, workspaceID); err != nil {
-		return false, err
+		return false, candidate, err
 	}
 	if expectedSchema == string(V6ContractAtomicResultSubmission) {
 		if _, err = ensureV6BackingTaskTx(ctx, tx, workItemID); err != nil {
-			return false, err
+			return false, candidate, err
 		}
 	}
 	attemptID, manifestID := uuid.NewString(), uuid.NewString()
 	manifest, manifestHash, err := compileV6WorkManifestTx(ctx, tx, workspaceID, runID, workItemID, attemptID, manifestID, agentID, mission, expectedSchema, goalVersion, stateVersion, throughSequence, payload)
 	if err != nil {
-		return false, err
+		return false, candidate, err
 	}
 	var attemptNumber int
 	if err = tx.QueryRow(ctx, `SELECT COALESCE(max(attempt_number),0)+1 FROM research_work_item_attempt WHERE work_item_id=$1::uuid`, workItemID).Scan(&attemptNumber); err != nil {
-		return false, err
+		return false, candidate, err
 	}
 	dispatchKey := "v6-dispatch:" + attemptID
 	if _, err = tx.Exec(ctx, `INSERT INTO research_work_item_attempt(id,workspace_id,session_id,work_item_id,attempt_number,assigned_agent_id,membership_id,dispatch_key,manifest_id,manifest_hash,status,manifest)
 		VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,$6::uuid,$7::uuid,$8,$9::uuid,$10,'dispatching',$11::jsonb)`, attemptID, workspaceID, runID, workItemID, attemptNumber, agentID, membershipID, dispatchKey, manifestID, manifestHash, manifest); err != nil {
-		return false, err
+		return false, candidate, err
 	}
 	attemptHash, err := ArtifactContentHash(ArtifactKindAttempt, v6WorkAttemptArtifactContent(
 		workItemID, attemptNumber, agentID, membershipID, dispatchKey, manifestID, manifestHash,
 	))
 	if err != nil {
-		return false, err
+		return false, candidate, err
 	}
 	goalVersion32 := int32(goalVersion)
 	if err = registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
@@ -82,30 +102,84 @@ func (s *PostgresStore) prepareNextV6Dispatch(ctx context.Context) (bool, error)
 		SchemaVersion: OrchestratorVersionV6, AccessLevel: ArtifactAccessRaw,
 		HashOrigin: ArtifactHashOriginProduction, ContentHash: attemptHash,
 	}); err != nil {
-		return false, err
+		return false, candidate, err
 	}
 	if expectedSchema == string(V6ContractAtomicResultSubmission) {
 		if err = persistV6CatalogPagesTx(ctx, tx, workspaceID, runID, attemptID, throughSequence, manifest); err != nil {
-			return false, err
+			return false, candidate, err
 		}
 	}
 	outboxPayload, err := json.Marshal(V6DispatchIntentPayload{Access: V6AttemptAccess{WorkspaceID: workspaceID, RunID: runID, WorkItemID: workItemID, AttemptID: attemptID, AgentID: agentID}, Manifest: manifest, Mission: mission})
 	if err != nil {
-		return false, err
+		return false, candidate, err
 	}
 	if _, err = tx.Exec(ctx, `INSERT INTO research_v6_outbox(workspace_id,session_id,kind,idempotency_key,payload)VALUES($1::uuid,$2::uuid,'dispatch_work_item',$3,$4::jsonb)`, workspaceID, runID, dispatchKey, outboxPayload); err != nil {
-		return false, err
+		return false, candidate, err
 	}
 	// Observed Agent turns run 17-30 minutes; a 15-minute lease expired mid-turn
 	// and burned the whole attempt budget on healthy work. Progress reports also
 	// slide this lease (see ReportV6WorkProgress).
 	if _, err = tx.Exec(ctx, `UPDATE research_work_item SET status='dispatching',attempt_count=attempt_count+1,lease_token=$2::uuid,lease_expires_at=now()+interval '45 minutes',state_version=state_version+1,updated_at=now() WHERE id=$1::uuid`, workItemID, uuid.NewString()); err != nil {
-		return false, err
+		return false, candidate, err
 	}
 	if _, err = tx.Exec(ctx, `UPDATE research_team_membership SET state='working' WHERE id=$1::uuid`, membershipID); err != nil {
-		return false, err
+		return false, candidate, err
 	}
 	if _, err = appendEvent(ctx, tx, workspaceID, runID, "v6_work_item_dispatch_prepared", dispatchKey, "system", "", map[string]any{"work_item_id": workItemID, "work_item_attempt_id": attemptID, "manifest_id": manifestID, "manifest_hash": manifestHash, "attempt_number": attemptNumber}); err != nil {
+		return false, candidate, err
+	}
+	if err = s.commitResearchTx(ctx, txOpV6DispatchPrepare, tx); err != nil {
+		return false, candidate, err
+	}
+	return true, candidate, nil
+}
+
+func isPermanentV6DispatchPreparationError(ctx context.Context, err error) bool {
+	if err == nil || ctx.Err() != nil || errors.Is(err, ErrRunLeaseLost) || errors.Is(err, ErrCommitOutcomeUnknown) || pgconn.SafeToRetry(err) {
+		return false
+	}
+	if errors.Is(err, ErrInvalidContract) || errors.Is(err, pgx.ErrNoRows) {
+		return true
+	}
+	var postgresError *pgconn.PgError
+	if errors.As(err, &postgresError) {
+		return strings.HasPrefix(postgresError.Code, "22") || strings.HasPrefix(postgresError.Code, "23") || postgresError.Code == "P0001"
+	}
+	var scanError pgx.ScanArgError
+	return errors.As(err, &scanError)
+}
+
+func (s *PostgresStore) quarantineV6DispatchPreparationFailure(ctx context.Context, candidate v6DispatchCandidate, cause error) (bool, error) {
+	tx, err := s.beginResearchTx(ctx, txOpV6DispatchPrepare, pgx.TxOptions{})
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx)
+	if err = lockRunForMutation(ctx, tx, candidate.runID, candidate.workspaceID); err != nil {
+		return false, err
+	}
+	diagnostic := truncateBytes(cause.Error(), 4096)
+	var stateVersion int64
+	err = tx.QueryRow(ctx, `UPDATE research_work_item SET status='failed',terminal_reason_code='contract_rejected',
+		terminal_reason_detail=$4,lease_token=NULL,lease_expires_at=NULL,state_version=state_version+1,updated_at=now()
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid AND status='ready'
+		RETURNING state_version`, candidate.workspaceID, candidate.runID, candidate.workItemID, diagnostic).Scan(&stateVersion)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE research_team_membership m SET state='idle'
+		WHERE m.workspace_id=$1::uuid AND m.session_id=$2::uuid AND m.id=$3::uuid AND m.state='working'
+		AND NOT EXISTS (SELECT 1 FROM research_work_item active WHERE active.workspace_id=m.workspace_id
+			AND active.session_id=m.session_id AND active.assigned_agent_id=m.agent_id
+			AND active.status IN ('dispatching','running','awaiting_input'))`, candidate.workspaceID, candidate.runID, candidate.membershipID); err != nil {
+		return false, err
+	}
+	if _, err = appendEvent(ctx, tx, candidate.workspaceID, candidate.runID, "v6_work_item_recovered",
+		fmt.Sprintf("v6-work-item-dispatch-rejected:%s:%d", candidate.workItemID, stateVersion), "system", "",
+		map[string]any{"work_item_id": candidate.workItemID, "status": "failed", "reason": "contract_rejected", "diagnostics": diagnostic}); err != nil {
 		return false, err
 	}
 	if err = s.commitResearchTx(ctx, txOpV6DispatchPrepare, tx); err != nil {

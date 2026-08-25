@@ -181,6 +181,12 @@ needs no extra capacity justification beyond the Director Decision. At 20–49,
 the Decision records a capability, parallelism or independence reason. Fifty
 rejects creation mechanically.
 
+One run-scoped Agent may own at most one active Work Item at a time. Dispatch
+admits only an `idle` membership; `working` is not spare capacity. Independent
+research dimensions therefore use distinct Agents instead of accumulating
+multiple ready/running Work Items behind one Agent and presenting that queue as
+parallel execution.
+
 Agent archive is soft. Task, Attempt, Result, Discussion, Steward and Report
 attribution cannot be deleted or nulled by later Agent lifecycle changes.
 

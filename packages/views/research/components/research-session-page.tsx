@@ -540,6 +540,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   const handleOpenAgentPanel = useCallback<OpenAgentPanelFn>((agentId, snapshot) => {
     setAgentDock({ agentId, snapshot: snapshot ?? null });
   }, []);
+  const handleCloseAgentPanel = useCallback(() => setAgentDock(null), []);
   const { data: workspaceMembers = [] } = useQuery({
     ...memberListOptions(wsId),
     enabled: !!agentDock,
@@ -1189,7 +1190,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
       identitySnapshot={agentDock.snapshot}
       currentUserId={currentUserId}
       members={workspaceMembers}
-      onClose={() => setAgentDock(null)}
+      onClose={handleCloseAgentPanel}
       variant={isMobile ? "page" : "panel"}
       doneLabel={
         isMobile ? tAgents(($) => $.side_panel.back_to_messages) : undefined
@@ -1319,6 +1320,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
           onSelectNode={handleSelectCanvasNode}
           executionRows={executionRows}
           onOpenAgentPanel={handleOpenAgentPanel}
+          onCloseAgentPanel={handleCloseAgentPanel}
           canvasMode={canvasMode}
           activeLens={d5Lens}
           onActiveLensChange={handleD5LensChange}

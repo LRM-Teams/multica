@@ -1465,7 +1465,8 @@
       "reason": "Reason",
       "completed": "Completed",
       "current": "In progress",
-      "open_agent": "Open agent settings"
+      "execution_details": "Execution details",
+      "open_agent": "View agent profile"
     },
     "report": {
       "title": "Node report",

@@ -29,6 +29,8 @@ import {
 } from "@multica/ui/components/ui/tooltip";
 import { ChevronRight, ChevronDown, ChevronUp, Brain, AlertCircle, AlertTriangle, Copy } from "lucide-react";
 import { ChatMessageHoverShell } from "./chat-message-hover-actions";
+import { NoteChatInsertActions } from "./note-chat-insert-actions";
+import { buildChatNoteWriteConfirmationByMessageId } from "@multica/core/notes/worker-reply-actions";
 import { useScrollFade } from "@multica/ui/hooks/use-scroll-fade";
 import { chatTranscriptOptions, isStandaloneSessionOutstanding, isTaskMessageTaskId } from "@multica/core/chat/queries";
 import { Markdown } from "@multica/views/common/markdown";
@@ -172,6 +174,14 @@ export function ChatMessageList({
   const fadeStyle = useScrollFade(scrollRef);
   const { t } = useT("chat");
 
+  const noteInsertOffers = useMemo(
+    () =>
+      noteInsertPageId?.trim()
+        ? buildChatNoteWriteConfirmationByMessageId(messages)
+        : new Map<string, { mode: string }>(),
+    [messages, noteInsertPageId],
+  );
+
   const turnOutstanding = isStandaloneSessionOutstanding(pendingTask);
   const lastMessage = messages[messages.length - 1];
   const pendingAlreadyPersisted = turnOutstanding && lastMessage?.role === "assistant";
@@ -311,6 +321,7 @@ export function ChatMessageList({
                   enhanced={isDmBubble}
                   hoverMessageActions={hoverMessageActions}
                   noteInsertPageId={noteInsertPageId}
+                  offerNoteInsert={noteInsertOffers.has(msg.id)}
                 />
               </div>
             )}
@@ -397,6 +408,7 @@ function MessageBubble({
   enhanced,
   hoverMessageActions,
   noteInsertPageId,
+  offerNoteInsert,
 }: {
   sessionId: string;
   message: ChatMessage;
@@ -404,6 +416,7 @@ function MessageBubble({
   enhanced?: boolean;
   hoverMessageActions?: boolean;
   noteInsertPageId?: string | null;
+  offerNoteInsert?: boolean;
 }) {
   if (message.role === "user") {
     return (
@@ -452,6 +465,7 @@ function MessageBubble({
       enhanced={enhanced}
       hoverMessageActions={hoverMessageActions}
       noteInsertPageId={noteInsertPageId}
+      offerNoteInsert={offerNoteInsert}
     />
   );
 }
@@ -463,6 +477,7 @@ function AssistantMessage({
   enhanced,
   hoverMessageActions,
   noteInsertPageId,
+  offerNoteInsert,
 }: {
   sessionId: string;
   message: ChatMessage;
@@ -470,6 +485,7 @@ function AssistantMessage({
   enhanced?: boolean;
   hoverMessageActions?: boolean;
   noteInsertPageId?: string | null;
+  offerNoteInsert?: boolean;
 }) {
   const taskId = message.task_id;
   const canFetchTaskMessages = !!sessionId && isTaskMessageTaskId(taskId);
@@ -539,6 +555,12 @@ function AssistantMessage({
           isPending={isPending}
           hideCopy={hoverMessageActions}
         />
+        {offerNoteInsert && noteInsertPageId && !isPending ? (
+          <NoteChatInsertActions
+            pageId={noteInsertPageId}
+            text={extractCopyText(message, timeline)}
+          />
+        ) : null}
       </div>
     </ChatMessageHoverShell>
   );

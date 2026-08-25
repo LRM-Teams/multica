@@ -109,16 +109,20 @@ export function runtimeLocalSkillsOptions(runtimeId: string | null | undefined) 
 }
 
 export const agentProfileSkillsKeys = {
-  forAgent: (agentId: string) => ["agents", "profile-skills", agentId] as const,
+  forAgent: (agentId: string, runtimeId: string) =>
+    ["agents", "profile-skills", agentId, runtimeId] as const,
 };
 
-export function agentProfileSkillsOptions(agentId: string | null | undefined) {
+export function agentProfileSkillsOptions(
+  agentId: string | null | undefined,
+  runtimeId: string | null | undefined,
+) {
   return queryOptions({
-    queryKey: agentId
-      ? agentProfileSkillsKeys.forAgent(agentId)
+    queryKey: agentId && runtimeId
+      ? agentProfileSkillsKeys.forAgent(agentId, runtimeId)
       : ["agents", "profile-skills"] as const,
     queryFn: () => api.listAgentProfileSkills(agentId as string),
-    enabled: Boolean(agentId),
+    enabled: Boolean(agentId && runtimeId),
     staleTime: 30_000,
     retry: false,
   });

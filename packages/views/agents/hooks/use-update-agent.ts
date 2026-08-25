@@ -9,6 +9,7 @@ import {
   agentDetailKeys,
   agentRestartModeState,
 } from "@multica/core/agents";
+import { agentProfileSkillsKeys } from "@multica/core/runtimes";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import { useT } from "../../i18n";
 
@@ -127,6 +128,18 @@ export function useUpdateAgent(wsId: string) {
       );
       // List directory can refetch; panel body must NOT — PATCH is authority.
       qc.invalidateQueries({ queryKey: listKey });
+
+      if ("runtime_id" in data && prevAgent?.runtime_id) {
+        const nextRuntimeId = String(serverPatch.runtime_id ?? data.runtime_id);
+        void qc.invalidateQueries({
+          queryKey: agentProfileSkillsKeys.forAgent(id, prevAgent.runtime_id),
+        });
+        if (nextRuntimeId && nextRuntimeId !== prevAgent.runtime_id) {
+          void qc.invalidateQueries({
+            queryKey: agentProfileSkillsKeys.forAgent(id, nextRuntimeId),
+          });
+        }
+      }
 
       if (!touchesRuntimeConfig(data)) {
         toast.success(t(($) => $.detail.agent_updated_toast));

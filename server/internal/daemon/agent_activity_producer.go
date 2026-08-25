@@ -322,7 +322,23 @@ func (p *agentActivityProducer) publishLocked(key agentActivityProducerKey, snap
 	for _, entry := range broadcast.trajectory {
 		timeline = append(timeline, projectActivityTimelineEntry(entry, summary))
 	}
-	payload := protocol.AgentActivityPayload{Snapshot: snapshot, Summary: summary, Timeline: timeline}
+	timing := broadcast.timing
+	if previous := state.latestActivity.Timing; previous != nil {
+		if timing.ColdStartAtMS == 0 {
+			timing.ColdStartAtMS = previous.ColdStartAtMS
+		}
+		if timing.AcceptedAtMS == 0 {
+			timing.AcceptedAtMS = previous.AcceptedAtMS
+		}
+		if timing.FirstACPUpdateAtMS == 0 {
+			timing.FirstACPUpdateAtMS = previous.FirstACPUpdateAtMS
+		}
+	}
+	var latestTiming *protocol.AgentActivityTiming
+	if timing != (protocol.AgentActivityTiming{}) {
+		latestTiming = &timing
+	}
+	payload := protocol.AgentActivityPayload{Snapshot: snapshot, Summary: summary, Timeline: timeline, Timing: latestTiming}
 	if err := payload.Validate(); err != nil {
 		return err
 	}

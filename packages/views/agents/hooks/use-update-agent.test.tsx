@@ -6,6 +6,7 @@ import { renderHook } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Agent } from "@multica/core/types";
 import { agentDetailKeys } from "@multica/core/agents";
+import { agentProfileSkillsKeys } from "@multica/core/runtimes";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 
 // `api.updateAgent` is the save path; reset preflight + `restart` mode cover
@@ -223,6 +224,17 @@ describe("useUpdateAgent — agent detail cache (LRM-292 profile / panel)", () =
     await result.current("agent-1", { runtime_id: "rt-2" });
 
     expect(cachedDetail(qc, "agent-1")!.runtime_id).toBe("rt-2");
+  });
+
+  it("invalidates profile skills when the bound runtime changes", async () => {
+    const { qc, result } = setup([makeAgent()]);
+    const oldSkillsKey = agentProfileSkillsKeys.forAgent("agent-1", "rt-1");
+    qc.setQueryData(oldSkillsKey, { agentId: "agent-1", global: [], workspace: [] });
+    mockUpdateAgent.mockResolvedValue(makeAgent({ runtime_id: "rt-2" }));
+
+    await result.current("agent-1", { runtime_id: "rt-2" });
+
+    expect(qc.getQueryState(oldSkillsKey)?.isInvalidated).toBe(true);
   });
 });
 

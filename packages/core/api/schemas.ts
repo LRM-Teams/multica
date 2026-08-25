@@ -2432,9 +2432,19 @@ const RunnerActivityTimelineRowSchema = z.object({
   body: z.string().optional(),
 }).loose();
 
+const RunnerActivityTimingSchema = z.object({
+  cold_start_at_ms: z.number().optional(),
+  accepted_at_ms: z.number().optional(),
+  first_acp_update_at_ms: z.number().optional(),
+  daemon_sent_at_ms: z.number().optional(),
+  frontend_received_at_ms: z.number().optional(),
+  frontend_cached_at_ms: z.number().optional(),
+}).loose();
+
 export const RunnerActivityResponseSchema = z.object({
   summary: RunnerActivitySummarySchema.nullable().default(null),
   timeline: z.array(RunnerActivityTimelineRowSchema).default([]),
+  timing: RunnerActivityTimingSchema.optional(),
 }).loose();
 
 export const EMPTY_RUNNER_ACTIVITY_RESPONSE = { summary: null, timeline: [] };

@@ -372,7 +372,9 @@ function AgentProfileTabContent({
   // stays for the pickers' options — it means "what may I bind to", which is a
   // different question and a different (filtered) set.
   const { data: runtimeConfig } = useQuery(agentRuntimeConfigOptions(wsId, agent.id));
-  const { data: profileSkills } = useQuery(agentProfileSkillsOptions(agent.id));
+  const { data: profileSkills } = useQuery(
+    agentProfileSkillsOptions(agent.id, agent.runtime_id),
+  );
   const handleUpdate = useUpdateAgent(wsId);
   const { canEdit, canChangeRole } = useAgentPermissions(agent, wsId);
   const qc = useQueryClient();

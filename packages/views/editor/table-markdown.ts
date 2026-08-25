@@ -1,7 +1,6 @@
-import type { Editor } from "@tiptap/core";
-import type { JSONContent } from "@tiptap/core";
+import type { Editor, JSONContent } from "@tiptap/core";
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
-import { Table } from "@tiptap/extension-table";
+import { Table, renderTableToMarkdown } from "@tiptap/extension-table";
 
 /** Default column width for newly inserted cells (matches editor extensions). */
 export const TABLE_CELL_DEFAULT_WIDTH = 128;
@@ -12,7 +11,7 @@ export const TABLE_COLWIDTH_COMMENT_RE =
 /** Table extension that persists resized column widths in markdown. */
 export const TableWithColwidthMarkdown = Table.extend({
   renderMarkdown(node, helpers) {
-    const gfm = this.parent?.(node, helpers) ?? "";
+    const gfm = renderTableToMarkdown(node, helpers);
     const widths = extractColumnWidthsFromTableJson(node);
     if (!tableHasCustomColumnWidths(widths)) {
       return gfm;

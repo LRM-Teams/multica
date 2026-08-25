@@ -523,7 +523,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
       return () => {
         if (debounceRef.current) {
           clearTimeout(debounceRef.current);
-          debounceRef.current = null;
+          debounceRef.current = undefined;
         }
         if (!editor || editor.isDestroyed || !onUpdateRef.current) {
           return;

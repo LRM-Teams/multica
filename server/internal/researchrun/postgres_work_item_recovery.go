@@ -161,7 +161,7 @@ func (s *PostgresStore) RecoverExpiredV6WorkItems(ctx context.Context, limit int
 		  SELECT w.id,(invalid.id IS NOT NULL) AS platform_invalid_manifest,
 		    (terminal.work_item_id IS NOT NULL) AS inbox_terminal
 		  FROM research_work_item w
-		  JOIN research_session s ON s.id=w.session_id
+		  JOIN research_session s ON s.workspace_id=w.workspace_id AND s.id=w.session_id
 		  LEFT JOIN invalid_manifest invalid ON invalid.id=w.id
 		  LEFT JOIN terminal_inbox terminal ON terminal.work_item_id=w.id
 		  WHERE s.orchestrator_version='research-run-v6'
@@ -311,6 +311,57 @@ func (s *PostgresStore) RecoverExpiredV6WorkItems(ctx context.Context, limit int
 		return 0, err
 	}
 	zombieRows.Close()
+	// A ready queue behind one Agent is not parallel execution. Keep the highest
+	// priority candidate for each idle member and reject the surplus so the
+	// Director can create distinct run-scoped Agents and reassign the independent
+	// dimensions. If the member already has active execution, every additional
+	// ready item is surplus.
+	oversubscribedRows, err := tx.Query(ctx, `
+		WITH ranked AS (
+		  SELECT w.id,w.workspace_id,w.session_id,
+		    row_number() OVER (PARTITION BY w.workspace_id,w.session_id,w.assigned_agent_id
+		      ORDER BY w.priority DESC,w.ready_at,w.id) AS queue_position,
+		    EXISTS (
+		      SELECT 1 FROM research_work_item active
+		      WHERE active.workspace_id=w.workspace_id AND active.session_id=w.session_id
+		        AND active.assigned_agent_id=w.assigned_agent_id
+		        AND active.id<>w.id AND active.status IN ('dispatching','running','awaiting_input')
+		    ) AS agent_busy
+		  FROM research_work_item w
+		  JOIN research_session s ON s.id=w.session_id
+		  WHERE s.orchestrator_version='research-run-v6' AND s.status='running'
+		    AND w.kind<>'director' AND w.status='ready'
+		), surplus AS (
+		  SELECT w.id
+		  FROM research_work_item w JOIN ranked candidate ON candidate.id=w.id
+		  WHERE candidate.agent_busy OR candidate.queue_position>1
+		  ORDER BY w.session_id,w.assigned_agent_id,w.priority DESC,w.ready_at,w.id
+		  FOR UPDATE OF w SKIP LOCKED LIMIT $1
+		)
+		UPDATE research_work_item w
+		SET status='failed',terminal_reason_code='contract_rejected',
+		    terminal_reason_detail='同一个智能体被分配了多个活动 Work；独立调研方向必须分配给不同的 run-scoped Agent。',
+		    lease_token=NULL,lease_expires_at=NULL,state_version=w.state_version+1,updated_at=now()
+		WHERE w.id IN (SELECT id FROM surplus)
+		RETURNING w.workspace_id::text,w.session_id::text,w.id::text,w.status,w.state_version
+	`, limit)
+	if err != nil {
+		return 0, err
+	}
+	for oversubscribedRows.Next() {
+		var item recovered
+		if err = oversubscribedRows.Scan(&item.workspaceID, &item.runID, &item.workItemID, &item.status, &item.version); err != nil {
+			oversubscribedRows.Close()
+			return 0, err
+		}
+		item.recoveryKind = "agent_active_work_conflict"
+		items = append(items, item)
+	}
+	if err = oversubscribedRows.Err(); err != nil {
+		oversubscribedRows.Close()
+		return 0, err
+	}
+	oversubscribedRows.Close()
 	// A retryable runtime-capacity failure is not evidence that the research
 	// contract or Agent is bad. Reopen each exhausted Work Item once with a
 	// bounded delay. The one-time Run Event fence prevents an unavailable model

@@ -121,12 +121,14 @@ func (s *PostgresStore) executeV6CreateWorkAction(ctx context.Context, proposal 
 	}
 	var goalVersion int
 	var state, sequence int64
-	var member, assigneeIsDirector bool
+	var member, assigneeIsDirector, assigneeHasActiveWork bool
 	if err = tx.QueryRow(ctx, `SELECT goal_version,state_version,
 		COALESCE((SELECT max(sequence) FROM research_run_event WHERE session_id=s.id),0),
 		EXISTS(SELECT 1 FROM research_team_membership m WHERE m.session_id=s.id AND m.agent_id=$3::uuid AND m.state IN ('idle','working','offline','retiring')),
-		EXISTS(SELECT 1 FROM research_director_assignment d WHERE d.id=s.current_director_assignment_id AND d.status='active' AND d.director_agent_id=$3::uuid)
-		FROM research_session s WHERE s.workspace_id=$1::uuid AND s.id=$2::uuid`, proposal.WorkspaceID, proposal.RunID, payload.AssigneeAgentID).Scan(&goalVersion, &state, &sequence, &member, &assigneeIsDirector); err != nil {
+		EXISTS(SELECT 1 FROM research_director_assignment d WHERE d.id=s.current_director_assignment_id AND d.status='active' AND d.director_agent_id=$3::uuid),
+		EXISTS(SELECT 1 FROM research_work_item active WHERE active.workspace_id=s.workspace_id AND active.session_id=s.id
+			AND active.assigned_agent_id=$3::uuid AND active.status IN ('ready','dispatching','enqueued','running','awaiting_input'))
+		FROM research_session s WHERE s.workspace_id=$1::uuid AND s.id=$2::uuid`, proposal.WorkspaceID, proposal.RunID, payload.AssigneeAgentID).Scan(&goalVersion, &state, &sequence, &member, &assigneeIsDirector, &assigneeHasActiveWork); err != nil {
 		return err
 	}
 	if state != expectedState || !member {
@@ -134,6 +136,9 @@ func (s *PostgresStore) executeV6CreateWorkAction(ctx context.Context, proposal 
 	}
 	if expectedKind == V6ContractAtomicResultSubmission && assigneeIsDirector {
 		return fmt.Errorf("%w: Research Director cannot execute atomic research; create a run-scoped Agent first", ErrInvalidContract)
+	}
+	if expectedKind == V6ContractAtomicResultSubmission && assigneeHasActiveWork {
+		return fmt.Errorf("%w: 该智能体已有活动中的 Work；独立调研方向必须分配给不同的 run-scoped Agent，或等待当前 Work 完成", ErrInvalidContract)
 	}
 	workID := uuid.NewString()
 	result, err := tx.Exec(ctx, `INSERT INTO research_work_item(id,workspace_id,session_id,kind,status,target_kind,client_key,idempotency_key,goal_version,input_state_version,input_event_sequence,created_by_director_cycle_id,assigned_agent_id,priority,max_attempts,payload_schema_id,expected_result_schema_id,payload,state_version,ready_at,reason)

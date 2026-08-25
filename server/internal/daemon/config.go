@@ -87,7 +87,7 @@ type Config struct {
 	Agents         map[string]AgentEntry // keyed by provider: claude, codex, opencode, pi, cursor, kiro, grok
 	WorkspacesRoot string                // base path containing workspace directories (default: ~/.multica/workspaces)
 	// BindingStateRoot isolates durable workspace-execution coordinator state
-	// for one Binding child. Empty keeps the historical single-process paths.
+	// for one WorkspaceDaemon. Empty keeps the historical single-process paths.
 	BindingStateRoot string
 	HealthPort       int // local HTTP port for health checks (default: 19514)
 	// LocalControlToken authenticates owner-only loopback mutation requests.
@@ -261,7 +261,7 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	if e, ok := probe("MULTICA_GROK_PATH", agent.ProviderGrok, "MULTICA_GROK_MODEL"); ok {
 		agents[agent.ProviderGrok] = e
 	}
-	// Zero detected agent CLIs is a valid Computer. Setup and Binding child
+	// Zero detected agent CLIs is a valid Computer. Setup and WorkspaceDaemon
 	// connectivity are proven by the Workspace connection, not by runtime count.
 
 	claudeArgs, err := shellArgsFromEnv("MULTICA_CLAUDE_ARGS")
@@ -272,7 +272,7 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	// Host info
+	// Machine hostname
 	host, err := os.Hostname()
 	if err != nil || strings.TrimSpace(host) == "" {
 		host = "local-machine"

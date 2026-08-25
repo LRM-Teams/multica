@@ -17,20 +17,20 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-type hostMachineUpgradeConfig struct {
-	identity           HostProcessIdentity
+type computerMachineUpgradeConfig struct {
+	identity           ComputerIdentity
 	releaseManifestURL string
 	residentRoot       string
 	cancel             context.CancelFunc
 }
 
-// ErrComputerControlBusy is the Raft 1.0.17 Host busy signal. DaemonCore maps
+// ErrComputerControlBusy is the Raft 1.0.17 Computer busy signal. DaemonCore maps
 // it onto computer:upgrade:done { error: "control_busy" }.
 var ErrComputerControlBusy = errors.New("Computer Machine Upgrade is already running")
 
-type hostMachineUpgrade struct {
-	host   *Host
-	config hostMachineUpgradeConfig
+type computerMachineUpgrade struct {
+	computerCore *ComputerCore
+	config       computerMachineUpgradeConfig
 
 	stageRelease   func(string, time.Duration, string) (string, error)
 	verifyBinary   func(context.Context, string, string) error
@@ -45,6 +45,7 @@ type hostMachineUpgrade struct {
 	initiatorWorkspaceID string
 	activeCancel         context.CancelFunc
 	restartBinary        string
+	restartHandoff       *ComputerRestartHandoff
 	targetVersion        string
 	manifestBaseURL      string
 	lastStatus           MachineUpgradeStatus
@@ -63,11 +64,11 @@ type MachineUpgradeStatus struct {
 	Phases        []string `json:"phases,omitempty"`
 }
 
-// hostMachineUpgradeJournal is the durable successor handoff marker. Write it
+// computerMachineUpgradeJournal is the durable successor handoff marker. Write it
 // after staging and verification, immediately before swapping the binary. The
 // successor reconciles the marker after restart and removes it after handling
 // completion.
-type hostMachineUpgradeJournal struct {
+type computerMachineUpgradeJournal struct {
 	RequestID                   string   `json:"requestId"`
 	FromVersion                 string   `json:"fromVersion"`
 	TargetVersion               string   `json:"targetVersion"`
@@ -89,19 +90,19 @@ const (
 	MachineUpgradePhaseRollingBack    = "rolling_back"
 )
 
-func newHostMachineUpgrade(host *Host, config hostMachineUpgradeConfig) *hostMachineUpgrade {
-	return &hostMachineUpgrade{
-		host: host, config: config,
+func newComputerMachineUpgrade(computerCore *ComputerCore, config computerMachineUpgradeConfig) *computerMachineUpgrade {
+	return &computerMachineUpgrade{
+		computerCore: computerCore, config: config,
 		manifestBaseURL: strings.TrimSpace(config.releaseManifestURL),
 		stageRelease:    cli.StageReleaseScratch, verifyBinary: verifyComputerBinary,
 		installPath: cli.InstallPath, swapExecutable: cli.SwapExecutable,
 	}
 }
 
-// startServiceUpgrade accepts a runner-delivered cloud command and returns
+// startServiceUpgrade accepts a WorkspaceDaemon-delivered cloud command and returns
 // after the service has claimed machine-upgrade ownership. All package work
 // continues in the Computer service process.
-func (upgrade *hostMachineUpgrade) startServiceUpgrade(identity BindingChildIdentity, command protocol.ComputerUpgradePayload) error {
+func (upgrade *computerMachineUpgrade) startServiceUpgrade(identity WorkspaceDaemonIdentity, command protocol.ComputerUpgradePayload) error {
 	command.Canonicalize()
 	operationID := strings.TrimSpace(command.Operation())
 	if operationID == "" {
@@ -116,6 +117,10 @@ func (upgrade *hostMachineUpgrade) startServiceUpgrade(identity BindingChildIden
 		}
 		return ErrComputerControlBusy
 	}
+	if upgrade.restartBinary != "" {
+		upgrade.mu.Unlock()
+		return ErrComputerControlBusy
+	}
 	upgrade.activeID = operationID
 	upgrade.activePhase = "accepted"
 	upgrade.activeMessage = "Upgrade request accepted"
@@ -128,7 +133,7 @@ func (upgrade *hostMachineUpgrade) startServiceUpgrade(identity BindingChildIden
 	return nil
 }
 
-func (upgrade *hostMachineUpgrade) status() MachineUpgradeStatus {
+func (upgrade *computerMachineUpgrade) status() MachineUpgradeStatus {
 	upgrade.mu.Lock()
 	defer upgrade.mu.Unlock()
 	if upgrade.activeID == "" {
@@ -147,7 +152,7 @@ func (upgrade *hostMachineUpgrade) status() MachineUpgradeStatus {
 	}
 }
 
-func (upgrade *hostMachineUpgrade) recordProgress(operationID, phase, message string) {
+func (upgrade *computerMachineUpgrade) recordProgress(operationID, phase, message string) {
 	upgrade.mu.Lock()
 	defer upgrade.mu.Unlock()
 	if upgrade.activeID != operationID {
@@ -160,7 +165,7 @@ func (upgrade *hostMachineUpgrade) recordProgress(operationID, phase, message st
 	}
 }
 
-func (upgrade *hostMachineUpgrade) recordDone(operationID, newVersion, upgradeError string) {
+func (upgrade *computerMachineUpgrade) recordDone(operationID, newVersion, upgradeError string) {
 	upgrade.mu.Lock()
 	defer upgrade.mu.Unlock()
 	if upgrade.activeID != operationID {
@@ -184,7 +189,7 @@ func (upgrade *hostMachineUpgrade) recordDone(operationID, newVersion, upgradeEr
 	upgrade.activeCancel = nil
 }
 
-func (upgrade *hostMachineUpgrade) cancelActive() error {
+func (upgrade *computerMachineUpgrade) cancelActive() error {
 	upgrade.mu.Lock()
 	cancel := upgrade.activeCancel
 	active := upgrade.activeID
@@ -196,7 +201,7 @@ func (upgrade *hostMachineUpgrade) cancelActive() error {
 	return nil
 }
 
-func (upgrade *hostMachineUpgrade) executeServiceUpgrade(identity BindingChildIdentity, command protocol.ComputerUpgradePayload) {
+func (upgrade *computerMachineUpgrade) executeServiceUpgrade(identity WorkspaceDaemonIdentity, command protocol.ComputerUpgradePayload) {
 	operationID := command.Operation()
 	startedAt := time.Now().UTC().Format(time.RFC3339Nano)
 	defer func() {
@@ -223,10 +228,10 @@ func (upgrade *hostMachineUpgrade) executeServiceUpgrade(identity BindingChildId
 	prepared := false
 	defer func() {
 		if !prepared {
-			_ = upgrade.host.ReleaseMachineUpgrade(context.Background())
+			_ = upgrade.computerCore.ReleaseMachineUpgrade(context.Background())
 		}
 	}()
-	if err := upgrade.host.PrepareSiblingMachineUpgrade(ctx, identity.WorkspaceID); err != nil {
+	if err := upgrade.computerCore.PrepareSiblingMachineUpgrade(ctx, identity.WorkspaceID); err != nil {
 		upgrade.recordDone(operationID, "", "prepare_failed")
 		upgrade.emitRunnerEvent(identity, protocol.EventComputerUpgradeDone, protocol.ComputerUpgradeDonePayload{RequestID: command.RequestID, OK: false, Error: "prepare_failed"})
 		return
@@ -271,7 +276,7 @@ func (upgrade *hostMachineUpgrade) executeServiceUpgrade(identity BindingChildId
 		return
 	}
 	managedWorkspaceIDs := upgrade.acceptedManagedWorkspaceIDs()
-	if err := upgrade.writeJournal(hostMachineUpgradeJournal{
+	if err := upgrade.writeJournal(computerMachineUpgradeJournal{
 		RequestID: command.RequestID, FromVersion: upgrade.config.identity.Version,
 		TargetVersion: target, StartedAt: startedAt, SchemaVersion: 1,
 		SourceServicePID: os.Getpid(), OldRunnerPIDs: upgrade.runnerPIDs(managedWorkspaceIDs),
@@ -323,18 +328,18 @@ func resolveMachineUpgradeTarget(requested, releaseChannel, manifestURL string) 
 	return cli.NormalizeReleaseTag(release.TagName), nil
 }
 
-func (upgrade *hostMachineUpgrade) emitRunnerEvent(identity BindingChildIdentity, eventType string, payload any) {
+func (upgrade *computerMachineUpgrade) emitRunnerEvent(identity WorkspaceDaemonIdentity, eventType string, payload any) {
 	if identity.Validate() != nil {
-		targets := upgrade.host.supervisor.availableMachineControlTargets()
+		targets := upgrade.computerCore.daemonCore.availableMachineControlTargets()
 		if len(targets) == 0 {
 			return
 		}
 		identity = targets[0].identity
 	}
-	_ = upgrade.host.supervisor.DeliverComputerUpgradeEvent(context.Background(), upgrade.host.control.token, identity, eventType, payload)
+	_ = upgrade.computerCore.daemonCore.DeliverComputerUpgradeEvent(context.Background(), upgrade.computerCore.control.token, identity, eventType, payload)
 }
 
-func (upgrade *hostMachineUpgrade) handleChildAction(ctx context.Context, identity BindingChildIdentity, raw json.RawMessage) error {
+func (upgrade *computerMachineUpgrade) handleChildAction(ctx context.Context, identity WorkspaceDaemonIdentity, raw json.RawMessage) error {
 	if upgrade == nil {
 		return errors.New("Computer Machine Upgrade coordinator is unavailable")
 	}
@@ -343,10 +348,10 @@ func (upgrade *hostMachineUpgrade) handleChildAction(ctx context.Context, identi
 		return err
 	}
 	if _, _, ok := upgrade.currentRuntime(identity, ack.RuntimeID); !ok {
-		return errors.New("machine action Runtime belongs to another Binding child")
+		return errors.New("machine action Runtime belongs to another WorkspaceDaemon")
 	}
 	if ack.RuntimeGone || ack.PendingModelList != nil || ack.PendingLocalSkills != nil || ack.PendingLocalSkillImport != nil || len(ack.PendingLocalSkillImports) > 0 || ack.PendingMemoryCuration != nil {
-		return errors.New("Binding child attempted to forward a Workspace execution action")
+		return errors.New("WorkspaceDaemon attempted to forward a Workspace execution action")
 	}
 	upgrade.mu.Lock()
 	if manifest := strings.TrimSpace(ack.ReleaseManifestBaseURL); manifest != "" {
@@ -354,12 +359,12 @@ func (upgrade *hostMachineUpgrade) handleChildAction(ctx context.Context, identi
 	}
 	upgrade.mu.Unlock()
 	if ack.PendingRestart != nil {
-		go upgrade.scheduleCurrentBinaryRestart()
+		return upgrade.scheduleCurrentBinaryRestart()
 	}
 	return nil
 }
 
-func sameHostStringSet(left, right []string) bool {
+func sameWorkspaceSet(left, right []string) bool {
 	if len(left) != len(right) {
 		return false
 	}
@@ -375,7 +380,7 @@ func sameHostStringSet(left, right []string) bool {
 	return true
 }
 
-func (upgrade *hostMachineUpgrade) recoverSuccessor(ctx context.Context) error {
+func (upgrade *computerMachineUpgrade) recoverSuccessor(ctx context.Context) error {
 	journal, err := upgrade.readJournal()
 	if err != nil {
 		return err
@@ -402,8 +407,8 @@ func (upgrade *hostMachineUpgrade) recoverSuccessor(ctx context.Context) error {
 		return err
 	}
 	managedWorkspaceIDs := upgrade.acceptedManagedWorkspaceIDs()
-	if !sameHostStringSet(managedWorkspaceIDs, journal.AcceptedManagedWorkspaceIDs) || managedSetRevision(managedWorkspaceIDs) != journal.AcceptedManagedSetRevision {
-		return errors.New("successor managed runner set has not converged")
+	if !sameWorkspaceSet(managedWorkspaceIDs, journal.AcceptedManagedWorkspaceIDs) || managedSetRevision(managedWorkspaceIDs) != journal.AcceptedManagedSetRevision {
+		return errors.New("successor managed Workspace set has not converged")
 	}
 	if journal.ObservedTargetGeneration != upgrade.config.identity.ServiceGeneration || journal.TargetServicePID != os.Getpid() || journal.Phase != MachineUpgradePhaseTargetReady {
 		journal.ObservedTargetGeneration = upgrade.config.identity.ServiceGeneration
@@ -416,11 +421,11 @@ func (upgrade *hostMachineUpgrade) recoverSuccessor(ctx context.Context) error {
 	return nil
 }
 
-func predecessorPIDs(journal hostMachineUpgradeJournal) []int {
+func predecessorPIDs(journal computerMachineUpgradeJournal) []int {
 	return append([]int{journal.SourceServicePID}, journal.OldRunnerPIDs...)
 }
 
-func requirePredecessorsDead(journal hostMachineUpgradeJournal) error {
+func requirePredecessorsDead(journal computerMachineUpgradeJournal) error {
 	for _, pid := range predecessorPIDs(journal) {
 		if pid < 1 {
 			continue
@@ -433,10 +438,10 @@ func requirePredecessorsDead(journal hostMachineUpgradeJournal) error {
 	return nil
 }
 
-func (upgrade *hostMachineUpgrade) runnerPIDs(workspaceIDs []string) []int {
+func (upgrade *computerMachineUpgrade) runnerPIDs(workspaceIDs []string) []int {
 	pids := make([]int, 0, len(workspaceIDs))
 	for _, workspaceID := range workspaceIDs {
-		_, pid, ok := upgrade.host.Snapshot(workspaceID)
+		_, pid, ok := upgrade.computerCore.Snapshot(workspaceID)
 		if ok && pid > 0 {
 			pids = append(pids, pid)
 		}
@@ -445,19 +450,19 @@ func (upgrade *hostMachineUpgrade) runnerPIDs(workspaceIDs []string) []int {
 	return pids
 }
 
-func (upgrade *hostMachineUpgrade) journalPath() string {
+func (upgrade *computerMachineUpgrade) journalPath() string {
 	return machineUpgradeJournalPath(upgrade.config.residentRoot)
 }
 
-func (upgrade *hostMachineUpgrade) writeJournal(journal hostMachineUpgradeJournal) error {
+func (upgrade *computerMachineUpgrade) writeJournal(journal computerMachineUpgradeJournal) error {
 	return writeMachineUpgradeJournal(upgrade.config.residentRoot, journal)
 }
 
-func (upgrade *hostMachineUpgrade) readJournal() (*hostMachineUpgradeJournal, error) {
+func (upgrade *computerMachineUpgrade) readJournal() (*computerMachineUpgradeJournal, error) {
 	return readMachineUpgradeJournal(upgrade.config.residentRoot)
 }
 
-func (upgrade *hostMachineUpgrade) removeJournal() error {
+func (upgrade *computerMachineUpgrade) removeJournal() error {
 	return removeMachineUpgradeJournal(upgrade.config.residentRoot)
 }
 
@@ -469,7 +474,7 @@ func machineUpgradeJournalPath(root string) string {
 	return filepath.Join(root, "machine-upgrade-host.json")
 }
 
-func writeMachineUpgradeJournal(root string, journal hostMachineUpgradeJournal) error {
+func writeMachineUpgradeJournal(root string, journal computerMachineUpgradeJournal) error {
 	path := machineUpgradeJournalPath(root)
 	if path == "" {
 		return errors.New("Computer Machine Upgrade journal root is unavailable")
@@ -505,7 +510,7 @@ func writeMachineUpgradeJournal(root string, journal hostMachineUpgradeJournal) 
 	return os.Rename(temporaryPath, path)
 }
 
-func readMachineUpgradeJournal(root string) (*hostMachineUpgradeJournal, error) {
+func readMachineUpgradeJournal(root string) (*computerMachineUpgradeJournal, error) {
 	path := machineUpgradeJournalPath(root)
 	if path == "" {
 		return nil, nil
@@ -517,7 +522,7 @@ func readMachineUpgradeJournal(root string) (*hostMachineUpgradeJournal, error) 
 	if err != nil {
 		return nil, err
 	}
-	var journal hostMachineUpgradeJournal
+	var journal computerMachineUpgradeJournal
 	if err := json.Unmarshal(data, &journal); err != nil {
 		return nil, fmt.Errorf("parse Computer Machine Upgrade journal: %w", err)
 	}
@@ -554,6 +559,23 @@ type PendingMachineUpgradeHandoff struct {
 	KeepOwnedProcess            bool
 }
 
+// ComputerRestartHandoff is the in-memory predecessor snapshot used to
+// restart the current binary without pretending that an upgrade is active.
+type ComputerRestartHandoff struct {
+	Version                     string   `json:"version"`
+	SourceServicePID            int      `json:"sourceServicePid"`
+	OldBindingPIDs              []int    `json:"oldBindingPids,omitempty"`
+	AcceptedManagedWorkspaceIDs []string `json:"acceptedManagedWorkspaceIds"`
+	AcceptedManagedSetRevision  string   `json:"acceptedManagedSetRevision"`
+}
+
+// ComputerRestartPlan is the one post-shutdown launch decision returned by
+// ComputerCore. CurrentBinaryHandoff is nil for a real Machine Upgrade.
+type ComputerRestartPlan struct {
+	BinaryPath           string
+	CurrentBinaryHandoff *ComputerRestartHandoff
+}
+
 func WritePendingMachineUpgradeHandoffForTest(root string, handoff PendingMachineUpgradeHandoff) error {
 	requestID := strings.TrimSpace(handoff.RequestID)
 	if requestID == "" {
@@ -563,7 +585,7 @@ func WritePendingMachineUpgradeHandoffForTest(root string, handoff PendingMachin
 	if phase == "" {
 		phase = MachineUpgradePhaseAccepted
 	}
-	return writeMachineUpgradeJournal(root, hostMachineUpgradeJournal{
+	return writeMachineUpgradeJournal(root, computerMachineUpgradeJournal{
 		RequestID: requestID, FromVersion: handoff.FromVersion, TargetVersion: handoff.TargetVersion,
 		StartedAt: "2026-08-18T00:00:00Z", SchemaVersion: 1, SourceServicePID: handoff.SourceServicePID,
 		OldRunnerPIDs:               append([]int(nil), handoff.OldRunnerPIDs...),
@@ -607,7 +629,7 @@ func WaitForMachineUpgradePredecessors(ctx context.Context, handoff PendingMachi
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	journal := hostMachineUpgradeJournal{
+	journal := computerMachineUpgradeJournal{
 		SourceServicePID: handoff.SourceServicePID, OldRunnerPIDs: handoff.OldRunnerPIDs,
 	}
 	if err := requirePredecessorsDead(journal); err == nil {
@@ -642,12 +664,12 @@ func removeMachineUpgradeJournal(root string) error {
 	return err
 }
 
-func (upgrade *hostMachineUpgrade) currentRuntime(identity BindingChildIdentity, runtimeID string) (hostBindingRuntime, string, bool) {
-	upgrade.host.runtimeMu.RLock()
-	defer upgrade.host.runtimeMu.RUnlock()
-	report, ok := upgrade.host.runtimeSets[identity.WorkspaceID]
+func (upgrade *computerMachineUpgrade) currentRuntime(identity WorkspaceDaemonIdentity, runtimeID string) (workspaceDaemonRuntime, string, bool) {
+	upgrade.computerCore.runtimeMu.RLock()
+	defer upgrade.computerCore.runtimeMu.RUnlock()
+	report, ok := upgrade.computerCore.runtimeSets[identity.WorkspaceID]
 	if !ok || report.Identity != identity || report.DaemonToken == "" || (!report.ExpiresAt.IsZero() && time.Now().After(report.ExpiresAt)) {
-		return hostBindingRuntime{}, "", false
+		return workspaceDaemonRuntime{}, "", false
 	}
 	requestedRuntimeID := strings.TrimSpace(runtimeID)
 	for _, runtime := range report.Runtimes {
@@ -658,50 +680,61 @@ func (upgrade *hostMachineUpgrade) currentRuntime(identity BindingChildIdentity,
 			return runtime, report.DaemonToken, true
 		}
 	}
-	return hostBindingRuntime{}, "", false
+	return workspaceDaemonRuntime{}, "", false
 }
 
-func (upgrade *hostMachineUpgrade) firstCurrentRuntime() (hostBindingRuntime, string, bool) {
-	upgrade.host.runtimeMu.RLock()
-	defer upgrade.host.runtimeMu.RUnlock()
-	workspaces := make([]string, 0, len(upgrade.host.runtimeSets))
-	for workspaceID := range upgrade.host.runtimeSets {
+func (upgrade *computerMachineUpgrade) firstCurrentRuntime() (workspaceDaemonRuntime, string, bool) {
+	upgrade.computerCore.runtimeMu.RLock()
+	defer upgrade.computerCore.runtimeMu.RUnlock()
+	workspaces := make([]string, 0, len(upgrade.computerCore.runtimeSets))
+	for workspaceID := range upgrade.computerCore.runtimeSets {
 		workspaces = append(workspaces, workspaceID)
 	}
 	sort.Strings(workspaces)
 	for _, workspaceID := range workspaces {
-		report := upgrade.host.runtimeSets[workspaceID]
-		if report.DaemonToken == "" || (!report.ExpiresAt.IsZero() && time.Now().After(report.ExpiresAt)) || !upgrade.host.Current(report.Identity) {
+		report := upgrade.computerCore.runtimeSets[workspaceID]
+		if report.DaemonToken == "" || (!report.ExpiresAt.IsZero() && time.Now().After(report.ExpiresAt)) || !upgrade.computerCore.Current(report.Identity) {
 			continue
 		}
 		if len(report.Runtimes) > 0 {
 			return report.Runtimes[0], report.DaemonToken, true
 		}
 	}
-	return hostBindingRuntime{}, "", false
+	return workspaceDaemonRuntime{}, "", false
 }
 
-func (upgrade *hostMachineUpgrade) acceptedManagedWorkspaceIDs() []string {
-	if upgrade == nil || upgrade.host == nil {
+func (upgrade *computerMachineUpgrade) acceptedManagedWorkspaceIDs() []string {
+	if upgrade == nil || upgrade.computerCore == nil {
 		return nil
 	}
-	return normalizedWorkspaceIDs(upgrade.host.DesiredWorkspaceIDs())
+	return normalizedWorkspaceIDs(upgrade.computerCore.DesiredWorkspaceIDs())
 }
 
-func (upgrade *hostMachineUpgrade) scheduleCurrentBinaryRestart() {
+func (upgrade *computerMachineUpgrade) scheduleCurrentBinaryRestart() error {
 	path, err := upgrade.installPath()
 	if err != nil {
-		return
+		return err
 	}
 	upgrade.mu.Lock()
+	if upgrade.activeID != "" {
+		upgrade.mu.Unlock()
+		return ErrComputerControlBusy
+	}
 	if upgrade.restartBinary == "" {
+		workspaceIDs := upgrade.acceptedManagedWorkspaceIDs()
 		upgrade.restartBinary = path
+		upgrade.restartHandoff = &ComputerRestartHandoff{
+			Version: upgrade.config.identity.Version, SourceServicePID: os.Getpid(),
+			OldBindingPIDs:              upgrade.runnerPIDs(workspaceIDs),
+			AcceptedManagedWorkspaceIDs: workspaceIDs,
+			AcceptedManagedSetRevision:  managedSetRevision(workspaceIDs),
+		}
 		upgrade.targetVersion = upgrade.config.identity.Version
 	}
 	upgrade.mu.Unlock()
 	if upgrade.config.cancel != nil {
-		if upgrade.host != nil && upgrade.host.logger != nil {
-			upgrade.host.logger.Info("Computer shutdown requested",
+		if upgrade.computerCore != nil && upgrade.computerCore.logger != nil {
+			upgrade.computerCore.logger.Info("Computer shutdown requested",
 				"source", "machine_upgrade",
 				"action", "restart",
 				"reason", "current_binary_restart",
@@ -710,6 +743,7 @@ func (upgrade *hostMachineUpgrade) scheduleCurrentBinaryRestart() {
 		}
 		upgrade.config.cancel()
 	}
+	return nil
 }
 
 func verifyComputerBinary(ctx context.Context, path, target string) error {
@@ -730,13 +764,21 @@ func versionsMatch(left, right string) bool {
 	return normalize(left) != "" && normalize(left) == normalize(right)
 }
 
-// RestartBinary returns the exact activated Computer launcher selected by a
-// Host-owned Machine Upgrade.
-func (host *Host) RestartBinary() string {
-	if host == nil || host.upgrade == nil {
-		return ""
+// RestartPlan atomically returns the activated launcher and, for a same-binary
+// restart, its predecessor snapshot. Real Machine Upgrade uses its journal.
+func (computerCore *ComputerCore) RestartPlan() ComputerRestartPlan {
+	if computerCore == nil || computerCore.upgrade == nil {
+		return ComputerRestartPlan{}
 	}
-	host.upgrade.mu.Lock()
-	defer host.upgrade.mu.Unlock()
-	return host.upgrade.restartBinary
+	computerCore.upgrade.mu.Lock()
+	defer computerCore.upgrade.mu.Unlock()
+	plan := ComputerRestartPlan{BinaryPath: computerCore.upgrade.restartBinary}
+	if computerCore.upgrade.restartHandoff == nil {
+		return plan
+	}
+	handoff := *computerCore.upgrade.restartHandoff
+	handoff.OldBindingPIDs = append([]int(nil), handoff.OldBindingPIDs...)
+	handoff.AcceptedManagedWorkspaceIDs = append([]string(nil), handoff.AcceptedManagedWorkspaceIDs...)
+	plan.CurrentBinaryHandoff = &handoff
+	return plan
 }

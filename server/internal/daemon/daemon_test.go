@@ -2245,7 +2245,7 @@ func TestExecuteAndDrainDoesNotPublishResidentActivity(t *testing.T) {
 		activities = append(activities, payload)
 	})
 	d := New(Config{}, nil)
-	d.runnerInstanceID = "daemon-1"
+	d.instanceID = "daemon-1"
 	runner := installTestAgentActivityProducer(t, d, "workspace-1", producer)
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
 	_, err := runner.processes.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1"})

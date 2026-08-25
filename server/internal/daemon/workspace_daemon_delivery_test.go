@@ -935,7 +935,7 @@ func TestBindingChildWorkspaceDaemonIsTheCredentialProxyInbox(t *testing.T) {
 		owned.inboxes.Close()
 	})
 	if err := d.adoptWorkspaceDaemon(owned); err != nil {
-		t.Fatalf("adopt Binding child WorkspaceDaemon: %v", err)
+		t.Fatalf("adopt WorkspaceDaemon: %v", err)
 	}
 
 	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
@@ -948,10 +948,10 @@ func TestBindingChildWorkspaceDaemonIsTheCredentialProxyInbox(t *testing.T) {
 
 	resolved, err := d.resolveWorkspaceDaemonByAgent("agent-1")
 	if err != nil {
-		t.Fatalf("Credential Proxy could not find Binding child Inbox: %v", err)
+		t.Fatalf("Credential Proxy could not find WorkspaceDaemon Inbox: %v", err)
 	}
 	if resolved != owned {
-		t.Fatal("Credential Proxy resolved a different WorkspaceDaemon than the Binding child")
+		t.Fatal("Credential Proxy resolved a different WorkspaceDaemon")
 	}
 
 	ensured, err := d.ensureWorkspaceDaemon("workspace-1")
@@ -959,7 +959,7 @@ func TestBindingChildWorkspaceDaemonIsTheCredentialProxyInbox(t *testing.T) {
 		t.Fatal(err)
 	}
 	if ensured != owned {
-		t.Fatal("handoff minted a second WorkspaceDaemon for the same Binding child")
+		t.Fatal("handoff minted a second WorkspaceDaemon for the same process")
 	}
 
 	if _, err := d.CredentialProxy().PreflightMessageSend("agent-1", "channel:one"); err != nil {
@@ -967,7 +967,7 @@ func TestBindingChildWorkspaceDaemonIsTheCredentialProxyInbox(t *testing.T) {
 	}
 }
 
-func TestUnadoptedBindingChildWorkspaceDaemonLeavesMessageSendUnavailable(t *testing.T) {
+func TestUnadoptedWorkspaceDaemonLeavesMessageSendUnavailable(t *testing.T) {
 	d := New(Config{WorkspacesRoot: t.TempDir(), DaemonID: "computer-1"}, nil)
 	d.mu.Lock()
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
@@ -991,7 +991,7 @@ func TestUnadoptedBindingChildWorkspaceDaemonLeavesMessageSendUnavailable(t *tes
 	registerTestWorkspaceDaemonInbox(t, owned, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
 
 	if _, err := d.CredentialProxy().PreflightMessageSend("agent-1", "channel:one"); err == nil || !strings.Contains(err.Error(), "Message coordinator is unavailable") {
-		t.Fatalf("unadopted Binding child send = %v, want Message coordinator is unavailable", err)
+		t.Fatalf("unadopted WorkspaceDaemon send = %v, want Message coordinator is unavailable", err)
 	}
 
 	ensured, err := d.ensureWorkspaceDaemon("workspace-1")
@@ -999,7 +999,7 @@ func TestUnadoptedBindingChildWorkspaceDaemonLeavesMessageSendUnavailable(t *tes
 		t.Fatal(err)
 	}
 	if ensured == owned {
-		t.Fatal("unadopted Binding child Runner was already on the Daemon lookup map")
+		t.Fatal("unadopted WorkspaceDaemon was already on the Daemon lookup map")
 	}
 	t.Cleanup(func() {
 		d.detachWorkspaceDaemon(ensured)

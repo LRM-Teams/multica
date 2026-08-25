@@ -134,13 +134,13 @@ func (runner *WorkspaceDaemon) serveConnection(connection *DaemonConnection, con
 			}
 			if runner.handleComputerControl == nil {
 				if runner.logger != nil {
-					runner.logger.Info("ignoring Computer control; Host callback is unavailable", "workspace_id", workspaceID, "action", message.Type)
+					runner.logger.Info("ignoring Computer control; Computer callback is unavailable", "workspace_id", workspaceID, "action", message.Type)
 				}
 				continue
 			}
 			if err := runner.handleComputerControl(connection.ctx, message.Type, command); err != nil {
 				if runner.logger != nil {
-					runner.logger.Warn("forward Computer control to Host failed", "workspace_id", workspaceID, "action", message.Type, "request_id", command.RequestID, "error", err)
+					runner.logger.Warn("forward Computer control to Computer failed", "workspace_id", workspaceID, "action", message.Type, "request_id", command.RequestID, "error", err)
 				}
 				// EventComputerRestart has its own semantics and is not
 				// acknowledged here. Every EventComputerUpgrade failure — not

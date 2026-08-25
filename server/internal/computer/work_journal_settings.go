@@ -25,37 +25,37 @@ func workJournalSettingPath(root string) string {
 
 // SetWorkJournalEnabled is the Computer-local Journal switch. The file under
 // the resident root is authoritative; missing files mean disabled.
-func (host *Host) SetWorkJournalEnabled(enabled bool) error {
-	if host == nil {
-		return errors.New("Computer Host is unavailable")
+func (computerCore *ComputerCore) SetWorkJournalEnabled(enabled bool) error {
+	if computerCore == nil {
+		return errors.New("ComputerCore is unavailable")
 	}
-	host.workJournalMu.Lock()
-	defer host.workJournalMu.Unlock()
-	host.workJournalEnabled = enabled
-	return writeWorkJournalSetting(host.workJournalRoot, enabled)
+	computerCore.workJournalMu.Lock()
+	defer computerCore.workJournalMu.Unlock()
+	computerCore.workJournalEnabled = enabled
+	return writeWorkJournalSetting(computerCore.workJournalRoot, enabled)
 }
 
 // WorkJournalEnabled reports the in-memory Journal switch (default off).
-func (host *Host) WorkJournalEnabled() bool {
-	if host == nil {
+func (computerCore *ComputerCore) WorkJournalEnabled() bool {
+	if computerCore == nil {
 		return false
 	}
-	host.workJournalMu.Lock()
-	defer host.workJournalMu.Unlock()
-	return host.workJournalEnabled
+	computerCore.workJournalMu.Lock()
+	defer computerCore.workJournalMu.Unlock()
+	return computerCore.workJournalEnabled
 }
 
-func (host *Host) loadWorkJournalSetting() {
-	if host == nil {
+func (computerCore *ComputerCore) loadWorkJournalSetting() {
+	if computerCore == nil {
 		return
 	}
-	enabled, err := readWorkJournalSetting(host.workJournalRoot)
+	enabled, err := readWorkJournalSetting(computerCore.workJournalRoot)
 	if err != nil {
 		return
 	}
-	host.workJournalMu.Lock()
-	host.workJournalEnabled = enabled
-	host.workJournalMu.Unlock()
+	computerCore.workJournalMu.Lock()
+	computerCore.workJournalEnabled = enabled
+	computerCore.workJournalMu.Unlock()
 }
 
 func writeWorkJournalSetting(root string, enabled bool) error {
@@ -111,18 +111,18 @@ func readWorkJournalSetting(root string) (bool, error) {
 
 // HarvestWorkDigest collects the Owner's Work Digest for one window. Journal
 // defaults off; a disabled harvest is an empty repos list, not an error.
-func (host *Host) HarvestWorkDigest(ctx context.Context, command protocol.ComputerWorkDigestPayload) (protocol.WorkDigest, error) {
-	if host == nil {
-		return protocol.WorkDigest{}, errors.New("Computer Host is unavailable")
+func (computerCore *ComputerCore) HarvestWorkDigest(ctx context.Context, command protocol.ComputerWorkDigestPayload) (protocol.WorkDigest, error) {
+	if computerCore == nil {
+		return protocol.WorkDigest{}, errors.New("ComputerCore is unavailable")
 	}
 	if err := command.Validate(); err != nil {
 		return protocol.WorkDigest{}, err
 	}
-	host.workJournalMu.Lock()
-	enabled := host.workJournalEnabled
-	home := strings.TrimSpace(host.workJournalHome)
-	computerID := strings.TrimSpace(host.processIdentity.ComputerID)
-	host.workJournalMu.Unlock()
+	computerCore.workJournalMu.Lock()
+	enabled := computerCore.workJournalEnabled
+	home := strings.TrimSpace(computerCore.workJournalHome)
+	computerID := strings.TrimSpace(computerCore.processIdentity.ComputerID)
+	computerCore.workJournalMu.Unlock()
 	if home == "" {
 		userHome, err := os.UserHomeDir()
 		if err != nil && enabled {

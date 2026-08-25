@@ -14,9 +14,9 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-func TestHostMachineUpgradeJournalIsPrivateAndRoundTrips(t *testing.T) {
-	upgrade := newHostMachineUpgrade(&Host{}, hostMachineUpgradeConfig{residentRoot: t.TempDir()})
-	want := hostMachineUpgradeJournal{
+func TestComputerMachineUpgradeJournalIsPrivateAndRoundTrips(t *testing.T) {
+	upgrade := newComputerMachineUpgrade(&ComputerCore{}, computerMachineUpgradeConfig{residentRoot: t.TempDir()})
+	want := computerMachineUpgradeJournal{
 		RequestID: "request-a", FromVersion: "v1.0.0", TargetVersion: "v1.1.0",
 		StartedAt: "2026-08-17T00:00:00Z", SchemaVersion: 1, SourceServicePID: 101,
 		AcceptedManagedWorkspaceIDs: []string{"workspace-a"}, AcceptedManagedSetRevision: managedSetRevision([]string{"workspace-a"}),
@@ -53,19 +53,19 @@ func TestHostMachineUpgradeJournalIsPrivateAndRoundTrips(t *testing.T) {
 	}
 }
 
-func TestHostMachineUpgradeSameOperationIsIgnoredWhileActive(t *testing.T) {
-	identity := BindingChildIdentity{WorkspaceID: "workspace-a", DaemonInstanceID: "start-3", PID: 8051}
-	host := &Host{runtimeSets: map[string]hostBindingRuntimeSet{
+func TestComputerMachineUpgradeSameOperationIsIgnoredWhileActive(t *testing.T) {
+	identity := WorkspaceDaemonIdentity{WorkspaceID: "workspace-a", DaemonInstanceID: "start-3", PID: 8051}
+	computerCore := &ComputerCore{runtimeSets: map[string]workspaceDaemonRuntimeSet{
 		"workspace-a": {
 			Identity: identity,
-			Runtimes: []hostBindingRuntime{
+			Runtimes: []workspaceDaemonRuntime{
 				{ID: "runtime-a", WorkspaceID: "workspace-a", Provider: "pi"},
 			},
 			DaemonToken: "runtime-token",
 			ExpiresAt:   time.Now().Add(time.Hour),
 		},
 	}}
-	upgrade := newHostMachineUpgrade(host, hostMachineUpgradeConfig{})
+	upgrade := newComputerMachineUpgrade(computerCore, computerMachineUpgradeConfig{})
 	upgrade.activeID = "upgrade-a"
 
 	if err := upgrade.startServiceUpgrade(identity, protocol.ComputerUpgradePayload{
@@ -78,19 +78,19 @@ func TestHostMachineUpgradeSameOperationIsIgnoredWhileActive(t *testing.T) {
 	}
 }
 
-func TestHostMachineUpgradeDifferentOperationReturnsBusy(t *testing.T) {
-	identity := BindingChildIdentity{WorkspaceID: "workspace-a", DaemonInstanceID: "start-3", PID: 8051}
-	host := &Host{runtimeSets: map[string]hostBindingRuntimeSet{
+func TestComputerMachineUpgradeDifferentOperationReturnsBusy(t *testing.T) {
+	identity := WorkspaceDaemonIdentity{WorkspaceID: "workspace-a", DaemonInstanceID: "start-3", PID: 8051}
+	computerCore := &ComputerCore{runtimeSets: map[string]workspaceDaemonRuntimeSet{
 		"workspace-a": {
 			Identity: identity,
-			Runtimes: []hostBindingRuntime{
+			Runtimes: []workspaceDaemonRuntime{
 				{ID: "runtime-a", WorkspaceID: "workspace-a", Provider: "pi"},
 			},
 			DaemonToken: "runtime-token",
 			ExpiresAt:   time.Now().Add(time.Hour),
 		},
 	}}
-	upgrade := newHostMachineUpgrade(host, hostMachineUpgradeConfig{})
+	upgrade := newComputerMachineUpgrade(computerCore, computerMachineUpgradeConfig{})
 	upgrade.activeID = "upgrade-a"
 
 	if err := upgrade.startServiceUpgrade(identity, protocol.ComputerUpgradePayload{
@@ -100,8 +100,8 @@ func TestHostMachineUpgradeDifferentOperationReturnsBusy(t *testing.T) {
 	}
 }
 
-func TestHostMachineUpgradeStatusRetainsRealProgressAndFailure(t *testing.T) {
-	upgrade := newHostMachineUpgrade(&Host{}, hostMachineUpgradeConfig{})
+func TestComputerMachineUpgradeStatusRetainsRealProgressAndFailure(t *testing.T) {
+	upgrade := newComputerMachineUpgrade(&ComputerCore{}, computerMachineUpgradeConfig{})
 	upgrade.activeID = "upgrade-a"
 	upgrade.targetVersion = "v2.0.0"
 	upgrade.recordProgress("upgrade-a", "verifying", "Verifying binary")
@@ -116,11 +116,11 @@ func TestHostMachineUpgradeStatusRetainsRealProgressAndFailure(t *testing.T) {
 	}
 }
 
-func TestHostControlForwardsComputerControlBusy(t *testing.T) {
-	identity := BindingChildIdentity{WorkspaceID: "workspace-a", DaemonInstanceID: "start-3", PID: 8051}
-	control := NewHostControl("owner-secret", HostControlCallbacks{
-		Current: func(got BindingChildIdentity) bool { return got == identity },
-		MachineActions: func(context.Context, BindingChildIdentity, json.RawMessage) error {
+func TestComputerControlForwardsBusy(t *testing.T) {
+	identity := WorkspaceDaemonIdentity{WorkspaceID: "workspace-a", DaemonInstanceID: "start-3", PID: 8051}
+	control := NewComputerControl("owner-secret", ComputerControlCallbacks{
+		Current: func(got WorkspaceDaemonIdentity) bool { return got == identity },
+		MachineActions: func(context.Context, WorkspaceDaemonIdentity, json.RawMessage) error {
 			return ErrComputerControlBusy
 		},
 	})
@@ -134,7 +134,7 @@ func TestHostControlForwardsComputerControlBusy(t *testing.T) {
 		return handler(ctx, headers, raw)
 	})
 
-	client := NewHostControlClient(endpoint, "owner-secret", identity)
+	client := NewComputerControlClient(endpoint, "owner-secret", identity)
 	err := client.ForwardComputerControl(context.Background(), protocol.DaemonHeartbeatAckPayload{
 		PendingRestart: &protocol.DaemonHeartbeatPendingRestart{ID: "restart-b"},
 	})
@@ -143,30 +143,30 @@ func TestHostControlForwardsComputerControlBusy(t *testing.T) {
 	}
 }
 
-func TestHostMachineUpgradeEmptyRuntimeUsesCurrentBindingRuntime(t *testing.T) {
-	identity := BindingChildIdentity{WorkspaceID: "workspace-a", DaemonInstanceID: "start-3", PID: 8051}
-	host := &Host{runtimeSets: map[string]hostBindingRuntimeSet{
+func TestComputerMachineUpgradeEmptyRuntimeUsesCurrentWorkspaceRuntime(t *testing.T) {
+	identity := WorkspaceDaemonIdentity{WorkspaceID: "workspace-a", DaemonInstanceID: "start-3", PID: 8051}
+	computerCore := &ComputerCore{runtimeSets: map[string]workspaceDaemonRuntimeSet{
 		"workspace-a": {
 			Identity: identity,
-			Runtimes: []hostBindingRuntime{
+			Runtimes: []workspaceDaemonRuntime{
 				{ID: "runtime-a", WorkspaceID: "workspace-a", Provider: "pi"},
 			},
 			DaemonToken: "runtime-token",
 			ExpiresAt:   time.Now().Add(time.Hour),
 		},
 	}}
-	upgrade := newHostMachineUpgrade(host, hostMachineUpgradeConfig{})
+	upgrade := newComputerMachineUpgrade(computerCore, computerMachineUpgradeConfig{})
 
 	runtime, token, ok := upgrade.currentRuntime(identity, "")
 	if !ok {
-		t.Fatal("current Binding child could not resolve its runtime for a connect-socket machine action")
+		t.Fatal("current WorkspaceDaemon could not resolve its Runtime for a connect-socket machine action")
 	}
 	if runtime.ID != "runtime-a" || token != "runtime-token" {
 		t.Fatalf("resolved runtime = %+v token=%q", runtime, token)
 	}
 }
 
-func TestHostMachineUpgradePreparesEveryChildAndSuccessorConverges(t *testing.T) {
+func TestComputerMachineUpgradePreparesEveryWorkspaceDaemonAndSuccessorConverges(t *testing.T) {
 	const controlToken = "owner-secret"
 	workspaceIDs := []string{"workspace-a", "workspace-b"}
 	runtimeIDs := []string{"runtime-a", "runtime-b"}
@@ -185,16 +185,16 @@ func TestHostMachineUpgradePreparesEveryChildAndSuccessorConverges(t *testing.T)
 		return nil, nil
 	})
 
-	newReadyHost := func(pidBase int) *Host {
-		host, err := NewHost(HostConfig{
+	newReadyComputer := func(pidBase int) *ComputerCore {
+		computerCore, err := NewComputerCore(ComputerCoreConfig{
 			ControlToken: controlToken,
-			Spawn: func(workspaceID string) (BindingChild, error) {
+			Spawn: func(workspaceID string) (WorkspaceDaemonProcess, error) {
 				pid := pidBase
 				if workspaceID == workspaceIDs[1] {
 					pid++
 				}
-				return &readySupervisorChild{
-					supervisorTestChild: newSupervisorTestChild(pid), controlEndpoint: childControl,
+				return &readyWorkspaceDaemonTestProcess{
+					workspaceDaemonTestProcess: newWorkspaceDaemonTestProcess(pid), controlEndpoint: childControl,
 					workspaceID: workspaceID, daemonInstanceID: fmt.Sprintf("child-%d", pid),
 				}, nil
 			},
@@ -202,31 +202,31 @@ func TestHostMachineUpgradePreparesEveryChildAndSuccessorConverges(t *testing.T)
 		if err != nil {
 			t.Fatal(err)
 		}
-		host.Reconcile(context.Background(), workspaceIDs)
+		computerCore.Reconcile(context.Background(), workspaceIDs)
 		for _, workspaceID := range workspaceIDs {
-			waitForSupervisorLifecycle(t, host.supervisor, workspaceID, RunnerLifecycleRunning)
+			waitForDaemonStatus(t, computerCore.daemonCore, workspaceID, WorkspaceDaemonRunning)
 		}
-		host.runtimeMu.Lock()
+		computerCore.runtimeMu.Lock()
 		for index, workspaceID := range workspaceIDs {
-			record, pid, ok := host.Snapshot(workspaceID)
+			record, pid, ok := computerCore.Snapshot(workspaceID)
 			if !ok {
 				t.Fatalf("missing Binding %s", workspaceID)
 			}
-			host.runtimeSets[workspaceID] = hostBindingRuntimeSet{
-				Identity:    BindingChildIdentity{WorkspaceID: workspaceID, DaemonInstanceID: record.DaemonInstanceID(), PID: pid},
-				Runtimes:    []hostBindingRuntime{{ID: runtimeIDs[index], WorkspaceID: workspaceID, Provider: "pi"}},
+			computerCore.runtimeSets[workspaceID] = workspaceDaemonRuntimeSet{
+				Identity:    WorkspaceDaemonIdentity{WorkspaceID: workspaceID, DaemonInstanceID: record.DaemonInstanceID, PID: pid},
+				Runtimes:    []workspaceDaemonRuntime{{ID: runtimeIDs[index], WorkspaceID: workspaceID, Provider: "pi"}},
 				DaemonToken: "runtime-token-" + workspaceID, ExpiresAt: time.Now().Add(time.Hour),
 			}
 		}
-		host.runtimeMu.Unlock()
-		return host
+		computerCore.runtimeMu.Unlock()
+		return computerCore
 	}
 
 	root := t.TempDir()
-	incumbent := newReadyHost(8101)
+	incumbent := newReadyComputer(8101)
 	upgradeCancelled := make(chan struct{}, 1)
-	upgrade := newHostMachineUpgrade(incumbent, hostMachineUpgradeConfig{
-		identity: HostProcessIdentity{
+	upgrade := newComputerMachineUpgrade(incumbent, computerMachineUpgradeConfig{
+		identity: ComputerIdentity{
 			ComputerID: "computer-a", ServiceGeneration: "service-31", Environment: "test",
 			Version: "v1.0.0",
 		},
@@ -283,9 +283,9 @@ func TestHostMachineUpgradePreparesEveryChildAndSuccessorConverges(t *testing.T)
 	}
 	incumbent.Stop()
 
-	successor := newReadyHost(8201)
-	successorUpgrade := newHostMachineUpgrade(successor, hostMachineUpgradeConfig{
-		identity: HostProcessIdentity{
+	successor := newReadyComputer(8201)
+	successorUpgrade := newComputerMachineUpgrade(successor, computerMachineUpgradeConfig{
+		identity: ComputerIdentity{
 			ComputerID: "computer-a", ServiceGeneration: "service-32", Environment: "test",
 			Version: "v2.0.0", SourceServicePID: math.MaxInt32,
 		},
@@ -306,7 +306,7 @@ func TestHostMachineUpgradePreparesEveryChildAndSuccessorConverges(t *testing.T)
 
 func TestRecoverSuccessorRejectsLivePredecessor(t *testing.T) {
 	root := t.TempDir()
-	journal := hostMachineUpgradeJournal{
+	journal := computerMachineUpgradeJournal{
 		RequestID: "upgrade-live", FromVersion: "v1.0.0", TargetVersion: "v2.0.0",
 		StartedAt: "2026-08-18T00:00:00Z", SchemaVersion: 1, SourceServicePID: os.Getpid(),
 		AcceptedManagedWorkspaceIDs: []string{"workspace-a"},
@@ -315,33 +315,33 @@ func TestRecoverSuccessorRejectsLivePredecessor(t *testing.T) {
 	if err := writeMachineUpgradeJournal(root, journal); err != nil {
 		t.Fatal(err)
 	}
-	host, err := NewHost(HostConfig{
+	computerCore, err := NewComputerCore(ComputerCoreConfig{
 		ControlToken: "token",
-		Spawn: func(workspaceID string) (BindingChild, error) {
-			return &readySupervisorChild{
-				supervisorTestChild: newSupervisorTestChild(9201),
-				workspaceID:         workspaceID, daemonInstanceID: "child-9201",
+		Spawn: func(workspaceID string) (WorkspaceDaemonProcess, error) {
+			return &readyWorkspaceDaemonTestProcess{
+				workspaceDaemonTestProcess: newWorkspaceDaemonTestProcess(9201),
+				workspaceID:                workspaceID, daemonInstanceID: "child-9201",
 			}, nil
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	host.Reconcile(context.Background(), []string{"workspace-a"})
-	waitForSupervisorLifecycle(t, host.supervisor, "workspace-a", RunnerLifecycleRunning)
-	record, pid, ok := host.Snapshot("workspace-a")
+	computerCore.Reconcile(context.Background(), []string{"workspace-a"})
+	waitForDaemonStatus(t, computerCore.daemonCore, "workspace-a", WorkspaceDaemonRunning)
+	record, pid, ok := computerCore.Snapshot("workspace-a")
 	if !ok {
 		t.Fatal("missing Binding workspace-a")
 	}
-	host.runtimeMu.Lock()
-	host.runtimeSets["workspace-a"] = hostBindingRuntimeSet{
-		Identity:    BindingChildIdentity{WorkspaceID: "workspace-a", DaemonInstanceID: record.DaemonInstanceID(), PID: pid},
-		Runtimes:    []hostBindingRuntime{{ID: "runtime-a", WorkspaceID: "workspace-a", Provider: "pi"}},
+	computerCore.runtimeMu.Lock()
+	computerCore.runtimeSets["workspace-a"] = workspaceDaemonRuntimeSet{
+		Identity:    WorkspaceDaemonIdentity{WorkspaceID: "workspace-a", DaemonInstanceID: record.DaemonInstanceID, PID: pid},
+		Runtimes:    []workspaceDaemonRuntime{{ID: "runtime-a", WorkspaceID: "workspace-a", Provider: "pi"}},
 		DaemonToken: "runtime-token", ExpiresAt: time.Now().Add(time.Hour),
 	}
-	host.runtimeMu.Unlock()
-	upgrade := newHostMachineUpgrade(host, hostMachineUpgradeConfig{
-		identity: HostProcessIdentity{
+	computerCore.runtimeMu.Unlock()
+	upgrade := newComputerMachineUpgrade(computerCore, computerMachineUpgradeConfig{
+		identity: ComputerIdentity{
 			ComputerID: "computer-a", ServiceGeneration: "service-40",
 			Version: "v2.0.0", SourceServicePID: os.Getpid(),
 		},
@@ -358,7 +358,7 @@ func TestRecoverSuccessorRejectsLivePredecessor(t *testing.T) {
 
 func TestRecoverSuccessorClearsAbortedActivationOnFromVersion(t *testing.T) {
 	root := t.TempDir()
-	if err := writeMachineUpgradeJournal(root, hostMachineUpgradeJournal{
+	if err := writeMachineUpgradeJournal(root, computerMachineUpgradeJournal{
 		RequestID: "upgrade-abort", FromVersion: "v1.0.0", TargetVersion: "v2.0.0",
 		StartedAt: "2026-08-18T00:00:00Z", SchemaVersion: 1, SourceServicePID: 101,
 		AcceptedManagedWorkspaceIDs: []string{"workspace-a"},
@@ -366,8 +366,8 @@ func TestRecoverSuccessorClearsAbortedActivationOnFromVersion(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	upgrade := newHostMachineUpgrade(&Host{}, hostMachineUpgradeConfig{
-		identity: HostProcessIdentity{
+	upgrade := newComputerMachineUpgrade(&ComputerCore{}, computerMachineUpgradeConfig{
+		identity: ComputerIdentity{
 			ComputerID: "computer-a", ServiceGeneration: "service-41",
 			Version: "v1.0.0",
 		},
@@ -385,9 +385,33 @@ func TestRecoverSuccessorClearsAbortedActivationOnFromVersion(t *testing.T) {
 	}
 }
 
+func TestCurrentBinaryRestartCapturesDedicatedHandoff(t *testing.T) {
+	computerCore := &ComputerCore{}
+	upgrade := newComputerMachineUpgrade(computerCore, computerMachineUpgradeConfig{
+		identity: ComputerIdentity{Version: "alpha.8"},
+	})
+	computerCore.upgrade = upgrade
+	upgrade.installPath = func() (string, error) { return "/tmp/current-computer", nil }
+
+	if err := upgrade.scheduleCurrentBinaryRestart(); err != nil {
+		t.Fatal(err)
+	}
+	plan := computerCore.RestartPlan()
+	if plan.BinaryPath != "/tmp/current-computer" {
+		t.Fatalf("restart binary = %q", plan.BinaryPath)
+	}
+	handoff := plan.CurrentBinaryHandoff
+	if handoff == nil {
+		t.Fatal("same-binary restart did not capture a dedicated handoff")
+	}
+	if handoff.Version != "alpha.8" || handoff.SourceServicePID != os.Getpid() || handoff.AcceptedManagedSetRevision == "" {
+		t.Fatalf("same-binary restart handoff = %+v", handoff)
+	}
+}
+
 func TestRecoverSuccessorKeepsActiveHandoffOnUnrelatedFromVersion(t *testing.T) {
 	root := t.TempDir()
-	if err := writeMachineUpgradeJournal(root, hostMachineUpgradeJournal{
+	if err := writeMachineUpgradeJournal(root, computerMachineUpgradeJournal{
 		RequestID: "upgrade-active", FromVersion: "v1.0.0", TargetVersion: "v2.0.0",
 		StartedAt: "2026-08-18T00:00:00Z", SchemaVersion: 1, SourceServicePID: 101,
 		AcceptedManagedWorkspaceIDs: []string{"workspace-a"},
@@ -396,8 +420,8 @@ func TestRecoverSuccessorKeepsActiveHandoffOnUnrelatedFromVersion(t *testing.T) 
 	}); err != nil {
 		t.Fatal(err)
 	}
-	upgrade := newHostMachineUpgrade(&Host{}, hostMachineUpgradeConfig{
-		identity: HostProcessIdentity{
+	upgrade := newComputerMachineUpgrade(&ComputerCore{}, computerMachineUpgradeConfig{
+		identity: ComputerIdentity{
 			ComputerID: "computer-a", ServiceGeneration: "service-42",
 			Version: "v1.0.0",
 		},
@@ -414,7 +438,7 @@ func TestRecoverSuccessorKeepsActiveHandoffOnUnrelatedFromVersion(t *testing.T) 
 
 func TestRecoverSuccessorClearsCoordinatorRollbackOnFromVersion(t *testing.T) {
 	root := t.TempDir()
-	if err := writeMachineUpgradeJournal(root, hostMachineUpgradeJournal{
+	if err := writeMachineUpgradeJournal(root, computerMachineUpgradeJournal{
 		RequestID: "upgrade-rollback", FromVersion: "v1.0.0", TargetVersion: "v2.0.0",
 		StartedAt: "2026-08-18T00:00:00Z", SchemaVersion: 1, SourceServicePID: 101,
 		AcceptedManagedWorkspaceIDs: []string{"workspace-a"},
@@ -423,8 +447,8 @@ func TestRecoverSuccessorClearsCoordinatorRollbackOnFromVersion(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	upgrade := newHostMachineUpgrade(&Host{}, hostMachineUpgradeConfig{
-		identity: HostProcessIdentity{
+	upgrade := newComputerMachineUpgrade(&ComputerCore{}, computerMachineUpgradeConfig{
+		identity: ComputerIdentity{
 			ComputerID: "computer-a", ServiceGeneration: "service-43",
 			Version: "v1.0.0",
 		},

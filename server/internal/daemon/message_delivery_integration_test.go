@@ -369,7 +369,7 @@ func startIdleMessageAcceptanceRunner(t *testing.T, d *Daemon, hub *daemonws.Hub
 		}
 	}
 	return func() {
-		hub.CloseWorkspaceDaemon(daemonID, workspaceID, d.runnerInstanceID)
+		hub.CloseWorkspaceDaemon(daemonID, workspaceID, d.instanceID)
 		cancel()
 		select {
 		case <-done:

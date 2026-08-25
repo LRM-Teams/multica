@@ -66,8 +66,9 @@ type Agent struct {
 	// Known provider-quota reset time. NULL while locked means unknown end (still locked).
 	ProviderBlockedUntil pgtype.Timestamptz `json:"provider_blocked_until"`
 	// Non-empty means provider-quota locked; holds user-facing error snippet.
-	ProviderBlockDetail string      `json:"provider_block_detail"`
-	ProviderSessionID   pgtype.Text `json:"provider_session_id"`
+	ProviderBlockDetail string             `json:"provider_block_detail"`
+	ProviderSessionID   pgtype.Text        `json:"provider_session_id"`
+	StoppedAt           pgtype.Timestamptz `json:"stopped_at"`
 }
 
 type AgentAction struct {

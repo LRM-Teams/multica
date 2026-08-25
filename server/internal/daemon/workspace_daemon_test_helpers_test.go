@@ -165,8 +165,8 @@ func prepareHeadlessWorkspaceDaemonTestDaemon(d *Daemon, workspacesRoot string) 
 	if d.cfg.WorkspacesRoot == "" {
 		d.cfg.WorkspacesRoot = workspacesRoot
 	}
-	if d.runnerInstanceID == "" {
-		d.runnerInstanceID = "runner-test"
+	if d.instanceID == "" {
+		d.instanceID = "runner-test"
 	}
 	if d.canonicalRuntimes == nil {
 		d.canonicalRuntimes = newAgentRuntimePool()

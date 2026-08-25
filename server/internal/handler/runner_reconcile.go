@@ -134,6 +134,7 @@ func (h *Handler) loadRunnerDesiredLaunches(ctx context.Context, identity daemon
 		FROM agent desired
 		JOIN agent_runtime runtime ON runtime.id = desired.runtime_id
 		WHERE desired.workspace_id::text = $1 AND desired.archived_at IS NULL
+		  AND desired.stopped_at IS NULL
 		  AND runtime.daemon_id = $2
 		ORDER BY desired.id`, identity.WorkspaceID, identity.DaemonID)
 	if err != nil {

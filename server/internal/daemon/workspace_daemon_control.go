@@ -13,28 +13,29 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-type bindingChildControlIdentity = computer.BindingChildIdentity
+type workspaceDaemonControlIdentity = computer.WorkspaceDaemonIdentity
 
-// bindingHostControlClient adapts the Computer-owned process Interface to the
-// daemon package's Workspace execution interfaces.
-type bindingHostControlClient struct{ client *computer.HostControlClient }
-
-func newBindingHostControlClient(endpoint, token string, identity bindingChildControlIdentity) *bindingHostControlClient {
-	return &bindingHostControlClient{client: computer.NewHostControlClient(endpoint, token, identity)}
+// workspaceDaemonComputerControl adapts ComputerCore control to WorkspaceDaemon interfaces.
+type workspaceDaemonComputerControl struct {
+	client *computer.ComputerControlClient
 }
 
-func (client *bindingHostControlClient) recordDiagnostic(ctx context.Context, workspaceID string, event diagnosticlog.Event) error {
+func newWorkspaceDaemonComputerControl(endpoint, token string, identity workspaceDaemonControlIdentity) *workspaceDaemonComputerControl {
+	return &workspaceDaemonComputerControl{client: computer.NewComputerControlClient(endpoint, token, identity)}
+}
+
+func (client *workspaceDaemonComputerControl) recordDiagnostic(ctx context.Context, workspaceID string, event diagnosticlog.Event) error {
 	return client.client.RecordDiagnostic(ctx, workspaceID, event)
 }
 
-func (client *bindingHostControlClient) forwardMachineActions(ctx context.Context, ack HeartbeatResponse) error {
+func (client *workspaceDaemonComputerControl) forwardMachineActions(ctx context.Context, ack HeartbeatResponse) error {
 	return client.client.ForwardComputerControl(ctx, ack)
 }
 
 // handleComputerControlCommand is the Raft 1.0.16 child callback: the
 // DaemonCore connect socket received computer:upgrade / computer:restart.
-// The Binding child executes the machine upgrade in-process. Host only
-// drains sibling Bindings and respawns after this child exits.
+// The WorkspaceDaemon forwards the machine action to ComputerCore, which
+// drains sibling WorkspaceDaemons and performs the restart or upgrade.
 func (d *Daemon) handleWSHeartbeatAck(ctx context.Context, ack *HeartbeatResponse) {
 	if ack == nil || ack.RuntimeID == "" {
 		return
@@ -50,7 +51,7 @@ func (d *Daemon) handleWorkspaceDaemonControlAck(ctx context.Context, ack *Heart
 	if d == nil || ack == nil {
 		return
 	}
-	if d.bindingHostControl == nil {
+	if d.computerControl == nil {
 		d.handleWSHeartbeatAck(ctx, ack)
 		return
 	}
@@ -72,8 +73,8 @@ func (d *Daemon) handleWorkspaceDaemonControlAck(ctx context.Context, ack *Heart
 	}
 	forwardCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	if err := d.bindingHostControl.forwardMachineActions(forwardCtx, machine); err != nil && d.logger != nil {
-		d.logger.Warn("forward Binding child machine action to Host failed", "runtime_id", ack.RuntimeID, "reason", "host_unavailable")
+	if err := d.computerControl.forwardMachineActions(forwardCtx, machine); err != nil && d.logger != nil {
+		d.logger.Warn("forward WorkspaceDaemon machine action to ComputerCore failed", "runtime_id", ack.RuntimeID, "reason", "computer_unavailable")
 	}
 }
 
@@ -114,33 +115,33 @@ func (d *Daemon) handleComputerControlCommand(ctx context.Context, action string
 	}
 	switch action {
 	case protocol.EventComputerUpgrade:
-		if d.bindingHostControl == nil {
+		if d.computerControl == nil {
 			// Raft 1.0.16: a DaemonCore not constructed by Computer
-			// ignores computer:upgrade instead of inventing a Host path.
+			// ignores computer:upgrade instead of inventing a ComputerCore path.
 			if d.logger != nil {
 				d.logger.Info("ignoring computer:upgrade — not launched by a Computer service")
 			}
 			return nil
 		}
-		// Drain is runner-owned and may wait for active provider work; do not
+		// Drain is WorkspaceDaemon-owned and may wait for active provider work; do not
 		// hold the service IPC request open while the service claims the
 		// machine-wide operation.
-		go func() { _ = d.beginBindingDrain(ctx) }()
+		go func() { _ = d.beginWorkspaceDaemonDrain(ctx) }()
 		forwardCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
-		if err := d.bindingHostControl.client.RequestComputerUpgrade(forwardCtx, command); err != nil {
+		if err := d.computerControl.client.RequestComputerUpgrade(forwardCtx, command); err != nil {
 			d.releaseClaimBarrier()
 			return err
 		}
 		return nil
 	case protocol.EventComputerRestart:
 		ack := HeartbeatResponse{Status: "ok", PendingRestart: &PendingRestart{ID: strings.TrimSpace(command.RequestID)}}
-		if d.bindingHostControl == nil {
-			return errors.New("Computer Host callback is unavailable")
+		if d.computerControl == nil {
+			return errors.New("ComputerCore callback is unavailable")
 		}
 		forwardCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
-		return d.bindingHostControl.forwardMachineActions(forwardCtx, ack)
+		return d.computerControl.forwardMachineActions(forwardCtx, ack)
 	default:
 		return fmt.Errorf("unsupported Computer control action %q", action)
 	}
@@ -150,66 +151,66 @@ func (d *Daemon) handleComputerWorkDigestCommand(ctx context.Context, command pr
 	if d == nil {
 		return protocol.WorkDigest{}, errors.New("DaemonCore is unavailable")
 	}
-	if d.bindingHostControl == nil {
-		return protocol.WorkDigest{}, errors.New("Computer Host callback is unavailable")
+	if d.computerControl == nil {
+		return protocol.WorkDigest{}, errors.New("ComputerCore callback is unavailable")
 	}
-	return d.bindingHostControl.client.HarvestWorkDigest(ctx, command)
+	return d.computerControl.client.HarvestWorkDigest(ctx, command)
 }
 
 func (d *Daemon) handleComputerWorkJournalCommand(ctx context.Context, command protocol.ComputerWorkJournalPayload) (bool, error) {
 	if d == nil {
 		return false, errors.New("DaemonCore is unavailable")
 	}
-	if d.bindingHostControl == nil {
-		return false, errors.New("Computer Host callback is unavailable")
+	if d.computerControl == nil {
+		return false, errors.New("ComputerCore callback is unavailable")
 	}
-	return d.bindingHostControl.client.SetWorkJournalEnabled(ctx, command)
+	return d.computerControl.client.SetWorkJournalEnabled(ctx, command)
 }
 
-func (client *bindingHostControlClient) reportRuntimeSet(ctx context.Context, runtimes []Runtime, daemonToken, expiresAt string) error {
+func (client *workspaceDaemonComputerControl) reportRuntimeSet(ctx context.Context, runtimes []Runtime, daemonToken, expiresAt string) error {
 	return client.client.ReportRuntimeSet(ctx, runtimes, daemonToken, expiresAt)
 }
 
-type bindingChildDiagnosticEnvelope struct {
+type workspaceDaemonDiagnosticEnvelope struct {
 	workspaceID string
 	event       *diagnosticlog.Event
 }
 
-type bindingChildDiagnosticForwarder struct {
-	client *bindingHostControlClient
+type workspaceDaemonDiagnosticForwarder struct {
+	client *workspaceDaemonComputerControl
 	ctx    context.Context
 	cancel context.CancelFunc
-	queue  chan bindingChildDiagnosticEnvelope
+	queue  chan workspaceDaemonDiagnosticEnvelope
 	done   chan struct{}
 	once   sync.Once
 }
 
-func newBindingChildDiagnosticForwarder(client *bindingHostControlClient) *bindingChildDiagnosticForwarder {
+func newWorkspaceDaemonDiagnosticForwarder(client *workspaceDaemonComputerControl) *workspaceDaemonDiagnosticForwarder {
 	ctx, cancel := context.WithCancel(context.Background())
-	forwarder := &bindingChildDiagnosticForwarder{
+	forwarder := &workspaceDaemonDiagnosticForwarder{
 		client: client, ctx: ctx, cancel: cancel,
-		queue: make(chan bindingChildDiagnosticEnvelope, 256), done: make(chan struct{}),
+		queue: make(chan workspaceDaemonDiagnosticEnvelope, 256), done: make(chan struct{}),
 	}
 	go forwarder.run()
 	return forwarder
 }
 
-func (forwarder *bindingChildDiagnosticForwarder) record(workspaceID string, event diagnosticlog.Event) error {
+func (forwarder *workspaceDaemonDiagnosticForwarder) record(workspaceID string, event diagnosticlog.Event) error {
 	if forwarder == nil || forwarder.client == nil {
-		return errors.New("Binding Host diagnostic aggregation is unavailable")
+		return errors.New("Computer diagnostic aggregation is unavailable")
 	}
-	envelope := bindingChildDiagnosticEnvelope{workspaceID: workspaceID, event: &event}
+	envelope := workspaceDaemonDiagnosticEnvelope{workspaceID: workspaceID, event: &event}
 	select {
 	case <-forwarder.ctx.Done():
-		return errors.New("Binding Host diagnostic aggregation is closed")
+		return errors.New("Computer diagnostic aggregation is closed")
 	case forwarder.queue <- envelope:
 		return nil
 	default:
-		return errors.New("Binding Host diagnostic aggregation queue is full")
+		return errors.New("Computer diagnostic aggregation queue is full")
 	}
 }
 
-func (forwarder *bindingChildDiagnosticForwarder) run() {
+func (forwarder *workspaceDaemonDiagnosticForwarder) run() {
 	defer close(forwarder.done)
 	for {
 		select {
@@ -223,7 +224,7 @@ func (forwarder *bindingChildDiagnosticForwarder) run() {
 	}
 }
 
-func (forwarder *bindingChildDiagnosticForwarder) Close() {
+func (forwarder *workspaceDaemonDiagnosticForwarder) Close() {
 	if forwarder == nil {
 		return
 	}

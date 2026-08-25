@@ -2,18 +2,21 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
 	"github.com/multica-ai/multica/server/internal/cli"
 	"github.com/multica-ai/multica/server/internal/computer"
 	"github.com/multica-ai/multica/server/internal/daemon"
 	logger_pkg "github.com/multica-ai/multica/server/internal/logger"
+	"github.com/multica-ai/multica/server/internal/util"
 )
 
 var computerCmd = &cobra.Command{
@@ -47,20 +50,149 @@ func rejectRetiredComputerProfileFlag(cmd *cobra.Command) error {
 	return nil
 }
 
-var computerServiceCmd = &cobra.Command{
+var computerRunCmd = &cobra.Command{
 	Use:    computer.ResidentServiceArg,
 	Hidden: true,
-	Short:  "Run the Computer resident process",
+	Short:  "Run the Computer",
 	Args:   cobra.NoArgs,
-	RunE:   runComputerResident,
+	RunE:   run,
 }
 
-var computerRunnerCmd = &cobra.Command{
-	Use:    computer.ResidentRunnerArg,
+// run starts the machine-wide Computer. ComputerCore owns the Computer
+// lifecycle, while DaemonCore owns WorkspaceDaemon processes for active bindings.
+func run(cmd *cobra.Command, _ []string) error {
+	util.EnsureHiddenConsole()
+
+	profile := ""
+	machineConfig, err := cli.LoadCLIConfigForProfile("")
+	if err != nil {
+		return fmt.Errorf("read Computer environment: %w", err)
+	}
+	serviceTarget, err := cli.ResolveServiceTarget(machineConfig)
+	if err != nil {
+		return fmt.Errorf("resolve Computer environment: %w", err)
+	}
+	computerID := flagString(cmd, "daemon-id")
+	if computerID == "" {
+		identity, err := (&computer.Lifecycle{}).Identity()
+		if err != nil {
+			return fmt.Errorf("resolve machine-wide Computer identity: %w", err)
+		}
+		computerID = identity
+	}
+	workspacesRoot, err := computer.ResolveComputerWorkspacesRoot()
+	if err != nil {
+		return err
+	}
+	bindingsRoot := computer.RootDir("")
+	serviceGeneration := uuid.NewString()
+	sourceServicePID, err := computer.PendingMachineUpgradeSourceServicePID(bindingsRoot)
+	if err != nil {
+		return fmt.Errorf("read Computer upgrade predecessor identity: %w", err)
+	}
+	if explicitSourcePID, flagErr := cmd.Flags().GetInt("source-service-pid"); flagErr == nil && explicitSourcePID > 0 {
+		sourceServicePID = explicitSourcePID
+	}
+	controlToken, err := computer.EnsureControlToken(profile)
+	if err != nil {
+		return err
+	}
+	deviceName := flagString(cmd, "device-name")
+	if deviceName == "" {
+		deviceName = strings.TrimSpace(os.Getenv("MULTICA_DAEMON_DEVICE_NAME"))
+	}
+	if deviceName == "" {
+		deviceName, _ = os.Hostname()
+	}
+
+	ctx, stop := notifyShutdownContext(context.Background())
+	defer stop()
+
+	logger := logger_pkg.NewLogger("computer")
+	serviceEndpoint := computer.ServiceControlEndpoint(bindingsRoot)
+	launcher := computer.WorkspaceDaemonLauncher{
+		ComputerID:  computerID,
+		Environment: string(serviceTarget.Environment), Profile: profile, ServerBaseURL: serviceTarget.Origin,
+		ServiceEndpoint: serviceEndpoint,
+		BindingsRoot:    bindingsRoot, WorkspacesRoot: workspacesRoot,
+	}
+	computerCore, err := computer.NewComputerCore(computer.ComputerCoreConfig{
+		Spawn: launcher.Spawn, ResidentRoot: bindingsRoot, Logger: logger, ControlToken: controlToken,
+	})
+	if err != nil {
+		return err
+	}
+
+	// Publish the resident PID for lifecycle commands. Failure remains
+	// best-effort so a read-only state directory does not hide the real process.
+	lifecycle := &computer.Lifecycle{}
+	cleanupPID := func() {}
+	if computer.RootDir(profile) != "" {
+		cleanup, err := lifecycle.PublishPID()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not write PID file: %v\n", err)
+		} else {
+			cleanupPID = cleanup
+		}
+	}
+	defer cleanupPID()
+
+	bindingStore := computer.NewBindingsStore(bindingsRoot)
+	if err := computerCore.Run(ctx, computer.ComputerProcessConfig{
+		ServiceEndpoint: serviceEndpoint, ResidentRoot: bindingsRoot,
+		Identity: computer.ComputerIdentity{
+			ComputerID: computerID, ServiceGeneration: serviceGeneration,
+			SourceServicePID: sourceServicePID,
+			Environment:      string(serviceTarget.Environment),
+			Version:          version, ServerURL: serviceTarget.Origin, DeviceName: deviceName,
+		},
+		ReleaseManifestURL: os.Getenv("MULTICA_RELEASE_MANIFEST_BASE_URL"),
+		DesiredWorkspaceIDs: func() ([]string, error) {
+			bindings, err := bindingStore.AllActiveForEnvironment(string(serviceTarget.Environment))
+			if err != nil {
+				return nil, err
+			}
+			ids := make([]string, 0, len(bindings))
+			for _, binding := range bindings {
+				ids = append(ids, binding.WorkspaceID)
+			}
+			return ids, nil
+		},
+	}); err != nil && !errors.Is(err, context.Canceled) {
+		return err
+	}
+	if restartPlan := computerCore.RestartPlan(); restartPlan.BinaryPath != "" {
+		restartBin := restartPlan.BinaryPath
+		if err := bestEffortSyncInstalledServiceUnit(profile, restartBin); err != nil {
+			logger.Warn("could not rewrite OS service unit to activated Computer binary",
+				"path", restartBin, "error", err)
+		}
+		if runningUnderSupervision() {
+			logger.Info("restarting Computer with updated binary via process supervisor handoff", "path", restartBin)
+			os.Exit(daemonHandoffExitCode)
+		}
+		if handoff := restartPlan.CurrentBinaryHandoff; handoff != nil {
+			if err := spawnDetachedRestartCoordinator(restartBin, profile, *handoff); err != nil {
+				return fmt.Errorf("start detached Computer restart coordinator: %w", err)
+			}
+			logger.Info("started detached Computer restart coordinator", "path", restartBin)
+			return nil
+		}
+		if err := spawnDetachedUpgradeCoordinator(restartBin, profile); err != nil {
+			return fmt.Errorf("start detached Computer upgrade coordinator: %w", err)
+		}
+		logger.Info("started detached Computer upgrade coordinator", "path", restartBin)
+	}
+
+	return nil
+}
+
+var computerWorkspaceDaemonCmd = &cobra.Command{
+	Use:    computer.WorkspaceDaemonArg,
 	Hidden: true,
-	Short:  "Run one Workspace Binding child",
+	Short:  "Run one WorkspaceDaemon process",
 	Args:   cobra.NoArgs,
-	RunE:   runComputerBindingRunner,
+	RunE:   runWorkspaceDaemonCommand,
 }
 
 var computerUpgradeCoordinatorCmd = &cobra.Command{
@@ -69,6 +201,14 @@ var computerUpgradeCoordinatorCmd = &cobra.Command{
 	Short:  "Run the detached Machine Upgrade coordinator",
 	Args:   cobra.NoArgs,
 	RunE:   runComputerUpgradeCoordinator,
+}
+
+var computerRestartCoordinatorCmd = &cobra.Command{
+	Use:    computer.ResidentRestartArg + " <handoff>",
+	Hidden: true,
+	Short:  "Run the detached current-binary restart coordinator",
+	Args:   cobra.ExactArgs(1),
+	RunE:   runComputerRestartCoordinator,
 }
 
 var computerStartCmd = &cobra.Command{
@@ -202,13 +342,15 @@ func init() {
 	computerDoctorCmd.Flags().Bool("fix", false, "Apply only provably safe stale-state cleanup")
 	computerDoctorCmd.Flags().String("output", "table", "Output format: table or json")
 
-	addComputerResidentFlags(computerServiceCmd)
-	computerRunnerCmd.Flags().String("workspace-id", "", "Workspace Binding identity")
-	_ = computerRunnerCmd.MarkFlagRequired("workspace-id")
+	addRunFlags(computerRunCmd)
+	computerRunCmd.Flags().Int("source-service-pid", 0, "Predecessor Computer service PID")
+	computerWorkspaceDaemonCmd.Flags().String("workspace-id", "", "Workspace identity")
+	_ = computerWorkspaceDaemonCmd.MarkFlagRequired("workspace-id")
 
-	computerCmd.AddCommand(computerServiceCmd)
-	computerCmd.AddCommand(computerRunnerCmd)
+	computerCmd.AddCommand(computerRunCmd)
+	computerCmd.AddCommand(computerWorkspaceDaemonCmd)
 	computerCmd.AddCommand(computerUpgradeCoordinatorCmd)
+	computerCmd.AddCommand(computerRestartCoordinatorCmd)
 	computerSuperviseCmd.Hidden = true
 	computerCmd.AddCommand(computerSuperviseCmd)
 	computerCmd.AddCommand(computerStartCmd)
@@ -223,26 +365,26 @@ func init() {
 	computerCmd.AddCommand(computerIdentityCmd)
 }
 
-func runComputerBindingRunner(cmd *cobra.Command, _ []string) error {
+func runWorkspaceDaemonCommand(cmd *cobra.Command, _ []string) error {
 	workspaceID, _ := cmd.Flags().GetString("workspace-id")
 	if strings.TrimSpace(workspaceID) == "" {
 		return fmt.Errorf("workspace-id is required")
 	}
-	bootstrap, err := computer.ReadBindingChildBootstrap(os.Stdin)
+	bootstrap, err := computer.ReadWorkspaceDaemonBootstrap(os.Stdin)
 	if err != nil {
 		return err
 	}
 	if strings.TrimSpace(workspaceID) != bootstrap.WorkspaceID {
-		return fmt.Errorf("workspace-id %q does not match Binding child bootstrap %q", workspaceID, bootstrap.WorkspaceID)
+		return fmt.Errorf("workspace-id %q does not match WorkspaceDaemon bootstrap %q", workspaceID, bootstrap.WorkspaceID)
 	}
 	ctx, stop := notifyShutdownContext(context.Background())
 	defer stop()
-	return runBindingChild(ctx, bootstrap, func(ready computer.BindingChildReady) error {
-		return computer.WriteBindingChildReady(os.Stdout, ready)
+	return runWorkspaceDaemon(ctx, bootstrap, func(ready computer.WorkspaceDaemonReady) error {
+		return computer.WriteWorkspaceDaemonReady(os.Stdout, ready)
 	})
 }
 
-func runBindingChild(ctx context.Context, bootstrap computer.BindingChildBootstrap, publishReady func(computer.BindingChildReady) error) error {
+func runWorkspaceDaemon(ctx context.Context, bootstrap computer.WorkspaceDaemonBootstrap, publishReady func(computer.WorkspaceDaemonReady) error) error {
 	cfg, err := daemon.LoadConfig(daemon.Overrides{
 		ServerURL:      bootstrap.ServerBaseURL,
 		WorkspacesRoot: bootstrap.WorkspacesRoot,
@@ -263,13 +405,13 @@ func runBindingChild(ctx context.Context, bootstrap computer.BindingChildBootstr
 		return fmt.Errorf("read ComputerCore control token: %w", err)
 	}
 	cfg.LocalControlToken = controlToken
-	logger := logger_pkg.NewLogger("runner").With("workspace_id", bootstrap.WorkspaceID)
-	return daemon.RunBindingChild(ctx, daemon.BindingChildRunConfig{
+	logger := logger_pkg.NewLogger("workspace-daemon").With("workspace_id", bootstrap.WorkspaceID)
+	return daemon.RunWorkspaceDaemonProcess(ctx, daemon.WorkspaceDaemonProcessConfig{
 		Daemon: cfg, Bootstrap: bootstrap, Logger: logger, PublishReady: publishReady,
 	})
 }
 
-func addComputerResidentFlags(cmd *cobra.Command) {
+func addRunFlags(cmd *cobra.Command) {
 	f := cmd.Flags()
 	f.String("daemon-id", "", "Unique daemon identifier (env: MULTICA_DAEMON_ID)")
 	f.String("device-name", "", "Human-readable device name (env: MULTICA_DAEMON_DEVICE_NAME)")
@@ -323,21 +465,21 @@ func runComputerDoctor(cmd *cobra.Command, args []string) error {
 	for _, candidate := range d.LegacyIdentityCandidates {
 		fmt.Fprintf(os.Stdout, "legacy id:    %s (preserved; explicit choice required)\n", candidate)
 	}
-	for _, runner := range d.Runners {
-		fmt.Fprintf(os.Stdout, "runner:       workspace=%s pid=%d alive=%v owned=%v\n", runner.WorkspaceID, runner.PID, runner.Alive, runner.Owned)
+	for _, workspaceDaemon := range d.WorkspaceDaemons {
+		fmt.Fprintf(os.Stdout, "workspace daemon: workspace=%s pid=%d alive=%v owned=%v\n", workspaceDaemon.WorkspaceID, workspaceDaemon.PID, workspaceDaemon.Alive, workspaceDaemon.Owned)
 	}
 	for _, f := range d.FixApplied {
 		fmt.Fprintf(os.Stdout, "fixed:        %s\n", f)
 	}
-	for _, runner := range d.UnownedLive {
-		fmt.Fprintf(os.Stdout, "degraded:     workspace %s Binding Runner (pid %d) is alive but not owned by this Computer; run `multica computer restart`\n", runner.WorkspaceID, runner.PID)
+	for _, workspaceDaemon := range d.UnownedLive {
+		fmt.Fprintf(os.Stdout, "degraded:     WorkspaceDaemon for %s (pid %d) is alive but not owned by this Computer; run `multica computer restart`\n", workspaceDaemon.WorkspaceID, workspaceDaemon.PID)
 	}
 	// A disconnected resident is non-zero for automation.
 	if !d.Connected && d.Resident != "starting" {
 		return fmt.Errorf("Computer is not connected")
 	}
 	if len(d.UnownedLive) > 0 {
-		return fmt.Errorf("Computer has %d Binding Runner(s) alive but not owned by this Computer; run `multica computer restart`", len(d.UnownedLive))
+		return fmt.Errorf("Computer has %d WorkspaceDaemon process(es) alive but not owned by this Computer; run `multica computer restart`", len(d.UnownedLive))
 	}
 	return nil
 }

@@ -35,7 +35,7 @@ func TestBindingDrainWaitsThenForcesOnlyManagedProcess(t *testing.T) {
 	}
 	d.activeTasks.Store(1)
 	d.registerManagedTask(1, func() { gracefulCancelled = true })
-	if err := d.beginBindingDrain(context.Background()); err != nil {
+	if err := d.beginWorkspaceDaemonDrain(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if elapsed := now.Sub(time.Unix(1_700_000_000, 0)); elapsed != bindingDrainGracefulTimeout {
@@ -63,7 +63,7 @@ func TestBindingDrainNeverForcesUnownedBackend(t *testing.T) {
 		},
 	}
 	d.activeTasks.Store(1)
-	if err := d.beginBindingDrain(context.Background()); err == nil {
+	if err := d.beginWorkspaceDaemonDrain(context.Background()); err == nil {
 		t.Fatal("unowned backend force path unexpectedly succeeded")
 	}
 }
@@ -81,7 +81,7 @@ func TestBindingDrainFailsClosedWhenClaimIsStillInFlight(t *testing.T) {
 	if !d.tryEnterClaim() {
 		t.Fatal("pre-barrier claim was not admitted")
 	}
-	err := d.beginBindingDrain(context.Background())
+	err := d.beginWorkspaceDaemonDrain(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "claim") {
 		t.Fatalf("drain error = %v, want an in-flight claim failure", err)
 	}

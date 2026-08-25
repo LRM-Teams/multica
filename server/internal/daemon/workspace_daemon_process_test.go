@@ -20,13 +20,13 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-const bindingChildRuntimeHelperEnv = "MULTICA_BINDING_CHILD_RUNTIME_HELPER"
+const workspaceDaemonRuntimeHelperEnv = "MULTICA_WORKSPACE_DAEMON_RUNTIME_HELPER"
 
-func TestBindingChildProcessFallbackRunsTheRealWorkspaceDaemon(t *testing.T) {
+func TestWorkspaceDaemonProcessFallbackRunsTheRealWorkspaceDaemon(t *testing.T) {
 	const (
 		workspaceID  = "workspace-a"
 		computerID   = "computer-a"
-		controlToken = "host-control-token"
+		controlToken = "computer-control-token"
 	)
 	readyFrames := make(chan protocol.WorkspaceReadyPayload, 1)
 	runtimeWakeConnected := make(chan struct{}, 1)
@@ -102,37 +102,37 @@ func TestBindingChildProcessFallbackRunsTheRealWorkspaceDaemon(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	host := newBindingControlTestHost(t, controlToken, computer.HostControlCallbacks{})
-	hostServerURL, hostListener := localHostControlRPCListener(t, host.host)
-	t.Setenv(bindingChildRuntimeHelperEnv, providerPath)
-	t.Setenv("MULTICA_BINDING_CHILD_CONTROL_TOKEN", controlToken)
-	bootstrap := computer.BindingChildBootstrap{
-		ProtocolVersion: computer.BindingChildProtocolVersion, WorkspaceID: workspaceID,
+	computerCore := newComputerControlTestHarness(t, controlToken, computer.ComputerControlCallbacks{})
+	computerControlURL, computerControlListener := localComputerControlRPCListener(t, computerCore.computerCore)
+	t.Setenv(workspaceDaemonRuntimeHelperEnv, providerPath)
+	t.Setenv("MULTICA_WORKSPACE_DAEMON_CONTROL_TOKEN", controlToken)
+	bootstrap := computer.WorkspaceDaemonBootstrap{
+		ProtocolVersion: computer.WorkspaceDaemonProtocolVersion, WorkspaceID: workspaceID,
 		ComputerID:  computerID,
-		Environment: "test", ServerBaseURL: server.URL, ServiceEndpoint: hostServerURL,
+		Environment: "test", ServerBaseURL: server.URL, ServiceEndpoint: computerControlURL,
 		BindingsRoot: root, WorkspacesRoot: workspacesRoot,
 	}
-	child, err := computer.StartBindingProcess(os.Args[0], []string{"-test.run=TestRunBindingChildProcessHelper"}, bootstrap)
+	child, err := computer.StartWorkspaceDaemonProcess(os.Args[0], []string{"-test.run=TestRunWorkspaceDaemonProcessHelper"}, bootstrap)
 	if err != nil {
-		t.Fatalf("start Binding child process: %v", err)
+		t.Fatalf("start WorkspaceDaemon process: %v", err)
 	}
 	t.Cleanup(func() { _ = child.Stop() })
-	host.state.mu.Lock()
-	host.state.pids[workspaceID] = child.PID()
-	host.state.mu.Unlock()
-	installStartingBindingChild(t, host, workspaceID, child.PID())
+	computerCore.state.mu.Lock()
+	computerCore.state.pids[workspaceID] = child.PID()
+	computerCore.state.mu.Unlock()
+	installStartingWorkspaceDaemon(t, computerCore, workspaceID, child.PID())
 	child.Activate()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	ready, err := child.AwaitReady(ctx)
 	if err != nil {
-		t.Fatalf("await real Binding child Ready: %v", err)
+		t.Fatalf("await real WorkspaceDaemon Ready: %v", err)
 	}
 	if ready.PID != child.PID() || ready.WorkspaceID != workspaceID || ready.DaemonInstanceID == "" {
-		t.Fatalf("Binding child Ready = %+v, pid=%d", ready, child.PID())
+		t.Fatalf("WorkspaceDaemon Ready = %+v, pid=%d", ready, child.PID())
 	}
-	if err := computer.RequestBindingReregisterRuntime(ctx, ready.RunnerEndpoint, controlToken, computer.BindingChildIdentity{
+	if err := computer.RequestWorkspaceDaemonReregisterRuntime(ctx, ready.RunnerEndpoint, controlToken, computer.WorkspaceDaemonIdentity{
 		WorkspaceID: workspaceID, DaemonInstanceID: ready.DaemonInstanceID, PID: ready.PID,
 	}); err != nil {
 		t.Fatalf("request child-owned Runtime re-registration: %v", err)
@@ -153,28 +153,28 @@ func TestBindingChildProcessFallbackRunsTheRealWorkspaceDaemon(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("real child never authenticated its runtime wake socket with the scoped Binding credential")
 	}
-	_ = hostListener.Close()
-	exited := make(chan computer.RunnerExitClass, 1)
+	_ = computerControlListener.Close()
+	exited := make(chan computer.WorkspaceDaemonExitClass, 1)
 	go func() { exited <- child.Wait() }()
 	select {
 	case class := <-exited:
-		t.Fatalf("Binding child exited after Host loss with class %s", class)
+		t.Fatalf("WorkspaceDaemon exited after Computer loss with class %s", class)
 	case <-time.After(1500 * time.Millisecond):
 	}
 	if err := child.Stop(); err != nil {
-		t.Fatalf("stop Binding child after Host loss: %v", err)
+		t.Fatalf("stop WorkspaceDaemon after Computer loss: %v", err)
 	}
 	select {
 	case <-exited:
 	case <-ctx.Done():
-		t.Fatal("Binding child did not stop through its process handle")
+		t.Fatal("WorkspaceDaemon did not stop through its process handle")
 	}
 }
 
-func TestComputerHostRunsTwoRealIsolatedBindingChildProcesses(t *testing.T) {
+func TestComputerRunsTwoRealIsolatedWorkspaceDaemonProcesses(t *testing.T) {
 	const (
 		computerID   = "computer-a"
-		controlToken = "host-control-token"
+		controlToken = "computer-control-token"
 	)
 	workspaceIDs := []string{"workspace-a", "workspace-b"}
 	readyFrames := make(chan string, len(workspaceIDs))
@@ -264,14 +264,14 @@ func TestComputerHostRunsTwoRealIsolatedBindingChildProcesses(t *testing.T) {
 		}
 	}
 
-	t.Setenv(bindingChildRuntimeHelperEnv, providerPath)
-	t.Setenv("MULTICA_BINDING_CHILD_CONTROL_TOKEN", controlToken)
+	t.Setenv(workspaceDaemonRuntimeHelperEnv, providerPath)
+	t.Setenv("MULTICA_WORKSPACE_DAEMON_CONTROL_TOKEN", controlToken)
 	var serviceEndpoint string
-	host, err := computer.NewHost(computer.HostConfig{
+	computerCore, err := computer.NewComputerCore(computer.ComputerCoreConfig{
 		ControlToken: controlToken,
-		Spawn: func(workspaceID string) (computer.BindingChild, error) {
-			return computer.StartBindingProcess(os.Args[0], []string{"-test.run=TestRunBindingChildProcessHelper"}, computer.BindingChildBootstrap{
-				ProtocolVersion: computer.BindingChildProtocolVersion, WorkspaceID: workspaceID,
+		Spawn: func(workspaceID string) (computer.WorkspaceDaemonProcess, error) {
+			return computer.StartWorkspaceDaemonProcess(os.Args[0], []string{"-test.run=TestRunWorkspaceDaemonProcessHelper"}, computer.WorkspaceDaemonBootstrap{
+				ProtocolVersion: computer.WorkspaceDaemonProtocolVersion, WorkspaceID: workspaceID,
 				ComputerID:  computerID,
 				Environment: "test", ServerBaseURL: server.URL, ServiceEndpoint: serviceEndpoint,
 				BindingsRoot: root, WorkspacesRoot: workspacesRoot,
@@ -281,22 +281,22 @@ func TestComputerHostRunsTwoRealIsolatedBindingChildProcesses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	serviceEndpoint = localHostControlRPC(t, host)
+	serviceEndpoint = localComputerControlRPC(t, computerCore)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	host.Reconcile(ctx, workspaceIDs)
-	t.Cleanup(func() { host.Reconcile(context.Background(), nil) })
-	if err := host.WaitReady(ctx, workspaceIDs); err != nil {
-		t.Fatalf("wait for two real Binding children: %v", err)
+	computerCore.Reconcile(ctx, workspaceIDs)
+	t.Cleanup(func() { computerCore.Reconcile(context.Background(), nil) })
+	if err := computerCore.WaitReady(ctx, workspaceIDs); err != nil {
+		t.Fatalf("wait for two real WorkspaceDaemons: %v", err)
 	}
-	recordA, pidA, okA := host.Snapshot(workspaceIDs[0])
-	recordB, pidB, okB := host.Snapshot(workspaceIDs[1])
-	if !okA || !okB || recordA.Lifecycle != computer.RunnerLifecycleRunning || recordB.Lifecycle != computer.RunnerLifecycleRunning {
-		t.Fatalf("real Binding children not running: A=%+v/%t B=%+v/%t", recordA, okA, recordB, okB)
+	recordA, pidA, okA := computerCore.Snapshot(workspaceIDs[0])
+	recordB, pidB, okB := computerCore.Snapshot(workspaceIDs[1])
+	if !okA || !okB || recordA.Status != computer.WorkspaceDaemonRunning || recordB.Status != computer.WorkspaceDaemonRunning {
+		t.Fatalf("real WorkspaceDaemons not running: A=%+v/%t B=%+v/%t", recordA, okA, recordB, okB)
 	}
 	if pidA <= 0 || pidB <= 0 || pidA == pidB || pidA == os.Getpid() || pidB == os.Getpid() {
-		t.Fatalf("Binding child PIDs = %d/%d, Host PID = %d", pidA, pidB, os.Getpid())
+		t.Fatalf("WorkspaceDaemon PIDs = %d/%d, Computer PID = %d", pidA, pidB, os.Getpid())
 	}
 	ready := map[string]bool{}
 	for len(ready) < len(workspaceIDs) {
@@ -311,10 +311,10 @@ func TestComputerHostRunsTwoRealIsolatedBindingChildProcesses(t *testing.T) {
 		t.Fatalf("Binding Runtime registrations = %d, want %d", got, len(workspaceIDs))
 	}
 
-	host.Reconcile(ctx, []string{workspaceIDs[0]})
-	waitForBindingLifecycle(t, ctx, host, workspaceIDs[1], computer.RunnerLifecycleStopped)
-	afterA, afterPIDA, ok := host.Snapshot(workspaceIDs[0])
-	if !ok || afterA.Lifecycle != computer.RunnerLifecycleRunning || afterA.DaemonInstanceID() != recordA.DaemonInstanceID() || afterPIDA != pidA {
+	computerCore.Reconcile(ctx, []string{workspaceIDs[0]})
+	waitForBindingLifecycle(t, ctx, computerCore, workspaceIDs[1], computer.WorkspaceDaemonStopped)
+	afterA, afterPIDA, ok := computerCore.Snapshot(workspaceIDs[0])
+	if !ok || afterA.Status != computer.WorkspaceDaemonRunning || afterA.DaemonInstanceID != recordA.DaemonInstanceID || afterPIDA != pidA {
 		t.Fatalf("removing Binding B mutated A: before=%+v/%d after=%+v/%d", recordA, pidA, afterA, afterPIDA)
 	}
 	select {
@@ -323,17 +323,17 @@ func TestComputerHostRunsTwoRealIsolatedBindingChildProcesses(t *testing.T) {
 			t.Fatalf("removing B disconnected sibling %q", workspaceID)
 		}
 	case <-ctx.Done():
-		t.Fatal("removed Binding child B did not close its WorkspaceDaemon connection")
+		t.Fatal("removed WorkspaceDaemon B did not close its connection")
 	}
 }
 
-func waitForBindingLifecycle(t *testing.T, ctx context.Context, host *computer.Host, workspaceID string, want computer.RunnerLifecycle) {
+func waitForBindingLifecycle(t *testing.T, ctx context.Context, computerCore *computer.ComputerCore, workspaceID string, want computer.WorkspaceDaemonStatus) {
 	t.Helper()
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		record, _, ok := host.Snapshot(workspaceID)
-		if ok && record.Lifecycle == want {
+		record, _, ok := computerCore.Snapshot(workspaceID)
+		if ok && record.Status == want {
 			return
 		}
 		select {
@@ -344,11 +344,11 @@ func waitForBindingLifecycle(t *testing.T, ctx context.Context, host *computer.H
 	}
 }
 
-func TestBindingChildPublishesReadyWithoutAgentRuntimesOrWorkspaceDaemonWS(t *testing.T) {
+func TestWorkspaceDaemonPublishesReadyWithoutAgentRuntimes(t *testing.T) {
 	const (
 		workspaceID  = "workspace-a"
 		computerID   = "computer-a"
-		controlToken = "host-control-token"
+		controlToken = "computer-control-token"
 	)
 	var registerCalls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -389,25 +389,25 @@ func TestBindingChildPublishesReadyWithoutAgentRuntimesOrWorkspaceDaemonWS(t *te
 		t.Fatal(err)
 	}
 
-	host := newBindingControlTestHost(t, controlToken, computer.HostControlCallbacks{})
-	hostServerURL := localHostControlRPC(t, host.host)
-	t.Setenv("MULTICA_BINDING_CHILD_CONTROL_TOKEN", controlToken)
-	t.Setenv("MULTICA_BINDING_CHILD_ZERO_RUNTIME", "1")
-	bootstrap := computer.BindingChildBootstrap{
-		ProtocolVersion: computer.BindingChildProtocolVersion, WorkspaceID: workspaceID,
+	computerCore := newComputerControlTestHarness(t, controlToken, computer.ComputerControlCallbacks{})
+	computerControlURL := localComputerControlRPC(t, computerCore.computerCore)
+	t.Setenv("MULTICA_WORKSPACE_DAEMON_CONTROL_TOKEN", controlToken)
+	t.Setenv("MULTICA_WORKSPACE_DAEMON_ZERO_RUNTIME", "1")
+	bootstrap := computer.WorkspaceDaemonBootstrap{
+		ProtocolVersion: computer.WorkspaceDaemonProtocolVersion, WorkspaceID: workspaceID,
 		ComputerID:  computerID,
-		Environment: "test", ServerBaseURL: server.URL, ServiceEndpoint: hostServerURL,
+		Environment: "test", ServerBaseURL: server.URL, ServiceEndpoint: computerControlURL,
 		BindingsRoot: root, WorkspacesRoot: workspacesRoot,
 	}
-	child, err := computer.StartBindingProcess(os.Args[0], []string{"-test.run=TestRunBindingChildProcessHelper"}, bootstrap)
+	child, err := computer.StartWorkspaceDaemonProcess(os.Args[0], []string{"-test.run=TestRunWorkspaceDaemonProcessHelper"}, bootstrap)
 	if err != nil {
-		t.Fatalf("start Binding child process: %v", err)
+		t.Fatalf("start WorkspaceDaemon process: %v", err)
 	}
 	t.Cleanup(func() { _ = child.Stop() })
-	host.state.mu.Lock()
-	host.state.pids[workspaceID] = child.PID()
-	host.state.mu.Unlock()
-	installStartingBindingChild(t, host, workspaceID, child.PID())
+	computerCore.state.mu.Lock()
+	computerCore.state.pids[workspaceID] = child.PID()
+	computerCore.state.mu.Unlock()
+	installStartingWorkspaceDaemon(t, computerCore, workspaceID, child.PID())
 	child.Activate()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -417,20 +417,20 @@ func TestBindingChildPublishesReadyWithoutAgentRuntimesOrWorkspaceDaemonWS(t *te
 		t.Fatalf("zero-runtime DaemonCore must publish Ready after WorkspaceDaemon connect: %v", err)
 	}
 	if ready.PID != child.PID() || ready.WorkspaceID != workspaceID || ready.DaemonInstanceID == "" {
-		t.Fatalf("Binding child Ready = %+v, pid=%d", ready, child.PID())
+		t.Fatalf("WorkspaceDaemon Ready = %+v, pid=%d", ready, child.PID())
 	}
 	if got := registerCalls.Load(); got != 0 {
-		t.Fatalf("zero-runtime Binding child posted register %d times", got)
+		t.Fatalf("zero-runtime WorkspaceDaemon posted register %d times", got)
 	}
 }
 
-func TestRunBindingChildProcessHelper(t *testing.T) {
-	providerPath := os.Getenv(bindingChildRuntimeHelperEnv)
-	zeroRuntime := os.Getenv("MULTICA_BINDING_CHILD_ZERO_RUNTIME") == "1"
+func TestRunWorkspaceDaemonProcessHelper(t *testing.T) {
+	providerPath := os.Getenv(workspaceDaemonRuntimeHelperEnv)
+	zeroRuntime := os.Getenv("MULTICA_WORKSPACE_DAEMON_ZERO_RUNTIME") == "1"
 	if providerPath == "" && !zeroRuntime {
 		return
 	}
-	bootstrap, err := computer.ReadBindingChildBootstrap(os.Stdin)
+	bootstrap, err := computer.ReadWorkspaceDaemonBootstrap(os.Stdin)
 	if err != nil {
 		os.Exit(2)
 	}
@@ -439,80 +439,80 @@ func TestRunBindingChildProcessHelper(t *testing.T) {
 	if !zeroRuntime {
 		agents["pi"] = AgentEntry{Path: providerPath}
 	}
-	err = RunBindingChild(context.Background(), BindingChildRunConfig{
+	err = RunWorkspaceDaemonProcess(context.Background(), WorkspaceDaemonProcessConfig{
 		Daemon: Config{
 			DaemonID:    bootstrap.ComputerID,
 			Environment: bootstrap.Environment, ServerBaseURL: bootstrap.ServerBaseURL,
 			BindingsRoot: bootstrap.BindingsRoot, WorkspacesRoot: bootstrap.WorkspacesRoot,
-			LocalControlToken: os.Getenv("MULTICA_BINDING_CHILD_CONTROL_TOKEN"),
+			LocalControlToken: os.Getenv("MULTICA_WORKSPACE_DAEMON_CONTROL_TOKEN"),
 			Agents:            agents,
 			PollInterval:      time.Hour, HeartbeatInterval: time.Hour,
 		},
 		Bootstrap: bootstrap,
 		Logger:    logger,
-		PublishReady: func(ready computer.BindingChildReady) error {
-			return computer.WriteBindingChildReady(os.Stdout, ready)
+		PublishReady: func(ready computer.WorkspaceDaemonReady) error {
+			return computer.WriteWorkspaceDaemonReady(os.Stdout, ready)
 		},
 	})
 	if err != nil {
-		logger.Error("Binding child helper failed", "error", err)
+		logger.Error("WorkspaceDaemon helper failed", "error", err)
 		os.Exit(3)
 	}
 }
 
-func TestBindingChildCredentialProxyHasAChildOwnedListener(t *testing.T) {
+func TestWorkspaceDaemonCredentialProxyHasProcessOwnedListener(t *testing.T) {
 	d := New(Config{HealthPort: DefaultHealthPort}, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	listener, err := d.listenBindingCredentialProxy()
+	listener, err := d.listenWorkspaceDaemonCredentialProxy()
 	if err != nil {
-		t.Fatalf("listenBindingCredentialProxy: %v", err)
+		t.Fatalf("listenWorkspaceDaemonCredentialProxy: %v", err)
 	}
 	addr, ok := listener.Addr().(*net.TCPAddr)
 	if !ok || !addr.IP.IsLoopback() || addr.Port < 1 {
-		t.Fatalf("Binding child Credential Proxy addr = %v, want loopback ephemeral port", listener.Addr())
+		t.Fatalf("WorkspaceDaemon Credential Proxy addr = %v, want loopback ephemeral port", listener.Addr())
 	}
 	if d.cfg.HealthPort != addr.Port {
-		t.Fatalf("Binding child launch port = %d, want listener port %d", d.cfg.HealthPort, addr.Port)
+		t.Fatalf("WorkspaceDaemon launch port = %d, want listener port %d", d.cfg.HealthPort, addr.Port)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		d.serveBindingCredentialProxy(ctx, listener)
+		d.serveWorkspaceDaemonCredentialProxy(ctx, listener)
 	}()
 	t.Cleanup(func() {
 		cancel()
 		select {
 		case <-done:
 		case <-time.After(time.Second):
-			t.Fatal("Binding child Credential Proxy did not stop")
+			t.Fatal("WorkspaceDaemon Credential Proxy did not stop")
 		}
 	})
 
 	response, err := http.Get("http://" + listener.Addr().String() + "/credential-proxy/messages/check")
 	if err != nil {
-		t.Fatalf("GET Binding child Credential Proxy: %v", err)
+		t.Fatalf("GET WorkspaceDaemon Credential Proxy: %v", err)
 	}
 	_ = response.Body.Close()
 	if response.StatusCode != http.StatusMethodNotAllowed {
-		t.Fatalf("GET Binding child Credential Proxy status = %d, want 405", response.StatusCode)
+		t.Fatalf("GET WorkspaceDaemon Credential Proxy status = %d, want 405", response.StatusCode)
 	}
 	if allow := response.Header.Get("Allow"); allow != http.MethodPost {
-		t.Fatalf("GET Binding child Credential Proxy Allow = %q, want POST", allow)
+		t.Fatalf("GET WorkspaceDaemon Credential Proxy Allow = %q, want POST", allow)
 	}
 
 	health, err := http.Get("http://" + listener.Addr().String() + "/health")
 	if err != nil {
-		t.Fatalf("GET Binding child machine health route: %v", err)
+		t.Fatalf("GET WorkspaceDaemon machine health route: %v", err)
 	}
 	_ = health.Body.Close()
 	if health.StatusCode != http.StatusNotFound {
-		t.Fatalf("Binding child exposed Host /health with status %d", health.StatusCode)
+		t.Fatalf("WorkspaceDaemon exposed Computer /health with status %d", health.StatusCode)
 	}
 }
 
 func TestExpiredBindingDoesNotInstallWorkspaceToken(t *testing.T) {
-	d := newDaemonForRole(Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)), daemonProcessBindingChild)
+	d := newDaemonForRole(Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)), daemonProcessWorkspaceDaemon)
 	err := d.prepareBindingExecutionCredential(computer.WorkspaceBinding{
 		WorkspaceID: "workspace-a", ComputerID: "computer-a",
 		Credential: "expired-binding-token", CredentialExpiresAt: time.Now().Add(-time.Hour), Active: true,
@@ -526,7 +526,7 @@ func TestExpiredBindingDoesNotInstallWorkspaceToken(t *testing.T) {
 }
 
 func TestCurrentBindingBootstrapRejectsExpiredCredential(t *testing.T) {
-	d := newDaemonForRole(Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)), daemonProcessBindingChild)
+	d := newDaemonForRole(Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)), daemonProcessWorkspaceDaemon)
 	err := d.prepareBindingExecutionCredential(computer.WorkspaceBinding{
 		WorkspaceID: "workspace-a", ComputerID: "computer-a",
 		Credential: "expired-binding-token", CredentialExpiresAt: time.Now().Add(-time.Hour), Active: true,
@@ -536,7 +536,7 @@ func TestCurrentBindingBootstrapRejectsExpiredCredential(t *testing.T) {
 	}
 }
 
-func TestBindingChildMembershipRefreshStopsRevokedBinding(t *testing.T) {
+func TestWorkspaceDaemonMembershipRefreshStopsRevokedBinding(t *testing.T) {
 	const workspaceID = "workspace-a"
 	root := t.TempDir()
 	expiresAt := time.Now().Add(2 * time.Hour)
@@ -558,14 +558,14 @@ func TestBindingChildMembershipRefreshStopsRevokedBinding(t *testing.T) {
 	d := newDaemonForRole(Config{
 		BindingsRoot: root, Environment: "test", DaemonID: "computer-a",
 		ServerBaseURL: server.URL,
-	}, slog.New(slog.NewTextHandler(io.Discard, nil)), daemonProcessBindingChild)
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)), daemonProcessWorkspaceDaemon)
 	d.client.SetWorkspaceDaemonToken(workspaceID, "binding-token", expiresAt)
 
 	done := make(chan error, 1)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	go func() {
-		done <- d.bindingWorkspaceRefreshLoop(ctx, workspaceID, "binding-token", 5*time.Millisecond)
+		done <- d.workspaceRefreshLoop(ctx, workspaceID, "binding-token", 5*time.Millisecond)
 	}()
 	time.Sleep(20 * time.Millisecond)
 	if err := store.RemoveForEnvironment("test", workspaceID); err != nil {
@@ -577,18 +577,18 @@ func TestBindingChildMembershipRefreshStopsRevokedBinding(t *testing.T) {
 			t.Fatalf("membership refresh error = %v", err)
 		}
 	case <-ctx.Done():
-		t.Fatal("Binding child did not stop after its connection was revoked")
+		t.Fatal("WorkspaceDaemon did not stop after its connection was revoked")
 	}
 }
 
-func TestBindingChildrenUseIsolatedDurableExecutionState(t *testing.T) {
+func TestWorkspaceDaemonsUseIsolatedDurableExecutionState(t *testing.T) {
 	root := t.TempDir()
 	workspacesRoot := filepath.Join(root, "workspaces")
 	bindingsRoot := filepath.Join(root, "bindings")
 	firstRoot := filepath.Join(root, "execution", "workspace-a")
 	secondRoot := filepath.Join(root, "execution", "workspace-b")
-	first := newDaemonForRole(Config{WorkspacesRoot: workspacesRoot, BindingsRoot: bindingsRoot, MachineID: "machine-a", BindingStateRoot: firstRoot, WorkspaceID: "workspace-a"}, slog.New(slog.NewTextHandler(io.Discard, nil)), daemonProcessBindingChild)
-	second := newDaemonForRole(Config{WorkspacesRoot: workspacesRoot, BindingsRoot: bindingsRoot, MachineID: "machine-a", BindingStateRoot: secondRoot, WorkspaceID: "workspace-b"}, slog.New(slog.NewTextHandler(io.Discard, nil)), daemonProcessBindingChild)
+	first := newDaemonForRole(Config{WorkspacesRoot: workspacesRoot, BindingsRoot: bindingsRoot, MachineID: "machine-a", BindingStateRoot: firstRoot, WorkspaceID: "workspace-a"}, slog.New(slog.NewTextHandler(io.Discard, nil)), daemonProcessWorkspaceDaemon)
+	second := newDaemonForRole(Config{WorkspacesRoot: workspacesRoot, BindingsRoot: bindingsRoot, MachineID: "machine-a", BindingStateRoot: secondRoot, WorkspaceID: "workspace-b"}, slog.New(slog.NewTextHandler(io.Discard, nil)), daemonProcessWorkspaceDaemon)
 
 	for label, paths := range map[string]struct {
 		pair          [2]string

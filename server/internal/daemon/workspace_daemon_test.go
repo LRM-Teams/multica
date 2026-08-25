@@ -84,7 +84,7 @@ func TestWorkspaceDaemonReadyPingAndReconnectUseFixedIdentity(t *testing.T) {
 	}))
 	defer server.Close()
 	d := New(Config{ServerBaseURL: server.URL, DaemonID: "daemon-1", DeviceName: "ubuntu-build-host", CLIVersion: "0.4.24-alpha.91"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	d.runnerInstanceID = "instance-1"
+	d.instanceID = "instance-1"
 	d.client.SetWorkspaceDaemonToken("workspace-1", "workspace-token", time.Now().Add(time.Minute))
 	runner, err := d.newWorkspaceDaemon("workspace-1")
 	if err != nil {
@@ -135,7 +135,7 @@ func TestWorkspaceDaemonRunReturnsWhenBindingContextCancelsLiveSocket(t *testing
 	}))
 	defer server.Close()
 	d := New(Config{ServerBaseURL: server.URL, DaemonID: "daemon-1"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	d.runnerInstanceID = "instance-1"
+	d.instanceID = "instance-1"
 	d.client.SetWorkspaceDaemonToken("workspace-1", "workspace-token", time.Now().Add(time.Minute))
 	runner, err := d.newWorkspaceDaemon("workspace-1")
 	if err != nil {
@@ -444,7 +444,7 @@ func TestWorkspaceDaemonReportsForwardFailureForComputerUpgrade(t *testing.T) {
 		t.Fatal(err)
 	}
 	runner.handleComputerControl = func(context.Context, string, protocol.ComputerUpgradePayload) error {
-		return errors.New("forward to Host failed")
+		return errors.New("forward to Computer failed")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()

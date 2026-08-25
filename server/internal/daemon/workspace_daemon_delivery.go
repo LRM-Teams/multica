@@ -166,8 +166,8 @@ func (d *Daemon) attachWorkspaceDaemon(runner *WorkspaceDaemon) {
 	d.workspaceDaemonMu.Unlock()
 }
 
-// adoptWorkspaceDaemon publishes the Binding child's owned Runner as the
-// Credential Proxy / handoff lookup. Binding child constructs that Runner
+// adoptWorkspaceDaemon publishes this process's WorkspaceDaemon as the
+// Credential Proxy / handoff lookup. The process constructs the WorkspaceDaemon
 // before Run; if it stays off this map, ensureWorkspaceDaemon mints a second
 // empty inbox and message send returns 409 "Message coordinator is unavailable".
 func (d *Daemon) adoptWorkspaceDaemon(runner *WorkspaceDaemon) error {

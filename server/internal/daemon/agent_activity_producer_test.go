@@ -253,7 +253,7 @@ func TestManagedStartPublicationPreservesLiveActivity(t *testing.T) {
 		activities = append(activities, payload)
 	})
 	d := New(Config{}, nil)
-	d.runnerInstanceID = "daemon-1"
+	d.instanceID = "daemon-1"
 	d.mu.Lock()
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
 	d.mu.Unlock()
@@ -289,7 +289,7 @@ func TestResidentTextUpdatesWorkingWithoutAddingTimelineEntry(t *testing.T) {
 		activities = append(activities, payload)
 	})
 	d := New(Config{}, nil)
-	d.runnerInstanceID = "daemon-1"
+	d.instanceID = "daemon-1"
 	runner := installTestAgentActivityProducer(t, d, "workspace-1", producer)
 	accepted := startTestManagedAgent(t, runner, "agent-1", "runtime-1", "launch-1")
 	markTestLaunchRunning(t, runner, "agent-1")
@@ -368,7 +368,7 @@ func TestManagedStartReconciliationDoesNotRepaintStarting(t *testing.T) {
 		activities = append(activities, payload)
 	})
 	d := New(Config{WorkspacesRoot: t.TempDir(), DaemonID: "computer-1"}, nil)
-	d.runnerInstanceID = "daemon-1"
+	d.instanceID = "daemon-1"
 	d.mu.Lock()
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
 	d.mu.Unlock()
@@ -402,7 +402,7 @@ func TestMessageAcceptanceWithoutManagedLaunchDoesNotInventActivityIdentity(t *t
 		activities = append(activities, payload)
 	})
 	d := New(Config{}, nil)
-	d.runnerInstanceID = "daemon-instance-1"
+	d.instanceID = "daemon-instance-1"
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
 
 	runner, _ := attachTestWorkspaceDaemon(t, d, "workspace-1", func(string, any) error { return nil })
@@ -428,7 +428,7 @@ func TestPendingAndProviderAcceptancePublishOneMessageReceivedActivity(t *testin
 		activities = append(activities, payload)
 	})
 	d := New(Config{}, nil)
-	d.runnerInstanceID = "daemon-instance-1"
+	d.instanceID = "daemon-instance-1"
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
 
 	runner, _ := attachTestWorkspaceDaemon(t, d, "workspace-1", func(string, any) error { return nil })
@@ -474,7 +474,7 @@ func TestResidentRuntimeEventsPublishRaftActivityLifecycle(t *testing.T) {
 		activities = append(activities, payload)
 	})
 	d := New(Config{}, nil)
-	d.runnerInstanceID = "daemon-1"
+	d.instanceID = "daemon-1"
 	runner := installTestAgentActivityProducer(t, d, "workspace-1", producer)
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
 	accepted := startTestManagedAgent(t, runner, "agent-a", "runtime-1", "dispatch-a")
@@ -594,7 +594,7 @@ func TestResidentCompactionPublishesOneStaleEntryAndFinishesBeforeResumedOutput(
 	}
 	installActivityProducerAgent(t, producer)
 	d := New(Config{}, nil)
-	d.runnerInstanceID = "daemon-1"
+	d.instanceID = "daemon-1"
 	runner := installTestAgentActivityProducer(t, d, "workspace-1", producer)
 	accepted := startTestManagedAgent(t, runner, "agent-a", "runtime-1", "launch-a")
 	if err := producer.SetManaged(accepted.AgentInstanceID, protocol.AgentStatusPayload{AgentID: "agent-a", Status: protocol.AgentStatusActive}, protocol.AgentSessionPayload{AgentID: "agent-a"}); err != nil {
@@ -663,7 +663,7 @@ func TestIdleMessageAcceptanceFailurePublishesVisibleErrorActivity(t *testing.T)
 	})
 	installActivityProducerAgent(t, producer)
 	d := New(Config{}, nil)
-	d.runnerInstanceID = "daemon-1"
+	d.instanceID = "daemon-1"
 	runner := installTestAgentActivityProducer(t, d, "workspace-1", producer)
 	accepted := startTestManagedAgent(t, runner, "agent-a", "runtime-1", "launch-a")
 	if err := producer.SetManaged(accepted.AgentInstanceID, protocol.AgentStatusPayload{AgentID: "agent-a", Status: protocol.AgentStatusActive}, protocol.AgentSessionPayload{AgentID: "agent-a"}); err != nil {

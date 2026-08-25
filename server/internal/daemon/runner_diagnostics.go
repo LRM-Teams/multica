@@ -55,7 +55,7 @@ func (d *Daemon) initializeRunnerDiagnostics() {
 	}
 	d.runnerDiagnostics = &runnerDiagnosticRegistry{
 		store: store, environment: environment,
-		daemonInstanceID: d.runnerInstanceID, computerID: computerID,
+		daemonInstanceID: d.instanceID, computerID: computerID,
 		loggers: make(map[string]*diagnosticlog.Logger), failed: make(map[string]struct{}),
 	}
 	d.runnerDiagnosticStore = store

@@ -81,7 +81,7 @@ func (d *Daemon) ensureIdleMessageCoordinatorForDelivery(workspaceID, agentID st
 
 // restoreResidentAgents rebuilds durable Agent roots after a Computer process
 // restart. A durable root alone does not create a WorkspaceDaemon or a Message
-// coordinator; the supervised Binding child receives an explicit managed start
+// coordinator; the supervised WorkspaceDaemon receives an explicit managed start
 // when work exists.
 func mixedRunMessageBatchIdentity(messages []protocol.AgentMessageProjection) (string, string, string, bool) {
 	if len(messages) == 0 || messages[0].RunID == "" || messages[0].RunAgentID == "" {

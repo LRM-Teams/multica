@@ -130,11 +130,14 @@ const (
 	// ResidentCommand is the public cobra command that owns the Computer.
 	ResidentCommand = "computer"
 	// ResidentServiceArg is the hidden argv that marks a spawned resident.
-	// Callers never type this; Lifecycle and the supervisor assemble it.
+	// Callers never type this; Lifecycle and the process supervisor assemble it.
 	ResidentServiceArg = "__service"
 	// ResidentUpgradeArg is the hidden argv for the detached Machine Upgrade
 	// coordinator. The incumbent Computer must not own successor spawn.
 	ResidentUpgradeArg = "__upgrade"
+	// ResidentRestartArg is the hidden argv for a same-binary restart
+	// coordinator. Unlike Machine Upgrade, it does not use an upgrade journal.
+	ResidentRestartArg = "__restart"
 )
 
 // ResidentServicePrefix is the Computer-owned process contract. Workspace
@@ -180,9 +183,9 @@ func startResidentProcess(exe string, args []string, log *os.File) (procHandle, 
 		child.Stderr = log
 		child.SysProcAttr = SysProcAttr(breakaway)
 		// Raft 1.0.17 spawnDetachedService uses detached+unref and never binds
-		// the resident to parent death. Setsid already makes this child a new
+		// the Computer to parent death. Setsid already makes this process a new
 		// session; Pdeathsig would SIGTERM it when `multica computer start`
-		// exits. Binding children are also unlinked from parent death.
+		// exits. WorkspaceDaemons are also unlinked from parent death.
 		if err := child.Start(); err != nil {
 			return nil, err
 		}

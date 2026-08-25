@@ -133,7 +133,7 @@ func TestObserveMessageSendHoldPublishesSystemActivityEntry(t *testing.T) {
 	installActivityProducerAgent(t, producer)
 
 	d := New(Config{}, nil)
-	d.runnerInstanceID = "daemon-instance-1"
+	d.instanceID = "daemon-instance-1"
 	runner := installTestAgentActivityProducer(t, d, "workspace-1", producer)
 	accepted := startTestManagedAgent(t, runner, "agent-a", "runtime-1", "launch-a")
 	if err := producer.SetManaged(accepted.AgentInstanceID, protocol.AgentStatusPayload{AgentID: "agent-a", Status: protocol.AgentStatusActive}, protocol.AgentSessionPayload{AgentID: "agent-a"}); err != nil {
@@ -165,7 +165,7 @@ func TestObserveMessageSendHoldPublishesSystemActivityEntry(t *testing.T) {
 // this Runner; the projection is best-effort and the send outcome is untouched.
 func TestObserveMessageSendHoldIsFailSoftWhenAgentNotManaged(t *testing.T) {
 	d := New(Config{}, nil)
-	d.runnerInstanceID = "daemon-instance-1"
+	d.instanceID = "daemon-instance-1"
 	runner := installTestAgentActivityProducer(t, d, "workspace-unknown", newAgentActivityProducer("daemon-instance-1", time.Now, nil))
 	// No managed launch exists for the Agent; observe must not panic.
 	runner.observeMessageSendHold("agent-unknown", "#general", 0, "freshness_unknown")
@@ -178,7 +178,7 @@ func TestObserveMessageSendDraftSentPublishesSystemActivityEntry(t *testing.T) {
 	installActivityProducerAgent(t, producer)
 
 	d := New(Config{}, nil)
-	d.runnerInstanceID = "daemon-instance-1"
+	d.instanceID = "daemon-instance-1"
 	runner := installTestAgentActivityProducer(t, d, "workspace-1", producer)
 	accepted := startTestManagedAgent(t, runner, "agent-a", "runtime-1", "launch-a")
 	if err := producer.SetManaged(accepted.AgentInstanceID, protocol.AgentStatusPayload{AgentID: "agent-a", Status: protocol.AgentStatusActive}, protocol.AgentSessionPayload{AgentID: "agent-a"}); err != nil {

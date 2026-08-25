@@ -104,9 +104,10 @@ export interface StarCanvasViewModel {
  * ------------------------------------------------------------------ */
 
 function toLayoutNode(n: TypedGraphNode): StarGraphLayoutNode {
+  const nodeKind = n.node_type?.trim() ?? "";
   const input: StarGraphNodeInput = {
     id: n.id,
-    node_kind: n.node_type,
+    node_kind: nodeKind,
     status: n.status,
     importance: undefined,
     title: n.title,
@@ -126,8 +127,8 @@ function toLayoutNode(n: TypedGraphNode): StarGraphLayoutNode {
   return {
     id: n.id,
     tier: tier as StarGraphLayoutTier,
-    radius: n.node_type.trim().toLowerCase() === "goal" ? 59 : undefined,
-    nodeKind: n.node_type,
+    radius: nodeKind.toLowerCase() === "goal" ? 59 : undefined,
+    nodeKind,
     clusterId: n.cluster_id && n.cluster_id !== "" ? n.cluster_id : null,
     parentId: n.parent_id || n.derived_from || null,
   };

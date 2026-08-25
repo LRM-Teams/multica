@@ -89,7 +89,10 @@ export function adaptResearchV6DirectorCanvas(
   // second Agent circle duplicates the same execution unit and overwhelms the
   // constellation with roster nodes and assignment edges.
   const visibleNodes = projection.nodes.filter(
-    (node) => !node.absorbed && node.canonicalRef.kind !== "agent",
+    (node) =>
+      !node.absorbed &&
+      node.canonicalRef.kind !== "agent" &&
+      node.kind.trim().toLowerCase() !== "agent",
   );
   const visibleNodeIds = new Set(visibleNodes.map((node) => node.id));
   const absorbedInputs = new Map<string, string[]>();

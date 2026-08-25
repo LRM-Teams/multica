@@ -148,6 +148,12 @@ second-stage payload Schemas, so adding a research method or Agent role does not
 require a new orchestrator version. Unknown platform verbs still fail closed;
 Ronaldo's semantic authority does not make unimplemented server operations real.
 
+Atomic research dispatch has one exact mechanical mapping: the outer Action uses
+`kind=create_work_item` and `payload_schema=work.create.v1`; its payload uses
+`kind=research` and `expected_result_schema_id=atomic_result_submission`.
+Names from any of those other layers are not Action-kind aliases, and the
+Director must not discover the vocabulary through repeated rejected submissions.
+
 The Director plans, staffs, assigns and integrates; it never executes atomic
 research Work itself. Atomic Work uses `atomic_result_submission`, a non-empty
 payload schema ID other than `no_op.v1`, and an exact non-empty

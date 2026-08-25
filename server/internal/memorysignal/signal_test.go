@@ -112,6 +112,17 @@ func TestDetectMissedWriteFromSignal(t *testing.T) {
 	}
 }
 
+func TestDetectMissedWriteFromCompactionFlush(t *testing.T) {
+	signals := []Signal{{Action: ActionCompactionFlush, Kind: "missed", Summary: "context compaction ran without a durable memory write"}}
+	miss, ok := DetectMissedWrite("随便聊聊", signals, nil, "member-1")
+	if !ok {
+		t.Fatal("expected miss from compaction_flush")
+	}
+	if miss.Source != ActionCompactionFlush {
+		t.Fatalf("source = %q", miss.Source)
+	}
+}
+
 func TestNormalizeTopicAndDedupeKey(t *testing.T) {
 	if got := NormalizeTopic(" Progress Feedback "); got != "progress_feedback" {
 		t.Fatalf("got %q", got)

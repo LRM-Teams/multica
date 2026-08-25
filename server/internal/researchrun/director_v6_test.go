@@ -12,31 +12,6 @@ import (
 	"github.com/google/uuid"
 )
 
-func TestV6DirectorBriefSurvivesItsOwnOperationalEvents(t *testing.T) {
-	cycleID := "00000000-0000-4000-8000-000000000001"
-	workID := "00000000-0000-4000-8000-000000000002"
-	briefID := "00000000-0000-4000-8000-000000000003"
-	for _, test := range []struct {
-		name, eventType, payload string
-		want                     bool
-	}{
-		{name: "cycle created", eventType: "v6_director_cycle_created", payload: `{"cycle_id":"` + cycleID + `","work_item_id":"` + workID + `","brief_id":"` + briefID + `"}`, want: true},
-		{name: "dispatch prepared", eventType: "v6_work_item_dispatch_prepared", payload: `{"work_item_id":"` + workID + `"}`, want: true},
-		{name: "dispatch completed", eventType: "v6_work_item_dispatched", payload: `{"work_item_id":"` + workID + `"}`, want: true},
-		{name: "attempt recovered", eventType: "v6_work_item_recovered", payload: `{"work_item_id":"` + workID + `"}`, want: true},
-		{name: "brief acknowledged", eventType: "v6_director_brief_page_acknowledged", payload: `{"brief_id":"` + briefID + `"}`, want: true},
-		{name: "proposal received", eventType: "v6_work_submission_received", payload: `{"work_item_id":"` + workID + `"}`, want: true},
-		{name: "other work", eventType: "v6_work_item_dispatched", payload: `{"work_item_id":"00000000-0000-4000-8000-000000000009"}`},
-		{name: "material event", eventType: "v6_branch_created", payload: `{"work_item_id":"` + workID + `"}`},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			if got := isV6DirectorCycleOperationalEvent(test.eventType, json.RawMessage(test.payload), cycleID, workID, briefID); got != test.want {
-				t.Fatalf("allowed=%v want=%v", got, test.want)
-			}
-		})
-	}
-}
-
 type teamV6StoreStub struct {
 	added    AddV6TeamMemberInput
 	archived ArchiveV6TeamMemberInput
@@ -95,6 +70,15 @@ func TestV6DirectorFailureValidation(t *testing.T) {
 	}
 }
 
+func TestV6DirectorRunLifecycleRejectsAutonomousPause(t *testing.T) {
+	if target, allowed := v6DirectorRunLifecycleTarget("pause_run"); allowed || target != "" {
+		t.Fatalf("pause_run target=%q allowed=%v", target, allowed)
+	}
+	if target, allowed := v6DirectorRunLifecycleTarget("resume_run"); !allowed || target != "running" {
+		t.Fatalf("resume_run target=%q allowed=%v", target, allowed)
+	}
+}
+
 func TestV6DirectorBriefIsBoundedAndPaged(t *testing.T) {
 	branches := make([]any, 257)
 	for i := range branches {
@@ -113,6 +97,229 @@ func TestV6DirectorBriefIsBoundedAndPaged(t *testing.T) {
 	brief, err := (contextCompilerModule{}).CompileDirectorBrief(facts, time.Unix(1, 0))
 	if err != nil || len(brief.Pages) != 5 {
 		t.Fatalf("pages=%d err=%v", len(brief.Pages), err)
+	}
+}
+
+func TestV6DirectorBriefBoundsTeamMissionSummary(t *testing.T) {
+	run := newTransactionRecoveryRun(t, "Bound V6 team mission summary")
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_session SET orchestrator_version='research-run-v6' WHERE id=$1::uuid`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.store.AssignV6Director(run.ctx, AssignV6DirectorInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+		AgentID: run.fixture.agentID, UserID: run.fixture.userID,
+		Reason: "Compile a bounded team summary", ClientRequestID: uuid.NewString(), ExpectedStateVersion: 0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	longMission := strings.Repeat("研究", 300)
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_team_membership SET mission_prompt=$2 WHERE session_id=$1::uuid`, run.fixture.sessionID, longMission); err != nil {
+		t.Fatal(err)
+	}
+	var stateVersion int64
+	if err := run.pool.QueryRow(run.ctx, `SELECT state_version FROM research_session WHERE id=$1::uuid`, run.fixture.sessionID).Scan(&stateVersion); err != nil {
+		t.Fatal(err)
+	}
+	facts, err := run.store.LoadDirectorBriefFacts(run.ctx, StartV6DirectorCycleInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID, ExpectedStateVersion: stateVersion,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(facts.Team) != 1 {
+		t.Fatalf("team members=%d, want 1", len(facts.Team))
+	}
+	mission, ok := facts.Team[0].(map[string]any)["mission_summary"].(string)
+	if !ok || len([]rune(mission)) != 512 {
+		t.Fatalf("mission summary rune count=%d, want 512", len([]rune(mission)))
+	}
+	if _, err = (contextCompilerModule{}).CompileDirectorBrief(facts, time.Unix(1, 0)); err != nil {
+		t.Fatalf("compile Director Brief with bounded team mission: %v", err)
+	}
+}
+
+func TestV6DirectorBriefIncludesWorkFailureRecoveryFacts(t *testing.T) {
+	run := newTransactionRecoveryRun(t, "V6 Director Brief work failure recovery")
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_session SET orchestrator_version='research-run-v6' WHERE id=$1::uuid`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.store.AssignV6Director(run.ctx, AssignV6DirectorInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+		AgentID: run.fixture.agentID, UserID: run.fixture.userID,
+		Reason: "Recover failed work", ClientRequestID: uuid.NewString(), ExpectedStateVersion: 0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var membershipID string
+	if err := run.pool.QueryRow(run.ctx, `SELECT id::text FROM research_team_membership WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND agent_id=$3::uuid`, run.fixture.workspaceID, run.fixture.sessionID, run.fixture.agentID).Scan(&membershipID); err != nil {
+		t.Fatal(err)
+	}
+	workItemID := uuid.NewString()
+	mission := "独立复核关键来源并解释冲突。"
+	if _, err := run.pool.Exec(run.ctx, `INSERT INTO research_work_item (
+		id,workspace_id,session_id,kind,status,assigned_agent_id,goal_version,idempotency_key,
+		payload_schema_id,state_version,reason,attempt_count,max_attempts,terminal_reason_code,terminal_reason_detail
+	) VALUES ($1::uuid,$2::uuid,$3::uuid,'research','failed',$4::uuid,1,$5,'research.finding.v1',1,$6,3,3,'attempt_budget_exhausted','连续提交未通过合同校验。')`,
+		workItemID, run.fixture.workspaceID, run.fixture.sessionID, run.fixture.agentID, "brief-failure:"+workItemID, mission); err != nil {
+		t.Fatal(err)
+	}
+	attemptID := seedV6RecoveryAttempt(t, run, membershipID, workItemID)
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_work_item_attempt SET status='failed',failure_class='contract_rejected',diagnostics='content_layers.conclusion is required',completed_at=now() WHERE id=$1::uuid`, attemptID); err != nil {
+		t.Fatal(err)
+	}
+	var stateVersion int64
+	if err := run.pool.QueryRow(run.ctx, `SELECT state_version FROM research_session WHERE id=$1::uuid`, run.fixture.sessionID).Scan(&stateVersion); err != nil {
+		t.Fatal(err)
+	}
+	facts, err := run.store.LoadDirectorBriefFacts(run.ctx, StartV6DirectorCycleInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID, ExpectedStateVersion: stateVersion,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var failed map[string]any
+	for _, raw := range facts.WorkItems {
+		item := raw.(map[string]any)
+		if item["id"] == workItemID {
+			failed = item
+			break
+		}
+	}
+	if failed == nil {
+		t.Fatal("failed Work Item missing from Director Brief")
+	}
+	summary, ok := failed["summary"].(string)
+	if !ok {
+		t.Fatalf("summary=%T, want string", failed["summary"])
+	}
+	for _, want := range []string{mission, "尝试 3/3", "最近尝试状态 failed", "失败分类 contract_rejected", "失败诊断 content_layers.conclusion is required", "终止原因 attempt_budget_exhausted", "连续提交未通过合同校验。"} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("summary missing %q: %s", want, summary)
+		}
+	}
+	if _, err = (contextCompilerModule{}).CompileDirectorBrief(facts, time.Unix(1, 0)); err != nil {
+		t.Fatalf("compile Director Brief with failure recovery facts: %v", err)
+	}
+}
+
+func TestV6DirectorBriefIncludesAtomicResultFrontier(t *testing.T) {
+	run := newTransactionRecoveryRun(t, "V6 Director Brief atomic frontier")
+	membershipID, workItemID := seedV6RecoveryWorkItem(t, run, "running", time.Now().Add(time.Minute))
+	attemptID := seedV6RecoveryAttempt(t, run, membershipID, workItemID)
+	branchID, resultArtifactID, resultNodeID := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	contentHash := "sha256:" + strings.Repeat("a", 64)
+	clientRequestID := uuid.NewString()
+
+	tx, err := run.pool.Begin(run.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(run.ctx)
+	if _, err = tx.Exec(run.ctx, `INSERT INTO research_branch(id,workspace_id,session_id,client_key,objective,status,goal_version,state_version)
+		VALUES($1::uuid,$2::uuid,$3::uuid,$4,'Investigate the source landscape','active',1,1)`, branchID, run.fixture.workspaceID, run.fixture.sessionID, "brief:"+branchID); err != nil {
+		t.Fatal(err)
+	}
+	if err = registerV6BranchArtifactTx(run.ctx, tx, run.fixture.workspaceID, run.fixture.sessionID, branchID, time.Now().UTC(), 1, map[string]any{
+		"parent_branch_id": "", "objective": "Investigate the source landscape", "entry_conditions": json.RawMessage(`[]`),
+		"exit_conditions": json.RawMessage(`[]`), "budget_share": 0.0, "status": "active",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err = registerArtifactPassportTx(run.ctx, tx, registerArtifactPassportInput{
+		WorkspaceID: run.fixture.workspaceID, SessionID: run.fixture.sessionID, EntityID: resultArtifactID,
+		Kind: ArtifactKindResultArtifact, ProvenanceCompleteness: ArtifactProvenanceComplete,
+		SchemaVersion: "research-run-v6", ContentHash: contentHash,
+		AccessLevel: ArtifactAccessRaw, HashOrigin: ArtifactHashOriginProduction,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var artifactVersionID string
+	if err = tx.QueryRow(run.ctx, `SELECT id::text FROM research_artifact_version WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND artifact_id=$3::uuid AND version=1`, run.fixture.workspaceID, run.fixture.sessionID, resultArtifactID).Scan(&artifactVersionID); err != nil {
+		t.Fatal(err)
+	}
+	var manifestID, manifestHash string
+	if err = tx.QueryRow(run.ctx, `SELECT manifest_id::text,manifest_hash FROM research_work_item_attempt WHERE id=$1::uuid`, attemptID).Scan(&manifestID, &manifestHash); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(run.ctx, `UPDATE research_work_item_attempt SET result_kind='result_node',result_entity_id=$2::uuid,result_artifact_id=$3::uuid,result_hash=$4,client_request_id=$5::uuid,result_submitted_at=now() WHERE id=$1::uuid`, attemptID, resultNodeID, resultArtifactID, contentHash, clientRequestID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(run.ctx, `INSERT INTO research_result_artifact(id,workspace_id,session_id,attempt_id,work_item_attempt_id,orchestrator_version,result_schema_version,result,client_request_id,content_hash,accepted_at,acceptance_work_manifest_id,acceptance_work_manifest_hash,resolved_input_versions_v6,acceptance_lineage_v6)
+		VALUES($1::uuid,$2::uuid,$3::uuid,NULL,$4::uuid,$5,'6','{}'::jsonb,$6,$7,now(),$8::uuid,$9,'[]'::jsonb,'[]'::jsonb)`, resultArtifactID, run.fixture.workspaceID, run.fixture.sessionID, attemptID, OrchestratorVersionV6, clientRequestID, contentHash, manifestID, manifestHash); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(run.ctx, `INSERT INTO research_result_node(id,workspace_id,session_id,result_artifact_id,artifact_version_id,work_item_attempt_id,
+		catalog_summary,brief_summary,objective,conclusion,content,open_questions,conclusion_state,integration_state,content_hash)
+		VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6::uuid,'Source landscape','Ten candidate sources found','Find sources','Candidates found','Result content','["Which candidates have independent verification?","What changed after the latest release?"]'::jsonb,'accepted','unmatched',$7)`,
+		resultNodeID, run.fixture.workspaceID, run.fixture.sessionID, resultArtifactID, artifactVersionID, attemptID, contentHash); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(run.ctx, `INSERT INTO research_node_branch(workspace_id,session_id,node_artifact_version_id,branch_id)
+		VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid)`, run.fixture.workspaceID, run.fixture.sessionID, artifactVersionID, branchID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(run.ctx, `INSERT INTO research_branch_frontier(workspace_id,session_id,branch_id,node_artifact_version_id,tier,added_by_event_sequence)
+		VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,'S',1)`, run.fixture.workspaceID, run.fixture.sessionID, branchID, artifactVersionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(run.ctx, `INSERT INTO research_node_steward_assignment(workspace_id,session_id,node_artifact_version_id,agent_id,membership_id,generation,status,reason)
+		VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,1,'active','accepted_result_owner')`, run.fixture.workspaceID, run.fixture.sessionID, artifactVersionID, run.fixture.agentID, membershipID); err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.Commit(run.ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	frontier, hasMore, err := run.store.loadV6BranchFrontierBrief(run.ctx, run.fixture.workspaceID, run.fixture.sessionID, branchID)
+	if err != nil || hasMore || len(frontier) != 1 {
+		t.Fatalf("frontier=%+v hasMore=%v err=%v", frontier, hasMore, err)
+	}
+	item := frontier[0].(map[string]any)
+	node := item["node"].(map[string]any)
+	if node["kind"] != "result_s" || node["tier"] != "S" || node["id"] != resultArtifactID || node["version_id"] != artifactVersionID {
+		t.Fatalf("atomic frontier node=%+v", node)
+	}
+	if _, legacyRevision := node["revision"]; legacyRevision {
+		t.Fatalf("atomic frontier node contains non-contract revision: %+v", node)
+	}
+	briefSummary, ok := item["brief_summary"].(string)
+	if !ok {
+		t.Fatalf("atomic frontier brief_summary=%T, want string", item["brief_summary"])
+	}
+	for _, question := range []string{"Which candidates have independent verification?", "What changed after the latest release?"} {
+		if !strings.Contains(briefSummary, question) {
+			t.Fatalf("atomic frontier brief summary missing open question %q: %s", question, briefSummary)
+		}
+	}
+
+	_, err = (contextCompilerModule{}).CompileDirectorBrief(DirectorBriefFacts{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+		AssignmentID: uuid.NewString(), DirectorGeneration: 1, StateVersion: 1, ThroughSequence: 1,
+		Goal:          map[string]any{"goal_version": 1, "goal": "Research", "scope": map[string]any{}, "audience": "", "freshness": "", "language": "en", "source_policy": map[string]any{}},
+		DirectorState: "available", Team: []any{map[string]any{"agent_id": run.fixture.agentID, "membership_id": membershipID, "state": "idle", "mission_summary": "Direct"}},
+		Branches:          []any{map[string]any{"branch": map[string]any{"id": branchID, "state_version": 1}, "objective": "Investigate the source landscape", "scope": map[string]any{}, "status": "active", "frontier_nodes": frontier, "has_more": false}},
+		TerminalSummaries: []any{}, WorkItems: []any{}, Discussions: []any{}, Reports: []any{}, UnresolvedDisputes: []any{}, Steering: []any{},
+	}, time.Unix(1, 0))
+	if err != nil {
+		t.Fatalf("compile Director Brief with atomic frontier: %v", err)
+	}
+}
+
+func TestDirectorBriefFrontierSummaryBoundsOpenQuestions(t *testing.T) {
+	questions := make([]string, 128)
+	for index := range questions {
+		questions[index] = strings.Repeat("问题", 300)
+	}
+	raw, err := json.Marshal(questions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary := directorBriefFrontierSummary("基础摘要", raw)
+	if len([]rune(summary)) > 32768 {
+		t.Fatalf("summary length=%d, want <=32768", len([]rune(summary)))
+	}
+	if !strings.Contains(summary, "待回答问题") || !strings.Contains(summary, "问题") {
+		t.Fatalf("summary does not expose open questions: %s", summary)
 	}
 }
 
@@ -281,6 +488,240 @@ func TestV6EventTriggerWaitsForMaterialRuntimeEffects(t *testing.T) {
 	}
 }
 
+func TestV6EventTriggerRecoversBootstrapWithoutDirectorCycle(t *testing.T) {
+	run := newTransactionRecoveryRun(t, "Recover V6 bootstrap without Director cycle")
+	title := "Recover bootstrap " + uuid.NewString()
+	bootstrapped, _, err := run.store.BootstrapV6(run.ctx, V6BootstrapInput{
+		WorkspaceID:     run.fixture.workspaceID,
+		CreatedBy:       run.fixture.userID,
+		DirectorAgentID: run.fixture.agentID,
+		Goal:            title,
+		Title:           title,
+		DepthTier:       "standard",
+		Language:        "Simplified Chinese",
+		ClientRequestID: uuid.NewString(),
+	}, DefaultRunConfig("standard"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var cycles int
+	if err = run.pool.QueryRow(run.ctx, `SELECT count(*)::int FROM research_director_cycle WHERE session_id=$1::uuid`, bootstrapped.SessionID).Scan(&cycles); err != nil {
+		t.Fatal(err)
+	}
+	if cycles != 0 {
+		t.Fatalf("bootstrap unexpectedly created %d Director cycles", cycles)
+	}
+
+	processed, err := run.store.ProcessV6EventTriggers(run.ctx, 32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if processed != 1 {
+		t.Fatalf("processed %d bootstrap triggers, want 1", processed)
+	}
+	if err = run.pool.QueryRow(run.ctx, `SELECT count(*)::int FROM research_director_cycle WHERE session_id=$1::uuid`, bootstrapped.SessionID).Scan(&cycles); err != nil {
+		t.Fatal(err)
+	}
+	if cycles != 1 {
+		t.Fatalf("bootstrap recovery created %d Director cycles, want 1", cycles)
+	}
+	var triggerType string
+	if err = run.pool.QueryRow(run.ctx, `
+		SELECT event.event_type
+		FROM research_director_cycle cycle
+		JOIN research_run_event event
+		  ON event.session_id=cycle.session_id AND event.sequence=cycle.trigger_from_sequence
+		WHERE cycle.session_id=$1::uuid
+	`, bootstrapped.SessionID).Scan(&triggerType); err != nil {
+		t.Fatal(err)
+	}
+	if triggerType != "v6_run_bootstrapped" {
+		t.Fatalf("bootstrap recovery used trigger %q, want v6_run_bootstrapped", triggerType)
+	}
+}
+
+func TestV6EventTriggerRepairsAtomicResultMissingFromCoveredBrief(t *testing.T) {
+	run := newTransactionRecoveryRun(t, "Repair covered V6 atomic frontier")
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_session SET orchestrator_version='research-run-v6' WHERE id=$1::uuid`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.store.AssignV6Director(run.ctx, AssignV6DirectorInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+		AgentID: run.fixture.agentID, UserID: run.fixture.userID,
+		Reason: "Repair omitted atomic frontier", ClientRequestID: uuid.NewString(), ExpectedStateVersion: 0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var membershipID string
+	if err := run.pool.QueryRow(run.ctx, `SELECT id::text FROM research_team_membership WHERE session_id=$1::uuid AND agent_id=$2::uuid AND state='idle'`, run.fixture.sessionID, run.fixture.agentID).Scan(&membershipID); err != nil {
+		t.Fatal(err)
+	}
+	workItemID := uuid.NewString()
+	if _, err := run.pool.Exec(run.ctx, `INSERT INTO research_work_item(id,workspace_id,session_id,kind,status,assigned_agent_id,goal_version,idempotency_key,lease_token,lease_expires_at,payload_schema_id,state_version)
+		VALUES($1::uuid,$2::uuid,$3::uuid,'research','running',$4::uuid,1,$5,$6::uuid,now()+interval '1 minute','schema',1)`,
+		workItemID, run.fixture.workspaceID, run.fixture.sessionID, run.fixture.agentID, "frontier-repair:"+workItemID, uuid.NewString()); err != nil {
+		t.Fatal(err)
+	}
+	attemptID := seedV6RecoveryAttempt(t, run, membershipID, workItemID)
+	resultArtifactID, resultNodeID := uuid.NewString(), uuid.NewString()
+	contentHash := "sha256:" + strings.Repeat("b", 64)
+	clientRequestID := uuid.NewString()
+	tx, err := run.pool.Begin(run.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(run.ctx)
+	if err = registerArtifactPassportTx(run.ctx, tx, registerArtifactPassportInput{
+		WorkspaceID: run.fixture.workspaceID, SessionID: run.fixture.sessionID, EntityID: resultArtifactID,
+		Kind: ArtifactKindResultArtifact, ProvenanceCompleteness: ArtifactProvenanceComplete,
+		SchemaVersion: "research-run-v6", ContentHash: contentHash,
+		AccessLevel: ArtifactAccessRaw, HashOrigin: ArtifactHashOriginProduction,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var artifactVersionID string
+	if err = tx.QueryRow(run.ctx, `SELECT id::text FROM research_artifact_version WHERE artifact_id=$1::uuid AND version=1`, resultArtifactID).Scan(&artifactVersionID); err != nil {
+		t.Fatal(err)
+	}
+	var manifestID, manifestHash string
+	if err = tx.QueryRow(run.ctx, `SELECT manifest_id::text,manifest_hash FROM research_work_item_attempt WHERE id=$1::uuid`, attemptID).Scan(&manifestID, &manifestHash); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(run.ctx, `UPDATE research_work_item_attempt SET result_kind='result_node',result_entity_id=$2::uuid,result_artifact_id=$3::uuid,result_hash=$4,client_request_id=$5::uuid,result_submitted_at=now() WHERE id=$1::uuid`, attemptID, resultNodeID, resultArtifactID, contentHash, clientRequestID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(run.ctx, `INSERT INTO research_result_artifact(id,workspace_id,session_id,attempt_id,work_item_attempt_id,orchestrator_version,result_schema_version,result,client_request_id,content_hash,accepted_at,acceptance_work_manifest_id,acceptance_work_manifest_hash,resolved_input_versions_v6,acceptance_lineage_v6)
+		VALUES($1::uuid,$2::uuid,$3::uuid,NULL,$4::uuid,$5,'6','{}'::jsonb,$6,$7,now(),$8::uuid,$9,'[]'::jsonb,'[]'::jsonb)`, resultArtifactID, run.fixture.workspaceID, run.fixture.sessionID, attemptID, OrchestratorVersionV6, clientRequestID, contentHash, manifestID, manifestHash); err != nil {
+		t.Fatal(err)
+	}
+	resultEvent, err := appendEvent(run.ctx, tx, run.fixture.workspaceID, run.fixture.sessionID,
+		"v6_result_node_accepted", "covered-without-frontier:"+uuid.NewString(), "agent", run.fixture.agentID,
+		map[string]any{"artifact_version_id": artifactVersionID, "result_artifact_id": resultArtifactID, "result_node_id": resultNodeID, "work_item_id": workItemID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.Commit(run.ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	processed, err := run.store.ProcessV6EventTriggers(run.ctx, 32)
+	if err != nil || processed != 1 {
+		t.Fatalf("initial event trigger processed=%d err=%v", processed, err)
+	}
+	if _, err = run.pool.Exec(run.ctx, `UPDATE research_work_item SET status='succeeded',completed_at=now() WHERE session_id=$1::uuid AND kind='director'`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = run.pool.Exec(run.ctx, `UPDATE research_director_cycle SET status='applied',completed_at=now() WHERE session_id=$1::uuid`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+
+	branchID := uuid.NewString()
+	materializeTx, err := run.pool.Begin(run.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer materializeTx.Rollback(run.ctx)
+	if _, err = materializeTx.Exec(run.ctx, `INSERT INTO research_branch(id,workspace_id,session_id,client_key,objective,status,goal_version,state_version)
+		VALUES($1::uuid,$2::uuid,$3::uuid,$4,'Investigate the source landscape','active',1,1)`, branchID, run.fixture.workspaceID, run.fixture.sessionID, "repair:"+branchID); err != nil {
+		t.Fatal(err)
+	}
+	if err = registerV6BranchArtifactTx(run.ctx, materializeTx, run.fixture.workspaceID, run.fixture.sessionID, branchID, time.Now().UTC(), 1, map[string]any{
+		"parent_branch_id": "", "objective": "Investigate the source landscape", "entry_conditions": json.RawMessage(`[]`),
+		"exit_conditions": json.RawMessage(`[]`), "budget_share": 0.0, "status": "active",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = materializeTx.Exec(run.ctx, `INSERT INTO research_result_node(id,workspace_id,session_id,result_artifact_id,artifact_version_id,work_item_attempt_id,
+		catalog_summary,brief_summary,objective,conclusion,content,conclusion_state,integration_state,open_questions,content_hash)
+		VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6::uuid,'Source landscape','Candidates found','Find sources','Candidates found','Result content','accepted','unmatched',jsonb_build_array('Which unresolved market constraint matters?'),$7)`, resultNodeID, run.fixture.workspaceID, run.fixture.sessionID, resultArtifactID, artifactVersionID, attemptID, contentHash); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = materializeTx.Exec(run.ctx, `INSERT INTO research_node_branch(workspace_id,session_id,node_artifact_version_id,branch_id) VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid)`, run.fixture.workspaceID, run.fixture.sessionID, artifactVersionID, branchID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = materializeTx.Exec(run.ctx, `INSERT INTO research_branch_frontier(workspace_id,session_id,branch_id,node_artifact_version_id,tier,added_by_event_sequence) VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,'S',$5)`, run.fixture.workspaceID, run.fixture.sessionID, branchID, artifactVersionID, resultEvent.Sequence); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = materializeTx.Exec(run.ctx, `INSERT INTO research_node_steward_assignment(workspace_id,session_id,node_artifact_version_id,agent_id,membership_id,generation,status,reason) VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,1,'active','accepted_result_owner')`, run.fixture.workspaceID, run.fixture.sessionID, artifactVersionID, run.fixture.agentID, membershipID); err != nil {
+		t.Fatal(err)
+	}
+	if err = materializeTx.Commit(run.ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	processed, err = run.store.ProcessV6EventTriggers(run.ctx, 32)
+	if err != nil || processed != 1 {
+		t.Fatalf("frontier repair trigger processed=%d err=%v", processed, err)
+	}
+	var cycles int
+	var latestBrief string
+	if err = run.pool.QueryRow(run.ctx, `SELECT count(*)::int FROM research_director_cycle WHERE session_id=$1::uuid`, run.fixture.sessionID).Scan(&cycles); err != nil {
+		t.Fatal(err)
+	}
+	if err = run.pool.QueryRow(run.ctx, `SELECT convert_from(p.content_bytes,'UTF8') FROM research_director_brief_page p JOIN research_director_cycle c ON c.id=p.director_cycle_id WHERE p.session_id=$1::uuid ORDER BY c.created_at DESC,p.ordinal LIMIT 1`, run.fixture.sessionID).Scan(&latestBrief); err != nil {
+		t.Fatal(err)
+	}
+	if cycles != 2 || !strings.Contains(latestBrief, artifactVersionID) || !strings.Contains(latestBrief, `"kind":"result_s"`) || !strings.Contains(latestBrief, "Which unresolved market constraint matters?") {
+		t.Fatalf("repair cycles=%d brief contains node=%v kind=%v question=%v", cycles, strings.Contains(latestBrief, artifactVersionID), strings.Contains(latestBrief, `"kind":"result_s"`), strings.Contains(latestBrief, "Which unresolved market constraint matters?"))
+	}
+
+	// A brief compiled before open-question propagation could contain the Result
+	// frontier node while omitting its unresolved questions. Re-emit the material
+	// event, simulate that historical page shape, and verify reconciliation creates
+	// one fresh cycle whose brief restores the questions.
+	if _, err = run.pool.Exec(run.ctx, `UPDATE research_work_item SET status='succeeded',completed_at=now() WHERE session_id=$1::uuid AND kind='director'`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = run.pool.Exec(run.ctx, `UPDATE research_director_cycle SET status='applied',completed_at=now() WHERE session_id=$1::uuid`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	duplicateTx, err := run.pool.Begin(run.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	duplicateEvent, err := appendEvent(run.ctx, duplicateTx, run.fixture.workspaceID, run.fixture.sessionID,
+		"v6_result_node_accepted", "covered-without-questions:"+uuid.NewString(), "agent", run.fixture.agentID,
+		map[string]any{"artifact_version_id": artifactVersionID, "result_artifact_id": resultArtifactID, "result_node_id": resultNodeID, "work_item_id": workItemID})
+	if err != nil {
+		_ = duplicateTx.Rollback(run.ctx)
+		t.Fatal(err)
+	}
+	if err = duplicateTx.Commit(run.ctx); err != nil {
+		t.Fatal(err)
+	}
+	processed, err = run.store.ProcessV6EventTriggers(run.ctx, 32)
+	if err != nil || processed != 1 {
+		t.Fatalf("historical cycle setup processed=%d err=%v", processed, err)
+	}
+	if _, err = run.pool.Exec(run.ctx, `UPDATE research_work_item SET status='succeeded',completed_at=now() WHERE session_id=$1::uuid AND kind='director'`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = run.pool.Exec(run.ctx, `UPDATE research_director_cycle SET status='applied',completed_at=now() WHERE session_id=$1::uuid`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	var historicalCycleID string
+	if err = run.pool.QueryRow(run.ctx, `SELECT id::text FROM research_director_cycle WHERE session_id=$1::uuid AND trigger_from_sequence=$2 ORDER BY created_at DESC LIMIT 1`, run.fixture.sessionID, duplicateEvent.Sequence).Scan(&historicalCycleID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = run.pool.Exec(run.ctx, `UPDATE research_director_brief_page SET content_bytes=convert_to(replace(convert_from(content_bytes,'UTF8'),$2,''),'UTF8') WHERE director_cycle_id=$1::uuid`, historicalCycleID, directorBriefOpenQuestionsMarker); err != nil {
+		t.Fatal(err)
+	}
+	processed, err = run.store.ProcessV6EventTriggers(run.ctx, 32)
+	if err != nil || processed != 1 {
+		t.Fatalf("open-question repair trigger processed=%d err=%v", processed, err)
+	}
+	if err = run.pool.QueryRow(run.ctx, `SELECT count(*)::int FROM research_director_cycle WHERE session_id=$1::uuid`, run.fixture.sessionID).Scan(&cycles); err != nil {
+		t.Fatal(err)
+	}
+	if err = run.pool.QueryRow(run.ctx, `SELECT convert_from(p.content_bytes,'UTF8') FROM research_director_brief_page p JOIN research_director_cycle c ON c.id=p.director_cycle_id WHERE p.session_id=$1::uuid ORDER BY c.created_at DESC,p.ordinal LIMIT 1`, run.fixture.sessionID).Scan(&latestBrief); err != nil {
+		t.Fatal(err)
+	}
+	if cycles != 4 || !strings.Contains(latestBrief, directorBriefOpenQuestionsMarker) || !strings.Contains(latestBrief, "Which unresolved market constraint matters?") {
+		t.Fatalf("open-question repair cycles=%d marker=%v question=%v", cycles, strings.Contains(latestBrief, directorBriefOpenQuestionsMarker), strings.Contains(latestBrief, "Which unresolved market constraint matters?"))
+	}
+}
+
 func TestRejectedV6DirectorProposalTerminatesAndEmitsTrigger(t *testing.T) {
 	run := newTransactionRecoveryRun(t, "Reject stale V6 Director proposal")
 	t.Cleanup(func() {
@@ -339,6 +780,12 @@ func TestV6DirectorCreatedWorkStartsAtVersionOne(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := run.store.AddV6TeamMember(run.ctx, AddV6TeamMemberInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+		AgentID: run.fixture.reporterID, MissionPrompt: "Investigate the assigned question",
+	}); err != nil {
+		t.Fatal(err)
+	}
 	var stateVersion, throughSequence int64
 	if err := run.pool.QueryRow(run.ctx, `SELECT state_version,
 		COALESCE((SELECT max(sequence) FROM research_run_event WHERE session_id=$1::uuid),0)
@@ -357,7 +804,7 @@ func TestV6DirectorCreatedWorkStartsAtVersionOne(t *testing.T) {
 		t.Fatal(err)
 	}
 	actionPayload, err := json.Marshal(map[string]any{
-		"kind": "research", "assignee_agent_id": run.fixture.agentID, "mission": "Investigate the assigned question",
+		"kind": "deep_read", "assignee_agent_id": run.fixture.reporterID, "mission": "Investigate the assigned question",
 		"expected_result_schema_id": "atomic_result_submission", "payload_schema_id": "research.test.v1",
 		"payload":  map[string]any{"task_specific_schema": map[string]any{"type": "object"}},
 		"priority": 0.5, "max_attempts": 1, "branch_ids": []string{},
@@ -375,11 +822,194 @@ func TestV6DirectorCreatedWorkStartsAtVersionOne(t *testing.T) {
 		t.Fatal(err)
 	}
 	var workStateVersion int64
-	if err = run.pool.QueryRow(run.ctx, `SELECT state_version FROM research_work_item
-		WHERE session_id=$1::uuid AND idempotency_key=$2`, run.fixture.sessionID, idempotencyKey).Scan(&workStateVersion); err != nil {
+	var persistedKind, taskKind string
+	if err = run.pool.QueryRow(run.ctx, `SELECT state_version,kind,payload->>'task_kind' FROM research_work_item
+		WHERE session_id=$1::uuid AND idempotency_key=$2`, run.fixture.sessionID, idempotencyKey).Scan(&workStateVersion, &persistedKind, &taskKind); err != nil {
 		t.Fatal(err)
 	}
 	if workStateVersion != 1 {
 		t.Fatalf("created Work state_version=%d want 1", workStateVersion)
+	}
+	if persistedKind != "research" || taskKind != "deep_read" {
+		t.Fatalf("created Work kind=%q task_kind=%q want research/deep_read", persistedKind, taskKind)
+	}
+}
+
+func TestV6DirectorRejectsWorkWhoseBranchIsOutsideTheRun(t *testing.T) {
+	run := newTransactionRecoveryRun(t, "Reject invalid V6 Work branch scope")
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_session SET orchestrator_version='research-run-v6' WHERE id=$1::uuid`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.store.AssignV6Director(run.ctx, AssignV6DirectorInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+		AgentID: run.fixture.agentID, UserID: run.fixture.userID,
+		Reason: "Validate Work branch scope", ClientRequestID: uuid.NewString(), ExpectedStateVersion: 0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.store.AddV6TeamMember(run.ctx, AddV6TeamMemberInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+		AgentID: run.fixture.reporterID, MissionPrompt: "Investigate the assigned question",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var stateVersion int64
+	if err := run.pool.QueryRow(run.ctx, `SELECT state_version FROM research_session WHERE id=$1::uuid`, run.fixture.sessionID).Scan(&stateVersion); err != nil {
+		t.Fatal(err)
+	}
+	idempotencyKey := "invalid-branch-work:" + uuid.NewString()
+	payload, err := json.Marshal(map[string]any{
+		"kind": "research", "assignee_agent_id": run.fixture.reporterID,
+		"mission": "Investigate the assigned question", "expected_result_schema_id": "atomic_result_submission",
+		"payload_schema_id": "research.test.v1", "payload": map[string]any{"task_specific_schema": map[string]any{"type": "object"}},
+		"priority": 0.5, "max_attempts": 1, "branch_ids": []string{uuid.NewString()},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = run.store.executeV6CreateWorkAction(run.ctx, v6DirectorProposal{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+	}, uuid.NewString(), v6DirectorAction{
+		ActionID: uuid.NewString(), Kind: "create_work_item", IdempotencyKey: idempotencyKey,
+		PayloadSchema: "work.create.v1", Payload: payload,
+	}, stateVersion)
+	if !errors.Is(err, ErrInvalidContract) || !strings.Contains(err.Error(), "branch_ids") {
+		t.Fatalf("invalid branch scope error=%v", err)
+	}
+	var created int
+	if err = run.pool.QueryRow(run.ctx, `SELECT count(*)::int FROM research_work_item
+		WHERE session_id=$1::uuid AND idempotency_key=$2`, run.fixture.sessionID, idempotencyKey).Scan(&created); err != nil {
+		t.Fatal(err)
+	}
+	if created != 0 {
+		t.Fatalf("created invalid branch-scoped Work=%d want 0", created)
+	}
+}
+
+func TestV6DirectorRejectsUnusableAtomicWorkSchemaWithActionableDiagnostic(t *testing.T) {
+	run := newTransactionRecoveryRun(t, "Reject unusable V6 atomic Work schema")
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_session SET orchestrator_version='research-run-v6' WHERE id=$1::uuid`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.store.AssignV6Director(run.ctx, AssignV6DirectorInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+		AgentID: run.fixture.agentID, UserID: run.fixture.userID,
+		Reason: "Coordinate atomic research", ClientRequestID: uuid.NewString(), ExpectedStateVersion: 0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.store.AddV6TeamMember(run.ctx, AddV6TeamMemberInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+		AgentID: run.fixture.reporterID, MissionPrompt: "Research Manus technology",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var stateVersion int64
+	if err := run.pool.QueryRow(run.ctx, `SELECT state_version FROM research_session WHERE id=$1::uuid`, run.fixture.sessionID).Scan(&stateVersion); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(map[string]any{
+		"kind": "research", "assignee_agent_id": run.fixture.reporterID,
+		"mission": "Research Manus technology", "expected_result_schema_id": "atomic_result_submission",
+		"payload_schema_id": "no_op.v1", "payload": map[string]any{"reason": "technology"},
+		"priority": 0.9, "max_attempts": 2, "branch_ids": []string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = run.store.executeV6CreateWorkAction(run.ctx, v6DirectorProposal{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+	}, uuid.NewString(), v6DirectorAction{
+		ActionID: uuid.NewString(), Kind: "create_work_item", IdempotencyKey: "invalid-atomic:" + uuid.NewString(),
+		PayloadSchema: "collaboration.create.v1", Payload: payload,
+	}, stateVersion)
+	if !errors.Is(err, ErrInvalidContract) || !strings.Contains(err.Error(), "no_op.v1") || !strings.Contains(err.Error(), "payload.task_specific_schema") {
+		t.Fatalf("invalid atomic Work error=%v, want actionable schema diagnostic", err)
+	}
+}
+
+func TestV6DirectorCannotNoOpAfterRejectedAssignmentWithIdleWorkers(t *testing.T) {
+	run := newTransactionRecoveryRun(t, "Recover rejected V6 Agent assignment")
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_session SET orchestrator_version='research-run-v6' WHERE id=$1::uuid`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.store.AssignV6Director(run.ctx, AssignV6DirectorInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+		AgentID: run.fixture.agentID, UserID: run.fixture.userID,
+		Reason: "Recover rejected team assignment", ClientRequestID: uuid.NewString(), ExpectedStateVersion: 0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.store.AddV6TeamMember(run.ctx, AddV6TeamMemberInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+		AgentID: run.fixture.reporterID, MissionPrompt: "Research Manus technology",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.pool.Exec(run.ctx, `INSERT INTO research_work_item(
+		id,workspace_id,session_id,kind,status,assigned_agent_id,goal_version,idempotency_key,
+		payload_schema_id,expected_result_schema_id,payload,state_version,terminal_reason_code,terminal_reason_detail
+	) VALUES($1::uuid,$2::uuid,$3::uuid,'director','failed',$4::uuid,1,$5,
+		'director.action.registry.v1','director_action_proposal','{}'::jsonb,1,'contract_rejected','atomic Work schema was invalid')`,
+		uuid.NewString(), run.fixture.workspaceID, run.fixture.sessionID, run.fixture.agentID,
+		"rejected-assignment:"+uuid.NewString()); err != nil {
+		t.Fatal(err)
+	}
+	var stateVersion int64
+	if err := run.pool.QueryRow(run.ctx, `SELECT state_version FROM research_session WHERE id=$1::uuid`, run.fixture.sessionID).Scan(&stateVersion); err != nil {
+		t.Fatal(err)
+	}
+	action := v6DirectorAction{
+		ActionID: uuid.NewString(), Kind: "no_op", IdempotencyKey: "invalid-no-op:" + uuid.NewString(),
+		PayloadSchema: "no_op.v1", Reason: "Wait for the next brief",
+	}
+	err := run.store.recordV6DirectorNoOp(run.ctx, v6DirectorProposal{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+	}, uuid.NewString(), action, stateVersion, action.Reason)
+	if !errors.Is(err, ErrInvalidContract) || !strings.Contains(err.Error(), "assign Work to an idle run-scoped Agent") {
+		t.Fatalf("post-rejection no-op error=%v, want assignment recovery requirement", err)
+	}
+}
+
+func TestV6DirectorCannotNoOpWithFailedWorkerWork(t *testing.T) {
+	run := newTransactionRecoveryRun(t, "Recover failed V6 Agent Work")
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_session SET orchestrator_version='research-run-v6' WHERE id=$1::uuid`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.store.AssignV6Director(run.ctx, AssignV6DirectorInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+		AgentID: run.fixture.agentID, UserID: run.fixture.userID,
+		Reason: "Recover failed Agent Work", ClientRequestID: uuid.NewString(), ExpectedStateVersion: 0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.store.AddV6TeamMember(run.ctx, AddV6TeamMemberInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+		AgentID: run.fixture.reporterID, MissionPrompt: "Research Manus technology",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.pool.Exec(run.ctx, `INSERT INTO research_work_item(
+		id,workspace_id,session_id,kind,status,assigned_agent_id,goal_version,idempotency_key,
+		payload_schema_id,expected_result_schema_id,payload,state_version,terminal_reason_code
+	) VALUES($1::uuid,$2::uuid,$3::uuid,'research','failed',$4::uuid,1,$5,
+		'research.manus.v1','atomic_result_submission','{}'::jsonb,1,'attempt_budget_exhausted')`,
+		uuid.NewString(), run.fixture.workspaceID, run.fixture.sessionID, run.fixture.reporterID,
+		"failed-worker:"+uuid.NewString()); err != nil {
+		t.Fatal(err)
+	}
+	var stateVersion int64
+	if err := run.pool.QueryRow(run.ctx, `SELECT state_version FROM research_session WHERE id=$1::uuid`, run.fixture.sessionID).Scan(&stateVersion); err != nil {
+		t.Fatal(err)
+	}
+	action := v6DirectorAction{
+		ActionID: uuid.NewString(), Kind: "no_op", IdempotencyKey: "failed-worker-no-op:" + uuid.NewString(),
+		PayloadSchema: "no_op.v1", Reason: "Wait for the next brief",
+	}
+	err := run.store.recordV6DirectorNoOp(run.ctx, v6DirectorProposal{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+	}, uuid.NewString(), action, stateVersion, action.Reason)
+	if !errors.Is(err, ErrInvalidContract) || !strings.Contains(err.Error(), "retry or reassign failed Work") {
+		t.Fatalf("failed-worker no-op error=%v, want recovery requirement", err)
 	}
 }

@@ -13,14 +13,18 @@ func TestAgentObservationValidationMatrix(t *testing.T) {
 	stage := AgentRuntimeStageObservationData{RuntimeID: "runtime-1"}
 	tool := AgentRuntimeStageObservationData{RuntimeID: "runtime-1", ToolName: "read_file", ToolCallID: "call-1"}
 	valid := []AgentObservation{
-		{AgentID: "agent-1", LaunchID: "launch-1", Kind: AgentObservationRuntimeReady, Data: runtime, At: at},
-		{AgentID: "agent-1", LaunchID: "launch-1", Kind: AgentObservationRuntimeWorking, Data: stage, At: at},
-		{AgentID: "agent-1", LaunchID: "launch-1", Kind: AgentObservationRuntimeThinking, Data: stage, At: at},
-		{AgentID: "agent-1", LaunchID: "launch-1", Kind: AgentObservationRuntimeTool, Data: tool, At: at},
-		{AgentID: "agent-1", LaunchID: "launch-1", Kind: AgentObservationMessageBodyAccepted, Data: AgentMessageAcceptanceObservationData{RuntimeID: "runtime-1"}, At: at},
-		{AgentID: "agent-1", LaunchID: "launch-1", Kind: AgentObservationFreshnessHeld, Data: AgentFreshnessHoldObservationData{RuntimeID: "runtime-1", Target: "channel:one", NewMessageCount: 2, ReasonCode: "local_pending"}, At: at},
-		{AgentID: "agent-1", LaunchID: "launch-1", Kind: AgentObservationDraftSent, Data: AgentDraftSentObservationData{RuntimeID: "runtime-1", Target: "#one"}, At: at},
-		{AgentID: "agent-1", LaunchID: "launch-1", Kind: AgentObservationError, Data: AgentErrorObservationData{RuntimeID: "runtime-1", ProcessInstanceID: "process-1", ReasonCode: "provider_failed", Message: "provider unavailable"}, At: at},
+		{AgentID: "agent-1", Kind: AgentObservationRuntimeReady, Data: runtime, At: at},
+		{AgentID: "agent-1", Kind: AgentObservationRuntimeWorking, Data: stage, At: at},
+		{AgentID: "agent-1", Kind: AgentObservationRuntimeThinking, Data: stage, At: at},
+		{AgentID: "agent-1", Kind: AgentObservationRuntimeTool, Data: tool, At: at},
+		{AgentID: "agent-1", Kind: AgentObservationRuntimeDiagnostic, Data: AgentRuntimeDiagnosticObservationData{RuntimeID: "runtime-1", Name: "warning", Kind: "provider", Detail: "details"}, At: at},
+		{AgentID: "agent-1", Kind: AgentObservationMessageBodyAccepted, Data: AgentMessageAcceptanceObservationData{RuntimeID: "runtime-1"}, At: at},
+		{AgentID: "agent-1", Kind: AgentObservationFreshnessHeld, Data: AgentFreshnessHoldObservationData{RuntimeID: "runtime-1", Target: "channel:one", NewMessageCount: 2, ReasonCode: "local_pending"}, At: at},
+		{AgentID: "agent-1", Kind: AgentObservationDraftSent, Data: AgentDraftSentObservationData{RuntimeID: "runtime-1", Target: "#one"}, At: at},
+		{AgentID: "agent-1", Kind: AgentObservationError, Data: AgentErrorObservationData{RuntimeID: "runtime-1", ProcessInstanceID: "process-1", ReasonCode: "provider_failed", Message: "provider unavailable"}, At: at},
+	}
+	for index := range valid {
+		valid[index].AgentInstanceID = "instance-1"
 	}
 	for _, observation := range valid {
 		if err := observation.Validate(); err != nil {
@@ -31,12 +35,12 @@ func TestAgentObservationValidationMatrix(t *testing.T) {
 	invalid := []AgentObservation{
 		{},
 		{AgentID: "agent-1", Kind: AgentObservationRuntimeThinking, Data: stage, At: at},
-		{AgentID: "agent-1", LaunchID: "launch-1", Kind: AgentObservationRuntimeReady, Data: stage, At: at},
-		{AgentID: "agent-1", LaunchID: "launch-1", Kind: AgentObservationRuntimeReady, Data: AgentRuntimeObservationData{RuntimeID: "runtime-1", RuntimeGeneration: 1}, At: at},
-		{AgentID: "agent-1", LaunchID: "launch-1", Kind: AgentObservationRuntimeTool, Data: runtime, At: at},
-		{AgentID: "agent-1", LaunchID: "launch-1", Kind: AgentObservationMessageBodyAccepted, Data: AgentMessageAcceptanceObservationData{}, At: at},
-		{AgentID: "agent-1", LaunchID: "launch-1", Kind: AgentObservationFreshnessHeld, Data: AgentFreshnessHoldObservationData{RuntimeID: "runtime-1", Target: "channel:one", ReasonCode: ""}, At: at},
-		{AgentID: "agent-1", LaunchID: "launch-1", Kind: AgentObservationDraftSent, Data: AgentDraftSentObservationData{RuntimeID: "runtime-1"}, At: at},
+		{AgentID: "agent-1", Kind: AgentObservationRuntimeReady, Data: stage, At: at},
+		{AgentID: "agent-1", Kind: AgentObservationRuntimeReady, Data: AgentRuntimeObservationData{RuntimeID: "runtime-1", RuntimeGeneration: 1}, At: at},
+		{AgentID: "agent-1", Kind: AgentObservationRuntimeTool, Data: runtime, At: at},
+		{AgentID: "agent-1", Kind: AgentObservationMessageBodyAccepted, Data: AgentMessageAcceptanceObservationData{}, At: at},
+		{AgentID: "agent-1", Kind: AgentObservationFreshnessHeld, Data: AgentFreshnessHoldObservationData{RuntimeID: "runtime-1", Target: "channel:one", ReasonCode: ""}, At: at},
+		{AgentID: "agent-1", Kind: AgentObservationDraftSent, Data: AgentDraftSentObservationData{RuntimeID: "runtime-1"}, At: at},
 	}
 	for index, observation := range invalid {
 		if err := observation.Validate(); err == nil {
@@ -50,6 +54,7 @@ func TestAgentObservationTypesExcludePresentationAndSensitiveFields(t *testing.T
 		reflect.TypeOf(AgentObservation{}),
 		reflect.TypeOf(AgentRuntimeObservationData{}),
 		reflect.TypeOf(AgentRuntimeStageObservationData{}),
+		reflect.TypeOf(AgentRuntimeDiagnosticObservationData{}),
 		reflect.TypeOf(AgentMessageAcceptanceObservationData{}),
 		reflect.TypeOf(AgentFreshnessHoldObservationData{}),
 		reflect.TypeOf(AgentDraftSentObservationData{}),

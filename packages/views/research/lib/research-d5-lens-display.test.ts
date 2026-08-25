@@ -75,7 +75,8 @@ describe("buildD5LensDisplayHints", () => {
 
 describe("isResearchD5Lens", () => {
   it("accepts known lens ids", () => {
-    expect(isResearchD5Lens("confidence")).toBe(true);
+    expect(isResearchD5Lens("agent")).toBe(true);
+    expect(isResearchD5Lens("confidence")).toBe(false);
     expect(isResearchD5Lens("nope")).toBe(false);
   });
 });

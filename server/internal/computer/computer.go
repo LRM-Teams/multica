@@ -130,11 +130,14 @@ const (
 	// ResidentCommand is the public cobra command that owns the Computer.
 	ResidentCommand = "computer"
 	// ResidentServiceArg is the hidden argv that marks a spawned resident.
-	// Callers never type this; Lifecycle and the supervisor assemble it.
+	// Callers never type this; Lifecycle and the process supervisor assemble it.
 	ResidentServiceArg = "__service"
 	// ResidentUpgradeArg is the hidden argv for the detached Machine Upgrade
 	// coordinator. The incumbent Computer must not own successor spawn.
 	ResidentUpgradeArg = "__upgrade"
+	// ResidentRestartArg is the hidden argv for a same-binary restart
+	// coordinator. Unlike Machine Upgrade, it does not use an upgrade journal.
+	ResidentRestartArg = "__restart"
 )
 
 // ResidentServicePrefix is the Computer-owned process contract. Workspace
@@ -180,9 +183,9 @@ func startResidentProcess(exe string, args []string, log *os.File) (procHandle, 
 		child.Stderr = log
 		child.SysProcAttr = SysProcAttr(breakaway)
 		// Raft 1.0.17 spawnDetachedService uses detached+unref and never binds
-		// the resident to parent death. Setsid already makes this child a new
+		// the Computer to parent death. Setsid already makes this process a new
 		// session; Pdeathsig would SIGTERM it when `multica computer start`
-		// exits. Binding children are also unlinked from parent death.
+		// exits. WorkspaceDaemons are also unlinked from parent death.
 		if err := child.Start(); err != nil {
 			return nil, err
 		}
@@ -300,14 +303,14 @@ func (l *Lifecycle) StartBackground(options StartOptions) (StartResult, error) {
 type StopResult struct {
 	Running        bool // a resident was live and was asked to stop
 	Pid            int
-	Stopped        bool // the port was fully released and the PID file cleared
+	Stopped        bool // the resident and its WorkspaceDaemons stopped and the PID file cleared
 	GracefulFailed bool // the /shutdown request failed and a forced kill was used
 	Err            error
 }
 
 // Stop gracefully stops the resident process via its /shutdown endpoint,
-// falling back to a forced kill, then waits for the port to be released and
-// clears the PID file.
+// falling back to a forced kill and orphaned-WorkspaceDaemon cleanup, then
+// waits for the port to be released and clears the PID file.
 func (l *Lifecycle) Stop() StopResult {
 	return l.stop("stop")
 }
@@ -351,10 +354,31 @@ func (l *Lifecycle) stop(action string) StopResult {
 		Source: source, Action: action, RequestPID: os.Getpid(),
 	}); err != nil {
 		res.GracefulFailed = true
-		fmt.Fprintf(v.stderr, "Graceful shutdown request failed: %v — falling back to forced kill.\n", err)
 		if kerr := process.Kill(); kerr != nil {
-			res.Err = fmt.Errorf("kill daemon (pid %d): %w", int(pid), kerr)
+			res.Err = fmt.Errorf("graceful shutdown failed (%v); kill daemon (pid %d): %w", err, int(pid), kerr)
 			return res
+		}
+		// WorkspaceDaemon children are detached, so killing the resident does
+		// not kill them. Wait until the owner is confirmed dead (the persisted
+		// owner-PID fence otherwise correctly refuses takeover), then reclaim
+		// every child it left behind.
+		if !waitForProcessExit(res.Pid, 20*time.Millisecond, 2*time.Second, v.sleep) {
+			res.Err = fmt.Errorf("could not confirm daemon (pid %d) stopped after forced kill", res.Pid)
+			return res
+		}
+		runners, reclaimErr := findReclaimableRunners(RootDir(""), nil)
+		if reclaimErr != nil {
+			res.Err = fmt.Errorf("find orphaned WorkspaceDaemons: %w", reclaimErr)
+			return res
+		}
+		for _, runner := range runners {
+			if reclaimErr := reclaimRunnerProcess(runner, runnerReclaimOptions{
+				StateRoot: RootDir(""), PollInterval: 20 * time.Millisecond,
+				Grace: 2 * time.Second, Sleep: v.sleep,
+			}); reclaimErr != nil {
+				res.Err = fmt.Errorf("stop orphaned WorkspaceDaemon (pid %d): %w", runner.PID, reclaimErr)
+				return res
+			}
 		}
 	}
 

@@ -37,4 +37,23 @@ describe("summarizeTypedGraph", () => {
     );
     expect(summary.newFrontiers).toBe(1);
   });
+
+  it("counts canonical branches as directions instead of all V6 nodes", () => {
+    const summary = summarizeTypedGraph(
+      [
+        testTypedNode({ id: "goal", level: "xxl", node_type: "goal", status: "active" }),
+        testTypedNode({ id: "work", level: "s", node_type: "work_s", status: "failed" }),
+        testTypedNode({ id: "result", level: "s", node_type: "result_s", status: "accepted" }),
+      ],
+      {
+        totalNodeCount: 21,
+        clusters: [testTypedCluster({ id: "branch-1", cluster_type: "branch" })],
+      },
+    );
+
+    expect(summary.loadedDirections).toBe(1);
+    expect(summary.totalDirections).toBeNull();
+    expect(summary.stableResults).toBe(0);
+    expect(summary.stoppedDirections).toBe(1);
+  });
 });

@@ -240,6 +240,8 @@ export interface ChannelMentionCandidate {
   id: string;
   handle: string;
   label: string;
+  /** Self-description (user) or configured description (agent); "" when unset. */
+  description: string;
   avatar_url?: string | null;
 }
 
@@ -350,6 +352,8 @@ export interface ChannelMessage {
    * may carry an expiring signature, while this metadata is stable.
    */
   attachments?: import("./attachment").Attachment[];
+  /** Number of immutable Graph Memory citation snapshots available lazily. */
+  graph_memory_citation_count?: number;
   /**
    * Structured @ targets who are not channel members yet (group send only).
    * Present on the send ACK when BE #1984 is deployed; omit when empty.

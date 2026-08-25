@@ -2,12 +2,10 @@
 
 import {
   useCallback,
-  useMemo,
   type ComponentProps,
   type KeyboardEvent,
 } from "react";
 import { ChevronDown } from "lucide-react";
-import type { TypedGraphNode } from "@multica/core/research";
 import {
   Popover,
   PopoverContent,
@@ -21,10 +19,8 @@ import {
   RESEARCH_D5_LENSES,
   type ResearchD5Lens,
 } from "../lib/research-d5-lens";
-import { buildD5FilterOptions } from "../lib/research-d5-filter-options";
 import type { GoalVersionEntry } from "../lib/research-d5-goal-history";
 import { resolveD5LensNavigationIndex } from "../lib/research-d5-lens-keyboard";
-import { ResearchD5CanvasFilter } from "./research-d5-canvas-filter";
 
 type ChromeProps = ComponentProps<typeof ResearchSessionChromeActions>;
 
@@ -34,7 +30,6 @@ export function ResearchD5Chrome({
   goalVersion,
   goalHistory = [],
   goalImpact = null,
-  typedGraphNodes = [],
   projectionSource = null,
   className,
   session,
@@ -50,15 +45,10 @@ export function ResearchD5Chrome({
   goalVersion?: number | null;
   goalHistory?: readonly GoalVersionEntry[];
   goalImpact?: { labeledNodes: number; totalNodes: number } | null;
-  typedGraphNodes?: readonly TypedGraphNode[];
   projectionSource?: "v5" | "v6" | null;
   className?: string;
 }) {
   const { t } = useT("research");
-  const filterOptions = useMemo(
-    () => buildD5FilterOptions(typedGraphNodes),
-    [typedGraphNodes],
-  );
   const handleLensKeyDown = useCallback(
     (event: KeyboardEvent<HTMLButtonElement>) => {
       const lens = event.currentTarget.dataset.lens as ResearchD5Lens | undefined;
@@ -135,8 +125,6 @@ export function ResearchD5Chrome({
         </div>
 
         <div className="d5-chrome-controls">
-          <ResearchD5CanvasFilter sessionId={session.id} options={filterOptions} />
-
           <div className="d5-lens-group" role="tablist" aria-label={t(($) => $.d5.lens_group)}>
             {RESEARCH_D5_LENSES.map((lens) => (
               <button

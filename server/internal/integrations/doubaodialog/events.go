@@ -9,16 +9,16 @@ import (
 
 // Duplex event type constants (JSON text frames).
 const (
-	EventSessionCreate   = "session.create"
-	EventSessionUpdate   = "session.update"
-	EventSessionClose    = "session.close"
-	EventSessionCreated  = "session.created"
-	EventSessionUpdated  = "session.updated"
-	EventSessionClosed   = "session.closed"
+	EventSessionCreate  = "session.create"
+	EventSessionUpdate  = "session.update"
+	EventSessionClose   = "session.close"
+	EventSessionCreated = "session.created"
+	EventSessionUpdated = "session.updated"
+	EventSessionClosed  = "session.closed"
 
-	EventInputAudioAppend  = "input_audio_buffer.append"
-	EventInputAudioCommit  = "input_audio_buffer.commit"
-	EventResponseCancel    = "response.cancel"
+	EventInputAudioAppend   = "input_audio_buffer.append"
+	EventInputAudioCommit   = "input_audio_buffer.commit"
+	EventResponseCancel     = "response.cancel"
 	EventConversationCreate = "conversation.item.create"
 
 	EventFunctionCallArgumentsDone = "response.function_call_arguments.done"
@@ -63,28 +63,28 @@ type SessionAudio struct {
 }
 
 type SessionConfig struct {
-	ID           string        `json:"id,omitempty"`
-	Model        string        `json:"model"`
-	Instructions string        `json:"instructions,omitempty"`
-	Audio        SessionAudio  `json:"audio"`
-	Tools        []Tool        `json:"tools,omitempty"`
+	ID           string       `json:"id,omitempty"`
+	Model        string       `json:"model"`
+	Instructions string       `json:"instructions,omitempty"`
+	Audio        SessionAudio `json:"audio"`
+	Tools        []Tool       `json:"tools,omitempty"`
 }
 
 type ClientEvent struct {
-	Type    string          `json:"type"`
-	EventID string          `json:"event_id,omitempty"`
-	Session *SessionConfig  `json:"session,omitempty"`
-	Audio   string          `json:"audio,omitempty"`
-	Text    string          `json:"text,omitempty"`
+	Type    string             `json:"type"`
+	EventID string             `json:"event_id,omitempty"`
+	Session *SessionConfig     `json:"session,omitempty"`
+	Audio   string             `json:"audio,omitempty"`
+	Text    string             `json:"text,omitempty"`
 	Items   []ConversationItem `json:"items,omitempty"`
 }
 
 type ConversationItem struct {
-	ID      string                   `json:"id,omitempty"`
-	Type    string                   `json:"type,omitempty"`
-	Role    string                   `json:"role,omitempty"`
-	CallID  string                   `json:"call_id,omitempty"`
-	Status  string                   `json:"status,omitempty"`
+	ID      string                    `json:"id,omitempty"`
+	Type    string                    `json:"type,omitempty"`
+	Role    string                    `json:"role,omitempty"`
+	CallID  string                    `json:"call_id,omitempty"`
+	Status  string                    `json:"status,omitempty"`
 	Content []ConversationItemContent `json:"content,omitempty"`
 }
 
@@ -104,10 +104,10 @@ type ServerEvent struct {
 	EventID string          `json:"event_id,omitempty"`
 	Raw     json.RawMessage `json:"-"`
 
-	SessionID string `json:"-"`
-	Delta     string `json:"-"`
-	Text      string `json:"-"`
-	Audio     []byte `json:"-"`
+	SessionID  string `json:"-"`
+	Delta      string `json:"-"`
+	Text       string `json:"-"`
+	Audio      []byte `json:"-"`
 	Transcript string `json:"-"`
 
 	FunctionCalls []FunctionCall `json:"-"`
@@ -133,17 +133,17 @@ func DefaultSessionConfig(model, voice, instructions string, tools []Tool) Sessi
 
 func ParseServerEvent(raw []byte) (ServerEvent, error) {
 	var envelope struct {
-		Type      string            `json:"type"`
-		EventID   string            `json:"event_id"`
-		Session   *struct {
+		Type    string `json:"type"`
+		EventID string `json:"event_id"`
+		Session *struct {
 			ID string `json:"id"`
 		} `json:"session"`
-		Delta     string            `json:"delta"`
-		Text      string            `json:"text"`
-		Transcript string           `json:"transcript"`
-		Audio     string            `json:"audio"`
-		Items     []FunctionCall    `json:"items"`
-		Error     *struct {
+		Delta      string         `json:"delta"`
+		Text       string         `json:"text"`
+		Transcript string         `json:"transcript"`
+		Audio      string         `json:"audio"`
+		Items      []FunctionCall `json:"items"`
+		Error      *struct {
 			Message string `json:"message"`
 			Code    string `json:"code"`
 		} `json:"error"`

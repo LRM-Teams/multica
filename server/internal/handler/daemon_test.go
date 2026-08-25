@@ -495,7 +495,7 @@ func settleClaimedInboxEventForTest(t *testing.T, eventID string) {
 	}
 }
 
-func TestClaimTaskByRuntime_QueuesChatBehindActiveIssueWake(t *testing.T) {
+func TestClaimTaskByRuntime_RunsChatAlongsideActiveIssueWake(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -551,20 +551,14 @@ func TestClaimTaskByRuntime_QueuesChatBehindActiveIssueWake(t *testing.T) {
 	}
 
 	task, body := claimTaskByRuntimeForTest(t, runtimeID)
-	if task != nil {
-		t.Fatalf("chat wake %s bypassed active issue wake as %s: %s", chatTaskID, task.ID, body)
+	if task == nil || task.ID != chatTaskID {
+		t.Fatalf("claim alongside active issue wake = %+v, want chat task %s: %s", task, chatTaskID, body)
 	}
 	if got := taskStatus(t, runningIssueTaskID); got != "draining" {
 		t.Fatalf("running issue task status = %q, want draining", got)
 	}
-	if got := taskStatus(t, chatTaskID); got != "pending" {
-		t.Fatalf("chat task status = %q, want pending behind active issue wake", got)
-	}
-
-	settleClaimedInboxEventForTest(t, runningIssueTaskID)
-	task, body = claimTaskByRuntimeForTest(t, runtimeID)
-	if task == nil || task.ID != chatTaskID {
-		t.Fatalf("claim after issue completion = %+v, want chat task %s: %s", task, chatTaskID, body)
+	if got := taskStatus(t, chatTaskID); got != "draining" {
+		t.Fatalf("chat task status = %q, want draining alongside active issue wake", got)
 	}
 }
 
@@ -1952,7 +1946,7 @@ func TestDaemonRegister_MergesLegacyDaemonIDRuntime(t *testing.T) {
 		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at)
 		VALUES ($1,  $2,  'legacy-runtime',  'local',  'claude',  'offline',  'TestMachine.local',  '{}'::jsonb,  now() - interval '1 hour')
 		RETURNING id
-	`,  testWorkspaceID,  legacyDaemonID).Scan(&legacyRuntimeID); err != nil {
+	`, testWorkspaceID, legacyDaemonID).Scan(&legacyRuntimeID); err != nil {
 		t.Fatalf("seed legacy runtime: %v", err)
 	}
 	t.Cleanup(func() {
@@ -2086,7 +2080,7 @@ func TestDaemonRegister_MergesLegacyDaemonIDRuntime_ReverseDotLocal(t *testing.T
 		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at)
 		VALUES ($1,  $2,  'legacy-runtime-reverse',  'local',  'claude',  'offline',  '',  '{}'::jsonb,  now())
 		RETURNING id
-	`,  testWorkspaceID,  legacyDaemonID).Scan(&legacyRuntimeID); err != nil {
+	`, testWorkspaceID, legacyDaemonID).Scan(&legacyRuntimeID); err != nil {
 		t.Fatalf("seed legacy runtime: %v", err)
 	}
 	t.Cleanup(func() {
@@ -2144,7 +2138,7 @@ func TestDaemonRegister_MergesLegacyDaemonIDRuntime_CaseDrift(t *testing.T) {
 		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at)
 		VALUES ($1,  $2,  'legacy-runtime-case',  'local',  'claude',  'offline',  '',  '{}'::jsonb,  now())
 		RETURNING id
-	`,  testWorkspaceID,  storedDaemonID).Scan(&legacyRuntimeID); err != nil {
+	`, testWorkspaceID, storedDaemonID).Scan(&legacyRuntimeID); err != nil {
 		t.Fatalf("seed legacy runtime: %v", err)
 	}
 	t.Cleanup(func() {
@@ -2214,7 +2208,7 @@ func TestDaemonRegister_MergesAllCaseDuplicateLegacyRuntimes(t *testing.T) {
 		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at)
 		VALUES ($1,  $2,  'legacy-upper',  'local',  'claude',  'offline',  '',  '{}'::jsonb,  now() - interval '2 hours')
 		RETURNING id
-	`,  testWorkspaceID,  storedUpperID).Scan(&legacyUpperID); err != nil {
+	`, testWorkspaceID, storedUpperID).Scan(&legacyUpperID); err != nil {
 		t.Fatalf("seed upper-case legacy runtime: %v", err)
 	}
 	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, legacyUpperID) })
@@ -2223,7 +2217,7 @@ func TestDaemonRegister_MergesAllCaseDuplicateLegacyRuntimes(t *testing.T) {
 		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at)
 		VALUES ($1,  $2,  'legacy-lower',  'local',  'claude',  'offline',  '',  '{}'::jsonb,  now() - interval '1 hour')
 		RETURNING id
-	`,  testWorkspaceID,  storedLowerID).Scan(&legacyLowerID); err != nil {
+	`, testWorkspaceID, storedLowerID).Scan(&legacyLowerID); err != nil {
 		t.Fatalf("seed lower-case legacy runtime: %v", err)
 	}
 	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, legacyLowerID) })
@@ -4007,7 +4001,7 @@ func createRuntimeGuardRuntime(t *testing.T, ctx context.Context, provider strin
 		VALUES ($1,  'runtime-guard-' || gen_random_uuid()::text,  'Runtime Guard Fixture', 
 		        'local',  $2,  'offline',  '{}'::jsonb,  '{}'::jsonb,  now())
 		RETURNING id
-	`,  testWorkspaceID,  provider).Scan(&runtimeID); err != nil {
+	`, testWorkspaceID, provider).Scan(&runtimeID); err != nil {
 		t.Fatalf("setup: create runtime: %v", err)
 	}
 	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_runtime WHERE id = $1`, runtimeID) })

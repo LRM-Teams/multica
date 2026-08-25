@@ -7,10 +7,23 @@ import {
 import { defaultStorage } from "../platform/storage";
 import { DEFAULT_RESEARCH_D5_LENS, type ResearchD5Lens } from "./d5-lens";
 
-export type ResearchD5RailMode = "chat" | "detail";
-export type ResearchD5Overlay =
-  | { sessionId: string; kind: "agent"; agentId: string }
-  | { sessionId: string; kind: "report" };
+export type ResearchD5RailMode = "chat" | "detail" | "agent";
+export type ResearchD5Overlay = { sessionId: string; kind: "report" };
+
+const MAX_SESSION_PREFERENCES = 20;
+
+function retainRecentSessionPreference(
+  current: Record<string, true>,
+  sessionId: string,
+  enabled: boolean,
+): Record<string, true> {
+  const previous = Object.entries(current).filter(([key]) => key !== sessionId);
+  if (!enabled) return Object.fromEntries(previous);
+  return Object.fromEntries([
+    ...previous.slice(-(MAX_SESSION_PREFERENCES - 1)),
+    [sessionId, true],
+  ]);
+}
 
 type ResearchUiState = {
   chatDrawerOpen: boolean;
@@ -27,6 +40,12 @@ type ResearchUiState = {
   /** Session-scoped transient inspector surface; deliberately not persisted. */
   d5Overlay: ResearchD5Overlay | null;
   setD5Overlay: (overlay: ResearchD5Overlay | null) => void;
+  /** Sessions whose compact goal card preference is collapsed. */
+  goalCollapsedBySession: Record<string, true>;
+  setGoalCollapsed: (sessionId: string, collapsed: boolean) => void;
+  /** Sessions whose terminal completion guide was dismissed. */
+  completionGuideDismissedBySession: Record<string, true>;
+  dismissCompletionGuide: (sessionId: string) => void;
 };
 
 export const useResearchUiStore = create<ResearchUiState>()(
@@ -43,15 +62,34 @@ export const useResearchUiStore = create<ResearchUiState>()(
       setD5Lens: (lens) => set({ d5Lens: lens }),
       d5Overlay: null,
       setD5Overlay: (overlay) => set({ d5Overlay: overlay }),
+      goalCollapsedBySession: {},
+      setGoalCollapsed: (sessionId, collapsed) =>
+        set((state) => ({
+          goalCollapsedBySession: retainRecentSessionPreference(
+            state.goalCollapsedBySession,
+            sessionId,
+            collapsed,
+          ),
+        })),
+      completionGuideDismissedBySession: {},
+      dismissCompletionGuide: (sessionId) =>
+        set((state) => ({
+          completionGuideDismissedBySession: retainRecentSessionPreference(
+            state.completionGuideDismissedBySession,
+            sessionId,
+            true,
+          ),
+        })),
     }),
     {
-      name: "multica_research_ui_v4",
+      name: "multica_research_ui_v5",
       storage: createJSONStorage(() => createWorkspaceAwareStorage(defaultStorage)),
       partialize: (s) => ({
-        chatDrawerOpen: s.chatDrawerOpen,
-        d5RailOpen: s.d5RailOpen,
-        d5RailMode: s.d5RailMode,
+        d5RailMode: s.d5RailMode === "agent" ? "detail" : s.d5RailMode,
         d5Lens: s.d5Lens,
+        goalCollapsedBySession: s.goalCollapsedBySession,
+        completionGuideDismissedBySession:
+          s.completionGuideDismissedBySession,
       }),
     },
   ),

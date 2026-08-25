@@ -1,3 +1,7 @@
+import type {
+  StarGraphLayoutCluster,
+  StarGraphLayoutFrontier,
+} from "@multica/core/research";
 import type { StarGraphExpansionTransition } from "../lib/star-graph-expansion";
 import type {
   StarCanvasViewModel,
@@ -44,6 +48,46 @@ export function computeEntityBounds(entities: readonly StarEntityView[]): StarGr
     minY = Math.min(minY, entity.y - entity.radius);
     maxX = Math.max(maxX, entity.x + entity.radius);
     maxY = Math.max(maxY, entity.y + entity.radius);
+  }
+  const width = Math.max(maxX - minX, 1);
+  const height = Math.max(maxY - minY, 1);
+  return {
+    minX,
+    minY,
+    maxX,
+    maxY,
+    width,
+    height,
+    centerX: (minX + maxX) / 2,
+    centerY: (minY + maxY) / 2,
+  };
+}
+
+/** Include branch territories so auto-fit preserves the intended areas of calm. */
+export function computeConstellationBounds(
+  entities: readonly StarEntityView[],
+  clusters: readonly StarGraphLayoutCluster[],
+  frontiers: readonly StarGraphLayoutFrontier[] = [],
+): StarGraphBounds | null {
+  const entityBounds = computeEntityBounds(entities);
+  if (!entityBounds) return null;
+  let minX = entityBounds.minX;
+  let minY = entityBounds.minY;
+  let maxX = entityBounds.maxX;
+  let maxY = entityBounds.maxY;
+  for (const cluster of clusters) {
+    const halfWidth = (cluster.width ?? cluster.radius * 2) / 2;
+    const halfHeight = (cluster.height ?? cluster.radius * 2) / 2;
+    minX = Math.min(minX, cluster.x - halfWidth);
+    minY = Math.min(minY, cluster.y - halfHeight);
+    maxX = Math.max(maxX, cluster.x + halfWidth);
+    maxY = Math.max(maxY, cluster.y + halfHeight);
+  }
+  for (const frontier of frontiers) {
+    minX = Math.min(minX, frontier.x);
+    minY = Math.min(minY, frontier.y);
+    maxX = Math.max(maxX, frontier.x + frontier.width);
+    maxY = Math.max(maxY, frontier.y + frontier.height);
   }
   const width = Math.max(maxX - minX, 1);
   const height = Math.max(maxY - minY, 1);

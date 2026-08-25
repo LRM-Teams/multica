@@ -29,6 +29,11 @@ const (
 	// review verdict changes the executable frontier.
 	AgentInboxReasonGoalGraphDelta = "goal_graph_delta"
 
+	// AgentInboxReasonGoalController is a durable, coalesced reconciliation
+	// turn for the standard Goal -> Issue -> Run control plane. It is separate
+	// from Work Graph delta execution.
+	AgentInboxReasonGoalController = "goal_controller"
+
 	// AgentInboxReasonNoteWorker is notes 「按这篇做」/ Worker dispatch into a
 	// Messages channel or agent DM. Product reason (not residual channel chat).
 	AgentInboxReasonNoteWorker = "note_worker"

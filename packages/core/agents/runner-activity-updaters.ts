@@ -28,16 +28,27 @@ export function applyRunnerActivityRealtime(
     logger.warn("ignored malformed agent:activity payload", parsed.error.issues);
     return;
   }
+  const receivedAt = Date.now();
+  const activity = parsed.data.activity.timing
+    ? {
+        ...parsed.data.activity,
+        timing: {
+          ...parsed.data.activity.timing,
+          frontend_received_at_ms: receivedAt,
+          frontend_cached_at_ms: Date.now(),
+        },
+      }
+    : parsed.data.activity;
   queryClient.setQueryData(
     runnerActivityKeys.all(wsId, parsed.data.agent_id),
-    parsed.data.activity,
+    activity,
   );
   queryClient.setQueryData<RunnerActivitySummariesResponse | undefined>(
     runnerActivitySummaryKeys.all(wsId),
     (current) => {
       if (!current) return current;
 
-      const nextSummary = parsed.data.activity.summary;
+      const nextSummary = activity.summary;
       const existingIndex = current.items.findIndex(
         (item) => item.agent_id === parsed.data.agent_id,
       );

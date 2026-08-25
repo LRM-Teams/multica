@@ -254,6 +254,13 @@ func fakePiRPCProcessScript() string {
 	        printf '{"type":"agent_end","messages":[{"role":"assistant","model":"test-pi","usage":{"input":2,"output":3}}]}\n'
 	      fi
 	      ;;
+	    *'"id":"multica-directed-message"'*)
+	      if [ -n "$PI_RPC_TEST_DIRECTED_INPUT" ]; then printf '%s' "$line" > "$PI_RPC_TEST_DIRECTED_INPUT"; fi
+	      printf '{"id":"multica-directed-message","type":"response","command":"prompt","success":true}\n'
+	      if [ -n "$PI_RPC_TEST_NOTICE_MODE" ]; then
+	        printf '{"type":"agent_end","messages":[{"role":"assistant","model":"test-pi","usage":{"input":2,"output":3}}]}\n'
+	      fi
+	      ;;
 	    *'"id":"multica-message-input"'*)
 	      if [ -n "$PI_RPC_TEST_MESSAGE_INPUT" ]; then printf '%s' "$line" > "$PI_RPC_TEST_MESSAGE_INPUT"; fi
 	      printf '{"id":"multica-message-input","type":"response","command":"prompt","success":true}\n'
@@ -324,7 +331,7 @@ func TestFormatResidentMessageBatchCarriesDeliveryContract(t *testing.T) {
 func TestFormatResidentMessageBatchStandaloneChatUsesAutomaticDelivery(t *testing.T) {
 	prompt, err := formatResidentMessageBatch([]ResidentMessage{{
 		ID: "message-1", Target: "chat:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", Seq: 1,
-		Content: "<note_chat_context>\ncontext_note_title: todo\n</note_chat_context>\n\nwhat is the note title?",
+		Content:        "<note_chat_context>\ncontext_note_title: todo\n</note_chat_context>\n\nwhat is the note title?",
 		RuntimeContext: "## Current Task Initiator\n\nAlice",
 	}})
 	if err != nil {
@@ -961,6 +968,111 @@ func TestPiRPCBackendFreshRunIdentityAndResidentTurnReuse(t *testing.T) {
 	}
 }
 
+func TestPiRPCBackendBindRunIdentityOnFreshBackend(t *testing.T) {
+	backend := newPiRPCBackend(Config{})
+	t.Cleanup(backend.Close)
+
+	identity := PiRunIdentity{RunID: "run-1", RunAgentID: "run-agent-1"}
+	binding, err := backend.BindRunIdentity(identity)
+	if err != nil {
+		t.Fatalf("BindRunIdentity: %v", err)
+	}
+	if binding.PiRunIdentity != identity || binding.SessionID == "" || binding.CaptureBoundary == "" {
+		t.Fatalf("binding = %+v, want complete native run identity", binding)
+	}
+	if got := backend.cfg.ResidentOptions.ResumeSessionID; got != binding.SessionID {
+		t.Fatalf("resident resume session = %q, want %q", got, binding.SessionID)
+	}
+}
+
+func TestPiRPCBackendBindRunIdentityReplacesIdleUnboundProcess(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pi")
+	startsPath := filepath.Join(dir, "starts")
+	writeTestExecutable(t, path, []byte(fakePiRPCProcessScript()))
+	backend := newPiRPCBackend(Config{ExecutablePath: path, ResidentOptions: ExecOptions{Cwd: dir}, Env: map[string]string{
+		"PI_RPC_TEST_STARTS": startsPath,
+	}})
+	t.Cleanup(backend.Close)
+
+	if err := backend.EnsureResidentProcess(context.Background()); err != nil {
+		t.Fatalf("EnsureResidentProcess: %v", err)
+	}
+	waitForPiRPCTestPath(t, startsPath)
+	unboundSessionID := backend.ProviderSessionID()
+	identity := PiRunIdentity{RunID: "run-1", RunAgentID: "run-agent-1"}
+	binding, err := backend.BindRunIdentity(identity)
+	if err != nil {
+		t.Fatalf("BindRunIdentity with idle unbound process: %v", err)
+	}
+	if binding.SessionID == unboundSessionID {
+		t.Fatalf("binding reused unbound resident session %q", binding.SessionID)
+	}
+	if got := backend.ProviderSessionID(); got != "" {
+		t.Fatalf("idle unbound process was not disposed, session = %q", got)
+	}
+	if _, err := backend.PrepareRun(context.Background(), identity); err != nil {
+		t.Fatalf("PrepareRun after bind: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		data, err := os.ReadFile(startsPath)
+		if err == nil && strings.Count(string(data), "x") == 2 {
+			break
+		}
+		if err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for replacement Pi RPC process")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := backend.ProviderSessionID(); got != binding.SessionID {
+		t.Fatalf("replacement provider session = %q, want bound session %q", got, binding.SessionID)
+	}
+}
+
+func TestPiRPCBackendBindRunIdentityRejectsDifferentBoundIdentity(t *testing.T) {
+	backend := newPiRPCBackend(Config{})
+	t.Cleanup(backend.Close)
+
+	if _, err := backend.BindRunIdentity(PiRunIdentity{RunID: "run-1", RunAgentID: "run-agent-1"}); err != nil {
+		t.Fatalf("bind first identity: %v", err)
+	}
+	_, err := backend.BindRunIdentity(PiRunIdentity{RunID: "run-2", RunAgentID: "run-agent-1"})
+	if !errors.Is(err, ErrPiRPCRunIdentityRequiresFreshSession) {
+		t.Fatalf("different bound identity error = %v, want fresh-session sentinel", err)
+	}
+}
+
+func TestPiRPCBackendBindRunIdentityRejectsUnboundProcessAfterTurn(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pi")
+	writeTestExecutable(t, path, []byte(fakePiRPCProcessScript()))
+	backend := newPiRPCBackend(Config{ExecutablePath: path, ResidentOptions: ExecOptions{Cwd: dir}, Env: map[string]string{
+		"PI_RPC_TEST_STARTS": filepath.Join(dir, "starts"),
+	}})
+	t.Cleanup(backend.Close)
+
+	if err := backend.EnsureResidentProcess(context.Background()); err != nil {
+		t.Fatalf("EnsureResidentProcess: %v", err)
+	}
+	unboundSessionID := backend.ProviderSessionID()
+	session, err := backend.Execute(context.Background(), "user turn", ExecOptions{Cwd: dir})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	waitPiRPCResult(t, session, unboundSessionID)
+
+	// A completed prompt is still a served turn: its unbound native session
+	// must never be repurposed for a dispatch run identity.
+	_, err = backend.BindRunIdentity(PiRunIdentity{RunID: "run-1", RunAgentID: "run-agent-1"})
+	if !errors.Is(err, ErrPiRPCRunIdentityRequiresFreshSession) {
+		t.Fatalf("bind after unbound user turn error = %v, want fresh-session sentinel", err)
+	}
+}
+
 func TestPiRPCBackendPrepareRunStartsBoundProcessWithoutAgentTurn(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "pi")
@@ -1000,5 +1112,63 @@ func TestPiRPCBackendPrepareRunRejectsNativeStartFailureBeforeTurn(t *testing.T)
 	}
 	if b.running.Load() {
 		t.Fatal("failed preflight left an active agent turn")
+	}
+}
+
+func TestPiRPCBackendSteersCompleteDirectedMessageAtBusySafePoint(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pi")
+	writeTestExecutable(t, path, []byte(fakePiRPCProcessScript()))
+	directedPath := filepath.Join(dir, "directed-message.json")
+	secondStarted := filepath.Join(dir, "second-started")
+	b := newPiRPCBackend(Config{ExecutablePath: path, Env: map[string]string{
+		"PI_RPC_TEST_STARTS":         filepath.Join(dir, "starts"),
+		"PI_RPC_TEST_DIRECTED_INPUT": directedPath,
+		"PI_RPC_TEST_NOTICE_MODE":    "1",
+		"PI_RPC_TEST_SECOND_STARTED": secondStarted,
+	}})
+	t.Cleanup(b.Close)
+
+	first, err := b.Execute(context.Background(), "initialize", ExecOptions{Cwd: dir, ResumeSessionID: filepath.Join(dir, "session.jsonl")})
+	if err != nil {
+		t.Fatalf("initialize Pi RPC: %v", err)
+	}
+	waitPiRPCResult(t, first, filepath.Join(dir, "session.jsonl"))
+	busy, err := b.Execute(context.Background(), "busy turn", ExecOptions{Cwd: dir, ResumeSessionID: filepath.Join(dir, "session.jsonl")})
+	if err != nil {
+		t.Fatalf("start busy Pi RPC turn: %v", err)
+	}
+	waitForPiRPCTestPath(t, secondStarted)
+
+	err = b.AcceptDirectedMessage(context.Background(), ResidentDirectedMessage{
+		RunID: "run-1", TurnID: "turn-1", MessageID: "message-1", Target: "thread:thread-1",
+		ActorType: "user", ActorID: "user-1", ActorName: "Ada", Content: "Find the retry decision",
+		Parts:          json.RawMessage(`[{"type":"text","text":"Find the retry decision"}]`),
+		BoundedContext: json.RawMessage(`{"thread_root":"Why did retries change?"}`),
+	})
+	if err != nil {
+		t.Fatalf("AcceptDirectedMessage: %v", err)
+	}
+	waitPiRPCResult(t, busy, filepath.Join(dir, "session.jsonl"))
+	waitForPiRPCTestPath(t, directedPath)
+	raw, err := os.ReadFile(directedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var command struct {
+		ID                string `json:"id"`
+		StreamingBehavior string `json:"streamingBehavior"`
+		Message           string `json:"message"`
+	}
+	if err := json.Unmarshal(raw, &command); err != nil {
+		t.Fatalf("decode native Pi directed Message: %v", err)
+	}
+	if command.ID != "multica-directed-message" || command.StreamingBehavior != "steer" {
+		t.Fatalf("native Pi directed command = %+v", command)
+	}
+	for _, want := range []string{"run-1", "turn-1", "message-1", "thread:thread-1", "Ada", "Find the retry decision", "thread_root", "pinned graph version"} {
+		if !strings.Contains(command.Message, want) {
+			t.Fatalf("directed Message %s does not contain %q", command.Message, want)
+		}
 	}
 }

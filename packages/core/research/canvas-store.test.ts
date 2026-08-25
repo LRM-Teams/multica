@@ -69,7 +69,7 @@ describe("useResearchCanvasStore (LRM-1497 shared client state)", () => {
     expect(useResearchCanvasStore.getState().selectedNodeId).toBeNull();
   });
 
-  it("isolates and clears persisted selections by research session", () => {
+  it("isolates and clears transient selections by research session", () => {
     const store = useResearchCanvasStore.getState();
     store.selectSessionNode("session-a", "node-a");
     store.selectSessionNode("session-b", "node-b");

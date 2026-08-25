@@ -145,7 +145,7 @@ func TestShadowEquivalenceEvidenceTieOrderMatchesListClaims(t *testing.T) {
 		t.Fatalf("verifyShadowEquivalenceTx: %v", err)
 	}
 
-	claims, err := store.ListClaims(ctx, run.SessionID)
+	claims, err := store.ListClaims(ctx, run.SessionID, run.WorkspaceID)
 	if err != nil {
 		t.Fatalf("ListClaims: %v", err)
 	}
@@ -267,7 +267,7 @@ func TestShadowEvidenceTieOrderPromptHashMatchesAfterDispatch(t *testing.T) {
 		t.Fatalf("CreateRun: %v", err)
 	}
 	seedShadowEvidenceTieArtifacts(t, ctx, pool, fixture.workspaceID, run.SessionID)
-	tasks, err := store.ListTasks(ctx, run.SessionID)
+	tasks, err := store.ListTasks(ctx, run.SessionID, run.WorkspaceID)
 	if err != nil || len(tasks) == 0 {
 		t.Fatalf("ListTasks: %v len=%d", err, len(tasks))
 	}

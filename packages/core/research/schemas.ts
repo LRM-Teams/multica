@@ -93,7 +93,7 @@ function nullishRecord() {
   );
 }
 
-export const ResearchSessionSchema = z
+const ResearchSessionWireSchema = z
   .object({
     id: z.string(),
     workspace_id: z.string(),
@@ -119,6 +119,14 @@ export const ResearchSessionSchema = z
     director_agent_id: z.string().nullable().optional().default(null),
   })
   .passthrough();
+
+export const ResearchSessionSchema = ResearchSessionWireSchema.transform(
+  ({ orchestrator_version, director_agent_id, ...session }) => ({
+    ...session,
+    orchestratorVersion: orchestrator_version,
+    directorAgentId: director_agent_id,
+  }),
+);
 
 export const ResearchPresenceResponseSchema = z
   .object({
@@ -305,7 +313,7 @@ const ResearchThoughtStrategySchema = z
   })
   .passthrough();
 
-export const ResearchRunSchema = z
+const ResearchRunWireSchema = z
   .object({
     session_id: z.string(),
     workspace_id: z.string(),
@@ -320,6 +328,7 @@ export const ResearchRunSchema = z
     plan_version: z.number(),
     state_version: z.number(),
     orchestrator_version: z.string(),
+    director_agent_id: z.string().optional(),
     config: z
       .object({
         max_tasks: z.number(),
@@ -355,6 +364,14 @@ export const ResearchRunSchema = z
     last_error: z.string().optional(),
   })
   .passthrough();
+
+export const ResearchRunSchema = ResearchRunWireSchema.transform(
+  ({ orchestrator_version, director_agent_id, ...run }) => ({
+    ...run,
+    orchestratorVersion: orchestrator_version,
+    directorAgentId: director_agent_id,
+  }),
+);
 
 const ResearchEvidenceStandardSchema = z
   .object({
@@ -436,7 +453,7 @@ const ResearchRunSnapshotSchema = z
         freshness: z.string(),
         language: z.string(),
         source_policy: nullishRecord(),
-        run_limits: ResearchRunSchema.shape.config,
+        run_limits: ResearchRunWireSchema.shape.config,
         reason: z.string(),
         created_at: z.string(),
       })
@@ -679,4 +696,3 @@ export const ResearchProductionWindowSchema = z.object({
     .passthrough()
     .optional(),
 });
-

@@ -5,7 +5,11 @@
 // Design authority: docs/superpowers/specs/2026-08-14-graph-memory-reviewer-design.zh-CN.md
 package memorygraph
 
-import "time"
+import (
+	"time"
+
+	"github.com/multica-ai/multica/server/pkg/agent"
+)
 
 // Epistemic status values for nodes (design §4.2).
 const (
@@ -273,6 +277,7 @@ type QueryLogEntry struct {
 	Rounds    int       `json:"rounds"`
 	AgentRuns int       `json:"agent_runs"` // K for TTT
 	Found     bool      `json:"found"`
+	PriorUsed bool      `json:"prior_used,omitempty"`
 
 	// Judge write-back (async):
 	JudgeDone     bool     `json:"judge_done"`
@@ -298,25 +303,6 @@ type QueryLogEntry struct {
 	LegacyNonAuthoritative bool `json:"legacy_non_authoritative,omitempty"`
 }
 
-// RegressionEntry is one line of regression_set.jsonl (Q26).
-type RegressionEntry struct {
-	Query         string   `json:"query"`
-	RelevantNodes []string `json:"relevant_nodes"`
-	AddedVersion  int      `json:"added_version"`
-	Reason        string   `json:"reason"`
-	// BaselineRounds is the number of explore rounds the original query
-	// needed (design Q13/A2): the n of the n-hop coverage check and the
-	// reference for the rounds-overflow regression gate. Absent/zero in
-	// files written before A2 defaults to DefaultBacktestBaselineRounds.
-	BaselineRounds int `json:"baseline_rounds,omitempty"`
-
-	// InfoItems and LedgerID identify a post-Dive regression entry. Flat
-	// entries are retained only as non-authoritative migration audit data.
-	InfoItems              []BacktestItem `json:"info_items,omitempty"`
-	LedgerID               string         `json:"ledger_id,omitempty"`
-	LegacyNonAuthoritative bool           `json:"legacy_non_authoritative,omitempty"`
-}
-
 // ExploreRun is one explore-agent trajectory (K of them in TTT mode, Q17).
 type ExploreRun struct {
 	RunID   string `json:"run_id"`
@@ -331,6 +317,11 @@ type ExploreRun struct {
 	ViewedNodeIDs []string `json:"viewed_node_ids,omitempty"`
 	Rounds        int      `json:"rounds"`
 	Error         string   `json:"error,omitempty"`
+	// Messages is the run's drained message stream, captured for every run
+	// and cleared on all runs after adoption (only the sanitized adopted
+	// transcript travels on). Transport for the prior record, never
+	// persisted.
+	Messages []agent.Message `json:"-"`
 }
 
 // Citation is a qualified adopted-node reference (spec §3 step 8): the
@@ -338,9 +329,16 @@ type ExploreRun struct {
 // version. Level is -1 for non-graph ids (staging segments) or when the
 // pinned graph could not be read.
 type Citation struct {
-	NodeID    string `json:"node_id"`
-	Level     int    `json:"level"`
-	Epistemic string `json:"epistemic_status,omitempty"`
+	NodeID         string    `json:"node_id"`
+	GraphVersion   int       `json:"graph_version,omitempty"`
+	Level          int       `json:"level"`
+	Epistemic      string    `json:"epistemic_status,omitempty"`
+	Tags           []string  `json:"tags,omitempty"`
+	Title          string    `json:"title,omitempty"`
+	FirstParagraph string    `json:"first_paragraph,omitempty"`
+	Excerpt        string    `json:"excerpt,omitempty"`
+	ContentHash    string    `json:"content_hash,omitempty"`
+	CapturedAt     time.Time `json:"captured_at,omitempty"`
 }
 
 // RecallResult is what Retrieve returns to the downstream agent (Q25).
@@ -352,6 +350,12 @@ type RecallResult struct {
 	Rounds    int          `json:"rounds"`
 	AgentRuns []ExploreRun `json:"agent_runs,omitempty"`
 	Found     bool         `json:"found"`
+	// AdoptedIndex points into AgentRuns at the adopted trajectory (-1 on
+	// miss). AdoptedTranscript is the adopted run's message stream
+	// sanitized to the allowlisted TraceMessage shape (Phase 2 prior
+	// record input).
+	AdoptedIndex      int            `json:"adopted_index,omitempty"`
+	AdoptedTranscript []TraceMessage `json:"adopted_transcript,omitempty"`
 	// Version is the graph version the explore was pinned to for the whole
 	// call (design Q13/R5: a mid-explore version switch never swaps the
 	// graph under an in-flight trajectory).

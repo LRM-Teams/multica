@@ -3,7 +3,6 @@ import type { StarGraphLayoutResult } from "@multica/core/research";
 import {
   buildStarCanvasViewModel,
   extractLayoutResultFromViewModel,
-  rebaseStarCanvasIntoViewModel,
   type StarCanvasViewModel,
 } from "../star-graph";
 
@@ -28,21 +27,15 @@ export function buildD5SessionCanvasModel(
     edges: typed.edges,
     seed: typed.graph_version,
     // Stable version so graph_version bumps reuse incremental layout positions.
-    version: "d5-star-v1",
+    version: "d5-star-v2",
     previous: options.previousLayout,
   });
 
   const layoutForNext = extractLayoutResultFromViewModel(base);
-
-  if (viewport.width <= 0 || viewport.height <= 0) {
-    return { model: base, layoutForNext };
-  }
-
-  return {
-    model: rebaseStarCanvasIntoViewModel(base, viewport, {
-      rightPanelWidth: options.rightPanelWidth,
-      padding: 32,
-    }),
-    layoutForNext,
-  };
+  // The interactive camera owns viewport fitting. Pre-scaling node positions
+  // here and fitting them again in StarGraphCanvas compressed every relation
+  // into the same short radius and destroyed the constellation's depth.
+  void viewport;
+  void options.rightPanelWidth;
+  return { model: base, layoutForNext };
 }

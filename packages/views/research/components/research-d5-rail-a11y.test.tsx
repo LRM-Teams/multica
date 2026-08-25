@@ -10,6 +10,7 @@ vi.mock("../../i18n/use-t", () => ({
           rail: {
             chat_tab: "Fleet chat",
             detail_tab: "Node detail",
+            agent_tab: "Agent settings",
             hide: "Hide context rail",
           },
         },
@@ -27,13 +28,17 @@ describe("ResearchD5Rail accessibility", () => {
         onModeChange={onModeChange}
         chatPanel={<button>Send</button>}
         detailPanel={<button>Inspect</button>}
+        agentPanel={<button>Configure</button>}
+        agentAvailable
       />,
     );
 
     const chatTab = screen.getByRole("tab", { name: "Fleet chat" });
     const detailTab = screen.getByRole("tab", { name: "Node detail" });
+    const agentTab = screen.getByRole("tab", { name: "Agent settings" });
     expect(chatTab).toHaveAttribute("aria-selected", "true");
     expect(detailTab).toHaveAttribute("aria-selected", "false");
+    expect(agentTab).toHaveAttribute("aria-selected", "false");
     expect(chatTab).toHaveAttribute("tabindex", "0");
     expect(detailTab).toHaveAttribute("tabindex", "-1");
     expect(screen.getByRole("tabpanel")).toHaveTextContent("Send");
@@ -48,10 +53,15 @@ describe("ResearchD5Rail accessibility", () => {
         onModeChange={onModeChange}
         chatPanel={<button>Send</button>}
         detailPanel={<button>Inspect</button>}
+        agentPanel={<button>Configure</button>}
+        agentAvailable
       />,
     );
     expect(screen.getByRole("tabpanel")).toHaveTextContent("Inspect");
     expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+
+    fireEvent.click(agentTab);
+    expect(onModeChange).toHaveBeenCalledWith("agent");
   });
 
   it("moves tab focus and selection with the arrow-key pattern", () => {
@@ -75,6 +85,22 @@ describe("ResearchD5Rail accessibility", () => {
     fireEvent.keyDown(detailTab, { key: "Home" });
     expect(onModeChange).toHaveBeenLastCalledWith("chat");
     expect(document.activeElement).toBe(chatTab);
+  });
+
+  it("disables Agent settings when the selected node has no Agent", () => {
+    render(
+      <ResearchD5Rail
+        id="context"
+        mode="detail"
+        onModeChange={() => {}}
+        chatPanel={null}
+        detailPanel={null}
+      />,
+    );
+
+    expect(
+      screen.getByRole("tab", { name: "Agent settings" }),
+    ).toBeDisabled();
   });
 
   it("passes hidden and inert state to the rail ownership surface", () => {

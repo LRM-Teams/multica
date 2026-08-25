@@ -155,7 +155,6 @@
     "prop_runtime": "Runtime",
     "prop_model": "Model",
     "prop_thinking": "Thinking",
-    "prop_concurrency": "Concurrency",
     "prop_owner": "Owner",
     "prop_created": "Created",
     "prop_updated": "Updated",
@@ -189,6 +188,7 @@
       "cancel": "Cancel",
       "role_updated_toast": "Workspace role updated",
       "role_update_failed_toast": "Failed to update workspace role",
+      "role_hint": "Admin lets this agent manage channels, invitations, agents & computers, and settings in this workspace. It can never become Owner.",
       "role_readonly_hint": "Only workspace owners and admins can change an agent's workspace role."
     },
     "start_intent_failure": "This agent did not finish starting on its selected computer ({{code}}). Review the runtime configuration, then use the normal human restart flow if appropriate.",
@@ -199,8 +199,6 @@
     "trigger_label": "Attach"
   },
   "pickers": {
-    "concurrency_tooltip": "Concurrency · {{value}} max concurrent tasks",
-    "concurrency_range": "Max concurrent tasks ({{min}}–{{max}})",
     "runtime_none": "No runtime",
     "runtime_tooltip": "Runtime · {{name}} · {{status}}",
     "runtime_tooltip_none": "Runtime · none selected",
@@ -264,6 +262,7 @@
     "title_duplicate": "Duplicate Agent",
     "description_create": "Create a new AI agent for your workspace.",
     "description_identity_locked": "Name and instructions are prefilled. Choose a Computer, runtime, and model to finish.",
+    "description_computer_locked": "This Computer is fixed. Choose a runtime and model to finish.",
     "description_duplicate": "Create a new agent based on \"{{name}}\". Instructions, env, and skills are copied for you.",
     "name_label": "Name",
     "name_hint": "This permanent name is used for @mentions.",
@@ -560,6 +559,7 @@
   },
   "side_panel": {
     "close_aria": "Close agent panel",
+    "actions_more_aria": "More actions",
     "back_to_member_aria": "Back to {{name}}",
     "back_to_messages": "Back to messages",
     "resize_aria": "Resize profile panel",
@@ -715,27 +715,17 @@
     "info_status": "Status"
   },
   "reminders": {
-    "upcoming_heading": "Upcoming",
-    "history_heading": "History",
-    "empty_all": "No reminders yet.",
-    "empty_upcoming": "No upcoming reminders.",
-    "empty_history": "No fired reminders yet.",
+    "empty_list": "No reminders.",
     "loading": "Loading reminders…",
     "error_title": "Couldn't load reminders.",
     "retry": "Retry",
-    "load_more": "Load more",
     "inaccessible": "You don't have permission to view this agent's reminders.",
     "anchor_unavailable": "Anchor unavailable",
     "one_shot": "One-time",
     "next_fire_label": "Next",
-    "fired_label": "Fired",
-    "timezone_label": "Timezone",
     "status_scheduled": "Scheduled",
     "status_firing": "Firing",
-    "status_overdue": "Overdue",
-    "status_dormant": "Dormant",
-    "status_cancelled": "Cancelled",
-    "status_fired": "Fired"
+    "status_overdue": "Overdue"
   },
   "task_failure": {
     "agent_error": "Agent execution error",

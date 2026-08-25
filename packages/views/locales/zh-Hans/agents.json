@@ -150,7 +150,6 @@
     "prop_runtime": "运行时",
     "prop_model": "模型",
     "prop_thinking": "思考",
-    "prop_concurrency": "并发",
     "prop_owner": "所有者",
     "prop_created": "创建时间",
     "prop_updated": "更新时间",
@@ -184,6 +183,7 @@
       "cancel": "取消",
       "role_updated_toast": "工作区角色已更新",
       "role_update_failed_toast": "更新工作区角色失败",
+      "role_hint": "管理员可以在本工作区管理通道、邀请、agents & computers 与设置。永远不能成为 Owner。",
       "role_readonly_hint": "仅工作区 owner/admin 可更改 agent 的工作区角色。"
     },
     "start_intent_failure": "此 Agent 未能在所选电脑上完成启动（{{code}}）。请检查运行配置；如合适，再通过正常的人类重启流程处理。",
@@ -194,8 +194,6 @@
     "trigger_label": "附加"
   },
   "pickers": {
-    "concurrency_tooltip": "并发 · 最多 {{value}} 个并行 task",
-    "concurrency_range": "最大并行 task 数（{{min}}–{{max}}）",
     "runtime_none": "无运行时",
     "runtime_tooltip": "运行时 · {{name}} · {{status}}",
     "runtime_tooltip_none": "运行时 · 未选择",
@@ -259,6 +257,7 @@
     "title_duplicate": "复制智能体",
     "description_create": "为工作区创建一个新的 AI 智能体。",
     "description_identity_locked": "名称与指令已填好。请选择电脑、运行时和模型后创建。",
+    "description_computer_locked": "电脑已锁定。请选择运行时和模型后创建。",
     "description_duplicate": "基于\"{{name}}\"创建一个新智能体。指令、环境变量和 skill 会一并复制。",
     "name_label": "名称",
     "name_hint": "这个永久名称用于 @提及。",
@@ -550,6 +549,7 @@
   },
   "side_panel": {
     "close_aria": "关闭 agent 面板",
+    "actions_more_aria": "更多操作",
     "back_to_member_aria": "返回 {{name}}",
     "back_to_messages": "回消息",
     "resize_aria": "调整 Profile 面板宽度",
@@ -703,27 +703,17 @@
     "info_status": "状态"
   },
   "reminders": {
-    "upcoming_heading": "待触发",
-    "history_heading": "历史",
-    "empty_all": "还没有提醒。",
-    "empty_upcoming": "没有待触发的提醒。",
-    "empty_history": "还没有已触发的提醒。",
+    "empty_list": "没有提醒。",
     "loading": "正在加载提醒…",
     "error_title": "提醒加载失败。",
     "retry": "重试",
-    "load_more": "加载更多",
     "inaccessible": "你没有权限查看该 Agent 的提醒。",
     "anchor_unavailable": "锚点不可用",
     "one_shot": "一次性",
     "next_fire_label": "下次",
-    "fired_label": "触发于",
-    "timezone_label": "时区",
     "status_scheduled": "已排程",
     "status_firing": "触发中",
-    "status_overdue": "已过期",
-    "status_dormant": "休眠",
-    "status_cancelled": "已取消",
-    "status_fired": "已触发"
+    "status_overdue": "已过期"
   },
   "task_failure": {
     "agent_error": "智能体执行出错",

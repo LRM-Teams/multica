@@ -49,7 +49,7 @@ func TestCommitAgentFromActionMessage_ConcurrentConfirmationCreatesOneAgent(t *t
 	params := db.CreateAgentParams{
 		WorkspaceID: ws, Name: "concurrent-proposal-agent", DisplayName: "concurrent-proposal-agent", Description: "concurrent proposal", RuntimeMode: "cloud",
 		RuntimeConfig: []byte("{}"), RuntimeID: parseUUID(testRuntimeID),
-		MaxConcurrentTasks: 6, OwnerID: owner, CustomEnv: []byte("{}"),
+		OwnerID: owner, CustomEnv: []byte("{}"),
 		CustomArgs: []byte("[]"), Model: pgtype.Text{String: "composer-1.5", Valid: true},
 	}
 	type result struct {
@@ -174,20 +174,19 @@ func TestCommitAgentFromActionMessage(t *testing.T) {
 	})
 
 	createParams := db.CreateAgentParams{
-		WorkspaceID:        ws,
-		Name:               "proposal-agent",
-		DisplayName:        "proposal-agent",
-		Description:        "summary",
-		RuntimeMode:        "cloud",
-		RuntimeConfig:      []byte("{}"),
-		RuntimeID:          parseUUID(testRuntimeID),
-		MaxConcurrentTasks: 6,
-		OwnerID:            owner,
-		CustomEnv:          []byte("{}"),
-		CustomArgs:         []byte("[]"),
-		McpConfig:          nil,
-		Model:              pgtype.Text{String: "composer-1.5", Valid: true},
-		ThinkingLevel:      pgtype.Text{},
+		WorkspaceID:   ws,
+		Name:          "proposal-agent",
+		DisplayName:   "proposal-agent",
+		Description:   "summary",
+		RuntimeMode:   "cloud",
+		RuntimeConfig: []byte("{}"),
+		RuntimeID:     parseUUID(testRuntimeID),
+		OwnerID:       owner,
+		CustomEnv:     []byte("{}"),
+		CustomArgs:    []byte("[]"),
+		McpConfig:     nil,
+		Model:         pgtype.Text{String: "composer-1.5", Valid: true},
+		ThinkingLevel: pgtype.Text{},
 	}
 
 	created, err := testHandler.createAgentFromActionMessage(ctx, ws, owner, parseUUID(messageID), createParams, "Proposal Agent")
@@ -261,14 +260,12 @@ func TestCommitAgentFromActionMessage(t *testing.T) {
 		t.Fatalf("expected agent in #general, got n=%d err=%v", n, err)
 	}
 
-	var launchID, launchRuntimeID string
-	if err := testPool.QueryRow(ctx, `
-		SELECT launch_id::text, runtime_id::text
-		FROM agent_runner_launch_projection WHERE agent_id = $1`, created.ID).Scan(&launchID, &launchRuntimeID); err != nil {
-		t.Fatalf("load desired launch: %v", err)
+	var desiredRuntimeID string
+	if err := testPool.QueryRow(ctx, `SELECT runtime_id::text FROM agent WHERE id = $1`, created.ID).Scan(&desiredRuntimeID); err != nil {
+		t.Fatalf("load Agent desired Runtime: %v", err)
 	}
-	if launchID == "" || launchRuntimeID != uuidToString(createParams.RuntimeID) {
-		t.Fatalf("desired launch = id=%q runtime=%q", launchID, launchRuntimeID)
+	if desiredRuntimeID != uuidToString(createParams.RuntimeID) {
+		t.Fatalf("Agent desired Runtime = %q", desiredRuntimeID)
 	}
 
 	// A completed confirmation is terminal. Even an identical replay conflicts;
@@ -294,7 +291,7 @@ func TestCommitAgentFromActionMessage(t *testing.T) {
 	}
 }
 
-func TestCreateAgentManagedCommitAtomicallyCreatesMembershipAndDesiredLaunch(t *testing.T) {
+func TestCreateAgentManagedCommitAtomicallyCreatesMembershipAndDesiredRuntime(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -302,16 +299,15 @@ func TestCreateAgentManagedCommitAtomicallyCreatesMembershipAndDesiredLaunch(t *
 	ws := parseUUID(testWorkspaceID)
 	generalID := ensureSystemGeneralForTest(t)
 	params := db.CreateAgentParams{
-		WorkspaceID:        ws,
-		Description:        "manual create",
-		RuntimeMode:        "cloud",
-		RuntimeConfig:      []byte("{}"),
-		RuntimeID:          parseUUID(testRuntimeID),
-		MaxConcurrentTasks: 6,
-		OwnerID:            parseUUID(testUserID),
-		CustomEnv:          []byte("{}"),
-		CustomArgs:         []byte("[]"),
-		Model:              pgtype.Text{String: "composer-1.5", Valid: true},
+		WorkspaceID:   ws,
+		Description:   "manual create",
+		RuntimeMode:   "cloud",
+		RuntimeConfig: []byte("{}"),
+		RuntimeID:     parseUUID(testRuntimeID),
+		OwnerID:       parseUUID(testUserID),
+		CustomEnv:     []byte("{}"),
+		CustomArgs:    []byte("[]"),
+		Model:         pgtype.Text{String: "composer-1.5", Valid: true},
 	}
 	created, err := testHandler.createAgentManagedCommit(ctx, ws, params, "Manual Intent Agent")
 	if err != nil {
@@ -326,9 +322,9 @@ func TestCreateAgentManagedCommitAtomicallyCreatesMembershipAndDesiredLaunch(t *
 		parseUUID(generalID), created.ID).Scan(&memberships); err != nil || memberships != 1 {
 		t.Fatalf("manual general membership = %d, err=%v", memberships, err)
 	}
-	var launchCount int
-	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent_runner_launch_projection WHERE agent_id = $1`, created.ID).Scan(&launchCount); err != nil || launchCount != 1 {
-		t.Fatalf("manual desired launch count = %d, err=%v", launchCount, err)
+	var desiredRuntimeID string
+	if err := testPool.QueryRow(ctx, `SELECT runtime_id::text FROM agent WHERE id = $1`, created.ID).Scan(&desiredRuntimeID); err != nil || desiredRuntimeID != testRuntimeID {
+		t.Fatalf("manual desired Runtime = %q, err=%v", desiredRuntimeID, err)
 	}
 }
 
@@ -337,13 +333,12 @@ func TestCreateAgentManagedCommitAtomicallyCreatesMembershipAndDesiredLaunch(t *
 // raw create params (it only hashes the final non-sensitive fields).
 func TestAgentActionFinalPayloadHashStability(t *testing.T) {
 	base := db.CreateAgentParams{
-		DisplayName:        "Agent A",
-		Name:               "",
-		Description:        "desc",
-		RuntimeID:          parseUUID("00000000-0000-0000-0000-000000000001"),
-		Model:              pgtype.Text{String: "m1", Valid: true},
-		ThinkingLevel:      pgtype.Text{},
-		MaxConcurrentTasks: 6,
+		DisplayName:   "Agent A",
+		Name:          "",
+		Description:   "desc",
+		RuntimeID:     parseUUID("00000000-0000-0000-0000-000000000001"),
+		Model:         pgtype.Text{String: "m1", Valid: true},
+		ThinkingLevel: pgtype.Text{},
 	}
 	h1 := agentActionFinalPayloadHash(base, map[string]any{"preferred_computer": "box-1"})
 	h2 := agentActionFinalPayloadHash(base, map[string]any{"preferred_computer": "box-1"})

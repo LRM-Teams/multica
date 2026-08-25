@@ -57,6 +57,22 @@ import { ChatInput } from "./chat-input";
 import { ChatContactList } from "./chat-contact-list";
 import { ChatResizeHandles } from "./chat-resize-handles";
 import { useChatResize } from "./use-chat-resize";
+import { useNoteBubbleSidebarWidth } from "./use-note-bubble-sidebar-width";
+import {
+  NOTE_ASSISTANT_SIDEBAR_EXIT_MS,
+  chatWindowClosesOnEscape,
+  chatWindowClosesOnOutsideClick,
+  chatWindowEscapeClosesNoteBubble,
+  chatWindowEscapeLayerSelector,
+  chatWindowMainPane,
+  chatWindowMainPaneClassName,
+  chatWindowShellClassName,
+  chatWindowSidebarClipClassName,
+  chatWindowSidebarSlideClassName,
+  chatWindowUsesFloatingChrome,
+  noteAssistantSidebarPresence,
+  type ChatWindowLayout,
+} from "./chat-window-layout";
 import { RuntimeTokenStatsBadge } from "../../common/runtime-token-stats-badge";
 import { createLogger } from "@multica/core/logger";
 import type { Agent, ChatMessage, ChatMessagesPage, ChatPendingTask, ChatSession, PendingChatTasksResponse } from "@multica/core/types";
@@ -96,16 +112,45 @@ export interface ChatWindowProps {
   composerFocusToken?: number;
   /**
    * Send this text once the Notes bubble is open and an agent is ready
-   * (e.g. the Highlights satellite). Cleared via onSeedSendConsumed.
-   * `nonce` is unique per click so React Strict Mode cannot double-send.
+   * (e.g. after the user confirms the Highlights compose card). Cleared
+   * via onSeedSendConsumed. `nonce` is unique per click so React Strict
+   * Mode cannot double-send.
    */
   seedSend?: { nonce: number; text: string } | null;
   onSeedSendConsumed?: () => void;
   /**
+   * Optional slot rendered in the conversation area (empty state) and,
+   * when messages exist, above the composer (e.g. Period Brief chips).
+   */
+  composerAccessory?: React.ReactNode;
+  /** Override the composer placeholder when the accessory is driving send. */
+  composerPlaceholder?: string;
+  /** Allow sending an empty composer (Period Brief chip-only start). */
+  allowEmptySend?: boolean;
+  /**
+   * When set, consume the send instead of posting a chat message.
+   * Return true to clear the composer; false to keep the draft.
+   */
+  onSendOverride?: (text: string) => boolean | Promise<boolean>;
+  /**
+   * Run before a normal send. Return true to keep the draft and skip the
+   * chat post (e.g. open Period Brief chips after a 写汇报 ask).
+   */
+  onSendIntercept?: (text: string) => boolean;
+  /** Rewrite the outgoing body (e.g. attach a Notes selection quote). */
+  transformOutgoing?: (content: string) => string;
+  /** Called after a chat send is accepted (not intercept / override / error). */
+  onSendAccepted?: () => void;
+  /** Rendered inside the composer card, above the editor. */
+  composerPrefix?: React.ReactNode;
+  /** Hide the composer until a page-bound Period Brief run finishes. */
+  composerLocked?: boolean;
+  /**
    * Force layout. Default: floating desktop window; on mobile with a
    * lockedAgentId, fullscreen sheet is used automatically.
+   * Notes assistant uses `sidebar` (full-height right rail).
    */
-  layout?: "floating" | "fullscreen";
+  layout?: ChatWindowLayout;
 }
 
 const uiLogger = createLogger("chat.ui");
@@ -240,6 +285,15 @@ export function ChatWindow({
   composerFocusToken,
   seedSend,
   onSeedSendConsumed,
+  composerAccessory,
+  composerPlaceholder,
+  allowEmptySend = false,
+  onSendOverride,
+  onSendIntercept,
+  transformOutgoing,
+  onSendAccepted,
+  composerPrefix,
+  composerLocked = false,
   layout = "floating",
 }: ChatWindowProps = {}) {
   const { t } = useT("chat");
@@ -248,7 +302,10 @@ export function ChatWindow({
   const isDmBubble = Boolean(lockedAgentId) && !contextNotePageId;
   // react-doctor-disable-next-line react-doctor/no-event-handler -- mode flag from optional mount prop; not an event→effect handler
   const isNoteBubble = Boolean(contextNotePageId);
-  const effectiveLayout: "floating" | "fullscreen" = layout;
+  const effectiveLayout: ChatWindowLayout = layout;
+  const isFullscreen = effectiveLayout === "fullscreen";
+  const isSidebar = effectiveLayout === "sidebar";
+  const usesFloatingChrome = chatWindowUsesFloatingChrome(effectiveLayout);
 
   const globalIsOpen = useChatStore((s) => s.isOpen);
   const globalActiveSessionId = useChatStore((s) => s.activeSessionId);
@@ -638,12 +695,18 @@ export function ChatWindow({
 
   const handleSend = useCallback(
     async (content: string, attachmentIds?: string[]): Promise<boolean> => {
+      if (onSendIntercept?.(content)) {
+        return false;
+      }
+      if (onSendOverride) {
+        return await onSendOverride(content);
+      }
       if (!activeAgent) {
         apiLogger.warn("sendChatMessage skipped: no active agent");
         return false;
       }
 
-      const finalContent = content;
+      const finalContent = transformOutgoing ? transformOutgoing(content) : content;
 
       const isNewSession = !activeSessionId;
 
@@ -728,6 +791,7 @@ export function ChatWindow({
         qc.invalidateQueries({ queryKey: chatKeys.messages(sessionId) });
         qc.invalidateQueries({ queryKey: chatKeys.messagesPage(sessionId) });
         qc.invalidateQueries({ queryKey: chatKeys.pendingTasks(wsId) });
+        onSendAccepted?.();
         return true;
       }
       let pendingAfterSend: ChatPendingTask = {
@@ -750,6 +814,7 @@ export function ChatWindow({
         apiLogger.warn("sendChatMessage.pendingTask.refresh.error", { sessionId, err });
       }
       qc.setQueryData<ChatPendingTask>(chatKeys.pendingTask(sessionId), pendingAfterSend);
+      onSendAccepted?.();
       if (stopRequestedBeforeTaskRef.current) {
         stopRequestedBeforeTaskRef.current = false;
         await cancelStandaloneTurn(sessionId, { source: "deferred-send" });
@@ -769,6 +834,10 @@ export function ChatWindow({
       setActiveSession,
       t,
       wsId,
+      onSendOverride,
+      onSendIntercept,
+      transformOutgoing,
+      onSendAccepted,
     ],
   );
 
@@ -871,13 +940,38 @@ export function ChatWindow({
   const isExpanded = useChatStore((s) => s.isExpanded);
 
   const windowRef = useRef<HTMLDivElement>(null);
+  const { width: sidebarWidth, onResizePointerDown: onSidebarResizePointerDown } =
+    useNoteBubbleSidebarWidth();
   const { renderWidth, renderHeight, isAtMax, boundsReady, isDragging, toggleExpand, startDrag } = useChatResize(windowRef);
+  const [sidebarStayMounted, setSidebarStayMounted] = useState(false);
+  const [sidebarEntered, setSidebarEntered] = useState(false);
+
+  useEffect(() => {
+    if (!isSidebar) return;
+    if (isOpen) {
+      setSidebarStayMounted(true);
+      let enter = 0;
+      const frame = window.requestAnimationFrame(() => {
+        enter = window.requestAnimationFrame(() => setSidebarEntered(true));
+      });
+      return () => {
+        window.cancelAnimationFrame(frame);
+        window.cancelAnimationFrame(enter);
+      };
+    }
+    setSidebarEntered(false);
+    const timer = window.setTimeout(() => setSidebarStayMounted(false), NOTE_ASSISTANT_SIDEBAR_EXIT_MS);
+    return () => window.clearTimeout(timer);
+  }, [isSidebar, isOpen]);
+
+  const sidebarPresence = noteAssistantSidebarPresence(isOpen, sidebarStayMounted);
+  const sidebarSlideOpen = sidebarPresence === "open" && sidebarEntered;
 
   const hasMessages = messages.length > 0 || turnOutstanding;
+  const mainPane = chatWindowMainPane(showSkeleton, hasMessages, Boolean(composerAccessory));
 
-  const isVisible = isOpen && (effectiveLayout === "fullscreen" || isExpanded || boundsReady);
+  const isVisible = isOpen && (isFullscreen || isSidebar || isExpanded || boundsReady);
 
-  const isFullscreen = effectiveLayout === "fullscreen";
   const activeAgentDisplayName = activeAgent
     ? resolveActorDisplayName(activeAgent, activeAgent.id)
     : undefined;
@@ -886,29 +980,13 @@ export function ChatWindow({
   // (same outcome as the header Minus). Ignore portaled layers that belong to
   // this window (session menu, create-agent dialog, tooltips, etc.).
   useEffect(() => {
-    if (!isNoteBubble || !isOpen || isFullscreen) return;
+    if (!isNoteBubble || !isOpen || !chatWindowClosesOnOutsideClick(effectiveLayout)) return;
 
     const onPointerDown = (event: PointerEvent) => {
       const target = event.target;
       if (!(target instanceof Element)) return;
       if (windowRef.current?.contains(target)) return;
-      if (
-        target.closest(
-          [
-            '[data-slot="popover-content"]',
-            '[data-slot="dialog-content"]',
-            '[data-slot="dialog-overlay"]',
-            '[data-slot="alert-dialog-content"]',
-            '[data-slot="alert-dialog-overlay"]',
-            '[data-slot="dropdown-menu-content"]',
-            '[data-slot="dropdown-menu-sub-content"]',
-            '[data-slot="select-content"]',
-            '[data-slot="tooltip-content"]',
-            '[data-slot="sheet-content"]',
-            '[data-slot="sheet-overlay"]',
-          ].join(","),
-        )
-      ) {
+      if (target.closest(chatWindowEscapeLayerSelector() + ', [data-slot="tooltip-content"]')) {
         return;
       }
       handleMinimize();
@@ -916,7 +994,21 @@ export function ChatWindow({
 
     document.addEventListener("pointerdown", onPointerDown);
     return () => document.removeEventListener("pointerdown", onPointerDown);
-  }, [isNoteBubble, isOpen, isFullscreen, handleMinimize]);
+  }, [isNoteBubble, isOpen, effectiveLayout, handleMinimize]);
+
+  useEffect(() => {
+    if (!isNoteBubble || !isOpen || !chatWindowClosesOnEscape(effectiveLayout)) return;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!chatWindowEscapeClosesNoteBubble(event)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      handleMinimize();
+    };
+
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [isNoteBubble, isOpen, effectiveLayout, handleMinimize]);
 
   // Fullscreen sheet must cover the *viewport*, not just the DM `<main>`.
   // Absolute+parent was leaving the DM composer visible underneath on mobile
@@ -931,9 +1023,7 @@ export function ChatWindow({
     };
   }, [isFullscreen, isOpen]);
 
-  const containerClass = isFullscreen
-    ? "fixed inset-0 z-50 flex h-dvh max-h-dvh w-full flex-row bg-background overflow-hidden pt-[env(safe-area-inset-top,0px)]"
-    : "absolute bottom-2 right-2 z-50 flex flex-row rounded-xl ring-1 ring-foreground/10 bg-sidebar shadow-2xl overflow-hidden";
+  const containerClass = chatWindowShellClassName(effectiveLayout);
   const containerStyle: React.CSSProperties = isFullscreen
     ? {
         pointerEvents: isOpen ? "auto" : "none",
@@ -943,45 +1033,34 @@ export function ChatWindow({
         height: "100dvh",
         maxHeight: "100dvh",
       }
+    : isSidebar
+      ? {
+          pointerEvents: isOpen ? "auto" : "none",
+          width: sidebarWidth,
+          height: "100%",
+        }
     : {
         transformOrigin: "bottom right",
         pointerEvents: isOpen ? "auto" : "none",
       };
 
-  const shell = (
-    <motion.div
-      ref={windowRef}
-      className={containerClass}
-      style={containerStyle}
-      initial={
-        isFullscreen
-          ? { opacity: 0, width: "100%", height: "100%" }
-          : { opacity: 0, scale: 0.95, width: renderWidth, height: renderHeight }
-      }
-      animate={
-        isFullscreen
-          ? {
-              opacity: isVisible ? 1 : 0,
-              width: "100%",
-              height: "100%",
-              scale: 1,
-            }
-          : {
-              opacity: isVisible ? 1 : 0,
-              scale: isVisible ? 1 : 0.95,
-              width: renderWidth,
-              height: renderHeight,
-            }
-      }
-      transition={{
-        width: isDragging ? { duration: 0 } : { type: "spring", duration: 0.3, bounce: 0 },
-        height: isDragging ? { duration: 0 } : { type: "spring", duration: 0.3, bounce: 0 },
-        opacity: { duration: 0.15 },
-        scale: { type: "spring", duration: 0.2, bounce: 0 },
-      }}
-      aria-hidden={!isOpen}
-    >
-      {!isFullscreen && <ChatResizeHandles onDragStart={startDrag} />}
+  const shellClassName = cn(
+    containerClass,
+    isSidebar && chatWindowSidebarSlideClassName(sidebarSlideOpen),
+  );
+  const shellTestId = isNoteBubble ? "note-assistant-chat-shell" : "chat-window-shell";
+  const shellBody = (
+    <>
+      {usesFloatingChrome && <ChatResizeHandles onDragStart={startDrag} />}
+      {isSidebar && (
+        <button
+          type="button"
+          data-testid="note-assistant-sidebar-resize"
+          aria-label={t(($) => $.window.resize_sidebar_aria)}
+          className="absolute inset-y-0 left-0 z-10 w-1.5 cursor-col-resize border-0 bg-transparent p-0 hover:bg-foreground/10"
+          onPointerDown={onSidebarResizePointerDown}
+        />
+      )}
       {/* Left IM pane: agent contacts — hidden in DM bubble (locked agent). */}
       {!isDmBubble && !isNoteBubble && (
         <ChatContactList
@@ -1055,7 +1134,7 @@ export function ChatWindow({
           ) : null}
         </div>
         <div className="flex items-center gap-0.5 shrink-0">
-          {!isFullscreen && (
+          {usesFloatingChrome && (
             <Tooltip>
               <TooltipTrigger
                 render={
@@ -1096,10 +1175,10 @@ export function ChatWindow({
 
       {headerAccessory}
 
-      {/* Messages / skeleton / empty state */}
-      {showSkeleton ? (
+      {/* Messages / skeleton / empty state. Chips never replace this pane. */}
+      {mainPane === "skeleton" ? (
         <ChatMessageSkeleton />
-        ) : hasMessages ? (
+      ) : mainPane === "messages" ? (
         <ChatMessageList
           key={activeSessionId}
           sessionId={activeSessionId ?? ""}
@@ -1111,7 +1190,11 @@ export function ChatWindow({
           isFetchingOlderMessages={isFetchingOlderMessages}
           onLoadOlderMessages={() => void fetchOlderMessages()}
           isDmBubble={isDmBubble}
+          hoverMessageActions={isNoteBubble}
+          noteInsertPageId={isNoteBubble ? contextNotePageId : undefined}
         />
+      ) : mainPane === "spacer" ? (
+        <div className={chatWindowMainPaneClassName(mainPane)} aria-hidden />
       ) : (
         <EmptyState
           hasSessions={sessions.length > 0}
@@ -1123,6 +1206,7 @@ export function ChatWindow({
           }}
         />
       )}
+      {composerAccessory}
 
       {/* No-agent banner above the input. Presence (online/offline)
        *  belongs to the header only (#624, Parker/Iris) — this slot used to
@@ -1144,14 +1228,17 @@ export function ChatWindow({
         onRestoreDraftConsumed={handleRestoreDraftConsumed}
         onUploadFile={handleUploadFile}
         onStop={handleStop}
-        isRunning={turnOutstanding}
-        disabled={isSessionArchived}
+        isRunning={turnOutstanding || composerLocked}
+        disabled={isSessionArchived || composerLocked}
         noAgent={noAgent}
         agentName={activeAgentDisplayName}
         agentId={activeAgent?.id ?? null}
         sessionId={activeSessionId}
         safeArea={isFullscreen}
         focusToken={composerFocusToken}
+        placeholder={composerPlaceholder}
+        allowEmptySend={allowEmptySend}
+        composerPrefix={composerPrefix}
         leftAdornment={
           isDmBubble || isNoteBubble || lockPreferredAgent ? undefined : (
             <AgentDropdown
@@ -1164,11 +1251,69 @@ export function ChatWindow({
         }
       />
       </div>
+    </>
+  );
+
+  const shell = isSidebar ? (
+    <div
+      ref={windowRef}
+      className={shellClassName}
+      style={containerStyle}
+      data-layout={effectiveLayout}
+      data-testid={shellTestId}
+      aria-hidden={!isOpen}
+    >
+      {shellBody}
+    </div>
+  ) : (
+    <motion.div
+      ref={windowRef}
+      className={shellClassName}
+      style={containerStyle}
+      data-layout={effectiveLayout}
+      data-testid={shellTestId}
+      initial={
+        isFullscreen
+          ? { opacity: 0, width: "100%", height: "100%" }
+          : { opacity: 0, scale: 0.95, width: renderWidth, height: renderHeight }
+      }
+      animate={
+        isFullscreen
+          ? {
+              opacity: isVisible ? 1 : 0,
+              width: "100%",
+              height: "100%",
+              scale: 1,
+            }
+          : {
+              opacity: isVisible ? 1 : 0,
+              scale: isVisible ? 1 : 0.95,
+              width: renderWidth,
+              height: renderHeight,
+            }
+      }
+      transition={{
+        width: isDragging ? { duration: 0 } : { type: "spring", duration: 0.3, bounce: 0 },
+        height: isDragging ? { duration: 0 } : { type: "spring", duration: 0.3, bounce: 0 },
+        opacity: { duration: 0.15 },
+        scale: { type: "spring", duration: 0.2, bounce: 0 },
+      }}
+      aria-hidden={!isOpen}
+    >
+      {shellBody}
     </motion.div>
   );
 
   if (isFullscreen && typeof document !== "undefined") {
     return createPortal(shell, document.body);
+  }
+  if (isSidebar) {
+    if (sidebarPresence === "omit") return null;
+    return (
+      <div className={chatWindowSidebarClipClassName()} data-testid="note-assistant-sidebar-clip">
+        {shell}
+      </div>
+    );
   }
   return shell;
 }

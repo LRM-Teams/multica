@@ -411,7 +411,7 @@ func renderChatWakeContext(ctx TaskContextForEnv) string {
 	var b strings.Builder
 	b.WriteString("# Message Runtime\n\n")
 	b.WriteString("This durable Agent runtime receives canonical Message Deliveries. It has no current channel, task, lease, execution, or session identity.\n\n")
-	b.WriteString("Use `multica message check` to inspect pending input, then use the returned canonical target for reads or sends when needed. Do not run `multica issue get` unless the user asks you to create or inspect an issue.\n\n")
+	b.WriteString("Run `multica inbox check` first to distinguish App reminders from Messages. If Messages are pending, run `multica message check` to inspect them, then use the returned canonical target for reads or sends. Do not run `multica issue get` unless the user asks.\n\n")
 	writeAgentSkillsIndex(&b, ctx.AgentSkills)
 	return b.String()
 }

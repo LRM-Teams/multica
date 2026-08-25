@@ -154,7 +154,7 @@ for required in \
   'OSS_BUCKET: leagent' \
   'RELEASE_PREFIX: computer' \
   'PUBLIC_BASE_URL: https://cdn.leagent.me/computer' \
-  '^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[0-9]+)?$' \
+  '^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)\.[0-9]+)?$' \
   'canonical_prefix="${RELEASE_PREFIX}/${version}"' \
   'immutable_keys=(' \
   '"${canonical_prefix}/checksums.txt"' \

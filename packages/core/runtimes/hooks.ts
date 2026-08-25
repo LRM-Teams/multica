@@ -2,13 +2,44 @@ import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useAuthStore } from "../auth";
 import type { AgentRuntime } from "../types";
-import { runtimeListOptions } from "./queries";
+import { computerListOptions, runtimeListOptions } from "./queries";
 import {
   runtimeCanStartSelfUpdate,
   runtimeHasHealthAttention,
 } from "./runtime-health-state";
 
 export const RUNTIME_ATTENTION_RUNTIME_QUERY = "attention_runtime";
+
+/**
+ * Ids of the runtimes this viewer may bind an agent to, or null when the
+ * server did not say.
+ *
+ * Where an agent runs is chosen at two levels — machine, then provider — so
+ * the Computer list is where the choice belongs: each Computer carries the
+ * runtimes on it the caller may pick, already filtered server-side. That
+ * filter (visibility, which exists only at the runtime level) now has exactly
+ * one definition instead of one per picker.
+ *
+ * Null means an older server that omits the field; callers fall back to the
+ * legacy client-side rule rather than offering nothing.
+ */
+export function useBindableRuntimeIds(wsId: string | undefined): Set<string> | null {
+  const { data: computers } = useQuery({
+    ...computerListOptions(wsId ?? ""),
+    enabled: !!wsId,
+  });
+  return useMemo(() => {
+    if (!computers) return null;
+    let sawField = false;
+    const ids = new Set<string>();
+    for (const computer of computers) {
+      if (!computer.runtimes) continue;
+      sawField = true;
+      for (const runtime of computer.runtimes) ids.add(runtime.id);
+    }
+    return sawField ? ids : null;
+  }, [computers]);
+}
 
 export interface MyAttentionRuntimeSummary {
   count: number;

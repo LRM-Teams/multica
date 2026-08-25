@@ -34,6 +34,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/util"
 	"github.com/multica-ai/multica/server/internal/util/secretbox"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 var defaultOrigins = []string{
@@ -429,10 +430,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		h.HandleDaemonReminderFireRequest,
 	)
 	daemonHub.SetAgentDeliveryAckHandler(h.HandleAgentDeliveryAck)
-	// The current fenced Workspace Runner owns Attachment, launch, Message, and
+	// The current fenced WorkspaceDaemon owns Attachment, process, Message, and
 	// typed Activity intake for one daemon/workspace pair.
-	daemonHub.SetWorkspaceRunnerHandler(h.HandleWorkspaceRunnerFrame)
-	daemonHub.SetWorkspaceRunnerDisconnectHandler(h.HandleWorkspaceRunnerDisconnect)
+	daemonHub.SetWorkspaceDaemonHandler(h.HandleWorkspaceDaemonFrame)
+	daemonHub.SetWorkspaceDaemonDisconnectHandler(h.HandleWorkspaceDaemonDisconnect)
 	health := newServerHealth(pool)
 
 	r := chi.NewRouter()
@@ -555,6 +556,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	r.Post(voiceCallLLMPath, h.HandleVoiceCallLLM)
 
 	// Daemon API routes (require daemon token or valid user token)
+	r.With(middleware.DaemonAuth(queries, patCache, daemonTokenCache, cloudPATVerifier)).Get(protocol.DaemonConnectPath, h.DaemonWebSocket)
+	r.With(middleware.DaemonAuth(queries, patCache, daemonTokenCache, cloudPATVerifier)).Get(protocol.WorkspaceDaemonConnectPath, h.WorkspaceDaemonWebSocket)
 	r.Route("/api/daemon", func(r chi.Router) {
 		r.Use(middleware.DaemonAuth(queries, patCache, daemonTokenCache, cloudPATVerifier))
 
@@ -564,7 +567,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		// TODO(computer-liveness): Remove after v0.4.24-alpha.55 is no
 		// longer a supported direct self-upgrade source.
 		r.Post("/computer/heartbeat", h.ComputerHeartbeat)
-		r.Get("/connect", h.DaemonWebSocket)
 		// TODO(computer-liveness): Remove after v0.4.24-alpha.55 is no
 		// longer a supported direct self-upgrade source.
 		r.Get("/ws", h.DaemonWebSocket)
@@ -697,6 +699,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/graph-memory/consolidations/{runId}", h.GetGraphMemoryConsolidation)
 					r.Get("/graph-memory/audit", h.GetGraphMemoryAudit)
 					r.Get("/graph-memory/channels/{channelId}/lineage", h.GetGraphMemoryChannelLineage)
+					r.Get("/graph-memory/channels/{channelId}/mode", h.GetGraphMemoryChannelMode)
+					r.Put("/graph-memory/channels/{channelId}/mode", h.UpdateGraphMemoryChannelMode)
+					r.Post("/graph-memory/channels/{channelId}/reset", h.ResetGraphMemoryChannelAgent)
+					r.Get("/graph-memory/messages/{messageId}/citations", h.GetGraphMemoryMessageCitations)
 					r.Get("/memory-curation/daily-summary", h.ListMemoryCurationDailySummary)
 					r.Get("/memory-curation/candidates", h.ListMemoryCurationCandidates)
 					r.Get("/memory-curation/candidates/{candidateId}", h.GetMemoryCurationCandidate)
@@ -891,10 +897,13 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Route("/api/notes", func(r chi.Router) {
 				r.Post("/retrospectives", h.CreateNoteRetrospective)
 				r.Post("/period-briefs", h.CreateNotePeriodBrief)
+				r.Get("/period-briefs/active", h.GetActiveNotePeriodBrief)
+				r.Post("/period-briefs/{runId}/insert", h.InsertNotePeriodBrief)
 				r.Route("/pages", func(r chi.Router) {
 					r.Get("/", h.ListNotePages)
 					r.Post("/", h.CreateNotePage)
 					r.Get("/trash", h.ListDeletedNotePages)
+					r.Delete("/trash", h.EmptyNoteTrash)
 					r.Route("/{id}", func(r chi.Router) {
 						r.Get("/", h.GetNotePage)
 						r.Patch("/", h.UpdateNotePage)
@@ -918,7 +927,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 						r.Get("/channel-refs", h.ListNotePageChannelRefs)
 						r.Post("/channel-refs", h.CreateNotePageChannelRef)
 						r.Delete("/channel-refs/{channelId}", h.DeleteNotePageChannelRef)
-						r.Post("/issues", h.CreateNotePageIssue)
 						r.Get("/writebacks", h.ListNotePageWritebacks)
 						r.Post("/writebacks", h.CreateNotePageWriteback)
 					})
@@ -971,6 +979,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Put("/metadata/{key}", h.SetIssueMetadataKey)
 					r.Delete("/metadata/{key}", h.DeleteIssueMetadataKey)
 					r.Get("/pull-requests", h.ListPullRequestsForIssue)
+					r.Post("/pull-requests/rescan", h.RescanIssuePullRequest)
+					r.Get("/completion-reports", h.ListIssueCompletionReports)
+					r.Post("/completion-reviews", h.ReviewIssueCompletion)
 				})
 			})
 
@@ -1066,6 +1077,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Post("/resume", h.PostResearchV6ProjectionResume)
 				})
 				r.Get("/v6/runs/{runId}/reports", h.GetResearchV6Reports)
+				r.Get("/v6/runs/{runId}/work-items/{workItemId}/activity", h.GetResearchV6WorkActivity)
 				r.Get("/v6/runs/{runId}/reports/{reportId}/compiled", h.GetResearchV6ReportCompiled)
 				r.Get("/v6/runs/{runId}/reports/{reportId}", h.GetResearchV6Report)
 				r.Get("/fleet", h.GetResearchFleet)
@@ -1178,10 +1190,14 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Post("/cancel-tasks", h.CancelAgentTasks)
 					r.Post("/start", h.StartAgent)
 					r.Post("/stop", h.StopAgent)
+					// Assembled Computer + runtime + model + thinking for the
+					// inspector's Runtime config block, so no client has to
+					// join a runtime id against a list it may not fully see.
+					r.Get("/runtime-config", h.GetAgentRuntimeConfig)
 					r.Get("/health", h.GetAgentHealth)
 					r.Get("/reset", h.GetAgentRestart)
 					r.Post("/reset", h.ResetAgent)
-					// Workspace Runner Activity is the only public Agent Activity
+					// WorkspaceDaemon Activity is the only public Agent Activity
 					// contract. It is a server-owned presentation read model; there is
 					// no compatibility translation from the removed event timeline.
 					r.Get("/runner-activity", h.GetRunnerActivity)
@@ -1351,12 +1367,16 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// (spec 005); lets operators/AReaL track runs without the
 			// per-run capability token.
 			r.Get("/api/v1/env-dispatch/{projectID}/diagnosis/latest", h.GetLatestEnvDispatchDiagnosis)
+			r.Get("/api/v1/env-dispatch/{projectID}/files", h.DownloadEnvDispatchFile)
+			r.Post("/api/v1/env-dispatch/{projectID}/files", h.UploadEnvDispatchFile)
 			// Channel-first facades for dispatch_type=message: resolve the bound
 			// project internally. Project-first routes above remain available.
 			r.Get("/api/v1/env-dispatch/channels/{channelID}/dag", h.GetEnvDispatchChannelDag)
 			r.Post("/api/v1/env-dispatch/channels/{channelID}/diagnosis", h.DiagnoseEnvDispatchChannel)
 			r.Get("/api/v1/env-dispatch/channels/{channelID}/diagnosis/latest", h.GetLatestEnvDispatchChannelDiagnosis)
 			r.Delete("/api/v1/env-dispatch/channels/{channelID}", h.DeleteEnvDispatchChannel)
+			r.Get("/api/v1/env-dispatch/channels/{channelID}/files", h.DownloadEnvDispatchChannelFile)
+			r.Post("/api/v1/env-dispatch/channels/{channelID}/files", h.UploadEnvDispatchChannelFile)
 			r.Get("/api/v1/channels/{channelID}/env-checkpoints", h.ListChannelEnvCheckpoints)
 
 			// Env-checkpoint APIs. Gated by ENV_CHECKPOINTS_ENABLED; handlers
@@ -1414,6 +1434,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Post("/channels", h.CreateAgentCoordinationChannel)
 				r.Post("/channels/{channelId}/archive", h.ArchiveAgentCoordinationChannel)
 				r.Get("/channels/{channelId}/members", h.ListAgentChannelMembers)
+				r.Post("/channels/{channelId}/graph-memory/{operation}", h.GraphMemoryAgentTool)
+				r.Post("/channels/{channelId}/graph-memory-usage", h.GraphMemoryAgentUsage)
 				r.Get("/channels/{channelId}/goal", h.GetAgentChannelGoal)
 				r.Post("/channels/{channelId}/goal", h.CreateAgentChannelGoal)
 				r.Patch("/channels/{channelId}/goal", h.UpdateAgentChannelGoal)
@@ -1479,6 +1501,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Get("/issues/{id}/task-runs", h.ListAgentIssueTaskRuns)
 				r.Get("/issues/{id}/pull-requests", h.ListAgentIssuePullRequests)
 				r.Get("/issues/{id}/attachments", h.ListAgentIssueAttachments)
+				r.Post("/issues/{id}/completion", h.SubmitAgentIssueCompletion)
+				r.Get("/issues/{id}/completion-reports", h.ListAgentIssueCompletionReports)
+				r.Post("/issues/{id}/completion-reviews", h.ReviewAgentIssueCompletion)
 				r.Post("/issues/{id}/rerun", h.RerunAgentIssue)
 				r.Put("/issues/{id}/channel", h.SetAgentIssueSourceChannel)
 				r.Get("/tasks/{taskId}/messages", h.ListAgentTaskMessages)
@@ -1513,6 +1538,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 							r.Post("/director-brief-acks", h.AcknowledgeAgentResearchV6DirectorBrief)
 							r.Get("/catalog", h.GetAgentResearchV6WorkCatalog)
 							r.Post("/catalog-acks", h.AcknowledgeAgentResearchV6WorkCatalog)
+							r.Post("/progress", h.ReportAgentResearchV6WorkProgress)
 							r.Post("/submission", h.SubmitAgentResearchV6Work)
 							r.Post("/report-uploads", h.CreateAgentResearchV6ReportUpload)
 							r.Put("/report-uploads/{uploadId}/content", h.PutAgentResearchV6ReportUpload)

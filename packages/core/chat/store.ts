@@ -1,5 +1,10 @@
 import { create } from "zustand";
 import type { StorageAdapter } from "../types";
+import {
+  appendNoteSelectionExcerpt,
+  removeNoteSelectionExcerpt as dropNoteSelectionExcerpt,
+  type NoteSelectionQuote,
+} from "../notes/selection-quote";
 import { getCurrentSlug, registerForWorkspaceRehydration } from "../platform/workspace-storage";
 import { createLogger } from "../logger";
 
@@ -26,12 +31,15 @@ const OPEN_KEY = "multica:chat:isOpen";
 const DM_BUBBLE_OPEN_AGENT_KEY = "multica:chat:dmBubbleOpenAgentId";
 /** Active session id per agent for DM bubbles: { [agentId]: sessionId }. */
 const DM_BUBBLE_SESSIONS_KEY = "multica:chat:dmBubbleSessions";
-/** Which note page's assistant bubble is open (null = closed). Persisted per workspace. */
+/** Stale persist key — open state is session-only; refresh must close the rail. */
 const NOTE_BUBBLE_OPEN_PAGE_KEY = "multica:chat:noteBubbleOpenPageId";
 /** Active session id per note page for Notes bubbles: { [pageId]: sessionId }. */
 const NOTE_BUBBLE_SESSIONS_KEY = "multica:chat:noteBubbleSessions";
 /** Selected agent id per note page for Notes bubbles. */
 const NOTE_BUBBLE_AGENTS_KEY = "multica:chat:noteBubbleAgents";
+/** Desktop Notes rail width. Global, not workspace-scoped — same habit as chatWidth. */
+const NOTE_BUBBLE_SIDEBAR_WIDTH_KEY = "multica:chat:noteBubbleSidebarWidth";
+const NOTE_BUBBLE_SIDEBAR_DEFAULT_WIDTH = 384;
 
 function readDrafts(storage: StorageAdapter, key: string): Record<string, string> {
   const raw = storage.getItem(key);
@@ -121,13 +129,24 @@ export interface ChatState {
   dmBubbleActiveSessionByAgent: Record<string, string>;
   /**
    * Note page id whose Notes assistant bubble is open. Null = closed.
-   * Independent from global FAB and DM bubbles.
+   * Session-only — a refresh starts closed. Independent from global FAB
+   * and DM bubbles.
    */
   noteBubbleOpenPageId: string | null;
   /** Active bubble session per note page id. */
   noteBubbleActiveSessionByPage: Record<string, string>;
   /** Selected agent per note page id for the Notes assistant bubble. */
   noteBubbleSelectedAgentByPage: Record<string, string>;
+  /**
+   * Selection excerpt waiting in the Notes assistant composer. Session-only —
+   * never persisted. Cleared when the rail closes.
+   */
+  noteSelectionQuote: NoteSelectionQuote | null;
+  /**
+   * Desktop Notes rail width in px. Shared so the page dock and the overlay
+   * stay in lockstep while dragging either direction.
+   */
+  noteBubbleSidebarWidth: number;
   /** Drafts per session: sessionId (or DRAFT_NEW_SESSION) → markdown text. */
   inputDrafts: Record<string, string>;
   /** Raw user-chosen size — no clamp applied. UI layer clamps at render time. */
@@ -143,8 +162,12 @@ export interface ChatState {
   setDmBubbleActiveSession: (agentId: string, sessionId: string | null) => void;
   setNoteBubbleOpenPageId: (pageId: string | null) => void;
   toggleNoteBubble: (pageId: string) => void;
+  setNoteSelectionQuote: (quote: NoteSelectionQuote | null) => void;
+  askAboutNoteSelection: (pageId: string, text: string) => void;
+  removeNoteSelectionExcerpt: (excerptId: string) => void;
   setNoteBubbleActiveSession: (pageId: string, sessionId: string | null) => void;
   setNoteBubbleSelectedAgent: (pageId: string, agentId: string | null) => void;
+  setNoteBubbleSidebarWidth: (width: number) => void;
   /** sessionId accepts a real session UUID or DRAFT_NEW_SESSION. */
   setInputDraft: (sessionId: string, draft: string) => void;
   clearInputDraft: (sessionId: string) => void;
@@ -177,9 +200,12 @@ export function createChatStore(options: ChatStoreOptions) {
     selectedAgentId: storage.getItem(wsKey(AGENT_STORAGE_KEY)),
     dmBubbleOpenAgentId: storage.getItem(wsKey(DM_BUBBLE_OPEN_AGENT_KEY)),
     dmBubbleActiveSessionByAgent: readStringMap(storage, wsKey(DM_BUBBLE_SESSIONS_KEY)),
-    noteBubbleOpenPageId: storage.getItem(wsKey(NOTE_BUBBLE_OPEN_PAGE_KEY)),
+    noteBubbleOpenPageId: null,
+    noteSelectionQuote: null,
     noteBubbleActiveSessionByPage: readStringMap(storage, wsKey(NOTE_BUBBLE_SESSIONS_KEY)),
     noteBubbleSelectedAgentByPage: readStringMap(storage, wsKey(NOTE_BUBBLE_AGENTS_KEY)),
+    noteBubbleSidebarWidth:
+      Number(storage.getItem(NOTE_BUBBLE_SIDEBAR_WIDTH_KEY)) || NOTE_BUBBLE_SIDEBAR_DEFAULT_WIDTH,
     inputDrafts: readDrafts(storage, wsKey(DRAFTS_KEY)),
     chatWidth: Number(storage.getItem(CHAT_WIDTH_KEY)) || CHAT_DEFAULT_W,
     chatHeight: Number(storage.getItem(CHAT_HEIGHT_KEY)) || CHAT_DEFAULT_H,
@@ -249,23 +275,53 @@ export function createChatStore(options: ChatStoreOptions) {
         from: get().noteBubbleOpenPageId,
         to: pageId,
       });
-      if (pageId) {
-        storage.setItem(wsKey(NOTE_BUBBLE_OPEN_PAGE_KEY), pageId);
-      } else {
-        storage.removeItem(wsKey(NOTE_BUBBLE_OPEN_PAGE_KEY));
-      }
-      set({ noteBubbleOpenPageId: pageId });
+      storage.removeItem(wsKey(NOTE_BUBBLE_OPEN_PAGE_KEY));
+      set({
+        noteBubbleOpenPageId: pageId,
+        noteSelectionQuote: pageId ? get().noteSelectionQuote : null,
+      });
     },
     toggleNoteBubble: (pageId) => {
       const current = get().noteBubbleOpenPageId;
       const next = current === pageId ? null : pageId;
       logger.debug("toggleNoteBubble", { pageId, to: next });
-      if (next) {
-        storage.setItem(wsKey(NOTE_BUBBLE_OPEN_PAGE_KEY), next);
-      } else {
-        storage.removeItem(wsKey(NOTE_BUBBLE_OPEN_PAGE_KEY));
-      }
-      set({ noteBubbleOpenPageId: next });
+      storage.removeItem(wsKey(NOTE_BUBBLE_OPEN_PAGE_KEY));
+      set({
+        noteBubbleOpenPageId: next,
+        noteSelectionQuote: next ? get().noteSelectionQuote : null,
+      });
+    },
+    setNoteSelectionQuote: (quote) => {
+      logger.debug("setNoteSelectionQuote", {
+        pageId: quote?.pageId ?? null,
+        excerptCount: quote?.excerpts.length ?? 0,
+      });
+      set({ noteSelectionQuote: quote });
+    },
+    askAboutNoteSelection: (pageId, text) => {
+      const current = get().noteSelectionQuote;
+      const next = appendNoteSelectionExcerpt(current, pageId, text, {
+        id: `excerpt-${Date.now()}-${current?.excerpts.length ?? 0}`,
+      });
+      if (!next) return;
+      logger.info("askAboutNoteSelection", {
+        pageId,
+        excerptCount: next.excerpts.length,
+        textLength: text.trim().length,
+      });
+      storage.removeItem(wsKey(NOTE_BUBBLE_OPEN_PAGE_KEY));
+      set({
+        noteBubbleOpenPageId: pageId,
+        noteSelectionQuote: next,
+      });
+    },
+    removeNoteSelectionExcerpt: (excerptId) => {
+      const next = dropNoteSelectionExcerpt(get().noteSelectionQuote, excerptId);
+      logger.debug("removeNoteSelectionExcerpt", {
+        excerptId,
+        excerptCount: next?.excerpts.length ?? 0,
+      });
+      set({ noteSelectionQuote: next });
     },
     setNoteBubbleActiveSession: (pageId, sessionId) => {
       const prev = get().noteBubbleActiveSessionByPage[pageId] ?? null;
@@ -289,6 +345,11 @@ export function createChatStore(options: ChatStoreOptions) {
       }
       writeStringMap(storage, wsKey(NOTE_BUBBLE_AGENTS_KEY), next);
       set({ noteBubbleSelectedAgentByPage: next });
+    },
+    setNoteBubbleSidebarWidth: (width) => {
+      logger.debug("setNoteBubbleSidebarWidth", { width });
+      storage.setItem(NOTE_BUBBLE_SIDEBAR_WIDTH_KEY, String(width));
+      set({ noteBubbleSidebarWidth: width });
     },
     setInputDraft: (sessionId, draft) => {
       // Debug level — onUpdate fires on every keystroke.
@@ -334,7 +395,6 @@ export function createChatStore(options: ChatStoreOptions) {
     const nextDrafts = readDrafts(storage, wsKey(DRAFTS_KEY));
     const nextBubbleAgent = storage.getItem(wsKey(DM_BUBBLE_OPEN_AGENT_KEY));
     const nextBubbleSessions = readStringMap(storage, wsKey(DM_BUBBLE_SESSIONS_KEY));
-    const nextNoteBubblePage = storage.getItem(wsKey(NOTE_BUBBLE_OPEN_PAGE_KEY));
     const nextNoteBubbleSessions = readStringMap(storage, wsKey(NOTE_BUBBLE_SESSIONS_KEY));
     const nextNoteBubbleAgents = readStringMap(storage, wsKey(NOTE_BUBBLE_AGENTS_KEY));
     logger.info("workspace rehydration", {
@@ -344,15 +404,16 @@ export function createChatStore(options: ChatStoreOptions) {
       nextAgent,
       draftCount: Object.keys(nextDrafts).length,
       nextBubbleAgent,
-      nextNoteBubblePage,
     });
+    storage.removeItem(wsKey(NOTE_BUBBLE_OPEN_PAGE_KEY));
     store.setState({
       activeSessionId: nextSession,
       selectedAgentId: nextAgent,
       inputDrafts: nextDrafts,
       dmBubbleOpenAgentId: nextBubbleAgent,
       dmBubbleActiveSessionByAgent: nextBubbleSessions,
-      noteBubbleOpenPageId: nextNoteBubblePage,
+      noteBubbleOpenPageId: null,
+      noteSelectionQuote: null,
       noteBubbleActiveSessionByPage: nextNoteBubbleSessions,
       noteBubbleSelectedAgentByPage: nextNoteBubbleAgents,
     });

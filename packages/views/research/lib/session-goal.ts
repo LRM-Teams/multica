@@ -23,29 +23,6 @@ export type SessionGoalModel = {
   substantiveProposal: string | null;
 };
 
-const GOAL_COLLAPSE_KEY = "research.sessionGoal.collapsed";
-
-export function readGoalCardCollapsed(sessionId: string): boolean {
-  if (typeof window === "undefined") return false;
-  try {
-    return window.localStorage.getItem(`${GOAL_COLLAPSE_KEY}:${sessionId}`) === "1";
-  } catch {
-    return false;
-  }
-}
-
-export function writeGoalCardCollapsed(sessionId: string, collapsed: boolean): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(
-      `${GOAL_COLLAPSE_KEY}:${sessionId}`,
-      collapsed ? "1" : "0",
-    );
-  } catch {
-    // ignore quota / private mode
-  }
-}
-
 export function normalizeSessionGoalText(raw: string | null | undefined): string {
   return stripCreateParamsTrailer(raw ?? "").trim();
 }

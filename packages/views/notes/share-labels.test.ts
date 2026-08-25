@@ -13,7 +13,7 @@ function member(overrides: Partial<MemberWithUser>): MemberWithUser {
     display_name: "User One",
     email: "user1@example.com",
     avatar_url: null,
-    profile_description: "",
+    description: "",
     ...overrides,
   };
 }
@@ -46,5 +46,23 @@ describe("buildNoteShareNames", () => {
         formatName: (name, workspace) => `${name} (${workspace})`,
       }),
     ).toEqual(["Unknown member (LRM-team)"]);
+  });
+
+  it("appends shared agent and channel names after member names", () => {
+    expect(
+      buildNoteShareNames({
+        shareUserIds: ["user-zhang"],
+        membersByUserId: new Map([
+          ["user-zhang", member({ user_id: "user-zhang", display_name: "Zhang San" })],
+        ]),
+        shareAgentIds: ["agent-1"],
+        agentsById: new Map([["agent-1", { name: "notes-bot", display_name: "笔记助手" }]]),
+        shareChannelIds: ["ch-1"],
+        channelsById: new Map([["ch-1", { name: "sprint-room" }]]),
+        workspaceName: "LRM-team",
+        unknownMemberLabel: "Unknown member",
+        formatName: (name, workspace) => `${name} (${workspace})`,
+      }),
+    ).toEqual(["Zhang San (LRM-team)", "笔记助手", "sprint-room"]);
   });
 });

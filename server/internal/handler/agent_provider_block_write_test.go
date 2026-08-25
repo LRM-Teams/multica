@@ -22,9 +22,10 @@ func TestFailAgentInboxEvent_StickyQuotaWritesProviderBlock(t *testing.T) {
 	ctx := context.Background()
 	agentID, runtimeID, eventID, deliveryID, leaseToken, daemonID := seedLeasedInboxForProviderBlockTest(t)
 
-	blockedUntil := time.Now().In(time.Local).Add(2 * time.Hour).Truncate(time.Second)
-	stickyErr := `429: {"code":"1310","message":"已达到 7 天使用上限，` +
-		blockedUntil.Format("2006-01-02 15:04:05") + ` 后可继续使用。"}`
+	now := time.Now().In(time.Local)
+	blockedUntil := time.Date(now.Year()+1, time.August, 20, 3, 30, 0, 0, time.Local)
+	stickyErr := "You've hit your usage limit. Visit settings or try again at " +
+		blockedUntil.Format("Jan 2") + "th, " + blockedUntil.Format("2006 3:04 PM") + "."
 	failReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/agent-inbox/events/"+eventID+"/fail", FailAgentInboxEventRequest{
 		DeliveryID:    deliveryID,
 		LeaseToken:    leaseToken,
@@ -52,7 +53,7 @@ func TestFailAgentInboxEvent_StickyQuotaWritesProviderBlock(t *testing.T) {
 	if until == nil {
 		t.Fatal("provider_blocked_until NULL — stamp in error text should have been parsed")
 	}
-	wantUntil, ok := taskfailure.ParseProviderBlockedUntil(stickyErr, time.Now(), time.Local)
+	wantUntil, ok := taskfailure.ParseProviderBlockedUntil(stickyErr, time.Local)
 	if !ok {
 		t.Fatal("test fixture stamp must parse")
 	}

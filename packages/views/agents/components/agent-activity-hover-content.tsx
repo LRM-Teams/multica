@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
 import { useActorName } from "@multica/core/workspace/hooks";
+import { ActorAvatar } from "../../common/actor-avatar";
 import type { AgentTask } from "@multica/core/types";
 import { workloadConfig } from "../presence";
 import { useT } from "../../i18n";
@@ -27,7 +27,7 @@ export function AgentActivityHoverContent({
   tasks,
 }: AgentActivityHoverContentProps) {
   const { t } = useT("issues");
-  const { getActorName, getActorInitials, getActorAvatarUrl } = useActorName();
+  const { getActorName } = useActorName();
 
   // Tick `now` once per second so the per-task duration label updates
   // live while the hover card is open. setInterval only runs while the
@@ -64,12 +64,13 @@ export function AgentActivityHoverContent({
               key={task.id}
               className="flex items-center gap-2 text-xs"
             >
-              <ActorAvatarBase
-                name={getActorName("agent", task.agent_id)}
-                initials={getActorInitials("agent", task.agent_id)}
-                avatarUrl={getActorAvatarUrl("agent", task.agent_id)}
-                isAgent
+              {/* Smart wrapper: resolves faces ListAgents hides (LRM-391).
+                  No profile link — this body already lives in a hover card. */}
+              <ActorAvatar
+                actorType="agent"
+                actorId={task.agent_id}
                 size={18}
+                profileLink={false}
               />
               <span className="flex-1 truncate font-medium">
                 {getActorName("agent", task.agent_id)}

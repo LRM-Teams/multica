@@ -1,7 +1,15 @@
 import type { WorkGraphEdge, WorkGraphNode } from "@multica/core/types";
 
-const VIEWBOX_WIDTH = 360;
-const VIEWBOX_HEIGHT = 144;
+/** Compact chip size — readable two-line Chinese without ballooning the goal card. */
+export const GOAL_MINI_NODE_WIDTH = 148;
+export const GOAL_MINI_NODE_HEIGHT = 44;
+const LAYER_GAP_X = 40;
+const NODE_GAP_Y = 10;
+const CANVAS_PAD_X = 16;
+const CANVAS_PAD_Y = 14;
+
+/** Initial columns shown for large graphs; more layers load on demand. */
+export const GOAL_MINI_INITIAL_LAYER_BUDGET = 4;
 
 export type GoalNodeVisualState =
   | "pending"
@@ -18,7 +26,7 @@ export interface GoalMiniGraphLayoutNode {
   y: number;
   width: number;
   height: number;
-  compact: boolean;
+  layer: number;
 }
 
 export interface GoalMiniGraphLayoutEdge extends WorkGraphEdge {
@@ -28,6 +36,7 @@ export interface GoalMiniGraphLayoutEdge extends WorkGraphEdge {
 export interface GoalMiniGraphLayout {
   width: number;
   height: number;
+  maxLayer: number;
   nodes: GoalMiniGraphLayoutNode[];
   edges: GoalMiniGraphLayoutEdge[];
 }
@@ -57,6 +66,16 @@ export function goalNodeVisualState(node: WorkGraphNode): GoalNodeVisualState {
 
 function round(value: number): number {
   return Math.round(value * 10) / 10;
+}
+
+function edgePath(
+  source: GoalMiniGraphLayoutNode,
+  target: GoalMiniGraphLayoutNode,
+): string {
+  const sourceX = source.x + source.width / 2;
+  const targetX = target.x - target.width / 2;
+  const dx = Math.max(24, (targetX - sourceX) * 0.45);
+  return `M ${round(sourceX)} ${source.y} C ${round(sourceX + dx)} ${source.y}, ${round(targetX - dx)} ${target.y}, ${round(targetX)} ${target.y}`;
 }
 
 export function layoutGoalMiniGraph(
@@ -104,28 +123,46 @@ export function layoutGoalMiniGraph(
     if (!visited.has(node.id)) depth.set(node.id, 0);
   }
 
-  const maxDepth = Math.max(0, ...depth.values());
+  const maxDepth = nodes.length === 0 ? 0 : Math.max(0, ...depth.values());
   const layers = new Map<number, WorkGraphNode[]>();
   for (const node of nodes) {
     const nodeDepth = depth.get(node.id) ?? 0;
     layers.set(nodeDepth, [...(layers.get(nodeDepth) ?? []), node]);
   }
-  const nodeWidth = maxDepth >= 4 ? 58 : maxDepth === 3 ? 68 : 82;
-  const horizontalMargin = nodeWidth / 2 + 12;
-  const horizontalStep =
-    maxDepth === 0 ? 0 : (VIEWBOX_WIDTH - horizontalMargin * 2) / maxDepth;
+  for (const [layer, layerNodes] of layers) {
+    layerNodes.sort((left, right) => (order.get(left.id) ?? 0) - (order.get(right.id) ?? 0));
+    layers.set(layer, layerNodes);
+  }
+
+  const maxLayerCount = Math.max(1, ...[...layers.values()].map((layerNodes) => layerNodes.length));
+  const contentWidth =
+    nodes.length === 0
+      ? GOAL_MINI_NODE_WIDTH
+      : (maxDepth + 1) * GOAL_MINI_NODE_WIDTH + maxDepth * LAYER_GAP_X;
+  const contentHeight =
+    maxLayerCount * GOAL_MINI_NODE_HEIGHT + Math.max(0, maxLayerCount - 1) * NODE_GAP_Y;
+  const width = round(contentWidth + CANVAS_PAD_X * 2);
+  const height = round(contentHeight + CANVAS_PAD_Y * 2);
+
   const positioned: GoalMiniGraphLayoutNode[] = [];
   for (const [layer, layerNodes] of layers) {
-    const slotHeight = (VIEWBOX_HEIGHT - 20) / Math.max(1, layerNodes.length);
-    const nodeHeight = Math.max(12, Math.min(24, slotHeight - 5));
+    const columnHeight =
+      layerNodes.length * GOAL_MINI_NODE_HEIGHT + Math.max(0, layerNodes.length - 1) * NODE_GAP_Y;
+    const columnTop = CANVAS_PAD_Y + (contentHeight - columnHeight) / 2;
     layerNodes.forEach((node, index) => {
       positioned.push({
         id: node.id,
-        x: round(maxDepth === 0 ? VIEWBOX_WIDTH / 2 : horizontalMargin + layer * horizontalStep),
-        y: round(10 + slotHeight * (index + 0.5)),
-        width: nodeHeight < 18 ? nodeHeight : nodeWidth,
-        height: nodeHeight,
-        compact: nodeHeight < 18,
+        x: round(
+          CANVAS_PAD_X +
+            GOAL_MINI_NODE_WIDTH / 2 +
+            layer * (GOAL_MINI_NODE_WIDTH + LAYER_GAP_X),
+        ),
+        y: round(
+          columnTop + GOAL_MINI_NODE_HEIGHT / 2 + index * (GOAL_MINI_NODE_HEIGHT + NODE_GAP_Y),
+        ),
+        width: GOAL_MINI_NODE_WIDTH,
+        height: GOAL_MINI_NODE_HEIGHT,
+        layer,
       });
     });
   }
@@ -134,14 +171,35 @@ export function layoutGoalMiniGraph(
   const laidOutEdges = validEdges.map((edge) => {
     const source = positionById.get(edge.from_node_id)!;
     const target = positionById.get(edge.to_node_id)!;
-    const sourceX = source.x + source.width / 2;
-    const targetX = target.x - target.width / 2;
-    const controlX = sourceX + (targetX - sourceX) / 2;
     return {
       ...edge,
-      path: `M ${round(sourceX)} ${source.y} C ${round(controlX)} ${source.y}, ${round(controlX)} ${target.y}, ${round(targetX)} ${target.y}`,
+      path: edgePath(source, target),
     };
   });
 
-  return { width: VIEWBOX_WIDTH, height: VIEWBOX_HEIGHT, nodes: positioned, edges: laidOutEdges };
+  return {
+    width,
+    height,
+    maxLayer: maxDepth,
+    nodes: positioned,
+    edges: laidOutEdges,
+  };
+}
+
+/** Progressive column window — keeps large graphs cheap without changing API payloads. */
+export function visibleGoalMiniGraphSlice(
+  layout: GoalMiniGraphLayout,
+  layerBudget: number,
+): { nodes: GoalMiniGraphLayoutNode[]; edges: GoalMiniGraphLayoutEdge[]; hasMore: boolean } {
+  const budget = Math.max(1, layerBudget);
+  const nodes = layout.nodes.filter((node) => node.layer < budget);
+  const visibleIds = new Set(nodes.map((node) => node.id));
+  const edges = layout.edges.filter(
+    (edge) => visibleIds.has(edge.from_node_id) && visibleIds.has(edge.to_node_id),
+  );
+  return {
+    nodes,
+    edges,
+    hasMore: layout.maxLayer + 1 > budget,
+  };
 }

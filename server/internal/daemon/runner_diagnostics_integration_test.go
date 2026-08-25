@@ -70,9 +70,9 @@ func TestStandaloneChatDiagnosticsFollowInboxExecutionPath(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	d := New(Config{ServerBaseURL: server.URL}, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	d.runnerInstanceID = "start-identity-1"
+	d.instanceID = "start-identity-1"
 	d.runnerDiagnostics = &runnerDiagnosticRegistry{
-		store: store, environment: diagnosticlog.EnvironmentProduction, daemonInstanceID: d.runnerInstanceID,
+		store: store, environment: diagnosticlog.EnvironmentProduction, daemonInstanceID: d.instanceID,
 		loggers: make(map[string]*diagnosticlog.Logger), failed: make(map[string]struct{}),
 	}
 	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID, Provider: "claude"}
@@ -378,9 +378,9 @@ func TestCredentialProxyResponseDiagnosticsUseBoundedOutcomes(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	d := New(Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	d.runnerInstanceID = "start-identity-1"
+	d.instanceID = "start-identity-1"
 	d.runnerDiagnostics = &runnerDiagnosticRegistry{
-		store: store, environment: diagnosticlog.EnvironmentProduction, daemonInstanceID: d.runnerInstanceID,
+		store: store, environment: diagnosticlog.EnvironmentProduction, daemonInstanceID: d.instanceID,
 		loggers: make(map[string]*diagnosticlog.Logger), failed: make(map[string]struct{}),
 	}
 	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
@@ -450,9 +450,9 @@ func newStandaloneChatDiagnosticDaemon(t *testing.T, serverURL string) (*Daemon,
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	d := New(Config{ServerBaseURL: serverURL}, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	d.runnerInstanceID = "start-identity-1"
+	d.instanceID = "start-identity-1"
 	d.runnerDiagnostics = &runnerDiagnosticRegistry{
-		store: store, environment: diagnosticlog.EnvironmentProduction, daemonInstanceID: d.runnerInstanceID,
+		store: store, environment: diagnosticlog.EnvironmentProduction, daemonInstanceID: d.instanceID,
 		loggers: make(map[string]*diagnosticlog.Logger), failed: make(map[string]struct{}),
 	}
 	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID, Provider: "claude"}

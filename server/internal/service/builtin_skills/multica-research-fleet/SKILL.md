@@ -1,72 +1,101 @@
 ---
 name: multica-research-fleet
-description: "Use when executing an assigned durable Research Run task or operating the sealed Research Fleet led by Ronaldo."
+description: "用于执行已分配的持久化调研任务，或操作由调研主理人领导的封闭 Research Fleet。"
 user-invocable: false
 allowed-tools: Bash(multica *), Bash(curl *)
 ---
 
-# Multica Research Fleet
+# Multica 调研舰队
 
-Ronaldo leads the sealed Research Fleet. A current Research Run is a durable
-server-owned task graph, evidence ledger, decision log, delivery gate, and
-recovery loop. Chat is for user steering and visible progress; chat prose does
-not advance a task or satisfy a delivery gate.
+调研主理人领导封闭的 Research Fleet。当前 Research Run 是服务端持久拥有的
+任务图、证据账本、决策日志、交付门和恢复循环。对话只用于用户纠偏和展示进度；
+仅在对话中回复不会推进任务，也不能满足交付门。
 
-## V6 Director assignments
+## V6 主理人任务
 
-Users may create a V6 Run by sending `orchestrator_version=research-run-v6` and
-a Director. The homepage defaults to V6 and selects the first available Agent.
-Clients that omit `orchestrator_version` still create V5. `AssessV6Activation`
-remains an audit; it does not flip that omitted-version default. User chat on a
-V6 Run wakes the current Director, not a workspace Fleet Lead. `PATCH
-/api/research/v6/release` can close new V6 creates and pause existing V6 Runs.
+V6 的最高优先级语言规则：从收到任务到结束，所有自然语言输出，
+包括执行进度、智能体之间的消息、分析说明、错误说明和最终摘要，
+都必须使用简体中文。不得用英文叙述“我将……”“让我……”或工具探查过程。
+只有 JSON 字段名、枚举值、命令、代码、专有名词和来源原文保持原样；
+冻结合同明确要求其他语言时除外。下文中的英文是协议说明，不是输出语言示例。
 
-When the dispatch contract is `research-run-v6`, the durable Work Manifest and
-Director Brief are the complete authority for the current cycle. Never infer
-canonical state from chat history, a previous model session, the canvas, or a
-locally remembered team. A replacement Agent or Director must be able to resume
-from PostgreSQL-backed Brief pages, catalog pages, Work Items, attempts, node
-versions, discussions, steering assessments, reports, and committed events.
+用户可通过 `orchestrator_version=research-run-v6` 并指定主理人创建 V6 Run。
+首页默认选择 V6 和第一个运行时在线的 Agent。V6 通过既有 daemon credential proxy
+调用服务端 API，不要求独立的 daemon capability 或版本。省略 `orchestrator_version` 的客户端仍创建
+V5。`AssessV6Activation` 仍是审计，不会改变省略版本时的默认值。V6 Run 中的
+用户消息会唤醒当前主理人，而不是工作区 Fleet Lead。`PATCH
+/api/research/v6/release` 可以关闭新的 V6 创建并暂停现有 V6 Run。
 
-- Submit exactly the envelope named by `expected_result`; V6 has nine strict
-  envelopes and rejects unknown fields, cross-envelope fields, stale versions,
-  unscoped references, and payloads outside the frozen Manifest.
-- A Work Item changes state only through its attempt/result transaction. Never
-  directly promote, assimilate, revive, or connect graph nodes. Integration is
-  a proposal until the server enforces promotion eligibility, locks the inputs,
-  creates the single successor, and permanently records every absorbed node.
-- Every user message is Steering input, including messages that produce a
-  `no_op` assessment. Selected canvas references are immutable hints attached
-  to that message; they are not graph mutations.
-- The Director dynamically forms and replaces the team within the persisted
-  membership and hard-cap rules. Model sessions are disposable execution
-  resources, not durable team members or progress stores.
-- A V6 Report is an immutable Goal attachment, never a graph node. Only the
-  Director publication workflow may publish its verified package. Do not emit
-  external URLs, credentials, application-origin dependencies, or bridge calls
-  from report resources.
+派发合同为 `research-run-v6` 时，持久化 Work Manifest 和 Director Brief 是当前
+cycle 的完整权威。不得从对话历史、旧模型会话、画布或本地记忆的团队推断
+canonical state。替换后的 Agent 或主理人必须能够只依靠 PostgreSQL 中的 Brief
+页面、catalog 页面、Work Item、attempt、节点版本、讨论、纠偏评估、报告和已提交
+事件恢复执行。
 
-If any Brief/Manifest hash, revision, cursor, state version, assignment,
-membership, capability, or expected envelope disagrees with the dispatch,
-fail closed and let the durable recovery path issue a new attempt. Do not adapt
-the payload into a legacy V1–V5 result.
+- 只提交 `expected_result` 指定的 envelope。V6 有九种严格 envelope；未知字段、
+  跨 envelope 字段、过期版本、未限定范围的引用以及冻结 Manifest 之外的 payload
+  都会被拒绝。
+- Work Item 只能通过自身 attempt/result 事务改变状态。不得直接提升、吸收、恢复或
+  连接图节点。Integration 在服务端检查提升资格、锁定输入、创建唯一后继并永久记录
+  所有被吸收节点之前都只是 proposal。
+- 每条用户消息都是 Steering 输入，包括产生 `no_op` 评估的消息。用户选中的画布引用
+  是附在消息上的不可变提示，不是图变更。
+- 主理人在持久 membership 和硬上限内动态组建、替换团队。模型会话只是可丢弃的执行
+  资源，不是持久团队成员或进度存储。
+- 存在独立调研维度且容量允许时，主理人应在一个 proposal 中创建多个 Branch 和 Work
+  Item 并发运行。每个 run-scoped Agent 同时最多承担一个活动 Work；独立方向必须一项一
+  Agent，已有任务集中在同一 Agent 时应扩充专职 Agent 并改派，不得伪装成并发后串行执行。
+  标准 V6 首轮至少创建 3 名职责不同的 run-scoped Agent；全部加入后，在后续 proposal
+  中至少创建 3 个独立 atomic Work 并分别分配，`max_parallel_tasks` 小于 3 时以该上限为准。
+  除非冻结合同明确指定其他语言，面向用户的进度和结果叙述一律使用
+  简体中文；协议 key、枚举值、命令和来源原文保持精确。面向用户的输出不得叙述
+  Manifest/Brief 查找、标识符、JSON 拼装、CLI 命令、工具调用或隐藏推理；交接后只输出
+  简短的中文调研摘要。
+- Director Brief 节点摘要中的“待回答问题”来自持久化 Result/Insight。主理人必须逐项判断：
+  每个仍有价值的问题创建一个独立 Work 并交给不同 Agent，出现能力、容量或独立性缺口时先创建 Agent；
+  不继续的问题在 action reason 中记录收敛理由。存在高价值待回答问题且没有活动 Work
+  覆盖时，不得提交 `no_op`。历史 Brief 若遗漏 Result 的待回答问题，服务端会自动创建
+  一次修复 Cycle；不要要求用户重建 Run。
+- 每轮先检查 Branch Frontier 的 fresh、未吸收节点。两个或更多节点语义相关且满足
+  promotion、assimilation 或 `xxl_merge` 时，优先启动收敛；数量只触发判断，不得强行
+  融合不相关内容。使用 `kind: "create_integration"`、
+  `payload_schema: "integration.create.v1"`，并从 Brief 原样复制至少两个完整
+  `inputs` node ref 和对应完整 `branch_refs`。服务端建立冻结 Steward Discussion；全体
+  同意后自动派发 Integration Work 并创建 M/L/XL/XXL successor。不得创建普通 Work
+  绕过 Discussion。报告前，material unabsorbed content 必须已吸收、排除、终止或列为缺口。
+- 主理人不得自行暂停整场 Run。单个 Work Item 失败时，先读取 Brief 中的小目标、Attempt
+  次数/预算、失败分类、诊断和终止原因，再选择 `retry_work_item`、`reassign_work_item`、
+  创建替代 Work，或向用户明确报告。存在失败的专属 Agent Work 且当前没有活动 Agent
+  Work 时不得 `no_op`。只有用户 Stop 或发布维护控制可以暂停整场调研。
+- V6 Report 是不可变的 Goal 附件，不是图节点。只有主理人发布工作流可以发布通过验证的
+  package。报告资源不得输出外部 URL、凭据、应用同源依赖或 bridge 调用。
+- 内部 `director` cycle Work 只是主理人调度记录，不是成果星图节点。星图只展示可向用户
+  解释的调研 Work、结果和洞察；主理人执行状态通过 Brief、聊天、presence 和活动记录查看。
 
-### V6 executable loop
+如果 Brief/Manifest hash、revision、cursor、state version、assignment、membership、
+capability 或 expected envelope 中任何一项与派发不一致，应拒绝继续并让持久恢复路径
+签发新 attempt。不得把 payload 改装成旧 V1–V5 结果。如果平台生成的原子 Manifest 在
+已有持久 Work Branch scope 时仍给出空 `branch_refs`，系统会替换它且不消耗 Agent 的
+attempt 预算。
 
-If the prompt contains `## Durable Research V6 Work Item`, use the exact Run,
-Work Item, and Attempt IDs from that prompt. Read the frozen Manifest first:
+### V6 可执行循环
+
+先遵守上面的简体中文输出规则，再执行本节的协议步骤。不得把 CLI、
+credential proxy、Manifest、Brief 或 schema 的查找过程逐句输出给用户。
+
+如果 prompt 包含 `## 持久化 Research V6 Work Item`，使用其中精确的 Run、Work Item
+和 Attempt ID。首先读取冻结 Manifest：
 
 ```bash
 multica research work-manifest <session-id> <work-item-id> <attempt-id> --output json
 ```
 
-The Manifest's `expected_result_schema` names the only accepted root envelope.
-Preserve its workspace, Run, Work Item, Attempt, Agent, Manifest, goal, state,
-and event identities exactly. The Mission is an instruction inside that frozen
-authority; it is not a substitute for reading the Manifest.
+Manifest 的 `expected_result_schema` 指定唯一可接受的根 envelope。精确保留其中的
+workspace、Run、Work Item、Attempt、Agent、Manifest、goal、state 和 event 身份。
+调研任务只是冻结权威内部的一条指令，不能替代读取 Manifest。
 
-If the daemon's installed CLI predates these V6 commands, use the daemon-owned
-credential proxy. Never read or print a token:
+credential proxy 是已派发 attempt 的受权传输路径。CLI 传输不可用时可使用守护进程
+拥有的 credential proxy；不得读取或输出 token：
 
 ```bash
 V6_API="http://127.0.0.1:${MULTICA_DAEMON_PORT}/api/agent/research/sessions/<session-id>/work-items/<work-item-id>/attempts/<attempt-id>"
@@ -76,17 +105,31 @@ V6_CURL=(curl -fsS \
 "${V6_CURL[@]}" "${V6_API}/manifest"
 ```
 
-Use only the endpoint families authorized by the Manifest: Director work uses
-GET `/director-brief` and POST `/director-brief-acks`; a Manifest containing
-`catalog_access` authorizes GET `/catalog` and POST `/catalog-acks`; Report work
-uses `/report-uploads`; all work submits through POST `/submission`. JSON writes
-use `Content-Type: application/json`; a strict submission uses
-`--data-binary @result.json`. This fallback has the same attempt and Agent
-authorization as the CLI and exists because server CI/CD may deploy before a
-local daemon binary is upgraded.
+只能使用 Manifest 授权的 endpoint family：主理人工作使用 GET `/director-brief` 和
+POST `/director-brief-acks`；包含 `catalog_access` 的 Manifest 授权 GET `/catalog`
+和 POST `/catalog-acks`；报告工作使用 `/report-uploads`；所有工作都通过 POST
+`/submission` 提交。写 JSON 时使用 `Content-Type: application/json`，严格提交使用
+`--data-binary @result.json`。该回退路径与 CLI 具有相同的 attempt 和 Agent 授权，
+用于服务端 CI/CD 已部署但本地 daemon 尚未升级的情况。
 
-For a Director assignment, read every Brief page by following `next_cursor` and
-acknowledge each page with the exact IDs and hashes returned in that page:
+整个 attempt 中都要报告实时进度，便于用户了解工作状态。读取 Manifest 后立即报告一次；
+之后每次阶段变化（读取 brief 或 catalog、搜索、阅读来源、分析、起草、验证）时，向
+`${V6_API}/progress` POST 一行简体中文进度：
+
+```bash
+"${V6_CURL[@]}" -X POST -H 'Content-Type: application/json' \
+  -d '{"client_request_id":"<new-uuid>","text":"<one line, mission language, ≤240 chars>","stage":"<short-key>"}' \
+  "${V6_API}/progress"
+```
+
+进度不会结算 Work Item，服务端会限制每个 attempt 的数量。进度 POST 失败不得阻塞任务
+或形成重试循环；忽略错误并继续。进度也是存活心跳：每条被接受的进度会把 Work Item
+租约向后延长至少 20 分钟，因此长回合至少每 15 分钟报告一次，否则租约可能在工作中
+过期，attempt 会按 lost 恢复。被接受的进度会立即显示在调研页面，并从同一条持久化
+Run Event 恢复；无需再调用通用 task 进度接口。
+
+主理人任务必须沿 `next_cursor` 读取每一页 Brief，并用该页返回的精确 ID 和 hash
+逐页确认：
 
 ```bash
 multica research director-brief <session-id> <work-item-id> <attempt-id> \
@@ -96,21 +139,37 @@ multica research director-brief-ack <session-id> <work-item-id> <attempt-id> \
   --page-key <page-key> --page-hash <page-hash> --output json
 ```
 
-The acknowledgement object contains exactly `client_request_id`, `brief_id`,
-`brief_hash`, `page_key`, and `page_hash`. Build the strict
-`director_action_proposal` identity by copying workspace/Run/Work/Attempt and
-Manifest identity from the Manifest; copy Director assignment/generation,
-Brief identity, page count, state version, and event sequence from the Brief.
-Each action must use a root-contract action kind and one payload schema frozen
-under `manifest.task_specific_schema.payload_schemas`. Do not guess older
-`research.*` schema names. Agent creation is asynchronous: never assign Work to
-an Agent requested in the same proposal; wait for the joined event and next
-Director cycle. Atomic Work uses `atomic_result_submission`, a non-empty
-`payload_schema_id`, and the exact result validator in
-`payload.task_specific_schema`.
+确认对象只能包含 `client_request_id`、`brief_id`、`brief_hash`、`page_key` 和
+`page_hash`。构造严格 `director_action_proposal` 身份时，从 Manifest 复制
+workspace/Run/Work/Attempt 和 Manifest 身份；从 Brief 复制 Director
+assignment/generation、Brief 身份、页数、state version 和 event sequence。每个 action
+必须使用根合同允许的 action kind，以及 `manifest.task_specific_schema.payload_schemas`
+中冻结的一个 payload schema。创建 atomic research Work 时，外层 action 的机械映射固定为
+`kind: "create_work_item"`、`payload_schema: "work.create.v1"`；内层 action payload 固定包含
+`kind: "research"` 和 `expected_result_schema_id: "atomic_result_submission"`。不得把
+`work`、`work.create`、`create_work`、`create_collaboration`、`collaboration_create` 或
+`collaboration.create.v1` 当作 action kind，也不得靠重复提交猜测枚举值。不得猜测旧
+`research.*` schema 名。Agent 创建是异步的：
+不得把 Work 分给同一个 proposal 中刚申请的 Agent；等待 joined 事件和下一次 Director
+cycle。主理人只负责规划、组队、派工和整合，不得把原子调研 Work 指派给自己。原子
+Work 使用 `atomic_result_submission`，`payload_schema_id` 必须非空且不得为
+`no_op.v1`，并在 `payload.task_specific_schema` 中携带精确、非空的结果校验器。派工
+的 `branch_ids` 只能复制当前 Run 中已经存在的 Branch ID，不得根据标题或 action ID
+推导 UUID；不存在或跨 Run 的 Branch 引用会使 proposal 被拒绝。派工
+发生合同拒绝且已有空闲专属 Agent 时，下一轮必须修正合同并重新派工，不得提交
+`no_op`；运行中尚无专属 Agent 且无 Agent 创建待处理时也不得 `no_op`。专属 Agent
+Work 已失败且当前无活动 Agent Work 时，必须重试或改派失败 Work，不得等待。
 
-When `catalog_access` is present, read the authorized view page by page and
-acknowledge every page used by the result:
+Director 发起节点收敛时，外层 action 的机械映射固定为
+`kind: "create_integration"`、`payload_schema: "integration.create.v1"`；payload 只包含
+从 Brief 复制的 `inputs` 与 `branch_refs`。服务端会给每个当前 Steward 创建
+`discussion_turn_submission` Work。投票必须公开说明 common/unique findings、冲突、遗漏、
+scope 和理由；全体 accept 后，最后加入的成功参与者收到 `integration_submission` Work。
+Integration 必须原样复制 Manifest 的 `input_nodes`、`branch_refs` 和 Discussion identity，
+按 S+S→M、M+M→L、L+L→XL、XL+XL→XXL、高层+低层保持高层、XXL+XXL→XXL 的规则提交。
+`content_hash` 同样使用仅移除自身后的 RFC 8785 JCS SHA-256。
+
+存在 `catalog_access` 时，逐页读取授权 view，并确认结果实际使用的每一页：
 
 ```bash
 multica research work-catalog <session-id> <work-item-id> <attempt-id> \
@@ -120,12 +179,18 @@ multica research work-catalog-ack <session-id> <work-item-id> <attempt-id> \
   --output json
 ```
 
-An `atomic_result_submission` must copy the Manifest's `task_id` as well as its
-Work/Attempt/Agent identity. The server creates that one-to-one Task provenance
-record before dispatch. Its `content_hash` is SHA-256 over RFC 8785 JCS bytes
-after removing only `content_hash`; do not hash pretty-printed file bytes.
+`atomic_result_submission` 必须复制 Manifest 的 `task_id` 及其 Work/Attempt/Agent
+身份。服务端会在派发前创建一对一 Task provenance 记录。精确复制
+`manifest.branch_refs`，包括每个 Branch `state_version`；不得用
+`through_state_version` 或其他 Run watermark 替代。把
+`manifest.task_specific_schema.payload_schemas` 下唯一的精确 key 复制到提交的
+`task_specific_schema`；不得编造或重命名 `research.*` schema ID。
+`content_layers.catalog_summary` 最多 512 个字符。根 content layer 的
+`uncertainties`、`conflicts` 和 `open_questions` 是字符串数组；`task_specific_payload`
+内同名字段遵循冻结任务 schema，可能是对象数组。`content_hash` 是仅移除
+`content_hash` 后的 RFC 8785 JCS 字节的 SHA-256，不得 hash 格式化后的文件字节。
 
-Report work uploads each immutable resource before the package submission:
+报告工作必须在提交 package 前上传每个不可变资源：
 
 ```bash
 multica research report-upload <session-id> <work-item-id> <attempt-id> \
@@ -133,38 +198,32 @@ multica research report-upload <session-id> <work-item-id> <attempt-id> \
   --media-type <media-type> --output json
 ```
 
-Submit the strict envelope only through the V6 endpoint:
+严格 envelope 只能通过 V6 endpoint 提交：
 
 ```bash
 multica research work-submit <session-id> <work-item-id> <attempt-id> \
   --file <absolute-path/result.json> --output json
 ```
 
-`/submission` has no validation-only or dry-run mode. Never send a probe,
-placeholder, or minimum test payload: any HTTP 200 is the formal durable
-handoff and may permanently settle the Work Item. Submit only the inspected,
-mission-complete result.
+`/submission` 没有仅校验或 dry-run 模式。不得发送探测、占位或最小测试 payload：
+任何 HTTP 200 都是正式的持久交接，可能永久结算 Work Item。只能提交已经检查并完整
+完成任务的结果。
 
-Retry the same submission with the same `client_request_id` and byte-equivalent
-payload after a transport failure. Never send a V6 envelope through the legacy
-`task-result` command.
-That exact replay remains valid after the Attempt settles and returns the
-original Submission outcome; a new request ID or changed content does not.
+传输失败后，使用相同 `client_request_id` 和字节等价 payload 重试同一提交。不得通过旧
+`task-result` 命令发送 V6 envelope。Attempt 结算后，该精确 replay 仍有效并返回原始
+Submission 结果；新 request ID 或变更后的内容不具备此性质。
 
-An HTTP 400 `research.v6.invalid_contract` response includes the bounded field
-or hash validation reason. Correct that exact contract violation before the
-next submission; the rejected envelope was not durably handed off. Do not
-blindly resend an unchanged invalid file.
+HTTP 400 `research.v6.invalid_contract` 响应会包含受限字段或 hash 的校验原因。下次
+提交前先修正该精确合同违规；被拒绝的 envelope 尚未持久交接。不得盲目重发未修改的
+无效文件。
 
-JSON strings must not contain `U+0000`/NUL. Remove that character from copied
-source text before recomputing `content_hash` and resubmitting.
+JSON 字符串不得包含 `U+0000`/NUL。重新计算 `content_hash` 和提交前，先从复制的来源
+文本中移除该字符。
 
-The submission boundary is asynchronous. Status `received` means the envelope
-is durably handed off and the Agent should finish; a server reconciler later
-marks it `accepted` or `rejected`. Do not keep the Inbox execution open waiting
-for `accepted`, and do not create a second request ID after `received`.
-The server may cancel the remaining Inbox execution after that durable result
-settles; this is successful cleanup, not a failed Research result.
+提交边界是异步的。状态 `received` 表示 envelope 已持久交接，Agent 应结束执行；服务端
+reconciler 之后会标记为 `accepted` 或 `rejected`。不得让 Inbox 执行保持打开等待
+`accepted`，也不得在 `received` 后创建第二个 request ID。持久结果结算后，服务端可能
+取消剩余 Inbox 执行；这是成功清理，不是调研结果失败。
 
 ## Assigned Research Run task
 
@@ -332,6 +391,11 @@ An Inbox delivery that expires before any worker claims it is terminal only for
 that delivery. The server preserves the Research Task's bounded attempt budget
 and re-resolves an available execution target; do not duplicate the Task or
 change its method to recover from this delivery failure.
+
+The same ownership applies when a runtime restarts or times out after claiming
+the Inbox delivery. Generic Inbox auto-retry must not clone a delivery carrying
+`research_dispatch_key`; wait for the Research Work lease/recovery loop to
+settle the old Attempt and dispatch a new Attempt with a new key.
 
 Every `required_capability` in a proposed task must exactly match an active
 fleet role. When a real specialty is missing, the lead must hire it, optimize

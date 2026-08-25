@@ -10,7 +10,7 @@ import (
 )
 
 type deliveryGateStore interface {
-	EvaluateGate(context.Context, string) (GateResult, error)
+	EvaluateGate(context.Context, string, string) (GateResult, error)
 	SetAwaitingConfirmation(context.Context, string, GateResult) (Run, RunEvent, error)
 	CreateControlTask(context.Context, ControlTaskInput) (Task, RunEvent, error)
 	Complete(context.Context, string, string, string) (Run, RunEvent, error)
@@ -32,15 +32,15 @@ type deliveryGateModule struct {
 	projection pendingEventProjector
 }
 
-func (module deliveryGateModule) Evaluate(ctx context.Context, sessionID string) (GateResult, error) {
-	return module.store.EvaluateGate(ctx, sessionID)
+func (module deliveryGateModule) Evaluate(ctx context.Context, sessionID, workspaceID string) (GateResult, error) {
+	return module.store.EvaluateGate(ctx, sessionID, workspaceID)
 }
 
 // Advance evaluates the current canonical graph and either transitions the Run
 // to confirmation or creates exactly one minimal remediation task. Execution of
 // a newly created task remains the responsibility of Execution Module.
 func (module deliveryGateModule) Advance(ctx context.Context, run Run, tasks []Task) (gateAdvanceOutcome, error) {
-	gate, err := module.store.EvaluateGate(ctx, run.SessionID)
+	gate, err := module.store.EvaluateGate(ctx, run.SessionID, run.WorkspaceID)
 	if err != nil {
 		return gateAdvanceOutcome{}, err
 	}
@@ -83,7 +83,7 @@ func (module deliveryGateModule) Advance(ctx context.Context, run Run, tasks []T
 }
 
 func (module deliveryGateModule) Confirm(ctx context.Context, sessionID, workspaceID, userID string) (Run, error) {
-	gate, err := module.store.EvaluateGate(ctx, sessionID)
+	gate, err := module.store.EvaluateGate(ctx, sessionID, workspaceID)
 	if err != nil {
 		return Run{}, err
 	}

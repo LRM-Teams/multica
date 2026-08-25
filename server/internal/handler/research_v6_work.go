@@ -7,10 +7,12 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/multica-ai/multica/server/internal/logger"
 	"github.com/multica-ai/multica/server/internal/researchrun"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 const maxResearchV6SubmissionBytes int64 = 2 << 20
@@ -184,6 +186,48 @@ func (h *Handler) AcknowledgeAgentResearchV6WorkCatalog(w http.ResponseWriter, r
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"acknowledged": true})
+}
+
+type reportResearchV6ProgressRequest struct {
+	ClientRequestID string `json:"client_request_id"`
+	Text            string `json:"text"`
+	Stage           string `json:"stage"`
+}
+
+// ReportAgentResearchV6WorkProgress records a one-line in-flight progress note
+// for the active attempt. Notes surface as live presence captions in the run
+// UI; they never mutate work item state and never settle the attempt.
+func (h *Handler) ReportAgentResearchV6WorkProgress(w http.ResponseWriter, r *http.Request) {
+	service, ok := h.researchV6Submission(w)
+	if !ok {
+		return
+	}
+	access, ok := h.authorizeResearchV6Attempt(w, r)
+	if !ok {
+		return
+	}
+	var request reportResearchV6ProgressRequest
+	if !decodeResearchJSON(w, r, &request) {
+		return
+	}
+	if _, valid := parseUUIDOrBadRequest(w, request.ClientRequestID, "client_request_id"); !valid {
+		return
+	}
+	err := service.ReportWorkProgress(r.Context(), researchrun.ReportV6WorkProgressInput{
+		V6AttemptAccess: access, ClientRequestID: request.ClientRequestID,
+		Text: request.Text, Stage: request.Stage,
+	})
+	if err != nil {
+		writeResearchV6DomainError(w, err)
+		return
+	}
+	h.publish(protocol.EventResearchSessionPresence, access.WorkspaceID, "agent", access.AgentID, map[string]any{
+		"session_id": access.RunID,
+		"agent_id":   access.AgentID,
+		"activity":   researchrun.PrepareV6WorkProgressText(request.Text),
+		"updated_at": time.Now().UTC().UnixMilli(),
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"recorded": true})
 }
 
 func (h *Handler) SubmitAgentResearchV6Work(w http.ResponseWriter, r *http.Request) {

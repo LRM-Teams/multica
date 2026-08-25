@@ -91,7 +91,7 @@ const members: MemberWithUser[] = [
     display_name: "Me",
     email: "me@example.com",
     avatar_url: null,
-    profile_description: "",
+    description: "",
     created_at: "2026-01-01T00:00:00Z",
   },
   {
@@ -103,7 +103,7 @@ const members: MemberWithUser[] = [
     display_name: "Other",
     email: "other@example.com",
     avatar_url: null,
-    profile_description: "",
+    description: "",
     created_at: "2026-01-01T00:00:00Z",
   },
 ];
@@ -142,6 +142,7 @@ function renderDialog(
     instructions?: string;
     lockIdentity?: boolean;
   } | null,
+  lockComputer = false,
 ) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -160,6 +161,7 @@ function renderDialog(
             template={template}
             prefill={prefill}
             defaultMachineId={defaultMachineId}
+            lockComputer={lockComputer}
             onClose={onClose}
             onCreate={onCreate}
           />
@@ -324,7 +326,6 @@ describe("CreateAgentDialog workspace runtime selection", () => {
       custom_env: {},
       custom_args: [],
       skills: [],
-      max_concurrent_tasks: 1,
     } as unknown as Agent;
     renderDialog([selected], template);
 
@@ -365,5 +366,29 @@ describe("CreateAgentDialog workspace runtime selection", () => {
         model: "claude-sonnet-5",
       }),
     );
+  });
+
+  it("locks the Computer picker when lockComputer is set", () => {
+    const runtime = makeRuntime({
+      id: "rt-locked",
+      daemon_id: "pc-daemon-aaaa",
+      owner_id: ME,
+      provider: "pi",
+    });
+    renderDialog(
+      [runtime],
+      undefined,
+      runtimeMachineKey(runtime),
+      {
+        name: "period-collect-aaaa",
+        lockIdentity: true,
+      },
+      true,
+    );
+
+    expect(
+      screen.getByText("This Computer is fixed. Choose a runtime and model to finish."),
+    ).toBeTruthy();
+    expect(screen.getByTestId("computer-picker-trigger")).toBeDisabled();
   });
 });

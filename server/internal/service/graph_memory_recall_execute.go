@@ -7,8 +7,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -46,6 +50,7 @@ type GraphMemoryRecallExecutor struct {
 	embedder       *memorygraph.CachedEmbedder
 	traces         *memorygraph.TraceRecorder
 	model          string
+	priorFlights   singleflight.Group
 }
 
 func NewGraphMemoryRecallExecutor(pool *pgxpool.Pool, dive *GraphMemoryDiveService, backendFactory GraphMemoryRecallBackendFactory, embedder *memorygraph.CachedEmbedder, traces *memorygraph.TraceRecorder, model string) *GraphMemoryRecallExecutor {
@@ -91,7 +96,15 @@ func (e *GraphMemoryRecallExecutor) Execute(ctx context.Context, plan *GraphMemo
 	cfg.Model = e.model
 	explorer := memorygraph.NewExplorer(store, retr, backend, cfg, "pi", e.traces)
 	explorer.PinVersion(plan.GraphVersion)
-	result, err := explorer.Explore(ctx, plan.Query)
+	priorStore := memorygraph.NewPriorRecordStore(filepath.Join(plan.GraphDir, "continuation"))
+	ownerKey := graphPriorOwnerKey(plan)
+	var brief *memorygraph.PriorBrief
+	if rec, err := priorStore.Load(ownerKey); err != nil {
+		slog.Warn("graph memory recall: prior record load failed; continuing without prior", "recall_id", plan.RecallID, "error", err)
+	} else if rec != nil && rec.GraphVersion == plan.GraphVersion {
+		brief = e.priorBrief(ctx, plan, rec, priorStore, ownerKey, backend)
+	}
+	result, err := explorer.ExploreWithPrior(ctx, plan.Query, plan.Seeds, brief)
 	if err != nil {
 		return e.executionFailure(ctx, plan, "explore: "+err.Error())
 	}
@@ -104,6 +117,7 @@ func (e *GraphMemoryRecallExecutor) Execute(ctx context.Context, plan *GraphMemo
 		Rounds:    result.Rounds,
 		AgentRuns: len(result.AgentRuns),
 		Found:     result.Found,
+		PriorUsed: brief != nil,
 	}); err != nil {
 		slog.Warn("graph memory recall: query log append failed", "trace_id", plan.TraceID, "error", err)
 	}
@@ -113,10 +127,68 @@ func (e *GraphMemoryRecallExecutor) Execute(ctx context.Context, plan *GraphMemo
 	if err := e.enqueueDive(ctx, plan.RecallID); err != nil {
 		return nil, err
 	}
+	if result.Found {
+		if err := priorStore.Save(ownerKey, memorygraph.PriorRecord{
+			GraphVersion: plan.GraphVersion,
+			Query:        plan.Query,
+			CreatedAt:    time.Now().UTC(),
+			Transcript:   result.AdoptedTranscript,
+		}); err != nil {
+			slog.Warn("graph memory recall: prior record save failed", "recall_id", plan.RecallID, "error", err)
+		}
+	}
 	if !result.Found {
 		return &GraphMemoryRecallInjection{Version: plan.GraphVersion, Rounds: result.Rounds}, nil
 	}
 	return graphMemoryRecallInjection(store, plan.GraphVersion, result.Summary, result.NodeIDs, result.Rounds), nil
+}
+
+// graphPriorOwnerKey is the per-channel continuation key: workspace +
+// graph identity + view channel. Cross-workspace or cross-channel reuse is
+// impossible by construction.
+func graphPriorOwnerKey(plan *GraphMemoryRecallPlan) string {
+	return strings.Join([]string{
+		plan.WorkspaceID, plan.GraphKind, plan.GraphOwnerID, plan.GraphView.ChannelID,
+	}, "|")
+}
+
+// priorBrief resolves the query-aware brief for this recall: exact-match
+// cache on the normalized query, then a singleflight-compressed miss. Every
+// failure degrades to nil so recall continues without prior evidence.
+func (e *GraphMemoryRecallExecutor) priorBrief(ctx context.Context, plan *GraphMemoryRecallPlan, rec *memorygraph.PriorRecord, store *memorygraph.PriorRecordStore, ownerKey string, backend memorygraph.AgentBackend) *memorygraph.PriorBrief {
+	key := memorygraph.NormalizeRecallKey(plan.Query)
+	if key == "" {
+		return nil
+	}
+	if cached, ok := rec.Briefs[key]; ok {
+		slog.Info("graph memory recall: prior brief cache hit", "recall_id", plan.RecallID)
+		return &cached
+	}
+	flightKey := ownerKey + "|" + strconv.Itoa(rec.GraphVersion) + "|" + key
+	started := time.Now()
+	v, err, _ := e.priorFlights.Do(flightKey, func() (any, error) {
+		return memorygraph.NewPriorCompressor(backend, e.model, memorygraph.DefaultPriorCompressionTimeout).
+			Compress(ctx, plan.Query, rec.Transcript)
+	})
+	if err != nil {
+		slog.Warn("graph memory recall: prior compression failed; continuing without prior", "recall_id", plan.RecallID, "error", err)
+		return nil
+	}
+	brief, _ := v.(*memorygraph.PriorBrief)
+	if brief == nil {
+		return nil
+	}
+	slog.Info("graph memory recall: prior brief compressed",
+		"recall_id", plan.RecallID, "ms", time.Since(started).Milliseconds(),
+		"transcript_msgs", len(rec.Transcript), "brief_nodes", len(brief.NodeIDs))
+	if rec.Briefs == nil {
+		rec.Briefs = map[string]memorygraph.PriorBrief{}
+	}
+	rec.Briefs[key] = *brief
+	if err := store.Save(ownerKey, *rec); err != nil {
+		slog.Warn("graph memory recall: prior brief write-back failed", "recall_id", plan.RecallID, "error", err)
+	}
+	return brief
 }
 
 func (e *GraphMemoryRecallExecutor) executionFailure(ctx context.Context, plan *GraphMemoryRecallPlan, reason string) (*GraphMemoryRecallInjection, error) {

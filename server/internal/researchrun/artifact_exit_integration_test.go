@@ -108,7 +108,7 @@ func TestReplayDispatchPromptMatchesOutboxAfterDispatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateRun: %v", err)
 	}
-	tasks, err := store.ListTasks(ctx, run.SessionID)
+	tasks, err := store.ListTasks(ctx, run.SessionID, run.WorkspaceID)
 	if err != nil || len(tasks) == 0 {
 		t.Fatalf("ListTasks: %v len=%d", err, len(tasks))
 	}
@@ -158,7 +158,7 @@ func TestHistoricalTaskContextAdvancesWhileFrozenManifestStable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateRun: %v", err)
 	}
-	tasks, err := store.ListTasks(ctx, run.SessionID)
+	tasks, err := store.ListTasks(ctx, run.SessionID, run.WorkspaceID)
 	if err != nil || len(tasks) == 0 {
 		t.Fatalf("ListTasks: %v len=%d", err, len(tasks))
 	}
@@ -256,7 +256,7 @@ func TestAttemptContextManifestMetadataStableAcrossLiveMutation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateRun: %v", err)
 	}
-	tasks, err := store.ListTasks(ctx, run.SessionID)
+	tasks, err := store.ListTasks(ctx, run.SessionID, run.WorkspaceID)
 	if err != nil || len(tasks) == 0 {
 		t.Fatalf("ListTasks: %v len=%d", err, len(tasks))
 	}
@@ -403,7 +403,7 @@ func TestTaskBoundArtifactProjectionUsesSelectionTimeMetadata(t *testing.T) {
 	}
 	claimID := uuid.NewString()
 	seedIntegrationClaimArtifact(t, ctx, pool, fixture.workspaceID, run.SessionID, claimID, "projection-claim", "freeze projection metadata")
-	tasks, err := store.ListTasks(ctx, run.SessionID)
+	tasks, err := store.ListTasks(ctx, run.SessionID, run.WorkspaceID)
 	if err != nil || len(tasks) == 0 {
 		t.Fatalf("ListTasks: %v len=%d", err, len(tasks))
 	}
@@ -704,14 +704,14 @@ func TestTaskContextForAttemptUsesFrozenGateSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateRun: %v", err)
 	}
-	tasks, err := store.ListTasks(ctx, run.SessionID)
+	tasks, err := store.ListTasks(ctx, run.SessionID, run.WorkspaceID)
 	if err != nil || len(tasks) == 0 {
 		t.Fatalf("ListTasks: %v len=%d", err, len(tasks))
 	}
 	// This is the unchanged V1-V5 Gate rubric output before D freezes it. The
 	// manifest must authorize and preserve these exact bytes rather than run a
 	// second, D-specific rubric.
-	rubricGate, err := store.EvaluateGate(ctx, run.SessionID)
+	rubricGate, err := store.EvaluateGate(ctx, run.SessionID, run.WorkspaceID)
 	if err != nil {
 		t.Fatalf("EvaluateGate before dispatch: %v", err)
 	}
@@ -776,7 +776,7 @@ func TestTaskContextForAttemptUsesFrozenGateSnapshot(t *testing.T) {
 		)
 	`, []any{extraTaskID, fixture.workspaceID, run.SessionID, run.GoalVersion, run.PlanVersion}, []string{extraTaskID})
 
-	liveGate, err := store.EvaluateGate(ctx, run.SessionID)
+	liveGate, err := store.EvaluateGate(ctx, run.SessionID, run.WorkspaceID)
 	if err != nil {
 		t.Fatalf("EvaluateGate: %v", err)
 	}
@@ -871,7 +871,7 @@ func TestTaskContextForAttemptRejectsTamperedFrozenGateSnapshot(t *testing.T) {
 			if createErr != nil {
 				t.Fatal(createErr)
 			}
-			tasks, listErr := store.ListTasks(ctx, run.SessionID)
+			tasks, listErr := store.ListTasks(ctx, run.SessionID, run.WorkspaceID)
 			if listErr != nil || len(tasks) == 0 {
 				t.Fatalf("ListTasks err=%v len=%d", listErr, len(tasks))
 			}

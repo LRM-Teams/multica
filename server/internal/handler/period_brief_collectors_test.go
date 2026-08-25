@@ -31,7 +31,7 @@ func TestEnsurePeriodBriefCollectors_CreatesPerLocalComputer(t *testing.T) {
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent_runtime (workspace_id, daemon_id, name, display_name, runtime_mode, provider, status, device_info, metadata, visibility, last_seen_at) VALUES ($1,  $2,  'cloud-box',  'Cloud Box',  'cloud',  $3,  'online',  '',  '{}'::jsonb,  'public',  now())
 		RETURNING id
-	`,  testWorkspaceID,  cloudDaemon,  "cloud_collect_"+uuid.NewString()).Scan(&cloudRuntimeID); err != nil {
+	`, testWorkspaceID, cloudDaemon, "cloud_collect_"+uuid.NewString()).Scan(&cloudRuntimeID); err != nil {
 		t.Fatalf("seed cloud runtime: %v", err)
 	}
 	// LRM-1570: the cloud runtime is its own Computer, owned via an active
@@ -47,7 +47,7 @@ func TestEnsurePeriodBriefCollectors_CreatesPerLocalComputer(t *testing.T) {
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, cloudRuntimeID)
 	})
 
-	call := func() *httptest.ResponseRecorder {
+	probe := func() *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
 		req := newRequestAs(testUserID, http.MethodPost, "/api/agents/period-brief-collectors", map[string]string{
 			"model": "collector-model",
@@ -56,21 +56,80 @@ func TestEnsurePeriodBriefCollectors_CreatesPerLocalComputer(t *testing.T) {
 		testHandler.EnsurePeriodBriefCollectors(rec, req)
 		return rec
 	}
+	create := func(runtimeID string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		req := newRequestAs(testUserID, http.MethodPost, "/api/agents/period-brief-collectors", map[string]string{
+			"model":      "collector-model",
+			"runtime_id": runtimeID,
+		})
+		req.Header.Set("X-Workspace-ID", testWorkspaceID)
+		testHandler.EnsurePeriodBriefCollectors(rec, req)
+		return rec
+	}
 
-	rec := call()
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("create=%d body=%s", rec.Code, rec.Body.String())
+	probed := probe()
+	if probed.Code != http.StatusOK {
+		t.Fatalf("probe=%d body=%s", probed.Code, probed.Body.String())
+	}
+	var preview EnsurePeriodBriefCollectorsResponse
+	if err := json.Unmarshal(probed.Body.Bytes(), &preview); err != nil {
+		t.Fatal(err)
+	}
+	if len(preview.Created) != 0 {
+		t.Fatalf("probe must not create: %#v", preview.Created)
+	}
+	if len(preview.Missing) < 3 {
+		t.Fatalf("missing=%#v", preview.Missing)
+	}
+
+	for _, runtimeID := range []string{runtimeA, runtimeB, cloudRuntimeID} {
+		rec := create(runtimeID)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("create %s=%d body=%s", runtimeID, rec.Code, rec.Body.String())
+		}
+		var created EnsurePeriodBriefCollectorsResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+			t.Fatal(err)
+		}
+		if len(created.Created) != 1 {
+			t.Fatalf("created=%v agents=%d", created.Created, len(created.Agents))
+		}
+		for _, agent := range created.Agents {
+			t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, agent.ID) })
+		}
+	}
+
+	rec := probe()
+	if rec.Code != http.StatusOK {
+		t.Fatalf("probe after create=%d body=%s", rec.Code, rec.Body.String())
 	}
 	var created EnsurePeriodBriefCollectorsResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
 		t.Fatal(err)
 	}
-	if len(created.Created) < 3 {
-		t.Fatalf("created=%v agents=%d", created.Created, len(created.Agents))
+	missingByKey := map[string]PeriodBriefCollectorMissingSlot{}
+	for _, slot := range created.Missing {
+		missingByKey[slot.Key] = slot
 	}
+	for _, key := range []string{
+		"local:" + strings.ToLower(daemonA),
+		"local:" + strings.ToLower(daemonB),
+		"cloud:" + cloudRuntimeID,
+	} {
+		if _, ok := missingByKey[key]; ok {
+			t.Fatalf("slot %s still missing after create: %#v", key, created.Missing)
+		}
+	}
+	wantA := periodBriefCollectorNameForDaemon(daemonA)
+	wantB := periodBriefCollectorNameForDaemon(daemonB)
+	wantCloud := periodBriefCollectorNameForDaemon(cloudRuntimeID)
 	names := map[string]string{}
 	var sawCloud bool
 	for _, agent := range created.Agents {
+		names[agent.Name] = agent.ID
+		if agent.Name != wantA && agent.Name != wantB && agent.Name != wantCloud {
+			continue
+		}
 		if !strings.HasPrefix(agent.Name, periodBriefCollectorNamePrefix) {
 			t.Fatalf("collector name %q", agent.Name)
 		}
@@ -79,20 +138,16 @@ func TestEnsurePeriodBriefCollectors_CreatesPerLocalComputer(t *testing.T) {
 		} else if !strings.HasPrefix(agent.DisplayName, periodBriefCollectorDisplayLead) {
 			t.Fatalf("display_name %q", agent.DisplayName)
 		}
-		names[agent.Name] = agent.ID
 		t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, agent.ID) })
 	}
 	if !sawCloud {
 		t.Fatal("expected a cloud-labeled collector display name")
 	}
-	wantA := periodBriefCollectorNameForDaemon(daemonA)
-	wantB := periodBriefCollectorNameForDaemon(daemonB)
-	wantCloud := periodBriefCollectorNameForDaemon(cloudRuntimeID)
 	if names[wantA] == "" || names[wantB] == "" || names[wantCloud] == "" {
 		t.Fatalf("missing collectors want %q/%q/%q got %#v", wantA, wantB, wantCloud, names)
 	}
 
-	again := call()
+	again := create(runtimeA)
 	if again.Code != http.StatusOK {
 		t.Fatalf("idempotent=%d body=%s", again.Code, again.Body.String())
 	}
@@ -103,9 +158,6 @@ func TestEnsurePeriodBriefCollectors_CreatesPerLocalComputer(t *testing.T) {
 	if len(existing.Created) != 0 {
 		t.Fatalf("created on second ensure = %#v", existing.Created)
 	}
-
-	_ = runtimeA
-	_ = runtimeB
 }
 
 func TestPeriodBriefCollectorNameForDaemonStable(t *testing.T) {
@@ -145,7 +197,7 @@ func TestEnsurePeriodBriefCollectors_SkipsOthersPublicComputers(t *testing.T) {
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, visibility, last_seen_at) VALUES ($1,  $2,  $3,  'local',  $4,  'online',  '',  '{}'::jsonb,  'public',  now())
 		RETURNING id
-	`,  testWorkspaceID,  otherDaemon,  "Other Public Laptop",  "other_pub_"+uuid.NewString()).Scan(&otherRuntimeID); err != nil {
+	`, testWorkspaceID, otherDaemon, "Other Public Laptop", "other_pub_"+uuid.NewString()).Scan(&otherRuntimeID); err != nil {
 		t.Fatalf("seed other public runtime: %v", err)
 	}
 	t.Cleanup(func() {
@@ -165,11 +217,40 @@ func TestEnsurePeriodBriefCollectors_SkipsOthersPublicComputers(t *testing.T) {
 	})
 
 	ownDaemon := "own-pc-" + uuid.NewString()[:8]
-	_ = seedMachineLockedRuntime(t, ownDaemon, "My Laptop")
+	ownRuntimeID := seedMachineLockedRuntime(t, ownDaemon, "My Laptop")
+
+	probe := httptest.NewRecorder()
+	probeReq := newRequestAs(testUserID, http.MethodPost, "/api/agents/period-brief-collectors", map[string]string{
+		"model": "collector-model",
+	})
+	probeReq.Header.Set("X-Workspace-ID", testWorkspaceID)
+	testHandler.EnsurePeriodBriefCollectors(probe, probeReq)
+	if probe.Code != http.StatusOK {
+		t.Fatalf("probe=%d body=%s", probe.Code, probe.Body.String())
+	}
+	var preview EnsurePeriodBriefCollectorsResponse
+	if err := json.Unmarshal(probe.Body.Bytes(), &preview); err != nil {
+		t.Fatal(err)
+	}
+	forbidden := periodBriefCollectorNameForDaemon(otherDaemon)
+	wantOwn := periodBriefCollectorNameForDaemon(ownDaemon)
+	sawOwnMissing := false
+	for _, slot := range preview.Missing {
+		if strings.Contains(strings.ToLower(slot.Key), strings.ToLower(otherDaemon)) {
+			t.Fatalf("must not list another member's computer: %#v", slot)
+		}
+		if slot.Key == "local:"+strings.ToLower(ownDaemon) {
+			sawOwnMissing = true
+		}
+	}
+	if !sawOwnMissing {
+		t.Fatalf("expected own missing slot %q among %#v", wantOwn, preview.Missing)
+	}
 
 	rec := httptest.NewRecorder()
 	req := newRequestAs(testUserID, http.MethodPost, "/api/agents/period-brief-collectors", map[string]string{
-		"model": "collector-model",
+		"model":      "collector-model",
+		"runtime_id": ownRuntimeID,
 	})
 	req.Header.Set("X-Workspace-ID", testWorkspaceID)
 	testHandler.EnsurePeriodBriefCollectors(rec, req)
@@ -180,8 +261,6 @@ func TestEnsurePeriodBriefCollectors_SkipsOthersPublicComputers(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
-	wantOwn := periodBriefCollectorNameForDaemon(ownDaemon)
-	forbidden := periodBriefCollectorNameForDaemon(otherDaemon)
 	sawOwn := false
 	for _, agent := range resp.Agents {
 		t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, agent.ID) })
@@ -194,6 +273,147 @@ func TestEnsurePeriodBriefCollectors_SkipsOthersPublicComputers(t *testing.T) {
 	}
 	if !sawOwn {
 		t.Fatalf("expected own collector %q among %#v", wantOwn, resp.Agents)
+	}
+}
+
+func TestEnsurePeriodBriefCollectors_RestoresArchivedSameName(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	_ = ensureSystemGeneralForTest(t)
+
+	daemon := "pc-daemon-" + uuid.NewString()[:8]
+	runtimeID := seedMachineLockedRuntime(t, daemon, "Laptop Restore")
+	create := func() *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		req := newRequestAs(testUserID, http.MethodPost, "/api/agents/period-brief-collectors", map[string]string{
+			"model":      "collector-model",
+			"runtime_id": runtimeID,
+		})
+		req.Header.Set("X-Workspace-ID", testWorkspaceID)
+		testHandler.EnsurePeriodBriefCollectors(rec, req)
+		return rec
+	}
+
+	createdRec := create()
+	if createdRec.Code != http.StatusCreated {
+		t.Fatalf("create=%d body=%s", createdRec.Code, createdRec.Body.String())
+	}
+	var created EnsurePeriodBriefCollectorsResponse
+	if err := json.Unmarshal(createdRec.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if len(created.Agents) != 1 {
+		t.Fatalf("agents=%#v", created.Agents)
+	}
+	agentID := created.Agents[0].ID
+	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, agentID) })
+
+	if _, err := testPool.Exec(ctx, `UPDATE agent SET archived_at = now(), archived_by = $2 WHERE id = $1`, agentID, testUserID); err != nil {
+		t.Fatalf("archive: %v", err)
+	}
+
+	restoredRec := create()
+	if restoredRec.Code != http.StatusOK && restoredRec.Code != http.StatusCreated {
+		t.Fatalf("restore after archive=%d body=%s", restoredRec.Code, restoredRec.Body.String())
+	}
+	if strings.Contains(restoredRec.Body.String(), "agent_workspace_name_unique") {
+		t.Fatalf("archived collector still collided on name: %s", restoredRec.Body.String())
+	}
+	var restored EnsurePeriodBriefCollectorsResponse
+	if err := json.Unmarshal(restoredRec.Body.Bytes(), &restored); err != nil {
+		t.Fatal(err)
+	}
+	if len(restored.Agents) != 1 || restored.Agents[0].ID != agentID {
+		t.Fatalf("expected same collector restored, got %#v", restored.Agents)
+	}
+	var archivedAt any
+	if err := testPool.QueryRow(ctx, `SELECT archived_at FROM agent WHERE id = $1`, agentID).Scan(&archivedAt); err != nil {
+		t.Fatal(err)
+	}
+	if archivedAt != nil {
+		t.Fatalf("expected archived_at NULL, got %v", archivedAt)
+	}
+}
+
+func TestEnsurePeriodBriefCollectors_RebindsWrongComputer(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	_ = ensureSystemGeneralForTest(t)
+
+	daemonA := "pc-daemon-" + uuid.NewString()[:8]
+	daemonB := "pc-daemon-" + uuid.NewString()[:8]
+	runtimeA := seedMachineLockedRuntime(t, daemonA, "Laptop A")
+	runtimeB := seedMachineLockedRuntime(t, daemonB, "Laptop B")
+
+	create := func(runtimeID string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		req := newRequestAs(testUserID, http.MethodPost, "/api/agents/period-brief-collectors", map[string]string{
+			"model":      "collector-model",
+			"runtime_id": runtimeID,
+		})
+		req.Header.Set("X-Workspace-ID", testWorkspaceID)
+		testHandler.EnsurePeriodBriefCollectors(rec, req)
+		return rec
+	}
+
+	createdRec := create(runtimeA)
+	if createdRec.Code != http.StatusCreated {
+		t.Fatalf("create=%d body=%s", createdRec.Code, createdRec.Body.String())
+	}
+	var created EnsurePeriodBriefCollectorsResponse
+	if err := json.Unmarshal(createdRec.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if len(created.Agents) != 1 {
+		t.Fatalf("agents=%#v", created.Agents)
+	}
+	agentID := created.Agents[0].ID
+	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, agentID) })
+
+	if _, err := testPool.Exec(ctx, `UPDATE agent SET runtime_id = $2 WHERE id = $1`, agentID, runtimeB); err != nil {
+		t.Fatalf("rebind fixture: %v", err)
+	}
+
+	probe := httptest.NewRecorder()
+	probeReq := newRequestAs(testUserID, http.MethodPost, "/api/agents/period-brief-collectors", map[string]string{
+		"model": "collector-model",
+	})
+	probeReq.Header.Set("X-Workspace-ID", testWorkspaceID)
+	testHandler.EnsurePeriodBriefCollectors(probe, probeReq)
+	if probe.Code != http.StatusOK {
+		t.Fatalf("probe=%d body=%s", probe.Code, probe.Body.String())
+	}
+	var preview EnsurePeriodBriefCollectorsResponse
+	if err := json.Unmarshal(probe.Body.Bytes(), &preview); err != nil {
+		t.Fatal(err)
+	}
+	sawA := false
+	for _, slot := range preview.Missing {
+		if slot.Key == "local:"+strings.ToLower(daemonA) {
+			sawA = true
+		}
+	}
+	if !sawA {
+		t.Fatalf("expected Laptop A missing after wrong-computer bind: %#v", preview.Missing)
+	}
+
+	repaired := create(runtimeA)
+	if repaired.Code != http.StatusOK {
+		t.Fatalf("repair=%d body=%s", repaired.Code, repaired.Body.String())
+	}
+	var after EnsurePeriodBriefCollectorsResponse
+	if err := json.Unmarshal(repaired.Body.Bytes(), &after); err != nil {
+		t.Fatal(err)
+	}
+	if len(after.Created) != 0 {
+		t.Fatalf("repair should rebind, not create: %#v", after.Created)
+	}
+	if len(after.Agents) != 1 || after.Agents[0].ID != agentID || after.Agents[0].RuntimeID != runtimeA {
+		t.Fatalf("repaired agent=%#v want runtime %s", after.Agents, runtimeA)
 	}
 }
 

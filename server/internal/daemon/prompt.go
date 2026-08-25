@@ -87,6 +87,8 @@ var currentStateSlots = []func(Task) string{
 	channelGoalStateSlot,
 }
 
+const goalManagerParallelAdmission = "Parallel admission: if 2+ independently acceptable units can proceed without waiting (research, data/source collection, implementation, testing, or review), create/reuse one channel-linked parent and run `multica issue decompose <parent-issue-id> --plan-file <path> --idempotency-key <uuid>`; independent roots start together. Use `depends_on` only for prerequisites; never fake a parent with peer top-level Issues or park an independent root in backlog. No confirmation inside the Goal's scope, permissions, and budget; DIRECT only for coupled work; ask only for material boundary expansion."
+
 func currentStateOverlay(task Task) string {
 	var b strings.Builder
 	for _, slot := range currentStateSlots {
@@ -168,6 +170,7 @@ func channelGoalStateSlot(task Task) string {
 				b.WriteString("EXECUTION GATE: this multi-agent Goal is not a code assignment. Do not edit shared project files, create a code branch or commit, push, open/merge a PR, or deploy from this chat task. Only durable control-plane setup and status/review coordination are admitted until this agent is claimed on a channel-linked Issue in the bound Project.\n")
 				if isManager {
 					b.WriteString("As group manager, establish the delivery chain in order: run `multica goal bootstrap --channel <id> --project-title <title> --repository-url <url>` to create/bind one Project and its canonical github_repo; create a channel-linked parent Issue in that Project; decompose non-overlapping child Issues for parallel agents; create one manager-owned integration/release Issue and set metadata `delivery_role=integration`; require implementers to submit in_review and an independent reviewer or human to approve before done. Never assign the same deliverable to two agents.\n")
+					b.WriteString(goalManagerParallelAdmission + "\n")
 				} else {
 					b.WriteString("You have no server-owned code deliverable this wake. You may analyze and propose a bounded Issue to the group manager, then wait for assignment; do not start an independent implementation.\n")
 				}
@@ -293,7 +296,7 @@ func buildAssignmentPrompt(task Task) string {
 	}
 	b.WriteString("\nCurrent-turn execution contract:\n")
 	fmt.Fprintf(&b, "- Unless your Agent Identity forbids status changes, set `%s` to `in_progress` before substantive work.\n", task.IssueID)
-	b.WriteString("- Default to direct execution. If the work has independently acceptable units or needs isolated workers, first open the `multica-working-on-issues` skill and follow its current DIRECT / Issue DAG / Goal Graph boundary; do not reconstruct graph rules from an old session.\n")
+	b.WriteString("- Choose DIRECT / Issue DAG / Goal Graph before work. Keep tightly coupled delivery DIRECT; when 2+ independently acceptable units can proceed without waiting—including research, data collection, implementation, testing, or review—use parallel Issue DAG roots. No confirmation is needed inside this Issue's scope, permissions, and budget. Open the `multica-working-on-issues` skill for plan format and isolation rules.\n")
 	b.WriteString("- Complete the acceptance criteria and verify proportionately to the change. Run the relevant build, tests, or behavior check; visual comparison is required only for UI or visual acceptance criteria.\n")
 	fmt.Fprintf(&b, "- Deliver the outcome with `multica issue comment add %s` using `--content-stdin` with a quoted heredoc or a UTF-8 `--content-file`; never inline generated comment prose in the shell. Final assistant output is not the Issue reply.\n", task.IssueID)
 	fmt.Fprintf(&b, "- When complete, set `%s` to `in_review` unless status changes are forbidden. If genuinely blocked, set it to `blocked` and comment with the concrete blocker and required next action.\n", task.IssueID)

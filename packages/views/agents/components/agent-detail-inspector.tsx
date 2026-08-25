@@ -12,6 +12,7 @@ import { Button } from "@multica/ui/components/ui/button";
 import type {
   Agent,
   AgentRuntime,
+  AgentRuntimeConfig,
   MemberWithUser,
 } from "@multica/core/types";
 import {
@@ -29,15 +30,11 @@ import {
 } from "@multica/core/identity";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorIdentityRow } from "../../common/actor-identity-row";
-import { PropRow } from "../../common/prop-row";
 import { InlineFieldEditor } from "./inline-field-editor";
 import { useT } from "../../i18n";
-import { ComputerInfoRow } from "./inspector/computer-info-row";
-import { ConcurrencyPicker } from "./inspector/concurrency-picker";
-import { ModelPicker } from "./inspector/model-picker";
-import { RuntimePicker } from "./inspector/runtime-picker";
 import { SkillAttach } from "./inspector/skill-attach";
-import { ThinkingPropRow } from "./inspector/thinking-prop-row";
+import { InspectorField, InspectorSectionHeading } from "./inspector/inspector-field";
+import { RuntimeConfigBlock } from "./inspector/runtime-config-block";
 import { RuntimeConfigDialog } from "./runtime-config-dialog";
 import { LarkAgentBindButton } from "../../settings/components/lark-tab";
 import { AgentWorkspaceRole } from "./agent-workspace-role";
@@ -45,7 +42,12 @@ import { AgentActivityStatus } from "./agent-activity-list-item";
 
 interface InspectorProps {
   agent: Agent;
-  runtime: AgentRuntime | null;
+  /**
+   * Server-assembled Computer + runtime + model + thinking. Not resolved from
+   * `runtimes` below: that list is "what may I bind to" and omits another
+   * member's private runtime, which used to blank this whole block.
+   */
+  runtimeConfig: AgentRuntimeConfig | undefined;
   owner: MemberWithUser | null;
   presence: AgentPresence | null | undefined;
   // Below: needed for inline edit. The inspector now owns the editing surface
@@ -90,7 +92,7 @@ interface InspectorProps {
  */
 export function AgentDetailInspector({
   agent,
-  runtime,
+  runtimeConfig,
   owner,
   presence,
   runtimes,
@@ -168,56 +170,35 @@ export function AgentDetailInspector({
       {/* Properties — editable when canEdit. When the current user lacks
           permission, each picker self-renders a static read-only display so
           the value is visible but not interactive. */}
-      <Section label={t(($) => $.inspector.section_properties)}>
-        {/* LRM-1351: runtime/model/thinking open one Dialog; summary shows
-            effective values only. Frank pencil lock: trailing pencil only —
-            summary chips are not a row-wide click target. */}
-        <PropRow label={t(($) => $.inspector.prop_computer)} interactive={false}>
-          <ComputerInfoRow runtime={runtime} />
-        </PropRow>
-        <PropRow label={t(($) => $.inspector.prop_runtime)} interactive={false}>
-          <span className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
-            <RuntimePicker
-              value={agent.runtime_id}
-              runtimes={runtimes}
-              members={members}
-              currentUserId={currentUserId}
-              canEdit={false}
-              onChange={() => {}}
-            />
-            <ModelPicker
-              runtimeId={agent.runtime_id}
-              value={agent.model ?? ""}
-              canEdit={false}
-              onChange={() => {}}
-            />
-          </span>
-          {canEdit ? (
+      {/* LRM-1351: runtime/model/thinking open one Dialog; summary shows
+          effective values only. Frank pencil lock: the heading's control is
+          the only way in — the summary body is not a click target. */}
+      <Section
+        label={t(($) => $.inspector.section_properties)}
+        action={
+          canEdit ? (
             <button
               type="button"
-              className="ml-auto inline-flex shrink-0 rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="-my-1.5 inline-flex shrink-0 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               onClick={() => setRuntimeDialogOpen(true)}
               aria-label={t(($) => $.runtime_config.edit_trigger_aria)}
               data-testid="agent-inspector-runtime-config-edit"
             >
-              <Pencil className="h-3.5 w-3.5" aria-hidden />
+              <Pencil className="size-3.5" aria-hidden />
             </button>
-          ) : null}
-        </PropRow>
-        <ThinkingPropRow
-          runtimeId={agent.runtime_id}
-          model={agent.model ?? ""}
-          value={agent.thinking_level ?? ""}
-          canEdit={false}
-          onChange={() => {}}
-        />
-        <PropRow label={t(($) => $.inspector.prop_concurrency)} interactive={false}>
-          <ConcurrencyPicker
-            value={agent.max_concurrent_tasks}
-            canEdit={canEdit}
-            onChange={(n) => update({ max_concurrent_tasks: n })}
+          ) : null
+        }
+      >
+        <div className="w-full">
+          <RuntimeConfigBlock
+            agent={agent}
+            runtimeConfig={runtimeConfig}
+            runtimes={runtimes}
+            members={members}
+            currentUserId={currentUserId}
+            wsId={wsId}
           />
-        </PropRow>
+        </div>
         {canEdit ? (
           <RuntimeConfigDialog
             agent={agent}
@@ -234,7 +215,7 @@ export function AgentDetailInspector({
       {/* Details — read-only (no hover, no chip styling — these aren't clickable) */}
       <Section label={t(($) => $.inspector.section_details)}>
         {owner && (
-          <PropRow label={t(($) => $.inspector.prop_owner)} interactive={false}>
+          <InspectorField label={t(($) => $.inspector.prop_owner)}>
             <span className="flex min-w-0 items-center gap-1.5">
               <ActorAvatar
                 actorType="member"
@@ -243,36 +224,35 @@ export function AgentDetailInspector({
               />
               <span className="truncate">{owner.name}</span>
             </span>
-          </PropRow>
+          </InspectorField>
         )}
-        <PropRow label={t(($) => $.inspector.prop_created)} interactive={false}>
+        <InspectorField label={t(($) => $.inspector.prop_created)}>
           <span className="text-muted-foreground">
             {timeAgo(agent.created_at)}
           </span>
-        </PropRow>
-        <PropRow label={t(($) => $.inspector.prop_updated)} interactive={false}>
+        </InspectorField>
+        <InspectorField label={t(($) => $.inspector.prop_updated)}>
           <span className="text-muted-foreground">
             {timeAgo(agent.updated_at)}
           </span>
-        </PropRow>
+        </InspectorField>
       </Section>
 
-      {/* LRM-1449 — workspace-admin role (Member/Admin). Standalone block so
-          the owner/admin-only toggle is a full-width control, not a cramped
-          PropRow value. */}
-      <AgentWorkspaceRole
-        wsId={wsId}
-        agent={agent}
-        permission={canChangeRole}
-        onRoleChanged={onRoleChanged}
-      />
+      {/* LRM-1449 — workspace-admin role (Member/Admin). Its own section so the
+          owner/admin-only control is full width, not a cramped inline value. */}
+      <div className="flex flex-col border-b px-5 py-4">
+        <AgentWorkspaceRole
+          wsId={wsId}
+          agent={agent}
+          permission={canChangeRole}
+          onRoleChanged={onRoleChanged}
+        />
+      </div>
 
       {/* Skills */}
       <div className="flex flex-col border-b px-5 py-4">
         <div className="mb-2 flex items-center gap-2">
-          <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-            {t(($) => $.inspector.section_skills)}
-          </span>
+          <InspectorSectionHeading label={t(($) => $.inspector.section_skills)} />
           <span className="font-mono text-[10px] tabular-nums text-muted-foreground/70">
             {agent.skills.length}
           </span>
@@ -301,9 +281,7 @@ export function AgentDetailInspector({
       {canEdit && (
         <div className="flex flex-col px-5 py-4">
           <div className="mb-2 flex items-center gap-2">
-            <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-              {t(($) => $.inspector.section_integrations)}
-            </span>
+            <InspectorSectionHeading label={t(($) => $.inspector.section_integrations)} />
           </div>
           <div className="flex flex-wrap gap-2">
             <LarkAgentBindButton
@@ -324,19 +302,20 @@ export function AgentDetailInspector({
 
 function Section({
   label,
+  action,
   children,
 }: {
   label: string;
+  /** Edit control, rendered beside the heading — same place as the side panel's. */
+  action?: ReactNode;
   children: ReactNode;
 }) {
   return (
     <div className="border-b px-5 py-4">
-      <div className="mb-1 -mx-2 px-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-        {label}
+      <div className="mb-2">
+        <InspectorSectionHeading label={label} action={action} />
       </div>
-      <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
-        {children}
-      </div>
+      <div className="flex flex-wrap gap-x-7 gap-y-4">{children}</div>
     </div>
   );
 }

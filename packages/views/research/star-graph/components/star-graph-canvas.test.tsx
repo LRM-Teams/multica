@@ -249,7 +249,7 @@ describe("StarGraphCanvas (Slice A renderer)", () => {
     expect(onSelectNode).not.toHaveBeenCalled();
   });
 
-  it("delegates expandable nodes to the server-backed one-layer toggle", () => {
+  it("opens expandable node detail separately from its disclosure toggle", () => {
     const onSelectNode = vi.fn();
     const onOpenNode = vi.fn();
     const onToggleNode = vi.fn();
@@ -276,9 +276,19 @@ describe("StarGraphCanvas (Slice A renderer)", () => {
     );
     fireEvent.click(node);
 
-    expect(onSelectNode).toHaveBeenCalledWith("stable-a");
+    expect(onOpenNode).toHaveBeenCalledWith("stable-a");
+    expect(onSelectNode).not.toHaveBeenCalled();
+    expect(onToggleNode).not.toHaveBeenCalled();
+
+    fireEvent.click(within(node).getByTestId("star-graph-disclosure"));
+
     expect(onToggleNode).toHaveBeenCalledWith("stable-a");
-    expect(onOpenNode).not.toHaveBeenCalled();
+    expect(onOpenNode).toHaveBeenCalledOnce();
+
+    fireEvent.keyDown(node, { key: "Enter", shiftKey: true });
+
+    expect(onToggleNode).toHaveBeenCalledTimes(2);
+    expect(onOpenNode).toHaveBeenCalledOnce();
   });
 
   it("shows a short semantic beacon for a committed fusion", () => {
@@ -322,7 +332,7 @@ describe("StarGraphCanvas (Slice A renderer)", () => {
       "data-disclosure-state",
       "failed",
     );
-    fireEvent.click(node);
+    fireEvent.click(within(node).getByTestId("star-graph-disclosure"));
     expect(onToggleNode).toHaveBeenCalledWith("stable-a");
     expect(screen.getAllByTestId("star-graph-node")).toHaveLength(3);
   });

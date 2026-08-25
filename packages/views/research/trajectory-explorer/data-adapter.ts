@@ -64,7 +64,12 @@ export function deriveTrajectoryCommits(
   const commits: TrajectoryCommit[] = nodes
     .filter((n) => n.id && n.id !== "__research_logic_start__" && n.id !== "__research_logic_end__")
     .map((n) => {
-      const status = resolveLogicStatus(n).tone;
+      const normalizedStatus = (n.status || "").trim().toLowerCase();
+      const status =
+        n.node_type === "agent" &&
+        (normalizedStatus === "idle" || normalizedStatus === "offline")
+          ? normalizedStatus
+          : resolveLogicStatus(n).tone;
       return {
         id: n.id,
         branchKey: branchKeyFor(n, actorIds),

@@ -5,6 +5,31 @@ supersedes: docs/adr/0018-machine-work-journal-period-brief.md
 
 # Runtime Agents collect machine work; a dedicated Brief Agent synthesizes
 
+> **Amendment (2026-08-24):** Failure no longer shares a write wake. If a
+> collector still owes the one assistant retry, the platform wakes **retry-only**
+> (`notePeriodBriefRetryInstruction` — no `--note-write`). After that attempt
+> settles, a separate write wake delivers the Brief. Harvest ignores folder
+> `note_write` before that write wake. `submit-pack` patches one collector via
+> `jsonb ||` so two machines cannot clobber each other; await counts a pack only
+> when `pack_job_id` matches this job. 「材料齐了」 requires at least one ready
+> pack. Composer unlocks when the insert card is posted (`awaiting_confirm`) —
+> the human may discard the Brief without inserting. Satellite `Write
+> report` / `Report` is period-brief intent. FAB create omits `chat_session_id`
+> so progress does not append onto an old Q&A thread.
+>
+> **Amendment (2026-08-21):** The bubble result card must show **this run**.
+> Do not harvest the latest `note_write` on `工作介绍/` — that is usually
+> last week's brief, posted the moment the synthesizer is woken. Scope
+> harvest to writes with `created_at >= run.created_at`, wait for that
+> write before posting 「汇报稿整理完成了」, and fall back to **this run's
+> draft** (current packs), never a prior folder write.
+>
+> **Amendment (2026-08-21):** 写汇报 is composed in the Notes assistant
+> bubble (satellite → chips for day/week/month/custom and owned computers,
+> plus the bubble composer). There is no header button and no dedicated
+> dialog. Typed text wins when it conflicts with chips. After dispatch,
+> stay in the bubble — do not auto-open Messages.
+>
 > **Amendment (2026-08-21):** Optional human `focus` on 写汇报. Empty focus
 > keeps today's full-scope collect. Non-empty focus wakes 笔记助手 first as
 > collect-plan commander (`submit-collect-plan`); it restates paths/topics/
@@ -109,9 +134,13 @@ strictly inside that window.
 
 The Workspace **Notes Assistant** is the synthesizer (写汇报 wake,
 `force_fresh_session`). The human cannot pick another Agent. Synthesis uses
-Note Worker + `--note-write` under `工作介绍/`; humans confirm before body
-lands. Collector packs are untrusted partitions in the wake prompt (same
-escape rules as note/facts/digest).
+Note Worker + `--note-write` still produces the Brief body. When the human
+starts from a Notes bubble, progress is narrated in that page's
+`chat_session`. Collector packs and the finished brief appear in that
+bubble as collapsed `note_brief` cards. The brief card offers **插入笔记下面**
+(append onto the issuing page) and **插入子笔记** (child of that page), not
+under global `工作介绍/`. Collector packs are untrusted partitions in the
+wake prompt (same escape rules as note/facts/digest).
 
 ### Collector settle + status board
 
@@ -162,9 +191,10 @@ retryable stalled), the synthesizer may call:
 
 `multica notes period-brief retry-collectors --draft-page-id <draft>`
 
-Platform enforces: skip permanent failures; **max 3 retries** per collector;
-then re-wait and re-wake the synthesizer. Skill:
-`multica-period-work-brief`.
+Platform enforces: skip permanent failures; **exactly one** Notes-Assistant
+retry per collector; inbox does not auto-retry. After that attempt settles
+(ready or failed), the collector result is received and the synthesizer
+writes the Brief. Skill: `multica-period-work-brief`.
 
 ## Rejected alternatives
 

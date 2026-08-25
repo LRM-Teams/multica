@@ -504,6 +504,7 @@ func (b *codexAppServerBackend) maybeCompactAfterTurn(p *codexAppServerProcess, 
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), postTurnCompactionTimeout)
 	defer cancel()
+	runMemoryFlushBeforeCompaction(processWorkingDir(p.cmd))
 	err := b.compactRuntime(ctx, p, emit)
 	b.compact.recordAttempt(err != nil, p.client.currentRuntimeStats())
 	if err != nil && b.cfg.Logger != nil {

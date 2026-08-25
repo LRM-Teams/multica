@@ -462,10 +462,23 @@ export interface UpdateMemoryCuratorProfileRequest {
 }
 
 export type GraphMemoryType = "legacy" | "graph";
+export type GraphMemoryMode = "inject" | "agent";
+export type GraphMemoryChannelModeOverride = "inherit" | GraphMemoryMode;
 
 export interface GraphMemoryProfile {
   workspace_id: string;
   memory_type: GraphMemoryType;
+  graph_memory_mode: GraphMemoryMode;
+  memory_agent_runtime_id: string;
+  memory_agent_model: string;
+  memory_agent_thinking: string;
+  recall_ttt_enabled: boolean;
+  consolidation_ttt_enabled: boolean;
+  memory_agent_idle_grace_seconds: number;
+  memory_agent_max_nodes_per_call: number;
+  memory_agent_max_nodes_per_minute: number;
+  memory_agent_max_continuous_turn_seconds: number;
+  memory_agent_max_tokens_per_hour: number;
   explore_agents: number;
   explore_max_rounds: number;
   ttt_enabled: boolean;
@@ -490,6 +503,17 @@ export interface GraphMemoryProfile {
 
 export interface UpdateGraphMemoryProfileRequest {
   memory_type: GraphMemoryType;
+  graph_memory_mode?: GraphMemoryMode;
+  memory_agent_runtime_id?: string;
+  memory_agent_model?: string;
+  memory_agent_thinking?: string;
+  recall_ttt_enabled?: boolean;
+  consolidation_ttt_enabled?: boolean;
+  memory_agent_idle_grace_seconds?: number;
+  memory_agent_max_nodes_per_call?: number;
+  memory_agent_max_nodes_per_minute?: number;
+  memory_agent_max_continuous_turn_seconds?: number;
+  memory_agent_max_tokens_per_hour?: number;
   explore_agents: number;
   explore_max_rounds: number;
   confirm_empty_start?: boolean;
@@ -511,6 +535,38 @@ export interface UpdateGraphMemoryProfileRequest {
   source_max_image_megapixels?: number;
   dive_model?: string;
   dive_provider?: string;
+}
+
+export type GraphMemoryChannelAgentStatus = "provisioning" | "active" | "blocked" | "inactive";
+
+export interface GraphMemoryChannelMode {
+  workspace_id: string;
+  channel_id: string;
+  override: GraphMemoryChannelModeOverride;
+  effective_mode: GraphMemoryMode;
+  status: GraphMemoryChannelAgentStatus;
+  blocked_reason: string;
+  agent_id: string;
+  runtime_id: string;
+}
+
+export interface GraphMemoryCitation {
+  id: string;
+  node_id: string;
+  graph_version: number;
+  level: string;
+  epistemic_status: string;
+  tags: string[];
+  title: string;
+  first_paragraph: string;
+  excerpt: string;
+  content_hash: string;
+  captured_at: string;
+}
+
+export interface GraphMemoryMessageCitations {
+  message_id: string;
+  items: GraphMemoryCitation[];
 }
 
 export interface GraphMemoryGraphStatus {

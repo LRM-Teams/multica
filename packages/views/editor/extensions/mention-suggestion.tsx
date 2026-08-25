@@ -30,11 +30,9 @@ import type {
 } from "@multica/core/types";
 import { Hash, ListTodo } from "lucide-react";
 import { ActorAvatar } from "../../common/actor-avatar";
-import { agentColor } from "../../common/agent-color";
 import { StatusIcon } from "../../issues/components/status-icon";
 import { ProjectIcon } from "../../projects/components/project-icon";
 import { useT } from "../../i18n/use-t";
-import { Badge } from "@multica/ui/components/ui/badge";
 import type { IssueStatus, ProjectStatus } from "@multica/core/types";
 import { PROJECT_STATUS_CONFIG } from "@multica/core/projects/config";
 import type { SuggestionOptions } from "@tiptap/suggestion";
@@ -67,7 +65,11 @@ export interface MentionItem {
   handle?: string;
   /** Optional grouping hint for injected context items / channel membership. */
   group?: "current" | "recent" | "search" | "in_channel" | "not_in_channel";
-  /** Secondary text shown beside the label (e.g. issue title) */
+  /**
+   * Secondary text shown beside the label: the issue title for issues, and
+   * the one-line blurb (user self-description / agent description) for actors.
+   * Empty / absent means the row renders as name + handle only.
+   */
   description?: string;
   /** Secondary row for actor identity, e.g. @backend-engineer. */
   secondaryLabel?: string;
@@ -114,7 +116,6 @@ export interface MentionListRef {
 
 interface MentionGroup {
   label:
-    | "Broadcast"
     | "Current"
     | "Recent"
     | "Search"
@@ -127,7 +128,6 @@ interface MentionGroup {
 }
 
 function groupItems(items: MentionItem[]): MentionGroup[] {
-  const broadcast: MentionItem[] = [];
   const current: MentionItem[] = [];
   const recent: MentionItem[] = [];
   const search: MentionItem[] = [];
@@ -138,9 +138,11 @@ function groupItems(items: MentionItem[]): MentionGroup[] {
   const channels: MentionItem[] = [];
 
   for (const item of items) {
-    if (item.type === "all") {
-      broadcast.push(item);
-    } else if (item.group === "current") {
+    // @all is not offered: the bare-mention cutover (#600/#446) dropped the
+    // broadcast token, so a row for it would select a mention the server
+    // never resolves. Drop it rather than render a dead option.
+    if (item.type === "all") continue;
+    if (item.group === "current") {
       current.push(item);
     } else if (item.group === "recent") {
       recent.push(item);
@@ -161,7 +163,6 @@ function groupItems(items: MentionItem[]): MentionGroup[] {
 
   // M5: empty sections are omitted (no bare headers).
   const groups: MentionGroup[] = [];
-  if (broadcast.length > 0) groups.push({ label: "Broadcast", items: broadcast });
   if (current.length > 0) groups.push({ label: "Current", items: current });
   if (recent.length > 0) groups.push({ label: "Recent", items: recent });
   if (search.length > 0) groups.push({ label: "Search", items: search });
@@ -469,7 +470,6 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
     const hasContextGroups = visibleItems.some((item) => item.group === "current" || item.group === "recent");
     const contextLayout = hasContextGroups;
     const groupLabel = (label: MentionGroup["label"]): string => {
-      if (label === "Broadcast") return "";
       if (label === "Current") return t(($) => $.mention.group_current);
       if (label === "Recent") return t(($) => $.mention.group_recent);
       if (label === "Search") return t(($) => $.mention.group_search);
@@ -483,33 +483,15 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
 
     // Build a flat index mapping aligned with visibleItems (grouped order)
     let globalIndex = 0;
-    const duplicateActorLabels = new Set(
-      Object.entries(
-        visibleItems.reduce<Record<string, number>>((acc, item) => {
-          if (item.type === "member" || item.type === "agent") {
-            const key = item.label.trim().toLowerCase();
-            if (key) acc[key] = (acc[key] ?? 0) + 1;
-          }
-          return acc;
-        }, {}),
-      )
-        .filter(([, count]) => count > 1)
-        .map(([label]) => label),
-    );
 
     const renderRows = (group: MentionGroup): ReactNode =>
       group.items.map((item) => {
         const idx = globalIndex++;
-        const duplicateLabel = duplicateActorLabels.has(item.label.trim().toLowerCase());
-        const showSecondary =
-          item.type === "agent" ||
-          duplicateLabel ||
-          actorHandleSearchRank(item.handle ?? "", normalizedQuery) < 3;
         return (
           <MentionRow
             key={`${item.type}-${item.id}`}
             item={item}
-            showSecondary={showSecondary}
+            query={normalizedQuery}
             selected={idx === selectedIndex}
             onSelect={() => selectItem(idx)}
             buttonRef={(el) => { itemRefs.current[idx] = el; }}
@@ -519,16 +501,14 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
 
     if (contextLayout) {
       return (
-        <div className="flex max-h-[420px] w-96 flex-col overflow-hidden rounded-lg border bg-popover py-1 shadow-xl">
+        <div className="flex max-h-[420px] w-[var(--suggestion-anchor-width,400px)] flex-col overflow-hidden rounded-lg border bg-popover py-1 shadow-xl">
           {groups.map((group) => {
             const isRecent = group.label === "Recent";
             return (
               <section key={group.label} className={isRecent ? "min-h-0" : "shrink-0"}>
-                {group.label !== "Broadcast" && (
-                  <div className="shrink-0 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/80">
-                    {groupLabel(group.label)}
-                  </div>
-                )}
+                <div className="sticky top-0 z-10 shrink-0 bg-popover px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/80">
+                  {groupLabel(group.label)}
+                </div>
                 <div className={isRecent ? "max-h-64 overflow-y-auto overscroll-contain" : undefined}>
                   {renderRows(group)}
                 </div>
@@ -541,7 +521,7 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
 
     return (
       <div
-        className="w-72 max-h-[300px] overflow-y-auto rounded-md border bg-popover py-1 shadow-md"
+        className="w-[var(--suggestion-anchor-width,400px)] max-h-[300px] overflow-y-auto rounded-md border bg-popover py-1 shadow-md"
         onScroll={(event) => {
           const el = event.currentTarget;
           if (el.scrollHeight - el.scrollTop - el.clientHeight <= 48) {
@@ -551,11 +531,9 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
       >
         {groups.map((group) => (
           <div key={group.label}>
-            {group.label !== "Broadcast" && (
-              <div className="px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/80">
-                {groupLabel(group.label)}
-              </div>
-            )}
+            <div className="sticky top-0 z-10 bg-popover px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/80">
+              {groupLabel(group.label)}
+            </div>
             {renderRows(group)}
           </div>
         ))}
@@ -575,29 +553,28 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
 
 function MentionRow({
   item,
-  showSecondary,
+  query,
   selected,
   onSelect,
   buttonRef,
 }: {
   item: MentionItem;
-  showSecondary: boolean;
+  query: string;
   selected: boolean;
   onSelect: () => void;
   buttonRef?: (el: HTMLButtonElement | null) => void;
 }) {
-  const { t } = useT("editor");
   if (item.type === "channel") {
     return (
       <button
         type="button"
         ref={buttonRef}
-        className={`flex w-full items-center gap-2.5 px-3 py-2 text-left text-xs transition-colors ${
+        className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors ${
           selected ? "bg-accent" : "hover:bg-accent/50"
         }`}
         onClick={onSelect}
       >
-        <span className="flex h-7 w-7 shrink-0 items-center justify-center">
+        <span className="flex size-5 shrink-0 items-center justify-center">
           <Hash className="h-3.5 w-3.5 text-muted-foreground" />
         </span>
         <span className="min-w-0 flex-1">
@@ -620,12 +597,12 @@ function MentionRow({
       <button
         type="button"
         ref={buttonRef}
-        className={`flex w-full items-center gap-2.5 px-3 py-2 text-left text-xs transition-colors ${
+        className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors ${
           selected ? "bg-accent" : "hover:bg-accent/50"
         } ${isClosed ? "opacity-60" : ""}`}
         onClick={onSelect}
       >
-        <span className="flex h-7 w-7 shrink-0 items-center justify-center">
+        <span className="flex size-5 shrink-0 items-center justify-center">
           {item.status ? (
             <StatusIcon status={item.status} className="h-3.5 w-3.5" />
           ) : (
@@ -654,12 +631,12 @@ function MentionRow({
       <button
         type="button"
         ref={buttonRef}
-        className={`flex w-full items-center gap-2.5 px-3 py-2 text-left text-xs transition-colors ${
+        className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors ${
           selected ? "bg-accent" : "hover:bg-accent/50"
         }`}
         onClick={onSelect}
       >
-        <span className="flex h-7 w-7 shrink-0 items-center justify-center">
+        <span className="flex size-5 shrink-0 items-center justify-center">
           <ProjectIcon project={{ icon: item.icon ?? null }} size="sm" />
         </span>
         <span className="min-w-0 flex-1">
@@ -677,54 +654,64 @@ function MentionRow({
     );
   }
 
-  const isActor = item.type === "member" || item.type === "agent";
-  const secondary = isActor && showSecondary ? item.secondaryLabel : undefined;
-  const allMembersHint = item.type === "all" ? t(($) => $.mention.all_members_hint) : null;
-  const actorContent = (
-    <>
-      <ActorAvatar
-        actorType={item.type === "all" ? "member" : item.type}
-        actorId={item.id}
-        size={20}
-        showStatusDot
-      />
-      <span className="min-w-0 flex-1">
-        <span
-          className="block truncate font-medium text-foreground"
-          style={item.type === "agent" ? { color: agentColor(item.id).fg } : undefined}
-        >
-          {item.type === "all" ? t(($) => $.mention.all_members) : item.label}
-        </span>
-        {allMembersHint && (
-          <span className="block truncate text-[11px] text-muted-foreground">
-            {allMembersHint}
-          </span>
-        )}
-        {secondary && (
-          <span className="block truncate text-[11px] text-muted-foreground">
-            {secondary}
-          </span>
-        )}
-      </span>
-    </>
-  );
+  // Three columns share one line, so truncation needs a fixed priority: the
+  // handle never truncates (it is the only value that identifies the row
+  // uniquely), the name gives way second, and the blurb gives way first —
+  // hidden outright rather than clipped to an unreadable stub.
+  const handleLabel = item.secondaryLabel ?? (item.handle ? `@${item.handle}` : null);
+  const blurb = item.description?.trim();
 
   return (
     <button
       type="button"
       ref={buttonRef}
-      className={`flex w-full items-center gap-2.5 px-3 py-2 text-left text-xs transition-colors ${
+      className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors ${
         selected ? "bg-accent" : "hover:bg-accent/50"
       }`}
       onClick={onSelect}
     >
-      {actorContent}
-      {item.type === "agent" && (
-        // "Agent" is a glossary-protected product term — kept un-translated.
-        // eslint-disable-next-line i18next/no-literal-string
-        <Badge variant="outline" className="ml-auto text-[10px] h-4 px-1.5">Agent</Badge>
+      <span className="flex size-5 shrink-0 items-center justify-center">
+        <ActorAvatar actorType={item.type} actorId={item.id} size={20} showStatusDot />
+      </span>
+      <span className="max-w-[46%] shrink truncate font-medium text-foreground">
+        {highlightMatch(item.label, query)}
+      </span>
+      {blurb ? (
+        <span className="@container min-w-0 flex-1">
+          <span className="block truncate text-muted-foreground @max-[72px]:hidden">
+            {highlightMatch(blurb, query)}
+          </span>
+        </span>
+      ) : (
+        <span className="min-w-0 flex-1" />
+      )}
+      {handleLabel && (
+        <span className="max-w-[55%] shrink-0 truncate pl-3 font-mono text-[11px] text-muted-foreground/80">
+          {highlightMatch(handleLabel, query)}
+        </span>
       )}
     </button>
+  );
+}
+
+/**
+ * Bold the matched substring so the eye lands on why a row is in the list.
+ * Direct substring matches only: a pinyin hit (`matchesPinyin`) has no
+ * contiguous run to mark, so those rows stay evenly weighted by design.
+ */
+function highlightMatch(text: string, query: string): ReactNode {
+  const q = query.trim();
+  if (!q) return text;
+  const at = text.toLowerCase().indexOf(q.toLowerCase());
+  if (at < 0) return text;
+  return (
+    <>
+      {text.slice(0, at)}
+      <mark className="bg-transparent font-semibold text-foreground">
+        {text.slice(at, at + q.length)}
+      </mark>
+      {text.slice(at + q.length)}
+    </>
   );
 }
 
@@ -890,6 +877,7 @@ export function createMentionSuggestion(
           label: presentation.displayName,
           handle: presentation.handle,
           secondaryLabel: presentation.handleLabel ?? undefined,
+          description: m.description?.trim() || undefined,
           type: "member" as const,
           group: membershipGroup(m.user_id),
         };
@@ -941,6 +929,9 @@ export function createMentionSuggestion(
           label: presentation.displayName,
           handle: presentation.handle,
           secondaryLabel: presentation.handleLabel ?? undefined,
+          // Scoped channel-member candidates carry identity only, so their
+          // rows render as name + handle until the list query resolves them.
+          description: "description" in a ? a.description?.trim() || undefined : undefined,
           type: "agent" as const,
           group: membershipGroup(a.id),
         });
@@ -1000,6 +991,11 @@ export function createMentionSuggestion(
     render: createSuggestionPopupRender<MentionItem, MentionItem, MentionListRef, MentionListProps>({
       pluginKey,
       component: MentionList,
+      // The roster reads as an extension of what you are typing, so it spans
+      // the composer exactly and stays above it rather than following the
+      // caret vertically.
+      anchorToEditorWidth: true,
+      anchorToEditorTop: true,
       getProps: (props) => ({
         items: props.items,
         query: props.query,

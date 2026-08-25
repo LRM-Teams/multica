@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Bot, ClipboardList, FileText, ListTree } from "lucide-react";
+import { ClipboardList, FileText, ListTree } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
 import {
   Tooltip,
@@ -20,7 +20,6 @@ export type NoteAssistantFabAction = NoteAssistantSatelliteId | "chat";
 
 const SATELLITE_ICONS: Record<NoteAssistantSatelliteId, React.ReactNode> = {
   period_brief: <ClipboardList className="size-3.5 shrink-0" />,
-  worker: <Bot className="size-3.5 shrink-0" />,
   highlights: <ListTree className="size-3.5 shrink-0" />,
 };
 
@@ -70,10 +69,6 @@ export function NoteAssistantFabCluster({
     period_brief: {
       label: t(($) => $.notes_page.assistant_satellite_period),
       hint: t(($) => $.notes_page.assistant_satellite_period_hint),
-    },
-    worker: {
-      label: t(($) => $.notes_page.assistant_satellite_worker),
-      hint: t(($) => $.notes_page.assistant_satellite_worker_hint),
     },
     highlights: {
       label: t(($) => $.notes_page.assistant_satellite_highlights),

@@ -194,12 +194,13 @@ describe("useRealtimeSync — ws instance change", () => {
         wrapper: createWrapper(qc),
       });
       const activity: RunnerActivityResponse = {
-        summary: { label: "Running command...", tone: "info", visibility: "visible" },
+        summary: { label: "Running command...", activityKind: "working", detailKind: "running_command" },
         timeline: [{
           id: "entry-1",
           occurred_at: "2026-08-10T00:00:00Z",
           title: "Running command...",
-          tone: "info",
+          activity_kind: "working",
+          detail_kind: "running_command",
           body_kind: "text",
           body: "Safe narrative",
         }],
@@ -269,7 +270,7 @@ describe("useRealtimeSync — ws instance change", () => {
     }
   });
 
-  it("invalidates the Workspace Computer projection on computer:updated", () => {
+  it("invalidates the Workspace Computer projection on computer:status", () => {
     vi.useFakeTimers();
     try {
       const ws = createMockWs();
@@ -283,8 +284,12 @@ describe("useRealtimeSync — ws instance change", () => {
       invalidateSpy.mockClear();
       act(() => {
         anyHandler?.({
-          type: "computer:updated",
-          payload: { computer_id: "computer-1" },
+          type: "computer:status",
+          payload: {
+            computer_id: "computer-1",
+            status: "connected",
+            changed_at: "2026-08-24T22:30:00Z",
+          },
         });
         vi.advanceTimersByTime(100);
       });

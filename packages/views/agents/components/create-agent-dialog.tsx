@@ -9,6 +9,7 @@ import {
   machineForRuntime,
 } from "./computer-picker-utils";
 import { isRuntimeUsableForUser } from "./runtime-usability";
+import { useBindableRuntimeIds } from "@multica/core/runtimes";
 import { InstructionsEditor } from "./instructions-editor";
 import { SkillMultiSelect } from "./skill-multi-select";
 import { AvatarPicker, type AvatarPickerSelection } from "./avatar-picker";
@@ -73,6 +74,7 @@ export function CreateAgentDialog({
   proposal,
   prefill,
   defaultMachineId = null,
+  lockComputer = false,
   onClose,
   onCreate,
 }: {
@@ -83,7 +85,7 @@ export function CreateAgentDialog({
   // When provided, the dialog opens in "Duplicate" mode: the visible
   // fields (name / description / runtime / visibility / model) are
   // pre-populated from this agent, and the hidden fields
-  // (instructions / custom_args / custom_env / max_concurrent_tasks)
+  // (instructions / custom_args / custom_env)
   // are forwarded to the create call so the new agent is a true clone.
   // Skills are copied separately by the caller after createAgent
   // succeeds — they're not part of CreateAgentRequest.
@@ -108,6 +110,8 @@ export function CreateAgentDialog({
   defaultHomeChannelId?: string | null;
   /** Prefill computer (machine id from buildRuntimeMachines). */
   defaultMachineId?: string | null;
+  /** Hide Computer changes — the caller already chose this machine. */
+  lockComputer?: boolean;
   onClose: () => void;
   // Returns the created Agent so the dialog can run a follow-up
   // setAgentSkills with the IDs the user picked in the form. Pre-skill-
@@ -123,6 +127,8 @@ export function CreateAgentDialog({
   const identityLocked = Boolean(prefill?.lockIdentity) && !isDuplicate && !isProposal && !isDraft;
   const queryClient = useQueryClient();
   const wsId = useWorkspaceId();
+  // Which runtimes may be bound is the server's answer, delivered per Computer.
+  const bindableIds = useBindableRuntimeIds(wsId);
   // Agent creation establishes the permanent name. The initial display
   // name matches it and remains editable later from Profile.
   const [name, setName] = useState(
@@ -208,7 +214,7 @@ export function CreateAgentDialog({
       : undefined;
     if (
       templateRuntime &&
-      isRuntimeUsableForUser(templateRuntime, currentUserId)
+      isRuntimeUsableForUser(templateRuntime, currentUserId, bindableIds)
     ) {
       return machineForRuntime(templateRuntime, initialMachines)?.id ?? "";
     }
@@ -223,7 +229,7 @@ export function CreateAgentDialog({
       : undefined;
     if (
       templateRuntime &&
-      isRuntimeUsableForUser(templateRuntime, currentUserId)
+      isRuntimeUsableForUser(templateRuntime, currentUserId, bindableIds)
     ) {
       return templateRuntime.id;
     }
@@ -317,9 +323,6 @@ export function CreateAgentDialog({
         // dialog's create call still accepts custom_env at create
         // time, but the source values aren't available here.
         if (template.custom_args.length) data.custom_args = template.custom_args;
-        if (template.max_concurrent_tasks) {
-          data.max_concurrent_tasks = template.max_concurrent_tasks;
-        }
       }
       const createdAgent = await onCreate(data);
       // Follow-up: attach selected skills to the newly created agent.
@@ -375,7 +378,9 @@ export function CreateAgentDialog({
           )}
           {identityLocked && (
             <DialogDescription className="mt-1 text-xs">
-              {t(($) => $.create_dialog.description_identity_locked)}
+              {lockComputer
+                ? t(($) => $.create_dialog.description_computer_locked)
+                : t(($) => $.create_dialog.description_identity_locked)}
             </DialogDescription>
           )}
           {(isProposal || isDraft) && (
@@ -462,6 +467,7 @@ export function CreateAgentDialog({
               machineRuntimes={machineRuntimes}
               runtimeId={effectiveRuntimeId}
               onRuntimeSelect={handleRuntimeSelect}
+              lockComputer={lockComputer}
               model={model}
               onModelChange={(next) => {
                 if (next === model) return;

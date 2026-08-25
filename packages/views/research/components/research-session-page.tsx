@@ -8,11 +8,11 @@ import { toast } from "sonner";
 import { api, ApiError } from "@multica/core/api";
 import { createResearchV6DirectorProjectionTransport } from "@multica/core/api/research-v6-director";
 import {
+  isResearchV6ProjectionResyncError,
   researchV6DirectorNodeDetailOptions,
-  researchV6DirectorReportCompiledOptions,
-  researchV6DirectorReportOptions,
-  researchV6DirectorReportsOptions,
+  researchV6DirectorProjectionKeys,
 } from "@multica/core/research-v6/director-queries";
+import { RESEARCH_V6_DIRECTOR_DELTA_EVENT } from "@multica/core/research-v6-live/director-controller";
 import {
   researchV6DirectorSelectedRefFromNode,
   researchV6DirectorSelectionIdentity,
@@ -25,10 +25,10 @@ import type {
 } from "@multica/core/agents";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
-import { agentListOptions } from "@multica/core/workspace/queries";
 import { useWS } from "@multica/core/realtime";
 import type { WSEventType } from "@multica/core/types/events";
 import {
+  DEFAULT_RESEARCH_D5_LENS,
   dedupeResearchFleetMembers,
   isResearchD5Lens,
   mergeTypedGraphPages,
@@ -52,16 +52,11 @@ import { Button } from "@multica/ui/components/ui/button";
 import { Textarea } from "@multica/ui/components/ui/textarea";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { useAutoScroll } from "@multica/ui/hooks/use-auto-scroll";
-import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { cn } from "@multica/ui/lib/utils";
 import { AgentPanelProvider } from "../../common/agent-panel-context";
 import { ResolvedAgentSidePanel } from "../../common/resolved-agent-side-panel";
 import { useT } from "../../i18n/use-t";
-import {
-  CHANNEL_DETAIL_SIDE_WIDTH_STORAGE_KEY,
-  useProfilePanelWidth,
-} from "../../layout/use-profile-panel-width";
 import { useNavigation } from "../../navigation/context";
 import {
   formatClarificationFormReply,
@@ -76,13 +71,8 @@ import {
   type FleetStepCardModel,
 } from "../lib/fleet-step-cards";
 import { resolveCanvasBodyMode } from "../lib/canvas-body-mode";
-import { buildExecutionOverlayRows } from "../execution-overlay/index";
 import { resolveChatDrawerMode } from "../lib/chat-drawer-mode";
-import {
-  dismissCompletionGuide,
-  isCompletionGuideDismissed,
-  resolveCompletionGuideKind,
-} from "../lib/completion-guide";
+import { resolveCompletionGuideKind } from "../lib/completion-guide";
 import { deliveryContentCount } from "../lib/delivery-mode";
 import {
   buildHumanBoundary,
@@ -111,9 +101,10 @@ import { isServerError } from "../lib/network-status";
 import { formatStageGateRejectReply } from "../lib/stage-gate-confirm";
 import { useBrowserOnline } from "../lib/use-browser-online";
 import {
-  canvasSnapshotToTypedGraph,
   useResearchV6DirectorCanvas,
-  useResearchSessionCanvas,
+  useResearchV6DirectorAssignment,
+  useResearchV6Reports,
+  useResearchV6WorkActivity,
 } from "../v6-session-adapter";
 import {
   INITIAL_RESEARCH_SESSION_UI_STATE,
@@ -141,7 +132,6 @@ import { ResearchLiveStream } from "./research-live-stream";
 import { ResearchNodeDetail } from "./research-node-detail";
 import { ResearchSelectedRefChip } from "./research-selected-ref-chip";
 import { ResearchV6NodeDetail } from "./research-v6-node-detail";
-import { validateResearchV6ReportSandboxUrl } from "../lib/research-v6-report-sandbox";
 import { ResearchV6ReportModal } from "./research-v6-report-modal";
 import { ResearchProductRoundCardView } from "./research-product-round-card";
 import { ResearchProjectionContractNotice } from "./research-projection-contract-notice";
@@ -208,28 +198,26 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
 
 function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   const { t } = useT("research");
-  const { t: tAgents } = useT("agents");
   const wsId = useWorkspaceId();
   const paths = useWorkspacePaths();
   const nav = useNavigation();
   const qc = useQueryClient();
   const { subscribe, onReconnect, onConnectionStatus } = useWS();
-  const isMobile = useIsMobile();
   const currentUserId = useAuthStore((s) => s.user?.id ?? null);
   const chatOpen = useResearchUiStore((s) => s.chatDrawerOpen);
   const d5Lens = useResearchUiStore((s) => s.d5Lens);
   const setD5Lens = useResearchUiStore((s) => s.setD5Lens);
   const setD5RailOpen = useResearchUiStore((s) => s.setD5RailOpen);
   const setD5RailMode = useResearchUiStore((s) => s.setD5RailMode);
-  // LRM-832 — dismiss is per-session (localStorage + in-memory for this visit).
-  // react-doctor-disable-next-line react-doctor/prefer-useReducer -- these independent UI concerns are intentionally owned by their respective stores/hooks.
-  const [dismissedSessionId, setDismissedSessionId] = useState<string | null>(null);
-  const completionDismissed =
-    dismissedSessionId === sessionId || isCompletionGuideDismissed(sessionId);
+  const completionDismissed = useResearchUiStore(
+    (state) => state.completionGuideDismissedBySession[sessionId] === true,
+  );
+  const dismissCompletionGuide = useResearchUiStore(
+    (state) => state.dismissCompletionGuide,
+  );
   const dismissCompletion = useCallback(() => {
     dismissCompletionGuide(sessionId);
-    setDismissedSessionId(sessionId);
-  }, [sessionId]);
+  }, [dismissCompletionGuide, sessionId]);
   const online = useBrowserOnline();
   const { data, isLoading, isFetching, isError, error, refetch } = useQuery(
     researchSessionSnapshotOptions(wsId, sessionId),
@@ -256,6 +244,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     (s) => s.selectSessionNode,
   );
   const appliedNodeLinkRef = useRef<string | null>(null);
+  const nodeDetailResyncSnapshotRef = useRef<string | null>(null);
   const lastCanvasChangeMessageIdRef = useRef<string | null>(null);
   const canvasChangeSessionIdRef = useRef(sessionId);
   const typedGraph = useMemo(
@@ -268,12 +257,8 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     [typedGraphPages, selectedNodeId],
   );
   const directorV6Enabled =
-    data?.run?.run.orchestrator_version === "research-run-v6";
-  const persistedDirectorAgentId = data?.run?.run.director_agent_id ?? null;
-  const { data: workspaceAgents = [] } = useQuery({
-    ...agentListOptions(wsId),
-    enabled: directorV6Enabled,
-  });
+    data?.run?.run.orchestratorVersion === "research-run-v6";
+  const persistedDirectorAgentId = data?.run?.run.directorAgentId ?? null;
   const directorTransport = useMemo(
     () => createResearchV6DirectorProjectionTransport(api),
     [],
@@ -295,6 +280,19 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     expansionFailureLabel: t(($) => $.panel.expansion_failed),
     realtimeBus: directorRealtimeBus,
   });
+  useEffect(() => {
+    if (!directorV6Enabled) return;
+    return directorRealtimeBus.subscribeEvent(
+      RESEARCH_V6_DIRECTOR_DELTA_EVENT,
+      (payload) => {
+        const envelope = payload as { run_id?: unknown };
+        if (envelope.run_id !== sessionId) return;
+        void qc.invalidateQueries({
+          queryKey: researchKeys.presence(wsId, sessionId),
+        });
+      },
+    );
+  }, [directorRealtimeBus, directorV6Enabled, qc, sessionId, wsId]);
   const selectedDirectorProjectionNode = selectedNodeId
     ? directorCanvas.canvas?.projectionNodeById.get(selectedNodeId) ?? null
     : null;
@@ -302,6 +300,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     data: directorNodeDetailData,
     isLoading: directorNodeDetailLoading,
     isError: directorNodeDetailError,
+    error: directorNodeDetailFailure,
     refetch: refetchDirectorNodeDetail,
   } = useQuery({
     ...researchV6DirectorNodeDetailOptions(
@@ -316,6 +315,40 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
       directorV6Enabled &&
       Boolean(directorCanvas.snapshotId && selectedDirectorProjectionNode),
   });
+  useEffect(() => {
+    const expiredSnapshotId = directorCanvas.snapshotId;
+    if (
+      !expiredSnapshotId ||
+      !isResearchV6ProjectionResyncError(directorNodeDetailFailure) ||
+      nodeDetailResyncSnapshotRef.current === expiredSnapshotId
+    ) {
+      return;
+    }
+    nodeDetailResyncSnapshotRef.current = expiredSnapshotId;
+    void qc.invalidateQueries({
+      queryKey: researchV6DirectorProjectionKeys.snapshot(wsId, sessionId),
+    });
+  }, [
+    directorCanvas.snapshotId,
+    directorNodeDetailFailure,
+    qc,
+    sessionId,
+    wsId,
+  ]);
+  const {
+    data: directorWorkActivityData,
+    isLoading: directorWorkActivityLoading,
+    isError: directorWorkActivityError,
+    refetch: refetchDirectorWorkActivity,
+    timeline: directorWorkTimeline,
+  } = useResearchV6WorkActivity({
+    enabled: directorV6Enabled,
+    workspaceId: wsId,
+    runId: sessionId,
+    selectedNode: selectedDirectorProjectionNode,
+    transport: directorTransport,
+    subscribe,
+  });
   const directorSelectionIdentity = researchV6DirectorSelectionIdentity(
     wsId,
     sessionId,
@@ -329,39 +362,11 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   const clearDirectorReference = useResearchV6DirectorSelectionStore(
     (state) => state.clear,
   );
-  // The current durable run contract is session-keyed. Probe the V6 projection
-  // with that stable key for legacy runs only; Director V6 uses the strict
-  // workspace/run/snapshot projection contract above and never falls through
-  // this compatibility probe.
-  const projectionGateway = useResearchSessionCanvas({
-    wsId,
-    sessionId,
-    runId: data && !directorV6Enabled ? sessionId : undefined,
-    transports: {
-      loadV6Snapshot: (runId, signal) =>
-        api.getResearchV6ProjectionSnapshot(runId, { signal }),
-      loadV5Session: async (id) => {
-        const snapshot = await api.getResearchSessionSnapshot(id);
-        return { sessionId: id, nodes: snapshot.nodes, edges: snapshot.edges };
-      },
-    },
-  });
   const rawDisplayTypedGraph = useMemo(
-    () => {
-      if (directorV6Enabled) return directorCanvas.canvas?.graph;
-      if (projectionGateway.status === "error") return undefined;
-      return projectionGateway.source === "v6" && projectionGateway.canvas
-        ? canvasSnapshotToTypedGraph(sessionId, projectionGateway.snapshot)
-        : typedGraph;
-    },
+    () => (directorV6Enabled ? directorCanvas.canvas?.graph : typedGraph),
     [
-      projectionGateway.canvas,
-      projectionGateway.snapshot,
-      projectionGateway.source,
-      projectionGateway.status,
       directorCanvas.canvas,
       directorV6Enabled,
-      sessionId,
       typedGraph,
     ],
   );
@@ -372,20 +377,16 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     sessionStatus: data?.session.status ?? "",
   });
   const displayTypedGraph = guardedProjection.graph;
-  const projectionSource = directorV6Enabled ? "v6" : projectionGateway.source;
-  const canvasUsesV5 = !directorV6Enabled && projectionGateway.status === "v5";
+  const projectionSource = directorV6Enabled ? "v6" : "v5";
   const canvasLoading =
     (directorV6Enabled && directorCanvas.isLoading) ||
-    (!directorV6Enabled && projectionGateway.status === "probing") ||
-    (canvasUsesV5 && typedGraphLoading);
+    (!directorV6Enabled && typedGraphLoading);
   const canvasError =
     (directorV6Enabled && directorCanvas.error !== null) ||
-    (!directorV6Enabled && projectionGateway.status === "error") ||
-    (canvasUsesV5 && typedGraphError);
+    (!directorV6Enabled && typedGraphError);
   const canvasRetryPending =
     (directorV6Enabled && directorCanvas.isFetching) ||
-    (!directorV6Enabled && projectionGateway.isFetching) ||
-    (canvasUsesV5 && typedGraphFetching && !typedGraphFetchingNextPage);
+    (!directorV6Enabled && typedGraphFetching && !typedGraphFetchingNextPage);
   const detailGraphNodes = useMemo(
     () => mergeResearchCanvasNodes(data?.nodes ?? [], displayTypedGraph),
     [data?.nodes, displayTypedGraph],
@@ -400,15 +401,27 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   }, [data?.edges, displayTypedGraph?.edges]);
   useEffect(() => {
     const fromUrl = nav.searchParams.get("lens");
-    if (isResearchD5Lens(fromUrl) && fromUrl !== d5Lens) {
-      setD5Lens(fromUrl);
+    if (isResearchD5Lens(fromUrl)) {
+      if (fromUrl !== d5Lens) setD5Lens(fromUrl);
+      return;
     }
-  }, [d5Lens, nav.searchParams, sessionId, setD5Lens]);
+
+    const hiddenLensSelected = !isResearchD5Lens(d5Lens);
+    if (hiddenLensSelected || fromUrl !== null) {
+      setD5Lens(DEFAULT_RESEARCH_D5_LENS);
+    }
+    if (fromUrl !== null) {
+      const params = new URLSearchParams(nav.searchParams.toString());
+      params.delete("lens");
+      const qs = params.toString();
+      nav.replace(qs ? `${nav.pathname}?${qs}` : nav.pathname);
+    }
+  }, [d5Lens, nav, nav.searchParams, sessionId, setD5Lens]);
   const handleD5LensChange = useCallback(
     (lens: ResearchD5Lens) => {
       setD5Lens(lens);
       const params = new URLSearchParams(nav.searchParams.toString());
-      if (lens === "relations") params.delete("lens");
+      if (lens === DEFAULT_RESEARCH_D5_LENS) params.delete("lens");
       else params.set("lens", lens);
       const qs = params.toString();
       nav.replace(qs ? `${nav.pathname}?${qs}` : nav.pathname);
@@ -419,87 +432,35 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     researchSessionUiReducer,
     INITIAL_RESEARCH_SESSION_UI_STATE,
   );
-  const [selectedDirectorReportId, setSelectedDirectorReportId] = useState<
-    string | null
-  >(null);
-  const [assignedDirectorAgentId, setAssignedDirectorAgentId] = useState<string | null>(
-    persistedDirectorAgentId,
-  );
-  useEffect(() => {
-    // react-doctor-disable-next-line react-doctor/no-derived-state -- assignment changes optimistically and is reconciled from the persisted snapshot.
-    setAssignedDirectorAgentId(persistedDirectorAgentId);
-  }, [persistedDirectorAgentId]);
-  const assignedDirectorAgent = workspaceAgents.find(
-    (agent) => agent.id === assignedDirectorAgentId,
-  );
-  // react-doctor-disable-next-line react-doctor/query-mutation-missing-invalidation -- onSuccess updates the persisted Director assignment and the session snapshot is refreshed by the assignment flow.
-  const directorAssignment = useMutation({
-    mutationFn: ({ agentId, reason }: { agentId: string; reason: string }) =>
-      api.replaceResearchV6Director(wsId, sessionId, {
-        directorAgentId: agentId,
-        expectedStateVersion: data?.run?.run.state_version ?? 0,
-        reason,
-        clientRequestId: crypto.randomUUID(),
-      }),
-    onSuccess: (assignment) => {
-      if (assignment) {
-        setAssignedDirectorAgentId(assignment.directorAgentId);
-        void qc.invalidateQueries({
-          queryKey: researchKeys.snapshot(wsId, sessionId),
-        });
-      }
-    },
-  });
   const {
-    data: directorReportsData,
-    isLoading: directorReportsLoading,
-    refetch: refetchDirectorReports,
-  } = useQuery({
-    ...researchV6DirectorReportsOptions(directorTransport, wsId, sessionId),
+    agents: workspaceAgents,
+    assignedAgentId: assignedDirectorAgentId,
+    assignedAgent: assignedDirectorAgent,
+    assignment: directorAssignment,
+  } = useResearchV6DirectorAssignment({
     enabled: directorV6Enabled,
+    workspaceId: wsId,
+    runId: sessionId,
+    persistedAgentId: persistedDirectorAgentId,
+    expectedStateVersion: data?.run?.run.state_version ?? 0,
   });
-  const directorReportId =
-    (selectedDirectorReportId &&
-    directorReportsData?.some((item) => item.id === selectedDirectorReportId)
-      ? selectedDirectorReportId
-      : null) ??
-    directorReportsData?.find((item) => item.status === "published")?.id ??
-    directorReportsData?.[0]?.id ??
-    null;
   const {
-    data: directorReportDetailData,
-    isFetching: directorReportDetailFetching,
-    refetch: refetchDirectorReportDetail,
-  } = useQuery({
-    ...researchV6DirectorReportOptions(
-      directorTransport,
-      wsId,
-      sessionId,
-      directorReportId ?? "00000000-0000-0000-0000-000000000000",
-    ),
-    enabled: directorV6Enabled && ui.deliveryOpen && Boolean(directorReportId),
-  });
-  const directorReportSandbox = validateResearchV6ReportSandboxUrl(
-    directorReportDetailData?.sandbox_url ?? "",
-    typeof window === "undefined" ? "" : window.location.origin,
-    directorReportDetailData?.report_origin ?? "",
-  );
-  const {
-    data: directorReportCompiledHtml,
-    isFetching: directorReportCompiledFetching,
-  } = useQuery({
-    ...researchV6DirectorReportCompiledOptions(
-      directorTransport,
-      wsId,
-      sessionId,
-      directorReportId ?? "00000000-0000-4000-8000-000000000000",
-    ),
-    enabled:
-      directorV6Enabled &&
-      ui.deliveryOpen &&
-      Boolean(directorReportId) &&
-      Boolean(directorReportDetailData) &&
-      !directorReportSandbox.ok,
+    reports: directorReportsData,
+    reportsLoading: directorReportsLoading,
+    refetchReports: refetchDirectorReports,
+    reportId: directorReportId,
+    selectReport: setSelectedDirectorReportId,
+    reportDetail: directorReportDetailData,
+    reportDetailFetching: directorReportDetailFetching,
+    refetchReportDetail: refetchDirectorReportDetail,
+    compiledHtml: directorReportCompiledHtml,
+    compiledFetching: directorReportCompiledFetching,
+  } = useResearchV6Reports({
+    enabled: directorV6Enabled,
+    deliveryOpen: ui.deliveryOpen,
+    workspaceId: wsId,
+    runId: sessionId,
+    transport: directorTransport,
   });
   const handleSelectCanvasNode = useCallback(
     (node: ResearchGraphNode | null) => {
@@ -583,15 +544,17 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   } | null>(null);
   const handleOpenAgentPanel = useCallback<OpenAgentPanelFn>((agentId, snapshot) => {
     setAgentDock({ agentId, snapshot: snapshot ?? null });
-  }, []);
+    setD5RailMode("agent");
+    setD5RailOpen(true);
+  }, [setD5RailMode, setD5RailOpen]);
+  const handleCloseAgentPanel = useCallback(() => {
+    setAgentDock(null);
+    setD5RailMode("detail");
+  }, [setD5RailMode]);
   const { data: workspaceMembers = [] } = useQuery({
     ...memberListOptions(wsId),
     enabled: !!agentDock,
   });
-  const {
-    width: agentSideWidth,
-    onResizePointerDown: onAgentSideResizePointerDown,
-  } = useProfilePanelWidth(CHANNEL_DETAIL_SIDE_WIDTH_STORAGE_KEY);
   const chatScrollRef = useRef<HTMLDivElement>(null);
   // LRM-1250 / LRM-1248 AC4 — focus restore target after successful send.
   const composerRef = useRef<HTMLTextAreaElement>(null);
@@ -602,23 +565,44 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     action: ResearchNodeCommandAction;
     requestId: string;
   } | null>(null);
+  const messageRequestRef = useRef<{
+    identity: string;
+    requestId: string;
+  } | null>(null);
   // Stick-to-bottom while content grows (live stream / new cards); releases if
   // the user scrolls up to read history — no jump-scroll (LRM-820).
   useAutoScroll(chatScrollRef, chatOpen);
 
   const send = useMutation({
-    mutationFn: (body: string) =>
-      api.postResearchMessage(sessionId, {
+    mutationFn: (body: string) => {
+      const targetAgentId = directorV6Enabled
+        ? persistedDirectorAgentId ?? undefined
+        : undefined;
+      const selectedResearchRefs =
+        directorV6Enabled && selectedDirectorReference
+          ? [selectedDirectorReference]
+          : undefined;
+      const requestIdentity = [
+        sessionId,
         body,
-        target_agent_id: directorV6Enabled
-          ? persistedDirectorAgentId ?? undefined
-          : undefined,
-        selected_research_refs:
-          directorV6Enabled && selectedDirectorReference
-            ? [selectedDirectorReference]
-            : undefined,
-      }),
+        targetAgentId ?? "",
+        selectedDirectorReference?.stableId ?? "",
+        selectedDirectorReference?.revision ?? "",
+        selectedDirectorReference?.contentHash ?? "",
+      ].join("\n");
+      const current = messageRequestRef.current;
+      const requestId =
+        current?.identity === requestIdentity ? current.requestId : createSafeId();
+      messageRequestRef.current = { identity: requestIdentity, requestId };
+      return api.postResearchMessage(sessionId, {
+        body,
+        clientRequestId: requestId,
+        targetAgentId,
+        selectedResearchRefs,
+      });
+    },
     onSuccess: () => {
+      messageRequestRef.current = null;
       // Focus before clearBody so empty-state native disabled does not dump focus to BODY.
       composerRef.current?.focus();
       dispatch({ type: "clearBody" });
@@ -704,7 +688,6 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     onSettled: () => {
       void refetch();
       void refetchTypedGraph();
-      projectionGateway.refetch();
     },
   });
 
@@ -742,7 +725,11 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
 
   // LRM-840 — reject stage-gate confirm: tip → agent + status resumes via BE.
   const rejectConfirm = useMutation({
-    mutationFn: (body: string) => api.postResearchMessage(sessionId, { body }),
+    mutationFn: (body: string) =>
+      api.postResearchMessage(sessionId, {
+        body,
+        clientRequestId: createSafeId(),
+      }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) });
       void qc.invalidateQueries({ queryKey: researchKeys.sessions(wsId) });
@@ -810,7 +797,10 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     interruptRetryPriorIdRef.current = sessionInterrupt.messageId;
     setInterruptPhase("pending");
     void api
-      .postResearchMessage(sessionId, { body })
+      .postResearchMessage(sessionId, {
+        body,
+        clientRequestId: createSafeId(),
+      })
       .then(() =>
         qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) }),
       )
@@ -948,13 +938,32 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     });
     return base ? enrichResearchNodeForDetail(base, displayTypedGraph) : null;
   })();
-  const executionRows = buildExecutionOverlayRows({
-    members: fleet.members,
-    presence,
-    presenceAvailable: presenceData != null,
-    nodes: data.nodes,
-    run: data.run,
-  });
+  // Live executor caption for the selected V6 projection node: match the
+  // presence roster by executing agent, by the node's own work item identity,
+  // or by any work item linked from the node detail.
+  const selectedNodeLiveActivity = (() => {
+    const ref = selectedDirectorProjectionNode?.canonicalRef;
+    if (!ref) return null;
+    const linkedWorkItemIds = new Set(
+      (directorNodeDetailData?.workItemRefs ?? []).map((r) => r.id),
+    );
+    for (const [agentId, entry] of Object.entries(presence)) {
+      if (entry.phase !== "running" && entry.phase !== "queued" && entry.phase !== "stale") continue;
+      const matchesNode =
+        (ref.kind === "agent" && agentId === ref.id) ||
+        (entry.taskId != null &&
+          (entry.taskId === ref.id || linkedWorkItemIds.has(entry.taskId)));
+      if (!matchesNode) continue;
+      if (!entry.activity) continue;
+      return {
+        name: entry.name || agentId.slice(0, 8),
+        activity: entry.activity,
+        phase: entry.phase,
+        updatedAt: entry.updatedAt,
+      };
+    }
+    return null;
+  })();
   // LRM-1329 — drawer overview owns error/permission; cards stay fact-only.
   const canvasMode = resolveCanvasBodyMode({
     nodes: data.nodes,
@@ -1066,8 +1075,49 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     waiting: t(($) => $.step_card.generated.waiting),
   };
   const chatFeed = buildFleetChatFeed(messages, fleetStepLabels);
+  const directorPresence = assignedDirectorAgentId
+    ? presence[assignedDirectorAgentId]
+    : undefined;
+  const v6DirectorActivityCard: FleetStepCardModel | null =
+    directorV6Enabled && directorPresence?.activity.trim()
+      ? {
+          kind: "step",
+          id: `v6-director-presence-${assignedDirectorAgentId}`,
+          status:
+            directorPresence.phase === "failed" ||
+            directorPresence.phase === "stale"
+              ? "failed"
+              : directorPresence.phase === "done"
+                ? "done"
+                : directorPresence.phase === "idle"
+                  ? "waiting"
+                  : "running",
+          title:
+            assignedDirectorAgent?.display_name ||
+            assignedDirectorAgent?.name ||
+            directorPresence.name ||
+            t(($) => $.d5.rail.director_fallback),
+          stepLabel: t(($) => $.d5.rail.director_role),
+          summaryHeadline: directorPresence.activity,
+          summaryDetail: "",
+          bullets: [],
+          evidence: null,
+          mergeCount: 1,
+          reason: directorPresence.staleReason,
+          recoveryHint: null,
+          actorAgentId: assignedDirectorAgentId,
+          createdAt:
+            directorPresence.updatedAt == null
+              ? ""
+              : new Date(directorPresence.updatedAt).toISOString(),
+          showRetry: false,
+          showReassign: false,
+        }
+      : null;
   const runningCards = directorV6Enabled
-    ? []
+    ? v6DirectorActivityCard
+      ? [v6DirectorActivityCard]
+      : []
     : presenceRunningCards(presence, fleet.members);
   const waitingCard = directorV6Enabled
     ? null
@@ -1085,20 +1135,27 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     runningCards.length > 0 ||
     !!waitingCard ||
     showStop;
-  const chatMode = resolveChatDrawerMode(chatHasFeed ? 1 : 0, session.status, {
-    loading: send.isPending && !chatHasFeed,
-    error: send.isError
-      ? send.error instanceof Error
-        ? send.error.message
-        : t(($) => $.session_page.send_failed)
-      : null,
-  });
+  const chatMode = resolveChatDrawerMode(
+    chatHasFeed ? 1 : 0,
+    directorV6Enabled ? undefined : session.status,
+    {
+      loading: send.isPending && !chatHasFeed,
+      error: send.isError
+        ? send.error instanceof Error
+          ? send.error.message
+          : t(($) => $.session_page.send_failed)
+        : null,
+    },
+  );
   const chatErrorMessage =
     send.error instanceof Error ? send.error.message : null;
 
   const postFleetAction = (body: string) => {
     void api
-      .postResearchMessage(sessionId, { body })
+      .postResearchMessage(sessionId, {
+        body,
+        clientRequestId: createSafeId(),
+      })
       .then(() =>
         qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) }),
       )
@@ -1132,11 +1189,9 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
       identitySnapshot={agentDock.snapshot}
       currentUserId={currentUserId}
       members={workspaceMembers}
-      onClose={() => setAgentDock(null)}
-      variant={isMobile ? "page" : "panel"}
-      doneLabel={
-        isMobile ? tAgents(($) => $.side_panel.back_to_messages) : undefined
-      }
+      onClose={handleCloseAgentPanel}
+      variant="panel"
+      hideDismiss
     />
   ) : null;
 
@@ -1153,7 +1208,6 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
         goalVersion={goalVersion}
         goalHistory={goalHistory}
         goalImpact={goalImpact}
-        typedGraphNodes={displayTypedGraph?.nodes ?? []}
         projectionSource={projectionSource}
         session={session}
         contract={data.run?.contract}
@@ -1215,15 +1269,12 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
           typedLoading={canvasLoading}
           typedError={canvasError}
           projectionErrorReason={
-            directorV6Enabled
-              ? directorCanvas.error?.message
-              : projectionGateway.error?.reason
+            directorV6Enabled ? directorCanvas.error?.message : undefined
           }
           projectionMismatch={projectionMismatch}
           onRetryTypedGraph={() => {
             void refetchTypedGraph();
             if (directorV6Enabled) directorCanvas.refetch();
-            else projectionGateway.refetch();
           }}
           retryTypedGraphPending={canvasRetryPending}
           snapshotNodeCount={data.nodes.length}
@@ -1234,30 +1285,37 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
             directorV6Enabled ? directorCanvas.expansionControl : undefined
           }
           densityBins={
-            directorV6Enabled ? directorCanvas.canvas?.densityBins : undefined
+            directorV6Enabled
+              ? directorCanvas.canvas?.densityBins.map((bin) => ({
+                  id: bin.id,
+                  bounds: bin.bounds,
+                  total: bin.total,
+                  executionCounts: bin.executionCounts,
+                }))
+              : undefined
           }
           typedGraphHasNextPage={
             directorV6Enabled
               ? directorCanvas.hasNextSnapshotPage
-              : canvasUsesV5 && typedGraphHasNextPage === true
+              : typedGraphHasNextPage === true
           }
           typedGraphLoadMorePending={
             directorV6Enabled
               ? directorCanvas.isFetching
-              : canvasUsesV5 && typedGraphFetchingNextPage
+              : typedGraphFetchingNextPage
           }
           onLoadMoreTypedGraph={
             directorV6Enabled && directorCanvas.hasNextSnapshotPage
               ? directorCanvas.loadNextSnapshotPage
-              : canvasUsesV5 && typedGraphHasNextPage
+              : typedGraphHasNextPage
               ? () => void fetchNextTypedGraphPage()
               : undefined
           }
           snapshotNodes={data.nodes}
           selectedNode={selectedNode}
           onSelectNode={handleSelectCanvasNode}
-          executionRows={executionRows}
           onOpenAgentPanel={handleOpenAgentPanel}
+          onCloseAgentPanel={handleCloseAgentPanel}
           canvasMode={canvasMode}
           activeLens={d5Lens}
           onActiveLensChange={handleD5LensChange}
@@ -1281,19 +1339,27 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
                 <ResearchV6NodeDetail
                   node={selectedDirectorProjectionNode}
                   detail={directorNodeDetailData}
+                  workActivity={directorWorkActivityData}
+                  workTimeline={directorWorkTimeline}
+                  workActivityLoading={directorWorkActivityLoading}
+                  workActivityError={directorWorkActivityError}
                   loading={directorNodeDetailLoading}
                   error={directorNodeDetailError}
                   selectedForChat={
-                    selectedDirectorReference?.stable_id ===
-                    `${selectedDirectorProjectionNode.canonical_ref.kind}:${selectedDirectorProjectionNode.canonical_ref.id}`
+                    selectedDirectorReference?.stableId ===
+                    `${selectedDirectorProjectionNode.canonicalRef.kind}:${selectedDirectorProjectionNode.canonicalRef.id}`
                   }
                   projectionNodeById={
                     directorCanvas.canvas?.projectionNodeById ?? new Map()
                   }
+                  liveActivity={selectedNodeLiveActivity}
                   onRetry={() => void refetchDirectorNodeDetail()}
+                  onRetryWorkActivity={() => {
+                    void refetchDirectorWorkActivity();
+                  }}
                   onFocusNode={(nodeId) => {
                     if (!directorCanvas.canvas?.projectionNodeById.has(nodeId)) return;
-                    handleD5LensChange("relations");
+                    handleD5LensChange("agent");
                     selectSessionCanvasNode(sessionId, nodeId);
                   }}
                   onReference={() => {
@@ -1339,6 +1405,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
               </p>
             )
           }
+          agentPanel={agentPanelNode}
           chatPanel={
             <>
             <ResearchDirectorChatHeader
@@ -1349,9 +1416,11 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
                   : undefined
               }
               activity={
-                directorMember
-                  ? presence[directorMember.agent_id]?.activity
-                  : null
+                directorV6Enabled
+                  ? directorPresence?.activity
+                  : directorMember
+                    ? presence[directorMember.agent_id]?.activity
+                    : null
               }
               modeChip={<ResearchChatModeChip mode={chatMode} />}
               mode={chatMode}
@@ -1508,6 +1577,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
                           <ResearchChatCard
                             message={item.message}
                             members={fleet.members}
+                            presence={presence}
                             messages={messages}
                             currentGoal={session.goal}
                             roundPending={send.isPending}
@@ -1600,7 +1670,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
                 {directorV6Enabled && selectedDirectorReference ? (
                   <ul
                     className="mb-2"
-                    aria-label={selectedDirectorReference.display_summary}
+                    aria-label={selectedDirectorReference.displaySummary}
                   >
                     <ResearchSelectedRefChip
                       reference={selectedDirectorReference}
@@ -1699,22 +1769,6 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
           }
         />
 
-        {!isMobile && agentPanelNode ? (
-          <div
-            data-testid="research-agent-side-slot"
-            className="relative flex shrink-0 flex-col border-l border-border/30 bg-background"
-            style={{ width: agentSideWidth }}
-          >
-            <button
-              type="button"
-              data-testid="research-agent-side-resize"
-              aria-label={tAgents(($) => $.side_panel.resize_aria)}
-              className="absolute inset-y-0 left-0 z-10 w-1.5 cursor-col-resize border-0 bg-transparent p-0 hover:bg-foreground/10"
-              onPointerDown={onAgentSideResizePointerDown}
-            />
-            {agentPanelNode}
-          </div>
-        ) : null}
       </div>
 
       {/* LRM-832 — terminal next-step guide (dismiss persists; below Delivery z-80). */}
@@ -1754,17 +1808,17 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
               ? {
                   id: directorReportDetailData.id,
                   title: directorReportDetailData.title,
-                  packageHash: directorReportDetailData.package_hash,
-                  sandboxUrl: directorReportDetailData.sandbox_url ?? "",
-                  reportOrigin: directorReportDetailData.report_origin ?? "",
+                  packageHash: directorReportDetailData.packageHash,
+                  sandboxUrl: directorReportDetailData.sandboxUrl ?? "",
+                  reportOrigin: directorReportDetailData.reportOrigin ?? "",
                   compiledHtml: directorReportCompiledHtml,
-                  plainTextFallback: directorReportDetailData.plain_text,
+                  plainTextFallback: directorReportDetailData.plainText,
                   revision: directorReportDetailData.revision,
                   status: directorReportDetailData.status,
                   inputCount:
                     directorReportsData?.find(
                       (item) => item.id === directorReportDetailData.id,
-                    )?.input_count ?? directorReportDetailData.input_refs.length,
+                    )?.inputCount ?? directorReportDetailData.inputRefs.length,
                 }
               : null
           }
@@ -1773,7 +1827,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
             revision: item.revision,
             status: item.status,
             title: item.title,
-            publishedAt: item.published_at,
+            publishedAt: item.publishedAt,
           }))}
           onSelectReport={setSelectedDirectorReportId}
           selectedReportId={directorReportId}
@@ -1816,7 +1870,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   return (
     <ResearchConnectivityShell>
       <AgentPanelProvider onOpenAgent={handleOpenAgentPanel}>
-        {isMobile && agentPanelNode ? agentPanelNode : sessionBody}
+        {sessionBody}
       </AgentPanelProvider>
     </ResearchConnectivityShell>
   );

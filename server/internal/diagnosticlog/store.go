@@ -359,7 +359,7 @@ func validateEvent(event Event) error {
 func knownEvent(name EventName) bool {
 	switch name {
 	case EventComputerStateChanged, EventEnvironmentStateChanged, EventSessionStateChanged,
-		EventWorkspaceRunnerStateChanged, EventUpgradeStateChanged, EventGenerationFenced,
+		EventWorkspaceDaemonStateChanged, EventUpgradeStateChanged, EventGenerationFenced,
 		EventRunnerLogSinkDegraded, EventRunnerLogSinkRecovered, EventDiagnosticStorageEvicted,
 		EventRunnerStateChanged, EventServerConnectionStateChanged, EventRuntimeDetected,
 		EventAgentLifecycleRequested, EventAgentProcessStateChanged, EventDeliveryStateChanged,
@@ -374,7 +374,7 @@ func validateEventScope(scope Scope, name EventName) error {
 	service := false
 	switch name {
 	case EventComputerStateChanged, EventEnvironmentStateChanged, EventSessionStateChanged,
-		EventWorkspaceRunnerStateChanged, EventUpgradeStateChanged, EventGenerationFenced,
+		EventWorkspaceDaemonStateChanged, EventUpgradeStateChanged, EventGenerationFenced,
 		EventRunnerLogSinkDegraded, EventRunnerLogSinkRecovered, EventDiagnosticStorageEvicted:
 		service = true
 	}

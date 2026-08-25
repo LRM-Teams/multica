@@ -28,6 +28,9 @@ import {
   TooltipContent,
 } from "@multica/ui/components/ui/tooltip";
 import { ChevronRight, ChevronDown, ChevronUp, Brain, AlertCircle, AlertTriangle, Copy } from "lucide-react";
+import { ChatMessageHoverShell } from "./chat-message-hover-actions";
+import { NoteChatInsertActions } from "./note-chat-insert-actions";
+import { buildChatNoteWriteConfirmationByMessageId } from "@multica/core/notes/worker-reply-actions";
 import { useScrollFade } from "@multica/ui/hooks/use-scroll-fade";
 import { chatTranscriptOptions, isStandaloneSessionOutstanding, isTaskMessageTaskId } from "@multica/core/chat/queries";
 import { Markdown } from "@multica/views/common/markdown";
@@ -136,6 +139,13 @@ interface ChatMessageListProps {
    * tool steps. Global FAB / non-bubble chat keeps the compact fold.
    */
   isDmBubble?: boolean;
+  /**
+   * Notes bubble: copy lives on the Messages-style hover overlay, not a
+   * fixed footer slot under every reply.
+   */
+  hoverMessageActions?: boolean;
+  /** Notes page id for hover insert-below / insert-child. */
+  noteInsertPageId?: string | null;
 }
 
 export function ChatMessageList({
@@ -148,6 +158,8 @@ export function ChatMessageList({
   isFetchingOlderMessages = false,
   onLoadOlderMessages,
   isDmBubble = false,
+  hoverMessageActions = false,
+  noteInsertPageId,
 }: ChatMessageListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const lastTailIdRef = useRef<string | undefined>(undefined);
@@ -161,6 +173,14 @@ export function ChatMessageList({
   }, []);
   const fadeStyle = useScrollFade(scrollRef);
   const { t } = useT("chat");
+
+  const noteInsertOffers = useMemo(
+    () =>
+      noteInsertPageId?.trim()
+        ? buildChatNoteWriteConfirmationByMessageId(messages)
+        : new Map<string, { mode: string }>(),
+    [messages, noteInsertPageId],
+  );
 
   const turnOutstanding = isStandaloneSessionOutstanding(pendingTask);
   const lastMessage = messages[messages.length - 1];
@@ -299,6 +319,9 @@ export function ChatMessageList({
                   message={msg}
                   isPending={false}
                   enhanced={isDmBubble}
+                  hoverMessageActions={hoverMessageActions}
+                  noteInsertPageId={noteInsertPageId}
+                  offerNoteInsert={noteInsertOffers.has(msg.id)}
                 />
               </div>
             )}
@@ -383,39 +406,53 @@ function MessageBubble({
   message,
   isPending,
   enhanced,
+  hoverMessageActions,
+  noteInsertPageId,
+  offerNoteInsert,
 }: {
   sessionId: string;
   message: ChatMessage;
   isPending: boolean;
   enhanced?: boolean;
+  hoverMessageActions?: boolean;
+  noteInsertPageId?: string | null;
+  offerNoteInsert?: boolean;
 }) {
   if (message.role === "user") {
     return (
       <div className="flex justify-end">
-        <div className="max-w-[80%] space-y-1">
-          <div className={cn("rounded-2xl bg-muted px-3.5 py-2 text-sm break-words", selectableMessageTextClass)}>
-            {/* User messages are authored as markdown in ContentEditor, so
-             * render them through the same pipeline as assistant replies.
-             * Neutralise prose's leading/trailing margin so single-line
-             * bubbles stay as compact as the plain-text version used to. */}
-            <ChatCollapsibleBody
-              contentKey={`user:${message.id}:${message.content.length}`}
-              fadeVariant="muted"
-            >
-              <div className="prose prose-sm dark:prose-invert max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
-                <Markdown attachments={message.attachments} mentionVariant="plain">{message.content}</Markdown>
+        <ChatMessageHoverShell
+          enabled={!!hoverMessageActions}
+          copyTextValue={extractCopyText(message, [])}
+          noteInsertPageId={noteInsertPageId}
+        >
+          <div className="max-w-[80%] space-y-1">
+            <div className={cn("rounded-2xl bg-muted px-3.5 py-2 text-sm break-words", selectableMessageTextClass)}>
+              {/* User messages are authored as markdown in ContentEditor, so
+               * render them through the same pipeline as assistant replies.
+               * Neutralise prose's leading/trailing margin so single-line
+               * bubbles stay as compact as the plain-text version used to. */}
+              <ChatCollapsibleBody
+                contentKey={`user:${message.id}:${message.content.length}`}
+                fadeVariant="muted"
+              >
+                <div className="prose prose-sm dark:prose-invert max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+                  <Markdown attachments={message.attachments} mentionVariant="plain">{message.content}</Markdown>
+                </div>
+              </ChatCollapsibleBody>
+              <AttachmentList
+                attachments={message.attachments}
+                content={message.content}
+                className="mt-1.5"
+              />
+            </div>
+            {!hoverMessageActions && (
+              <div className="flex justify-end">
+                <MessageCopyButton message={message} timeline={[]} />
               </div>
-            </ChatCollapsibleBody>
-            <AttachmentList
-              attachments={message.attachments}
-              content={message.content}
-              className="mt-1.5"
-            />
+            )}
           </div>
-          <div className="flex justify-end">
-            <MessageCopyButton message={message} timeline={[]} />
-          </div>
-        </div>
+        </ChatMessageHoverShell>
       </div>
     );
   }
@@ -426,6 +463,9 @@ function MessageBubble({
       message={message}
       isPending={isPending}
       enhanced={enhanced}
+      hoverMessageActions={hoverMessageActions}
+      noteInsertPageId={noteInsertPageId}
+      offerNoteInsert={offerNoteInsert}
     />
   );
 }
@@ -435,11 +475,17 @@ function AssistantMessage({
   message,
   isPending,
   enhanced,
+  hoverMessageActions,
+  noteInsertPageId,
+  offerNoteInsert,
 }: {
   sessionId: string;
   message: ChatMessage;
   isPending: boolean;
   enhanced?: boolean;
+  hoverMessageActions?: boolean;
+  noteInsertPageId?: string | null;
+  offerNoteInsert?: boolean;
 }) {
   const taskId = message.task_id;
   const canFetchTaskMessages = !!sessionId && isTaskMessageTaskId(taskId);
@@ -460,44 +506,63 @@ function AssistantMessage({
   // so the user can see exactly where the run broke.
   if (message.failure_reason) {
     return (
-      <FailureBubble
-        reason={message.failure_reason}
-        rawError={message.content}
-        timeline={timeline}
-        elapsedMs={message.elapsed_ms}
-        enhanced={enhanced}
-      />
+      <ChatMessageHoverShell
+        enabled={!!hoverMessageActions}
+        copyTextValue={extractCopyText(message, timeline)}
+        noteInsertPageId={noteInsertPageId}
+      >
+        <FailureBubble
+          reason={message.failure_reason}
+          rawError={message.content}
+          timeline={timeline}
+          elapsedMs={message.elapsed_ms}
+          enhanced={enhanced}
+        />
+      </ChatMessageHoverShell>
     );
   }
 
   return (
-    <div className="w-full space-y-1.5">
-      {timeline.length > 0 ? (
-        <TimelineView
-          items={timeline}
+    <ChatMessageHoverShell
+      enabled={!!hoverMessageActions && !isPending}
+      copyTextValue={extractCopyText(message, timeline)}
+      noteInsertPageId={noteInsertPageId}
+    >
+      <div className="w-full space-y-1.5">
+        {timeline.length > 0 ? (
+          <TimelineView
+            items={timeline}
+            attachments={message.attachments}
+            enhanced={enhanced}
+            messageParts={message.parts}
+            messageContent={message.content}
+            foldKey={taskId ? `task:${taskId}` : `msg:${message.id}`}
+          />
+        ) : (
+          <MessageProse
+            content={message.content}
+            parts={message.parts}
+            attachments={message.attachments}
+          />
+        )}
+        <AttachmentList
           attachments={message.attachments}
-          enhanced={enhanced}
-          messageParts={message.parts}
-          messageContent={message.content}
-          foldKey={taskId ? `task:${taskId}` : `msg:${message.id}`}
-        />
-      ) : (
-        <MessageProse
           content={message.content}
-          parts={message.parts}
-          attachments={message.attachments}
         />
-      )}
-      <AttachmentList
-        attachments={message.attachments}
-        content={message.content}
-      />
-      <MessageFooter
-        message={message}
-        timeline={timeline}
-        isPending={isPending}
-      />
-    </div>
+        <MessageFooter
+          message={message}
+          timeline={timeline}
+          isPending={isPending}
+          hideCopy={hoverMessageActions}
+        />
+        {offerNoteInsert && noteInsertPageId && !isPending ? (
+          <NoteChatInsertActions
+            pageId={noteInsertPageId}
+            text={extractCopyText(message, timeline)}
+          />
+        ) : null}
+      </div>
+    </ChatMessageHoverShell>
   );
 }
 
@@ -510,12 +575,14 @@ function MessageFooter({
   message,
   timeline,
   isPending,
+  hideCopy,
 }: {
   message: ChatMessage;
   timeline: ChatTimelineItem[];
   isPending: boolean;
+  hideCopy?: boolean;
 }) {
-  const showCopy = !isPending;
+  const showCopy = !isPending && !hideCopy;
   if (message.elapsed_ms == null && !showCopy) return null;
   return (
     <div className="flex items-center gap-1.5">

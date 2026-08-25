@@ -70,7 +70,6 @@ import { ResearchHomeHero } from "./research-home-hero";
 import { ResearchHomeOverview } from "./research-home-overview";
 import { ResearchHomeConstellationPreview } from "./research-home-constellation-preview";
 import { ResearchHomeHeader } from "./research-home-header";
-import { ResearchV6OpsPanel } from "./research-v6-ops-panel";
 import { ResearchShellAtmosphere } from "./research-shell-atmosphere";
 import "./research-home-visual.css";
 import { ResearchServerErrorPage } from "./research-server-error-page";
@@ -106,6 +105,7 @@ type ComposerDraft = {
  * surface in the UI — the user picks a behavior, not an orchestrator tag.
  */
 const CLASSIC_FLEET_VALUE = "__classic_fleet__";
+const PREFERRED_DIRECTOR_UNAVAILABLE_VALUE = "__preferred_director_unavailable__";
 
 function emptyComposer(uiLanguage?: string): ComposerDraft {
   return {
@@ -205,7 +205,10 @@ export function ResearchListPage() {
   const fleetQuery = useQuery(researchFleetOptions(wsId));
   const agentsQuery = useQuery(agentListOptions(wsId));
   const availableDirectors = (agentsQuery.data ?? []).filter(
-    (agent) => agent.archived_at == null,
+    (agent) =>
+      agent.archived_at == null &&
+      Boolean(agent.runtime_id) &&
+      agent.runtime_status === "online",
   );
   const selectedDirectorId =
     orchestratorVersion === "research-run-v6"
@@ -219,7 +222,7 @@ export function ResearchListPage() {
       ? t(($) => $.home.lead_fleet_option)
       : selectedDirector
         ? selectedDirector.display_name || selectedDirector.name || selectedDirector.id
-        : t(($) => $.d5.rail.director_fallback);
+        : t(($) => $.home.preferred_director_unavailable_label);
   const { data, isLoading, isFetching, isError, error, refetch } = useQuery(
     researchSessionListOptions(wsId),
   );
@@ -247,15 +250,15 @@ export function ResearchListPage() {
             language,
             selectedTemplate ? appliedTemplatePrompt : null,
           ),
-          depth_tier: params.depth_tier,
+          depthTier: params.depth_tier,
           language: params.language,
-          source_weights: params.source_weights,
+          sourceWeights: params.source_weights,
           ...(draftTitle?.trim() ? { title: draftTitle.trim() } : {}),
           ...(createRequestIdRef.current
-            ? { client_request_id: createRequestIdRef.current }
+            ? { clientRequestId: createRequestIdRef.current }
             : {}),
           ...(orchestratorVersion === "research-run-v6"
-            ? { orchestrator_version: orchestratorVersion, director_agent_id: selectedDirectorId }
+            ? { orchestratorVersion, directorAgentId: selectedDirectorId }
             : {}),
         },
         wsId,
@@ -468,12 +471,31 @@ export function ResearchListPage() {
   };
 
   // LRM-787: keep the draft on failure and surface the error inside the card.
-  const createError =
-    create.isError && create.error instanceof Error && create.error.message
-      ? create.error.message
-      : create.isError
-        ? t(($) => $.home.create_failed)
-        : null;
+  const createErrorBody =
+    create.isError &&
+    typeof create.error === "object" &&
+    create.error != null &&
+    "body" in create.error &&
+    typeof create.error.body === "object" &&
+    create.error.body != null
+      ? (create.error.body as { code?: unknown })
+      : null;
+  const createErrorCode =
+    typeof createErrorBody?.code === "string" ? createErrorBody.code : null;
+  const localizedCreateError =
+    createErrorCode === "research.v6.director_runtime_offline"
+      ? t(($) => $.home.director_runtime_offline)
+      : createErrorCode === "research.v6.bootstrap_pending"
+        ? t(($) => $.home.bootstrap_pending)
+        : createErrorCode?.startsWith("research.v6.director_")
+          ? t(($) => $.home.director_unavailable)
+          : null;
+  const createError = create.isError
+    ? localizedCreateError ??
+      (create.error instanceof Error && create.error.message
+        ? create.error.message
+        : t(($) => $.home.create_failed))
+    : null;
   if (createError) lastCreateErrorRef.current = createError;
   const visibleCreateError =
     createError ?? (createRetrying ? lastCreateErrorRef.current : null);
@@ -530,7 +552,7 @@ export function ResearchListPage() {
     return (
       <div className="space-y-6">
         {inProgress.length > 0 && (
-          <section>
+          <section data-testid="research-session-group-in-progress">
             <h2 className="px-3 text-xs font-medium text-muted-foreground">
               {t(($) => $.groups.in_progress)}
               <span className="ml-1.5 tabular-nums font-medium">
@@ -541,7 +563,7 @@ export function ResearchListPage() {
           </section>
         )}
         {completed.length > 0 && (
-          <section>
+          <section data-testid="research-session-group-completed">
             <h2 className="px-3 text-xs font-medium text-muted-foreground">
               {t(($) => $.groups.completed)}
               <span className="ml-1.5 tabular-nums font-medium">
@@ -552,7 +574,7 @@ export function ResearchListPage() {
           </section>
         )}
         {failed.length > 0 && (
-          <section>
+          <section data-testid="research-session-group-failed">
             <h2 className="px-3 text-xs font-medium text-muted-foreground">
               {t(($) => $.filter.status_failed)}
               <span className="ml-1.5 tabular-nums font-medium">
@@ -603,7 +625,6 @@ export function ResearchListPage() {
             <ResearchShellAtmosphere className="-top-2" heightClassName="h-[200px]" />
           ) : null}
           <ResearchHomeHeader sessions={sessions} />
-          {!bootstrapLoading && !bootstrapIsError ? <ResearchV6OpsPanel /> : null}
           {/* LRM-783 / LRM-784 / LRM-1106: brand-hero + full-width composer (12 cols). */}
           <div ref={composerCardRef} className="relative z-[1]">
             <ResearchHomeHero preview={<ResearchHomeConstellationPreview sessions={sessions} selectedId={selectedResearchId} />}>
@@ -730,11 +751,18 @@ export function ResearchListPage() {
                     <Select
                       value={
                         orchestratorVersion === "research-run-v6"
-                          ? selectedDirectorId
+                          ? selectedDirectorId || PREFERRED_DIRECTOR_UNAVAILABLE_VALUE
                           : CLASSIC_FLEET_VALUE
                       }
                       onValueChange={(next) => {
-                        if (createBusy || typeof next !== "string" || next === "") return;
+                        if (
+                          createBusy ||
+                          typeof next !== "string" ||
+                          next === "" ||
+                          next === PREFERRED_DIRECTOR_UNAVAILABLE_VALUE
+                        ) {
+                          return;
+                        }
                         setComposer((prev) => ({
                           ...prev,
                           orchestratorVersion:
@@ -756,6 +784,11 @@ export function ResearchListPage() {
                         <SelectValue>{leadLabel}</SelectValue>
                       </SelectTrigger>
                       <SelectContent align="start">
+                        {!selectedDirectorId ? (
+                          <SelectItem disabled value={PREFERRED_DIRECTOR_UNAVAILABLE_VALUE}>
+                            {t(($) => $.home.preferred_director_unavailable_label)}
+                          </SelectItem>
+                        ) : null}
                         {availableDirectors.map((agent) => (
                           <SelectItem key={agent.id} value={agent.id}>
                             {agent.display_name || agent.name || agent.id}
@@ -813,6 +846,13 @@ export function ResearchListPage() {
                     </Button>
                   </div>
                 </div>
+                {orchestratorVersion === "research-run-v6" &&
+                !agentsQuery.isLoading &&
+                !selectedDirectorId ? (
+                  <p className="border-t px-3 py-2 text-xs text-destructive md:px-3.5" role="alert">
+                    {t(($) => $.home.preferred_director_unavailable)}
+                  </p>
+                ) : null}
               </div>
 
               <ResearchCreateParamsPanel

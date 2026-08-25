@@ -16,6 +16,7 @@ import { createLogger } from "@multica/core/logger";
 import { enterKey } from "@multica/core/platform";
 import type { UploadResult } from "@multica/core/hooks/use-file-upload";
 import type { MentionItem } from "../../editor/extensions/mention-suggestion";
+import { usePrefersReducedMotion } from "../../common/use-prefers-reduced-motion";
 import { useT } from "../../i18n";
 
 const logger = createLogger("chat.ui");
@@ -55,6 +56,12 @@ interface ChatInputProps {
   safeArea?: boolean;
   /** Bump to focus the composer editor. */
   focusToken?: number;
+  /** Replace the default composer placeholder. */
+  placeholder?: string;
+  /** Allow sending when the composer is empty. */
+  allowEmptySend?: boolean;
+  /** Rendered inside the composer card, above the editor (e.g. a quote chip). */
+  composerPrefix?: ReactNode;
 }
 
 export function ChatInput({
@@ -73,8 +80,12 @@ export function ChatInput({
   sessionId,
   safeArea = false,
   focusToken,
+  placeholder: placeholderOverride,
+  allowEmptySend = false,
+  composerPrefix,
 }: ChatInputProps) {
   const { t } = useT("chat");
+  const prefersReducedMotion = usePrefersReducedMotion();
   const editorRef = useRef<ContentEditorRef>(null);
   // ChatWindow always passes sessionId/agentId. Prefer those for draft
   // scoping so DM-bubble mode never bleeds into the global desktop chat store.
@@ -196,8 +207,8 @@ export function ChatInput({
   });
 
   const handleSend = async () => {
-    const content = editorRef.current?.getMarkdown()?.replace(/(\n\s*)+$/, "").trim();
-    if (!content || isSubmitting || disabled || noAgent) {
+    const content = editorRef.current?.getMarkdown()?.replace(/(\n\s*)+$/, "").trim() ?? "";
+    if ((!content && !allowEmptySend) || isSubmitting || disabled || noAgent) {
       logger.debug("input.send skipped", {
         emptyContent: !content,
         isRunning,
@@ -258,9 +269,11 @@ export function ChatInput({
     ? t(($) => $.input.placeholder_no_agent)
     : disabled
       ? t(($) => $.input.placeholder_archived)
-      : agentName
-        ? t(($) => $.input.placeholder_named, { name: agentName })
-        : t(($) => $.input.placeholder_default);
+      : placeholderOverride
+        ? placeholderOverride
+        : agentName
+          ? t(($) => $.input.placeholder_named, { name: agentName })
+          : t(($) => $.input.placeholder_default);
 
   const uploadEnabled = !!onUploadFile && !disabled && !noAgent;
 
@@ -292,6 +305,7 @@ export function ChatInput({
         )}
         aria-disabled={noAgent || undefined}
       >
+        {composerPrefix}
         <div className="flex-1 min-h-0 overflow-y-auto px-3 py-2">
           <ContentEditor
             // See the editorKey / draftKey split note above — editorKey
@@ -343,12 +357,13 @@ export function ChatInput({
               onClick={() => {}}
               running
               onStop={onStop}
+              reducedMotion={prefersReducedMotion}
               stopTooltip={t(($) => $.input.stop_tooltip)}
             />
           )}
           <SubmitButton
             onClick={handleSend}
-            disabled={isEmpty || isSubmitting || !!disabled || !!noAgent || pendingUploads > 0}
+            disabled={(isEmpty && !allowEmptySend) || isSubmitting || !!disabled || !!noAgent || pendingUploads > 0}
             running={isRunning}
             allowSubmitWhileRunning
             tooltip={`${t(($) => $.input.send_tooltip)} · ${enterKey}`}

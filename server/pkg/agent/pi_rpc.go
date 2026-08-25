@@ -66,6 +66,7 @@ func (b *piRPCBackend) maybeCompactAfterTurn(p *piRPCProcess, model string, msgC
 	ctx, cancel := context.WithTimeout(context.Background(), postTurnCompactionTimeout)
 	defer cancel()
 	trySend(msgCh, Message{Type: MessageCompactionStarted})
+	runMemoryFlushBeforeCompaction(processWorkingDir(p.cmd))
 	compacted, err := b.Compact(ctx, proactiveContextCompactionInstructions)
 	b.compact.recordAttempt(err != nil, p.queryRuntimeStats(context.Background(), nil, model))
 	if err != nil {
@@ -199,11 +200,18 @@ type piRPCProcess struct {
 	sessionID     string
 	mcpConfigPath string // temp file from agent.mcp_config; removed on dispose
 
-	writeMu   sync.Mutex
-	stateMu   sync.Mutex
-	turn      *piRPCTurn
-	idleInput *piRPCIdleInput
-	pending   map[string]chan piRPCResponse // request-ID keyed control responses
+	writeMu       sync.Mutex
+	stateMu       sync.Mutex
+	turn          *piRPCTurn
+	idleInput     *piRPCIdleInput
+	hasServedTurn bool
+	pending       map[string]chan piRPCResponse // request-ID keyed control responses
+}
+
+func (p *piRPCProcess) isUnboundIdle() bool {
+	p.stateMu.Lock()
+	defer p.stateMu.Unlock()
+	return !p.hasServedTurn && p.turn == nil && p.idleInput == nil && len(p.pending) == 0
 }
 
 type piRPCIdleInput struct {
@@ -299,7 +307,13 @@ func (b *piRPCBackend) BindRunIdentity(identity PiRunIdentity) (PiRunBinding, er
 		return *b.runBinding, nil
 	}
 	if b.process != nil {
-		return PiRunBinding{}, fmt.Errorf("%w: Pi run identity must be bound before the resident process starts", ErrPiRPCRunIdentityRequiresFreshSession)
+		// Lifecycle startup may eagerly create an unbound resident before the
+		// dispatch run identity arrives. It is safe to replace only while no
+		// user turn or control request has used the native session.
+		if b.running.Load() || !b.process.isUnboundIdle() {
+			return PiRunBinding{}, fmt.Errorf("%w: Pi run identity must be bound before the resident process serves a turn", ErrPiRPCRunIdentityRequiresFreshSession)
+		}
+		b.disposeLocked(b.process)
 	}
 	sessionID := newPiSessionID()
 	captureExtPath, captureLogPath, err := newPiCaptureExtension()
@@ -493,6 +507,7 @@ func (b *piRPCBackend) acceptIdleInputPrompt(ctx context.Context, prompt string)
 		p.stateMu.Unlock()
 		return ResidentMessageAcceptance{}, fmt.Errorf("%w: Pi RPC native input is active", ErrPiRPCTurnBusy)
 	}
+	p.hasServedTurn = true
 	p.idleInput = idleInput
 	p.stateMu.Unlock()
 	clearIdleInput := func() {
@@ -548,6 +563,43 @@ func (b *piRPCBackend) AcceptPendingNotice(ctx context.Context, notice ResidentP
 	}
 	if !response.Success {
 		return fmt.Errorf("Pi RPC Pending Notice: %s", response.Error)
+	}
+	return nil
+}
+
+func (b *piRPCBackend) AcceptDirectedMessage(ctx context.Context, message ResidentDirectedMessage) error {
+	if !b.running.Load() {
+		return errors.New("Pi RPC directed Message requires an active turn")
+	}
+	if strings.TrimSpace(message.RunID) == "" || strings.TrimSpace(message.TurnID) == "" ||
+		strings.TrimSpace(message.MessageID) == "" || strings.TrimSpace(message.Target) == "" ||
+		strings.TrimSpace(message.ActorType) == "" || strings.TrimSpace(message.ActorName) == "" ||
+		strings.TrimSpace(message.Content) == "" {
+		return errors.New("directed Message requires run, turn, message, target, actor, and content")
+	}
+	if len(message.Parts) > 0 && !json.Valid(message.Parts) {
+		return errors.New("directed Message parts must be valid JSON")
+	}
+	if len(message.BoundedContext) > 0 && !json.Valid(message.BoundedContext) {
+		return errors.New("directed Message bounded context must be valid JSON")
+	}
+	p, err := b.getProcess()
+	if err != nil {
+		return err
+	}
+	raw, err := json.Marshal(message)
+	if err != nil {
+		return fmt.Errorf("marshal directed Message: %w", err)
+	}
+	prompt := "Directed Message for the active Graph Memory turn. Apply it after the current tool call safe boundary. Preserve the current trajectory, viewed nodes, tool results, and pinned graph version. The immutable initial query remains in the server ledger; update only the effective objective. Reply visibly to the supplied target even when no relevant memory is found.\n" + string(raw)
+	response, err := b.sendControlCommand(ctx, p, "multica-directed-message", map[string]any{
+		"type": "prompt", "message": prompt, "streamingBehavior": "steer",
+	})
+	if err != nil {
+		return fmt.Errorf("Pi RPC directed Message: %w", err)
+	}
+	if !response.Success {
+		return fmt.Errorf("Pi RPC directed Message: %s", response.Error)
 	}
 	return nil
 }
@@ -775,6 +827,7 @@ func (b *piRPCBackend) executeTurn(ctx context.Context, prompt string, opts Exec
 		},
 	}
 	p.stateMu.Lock()
+	p.hasServedTurn = true
 	p.turn = turn
 	p.stateMu.Unlock()
 	defer func() {

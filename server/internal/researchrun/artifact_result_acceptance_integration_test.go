@@ -413,7 +413,7 @@ func TestAcceptResultRejectsWhenManifestEntryEligibilityAdvances(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateRun: %v", err)
 	}
-	tasks, err := store.ListTasks(ctx, run.SessionID)
+	tasks, err := store.ListTasks(ctx, run.SessionID, run.WorkspaceID)
 	if err != nil || len(tasks) != 1 {
 		t.Fatalf("ListTasks: %v len=%d", err, len(tasks))
 	}
@@ -486,7 +486,7 @@ func TestAcceptResultRejectsWhenManifestEntryArtifactWithdrawn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateRun: %v", err)
 	}
-	tasks, err := store.ListTasks(ctx, run.SessionID)
+	tasks, err := store.ListTasks(ctx, run.SessionID, run.WorkspaceID)
 	if err != nil || len(tasks) != 1 {
 		t.Fatalf("ListTasks: %v len=%d", err, len(tasks))
 	}
@@ -550,7 +550,7 @@ func TestAcceptResultRejectsWhenManifestEntryRepresentationChanges(t *testing.T)
 	if err != nil {
 		t.Fatalf("CreateRun: %v", err)
 	}
-	tasks, err := store.ListTasks(ctx, run.SessionID)
+	tasks, err := store.ListTasks(ctx, run.SessionID, run.WorkspaceID)
 	if err != nil || len(tasks) != 1 {
 		t.Fatalf("ListTasks: %v len=%d", err, len(tasks))
 	}
@@ -647,7 +647,7 @@ func setupRunningPlanAttempt(
 	if err != nil {
 		t.Fatalf("CreateRun: %v", err)
 	}
-	tasks, err := store.ListTasks(ctx, run.SessionID)
+	tasks, err := store.ListTasks(ctx, run.SessionID, run.WorkspaceID)
 	if err != nil || len(tasks) != 1 {
 		t.Fatalf("ListTasks: %v len=%d", err, len(tasks))
 	}

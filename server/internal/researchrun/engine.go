@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 type Engine struct {
@@ -53,11 +54,25 @@ func (e *Engine) ProjectionV6Deltas(ctx context.Context, request V6ProjectionDel
 	return e.store.ProjectionV6Deltas(ctx, request)
 }
 
-func (e *Engine) ProjectionV6NodeDetail(ctx context.Context, workspaceID, runID, nodeID, view string) (V6ProjectionNodeDetail, error) {
+func (e *Engine) ProjectionV6NodeDetail(ctx context.Context, workspaceID, runID, snapshotID, nodeID, view string) (V6ProjectionNodeDetail, error) {
 	if e == nil || e.store == nil {
 		return V6ProjectionNodeDetail{}, ErrV6DirectorUnavailable
 	}
-	return e.store.ProjectionV6NodeDetail(ctx, workspaceID, runID, nodeID, view)
+	return e.store.ProjectionV6NodeDetail(ctx, workspaceID, runID, snapshotID, nodeID, view)
+}
+
+func (e *Engine) ProjectionV6WorkActivity(ctx context.Context, workspaceID, runID, workItemID string) (V6WorkActivity, error) {
+	if e == nil || e.store == nil {
+		return V6WorkActivity{}, ErrV6DirectorUnavailable
+	}
+	return e.store.ProjectionV6WorkActivity(ctx, workspaceID, runID, workItemID)
+}
+
+func (e *Engine) RecordV6WorkActivity(ctx context.Context, workspaceID, inboxTaskID string, messages []protocol.TaskMessagePayload) error {
+	if e == nil || e.store == nil {
+		return ErrV6DirectorUnavailable
+	}
+	return e.store.RecordV6WorkActivity(ctx, workspaceID, inboxTaskID, messages)
 }
 
 func NewEngineWithReportStorage(store *PostgresStore, dispatcher Dispatcher, projector Projector, reportStorage ReportPackageStorage) ResearchRun {
@@ -248,6 +263,10 @@ func (e *Engine) AcknowledgeWorkCatalog(ctx context.Context, in AcknowledgeV6Cat
 	return (workCatalogModule{store: e.store}).Acknowledge(ctx, in)
 }
 
+func (e *Engine) ReportWorkProgress(ctx context.Context, in ReportV6WorkProgressInput) error {
+	return (workProgressModule{store: e.store}).Report(ctx, in)
+}
+
 func (e *Engine) SubmitV6Work(ctx context.Context, in V6SubmissionInput) (V6SubmissionOutcome, error) {
 	return (v6SubmissionModule{store: e.store}).Submit(ctx, in)
 }
@@ -264,10 +283,11 @@ func (e *Engine) ReconcileV6Work(ctx context.Context, limit int) (int, error) {
 	cancelled, cancellationErr := cancelLostV6InboxTasks(ctx, e.store, e.dispatcher, limit)
 	settled, settledCancellationErr := cancelSettledV6InboxTasks(ctx, e.store, e.dispatcher, limit)
 	events, eventErr := e.store.ProcessV6EventTriggers(ctx, limit)
+	idleWakes, idleErr := e.store.ProcessV6IdleRuns(ctx, limit)
 	prepared, prepareErr := e.store.PrepareV6Dispatches(ctx, limit)
 	delivered, deliveryErr := (v6RuntimeModule{store: e.store, team: e.store, agents: e.v6Agents, inbox: e.v6Inbox, clock: e.clock}).Deliver(ctx, limit)
 	ingested, ingestErr := e.IngestPendingScreenedSources(ctx, limit)
-	return recovered + cancelled + settled + steering + proposals + reports + applied + events + prepared + delivered + ingested, errors.Join(err, cancellationErr, settledCancellationErr, steeringErr, proposalErr, reportErr, applyErr, eventErr, prepareErr, deliveryErr, ingestErr)
+	return recovered + cancelled + settled + steering + proposals + reports + applied + events + idleWakes + prepared + delivered + ingested, errors.Join(err, cancellationErr, settledCancellationErr, steeringErr, proposalErr, reportErr, applyErr, eventErr, idleErr, prepareErr, deliveryErr, ingestErr)
 }
 
 func (e *Engine) AssignV6Director(ctx context.Context, in AssignV6DirectorInput) (V6DirectorAssignment, error) {
@@ -392,15 +412,15 @@ func (e *Engine) ReconcileSession(ctx context.Context, sessionID string) (retErr
 		return e.failureModule().HandleBudgetExhaustion(ctx, run, "wall_time", fmt.Sprintf("run exceeded %d seconds", run.Config.MaxRunSeconds))
 	}
 
-	if err = e.executionModule().SyncAttempts(ctx, sessionID); err != nil {
+	if err = e.executionModule().SyncAttempts(ctx, sessionID, run.WorkspaceID); err != nil {
 		return e.failureModule().HandleDispatchFailure(ctx, sessionID, err)
 	}
 
-	tasks, err := e.store.ListTasks(ctx, sessionID)
+	tasks, err := e.store.ListTasks(ctx, sessionID, run.WorkspaceID)
 	if err != nil {
 		return err
 	}
-	attempts, err := e.store.ListAttempts(ctx, sessionID)
+	attempts, err := e.store.ListAttempts(ctx, sessionID, run.WorkspaceID)
 	if err != nil {
 		return err
 	}
@@ -437,11 +457,11 @@ func (e *Engine) ReconcileSession(ctx context.Context, sessionID string) (retErr
 	if err = e.executionModule().ActivateReadyTasks(ctx, sessionID); err != nil {
 		return err
 	}
-	tasks, err = e.store.ListTasks(ctx, sessionID)
+	tasks, err = e.store.ListTasks(ctx, sessionID, run.WorkspaceID)
 	if err != nil {
 		return err
 	}
-	attempts, err = e.store.ListAttempts(ctx, sessionID)
+	attempts, err = e.store.ListAttempts(ctx, sessionID, run.WorkspaceID)
 	if err != nil {
 		return err
 	}
@@ -564,31 +584,31 @@ func (e *Engine) Snapshot(ctx context.Context, sessionID, workspaceID string) (R
 	if err != nil {
 		return RunSnapshot{}, err
 	}
-	questions, err := e.store.ListQuestions(ctx, sessionID)
+	questions, err := e.store.ListQuestions(ctx, sessionID, workspaceID)
 	if err != nil {
 		return RunSnapshot{}, err
 	}
-	tasks, err := e.store.ListTasks(ctx, sessionID)
+	tasks, err := e.store.ListTasks(ctx, sessionID, workspaceID)
 	if err != nil {
 		return RunSnapshot{}, err
 	}
-	attempts, err := e.store.ListAttempts(ctx, sessionID)
+	attempts, err := e.store.ListAttempts(ctx, sessionID, workspaceID)
 	if err != nil {
 		return RunSnapshot{}, err
 	}
-	sources, err := e.store.ListSourceSnapshots(ctx, sessionID)
+	sources, err := e.store.ListSourceSnapshots(ctx, sessionID, workspaceID)
 	if err != nil {
 		return RunSnapshot{}, err
 	}
-	observations, err := e.store.ListObservations(ctx, sessionID)
+	observations, err := e.store.ListObservations(ctx, sessionID, workspaceID)
 	if err != nil {
 		return RunSnapshot{}, err
 	}
-	claims, err := e.store.ListClaims(ctx, sessionID)
+	claims, err := e.store.ListClaims(ctx, sessionID, workspaceID)
 	if err != nil {
 		return RunSnapshot{}, err
 	}
-	gate, err := e.gateModule().Evaluate(ctx, sessionID)
+	gate, err := e.gateModule().Evaluate(ctx, sessionID, workspaceID)
 	if err != nil {
 		return RunSnapshot{}, err
 	}
@@ -628,11 +648,11 @@ type projectionSnapshotStore interface {
 	GetRun(context.Context, string, string) (Run, error)
 	GetCurrentContract(context.Context, string, string) (ResearchContract, error)
 	GetCurrentMethod(context.Context, string, string) (*ResearchMethod, error)
-	ListQuestions(context.Context, string) ([]Question, error)
-	ListTasks(context.Context, string) ([]Task, error)
-	ListAttempts(context.Context, string) ([]Attempt, error)
-	ListClaims(context.Context, string) ([]Claim, error)
-	EvaluateGate(context.Context, string) (GateResult, error)
+	ListQuestions(context.Context, string, string) ([]Question, error)
+	ListTasks(context.Context, string, string) ([]Task, error)
+	ListAttempts(context.Context, string, string) ([]Attempt, error)
+	ListClaims(context.Context, string, string) ([]Claim, error)
+	EvaluateGate(context.Context, string, string) (GateResult, error)
 }
 
 func loadProjectionSnapshot(ctx context.Context, store projectionSnapshotStore, sessionID, workspaceID string) (RunSnapshot, error) {
@@ -648,23 +668,23 @@ func loadProjectionSnapshot(ctx context.Context, store projectionSnapshotStore, 
 	if err != nil {
 		return RunSnapshot{}, err
 	}
-	questions, err := store.ListQuestions(ctx, sessionID)
+	questions, err := store.ListQuestions(ctx, sessionID, workspaceID)
 	if err != nil {
 		return RunSnapshot{}, err
 	}
-	tasks, err := store.ListTasks(ctx, sessionID)
+	tasks, err := store.ListTasks(ctx, sessionID, workspaceID)
 	if err != nil {
 		return RunSnapshot{}, err
 	}
-	attempts, err := store.ListAttempts(ctx, sessionID)
+	attempts, err := store.ListAttempts(ctx, sessionID, workspaceID)
 	if err != nil {
 		return RunSnapshot{}, err
 	}
-	claims, err := store.ListClaims(ctx, sessionID)
+	claims, err := store.ListClaims(ctx, sessionID, workspaceID)
 	if err != nil {
 		return RunSnapshot{}, err
 	}
-	gate, err := store.EvaluateGate(ctx, sessionID)
+	gate, err := store.EvaluateGate(ctx, sessionID, workspaceID)
 	if err != nil {
 		return RunSnapshot{}, err
 	}

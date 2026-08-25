@@ -1,5 +1,5 @@
 export type { Issue, IssueStatus, IssuePriority, IssueAssigneeType, IssueMetadata, IssueMetadataValue, IssueReaction, IssueReviewStats, IssueSourceMessageRef, IssueSourceRefs, IssueSourceChannelRef, ProjectChannel, IssueNoteRef, IssueNoteRefListResponse } from "./issue";
-export type { NotePage, NotePageListResponse, CreateNotePageRequest, DuplicateNotePageRequest, MoveNotePageRequest, UpdateNotePageRequest, UpdateNotePageSharesRequest, NoteAIJobStatus, NoteAIEditAction, NoteAIJobFailureCode, NoteAIJobRepairCode, NoteAIEditResult, CreateNoteAIJobRequest, NoteAIJob, NoteIntent, NoteWorkerJobStatus, CreateNoteWorkerJobRequest, NoteWorkerJob, NotePageRefType, NotePageIssueRef, NotePageIssueRefListResponse, CreateNotePageIssueRefRequest, CreateNotePageAgentRefRequest, CreateNotePageRunRefRequest, CreateNotePageChannelRefRequest, CreateNotePageIssueRequest, CreateNotePageIssueResponse, NoteWritebackAction, NoteWritebackStatus, NoteWritebackEvidence, NoteWriteback, NoteWritebackListResponse, CreateNoteWritebackRequest, NoteRetrospectiveWindow, NotePeriodBriefWindow, NoteRetrospectiveSource, CreateNoteRetrospectiveRequest, NoteRetrospectiveWindowInfo, CreateNoteRetrospectiveResponse, CreateNotePeriodBriefRequest, CreateNotePeriodBriefResponse } from "./note";
+export type { NotePage, NotePageListResponse, CreateNotePageRequest, DuplicateNotePageRequest, MoveNotePageRequest, UpdateNotePageRequest, UpdateNotePageSharesRequest, NoteAIJobStatus, NoteAIEditAction, NoteAIJobFailureCode, NoteAIJobRepairCode, NoteAIEditResult, CreateNoteAIJobRequest, NoteAIJob, NoteIntent, NoteWorkerJobStatus, CreateNoteWorkerJobRequest, NoteWorkerJob, NotePageRefType, NotePageIssueRef, NotePageIssueRefListResponse, CreateNotePageIssueRefRequest, CreateNotePageAgentRefRequest, CreateNotePageRunRefRequest, CreateNotePageChannelRefRequest, NoteWritebackAction, NoteWritebackStatus, NoteWritebackEvidence, NoteWriteback, NoteWritebackListResponse, CreateNoteWritebackRequest, NoteRetrospectiveWindow, NotePeriodBriefWindow, NoteRetrospectiveSource, CreateNoteRetrospectiveRequest, NoteRetrospectiveWindowInfo, CreateNoteRetrospectiveResponse, CreateNotePeriodBriefRequest, CreateNotePeriodBriefResponse, NotePeriodBriefRunStatus, NotePeriodBriefActiveRun, NotePeriodBriefActiveResponse, NotePeriodBriefInsertMode, InsertNotePeriodBriefRequest, InsertNotePeriodBriefResponse } from "./note";
 export type {
   FleetClassId,
   AgentFleetRank,
@@ -51,6 +51,8 @@ export type {
   TaskFailureReason,
   AgentRuntime,
   ComputerConnection,
+  ComputerRuntimeOption,
+  AgentRuntimeConfig,
   RuntimeDevice,
   RuntimeAgentWorkspace,
   RuntimeAgentWorkspacesResponse,
@@ -63,6 +65,7 @@ export type {
   EnsurePeriodBriefAgentResponse,
   EnsureNotesAssistantAgentResponse,
   EnsurePeriodBriefCollectorsResponse,
+  PeriodBriefCollectorMissingSlot,
   AgentTemplate,
   AgentTemplateSummary,
   AgentTemplateSkillRef,
@@ -179,8 +182,14 @@ export type {
   MemoryCuratorProfile,
   UpdateMemoryCuratorProfileRequest,
   GraphMemoryType,
+  GraphMemoryMode,
+  GraphMemoryChannelModeOverride,
   GraphMemoryProfile,
   UpdateGraphMemoryProfileRequest,
+  GraphMemoryChannelAgentStatus,
+  GraphMemoryChannelMode,
+  GraphMemoryCitation,
+  GraphMemoryMessageCitations,
   GraphMemoryGraphStatus,
   GraphMemoryStatus,
   GraphMemoryAuditSummary,

@@ -11,7 +11,7 @@ An active multi-agent channel Goal is not itself a code assignment. Repository
 mutation requires a claimed Issue that is linked to the Goal channel and belongs
 to the channel's bound Git-backed Project. Chat wakes without such an Issue may
 coordinate the control plane but must not create competing implementations.
-Implementation Issues stop at `in_review`. Canonical merge and deployment
+Implementation Issues submit a typed completion report and stop at `in_review`. Canonical merge and deployment
 belong to a separate manager-owned integration Issue whose metadata includes
 `delivery_role=integration`; that lane integrates only independently reviewed,
 green-CI branches and verifies the deployed commit against the parent Goal.
@@ -25,7 +25,7 @@ For building mention links, load `multica-mentioning` instead — not this skill
 Every contract below is traced to source in
 `references/working-on-issues-source-map.md`.
 
-## Choose the lightest coordination layer
+## Choose the lightest coordination layer without serializing independent work
 
 The assignment runtime requires one decision before substantive execution:
 
@@ -34,17 +34,35 @@ The assignment runtime requires one decision before substantive execution:
 - `ISSUE_DAG`: for bounded parallel or staged work, atomically create child
   Issues with `multica issue decompose <issue-id> --plan-file <path>
   --idempotency-key <uuid>`. Use this for ordinary development, review, or a
-  one-off multi-source investigation. It creates no Work Graph.
+  one-off multi-source investigation. Every plan node must include a non-empty
+  `acceptance_criteria` array. It creates no Work Graph; children inherit the
+  parent Issue's active Goal scope when one exists.
 - `GOAL_GRAPH`: only while an explicit active channel Goal exists, and only for
   a manager/coordinator. Use `multica issue graph create` with
   `anchor_kind=channel_goal` when the work needs repeated evidence-driven
   replanning, independent verification, epochs, or a long-running loop.
 
-Do not use task length by itself as the trigger. A greeting, one tool call, or a
-small edit stays direct. An Issue DAG declares `depends_on`, starts all roots,
-and promotes downstream Issues after all prerequisites become reviewable. The
-same Agent may own multiple roots: they use independent Issue sessions and
-execution roots and can run in parallel up to its concurrency cap.
+Do not minimize Issue count as an objective. When two or more independently
+acceptable units can make progress without waiting—especially research, source
+or data collection, implementation, testing, or review—default to an Issue DAG
+whose independent roots start in parallel. Do not ask for confirmation merely
+to parallelize work already within the current Issue's scope, permissions, and
+committed budget; ask only when decomposition materially expands one of those
+boundaries. Do not use task length by itself as the trigger. A greeting, one
+tool call, or a small edit stays direct.
+
+An Issue DAG declares `depends_on`, starts all roots, and promotes downstream
+Issues after all prerequisites become reviewable. Do not park an independent
+root in `backlog`; express real prerequisites with `depends_on` and let the
+server park downstream nodes. The same Agent may own multiple roots: they use
+independent Issue sessions and execution roots and can run in parallel up to
+its concurrency cap.
+
+For an active Goal, ordinary top-level group messages execute manager-first.
+Workers start from their assigned Issues, not from duplicate chat fanout. The
+standard Goal controller durably coalesces Goal, Issue, dependency, and Run
+changes into a directed manager reconciliation Run; use those reconciliations
+to adjust the DAG and Goal checkpoint, not to chat-wake every worker.
 
 Use `worker_mode: derived_agent` only when the node needs strong identity or
 memory isolation: independent candidate implementations, blind/adversarial
@@ -146,11 +164,12 @@ records close intent; on merge, that close intent can move the linked issue to
 
 ### Default for code-changing issue work
 
-When an issue run changes code, keep the checkout inside this Agent workspace
-and work in that project directory or worktree. If the issue's project binds a
-`github_repo` and no checkout exists yet, list it with
-`multica workspace info --projects --output json` and clone it here first. The default handoff
-is then to open or update a PR before posting the final Multica issue comment,
+When an issue run changes code, use an existing checkout inside this Agent
+workspace and work in that project directory or worktree. If the bound
+`github_repo` has no checkout yet, inspect the current project resource with
+`multica workspace info --projects --output json`, then clone it yourself into
+this Agent workspace. Multica does not clone repositories or provision
+checkouts. The default handoff is then to open or update a PR before posting the final Multica issue comment,
 unless the user explicitly asked for a local-only change or no PR. This is a default, not
 an unconditional command: if no code changed, say no PR is needed;
 if PR creation is blocked by auth, failing tests, or missing remote state,
@@ -292,8 +311,13 @@ on it. These are the contracts, not advice:
 - **`backlog`** parks an agent-assigned issue: the assignee is set but no task
   fires. Moving `backlog → todo` (or any non-done/non-cancelled status) enqueues
   the assigned agent then.
-- **`in_review`** is an accepted issue status. Some workflows use it while a PR
-  is open and awaiting review; moving to it is an explicit mutation.
+- **`in_review`** for Agent implementation work is entered only through
+  `multica issue complete <id> --summary ... --evidence 'INDEX=KIND:REF'`.
+  The command binds every criterion/evidence result to the authenticated Run,
+  creates the visible report comment, and prevents an empty review state.
+- **`done`** cannot be self-approved by an implementation Agent. An independent
+  Agent/human uses `multica issue review`; rejection preserves the old report
+  and creates a successor Run.
 - **`done`** on a child issue posts a system comment on its parent. If a PR
   carries close intent (`Closes MUL-XXXX`), it advances the issue to `done`
   itself on merge — you do not also need to flip it manually.

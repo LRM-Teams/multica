@@ -4,6 +4,25 @@ import { getExtensionField } from "@tiptap/core";
 import type { Editor } from "@tiptap/core";
 import { createSubmitExtension } from "./submit-shortcut";
 
+function editorWithSuggestion(active: boolean): Partial<Editor> {
+  const editor = {
+    view: { composing: false } as unknown as Editor["view"],
+    isActive: () => false,
+    state: {
+      plugins: [
+        {
+          getState: () => ({
+            active,
+            decorationId: active ? "suggestion-1" : null,
+            range: active ? { from: 1, to: 2 } : { from: 0, to: 0 },
+          }),
+        },
+      ],
+    } as unknown as Editor["state"],
+  } as Partial<Editor>;
+  return editor;
+}
+
 function getShortcuts(
   ext: ReturnType<typeof createSubmitExtension>,
   editor: Partial<Editor>,
@@ -24,6 +43,7 @@ describe("createSubmitExtension", () => {
   const baseEditor = {
     view: { composing: false } as unknown as Editor["view"],
     isActive: () => false,
+    state: { plugins: [] } as unknown as Editor["state"],
   } as Partial<Editor>;
 
   it("Mod-Enter always submits", () => {
@@ -82,10 +102,33 @@ describe("createSubmitExtension", () => {
       {
         view: { composing: false } as unknown as Editor["view"],
         isActive: (name: string) => name === "codeBlock",
+        state: { plugins: [] } as unknown as Editor["state"],
       },
     );
 
     expect(shortcuts.Enter!()).toBe(false);
     expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("lets an active suggestion handle bare Enter", () => {
+    const onSubmit = vi.fn(() => true);
+    const shortcuts = getShortcuts(
+      createSubmitExtension(onSubmit, { submitOnEnter: true }),
+      editorWithSuggestion(true),
+    );
+
+    expect(shortcuts.Enter!()).toBe(false);
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("submits after a suggestion becomes inactive", () => {
+    const onSubmit = vi.fn(() => true);
+    const shortcuts = getShortcuts(
+      createSubmitExtension(onSubmit, { submitOnEnter: true }),
+      editorWithSuggestion(false),
+    );
+
+    expect(shortcuts.Enter!()).toBe(true);
+    expect(onSubmit).toHaveBeenCalledTimes(1);
   });
 });

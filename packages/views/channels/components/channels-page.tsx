@@ -966,6 +966,11 @@ export function ChannelsPage({
     () => (activeDmId ? dms.find((d) => d.id === activeDmId) ?? null : null),
     [dms, activeDmId],
   );
+  // A route target owns the selection slot even before its conversation row
+  // resolves. Keep this as an explicit state of the selection model rather
+  // than letting both render fallback and desktop auto-selection independently
+  // infer that an unresolved route means "nothing selected".
+  const routeOwnsSelection = !!channelId;
   // 2026-07-31 Wendy DM incident — a selected DM that never shows up in the list
   // (backend `GET /api/dm` gap, or any other never-resolving cause) used to
   // leave ConversationSwitchSkeleton spinning forever, which reads as a blank
@@ -992,14 +997,20 @@ export function ChannelsPage({
       channels.find((c) => c.id === activeId) ??
       archivedChannels.find((c) => c.id === activeId) ??
       null;
+    if (explicit) return explicit;
+    // A route-selected conversation stays authoritative while its unified-list
+    // row is resolving (initial load or a refetch). Falling back to #general in
+    // that gap renders and marks the wrong conversation read; the desktop
+    // auto-select effect can then permanently overwrite the intended selection.
+    if (routeOwnsSelection || activeId) return null;
     // #642 — same priority as the auto-select effects: prefer #general over
     // an arbitrary first channel for the render-time fallback too, so the
     // very first paint (before those effects commit) doesn't briefly show
     // the wrong channel.
     return listFirstSelection
-      ? explicit
-      : (explicit ?? channels.find(isImmutableSystemChannel) ?? channels[0] ?? null);
-  }, [channels, archivedChannels, activeId, activeDmId, listFirstSelection]);
+      ? null
+      : (channels.find(isImmutableSystemChannel) ?? channels[0] ?? null);
+  }, [channels, archivedChannels, activeId, activeDmId, routeOwnsSelection, listFirstSelection]);
   // LRM-622/623 — single invite-candidates fetch while Add people is open
   // (server omits existing channel members + archived agents only; every
   // non-archived WS agent is inviteable — no private/Wendy silent filter,
@@ -1441,6 +1452,7 @@ export function ChannelsPage({
       handle: candidate.handle,
       type: candidate.type === "agent" ? ("agent" as const) : ("member" as const),
       group,
+      description: candidate.description || undefined,
       secondaryLabel: candidate.handle ? `@${candidate.handle}` : undefined,
     });
     const keep = (candidate: { type: string; id: string }) =>
@@ -1624,6 +1636,13 @@ export function ChannelsPage({
     const previous = previousMobileRef.current;
     const transitionedToMobile = previous === false && isMobile;
     previousMobileRef.current = isMobile;
+    // A `/channels/[id]` route owns selection even before its conversation row
+    // resolves. Never enqueue the desktop #general fallback behind that route:
+    // the stale effect can commit after reconciliation and switch the pane away
+    // from the deep-linked channel while leaving the URL unchanged. This check
+    // deliberately follows the viewport snapshot update above so route changes
+    // cannot leave responsive-transition bookkeeping stale.
+    if (routeOwnsSelection) return;
     if (activeId || activeDmId) return;
     const onMobileViewport =
       isMobile || (typeof window !== "undefined" && window.innerWidth < 768);
@@ -1638,7 +1657,7 @@ export function ChannelsPage({
     // of derived state — there's no event handler to move it into.
     // react-doctor-disable-next-line react-doctor/no-chain-state-updates, react-doctor/no-adjust-state-on-prop-change
     setActiveId((channels.find(isImmutableSystemChannel) ?? channels[0]).id);
-  }, [viewportReady, isMobile, activeId, activeDmId, channels, embedded]);
+  }, [viewportReady, isMobile, activeId, activeDmId, channels, embedded, routeOwnsSelection]);
 
   // Bottom-stick on new messages and open-at-latest on switch are handled by
   // ChannelMessageList (react-virtuoso followOutput + initialTopMostItemIndex).

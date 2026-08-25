@@ -448,7 +448,7 @@ func TestChannelOnboardingArchiveAfterDrainExpiresWithoutVisibleSend(t *testing.
 	}
 }
 
-func TestChannelOnboardingSystemGeneralWaitsForDurablePublication(t *testing.T) {
+func TestChannelOnboardingSystemGeneralPublishesWithoutProviderTurn(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -481,11 +481,28 @@ func TestChannelOnboardingSystemGeneralWaitsForDurablePublication(t *testing.T) 
 	if err := testHandler.publishChannelOnboardingSystemMessageForGeneration(ctx, parseUUID(generationID)); err != nil {
 		t.Fatalf("publish system-general onboarding generation: %v", err)
 	}
-	after := drainChannelOnboardingForTest(t, handlerTestRuntimeID(t))
-	if len(after.Events) != 1 || after.Events[0].AgentID != agentID || after.Events[0].ChannelID != channelID || after.Events[0].Reason != protocol.ChannelOnboardingReason {
-		t.Fatalf("system-general onboarding after publication = %+v", after.Events)
+	var completedStatus, terminalReason string
+	if err := testPool.QueryRow(ctx, `
+		SELECT status, terminal_evidence->>'reason'
+		FROM channel_agent_onboarding
+		WHERE id = $1`, onboardingID).Scan(&completedStatus, &terminalReason); err != nil {
+		t.Fatalf("load silent system-general terminal state: %v", err)
 	}
-	completeChannelOnboardingForTest(t, after.Events[0], "", http.StatusOK)
+	if completedStatus != "completed" || terminalReason != "system_general_silent_join" {
+		t.Fatalf("silent system-general terminal state = status:%q reason:%q", completedStatus, terminalReason)
+	}
+	after := drainChannelOnboardingForTest(t, handlerTestRuntimeID(t))
+	if len(after.Events) != 0 {
+		t.Fatalf("system-general onboarding created a provider turn after publication: %+v", after.Events)
+	}
+	var inboxRows int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*) FROM agent_inbox_event WHERE channel_onboarding_id = $1`, onboardingID).Scan(&inboxRows); err != nil {
+		t.Fatalf("count silent system-general inbox rows: %v", err)
+	}
+	if inboxRows != 0 {
+		t.Fatalf("silent system-general inbox rows = %d, want 0", inboxRows)
+	}
 }
 
 func TestChannelOnboardingPublicationFailureStaysRetryableAndBlocksLease(t *testing.T) {
@@ -563,10 +580,9 @@ func TestChannelOnboardingPublicationFailureStaysRetryableAndBlocksLease(t *test
 		t.Fatalf("confirmed publication = status:%q attempt:%d, want published/4", publicationStatus, publicationAttempt)
 	}
 	drain := drainChannelOnboardingForTest(t, handlerTestRuntimeID(t))
-	if len(drain.Events) != 1 || drain.Events[0].AgentID != agentID {
-		t.Fatalf("confirmed publication drain = %+v", drain.Events)
+	if len(drain.Events) != 0 {
+		t.Fatalf("confirmed system-general publication created provider turn: %+v", drain.Events)
 	}
-	completeChannelOnboardingForTest(t, drain.Events[0], "", http.StatusOK)
 }
 
 func assertChannelOnboardingPublicationRetryable(t *testing.T, onboardingID string, wantAttempt int) {

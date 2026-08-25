@@ -262,6 +262,11 @@ contain an allowed justification class.
 | lifecycle timestamps | ready/start/complete/cancel |
 
 Unique `(session_id, goal_version, idempotency_key)`. One active lease per row.
+Director `work.create.v1.kind` is the semantic task kind (`deep_read`, `verify`,
+and future task methods). It is retained as `payload.task_kind`; the persisted
+Work Item scheduling kind is derived from `expected_result_schema_id`
+(`research`, `discussion`, `integration`, or `report`) and must never store an
+open-ended semantic task kind in the constrained `kind` column.
 
 #### `research_work_item_attempt`
 
@@ -283,6 +288,17 @@ This is the single V6 execution Attempt table; existing
 Unique active attempt partial index per Work Item; unique dispatch key, Inbox
 Task and client request ID. Unknown commit reconciliation checks Result Artifact
 and Event before creating another Attempt.
+
+#### `research_work_item_activity_entry`
+
+This Attempt-scoped read model stores the bounded user-facing projection of
+Inbox `task:message` events. Identity is fixed by workspace, Run, Work Item,
+Attempt and Inbox Task; `(work_item_attempt_id, message_sequence)` is unique for
+idempotent delivery. Persist only presentation fields (`title`, `subtext`,
+`tone`, `body_kind`, `body`, timestamps). Hidden reasoning, raw tool output and
+unrecognized tool parameters must never enter this table. The Work activity API
+queries this exact identity and must not reconstruct a timeline from generic
+Agent activity or a time window.
 
 #### `research_work_catalog_page`
 
@@ -483,6 +499,19 @@ Team creation locks the Run before counting membership. Integration locks every
 input slot before output creation. Report publish locks the Run, Report revision,
 Branch inputs and current versions before accepting the Review. No Adapter call
 occurs while holding a database transaction.
+
+An active atomic Attempt whose frozen Manifest omits a persisted Work-to-Branch
+scope is a platform-invalid dispatch. Recovery marks that Attempt lost with
+`platform_invalid_manifest`, returns the Work to `ready`, and refunds its
+`attempt_count` before recompiling; it does not wait for the runtime timeout or
+spend the Agent retry budget.
+
+When every terminal Attempt for an exhausted non-Director Work reports the
+same Inbox failure as retryable `agent_error.model_not_found_or_unavailable`,
+recovery reopens that Work exactly once after a two-minute delay and records a
+stable Run Event fence. This absorbs transient provider capacity incidents but
+cannot create an unbounded retry loop. A terminal Attempt also releases its
+membership back to `idle` whenever that membership has no other active Attempt.
 
 ## 7. Transaction operation registry
 

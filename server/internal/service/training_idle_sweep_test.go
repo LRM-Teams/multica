@@ -44,10 +44,10 @@ func TestCountActiveTrainingTasks_Integration(t *testing.T) {
 	agent, err := q.CreateAgent(ctx, db.CreateAgentParams{
 		WorkspaceID: ws.ID, Name: "sweep-agent", DisplayName: "Sweep Agent",
 		Description: "test", RuntimeMode: "cloud", RuntimeConfig: []byte("{}"),
-		RuntimeID: rtID, MaxConcurrentTasks: 1,
+		RuntimeID:    rtID,
 		Instructions: "", CustomEnv: []byte("{}"), CustomArgs: []byte("[]"),
-			Model:              pgtype.Text{String: "composer-1.5", Valid: true},
-})
+		Model: pgtype.Text{String: "composer-1.5", Valid: true},
+	})
 	require.NoError(t, err)
 
 	// newTask mirrors a rollout task: the session_run row is what binds it to a

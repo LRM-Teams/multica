@@ -255,7 +255,9 @@ RETURNING id`, testWorkspaceID, rootID, testUserID, "Bubble child "+uuid.NewStri
 	if session.ContextNotePageID != rootID {
 		t.Fatalf("context_note_page_id = %q, want %s", session.ContextNotePageID, rootID)
 	}
-	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM chat_session WHERE id = $1`, session.ID) })
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM chat_session WHERE id = $1`, session.ID)
+	})
 
 	childReq := withURLParam(withAgentCredentialPrincipal(
 		newRequest(http.MethodGet, "/api/agent/notes/pages/"+childID, nil),
@@ -332,4 +334,3 @@ RETURNING id`, testWorkspaceID, rootID, testUserID, "Worker child "+uuid.NewStri
 		t.Fatalf("descendant get: expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
-

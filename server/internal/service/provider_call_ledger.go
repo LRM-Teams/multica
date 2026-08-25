@@ -10,6 +10,7 @@ import (
 	"unicode"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/util"
@@ -539,6 +540,36 @@ func (l *ProviderCallLedger) FreezeAndComplete(ctx context.Context, input Frozen
 		return FrozenSnapshotRecord{}, EnvDispatchRunRecord{}, fmt.Errorf("timeout freeze requires running or quiet_candidate status, got %q", locked.Status)
 	}
 	expectedStatus := locked.Status
+	// Replay healing: if a frozen snapshot already exists but the run row never
+	// reached its terminal status (interrupted completion or post-freeze status
+	// regression), re-freezing would violate the snapshot primary key on every
+	// sweep, forever. Converge the run onto the recorded snapshot instead.
+	if existing, existingErr := qtx.GetMixedRLFrozenSnapshot(ctx, input.RunID); existingErr == nil {
+		if _, err = tx.Exec(ctx, "SELECT set_config('multica.mixed_rl_freeze_writer', 'on', true)"); err != nil {
+			return FrozenSnapshotRecord{}, EnvDispatchRunRecord{}, err
+		}
+		if _, err = qtx.TransitionMixedRLRunStatus(ctx, db.TransitionMixedRLRunStatusParams{
+			RunID: input.RunID, ExpectedStatus: expectedStatus, NextStatus: "freezing",
+		}); err != nil {
+			return FrozenSnapshotRecord{}, EnvDispatchRunRecord{}, err
+		}
+		runRow, completeErr := qtx.CompleteMixedRLRunWithSnapshot(ctx, db.CompleteMixedRLRunWithSnapshotParams{
+			TerminalStatus: existing.RunStatus, RunID: input.RunID,
+			SnapshotID: existing.SnapshotID, SnapshotHash: existing.SnapshotHash,
+		})
+		if completeErr != nil {
+			return FrozenSnapshotRecord{}, EnvDispatchRunRecord{}, completeErr
+		}
+		if _, err = tx.Exec(ctx, "SELECT set_config('multica.mixed_rl_freeze_writer', 'off', true)"); err != nil {
+			return FrozenSnapshotRecord{}, EnvDispatchRunRecord{}, err
+		}
+		if err = tx.Commit(ctx); err != nil {
+			return FrozenSnapshotRecord{}, EnvDispatchRunRecord{}, err
+		}
+		return frozenSnapshotRecord(existing), mixedRLRunRecord(runRow), nil
+	} else if !errors.Is(existingErr, pgx.ErrNoRows) {
+		return FrozenSnapshotRecord{}, EnvDispatchRunRecord{}, existingErr
+	}
 	if input.RunStatus == "failed_timeout" {
 		now := time.Now().UTC()
 		activeTurns, listErr := qtx.ListMixedRLActiveResidentTurns(ctx, input.RunID)

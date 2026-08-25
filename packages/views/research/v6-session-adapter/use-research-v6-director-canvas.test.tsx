@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { useResearchV6DirectorDisplayStore } from "@multica/core/research-v6/director-display-store";
 import type { ResearchV6DirectorRealtimeBus } from "@multica/core/research-v6-live/director-controller";
 import type {
+  ResearchV6DirectorProjectionSliceRequest,
   ResearchV6DirectorProjectionSnapshot,
   ResearchV6DirectorProjectionTransport,
 } from "@multica/core/types/research-v6-director";
@@ -17,37 +18,64 @@ const SNAPSHOT_ID = "00000000-0000-4000-8000-000000000601";
 function snapshot(
   sliceKey: string,
   nodes: Array<{ id: string; tier: "S" | "L"; expandable: boolean }>,
+  snapshotId = SNAPSHOT_ID,
 ): ResearchV6DirectorProjectionSnapshot {
   return {
-    contract_kind: "projection_snapshot",
-    schema_version: 6,
-    snapshot_id: SNAPSHOT_ID,
-    workspace_id: WORKSPACE_ID,
-    run_id: RUN_ID,
-    through_event_sequence: 4,
-    projection_hash: `sha256:${"d".repeat(64)}`,
-    slice_key: sliceKey,
+    contractKind: "projection_snapshot",
+    schemaVersion: 6,
+    snapshotId,
+    workspaceId: WORKSPACE_ID,
+    runId: RUN_ID,
+    throughEventSequence: 4,
+    projectionHash: `sha256:${"d".repeat(64)}`,
+    sliceKey,
     nodes: nodes.map(({ id, tier, expandable }) => ({
       id,
       kind: tier === "S" ? "result_s" : "insight",
       tier,
-      canonical_ref: { kind: tier === "S" ? "result" : "insight", id: RUN_ID },
-      branch_ids: [],
+      canonicalRef: { kind: tier === "S" ? "result" : "insight", id: RUN_ID },
+      branchIds: [],
       state: {
         execution: "succeeded",
         conclusion: "accepted",
         integration: tier === "S" ? "absorbed" : "candidate",
       },
-      catalog_summary: id,
+      catalogSummary: id,
       absorbed: tier === "S",
       terminal: true,
       expandable,
-      hidden_child_count: expandable ? 1 : 0,
-      updated_at: "2026-08-17T08:00:00Z",
+      hiddenChildCount: expandable ? 1 : 0,
+      updatedAt: "2026-08-17T08:00:00Z",
     })),
     edges: [],
-    density_bins: [],
-    has_more: false,
+    densityBins: [],
+    hasMore: false,
+  };
+}
+
+function projectionNodeWire(
+  node: ResearchV6DirectorProjectionSnapshot["nodes"][number],
+) {
+  return {
+    id: node.id,
+    kind: node.kind,
+    tier: node.tier,
+    canonical_ref: {
+      kind: node.canonicalRef.kind,
+      id: node.canonicalRef.id,
+      revision: node.canonicalRef.revision,
+      version_id: node.canonicalRef.versionId,
+      content_hash: node.canonicalRef.contentHash,
+    },
+    branch_ids: node.branchIds,
+    state: node.state,
+    title: node.title,
+    catalog_summary: node.catalogSummary,
+    absorbed: node.absorbed,
+    terminal: node.terminal,
+    expandable: node.expandable,
+    hidden_child_count: node.hiddenChildCount,
+    updated_at: node.updatedAt,
   };
 }
 
@@ -60,7 +88,7 @@ function wrapper(client: QueryClient) {
 describe("useResearchV6DirectorCanvas", () => {
   beforeEach(() => useResearchV6DirectorDisplayStore.getState().clear());
 
-  it("hydrates the shared graph and reveals one server slice on click", async () => {
+  it("hydrates the shared graph and reveals one server slice on disclosure", async () => {
     const transport = {
       loadSnapshot: async () =>
         snapshot("default", [{ id: "root", tier: "L", expandable: true }]),
@@ -83,12 +111,83 @@ describe("useResearchV6DirectorCanvas", () => {
         }),
       { wrapper: wrapper(client) },
     );
-    await waitFor(() => expect(result.current.canvas?.graph.nodes).toHaveLength(1));
+    await waitFor(() =>
+      expect(result.current.canvas?.graph.nodes).toHaveLength(1),
+    );
     act(() => result.current.expansionControl?.onToggleNode("root"));
-    await waitFor(() => expect(result.current.canvas?.graph.nodes).toHaveLength(2));
+    await waitFor(() =>
+      expect(result.current.canvas?.graph.nodes).toHaveLength(2),
+    );
     expect(result.current.expansionControl?.expandedNodeIds.has("root")).toBe(
       true,
     );
+  });
+
+  it("keeps an expanded layer visible while rebasing it onto a new snapshot", async () => {
+    const nextSnapshotId = "00000000-0000-4000-8000-000000000602";
+    let activeSnapshotId = SNAPSHOT_ID;
+    const loadedSliceSnapshotIds: string[] = [];
+    const transport = {
+      loadSnapshot: async () =>
+        snapshot(
+          "default",
+          [{ id: "root", tier: "L", expandable: true }],
+          activeSnapshotId,
+        ),
+      loadSlice: async (
+        _workspaceId: string,
+        _runId: string,
+        request: ResearchV6DirectorProjectionSliceRequest,
+      ) => {
+        loadedSliceSnapshotIds.push(request.snapshotId);
+        return snapshot(
+          "expand:root",
+          [{ id: "child", tier: "L", expandable: false }],
+          request.snapshotId,
+        );
+      },
+    } as Pick<
+      ResearchV6DirectorProjectionTransport,
+      "loadSnapshot" | "loadSlice"
+    > as ResearchV6DirectorProjectionTransport;
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const { result } = renderHook(
+      () =>
+        useResearchV6DirectorCanvas({
+          workspaceId: WORKSPACE_ID,
+          runId: RUN_ID,
+          transport,
+          expansionFailureLabel: "Expansion failed",
+        }),
+      { wrapper: wrapper(client) },
+    );
+    await waitFor(() =>
+      expect(result.current.canvas?.graph.nodes).toHaveLength(1),
+    );
+    act(() => result.current.expansionControl?.onToggleNode("root"));
+    await waitFor(() =>
+      expect(result.current.canvas?.graph.nodes).toHaveLength(2),
+    );
+
+    act(() => {
+      activeSnapshotId = nextSnapshotId;
+      result.current.refetch();
+    });
+
+    await waitFor(() => expect(result.current.snapshotId).toBe(nextSnapshotId));
+    expect(result.current.canvas?.graph.nodes).toHaveLength(2);
+    await waitFor(() =>
+      expect(loadedSliceSnapshotIds).toEqual([SNAPSHOT_ID, nextSnapshotId]),
+    );
+    expect(result.current.expansionControl?.expandedNodeIds.has("root")).toBe(
+      true,
+    );
+    expect(
+      useResearchV6DirectorDisplayStore.getState().expandedByRoot.root
+        ?.snapshotId,
+    ).toBe(nextSnapshotId);
   });
 
   it("renders a committed realtime delta without refetching the snapshot", async () => {
@@ -140,9 +239,9 @@ describe("useResearchV6DirectorCanvas", () => {
           run_id: RUN_ID,
           snapshot_id: SNAPSHOT_ID,
           event_sequence: 5,
-          previous_projection_hash: initial.projection_hash,
+          previous_projection_hash: initial.projectionHash,
           projection_hash: `sha256:${"e".repeat(64)}`,
-          upsert_nodes: [nextNode],
+          upsert_nodes: [projectionNodeWire(nextNode)],
           remove_node_ids: [],
           upsert_edges: [],
           remove_edge_ids: [],
@@ -203,9 +302,9 @@ describe("useResearchV6DirectorCanvas", () => {
           run_id: RUN_ID,
           snapshot_id: SNAPSHOT_ID,
           event_sequence: 5,
-          previous_projection_hash: initial.projection_hash,
+          previous_projection_hash: initial.projectionHash,
           projection_hash: `sha256:${"e".repeat(64)}`,
-          upsert_nodes: [absorbed],
+          upsert_nodes: [projectionNodeWire(absorbed)],
           remove_node_ids: [],
           upsert_edges: [
             {

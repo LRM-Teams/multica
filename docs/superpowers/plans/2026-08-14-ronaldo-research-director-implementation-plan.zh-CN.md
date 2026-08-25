@@ -80,7 +80,7 @@ Handler 不得直接查询 V6 canonical 子表。现有 `server/internal/handler
 | 用户 | `GET /api/research/v6/runs/{runId}/projection/slice` | viewport/展开 Slice |
 | 用户 | `GET /api/research/v6/runs/{runId}/projection/deltas` | 连续 Delta |
 | 用户 | `POST /api/research/v6/runs/{runId}/projection/resume` | 恢复或要求 resync |
-| 用户 | `GET /api/research/v6/runs/{runId}/projection/nodes/{nodeId}` | 检查面板详情 |
+| 用户 | `GET /api/research/v6/runs/{runId}/projection/nodes/{nodeId}?snapshot_id={snapshotId}` | 按当前画布快照检查面板详情 |
 | 用户 | `GET /api/research/v6/runs/{runId}/reports` | Goal 的 Report revision metadata |
 | 用户 | `GET /api/research/v6/runs/{runId}/reports/{reportId}` | 报告详情、审阅、input refs 和 sandbox URL |
 | Agent | `GET /api/agent/research/sessions/{id}/work-items/{workItemId}/attempts/{attemptId}/manifest` | 中断后重新取得该 Attempt 的冻结 Manifest |

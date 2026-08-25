@@ -110,8 +110,10 @@ type fakeExploreBackend struct {
 	calls int
 	errs  []string
 
-	// expandsPerCall decides how many /expand calls the invocation with the
-	// given 1-based call index performs (nil → exactly one).
+	// expandsPerCall decides how many single-node /explore calls the
+	// invocation with the given 1-based call index performs (nil → exactly
+	// one). Each call consumes one round, mirroring the old per-expand
+	// accounting under the merged protocol.
 	expandsPerCall func(callIdx int) int
 	// reportRounds rewrites the rounds value reported in the final JSON
 	// (nil → report the server-observed round count).
@@ -143,14 +145,9 @@ func (f *fakeExploreBackend) Execute(ctx context.Context, prompt string, _ agent
 	base := promptField(prompt, "Tool server base URL: ")
 	token := promptField(prompt, "Bearer token: ")
 	traj := promptField(prompt, "Trajectory ID: ")
-	seedExp := promptField(prompt, "Seed expansion ID: ")
 	node := firstSeedNode(prompt)
-	if base == "" || token == "" || traj == "" || seedExp == "" || node == "" {
+	if base == "" || token == "" || traj == "" || node == "" {
 		return nil, fmt.Errorf("prompt missing tool coordinates (base=%q traj=%q node=%q)", base, traj, node)
-	}
-
-	if status, _ := explorePost(base, token, "/view", map[string]any{"trajectory_id": traj, "expansion_id": seedExp, "node_id": node}); status != http.StatusOK {
-		f.recordErr("view %s: status %d", node, status)
 	}
 
 	expands := 1
@@ -159,16 +156,14 @@ func (f *fakeExploreBackend) Execute(ctx context.Context, prompt string, _ agent
 	}
 	lastRound := 0
 	for i := 0; i < expands; i++ {
-		status, body := explorePost(base, token, "/expand", map[string]any{
-			"trajectory_id": traj, "node_id": node, "request_key": fmt.Sprintf("rk-%d", i),
-		})
+		status, body := explorePost(base, token, "/explore", map[string]any{"trajectory_id": traj, "node_ids": []string{node}})
 		if status != http.StatusOK {
-			f.recordErr("expand %s: status %d body %s", node, status, body)
+			f.recordErr("explore %s: status %d body %s", node, status, body)
 			break
 		}
-		var er expandResponse
+		var er exploreResponse
 		if err := json.Unmarshal(body, &er); err != nil {
-			f.recordErr("expand decode: %v", err)
+			f.recordErr("explore decode: %v", err)
 			break
 		}
 		lastRound = er.Round
@@ -179,7 +174,7 @@ func (f *fakeExploreBackend) Execute(ctx context.Context, prompt string, _ agent
 		reported = f.reportRounds(lastRound)
 	}
 	if status, _ := explorePost(base, token, "/submit", map[string]any{
-		"trajectory_id": traj, "found": true, "summary": fmt.Sprintf("summary from call %d", idx), "node_ids": []string{node},
+		"trajectory_id": traj, "found": true, "summary": "s", "node_ids": []string{node},
 	}); status != http.StatusOK {
 		f.recordErr("submit: status %d", status)
 	}
@@ -243,7 +238,6 @@ func testExploreConfig() ExploreConfig {
 		Agents:            1,
 		MaxRounds:         5,
 		MaxExpandPerRound: 5,
-		ViewsPerExpansion: 1,
 		MaxNodeChars:      100,
 		Timeout:           15 * time.Second,
 	}
@@ -255,54 +249,84 @@ func testExploreConfig() ExploreConfig {
 
 func TestDefaultExploreConfig(t *testing.T) {
 	cfg := DefaultExploreConfig()
-	if cfg.Agents != 1 || cfg.MaxRounds != 3 || cfg.MaxExpandPerRound != 5 || cfg.ViewsPerExpansion != 1 || cfg.MaxNodeChars != 2000 || cfg.Timeout != 5*time.Minute {
+	if cfg.Agents != 1 || cfg.MaxRounds != 6 || cfg.MaxExpandPerRound != 5 || cfg.MaxNodeChars != 2000 || cfg.Timeout != 5*time.Minute {
 		t.Fatalf("DefaultExploreConfig = %+v", cfg)
 	}
 }
 
-func TestExploreAdoptsRunAndCrossChecksRounds(t *testing.T) {
+func TestExploreUsesServerRounds(t *testing.T) {
+	for _, reportedRounds := range []int{1, 99} {
+		t.Run(fmt.Sprintf("agent_reports_%d", reportedRounds), func(t *testing.T) {
+			store := newExploreStore(t)
+			retr := newExploreRetriever(t, store)
+			backend := &fakeExploreBackend{
+				t:              t,
+				expandsPerCall: func(int) int { return 2 },
+				reportRounds:   func(int) int { return reportedRounds },
+			}
+			ex := NewExplorer(store, retr, backend, testExploreConfig(), "pi", nil)
+
+			res, err := ex.Explore(context.Background(), "dispatch router retries")
+			if err != nil {
+				t.Fatalf("Explore: %v", err)
+			}
+			if len(backend.errs) > 0 {
+				t.Fatalf("fake backend tool errors: %v", backend.errs)
+			}
+			if !res.Found || res.TraceID == "" || len(res.AgentRuns) != 1 {
+				t.Fatalf("Explore result = %+v, want one found run with a trace", res)
+			}
+			run := res.AgentRuns[0]
+			if run.Error != "" || run.Seed != 0 {
+				t.Fatalf("run = %+v, want successful seed 0", run)
+			}
+			if run.Rounds != 2 || res.Rounds != 2 {
+				t.Fatalf("rounds = run:%d res:%d, want server count 2", run.Rounds, res.Rounds)
+			}
+		})
+	}
+}
+
+// P0 §4.1: persisted seed ids replace the internal hybrid search. The
+// internal search for this query hits n-target; explicit n-other seeds
+// must win, proving ExploreWithSeeds skipped the search.
+func TestExploreWithSeedsUsesProvidedSeeds(t *testing.T) {
 	store := newExploreStore(t)
 	retr := newExploreRetriever(t, store)
-	backend := &fakeExploreBackend{
-		t:              t,
-		expandsPerCall: func(int) int { return 2 },
-		reportRounds:   func(int) int { return 1 }, // under-report: server counted 2 expands
-	}
+	backend := &fakeExploreBackend{t: t}
 	ex := NewExplorer(store, retr, backend, testExploreConfig(), "pi", nil)
 
-	res, err := ex.Explore(context.Background(), "dispatch router retries")
+	res, err := ex.ExploreWithSeeds(context.Background(), "dispatch router retries", []string{"n-other"})
 	if err != nil {
-		t.Fatalf("Explore: %v", err)
+		t.Fatalf("ExploreWithSeeds: %v", err)
 	}
 	if len(backend.errs) > 0 {
 		t.Fatalf("fake backend tool errors: %v", backend.errs)
 	}
-	if !res.Found {
-		t.Fatalf("Found = false, want true (runs: %+v)", res.AgentRuns)
+	// The fake backend explores and submits the FIRST prompt seed node, so
+	// an adopted n-other proves the provided seeds reached the trajectory.
+	if !res.Found || len(res.NodeIDs) != 1 || res.NodeIDs[0] != "n-other" {
+		t.Fatalf("result = %+v, want found run adopting provided seed n-other", res)
 	}
-	if res.TraceID == "" {
-		t.Fatalf("TraceID is empty")
+}
+
+// Empty seed ids fall back to the internal hybrid search (backtest and
+// direct-caller compatibility).
+func TestExploreWithSeedsEmptySeedsFallsBackToSearch(t *testing.T) {
+	store := newExploreStore(t)
+	retr := newExploreRetriever(t, store)
+	backend := &fakeExploreBackend{t: t}
+	ex := NewExplorer(store, retr, backend, testExploreConfig(), "pi", nil)
+
+	res, err := ex.ExploreWithSeeds(context.Background(), "dispatch router retries", nil)
+	if err != nil {
+		t.Fatalf("ExploreWithSeeds: %v", err)
 	}
-	if len(res.AgentRuns) != 1 {
-		t.Fatalf("len(AgentRuns) = %d, want 1", len(res.AgentRuns))
+	if len(backend.errs) > 0 {
+		t.Fatalf("fake backend tool errors: %v", backend.errs)
 	}
-	run := res.AgentRuns[0]
-	if run.Error != "" {
-		t.Fatalf("run error: %s", run.Error)
-	}
-	if run.Seed != 0 {
-		t.Fatalf("run.Seed = %d, want 0", run.Seed)
-	}
-	// Round accounting: the model-reported value (1) is audit-only; the
-	// server-counted 2 expands are authoritative.
-	if run.Rounds != 2 || res.Rounds != 2 {
-		t.Fatalf("rounds = run:%d res:%d, want 2 (server cross-check)", run.Rounds, res.Rounds)
-	}
-	if res.Summary != "summary from call 1" {
-		t.Fatalf("Summary = %q", res.Summary)
-	}
-	if len(res.NodeIDs) != 1 || res.NodeIDs[0] != "n-target" {
-		t.Fatalf("NodeIDs = %v, want [n-target]", res.NodeIDs)
+	if !res.Found || len(res.NodeIDs) != 1 || res.NodeIDs[0] != "n-target" {
+		t.Fatalf("result = %+v, want internal-search hit n-target", res)
 	}
 }
 
@@ -447,169 +471,38 @@ func startTestToolServer(t *testing.T, store *Store, cfg ExploreConfig) (*Explor
 
 func TestExploreToolServerAuth(t *testing.T) {
 	store := newExploreGraphStore(t)
-	srv, baseURL, token := startTestToolServer(t, store, testExploreConfig())
-	seedExp := registerSeeds(t, srv, "t1", []string{"a"})
-	payload := map[string]any{"trajectory_id": "t1", "expansion_id": seedExp, "node_id": "a"}
+	_, baseURL, token := startTestToolServer(t, store, testExploreConfig())
+	payload := map[string]any{"trajectory_id": "t1", "node_ids": []string{"a"}}
 
-	if status, _ := explorePost(baseURL, "", "/view", payload); status != http.StatusUnauthorized {
+	if status, _ := explorePost(baseURL, "", "/explore", payload); status != http.StatusUnauthorized {
 		t.Fatalf("missing bearer: status = %d, want 401", status)
 	}
-	if status, _ := explorePost(baseURL, "wrong-token", "/view", payload); status != http.StatusUnauthorized {
+	if status, _ := explorePost(baseURL, "wrong-token", "/explore", payload); status != http.StatusUnauthorized {
 		t.Fatalf("wrong bearer: status = %d, want 401", status)
 	}
-	if status, _ := explorePost(baseURL, token, "/view", payload); status != http.StatusOK {
+	if status, _ := explorePost(baseURL, token, "/explore", payload); status != http.StatusOK {
 		t.Fatalf("correct bearer: status = %d, want 200", status)
 	}
 }
 
-func TestExploreToolServerViewTruncates(t *testing.T) {
-	store := newExploreGraphStore(t)
-	cfg := testExploreConfig()
-	cfg.MaxNodeChars = 50
-	cfg.ViewsPerExpansion = 2
-	srv, baseURL, token := startTestToolServer(t, store, cfg)
-	seedExp := registerSeeds(t, srv, "t1", []string{"a", "ghost"})
-
-	status, body := explorePost(baseURL, token, "/view", map[string]any{"trajectory_id": "t1", "expansion_id": seedExp, "node_id": "a"})
-	if status != http.StatusOK {
-		t.Fatalf("view: status = %d body %s", status, body)
-	}
-	var resp viewResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		t.Fatalf("view decode: %v", err)
-	}
-	if !resp.Truncated || len(resp.Body) != 50 {
-		t.Fatalf("view body len = %d truncated=%v, want 50/true", len(resp.Body), resp.Truncated)
-	}
-	if resp.Level != 2 {
-		t.Fatalf("view level = %d, want 2", resp.Level)
-	}
-
-	// Batch member missing from the graph -> 404 (a node outside every batch
-	// is rejected earlier with 409 VIEW_NOT_IN_BATCH).
-	if status, _ := explorePost(baseURL, token, "/view", map[string]any{"trajectory_id": "t1", "expansion_id": seedExp, "node_id": "ghost"}); status != http.StatusNotFound {
-		t.Fatalf("view unknown: status = %d, want 404", status)
-	}
-}
-
-func TestExploreToolServerExpandOrderingAndBudget(t *testing.T) {
-	store := newExploreGraphStore(t)
-	cfg := testExploreConfig()
-	cfg.MaxRounds = 5
-	cfg.MaxExpandPerRound = 10
-	srv, baseURL, token := startTestToolServer(t, store, cfg)
-	seedExp := registerSeeds(t, srv, "t1", []string{"b"})
-	viewNode(t, baseURL, token, "t1", seedExp, "b")
-
-	expand := func(key string) expandResponse {
-		t.Helper()
-		status, body := explorePost(baseURL, token, "/expand", map[string]any{"trajectory_id": "t1", "node_id": "b", "request_key": key})
-		if status != http.StatusOK {
-			t.Fatalf("expand: status = %d body %s", status, body)
-		}
-		var resp expandResponse
-		if err := json.Unmarshal(body, &resp); err != nil {
-			t.Fatalf("expand decode: %v", err)
-		}
-		return resp
-	}
-
-	resp := expand("rk-1")
-	if resp.Round != 1 || resp.BudgetExceeded {
-		t.Fatalf("first expand: round=%d budget_exceeded=%v, want 1/false", resp.Round, resp.BudgetExceeded)
-	}
-	// Priority: hierarchy parent a, child c, then relations. The evidence_for
-	// edge (b->e, delta 2) is never demoted; the contradicts edge (b->d,
-	// delta 2) is demoted to the end despite appearing first in relations.
-	got := make([]string, 0, len(resp.Candidates))
-	vias := make(map[string]string)
-	for _, c := range resp.Candidates {
-		got = append(got, c.NodeID)
-		vias[c.NodeID] = c.Via
-	}
-	want := []string{"a", "c", "e", "d"}
-	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("candidates = %v, want %v", got, want)
-	}
-	if vias["e"] != EdgeTypeEvidenceFor || vias["d"] != EdgeTypeContradicts {
-		t.Fatalf("vias = %v", vias)
-	}
-
-	// Round counter increments per distinct request key.
-	resp = expand("rk-2")
-	if resp.Round != 2 {
-		t.Fatalf("second expand: round = %d, want 2", resp.Round)
-	}
-}
-
-func TestExploreToolServerExpandCapAndBudgetExceeded(t *testing.T) {
+// The inline neighbor list of a served node honors the MaxExpandPerRound cap
+// (spec §4.1: the per-node neighbor cap is retained as a distinct limit).
+func TestExploreToolServerExploreNeighborCap(t *testing.T) {
 	store := newExploreGraphStore(t)
 	cfg := testExploreConfig()
 	cfg.MaxRounds = 1
 	cfg.MaxExpandPerRound = 2
-	srv, baseURL, token := startTestToolServer(t, store, cfg)
-	seedExp := registerSeeds(t, srv, "t1", []string{"b"})
-	viewNode(t, baseURL, token, "t1", seedExp, "b")
+	_, baseURL, token := startTestToolServer(t, store, cfg)
 
-	status, body := explorePost(baseURL, token, "/expand", map[string]any{"trajectory_id": "t1", "node_id": "b", "request_key": "rk-1"})
-	if status != http.StatusOK {
-		t.Fatalf("expand: status = %d body %s", status, body)
+	resp := exploreNodes(t, baseURL, token, "t1", "b")
+	if len(resp.Nodes) != 1 {
+		t.Fatalf("len(nodes) = %d, want 1", len(resp.Nodes))
 	}
-	var resp expandResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		t.Fatalf("expand decode: %v", err)
-	}
-	if len(resp.Candidates) != 2 {
-		t.Fatalf("len(candidates) = %d, want cap 2", len(resp.Candidates))
+	if len(resp.Nodes[0].Neighbors) != 2 {
+		t.Fatalf("len(neighbors) = %d, want cap 2", len(resp.Nodes[0].Neighbors))
 	}
 	if !resp.BudgetExceeded {
 		t.Fatalf("budget_exceeded = false, want true at MaxRounds=1")
-	}
-}
-
-// Server-enforced budget (design Q15/A6): once the round counter reaches
-// MaxRounds, subsequent /expand calls are rejected with 200 +
-// {"budget_exceeded":true,"candidates":[]} and the trajectory is marked
-// budget-blown server-side.
-func TestExploreToolServerExpandBeyondBudgetRejected(t *testing.T) {
-	store := newExploreGraphStore(t)
-	cfg := testExploreConfig()
-	cfg.MaxRounds = 1
-	srv, baseURL, token := startTestToolServer(t, store, cfg)
-	seedExp := registerSeeds(t, srv, "t1", []string{"b"})
-	viewNode(t, baseURL, token, "t1", seedExp, "b")
-
-	expand := func(key string) expandResponse {
-		t.Helper()
-		status, body := explorePost(baseURL, token, "/expand", map[string]any{"trajectory_id": "t1", "node_id": "b", "request_key": key})
-		if status != http.StatusOK {
-			t.Fatalf("expand: status = %d body %s", status, body)
-		}
-		var resp expandResponse
-		if err := json.Unmarshal(body, &resp); err != nil {
-			t.Fatalf("expand decode: %v", err)
-		}
-		return resp
-	}
-
-	// The first expand consumes the single budgeted round and is served.
-	resp := expand("rk-1")
-	if resp.Round != 1 || !resp.BudgetExceeded || len(resp.Candidates) == 0 {
-		t.Fatalf("first expand = %+v, want round 1 served with budget_exceeded", resp)
-	}
-	// Every subsequent expand is rejected: empty candidates, round counter
-	// frozen at the budget, trajectory marked budget-blown.
-	for i := 0; i < 2; i++ {
-		resp = expand(fmt.Sprintf("rk-%d", i+2))
-		if resp.Round != 1 || !resp.BudgetExceeded || len(resp.Candidates) != 0 {
-			t.Fatalf("over-budget expand %d = %+v, want rejected with empty candidates", i+2, resp)
-		}
-	}
-	if got := srv.trajectoryRounds("t1"); got != 1 {
-		t.Fatalf("server round count = %d, want 1 (rejected expands do not consume rounds)", got)
-	}
-	if !srv.trajectoryBudgetBlown("t1") {
-		t.Fatalf("trajectory not marked budget-blown")
 	}
 }
 
@@ -623,11 +516,9 @@ func TestExploreToolServerBlownTrajectorySubmitForcedNotFound(t *testing.T) {
 	srv, baseURL, token := startTestToolServer(t, store, cfg)
 
 	// t1 blows the budget, then submits found=true with a valid citation.
-	seedExp1 := registerSeeds(t, srv, "t1", []string{"b"})
-	viewNode(t, baseURL, token, "t1", seedExp1, "b")
 	for i := 0; i < 2; i++ {
-		if status, body := explorePost(baseURL, token, "/expand", map[string]any{"trajectory_id": "t1", "node_id": "b", "request_key": fmt.Sprintf("rk-%d", i+1)}); status != http.StatusOK {
-			t.Fatalf("expand %d: status = %d body %s", i, status, body)
+		if status, body := explorePost(baseURL, token, "/explore", map[string]any{"trajectory_id": "t1", "node_ids": []string{"b"}}); status != http.StatusOK {
+			t.Fatalf("explore %d: status = %d body %s", i, status, body)
 		}
 	}
 	status, body := explorePost(baseURL, token, "/submit", map[string]any{
@@ -657,10 +548,8 @@ func TestExploreToolServerBlownTrajectorySubmitForcedNotFound(t *testing.T) {
 	}
 
 	// The non-blown sibling trajectory submits found=true and keeps it.
-	seedExp2 := registerSeeds(t, srv, "t2", []string{"b"})
-	viewNode(t, baseURL, token, "t2", seedExp2, "b")
-	if status, body := explorePost(baseURL, token, "/expand", map[string]any{"trajectory_id": "t2", "node_id": "b", "request_key": "rk-1"}); status != http.StatusOK {
-		t.Fatalf("t2 expand: status = %d body %s", status, body)
+	if status, body := explorePost(baseURL, token, "/explore", map[string]any{"trajectory_id": "t2", "node_ids": []string{"b"}}); status != http.StatusOK {
+		t.Fatalf("t2 explore: status = %d body %s", status, body)
 	}
 	status, body = explorePost(baseURL, token, "/submit", map[string]any{
 		"trajectory_id": "t2", "found": true, "summary": "s", "node_ids": []string{"b"},
@@ -682,21 +571,25 @@ func TestExploreToolServerBlownTrajectorySubmitForcedNotFound(t *testing.T) {
 
 func TestExploreToolServerSubmitValidation(t *testing.T) {
 	store := newExploreGraphStore(t)
-	cfg := testExploreConfig()
-	cfg.ViewsPerExpansion = 2
-	srv, baseURL, token := startTestToolServer(t, store, cfg)
+	_, baseURL, token := startTestToolServer(t, store, testExploreConfig())
 
 	if err := store.WriteStagingSegment("s1", []byte("staging summary for dispatch segment")); err != nil {
 		t.Fatalf("WriteStagingSegment: %v", err)
 	}
 
-	// Viewed graph + staging ids are both kept with no warnings. (Unviewed,
-	// duplicate, and conflicting submissions are hard 4xx rejections covered
-	// by the traversal-state tests.)
-	seedExp := registerSeeds(t, srv, "t1", []string{"a", "seg:s1"})
-	viewNode(t, baseURL, token, "t1", seedExp, "a")
-	viewNode(t, baseURL, token, "t1", seedExp, "seg:s1")
-	status, body := explorePost(baseURL, token, "/submit", map[string]any{
+	// Register + view graph and staging ids via a real /explore (the merged
+	// protocol registers the trajectory and marks the served ids viewed), so
+	// submitting exactly the viewed ids is clean.
+	status, body := explorePost(baseURL, token, "/explore", map[string]any{
+		"trajectory_id": "t1",
+		"node_ids":      []string{"a", "seg:s1"},
+	})
+	if status != http.StatusOK {
+		t.Fatalf("explore: status = %d body %s", status, body)
+	}
+
+	// Valid graph + staging ids are both kept with no warnings.
+	status, body = explorePost(baseURL, token, "/submit", map[string]any{
 		"trajectory_id": "t1",
 		"found":         true,
 		"summary":       "s",
@@ -712,6 +605,29 @@ func TestExploreToolServerSubmitValidation(t *testing.T) {
 	if len(resp.NodeIDs) != 2 || len(resp.Warnings) != 0 {
 		t.Fatalf("kept = %v warnings = %v, want 2 kept / 0 warnings", resp.NodeIDs, resp.Warnings)
 	}
+
+	// A citation that was never viewed is a hard conflict rejection, not a
+	// silent drop (traversal-state semantics: unviewed ids cannot be claimed).
+	status, body = explorePost(baseURL, token, "/submit", map[string]any{
+		"trajectory_id": "t1",
+		"found":         true,
+		"summary":       "s",
+		"node_ids":      []string{"a", "ghost"},
+	})
+	if status != http.StatusConflict {
+		t.Fatalf("unviewed submit: status = %d body %s, want 409", status, body)
+	}
+
+	// An unregistered trajectory is rejected outright.
+	status, body = explorePost(baseURL, token, "/submit", map[string]any{
+		"trajectory_id": "t2",
+		"found":         true,
+		"summary":       "s",
+		"node_ids":      []string{"a"},
+	})
+	if status != http.StatusNotFound {
+		t.Fatalf("unregistered submit: status = %d body %s, want 404", status, body)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -719,41 +635,43 @@ func TestExploreToolServerSubmitValidation(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // switchingExploreBackend switches the store's current pointer to a fresh
-// version — in which the target node no longer exists — between the first
-// /view and the /expand of the same trajectory. Under version pinning the
-// in-flight explore must keep reading the pinned v1 graph.
+// version — in which the target node no longer exists — between two /explore
+// calls of the same trajectory. Under version pinning the in-flight explore
+// must keep reading the pinned v1 graph.
 type switchingExploreBackend struct {
 	t     *testing.T
 	store *Store
 
-	mu           sync.Mutex
-	viewedBody   string
-	expandStatus int
-	submitStatus int
+	mu                  sync.Mutex
+	viewedBody          string
+	secondExploreStatus int
+	submitStatus        int
 }
 
 func (b *switchingExploreBackend) Execute(_ context.Context, prompt string, _ agent.ExecOptions) (*agent.Session, error) {
 	base := promptField(prompt, "Tool server base URL: ")
 	token := promptField(prompt, "Bearer token: ")
 	traj := promptField(prompt, "Trajectory ID: ")
-	seedExp := promptField(prompt, "Seed expansion ID: ")
 	node := firstSeedNode(prompt)
-	if base == "" || token == "" || traj == "" || seedExp == "" || node == "" {
+	if base == "" || token == "" || traj == "" || node == "" {
 		return nil, fmt.Errorf("prompt missing tool coordinates")
 	}
 
-	// Round 0: view the seed on the pinned version.
-	status, body := explorePost(base, token, "/view", map[string]any{"trajectory_id": traj, "expansion_id": seedExp, "node_id": node})
+	// First explore of the seed on the pinned version.
+	status, body := explorePost(base, token, "/explore", map[string]any{"trajectory_id": traj, "node_ids": []string{node}})
 	if status != http.StatusOK {
-		return nil, fmt.Errorf("view %s: status %d", node, status)
+		return nil, fmt.Errorf("explore %s: status %d", node, status)
 	}
-	var vr viewResponse
-	if err := json.Unmarshal(body, &vr); err != nil {
-		return nil, fmt.Errorf("view decode: %v", err)
+	var er exploreResponse
+	if err := json.Unmarshal(body, &er); err != nil {
+		return nil, fmt.Errorf("explore decode: %v", err)
+	}
+	if len(er.Nodes) != 1 {
+		return nil, fmt.Errorf("explore returned %d nodes, want 1", len(er.Nodes))
 	}
 
 	// Mid-flight version switch: v2 drops the target node entirely. An
-	// unpinned explore would now 404 on /expand and fail /submit.
+	// unpinned explore would now 404 on the next /explore and fail /submit.
 	v2, err := b.store.CreateVersionFrom(1, "ttt")
 	if err != nil {
 		return nil, fmt.Errorf("create v2: %v", err)
@@ -766,25 +684,25 @@ func (b *switchingExploreBackend) Execute(_ context.Context, prompt string, _ ag
 	}
 
 	b.mu.Lock()
-	b.viewedBody = vr.Body
+	b.viewedBody = er.Nodes[0].Body
 	b.mu.Unlock()
 
-	expandStatus, _ := explorePost(base, token, "/expand", map[string]any{"trajectory_id": traj, "node_id": node, "request_key": "rk-1"})
+	secondExploreStatus, _ := explorePost(base, token, "/explore", map[string]any{"trajectory_id": traj, "node_ids": []string{node}})
 	submitStatus, _ := explorePost(base, token, "/submit", map[string]any{
 		"trajectory_id": traj, "found": true, "summary": "s", "node_ids": []string{node},
 	})
 	b.mu.Lock()
-	b.expandStatus = expandStatus
+	b.secondExploreStatus = secondExploreStatus
 	b.submitStatus = submitStatus
 	b.mu.Unlock()
 
-	out := fmt.Sprintf(`{"found":true,"summary":"pinned summary","node_ids":[%q],"rounds":1}`, node)
+	out := fmt.Sprintf(`{"found":true,"summary":"pinned summary","node_ids":[%q],"rounds":2}`, node)
 	return exploreCompletedSession(out), nil
 }
 
 // TestExplorePinsVersionForWholeCall (design R5/R12): a consolidation switch
 // in the middle of an explore must not swap the graph under the in-flight
-// trajectory — /view, /expand and /submit all read the version pinned at
+// trajectory — every /explore and /submit reads the version pinned at
 // Explore start, and the result records that version.
 func TestExplorePinsVersionForWholeCall(t *testing.T) {
 	store := newExploreStore(t) // v1 with n-target / n-other
@@ -797,13 +715,13 @@ func TestExplorePinsVersionForWholeCall(t *testing.T) {
 		t.Fatalf("Explore: %v", err)
 	}
 	if !res.Found {
-		t.Fatalf("Found = false (expand=%d submit=%d), want a successful pinned explore", backend.expandStatus, backend.submitStatus)
+		t.Fatalf("Found = false (explore=%d submit=%d), want a successful pinned explore", backend.secondExploreStatus, backend.submitStatus)
 	}
 	if res.Version != 1 {
 		t.Fatalf("Version = %d, want 1 (the version pinned at explore start)", res.Version)
 	}
-	if backend.expandStatus != http.StatusOK {
-		t.Fatalf("expand status = %d, want 200 (pinned v1 still serves the node deleted in v2)", backend.expandStatus)
+	if backend.secondExploreStatus != http.StatusOK {
+		t.Fatalf("second explore status = %d, want 200 (pinned v1 still serves the node deleted in v2)", backend.secondExploreStatus)
 	}
 	if backend.submitStatus != http.StatusOK {
 		t.Fatalf("submit status = %d, want 200 (cited node validated against pinned v1)", backend.submitStatus)
@@ -814,5 +732,109 @@ func TestExplorePinsVersionForWholeCall(t *testing.T) {
 	}
 	if len(res.NodeIDs) != 1 || res.NodeIDs[0] != "n-target" {
 		t.Fatalf("NodeIDs = %v, want [n-target]", res.NodeIDs)
+	}
+}
+
+// Phase 2 §5.1: the adopted run's message stream is captured, sanitized to
+// the allowlisted TraceMessage shape, and exposed on the result for the
+// per-channel prior record. Non-adopted runs drop their buffered streams.
+func TestExploreCapturesAdoptedTranscript(t *testing.T) {
+	store := newExploreStore(t)
+	retr := newExploreRetriever(t, store)
+	finalJSON := `{"found":true,"summary":"s","node_ids":["n-target"],"rounds":1}`
+	backend := &traceFakeBackend{
+		output: finalJSON,
+		msgs: []agent.Message{
+			{Type: agent.MessageText, Content: "exploring the graph"},
+			{Type: agent.MessageDiagnostic, Title: "diag", Diagnostic: "provider-internal", Content: "diag content"},
+		},
+	}
+	ex := NewExplorer(store, retr, backend, testExploreConfig(), "pi", nil)
+
+	res, err := ex.Explore(context.Background(), "dispatch router retries")
+	if err != nil {
+		t.Fatalf("Explore: %v", err)
+	}
+	if !res.Found || res.AdoptedIndex != 0 {
+		t.Fatalf("result found=%v adopted=%d, want found run 0 adopted", res.Found, res.AdoptedIndex)
+	}
+	if len(res.AdoptedTranscript) != 2 {
+		t.Fatalf("AdoptedTranscript = %d records, want 2", len(res.AdoptedTranscript))
+	}
+	if res.AdoptedTranscript[0].Content != "exploring the graph" || res.AdoptedTranscript[0].Sequence != 0 {
+		t.Fatalf("transcript[0] = %+v", res.AdoptedTranscript[0])
+	}
+	// Diagnostic internals stay out: the record carries only the allowlisted
+	// Content column, never Title/Diagnostic/SessionID.
+	if res.AdoptedTranscript[1].Content != "diag content" || res.AdoptedTranscript[1].Type != "diagnostic" {
+		t.Fatalf("transcript[1] = %+v", res.AdoptedTranscript[1])
+	}
+	if len(res.AgentRuns) != 1 || res.AgentRuns[0].Messages != nil {
+		t.Fatalf("run message buffers must be cleared after adoption: %+v", res.AgentRuns[0])
+	}
+}
+
+type promptCaptureBackend struct{ prompt string }
+
+func (b *promptCaptureBackend) Execute(_ context.Context, prompt string, _ agent.ExecOptions) (*agent.Session, error) {
+	b.prompt = prompt
+	return exploreCompletedSession(`{"found":false,"summary":"","node_ids":[],"rounds":0}`), nil
+}
+
+// Phase 2 §5.4: prior node ids merge AFTER the fresh seeds (fresh always
+// first, D1), duplicates are skipped, unknown ids (empty hydration) are
+// dropped, and the tentative evidence block carries the full brief.
+func TestExploreWithPriorPromptCarriesTentativeBlock(t *testing.T) {
+	store := newExploreStore(t)
+	retr := newExploreRetriever(t, store)
+	capture := &promptCaptureBackend{}
+	ex := NewExplorer(store, retr, capture, testExploreConfig(), "pi", nil)
+
+	prior := &PriorBrief{
+		Summary: "S", NodeIDs: []string{"n-ghost", "n-other", "n-target"},
+		Observations: []string{"obs-1"}, Rejected: []string{"rej-1"}, OpenQuestions: []string{"oq-1"},
+	}
+	if _, err := ex.ExploreWithPrior(context.Background(), "dispatch router retries", []string{"n-target"}, prior); err != nil {
+		t.Fatalf("ExploreWithPrior: %v", err)
+	}
+	for _, want := range []string{
+		"MAY BE STALE OR WRONG", "prior summary: S",
+		"observation: obs-1", "rejected branch: rej-1", "open question: oq-1",
+	} {
+		if !strings.Contains(capture.prompt, want) {
+			t.Fatalf("prompt missing %q", want)
+		}
+	}
+	freshAt := strings.Index(capture.prompt, "- n-target:")
+	priorAt := strings.Index(capture.prompt, "- n-other:")
+	if freshAt < 0 || priorAt < 0 || freshAt > priorAt {
+		t.Fatalf("fresh seed must precede merged prior seed (fresh=%d prior=%d)", freshAt, priorAt)
+	}
+	if strings.Count(capture.prompt, "- n-other:") != 1 {
+		t.Fatalf("prior node must appear exactly once (dedup)")
+	}
+	if strings.Contains(capture.prompt, "n-ghost") {
+		t.Fatalf("unknown prior node id must be dropped from seeds")
+	}
+}
+
+// The merged seed list must keep the whole tool-server flow healthy: the
+// fake backend explores and submits the first seed end to end.
+func TestExploreWithPriorToolServerPath(t *testing.T) {
+	store := newExploreStore(t)
+	retr := newExploreRetriever(t, store)
+	backend := &fakeExploreBackend{t: t}
+	ex := NewExplorer(store, retr, backend, testExploreConfig(), "pi", nil)
+
+	prior := &PriorBrief{Summary: "prior summary", NodeIDs: []string{"n-other"}}
+	res, err := ex.ExploreWithPrior(context.Background(), "dispatch router retries", []string{"n-target"}, prior)
+	if err != nil {
+		t.Fatalf("ExploreWithPrior: %v", err)
+	}
+	if len(backend.errs) > 0 {
+		t.Fatalf("fake backend tool errors: %v", backend.errs)
+	}
+	if !res.Found || len(res.NodeIDs) != 1 || res.NodeIDs[0] != "n-target" {
+		t.Fatalf("result = %+v, want first seed n-target explored and adopted", res)
 	}
 }

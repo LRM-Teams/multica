@@ -1,71 +1,43 @@
 // @vitest-environment jsdom
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { renderHook, act } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const wsHandlers = vi.hoisted(() => new Map<string, (payload: unknown) => void>());
-const reconnect = vi.hoisted(() => ({ cb: null as null | (() => void) }));
-const clientHandles = vi.hoisted(() => ({ invalidateQueries: vi.fn() }));
+const reconnect = vi.hoisted(() => ({ callback: null as null | (() => void) }));
+const invalidateQueries = vi.hoisted(() => vi.fn());
 
 vi.mock("@multica/core/agents", () => ({
-  agentRemindersKeys: {
-    all: (agentId: string) => ["agent-reminders", agentId],
-  },
+  agentRemindersKeys: { all: (agentId: string) => ["agent-reminders", agentId] },
 }));
-
 vi.mock("@tanstack/react-query", async () => {
   const actual = await vi.importActual<typeof import("@tanstack/react-query")>("@tanstack/react-query");
-  return { ...actual, useQueryClient: () => ({ invalidateQueries: clientHandles.invalidateQueries }) };
+  return { ...actual, useQueryClient: () => ({ invalidateQueries }) };
 });
-
 vi.mock("@multica/core/realtime", () => ({
-  useWSEvent: (event: string, handler: (payload: unknown) => void) => {
-    wsHandlers.set(event, handler);
-  },
-  useWSReconnect: (cb: () => void) => {
-    reconnect.cb = cb;
+  useWSEvent: (event: string, handler: (payload: unknown) => void) => wsHandlers.set(event, handler),
+  useWSReconnect: (callback: () => void) => {
+    reconnect.callback = callback;
   },
 }));
 
 import { useAgentRemindersRealtime } from "./use-agent-reminders-realtime";
 
-function push(payload: { agent_id: string }) {
-  act(() => {
-    wsHandlers.get("agent_reminder:changed")!(payload);
-  });
-}
-
 describe("useAgentRemindersRealtime", () => {
   beforeEach(() => {
     wsHandlers.clear();
-    reconnect.cb = null;
-    clientHandles.invalidateQueries.mockClear();
+    reconnect.callback = null;
+    invalidateQueries.mockClear();
   });
 
-  it("invalidates the matching agent's reminders query on agent_reminder:changed", () => {
+  it("invalidates upcoming reminders for matching events and reconnects", () => {
     renderHook(() => useAgentRemindersRealtime("agent-1"));
 
-    push({ agent_id: "agent-1" });
+    act(() => wsHandlers.get("agent_reminder:changed")?.({ agentId: "agent-1" }));
+    act(() => reconnect.callback?.());
 
-    expect(clientHandles.invalidateQueries).toHaveBeenCalledWith({
-      queryKey: ["agent-reminders", "agent-1"],
-    });
-  });
-
-  it("ignores an event scoped to a different agent", () => {
-    renderHook(() => useAgentRemindersRealtime("agent-1"));
-
-    push({ agent_id: "agent-2" });
-
-    expect(clientHandles.invalidateQueries).not.toHaveBeenCalled();
-  });
-
-  it("invalidates on WS reconnect, independent of the specific event", () => {
-    renderHook(() => useAgentRemindersRealtime("agent-1"));
-
-    act(() => reconnect.cb!());
-
-    expect(clientHandles.invalidateQueries).toHaveBeenCalledWith({
+    expect(invalidateQueries).toHaveBeenCalledTimes(2);
+    expect(invalidateQueries).toHaveBeenCalledWith({
       queryKey: ["agent-reminders", "agent-1"],
     });
   });

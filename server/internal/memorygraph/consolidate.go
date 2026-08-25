@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -50,19 +49,22 @@ type CostWeights struct {
 // ConsolidateConfig configures the Consolidator (design §6 consolidation
 // block plus the graph shape limits).
 type ConsolidateConfig struct {
-	TriggerSegments  int     // new staging segments that trigger consolidation (default 50)
-	TriggerQueries   int     // queries since last consolidation that trigger it (default 200)
-	OpBudget         int     // max operations per consolidation trajectory (default 50)
-	RoundBudget      int     // max agent working rounds per trajectory (default 10)
-	TTVTrajectories  int     // T parallel candidate trajectories; 1 = non-TTT in-place mode (default 4)
-	RecallTolerance  float64 // allowed recall-rate drop vs baseline (default 0.02)
-	CostWeights      CostWeights
-	MaxLevels        int           // hierarchy depth cap; levels are 0..MaxLevels-1 (default 4)
-	MaxFanout        int           // max summarizes children per node (default 8)
-	MaxRelationEdges int           // max incident countable relation edges per node (default 8)
-	VersionsKeep     int           // versions retained by the post-consolidation GC (default 5)
-	Model            string        // model name passed to the agent backend
-	Timeout          time.Duration // per-trajectory wall-clock timeout
+	TriggerSegments          int     // new staging segments that trigger consolidation (default 50)
+	TriggerQueries           int     // queries since last consolidation that trigger it (default 200)
+	OpBudget                 int     // max operations per consolidation trajectory (default 50)
+	RoundBudget              int     // max agent working rounds per trajectory (default 10)
+	TTVTrajectories          int     // T parallel candidate trajectories; 1 = non-TTT in-place mode (default 4)
+	RecallTolerance          float64 // allowed recall-rate drop vs baseline (default 0.02)
+	CostWeights              CostWeights
+	MaxLevels                int            // hierarchy depth cap; levels are 0..MaxLevels-1 (default 4)
+	MaxFanout                int            // max summarizes children per node (default 8)
+	MaxRelationEdges         int            // max incident countable relation edges per node (default 8)
+	VersionsKeep             int            // versions retained by the post-consolidation GC (default 5)
+	Budget                   BacktestBudget // per-candidate D_q top-B allocation
+	ExploreMaxRounds         int            // L2 closure radius; must match runner budget
+	ExploreMaxExpandPerRound int            // L3 candidate cap; must match /explore
+	Model                    string         // model name passed to the agent backend
+	Timeout                  time.Duration  // per-trajectory wall-clock timeout
 	// BacktestGroundTruth attaches server-authoritative catalog items and
 	// ledger baselines before candidate evaluation. Nil preserves legacy input.
 	BacktestGroundTruth func(ctx context.Context, store *Store, fromVersion int, queries []*BacktestQuery) error
@@ -71,18 +73,21 @@ type ConsolidateConfig struct {
 // DefaultConsolidateConfig returns the design §6 defaults.
 func DefaultConsolidateConfig() ConsolidateConfig {
 	return ConsolidateConfig{
-		TriggerSegments:  50,
-		TriggerQueries:   200,
-		OpBudget:         50,
-		RoundBudget:      10,
-		TTVTrajectories:  4,
-		RecallTolerance:  0.02,
-		CostWeights:      CostWeights{Round: 1.0, Tail: 0.5, Embed: 0.2, Node: 0.1, Graph: 0.05},
-		MaxLevels:        4,
-		MaxFanout:        8,
-		MaxRelationEdges: 8,
-		VersionsKeep:     5,
-		Timeout:          30 * time.Minute,
+		TriggerSegments:          50,
+		TriggerQueries:           200,
+		OpBudget:                 50,
+		RoundBudget:              10,
+		TTVTrajectories:          4,
+		RecallTolerance:          0.02,
+		CostWeights:              CostWeights{Round: 1.0, Tail: 0.5, Embed: 0.2, Node: 0.1, Graph: 0.05},
+		MaxLevels:                4,
+		MaxFanout:                8,
+		MaxRelationEdges:         8,
+		VersionsKeep:             5,
+		Budget:                   DefaultBacktestBudget(),
+		ExploreMaxRounds:         DefaultExploreConfig().MaxRounds,
+		ExploreMaxExpandPerRound: DefaultExploreConfig().MaxExpandPerRound,
+		Timeout:                  30 * time.Minute,
 	}
 }
 
@@ -121,6 +126,13 @@ func (c ConsolidateConfig) normalized() ConsolidateConfig {
 	}
 	if c.VersionsKeep <= 0 {
 		c.VersionsKeep = d.VersionsKeep
+	}
+	c.Budget = c.Budget.normalized()
+	if c.ExploreMaxRounds <= 0 {
+		c.ExploreMaxRounds = d.ExploreMaxRounds
+	}
+	if c.ExploreMaxExpandPerRound <= 0 {
+		c.ExploreMaxExpandPerRound = d.ExploreMaxExpandPerRound
 	}
 	if c.Timeout <= 0 {
 		c.Timeout = d.Timeout
@@ -359,15 +371,43 @@ func (c *Consolidator) consolidateTTT(ctx context.Context, current int, staging 
 			return nil, fmt.Errorf("consolidate ttt: attach backtest ground truth: %w", err)
 		}
 	}
-	bt := NewBacktester(c.store, BacktestConfig{
+	windowQueries, err := BacktestWindowQueryCount(c.store, current)
+	if err != nil {
+		return nil, fmt.Errorf("consolidate ttt: count window queries: %w", err)
+	}
+	btCfg := BacktestConfig{
 		RecallTolerance: c.cfg.RecallTolerance,
 		Embedder:        c.emb,
 		Runner:          c.runner,
-	})
+		// Cold start (spec §7): below the threshold the window baselines are
+		// too thin to trust, so the statistical gates (recall, rounds
+		// regression) are skipped; the structural gates always run.
+		ColdStart: windowQueries < c.cfg.Budget.ColdStartThreshold,
+	}
+
+	// Budget allocation (spec §5.2): with a runner wired, each candidate
+	// independently ranks the window queries by D_q and picks its top-B;
+	// every candidate is then measured on the union so Cost stays comparable.
+	// Without a runner there is no Explore to save (AcceptedWithoutExplore
+	// stands), so the full window is evaluated as before (spec §5.4).
+	measured := queries
+	var plan *BudgetPlan
+	if c.runner != nil && len(queries) > 0 {
+		plan, err = PlanBudget(ctx, c.store, current, versions, queries, c.cfg.Budget, btCfg.normalized().Retrieval, c.emb, c.cfg.ExploreMaxRounds, c.cfg.ExploreMaxExpandPerRound)
+		if err != nil {
+			return nil, fmt.Errorf("consolidate ttt: budget plan: %w", err)
+		}
+		measured = plan.Union
+	}
+
+	bt := NewBacktester(c.store, btCfg)
 	cands := make([]CandidateStats, t)
 	result := &ConsolidateResult{Candidates: cands}
 	for i := range versions {
-		stats := bt.EvaluateCandidate(ctx, versions[i], current, queries)
+		stats := bt.EvaluateCandidate(ctx, versions[i], current, measured)
+		if plan != nil {
+			stats.Queries = appendBudgetAudit(stats.Queries, plan.PerCandidate[versions[i]], measured, queries)
+		}
 		stats.Actor = fmt.Sprintf("ttt-%d", i)
 		stats.OpsApplied = outcomes[i].applied
 		if outcomes[i].err != nil {
@@ -392,9 +432,6 @@ func (c *Consolidator) consolidateTTT(ctx context.Context, current int, staging 
 			return nil, fmt.Errorf("consolidate ttt: switch current to v%d: %w", result.WinnerVersion, err)
 		}
 		result.Switched = true
-		// Q26: queries that degraded across the switch join the permanent
-		// regression set so every future transition re-checks them.
-		c.recordRegressions(result.WinnerVersion, cands[winnerIdx], queries)
 	} else {
 		// No candidate survived the gates: keep the current version.
 		result.WinnerVersion = current
@@ -410,9 +447,12 @@ func (c *Consolidator) consolidateTTT(ctx context.Context, current int, staging 
 
 	// Audit: one select_version entry with the per-candidate stats.
 	detail := map[string]any{
-		"winner":     result.WinnerVersion,
-		"switched":   result.Switched,
-		"candidates": candidateAuditDetails(cands),
+		"winner":         result.WinnerVersion,
+		"switched":       result.Switched,
+		"cold_start":     btCfg.ColdStart,
+		"window_queries": windowQueries,
+		"judged_queries": len(queries),
+		"candidates":     candidateAuditDetails(cands),
 	}
 	if err := c.oplog.Append(result.WinnerVersion, CreatorConsolidator, OpSelectVersion,
 		fmt.Sprintf("v%d", result.WinnerVersion), detail); err != nil {
@@ -425,56 +465,36 @@ func (c *Consolidator) consolidateTTT(ctx context.Context, current int, staging 
 	return result, nil
 }
 
-// recordRegressions folds the winning candidate's regressed window queries
-// into the permanent regression set (design Q26, review P0-4): a query that
-// passed baseline-side but degraded on the winning version is re-checked on
-// every future version transition. Regression-set entries themselves are
-// excluded (they are already in the set — a gate-4 failure keeps them
-// there), and repeats dedupe by query text. Appends are best-effort: the
-// switch already happened, so a persistence failure is logged, never
-// returned.
-func (c *Consolidator) recordRegressions(winnerVersion int, winner CandidateStats, queries []*BacktestQuery) {
-	existing, err := c.store.ReadRegression()
-	if err != nil {
-		slog.Warn("consolidate ttt: read regression set failed; skipping regression recording",
-			"version", winnerVersion, "error", err)
-		return
+func appendBudgetAudit(stats []QueryBacktestStat, cb candidateBudget, measured, window []*BacktestQuery) []QueryBacktestStat {
+	identities := budgetQueryIdentities(window)
+	for i := range stats {
+		for _, q := range measured {
+			if stats[i].TraceID == q.TraceID && stats[i].Query == q.Query {
+				stats[i].Dq = cb.Dq[identities[q]]
+				break
+			}
+		}
 	}
-	known := make(map[string]bool, len(existing))
-	for _, re := range existing {
-		known[re.Query] = true
+	measuredSet := make(map[string]bool, len(measured))
+	for _, q := range measured {
+		measuredSet[identities[q]] = true
 	}
-	statIndex := 0
-	for _, q := range queries {
-		// Queries without resolved ground truth are intentionally skipped by
-		// EvaluateCandidate and therefore have no corresponding audit stat.
-		if len(resolveBacktestItems(q)) == 0 {
+	for _, q := range window {
+		id := identities[q]
+		if measuredSet[id] {
 			continue
 		}
-		if statIndex >= len(winner.Queries) {
-			slog.Warn("consolidate ttt: winner query stats misaligned; skipping regression recording",
-				"version", winnerVersion, "stats", len(winner.Queries), "queries", len(queries))
-			return
-		}
-		qs := winner.Queries[statIndex]
-		statIndex++
-		if q.Regression || !qs.Regressed || known[q.Query] {
-			continue
-		}
-		known[q.Query] = true
-		entry := &RegressionEntry{
+		stats = append(stats, QueryBacktestStat{
+			TraceID:        q.TraceID,
 			Query:          q.Query,
-			RelevantNodes:  q.RelevantNodes,
-			AddedVersion:   winnerVersion,
-			BaselineRounds: qs.BaselineRounds,
-			Reason: fmt.Sprintf("regressed on switch to v%d (covered=%v found=%v rounds=%.0f baseline_rounds=%d)",
-				winnerVersion, qs.Covered, qs.Found, qs.Rounds, qs.BaselineRounds),
-		}
-		if err := c.store.AppendRegression(entry); err != nil {
-			slog.Warn("consolidate ttt: append regression failed",
-				"version", winnerVersion, "query", q.Query, "error", err)
-		}
+			BaselineRounds: baselineRounds(q.BaselineRounds),
+			BaselineFound:  q.BaselineFound,
+			Skipped:        true,
+			Dq:             cb.Dq[id],
+			SkipReason:     "outside the per-candidate top-B budget union",
+		})
 	}
+	return stats
 }
 
 // runTrajectory executes one consolidation trajectory against candidate

@@ -205,6 +205,22 @@ function subLabelForTier(
     : undefined;
 }
 
+function assignedAgentName(detail: unknown): string | undefined {
+  if (!detail || typeof detail !== "object" || Array.isArray(detail)) {
+    return undefined;
+  }
+  const assignedAgent = (detail as Record<string, unknown>).assigned_agent;
+  if (
+    !assignedAgent ||
+    typeof assignedAgent !== "object" ||
+    Array.isArray(assignedAgent)
+  ) {
+    return undefined;
+  }
+  const name = (assignedAgent as Record<string, unknown>).name;
+  return typeof name === "string" && name.trim() ? name.trim() : undefined;
+}
+
 /* ------------------------------------------------------------------ *
  * Top-level adapter
  * ------------------------------------------------------------------ */
@@ -235,6 +251,11 @@ export function toStarGraphNodeView(node: StarGraphNodeInput): StarGraphNodeView
       ? "run"
       : mappedState;
   if (tier === "s") {
+    const agentId =
+      typeof node.actor_agent_id === "string" && node.actor_agent_id
+        ? node.actor_agent_id
+        : undefined;
+    const agentName = assignedAgentName(node.detail);
     return {
       id: node.id,
       tier,
@@ -242,10 +263,8 @@ export function toStarGraphNodeView(node: StarGraphNodeInput): StarGraphNodeView
       state,
       title: node.title,
       subLabel: subLabelForTier(node),
-      agentBadge:
-        typeof node.actor_agent_id === "string" && node.actor_agent_id
-          ? shortAgent(node.actor_agent_id)
-          : undefined,
+      agentId,
+      agentBadge: agentName ?? (agentId ? shortAgent(agentId) : undefined),
       metrics,
       semanticRole,
     };
@@ -257,7 +276,7 @@ export function toStarGraphNodeView(node: StarGraphNodeInput): StarGraphNodeView
     tierSource: source,
     state,
     title: node.title,
-    subLabel: subLabelForTier(node),
+    subLabel: semanticRole === "goal" ? undefined : subLabelForTier(node),
     metrics,
     semanticRole,
   };

@@ -85,6 +85,11 @@ type GraphMemoryRecallPlan struct {
 	TTTEnabled   bool
 	Query        string
 	TraceID      string
+	// Seeds are the authoritative round-0 hybrid hit node ids computed by
+	// Begin's seeder against GraphVersion and persisted to the ledger; the
+	// executor hands them to Explorer.ExploreWithSeeds so the hybrid search
+	// runs exactly once per recall (spec P0 §4.1).
+	Seeds []string
 	// Replayed marks a plan adopted from the already-committed ledger row
 	// (idempotent replay): no new rows were written and no provider work
 	// happened for it (A23).
@@ -182,17 +187,24 @@ func (s *GraphMemoryRecallService) Begin(ctx context.Context, req GraphMemoryRec
 	// Effective profile: the workspace row wins over the env default.
 	q := db.New(s.pool)
 	memoryType := s.envType
+	graphMemoryMode := "inject"
 	tunables := s.limits.Defaults
 	tttEnabled := false
 	if profile, perr := q.GetGraphMemoryProfile(ctx, wsUUID); perr == nil {
 		if profile.MemoryType == "graph" || profile.MemoryType == "legacy" {
 			memoryType = profile.MemoryType
 		}
+		if profile.GraphMemoryMode == "inject" || profile.GraphMemoryMode == "agent" {
+			graphMemoryMode = profile.GraphMemoryMode
+		}
 		tunables = graphMemoryTunablesFromProfile(profile)
-		tttEnabled = profile.TttEnabled
+		tttEnabled = profile.RecallTttEnabled
 	}
 	if memoryType != "graph" {
 		return nil, fmt.Errorf("%w: memory_type is %s", ErrGraphMemoryRecallDisabled, memoryType)
+	}
+	if graphMemoryMode != "inject" {
+		return nil, fmt.Errorf("%w: graph_memory_mode is %s", ErrGraphMemoryRecallDisabled, graphMemoryMode)
 	}
 
 	// Memory-agent training behavior (spec §5): the invoking agent's active
@@ -288,6 +300,7 @@ func (s *GraphMemoryRecallService) Begin(ctx context.Context, req GraphMemoryRec
 		TTTEnabled:   tttEnabled,
 		Query:        req.Query,
 		TraceID:      req.TraceID,
+		Seeds:        seeds,
 	}
 	if err := s.persistPlan(ctx, plan, wsUUID, taskUUID, rtUUID, graphOwnerID, seeds); err != nil {
 		return nil, err

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { GitBranch, Play, RefreshCw, ShieldCheck, Timer } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -14,7 +14,7 @@ import {
   graphMemoryProfileOptions,
   graphMemoryStatusOptions,
 } from "@multica/core/evolution/queries";
-import type { GraphMemoryProfile, UpdateGraphMemoryProfileRequest } from "@multica/core/types";
+import type { GraphMemoryMode, GraphMemoryProfile, UpdateGraphMemoryProfileRequest } from "@multica/core/types";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Button } from "@multica/ui/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@multica/ui/components/ui/card";
@@ -35,14 +35,16 @@ function clampExploreAgents(value: number): number {
 
 function graphMemoryTttUpdatePayload(
   profile: GraphMemoryProfile,
-  patch: { ttt_enabled: boolean; explore_agents: number },
+  patch: { recall_ttt_enabled: boolean; consolidation_ttt_enabled: boolean; explore_agents: number },
 ): UpdateGraphMemoryProfileRequest {
   return {
     memory_type: profile.memory_type,
     explore_agents: patch.explore_agents,
     explore_max_rounds: profile.explore_max_rounds,
     config_version: profile.config_version,
-    ttt_enabled: patch.ttt_enabled,
+    ttt_enabled: patch.recall_ttt_enabled,
+    recall_ttt_enabled: patch.recall_ttt_enabled,
+    consolidation_ttt_enabled: patch.consolidation_ttt_enabled,
     explore_nodes_per_expansion: profile.explore_nodes_per_expansion,
     max_hierarchy_fanout: profile.max_hierarchy_fanout,
     max_relation_edges_per_node: profile.max_relation_edges_per_node,
@@ -144,6 +146,82 @@ function isGraphMemoryParseFallback(profile: GraphMemoryProfile): boolean {
   );
 }
 
+export function GraphMemoryAgentModeCard({ wsId, isAdmin }: { wsId: string; isAdmin: boolean }) {
+  const copy = useEvolutionCopy();
+  const queryClient = useQueryClient();
+  const { data: profile } = useQuery(graphMemoryProfileOptions(wsId));
+  const [mode, setMode] = useState<GraphMemoryMode>(profile?.graph_memory_mode ?? "agent");
+  const [runtimeId, setRuntimeId] = useState(profile?.memory_agent_runtime_id ?? "");
+  const [model, setModel] = useState(profile?.memory_agent_model ?? "");
+  const [tokensPerHour, setTokensPerHour] = useState(profile?.memory_agent_max_tokens_per_hour ?? 200000);
+
+  useEffect(() => {
+    if (!profile) return;
+    setMode(profile.graph_memory_mode);
+    setRuntimeId(profile.memory_agent_runtime_id);
+    setModel(profile.memory_agent_model);
+    setTokensPerHour(profile.memory_agent_max_tokens_per_hour);
+  }, [profile]);
+
+  const save = useMutation({
+    mutationFn: () => {
+      if (!profile) throw new Error(copy("graphAgentModeUnavailable"));
+      return api.updateGraphMemoryProfile(wsId, {
+        memory_type: profile.memory_type,
+        explore_agents: profile.explore_agents,
+        explore_max_rounds: profile.explore_max_rounds,
+        config_version: profile.config_version,
+        graph_memory_mode: mode,
+        memory_agent_runtime_id: runtimeId.trim(),
+        memory_agent_model: model.trim(),
+        memory_agent_max_tokens_per_hour: Math.max(1000, Math.trunc(tokensPerHour)),
+      });
+    },
+    onSuccess: async () => {
+      toast.success(copy("graphAgentModeSaved"));
+      await queryClient.invalidateQueries({ queryKey: evolutionKeys.graphMemoryProfile(wsId) });
+    },
+    onError: (error) => {
+      if (error instanceof ApiError && error.status === 409) {
+        void queryClient.invalidateQueries({ queryKey: evolutionKeys.graphMemoryProfile(wsId) });
+        showErrorToast(copy("graphTttConflict"));
+        return;
+      }
+      showErrorToast(error instanceof Error ? error.message : copy("graphAgentMode"));
+    },
+  });
+
+  if (!profile || profile.memory_type !== "graph" || isGraphMemoryParseFallback(profile)) return null;
+
+  return (
+    <Card className="bg-background/85 backdrop-blur">
+      <CardHeader>
+        <CardTitle>{copy("graphAgentMode")}</CardTitle>
+        <p className="text-sm text-muted-foreground">{copy("graphAgentModeHint")}</p>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid grid-cols-2 gap-2">
+          <Button type="button" variant={mode === "agent" ? "default" : "outline"} disabled={!isAdmin || save.isPending} onClick={() => setMode("agent")}>{copy("graphAgentModeAgent")}</Button>
+          <Button type="button" variant={mode === "inject" ? "default" : "outline"} disabled={!isAdmin || save.isPending} onClick={() => setMode("inject")}>{copy("graphAgentModeInject")}</Button>
+        </div>
+        <div className="space-y-1">
+          <Label htmlFor="graph-memory-agent-runtime">{copy("graphAgentRuntime")}</Label>
+          <Input id="graph-memory-agent-runtime" value={runtimeId} onChange={(event) => setRuntimeId(event.target.value)} disabled={!isAdmin || mode !== "agent" || save.isPending} placeholder={copy("graphAgentRuntimePlaceholder")} />
+        </div>
+        <div className="space-y-1">
+          <Label htmlFor="graph-memory-agent-model">{copy("graphAgentModel")}</Label>
+          <Input id="graph-memory-agent-model" value={model} onChange={(event) => setModel(event.target.value)} disabled={!isAdmin || mode !== "agent" || save.isPending} />
+        </div>
+        <div className="space-y-1">
+          <Label htmlFor="graph-memory-agent-token-limit">{copy("graphAgentTokensPerHour")}</Label>
+          <Input id="graph-memory-agent-token-limit" type="number" min={1000} max={10000000} value={tokensPerHour} onChange={(event) => setTokensPerHour(Number.parseInt(event.target.value, 10) || 1000)} disabled={!isAdmin || mode !== "agent" || save.isPending} />
+        </div>
+        <Button variant="outline" disabled={!isAdmin || save.isPending} onClick={() => save.mutate()}>{copy("graphAgentModeSave")}</Button>
+      </CardContent>
+    </Card>
+  );
+}
+
 export function GraphMemoryTttCard({ wsId, isAdmin }: { wsId: string; isAdmin: boolean }) {
   const copy = useEvolutionCopy();
   const { data: profile, refetch } = useQuery(graphMemoryProfileOptions(wsId));
@@ -196,11 +274,12 @@ function GraphMemoryTttEditor({
 }) {
   const copy = useEvolutionCopy();
   const queryClient = useQueryClient();
-  const [tttEnabled, setTttEnabled] = useState(profile.ttt_enabled);
+  const [recallTttEnabled, setRecallTttEnabled] = useState(profile.recall_ttt_enabled);
+  const [consolidationTttEnabled, setConsolidationTttEnabled] = useState(profile.consolidation_ttt_enabled);
   const [exploreAgents, setExploreAgents] = useState(profile.explore_agents);
 
   const save = useMutation({
-    mutationFn: (patch: { ttt_enabled: boolean; explore_agents: number }) =>
+    mutationFn: (patch: { recall_ttt_enabled: boolean; consolidation_ttt_enabled: boolean; explore_agents: number }) =>
       api.updateGraphMemoryProfile(wsId, graphMemoryTttUpdatePayload(profile, patch)),
     onSuccess: async () => {
       toast.success(copy("graphTttSaved"));
@@ -227,13 +306,24 @@ function GraphMemoryTttEditor({
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="flex items-center justify-between gap-3">
-          <Label htmlFor="graph-ttt-enabled" className="text-sm">{copy("graphTtt")}</Label>
+          <Label htmlFor="graph-recall-ttt-enabled" className="text-sm">{copy("graphRecallTtt")}</Label>
           <Switch
-            id="graph-ttt-enabled"
-            checked={tttEnabled}
-            onCheckedChange={(checked) => setTttEnabled(checked === true)}
+            id="graph-recall-ttt-enabled"
+            checked={recallTttEnabled}
+            onCheckedChange={(checked) => setRecallTttEnabled(checked === true)}
+            disabled={!isAdmin || profile.graph_memory_mode === "agent" || save.isPending}
+            aria-label={copy("graphRecallTtt")}
+            title={profile.graph_memory_mode === "agent" ? copy("graphRecallTttAgentDisabled") : isAdmin ? undefined : copy("graphTttAdminOnly")}
+          />
+        </div>
+        <div className="flex items-center justify-between gap-3">
+          <Label htmlFor="graph-consolidation-ttt-enabled" className="text-sm">{copy("graphConsolidationTtt")}</Label>
+          <Switch
+            id="graph-consolidation-ttt-enabled"
+            checked={consolidationTttEnabled}
+            onCheckedChange={(checked) => setConsolidationTttEnabled(checked === true)}
             disabled={!isAdmin || save.isPending}
-            aria-label={copy("graphTtt")}
+            aria-label={copy("graphConsolidationTtt")}
             title={isAdmin ? undefined : copy("graphTttAdminOnly")}
           />
         </div>
@@ -251,11 +341,11 @@ function GraphMemoryTttEditor({
               if (!Number.isFinite(next)) return;
               setExploreAgents(Math.trunc(next));
             }}
-            disabled={!isAdmin || !tttEnabled || save.isPending}
+            disabled={!isAdmin || !recallTttEnabled || profile.graph_memory_mode === "agent" || save.isPending}
             aria-label={copy("graphTttConcurrency")}
             title={isAdmin ? undefined : copy("graphTttAdminOnly")}
           />
-          {!tttEnabled && (
+          {!recallTttEnabled && (
             <p className="text-xs text-muted-foreground">{copy("graphTttEffectiveK")}</p>
           )}
         </div>
@@ -263,7 +353,8 @@ function GraphMemoryTttEditor({
           variant="outline"
           disabled={!isAdmin || save.isPending}
           onClick={() => save.mutate({
-            ttt_enabled: tttEnabled,
+            recall_ttt_enabled: recallTttEnabled,
+            consolidation_ttt_enabled: consolidationTttEnabled,
             explore_agents: clampExploreAgents(exploreAgents),
           })}
         >

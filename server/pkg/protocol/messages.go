@@ -25,6 +25,11 @@ const (
 	// RefID is optional: empty means create a new page; set it to target an
 	// existing note_page. Label may carry a suggested title.
 	MessagePartTypeNoteWrite = "note_write"
+	// MessagePartTypePeriodBriefInsert is the two-button insert card on a
+	// Notes-bubble Period Brief result (append below the issuing page, or
+	// create a child page). RefID is the run id; SelectedOptionID is set
+	// after the human picks append or child.
+	MessagePartTypePeriodBriefInsert = "period_brief_insert"
 	// MessagePartTypeConfirmation is the structured acknowledgement part (LRM-1523
 	// L1). A pure confirmation carries no new information, no @-directive and no
 	// action, and must not wake any agent.
@@ -233,6 +238,14 @@ type AgentMessageProjection struct {
 	InitiatorID   string                         `json:"initiator_id,omitempty"`
 	InitiatorName string                         `json:"initiator_name,omitempty"`
 	Memories      []AgentMessageMemoryProjection `json:"memories,omitempty"`
+	// Directed marks an explicit @mention of a managed Graph Memory Agent.
+	// The daemon may deliver it through a provider-native in-flight steering
+	// boundary; ordinary Messages remain queued through the coordinator.
+	Directed bool `json:"directed,omitempty"`
+	// GraphMemoryTools authorizes projection of the five managed Graph
+	// operations into this turn. It is set only from server-side managed
+	// membership and is recomputed during redelivery.
+	GraphMemoryTools bool `json:"graph_memory_tools,omitempty"`
 	// RuntimeContext is daemon-local, freshly rendered immediately before a
 	// resident turn. It must never be persisted in coordinator state or sent
 	// by the Server because it may contain scoped memory.
@@ -426,7 +439,9 @@ type ReadWorkdirFileResponsePayload struct {
 // WriteWorkdirFileRequestPayload is pushed server→daemon to replace one UTF-8
 // text file inside a confined workdir root. ExpectedContentHash, when present,
 // must match the current file hash or the daemon returns Conflict without
-// modifying the file.
+// modifying the file. Create, when true, allows the daemon to create a missing
+// file (and parent directories) instead of returning Missing; agent-file
+// callers leave it false so the RPC stays edit-only.
 type WriteWorkdirFileRequestPayload struct {
 	RequestID           string `json:"request_id"`
 	RuntimeID           string `json:"runtime_id"`
@@ -435,6 +450,7 @@ type WriteWorkdirFileRequestPayload struct {
 	Content             string `json:"content"`
 	ExpectedContentHash string `json:"expected_content_hash,omitempty"`
 	MaxBytes            int    `json:"max_bytes,omitempty"`
+	Create              bool   `json:"create,omitempty"`
 }
 
 // WriteWorkdirFileResponsePayload is the daemon→server reply for a text write.
@@ -565,21 +581,21 @@ const (
 	DaemonCapabilityRestrictedExecution      = "restricted_execution_profiles_v1"
 	DaemonCapabilityReminderVersionedCache   = "reminder_versioned_cache_v1"
 	DaemonCapabilityReminderFireRequest      = "reminder:fire-request-v2"
-	// DaemonCapabilityWorkspaceRunnerAgentReset gates Raft's discrete
+	// DaemonCapabilityWorkspaceDaemonAgentReset gates Raft's discrete
 	// agent:reset-workspace command plus Multica's terminal reset receipt.
-	DaemonCapabilityWorkspaceRunnerAgentReset = "workspace_runner_agent_reset_workspace_v1"
+	DaemonCapabilityWorkspaceDaemonAgentReset = "workspace_daemon_agent_reset_workspace_v1"
 	// DaemonCapabilityMachineUpgrade gates the machine-scoped upgrade
 	// operation protocol. Older daemons continue to receive no machine action
 	// and therefore cannot accidentally claim or complete an operation.
 	DaemonCapabilityMachineUpgrade = "machine_upgrade_v1"
-	// DaemonCapabilityWorkspaceRunnerAgentProcess selects the Raft-shaped
+	// DaemonCapabilityWorkspaceDaemonAgentProcess selects the Raft-shaped
 	// agent:start / agent:stop process-control boundary.
-	DaemonCapabilityWorkspaceRunnerAgentProcess = "workspace_runner_agent_process_v1"
-	// DaemonCapabilityWorkspaceRunnerControlPlane selects the current ready
-	// Workspace Runner as the sole carrier for heartbeat actions belonging to
+	DaemonCapabilityWorkspaceDaemonAgentProcess = "workspace_daemon_agent_process_v1"
+	// DaemonCapabilityWorkspaceDaemonControlPlane selects the current ready
+	// WorkspaceDaemon as the sole carrier for heartbeat actions belonging to
 	// that Workspace. Runtime-multiplexed WS and HTTP heartbeats remain legacy
 	// adapters for older daemons and must not execute actions for this Runner.
-	DaemonCapabilityWorkspaceRunnerControlPlane = "workspace_runner_control_plane_v1"
+	DaemonCapabilityWorkspaceDaemonControlPlane = "workspace_daemon_control_plane_v1"
 )
 
 // ReminderTimerJob is the complete server-owned timer projection cached by
@@ -1130,7 +1146,7 @@ type AgentMemoryHydrateEntry struct {
 
 // TurnCaptureUpload is the daemon-to-server, agent-credential-authenticated
 // record of one settled resident Pi turn. The daemon, rather than the
-// workspace runner, is the trust boundary which creates this payload.
+// workspace daemon, is the trust boundary which creates this payload.
 type TurnCaptureUpload struct {
 	AgentID        string                     `json:"agent_id"`
 	RuntimeID      string                     `json:"runtime_id"`

@@ -56,8 +56,8 @@ import { StarGraphClusterLayer } from "./star-graph-cluster-layer";
 import { StarGraphCollapseRelationLayer } from "./star-graph-collapse-relation-layer";
 import { StarGraphCollapseGhostLayer } from "./star-graph-collapse-ghost-layer";
 import {
-  computeEntityBounds,
   computeEntityBoundsForIds,
+  computeConstellationBounds,
   fitCameraToBounds,
   focusCameraOnEntity,
   planExpansionTransactionCamera,
@@ -281,6 +281,7 @@ export function StarGraphCanvas({
   } | null>(null);
   const entityLabels = useMemo<StarGraphEntityLabels>(
     () => ({
+      originHeader: t(($) => $.d5.star_graph.origin_header),
       tierHeaders: {
         xxl: t(($) => $.d5.star_graph.tier_headers.xxl),
         xl: t(($) => $.d5.star_graph.tier_headers.xl),
@@ -379,7 +380,10 @@ export function StarGraphCanvas({
     setCameraTransitioning(true);
   }, []);
 
-  const bounds = useMemo(() => computeEntityBounds(model.entities), [model.entities]);
+  const bounds = useMemo(
+    () => computeConstellationBounds(model.entities, model.clusters, model.frontiers),
+    [model.clusters, model.entities, model.frontiers],
+  );
 
   const typedNodeIndex = useMemo(
     () => (typedNodes ? indexTypedGraphNodes(typedNodes) : new Map()),
@@ -723,12 +727,8 @@ export function StarGraphCanvas({
         }
         case "openDetail":
           if (!focusId) return;
-          if (expansionControl?.expandableNodeIds.has(focusId)) {
-            onSelectNode?.(focusId);
-            expansionControl.onToggleNode(focusId);
-          } else {
-            onOpenNode?.(focusId);
-          }
+          if (onOpenNode) onOpenNode(focusId);
+          else onSelectNode?.(focusId);
           return;
         case "closeOverlay":
           keyboardNav?.onCloseOverlay?.(action.layer);

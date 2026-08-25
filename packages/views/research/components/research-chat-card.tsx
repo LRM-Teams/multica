@@ -6,6 +6,7 @@ import type {
   ResearchMessage,
   ResearchProductRoundCard,
 } from "@multica/core/types";
+import type { ResearchPresenceMap } from "@multica/core/research";
 import { StreamingMarkdown } from "@multica/ui/markdown";
 import { cn } from "@multica/ui/lib/utils";
 import { ActorAvatar } from "../../common/actor-avatar";
@@ -15,7 +16,7 @@ import {
   resolveClarificationResolution,
   type ClarificationResolution,
 } from "../lib/clarification-question";
-import { speakerMemberForMessage } from "../lib/research-chat-speaker";
+import { researchChatSpeakerForMessage } from "../lib/research-chat-speaker";
 import { productRoundCardFromProcessMessage } from "../lib/product-round-process-card";
 import { ResearchClarificationCard } from "./research-clarification-card";
 import { ResearchProductRoundCardView } from "./research-product-round-card";
@@ -41,6 +42,7 @@ function formatTime(iso: string): string {
 export function ResearchChatCard({
   message,
   members,
+  presence,
   messages,
   currentGoal,
   onRoundAgree,
@@ -57,6 +59,7 @@ export function ResearchChatCard({
 }: {
   message: ResearchMessage;
   members: ResearchFleetMember[];
+  presence?: ResearchPresenceMap;
   /** Full feed — used to resolve clarification answered/skipped state (LRM-822). */
   messages?: ResearchMessage[];
   currentGoal?: string;
@@ -81,20 +84,23 @@ export function ResearchChatCard({
   const { t } = useT("research");
   const isProcess = message.card_kind === "process";
   const isUser = message.sender_type === "user";
-  const member = speakerMemberForMessage(message, members);
+  const speaker = researchChatSpeakerForMessage(message, members, presence);
   const target = isUser
     ? members.find((m) => m.agent_id === message.target_agent_id)
     : undefined;
   const role = isUser
     ? t(($) => $.chat.from_you)
-    : member?.role ?? metaString(message.meta, "op") ?? message.sender_type;
+    : speaker?.role ?? metaString(message.meta, "op") ?? message.sender_type;
   const name = isUser
     ? t(($) => $.chat.you)
-    : member?.display_name ||
-      member?.name ||
-      (isProcess ? t(($) => $.chat.process) : t(($) => $.chat.system));
+    : speaker?.name ??
+      (speaker
+        ? t(($) => $.chat.agent)
+        : isProcess
+          ? t(($) => $.chat.process)
+          : t(($) => $.chat.system));
   const op = metaString(message.meta, "op");
-  const agentId = member?.agent_id;
+  const agentId = speaker?.agentId;
   const routedTo =
     isUser && message.target_agent_id
       ? target?.display_name || target?.name || t(($) => $.chat.to_lead)

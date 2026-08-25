@@ -129,10 +129,6 @@ type Handler struct {
 	DaemonHub            *daemonws.Hub
 	RunnerPresenceSource RunnerPresenceSource
 	RunnerPresenceMu     *sync.Mutex
-	// runnerActivityCursor is the in-process sticky note for this connect:
-	// how far this Computer instance has already reported Activity. It is
-	// not durable residency and dies with the process or a new instance.
-	runnerActivityCursor *runnerActivityCursorStore
 	// runnerObservations is the live Computer process: status, launch, and
 	// session for the current socket. It is not durable.
 	runnerObservations *runnerObservationStore
@@ -148,6 +144,12 @@ type Handler struct {
 	// endpoint (spec §1/§3/§14). Nil-safe: the endpoint answers 503 when
 	// unwired.
 	GraphMemoryRecall *service.GraphMemoryRecallService
+	// GraphMemoryAgentControl owns managed per-channel Memory Agent lifecycle,
+	// lease state, and reset/recovery transitions.
+	GraphMemoryAgentControl service.GraphMemoryAgentControlPlane
+	// GraphMemoryAgentGateway exposes only the five Channel-scoped Graph
+	// operations to the managed Agent data plane.
+	GraphMemoryAgentGateway *service.GraphMemoryAgentGateway
 	// GraphMemoryRecallExecutor synchronously runs accepted recalls and returns
 	// only their bounded injection. Nil preserves the pre-execution response.
 	GraphMemoryRecallExecutor *service.GraphMemoryRecallExecutor
@@ -169,6 +171,7 @@ type Handler struct {
 	AgentFleetRankService *service.AgentFleetRankService
 	AgentHonorService     *service.AgentHonorService
 	IssueService          *service.IssueService
+	IssueExecution        *service.IssueExecutionService
 	HonorService          *service.HonorService
 	EmailService          *service.EmailService
 	EnvCheckpointService  EnvCheckpointServiceAPI
@@ -323,6 +326,8 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 	taskSvc := service.NewTaskService(queries, txStarter, hub, bus, daemonHub)
 	taskSvc.Analytics = analyticsClient
 	agentFleetRankService := service.NewAgentFleetRankService(queries)
+	issueSvc := service.NewIssueService(queries, txStarter, bus, analyticsClient, taskSvc)
+	taskSvc.IssueExecution = issueSvc.Execution
 	h := &Handler{
 		Queries:                queries,
 		DB:                     executor,
@@ -331,7 +336,6 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		DaemonHub:              daemonHub,
 		RunnerPresenceSource:   daemonHub,
 		RunnerPresenceMu:       &sync.Mutex{},
-		runnerActivityCursor:   newRunnerActivityCursorStore(),
 		runnerObservations:     newRunnerObservationStore(),
 		agentRestarts:          newAgentRestartStore(),
 		Bus:                    bus,
@@ -341,7 +345,8 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		GraphMemoryAudit:       service.NewGraphMemoryAuditService(""),
 		GraphMemoryLimits:      service.LoadGraphMemoryLimits(os.Getenv),
 		AgentHonorService:      service.NewAgentHonorService(queries, agentFleetRankService),
-		IssueService:           service.NewIssueService(queries, txStarter, bus, analyticsClient, taskSvc),
+		IssueService:           issueSvc,
+		IssueExecution:         issueSvc.Execution,
 		HonorService:           service.NewHonorService(queries),
 		EmailService:           emailService,
 		UpdateStore:            NewPostgresUpdateStore(updateDB),
@@ -371,33 +376,65 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		h.GraphMemoryAudit = service.NewGraphMemoryAuditServiceWithPool(pool, "")
 		h.GraphMemoryBlobs = service.NewGraphMemoryBlobService(pool)
 		h.WorkGraph = workgraph.NewStore(pool)
+		h.WorkGraph.OnNodesReadyTx = func(ctx context.Context, tx pgx.Tx, workspaceID string, issueIDs []string) error {
+			qtx := db.New(tx)
+			for _, issueID := range issueIDs {
+				issue, err := qtx.GetIssueInWorkspace(ctx, db.GetIssueInWorkspaceParams{
+					ID: parseUUID(issueID), WorkspaceID: parseUUID(workspaceID),
+				})
+				if err != nil {
+					return err
+				}
+				if issue.Status == "backlog" {
+					issue, err = qtx.UpdateIssueStatus(ctx, db.UpdateIssueStatusParams{
+						ID: issue.ID, WorkspaceID: issue.WorkspaceID, Status: "todo",
+					})
+					if err != nil {
+						return err
+					}
+				}
+				var verifier bool
+				_ = tx.QueryRow(ctx, `SELECT EXISTS(
+					SELECT 1 FROM work_graph_node node
+					JOIN work_graph graph ON graph.id=node.graph_id
+					WHERE node.workspace_id=$1 AND node.issue_id=$2
+					  AND node.role='verifier' AND node.based_on_graph_version=graph.current_version
+				)`, issue.WorkspaceID, issue.ID).Scan(&verifier)
+				if _, err = h.IssueExecution.ReconcileTx(ctx, tx, issue, service.IssueExecutionReconcileOptions{
+					TriggerKind: "work_graph_ready", ForceFreshSession: verifier, Invalidate: true,
+				}); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
 		h.WorkGraph.OnNodesReady = func(ctx context.Context, workspaceID string, issueIDs []string) {
 			for _, issueID := range issueIDs {
 				issue, err := queries.GetIssueInWorkspace(ctx, db.GetIssueInWorkspaceParams{ID: parseUUID(issueID), WorkspaceID: parseUUID(workspaceID)})
 				if err != nil || issue.AssigneeType.String != "agent" || !issue.AssigneeID.Valid {
 					continue
 				}
+				var verifier bool
+				_ = pool.QueryRow(ctx, `SELECT EXISTS(
+					SELECT 1 FROM work_graph_node node
+					JOIN work_graph graph ON graph.id=node.graph_id
+					WHERE node.workspace_id=$1 AND node.issue_id=$2
+					  AND node.role='verifier' AND node.based_on_graph_version=graph.current_version
+				)`, issue.WorkspaceID, issue.ID).Scan(&verifier)
 				if issue.Status == "backlog" {
-					issue, err = queries.UpdateIssueStatus(ctx, db.UpdateIssueStatusParams{ID: issue.ID, Status: "todo", WorkspaceID: parseUUID(workspaceID)})
+					issue, err = h.IssueExecution.UpdateStatus(ctx, issue, "todo", service.IssueExecutionReconcileOptions{
+						TriggerKind: "dependency_ready", ForceFreshSession: verifier,
+					})
 					if err != nil {
 						continue
 					}
+					continue
 				}
-				if h.isAgentAssigneeReady(ctx, issue) {
-					var verifier bool
-					_ = pool.QueryRow(ctx, `SELECT EXISTS(
-						SELECT 1 FROM work_graph_node node
-						JOIN work_graph graph ON graph.id=node.graph_id
-						WHERE node.workspace_id=$1 AND node.issue_id=$2
-						  AND node.role='verifier' AND node.based_on_graph_version=graph.current_version
-					)`, issue.WorkspaceID, issue.ID).Scan(&verifier)
-					if verifier {
-						_, _ = taskSvc.EnqueueFreshTaskForIssue(ctx, issue)
-					} else {
-						_, _ = taskSvc.EnqueueTaskForIssue(ctx, issue)
-					}
-				}
+				_, _ = h.IssueExecution.Reconcile(ctx, issue.WorkspaceID, issue.ID, service.IssueExecutionReconcileOptions{
+					TriggerKind: "dependency_ready", ForceFreshSession: verifier,
+				})
 			}
+			_, _ = h.IssueExecution.DispatchPending(ctx, int32(len(issueIDs)))
 		}
 		h.WorkGraph.OnGraphDelta = h.wakeGoalCoordinatorForGraphDelta
 		researchStore := researchrun.NewPostgresStore(pool)

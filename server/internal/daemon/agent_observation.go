@@ -36,8 +36,8 @@ type AgentObservationData interface {
 	agentObservationData()
 }
 
-// AgentRuntimeObservationData keeps the identities of a logical launch, local
-// process, provider session, provider turn, and Runtime CAS generation distinct.
+// AgentRuntimeObservationData keeps process, provider session, provider turn,
+// and Runtime CAS generation identities distinct.
 type AgentRuntimeObservationData struct {
 	RuntimeID         string
 	ProcessInstanceID string
@@ -59,12 +59,28 @@ type AgentRuntimeStageObservationData struct {
 	ToolCallID string
 	ToolInput  map[string]any
 	StaleFor   time.Duration
+	ProviderEventAt time.Time
 }
 
 func (AgentRuntimeStageObservationData) agentObservationData() {}
 
+// AgentRuntimeDiagnosticObservationData keeps the provider's typed warning
+// separate from generic runtime-stage facts. The daemon sanitizes these
+// fields before they become Activity presentation.
+type AgentRuntimeDiagnosticObservationData struct {
+	RuntimeID string
+	Source    string
+	Reference string
+	Name      string
+	Kind      string
+	Detail    string
+}
+
+func (AgentRuntimeDiagnosticObservationData) agentObservationData() {}
+
 type AgentMessageAcceptanceObservationData struct {
 	RuntimeID string
+	AcceptedAt time.Time
 }
 
 func (AgentMessageAcceptanceObservationData) agentObservationData() {}
@@ -98,11 +114,11 @@ func (AgentErrorObservationData) agentObservationData() {}
 // AgentObservation carries one validated execution fact. The authenticated
 // Workspace scope belongs to the producer; it is not duplicated here.
 type AgentObservation struct {
-	AgentID  string
-	LaunchID string
-	Kind     AgentObservationKind
-	Data     AgentObservationData
-	At       time.Time
+	AgentID         string
+	AgentInstanceID string
+	Kind            AgentObservationKind
+	Data            AgentObservationData
+	At              time.Time
 }
 
 func (observation AgentObservation) Validate() error {
@@ -115,7 +131,7 @@ func (observation AgentObservation) Validate() error {
 
 	switch observation.Kind {
 	case AgentObservationRuntimeReady:
-		if err := observation.validateLaunchID(); err != nil {
+		if err := observation.validateAgentInstanceID(); err != nil {
 			return err
 		}
 		data, ok := observation.Data.(AgentRuntimeObservationData)
@@ -130,8 +146,8 @@ func (observation AgentObservation) Validate() error {
 		}
 		return nil
 
-	case AgentObservationRuntimeStarting, AgentObservationRuntimeWorking, AgentObservationRuntimeThinking, AgentObservationRuntimeTool, AgentObservationRuntimeCompacting, AgentObservationRuntimeCompacted, AgentObservationRuntimeCompactionStale, AgentObservationRuntimeIdle, AgentObservationRuntimeDiagnostic, AgentObservationRuntimeStalled:
-		if err := observation.validateLaunchID(); err != nil {
+	case AgentObservationRuntimeStarting, AgentObservationRuntimeWorking, AgentObservationRuntimeThinking, AgentObservationRuntimeTool, AgentObservationRuntimeCompacting, AgentObservationRuntimeCompacted, AgentObservationRuntimeCompactionStale, AgentObservationRuntimeIdle, AgentObservationRuntimeStalled:
+		if err := observation.validateAgentInstanceID(); err != nil {
 			return err
 		}
 		data, ok := observation.Data.(AgentRuntimeStageObservationData)
@@ -146,8 +162,18 @@ func (observation AgentObservation) Validate() error {
 		}
 		return nil
 
+	case AgentObservationRuntimeDiagnostic:
+		if err := observation.validateAgentInstanceID(); err != nil {
+			return err
+		}
+		data, ok := observation.Data.(AgentRuntimeDiagnosticObservationData)
+		if !ok || strings.TrimSpace(data.RuntimeID) == "" || strings.TrimSpace(data.Name) == "" {
+			return observationDataTypeError(observation.Kind)
+		}
+		return nil
+
 	case AgentObservationMessageBodyAccepted:
-		if err := observation.validateLaunchID(); err != nil {
+		if err := observation.validateAgentInstanceID(); err != nil {
 			return err
 		}
 		data, ok := observation.Data.(AgentMessageAcceptanceObservationData)
@@ -160,7 +186,7 @@ func (observation AgentObservation) Validate() error {
 		return nil
 
 	case AgentObservationFreshnessHeld:
-		if err := observation.validateLaunchID(); err != nil {
+		if err := observation.validateAgentInstanceID(); err != nil {
 			return err
 		}
 		data, ok := observation.Data.(AgentFreshnessHoldObservationData)
@@ -173,7 +199,7 @@ func (observation AgentObservation) Validate() error {
 		return nil
 
 	case AgentObservationDraftSent:
-		if err := observation.validateLaunchID(); err != nil {
+		if err := observation.validateAgentInstanceID(); err != nil {
 			return err
 		}
 		data, ok := observation.Data.(AgentDraftSentObservationData)
@@ -186,7 +212,7 @@ func (observation AgentObservation) Validate() error {
 		return nil
 
 	case AgentObservationError, AgentObservationOffline:
-		if err := observation.validateLaunchID(); err != nil {
+		if err := observation.validateAgentInstanceID(); err != nil {
 			return err
 		}
 		data, ok := observation.Data.(AgentErrorObservationData)
@@ -206,9 +232,9 @@ func (observation AgentObservation) Validate() error {
 	}
 }
 
-func (observation AgentObservation) validateLaunchID() error {
-	if strings.TrimSpace(observation.LaunchID) == "" {
-		return errors.New("Agent execution observation launch identity is required")
+func (observation AgentObservation) validateAgentInstanceID() error {
+	if strings.TrimSpace(observation.AgentInstanceID) == "" {
+		return errors.New("Agent execution observation local instance identity is required")
 	}
 	return nil
 }

@@ -1,5 +1,22 @@
 import { Extension } from "@tiptap/core";
 
+interface SuggestionPluginState {
+  active: true;
+  decorationId: string;
+  range: { from: number; to: number };
+}
+
+function isActiveSuggestionState(value: unknown): value is SuggestionPluginState {
+  if (!value || typeof value !== "object") return false;
+  const state = value as Partial<SuggestionPluginState>;
+  return (
+    state.active === true &&
+    typeof state.decorationId === "string" &&
+    typeof state.range?.from === "number" &&
+    typeof state.range.to === "number"
+  );
+}
+
 /**
  * `onSubmit` must return true when it actually handled the event and false
  * when there's no submit handler wired up. That lets us fall through to the
@@ -27,6 +44,16 @@ export function createSubmitExtension(
           if (editor.view.composing) return false;
           // Let Enter insert a newline inside a code block.
           if (editor.isActive("codeBlock")) return false;
+          // Suggestion plugins own Enter while their popup is active. Returning
+          // false lets the matching @, #, or / plugin insert its highlighted
+          // item instead of allowing chat-style Enter to send the draft.
+          if (
+            editor.state.plugins.some((plugin) =>
+              isActiveSuggestionState(plugin.getState(editor.state)),
+            )
+          ) {
+            return false;
+          }
           return onSubmit();
         };
       }

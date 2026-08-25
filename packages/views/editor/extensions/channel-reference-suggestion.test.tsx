@@ -1,7 +1,10 @@
 // @vitest-environment node
 import { describe, it, expect, vi } from "vitest";
-import type { QueryClient } from "@tanstack/react-query";
-import { channelKeys } from "@multica/core/channels/queries";
+import type { InfiniteData, QueryClient } from "@tanstack/react-query";
+import {
+  conversationKeys,
+  type ConversationListResponse,
+} from "@multica/core/conversations";
 import type { Channel } from "@multica/core/types";
 import type { MentionItem } from "./mention-suggestion";
 import { createChannelReferenceSuggestion } from "./channel-reference-suggestion";
@@ -28,14 +31,22 @@ function fakeChannel(overrides: Partial<Channel>): Channel {
 
 function fakeQc(channels: Channel[]): QueryClient {
   const map = new Map<string, unknown>();
-  map.set(JSON.stringify(channelKeys.list("ws-1")), channels);
+  const data: InfiniteData<ConversationListResponse> = {
+    pages: [
+      {
+        items: channels.map((channel) => ({ kind: "channel" as const, channel })),
+      },
+    ],
+    pageParams: [null],
+  };
+  map.set(JSON.stringify(conversationKeys.list("ws-1")), data);
   return {
     getQueryData: (key: readonly unknown[]) => map.get(JSON.stringify(key)),
   } as unknown as QueryClient;
 }
 
 describe("createChannelReferenceSuggestion", () => {
-  it("returns cached group channels matching the query, filtering out DMs and archived channels", () => {
+  it("returns cached group channels matching the query, filtering out DMs and archived channels", async () => {
     const qc = fakeQc([
       fakeChannel({ id: "c1", name: "general" }),
       fakeChannel({ id: "c2", name: "engineering", description: "eng talk" }),
@@ -46,21 +57,21 @@ describe("createChannelReferenceSuggestion", () => {
     ]);
 
     const config = createChannelReferenceSuggestion(qc);
-    const items = config.items!({ query: "eng", editor: {} as never }) as MentionItem[];
+    const items = await config.items!({ query: "eng", editor: {} as never });
 
     expect(items).toEqual([
       expect.objectContaining({ id: "c2", label: "engineering", type: "channel" }),
     ]);
   });
 
-  it("returns every eligible channel when the query is empty", () => {
+  it("returns every eligible channel when the query is empty", async () => {
     const qc = fakeQc([
       fakeChannel({ id: "c1", name: "general" }),
       fakeChannel({ id: "c2", name: "engineering" }),
     ]);
 
     const config = createChannelReferenceSuggestion(qc);
-    const items = config.items!({ query: "", editor: {} as never }) as MentionItem[];
+    const items = await config.items!({ query: "", editor: {} as never });
 
     expect(items.map((i) => i.id)).toEqual(["c1", "c2"]);
   });
@@ -107,4 +118,5 @@ describe("createChannelReferenceSuggestion", () => {
     const mergedSuggestion = configured.options.suggestion;
     expect(mergedSuggestion.allow({} as never)).toBe(true);
   });
+
 });

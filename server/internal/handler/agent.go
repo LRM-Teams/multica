@@ -89,10 +89,9 @@ type AgentResponse struct {
 	// ManagedRole is reserved for independent platform-managed agent classes
 	// such as research_fleet. Channel manager identity comes exclusively from
 	// channel_member.role.
-	ManagedRole        string `json:"managed_role,omitempty"`
-	WorkspaceRole      string `json:"workspace_role"`
-	MaxConcurrentTasks int32  `json:"max_concurrent_tasks"`
-	Model              string `json:"model"`
+	ManagedRole   string `json:"managed_role,omitempty"`
+	WorkspaceRole string `json:"workspace_role"`
+	Model         string `json:"model"`
 	// ThinkingLevel is the runtime-native reasoning/effort token persisted
 	// for this agent (empty = use runtime default). The picker is per-runtime
 	// per-model; the API never normalizes across providers. See MUL-2339.
@@ -155,34 +154,33 @@ func agentToResponse(a db.Agent) AgentResponse {
 		managedRole = a.ManagedRole.String
 	}
 	return AgentResponse{
-		ID:                 uuidToString(a.ID),
-		WorkspaceID:        uuidToString(a.WorkspaceID),
-		RuntimeID:          uuidToString(a.RuntimeID),
-		Name:               a.Name,
-		DisplayName:        agentDisplayName(a),
-		Description:        a.Description,
-		Instructions:       a.Instructions,
-		AvatarURL:          &a.AvatarUrl,
-		AvatarSource:       a.AvatarSource,
-		RuntimeMode:        a.RuntimeMode,
-		RuntimeName:        defaultAgentRuntimeName(a.RuntimeMode),
-		RuntimeConfig:      rc,
-		CustomArgs:         customArgs,
-		McpConfig:          mcpConfig,
-		HasCustomEnv:       envKeyCount > 0,
-		CustomEnvKeyCount:  envKeyCount,
-		Status:             a.Status,
-		WorkspaceRole:      a.WorkspaceRole,
-		MaxConcurrentTasks: a.MaxConcurrentTasks,
-		Model:              a.Model.String,
-		ThinkingLevel:      a.ThinkingLevel.String,
-		OwnerID:            uuidToPtr(a.OwnerID),
-		ManagedRole:        managedRole,
-		Skills:             []AgentSkillSummary{},
-		CreatedAt:          timestampToString(a.CreatedAt),
-		UpdatedAt:          timestampToString(a.UpdatedAt),
-		ArchivedAt:         timestampToPtr(a.ArchivedAt),
-		ArchivedBy:         uuidToPtr(a.ArchivedBy),
+		ID:                uuidToString(a.ID),
+		WorkspaceID:       uuidToString(a.WorkspaceID),
+		RuntimeID:         uuidToString(a.RuntimeID),
+		Name:              a.Name,
+		DisplayName:       agentDisplayName(a),
+		Description:       a.Description,
+		Instructions:      a.Instructions,
+		AvatarURL:         &a.AvatarUrl,
+		AvatarSource:      a.AvatarSource,
+		RuntimeMode:       a.RuntimeMode,
+		RuntimeName:       defaultAgentRuntimeName(a.RuntimeMode),
+		RuntimeConfig:     rc,
+		CustomArgs:        customArgs,
+		McpConfig:         mcpConfig,
+		HasCustomEnv:      envKeyCount > 0,
+		CustomEnvKeyCount: envKeyCount,
+		Status:            a.Status,
+		WorkspaceRole:     a.WorkspaceRole,
+		Model:             a.Model.String,
+		ThinkingLevel:     a.ThinkingLevel.String,
+		OwnerID:           uuidToPtr(a.OwnerID),
+		ManagedRole:       managedRole,
+		Skills:            []AgentSkillSummary{},
+		CreatedAt:         timestampToString(a.CreatedAt),
+		UpdatedAt:         timestampToString(a.UpdatedAt),
+		ArchivedAt:        timestampToPtr(a.ArchivedAt),
+		ArchivedBy:        uuidToPtr(a.ArchivedBy),
 	}
 }
 
@@ -979,21 +977,20 @@ func (h *Handler) GetAgent(w http.ResponseWriter, r *http.Request) {
 
 type CreateAgentRequest struct {
 	// Name is the permanent Agent name chosen at creation and used for mentions.
-	Name               string                `json:"name"`
-	DisplayName        string                `json:"display_name"`
-	Description        string                `json:"description"`
-	Instructions       string                `json:"instructions"`
-	AvatarSelection    *AgentAvatarSelection `json:"avatar_selection"`
-	RuntimeID          string                `json:"runtime_id"`
-	RuntimeConfig      any                   `json:"runtime_config"`
-	CustomEnv          map[string]string     `json:"custom_env"`
-	CustomArgs         []string              `json:"custom_args"`
-	McpConfig          json.RawMessage       `json:"mcp_config"`
-	MaxConcurrentTasks int32                 `json:"max_concurrent_tasks"`
-	Model              string                `json:"model"`
-	ThinkingLevel      string                `json:"thinking_level"`
-	InitialNotes       map[string]string     `json:"initial_notes"`
-	InitialMemory      map[string]string     `json:"initial_memory"`
+	Name            string                `json:"name"`
+	DisplayName     string                `json:"display_name"`
+	Description     string                `json:"description"`
+	Instructions    string                `json:"instructions"`
+	AvatarSelection *AgentAvatarSelection `json:"avatar_selection"`
+	RuntimeID       string                `json:"runtime_id"`
+	RuntimeConfig   any                   `json:"runtime_config"`
+	CustomEnv       map[string]string     `json:"custom_env"`
+	CustomArgs      []string              `json:"custom_args"`
+	McpConfig       json.RawMessage       `json:"mcp_config"`
+	Model           string                `json:"model"`
+	ThinkingLevel   string                `json:"thinking_level"`
+	InitialNotes    map[string]string     `json:"initial_notes"`
+	InitialMemory   map[string]string     `json:"initial_memory"`
 	// Template records which template slug was used to seed this agent
 	// (e.g. "coding" / "planning" / "writing" / "assistant"). Empty when
 	// the caller didn't come from a template picker — the `agent_created`
@@ -1077,10 +1074,6 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "runtime_id is required")
 		return
 	}
-	if req.MaxConcurrentTasks == 0 {
-		req.MaxConcurrentTasks = 6
-	}
-
 	runtimeUUID, ok := parseUUIDOrBadRequest(w, req.RuntimeID, "runtime_id")
 	if !ok {
 		return
@@ -1199,19 +1192,18 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	createParams := db.CreateAgentParams{
-		WorkspaceID:        wsUUID,
-		Description:        req.Description,
-		Instructions:       req.Instructions,
-		RuntimeMode:        runtime.RuntimeMode,
-		RuntimeConfig:      rc,
-		RuntimeID:          runtime.ID,
-		MaxConcurrentTasks: req.MaxConcurrentTasks,
-		OwnerID:            parseUUID(ownerID),
-		CustomEnv:          ce,
-		CustomArgs:         ca,
-		McpConfig:          mc,
-		Model:              pgtype.Text{String: strings.TrimSpace(req.Model), Valid: strings.TrimSpace(req.Model) != ""},
-		ThinkingLevel:      pgtype.Text{String: req.ThinkingLevel, Valid: req.ThinkingLevel != ""},
+		WorkspaceID:   wsUUID,
+		Description:   req.Description,
+		Instructions:  req.Instructions,
+		RuntimeMode:   runtime.RuntimeMode,
+		RuntimeConfig: rc,
+		RuntimeID:     runtime.ID,
+		OwnerID:       parseUUID(ownerID),
+		CustomEnv:     ce,
+		CustomArgs:    ca,
+		McpConfig:     mc,
+		Model:         pgtype.Text{String: strings.TrimSpace(req.Model), Valid: strings.TrimSpace(req.Model) != ""},
+		ThinkingLevel: pgtype.Text{String: req.ThinkingLevel, Valid: req.ThinkingLevel != ""},
 	}
 	if err := service.RequireAgentModel(createParams.Model.String); err != nil {
 		writeError(w, http.StatusBadRequest, "model is required")
@@ -1335,11 +1327,10 @@ type UpdateAgentRequest struct {
 	// actually unchanged, and so a client that round-tripped a
 	// previously-returned masked map cannot silently overwrite real
 	// secret values with literal `****`. See MUL-2600.
-	CustomArgs         *[]string        `json:"custom_args"`
-	McpConfig          *json.RawMessage `json:"mcp_config"`
-	Status             *string          `json:"status"`
-	MaxConcurrentTasks *int32           `json:"max_concurrent_tasks"`
-	Model              *string          `json:"model"`
+	CustomArgs *[]string        `json:"custom_args"`
+	McpConfig  *json.RawMessage `json:"mcp_config"`
+	Status     *string          `json:"status"`
+	Model      *string          `json:"model"`
 	// ThinkingLevel is treated as a tri-state per-MUL-2339:
 	//   - field omitted → no change (leave existing value alone)
 	//   - field present with "" → explicit clear (use runtime default)
@@ -1414,11 +1405,6 @@ func broadcastAgentResponse(resp AgentResponse) AgentResponse {
 // description, model, thinking_level, being chatted with or assigned work)
 // is unconditional for every workspace member; how the agent is built stays
 // admin|owner. See canAccessAgentInternals.
-//
-// MaxConcurrentTasks is deliberately NOT in this bucket (nor treated as
-// unconditional usage info) — Frank flagged 2026-07-30 16:43 that it may be
-// entirely dead now that execution is single-session; pending confirmation
-// (batch 3), it's left exactly as-is rather than guessed into either side.
 func redactAgentInternals(resp *AgentResponse) {
 	resp.Instructions = ""
 	resp.RuntimeConfig = nil
@@ -1441,8 +1427,8 @@ func redactMcpConfig(resp *AgentResponse) {
 // handlers already gate on actorType — mutation handlers
 // (create/update/archive/restore) must apply the same rule, otherwise
 // an agent with a host owner/admin token can do an unrelated mutation
-// (e.g. flip max_concurrent_tasks) on a target agent and harvest the
-// target's mcp_config from the mutation response. MUL-2600.
+// (e.g. flip status) on a target agent and harvest the target's
+// mcp_config from the mutation response. MUL-2600.
 func redactAgentResponseForActor(resp *AgentResponse, actorType string) {
 	if actorType == "agent" {
 		redactMcpConfig(resp)
@@ -1661,9 +1647,6 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Status != nil {
 		params.Status = pgtype.Text{String: *req.Status, Valid: true}
-	}
-	if req.MaxConcurrentTasks != nil {
-		params.MaxConcurrentTasks = pgtype.Int4{Int32: *req.MaxConcurrentTasks, Valid: true}
 	}
 	if req.Model != nil {
 		params.Model = pgtype.Text{String: *req.Model, Valid: true}

@@ -159,7 +159,7 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 	if runtime.Provider == agent.ProviderPi {
 		addPiMemoryFastModeEnv(agentEnv)
 	}
-	residentLaunchID := "resident-" + uuid.NewString()
+	residentAgentInstanceID := "resident-" + uuid.NewString()
 	// Resume only the id last applied by agent:start for this DaemonCore.
 	// Do not invent a disk-backed pointer; a new process starts empty until
 	// the next start payload, same as Raft idleRestartSnapshots.
@@ -202,7 +202,7 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 		return fmt.Errorf("resident Message runtime identity: %w", err)
 	}
 
-	lease, err := d.canonicalRuntimes.acquire(canonicalAgentRuntimeAcquireRequest{
+	lease, err := d.canonicalRuntimes.acquire(agentRuntimeAcquireRequest{
 		Identity:           identity,
 		CanonicalSessionID: resumeSessionID,
 		BackendConfig: agent.Config{
@@ -229,7 +229,7 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 			transport, err := d.prepareAgentProxyCLITransport(
 				InboxKey{WorkspaceID: config.WorkspaceID, AgentID: config.Agent.ID},
 				config.RuntimeID,
-				residentLaunchID,
+				residentAgentInstanceID,
 				selfBin,
 			)
 			if err != nil {
@@ -239,7 +239,6 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 			environment["PATH"] = filepath.Dir(transport.wrapperPath) + string(os.PathListSeparator) + environment["PATH"]
 			return func() { _ = transport.Close() }, nil
 		},
-		Context: ctx,
 	})
 	if err != nil {
 		return fmt.Errorf("acquire resident Message runtime: %w", err)
@@ -266,7 +265,7 @@ func (d *Daemon) ensureResidentProviderProcess(ctx context.Context, agentID, run
 		startErr := fmt.Errorf("start resident provider process: %w", err)
 		cleanupErr := d.canonicalRuntimes.invalidateSession(agentID, runtimeID)
 		if errors.Is(cleanupErr, ErrCanonicalAgentRuntimeBusy) {
-			cleanupErr = d.canonicalRuntimes.forceInvalidateSession(agentID, runtimeID)
+			cleanupErr = d.canonicalRuntimes.beginResidentTermination(agentID, runtimeID)
 		}
 		if d.turnScopeMemory != nil {
 			d.turnScopeMemory.clearResident(agentID, runtimeID)

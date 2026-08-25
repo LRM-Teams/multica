@@ -78,6 +78,8 @@ export interface StarGraphNodeProps {
   /** Grid position on the canvas (left/top in % or px). Optional. */
   style?: React.CSSProperties;
   onOpen?: () => void;
+  /** Toggle the server-backed disclosure without opening the node detail. */
+  onToggleExpanded?: () => void;
   className?: string;
 }
 
@@ -105,6 +107,7 @@ export function StarGraphNode({
   tabIndex,
   style,
   onOpen,
+  onToggleExpanded,
   className,
 }: StarGraphNodeProps) {
   const token = starGraphTierToken(tier);
@@ -141,8 +144,32 @@ export function StarGraphNode({
       aria-busy={busy || undefined}
       aria-pressed={selected || undefined}
       aria-expanded={expanded}
+      aria-keyshortcuts={onToggleExpanded ? "Shift+Enter" : undefined}
       aria-invalid={invalid || undefined}
-      onClick={onOpen}
+      onClick={(event) => {
+        const target = event.target;
+        if (
+          onToggleExpanded &&
+          target instanceof Element &&
+          target.closest("[data-star-graph-disclosure]")
+        ) {
+          onToggleExpanded();
+          return;
+        }
+        onOpen?.();
+      }}
+      onKeyDown={(event) => {
+        if (
+          !onToggleExpanded ||
+          !event.shiftKey ||
+          (event.key !== "Enter" && event.key !== " ")
+        ) {
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        onToggleExpanded();
+      }}
       data-tier={tier}
       data-semantic-role={semanticRole}
       data-state={state}
@@ -223,6 +250,7 @@ export function StarGraphNode({
       {expanded !== undefined ? (
         <span
           data-testid="star-graph-disclosure"
+          data-star-graph-disclosure
           data-disclosure-state={
             invalid ? "failed" : busy ? "loading" : expanded ? "expanded" : "collapsed"
           }
@@ -263,6 +291,7 @@ function SNodeContent({
         <span
           data-testid="star-graph-agent-badge"
           className="mt-0.5 inline-grid min-w-[1.4rem] place-items-center rounded-full border px-1 text-[0.5rem] font-black"
+          title={agentBadge}
         >
           {agentBadge}
         </span>

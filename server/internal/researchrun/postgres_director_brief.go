@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -51,7 +52,7 @@ func (s *PostgresStore) LoadDirectorBriefFacts(ctx context.Context, in StartV6Di
 			rows.Close()
 			return DirectorBriefFacts{}, err
 		}
-		item := map[string]any{"agent_id": agentID, "membership_id": membershipID, "state": state, "mission_summary": mission, "steward_node_count": stewardCount}
+		item := map[string]any{"agent_id": agentID, "membership_id": membershipID, "state": state, "mission_summary": truncateV6BriefText(mission, 512), "steward_node_count": stewardCount}
 		if activeWork != "" {
 			item["active_work_item_id"] = activeWork
 		}
@@ -101,19 +102,34 @@ func (s *PostgresStore) LoadDirectorBriefFacts(ctx context.Context, in StartV6Di
 		}
 		facts.Branches = append(facts.Branches, item)
 	}
-	rows, err = s.pool.Query(ctx, `SELECT w.id::text,w.kind,w.status,COALESCE(NULLIF(w.target_kind,''),w.kind),w.updated_at,COALESCE(w.assigned_agent_id::text,''),COALESCE((SELECT array_agg(b.branch_id::text ORDER BY b.branch_id) FROM research_v6_work_item_branch b WHERE b.workspace_id=w.workspace_id AND b.session_id=w.session_id AND b.work_item_id=w.id),'{}') FROM research_work_item w WHERE w.workspace_id=$1::uuid AND w.session_id=$2::uuid AND w.kind IN ('research','match','discussion','integration','director','report','review') ORDER BY w.updated_at,w.id LIMIT 512`, in.WorkspaceID, in.RunID)
+	rows, err = s.pool.Query(ctx, `SELECT w.id::text,w.kind,w.status,
+		COALESCE(NULLIF(left(w.reason,512),''),NULLIF(w.target_kind,''),w.kind),w.updated_at,
+		COALESCE(w.assigned_agent_id::text,''),w.attempt_count,w.max_attempts,
+		COALESCE(latest_attempt.status,''),COALESCE(latest_attempt.failure_class,''),COALESCE(left(latest_attempt.diagnostics,32768),''),
+		COALESCE(w.terminal_reason_code,''),COALESCE(left(w.terminal_reason_detail,32768),''),
+		COALESCE((SELECT array_agg(b.branch_id::text ORDER BY b.branch_id) FROM research_v6_work_item_branch b WHERE b.workspace_id=w.workspace_id AND b.session_id=w.session_id AND b.work_item_id=w.id),'{}')
+		FROM research_work_item w
+		LEFT JOIN LATERAL (
+			SELECT attempt.status,attempt.failure_class,attempt.diagnostics
+			FROM research_work_item_attempt attempt
+			WHERE attempt.workspace_id=w.workspace_id AND attempt.session_id=w.session_id AND attempt.work_item_id=w.id
+			ORDER BY attempt.attempt_number DESC LIMIT 1
+		) latest_attempt ON true
+		WHERE w.workspace_id=$1::uuid AND w.session_id=$2::uuid AND w.kind IN ('research','match','discussion','integration','director','report','review') ORDER BY w.updated_at,w.id LIMIT 512`, in.WorkspaceID, in.RunID)
 	if err != nil {
 		return DirectorBriefFacts{}, err
 	}
 	for rows.Next() {
-		var id, kind, state, summary, agentID string
+		var id, kind, state, summary, agentID, attemptState, failureClass, failureDiagnostics, terminalReasonCode, terminalReasonDetail string
+		var attemptCount, maxAttempts int
 		var branchIDs []string
 		var updated time.Time
-		if err = rows.Scan(&id, &kind, &state, &summary, &updated, &agentID, &branchIDs); err != nil {
+		if err = rows.Scan(&id, &kind, &state, &summary, &updated, &agentID, &attemptCount, &maxAttempts, &attemptState, &failureClass, &failureDiagnostics, &terminalReasonCode, &terminalReasonDetail, &branchIDs); err != nil {
 			rows.Close()
 			return DirectorBriefFacts{}, err
 		}
 		state = directorBriefWorkState(state)
+		summary = directorBriefWorkSummary(summary, state, attemptCount, maxAttempts, attemptState, failureClass, failureDiagnostics, terminalReasonCode, terminalReasonDetail)
 		item := map[string]any{"id": id, "kind": kind, "state": state, "summary": summary, "updated_at": updated.UTC().Format(time.RFC3339Nano)}
 		if agentID != "" {
 			item["assigned_agent_id"] = agentID
@@ -162,39 +178,100 @@ func (s *PostgresStore) LoadDirectorBriefFacts(ctx context.Context, in StartV6Di
 	return facts, nil
 }
 
+func directorBriefWorkSummary(mission, state string, attemptCount, maxAttempts int, attemptState, failureClass, failureDiagnostics, terminalReasonCode, terminalReasonDetail string) string {
+	parts := []string{strings.TrimSpace(mission)}
+	if state == "failed" || failureClass != "" || terminalReasonCode != "" {
+		parts = append(parts, fmt.Sprintf("尝试 %d/%d", attemptCount, maxAttempts))
+		if attemptState != "" {
+			parts = append(parts, "最近尝试状态 "+attemptState)
+		}
+		if failureClass != "" {
+			parts = append(parts, "失败分类 "+failureClass)
+		}
+		if failureDiagnostics != "" {
+			parts = append(parts, "失败诊断 "+failureDiagnostics)
+		}
+		if terminalReasonCode != "" {
+			parts = append(parts, "终止原因 "+terminalReasonCode)
+		}
+		if terminalReasonDetail != "" && terminalReasonDetail != failureDiagnostics {
+			parts = append(parts, terminalReasonDetail)
+		}
+	}
+	return truncateV6BriefText(strings.Join(parts, "；"), 512)
+}
+
 func (s *PostgresStore) loadV6BranchFrontierBrief(ctx context.Context, workspaceID, runID, branchID string) ([]any, bool, error) {
-	rows, err := s.pool.Query(ctx, `SELECT v.id::text,v.artifact_id::text,v.version,v.content_hash,iv.tier,iv.catalog_summary,iv.brief_summary,
+	rows, err := s.pool.Query(ctx, `WITH frontier_content AS (
+		SELECT rn.artifact_version_id,'result_s'::text AS node_kind,'S'::text AS tier,rn.catalog_summary,rn.brief_summary,rn.open_questions,
+			rn.conclusion_state,
+			CASE rn.integration_state WHEN 'candidate' THEN 'candidate' WHEN 'discussing' THEN 'discussing' WHEN 'excluded' THEN 'excluded' WHEN 'absorbed' THEN 'excluded' ELSE 'unmatched' END AS integration_state,
+			rn.accepted_at AS content_created_at,rn.id AS content_id
+		FROM research_result_node rn WHERE rn.workspace_id=$1::uuid AND rn.session_id=$2::uuid
+		UNION ALL
+		SELECT iv.artifact_version_id,'insight'::text,iv.tier,iv.catalog_summary,iv.brief_summary,iv.open_questions,
+			CASE iv.status WHEN 'accepted' THEN 'accepted' WHEN 'challenged' THEN 'challenged' WHEN 'refuted' THEN 'refuted' ELSE 'invalid' END,
+			CASE WHEN iv.status IN ('refuted','invalid','terminal') THEN 'excluded' WHEN iv.discussion_id IS NOT NULL THEN 'discussing' WHEN iv.integration_round_id IS NOT NULL THEN 'candidate' ELSE 'unmatched' END,
+			iv.created_at,iv.id
+		FROM research_insight_version iv WHERE iv.workspace_id=$1::uuid AND iv.session_id=$2::uuid
+	)
+		SELECT v.id::text,content.content_id::text,v.content_hash,content.node_kind,content.tier,content.catalog_summary,content.brief_summary,content.open_questions,
 		COALESCE((SELECT steward.agent_id::text FROM research_node_steward_assignment steward WHERE steward.session_id=f.session_id AND steward.node_artifact_version_id=f.node_artifact_version_id AND steward.status='active' ORDER BY steward.generation DESC LIMIT 1),
 		         (SELECT assignment.director_agent_id::text FROM research_session session JOIN research_director_assignment assignment ON assignment.id=session.current_director_assignment_id WHERE session.id=f.session_id)),
-		CASE iv.status WHEN 'accepted' THEN 'accepted' WHEN 'challenged' THEN 'challenged' WHEN 'refuted' THEN 'refuted' ELSE 'invalid' END,
-		CASE WHEN iv.status IN ('refuted','invalid','terminal') THEN 'excluded' WHEN iv.discussion_id IS NOT NULL THEN 'discussing' WHEN iv.integration_round_id IS NOT NULL THEN 'candidate' ELSE 'unmatched' END,
+		content.conclusion_state,content.integration_state,
 		COALESCE((SELECT array_agg(DISTINCT binding.branch_id::text ORDER BY binding.branch_id::text) FROM research_node_branch binding WHERE binding.session_id=f.session_id AND binding.node_artifact_version_id=f.node_artifact_version_id),'{}')
 		FROM research_branch_frontier f JOIN research_artifact_version v ON v.id=f.node_artifact_version_id
-		JOIN research_insight_version iv ON iv.artifact_version_id=v.id
+		JOIN frontier_content content ON content.artifact_version_id=v.id
 		WHERE f.workspace_id=$1::uuid AND f.session_id=$2::uuid AND f.branch_id=$3::uuid AND f.removed_by_event_sequence IS NULL
-		ORDER BY CASE iv.tier WHEN 'XXL' THEN 5 WHEN 'XL' THEN 4 WHEN 'L' THEN 3 WHEN 'M' THEN 2 ELSE 1 END DESC,iv.created_at DESC,iv.id LIMIT 65`, workspaceID, runID, branchID)
+		ORDER BY CASE content.tier WHEN 'XXL' THEN 5 WHEN 'XL' THEN 4 WHEN 'L' THEN 3 WHEN 'M' THEN 2 ELSE 1 END DESC,content.content_created_at DESC,content.content_id LIMIT 65`, workspaceID, runID, branchID)
 	if err != nil {
 		return nil, false, err
 	}
 	defer rows.Close()
 	frontier := []any{}
 	for rows.Next() {
-		var versionID, artifactID, contentHash, tier, catalog, brief, steward, conclusion, integration string
-		var revision int
+		var versionID, artifactID, contentHash, nodeKind, tier, catalog, brief, steward, conclusion, integration string
+		var openQuestions json.RawMessage
 		var branchIDs []string
-		if err = rows.Scan(&versionID, &artifactID, &revision, &contentHash, &tier, &catalog, &brief, &steward, &conclusion, &integration, &branchIDs); err != nil {
+		if err = rows.Scan(&versionID, &artifactID, &contentHash, &nodeKind, &tier, &catalog, &brief, &openQuestions, &steward, &conclusion, &integration, &branchIDs); err != nil {
 			return nil, false, err
 		}
 		if len(frontier) == 64 {
 			return frontier, true, nil
 		}
 		frontier = append(frontier, map[string]any{
-			"node":            map[string]any{"id": artifactID, "version_id": versionID, "revision": revision, "tier": tier, "content_hash": contentHash},
-			"catalog_summary": catalog, "brief_summary": brief, "steward_agent_id": steward, "branch_ids": branchIDs,
+			"node":            map[string]any{"kind": nodeKind, "id": artifactID, "version_id": versionID, "tier": tier, "content_hash": contentHash},
+			"catalog_summary": catalog, "brief_summary": directorBriefFrontierSummary(brief, openQuestions), "steward_agent_id": steward, "branch_ids": branchIDs,
 			"conclusion_state": conclusion, "integration_state": integration,
 		})
 	}
 	return frontier, false, rows.Err()
+}
+
+const directorBriefOpenQuestionsMarker = "待回答问题："
+
+func directorBriefFrontierSummary(summary string, rawOpenQuestions json.RawMessage) string {
+	base := truncateV6BriefText(summary, 32768)
+	var questions []string
+	if json.Unmarshal(rawOpenQuestions, &questions) != nil {
+		return base
+	}
+	clean := make([]string, 0, len(questions))
+	for _, question := range questions {
+		if question = strings.TrimSpace(question); question != "" {
+			clean = append(clean, question)
+		}
+	}
+	if len(clean) == 0 {
+		return base
+	}
+	questionText := truncateV6BriefText(strings.Join(clean, "\n- "), 8192)
+	questionBlock := directorBriefOpenQuestionsMarker + "\n- " + questionText
+	baseLimit := 32768 - len([]rune(questionBlock)) - 2
+	if baseLimit < 1 {
+		return truncateV6BriefText(questionBlock, 32768)
+	}
+	return truncateV6BriefText(base, baseLimit) + "\n\n" + questionBlock
 }
 
 func (s *PostgresStore) loadV6DirectorControlFacts(ctx context.Context, workspaceID, runID string, facts *DirectorBriefFacts) error {
@@ -295,10 +372,11 @@ func directorBriefControlState(state string) string {
 
 func truncateV6BriefText(value string, limit int) string {
 	value = strings.TrimSpace(value)
-	if len(value) <= limit {
+	runes := []rune(value)
+	if len(runes) <= limit {
 		return value
 	}
-	return value[:limit]
+	return string(runes[:limit])
 }
 
 func jsonObjectOrEmpty(raw json.RawMessage) any {
@@ -359,6 +437,7 @@ func (s *PostgresStore) PersistDirectorCycle(ctx context.Context, in StartV6Dire
 	}
 	cycle := V6DirectorCycle{ID: uuid.NewString(), RunID: in.RunID, AssignmentID: assignmentID, BriefID: brief.BriefID, BriefHash: brief.BriefHash, Generation: generation, PageCount: len(brief.Pages), StateVersion: 1, Status: "pending", WorkItemID: uuid.NewString()}
 	directorPayload, err := json.Marshal(map[string]any{"brief_id": brief.BriefID, "brief_hash": brief.BriefHash,
+		"mission_prompt":       "研读最新调研简报，规划并派发下一步调研工作。",
 		"task_specific_schema": map[string]any{"payload_schemas": v6DirectorActionPayloadSchemas()}})
 	if err != nil {
 		return V6DirectorCycle{}, err
@@ -403,6 +482,11 @@ func v6DirectorActionPayloadSchemas() map[string]any {
 	uuidValue := map[string]any{"type": "string", "format": "uuid"}
 	hashValue := map[string]any{"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
 	jsonObject := map[string]any{"type": "object"}
+	nodeRef := map[string]any{"type": "object", "additionalProperties": false, "required": []string{"kind", "id", "version_id", "tier", "content_hash"}, "properties": map[string]any{
+		"kind": map[string]any{"enum": []string{"result_s", "insight"}}, "id": uuidValue, "version_id": uuidValue,
+		"tier": map[string]any{"enum": []string{"S", "M", "L", "XL", "XXL"}}, "content_hash": hashValue}}
+	branchRef := map[string]any{"type": "object", "additionalProperties": false, "required": []string{"id", "state_version"}, "properties": map[string]any{
+		"id": uuidValue, "state_version": map[string]any{"type": "integer", "minimum": 0}}}
 	return map[string]any{
 		"no_op.v1": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"reason"}, "properties": map[string]any{"message_id": map[string]any{"type": "string", "format": "uuid"}, "reason": text}},
 		"steering_assessment.v1": map[string]any{"type": "object", "additionalProperties": false,
@@ -425,6 +509,9 @@ func v6DirectorActionPayloadSchemas() map[string]any {
 		"collaboration.create.v1": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"assignee_agent_id", "mission", "expected_result_schema_id", "payload_schema_id", "payload", "priority", "max_attempts"}, "properties": map[string]any{
 			"kind": map[string]any{"type": "string"}, "assignee_agent_id": uuidValue, "mission": text, "expected_result_schema_id": map[string]any{"type": "string"}, "payload_schema_id": map[string]any{"type": "string"}, "payload": jsonObject,
 			"priority": map[string]any{"type": "number", "minimum": 0, "maximum": 1}, "max_attempts": map[string]any{"type": "integer", "minimum": 1, "maximum": 100}, "branch_ids": map[string]any{"type": "array", "maxItems": 128, "items": uuidValue}}},
+		"integration.create.v1": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"inputs", "branch_refs"}, "properties": map[string]any{
+			"inputs":      map[string]any{"type": "array", "minItems": 2, "maxItems": 256, "items": nodeRef},
+			"branch_refs": map[string]any{"type": "array", "minItems": 1, "maxItems": 128, "items": branchRef}}},
 		"branch.create.v1": map[string]any{"type": "object", "additionalProperties": false,
 			"required": []string{"objective", "scope", "budget_share"}, "properties": map[string]any{
 				"objective": text, "scope": jsonObject, "budget_share": map[string]any{"type": "number", "minimum": 0, "maximum": 1}, "parent_branch_id": uuidValue}},

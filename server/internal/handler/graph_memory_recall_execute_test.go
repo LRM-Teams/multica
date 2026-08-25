@@ -44,20 +44,14 @@ func (b *scriptedRecallBackend) Execute(_ context.Context, prompt string, _ agen
 	base := recallPromptField(prompt, "Tool server base URL: ")
 	token := recallPromptField(prompt, "Bearer token: ")
 	trajectory := recallPromptField(prompt, "Trajectory ID: ")
-	expansion := recallPromptField(prompt, "Seed expansion ID: ")
 	nodeID := recallFirstSeedNode(prompt)
-	if base == "" || token == "" || trajectory == "" || expansion == "" || nodeID == "" {
+	if base == "" || token == "" || trajectory == "" || nodeID == "" {
 		return nil, fmt.Errorf("missing explore tool coordinates")
 	}
-	if status := recallToolPost(base, token, "/view", map[string]any{
-		"trajectory_id": trajectory, "expansion_id": expansion, "node_id": nodeID,
+	if status := recallToolPost(base, token, "/explore", map[string]any{
+		"trajectory_id": trajectory, "node_ids": []string{nodeID},
 	}); status != http.StatusOK {
-		return nil, fmt.Errorf("view status %d", status)
-	}
-	if status := recallToolPost(base, token, "/expand", map[string]any{
-		"trajectory_id": trajectory, "node_id": nodeID, "request_key": "r1",
-	}); status != http.StatusOK {
-		return nil, fmt.Errorf("expand status %d", status)
+		return nil, fmt.Errorf("explore status %d", status)
 	}
 	if status := recallToolPost(base, token, "/submit", map[string]any{
 		"trajectory_id": trajectory, "found": b.found, "summary": b.summary, "node_ids": []string{nodeID},

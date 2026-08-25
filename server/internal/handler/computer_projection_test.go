@@ -28,6 +28,9 @@ func TestComputerConnectionProjectionDoesNotDependOnAgentRuntime(t *testing.T) {
 	if strings.Contains(string(wire), `"device_name"`) || strings.Contains(string(wire), `"cli_version"`) {
 		t.Fatalf("Computer metadata JSON contains snake_case fields: %s", wire)
 	}
+	if !strings.Contains(string(wire), `"runtimes":[]`) {
+		t.Fatalf("zero-Runtime Computer must encode runtimes as an empty array: %s", wire)
+	}
 
 	disconnected := computerConnectionProjection("computer-1", "user-1", pgtype.Timestamptz{Time: now, Valid: true}, false, false, "ubuntu-build-host", "linux", "0.4.24-alpha.91")
 	if disconnected.Connected {

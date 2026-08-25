@@ -38,28 +38,33 @@ func (s *projectionSnapshotTestStore) GetCurrentMethod(_ context.Context, sessio
 	return s.method, nil
 }
 
-func (s *projectionSnapshotTestStore) ListQuestions(_ context.Context, sessionID string) ([]Question, error) {
+func (s *projectionSnapshotTestStore) ListQuestions(_ context.Context, sessionID, workspaceID string) ([]Question, error) {
 	s.sessionID = sessionID
+	s.workspaceID = workspaceID
 	return s.questions, nil
 }
 
-func (s *projectionSnapshotTestStore) ListTasks(_ context.Context, sessionID string) ([]Task, error) {
+func (s *projectionSnapshotTestStore) ListTasks(_ context.Context, sessionID, workspaceID string) ([]Task, error) {
 	s.sessionID = sessionID
+	s.workspaceID = workspaceID
 	return s.tasks, nil
 }
 
-func (s *projectionSnapshotTestStore) ListAttempts(_ context.Context, sessionID string) ([]Attempt, error) {
+func (s *projectionSnapshotTestStore) ListAttempts(_ context.Context, sessionID, workspaceID string) ([]Attempt, error) {
 	s.sessionID = sessionID
+	s.workspaceID = workspaceID
 	return s.attempts, nil
 }
 
-func (s *projectionSnapshotTestStore) ListClaims(_ context.Context, sessionID string) ([]Claim, error) {
+func (s *projectionSnapshotTestStore) ListClaims(_ context.Context, sessionID, workspaceID string) ([]Claim, error) {
 	s.sessionID = sessionID
+	s.workspaceID = workspaceID
 	return s.claims, nil
 }
 
-func (s *projectionSnapshotTestStore) EvaluateGate(_ context.Context, sessionID string) (GateResult, error) {
+func (s *projectionSnapshotTestStore) EvaluateGate(_ context.Context, sessionID, workspaceID string) (GateResult, error) {
 	s.sessionID = sessionID
+	s.workspaceID = workspaceID
 	return s.gate, nil
 }
 

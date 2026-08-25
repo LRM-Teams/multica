@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -47,6 +49,149 @@ func TestStoreInitIdempotent(t *testing.T) {
 	versions, err := s.ListVersions()
 	if err != nil || !slices.Equal(versions, []int{1}) {
 		t.Fatalf("ListVersions = %v, %v; want [1]", versions, err)
+	}
+}
+
+// Cold-start wipe (spec §7, no backward compatibility): a store whose data
+// predates the protocol marker is generation-1 state; Init wipes it and
+// rebuilds a fresh empty store.
+func TestStoreInitWipesUnmarkedGeneration1Data(t *testing.T) {
+	s := newTestStore(t)
+	seedGraphNode(t, s, 1, "legacy", "legacy body")
+	if err := s.AppendQueryLog("w1", &QueryLogEntry{TraceID: "legacy", Query: "legacy query", Version: 1}); err != nil {
+		t.Fatalf("AppendQueryLog: %v", err)
+	}
+	// Age the store into generation 1: the marker never existed.
+	if err := os.Remove(s.protocolFile()); err != nil {
+		t.Fatalf("remove protocol marker: %v", err)
+	}
+	regressionFile := filepath.Join(s.Root, "regression_set.jsonl")
+	if err := os.WriteFile(regressionFile, []byte("{\"query\":\"old\"}\n"), 0o644); err != nil {
+		t.Fatalf("seed regression_set.jsonl: %v", err)
+	}
+
+	if err := s.Init(); err != nil {
+		t.Fatalf("Init over generation-1 store: %v", err)
+	}
+
+	versions, err := s.ListVersions()
+	if err != nil || !slices.Equal(versions, []int{1}) {
+		t.Fatalf("ListVersions after wipe = %v, %v; want fresh [1]", versions, err)
+	}
+	if v, err := s.CurrentVersion(); err != nil || v != 1 {
+		t.Fatalf("CurrentVersion after wipe = %d, %v; want 1", v, err)
+	}
+	g, err := LoadGraph(s, 1)
+	if err != nil || len(g.Nodes()) != 0 {
+		t.Fatalf("graph after wipe = %d nodes, %v; want empty", len(g.Nodes()), err)
+	}
+	if _, err := os.Stat(regressionFile); !os.IsNotExist(err) {
+		t.Fatalf("regression_set.jsonl survived the wipe (stat err = %v)", err)
+	}
+	windows, err := s.ListQueryLogWindows()
+	if err != nil || len(windows) != 0 {
+		t.Fatalf("query log windows after wipe = %v, %v; want none", windows, err)
+	}
+	marker, err := os.ReadFile(s.protocolFile())
+	if err != nil || string(marker) != strconv.Itoa(GraphProtocolGeneration) {
+		t.Fatalf("protocol marker = %q, %v; want %d", string(marker), err, GraphProtocolGeneration)
+	}
+}
+
+// The scoped identity marker is immutable (spec §3) and must survive the
+// protocol wipe: the directory keeps its identity while all data goes.
+func TestStoreInitWipePreservesScopedIdentity(t *testing.T) {
+	ws, pid := "11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222"
+	dir, err := EnsureScopedDir(t.TempDir(), ws, GraphDirKindProject, pid)
+	if err != nil {
+		t.Fatalf("EnsureScopedDir: %v", err)
+	}
+	s := NewStore(dir)
+	if err := s.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	seedGraphNode(t, s, 1, "legacy", "legacy body")
+	// Age the store into generation 1: the marker never existed.
+	if err := os.Remove(s.protocolFile()); err != nil {
+		t.Fatalf("remove protocol marker: %v", err)
+	}
+
+	if err := s.Init(); err != nil {
+		t.Fatalf("Init over generation-1 store: %v", err)
+	}
+	if err := VerifyGraphIdentity(dir, GraphIdentity{
+		WorkspaceID: ws, Kind: string(GraphDirKindProject), OwnerID: pid,
+	}); err != nil {
+		t.Fatalf("identity did not survive the wipe: %v", err)
+	}
+	g, err := LoadGraph(s, 1)
+	if err != nil || len(g.Nodes()) != 0 {
+		t.Fatalf("graph after wipe = %d nodes, %v; want empty", len(g.Nodes()), err)
+	}
+}
+
+// A store already at the current protocol generation keeps all its data
+// across re-Init; only stale generations are wiped.
+func TestStoreInitKeepsCurrentGenerationData(t *testing.T) {
+	s := newTestStore(t)
+	seedGraphNode(t, s, 1, "n1", "alpha beta")
+	if err := s.AppendQueryLog("w1", &QueryLogEntry{TraceID: "t1", Query: "alpha", Version: 1}); err != nil {
+		t.Fatalf("AppendQueryLog: %v", err)
+	}
+
+	if err := s.Init(); err != nil {
+		t.Fatalf("re-Init: %v", err)
+	}
+	g, err := LoadGraph(s, 1)
+	if err != nil || g.Node("n1") == nil {
+		t.Fatalf("re-Init lost current-generation data: %v", err)
+	}
+	windows, err := s.ListQueryLogWindows()
+	if err != nil || len(windows) != 1 {
+		t.Fatalf("query log windows after re-Init = %v, %v; want 1", windows, err)
+	}
+}
+
+// An explicit older-generation marker triggers the same wipe.
+func TestStoreInitWipesOlderMarkerGeneration(t *testing.T) {
+	s := newTestStore(t)
+	seedGraphNode(t, s, 1, "n1", "alpha beta")
+	if err := os.WriteFile(s.protocolFile(), []byte("1"), 0o644); err != nil {
+		t.Fatalf("downgrade marker: %v", err)
+	}
+
+	if err := s.Init(); err != nil {
+		t.Fatalf("Init over older marker: %v", err)
+	}
+	g, err := LoadGraph(s, 1)
+	if err != nil || len(g.Nodes()) != 0 {
+		t.Fatalf("graph after wipe = %d nodes, %v; want empty", len(g.Nodes()), err)
+	}
+	marker, err := os.ReadFile(s.protocolFile())
+	if err != nil || string(marker) != strconv.Itoa(GraphProtocolGeneration) {
+		t.Fatalf("protocol marker = %q, %v; want %d", string(marker), err, GraphProtocolGeneration)
+	}
+}
+
+func TestStoreInitRejectsNewerMarkerGeneration(t *testing.T) {
+	s := newTestStore(t)
+	seedGraphNode(t, s, 1, "n1", "alpha beta")
+	newer := GraphProtocolGeneration + 1
+	if err := os.WriteFile(s.protocolFile(), []byte(strconv.Itoa(newer)), 0o644); err != nil {
+		t.Fatalf("upgrade marker: %v", err)
+	}
+
+	err := s.Init()
+	if err == nil || !strings.Contains(err.Error(), "newer than supported") {
+		t.Fatalf("Init over newer marker = %v, want newer-generation error", err)
+	}
+	g, err := LoadGraph(s, 1)
+	if err != nil || g.Node("n1") == nil {
+		t.Fatalf("newer-generation rejection changed graph data: %v", err)
+	}
+	marker, err := os.ReadFile(s.protocolFile())
+	if err != nil || string(marker) != strconv.Itoa(newer) {
+		t.Fatalf("protocol marker = %q, %v; want %d", string(marker), err, newer)
 	}
 }
 
@@ -278,21 +423,6 @@ func TestEmbeddingPath(t *testing.T) {
 	}
 	if info, err := os.Stat(filepath.Dir(p)); err != nil || !info.IsDir() {
 		t.Fatalf("embedding dir missing: %v", err)
-	}
-}
-
-func TestRegressionSet(t *testing.T) {
-	s := newTestStore(t)
-	if got, err := s.ReadRegression(); err != nil || len(got) != 0 {
-		t.Fatalf("ReadRegression(missing) = %v, %v", got, err)
-	}
-	e := &RegressionEntry{Query: "q", RelevantNodes: []string{"n1"}, AddedVersion: 2, Reason: "regressed"}
-	if err := s.AppendRegression(e); err != nil {
-		t.Fatalf("AppendRegression: %v", err)
-	}
-	got, err := s.ReadRegression()
-	if err != nil || len(got) != 1 || got[0].Query != "q" || got[0].AddedVersion != 2 {
-		t.Fatalf("ReadRegression = %v, %v", got, err)
 	}
 }
 

@@ -45,28 +45,40 @@ that is enough.
 ## What you do
 
 - **Organize** — outline, regroup headings, suggest child-page splits
-- **Rewrite root** — propose a new root body in final assistant output (clearly
-  mark it as a proposal the human must apply; the bubble does not silent-write)
+- **Rewrite / insert** — put cleaned markdown in final assistant output. The
+  bubble shows **Insert below note** and **Insert as child note** when the
+  human asked to insert or save. Do not say you cannot insert, and do not ask
+  them to copy-paste.
 - **Q&A** — answer from root + selected children only
 - **Compare / merge ideas** across a small set of pages you read
 
 ## Writes
 
 There is **no** notes write CLI and **no** bubble Message-send write path.
-Propose markdown in final assistant output and let the human apply it in
-the editor. Never claim a silent page replace succeeded.
+When the human asks to insert, save, or write this note (or a child page),
+put **only the cleaned markdown** in final assistant output. The bubble then
+shows **Insert below note** and **Insert as child note**. Do not say you
+cannot insert. Do not ask them to copy-paste. Never claim the page was
+already written.
+
+If this wake is Editor `note_ai_job` (empty-line / in-note JSON edit, not
+this bubble): formulas in `markdown` must use `$...$` / `$$...$$` so the
+Notes editor can render them. Do not use `\(...\)`, `\[...\]`, or fenced
+`latex` / `math`. In the JSON string, double every LaTeX backslash.
 
 ## ACL
 
 Agent token + active bubble session authorize the **context root and its
 descendants**. Stay in that subtree unless the human points at another
-authorized page.
+authorized page. A page shared to this Agent (or a group channel it belongs
+to) authorizes **that page only** — `notes tree` will not list children from
+a share.
 
 ## Do not confuse
 
 | This skill | Not this |
 |------------|----------|
-| Notes FAB bubble / `chat_session.context_note_page_id` | Worker `note_worker_job` / 「按这篇做」 |
+| Notes FAB bubble / `chat_session.context_note_page_id` | Period Brief / other `note_worker_job` wakes |
 | Selective `notes get` / `tree` | Period Brief synthesizer wake (`multica-period-work-brief`) — same Agent, different wake |
 | Final-output rewrite proposals | Editor structured `note_ai_job` actions |
 

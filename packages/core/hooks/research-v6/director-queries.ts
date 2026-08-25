@@ -1,4 +1,5 @@
 import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
+import { ApiError } from "../../api/client";
 import type {
   ResearchV6DirectorNodeDetailView,
   ResearchV6DirectorDetailTransport,
@@ -50,6 +51,18 @@ export const researchV6DirectorProjectionKeys = {
       nodeId,
       view,
     ] as const,
+  workActivity: (
+    workspaceId: string,
+    runId: string,
+    workItemId: string,
+    projectionRevision: string,
+  ) =>
+    [
+      ...researchV6DirectorProjectionKeys.all(workspaceId, runId),
+      "work-activity",
+      workItemId,
+      projectionRevision,
+    ] as const,
   reports: (workspaceId: string, runId: string) =>
     [
       ...researchV6DirectorProjectionKeys.all(workspaceId, runId),
@@ -67,6 +80,15 @@ export const researchV6DirectorProjectionKeys = {
       "compiled",
     ] as const,
 };
+
+export function isResearchV6ProjectionResyncError(error: unknown): boolean {
+  if (!(error instanceof ApiError) || error.status !== 409) return false;
+  if (!error.body || typeof error.body !== "object") return false;
+  return (
+    (error.body as Record<string, unknown>).code ===
+    "research.v6.projection_resync_required"
+  );
+}
 
 export function researchV6DirectorSlicePageRequest(
   input: Omit<ResearchV6DirectorProjectionSliceRequest, "cursor" | "depth">,
@@ -96,7 +118,7 @@ export function researchV6DirectorSnapshotOptions(
         signal,
       ),
     getNextPageParam: (page) =>
-      page.has_more ? (page.next_cursor ?? null) : null,
+      page.hasMore ? (page.nextCursor ?? null) : null,
   });
 }
 
@@ -111,7 +133,7 @@ export function researchV6DirectorSliceOptions(
     queryKey: researchV6DirectorProjectionKeys.slice(
       workspaceId,
       runId,
-      input.snapshot_id,
+      input.snapshotId,
       input.root,
     ),
     initialPageParam: null as string | null,
@@ -123,7 +145,7 @@ export function researchV6DirectorSliceOptions(
         signal,
       ),
     getNextPageParam: (page) =>
-      page.has_more ? (page.next_cursor ?? null) : null,
+      page.hasMore ? (page.nextCursor ?? null) : null,
   });
 }
 
@@ -151,7 +173,7 @@ export function researchV6DirectorDeltaOptions(
         pageParam ?? undefined,
         signal,
       ),
-    getNextPageParam: (page) => page.next_cursor,
+    getNextPageParam: (page) => page.nextCursor,
   });
 }
 
@@ -175,15 +197,37 @@ export function researchV6DirectorNodeDetailOptions(
       const detail = await transport.loadNodeDetail(
         workspaceId,
         runId,
+        snapshotId,
         nodeId,
         view,
         signal,
       );
-      if (detail && detail.snapshot_id !== snapshotId) {
+      if (detail && detail.snapshotId !== snapshotId) {
         throw new Error("Director V6 node detail changed snapshot identity");
       }
       return detail;
     },
+    retry: (failureCount, error) =>
+      !isResearchV6ProjectionResyncError(error) && failureCount < 3,
+  });
+}
+
+export function researchV6DirectorWorkActivityOptions(
+  transport: ResearchV6DirectorDetailTransport,
+  workspaceId: string,
+  runId: string,
+  workItemId: string,
+  projectionRevision: string,
+) {
+  return queryOptions({
+    queryKey: researchV6DirectorProjectionKeys.workActivity(
+      workspaceId,
+      runId,
+      workItemId,
+      projectionRevision,
+    ),
+    queryFn: ({ signal }) =>
+      transport.loadWorkActivity(workspaceId, runId, workItemId, signal),
   });
 }
 

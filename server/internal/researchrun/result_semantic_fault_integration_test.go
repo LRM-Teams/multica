@@ -133,7 +133,7 @@ func TestAcceptResultSemanticFaultsRollbackCompletePlanAcceptance(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			tasks, err := store.ListTasks(ctx, run.SessionID)
+			tasks, err := store.ListTasks(ctx, run.SessionID, run.WorkspaceID)
 			if err != nil || len(tasks) != 1 {
 				t.Fatalf("tasks=%+v err=%v", tasks, err)
 			}
@@ -217,7 +217,7 @@ func TestAcceptResultSemanticFaultsRollbackCompleteEvidenceAcceptance(t *testing
 			if err != nil {
 				t.Fatal(err)
 			}
-			tasks, err := store.ListTasks(ctx, run.SessionID)
+			tasks, err := store.ListTasks(ctx, run.SessionID, run.WorkspaceID)
 			if err != nil || len(tasks) != 1 {
 				t.Fatalf("plan tasks=%+v err=%v", tasks, err)
 			}
@@ -250,7 +250,7 @@ func TestAcceptResultSemanticFaultsRollbackCompleteEvidenceAcceptance(t *testing
 			if _, err = store.ActivateReadyTasks(ctx, run.SessionID); err != nil {
 				t.Fatalf("ActivateReadyTasks: %v", err)
 			}
-			discoverTasks, err := listDiscoverTasks(ctx, store, run.SessionID)
+			discoverTasks, err := listDiscoverTasks(ctx, store, run.SessionID, run.WorkspaceID)
 			if err != nil || len(discoverTasks) == 0 {
 				t.Fatalf("discover tasks=%+v err=%v", discoverTasks, err)
 			}

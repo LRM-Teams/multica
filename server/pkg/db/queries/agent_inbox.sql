@@ -183,6 +183,27 @@ SET status = 'pending',
     updated_at = now()
 WHERE e.id IN (SELECT inbox_event_id FROM expired_delivery)
   AND e.status = 'draining'
+  AND (
+    e.issue_run_kind IS NULL
+    OR EXISTS (
+      SELECT 1
+      FROM active_issue_execution claim
+      JOIN issue issue_row
+        ON issue_row.workspace_id = claim.workspace_id
+       AND issue_row.id = claim.issue_id
+       AND issue_row.execution_revision = claim.issue_execution_revision
+       AND issue_row.status IN ('todo', 'in_progress')
+       AND issue_row.assignee_type = 'agent'
+       AND issue_row.assignee_id = claim.agent_id
+      WHERE claim.workspace_id = e.workspace_id
+        AND claim.issue_id = e.issue_id
+        AND claim.run_id = e.id
+        AND claim.agent_id = e.agent_id
+        AND claim.issue_execution_revision = e.issue_execution_revision
+        AND claim.attempt_number = e.issue_execution_attempt_number
+        AND claim.status = 'active'
+    )
+  )
   AND NOT EXISTS (
     SELECT 1
     FROM agent_event_delivery d
@@ -256,6 +277,27 @@ WHERE d.id = $1
   AND d.status IN ('leased', 'processing')
   AND d.lease_expires_at > now()
   AND e.status = 'draining'
+  AND (
+    e.issue_run_kind IS NULL
+    OR EXISTS (
+      SELECT 1
+      FROM active_issue_execution claim
+      JOIN issue issue_row
+        ON issue_row.workspace_id = claim.workspace_id
+       AND issue_row.id = claim.issue_id
+       AND issue_row.execution_revision = claim.issue_execution_revision
+       AND issue_row.status IN ('todo', 'in_progress')
+       AND issue_row.assignee_type = 'agent'
+       AND issue_row.assignee_id = claim.agent_id
+      WHERE claim.workspace_id = e.workspace_id
+        AND claim.issue_id = e.issue_id
+        AND claim.run_id = e.id
+        AND claim.agent_id = e.agent_id
+        AND claim.issue_execution_revision = e.issue_execution_revision
+        AND claim.attempt_number = e.issue_execution_attempt_number
+        AND claim.status = 'active'
+    )
+  )
   AND NOT EXISTS (
     SELECT 1
     FROM agent_event_delivery newer

@@ -24,7 +24,6 @@ const (
 	LocalControlServiceStatusOperation        = "service:status"
 	LocalControlMachineAttestationOperation   = "machine-attestation"
 	LocalControlWorkspaceEnvironmentOperation = "workspace:environment"
-	LocalControlWorkspaceCapacityOperation    = "workspace:capacity"
 	LocalControlWorkspaceDiagnosticsOperation = "workspace:diagnostics"
 	LocalControlComputerControlOperation      = "computer:control"
 	LocalControlRunnerReadyOperation          = "runner:ready"
@@ -44,7 +43,7 @@ var localControlOperationSpecs = []localControlOperationSpec{
 	{Name: "service:start"}, {Name: "service:stop"}, {Name: "service:diagnostics"},
 	{Name: "workspace:list"}, {Name: "workspace:status"}, {Name: "workspace:start"},
 	{Name: "workspace:stop"}, {Name: "workspace:restart"}, {Name: "workspace:attach"},
-	{Name: "workspace:detach"}, {Name: LocalControlWorkspaceEnvironmentOperation}, {Name: LocalControlWorkspaceCapacityOperation},
+	{Name: "workspace:detach"}, {Name: LocalControlWorkspaceEnvironmentOperation},
 	{Name: LocalControlWorkspaceDiagnosticsOperation}, {Name: LocalControlComputerControlOperation},
 	{Name: "runner:start"}, {Name: "runner:stop"}, {Name: "runner:restart"},
 	{Name: LocalControlRunnerDrainOperation}, {Name: LocalControlRunnerReleaseOperation}, {Name: LocalControlRunnerReadyOperation},

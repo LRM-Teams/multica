@@ -197,7 +197,7 @@ func TestResidentMessageSuccessReportsAndSyncsMemoryWrites(t *testing.T) {
 	d.client.SetRuntimeDaemonToken("runtime-1", "runtime-token", time.Now().Add(time.Hour))
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
 	backend := &sequencedResidentMessageRuntime{accepted: make(chan chan error, 1)}
-	d.canonicalRuntimes.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{backend: backend}
+	d.canonicalRuntimes.slots["agent-1\x00runtime-1"] = &agentRuntimeSlot{backend: backend}
 
 	if err := d.deliverIdleMessageBatch(context.Background(), "agent-1", "runtime-1", []protocol.AgentMessageProjection{{
 		ID: "message-1", Target: "dm:member-1", Seq: 1, Content: "remember this",
@@ -248,5 +248,88 @@ func TestResidentMessageMemoryTaskKeepsInitiatorOnlyForSingleSubject(t *testing.
 	}
 	if task.ChatSessionID != "channel:c1" || task.ChatMessage != "one\ntwo" {
 		t.Fatalf("resident memory task = %+v", task)
+	}
+}
+
+// P0 §4.2: identical recall queries within one resident message batch
+// coalesce into a single server recall; whitespace/case variants share the
+// normalized key, distinct queries do not.
+func TestPrepareResidentMessageBatchCoalescesIdenticalGraphRecalls(t *testing.T) {
+	var recalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/daemon/graph-memory/recalls" {
+			http.NotFound(w, r)
+			return
+		}
+		recalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"found":true,"injection":"## Graph Memory Recall\ndispatch retries use exponential backoff","status":"explore_terminal"}`))
+	}))
+	defer server.Close()
+
+	root := t.TempDir()
+	d := New(Config{WorkspacesRoot: root, MemoryType: MemoryTypeGraph}, nil)
+	d.client = NewClient(server.URL)
+	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
+
+	msg := func(id, content string) protocol.AgentMessageProjection {
+		return protocol.AgentMessageProjection{
+			ID: id, Target: "channel:group-1", Seq: 1, Content: content,
+			ChannelID: "channel-group", ChannelKind: "group",
+			InitiatorType: "member", InitiatorID: "member-1", InitiatorName: "JHP",
+		}
+	}
+	messages := []protocol.AgentMessageProjection{
+		msg("m-1", "summarize current progress"),
+		msg("m-2", "summarize current progress"),
+		msg("m-3", "summarize   current  progress"), // whitespace runs collapse to the same key
+		msg("m-4", "list current risks"),
+	}
+
+	prepared, _, err := d.prepareResidentMessageBatch(context.Background(), "agent-1", "runtime-1", messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prepared) != 4 {
+		t.Fatalf("prepared messages = %d, want 4", len(prepared))
+	}
+	if got := recalls.Load(); got != 2 {
+		t.Fatalf("recall calls = %d, want 2 (identical queries coalesced)", got)
+	}
+}
+
+func TestGraphMemoryAgentToolContextProjectsOnlyFiveScopedOperations(t *testing.T) {
+	context := graphMemoryAgentToolContext(protocol.AgentMessageProjection{
+		ID: "message-1", ChannelID: "channel-1", GraphMemoryTools: true,
+	})
+	for _, operation := range []string{"start", "explore", "redirect", "submit", "checkpoint"} {
+		if !strings.Contains(context, operation) {
+			t.Fatalf("tool context missing %q: %s", operation, context)
+		}
+	}
+	for _, forbidden := range []string{"graph owner in a tool body", "Authorization: Bearer"} {
+		if strings.Contains(context, forbidden) {
+			t.Fatalf("tool context leaks forbidden authority %q: %s", forbidden, context)
+		}
+	}
+	if !strings.Contains(context, "/api/agent/channels/channel-1/graph-memory/") || !strings.Contains(context, "message-1") {
+		t.Fatalf("tool context is not bound to channel/message: %s", context)
+	}
+}
+
+func TestGraphMemoryUsageDeltaUsesResidentTurnDelta(t *testing.T) {
+	input, output := graphMemoryUsageDelta(
+		&agent.RuntimeTokenStats{InputTokens: 100, OutputTokens: 20},
+		&agent.RuntimeTokenStats{InputTokens: 135, OutputTokens: 29},
+	)
+	if input != 35 || output != 9 {
+		t.Fatalf("usage delta input=%d output=%d", input, output)
+	}
+	input, output = graphMemoryUsageDelta(
+		&agent.RuntimeTokenStats{InputTokens: 200, OutputTokens: 40},
+		&agent.RuntimeTokenStats{InputTokens: 10, OutputTokens: 5},
+	)
+	if input != 0 || output != 0 {
+		t.Fatalf("reset stats must clamp to zero: input=%d output=%d", input, output)
 	}
 }

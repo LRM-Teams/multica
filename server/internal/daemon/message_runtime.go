@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/agentworkspace"
+	"github.com/multica-ai/multica/server/internal/cli"
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/internal/memorysignal"
 	"github.com/multica-ai/multica/server/pkg/agent"
@@ -56,9 +57,9 @@ func (d *Daemon) ensureIdleMessageCoordinator(workspaceID, agentID, runtimeID st
 	if d == nil || workspaceID == "" || agentID == "" || runtimeID == "" {
 		return false, errors.New("Workspace, Agent, and Runtime ids are required")
 	}
-	runner, err := d.ensureWorkspaceRunner(workspaceID)
+	runner, err := d.ensureWorkspaceDaemon(workspaceID)
 	if err != nil {
-		return false, fmt.Errorf("ensure Workspace Runner %q: %w", workspaceID, err)
+		return false, fmt.Errorf("ensure WorkspaceDaemon %q: %w", workspaceID, err)
 	}
 	return runner.ensureMessageInbox(agentID, runtimeID)
 }
@@ -72,17 +73,18 @@ func (d *Daemon) ensureIdleMessageCoordinatorForDelivery(workspaceID, agentID st
 	if d == nil || workspaceID == "" || agentID == "" {
 		return errors.New("workspace and agent ids are required")
 	}
-	runner := d.currentWorkspaceRunner(workspaceID)
+	runner := d.currentWorkspaceDaemon(workspaceID)
 	if runner == nil {
-		return fmt.Errorf("Workspace Runner %q is unavailable", workspaceID)
+		return fmt.Errorf("WorkspaceDaemon %q is unavailable", workspaceID)
 	}
 	return runner.ensureMessageInboxForDelivery(agentID)
 }
 
 // restoreResidentAgents rebuilds durable Agent roots after a Computer process
-// restart. A durable root alone does not create a Workspace Runner or a Message
-// coordinator; the supervised Binding child receives an explicit managed start
+// restart. A durable root alone does not create a WorkspaceDaemon or a Message
+// coordinator; the supervised WorkspaceDaemon receives an explicit managed start
 // when work exists.
+
 func mixedRunMessageBatchIdentity(messages []protocol.AgentMessageProjection) (string, string, string, bool) {
 	if len(messages) == 0 || messages[0].RunID == "" || messages[0].RunAgentID == "" {
 		return "", "", "", false
@@ -102,13 +104,35 @@ func mixedRunMessageBatchIdentity(messages []protocol.AgentMessageProjection) (s
 
 func (d *Daemon) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID string, messages []protocol.AgentMessageProjection) error {
 	runID, runAgentID, turnID, mixed := mixedRunMessageBatchIdentity(messages)
+	directedRunID, directedTurnID := runID, turnID
+	if directedRunID == "" {
+		directedRunID = uuid.NewString()
+	}
+	if directedTurnID == "" {
+		directedTurnID = uuid.NewString()
+	}
 	d.mu.Lock()
 	workspaceID := d.runtimeIndex[runtimeID].WorkspaceID
 	d.mu.Unlock()
-	runner, _ := d.ensureWorkspaceRunner(workspaceID)
+	runner, _ := d.ensureWorkspaceDaemon(workspaceID)
 	preparedMessages, memoryTask, err := d.prepareResidentMessageBatch(ctx, agentID, runtimeID, messages)
 	if err != nil {
 		return err
+	}
+	graphMemoryChannelID := ""
+	for _, message := range preparedMessages {
+		if message.GraphMemoryTools {
+			if graphMemoryChannelID == "" {
+				graphMemoryChannelID = message.ChannelID
+			} else if graphMemoryChannelID != message.ChannelID {
+				graphMemoryChannelID = ""
+				break
+			}
+		}
+	}
+	var graphMemoryStatsBefore *agent.RuntimeTokenStats
+	if graphMemoryChannelID != "" {
+		graphMemoryStatsBefore, _ = d.canonicalRuntimes.runtimeStats(ctx, agentID, runtimeID)
 	}
 	var canonicalActionTurn canonicalActionTurnToken
 	if mixed {
@@ -124,7 +148,11 @@ func (d *Daemon) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID
 	// here per delivery batch (friction-gated memory spec).
 	var frictionMu sync.Mutex
 	frictionTracker := memorysignal.NewFrictionTracker()
+	processCallback, managedProcess := d.canonicalRuntimes.managedProcessCallback(agentID, runtimeID)
 	err = d.canonicalRuntimes.deliverIdleMessages(ctx, agentID, runtimeID, preparedMessages, nil, func() {
+		if bindErr := d.canonicalRuntimes.bindDirectedTurn(agentID, runtimeID, directedRunID, directedTurnID); bindErr != nil && d.logger != nil {
+			d.logger.Warn("resident directed turn binding failed", "agent_id", agentID, "runtime_id", runtimeID, "error", bindErr)
+		}
 		if mixed {
 			d.activateCanonicalActionTurn(agentID, canonicalActionTurn)
 			d.reportMixedRunActivity(agentID, runtimeID, runID, runAgentID, "turn:"+turnID+":active:start", protocol.MixedRunActivityActiveTurn, 1)
@@ -153,8 +181,13 @@ func (d *Daemon) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID
 		}
 		frictionMu.Unlock()
 		d.reportMixedRunToolActivity(agentID, runtimeID, runID, runAgentID, turnID, canonicalActionTurn, message)
-		runner.observeResidentMessageRuntime(agentID, runtimeID, message)
+		if managedProcess {
+			runner.observeResidentMessageRuntimeForProcess(processCallback, runtimeID, message)
+		} else {
+			runner.observeResidentMessageRuntime(agentID, runtimeID, message)
+		}
 	}, func(turnErr error, generation uint64, capture *agent.ResidentTurnCapture) {
+		d.canonicalRuntimes.clearDirectedTurn(agentID, runtimeID, directedRunID, directedTurnID)
 		if mixed {
 			d.reportMixedRunActivity(agentID, runtimeID, runID, runAgentID, "turn:"+turnID+":active:end", protocol.MixedRunActivityActiveTurn, -1)
 			if d.reportResidentTurnCapture(workspaceID, agentID, runtimeID, runID, runAgentID, turnID, canonicalActionTurn, turnErr, capture) {
@@ -180,6 +213,11 @@ func (d *Daemon) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID
 				streamedMu.Unlock()
 				d.writebackStandaloneChatTurn(reportCtx, sessionID, runtimeID, turnErr, capture, streamed)
 			}
+			if graphMemoryChannelID != "" {
+				if after, statsErr := d.canonicalRuntimes.runtimeStats(reportCtx, agentID, runtimeID); statsErr == nil {
+					d.reportGraphMemoryAgentUsage(reportCtx, workspaceID, agentID, graphMemoryChannelID, graphMemoryStatsBefore, after)
+				}
+			}
 			cancel()
 		}
 		// Raft-aligned turn end: never auto-deliver Pending bodies solely because
@@ -191,7 +229,11 @@ func (d *Daemon) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID
 			_ = runner.notifyAppInbox(context.Background(), agentID, runtimeID)
 		}
 		d.canonicalRuntimes.publishIfMessageTurnStillIdle(agentID, runtimeID, generation, func() {
-			runner.observeMessageTurnCompletion(agentID, runtimeID, turnErr)
+			if managedProcess {
+				runner.observeMessageTurnCompletionForProcess(processCallback, runtimeID, turnErr)
+			} else {
+				runner.observeMessageTurnCompletion(agentID, runtimeID, turnErr)
+			}
 		})
 	})
 	if err != nil {
@@ -209,7 +251,11 @@ func (d *Daemon) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID
 		// receipt exists, so the onComplete path above cannot publish them.
 		// Project the failure explicitly instead of leaving it only in daemon
 		// logs while the user waits for an Agent response that cannot arrive.
-		runner.observeMessageTurnCompletion(agentID, runtimeID, err)
+		if managedProcess {
+			runner.observeMessageTurnCompletionForProcess(processCallback, runtimeID, err)
+		} else {
+			runner.observeMessageTurnCompletion(agentID, runtimeID, err)
+		}
 		// Same for standalone bubbles: without an assistant row the UI stays on
 		// 排队中 forever after provider timeout / accept failure.
 		if sessionID, ok := standaloneChatSessionIDFromMessages(messages); ok && d.client != nil && strings.TrimSpace(d.client.baseURL) != "" {
@@ -221,6 +267,47 @@ func (d *Daemon) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID
 	return err
 }
 
+func graphMemoryUsageDelta(before, after *agent.RuntimeTokenStats) (int64, int64) {
+	if before == nil || after == nil {
+		return 0, 0
+	}
+	inputTokens, outputTokens := after.InputTokens, after.OutputTokens
+	inputTokens -= before.InputTokens
+	outputTokens -= before.OutputTokens
+	if inputTokens < 0 {
+		inputTokens = 0
+	}
+	if outputTokens < 0 {
+		outputTokens = 0
+	}
+	return inputTokens, outputTokens
+}
+
+func (d *Daemon) reportGraphMemoryAgentUsage(ctx context.Context, workspaceID, agentID, channelID string, before, after *agent.RuntimeTokenStats) {
+	if d == nil || after == nil || strings.TrimSpace(channelID) == "" {
+		return
+	}
+	inputTokens, outputTokens := graphMemoryUsageDelta(before, after)
+	if inputTokens == 0 && outputTokens == 0 {
+		return
+	}
+	credential, err := d.messageAgentCredential(ctx, workspaceID, agentID)
+	if err != nil {
+		if d.logger != nil {
+			d.logger.Warn("graph memory agent usage credential unavailable", "agent_id", agentID, "channel_id", channelID, "error", err)
+		}
+		return
+	}
+	client := cli.NewAPIClient(d.cfg.ServerBaseURL, workspaceID, credential.Token)
+	client.AgentID = agentID
+	var response map[string]any
+	if err := client.PostJSON(ctx, "/api/agent/channels/"+channelID+"/graph-memory-usage", map[string]int64{
+		"input_tokens": inputTokens, "output_tokens": outputTokens,
+	}, &response); err != nil && d.logger != nil {
+		d.logger.Warn("graph memory agent usage report failed", "agent_id", agentID, "channel_id", channelID, "error", err)
+	}
+}
+
 // reportResidentTurnCapture performs durable server-side accounting before the
 // daemon releases the matching unfinished-capture counter. A failed upload is
 // deliberately left unfinished; a successful server gap report is the only
@@ -230,15 +317,19 @@ func (d *Daemon) reportResidentTurnCapture(workspaceID, agentID, runtimeID, runI
 	if d.client == nil || strings.TrimSpace(d.client.baseURL) == "" {
 		return false
 	}
-	credential, ok := readCachedAgentCredential(d.cfg, workspaceID, runtimeID, agentID, time.Now())
-	if !ok {
+	reportCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	credential, err := d.credentialManager().Get(reportCtx, agentCredentialKey{
+		WorkspaceID: workspaceID,
+		RuntimeID:   runtimeID,
+		AgentID:     agentID,
+	}, agentCredentialCacheFirst)
+	if err != nil {
 		if d.logger != nil {
-			d.logger.Warn("mixed-run capture credential unavailable", "run_id", runID, "run_agent_id", runAgentID)
+			d.logger.Warn("mixed-run capture credential unavailable", "run_id", runID, "run_agent_id", runAgentID, "error", err)
 		}
 		return false
 	}
-	reportCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
 	gapReason := "capture_unavailable"
 	if turnErr != nil {
 		gapReason = "provider_turn_failed"
@@ -343,7 +434,7 @@ func mixedRunCaptureGapIdentity(runAgentID, activityTurnID string, capture *agen
 }
 
 // reportMixedRunToolActivity tracks inflight tool calls of a mixed-run turn.
-// User-facing Activity emission stays with the Workspace Runner; this reports
+// User-facing Activity emission stays with the WorkspaceDaemon; this reports
 // only the durable mixed-run transition deltas.
 func (d *Daemon) reportMixedRunToolActivity(agentID, runtimeID, runID, runAgentID, turnID string, turnToken canonicalActionTurnToken, message agent.Message) {
 	if runID == "" || runAgentID == "" || turnID == "" || strings.TrimSpace(message.CallID) == "" {
@@ -380,6 +471,7 @@ func (d *Daemon) prepareResidentMessageBatch(ctx context.Context, agentID, runti
 
 	prepared := make([]protocol.AgentMessageProjection, 0, len(messages))
 	sessionKey := residentTurnScopeSessionKey(agentID, runtimeID)
+	graphRecallMemo := map[string][]execenv.MemoryContextForEnv{}
 	for _, message := range messages {
 		messageTask := residentMessageMemoryTask(workspaceID, agentID, runtimeID, []protocol.AgentMessageProjection{message})
 		if profile, ok := d.graphProfileForWorkspace(workspaceID); ok {
@@ -395,7 +487,7 @@ func (d *Daemon) prepareResidentMessageBatch(ctx context.Context, agentID, runti
 			// Agent-scope rows stay out of per-message context.
 			combined := mergeGraphModeExecutionMemory(
 				agentRoot, messageTask, serverMemories,
-				d.graphExecutionMemories(ctx, messageTask, d.logger),
+				d.memoizedGraphExecutionMemories(ctx, messageTask, graphRecallMemo, d.logger),
 			)
 			memories = withoutAgentScopeMemories(combined)
 		} else {
@@ -418,9 +510,32 @@ func (d *Daemon) prepareResidentMessageBatch(ctx context.Context, agentID, runti
 			InitiatorID:     message.InitiatorID,
 			InitiatorName:   message.InitiatorName,
 		})
+		if message.GraphMemoryTools {
+			message.RuntimeContext += graphMemoryAgentToolContext(message)
+		}
 		prepared = append(prepared, message)
 	}
 	return prepared, residentMessageMemoryTask(workspaceID, agentID, runtimeID, messages), nil
+}
+
+func graphMemoryAgentToolContext(message protocol.AgentMessageProjection) string {
+	channelID := strings.TrimSpace(message.ChannelID)
+	messageID := strings.TrimSpace(message.ID)
+	if channelID == "" || messageID == "" {
+		return ""
+	}
+	return fmt.Sprintf(`
+
+## Managed Graph Memory tools
+You are the managed Memory Agent for this Channel. Graph scope, version, run, and trajectory are server-owned; never invent or override them.
+Use only these five Graph operations through the daemon credential proxy:
+  POST http://127.0.0.1:$MULTICA_DAEMON_PORT/api/agent/channels/%s/graph-memory/{start|explore|redirect|submit|checkpoint}
+Required headers:
+  X-Agent-ID: $MULTICA_AGENT_ID
+  X-Workspace-ID: $MULTICA_WORKSPACE_ID
+  Content-Type: application/json
+Use curl with JSON bodies. Every operation requires a stable idempotency_key; derive it from message %s and the operation. Call start with {query,idempotency_key}; use the returned trajectory_id for all later calls. Explore accepts at most the configured server limit and only explicit node_ids. For an in-place directed correction call redirect with trajectory_id, query, steering_message_id, and idempotency_key. End the run exactly once with submit (cited visible memory) or checkpoint (durable private state). Never send workspace, Channel scope, graph owner, or graph version in a tool body. A rejected/fenced/quota response is terminal for this turn; checkpoint if still available and do not bypass the gateway.
+`, channelID, messageID)
 }
 
 func residentMessageMemoryTask(workspaceID, agentID, runtimeID string, messages []protocol.AgentMessageProjection) Task {
@@ -583,7 +698,7 @@ func (p *CredentialProxy) SeenUpToSeq(agentID, target string) (int64, error) {
 	if p == nil || p.daemon == nil {
 		return 0, errors.New("Credential Proxy is unavailable")
 	}
-	runner, err := p.daemon.resolveWorkspaceRunnerByAgent(agentID)
+	runner, err := p.daemon.resolveWorkspaceDaemonByAgent(agentID)
 	if err != nil {
 		return 0, errors.New("Message coordinator is unavailable")
 	}
@@ -601,7 +716,7 @@ func (p *CredentialProxy) CheckMessages(agentID string) (MessageCheckResult, err
 	if p == nil || p.daemon == nil {
 		return MessageCheckResult{}, errors.New("Credential Proxy is unavailable")
 	}
-	runner, err := p.daemon.resolveWorkspaceRunnerByAgent(agentID)
+	runner, err := p.daemon.resolveWorkspaceDaemonByAgent(agentID)
 	if err != nil {
 		return MessageCheckResult{}, errors.New("Message coordinator is unavailable")
 	}
@@ -630,7 +745,7 @@ func (p *CredentialProxy) PrepareMessageRead(
 	if p == nil || p.daemon == nil {
 		return CoverageOffer{}, errors.New("Credential Proxy is unavailable")
 	}
-	runner, err := p.daemon.resolveWorkspaceRunnerByAgent(agentID)
+	runner, err := p.daemon.resolveWorkspaceDaemonByAgent(agentID)
 	if err != nil {
 		return CoverageOffer{}, errors.New("Message coordinator is unavailable")
 	}
@@ -712,7 +827,7 @@ func (p *CredentialProxy) MessageSendBoundarySnapshot(agentID, target string) (i
 	if p == nil || p.daemon == nil {
 		return 0, errors.New("Credential Proxy is unavailable")
 	}
-	runner, err := p.daemon.resolveWorkspaceRunnerByAgent(agentID)
+	runner, err := p.daemon.resolveWorkspaceDaemonByAgent(agentID)
 	if err != nil {
 		return 0, errors.New("Message coordinator is unavailable")
 	}
@@ -723,7 +838,7 @@ func (p *CredentialProxy) PreflightMessageSend(agentID, target string) (MessageS
 	if p == nil || p.daemon == nil {
 		return MessageSendFreshness{}, errors.New("Credential Proxy is unavailable")
 	}
-	runner, err := p.daemon.resolveWorkspaceRunnerByAgent(agentID)
+	runner, err := p.daemon.resolveWorkspaceDaemonByAgent(agentID)
 	if err != nil {
 		return MessageSendFreshness{}, errors.New("Message coordinator is unavailable")
 	}
@@ -734,7 +849,7 @@ func (p *CredentialProxy) PrepareHeldMessageContext(agentID, target string, thro
 	if p == nil || p.daemon == nil {
 		return CoverageOffer{}, errors.New("Credential Proxy is unavailable")
 	}
-	runner, err := p.daemon.resolveWorkspaceRunnerByAgent(agentID)
+	runner, err := p.daemon.resolveWorkspaceDaemonByAgent(agentID)
 	if err != nil {
 		return CoverageOffer{}, errors.New("Message coordinator is unavailable")
 	}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -32,6 +33,7 @@ func (h *Handler) scheduleCanonicalMessageDelivery(ctx context.Context, eventTyp
 		return
 	}
 	h.runAfterChannelMessageAck(ctx, func(ctx context.Context) {
+		h.attachGraphMemoryCitationsToPublishedMessage(ctx, message)
 		channel, found := h.getChannel(ctx, message.WorkspaceID, parseUUID(message.ChannelID))
 		if !found {
 			slog.Warn("load canonical Message channel for Agent delivery failed", "workspace_id", message.WorkspaceID, "channel_id", message.ChannelID, "message_id", message.ID)
@@ -137,6 +139,11 @@ func persistCanonicalMessageDeliveryPlansTx(ctx context.Context, tx pgx.Tx, ch C
 			delivery.RunAgentID = plan.RunAgentID
 		}
 		plan.Delivery = delivery
+		if delivery.Message.Directed {
+			if err := persistGraphMemoryAgentSteeringEvent(ctx, tx, delivery.Message); err != nil {
+				return fmt.Errorf("persist graph memory agent steering event: %w", err)
+			}
+		}
 		// A repaired delivery or obligation needs a live notification after the
 		// acceptance boundary; an ordinary complete replay creates neither.
 		plan.Created = deliveryCreated || obligationCreated
@@ -153,6 +160,119 @@ func (h *Handler) notifyCanonicalMessageDeliveryPlans(ctx context.Context, ch Ch
 	}
 }
 
+// persistGraphMemoryAgentSteeringEvent appends an accepted directed message to
+// the currently fenced trajectory. Delivery replay is idempotent by message_id;
+// channels without an active run retain the ordinary Message queue only.
+func persistGraphMemoryAgentSteeringEvent(ctx context.Context, tx pgx.Tx, message protocol.AgentMessageProjection) error {
+	if tx == nil || !message.Directed || strings.TrimSpace(message.ID) == "" || strings.TrimSpace(message.ChannelID) == "" {
+		return nil
+	}
+	var runID, trajectoryID string
+	if err := tx.QueryRow(ctx, `
+		SELECT run.id::text,trajectory.id::text
+		FROM graph_memory_agent_state state
+		JOIN graph_memory_agent_run run ON run.id=state.active_run_id AND run.status='running'
+		JOIN graph_memory_agent_trajectory trajectory ON trajectory.run_id=run.id AND trajectory.status='active'
+		WHERE state.channel_id=$1::uuid
+		FOR UPDATE OF run`, message.ChannelID).Scan(&runID, &trajectoryID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+	actor, err := json.Marshal(map[string]string{
+		"type": message.InitiatorType,
+		"id":   message.InitiatorID,
+		"name": message.InitiatorName,
+	})
+	if err != nil {
+		return err
+	}
+	body, err := json.Marshal(map[string]any{
+		"id":      message.ID,
+		"seq":     message.Seq,
+		"content": message.Content,
+	})
+	if err != nil {
+		return err
+	}
+	target, err := json.Marshal(map[string]string{
+		"channel_id": message.ChannelID,
+		"target":     message.Target,
+	})
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `
+		INSERT INTO graph_memory_agent_steering_event
+		  (run_id,trajectory_id,message_id,ordinal,actor,message,target)
+		SELECT $1::uuid,$2::uuid,$3::uuid,
+		       COALESCE((SELECT max(ordinal)+1 FROM graph_memory_agent_steering_event WHERE run_id=$1::uuid),1),
+		       $4::jsonb,$5::jsonb,$6::jsonb
+		ON CONFLICT (run_id,message_id) DO NOTHING`, runID, trajectoryID, message.ID, actor, body, target)
+	return err
+}
+
+func (h *Handler) observeGraphMemoryChannelActivity(ctx context.Context, ch ChannelResponse, message ChannelMessageResponse) {
+	if h == nil || h.GraphMemoryAgentControl == nil || h.DB == nil || !strings.EqualFold(ch.Kind, "group") {
+		return
+	}
+	if !channelMessageIsHumanAuthored(message.Type) && !strings.EqualFold(message.Type, "agent") {
+		return
+	}
+	if strings.EqualFold(message.Type, "agent") && message.AuthorID != nil {
+		var memoryAgentID pgtype.UUID
+		if err := h.DB.QueryRow(ctx, `SELECT agent_id FROM graph_memory_channel_agent WHERE channel_id = $1`, parseUUID(ch.ID)).Scan(&memoryAgentID); err == nil && *message.AuthorID == uuidToString(memoryAgentID) {
+			return
+		}
+	}
+	observedAt := time.Now().UTC()
+	if parsed, err := time.Parse(time.RFC3339Nano, message.CreatedAt); err == nil {
+		observedAt = parsed
+	}
+	if err := h.GraphMemoryAgentControl.ObserveActivity(ctx, ch.WorkspaceID, ch.ID, observedAt); err != nil {
+		slog.Warn("graph memory channel activity observation failed", "workspace_id", ch.WorkspaceID, "channel_id", ch.ID, "message_id", message.ID, "error", err)
+	}
+}
+
+func (h *Handler) publishBlockedGraphMemoryDirectedFailure(ctx context.Context, ch ChannelResponse, message ChannelMessageResponse) {
+	if h == nil || h.DB == nil || !channelMessageIsHumanAuthored(message.Type) || !strings.EqualFold(ch.Kind, "group") {
+		return
+	}
+	var agentID pgtype.UUID
+	var reason string
+	if err := h.DB.QueryRow(ctx, `
+		SELECT agent_id, blocked_reason
+		FROM graph_memory_channel_agent
+		WHERE channel_id = $1 AND workspace_id = $2 AND status = 'blocked' AND agent_id IS NOT NULL`,
+		parseUUID(ch.ID), parseUUID(ch.WorkspaceID),
+	).Scan(&agentID, &reason); err != nil || !managedGraphMemoryAgentMentionParts(agentID, message.Parts) {
+		return
+	}
+	content := "Graph Memory Agent cannot accept this request while blocked."
+	if strings.TrimSpace(reason) != "" {
+		content += " Reason: " + strings.TrimSpace(reason)
+	}
+	failure, err := h.insertChannelMessage(ctx, parseUUID(ch.ID), parseUUID(ch.WorkspaceID), "system", pgtype.UUID{}, "System", content, "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		slog.Warn("graph memory blocked directed failure insert failed", "channel_id", ch.ID, "message_id", message.ID, "error", err)
+		return
+	}
+	h.publishChannelToMembers(ctx, protocol.EventChannelMessage, ch.WorkspaceID, "system", "", parseUUID(ch.ID), failure)
+}
+
+func managedGraphMemoryAgentMentionParts(agentID pgtype.UUID, parts []protocol.MessagePart) bool {
+	if !agentID.Valid {
+		return false
+	}
+	for _, part := range parts {
+		if part.Type == protocol.MessagePartTypeReference && part.RefType == "mention" && part.RefSubType == "agent" && part.RefID == uuidToString(agentID) {
+			return true
+		}
+	}
+	return false
+}
+
 // deliverCanonicalMessageToChannelAgents is the compatibility boundary for
 // non-frontend canonical publishers. Frontend and env-dispatch sends call the
 // same planning/persistence functions through service.SendCanonicalChannelMessage.
@@ -166,6 +286,8 @@ func (h *Handler) deliverCanonicalMessageToChannelAgents(ctx context.Context, ch
 	if !channelMessageIsHumanAuthored(message.Type) && channelMessageIsConfirmationNoWake(message) {
 		return nil
 	}
+	h.observeGraphMemoryChannelActivity(ctx, ch, message)
+	h.publishBlockedGraphMemoryDirectedFailure(ctx, ch, message)
 	plans, err := h.planCanonicalMessageDeliveryRecipients(ctx, ch, message)
 	if err != nil {
 		return err
@@ -203,13 +325,15 @@ func persistCanonicalMessageDelivery(ctx context.Context, exec dbExecutor, ch Ch
 		return protocol.AgentDeliverPayload{}, false, err
 	}
 	created := tag.RowsAffected() == 1
+	directed := managedGraphMemoryAgentMention(ctx, exec, parseUUID(ch.ID), recipient.ID, message.Parts)
+	managedGraphTools := managedGraphMemoryAgent(ctx, exec, parseUUID(ch.ID), recipient.ID)
 	return protocol.AgentDeliverPayload{
 		AgentID:    agentID,
 		Target:     target,
 		Seq:        message.Seq,
 		DeliveryID: "message:" + message.ID + ":agent:" + agentID,
 		Message: protocol.AgentMessageProjection{
-			ID: message.ID, ChannelID: ch.ID, Target: target, ReplyTarget: replyTarget, Seq: message.Seq, Content: message.Content, Parts: message.Parts,
+			ID: message.ID, ChannelID: ch.ID, Target: target, ReplyTarget: replyTarget, Seq: message.Seq, Content: message.Content, Parts: message.Parts, Directed: directed, GraphMemoryTools: managedGraphTools,
 			ChannelKind: ch.Kind, ProjectID: stringValue(ch.ProjectID),
 			InitiatorType: canonicalMessageInitiatorType(message.Type), InitiatorID: stringValue(message.AuthorID), InitiatorName: message.AuthorName,
 		},
@@ -243,8 +367,28 @@ func (h *Handler) attachCanonicalMessageMemories(ctx context.Context, workspaceI
 	}
 }
 
+func managedGraphMemoryAgent(ctx context.Context, exec dbExecutor, channelID, agentID pgtype.UUID) bool {
+	if exec == nil || !channelID.Valid || !agentID.Valid {
+		return false
+	}
+	var managed bool
+	if err := exec.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM graph_memory_channel_agent
+			WHERE channel_id = $1 AND agent_id = $2 AND status = 'active'
+		)`, channelID, agentID).Scan(&managed); err != nil {
+		return false
+	}
+	return managed
+}
+
+func managedGraphMemoryAgentMention(ctx context.Context, exec dbExecutor, channelID, agentID pgtype.UUID, parts []protocol.MessagePart) bool {
+	return managedGraphMemoryAgentMentionParts(agentID, parts) && managedGraphMemoryAgent(ctx, exec, channelID, agentID)
+}
+
 // redeliverUnacknowledgedComputerAgentMessages rebuilds the Computer's
-// at-least-once transport queue whenever its Workspace Runner becomes ready.
+// at-least-once transport queue whenever its WorkspaceDaemon becomes ready.
 // The persisted delivery sequence remains the canonical target sequence; this
 // path neither invents a recovery cursor nor changes local context coverage.
 func (h *Handler) redeliverUnacknowledgedComputerAgentMessages(ctx context.Context, identity daemonws.ClientIdentity) error {
@@ -333,6 +477,8 @@ func (h *Handler) redeliverUnacknowledgedComputerAgentMessages(ctx context.Conte
 
 	for i := range pending {
 		item := &pending[i]
+		item.message.GraphMemoryTools = managedGraphMemoryAgent(ctx, h.DB, parseUUID(item.message.ChannelID), item.agentID)
+		item.message.Directed = item.message.GraphMemoryTools && managedGraphMemoryAgentMentionParts(item.agentID, item.message.Parts)
 		h.attachCanonicalMessageMemories(ctx, identity.WorkspaceID, item.agentID, &item.message)
 		agentIDText := uuidToString(item.agentID)
 		delivery := protocol.AgentDeliverPayload{
@@ -536,6 +682,26 @@ func (h *Handler) canonicalMessageDeliveryRecipients(ctx context.Context, ch Cha
 		}
 		return h.filterCanonicalMessageDeliveryRecipients(ctx, ch, message, h.channelThreadFollowerAgents(ctx, ch.WorkspaceID, ch.ID, threadRootID), true)
 	}
+	// An active Goal changes only top-level group execution admission. The
+	// canonical Message remains visible to every channel member, but an
+	// unaddressed Message must not start one provider turn per Agent. A direct
+	// mention still executes its explicit targets; the Goal controller receives
+	// a separate durable state event and decides whether the plan must change.
+	//
+	// Fail open to the established channel policy when an active Goal has no
+	// runnable Agent manager. Silently dropping a human Message is worse than the
+	// bounded legacy fanout, and the controller safety scan will surface the
+	// missing-manager condition.
+	if ch.Kind == "group" {
+		if managers, active := h.activeGoalManagerAgents(ctx, ch.WorkspaceID, ch.ID); active {
+			if len(mentioned) > 0 {
+				return h.filterCanonicalMessageDeliveryRecipients(ctx, ch, message, mentioned, false)
+			}
+			if len(managers) > 0 {
+				return h.filterCanonicalMessageDeliveryRecipients(ctx, ch, message, managers[:1], false)
+			}
+		}
+	}
 	if channelMessageIsHumanAuthored(message.Type) && channelMessageIsGroupCommand(message.Content, message.Parts) {
 		return h.filterCanonicalMessageDeliveryRecipients(ctx, ch, message, h.channelAgentMembers(ctx, ch.WorkspaceID, ch.ID), true)
 	}
@@ -554,6 +720,48 @@ func (h *Handler) canonicalMessageDeliveryRecipients(ctx context.Context, ch Cha
 		return nil
 	}
 	return h.filterCanonicalMessageDeliveryRecipients(ctx, ch, message, h.channelAgentMembers(ctx, ch.WorkspaceID, ch.ID), true)
+}
+
+// activeGoalManagerAgents returns the ordered Agent managers for an active
+// channel Goal. The Goal creator wins when it is still an eligible manager;
+// owner then manager role order is the deterministic fallback. The bool says
+// whether an active Goal exists independently of manager availability.
+func (h *Handler) activeGoalManagerAgents(ctx context.Context, workspaceID, channelID string) ([]db.Agent, bool) {
+	var creatorType string
+	var creatorID pgtype.UUID
+	if err := h.DB.QueryRow(ctx, `
+		SELECT created_by_type, created_by_id
+		FROM channel_goal
+		WHERE workspace_id=$1 AND channel_id=$2 AND status='active'
+		ORDER BY created_at DESC
+		LIMIT 1`, parseUUID(workspaceID), parseUUID(channelID)).Scan(&creatorType, &creatorID); err != nil {
+		return nil, false
+	}
+	rows, err := h.DB.Query(ctx, `
+		SELECT a.id, a.workspace_id, a.name, a.avatar_url, a.runtime_mode, a.runtime_config, a.status,
+		       a.owner_id, a.created_at, a.updated_at, a.description, a.runtime_id,
+		       a.instructions, a.archived_at, a.display_name, a.model, a.thinking_level
+		FROM channel_member cm
+		JOIN agent a ON cm.member_type='agent' AND a.id=cm.member_id
+		WHERE cm.workspace_id=$1 AND cm.channel_id=$2
+		  AND cm.role IN ('owner','manager')
+		  AND a.archived_at IS NULL AND a.runtime_id IS NOT NULL
+		ORDER BY CASE WHEN $3='agent' AND a.id=$4 THEN 0
+		              WHEN cm.role='owner' THEN 1 ELSE 2 END,
+		         cm.created_at, a.id`, parseUUID(workspaceID), parseUUID(channelID), creatorType, nullableUUID(creatorID))
+	if err != nil {
+		return nil, true
+	}
+	defer rows.Close()
+	var managers []db.Agent
+	for rows.Next() {
+		var a db.Agent
+		if err := rows.Scan(&a.ID, &a.WorkspaceID, &a.Name, &a.AvatarUrl, &a.RuntimeMode, &a.RuntimeConfig, &a.Status, &a.OwnerID, &a.CreatedAt, &a.UpdatedAt, &a.Description, &a.RuntimeID, &a.Instructions, &a.ArchivedAt, &a.DisplayName, &a.Model, &a.ThinkingLevel); err != nil {
+			continue
+		}
+		managers = append(managers, a)
+	}
+	return managers, true
 }
 
 func (h *Handler) mergeCanonicalMessageDeliveryRecipients(parts ...[]db.Agent) []db.Agent {

@@ -186,6 +186,14 @@ export function translateLayoutInto(
     x: Math.round((cluster.x * scale + translateX) * 100) / 100,
     y: Math.round((cluster.y * scale + translateY) * 100) / 100,
     radius: Math.ceil(cluster.radius * scale),
+    width:
+      cluster.width == null
+        ? undefined
+        : Math.round(cluster.width * scale * 100) / 100,
+    height:
+      cluster.height == null
+        ? undefined
+        : Math.round(cluster.height * scale * 100) / 100,
     memberIds: cluster.memberIds,
   }));
   const frontiers = (layout.frontiers ?? []).map((frontier) => ({

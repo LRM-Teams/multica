@@ -6,7 +6,6 @@
 - **Cut policy:** **Ship only the latest path.** No dual-write, no long-lived compatibility layer, no historical backfill guarantee. **Do not build protocol hostility** (no required 400 on leftover fields): delete old client/server write paths so nothing in-repo still *uses* them.
 - **Related:**
   - Product PRD §4.1 Attachment/Files — `docs/product-conversation-model-prd.md`
-  - Schema target (`parts` sole truth) — `docs/superpowers/specs/2026-07-08-conversation-schema-target-design.md`
   - Agent CLI attachment surface — `docs/superpowers/specs/2026-07-09-agent-attachment-raft-align-design.md` (agent upload/id protocol; this doc owns **message shape**)
 
 ## Problem

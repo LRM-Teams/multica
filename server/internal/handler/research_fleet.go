@@ -151,21 +151,20 @@ func (h *Handler) seedResearchFleetMembers(ctx context.Context, fleet db.Researc
 			continue
 		}
 		agent, err := h.createAgentWithIdentity(ctx, h.Queries, db.CreateAgentParams{
-			WorkspaceID:        workspaceID,
-			Description:        seed.Description,
-			Instructions:       seed.Instructions,
-			AvatarUrl:          pgtype.Text{},
-			AvatarSource:       agentAvatarSourceAssigned,
-			RuntimeMode:        runtime.RuntimeMode,
-			RuntimeConfig:      []byte("{}"),
-			RuntimeID:          runtime.ID,
-			MaxConcurrentTasks: 4,
-			OwnerID:            userID,
-			CustomEnv:          []byte("{}"),
-			CustomArgs:         []byte("[]"),
-			McpConfig:          nil,
-			Model:              pgTextModelForRuntime(runtime.Provider),
-			ThinkingLevel:      pgtype.Text{},
+			WorkspaceID:   workspaceID,
+			Description:   seed.Description,
+			Instructions:  seed.Instructions,
+			AvatarUrl:     pgtype.Text{},
+			AvatarSource:  agentAvatarSourceAssigned,
+			RuntimeMode:   runtime.RuntimeMode,
+			RuntimeConfig: []byte("{}"),
+			RuntimeID:     runtime.ID,
+			OwnerID:       userID,
+			CustomEnv:     []byte("{}"),
+			CustomArgs:    []byte("[]"),
+			McpConfig:     nil,
+			Model:         pgTextModelForRuntime(runtime.Provider),
+			ThinkingLevel: pgtype.Text{},
 		}, seed.Name, seed.Name)
 		if err != nil {
 			return db.ResearchFleet{}, nil, fmt.Errorf("create fleet agent %s: %w", seed.Name, err)

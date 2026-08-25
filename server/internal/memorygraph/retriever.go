@@ -219,6 +219,15 @@ func (r *HybridRetriever) nodeForDoc(id string) *Node {
 	return r.nodes[id]
 }
 
+// AllowsNodeID reports whether id may be surfaced to this retriever's
+// caller: staging docs and unknown ids pass (same rule as Search), graph
+// nodes must satisfy the active view. The continuation seed merge uses this
+// so prior node ids can never bypass channel visibility.
+func (r *HybridRetriever) AllowsNodeID(id string) bool {
+	n := r.nodeForDoc(id)
+	return n == nil || !r.viewActive() || r.cfg.View.Allows(n)
+}
+
 // hybridSearch is the shared two-channel scoring used by production Search
 // and by per-candidate backtest retrievers (design Q13/A2): BM25 scores
 // normalized to [0,1] (divided by the channel maximum) and vector cosine

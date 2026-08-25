@@ -115,7 +115,7 @@ export type MessagePart =
       label: string;
     }
   | {
-      /** Collapsible note snapshot (Note Worker 「按这篇做」). */
+      /** Collapsible note snapshot (Worker / Period Brief). */
       type: "note_brief";
       /** note_page id */
       ref_id: string;
@@ -135,6 +135,14 @@ export type MessagePart =
       ref_id?: string;
       /** Optional suggested title. */
       label?: string;
+    }
+  | {
+      /** Notes-bubble Period Brief insert card (append below page / create child). */
+      type: "period_brief_insert";
+      /** note_period_brief_run id */
+      ref_id: string;
+      /** Set after the human picks a button. */
+      selected_option_id?: "append" | "child";
     };
 
 /**

@@ -64,9 +64,6 @@ func MigrateLegacyQueryLogs(store *Store) (LegacyMigrationResult, error) {
 			return result, err
 		}
 	}
-	if err := store.migrateLegacyRegressionLocked(&result, quarantined); err != nil {
-		return result, err
-	}
 	return result, nil
 }
 
@@ -124,53 +121,6 @@ func (s *Store) migrateLegacyQueryLogWindowLocked(window string, result *LegacyM
 	return nil
 }
 
-func (s *Store) migrateLegacyRegressionLocked(result *LegacyMigrationResult, quarantined map[string]bool) error {
-	path := filepath.Join(s.Root, "regression_set.jsonl")
-	lines, err := readLegacyMigrationLines(path)
-	if err != nil {
-		return fmt.Errorf("legacy migration: read regression set: %w", err)
-	}
-	if len(lines) == 0 {
-		return nil
-	}
-	entries := make([]*RegressionEntry, 0, len(lines))
-	for lineNumber, raw := range lines {
-		result.Scanned++
-		entry, reason := parseLegacyRegressionEntry(raw)
-		if reason != "" {
-			if err := s.quarantineLegacyEntryLocked(quarantined, "regression_set", lineNumber+1, reason, raw); err != nil {
-				return err
-			}
-			result.Quarantined++
-			continue
-		}
-		if entry.LegacyNonAuthoritative {
-			result.Skipped++
-			entries = append(entries, entry)
-			continue
-		}
-		if isCurrentRegressionEntry(entry) {
-			result.Skipped++
-			entries = append(entries, entry)
-			continue
-		}
-		if !isFlatLegacyRegressionEntry(entry) || !legacyRegressionNumbersInRange(entry) {
-			if err := s.quarantineLegacyEntryLocked(quarantined, "regression_set", lineNumber+1, "unknown_or_out_of_range_regression_shape", raw); err != nil {
-				return err
-			}
-			result.Quarantined++
-			continue
-		}
-		entry.LegacyNonAuthoritative = true
-		result.Marked++
-		entries = append(entries, entry)
-	}
-	if err := writeJSONLAtomically(path, entries); err != nil {
-		return fmt.Errorf("legacy migration: rewrite regression set: %w", err)
-	}
-	return s.writeLegacyMigrationCheckpointLocked("regression_set")
-}
-
 func parseLegacyQueryLogEntry(raw string) (*QueryLogEntry, string) {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(raw), &fields); err != nil || len(fields) == 0 {
@@ -182,21 +132,6 @@ func parseLegacyQueryLogEntry(raw string) (*QueryLogEntry, string) {
 	var entry QueryLogEntry
 	if err := json.Unmarshal([]byte(raw), &entry); err != nil {
 		return nil, "undecodable_query_log_entry"
-	}
-	return &entry, ""
-}
-
-func parseLegacyRegressionEntry(raw string) (*RegressionEntry, string) {
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(raw), &fields); err != nil || len(fields) == 0 {
-		return nil, "undecodable_regression_entry"
-	}
-	if !hasAnyLegacyField(fields, "query", "relevant_nodes", "info_items", "ledger_id", "legacy_non_authoritative") {
-		return nil, "unknown_regression_shape"
-	}
-	var entry RegressionEntry
-	if err := json.Unmarshal([]byte(raw), &entry); err != nil {
-		return nil, "undecodable_regression_entry"
 	}
 	return &entry, ""
 }
@@ -218,23 +153,11 @@ func isFlatLegacyQueryLogEntry(entry *QueryLogEntry) bool {
 	return entry.JudgeDone && len(entry.InfoItems) == 0 && entry.LedgerID == "" && entry.TrajectoryID == ""
 }
 
-func isCurrentRegressionEntry(entry *RegressionEntry) bool {
-	return len(entry.InfoItems) > 0 || entry.LedgerID != ""
-}
-
-func isFlatLegacyRegressionEntry(entry *RegressionEntry) bool {
-	return entry.Query != "" && len(entry.RelevantNodes) > 0 && len(entry.InfoItems) == 0 && entry.LedgerID == ""
-}
-
 func legacyQueryNumbersInRange(entry *QueryLogEntry) bool {
 	return entry.Version >= 0 && entry.Rounds >= 0 && entry.Rounds <= legacyMaxRounds &&
 		entry.AgentRuns >= 0 && entry.AgentRuns <= legacyMaxAgentRuns &&
 		!math.IsNaN(entry.JudgeScore) && !math.IsInf(entry.JudgeScore, 0) &&
 		entry.JudgeScore >= 0 && entry.JudgeScore <= legacyMaxJudgeScore
-}
-
-func legacyRegressionNumbersInRange(entry *RegressionEntry) bool {
-	return entry.AddedVersion >= 0 && entry.BaselineRounds >= 0 && entry.BaselineRounds <= legacyMaxRounds
 }
 
 func (s *Store) legacyMigrationDir() string {

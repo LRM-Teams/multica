@@ -200,6 +200,19 @@ describe("ChatInput Enter-to-send", () => {
     expect(editorProps.last?.submitOnEnter).toBe(true);
   });
 
+  it("pulses the stop button while a run is in progress", () => {
+    renderInput({ isRunning: true, onStop: vi.fn() });
+    const stop = screen.getByRole("button", { name: "Stop" });
+    expect(stop.className).toContain("animate-chat-impulse");
+  });
+
+  it("renders a quote chip inside the composer card", () => {
+    renderInput({
+      composerPrefix: <div data-testid="quote-chip">quoted excerpt</div>,
+    });
+    expect(screen.getByTestId("quote-chip").textContent).toBe("quoted excerpt");
+  });
+
   it("keeps composer focus after a successful send", async () => {
     const onSend = vi.fn(async () => undefined);
     renderInput({ onSend });

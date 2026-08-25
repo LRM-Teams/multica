@@ -16,11 +16,11 @@ import (
 // Module. It excludes Gate, Result acceptance, Projection, and Run lifecycle
 // mutations.
 type executionStore interface {
-	ListAttempts(context.Context, string) ([]Attempt, error)
+	ListAttempts(context.Context, string, string) ([]Attempt, error)
 	ReconcileAttempts(context.Context, string, map[string]InboxTaskState) ([]RunEvent, error)
 	ActivateReadyTasks(context.Context, string) (int, error)
-	ListPendingCancellations(context.Context, string) ([]PendingCancellation, error)
-	MarkCancellationsRequested(context.Context, string, []CancellationRequest) error
+	ListPendingCancellations(context.Context, string, string) ([]PendingCancellation, error)
+	MarkCancellationsRequested(context.Context, string, string, []CancellationRequest) error
 	CompleteCancellations(context.Context, string, []string) ([]RunEvent, error)
 	EvaluateExecutionTargets(context.Context, string, []FleetMember) (map[string]ExecutionTargetHealth, error)
 	DeferTaskForExecutionTarget(context.Context, string, string, *time.Time, []ExecutionTargetHealth) (RunEvent, error)
@@ -43,11 +43,11 @@ type executionModule struct {
 // SyncAttempts reconciles external runtime state before dependency activation.
 // An Inbox Task ID is authoritative once attached; DispatchKey is used only
 // while the attach acknowledgement is still missing.
-func (module executionModule) SyncAttempts(ctx context.Context, sessionID string) error {
+func (module executionModule) SyncAttempts(ctx context.Context, sessionID, workspaceID string) error {
 	if _, err := module.DeliverPending(ctx, sessionID, 32); err != nil {
 		return err
 	}
-	attempts, err := module.store.ListAttempts(ctx, sessionID)
+	attempts, err := module.store.ListAttempts(ctx, sessionID, workspaceID)
 	if err != nil {
 		return err
 	}
@@ -157,7 +157,7 @@ func (module executionModule) CancelPendingAttempts(ctx context.Context, run Run
 	if run.SessionID == "" {
 		return false, nil
 	}
-	pending, err := module.store.ListPendingCancellations(ctx, run.SessionID)
+	pending, err := module.store.ListPendingCancellations(ctx, run.SessionID, run.WorkspaceID)
 	if err != nil || len(pending) == 0 {
 		return false, err
 	}
@@ -221,7 +221,7 @@ func (module executionModule) CancelPendingAttempts(ctx context.Context, run Run
 			return true, fmt.Errorf("cancel research inbox tasks: %w", err)
 		}
 		markCtx, markCancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
-		err = module.store.MarkCancellationsRequested(markCtx, run.SessionID, requests)
+		err = module.store.MarkCancellationsRequested(markCtx, run.SessionID, run.WorkspaceID, requests)
 		markCancel()
 		if err != nil {
 			return true, err

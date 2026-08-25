@@ -1,0 +1,2 @@
+ALTER TABLE agent
+DROP COLUMN IF EXISTS stopped_at;

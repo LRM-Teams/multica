@@ -34,7 +34,7 @@ func createRuntimeLocalSkillTestRuntime(t *testing.T, ownerID string) string {
 		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at)
 		VALUES ($1,  $2,  $3,  'local',  'claude',  'online',  'Runtime Local Skills Test',  '{}'::jsonb,  now())
 		RETURNING id
-	`,  testWorkspaceID,  daemonID,  runtimeName).Scan(&runtimeID); err != nil {
+	`, testWorkspaceID, daemonID, runtimeName).Scan(&runtimeID); err != nil {
 		t.Fatalf("create local runtime: %v", err)
 	}
 	bindTestRuntimeOwner(t, daemonID, ownerID)
@@ -318,7 +318,7 @@ func createStaleHeartbeatRuntimeLocalSkillTestRuntime(t *testing.T, ownerID stri
 		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, updated_at)
 		VALUES ($1,  $2,  $3,  'local',  'claude',  'online',  'Runtime Local Skills Stale Test',  '{}'::jsonb,  now() - interval '10 minutes',  now() - interval '9 minutes')
 		RETURNING id
-	`,  testWorkspaceID,  daemonID,  runtimeName).Scan(&runtimeID); err != nil {
+	`, testWorkspaceID, daemonID, runtimeName).Scan(&runtimeID); err != nil {
 		t.Fatalf("create stale-heartbeat local runtime: %v", err)
 	}
 	bindTestRuntimeOwner(t, daemonID, ownerID)

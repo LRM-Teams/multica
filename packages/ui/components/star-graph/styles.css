@@ -260,7 +260,7 @@
   background: #0a1925;
   color: #a7f3d0;
   box-shadow: 0 3px 10px rgb(0 0 0 / 28%);
-  pointer-events: none;
+  pointer-events: auto;
 }
 .sg-disclosure[data-disclosure-state="expanded"] {
   border-color: #5ee39d;
@@ -406,10 +406,25 @@
 }
 
 .sg-node [data-testid="star-graph-agent-badge"] {
-  border-color: color-mix(in oklab, var(--sg-accent-agent) 65%, transparent);
-  background: color-mix(in oklab, var(--sg-accent-agent) 14%, transparent);
-  color: #bdeff4;
+  max-width: 90%;
+  overflow: hidden;
+  border-color: color-mix(
+    in oklab,
+    var(--sg-agent-identity, var(--sg-accent-agent)) 72%,
+    var(--foreground)
+  );
+  background: var(
+    --sg-agent-identity-bg,
+    color-mix(in oklab, var(--sg-accent-agent) 14%, transparent)
+  );
+  color: color-mix(
+    in oklab,
+    var(--sg-agent-identity, var(--sg-accent-agent)) 58%,
+    var(--foreground)
+  );
   font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sg-document-badge {

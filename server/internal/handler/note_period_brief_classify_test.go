@@ -90,6 +90,75 @@ func TestClassifyPeriodBriefCollectorOutcomeEmptyCompleted(t *testing.T) {
 	}
 }
 
+func TestPeriodBriefRetryDispositionAllowsRunningAfterWaitReleased(t *testing.T) {
+	t.Parallel()
+	d := periodBriefRetryDisposition("dispatched", "", false)
+	if d.Status != "stalled" || !d.Retryable {
+		t.Fatalf("still-running inbox after wait released must be retryable: %+v", d)
+	}
+	ready := periodBriefRetryDisposition("running", "", true)
+	if ready.Status != "ready" || ready.Retryable {
+		t.Fatalf("ready pack must not retry: %+v", ready)
+	}
+}
+
+func TestPeriodBriefCollectorNeedsAssistantRetryOnce(t *testing.T) {
+	t.Parallel()
+	if periodBriefCollectorNeedsAssistantRetry(notePeriodBriefPackResult{Status: "failed", Retryable: true, RetryCount: 0}) != true {
+		t.Fatal("first transient failure must wait for the Notes Assistant retry")
+	}
+	if periodBriefCollectorNeedsAssistantRetry(notePeriodBriefPackResult{Status: "failed", Retryable: true, RetryCount: 1}) {
+		t.Fatal("one assistant retry is the final result")
+	}
+	if periodBriefCollectorNeedsAssistantRetry(notePeriodBriefPackResult{Status: "ready", Retryable: false, RetryCount: 0}) {
+		t.Fatal("ready packs are already received")
+	}
+	if periodBriefCollectorNeedsAssistantRetry(notePeriodBriefPackResult{Status: "failed", Retryable: false, RetryCount: 0}) {
+		t.Fatal("permanent failures are already final")
+	}
+	if periodBriefAllCollectorResultsFinal([]notePeriodBriefPackResult{
+		{Status: "ready"},
+		{Status: "failed", Retryable: true, RetryCount: 0},
+	}) {
+		t.Fatal("must not treat remaining assistant retries as received")
+	}
+	if got := periodBriefMaterialsProgressCopy([]notePeriodBriefPackResult{
+		{Status: "failed", Retryable: true, RetryCount: 0},
+	}); !strings.Contains(got, "再发起一次采集") {
+		t.Fatalf("first failure copy = %q", got)
+	}
+	if got := periodBriefMaterialsProgressCopy([]notePeriodBriefPackResult{
+		{Status: "failed", Retryable: true, RetryCount: 1},
+	}); !strings.Contains(got, "没有采到可用材料") {
+		t.Fatalf("final failure copy = %q", got)
+	}
+	if got := periodBriefMaterialsProgressCopy(nil); !strings.Contains(got, "没有派出采集员") {
+		t.Fatalf("empty plan copy = %q", got)
+	}
+	if got := periodBriefMaterialsProgressCopy([]notePeriodBriefPackResult{
+		{Status: "ready"},
+	}); !strings.Contains(got, "收到了所有需要的材料") {
+		t.Fatalf("ready copy = %q", got)
+	}
+}
+
+func TestPeriodBriefPackBelongsToJob(t *testing.T) {
+	t.Parallel()
+	current := "job-2"
+	if periodBriefPackBelongsToJob(notePeriodBriefCollectorRef{PackJobID: "job-1", JobID: current}, current) {
+		t.Fatal("a pack from the previous job must not settle this retry")
+	}
+	if !periodBriefPackBelongsToJob(notePeriodBriefCollectorRef{PackJobID: current, JobID: current}, current) {
+		t.Fatal("this job's pack must settle")
+	}
+	if !periodBriefPackBelongsToJob(notePeriodBriefCollectorRef{JobID: current}, current) {
+		t.Fatal("legacy pack without pack_job_id still counts for the current job")
+	}
+	if periodBriefPackBelongsToJob(notePeriodBriefCollectorRef{JobID: current}, "job-1") {
+		t.Fatal("legacy pack must not count for a different waited job")
+	}
+}
+
 func TestClassifyPeriodBriefCollectorOutcomeStalled(t *testing.T) {
 	t.Parallel()
 	d := classifyPeriodBriefCollectorOutcome("running", "", "", false, true)

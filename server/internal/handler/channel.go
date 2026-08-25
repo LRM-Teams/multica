@@ -230,6 +230,9 @@ type ChannelMessageResponse struct {
 	// Attachments referenced by this message. The chat bubble renders
 	// file/image cards from these canonical associations.
 	Attachments []AttachmentResponse `json:"attachments,omitempty"`
+	// GraphMemoryCitationCount exposes only immutable snapshot availability;
+	// citation bodies are loaded lazily through the member-authorized endpoint.
+	GraphMemoryCitationCount int `json:"graph_memory_citation_count,omitempty"`
 	// UndeliveredMentions lists structured @ targets who are not channel
 	// members yet. Message is still stored; delivery is withheld until the
 	// sender invites (Raft undelivered / invite). Omit when empty.
@@ -371,11 +374,14 @@ type ChannelInviteCandidatesResponse struct {
 // ChannelMentionCandidate is one @ picker row. Type matches the composer
 // mention vocabulary (member | agent), not channel_member.member_type.
 type ChannelMentionCandidate struct {
-	Type      string  `json:"type"`
-	ID        string  `json:"id"`
-	Handle    string  `json:"handle"`
-	Label     string  `json:"label"`
-	AvatarURL *string `json:"avatar_url,omitempty"`
+	Type   string `json:"type"`
+	ID     string `json:"id"`
+	Handle string `json:"handle"`
+	Label  string `json:"label"`
+	// One-line blurb: the user's self-description or the agent's configured
+	// description. Always a string; empty when unset.
+	Description string  `json:"description"`
+	AvatarURL   *string `json:"avatar_url,omitempty"`
 }
 
 // ChannelMentionCandidatesResponse is GET /api/channels/:id/mention-candidates.
@@ -1433,6 +1439,7 @@ func (h *Handler) listChannelMentionInChannel(ctx context.Context, workspaceID, 
 		       cm.member_id,
 		       COALESCE(u.name, a.name, ''),
 		       COALESCE(NULLIF(u.display_name, ''), u.name, u.email, NULLIF(a.display_name, ''), a.name, ''),
+		       COALESCE(NULLIF(u.profile_description, ''), NULLIF(a.description, ''), ''),
 		       CASE WHEN cm.member_type = 'user' THEN u.avatar_url ELSE a.avatar_url END
 		FROM channel_member cm
 		LEFT JOIN "user" u ON cm.member_type = 'user' AND u.id = cm.member_id
@@ -1459,6 +1466,7 @@ func (h *Handler) listChannelMentionOutsiders(ctx context.Context, workspaceID, 
 	rows, err := h.DB.Query(ctx, `
 		WITH visible_agents AS (
 			SELECT a.id, a.name, COALESCE(NULLIF(a.display_name, ''), a.name) AS display_name,
+			       COALESCE(a.description, '') AS description,
 			       a.avatar_url
 			FROM agent a
 			WHERE a.workspace_id = $1
@@ -1476,6 +1484,7 @@ func (h *Handler) listChannelMentionOutsiders(ctx context.Context, workspaceID, 
 			SELECT 'member'::text AS type, m.user_id AS id,
 			       COALESCE(u.name, '') AS handle,
 			       COALESCE(NULLIF(u.display_name, ''), u.name, u.email) AS label,
+			       COALESCE(u.profile_description, '') AS description,
 			       u.avatar_url
 			FROM member m
 			JOIN "user" u ON u.id = m.user_id
@@ -1492,10 +1501,11 @@ func (h *Handler) listChannelMentionOutsiders(ctx context.Context, workspaceID, 
 			  )
 			UNION ALL
 			SELECT 'agent'::text AS type, va.id AS id,
-			       va.name AS handle, va.display_name AS label, va.avatar_url
+			       va.name AS handle, va.display_name AS label,
+			       va.description, va.avatar_url
 			FROM visible_agents va
 		)
-		SELECT type, id, handle, label, avatar_url
+		SELECT type, id, handle, label, description, avatar_url
 		FROM candidates
 		ORDER BY lower(label), lower(handle), id
 		LIMIT $5 OFFSET $6`,
@@ -1535,7 +1545,7 @@ func scanChannelMentionCandidates(rows pgx.Rows) ([]ChannelMentionCandidate, err
 		var c ChannelMentionCandidate
 		var id pgtype.UUID
 		var avatar pgtype.Text
-		if err := rows.Scan(&c.Type, &id, &c.Handle, &c.Label, &avatar); err != nil {
+		if err := rows.Scan(&c.Type, &id, &c.Handle, &c.Label, &c.Description, &avatar); err != nil {
 			return nil, err
 		}
 		c.ID = uuidToString(id)
@@ -2278,6 +2288,7 @@ func (h *Handler) ListChannelMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	attachChannelMessageExtras := func(msgs []ChannelMessageResponse) {
 		h.attachChannelMessageAttachments(r.Context(), workspaceID, msgs)
+		h.attachGraphMemoryCitationCounts(r.Context(), workspaceID, msgs)
 		h.attachChannelMessageReactions(r.Context(), workspaceID, msgs)
 		h.attachChannelMessageReplySummaries(r.Context(), workspaceID, msgs)
 		h.attachChannelMessageQuotes(r.Context(), workspaceID, msgs)
@@ -2448,6 +2459,7 @@ func (h *Handler) listChannelMessagesAround(w http.ResponseWriter, r *http.Reque
 	// Attach extras
 	attachChannelMessageExtras := func(msgs []ChannelMessageResponse) {
 		h.attachChannelMessageAttachments(r.Context(), workspaceIDStr, msgs)
+		h.attachGraphMemoryCitationCounts(r.Context(), workspaceIDStr, msgs)
 		h.attachChannelMessageReactions(r.Context(), workspaceIDStr, msgs)
 		h.attachChannelMessageReplySummaries(r.Context(), workspaceIDStr, msgs)
 		h.attachChannelMessageQuotes(r.Context(), workspaceIDStr, msgs)
@@ -3089,6 +3101,7 @@ func (h *Handler) attachSingleChannelMessageDetails(ctx context.Context, workspa
 	h.attachChannelMessageThreadMetadata(ctx, workspaceID, userID, messages)
 	h.attachChannelMessageThreadReadModel(ctx, workspaceID, messages)
 	h.attachChannelMessageAttachments(ctx, workspaceID, messages)
+	h.attachGraphMemoryCitationCounts(ctx, workspaceID, messages)
 	msg = messages[0]
 	applyChannelMessageTombstone(&msg)
 	return msg
@@ -3108,6 +3121,42 @@ func (h *Handler) attachChannelMessageAttachments(ctx context.Context, workspace
 	grouped := h.groupChannelMessageAttachments(ctx, workspaceID, messageIDs)
 	for i := range messages {
 		messages[i].Attachments = grouped[messages[i].ID]
+	}
+}
+
+func (h *Handler) attachGraphMemoryCitationCounts(ctx context.Context, workspaceID string, messages []ChannelMessageResponse) {
+	if len(messages) == 0 {
+		return
+	}
+	ids := make([]pgtype.UUID, 0, len(messages))
+	for _, message := range messages {
+		if message.DeletedAt == nil {
+			ids = append(ids, parseUUID(message.ID))
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	rows, err := h.DB.Query(ctx, `
+		SELECT message_id,count(*)::int
+		FROM graph_memory_agent_citation
+		WHERE workspace_id=$1::uuid AND message_id=ANY($2::uuid[])
+		GROUP BY message_id`, workspaceID, ids)
+	if err != nil {
+		slog.Warn("graph memory citation count hydration failed", "workspace_id", workspaceID, "error", err)
+		return
+	}
+	defer rows.Close()
+	counts := make(map[string]int)
+	for rows.Next() {
+		var messageID pgtype.UUID
+		var count int
+		if rows.Scan(&messageID, &count) == nil {
+			counts[uuidToString(messageID)] = count
+		}
+	}
+	for i := range messages {
+		messages[i].GraphMemoryCitationCount = counts[messages[i].ID]
 	}
 }
 
@@ -3882,6 +3931,7 @@ func (h *Handler) ListChannelMessageThread(w http.ResponseWriter, r *http.Reques
 		out = append(out, repliesDesc[i])
 	}
 	h.attachChannelMessageAttachments(r.Context(), workspaceID, out)
+	h.attachGraphMemoryCitationCounts(r.Context(), workspaceID, out)
 	h.attachChannelMessageReactions(r.Context(), workspaceID, out)
 	h.attachChannelMessageReplySummaries(r.Context(), workspaceID, out)
 	h.attachChannelMessageQuotes(r.Context(), workspaceID, out)
@@ -6133,7 +6183,7 @@ func (h *Handler) channelMentionedAgents(ctx context.Context, workspaceID, chann
 	}
 	rows, err := h.DB.Query(ctx, `
 		SELECT a.id, a.workspace_id, a.name, a.avatar_url, a.runtime_mode, a.runtime_config, a.status,
-		       a.max_concurrent_tasks, a.owner_id, a.created_at, a.updated_at, a.description, a.runtime_id,
+		       a.owner_id, a.created_at, a.updated_at, a.description, a.runtime_id,
 		       a.instructions, a.archived_at, a.display_name, a.model, a.thinking_level
 		FROM channel_member cm
 		JOIN agent a ON cm.member_type = 'agent' AND a.id = cm.member_id
@@ -6145,7 +6195,7 @@ func (h *Handler) channelMentionedAgents(ctx context.Context, workspaceID, chann
 	var out []db.Agent
 	for rows.Next() {
 		var a db.Agent
-		if err := rows.Scan(&a.ID, &a.WorkspaceID, &a.Name, &a.AvatarUrl, &a.RuntimeMode, &a.RuntimeConfig, &a.Status, &a.MaxConcurrentTasks, &a.OwnerID, &a.CreatedAt, &a.UpdatedAt, &a.Description, &a.RuntimeID, &a.Instructions, &a.ArchivedAt, &a.DisplayName, &a.Model, &a.ThinkingLevel); err != nil {
+		if err := rows.Scan(&a.ID, &a.WorkspaceID, &a.Name, &a.AvatarUrl, &a.RuntimeMode, &a.RuntimeConfig, &a.Status, &a.OwnerID, &a.CreatedAt, &a.UpdatedAt, &a.Description, &a.RuntimeID, &a.Instructions, &a.ArchivedAt, &a.DisplayName, &a.Model, &a.ThinkingLevel); err != nil {
 			continue
 		}
 		_, mentionedByID := mentionedAgents[uuidToString(a.ID)]
@@ -6160,7 +6210,7 @@ func (h *Handler) channelMentionedAgents(ctx context.Context, workspaceID, chann
 func (h *Handler) channelThreadFollowerAgents(ctx context.Context, workspaceID, channelID, rootMessageID string) []db.Agent {
 	return h.channelThreadAgentsFromQuery(ctx, `
 		SELECT a.id, a.workspace_id, a.name, a.avatar_url, a.runtime_mode, a.runtime_config, a.status,
-		       a.max_concurrent_tasks, a.owner_id, a.created_at, a.updated_at, a.description, a.runtime_id,
+		       a.owner_id, a.created_at, a.updated_at, a.description, a.runtime_id,
 		       a.instructions, a.archived_at, a.display_name, a.model, a.thinking_level
 		FROM thread_participant tp
 		JOIN channel_message root ON root.id = tp.root_message_id
@@ -6184,7 +6234,7 @@ func (h *Handler) channelThreadAgentsFromQuery(ctx context.Context, query string
 	var out []db.Agent
 	for rows.Next() {
 		var a db.Agent
-		if err := rows.Scan(&a.ID, &a.WorkspaceID, &a.Name, &a.AvatarUrl, &a.RuntimeMode, &a.RuntimeConfig, &a.Status, &a.MaxConcurrentTasks, &a.OwnerID, &a.CreatedAt, &a.UpdatedAt, &a.Description, &a.RuntimeID, &a.Instructions, &a.ArchivedAt, &a.DisplayName, &a.Model, &a.ThinkingLevel); err != nil {
+		if err := rows.Scan(&a.ID, &a.WorkspaceID, &a.Name, &a.AvatarUrl, &a.RuntimeMode, &a.RuntimeConfig, &a.Status, &a.OwnerID, &a.CreatedAt, &a.UpdatedAt, &a.Description, &a.RuntimeID, &a.Instructions, &a.ArchivedAt, &a.DisplayName, &a.Model, &a.ThinkingLevel); err != nil {
 			continue
 		}
 		out = append(out, a)

@@ -1,8 +1,14 @@
 "use client";
 
-import type { QueryClient } from "@tanstack/react-query";
+import type { InfiniteData, QueryClient } from "@tanstack/react-query";
 import { getCurrentWsId } from "@multica/core/platform";
-import { channelKeys } from "@multica/core/channels/queries";
+import {
+  conversationGroupChannels,
+  conversationKeys,
+  conversationsOptions,
+  flattenConversationPages,
+  type ConversationListResponse,
+} from "@multica/core/conversations";
 import type { Channel } from "@multica/core/types";
 import type { SuggestionOptions } from "@tiptap/suggestion";
 import { PluginKey } from "@tiptap/pm/state";
@@ -33,23 +39,34 @@ function matchesChannel(item: Pick<Channel, "name" | "description">, query: stri
   );
 }
 
-// No server search — a workspace's channel list is small and already fully
-// cached (channelsOptions fetches the whole thing up front, unlike issues
-// which are paginated/bucketed), so client-side filtering of the cache is
-// sufficient. Mirrors createIssueReferenceSuggestion's shape and popup
-// (issue-reference-suggestion.tsx) minus its server-search fallback.
+// Filter the unified Conversations cache, which is also the Messages sidebar's
+// single source of truth. If the composer opens before that cache exists, the
+// suggestion performs one normal infinite-query fetch instead of permanently
+// showing an empty picker until the user types another character.
 export function createChannelReferenceSuggestion(
   qc: QueryClient,
 ): Omit<SuggestionOptions<MentionItem>, "editor"> {
   const pluginKey = new PluginKey("channelReferenceSuggestion");
 
-  function buildItems(query: string): MentionItem[] {
+  async function buildItems(query: string): Promise<MentionItem[]> {
     const wsId = getCurrentWsId();
     if (!wsId) return [];
 
-    const cached = qc.getQueryData<Channel[]>(channelKeys.list(wsId)) ?? [];
+    let cached = qc.getQueryData<InfiniteData<ConversationListResponse>>(
+      conversationKeys.list(wsId),
+    );
+    if (!cached) {
+      try {
+        cached = await qc.fetchInfiniteQuery(conversationsOptions(wsId));
+      } catch {
+        return [];
+      }
+    }
+    const channels = cached
+      ? conversationGroupChannels(flattenConversationPages(cached))
+      : [];
     const items: MentionItem[] = [];
-    for (const c of cached) {
+    for (const c of channels) {
       if (c.kind === "group" && !c.archived_at && matchesChannel(c, query)) {
         items.push(channelToReference(c));
       }
@@ -93,6 +110,11 @@ export function createChannelReferenceSuggestion(
     }>({
       pluginKey,
       component: MentionList,
+      // Keep #channel suggestions aligned with the @person picker: both are
+      // roster-style composer suggestions, span the composer, and stay above
+      // it rather than following the caret vertically.
+      anchorToEditorWidth: true,
+      anchorToEditorTop: true,
       getProps: (props) => ({
         items: props.items,
         query: props.query,

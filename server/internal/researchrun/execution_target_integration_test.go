@@ -45,7 +45,7 @@ func TestExecutionTargetIsFrozenIntoAttemptAndOutbox(t *testing.T) {
 	if target.Adapter != "agent_inbox" || target.RuntimeID == "" || target.Provider != "codex" || target.Model != "test-model" || len(target.ConfigFingerprint) != 64 {
 		t.Fatalf("resolved target=%+v", target)
 	}
-	tasks, err := store.ListTasks(ctx, fixture.sessionID)
+	tasks, err := store.ListTasks(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil || len(tasks) != 1 {
 		t.Fatalf("tasks=%+v err=%v", tasks, err)
 	}

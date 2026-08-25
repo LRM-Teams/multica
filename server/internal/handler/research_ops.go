@@ -632,8 +632,24 @@ func (h *Handler) GetResearchPresence(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if _, err := h.Queries.GetResearchSession(r.Context(), db.GetResearchSessionParams{ID: sessionID, WorkspaceID: wsUUID}); err != nil {
+	sessionRow, err := h.Queries.GetResearchSession(r.Context(), db.GetResearchSessionParams{ID: sessionID, WorkspaceID: wsUUID})
+	if err != nil {
 		writeError(w, http.StatusNotFound, "research session not found")
+		return
+	}
+	// V6 runs have a run-scoped team (not workspace fleet members) and track
+	// execution in V6 work items — the V5 fleet/task roster below never sees
+	// them, so derive presence from the V6 ledger instead.
+	if sessionRow.OrchestratorVersion == researchrun.OrchestratorVersionV6 {
+		presence, presenceErr := h.buildResearchV6PresenceRoster(r.Context(), wsUUID, sessionID, time.Now().UTC())
+		if presenceErr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to load presence")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"session_id": uuidToString(sessionID),
+			"presence":   presence,
+		})
 		return
 	}
 	nodes, err := h.Queries.ListResearchGraphNodes(r.Context(), db.ListResearchGraphNodesParams{
@@ -967,8 +983,9 @@ func (h *Handler) StopResearchSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, researchSessionToResponse(updated))
 }
 
-// DeleteResearchSession permanently removes a research session and cascaded
-// graph/messages/sources/report rows.
+// DeleteResearchSession permanently removes legacy sessions. V6 sessions are
+// archived because their canonical facts are append-only and may only be
+// removed by the enclosing Workspace deletion policy.
 func (h *Handler) DeleteResearchSession(w http.ResponseWriter, r *http.Request) {
 	workspaceID := h.resolveWorkspaceID(r)
 	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace_id")
@@ -1008,6 +1025,23 @@ func (h *Handler) DeleteResearchSession(w http.ResponseWriter, r *http.Request) 
 
 	if err = h.stopResearchSessionWakes(r.Context(), wsUUID, sessionID); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to cancel active research tasks")
+		return
+	}
+	if session.OrchestratorVersion == researchrun.OrchestratorVersionV6 {
+		archived, archiveErr := h.Queries.UpdateResearchSession(r.Context(), db.UpdateResearchSessionParams{
+			ID:          sessionID,
+			WorkspaceID: wsUUID,
+			Status:      pgtype.Text{String: "archived", Valid: true},
+		})
+		if archiveErr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to archive research session")
+			return
+		}
+		h.publish(protocol.EventResearchSessionStatusChanged, workspaceID, "user", userID, map[string]any{
+			"session":  researchSessionToResponse(archived),
+			"archived": true,
+		})
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 
@@ -1319,20 +1353,19 @@ func (h *Handler) HireResearchFleetMember(w http.ResponseWriter, r *http.Request
 	}
 
 	agent, err := h.createAgentWithIdentity(r.Context(), h.Queries, db.CreateAgentParams{
-		WorkspaceID:        wsUUID,
-		Description:        req.Description,
-		Instructions:       instructions,
-		AvatarUrl:          pgtype.Text{},
-		AvatarSource:       agentAvatarSourceAssigned,
-		RuntimeMode:        runtime.RuntimeMode,
-		RuntimeConfig:      []byte("{}"),
-		RuntimeID:          runtime.ID,
-		MaxConcurrentTasks: 3,
-		OwnerID:            parseUUID(userID),
-		CustomEnv:          []byte("{}"),
-		CustomArgs:         []byte("[]"),
-		Model:              model,
-		ThinkingLevel:      pgtype.Text{},
+		WorkspaceID:   wsUUID,
+		Description:   req.Description,
+		Instructions:  instructions,
+		AvatarUrl:     pgtype.Text{},
+		AvatarSource:  agentAvatarSourceAssigned,
+		RuntimeMode:   runtime.RuntimeMode,
+		RuntimeConfig: []byte("{}"),
+		RuntimeID:     runtime.ID,
+		OwnerID:       parseUUID(userID),
+		CustomEnv:     []byte("{}"),
+		CustomArgs:    []byte("[]"),
+		Model:         model,
+		ThinkingLevel: pgtype.Text{},
 	}, req.Name, req.Name)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to hire agent: "+err.Error())

@@ -354,6 +354,62 @@ func TestResolveGraphMemoryGate(t *testing.T) {
 	}
 }
 
+func TestGraphMemoryConsolidationConfigs(t *testing.T) {
+	cases := []struct {
+		name       string
+		rounds     int
+		tttEnabled bool
+		wantRounds int
+		wantTTV    int
+	}{
+		{name: "zero keeps default rounds", rounds: 0, tttEnabled: true, wantRounds: 6, wantTTV: 4},
+		{name: "profile rounds override default", rounds: 10, tttEnabled: true, wantRounds: 10, wantTTV: 4},
+		{name: "negative keeps default rounds", rounds: -1, tttEnabled: true, wantRounds: 6, wantTTV: 4},
+		{name: "ttt off forces non-TTT in-place", rounds: 10, tttEnabled: false, wantRounds: 10, wantTTV: 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, exploreCfg := graphMemoryConsolidationConfigs("model", tc.rounds, tc.tttEnabled)
+			if exploreCfg.MaxRounds != tc.wantRounds {
+				t.Fatalf("exploreCfg.MaxRounds = %d, want %d", exploreCfg.MaxRounds, tc.wantRounds)
+			}
+			if cfg.ExploreMaxRounds != tc.wantRounds {
+				t.Fatalf("cfg.ExploreMaxRounds = %d, want %d", cfg.ExploreMaxRounds, tc.wantRounds)
+			}
+			if cfg.TTVTrajectories != tc.wantTTV {
+				t.Fatalf("cfg.TTVTrajectories = %d, want %d", cfg.TTVTrajectories, tc.wantTTV)
+			}
+			if exploreCfg.Model != "model" {
+				t.Fatalf("exploreCfg.Model = %q, want model", exploreCfg.Model)
+			}
+		})
+	}
+}
+
+func TestResolveGraphMemoryProfile(t *testing.T) {
+	ctx := context.Background()
+	wsID := "3f6b1c2e-7a8d-4e5f-9a0b-1c2d3e4f5a6b"
+	wsDir := "/root/" + wsID + "/memory_graph/projects/1f2e3d4c-5b6a-4978-8c7d-6e5f4a3b2c1d"
+
+	var gotWorkspaceID string
+	lookup := func(_ context.Context, workspaceID string) (int, bool) {
+		gotWorkspaceID = workspaceID
+		return 10, true
+	}
+	if rounds, ttt := resolveGraphMemoryProfile(ctx, wsDir, lookup); rounds != 10 || !ttt {
+		t.Fatalf("resolveGraphMemoryProfile = (%d, %v), want (10, true)", rounds, ttt)
+	}
+	if gotWorkspaceID != wsID {
+		t.Fatalf("lookup workspace ID = %q, want %q", gotWorkspaceID, wsID)
+	}
+	if rounds, ttt := resolveGraphMemoryProfile(ctx, "/root/memory_graph", lookup); rounds != 0 || ttt {
+		t.Fatalf("root-level profile = (%d, %v), want (0, false)", rounds, ttt)
+	}
+	if rounds, ttt := resolveGraphMemoryProfile(ctx, wsDir, nil); rounds != 0 || ttt {
+		t.Fatalf("nil lookup profile = (%d, %v), want (0, false)", rounds, ttt)
+	}
+}
+
 func TestGraphMemoryJobSpecValid(t *testing.T) {
 	job := GraphMemoryJobs(nil, nil)
 	if err := job.validate(); err != nil {

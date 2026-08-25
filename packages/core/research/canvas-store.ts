@@ -104,7 +104,7 @@ type CanvasState = {
   viewportBySession: Record<string, CanvasViewport>;
   /** Currently selected node id (client selection, not canonical). */
   selectedNodeId: string | null;
-  /** Session-scoped selection restores refreshes without leaking across runs. */
+  /** Session-scoped transient selection without leaking across runs. */
   selectedNodeBySession: Record<string, string>;
   /** Current display-only filter. */
   filter: ResearchCanvasFilter;
@@ -185,8 +185,6 @@ export const useResearchCanvasStore = create<CanvasState>()(
       partialize: (s) => ({
         viewport: s.viewport,
         viewportBySession: s.viewportBySession,
-        selectedNodeId: s.selectedNodeId,
-        selectedNodeBySession: s.selectedNodeBySession,
         filter: s.filter,
         filterBySession: s.filterBySession,
       }),

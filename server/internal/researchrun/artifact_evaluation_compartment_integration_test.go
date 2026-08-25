@@ -78,7 +78,7 @@ func TestEvaluatedSubjectSerializationExcludesPrivateArtifactWhileGraderUsesFroz
 		t.Fatal("private artifact content hash is empty")
 	}
 
-	tasks, err := store.ListTasks(ctx, run.SessionID)
+	tasks, err := store.ListTasks(ctx, run.SessionID, run.WorkspaceID)
 	if err != nil || len(tasks) == 0 {
 		t.Fatalf("ListTasks: %v len=%d", err, len(tasks))
 	}
@@ -428,7 +428,7 @@ func TestEvaluationPrivateStageEvalExcludedFromTaskExecutionManifest(t *testing.
 		t.Fatal("expected positive control claim in manifest entries")
 	}
 
-	tasks, err := store.ListTasks(ctx, run.SessionID)
+	tasks, err := store.ListTasks(ctx, run.SessionID, run.WorkspaceID)
 	if err != nil || len(tasks) == 0 {
 		t.Fatalf("ListTasks: %v len=%d", err, len(tasks))
 	}

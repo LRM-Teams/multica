@@ -27,31 +27,45 @@ import (
 // or unversioned writes against an existing row return 409 instead of
 // silently overwriting concurrent changes.
 
-const defaultGraphMemoryType = "legacy"
+const (
+	defaultGraphMemoryType = "legacy"
+	defaultGraphMemoryMode = "agent"
+)
 
 type graphMemoryProfileResponse struct {
-	WorkspaceID              string  `json:"workspace_id"`
-	MemoryType               string  `json:"memory_type"`
-	ExploreAgents            int32   `json:"explore_agents"`
-	ExploreMaxRounds         int32   `json:"explore_max_rounds"`
-	TTTEnabled               bool    `json:"ttt_enabled"`
-	ExploreNodesPerExpansion int32   `json:"explore_nodes_per_expansion"`
-	MaxHierarchyFanout       int32   `json:"max_hierarchy_fanout"`
-	MaxRelationEdgesPerNode  int32   `json:"max_relation_edges_per_node"`
-	DiveMaxRounds            int32   `json:"dive_max_rounds"`
-	DiveMaxViewedNodes       int32   `json:"dive_max_viewed_nodes"`
-	DiveMaxSourceFiles       int32   `json:"dive_max_source_files"`
-	DiveTimeoutSeconds       int32   `json:"dive_timeout_seconds"`
-	WRound                   float64 `json:"w_round"`
-	SourceMaxFileBytes       int64   `json:"source_max_file_bytes"`
-	SourceMaxTotalBytes      int64   `json:"source_max_total_bytes"`
-	SourceMaxPDFPages        int32   `json:"source_max_pdf_pages"`
-	SourceMaxAVSeconds       int32   `json:"source_max_av_seconds"`
-	SourceMaxImageMegapixels int32   `json:"source_max_image_megapixels"`
-	DiveModel                string  `json:"dive_model"`
-	DiveProvider             string  `json:"dive_provider"`
-	ConfigVersion            int64   `json:"config_version"`
-	UpdatedAt                string  `json:"updated_at,omitempty"`
+	WorkspaceID                         string  `json:"workspace_id"`
+	MemoryType                          string  `json:"memory_type"`
+	GraphMemoryMode                     string  `json:"graph_memory_mode"`
+	MemoryAgentRuntimeID                string  `json:"memory_agent_runtime_id"`
+	MemoryAgentModel                    string  `json:"memory_agent_model"`
+	MemoryAgentThinking                 string  `json:"memory_agent_thinking"`
+	RecallTTTEnabled                    bool    `json:"recall_ttt_enabled"`
+	ConsolidationTTTEnabled             bool    `json:"consolidation_ttt_enabled"`
+	MemoryAgentIdleGraceSeconds         int32   `json:"memory_agent_idle_grace_seconds"`
+	MemoryAgentMaxNodesPerCall          int32   `json:"memory_agent_max_nodes_per_call"`
+	MemoryAgentMaxNodesPerMinute        int32   `json:"memory_agent_max_nodes_per_minute"`
+	MemoryAgentMaxContinuousTurnSeconds int32   `json:"memory_agent_max_continuous_turn_seconds"`
+	MemoryAgentMaxTokensPerHour         int64   `json:"memory_agent_max_tokens_per_hour"`
+	ExploreAgents                       int32   `json:"explore_agents"`
+	ExploreMaxRounds                    int32   `json:"explore_max_rounds"`
+	TTTEnabled                          bool    `json:"ttt_enabled"`
+	ExploreNodesPerExpansion            int32   `json:"explore_nodes_per_expansion"`
+	MaxHierarchyFanout                  int32   `json:"max_hierarchy_fanout"`
+	MaxRelationEdgesPerNode             int32   `json:"max_relation_edges_per_node"`
+	DiveMaxRounds                       int32   `json:"dive_max_rounds"`
+	DiveMaxViewedNodes                  int32   `json:"dive_max_viewed_nodes"`
+	DiveMaxSourceFiles                  int32   `json:"dive_max_source_files"`
+	DiveTimeoutSeconds                  int32   `json:"dive_timeout_seconds"`
+	WRound                              float64 `json:"w_round"`
+	SourceMaxFileBytes                  int64   `json:"source_max_file_bytes"`
+	SourceMaxTotalBytes                 int64   `json:"source_max_total_bytes"`
+	SourceMaxPDFPages                   int32   `json:"source_max_pdf_pages"`
+	SourceMaxAVSeconds                  int32   `json:"source_max_av_seconds"`
+	SourceMaxImageMegapixels            int32   `json:"source_max_image_megapixels"`
+	DiveModel                           string  `json:"dive_model"`
+	DiveProvider                        string  `json:"dive_provider"`
+	ConfigVersion                       int64   `json:"config_version"`
+	UpdatedAt                           string  `json:"updated_at,omitempty"`
 }
 
 // updateGraphMemoryProfileRequest is a full-profile write guarded by
@@ -59,31 +73,46 @@ type graphMemoryProfileResponse struct {
 // default, on create) values so knob-only updates stay ergonomic; the
 // concurrency guard — not field coverage — is the CAS contract.
 type updateGraphMemoryProfileRequest struct {
-	MemoryType               string   `json:"memory_type"`
-	ExploreAgents            int32    `json:"explore_agents"`
-	ExploreMaxRounds         int32    `json:"explore_max_rounds"`
-	ConfirmEmptyStart        bool     `json:"confirm_empty_start"`
-	ConfigVersion            *int64   `json:"config_version"`
-	TTTEnabled               *bool    `json:"ttt_enabled"`
-	ExploreNodesPerExpansion *int32   `json:"explore_nodes_per_expansion"`
-	MaxHierarchyFanout       *int32   `json:"max_hierarchy_fanout"`
-	MaxRelationEdgesPerNode  *int32   `json:"max_relation_edges_per_node"`
-	DiveMaxRounds            *int32   `json:"dive_max_rounds"`
-	DiveMaxViewedNodes       *int32   `json:"dive_max_viewed_nodes"`
-	DiveMaxSourceFiles       *int32   `json:"dive_max_source_files"`
-	DiveTimeoutSeconds       *int32   `json:"dive_timeout_seconds"`
-	WRound                   *float64 `json:"w_round"`
-	SourceMaxFileBytes       *int64   `json:"source_max_file_bytes"`
-	SourceMaxTotalBytes      *int64   `json:"source_max_total_bytes"`
-	SourceMaxPDFPages        *int32   `json:"source_max_pdf_pages"`
-	SourceMaxAVSeconds       *int32   `json:"source_max_av_seconds"`
-	SourceMaxImageMegapixels *int32   `json:"source_max_image_megapixels"`
-	DiveModel                *string  `json:"dive_model"`
-	DiveProvider             *string  `json:"dive_provider"`
+	MemoryType                          string   `json:"memory_type"`
+	GraphMemoryMode                     *string  `json:"graph_memory_mode"`
+	MemoryAgentRuntimeID                *string  `json:"memory_agent_runtime_id"`
+	MemoryAgentModel                    *string  `json:"memory_agent_model"`
+	MemoryAgentThinking                 *string  `json:"memory_agent_thinking"`
+	RecallTTTEnabled                    *bool    `json:"recall_ttt_enabled"`
+	ConsolidationTTTEnabled             *bool    `json:"consolidation_ttt_enabled"`
+	MemoryAgentIdleGraceSeconds         *int32   `json:"memory_agent_idle_grace_seconds"`
+	MemoryAgentMaxNodesPerCall          *int32   `json:"memory_agent_max_nodes_per_call"`
+	MemoryAgentMaxNodesPerMinute        *int32   `json:"memory_agent_max_nodes_per_minute"`
+	MemoryAgentMaxContinuousTurnSeconds *int32   `json:"memory_agent_max_continuous_turn_seconds"`
+	MemoryAgentMaxTokensPerHour         *int64   `json:"memory_agent_max_tokens_per_hour"`
+	ExploreAgents                       int32    `json:"explore_agents"`
+	ExploreMaxRounds                    int32    `json:"explore_max_rounds"`
+	ConfirmEmptyStart                   bool     `json:"confirm_empty_start"`
+	ConfigVersion                       *int64   `json:"config_version"`
+	TTTEnabled                          *bool    `json:"ttt_enabled"`
+	ExploreNodesPerExpansion            *int32   `json:"explore_nodes_per_expansion"`
+	MaxHierarchyFanout                  *int32   `json:"max_hierarchy_fanout"`
+	MaxRelationEdgesPerNode             *int32   `json:"max_relation_edges_per_node"`
+	DiveMaxRounds                       *int32   `json:"dive_max_rounds"`
+	DiveMaxViewedNodes                  *int32   `json:"dive_max_viewed_nodes"`
+	DiveMaxSourceFiles                  *int32   `json:"dive_max_source_files"`
+	DiveTimeoutSeconds                  *int32   `json:"dive_timeout_seconds"`
+	WRound                              *float64 `json:"w_round"`
+	SourceMaxFileBytes                  *int64   `json:"source_max_file_bytes"`
+	SourceMaxTotalBytes                 *int64   `json:"source_max_total_bytes"`
+	SourceMaxPDFPages                   *int32   `json:"source_max_pdf_pages"`
+	SourceMaxAVSeconds                  *int32   `json:"source_max_av_seconds"`
+	SourceMaxImageMegapixels            *int32   `json:"source_max_image_megapixels"`
+	DiveModel                           *string  `json:"dive_model"`
+	DiveProvider                        *string  `json:"dive_provider"`
 }
 
 func validGraphMemoryType(t string) bool {
 	return t == "legacy" || t == "graph"
+}
+
+func validGraphMemoryMode(mode string) bool {
+	return mode == "inject" || mode == "agent"
 }
 
 func (h *Handler) graphMemoryLimits() service.GraphMemoryLimits {
@@ -95,27 +124,40 @@ func (h *Handler) graphMemoryLimits() service.GraphMemoryLimits {
 
 func graphMemoryProfileFromRow(row db.GraphMemoryProfile) graphMemoryProfileResponse {
 	resp := graphMemoryProfileResponse{
-		WorkspaceID:              uuidToString(row.WorkspaceID),
-		MemoryType:               row.MemoryType,
-		ExploreAgents:            row.ExploreAgents,
-		ExploreMaxRounds:         row.ExploreMaxRounds,
-		TTTEnabled:               row.TttEnabled,
-		ExploreNodesPerExpansion: row.ExploreNodesPerExpansion,
-		MaxHierarchyFanout:       row.MaxHierarchyFanout,
-		MaxRelationEdgesPerNode:  row.MaxRelationEdgesPerNode,
-		DiveMaxRounds:            row.DiveMaxRounds,
-		DiveMaxViewedNodes:       row.DiveMaxViewedNodes,
-		DiveMaxSourceFiles:       row.DiveMaxSourceFiles,
-		DiveTimeoutSeconds:       row.DiveTimeoutSeconds,
-		WRound:                   row.WRound,
-		SourceMaxFileBytes:       row.SourceMaxFileBytes,
-		SourceMaxTotalBytes:      row.SourceMaxTotalBytes,
-		SourceMaxPDFPages:        row.SourceMaxPdfPages,
-		SourceMaxAVSeconds:       row.SourceMaxAvSeconds,
-		SourceMaxImageMegapixels: row.SourceMaxImageMegapixels,
-		DiveModel:                row.DiveModel,
-		DiveProvider:             row.DiveProvider,
-		ConfigVersion:            row.ConfigVersion,
+		WorkspaceID:                         uuidToString(row.WorkspaceID),
+		MemoryType:                          row.MemoryType,
+		GraphMemoryMode:                     row.GraphMemoryMode,
+		MemoryAgentModel:                    row.MemoryAgentModel,
+		MemoryAgentThinking:                 row.MemoryAgentThinking,
+		RecallTTTEnabled:                    row.RecallTttEnabled,
+		ConsolidationTTTEnabled:             row.ConsolidationTttEnabled,
+		MemoryAgentIdleGraceSeconds:         row.MemoryAgentIdleGraceSeconds,
+		MemoryAgentMaxNodesPerCall:          row.MemoryAgentMaxNodesPerCall,
+		MemoryAgentMaxNodesPerMinute:        row.MemoryAgentMaxNodesPerMinute,
+		MemoryAgentMaxContinuousTurnSeconds: row.MemoryAgentMaxContinuousTurnSeconds,
+		MemoryAgentMaxTokensPerHour:         row.MemoryAgentMaxTokensPerHour,
+		ExploreAgents:                       row.ExploreAgents,
+		ExploreMaxRounds:                    row.ExploreMaxRounds,
+		TTTEnabled:                          row.TttEnabled,
+		ExploreNodesPerExpansion:            row.ExploreNodesPerExpansion,
+		MaxHierarchyFanout:                  row.MaxHierarchyFanout,
+		MaxRelationEdgesPerNode:             row.MaxRelationEdgesPerNode,
+		DiveMaxRounds:                       row.DiveMaxRounds,
+		DiveMaxViewedNodes:                  row.DiveMaxViewedNodes,
+		DiveMaxSourceFiles:                  row.DiveMaxSourceFiles,
+		DiveTimeoutSeconds:                  row.DiveTimeoutSeconds,
+		WRound:                              row.WRound,
+		SourceMaxFileBytes:                  row.SourceMaxFileBytes,
+		SourceMaxTotalBytes:                 row.SourceMaxTotalBytes,
+		SourceMaxPDFPages:                   row.SourceMaxPdfPages,
+		SourceMaxAVSeconds:                  row.SourceMaxAvSeconds,
+		SourceMaxImageMegapixels:            row.SourceMaxImageMegapixels,
+		DiveModel:                           row.DiveModel,
+		DiveProvider:                        row.DiveProvider,
+		ConfigVersion:                       row.ConfigVersion,
+	}
+	if row.MemoryAgentRuntimeID.Valid {
+		resp.MemoryAgentRuntimeID = uuidToString(row.MemoryAgentRuntimeID)
 	}
 	if row.UpdatedAt.Valid {
 		resp.UpdatedAt = row.UpdatedAt.Time.UTC().Format(time.RFC3339)
@@ -126,23 +168,29 @@ func graphMemoryProfileFromRow(row db.GraphMemoryProfile) graphMemoryProfileResp
 func (h *Handler) defaultGraphMemoryProfile(workspaceID string) graphMemoryProfileResponse {
 	defaults := h.graphMemoryLimits().Defaults
 	return graphMemoryProfileResponse{
-		WorkspaceID:              workspaceID,
-		MemoryType:               defaultGraphMemoryType,
-		ExploreAgents:            int32(defaults.TTTConcurrency),
-		ExploreMaxRounds:         int32(defaults.ExploreMaxRounds),
-		ExploreNodesPerExpansion: int32(defaults.ExploreNodesPerExpansion),
-		MaxHierarchyFanout:       int32(defaults.MaxHierarchyFanout),
-		MaxRelationEdgesPerNode:  int32(defaults.MaxRelationEdgesPerNode),
-		DiveMaxRounds:            int32(defaults.DiveMaxRounds),
-		DiveMaxViewedNodes:       int32(defaults.DiveMaxViewedNodes),
-		DiveMaxSourceFiles:       int32(defaults.DiveMaxSourceFiles),
-		DiveTimeoutSeconds:       int32(defaults.DiveTimeoutSeconds),
-		WRound:                   defaults.WRound,
-		SourceMaxFileBytes:       defaults.SourceMaxFileBytes,
-		SourceMaxTotalBytes:      defaults.SourceMaxTotalBytes,
-		SourceMaxPDFPages:        int32(defaults.SourceMaxPDFPages),
-		SourceMaxAVSeconds:       int32(defaults.SourceMaxAVSeconds),
-		SourceMaxImageMegapixels: int32(defaults.SourceMaxImageMegapixels),
+		WorkspaceID:                         workspaceID,
+		MemoryType:                          defaultGraphMemoryType,
+		GraphMemoryMode:                     defaultGraphMemoryMode,
+		MemoryAgentIdleGraceSeconds:         120,
+		MemoryAgentMaxNodesPerCall:          4,
+		MemoryAgentMaxNodesPerMinute:        30,
+		MemoryAgentMaxContinuousTurnSeconds: 600,
+		MemoryAgentMaxTokensPerHour:         200000,
+		ExploreAgents:                       int32(defaults.TTTConcurrency),
+		ExploreMaxRounds:                    6,
+		ExploreNodesPerExpansion:            int32(defaults.ExploreNodesPerExpansion),
+		MaxHierarchyFanout:                  int32(defaults.MaxHierarchyFanout),
+		MaxRelationEdgesPerNode:             int32(defaults.MaxRelationEdgesPerNode),
+		DiveMaxRounds:                       int32(defaults.DiveMaxRounds),
+		DiveMaxViewedNodes:                  int32(defaults.DiveMaxViewedNodes),
+		DiveMaxSourceFiles:                  int32(defaults.DiveMaxSourceFiles),
+		DiveTimeoutSeconds:                  int32(defaults.DiveTimeoutSeconds),
+		WRound:                              defaults.WRound,
+		SourceMaxFileBytes:                  defaults.SourceMaxFileBytes,
+		SourceMaxTotalBytes:                 defaults.SourceMaxTotalBytes,
+		SourceMaxPDFPages:                   int32(defaults.SourceMaxPDFPages),
+		SourceMaxAVSeconds:                  int32(defaults.SourceMaxAVSeconds),
+		SourceMaxImageMegapixels:            int32(defaults.SourceMaxImageMegapixels),
 	}
 }
 
@@ -186,6 +234,14 @@ func (h *Handler) UpdateGraphMemoryProfile(w http.ResponseWriter, r *http.Reques
 	if !validGraphMemoryType(req.MemoryType) {
 		writeError(w, http.StatusBadRequest, "memory_type must be 'legacy' or 'graph'")
 		return
+	}
+	if req.GraphMemoryMode != nil {
+		mode := strings.ToLower(strings.TrimSpace(*req.GraphMemoryMode))
+		if !validGraphMemoryMode(mode) {
+			writeError(w, http.StatusBadRequest, "graph_memory_mode must be 'inject' or 'agent'")
+			return
+		}
+		req.GraphMemoryMode = &mode
 	}
 
 	current, err := h.Queries.GetGraphMemoryProfile(r.Context(), parseUUID(workspaceID))
@@ -243,38 +299,131 @@ func (h *Handler) UpdateGraphMemoryProfile(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	params := graphMemoryProfileParams(parseUUID(workspaceID), req.MemoryType, tunables, tttEnabled, diveModel, diveProvider)
+	graphMemoryMode := defaultGraphMemoryMode
+	memoryAgentRuntimeID := pgtype.UUID{}
+	memoryAgentModel, memoryAgentThinking := "", ""
+	recallTTTEnabled, consolidationTTTEnabled := tttEnabled, tttEnabled
+	idleGraceSeconds, maxNodesPerCall, maxNodesPerMinute := int32(120), int32(4), int32(30)
+	maxContinuousTurnSeconds, maxTokensPerHour := int32(600), int64(200000)
+	if exists {
+		graphMemoryMode = current.GraphMemoryMode
+		memoryAgentRuntimeID = current.MemoryAgentRuntimeID
+		memoryAgentModel = current.MemoryAgentModel
+		memoryAgentThinking = current.MemoryAgentThinking
+		recallTTTEnabled = current.RecallTttEnabled
+		consolidationTTTEnabled = current.ConsolidationTttEnabled
+		idleGraceSeconds = current.MemoryAgentIdleGraceSeconds
+		maxNodesPerCall = current.MemoryAgentMaxNodesPerCall
+		maxNodesPerMinute = current.MemoryAgentMaxNodesPerMinute
+		maxContinuousTurnSeconds = current.MemoryAgentMaxContinuousTurnSeconds
+		maxTokensPerHour = current.MemoryAgentMaxTokensPerHour
+	}
+	if req.GraphMemoryMode != nil {
+		graphMemoryMode = *req.GraphMemoryMode
+	}
+	if req.MemoryAgentRuntimeID != nil {
+		runtimeID := strings.TrimSpace(*req.MemoryAgentRuntimeID)
+		if runtimeID == "" {
+			memoryAgentRuntimeID = pgtype.UUID{}
+		} else if parsed, ok := parseUUIDOrBadRequest(w, runtimeID, "memory_agent_runtime_id"); ok {
+			memoryAgentRuntimeID = parsed
+		} else {
+			return
+		}
+	}
+	if req.MemoryAgentModel != nil {
+		memoryAgentModel = strings.TrimSpace(*req.MemoryAgentModel)
+	}
+	if req.MemoryAgentThinking != nil {
+		memoryAgentThinking = strings.TrimSpace(*req.MemoryAgentThinking)
+	}
+	if req.TTTEnabled != nil {
+		recallTTTEnabled = *req.TTTEnabled
+		consolidationTTTEnabled = *req.TTTEnabled
+	}
+	if req.RecallTTTEnabled != nil {
+		recallTTTEnabled = *req.RecallTTTEnabled
+	}
+	if req.ConsolidationTTTEnabled != nil {
+		consolidationTTTEnabled = *req.ConsolidationTTTEnabled
+	}
+	if req.MemoryAgentIdleGraceSeconds != nil {
+		idleGraceSeconds = *req.MemoryAgentIdleGraceSeconds
+	}
+	if req.MemoryAgentMaxNodesPerCall != nil {
+		maxNodesPerCall = *req.MemoryAgentMaxNodesPerCall
+	}
+	if req.MemoryAgentMaxNodesPerMinute != nil {
+		maxNodesPerMinute = *req.MemoryAgentMaxNodesPerMinute
+	}
+	if req.MemoryAgentMaxContinuousTurnSeconds != nil {
+		maxContinuousTurnSeconds = *req.MemoryAgentMaxContinuousTurnSeconds
+	}
+	if req.MemoryAgentMaxTokensPerHour != nil {
+		maxTokensPerHour = *req.MemoryAgentMaxTokensPerHour
+	}
+	if idleGraceSeconds < 30 || idleGraceSeconds > 3600 || maxNodesPerCall < 1 || maxNodesPerCall > 16 ||
+		maxNodesPerMinute < 1 || maxNodesPerMinute > 600 || maxContinuousTurnSeconds < 30 ||
+		maxContinuousTurnSeconds > 3600 || maxTokensPerHour < 1000 || maxTokensPerHour > 10000000 {
+		writeError(w, http.StatusBadRequest, "memory agent quota is outside server limits")
+		return
+	}
+
+	params := graphMemoryProfileParams(parseUUID(workspaceID), req.MemoryType, tunables, recallTTTEnabled, diveModel, diveProvider)
+	params.GraphMemoryMode = graphMemoryMode
+	params.MemoryAgentRuntimeID = memoryAgentRuntimeID
+	params.MemoryAgentModel = memoryAgentModel
+	params.MemoryAgentThinking = memoryAgentThinking
+	params.RecallTttEnabled = recallTTTEnabled
+	params.ConsolidationTttEnabled = consolidationTTTEnabled
+	params.MemoryAgentIdleGraceSeconds = idleGraceSeconds
+	params.MemoryAgentMaxNodesPerCall = maxNodesPerCall
+	params.MemoryAgentMaxNodesPerMinute = maxNodesPerMinute
+	params.MemoryAgentMaxContinuousTurnSeconds = maxContinuousTurnSeconds
+	params.MemoryAgentMaxTokensPerHour = maxTokensPerHour
 	if !exists {
 		row, err := h.Queries.CreateGraphMemoryProfile(r.Context(), db.CreateGraphMemoryProfileParams(params))
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to save graph memory profile")
 			return
 		}
+		h.reconcileGraphMemoryWorkspaceChannels(r.Context(), workspaceID)
 		writeJSON(w, http.StatusOK, graphMemoryProfileFromRow(db.GraphMemoryProfile(row)))
 		return
 	}
 	casParams := db.UpdateGraphMemoryProfileCASParams{
-		WorkspaceID:              params.WorkspaceID,
-		ConfigVersion:            current.ConfigVersion,
-		MemoryType:               params.MemoryType,
-		ExploreAgents:            params.ExploreAgents,
-		ExploreMaxRounds:         params.ExploreMaxRounds,
-		TttEnabled:               params.TttEnabled,
-		ExploreNodesPerExpansion: params.ExploreNodesPerExpansion,
-		MaxHierarchyFanout:       params.MaxHierarchyFanout,
-		MaxRelationEdgesPerNode:  params.MaxRelationEdgesPerNode,
-		DiveMaxRounds:            params.DiveMaxRounds,
-		DiveMaxViewedNodes:       params.DiveMaxViewedNodes,
-		DiveMaxSourceFiles:       params.DiveMaxSourceFiles,
-		DiveTimeoutSeconds:       params.DiveTimeoutSeconds,
-		WRound:                   params.WRound,
-		SourceMaxFileBytes:       params.SourceMaxFileBytes,
-		SourceMaxTotalBytes:      params.SourceMaxTotalBytes,
-		SourceMaxPdfPages:        params.SourceMaxPdfPages,
-		SourceMaxAvSeconds:       params.SourceMaxAvSeconds,
-		SourceMaxImageMegapixels: params.SourceMaxImageMegapixels,
-		DiveModel:                params.DiveModel,
-		DiveProvider:             params.DiveProvider,
+		WorkspaceID:                         params.WorkspaceID,
+		ConfigVersion:                       current.ConfigVersion,
+		MemoryType:                          params.MemoryType,
+		ExploreAgents:                       params.ExploreAgents,
+		ExploreMaxRounds:                    params.ExploreMaxRounds,
+		TttEnabled:                          params.TttEnabled,
+		RecallTttEnabled:                    params.RecallTttEnabled,
+		ConsolidationTttEnabled:             params.ConsolidationTttEnabled,
+		GraphMemoryMode:                     params.GraphMemoryMode,
+		MemoryAgentRuntimeID:                params.MemoryAgentRuntimeID,
+		MemoryAgentModel:                    params.MemoryAgentModel,
+		MemoryAgentThinking:                 params.MemoryAgentThinking,
+		MemoryAgentIdleGraceSeconds:         params.MemoryAgentIdleGraceSeconds,
+		MemoryAgentMaxNodesPerCall:          params.MemoryAgentMaxNodesPerCall,
+		MemoryAgentMaxNodesPerMinute:        params.MemoryAgentMaxNodesPerMinute,
+		MemoryAgentMaxContinuousTurnSeconds: params.MemoryAgentMaxContinuousTurnSeconds,
+		MemoryAgentMaxTokensPerHour:         params.MemoryAgentMaxTokensPerHour,
+		ExploreNodesPerExpansion:            params.ExploreNodesPerExpansion,
+		MaxHierarchyFanout:                  params.MaxHierarchyFanout,
+		MaxRelationEdgesPerNode:             params.MaxRelationEdgesPerNode,
+		DiveMaxRounds:                       params.DiveMaxRounds,
+		DiveMaxViewedNodes:                  params.DiveMaxViewedNodes,
+		DiveMaxSourceFiles:                  params.DiveMaxSourceFiles,
+		DiveTimeoutSeconds:                  params.DiveTimeoutSeconds,
+		WRound:                              params.WRound,
+		SourceMaxFileBytes:                  params.SourceMaxFileBytes,
+		SourceMaxTotalBytes:                 params.SourceMaxTotalBytes,
+		SourceMaxPdfPages:                   params.SourceMaxPdfPages,
+		SourceMaxAvSeconds:                  params.SourceMaxAvSeconds,
+		SourceMaxImageMegapixels:            params.SourceMaxImageMegapixels,
+		DiveModel:                           params.DiveModel,
+		DiveProvider:                        params.DiveProvider,
 	}
 	row, err := h.Queries.UpdateGraphMemoryProfileCAS(r.Context(), casParams)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -286,6 +435,7 @@ func (h *Handler) UpdateGraphMemoryProfile(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "failed to save graph memory profile")
 		return
 	}
+	h.reconcileGraphMemoryWorkspaceChannels(r.Context(), workspaceID)
 	writeJSON(w, http.StatusOK, graphMemoryProfileFromRow(db.GraphMemoryProfile(row)))
 }
 
@@ -360,26 +510,34 @@ func graphMemoryTunablesFromRequest(defaults service.GraphMemoryTunables, curren
 
 func graphMemoryProfileParams(workspaceID pgtype.UUID, memoryType string, t service.GraphMemoryTunables, tttEnabled bool, diveModel, diveProvider string) db.CreateGraphMemoryProfileParams {
 	return db.CreateGraphMemoryProfileParams{
-		WorkspaceID:              workspaceID,
-		MemoryType:               memoryType,
-		ExploreAgents:            int32(t.TTTConcurrency),
-		ExploreMaxRounds:         int32(t.ExploreMaxRounds),
-		TttEnabled:               tttEnabled,
-		ExploreNodesPerExpansion: int32(t.ExploreNodesPerExpansion),
-		MaxHierarchyFanout:       int32(t.MaxHierarchyFanout),
-		MaxRelationEdgesPerNode:  int32(t.MaxRelationEdgesPerNode),
-		DiveMaxRounds:            int32(t.DiveMaxRounds),
-		DiveMaxViewedNodes:       int32(t.DiveMaxViewedNodes),
-		DiveMaxSourceFiles:       int32(t.DiveMaxSourceFiles),
-		DiveTimeoutSeconds:       int32(t.DiveTimeoutSeconds),
-		WRound:                   t.WRound,
-		SourceMaxFileBytes:       t.SourceMaxFileBytes,
-		SourceMaxTotalBytes:      t.SourceMaxTotalBytes,
-		SourceMaxPdfPages:        int32(t.SourceMaxPDFPages),
-		SourceMaxAvSeconds:       int32(t.SourceMaxAVSeconds),
-		SourceMaxImageMegapixels: int32(t.SourceMaxImageMegapixels),
-		DiveModel:                diveModel,
-		DiveProvider:             diveProvider,
+		WorkspaceID:                         workspaceID,
+		MemoryType:                          memoryType,
+		ExploreAgents:                       int32(t.TTTConcurrency),
+		ExploreMaxRounds:                    int32(t.ExploreMaxRounds),
+		TttEnabled:                          tttEnabled,
+		RecallTttEnabled:                    tttEnabled,
+		ConsolidationTttEnabled:             tttEnabled,
+		GraphMemoryMode:                     defaultGraphMemoryMode,
+		MemoryAgentIdleGraceSeconds:         120,
+		MemoryAgentMaxNodesPerCall:          4,
+		MemoryAgentMaxNodesPerMinute:        30,
+		MemoryAgentMaxContinuousTurnSeconds: 600,
+		MemoryAgentMaxTokensPerHour:         200000,
+		ExploreNodesPerExpansion:            int32(t.ExploreNodesPerExpansion),
+		MaxHierarchyFanout:                  int32(t.MaxHierarchyFanout),
+		MaxRelationEdgesPerNode:             int32(t.MaxRelationEdgesPerNode),
+		DiveMaxRounds:                       int32(t.DiveMaxRounds),
+		DiveMaxViewedNodes:                  int32(t.DiveMaxViewedNodes),
+		DiveMaxSourceFiles:                  int32(t.DiveMaxSourceFiles),
+		DiveTimeoutSeconds:                  int32(t.DiveTimeoutSeconds),
+		WRound:                              t.WRound,
+		SourceMaxFileBytes:                  t.SourceMaxFileBytes,
+		SourceMaxTotalBytes:                 t.SourceMaxTotalBytes,
+		SourceMaxPdfPages:                   int32(t.SourceMaxPDFPages),
+		SourceMaxAvSeconds:                  int32(t.SourceMaxAVSeconds),
+		SourceMaxImageMegapixels:            int32(t.SourceMaxImageMegapixels),
+		DiveModel:                           diveModel,
+		DiveProvider:                        diveProvider,
 	}
 }
 

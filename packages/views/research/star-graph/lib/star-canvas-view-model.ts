@@ -25,6 +25,7 @@
 
 import {
   layoutStarGraph,
+  STAR_GRAPH_RADIUS,
   translateLayoutInto,
   type StarGraphLayoutNode,
   type StarGraphLayoutNodePosition,
@@ -103,14 +104,16 @@ export interface StarCanvasViewModel {
  * ------------------------------------------------------------------ */
 
 function toLayoutNode(n: TypedGraphNode): StarGraphLayoutNode {
+  const nodeKind = n.node_type?.trim() ?? "";
   const input: StarGraphNodeInput = {
     id: n.id,
-    node_kind: n.node_type,
+    node_kind: nodeKind,
     status: n.status,
     importance: undefined,
     title: n.title,
     summary: n.summary,
     actor_agent_id: n.actor_agent_id ?? undefined,
+    detail: n.payload,
     typed: {
       level: n.level || undefined,
       round: n.round,
@@ -124,7 +127,8 @@ function toLayoutNode(n: TypedGraphNode): StarGraphLayoutNode {
   return {
     id: n.id,
     tier: tier as StarGraphLayoutTier,
-    nodeKind: n.node_type,
+    radius: nodeKind.toLowerCase() === "goal" ? 59 : undefined,
+    nodeKind,
     clusterId: n.cluster_id && n.cluster_id !== "" ? n.cluster_id : null,
     parentId: n.parent_id || n.derived_from || null,
   };
@@ -201,6 +205,37 @@ export function buildStarCanvasViewModel(
   const { nodes, edges, seed, version } = input;
 
   const layoutNodes = nodes.map(toLayoutNode);
+  const layoutNodeById = new Map(layoutNodes.map((node) => [node.id, node]));
+
+  // Agent membership is run-scoped, while its active Work carries the branch.
+  // Project that canonical assignment relation into the same visual territory
+  // so Agent and Work form one readable branch instead of a ring around Goal.
+  for (const edge of edges) {
+    if (edge.edge_type !== "assigned_to") continue;
+    const work = layoutNodeById.get(edge.from_node_id);
+    const agent = layoutNodeById.get(edge.to_node_id);
+    if (!work?.clusterId || !agent || agent.clusterId) continue;
+    agent.clusterId = work.clusterId;
+  }
+
+  // Once a branch has an integrated result, its atomic Work/Result nodes orbit
+  // that landmark. Before integration they orbit the branch's virtual centre.
+  const stableAnchorByCluster = new Map<string, StarGraphLayoutNode>();
+  for (const node of layoutNodes) {
+    if (!node.clusterId || node.tier === "s") continue;
+    const current = stableAnchorByCluster.get(node.clusterId);
+    const nodeRadius = node.radius ?? STAR_GRAPH_RADIUS[node.tier];
+    const currentRadius = current
+      ? (current.radius ?? STAR_GRAPH_RADIUS[current.tier])
+      : -1;
+    if (!current || nodeRadius > currentRadius) {
+      stableAnchorByCluster.set(node.clusterId, node);
+    }
+  }
+  for (const node of layoutNodes) {
+    if (node.tier !== "s" || node.parentId || !node.clusterId) continue;
+    node.parentId = stableAnchorByCluster.get(node.clusterId)?.id ?? null;
+  }
   const byId = new Set(layoutNodes.map((n) => n.id));
 
   const relations: StarGraphLayoutRelation[] = edges
@@ -228,6 +263,7 @@ export function buildStarCanvasViewModel(
         title: n.title,
         summary: n.summary,
         actor_agent_id: n.actor_agent_id ?? undefined,
+        detail: n.payload,
         typed: {
           level: n.level || undefined,
           round: n.round,

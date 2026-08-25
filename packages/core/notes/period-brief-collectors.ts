@@ -12,6 +12,8 @@ import { isPeriodBriefAgent } from "./period-brief-agent";
 
 export const PERIOD_BRIEF_COLLECTOR_NAME_PREFIX = "period-collect-";
 export const PERIOD_BRIEF_COLLECTOR_DISPLAY_LEAD = "采集 · ";
+const PERIOD_BRIEF_COLLECTOR_DAEMON_SLUG_LEN = 8;
+const PERIOD_BRIEF_COLLECTOR_NON_SLUG = /[^a-z0-9]+/g;
 
 export type PeriodBriefCollectorCandidate = Pick<
   Agent,
@@ -19,6 +21,29 @@ export type PeriodBriefCollectorCandidate = Pick<
 >;
 
 export type PeriodBriefCollectorRuntime = Pick<AgentRuntime, "id" | "status" | "owner_id">;
+
+export type PeriodBriefCollectorSlotRuntime = Pick<
+  AgentRuntime,
+  "id" | "daemon_id" | "runtime_mode" | "owner_id" | "display_name" | "name" | "status"
+>;
+
+export type PeriodBriefCollectorComputer = {
+  daemon_id: string;
+  owner_id: string;
+  deviceName?: string | null;
+};
+
+/** One owned Computer that should have a dedicated Period Work collector. */
+export type PeriodBriefCollectorSlot = {
+  key: string;
+  machineId: string;
+  label: string;
+  expectedName: string;
+  runtimeIds: string[];
+  collector: PeriodBriefCollectorCandidate | null;
+  strayAgentId: string | null;
+  needsSetup: boolean;
+};
 
 /** True when this Agent is a provisioned Period Work collector. */
 export function isPeriodBriefCollectorAgent(
@@ -110,4 +135,166 @@ export function periodBriefCollectorLabel(
   const display = agent.display_name?.trim();
   if (display) return display;
   return agent.name;
+}
+
+/** Canonical handle for the collector that belongs to this Computer seed. */
+export function periodBriefCollectorNameForSeed(seed: string): string {
+  return PERIOD_BRIEF_COLLECTOR_NAME_PREFIX + periodBriefCollectorDaemonSlug(seed);
+}
+
+function periodBriefCollectorDaemonSlug(seed: string): string {
+  let cleaned = seed.trim().toLowerCase().replace(PERIOD_BRIEF_COLLECTOR_NON_SLUG, "");
+  if (cleaned === "") cleaned = "computer";
+  if (cleaned.length > PERIOD_BRIEF_COLLECTOR_DAEMON_SLUG_LEN) {
+    cleaned = cleaned.slice(-PERIOD_BRIEF_COLLECTOR_DAEMON_SLUG_LEN);
+  }
+  while (cleaned.length < PERIOD_BRIEF_COLLECTOR_DAEMON_SLUG_LEN) {
+    cleaned += "0";
+  }
+  return cleaned;
+}
+
+function periodBriefComputerIdentity(runtime: PeriodBriefCollectorSlotRuntime): {
+  key: string;
+  machineId: string;
+  seed: string;
+  cloud: boolean;
+} {
+  const mode = (runtime.runtime_mode ?? "local").toLowerCase();
+  const daemon = runtime.daemon_id?.trim() ?? "";
+  if (mode === "cloud") {
+    return {
+      key: `cloud:${runtime.id}`,
+      machineId: daemon ? `cloud:${daemon}` : `cloud:runtime:${runtime.id}`,
+      seed: runtime.id,
+      cloud: true,
+    };
+  }
+  if (daemon) {
+    return {
+      key: `local:${daemon.toLowerCase()}`,
+      machineId: `${mode}:${daemon}`,
+      seed: daemon,
+      cloud: false,
+    };
+  }
+  return {
+    key: `local:runtime:${runtime.id}`,
+    machineId: `${mode}:runtime:${runtime.id}`,
+    seed: runtime.id,
+    cloud: false,
+  };
+}
+
+/**
+ * Owned Computers that should each have one Period Work collector.
+ * Missing, deleted, or rebound-off-this-computer collectors need setup.
+ */
+function isOwnedPeriodBriefComputer(
+  runtime: PeriodBriefCollectorSlotRuntime,
+  userId: string,
+  connections: readonly PeriodBriefCollectorComputer[],
+): boolean {
+  if (runtime.owner_id === userId) return true;
+  if (runtime.owner_id && runtime.owner_id !== userId) return false;
+  const daemon = runtime.daemon_id?.trim();
+  if (!daemon) return false;
+  return connections.some(
+    (connection) => connection.daemon_id === daemon && connection.owner_id === userId,
+  );
+}
+
+export function listOwnedPeriodBriefCollectorSlots(
+  runtimes: readonly PeriodBriefCollectorSlotRuntime[],
+  agents: readonly PeriodBriefCollectorCandidate[],
+  userId: string | null | undefined,
+  connections: readonly PeriodBriefCollectorComputer[] = [],
+): PeriodBriefCollectorSlot[] {
+  const uid = userId?.trim();
+  if (!uid) return [];
+
+  const groups = new Map<
+    string,
+    {
+      machineId: string;
+      seed: string;
+      cloud: boolean;
+      labelHint?: string;
+      runtimes: PeriodBriefCollectorSlotRuntime[];
+    }
+  >();
+  for (const runtime of runtimes) {
+    if (!isOwnedPeriodBriefComputer(runtime, uid, connections)) continue;
+    const identity = periodBriefComputerIdentity(runtime);
+    const group = groups.get(identity.key) ?? {
+      machineId: identity.machineId,
+      seed: identity.seed,
+      cloud: identity.cloud,
+      runtimes: [],
+    };
+    group.runtimes.push(runtime);
+    groups.set(identity.key, group);
+  }
+  for (const connection of connections) {
+    if (connection.owner_id !== uid) continue;
+    const daemon = connection.daemon_id.trim();
+    if (!daemon) continue;
+    const key = `local:${daemon.toLowerCase()}`;
+    if (groups.has(key)) continue;
+    groups.set(key, {
+      machineId: `local:${daemon}`,
+      seed: daemon,
+      cloud: false,
+      labelHint: connection.deviceName?.trim() || undefined,
+      runtimes: [],
+    });
+  }
+
+  const collectors = listPeriodBriefCollectorAgents(agents);
+  const slots: PeriodBriefCollectorSlot[] = [];
+  for (const [key, group] of groups) {
+    const expectedName = periodBriefCollectorNameForSeed(group.seed);
+    const onSlot =
+      collectors.find((agent) => group.runtimes.some((item) => item.id === agent.runtime_id)) ??
+      null;
+    const named = collectors.find((agent) => agent.name === expectedName) ?? null;
+    const namedOnSlot = named
+      ? runtimes.find((item) => item.id === named.runtime_id)
+      : undefined;
+    const strayAgentId =
+      named && namedOnSlot && periodBriefComputerIdentity(namedOnSlot).key !== key
+        ? named.id
+        : named && !namedOnSlot
+          ? named.id
+          : null;
+    const representative =
+      group.runtimes.find((item) => item.status === "online") ?? group.runtimes[0];
+    const label =
+      representative?.display_name?.trim() ||
+      representative?.name?.trim() ||
+      group.labelHint ||
+      (group.cloud ? "Cloud" : "Computer");
+    slots.push({
+      key,
+      machineId: group.machineId,
+      label,
+      expectedName,
+      runtimeIds: group.runtimes.map((item) => item.id),
+      collector: onSlot,
+      strayAgentId,
+      needsSetup: !onSlot,
+    });
+  }
+  return slots;
+}
+
+export function listPeriodBriefCollectorSlotsNeedingSetup(
+  runtimes: readonly PeriodBriefCollectorSlotRuntime[],
+  agents: readonly PeriodBriefCollectorCandidate[],
+  userId: string | null | undefined,
+  connections: readonly PeriodBriefCollectorComputer[] = [],
+): PeriodBriefCollectorSlot[] {
+  return listOwnedPeriodBriefCollectorSlots(runtimes, agents, userId, connections).filter(
+    (slot) => slot.needsSetup,
+  );
 }

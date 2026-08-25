@@ -34,6 +34,7 @@ export function RuntimeConfigFields({
   thinkingLevel,
   onThinkingChange,
   modelRequired = false,
+  lockComputer = false,
   disabled = false,
 }: {
   runtimes: RuntimeDevice[];
@@ -51,6 +52,8 @@ export function RuntimeConfigFields({
   thinkingLevel: string;
   onThinkingChange: (level: string) => void;
   modelRequired?: boolean;
+  /** Computer is preselected and cannot be changed. */
+  lockComputer?: boolean;
   disabled?: boolean;
 }) {
   const queryClient = useQueryClient();
@@ -72,7 +75,7 @@ export function RuntimeConfigFields({
         currentUserId={currentUserId}
         selectedMachineId={machineId}
         onSelect={onMachineSelect}
-        disabled={disabled}
+        disabled={disabled || lockComputer}
       />
       <RuntimePicker
         runtimes={machineRuntimes}

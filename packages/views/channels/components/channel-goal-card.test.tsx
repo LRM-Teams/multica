@@ -167,10 +167,8 @@ describe("ChannelGoalCard work graph", () => {
       expect(view.container.querySelector('[data-state="done"]')).toBeInTheDocument();
       expect(view.container.querySelector('[data-state="working"]')).toBeInTheDocument();
       expect(view.container.querySelector('[data-state="error"]')).toBeInTheDocument();
-      expect(view.container.querySelector('[data-node-id="error"] rect')).toHaveAttribute(
-        "stroke-dasharray",
-        "3 2",
-      );
+      // Verifier nodes render as dashed HTML chips (not SVG rects).
+      expect(view.container.querySelector('[data-node-id="error"]')).toHaveClass("border-dashed");
     });
   });
 

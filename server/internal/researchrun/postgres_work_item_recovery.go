@@ -68,8 +68,8 @@ func (s *PostgresStore) ListLostV6InboxTaskIDs(ctx context.Context, limit int) (
 	rows, err := s.pool.Query(ctx, `
 		SELECT a.inbox_task_id::text
 		FROM research_work_item_attempt a
-		JOIN research_session run ON run.id=a.session_id
-		JOIN agent_inbox_event inbox ON inbox.id=a.inbox_task_id
+		JOIN research_session run ON run.workspace_id=a.workspace_id AND run.id=a.session_id
+		JOIN agent_inbox_event inbox ON inbox.workspace_id=a.workspace_id AND inbox.id=a.inbox_task_id
 		WHERE run.orchestrator_version='research-run-v6'
 		  AND a.status='lost'
 		  AND inbox.status IN ('pending','draining','failed')
@@ -103,8 +103,8 @@ func (s *PostgresStore) ListSettledV6InboxTaskIDs(ctx context.Context, limit int
 	rows, err := s.pool.Query(ctx, `
 		SELECT a.inbox_task_id::text
 		FROM research_work_item_attempt a
-		JOIN research_session run ON run.id=a.session_id
-		JOIN agent_inbox_event inbox ON inbox.id=a.inbox_task_id
+		JOIN research_session run ON run.workspace_id=a.workspace_id AND run.id=a.session_id
+		JOIN agent_inbox_event inbox ON inbox.workspace_id=a.workspace_id AND inbox.id=a.inbox_task_id
 		WHERE run.orchestrator_version='research-run-v6'
 		  AND a.status IN ('succeeded','failed','cancelled')
 		  AND inbox.status IN ('pending','draining','failed')

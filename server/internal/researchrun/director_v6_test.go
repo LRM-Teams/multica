@@ -803,11 +803,12 @@ func TestV6DirectorCreatedWorkStartsAtVersionOne(t *testing.T) {
 	if err = run.pool.QueryRow(run.ctx, `SELECT state_version FROM research_session WHERE id=$1::uuid`, run.fixture.sessionID).Scan(&stateVersion); err != nil {
 		t.Fatal(err)
 	}
+	branchID := seedV6DirectorChildBranch(t, run, "create-versioned-work:", "Investigate the assigned question", 1)
 	actionPayload, err := json.Marshal(map[string]any{
 		"kind": "deep_read", "assignee_agent_id": run.fixture.reporterID, "mission": "Investigate the assigned question",
 		"expected_result_schema_id": "atomic_result_submission", "payload_schema_id": "research.test.v1",
 		"payload":  map[string]any{"task_specific_schema": map[string]any{"type": "object"}},
-		"priority": 0.5, "max_attempts": 1, "branch_ids": []string{},
+		"priority": 0.5, "max_attempts": 1, "branch_ids": []string{branchID},
 	})
 	if err != nil {
 		t.Fatal(err)

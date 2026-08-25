@@ -56,6 +56,8 @@ func TestRonaldoV6DirectorProtocolRequiresParallelChineseResearch(t *testing.T) 
 	for _, want := range []string{
 		"所有自然语言输出",
 		"多个独立方向",
+		"独立子 Branch",
+		"不得使用根 Branch",
 		"同一 proposal",
 		"payload_schema_id 绝不能使用 no_op.v1",
 		"payload.task_specific_schema",
@@ -73,6 +75,7 @@ func TestRonaldoV6DirectorProtocolRequiresParallelChineseResearch(t *testing.T) 
 		"action.payload_schema 必须是 integration.create.v1",
 		"S promotion 为 M",
 		"全体同意后自动创建 integration Work",
+		"持续推进 S→M→L→XL→XXL",
 	} {
 		if !strings.Contains(RonaldoV6DirectorSystemProtocol, want) {
 			t.Fatalf("director protocol missing %q", want)
@@ -315,6 +318,88 @@ func TestV6BackingTaskMirrorsWorkItemLifecycle(t *testing.T) {
 		if got != transition.taskStatus {
 			t.Fatalf("Work Item status %q projected Task status %q, want %q", transition.workStatus, got, transition.taskStatus)
 		}
+	}
+}
+
+func TestV6RunPauseCancelAndArchiveFollowWorkItemAuthority(t *testing.T) {
+	run := newTransactionRecoveryRun(t, "Transition V6 Run with backing Task")
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_session SET orchestrator_version='research-run-v6' WHERE id=$1::uuid`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	membershipID, workItemID := seedV6RecoveryWorkItem(t, run, "running", time.Now().Add(time.Minute))
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_work_item SET expected_result_schema_id='atomic_result_submission',payload_schema_id='research.finding.v1' WHERE id=$1::uuid`, workItemID); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := run.pool.Begin(run.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskID, err := ensureV6BackingTaskTx(run.ctx, tx, workItemID)
+	if err != nil {
+		_ = tx.Rollback(run.ctx)
+		t.Fatal(err)
+	}
+	if err = tx.Commit(run.ctx); err != nil {
+		t.Fatal(err)
+	}
+	attemptID := seedV6RecoveryAttempt(t, run, membershipID, workItemID)
+	inboxTaskID := uuid.NewString()
+	if _, err = run.pool.Exec(run.ctx, `
+		INSERT INTO agent_inbox_event (id,workspace_id,agent_id,reason,requires_wake,status,seq_from,seq_to)
+		VALUES ($1::uuid,$2::uuid,$3::uuid,'quick_create',true,'draining',0,0)
+	`, inboxTaskID, run.fixture.workspaceID, run.fixture.agentID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = run.pool.Exec(run.ctx, `UPDATE research_work_item_attempt SET inbox_task_id=$2::uuid WHERE id=$1::uuid`, attemptID, inboxTaskID); err != nil {
+		t.Fatal(err)
+	}
+
+	dispatcher := &recordingCancellationDispatcher{}
+	engine := newEngine(run.store, dispatcher, nil)
+	paused, err := engine.Pause(run.ctx, run.fixture.sessionID, run.fixture.workspaceID, run.fixture.userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if paused.Status != RunStatusPaused {
+		t.Fatalf("paused Run status=%q", paused.Status)
+	}
+	if len(dispatcher.cancelled) != 1 || dispatcher.cancelled[0] != inboxTaskID {
+		t.Fatalf("cancelled Inbox tasks=%v want=%s", dispatcher.cancelled, inboxTaskID)
+	}
+	for label, check := range map[string]struct {
+		table string
+		id    string
+		want  string
+	}{
+		"Work Item": {table: "research_work_item", id: workItemID, want: "ready"},
+		"Task":      {table: "research_task", id: taskID, want: "ready"},
+		"Attempt":   {table: "research_work_item_attempt", id: attemptID, want: "cancelled"},
+	} {
+		var got string
+		if err = run.pool.QueryRow(run.ctx, "SELECT status FROM "+check.table+" WHERE id=$1::uuid", check.id).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got != check.want {
+			t.Fatalf("%s status=%q want=%q", label, got, check.want)
+		}
+	}
+
+	if _, _, err = run.store.Resume(run.ctx, run.fixture.sessionID, run.fixture.workspaceID, run.fixture.userID); err != nil {
+		t.Fatal(err)
+	}
+	cancelled, _, _, err := run.store.Cancel(run.ctx, run.fixture.sessionID, run.fixture.workspaceID, run.fixture.userID, "user deleted")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cancelled.Status != RunStatusCancelled {
+		t.Fatalf("cancelled Run status=%q", cancelled.Status)
+	}
+	archived, _, _, err := run.store.Archive(run.ctx, run.fixture.sessionID, run.fixture.workspaceID, run.fixture.userID, "hide from list")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if archived.Status != RunStatusArchived {
+		t.Fatalf("archived Run status=%q", archived.Status)
 	}
 }
 

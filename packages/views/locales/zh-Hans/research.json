@@ -1465,7 +1465,8 @@
       "reason": "原因",
       "completed": "已经完成",
       "current": "当前正在做",
-      "open_agent": "打开 Agent 配置"
+      "execution_details": "执行详情",
+      "open_agent": "查看智能体资料"
     },
     "report": {
       "title": "节点报告",

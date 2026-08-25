@@ -205,10 +205,14 @@ func (s *PostgresStore) ApplyReceivedV6ReportPackages(ctx context.Context, limit
 		decoded := DecodedV6Contract{Kind: V6ContractReportPackageSubmission, Envelope: envelope, Canonical: envelope, ContentHash: hash}
 		_, err = s.applyReportPackageV6(ctx, id, decoded)
 		if err != nil {
-			if !isTerminalV6SubmissionError(err) {
+			if !isTerminalV6SubmissionError(err) && !isPermanentV6ProcessingError(ctx, err) {
 				return applied, err
 			}
-			if rejectErr := s.rejectV6ReportPackage(context.WithoutCancel(ctx), id, err.Error()); rejectErr != nil {
+			reason := err.Error()
+			if !isTerminalV6SubmissionError(err) {
+				reason = v6SubmissionApplyDiagnostic(err)
+			}
+			if rejectErr := s.rejectV6ReportPackage(context.WithoutCancel(ctx), id, reason); rejectErr != nil {
 				return applied, rejectErr
 			}
 		}

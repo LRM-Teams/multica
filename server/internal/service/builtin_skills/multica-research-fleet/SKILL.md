@@ -138,6 +138,8 @@ assignment/generation、Brief 身份、页数、state version 和 event sequence
 cycle。主理人只负责规划、组队、派工和整合，不得把原子调研 Work 指派给自己。原子
 Work 使用 `atomic_result_submission`，`payload_schema_id` 必须非空且不得为
 `no_op.v1`，并在 `payload.task_specific_schema` 中携带精确、非空的结果校验器。派工
+的 `branch_ids` 只能复制当前 Run 中已经存在的 Branch ID，不得根据标题或 action ID
+推导 UUID；不存在或跨 Run 的 Branch 引用会使 proposal 被拒绝。派工
 发生合同拒绝且已有空闲专属 Agent 时，下一轮必须修正合同并重新派工，不得提交
 `no_op`；运行中尚无专属 Agent 且无 Agent 创建待处理时也不得 `no_op`。专属 Agent
 Work 已失败且当前无活动 Agent Work 时，必须重试或改派失败 Work，不得等待。

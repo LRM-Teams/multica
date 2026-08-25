@@ -11,6 +11,18 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+type v6CreateWorkActionPayload struct {
+	Kind                   string          `json:"kind"`
+	AssigneeAgentID        string          `json:"assignee_agent_id"`
+	Mission                string          `json:"mission"`
+	ExpectedResultSchemaID string          `json:"expected_result_schema_id"`
+	PayloadSchemaID        string          `json:"payload_schema_id"`
+	Payload                json.RawMessage `json:"payload"`
+	Priority               float64         `json:"priority"`
+	MaxAttempts            int             `json:"max_attempts"`
+	BranchIDs              []string        `json:"branch_ids"`
+}
+
 func (s *PostgresStore) executeV6CreateAgentAction(ctx context.Context, proposal v6DirectorProposal, cycleID string, action v6DirectorAction, expectedState int64) error {
 	if action.PayloadSchema != "agent.create.v1" {
 		return ErrInvalidContract
@@ -63,17 +75,7 @@ func (s *PostgresStore) executeV6CreateWorkAction(ctx context.Context, proposal 
 	if action.PayloadSchema != "work.create.v1" && action.PayloadSchema != "collaboration.create.v1" {
 		return ErrInvalidContract
 	}
-	var payload struct {
-		Kind                   string          `json:"kind"`
-		AssigneeAgentID        string          `json:"assignee_agent_id"`
-		Mission                string          `json:"mission"`
-		ExpectedResultSchemaID string          `json:"expected_result_schema_id"`
-		PayloadSchemaID        string          `json:"payload_schema_id"`
-		Payload                json.RawMessage `json:"payload"`
-		Priority               float64         `json:"priority"`
-		MaxAttempts            int             `json:"max_attempts"`
-		BranchIDs              []string        `json:"branch_ids"`
-	}
+	var payload v6CreateWorkActionPayload
 	if json.Unmarshal(action.Payload, &payload) != nil || strings.TrimSpace(payload.Kind) == "" || strings.TrimSpace(payload.Mission) == "" || payload.Priority < 0 || payload.Priority > 1 || payload.MaxAttempts < 1 || payload.MaxAttempts > 100 {
 		return ErrInvalidContract
 	}

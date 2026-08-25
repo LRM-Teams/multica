@@ -45,12 +45,14 @@ canonical state。替换后的 Agent 或主理人必须能够只依靠 PostgreSQ
 - 存在独立调研维度且容量允许时，主理人应在一个 proposal 中创建多个 Branch 和 Work
   Item 并发运行。每个 run-scoped Agent 同时最多承担一个活动 Work；独立方向必须一项一
   Agent，已有任务集中在同一 Agent 时应扩充专职 Agent 并改派，不得伪装成并发后串行执行。
+  标准 V6 首轮至少创建 3 名职责不同的 run-scoped Agent；全部加入后，在后续 proposal
+  中至少创建 3 个独立 atomic Work 并分别分配，`max_parallel_tasks` 小于 3 时以该上限为准。
   除非冻结合同明确指定其他语言，面向用户的进度和结果叙述一律使用
   简体中文；协议 key、枚举值、命令和来源原文保持精确。面向用户的输出不得叙述
   Manifest/Brief 查找、标识符、JSON 拼装、CLI 命令、工具调用或隐藏推理；交接后只输出
   简短的中文调研摘要。
 - Director Brief 节点摘要中的“待回答问题”来自持久化 Result/Insight。主理人必须逐项判断：
-  对仍有价值的问题创建或改派后续 Work，出现能力、容量或独立性缺口时再创建 Agent；
+  每个仍有价值的问题创建一个独立 Work 并交给不同 Agent，出现能力、容量或独立性缺口时先创建 Agent；
   不继续的问题在 action reason 中记录收敛理由。存在高价值待回答问题且没有活动 Work
   覆盖时，不得提交 `no_op`。历史 Brief 若遗漏 Result 的待回答问题，服务端会自动创建
   一次修复 Cycle；不要要求用户重建 Run。

@@ -86,10 +86,11 @@ func TestBuildPromptInjectsCurrentManagerAuthorityIntoResumedSession(t *testing.
 		"Group manager this wake (server-claimed):",
 		`id="channel-lrm2" name="LRM2.0开发群"`,
 		"Ignore any other session/brief for roles not listed",
-		"ordinary self-owned Reminder capability",
-		"only when you judge a later follow-up is useful",
+		"do not auto-schedule a Reminder",
+		"--delay-seconds 900|1800|2700|3600",
 		"Adaptive Goal Mode:",
 		"when a human states a channel-level overall goal/outcome",
+		"Never substitute a Cursor/tool goal",
 		"Never claim the Goal is set until create succeeds",
 		"User message:\nhello",
 	} {
@@ -116,6 +117,7 @@ func TestBuildPromptInjectsCurrentManagerAuthorityIntoResumedSession(t *testing.
 	for _, forbidden := range []string{
 		"One anchored `multica reminder schedule` per channel",
 		"Drop any manager duties/reminders",
+		"the role does not own, require, or auto-schedule a Reminder",
 	} {
 		if strings.Contains(promoted, forbidden) || strings.Contains(demoted, forbidden) {
 			t.Fatalf("manager role overlay retained role-owned Reminder policy %q", forbidden)
@@ -915,6 +917,9 @@ func TestBuildPromptTellsChannelManagerToMaintainGoalProcess(t *testing.T) {
 		"multica goal process list --channel channel-1 --output json",
 		"multica goal process put --channel channel-1 --expected-version <current-process-version-or-0>",
 		"The process document and the authoritative short Goal checkpoint are separate",
+		"Goal follow-up Reminder:",
+		`multica reminder schedule --title "Goal follow-up: goal-1" --delay-seconds 900`,
+		"900, 1800, 2700, or 3600 seconds",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("manager goal prompt missing %q:\n%s", want, out)
@@ -924,7 +929,7 @@ func TestBuildPromptTellsChannelManagerToMaintainGoalProcess(t *testing.T) {
 	member := base
 	member.Agent = &AgentData{}
 	out = BuildPrompt(member, "claude", "")
-	if strings.Contains(out, "Manager process document:") || strings.Contains(out, "multica goal process put") {
+	if strings.Contains(out, "Manager process document:") || strings.Contains(out, "multica goal process put") || strings.Contains(out, "Goal follow-up Reminder:") {
 		t.Fatalf("ordinary channel member was told to write manager process:\n%s", out)
 	}
 }
@@ -1035,7 +1040,7 @@ func TestBuildPromptAllowsOnlyManagerIntegrationIssueToRelease(t *testing.T) {
 	for _, want := range []string{
 		"canonical integration/release Issue", "independently reviewed Issue branches",
 		"require green CI", "verify the deployed artifact against every Goal criterion",
-		"--repeat every:15m", "Cancel the Reminder when the Goal becomes terminal",
+		"--delay-seconds 900", "Cancel the Reminder when the Goal becomes terminal",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("integration prompt missing %q:\n%s", want, out)

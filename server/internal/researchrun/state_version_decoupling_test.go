@@ -261,11 +261,12 @@ func TestConflictRejectedResultRequeuesWorkItemWithoutBurningBudget(t *testing.T
 	if attemptStatus != "failed" || failureClass != "contract_rejected" {
 		t.Fatalf("attempt=%s class=%s want failed/contract_rejected (no lease limbo)", attemptStatus, failureClass)
 	}
-	var workStatus, terminalReason string
+	var workStatus, terminalReason, membershipState string
 	var attemptCount int
 	var leaseToken *string
-	if err = run.pool.QueryRow(run.ctx, `SELECT status,COALESCE(terminal_reason_code,''),attempt_count,lease_token::text
-		FROM research_work_item WHERE id=$1::uuid`, workItemID).Scan(&workStatus, &terminalReason, &attemptCount, &leaseToken); err != nil {
+	if err = run.pool.QueryRow(run.ctx, `SELECT w.status,COALESCE(w.terminal_reason_code,''),w.attempt_count,w.lease_token::text,m.state
+		FROM research_work_item w JOIN research_team_membership m ON m.id=$2::uuid WHERE w.id=$1::uuid`, workItemID, membershipID).
+		Scan(&workStatus, &terminalReason, &attemptCount, &leaseToken, &membershipState); err != nil {
 		t.Fatal(err)
 	}
 	if workStatus != "ready" || terminalReason != "" || leaseToken != nil {
@@ -273,6 +274,9 @@ func TestConflictRejectedResultRequeuesWorkItemWithoutBurningBudget(t *testing.T
 	}
 	if attemptCount != 0 {
 		t.Fatalf("attempt_count=%d want 0: conflicts must not burn the attempt budget", attemptCount)
+	}
+	if membershipState != "idle" {
+		t.Fatalf("membership=%s want idle after rejected attempt", membershipState)
 	}
 }
 

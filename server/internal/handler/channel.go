@@ -209,7 +209,6 @@ type ChannelMessageResponse struct {
 	Source              string                 `json:"source"`
 	ExternalMessageID   *string                `json:"external_message_id"`
 	ClientMessageID     *string                `json:"client_message_id"`
-	Evaluation          *protocol.EvaluationControl `json:"evaluation,omitempty"`
 	ReplyToMessageID    *string                `json:"reply_to_message_id,omitempty"`
 	ReplyTo             *ChannelMessageReply   `json:"reply_to,omitempty"`
 	QuoteMessageID      *string                `json:"quote_message_id,omitempty"`
@@ -404,7 +403,6 @@ type SendChannelMessageRequest struct {
 	QuoteMessageIDCamel *string                         `json:"quoteMessageId"`
 	Quote               *SendChannelMessageQuoteRequest `json:"quote"`
 	ClientMessageID     *string                         `json:"client_message_id"`
-	Evaluation          *channelMessageEvaluationRequest `json:"evaluation,omitempty"`
 }
 
 type SendChannelMessageQuoteRequest struct {
@@ -3965,20 +3963,6 @@ func (h *Handler) SendChannelMessageThreadReply(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	evaluation, err := normalizeChannelMessageEvaluation(req.Evaluation)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if evaluation != nil {
-		if evaluation.TurnIndex == 0 {
-			writeError(w, http.StatusBadRequest, "evaluation thread reply requires turn_index greater than zero")
-			return
-		}
-		if !h.authorizeChannelEvaluation(w, r, workspaceID) {
-			return
-		}
-	}
 	content, parts, err := messageparts.Normalize(req.Content, req.Parts)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid message parts: "+err.Error())
@@ -4007,10 +3991,6 @@ func (h *Handler) SendChannelMessageThreadReply(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusNotFound, "channel not found")
 		return
 	}
-	if evaluation != nil && !strings.EqualFold(ch.Kind, "group") {
-		writeError(w, http.StatusBadRequest, "evaluation messages require a group channel")
-		return
-	}
 	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
 		return
 	}
@@ -4027,16 +4007,6 @@ func (h *Handler) SendChannelMessageThreadReply(w http.ResponseWriter, r *http.R
 	}
 	root, ok := h.loadChannelThreadRoot(w, r.Context(), workspaceID, channelID, rootID)
 	if !ok {
-		return
-	}
-	rootEvaluation, err := loadChannelMessageEvaluation(r.Context(), h.DB, root.ID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to load evaluation thread metadata")
-		return
-	}
-	if (rootEvaluation != nil || evaluation != nil) &&
-		(rootEvaluation == nil || rootEvaluation.TurnIndex != 0 || !sameEvaluationEpisode(rootEvaluation, evaluation)) {
-		writeError(w, http.StatusConflict, errEvaluationThread.Error())
 		return
 	}
 	replyToMessageID, ok := h.validateChannelThreadReplyTarget(w, r.Context(), workspaceID, channelID, rootID, req.ReplyToMessageID)
@@ -4057,7 +4027,7 @@ func (h *Handler) SendChannelMessageThreadReply(w http.ResponseWriter, r *http.R
 		Content: content, Parts: parts, AttachmentIDs: attachmentIDs,
 		ReplyToMessageID: replyToMessageID, QuoteMessageID: quoteMessageID,
 		QuoteSnapshot: quoteSnapshot, ThreadRootMessageID: rootID,
-		ThreadID: threadID, ClientMessageID: clientMessageID, Evaluation: evaluation,
+		ThreadID: threadID, ClientMessageID: clientMessageID,
 		BeforeRecipientPlanning: func(txHandler *Handler, ctx context.Context, msg ChannelMessageResponse, created bool) error {
 			if !created {
 				return nil
@@ -4079,7 +4049,7 @@ func (h *Handler) SendChannelMessageThreadReply(w http.ResponseWriter, r *http.R
 		},
 	})
 	if err != nil {
-		if errors.Is(err, errChannelClientMessageConflict) || errors.Is(err, errEvaluationConflict) {
+		if errors.Is(err, errChannelClientMessageConflict) {
 			writeError(w, http.StatusConflict, "client_message_id conflicts with an existing channel message")
 			return
 		}
@@ -4708,7 +4678,6 @@ type canonicalChannelMessageInput struct {
 	ThreadRootMessageID     pgtype.UUID
 	ThreadID                *string
 	ClientMessageID         *string
-	Evaluation              *protocol.EvaluationControl
 	BeforeRecipientPlanning func(*Handler, context.Context, ChannelMessageResponse, bool) error
 }
 
@@ -4811,22 +4780,6 @@ func (h *Handler) persistPreparedCanonicalChannelMessage(ctx context.Context, in
 		txHandler.Queries = h.Queries.WithTx(tx)
 	}
 
-	if result.Created {
-		if err := persistChannelMessageEvaluation(ctx, tx, result.Message.ID, input.Evaluation); err != nil {
-			return zero, err
-		}
-		result.Message.Evaluation = input.Evaluation
-	} else {
-		persistedEvaluation, err := loadChannelMessageEvaluation(ctx, tx, result.Message.ID)
-		if err != nil {
-			return zero, err
-		}
-		if !sameEvaluationControl(persistedEvaluation, input.Evaluation) {
-			return zero, errEvaluationConflict
-		}
-		result.Message.Evaluation = persistedEvaluation
-	}
-
 	if input.BeforeRecipientPlanning != nil {
 		if err := input.BeforeRecipientPlanning(&txHandler, ctx, result.Message, result.Created); err != nil {
 			return zero, err
@@ -4896,20 +4849,6 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	evaluation, err := normalizeChannelMessageEvaluation(req.Evaluation)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if evaluation != nil {
-		if evaluation.TurnIndex != 0 {
-			writeError(w, http.StatusBadRequest, "evaluation top-level message requires turn_index=0")
-			return
-		}
-		if !h.authorizeChannelEvaluation(w, r, workspaceID) {
-			return
-		}
-	}
 	content, parts, err := messageparts.Normalize(req.Content, req.Parts)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid message parts: "+err.Error())
@@ -4938,10 +4877,6 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 	ch, found := h.getChannel(r.Context(), workspaceID, channelID)
 	if !found {
 		writeError(w, http.StatusNotFound, "channel not found")
-		return
-	}
-	if evaluation != nil && !strings.EqualFold(ch.Kind, "group") {
-		writeError(w, http.StatusBadRequest, "evaluation messages require a group channel")
 		return
 	}
 	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
@@ -4981,10 +4916,9 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 		QuoteMessageID:   quoteMessageID,
 		QuoteSnapshot:    quoteSnapshot,
 		ClientMessageID:  clientMessageID,
-		Evaluation:       evaluation,
 	})
 	if err != nil {
-		if errors.Is(err, errChannelClientMessageConflict) || errors.Is(err, errEvaluationConflict) {
+		if errors.Is(err, errChannelClientMessageConflict) {
 			writeError(w, http.StatusConflict, "client_message_id conflicts with an existing channel message")
 			return
 		}

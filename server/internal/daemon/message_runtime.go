@@ -85,29 +85,6 @@ func (d *Daemon) ensureIdleMessageCoordinatorForDelivery(workspaceID, agentID st
 // coordinator; the supervised WorkspaceDaemon receives an explicit managed start
 // when work exists.
 
-func evaluationMessageBatchControl(messages []protocol.AgentMessageProjection) (*protocol.EvaluationControl, error) {
-	if len(messages) == 0 {
-		return nil, nil
-	}
-	first := messages[0].Evaluation
-	for _, message := range messages {
-		current := message.Evaluation
-		if first == nil || current == nil {
-			if first != nil || current != nil {
-				return nil, errors.New("evaluation and ordinary Messages cannot share a resident batch")
-			}
-			continue
-		}
-		if first.SchemaVersion != 1 || current.SchemaVersion != first.SchemaVersion ||
-			current.EvaluationID != first.EvaluationID || current.EpisodeID != first.EpisodeID ||
-			current.MemoryPolicy != first.MemoryPolicy || current.TurnIndex < 0 ||
-			!protocol.ValidEvaluationMemoryPolicy(current.MemoryPolicy) {
-			return nil, errors.New("resident batch crosses an evaluation episode or memory policy boundary")
-		}
-	}
-	return first, nil
-}
-
 func mixedRunMessageBatchIdentity(messages []protocol.AgentMessageProjection) (string, string, string, bool) {
 	if len(messages) == 0 || messages[0].RunID == "" || messages[0].RunAgentID == "" {
 		return "", "", "", false
@@ -126,10 +103,6 @@ func mixedRunMessageBatchIdentity(messages []protocol.AgentMessageProjection) (s
 }
 
 func (d *Daemon) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID string, messages []protocol.AgentMessageProjection) error {
-	evaluation, err := evaluationMessageBatchControl(messages)
-	if err != nil {
-		return err
-	}
 	runID, runAgentID, turnID, mixed := mixedRunMessageBatchIdentity(messages)
 	directedRunID, directedTurnID := runID, turnID
 	if directedRunID == "" {
@@ -142,48 +115,9 @@ func (d *Daemon) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID
 	workspaceID := d.runtimeIndex[runtimeID].WorkspaceID
 	d.mu.Unlock()
 	runner, _ := d.ensureWorkspaceDaemon(workspaceID)
-	if evaluation != nil && len(messages) > 0 && messages[0].Evaluation != nil && messages[0].Evaluation.TurnIndex == 0 {
-		if err := d.canonicalRuntimes.invalidateSession(agentID, runtimeID); err != nil {
-			return err
-		}
-		if d.turnScopeMemory != nil {
-			d.turnScopeMemory.clearResident(agentID, runtimeID)
-		}
-		d.recordProviderSession(agentID, runtimeID, "")
-		freshContext := residentContextWithMemoryPolicy(ctx, evaluation.MemoryPolicy)
-		if err := d.ensureResidentMessageRuntime(freshContext, agentID, runtimeID, nil); err != nil {
-			return err
-		}
-	}
 	preparedMessages, memoryTask, err := d.prepareResidentMessageBatch(ctx, agentID, runtimeID, messages)
 	if err != nil {
 		return err
-	}
-	var restoreEvaluationMemory func()
-	if memoryTask.MemoryPolicy == protocol.EvaluationMemoryPolicyReadOnly || memoryTask.MemoryPolicy == protocol.EvaluationMemoryPolicyOff {
-		agentRoot := agentworkspace.Root(d.cfg.WorkspacesRoot, workspaceID, agentID)
-		unlock := lockMemoryWriteReport(agentRoot)
-		snapshot, snapshotErr := captureEvaluationMemorySnapshot(agentRoot)
-		if snapshotErr != nil {
-			unlock()
-			return fmt.Errorf("capture evaluation memory snapshot: %w", snapshotErr)
-		}
-		if memoryTask.MemoryPolicy == protocol.EvaluationMemoryPolicyOff {
-			if clearErr := clearEvaluationMemoryFiles(agentRoot); clearErr != nil {
-				_ = restoreEvaluationMemorySnapshot(agentRoot, snapshot)
-				unlock()
-				return fmt.Errorf("clear evaluation memory files: %w", clearErr)
-			}
-		}
-		var restoreOnce sync.Once
-		restoreEvaluationMemory = func() {
-			restoreOnce.Do(func() {
-				if restoreErr := restoreEvaluationMemorySnapshot(agentRoot, snapshot); restoreErr != nil && d.logger != nil {
-					d.logger.Error("restore evaluation memory snapshot failed", "agent_id", agentID, "runtime_id", runtimeID, "error", restoreErr)
-				}
-				unlock()
-			})
-		}
 	}
 	graphMemoryChannelID := ""
 	for _, message := range preparedMessages {
@@ -265,9 +199,6 @@ func (d *Daemon) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID
 			outcome, reasonCode = "failed", "provider_turn_failed"
 		}
 		d.recordResidentMessageBatch(workspaceID, runtimeID, agentID, preparedMessages, "provider_finished", outcome, reasonCode)
-		if restoreEvaluationMemory != nil {
-			restoreEvaluationMemory()
-		}
 		if d.client != nil && strings.TrimSpace(d.client.baseURL) != "" {
 			reportCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			if turnErr == nil {
@@ -305,9 +236,6 @@ func (d *Daemon) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID
 			}
 		})
 	})
-	if err != nil && restoreEvaluationMemory != nil {
-		restoreEvaluationMemory()
-	}
 	if err != nil {
 		if mixed {
 			d.endCanonicalActionTurn(agentID, canonicalActionTurn)
@@ -537,11 +465,7 @@ func (d *Daemon) prepareResidentMessageBatch(ctx context.Context, agentID, runti
 		return nil, Task{}, errors.New("runtime workspace is unavailable for resident Message memory")
 	}
 	agentRoot := agentworkspace.Root(d.cfg.WorkspacesRoot, workspaceID, agentID)
-	batchMemoryPolicy := ""
-	if len(messages) > 0 && messages[0].Evaluation != nil {
-		batchMemoryPolicy = messages[0].Evaluation.MemoryPolicy
-	}
-	if batchMemoryPolicy != protocol.EvaluationMemoryPolicyOff && d.client != nil && strings.TrimSpace(d.client.baseURL) != "" {
+	if d.client != nil && strings.TrimSpace(d.client.baseURL) != "" {
 		d.hydrateAgentMemoryCenter(ctx, workspaceID, agentID, runtimeID, agentRoot)
 	}
 
@@ -557,9 +481,7 @@ func (d *Daemon) prepareResidentMessageBatch(ctx context.Context, agentID, runti
 		}
 		serverMemories := convertResidentMessageMemoriesForEnv(message.Memories)
 		var memories []execenv.MemoryContextForEnv
-		if messageTask.MemoryPolicy == protocol.EvaluationMemoryPolicyOff {
-			memories = nil
-		} else if effectiveMemoryType(d.cfg.MemoryType, messageTask.MemoryType) == MemoryTypeGraph {
+		if effectiveMemoryType(d.cfg.MemoryType, messageTask.MemoryType) == MemoryTypeGraph {
 			// Same merge contract as runTask (spec §8): legacy user/agent
 			// retained, graph blob appended, no legacy project/channel/daily.
 			// Agent-scope rows stay out of per-message context.
@@ -571,7 +493,7 @@ func (d *Daemon) prepareResidentMessageBatch(ctx context.Context, agentID, runti
 		} else {
 			memories, _ = prepareTurnScopeMemory(agentRoot, messageTask, serverMemories)
 		}
-		if d.turnScopeMemory != nil && messageTask.MemoryPolicy != protocol.EvaluationMemoryPolicyOff {
+		if d.turnScopeMemory != nil {
 			memories = d.turnScopeMemory.selectForInject(sessionKey, memories, false)
 			d.turnScopeMemory.markInjected(sessionKey, memories)
 		}
@@ -588,7 +510,7 @@ func (d *Daemon) prepareResidentMessageBatch(ctx context.Context, agentID, runti
 			InitiatorID:     message.InitiatorID,
 			InitiatorName:   message.InitiatorName,
 		})
-		if message.GraphMemoryTools && messageTask.MemoryPolicy != protocol.EvaluationMemoryPolicyOff {
+		if message.GraphMemoryTools {
 			message.RuntimeContext += graphMemoryAgentToolContext(message)
 		}
 		prepared = append(prepared, message)
@@ -626,9 +548,6 @@ func residentMessageMemoryTask(workspaceID, agentID, runtimeID string, messages 
 			task.ChannelID = message.ChannelID
 			task.ChannelKind = message.ChannelKind
 			task.ProjectID = message.ProjectID
-			if message.Evaluation != nil {
-				task.MemoryPolicy = message.Evaluation.MemoryPolicy
-			}
 			initiatorType, initiatorID, initiatorName = message.InitiatorType, message.InitiatorID, message.InitiatorName
 		} else if message.InitiatorType != initiatorType || message.InitiatorID != initiatorID {
 			initiatorType, initiatorID, initiatorName = "", "", ""

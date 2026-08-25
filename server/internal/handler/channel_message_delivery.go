@@ -68,10 +68,6 @@ type canonicalMessageDeliveryPlan struct {
 func (h *Handler) planCanonicalMessageDeliveryRecipients(ctx context.Context, ch ChannelResponse, message ChannelMessageResponse) ([]*canonicalMessageDeliveryPlan, error) {
 	plans := make([]*canonicalMessageDeliveryPlan, 0)
 	for _, sourceRecipient := range h.canonicalMessageDeliveryRecipients(ctx, ch, message) {
-		if evaluationMemoryPolicy(message) == protocol.EvaluationMemoryPolicyOff &&
-			managedGraphMemoryAgent(ctx, h.DB, parseUUID(ch.ID), sourceRecipient.ID) {
-			continue
-		}
 		recipient := sourceRecipient
 		runID, runAgentID, executionAgent, mixed, err := h.resolveCanonicalRunRecipient(ctx, ch, sourceRecipient)
 		if err != nil {
@@ -168,7 +164,7 @@ func (h *Handler) notifyCanonicalMessageDeliveryPlans(ctx context.Context, ch Ch
 // the currently fenced trajectory. Delivery replay is idempotent by message_id;
 // channels without an active run retain the ordinary Message queue only.
 func persistGraphMemoryAgentSteeringEvent(ctx context.Context, tx pgx.Tx, message protocol.AgentMessageProjection) error {
-	if tx == nil || !message.Directed || projectionMemoryPolicy(message) == protocol.EvaluationMemoryPolicyOff || strings.TrimSpace(message.ID) == "" || strings.TrimSpace(message.ChannelID) == "" {
+	if tx == nil || !message.Directed || strings.TrimSpace(message.ID) == "" || strings.TrimSpace(message.ChannelID) == "" {
 		return nil
 	}
 	var runID, trajectoryID string
@@ -218,7 +214,7 @@ func persistGraphMemoryAgentSteeringEvent(ctx context.Context, tx pgx.Tx, messag
 }
 
 func (h *Handler) observeGraphMemoryChannelActivity(ctx context.Context, ch ChannelResponse, message ChannelMessageResponse) {
-	if h == nil || h.GraphMemoryAgentControl == nil || h.DB == nil || !strings.EqualFold(ch.Kind, "group") || evaluationMemoryPolicy(message) == protocol.EvaluationMemoryPolicyOff {
+	if h == nil || h.GraphMemoryAgentControl == nil || h.DB == nil || !strings.EqualFold(ch.Kind, "group") {
 		return
 	}
 	if !channelMessageIsHumanAuthored(message.Type) && !strings.EqualFold(message.Type, "agent") {
@@ -240,7 +236,7 @@ func (h *Handler) observeGraphMemoryChannelActivity(ctx context.Context, ch Chan
 }
 
 func (h *Handler) publishBlockedGraphMemoryDirectedFailure(ctx context.Context, ch ChannelResponse, message ChannelMessageResponse) {
-	if h == nil || h.DB == nil || !channelMessageIsHumanAuthored(message.Type) || !strings.EqualFold(ch.Kind, "group") || evaluationMemoryPolicy(message) == protocol.EvaluationMemoryPolicyOff {
+	if h == nil || h.DB == nil || !channelMessageIsHumanAuthored(message.Type) || !strings.EqualFold(ch.Kind, "group") {
 		return
 	}
 	var agentID pgtype.UUID
@@ -337,7 +333,7 @@ func persistCanonicalMessageDelivery(ctx context.Context, exec dbExecutor, ch Ch
 		Seq:        message.Seq,
 		DeliveryID: "message:" + message.ID + ":agent:" + agentID,
 		Message: protocol.AgentMessageProjection{
-			ID: message.ID, ChannelID: ch.ID, Target: target, ReplyTarget: replyTarget, Seq: message.Seq, Content: message.Content, Parts: message.Parts, Evaluation: message.Evaluation, Directed: directed, GraphMemoryTools: managedGraphTools,
+			ID: message.ID, ChannelID: ch.ID, Target: target, ReplyTarget: replyTarget, Seq: message.Seq, Content: message.Content, Parts: message.Parts, Directed: directed, GraphMemoryTools: managedGraphTools,
 			ChannelKind: ch.Kind, ProjectID: stringValue(ch.ProjectID),
 			InitiatorType: canonicalMessageInitiatorType(message.Type), InitiatorID: stringValue(message.AuthorID), InitiatorName: message.AuthorName,
 		},
@@ -345,7 +341,7 @@ func persistCanonicalMessageDelivery(ctx context.Context, exec dbExecutor, ch Ch
 }
 
 func (h *Handler) attachCanonicalMessageMemories(ctx context.Context, workspaceID string, agentID pgtype.UUID, message *protocol.AgentMessageProjection) {
-	if h == nil || h.TaskService == nil || message == nil || projectionMemoryPolicy(*message) == protocol.EvaluationMemoryPolicyOff {
+	if h == nil || h.TaskService == nil || message == nil {
 		return
 	}
 	chatSessionID := ""
@@ -410,9 +406,7 @@ func (h *Handler) redeliverUnacknowledgedComputerAgentMessages(ctx context.Conte
 		       END || CASE
 		         WHEN m.thread_root_message_id IS NOT NULL THEN ':' || LEFT(m.thread_root_message_id::text, 8)
 		         ELSE ''
-		       END,
-		       evaluation.schema_version,evaluation.evaluation_id,evaluation.episode_id,
-		       evaluation.turn_index,evaluation.memory_policy
+		       END
 		FROM agent_message_delivery delivery
 		JOIN agent recipient ON recipient.id = delivery.agent_id AND recipient.archived_at IS NULL
 		JOIN agent_runtime runtime ON runtime.id = recipient.runtime_id
@@ -420,7 +414,6 @@ func (h *Handler) redeliverUnacknowledgedComputerAgentMessages(ctx context.Conte
 		JOIN channel c ON c.id = m.channel_id AND c.workspace_id = delivery.workspace_id
 		LEFT JOIN "user" author_user ON m.author_type = 'user' AND author_user.id = m.author_id
 		LEFT JOIN agent author_agent ON m.author_type = 'agent' AND author_agent.id = m.author_id
-		LEFT JOIN channel_message_evaluation evaluation ON evaluation.message_id=m.id
 		LEFT JOIN LATERAL (
 			SELECT COALESCE(NULLIF(u.name, ''), NULLIF(a.name, ''), '') AS handle
 			FROM channel_member cm
@@ -452,10 +445,7 @@ func (h *Handler) redeliverUnacknowledgedComputerAgentMessages(ctx context.Conte
 		var seq int64
 		var content, target, channelKind, authorType, authorName, replyTarget string
 		var rawParts []byte
-		var evaluationSchema, evaluationTurn pgtype.Int4
-		var evaluationID, episodeID, memoryPolicy pgtype.Text
-		if err := rows.Scan(&agentID, &messageID, &channelID, &seq, &content, &rawParts, &target, &channelKind, &projectID, &authorType, &authorID, &authorName, &replyTarget,
-			&evaluationSchema, &evaluationID, &episodeID, &evaluationTurn, &memoryPolicy); err != nil {
+		if err := rows.Scan(&agentID, &messageID, &channelID, &seq, &content, &rawParts, &target, &channelKind, &projectID, &authorType, &authorID, &authorName, &replyTarget); err != nil {
 			rows.Close()
 			return fmt.Errorf("scan unacknowledged Computer Agent Message: %w", err)
 		}
@@ -466,20 +456,13 @@ func (h *Handler) redeliverUnacknowledgedComputerAgentMessages(ctx context.Conte
 				return fmt.Errorf("decode unacknowledged Computer Agent Message parts: %w", err)
 			}
 		}
-		var evaluation *protocol.EvaluationControl
-		if evaluationSchema.Valid {
-			evaluation = &protocol.EvaluationControl{
-				SchemaVersion: int(evaluationSchema.Int32), EvaluationID: evaluationID.String,
-				EpisodeID: episodeID.String, TurnIndex: int(evaluationTurn.Int32), MemoryPolicy: memoryPolicy.String,
-			}
-		}
 		pending = append(pending, pendingComputerAgentMessage{
 			agentID: agentID,
 			target:  target,
 			seq:     seq,
 			message: protocol.AgentMessageProjection{
 				ID: uuidToString(messageID), ChannelID: uuidToString(channelID), Target: target,
-				ReplyTarget: replyTarget, Seq: seq, Content: content, Parts: parts, Evaluation: evaluation,
+				ReplyTarget: replyTarget, Seq: seq, Content: content, Parts: parts,
 				ChannelKind: channelKind, ProjectID: uuidToString(projectID),
 				InitiatorType: canonicalMessageInitiatorType(authorType),
 				InitiatorID:   uuidToString(authorID), InitiatorName: authorName,

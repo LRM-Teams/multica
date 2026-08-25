@@ -30,7 +30,7 @@
 
 **Implement**
 
-- 新建`server/migrations/448_graph_memory_agent_mode.up.sql/.down.sql`：
+- 新建`server/migrations/451_graph_memory_agent_mode.up.sql/.down.sql`：
   - 扩展`graph_memory_profile`：mode、runtime/model/thinking、recall/consolidation TTT、idle/node/token/turn limits。
   - 为channel添加override，默认inherit。
   - 新增managed channel identity/status/state核心表及必要enum/check/index；既有Graph profile迁移为agent。

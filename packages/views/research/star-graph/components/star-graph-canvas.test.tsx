@@ -332,7 +332,7 @@ describe("StarGraphCanvas (Slice A renderer)", () => {
       "data-disclosure-state",
       "failed",
     );
-    fireEvent.click(node);
+    fireEvent.click(within(node).getByTestId("star-graph-disclosure"));
     expect(onToggleNode).toHaveBeenCalledWith("stable-a");
     expect(screen.getAllByTestId("star-graph-node")).toHaveLength(3);
   });

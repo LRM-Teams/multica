@@ -92,20 +92,31 @@ func loadAgentProcessCapInputs(getenv func(string) string, numCPU int) (AgentPro
 		Ceil:   DefaultMaxAgentProcessesCeil,
 	}
 	if raw := strings.TrimSpace(getenv("MULTICA_MAX_AGENT_PROCESSES")); raw != "" {
-		n, err := strconv.Atoi(raw)
-		if err != nil || n < 0 {
-			return AgentProcessCapInputs{}, fmt.Errorf("MULTICA_MAX_AGENT_PROCESSES: invalid non-negative integer %q", raw)
+		n, err := parseAgentProcessCapEnvInt(raw, "MULTICA_MAX_AGENT_PROCESSES", 0, "non-negative")
+		if err != nil {
+			return AgentProcessCapInputs{}, err
 		}
 		in.Absolute = &n
 	}
 	if raw := strings.TrimSpace(getenv("MULTICA_MAX_AGENT_PROCESSES_PER_CPU")); raw != "" {
-		n, err := strconv.Atoi(raw)
-		if err != nil || n <= 0 {
-			return AgentProcessCapInputs{}, fmt.Errorf("MULTICA_MAX_AGENT_PROCESSES_PER_CPU: invalid positive integer %q", raw)
+		n, err := parseAgentProcessCapEnvInt(raw, "MULTICA_MAX_AGENT_PROCESSES_PER_CPU", 1, "positive")
+		if err != nil {
+			return AgentProcessCapInputs{}, err
 		}
 		in.PerCPU = n
 	}
 	return in, nil
+}
+
+// parseAgentProcessCapEnvInt centralizes the two environment integer contracts
+// used by loadAgentProcessCapInputs. Keeping the bound check in one place makes
+// future cap knobs use the same parsing and error semantics.
+func parseAgentProcessCapEnvInt(raw, name string, minimum int, requirement string) (int, error) {
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < minimum {
+		return 0, fmt.Errorf("%s: invalid %s integer %q", name, requirement, raw)
+	}
+	return n, nil
 }
 
 // resolveMaxAgentProcessesFromEnv is the production entry. Resident Agent

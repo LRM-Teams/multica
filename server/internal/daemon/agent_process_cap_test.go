@@ -116,3 +116,39 @@ func TestLoadAgentProcessCapInputsRejectsBadValues(t *testing.T) {
 		t.Fatal("expected error for non-positive per-cpu")
 	}
 }
+
+func TestParseAgentProcessCapEnvIntBounds(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name       string
+		raw        string
+		minimum    int
+		requirement string
+		want       int
+		wantErr    bool
+	}{
+		{name: "zero allowed", raw: "0", minimum: 0, requirement: "non-negative", want: 0},
+		{name: "positive required", raw: "1", minimum: 1, requirement: "positive", want: 1},
+		{name: "negative rejected", raw: "-1", minimum: 0, requirement: "non-negative", wantErr: true},
+		{name: "non integer rejected", raw: "oops", minimum: 0, requirement: "non-negative", wantErr: true},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := parseAgentProcessCapEnvInt(tc.raw, "TEST_CAP", tc.minimum, tc.requirement)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected parse error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseAgentProcessCapEnvInt() error = %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("parseAgentProcessCapEnvInt() = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}

@@ -125,6 +125,7 @@ func TestAgentActivityPayloadUsesRaftFactOnlyWireEnvelope(t *testing.T) {
 		Detail:      "pnpm test",
 		Entries:     []AgentActivityEntry{{Kind: "status", Body: json.RawMessage(`{"activity":"working","detail":"pnpm test","detailKind":"running_command"}`)}},
 		IsHeartbeat: true,
+		Timing:      AgentActivityTiming{AcceptedAtMS: 100, FirstACPUpdateAtMS: 150, DaemonSentAtMS: 180},
 	}
 
 	wire, err := json.Marshal(payload)
@@ -153,7 +154,7 @@ func TestAgentActivityPayloadUsesRaftFactOnlyWireEnvelope(t *testing.T) {
 	if err := json.Unmarshal(wire, &decoded); err != nil {
 		t.Fatalf("unmarshal Activity fact: %v", err)
 	}
-	if decoded.Snapshot.AgentID != payload.Snapshot.AgentID || decoded.Snapshot.DetailKind != payload.Snapshot.DetailKind || decoded.Snapshot.ActivityKind != "" || !decoded.Snapshot.ObservedAt.Equal(observedAt) || decoded.Detail != payload.Detail || !decoded.IsHeartbeat {
+	if decoded.Snapshot.AgentID != payload.Snapshot.AgentID || decoded.Snapshot.DetailKind != payload.Snapshot.DetailKind || decoded.Snapshot.ActivityKind != "" || !decoded.Snapshot.ObservedAt.Equal(observedAt) || decoded.Detail != payload.Detail || !decoded.IsHeartbeat || decoded.Timing != payload.Timing {
 		t.Fatalf("decoded Activity fact = %+v, want identities/detail/time without daemon activity kind", decoded.Snapshot)
 	}
 }

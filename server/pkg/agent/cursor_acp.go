@@ -320,6 +320,7 @@ func (b *cursorACPBackend) executeTurn(ctx context.Context, prompt string, opts 
 	p.stateMu.Unlock()
 	p.noticeMu.Lock()
 	p.noticeDone = nil
+	p.client.resetFirstUpdate()
 	p.client.resetToolCallFailure()
 	primaryID, primaryDone, err := p.client.beginRequest("session/prompt", map[string]any{
 		"sessionId": p.sessionID,

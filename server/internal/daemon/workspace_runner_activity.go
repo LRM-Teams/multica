@@ -207,7 +207,7 @@ func (runner *WorkspaceRunner) observeResidentMessageRuntime(agentID, runtimeID 
 	}
 
 	at := time.Now().UTC()
-	stage := AgentRuntimeStageObservationData{RuntimeID: runtimeID}
+	stage := AgentRuntimeStageObservationData{RuntimeID: runtimeID, ProviderEventAt: message.ProviderEventAt}
 	switch message.Type {
 	case agent.MessageThinking, agent.MessageText, agent.MessageToolUse:
 		_, _ = runner.activity.CompleteCompactionIfActive(agentID, launch.LaunchID, stage, at)
@@ -322,9 +322,10 @@ func (runner *WorkspaceRunner) broadcastMessageReceivedActivity(agentID, runtime
 		return
 	}
 	if launch, found := runner.managedLaunch(agentID, runtimeID); found && runner.activity != nil {
+		at := time.Now().UTC()
 		runner.observeActivity(AgentObservation{
 			AgentID: agentID, LaunchID: launch.LaunchID, Kind: AgentObservationMessageBodyAccepted,
-			Data: AgentMessageAcceptanceObservationData{RuntimeID: runtimeID}, At: time.Now().UTC(),
+			Data: AgentMessageAcceptanceObservationData{RuntimeID: runtimeID, AcceptedAt: at}, At: at,
 		}, "Message accepted")
 	}
 }

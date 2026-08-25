@@ -310,7 +310,21 @@ func (p *agentActivityProducer) publishLocked(snapshot protocol.AgentActivitySna
 	if detail == "" {
 		detail = defaultAgentActivityDetail(snapshot.DetailKind)
 	}
-	payload := protocol.AgentActivityPayload{Snapshot: snapshot, Detail: detail, Entries: broadcast.trajectory}
+	payload := protocol.AgentActivityPayload{Snapshot: snapshot, Detail: detail, Entries: broadcast.trajectory, Timing: broadcast.timing}
+	if payload.Timing == (protocol.AgentActivityTiming{}) && state.latestActivity.Timing != (protocol.AgentActivityTiming{}) {
+		payload.Timing = state.latestActivity.Timing
+	} else {
+		previous := state.latestActivity.Timing
+		if payload.Timing.ColdStartAtMS == 0 {
+			payload.Timing.ColdStartAtMS = previous.ColdStartAtMS
+		}
+		if payload.Timing.AcceptedAtMS == 0 {
+			payload.Timing.AcceptedAtMS = previous.AcceptedAtMS
+		}
+		if payload.Timing.FirstACPUpdateAtMS == 0 {
+			payload.Timing.FirstACPUpdateAtMS = previous.FirstACPUpdateAtMS
+		}
+	}
 	if err := payload.Validate(); err != nil {
 		return err
 	}
@@ -349,7 +363,7 @@ func (p *agentActivityProducer) Tick() {
 		state.snapshot = heartbeat
 		state.lastClientSequence = heartbeat.ClientSequence
 		state.lastHeartbeatAt = now
-		state.latestActivity = protocol.AgentActivityPayload{Snapshot: heartbeat, Detail: state.detail, IsHeartbeat: true}
+		state.latestActivity = protocol.AgentActivityPayload{Snapshot: heartbeat, Detail: state.detail, IsHeartbeat: true, Timing: state.latestActivity.Timing}
 		if state.connected && p.send != nil {
 			p.send(state.latestActivity)
 		}

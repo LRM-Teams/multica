@@ -59,12 +59,14 @@ type AgentRuntimeStageObservationData struct {
 	ToolCallID string
 	ToolInput  map[string]any
 	StaleFor   time.Duration
+	ProviderEventAt time.Time
 }
 
 func (AgentRuntimeStageObservationData) agentObservationData() {}
 
 type AgentMessageAcceptanceObservationData struct {
 	RuntimeID string
+	AcceptedAt time.Time
 }
 
 func (AgentMessageAcceptanceObservationData) agentObservationData() {}

@@ -52,9 +52,9 @@ func TestOverlayInFlightInboxOnIdleRunnerSummary(t *testing.T) {
 	cases := []struct {
 		in, want string
 	}{
-		{"Online", "Thinking..."},
-		{"Idle", "Thinking..."},
-		{"Working...", "Thinking..."},
+		{"Online", "Working..."},
+		{"Idle", "Working..."},
+		{"Working...", "Working..."},
 		{"Running command...", "Running command..."},
 		{"Thinking...", "Thinking..."},
 	}

@@ -256,6 +256,12 @@ func (runner *WorkspaceRunner) sendOnConnection(connection *DaemonConnection, ev
 	if runner.connection != connection {
 		return errors.New("Workspace Runner connection is stale")
 	}
+	if eventType == protocol.EventAgentActivity {
+		if activity, ok := payload.(protocol.AgentActivityPayload); ok {
+			activity.Timing.DaemonSentAtMS = time.Now().UTC().UnixMilli()
+			payload = activity
+		}
+	}
 	return connection.Write(eventType, payload)
 }
 

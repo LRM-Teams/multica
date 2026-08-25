@@ -286,8 +286,8 @@ func TestListRunnerActivitySummariesOverlaysInFlightInboxOnOnline(t *testing.T) 
 			continue
 		}
 		found = true
-		if item.Summary.Label != "Thinking..." {
-			t.Fatalf("collecting agent summary=%q, want Thinking... not Online", item.Summary.Label)
+		if item.Summary.Label != "Working..." {
+			t.Fatalf("collecting agent summary=%q, want Working... not Online", item.Summary.Label)
 		}
 	}
 	if !found {
@@ -306,8 +306,7 @@ func TestListRunnerActivitySummariesOverlaysInFlightInboxOnOnline(t *testing.T) 
 	if err := json.Unmarshal(detailRec.Body.Bytes(), &detail); err != nil {
 		t.Fatal(err)
 	}
-	if detail.Summary == nil || detail.Summary.Label != "Thinking..." {
-		t.Fatalf("detail summary=%+v, want Thinking...", detail.Summary)
+	if detail.Summary == nil || detail.Summary.Label != "Working..." {
+		t.Fatalf("detail summary=%+v, want Working...", detail.Summary)
 	}
 }
-

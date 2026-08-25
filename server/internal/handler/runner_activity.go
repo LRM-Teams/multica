@@ -31,6 +31,14 @@ const (
 type RunnerActivityResponse struct {
 	Summary  *activityprojection.Summary         `json:"summary"`
 	Timeline []RunnerActivityTimelineResponseRow `json:"timeline"`
+	Timing   *RunnerActivityTimingResponse       `json:"timing,omitempty"`
+}
+
+type RunnerActivityTimingResponse struct {
+	ColdStartAtMS      int64 `json:"cold_start_at_ms,omitempty"`
+	AcceptedAtMS       int64 `json:"accepted_at_ms,omitempty"`
+	FirstACPUpdateAtMS int64 `json:"first_acp_update_at_ms,omitempty"`
+	DaemonSentAtMS     int64 `json:"daemon_sent_at_ms,omitempty"`
 }
 
 type RunnerActivityTimelineResponseRow struct {
@@ -42,6 +50,13 @@ type RunnerActivityTimelineResponseRow struct {
 type RunnerActivityRealtimePayload struct {
 	AgentID  string                 `json:"agent_id"`
 	Activity RunnerActivityResponse `json:"activity"`
+}
+
+func runnerActivityTimingResponse(t protocol.AgentActivityTiming) *RunnerActivityTimingResponse {
+	if t == (protocol.AgentActivityTiming{}) {
+		return nil
+	}
+	return &RunnerActivityTimingResponse{ColdStartAtMS: t.ColdStartAtMS, AcceptedAtMS: t.AcceptedAtMS, FirstACPUpdateAtMS: t.FirstACPUpdateAtMS, DaemonSentAtMS: t.DaemonSentAtMS}
 }
 
 type runnerActivityTimelineEntry struct {
@@ -602,6 +617,7 @@ func (h *Handler) recordRunnerActivity(ctx context.Context, identity daemonws.Cl
 			if err != nil {
 				return err
 			}
+			projected.Timing = runnerActivityTimingResponse(activity.Timing)
 			h.publish(protocol.EventAgentActivity, identity.WorkspaceID, "system", "", RunnerActivityRealtimePayload{
 				AgentID:  snapshot.AgentID,
 				Activity: projected,
@@ -633,6 +649,7 @@ func (h *Handler) recordRunnerActivity(ctx context.Context, identity daemonws.Cl
 		if err != nil {
 			return err
 		}
+		projected.Timing = runnerActivityTimingResponse(activity.Timing)
 		h.publish(protocol.EventAgentActivity, identity.WorkspaceID, "system", "", RunnerActivityRealtimePayload{
 			AgentID:  snapshot.AgentID,
 			Activity: projected,
@@ -1001,13 +1018,13 @@ func runnerActivitySummaryWithError(summary activityprojection.Summary, errorTex
 }
 
 // overlayInFlightInboxOnIdleRunnerSummary keeps compact Activity from saying
-// Online/Idle/Working while an inbox task (e.g. Period Work collector) is still
-// draining. Presence stays on the avatar; the composer strip needs a live verb.
+// Online/Idle while an inbox task is still draining. It intentionally uses the
+// provider-neutral Working label: Thinking requires a real provider event.
 func overlayInFlightInboxOnIdleRunnerSummary(summary activityprojection.Summary) activityprojection.Summary {
 	base := strings.TrimRight(strings.TrimSpace(summary.Label), ".…")
 	switch base {
 	case "Online", "Idle", "Working":
-		return activityprojection.Summary{Label: "Thinking...", Tone: "info", Visibility: "visible"}
+		return activityprojection.Summary{Label: "Working...", Tone: "warning", Visibility: "visible"}
 	default:
 		return summary
 	}

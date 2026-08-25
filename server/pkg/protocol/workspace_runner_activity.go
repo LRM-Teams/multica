@@ -384,6 +384,16 @@ type AgentActivityPayload struct {
 	Detail      string                `json:"-"`
 	Entries     []AgentActivityEntry  `json:"-"`
 	IsHeartbeat bool                  `json:"-"`
+	Timing      AgentActivityTiming   `json:"-"`
+}
+
+// AgentActivityTiming is optional, provider-neutral diagnostic evidence. It
+// never drives lifecycle projection; the browser adds receive/cache marks.
+type AgentActivityTiming struct {
+	ColdStartAtMS      int64 `json:"coldStartAtMs,omitempty"`
+	AcceptedAtMS       int64 `json:"acceptedAtMs,omitempty"`
+	FirstACPUpdateAtMS int64 `json:"firstAcpUpdateAtMs,omitempty"`
+	DaemonSentAtMS     int64 `json:"daemonSentAtMs,omitempty"`
 }
 
 // agentActivityWirePayload is Raft v1.0.16's fact-only agent:activity body.
@@ -400,6 +410,7 @@ type agentActivityWirePayload struct {
 	ProducerFactID   string               `json:"producerFactId,omitempty"`
 	ObservedAtMS     *int64               `json:"observedAtMs,omitempty"`
 	IsHeartbeat      bool                 `json:"isHeartbeat"`
+	Timing           *AgentActivityTiming `json:"timing,omitempty"`
 }
 
 func (p AgentActivityPayload) MarshalJSON() ([]byte, error) {
@@ -407,6 +418,11 @@ func (p AgentActivityPayload) MarshalJSON() ([]byte, error) {
 	if !p.Snapshot.ObservedAt.IsZero() {
 		value := p.Snapshot.ObservedAt.UnixMilli()
 		observedAtMS = &value
+	}
+	var timing *AgentActivityTiming
+	if p.Timing != (AgentActivityTiming{}) {
+		value := p.Timing
+		timing = &value
 	}
 	return json.Marshal(agentActivityWirePayload{
 		AgentID:          p.Snapshot.AgentID,
@@ -420,6 +436,7 @@ func (p AgentActivityPayload) MarshalJSON() ([]byte, error) {
 		ProducerFactID:   p.Snapshot.ProducerFactID,
 		ObservedAtMS:     observedAtMS,
 		IsHeartbeat:      p.IsHeartbeat,
+		Timing:           timing,
 	})
 }
 
@@ -445,6 +462,9 @@ func (p *AgentActivityPayload) UnmarshalJSON(data []byte) error {
 	p.Detail = wire.Detail
 	p.Entries = wire.Entries
 	p.IsHeartbeat = wire.IsHeartbeat
+	if wire.Timing != nil {
+		p.Timing = *wire.Timing
+	}
 	return nil
 }
 

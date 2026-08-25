@@ -18,6 +18,7 @@ type activityBroadcast struct {
 	detailKind        string
 	processInstanceID string
 	trajectory        []protocol.AgentActivityEntry
+	timing            protocol.AgentActivityTiming
 }
 
 // Observe is the only typed Message/runtime-fact to Activity presentation
@@ -193,13 +194,20 @@ func activityBroadcastForObservation(observation AgentObservation) (activityBroa
 		entry, err = activityStatusEntry(broadcast.detailKind, broadcast.detail)
 	case AgentObservationRuntimeStarting:
 		broadcast.activityKind, broadcast.detailKind, broadcast.detail = protocol.ActivityKindWorking, "starting", "Starting…"
+		broadcast.timing.ColdStartAtMS = observation.At.UnixMilli()
 		entry, err = activityStatusEntry(broadcast.detailKind, broadcast.detail)
 	case AgentObservationRuntimeWorking:
 		// Runtime text advances Raft's current model-response state, but the
 		// final reply belongs to Chat and does not create a generic Timeline row.
 		broadcast.activityKind, broadcast.detailKind, broadcast.detail = protocol.ActivityKindWorking, "model_response_started", "Working"
+		if data := observation.Data.(AgentRuntimeStageObservationData); !data.ProviderEventAt.IsZero() {
+			broadcast.timing.FirstACPUpdateAtMS = data.ProviderEventAt.UnixMilli()
+		}
 	case AgentObservationRuntimeThinking:
 		broadcast.activityKind, broadcast.detailKind, broadcast.detail = protocol.ActivityKindThinking, "thinking_started", "Thinking"
+		if data := observation.Data.(AgentRuntimeStageObservationData); !data.ProviderEventAt.IsZero() {
+			broadcast.timing.FirstACPUpdateAtMS = data.ProviderEventAt.UnixMilli()
+		}
 		entry, err = activityStatusEntry(broadcast.detailKind, broadcast.detail)
 	case AgentObservationRuntimeTool:
 		data := observation.Data.(AgentRuntimeStageObservationData)
@@ -214,6 +222,9 @@ func activityBroadcastForObservation(observation AgentObservation) (activityBroa
 			toolName = semantic
 		}
 		broadcast.detail = summary
+		if !data.ProviderEventAt.IsZero() {
+			broadcast.timing.FirstACPUpdateAtMS = data.ProviderEventAt.UnixMilli()
+		}
 		entry, err = activityToolStartEntry(toolName, toolInput)
 	case AgentObservationRuntimeCompacting:
 		broadcast.activityKind, broadcast.detailKind, broadcast.detail = protocol.ActivityKindWorking, "compacting_context", "Compacting context"
@@ -244,6 +255,12 @@ func activityBroadcastForObservation(observation AgentObservation) (activityBroa
 		// body is accepted. Keep the presentation detail the UI already
 		// maps; do not wait for native write completion.
 		broadcast.activityKind, broadcast.detailKind, broadcast.detail = protocol.ActivityKindWorking, "message_received", "Message received"
+		data := observation.Data.(AgentMessageAcceptanceObservationData)
+		acceptedAt := data.AcceptedAt
+		if acceptedAt.IsZero() {
+			acceptedAt = observation.At
+		}
+		broadcast.timing.AcceptedAtMS = acceptedAt.UnixMilli()
 		entry, err = activityStatusEntry(broadcast.detailKind, broadcast.detail)
 	case AgentObservationFreshnessHeld:
 		data := observation.Data.(AgentFreshnessHoldObservationData)

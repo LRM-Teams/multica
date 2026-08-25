@@ -121,8 +121,8 @@ vi.mock("../../agents/components/agent-profile-actions", () => ({
       {layout === "icons" ? (
         <button type="button" data-testid="agent-profile-chrome-action-message" />
       ) : (
-        <button type="button" data-testid="agent-profile-action-start">
-          Start Agent
+        <button type="button" data-testid="agent-profile-action-delete">
+          Delete
         </button>
       )}
     </div>
@@ -610,7 +610,7 @@ describe("AgentSidePanel", () => {
     );
   });
 
-  it("copies compact icons into chrome and keeps labeled Actions in the Profile body", () => {
+  it("puts the actions menu in chrome and leaves only Delete in the Profile body", () => {
     renderPanel();
     expect(screen.queryByTestId("agent-profile-message-button")).not.toBeInTheDocument();
     const chrome = screen.getByTestId("agent-profile-chrome-actions");
@@ -619,7 +619,7 @@ describe("AgentSidePanel", () => {
     expect(screen.getByTestId("agent-profile-identity")).not.toContainElement(actions);
     expect(screen.getByTestId("agent-profile-identity")).not.toContainElement(chrome);
     expect(screen.queryByTestId("agent-profile-action-message")).not.toBeInTheDocument();
-    expect(screen.getByTestId("agent-profile-action-start")).toHaveTextContent("Start Agent");
+    expect(screen.getByTestId("agent-profile-action-delete")).toHaveTextContent("Delete");
     expect(screen.getByTestId("agent-profile-chrome-action-message")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "More" })).not.toBeInTheDocument();
   });

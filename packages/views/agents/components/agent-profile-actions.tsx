@@ -1,7 +1,15 @@
 "use client";
 
 import { useState } from "react";
-import { Loader2, MessageSquare, Play, RotateCcw, Square, Trash2 } from "lucide-react";
+import {
+  Loader2,
+  MessageSquare,
+  MoreHorizontal,
+  Play,
+  RotateCcw,
+  Square,
+  Trash2,
+} from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
@@ -12,18 +20,26 @@ import { deriveRuntimeHealth } from "@multica/core/runtimes";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import { resolveActorDisplayName } from "@multica/core/identity";
 import { Button } from "@multica/ui/components/ui/button";
-import { ButtonGroup } from "@multica/ui/components/ui/button-group";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@multica/ui/components/ui/tooltip";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@multica/ui/components/ui/dropdown-menu";
 import { useOpenDM } from "../../common/use-open-dm";
 import { useT } from "../../i18n/use-t";
 import { AgentRestartModal } from "./agent-restart-modal";
 import { ConfirmDeleteAgent } from "./confirm-delete-agent";
 
 /**
- * Agent profile actions. The Profile body keeps the labeled ACTIONS stack
- * (Start/Stop, Restart/Reset, Delete). Chrome copies Message + one
- * Start/Stop toggle + Restart/Reset as compact icons. Message and Delete
- * each live in one place: Message in chrome, Delete in the stack.
+ * Agent profile actions. Every ordinary action lives in exactly one place —
+ * the chrome menu — and the Profile body's ACTIONS stack is reduced to the
+ * destructive Delete alone. Chrome (Linear-style, `layout="icons"`)
+ * exposes a single ghost `⋯` trigger that opens a dropdown menu with
+ * Message, the Start/Stop toggle, and Restart/Reset as labeled items — the
+ * panel's ✕ close control sits next to it, owned by the shared panel shell.
+ * Message and Delete each live in one place: Message in the chrome menu,
+ * Delete in the stack.
  *
  * LRM-448 / Frank 2026-07-23: the destructive action is **Delete**, not
  * Archive (AC#2 "Message + Delete（非 Archive）"). The backend exposes no
@@ -171,86 +187,75 @@ export function AgentProfileActions({
   );
 
   if (layout === "icons") {
+    if (!showMessage && !showLifecycle && !showRestart) {
+      return dialogs;
+    }
+
     return (
       <section
         className="flex shrink-0 items-center gap-0.5"
         aria-label={t(($) => $.side_panel.actions_section)}
         data-testid="agent-profile-chrome-actions"
       >
-        {/* Icon-only segmented toolbar (Frank 2026-08-19): bordered outline
-            controls in a ButtonGroup so the cluster reads as real buttons
-            without text. Accessible names come from aria-label; Tooltip is the
-            hover affordance; no native title (banned by #3619). */}
-        <ButtonGroup>
-          {showMessage ? (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="icon"
-                    data-testid="agent-profile-chrome-action-message"
-                    aria-label={messageLabel}
-                    disabled={openingDM}
-                    onClick={() => void openDM({ peer_type: "agent", peer_id: agent.id })}
-                  >
-                    {messageIcon}
-                  </Button>
-                }
+        {/* Linear-style chrome (Frank 2026-08-25): a single ghost `⋯` trigger
+            opens a dropdown menu holding the agent actions, so the panel's
+            top-right corner only ever shows two icons (⋯ + ✕). Accessible
+            name comes from aria-label; no native title (banned by #3619). */}
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                data-testid="agent-profile-chrome-actions-menu"
+                aria-label={t(($) => $.side_panel.actions_more_aria)}
               />
-              <TooltipContent side="bottom">{messageLabel}</TooltipContent>
-            </Tooltip>
-          ) : null}
+            }
+          >
+            <MoreHorizontal className="size-4 shrink-0" aria-hidden />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            {showMessage ? (
+              <DropdownMenuItem
+                data-testid="agent-profile-chrome-action-message"
+                disabled={openingDM}
+                onClick={() => void openDM({ peer_type: "agent", peer_id: agent.id })}
+              >
+                {messageIcon}
+                {messageLabel}
+              </DropdownMenuItem>
+            ) : null}
 
-          {showLifecycle ? (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="icon"
-                    data-testid="agent-profile-chrome-action-start"
-                    aria-label={lifecycleLabel}
-                    disabled={lifecycleDisabled}
-                    onClick={() => void handleLifecycle()}
-                  >
-                    {lifecycleIcon}
-                  </Button>
-                }
-              />
-              <TooltipContent side="bottom">{lifecycleLabel}</TooltipContent>
-            </Tooltip>
-          ) : null}
+            {showLifecycle ? (
+              <DropdownMenuItem
+                data-testid="agent-profile-chrome-action-start"
+                disabled={lifecycleDisabled}
+                onClick={() => void handleLifecycle()}
+              >
+                {lifecycleIcon}
+                {lifecycleLabel}
+              </DropdownMenuItem>
+            ) : null}
 
-          {showRestart ? (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="icon"
-                    data-testid="agent-profile-chrome-action-restart"
-                    aria-label={restartLabel}
-                    onClick={() => setRestartOpen(true)}
-                  >
-                    <RotateCcw className="size-4 shrink-0" aria-hidden />
-                  </Button>
-                }
-              />
-              <TooltipContent side="bottom">{restartLabel}</TooltipContent>
-            </Tooltip>
-          ) : null}
-        </ButtonGroup>
+            {showRestart ? (
+              <DropdownMenuItem
+                data-testid="agent-profile-chrome-action-restart"
+                onClick={() => setRestartOpen(true)}
+              >
+                <RotateCcw className="size-4 shrink-0" aria-hidden />
+                {restartLabel}
+              </DropdownMenuItem>
+            ) : null}
+          </DropdownMenuContent>
+        </DropdownMenu>
 
         {dialogs}
       </section>
     );
   }
 
-  if (!showLifecycle && !showRestart && !showDelete) {
+  if (!showDelete) {
     return dialogs;
   }
 
@@ -259,54 +264,21 @@ export function AgentProfileActions({
       <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
         {t(($) => $.side_panel.actions_section)}
       </h3>
-      <div className="flex flex-col gap-2">
-        {showLifecycle ? (
-          <Button
-            type="button"
-            variant="outline"
-            size="lg"
-            className="w-full gap-2"
-            data-testid="agent-profile-action-start"
-            disabled={lifecycleDisabled}
-            onClick={() => void handleLifecycle()}
-          >
-            {lifecycleIcon}
-            {lifecycleLabel}
-          </Button>
-        ) : null}
-
-        {showRestart ? (
-          <Button
-            type="button"
-            variant="outline"
-            size="lg"
-            className="w-full gap-2"
-            data-testid="agent-profile-action-restart"
-            onClick={() => setRestartOpen(true)}
-          >
-            <RotateCcw className="size-4 shrink-0" aria-hidden />
-            {restartLabel}
-          </Button>
-        ) : null}
-
-        {showDelete ? (
-          <div className="mt-1 border-t border-border pt-3">
-            <Button
-              type="button"
-              // LRM-593 lock A: Delete = the ONLY solid destructive (filled
-              // bg-destructive + white text).
-              variant="destructive"
-              size="lg"
-              className="w-full gap-2 bg-destructive text-white hover:bg-destructive/90 dark:bg-destructive dark:hover:bg-destructive/90"
-              data-testid="agent-profile-action-delete"
-              disabled={deleting}
-              onClick={() => setConfirmDelete(true)}
-            >
-              <Trash2 className="size-4 shrink-0" aria-hidden />
-              {t(($) => $.side_panel.actions_delete)}
-            </Button>
-          </div>
-        ) : null}
+      <div className="border-t border-border pt-3">
+        <Button
+          type="button"
+          // LRM-593 lock A: Delete = the ONLY solid destructive (filled
+          // bg-destructive + white text).
+          variant="destructive"
+          size="lg"
+          className="w-full gap-2 bg-destructive text-white hover:bg-destructive/90 dark:bg-destructive dark:hover:bg-destructive/90"
+          data-testid="agent-profile-action-delete"
+          disabled={deleting}
+          onClick={() => setConfirmDelete(true)}
+        >
+          <Trash2 className="size-4 shrink-0" aria-hidden />
+          {t(($) => $.side_panel.actions_delete)}
+        </Button>
       </div>
 
       {dialogs}

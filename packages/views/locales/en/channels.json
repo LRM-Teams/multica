@@ -877,5 +877,21 @@
     "opt_muted": "Muted",
     "opt_muted_hint": "No notifications; dimmed in the list",
     "global_settings": "Global notification settings →"
+  },
+  "graph_memory": {
+    "title": "Graph memory",
+    "description": "Override the workspace delivery mode for this channel.",
+    "inherit": "Inherit",
+    "agent": "Memory Agent",
+    "inject": "Inject",
+    "effective": "Effective mode",
+    "save": "Save",
+    "reset": "Reset state",
+    "update_failed": "Couldn't update graph memory mode",
+    "reset_failed": "Couldn't reset the Memory Agent",
+    "citations": "Memory sources",
+    "citation_version": "Graph v{version}",
+    "citation_loading": "Loading sources…",
+    "citation_empty": "No source snapshots are available"
   }
 }

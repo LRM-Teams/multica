@@ -803,25 +803,26 @@ type AutopilotRetirementExport struct {
 }
 
 type Channel struct {
-	ID                  pgtype.UUID        `json:"id"`
-	WorkspaceID         pgtype.UUID        `json:"workspace_id"`
-	Name                string             `json:"name"`
-	Description         pgtype.Text        `json:"description"`
-	LarkChatID          pgtype.Text        `json:"lark_chat_id"`
-	CreatedBy           pgtype.UUID        `json:"created_by"`
-	CreatedAt           pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
-	ProjectID           pgtype.UUID        `json:"project_id"`
-	Kind                string             `json:"kind"`
-	ArchivedAt          pgtype.Timestamptz `json:"archived_at"`
-	ArchivedBy          pgtype.UUID        `json:"archived_by"`
-	SystemKey           pgtype.Text        `json:"system_key"`
-	AvatarUrl           pgtype.Text        `json:"avatar_url"`
-	Temporary           bool               `json:"temporary"`
-	ParentChannelID     pgtype.UUID        `json:"parent_channel_id"`
-	CreatedByAgentID    pgtype.UUID        `json:"created_by_agent_id"`
-	CoordinationPurpose pgtype.Text        `json:"coordination_purpose"`
-	ClientRequestID     pgtype.Text        `json:"client_request_id"`
+	ID                      pgtype.UUID        `json:"id"`
+	WorkspaceID             pgtype.UUID        `json:"workspace_id"`
+	Name                    string             `json:"name"`
+	Description             pgtype.Text        `json:"description"`
+	LarkChatID              pgtype.Text        `json:"lark_chat_id"`
+	CreatedBy               pgtype.UUID        `json:"created_by"`
+	CreatedAt               pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt               pgtype.Timestamptz `json:"updated_at"`
+	ProjectID               pgtype.UUID        `json:"project_id"`
+	Kind                    string             `json:"kind"`
+	ArchivedAt              pgtype.Timestamptz `json:"archived_at"`
+	ArchivedBy              pgtype.UUID        `json:"archived_by"`
+	SystemKey               pgtype.Text        `json:"system_key"`
+	AvatarUrl               pgtype.Text        `json:"avatar_url"`
+	Temporary               bool               `json:"temporary"`
+	ParentChannelID         pgtype.UUID        `json:"parent_channel_id"`
+	CreatedByAgentID        pgtype.UUID        `json:"created_by_agent_id"`
+	CoordinationPurpose     pgtype.Text        `json:"coordination_purpose"`
+	ClientRequestID         pgtype.Text        `json:"client_request_id"`
+	GraphMemoryModeOverride string             `json:"graph_memory_mode_override"`
 }
 
 type ChannelAgentOnboarding struct {
@@ -1800,6 +1801,99 @@ type GoalExecutionEpoch struct {
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 }
 
+type GraphMemoryAgentCitation struct {
+	ID              pgtype.UUID        `json:"id"`
+	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
+	ChannelID       pgtype.UUID        `json:"channel_id"`
+	MessageID       pgtype.UUID        `json:"message_id"`
+	TrajectoryID    pgtype.UUID        `json:"trajectory_id"`
+	NodeID          string             `json:"node_id"`
+	GraphVersion    int64              `json:"graph_version"`
+	Level           string             `json:"level"`
+	EpistemicStatus string             `json:"epistemic_status"`
+	Tags            []byte             `json:"tags"`
+	Title           string             `json:"title"`
+	FirstParagraph  string             `json:"first_paragraph"`
+	Excerpt         string             `json:"excerpt"`
+	ContentHash     string             `json:"content_hash"`
+	CapturedAt      pgtype.Timestamptz `json:"captured_at"`
+}
+
+type GraphMemoryAgentRun struct {
+	ID                 pgtype.UUID        `json:"id"`
+	WorkspaceID        pgtype.UUID        `json:"workspace_id"`
+	ChannelID          pgtype.UUID        `json:"channel_id"`
+	TargetKind         string             `json:"target_kind"`
+	TargetID           pgtype.UUID        `json:"target_id"`
+	Status             string             `json:"status"`
+	InitialQuery       string             `json:"initial_query"`
+	EffectiveObjective string             `json:"effective_objective"`
+	GraphKind          string             `json:"graph_kind"`
+	GraphOwnerID       pgtype.UUID        `json:"graph_owner_id"`
+	GraphVersion       int64              `json:"graph_version"`
+	FencingToken       int64              `json:"fencing_token"`
+	InputTokens        int64              `json:"input_tokens"`
+	OutputTokens       int64              `json:"output_tokens"`
+	CostMicros         int64              `json:"cost_micros"`
+	StartedAt          pgtype.Timestamptz `json:"started_at"`
+	FinishedAt         pgtype.Timestamptz `json:"finished_at"`
+	TargetSeq          int64              `json:"target_seq"`
+}
+
+type GraphMemoryAgentState struct {
+	ChannelID          pgtype.UUID        `json:"channel_id"`
+	ConsumedSeq        int64              `json:"consumed_seq"`
+	GraphVersion       int64              `json:"graph_version"`
+	Objective          string             `json:"objective"`
+	Observations       []byte             `json:"observations"`
+	RejectedBranches   []byte             `json:"rejected_branches"`
+	OpenQuestions      []byte             `json:"open_questions"`
+	CandidateNodeIds   []byte             `json:"candidate_node_ids"`
+	ViewedNodeIds      []byte             `json:"viewed_node_ids"`
+	PendingTargets     []byte             `json:"pending_targets"`
+	PostedFingerprints []byte             `json:"posted_fingerprints"`
+	NextHint           string             `json:"next_hint"`
+	LeaseExpiresAt     pgtype.Timestamptz `json:"lease_expires_at"`
+	ActiveRunID        pgtype.UUID        `json:"active_run_id"`
+	StateVersion       int64              `json:"state_version"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+}
+
+type GraphMemoryAgentSteeringEvent struct {
+	ID           pgtype.UUID        `json:"id"`
+	RunID        pgtype.UUID        `json:"run_id"`
+	TrajectoryID pgtype.UUID        `json:"trajectory_id"`
+	MessageID    pgtype.UUID        `json:"message_id"`
+	Ordinal      int64              `json:"ordinal"`
+	Actor        []byte             `json:"actor"`
+	Message      []byte             `json:"message"`
+	Target       []byte             `json:"target"`
+	AcceptedAt   pgtype.Timestamptz `json:"accepted_at"`
+}
+
+type GraphMemoryAgentToolOperation struct {
+	ID             pgtype.UUID        `json:"id"`
+	TrajectoryID   pgtype.UUID        `json:"trajectory_id"`
+	IdempotencyKey string             `json:"idempotency_key"`
+	Operation      string             `json:"operation"`
+	Request        []byte             `json:"request"`
+	Response       []byte             `json:"response"`
+	Error          string             `json:"error"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	Status         string             `json:"status"`
+	CompletedAt    pgtype.Timestamptz `json:"completed_at"`
+}
+
+type GraphMemoryAgentTrajectory struct {
+	ID            pgtype.UUID        `json:"id"`
+	RunID         pgtype.UUID        `json:"run_id"`
+	Status        string             `json:"status"`
+	ViewedNodeIds []byte             `json:"viewed_node_ids"`
+	StatePatch    []byte             `json:"state_patch"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	FinishedAt    pgtype.Timestamptz `json:"finished_at"`
+}
+
 type GraphMemoryBlob struct {
 	ID          pgtype.UUID        `json:"id"`
 	WorkspaceID pgtype.UUID        `json:"workspace_id"`
@@ -1819,6 +1913,23 @@ type GraphMemoryBlobRef struct {
 	RefID       pgtype.UUID        `json:"ref_id"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	ReleasedAt  pgtype.Timestamptz `json:"released_at"`
+}
+
+type GraphMemoryChannelAgent struct {
+	ChannelID                  pgtype.UUID        `json:"channel_id"`
+	WorkspaceID                pgtype.UUID        `json:"workspace_id"`
+	AgentID                    pgtype.UUID        `json:"agent_id"`
+	RuntimeID                  pgtype.UUID        `json:"runtime_id"`
+	SponsorUserID              pgtype.UUID        `json:"sponsor_user_id"`
+	Handle                     string             `json:"handle"`
+	DisplayName                string             `json:"display_name"`
+	Status                     string             `json:"status"`
+	BlockedReason              string             `json:"blocked_reason"`
+	DelegatedCredentialVersion int64              `json:"delegated_credential_version"`
+	LastNotifiedStatus         string             `json:"last_notified_status"`
+	ConfigVersion              int64              `json:"config_version"`
+	CreatedAt                  pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt                  pgtype.Timestamptz `json:"updated_at"`
 }
 
 type GraphMemoryChannelLineage struct {
@@ -1912,31 +2023,42 @@ type GraphMemoryInfoItemNode struct {
 }
 
 type GraphMemoryProfile struct {
-	WorkspaceID              pgtype.UUID        `json:"workspace_id"`
-	MemoryType               string             `json:"memory_type"`
-	ExploreAgents            int32              `json:"explore_agents"`
-	ExploreMaxRounds         int32              `json:"explore_max_rounds"`
-	UpdatedAt                pgtype.Timestamptz `json:"updated_at"`
-	ScopedWriterReady        bool               `json:"scoped_writer_ready"`
-	Timezone                 string             `json:"timezone"`
-	TttEnabled               bool               `json:"ttt_enabled"`
-	ExploreNodesPerExpansion int32              `json:"explore_nodes_per_expansion"`
-	MaxHierarchyFanout       int32              `json:"max_hierarchy_fanout"`
-	MaxRelationEdgesPerNode  int32              `json:"max_relation_edges_per_node"`
-	DiveMaxRounds            int32              `json:"dive_max_rounds"`
-	DiveMaxViewedNodes       int32              `json:"dive_max_viewed_nodes"`
-	DiveMaxSourceFiles       int32              `json:"dive_max_source_files"`
-	DiveTimeoutSeconds       int32              `json:"dive_timeout_seconds"`
-	WRound                   float64            `json:"w_round"`
-	SourceMaxFileBytes       int64              `json:"source_max_file_bytes"`
-	SourceMaxTotalBytes      int64              `json:"source_max_total_bytes"`
-	SourceMaxPdfPages        int32              `json:"source_max_pdf_pages"`
-	SourceMaxAvSeconds       int32              `json:"source_max_av_seconds"`
-	SourceMaxImageMegapixels int32              `json:"source_max_image_megapixels"`
-	DiveModel                string             `json:"dive_model"`
-	DiveProvider             string             `json:"dive_provider"`
-	ConfigVersion            int64              `json:"config_version"`
-	SchemaVersion            int32              `json:"schema_version"`
+	WorkspaceID                         pgtype.UUID        `json:"workspace_id"`
+	MemoryType                          string             `json:"memory_type"`
+	ExploreAgents                       int32              `json:"explore_agents"`
+	ExploreMaxRounds                    int32              `json:"explore_max_rounds"`
+	UpdatedAt                           pgtype.Timestamptz `json:"updated_at"`
+	ScopedWriterReady                   bool               `json:"scoped_writer_ready"`
+	Timezone                            string             `json:"timezone"`
+	TttEnabled                          bool               `json:"ttt_enabled"`
+	ExploreNodesPerExpansion            int32              `json:"explore_nodes_per_expansion"`
+	MaxHierarchyFanout                  int32              `json:"max_hierarchy_fanout"`
+	MaxRelationEdgesPerNode             int32              `json:"max_relation_edges_per_node"`
+	DiveMaxRounds                       int32              `json:"dive_max_rounds"`
+	DiveMaxViewedNodes                  int32              `json:"dive_max_viewed_nodes"`
+	DiveMaxSourceFiles                  int32              `json:"dive_max_source_files"`
+	DiveTimeoutSeconds                  int32              `json:"dive_timeout_seconds"`
+	WRound                              float64            `json:"w_round"`
+	SourceMaxFileBytes                  int64              `json:"source_max_file_bytes"`
+	SourceMaxTotalBytes                 int64              `json:"source_max_total_bytes"`
+	SourceMaxPdfPages                   int32              `json:"source_max_pdf_pages"`
+	SourceMaxAvSeconds                  int32              `json:"source_max_av_seconds"`
+	SourceMaxImageMegapixels            int32              `json:"source_max_image_megapixels"`
+	DiveModel                           string             `json:"dive_model"`
+	DiveProvider                        string             `json:"dive_provider"`
+	ConfigVersion                       int64              `json:"config_version"`
+	SchemaVersion                       int32              `json:"schema_version"`
+	GraphMemoryMode                     string             `json:"graph_memory_mode"`
+	MemoryAgentRuntimeID                pgtype.UUID        `json:"memory_agent_runtime_id"`
+	MemoryAgentModel                    string             `json:"memory_agent_model"`
+	MemoryAgentThinking                 string             `json:"memory_agent_thinking"`
+	RecallTttEnabled                    bool               `json:"recall_ttt_enabled"`
+	ConsolidationTttEnabled             bool               `json:"consolidation_ttt_enabled"`
+	MemoryAgentIdleGraceSeconds         int32              `json:"memory_agent_idle_grace_seconds"`
+	MemoryAgentMaxNodesPerCall          int32              `json:"memory_agent_max_nodes_per_call"`
+	MemoryAgentMaxNodesPerMinute        int32              `json:"memory_agent_max_nodes_per_minute"`
+	MemoryAgentMaxContinuousTurnSeconds int32              `json:"memory_agent_max_continuous_turn_seconds"`
+	MemoryAgentMaxTokensPerHour         int64              `json:"memory_agent_max_tokens_per_hour"`
 }
 
 type GraphMemoryRecall struct {

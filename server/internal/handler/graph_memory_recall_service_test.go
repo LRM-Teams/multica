@@ -47,9 +47,11 @@ func mustGraphMemoryGraphDir(t *testing.T, root, workspaceID string, kind memory
 func mustGraphMemoryGraphProfile(t *testing.T, workspaceID pgtype.UUID, tttEnabled bool, savedK int) {
 	t.Helper()
 	if _, err := testPool.Exec(context.Background(), `
-		INSERT INTO graph_memory_profile (workspace_id, memory_type, ttt_enabled, explore_agents)
-		VALUES ($1, 'graph', $2, $3)
-		ON CONFLICT (workspace_id) DO UPDATE SET memory_type = 'graph', ttt_enabled = $2, explore_agents = $3
+		INSERT INTO graph_memory_profile (workspace_id, memory_type, graph_memory_mode, ttt_enabled, recall_ttt_enabled, explore_agents)
+		VALUES ($1, 'graph', 'inject', $2, $2, $3)
+		ON CONFLICT (workspace_id) DO UPDATE SET
+			memory_type = 'graph', graph_memory_mode = 'inject',
+			ttt_enabled = $2, recall_ttt_enabled = $2, explore_agents = $3
 	`, workspaceID, tttEnabled, savedK); err != nil {
 		t.Fatal(err)
 	}

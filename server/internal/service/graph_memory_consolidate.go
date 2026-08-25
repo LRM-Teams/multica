@@ -54,7 +54,7 @@ func (s *GraphMemoryConsolidationService) Run(ctx context.Context, workspaceID, 
 	runID := util.UUIDToString(run.ID)
 	tttEnabled := false
 	if profile, perr := s.queries.GetGraphMemoryProfile(ctx, ws); perr == nil {
-		tttEnabled = profile.TttEnabled
+		tttEnabled = profile.ConsolidationTttEnabled
 	}
 	go s.execute(context.Background(), run.ID, workspaceID, tttEnabled)
 	return runID, nil

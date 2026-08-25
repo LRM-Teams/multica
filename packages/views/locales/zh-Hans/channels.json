@@ -876,5 +876,21 @@
     "opt_muted": "静音",
     "opt_muted_hint": "不通知，列表里弱显示",
     "global_settings": "全局通知设置 →"
+  },
+  "graph_memory": {
+    "title": "图记忆",
+    "description": "覆盖此频道的工作区交付方式。",
+    "inherit": "继承",
+    "agent": "记忆智能体",
+    "inject": "注入",
+    "effective": "当前生效方式",
+    "save": "保存",
+    "reset": "重置状态",
+    "update_failed": "无法更新图记忆模式",
+    "reset_failed": "无法重置记忆智能体",
+    "citations": "记忆来源",
+    "citation_version": "图版本 v{version}",
+    "citation_loading": "正在加载来源…",
+    "citation_empty": "没有可用的来源快照"
   }
 }

@@ -567,6 +567,43 @@ func (b *piRPCBackend) AcceptPendingNotice(ctx context.Context, notice ResidentP
 	return nil
 }
 
+func (b *piRPCBackend) AcceptDirectedMessage(ctx context.Context, message ResidentDirectedMessage) error {
+	if !b.running.Load() {
+		return errors.New("Pi RPC directed Message requires an active turn")
+	}
+	if strings.TrimSpace(message.RunID) == "" || strings.TrimSpace(message.TurnID) == "" ||
+		strings.TrimSpace(message.MessageID) == "" || strings.TrimSpace(message.Target) == "" ||
+		strings.TrimSpace(message.ActorType) == "" || strings.TrimSpace(message.ActorName) == "" ||
+		strings.TrimSpace(message.Content) == "" {
+		return errors.New("directed Message requires run, turn, message, target, actor, and content")
+	}
+	if len(message.Parts) > 0 && !json.Valid(message.Parts) {
+		return errors.New("directed Message parts must be valid JSON")
+	}
+	if len(message.BoundedContext) > 0 && !json.Valid(message.BoundedContext) {
+		return errors.New("directed Message bounded context must be valid JSON")
+	}
+	p, err := b.getProcess()
+	if err != nil {
+		return err
+	}
+	raw, err := json.Marshal(message)
+	if err != nil {
+		return fmt.Errorf("marshal directed Message: %w", err)
+	}
+	prompt := "Directed Message for the active Graph Memory turn. Apply it after the current tool call safe boundary. Preserve the current trajectory, viewed nodes, tool results, and pinned graph version. The immutable initial query remains in the server ledger; update only the effective objective. Reply visibly to the supplied target even when no relevant memory is found.\n" + string(raw)
+	response, err := b.sendControlCommand(ctx, p, "multica-directed-message", map[string]any{
+		"type": "prompt", "message": prompt, "streamingBehavior": "steer",
+	})
+	if err != nil {
+		return fmt.Errorf("Pi RPC directed Message: %w", err)
+	}
+	if !response.Success {
+		return fmt.Errorf("Pi RPC directed Message: %s", response.Error)
+	}
+	return nil
+}
+
 func formatResidentPendingNotice(notice ResidentPendingNotice) (string, error) {
 	if notice.TotalPending < 0 || notice.PendingAppItems < 0 || notice.TotalPending == 0 && notice.PendingAppItems == 0 {
 		return "", errors.New("Pending Notice requires pending Messages or App items")

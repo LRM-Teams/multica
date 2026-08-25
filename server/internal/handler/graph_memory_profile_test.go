@@ -50,14 +50,19 @@ func TestGraphMemoryProfileRoundTrip(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&def); err != nil {
 		t.Fatal(err)
 	}
-	if def.WorkspaceID != workspaceID || def.MemoryType != "legacy" || def.ExploreAgents != 4 || def.ExploreMaxRounds != 6 {
-		t.Fatalf("default profile = %+v, want legacy/4/6", def)
+	if def.WorkspaceID != workspaceID || def.MemoryType != "legacy" || def.GraphMemoryMode != "agent" ||
+		def.ExploreAgents != 4 || def.ExploreMaxRounds != 6 || def.MemoryAgentIdleGraceSeconds != 120 ||
+		def.MemoryAgentMaxNodesPerCall != 4 || def.MemoryAgentMaxNodesPerMinute != 30 ||
+		def.MemoryAgentMaxContinuousTurnSeconds != 600 || def.MemoryAgentMaxTokensPerHour != 200000 {
+		t.Fatalf("default profile = %+v, want legacy/agent defaults", def)
 	}
 
 	// PUT persists the reviewer settings.
 	w = httptest.NewRecorder()
 	putReq := withURLParam(newRequest(http.MethodPut, "/api/workspaces/"+workspaceID+"/graph-memory/profile", map[string]any{
-		"memory_type": "graph", "explore_agents": 2, "explore_max_rounds": 5, "confirm_empty_start": true,
+		"memory_type": "graph", "graph_memory_mode": "inject", "explore_agents": 2, "explore_max_rounds": 5,
+		"confirm_empty_start": true, "recall_ttt_enabled": true, "consolidation_ttt_enabled": false,
+		"memory_agent_idle_grace_seconds": 180, "memory_agent_max_tokens_per_hour": 150000,
 	}), "id", workspaceID)
 	putReq.Header.Set("X-Workspace-ID", workspaceID)
 	testHandler.UpdateGraphMemoryProfile(w, putReq)
@@ -68,8 +73,10 @@ func TestGraphMemoryProfileRoundTrip(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&saved); err != nil {
 		t.Fatal(err)
 	}
-	if saved.MemoryType != "graph" || saved.ExploreAgents != 2 || saved.ExploreMaxRounds != 5 || saved.UpdatedAt == "" {
-		t.Fatalf("saved profile = %+v, want graph/2/5 with updated_at", saved)
+	if saved.MemoryType != "graph" || saved.GraphMemoryMode != "inject" || saved.ExploreAgents != 2 ||
+		saved.ExploreMaxRounds != 5 || !saved.RecallTTTEnabled || saved.ConsolidationTTTEnabled ||
+		saved.MemoryAgentIdleGraceSeconds != 180 || saved.MemoryAgentMaxTokensPerHour != 150000 || saved.UpdatedAt == "" {
+		t.Fatalf("saved profile = %+v, want graph/inject with split TTT and agent limits", saved)
 	}
 
 	// GET returns the persisted row.
@@ -97,6 +104,17 @@ func TestGraphMemoryProfileRoundTrip(t *testing.T) {
 	testHandler.UpdateGraphMemoryProfile(w, badReq)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("UpdateGraphMemoryProfile invalid type: status=%d body=%s, want 400", w.Code, w.Body.String())
+	}
+
+	w = httptest.NewRecorder()
+	badModeReq := withURLParam(newRequest(http.MethodPut, "/api/workspaces/"+workspaceID+"/graph-memory/profile", map[string]any{
+		"memory_type": "graph", "graph_memory_mode": "dual", "explore_agents": 2, "explore_max_rounds": 5,
+		"config_version": saved.ConfigVersion,
+	}), "id", workspaceID)
+	badModeReq.Header.Set("X-Workspace-ID", workspaceID)
+	testHandler.UpdateGraphMemoryProfile(w, badModeReq)
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "graph_memory_mode") {
+		t.Fatalf("UpdateGraphMemoryProfile invalid mode: status=%d body=%s, want 400", w.Code, w.Body.String())
 	}
 }
 

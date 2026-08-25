@@ -51,6 +51,8 @@ import type {
   UpdateMemoryCuratorProfileRequest,
   GraphMemoryProfile,
   UpdateGraphMemoryProfileRequest,
+  GraphMemoryChannelMode,
+  GraphMemoryMessageCitations,
   GraphMemoryStatus,
   GraphMemoryAuditSummary,
   GraphMemoryChannelLineage,
@@ -454,6 +456,8 @@ import {
   MemoryCurationRunDetailSchema,
   MemoryCuratorProfileSchema,
   GraphMemoryProfileSchema,
+  GraphMemoryChannelModeSchema,
+  GraphMemoryMessageCitationsSchema,
   StartMemoryCurationRunResponseSchema,
   MemoryCurationBackfillResponseSchema,
   EMPTY_MEMORY_CURATION_BACKFILL_RESPONSE,
@@ -3267,6 +3271,43 @@ export class ApiClient {
     return parseWithFallback(raw, GraphMemoryProfileSchema, EMPTY_GRAPH_MEMORY_PROFILE, {
       endpoint: "PUT /api/workspaces/{id}/graph-memory/profile",
     });
+  }
+
+  async getGraphMemoryChannelMode(workspaceId: string, channelId: string): Promise<GraphMemoryChannelMode> {
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/graph-memory/channels/${encodeURIComponent(channelId)}/mode`,
+    );
+    return parseWithFallback(raw, GraphMemoryChannelModeSchema, {
+      workspace_id: workspaceId, channel_id: channelId, override: "inherit", effective_mode: "agent",
+      status: "inactive", blocked_reason: "", agent_id: "", runtime_id: "",
+    }, { endpoint: "GET /api/workspaces/{id}/graph-memory/channels/{channelId}/mode" });
+  }
+
+  async updateGraphMemoryChannelMode(workspaceId: string, channelId: string, override: "inherit" | "inject" | "agent"): Promise<GraphMemoryChannelMode> {
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/graph-memory/channels/${encodeURIComponent(channelId)}/mode`,
+      { method: "PUT", body: JSON.stringify({ override }) },
+    );
+    return parseWithFallback(raw, GraphMemoryChannelModeSchema, {
+      workspace_id: workspaceId, channel_id: channelId, override, effective_mode: override === "inherit" ? "agent" : override,
+      status: "inactive", blocked_reason: "", agent_id: "", runtime_id: "",
+    }, { endpoint: "PUT /api/workspaces/{id}/graph-memory/channels/{channelId}/mode" });
+  }
+
+  async resetGraphMemoryChannelAgent(workspaceId: string, channelId: string): Promise<void> {
+    await this.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/graph-memory/channels/${encodeURIComponent(channelId)}/reset`,
+      { method: "POST", body: JSON.stringify({}) },
+    );
+  }
+
+  async getGraphMemoryMessageCitations(workspaceId: string, messageId: string): Promise<GraphMemoryMessageCitations> {
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/graph-memory/messages/${encodeURIComponent(messageId)}/citations`,
+    );
+    return parseWithFallback(raw, GraphMemoryMessageCitationsSchema, {
+      message_id: messageId, items: [],
+    }, { endpoint: "GET /api/workspaces/{id}/graph-memory/messages/{messageId}/citations" });
   }
 
   async getGraphMemoryStatus(workspaceId: string): Promise<GraphMemoryStatus> {

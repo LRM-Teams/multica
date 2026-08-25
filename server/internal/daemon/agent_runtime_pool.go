@@ -203,6 +203,8 @@ type agentRuntimeSlot struct {
 	lastPendingNoticeCoordinatorID string
 	lastPendingNoticeGeneration    uint64
 	lastAppInboxNoticeFingerprint  string
+	activeDirectedRunID            string
+	activeDirectedTurnID           string
 	// lastRuntimeActivityAt is the slot-level silence clock. Unlike the
 	// per-turn watchdog stamp it survives across turns, so a delivery that
 	// never reaches native acceptance can still tell how long this resident
@@ -637,6 +639,141 @@ func (p *agentRuntimePool) takeNextResumeSession(agentID, runtimeID string) (str
 	}
 	delete(p.nextResume, key)
 	return sessionID, true
+}
+
+func (p *agentRuntimePool) runtimeStats(ctx context.Context, agentID, runtimeID string) (*agent.RuntimeTokenStats, error) {
+	if p == nil {
+		return nil, errors.New("canonical agent runtime pool is nil")
+	}
+	key := strings.TrimSpace(agentID) + "\x00" + strings.TrimSpace(runtimeID)
+	p.mu.Lock()
+	slot := p.slots[key]
+	p.mu.Unlock()
+	if slot == nil {
+		return nil, errors.New("canonical resident runtime is unavailable")
+	}
+	slot.mu.Lock()
+	backend := slot.backend
+	slot.mu.Unlock()
+	statsProvider, ok := backend.(interface {
+		RuntimeStats(context.Context) (*agent.RuntimeTokenStats, error)
+	})
+	if !ok {
+		return nil, errors.New("canonical resident runtime does not expose token stats")
+	}
+	return statsProvider.RuntimeStats(ctx)
+}
+
+func (p *agentRuntimePool) bindDirectedTurn(agentID, runtimeID, runID, turnID string) error {
+	if p == nil || strings.TrimSpace(runID) == "" || strings.TrimSpace(turnID) == "" {
+		return errors.New("directed turn identity is required")
+	}
+	key := strings.TrimSpace(agentID) + "\x00" + strings.TrimSpace(runtimeID)
+	p.mu.Lock()
+	slot := p.slots[key]
+	if slot != nil {
+		slot.mu.Lock()
+	}
+	p.mu.Unlock()
+	if slot == nil {
+		return errors.New("canonical resident runtime is not registered")
+	}
+	defer slot.mu.Unlock()
+	if !slot.running || slot.backend == nil {
+		return errors.New("canonical resident runtime is idle")
+	}
+	slot.activeDirectedRunID = strings.TrimSpace(runID)
+	slot.activeDirectedTurnID = strings.TrimSpace(turnID)
+	return nil
+}
+
+func (p *agentRuntimePool) deliverDirectedMessage(ctx context.Context, agentID, runtimeID string, message agent.ResidentDirectedMessage) error {
+	if p == nil {
+		return errors.New("canonical agent runtime pool is nil")
+	}
+	key := strings.TrimSpace(agentID) + "\x00" + strings.TrimSpace(runtimeID)
+	p.mu.Lock()
+	slot := p.slots[key]
+	if slot != nil {
+		slot.mu.Lock()
+	}
+	p.mu.Unlock()
+	if slot == nil {
+		return errors.New("canonical resident runtime is not registered")
+	}
+	defer slot.mu.Unlock()
+	if !slot.running || slot.backend == nil {
+		return errors.New("canonical resident runtime is idle")
+	}
+	if slot.activeDirectedRunID != message.RunID || slot.activeDirectedTurnID != message.TurnID {
+		return errors.New("directed Message does not match the active run and turn")
+	}
+	input, ok := slot.backend.(agent.ResidentDirectedMessageInput)
+	if !ok {
+		return errors.New("canonical resident runtime does not support directed Message steering")
+	}
+	return input.AcceptDirectedMessage(ctx, message)
+}
+
+func (p *agentRuntimePool) clearDirectedTurn(agentID, runtimeID, runID, turnID string) {
+	if p == nil {
+		return
+	}
+	key := strings.TrimSpace(agentID) + "\x00" + strings.TrimSpace(runtimeID)
+	p.mu.Lock()
+	slot := p.slots[key]
+	if slot != nil {
+		slot.mu.Lock()
+	}
+	p.mu.Unlock()
+	if slot == nil {
+		return
+	}
+	defer slot.mu.Unlock()
+	if slot.activeDirectedRunID == runID && slot.activeDirectedTurnID == turnID {
+		slot.activeDirectedRunID = ""
+		slot.activeDirectedTurnID = ""
+	}
+}
+
+func (p *agentRuntimePool) deliverActiveDirectedProjection(ctx context.Context, agentID, runtimeID string, projection protocol.AgentMessageProjection) error {
+	if p == nil {
+		return errors.New("canonical agent runtime pool is nil")
+	}
+	key := strings.TrimSpace(agentID) + "\x00" + strings.TrimSpace(runtimeID)
+	p.mu.Lock()
+	slot := p.slots[key]
+	if slot != nil {
+		slot.mu.Lock()
+	}
+	p.mu.Unlock()
+	if slot == nil {
+		return errors.New("canonical resident runtime is not registered")
+	}
+	runID, turnID := slot.activeDirectedRunID, slot.activeDirectedTurnID
+	running := slot.running && slot.backend != nil
+	slot.mu.Unlock()
+	if !running || runID == "" || turnID == "" {
+		return errors.New("canonical resident runtime has no active directed turn")
+	}
+	parts, _ := json.Marshal(projection.Parts)
+	boundedContext, _ := json.Marshal(map[string]any{
+		"channel_id":   projection.ChannelID,
+		"reply_target": projection.ReplyTarget,
+		"seq":          projection.Seq,
+	})
+	actorName := strings.TrimSpace(projection.InitiatorName)
+	if actorName == "" {
+		actorName = strings.TrimSpace(projection.InitiatorID)
+	}
+	if actorName == "" {
+		actorName = strings.TrimSpace(projection.InitiatorType)
+	}
+	return p.deliverDirectedMessage(ctx, agentID, runtimeID, agent.ResidentDirectedMessage{
+		RunID: runID, TurnID: turnID, MessageID: projection.ID, Target: projection.Target,
+		ActorType: projection.InitiatorType, ActorID: projection.InitiatorID, ActorName: actorName,
+		Content: projection.Content, Parts: parts, BoundedContext: boundedContext,
+	})
 }
 
 func (p *agentRuntimePool) hasRunningTurn(agentID, runtimeID string) bool {

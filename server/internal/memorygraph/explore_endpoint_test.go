@@ -8,6 +8,7 @@ package memorygraph
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -239,6 +240,13 @@ func TestExploreToolServerExactBudgetSubmitKeepsFound(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("submit: status = %d body %s", status, body)
 	}
+	var submitted submitResponse
+	if err := json.Unmarshal(body, &submitted); err != nil {
+		t.Fatalf("decode submit response: %v", err)
+	}
+	if len(submitted.Citations) != 1 || submitted.Citations[0].NodeID != "b" || submitted.Citations[0].GraphVersion != storeCurrentVersion(t, store) || submitted.Citations[0].FirstParagraph == "" || submitted.Citations[0].CapturedAt.IsZero() {
+		t.Fatalf("citation snapshot = %+v, want immutable metadata for viewed node b", submitted.Citations)
+	}
 	if sub := srv.trajectorySubmission("t1"); sub == nil || !sub.Found {
 		t.Fatalf("stored submission = %+v, want Found=true", sub)
 	}
@@ -320,5 +328,211 @@ func TestExploreToolServerExploreAppliesGraphView(t *testing.T) {
 	})
 	if status != http.StatusNotFound {
 		t.Fatalf("explore out-of-view node: status = %d, want 404", status)
+	}
+}
+
+func TestExploreToolServerNativeStartRedirectCheckpoint(t *testing.T) {
+	store := newExploreGraphStore(t)
+	retr := newExploreRetriever(t, store)
+	cfg := testExploreConfig()
+	cfg.MaxRounds = 10
+	srv, err := NewExploreToolServer(store, retr, cfg, storeCurrentVersion(t, store))
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseURL, token, err := srv.Start(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = srv.Shutdown(ctx)
+	})
+
+	status, body := explorePost(baseURL, token, "/start", map[string]any{"query": "dispatch behavior", "idempotency_key": "start-1"})
+	if status != http.StatusOK {
+		t.Fatalf("start: status=%d body=%s", status, body)
+	}
+	var started memoryGraphStartResponse
+	if err := json.Unmarshal(body, &started); err != nil {
+		t.Fatal(err)
+	}
+	if started.TrajectoryID == "" || started.GraphVersion <= 0 || len(started.Nodes) == 0 {
+		t.Fatalf("start response = %+v", started)
+	}
+	status, body = explorePost(baseURL, token, "/start", map[string]any{"query": "dispatch behavior", "idempotency_key": "start-1"})
+	var replayed memoryGraphStartResponse
+	if status != http.StatusOK || json.Unmarshal(body, &replayed) != nil || replayed.TrajectoryID != started.TrajectoryID {
+		t.Fatalf("idempotent start replay: status=%d body=%s started=%+v", status, body, started)
+	}
+	status, body = explorePost(baseURL, token, "/start", map[string]any{"query": "different query", "idempotency_key": "start-1"})
+	if status != http.StatusConflict || !strings.Contains(string(body), "IDEMPOTENCY_CONFLICT") {
+		t.Fatalf("conflicting start replay: status=%d body=%s", status, body)
+	}
+	status, body = explorePost(baseURL, token, "/redirect", map[string]any{
+		"trajectory_id":       started.TrajectoryID,
+		"query":               "retry decision",
+		"steering_message_id": "message-1",
+	})
+	if status != http.StatusOK {
+		t.Fatalf("redirect: status=%d body=%s", status, body)
+	}
+	var redirected memoryGraphStartResponse
+	if err := json.Unmarshal(body, &redirected); err != nil {
+		t.Fatal(err)
+	}
+	if redirected.TrajectoryID != started.TrajectoryID || redirected.GraphVersion != started.GraphVersion {
+		t.Fatalf("redirect changed trajectory/version: start=%+v redirect=%+v", started, redirected)
+	}
+	status, body = explorePost(baseURL, token, "/checkpoint", map[string]any{
+		"trajectory_id": started.TrajectoryID,
+		"state":         map[string]any{"objective": "continue retry investigation", "open_questions": []string{"when"}},
+	})
+	if status != http.StatusOK {
+		t.Fatalf("checkpoint: status=%d body=%s", status, body)
+	}
+	status, body = explorePost(baseURL, token, "/submit", map[string]any{
+		"trajectory_id": started.TrajectoryID, "found": false, "summary": "", "node_ids": []string{},
+	})
+	if status != http.StatusConflict || !strings.Contains(string(body), "TRAJECTORY_TERMINAL") {
+		t.Fatalf("submit after checkpoint: status=%d body=%s", status, body)
+	}
+}
+
+func storeCurrentVersion(t *testing.T, store *Store) int {
+	t.Helper()
+	version, err := store.CurrentVersion()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return version
+}
+
+type fakeAgentToolLedgerOperation struct {
+	operation string
+	request   json.RawMessage
+	response  json.RawMessage
+	pending   bool
+}
+
+type fakeAgentToolLedger struct {
+	trajectoryID string
+	operations   map[string]*fakeAgentToolLedgerOperation
+	viewed       []string
+	finished     string
+	state        json.RawMessage
+	citations    []Citation
+}
+
+func newFakeAgentToolLedger(trajectoryID string) *fakeAgentToolLedger {
+	return &fakeAgentToolLedger{trajectoryID: trajectoryID, operations: make(map[string]*fakeAgentToolLedgerOperation)}
+}
+
+func (l *fakeAgentToolLedger) TrajectoryID() string { return l.trajectoryID }
+
+func (l *fakeAgentToolLedger) Reserve(_ context.Context, key, operation string, request json.RawMessage) (AgentToolOperationReservation, error) {
+	if existing := l.operations[key]; existing != nil {
+		if existing.operation != operation || string(existing.request) != string(request) {
+			return AgentToolOperationReservation{}, errors.New("idempotency conflict")
+		}
+		return AgentToolOperationReservation{OperationID: key, Replay: !existing.pending, Pending: existing.pending, Response: existing.response}, nil
+	}
+	l.operations[key] = &fakeAgentToolLedgerOperation{operation: operation, request: append(json.RawMessage(nil), request...), pending: true}
+	return AgentToolOperationReservation{OperationID: key}, nil
+}
+
+func (l *fakeAgentToolLedger) Complete(_ context.Context, operationID string, response json.RawMessage, _ string) error {
+	op := l.operations[operationID]
+	if op == nil || !op.pending {
+		return errors.New("operation is not pending")
+	}
+	op.pending = false
+	op.response = append(json.RawMessage(nil), response...)
+	return nil
+}
+
+func (l *fakeAgentToolLedger) RecordViewed(_ context.Context, nodeIDs []string) error {
+	l.viewed = append(l.viewed, nodeIDs...)
+	return nil
+}
+
+func (l *fakeAgentToolLedger) Finish(_ context.Context, operationID, status string, state json.RawMessage, citations []Citation, response json.RawMessage) error {
+	if err := l.Complete(context.Background(), operationID, response, ""); err != nil {
+		return err
+	}
+	l.finished = status
+	l.state = append(json.RawMessage(nil), state...)
+	l.citations = append([]Citation(nil), citations...)
+	return nil
+}
+
+func TestExploreToolServerDurableAgentLedgerOwnsFiveNativeOperations(t *testing.T) {
+	store := newExploreGraphStore(t)
+	retr := newExploreRetriever(t, store)
+	ledger := newFakeAgentToolLedger("11111111-1111-1111-1111-111111111111")
+	srv, err := NewExploreToolServerWithAgentLedger(store, retr, testExploreConfig(), storeCurrentVersion(t, store), nil, ledger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseURL, token, err := srv.Start(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
+
+	status, body := explorePost(baseURL, token, "/start", map[string]any{"query": "dispatch", "idempotency_key": "start-1"})
+	if status != http.StatusOK {
+		t.Fatalf("start status=%d body=%s", status, body)
+	}
+	var started memoryGraphStartResponse
+	if json.Unmarshal(body, &started) != nil || started.TrajectoryID != ledger.trajectoryID || len(started.Nodes) == 0 {
+		t.Fatalf("start response=%s", body)
+	}
+	status, replay := explorePost(baseURL, token, "/start", map[string]any{"query": "dispatch", "idempotency_key": "start-1"})
+	var replayed memoryGraphStartResponse
+	if status != http.StatusOK || json.Unmarshal(replay, &replayed) != nil || replayed.TrajectoryID != started.TrajectoryID || len(replayed.Nodes) != len(started.Nodes) {
+		t.Fatalf("durable start replay status=%d body=%s first=%s", status, replay, body)
+	}
+
+	nodeID := started.Nodes[0].NodeID
+	status, body = explorePost(baseURL, token, "/explore", map[string]any{
+		"trajectory_id": ledger.trajectoryID, "node_ids": []string{nodeID}, "idempotency_key": "explore-1",
+	})
+	if status != http.StatusOK || len(ledger.viewed) != 1 || ledger.viewed[0] != nodeID {
+		t.Fatalf("explore status=%d body=%s viewed=%v", status, body, ledger.viewed)
+	}
+	status, body = explorePost(baseURL, token, "/redirect", map[string]any{
+		"trajectory_id": ledger.trajectoryID, "query": "retry", "steering_message_id": "message-1",
+	})
+	if status != http.StatusOK || ledger.operations["redirect:message-1"] == nil {
+		t.Fatalf("redirect status=%d body=%s operations=%v", status, body, ledger.operations)
+	}
+	status, body = explorePost(baseURL, token, "/submit", map[string]any{
+		"trajectory_id": ledger.trajectoryID, "found": true, "summary": "found", "node_ids": []string{nodeID}, "idempotency_key": "submit-1",
+	})
+	if status != http.StatusOK || ledger.finished != "submitted" || len(ledger.citations) != 1 || ledger.citations[0].NodeID != nodeID {
+		t.Fatalf("submit status=%d body=%s finished=%s citations=%+v", status, body, ledger.finished, ledger.citations)
+	}
+}
+
+func TestExploreToolServerDurableCheckpointTerminalizesLedger(t *testing.T) {
+	store := newExploreGraphStore(t)
+	ledger := newFakeAgentToolLedger("22222222-2222-2222-2222-222222222222")
+	srv, err := NewExploreToolServerWithAgentLedger(store, newExploreRetriever(t, store), testExploreConfig(), storeCurrentVersion(t, store), nil, ledger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseURL, token, _ := srv.Start(context.Background())
+	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
+	status, body := explorePost(baseURL, token, "/start", map[string]any{"query": "dispatch", "idempotency_key": "start"})
+	if status != http.StatusOK {
+		t.Fatalf("start status=%d body=%s", status, body)
+	}
+	status, body = explorePost(baseURL, token, "/checkpoint", map[string]any{
+		"trajectory_id": ledger.trajectoryID, "state": map[string]any{"objective": "resume later"}, "idempotency_key": "checkpoint-1",
+	})
+	if status != http.StatusOK || ledger.finished != "checkpointed" || !strings.Contains(string(ledger.state), "resume later") {
+		t.Fatalf("checkpoint status=%d body=%s finished=%s state=%s", status, body, ledger.finished, ledger.state)
 	}
 }

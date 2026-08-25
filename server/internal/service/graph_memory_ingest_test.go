@@ -4,8 +4,10 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/memorygraph"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 // Spec §5/§8: channel-origin segments default to channel visibility and
@@ -39,5 +41,16 @@ func TestIngestScopeForTask(t *testing.T) {
 
 	if _, _, _, ok = ingestScopeForTask(ws, "", "", GraphRouteResolution{}, "agent-1", "task-1"); ok {
 		t.Fatal("unscoped task must not resolve any graph (spec §14 test 11)")
+	}
+}
+
+func TestGraphMemoryDerivativeAgentExcludedFromIngest(t *testing.T) {
+	managed := db.Agent{ManagedRole: pgtype.Text{String: "graph_memory_channel", Valid: true}}
+	if !graphMemoryDerivativeAgent(managed) {
+		t.Fatal("managed Graph Memory Agent must be derivative")
+	}
+	ordinary := db.Agent{ManagedRole: pgtype.Text{String: "research", Valid: true}}
+	if graphMemoryDerivativeAgent(ordinary) || graphMemoryDerivativeAgent(db.Agent{}) {
+		t.Fatal("ordinary agents must remain ingestible")
 	}
 }

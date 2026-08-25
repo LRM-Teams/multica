@@ -220,6 +220,34 @@ type AgentSkillsListResultPayload struct {
 	Workspace []AgentSkillSummary `json:"workspace"`
 }
 
+const (
+	EvaluationMemoryPolicyReadWrite = "read_write"
+	EvaluationMemoryPolicyReadOnly  = "read_only"
+	EvaluationMemoryPolicyOff       = "off"
+)
+
+// EvaluationControl is trusted execution metadata for benchmark traffic. It
+// is transported beside the canonical Message and must never be rendered into
+// model-visible content, parts, Graph evidence, or user-authored text.
+type EvaluationControl struct {
+	SchemaVersion int    `json:"schemaVersion"`
+	EvaluationID  string `json:"evaluationId"`
+	EpisodeID     string `json:"episodeId"`
+	TurnIndex     int    `json:"turnIndex"`
+	MemoryPolicy  string `json:"memoryPolicy"`
+}
+
+// ValidEvaluationMemoryPolicy reports whether policy is a supported durable
+// memory access mode.
+func ValidEvaluationMemoryPolicy(policy string) bool {
+	switch strings.TrimSpace(policy) {
+	case EvaluationMemoryPolicyReadWrite, EvaluationMemoryPolicyReadOnly, EvaluationMemoryPolicyOff:
+		return true
+	default:
+		return false
+	}
+}
+
 // AgentMessageProjection is the canonical Message data the coordinator may
 // hand to a runtime. Target is the internal Context Boundary key;
 // ReplyTarget is the recipient-relative CLI target exposed to the runtime.
@@ -238,6 +266,17 @@ type AgentMessageProjection struct {
 	InitiatorID   string                         `json:"initiator_id,omitempty"`
 	InitiatorName string                         `json:"initiator_name,omitempty"`
 	Memories      []AgentMessageMemoryProjection `json:"memories,omitempty"`
+	// Evaluation carries benchmark-only control metadata. Runtime preparation
+	// consumes it for session and memory policy, but prompt rendering must not.
+	Evaluation *EvaluationControl `json:"evaluation,omitempty"`
+	// Directed marks an explicit @mention of a managed Graph Memory Agent.
+	// The daemon may deliver it through a provider-native in-flight steering
+	// boundary; ordinary Messages remain queued through the coordinator.
+	Directed bool `json:"directed,omitempty"`
+	// GraphMemoryTools authorizes projection of the five managed Graph
+	// operations into this turn. It is set only from server-side managed
+	// membership and is recomputed during redelivery.
+	GraphMemoryTools bool `json:"graph_memory_tools,omitempty"`
 	// RuntimeContext is daemon-local, freshly rendered immediately before a
 	// resident turn. It must never be persisted in coordinator state or sent
 	// by the Server because it may contain scoped memory.

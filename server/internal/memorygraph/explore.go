@@ -370,16 +370,43 @@ func qualifyRecallCitations(store *Store, version int, ids []string) []Citation 
 	}
 	out := make([]Citation, 0, len(ids))
 	for _, id := range ids {
-		c := Citation{NodeID: id, Level: -1}
+		c := Citation{NodeID: id, GraphVersion: version, Level: -1, CapturedAt: time.Now().UTC()}
 		if g != nil {
 			if n := g.Node(id); n != nil {
 				c.Level = n.Level
 				c.Epistemic = n.Epistemic
+				c.Tags = append([]string(nil), n.Tags...)
+				c.Title, c.FirstParagraph = citationTextSnapshot(n.Body)
+				c.Excerpt = c.FirstParagraph
+				c.ContentHash = n.ContentHash
 			}
 		}
 		out = append(out, c)
 	}
 	return out
+}
+
+func citationTextSnapshot(body string) (string, string) {
+	paragraphs := strings.Split(strings.TrimSpace(body), "\n\n")
+	first := ""
+	for _, paragraph := range paragraphs {
+		if value := strings.TrimSpace(paragraph); value != "" {
+			first = value
+			break
+		}
+	}
+	if first == "" {
+		return "", ""
+	}
+	lines := strings.Split(first, "\n")
+	title := strings.TrimSpace(strings.TrimLeft(lines[0], "# "))
+	if len(title) > 160 {
+		title = title[:160]
+	}
+	if len(first) > 500 {
+		first = first[:500]
+	}
+	return title, first
 }
 
 // seedSnippets resolves retrieval hits to prompt snippets, reading graph

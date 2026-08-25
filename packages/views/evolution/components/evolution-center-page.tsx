@@ -95,6 +95,7 @@ import {
 import { MemoryCurationDailyLedger } from "./memory-curation-daily-ledger";
 import { AgentEvidencePanel } from "./agent-evidence-panel";
 import {
+  GraphMemoryAgentModeCard,
   GraphMemoryAuditCard,
   GraphMemoryConsolidationCard,
   GraphMemoryStatusCard,
@@ -150,7 +151,21 @@ const COPY = {
   memoryTypeGraphConfirmCheckbox: "I understand the empty start and no-fallback behavior",
   memoryTypeGraphConfirmApply: "Switch to graph",
   memoryTypeGraphConfirmCancel: "Cancel",
+  graphAgentMode: "Graph memory delivery",
+  graphAgentModeHint: "Choose a visible channel Memory Agent or synchronous injection. The modes never run together.",
+  graphAgentModeAgent: "Memory Agent",
+  graphAgentModeInject: "Inject before turns",
+  graphAgentRuntime: "Memory Agent runtime",
+  graphAgentRuntimePlaceholder: "Auto-select an eligible owner Pi runtime",
+  graphAgentModel: "Memory Agent model",
+  graphAgentTokensPerHour: "Workspace tokens per hour",
+  graphAgentModeSave: "Save delivery settings",
+  graphAgentModeSaved: "Graph memory delivery updated",
+  graphAgentModeUnavailable: "Graph memory profile is unavailable",
   graphTtt: "Test-time training",
+  graphRecallTtt: "Recall TTT",
+  graphConsolidationTtt: "Consolidation TTT",
+  graphRecallTttAgentDisabled: "Agent mode always uses one trajectory in this version",
   graphTttHint: "When on, each recall runs K independent Explore trajectories and adopts the fastest success, and graph consolidation generates multiple candidate versions in parallel and adopts the best. When off, both run exactly one trajectory.",
   graphTttConcurrency: "TTT concurrency",
   graphTttEffectiveK: "Effective K = 1 while TTT is off",
@@ -792,6 +807,7 @@ export function EvolutionCenterPage() {
             <TabsContent value="memory" className="grid gap-4 xl:grid-cols-[.9fr_1.1fr]">
               <div className="grid gap-4">
                 <MemoryTypeCard wsId={wsId} isAdmin={isWorkspaceAdmin} />
+                <GraphMemoryAgentModeCard wsId={wsId} isAdmin={isWorkspaceAdmin} />
                 <GraphMemoryTttCard wsId={wsId} isAdmin={isWorkspaceAdmin} />
                 {isGraphMemory ? (
                   <>

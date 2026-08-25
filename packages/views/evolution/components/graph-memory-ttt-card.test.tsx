@@ -39,6 +39,17 @@ function graphProfile(overrides: Partial<GraphMemoryProfile> = {}): GraphMemoryP
   return {
     workspace_id: "ws-1",
     memory_type: "graph",
+    graph_memory_mode: "inject",
+    memory_agent_runtime_id: "",
+    memory_agent_model: "",
+    memory_agent_thinking: "",
+    recall_ttt_enabled: false,
+    consolidation_ttt_enabled: false,
+    memory_agent_idle_grace_seconds: 120,
+    memory_agent_max_nodes_per_call: 4,
+    memory_agent_max_nodes_per_minute: 30,
+    memory_agent_max_continuous_turn_seconds: 600,
+    memory_agent_max_tokens_per_hour: 200000,
     explore_agents: 4,
     explore_max_rounds: 3,
     ttt_enabled: false,
@@ -65,14 +76,16 @@ function graphProfile(overrides: Partial<GraphMemoryProfile> = {}): GraphMemoryP
 
 function expectedUpdatePayload(
   profile: GraphMemoryProfile,
-  patch: { ttt_enabled: boolean; explore_agents: number },
+  patch: { recall_ttt_enabled: boolean; explore_agents: number },
 ) {
   return {
     memory_type: profile.memory_type,
     explore_agents: patch.explore_agents,
     explore_max_rounds: profile.explore_max_rounds,
     config_version: profile.config_version,
-    ttt_enabled: patch.ttt_enabled,
+    ttt_enabled: patch.recall_ttt_enabled,
+    recall_ttt_enabled: patch.recall_ttt_enabled,
+    consolidation_ttt_enabled: profile.consolidation_ttt_enabled,
     explore_nodes_per_expansion: profile.explore_nodes_per_expansion,
     max_hierarchy_fanout: profile.max_hierarchy_fanout,
     max_relation_edges_per_node: profile.max_relation_edges_per_node,
@@ -129,9 +142,9 @@ beforeEach(() => {
 
 describe("GraphMemoryTttCard", { timeout: 20000 }, () => {
   it("renders the TTT switch off by default with a disabled concurrency field showing the saved K and the effective-K-1 hint", async () => {
-    renderTttCard({ profile: graphProfile({ ttt_enabled: false, explore_agents: 4 }) });
+    renderTttCard({ profile: graphProfile({ recall_ttt_enabled: false, explore_agents: 4 }) });
 
-    const tttSwitch = await screen.findByRole("switch", { name: enEvolution.graphTtt });
+    const tttSwitch = await screen.findByRole("switch", { name: enEvolution.graphRecallTtt });
     expect(tttSwitch).toHaveAttribute("aria-checked", "false");
     const concurrency = screen.getByLabelText(enEvolution.graphTttConcurrency);
     expect(concurrency).toBeDisabled();
@@ -139,12 +152,12 @@ describe("GraphMemoryTttCard", { timeout: 20000 }, () => {
     expect(screen.getByText(enEvolution.graphTttEffectiveK)).toBeTruthy();
   });
 
-  it("enables concurrency after toggling on and saves ttt_enabled, edited K, unchanged fields, and config_version", async () => {
-    const profile = graphProfile({ ttt_enabled: false, explore_agents: 4, config_version: 5 });
+  it("enables concurrency after toggling on and saves recall_ttt_enabled, edited K, unchanged fields, and config_version", async () => {
+    const profile = graphProfile({ recall_ttt_enabled: false, explore_agents: 4, config_version: 5 });
     renderTttCard({ profile });
     const user = userEvent.setup();
 
-    const tttSwitch = await screen.findByRole("switch", { name: enEvolution.graphTtt });
+    const tttSwitch = await screen.findByRole("switch", { name: enEvolution.graphRecallTtt });
     fireEvent.click(tttSwitch);
     await waitFor(() => {
       expect(tttSwitch).toHaveAttribute("aria-checked", "true");
@@ -157,18 +170,18 @@ describe("GraphMemoryTttCard", { timeout: 20000 }, () => {
     await waitFor(() => {
       expect(api.updateGraphMemoryProfile).toHaveBeenCalledWith(
         "ws-1",
-        expectedUpdatePayload(profile, { ttt_enabled: true, explore_agents: 8 }),
+        expectedUpdatePayload(profile, { recall_ttt_enabled: true, explore_agents: 8 }),
       );
     });
     expect(toast.success).toHaveBeenCalledWith(enEvolution.graphTttSaved);
   });
 
   it("keeps the saved explore_agents when toggling TTT off rather than resetting K to 1", async () => {
-    const profile = graphProfile({ ttt_enabled: true, explore_agents: 8, config_version: 5 });
+    const profile = graphProfile({ recall_ttt_enabled: true, explore_agents: 8, config_version: 5 });
     renderTttCard({ profile });
     const user = userEvent.setup();
 
-    const tttSwitch = await screen.findByRole("switch", { name: enEvolution.graphTtt });
+    const tttSwitch = await screen.findByRole("switch", { name: enEvolution.graphRecallTtt });
     expect(tttSwitch).toHaveAttribute("aria-checked", "true");
     fireEvent.click(tttSwitch);
     const concurrency = screen.getByLabelText(enEvolution.graphTttConcurrency);
@@ -179,7 +192,7 @@ describe("GraphMemoryTttCard", { timeout: 20000 }, () => {
     await waitFor(() => {
       expect(api.updateGraphMemoryProfile).toHaveBeenCalledWith(
         "ws-1",
-        expectedUpdatePayload(profile, { ttt_enabled: false, explore_agents: 8 }),
+        expectedUpdatePayload(profile, { recall_ttt_enabled: false, explore_agents: 8 }),
       );
     });
   });
@@ -192,7 +205,7 @@ describe("GraphMemoryTttCard", { timeout: 20000 }, () => {
     );
     const user = userEvent.setup();
 
-    await screen.findByRole("switch", { name: enEvolution.graphTtt });
+    await screen.findByRole("switch", { name: enEvolution.graphRecallTtt });
     await user.click(screen.getByRole("button", { name: enEvolution.graphTttSave }));
 
     await waitFor(() => {
@@ -209,18 +222,18 @@ describe("GraphMemoryTttCard", { timeout: 20000 }, () => {
 
     expect(await screen.findByText(enEvolution.graphTttParseError)).toBeTruthy();
     expect(screen.getByRole("button", { name: enEvolution.graphTttRetry })).toBeTruthy();
-    expect(screen.queryByRole("switch", { name: enEvolution.graphTtt })).toBeNull();
+    expect(screen.queryByRole("switch", { name: enEvolution.graphRecallTtt })).toBeNull();
     expect(screen.queryByLabelText(enEvolution.graphTttConcurrency)).toBeNull();
     expect(screen.queryByRole("button", { name: enEvolution.graphTttSave })).toBeNull();
   });
 
   it("disables TTT controls for non-admins", async () => {
     renderTttCard({
-      profile: graphProfile({ ttt_enabled: true, explore_agents: 4 }),
+      profile: graphProfile({ recall_ttt_enabled: true, explore_agents: 4 }),
       isAdmin: false,
     });
 
-    const tttSwitch = await screen.findByRole("switch", { name: enEvolution.graphTtt });
+    const tttSwitch = await screen.findByRole("switch", { name: enEvolution.graphRecallTtt });
     // Base UI Switch is a span: it surfaces disabled as aria-disabled, not the HTML disabled property.
     expect(tttSwitch).toHaveAttribute("aria-disabled", "true");
     expect(screen.getByLabelText(enEvolution.graphTttConcurrency)).toBeDisabled();
@@ -233,7 +246,7 @@ describe("GraphMemoryTttCard", { timeout: 20000 }, () => {
     await waitFor(() => {
       expect(api.getGraphMemoryProfile).toHaveBeenCalledWith("ws-1");
     });
-    expect(screen.queryByRole("switch", { name: enEvolution.graphTtt })).toBeNull();
+    expect(screen.queryByRole("switch", { name: enEvolution.graphRecallTtt })).toBeNull();
     expect(screen.queryByLabelText(enEvolution.graphTttConcurrency)).toBeNull();
     expect(screen.queryByText(enEvolution.graphTtt)).toBeNull();
   });

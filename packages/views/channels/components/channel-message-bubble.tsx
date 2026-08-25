@@ -78,6 +78,7 @@ import {
   SELF_MENTION_ROW_MENTION_CLASS,
 } from "../../common/mention-token";
 import { VoiceMessageAudio } from "./voice-message-audio";
+import { GraphMemoryCitationBadge } from "./graph-memory-citation-badge";
 import { resolveVoiceMessagePresentation } from "../lib/voice-message-presentation";
 
 const FullEmojiPicker = lazy(() =>
@@ -1167,6 +1168,13 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
               presentation={voicePresentation}
               highlightQuery={searchHighlighted ? searchQuery : undefined}
             />
+            {(message.graph_memory_citation_count ?? 0) > 0 && (
+              <GraphMemoryCitationBadge
+                workspaceId={message.workspace_id}
+                messageId={message.id}
+                count={message.graph_memory_citation_count ?? 0}
+              />
+            )}
             {/* #1276 INV-3: one persistent status live region per local send —
                 empty (silent) → "Sending…" (pending ≥1.0s) → "Failed" — updated
                 in place so screen readers announce the transition and the body

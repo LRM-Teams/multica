@@ -20,8 +20,11 @@ type v6WorkDispatchIdentity struct {
 	Goal           struct {
 		GoalVersion int `json:"goal_version"`
 	} `json:"goal"`
+	BranchRefs    []V6BranchRef   `json:"branch_refs"`
+	InputNodes    []V6NodeRef     `json:"input_nodes"`
 	CatalogAccess json.RawMessage `json:"catalog_access"`
 	TaskSchema    json.RawMessage `json:"task_specific_schema"`
+	TaskContext   json.RawMessage `json:"task_context"`
 }
 
 // BuildV6WorkDispatchPrompt turns a frozen Work Manifest into an executable
@@ -89,6 +92,39 @@ func BuildV6WorkDispatchPrompt(manifest V6WorkManifest) (string, error) {
 		fmt.Fprintf(&prompt, "  \"workspace_id\": \"%s\",\n  \"run_id\": \"%s\",\n  \"work_item_id\": \"%s\",\n  \"task_id\": \"%s\",\n  \"attempt_id\": \"%s\",\n  \"agent_id\": \"%s\",\n  \"manifest_id\": \"%s\",\n  \"manifest_hash\": \"%s\",\n  \"goal_version\": %d,\n", identity.WorkspaceID, identity.RunID, identity.WorkItemID, identity.TaskID, identity.AttemptID, identity.AssignedAgent, identity.ManifestID, identity.ManifestHash, identity.Goal.GoalVersion)
 		fmt.Fprintf(&prompt, "  \"branch_refs\": <manifest.branch_refs>,\n  \"content_layers\": {\"catalog_summary\":\"<summary>\",\"brief_summary\":\"<summary>\",\"objective\":\"<objective>\",\"conclusion\":\"<conclusion>\",\"content\":\"<content>\",\"scope\":{},\"uncertainties\":[],\"conflicts\":[],\"open_questions\":[]},\n  \"evidence_refs\": <only frozen manifest artifact versions actually used>,\n  \"state_proposal\": {\"conclusion_state\":\"proposed\",\"integration_state\":\"candidate\"},\n  \"related_candidates\": [],\n  \"task_specific_schema\": \"%s\",\n  \"task_specific_payload\": <object matching the schema under that exact manifest key>,\n  \"content_hash\": \"sha256:<RFC-8785-hash>\"\n}\n```\n\n", taskSchemaID)
 		prompt.WriteString("必须使用 `manifest.task_specific_schema.payload_schemas` 下唯一的 key，不得编造或重命名 schema ID。`content_layers.catalog_summary` 最多 512 个字符。根层的 `content_layers.uncertainties`、`content_layers.conflicts` 和 `content_layers.open_questions` 是字符串数组；`task_specific_payload` 内同名字段遵循冻结的任务 schema，可能包含对象。计算 `content_hash` 时只移除 `content_hash` 字段，用 RFC 8785 JCS 规范化其余对象，对所得字节做 SHA-256，然后写入小写 `sha256:<64-hex>`。提交前必须读取并确认实际使用的每一页 catalog。\n\n")
+	}
+	if identity.ExpectedResult == V6ContractDiscussionTurnSubmission {
+		var discussion struct {
+			DiscussionID       string `json:"discussion_id"`
+			DiscussionRevision int    `json:"discussion_revision"`
+			InputSetHash       string `json:"input_set_hash"`
+		}
+		if json.Unmarshal(identity.TaskContext, &discussion) != nil || discussion.DiscussionID == "" || discussion.DiscussionRevision < 1 || discussion.InputSetHash == "" {
+			return "", fmt.Errorf("%w: incomplete V6 discussion identity", ErrInvalidContract)
+		}
+		prompt.WriteString("你是候选节点的当前 Steward。逐项比较 Manifest 中冻结的 input_nodes，判断它们是否存在足够的共同语义与新增价值；不得因为数量足够就同意融合。提交下面的精确结构：\n\n")
+		prompt.WriteString("```json\n{\n  \"contract_kind\": \"discussion_turn_submission\",\n  \"schema_version\": 6,\n  \"client_request_id\": \"<new-uuid>\",\n")
+		fmt.Fprintf(&prompt, "  \"workspace_id\": \"%s\",\n  \"run_id\": \"%s\",\n  \"work_item_id\": \"%s\",\n  \"attempt_id\": \"%s\",\n  \"manifest_id\": \"%s\",\n  \"manifest_hash\": \"%s\",\n  \"discussion_id\": \"%s\",\n  \"discussion_revision\": %d,\n  \"input_set_hash\": \"%s\",\n  \"agent_id\": \"%s\",\n", identity.WorkspaceID, identity.RunID, identity.WorkItemID, identity.AttemptID, identity.ManifestID, identity.ManifestHash, discussion.DiscussionID, discussion.DiscussionRevision, discussion.InputSetHash, identity.AssignedAgent)
+		prompt.WriteString("  \"visible_message\": \"<面向用户可见的中文判断>\",\n  \"contribution\": {\"common_findings\":[],\"unique_findings\":[],\"conflicts\":[],\"scope\":{},\"omissions\":[],\"vote\":\"<accept|reject|uncertain>\",\"reason\":\"<中文理由>\"},\n  \"evidence_refs\": []\n}\n```\n\n")
+		prompt.WriteString("只有确有语义增益且不存在未解决冲突时才投 accept；不相关或重复投 reject；证据不足或存在冲突投 uncertain。\n\n")
+	}
+	if identity.ExpectedResult == V6ContractIntegrationSubmission {
+		var integration struct {
+			DiscussionID       string `json:"discussion_id"`
+			DiscussionRevision int    `json:"discussion_revision"`
+			InputSetHash       string `json:"input_set_hash"`
+		}
+		if json.Unmarshal(identity.TaskContext, &integration) != nil || integration.DiscussionID == "" || integration.DiscussionRevision < 1 || integration.InputSetHash == "" || len(identity.InputNodes) < 2 || len(identity.BranchRefs) == 0 {
+			return "", fmt.Errorf("%w: incomplete V6 integration identity", ErrInvalidContract)
+		}
+		inputNodes, _ := json.Marshal(identity.InputNodes)
+		branchRefs, _ := json.Marshal(identity.BranchRefs)
+		prompt.WriteString("Discussion 已全体同意。综合冻结 input_nodes，生成一个有明确语义增益、可独立阅读的 successor。两个同级输入晋升一级；一个最高层输入加低层输入为 assimilation 且保持最高 tier；两个 XXL 为 xxl_merge。提交下面的精确结构：\n\n")
+		prompt.WriteString("```json\n{\n  \"contract_kind\": \"integration_submission\",\n  \"schema_version\": 6,\n  \"client_request_id\": \"<new-uuid>\",\n")
+		fmt.Fprintf(&prompt, "  \"workspace_id\": \"%s\",\n  \"run_id\": \"%s\",\n  \"work_item_id\": \"%s\",\n  \"attempt_id\": \"%s\",\n  \"agent_id\": \"%s\",\n  \"manifest_id\": \"%s\",\n  \"manifest_hash\": \"%s\",\n  \"discussion_id\": \"%s\",\n  \"discussion_revision\": %d,\n  \"input_set_hash\": \"%s\",\n", identity.WorkspaceID, identity.RunID, identity.WorkItemID, identity.AttemptID, identity.AssignedAgent, identity.ManifestID, identity.ManifestHash, integration.DiscussionID, integration.DiscussionRevision, integration.InputSetHash)
+		fmt.Fprintf(&prompt, "  \"mode\": \"<promotion|assimilation|xxl_merge>\",\n  \"input_nodes\": %s,\n  \"output_tier\": \"<M|L|XL|XXL>\",\n  \"output_content\": {\"catalog_summary\":\"<summary>\",\"brief_summary\":\"<summary>\",\"objective\":\"<objective>\",\"conclusion\":\"<conclusion>\",\"content\":\"<完整中文整合结果>\",\"scope\":{},\"uncertainties\":[],\"conflicts\":[],\"open_questions\":[]},\n  \"branch_refs\": %s,\n", inputNodes, branchRefs)
+		prompt.WriteString("  \"semantic_gain\": \"<相对于输入新增的中文综合价值>\",\n  \"steward_agent_id\": \"" + identity.AssignedAgent + "\",\n  \"content_hash\": \"sha256:<RFC-8785-hash>\"\n}\n```\n\n")
+		prompt.WriteString("计算 `content_hash` 时只移除 `content_hash` 字段，用 RFC 8785 JCS 规范化其余对象并计算 SHA-256。不得改写 Manifest 冻结的 input_nodes、branch_refs 或 discussion identity。\n\n")
 	}
 	if len(identity.CatalogAccess) > 0 && string(identity.CatalogAccess) != "null" {
 		prompt.WriteString("读取并确认本次工作所需的每一页已授权 catalog：\n\n")

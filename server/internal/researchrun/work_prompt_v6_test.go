@@ -69,9 +69,72 @@ func TestRonaldoV6DirectorProtocolRequiresParallelChineseResearch(t *testing.T) 
 		"action.payload_schema 必须是 work.create.v1",
 		"action.payload.kind 必须是 research",
 		"action.payload.expected_result_schema_id 必须是 atomic_result_submission",
+		"action.kind 必须是 create_integration",
+		"action.payload_schema 必须是 integration.create.v1",
+		"S promotion 为 M",
+		"全体同意后自动创建 integration Work",
 	} {
 		if !strings.Contains(RonaldoV6DirectorSystemProtocol, want) {
 			t.Fatalf("director protocol missing %q", want)
+		}
+	}
+}
+
+func TestBuildV6WorkDispatchPromptMakesDiscussionExecutable(t *testing.T) {
+	manifest := validV6DispatchPromptManifest(t, map[string]any{
+		"expected_result_schema": string(V6ContractDiscussionTurnSubmission),
+		"task_context": map[string]any{
+			"discussion_id":       "00000000-0000-4000-8000-000000000301",
+			"discussion_revision": 1,
+			"input_set_hash":      "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		},
+	})
+	prompt, err := BuildV6WorkDispatchPrompt(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`"contract_kind": "discussion_turn_submission"`,
+		`"discussion_id": "00000000-0000-4000-8000-000000000301"`,
+		`"discussion_revision": 1`,
+		`"vote":"<accept|reject|uncertain>"`,
+		"不得因为数量足够就同意融合",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("discussion prompt missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
+func TestBuildV6WorkDispatchPromptMakesIntegrationExecutable(t *testing.T) {
+	manifest := validV6DispatchPromptManifest(t, map[string]any{
+		"expected_result_schema": string(V6ContractIntegrationSubmission),
+		"branch_refs": []any{
+			map[string]any{"id": "00000000-0000-4000-8000-000000000302", "state_version": 2},
+		},
+		"input_nodes": []any{
+			map[string]any{"kind": "result_s", "id": "00000000-0000-4000-8000-000000000303", "version_id": "00000000-0000-4000-8000-000000000304", "tier": "S", "content_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+			map[string]any{"kind": "result_s", "id": "00000000-0000-4000-8000-000000000305", "version_id": "00000000-0000-4000-8000-000000000306", "tier": "S", "content_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},
+		},
+		"task_context": map[string]any{
+			"discussion_id":       "00000000-0000-4000-8000-000000000301",
+			"discussion_revision": 1,
+			"input_set_hash":      "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+		},
+	})
+	prompt, err := BuildV6WorkDispatchPrompt(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`"contract_kind": "integration_submission"`,
+		`"mode": "<promotion|assimilation|xxl_merge>"`,
+		`"output_tier": "<M|L|XL|XXL>"`,
+		`"steward_agent_id": "00000000-0000-4000-8000-000000000009"`,
+		"不得改写 Manifest 冻结的 input_nodes",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("integration prompt missing %q:\n%s", want, prompt)
 		}
 	}
 }

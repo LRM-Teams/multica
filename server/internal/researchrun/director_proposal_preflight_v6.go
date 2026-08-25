@@ -19,6 +19,7 @@ type v6DirectorPreflightFacts struct {
 	unresolvedQuestions int
 	proposedAgentCount  int
 	proposedAtomicWork  int
+	proposedConvergence int
 }
 
 func (s *PostgresStore) preflightV6DirectorProposal(ctx context.Context, proposal v6DirectorProposal) error {
@@ -27,10 +28,13 @@ func (s *PostgresStore) preflightV6DirectorProposal(ctx context.Context, proposa
 	assigneeSeen := map[uuid.UUID]struct{}{}
 	proposedAgentCount := 0
 	proposedAtomicWork := 0
+	proposedConvergence := 0
 	for _, action := range proposal.Actions {
 		switch action.Kind {
 		case "create_agent":
 			proposedAgentCount++
+		case "open_discussion", "create_integration":
+			proposedConvergence++
 		case "create_work_item", "create_task":
 			var payload v6CreateWorkActionPayload
 			if json.Unmarshal(action.Payload, &payload) != nil {
@@ -62,6 +66,7 @@ func (s *PostgresStore) preflightV6DirectorProposal(ctx context.Context, proposa
 	var facts v6DirectorPreflightFacts
 	facts.proposedAgentCount = proposedAgentCount
 	facts.proposedAtomicWork = proposedAtomicWork
+	facts.proposedConvergence = proposedConvergence
 	err := s.pool.QueryRow(ctx, `SELECT
 		COALESCE((s.run_config->>'max_parallel_tasks')::int,5),
 		(SELECT count(*)::int FROM research_team_membership m
@@ -133,6 +138,9 @@ func (s *PostgresStore) preflightV6DirectorProposal(ctx context.Context, proposa
 }
 
 func validateV6ParallelResearchPlan(facts v6DirectorPreflightFacts) error {
+	if facts.proposedConvergence > 0 && facts.resultCount >= 2 {
+		return nil
+	}
 	if facts.proposedAgentCount == 0 && facts.proposedAtomicWork == 0 && facts.unresolvedQuestions == 0 {
 		return nil
 	}

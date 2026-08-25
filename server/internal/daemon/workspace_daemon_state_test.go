@@ -248,10 +248,10 @@ func TestDaemonCoreSupervisesProcessAndWorkspaceDaemonOwnsExecution(t *testing.T
 	if strings.Contains(string(daemonRaw), "superviseWorkspaceDaemon") || strings.Contains(string(daemonRaw), "workspaceDaemonChildren") {
 		t.Fatal("daemon package still contains ComputerCore process supervision")
 	}
-	if !strings.Contains(string(processRaw), "runner.Run(runCtx)") {
+	if !strings.Contains(string(processRaw), "workspaceDaemon.Run(runCtx)") {
 		t.Fatal("WorkspaceDaemon process does not own WorkspaceDaemon.Run")
 	}
-	if !strings.Contains(string(processRaw), "adoptWorkspaceDaemon(runner)") {
+	if !strings.Contains(string(processRaw), "adoptWorkspaceDaemon(workspaceDaemon)") {
 		t.Fatal("WorkspaceDaemon process does not publish its execution core for Credential Proxy lookup")
 	}
 	if !strings.Contains(string(daemonCoreRaw), "type DaemonCore struct") || !strings.Contains(string(daemonCoreRaw), "child.Wait()") {

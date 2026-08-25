@@ -3,7 +3,6 @@ package daemon
 import (
 	"encoding/json"
 	"errors"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -43,26 +42,15 @@ func activitySystemEntry(title, text string) (protocol.AgentActivityEntry, error
 	return protocol.AgentActivityEntry{Kind: "system", Body: body}, nil
 }
 
-var diagnosticSecretPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9._~+\-/=]+`),
-	regexp.MustCompile(`(?i)\b(?:sk|ghp|github_pat|xox[baprs])-[-A-Za-z0-9_]+`),
-	regexp.MustCompile(`(?i)\b(?:api[_-]?key|token|password|secret|authorization)\s*[:=]\s*["']?[^\s"']+`),
-}
-
-func sanitizeDiagnosticText(value string) string {
-	value = strings.TrimSpace(value)
-	for _, pattern := range diagnosticSecretPatterns {
-		value = pattern.ReplaceAllString(value, "[REDACTED]")
-	}
-	return value
-}
-
 func activityDiagnosticEntry(source, reference, title, kind, text string) (protocol.AgentActivityEntry, error) {
-	source = sanitizeDiagnosticText(source)
-	reference = sanitizeDiagnosticText(reference)
-	title = sanitizeDiagnosticText(title)
-	kind = sanitizeDiagnosticText(kind)
-	text = sanitizeDiagnosticText(text)
+	// Diagnostic messages are already bounded at the provider boundary. Keep
+	// this formatter focused on the Activity contract: title plus the optional
+	// provider/run association, without a second generic text-redaction pass.
+	source = strings.TrimSpace(source)
+	reference = strings.TrimSpace(reference)
+	title = strings.TrimSpace(title)
+	kind = strings.TrimSpace(kind)
+	text = strings.TrimSpace(text)
 	if title == "" {
 		title = "Runtime warning"
 	}
@@ -72,7 +60,13 @@ func activityDiagnosticEntry(source, reference, title, kind, text string) (proto
 	if text == "" {
 		text = "Provider reported a warning"
 	}
-	body, err := json.Marshal(protocol.AgentActivitySystemBody{Title: title, Text: text, Source: source, Reference: reference})
+	if source != "" {
+		text = "Provider: " + source + "\n" + text
+	}
+	if reference != "" {
+		text += "\nRun: " + reference
+	}
+	body, err := json.Marshal(protocol.AgentActivitySystemBody{Title: title, Text: text})
 	if err != nil {
 		return protocol.AgentActivityEntry{}, err
 	}

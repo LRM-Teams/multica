@@ -204,14 +204,7 @@ func ProjectTimelineEntry(entry protocol.AgentActivityEntry, summary Summary) Ti
 			if title == "" {
 				title = "Runtime warning"
 			}
-			text := boundedText(body.Text)
-			if source := boundedText(body.Source); source != "" {
-				text = "Provider: " + source + "\n" + text
-			}
-			if reference := boundedText(body.Reference); reference != "" {
-				text += "\nRun: " + reference
-			}
-			return TimelineRow{Title: title, Subtext: boundedText(text), Tone: "warning", BodyKind: "none"}
+			return TimelineRow{Title: title, Subtext: boundedText(body.Text), Tone: "warning", BodyKind: "none"}
 		}
 	}
 	return row

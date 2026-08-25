@@ -166,14 +166,7 @@ func projectActivityTimelineEntry(entry protocol.AgentActivityEntry, summary pro
 			if title == "" {
 				title = "Runtime warning"
 			}
-			text := boundedText(body.Text)
-			if source := boundedText(body.Source); source != "" {
-				text = "Provider: " + source + "\n" + text
-			}
-			if reference := boundedText(body.Reference); reference != "" {
-				text += "\nRun: " + reference
-			}
-			return protocol.AgentActivityTimelineRow{ActivityKind: protocol.ActivityKindError, DetailKind: "runtime_diagnostic", Title: title, Subtext: boundedText(text), BodyKind: "none"}
+			return protocol.AgentActivityTimelineRow{ActivityKind: protocol.ActivityKindError, DetailKind: "runtime_diagnostic", Title: title, Subtext: boundedText(body.Text), BodyKind: "none"}
 		}
 	}
 	return row

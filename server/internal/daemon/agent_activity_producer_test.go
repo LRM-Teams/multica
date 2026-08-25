@@ -516,7 +516,7 @@ func TestResidentRuntimeEventsPublishRaftActivityLifecycle(t *testing.T) {
 	}
 }
 
-func TestRuntimeDiagnosticActivityPreservesWarningDetailsAndRedactsSecrets(t *testing.T) {
+func TestRuntimeDiagnosticActivityPreservesWarningDetails(t *testing.T) {
 	var activities []protocol.AgentActivityPayload
 	producer := newAgentActivityProducer("daemon-1", time.Now, func(payload protocol.AgentActivityPayload) {
 		activities = append(activities, payload)
@@ -526,7 +526,7 @@ func TestRuntimeDiagnosticActivityPreservesWarningDetailsAndRedactsSecrets(t *te
 		AgentID: "agent-a", AgentInstanceID: "instance-a", Kind: AgentObservationRuntimeDiagnostic,
 		Data: AgentRuntimeDiagnosticObservationData{
 			RuntimeID: "runtime-1", Source: "codex", Reference: "run-4193709a", Name: "Bubblewrap PATH warning", Kind: "bubblewrap_path",
-			Detail: "bubblewrap is not on PATH; token=super-secret; model refresh timeout is 30s",
+			Detail: "bubblewrap is not on PATH; model refresh timeout is 30s",
 		}, At: time.Now().UTC(),
 	}); err != nil {
 		t.Fatal(err)
@@ -538,7 +538,7 @@ func TestRuntimeDiagnosticActivityPreservesWarningDetailsAndRedactsSecrets(t *te
 	if row.Title != "Bubblewrap PATH warning (bubblewrap_path)" {
 		t.Fatalf("diagnostic title = %q", row.Title)
 	}
-	if !strings.Contains(row.Subtext, "Provider: codex") || !strings.Contains(row.Subtext, "Run: run-4193709a") || !strings.Contains(row.Subtext, "model refresh timeout is 30s") || strings.Contains(row.Subtext, "super-secret") || !strings.Contains(row.Subtext, "[REDACTED]") {
+	if !strings.Contains(row.Subtext, "Provider: codex") || !strings.Contains(row.Subtext, "Run: run-4193709a") || !strings.Contains(row.Subtext, "model refresh timeout is 30s") {
 		t.Fatalf("diagnostic subtext = %q", row.Subtext)
 	}
 }

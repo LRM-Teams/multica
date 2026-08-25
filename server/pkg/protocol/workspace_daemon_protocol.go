@@ -355,10 +355,8 @@ type AgentActivityToolStartBody struct {
 // AgentActivitySystemBody is a bounded, user-visible runtime diagnostic. It
 // is a timeline fact and does not replace the current lifecycle Snapshot.
 type AgentActivitySystemBody struct {
-	Title     string `json:"title"`
-	Text      string `json:"text"`
-	Source    string `json:"source,omitempty"`
-	Reference string `json:"reference,omitempty"`
+	Title string `json:"title"`
+	Text  string `json:"text"`
 }
 
 type AgentActivitySummary struct {

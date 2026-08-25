@@ -1,7 +1,10 @@
 // @vitest-environment node
 import { describe, it, expect, vi } from "vitest";
-import type { QueryClient } from "@tanstack/react-query";
-import { channelKeys } from "@multica/core/channels/queries";
+import type { InfiniteData, QueryClient } from "@tanstack/react-query";
+import {
+  conversationKeys,
+  type ConversationListResponse,
+} from "@multica/core/conversations";
 import type { Channel } from "@multica/core/types";
 import type { MentionItem } from "./mention-suggestion";
 import { createChannelReferenceSuggestion } from "./channel-reference-suggestion";
@@ -28,7 +31,15 @@ function fakeChannel(overrides: Partial<Channel>): Channel {
 
 function fakeQc(channels: Channel[]): QueryClient {
   const map = new Map<string, unknown>();
-  map.set(JSON.stringify(channelKeys.list("ws-1")), channels);
+  const data: InfiniteData<ConversationListResponse> = {
+    pages: [
+      {
+        items: channels.map((channel) => ({ kind: "channel" as const, channel })),
+      },
+    ],
+    pageParams: [null],
+  };
+  map.set(JSON.stringify(conversationKeys.list("ws-1")), data);
   return {
     getQueryData: (key: readonly unknown[]) => map.get(JSON.stringify(key)),
   } as unknown as QueryClient;
@@ -107,4 +118,5 @@ describe("createChannelReferenceSuggestion", () => {
     const mergedSuggestion = configured.options.suggestion;
     expect(mergedSuggestion.allow({} as never)).toBe(true);
   });
+
 });

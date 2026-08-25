@@ -1,8 +1,13 @@
 "use client";
 
-import type { QueryClient } from "@tanstack/react-query";
+import type { InfiniteData, QueryClient } from "@tanstack/react-query";
 import { getCurrentWsId } from "@multica/core/platform";
-import { channelKeys } from "@multica/core/channels/queries";
+import {
+  conversationGroupChannels,
+  conversationKeys,
+  flattenConversationPages,
+  type ConversationListResponse,
+} from "@multica/core/conversations";
 import type { Channel } from "@multica/core/types";
 import type { SuggestionOptions } from "@tiptap/suggestion";
 import { PluginKey } from "@tiptap/pm/state";
@@ -33,10 +38,9 @@ function matchesChannel(item: Pick<Channel, "name" | "description">, query: stri
   );
 }
 
-// No server search — a workspace's channel list is small and already fully
-// cached (channelsOptions fetches the whole thing up front, unlike issues
-// which are paginated/bucketed), so client-side filtering of the cache is
-// sufficient. Mirrors createIssueReferenceSuggestion's shape and popup
+// No server search — filter the loaded pages of the unified Conversations
+// cache, which is also the Messages sidebar's single source of truth. Mirrors
+// createIssueReferenceSuggestion's shape and popup
 // (issue-reference-suggestion.tsx) minus its server-search fallback.
 export function createChannelReferenceSuggestion(
   qc: QueryClient,
@@ -47,9 +51,14 @@ export function createChannelReferenceSuggestion(
     const wsId = getCurrentWsId();
     if (!wsId) return [];
 
-    const cached = qc.getQueryData<Channel[]>(channelKeys.list(wsId)) ?? [];
+    const cached = qc.getQueryData<InfiniteData<ConversationListResponse>>(
+      conversationKeys.list(wsId),
+    );
+    const channels = cached
+      ? conversationGroupChannels(flattenConversationPages(cached))
+      : [];
     const items: MentionItem[] = [];
-    for (const c of cached) {
+    for (const c of channels) {
       if (c.kind === "group" && !c.archived_at && matchesChannel(c, query)) {
         items.push(channelToReference(c));
       }

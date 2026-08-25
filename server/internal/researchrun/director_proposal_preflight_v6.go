@@ -24,6 +24,8 @@ type v6DirectorPreflightFacts struct {
 	proposedBranches     int
 	proposedWorkBranches int
 	childBranches        int
+	topLevelBranches     int
+	proposedTopLevel     int
 	convergenceReady     bool
 	activeConvergence    int
 }
@@ -173,13 +175,23 @@ func (s *PostgresStore) preflightV6DirectorProposal(ctx context.Context, proposa
 		if existingParents != len(uniqueParents) {
 			return fmt.Errorf("%w: create_branch 的 parent_branch_id 必须属于当前 Run", ErrInvalidContract)
 		}
-		if facts.resultCount == 0 && facts.childBranches == 0 {
-			var rootBranchID uuid.UUID
-			if err = s.pool.QueryRow(ctx, `SELECT id FROM research_branch
-				WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND parent_branch_id IS NULL
-				ORDER BY created_at,id LIMIT 1`, proposal.WorkspaceID, proposal.RunID).Scan(&rootBranchID); err != nil {
-				return err
+		var rootBranchID uuid.UUID
+		if err = s.pool.QueryRow(ctx, `SELECT id FROM research_branch
+			WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND parent_branch_id IS NULL
+			ORDER BY (client_key='root') DESC,created_at,id LIMIT 1`, proposal.WorkspaceID, proposal.RunID).Scan(&rootBranchID); err != nil {
+			return err
+		}
+		if err = s.pool.QueryRow(ctx, `SELECT count(*)::int FROM research_branch
+			WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND parent_branch_id=$3::uuid
+			AND status IN ('proposed','active')`, proposal.WorkspaceID, proposal.RunID, rootBranchID).Scan(&facts.topLevelBranches); err != nil {
+			return err
+		}
+		for _, parentID := range proposedBranchParents {
+			if parentID == rootBranchID {
+				facts.proposedTopLevel++
 			}
+		}
+		if facts.resultCount == 0 && facts.childBranches == 0 {
 			for _, parentID := range proposedBranchParents {
 				if parentID != rootBranchID {
 					return fmt.Errorf("%w: 首轮独立方向必须直接创建在根 Branch 下", ErrInvalidContract)
@@ -238,6 +250,9 @@ func validateV6ParallelResearchPlan(facts v6DirectorPreflightFacts) error {
 	}
 	if facts.proposedAtomicWork > 0 && facts.childBranches == 0 {
 		return fmt.Errorf("%w: 先为独立调研方向创建子 Branch；atomic Work 不得全部堆进根 Branch", ErrInvalidContract)
+	}
+	if facts.proposedTopLevel > 0 && facts.topLevelBranches+facts.proposedTopLevel > facts.maxParallelTasks {
+		return fmt.Errorf("%w: 一级研究方向最多 %d 个；请复用已有方向，或把细分问题创建为相关方向的子 Branch", ErrInvalidContract, facts.maxParallelTasks)
 	}
 	if facts.resultCount == 0 && facts.proposedAtomicWork > 0 && facts.proposedWorkBranches < parallelTarget {
 		return fmt.Errorf("%w: 首轮 atomic Work 必须覆盖至少 %d 个不同的子 Branch", ErrInvalidContract, parallelTarget)

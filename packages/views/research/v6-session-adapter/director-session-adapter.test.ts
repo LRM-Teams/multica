@@ -149,7 +149,7 @@ describe("Director V6 canvas adapter", () => {
     expect(result.graph.nodes[0]?.status).toBe("succeeded");
   });
 
-  it("groups nodes into server-declared Branch territories", () => {
+  it("groups leaf Branch nodes into server-declared top-level territories", () => {
     const rootBranch = "00000000-0000-4000-8000-000000000100";
     const branchA = "00000000-0000-4000-8000-000000000101";
     const branchB = "00000000-0000-4000-8000-000000000102";
@@ -159,8 +159,14 @@ describe("Director V6 canvas adapter", () => {
       nodes: [
         node("goal", "GOAL", { kind: "goal", branchIds: [rootBranch] }),
         node("legacy-root", "S", { branchIds: [rootBranch] }),
-        node("one", "M", { branchIds: [branchA, rootBranch] }),
-        node("two", "L", { branchIds: [branchB, branchA, rootBranch] }),
+        node("one", "M", {
+          branchIds: [branchA],
+          territory: { branchId: branchA, label: "Market" },
+        }),
+        node("two", "L", {
+          branchIds: [branchB],
+          territory: { branchId: branchA, label: "Market" },
+        }),
       ],
       edges: [],
     });
@@ -175,12 +181,10 @@ describe("Director V6 canvas adapter", () => {
       branchA,
     );
     expect(result.graph.nodes.find((item) => item.id === "two")?.cluster_id).toBe(
-      branchB,
-    );
-    expect(result.graph.clusters.map((cluster) => cluster.id)).toEqual([
       branchA,
-      branchB,
-    ]);
+    );
+    expect(result.graph.clusters.map((cluster) => cluster.id)).toEqual([branchA]);
+    expect(result.graph.clusters[0]?.label).toBe("Market");
   });
 
   it("renders canonical Goal as a compact origin below synthesis tiers", () => {

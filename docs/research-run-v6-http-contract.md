@@ -303,6 +303,14 @@ Both return a strict `projection_snapshot`. A Slice uses a non-default
 workspace/Run/snapshot/slice parameters and rejected if altered or reused across
 users.
 
+Each projected node keeps its exact canonical membership in `branch_ids`. When
+all of those Branches descend from one top-level child of the Run root, the node
+also carries a `territory` object with that top-level `branch_id` and its bounded
+objective `label`. The field is absent for the Goal, orphaned legacy Branches,
+and cross-territory synthesis. Clients use only this server-declared field for
+visual direction grouping; they must not treat every leaf Branch as a separate
+top-level direction or infer Branch ancestry from text.
+
 `depth` is fixed to 1 for derivation expansion in V6. Viewport density reads may
 use server-defined bounded rectangle/zoom parameters, but they cannot change
 canonical visibility or create graph nodes.

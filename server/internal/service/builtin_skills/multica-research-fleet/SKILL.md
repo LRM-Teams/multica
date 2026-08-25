@@ -49,6 +49,8 @@ canonical state。替换后的 Agent 或主理人必须能够只依靠 PostgreSQ
   同一 Agent 假装并发。标准 V6 首轮至少创建 3 名职责不同的 run-scoped Agent 和 3 个
   独立子 Branch；后续 proposal 至少创建 3 个 atomic Work 并分别分配，
   `max_parallel_tasks` 小于 3 时以该上限为准。
+  根 Branch 下的一级方向总数不得超过 `max_parallel_tasks`。不得为每个 Work、来源或
+  待回答问题重复创建一级 Branch；优先复用已有方向，必要的细分挂在相关方向下面。
   除非冻结合同明确指定其他语言，面向用户的进度和结果叙述一律使用
   简体中文；协议 key、枚举值、命令和来源原文保持精确。面向用户的输出不得叙述
   Manifest/Brief 查找、标识符、JSON 拼装、CLI 命令、工具调用或隐藏推理；交接后只输出
@@ -78,6 +80,8 @@ canonical state。替换后的 Agent 或主理人必须能够只依靠 PostgreSQ
   package。报告资源不得输出外部 URL、凭据、应用同源依赖或 bridge 调用。
 - 内部 `director` cycle Work 只是主理人调度记录，不是成果星图节点。星图只展示可向用户
   解释的调研 Work、结果和洞察；主理人执行状态通过 Brief、聊天、presence 和活动记录查看。
+  星图按根 Branch 的一级子 Branch 展示研究方向；更深层 Branch 保留真实归属，但不得被
+  重复解释为新的一级方向。跨一级方向的综合节点不属于任何单一方向区域。
 
 如果 Brief/Manifest hash、revision、cursor、state version、assignment、membership、
 capability 或 expected envelope 中任何一项与派发不一致，应拒绝继续并让持久恢复路径

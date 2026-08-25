@@ -5,7 +5,7 @@ import (
 )
 
 // reportMixedRunActivity durably records one mixed-run lifecycle transition and
-// best-effort ships it on the workspace Runner connection. The durable outbox
+// best-effort ships it on the WorkspaceDaemon connection. The durable outbox
 // is written before any send attempt so a daemon restart cannot lose the
 // counter delta; the server acknowledges with EventMixedRunActivityAck.
 func (d *Daemon) reportMixedRunActivity(agentID, runtimeID, runID, runAgentID, transitionID, dimension string, delta int) bool {
@@ -34,7 +34,7 @@ func (d *Daemon) reportMixedRunActivity(agentID, runtimeID, runID, runAgentID, t
 		}
 		return false
 	}
-	if runner := d.currentWorkspaceRunner(workspaceID); runner != nil {
+	if runner := d.currentWorkspaceDaemon(workspaceID); runner != nil {
 		if err := runner.sendOnCurrentConnection(protocol.EventMixedRunActivityTransition, payload); err != nil && d.logger != nil {
 			d.logger.Debug("mixed-run activity transition send deferred", "error", err, "workspace_id", workspaceID, "run_id", runID, "transition_id", transitionID)
 		}

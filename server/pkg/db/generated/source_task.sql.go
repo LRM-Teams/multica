@@ -24,7 +24,16 @@ type GetSourceTaskForWorkspaceParams struct {
 
 func (q *Queries) GetSourceTaskForWorkspace(ctx context.Context, arg GetSourceTaskForWorkspaceParams) (SourceTask, error) {
 	row := q.db.QueryRow(ctx, getSourceTaskForWorkspace, arg.ID, arg.WorkspaceID)
-	return scanSourceTask(row)
+	var i SourceTask
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Type,
+		&i.Payload,
+		&i.ContentHash,
+		&i.CreatedAt,
+	)
+	return i, err
 }
 
 const upsertSourceTask = `-- name: UpsertSourceTask :one
@@ -43,12 +52,20 @@ type UpsertSourceTaskParams struct {
 }
 
 func (q *Queries) UpsertSourceTask(ctx context.Context, arg UpsertSourceTaskParams) (SourceTask, error) {
-	row := q.db.QueryRow(ctx, upsertSourceTask, arg.WorkspaceID, arg.Type, arg.Payload, arg.ContentHash)
-	return scanSourceTask(row)
-}
-
-func scanSourceTask(row interface{ Scan(...interface{}) error }) (SourceTask, error) {
-	var item SourceTask
-	err := row.Scan(&item.ID, &item.WorkspaceID, &item.Type, &item.Payload, &item.ContentHash, &item.CreatedAt)
-	return item, err
+	row := q.db.QueryRow(ctx, upsertSourceTask,
+		arg.WorkspaceID,
+		arg.Type,
+		arg.Payload,
+		arg.ContentHash,
+	)
+	var i SourceTask
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Type,
+		&i.Payload,
+		&i.ContentHash,
+		&i.CreatedAt,
+	)
+	return i, err
 }

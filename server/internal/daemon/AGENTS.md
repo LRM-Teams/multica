@@ -5,7 +5,7 @@ and ownership boundaries exact; do not add wrapper concepts around them.
 
 ## Agent start
 
-- The production start owner is `(*WorkspaceRunner).startAgentNow`.
+- The production start owner is `(*WorkspaceDaemon).startAgentNow`.
 - Server-commanded starts and idle-snapshot wakeups must converge on
   `startAgentNow`; do not create another production start-completion path.
 - Replayed or rebound starts publish current status/session only. They must not
@@ -14,7 +14,7 @@ and ownership boundaries exact; do not add wrapper concepts around them.
 ## Starting Activity
 
 - Publish the spawn Activity through
-  `(*WorkspaceRunner).broadcastActivity(..., "starting")`.
+  `(*WorkspaceDaemon).broadcastActivity(..., "starting")`.
 - Production code has exactly one `broadcastActivity` call site: inside
   `startAgentNow`, after the provider process exists and `active` status (and a
   present provider session) has been sent.
@@ -28,7 +28,7 @@ and ownership boundaries exact; do not add wrapper concepts around them.
 
 - `TestRaftStartingActivityHasOneBroadcastCallSite` locks the method name and
   sole production call site.
-- `TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus` requires
+- `TestWorkspaceDaemonAcceptsScopedStartAndReturnsAckThenStatus` requires
   exactly one Starting Activity for a managed spawn.
 - `TestReplayManagedStartDoesNotRepaintStarting` locks the replay behavior.
 - Run `go test ./internal/daemon -count=1` from `server/` after changing this
@@ -50,10 +50,25 @@ The daemon owns the workspace side only. Its provider skill paths are:
 | Claude | `<workingDirectory>/.claude/skills/` |
 | Codex | `<workingDirectory>/.agents/skills/` |
 | OpenCode | `<workingDirectory>/.opencode/skills/` |
-| Pi | `<workingDirectory>/.pi/skills/` |
+| Pi | `<workingDirectory>/.pi/skills/`, `<workingDirectory>/.agents/skills/` |
 | Cursor | `<workingDirectory>/.cursor/skills/` |
 | Kiro | `<workingDirectory>/.kiro/skills/` |
 | Grok | `<workingDirectory>/.grok/skills/` |
+
+Pi workspace discovery follows Pi itself rather than a Multica-specific
+subset: load `<workingDirectory>/.pi/settings.json`, registered project
+packages under `<workingDirectory>/.pi/{git,npm}/`, `.pi/skills/`, and
+`.agents/skills/` from the working directory through the nearest Git root.
+Multica-managed assigned Skills are materialized only into the primary
+`.pi/skills/` root; the other roots remain read-only discovery surfaces.
+
+Pi's global inventory is a separate, read-only import surface. Match Pi's
+native global discovery contract: `PI_CODING_AGENT_DIR/skills/` (default
+`~/.pi/agent/skills/`), `~/.agents/skills/`, and skill resources from packages
+registered in Pi's global `settings.json`. Do not scan the managed
+`~/.pi/agent/git/` or `npm/` stores indiscriminately: an unregistered checkout
+is not an installed Pi package. This global inventory must never be copied
+into an Agent workspace automatically.
 
 Do not introduce an agent-scoped `CODEX_HOME`, `codex-home`, or equivalent
 provider-home directory. Codex's global `CODEX_HOME`, `~/.codex/skills/`, and
@@ -87,15 +102,15 @@ the control RPC.
 
 ## Responsibility boundary
 
-Daemon owns one Workspace Runner's execution behavior, drain barrier, provider
+Daemon owns one WorkspaceDaemon's execution behavior, drain barrier, provider
 runtimes, Runtime registration, and child-local state. Computer owns machine
 supervision, process identity fencing, sibling coordination, orphan cleanup,
 and upgrade policy. Cloud Server HTTP/WebSocket is not part of this migration.
 
 Use TDD at the RPC operation seam before changing handlers or callers. Managed
-runner identity is `pid + startIdentity + role + workspace/server identity +
-version`; do not restore numeric generation fences, per-Binding lease/attest
-polling, or persisted lifecycle state.
+runner identity is `pid + child-reported daemonInstanceId + role +
+workspace/server identity + version`. Do not restore per-Binding
+lease/attest polling or persisted lifecycle state.
 
 ## Go typing
 

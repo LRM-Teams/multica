@@ -32,6 +32,8 @@ vi.mock("@multica/core/research", async (importOriginal) => {
         setD5RailOpen: () => void;
         d5RailMode: "chat";
         setD5RailMode: () => void;
+        d5Overlay: null;
+        setD5Overlay: () => void;
       }) => unknown,
     ) =>
       selector({
@@ -39,6 +41,8 @@ vi.mock("@multica/core/research", async (importOriginal) => {
         setD5RailOpen: vi.fn(),
         d5RailMode: "chat",
         setD5RailMode: vi.fn(),
+        d5Overlay: null,
+        setD5Overlay: vi.fn(),
       }),
   };
 });
@@ -109,7 +113,6 @@ describe("ResearchConstellationWorkspace projection mismatch", () => {
         snapshotNodes={snapshotNodes}
         selectedNode={null}
         onSelectNode={() => {}}
-        executionRows={[]}
         onOpenAgentPanel={() => {}}
         canvasMode="ready"
         activeLens="relations"
@@ -159,7 +162,6 @@ describe("ResearchConstellationWorkspace projection mismatch", () => {
         snapshotNodes={snapshotNodes}
         selectedNode={null}
         onSelectNode={() => {}}
-        executionRows={[]}
         onOpenAgentPanel={() => {}}
         canvasMode="ready"
         activeLens="relations"
@@ -197,7 +199,6 @@ describe("ResearchConstellationWorkspace typed graph recovery", () => {
         snapshotNodes={[]}
         selectedNode={null}
         onSelectNode={() => {}}
-        executionRows={[]}
         onOpenAgentPanel={() => {}}
         canvasMode="ready"
         activeLens="relations"
@@ -226,7 +227,6 @@ describe("ResearchConstellationWorkspace typed graph recovery", () => {
         snapshotNodes={[]}
         selectedNode={null}
         onSelectNode={() => {}}
-        executionRows={[]}
         onOpenAgentPanel={() => {}}
         canvasMode="ready"
         activeLens="relations"
@@ -249,6 +249,77 @@ describe("ResearchConstellationWorkspace typed graph recovery", () => {
 });
 
 describe("ResearchConstellationWorkspace local theme", () => {
+  it("closes a previously opened Agent panel when selecting another Work node", async () => {
+    const onCloseAgentPanel = vi.fn();
+    render(
+      <ResearchConstellationWorkspace
+        typedGraph={{
+          session_id: "s1",
+          graph_version: 1,
+          total_node_count: 1,
+          nodes: [
+            {
+              id: "agent-node-1",
+              session_id: "s1",
+              node_type: "work_item",
+              title: "Verify product roadmap",
+              level: "S",
+              status: "running",
+              summary: "",
+              actor_agent_id: "agent-1",
+              cluster_id: null,
+              confidence: null,
+              goal_version_id: null,
+              derived_from: null,
+              merged_from: [],
+              superseded_by: null,
+              restart_of: null,
+              invalidated_by: null,
+              superseded_at: null,
+              invalidated_at: null,
+              parent_id: null,
+              child_ids: [],
+              children_of: [],
+              created_at: "",
+              updated_at: "",
+            },
+          ],
+          edges: [],
+          clusters: [],
+          lineage: {
+            derived: {},
+            merged: {},
+            superseded: {},
+            restarted: {},
+            invalidated: {},
+            supersedes: {},
+          },
+        } satisfies TypedGraphResponse}
+        typedLoading={false}
+        typedError={false}
+        typedGraphSessionId="s1"
+        projectionSource="v6"
+        snapshotNodes={[]}
+        selectedNode={null}
+        onSelectNode={() => {}}
+        onOpenAgentPanel={() => {}}
+        onCloseAgentPanel={onCloseAgentPanel}
+        canvasMode="ready"
+        activeLens="relations"
+        sources={[]}
+        members={[]}
+        chatPanel={<div>chat</div>}
+        detailPanel={<div>detail</div>}
+        composer={<div>composer</div>}
+      />,
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: /Verify product roadmap/ }),
+    );
+    expect(onCloseAgentPanel).toHaveBeenCalledTimes(1);
+  });
+
   it("requests server-declared expansion without opening the result report", async () => {
     const onSelectNode = vi.fn();
     const onToggleNode = vi.fn();
@@ -302,7 +373,6 @@ describe("ResearchConstellationWorkspace local theme", () => {
         snapshotNodes={[]}
         selectedNode={null}
         onSelectNode={onSelectNode}
-        executionRows={[]}
         onOpenAgentPanel={() => {}}
         canvasMode="ready"
         activeLens="relations"
@@ -384,7 +454,6 @@ describe("ResearchConstellationWorkspace local theme", () => {
         snapshotNodes={snapshotNodes}
         selectedNode={null}
         onSelectNode={() => {}}
-        executionRows={[]}
         onOpenAgentPanel={() => {}}
         canvasMode="ready"
         activeLens="relations"

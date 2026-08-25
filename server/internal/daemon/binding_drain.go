@@ -68,12 +68,12 @@ func (d *Daemon) waitBindingDrain(ctx context.Context, delay time.Duration) erro
 	}
 }
 
-// beginBindingDrain is the Binding child's complete execution-plane response
-// to a Host prepare request. It closes the claim gate, asks only child-owned
+// beginWorkspaceDaemonDrain is the WorkspaceDaemon's complete execution-plane response
+// to a Computer prepare request. It closes the claim gate, asks only its own
 // turns to stop, and bounds their graceful drain before force-terminating only
-// provider processes owned by this child. Machine Upgrade orchestration,
+// provider processes owned by this WorkspaceDaemon. Machine Upgrade orchestration,
 // journaling, activation, and successor convergence remain Computer-owned.
-func (d *Daemon) beginBindingDrain(ctx context.Context) error {
+func (d *Daemon) beginWorkspaceDaemonDrain(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}

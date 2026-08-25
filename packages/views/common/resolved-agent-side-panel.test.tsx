@@ -119,7 +119,6 @@ function makeAgent(id = "agent-1"): Agent {
     runtime_config: {},
     custom_args: [],
     status: "idle",
-    max_concurrent_tasks: 1,
     model: "",
     thinking_level: "",
     owner_id: "owner-1",

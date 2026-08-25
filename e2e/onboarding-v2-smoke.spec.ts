@@ -100,7 +100,7 @@ test("onboarding v2 — zh-Hans renders Chinese labels", async ({ page, context 
   await page.goto("/onboarding");
   await page.waitForLoadState("networkidle");
 
-  await page.getByRole("button").first().click().catch(() => {});
+  await page.getByRole("button", { name: "在 web 端继续" }).click();
 
   // Source screen — Chinese question
   await expect(page.getByText("你是从哪里了解到 Multica 的？")).toBeVisible({ timeout: 10000 });

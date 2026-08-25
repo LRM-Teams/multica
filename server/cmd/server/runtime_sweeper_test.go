@@ -735,24 +735,24 @@ func TestExpireStaleQueuedTasksSkipsOfflineRuntimes(t *testing.T) {
 	// fix must catch independent of status.
 	var staleOnlineRT, offlineRT, freshOnlineRT string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, owner_id, last_seen_at)
-		VALUES ($1, 'stale-online-daemon-clock-test', 'clock test stale-online', 'local', 'pi', 'online', $2, now() - interval '10 minutes')
+		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, last_seen_at)
+		VALUES ($1, 'stale-online-daemon-clock-test', 'clock test stale-online', 'local', 'pi', 'online', now() - interval '10 minutes')
 		RETURNING id
-	`, testWorkspaceID, ownerID).Scan(&staleOnlineRT); err != nil {
+	`, testWorkspaceID).Scan(&staleOnlineRT); err != nil {
 		t.Fatalf("failed to insert stale-online runtime: %v", err)
 	}
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, owner_id, last_seen_at)
-		VALUES ($1, 'offline-daemon-clock-test', 'clock test offline', 'local', 'pi', 'offline', $2, now() - interval '10 minutes')
+		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, last_seen_at)
+		VALUES ($1, 'offline-daemon-clock-test', 'clock test offline', 'local', 'pi', 'offline', now() - interval '10 minutes')
 		RETURNING id
-	`, testWorkspaceID, ownerID).Scan(&offlineRT); err != nil {
+	`, testWorkspaceID).Scan(&offlineRT); err != nil {
 		t.Fatalf("failed to insert offline runtime: %v", err)
 	}
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, owner_id, last_seen_at)
-		VALUES ($1, 'online-daemon-clock-test', 'clock test online', 'local', 'pi', 'online', $2, now())
+		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, last_seen_at)
+		VALUES ($1, 'online-daemon-clock-test', 'clock test online', 'local', 'pi', 'online', now())
 		RETURNING id
-	`, testWorkspaceID, ownerID).Scan(&freshOnlineRT); err != nil {
+	`, testWorkspaceID).Scan(&freshOnlineRT); err != nil {
 		t.Fatalf("failed to insert fresh-online runtime: %v", err)
 	}
 
@@ -873,17 +873,17 @@ func TestExpireQueuedTasksOnOfflineRuntimes(t *testing.T) {
 	// Distinct daemon_ids satisfy UNIQUE(workspace_id, daemon_id, provider).
 	var offlineRT, onlineRT string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, owner_id)
-		VALUES ($1, 'offline-daemon-sweep-test', 'sweep test offline', 'local', 'pi', 'offline', $2)
+		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status)
+		VALUES ($1, 'offline-daemon-sweep-test', 'sweep test offline', 'local', 'pi', 'offline')
 		RETURNING id
-	`, testWorkspaceID, ownerID).Scan(&offlineRT); err != nil {
+	`, testWorkspaceID).Scan(&offlineRT); err != nil {
 		t.Fatalf("failed to insert offline runtime: %v", err)
 	}
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, owner_id)
-		VALUES ($1, 'online-daemon-sweep-test', 'sweep test online', 'local', 'pi', 'online', $2)
+		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status)
+		VALUES ($1, 'online-daemon-sweep-test', 'sweep test online', 'local', 'pi', 'online')
 		RETURNING id
-	`, testWorkspaceID, ownerID).Scan(&onlineRT); err != nil {
+	`, testWorkspaceID).Scan(&onlineRT); err != nil {
 		t.Fatalf("failed to insert online runtime: %v", err)
 	}
 

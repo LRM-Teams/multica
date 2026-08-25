@@ -130,42 +130,6 @@ type ResidentMessagePreparation interface {
 	PrepareMessageInput(context.Context, func(Message)) error
 }
 
-// ResidentReminderInput is one private Reminder system input. It is separate
-// from ResidentMessage so provider adapters cannot accidentally give it
-// canonical Message, reply, persistence, or pending-queue semantics.
-type ResidentReminderInput struct {
-	ReminderID string
-	Version    int64
-	Title      string
-	Anchor     ResidentReminderAnchor
-	Occurrence ResidentReminderOccurrence
-}
-
-type ResidentReminderAnchor struct {
-	Available           bool
-	ChannelID           string
-	MessageID           string
-	ThreadRootMessageID string
-	Target              string
-	ReplyTarget         string
-	Excerpt             string
-}
-
-type ResidentReminderOccurrence struct {
-	OccurrenceID string
-	ScheduledFor string
-	DueAt        string
-	Cadence      string
-	Timezone     string
-}
-
-// ResidentReminderInputReceiver accepts a Reminder only at the provider's
-// native idle input boundary. Acceptance starts a turn, so Done retains the
-// same admission meaning as ResidentMessageAcceptance.
-type ResidentReminderInputReceiver interface {
-	AcceptReminderInput(context.Context, ResidentReminderInput) (ResidentMessageAcceptance, error)
-}
-
 // ResidentMessageAcceptance separates native input acceptance from the
 // provider turn it may start. Done reports that the runtime is idle again;
 // callers must keep turn admission closed until it resolves. Messages exposes
@@ -228,11 +192,12 @@ type ResidentPendingTarget struct {
 	PendingCount int    `json:"pending_count"`
 }
 
-// ResidentPendingNotice tells a busy runtime that concrete canonical Messages
-// remain Pending without crossing their bodies into runtime context.
+// ResidentPendingNotice tells a runtime that its machine-local Inbox has work
+// without crossing Message or App item bodies into runtime context.
 type ResidentPendingNotice struct {
-	TotalPending   int                     `json:"total_pending"`
-	ChangedTargets []ResidentPendingTarget `json:"changed_targets"`
+	TotalPending    int                     `json:"total_pending,omitempty"`
+	ChangedTargets  []ResidentPendingTarget `json:"changed_targets,omitempty"`
+	PendingAppItems int                     `json:"pending_app_items,omitempty"`
 }
 
 // ResidentPendingNoticeInput is an optional resident-runtime capability. A nil
@@ -240,6 +205,13 @@ type ResidentPendingNotice struct {
 // input boundary; it does not mean any Pending Message was consumed.
 type ResidentPendingNoticeInput interface {
 	AcceptPendingNotice(context.Context, ResidentPendingNotice) error
+}
+
+// ResidentIdleInboxNoticeInput accepts the same content-free Inbox notice at
+// the provider's native idle boundary. Acceptance starts a turn, so Done keeps
+// the same admission meaning as ResidentMessageAcceptance.
+type ResidentIdleInboxNoticeInput interface {
+	AcceptIdleInboxNotice(context.Context, ResidentPendingNotice) (ResidentMessageAcceptance, error)
 }
 
 // PiRunIdentity is the durable mixed-run binding shared by one-shot and

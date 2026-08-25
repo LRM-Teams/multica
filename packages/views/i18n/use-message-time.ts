@@ -99,6 +99,22 @@ export function fullTimestamp(valueMs: number, tz: string, locale: string): stri
   }).format(valueMs);
 }
 
+// Calendar day only, no clock — profile "created"/"joined" rows. Locale-aware
+// (the panels used to hand-write toLocaleDateString, one of them pinned to
+// "en-US", so a zh viewer read an English date).
+export function formatCalendarDate(
+  valueMs: number,
+  tz: string,
+  locale: string,
+): string {
+  return new Intl.DateTimeFormat(locale, {
+    timeZone: tz,
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  }).format(valueMs);
+}
+
 // Date-divider label: today / yesterday / localized weekday + date.
 export function messageDayLabel(
   valueMs: number,

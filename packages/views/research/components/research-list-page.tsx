@@ -13,6 +13,13 @@ import {
 } from "@multica/core/research";
 import type { ResearchSession } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@multica/ui/components/ui/select";
 import { Textarea } from "@multica/ui/components/ui/textarea";
 import { cn } from "@multica/ui/lib/utils";
 import { AlertCircle, Loader2, SlidersHorizontal } from "lucide-react";
@@ -41,6 +48,7 @@ import {
 } from "../lib/session-list-filter";
 import { countSessionsByStatus } from "../lib/session-list-counts";
 import { RESEARCH_LIST_WORKBENCH_CLASS } from "../lib/research-list-layout";
+import { preferredResearchDirectorId } from "../lib/preferred-research-director";
 import {
   clearResearchListPersist,
   readResearchListPersist,
@@ -90,6 +98,14 @@ type ComposerDraft = {
   orchestratorVersion: "research-run-v5" | "research-run-v6";
   directorAgentId: string;
 };
+
+/**
+ * Sentinel for "run without a Director" (legacy V5 fleet). Base UI Select
+ * rejects "" as an item value, and the engine version string must never
+ * surface in the UI — the user picks a behavior, not an orchestrator tag.
+ */
+const CLASSIC_FLEET_VALUE = "__classic_fleet__";
+const PREFERRED_DIRECTOR_UNAVAILABLE_VALUE = "__preferred_director_unavailable__";
 
 function emptyComposer(uiLanguage?: string): ComposerDraft {
   return {
@@ -189,12 +205,24 @@ export function ResearchListPage() {
   const fleetQuery = useQuery(researchFleetOptions(wsId));
   const agentsQuery = useQuery(agentListOptions(wsId));
   const availableDirectors = (agentsQuery.data ?? []).filter(
-    (agent) => agent.archived_at == null,
+    (agent) =>
+      agent.archived_at == null &&
+      Boolean(agent.runtime_id) &&
+      agent.runtime_status === "online",
   );
   const selectedDirectorId =
     orchestratorVersion === "research-run-v6"
-      ? directorAgentId || availableDirectors[0]?.id || ""
+      ? directorAgentId || preferredResearchDirectorId(availableDirectors)
       : "";
+  const selectedDirector = availableDirectors.find(
+    (agent) => agent.id === selectedDirectorId,
+  );
+  const leadLabel =
+    orchestratorVersion === "research-run-v5"
+      ? t(($) => $.home.lead_fleet_option)
+      : selectedDirector
+        ? selectedDirector.display_name || selectedDirector.name || selectedDirector.id
+        : t(($) => $.home.preferred_director_unavailable_label);
   const { data, isLoading, isFetching, isError, error, refetch } = useQuery(
     researchSessionListOptions(wsId),
   );
@@ -222,15 +250,15 @@ export function ResearchListPage() {
             language,
             selectedTemplate ? appliedTemplatePrompt : null,
           ),
-          depth_tier: params.depth_tier,
+          depthTier: params.depth_tier,
           language: params.language,
-          source_weights: params.source_weights,
+          sourceWeights: params.source_weights,
           ...(draftTitle?.trim() ? { title: draftTitle.trim() } : {}),
           ...(createRequestIdRef.current
-            ? { client_request_id: createRequestIdRef.current }
+            ? { clientRequestId: createRequestIdRef.current }
             : {}),
           ...(orchestratorVersion === "research-run-v6"
-            ? { orchestrator_version: orchestratorVersion, director_agent_id: selectedDirectorId }
+            ? { orchestratorVersion, directorAgentId: selectedDirectorId }
             : {}),
         },
         wsId,
@@ -412,7 +440,10 @@ export function ResearchListPage() {
       uiLanguage: language,
     });
     if (orchestratorVersion === "research-run-v6" && !selectedDirectorId) {
-      setComposer((prev) => ({ ...prev, paramsOpen: true }));
+      const trigger = document.querySelector(
+        '[data-testid="research-create-lead"]',
+      );
+      if (trigger instanceof HTMLElement) trigger.focus();
       return;
     }
     if (!result.ok) {
@@ -440,12 +471,31 @@ export function ResearchListPage() {
   };
 
   // LRM-787: keep the draft on failure and surface the error inside the card.
-  const createError =
-    create.isError && create.error instanceof Error && create.error.message
-      ? create.error.message
-      : create.isError
-        ? t(($) => $.home.create_failed)
-        : null;
+  const createErrorBody =
+    create.isError &&
+    typeof create.error === "object" &&
+    create.error != null &&
+    "body" in create.error &&
+    typeof create.error.body === "object" &&
+    create.error.body != null
+      ? (create.error.body as { code?: unknown })
+      : null;
+  const createErrorCode =
+    typeof createErrorBody?.code === "string" ? createErrorBody.code : null;
+  const localizedCreateError =
+    createErrorCode === "research.v6.director_runtime_offline"
+      ? t(($) => $.home.director_runtime_offline)
+      : createErrorCode === "research.v6.bootstrap_pending"
+        ? t(($) => $.home.bootstrap_pending)
+        : createErrorCode?.startsWith("research.v6.director_")
+          ? t(($) => $.home.director_unavailable)
+          : null;
+  const createError = create.isError
+    ? localizedCreateError ??
+      (create.error instanceof Error && create.error.message
+        ? create.error.message
+        : t(($) => $.home.create_failed))
+    : null;
   if (createError) lastCreateErrorRef.current = createError;
   const visibleCreateError =
     createError ?? (createRetrying ? lastCreateErrorRef.current : null);
@@ -502,7 +552,7 @@ export function ResearchListPage() {
     return (
       <div className="space-y-6">
         {inProgress.length > 0 && (
-          <section>
+          <section data-testid="research-session-group-in-progress">
             <h2 className="px-3 text-xs font-medium text-muted-foreground">
               {t(($) => $.groups.in_progress)}
               <span className="ml-1.5 tabular-nums font-medium">
@@ -513,7 +563,7 @@ export function ResearchListPage() {
           </section>
         )}
         {completed.length > 0 && (
-          <section>
+          <section data-testid="research-session-group-completed">
             <h2 className="px-3 text-xs font-medium text-muted-foreground">
               {t(($) => $.groups.completed)}
               <span className="ml-1.5 tabular-nums font-medium">
@@ -524,7 +574,7 @@ export function ResearchListPage() {
           </section>
         )}
         {failed.length > 0 && (
-          <section>
+          <section data-testid="research-session-group-failed">
             <h2 className="px-3 text-xs font-medium text-muted-foreground">
               {t(($) => $.filter.status_failed)}
               <span className="ml-1.5 tabular-nums font-medium">
@@ -695,6 +745,60 @@ export function ResearchListPage() {
                     </p>
                   </div>
                   <div className="flex w-full flex-col gap-2 md:w-auto md:flex-row md:items-center">
+                    {/* Critique 2026-08-21 P0: one behavior-named decision — who
+                        hosts the run. Picking an agent runs V6; the classic
+                        fleet option maps to V5. Engine strings stay internal. */}
+                    <Select
+                      value={
+                        orchestratorVersion === "research-run-v6"
+                          ? selectedDirectorId || PREFERRED_DIRECTOR_UNAVAILABLE_VALUE
+                          : CLASSIC_FLEET_VALUE
+                      }
+                      onValueChange={(next) => {
+                        if (
+                          createBusy ||
+                          typeof next !== "string" ||
+                          next === "" ||
+                          next === PREFERRED_DIRECTOR_UNAVAILABLE_VALUE
+                        ) {
+                          return;
+                        }
+                        setComposer((prev) => ({
+                          ...prev,
+                          orchestratorVersion:
+                            next === CLASSIC_FLEET_VALUE
+                              ? "research-run-v5"
+                              : "research-run-v6",
+                          directorAgentId: next === CLASSIC_FLEET_VALUE ? "" : next,
+                        }));
+                      }}
+                    >
+                      <SelectTrigger
+                        aria-label={t(($) => $.d5.rail.director_role)}
+                        data-testid="research-create-lead"
+                        className="h-10 w-full rounded-full px-3.5 text-sm font-medium md:h-8 md:w-auto md:max-w-56"
+                      >
+                        <span className="shrink-0 text-muted-foreground">
+                          {t(($) => $.home.lead_prefix)}
+                        </span>
+                        <SelectValue>{leadLabel}</SelectValue>
+                      </SelectTrigger>
+                      <SelectContent align="start">
+                        {!selectedDirectorId ? (
+                          <SelectItem disabled value={PREFERRED_DIRECTOR_UNAVAILABLE_VALUE}>
+                            {t(($) => $.home.preferred_director_unavailable_label)}
+                          </SelectItem>
+                        ) : null}
+                        {availableDirectors.map((agent) => (
+                          <SelectItem key={agent.id} value={agent.id}>
+                            {agent.display_name || agent.name || agent.id}
+                          </SelectItem>
+                        ))}
+                        <SelectItem value={CLASSIC_FLEET_VALUE}>
+                          {t(($) => $.home.lead_fleet_option)}
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
                     <Button
                       type="button"
                       variant="outline"
@@ -742,6 +846,13 @@ export function ResearchListPage() {
                     </Button>
                   </div>
                 </div>
+                {orchestratorVersion === "research-run-v6" &&
+                !agentsQuery.isLoading &&
+                !selectedDirectorId ? (
+                  <p className="border-t px-3 py-2 text-xs text-destructive md:px-3.5" role="alert">
+                    {t(($) => $.home.preferred_director_unavailable)}
+                  </p>
+                ) : null}
               </div>
 
               <ResearchCreateParamsPanel
@@ -765,43 +876,6 @@ export function ResearchListPage() {
                   }))
                 }
               />
-              <div className="mt-2 rounded-xl border border-border/60 bg-card/50 p-3" data-testid="research-create-director-options">
-                <label className="flex items-center gap-2 text-xs font-medium text-foreground">
-                  <span>{t(($) => $.d5.rail.director_role)}</span>
-                  <select
-                    value={orchestratorVersion}
-                    onChange={(event) =>
-                      setComposer((prev) => ({
-                        ...prev,
-                        orchestratorVersion: event.target.value as ComposerDraft["orchestratorVersion"],
-                        directorAgentId: event.target.value === "research-run-v6" ? prev.directorAgentId : "",
-                      }))
-                    }
-                    className="rounded-md border border-input bg-background px-2 py-1 text-xs"
-                  >
-                    <option value="research-run-v5">{t(($) => $.panel.fleet)}</option>
-                    <option value="research-run-v6">{t(($) => $.d5.rail.director_role)}</option>
-                  </select>
-                </label>
-                {orchestratorVersion === "research-run-v6" ? (
-                  <select
-                    aria-label={t(($) => $.d5.rail.director_role)}
-                    value={selectedDirectorId}
-                    onChange={(event) =>
-                      setComposer((prev) => ({ ...prev, directorAgentId: event.target.value }))
-                    }
-                    className="mt-2 w-full rounded-md border border-input bg-background px-2 py-1.5 text-xs"
-                  >
-                    <option value="">{t(($) => $.d5.rail.director_fallback)}</option>
-                    {availableDirectors.map((agent) => (
-                      <option key={agent.id} value={agent.id}>
-                        {agent.display_name || agent.name || agent.id}
-                      </option>
-                    ))}
-                  </select>
-                ) : null}
-              </div>
-
               {visibleCreateError ? (
                 <div
                   role="alert"

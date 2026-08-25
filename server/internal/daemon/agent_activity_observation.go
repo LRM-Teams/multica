@@ -13,12 +13,11 @@ import (
 // processInstanceID is local launch fencing; the remaining fields are the
 // activity state and timeline fact.
 type activityBroadcast struct {
-	activityKind      string
-	detail            string
-	detailKind        string
-	processInstanceID string
-	trajectory        []protocol.AgentActivityEntry
-	timing            protocol.AgentActivityTiming
+	activityKind string
+	detail       string
+	detailKind   string
+	trajectory   []protocol.AgentActivityEntry
+	timing       protocol.AgentActivityTiming
 }
 
 // Observe is the only typed Message/runtime-fact to Activity presentation
@@ -56,21 +55,16 @@ func (p *agentActivityProducer) observeLocked(observation AgentObservation) erro
 
 	snapshot := state.snapshot
 	snapshot.AgentID = observation.AgentID
-	snapshot.LaunchID = observation.LaunchID
 	snapshot.DaemonInstanceID = p.daemonInstanceID
 	if broadcast.activityKind != "" {
 		snapshot.ActivityKind = broadcast.activityKind
 		snapshot.DetailKind = broadcast.detailKind
-		snapshot.ProcessInstanceID = broadcast.processInstanceID
 	} else if snapshot.ActivityKind == "" {
 		snapshot.ActivityKind = protocol.ActivityKindOnline
 		snapshot.DetailKind = broadcast.detailKind
 	}
-	snapshot.ClientSequence = 0
-	snapshot.ProducerFactID = ""
 	snapshot.ObservedAt = observation.At.UTC()
-	snapshot.ProbeID = ""
-	if err := p.publishLocked(snapshot, broadcast); err != nil {
+	if err := p.publishLocked(key, snapshot, broadcast); err != nil {
 		return err
 	}
 	if data, ok := observation.Data.(AgentRuntimeObservationData); ok {
@@ -118,17 +112,17 @@ func duplicateIdleActivity(previous protocol.AgentActivitySnapshot, broadcast ac
 // CompleteCompactionIfActive emits the missing provider finish before the first
 // resumed Message-runtime observation. It is scoped to one concrete launch so
 // a replacement process cannot inherit stale compaction state.
-func (p *agentActivityProducer) CompleteCompactionIfActive(agentID, launchID string, data AgentRuntimeStageObservationData, at time.Time) (bool, error) {
+func (p *agentActivityProducer) CompleteCompactionIfActive(agentID, agentInstanceID string, data AgentRuntimeStageObservationData, at time.Time) (bool, error) {
 	if p == nil {
 		return false, errors.New("Activity producer is not configured")
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	state := p.states[agentActivityProducerKey{agentID: agentID, launchID: launchID}]
+	state := p.states[agentActivityProducerKey{agentID: agentID, agentInstanceID: agentInstanceID}]
 	if state == nil || !state.compaction.active {
 		return false, nil
 	}
-	observation := AgentObservation{AgentID: agentID, LaunchID: launchID, Kind: AgentObservationRuntimeCompacted, Data: data, At: at}
+	observation := AgentObservation{AgentID: agentID, AgentInstanceID: agentInstanceID, Kind: AgentObservationRuntimeCompacted, Data: data, At: at}
 	if err := observation.Validate(); err != nil {
 		return false, err
 	}
@@ -138,13 +132,13 @@ func (p *agentActivityProducer) CompleteCompactionIfActive(agentID, launchID str
 	return true, nil
 }
 
-func (p *agentActivityProducer) InterruptCompactionIfActive(agentID, launchID string) bool {
+func (p *agentActivityProducer) InterruptCompactionIfActive(agentID, agentInstanceID string) bool {
 	if p == nil {
 		return false
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	state := p.states[agentActivityProducerKey{agentID: agentID, launchID: launchID}]
+	state := p.states[agentActivityProducerKey{agentID: agentID, agentInstanceID: agentInstanceID}]
 	if state == nil || !state.compaction.active {
 		return false
 	}
@@ -164,8 +158,7 @@ func (p *agentActivityProducer) markCompactionStale(key agentActivityProducerKey
 	}
 	state.compaction.cancelStale = nil
 	observation := AgentObservation{
-		AgentID: key.agentID, LaunchID: key.launchID,
-		Kind: AgentObservationRuntimeCompactionStale, Data: state.compaction.runtime,
+		AgentID: key.agentID, AgentInstanceID: key.agentInstanceID, Kind: AgentObservationRuntimeCompactionStale, Data: state.compaction.runtime,
 		At: p.now().UTC(),
 	}
 	if observation.Validate() == nil && p.observeLocked(observation) == nil {
@@ -174,7 +167,7 @@ func (p *agentActivityProducer) markCompactionStale(key agentActivityProducerKey
 }
 
 func (p *agentActivityProducer) observationStateLocked(observation AgentObservation) (agentActivityProducerKey, *agentActivityProducerState, error) {
-	key := agentActivityProducerKey{agentID: observation.AgentID, launchID: observation.LaunchID}
+	key := agentActivityProducerKey{agentID: observation.AgentID, agentInstanceID: observation.AgentInstanceID}
 	state := p.states[key]
 	if state == nil {
 		return agentActivityProducerKey{}, nil, errors.New("Activity is not managed for this Agent launch")
@@ -189,8 +182,7 @@ func activityBroadcastForObservation(observation AgentObservation) (activityBroa
 
 	switch observation.Kind {
 	case AgentObservationRuntimeReady:
-		data := observation.Data.(AgentRuntimeObservationData)
-		broadcast.activityKind, broadcast.detailKind, broadcast.processInstanceID, broadcast.detail = protocol.ActivityKindOnline, "idle", data.ProcessInstanceID, "Online"
+		broadcast.activityKind, broadcast.detailKind, broadcast.detail = protocol.ActivityKindOnline, "idle", "Online"
 		entry, err = activityStatusEntry(broadcast.detailKind, broadcast.detail)
 	case AgentObservationRuntimeStarting:
 		broadcast.activityKind, broadcast.detailKind, broadcast.detail = protocol.ActivityKindWorking, "starting", "Starting…"
@@ -248,8 +240,9 @@ func activityBroadcastForObservation(observation AgentObservation) (activityBroa
 		broadcast.activityKind, broadcast.detailKind, broadcast.detail = protocol.ActivityKindOnline, "idle", "Idle"
 		entry, err = activityStatusEntry(broadcast.detailKind, broadcast.detail)
 	case AgentObservationRuntimeDiagnostic:
+		data := observation.Data.(AgentRuntimeDiagnosticObservationData)
 		broadcast.detailKind = "idle"
-		entry, err = activitySystemEntry("Runtime warning", "Provider reported a warning")
+		entry, err = formatActivityTimelineEntry(data.Source, data.Reference, data.Name, data.Kind, data.Detail)
 	case AgentObservationMessageBodyAccepted:
 		// Raft 1.0.16 shows "Message received" when an ordinary inbox
 		// body is accepted. Keep the presentation detail the UI already
@@ -272,7 +265,7 @@ func activityBroadcastForObservation(observation AgentObservation) (activityBroa
 		entry, err = activitySystemEntry(messageSendDraftSentTitle(), messageSendDraftSentSubtext(data.Target, data.Anyway))
 	case AgentObservationError:
 		data := observation.Data.(AgentErrorObservationData)
-		broadcast.activityKind, broadcast.detailKind, broadcast.processInstanceID, broadcast.detail = protocol.ActivityKindError, "runtime_error", data.ProcessInstanceID, strings.TrimSpace(data.Message)
+		broadcast.activityKind, broadcast.detailKind, broadcast.detail = protocol.ActivityKindError, "runtime_error", strings.TrimSpace(data.Message)
 		entry, err = activityStatusEntry(broadcast.detailKind, broadcast.detail)
 	case AgentObservationOffline:
 		data := observation.Data.(AgentErrorObservationData)

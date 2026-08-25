@@ -304,7 +304,7 @@ func (h *Handler) provisionOnboardingAgent(ctx context.Context, workspaceID, cre
 		WorkspaceID: workspaceID, Description: windyDescription, Instructions: windyInstructions,
 		AvatarUrl: pgtype.Text{String: windyAvatarURL, Valid: true}, AvatarSource: agentAvatarSourceAssigned,
 		RuntimeMode: runtime.RuntimeMode, RuntimeConfig: []byte("{}"), RuntimeID: runtime.ID,
-		MaxConcurrentTasks: 6, OwnerID: creatorID, CustomEnv: []byte("{}"), CustomArgs: []byte("[]"),
+		OwnerID: creatorID, CustomEnv: []byte("{}"), CustomArgs: []byte("[]"),
 		Model: pgtype.Text{String: model, Valid: true}, ThinkingLevel: thinking,
 	}, windyAgentName)
 	if err != nil {
@@ -348,7 +348,8 @@ func (h *Handler) pickWindyRuntime(w http.ResponseWriter, r *http.Request, works
 			writeError(w, http.StatusForbidden, "not a member of this workspace")
 			return db.AgentRuntime{}, false
 		}
-		if !canUseRuntimeForAgent(member, runtime) {
+		runtimeOwnerID, _ := h.resolveRuntimeOwnerQuery(r.Context(), runtime)
+		if !canUseRuntimeForAgent(member, runtime, runtimeOwnerID) {
 			writeError(w, http.StatusForbidden, "this runtime is private; only its owner or a workspace admin can create agents on it")
 			return db.AgentRuntime{}, false
 		}

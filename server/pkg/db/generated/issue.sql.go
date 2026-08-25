@@ -155,7 +155,7 @@ INSERT INTO issue (
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
     COALESCE($16::jsonb, '[]'::jsonb)
-) RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, forked_from_issue_id, forked_at_seq, forked_at_task_id
+) RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, forked_from_issue_id, forked_at_seq, forked_at_task_id, channel_goal_id, goal_required, execution_revision, execution_attempt_sequence
 `
 
 type CreateIssueParams struct {
@@ -225,6 +225,10 @@ func (q *Queries) CreateIssue(ctx context.Context, arg CreateIssueParams) (Issue
 		&i.ForkedFromIssueID,
 		&i.ForkedAtSeq,
 		&i.ForkedAtTaskID,
+		&i.ChannelGoalID,
+		&i.GoalRequired,
+		&i.ExecutionRevision,
+		&i.ExecutionAttemptSequence,
 	)
 	return i, err
 }
@@ -236,7 +240,7 @@ INSERT INTO issue (
     parent_issue_id, position, start_date, due_date, number, project_id, metadata
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
-) RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, forked_from_issue_id, forked_at_seq, forked_at_task_id
+) RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, forked_from_issue_id, forked_at_seq, forked_at_task_id, channel_goal_id, goal_required, execution_revision, execution_attempt_sequence
 `
 
 type CreateIssueWithMetadataParams struct {
@@ -309,6 +313,10 @@ func (q *Queries) CreateIssueWithMetadata(ctx context.Context, arg CreateIssueWi
 		&i.ForkedFromIssueID,
 		&i.ForkedAtSeq,
 		&i.ForkedAtTaskID,
+		&i.ChannelGoalID,
+		&i.GoalRequired,
+		&i.ExecutionRevision,
+		&i.ExecutionAttemptSequence,
 	)
 	return i, err
 }
@@ -321,8 +329,9 @@ INSERT INTO issue (
     origin_type, origin_id, acceptance_criteria
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-    $16, $17, COALESCE($18::jsonb, '[]'::jsonb)
-) RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, forked_from_issue_id, forked_at_seq, forked_at_task_id
+    $16, $17,
+    COALESCE($18::jsonb, '[]'::jsonb)
+) RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, forked_from_issue_id, forked_at_seq, forked_at_task_id, channel_goal_id, goal_required, execution_revision, execution_attempt_sequence
 `
 
 type CreateIssueWithOriginParams struct {
@@ -396,6 +405,10 @@ func (q *Queries) CreateIssueWithOrigin(ctx context.Context, arg CreateIssueWith
 		&i.ForkedFromIssueID,
 		&i.ForkedAtSeq,
 		&i.ForkedAtTaskID,
+		&i.ChannelGoalID,
+		&i.GoalRequired,
+		&i.ExecutionRevision,
+		&i.ExecutionAttemptSequence,
 	)
 	return i, err
 }
@@ -424,7 +437,7 @@ UPDATE issue SET
     metadata = metadata - $1::text,
     updated_at = now()
 WHERE id = $2 AND workspace_id = $3
-RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, forked_from_issue_id, forked_at_seq, forked_at_task_id
+RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, forked_from_issue_id, forked_at_seq, forked_at_task_id, channel_goal_id, goal_required, execution_revision, execution_attempt_sequence
 `
 
 type DeleteIssueMetadataKeyParams struct {
@@ -466,12 +479,16 @@ func (q *Queries) DeleteIssueMetadataKey(ctx context.Context, arg DeleteIssueMet
 		&i.ForkedFromIssueID,
 		&i.ForkedAtSeq,
 		&i.ForkedAtTaskID,
+		&i.ChannelGoalID,
+		&i.GoalRequired,
+		&i.ExecutionRevision,
+		&i.ExecutionAttemptSequence,
 	)
 	return i, err
 }
 
 const findActiveDuplicateIssue = `-- name: FindActiveDuplicateIssue :one
-SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, forked_from_issue_id, forked_at_seq, forked_at_task_id FROM issue
+SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, forked_from_issue_id, forked_at_seq, forked_at_task_id, channel_goal_id, goal_required, execution_revision, execution_attempt_sequence FROM issue
 WHERE workspace_id = $1
   AND status NOT IN ('done', 'cancelled')
   AND project_id IS NOT DISTINCT FROM $2::uuid
@@ -524,12 +541,16 @@ func (q *Queries) FindActiveDuplicateIssue(ctx context.Context, arg FindActiveDu
 		&i.ForkedFromIssueID,
 		&i.ForkedAtSeq,
 		&i.ForkedAtTaskID,
+		&i.ChannelGoalID,
+		&i.GoalRequired,
+		&i.ExecutionRevision,
+		&i.ExecutionAttemptSequence,
 	)
 	return i, err
 }
 
 const getIssue = `-- name: GetIssue :one
-SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, forked_from_issue_id, forked_at_seq, forked_at_task_id FROM issue
+SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, forked_from_issue_id, forked_at_seq, forked_at_task_id, channel_goal_id, goal_required, execution_revision, execution_attempt_sequence FROM issue
 WHERE id = $1
 `
 
@@ -564,56 +585,16 @@ func (q *Queries) GetIssue(ctx context.Context, id pgtype.UUID) (Issue, error) {
 		&i.ForkedFromIssueID,
 		&i.ForkedAtSeq,
 		&i.ForkedAtTaskID,
-	)
-	return i, err
-}
-
-const getIssueForTask = `-- name: GetIssueForTask :one
-SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority, i.assignee_type, i.assignee_id, i.creator_type, i.creator_id, i.parent_issue_id, i.acceptance_criteria, i.context_refs, i.position, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.origin_type, i.origin_id, i.first_executed_at, i.start_date, i.metadata, i.forked_from_issue_id, i.forked_at_seq, i.forked_at_task_id
-FROM issue i
-JOIN agent_inbox_event atq ON atq.issue_id = i.id
-WHERE atq.id::text = $1::text
-`
-
-// GetIssueForTask returns the issue linked to an agent task. The text comparison matches the
-// message-range queries whose callers carry the task ID as text.
-func (q *Queries) GetIssueForTask(ctx context.Context, dollar_1 string) (Issue, error) {
-	row := q.db.QueryRow(ctx, getIssueForTask, dollar_1)
-	var i Issue
-	err := row.Scan(
-		&i.ID,
-		&i.WorkspaceID,
-		&i.Title,
-		&i.Description,
-		&i.Status,
-		&i.Priority,
-		&i.AssigneeType,
-		&i.AssigneeID,
-		&i.CreatorType,
-		&i.CreatorID,
-		&i.ParentIssueID,
-		&i.AcceptanceCriteria,
-		&i.ContextRefs,
-		&i.Position,
-		&i.DueDate,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.Number,
-		&i.ProjectID,
-		&i.OriginType,
-		&i.OriginID,
-		&i.FirstExecutedAt,
-		&i.StartDate,
-		&i.Metadata,
-		&i.ForkedFromIssueID,
-		&i.ForkedAtSeq,
-		&i.ForkedAtTaskID,
+		&i.ChannelGoalID,
+		&i.GoalRequired,
+		&i.ExecutionRevision,
+		&i.ExecutionAttemptSequence,
 	)
 	return i, err
 }
 
 const getIssueByNumber = `-- name: GetIssueByNumber :one
-SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, forked_from_issue_id, forked_at_seq, forked_at_task_id FROM issue
+SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, forked_from_issue_id, forked_at_seq, forked_at_task_id, channel_goal_id, goal_required, execution_revision, execution_attempt_sequence FROM issue
 WHERE workspace_id = $1 AND number = $2
 `
 
@@ -653,12 +634,16 @@ func (q *Queries) GetIssueByNumber(ctx context.Context, arg GetIssueByNumberPara
 		&i.ForkedFromIssueID,
 		&i.ForkedAtSeq,
 		&i.ForkedAtTaskID,
+		&i.ChannelGoalID,
+		&i.GoalRequired,
+		&i.ExecutionRevision,
+		&i.ExecutionAttemptSequence,
 	)
 	return i, err
 }
 
 const getIssueByOrigin = `-- name: GetIssueByOrigin :one
-SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, forked_from_issue_id, forked_at_seq, forked_at_task_id FROM issue
+SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, forked_from_issue_id, forked_at_seq, forked_at_task_id, channel_goal_id, goal_required, execution_revision, execution_attempt_sequence FROM issue
 WHERE workspace_id = $1
   AND origin_type = $2
   AND origin_id = $3
@@ -673,9 +658,8 @@ type GetIssueByOriginParams struct {
 
 // Finds the issue stamped with a specific (origin_type, origin_id) pair.
 // Used by quick-create completion to deterministically locate the issue
-// produced by a given agent_inbox_event.id — robust against concurrent
-// issue creates by the same agent (assignment task + quick-create both
-// running with max_concurrent_tasks > 1).
+// produced by a given agent_inbox_event.id — robust against the same
+// agent creating other issues around the same time.
 func (q *Queries) GetIssueByOrigin(ctx context.Context, arg GetIssueByOriginParams) (Issue, error) {
 	row := q.db.QueryRow(ctx, getIssueByOrigin, arg.WorkspaceID, arg.OriginType, arg.OriginID)
 	var i Issue
@@ -707,12 +691,64 @@ func (q *Queries) GetIssueByOrigin(ctx context.Context, arg GetIssueByOriginPara
 		&i.ForkedFromIssueID,
 		&i.ForkedAtSeq,
 		&i.ForkedAtTaskID,
+		&i.ChannelGoalID,
+		&i.GoalRequired,
+		&i.ExecutionRevision,
+		&i.ExecutionAttemptSequence,
+	)
+	return i, err
+}
+
+const getIssueForTask = `-- name: GetIssueForTask :one
+SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority, i.assignee_type, i.assignee_id, i.creator_type, i.creator_id, i.parent_issue_id, i.acceptance_criteria, i.context_refs, i.position, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.origin_type, i.origin_id, i.first_executed_at, i.start_date, i.metadata, i.forked_from_issue_id, i.forked_at_seq, i.forked_at_task_id, i.channel_goal_id, i.goal_required, i.execution_revision, i.execution_attempt_sequence
+FROM issue i
+JOIN agent_inbox_event atq ON atq.issue_id = i.id
+WHERE atq.id::text = $1::text
+`
+
+// Returns the issue linked to an agent task. The text comparison matches the
+// message-range queries whose callers carry the task ID as text.
+func (q *Queries) GetIssueForTask(ctx context.Context, dollar_1 string) (Issue, error) {
+	row := q.db.QueryRow(ctx, getIssueForTask, dollar_1)
+	var i Issue
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Title,
+		&i.Description,
+		&i.Status,
+		&i.Priority,
+		&i.AssigneeType,
+		&i.AssigneeID,
+		&i.CreatorType,
+		&i.CreatorID,
+		&i.ParentIssueID,
+		&i.AcceptanceCriteria,
+		&i.ContextRefs,
+		&i.Position,
+		&i.DueDate,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Number,
+		&i.ProjectID,
+		&i.OriginType,
+		&i.OriginID,
+		&i.FirstExecutedAt,
+		&i.StartDate,
+		&i.Metadata,
+		&i.ForkedFromIssueID,
+		&i.ForkedAtSeq,
+		&i.ForkedAtTaskID,
+		&i.ChannelGoalID,
+		&i.GoalRequired,
+		&i.ExecutionRevision,
+		&i.ExecutionAttemptSequence,
 	)
 	return i, err
 }
 
 const getIssueInWorkspace = `-- name: GetIssueInWorkspace :one
-SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, forked_from_issue_id, forked_at_seq, forked_at_task_id FROM issue
+SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, forked_from_issue_id, forked_at_seq, forked_at_task_id, channel_goal_id, goal_required, execution_revision, execution_attempt_sequence FROM issue
 WHERE id = $1 AND workspace_id = $2
 `
 
@@ -752,12 +788,16 @@ func (q *Queries) GetIssueInWorkspace(ctx context.Context, arg GetIssueInWorkspa
 		&i.ForkedFromIssueID,
 		&i.ForkedAtSeq,
 		&i.ForkedAtTaskID,
+		&i.ChannelGoalID,
+		&i.GoalRequired,
+		&i.ExecutionRevision,
+		&i.ExecutionAttemptSequence,
 	)
 	return i, err
 }
 
 const listChildIssues = `-- name: ListChildIssues :many
-SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, forked_from_issue_id, forked_at_seq, forked_at_task_id FROM issue
+SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, forked_from_issue_id, forked_at_seq, forked_at_task_id, channel_goal_id, goal_required, execution_revision, execution_attempt_sequence FROM issue
 WHERE parent_issue_id = $1
 ORDER BY position ASC, created_at DESC
 `
@@ -799,6 +839,10 @@ func (q *Queries) ListChildIssues(ctx context.Context, parentIssueID pgtype.UUID
 			&i.ForkedFromIssueID,
 			&i.ForkedAtSeq,
 			&i.ForkedAtTaskID,
+			&i.ChannelGoalID,
+			&i.GoalRequired,
+			&i.ExecutionRevision,
+			&i.ExecutionAttemptSequence,
 		); err != nil {
 			return nil, err
 		}
@@ -811,7 +855,7 @@ func (q *Queries) ListChildIssues(ctx context.Context, parentIssueID pgtype.UUID
 }
 
 const listChildrenByParents = `-- name: ListChildrenByParents :many
-SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, forked_from_issue_id, forked_at_seq, forked_at_task_id FROM issue
+SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, forked_from_issue_id, forked_at_seq, forked_at_task_id, channel_goal_id, goal_required, execution_revision, execution_attempt_sequence FROM issue
 WHERE workspace_id = $1
   AND parent_issue_id = ANY($2::uuid[])
 ORDER BY parent_issue_id, position ASC, created_at DESC
@@ -864,6 +908,10 @@ func (q *Queries) ListChildrenByParents(ctx context.Context, arg ListChildrenByP
 			&i.ForkedFromIssueID,
 			&i.ForkedAtSeq,
 			&i.ForkedAtTaskID,
+			&i.ChannelGoalID,
+			&i.GoalRequired,
+			&i.ExecutionRevision,
+			&i.ExecutionAttemptSequence,
 		); err != nil {
 			return nil, err
 		}
@@ -891,13 +939,11 @@ WHERE i.workspace_id = $1
   AND ($11::jsonb IS NULL OR i.metadata @> $11::jsonb)
   AND (
     $12::uuid IS NULL
-    -- (1) assignee is an agent owned by the user
     OR (i.assignee_type = 'agent' AND i.assignee_id IN (
           SELECT a.id FROM agent a
            WHERE a.workspace_id = $1
              AND a.owner_id     = $12::uuid
     ))
-    -- (2)(3)(4) assignee is a squad related to the user — three relations
   )
 ORDER BY i.position ASC, i.created_at DESC
 LIMIT $2 OFFSET $3
@@ -941,9 +987,8 @@ type ListIssuesRow struct {
 }
 
 // involves_user_id widens the assignee filter to surface issues where the user
-// is *indirectly* the assignee — via an owned agent or a squad they belong to /
-// lead / have an agent inside. The semantics intentionally exclude direct
-// member assignment (`assignee_type='member' AND assignee_id=involves_user_id`)
+// is indirectly the assignee via an owned agent. The semantics intentionally
+// exclude direct member assignment (`assignee_type='member' AND assignee_id=involves_user_id`)
 // because that is already the meaning of the `assignee_id` filter (tab 1
 // "Assigned to me"), and the two filters must produce disjoint result sets.
 func (q *Queries) ListIssues(ctx context.Context, arg ListIssuesParams) ([]ListIssuesRow, error) {
@@ -1000,7 +1045,7 @@ func (q *Queries) ListIssues(ctx context.Context, arg ListIssuesParams) ([]ListI
 }
 
 const listIssuesByProject = `-- name: ListIssuesByProject :many
-SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, forked_from_issue_id, forked_at_seq, forked_at_task_id FROM issue
+SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, forked_from_issue_id, forked_at_seq, forked_at_task_id, channel_goal_id, goal_required, execution_revision, execution_attempt_sequence FROM issue
 WHERE project_id = $1 AND workspace_id = $2
 ORDER BY created_at ASC
 `
@@ -1047,6 +1092,10 @@ func (q *Queries) ListIssuesByProject(ctx context.Context, arg ListIssuesByProje
 			&i.ForkedFromIssueID,
 			&i.ForkedAtSeq,
 			&i.ForkedAtTaskID,
+			&i.ChannelGoalID,
+			&i.GoalRequired,
+			&i.ExecutionRevision,
+			&i.ExecutionAttemptSequence,
 		); err != nil {
 			return nil, err
 		}
@@ -1115,8 +1164,7 @@ type ListOpenIssuesRow struct {
 	Metadata      []byte             `json:"metadata"`
 }
 
-// See ListIssues for the semantics of involves_user_id (mirrors the 4-branch
-// filter; member-direct assignment is intentionally excluded).
+// See ListIssues for the semantics of involves_user_id.
 func (q *Queries) ListOpenIssues(ctx context.Context, arg ListOpenIssuesParams) ([]ListOpenIssuesRow, error) {
 	rows, err := q.db.Query(ctx, listOpenIssues,
 		arg.WorkspaceID,
@@ -1207,14 +1255,13 @@ func (q *Queries) MarkIssueFirstExecuted(ctx context.Context, id pgtype.UUID) (M
 	return i, err
 }
 
-
 const setIssueMetadataKey = `-- name: SetIssueMetadataKey :one
 
 UPDATE issue SET
     metadata = jsonb_set(metadata, ARRAY[$1::text], $2::jsonb),
     updated_at = now()
 WHERE id = $3 AND workspace_id = $4
-RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, forked_from_issue_id, forked_at_seq, forked_at_task_id
+RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, forked_from_issue_id, forked_at_seq, forked_at_task_id, channel_goal_id, goal_required, execution_revision, execution_attempt_sequence
 `
 
 type SetIssueMetadataKeyParams struct {
@@ -1264,6 +1311,10 @@ func (q *Queries) SetIssueMetadataKey(ctx context.Context, arg SetIssueMetadataK
 		&i.ForkedFromIssueID,
 		&i.ForkedAtSeq,
 		&i.ForkedAtTaskID,
+		&i.ChannelGoalID,
+		&i.GoalRequired,
+		&i.ExecutionRevision,
+		&i.ExecutionAttemptSequence,
 	)
 	return i, err
 }
@@ -1284,7 +1335,7 @@ UPDATE issue SET
     acceptance_criteria = COALESCE($13::jsonb, acceptance_criteria),
     updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, forked_from_issue_id, forked_at_seq, forked_at_task_id
+RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, forked_from_issue_id, forked_at_seq, forked_at_task_id, channel_goal_id, goal_required, execution_revision, execution_attempt_sequence
 `
 
 type UpdateIssueParams struct {
@@ -1348,6 +1399,10 @@ func (q *Queries) UpdateIssue(ctx context.Context, arg UpdateIssueParams) (Issue
 		&i.ForkedFromIssueID,
 		&i.ForkedAtSeq,
 		&i.ForkedAtTaskID,
+		&i.ChannelGoalID,
+		&i.GoalRequired,
+		&i.ExecutionRevision,
+		&i.ExecutionAttemptSequence,
 	)
 	return i, err
 }
@@ -1357,7 +1412,7 @@ UPDATE issue SET
     status = $2,
     updated_at = now()
 WHERE id = $1 AND workspace_id = $3
-RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, forked_from_issue_id, forked_at_seq, forked_at_task_id
+RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, forked_from_issue_id, forked_at_seq, forked_at_task_id, channel_goal_id, goal_required, execution_revision, execution_attempt_sequence
 `
 
 type UpdateIssueStatusParams struct {
@@ -1398,6 +1453,10 @@ func (q *Queries) UpdateIssueStatus(ctx context.Context, arg UpdateIssueStatusPa
 		&i.ForkedFromIssueID,
 		&i.ForkedAtSeq,
 		&i.ForkedAtTaskID,
+		&i.ChannelGoalID,
+		&i.GoalRequired,
+		&i.ExecutionRevision,
+		&i.ExecutionAttemptSequence,
 	)
 	return i, err
 }

@@ -42,7 +42,7 @@ func TestAgentReadiness_StaleHeartbeatIsNotReady(t *testing.T) {
 	staleAgent, err := q.CreateAgent(ctx, db.CreateAgentParams{
 		WorkspaceID: ws.ID, Name: "stale-readiness-agent", DisplayName: "Stale Readiness Agent",
 		Description: "test", RuntimeMode: "local", RuntimeConfig: []byte("{}"), RuntimeID: staleRuntimeID,
-		MaxConcurrentTasks: 1, Instructions: "", CustomEnv: []byte("{}"), CustomArgs: []byte("[]"),
+		Instructions: "", CustomEnv: []byte("{}"), CustomArgs: []byte("[]"),
 		Model: pgtype.Text{String: "composer-1.5", Valid: true},
 	})
 	require.NoError(t, err)
@@ -64,7 +64,7 @@ func TestAgentReadiness_StaleHeartbeatIsNotReady(t *testing.T) {
 	freshAgent, err := q.CreateAgent(ctx, db.CreateAgentParams{
 		WorkspaceID: ws.ID, Name: "fresh-readiness-agent", DisplayName: "Fresh Readiness Agent",
 		Description: "test", RuntimeMode: "local", RuntimeConfig: []byte("{}"), RuntimeID: freshRuntimeID,
-		MaxConcurrentTasks: 1, Instructions: "", CustomEnv: []byte("{}"), CustomArgs: []byte("[]"),
+		Instructions: "", CustomEnv: []byte("{}"), CustomArgs: []byte("[]"),
 		Model: pgtype.Text{String: "composer-1.5", Valid: true},
 	})
 	require.NoError(t, err)

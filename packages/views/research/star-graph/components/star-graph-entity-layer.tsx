@@ -1,17 +1,20 @@
 "use client";
 
+import type { CSSProperties } from "react";
 import {
   StarGraphNode,
   resolveStarGraphState,
   type StarGraphTier,
 } from "@multica/ui/components/star-graph";
 import { cn } from "@multica/ui/lib/utils";
+import { agentColor } from "../../../common/agent-color";
 import type { D5LensDisplayHints } from "../../lib/research-d5-lens-display";
 import type { MotionDirective } from "../../motion/directives";
 import type { StarEntityView } from "../lib/star-canvas-view-model";
 import type { StarGraphExpansionControl } from "../lib/star-graph-expansion";
 
 export interface StarGraphEntityLabels {
+  originHeader: string;
   tierHeaders: Record<StarGraphTier, string>;
   documentCount: (count: number) => string;
   confidence: (value: number) => string;
@@ -50,6 +53,15 @@ export function StarGraphEntityLayer({
         const selected = entity.id === selectedNodeId;
         const focusable = selected || (!selectedNodeId && entity === entities[0]);
         const motion = motionDirectives?.get(entity.id) ?? null;
+        const identityColor = entity.view.agentId
+          ? agentColor(entity.view.agentId)
+          : null;
+        const identityStyle = identityColor
+          ? ({
+              "--sg-agent-identity": identityColor.fg,
+              "--sg-agent-identity-bg": identityColor.bg,
+            } as CSSProperties)
+          : undefined;
         const expandable =
           expansionControl?.expandableNodeIds.has(entity.id) ?? false;
         const expansionLoading =
@@ -80,9 +92,11 @@ export function StarGraphEntityLayer({
             title={entity.view.title}
             subLabel={entity.view.subLabel}
             headerLabel={
-              entity.view.tier === "s"
-                ? undefined
-                : labels.tierHeaders[entity.view.tier]
+              entity.view.semanticRole === "goal"
+                ? labels.originHeader
+                : entity.view.tier === "s"
+                  ? undefined
+                  : labels.tierHeaders[entity.view.tier]
             }
             semanticRole={entity.view.semanticRole}
             agentBadge={entity.view.agentBadge}
@@ -132,8 +146,11 @@ export function StarGraphEntityLayer({
               motion?.markerClass,
             )}
             style={{
+              ...identityStyle,
               left: entity.x - entity.radius,
               top: entity.y - entity.radius,
+              width: entity.radius * 2,
+              height: entity.radius * 2,
               ...motion?.style,
             }}
             onOpen={() => {

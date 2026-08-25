@@ -11,9 +11,9 @@ const (
 	// ScopeDaemonRuntime routes daemon wakeup frames through the Redis relay.
 	// It is consumed by the daemon WebSocket hub, not by browser clients.
 	ScopeDaemonRuntime = "daemon_runtime"
-	// ScopeDaemonWorkspaceRunner routes frames to the single current Runner
+	// ScopeDaemonWorkspaceDaemon routes frames to the single current Runner
 	// for a daemon/workspace pair.
-	ScopeDaemonWorkspaceRunner = "daemon_workspace_runner"
+	ScopeDaemonWorkspaceDaemon = "daemon_workspace_daemon"
 )
 
 // Broadcaster is the abstraction every realtime event producer should depend
@@ -55,10 +55,10 @@ type DaemonRuntimeDeliverer interface {
 	DeliverDaemonRuntime(scopeID string, frame []byte, eventID string)
 }
 
-// DaemonWorkspaceRunnerDeliverer consumes daemon/workspace Runner relay
+// DaemonWorkspaceDaemonDeliverer consumes daemon/workspace Runner relay
 // frames. It is intentionally separate from runtime fanout.
-type DaemonWorkspaceRunnerDeliverer interface {
-	DeliverDaemonWorkspaceRunner(scopeID string, frame []byte, eventID string)
+type DaemonWorkspaceDaemonDeliverer interface {
+	DeliverDaemonWorkspaceDaemon(scopeID string, frame []byte, eventID string)
 }
 
 // Compile-time assertion that *Hub continues to satisfy Broadcaster.

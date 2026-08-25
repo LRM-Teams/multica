@@ -104,7 +104,7 @@ func TestListClaimsOrdersEvidenceByRelationAndID(t *testing.T) {
 	}
 
 	store := NewPostgresStore(pool)
-	claims, err := store.ListClaims(ctx, fixture.sessionID)
+	claims, err := store.ListClaims(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil {
 		t.Fatalf("ListClaims: %v", err)
 	}

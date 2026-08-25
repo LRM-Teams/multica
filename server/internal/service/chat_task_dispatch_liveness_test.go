@@ -67,7 +67,7 @@ func TestCreateChatTaskRow_SucceedsRegardlessOfRuntimeConnectivity(t *testing.T)
 	agent, err := q.CreateAgent(ctx, db.CreateAgentParams{
 		WorkspaceID: ws.ID, Name: "chat-dispatch-liveness-agent", DisplayName: "Chat Dispatch Liveness Agent",
 		Description: "test", RuntimeMode: "local", RuntimeConfig: []byte("{}"), RuntimeID: deadRuntimeID,
-		MaxConcurrentTasks: 1, Instructions: "", CustomEnv: []byte("{}"), CustomArgs: []byte("[]"),
+		Instructions: "", CustomEnv: []byte("{}"), CustomArgs: []byte("[]"),
 		Model: pgtype.Text{String: "composer-1.5", Valid: true},
 	})
 	require.NoError(t, err)

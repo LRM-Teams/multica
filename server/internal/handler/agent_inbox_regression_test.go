@@ -15,7 +15,7 @@ import (
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-func TestAgentInboxDrainSerializesSameAgentAndKeepsDifferentAgentsConcurrent(t *testing.T) {
+func TestAgentInboxDrainSerializesSameAgentConversationLaneAndKeepsDifferentAgentsConcurrent(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -145,6 +145,159 @@ ON CONFLICT DO NOTHING`, secondChannelID, testWorkspaceID, secondAgentID); err !
 	}
 	if len(nextResp.Events) != 1 || nextResp.Events[0].AgentID != firstAgentID || nextResp.Events[0].ID == firstDelivery.ID {
 		t.Fatalf("queued first-agent drain = %+v, want the second event after release", nextResp.Events)
+	}
+}
+
+func TestAgentInboxDrainRunsDistinctIssueLanesUpToAgentLimit(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	runtimeID := createClaimReclaimRuntime(t, ctx, "issue-lane-runtime-"+uuid.NewString())
+	agentID, firstIssueID := createClaimReclaimAgentAndIssue(t, ctx, runtimeID, "Issue Lane Agent "+uuid.NewString()[:8])
+	if _, err := testPool.Exec(ctx, `UPDATE agent SET max_concurrent_tasks = 2 WHERE id = $1`, agentID); err != nil {
+		t.Fatalf("set issue concurrency limit: %v", err)
+	}
+
+	createIssue := func(title string) string {
+		t.Helper()
+		var issueID string
+		if err := testPool.QueryRow(ctx, `
+			INSERT INTO issue (workspace_id, title, status, priority, creator_id, creator_type, number, position)
+			VALUES (
+				$1, $2, 'in_progress', 'none', $3, 'member',
+				(SELECT COALESCE(MAX(number), 82649) + 1 FROM issue WHERE workspace_id = $1),
+				0
+			)
+			RETURNING id
+		`, testWorkspaceID, title, testUserID).Scan(&issueID); err != nil {
+			t.Fatalf("create issue %q: %v", title, err)
+		}
+		t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, issueID) })
+		return issueID
+	}
+	secondIssueID := createIssue("Second issue lane " + uuid.NewString()[:8])
+	thirdIssueID := createIssue("Third issue lane " + uuid.NewString()[:8])
+
+	createTask := func(issueID string, priority int32) db.AgentInboxEvent {
+		t.Helper()
+		task, err := testHandler.Queries.CreateAgentTask(ctx, db.CreateAgentTaskParams{
+			AgentID:   parseUUID(agentID),
+			RuntimeID: parseUUID(runtimeID),
+			IssueID:   parseUUID(issueID),
+			Priority:  priority,
+		})
+		if err != nil {
+			t.Fatalf("create task for issue %s: %v", issueID, err)
+		}
+		return task
+	}
+
+	first := createTask(firstIssueID, 100)
+	firstFollowUp := createTask(firstIssueID, 90)
+	second := createTask(secondIssueID, 10)
+	third := createTask(thirdIssueID, 5)
+	base := time.Now().Add(-time.Minute)
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_inbox_event
+		SET created_at = CASE id
+			WHEN $1 THEN $5::timestamptz
+			WHEN $2 THEN $5::timestamptz + interval '1 second'
+			WHEN $3 THEN $5::timestamptz + interval '2 seconds'
+			ELSE $5::timestamptz + interval '3 seconds'
+		END
+		WHERE id IN ($1, $2, $3, $4)
+	`, first.ID, firstFollowUp.ID, second.ID, third.ID, base); err != nil {
+		t.Fatalf("order issue lane tasks: %v", err)
+	}
+
+	runtime, err := testHandler.Queries.GetAgentRuntime(ctx, parseUUID(runtimeID))
+	if err != nil {
+		t.Fatalf("load runtime: %v", err)
+	}
+	lease := func() (db.AgentEventDelivery, error) {
+		return testHandler.leaseAgentInboxEventForRuntime(ctx, runtime)
+	}
+
+	firstDelivery, err := lease()
+	if err != nil || firstDelivery.InboxEventID != first.ID {
+		t.Fatalf("first lease=%+v err=%v, want first issue event %s", firstDelivery, err, first.ID)
+	}
+	secondDelivery, err := lease()
+	if err != nil || secondDelivery.InboxEventID != second.ID {
+		t.Fatalf("second lease=%+v err=%v, want distinct issue event %s while first issue is active", secondDelivery, err, second.ID)
+	}
+	if delivery, err := lease(); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("third issue bypassed max_concurrent_tasks=2: delivery=%+v err=%v", delivery, err)
+	}
+
+	channelID := seedChannelForTest(t, "issue-lane-conversation-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)
+		ON CONFLICT DO NOTHING
+	`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed conversation membership: %v", err)
+	}
+	conversationFirstID := createProductInboxEventForRuntime(t, runtimeID, agentID, channelID)
+	createProductInboxEventForRuntime(t, runtimeID, agentID, channelID)
+	conversationDelivery, err := lease()
+	if err != nil || uuidToString(conversationDelivery.InboxEventID) != conversationFirstID {
+		t.Fatalf("conversation lease=%+v err=%v, want conversation lane %s alongside issue lanes", conversationDelivery, err, conversationFirstID)
+	}
+	if delivery, err := lease(); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("second conversation run bypassed its single lane or third issue bypassed task cap: delivery=%+v err=%v", delivery, err)
+	}
+
+	settleClaimedInboxEventForTest(t, uuidToString(first.ID))
+	followUpDelivery, err := lease()
+	if err != nil || followUpDelivery.InboxEventID != firstFollowUp.ID {
+		t.Fatalf("follow-up lease=%+v err=%v, want same-issue follow-up %s after its lane released", followUpDelivery, err, firstFollowUp.ID)
+	}
+}
+
+func TestAgentInboxDrainIgnoresLeakedDeliveryForTerminalEvent(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	runtimeID := createClaimReclaimRuntime(t, ctx, "terminal-delivery-runtime-"+uuid.NewString())
+	agentID := createHandlerTestAgentOnRuntime(t, "Terminal Delivery Agent "+uuid.NewString()[:8], runtimeID)
+	channelID := seedChannelForTest(t, "terminal-delivery-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `INSERT INTO channel_member(channel_id,workspace_id,member_type,member_id) VALUES($1,$2,'agent',$3) ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed agent member: %v", err)
+	}
+	createProductInboxEventForRuntime(t, runtimeID, agentID, channelID)
+	createProductInboxEventForRuntime(t, runtimeID, agentID, channelID)
+
+	drain := func() DrainAgentInboxResponse {
+		req := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agent-inbox/drain", nil, testWorkspaceID, "terminal-delivery-daemon")
+		req = withURLParam(req, "runtimeId", runtimeID)
+		rec := httptest.NewRecorder()
+		testHandler.DrainAgentInboxByRuntime(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("drain: status=%d body=%s", rec.Code, rec.Body.String())
+		}
+		var response DrainAgentInboxResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+			t.Fatal(err)
+		}
+		return response
+	}
+
+	first := drain()
+	if len(first.Events) != 1 {
+		t.Fatalf("first drain events=%d, want 1", len(first.Events))
+	}
+	if _, err := testPool.Exec(ctx, `UPDATE agent_inbox_event SET status='suppressed',terminal_outcome='cancelled',terminal_delivery_id=$2::uuid,terminal_at=now(),completed_at=now(),updated_at=now() WHERE id=$1::uuid`, first.Events[0].ID, first.Events[0].DeliveryID); err != nil {
+		t.Fatal(err)
+	}
+
+	second := drain()
+	if len(second.Events) != 1 || second.Events[0].ID == first.Events[0].ID {
+		t.Fatalf("second drain=%+v, want queued event despite leaked terminal delivery", second.Events)
 	}
 }
 

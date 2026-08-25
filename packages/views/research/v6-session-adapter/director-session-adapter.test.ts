@@ -16,19 +16,19 @@ function node(
     id,
     kind: tier === "S" ? "result_s" : "insight",
     tier,
-    canonical_ref: { kind: tier === "S" ? "result" : "insight", id: RUN_ID },
-    branch_ids: [],
+    canonicalRef: { kind: tier === "S" ? "result" : "insight", id: RUN_ID },
+    branchIds: [],
     state: {
       execution: "succeeded",
       conclusion: "accepted",
       integration: "candidate",
     },
-    catalog_summary: `summary ${id}`,
+    catalogSummary: `summary ${id}`,
     absorbed: false,
     terminal: true,
     expandable: false,
-    hidden_child_count: 0,
-    updated_at: "2026-08-17T08:00:00Z",
+    hiddenChildCount: 0,
+    updatedAt: "2026-08-17T08:00:00Z",
     ...overrides,
   };
 }
@@ -42,10 +42,10 @@ function edge(
   return {
     id,
     kind,
-    from_node_id: from,
-    to_node_id: to,
+    fromNodeId: from,
+    toNodeId: to,
     canonical: true,
-    hidden_count: 0,
+    hiddenCount: 0,
     expandable: false,
   };
 }
@@ -79,6 +79,76 @@ describe("Director V6 canvas adapter", () => {
     expect(result.graph.nodes.map((item) => item.level)).toEqual(["s", "xl"]);
   });
 
+  it("folds assigned Agent identity into its Work node", () => {
+    const agentId = "00000000-0000-4000-8000-000000000201";
+    const result = adaptResearchV6DirectorCanvas({
+      runId: RUN_ID,
+      eventSequence: 10,
+      nodes: [
+        node("agent-node", "S", {
+          kind: "agent",
+          canonicalRef: { kind: "agent", id: agentId },
+          title: "Manus 技术研究员",
+        }),
+        node("work-node", "S", {
+          kind: "work_s",
+          canonicalRef: { kind: "work_item", id: RUN_ID },
+          title: "核验 Manus 技术进展",
+        }),
+      ],
+      edges: [edge("assignment", "work-node", "agent-node", "assigned_to")],
+    });
+
+    expect(result.graph.nodes).toHaveLength(1);
+    expect(result.graph.nodes[0]).toMatchObject({
+      id: "work-node",
+      actor_agent_id: agentId,
+      payload: {
+        assigned_agent: {
+          id: agentId,
+          name: "Manus 技术研究员",
+        },
+      },
+    });
+    expect(result.graph.edges).toEqual([]);
+  });
+
+  it("omits standalone Agent roster nodes while preserving completed results", () => {
+    const result = adaptResearchV6DirectorCanvas({
+      runId: RUN_ID,
+      eventSequence: 11,
+      nodes: [
+        node("result", "S", {
+          state: {
+            execution: "succeeded",
+            conclusion: "proposed",
+            integration: "candidate",
+          },
+        }),
+        node("idle-agent", "S", {
+          kind: "agent",
+          state: {
+            execution: "idle",
+            conclusion: "proposed",
+            integration: "unmatched",
+          },
+        }),
+        node("offline-agent", "S", {
+          kind: "agent",
+          state: {
+            execution: "offline",
+            conclusion: "proposed",
+            integration: "unmatched",
+          },
+        }),
+      ],
+      edges: [],
+    });
+
+    expect(result.graph.nodes.map((item) => item.id)).toEqual(["result"]);
+    expect(result.graph.nodes[0]?.status).toBe("succeeded");
+  });
+
   it("groups nodes into server-declared Branch territories", () => {
     const branchA = "00000000-0000-4000-8000-000000000101";
     const branchB = "00000000-0000-4000-8000-000000000102";
@@ -86,8 +156,8 @@ describe("Director V6 canvas adapter", () => {
       runId: RUN_ID,
       eventSequence: 9,
       nodes: [
-        node("one", "M", { branch_ids: [branchA] }),
-        node("two", "L", { branch_ids: [branchB, branchA] }),
+        node("one", "M", { branchIds: [branchA] }),
+        node("two", "L", { branchIds: [branchB, branchA] }),
       ],
       edges: [],
     });
@@ -104,14 +174,14 @@ describe("Director V6 canvas adapter", () => {
     ]);
   });
 
-  it("keeps the Goal tier canonical while using the top-size D5 presentation", () => {
+  it("renders canonical Goal as a compact origin below synthesis tiers", () => {
     const result = adaptResearchV6DirectorCanvas({
       runId: RUN_ID,
       eventSequence: 8,
       nodes: [node("goal", "GOAL", { kind: "goal" })],
       edges: [],
     });
-    expect(result.graph.nodes[0]?.level).toBe("xxl");
+    expect(result.graph.nodes[0]?.level).toBe("m");
     expect(result.graph.nodes[0]?.payload).toMatchObject({
       projection_tier: "GOAL",
       semantic_role: "goal",
@@ -139,8 +209,8 @@ describe("Director V6 canvas adapter", () => {
       runId: RUN_ID,
       eventSequence: 8,
       nodes: [
-        node("expand", "L", { expandable: true, hidden_child_count: 4 }),
-        node("leaf", "M", { expandable: false, hidden_child_count: 0 }),
+        node("expand", "L", { expandable: true, hiddenChildCount: 4 }),
+        node("leaf", "M", { expandable: false, hiddenChildCount: 0 }),
       ],
       edges: [],
     });

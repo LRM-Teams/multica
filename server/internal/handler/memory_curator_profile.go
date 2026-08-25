@@ -155,7 +155,12 @@ func (h *Handler) UpdateMemoryCuratorProfile(w http.ResponseWriter, r *http.Requ
 		SELECT count(*)
 		  FROM agent_runtime
 		 WHERE id = $1 AND workspace_id = $2
-		   AND (owner_id = $3 OR visibility = 'public')
+		   AND (visibility = 'public' OR EXISTS (
+		        SELECT 1 FROM computer_workspace_bindings b
+		         WHERE b.daemon_id = agent_runtime.daemon_id
+		           AND b.workspace_id = agent_runtime.workspace_id
+		           AND b.user_id = $3 AND b.active = TRUE
+		   ))
 	`, runtimeUUID, workspaceID, userID).Scan(&runtimeCount); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to validate runtime")
 		return
@@ -322,7 +327,12 @@ func (h *Handler) memoryCuratorRunStatus(ctx context.Context, profile memoryCura
 		  FROM agent_runtime rt
 		  JOIN agent curator ON curator.id = $2
 		 WHERE rt.id = $1 AND rt.workspace_id = $3
-		   AND (rt.owner_id = $4 OR rt.visibility = 'public')
+		   AND (rt.visibility = 'public' OR EXISTS (
+		        SELECT 1 FROM computer_workspace_bindings b
+		         WHERE b.daemon_id = rt.daemon_id
+		           AND b.workspace_id = rt.workspace_id
+		           AND b.user_id = $4 AND b.active = TRUE
+		   ))
 		   AND curator.workspace_id = $3 AND curator.owner_id = $4
 		   AND curator.runtime_id = rt.id AND curator.archived_at IS NULL
 	`, profile.RuntimeID, profile.CuratorAgentID, profile.WorkspaceID, profile.UserID).Scan(&runtimeLastSeenAt)

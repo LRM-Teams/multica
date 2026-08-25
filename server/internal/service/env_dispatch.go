@@ -2463,7 +2463,7 @@ func (s *EnvDispatchService) sendMixedChannelMessage(ctx context.Context, in Env
 		return
 	}
 	r.InitialMessageSubmittedAt = prepared.SubmittedAt
-	prepared.Acknowledge(ctx)
+	go prepared.Acknowledge(context.WithoutCancel(ctx))
 }
 
 // dispatchBranchChannelMessage resumes a legacy source collaboration trigger

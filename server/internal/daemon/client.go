@@ -130,8 +130,9 @@ func isRuntimeNotFoundError(err error) bool {
 
 // Client handles HTTP communication with the Multica server daemon API.
 type Client struct {
-	baseURL string
-	client  *http.Client
+	baseURL      string
+	client       *http.Client
+	recallClient *http.Client
 
 	tokenMu sync.RWMutex
 	// workspaceTokens and runtimeTokens hold Computer Binding credentials
@@ -152,11 +153,54 @@ func NewClient(baseURL string) *Client {
 	return &Client{
 		baseURL:         baseURL,
 		client:          &http.Client{Timeout: 30 * time.Second},
+		recallClient:    &http.Client{Timeout: 15 * time.Minute},
 		workspaceTokens: make(map[string]daemonAuthToken),
 		runtimeTokens:   make(map[string]daemonAuthToken),
 		platform:        "daemon",
 		os:              normalizeGOOS(runtime.GOOS),
 	}
+}
+
+// RequestGraphMemoryRecall requests a bounded, server-executed graph-memory
+// injection. The dedicated client permits synchronous Explore execution while
+// the request context still controls cancellation.
+func (c *Client) RequestGraphMemoryRecall(ctx context.Context, workspaceID string, req protocol.GraphMemoryRecallRequest) (*protocol.GraphMemoryRecallResponse, error) {
+	var response protocol.GraphMemoryRecallResponse
+	if err := c.postGraphMemoryRecallJSON(ctx, "/api/daemon/graph-memory/recalls", req, &response, c.tokenForWorkspace(workspaceID)); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (c *Client) postGraphMemoryRecallJSON(ctx context.Context, path string, reqBody any, respBody any, token string) error {
+	data, err := json.Marshal(reqBody)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(data))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	c.setIdentityHeaders(req)
+
+	client := c.recallClient
+	if client == nil {
+		client = c.client
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return &requestError{Method: http.MethodPost, Path: path, StatusCode: resp.StatusCode, Body: strings.TrimSpace(string(body))}
+	}
+	return json.NewDecoder(resp.Body).Decode(respBody)
 }
 
 // normalizeGOOS maps Go's runtime.GOOS values to the protocol vocabulary
@@ -270,7 +314,7 @@ func (c *Client) WorkspaceDaemonTokenAvailable(workspaceID string, now time.Time
 }
 
 // WorkspaceDaemonToken returns the currently valid workspace-scoped daemon
-// credential for a long-lived Workspace Runner connection. The profile token
+// credential for a long-lived WorkspaceDaemon connection. The profile token
 // must never be substituted here because the server uses this token's
 // workspace claim as the Runner routing fence.
 func (c *Client) WorkspaceDaemonToken(workspaceID string, now time.Time) string {
@@ -413,14 +457,6 @@ func (c *Client) ReportProgress(ctx context.Context, taskID, summary string, ste
 		"step":    step,
 		"total":   total,
 	}, nil, c.tokenForRuntime(runtimeID))
-}
-
-// KickGraphMemoryJudge reports one graph-memory recall to the server,
-// kicking the server-side async judge + delayed-reward flow (design §5.3).
-// Fire-and-forget from the caller's perspective: errors are logged by the
-// caller and never affect task execution.
-func (c *Client) KickGraphMemoryJudge(ctx context.Context, runtimeID string, payload protocol.GraphMemoryJudgeKickPayload) error {
-	return c.postJSONWithToken(ctx, "/api/daemon/graph-memory/judge", payload, nil, c.tokenForRuntime(runtimeID))
 }
 
 // TaskMessageData represents a single agent execution message for batch reporting.
@@ -607,7 +643,7 @@ func (c *Client) GetTaskStatus(ctx context.Context, taskID, runtimeID string) (s
 	return resp.Status, nil
 }
 
-// HeartbeatResponse and pending-action aliases keep the Workspace Runner wire
+// HeartbeatResponse and pending-action aliases keep the WorkspaceDaemon wire
 // contract readable inside the daemon action coordinator.
 type (
 	HeartbeatResponse       = protocol.DaemonHeartbeatAckPayload
@@ -621,7 +657,7 @@ type (
 
 // TODO(computer-liveness): Remove after v0.4.24-alpha.55 is no
 // longer a supported direct self-upgrade source. Current DaemonCore liveness
-// is the Workspace Runner socket, not this HTTP heartbeat.
+// is the WorkspaceDaemon socket, not this HTTP heartbeat.
 func (c *Client) ComputerHeartbeat(ctx context.Context, workspaceID, daemonID string) error {
 	return c.postJSONWithToken(ctx, "/api/daemon/computer/heartbeat", map[string]any{
 		"workspace_id": workspaceID, "daemon_id": daemonID,

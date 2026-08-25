@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/google/uuid"
 )
 
 // TestUpdateAgentRuntime_DisplayNamePatchAndClear covers PATCH display_name:
@@ -97,7 +99,7 @@ func TestDaemonRegister_PreservesUserDisplayName(t *testing.T) {
 		t.Skip("database not available")
 	}
 
-	daemonID := "display-name-preserve-daemon"
+	daemonID := "display-name-preserve-daemon-" + uuid.NewString()
 	provider := "claude"
 
 	// First register as the workspace member so owner_id is set (daemon-token

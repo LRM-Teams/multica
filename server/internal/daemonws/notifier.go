@@ -15,13 +15,7 @@ import (
 type ReminderNotifier interface {
 	NotifyReminderUpsert(runtimeID string, payload protocol.ReminderUpsertPayload)
 	NotifyReminderCancel(runtimeID string, payload protocol.ReminderCancelPayload)
-}
-
-// ReminderOwnerInputNotifier is the non-durable post-commit transport for one
-// private Reminder input. A false result is final; implementations must not
-// stage retries or reconnect replay.
-type ReminderOwnerInputNotifier interface {
-	NotifyReminderOwnerInput(workspaceID, daemonID string, payload protocol.ReminderOwnerInputPayload) bool
+	NotifyReminderFireReceiptAck(runtimeID string, payload protocol.ReminderFireReceiptAckPayload)
 }
 
 // AgentDeliveryNotifier is the server-side transport boundary for canonical
@@ -30,7 +24,7 @@ type AgentDeliveryNotifier interface {
 	NotifyWorkspaceAgentDelivery(workspaceID, daemonID string, payload protocol.AgentDeliverPayload) bool
 }
 
-// AgentRestartNotifier transports only Raft's discrete Workspace Runner
+// AgentRestartNotifier transports only Raft's discrete WorkspaceDaemon
 // commands. Product-level restart/reset orchestration stays on the
 // server and advances from Runner status/reset facts.
 type AgentRestartNotifier interface {
@@ -45,11 +39,11 @@ type RelayNotifier struct {
 	relay realtime.RelayPublisher
 }
 
-func workspaceRunnerRelayScopeID(daemonID, workspaceID string) string {
+func workspaceDaemonRelayScopeID(daemonID, workspaceID string) string {
 	return daemonID + "\x00" + workspaceID
 }
 
-func parseWorkspaceRunnerRelayScopeID(scopeID string) (daemonID, workspaceID string, ok bool) {
+func parseWorkspaceDaemonRelayScopeID(scopeID string) (daemonID, workspaceID string, ok bool) {
 	daemonID, workspaceID, ok = strings.Cut(scopeID, "\x00")
 	return daemonID, workspaceID, ok && daemonID != "" && workspaceID != ""
 }
@@ -94,8 +88,8 @@ func (n *RelayNotifier) NotifyWorkspaceAgentDelivery(workspaceID, daemonID strin
 		delivered = n.local.notifyWorkspaceAgentDelivery(workspaceID, daemonID, payload, frame, eventID)
 	}
 	if n.relay != nil {
-		scopeID := workspaceRunnerRelayScopeID(daemonID, workspaceID)
-		if err := n.relay.PublishWithID(realtime.ScopeDaemonWorkspaceRunner, scopeID, "", frame, eventID); err != nil {
+		scopeID := workspaceDaemonRelayScopeID(daemonID, workspaceID)
+		if err := n.relay.PublishWithID(realtime.ScopeDaemonWorkspaceDaemon, scopeID, "", frame, eventID); err != nil {
 			slog.Warn("workspace Runner agent delivery relay publish failed", "error", err, "workspace_id", workspaceID, "daemon_id", daemonID, "delivery_id", payload.DeliveryID)
 		} else {
 			delivered = true
@@ -117,9 +111,9 @@ func (n *RelayNotifier) NotifyAgentRestartCommand(workspaceID, computerID, event
 		delivered = n.local.NotifyAgentRestartCommand(workspaceID, computerID, eventType, commandID, payload)
 	}
 	if n.relay != nil {
-		scopeID := workspaceRunnerRelayScopeID(computerID, workspaceID)
-		if err := n.relay.PublishWithID(realtime.ScopeDaemonWorkspaceRunner, scopeID, "", frame, "agent-restart:"+commandID+":"+eventType); err != nil {
-			slog.Warn("Workspace Runner Agent Restart command publish failed", "workspace_id", workspaceID, "computer_id", computerID, "operation_id", commandID, "event_type", eventType, "error", err)
+		scopeID := workspaceDaemonRelayScopeID(computerID, workspaceID)
+		if err := n.relay.PublishWithID(realtime.ScopeDaemonWorkspaceDaemon, scopeID, "", frame, "agent-restart:"+commandID+":"+eventType); err != nil {
+			slog.Warn("WorkspaceDaemon Agent Restart command publish failed", "workspace_id", workspaceID, "computer_id", computerID, "operation_id", commandID, "event_type", eventType, "error", err)
 		} else {
 			delivered = true
 		}
@@ -129,11 +123,11 @@ func (n *RelayNotifier) NotifyAgentRestartCommand(workspaceID, computerID, event
 
 func validAgentRestartCommand(eventType string, payload any) bool {
 	switch command := payload.(type) {
-	case protocol.WorkspaceRunnerAgentStopPayload:
+	case protocol.AgentStopPayload:
 		return eventType == protocol.EventDaemonAgentStop && command.Validate() == nil
-	case protocol.WorkspaceRunnerAgentResetWorkspacePayload:
+	case protocol.AgentWorkspaceResetPayload:
 		return eventType == protocol.EventDaemonAgentResetWorkspace && command.Validate() == nil
-	case protocol.WorkspaceRunnerAgentStartPayload:
+	case protocol.AgentStartPayload:
 		return eventType == protocol.EventDaemonAgentStart && command.Validate() == nil
 	default:
 		return false
@@ -180,34 +174,8 @@ func (n *RelayNotifier) NotifyReminderCancel(runtimeID string, payload protocol.
 	n.notifyReminderWithID(runtimeID, protocol.EventReminderCancel, payload, "reminder-cancel:"+payload.ReminderID+":"+strconv.FormatInt(payload.Version, 10))
 }
 
-func (n *RelayNotifier) NotifyReminderOwnerInput(workspaceID, daemonID string, payload protocol.ReminderOwnerInputPayload) bool {
-	if workspaceID == "" || daemonID == "" {
-		return false
-	}
-	input := protocol.AgentTransientDeliverPayload{
-		Kind: protocol.AgentTransientDeliverKindReminder, Transient: true, Reminder: payload,
-	}
-	frame, err := json.Marshal(protocol.Message{Type: protocol.EventAgentDeliver, Payload: mustMarshalRaw(input)})
-	if err != nil {
-		return false
-	}
-	delivered := false
-	eventID := ulid.Make().String()
-	if n.local != nil {
-		delivered = n.local.notifyWorkspaceRunnerFrame(daemonID, workspaceID, frame)
-	}
-	if n.relay != nil {
-		scopeID := workspaceRunnerRelayScopeID(daemonID, workspaceID)
-		if err := n.relay.PublishWithID(realtime.ScopeDaemonWorkspaceRunner, scopeID, "", frame, eventID); err != nil {
-			slog.Warn("workspace Runner Reminder owner input publish failed", "workspace_id", workspaceID, "daemon_id", daemonID, "runtime_id", payload.RuntimeID, "error", err)
-		} else {
-			delivered = true
-		}
-	}
-	if !delivered {
-		slog.Info("transient Reminder owner input", "outcome", "transport_lost", "workspace_id", workspaceID, "daemon_id", daemonID, "runtime_id", payload.RuntimeID, "agent_id", payload.AgentID, "reminder_id", payload.ReminderID, "version", payload.Version)
-	}
-	return delivered
+func (n *RelayNotifier) NotifyReminderFireReceiptAck(runtimeID string, payload protocol.ReminderFireReceiptAckPayload) {
+	n.notifyReminderWithID(runtimeID, protocol.EventReminderFireReceiptAck, payload, "reminder-fire-receipt-ack:"+payload.ReminderID+":"+strconv.FormatInt(payload.Version, 10))
 }
 
 func (n *RelayNotifier) notifyReminderWithID(runtimeID, eventType string, payload any, eventID string) {

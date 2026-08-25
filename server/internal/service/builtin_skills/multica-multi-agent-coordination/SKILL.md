@@ -101,11 +101,16 @@ Messages through the machine-local coordinator:
 multica message check
 ```
 
-The command has no target, cursor, or limit option. It immediately drains at
-most three Pending Messages into the current Agent turn and advances context
-coverage only for those returned Messages. If the output says more remain, run
-the same command again; otherwise `Message check complete.` is the terminal
-marker. A Notice by itself does not mean the Messages were read.
+The command has no target, cursor, or limit option. It drains all paginated
+Pending Messages into the current Agent turn, advancing context coverage for
+each returned batch before continuing. It uses a 50-round safety cap; a normal
+successful run ends with `Message check complete.` A content-free Notice does
+not identify whether the pending item is a reminder or a Message, so run
+`multica inbox check` first to route the work, then use `multica message check`
+only when the snapshot shows pending Messages. Message commands use the
+machine-local Credential Proxy, which refreshes a near-expiry Agent credential
+before forwarding the command; do not restart a runtime or read a token to
+renew it.
 
 ## 4. Execute the selected mode
 

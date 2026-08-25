@@ -18,8 +18,9 @@ import (
 )
 
 const (
-	ActionNone  = "none"
-	ActionWrite = "write"
+	ActionNone            = "none"
+	ActionWrite           = "write"
+	ActionCompactionFlush = "compaction_flush"
 
 	KindFeedback     = "feedback"
 	KindPreference   = "preference"
@@ -184,14 +185,15 @@ func IsDurableWrite(w WriteEntry) bool {
 }
 
 // ShouldReportEvenWithoutWrites tells the daemon to POST an empty write report
-// so the server can run the missed-write guard.
+// so the server can run the missed-write, decision and friction guards.
 func ShouldReportEvenWithoutWrites(triggerText string, signals []Signal) bool {
 	for _, s := range signals {
-		if s.Action == ActionWrite {
+		switch s.Action {
+		case ActionWrite, ActionDecision, ActionFriction, ActionCompactionFlush:
 			return true
 		}
 	}
-	return LooksLikeDurableFeedback(triggerText)
+	return LooksLikeDurableFeedback(triggerText) || LooksLikeDecisionFinal(triggerText) || LooksLikeCorrection(triggerText)
 }
 
 // DetectMissedWrite returns a candidate when trigger/signal asked for durable
@@ -199,7 +201,7 @@ func ShouldReportEvenWithoutWrites(triggerText string, signals []Signal) bool {
 func DetectMissedWrite(triggerText string, signals []Signal, writes []WriteEntry, defaultSubjectID string) (MissedWrite, bool) {
 	var writeSignals []Signal
 	for _, s := range signals {
-		if s.Action == ActionWrite {
+		if s.Action == ActionWrite || s.Action == ActionCompactionFlush {
 			writeSignals = append(writeSignals, s)
 		}
 	}
@@ -214,6 +216,9 @@ func DetectMissedWrite(triggerText string, signals []Signal, writes []WriteEntry
 	if len(writeSignals) > 0 {
 		sig = writeSignals[0]
 		source = SourceMemorySignal
+		if sig.Action == ActionCompactionFlush {
+			source = ActionCompactionFlush
+		}
 	}
 
 	scope := firstNonEmpty(sig.Scope, "user")

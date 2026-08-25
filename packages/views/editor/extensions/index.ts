@@ -30,13 +30,11 @@ import Image from "@tiptap/extension-image";
 import TableRow from "@tiptap/extension-table-row";
 import TableHeader from "@tiptap/extension-table-header";
 import TableCell from "@tiptap/extension-table-cell";
-import { Table } from "@tiptap/extension-table";
 import { StableTableView } from "../stable-table-view";
+import { TABLE_CELL_DEFAULT_WIDTH, TableWithColwidthMarkdown } from "../table-markdown";
 
 /** Resize floor (~1/3 of the previous 128px minimum). */
 const TABLE_CELL_MIN_WIDTH = 43;
-/** Default column width for newly inserted cells (previous default). */
-const TABLE_CELL_DEFAULT_WIDTH = 128;
 
 const TableCellWithDefaultWidth = TableCell.extend({
   addAttributes() {
@@ -95,6 +93,7 @@ import { FileCardExtension } from "./file-card";
 import { ImageView } from "./image-view";
 import { BlockMathExtension, InlineMathExtension } from "./math";
 import { HighlightExtension } from "./highlight";
+import { TextStyleExtension } from "./text-style";
 
 const lowlight = sharedLowlight;
 
@@ -233,6 +232,12 @@ export interface EditorExtensionsOptions {
    * - "block" — Notion-style content blocks for editors such as Notes.
    */
   slashCommandMode?: "skill" | "command" | "block";
+  /**
+   * Notes-only: register the color / font-size mark so selection formatting
+   * persists as sanitized `<span style>` in markdown. Other surfaces stay
+   * off so issue comments do not grow Office-pasted colors.
+   */
+  enableTextStyles?: boolean;
 }
 
 export function createEditorExtensions(
@@ -331,7 +336,7 @@ export function createEditorExtensions(
     // page-level scroll container instead of the table itself.
     // Min width is the resize floor; new cells default to 128px via colwidth
     // so `/table` still inserts at the previous comfortable width.
-    Table.configure({
+    TableWithColwidthMarkdown.configure({
       resizable: true,
       renderWrapper: true,
       allowTableNodeSelection: true,
@@ -346,6 +351,7 @@ export function createEditorExtensions(
     BlockMathExtension,
     InlineMathExtension,
     HighlightExtension,
+    ...(options.enableTextStyles ? [TextStyleExtension] : []),
     // 3-space indent so nested ordered lists survive CommonMark in ReadonlyContent.
     Markdown.configure({ indentation: { style: "space", size: 3 } }),
     // Make Cmd+C / Cmd+X / drag write Markdown source to clipboard text/plain

@@ -4,11 +4,16 @@ import type {
   ListResearchProductRoundCardsResponse,
   ResearchSessionSnapshot,
 } from "../types/research";
+import { researchV6DirectorProjectionKeys } from "../hooks/research-v6/director-queries";
 import { researchKeys, type ResearchPresenceMap } from "./queries";
 import { ResearchProductRoundCardSchema } from "./schemas";
 import { applyTypedGraphWsPatch } from "./typed-graph-cache";
 
 const listRefreshTimers = new WeakMap<QueryClient, Map<string, ReturnType<typeof setTimeout>>>();
+const v6ProjectionRefreshTimers = new WeakMap<
+  QueryClient,
+  Map<string, ReturnType<typeof setTimeout>>
+>();
 
 function scheduleSessionListRefresh(qc: QueryClient, wsId: string) {
   let timers = listRefreshTimers.get(qc);
@@ -22,6 +27,27 @@ function scheduleSessionListRefresh(qc: QueryClient, wsId: string) {
     void qc.invalidateQueries({ queryKey: researchKeys.sessions(wsId) });
   }, 1000);
   timers.set(wsId, timer);
+}
+
+function scheduleV6ProjectionRefresh(
+  qc: QueryClient,
+  wsId: string,
+  runId: string,
+) {
+  let timers = v6ProjectionRefreshTimers.get(qc);
+  if (!timers) {
+    timers = new Map();
+    v6ProjectionRefreshTimers.set(qc, timers);
+  }
+  const timerKey = `${wsId}:${runId}`;
+  if (timers.has(timerKey)) return;
+  const timer = setTimeout(() => {
+    timers?.delete(timerKey);
+    void qc.invalidateQueries({
+      queryKey: researchV6DirectorProjectionKeys.snapshot(wsId, runId),
+    });
+  }, 500);
+  timers.set(timerKey, timer);
 }
 
 function sessionIdFromPayload(payload: Record<string, unknown>): string | null {
@@ -81,6 +107,11 @@ export function applyResearchWSEvent(
   message: WSMessage,
 ) {
   const payload = (message.payload ?? {}) as Record<string, unknown>;
+  if (message.type === "research_projection_v6:delta") {
+    const runId = typeof payload.run_id === "string" ? payload.run_id : "";
+    if (runId) scheduleV6ProjectionRefresh(qc, wsId, runId);
+    return;
+  }
   const sessionId = sessionIdFromPayload(payload);
   if (message.type.startsWith("research_session:")) {
     scheduleSessionListRefresh(qc, wsId);
@@ -294,8 +325,9 @@ export function applyResearchWSEvent(
           }
           next[agentId] = {
             ...(next[agentId] ?? {
-              phase: "idle", role: "", fleetMemberId: null, taskId: null,
-              nodeId: null, branchId: null, stage: null, expiresAt: null, staleReason: null,
+              phase: "idle", role: "", name: "", avatarUrl: null, fleetMemberId: null,
+              taskId: null, nodeId: null, branchId: null, stage: null,
+              expiresAt: null, staleReason: null,
             }),
             activity, updatedAt,
           };

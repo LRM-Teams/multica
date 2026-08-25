@@ -7,8 +7,8 @@ import (
 	"regexp"
 	"strings"
 
+	agentskills "github.com/multica-ai/multica/server/internal/daemon/agent/skills"
 	skillpkg "github.com/multica-ai/multica/server/internal/skill"
-	"github.com/multica-ai/multica/server/pkg/agent"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 	"gopkg.in/yaml.v3"
 )
@@ -82,48 +82,7 @@ func resolveSkillsDir(agentRoot, provider string, manifest *sidecarManifest) (st
 // (removeReusedManagedSkillDirs) needs the bare path with no side effects so
 // it can match the managed skill roots the prior manifest recorded.
 func skillsDirPath(agentRoot, provider string) string {
-	switch provider {
-	case agent.ProviderClaude:
-		// Claude Code natively discovers skills from .claude/skills/ in the workdir.
-		return filepath.Join(agentRoot, ".claude", "skills")
-	case agent.ProviderOpenCode:
-		// OpenCode natively discovers project skills from .opencode/skills/ in
-		// the workdir. ConfigPaths.directories() walks up from the discovery
-		// root looking for a bare `.opencode` directory (no opencode.json
-		// signal required), then skill/index.ts scans `{skill,skills}/**/SKILL.md`
-		// under each match. Discovery is anchored at the Agent workspace via
-		// `opencode run --dir <agentRoot>` + PWD override in opencodeBackend —
-		// without those, OpenCode walks from the daemon's inherited PWD and
-		// misses .opencode/skills + AGENTS.md entirely (MUL-2416).
-		return filepath.Join(agentRoot, ".opencode", "skills")
-	case agent.ProviderCodex:
-		// Codex follows Raft's split: CODEX_HOME and global skills remain
-		// outside the agent workspace, while assigned skills are workspace-local.
-		return filepath.Join(agentRoot, ".agents", "skills")
-	case agent.ProviderPi:
-		// Pi natively discovers skills from .pi/skills/ in the workdir.
-		return filepath.Join(agentRoot, ".pi", "skills")
-	case agent.ProviderCursor:
-		// Cursor natively discovers skills from .cursor/skills/ in the workdir.
-		return filepath.Join(agentRoot, ".cursor", "skills")
-	case agent.ProviderKiro:
-		// Kiro CLI auto-discovers project-level skills from .kiro/skills/
-		// in the workdir.
-		return filepath.Join(agentRoot, ".kiro", "skills")
-	case agent.ProviderGrok:
-		// Grok Build discovers project skills from .grok/skills/ (and
-		// .grok/commands/) under the workdir.
-		return filepath.Join(agentRoot, ".grok", "skills")
-	default:
-		// Fallback: write to .agent_context/skills/ (referenced by meta config).
-		return filepath.Join(agentRoot, ".agent_context", "skills")
-	}
-}
-
-// SkillsDirPath exposes the provider-native workspace skill root to the
-// daemon's profile discovery protocol without duplicating the mapping.
-func SkillsDirPath(agentRoot, provider string) string {
-	return skillsDirPath(agentRoot, provider)
+	return agentskills.PrimaryWorkspaceRoot(provider, agentRoot)
 }
 
 var nonAlphaNum = regexp.MustCompile(`[^a-z0-9]+`)
@@ -452,7 +411,7 @@ func renderChatWakeContext(ctx TaskContextForEnv) string {
 	var b strings.Builder
 	b.WriteString("# Message Runtime\n\n")
 	b.WriteString("This durable Agent runtime receives canonical Message Deliveries. It has no current channel, task, lease, execution, or session identity.\n\n")
-	b.WriteString("Use `multica message check` to inspect pending input, then use the returned canonical target for reads or sends when needed. Do not run `multica issue get` unless the user asks you to create or inspect an issue.\n\n")
+	b.WriteString("Run `multica inbox check` first to distinguish App reminders from Messages. If Messages are pending, run `multica message check` to inspect them, then use the returned canonical target for reads or sends. Do not run `multica issue get` unless the user asks.\n\n")
 	writeAgentSkillsIndex(&b, ctx.AgentSkills)
 	return b.String()
 }

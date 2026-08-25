@@ -49,6 +49,7 @@ func TestBuildPromptAssignmentSnapshotAvoidsRedundantReads(t *testing.T) {
 			t.Errorf("terminal assignment prompt contains forbidden command %q\n--- output ---\n%s", forbidden, out)
 		}
 	}
+
 }
 
 func TestBuildPromptChannelRoleChangedUsesBoundedSignal(t *testing.T) {
@@ -218,7 +219,7 @@ func TestBuildPromptAssignmentCarriesTurnWorkflowAndLazyDecomposition(t *testing
 	for _, want := range []string{
 		"Current-turn execution contract:",
 		"set `issue-active-1` to `in_progress`",
-		"open the `multica-working-on-issues` skill",
+		"Open the `multica-working-on-issues` skill",
 		"DIRECT / Issue DAG / Goal Graph",
 		"verify proportionately",
 		"multica issue comment add issue-active-1",
@@ -894,6 +895,78 @@ func TestBuildPromptInjectsActiveChannelGoalEveryWake(t *testing.T) {
 	}
 }
 
+func TestBuildPromptTellsChannelManagerToMaintainGoalProcess(t *testing.T) {
+	base := Task{
+		ChannelID: "channel-1", ChatSessionID: "chat-1", ChatMessage: "continue",
+		ChannelGoal: &protocol.ChannelGoalContext{
+			ID: "goal-1", Title: "Ship", Objective: "Ship safely", Version: 2,
+			SuccessCriteria: []string{"Reviewed release"},
+		},
+	}
+
+	manager := base
+	manager.Agent = &AgentData{ManagerChannels: []execenv.ManagerChannelContextForEnv{{ID: "channel-1", Name: "delivery"}}}
+	out := BuildPrompt(manager, "claude", "")
+	for _, want := range []string{
+		"Manager process document:",
+		"multica goal process list --channel channel-1 --output json",
+		"multica goal process put --channel channel-1 --expected-version <current-process-version-or-0>",
+		"The process document and the authoritative short Goal checkpoint are separate",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("manager goal prompt missing %q:\n%s", want, out)
+		}
+	}
+
+	member := base
+	member.Agent = &AgentData{}
+	out = BuildPrompt(member, "claude", "")
+	if strings.Contains(out, "Manager process document:") || strings.Contains(out, "multica goal process put") {
+		t.Fatalf("ordinary channel member was told to write manager process:\n%s", out)
+	}
+}
+
+func TestBuildPromptChannelManagerDefaultsIndependentGoalWorkToIssueDAG(t *testing.T) {
+	task := Task{
+		ChannelID: "channel-1", ChatSessionID: "chat-1", ChatMessage: "continue the rewrite",
+		Agent: &AgentData{ManagerChannels: []execenv.ManagerChannelContextForEnv{{ID: "channel-1", Name: "delivery"}}},
+		ChannelGoal: &protocol.ChannelGoalContext{
+			ID: "goal-1", Title: "Ship", Objective: "Ship safely", Version: 2,
+			SuccessCriteria: []string{"Reviewed release"},
+			Coordination: &protocol.ChannelGoalCoordinationContext{
+				ProjectID: "project-1", GitRepositoryBound: true, AgentMemberCount: 3,
+				ProjectIssueTotal: 4, OpenProjectIssueTotal: 2, ExecutionAdmission: "ready",
+			},
+		},
+	}
+
+	out := BuildPrompt(task, "claude", "")
+	for _, want := range []string{
+		"Parallel admission:",
+		"research, data/source collection, implementation, testing, or review",
+		"independent roots start together",
+		"multica issue decompose <parent-issue-id> --plan-file <path> --idempotency-key <uuid>",
+		"never fake a parent with peer top-level Issues or park an independent root in backlog",
+		"No confirmation inside the Goal's scope",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("manager parallel admission missing %q:\n%s", want, out)
+		}
+	}
+
+	task.Agent = &AgentData{}
+	out = BuildPrompt(task, "claude", "")
+	if strings.Contains(out, "Parallel admission:") {
+		t.Fatalf("ordinary channel member received manager-only parallel admission:\n%s", out)
+	}
+}
+
+func TestGoalManagerParallelAdmissionStaysCompact(t *testing.T) {
+	if got := len(goalManagerParallelAdmission); got > 600 {
+		t.Fatalf("manager parallel admission is %d bytes; keep hot-path guidance at or below 600", got)
+	}
+}
+
 func TestBuildPromptBlocksUnassignedMultiAgentGoalImplementation(t *testing.T) {
 	base := Task{
 		ChannelID: "channel-1", ChatSessionID: "chat-1", ChatMessage: "continue",
@@ -989,7 +1062,7 @@ func TestBuildPromptAdmitsOnlyAlignedClaimedGoalIssue(t *testing.T) {
 
 func TestBuildPromptWithoutChannelGoalKeepsOrdinaryChatUnchanged(t *testing.T) {
 	out := BuildPrompt(Task{ChatSessionID: "chat-1", ChatMessage: "hello"}, "claude", "")
-	if strings.Contains(out, "Current channel goal") {
+	if strings.Contains(out, "Current channel goal") || strings.Contains(out, "Parallel admission:") {
 		t.Fatalf("ordinary chat unexpectedly entered goal mode:\n%s", out)
 	}
 }

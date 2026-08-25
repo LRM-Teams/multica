@@ -68,15 +68,15 @@ func init() {
 		command.Flags().String("app-url", "", "Test Web app origin (required with --environment test)")
 		command.Flags().Bool("yes", false, "Confirm an environment switch without prompting")
 	}
-	setupCmd.Flags().String(callbackHostFlag, "", "Host the OAuth callback URL points at (auto-detected when empty). Use this for Windows WSL / reverse-proxy setups.")
+	setupCmd.Flags().String(callbackHostFlag, "", "ComputerCore the OAuth callback URL points at (auto-detected when empty). Use this for Windows WSL / reverse-proxy setups.")
 	setupCmd.Flags().String("workspace", "", "Set the workspace by id or slug (env: MULTICA_WORKSPACE).")
-	setupCloudCmd.Flags().String(callbackHostFlag, "", "Host the OAuth callback URL points at (auto-detected when empty). Use this for Windows WSL / reverse-proxy setups.")
+	setupCloudCmd.Flags().String(callbackHostFlag, "", "ComputerCore the OAuth callback URL points at (auto-detected when empty). Use this for Windows WSL / reverse-proxy setups.")
 	setupCloudCmd.Flags().String("workspace", "", "Set the workspace by id or slug (env: MULTICA_WORKSPACE).")
 	setupSelfHostCmd.Flags().String("server-url", "", "Backend server URL (e.g. https://api.internal.co) (env: MULTICA_SERVER_URL)")
 	setupSelfHostCmd.Flags().String("app-url", "", "Frontend app URL (e.g. https://app.internal.co) (env: MULTICA_APP_URL)")
 	setupSelfHostCmd.Flags().Int("port", 8080, "Backend server port (used when --server-url is not set)")
 	setupSelfHostCmd.Flags().Int("frontend-port", 3000, "Frontend port (used when --app-url is not set)")
-	setupSelfHostCmd.Flags().String(callbackHostFlag, "", "Host the OAuth callback URL points at (auto-detected when empty). Use this for Windows WSL / reverse-proxy setups.")
+	setupSelfHostCmd.Flags().String(callbackHostFlag, "", "ComputerCore the OAuth callback URL points at (auto-detected when empty). Use this for Windows WSL / reverse-proxy setups.")
 	setupSelfHostCmd.Flags().String("workspace", "", "Set the workspace by id or slug (env: MULTICA_WORKSPACE).")
 
 	setupCmd.AddCommand(setupCloudCmd)

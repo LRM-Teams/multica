@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -151,6 +152,27 @@ var issueStatusCmd = &cobra.Command{
 	RunE: runIssueStatus,
 }
 
+var issueCompleteCmd = &cobra.Command{
+	Use:   "complete <id>",
+	Short: "Submit typed acceptance evidence and move an Agent Issue to review",
+	Args:  exactArgs(1),
+	RunE:  runIssueComplete,
+}
+
+var issueReviewCmd = &cobra.Command{
+	Use:   "review <id>",
+	Short: "Accept or reject a typed Issue completion report",
+	Args:  exactArgs(1),
+	RunE:  runIssueReview,
+}
+
+var issueCompletionReportsCmd = &cobra.Command{
+	Use:   "completion-reports <id>",
+	Short: "List typed completion and review history for an Issue",
+	Args:  exactArgs(1),
+	RunE:  runIssueCompletionReports,
+}
+
 // Comment subcommands.
 
 var issueCommentCmd = &cobra.Command{
@@ -261,6 +283,9 @@ func init() {
 	issueCmd.AddCommand(issueChannelCmd)
 	issueCmd.AddCommand(issueAssignCmd)
 	issueCmd.AddCommand(issueStatusCmd)
+	issueCmd.AddCommand(issueCompleteCmd)
+	issueCmd.AddCommand(issueReviewCmd)
+	issueCmd.AddCommand(issueCompletionReportsCmd)
 	issueCmd.AddCommand(issueCommentCmd)
 	issueCmd.AddCommand(issueSubscriberCmd)
 	issueCmd.AddCommand(issueRunsCmd)
@@ -349,6 +374,18 @@ func init() {
 
 	// issue status
 	issueStatusCmd.Flags().String("output", "table", "Output format: table or json")
+
+	// issue complete / review
+	issueCompleteCmd.Flags().String("summary", "", "Concise implementation summary (required)")
+	issueCompleteCmd.Flags().StringArray("evidence", nil, "Criterion evidence as INDEX=KIND:REF (repeatable; every criterion needs evidence)")
+	issueCompleteCmd.Flags().StringArray("artifact", nil, "Additional artifact as KIND:REF (repeatable)")
+	issueCompleteCmd.Flags().StringArray("risk", nil, "Known risk or follow-up (repeatable)")
+	issueCompleteCmd.Flags().String("output", "json", "Output format: json")
+	issueReviewCmd.Flags().String("report", "", "Completion report UUID (required)")
+	issueReviewCmd.Flags().StringArray("reject-criterion", nil, "Reject a criterion as INDEX=REASON (repeatable); none accepts all")
+	issueReviewCmd.Flags().String("reason", "", "Overall review note (required when rejecting)")
+	issueReviewCmd.Flags().String("output", "json", "Output format: json")
+	issueCompletionReportsCmd.Flags().String("output", "json", "Output format: json")
 
 	// issue assign
 	issueAssignCmd.Flags().String("to", "", "Assignee name (member or agent; fuzzy match)")
@@ -931,8 +968,8 @@ func runIssueCreate(cmd *cobra.Command, _ []string) error {
 	// inherits the env var and tags the new issue with origin_type=
 	// quick_create + origin_id=<task_id>. The completion handler then
 	// locates the issue deterministically by origin instead of "most
-	// recent issue by this agent", which is racy when max_concurrent_tasks
-	// > 1 and the agent is creating other issues in parallel.
+	// recent issue by this agent", which would be racy if the agent
+	// creates other issues around the same time.
 	if taskID := os.Getenv("MULTICA_QUICK_CREATE_TASK_ID"); taskID != "" {
 		body["origin_type"] = "quick_create"
 		body["origin_id"] = taskID
@@ -1247,6 +1284,190 @@ func runIssueStatus(cmd *cobra.Command, args []string) error {
 		return cli.PrintJSON(os.Stdout, result)
 	}
 	return nil
+}
+
+type issueCompletionContext struct {
+	AcceptanceCriteria []string `json:"acceptance_criteria"`
+	ExecutionRevision  *int64   `json:"execution_revision"`
+}
+
+type issueCompletionEvidenceRef struct {
+	Kind string `json:"kind"`
+	Ref  string `json:"ref"`
+}
+
+type issueCompletionAcceptanceResult struct {
+	CriterionIndex int                          `json:"criterion_index"`
+	Criterion      string                       `json:"criterion"`
+	Satisfied      bool                         `json:"satisfied"`
+	EvidenceRefs   []issueCompletionEvidenceRef `json:"evidence_refs"`
+}
+
+func readIssueCompletionContext(ctx context.Context, client *cli.APIClient, cmd *cobra.Command, issueID string) (issueCompletionContext, error) {
+	var current issueCompletionContext
+	if err := client.GetJSON(ctx, agentIssueAPIPath(cmd, issueID, ""), &current); err != nil {
+		return current, err
+	}
+	if current.ExecutionRevision == nil {
+		return current, fmt.Errorf("server did not return an execution revision; update the Multica server and CLI together")
+	}
+	if len(current.AcceptanceCriteria) == 0 {
+		return current, fmt.Errorf("issue has no acceptance criteria; define measurable criteria before completion")
+	}
+	return current, nil
+}
+
+func parseCompletionRef(value string) (issueCompletionEvidenceRef, error) {
+	kind, ref, ok := strings.Cut(strings.TrimSpace(value), ":")
+	kind, ref = strings.TrimSpace(kind), strings.TrimSpace(ref)
+	if !ok || kind == "" || ref == "" {
+		return issueCompletionEvidenceRef{}, fmt.Errorf("%q must use KIND:REF", value)
+	}
+	return issueCompletionEvidenceRef{Kind: kind, Ref: ref}, nil
+}
+
+func runIssueComplete(cmd *cobra.Command, args []string) error {
+	if !isAgentAPIToken(cmd) {
+		return fmt.Errorf("issue complete requires an Agent execution credential; humans review reports")
+	}
+	summary, _ := cmd.Flags().GetString("summary")
+	if strings.TrimSpace(summary) == "" {
+		return fmt.Errorf("--summary is required")
+	}
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := cli.APIContext(context.Background())
+	defer cancel()
+	issueRef, err := resolveIssueRef(ctx, client, args[0])
+	if err != nil {
+		return fmt.Errorf("resolve issue: %w", err)
+	}
+	current, err := readIssueCompletionContext(ctx, client, cmd, issueRef.ID)
+	if err != nil {
+		return fmt.Errorf("load issue completion contract: %w", err)
+	}
+	results := make([]issueCompletionAcceptanceResult, len(current.AcceptanceCriteria))
+	for index, criterion := range current.AcceptanceCriteria {
+		results[index] = issueCompletionAcceptanceResult{
+			CriterionIndex: index, Criterion: criterion, Satisfied: true,
+			EvidenceRefs: []issueCompletionEvidenceRef{},
+		}
+	}
+	evidence, _ := cmd.Flags().GetStringArray("evidence")
+	for _, value := range evidence {
+		indexText, rawRef, ok := strings.Cut(value, "=")
+		index, indexErr := strconv.Atoi(strings.TrimSpace(indexText))
+		if !ok || indexErr != nil || index < 0 || index >= len(results) {
+			return fmt.Errorf("invalid --evidence %q: expected INDEX=KIND:REF for criterion 0..%d", value, len(results)-1)
+		}
+		ref, refErr := parseCompletionRef(rawRef)
+		if refErr != nil {
+			return fmt.Errorf("invalid --evidence %q: %w", value, refErr)
+		}
+		results[index].EvidenceRefs = append(results[index].EvidenceRefs, ref)
+	}
+	for index, result := range results {
+		if len(result.EvidenceRefs) == 0 {
+			return fmt.Errorf("criterion %d has no evidence: %s", index, result.Criterion)
+		}
+	}
+	artifacts := []issueCompletionEvidenceRef{}
+	rawArtifacts, _ := cmd.Flags().GetStringArray("artifact")
+	for _, value := range rawArtifacts {
+		ref, refErr := parseCompletionRef(value)
+		if refErr != nil {
+			return fmt.Errorf("invalid --artifact: %w", refErr)
+		}
+		artifacts = append(artifacts, ref)
+	}
+	risks, _ := cmd.Flags().GetStringArray("risk")
+	body := map[string]any{
+		"expected_execution_revision": *current.ExecutionRevision,
+		"summary":                     summary, "acceptance_results": results,
+		"artifact_refs": artifacts, "risks": risks,
+	}
+	var response any
+	if err = client.PostJSON(ctx, agentIssueAPIPath(cmd, issueRef.ID, "/completion"), body, &response); err != nil {
+		return fmt.Errorf("submit completion report: %w", err)
+	}
+	return cli.PrintJSON(os.Stdout, response)
+}
+
+func runIssueReview(cmd *cobra.Command, args []string) error {
+	reportID, _ := cmd.Flags().GetString("report")
+	if strings.TrimSpace(reportID) == "" {
+		return fmt.Errorf("--report is required")
+	}
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := cli.APIContext(context.Background())
+	defer cancel()
+	issueRef, err := resolveIssueRef(ctx, client, args[0])
+	if err != nil {
+		return fmt.Errorf("resolve issue: %w", err)
+	}
+	current, err := readIssueCompletionContext(ctx, client, cmd, issueRef.ID)
+	if err != nil {
+		return fmt.Errorf("load review contract: %w", err)
+	}
+	rejected, _ := cmd.Flags().GetStringArray("reject-criterion")
+	rejections := make(map[int]string, len(rejected))
+	for _, value := range rejected {
+		indexText, reason, ok := strings.Cut(value, "=")
+		index, indexErr := strconv.Atoi(strings.TrimSpace(indexText))
+		reason = strings.TrimSpace(reason)
+		if !ok || indexErr != nil || index < 0 || index >= len(current.AcceptanceCriteria) || reason == "" {
+			return fmt.Errorf("invalid --reject-criterion %q: expected INDEX=REASON for criterion 0..%d", value, len(current.AcceptanceCriteria)-1)
+		}
+		if _, duplicate := rejections[index]; duplicate {
+			return fmt.Errorf("criterion %d was rejected more than once", index)
+		}
+		rejections[index] = reason
+	}
+	verdict := "accepted"
+	results := make([]map[string]any, len(current.AcceptanceCriteria))
+	for index := range current.AcceptanceCriteria {
+		reason, isRejected := rejections[index]
+		results[index] = map[string]any{"criterion_index": index, "accepted": !isRejected, "reason": reason}
+		if isRejected {
+			verdict = "rejected"
+		}
+	}
+	reason, _ := cmd.Flags().GetString("reason")
+	if verdict == "rejected" && strings.TrimSpace(reason) == "" {
+		return fmt.Errorf("--reason is required when rejecting a report")
+	}
+	body := map[string]any{
+		"report_id": strings.TrimSpace(reportID), "verdict": verdict,
+		"reason": reason, "acceptance_results": results,
+	}
+	var response any
+	if err = client.PostJSON(ctx, agentIssueAPIPath(cmd, issueRef.ID, "/completion-reviews"), body, &response); err != nil {
+		return fmt.Errorf("review completion report: %w", err)
+	}
+	return cli.PrintJSON(os.Stdout, response)
+}
+
+func runIssueCompletionReports(cmd *cobra.Command, args []string) error {
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := cli.APIContext(context.Background())
+	defer cancel()
+	issueRef, err := resolveIssueRef(ctx, client, args[0])
+	if err != nil {
+		return fmt.Errorf("resolve issue: %w", err)
+	}
+	var response any
+	if err = client.GetJSON(ctx, agentIssueAPIPath(cmd, issueRef.ID, "/completion-reports"), &response); err != nil {
+		return fmt.Errorf("list completion reports: %w", err)
+	}
+	return cli.PrintJSON(os.Stdout, response)
 }
 
 // ---------------------------------------------------------------------------

@@ -177,9 +177,10 @@ func RequireAgentPrincipal(next http.Handler) http.Handler {
 // Everything else under /api/agents/* and /api/members/agents/* remains blocked.
 //
 // Matches (legacy and Members Directory primary, ADR 0013):
-//   PUT  /api/agents/{uuid} | /api/members/agents/{uuid}
-//   POST .../{uuid}/archive
-//   POST .../{uuid}/restore
+//
+//	PUT  /api/agents/{uuid} | /api/members/agents/{uuid}
+//	POST .../{uuid}/archive
+//	POST .../{uuid}/restore
 var agentSelfManagePath = regexp.MustCompile(`(?i)^/api/(?:members/)?agents/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:/(?:archive|restore))?$`)
 
 func agentPrincipalMayUseHumanAgentPath(method, path string) bool {

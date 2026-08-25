@@ -16,7 +16,6 @@ type runnerObservedAgent struct {
 	workspaceID      string
 	agentID          string
 	runtimeID        string
-	launchID         string
 	status           string
 	daemonID         string
 	daemonInstanceID string
@@ -36,72 +35,66 @@ func newRunnerObservationStore() *runnerObservationStore {
 	return &runnerObservationStore{notes: make(map[runnerObservationScope]map[string]runnerObservedAgent)}
 }
 
-func (s *runnerObservationStore) acceptStatus(workspaceID, daemonID, daemonInstanceID, agentID, runtimeID, launchID, status string) bool {
-	if s == nil || agentID == "" || daemonID == "" || daemonInstanceID == "" || launchID == "" {
+func (s *runnerObservationStore) acceptStatus(workspaceID, daemonID, daemonInstanceID, agentID, runtimeID, status string) bool {
+	if s == nil || agentID == "" || daemonID == "" || daemonInstanceID == "" {
 		return false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	current, ok := s.findLocked(workspaceID, agentID)
-	sameLaunch := ok && current.daemonID == daemonID && current.daemonInstanceID == daemonInstanceID && current.launchID == launchID
-	if ok && current.status != protocol.AgentStatusInactive && current.daemonInstanceID == daemonInstanceID && !sameLaunch {
-		return false
-	}
-	if sameLaunch && current.runtimeID != "" {
+	sameRuntime := ok && current.daemonID == daemonID && current.daemonInstanceID == daemonInstanceID && current.runtimeID == runtimeID
+	if sameRuntime && current.runtimeID != "" {
 		runtimeID = current.runtimeID
 	}
 	sessionID := ""
-	if sameLaunch {
+	if sameRuntime {
 		sessionID = current.sessionID
 	}
 	s.evictAgentLocked(workspaceID, agentID)
 	s.writeLocked(runnerObservedAgent{
 		workspaceID: workspaceID, agentID: agentID, runtimeID: runtimeID,
-		launchID: launchID, status: status, daemonID: daemonID,
+		status: status, daemonID: daemonID,
 		daemonInstanceID: daemonInstanceID, sessionID: sessionID,
 	})
 	return true
 }
 
-func (s *runnerObservationStore) acceptStartAck(workspaceID, daemonID, daemonInstanceID, agentID, runtimeID, launchID string) (string, bool) {
-	if s == nil || agentID == "" || daemonID == "" || daemonInstanceID == "" || launchID == "" {
+func (s *runnerObservationStore) acceptStartAck(workspaceID, daemonID, daemonInstanceID, agentID, runtimeID string) (string, bool) {
+	if s == nil || agentID == "" || daemonID == "" || daemonInstanceID == "" {
 		return "", false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	current, ok := s.findLocked(workspaceID, agentID)
-	sameLaunch := ok && current.daemonID == daemonID && current.daemonInstanceID == daemonInstanceID && current.launchID == launchID
-	if ok && current.status != protocol.AgentStatusInactive && !sameLaunch {
-		return "", false
-	}
+	sameRuntime := ok && current.daemonID == daemonID && current.daemonInstanceID == daemonInstanceID && current.runtimeID == runtimeID
 	status := "accepted"
-	if sameLaunch && current.status == protocol.AgentStatusActive {
+	if sameRuntime && current.status == protocol.AgentStatusActive {
 		status = protocol.AgentStatusActive
 	}
-	if sameLaunch && current.runtimeID != "" {
+	if sameRuntime && current.runtimeID != "" {
 		runtimeID = current.runtimeID
 	}
 	sessionID := ""
-	if sameLaunch {
+	if sameRuntime {
 		sessionID = current.sessionID
 	}
 	s.evictAgentLocked(workspaceID, agentID)
 	s.writeLocked(runnerObservedAgent{
 		workspaceID: workspaceID, agentID: agentID, runtimeID: runtimeID,
-		launchID: launchID, status: status, daemonID: daemonID,
+		status: status, daemonID: daemonID,
 		daemonInstanceID: daemonInstanceID, sessionID: sessionID,
 	})
 	return status, true
 }
 
-func (s *runnerObservationStore) acceptSession(workspaceID, daemonID, daemonInstanceID, agentID, launchID, sessionID string) bool {
-	if s == nil || agentID == "" || launchID == "" {
+func (s *runnerObservationStore) acceptSession(workspaceID, daemonID, daemonInstanceID, agentID, sessionID string) bool {
+	if s == nil || agentID == "" {
 		return false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	current, ok := s.findLocked(workspaceID, agentID)
-	if !ok || current.daemonID != daemonID || current.daemonInstanceID != daemonInstanceID || current.launchID != launchID {
+	if !ok || current.daemonID != daemonID || current.daemonInstanceID != daemonInstanceID {
 		return false
 	}
 	if current.status != "accepted" && current.status != protocol.AgentStatusActive {
@@ -112,22 +105,22 @@ func (s *runnerObservationStore) acceptSession(workspaceID, daemonID, daemonInst
 	return true
 }
 
-func (s *runnerObservationStore) putStatus(workspaceID, daemonID, daemonInstanceID, agentID, runtimeID, launchID, status string) {
-	s.acceptStatus(workspaceID, daemonID, daemonInstanceID, agentID, runtimeID, launchID, status)
+func (s *runnerObservationStore) putStatus(workspaceID, daemonID, daemonInstanceID, agentID, runtimeID, status string) {
+	s.acceptStatus(workspaceID, daemonID, daemonInstanceID, agentID, runtimeID, status)
 }
 
-func (s *runnerObservationStore) putSession(workspaceID, daemonID, daemonInstanceID, agentID, launchID, sessionID string) {
-	s.acceptSession(workspaceID, daemonID, daemonInstanceID, agentID, launchID, sessionID)
+func (s *runnerObservationStore) putSession(workspaceID, daemonID, daemonInstanceID, agentID, sessionID string) {
+	s.acceptSession(workspaceID, daemonID, daemonInstanceID, agentID, sessionID)
 }
 
-func (s *runnerObservationStore) deactivate(workspaceID, daemonID, daemonInstanceID, agentID, launchID string) bool {
+func (s *runnerObservationStore) deactivate(workspaceID, daemonID, daemonInstanceID, agentID string) bool {
 	if s == nil {
 		return false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	current, ok := s.findLocked(workspaceID, agentID)
-	if !ok || current.daemonID != daemonID || current.daemonInstanceID != daemonInstanceID || current.launchID != launchID {
+	if !ok || current.daemonID != daemonID || current.daemonInstanceID != daemonInstanceID {
 		return false
 	}
 	if current.status != protocol.AgentStatusActive {

@@ -6,12 +6,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 )
-
 
 func injectPeriodBriefCollectorPackMarkdown(t *testing.T, collectorAgentID, packBody string) {
 	t.Helper()
@@ -176,6 +176,14 @@ SELECT context FROM agent_inbox_event WHERE id = $1`, *resp.Job.TaskID).Scan(&co
 			t.Fatalf("collector job missing task_id: %#v", job)
 		}
 		assertPeriodBriefInboxForceFresh(t, *job.TaskID)
+		var maxAttempts int32
+		if err := testPool.QueryRow(context.Background(), `
+SELECT max_attempts FROM agent_inbox_event WHERE id = $1`, *job.TaskID).Scan(&maxAttempts); err != nil {
+			t.Fatalf("load collector max_attempts: %v", err)
+		}
+		if maxAttempts != 1 {
+			t.Fatalf("collector inbox max_attempts = %d, want 1 (no automatic re-collect)", maxAttempts)
+		}
 	}
 	if resp.Job.ChannelMessageID == nil {
 		t.Fatal("expected synthesizer channel_message_id")
@@ -580,4 +588,273 @@ WHERE r.draft_page_id = $1::uuid
 	if !strings.Contains(stored, "via agent_credential") {
 		t.Fatalf("pack_markdown = %q", stored)
 	}
+}
+
+func injectPeriodBriefCollectPlan(t *testing.T, plan notePeriodBriefCollectPlan) {
+	t.Helper()
+	raw, err := json.Marshal(plan)
+	if err != nil {
+		t.Fatalf("marshal plan: %v", err)
+	}
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	t.Cleanup(func() {
+		close(stop)
+		<-done
+	})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			tag, err := testPool.Exec(context.Background(), `
+UPDATE note_period_brief_run
+SET collect_plan = $1::jsonb, updated_at = now()
+WHERE status = 'planning'
+  AND collect_plan IS NULL`, raw)
+			if err == nil && tag.RowsAffected() > 0 {
+				return
+			}
+			time.Sleep(40 * time.Millisecond)
+		}
+	}()
+}
+
+func TestCreateNotePeriodBriefEmptyFocusSkipsPlanner(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	prevWait := notePeriodBriefCollectorMaxWait
+	notePeriodBriefCollectorMaxWait = 0
+	prevPlan := notePeriodBriefPlannerMaxWait
+	notePeriodBriefPlannerMaxWait = 0
+	prevBG := notePeriodBriefFinishInBackground
+	notePeriodBriefFinishInBackground = false
+	t.Cleanup(func() {
+		notePeriodBriefCollectorMaxWait = prevWait
+		notePeriodBriefPlannerMaxWait = prevPlan
+		notePeriodBriefFinishInBackground = prevBG
+	})
+
+	synthID := createHandlerTestAgent(t, "Period Brief Synth "+uuid.NewString()[:8], nil)
+	collectorA := createPeriodBriefCollectorTestAgent(t, "Collector A")
+	day := time.Now().UTC().Format("2006-01-02")
+	rec := httptest.NewRecorder()
+	testHandler.CreateNotePeriodBrief(rec, newRequest(http.MethodPost, "/api/notes/period-briefs", map[string]any{
+		"window":              "day",
+		"date":                day,
+		"timezone":            "UTC",
+		"agent_id":            synthID,
+		"collector_agent_ids": []string{collectorA},
+		"focus":               "   ",
+	}))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("period brief = %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp createNotePeriodBriefResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.CollectorJobs) != 1 {
+		t.Fatalf("empty focus must dispatch collectors immediately: %#v", resp.CollectorJobs)
+	}
+	var userFocus, status string
+	if err := testPool.QueryRow(context.Background(), `
+SELECT user_focus, status FROM note_period_brief_run WHERE draft_page_id = $1`, resp.Page.ID).Scan(&userFocus, &status); err != nil {
+		t.Fatalf("load run: %v", err)
+	}
+	if userFocus != "" {
+		t.Fatalf("blank focus should store empty, got %q", userFocus)
+	}
+	if status == "planning" {
+		t.Fatal("empty focus must not stay in planning")
+	}
+}
+
+func TestCreateNotePeriodBriefFocusFallsBackWhenPlanMissing(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	prevWait := notePeriodBriefCollectorMaxWait
+	notePeriodBriefCollectorMaxWait = 0
+	prevPlan := notePeriodBriefPlannerMaxWait
+	notePeriodBriefPlannerMaxWait = 0
+	prevBG := notePeriodBriefFinishInBackground
+	notePeriodBriefFinishInBackground = false
+	t.Cleanup(func() {
+		notePeriodBriefCollectorMaxWait = prevWait
+		notePeriodBriefPlannerMaxWait = prevPlan
+		notePeriodBriefFinishInBackground = prevBG
+	})
+
+	synthID := createHandlerTestAgent(t, "Period Brief Synth "+uuid.NewString()[:8], nil)
+	collectorA := createPeriodBriefCollectorTestAgent(t, "Collector A")
+	collectorB := createPeriodBriefCollectorTestAgent(t, "Collector B")
+	day := time.Now().UTC().Format("2006-01-02")
+	rec := httptest.NewRecorder()
+	testHandler.CreateNotePeriodBrief(rec, newRequest(http.MethodPost, "/api/notes/period-briefs", map[string]any{
+		"window":              "day",
+		"date":                day,
+		"timezone":            "UTC",
+		"agent_id":            synthID,
+		"collector_agent_ids": []string{collectorA, collectorB},
+		"focus":               "只整理 ~/multica",
+	}))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("period brief = %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp createNotePeriodBriefResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Job.AgentID != synthID {
+		t.Fatalf("synthesizer job agent = %s, want %s", resp.Job.AgentID, synthID)
+	}
+	if len(resp.CollectorJobs) != 2 {
+		t.Fatalf("missing plan should fall back to all selected collectors: %#v", resp.CollectorJobs)
+	}
+	var userFocus string
+	if err := testPool.QueryRow(context.Background(), `
+SELECT user_focus FROM note_period_brief_run WHERE draft_page_id = $1`, resp.Page.ID).Scan(&userFocus); err != nil {
+		t.Fatalf("load focus: %v", err)
+	}
+	if userFocus != "只整理 ~/multica" {
+		t.Fatalf("user_focus = %q", userFocus)
+	}
+}
+
+func TestCreateNotePeriodBriefFocusHonorsCollectPlanSkip(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	prevWait := notePeriodBriefCollectorMaxWait
+	notePeriodBriefCollectorMaxWait = 0
+	prevPlan := notePeriodBriefPlannerMaxWait
+	notePeriodBriefPlannerMaxWait = 3 * time.Second
+	prevBG := notePeriodBriefFinishInBackground
+	notePeriodBriefFinishInBackground = false
+	t.Cleanup(func() {
+		notePeriodBriefCollectorMaxWait = prevWait
+		notePeriodBriefPlannerMaxWait = prevPlan
+		notePeriodBriefFinishInBackground = prevBG
+	})
+
+	synthID := createHandlerTestAgent(t, "Period Brief Synth "+uuid.NewString()[:8], nil)
+	collectorA := createPeriodBriefCollectorTestAgent(t, "Collector A")
+	collectorB := createPeriodBriefCollectorTestAgent(t, "Collector B")
+	injectPeriodBriefCollectPlan(t, notePeriodBriefCollectPlan{
+		Summary: "laptop only",
+		Assignments: []notePeriodBriefCollectAssignment{
+			{CollectorAgentID: collectorA, Paths: []string{"/home/jian40/multica"}, Brief: "notes-agent"},
+			{CollectorAgentID: collectorB, Skip: true},
+		},
+	})
+
+	day := time.Now().UTC().Format("2006-01-02")
+	rec := httptest.NewRecorder()
+	testHandler.CreateNotePeriodBrief(rec, newRequest(http.MethodPost, "/api/notes/period-briefs", map[string]any{
+		"window":              "day",
+		"date":                day,
+		"timezone":            "UTC",
+		"agent_id":            synthID,
+		"collector_agent_ids": []string{collectorA, collectorB},
+		"focus":               "只整理本机 ~/multica",
+	}))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("period brief = %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp createNotePeriodBriefResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.CollectorJobs) != 1 {
+		t.Fatalf("plan skip should dispatch one collector: %#v", resp.CollectorJobs)
+	}
+	if resp.CollectorJobs[0].AgentID != collectorA {
+		t.Fatalf("dispatched %s, want %s", resp.CollectorJobs[0].AgentID, collectorA)
+	}
+}
+
+func TestSubmitAgentNotePeriodBriefPackDoesNotClobberSibling(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	synthID := createHandlerTestAgent(t, "Pack Race Synth "+uuid.NewString()[:8], nil)
+	collectorA := createPeriodBriefCollectorTestAgent(t, "Pack Race A")
+	collectorB := createPeriodBriefCollectorTestAgent(t, "Pack Race B")
+
+	createRec := httptest.NewRecorder()
+	testHandler.CreateNotePeriodBrief(createRec, newRequest(http.MethodPost, "/api/notes/period-briefs", map[string]any{
+		"window":              "day",
+		"date":                time.Now().UTC().Format("2006-01-02"),
+		"timezone":            "UTC",
+		"agent_id":            synthID,
+		"collector_agent_ids": []string{collectorA, collectorB},
+	}))
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create = %d: %s", createRec.Code, createRec.Body.String())
+	}
+	var created createNotePeriodBriefResponse
+	if err := json.NewDecoder(createRec.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create: %v", err)
+	}
+
+	submit := func(agentID, body string) int {
+		req := withURLParam(withAgentCredentialPrincipal(
+			newRequest(http.MethodPost, "/api/agent/notes/period-briefs/"+created.Page.ID+"/submit-pack", map[string]any{
+				"markdown": body,
+			}),
+			agentID, testWorkspaceID, testUserID,
+		), "draftPageId", created.Page.ID)
+		rec := httptest.NewRecorder()
+		testHandler.SubmitAgentNotePeriodBriefPack(rec, req)
+		return rec.Code
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		if code := submit(collectorA, "## Work groups\n\n### A\n- from A\n"); code != http.StatusOK {
+			t.Errorf("submit A = %d", code)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		if code := submit(collectorB, "## Work groups\n\n### B\n- from B\n"); code != http.StatusOK {
+			t.Errorf("submit B = %d", code)
+		}
+	}()
+	wg.Wait()
+
+	var packs []string
+	rows, err := testPool.Query(context.Background(), `
+SELECT c->>'agent_id', c->>'pack_markdown'
+FROM note_period_brief_run r,
+     jsonb_array_elements(r.collectors) AS c
+WHERE r.draft_page_id = $1::uuid
+ORDER BY c->>'agent_id'`, created.Page.ID)
+	if err != nil {
+		t.Fatalf("load packs: %v", err)
+	}
+	defer rows.Close()
+	got := map[string]string{}
+	for rows.Next() {
+		var agentID, markdown string
+		if err := rows.Scan(&agentID, &markdown); err != nil {
+			t.Fatalf("scan pack: %v", err)
+		}
+		got[agentID] = markdown
+		packs = append(packs, agentID)
+	}
+	if !strings.Contains(got[collectorA], "from A") {
+		t.Fatalf("collector A pack lost: %#v", got)
+	}
+	if !strings.Contains(got[collectorB], "from B") {
+		t.Fatalf("collector B pack lost: %#v", got)
+	}
+	_ = packs
 }

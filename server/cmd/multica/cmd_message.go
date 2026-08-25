@@ -11,7 +11,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 
@@ -26,6 +25,7 @@ import (
 var errAgentMessageHeld = errors.New("message held by freshness check (not delivered); saved as an unsent draft and requires an explicit new decision before sending")
 
 const maxAgentMessageStdinBytes = 1 << 20
+const maxMessageCheckRounds = 50
 
 func newMessageSendCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -102,7 +102,7 @@ type messageCheckCLIResponse struct {
 func newMessageCheckCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "check",
-		Short: "Drain a bounded window of Pending messages",
+		Short: "Drain Pending messages",
 		Args:  cobra.NoArgs,
 		RunE:  runAgentMessageCheck,
 	}
@@ -122,42 +122,69 @@ func runAgentMessageCheckWithWriter(output io.Writer) error {
 	if err != nil || portNumber < 1 || portNumber > 65535 {
 		return errors.New("message check requires a valid MULTICA_DAEMON_PORT")
 	}
+	endpoint := fmt.Sprintf("http://127.0.0.1:%d/credential-proxy/messages/check", portNumber)
+	client := &http.Client{Timeout: cli.APITimeout()}
+
+	for round := 0; round < maxMessageCheckRounds; round++ {
+		ctx, cancel := cli.APIContext(context.Background())
+		result, receiptID, err := fetchMessageCheckBatch(ctx, client, endpoint, agentID)
+		if err != nil {
+			cancel()
+			return err
+		}
+
+		terminal := !result.HasMore
+		if (len(result.Messages) > 0 || result.HasMore) && receiptID == "" {
+			cancel()
+			return errors.New("message check response omitted coverage receipt")
+		}
+		if receiptID != "" {
+			if err := commitLocalMessageCoverage(ctx, receiptID); err != nil {
+				cancel()
+				return fmt.Errorf("commit message check coverage: %w", err)
+			}
+		}
+		cancel()
+		if err := printMessageCheckResult(output, result, terminal); err != nil {
+			return fmt.Errorf("write message check output: %w", err)
+		}
+		if terminal {
+			return nil
+		}
+	}
+
+	return errors.New("message check stopped after the maximum drain rounds; messages remain pending")
+}
+
+func fetchMessageCheckBatch(ctx context.Context, client *http.Client, endpoint, agentID string) (messageCheckCLIResponse, string, error) {
 	body, err := json.Marshal(map[string]string{"agent_id": agentID})
 	if err != nil {
-		return fmt.Errorf("encode message check request: %w", err)
+		return messageCheckCLIResponse{}, "", fmt.Errorf("encode message check request: %w", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		fmt.Sprintf("http://127.0.0.1:%d/credential-proxy/messages/check", portNumber), bytes.NewReader(body))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("prepare message check: %w", err)
+		return messageCheckCLIResponse{}, "", fmt.Errorf("prepare message check: %w", err)
 	}
 	request.Header.Set("Content-Type", "application/json")
-	response, err := (&http.Client{Timeout: 5 * time.Second}).Do(request)
+	response, err := client.Do(request)
 	if err != nil {
-		return fmt.Errorf("message check through Credential Proxy: %w", err)
+		return messageCheckCLIResponse{}, "", fmt.Errorf("message check through Credential Proxy: %w", err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		detail, _ := io.ReadAll(io.LimitReader(response.Body, 4<<10))
-		return fmt.Errorf("message check through Credential Proxy: %s: %s", response.Status, strings.TrimSpace(string(detail)))
+		return messageCheckCLIResponse{}, "", fmt.Errorf("message check through Credential Proxy: %s: %s", response.Status, strings.TrimSpace(string(detail)))
 	}
+
 	var result messageCheckCLIResponse
-	if err := consumeMessageCoverageResponse(
-		ctx,
-		response.Body,
-		output,
-		&result,
-		func(w io.Writer) error { return printMessageCheckResult(w, result) },
-		commitLocalMessageCoverage,
-	); err != nil {
-		return fmt.Errorf("consume message check response: %w", err)
+	receiptID, err := decodeMessageCoverageResponse(response.Body, &result)
+	if err != nil {
+		return messageCheckCLIResponse{}, "", fmt.Errorf("decode message check response: %w", err)
 	}
-	return nil
+	return result, receiptID, nil
 }
 
-func printMessageCheckResult(w io.Writer, result messageCheckCLIResponse) error {
+func printMessageCheckResult(w io.Writer, result messageCheckCLIResponse, terminal bool) error {
 	for _, message := range result.Messages {
 		if _, err := fmt.Fprintf(w, "Message %s (%s seq %d)\n", message.ID, message.Target, message.Seq); err != nil {
 			return err
@@ -180,9 +207,8 @@ func printMessageCheckResult(w io.Writer, result messageCheckCLIResponse) error 
 			return err
 		}
 	}
-	if result.HasMore {
-		_, err := fmt.Fprintf(w, "More Pending messages remain (%d); run `multica message check` again.\n", result.Remaining)
-		return err
+	if !terminal {
+		return nil
 	}
 	_, err := fmt.Fprintln(w, "Message check complete.")
 	return err

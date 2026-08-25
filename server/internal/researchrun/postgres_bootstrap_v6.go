@@ -83,7 +83,7 @@ func (s *PostgresStore) BootstrapV6(ctx context.Context, in V6BootstrapInput, cf
 	if _, err = tx.Exec(ctx, `UPDATE research_session SET current_director_assignment_id=$2::uuid WHERE id=$1::uuid`, runID, assignmentID); err != nil {
 		return Run{}, 0, err
 	}
-	mission := "Serve as Ronaldo, the Research Director. Build and supervise the research team, preserve evidence lineage, and publish only a reviewed report."
+	mission := "担任本次调研的主理人，组建并管理调研团队，保留完整的证据链，只发布经过复核的报告。"
 	missionPayload, _ := json.Marshal(map[string]string{"mission": mission})
 	missionHash := ArtifactContentHashFromCanonicalJSON(missionPayload)
 	if _, err = tx.Exec(ctx, `INSERT INTO research_team_membership(id,workspace_id,session_id,agent_id,membership_generation,mission_prompt,mission_hash,mission_revision,state)
@@ -118,10 +118,11 @@ func (s *PostgresStore) BootstrapV6(ctx context.Context, in V6BootstrapInput, cf
 	if err = ensureSessionPolicyStateTx(ctx, tx, in.WorkspaceID, runID); err != nil {
 		return Run{}, 0, err
 	}
-	event, err := appendEvent(ctx, tx, in.WorkspaceID, runID, "v6_run_bootstrapped", "v6-bootstrap:"+in.ClientRequestID, "user", in.CreatedBy, map[string]any{
+	event, err := appendEvent(ctx, tx, in.WorkspaceID, runID, "v6_run_bootstrapped", "v6-bootstrap:"+in.ClientRequestID, "user", in.CreatedBy, rebuildablePayload(map[string]any{
 		"orchestrator_version": OrchestratorVersionV6, "director_assignment_id": assignmentID, "director_agent_id": in.DirectorAgentID, "membership_id": membershipID,
 		"client_request_id": in.ClientRequestID, "request_hash": requestHash,
-	})
+		"goal": strings.TrimSpace(in.Goal), "title": strings.TrimSpace(in.Title), "status": "running",
+	}))
 	if err != nil {
 		return Run{}, 0, err
 	}

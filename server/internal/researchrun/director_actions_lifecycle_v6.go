@@ -59,13 +59,17 @@ func (s *PostgresStore) executeV6WorkLifecycleAction(ctx context.Context, propos
 		if status != "failed" && status != "cancelled" && status != "stale" {
 			return ErrInvalidTransition
 		}
-		command = `UPDATE research_work_item SET status='ready',terminal_reason_code='',terminal_reason_detail='',lease_token=NULL,lease_expires_at=NULL,ready_at=now(),updated_at=now() WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid`
+		// A Director retry is an explicit grant of a fresh attempt budget.
+		// Without the reset, a budget-exhausted item returns to 'ready' but is
+		// skipped by dispatch preparation forever (attempt_count>=max_attempts),
+		// leaving a silent zombie the Director believes it has retried.
+		command = `UPDATE research_work_item SET status='ready',attempt_count=0,terminal_reason_code='',terminal_reason_detail='',lease_token=NULL,lease_expires_at=NULL,ready_at=now(),updated_at=now() WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid`
 		args = []any{proposal.WorkspaceID, proposal.RunID, payload.TargetID}
 	case "reassign_work_item":
 		if strings.TrimSpace(payload.AssigneeAgentID) == "" || status == "succeeded" || status == "cancelled" {
 			return ErrInvalidTransition
 		}
-		command = `UPDATE research_work_item w SET assigned_agent_id=$4::uuid,status='ready',lease_token=NULL,lease_expires_at=NULL,ready_at=now(),updated_at=now() WHERE w.workspace_id=$1::uuid AND w.session_id=$2::uuid AND w.id=$3::uuid AND EXISTS(SELECT 1 FROM research_team_membership m WHERE m.session_id=w.session_id AND m.agent_id=$4::uuid AND m.state IN ('idle','working','offline','retiring'))`
+		command = `UPDATE research_work_item w SET assigned_agent_id=$4::uuid,status='ready',attempt_count=0,lease_token=NULL,lease_expires_at=NULL,ready_at=now(),updated_at=now() WHERE w.workspace_id=$1::uuid AND w.session_id=$2::uuid AND w.id=$3::uuid AND EXISTS(SELECT 1 FROM research_team_membership m WHERE m.session_id=w.session_id AND m.agent_id=$4::uuid AND m.state IN ('idle','working','offline','retiring'))`
 		args = []any{proposal.WorkspaceID, proposal.RunID, payload.TargetID, payload.AssigneeAgentID}
 	}
 	result, err := tx.Exec(ctx, command, args...)
@@ -195,7 +199,10 @@ func (s *PostgresStore) executeV6RunLifecycleAction(ctx context.Context, proposa
 	if json.Unmarshal(action.Payload, &payload) != nil {
 		return ErrInvalidContract
 	}
-	target := map[string]string{"pause_run": "paused", "resume_run": "running", "complete_run": "completed", "fail_run": "failed"}[action.Kind]
+	target, allowed := v6DirectorRunLifecycleTarget(action.Kind)
+	if !allowed {
+		return ErrInvalidContract
+	}
 	tx, err := s.beginResearchTx(ctx, txOpV6DirectorProposalComplete, pgx.TxOptions{})
 	if err != nil {
 		return err
@@ -217,13 +224,18 @@ func (s *PostgresStore) executeV6RunLifecycleAction(ctx context.Context, proposa
 	return s.commitResearchTx(ctx, txOpV6DirectorProposalComplete, tx)
 }
 
+func v6DirectorRunLifecycleTarget(kind string) (string, bool) {
+	target, allowed := map[string]string{"resume_run": "running", "complete_run": "completed", "fail_run": "failed"}[kind]
+	return target, allowed
+}
+
 func firstNonEmptyV6(values ...string) string {
 	for _, value := range values {
 		if strings.TrimSpace(value) != "" {
 			return strings.TrimSpace(value)
 		}
 	}
-	return "Director decision"
+	return "调研主理人决定"
 }
 
 func withV6ActionKind(raw json.RawMessage, kind string) json.RawMessage {
@@ -251,11 +263,74 @@ func (s *PostgresStore) recordV6DirectorNoOp(ctx context.Context, proposal v6Dir
 		return err
 	}
 	var state int64
-	if err = tx.QueryRow(ctx, `SELECT state_version FROM research_session WHERE workspace_id=$1::uuid AND id=$2::uuid`, proposal.WorkspaceID, proposal.RunID).Scan(&state); err != nil {
+	var runStatus string
+	var hasWorker, agentCreationPending, hasIdleWorker bool
+	var hasWorkerWork, hasActiveWorkerWork, hasFailedWorkerWork, hasRejectedAssignment bool
+	if err = tx.QueryRow(ctx, `
+		SELECT s.state_version,
+		       s.status,
+		       EXISTS(
+		         SELECT 1 FROM research_team_membership m
+		         JOIN research_director_assignment d ON d.id=s.current_director_assignment_id AND d.status='active'
+		         WHERE m.workspace_id=s.workspace_id AND m.session_id=s.id
+		           AND m.agent_id<>d.director_agent_id
+		           AND m.state IN ('idle','working','offline','retiring')
+		       ),
+		       EXISTS(
+		         SELECT 1 FROM research_v6_outbox o
+		         WHERE o.workspace_id=s.workspace_id AND o.session_id=s.id
+		           AND o.kind='create_agent' AND o.status IN ('pending','delivering')
+		       ),
+		       EXISTS(
+		         SELECT 1 FROM research_team_membership m
+		         JOIN research_director_assignment d ON d.id=s.current_director_assignment_id AND d.status='active'
+		         WHERE m.workspace_id=s.workspace_id AND m.session_id=s.id
+		           AND m.agent_id<>d.director_agent_id AND m.state='idle'
+		       ),
+		       EXISTS(
+		         SELECT 1 FROM research_work_item w
+		         JOIN research_director_assignment d ON d.id=s.current_director_assignment_id AND d.status='active'
+		         WHERE w.workspace_id=s.workspace_id AND w.session_id=s.id
+		           AND w.kind<>'director' AND w.assigned_agent_id<>d.director_agent_id
+		       ),
+		       EXISTS(
+		         SELECT 1 FROM research_work_item w
+		         JOIN research_director_assignment d ON d.id=s.current_director_assignment_id AND d.status='active'
+		         WHERE w.workspace_id=s.workspace_id AND w.session_id=s.id
+		           AND w.kind<>'director' AND w.assigned_agent_id<>d.director_agent_id
+		           AND w.status IN ('ready','dispatching','enqueued','running','awaiting_input')
+		       ),
+		       EXISTS(
+		         SELECT 1 FROM research_work_item w
+		         JOIN research_director_assignment d ON d.id=s.current_director_assignment_id AND d.status='active'
+		         WHERE w.workspace_id=s.workspace_id AND w.session_id=s.id
+		           AND w.kind<>'director' AND w.assigned_agent_id<>d.director_agent_id
+		           AND w.status='failed'
+		       ),
+		       EXISTS(
+		         SELECT 1 FROM research_work_item w
+		         WHERE w.workspace_id=s.workspace_id AND w.session_id=s.id
+		           AND w.kind='director' AND w.status='failed'
+		           AND w.terminal_reason_code='contract_rejected'
+		       )
+		FROM research_session s
+		WHERE s.workspace_id=$1::uuid AND s.id=$2::uuid`, proposal.WorkspaceID, proposal.RunID).Scan(
+		&state, &runStatus, &hasWorker, &agentCreationPending, &hasIdleWorker,
+		&hasWorkerWork, &hasActiveWorkerWork, &hasFailedWorkerWork, &hasRejectedAssignment,
+	); err != nil {
 		return err
 	}
 	if state != expectedState {
 		return ErrWorkItemChanged
+	}
+	if runStatus == "running" && !hasWorker && !agentCreationPending {
+		return fmt.Errorf("%w: running Research Run has no non-Director member; create a run-scoped Agent before waiting", ErrInvalidContract)
+	}
+	if runStatus == "running" && hasIdleWorker && !hasWorkerWork && hasRejectedAssignment {
+		return fmt.Errorf("%w: the previous Work assignment was rejected; correct its schema and assign Work to an idle run-scoped Agent instead of returning no_op", ErrInvalidContract)
+	}
+	if runStatus == "running" && hasIdleWorker && !hasActiveWorkerWork && hasFailedWorkerWork {
+		return fmt.Errorf("%w: run-scoped Agent Work failed and no Agent Work is active; retry or reassign failed Work instead of returning no_op", ErrInvalidContract)
 	}
 	if _, err = appendEvent(ctx, tx, proposal.WorkspaceID, proposal.RunID, "v6_director_no_op", "v6-director-action:"+action.IdempotencyKey, "director", "", map[string]any{"director_cycle_id": cycleID, "reason": firstNonEmptyV6(reason, action.Reason)}); err != nil {
 		return err

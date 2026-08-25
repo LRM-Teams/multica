@@ -156,7 +156,7 @@ type gateTestStore struct {
 	completeErr        error
 }
 
-func (store *gateTestStore) EvaluateGate(context.Context, string) (GateResult, error) {
+func (store *gateTestStore) EvaluateGate(context.Context, string, string) (GateResult, error) {
 	store.calls = append(store.calls, "evaluate_gate")
 	return store.gate, store.gateErr
 }

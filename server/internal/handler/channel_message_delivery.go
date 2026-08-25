@@ -244,7 +244,7 @@ func (h *Handler) attachCanonicalMessageMemories(ctx context.Context, workspaceI
 }
 
 // redeliverUnacknowledgedComputerAgentMessages rebuilds the Computer's
-// at-least-once transport queue whenever its Workspace Runner becomes ready.
+// at-least-once transport queue whenever its WorkspaceDaemon becomes ready.
 // The persisted delivery sequence remains the canonical target sequence; this
 // path neither invents a recovery cursor nor changes local context coverage.
 func (h *Handler) redeliverUnacknowledgedComputerAgentMessages(ctx context.Context, identity daemonws.ClientIdentity) error {
@@ -287,41 +287,63 @@ func (h *Handler) redeliverUnacknowledgedComputerAgentMessages(ctx context.Conte
 	if err != nil {
 		return fmt.Errorf("load unacknowledged Computer Agent Messages: %w", err)
 	}
-	defer rows.Close()
+	// Drain the list cursor before nested pool work (memories / graph profile)
+	// so cursordeadlock cannot hold two connections (cursordeadlock / #1803).
+	type pendingComputerAgentMessage struct {
+		agentID pgtype.UUID
+		message protocol.AgentMessageProjection
+		target  string
+		seq     int64
+	}
+	pending := make([]pendingComputerAgentMessage, 0)
 	for rows.Next() {
 		var agentID, messageID, channelID, projectID, authorID pgtype.UUID
 		var seq int64
 		var content, target, channelKind, authorType, authorName, replyTarget string
 		var rawParts []byte
 		if err := rows.Scan(&agentID, &messageID, &channelID, &seq, &content, &rawParts, &target, &channelKind, &projectID, &authorType, &authorID, &authorName, &replyTarget); err != nil {
+			rows.Close()
 			return fmt.Errorf("scan unacknowledged Computer Agent Message: %w", err)
 		}
 		var parts []protocol.MessagePart
 		if len(rawParts) > 0 && string(rawParts) != "null" {
 			if err := json.Unmarshal(rawParts, &parts); err != nil {
+				rows.Close()
 				return fmt.Errorf("decode unacknowledged Computer Agent Message parts: %w", err)
 			}
 		}
-		agentIDText := uuidToString(agentID)
-		message := protocol.AgentMessageProjection{
-			ID: uuidToString(messageID), ChannelID: uuidToString(channelID), Target: target,
-			ReplyTarget: replyTarget, Seq: seq, Content: content, Parts: parts,
-			ChannelKind: channelKind, ProjectID: uuidToString(projectID),
-			InitiatorType: canonicalMessageInitiatorType(authorType),
-			InitiatorID:   uuidToString(authorID), InitiatorName: authorName,
-		}
-		h.attachCanonicalMessageMemories(ctx, identity.WorkspaceID, agentID, &message)
-		delivery := protocol.AgentDeliverPayload{
-			AgentID: agentIDText, Target: target, Seq: seq,
-			DeliveryID: "message:" + message.ID + ":agent:" + agentIDText,
-			Message:    message,
-		}
-		if !h.AgentDeliveryNotifier.NotifyWorkspaceAgentDelivery(identity.WorkspaceID, identity.DaemonID, delivery) {
-			slog.Debug("Computer Agent Message redelivery deferred", "workspace_id", identity.WorkspaceID, "computer_id", identity.DaemonID, "agent_id", agentIDText, "delivery_id", delivery.DeliveryID, "seq", seq)
-		}
+		pending = append(pending, pendingComputerAgentMessage{
+			agentID: agentID,
+			target:  target,
+			seq:     seq,
+			message: protocol.AgentMessageProjection{
+				ID: uuidToString(messageID), ChannelID: uuidToString(channelID), Target: target,
+				ReplyTarget: replyTarget, Seq: seq, Content: content, Parts: parts,
+				ChannelKind: channelKind, ProjectID: uuidToString(projectID),
+				InitiatorType: canonicalMessageInitiatorType(authorType),
+				InitiatorID:   uuidToString(authorID), InitiatorName: authorName,
+			},
+		})
 	}
 	if err := rows.Err(); err != nil {
+		rows.Close()
 		return fmt.Errorf("iterate unacknowledged Computer Agent Messages: %w", err)
+	}
+	rows.Close()
+
+	for i := range pending {
+		item := &pending[i]
+		h.attachCanonicalMessageMemories(ctx, identity.WorkspaceID, item.agentID, &item.message)
+		agentIDText := uuidToString(item.agentID)
+		delivery := protocol.AgentDeliverPayload{
+			AgentID: agentIDText, Target: item.target, Seq: item.seq,
+			DeliveryID: "message:" + item.message.ID + ":agent:" + agentIDText,
+			Message:    item.message,
+		}
+		h.applyGraphMemoryProfileToDelivery(ctx, identity.WorkspaceID, &delivery)
+		if !h.AgentDeliveryNotifier.NotifyWorkspaceAgentDelivery(identity.WorkspaceID, identity.DaemonID, delivery) {
+			slog.Debug("Computer Agent Message redelivery deferred", "workspace_id", identity.WorkspaceID, "computer_id", identity.DaemonID, "agent_id", agentIDText, "delivery_id", delivery.DeliveryID, "seq", item.seq)
+		}
 	}
 	return nil
 }
@@ -476,6 +498,7 @@ func (h *Handler) notifyCanonicalMessageDelivery(ctx context.Context, ch Channel
 		slog.Warn("load Agent Message delivery daemon failed", "workspace_id", ch.WorkspaceID, "agent_id", delivery.AgentID, "runtime_id", uuidToString(recipient.RuntimeID), "message_id", delivery.Message.ID, "error", err)
 		return
 	}
+	h.applyGraphMemoryProfileToDelivery(ctx, ch.WorkspaceID, &delivery)
 	if daemonID == nil || strings.TrimSpace(*daemonID) == "" || !h.AgentDeliveryNotifier.NotifyWorkspaceAgentDelivery(ch.WorkspaceID, *daemonID, delivery) {
 		slog.Debug("Agent Message live delivery deferred to recovery", "workspace_id", ch.WorkspaceID, "agent_id", delivery.AgentID, "daemon_id", daemonID, "message_id", delivery.Message.ID, "delivery_id", delivery.DeliveryID)
 	}

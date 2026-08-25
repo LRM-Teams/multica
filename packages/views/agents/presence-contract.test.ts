@@ -23,6 +23,7 @@ const livePresenceEntryPoints = [
   "../runtimes/components/delete-computer-dialog.tsx",
   "../runtimes/components/delete-runtime-dialog.tsx",
   "../runtimes/components/runtimes-page.tsx",
+  "../members/members-directory-page.tsx",
 ] as const;
 
 describe("Agent Presence hard-cut contract", () => {
@@ -83,7 +84,10 @@ describe("Agent Presence hard-cut contract", () => {
   it("passes the one page-level snapshot into large Agent row avatars", () => {
     const agentsPage = source("components/agents-page.tsx");
     const runtimesPage = source("../runtimes/components/runtimes-page.tsx");
+    const membersPage = source("../members/members-directory-page.tsx");
     expect(agentsPage).toContain("agentPresence={presence}");
     expect(runtimesPage).toContain("presence={presenceMap.get(agent.id) ?? null}");
+    expect(membersPage).toContain("useWorkspaceAgentPresence");
+    expect(membersPage).toContain("agentPresence.get(a.id)");
   });
 });

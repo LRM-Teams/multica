@@ -278,6 +278,25 @@ func (c *Client) doJSON(
 	return resp, nil
 }
 
+// HTTPError is a non-2xx bridge response. Status drives retry classification
+// (429/5xx transient, other 4xx terminal); the body snippet is diagnostics
+// only - callers must assume it can contain echoed secrets and redact before
+// persisting it (A29).
+type HTTPError struct {
+	Op     string
+	Status int
+	Body   string
+}
+
+// Error implements error. The op name and status are safe to log; Body is
+// passed through verbatim for the caller to sanitize.
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf(
+		"arealrl: %s returned status %d: %s",
+		e.Op, e.Status, strings.TrimSpace(e.Body),
+	)
+}
+
 // checkStatus returns an error for any non-2xx response, including a snippet
 // of the response body for diagnostics.
 func checkStatus(resp *http.Response, op string) error {
@@ -285,8 +304,5 @@ func checkStatus(resp *http.Response, op string) error {
 		return nil
 	}
 	snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-	return fmt.Errorf(
-		"arealrl: %s returned status %d: %s",
-		op, resp.StatusCode, strings.TrimSpace(string(snippet)),
-	)
+	return &HTTPError{Op: op, Status: resp.StatusCode, Body: string(snippet)}
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/util"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 const (
@@ -137,6 +138,11 @@ func (h *Handler) acquireWorkOwnerLease(ctx context.Context, workspaceID, agentI
 	issueID, err := util.ParseUUID(issueIDRaw)
 	if err != nil {
 		return WorkOwnerLeaseResponse{}, errWorkOwnerLeaseBadRequest("invalid issue_id")
+	}
+	if _, err := h.Queries.GetIssueInWorkspace(ctx, db.GetIssueInWorkspaceParams{
+		ID: issueID, WorkspaceID: workspaceID,
+	}); err != nil {
+		return WorkOwnerLeaseResponse{}, errWorkOwnerLeaseBadRequest("issue not found in this workspace")
 	}
 	role := strings.TrimSpace(req.Role)
 	if role == "" {

@@ -14,8 +14,8 @@ func TestBindingDrainWaitsThenForcesOnlyManagedProcess(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	backend := &canonicalRuntimeTestBackend{}
 	gracefulCancelled := false
-	pool := newCanonicalAgentRuntimePool()
-	pool.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{backend: backend, running: true}
+	pool := newAgentRuntimePool()
+	pool.slots["agent-1\x00runtime-1"] = &agentRuntimeSlot{backend: backend, running: true}
 	d := &Daemon{
 		canonicalRuntimes: pool,
 		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -35,7 +35,7 @@ func TestBindingDrainWaitsThenForcesOnlyManagedProcess(t *testing.T) {
 	}
 	d.activeTasks.Store(1)
 	d.registerManagedTask(1, func() { gracefulCancelled = true })
-	if err := d.beginBindingDrain(context.Background()); err != nil {
+	if err := d.beginWorkspaceDaemonDrain(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if elapsed := now.Sub(time.Unix(1_700_000_000, 0)); elapsed != bindingDrainGracefulTimeout {
@@ -50,8 +50,8 @@ func TestBindingDrainWaitsThenForcesOnlyManagedProcess(t *testing.T) {
 }
 
 func TestBindingDrainNeverForcesUnownedBackend(t *testing.T) {
-	pool := newCanonicalAgentRuntimePool()
-	pool.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{backend: &canonicalRuntimeNonForceKillableTestBackend{}, running: true}
+	pool := newAgentRuntimePool()
+	pool.slots["agent-1\x00runtime-1"] = &agentRuntimeSlot{backend: &canonicalRuntimeNonForceKillableTestBackend{}, running: true}
 	now := time.Unix(1_700_000_010, 0)
 	d := &Daemon{
 		canonicalRuntimes: pool,
@@ -63,7 +63,7 @@ func TestBindingDrainNeverForcesUnownedBackend(t *testing.T) {
 		},
 	}
 	d.activeTasks.Store(1)
-	if err := d.beginBindingDrain(context.Background()); err == nil {
+	if err := d.beginWorkspaceDaemonDrain(context.Background()); err == nil {
 		t.Fatal("unowned backend force path unexpectedly succeeded")
 	}
 }
@@ -81,7 +81,7 @@ func TestBindingDrainFailsClosedWhenClaimIsStillInFlight(t *testing.T) {
 	if !d.tryEnterClaim() {
 		t.Fatal("pre-barrier claim was not admitted")
 	}
-	err := d.beginBindingDrain(context.Background())
+	err := d.beginWorkspaceDaemonDrain(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "claim") {
 		t.Fatalf("drain error = %v, want an in-flight claim failure", err)
 	}

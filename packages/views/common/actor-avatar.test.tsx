@@ -191,44 +191,52 @@ describe("AgentPresenceOverlay", () => {
 });
 
 describe("AgentStatusDot", () => {
+  const getPresenceCore = () =>
+    screen
+      .getByLabelText(/^Status:/)
+      .querySelector<HTMLElement>('[data-slot="presence-core"]')!;
+
   beforeEach(() => {
     presenceDetailMock.mockReturnValue("online");
   });
 
-  it("scales the dot diameter with the avatar size, clamped to a legible minimum", () => {
+  it("uses discrete badge tiers instead of scaling indefinitely with the avatar", () => {
     const { rerender } = render(<AgentStatusDot agentId="agent-1" size={40} />);
-    // 40 * 0.28 ≈ 11px on a large avatar.
-    expect(screen.getByLabelText(/^Status:/)).toHaveStyle({ width: "11px", height: "11px" });
+    expect(screen.getByLabelText(/^Status:/)).toHaveStyle({ width: "10px", height: "10px" });
+    expect(getPresenceCore()).toHaveStyle({ width: "8px", height: "8px" });
 
-    // A tiny 14px stack avatar clamps to the 5px floor rather than vanishing.
+    // Dense stacks use the smallest complete badge rather than a proportional speck.
     rerender(<AgentStatusDot agentId="agent-1" size={14} />);
-    expect(screen.getByLabelText(/^Status:/)).toHaveStyle({ width: "5px", height: "5px" });
+    expect(screen.getByLabelText(/^Status:/)).toHaveStyle({ width: "6px", height: "6px" });
+    expect(getPresenceCore()).toHaveStyle({ width: "4px", height: "4px" });
   });
 
-  it("carries a surface-colored cut-out ring so it reads on any background", () => {
+  it("uses a surface-colored badge with a separate status core instead of a heavy ring", () => {
     render(<AgentStatusDot agentId="agent-1" size={28} />);
-    const dot = screen.getByLabelText(/^Status:/);
-    expect(dot).toHaveClass("ring-2");
-    expect(dot).toHaveClass("ring-background");
+    const badge = screen.getByLabelText(/^Status:/);
+    const core = getPresenceCore();
+    expect(badge).toHaveClass("bg-background");
+    expect(badge).not.toHaveClass("ring-2");
+    expect(core).toHaveClass("bg-success");
   });
 
-  it("LRM-1119: insets the corner anchor by ring width so fill+ring stay inside the box", () => {
+  it("keeps the complete badge inside the avatar box at the bottom-right corner", () => {
     render(<AgentStatusDot agentId="agent-1" size={40} />);
     const anchor = screen.getByLabelText(/^Status:/).parentElement;
-    expect(anchor).toHaveClass("bottom-0.5");
-    expect(anchor).toHaveClass("right-0.5");
+    expect(anchor).toHaveClass("bottom-0");
+    expect(anchor).toHaveClass("right-0");
   });
 
   it("uses the success color when online but never fakes green when offline", () => {
     const { rerender } = render(<AgentStatusDot agentId="agent-1" size={28} />);
-    expect(screen.getByLabelText(/^Status:/)).toHaveClass("bg-success");
+    expect(getPresenceCore()).toHaveClass("bg-success");
 
     presenceDetailMock.mockReturnValue("offline");
     rerender(<AgentStatusDot agentId="agent-1" size={28} />);
-    const dot = screen.getByLabelText(/^Status:/);
-    expect(dot).not.toHaveClass("bg-success");
-    expect(dot).toHaveClass("border-muted-foreground/50");
-    expect(dot).toHaveClass("bg-transparent");
+    const core = getPresenceCore();
+    expect(core).not.toHaveClass("bg-success");
+    expect(core).toHaveClass("border-muted-foreground/50");
+    expect(core).toHaveClass("bg-transparent");
   });
 
   it("renders nothing while presence is still loading", () => {
@@ -241,25 +249,22 @@ describe("AgentStatusDot", () => {
     presenceDetailMock.mockReturnValue("online");
     const { container } = render(<AgentStatusDot agentId="agent-1" size={28} />);
     expect(container.querySelector(".animate-ping")).toBeNull();
-    expect(screen.getByLabelText(/^Status:/)).toHaveClass("bg-success");
-    expect(screen.getByLabelText(/^Status:/)).not.toHaveClass("bg-warning");
+    expect(getPresenceCore()).toHaveClass("bg-success");
+    expect(getPresenceCore()).not.toHaveClass("bg-warning");
   });
 
-  it("renders an OFFLINE dot as a hollow ring at legible sizes, filled on tiny ones (§3-v2)", () => {
+  it("renders OFFLINE consistently as a quiet hollow core", () => {
     presenceDetailMock.mockReturnValue("offline");
-    // Legible size (40 → ~11px dot) → hollow ring, no filled gray.
     const { rerender } = render(<AgentStatusDot agentId="agent-1" size={40} />);
-    let dot = screen.getByLabelText(/^Status:/);
-    expect(dot).toHaveClass("border-2");
-    expect(dot).toHaveClass("bg-transparent");
-    expect(dot).not.toHaveClass("bg-muted-foreground/40");
+    let core = getPresenceCore();
+    expect(core).toHaveClass("border");
+    expect(core).toHaveClass("bg-transparent");
+    expect(core).not.toHaveClass("bg-muted-foreground/40");
 
-    // Tiny participant-stack dot (14 → clamped to 5px) → hollow unreadable, so
-    // it falls back to the filled gray.
     rerender(<AgentStatusDot agentId="agent-1" size={14} />);
-    dot = screen.getByLabelText(/^Status:/);
-    expect(dot).toHaveClass("bg-muted-foreground/40");
-    expect(dot).not.toHaveClass("border-2");
+    core = getPresenceCore();
+    expect(core).toHaveClass("border");
+    expect(core).toHaveClass("bg-transparent");
   });
 });
 

@@ -24,6 +24,9 @@ import type {
   EvolutionReviewSubmission,
   MemoryCurationRunDetail,
   WorkspaceMemoryCurationStatus,
+  GraphMemoryStatus,
+  GraphMemoryAuditSummary,
+  GraphMemoryConsolidationRun,
   CreateBillingCheckoutSessionResponse,
   CreateBillingPortalSessionResponse,
   GroupedIssuesResponse,
@@ -55,6 +58,7 @@ import type {
   GetVoiceCallResponse,
   EnsureWindyResponse,
   EnsurePeriodBriefAgentResponse,
+  EnsureNotesAssistantAgentResponse,
   EnsurePeriodBriefCollectorsResponse,
   StartVoiceCallDuplexResponse,
   VoiceCallDuplexAudioHint,
@@ -71,11 +75,13 @@ import type {
   NoteWritebackListResponse,
   CreateNoteRetrospectiveResponse,
   CreateNotePeriodBriefResponse,
+  NotePeriodBriefActiveResponse,
+  InsertNotePeriodBriefResponse,
   IssueNoteRef,
   IssueNoteRefListResponse,
 } from "../types";
 import type { CloudRuntimeNode } from "../runtimes/cloud-runtime";
-import type { RawReminderPage } from "../agents/reminder-view-model";
+import type { AgentReminderListResponse } from "../agents/reminder-view-model";
 import type { ConversationHandleLookup } from "../conversations/types";
 
 const AgentRestartModeStateSchema = z.object({
@@ -207,9 +213,12 @@ export const NotePageSchema: z.ZodType<NotePage> = z.object({
   parent_id: z.string().nullable().default(null),
   owner_user_id: z.string().default(""),
   title: z.string().default("Untitled"),
+  icon: z.string().nullable().optional(),
   content: z.string().default(""),
   sort_key: z.string().default(""),
   share_user_ids: z.array(z.string()).default([]),
+  share_agent_ids: z.array(z.string()).default([]),
+  share_channel_ids: z.array(z.string()).default([]),
   can_manage_shares: z.boolean().default(false),
   created_at: z.string().default(""),
   updated_at: z.string().default(""),
@@ -227,9 +236,12 @@ export const EMPTY_NOTE_PAGE: NotePage = {
   parent_id: null,
   owner_user_id: "",
   title: "Untitled",
+  icon: null,
   content: "",
   sort_key: "",
   share_user_ids: [],
+  share_agent_ids: [],
+  share_channel_ids: [],
   can_manage_shares: false,
   created_at: "",
   updated_at: "",
@@ -359,6 +371,7 @@ export const CreateNotePeriodBriefResponseSchema: z.ZodType<CreateNotePeriodBrie
   fact_count: z.number().default(0),
   collector_agent_ids: z.array(z.string()).nullish().transform((v) => v ?? []),
   collector_jobs: z.array(NoteWorkerJobSchema).nullish().transform((v) => v ?? []),
+  chat_session_id: z.string().nullish().transform((v) => v ?? ""),
 }).loose();
 
 export const EMPTY_CREATE_NOTE_PERIOD_BRIEF_RESPONSE: CreateNotePeriodBriefResponse = {
@@ -371,6 +384,33 @@ export const EMPTY_CREATE_NOTE_PERIOD_BRIEF_RESPONSE: CreateNotePeriodBriefRespo
   fact_count: 0,
   collector_agent_ids: [],
   collector_jobs: [],
+  chat_session_id: "",
+};
+
+export const NotePeriodBriefActiveRunSchema = z.object({
+  id: z.string(),
+  status: z.string(),
+  chat_session_id: z.string().nullish().transform((v) => v ?? ""),
+  source_page_id: z.string().nullish().transform((v) => v ?? ""),
+  draft_page_id: z.string(),
+}).loose();
+
+export const NotePeriodBriefActiveResponseSchema: z.ZodType<NotePeriodBriefActiveResponse> = z.object({
+  run: NotePeriodBriefActiveRunSchema.nullable(),
+}).loose();
+
+export const EMPTY_NOTE_PERIOD_BRIEF_ACTIVE: NotePeriodBriefActiveResponse = {
+  run: null,
+};
+
+export const InsertNotePeriodBriefResponseSchema: z.ZodType<InsertNotePeriodBriefResponse> = z.object({
+  mode: z.enum(["append", "child"]),
+  title: z.string().optional(),
+}).loose();
+
+export const EMPTY_INSERT_NOTE_PERIOD_BRIEF_RESPONSE = {
+  mode: "child" as const,
+  title: "",
 };
 
 export const ChannelGoalSchema = z.object({
@@ -663,6 +703,11 @@ export const AgentRuntimeSchema = z.object({
 export const AgentRuntimeListSchema = z.array(AgentRuntimeSchema);
 export const EMPTY_AGENT_RUNTIME_LIST: AgentRuntime[] = [];
 
+export const ComputerRuntimeOptionSchema = z.object({
+  id: z.string().min(1),
+  provider: z.string(),
+}).loose();
+
 export const ComputerConnectionSchema = z.object({
   daemon_id: z.string().min(1),
   owner_id: z.string().min(1),
@@ -672,7 +717,33 @@ export const ComputerConnectionSchema = z.object({
   os: z.string().nullable().optional(),
   cliVersion: z.string().nullable().optional(),
   work_journal_enabled: z.boolean().nullable().optional(),
+  // Runtimes on this Computer the viewer may bind an agent to, already
+  // filtered server-side. Older servers omit it — treat missing as unknown,
+  // not as "none bindable".
+  runtimes: z.array(ComputerRuntimeOptionSchema).optional(),
 }).loose();
+
+export const AgentRuntimeConfigSchema = z.object({
+  computer: z.object({
+    daemon_id: z.string(),
+    name: z.string(),
+    connected: z.boolean(),
+    cli_version: z.string().optional(),
+    os: z.string().optional(),
+    owner_id: z.string().optional(),
+  }).loose().nullable(),
+  runtime: z.object({
+    id: z.string(),
+    provider: z.string(),
+  }).loose().nullable(),
+  model: z.string().optional(),
+  thinking: z.string().optional(),
+}).loose();
+
+export const EMPTY_AGENT_RUNTIME_CONFIG = {
+  computer: null,
+  runtime: null,
+} as const;
 export const ComputerConnectionListSchema = z.array(ComputerConnectionSchema);
 export const EMPTY_COMPUTER_CONNECTION_LIST: ComputerConnection[] = [];
 
@@ -1445,9 +1516,28 @@ export const EMPTY_MEMORY_CURATOR_PROFILE = {
 
 export const GraphMemoryProfileSchema = z.object({
   workspace_id: z.string().default(""),
-  memory_type: z.enum(["legacy", "graph"]).catch("legacy"),
+  // Spec §2/§16: an unsupported memory_type must fail validation (surfaced
+  // via parseWithFallback) rather than silently coerce to legacy mode.
+  memory_type: z.enum(["legacy", "graph"]),
   explore_agents: z.number().int().default(4),
   explore_max_rounds: z.number().int().default(3),
+  ttt_enabled: z.boolean().default(false),
+  explore_nodes_per_expansion: z.number().int().default(1),
+  max_hierarchy_fanout: z.number().int().default(8),
+  max_relation_edges_per_node: z.number().int().default(8),
+  dive_max_rounds: z.number().int().default(6),
+  dive_max_viewed_nodes: z.number().int().default(24),
+  dive_max_source_files: z.number().int().default(4),
+  dive_timeout_seconds: z.number().int().default(600),
+  w_round: z.number().default(0.1),
+  source_max_file_bytes: z.number().int().default(20971520),
+  source_max_total_bytes: z.number().int().default(52428800),
+  source_max_pdf_pages: z.number().int().default(50),
+  source_max_av_seconds: z.number().int().default(600),
+  source_max_image_megapixels: z.number().int().default(40),
+  dive_model: z.string().default(""),
+  dive_provider: z.string().default(""),
+  config_version: z.number().int().default(0),
   updated_at: z.string().default(""),
 }).loose();
 
@@ -1456,7 +1546,103 @@ export const EMPTY_GRAPH_MEMORY_PROFILE = {
   memory_type: "legacy" as const,
   explore_agents: 4,
   explore_max_rounds: 3,
+  ttt_enabled: false,
+  explore_nodes_per_expansion: 1,
+  max_hierarchy_fanout: 8,
+  max_relation_edges_per_node: 8,
+  dive_max_rounds: 6,
+  dive_max_viewed_nodes: 24,
+  dive_max_source_files: 4,
+  dive_timeout_seconds: 600,
+  w_round: 0.1,
+  source_max_file_bytes: 20971520,
+  source_max_total_bytes: 52428800,
+  source_max_pdf_pages: 50,
+  source_max_av_seconds: 600,
+  source_max_image_megapixels: 40,
+  dive_model: "",
+  dive_provider: "",
+  config_version: 0,
   updated_at: "",
+};
+
+export const GraphMemoryGraphStatusSchema = z.object({
+  kind: z.enum(["project", "channel"]).catch("project"),
+  owner_id: z.string().default(""),
+  current_version: z.number().int().default(0),
+  versions: z.array(z.number().int()).default([]),
+  staging_segments: z.number().int().default(0),
+  // Backend omits/nulls this when the graph was never consolidated.
+  last_consolidated_at: z.string().nullable().default(null),
+  consolidation_backoff: z.boolean().default(false),
+  recall_queries_24h: z.number().int().default(0),
+  recall_hit_rate_24h: z.number().default(0),
+}).loose();
+
+export const GraphMemoryStatusSchema = z.object({
+  workspace_id: z.string().default(""),
+  // Same fail-closed rule as the profile schema (spec §2/§16).
+  memory_type: z.enum(["legacy", "graph"]),
+  scoped_writer_ready: z.boolean().default(false),
+  empty_start: z.boolean().default(true),
+  graphs: z.array(GraphMemoryGraphStatusSchema).default([]),
+}).loose();
+
+export const EMPTY_GRAPH_MEMORY_STATUS: GraphMemoryStatus = {
+  workspace_id: "", memory_type: "legacy", scoped_writer_ready: false, empty_start: true, graphs: [],
+};
+
+export const GraphMemoryAuditSummarySchema = z.object({
+  workspace_id: z.string().default(""),
+  queries_24h: z.number().int().default(0),
+  recall_hits_24h: z.number().int().default(0),
+  recall_hit_rate_24h: z.number().default(0),
+  avg_explore_rounds_24h: z.number().default(0),
+  judged_queries_24h: z.number().int().default(0),
+  regressions_total: z.number().int().default(0),
+}).loose();
+
+export const EMPTY_GRAPH_MEMORY_AUDIT: GraphMemoryAuditSummary = {
+  workspace_id: "", queries_24h: 0, recall_hits_24h: 0, recall_hit_rate_24h: 0,
+  avg_explore_rounds_24h: 0, judged_queries_24h: 0, regressions_total: 0,
+};
+
+export const GraphMemoryChannelLineageSchema = z.object({
+  workspace_id: z.string().default(""),
+  channel_id: z.string().default(""),
+  routing_mode: z.enum(["standalone", "project_lineage", ""]).catch(""),
+  current: z.object({
+    graph_kind: z.enum(["project", "channel"]).catch("project"),
+    graph_owner_id: z.string().default(""),
+    generation: z.number().int().default(0),
+  }).loose().nullable().default(null),
+  lineage: z.array(z.object({
+    generation: z.number().int().default(0),
+    graph_kind: z.enum(["project", "channel"]).catch("project"),
+    graph_owner_id: z.string().default(""),
+    valid_from: z.string().default(""),
+    valid_to: z.string().default(""),
+  }).loose()).default([]),
+}).loose();
+
+export const GraphMemoryConsolidationRunSchema = z.object({
+  id: z.string().default(""),
+  workspace_id: z.string().default(""),
+  status: z.string().default("queued"),
+  trigger_kind: z.string().default("manual"),
+  error: z.string().default(""),
+  created_at: z.string().default(""),
+  started_at: z.string().default(""),
+  finished_at: z.string().default(""),
+}).loose();
+
+export const GraphMemoryConsolidationListSchema = z.object({
+  runs: z.array(GraphMemoryConsolidationRunSchema).default([]),
+}).loose();
+
+export const EMPTY_GRAPH_MEMORY_CONSOLIDATION_RUN: GraphMemoryConsolidationRun = {
+  id: "", workspace_id: "", status: "queued", trigger_kind: "manual", error: "",
+  created_at: "", started_at: "", finished_at: "",
 };
 
 export const StartMemoryCurationRunResponseSchema = z.object({
@@ -1898,11 +2084,6 @@ export const IssueSchema = z.object({
   updated_at: z.string(),
 }).loose();
 
-export const CreateNotePageIssueResponseSchema = z.object({
-  issue: IssueSchema,
-  ref: NotePageIssueRefSchema,
-}).loose();
-
 export const ListIssuesResponseSchema = z.object({
   issues: z.array(IssueSchema).default([]),
   total: z.number().default(0),
@@ -2183,9 +2364,9 @@ export const EMPTY_AGENT_HEALTH_RESPONSE: AgentHealthResponse = {
 };
 
 const RunnerActivitySummarySchema = z.object({
+  activityKind: z.string().default(""),
+  detailKind: z.string().default(""),
   label: z.string().default(""),
-  tone: z.string().default("muted"),
-  visibility: z.string().default("hidden"),
 }).loose();
 
 const RunnerActivityTimelineRowSchema = z.object({
@@ -2193,7 +2374,8 @@ const RunnerActivityTimelineRowSchema = z.object({
   occurred_at: z.string().default(""),
   title: z.string().default("Working..."),
   subtext: z.string().optional(),
-  tone: z.string().default("muted"),
+  activity_kind: z.string().default(""),
+  detail_kind: z.string().default(""),
   body_kind: z.string().default("generic"),
   body: z.string().optional(),
 }).loose();
@@ -2517,9 +2699,23 @@ export const EnsurePeriodBriefAgentResponseSchema: z.ZodType<EnsurePeriodBriefAg
   created: z.boolean(),
 }).loose();
 
+export const EnsureNotesAssistantAgentResponseSchema: z.ZodType<EnsureNotesAssistantAgentResponse> = z.object({
+  agent: z.custom<Agent>((value) => MinimalAgentSchema.safeParse(value).success).optional(),
+  created: z.boolean().default(false),
+  aligned: z.boolean().optional(),
+  needs_setup: z.boolean().optional(),
+  onboarding_available: z.boolean().optional(),
+  setup_hint: z.boolean().optional(),
+}).loose();
+
 export const EnsurePeriodBriefCollectorsResponseSchema: z.ZodType<EnsurePeriodBriefCollectorsResponse> = z.object({
   agents: z.array(z.custom<Agent>((value) => MinimalAgentSchema.safeParse(value).success)),
   created: z.array(z.string()),
+  missing: z.array(z.object({
+    key: z.string(),
+    label: z.string(),
+    machine_id: z.string(),
+  })).optional(),
 }).loose();
 
 // Fallback when the success response fails to parse. The agent server-side
@@ -2605,7 +2801,7 @@ export const EMPTY_CONVERSATION_HANDLE_LOOKUP: ConversationHandleLookup = {
 // trust this shape — a drift here would knock both surfaces out. Kept
 // lenient by the same rules as IssueSchema: enums stay `z.string()`,
 // nullable fields are unioned with `null`, unknown server fields pass
-// through via `.loose()`. `profile_description` is the field added in
+// through via `.loose()`. `description` is the field added in
 // MUL-2406; the server emits `""` when unset (NOT NULL DEFAULT ''), so
 // the schema defaults to `""` too — keeps the type tight without
 // breaking older backends that don't return the column yet.
@@ -2621,7 +2817,7 @@ export const UserSchema = z.object({
   onboarding_questionnaire: z.record(z.string(), z.unknown()).default({}),
   starter_content_state: z.string().nullable().default(null),
   language: z.string().nullable().default(null),
-  profile_description: z.string().default(""),
+  description: z.string().default(""),
   timezone: z.string().nullable().default(null),
   created_at: z.string().default(""),
   updated_at: z.string().default(""),
@@ -2637,7 +2833,7 @@ export const EMPTY_USER: User = {
   onboarding_questionnaire: {},
   starter_content_state: null,
   language: null,
-  profile_description: "",
+  description: "",
   timezone: null,
   created_at: "",
   updated_at: "",
@@ -3005,66 +3201,36 @@ export const EMPTY_SANDBOX_SNAPSHOT: SandboxSnapshot = {
   updated_at: "",
 };
 
-// Reminders (task #655/#656, `agent_reminder_read.go`'s `humanReminder*`
-// shapes). `status`/`schedule_kind`/`definition_status` stay `z.string()`
-// (never `z.enum()`) so an unrecognized value still parses the row instead
-// of rejecting the whole page — `adaptUpcomingRow`/`adaptFiredRow` in
-// reminder-view-model.ts are the boundary that narrows to the app's strict
-// literal unions and drops a row it can't safely classify, never
-// misrendering an unknown value as one of the known states.
-const RawReminderAnchorSchema = z.object({
+const AgentReminderAnchorResponseSchema = z.object({
   available: z.boolean(),
   // Not `z.enum()` — an unrecognized future anchor kind must degrade just
   // this row's anchor (see `adaptAnchor`), not fail the whole array element
   // and, transitively, the entire page.
   kind: z.string().optional(),
-  // LRM-507: readable channel/DM name (preferred over legacy `display`).
-  display_name: z.string().optional(),
-  display: z.string().optional(),
+  // LRM-507: readable channel/DM name.
+  displayName: z.string().optional(),
   href: z.string().optional(),
 }).loose();
 
-const RawReminderDefinitionSchema = z.object({
+const AgentReminderDefinitionResponseSchema = z.object({
   id: z.string(),
   title: z.string(),
   status: z.string(),
-  schedule_kind: z.string(),
-  next_fire_at: z.string().optional(),
-  last_fire_at: z.string().optional(),
+  scheduleKind: z.string(),
+  nextFireAt: z.string().optional(),
+  lastFireAt: z.string().optional(),
   cadence: z.string().optional(),
-  schedule_timezone: z.string().optional(),
-  snooze_count: z.number().default(0),
-  anchor: RawReminderAnchorSchema,
+  scheduleTimezone: z.string().optional(),
+  snoozeCount: z.number().default(0),
+  anchor: AgentReminderAnchorResponseSchema,
 }).loose();
 
-const RawReminderOccurrenceSchema = z.object({
-  id: z.string(),
-  reminder_id: z.string(),
-  title: z.string(),
-  status: z.string(),
-  definition_status: z.string(),
-  schedule_kind: z.string(),
-  cadence_scheduled_for: z.string(),
-  due_at: z.string(),
-  fired_at: z.string(),
-  cadence: z.string().optional(),
-  schedule_timezone: z.string().optional(),
-  anchor: RawReminderAnchorSchema,
+export const AgentReminderListResponseSchema = z.object({
+  definitions: z.array(AgentReminderDefinitionResponseSchema).default([]),
 }).loose();
 
-export const RawReminderPageSchema = z.object({
-  definitions: z.array(RawReminderDefinitionSchema).default([]),
-  occurrences: z.array(RawReminderOccurrenceSchema).default([]),
-  limit: z.number().default(0),
-  has_more: z.boolean().default(false),
-  next_cursor: z.string().optional(),
-}).loose();
-
-export const EMPTY_REMINDER_PAGE: RawReminderPage = {
+export const EMPTY_AGENT_REMINDER_LIST: AgentReminderListResponse = {
   definitions: [],
-  occurrences: [],
-  limit: 0,
-  has_more: false,
 };
 
 export const ChannelMentionCandidateSchema = z.object({
@@ -3072,6 +3238,9 @@ export const ChannelMentionCandidateSchema = z.object({
   id: z.string().catch(""),
   handle: z.string().catch(""),
   label: z.string().catch(""),
+  // Self-description (user) or configured description (agent). Server sends
+  // "" when unset; older backends omit it entirely.
+  description: z.string().catch(""),
   avatar_url: z.string().nullish(),
 }).loose();
 

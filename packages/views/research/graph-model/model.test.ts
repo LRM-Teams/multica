@@ -2,15 +2,13 @@
 import { describe, expect, it } from "vitest";
 import {
   adaptV5Graph,
-  adaptV6Delta,
-  adaptV6Snapshot,
 } from "@multica/core/adapters";
 import {
+  canvasFixtureDelta,
+  canvasFixtureSnapshot,
   tombstoneA2Delta,
   twoComponentSnapshot,
   v5FixtureGraph,
-  v6FixtureDelta,
-  v6FixtureSnapshot,
 } from "@multica/core/adapters/fixtures";
 import {
   canvasModelReducer,
@@ -43,27 +41,27 @@ describe("unified canvas ViewModel — (AC3) one render layer for V5 and V6", ()
     }
   });
 
-  it("renders a V6 fixture through the same render layer", () => {
-    const snap = adaptV6Snapshot(v6FixtureSnapshot());
+  it("renders a canvas fixture through the shared render layer", () => {
+    const snap = canvasFixtureSnapshot();
     const model = resetWithSnapshot(snap);
     const render = renderCanvas(model);
     const ids = render.nodes.map((n) => n.id);
     expect(ids.some((id) => id.includes(":claim:c1"))).toBe(true);
     expect(ids.some((id) => id.includes(":insight:i1"))).toBe(true);
-    // Unknown future kind degraded to generic but still rendered with geometry.
-    const generic = render.nodes.find((n) => n.id.includes(":unknown_future_kind:u1"))!;
+    // A generic display node still receives stable geometry.
+    const generic = render.nodes.find((n) => n.id.includes(":future:u1"))!;
     expect(generic.kind).toBe("generic");
     expect(generic.position).toBeDefined();
     expect(render.edges.some((e) => e.relation === "integrates")).toBe(true);
   });
 
-  it("V5 and V6 both enter the identical reducer/render pipeline (no separate path)", () => {
+  it("V5 input and canvas input enter the identical reducer/render pipeline", () => {
     const v5 = resetWithSnapshot(
       adaptV5Graph("s1", v5FixtureGraph().nodes, v5FixtureGraph().edges),
     );
-    const v6 = resetWithSnapshot(adaptV6Snapshot(v6FixtureSnapshot()));
+    const canvas = resetWithSnapshot(canvasFixtureSnapshot());
     // Both models are the same type and are driven by the same reducer/render fns.
-    for (const model of [v5, v6]) {
+    for (const model of [v5, canvas]) {
       const state = freshModel(model);
       expect(typeof canvasModelReducer).toBe("function");
       expect(renderCanvas(state).nodes.length).toBeGreaterThan(0);
@@ -84,8 +82,8 @@ describe("unified canvas ViewModel — (AC1) stable identity & position on recom
     );
   });
 
-  it("recomputing the same V6 snapshot yields identical positions and ids", () => {
-    const snap = adaptV6Snapshot(v6FixtureSnapshot());
+  it("recomputing the same canvas snapshot yields identical positions and ids", () => {
+    const snap = canvasFixtureSnapshot();
     const a = resetWithSnapshot(snap);
     const b = resetWithSnapshot(snap);
     expect(renderCanvas(a).nodes.map((n) => n.id)).toEqual(
@@ -98,14 +96,13 @@ describe("unified canvas ViewModel — (AC1) stable identity & position on recom
 });
 
 describe("unified canvas ViewModel — (AC2) visibility tombstone local recompute", () => {
-  const v6Model = () =>
-    freshModel(resetWithSnapshot(adaptV6Snapshot(v6FixtureSnapshot())));
+  const canvasModel = () => freshModel(resetWithSnapshot(canvasFixtureSnapshot()));
 
   it("removes the tombstoned view node and dangling edges from the render", () => {
-    let model = v6Model();
+    let model = canvasModel();
     model = canvasModelReducer(model, {
       type: "delta",
-      delta: adaptV6Delta(v6FixtureDelta()),
+      delta: canvasFixtureDelta(),
     });
     const render = renderCanvas(model);
     expect(render.nodes.some((n) => n.id.includes(":claim:c1"))).toBe(false);
@@ -136,8 +133,8 @@ describe("unified canvas ViewModel — (AC2) visibility tombstone local recomput
   });
 
   it("is idempotent — the same delta twice never duplicates nodes", () => {
-    let model = v6Model();
-    const delta = adaptV6Delta(v6FixtureDelta());
+    let model = canvasModel();
+    const delta = canvasFixtureDelta();
     model = canvasModelReducer(model, { type: "delta", delta });
     const once = renderCanvas(model).nodes.length;
     model = canvasModelReducer(model, { type: "delta", delta });
@@ -150,11 +147,11 @@ describe("unified canvas ViewModel — (AC2) visibility tombstone local recomput
   });
 
   it("discards hidden (folded) nodes as display-only view without mutating canonical graph", () => {
-    let model = v6Model();
+    let model = canvasModel();
     const canonicalCount = model.snapshot.nodes.length;
     model = canvasModelReducer(model, {
       type: "setHidden",
-      nodeIds: ["run-v6-contract-fixture:claim:c2"],
+      nodeIds: ["run-canvas-fixture:claim:c2"],
     });
     const render = renderCanvas(model);
     expect(render.nodes.some((n) => n.id.includes(":claim:c2"))).toBe(false);

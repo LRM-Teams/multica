@@ -548,6 +548,11 @@ export function useRealtimeSync(
         const wsId = getCurrentWsId();
         if (wsId) {
           qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
+          // The assembled runtime config lives under runtimeKeys (its liveness
+          // rides the daemon/computer refresh chain), so an agent-side change
+          // to the binding, model, or thinking level has to invalidate it
+          // explicitly — the agents key does not cover it.
+          qc.invalidateQueries({ queryKey: [...runtimeKeys.all(wsId), "agent-config"] });
         }
       },
       member: () => {
@@ -1394,6 +1399,10 @@ export function useRealtimeSync(
     const unsubResearchStageEval = ws.on("research_session:stage_eval", onResearchEvent("research_session:stage_eval"));
     const unsubResearchStatus = ws.on("research_session:status_changed", onResearchEvent("research_session:status_changed"));
     const unsubResearchProductRound = ws.on("research_session:product_round", onResearchEvent("research_session:product_round"));
+    const unsubResearchV6Projection = ws.on(
+      "research_projection_v6:delta",
+      onResearchEvent("research_projection_v6:delta"),
+    );
 
     return () => {
       unsubAny();
@@ -1452,6 +1461,7 @@ export function useRealtimeSync(
       unsubResearchStageEval();
       unsubResearchStatus();
       unsubResearchProductRound();
+      unsubResearchV6Projection();
       timers.forEach(clearTimeout);
       timers.clear();
     };

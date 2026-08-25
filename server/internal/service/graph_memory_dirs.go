@@ -29,29 +29,6 @@ func graphMemoryWorkspacesRoot() (string, error) {
 	return filepath.Abs(root)
 }
 
-// graphMemoryDirForWorkspace returns the memory_graph directory serving one
-// workspace: the per-workspace <root>/<workspace>/memory_graph when it
-// exists, else the root-level default layout <root>/memory_graph (the
-// daemon's default GraphMemoryDir). ok is false when neither exists — the
-// workspace has no graph memory store and callers skip silently. This
-// follows the scheduler job's per-dir discovery (findMemoryGraphDirs).
-func graphMemoryDirForWorkspace(root, workspaceID string) (dir string, ok bool) {
-	if root == "" {
-		return "", false
-	}
-	if workspaceID != "" {
-		perWS := filepath.Join(root, workspaceID, "memory_graph")
-		if info, err := os.Stat(perWS); err == nil && info.IsDir() {
-			return perWS, true
-		}
-	}
-	def := filepath.Join(root, "memory_graph")
-	if info, err := os.Stat(def); err == nil && info.IsDir() {
-		return def, true
-	}
-	return "", false
-}
-
 // resolveGraphMemoryType resolves memory_type for one workspace (design
 // §1/A4): a valid graph_memory_profile row wins over the process env default
 // (MULTICA_MEMORY_TYPE); anything unrecognized falls back to the env

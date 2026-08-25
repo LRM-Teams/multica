@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, MessageSquare, Pencil, Trash2 } from "lucide-react";
+import { Loader2, MessageSquare, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import { api } from "@multica/core/api";
 import { useAuthStore } from "@multica/core/auth";
 import { agentRunCounts30dOptions, agentFleetRankingsOptions } from "@multica/core/agents";
@@ -30,6 +30,12 @@ import {
 import { Button } from "@multica/ui/components/ui/button";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@multica/ui/components/ui/dropdown-menu";
+import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -48,6 +54,7 @@ import { MemberSelfAvatarEditor } from "./member-self-avatar-editor";
 import { useOpenAgentPanel } from "../common/agent-panel-context";
 import { ActorAvatar } from "../common/actor-avatar";
 import { ActorStyledName } from "../common/actor-styled-name";
+import { ProfileField, ProfileSectionHeading } from "../common/profile-field";
 import { ConversationSidePanelShell } from "../common/conversation-side-panel-shell";
 import { useOpenDM } from "../common/use-open-dm";
 import { AppLink } from "../navigation";
@@ -55,11 +62,9 @@ import { HonorWall } from "../honor/honor-wall";
 import { UserHonorLevelIcon } from "../honor/user-honor-level-icon";
 import { RolesDialog } from "../settings/components/roles-dialog";
 import { useT } from "../i18n/use-t";
+import { Time } from "../i18n";
 
 const MAX_PROFILE_DESCRIPTION_LEN = 2000;
-
-/** Stable shell leading slot — avoid jsx-as-prop redraw (react-doctor). */
-const MEMBER_PANEL_LOADING_LEADING = <Skeleton className="h-5 w-28" />;
 
 /** Directory-only manage surface (role pencil + Remove in Actions). */
 export type MemberDirectoryManage = {
@@ -114,18 +119,15 @@ export function MemberSidePanel({
   const isPending = (membersPending && !member) || (profilePending && !profile);
   const closeAriaLabel = tChannels(($) => $.profile_popover.close_aria);
   const unavailableLabel = t(($) => $.card.unavailable);
-  // Directory embeds use floating chrome (identity is the header), matching agent.
-  const shellHeader = hideDismiss ? "floating" : "bar";
 
   if (isPending) {
     return (
       <ConversationSidePanelShell
         variant={variant}
         hideDismiss={hideDismiss}
-        header={shellHeader}
+        header="floating"
         onClose={onClose}
         closeAriaLabel={closeAriaLabel}
-        leading={hideDismiss ? undefined : MEMBER_PANEL_LOADING_LEADING}
       >
         <div className="space-y-3 p-4" data-testid="member-side-panel-loading">
           <Skeleton className="h-16 w-16 rounded-full" />
@@ -250,8 +252,7 @@ function MemberSidePanelReady({
     for (const row of fleetRankings) m.set(row.agent_id, row);
     return m;
   }, [fleetRankings]);
-  const messageAriaLabel = t(($) => $.panel.message_aria);
-  const shellHeader = hideDismiss ? "floating" : "bar";
+  const messageLabel = t(($) => $.panel.message_button);
 
   const displayName = useMemo(() => {
     if (member) return resolveActorDisplayName(member, member.name);
@@ -307,12 +308,21 @@ function MemberSidePanelReady({
       })
     : null;
 
-  const description =
-    (profile?.description ?? member?.profile_description ?? "").trim();
+  const description = (profile?.description ?? member?.description ?? "").trim();
   const role = (member?.role ?? profile?.role ?? "") as MemberRole | string;
   const email = member?.email?.trim() || "";
   const joinedAt = member?.created_at ?? null;
-  const canMessage = !!onMessage && !isSelf;
+  // Any member other than yourself can be messaged: hosts that own a
+  // conversation pass `onMessage`, the rest fall back to opening the DM
+  // directly — same reach as the agent panel's Message action.
+  const canMessage = !isSelf;
+  const handleMessage = () => {
+    if (onMessage) {
+      onMessage(userId);
+      return;
+    }
+    void openDM({ peer_type: "user", peer_id: userId });
+  };
   const youSuffix = isSelf ? ` ${t(($) => $.panel.you_suffix)}` : "";
 
   const runCountById = useMemo(
@@ -332,58 +342,55 @@ function MemberSidePanelReady({
       });
   }, [agents, runCountById, userId]);
 
-  // Dock chrome (conversation): name + Message. Directory: floating, no bar actions.
-  const identityLeading = useMemo(
-    () => (
-      <p className="min-w-0 truncate text-sm font-semibold">{displayName}</p>
-    ),
-    [displayName],
-  );
-
-  // Conversation dock keeps Message in chrome; directory moves Message into Actions.
-  const chromeActions = useMemo(() => {
-    if (hideDismiss) return null;
-    if (canMessage) {
-      return (
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          onClick={() => onMessage?.(userId)}
-          aria-label={messageAriaLabel}
-          data-testid="member-side-panel-message"
+  // Linear-style chrome (aligned with the agent panel — Frank 2026-08-25): a
+  // single ghost `⋯` trigger opens a dropdown menu holding the member
+  // actions (Message / Edit profile), so the panel's top-right corner only
+  // ever shows two icons (⋯ + ✕). Directory embeds render no chrome at all
+  // — identity is the floating header there and actions live in the
+  // content's Actions section instead. Accessible name comes from
+  // aria-label; no native title (banned by #3619).
+  const showChromeMessage = !hideDismiss && canMessage;
+  const showChromeEditProfile = !hideDismiss && isSelf;
+  const chromeActions =
+    showChromeMessage || showChromeEditProfile ? (
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              data-testid="member-side-panel-actions-menu"
+              aria-label={t(($) => $.panel.actions_more_aria)}
+            />
+          }
         >
-          <MessageSquare className="size-4" aria-hidden />
-        </Button>
-      );
-    }
-    if (isSelf) {
-      return (
-        <AppLink href={`${paths.settings()}?tab=profile`}>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="h-7 gap-1 px-2 text-xs"
-            data-testid="member-side-panel-edit-profile"
-          >
-            <Pencil className="size-3" aria-hidden />
-            {t(($) => $.panel.edit_profile)}
-          </Button>
-        </AppLink>
-      );
-    }
-    return null;
-  }, [
-    hideDismiss,
-    canMessage,
-    isSelf,
-    messageAriaLabel,
-    onMessage,
-    paths,
-    t,
-    userId,
-  ]);
+          <MoreHorizontal className="size-4 shrink-0" aria-hidden />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          {showChromeMessage ? (
+            <DropdownMenuItem
+              data-testid="member-side-panel-message"
+              disabled={openingDM}
+              onClick={handleMessage}
+            >
+              <MessageSquare className="size-4 shrink-0" aria-hidden />
+              {messageLabel}
+            </DropdownMenuItem>
+          ) : null}
+
+          {showChromeEditProfile ? (
+            <DropdownMenuItem
+              data-testid="member-side-panel-edit-profile"
+              render={<AppLink href={`${paths.settings()}?tab=profile`} />}
+            >
+              <Pencil className="size-4 shrink-0" aria-hidden />
+              {t(($) => $.panel.edit_profile)}
+            </DropdownMenuItem>
+          ) : null}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    ) : null;
 
   const invalidateProfileCaches = () => {
     void qc.invalidateQueries({
@@ -396,7 +403,7 @@ function MemberSidePanelReady({
   };
 
   const saveDescription = async (next: string) => {
-    const updated = await api.updateMe({ profile_description: next });
+    const updated = await api.updateMe({ description: next });
     setUser(updated);
     invalidateProfileCaches();
   };
@@ -414,14 +421,6 @@ function MemberSidePanelReady({
         ? t(($) => $.role.admin)
         : t(($) => $.role.member);
 
-  const handleMessage = () => {
-    if (onMessage) {
-      onMessage(userId);
-      return;
-    }
-    void openDM({ peer_type: "user", peer_id: userId });
-  };
-
   // Directory embed: Message (+ Remove) in Actions, matching agent profile.
   // Conversation dock: Message stays in chrome only — do not double-render.
   const canEditRole = directoryManage?.canEditRole === true;
@@ -433,11 +432,10 @@ function MemberSidePanelReady({
     <ConversationSidePanelShell
       variant={variant}
       hideDismiss={hideDismiss}
-      header={shellHeader}
+      header="floating"
       onClose={onClose}
       closeAriaLabel={closeAriaLabel}
       doneLabel={doneLabel}
-      leading={hideDismiss ? undefined : identityLeading}
       actions={chromeActions}
     >
       <div
@@ -447,8 +445,12 @@ function MemberSidePanelReady({
         )}
         data-testid="member-side-panel"
       >
-        {/* Identity — matches agent floating header row */}
-        <div className="mb-1 flex items-start gap-3">
+        {/* Identity — matches agent floating header row. Floating chrome sits
+            over this row; a live chrome trigger + ✕ reserves room (2 × 32px
+            icons + gap-0.5 + the 10px corner offset ≈ 76px, rounded up to
+            pr-20 / 80px — same math as the agent panel). Directory embeds
+            (`hideDismiss`) render no chrome, so no reserve is needed. */}
+        <div className={cn("mb-1 flex items-start gap-3", !hideDismiss && "pr-20")}>
           {isSelf ? (
             <MemberSelfAvatarEditor userId={userId}>
               <ActorAvatar
@@ -558,9 +560,9 @@ function MemberSidePanelReady({
 
           {honorWall ? (
             <section className="border-t border-border pt-3">
-              <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                {t(($) => $.panel.honor_title)}
-              </h3>
+              <div className="mb-2">
+              <ProfileSectionHeading label={t(($) => $.panel.honor_title)} />
+            </div>
               <HonorWall
                 wall={honorWall}
                 completionLabel={t(($) => $.panel.honor_completion, {
@@ -592,9 +594,9 @@ function MemberSidePanelReady({
           ) : null}
 
           <section className="border-t border-border pt-3">
-            <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-              {t(($) => $.panel.info)}
-            </h3>
+            <div className="mb-2">
+              <ProfileSectionHeading label={t(($) => $.panel.info)} />
+            </div>
             <div className="grid grid-cols-[100px_minmax(0,1fr)] gap-x-3 gap-y-2 text-[13px]">
               <span className="pt-0.5 text-muted-foreground">
                 {t(($) => $.panel.role)}
@@ -631,19 +633,19 @@ function MemberSidePanelReady({
                   <span className="text-muted-foreground">
                     {t(($) => $.panel.joined)}
                   </span>
-                  <span className="truncate">{formatJoinedDate(joinedAt)}</span>
+                  <Time kind="date" value={joinedAt} className="truncate" />
                 </>
               ) : null}
             </div>
           </section>
 
           <section className="border-t border-border pt-3">
-            <h3 className="mb-2 flex items-center justify-between gap-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-              <span>{t(($) => $.panel.created_agents)}</span>
-              <span className="font-medium tabular-nums text-muted-foreground/80">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <ProfileSectionHeading label={t(($) => $.panel.created_agents)} />
+              <span className="text-[11px] font-medium tabular-nums text-muted-foreground/80">
                 {ownedAgents.length}
               </span>
-            </h3>
+            </div>
             {ownedAgents.length === 0 ? (
               <p className="text-[13px] text-muted-foreground">
                 {t(($) => $.panel.no_agents)}
@@ -682,9 +684,9 @@ function MemberSidePanelReady({
               aria-label={t(($) => $.panel.actions_section)}
               data-testid="member-profile-actions"
             >
-              <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                {t(($) => $.panel.actions_section)}
-              </h3>
+              <div className="mb-2">
+              <ProfileSectionHeading label={t(($) => $.panel.actions_section)} />
+            </div>
               <div className="flex flex-col gap-2">
                 {showActionMessage ? (
                   <Button
@@ -792,23 +794,6 @@ function MemberSidePanelReady({
   );
 }
 
-function ProfileField({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div>
-      <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-        {label}
-      </div>
-      {children}
-    </div>
-  );
-}
-
 function CreatedAgentRow({
   agent,
   fleet,
@@ -893,12 +878,3 @@ function CreatedAgentRow({
   );
 }
 
-function formatJoinedDate(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
-}

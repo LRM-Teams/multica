@@ -30,7 +30,7 @@ describe("D5 trajectory selection seam", () => {
     );
     expect(handler).toContain('setRailMode("detail")');
     expect(handler).toContain("setRailOpen(true)");
-    expect(handler).toContain("openAgentInspector");
+    expect(handler).not.toContain("openAgentInspector");
     expect(handler).toContain("openReport");
   });
 });

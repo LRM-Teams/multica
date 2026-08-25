@@ -207,7 +207,7 @@ func diffAgentMemoryWrites(agentRoot string, prior memoryWriteSnapshot) (memoryW
 
 const memorySignalQueueRel = "sync_queue/memory-signal.jsonl"
 
-func (d *Daemon) reportAgentMemoryWrites(ctx context.Context, task Task) {
+func (d *Daemon) reportAgentMemoryWrites(ctx context.Context, task Task, friction memorysignal.FrictionVector) {
 	if d == nil || d.client == nil {
 		return
 	}
@@ -229,7 +229,9 @@ func (d *Daemon) reportAgentMemoryWrites(ctx context.Context, task Task) {
 	}
 	triggerText := memoryWriteTriggerText(task)
 	signals := loadMemorySignals(agentRoot)
-	if len(changes) == 0 && !memorysignal.ShouldReportEvenWithoutWrites(triggerText, toMemorySignals(signals)) {
+	// Non-zero friction forces a report even without writes so the server-side
+	// friction guard can queue a lesson candidate (friction-gated memory spec).
+	if len(changes) == 0 && friction.IsZero() && !memorysignal.ShouldReportEvenWithoutWrites(triggerText, toMemorySignals(signals)) {
 		// A removed durable file produces no current-file write event. Reconcile
 		// the atom index anyway so the deletion becomes a center tombstone.
 		d.syncAgentMemoryCenter(ctx, task, nil)
@@ -253,6 +255,15 @@ func (d *Daemon) reportAgentMemoryWrites(ctx context.Context, task Task) {
 		InitiatorID: strings.TrimSpace(task.InitiatorID),
 		Signals:     signals,
 		Writes:      entries,
+	}
+	if !friction.IsZero() {
+		report.Friction = &AgentFrictionVector{
+			HumanCorrection: friction.HumanCorrection,
+			ActionRejected:  friction.ActionRejected,
+			RetryLoop:       friction.RetryLoop,
+			Rework:          friction.Rework,
+			SelfErrorStreak: friction.SelfErrorStreak,
+		}
 	}
 	if err := d.client.ReportAgentMemoryWrites(ctx, report); err != nil {
 		return
@@ -352,4 +363,14 @@ type AgentMemoryWriteReport struct {
 	InitiatorID string                  `json:"initiator_id,omitempty"`
 	Signals     []AgentMemorySignal     `json:"signals,omitempty"`
 	Writes      []AgentMemoryWriteEntry `json:"writes"`
+	Friction    *AgentFrictionVector    `json:"friction,omitempty"`
+}
+
+// AgentFrictionVector mirrors protocol.AgentFrictionVector for the client.
+type AgentFrictionVector struct {
+	HumanCorrection int `json:"human_correction,omitempty"`
+	ActionRejected  int `json:"action_rejected,omitempty"`
+	RetryLoop       int `json:"retry_loop,omitempty"`
+	Rework          int `json:"rework,omitempty"`
+	SelfErrorStreak int `json:"self_error_streak,omitempty"`
 }

@@ -212,7 +212,7 @@ func deliverWebPushToSubscriptions(ctx context.Context, queries *db.Queries, sen
 	if len(gone) > 0 {
 		_, err := queries.DeleteWebPushSubscriptionsByEndpoints(ctx, db.DeleteWebPushSubscriptionsByEndpointsParams{
 			UserID:    userID,
-			Endpoints: gone,
+			Column2:   gone,
 		})
 		if err != nil {
 			slog.Error("web push: cleanup failed subscriptions", "error", err)
@@ -223,7 +223,7 @@ func deliverWebPushToSubscriptions(ctx context.Context, queries *db.Queries, sen
 func webPushChannelInfoForRecipient(ctx context.Context, queries *db.Queries, workspaceID, channelID, recipientID string) (webPushChannelInfo, error) {
 	row, err := queries.GetWebPushChannelRecipientInfo(ctx, db.GetWebPushChannelRecipientInfoParams{
 		WorkspaceID: parseUUID(workspaceID),
-		ChannelID:   parseUUID(channelID),
+		ID:          parseUUID(channelID),
 		MemberID:    parseUUID(recipientID),
 	})
 	if err != nil {

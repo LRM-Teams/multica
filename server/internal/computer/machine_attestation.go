@@ -46,8 +46,8 @@ func ValidateSuccessorPIDVersion(want SuccessorPIDVersion, got MachineAttestatio
 	if got.SourceServicePID != want.SourceServicePID {
 		return fmt.Errorf("source service pid %d does not match predecessor %d", got.SourceServicePID, want.SourceServicePID)
 	}
-	if !sameHostStringSet(got.ManagedWorkspaceIDs, want.AcceptedManagedWorkspaceIDs) || got.ManagedSetRevision != want.AcceptedManagedSetRevision {
-		return fmt.Errorf("managed runner set has not converged")
+	if !sameWorkspaceSet(got.ManagedWorkspaceIDs, want.AcceptedManagedWorkspaceIDs) || got.ManagedSetRevision != want.AcceptedManagedSetRevision {
+		return fmt.Errorf("managed Workspace set has not converged")
 	}
 	return nil
 }

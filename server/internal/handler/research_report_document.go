@@ -264,7 +264,9 @@ func (h *Handler) ServeResearchV6ReportDocument(w http.ResponseWriter, r *http.R
 	w.Header().Set("Content-Length", strconv.FormatInt(documentSize, 10))
 	w.Header().Set("ETag", `"`+documentHash+`"`)
 	if status == "published" {
-		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		// Keep browser caching within the signed rendering capability lifetime.
+		// Shared caches (CDN/proxy) must never store workspace-private Reports.
+		w.Header().Set("Cache-Control", "private, max-age=300, immutable")
 	} else {
 		w.Header().Set("Cache-Control", "no-store")
 	}

@@ -156,7 +156,7 @@ export function buildNoteWriteConfirmationByMessageId(
 
 /**
  * For each agent message, map to the most recent preceding `note_brief` page id
- * in timeline order (Worker 「按这篇做」 trigger).
+ * in timeline order (Worker / Period Brief trigger).
  */
 export function buildNoteWorkerPageIdByMessageId(
   messages: readonly ChannelMessage[],

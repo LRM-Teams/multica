@@ -93,3 +93,26 @@ func TestShouldProactivelyCompactSkipsIneffectiveRepeat(t *testing.T) {
 		t.Fatal("after occupancy falls under the resume line, 60% may compact again")
 	}
 }
+
+func TestRunMemoryFlushBeforeCompactionIsFailOpen(t *testing.T) {
+	called := false
+	MemoryFlushBeforeCompaction = func(root string) {
+		called = true
+		if root != "/tmp/agent" {
+			t.Fatalf("root = %q", root)
+		}
+		panic("hook must not escape")
+	}
+	t.Cleanup(func() { MemoryFlushBeforeCompaction = nil })
+	runMemoryFlushBeforeCompaction("/tmp/agent")
+	if !called {
+		t.Fatal("expected hook")
+	}
+	runMemoryFlushBeforeCompaction("  ")
+}
+
+func TestProcessWorkingDir(t *testing.T) {
+	if processWorkingDir(nil) != "" {
+		t.Fatal("nil cmd")
+	}
+}

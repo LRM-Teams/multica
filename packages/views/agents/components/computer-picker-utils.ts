@@ -13,10 +13,11 @@ export function machineForRuntime(
 export function firstRuntimeMachine(
   machines: RuntimeMachine[],
   currentUserId?: string | null,
+  bindableIds?: ReadonlySet<string> | null,
 ): RuntimeMachine | null {
   if (currentUserId !== undefined) {
     for (const machine of machines) {
-      if (machine.runtimes.some((r) => isRuntimeUsableForUser(r, currentUserId))) {
+      if (machine.runtimes.some((r) => isRuntimeUsableForUser(r, currentUserId, bindableIds))) {
         return machine;
       }
     }
@@ -28,11 +29,12 @@ export function firstRuntimeMachine(
 export function firstRuntimeIdOnMachine(
   machine: RuntimeMachine | null | undefined,
   currentUserId?: string | null,
+  bindableIds?: ReadonlySet<string> | null,
 ): string {
   if (!machine) return "";
   if (currentUserId !== undefined) {
     const usable = machine.runtimes.find((r) =>
-      isRuntimeUsableForUser(r, currentUserId),
+      isRuntimeUsableForUser(r, currentUserId, bindableIds),
     );
     if (usable) return usable.id;
   }

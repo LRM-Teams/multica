@@ -68,9 +68,17 @@ type createAgentRestartRequest struct {
 	Mode AgentRestartMode `json:"mode"`
 }
 
-// StartAgent allocates a fresh immutable launch and dispatch identity before
-// asking the current Workspace Runner to start it. Reusing a failed dispatch
-// would only replay Raft's original acceptance receipt without spawning.
+type agentLifecycleRequestError struct {
+	status  int
+	message string
+}
+
+func writeAgentLifecycleRequestError(w http.ResponseWriter, err *agentLifecycleRequestError) {
+	writeError(w, err.status, err.message)
+}
+
+// StartAgent asks the current Workspace Daemon to converge the Agent's active
+// runtime assignment.
 func (h *Handler) StartAgent(w http.ResponseWriter, r *http.Request) {
 	agent, ok := h.loadAgentRestartTarget(w, r)
 	if !ok {
@@ -79,49 +87,45 @@ func (h *Handler) StartAgent(w http.ResponseWriter, r *http.Request) {
 	restarts := h.restarts()
 	restarts.lifecycleMu.Lock()
 	defer restarts.lifecycleMu.Unlock()
-	if !agent.RuntimeID.Valid {
-		writeError(w, http.StatusConflict, "agent_runtime_missing")
-		return
-	}
-	runtime, err := h.Queries.GetAgentRuntimeForWorkspace(r.Context(), db.GetAgentRuntimeForWorkspaceParams{
-		ID: agent.RuntimeID, WorkspaceID: agent.WorkspaceID,
-	})
-	if err != nil {
-		writeError(w, http.StatusConflict, "agent_runtime_missing")
-		return
-	}
-	if !runtime.DaemonID.Valid {
-		writeError(w, http.StatusConflict, "agent_runtime_offline")
-		return
-	}
-	launchID := uuid.NewString()
-	dispatchID := uuid.NewString()
-	var sessionID string
-	err = h.DB.QueryRow(r.Context(), `
-		UPDATE agent_runner_launch_projection
-		SET launch_id = $1, start_dispatch_id = $2, updated_at = now()
-		WHERE workspace_id = $3 AND agent_id = $4 AND runtime_id = $5
-		RETURNING COALESCE(provider_session_id, '')
-	`, launchID, dispatchID, agent.WorkspaceID, agent.ID, runtime.ID).Scan(&sessionID)
-	if err != nil {
-		writeError(w, http.StatusConflict, "agent_launch_unavailable")
-		return
-	}
-	h.restarts().finish(uuidToString(agent.ID))
-	if h.AgentRestartNotifier == nil || !h.AgentRestartNotifier.NotifyAgentRestartCommand(
-		uuidToString(agent.WorkspaceID), runtime.DaemonID.String, protocol.EventDaemonAgentStart, dispatchID,
-		protocol.WorkspaceRunnerAgentStartPayload{
-			AgentID: uuidToString(agent.ID), RuntimeID: uuidToString(runtime.ID), LaunchID: launchID, StartDispatchID: dispatchID,
-			Config: protocol.WorkspaceRunnerAgentStartConfig{SessionID: sessionID},
-		},
-	) {
-		// The desired launch and immutable dispatch are already recorded.
-		// Reconnect reconciliation replays that exact Start; it must not turn an
-		// unavailable first delivery into manual Stop intent.
-		writeJSON(w, http.StatusAccepted, map[string]string{"status": "starting"})
+	if err := h.startAgent(r.Context(), agent); err != nil {
+		writeAgentLifecycleRequestError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "starting"})
+}
+
+func (h *Handler) startAgent(ctx context.Context, agent db.Agent) *agentLifecycleRequestError {
+	if !agent.RuntimeID.Valid {
+		return &agentLifecycleRequestError{status: http.StatusConflict, message: "agent_runtime_missing"}
+	}
+	runtime, err := h.Queries.GetAgentRuntimeForWorkspace(ctx, db.GetAgentRuntimeForWorkspaceParams{
+		ID: agent.RuntimeID, WorkspaceID: agent.WorkspaceID,
+	})
+	if err != nil {
+		return &agentLifecycleRequestError{status: http.StatusConflict, message: "agent_runtime_missing"}
+	}
+	if !runtime.DaemonID.Valid {
+		return &agentLifecycleRequestError{status: http.StatusConflict, message: "agent_runtime_offline"}
+	}
+	var sessionID string
+	err = h.DB.QueryRow(ctx, `SELECT COALESCE(provider_session_id, '') FROM agent WHERE id = $1 AND archived_at IS NULL`, agent.ID).Scan(&sessionID)
+	if err != nil {
+		return &agentLifecycleRequestError{status: http.StatusConflict, message: "agent_runtime_missing"}
+	}
+	if _, err := h.DB.Exec(ctx, `UPDATE agent SET stopped_at = NULL, updated_at = now() WHERE id = $1`, agent.ID); err != nil {
+		return &agentLifecycleRequestError{status: http.StatusInternalServerError, message: "failed to start Agent"}
+	}
+	h.restarts().finish(uuidToString(agent.ID))
+	if h.AgentRestartNotifier == nil || !h.AgentRestartNotifier.NotifyAgentRestartCommand(
+		uuidToString(agent.WorkspaceID), runtime.DaemonID.String, protocol.EventDaemonAgentStart, uuid.NewString(),
+		protocol.AgentStartPayload{
+			AgentID: uuidToString(agent.ID), RuntimeID: uuidToString(runtime.ID), Config: protocol.AgentStartConfig{SessionID: sessionID},
+		},
+	) {
+		// Desired state remains the Agent row. Reconnect reconciliation retries it.
+		return nil
+	}
+	return nil
 }
 
 func (h *Handler) StopAgent(w http.ResponseWriter, r *http.Request) {
@@ -132,47 +136,41 @@ func (h *Handler) StopAgent(w http.ResponseWriter, r *http.Request) {
 	restarts := h.restarts()
 	restarts.lifecycleMu.Lock()
 	defer restarts.lifecycleMu.Unlock()
-	workspaceID := uuidToString(agent.WorkspaceID)
-	agentID := uuidToString(agent.ID)
-	if !agent.RuntimeID.Valid {
-		writeError(w, http.StatusConflict, "agent_runtime_missing")
-		return
-	}
-	runtime, err := h.Queries.GetAgentRuntimeForWorkspace(r.Context(), db.GetAgentRuntimeForWorkspaceParams{
-		ID: agent.RuntimeID, WorkspaceID: agent.WorkspaceID,
-	})
-	if err != nil || !runtime.DaemonID.Valid {
-		writeError(w, http.StatusConflict, "agent_runtime_offline")
-		return
-	}
-	var launchID string
-	if restart, active := h.restarts().get(agentID); active && restart.workspaceID == workspaceID &&
-		restart.runtimeID == uuidToString(runtime.ID) && restart.computerID == runtime.DaemonID.String {
-		if restart.step == agentRestartStepStarting {
-			launchID = restart.startLaunchID
-		} else {
-			launchID = restart.stopLaunchID
-		}
-		h.restarts().finish(agentID)
-	}
-	if launchID == "" {
-		err = h.DB.QueryRow(r.Context(), `
-			SELECT launch_id::text FROM agent_runner_launch_projection
-			WHERE workspace_id = $1 AND agent_id = $2 AND runtime_id = $3
-		`, agent.WorkspaceID, agent.ID, runtime.ID).Scan(&launchID)
-		if err != nil || launchID == "" {
-			writeError(w, http.StatusConflict, "agent_launch_unavailable")
-			return
-		}
-	}
-	if h.AgentRestartNotifier == nil || !h.AgentRestartNotifier.NotifyAgentRestartCommand(
-		workspaceID, runtime.DaemonID.String, protocol.EventDaemonAgentStop, launchID,
-		protocol.WorkspaceRunnerAgentStopPayload{AgentID: agentID, LaunchID: launchID},
-	) {
-		writeError(w, http.StatusConflict, "agent_runtime_offline")
+	if err := h.stopAgent(r.Context(), agent); err != nil {
+		writeAgentLifecycleRequestError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "stopping"})
+}
+
+func (h *Handler) stopAgent(ctx context.Context, agent db.Agent) *agentLifecycleRequestError {
+	workspaceID := uuidToString(agent.WorkspaceID)
+	agentID := uuidToString(agent.ID)
+	if !agent.RuntimeID.Valid {
+		return &agentLifecycleRequestError{status: http.StatusConflict, message: "agent_runtime_missing"}
+	}
+	runtime, err := h.Queries.GetAgentRuntimeForWorkspace(ctx, db.GetAgentRuntimeForWorkspaceParams{
+		ID: agent.RuntimeID, WorkspaceID: agent.WorkspaceID,
+	})
+	if err != nil || !runtime.DaemonID.Valid {
+		return &agentLifecycleRequestError{status: http.StatusConflict, message: "agent_runtime_offline"}
+	}
+	if restart, active := h.restarts().get(agentID); active && restart.workspaceID == workspaceID &&
+		restart.runtimeID == uuidToString(runtime.ID) && restart.computerID == runtime.DaemonID.String {
+		h.restarts().finish(agentID)
+	}
+	if _, err := h.DB.Exec(ctx, `UPDATE agent SET stopped_at = now(), updated_at = now() WHERE id = $1`, agent.ID); err != nil {
+		return &agentLifecycleRequestError{status: http.StatusInternalServerError, message: "failed to stop Agent"}
+	}
+	if h.AgentRestartNotifier == nil || !h.AgentRestartNotifier.NotifyAgentRestartCommand(
+		workspaceID, runtime.DaemonID.String, protocol.EventDaemonAgentStop, uuid.NewString(),
+		protocol.AgentStopPayload{AgentID: agentID},
+	) {
+		// stopped_at is the user's desired state. Reconnect reconciliation
+		// enforces it even when the immediate command cannot be delivered.
+		return nil
+	}
+	return nil
 }
 
 // GetAgentRestart returns the server-authoritative capability for Raft's
@@ -213,23 +211,28 @@ func (h *Handler) ResetAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid mode")
 		return
 	}
-	runtime, supported, reason, err := h.agentRestartRuntimeSupport(r.Context(), agent)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to start Agent restart")
+	operation, requestErr := h.resetAgent(r.Context(), agent, req.Mode, storageKind)
+	if requestErr != nil {
+		writeAgentLifecycleRequestError(w, requestErr)
 		return
+	}
+	writeJSON(w, http.StatusAccepted, operation)
+}
+
+func (h *Handler) resetAgent(ctx context.Context, agent db.Agent, mode AgentRestartMode, storageKind agentRestartStorageKind) (AgentRestartOperation, *agentLifecycleRequestError) {
+	runtime, supported, reason, err := h.agentRestartRuntimeSupport(ctx, agent)
+	if err != nil {
+		return AgentRestartOperation{}, &agentLifecycleRequestError{status: http.StatusInternalServerError, message: "failed to start Agent restart"}
 	}
 	if !supported {
-		writeError(w, http.StatusConflict, reason)
-		return
+		return AgentRestartOperation{}, &agentLifecycleRequestError{status: http.StatusConflict, message: reason}
 	}
-	if req.Mode == agentRestartModeFull &&
-		!workspaceRunnerResetCapabilityPresent(runtimeCapabilities(runtimeMetadata(runtime))) {
-		writeError(w, http.StatusConflict, "unsupported_runtime_capability")
-		return
+	if mode == agentRestartModeFull &&
+		!workspaceDaemonResetCapabilityPresent(runtimeCapabilities(runtimeMetadata(runtime))) {
+		return AgentRestartOperation{}, &agentLifecycleRequestError{status: http.StatusConflict, message: "unsupported_runtime_capability"}
 	}
 	if !runtime.DaemonID.Valid {
-		writeError(w, http.StatusConflict, "current Workspace Runner unavailable during Agent restart operation")
-		return
+		return AgentRestartOperation{}, &agentLifecycleRequestError{status: http.StatusConflict, message: "current WorkspaceDaemon unavailable during Agent restart operation"}
 	}
 	now := time.Now().UTC()
 	state, accepted := h.restarts().begin(activeAgentRestartState{
@@ -242,10 +245,13 @@ func (h *Handler) ResetAgent(w http.ResponseWriter, r *http.Request) {
 		step:        agentRestartStepStopping,
 	})
 	if !accepted {
-		writeError(w, http.StatusConflict, "an Agent restart is already active")
-		return
+		return AgentRestartOperation{}, &agentLifecycleRequestError{status: http.StatusConflict, message: "an Agent restart is already active"}
 	}
-	if err := h.beginAgentRestartOperation(r.Context(), state); err != nil {
+	if _, err := h.DB.Exec(ctx, `UPDATE agent SET stopped_at = NULL, updated_at = now() WHERE id = $1`, agent.ID); err != nil {
+		h.restarts().finish(uuidToString(agent.ID))
+		return AgentRestartOperation{}, &agentLifecycleRequestError{status: http.StatusInternalServerError, message: "failed to start Agent restart"}
+	}
+	if err := h.beginAgentRestartOperation(ctx, state); err != nil {
 		slog.Warn(
 			"Agent Restart command not yet delivered",
 			"workspace_id", state.workspaceID,
@@ -253,22 +259,22 @@ func (h *Handler) ResetAgent(w http.ResponseWriter, r *http.Request) {
 			"runtime_id", state.runtimeID,
 			"agent_id", state.agentID,
 			"operation_id", state.operationID,
-			"mode", req.Mode,
+			"mode", mode,
 			"step", state.step,
 			"error", err,
 		)
 	}
 	startedAt := now.Format(time.RFC3339Nano)
-	writeJSON(w, http.StatusAccepted, AgentRestartOperation{
+	return AgentRestartOperation{
 		ID:        state.operationID,
 		AgentID:   state.agentID,
 		RuntimeID: uuidToPtr(runtime.ID),
-		Mode:      req.Mode,
+		Mode:      mode,
 		Status:    agentRestartRunning,
 		Step:      state.step,
 		CreatedAt: startedAt,
 		StartedAt: &startedAt,
-	})
+	}, nil
 }
 
 func (h *Handler) loadAgentRestartTarget(w http.ResponseWriter, r *http.Request) (db.Agent, bool) {
@@ -295,7 +301,7 @@ func (h *Handler) agentRestartPreflight(ctx context.Context, target db.Agent) (A
 		return AgentRestartPreflight{}, err
 	}
 	actions := make(map[AgentRestartMode]AgentRestartModePreflight, 3)
-	resetWorkspaceSupported := supported && workspaceRunnerResetCapabilityPresent(runtimeCapabilities(runtimeMetadata(runtime)))
+	resetWorkspaceSupported := supported && workspaceDaemonResetCapabilityPresent(runtimeCapabilities(runtimeMetadata(runtime)))
 	for _, mode := range []AgentRestartMode{
 		agentRestartModeRestart,
 		agentRestartModeSession,
@@ -336,7 +342,7 @@ func (h *Handler) agentRestartRuntimeSupport(ctx context.Context, agent db.Agent
 		time.Since(runtime.LastSeenAt.Time) >= agentHealthStaleThreshold {
 		return runtime, false, "agent_runtime_offline", nil
 	}
-	if !workspaceRunnerAgentProcessCapabilityPresent(runtimeCapabilities(runtimeMetadata(runtime))) {
+	if !workspaceDaemonAgentProcessCapabilityPresent(runtimeCapabilities(runtimeMetadata(runtime))) {
 		return runtime, false, "unsupported_runtime_capability", nil
 	}
 	return runtime, true, "", nil
@@ -366,18 +372,18 @@ func agentRestartModeForStorage(action agentRestartStorageKind) AgentRestartMode
 	}
 }
 
-func workspaceRunnerAgentProcessCapabilityPresent(capabilities []string) bool {
+func workspaceDaemonAgentProcessCapabilityPresent(capabilities []string) bool {
 	for _, capability := range capabilities {
-		if capability == protocol.DaemonCapabilityWorkspaceRunnerAgentProcess {
+		if capability == protocol.DaemonCapabilityWorkspaceDaemonAgentProcess {
 			return true
 		}
 	}
 	return false
 }
 
-func workspaceRunnerResetCapabilityPresent(capabilities []string) bool {
+func workspaceDaemonResetCapabilityPresent(capabilities []string) bool {
 	for _, capability := range capabilities {
-		if capability == protocol.DaemonCapabilityWorkspaceRunnerAgentReset {
+		if capability == protocol.DaemonCapabilityWorkspaceDaemonAgentReset {
 			return true
 		}
 	}

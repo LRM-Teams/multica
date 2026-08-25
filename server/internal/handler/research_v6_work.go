@@ -4,11 +4,15 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/multica-ai/multica/server/internal/logger"
 	"github.com/multica-ai/multica/server/internal/researchrun"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 const maxResearchV6SubmissionBytes int64 = 2 << 20
@@ -32,6 +36,14 @@ func (h *Handler) researchV6Submission(w http.ResponseWriter) (researchrun.Resea
 }
 
 func (h *Handler) authorizeResearchV6Attempt(w http.ResponseWriter, r *http.Request) (researchrun.V6AttemptAccess, bool) {
+	return h.authorizeResearchV6AttemptWithReplay(w, r, false)
+}
+
+func (h *Handler) authorizeResearchV6SubmissionAttempt(w http.ResponseWriter, r *http.Request) (researchrun.V6AttemptAccess, bool) {
+	return h.authorizeResearchV6AttemptWithReplay(w, r, true)
+}
+
+func (h *Handler) authorizeResearchV6AttemptWithReplay(w http.ResponseWriter, r *http.Request, allowSettledReplay bool) (researchrun.V6AttemptAccess, bool) {
 	principal, ok := h.requireAgentPrincipal(w, r)
 	if !ok {
 		return researchrun.V6AttemptAccess{}, false
@@ -61,17 +73,47 @@ func (h *Handler) authorizeResearchV6Attempt(w http.ResponseWriter, r *http.Requ
 		}
 		return access, true
 	}
-	event, _, active := h.requireAgentCredentialActiveInboxDelivery(w, r)
-	if !active {
+	// The daemon's durable Credential Proxy deliberately strips the retired
+	// task and lease headers. Bind the request back to the exact active V6
+	// attempt server-side instead of asking the Agent process to carry those
+	// credentials. The attempt UUIDs, assignment, Inbox binding, and draining
+	// state together form the task fence. The Agent may start immediately after
+	// Inbox insertion, before outbox completion attaches inbox_task_id, so the
+	// exact immutable Inbox context also closes that dispatch race.
+	err := h.DB.QueryRow(r.Context(), `
+		SELECT COALESCE(a.inbox_task_id::text,'')
+		FROM research_work_item_attempt a
+		JOIN agent_inbox_event e
+		  ON e.workspace_id=a.workspace_id AND e.agent_id=a.assigned_agent_id
+		JOIN research_team_membership m
+		  ON (m.workspace_id,m.session_id,m.id)=(a.workspace_id,a.session_id,a.membership_id)
+		WHERE a.workspace_id=$1::uuid AND a.session_id=$2::uuid
+		  AND a.work_item_id=$3::uuid AND a.id=$4::uuid
+		  AND a.assigned_agent_id=$5::uuid AND m.agent_id=$5::uuid
+		  AND e.workspace_id=$1::uuid AND e.agent_id=$5::uuid
+		  AND m.state NOT IN ('archived','failed')
+		  AND (
+		    (a.status IN ('dispatching','running') AND e.status='draining')
+		    OR (
+		      $6::boolean
+		      AND a.status IN ('succeeded','failed','cancelled')
+		      AND EXISTS (
+		        SELECT 1 FROM research_v6_work_submission sub
+		        WHERE (sub.workspace_id,sub.session_id,sub.work_item_id,sub.attempt_id)=
+		              (a.workspace_id,a.session_id,a.work_item_id,a.id)
+		      )
+		    )
+		  )
+		  AND (a.inbox_task_id IS NULL OR e.id=a.inbox_task_id)
+		  AND e.context->>'type'='research_run_work_item'
+		  AND e.context->>'run_id'=a.session_id::text
+		  AND e.context->>'work_item_id'=a.work_item_id::text
+		  AND e.context->>'attempt_id'=a.id::text
+	`, access.WorkspaceID, access.RunID, access.WorkItemID, access.AttemptID, access.AgentID, allowSettledReplay).Scan(&access.InboxTaskID)
+	if err != nil {
+		writeRonaldoV6Error(w, http.StatusConflict, "research.v6.principal_mismatch", "research attempt is not the active Agent task", false)
 		return researchrun.V6AttemptAccess{}, false
 	}
-	var binding researchV6InboxContext
-	if json.Unmarshal(event.Context, &binding) != nil || binding.Type != "research_run_work_item" ||
-		binding.RunID != access.RunID || binding.WorkItemID != access.WorkItemID || binding.AttemptID != access.AttemptID {
-		writeRonaldoV6Error(w, http.StatusForbidden, "research.v6.principal_mismatch", "active inbox delivery does not match this research attempt", false)
-		return researchrun.V6AttemptAccess{}, false
-	}
-	access.InboxTaskID = uuidToString(event.ID)
 	return access, true
 }
 
@@ -146,12 +188,54 @@ func (h *Handler) AcknowledgeAgentResearchV6WorkCatalog(w http.ResponseWriter, r
 	writeJSON(w, http.StatusOK, map[string]any{"acknowledged": true})
 }
 
-func (h *Handler) SubmitAgentResearchV6Work(w http.ResponseWriter, r *http.Request) {
+type reportResearchV6ProgressRequest struct {
+	ClientRequestID string `json:"client_request_id"`
+	Text            string `json:"text"`
+	Stage           string `json:"stage"`
+}
+
+// ReportAgentResearchV6WorkProgress records a one-line in-flight progress note
+// for the active attempt. Notes surface as live presence captions in the run
+// UI; they never mutate work item state and never settle the attempt.
+func (h *Handler) ReportAgentResearchV6WorkProgress(w http.ResponseWriter, r *http.Request) {
 	service, ok := h.researchV6Submission(w)
 	if !ok {
 		return
 	}
 	access, ok := h.authorizeResearchV6Attempt(w, r)
+	if !ok {
+		return
+	}
+	var request reportResearchV6ProgressRequest
+	if !decodeResearchJSON(w, r, &request) {
+		return
+	}
+	if _, valid := parseUUIDOrBadRequest(w, request.ClientRequestID, "client_request_id"); !valid {
+		return
+	}
+	err := service.ReportWorkProgress(r.Context(), researchrun.ReportV6WorkProgressInput{
+		V6AttemptAccess: access, ClientRequestID: request.ClientRequestID,
+		Text: request.Text, Stage: request.Stage,
+	})
+	if err != nil {
+		writeResearchV6DomainError(w, err)
+		return
+	}
+	h.publish(protocol.EventResearchSessionPresence, access.WorkspaceID, "agent", access.AgentID, map[string]any{
+		"session_id": access.RunID,
+		"agent_id":   access.AgentID,
+		"activity":   researchrun.PrepareV6WorkProgressText(request.Text),
+		"updated_at": time.Now().UTC().UnixMilli(),
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"recorded": true})
+}
+
+func (h *Handler) SubmitAgentResearchV6Work(w http.ResponseWriter, r *http.Request) {
+	service, ok := h.researchV6Submission(w)
+	if !ok {
+		return
+	}
+	access, ok := h.authorizeResearchV6SubmissionAttempt(w, r)
 	if !ok {
 		return
 	}
@@ -166,6 +250,13 @@ func (h *Handler) SubmitAgentResearchV6Work(w http.ResponseWriter, r *http.Reque
 	}
 	outcome, err := service.SubmitV6Work(r.Context(), researchrun.V6SubmissionInput{V6AttemptAccess: access, Raw: raw})
 	if err != nil {
+		slog.Warn("research V6 work submission rejected", append(logger.RequestAttrs(r),
+			"error", err,
+			"run_id", access.RunID,
+			"work_item_id", access.WorkItemID,
+			"attempt_id", access.AttemptID,
+			"agent_id", access.AgentID,
+		)...)
 		writeResearchV6DomainError(w, err)
 		return
 	}
@@ -243,7 +334,7 @@ func (h *Handler) AcknowledgeAgentResearchV6DirectorBrief(w http.ResponseWriter,
 func writeResearchV6DomainError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, researchrun.ErrInvalidContract):
-		writeRonaldoV6Error(w, http.StatusBadRequest, "research.v6.invalid_contract", "invalid research V6 contract", false)
+		writeRonaldoV6Error(w, http.StatusBadRequest, "research.v6.invalid_contract", researchV6InvalidContractMessage(err), false)
 	case errors.Is(err, researchrun.ErrAttemptNotAssigned):
 		writeRonaldoV6Error(w, http.StatusForbidden, "research.v6.principal_mismatch", "research attempt is not assigned to this principal", false)
 	case errors.Is(err, researchrun.ErrV6IdempotencyConflict), errors.Is(err, researchrun.ErrResultConflict):
@@ -261,6 +352,23 @@ func writeResearchV6DomainError(w http.ResponseWriter, err error) {
 	default:
 		writeRonaldoV6Error(w, http.StatusInternalServerError, "research.v6.internal", "research V6 request failed", true)
 	}
+}
+
+func researchV6InvalidContractMessage(err error) string {
+	const fallback = "invalid research V6 contract"
+	detail := strings.TrimSpace(err.Error())
+	for strings.HasPrefix(detail, researchrun.ErrInvalidContract.Error()) {
+		detail = strings.TrimSpace(strings.TrimPrefix(detail, researchrun.ErrInvalidContract.Error()))
+		detail = strings.TrimSpace(strings.TrimPrefix(detail, ":"))
+	}
+	if detail == "" {
+		return fallback
+	}
+	const maxDetailBytes = 1024
+	if len(detail) > maxDetailBytes {
+		detail = detail[:maxDetailBytes]
+	}
+	return fallback + ": " + detail
 }
 
 func writeRonaldoV6Error(w http.ResponseWriter, status int, code, message string, retryable bool) {

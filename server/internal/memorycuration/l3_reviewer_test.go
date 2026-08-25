@@ -105,7 +105,7 @@ func TestAgentStageRunnerUsesPiToolsAndAgentRoot(t *testing.T) {
 
 func TestStageAgentContractsRequireConciseDailyAndMemory(t *testing.T) {
 	selfReview := stageAgentContract(StageAgentSelfReview)
-	for _, want := range []string{"terse event index", "at most 240 characters", "one stable fact or rule per bullet", "at most 180 characters", "never copy steps, logs, file lists, or chat"} {
+	for _, want := range []string{"terse event index", "at most 240 characters", "one stable fact or rule per bullet", "at most 180 characters", "never copy steps, logs, file lists, or chat", "compaction_flush"} {
 		if !strings.Contains(selfReview, want) {
 			t.Fatalf("self-review contract missing %q: %s", want, selfReview)
 		}

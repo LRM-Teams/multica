@@ -45,7 +45,7 @@ func TestPATCache_NilSafe(t *testing.T) {
 		t.Fatalf("nil cache must miss; got (%q, %v)", v, ok)
 	}
 	c.Set(ctx, "any-hash", "user-1", AuthCacheTTL) // no panic
-	c.Invalidate(ctx, "any-hash")                 // no panic
+	c.Invalidate(ctx, "any-hash")                  // no panic
 }
 
 func TestNewPATCache_NilRedisReturnsNil(t *testing.T) {

@@ -24,15 +24,15 @@ func TestInsertMemoryCurationAgentRuns_StaleHeartbeatSkipsNotQueues(t *testing.T
 
 	var staleRuntimeID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (
-		  workspace_id, daemon_id, name, runtime_mode, provider, status,
-		  device_info, metadata, owner_id, visibility, last_seen_at, updated_at
-		) VALUES ($1, 'memory-curation-insert-stale-daemon', 'Memory Curation Insert Stale Runtime', 'local', 'codex', 'online',
-		          '', '{}'::jsonb, $2, 'private', now() - interval '10 minutes', now() - interval '9 minutes')
+		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, visibility, last_seen_at, updated_at) VALUES ($1,  'memory-curation-insert-stale-daemon',  'Memory Curation Insert Stale Runtime',  'local',  'codex',  'online', 
+		          '',  '{}'::jsonb,  'private',  now() - interval '10 minutes',  now() - interval '9 minutes')
 		RETURNING id::text
-	`, testWorkspaceID, testUserID).Scan(&staleRuntimeID); err != nil {
+	`, testWorkspaceID).Scan(&staleRuntimeID); err != nil {
 		t.Fatal(err)
 	}
+
+	bindTestRuntimeOwner(t, "memory-curation-insert-stale-daemon", testUserID)
+
 	var agentID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (workspace_id, name, display_name, runtime_mode, runtime_id, owner_id, model)
@@ -138,15 +138,15 @@ func TestMemoryCurationBackfillSkipsIdleAndSucceededDays(t *testing.T) {
 	ctx := context.Background()
 	var runtimeID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (
-		  workspace_id, daemon_id, name, runtime_mode, provider, status,
-		  device_info, metadata, owner_id, visibility, last_seen_at
-		) VALUES ($1, 'memory-curator-backfill-daemon', 'Memory Curator Backfill Runtime', 'local', 'cursor', 'online',
-		          'memory curator backfill', jsonb_build_object('capabilities', jsonb_build_array($2::text)), $3, 'private', now())
+		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, visibility, last_seen_at) VALUES ($1,  'memory-curator-backfill-daemon',  'Memory Curator Backfill Runtime',  'local',  'cursor',  'online', 
+		          'memory curator backfill',  jsonb_build_object('capabilities', jsonb_build_array($2::text)),  'private',  now())
 		RETURNING id::text
-	`, testWorkspaceID, protocol.DaemonCapabilityMemoryCuration, testUserID).Scan(&runtimeID); err != nil {
+	`, testWorkspaceID, protocol.DaemonCapabilityMemoryCuration).Scan(&runtimeID); err != nil {
 		t.Fatal(err)
 	}
+
+	bindTestRuntimeOwner(t, "memory-curator-backfill-daemon", testUserID)
+
 	var curatorAgentID, targetAgentID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (workspace_id, name, display_name, runtime_mode, runtime_id, owner_id, instructions, model)

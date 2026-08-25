@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -15,6 +16,30 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/memorycuration"
 )
+
+// writeLegacyCurationNotApplicable is the stable graph-mode response for
+// legacy-only curation endpoints (spec §10): graph workspaces never run
+// legacy L1-L4 pipelines, and callers get an explicit machine-readable
+// answer instead of a silently frozen queue.
+func writeLegacyCurationNotApplicable(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusConflict)
+	_, _ = w.Write([]byte(`{"error":"legacy_curation_not_applicable","memory_type":"graph"}`))
+}
+
+// graphMemoryTypeForWorkspace resolves the effective memory_type for one
+// workspace (design §1/A4): a valid graph_memory_profile row wins over the
+// process env default (MULTICA_MEMORY_TYPE), then "legacy".
+func (h *Handler) graphMemoryTypeForWorkspace(ctx context.Context, workspaceID pgtype.UUID) string {
+	if profile := h.graphMemoryProfileForWorkspace(ctx, workspaceID); profile.memoryType != "" {
+		return profile.memoryType
+	}
+	envType := strings.ToLower(strings.TrimSpace(os.Getenv("MULTICA_MEMORY_TYPE")))
+	if envType == "graph" || envType == "legacy" {
+		return envType
+	}
+	return "legacy"
+}
 
 type startMemoryCurationRequest struct {
 	AgentID        string   `json:"agent_id"`
@@ -228,6 +253,10 @@ func (h *Handler) StartMemoryCurationRun(w http.ResponseWriter, r *http.Request)
 	}
 	if !roleAllowed(member.Role, "owner", "admin") {
 		writeError(w, http.StatusForbidden, "only workspace owner/admin can run team curation")
+		return
+	}
+	if h.graphMemoryTypeForWorkspace(r.Context(), parseUUID(workspaceID)) == "graph" {
+		writeLegacyCurationNotApplicable(w)
 		return
 	}
 	profile, err := h.loadMemoryCuratorProfile(r, workspaceID, uuidToString(member.UserID))

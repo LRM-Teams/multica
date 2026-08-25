@@ -8,17 +8,16 @@ import (
 	"time"
 )
 
-// ServiceControlEndpoint is the machine-owned IPC endpoint used by Binding
-// children and lifecycle clients.
+// ServiceControlEndpoint is ComputerCore's IPC endpoint for WorkspaceDaemons
+// and lifecycle clients.
 func ServiceControlEndpoint(residentRoot string) string {
 	return localControlEndpoint(residentRoot, "service")
 }
 
-// RunnerControlEndpoint is one identity-fenced Binding runner's IPC
-// endpoint. Its name is bounded even when Workspace identifiers are long.
-func RunnerControlEndpoint(residentRoot string, identity BindingChildIdentity) string {
+// WorkspaceDaemonControlEndpoint is one identity-fenced WorkspaceDaemon IPC endpoint.
+func WorkspaceDaemonControlEndpoint(residentRoot string, identity WorkspaceDaemonIdentity) string {
 	return localControlEndpoint(residentRoot, strings.Join([]string{
-		"runner", identity.WorkspaceID, identity.StartIdentity,
+		"runner", identity.WorkspaceID, identity.DaemonInstanceID,
 	}, "-"))
 }
 

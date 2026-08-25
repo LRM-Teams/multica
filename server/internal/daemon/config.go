@@ -44,9 +44,12 @@ const (
 	MemoryTypeGraph  = "graph"
 	// DefaultMemoryType keeps the legacy memory pipeline active unless the
 	// operator opts into the graph reviewer via MULTICA_MEMORY_TYPE=graph.
-	DefaultMemoryType                = MemoryTypeLegacy
-	DefaultGraphExploreAgents        = 1
-	DefaultGraphExploreMaxRounds     = 3
+	DefaultMemoryType         = MemoryTypeLegacy
+	DefaultGraphExploreAgents = 1
+	// DefaultGraphExploreMaxRounds matches memorygraph.DefaultExploreConfig:
+	// the merged /explore protocol counts one round per served node, so the
+	// budget is larger than the legacy /view+/expand round count.
+	DefaultGraphExploreMaxRounds     = 6
 	DefaultGraphRewardTimeoutSeconds = 600
 	// DefaultMemoryCurationL3ReviewTimeout is the per-invocation wall clock for
 	// the curator agent (self-review / team curation / L3). 30s was too short
@@ -84,7 +87,7 @@ type Config struct {
 	Agents         map[string]AgentEntry // keyed by provider: claude, codex, opencode, pi, cursor, kiro, grok
 	WorkspacesRoot string                // base path containing workspace directories (default: ~/.multica/workspaces)
 	// BindingStateRoot isolates durable workspace-execution coordinator state
-	// for one Binding child. Empty keeps the historical single-process paths.
+	// for one WorkspaceDaemon. Empty keeps the historical single-process paths.
 	BindingStateRoot string
 	HealthPort       int // local HTTP port for health checks (default: 19514)
 	// LocalControlToken authenticates owner-only loopback mutation requests.
@@ -101,9 +104,6 @@ type Config struct {
 	// or "graph" (design §1 memory_type switch). Any other value is a
 	// configuration error and fails LoadConfig.
 	MemoryType string
-	// GraphMemoryDir is the root of the memorygraph.Store layout (design
-	// §4.1). Empty in env resolves to <WorkspacesRoot>/memory_graph.
-	GraphMemoryDir string
 	// GraphEmbed* configure the OpenAI-compatible embedding endpoint used by
 	// the hybrid retriever's vector channel (design §5.2). Empty BaseURL/Model
 	// silently disables embeddings and retrieval runs BM25-only.
@@ -120,13 +120,8 @@ type Config struct {
 	// Q28): pending explore traces whose judge result never arrives are
 	// resolved with the miss penalty after this long.
 	GraphRewardTimeoutSeconds int
-	// MaxAgentProcesses bounds distinct agents with a live resident provider
-	// process on this Computer (#35). 0 = unlimited and is the production
-	// default. MULTICA_MAX_AGENT_PROCESSES enables an explicit operator safety
-	// valve; it is separate from the Raft-aligned start scheduling contract.
-	MaxAgentProcesses int
-	PollInterval      time.Duration
-	HeartbeatInterval time.Duration
+	PollInterval              time.Duration
+	HeartbeatInterval         time.Duration
 	// InboundWatchdog is the daemon-ws silence threshold for probe→terminate
 	// reconnect (default 70s). 0 disables. Override: MULTICA_DAEMON_INBOUND_WATCHDOG.
 	InboundWatchdog                time.Duration
@@ -266,7 +261,7 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	if e, ok := probe("MULTICA_GROK_PATH", agent.ProviderGrok, "MULTICA_GROK_MODEL"); ok {
 		agents[agent.ProviderGrok] = e
 	}
-	// Zero detected agent CLIs is a valid Computer. Setup and Binding child
+	// Zero detected agent CLIs is a valid Computer. Setup and WorkspaceDaemon
 	// connectivity are proven by the Workspace connection, not by runtime count.
 
 	claudeArgs, err := shellArgsFromEnv("MULTICA_CLAUDE_ARGS")
@@ -277,7 +272,7 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	// Host info
+	// Machine hostname
 	host, err := os.Hostname()
 	if err != nil || strings.TrimSpace(host) == "" {
 		host = "local-machine"
@@ -445,11 +440,6 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	if memoryCurationRunTimeout <= 0 {
 		return Config{}, fmt.Errorf("MULTICA_DAEMON_MEMORY_CURATION_RUN_TIMEOUT: must be positive")
 	}
-	maxAgentProcesses, err := resolveMaxAgentProcessesFromEnv(os.Getenv)
-	if err != nil {
-		return Config{}, err
-	}
-
 	// Graph memory reviewer (design §1/§6). memory_type fails loud on any
 	// value outside legacy|graph: a typo must not silently pin the daemon to
 	// the wrong memory pipeline.
@@ -461,10 +451,6 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	case MemoryTypeLegacy, MemoryTypeGraph:
 	default:
 		return Config{}, fmt.Errorf("MULTICA_MEMORY_TYPE: invalid memory type %q (want %q or %q)", memoryType, MemoryTypeLegacy, MemoryTypeGraph)
-	}
-	graphMemoryDir := strings.TrimSpace(os.Getenv("MULTICA_GRAPH_MEMORY_DIR"))
-	if graphMemoryDir == "" {
-		graphMemoryDir = filepath.Join(workspacesRoot, "memory_graph")
 	}
 	graphExploreAgents, err := positiveIntFromEnv("MULTICA_GRAPH_EXPLORE_AGENTS", DefaultGraphExploreAgents)
 	if err != nil {
@@ -498,14 +484,12 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		MemoryCurationL3ReviewTimeout:  memoryCurationL3ReviewTimeout,
 		MemoryCurationRunTimeout:       memoryCurationRunTimeout,
 		MemoryType:                     memoryType,
-		GraphMemoryDir:                 graphMemoryDir,
 		GraphEmbedBaseURL:              strings.TrimSpace(os.Getenv("MULTICA_GRAPH_EMBED_BASE_URL")),
 		GraphEmbedAPIKey:               strings.TrimSpace(os.Getenv("MULTICA_GRAPH_EMBED_API_KEY")),
 		GraphEmbedModel:                strings.TrimSpace(os.Getenv("MULTICA_GRAPH_EMBED_MODEL")),
 		GraphExploreAgents:             graphExploreAgents,
 		GraphExploreMaxRounds:          graphExploreMaxRounds,
 		GraphRewardTimeoutSeconds:      graphRewardTimeoutSeconds,
-		MaxAgentProcesses:              maxAgentProcesses,
 		HealthPort:                     healthPort,
 		PollInterval:                   pollInterval,
 		HeartbeatInterval:              heartbeatInterval,

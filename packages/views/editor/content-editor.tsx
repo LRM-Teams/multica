@@ -56,6 +56,7 @@ import type { MentionAgentCandidate, MentionItem } from "./extensions/mention-su
 import { createEditorExtensions } from "./extensions";
 import { uploadAndInsertFile } from "./extensions/file-upload";
 import { preprocessMarkdown } from "./utils/preprocess";
+import { applyTableColwidthsFromMarkdown } from "./table-markdown";
 import { openLink, isMentionHref } from "./utils/link-handler";
 import { EditorBubbleMenu, type TextOptimizationRequest } from "./bubble-menu";
 import { EmptyLineAiMenu, type EmptyLineAiState, type PageEditAIAction } from "./empty-line-ai-menu";
@@ -94,8 +95,16 @@ interface ContentEditorProps {
   showBubbleMenu?: boolean;
   /** Optional AI rewrite action for the selected text plus nearby context. */
   onOptimizeSelection?: (request: TextOptimizationRequest, options?: { signal?: AbortSignal; onStatus?: (status: NoteAIJobStatus) => void }) => Promise<NoteAIEditResult>;
+  /** Open the Notes assistant with the selection quoted in the composer. */
+  onAskAboutSelection?: (text: string) => void;
   /** Optional Notion-style empty-line AI action for editing the current page. */
   onEditPageWithAI?: PageEditAIAction;
+  /**
+   * Called when the empty-line prompt is sent. Return false to handle the
+   * request elsewhere — e.g. open the Notes assistant sidebar so the human
+   * can configure 笔记助手. Space still opens the in-note input bar.
+   */
+  onRequestPageAI?: () => boolean;
   /** Applies an AI-suggested title only after the user confirms an edit. */
   onApplyAITitle?: (title: string) => void;
   /** Current title snapshot used to undo AI title suggestions. */
@@ -181,15 +190,20 @@ interface ContentEditorProps {
    * every other editor (issue/comment/description) keeps its current behavior.
    */
   plainUrls?: boolean;
+  /**
+   * Notes-only: enable selection color / font-size marks and apply
+   * `--note-default-*` CSS variables to the editor root.
+   */
+  enableTextStyles?: boolean;
+  /** CSS custom properties for notes default typography. */
+  contentCssVars?: Record<string, string | undefined>;
 }
 
 interface ContentEditorRef {
   getMarkdown: () => string;
   clearContent: () => void;
   focus: () => void;
-  /** Drop focus from the editor — used by chat after send so the caret
-   *  stops competing with the StatusPill / streaming reply for the user's
-   *  attention. */
+  /** Drop focus from the editor (Escape / blur-shortcut paths). */
   blur: () => void;
   uploadFile: (file: File) => void;
   /** True when file uploads are still in progress. */
@@ -230,7 +244,9 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
       onUploadFile,
       showBubbleMenu = true,
       onOptimizeSelection,
+      onAskAboutSelection,
       onEditPageWithAI,
+      onRequestPageAI,
       onApplyAITitle,
       currentAITitle,
       showEmptyLinePlaceholder = false,
@@ -252,6 +268,8 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
       mediaMode = "inline",
       onExternalFiles,
       plainUrls = false,
+      enableTextStyles = false,
+      contentCssVars,
     },
     ref,
   ) {
@@ -387,6 +405,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
             });
           }
         }
+        applyTableColwidthsFromMarkdown(ed, initialContent);
         lastEmittedRef.current = stripBlobUrls(ed.getMarkdown()).trimEnd();
       },
       content: mountChunked ? "" : initialContent,
@@ -415,6 +434,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
           enableIssueReferences,
           enableSlashCommands,
         slashCommandMode,
+        enableTextStyles,
       }),
       onUpdate: ({ editor: ed }) => {
         if (!onUpdateRef.current) return;
@@ -489,6 +509,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
         attributes: {
           class: cn(
             "flex-1 rich-text-editor text-sm outline-none",
+            enableTextStyles && "note-format",
             showEmptyLinePlaceholder && "show-empty-line-placeholder",
             className,
           ),
@@ -496,12 +517,40 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
       },
     });
 
-    // Cleanup debounce on unmount
+    // Cleanup debounce on unmount — flush any pending markdown so table layout
+    // edits (colwidth) and last keystrokes reach the parent before unmount.
     useEffect(() => {
       return () => {
-        if (debounceRef.current) clearTimeout(debounceRef.current);
+        if (debounceRef.current) {
+          clearTimeout(debounceRef.current);
+          debounceRef.current = undefined;
+        }
+        if (!editor || editor.isDestroyed || !onUpdateRef.current) {
+          return;
+        }
+        const md = stripBlobUrls(editor.getMarkdown()).trimEnd();
+        if (md !== lastEmittedRef.current) {
+          lastEmittedRef.current = md;
+          onUpdateRef.current(md);
+        }
       };
-    }, []);
+    }, [editor]);
+
+    useEffect(() => {
+      if (!editor || editor.isDestroyed) return;
+      const el = editor.view.dom as HTMLElement;
+      el.classList.toggle("note-format", enableTextStyles);
+      const keys = [
+        "--note-default-font-family",
+        "--note-default-font-size",
+        "--note-default-color",
+      ] as const;
+      for (const key of keys) {
+        const value = contentCssVars?.[key];
+        if (value) el.style.setProperty(key, value);
+        else el.style.removeProperty(key);
+      }
+    }, [contentCssVars, editor, enableTextStyles]);
 
     // Sync external `defaultValue` changes into the editor.
     // Tiptap v3 `useEditor` reads `content` only at mount (ueberdosis/tiptap#5831);
@@ -559,6 +608,8 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
           contentType: "markdown",
         });
       }
+
+      applyTableColwidthsFromMarkdown(editor, incoming);
 
       // Clamp prior selection to the new doc size so the caret doesn't snap
       // to position 0 after ProseMirror replaces the document.
@@ -726,7 +777,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
           <EditorContent className="flex flex-1 flex-col" editor={editor} />
           <TableControls editor={editor} rootRef={wrapperRef} />
           {showBubbleMenu && (
-            <EditorBubbleMenu editor={editor} currentIssueId={currentIssueId} onOptimizeSelection={onOptimizeSelection} onApplyTitle={onApplyAITitle} currentTitle={currentAITitle} />
+            <EditorBubbleMenu editor={editor} currentIssueId={currentIssueId} onOptimizeSelection={onOptimizeSelection} onAskAboutSelection={onAskAboutSelection} onApplyTitle={onApplyAITitle} currentTitle={currentAITitle} />
           )}
           {emptyLineAiState && onEditPageWithAI && (
             <EmptyLineAiMenu
@@ -734,6 +785,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
               state={emptyLineAiState}
               onChange={setEmptyLineAiState}
               onEditPageWithAI={onEditPageWithAI}
+              onRequestPageAI={onRequestPageAI}
               onApplyTitle={onApplyAITitle}
               currentTitle={currentAITitle}
               onClose={() => {

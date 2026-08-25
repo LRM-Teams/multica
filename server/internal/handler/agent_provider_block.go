@@ -24,8 +24,7 @@ func (h *Handler) applyAgentProviderQuotaBlock(
 	if !taskfailure.IsStickyProviderQuotaLock(errText, failureReason) {
 		return
 	}
-	now := time.Now()
-	until, untilOK := taskfailure.ParseProviderBlockedUntil(errText, now, time.Local)
+	until, untilOK := taskfailure.ParseProviderBlockedUntil(errText, time.Local)
 	detail := truncateForActivity(errText, 500)
 	if !taskfailure.ProviderLockDetailActive(detail) {
 		return

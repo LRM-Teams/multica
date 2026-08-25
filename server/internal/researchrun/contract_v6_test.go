@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -89,6 +90,15 @@ func TestDecodeV6ContractRejectsSelfHashMismatchAndMissingSecondValidator(t *tes
 	}
 	if _, err := DecodeV6Contract(raw, V6ContractAtomicResultSubmission, nil); !errors.Is(err, ErrInvalidContract) {
 		t.Fatalf("missing second-stage validator error=%v", err)
+	}
+}
+
+func TestV6CanonicalJSONRejectsPostgresUnrepresentableNullCharacter(t *testing.T) {
+	_, err := marshalV6CanonicalJSON(map[string]any{
+		"content_layers": map[string]any{"content": "before\x00after"},
+	})
+	if err == nil || !strings.Contains(err.Error(), `field "content_layers": field "content": JSON string contains U+0000`) {
+		t.Fatalf("error = %v, want field-level U+0000 rejection", err)
 	}
 }
 

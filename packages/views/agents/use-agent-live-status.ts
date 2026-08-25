@@ -4,17 +4,19 @@ import { useMemo } from "react";
 import { useAgentPresence, useRunnerActivitySummary } from "@multica/core/agents";
 import { useT } from "../i18n/use-t";
 import { resolveAgentLiveStatus, type AgentLiveStatusView } from "./resolve-agent-live-status";
-import { runnerActivityToneDotClass } from "./runner-activity-tone";
+import { runnerActivityVisuals } from "./runner-activity-visuals";
 
-/** Server-arbitrated Runner summary → compact composer / cue view. */
+/** Runner lifecycle facts → compact composer / cue view. */
 export function projectRunnerActivitySummary(
-  summary: { label: string; tone: string; visibility: string } | null | undefined,
+  summary: { label: string; activityKind: string; detailKind: string } | null | undefined,
 ): AgentLiveStatusView | null {
-  if (!summary || summary.visibility !== "visible") return null;
+  if (!summary) return null;
+  const visuals = runnerActivityVisuals({ activity_kind: summary.activityKind, detail_kind: summary.detailKind });
+  if (!visuals.show) return null;
   return {
     label: summary.label,
     textClass: "text-foreground",
-    dotClass: runnerActivityToneDotClass(summary.tone),
+    dotClass: visuals.dotClass,
   };
 }
 
@@ -40,8 +42,8 @@ export function useAgentLiveStatus(
 }
 
 /**
- * Composer-strip Activity comes only from the server-arbitrated Workspace
- * Runner projection. It intentionally does not inspect Tasks, presence,
+ * Composer-strip Activity comes only from Workspace Runner lifecycle facts.
+ * It intentionally does not inspect Tasks, presence,
  * provider events, sessions, or elapsed time.
  */
 export function useAgentActivityProjection(

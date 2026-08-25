@@ -68,7 +68,7 @@ func (h *Handler) authorizeComputerOwnerRequest(ctx context.Context, r *http.Req
 	var exists bool
 	if err := h.DB.QueryRow(ctx, `
 SELECT EXISTS (
-  SELECT 1 FROM computer_identity_owner WHERE daemon_id=$1 AND user_id=$2
+  SELECT 1 FROM computers WHERE id=$1 AND user_id=$2
 )`, daemonID, userID).Scan(&exists); err != nil {
 		return err
 	}
@@ -85,7 +85,7 @@ type computerHeartbeatRequest struct {
 }
 
 // ComputerHeartbeat is a compatibility writer for older residents that still
-// publish HTTP liveness. Current DaemonCore liveness is the Workspace Runner
+// publish HTTP liveness. Current DaemonCore liveness is the WorkspaceDaemon
 // socket (connect = alive), matching Raft 1.0.16 /daemon/connect.
 //
 // TODO(computer-liveness): Remove after v0.4.24-alpha.55 is no

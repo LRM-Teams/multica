@@ -158,7 +158,7 @@ func (s *PostgresStore) applyDiscussionTurnV6Tx(ctx context.Context, tx pgx.Tx, 
 	if _, err = tx.Exec(ctx, `UPDATE research_work_item SET status='succeeded',state_version=state_version+1,completed_at=now(),updated_at=now() WHERE id=$1::uuid`, in.WorkItemID); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE research_v6_work_submission SET status='accepted',outcome=jsonb_build_object('turn_id',$2),updated_at=now() WHERE id=$1::uuid`, submissionID, turnID); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE research_v6_work_submission SET status='accepted',outcome=jsonb_build_object('turn_id',$2::text),updated_at=now() WHERE id=$1::uuid`, submissionID, turnID); err != nil {
 		return err
 	}
 	if _, err = appendEvent(ctx, tx, in.WorkspaceID, in.RunID, "v6_discussion_append_turn", "v6-discussion-turn:"+in.ClientRequestID, "agent", in.AgentID,

@@ -1,27 +1,22 @@
 /**
  * Unified research-canvas projection model (FE-04).
  *
- * Both the V5 and V6 research backends are reduced to a single render-layer
- * graph through adapters. The canonical fields here are the ONLY fields any
- * renderer may read — every field is either copied straight from the backend
- * projection contract or explicitly derived from a documented projection field.
- * No renderer ever guesses a research fact from summary/title text.
+ * The V5 graph adapter and Director V6 view adapter both target this
+ * render-layer shape. Director's authoritative protocol remains isolated in
+ * its own projection module; this file contains no server wire contract.
  *
  * Field provenance contract (§7.1 of the autonomous-research-system plan):
  *   - `id`            → stable projection node id derived from
- *                        `(run_id, entity_kind, entity_id)` (V6) or the
- *                        server node id (V5).
- *   - `kind/subtype`  → backend `node_kind`/`node_subtype` (V6) or `node_type`
- *                        (V5). Unknown future kinds degrade to `kind:"generic"`.
+ *                        the server node id (V5) or Director projection id.
+ *   - `kind/subtype`  → normalized projection kind/subtype. Unknown future
+ *                        kinds degrade to `kind:"generic"`.
  *   - `title/summary` → backend title + bounded summary. Never parsed.
  *   - `status`        → backend status verbatim.
  *   - `importance`    → 0..1, from a documented backend field when present,
  *                        else a stable neutral default (never derived from
  *                        prose).
- *   - `freshness`     → verbatim server freshness signal: V6 opaque token
- *                        (`string | null`) copied as-is, else a documented V5
- *                        timestamp-derived recency (number). Never derived
- *                        from prose.
+ *   - `freshness`     → verbatim server signal (`string | null`) or a documented
+ *                        V5 timestamp-derived recency (number).
  *   - `detailRef`     → stable canonical entity reference for the by-id detail
  *                        read. Never fabricated.
  */
@@ -35,7 +30,7 @@ export type CanvasRelation = string;
 export interface CanvasNode {
   /** Stable projection identity (see header contract). */
   id: CanvasNodeId;
-  /** node_kind (V6) / node_type (V5), or "generic" for unknown future kinds. */
+  /** Normalized projection kind, or "generic" for unknown future kinds. */
   kind: string;
   /** node_subtype when the backend provides one. */
   subtype?: string;

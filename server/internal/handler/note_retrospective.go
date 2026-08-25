@@ -85,6 +85,7 @@ type noteRetrospectiveRunFact struct {
 	RunID           string
 	AgentID         string
 	AgentName       string
+	Reason          string
 	Summary         string
 	Outcome         string
 	IssueID         string

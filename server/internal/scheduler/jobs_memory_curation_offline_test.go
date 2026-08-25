@@ -35,10 +35,10 @@ func TestMemoryCurationSchedulerDefaultSelfReviewSkipsStaleHeartbeat(t *testing.
 	// status stays 'online'; only last_seen_at is stale. If the scheduler
 	// still trusts the status column, this runtime looks reachable.
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, owner_id, last_seen_at, updated_at)
-		VALUES ($1, $2, 'Stale Self Review Runtime', 'local', 'codex', 'online', 'test', $3, now() - interval '10 minutes', now() - interval '9 minutes')
+		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, last_seen_at, updated_at)
+		VALUES ($1, $2, 'Stale Self Review Runtime', 'local', 'codex', 'online', 'test', now() - interval '10 minutes', now() - interval '9 minutes')
 		RETURNING id::text
-	`, workspaceID, "stale-self-review-"+suffix, userID).Scan(&runtimeID); err != nil {
+	`, workspaceID, "stale-self-review-"+suffix).Scan(&runtimeID); err != nil {
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(ctx, `
@@ -120,10 +120,10 @@ func TestActiveMemoryCurationAgentIDsExcludesStaleHeartbeat(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, owner_id, last_seen_at, updated_at)
-		VALUES ($1, $2, 'Stale Active Targets Runtime', 'local', 'codex', 'online', 'test', $3, now() - interval '10 minutes', now() - interval '9 minutes')
+		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, last_seen_at, updated_at)
+		VALUES ($1, $2, 'Stale Active Targets Runtime', 'local', 'codex', 'online', 'test', now() - interval '10 minutes', now() - interval '9 minutes')
 		RETURNING id::text
-	`, workspaceID, "stale-active-targets-"+suffix, userID).Scan(&runtimeID); err != nil {
+	`, workspaceID, "stale-active-targets-"+suffix).Scan(&runtimeID); err != nil {
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(ctx, `
@@ -188,19 +188,19 @@ func TestMemoryCurationSchedulerProfileDrivenRunIsWaitingRuntimeForStaleHeartbea
 	// Curator runtime: status column still says 'online', but heartbeat is
 	// stale. This is the runtime under test.
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, owner_id, last_seen_at, updated_at)
-		VALUES ($1, $2, 'Stale Profile Driven Curator Runtime', 'local', 'codex', 'online', 'test', $3, now() - interval '10 minutes', now() - interval '9 minutes')
+		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, last_seen_at, updated_at)
+		VALUES ($1, $2, 'Stale Profile Driven Curator Runtime', 'local', 'codex', 'online', 'test', now() - interval '10 minutes', now() - interval '9 minutes')
 		RETURNING id::text
-	`, workspaceID, "stale-profile-driven-curator-"+suffix, userID).Scan(&curatorRuntimeID); err != nil {
+	`, workspaceID, "stale-profile-driven-curator-"+suffix).Scan(&curatorRuntimeID); err != nil {
 		t.Fatal(err)
 	}
 	// Target runtime: fresh, so the target agent is a valid active target and
 	// this test isolates the curator-runtime freshness check under test.
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, owner_id, last_seen_at)
-		VALUES ($1, $2, 'Stale Profile Driven Target Runtime', 'local', 'codex', 'online', 'test', $3, now())
+		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, last_seen_at)
+		VALUES ($1, $2, 'Stale Profile Driven Target Runtime', 'local', 'codex', 'online', 'test', now())
 		RETURNING id::text
-	`, workspaceID, "stale-profile-driven-target-"+suffix, userID).Scan(&targetRuntimeID); err != nil {
+	`, workspaceID, "stale-profile-driven-target-"+suffix).Scan(&targetRuntimeID); err != nil {
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(ctx, `

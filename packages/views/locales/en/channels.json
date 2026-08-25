@@ -140,6 +140,8 @@
     "control_plane": "Delivery control plane",
     "control_plane_ready": "Delivery ready",
     "control_plane_blocked": "Setup required",
+    "control_plane_issues_required": "Issues required",
+    "control_plane_unavailable": "Status unavailable",
     "control_plane_complete_blocked": "Complete the Git-backed Project Issue review flow first",
     "control_plane_project": "Project",
     "control_plane_git": "Git repository",
@@ -179,6 +181,17 @@
     "graph_status_blocked": "Blocked",
     "graph_status_error": "Failed",
     "graph_status_stale": "Stale",
+    "graph_zoom_in": "Zoom in work graph",
+    "graph_zoom_out": "Zoom out work graph",
+    "graph_fit": "Fit work graph to viewport",
+    "graph_pan_hint": "Drag to pan. Hold Ctrl or ⌘ and scroll to zoom. Click a node for read-only details.",
+    "graph_show_more": "Load more columns",
+    "graph_showing_nodes": "Showing {{visible}} of {{total}} nodes",
+    "graph_detail_status": "Status",
+    "graph_detail_role": "Role",
+    "graph_detail_issue": "Issue",
+    "graph_detail_contract": "Completion contract",
+    "graph_detail_close": "Close node details",
     "subgoals": "Subgoals",
     "subgoals_open": "Open subgoals",
     "subgoals_none_chip": "No subgoals yet",
@@ -542,7 +555,8 @@
     "overflow": "{{a}}, {{b}} and {{count}} people are typing"
   },
   "conversation_activity": {
-    "more_agents": "{{count}} more agents are working"
+    "more_agents_one": "{{count}} more agent is working",
+    "more_agents_other": "{{count}} more agents are working"
   },
   "agent_status": {
     "queued": "Queued",
@@ -635,6 +649,11 @@
     "note_brief_empty": "(empty note)",
     "note_brief_open_note": "Open note",
     "note_worker_insert_below": "Insert below note",
+    "period_brief_insert_below": "Insert below note",
+    "period_brief_insert_child": "Insert as child note",
+    "period_brief_insert_below_success": "Inserted below the note",
+    "period_brief_insert_child_success": "Inserted child note “{{title}}”",
+    "period_brief_insert_failed": "Could not insert the report",
     "note_worker_create_child": "Create child note",
     "note_worker_create_note": "Create note",
     "note_worker_create_note_success": "Note created",

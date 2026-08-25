@@ -61,12 +61,12 @@ type UserResponse struct {
 	OnboardedAt             *string         `json:"onboarded_at"`
 	OnboardingQuestionnaire json.RawMessage `json:"onboarding_questionnaire"`
 	StarterContentState     *string         `json:"starter_content_state"`
-	ProfileDescription      string          `json:"profile_description"`
+	ProfileDescription      string          `json:"description"`
 	CreatedAt               string          `json:"created_at"`
 	UpdatedAt               string          `json:"updated_at"`
 }
 
-// MaxProfileDescriptionLen caps the user-supplied profile_description body.
+// MaxProfileDescriptionLen caps the user-supplied description body.
 // Picked at 2000 chars per MUL-2406: enough room for role / stack / a few
 // preferences, short enough that injecting it into every agent brief
 // doesn't move the needle on prompt cost.
@@ -433,7 +433,7 @@ type UpdateMeRequest struct {
 	DisplayName        *string `json:"display_name"`
 	AvatarURL          *string `json:"avatar_url"`
 	Language           *string `json:"language"`
-	ProfileDescription *string `json:"profile_description"`
+	ProfileDescription *string `json:"description"`
 	// IANA tz to pin; "" clears back to NULL; nil leaves untouched.
 	Timezone *string `json:"timezone"`
 }
@@ -574,9 +574,13 @@ func (h *Handler) GoogleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if needsUpdate {
+		displayNameArg := pgtype.Text{String: user.DisplayName, Valid: true}
+		if newDisplayName.Valid {
+			displayNameArg = pgtype.Text{String: newDisplayName.String, Valid: true}
+		}
 		updated, err := h.Queries.UpdateUser(r.Context(), db.UpdateUserParams{
 			ID:          user.ID,
-			DisplayName: newDisplayName,
+			DisplayName: displayNameArg,
 			AvatarUrl:   newAvatar,
 		})
 		if err == nil {
@@ -674,9 +678,13 @@ func (h *Handler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 		displayName = pgtype.Text{String: value, Valid: true}
 	}
 
+	displayNameArg := pgtype.Text{String: currentUser.DisplayName, Valid: true}
+	if displayName.Valid {
+		displayNameArg = pgtype.Text{String: displayName.String, Valid: true}
+	}
 	params := db.UpdateUserParams{
 		ID:          currentUser.ID,
-		DisplayName: displayName,
+		DisplayName: displayNameArg,
 	}
 	if req.AvatarURL != nil {
 		params.AvatarUrl = pgtype.Text{String: strings.TrimSpace(*req.AvatarURL), Valid: true}
@@ -695,7 +703,7 @@ func (h *Handler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 		// counting each bad byte as one rune, which still bounds the column.
 		desc := strings.TrimSpace(*req.ProfileDescription)
 		if utf8.RuneCountInString(desc) > MaxProfileDescriptionLen {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("profile_description exceeds %d characters", MaxProfileDescriptionLen))
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("description exceeds %d characters", MaxProfileDescriptionLen))
 			return
 		}
 		params.ProfileDescription = pgtype.Text{String: desc, Valid: true}

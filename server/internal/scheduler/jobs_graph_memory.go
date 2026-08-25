@@ -14,8 +14,10 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/multica-ai/multica/server/internal/memorycuration"
 	"github.com/multica-ai/multica/server/internal/memorygraph"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
+	"github.com/multica-ai/multica/server/internal/service"
 	agentpkg "github.com/multica-ai/multica/server/pkg/agent"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -106,62 +108,111 @@ func GraphMemoryJobs(pool *pgxpool.Pool, bm *obsmetrics.BusinessMetrics) JobSpec
 	}
 }
 
-// graphMemoryTypeLookup resolves the per-workspace reviewer type from
-// graph_memory_profile; it must return an error (e.g. pgx.ErrNoRows) when
-// no profile row exists.
-type graphMemoryTypeLookup func(ctx context.Context, workspaceID string) (string, error)
+// graphMemoryWorkspaceGate is the per-workspace activation gate for graph
+// jobs (spec §10/§13): memory_type from the profile (env default when no
+// row) plus the scoped-writer readiness flag. Jobs stay inert until both
+// are satisfied — removing the process-level registration switch must not
+// activate an incomplete writer.
+type graphMemoryWorkspaceGate struct {
+	memoryType        string
+	scopedWriterReady bool
+}
 
-// graphMemoryProfileLookup builds the lookup over the sqlc queries; nil
-// pool yields a nil lookup (env-only resolution).
-func graphMemoryProfileLookup(pool *pgxpool.Pool) graphMemoryTypeLookup {
+type graphMemoryGateLookup func(ctx context.Context, workspaceID string) (graphMemoryWorkspaceGate, error)
+
+type graphMemoryProfileLookup func(ctx context.Context, workspaceID string) (exploreMaxRounds int, tttEnabled bool)
+
+func graphMemoryGateLookupForPool(pool *pgxpool.Pool) graphMemoryGateLookup {
 	if pool == nil {
 		return nil
 	}
 	q := db.New(pool)
-	return func(ctx context.Context, workspaceID string) (string, error) {
-		profile, err := q.GetGraphMemoryProfile(ctx, pgtype.UUID{Bytes: uuid.MustParse(workspaceID), Valid: true})
+	return func(ctx context.Context, workspaceID string) (graphMemoryWorkspaceGate, error) {
+		ws, err := uuid.Parse(workspaceID)
 		if err != nil {
-			return "", err
+			return graphMemoryWorkspaceGate{}, err
 		}
-		return profile.MemoryType, nil
+		gate, err := q.GetGraphMemoryScopedGate(ctx, pgtype.UUID{Bytes: ws, Valid: true})
+		if err != nil {
+			return graphMemoryWorkspaceGate{}, err
+		}
+		return graphMemoryWorkspaceGate{memoryType: gate.MemoryType, scopedWriterReady: gate.ScopedWriterReady}, nil
 	}
 }
 
-// resolveGraphMemoryType resolves memory_type for one
-// memory_graph directory (design §1/A4): the per-workspace profile row wins
-// when the directory maps to a workspace (<root>/<workspace>/memory_graph);
-// otherwise the MULTICA_MEMORY_TYPE env default applies, then "legacy".
-// Lookup errors (including a missing row) fail open to the env default so a
-// transient DB hiccup never flips a workspace's memory pipeline.
-func resolveGraphMemoryType(ctx context.Context, dir, envType string, lookup graphMemoryTypeLookup) string {
-	if lookup != nil {
-		if wsID, ok := graphDirWorkspaceID(dir); ok {
-			if rt, err := lookup(ctx, wsID); err == nil && (rt == "legacy" || rt == "graph") {
-				return rt
-			}
+// graphMemoryProfileForPool resolves a workspace profile's explore budget
+// and TTT flag. Missing rows and all lookup errors fail open to the
+// defaults (default rounds, TTT off) so a profile lookup cannot block
+// consolidation.
+func graphMemoryProfileForPool(pool *pgxpool.Pool) graphMemoryProfileLookup {
+	if pool == nil {
+		return nil
+	}
+	q := db.New(pool)
+	return func(ctx context.Context, workspaceID string) (int, bool) {
+		defaultRounds := memorygraph.DefaultExploreConfig().MaxRounds
+		ws, err := uuid.Parse(workspaceID)
+		if err != nil {
+			return defaultRounds, false
 		}
+		profile, err := q.GetGraphMemoryProfile(ctx, pgtype.UUID{Bytes: ws, Valid: true})
+		if err != nil {
+			return defaultRounds, false
+		}
+		rounds := int(profile.ExploreMaxRounds)
+		if rounds <= 0 {
+			rounds = defaultRounds
+		}
+		return rounds, profile.TttEnabled
 	}
-	if envType == "graph" || envType == "legacy" {
-		return envType
-	}
-	return "legacy"
 }
 
-// graphDirWorkspaceID extracts the workspace UUID from a per-workspace
-// <root>/<workspace>/memory_graph directory; the root-level default layout
-// maps to no workspace.
+// resolveGraphMemoryGate maps one graph dir to its scheduling decision:
+// "graph" (run), "legacy" (skip, not graph mode), or "skip_not_ready"
+// (graph mode but scoped writer gates not accepted). The workspace is
+// derived from the canonical dir path; lookup errors fall back to the env
+// type with readiness false.
+func resolveGraphMemoryGate(ctx context.Context, dir, envType string, lookup graphMemoryGateLookup) string {
+	gate := graphMemoryWorkspaceGate{memoryType: envType}
+	if wsID, ok := graphDirWorkspaceID(dir); ok && lookup != nil {
+		if row, err := lookup(ctx, wsID); err == nil {
+			gate = row
+		}
+	}
+	if gate.memoryType != "graph" {
+		return "legacy"
+	}
+	if !gate.scopedWriterReady {
+		return "skip_not_ready"
+	}
+	return "graph"
+}
+
+// resolveGraphMemoryProfile returns a workspace's configured explore budget
+// and TTT flag. Dirs without a workspace or without a lookup retain the
+// defaults (zero rounds, TTT off) when the consolidation config is built.
+func resolveGraphMemoryProfile(ctx context.Context, dir string, lookup graphMemoryProfileLookup) (int, bool) {
+	if wsID, ok := graphDirWorkspaceID(dir); ok && lookup != nil {
+		return lookup(ctx, wsID)
+	}
+	return 0, false
+}
+
+// graphDirWorkspaceID extracts the workspace id from a canonical graph dir
+// <root>/<ws>/memory_graph/<kind>s/<owner>.
 func graphDirWorkspaceID(dir string) (string, bool) {
-	parent := filepath.Base(filepath.Dir(dir))
-	if _, err := uuid.Parse(parent); err != nil {
+	ws := filepath.Base(filepath.Dir(filepath.Dir(filepath.Dir(dir))))
+	if _, err := uuid.Parse(ws); err != nil {
 		return "", false
 	}
-	return parent, true
+	return ws, true
 }
 
 func makeGraphMemoryConsolidationHandler(pool *pgxpool.Pool, bm *obsmetrics.BusinessMetrics) Handler {
 	return func(ctx context.Context, in HandlerInput) (HandlerResult, error) {
 		envType := strings.ToLower(strings.TrimSpace(os.Getenv("MULTICA_MEMORY_TYPE")))
-		lookup := graphMemoryProfileLookup(pool)
+		lookup := graphMemoryGateLookupForPool(pool)
+		profileLookup := graphMemoryProfileForPool(pool)
 		if lookup == nil && envType != "graph" {
 			// Without a DB there is no per-workspace override to resolve; the
 			// env default gates the whole sweep.
@@ -182,21 +233,31 @@ func makeGraphMemoryConsolidationHandler(pool *pgxpool.Pool, bm *obsmetrics.Busi
 
 		consolidated := 0
 		for _, dir := range dirs {
-			// Per-workspace memory_type (A4): only graph-enabled dirs
-			// consolidate; the rest are logged and skipped.
-			if rt := resolveGraphMemoryType(ctx, dir, envType, lookup); rt != "graph" {
-				slog.Info("graph memory consolidation skipped: reviewer not graph", "dir", dir, "memory_type", rt)
+			// Per-workspace activation gate (spec §10/§13): only dirs in
+			// graph mode with the scoped-writer readiness flag accepted
+			// consolidate; the rest (legacy mode or not-ready) are logged
+			// and skipped.
+			if decision := resolveGraphMemoryGate(ctx, dir, envType, lookup); decision != "graph" {
+				slog.Info("graph memory consolidation skipped", "dir", dir, "decision", decision)
 				continue
 			}
 			// Per-workspace errors are logged and the loop continues: one
 			// broken graph must not starve the others.
-			ok, err := consolidateOneGraph(ctx, dir, state.dir(dir), bm)
+			exploreMaxRounds, tttEnabled := resolveGraphMemoryProfile(ctx, dir, profileLookup)
+			ok, err := consolidateOneGraphWithPool(ctx, pool, dir, exploreMaxRounds, tttEnabled, state.dir(dir), bm)
 			if err != nil {
 				slog.Warn("graph memory consolidation failed", "dir", dir, "error", err)
 				continue
 			}
 			if ok {
 				consolidated++
+			}
+			// Daily seal (spec §6): after local midnight + 10m grace, seal
+			// the prior date's daily nodes under the same graph mutation
+			// lease as updates. Runs after every successful consolidation
+			// pass so quiet days still seal.
+			if wsID, ok := graphDirWorkspaceID(dir); ok {
+				sealGraphMemoryDaily(ctx, pool, dir, wsID)
 			}
 			if in.Heartbeat != nil {
 				if err := in.Heartbeat(ctx); err != nil {
@@ -219,16 +280,52 @@ func makeGraphMemoryConsolidationHandler(pool *pgxpool.Pool, bm *obsmetrics.Busi
 // without a pi backend.
 type graphConsolidationRunner func(ctx context.Context) (*memorygraph.ConsolidateResult, error)
 
+// graphMemoryConsolidationConfigs applies the effective profile budget to
+// the backtest runner and to D_q's closure-radius configuration. With TTT
+// off, consolidation runs a single in-place trajectory (TTVTrajectories=1,
+// design Q16) instead of T parallel candidate versions.
+func graphMemoryConsolidationConfigs(model string, exploreMaxRounds int, tttEnabled bool) (memorygraph.ConsolidateConfig, memorygraph.ExploreConfig) {
+	cfg := memorygraph.DefaultConsolidateConfig()
+	cfg.Model = model
+	if !tttEnabled {
+		cfg.TTVTrajectories = 1
+	}
+	exploreCfg := memorygraph.DefaultExploreConfig()
+	exploreCfg.Model = cfg.Model
+	if exploreMaxRounds > 0 {
+		exploreCfg.MaxRounds = exploreMaxRounds
+	}
+	// D_q's closure radius must track the explore budget the runner
+	// actually plays with (spec §5.1 L2).
+	cfg.ExploreMaxRounds = exploreCfg.MaxRounds
+	return cfg, exploreCfg
+}
+
 // consolidateOneGraph runs one gated consolidation cycle against the
 // memory_graph store at dir, updating ds in place. It reports whether a
 // consolidation ran.
-func consolidateOneGraph(ctx context.Context, dir string, ds *graphDirState, bm *obsmetrics.BusinessMetrics) (bool, error) {
+func consolidateOneGraph(ctx context.Context, dir string, exploreMaxRounds int, tttEnabled bool, ds *graphDirState, bm *obsmetrics.BusinessMetrics) (bool, error) {
+	return consolidateOneGraphWithPool(ctx, nil, dir, exploreMaxRounds, tttEnabled, ds, bm)
+}
+
+// consolidateOneGraphWithPool keeps the scheduler's workspace profile budget
+// and attaches dev's server-authoritative BacktestItem ground truth.
+func consolidateOneGraphWithPool(ctx context.Context, pool *pgxpool.Pool, dir string, exploreMaxRounds int, tttEnabled bool, ds *graphDirState, bm *obsmetrics.BusinessMetrics) (bool, error) {
 	store := memorygraph.NewStore(dir)
 	if err := store.Init(); err != nil {
 		return false, fmt.Errorf("init store: %w", err)
 	}
-	cfg := memorygraph.DefaultConsolidateConfig()
-	cfg.Model = strings.TrimSpace(os.Getenv("MULTICA_PI_MODEL"))
+	cfg, exploreCfg := graphMemoryConsolidationConfigs(strings.TrimSpace(os.Getenv("MULTICA_PI_MODEL")), exploreMaxRounds, tttEnabled)
+	if pool != nil {
+		identity, err := memorygraph.ReadGraphIdentity(dir)
+		if err != nil {
+			return false, err
+		}
+		catalog := service.NewGraphMemoryInfoCatalogService(pool)
+		cfg.BacktestGroundTruth = func(ctx context.Context, _ *memorygraph.Store, _ int, queries []*memorygraph.BacktestQuery) error {
+			return catalog.AttachBacktestGroundTruth(ctx, identity.Kind, identity.OwnerID, queries)
+		}
+	}
 	run := func(ctx context.Context) (*memorygraph.ConsolidateResult, error) {
 		backend, err := graphMemoryPIBackend()
 		if err != nil {
@@ -242,8 +339,6 @@ func consolidateOneGraph(ctx context.Context, dir string, ds *graphDirState, bm 
 			// conservative pass. The embedder (when configured) keeps the
 			// backtest retrieval identical to production (A2).
 			emb := graphMemoryEmbedder(store)
-			exploreCfg := memorygraph.DefaultExploreConfig()
-			exploreCfg.Model = cfg.Model
 			consolidator.SetRunner(memorygraph.NewExploreBacktestRunner(store, emb, backend, memorygraph.DefaultRetrievalConfig(), exploreCfg, "pi"))
 			consolidator.SetEmbedder(emb)
 		}
@@ -341,6 +436,63 @@ func consolidateOneGraphWith(ctx context.Context, dir string, store *memorygraph
 		bm.RecordGraphBacktestBypass(ratio)
 	}
 	return true, nil
+}
+
+// sealGraphMemoryDaily runs the daily seal pass for one graph directory
+// (spec §6): after local midnight plus the ten-minute grace period, the
+// prior date's daily nodes are sealed under the graph mutation lock. With
+// a nil pool (tests, DB-less deployments) the updater's process-local
+// default locker is used. Seal failures are logged, never fatal.
+func sealGraphMemoryDaily(ctx context.Context, pool *pgxpool.Pool, dir, wsID string) {
+	loc := graphMemoryTimezoneForWorkspace(ctx, pool, wsID)
+	now := time.Now().In(loc)
+	if now.Hour() == 0 && now.Minute() < 10 {
+		return // grace period: the prior day may still receive in-flight events
+	}
+	store := memorygraph.NewStore(dir)
+	updater := memorygraph.NewDailyUpdater(store, loc)
+	if pool != nil {
+		kind, owner := graphDirKindOwner(dir)
+		coordinator := service.NewGraphMutationCoordinator(pool)
+		updater.SetLocker(func(ctx context.Context, fn func() error) error {
+			return coordinator.WithGraphLock(ctx, wsID, kind, owner, func(context.Context) error { return fn() })
+		})
+	}
+	sealed, err := updater.SealPriorDay(ctx)
+	if err != nil {
+		slog.Warn("graph memory daily seal failed", "dir", dir, "error", err)
+	} else if sealed != "" {
+		slog.Info("graph memory daily node sealed", "dir", dir, "node", sealed)
+	}
+}
+
+// graphDirKindOwner parses the graph kind ("project"|"channel") and owner
+// id from a canonical dir <root>/<ws>/memory_graph/<kind>s/<owner>.
+func graphDirKindOwner(dir string) (kind, owner string) {
+	owner = filepath.Base(dir)
+	sub := filepath.Base(filepath.Dir(dir)) // "projects" | "channels"
+	return strings.TrimSuffix(sub, "s"), owner
+}
+
+// graphMemoryTimezoneForWorkspace resolves the workspace memory-profile
+// timezone via the scoped gate row, falling back to
+// memorycuration.DefaultTimezone on any error.
+func graphMemoryTimezoneForWorkspace(ctx context.Context, pool *pgxpool.Pool, workspaceID string) *time.Location {
+	if pool != nil {
+		if id, err := uuid.Parse(workspaceID); err == nil {
+			gate, err := db.New(pool).GetGraphMemoryScopedGate(ctx, pgtype.UUID{Bytes: id, Valid: true})
+			if err == nil && gate.Timezone != "" {
+				if loc, err := time.LoadLocation(gate.Timezone); err == nil {
+					return loc
+				}
+			}
+		}
+	}
+	loc, err := time.LoadLocation(memorycuration.DefaultTimezone)
+	if err != nil {
+		return time.FixedZone("CST", 8*3600)
+	}
+	return loc
 }
 
 // recordConsolidationFailure increments the consecutive failure/no-switch
@@ -451,33 +603,33 @@ func graphMemoryWorkspacesRoot() (string, error) {
 	return filepath.Abs(root)
 }
 
-// findMemoryGraphDirs locates memory_graph directories under the workspaces
-// root: the root-level default layout (<root>/memory_graph, matching the
-// daemon's default GraphMemoryDir) plus any per-workspace
-// <root>/<workspace>/memory_graph.
+// findMemoryGraphDirs walks the canonical layout
+// <root>/<ws>/memory_graph/{projects,channels}/<owner> and returns only
+// directories whose immutable identity matches their path (spec §3). The
+// legacy root-level <root>/memory_graph is never returned.
 func findMemoryGraphDirs(root string) ([]string, error) {
 	var dirs []string
-	seen := map[string]bool{}
-	add := func(dir string) {
-		if seen[dir] {
-			return
+	for _, sub := range []string{"projects", "channels"} {
+		kind := memorygraph.GraphDirKind(strings.TrimSuffix(sub, "s"))
+		glob := filepath.Join(root, "*", "memory_graph", sub, "*")
+		matches, err := filepath.Glob(glob)
+		if err != nil {
+			return nil, err
 		}
-		if info, err := os.Stat(dir); err == nil && info.IsDir() {
-			seen[dir] = true
+		for _, dir := range matches {
+			info, err := os.Stat(dir)
+			if err != nil || !info.IsDir() {
+				continue
+			}
+			owner := filepath.Base(dir)
+			ws := filepath.Base(filepath.Dir(filepath.Dir(filepath.Dir(dir))))
+			if err := memorygraph.VerifyGraphIdentity(dir, memorygraph.GraphIdentity{
+				WorkspaceID: ws, Kind: string(kind), OwnerID: owner,
+			}); err != nil {
+				slog.Warn("graph memory: skipping graph dir with invalid identity", "dir", dir, "error", err)
+				continue
+			}
 			dirs = append(dirs, dir)
-		}
-	}
-	add(filepath.Join(root, "memory_graph"))
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("read workspaces root %s: %w", root, err)
-	}
-	for _, entry := range entries {
-		if entry.IsDir() {
-			add(filepath.Join(root, entry.Name(), "memory_graph"))
 		}
 	}
 	return dirs, nil

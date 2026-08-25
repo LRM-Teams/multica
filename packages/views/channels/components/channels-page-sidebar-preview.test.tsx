@@ -222,4 +222,34 @@ describe("ChannelsPage — channel sidebar preview (LRM-263)", () => {
     expect(badge).not.toBeNull();
     expect(badge).toHaveClass("border-border/70");
   });
+
+  it("does not render the default channel while a routed conversation is resolving", async () => {
+    channelsFixture.current = [
+      {
+        id: "system-general",
+        workspace_id: "ws-1",
+        name: "general",
+        kind: "group" as const,
+        description: null,
+        lark_chat_id: null,
+        created_by: "user-1",
+        created_at: "2026-06-17T09:00:00Z",
+        updated_at: "2026-06-17T09:00:00Z",
+        unread_count: 4,
+        real_unread_count: 4,
+        last_message: {
+          type: "user" as const,
+          author_name: "General Author",
+          content: "General message must not render",
+          created_at: "2026-07-22T03:00:00.000Z",
+        },
+      },
+    ];
+
+    renderPage("route-target-still-loading");
+    await screen.findByRole("button", { name: /general/i });
+
+    expect(screen.queryByTestId("message-list")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("active-title")).not.toBeInTheDocument();
+  });
 });

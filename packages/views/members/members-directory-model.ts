@@ -197,3 +197,50 @@ export function resolveMembersSelection(
   }
   return defaultMembersSelection(roster);
 }
+
+/** A rail row the user can land on with the keyboard. */
+export type DirectoryRowRef = { kind: "agent" | "user"; id: string };
+
+/**
+ * Visible rail rows, top to bottom, honouring section collapse. Pure so the
+ * ↑/↓ traversal is unit-testable without a DOM.
+ */
+export function listVisibleDirectoryRows(
+  roster: MembersDirectoryRoster,
+  opts: { agentsOpen: boolean; humansOpen: boolean },
+): DirectoryRowRef[] {
+  const rows: DirectoryRowRef[] = [];
+  if (opts.agentsOpen) {
+    for (const group of roster.computerGroups) {
+      for (const agent of group.agents) {
+        rows.push({ kind: "agent", id: agent.id });
+      }
+    }
+  }
+  if (opts.humansOpen) {
+    for (const human of roster.humans) {
+      rows.push({ kind: "user", id: human.user_id });
+    }
+  }
+  return rows;
+}
+
+/**
+ * Move the selection by `delta` within the visible rows. A selection that is
+ * filtered out (or absent) enters at the first/last row so ↓ always lands
+ * somewhere. Stops at the ends rather than wrapping.
+ */
+export function stepDirectorySelection(
+  rows: readonly DirectoryRowRef[],
+  current: DirectoryRowRef | null,
+  delta: 1 | -1,
+): DirectoryRowRef | null {
+  if (rows.length === 0) return null;
+  const index = current
+    ? rows.findIndex((r) => r.kind === current.kind && r.id === current.id)
+    : -1;
+  if (index === -1) return delta > 0 ? rows[0]! : rows[rows.length - 1]!;
+  const next = index + delta;
+  if (next < 0 || next >= rows.length) return null;
+  return rows[next]!;
+}

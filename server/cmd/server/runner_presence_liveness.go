@@ -13,7 +13,7 @@ import (
 )
 
 // runnerPresenceRefreshInterval is how often the server refreshes Redis
-// liveness and DB last_seen_at for currently-connected Workspace Runners.
+// liveness and DB last_seen_at for currently-connected WorkspaceDaemons.
 //
 // It participates in a three-constant freshness chain that MUST keep its
 // ordering: runnerPresenceRefreshInterval (45s) < runtimeLivenessTTL (90s,
@@ -31,7 +31,7 @@ const runnerPresenceRefreshInterval = 45 * time.Second
 const runnerIDCacheTTL = 5 * time.Minute
 
 // runRunnerPresenceLivenessTicker implements LRM-1571's "liveness driven by
-// WS connection state": while a Workspace Runner socket is connected, the
+// WS connection state": while a WorkspaceDaemon socket is connected, the
 // server keeps the runtime's Redis liveness record and DB last_seen_at fresh
 // on the daemon's behalf — new daemons stop sending heartbeat frames, and the
 // sweeper / curation / UI consumers all keep working unchanged. When the
@@ -105,10 +105,10 @@ func (c *runnerIDCache) prune(now time.Time, ttl time.Duration) {
 	}
 }
 
-// refreshRunnerPresenceLiveness resolves every connected Workspace Runner to
+// refreshRunnerPresenceLiveness resolves every connected WorkspaceDaemon to
 // its online runtime(s) and bumps liveness + last_seen_at for each.
 func refreshRunnerPresenceLiveness(ctx context.Context, queries *db.Queries, liveness handler.LivenessStore, hub *daemonws.Hub, cache *runnerIDCache) {
-	runners := hub.ListWorkspaceRunners()
+	runners := hub.ListWorkspaceDaemons()
 	if len(runners) == 0 {
 		// No sockets: nothing to refresh; let the cache age out naturally.
 		return

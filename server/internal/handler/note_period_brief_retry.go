@@ -96,7 +96,7 @@ func (h *Handler) RetryAgentNotePeriodBriefCollectors(w http.ResponseWriter, r *
 
 	bg := context.WithoutCancel(r.Context())
 	draft, err := scanNotePage(h.DB.QueryRow(bg, `
-SELECT id, workspace_id, parent_id, owner_user_id, title, content, sort_key, created_at, updated_at, deleted_at
+SELECT id, workspace_id, parent_id, owner_user_id, title, icon, content, sort_key, created_at, updated_at, deleted_at
 FROM note_page WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL`, draftUUID, workspaceUUID))
 	if err != nil {
 		return
@@ -157,7 +157,7 @@ func (h *Handler) retryNotePeriodBriefCollectors(
 			failReason = *projected.FailureReason
 		}
 		packReady := strings.TrimSpace(ref.PackMarkdown) != ""
-		d := classifyPeriodBriefCollectorOutcome(projected.Status, failReason, failReason, packReady, false)
+		d := periodBriefRetryDisposition(projected.Status, failReason, packReady)
 		if packReady || d.Status == "ready" {
 			resp.Skipped = append(resp.Skipped, notePeriodBriefRetrySkipped{AgentID: ref.AgentID, Reason: "already ready"})
 			continue
@@ -188,7 +188,7 @@ func (h *Handler) retryNotePeriodBriefCollectors(
 		}
 
 		draft, err := scanNotePage(h.DB.QueryRow(ctx, `
-SELECT id, workspace_id, parent_id, owner_user_id, title, content, sort_key, created_at, updated_at, deleted_at
+SELECT id, workspace_id, parent_id, owner_user_id, title, icon, content, sort_key, created_at, updated_at, deleted_at
 FROM note_page WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL`,
 			run.DraftPageID, workspaceID))
 		if err != nil {
@@ -196,8 +196,17 @@ FROM note_page WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL`,
 			continue
 		}
 
-		// Clear prior pack artifact so harvest waits for a fresh submit-pack.
+		// Clear prior pack atomically so a sibling submit-pack cannot restore
+		// the old markdown, and harvest cannot treat it as this retry.
+		if err := h.mergeNotePeriodBriefCollector(ctx, run.ID, ref.AgentID, map[string]any{
+			"pack_markdown": "",
+			"pack_job_id":   "",
+		}, "collecting"); err != nil {
+			resp.Skipped = append(resp.Skipped, notePeriodBriefRetrySkipped{AgentID: ref.AgentID, Reason: "failed to clear prior pack"})
+			continue
+		}
 		ref.PackMarkdown = ""
+		ref.PackJobID = ""
 		refs[i] = ref
 
 		rec := httptest.NewRecorder()
@@ -205,6 +214,7 @@ FROM note_page WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL`,
 		job, ok := h.dispatchNotePeriodBriefCollectorOntoDraft(
 			rec, req, workspaceID, run.OwnerUserID, uuidToString(run.OwnerUserID),
 			agent, draft, ref.WindowLabel, ref.WindowStart, ref.WindowEnd, ref.ChannelID,
+			scopeFromCollectPlan(run.CollectPlan, ref.AgentID),
 		)
 		if !ok {
 			resp.Skipped = append(resp.Skipped, notePeriodBriefRetrySkipped{
@@ -221,6 +231,16 @@ FROM note_page WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL`,
 		ref.RetryCount++
 		refs[i] = ref
 		updated = true
+		if err := h.mergeNotePeriodBriefCollector(ctx, run.ID, ref.AgentID, map[string]any{
+			"job_id":        ref.JobID,
+			"channel_id":    ref.ChannelID,
+			"retry_count":   ref.RetryCount,
+			"pack_markdown": "",
+			"pack_job_id":   "",
+		}, "collecting"); err != nil {
+			resp.Skipped = append(resp.Skipped, notePeriodBriefRetrySkipped{AgentID: ref.AgentID, Reason: "failed to record retry job"})
+			continue
+		}
 		jobs = append(jobs, job)
 		resp.Retried = append(resp.Retried, notePeriodBriefRetryItem{
 			AgentID:    ref.AgentID,
@@ -231,7 +251,7 @@ FROM note_page WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL`,
 	}
 
 	if updated {
-		_ = h.updateNotePeriodBriefRunCollectors(ctx, run.ID, refs, "collecting")
+		_ = h.updateNotePeriodBriefRunStatus(ctx, run.ID, "collecting")
 	}
 	allJobs := jobsFromCollectorRefs(refs, uuidToString(run.DraftPageID))
 	if len(resp.Retried) == 0 {
@@ -249,6 +269,8 @@ func (h *Handler) dispatchNotePeriodBriefCollectorOntoDraft(
 	agent db.Agent,
 	draft notePageRow,
 	windowLabel, windowStart, windowEnd, preferredChannelID string,
+	scope notePeriodBriefCollectorScope,
 ) (NoteWorkerJobResponse, bool) {
-	return h.dispatchNotePeriodBriefCollector(w, r, workspaceID, userID, userIDString, draft, agent, windowLabel, windowStart, windowEnd)
+	_ = preferredChannelID
+	return h.dispatchNotePeriodBriefCollector(w, r, workspaceID, userID, userIDString, draft, agent, windowLabel, windowStart, windowEnd, scope)
 }

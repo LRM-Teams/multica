@@ -34,7 +34,7 @@ func TestServiceAndRunnerStreamsAreScopedAndVersioned(t *testing.T) {
 	runner, err := store.Runner(RunnerOptions{
 		Environment:       EnvironmentProduction,
 		WorkspaceID:       testWorkspaceID,
-		StartIdentity:     "start-identity-1",
+		DaemonInstanceID:  "start-identity-1",
 		ComputerID:        testComputerID,
 		ServiceGeneration: "service-generation-1",
 	})
@@ -82,7 +82,7 @@ func TestServiceAndRunnerStreamsAreScopedAndVersioned(t *testing.T) {
 	assertField(t, runnerRecord, "scope", "runner")
 	assertField(t, runnerRecord, "environment", string(EnvironmentProduction))
 	assertField(t, runnerRecord, "workspaceId", testWorkspaceID)
-	assertField(t, runnerRecord, "startIdentity", "start-identity-1")
+	assertField(t, runnerRecord, "daemonInstanceId", "start-identity-1")
 	assertField(t, runnerRecord, "source_message_id", "55555555-5555-4555-8555-555555555555")
 
 	for _, path := range []string{root, filepath.Dir(runnerPath)} {
@@ -105,30 +105,6 @@ func TestServiceAndRunnerStreamsAreScopedAndVersioned(t *testing.T) {
 	}
 }
 
-func TestCodexLifecycleFieldsAreStructuredAndTerminationReasonIsClosed(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "logs")
-	store := openTestStore(t, root, time.Now, Limits{})
-	runner, err := store.Runner(RunnerOptions{Environment: EnvironmentProduction, WorkspaceID: testWorkspaceID, StartIdentity: "start-1"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = runner.Record(Event{
-		Name: EventAgentProcessStateChanged, Level: LevelInfo, Component: "provider_process",
-		Identity: Identity{EventID: "event-1", RuntimeID: "runtime-1", StartDispatchID: "dispatch-1", ProcessInstanceID: "process-1", InboxEventID: "inbox-1"},
-		Fields:   Fields{Provider: "codex", Phase: "provider_exit", Outcome: "close", RuntimeEpoch: 2, ProcessPID: 1234, ExitCode: 137, Signal: "SIGKILL", TerminationReason: "force_killed", ForceKilled: true},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	record := readOneRecord(t, filepath.Join(root, "runners", string(EnvironmentProduction), testWorkspaceID+".log"))
-	for key, want := range map[string]any{"event_id": "event-1", "runtime_id": "runtime-1", "start_dispatch_id": "dispatch-1", "process_instance_id": "process-1", "inbox_event_id": "inbox-1", "runtime_epoch": float64(2), "pid": float64(1234), "exit_code": float64(137), "signal": "SIGKILL", "termination_reason": "force_killed", "force_killed": true} {
-		assertField(t, record, key, want)
-	}
-	if err := runner.Record(Event{Name: EventAgentProcessStateChanged, Level: LevelInfo, Component: "provider_process", Fields: Fields{TerminationReason: "prompt_body"}}); err == nil {
-		t.Fatal("accepted non-closed termination reason")
-	}
-}
-
 func TestRunnerRejectsInvalidDestination(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "logs")
 	store := openTestStore(t, root, time.Now, Limits{})
@@ -136,8 +112,8 @@ func TestRunnerRejectsInvalidDestination(t *testing.T) {
 		t.Fatal("Service accepted an empty serviceGeneration")
 	}
 	tests := []RunnerOptions{
-		{Environment: "staging", WorkspaceID: testWorkspaceID, StartIdentity: "start-1"},
-		{Environment: EnvironmentProduction, WorkspaceID: "../../escape", StartIdentity: "start-1"},
+		{Environment: "staging", WorkspaceID: testWorkspaceID, DaemonInstanceID: "start-1"},
+		{Environment: EnvironmentProduction, WorkspaceID: "../../escape", DaemonInstanceID: "start-1"},
 		{Environment: EnvironmentProduction, WorkspaceID: testWorkspaceID},
 	}
 	for _, options := range tests {
@@ -152,7 +128,7 @@ func TestRunnerRejectsInvalidDestination(t *testing.T) {
 	if err := service.Record(Event{Name: EventRunnerStateChanged, Level: LevelInfo, Component: "test"}); err == nil {
 		t.Fatal("Service accepted a Runner-scoped event")
 	}
-	runner, err := store.Runner(RunnerOptions{Environment: EnvironmentProduction, WorkspaceID: testWorkspaceID, StartIdentity: "start-1"})
+	runner, err := store.Runner(RunnerOptions{Environment: EnvironmentProduction, WorkspaceID: testWorkspaceID, DaemonInstanceID: "start-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -314,7 +290,7 @@ func TestCleanupEnforcesRetentionStreamAndGlobalBudgets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runner, err := store.Runner(RunnerOptions{Environment: EnvironmentProduction, WorkspaceID: testWorkspaceID, StartIdentity: "start-identity-1"})
+	runner, err := store.Runner(RunnerOptions{Environment: EnvironmentProduction, WorkspaceID: testWorkspaceID, DaemonInstanceID: "start-identity-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -434,7 +410,7 @@ func TestSymlinkEscapeIsRejected(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(root, "runners")); err != nil {
 		t.Skipf("symlink unsupported: %v", err)
 	}
-	if _, err := store.Runner(RunnerOptions{Environment: EnvironmentProduction, WorkspaceID: testWorkspaceID, StartIdentity: "start-1"}); err == nil {
+	if _, err := store.Runner(RunnerOptions{Environment: EnvironmentProduction, WorkspaceID: testWorkspaceID, DaemonInstanceID: "start-1"}); err == nil {
 		t.Fatal("Runner succeeded through symlink, want rejection")
 	}
 	entries, err := os.ReadDir(outside)

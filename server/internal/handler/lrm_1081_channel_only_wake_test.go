@@ -77,7 +77,7 @@ func TestChannelMentionEnqueueIsDeliveryOnly(t *testing.T) {
 	}
 }
 
-func TestReminderFireIsTransientOwnerInputWithoutMessageOrInboxWake(t *testing.T) {
+func TestReminderFireAuthorizationDoesNotCreateMessageOrServerInboxWake(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -85,8 +85,6 @@ func TestReminderFireIsTransientOwnerInputWithoutMessageOrInboxWake(t *testing.T
 	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}})
 	anchor := fixture.insertMessage(t, "user", testUserID, "anchor", nil)
 	reminderID := seedDueReminder(t, fixture.agentIDs[0], fixture.channel.ID, anchor.ID, "", "")
-	notifier := &capturedReminderOwnerInputNotifier{}
-	fixture.handler.ReminderOwnerInputNotifier = notifier
 	var messagesBefore, deliveriesBefore, wakesBefore int
 	if err := testPool.QueryRow(context.Background(), `
 		SELECT
@@ -112,9 +110,5 @@ func TestReminderFireIsTransientOwnerInputWithoutMessageOrInboxWake(t *testing.T
 	if messagesAfter != messagesBefore || deliveriesAfter != deliveriesBefore || wakesAfter != wakesBefore {
 		t.Fatalf("Reminder fire changed Message/delivery/inbox counts %d/%d/%d -> %d/%d/%d",
 			messagesBefore, deliveriesBefore, wakesBefore, messagesAfter, deliveriesAfter, wakesAfter)
-	}
-	calls := notifier.snapshot()
-	if len(calls) != 1 || calls[0].payload.ReminderID != reminderID {
-		t.Fatalf("transient owner inputs=%+v, want one for %s", calls, reminderID)
 	}
 }

@@ -263,6 +263,7 @@ function SNodeContent({
         <span
           data-testid="star-graph-agent-badge"
           className="mt-0.5 inline-grid min-w-[1.4rem] place-items-center rounded-full border px-1 text-[0.5rem] font-black"
+          title={agentBadge}
         >
           {agentBadge}
         </span>

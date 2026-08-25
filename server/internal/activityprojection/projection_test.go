@@ -15,7 +15,7 @@ func TestProjectSummaryOwnsAllKnownSemanticsAndUnknownFallback(t *testing.T) {
 		{"thinking", "", "Thinking..."},
 		{"working", "starting", "Starting…"},
 		{"working", "message_received", "Message received"},
-		{"working", "model_response_started", "Thinking..."},
+		{"working", "model_response_started", "Working..."},
 		{"working", "running_command", "Running command..."},
 		{"working", "checking_messages", "Checking messages..."},
 		{"working", "compacting_context", "Compacting context..."},
@@ -144,6 +144,42 @@ func TestProjectTimelineEntryShowsCommandTextAsSubtext(t *testing.T) {
 	plain := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "tool_start", Body: []byte(`{"toolName":"bash","toolInput":""}`)}, Summary{Label: "Online", Tone: "success"})
 	if plain.Title != "Running command" || plain.Subtext != "" || plain.Tone != "running" || plain.BodyKind != "command" {
 		t.Fatalf("generic command row = %+v, want no subtext", plain)
+	}
+}
+
+func TestProjectTaskMessageProjectsOnlyBoundedUserFacingTaskActivity(t *testing.T) {
+	row, ok := ProjectTaskMessage(protocol.TaskMessagePayload{
+		Type:       "tool_use",
+		Tool:       "bash",
+		Visibility: "user_facing",
+		Input: map[string]any{
+			"command": "pnpm test",
+			"secret":  "must not persist",
+		},
+	})
+	if !ok {
+		t.Fatal("user-facing tool message was not projected")
+	}
+	if row.Title != "Running command" || row.Subtext != "pnpm test" || row.Tone != "running" || row.BodyKind != "command" {
+		t.Fatalf("task message row = %+v", row)
+	}
+	if strings.Contains(row.Subtext, "must not persist") || row.Body != "" {
+		t.Fatalf("task message row retained raw provider input: %+v", row)
+	}
+
+	if _, ok := ProjectTaskMessage(protocol.TaskMessagePayload{
+		Type:       "tool_use",
+		Tool:       "bash",
+		Visibility: "diagnostic_only",
+	}); ok {
+		t.Fatal("diagnostic-only task message must not become presentation activity")
+	}
+	if _, ok := ProjectTaskMessage(protocol.TaskMessagePayload{
+		Type:       "text",
+		Visibility: "user_facing",
+		Content:    "provider reasoning must not persist",
+	}); ok {
+		t.Fatal("provider text must not become presentation activity")
 	}
 }
 

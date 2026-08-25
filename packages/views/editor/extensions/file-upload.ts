@@ -2,6 +2,7 @@ import { Extension } from "@tiptap/core";
 import { Plugin, PluginKey, TextSelection } from "@tiptap/pm/state";
 import type { UploadResult } from "@multica/core/hooks/use-file-upload";
 import { createSafeId } from "@multica/core/utils";
+import { clipboardPrefersTextOverFiles } from "./clipboard-paste";
 
 /** Find and remove a fileCard node by uploadId. */
  
@@ -263,8 +264,15 @@ export function createFileUploadExtension(
           key: new PluginKey("fileUpload"),
           props: {
             handlePaste(_view, event) {
-              const files = event.clipboardData?.files;
+              const clipboard = event.clipboardData;
+              const files = clipboard?.files;
               if (!files?.length) return false;
+              // PowerPoint / Word put a bitmap of the selection beside the
+              // copied text. Prefer the text so a text copy does not upload
+              // as an image. Screenshots and Finder file copies still land here.
+              if (clipboard && clipboardPrefersTextOverFiles(clipboard)) {
+                return false;
+              }
               if ((mediaModeRef?.current ?? "inline") === "external") {
                 return handleExternal(files);
               }

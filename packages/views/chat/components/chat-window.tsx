@@ -57,6 +57,22 @@ import { ChatInput } from "./chat-input";
 import { ChatContactList } from "./chat-contact-list";
 import { ChatResizeHandles } from "./chat-resize-handles";
 import { useChatResize } from "./use-chat-resize";
+import { useNoteBubbleSidebarWidth } from "./use-note-bubble-sidebar-width";
+import {
+  NOTE_ASSISTANT_SIDEBAR_EXIT_MS,
+  chatWindowClosesOnEscape,
+  chatWindowClosesOnOutsideClick,
+  chatWindowEscapeClosesNoteBubble,
+  chatWindowEscapeLayerSelector,
+  chatWindowMainPane,
+  chatWindowMainPaneClassName,
+  chatWindowShellClassName,
+  chatWindowSidebarClipClassName,
+  chatWindowSidebarSlideClassName,
+  chatWindowUsesFloatingChrome,
+  noteAssistantSidebarPresence,
+  type ChatWindowLayout,
+} from "./chat-window-layout";
 import { RuntimeTokenStatsBadge } from "../../common/runtime-token-stats-badge";
 import { createLogger } from "@multica/core/logger";
 import type { Agent, ChatMessage, ChatMessagesPage, ChatPendingTask, ChatSession, PendingChatTasksResponse } from "@multica/core/types";
@@ -77,18 +93,69 @@ export interface ChatWindowProps {
   contextNotePageId?: string;
   /**
    * Optional default agent for Notes bubble when no per-page selection exists.
+   * With `lockPreferredAgent`, this is the only agent (no picker).
    */
   preferredAgentId?: string | null;
   /**
+   * When true with preferredAgentId, hide the agent dropdown and always use
+   * that agent (Notes 笔记助手).
+   */
+  lockPreferredAgent?: boolean;
+  /**
+   * Optional slot rendered above the message list / empty state (e.g. Notes
+   * assistant first-open setup card).
+   */
+  headerAccessory?: React.ReactNode;
+  /**
+   * Bump to focus the composer (e.g. after Notes Assistant create dialog).
+   */
+  composerFocusToken?: number;
+  /**
+   * Send this text once the Notes bubble is open and an agent is ready
+   * (e.g. the Highlights satellite). Cleared via onSeedSendConsumed.
+   * `nonce` is unique per click so React Strict Mode cannot double-send.
+   */
+  seedSend?: { nonce: number; text: string } | null;
+  onSeedSendConsumed?: () => void;
+  /**
+   * Optional slot rendered in the conversation area (empty state) and,
+   * when messages exist, above the composer (e.g. Period Brief chips).
+   */
+  composerAccessory?: React.ReactNode;
+  /** Override the composer placeholder when the accessory is driving send. */
+  composerPlaceholder?: string;
+  /** Allow sending an empty composer (Period Brief chip-only start). */
+  allowEmptySend?: boolean;
+  /**
+   * When set, consume the send instead of posting a chat message.
+   * Return true to clear the composer; false to keep the draft.
+   */
+  onSendOverride?: (text: string) => boolean | Promise<boolean>;
+  /**
+   * Run before a normal send. Return true to keep the draft and skip the
+   * chat post (e.g. open Period Brief chips after a 写汇报 ask).
+   */
+  onSendIntercept?: (text: string) => boolean;
+  /** Rewrite the outgoing body (e.g. attach a Notes selection quote). */
+  transformOutgoing?: (content: string) => string;
+  /** Called after a chat send is accepted (not intercept / override / error). */
+  onSendAccepted?: () => void;
+  /** Rendered inside the composer card, above the editor. */
+  composerPrefix?: React.ReactNode;
+  /** Hide the composer until a page-bound Period Brief run finishes. */
+  composerLocked?: boolean;
+  /**
    * Force layout. Default: floating desktop window; on mobile with a
    * lockedAgentId, fullscreen sheet is used automatically.
+   * Notes assistant uses `sidebar` (full-height right rail).
    */
-  layout?: "floating" | "fullscreen";
+  layout?: ChatWindowLayout;
 }
 
 const uiLogger = createLogger("chat.ui");
 const apiLogger = createLogger("chat.api");
 const CHAT_VIRTUOSO_INITIAL_FIRST_ITEM_INDEX = 1_000_000;
+const consumedChatSeedNonces = new Set<number>();
 
 function seedChatMessagesPageCache(
   qc: ReturnType<typeof useQueryClient>,
@@ -212,6 +279,20 @@ export function ChatWindow({
   lockedAgentId,
   contextNotePageId,
   preferredAgentId,
+  lockPreferredAgent = false,
+  headerAccessory,
+  composerFocusToken,
+  seedSend,
+  onSeedSendConsumed,
+  composerAccessory,
+  composerPlaceholder,
+  allowEmptySend = false,
+  onSendOverride,
+  onSendIntercept,
+  transformOutgoing,
+  onSendAccepted,
+  composerPrefix,
+  composerLocked = false,
   layout = "floating",
 }: ChatWindowProps = {}) {
   const { t } = useT("chat");
@@ -220,7 +301,10 @@ export function ChatWindow({
   const isDmBubble = Boolean(lockedAgentId) && !contextNotePageId;
   // react-doctor-disable-next-line react-doctor/no-event-handler -- mode flag from optional mount prop; not an event→effect handler
   const isNoteBubble = Boolean(contextNotePageId);
-  const effectiveLayout: "floating" | "fullscreen" = layout;
+  const effectiveLayout: ChatWindowLayout = layout;
+  const isFullscreen = effectiveLayout === "fullscreen";
+  const isSidebar = effectiveLayout === "sidebar";
+  const usesFloatingChrome = chatWindowUsesFloatingChrome(effectiveLayout);
 
   const globalIsOpen = useChatStore((s) => s.isOpen);
   const globalActiveSessionId = useChatStore((s) => s.activeSessionId);
@@ -250,7 +334,9 @@ export function ChatWindow({
       ? (dmBubbleActiveSessionByAgent[lockedAgentId!] ?? null)
       : globalActiveSessionId;
   const noteSelectedAgentId = isNoteBubble
-    ? (noteBubbleSelectedAgentByPage[contextNotePageId!] ?? preferredAgentId ?? null)
+    ? lockPreferredAgent
+      ? (preferredAgentId ?? null)
+      : (noteBubbleSelectedAgentByPage[contextNotePageId!] ?? preferredAgentId ?? null)
     : null;
   const selectedAgentId = isNoteBubble
     ? noteSelectedAgentId
@@ -410,12 +496,19 @@ export function ChatWindow({
 
   // Resolve selected agent:
   // - DM bubble: locked to peer only (never fall back to another agent)
-  // - note bubble / global: stored preference → first available
+  // - Notes bubble with lockPreferredAgent: only the Notes Assistant (or null
+  //   while setup is pending). Never fall back to availableAgents[0] — that
+  //   incorrectly showed Wendy when 笔记助手 was missing/archived.
+  // - global / unlocked note: stored preference → first available
   const activeAgent = isDmBubble
     ? (agents.find((a) => a.id === lockedAgentId) ?? null)
-    : (availableAgents.find((a) => a.id === selectedAgentId) ??
-      availableAgents[0] ??
-      null);
+    : isNoteBubble && lockPreferredAgent
+      ? preferredAgentId
+        ? (agents.find((a) => a.id === preferredAgentId && !a.archived_at) ?? null)
+        : null
+      : (availableAgents.find((a) => a.id === selectedAgentId) ??
+        availableAgents[0] ??
+        null);
 
   // Three-state availability — "loading" stays neutral (no banner, no
   // disable) so the input doesn't flash a fake "no agent" state in the
@@ -601,12 +694,18 @@ export function ChatWindow({
 
   const handleSend = useCallback(
     async (content: string, attachmentIds?: string[]): Promise<boolean> => {
+      if (onSendIntercept?.(content)) {
+        return false;
+      }
+      if (onSendOverride) {
+        return await onSendOverride(content);
+      }
       if (!activeAgent) {
         apiLogger.warn("sendChatMessage skipped: no active agent");
         return false;
       }
 
-      const finalContent = content;
+      const finalContent = transformOutgoing ? transformOutgoing(content) : content;
 
       const isNewSession = !activeSessionId;
 
@@ -658,7 +757,8 @@ export function ChatWindow({
       );
       qc.setQueryData<ChatPendingTask>(chatKeys.pendingTask(sessionId), {
         pending: true,
-        status: "queued",
+        // Match GET pending-task: standalone has no queue stage to show.
+        status: "running",
         created_at: sentAt,
       });
       // Cache primed → safe to publish the new active session. Idempotent
@@ -690,12 +790,13 @@ export function ChatWindow({
         qc.invalidateQueries({ queryKey: chatKeys.messages(sessionId) });
         qc.invalidateQueries({ queryKey: chatKeys.messagesPage(sessionId) });
         qc.invalidateQueries({ queryKey: chatKeys.pendingTasks(wsId) });
+        onSendAccepted?.();
         return true;
       }
       let pendingAfterSend: ChatPendingTask = {
         pending: true,
         delivery_id: result.delivery_id,
-        status: "queued",
+        status: "running",
         created_at: result.created_at,
       };
       try {
@@ -712,6 +813,7 @@ export function ChatWindow({
         apiLogger.warn("sendChatMessage.pendingTask.refresh.error", { sessionId, err });
       }
       qc.setQueryData<ChatPendingTask>(chatKeys.pendingTask(sessionId), pendingAfterSend);
+      onSendAccepted?.();
       if (stopRequestedBeforeTaskRef.current) {
         stopRequestedBeforeTaskRef.current = false;
         await cancelStandaloneTurn(sessionId, { source: "deferred-send" });
@@ -731,8 +833,24 @@ export function ChatWindow({
       setActiveSession,
       t,
       wsId,
+      onSendOverride,
+      onSendIntercept,
+      transformOutgoing,
+      onSendAccepted,
     ],
   );
+
+  const handleSendRef = useRef(handleSend);
+  handleSendRef.current = handleSend;
+  useEffect(() => {
+    if (!seedSend || !isOpen || !activeAgent) return;
+    if (consumedChatSeedNonces.has(seedSend.nonce)) return;
+    consumedChatSeedNonces.add(seedSend.nonce);
+    void handleSendRef.current(seedSend.text).then((ok) => {
+      if (ok) onSeedSendConsumed?.();
+      else consumedChatSeedNonces.delete(seedSend.nonce);
+    });
+  }, [seedSend, isOpen, activeAgent, onSeedSendConsumed]);
 
   const handleStop = useCallback(() => {
     if (!activeSessionId) {
@@ -821,16 +939,75 @@ export function ChatWindow({
   const isExpanded = useChatStore((s) => s.isExpanded);
 
   const windowRef = useRef<HTMLDivElement>(null);
+  const { width: sidebarWidth, onResizePointerDown: onSidebarResizePointerDown } =
+    useNoteBubbleSidebarWidth();
   const { renderWidth, renderHeight, isAtMax, boundsReady, isDragging, toggleExpand, startDrag } = useChatResize(windowRef);
+  const [sidebarStayMounted, setSidebarStayMounted] = useState(false);
+  const [sidebarEntered, setSidebarEntered] = useState(false);
+
+  useEffect(() => {
+    if (!isSidebar) return;
+    if (isOpen) {
+      setSidebarStayMounted(true);
+      let enter = 0;
+      const frame = window.requestAnimationFrame(() => {
+        enter = window.requestAnimationFrame(() => setSidebarEntered(true));
+      });
+      return () => {
+        window.cancelAnimationFrame(frame);
+        window.cancelAnimationFrame(enter);
+      };
+    }
+    setSidebarEntered(false);
+    const timer = window.setTimeout(() => setSidebarStayMounted(false), NOTE_ASSISTANT_SIDEBAR_EXIT_MS);
+    return () => window.clearTimeout(timer);
+  }, [isSidebar, isOpen]);
+
+  const sidebarPresence = noteAssistantSidebarPresence(isOpen, sidebarStayMounted);
+  const sidebarSlideOpen = sidebarPresence === "open" && sidebarEntered;
 
   const hasMessages = messages.length > 0 || turnOutstanding;
+  const mainPane = chatWindowMainPane(showSkeleton, hasMessages, Boolean(composerAccessory));
 
-  const isVisible = isOpen && (effectiveLayout === "fullscreen" || isExpanded || boundsReady);
+  const isVisible = isOpen && (isFullscreen || isSidebar || isExpanded || boundsReady);
 
-  const isFullscreen = effectiveLayout === "fullscreen";
   const activeAgentDisplayName = activeAgent
     ? resolveActorDisplayName(activeAgent, activeAgent.id)
     : undefined;
+
+  // Notes floating bubble: click outside the window minimizes back to the FAB
+  // (same outcome as the header Minus). Ignore portaled layers that belong to
+  // this window (session menu, create-agent dialog, tooltips, etc.).
+  useEffect(() => {
+    if (!isNoteBubble || !isOpen || !chatWindowClosesOnOutsideClick(effectiveLayout)) return;
+
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (windowRef.current?.contains(target)) return;
+      if (target.closest(chatWindowEscapeLayerSelector() + ', [data-slot="tooltip-content"]')) {
+        return;
+      }
+      handleMinimize();
+    };
+
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [isNoteBubble, isOpen, effectiveLayout, handleMinimize]);
+
+  useEffect(() => {
+    if (!isNoteBubble || !isOpen || !chatWindowClosesOnEscape(effectiveLayout)) return;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!chatWindowEscapeClosesNoteBubble(event)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      handleMinimize();
+    };
+
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [isNoteBubble, isOpen, effectiveLayout, handleMinimize]);
 
   // Fullscreen sheet must cover the *viewport*, not just the DM `<main>`.
   // Absolute+parent was leaving the DM composer visible underneath on mobile
@@ -845,9 +1022,7 @@ export function ChatWindow({
     };
   }, [isFullscreen, isOpen]);
 
-  const containerClass = isFullscreen
-    ? "fixed inset-0 z-50 flex h-dvh max-h-dvh w-full flex-row bg-background overflow-hidden pt-[env(safe-area-inset-top,0px)]"
-    : "absolute bottom-2 right-2 z-50 flex flex-row rounded-xl ring-1 ring-foreground/10 bg-sidebar shadow-2xl overflow-hidden";
+  const containerClass = chatWindowShellClassName(effectiveLayout);
   const containerStyle: React.CSSProperties = isFullscreen
     ? {
         pointerEvents: isOpen ? "auto" : "none",
@@ -857,45 +1032,34 @@ export function ChatWindow({
         height: "100dvh",
         maxHeight: "100dvh",
       }
+    : isSidebar
+      ? {
+          pointerEvents: isOpen ? "auto" : "none",
+          width: sidebarWidth,
+          height: "100%",
+        }
     : {
         transformOrigin: "bottom right",
         pointerEvents: isOpen ? "auto" : "none",
       };
 
-  const shell = (
-    <motion.div
-      ref={windowRef}
-      className={containerClass}
-      style={containerStyle}
-      initial={
-        isFullscreen
-          ? { opacity: 0, width: "100%", height: "100%" }
-          : { opacity: 0, scale: 0.95, width: renderWidth, height: renderHeight }
-      }
-      animate={
-        isFullscreen
-          ? {
-              opacity: isVisible ? 1 : 0,
-              width: "100%",
-              height: "100%",
-              scale: 1,
-            }
-          : {
-              opacity: isVisible ? 1 : 0,
-              scale: isVisible ? 1 : 0.95,
-              width: renderWidth,
-              height: renderHeight,
-            }
-      }
-      transition={{
-        width: isDragging ? { duration: 0 } : { type: "spring", duration: 0.3, bounce: 0 },
-        height: isDragging ? { duration: 0 } : { type: "spring", duration: 0.3, bounce: 0 },
-        opacity: { duration: 0.15 },
-        scale: { type: "spring", duration: 0.2, bounce: 0 },
-      }}
-      aria-hidden={!isOpen}
-    >
-      {!isFullscreen && <ChatResizeHandles onDragStart={startDrag} />}
+  const shellClassName = cn(
+    containerClass,
+    isSidebar && chatWindowSidebarSlideClassName(sidebarSlideOpen),
+  );
+  const shellTestId = isNoteBubble ? "note-assistant-chat-shell" : "chat-window-shell";
+  const shellBody = (
+    <>
+      {usesFloatingChrome && <ChatResizeHandles onDragStart={startDrag} />}
+      {isSidebar && (
+        <button
+          type="button"
+          data-testid="note-assistant-sidebar-resize"
+          aria-label={t(($) => $.window.resize_sidebar_aria)}
+          className="absolute inset-y-0 left-0 z-10 w-1.5 cursor-col-resize border-0 bg-transparent p-0 hover:bg-foreground/10"
+          onPointerDown={onSidebarResizePointerDown}
+        />
+      )}
       {/* Left IM pane: agent contacts — hidden in DM bubble (locked agent). */}
       {!isDmBubble && !isNoteBubble && (
         <ChatContactList
@@ -969,7 +1133,7 @@ export function ChatWindow({
           ) : null}
         </div>
         <div className="flex items-center gap-0.5 shrink-0">
-          {!isFullscreen && (
+          {usesFloatingChrome && (
             <Tooltip>
               <TooltipTrigger
                 render={
@@ -1008,10 +1172,12 @@ export function ChatWindow({
         </div>
       </div>
 
-      {/* Messages / skeleton / empty state */}
-      {showSkeleton ? (
+      {headerAccessory}
+
+      {/* Messages / skeleton / empty state. Chips never replace this pane. */}
+      {mainPane === "skeleton" ? (
         <ChatMessageSkeleton />
-        ) : hasMessages ? (
+      ) : mainPane === "messages" ? (
         <ChatMessageList
           key={activeSessionId}
           sessionId={activeSessionId ?? ""}
@@ -1023,7 +1189,11 @@ export function ChatWindow({
           isFetchingOlderMessages={isFetchingOlderMessages}
           onLoadOlderMessages={() => void fetchOlderMessages()}
           isDmBubble={isDmBubble}
+          hoverMessageActions={isNoteBubble}
+          noteInsertPageId={isNoteBubble ? contextNotePageId : undefined}
         />
+      ) : mainPane === "spacer" ? (
+        <div className={chatWindowMainPaneClassName(mainPane)} aria-hidden />
       ) : (
         <EmptyState
           hasSessions={sessions.length > 0}
@@ -1035,6 +1205,7 @@ export function ChatWindow({
           }}
         />
       )}
+      {composerAccessory}
 
       {/* No-agent banner above the input. Presence (online/offline)
        *  belongs to the header only (#624, Parker/Iris) — this slot used to
@@ -1056,17 +1227,19 @@ export function ChatWindow({
         onRestoreDraftConsumed={handleRestoreDraftConsumed}
         onUploadFile={handleUploadFile}
         onStop={handleStop}
-        isRunning={turnOutstanding}
-        disabled={isSessionArchived}
+        isRunning={turnOutstanding || composerLocked}
+        disabled={isSessionArchived || composerLocked}
         noAgent={noAgent}
         agentName={activeAgentDisplayName}
         agentId={activeAgent?.id ?? null}
-        wsId={wsId}
         sessionId={activeSessionId}
-        currentProjectId={currentSession?.project_id ?? null}
         safeArea={isFullscreen}
+        focusToken={composerFocusToken}
+        placeholder={composerPlaceholder}
+        allowEmptySend={allowEmptySend}
+        composerPrefix={composerPrefix}
         leftAdornment={
-          isDmBubble ? undefined : (
+          isDmBubble || isNoteBubble || lockPreferredAgent ? undefined : (
             <AgentDropdown
               agents={availableAgents}
               activeAgent={activeAgent}
@@ -1077,11 +1250,69 @@ export function ChatWindow({
         }
       />
       </div>
+    </>
+  );
+
+  const shell = isSidebar ? (
+    <div
+      ref={windowRef}
+      className={shellClassName}
+      style={containerStyle}
+      data-layout={effectiveLayout}
+      data-testid={shellTestId}
+      aria-hidden={!isOpen}
+    >
+      {shellBody}
+    </div>
+  ) : (
+    <motion.div
+      ref={windowRef}
+      className={shellClassName}
+      style={containerStyle}
+      data-layout={effectiveLayout}
+      data-testid={shellTestId}
+      initial={
+        isFullscreen
+          ? { opacity: 0, width: "100%", height: "100%" }
+          : { opacity: 0, scale: 0.95, width: renderWidth, height: renderHeight }
+      }
+      animate={
+        isFullscreen
+          ? {
+              opacity: isVisible ? 1 : 0,
+              width: "100%",
+              height: "100%",
+              scale: 1,
+            }
+          : {
+              opacity: isVisible ? 1 : 0,
+              scale: isVisible ? 1 : 0.95,
+              width: renderWidth,
+              height: renderHeight,
+            }
+      }
+      transition={{
+        width: isDragging ? { duration: 0 } : { type: "spring", duration: 0.3, bounce: 0 },
+        height: isDragging ? { duration: 0 } : { type: "spring", duration: 0.3, bounce: 0 },
+        opacity: { duration: 0.15 },
+        scale: { type: "spring", duration: 0.2, bounce: 0 },
+      }}
+      aria-hidden={!isOpen}
+    >
+      {shellBody}
     </motion.div>
   );
 
   if (isFullscreen && typeof document !== "undefined") {
     return createPortal(shell, document.body);
+  }
+  if (isSidebar) {
+    if (sidebarPresence === "omit") return null;
+    return (
+      <div className={chatWindowSidebarClipClassName()} data-testid="note-assistant-sidebar-clip">
+        {shell}
+      </div>
+    );
   }
   return shell;
 }

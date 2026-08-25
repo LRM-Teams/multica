@@ -184,6 +184,12 @@ export interface RuntimeDevice {
 export type AgentRuntime = RuntimeDevice;
 
 /** Workspace-scoped Computer connection, independent of Agent runtime rows. */
+/** One provider process on a Computer, named for picking (no liveness of its own). */
+export interface ComputerRuntimeOption {
+  id: string;
+  provider: string;
+}
+
 export interface ComputerConnection {
   daemon_id: string;
   owner_id: string;
@@ -195,6 +201,42 @@ export interface ComputerConnection {
   cliVersion?: string | null;
   /** Owner-projected Machine Work Journal switch; missing on older servers. */
   work_journal_enabled?: boolean | null;
+  /**
+   * Runtimes on this Computer the viewer may bind an agent to — already
+   * filtered by the server, which is the only place that rule lives now.
+   * Choosing where an agent runs is a two-level choice (machine, then
+   * provider) because that is the shape of the thing: a Computer's daemon
+   * core hosts one runtime per provider. Older servers omit the field.
+   */
+  runtimes?: ComputerRuntimeOption[];
+}
+
+/**
+ * The assembled answer to "what is this agent configured to run on", from
+ * GET /api/agents/{id}/runtime-config.
+ *
+ * Composed server-side on purpose. Resolving it client-side meant joining an
+ * agent's runtime_id against GET /api/runtimes — a list that means "computers
+ * I can manage" and omits another member's private runtime, so the join
+ * missed and the inspector claimed the agent had no computer. Liveness and
+ * the machine name live on `computer` because they are Computer-level facts;
+ * `runtime` only names the provider.
+ */
+export interface AgentRuntimeConfig {
+  computer: {
+    daemon_id: string;
+    /** Display-ready: the server already resolved the fallback chain. */
+    name: string;
+    /** WS truth — a live WorkspaceDaemon socket for this daemon. */
+    connected: boolean;
+    cli_version?: string;
+    os?: string;
+    owner_id?: string;
+  } | null;
+  runtime: { id: string; provider: string } | null;
+  /** Stored values, echoed as-is. Empty means the provider decides at launch. */
+  model?: string;
+  thinking?: string;
 }
 
 /** One durable on-disk Agent workspace at `~/.multica/workspaces/<workspace_id>/agents/<agent_id>`. */
@@ -505,7 +547,6 @@ export interface Agent {
   managed_role?: "research_fleet";
   /** Workspace-level authority. Agents can be members or admins, never owners. */
   workspace_role: "member" | "admin";
-  max_concurrent_tasks: number;
   model: string;
   /**
    * Runtime-native reasoning/effort token (e.g. Claude's
@@ -634,16 +675,34 @@ export interface EnsureWindyResponse {
   dm_id?: string;
 }
 
-/** Idempotent Period Brief Agent (「周报」) ensure. */
+/** Retired path: archives leftover 周报 and returns 笔记助手 (写汇报 synthesizer). */
 export interface EnsurePeriodBriefAgentResponse {
   agent: Agent;
   created: boolean;
 }
 
-/** Idempotent per-Computer Period Work collectors ensure. */
+/** Idempotent Notes Assistant (「笔记助手」) ensure for the Notes FAB bubble. */
+export interface EnsureNotesAssistantAgentResponse {
+  agent?: Agent;
+  created: boolean;
+  aligned?: boolean;
+  needs_setup?: boolean;
+  onboarding_available?: boolean;
+  setup_hint?: boolean;
+}
+
+/** Owned Computer that still needs a Period Work collector. */
+export interface PeriodBriefCollectorMissingSlot {
+  key: string;
+  label: string;
+  machine_id: string;
+}
+
+/** Probe (no runtime_id) or create/repair one collector for a chosen runtime. */
 export interface EnsurePeriodBriefCollectorsResponse {
   agents: Agent[];
   created: string[];
+  missing?: PeriodBriefCollectorMissingSlot[];
 }
 
 /** Verified avatar write intent. The server derives and persists the URL and
@@ -670,7 +729,6 @@ export interface CreateAgentRequest {
    * a later batch alongside the DB column.
    */
   home_channel_id?: string | null;
-  max_concurrent_tasks?: number;
   model?: string;
   /** Optional runtime-native reasoning/effort token. See `Agent.thinking_level`. */
   thinking_level?: string;
@@ -730,7 +788,6 @@ export interface CreateAgentFromTemplateRequest {
   display_name?: string;
   runtime_id: string;
   model?: string;
-  max_concurrent_tasks?: number;
   /** Optional overrides applied to the template before creation. nil/omit
    *  uses the template's own value. */
   description?: string;
@@ -793,9 +850,8 @@ export interface UpdateAgentRequest {
    */
   home_channel_id?: string | null;
   status?: AgentStatus;
-  max_concurrent_tasks?: number;
   model?: string;
-	/** Completed runtime-model discovery request backing an execution-config save. */
+	/** Completed runtime-model discovery request backing a runtime-config save. */
 	model_catalog_request_id?: string;
   /**
    * Runtime-native reasoning/effort token. Tri-state semantics (MUL-2339):
@@ -806,6 +862,37 @@ export interface UpdateAgentRequest {
    *     runtime's provider enum, rejected with 400 if not recognised
    */
   thinking_level?: string;
+}
+
+export interface BulkUpdateAgentRuntimeConfigRequest {
+  agent_ids: string[];
+  runtime_id: string;
+  model: string;
+  thinking_level: string;
+}
+
+export interface BulkUpdateAgentRuntimeConfigResponse {
+  updated_agent_ids: string[];
+}
+
+export type BulkAgentLifecycleAction = "start" | "stop" | "reset";
+
+export interface BulkAgentLifecycleRequest {
+  agent_ids: string[];
+  action: BulkAgentLifecycleAction;
+  mode?: AgentRestartMode;
+}
+
+export interface BulkAgentLifecycleResult {
+  agent_id: string;
+  accepted: boolean;
+  status?: string;
+  error?: string;
+  operation?: AgentRestartOperation;
+}
+
+export interface BulkAgentLifecycleResponse {
+  results: BulkAgentLifecycleResult[];
 }
 
 /**

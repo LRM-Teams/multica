@@ -13,15 +13,15 @@ import { workspaceKeys } from "@multica/core/workspace/queries";
 import { useT } from "../../i18n";
 
 /** Fields that change the running code-agent session (Frank/Raft: restart after save). */
-const EXECUTION_CONFIG_KEYS = new Set([
+const RUNTIME_CONFIG_KEYS = new Set([
   "runtime_id",
   "model",
   "thinking_level",
 ]);
 
-function touchesExecutionConfig(data: Record<string, unknown>): boolean {
+function touchesRuntimeConfig(data: Record<string, unknown>): boolean {
   for (const key of Object.keys(data)) {
-    if (EXECUTION_CONFIG_KEYS.has(key)) return true;
+    if (RUNTIME_CONFIG_KEYS.has(key)) return true;
   }
   return false;
 }
@@ -46,7 +46,7 @@ function touchesExecutionConfig(data: Record<string, unknown>): boolean {
  *    invalidate+refetch detail (that race can briefly restore the pre-PATCH
  *    agent and leave Runtime Config stale until a hard reload — LRM-296).
  *    List is still invalidated so directory consumers converge.
- *  - When the patch touches runtime/model/thinking (execution config), also
+ *  - When the patch touches runtime/model/thinking (runtime config), also
  *    call Raft's `restart` mode (same path as the Restart
  *    button — Parker A2) so the new config applies immediately (Frank
  *    2026-08-04 / Raft). Preflight gates offline / unsupported (A3/A4);
@@ -128,7 +128,7 @@ export function useUpdateAgent(wsId: string) {
       // List directory can refetch; panel body must NOT — PATCH is authority.
       qc.invalidateQueries({ queryKey: listKey });
 
-      if (!touchesExecutionConfig(data)) {
+      if (!touchesRuntimeConfig(data)) {
         toast.success(t(($) => $.detail.agent_updated_toast));
         return;
       }

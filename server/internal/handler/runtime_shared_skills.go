@@ -345,8 +345,8 @@ func (h *Handler) syncRuntimeSharedSkill(ctx context.Context, rt db.AgentRuntime
 	}
 
 	creator := pgtype.UUID{}
-	if rt.OwnerID.Valid {
-		creator = rt.OwnerID
+	if ownerID, err := h.resolveRuntimeOwnerQuery(ctx, rt); err == nil {
+		creator = ownerID
 	}
 	resp, err := h.createSkillWithFiles(ctx, skillCreateInput{
 		WorkspaceID: rt.WorkspaceID,
@@ -569,8 +569,8 @@ func (h *Handler) syncAgentMemory(ctx context.Context, rt db.AgentRuntime, agent
 		return "", &runtimeSharedSkillConflictError{Conflict: RuntimeSharedSkillSyncConflict{Key: key, Name: name, Skill: uuidToString(byName.ID), Reason: "an agent memory with this name already exists and is not managed by this sync key"}}
 	}
 	creator := pgtype.UUID{}
-	if rt.OwnerID.Valid {
-		creator = rt.OwnerID
+	if ownerID, err := h.resolveRuntimeOwnerQuery(ctx, rt); err == nil {
+		creator = ownerID
 	}
 	if _, err := h.Queries.CreateAgentMemory(ctx, db.CreateAgentMemoryParams{WorkspaceID: rt.WorkspaceID, AgentID: agent.ID, Name: name, Content: sanitizeNullBytes(incoming.Content), Config: config, SyncKey: key, ContentHash: hash, CreatedBy: creator}); err != nil {
 		return "", err
@@ -688,8 +688,8 @@ func (h *Handler) syncAgentSharedSkill(ctx context.Context, rt db.AgentRuntime, 
 	}
 
 	creator := pgtype.UUID{}
-	if rt.OwnerID.Valid {
-		creator = rt.OwnerID
+	if ownerID, err := h.resolveRuntimeOwnerQuery(ctx, rt); err == nil {
+		creator = ownerID
 	}
 	created, err := h.Queries.CreateAgentSharedSkill(ctx, db.CreateAgentSharedSkillParams{WorkspaceID: rt.WorkspaceID, AgentID: agent.ID, Name: name, Description: sanitizeNullBytes(incoming.Description), Content: sanitizeNullBytes(incoming.Content), Config: config, SyncKey: key, ContentHash: hash, CreatedBy: creator})
 	if err != nil {

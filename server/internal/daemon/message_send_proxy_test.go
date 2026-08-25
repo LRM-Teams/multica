@@ -133,10 +133,10 @@ func TestObserveMessageSendHoldPublishesSystemActivityEntry(t *testing.T) {
 	installActivityProducerAgent(t, producer)
 
 	d := New(Config{}, nil)
-	d.runnerInstanceID = "daemon-instance-1"
-	runner := installTestRunnerActivity(t, d, "workspace-1", producer)
-	runner.processes.newID = func() string { return "launch-a" }
-	if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1", LaunchID: "launch-a", StartDispatchID: "launch-a" + "-dispatch"}); err != nil {
+	d.instanceID = "daemon-instance-1"
+	runner := installTestAgentActivityProducer(t, d, "workspace-1", producer)
+	accepted := startTestManagedAgent(t, runner, "agent-a", "runtime-1", "launch-a")
+	if err := producer.SetManaged(accepted.AgentInstanceID, protocol.AgentStatusPayload{AgentID: "agent-a", Status: protocol.AgentStatusActive}, protocol.AgentSessionPayload{AgentID: "agent-a"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -148,22 +148,15 @@ func TestObserveMessageSendHoldPublishesSystemActivityEntry(t *testing.T) {
 	if payload.Snapshot.AgentID != "agent-a" {
 		t.Fatalf("entry agent_id=%q, want agent-a", payload.Snapshot.AgentID)
 	}
-	if len(payload.Entries) != 1 {
-		t.Fatalf("entries=%d, want 1 system entry", len(payload.Entries))
+	if len(payload.Timeline) != 1 {
+		t.Fatalf("timeline=%d, want 1 display row", len(payload.Timeline))
 	}
-	entry := payload.Entries[0]
-	if entry.Kind != "system" {
-		t.Fatalf("entry kind=%q, want system", entry.Kind)
+	row := payload.Timeline[0]
+	if row.Title != messageSendHoldTitle() {
+		t.Fatalf("row title=%q, want %q", row.Title, messageSendHoldTitle())
 	}
-	var body protocol.AgentActivitySystemBody
-	if err := json.Unmarshal(entry.Body, &body); err != nil {
-		t.Fatalf("decode system entry body: %v", err)
-	}
-	if body.Title != messageSendHoldTitle() {
-		t.Fatalf("entry title=%q, want %q", body.Title, messageSendHoldTitle())
-	}
-	if body.Text != messageSendHoldSubtext(3) {
-		t.Fatalf("entry text=%q, want %q", body.Text, messageSendHoldSubtext(3))
+	if row.Subtext != messageSendHoldSubtext(3) {
+		t.Fatalf("row subtext=%q, want %q", row.Subtext, messageSendHoldSubtext(3))
 	}
 }
 
@@ -172,8 +165,8 @@ func TestObserveMessageSendHoldPublishesSystemActivityEntry(t *testing.T) {
 // this Runner; the projection is best-effort and the send outcome is untouched.
 func TestObserveMessageSendHoldIsFailSoftWhenAgentNotManaged(t *testing.T) {
 	d := New(Config{}, nil)
-	d.runnerInstanceID = "daemon-instance-1"
-	runner := installTestRunnerActivity(t, d, "workspace-unknown", newAgentActivityProducer("daemon-instance-1", time.Now, nil))
+	d.instanceID = "daemon-instance-1"
+	runner := installTestAgentActivityProducer(t, d, "workspace-unknown", newAgentActivityProducer("daemon-instance-1", time.Now, nil))
 	// No managed launch exists for the Agent; observe must not panic.
 	runner.observeMessageSendHold("agent-unknown", "#general", 0, "freshness_unknown")
 }
@@ -185,10 +178,10 @@ func TestObserveMessageSendDraftSentPublishesSystemActivityEntry(t *testing.T) {
 	installActivityProducerAgent(t, producer)
 
 	d := New(Config{}, nil)
-	d.runnerInstanceID = "daemon-instance-1"
-	runner := installTestRunnerActivity(t, d, "workspace-1", producer)
-	runner.processes.newID = func() string { return "launch-a" }
-	if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1", LaunchID: "launch-a", StartDispatchID: "launch-a-dispatch"}); err != nil {
+	d.instanceID = "daemon-instance-1"
+	runner := installTestAgentActivityProducer(t, d, "workspace-1", producer)
+	accepted := startTestManagedAgent(t, runner, "agent-a", "runtime-1", "launch-a")
+	if err := producer.SetManaged(accepted.AgentInstanceID, protocol.AgentStatusPayload{AgentID: "agent-a", Status: protocol.AgentStatusActive}, protocol.AgentSessionPayload{AgentID: "agent-a"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -196,22 +189,15 @@ func TestObserveMessageSendDraftSentPublishesSystemActivityEntry(t *testing.T) {
 	if len(sent) != 1 {
 		t.Fatalf("sent payloads=%d, want 1", len(sent))
 	}
-	if len(sent[0].Entries) != 1 {
-		t.Fatalf("entries=%d, want 1 system entry", len(sent[0].Entries))
+	if len(sent[0].Timeline) != 1 {
+		t.Fatalf("timeline=%d, want 1 display row", len(sent[0].Timeline))
 	}
-	entry := sent[0].Entries[0]
-	if entry.Kind != "system" {
-		t.Fatalf("entry kind=%q, want system", entry.Kind)
+	row := sent[0].Timeline[0]
+	if row.Title != "Send draft sent" {
+		t.Fatalf("row title=%q", row.Title)
 	}
-	var body protocol.AgentActivitySystemBody
-	if err := json.Unmarshal(entry.Body, &body); err != nil {
-		t.Fatalf("decode system entry body: %v", err)
-	}
-	if body.Title != "Send draft sent" {
-		t.Fatalf("entry title=%q", body.Title)
-	}
-	if body.Text != messageSendDraftSentSubtext("#raft-research:a291584b", false) {
-		t.Fatalf("entry text=%q", body.Text)
+	if row.Subtext != messageSendDraftSentSubtext("#raft-research:a291584b", false) {
+		t.Fatalf("row subtext=%q", row.Subtext)
 	}
 }
 

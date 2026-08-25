@@ -28,14 +28,14 @@
 //     SDK — bootstrap via POST /callback/ws/endpoint, app-layer
 //     ping/pong, ACK responses on every data frame, ctx cancel breaks
 //     blocking ReadMessage via a watchdog goroutine for §4.4)
-// 10. Patcher (subscribes to task / chat-done events; keeps the
+//  10. Patcher (subscribes to task / chat-done events; keeps the
 //     per-task Lark interactive card in sync; throttled patches +
 //     final/error bypass)
-// 11. OutcomeReplier (outbound side of the EventEmitter contract:
+//  11. OutcomeReplier (outbound side of the EventEmitter contract:
 //     NeedsBinding mints a token + sends the binding prompt;
 //     AgentOffline / AgentArchived push status notice cards into the
 //     chat; Ingested is owned by the Patcher; Dropped is silent)
-// 12. RegistrationService (RFC 8628 device-flow scan-to-install: opens
+//  12. RegistrationService (RFC 8628 device-flow scan-to-install: opens
 //     a session against accounts.feishu.cn, polls in the background,
 //     and on success writes through InstallationService + auto-binds
 //     the installer via InstallerBinder so §2.1 "scan to bind, you're

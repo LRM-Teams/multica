@@ -7,66 +7,27 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiClient, setApiInstance } from "../api";
 import { useRunnerActivitySummaries, useRunnerActivitySummary } from "./use-runner-activity-summary";
 
-afterEach(() => {
-  vi.unstubAllGlobals();
-});
+afterEach(() => vi.unstubAllGlobals());
 
-describe("useRunnerActivitySummary", () => {
+describe("runner activity summary hooks", () => {
   it("shares one Workspace request across Agent consumers", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({
-        items: [
-          { agent_id: "agent-1", summary: { label: "Online", tone: "success", visibility: "visible" } },
-          { agent_id: "agent-2", summary: { label: "Thinking...", tone: "info", visibility: "visible" } },
-        ],
-      }), { status: 200, headers: { "Content-Type": "application/json" } }),
-    );
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ items: [
+      { agent_id: "agent-1", summary: { label: "Online", activityKind: "online", detailKind: "idle" } },
+      { agent_id: "agent-2", summary: { label: "Thinking...", activityKind: "thinking", detailKind: "thinking_started" } },
+    ] }), { status: 200, headers: { "Content-Type": "application/json" } }));
     vi.stubGlobal("fetch", fetchMock);
     setApiInstance(new ApiClient("https://api.example.test"));
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
-    });
-    const wrapper = ({ children }: { children: ReactNode }) => (
-      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
-    );
-
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
     const { result } = renderHook(() => ({
       one: useRunnerActivitySummary("workspace-1", "agent-1"),
       two: useRunnerActivitySummary("workspace-1", "agent-2"),
+      all: useRunnerActivitySummaries("workspace-1"),
     }), { wrapper });
 
-    await waitFor(() => expect(result.current.one.data?.label).toBe("Online"));
-    expect(result.current.two.data?.label).toBe("Thinking...");
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock.mock.calls[0]?.[0]).toBe(
-      "https://api.example.test/api/members/agents/runner-activity-summaries",
-    );
-  });
-
-  it("returns the Workspace list without per-agent select", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({
-        items: [
-          { agent_id: "agent-1", summary: { label: "Thinking...", tone: "active", visibility: "visible" } },
-        ],
-      }), { status: 200, headers: { "Content-Type": "application/json" } }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-    setApiInstance(new ApiClient("https://api.example.test"));
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
-    });
-    const wrapper = ({ children }: { children: ReactNode }) => (
-      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
-    );
-
-    const { result } = renderHook(
-      () => useRunnerActivitySummaries("workspace-1"),
-      { wrapper },
-    );
-
-    await waitFor(() => expect(result.current.data?.items).toHaveLength(1));
-    expect(result.current.data?.items[0]?.agent_id).toBe("agent-1");
+    await waitFor(() => expect(result.current.one.data?.activityKind).toBe("online"));
+    expect(result.current.two.data).toMatchObject({ label: "Thinking...", detailKind: "thinking_started" });
+    expect(result.current.all.data?.items).toHaveLength(2);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

@@ -66,7 +66,7 @@ Multica 的记忆分成两层：
 8. 不确定、冲突、敏感或不知道应该放在哪里的内容，先写 `memory/REVIEW.md`。
 9. 猜测、一次性执行噪音、原始聊天记录、秘密以及只对当前回复有用的内容，不写入长期记忆。
 10. 实质收工（改代码、定方案、推进 issue、非琐碎排查）时，给当天 `memory/daily/YYYY-MM-DD.md` 追加 **1–3 条**短索引；纯打招呼 / 贴纸 / 测试废话不写 Daily。偏好和对接仍热路径直写正式文件，不要只堆在 Daily。
-11. **处理完可复用的问题后，agent 自己记住**：根因/修法/命令若下次还会用到，收工同轮写入项目 `MEMORY.md`/`DECISIONS.md` 或 agent `memory/MEMORY.md`/`notes/*`，不要等任何人再说「记住」；一次性噪音只留 Daily。是否可复用由 agent 判断。
+11. **处理完可复用的问题后，agent 自己记住**：根因/修法/命令若下次还会用到，收工同轮写入项目 `MEMORY.md`/`DECISIONS.md` 或 agent `memory/MEMORY.md`/`notes/*`，不要等任何人再说「记住」；一次性噪音只留 Daily。**摩擦门控**（详见 `docs/superpowers/specs/2026-08-20-friction-gated-memory-spec.zh-CN.md`）：本轮出现摩擦（反复重试失败、被人纠正、动作被拒）时必须落盘教训或明确判为基础设施问题；顺滑流水只留 Daily。决策（方案选择、约定裁决）按内容类型路由，顺滑也要当场写 `DECISIONS.md`/`CONTEXT.md`。
 
 #### 凝练预算
 
@@ -93,7 +93,7 @@ Multica 的记忆分成两层：
 
 1. Agent 写完 `USER.md` / `RELATIONSHIP.md` 等后，可向 `sync_queue/memory-signal.jsonl` 追加一行短信号，例如：
    `{"action":"write","kind":"feedback","scope":"user","topic":"progress_feedback","summary":"长任务开始前确认并持续反馈进度"}`
-2. 任务结束后 daemon 上报文件差分；若触发消息命中明确偏好句式（记住/以后都/别再/下次先…），或 signal 要求 write，但本轮没有任何 durable 文件写入（Daily 不算），平台异步写入一条 `agent_memory_curation_candidate`（`metadata.source=missed_write_guard|memory_signal`，`shareable=false`）。
+2. 任务结束后 daemon 上报文件差分；若触发消息命中明确偏好句式（记住/以后都/别再/下次先…）或决策定稿句式（就用/定了/统一改成…），或 signal 要求 write/decision/friction，但本轮没有任何 durable 文件写入（Daily 不算），平台异步写入一条 `agent_memory_curation_candidate`（`metadata.source=missed_write_guard|memory_signal|decision_guard|friction_guard`，`shareable=false`）。daemon 同时上报本任务的摩擦向量（同一工具同参数连续失败 ≥3 次、provider 连续报错 ≥3 次等可数事件）；摩擦非零且无 durable 写入时产生 `friction_guard` 候选（agent 自报 `{"action":"friction","kind":"infra"}` 可抑制，基础设施故障不是方法教训）。agent 也可自报 `{"action":"decision",...}` / `{"action":"friction","kind":"method",...}` 补充语义。
 3. 当天 self-review 消费这些 pending 候选：补写正式文件，或放入 `REVIEW.md`。
 4. Team curator 跳过 `shareable=false` / `scope=user` 的私有候选。
 
@@ -329,6 +329,9 @@ Agent 私有 `memory/daily/` **不是**产品笔记，也 **不是** `note_page_
 对接/交接/归属              -> RELATIONSHIP.md / notes（热路径立刻写）
 实质收工流水账              -> memory/daily/今天.md（热路径 append；短社交跳过）
 可复用问题修法              -> 项目 MEMORY/DECISIONS 或 agent MEMORY/notes（收工自记，不等「记住」）
+顺滑干完的活                -> 最多 Daily，短索引，到期即忘
+较劲过才干完的活            -> 教训必须落正式记忆（漏写有 friction_guard 兜底）
+拍板定下的决策              -> DECISIONS/CONTEXT 当场写，顺滑也不豁免（漏写有 decision_guard 兜底）
 只属于当前项目或当前群       -> project/channel scoped 文件
 群内所有当前接收者都要记住   -> 每个 agent 各写自己的文件
 明确覆盖群外/未来 agent       -> workspace/team 候选，经过审核后入库

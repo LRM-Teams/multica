@@ -1009,8 +1009,37 @@ func (h *Handler) DeleteAttachment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.deleteS3Object(r.Context(), att.Url)
+	h.maybeDeleteAttachmentBytes(r.Context(), att)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// maybeDeleteAttachmentBytes physically deletes att.Url only when no other
+// attachment row shares it and no registered graph-memory blob owns it.
+// With no blob service (tests without a pool) this keeps the legacy
+// unconditional delete. Check errors skip the physical delete: leaked
+// bytes are recoverable, deleted bytes are not.
+func (h *Handler) maybeDeleteAttachmentBytes(ctx context.Context, att db.Attachment) {
+	if h.GraphMemoryBlobs == nil {
+		h.deleteS3Object(ctx, att.Url)
+		return
+	}
+	workspaceID := uuidToString(att.WorkspaceID)
+	attachmentID := uuidToString(att.ID)
+	shared, err := h.GraphMemoryBlobs.AttachmentURLShared(ctx, workspaceID, attachmentID, att.Url)
+	if err != nil {
+		slog.Error("graph memory blob share check failed; skipping physical delete",
+			"error", err, "attachment_id", attachmentID)
+		return
+	}
+	retained, err := h.GraphMemoryBlobs.AttachmentBytesRetained(ctx, workspaceID, att.Url)
+	if err != nil {
+		slog.Error("graph memory blob retention check failed; skipping physical delete",
+			"error", err, "attachment_id", attachmentID)
+		return
+	}
+	if !shared && !retained {
+		h.deleteS3Object(ctx, att.Url)
+	}
 }
 
 // ---------------------------------------------------------------------------

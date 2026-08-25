@@ -201,7 +201,7 @@ func runtimeConnectivity(rt db.AgentRuntime, now time.Time) runtimeConnectivityT
 	// heartbeat-freshness judgment applies unchanged.
 	if p := runnerPresence; p != nil {
 		daemonID := strings.TrimSpace(rt.DaemonID.String)
-		if daemonID != "" && p.HasWorkspaceRunner(daemonID, uuidToString(rt.WorkspaceID)) {
+		if daemonID != "" && p.HasWorkspaceDaemon(daemonID, uuidToString(rt.WorkspaceID)) {
 			return runtimeConnectivityOnline
 		}
 	}

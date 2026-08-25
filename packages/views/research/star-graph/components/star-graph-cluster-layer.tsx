@@ -43,14 +43,14 @@ export function StarGraphClusterLayer({
           data-testid={`star-graph-cluster-${cluster.clusterId}`}
           className="sg-cluster-boundary"
           style={{
-            left: cluster.x - cluster.radius,
-            top: cluster.y - cluster.radius,
-            width: cluster.radius * 2,
-            height: cluster.radius * 2,
+            left: cluster.x - (cluster.width ?? cluster.radius * 2) / 2,
+            top: cluster.y - (cluster.height ?? cluster.radius * 2) / 2,
+            width: cluster.width ?? cluster.radius * 2,
+            height: cluster.height ?? cluster.radius * 2,
           }}
         >
           <span className="sg-cluster-label">
-            {clusterLabels?.get(cluster.clusterId) ?? cluster.clusterId}
+            {clusterLabels?.get(cluster.clusterId) ?? null}
           </span>
           {hiddenCounts?.get(cluster.clusterId) ? (
             <span

@@ -289,17 +289,17 @@ func createAgentHealthFixture(t *testing.T, status string, lastSeen, updatedAt t
 	return createAgentHealthFixtureWithRuntimeAccess(t, status, lastSeen, updatedAt, testUserID, "public")
 }
 
-func createAgentHealthFixtureWithRuntimeAccess(t *testing.T, status string, lastSeen, updatedAt time.Time, runtimeOwnerID, visibility string) (agentID, runtimeID string) {
+func createAgentHealthFixtureWithRuntimeAccess(t *testing.T, status string, lastSeen, updatedAt time.Time, _ string, visibility string) (agentID, runtimeID string) {
 	t.Helper()
 	if err := testPool.QueryRow(context.Background(), `
 		INSERT INTO agent_runtime (
 			workspace_id, daemon_id, name, runtime_mode, provider,
-			status, device_info, metadata, last_seen_at, updated_at, owner_id, visibility
+			status, device_info, metadata, last_seen_at, updated_at, visibility
 		)
 		VALUES ($1, NULL, $2, 'cloud', 'health-test',
-			$3, '', '{}'::jsonb, $4, $5, $6, $7)
+			$3, '', '{}'::jsonb, $4, $5, $6)
 		RETURNING id
-	`, testWorkspaceID, "health-runtime-"+randomID(), status, lastSeen, updatedAt, runtimeOwnerID, visibility).Scan(&runtimeID); err != nil {
+	`, testWorkspaceID, "health-runtime-"+randomID(), status, lastSeen, updatedAt, visibility).Scan(&runtimeID); err != nil {
 		t.Fatalf("create health runtime: %v", err)
 	}
 	if err := testPool.QueryRow(context.Background(), `
@@ -400,7 +400,7 @@ type fakePresence struct {
 	connected map[string]bool
 }
 
-func (f *fakePresence) HasWorkspaceRunner(daemonID, workspaceID string) bool {
+func (f *fakePresence) HasWorkspaceDaemon(daemonID, workspaceID string) bool {
 	if f == nil {
 		return false
 	}
@@ -413,7 +413,7 @@ func runnerKeyForTest(daemonID, workspaceID string) string {
 
 // TestRuntimeConnectivity_WSConnectedOverridesStaleHeartbeat is the LRM-1571
 // contract for the read-time online judgment: a runtime whose daemon holds a
-// live Workspace Runner socket is Online even when last_seen_at is far past
+// live WorkspaceDaemon socket is Online even when last_seen_at is far past
 // the stale threshold (WS-capable daemons stop heartbeating). Disconnected,
 // the legacy heartbeat ramp applies unchanged.
 func TestRuntimeConnectivity_WSConnectedOverridesStaleHeartbeat(t *testing.T) {
@@ -422,11 +422,11 @@ func TestRuntimeConnectivity_WSConnectedOverridesStaleHeartbeat(t *testing.T) {
 
 	now := time.Now()
 	rt := db.AgentRuntime{
-		Status:    "online",
-		DaemonID:  pgtype.Text{String: "agent-main", Valid: true},
+		Status:      "online",
+		DaemonID:    pgtype.Text{String: "agent-main", Valid: true},
 		WorkspaceID: memberManagementTestUUID(7),
-		LastSeenAt: pgtimestamptz(now.Add(-10 * time.Minute)), // dead by heartbeat
-		UpdatedAt:  pgtimestamptz(now.Add(-10 * time.Minute)),
+		LastSeenAt:  pgtimestamptz(now.Add(-10 * time.Minute)), // dead by heartbeat
+		UpdatedAt:   pgtimestamptz(now.Add(-10 * time.Minute)),
 	}
 
 	runnerPresence = &fakePresence{connected: map[string]bool{

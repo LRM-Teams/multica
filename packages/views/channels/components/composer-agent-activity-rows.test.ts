@@ -1,85 +1,69 @@
-// @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { selectComposerAgentActivityRows } from "./composer-agent-activity-rows";
+import { groupComposerAgentActivityRows, selectComposerAgentActivityRows } from "./composer-agent-activity-rows";
 
-function item(
-  agentId: string,
-  label: string,
-  tone: string,
-  visibility = "visible",
-) {
-  return { agent_id: agentId, summary: { label, tone, visibility } };
-}
-
-const agents = [
-  { agentId: "agent-idle", name: "IdleBot" },
-  { agentId: "agent-think", name: "Thinker" },
-  { agentId: "agent-run", name: "Runner" },
-  { agentId: "agent-online", name: "OnlineBot" },
-];
-
-describe("selectComposerAgentActivityRows", () => {
-  it("keeps live verbs, sorts them first, and hides presence on a group roster", () => {
-    const rows = selectComposerAgentActivityRows(agents, [
-      item("agent-online", "Online", "success"),
-      item("agent-idle", "Idle", "neutral"),
-      item("agent-run", "Command activity", "running"),
-      item("agent-think", "Thinking...", "active"),
-    ]);
-
-    expect(rows.map((row) => row.agentId)).toEqual(["agent-think", "agent-run"]);
-    expect(rows[0]).toMatchObject({
-      name: "Thinker",
-      label: "Thinking...",
-      dotClass: "bg-brand",
-    });
-    expect(rows[1]).toMatchObject({
-      name: "Runner",
-      label: "Command activity",
-      dotClass: "bg-running",
-    });
-    expect(rows.some((row) => /Online|Idle/.test(row.label))).toBe(false);
-  });
-
-  it("hides Online/Idle on 1:1 as well — presence belongs on the avatar", () => {
+describe("composer activity fact projection", () => {
+  it("shows and sorts lifecycle facts without server visual fields", () => {
     const rows = selectComposerAgentActivityRows(
-      [{ agentId: "agent-online", name: "OnlineBot" }],
-      [item("agent-online", "Online", "success")],
+      [{ agentId: "a", name: "A" }, { agentId: "b", name: "B" }],
+      [
+        { agent_id: "a", summary: { label: "Running command...", activityKind: "working", detailKind: "running_command" } },
+        { agent_id: "b", summary: { label: "Thinking...", activityKind: "thinking", detailKind: "thinking_started" } },
+      ],
     );
-    expect(rows).toEqual([]);
+    expect(rows.map((row) => row.agentId)).toEqual(["b", "a"]);
+    expect(rows.map((row) => row.dotClass)).toEqual(["bg-blue-500", "bg-running"]);
   });
 
-  it("keeps a 1:1 live verb so collecting is not mistaken for idle", () => {
+  it("hides presence-only facts and groups matching verbs", () => {
+    expect(selectComposerAgentActivityRows([{ agentId: "a", name: "A" }], [
+      { agent_id: "a", summary: { label: "Online", activityKind: "online", detailKind: "idle" } },
+    ])).toEqual([]);
+    const grouped = groupComposerAgentActivityRows([
+      { agentId: "a", name: "A", label: "Thinking...", dotClass: "bg-blue-500", rank: 0 },
+      { agentId: "b", name: "B", label: "Thinking...", dotClass: "bg-blue-500", rank: 0 },
+    ]);
+    expect(grouped.lines[0]?.names).toEqual(["A", "B"]);
+  });
+
+  it("keeps roster members only and omits the unambiguous DM name", () => {
     const rows = selectComposerAgentActivityRows(
-      [{ agentId: "agent-think", name: "Collector" }],
-      [item("agent-think", "Thinking...", "active")],
+      [{ agentId: "a", name: "Collector" }],
+      [
+        { agent_id: "a", summary: { label: "Thinking...", activityKind: "thinking", detailKind: "thinking_started" } },
+        { agent_id: "stranger", summary: { label: "Running command...", activityKind: "working", detailKind: "running_command" } },
+      ],
     );
     expect(rows).toHaveLength(1);
-    expect(rows[0]?.label).toBe("Thinking...");
+    expect(rows[0]).toMatchObject({ agentId: "a", name: "", label: "Thinking..." });
   });
 
-  it("drops Working, hidden, and agents with no observation", () => {
-    const rows = selectComposerAgentActivityRows(agents, [
-      item("agent-think", "Working", "active"),
-      item("agent-run", "Running command...", "info", "hidden"),
-      item("stranger", "Thinking...", "active"),
-    ]);
-
-    expect(rows).toEqual([]);
-  });
-
-  it("returns empty when the roster or summaries are empty", () => {
-    expect(selectComposerAgentActivityRows([], [item("agent-think", "Thinking...", "active")])).toEqual([]);
-    expect(selectComposerAgentActivityRows(agents, [])).toEqual([]);
+  it("returns empty for missing inputs and generic Working copy", () => {
+    const agents = [{ agentId: "a", name: "A" }];
+    expect(selectComposerAgentActivityRows([], [])).toEqual([]);
     expect(selectComposerAgentActivityRows(agents, undefined)).toEqual([]);
+    expect(selectComposerAgentActivityRows(agents, [
+      { agent_id: "a", summary: { label: "Working", activityKind: "working", detailKind: "generic" } },
+    ])).toEqual([]);
   });
 
-  it("does not infer the running tone from display copy", () => {
-    const rows = selectComposerAgentActivityRows(
-      [{ agentId: "agent-run", name: "Runner" }],
-      [item("agent-run", "Running command...", "warning")],
-    );
+  it("caps grouped lines and counts hidden agents", () => {
+    const grouped = groupComposerAgentActivityRows([
+      { agentId: "a", name: "A", label: "Thinking...", dotClass: "bg-blue-500", rank: 0 },
+      { agentId: "b", name: "B", label: "Running command...", dotClass: "bg-running", rank: 1 },
+      { agentId: "c", name: "C", label: "Reading history...", dotClass: "bg-amber-500", rank: 2 },
+      { agentId: "d", name: "D", label: "Reading history...", dotClass: "bg-amber-500", rank: 2 },
+    ]);
+    expect(grouped.lines.map((line) => line.label)).toEqual(["Thinking...", "Running command..."]);
+    expect(grouped.hiddenAgentCount).toBe(2);
+  });
 
-    expect(rows[0]?.dotClass).toBe("bg-amber-500");
+  it("caps names and normalizes ellipsis variants into one verb", () => {
+    const grouped = groupComposerAgentActivityRows([
+      { agentId: "a", name: "A", label: "Thinking…", dotClass: "bg-blue-500", rank: 0 },
+      { agentId: "b", name: "B", label: "Thinking...", dotClass: "bg-blue-500", rank: 0 },
+      { agentId: "c", name: "C", label: "Thinking...", dotClass: "bg-blue-500", rank: 0 },
+    ]);
+    expect(grouped.lines).toHaveLength(1);
+    expect(grouped.lines[0]).toMatchObject({ names: ["A", "B"], hiddenNameCount: 1 });
   });
 });

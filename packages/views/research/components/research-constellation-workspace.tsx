@@ -9,18 +9,8 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type {
-  ResearchCanvasFilter,
-  TypedGraphResponse,
-  StarGraphLayoutResult,
-} from "@multica/core/research";
-import {
-  countHiddenByFilter,
-  emptyCanvasFilter,
-  isBlankFilter,
-  useResearchCanvasStore,
-  useResearchUiStore,
-} from "@multica/core/research";
+import type { TypedGraphResponse, StarGraphLayoutResult } from "@multica/core/research";
+import { useResearchUiStore } from "@multica/core/research";
 import type {
   ResearchFleetMember,
   ResearchGraphNode,
@@ -44,7 +34,6 @@ import {
   type CanvasNodeA11yCopy,
 } from "../lib/canvas-keyboard-nav";
 import { summarizeTypedGraph } from "../lib/research-d5-summary";
-import { resolveAgentInspectorRow } from "../lib/resolve-agent-inspector-row";
 import {
   mergeResearchCanvasNodes,
   resolveResearchCanvasNode,
@@ -52,7 +41,6 @@ import {
 import { firstOrderNeighborIds } from "../lib/typed-graph-neighborhood";
 import type { CanvasBodyMode } from "../lib/canvas-body-mode";
 import type { ResearchD5Lens } from "../lib/research-d5-lens";
-import type { ExecutionRow } from "../execution-overlay";
 import { capTransitionGlowDirectives } from "../motion/glow-budget";
 import { semanticMotionCss } from "../motion/directives";
 import { useSemanticTransition } from "../motion/use-semantic-transition";
@@ -67,12 +55,15 @@ import {
   STAR_GRAPH_SEMANTIC_NODE_BUDGET,
   selectVisibleEntityIds,
 } from "../star-graph/lib/star-graph-visible-budget";
-import { ResearchAgentInspector } from "./research-agent-inspector";
 import { ResearchCanvasEmptyState } from "./research-canvas-empty-state";
 import { ResearchCanvasForming } from "./research-canvas-forming";
 import { ResearchCanvasProjectionMismatch } from "./research-canvas-projection-mismatch";
 import { ResearchCanvasStaleNotice } from "./research-canvas-stale-notice";
-import { ResearchD5MobileRail, ResearchD5Rail } from "./research-d5-rail";
+import {
+  ResearchD5MobileRail,
+  ResearchD5Rail,
+  type ResearchD5RailMode,
+} from "./research-d5-rail";
 import { ResearchNodeReportModal } from "./research-node-report-modal";
 import { ResearchPendingRetryButton } from "./research-pending-retry-button";
 import "./research-d5-layout.css";
@@ -81,8 +72,6 @@ export type ResearchReportController = {
   open: () => void;
   close: () => void;
 };
-
-const EMPTY_CANVAS_FILTER: ResearchCanvasFilter = emptyCanvasFilter();
 
 export function ResearchConstellationWorkspace({
   typedGraph,
@@ -99,8 +88,8 @@ export function ResearchConstellationWorkspace({
   snapshotNodes,
   selectedNode,
   onSelectNode,
-  executionRows,
   onOpenAgentPanel,
+  onCloseAgentPanel,
   canvasMode,
   activeLens,
   onActiveLensChange,
@@ -115,6 +104,7 @@ export function ResearchConstellationWorkspace({
   formingMessages,
   chatPanel,
   detailPanel,
+  agentPanel,
   composer,
   registerReportController,
   typedGraphHasNextPage = false,
@@ -144,8 +134,8 @@ export function ResearchConstellationWorkspace({
   snapshotNodes: ResearchGraphNode[];
   selectedNode: ResearchGraphNode | null;
   onSelectNode: (node: ResearchGraphNode | null) => void;
-  executionRows: ExecutionRow[];
   onOpenAgentPanel: OpenAgentPanelFn;
+  onCloseAgentPanel?: () => void;
   canvasMode: CanvasBodyMode;
   activeLens: ResearchD5Lens;
   onActiveLensChange?: (lens: ResearchD5Lens) => void;
@@ -160,6 +150,7 @@ export function ResearchConstellationWorkspace({
   formingMessages?: Parameters<typeof ResearchCanvasForming>[0]["messages"];
   chatPanel: ReactNode;
   detailPanel: ReactNode;
+  agentPanel?: ReactNode;
   composer: ReactNode;
   registerReportController?: (controller: ResearchReportController) => void;
   className?: string;
@@ -170,11 +161,6 @@ export function ResearchConstellationWorkspace({
   const setRailOpen = useResearchUiStore((s) => s.setD5RailOpen);
   const railMode = useResearchUiStore((s) => s.d5RailMode);
   const setRailMode = useResearchUiStore((s) => s.setD5RailMode);
-  const filterSessionId = typedGraphSessionId ?? typedGraph?.session_id ?? null;
-  const storedCanvasFilter = useResearchCanvasStore((s) =>
-    filterSessionId ? s.filterBySession?.[filterSessionId] : undefined,
-  );
-  const canvasFilter = storedCanvasFilter ?? EMPTY_CANVAS_FILTER;
   const hostRef = useRef<HTMLDivElement>(null);
   const railToggleRef = useRef<HTMLButtonElement>(null);
   const prevGraphRef = useRef<TypedGraphResponse | undefined>(undefined);
@@ -189,19 +175,12 @@ export function ResearchConstellationWorkspace({
     typedGraphSessionId ?? typedGraph?.session_id ?? generatedOverlaySessionId;
   const activeOverlay =
     d5Overlay?.sessionId === overlaySessionId ? d5Overlay : null;
-  const inspectorAgentId =
-    activeOverlay?.kind === "agent" ? activeOverlay.agentId : null;
   const reportOpen = activeOverlay?.kind === "report" && selectedNode != null;
   const closeOverlay = useCallback(() => {
     if (d5Overlay?.sessionId === overlaySessionId) setD5Overlay(null);
   }, [d5Overlay?.sessionId, overlaySessionId, setD5Overlay]);
   const openReport = useCallback(
     () => setD5Overlay({ sessionId: overlaySessionId, kind: "report" }),
-    [overlaySessionId, setD5Overlay],
-  );
-  const openAgentInspector = useCallback(
-    (agentId: string) =>
-      setD5Overlay({ sessionId: overlaySessionId, kind: "agent", agentId }),
     [overlaySessionId, setD5Overlay],
   );
   const motion = useSemanticTransition();
@@ -346,11 +325,8 @@ export function ResearchConstellationWorkspace({
   }, [canvasBuild?.layoutForNext]);
 
   const lensHints = useMemo(
-    () =>
-      buildD5LensDisplayHints(activeLens, typedGraph, canvasModel, {
-        filterRound: canvasFilter.round,
-      }),
-    [activeLens, typedGraph, canvasModel, canvasFilter.round],
+    () => buildD5LensDisplayHints(activeLens, typedGraph, canvasModel),
+    [activeLens, typedGraph, canvasModel],
   );
 
   const relatedNodeIds = useMemo(() => {
@@ -440,14 +416,39 @@ export function ResearchConstellationWorkspace({
 
   const clusterLabels = useMemo(() => {
     const map = new Map<string, string>();
+    const tierRank = new Map<string, number>([
+      ["xxl", 5],
+      ["xl", 4],
+      ["l", 3],
+      ["m", 2],
+      ["s", 1],
+    ]);
     for (const cluster of typedGraph?.clusters ?? []) {
       const id = cluster.id || cluster.name;
       if (!id) continue;
       const label = (cluster.label || cluster.name || "").trim();
-      if (label) map.set(id, label);
+      if (label && label !== id) {
+        map.set(id, label);
+        continue;
+      }
+      const landmark = (typedGraph?.nodes ?? [])
+        .filter((node) => node.cluster_id === id && node.title.trim())
+        .sort(
+          (left, right) =>
+            (tierRank.get(right.level.toLowerCase()) ?? 0) -
+              (tierRank.get(left.level.toLowerCase()) ?? 0) ||
+            left.id.localeCompare(right.id),
+        )[0];
+      if (!landmark) continue;
+      const title = landmark.title.trim();
+      const conciseTitle = title.length > 28 ? `${title.slice(0, 27)}…` : title;
+      map.set(
+        id,
+        t(($) => $.d5.cluster_scope, { title: conciseTitle }),
+      );
     }
     return map;
-  }, [typedGraph?.clusters]);
+  }, [t, typedGraph?.clusters, typedGraph?.nodes]);
 
   const summary = useMemo(
     () =>
@@ -473,15 +474,6 @@ export function ResearchConstellationWorkspace({
     newDir: summary.newFrontiers,
     stopped: summary.stoppedDirections,
   });
-  const filterHiddenCount = useMemo(() => {
-    if (!typedGraph?.nodes.length || isBlankFilter(canvasFilter)) return 0;
-    return countHiddenByFilter(typedGraph.nodes, canvasFilter).hidden;
-  }, [canvasFilter, typedGraph?.nodes]);
-  const filterHiddenNote =
-    filterHiddenCount > 0
-      ? t(($) => $.d5.filter.hidden_count, { count: filterHiddenCount })
-      : undefined;
-
   const canvasNodeA11yCopy = useMemo<CanvasNodeA11yCopy>(
     () => ({
       statuses: {
@@ -548,10 +540,20 @@ export function ResearchConstellationWorkspace({
     selectedNode && typedGraph
       ? typedGraph.nodes.find((node) => node.id === selectedNode.id) ?? null
       : null;
-  const inspectorRow =
-    inspectorAgentId != null && selectedTypedNode?.actor_agent_id === inspectorAgentId
-      ? resolveAgentInspectorRow(executionRows, selectedTypedNode)
-      : null;
+  const selectedAgentId =
+    selectedTypedNode?.actor_agent_id ?? selectedNode?.actor_agent_id ?? null;
+  const agentAvailable = Boolean(selectedAgentId || agentPanel);
+
+  const handleRailModeChange = useCallback(
+    (mode: ResearchD5RailMode) => {
+      if (mode === "agent") {
+        if (selectedAgentId) onOpenAgentPanel(selectedAgentId, undefined);
+        else if (!agentPanel) return;
+      }
+      setRailMode(mode);
+    },
+    [agentPanel, onOpenAgentPanel, selectedAgentId, setRailMode],
+  );
 
   const handleCanvasSelect = useCallback(
     (nodeId: string) => {
@@ -561,32 +563,10 @@ export function ResearchConstellationWorkspace({
       });
       onSelectNode(resolved);
       setRailMode("detail");
-
-      if (projectionSource === "v6") {
-        const v6Node = typedGraph?.nodes.find((node) => node.id === nodeId);
-        const v6Level = (v6Node?.level || "").toLowerCase();
-        if (v6Level === "s" && v6Node?.actor_agent_id) {
-          setRailOpen(false);
-          openAgentInspector(v6Node.actor_agent_id);
-          return;
-        }
-        if (v6Level === "l" || v6Level === "xl" || v6Level === "xxl") {
-          if (isMobile) setRailOpen(false);
-          openReport();
-          return;
-        }
-        setRailOpen(true);
-        closeOverlay();
-        return;
-      }
+      onCloseAgentPanel?.();
 
       const typedNode = typedGraph?.nodes.find((node) => node.id === nodeId);
       const level = (typedNode?.level || "").toLowerCase();
-      if (level === "s" && typedNode?.actor_agent_id) {
-        setRailOpen(false);
-        openAgentInspector(typedNode.actor_agent_id);
-        return;
-      }
       if (level === "l" || level === "xl" || level === "xxl") {
         if (isMobile) setRailOpen(false);
         openReport();
@@ -598,10 +578,9 @@ export function ResearchConstellationWorkspace({
     [
       closeOverlay,
       isMobile,
+      onCloseAgentPanel,
       onSelectNode,
-      openAgentInspector,
       openReport,
-      projectionSource,
       setRailMode,
       setRailOpen,
       snapshotNodes,
@@ -619,10 +598,12 @@ export function ResearchConstellationWorkspace({
       );
       setRailMode("detail");
       setRailOpen(true);
+      onCloseAgentPanel?.();
       closeOverlay();
     },
     [
       closeOverlay,
+      onCloseAgentPanel,
       onSelectNode,
       setRailMode,
       setRailOpen,
@@ -633,9 +614,10 @@ export function ResearchConstellationWorkspace({
 
   const handleCanvasBackground = useCallback(() => {
     closeOverlay();
+    onCloseAgentPanel?.();
     onSelectNode(null);
     setRailMode("chat");
-  }, [closeOverlay, onSelectNode, setRailMode]);
+  }, [closeOverlay, onCloseAgentPanel, onSelectNode, setRailMode]);
 
   const handleTrajectorySelect = useCallback(
     (nodeId: string | null) => {
@@ -757,7 +739,7 @@ export function ResearchConstellationWorkspace({
             onSelect={handleTrajectorySelect}
             onOpenNodeDetail={handleCanvasSelect}
             onJumpToCanvas={(nodeId) => {
-              onActiveLensChange?.("relations");
+              onActiveLensChange?.("agent");
               handleCanvasSelect(nodeId);
             }}
           />
@@ -765,7 +747,7 @@ export function ResearchConstellationWorkspace({
         {canvasModel && !projectionMismatch && activeLens !== "lineage" ? (
           <StarGraphCanvas
             model={canvasModel}
-            cameraSessionId={`${overlaySessionId}:d5-visual-v3`}
+            cameraSessionId={`${overlaySessionId}:d5-visual-v4`}
             selectedNodeId={selectedNode?.id ?? null}
             onSelectNode={handleCanvasFocus}
             onClearSelection={handleCanvasBackground}
@@ -776,7 +758,6 @@ export function ResearchConstellationWorkspace({
             fusionLowPerformance={motion.profile.lowPerformance}
             summaryTitle={summaryTitle}
             summaryDetail={summaryDetail}
-            filterHiddenNote={filterHiddenNote}
             clusterLabels={clusterLabels}
             frontierLabel={t(($) => $.d5.new_frontier_label)}
             lensHints={lensHints}
@@ -785,13 +766,12 @@ export function ResearchConstellationWorkspace({
             rightPanelWidth={0}
             nodeAccessibleNames={nodeAccessibleNames}
             relatedNodeIds={isMobile ? mobileNeighborhoodIds : relatedNodeIds}
-            hideUnselectedSTierRelations={projectionSource === "v6"}
+            hideUnselectedSTierRelations={false}
             semanticLandmarkLabels={projectionSource === "v6"}
-            sTierPresentation={projectionSource === "v6" ? "point" : "label"}
+            sTierPresentation="label"
             initialFitEntityIdList={isMobile ? mobileNeighborhoodIdList : undefined}
             entityBudget={isMobile ? STAR_GRAPH_MOBILE_DOM_BUDGET : undefined}
             typedNodes={typedGraph?.nodes}
-            canvasFilter={canvasFilter}
             hiddenCountLabel={(count) => t(($) => $.d5.cluster_hidden, { count })}
             loadMoreLabel={loadMoreLabel}
             onLoadMore={onLoadMoreTypedGraph}
@@ -803,7 +783,7 @@ export function ResearchConstellationWorkspace({
                 to_node_id: edge.to_node_id,
                 edge_type: edge.edge_type,
               })),
-              overlay: reportOpen || inspectorRow ? "detail" : null,
+              overlay: reportOpen ? "detail" : null,
               onCloseOverlay: closeOverlay,
             }}
           />
@@ -826,20 +806,6 @@ export function ResearchConstellationWorkspace({
         ) : null}
         {showEmpty ? <ResearchCanvasEmptyState /> : null}
 
-        <ResearchAgentInspector
-          row={inspectorRow}
-          typedNode={selectedTypedNode}
-          open={Boolean(inspectorRow) && !reportOpen}
-          onClose={closeOverlay}
-          onOpenAgentConfig={
-            inspectorRow
-              ? () => {
-                  onOpenAgentPanel(inspectorRow.id, undefined);
-                  closeOverlay();
-                }
-              : undefined
-          }
-        />
       </section>
 
       {isMobile || !railOpen ? (
@@ -864,9 +830,11 @@ export function ResearchConstellationWorkspace({
         <ResearchD5Rail
           id={contextRailId}
           mode={railMode}
-          onModeChange={setRailMode}
+          onModeChange={handleRailModeChange}
           chatPanel={chatPanel}
           detailPanel={detailPanel}
+          agentPanel={agentPanel}
+          agentAvailable={agentAvailable}
           composer={composer}
           onClose={closeContextRail}
           {...(backgroundInert ? { inert: true } : {})}
@@ -878,9 +846,11 @@ export function ResearchConstellationWorkspace({
           open={railOpen}
           onOpenChange={setRailOpen}
           mode={railMode}
-          onModeChange={setRailMode}
+          onModeChange={handleRailModeChange}
           chatPanel={chatPanel}
           detailPanel={detailPanel}
+          agentPanel={agentPanel}
+          agentAvailable={agentAvailable}
           composer={composer}
         />
       ) : null}

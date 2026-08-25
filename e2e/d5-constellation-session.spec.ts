@@ -200,16 +200,23 @@ test.describe.serial("D5 constellation session canvas gate", () => {
     await expect(page.getByTestId("research-node-report-modal")).toHaveCount(0);
   });
 
-  test("desktop: S agent node opens Agent Inspector", async ({ page }) => {
+  test("desktop: Work node opens Agent settings in the context rail", async ({ page }) => {
     test.skip(!seeded.fleetAgentId, "Fleet agent id unavailable in seed");
     await openSession(page, seeded, 1440, 900);
     await page
       .getByRole("button", { name: new RegExp(seeded.nodeTitles.probe, "i") })
       .first()
       .click();
-    await expect(page.getByTestId("research-agent-inspector")).toBeVisible();
-    await page.getByLabel(/关闭|Close/i).first().click();
-    await expect(page.getByTestId("research-agent-inspector")).toHaveCount(0);
+    await expect(page.getByTestId("research-d5-rail")).toHaveAttribute(
+      "data-rail-mode",
+      "detail",
+    );
+    await page.getByRole("tab", { name: /智能体设置|Agent settings/i }).click();
+    await expect(page.getByTestId("research-d5-rail")).toHaveAttribute(
+      "data-rail-mode",
+      "agent",
+    );
+    await expect(page.getByTestId("agent-profile-identity")).toBeVisible();
   });
 
   test("desktop: rail switches between chat and detail panels", async ({ page }) => {
@@ -306,18 +313,20 @@ test.describe.serial("D5 constellation session canvas gate", () => {
     });
   });
 
-  test("mobile: S agent node opens inspector sheet", async ({ page }) => {
+  test("mobile: Work node exposes Agent settings in the context sheet", async ({ page }) => {
     test.skip(!seeded.fleetAgentId, "Fleet agent id unavailable in seed");
     await openSession(page, seeded, 390, 844);
     await page
       .getByRole("button", { name: new RegExp(seeded.nodeTitles.probe, "i") })
       .first()
       .click();
-    await expect(page.getByTestId("research-agent-inspector")).toBeVisible();
-    await expect(page.getByTestId("research-agent-inspector")).toHaveAttribute(
-      "data-placement",
-      "sheet",
+    await expect(page.getByTestId("research-d5-mobile-rail")).toBeVisible();
+    await page.getByRole("tab", { name: /智能体设置|Agent settings/i }).click();
+    await expect(page.getByTestId("research-d5-rail")).toHaveAttribute(
+      "data-rail-mode",
+      "agent",
     );
+    await expect(page.getByTestId("agent-profile-identity")).toBeVisible();
   });
 
   test("mobile: L node opens report modal over the canvas", async ({ page }) => {

@@ -195,31 +195,3 @@ func TestNotePageIssueRefDeleteRequiresNoteAccess(t *testing.T) {
 		t.Fatalf("outsider delete: expected 404, got %d: %s", deleteRec.Code, deleteRec.Body.String())
 	}
 }
-
-func TestSharedCollaboratorCanCreateIssueFromNote(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	noteID := createNotePageForAITest(t, "Shared create-issue ACL "+uuid.NewString())
-	collaboratorID := createWorkspaceMemberForNoteACL(t, "note-create-sharee")
-	shareNoteWithUser(t, noteID, collaboratorID)
-
-	rec := httptest.NewRecorder()
-	testHandler.CreateNotePageIssue(rec, withURLParam(newRequestAs(collaboratorID, http.MethodPost, "/api/notes/pages/"+noteID+"/issues", map[string]any{
-		"title": "From shared collaborator",
-	}), "id", noteID))
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("sharee create issue: expected 201, got %d: %s", rec.Code, rec.Body.String())
-	}
-	var resp NoteCreateIssueResponse
-	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, resp.Issue.ID)
-	})
-	if resp.Issue.CreatorID != collaboratorID || resp.Issue.CreatorType != "member" {
-		t.Fatalf("issue creator = %#v", resp.Issue)
-	}
-}

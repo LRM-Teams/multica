@@ -4,9 +4,10 @@ import { isRuntimeUsableForUser } from "../runtime-usability";
 export function runtimePickerOptions(
   runtimes: AgentRuntime[],
   currentUserId: string | null,
+  bindableIds?: ReadonlySet<string> | null,
 ): AgentRuntime[] {
   return runtimes
-    .filter((runtime) => isRuntimeUsableForUser(runtime, currentUserId))
+    .filter((runtime) => isRuntimeUsableForUser(runtime, currentUserId, bindableIds))
     .toSorted((a, b) => {
       const aMine = a.owner_id === currentUserId;
       const bMine = b.owner_id === currentUserId;

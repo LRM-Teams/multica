@@ -252,7 +252,7 @@ func (s *PostgresStore) applyIntegrationV6Tx(ctx context.Context, tx pgx.Tx, sub
 	if _, err = tx.Exec(ctx, `UPDATE research_team_membership SET state='idle' WHERE id=$1::uuid AND state='working'`, membershipID); err != nil {
 		return V6IntegrationOutcome{}, err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE research_v6_work_submission SET status='accepted',outcome=jsonb_build_object('integration_round_id',$2,'insight_version_id',$3,'artifact_version_id',$4),updated_at=now() WHERE id=$1::uuid`, submissionID, roundID, insightVersionID, artifactVersionID); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE research_v6_work_submission SET status='accepted',outcome=jsonb_build_object('integration_round_id',$2::text,'insight_version_id',$3::text,'artifact_version_id',$4::text),updated_at=now() WHERE id=$1::uuid`, submissionID, roundID, insightVersionID, artifactVersionID); err != nil {
 		return V6IntegrationOutcome{}, err
 	}
 	return V6IntegrationOutcome{IntegrationRoundID: roundID, InsightID: insightID, InsightVersionID: insightVersionID, ArtifactVersionID: artifactVersionID, Tier: in.OutputTier}, nil

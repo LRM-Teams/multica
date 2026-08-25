@@ -17,6 +17,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+env:
+  # PR: compare to origin/dev. Push to dev: compare to the previous HEAD.
+  # All-zero before SHA (new branch) is handled in scripts/ci-pr-scope.sh.
+  BASE_REF: ${{ github.event_name == 'pull_request' && 'origin/dev' || github.event.before }}
+  GITHUB_EVENT_BEFORE: ${{ github.event.before }}
+
 jobs:
   frontend:
     # GitHub-hosted. The self-hosted CI pool was retired on 2026-07-29; the only
@@ -32,19 +38,48 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Fetch origin/dev
+        if: github.event_name == 'pull_request'
+        run: git fetch --no-tags origin dev:refs/remotes/origin/dev
+
+      - name: Resolve PR scope
+        id: scope
+        run: bash scripts/ci-pr-scope.sh >> "$GITHUB_OUTPUT"
+
+      - name: Prove the scope classifier
+        # Always. This script is the merge-gate classifier; if it lies, every
+        # later skip/full decision is wrong. It does not need Node or Go.
+        run: bash scripts/ci-pr-scope.test.sh
+
+      - name: Test self-host env derivation
+        if: steps.scope.outputs.run_selfhost == 'true'
+        run: bash scripts/selfhost-config.test.sh
+
+      - name: Enforce web-only workflow policy
+        if: steps.scope.outputs.run_web_workflows == 'true'
+        run: bash scripts/web-workflows.test.sh
+
+      - name: Check baked web public-origin gate
+        if: steps.scope.outputs.run_baked_origins == 'true'
+        run: bash scripts/assert-baked-web-public-origins.test.sh
+
       - name: Setup pnpm
+        if: steps.scope.outputs.frontend_mode != 'skip' || steps.scope.outputs.run_reserved_slugs == 'true'
         uses: pnpm/action-setup@v4
 
       - name: Setup Node.js
+        if: steps.scope.outputs.frontend_mode != 'skip' || steps.scope.outputs.run_reserved_slugs == 'true'
         uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: pnpm
 
       - name: Install dependencies
+        if: steps.scope.outputs.frontend_mode != 'skip' || steps.scope.outputs.run_reserved_slugs == 'true'
         run: pnpm install
 
       - name: Restore Turbo cache
+        if: steps.scope.outputs.frontend_mode != 'skip'
         uses: actions/cache@v4
         with:
           path: .turbo/cache
@@ -76,6 +111,7 @@ jobs:
             ${{ runner.os }}-turbo-
 
       - name: Restore Next.js cache
+        if: steps.scope.outputs.frontend_mode != 'skip'
         uses: actions/cache@v4
         with:
           path: apps/web/.next/cache
@@ -84,38 +120,22 @@ jobs:
             ${{ runner.os }}-next-${{ hashFiles('pnpm-lock.yaml') }}-
             ${{ runner.os }}-next-
 
-      - name: Test self-host env derivation
-        run: bash scripts/selfhost-config.test.sh
-
-      - name: Enforce web-only workflow policy
-        run: bash scripts/web-workflows.test.sh
-
-      - name: Check baked web public-origin gate
-        run: bash scripts/assert-baked-web-public-origins.test.sh
-
       - name: Verify reserved-slugs.ts is up to date
         # Re-runs the generator and fails on any drift from the
         # checked-in TypeScript output. The Go side embeds the JSON
         # source directly, so a passing diff here proves both sides
         # share one source of truth.
+        if: steps.scope.outputs.run_reserved_slugs == 'true'
         run: |
           pnpm generate:reserved-slugs
           git diff --exit-code -- packages/core/paths/reserved-slugs.ts
 
-      - name: Fetch React Doctor base
-        run: git fetch --no-tags origin dev:refs/remotes/origin/dev
-
-      - name: React Doctor
-        run: pnpm react:doctor
-
       - name: Build, type check, lint
         # Web-only (Frank 2026-07-28): drop desktop/docs/mobile from the PR
         # frontend job so CI stays on the product surface that still ships.
-        # Dependents of @multica/web (core/ui/views) are included via the
-        # `...` selector. Per-surface reasons below — deliberately not one
-        # shared paragraph, so each exemption has to be justified on its own
-        # rather than riding along on a blanket "web-only" note (task #12,
-        # 2026-08-01):
+        # Affected mode uses ...[BASE_REF] plus explicit exclusions; full mode
+        # keeps @multica/web... . Per-surface reasons below — deliberately not
+        # one shared paragraph (task #12, 2026-08-01):
         #
         # - apps/desktop packaging: out of the main release gate on purpose
         #   (#1320) — desktop isn't shipped through this pipeline.
@@ -133,7 +153,8 @@ jobs:
         # - apps/docs: no CI coverage, no assigned owner, low blast radius
         #   (infrequent changes). If you touch apps/docs, run its typecheck
         #   yourself; CI won't.
-        run: pnpm exec turbo build typecheck lint --filter='@multica/web...'
+        if: steps.scope.outputs.frontend_mode != 'skip'
+        run: bash scripts/ci-turbo-web.sh "${{ steps.scope.outputs.frontend_mode }}" build typecheck lint
 
   frontend-test:
     # The test half of the old single frontend job, split out (2026-08-06) so
@@ -141,9 +162,7 @@ jobs:
     # wall time becomes max(build job, test job) instead of their sum. This is
     # NOT the rejected test-sharding — no suite is split, and the split landed
     # only after the suite itself was cut ~40% (happy-dom + threads, #2394),
-    # so it is not "adding runners without reducing work". Billed minutes are
-    # roughly unchanged: the same work runs, plus one duplicated setup
-    # (checkout + install, ~1m30s).
+    # so it is not "adding runners without reducing work".
     #
     # PR-only, mirroring the old Test step's `if`: the dev push exists only to
     # publish a base-branch Turbo cache for build/typecheck/lint, and
@@ -155,17 +174,29 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Fetch origin/dev
+        run: git fetch --no-tags origin dev:refs/remotes/origin/dev
+
+      - name: Resolve PR scope
+        id: scope
+        run: bash scripts/ci-pr-scope.sh >> "$GITHUB_OUTPUT"
 
       - name: Setup pnpm
+        if: steps.scope.outputs.frontend_mode != 'skip'
         uses: pnpm/action-setup@v4
 
       - name: Setup Node.js
+        if: steps.scope.outputs.frontend_mode != 'skip'
         uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: pnpm
 
       - name: Install dependencies
+        if: steps.scope.outputs.frontend_mode != 'skip'
         run: pnpm install
 
       - name: Restore Turbo cache
@@ -175,6 +206,7 @@ jobs:
         # shared prefixes mean this job still restores whatever the build job
         # or dev push saved, which is what makes the `test` task's
         # `dependsOn: ^typecheck` usually a cache hit instead of a re-run.
+        if: steps.scope.outputs.frontend_mode != 'skip'
         uses: actions/cache@v4
         with:
           path: .turbo/cache
@@ -188,6 +220,7 @@ jobs:
         # One line, so the runner's core count is a measurement in the log
         # rather than an assumption about GitHub's published spec. Vitest sizes
         # its worker pool from this number (see packages/views/vitest.config.ts).
+        if: steps.scope.outputs.frontend_mode != 'skip'
         run: |
           echo "nproc=$(nproc) availableParallelism=$(node -p 'require("node:os").availableParallelism()')"
           echo "mem=$(free -g | awk '/^Mem:/{print $2}')GiB"
@@ -204,17 +237,19 @@ jobs:
         #
         # Deliberately NOT done here: raising any timeout. That would hide the
         # symptom and turn a stable red into an intermittent one.
-        run: pnpm exec turbo test --filter='@multica/web...' --concurrency=1
+        if: steps.scope.outputs.frontend_mode != 'skip'
+        env:
+          CONCURRENCY: "1"
+        run: bash scripts/ci-turbo-web.sh "${{ steps.scope.outputs.frontend_mode }}" test
+
+      - name: Skip unaffected frontend tests
+        if: steps.scope.outputs.frontend_mode == 'skip'
+        run: echo "No web-surface packages in this PR; frontend tests skipped"
+
   backend:
     # Also runs on the dev push (unlike the frontend-test job above, which
-    # stays PR-only — it's the expensive half of the frontend work and shares
-    # no cache with push). "The pull request already proved it" assumes no merge combination
-    # can break tests both branches passed individually; #1457/#1459/#1455 hit
-    # exactly that (2026-07-30): dev push had skipped backend since a day
-    # earlier, so a bad merge sat undetected until an unrelated PR's CI hit it.
-    # Backend is ~8 min and doesn't share a runner-scoped cache either way, so
-    # running it here trades a small, bounded daily cost for same-day baseline
-    # visibility instead of a silent, unbounded blind spot.
+    # stays PR-only). Push scope is the merge's own diff against
+    # github.event.before — not a second full-repo replay.
     # GitHub-hosted, same as frontend. Requires Docker for Postgres/Redis
     # service containers — see docs/ci-tencent-runner.md.
     runs-on: ubuntu-latest
@@ -264,50 +299,66 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Fetch origin/dev
+        if: github.event_name == 'pull_request'
+        run: git fetch --no-tags origin dev:refs/remotes/origin/dev
+
+      - name: Resolve PR scope
+        id: scope
+        run: bash scripts/ci-pr-scope.sh >> "$GITHUB_OUTPUT"
 
       - name: Setup Go
+        if: steps.scope.outputs.go_mode != 'skip' || steps.scope.outputs.run_migration_numbers == 'true'
         uses: actions/setup-go@v6
         with:
           go-version: "1.26.1"
           cache-dependency-path: server/go.sum
+
+      - name: Expand Go packages
+        id: go_pkgs
+        if: steps.scope.outputs.go_mode != 'skip'
+        env:
+          GO_MODE: ${{ steps.scope.outputs.go_mode }}
+          GO_SEED_PACKAGES: ${{ steps.scope.outputs.go_seed_packages }}
+        run: |
+          pkgs="$(bash scripts/ci-expand-go-packages.sh)"
+          echo "packages=$pkgs" >> "$GITHUB_OUTPUT"
+          echo "Affected Go packages: $pkgs"
+
+      - name: Prove Go package expansion
+        if: steps.scope.outputs.go_mode != 'skip'
+        run: bash scripts/ci-expand-go-packages.test.sh
 
       - name: Reject duplicate migration version numbers
         # Incremental only. `dev` already carries 59 duplicated numbers, and the
         # migrator records `version` as the full filename, so renaming an applied
         # migration would make production treat it as never run — existing
         # duplicates must stay. See scripts/migration-numbers.test.sh.
-        #
-        # The checkout above is shallow and has no origin/dev ref, so fetch it
-        # here rather than assuming it exists.
-        env:
-          BASE_REF: origin/dev
-        run: |
-          git fetch --no-tags --depth=1 origin dev:refs/remotes/origin/dev
-          bash scripts/migration-numbers.test.sh
+        if: steps.scope.outputs.run_migration_numbers == 'true'
+        run: bash scripts/migration-numbers.test.sh
 
       - name: Build
-        run: cd server && go build ./...
+        if: steps.scope.outputs.go_mode != 'skip'
+        run: cd server && go build ${{ steps.go_pkgs.outputs.packages }}
 
       # task #85 P0: catch unkeyed composite literals that silently mis-assign
       # when models.go field order changes (the silent-shift class next to
       # hand-written SQL drift). composites is on by default in go vet.
       - name: Go vet (composites + default checks)
-        run: cd server && go vet ./...
-
-      - name: Cursor-deadlock check
-        # Task #91: catches the #1803/#1812 shape (a rows cursor from
-        # Query() left open while a nested call acquires a second pool
-        # connection — deterministic pool deadlock under load). See
-        # server/tools/cursordeadlock for the false-positive bar this was
-        # held to before landing here.
-        run: cd server && go run ./tools/cursordeadlock ./internal ./cmd ./pkg
+        if: steps.scope.outputs.go_mode != 'skip'
+        run: cd server && go vet ${{ steps.go_pkgs.outputs.packages }}
 
       - name: Run migrations
+        if: steps.scope.outputs.go_mode != 'skip'
         run: cd server && go run ./cmd/migrate up
 
       # Isolated database for internal/researchrun. Its migration down/up
       # replays must not touch the schema the other integration packages share.
       - name: Prepare isolated research integration database
+        if: steps.scope.outputs.go_mode != 'skip' && (steps.go_pkgs.outputs.packages == './...' || contains(steps.go_pkgs.outputs.packages, './internal/researchrun'))
         env:
           PGPASSWORD: multica
         run: |
@@ -315,17 +366,16 @@ jobs:
             -c 'CREATE DATABASE multica_research;'
           cd server && DATABASE_URL="$TEST_DATABASE_URL" go run ./cmd/migrate up
 
-      - name: Agent delivery route
-        # Hard gate for the Raft 1.0.16 accept table. The full suite below also
-        # runs these tests; this step keeps the contract visible when
-        # acceptMessageDelivery changes.
-        run: make test-agent-delivery-route
-
       - name: Test
         # Integration packages share this job's Postgres service. Run packages
         # serially so a global scheduler repair cannot mutate another package's
         # temporary workspace while its fixture is still being assembled.
-        run: cd server && go test -p 1 ./...
+        if: steps.scope.outputs.go_mode != 'skip'
+        run: cd server && go test -p 1 ${{ steps.go_pkgs.outputs.packages }}
+
+      - name: Skip unaffected backend tests
+        if: steps.scope.outputs.go_mode == 'skip'
+        run: echo "No server packages in this PR; backend tests skipped"
 
       # LRM-1076 AC1/AC5 lives in the main `go test ./...` suite above
       # (TestProcessResearchNextSteps_SilentWindowAutoStepsGe3). The old

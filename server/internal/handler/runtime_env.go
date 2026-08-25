@@ -59,7 +59,8 @@ func (h *Handler) authorizeRuntimeEnv(w http.ResponseWriter, r *http.Request) (d
 	if !ok {
 		return db.AgentRuntime{}, db.Member{}, false
 	}
-	if !canEditRuntime(member, rt) {
+	rtOwnerID, _ := h.resolveRuntimeOwnerQuery(r.Context(), rt)
+	if !canEditRuntime(member, rt, rtOwnerID) {
 		writeError(w, http.StatusForbidden, "you can only manage env on your own runtimes")
 		return db.AgentRuntime{}, db.Member{}, false
 	}

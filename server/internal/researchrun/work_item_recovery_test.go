@@ -5,7 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
 )
 
 type submissionStoreStub struct {
@@ -75,6 +79,62 @@ func TestV6SubmissionReplayReturnsOriginalOutcomeAndRejectsChangedPayload(t *tes
 	changedRaw = withValidV6SelfHash(t, changedRaw, "content_hash")
 	if _, err = module.Submit(context.Background(), V6SubmissionInput{V6AttemptAccess: access, Raw: changedRaw}); !errors.Is(err, ErrV6IdempotencyConflict) {
 		t.Fatalf("changed replay error=%v", err)
+	}
+}
+
+func TestV6SubmissionReplaySurvivesSettledAttempt(t *testing.T) {
+	run := newTransactionRecoveryRun(t, "Replay settled V6 submission")
+	t.Cleanup(func() {
+		_, _ = run.pool.Exec(context.Background(), `DELETE FROM research_v6_work_submission WHERE workspace_id=$1::uuid`, run.fixture.workspaceID)
+	})
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_session SET orchestrator_version='research-run-v6' WHERE id=$1::uuid`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	membershipID, workItemID := seedV6RecoveryWorkItem(t, run, "running", time.Now().Add(time.Minute))
+	attemptID := seedV6RecoveryAttempt(t, run, membershipID, workItemID)
+	if _, err := run.pool.Exec(run.ctx, `
+		UPDATE research_work_item_attempt
+		SET manifest=jsonb_build_object(
+		  'expected_result_schema','atomic_result_submission',
+		  'task_specific_schema',jsonb_build_object('type','object','required',jsonb_build_array('value'),'properties',jsonb_build_object('value',jsonb_build_object('type','string')))
+		)
+		WHERE id=$1::uuid
+	`, attemptID); err != nil {
+		t.Fatal(err)
+	}
+	access := V6AttemptAccess{
+		WorkspaceID: run.fixture.workspaceID,
+		RunID:       run.fixture.sessionID,
+		WorkItemID:  workItemID,
+		AttemptID:   attemptID,
+		AgentID:     run.fixture.agentID,
+	}
+	requestID := uuid.NewString()
+	decoded := DecodedV6Contract{
+		Kind:        V6ContractAtomicResultSubmission,
+		ContentHash: "sha256:" + strings.Repeat("7", 64),
+		Canonical:   json.RawMessage(`{"contract_kind":"atomic_result_submission","schema_version":6}`),
+	}
+	first, err := run.store.RecordV6Submission(run.ctx, access, decoded, requestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = run.pool.Exec(run.ctx, `UPDATE research_work_item_attempt SET status='succeeded',completed_at=now() WHERE id=$1::uuid`, attemptID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = run.pool.Exec(run.ctx, `UPDATE research_work_item SET status='succeeded',completed_at=now() WHERE id=$1::uuid`, workItemID); err != nil {
+		t.Fatal(err)
+	}
+	binding, err := run.store.AuthorizeV6Submission(run.ctx, access)
+	if err != nil || binding.ExpectedKind != V6ContractAtomicResultSubmission || binding.TaskSchemaID != "schema" {
+		t.Fatalf("binding=%+v err=%v", binding, err)
+	}
+	replay, err := run.store.RecordV6Submission(run.ctx, access, decoded, requestID)
+	if err != nil || !replay.Replayed || replay.SubmissionID != first.SubmissionID {
+		t.Fatalf("replay=%+v err=%v, want submission %s", replay, err, first.SubmissionID)
+	}
+	if _, err = run.store.RecordV6Submission(run.ctx, access, decoded, uuid.NewString()); !errors.Is(err, ErrAttemptNotAssigned) {
+		t.Fatalf("new request after settlement error=%v, want ErrAttemptNotAssigned", err)
 	}
 }
 

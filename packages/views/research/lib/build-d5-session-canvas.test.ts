@@ -5,7 +5,6 @@ import {
 } from "@multica/core/research";
 import { buildD5SessionCanvasModel } from "./build-d5-session-canvas";
 import { testTypedNode } from "./test-typed-graph-node";
-import { extractLayoutResultFromViewModel } from "../star-graph/lib/star-canvas-view-model";
 
 const emptyLineage = {
   derived: {},
@@ -75,16 +74,26 @@ describe("buildD5SessionCanvasModel", () => {
     expect(second.model.stats.reused).toBeGreaterThan(0);
   });
 
-  it("regression: rebased positions must not feed incremental layout", () => {
-    const first = buildD5SessionCanvasModel(fixture(), viewport, { rightPanelWidth: 360 })!;
-    const rebasedPrevious = extractLayoutResultFromViewModel(first.model);
-    const second = buildD5SessionCanvasModel(fixture(), viewport, {
+  it("keeps world geometry independent from viewport fitting", () => {
+    const compact = buildD5SessionCanvasModel(fixture(), viewport, {
       rightPanelWidth: 360,
-      previousLayout: rebasedPrevious,
     })!;
+    const wide = buildD5SessionCanvasModel(
+      fixture(),
+      { width: 1920, height: 1080 },
+      { rightPanelWidth: 0 },
+    )!;
 
-    const stableFirst = first.layoutForNext.nodes.find((node) => node.id === "stable");
-    const stableSecond = second.layoutForNext.nodes.find((node) => node.id === "stable");
-    expect(stableFirst?.x).not.toBe(stableSecond?.x);
+    expect(compact.model.entities).toEqual(
+      compact.layoutForNext.nodes.map((node) =>
+        expect.objectContaining({
+          id: node.id,
+          x: node.x,
+          y: node.y,
+          radius: node.radius,
+        }),
+      ),
+    );
+    expect(wide.layoutForNext.nodes).toEqual(compact.layoutForNext.nodes);
   });
 });

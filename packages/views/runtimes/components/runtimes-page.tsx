@@ -9,8 +9,10 @@ import {
   Copy,
   Loader2,
   Monitor,
+  Play,
   Plus,
   RotateCcw,
+  Settings2,
   Square,
   X,
 } from "lucide-react";
@@ -50,6 +52,7 @@ import { resolveActorDisplayName } from "@multica/core/identity";
 import type {
   Agent,
   AgentRuntime,
+  AgentRestartMode,
   AgentTask,
   CreateAgentRequest,
   SandboxInstance,
@@ -67,6 +70,8 @@ import { cn } from "@multica/ui/lib/utils";
 import { PageHeader } from "../../layout/page-header";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { AgentActivityListItem } from "../../agents/components/agent-activity-list-item";
+import { BulkRuntimeConfigDialog } from "../../agents/components/bulk-runtime-config-dialog";
+import { BulkAgentResetDialog } from "../../agents/components/bulk-agent-reset-dialog";
 import { CreateAgentDialog } from "../../agents/components/create-agent-dialog";
 import { api } from "@multica/core/api";
 import { AddComputerDialog } from "./add-computer-dialog";
@@ -784,17 +789,23 @@ function MachineDetailView({
   const [select, setSelect] = useState<{
     mode: boolean;
     ids: Set<string>;
-    busy: "stop" | "restart" | null;
+    busy: "start" | "stop" | "reset" | null;
   }>(() => ({ mode: false, ids: new Set(), busy: null }));
   const selectMode = select.mode;
   const selectedAgentIds = select.ids;
   const bulkBusy = select.busy;
   const [showCreateAgent, setShowCreateAgent] = useState(false);
+  const [showBulkConfig, setShowBulkConfig] = useState(false);
+  const [showBulkReset, setShowBulkReset] = useState(false);
   const { data: allRuntimes = [], isLoading: runtimesLoading } = useQuery(
     runtimeListOptions(wsId),
   );
   const qc = useQueryClient();
-  const selectedCount = selectedAgentIds.size;
+  const selectedAgents = useMemo(
+    () => machineAgents.filter((agent) => selectedAgentIds.has(agent.id)),
+    [machineAgents, selectedAgentIds],
+  );
+  const selectedCount = selectedAgents.length;
   const allSelected =
     machineAgents.length > 0 && selectedCount === machineAgents.length;
 
@@ -829,84 +840,72 @@ function MachineDetailView({
     return agent;
   };
 
-  /** Raft-aligned bulk bar: Stop = cancel active tasks; Restart = `restart` mode. */
-  const handleBulkStop = async () => {
+  const handleBulkLifecycle = async (
+    action: "start" | "stop" | "reset",
+    mode?: AgentRestartMode,
+  ) => {
     if (selectedCount === 0 || bulkBusy) return;
-    const ids = Array.from(selectedAgentIds);
-    setSelect((prev) => ({ ...prev, busy: "stop" }));
+    setSelect((prev) => ({ ...prev, busy: action }));
     try {
-      const results = await Promise.all(
-        ids.map(async (id) => {
-          try {
-            const res = await api.cancelAgentTasks(id);
-            return { ok: true as const, cancelled: res.cancelled ?? 0 };
-          } catch {
-            return { ok: false as const, cancelled: 0 };
-          }
-        }),
-      );
-      let cancelled = 0;
-      let failed = 0;
-      for (const r of results) {
-        if (r.ok) cancelled += r.cancelled;
-        else failed += 1;
-      }
+      const response = await api.bulkAgentLifecycle({
+        agent_ids: selectedAgents.map((agent) => agent.id),
+        action,
+        ...(mode ? { mode } : {}),
+      });
+      const accepted = response.results.filter(
+        (result) => result.accepted,
+      ).length;
+      const failed = response.results.length - accepted;
       await qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
       if (failed > 0) {
         showErrorToast(
-          t(($) => $.machine.agents_bulk_stop_partial, {
-            cancelled,
+          t(($) => $.machine.agents_bulk_lifecycle_partial, {
+            accepted,
             failed,
           }),
         );
       } else {
         toast.success(
-          t(($) => $.machine.agents_bulk_stop_done, { count: cancelled }),
+          t(($) => $.machine.agents_bulk_lifecycle_done, { count: accepted }),
         );
       }
+      if (action === "reset") setShowBulkReset(false);
+    } catch (error) {
+      showErrorToast(
+        error instanceof Error
+          ? error.message
+          : t(($) => $.machine.agents_bulk_lifecycle_failed),
+      );
     } finally {
       setSelect((prev) => ({ ...prev, busy: null }));
     }
   };
 
-  const handleBulkRestart = async () => {
-    if (selectedCount === 0 || bulkBusy) return;
-    const ids = Array.from(selectedAgentIds);
-    setSelect((prev) => ({ ...prev, busy: "restart" }));
+  const handleBulkConfig = async (config: {
+    runtime_id: string;
+    model: string;
+    thinking_level: string;
+  }) => {
     try {
-      const results = await Promise.all(
-        ids.map(async (id) => {
-          try {
-            await api.resetAgent(id, "restart");
-            return true;
-          } catch {
-            return false;
-          }
+      const result = await api.bulkUpdateAgentRuntimeConfig({
+        agent_ids: selectedAgents.map((agent) => agent.id),
+        ...config,
+      });
+      await qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
+      toast.success(
+        t(($) => $.machine.agents_bulk_config_done, {
+          count: result.updated_agent_ids.length,
         }),
       );
-      let ok = 0;
-      let failed = 0;
-      for (const r of results) {
-        if (r) ok += 1;
-        else failed += 1;
-      }
-      await qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
-      if (failed > 0) {
-        showErrorToast(
-          t(($) => $.machine.agents_bulk_restart_partial, { ok, failed }),
-        );
-      } else {
-        toast.success(
-          t(($) => $.machine.agents_bulk_restart_done, { count: ok }),
-        );
-      }
-    } finally {
-      setSelect((prev) => ({ ...prev, busy: null }));
+    } catch (error) {
+      showErrorToast(
+        error instanceof Error
+          ? error.message
+          : t(($) => $.machine.agents_bulk_config_failed),
+      );
+      throw error;
     }
   };
-
-
-
   const hostname = machineHostname(machine);
   // Only the daemon-reported GOOS is an OS value. The device name is usually
   // the hostname, so using it here would duplicate the Hostname row.
@@ -1125,7 +1124,7 @@ function MachineDetailView({
                       onClick={() => {
                         setSelect({
                           mode: true,
-                          ids: new Set(machineAgents.map((a) => a.id)),
+                          ids: new Set(),
                           busy: null,
                         });
                       }}
@@ -1170,7 +1169,35 @@ function MachineDetailView({
                         variant="outline"
                         size="xs"
                         className="h-7 gap-1 px-2.5 text-[11px]"
-                        onClick={() => void handleBulkStop()}
+                        onClick={() => setShowBulkConfig(true)}
+                        disabled={!!bulkBusy}
+                        data-testid="machine-agents-bulk-config"
+                      >
+                        <Settings2 className="h-3 w-3" />
+                        {t(($) => $.machine.agents_bulk_configure)}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="xs"
+                        className="h-7 gap-1 px-2.5 text-[11px]"
+                        onClick={() => void handleBulkLifecycle("start")}
+                        disabled={!!bulkBusy}
+                        data-testid="machine-agents-bulk-start"
+                      >
+                        {bulkBusy === "start" ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <Play className="h-3 w-3" />
+                        )}
+                        {t(($) => $.machine.agents_bulk_start)}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="xs"
+                        className="h-7 gap-1 px-2.5 text-[11px]"
+                        onClick={() => void handleBulkLifecycle("stop")}
                         disabled={!!bulkBusy}
                         data-testid="machine-agents-bulk-stop"
                       >
@@ -1186,16 +1213,16 @@ function MachineDetailView({
                         variant="outline"
                         size="xs"
                         className="h-7 gap-1 px-2.5 text-[11px]"
-                        onClick={() => void handleBulkRestart()}
+                        onClick={() => setShowBulkReset(true)}
                         disabled={!!bulkBusy}
                         data-testid="machine-agents-bulk-restart"
                       >
-                        {bulkBusy === "restart" ? (
+                        {bulkBusy === "reset" ? (
                           <Loader2 className="h-3 w-3 animate-spin" />
                         ) : (
                           <RotateCcw className="h-3 w-3" />
                         )}
-                        {t(($) => $.machine.agents_bulk_restart)}
+                        {t(($) => $.machine.agents_bulk_restart_reset)}
                       </Button>
                     </div>
                   </div>
@@ -1236,6 +1263,26 @@ function MachineDetailView({
                 defaultMachineId={machine.id}
                 onClose={() => setShowCreateAgent(false)}
                 onCreate={handleCreateAgent}
+              />
+            ) : null}
+            {showBulkConfig && selectedAgents.length > 0 ? (
+              <BulkRuntimeConfigDialog
+                agents={selectedAgents}
+                open
+                onOpenChange={setShowBulkConfig}
+                runtimes={allRuntimes.length > 0 ? allRuntimes : machine.runtimes}
+                members={members}
+                currentUserId={user?.id ?? null}
+                onSave={handleBulkConfig}
+              />
+            ) : null}
+            {showBulkReset && selectedAgents.length > 0 ? (
+              <BulkAgentResetDialog
+                count={selectedAgents.length}
+                open
+                busy={bulkBusy === "reset"}
+                onOpenChange={setShowBulkReset}
+                onSubmit={(mode) => handleBulkLifecycle("reset", mode)}
               />
             ) : null}
           </section>

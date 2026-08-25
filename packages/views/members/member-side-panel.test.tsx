@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemberSidePanel } from "./member-side-panel";
 
@@ -51,8 +51,17 @@ vi.mock("@multica/core/paths", () => ({
 }));
 
 vi.mock("../navigation", () => ({
-  AppLink: ({ children, href }: { children: React.ReactNode; href: string }) => (
-    <a href={href}>{children}</a>
+  // Base UI's `render={<AppLink .../>}` merges the DropdownMenuItem's own
+  // props (data-testid, role, click handler, ...) into this element — spread
+  // them through, or the menu-item link tests below can't find their node.
+  AppLink: ({
+    children,
+    href,
+    ...rest
+  }: { children: React.ReactNode; href: string } & Record<string, unknown>) => (
+    <a href={href} {...rest}>
+      {children}
+    </a>
   ),
 }));
 
@@ -112,7 +121,7 @@ vi.mock("../i18n/use-t", () => ({
           role_dialog_subtitle: "Pick a role",
           created_agents: "Created agents",
           no_agents: "No agents created yet",
-          message_aria: "Send message",
+          actions_more_aria: "More actions",
           you_suffix: "(you)",
           edit_profile: "Edit profile",
           change_avatar_aria: "Change avatar",
@@ -154,7 +163,7 @@ describe("MemberSidePanel (LRM-619 lock A)", () => {
           display_name: "Frank An",
           email: "me@example.com",
           avatar_url: null,
-          profile_description: "",
+          description: "",
         },
       ],
       isPending: false,
@@ -230,7 +239,7 @@ describe("MemberSidePanel (LRM-619 lock A)", () => {
           display_name: "Me",
           email: "self@example.com",
           avatar_url: null,
-          profile_description: "Hello",
+          description: "Hello",
         },
       ],
       isPending: false,
@@ -252,6 +261,7 @@ describe("MemberSidePanel (LRM-619 lock A)", () => {
     });
     agentsMock.mockReturnValue({ data: [], isPending: false });
     renderPanel("u-self");
+    fireEvent.click(screen.getByTestId("member-side-panel-actions-menu"));
     expect(screen.queryByTestId("member-side-panel-message")).toBeNull();
     expect(screen.getByText(/\(you\)/)).toBeTruthy();
     expect(screen.getByText("No agents created yet")).toBeTruthy();
@@ -270,7 +280,7 @@ describe("MemberSidePanel (LRM-619 lock A)", () => {
           display_name: "Me",
           email: "self@example.com",
           avatar_url: null,
-          profile_description: "Hello",
+          description: "Hello",
           honor: { level: 42, name_style: "default" },
         },
       ],
@@ -297,6 +307,7 @@ describe("MemberSidePanel (LRM-619 lock A)", () => {
     expect(screen.getByTestId("member-profile-name-trigger").textContent).toContain("Me");
     expect(container.querySelector('[data-user-honor-level="42"]')).not.toBeNull();
     expect(screen.getByTestId("member-profile-description-trigger")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("member-side-panel-actions-menu"));
     const editLink = screen.getByTestId("member-side-panel-edit-profile").closest("a");
     expect(editLink?.getAttribute("href")).toBe("/ws-1/settings?tab=profile");
   });
@@ -305,27 +316,36 @@ describe("MemberSidePanel (LRM-619 lock A)", () => {
     renderPanel("u-frank");
     expect(screen.queryByTestId("member-self-avatar-change")).toBeNull();
     expect(screen.queryByTestId("member-profile-name-trigger")).toBeNull();
+    fireEvent.click(screen.getByTestId("member-side-panel-actions-menu"));
     expect(screen.queryByTestId("member-side-panel-edit-profile")).toBeNull();
     expect(screen.getByTestId("member-side-panel-message")).toBeTruthy();
   });
 
-  // LRM-812: avatar dedup — the top bar leading is name text only (no 22px
-  // avatar, no handle); the member's single avatar lives in the 64px body
-  // identity block, matching the Agent card chrome. (CREATED AGENTS rows have
-  // their own agent avatars — unrelated to the member-identity dedup.)
-  it("renders the member avatar exactly once (body identity); top bar is name text only", () => {
+  // LRM-812 (re-aligned to the floating chrome, LRM-542-style): there is no
+  // separate top bar any more — the identity block itself is the header, and
+  // the ⋯/✕ chrome floats over it. The member's avatar and name must still
+  // render exactly once each: the floating chrome cluster carries neither,
+  // and the identity block itself never doubles the name. (CREATED AGENTS
+  // rows have their own agent avatars — unrelated to this member-identity
+  // dedup; the Display name field below repeats the name by design and is
+  // out of scope for this check.)
+  it("renders the member avatar once, in the floating identity block — the chrome cluster carries no avatar or name", () => {
     renderPanel("u-frank");
 
     const memberAvatars = screen.getAllByTestId("avatar-u-frank");
     expect(memberAvatars).toHaveLength(1);
 
-    // The shell header bar (leading + message/close chrome) carries no avatar.
+    const identityBlock = memberAvatars[0]!.closest<HTMLElement>("div.items-start");
+    expect(identityBlock).not.toBeNull();
+    expect(within(identityBlock!).getAllByText("Frank An")).toHaveLength(1);
+
+    // The floating chrome cluster (⋯ menu trigger + ✕) sits over the
+    // identity row via absolute positioning — it never duplicates the
+    // avatar or the name.
     const closeButton = screen.getByLabelText("Close");
-    const headerBar = closeButton.closest("div.border-b");
-    expect(headerBar).not.toBeNull();
-    expect(headerBar!.querySelector('[data-testid^="avatar-"]')).toBeNull();
-    // Name text only — no handle line in the top bar.
-    expect(headerBar!.textContent).toContain("Frank An");
-    expect(headerBar!.textContent).not.toContain("@frank-an");
+    const chromeCluster = closeButton.closest("div.absolute");
+    expect(chromeCluster).not.toBeNull();
+    expect(chromeCluster!.querySelector('[data-testid^="avatar-"]')).toBeNull();
+    expect(chromeCluster).not.toHaveTextContent("Frank An");
   });
 });

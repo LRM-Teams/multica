@@ -31,11 +31,17 @@ type TaskContextForEnv struct {
 	AgentInstructions string // agent identity/persona instructions, injected into CLAUDE.md
 	AgentRoot         string // the sole durable Agent workspace and cwd
 	AgentSkills       []SkillContextForEnv
-	AgentMemories     []MemoryContextForEnv
-	ProjectID         string // issue's project, when present
-	ChannelID         string // exact DM/channel surface, when present
-	ChatSessionID     string // standalone FAB/bubble conversation, when present
-	ProjectTitle      string // human-readable project title
+	// AgentMemories is turn-scope (user/project/channel) memory for
+	// RenderTurnContext / pre-message overlays. Agent-global memory belongs in
+	// AgentScopeMemories so it can be loaded once at session start.
+	AgentMemories []MemoryContextForEnv
+	// AgentScopeMemories is agent-global memory for session-start surfaces
+	// (system prompt / AGENTS brief). It must not be re-injected on resume.
+	AgentScopeMemories []MemoryContextForEnv
+	ProjectID          string // issue's project, when present
+	ChannelID          string // exact DM/channel surface, when present
+	ChatSessionID      string // standalone FAB/bubble conversation, when present
+	ProjectTitle       string // human-readable project title
 	// MessageDelivery marks the durable Agent runtime that handles canonical
 	// Message Deliveries. It is process configuration only: no Task, lease,
 	// execution, session, or current-message identity appears here.

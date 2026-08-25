@@ -2,6 +2,8 @@ package agent
 
 import (
 	"errors"
+	"os/exec"
+	"strings"
 	"sync"
 	"time"
 )
@@ -21,7 +23,31 @@ const proactiveContextCompactionResumePercent = 45.0
 // cannot hold the resident admission lock after the user-visible turn ended.
 const postTurnCompactionTimeout = 3 * time.Minute
 
-const proactiveContextCompactionInstructions = `Preserve a structured checkpoint of the current conversation. Retain user intent, decisions, constraints, unresolved questions, active work, external side effects, changed files, test results, and source references. Distinguish verified facts from assumptions. Keep the checkpoint concise and sufficient for the next turn.`
+const proactiveContextCompactionInstructions = `Preserve a structured checkpoint of the current conversation. Retain user intent, decisions, constraints, unresolved questions, active work, external side effects, changed files, test results, and source references. Distinguish verified facts from assumptions. Keep the checkpoint concise and sufficient for the next turn. If durable Multica facts (preferences, decisions, reusable fixes, standing rules) were discussed but not written under MULTICA_AGENT_ROOT, retain them in the checkpoint so later self-review can recover them.`
+
+// MemoryFlushBeforeCompaction is an optional fail-open hook. Daemon wires it
+// to record a missed-write signal when no durable memory file changed. A
+// hook error or panic must never block compaction.
+var MemoryFlushBeforeCompaction func(agentRoot string)
+
+func processWorkingDir(cmd *exec.Cmd) string {
+	if cmd == nil {
+		return ""
+	}
+	return strings.TrimSpace(cmd.Dir)
+}
+
+func runMemoryFlushBeforeCompaction(cwd string) {
+	if MemoryFlushBeforeCompaction == nil {
+		return
+	}
+	cwd = strings.TrimSpace(cwd)
+	if cwd == "" {
+		return
+	}
+	defer func() { _ = recover() }()
+	MemoryFlushBeforeCompaction(cwd)
+}
 
 // compactionAttemptState stops repeating a closeout compact that did not get
 // occupancy under the resume line.

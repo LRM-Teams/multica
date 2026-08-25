@@ -2,8 +2,6 @@
 export type ResearchD5Lens = "relations" | "confidence" | "agent" | "lineage";
 
 export const RESEARCH_D5_LENSES: readonly ResearchD5Lens[] = [
-  "relations",
-  "confidence",
   "agent",
   "lineage",
 ];
@@ -12,4 +10,4 @@ export function isResearchD5Lens(value: string | null | undefined): value is Res
   return RESEARCH_D5_LENSES.includes(value as ResearchD5Lens);
 }
 
-export const DEFAULT_RESEARCH_D5_LENS: ResearchD5Lens = "relations";
+export const DEFAULT_RESEARCH_D5_LENS: ResearchD5Lens = "agent";

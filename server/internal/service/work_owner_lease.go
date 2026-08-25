@@ -45,9 +45,9 @@ func (s *TaskService) ensureExecutorWorkOwnerLease(ctx context.Context, issue db
 	}
 
 	var (
-		leaseID       pgtype.UUID
-		ownerAgentID  pgtype.UUID
-		canonical     pgtype.Text
+		leaseID      pgtype.UUID
+		ownerAgentID pgtype.UUID
+		canonical    pgtype.Text
 	)
 	err := exec.QueryRow(ctx, `
 		SELECT id, owner_agent_id, canonical_branch

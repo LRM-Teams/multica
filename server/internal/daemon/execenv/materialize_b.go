@@ -40,7 +40,10 @@ func MaterializeCanonicalTurnContextB(workDir, ledgerRoot, provider string, ctx 
 	staticCtx := StartupStaticContext(ctx)
 	plan := RenderStartupMaterializationPlan(provider, staticCtx)
 	receipt.ManagedInputDigest = plan.Digest()
-	brief = plan.RuntimeBrief
+	// Agent-scope memory is written into AGENTS for providers that ignore
+	// inline SystemPrompt (e.g. Cursor) but stays out of the digest so memory
+	// edits do not recycle the resident process.
+	brief = appendAgentScopeMemoryBrief(plan.RuntimeBrief, ctx)
 
 	agentsPath := runtimeConfigPath(absWork, provider)
 	if agentsPath == "" {
@@ -56,7 +59,7 @@ func MaterializeCanonicalTurnContextB(workDir, ledgerRoot, provider string, ctx 
 		return "", receipt, fmt.Errorf("AGENTS parent unsafe: %w", err)
 	}
 
-	final, err := synthesizeRuntimeConfigBytes(agentsPath, plan.RuntimeBrief)
+	final, err := synthesizeRuntimeConfigBytes(agentsPath, brief)
 	if err != nil {
 		return "", receipt, err
 	}

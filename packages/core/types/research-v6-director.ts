@@ -1,13 +1,16 @@
 /**
- * Frontend boundary types for the unreleased Ronaldo/Director V6 Projection.
+ * Internal frontend types for the Ronaldo/Director V6 Projection.
  *
  * Authority: docs/contracts/research-run-v6-director.schema.json and
  * docs/research-run-v6-http-contract.md §5. These deliberately do not extend
  * the legacy experimental V6 graph types: mixing those contracts would make a
- * successful response look valid while changing its meaning. Enum-like values
- * remain forward compatible so a newer server can render through the generic
- * visual path instead of taking down the complete canvas.
+ * successful response look valid while changing its meaning. The schema module
+ * owns snake_case wire decoding; callers only see these camelCase fields.
+ * Enum-like values remain forward compatible so a newer server can render
+ * through the generic visual path instead of taking down the complete canvas.
  */
+
+import type { RunnerActivityTimelineRow } from "./events";
 
 export type ResearchV6DirectorEntityKind =
   | "goal"
@@ -32,12 +35,13 @@ export interface ResearchV6DirectorEntityRef {
   kind: ResearchV6DirectorEntityKind;
   id: string;
   revision?: number;
-  version_id?: string;
-  content_hash?: string;
+  versionId?: string;
+  contentHash?: string;
 }
 
 export type ResearchV6DirectorProjectionNodeKind =
   | "goal"
+  | "agent"
   | "work_s"
   | "result_s"
   | "insight"
@@ -54,6 +58,8 @@ export type ResearchV6DirectorProjectionTier =
 
 export type ResearchV6DirectorExecutionState =
   | "pending"
+  | "idle"
+  | "offline"
   | "running"
   | "succeeded"
   | "failed"
@@ -91,8 +97,8 @@ export type ResearchV6DirectorTerminationReason =
   | (string & {});
 
 export interface ResearchV6DirectorTermination {
-  reason_code: ResearchV6DirectorTerminationReason;
-  reason_detail: string;
+  reasonCode: ResearchV6DirectorTerminationReason;
+  reasonDetail: string;
 }
 
 export interface ResearchV6DirectorProjectionState {
@@ -106,16 +112,16 @@ export interface ResearchV6DirectorProjectionNode {
   id: string;
   kind: ResearchV6DirectorProjectionNodeKind;
   tier: ResearchV6DirectorProjectionTier;
-  canonical_ref: ResearchV6DirectorEntityRef;
-  branch_ids: string[];
+  canonicalRef: ResearchV6DirectorEntityRef;
+  branchIds: string[];
   state: ResearchV6DirectorProjectionState;
   title?: string;
-  catalog_summary: string;
+  catalogSummary: string;
   absorbed: boolean;
   terminal: boolean;
   expandable: boolean;
-  hidden_child_count: number;
-  updated_at: string;
+  hiddenChildCount: number;
+  updatedAt: string;
 }
 
 export type ResearchV6DirectorProjectionEdgeKind =
@@ -123,6 +129,7 @@ export type ResearchV6DirectorProjectionEdgeKind =
   | "absorbed_into"
   | "produced_by"
   | "belongs_to"
+  | "assigned_to"
   | "challenges"
   | "collapsed_path"
   | (string & {});
@@ -130,65 +137,65 @@ export type ResearchV6DirectorProjectionEdgeKind =
 export interface ResearchV6DirectorProjectionEdge {
   id: string;
   kind: ResearchV6DirectorProjectionEdgeKind;
-  from_node_id: string;
-  to_node_id: string;
+  fromNodeId: string;
+  toNodeId: string;
   canonical: boolean;
-  hidden_count: number;
+  hiddenCount: number;
   expandable: boolean;
 }
 
 export interface ResearchV6DirectorDensityBin {
   id: string;
-  branch_id: string;
+  branchId: string;
   bounds: { x: number; y: number; width: number; height: number };
   total: number;
-  reason_counts: Record<string, number>;
-  execution_counts: Record<string, number>;
+  reasonCounts: Record<string, number>;
+  executionCounts: Record<string, number>;
 }
 
 export interface ResearchV6DirectorProjectionSnapshot {
-  contract_kind: "projection_snapshot";
-  schema_version: 6;
-  snapshot_id: string;
-  workspace_id: string;
-  run_id: string;
-  through_event_sequence: number;
-  projection_hash: string;
-  slice_key: string;
+  contractKind: "projection_snapshot";
+  schemaVersion: 6;
+  snapshotId: string;
+  workspaceId: string;
+  runId: string;
+  throughEventSequence: number;
+  projectionHash: string;
+  sliceKey: string;
   nodes: ResearchV6DirectorProjectionNode[];
   edges: ResearchV6DirectorProjectionEdge[];
-  density_bins: ResearchV6DirectorDensityBin[];
-  has_more: boolean;
-  next_cursor?: string;
+  densityBins: ResearchV6DirectorDensityBin[];
+  hasMore: boolean;
+  nextCursor?: string;
 }
 
 export interface ResearchV6DirectorProjectionDelta {
-  contract_kind: "projection_delta";
-  schema_version: 6;
-  workspace_id: string;
-  run_id: string;
-  snapshot_id: string;
-  event_sequence: number;
-  previous_projection_hash: string;
-  projection_hash: string;
-  upsert_nodes: ResearchV6DirectorProjectionNode[];
-  remove_node_ids: string[];
-  upsert_edges: ResearchV6DirectorProjectionEdge[];
-  remove_edge_ids: string[];
-  invalidate_slice_keys: string[];
+  contractKind: "projection_delta";
+  schemaVersion: 6;
+  workspaceId: string;
+  runId: string;
+  snapshotId: string;
+  eventSequence: number;
+  previousProjectionHash: string;
+  projectionHash: string;
+  upsertNodes: ResearchV6DirectorProjectionNode[];
+  removeNodeIds: string[];
+  upsertEdges: ResearchV6DirectorProjectionEdge[];
+  removeEdgeIds: string[];
+  invalidateSliceKeys: string[];
 }
 
 export interface ResearchV6DirectorProjectionDeltaPage {
-  run_id: string;
+  runId: string;
   deltas: ResearchV6DirectorProjectionDelta[];
-  next_cursor: string | null;
-  resync_required: boolean;
+  nextCursor: string | null;
+  resyncRequired: boolean;
 }
 
 export interface ResearchV6DirectorProjectionResumeRequest {
-  snapshot_id: string;
-  last_confirmed_sequence: number;
-  projection_hash: string;
+  snapshotId: string;
+  lastConfirmedSequence: number;
+  projectionHash: string;
 }
 
 export type ResearchV6DirectorNodeDetailView =
@@ -197,32 +204,63 @@ export type ResearchV6DirectorNodeDetailView =
   | "history"
   | (string & {});
 
+export interface ResearchV6DirectorContentLayers {
+  catalogSummary: string;
+  briefSummary: string;
+  objective: string;
+  conclusion: string;
+  content: string;
+  scope: Record<string, unknown>;
+  uncertainties: string[];
+  conflicts: string[];
+  openQuestions: string[];
+}
+
 export interface ResearchV6DirectorNodeDetail {
-  snapshot_id: string;
-  through_event_sequence: number;
-  projection_hash: string;
+  snapshotId: string;
+  throughEventSequence: number;
+  projectionHash: string;
   view: ResearchV6DirectorNodeDetailView;
   node: ResearchV6DirectorProjectionNode;
+  contentLayers?: ResearchV6DirectorContentLayers;
   incoming: ResearchV6DirectorProjectionEdge[];
   outgoing: ResearchV6DirectorProjectionEdge[];
-  history_refs: ResearchV6DirectorEntityRef[];
-  agent_refs: ResearchV6DirectorEntityRef[];
-  work_item_refs: ResearchV6DirectorEntityRef[];
-  attempt_refs: ResearchV6DirectorEntityRef[];
-  evidence_refs: ResearchV6DirectorEntityRef[];
-  discussion_refs: ResearchV6DirectorEntityRef[];
-  report_refs: ResearchV6DirectorEntityRef[];
+  historyRefs: ResearchV6DirectorEntityRef[];
+  agentRefs: ResearchV6DirectorEntityRef[];
+  workItemRefs: ResearchV6DirectorEntityRef[];
+  attemptRefs: ResearchV6DirectorEntityRef[];
+  evidenceRefs: ResearchV6DirectorEntityRef[];
+  discussionRefs: ResearchV6DirectorEntityRef[];
+  reportRefs: ResearchV6DirectorEntityRef[];
+}
+
+export interface ResearchV6DirectorWorkActivity {
+  workItemId: string;
+  attemptId: string;
+  agentId: string;
+  agentName: string;
+  inboxTaskId: string;
+  mission: string;
+  status: string;
+  progress: string;
+  progressStep: number;
+  progressTotal: number;
+  startedAt?: string;
+  completedAt?: string;
+  updatedAt: string;
+  timeline: RunnerActivityTimelineRow[];
+  timelineHasMore: boolean;
 }
 
 export interface ResearchV6DirectorReportReview {
   id?: string;
   decision: string;
   reason: string;
-  input_state_version?: number;
-  render_artifact_version_id?: string;
-  render_diagnostics?: unknown;
-  follow_up_work_item_refs?: unknown;
-  created_at?: string;
+  inputStateVersion?: number;
+  renderArtifactVersionId?: string;
+  renderDiagnostics?: unknown;
+  followUpWorkItemRefs?: unknown;
+  createdAt?: string;
 }
 
 export interface ResearchV6DirectorReportMetadata {
@@ -231,23 +269,23 @@ export interface ResearchV6DirectorReportMetadata {
   status: string;
   title: string;
   summary: string;
-  package_hash: string;
-  document_content_hash: string;
-  published_at: string | null;
-  created_at: string;
-  author_agent_id: string;
-  input_count: number;
-  latest_review: ResearchV6DirectorReportReview;
-  sandbox_url?: string;
-  report_origin?: string;
+  packageHash: string;
+  documentContentHash: string;
+  publishedAt: string | null;
+  createdAt: string;
+  authorAgentId: string;
+  inputCount: number;
+  latestReview: ResearchV6DirectorReportReview;
+  sandboxUrl?: string;
+  reportOrigin?: string;
 }
 
 export interface ResearchV6DirectorReportInputRef {
-  branch_id: string;
-  node_artifact_version_id: string;
-  input_role: string;
+  branchId: string;
+  nodeArtifactVersionId: string;
+  inputRole: string;
   ordinal: number;
-  content_hash: string;
+  contentHash: string;
 }
 
 export interface ResearchV6DirectorReportDetail {
@@ -256,24 +294,24 @@ export interface ResearchV6DirectorReportDetail {
   status: string;
   title: string;
   summary: string;
-  plain_text: string;
-  package_hash: string;
-  document_content_hash: string;
+  plainText: string;
+  packageHash: string;
+  documentContentHash: string;
   outline: unknown;
   citations: unknown;
-  input_refs: ResearchV6DirectorReportInputRef[];
+  inputRefs: ResearchV6DirectorReportInputRef[];
   reviews: ResearchV6DirectorReportReview[];
-  sandbox_url?: string;
-  report_origin?: string;
+  sandboxUrl?: string;
+  reportOrigin?: string;
 }
 
 export interface ResearchV6DirectorSelectedRef {
-  stable_id: string;
+  stableId: string;
   kind: ResearchV6DirectorEntityKind;
-  entity_id: string;
+  entityId: string;
   revision: number;
-  content_hash: string;
-  display_summary: string;
+  contentHash: string;
+  displaySummary: string;
 }
 
 export interface ResearchV6DirectorAssignment {
@@ -298,7 +336,7 @@ export interface ResearchV6DirectorAssignmentRequest {
 export interface ResearchV6DirectorProjectionSliceRequest {
   root: string;
   depth: 1;
-  snapshot_id: string;
+  snapshotId: string;
   cursor?: string;
 }
 
@@ -334,10 +372,17 @@ export interface ResearchV6DirectorDetailTransport {
   loadNodeDetail(
     workspaceId: string,
     runId: string,
+    snapshotId: string,
     nodeId: string,
     view: ResearchV6DirectorNodeDetailView,
     signal?: AbortSignal,
   ): Promise<ResearchV6DirectorNodeDetail>;
+  loadWorkActivity(
+    workspaceId: string,
+    runId: string,
+    workItemId: string,
+    signal?: AbortSignal,
+  ): Promise<ResearchV6DirectorWorkActivity>;
   listReports(
     workspaceId: string,
     runId: string,

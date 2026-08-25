@@ -2,8 +2,8 @@ package memorygraph
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,12 +23,16 @@ const (
 	OpAddHierarchyEdge = "add_hierarchy_edge"
 	OpAddRelationEdge  = "add_relation_edge"
 	OpDeleteEdge       = "delete_edge"
-	OpPruneEdge        = "prune_edge" // agent-driven sparsification (Q20)
-	OpSubmit           = "submit"     // agent signals completion within budget (Q19)
+	OpUpdateEdge       = "update_edge" // rejected for source provenance; not a management write
+	OpPruneEdge        = "prune_edge"  // agent-driven sparsification (Q20)
+	OpSubmit           = "submit"      // agent signals completion within budget (Q19)
 )
 
 // OpSelectVersion is the op-log entry recording a TTT version selection.
 const OpSelectVersion = "select_version"
+
+// OpRejectedManagement records a rejected management operation and its reason.
+const OpRejectedManagement = "rejected_management"
 
 // CostWeights are the design §6 consolidation cost weights:
 //
@@ -45,34 +49,45 @@ type CostWeights struct {
 // ConsolidateConfig configures the Consolidator (design §6 consolidation
 // block plus the graph shape limits).
 type ConsolidateConfig struct {
-	TriggerSegments int     // new staging segments that trigger consolidation (default 50)
-	TriggerQueries  int     // queries since last consolidation that trigger it (default 200)
-	OpBudget        int     // max operations per consolidation trajectory (default 50)
-	RoundBudget     int     // max agent working rounds per trajectory (default 10)
-	TTVTrajectories int     // T parallel candidate trajectories; 1 = non-TTT in-place mode (default 4)
-	RecallTolerance float64 // allowed recall-rate drop vs baseline (default 0.02)
-	CostWeights     CostWeights
-	MaxLevels       int           // hierarchy depth cap; levels are 0..MaxLevels-1 (default 4)
-	MaxFanout       int           // max summarizes children per node (default 8)
-	VersionsKeep    int           // versions retained by the post-consolidation GC (default 5)
-	Model           string        // model name passed to the agent backend
-	Timeout         time.Duration // per-trajectory wall-clock timeout
+	TriggerSegments          int     // new staging segments that trigger consolidation (default 50)
+	TriggerQueries           int     // queries since last consolidation that trigger it (default 200)
+	OpBudget                 int     // max operations per consolidation trajectory (default 50)
+	RoundBudget              int     // max agent working rounds per trajectory (default 10)
+	TTVTrajectories          int     // T parallel candidate trajectories; 1 = non-TTT in-place mode (default 4)
+	RecallTolerance          float64 // allowed recall-rate drop vs baseline (default 0.02)
+	CostWeights              CostWeights
+	MaxLevels                int            // hierarchy depth cap; levels are 0..MaxLevels-1 (default 4)
+	MaxFanout                int            // max summarizes children per node (default 8)
+	MaxRelationEdges         int            // max incident countable relation edges per node (default 8)
+	VersionsKeep             int            // versions retained by the post-consolidation GC (default 5)
+	Budget                   BacktestBudget // per-candidate D_q top-B allocation
+	ExploreMaxRounds         int            // L2 closure radius; must match runner budget
+	ExploreMaxExpandPerRound int            // L3 candidate cap; must match /explore
+	Model                    string         // model name passed to the agent backend
+	Timeout                  time.Duration  // per-trajectory wall-clock timeout
+	// BacktestGroundTruth attaches server-authoritative catalog items and
+	// ledger baselines before candidate evaluation. Nil preserves legacy input.
+	BacktestGroundTruth func(ctx context.Context, store *Store, fromVersion int, queries []*BacktestQuery) error
 }
 
 // DefaultConsolidateConfig returns the design §6 defaults.
 func DefaultConsolidateConfig() ConsolidateConfig {
 	return ConsolidateConfig{
-		TriggerSegments: 50,
-		TriggerQueries:  200,
-		OpBudget:        50,
-		RoundBudget:     10,
-		TTVTrajectories: 4,
-		RecallTolerance: 0.02,
-		CostWeights:     CostWeights{Round: 1.0, Tail: 0.5, Embed: 0.2, Node: 0.1, Graph: 0.05},
-		MaxLevels:       4,
-		MaxFanout:       8,
-		VersionsKeep:    5,
-		Timeout:         30 * time.Minute,
+		TriggerSegments:          50,
+		TriggerQueries:           200,
+		OpBudget:                 50,
+		RoundBudget:              10,
+		TTVTrajectories:          4,
+		RecallTolerance:          0.02,
+		CostWeights:              CostWeights{Round: 1.0, Tail: 0.5, Embed: 0.2, Node: 0.1, Graph: 0.05},
+		MaxLevels:                4,
+		MaxFanout:                8,
+		MaxRelationEdges:         8,
+		VersionsKeep:             5,
+		Budget:                   DefaultBacktestBudget(),
+		ExploreMaxRounds:         DefaultExploreConfig().MaxRounds,
+		ExploreMaxExpandPerRound: DefaultExploreConfig().MaxExpandPerRound,
+		Timeout:                  30 * time.Minute,
 	}
 }
 
@@ -106,8 +121,18 @@ func (c ConsolidateConfig) normalized() ConsolidateConfig {
 	if c.MaxFanout <= 0 {
 		c.MaxFanout = d.MaxFanout
 	}
+	if c.MaxRelationEdges <= 0 {
+		c.MaxRelationEdges = d.MaxRelationEdges
+	}
 	if c.VersionsKeep <= 0 {
 		c.VersionsKeep = d.VersionsKeep
+	}
+	c.Budget = c.Budget.normalized()
+	if c.ExploreMaxRounds <= 0 {
+		c.ExploreMaxRounds = d.ExploreMaxRounds
+	}
+	if c.ExploreMaxExpandPerRound <= 0 {
+		c.ExploreMaxExpandPerRound = d.ExploreMaxExpandPerRound
 	}
 	if c.Timeout <= 0 {
 		c.Timeout = d.Timeout
@@ -341,15 +366,48 @@ func (c *Consolidator) consolidateTTT(ctx context.Context, current int, staging 
 	if err != nil {
 		return nil, fmt.Errorf("consolidate ttt: backtest queries: %w", err)
 	}
-	bt := NewBacktester(c.store, BacktestConfig{
+	if c.cfg.BacktestGroundTruth != nil {
+		if err := c.cfg.BacktestGroundTruth(ctx, c.store, current, queries); err != nil {
+			return nil, fmt.Errorf("consolidate ttt: attach backtest ground truth: %w", err)
+		}
+	}
+	windowQueries, err := BacktestWindowQueryCount(c.store, current)
+	if err != nil {
+		return nil, fmt.Errorf("consolidate ttt: count window queries: %w", err)
+	}
+	btCfg := BacktestConfig{
 		RecallTolerance: c.cfg.RecallTolerance,
 		Embedder:        c.emb,
 		Runner:          c.runner,
-	})
+		// Cold start (spec §7): below the threshold the window baselines are
+		// too thin to trust, so the statistical gates (recall, rounds
+		// regression) are skipped; the structural gates always run.
+		ColdStart: windowQueries < c.cfg.Budget.ColdStartThreshold,
+	}
+
+	// Budget allocation (spec §5.2): with a runner wired, each candidate
+	// independently ranks the window queries by D_q and picks its top-B;
+	// every candidate is then measured on the union so Cost stays comparable.
+	// Without a runner there is no Explore to save (AcceptedWithoutExplore
+	// stands), so the full window is evaluated as before (spec §5.4).
+	measured := queries
+	var plan *BudgetPlan
+	if c.runner != nil && len(queries) > 0 {
+		plan, err = PlanBudget(ctx, c.store, current, versions, queries, c.cfg.Budget, btCfg.normalized().Retrieval, c.emb, c.cfg.ExploreMaxRounds, c.cfg.ExploreMaxExpandPerRound)
+		if err != nil {
+			return nil, fmt.Errorf("consolidate ttt: budget plan: %w", err)
+		}
+		measured = plan.Union
+	}
+
+	bt := NewBacktester(c.store, btCfg)
 	cands := make([]CandidateStats, t)
 	result := &ConsolidateResult{Candidates: cands}
 	for i := range versions {
-		stats := bt.EvaluateCandidate(ctx, versions[i], current, queries)
+		stats := bt.EvaluateCandidate(ctx, versions[i], current, measured)
+		if plan != nil {
+			stats.Queries = appendBudgetAudit(stats.Queries, plan.PerCandidate[versions[i]], measured, queries)
+		}
 		stats.Actor = fmt.Sprintf("ttt-%d", i)
 		stats.OpsApplied = outcomes[i].applied
 		if outcomes[i].err != nil {
@@ -374,9 +432,6 @@ func (c *Consolidator) consolidateTTT(ctx context.Context, current int, staging 
 			return nil, fmt.Errorf("consolidate ttt: switch current to v%d: %w", result.WinnerVersion, err)
 		}
 		result.Switched = true
-		// Q26: queries that degraded across the switch join the permanent
-		// regression set so every future transition re-checks them.
-		c.recordRegressions(result.WinnerVersion, cands[winnerIdx], queries)
 	} else {
 		// No candidate survived the gates: keep the current version.
 		result.WinnerVersion = current
@@ -392,9 +447,12 @@ func (c *Consolidator) consolidateTTT(ctx context.Context, current int, staging 
 
 	// Audit: one select_version entry with the per-candidate stats.
 	detail := map[string]any{
-		"winner":     result.WinnerVersion,
-		"switched":   result.Switched,
-		"candidates": candidateAuditDetails(cands),
+		"winner":         result.WinnerVersion,
+		"switched":       result.Switched,
+		"cold_start":     btCfg.ColdStart,
+		"window_queries": windowQueries,
+		"judged_queries": len(queries),
+		"candidates":     candidateAuditDetails(cands),
 	}
 	if err := c.oplog.Append(result.WinnerVersion, CreatorConsolidator, OpSelectVersion,
 		fmt.Sprintf("v%d", result.WinnerVersion), detail); err != nil {
@@ -407,51 +465,36 @@ func (c *Consolidator) consolidateTTT(ctx context.Context, current int, staging 
 	return result, nil
 }
 
-// recordRegressions folds the winning candidate's regressed window queries
-// into the permanent regression set (design Q26, review P0-4): a query that
-// passed baseline-side but degraded on the winning version is re-checked on
-// every future version transition. Regression-set entries themselves are
-// excluded (they are already in the set — a gate-4 failure keeps them
-// there), and repeats dedupe by query text. Appends are best-effort: the
-// switch already happened, so a persistence failure is logged, never
-// returned.
-func (c *Consolidator) recordRegressions(winnerVersion int, winner CandidateStats, queries []*BacktestQuery) {
-	existing, err := c.store.ReadRegression()
-	if err != nil {
-		slog.Warn("consolidate ttt: read regression set failed; skipping regression recording",
-			"version", winnerVersion, "error", err)
-		return
+func appendBudgetAudit(stats []QueryBacktestStat, cb candidateBudget, measured, window []*BacktestQuery) []QueryBacktestStat {
+	identities := budgetQueryIdentities(window)
+	for i := range stats {
+		for _, q := range measured {
+			if stats[i].TraceID == q.TraceID && stats[i].Query == q.Query {
+				stats[i].Dq = cb.Dq[identities[q]]
+				break
+			}
+		}
 	}
-	known := make(map[string]bool, len(existing))
-	for _, re := range existing {
-		known[re.Query] = true
+	measuredSet := make(map[string]bool, len(measured))
+	for _, q := range measured {
+		measuredSet[identities[q]] = true
 	}
-	if len(winner.Queries) != len(queries) {
-		// Defensive: a winner that failed evaluation before the per-query
-		// backtest ran cannot be mapped back to its queries.
-		slog.Warn("consolidate ttt: winner query stats misaligned; skipping regression recording",
-			"version", winnerVersion, "stats", len(winner.Queries), "queries", len(queries))
-		return
-	}
-	for i, q := range queries {
-		qs := winner.Queries[i]
-		if q.Regression || !qs.Regressed || known[q.Query] {
+	for _, q := range window {
+		id := identities[q]
+		if measuredSet[id] {
 			continue
 		}
-		known[q.Query] = true
-		entry := &RegressionEntry{
+		stats = append(stats, QueryBacktestStat{
+			TraceID:        q.TraceID,
 			Query:          q.Query,
-			RelevantNodes:  q.RelevantNodes,
-			AddedVersion:   winnerVersion,
-			BaselineRounds: qs.BaselineRounds,
-			Reason: fmt.Sprintf("regressed on switch to v%d (covered=%v found=%v rounds=%.0f baseline_rounds=%d)",
-				winnerVersion, qs.Covered, qs.Found, qs.Rounds, qs.BaselineRounds),
-		}
-		if err := c.store.AppendRegression(entry); err != nil {
-			slog.Warn("consolidate ttt: append regression failed",
-				"version", winnerVersion, "query", q.Query, "error", err)
-		}
+			BaselineRounds: baselineRounds(q.BaselineRounds),
+			BaselineFound:  q.BaselineFound,
+			Skipped:        true,
+			Dq:             cb.Dq[id],
+			SkipReason:     "outside the per-candidate top-B budget union",
+		})
 	}
+	return stats
 }
 
 // runTrajectory executes one consolidation trajectory against candidate
@@ -541,8 +584,15 @@ func (c *Consolidator) runAgent(ctx context.Context, prompt string) (*consolidat
 // under the given actor. OpBudget mutation operations are honored at most;
 // OpSubmit stops processing. Levels are recomputed after the batch.
 func (c *Consolidator) applyOperations(g *Graph, version int, actor string, ops []ConsolidateOp) (applied int, rejected []RejectReason, err error) {
+	var auditErr error
 	reject := func(op ConsolidateOp, target, reason string) {
 		rejected = append(rejected, RejectReason{Actor: actor, Op: op.Op, Target: target, Reason: reason})
+		if appendErr := c.oplog.Append(version, actor, OpRejectedManagement, target, map[string]any{
+			"operation": op.Op,
+			"reason":    reason,
+		}); appendErr != nil && auditErr == nil {
+			auditErr = appendErr
+		}
 	}
 	mutations := 0
 	for _, op := range ops {
@@ -567,6 +617,9 @@ func (c *Consolidator) applyOperations(g *Graph, version int, actor string, ops 
 			return applied, rejected, fmt.Errorf("op log v%d: %w", version, err)
 		}
 	}
+	if auditErr != nil {
+		return applied, rejected, fmt.Errorf("op log rejection v%d: %w", version, auditErr)
+	}
 	if err := g.RecomputeLevels(); err != nil {
 		return applied, rejected, fmt.Errorf("recompute levels: %w", err)
 	}
@@ -576,6 +629,9 @@ func (c *Consolidator) applyOperations(g *Graph, version int, actor string, ops 
 // applyOne validates and applies a single mutation operation, returning the
 // audit target id. The graph is left untouched when an error is returned.
 func (c *Consolidator) applyOne(g *Graph, version int, actor string, op ConsolidateOp) (string, error) {
+	if reason := c.sourceLayerReject(g, op); reason != "" {
+		return opTarget(op), fmt.Errorf("source_layer_immutable: %s", reason)
+	}
 	switch op.Op {
 	case OpAddNode:
 		if op.Node == nil {
@@ -598,6 +654,10 @@ func (c *Consolidator) applyOne(g *Graph, version int, actor string, op Consolid
 			n.CreatedVersion = version
 		}
 		n.UpdatedVersion = version
+		// Scope stamping (spec §5): a new node derives its visibility and
+		// provenance from the source segment sidecars; an explicit
+		// Visibility (e.g. a promotion to "project") is honored as-is.
+		c.stampNewNodeScope(&n)
 		if err := g.AddNode(&n); err != nil {
 			return n.NodeID, err
 		}
@@ -628,6 +688,27 @@ func (c *Consolidator) applyOne(g *Graph, version int, actor string, op Consolid
 		}
 		if n.TemporalStatus == "" {
 			n.TemporalStatus = existing.TemporalStatus
+		}
+		// Scope immutability (spec §5): visibility/channel flips on an
+		// existing node are rejected; promotion creates a separate
+		// project-visible node instead of mutating the source.
+		if scopeMutationAttempt(existing, &n) {
+			return id, fmt.Errorf("visibility_mutation: node %q scope is immutable; add a new project-visible node to promote", id)
+		}
+		n.Visibility = existing.Visibility
+		n.ChannelID = existing.ChannelID
+		// Provenance is monotonic: union the op's refs and source segment
+		// sidecars into the stored sets; entries are never removed.
+		n.SourceAgentIDs = mergeStringSet(existing.SourceAgentIDs, n.SourceAgentIDs)
+		n.SourceChannelIDs = mergeStringSet(existing.SourceChannelIDs, n.SourceChannelIDs)
+		n.SourceTaskIDs = mergeStringSet(existing.SourceTaskIDs, n.SourceTaskIDs)
+		c.mergeSegmentProvenance(&n)
+		if reason := extractionIdentityReject(existing, &n); reason != "" {
+			return id, fmt.Errorf("%s", reason)
+		}
+		if existing.Extraction != nil && n.Extraction == nil {
+			copied := *existing.Extraction
+			n.Extraction = &copied
 		}
 		n.UpdatedVersion = version
 		*existing = n // same-package in-place replacement keeps incident edges
@@ -666,6 +747,9 @@ func (c *Consolidator) applyOne(g *Graph, version int, actor string, op Consolid
 		}
 		e := *op.Edge
 		edgeDefaults(&e, actor, version)
+		if err := rejectRelationDegree(g, &e, c.cfg.MaxRelationEdges); err != nil {
+			return e.EdgeID, err
+		}
 		if err := g.AddRelationEdge(&e); err != nil {
 			return e.EdgeID, err
 		}
@@ -682,6 +766,115 @@ func (c *Consolidator) applyOne(g *Graph, version int, actor string, op Consolid
 	default:
 		return "", fmt.Errorf("unknown operation %q", op.Op)
 	}
+}
+
+// normalizedVisibility reads an empty visibility as "project" (spec §5:
+// pre-scope graphs are project-visible).
+func normalizedVisibility(v string) string {
+	if v == "" {
+		return "project"
+	}
+	return v
+}
+
+// scopeMutationAttempt reports whether the update document n tries to
+// change the existing node's visibility or channel binding (spec §5).
+// Empty fields in n mean "unchanged".
+func scopeMutationAttempt(existing, n *Node) bool {
+	if n.Visibility != "" && normalizedVisibility(n.Visibility) != normalizedVisibility(existing.Visibility) {
+		return true
+	}
+	return n.ChannelID != "" && n.ChannelID != existing.ChannelID
+}
+
+// stampNewNodeScope derives a consolidation-created node's scope from the
+// sidecars of its source segments (spec §5). The scope fails safe: only a
+// node whose sources are all channel-visible segments of one channel is
+// channel-visible; everything else (mixed sources, missing sidecars) is
+// project-visible. An agent-set Visibility is honored verbatim — promotion
+// ops set "project" explicitly and never touch the source node.
+func (c *Consolidator) stampNewNodeScope(n *Node) {
+	metas := c.segmentMetas(n.SegmentRefs)
+	if n.Visibility == "" {
+		channelID := ""
+		allChannel := len(metas) > 0
+		for _, m := range metas {
+			if m.Visibility != "channel" || m.ChannelID == "" || (channelID != "" && channelID != m.ChannelID) {
+				allChannel = false
+				break
+			}
+			channelID = m.ChannelID
+		}
+		if allChannel {
+			n.Visibility = "channel"
+			n.ChannelID = channelID
+		} else {
+			n.Visibility = "project"
+		}
+	}
+	c.mergeSegmentProvenance(n)
+}
+
+// mergeSegmentProvenance union-merges agent/channel/task ids from the
+// source segment sidecars into n's provenance sets (spec §5).
+func (c *Consolidator) mergeSegmentProvenance(n *Node) {
+	for _, m := range c.segmentMetas(n.SegmentRefs) {
+		if m.AgentID != "" {
+			n.SourceAgentIDs = mergeStringSet(n.SourceAgentIDs, []string{m.AgentID})
+		}
+		if m.ChannelID != "" {
+			n.SourceChannelIDs = mergeStringSet(n.SourceChannelIDs, []string{m.ChannelID})
+		}
+		if m.TaskID != "" {
+			n.SourceTaskIDs = mergeStringSet(n.SourceTaskIDs, []string{m.TaskID})
+		}
+	}
+}
+
+// segmentMetas loads the scope sidecars of the given staging segments.
+// Segments without a readable sidecar (legacy staging) contribute no meta.
+func (c *Consolidator) segmentMetas(segmentIDs []string) []*SegmentMeta {
+	var out []*SegmentMeta
+	for _, id := range segmentIDs {
+		meta, err := c.store.ReadStagingSegmentMeta(id)
+		if err != nil {
+			continue
+		}
+		out = append(out, meta)
+	}
+	return out
+}
+
+// mergeStringSet returns the union of base and add, preserving order.
+func mergeStringSet(base, add []string) []string {
+	seen := map[string]bool{}
+	out := append([]string{}, base...)
+	for _, s := range base {
+		seen[s] = true
+	}
+	for _, s := range add {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// rejectRelationDegree fails when adding e would exceed the per-node
+// countable relation-degree cap. Node-to-node edges consume a slot at both
+// ends; node-to-edge refs consume a slot only at From.
+func rejectRelationDegree(g *Graph, e *Edge, limit int) error {
+	if limit <= 0 {
+		return nil
+	}
+	if CountableRelationDegree(g, e.From) >= limit {
+		return fmt.Errorf("relation edge %s: node %q relation degree limit %d reached", e.EdgeID, e.From, limit)
+	}
+	if !e.IsEdgeRef() && CountableRelationDegree(g, e.To) >= limit {
+		return fmt.Errorf("relation edge %s: node %q relation degree limit %d reached", e.EdgeID, e.To, limit)
+	}
+	return nil
 }
 
 // edgeDefaults fills audit fields of an agent-supplied edge.
@@ -868,7 +1061,7 @@ func (c *Consolidator) buildPrompt(staging []stagingSummary, stats graphStats, s
 	b.WriteString("- {\"op\":\"submit\"} — finish within budget.\n\n")
 
 	fmt.Fprintf(&b, "Budgets (hard limits): at most %d operations and %d working rounds; submit when done.\n", c.cfg.OpBudget, c.cfg.RoundBudget)
-	fmt.Fprintf(&b, "Graph limits: at most %d hierarchy levels and %d children per node.\n\n", c.cfg.MaxLevels, c.cfg.MaxFanout)
+	fmt.Fprintf(&b, "Graph limits: at most %d hierarchy levels, %d children per node, and %d relation edges per node.\n\n", c.cfg.MaxLevels, c.cfg.MaxFanout, c.cfg.MaxRelationEdges)
 
 	fmt.Fprintf(&b, "Current graph stats: %d nodes, %d hierarchy edges, %d relation edges, max level %d.\n\n",
 		stats.NodeCount, stats.HierEdgeCount, stats.RelEdgeCount, stats.MaxLevel)
@@ -910,4 +1103,16 @@ func candidateAuditDetails(cands []CandidateStats) []map[string]any {
 		}
 	}
 	return out
+}
+
+// extractJSONObject parses a strict-JSON final response, tolerating
+// surrounding prose by slicing from the first "{" to the last "}" (same
+// approach as extractExploreOutput and memorycuration's team_output.go).
+func extractJSONObject(output string, dst any) bool {
+	start := strings.Index(output, "{")
+	end := strings.LastIndex(output, "}")
+	if start < 0 || end < start {
+		return false
+	}
+	return json.Unmarshal([]byte(output[start:end+1]), dst) == nil
 }

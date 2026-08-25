@@ -122,6 +122,33 @@ describe("TrajectoryExplorer (LRM-1480 / UI-06)", () => {
     expect(screen.getByTestId("trajectory-commit-status")).toHaveTextContent("完成");
   });
 
+  it("labels canonical succeeded results as completed and idle Agents as idle", () => {
+    const completed = node("result", "已核验结果", "succeeded", "theme-main");
+    const idleAgent: ResearchGraphNode = {
+      ...node("agent", "市场研究员", "idle", "theme-agent", "agent-market"),
+      node_type: "agent",
+      created_at: "2026-01-02T00:00:00Z",
+    };
+    renderWithI18n(
+      <TrajectoryExplorer
+        nodes={[completed, idleAgent]}
+        selectedId="agent"
+        sessionStatus="running"
+        onSelect={vi.fn()}
+        onJumpToCanvas={vi.fn()}
+        onOpenNodeDetail={vi.fn()}
+      />,
+      { locale: "zh-Hans" },
+    );
+
+    expect(
+      screen
+        .getAllByTestId("trajectory-commit-status")
+        .map((status) => status.textContent),
+    ).toEqual(["完成", "空闲"]);
+    expect(screen.getByTestId("trajectory-detail")).toHaveTextContent("空闲");
+  });
+
   it("shows loading skeleton without fake commits", () => {
     renderWithI18n(
       <TrajectoryExplorer

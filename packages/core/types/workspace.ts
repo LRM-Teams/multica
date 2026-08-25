@@ -65,7 +65,7 @@ export interface User {
    * who is requesting the work. Server always returns a string —
    * NOT NULL DEFAULT '' at the column level, empty when unset.
    */
-  profile_description: string;
+  description: string;
   /** Pinned IANA tz; null means "use browser-detected tz at render time". */
   timezone: string | null;
   created_at: string;
@@ -84,7 +84,7 @@ export interface MemberWithUser {
   display_name: string;
   email: string;
   avatar_url: string | null;
-  profile_description: string;
+  description: string;
   honor?: HonorSnapshot;
 }
 
@@ -110,7 +110,7 @@ export interface MemberProfile {
   /** Human-facing label; server returns display_name || name. */
   display_name: string;
   avatar_url: string | null;
-  /** User profile_description or agent description. Empty when unset. */
+  /** Self-description for users, configured description for agents. Empty when unset. */
   description: string;
   /** Workspace role for users; "Agent" for agent profiles. */
   role: string;

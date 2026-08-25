@@ -138,6 +138,38 @@ func sandboxNodeToResponse(n db.SandboxNode, instanceCount int64) SandboxNodeRes
 	}
 }
 
+func sandboxNodeFromRow(id pgtype.UUID, nodeKey string, ownerUserID pgtype.UUID, name, status string, capabilities []byte, maxConcurrency int32, metadata []byte, lastSeenAt, deletedAt, createdAt, updatedAt pgtype.Timestamptz) db.SandboxNode {
+	return db.SandboxNode{
+		ID: id, NodeKey: nodeKey, OwnerUserID: ownerUserID, Name: name, Status: status,
+		Capabilities: capabilities, MaxConcurrency: maxConcurrency, Metadata: metadata,
+		LastSeenAt: lastSeenAt, CreatedAt: createdAt, UpdatedAt: updatedAt, DeletedAt: deletedAt,
+	}
+}
+func sandboxNodeFromCreateRow(r db.CreateSandboxNodeRow) db.SandboxNode {
+	return sandboxNodeFromRow(r.ID, r.NodeKey, r.OwnerUserID, r.Name, r.Status, r.Capabilities, r.MaxConcurrency, r.Metadata, r.LastSeenAt, r.DeletedAt, r.CreatedAt, r.UpdatedAt)
+}
+func sandboxNodeFromListRow(r db.ListSandboxNodesByOwnerRow) db.SandboxNode {
+	return sandboxNodeFromRow(r.ID, r.NodeKey, r.OwnerUserID, r.Name, r.Status, r.Capabilities, r.MaxConcurrency, r.Metadata, r.LastSeenAt, r.DeletedAt, r.CreatedAt, r.UpdatedAt)
+}
+func sandboxNodeFromRegRow(r db.UpsertSandboxNodeRegistrationRow) db.SandboxNode {
+	return sandboxNodeFromRow(r.ID, r.NodeKey, r.OwnerUserID, r.Name, r.Status, r.Capabilities, r.MaxConcurrency, r.Metadata, r.LastSeenAt, r.DeletedAt, r.CreatedAt, r.UpdatedAt)
+}
+func sandboxNodeFromNameRow(r db.UpdateSandboxNodeNameForOwnerRow) db.SandboxNode {
+	return sandboxNodeFromRow(r.ID, r.NodeKey, r.OwnerUserID, r.Name, r.Status, r.Capabilities, r.MaxConcurrency, r.Metadata, r.LastSeenAt, r.DeletedAt, r.CreatedAt, r.UpdatedAt)
+}
+func sandboxNodeFromTplRow(r db.UpdateSandboxNodeDefaultTemplateForOwnerRow) db.SandboxNode {
+	return sandboxNodeFromRow(r.ID, r.NodeKey, r.OwnerUserID, r.Name, r.Status, r.Capabilities, r.MaxConcurrency, r.Metadata, r.LastSeenAt, r.DeletedAt, r.CreatedAt, r.UpdatedAt)
+}
+func sandboxNodeFromPickRow(r db.PickSandboxNodeForWorkspaceRow) db.SandboxNode {
+	return sandboxNodeFromRow(r.ID, r.NodeKey, r.OwnerUserID, r.Name, r.Status, r.Capabilities, r.MaxConcurrency, r.Metadata, r.LastSeenAt, r.DeletedAt, r.CreatedAt, r.UpdatedAt)
+}
+func sandboxNodeFromPickAvailRow(r db.PickAvailableSandboxNodeForWorkspaceRow) db.SandboxNode {
+	return sandboxNodeFromRow(r.ID, r.NodeKey, r.OwnerUserID, r.Name, r.Status, r.Capabilities, r.MaxConcurrency, r.Metadata, r.LastSeenAt, r.DeletedAt, r.CreatedAt, r.UpdatedAt)
+}
+func sandboxNodeFromHeartbeatRow(r db.TouchSandboxNodeHeartbeatRow) db.SandboxNode {
+	return sandboxNodeFromRow(r.ID, r.NodeKey, r.OwnerUserID, r.Name, r.Status, r.Capabilities, r.MaxConcurrency, r.Metadata, r.LastSeenAt, r.DeletedAt, r.CreatedAt, r.UpdatedAt)
+}
+
 func sandboxInstanceToResponse(i db.SandboxInstance) SandboxInstanceResponse {
 	return SandboxInstanceResponse{
 		ID:            uuidToString(i.ID),
@@ -260,7 +292,7 @@ func (h *Handler) CreateSandboxNode(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to create sandbox node")
 		return
 	}
-	writeJSON(w, http.StatusCreated, sandboxNodeToResponse(node, 0))
+	writeJSON(w, http.StatusCreated, sandboxNodeToResponse(sandboxNodeFromCreateRow(node), 0))
 }
 
 func (h *Handler) ListSandboxNodes(w http.ResponseWriter, r *http.Request) {
@@ -291,7 +323,7 @@ func (h *Handler) ListSandboxNodes(w http.ResponseWriter, r *http.Request) {
 	}
 	resp := make([]SandboxNodeResponse, 0, len(nodes))
 	for _, n := range nodes {
-		resp = append(resp, sandboxNodeToResponse(n, instanceCounts[uuidToString(n.ID)]))
+		resp = append(resp, sandboxNodeToResponse(sandboxNodeFromListRow(n), instanceCounts[uuidToString(n.ID)]))
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -515,11 +547,15 @@ func (h *Handler) UpdateSandboxNode(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "name is required")
 			return
 		}
-		node, err = h.Queries.UpdateSandboxNodeNameForOwner(r.Context(), db.UpdateSandboxNodeNameForOwnerParams{
+		row, qErr := h.Queries.UpdateSandboxNodeNameForOwner(r.Context(), db.UpdateSandboxNodeNameForOwnerParams{
 			ID:          nodeID,
 			OwnerUserID: ownerUUID,
 			Name:        name,
 		})
+		err = qErr
+		if err == nil {
+			node = sandboxNodeFromNameRow(row)
+		}
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				writeError(w, http.StatusNotFound, "sandbox node not found")
@@ -536,11 +572,15 @@ func (h *Handler) UpdateSandboxNode(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "default_template_id is required")
 			return
 		}
-		node, err = h.Queries.UpdateSandboxNodeDefaultTemplateForOwner(r.Context(), db.UpdateSandboxNodeDefaultTemplateForOwnerParams{
+		row, qErr := h.Queries.UpdateSandboxNodeDefaultTemplateForOwner(r.Context(), db.UpdateSandboxNodeDefaultTemplateForOwnerParams{
 			ID:             nodeID,
 			OwnerUserID:    ownerUUID,
 			CubeTemplateID: templateID,
 		})
+		err = qErr
+		if err == nil {
+			node = sandboxNodeFromTplRow(row)
+		}
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				writeError(w, http.StatusNotFound, "sandbox node not found")
@@ -888,9 +928,17 @@ func (h *Handler) CreateSandboxInstance(w http.ResponseWriter, r *http.Request) 
 		if !ok {
 			return
 		}
-		node, err = h.Queries.PickSandboxNodeForWorkspace(r.Context(), db.PickSandboxNodeForWorkspaceParams{WorkspaceID: wsUUID, NodeID: nodeID})
+		row, qErr := h.Queries.PickSandboxNodeForWorkspace(r.Context(), db.PickSandboxNodeForWorkspaceParams{WorkspaceID: wsUUID, NodeID: nodeID})
+		err = qErr
+		if err == nil {
+			node = sandboxNodeFromPickRow(row)
+		}
 	} else {
-		node, err = h.Queries.PickAvailableSandboxNodeForWorkspace(r.Context(), wsUUID)
+		row, qErr := h.Queries.PickAvailableSandboxNodeForWorkspace(r.Context(), wsUUID)
+		err = qErr
+		if err == nil {
+			node = sandboxNodeFromPickAvailRow(row)
+		}
 	}
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -1225,7 +1273,7 @@ func (h *Handler) GetSandboxInstance(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to get sandbox")
 		return
 	}
-	writeJSON(w, http.StatusOK, sandboxInstanceRowToResponse(row))
+	writeJSON(w, http.StatusOK, sandboxInstanceRowToResponse(sandboxInstanceFromGetRow(row)))
 }
 
 func (h *Handler) UpdateSandboxInstance(w http.ResponseWriter, r *http.Request) {
@@ -1776,7 +1824,7 @@ func (h *Handler) SandboxNodeRegister(w http.ResponseWriter, r *http.Request) {
 	if req.MaxConcurrency <= 0 {
 		req.MaxConcurrency = 1
 	}
-	node, err := h.Queries.UpsertSandboxNodeRegistration(r.Context(), db.UpsertSandboxNodeRegistrationParams{
+	nodeRow, err := h.Queries.UpsertSandboxNodeRegistration(r.Context(), db.UpsertSandboxNodeRegistrationParams{
 		NodeKey:        req.NodeKey,
 		Name:           req.Name,
 		OwnerUserID:    ownerUserID,
@@ -1788,6 +1836,7 @@ func (h *Handler) SandboxNodeRegister(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to register sandbox node")
 		return
 	}
+	node := sandboxNodeFromRegRow(nodeRow)
 	if uuidToString(node.ID) != nodeID {
 		writeError(w, http.StatusForbidden, "sandbox node token does not match node_key")
 		return
@@ -1826,7 +1875,7 @@ func (h *Handler) SandboxNodeHeartbeat(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to record sandbox node heartbeat")
 		return
 	}
-	writeJSON(w, http.StatusOK, sandboxNodeToResponse(node, 0))
+	writeJSON(w, http.StatusOK, sandboxNodeToResponse(sandboxNodeFromHeartbeatRow(node), 0))
 }
 
 func mergeSandboxNodeHeartbeatMetadata(existing, incoming json.RawMessage) json.RawMessage {
@@ -2153,7 +2202,7 @@ func (h *Handler) requireSandboxJobTokenJob(w http.ResponseWriter, r *http.Reque
 	}
 	authHeader := r.Header.Get("Authorization")
 	raw := strings.TrimPrefix(authHeader, "Bearer ")
-	job, err := h.Queries.GetSandboxJobByTokenHash(r.Context(), auth.HashToken(raw))
+	job, err := h.Queries.GetSandboxJobByTokenHash(r.Context(), pgtype.Text{String: auth.HashToken(raw), Valid: true})
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, "invalid sandbox job token")
 		return db.SandboxJob{}, false

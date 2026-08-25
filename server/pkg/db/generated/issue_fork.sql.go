@@ -24,7 +24,7 @@ INSERT INTO issue (
     $10, $11, $12, $13,
     $14, $15, $16, $17, $18,
     $19, $20, $21
-) RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, forked_from_issue_id, forked_at_seq, forked_at_task_id
+) RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, forked_from_issue_id, forked_at_seq, forked_at_task_id, channel_goal_id, goal_required, execution_revision, execution_attempt_sequence
 `
 
 type CreateForkedIssueParams struct {
@@ -108,6 +108,10 @@ func (q *Queries) CreateForkedIssue(ctx context.Context, arg CreateForkedIssuePa
 		&i.ForkedFromIssueID,
 		&i.ForkedAtSeq,
 		&i.ForkedAtTaskID,
+		&i.ChannelGoalID,
+		&i.GoalRequired,
+		&i.ExecutionRevision,
+		&i.ExecutionAttemptSequence,
 	)
 	return i, err
 }
@@ -127,7 +131,7 @@ func (q *Queries) DeleteForkedIssue(ctx context.Context, id pgtype.UUID) error {
 }
 
 const getTaskMessageAtSeq = `-- name: GetTaskMessageAtSeq :one
-SELECT id, task_id, seq, type, tool, content, input, output, created_at FROM task_message
+SELECT id, task_id, seq, type, tool, content, input, output, created_at, visibility FROM task_message
 WHERE task_id = $1
   AND seq = $2
 `
@@ -153,6 +157,7 @@ func (q *Queries) GetTaskMessageAtSeq(ctx context.Context, arg GetTaskMessageAtS
 		&i.Input,
 		&i.Output,
 		&i.CreatedAt,
+		&i.Visibility,
 	)
 	return i, err
 }

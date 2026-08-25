@@ -151,9 +151,49 @@ func InjectRuntimeConfig(workDir, provider string, ctx TaskContextForEnv) (strin
 // by the daemon. InjectRuntimeConfig remains available for callers that
 // explicitly need the historical task-aware materialization while they migrate
 // their workflow contracts to per-turn prompts.
+//
+// Agent-scope memory is appended to the on-disk brief (for providers that read
+// AGENTS/CLAUDE files and ignore inline SystemPrompt) but is intentionally
+// excluded from StartupStaticDigest so memory edits do not recycle the process.
 func InjectRuntimeKernel(workDir, provider string, ctx TaskContextForEnv) (string, error) {
-	content := buildStartupKernelContent(provider, StartupStaticContext(ctx))
+	content := appendAgentScopeMemoryBrief(buildStartupKernelContent(provider, StartupStaticContext(ctx)), ctx)
 	return writeRuntimeConfig(workDir, provider, content)
+}
+
+// appendAgentScopeMemoryBrief adds session-stable agent memory after the
+// static kernel. Digest still ignores this block (see StartupStaticContext).
+func appendAgentScopeMemoryBrief(brief string, ctx TaskContextForEnv) string {
+	mem := RenderAgentScopeMemory(agentScopeMemoriesForBrief(ctx))
+	if mem == "" {
+		return brief
+	}
+	brief = strings.TrimRight(brief, "\n")
+	if brief == "" {
+		return mem
+	}
+	return brief + "\n\n" + mem
+}
+
+func agentScopeMemoriesForBrief(ctx TaskContextForEnv) []MemoryContextForEnv {
+	if len(ctx.AgentScopeMemories) > 0 {
+		return ctx.AgentScopeMemories
+	}
+	// Backward-compatible: older callers may still place agent-scope rows in
+	// AgentMemories; filter to agent only so turn-scope rows stay out of AGENTS.
+	return filterAgentScopeMemories(ctx.AgentMemories)
+}
+
+func filterAgentScopeMemories(memories []MemoryContextForEnv) []MemoryContextForEnv {
+	if len(memories) == 0 {
+		return nil
+	}
+	out := make([]MemoryContextForEnv, 0, len(memories))
+	for _, m := range memories {
+		if strings.TrimSpace(m.Scope) == "agent" {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 func writeRuntimeConfig(workDir, provider, content string) (string, error) {
@@ -220,7 +260,7 @@ func buildStartupKernelContent(provider string, ctx TaskContextForEnv) string {
 	b.WriteString("## High-frequency Multica paths\n\n")
 	b.WriteString("Use the authenticated `multica` CLI for Multica resources; do not call platform URLs with raw HTTP. The current turn decides whether output is delivered through Message transport, an Issue comment, or final assistant output.\n\n")
 	b.WriteString("Message and DM/channel hot path:\n")
-	b.WriteString("- Pending input: `multica message check`; bounded context: `multica message read --target <target> --limit <N>` or `multica message search ...`.\n")
+	b.WriteString("- Pending input: `multica inbox check` first; if Messages pending, run `multica message check`; use `multica message read --target <target> --limit <N>` or `multica message search ...`.\n")
 	b.WriteString("- Visible reply: pipe text to `multica message send --target <target>` using the explicit canonical target from the current turn (`#channel`, `#channel:<thread-id>`, `dm:@handle`, or `dm:@handle:<thread-id>`). Use a quoted heredoc for multiline or shell-special text.\n")
 	b.WriteString("- Pure acknowledgement: `multica message react --message-id <id> --emoji \"...\"`. A successful send/react is delivery; do not duplicate it in final output.\n")
 	b.WriteString("- Do not use Issue commands merely because a Message arrived; use them only when the request needs Issue or project data.\n\n")
@@ -276,9 +316,9 @@ func RenderTurnContext(ctx TaskContextForEnv) string {
 		b.WriteString("\n")
 	}
 
-	if len(ctx.AgentMemories) > 0 {
+	if turnMemories := nonAgentScopeMemories(ctx.AgentMemories); len(turnMemories) > 0 {
 		var memories strings.Builder
-		renderPromotedMemorySnapshot(&memories, nonAgentScopeMemories(ctx.AgentMemories))
+		renderPromotedMemorySnapshot(&memories, turnMemories)
 		b.WriteString(boundedPromptText(memories.String(), turnMemorySnapshotMaxBytes, "promoted memory snapshot"))
 		b.WriteString("\n\n")
 	}
@@ -836,7 +876,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 			}
 			fmt.Fprintf(&b, "4. Run `multica issue status %s in_progress` unless your Agent Identity forbids issue status changes; if it does, skip this step.\n", ctx.IssueID)
 			b.WriteString("\n### Work Decomposition Gate\n\n")
-			b.WriteString("Before substantive execution, choose the lightest valid path. `DIRECT`: complete a tightly coupled deliverable that fits one bounded context yourself. `ISSUE_DAG`: for bounded parallel or staged work, atomically create child Issues with `multica issue decompose <issue-id> --plan-file <path> --idempotency-key <uuid>`; this is the normal path for development, review, and one-off multi-source investigation. `GOAL_GRAPH`: only when an explicit active channel Goal already exists and you are its manager/coordinator, use `multica issue graph create` for repeated evidence-driven replanning, independent verification, epochs, or a long-running loop. If decomposition materially expands scope, cost, permissions, or runtime, explain the proposed split and obtain human approval; proposal is a conversation state, never an executable graph admission. Task length alone is not a reason to split work. A greeting, one tool call, or a small low-risk change stays DIRECT. A planner that delegates bounded work must define each child's deliverable and completion boundary, and must not also implement work already delegated. The server is authoritative for dependency readiness, issue enqueue, permissions, budget and completion gates; never manually promote a managed queued Issue or claim that prompt prose satisfied a gate.\n\n")
+			b.WriteString("Choose before execution: `DIRECT` for tightly coupled work; `ISSUE_DAG` via `multica issue decompose <issue-id> --plan-file <path> --idempotency-key <uuid>` when two or more independently acceptable units can proceed without waiting, including research, data collection, implementation, testing, or review; `GOAL_GRAPH` only for an active Goal needing repeated replanning, independent verification, epochs, or a long-running loop. Parallelization inside the Issue's scope, permissions, and budget needs no extra confirmation; ask only for material boundary expansion. Task length alone is not a split reason. A planner defines each child's completion boundary and does not duplicate delegated work. The server owns readiness, enqueue, budget, and completion gates.\n\n")
 			b.WriteString("5. Complete the task **to its acceptance criteria / definition of done** within your Agent Identity boundaries — build the full, production-quality result, not a quick shallow pass just to reply. Then **self-verify before you treat it as done**: re-read the acceptance criteria and check your work against EACH one with real evidence (build/compile, run it, exercise the actual behavior, run or add tests; for UI compare the running screenshot to the target), and fix whatever fails. Do NOT report a shallow/partial result and wait to be bounced in review; if a requirement genuinely cannot be met, raise it as a blocker (step 9) instead of quietly shipping less. Do not investigate, implement, create issues, update issues, or delegate if your Agent Identity forbids that action; if your role is delegation-only, perform the allowed delegation work and stop once that outcome is delivered.\n")
 			fmt.Fprintf(&b, "6. **Post your final results as a comment — this step is mandatory**: post it with `multica issue comment add %s` using the platform-correct non-inline mode from ## Comment Formatting (never inline `--content`). Your results are only visible to the user if posted via this CLI call; text in your terminal or run logs is NOT delivered.\n", ctx.IssueID)
 			b.WriteString("7. Before exiting: only if this run produced a fact that clears the high bar (important AND likely to be re-read by future runs on this same issue, e.g. a new PR URL or deploy URL), or you noticed a metadata key from entry that is now stale, pin or clear it via `multica issue metadata set` / `multica issue metadata delete`. Most runs write nothing here — that is the expected outcome, not a gap. When in doubt, do not write. See the `## Issue Metadata` section above for the full bar.\n")
@@ -954,23 +994,24 @@ func nonAgentScopeMemories(memories []MemoryContextForEnv) []MemoryContextForEnv
 }
 
 // RenderAgentScopeMemory renders only agent-scope promoted memory for the
-// session-stable system prompt. Returns "" when there is no agent-scope memory.
+// session-stable system prompt / AGENTS brief. Returns "" when there is no
+// agent-scope memory.
 func RenderAgentScopeMemory(memories []MemoryContextForEnv) string {
-	if len(memories) == 0 {
-		return ""
-	}
-	var agentScoped []MemoryContextForEnv
-	for _, m := range memories {
-		if strings.TrimSpace(m.Scope) == "agent" {
-			agentScoped = append(agentScoped, m)
-		}
-	}
+	agentScoped := filterAgentScopeMemories(memories)
 	if len(agentScoped) == 0 {
 		return ""
 	}
 	var b strings.Builder
 	renderPromotedMemorySnapshot(&b, agentScoped)
 	return boundedPromptText(b.String(), turnMemorySnapshotMaxBytes, "agent memory snapshot")
+}
+
+// ShouldInjectAgentScopeSystemPrompt reports whether agent-scope memory may be
+// placed on ExecOptions.SystemPrompt. Resume must not re-append the same block
+// (Claude/Pi --append-system-prompt); fresh sessions and resume-fallback retries
+// (empty ResumeSessionID) inject once.
+func ShouldInjectAgentScopeSystemPrompt(resumeSessionID string) bool {
+	return strings.TrimSpace(resumeSessionID) == ""
 }
 
 func truncateMemorySnapshotContent(value string, maxBytes int) string {
@@ -1010,10 +1051,11 @@ func renderPinnedRules(b *strings.Builder, ctx TaskContextForEnv) {
 }
 
 func renderMemoryOperatingGuide(b *strings.Builder, ctx TaskContextForEnv) {
-	b.WriteString("### Memory Operating Guide (v0.12)\n\n")
+	b.WriteString("### Memory Operating Guide (v0.13)\n\n")
 	b.WriteString("All memory and skills move with this agent workspace. Resolve every path below relative to `MULTICA_AGENT_ROOT`; do not depend on separate memory, project, channel, user, device, or skill directory environment variables.\n\n")
-	b.WriteString("- **Write target map**: cross-project memory → `memory/MEMORY.md`; daily log → `memory/daily/YYYY-MM-DD.md`; uncertain items → `memory/REVIEW.md`; user preferences → `users/<member-id>/USER.md` or `RELATIONSHIP.md`; project knowledge → `projects/<project-id>/MEMORY.md`, `STATE.md`, or `DECISIONS.md`; channel defaults → `channels/<channel-id>/CONTEXT.md`; peer-agent collaboration → `notes/agents.md` or `notes/relationship-map.md`; skills → `skills/`. This map is agent-private files only. Never treat `notes/*.md` as the workspace Notes UI. Workspace product notes (`note_page`) are proposed with `multica message send --note-write` (see Product notes).\n")
+	b.WriteString("- **Write target map**: cross-project memory → `memory/MEMORY.md`; daily log → `memory/daily/YYYY-MM-DD.md`; uncertain items → `memory/REVIEW.md`; user preferences → `users/<member-id>/USER.md` or `RELATIONSHIP.md`; project knowledge → `projects/<project-id>/MEMORY.md`, `STATE.md`, or `DECISIONS.md`; channel defaults → `channels/<channel-id>/CONTEXT.md`; peer-agent collaboration → `notes/agents.md` or `notes/relationship-map.md`; skills → `skills/`. Never treat `notes/*.md` as the workspace Notes UI. Workspace product notes (`note_page`) are proposed with `multica message send --note-write` (see Product notes).\n")
 	b.WriteString("- **Scope and privacy**: source is provenance, not scope. Keep user, project, channel, and agent-wide facts separate. Never inspect another member's directory, invent IDs from display names, copy secrets, or broaden a private fact into shared memory. Project paths exist only for an explicitly bound project.\n")
+	b.WriteString("- **On-demand recall**: `multica memory search` / `multica memory get` outside the snapshot; attested scope only.\n")
 	if isChatLikeContext(ctx) {
 		b.WriteString("- **Recall before action**: use only the member identity supplied by the current Message context when reading `users/<member-id>/`.\n")
 	}
@@ -1037,7 +1079,7 @@ func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContext
 // durable Message runtime. Visible output is delivered only through the
 // machine-local credential proxy; final assistant output is never delivered.
 func renderChannelChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContextForEnv) {
-	b.WriteString("Visible output is delivered only by the durable agent-credential Multica CLI transport (`multica message send` / `multica message react`). First use `multica message check` to learn pending input, then use an explicit canonical target for a send or read. Text outside those commands, including final assistant output, is not delivered. Silence is only for ambient unaddressed messages, never human DMs, human @mentions, direct questions, or assigned work. Issue writes remain claim-first and only when requested.\n\n")
+	b.WriteString("Visible output is delivered only by the durable agent-credential Multica CLI transport (`multica message send` / `multica message react`). First use `multica inbox check`; if Messages pending, use `multica message check`; use an explicit canonical target for a send or read. Text outside those commands, including final assistant output, is not delivered. Silence is only for ambient unaddressed messages, never human DMs, human @mentions, direct questions, or assigned work. Issue writes remain claim-first and only when requested.\n\n")
 	b.WriteString("Context boundaries:\n")
 	b.WriteString("- Treat the injected conversation context as scoped to the current DM, channel, or thread surface. Do not use or infer other DMs, channels, issues, or threads unless the user explicitly references them and the CLI permits access.\n")
 	b.WriteString("- For thread-triggered runs, treat the thread root and recent replies as the natural boundary; do not load the entire parent channel/DM history by default.\n")
@@ -1127,7 +1169,7 @@ func renderProjectContext(b *strings.Builder, ctx TaskContextForEnv) {
 		return
 	}
 	fmt.Fprintf(b, "Project id: `%s`.\n", projectID)
-	fmt.Fprintf(b, "Inspect live project bindings with `multica workspace info --projects --output json` (filter with `--query` if needed). For this project (`%s`), clone each `github_repo` into this workspace if it is not already present, then work inside that checkout. Re-run the command when the binding may have changed — this runtime file is not updated when project resources change.\n\n", projectID)
+	fmt.Fprintf(b, "Inspect live project bindings with `multica workspace info --projects --output json` (filter with `--query` if needed). For this project (`%s`), use an existing project directory or worktree inside this workspace; if the bound `github_repo` has no checkout yet, clone it yourself into this workspace, then work inside that checkout. Multica does not clone repositories or provision checkouts. Re-run the command when the binding may have changed — this runtime file is not updated when project resources change.\n\n", projectID)
 }
 
 func renderLazyReferences(b *strings.Builder, isChat, chatCLIAvailable, hasSkills bool) {

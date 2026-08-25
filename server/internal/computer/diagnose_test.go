@@ -188,6 +188,73 @@ func TestFixQuarantinesOnlyExpiredBindingStateWithoutABinding(t *testing.T) {
 	}
 }
 
+func TestDiagnoseReportsRunnerOwnedByTheLiveResident(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	pid := os.Getpid()
+	if err := writeRunnerState(RootDir(""), persistedRunnerState{
+		WorkspaceID: "workspace-a", DaemonInstanceID: "start-a", OwnerPID: pid,
+		RunnerPID: pid, StartedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	lc := &Lifecycle{}
+	lc.Probe = func(context.Context, string) map[string]any {
+		return map[string]any{"status": "running", "connected": true, "pid": float64(pid)}
+	}
+	d := lc.Diagnose()
+	if len(d.WorkspaceDaemons) != 1 || !d.WorkspaceDaemons[0].Alive || !d.WorkspaceDaemons[0].Owned || d.WorkspaceDaemons[0].WorkspaceID != "workspace-a" || d.WorkspaceDaemons[0].PID != pid {
+		t.Fatalf("doctor WorkspaceDaemons = %+v, want one owned live process", d.WorkspaceDaemons)
+	}
+	if len(d.UnownedLive) != 0 {
+		t.Fatalf("doctor reported an owned runner as unowned: %+v", d.UnownedLive)
+	}
+}
+
+func TestDiagnoseReportsUnownedLiveRunnerAsDegraded(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	pid := os.Getpid()
+	// Owned by a different (dead) generation's pid, not the currently
+	// probed resident: this is the split-brain evidence doctor must surface.
+	if err := writeRunnerState(RootDir(""), persistedRunnerState{
+		WorkspaceID: "workspace-a", DaemonInstanceID: "start-a", OwnerPID: 999998,
+		RunnerPID: pid, StartedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	lc := &Lifecycle{}
+	lc.Probe = func(context.Context, string) map[string]any {
+		return map[string]any{"status": "running", "connected": true, "pid": float64(os.Getpid() + 1)}
+	}
+	d := lc.Diagnose()
+	if len(d.WorkspaceDaemons) != 1 || !d.WorkspaceDaemons[0].Alive || d.WorkspaceDaemons[0].Owned {
+		t.Fatalf("doctor WorkspaceDaemons = %+v, want one alive, unowned process", d.WorkspaceDaemons)
+	}
+	if len(d.UnownedLive) != 1 || d.UnownedLive[0].WorkspaceID != "workspace-a" || d.UnownedLive[0].PID != pid {
+		t.Fatalf("doctor UnownedLive = %+v, want the alive unowned runner", d.UnownedLive)
+	}
+}
+
+func TestDiagnoseReportsDeadRunnerAsNotAliveOrOwned(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if err := writeRunnerState(RootDir(""), persistedRunnerState{
+		WorkspaceID: "workspace-a", DaemonInstanceID: "start-a", OwnerPID: 999998,
+		RunnerPID: 999999, StartedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	lc := &Lifecycle{}
+	lc.Probe = func(context.Context, string) map[string]any {
+		return map[string]any{"status": "running", "connected": true, "pid": float64(os.Getpid())}
+	}
+	d := lc.Diagnose()
+	if len(d.WorkspaceDaemons) != 1 || d.WorkspaceDaemons[0].Alive || d.WorkspaceDaemons[0].Owned {
+		t.Fatalf("doctor WorkspaceDaemons = %+v, want the dead process reported as neither alive nor owned", d.WorkspaceDaemons)
+	}
+	if len(d.UnownedLive) != 0 {
+		t.Fatalf("doctor flagged a dead runner as unowned-live: %+v", d.UnownedLive)
+	}
+}
+
 func TestFixRemovesStaleResidentPIDOnlyWhenResidentIsStopped(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	pidPath := PIDPath("")
@@ -214,5 +281,64 @@ func TestFixRemovesStaleResidentPIDOnlyWhenResidentIsStopped(t *testing.T) {
 	lc.Fix(Diagnosis{Resident: "running"})
 	if _, err := os.Stat(pidPath); err != nil {
 		t.Fatalf("running resident PID was removed: %v", err)
+	}
+}
+
+// TestReclaimOrphanedRunnersTerminatesDeadOwnerRunner covers the doctor --fix
+// escape hatch: a WorkspaceDaemon whose owning Computer is gone is the
+// self-locking state that previously required a manual kill, so Fix must be
+// able to clear it.
+func TestReclaimOrphanedRunnersTerminatesDeadOwnerRunner(t *testing.T) {
+	root := t.TempDir()
+	orphan := spawnReclaimTestProcess(t, "sleep", "30")
+	pid := orphan.Process.Pid
+	writeReclaimableRunnerFixture(t, root, "workspace-orphan", pid, "")
+
+	applied := reclaimOrphanedRunners(root)
+
+	if len(applied) != 1 {
+		t.Fatalf("expected one reported mutation, got %v", applied)
+	}
+	if !strings.Contains(applied[0], "terminated orphaned WorkspaceDaemon") {
+		t.Fatalf("unexpected report: %q", applied[0])
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if alive, known := processAlive(pid); known && !alive {
+			break
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatalf("orphan pid %d still alive after reclaim", pid)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if remaining, err := findReclaimableRunners(root, nil); err != nil || len(remaining) != 0 {
+		t.Fatalf("expected persisted state to be cleared, got %v (err %v)", remaining, err)
+	}
+}
+
+// TestReclaimOrphanedRunnersLeavesLiveOwnerAlone is the safety fence: a
+// WorkspaceDaemon whose recorded owner is still alive belongs to a running
+// Computer and must never be signaled by doctor --fix.
+func TestReclaimOrphanedRunnersLeavesLiveOwnerAlone(t *testing.T) {
+	root := t.TempDir()
+	runner := spawnReclaimTestProcess(t, "sleep", "30")
+	pid := runner.Process.Pid
+	state := persistedRunnerState{
+		WorkspaceID: "workspace-owned", DaemonInstanceID: "live-start",
+		OwnerPID: os.Getpid(), RunnerPID: pid, StartedAt: time.Now().UTC(),
+	}
+	if err := writeRunnerState(root, state); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeRunnerPID(root, "workspace-owned", pid); err != nil {
+		t.Fatal(err)
+	}
+
+	if applied := reclaimOrphanedRunners(root); len(applied) != 0 {
+		t.Fatalf("expected no mutation for a live-owner runner, got %v", applied)
+	}
+	if alive, known := processAlive(pid); !known || !alive {
+		t.Fatal("runner with a live owner must not be signaled")
 	}
 }

@@ -15,10 +15,7 @@
     "placeholder_default": "输入消息…",
     "send_tooltip": "发送",
     "stop_tooltip": "停止",
-    "send_failed_toast": "发送消息失败",
-    "project_label": "项目",
-    "project_none": "无项目",
-    "project_tooltip": "设置该聊天对应的项目"
+    "send_failed_toast": "发送消息失败"
   },
   "message_list": {
     "show_details": "查看详情",
@@ -35,6 +32,12 @@
     "copy_action": "复制",
     "copied_toast": "已复制",
     "copy_failed_toast": "复制失败",
+    "insert_below_action": "插入笔记下面",
+    "insert_child_action": "插入子笔记",
+    "insert_below_success": "已插入当前笔记下面",
+    "insert_child_success": "已插入子笔记「{{title}}」",
+    "insert_failed": "插入笔记失败",
+    "insert_title_fallback": "对话内容",
     "expand_action": "查看更多",
     "collapse_action": "收起",
     "loading_older": "正在加载更早的消息…",
@@ -82,6 +85,7 @@
     "restore_tooltip": "还原",
     "expand_tooltip": "展开",
     "minimize_tooltip": "最小化",
+    "resize_sidebar_aria": "调整助手边栏宽度",
     "another_running": "另一个对话正在运行",
     "another_unread": "另一个对话有未读回复",
     "running": "运行中",
@@ -120,22 +124,7 @@
   "status_pill": {
     "stages": {
       "offline": "离线",
-      "reconnecting": "重连中",
-      "queued": "排队中",
-      "starting_up": "处理中",
-      "thinking": "思考中",
-      "typing": "输出"
-    },
-    "tools": {
-      "running_command": "执行命令…",
-      "reading_files": "读取文件…",
-      "searching_code": "搜索代码…",
-      "making_edits": "编辑文件…",
-      "searching_web": "搜索网页…",
-      "updating_todos": "更新待办…",
-      "running_subagent": "运行子代理…",
-      "planning": "规划中…",
-      "fallback": "处理中"
+      "thinking": "思考中"
     }
   },
   "bubble_cursor": {

@@ -7,15 +7,15 @@ import type {
 export function researchV6DirectorSelectedRefFromNode(
   node: ResearchV6DirectorProjectionNode,
 ): ResearchV6DirectorSelectedRef | null {
-  const { canonical_ref: ref } = node;
-  if (!ref.revision || !ref.content_hash) return null;
+  const { canonicalRef: ref } = node;
+  if (!ref.revision || !ref.contentHash) return null;
   return {
-    stable_id: `${ref.kind}:${ref.id}`,
+    stableId: `${ref.kind}:${ref.id}`,
     kind: ref.kind,
-    entity_id: ref.id,
+    entityId: ref.id,
     revision: ref.revision,
-    content_hash: ref.content_hash,
-    display_summary: node.catalog_summary,
+    contentHash: ref.contentHash,
+    displaySummary: node.catalogSummary,
   };
 }
 

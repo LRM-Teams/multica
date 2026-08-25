@@ -4,7 +4,6 @@ import (
 	"net/http"
 
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/multica-ai/multica/server/internal/activityprojection"
 	"github.com/multica-ai/multica/server/internal/util"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -16,8 +15,8 @@ type RunnerActivitySummariesResponse struct {
 }
 
 type RunnerActivitySummaryResponseItem struct {
-	AgentID string                     `json:"agent_id"`
-	Summary activityprojection.Summary `json:"summary"`
+	AgentID string                        `json:"agent_id"`
+	Summary protocol.AgentActivitySummary `json:"summary"`
 }
 
 // ListRunnerActivitySummaries returns one sparse Workspace projection for all
@@ -33,55 +32,33 @@ func (h *Handler) ListRunnerActivitySummaries(w http.ResponseWriter, r *http.Req
 	}
 
 	rows, err := h.DB.Query(r.Context(), `
-		SELECT s.agent_id, s.daemon_id, s.daemon_instance_id, s.activity_kind, s.detail_kind, latest_error.error_text
+		SELECT s.agent_id, s.daemon_id, s.daemon_instance_id,
+		       s.activity_kind, s.detail_kind, s.summary_label
 		FROM agent_activity_snapshot s
-		LEFT JOIN LATERAL (
-			SELECT recent.entry_body ->> 'detail' AS error_text
-			FROM (
-				SELECT e.entry_kind, e.entry_body, e.observed_at, e.id
-				FROM agent_activity_entry e
-				WHERE e.workspace_id = s.workspace_id
-				  AND e.agent_id = s.agent_id
-				ORDER BY e.observed_at DESC, e.id DESC
-				LIMIT $2
-			) recent
-			WHERE recent.entry_kind = 'status'
-			  AND recent.entry_body ->> 'activity' = 'error'
-			  AND btrim(COALESCE(recent.entry_body ->> 'detail', '')) <> ''
-			ORDER BY recent.observed_at DESC, recent.id DESC
-			LIMIT 1
-		) latest_error ON s.activity_kind = 'error'
 		WHERE s.workspace_id = $1
-		ORDER BY s.agent_id`, workspaceID, runnerActivityTimelineLimit)
+		ORDER BY s.agent_id`, workspaceID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load runner activity summaries")
 		return
 	}
 	defer rows.Close()
 
-	inFlight := h.workspaceInFlightInboxAgentIDs(r.Context(), workspaceID)
 	response := RunnerActivitySummariesResponse{Items: []RunnerActivitySummaryResponseItem{}}
 	for rows.Next() {
 		var agentID pgtype.UUID
 		var daemonID string
 		var snapshot protocol.AgentActivitySnapshot
-		var errorText pgtype.Text
-		if err := rows.Scan(&agentID, &daemonID, &snapshot.DaemonInstanceID, &snapshot.ActivityKind, &snapshot.DetailKind, &errorText); err != nil {
+		var summary protocol.AgentActivitySummary
+		if err := rows.Scan(&agentID, &daemonID, &snapshot.DaemonInstanceID, &summary.ActivityKind, &summary.DetailKind, &summary.Label); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to load runner activity summaries")
 			return
 		}
+		agentIDStr := util.UUIDToString(agentID)
 		if !h.liveRunnerOwnsActivitySnapshot(daemonID, util.UUIDToString(workspaceID), snapshot) {
 			continue
 		}
-		summary := activityprojection.ProjectSummary(snapshot)
-		if errorText.Valid {
-			summary = runnerActivitySummaryWithError(summary, errorText.String)
-		}
-		if _, busy := inFlight[util.UUIDToString(agentID)]; busy {
-			summary = overlayInFlightInboxOnIdleRunnerSummary(summary)
-		}
 		response.Items = append(response.Items, RunnerActivitySummaryResponseItem{
-			AgentID: util.UUIDToString(agentID),
+			AgentID: agentIDStr,
 			Summary: summary,
 		})
 	}
@@ -89,7 +66,6 @@ func (h *Handler) ListRunnerActivitySummaries(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusInternalServerError, "failed to load runner activity summaries")
 		return
 	}
-
 	writeJSON(w, http.StatusOK, response)
 }
 

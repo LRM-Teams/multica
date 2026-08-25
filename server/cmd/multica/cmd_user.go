@@ -108,7 +108,7 @@ func runUserProfileUpdate(cmd *cobra.Command, _ []string) error {
 		desc = ""
 	}
 
-	body := map[string]any{"profile_description": desc}
+	body := map[string]any{"description": desc}
 
 	client, err := newAPIClient(cmd)
 	if err != nil {
@@ -139,7 +139,7 @@ func printUserProfileTable(out *os.File, me map[string]any) {
 	fmt.Fprintf(w, "ID\t%s\n", strVal(me, "id"))
 	fmt.Fprintf(w, "NAME\t%s\n", strVal(me, "name"))
 	fmt.Fprintf(w, "EMAIL\t%s\n", strVal(me, "email"))
-	desc := strVal(me, "profile_description")
+	desc := strVal(me, "description")
 	if desc == "" {
 		desc = "(not set)"
 	}

@@ -247,7 +247,7 @@ func (h *Handler) assignWorkAfterRosterActivate(
 			},
 		})
 		if initiatorUserID.Valid {
-			_ = h.enqueueResearchAgentWake(ctx, wsUUID, s, member.AgentID, initiatorUserID, brief, "system")
+			_ = h.enqueueResearchAgentWake(ctx, wsUUID, s, member.AgentID, initiatorUserID, brief, "system", true)
 		}
 	}
 }

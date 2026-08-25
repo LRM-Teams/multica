@@ -10,7 +10,7 @@ import type {
 import { GIT_BRANCH_COLORS } from "../lib/git-topology";
 
 /**
- * Status text label per lane-layout tone (ok/run/fail/wait/mute). Status is
+ * Status text label per lane-layout tone, including Agent idle/offline presence. Status is
  * always double-encoded: a semantic badge/color *plus* a text label, so merge/
  * branch/fail is never conveyed by color alone (LRM-1394 T04–T07).
  */
@@ -20,6 +20,8 @@ const STATUS_BADGE: Record<string, string> = {
   fail: "border-destructive/35 bg-destructive/10 text-destructive",
   wait: "border-warning/40 bg-warning/10 text-foreground",
   mute: "border-muted/40 bg-muted/30 text-muted-foreground",
+  idle: "border-muted/40 bg-muted/30 text-muted-foreground",
+  offline: "border-muted/40 bg-muted/30 text-muted-foreground",
 };
 
 export function TrajectoryCommitCard({
@@ -54,6 +56,10 @@ export function TrajectoryCommitCard({
         return t((s) => s.trajectory_explorer.status_wait);
       case "mute":
         return t((s) => s.trajectory_explorer.status_mute);
+      case "idle":
+        return t((s) => s.trajectory_explorer.status_idle);
+      case "offline":
+        return t((s) => s.trajectory_explorer.status_offline);
       default:
         return commit.status;
     }

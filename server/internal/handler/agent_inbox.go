@@ -16,6 +16,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/auth"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/messageparts"
+	"github.com/multica-ai/multica/server/internal/researchrun"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	"github.com/multica-ai/multica/server/pkg/agent"
@@ -387,6 +388,7 @@ func (h *Handler) ReportAgentInboxMessages(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
+	userFacingMessages := make([]protocol.TaskMessagePayload, 0, len(req.Messages))
 	for _, msg := range req.Messages {
 		msg.Content = redact.Text(msg.Content)
 		msg.Output = redact.Text(msg.Output)
@@ -410,8 +412,8 @@ func (h *Handler) ReportAgentInboxMessages(w http.ResponseWriter, r *http.Reques
 			// Legacy daemons may still report an empty thinking phase. Retain it
 			// as diagnostic data only; current daemons no longer emit this wire.
 			details["phase_status"] = true
-			if payload, ok := agentInboxTaskMessagePayload(event, msg, "thinking", details); ok && h.Bus != nil {
-				h.publishTask(protocol.EventTaskMessage, uuidToString(event.WorkspaceID), "system", "", uuidToString(event.ID), payload)
+			if payload, ok := agentInboxTaskMessagePayload(event, msg, "thinking", details); ok {
+				userFacingMessages = append(userFacingMessages, payload)
 			}
 			continue
 		}
@@ -426,11 +428,39 @@ func (h *Handler) ReportAgentInboxMessages(w http.ResponseWriter, r *http.Reques
 			}
 			details["tool"] = tool
 		}
-		if payload, ok := agentInboxTaskMessagePayload(event, msg, kind, details); ok && h.Bus != nil {
+		if payload, ok := agentInboxTaskMessagePayload(event, msg, kind, details); ok {
+			userFacingMessages = append(userFacingMessages, payload)
+		}
+	}
+	if isResearchV6WorkInboxEvent(event) && len(userFacingMessages) > 0 {
+		writer, ok := h.ResearchRun.(researchrun.V6WorkActivityWriter)
+		if !ok {
+			writeError(w, http.StatusServiceUnavailable, "research work activity storage is unavailable")
+			return
+		}
+		if err := writer.RecordV6WorkActivity(
+			r.Context(),
+			uuidToString(event.WorkspaceID),
+			uuidToString(event.ID),
+			userFacingMessages,
+		); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to persist research work activity")
+			return
+		}
+	}
+	if h.Bus != nil {
+		for _, payload := range userFacingMessages {
 			h.publishTask(protocol.EventTaskMessage, uuidToString(event.WorkspaceID), "system", "", uuidToString(event.ID), payload)
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func isResearchV6WorkInboxEvent(event db.AgentInboxEvent) bool {
+	var envelope struct {
+		Type string `json:"type"`
+	}
+	return json.Unmarshal(event.Context, &envelope) == nil && envelope.Type == "research_run_work_item"
 }
 
 // StartAgentInboxExecution persists immutable attribution before the daemon
@@ -1504,9 +1534,10 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 			ThinkingLevel:   thinkingLevel,
 		}
 	}
-	usesAgentCredentialTransport := runtime.OwnerID.Valid && agentRuntimeHasCapability(runtime, protocol.DaemonCapabilityAgentCredentialTransport)
-	if runtime.OwnerID.Valid {
-		if owner, err := h.Queries.GetUser(ctx, runtime.OwnerID); err == nil {
+	runtimeOwnerID, ownerErr := h.resolveRuntimeOwnerQuery(ctx, runtime)
+	usesAgentCredentialTransport := ownerErr == nil && agentRuntimeHasCapability(runtime, protocol.DaemonCapabilityAgentCredentialTransport)
+	if ownerErr == nil {
+		if owner, err := h.Queries.GetUser(ctx, runtimeOwnerID); err == nil {
 			resp.RequestingUserName = userDisplayName(owner)
 			resp.RequestingUserProfileDescription = owner.ProfileDescription
 		}
@@ -1525,7 +1556,7 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 				DeliveryID:   delivery.ID,
 				AgentID:      event.AgentID,
 				WorkspaceID:  event.WorkspaceID,
-				UserID:       runtime.OwnerID,
+				UserID:       runtimeOwnerID,
 				ExpiresAt:    pgtype.Timestamptz{Time: time.Now().Add(24 * time.Hour), Valid: true},
 			}); err != nil {
 				slog.Error("agent inbox claim: failed to persist inbox token",
@@ -1541,10 +1572,12 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 	if ws, err := h.Queries.GetWorkspace(ctx, event.WorkspaceID); err == nil && ws.Context.Valid {
 		resp.WorkspaceContext = ws.Context.String
 	}
-	// Per-workspace graph memory reviewer override (design §1/A4): the
-	// daemon treats this as a task-scoped override of its env default.
-	if memoryType := h.graphMemoryTypeForWorkspace(ctx, event.WorkspaceID); memoryType != "" {
-		resp.MemoryType = memoryType
+	// Per-workspace graph memory profile override (spec §10): the daemon
+	// treats these as task-scoped overrides of its env defaults.
+	if profile := h.graphMemoryProfileForWorkspace(ctx, event.WorkspaceID); profile.memoryType != "" {
+		resp.MemoryType = profile.memoryType
+		resp.ExploreAgents = profile.exploreAgents
+		resp.ExploreMaxRounds = profile.exploreMaxRounds
 	}
 	if resp.Agent != nil {
 		resp.Agent.Memories = h.TaskService.LoadAgentMemoriesForExecution(ctx, event.AgentID, event.WorkspaceID, service.MemoryExecutionScope{

@@ -112,8 +112,9 @@ export interface ChatWindowProps {
   composerFocusToken?: number;
   /**
    * Send this text once the Notes bubble is open and an agent is ready
-   * (e.g. the Highlights satellite). Cleared via onSeedSendConsumed.
-   * `nonce` is unique per click so React Strict Mode cannot double-send.
+   * (e.g. after the user confirms the Highlights compose card). Cleared
+   * via onSeedSendConsumed. `nonce` is unique per click so React Strict
+   * Mode cannot double-send.
    */
   seedSend?: { nonce: number; text: string } | null;
   onSeedSendConsumed?: () => void;

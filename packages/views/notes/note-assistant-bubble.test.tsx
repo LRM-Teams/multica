@@ -123,13 +123,18 @@ vi.mock("./note-assistant-fab-cluster", () => ({
     onAction: (action: "period_brief" | "highlights" | "chat") => void;
     isRunning: boolean;
   }) => (
-    <button
-      type="button"
-      data-running={isRunning ? "true" : "false"}
-      onClick={() => onAction("period_brief")}
-    >
-      open-period
-    </button>
+    <>
+      <button
+        type="button"
+        data-running={isRunning ? "true" : "false"}
+        onClick={() => onAction("period_brief")}
+      >
+        open-period
+      </button>
+      <button type="button" onClick={() => onAction("highlights")}>
+        open-highlights
+      </button>
+    </>
   ),
 }));
 
@@ -141,6 +146,7 @@ vi.mock("../chat/components/chat-window", () => ({
     onSendOverride,
     onSendIntercept,
     onSendAccepted,
+    seedSend,
     layout,
   }: {
     composerAccessory?: ReactNode;
@@ -149,6 +155,7 @@ vi.mock("../chat/components/chat-window", () => ({
     onSendOverride?: (text: string) => boolean | Promise<boolean>;
     onSendIntercept?: (text: string) => boolean;
     onSendAccepted?: () => void;
+    seedSend?: { nonce: number; text: string } | null;
     layout?: string;
   }) => (
     <div>
@@ -156,6 +163,7 @@ vi.mock("../chat/components/chat-window", () => ({
         {composerPrefix}
         {composerAccessory}
       </div>
+      {seedSend ? <div data-testid="seed-send">{seedSend.text}</div> : null}
       <button
         type="button"
         onClick={() => {
@@ -619,5 +627,132 @@ describe("NoteAssistantBubble period brief", () => {
       </QueryClientProvider>,
     );
     expect(setNoteBubbleOpenPageId).toHaveBeenCalledWith(null);
+  });
+});
+
+describe("NoteAssistantBubble highlights", () => {
+  beforeEach(() => {
+    listAgents.mockReset();
+    listRuntimes.mockReset();
+    listMembers.mockReset();
+    listChatSessions.mockReset();
+    listPendingChatTasks.mockReset();
+    ensureNotesAssistantAgent.mockReset();
+    createNotePeriodBrief.mockReset();
+    getActiveNotePeriodBrief.mockReset();
+    toggleNoteBubble.mockReset();
+    setNoteBubbleOpenPageId.mockReset();
+    chatState.noteBubbleOpenPageId = null;
+    chatState.noteBubbleActiveSessionByPage = {};
+    chatState.noteSelectionQuote = null;
+    lastOutgoing.text = "";
+    getActiveNotePeriodBrief.mockResolvedValue({ run: null });
+    listAgents.mockResolvedValue([agent()]);
+    listRuntimes.mockResolvedValue([
+      { id: "runtime-1", status: "online", runtime_mode: "local", owner_id: "user-1" },
+    ]);
+    listMembers.mockResolvedValue([]);
+    listChatSessions.mockResolvedValue([]);
+    listPendingChatTasks.mockResolvedValue({ tasks: [] });
+    ensureNotesAssistantAgent.mockResolvedValue({
+      created: false,
+      needs_setup: false,
+      onboarding_available: false,
+      setup_hint: false,
+      agent: agent(),
+    });
+  });
+
+  function renderBubble() {
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    return renderWithI18n(
+      <QueryClientProvider client={qc}>
+        <NoteAssistantBubble pageId="page-1" pageTitle="Note" />
+      </QueryClientProvider>,
+      { locale: "zh-Hans" },
+    );
+  }
+
+  it("opens a compose card instead of sending immediately", async () => {
+    const user = userEvent.setup();
+    renderBubble();
+
+    await user.click(screen.getByRole("button", { name: "open-highlights" }));
+    expect(screen.getByTestId("highlights-compose")).toBeTruthy();
+    expect(screen.getByRole("textbox")).toHaveValue(
+      "请整理本笔记以及它的子笔记的重点。先用 notes 工具读取当前页及其子树，再按层级列出每页的核心结论、待办和未决问题。不要复述全文，写成可读提纲。",
+    );
+    expect(screen.queryByTestId("seed-send")).toBeNull();
+    expect(toggleNoteBubble).toHaveBeenCalledWith("page-1");
+  });
+
+  it("sends the edited prompt from the card", async () => {
+    const user = userEvent.setup();
+    renderBubble();
+
+    await user.click(screen.getByRole("button", { name: "open-highlights" }));
+    const editor = screen.getByRole("textbox");
+    await user.clear(editor);
+    await user.type(editor, "只要待办");
+    await user.click(screen.getByTestId("highlights-send"));
+
+    expect(screen.getByTestId("seed-send")).toHaveTextContent("只要待办");
+    expect(screen.queryByTestId("highlights-compose")).toBeNull();
+  });
+
+  it("cancels without sending", async () => {
+    const user = userEvent.setup();
+    renderBubble();
+
+    await user.click(screen.getByRole("button", { name: "open-highlights" }));
+    await user.click(screen.getByTestId("highlights-cancel"));
+
+    expect(screen.queryByTestId("highlights-compose")).toBeNull();
+    expect(screen.queryByTestId("seed-send")).toBeNull();
+  });
+
+  it("closes the period brief card when opening highlights", async () => {
+    const user = userEvent.setup();
+    renderBubble();
+
+    await user.click(screen.getByRole("button", { name: "open-period" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("period-brief-compose")).toBeTruthy();
+    });
+
+    await user.click(screen.getByRole("button", { name: "open-highlights" }));
+    expect(screen.getByTestId("highlights-compose")).toBeTruthy();
+    expect(screen.queryByTestId("period-brief-compose")).toBeNull();
+    expect(screen.queryByTestId("seed-send")).toBeNull();
+  });
+
+  it("closes the highlights card when opening period brief", async () => {
+    const user = userEvent.setup();
+    renderBubble();
+
+    await user.click(screen.getByRole("button", { name: "open-highlights" }));
+    expect(screen.getByTestId("highlights-compose")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "open-period" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("period-brief-compose")).toBeTruthy();
+    });
+    expect(screen.queryByTestId("highlights-compose")).toBeNull();
+    expect(screen.queryByTestId("seed-send")).toBeNull();
+  });
+
+  it("keeps an in-progress draft when highlights is clicked again", async () => {
+    const user = userEvent.setup();
+    renderBubble();
+
+    await user.click(screen.getByRole("button", { name: "open-highlights" }));
+    await user.clear(screen.getByRole("textbox"));
+    await user.type(screen.getByRole("textbox"), "只要待办");
+    await user.click(screen.getByRole("button", { name: "open-highlights" }));
+
+    expect(screen.getByRole("textbox")).toHaveValue("只要待办");
+    expect(screen.queryByTestId("seed-send")).toBeNull();
   });
 });

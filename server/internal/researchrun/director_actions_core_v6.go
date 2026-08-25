@@ -142,6 +142,26 @@ func (s *PostgresStore) executeV6CreateWorkAction(ctx context.Context, proposal 
 	if expectedKind == V6ContractAtomicResultSubmission && assigneeHasActiveWork {
 		return fmt.Errorf("%w: 该智能体已有活动中的 Work；独立调研方向必须分配给不同的 run-scoped Agent，或等待当前 Work 完成", ErrInvalidContract)
 	}
+	if len(payload.BranchIDs) > 0 {
+		branchIDs := make([]string, 0, len(payload.BranchIDs))
+		seen := make(map[string]struct{}, len(payload.BranchIDs))
+		for _, branchID := range payload.BranchIDs {
+			if _, exists := seen[branchID]; exists {
+				continue
+			}
+			seen[branchID] = struct{}{}
+			branchIDs = append(branchIDs, branchID)
+		}
+		var branchCount int
+		if err = tx.QueryRow(ctx, `SELECT count(*)::int FROM research_branch
+			WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=ANY($3::uuid[])`,
+			proposal.WorkspaceID, proposal.RunID, branchIDs).Scan(&branchCount); err != nil {
+			return err
+		}
+		if branchCount != len(branchIDs) {
+			return fmt.Errorf("%w: Work branch_ids must reference branches in the current Run", ErrInvalidContract)
+		}
+	}
 	workID := uuid.NewString()
 	result, err := tx.Exec(ctx, `INSERT INTO research_work_item(id,workspace_id,session_id,kind,status,target_kind,client_key,idempotency_key,goal_version,input_state_version,input_event_sequence,created_by_director_cycle_id,assigned_agent_id,priority,max_attempts,payload_schema_id,expected_result_schema_id,payload,state_version,ready_at,reason)
 		VALUES($1::uuid,$2::uuid,$3::uuid,$4,'ready','',$5,$5,$6,$7,$8,$9::uuid,$10::uuid,$11,$12,$13,$14,$15::jsonb,1,now(),$16) ON CONFLICT (session_id,goal_version,idempotency_key) WHERE goal_version IS NOT NULL AND idempotency_key<>'' DO NOTHING`, workID, proposal.WorkspaceID, proposal.RunID, persistedKind, action.IdempotencyKey, goalVersion, state, sequence, cycleID, payload.AssigneeAgentID, payload.Priority, payload.MaxAttempts, payload.PayloadSchemaID, payload.ExpectedResultSchemaID, workPayload, payload.Mission)

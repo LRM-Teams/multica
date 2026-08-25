@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { QueryClient } from "@tanstack/react-query";
 import { applyResearchWSEvent } from "./ws-updaters";
+import { researchV6DirectorProjectionKeys } from "../hooks/research-v6/director-queries";
 import { researchKeys } from "./queries";
 import { EMPTY_RESEARCH_SNAPSHOT } from "./schemas";
 
@@ -24,6 +25,26 @@ function makeQc(initial: unknown) {
 }
 
 describe("applyResearchWSEvent", () => {
+  it("coalesces V6 projection signals and refreshes the authoritative snapshot", () => {
+    vi.useFakeTimers();
+    const qc = makeQc(EMPTY_RESEARCH_SNAPSHOT);
+    const event = {
+      type: "research_projection_v6:delta" as const,
+      payload: { run_id: "run-v6", through_sequence: 12 },
+    };
+
+    applyResearchWSEvent(qc, "ws", event);
+    applyResearchWSEvent(qc, "ws", event);
+    vi.advanceTimersByTime(499);
+    expect(qc.invalidateQueries).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(qc.invalidateQueries).toHaveBeenCalledTimes(1);
+    expect(qc.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: researchV6DirectorProjectionKeys.snapshot("ws", "run-v6"),
+    });
+    vi.useRealTimers();
+  });
+
   it("coalesces session-list refreshes per workspace to at most once per second", () => {
     vi.useFakeTimers();
     const qc = makeQc(EMPTY_RESEARCH_SNAPSHOT);

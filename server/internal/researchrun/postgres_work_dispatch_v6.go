@@ -18,7 +18,7 @@ func (s *PostgresStore) PrepareV6Dispatches(ctx context.Context, limit int) (int
 	for inspected := 0; inspected < limit; inspected++ {
 		ok, candidate, err := s.prepareNextV6Dispatch(ctx)
 		if err != nil {
-			if candidate.workItemID == "" || !isPermanentV6DispatchPreparationError(ctx, err) {
+			if candidate.workItemID == "" || !isPermanentV6ProcessingError(ctx, err) {
 				return prepared, err
 			}
 			quarantined, quarantineErr := s.quarantineV6DispatchPreparationFailure(ctx, candidate, err)
@@ -134,7 +134,7 @@ func (s *PostgresStore) prepareNextV6Dispatch(ctx context.Context) (bool, v6Disp
 	return true, candidate, nil
 }
 
-func isPermanentV6DispatchPreparationError(ctx context.Context, err error) bool {
+func isPermanentV6ProcessingError(ctx context.Context, err error) bool {
 	if err == nil || ctx.Err() != nil || errors.Is(err, ErrRunLeaseLost) || errors.Is(err, ErrCommitOutcomeUnknown) || pgconn.SafeToRetry(err) {
 		return false
 	}

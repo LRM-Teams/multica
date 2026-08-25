@@ -1399,6 +1399,10 @@ export function useRealtimeSync(
     const unsubResearchStageEval = ws.on("research_session:stage_eval", onResearchEvent("research_session:stage_eval"));
     const unsubResearchStatus = ws.on("research_session:status_changed", onResearchEvent("research_session:status_changed"));
     const unsubResearchProductRound = ws.on("research_session:product_round", onResearchEvent("research_session:product_round"));
+    const unsubResearchV6Projection = ws.on(
+      "research_projection_v6:delta",
+      onResearchEvent("research_projection_v6:delta"),
+    );
 
     return () => {
       unsubAny();
@@ -1457,6 +1461,7 @@ export function useRealtimeSync(
       unsubResearchStageEval();
       unsubResearchStatus();
       unsubResearchProductRound();
+      unsubResearchV6Projection();
       timers.forEach(clearTimeout);
       timers.clear();
     };

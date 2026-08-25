@@ -440,6 +440,7 @@ func TestBoundary_NonessentialAllowlist_InventoryDocumentsNamedSurfaces(t *testi
 }
 
 const boundaryContractIssueID = "1881a167-4bb6-4602-944b-f40ce4192fe6"
+
 // --- ④ issue (necessary; still human paths today) ---
 
 // TestBoundary_IssueGet_HitsDedicatedAgentAPI asserts issue get uses
@@ -1202,6 +1203,65 @@ func TestBoundary_IssuePullRequests_HitsDedicatedAgentAPI(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("paths=%v, want GET %s", gotPaths, wantPRs)
+	}
+}
+
+// TestBoundary_IssuePullRequestsRescan_HitsDedicatedAgentAPI asserts the
+// recovery command never borrows the human admin route under mat_* auth.
+func TestBoundary_IssuePullRequestsRescan_HitsDedicatedAgentAPI(t *testing.T) {
+	wantGet := "/api/agent/issues/" + boundaryContractIssueID
+	wantRescan := wantGet + "/pull-requests/rescan"
+	var gotPaths []string
+	var bodyErr error
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPaths = append(gotPaths, r.Method+" "+r.URL.Path)
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == wantGet:
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": boundaryContractIssueID, "identifier": "MUL-1",
+			})
+		case r.Method == http.MethodPost && r.URL.Path == wantRescan:
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				bodyErr = fmt.Errorf("decode rescan body: %w", err)
+				http.Error(w, bodyErr.Error(), http.StatusBadRequest)
+				return
+			}
+			if body["pull_request_number"] != float64(73) {
+				bodyErr = fmt.Errorf("pull_request_number=%v want 73", body["pull_request_number"])
+				http.Error(w, bodyErr.Error(), http.StatusBadRequest)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"pull_request": map[string]any{
+					"number": 73, "state": "open", "title": "MUL-1: repair", "html_url": "https://github.test/pull/73",
+				},
+			})
+		default:
+			http.Error(w, "human pull-requests rescan path forbidden", http.StatusForbidden)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	boundaryCLIEnvProxy(t, srv.URL)
+
+	cmd := &cobra.Command{Use: "rescan"}
+	cmd.Flags().String("server-url", "", "")
+	cmd.Flags().String("workspace-id", "", "")
+	cmd.Flags().String("profile", "", "")
+	cmd.Flags().String("output", "json", "")
+	if err := runIssuePullRequestsRescan(cmd, []string{boundaryContractIssueID, "73"}); err != nil {
+		t.Fatalf("runIssuePullRequestsRescan: %v (paths=%v)", err, gotPaths)
+	}
+	if bodyErr != nil {
+		t.Fatal(bodyErr)
+	}
+	if len(gotPaths) != 2 || gotPaths[0] != "GET "+wantGet || gotPaths[1] != "POST "+wantRescan {
+		t.Fatalf("paths=%v, want [GET %s POST %s]", gotPaths, wantGet, wantRescan)
+	}
+	for _, p := range gotPaths {
+		if strings.HasPrefix(strings.SplitN(p, " ", 2)[1], "/api/issues") {
+			t.Fatalf("hit human path %q; full=%v", p, gotPaths)
+		}
 	}
 }
 

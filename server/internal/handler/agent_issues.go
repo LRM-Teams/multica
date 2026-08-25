@@ -235,6 +235,21 @@ func (h *Handler) ListAgentIssuePullRequests(w http.ResponseWriter, r *http.Requ
 	h.ListPullRequestsForIssue(w, r)
 }
 
+// RescanAgentIssuePullRequest repairs a canonical PR link within the caller's
+// workspace. The shared rescan path still binds the repository to the Issue's
+// project and rejects PRs that do not reference the Issue identifier.
+func (h *Handler) RescanAgentIssuePullRequest(w http.ResponseWriter, r *http.Request) {
+	p, ok := h.requireAgentPrincipal(w, r)
+	if !ok {
+		return
+	}
+	issue, ok := h.loadIssueForAgent(w, r, p, chi.URLParam(r, "id"))
+	if !ok {
+		return
+	}
+	h.rescanIssuePullRequest(w, r, issue)
+}
+
 func (h *Handler) RerunAgentIssue(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.requireAgentPrincipal(w, r); !ok {
 		return

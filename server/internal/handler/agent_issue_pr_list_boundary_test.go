@@ -37,3 +37,36 @@ func TestListAgentIssuePullRequests_AgentPrincipalMissingIssueReturns404(t *test
 		t.Fatalf("status=%d body=%s want exact 404", rec.Code, rec.Body.String())
 	}
 }
+
+func TestRescanAgentIssuePullRequest_RequiresAgentPrincipal(t *testing.T) {
+	h := &Handler{}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/agent/issues/"+uuid.NewString()+"/pull-requests/rescan", nil)
+	h.RescanAgentIssuePullRequest(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status=%d want 403", rec.Code)
+	}
+}
+
+func TestRescanAgentIssuePullRequest_CrossWorkspaceIssueReturns404(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	repo := "rescan-cross-workspace-" + randomID()
+	projectID := createGitHubRescanProject(t, repo)
+	issue := createGitHubRescanIssue(t, projectID, "Cross-workspace rescan")
+	agentID := createHandlerTestAgent(t, "Issue PR Cross Workspace", []byte("[]"))
+	req := newRequest(http.MethodPost, "/api/agent/issues/"+issue.ID+"/pull-requests/rescan", map[string]any{
+		"pull_request_number": 73,
+	})
+	req = withAgentPrincipal(req, agentID, uuid.NewString(), testUserID)
+	req = withURLParam(req, "id", issue.ID)
+	rec := httptest.NewRecorder()
+
+	testHandler.RescanAgentIssuePullRequest(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d body=%s want exact 404", rec.Code, rec.Body.String())
+	}
+}

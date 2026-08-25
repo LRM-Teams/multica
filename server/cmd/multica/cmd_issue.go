@@ -116,6 +116,13 @@ var issuePullRequestsCmd = &cobra.Command{
 	RunE:    runIssuePullRequests,
 }
 
+var issuePullRequestsRescanCmd = &cobra.Command{
+	Use:   "rescan <issue-id> <pull-request-number>",
+	Short: "Repair a missing canonical pull request link from GitHub",
+	Args:  exactArgs(2),
+	RunE:  runIssuePullRequestsRescan,
+}
+
 var issueCreateCmd = &cobra.Command{
 	Use:   "create",
 	Short: "Create a new issue",
@@ -301,6 +308,7 @@ func init() {
 	issueSubscriberCmd.AddCommand(issueSubscriberListCmd)
 	issueSubscriberCmd.AddCommand(issueSubscriberAddCmd)
 	issueSubscriberCmd.AddCommand(issueSubscriberRemoveCmd)
+	issuePullRequestsCmd.AddCommand(issuePullRequestsRescanCmd)
 
 	// issue list
 	issueListCmd.Flags().String("output", "table", "Output format: table or json")
@@ -332,6 +340,7 @@ func init() {
 
 	// issue pull-requests
 	issuePullRequestsCmd.Flags().String("output", "table", "Output format: table or json")
+	issuePullRequestsRescanCmd.Flags().String("output", "table", "Output format: table or json")
 
 	// issue create
 	issueCreateCmd.Flags().String("title", "", "Issue title (required)")
@@ -749,6 +758,47 @@ func runIssuePullRequests(cmd *cobra.Command, args []string) error {
 
 	prs, _ := result["pull_requests"].([]any)
 	printIssuePullRequestsTable(normalizePullRequestList(prs))
+	return nil
+}
+
+func runIssuePullRequestsRescan(cmd *cobra.Command, args []string) error {
+	prNumber, err := strconv.ParseInt(args[1], 10, 32)
+	if err != nil || prNumber <= 0 {
+		return fmt.Errorf("pull request number must be a positive integer")
+	}
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := cli.APIContext(context.Background())
+	defer cancel()
+
+	issueRef, err := resolveIssueRef(ctx, client, args[0])
+	if err != nil {
+		return fmt.Errorf("resolve issue: %w", err)
+	}
+
+	rescanPath := "/api/issues/" + url.PathEscape(issueRef.ID) + "/pull-requests/rescan"
+	if isAgentAPIToken(cmd) {
+		rescanPath = agentIssueAPIPath(cmd, issueRef.ID, "/pull-requests/rescan")
+	}
+	var result map[string]any
+	if err = client.PostJSON(ctx, rescanPath, map[string]any{
+		"pull_request_number": prNumber,
+	}, &result); err != nil {
+		return fmt.Errorf("rescan issue pull request: %w", err)
+	}
+
+	output, _ := cmd.Flags().GetString("output")
+	if output == "json" {
+		return cli.PrintJSON(os.Stdout, result)
+	}
+	pr, _ := result["pull_request"].(map[string]any)
+	if pr == nil {
+		return fmt.Errorf("rescan response did not include pull_request")
+	}
+	printIssuePullRequestsTable([]map[string]any{pr})
 	return nil
 }
 

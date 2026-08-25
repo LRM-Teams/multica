@@ -61,6 +61,36 @@ func TestValidateV6ParallelResearchPlanRequiresStaffingAndParallelWork(t *testin
 	}
 }
 
+func TestValidateV6IntegrationCandidateRequiresExecutableTierTransition(t *testing.T) {
+	result := func(id string, tier V6Tier) V6NodeRef {
+		return V6NodeRef{Kind: "result_s", ID: uuid.NewString(), VersionID: id, Tier: tier, ContentHash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+	}
+	tests := []struct {
+		name    string
+		inputs  []V6NodeRef
+		wantErr bool
+	}{
+		{name: "two S nodes can promote to M", inputs: []V6NodeRef{result(uuid.NewString(), V6TierS), result(uuid.NewString(), V6TierS)}},
+		{name: "one M can assimilate one S", inputs: []V6NodeRef{result(uuid.NewString(), V6TierM), result(uuid.NewString(), V6TierS)}},
+		{name: "mixed promotion and assimilation set is impossible", inputs: []V6NodeRef{result(uuid.NewString(), V6TierM), result(uuid.NewString(), V6TierM), result(uuid.NewString(), V6TierS)}, wantErr: true},
+		{name: "duplicate node version cannot satisfy input cardinality", inputs: func() []V6NodeRef {
+			versionID := uuid.NewString()
+			return []V6NodeRef{result(versionID, V6TierS), result(versionID, V6TierS)}
+		}(), wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateV6IntegrationCandidate(tt.inputs)
+			if tt.wantErr && !errors.Is(err, ErrV6InvalidTierTransition) {
+				t.Fatalf("error=%v want ErrV6InvalidTierTransition", err)
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("validate integration candidate: %v", err)
+			}
+		})
+	}
+}
+
 func TestPreflightV6DirectorProposalRejectsMissingBranchBeforeMutation(t *testing.T) {
 	run := newTransactionRecoveryRun(t, "Preflight Director Branch references")
 	if _, err := run.pool.Exec(run.ctx, `UPDATE research_session SET orchestrator_version='research-run-v6' WHERE id=$1::uuid`, run.fixture.sessionID); err != nil {

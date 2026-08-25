@@ -56,6 +56,7 @@ import type { MentionAgentCandidate, MentionItem } from "./extensions/mention-su
 import { createEditorExtensions } from "./extensions";
 import { uploadAndInsertFile } from "./extensions/file-upload";
 import { preprocessMarkdown } from "./utils/preprocess";
+import { applyTableColwidthsFromMarkdown } from "./table-markdown";
 import { openLink, isMentionHref } from "./utils/link-handler";
 import { EditorBubbleMenu, type TextOptimizationRequest } from "./bubble-menu";
 import { EmptyLineAiMenu, type EmptyLineAiState, type PageEditAIAction } from "./empty-line-ai-menu";
@@ -404,6 +405,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
             });
           }
         }
+        applyTableColwidthsFromMarkdown(ed, initialContent);
         lastEmittedRef.current = stripBlobUrls(ed.getMarkdown()).trimEnd();
       },
       content: mountChunked ? "" : initialContent,
@@ -515,12 +517,24 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
       },
     });
 
-    // Cleanup debounce on unmount
+    // Cleanup debounce on unmount — flush any pending markdown so table layout
+    // edits (colwidth) and last keystrokes reach the parent before unmount.
     useEffect(() => {
       return () => {
-        if (debounceRef.current) clearTimeout(debounceRef.current);
+        if (debounceRef.current) {
+          clearTimeout(debounceRef.current);
+          debounceRef.current = null;
+        }
+        if (!editor || editor.isDestroyed || !onUpdateRef.current) {
+          return;
+        }
+        const md = stripBlobUrls(editor.getMarkdown()).trimEnd();
+        if (md !== lastEmittedRef.current) {
+          lastEmittedRef.current = md;
+          onUpdateRef.current(md);
+        }
       };
-    }, []);
+    }, [editor]);
 
     useEffect(() => {
       if (!editor || editor.isDestroyed) return;
@@ -594,6 +608,8 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
           contentType: "markdown",
         });
       }
+
+      applyTableColwidthsFromMarkdown(editor, incoming);
 
       // Clamp prior selection to the new doc size so the caret doesn't snap
       // to position 0 after ProseMirror replaces the document.

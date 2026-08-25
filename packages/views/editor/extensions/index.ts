@@ -30,13 +30,11 @@ import Image from "@tiptap/extension-image";
 import TableRow from "@tiptap/extension-table-row";
 import TableHeader from "@tiptap/extension-table-header";
 import TableCell from "@tiptap/extension-table-cell";
-import { Table } from "@tiptap/extension-table";
 import { StableTableView } from "../stable-table-view";
+import { TABLE_CELL_DEFAULT_WIDTH, TableWithColwidthMarkdown } from "../table-markdown";
 
 /** Resize floor (~1/3 of the previous 128px minimum). */
 const TABLE_CELL_MIN_WIDTH = 43;
-/** Default column width for newly inserted cells (previous default). */
-const TABLE_CELL_DEFAULT_WIDTH = 128;
 
 const TableCellWithDefaultWidth = TableCell.extend({
   addAttributes() {
@@ -338,7 +336,7 @@ export function createEditorExtensions(
     // page-level scroll container instead of the table itself.
     // Min width is the resize floor; new cells default to 128px via colwidth
     // so `/table` still inserts at the previous comfortable width.
-    Table.configure({
+    TableWithColwidthMarkdown.configure({
       resizable: true,
       renderWrapper: true,
       allowTableNodeSelection: true,

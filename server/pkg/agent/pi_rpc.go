@@ -192,6 +192,11 @@ type piRPCBackend struct {
 	// field of the same name for the full explanation.
 	forceKilled               atomic.Bool
 	afterResultPublishForTest func()
+
+	// progressListener is fired on every Pi RPC stream event, including ones
+	// that carry no Message. See ResidentProgressListener.
+	progressMu       sync.Mutex
+	progressListener func()
 }
 
 type piRPCProcess struct {
@@ -233,6 +238,18 @@ type piRPCTurn struct {
 	response chan piRPCResponse
 	done     chan piRPCCompletion
 	message  func(Message)
+	progress func()
+}
+
+// noteProgress records that the Pi process delivered stream traffic, even
+// when the event maps to no Message. Long provider generations with no tool
+// calls are legitimate work; without this signal the resident silence
+// watchdog would mistake them for a wedged runtime.
+func (t *piRPCTurn) noteProgress() {
+	if t == nil || t.progress == nil {
+		return
+	}
+	t.progress()
 }
 
 // PiCompactionResult is the outcome of an explicit compaction call.
@@ -282,6 +299,22 @@ func newPiRPCBackend(cfg Config) *piRPCBackend {
 		cfg.Logger = slog.Default()
 	}
 	return &piRPCBackend{cfg: cfg}
+}
+
+// SetProgressListener registers a callback fired on every Pi RPC stream
+// event, including ones that carry no Message (empty deltas, unknown update
+// types). The daemon uses it to refresh the resident runtime's activity
+// clock so long generations without tool calls are not treated as stalled.
+func (b *piRPCBackend) SetProgressListener(fn func()) {
+	b.progressMu.Lock()
+	b.progressListener = fn
+	b.progressMu.Unlock()
+}
+
+func (b *piRPCBackend) currentProgressListener() func() {
+	b.progressMu.Lock()
+	defer b.progressMu.Unlock()
+	return b.progressListener
 }
 
 func NewPiRPCBackend(cfg Config) PiRPCBackend { return newPiRPCBackend(cfg) }
@@ -501,6 +534,7 @@ func (b *piRPCBackend) acceptIdleInputPrompt(ctx context.Context, prompt string)
 			message.SessionID = p.sessionID
 			trySend(idleInput.messages, message)
 		},
+		progress: b.currentProgressListener(),
 	}
 	p.stateMu.Lock()
 	if p.turn != nil || p.idleInput != nil {
@@ -825,6 +859,7 @@ func (b *piRPCBackend) executeTurn(ctx context.Context, prompt string, opts Exec
 			}
 			trySend(msgCh, msg)
 		},
+		progress: b.currentProgressListener(),
 	}
 	p.stateMu.Lock()
 	p.hasServedTurn = true
@@ -1025,9 +1060,11 @@ func (b *piRPCBackend) readEvents(p *piRPCProcess, stdout io.Reader) {
 			continue
 		}
 		if turn != nil {
+			turn.noteProgress()
 			piRPCDispatchEvent(event, turn)
 			continue
 		}
+		idleInput.stream.noteProgress()
 		piRPCDispatchEvent(event, idleInput.stream)
 	}
 	p.stateMu.Lock()

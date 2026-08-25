@@ -104,6 +104,9 @@ func (s *PostgresStore) executeV6CreateWorkAction(ctx context.Context, proposal 
 		if json.Unmarshal(workPayload, &config) != nil || len(config.TaskSpecificSchema) == 0 || string(config.TaskSpecificSchema) == "null" || strings.TrimSpace(payload.PayloadSchemaID) == "" || payload.PayloadSchemaID == "no_op.v1" {
 			return fmt.Errorf("%w: atomic Work payload_schema_id must never be no_op.v1 and payload.task_specific_schema is required", ErrInvalidContract)
 		}
+		if len(payload.BranchIDs) != 1 {
+			return fmt.Errorf("%w: 每个 atomic Work 必须只属于一个独立研究方向；先创建子 Branch，再提供唯一 branch_id", ErrInvalidContract)
+		}
 	}
 	if !validV6ActionUUID(payload.AssigneeAgentID) {
 		return ErrInvalidContract
@@ -152,14 +155,19 @@ func (s *PostgresStore) executeV6CreateWorkAction(ctx context.Context, proposal 
 			seen[branchID] = struct{}{}
 			branchIDs = append(branchIDs, branchID)
 		}
-		var branchCount int
-		if err = tx.QueryRow(ctx, `SELECT count(*)::int FROM research_branch
+		var branchCount, childBranchCount int
+		if err = tx.QueryRow(ctx, `SELECT count(*)::int,
+			count(*) FILTER (WHERE parent_branch_id IS NOT NULL)::int
+			FROM research_branch
 			WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=ANY($3::uuid[])`,
-			proposal.WorkspaceID, proposal.RunID, branchIDs).Scan(&branchCount); err != nil {
+			proposal.WorkspaceID, proposal.RunID, branchIDs).Scan(&branchCount, &childBranchCount); err != nil {
 			return err
 		}
 		if branchCount != len(branchIDs) {
 			return fmt.Errorf("%w: Work branch_ids must reference branches in the current Run", ErrInvalidContract)
+		}
+		if expectedKind == V6ContractAtomicResultSubmission && childBranchCount != 1 {
+			return fmt.Errorf("%w: atomic Work 不能直接堆进根 Branch，必须绑定一个独立子 Branch", ErrInvalidContract)
 		}
 	}
 	workID := uuid.NewString()
@@ -234,6 +242,15 @@ func (s *PostgresStore) executeV6CreateBranchAction(ctx context.Context, proposa
 	}
 	if state != expectedState {
 		return ErrWorkItemChanged
+	}
+	var parentCount int
+	if err = tx.QueryRow(ctx, `SELECT count(*)::int FROM research_branch
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid`,
+		proposal.WorkspaceID, proposal.RunID, payload.ParentBranchID).Scan(&parentCount); err != nil {
+		return err
+	}
+	if parentCount != 1 {
+		return fmt.Errorf("%w: create_branch parent must belong to the current Run", ErrInvalidContract)
 	}
 	branchID := uuid.NewString()
 	createdAt := time.Now().UTC()

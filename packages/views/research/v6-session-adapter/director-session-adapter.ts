@@ -115,8 +115,23 @@ export function adaptResearchV6DirectorCanvas(
     merged[successorId] = [...new Set(inputIds)];
   }
 
+  // The Goal's Branch is the Run-wide root scope, not a visual territory. If
+  // rendered as a cluster, every legacy root-bound node is wrapped in one
+  // giant dashed hull and the actual research directions disappear.
+  const rootBranchIds = new Set(
+    visibleNodes
+      .filter(
+        (node) =>
+          node.tier === "GOAL" || node.kind.trim().toLowerCase() === "goal",
+      )
+      .flatMap((node) => node.branchIds),
+  );
+  const visualBranchIdsForNode = (
+    node: ResearchV6DirectorProjectionNode,
+  ): string[] =>
+    node.branchIds.filter((branchId) => !rootBranchIds.has(branchId));
   const branchIds = [
-    ...new Set(visibleNodes.flatMap((node) => node.branchIds)),
+    ...new Set(visibleNodes.flatMap(visualBranchIdsForNode)),
   ];
 
   return {
@@ -161,7 +176,7 @@ export function adaptResearchV6DirectorCanvas(
           // Unknown future tiers retain their canonical value in payload while
           // degrading to the neutral M visual instead of breaking the canvas.
           level: rendererLevel(node),
-          cluster_id: node.branchIds[0] ?? null,
+          cluster_id: visualBranchIdsForNode(node)[0] ?? null,
           confidence: null,
           goal_version_id: null,
           derived_from: null,
@@ -202,7 +217,7 @@ export function adaptResearchV6DirectorCanvas(
         goal_version_id: null,
         payload: {
           member_node_ids: visibleNodes
-            .filter((node) => node.branchIds.includes(branchId))
+            .filter((node) => visualBranchIdsForNode(node).includes(branchId))
             .map((node) => node.id),
         },
         created_at: "",

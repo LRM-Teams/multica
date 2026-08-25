@@ -150,18 +150,27 @@ describe("Director V6 canvas adapter", () => {
   });
 
   it("groups nodes into server-declared Branch territories", () => {
+    const rootBranch = "00000000-0000-4000-8000-000000000100";
     const branchA = "00000000-0000-4000-8000-000000000101";
     const branchB = "00000000-0000-4000-8000-000000000102";
     const result = adaptResearchV6DirectorCanvas({
       runId: RUN_ID,
       eventSequence: 9,
       nodes: [
-        node("one", "M", { branchIds: [branchA] }),
-        node("two", "L", { branchIds: [branchB, branchA] }),
+        node("goal", "GOAL", { kind: "goal", branchIds: [rootBranch] }),
+        node("legacy-root", "S", { branchIds: [rootBranch] }),
+        node("one", "M", { branchIds: [branchA, rootBranch] }),
+        node("two", "L", { branchIds: [branchB, branchA, rootBranch] }),
       ],
       edges: [],
     });
 
+    expect(
+      result.graph.nodes.find((item) => item.id === "goal")?.cluster_id,
+    ).toBeNull();
+    expect(
+      result.graph.nodes.find((item) => item.id === "legacy-root")?.cluster_id,
+    ).toBeNull();
     expect(result.graph.nodes.find((item) => item.id === "one")?.cluster_id).toBe(
       branchA,
     );

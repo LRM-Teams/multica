@@ -169,8 +169,20 @@ func buildCanonicalV6ProjectionTx(ctx context.Context, tx pgx.Tx, workspaceID, r
 	var runStatus, goal string
 	var updated time.Time
 	var goalVersion int
-	var contractID string
-	if err := tx.QueryRow(ctx, `SELECT s.status,s.goal,s.goal_version,s.updated_at,COALESCE(c.id::text,s.id::text),COALESCE((SELECT max(sequence) FROM research_run_event WHERE session_id=s.id),0) FROM research_session s LEFT JOIN research_contract_revision c ON c.session_id=s.id AND c.goal_version=s.goal_version WHERE s.workspace_id=$1::uuid AND s.id=$2::uuid AND s.orchestrator_version='research-run-v6'`, workspaceID, runID).Scan(&runStatus, &goal, &goalVersion, &updated, &contractID, &build.throughSequence); err != nil {
+	var contractID, rootBranchID string
+	if err := tx.QueryRow(ctx, `SELECT s.status,s.goal,s.goal_version,s.updated_at,
+		COALESCE(c.id::text,s.id::text),
+		COALESCE((SELECT max(event.sequence) FROM research_run_event event
+			WHERE event.workspace_id=s.workspace_id AND event.session_id=s.id),0),
+		COALESCE((SELECT root.id::text FROM research_branch root
+			WHERE root.workspace_id=s.workspace_id AND root.session_id=s.id AND root.parent_branch_id IS NULL
+			ORDER BY root.created_at,root.id LIMIT 1),'')
+		FROM research_session s
+		LEFT JOIN research_contract_revision c ON c.workspace_id=s.workspace_id
+			AND c.session_id=s.id AND c.goal_version=s.goal_version
+		WHERE s.workspace_id=$1::uuid AND s.id=$2::uuid AND s.orchestrator_version='research-run-v6'`, workspaceID, runID).Scan(
+		&runStatus, &goal, &goalVersion, &updated, &contractID, &build.throughSequence, &rootBranchID,
+	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return build, ErrRunNotFound
 		}
@@ -178,7 +190,11 @@ func buildCanonicalV6ProjectionTx(ctx context.Context, tx pgx.Tx, workspaceID, r
 	}
 	goalExecution, goalTerminal := projectionExecutionForRun(runStatus)
 	goalID := v6ProjectionStableID("goal", contractID, goalVersion)
-	build.nodes = append(build.nodes, V6ProjectionNode{ID: goalID, Kind: "goal", Tier: "GOAL", CanonicalRef: V6ProjectionEntityRef{Kind: "goal", ID: contractID, Revision: goalVersion}, BranchIDs: []string{}, State: V6ProjectionState{Execution: goalExecution, Conclusion: "accepted", Integration: "unmatched"}, Title: truncateProjectionText(goal, 4096), CatalogSummary: truncateProjectionText(goal, 512), Terminal: goalTerminal, Expandable: true, UpdatedAt: normalizeProjectionTime(updated)})
+	goalBranchIDs := []string{}
+	if rootBranchID != "" {
+		goalBranchIDs = append(goalBranchIDs, rootBranchID)
+	}
+	build.nodes = append(build.nodes, V6ProjectionNode{ID: goalID, Kind: "goal", Tier: "GOAL", CanonicalRef: V6ProjectionEntityRef{Kind: "goal", ID: contractID, Revision: goalVersion}, BranchIDs: goalBranchIDs, State: V6ProjectionState{Execution: goalExecution, Conclusion: "accepted", Integration: "unmatched"}, Title: truncateProjectionText(goal, 4096), CatalogSummary: truncateProjectionText(goal, 512), Terminal: goalTerminal, Expandable: true, UpdatedAt: normalizeProjectionTime(updated)})
 	build.defaultVisible[goalID] = true
 	versionNodeIDs := map[string]string{}
 	workNodeIDs := map[string]string{}

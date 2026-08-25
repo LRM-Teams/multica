@@ -93,10 +93,8 @@ CLI 侧纯组合（cobra 命令 + `newAPIClient` + 3-4 个 GetJSON），模式�
 
 1. **「可见但未加入的公开频道」V1 做不了，也不该 hack**：multica 数据模型今天没有
    public/private 概念（channel 表无 visibility 列，migrations/112；kind 仅 group|dm）。
-   raft 语义里 `joined=false` 的公开频道依赖 visibility。**该概念已在
-   `2026-07-08-conversation-schema-target-design.md` §2 规划**（conversation.visibility，
-   迁移步骤 4 落地）。本命令 V2 在步骤 4 之后补 `[public, not joined]` 行——跟着 schema
-   路线图走，不为一条 CLI 提前发明平行的可见性机制。
+   raft 语义里 `joined=false` 的公开频道依赖 visibility。本命令 V2 等可见性 schema
+   落地后再补 `[public, not joined]` 行，不为一条 CLI 提前发明平行的可见性机制。
 2. **agent 身份的频道视角是错的（既有 bug，非本命令引入）**：`ListChannels` 的 SQL 以
    `member_type='user' AND member_id=X-User-ID` 过滤（channel.go:270-316），而 daemon task
    token 的 `X-User-ID` = agent 属主（middleware auth.go:85-94）。**即 agent 跑

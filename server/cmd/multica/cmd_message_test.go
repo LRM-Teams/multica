@@ -225,17 +225,28 @@ func TestMessageSearchUsesCanonicalFiltersWithoutLegacyChannelFlag(t *testing.T)
 func TestRunAgentMessageCheckUsesMachineLocalCredentialProxy(t *testing.T) {
 	var body map[string]any
 	commitCalls := 0
+	checkCalls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/credential-proxy/messages/check":
+			checkCalls++
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Errorf("decode body: %v", err)
 			}
+			if checkCalls == 1 {
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"messages": []map[string]any{{
+						"id": "message-1", "target": "channel:one", "seq": 1, "content": "new context",
+					}},
+					"has_more": true, "remaining": 1, "status": "more", "_coverage_receipt": "receipt-1",
+				})
+				return
+			}
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"messages": []map[string]any{{
-					"id": "message-1", "target": "channel:one", "seq": 1, "content": "new context",
+					"id": "message-2", "target": "channel:one", "seq": 2, "content": "final context",
 				}},
-				"has_more": true, "remaining": 1, "status": "more", "_coverage_receipt": "receipt-1",
+				"has_more": false, "remaining": 0, "status": "complete", "_coverage_receipt": "receipt-2",
 			})
 		case "/credential-proxy/messages/coverage/commit":
 			commitCalls++
@@ -246,7 +257,7 @@ func TestRunAgentMessageCheckUsesMachineLocalCredentialProxy(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&commit); err != nil {
 				t.Errorf("decode coverage commit: %v", err)
 			}
-			if commit["receipt_id"] != "receipt-1" || len(commit) != 1 {
+			if (commit["receipt_id"] != "receipt-1" && commit["receipt_id"] != "receipt-2") || len(commit) != 1 {
 				t.Errorf("coverage commit = %#v", commit)
 			}
 			_ = json.NewEncoder(w).Encode(map[string]string{"status": "committed"})
@@ -293,7 +304,7 @@ func TestRunAgentMessageCheckUsesMachineLocalCredentialProxy(t *testing.T) {
 			t.Fatalf("Credential Proxy body leaked %s: %+v", legacy, body)
 		}
 	}
-	for _, want := range []string{"channel:one", "new context", "run `multica message check` again"} {
+	for _, want := range []string{"channel:one", "new context", "final context"} {
 		if !strings.Contains(string(output), want) {
 			t.Errorf("output %q missing %q", output, want)
 		}
@@ -301,15 +312,18 @@ func TestRunAgentMessageCheckUsesMachineLocalCredentialProxy(t *testing.T) {
 	if strings.Contains(string(output), "receipt-1") || strings.Contains(string(output), "coverage_receipt") {
 		t.Fatalf("message check output leaked internal coverage receipt: %q", output)
 	}
-	if commitCalls != 1 {
-		t.Fatalf("coverage commit calls = %d, want 1", commitCalls)
+	if checkCalls != 2 {
+		t.Fatalf("message check calls = %d, want 2", checkCalls)
+	}
+	if commitCalls != 2 {
+		t.Fatalf("coverage commit calls = %d, want 2", commitCalls)
 	}
 	if _, ok := body["limit"]; ok {
 		t.Fatalf("Agent-controlled limit leaked into request: %+v", body)
 	}
 }
 
-func TestRunAgentMessageCheckOutputFailureLeavesCoverageUncommitted(t *testing.T) {
+func TestRunAgentMessageCheckCommitsCoverageBeforeOutput(t *testing.T) {
 	commitCalls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -332,14 +346,20 @@ func TestRunAgentMessageCheckOutputFailureLeavesCoverageUncommitted(t *testing.T
 	}
 	t.Setenv("MULTICA_DAEMON_PORT", port)
 	t.Setenv("MULTICA_AGENT_ID", "agent-1")
+	t.Setenv(daemon.AgentProxyURLEnv, srv.URL)
+	tokenFile := filepath.Join(t.TempDir(), "agent-proxy.token")
+	if err := os.WriteFile(tokenFile, []byte("map_test-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(daemon.AgentProxyTokenFileEnv, tokenFile)
 
 	outputErr := errors.New("stdout closed")
 	err = runAgentMessageCheckWithWriter(messageCoverageFailingWriter{err: outputErr})
 	if !errors.Is(err, outputErr) {
 		t.Fatalf("message check error = %v, want output failure", err)
 	}
-	if commitCalls != 0 {
-		t.Fatalf("output failure attempted %d coverage commits", commitCalls)
+	if commitCalls != 1 {
+		t.Fatalf("output failure attempted %d coverage commits, want 1", commitCalls)
 	}
 }
 

@@ -260,7 +260,7 @@ func buildStartupKernelContent(provider string, ctx TaskContextForEnv) string {
 	b.WriteString("## High-frequency Multica paths\n\n")
 	b.WriteString("Use the authenticated `multica` CLI for Multica resources; do not call platform URLs with raw HTTP. The current turn decides whether output is delivered through Message transport, an Issue comment, or final assistant output.\n\n")
 	b.WriteString("Message and DM/channel hot path:\n")
-	b.WriteString("- Pending input: `multica message check`; bounded context: `multica message read --target <target> --limit <N>` or `multica message search ...`.\n")
+	b.WriteString("- Pending input: `multica inbox check` first; if Messages pending, run `multica message check`; use `multica message read --target <target> --limit <N>` or `multica message search ...`.\n")
 	b.WriteString("- Visible reply: pipe text to `multica message send --target <target>` using the explicit canonical target from the current turn (`#channel`, `#channel:<thread-id>`, `dm:@handle`, or `dm:@handle:<thread-id>`). Use a quoted heredoc for multiline or shell-special text.\n")
 	b.WriteString("- Pure acknowledgement: `multica message react --message-id <id> --emoji \"...\"`. A successful send/react is delivery; do not duplicate it in final output.\n")
 	b.WriteString("- Do not use Issue commands merely because a Message arrived; use them only when the request needs Issue or project data.\n\n")
@@ -1079,7 +1079,7 @@ func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContext
 // durable Message runtime. Visible output is delivered only through the
 // machine-local credential proxy; final assistant output is never delivered.
 func renderChannelChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContextForEnv) {
-	b.WriteString("Visible output is delivered only by the durable agent-credential Multica CLI transport (`multica message send` / `multica message react`). First use `multica message check` to learn pending input, then use an explicit canonical target for a send or read. Text outside those commands, including final assistant output, is not delivered. Silence is only for ambient unaddressed messages, never human DMs, human @mentions, direct questions, or assigned work. Issue writes remain claim-first and only when requested.\n\n")
+	b.WriteString("Visible output is delivered only by the durable agent-credential Multica CLI transport (`multica message send` / `multica message react`). First use `multica inbox check`; if Messages pending, use `multica message check`; use an explicit canonical target for a send or read. Text outside those commands, including final assistant output, is not delivered. Silence is only for ambient unaddressed messages, never human DMs, human @mentions, direct questions, or assigned work. Issue writes remain claim-first and only when requested.\n\n")
 	b.WriteString("Context boundaries:\n")
 	b.WriteString("- Treat the injected conversation context as scoped to the current DM, channel, or thread surface. Do not use or infer other DMs, channels, issues, or threads unless the user explicitly references them and the CLI permits access.\n")
 	b.WriteString("- For thread-triggered runs, treat the thread root and recent replies as the natural boundary; do not load the entire parent channel/DM history by default.\n")

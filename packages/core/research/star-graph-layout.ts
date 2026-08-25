@@ -573,13 +573,15 @@ export function layoutStarGraph(
       ...members.map((member) => nodeRadius(member) * 2),
     );
     const usableArc = Math.max(baseRadial * span * 0.86, largestDiameter);
-    const layerCapacity = Math.max(
-      2,
-      Math.min(
-        6,
-        Math.floor(usableArc / (largestDiameter + padding + 14)),
-      ),
-    );
+    const layerCapacity = hasCanonicalOrigin
+      ? Math.max(
+          2,
+          Math.min(
+            6,
+            Math.floor(usableArc / (largestDiameter + padding + 14)),
+          ),
+        )
+      : Math.max(1, members.length);
     const layerStep = Math.max(92, largestDiameter + padding + 24);
     const depthCadence = [0, 42, 14, 58, 26, 48] as const;
     for (let i = 0; i < members.length; i += 1) {
@@ -609,13 +611,19 @@ export function layoutStarGraph(
         nodesInLayer === 1
           ? 0.5
           : (orderedPosition + 0.5) / nodesInLayer;
-      const layerLean =
-        ((layer % 3) - 1) * Math.min(span * 0.055, 0.045);
+      const layerLean = hasCanonicalOrigin
+        ? ((layer % 3) - 1) * Math.min(span * 0.055, 0.045)
+        : 0;
       const angle = start + fraction * span + layerLean;
+      const depthOffset = !hasCanonicalOrigin
+        ? 0
+        : group === "__free__"
+          ? orderedPosition * 220
+          : depthCadence[orderedPosition % depthCadence.length]!;
       const radial =
         baseRadial +
         layer * layerStep +
-        depthCadence[orderedPosition % depthCadence.length]!;
+        depthOffset;
       pos.set(n.id, { x: Math.cos(angle) * radial, y: Math.sin(angle) * radial });
       angleOf.set(n.id, angle);
       offsetOf.set(n.id, radial);

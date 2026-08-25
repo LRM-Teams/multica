@@ -9,9 +9,12 @@
  * Spatial semantics implemented (D5 spec):
  *   - The canonical goal is the origin; an XXL synthesis remains a distinct
  *     destination instead of being collapsed into the same visual role.
- *   - Stable tiers (xxl/xl/l/m) form a directional field to the right of the
- *     goal, grouped into contiguous angular sectors by `clusterId`.
- *   - S agents orbit their parent result on a small exploration radius.
+ *   - Branch landmarks plus unparented Work/Result points form a directional
+ *     field to the right of the goal, grouped into contiguous angular sectors
+ *     by `clusterId`.
+ *   - S is a visual tier, not an orbit instruction. Explicit Agent satellites
+ *     and parented Work orbit locally; unparented Work/Result nodes advance
+ *     through the same directional field as the rest of their branch.
  *   - New / unrelated directions sit outside existing clusters and only link
  *     back to the goal via `challenge` / `newdir` relation semantics.
  *
@@ -387,6 +390,16 @@ function nodeSignature(node: StarGraphLayoutNode): string {
   ].join("|");
 }
 
+function usesLocalOrbit(node: StarGraphLayoutNode): boolean {
+  if (node.tier !== "s") return false;
+  const kind = node.nodeKind?.trim().toLowerCase() ?? "";
+  if (kind === "agent" || kind === "agent_activity") return true;
+  if (kind === "work_s") return node.parentId != null;
+  // Geometry-only callers can still declare an explicit local orbit without
+  // importing Research node kinds into this framework-agnostic engine.
+  return kind === "" && node.parentId != null;
+}
+
 /**
  * Adaptive S-orbit ring radius: large enough to hold `count` agent circles of
  * diameter `2*S_RADIUS` without the agents colliding on the ring, never below
@@ -440,8 +453,11 @@ export function layoutStarGraph(
     nodes[0]!;
   const rootId = root.id;
 
-  const stable = nodes.filter((n) => n.tier !== "s" && n.id !== rootId);
-  const orbit = nodes.filter((n) => n.tier === "s");
+  const orbit = nodes.filter(usesLocalOrbit);
+  const orbitIds = new Set(orbit.map((node) => node.id));
+  const stable = nodes.filter(
+    (node) => node.id !== rootId && !orbitIds.has(node.id),
+  );
 
   /* ---- Incremental reuse: same signature + version -> keep previous pos. ---- */
   const prevUsable =
@@ -464,10 +480,15 @@ export function layoutStarGraph(
 
   /* ---- Group stable nodes into clusters (theme/成果 sectors). ---- */
   const byCluster = new Map<string, EngineNode[]>();
+  const unclusteredWork: EngineNode[] = [];
   const freeStable: EngineNode[] = [];
   for (const n of stable) {
     if (n.clusterId == null || n.clusterId === "") {
-      freeStable.push(n);
+      if (n.nodeKind?.trim().toLowerCase() === "work_s") {
+        unclusteredWork.push(n);
+      } else {
+        freeStable.push(n);
+      }
     } else {
       const list = byCluster.get(n.clusterId) ?? [];
       list.push(n);
@@ -484,15 +505,17 @@ export function layoutStarGraph(
         .map((node) => node.clusterId as string),
     ),
   ].sort();
-  const orderedGroups: (string | "__free__")[] = [
+  type StableGroup = string | "__work__" | "__free__";
+  const orderedGroups: StableGroup[] = [
     ...clusterKeys,
+    ...(unclusteredWork.length > 0 ? (["__work__"] as const) : []),
     ...(freeStable.length > 0 ? (["__free__"] as const) : []),
   ];
   const sectorCount = orderedGroups.length;
 
   /* ---- Angular sector per cluster group; deterministic (sorted keys). ---- */
-  const sectorStart = new Map<string | "__free__", number>();
-  const sectorSpan = new Map<string | "__free__", number>();
+  const sectorStart = new Map<StableGroup, number>();
+  const sectorSpan = new Map<StableGroup, number>();
   {
     const hasCanonicalOrigin = root.nodeKind?.toLowerCase() === "goal";
     const gap = hasCanonicalOrigin ? 0.16 : 0.22;
@@ -522,14 +545,18 @@ export function layoutStarGraph(
   // The reference constellation is intentionally not an equal-radius wheel.
   // Branches advance through alternating depth bands, producing short local
   // edges, medium branch edges, and long cross-field synthesis edges.
-  const directionalDepthFor = (group: string | "__free__") => {
+  const directionalDepthFor = (group: StableGroup) => {
+    if (group === "__work__") return 40;
     const index = Math.max(0, orderedGroups.indexOf(group));
     const depthPattern = [0, 220, 430, 110, 330, 560] as const;
     return depthPattern[index % depthPattern.length]! +
       Math.floor(index / depthPattern.length) * 240;
   };
 
-  const placeStableCluster = (nodesInGroup: EngineNode[], group: string | "__free__") => {
+  const placeStableCluster = (
+    nodesInGroup: EngineNode[],
+    group: StableGroup,
+  ) => {
     const start = sectorStart.get(group) ?? 0;
     const span = sectorSpan.get(group) ?? 0;
     // Sort members largest-first so big nodes anchor the innermost radius.
@@ -539,9 +566,22 @@ export function layoutStarGraph(
         a.id.localeCompare(b.id),
     );
     const firstRadius = nodeRadius(members[0]!);
-    let radial = hasCanonicalOrigin
+    const baseRadial = hasCanonicalOrigin
       ? rootRadius + firstRadius + 300 + directionalDepthFor(group)
       : rootRadius + members[0]!.label.halfWidth * 0.5 + 46;
+    const largestDiameter = Math.max(
+      ...members.map((member) => nodeRadius(member) * 2),
+    );
+    const usableArc = Math.max(baseRadial * span * 0.86, largestDiameter);
+    const layerCapacity = Math.max(
+      2,
+      Math.min(
+        6,
+        Math.floor(usableArc / (largestDiameter + padding + 14)),
+      ),
+    );
+    const layerStep = Math.max(92, largestDiameter + padding + 24);
+    const depthCadence = [0, 42, 14, 58, 26, 48] as const;
     for (let i = 0; i < members.length; i += 1) {
       const n = members[i]!;
       // Reuse previous position when signature is stable.
@@ -554,26 +594,31 @@ export function layoutStarGraph(
         reused.add(n.id);
         continue;
       }
-      const count = members.length;
-      const fraction = count === 1 ? 0.5 : (i + 0.5) / count;
-      const angle = start + fraction * span;
-      // Push the radial offset out enough to avoid the previous member's disc.
-      const r = nodeRadius(n);
-      const prevRadius = i > 0 ? nodeRadius(members[i - 1]!) : 0;
-      const minGap = r + prevRadius + padding;
-      if (radial < rootRadius + minGap * 0.4) {
-        radial = rootRadius + minGap * 0.4;
-      }
+      const layer = Math.floor(i / layerCapacity);
+      const layerStart = layer * layerCapacity;
+      const nodesInLayer = Math.min(
+        layerCapacity,
+        members.length - layerStart,
+      );
+      const positionInLayer = i - layerStart;
+      const orderedPosition =
+        layer % 2 === 0
+          ? positionInLayer
+          : nodesInLayer - positionInLayer - 1;
+      const fraction =
+        nodesInLayer === 1
+          ? 0.5
+          : (orderedPosition + 0.5) / nodesInLayer;
+      const layerLean =
+        ((layer % 3) - 1) * Math.min(span * 0.055, 0.045);
+      const angle = start + fraction * span + layerLean;
+      const radial =
+        baseRadial +
+        layer * layerStep +
+        depthCadence[orderedPosition % depthCadence.length]!;
       pos.set(n.id, { x: Math.cos(angle) * radial, y: Math.sin(angle) * radial });
       angleOf.set(n.id, angle);
       offsetOf.set(n.id, radial);
-      if (hasCanonicalOrigin) {
-        const directionalStep =
-          group === "__free__"
-            ? Math.max(220, r + prevRadius + 104)
-            : Math.max(64, (r + prevRadius + padding) * 0.42);
-        radial += directionalStep;
-      }
     }
   };
 
@@ -584,8 +629,11 @@ export function layoutStarGraph(
   if (freeStable.length > 0) {
     placeStableCluster(freeStable, "__free__");
   }
+  if (unclusteredWork.length > 0) {
+    placeStableCluster(unclusteredWork, "__work__");
+  }
 
-  /* ---- S-tier: orbit their parent result on a small exploration radius. ---- */
+  /* ---- Explicit local satellites: orbit their parent result. ---- */
   const clusterCenters = new Map<string, { x: number; y: number }>();
   const clusterAnchorRadii = new Map<string, number>();
   for (const key of clusterKeys) {

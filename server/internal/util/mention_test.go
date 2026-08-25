@@ -132,3 +132,26 @@ func TestParseMentionsFromContentAndPartsUsesOnlyMentionReferences(t *testing.T)
 		}
 	}
 }
+
+func TestParseMentionsFromContentAndPartsDeduplicatesPreservingOrder(t *testing.T) {
+	parts := []protocol.MessagePart{
+		{Type: protocol.MessagePartTypeReference, RefType: "mention", RefSubType: "agent", RefID: "agent-1"},
+		{Type: protocol.MessagePartTypeReference, RefType: "mention", RefSubType: "agent", RefID: "agent-1"},
+		{Type: protocol.MessagePartTypeReference, RefType: "mention", RefSubType: "member", RefID: "member-1"},
+		{Type: protocol.MessagePartTypeReference, RefType: "mention", RefSubType: "member", RefID: "member-1"},
+	}
+
+	got := ParseMentionsFromContentAndParts("", parts)
+	want := []Mention{
+		{Type: "agent", ID: "agent-1"},
+		{Type: "member", ID: "member-1"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("ParseMentionsFromContentAndParts returned %d mentions, want %d: %+v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("mention[%d] = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}

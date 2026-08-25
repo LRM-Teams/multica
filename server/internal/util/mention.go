@@ -27,25 +27,18 @@ func (m Mention) IsMentionAll() bool {
 // ParseMentions extracts deduplicated mentions from markdown content.
 func ParseMentions(content string) []Mention {
 	matches := MentionRe.FindAllStringSubmatch(content, -1)
-	seen := make(map[string]bool)
-	var result []Mention
+	collector := newMentionCollector()
 	for _, m := range matches {
-		key := m[2] + ":" + m[3]
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		result = append(result, Mention{Type: m[2], ID: m[3]})
+		collector.add(Mention{Type: m[2], ID: m[3]})
 	}
-	return result
+	return collector.result
 }
 
 // ParseMentionsFromContentAndParts extracts deduplicated channel mentions
 // exclusively from structured reference message parts. Legacy markdown is
 // migrated once at persistence time and is never reinterpreted by readers.
 func ParseMentionsFromContentAndParts(_ string, parts []protocol.MessagePart) []Mention {
-	seen := make(map[string]bool)
-	var result []Mention
+	collector := newMentionCollector()
 	for _, part := range parts {
 		if part.Type != protocol.MessagePartTypeReference {
 			continue
@@ -56,18 +49,29 @@ func ParseMentionsFromContentAndParts(_ string, parts []protocol.MessagePart) []
 		if part.RefSubType == "" || part.RefID == "" || part.RefSubType == "all" {
 			continue
 		}
-		result = appendMention(result, seen, Mention{Type: part.RefSubType, ID: part.RefID})
+		collector.add(Mention{Type: part.RefSubType, ID: part.RefID})
 	}
-	return result
+	return collector.result
 }
 
-func appendMention(result []Mention, seen map[string]bool, mention Mention) []Mention {
+// mentionCollector centralizes the ordering and deduplication contract shared
+// by markdown and structured-reference parsing.
+type mentionCollector struct {
+	result []Mention
+	seen   map[string]struct{}
+}
+
+func newMentionCollector() mentionCollector {
+	return mentionCollector{seen: make(map[string]struct{})}
+}
+
+func (c *mentionCollector) add(mention Mention) {
 	key := mention.Type + ":" + mention.ID
-	if seen[key] {
-		return result
+	if _, exists := c.seen[key]; exists {
+		return
 	}
-	seen[key] = true
-	return append(result, mention)
+	c.seen[key] = struct{}{}
+	c.result = append(c.result, mention)
 }
 
 // HasMentionAll returns true if any mention in the slice is an @all mention.

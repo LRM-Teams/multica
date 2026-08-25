@@ -390,13 +390,7 @@ type AgentActivityTiming struct {
 	DaemonSentAtMS     int64 `json:"daemonSentAtMs,omitempty"`
 }
 
-	Snapshot AgentActivitySnapshot      `json:"snapshot"`
-	Summary  AgentActivitySummary       `json:"summary"`
-	Timeline []AgentActivityTimelineRow `json:"timeline,omitempty"`
-}
-
 func (p WorkspaceReadyPayload) Validate() error {
-:server/pkg/protocol/workspace_daemon_protocol.go
 	if err := validateRequiredIDs(p.WorkspaceID, p.DaemonInstanceID); err != nil {
 		return err
 	}

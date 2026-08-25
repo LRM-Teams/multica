@@ -31,10 +31,9 @@ describe("applyRunnerActivityRealtime", () => {
     vi.restoreAllMocks();
   });
 
-  it("replaces the canonical server projection without scheduling REST reconciliation", () => {
-    const client = new QueryClient();  it("replaces the canonical cache without invalidating it", () => {
+  it("replaces the canonical cache without invalidating it", () => {
     const client = new QueryClient();
->    const key = runnerActivityKeys.all("workspace-1", "agent-1");
+    const key = runnerActivityKeys.all("workspace-1", "agent-1");
     client.setQueryData(key, { summary: null, timeline: [] });
     applyRunnerActivityRealtime(client, "workspace-1", { agent_id: "agent-1", activity: current });
     expect(client.getQueryData(key)).toEqual(current);

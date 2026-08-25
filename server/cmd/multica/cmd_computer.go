@@ -120,10 +120,11 @@ var computerUpgradeCmd = &cobra.Command{
 	Long: `Upgrade the resident Computer through its single machine owner.
 
 When the Computer is running, the command asks that live owner to download,
-verify, activate, hand off, and converge the upgrade. When no resident exists,
-it installs the verified release for the next Computer start under the same
-machine lock. A live but unreachable resident fails closed without changing
-the Active release.
+verify, activate, hand off, and converge the upgrade. It waits by default and
+shows each real phase until the successor reconnects; use --no-wait to return
+after submission. When no resident exists, it installs the verified release
+for the next Computer start under the same machine lock. A live but unreachable
+resident fails closed without changing the Active release.
 
 Production uses stable packages and test uses preview packages. Pass
 --target-version only to install a specific immutable recovery version.`,
@@ -180,6 +181,7 @@ var computerIdentityFreshCmd = &cobra.Command{
 
 func init() {
 	computerUpgradeCmd.Flags().String("target-version", "", "Target version to install (default: latest)")
+	computerUpgradeCmd.Flags().Bool("no-wait", false, "Submit a live upgrade without waiting for restart and reconnection")
 
 	// Machine-wide flags used by the lifecycle commands. These live on the
 	// parent so both start and restart see them; resolveProfile is forced to
@@ -394,38 +396,73 @@ func orDash(s string) string {
 
 func runComputerUpgrade(cmd *cobra.Command, _ []string) error {
 	targetVersion, _ := cmd.Flags().GetString("target-version")
+	noWait, _ := cmd.Flags().GetBool("no-wait")
+	displayTarget := strings.TrimSpace(targetVersion)
+	if displayTarget == "" {
+		displayTarget = "latest"
+	}
+	endpoint := computerUpgradeServiceEndpoint("")
+	probeCtx, probeCancel := context.WithTimeout(cmd.Context(), 2*time.Second)
+	initialHealth := (&computer.Lifecycle{ServiceEndpoint: endpoint}).Health(probeCtx)
+	probeCancel()
+	currentVersion := version
+	if computer.Alive(initialHealth) {
+		currentVersion = healthValue(initialHealth, "cliVersion")
+	}
+	display := newComputerUpgradeDisplay(os.Stdout, currentVersion, displayTarget, stdoutIsInteractive())
+	display.update("requesting", "Resolving release and contacting Computer")
+
 	ctx, cancel := context.WithTimeout(cmd.Context(), cli.DefaultUpdateDownloadTimeout+30*time.Second)
 	defer cancel()
-	upgrade, err := (&computer.Lifecycle{ServiceEndpoint: computerUpgradeServiceEndpoint("")}).Upgrade(ctx, computer.UpgradeOptions{
-		TargetVersion:    targetVersion,
-		CreateLiveIntent: createComputerUpgradeHumanIntent,
-	})
-	if err != nil {
-		return err
+	type upgradeOutcome struct {
+		result computer.UpgradeResult
+		err    error
 	}
+	outcomeCh := make(chan upgradeOutcome, 1)
+	go func() {
+		result, err := (&computer.Lifecycle{ServiceEndpoint: endpoint}).Upgrade(ctx, computer.UpgradeOptions{
+			TargetVersion: targetVersion, CreateLiveIntent: createComputerUpgradeHumanIntent,
+		})
+		outcomeCh <- upgradeOutcome{result: result, err: err}
+	}()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	var outcome upgradeOutcome
+	waiting := true
+	for waiting {
+		select {
+		case outcome = <-outcomeCh:
+			waiting = false
+		case <-ticker.C:
+			display.update("requesting", "Resolving release and contacting Computer")
+		case <-ctx.Done():
+			display.clear()
+			return ctx.Err()
+		}
+	}
+	if outcome.err != nil {
+		display.clear()
+		return outcome.err
+	}
+	upgrade := outcome.result
 	if upgrade.Route == computer.UpgradeRouteLive {
-		fmt.Fprintf(os.Stdout,
-			"Computer upgrade accepted: %s (target %s). The live Computer owns download, verification, handoff, and convergence.\n",
-			strVal(upgrade.Operation, "request_id"),
-			upgrade.ResolvedTarget,
-		)
+		requestID := strVal(upgrade.Operation, "request_id")
+		if noWait {
+			display.accepted(requestID, upgrade.ResolvedTarget)
+			return nil
+		}
+		display.update("accepted", "Waiting for Computer to begin")
+		watchCtx, watchCancel := context.WithTimeout(cmd.Context(), computerUpgradeWatchTimeout)
+		defer watchCancel()
+		result, err := watchComputerUpgrade(watchCtx, endpoint, requestID, initialHealth, display)
+		if err != nil {
+			display.clear()
+			return err
+		}
+		display.success(result)
 		return nil
 	}
-	if upgrade.AlreadyCurrent {
-		fmt.Fprintf(os.Stdout,
-			"%s is already Active for the next Computer start (generation %d). Binary: %s\nNo running successor was proven.\n",
-			upgrade.ActiveVersion,
-			upgrade.Generation,
-			upgrade.BinaryPath,
-		)
-		return nil
-	}
-	fmt.Fprintf(os.Stdout,
-		"Installed %s for the next Computer start (generation %d). Binary: %s\nNo running successor was proven; run `multica computer start` to use this Active release.\n",
-		upgrade.ActiveVersion,
-		upgrade.Generation,
-		upgrade.BinaryPath,
-	)
+	display.installed(upgrade.ActiveVersion, upgrade.BinaryPath, upgrade.AlreadyCurrent)
 	return nil
 }
 

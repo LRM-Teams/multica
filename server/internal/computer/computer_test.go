@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -280,28 +279,31 @@ func TestStopFallsBackToKillWhenShutdownFails(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Spawn a real short-lived process so the kill fallback targets a live
-	// PID (Killing a nonexistent PID errors and would mask the path we want
-	// to exercise).
-	child := exec.Command("sleep", "30")
-	if err := child.Start(); err != nil {
-		t.Skipf("cannot spawn child process: %v", err)
+	resident := spawnReclaimTestProcess(t, "sleep", "30")
+	residentPID := resident.Process.Pid
+	runner := spawnReclaimTestProcess(t, "sleep", "30")
+	runnerPID := runner.Process.Pid
+	root := RootDir("")
+	state := persistedRunnerState{
+		WorkspaceID: "workspace-a", DaemonInstanceID: "start-a",
+		OwnerPID: residentPID, RunnerPID: runnerPID, StartedAt: time.Now().UTC(),
 	}
-	pid := child.Process.Pid
-	defer func() {
-		_ = child.Process.Kill()
-		_, _ = child.Process.Wait()
-	}()
+	if err := writeRunnerState(root, state); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeRunnerPID(root, state.WorkspaceID, runnerPID); err != nil {
+		t.Fatal(err)
+	}
 
 	lc := &Lifecycle{}
-	var calls atomic.Int32
+	var probes atomic.Int32
 	lc.Probe = func(_ context.Context, _ string) map[string]any {
-		if calls.Add(1) == 1 {
-			return map[string]any{"status": "running", "pid": float64(pid)}
+		if probes.Add(1) == 1 {
+			return map[string]any{"status": "running", "pid": float64(residentPID)}
 		}
 		return map[string]any{"status": "stopped"}
 	}
-	lc.Sleep = func(time.Duration) {}
+	lc.Sleep = func(time.Duration) { time.Sleep(5 * time.Millisecond) }
 
 	restore := setRequestShutdown(func(string, ShutdownRequest) error { return os.ErrClosed })
 	defer restore()
@@ -312,6 +314,12 @@ func TestStopFallsBackToKillWhenShutdownFails(t *testing.T) {
 	}
 	if !res.Stopped {
 		t.Fatalf("Stop did not reach Stopped after kill fallback: %+v", res)
+	}
+	if alive, known := processAlive(runnerPID); !known || alive {
+		t.Fatalf("WorkspaceDaemon pid %d survived forced Computer stop", runnerPID)
+	}
+	if _, err := os.Stat(runnerStatePath(root, state.WorkspaceID)); !os.IsNotExist(err) {
+		t.Fatalf("WorkspaceDaemon state survived forced Computer stop: %v", err)
 	}
 }
 

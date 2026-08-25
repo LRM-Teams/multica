@@ -60,19 +60,20 @@ multica computer upgrade --target-version <version>
 
 `computer upgrade` is the only local upgrade command. It first checks the
 machine-wide resident. With a live resident, the CLI uses the saved human
-session to create the canonical server Machine Upgrade operation, then delivers
-that same operation ID through the owner-authenticated loopback surface. The
-server may concurrently deliver it over the DaemonCore WebSocket; Computer Host
-deduplicates both paths by operation ID and remains the sole owner of download,
-verification, handoff, rollback, and convergence. Host never uses a Workspace
-execution credential to create a human operation. If no resident owns the
-machine, the command may swap the on-PATH Computer (`$HOME/.local/bin/multica`)
-under the machine lock; that offline result is not proof of a running successor.
-Held resident ownership
-with unavailable control returns `upgrade_service_unreachable` and never falls
-back to offline activation. Omit `--target-version` to use the package selected
-by the active production or test environment. There is no top-level
-`multica update` command.
+session to create the canonical server Machine Upgrade operation, and the
+server dispatches that operation over the current DaemonCore WebSocket.
+Computer Host remains the sole owner of download, verification, handoff,
+rollback, and convergence. By default the command waits, renders those real
+Host phases, and finishes only after the successor is running and its prior
+Workspace connections have recovered. `--no-wait` returns after submission for
+callers that will monitor separately with `multica computer status`. Host never
+uses a Workspace execution credential to create a human operation. If no
+resident owns the machine, the command may swap the on-PATH Computer
+(`$HOME/.local/bin/multica`) under the machine lock; that offline result is not
+proof of a running successor. Held resident ownership with unavailable control
+returns `upgrade_service_unreachable` and never falls back to offline
+activation. Omit `--target-version` to use the package selected by the active
+production or test environment. There is no top-level `multica update` command.
 
 Computer owners can perform this action. A Workspace owner/admin does not gain
 lifecycle control over another person's Computer; the initiating Workspace is
@@ -89,12 +90,18 @@ controlled by the Computer lifecycle, not an OS supervisor:
 
 ```bash
 multica computer start      # run the machine-wide resident detached
-multica computer stop       # stop it gracefully
+multica computer stop       # stop it and all WorkspaceDaemon children
 multica computer restart    # stop + start
 multica computer status     # read-only status (identity, resident, Workspace connections)
 multica computer logs       # tail the resident service log
 multica computer doctor     # read-only diagnostics (--fix only clears a confirmed-stopped stale PID)
 ```
+
+Stop first requests graceful resident shutdown. If local control fails, its
+forced fallback terminates the resident and every persisted WorkspaceDaemon
+child; it reports an error rather than claiming success while a child remains.
+Interactive lifecycle commands render colored spinners and concise completion
+summaries; redirected output and CI automatically use stable plain-text lines.
 
 Computer identity metadata (device name, OS, and CLI version) belongs to the
 Computer connection and remains visible even when no provider Runtime is

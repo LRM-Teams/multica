@@ -401,9 +401,11 @@ Projection is rebuilt from canonical tables and Events. Report never appears in
 the graph node enum. Default Snapshot includes Goal, Branch Frontier M+, terminal
 high nodes, active Work S, unabsorbed Result S, and no absorbed node. A terminal
 research Work S that already produced a Result S is represented by one
-non-canonical `collapsed_path`; terminal Director control work stays in the
-canonical slice but is omitted from the default research canvas. Expansion reads
-one Derivation layer at a time.
+non-canonical `collapsed_path`. Director cycle Work is an operational scheduler
+record, not a research graph node: it is excluded from default Snapshots,
+canonical projection pages, expanded Slices and Deltas. Director state remains
+inspectable through Brief, chat and activity surfaces. Expansion reads one
+Derivation layer at a time.
 
 Work S branch scope comes from the assigned `research_v6_work_item_branch` rows,
 not from a future Result. The presentation-only work-activity read model resolves

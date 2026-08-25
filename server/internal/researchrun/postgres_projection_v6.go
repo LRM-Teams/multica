@@ -289,7 +289,6 @@ func appendV6InsightProjectionTx(ctx context.Context, tx pgx.Tx, build *v6Projec
 func appendV6WorkProjectionTx(ctx context.Context, tx pgx.Tx, build *v6ProjectionBuild, goalID string, workNodeIDs, agentNodeIDs map[string]string) error {
 	rows, err := tx.Query(ctx, `
 		SELECT w.id::text,
-		       w.kind,
 		       w.status,
 		       COALESCE(w.reason,''),
 		       COALESCE(w.terminal_reason_code,''),
@@ -329,16 +328,17 @@ func appendV6WorkProjectionTx(ctx context.Context, tx pgx.Tx, build *v6Projectio
 		 AND inbox.agent_id=latest_attempt.assigned_agent_id
 		LEFT JOIN agent_task_progress_snapshot progress ON progress.task_id=latest_attempt.inbox_task_id
 		WHERE w.workspace_id=$1::uuid AND w.session_id=$2::uuid
+		  AND w.kind<>'director'
 		ORDER BY w.id`, build.workspaceID, build.runID)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var id, kind, status, reason, reasonCode, reasonDetail, attemptFailureClass, attemptDiagnostics, assignedAgentID, agentName string
+		var id, status, reason, reasonCode, reasonDetail, attemptFailureClass, attemptDiagnostics, assignedAgentID, agentName string
 		var updated time.Time
 		var branches []string
-		if err = rows.Scan(&id, &kind, &status, &reason, &reasonCode, &reasonDetail, &attemptFailureClass, &attemptDiagnostics, &updated, &branches, &assignedAgentID, &agentName); err != nil {
+		if err = rows.Scan(&id, &status, &reason, &reasonCode, &reasonDetail, &attemptFailureClass, &attemptDiagnostics, &updated, &branches, &assignedAgentID, &agentName); err != nil {
 			return err
 		}
 		execution, terminal := projectionExecutionForWork(status)
@@ -346,7 +346,7 @@ func appendV6WorkProjectionTx(ctx context.Context, tx pgx.Tx, build *v6Projectio
 		state.Termination = projectionTerminationForWork(execution, terminal, reasonCode, reasonDetail, attemptFailureClass, attemptDiagnostics)
 		nodeID := v6ProjectionStableID("work_s", id, 0)
 		build.nodes = append(build.nodes, V6ProjectionNode{ID: nodeID, Kind: "work_s", Tier: "S", CanonicalRef: V6ProjectionEntityRef{Kind: "work_item", ID: id}, BranchIDs: branches, State: state, Title: truncateProjectionText(firstNonEmptyV6(reason, agentName), 160), CatalogSummary: truncateProjectionText(reason, 512), Terminal: terminal, Expandable: false, UpdatedAt: normalizeProjectionTime(updated)})
-		build.defaultVisible[nodeID] = kind != "director" || !terminal
+		build.defaultVisible[nodeID] = true
 		workNodeIDs[id] = nodeID
 		build.edges = append(build.edges, V6ProjectionEdge{ID: v6ProjectionEdgeID("belongs_to", nodeID, goalID), Kind: "belongs_to", FromNodeID: nodeID, ToNodeID: goalID, Canonical: true})
 		if agentNodeID := agentNodeIDs[assignedAgentID]; agentNodeID != "" {

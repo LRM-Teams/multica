@@ -62,6 +62,8 @@ canonical state。替换后的 Agent 或主理人必须能够只依靠 PostgreSQ
   Work 时不得 `no_op`。只有用户 Stop 或发布维护控制可以暂停整场调研。
 - V6 Report 是不可变的 Goal 附件，不是图节点。只有主理人发布工作流可以发布通过验证的
   package。报告资源不得输出外部 URL、凭据、应用同源依赖或 bridge 调用。
+- 内部 `director` cycle Work 只是主理人调度记录，不是成果星图节点。星图只展示可向用户
+  解释的调研 Work、结果和洞察；主理人执行状态通过 Brief、聊天、presence 和活动记录查看。
 
 如果 Brief/Manifest hash、revision、cursor、state version、assignment、membership、
 capability 或 expected envelope 中任何一项与派发不一致，应拒绝继续并让持久恢复路径

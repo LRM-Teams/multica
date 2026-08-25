@@ -69,6 +69,15 @@ func TestValidateV6ParallelResearchPlanRequiresStaffingAndParallelWork(t *testin
 				resultCount: 2, convergenceReady: true, proposedConvergence: 1, proposedAtomicWork: 1, proposedWorkBranches: 1},
 			wantErr: "不能同时继续堆积 atomic Work",
 		},
+		{
+			name:    "top-level directions are bounded by parallel capacity",
+			facts:   v6DirectorPreflightFacts{maxParallelTasks: 5, topLevelBranches: 5, proposedTopLevel: 1},
+			wantErr: "一级研究方向最多 5 个",
+		},
+		{
+			name:  "nested Branch does not consume another top-level direction",
+			facts: v6DirectorPreflightFacts{maxParallelTasks: 5, topLevelBranches: 5},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

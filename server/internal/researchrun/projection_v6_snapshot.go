@@ -57,6 +57,13 @@ func hashV6Projection(nodes []V6ProjectionNode, edges []V6ProjectionEdge, densit
 func normalizeV6Projection(nodes []V6ProjectionNode, edges []V6ProjectionEdge, density []V6ProjectionDensityBin) {
 	for index := range nodes {
 		sort.Strings(nodes[index].BranchIDs)
+		if nodes[index].Territory != nil {
+			nodes[index].Territory.Label = strings.TrimSpace(nodes[index].Territory.Label)
+			nodes[index].Territory.Label = truncateProjectionText(nodes[index].Territory.Label, 160)
+			if nodes[index].Territory.Label == "" {
+				nodes[index].Territory = nil
+			}
+		}
 		nodes[index].CatalogSummary = strings.TrimSpace(nodes[index].CatalogSummary)
 		nodes[index].CatalogSummary = truncateProjectionText(nodes[index].CatalogSummary, 512)
 	}

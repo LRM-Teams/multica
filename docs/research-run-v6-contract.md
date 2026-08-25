@@ -5,7 +5,7 @@ Status: target contract frozen; user-facing V6 create is open. Omitted
 
 Normative target schema:
 [`contracts/research-run-v6-director.schema.json`](contracts/research-run-v6-director.schema.json),
-SHA-256 `2ce8b8af85c9cec5e508fa1c6b01c6963d998899d09b99d33f8110aca3b59f88`.
+SHA-256 `888377d0abd2b51de10947d7b7736e23677793679b72056b7cb130e69c6c5b57`.
 Its `$id` is the final `research-run-v6.schema.json` identity.
 
 The code-coupled [`contracts/research-run-v6.schema.json`](contracts/research-run-v6.schema.json)
@@ -296,6 +296,13 @@ A Branch Frontier is an antichain of fresh, unabsorbed nodes, not a single row.
 One Branch may have several incomparable M/L/XL nodes but at most one current
 valid XXL. One Insight, including XXL, may bind to multiple Branches. Shared
 content and evidence are counted once by canonical identity.
+
+The root Branch has at most `max_parallel_tasks` active direct children. Those
+children are the Run's top-level research directions; Work, source and open
+question fan-out reuses them. Finer investigation creates descendants beneath
+the relevant direction instead of adding another root child. Projection maps
+every descendant to that top-level direction for visual grouping while keeping
+the exact canonical Branch bindings unchanged.
 
 Branch split, merge, parent change and terminal state require a Director action.
 Text similarity, UI clustering and layout cannot mutate Branch structure.

@@ -108,12 +108,18 @@ export interface ResearchV6DirectorProjectionState {
   termination?: ResearchV6DirectorTermination;
 }
 
+export interface ResearchV6DirectorProjectionTerritory {
+  branchId: string;
+  label: string;
+}
+
 export interface ResearchV6DirectorProjectionNode {
   id: string;
   kind: ResearchV6DirectorProjectionNodeKind;
   tier: ResearchV6DirectorProjectionTier;
   canonicalRef: ResearchV6DirectorEntityRef;
   branchIds: string[];
+  territory?: ResearchV6DirectorProjectionTerritory;
   state: ResearchV6DirectorProjectionState;
   title?: string;
   catalogSummary: string;

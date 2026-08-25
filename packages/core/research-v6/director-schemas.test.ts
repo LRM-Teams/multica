@@ -26,6 +26,7 @@ function snapshot() {
         tier: "L",
         canonical_ref: { kind: "insight", id: ID },
         branch_ids: [ID],
+        territory: { branch_id: ID, label: "Commercial adoption" },
         state: {
           execution: "succeeded",
           conclusion: "accepted",
@@ -48,9 +49,12 @@ function snapshot() {
 
 describe("Director V6 projection wire schemas", () => {
   it("accepts the exact strict projection snapshot", () => {
-    expect(parseResearchV6DirectorProjectionSnapshot(snapshot()).sliceKey).toBe(
-      "default",
-    );
+    const parsed = parseResearchV6DirectorProjectionSnapshot(snapshot());
+    expect(parsed.sliceKey).toBe("default");
+    expect(parsed.nodes[0]?.territory).toEqual({
+      branchId: ID,
+      label: "Commercial adoption",
+    });
   });
 
   it("accepts a running Director Work node with an empty catalog summary", () => {

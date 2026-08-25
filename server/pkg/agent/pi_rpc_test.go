@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"

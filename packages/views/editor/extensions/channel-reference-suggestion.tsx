@@ -102,6 +102,10 @@ export function createChannelReferenceSuggestion(
     }>({
       pluginKey,
       component: MentionList,
+      // Keep #channel suggestions aligned with the @person picker: both are
+      // roster-style composer suggestions and should span the composer rather
+      // than sizing themselves to the caret.
+      anchorToEditorWidth: true,
       getProps: (props) => ({
         items: props.items,
         query: props.query,

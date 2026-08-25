@@ -14,6 +14,7 @@ import type { StarEntityView } from "../lib/star-canvas-view-model";
 import type { StarGraphExpansionControl } from "../lib/star-graph-expansion";
 
 export interface StarGraphEntityLabels {
+  originHeader: string;
   tierHeaders: Record<StarGraphTier, string>;
   documentCount: (count: number) => string;
   confidence: (value: number) => string;
@@ -91,9 +92,11 @@ export function StarGraphEntityLayer({
             title={entity.view.title}
             subLabel={entity.view.subLabel}
             headerLabel={
-              entity.view.tier === "s"
-                ? undefined
-                : labels.tierHeaders[entity.view.tier]
+              entity.view.semanticRole === "goal"
+                ? labels.originHeader
+                : entity.view.tier === "s"
+                  ? undefined
+                  : labels.tierHeaders[entity.view.tier]
             }
             semanticRole={entity.view.semanticRole}
             agentBadge={entity.view.agentBadge}
@@ -146,6 +149,8 @@ export function StarGraphEntityLayer({
               ...identityStyle,
               left: entity.x - entity.radius,
               top: entity.y - entity.radius,
+              width: entity.radius * 2,
+              height: entity.radius * 2,
               ...motion?.style,
             }}
             onOpen={() => {

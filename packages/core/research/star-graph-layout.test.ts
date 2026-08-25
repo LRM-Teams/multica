@@ -141,6 +141,31 @@ describe("LRM-1514 star-graph layout — D5 baseline from algorithm", () => {
     expect(Math.hypot(branchA.x - branchB.x, branchA.y - branchB.y)).toBeGreaterThan(150);
   });
 
+  it("uses unequal branch depths instead of an equal-radius wheel", () => {
+    const layout = layoutStarGraph(
+      [
+        { id: "goal", tier: "m", radius: 59, nodeKind: "goal" },
+        { id: "work-a", tier: "s", clusterId: "branch-a" },
+        { id: "work-b", tier: "s", clusterId: "branch-b" },
+        { id: "work-c", tier: "s", clusterId: "branch-c" },
+      ],
+      [
+        { id: "a", fromNodeId: "goal", toNodeId: "work-a", kind: "decompose" },
+        { id: "b", fromNodeId: "goal", toNodeId: "work-b", kind: "decompose" },
+        { id: "c", fromNodeId: "goal", toNodeId: "work-c", kind: "decompose" },
+      ],
+    );
+    const goal = layout.nodes.find((node) => node.id === "goal")!;
+    const branchDistances = ["work-a", "work-b", "work-c"].map((id) => {
+      const node = layout.nodes.find((candidate) => candidate.id === id)!;
+      return dist(goal.x, goal.y, node.x, node.y);
+    });
+
+    expect(goal.radius).toBe(59);
+    expect(Math.max(...branchDistances) - Math.min(...branchDistances)).toBeGreaterThan(250);
+    expect(layout.clusters.every((cluster) => cluster.width && cluster.height)).toBe(true);
+  });
+
   it("keeps branch-scoped Work S beside its stable result instead of the Goal", () => {
     const layout = layoutStarGraph([
       { id: "goal", tier: "l", nodeKind: "goal" },

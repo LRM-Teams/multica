@@ -174,14 +174,14 @@ describe("Director V6 canvas adapter", () => {
     ]);
   });
 
-  it("keeps the Goal tier canonical while leaving room for a larger synthesis", () => {
+  it("renders canonical Goal as a compact origin below synthesis tiers", () => {
     const result = adaptResearchV6DirectorCanvas({
       runId: RUN_ID,
       eventSequence: 8,
       nodes: [node("goal", "GOAL", { kind: "goal" })],
       edges: [],
     });
-    expect(result.graph.nodes[0]?.level).toBe("l");
+    expect(result.graph.nodes[0]?.level).toBe("m");
     expect(result.graph.nodes[0]?.payload).toMatchObject({
       projection_tier: "GOAL",
       semantic_role: "goal",

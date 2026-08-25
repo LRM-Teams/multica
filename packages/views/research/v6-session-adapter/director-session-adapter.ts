@@ -47,9 +47,10 @@ function rendererLevel(node: ResearchV6DirectorProjectionNode): "xxl" | "xl" | "
     case "XXL":
       return "xxl";
     case "GOAL":
-      // Goal is the origin, not the final synthesis. Keeping it below XXL
-      // leaves visual headroom for the research result the run is building.
-      return "l";
+      // Goal is the compact origin, not the final synthesis. The layout gives
+      // it a dedicated 118px semantic radius while M typography keeps the
+      // visual hierarchy available for integrated L/XL/XXL results.
+      return "m";
     case "XL":
       return "xl";
     case "L":

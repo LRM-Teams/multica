@@ -1347,6 +1347,7 @@
       "load_more": "加载更多（还剩 {{count}} 条）",
       "load_more_pending": "加载中…"
     },
+    "cluster_scope": "{{title}} 的深挖范围",
     "cluster_hidden": "+{{count}} 隐藏",
     "graph_live": {
       "updating": "星图正在重组（v{{version}}）…",
@@ -1392,6 +1393,7 @@
     },
     "star_graph": {
       "canvas_label": "调研星图画布",
+      "origin_header": "调研起点",
       "tier_headers": {
         "xxl": "最终综合",
         "xl": "稳定结论",

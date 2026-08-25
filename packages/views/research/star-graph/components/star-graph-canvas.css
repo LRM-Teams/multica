@@ -490,13 +490,29 @@
   transition: opacity 180ms ease;
 }
 
-/* Goal is a semantic root, not an XXL synthesis. Keep the existing size
- * contract for compatibility, but give the root its own visual treatment. */
+/* Goal is a compact origin, not an XXL synthesis. */
 .sg-node[data-semantic-role="goal"] {
   border-color: var(--research-stage-explore);
+  background-color: color-mix(
+    in oklab,
+    var(--card) 82%,
+    var(--research-stage-explore)
+  );
+  background-image: radial-gradient(
+    circle at 44% 34%,
+    color-mix(in oklab, var(--research-stage-explore) 24%, var(--card)),
+    color-mix(in oklab, var(--canvas-bg) 92%, var(--research-stage-explore)) 72%
+  );
   box-shadow:
-    0 0 0 2px color-mix(in oklab, var(--research-stage-explore) 42%, transparent),
-    0 0 34px color-mix(in oklab, var(--research-stage-explore) 22%, transparent);
+    inset 0 0 22px
+      color-mix(in oklab, var(--research-stage-explore) 8%, transparent),
+    0 10px 28px var(--sg-elevation-shadow),
+    0 0 36px color-mix(in oklab, var(--research-stage-explore) 18%, transparent);
+}
+.sg-node[data-semantic-role="goal"] [data-testid="star-graph-header"] {
+  color: var(--research-stage-explore);
+  text-shadow: 0 0 12px
+    color-mix(in oklab, var(--research-stage-explore) 32%, transparent);
 }
 .sg-semantic-content-hidden .sg-core > *,
 .sg-semantic-content-hidden .sg-document-badge {

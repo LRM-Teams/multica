@@ -276,7 +276,7 @@ export function toStarGraphNodeView(node: StarGraphNodeInput): StarGraphNodeView
     tierSource: source,
     state,
     title: node.title,
-    subLabel: subLabelForTier(node),
+    subLabel: semanticRole === "goal" ? undefined : subLabelForTier(node),
     metrics,
     semanticRole,
   };

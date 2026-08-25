@@ -47,9 +47,10 @@ function rendererLevel(node: ResearchV6DirectorProjectionNode): "xxl" | "xl" | "
     case "XXL":
       return "xxl";
     case "GOAL":
-      // Goal is the origin, not the final synthesis. Keeping it below XXL
-      // leaves visual headroom for the research result the run is building.
-      return "l";
+      // Goal is the compact origin, not the final synthesis. The layout gives
+      // it a dedicated 118px semantic radius while M typography keeps the
+      // visual hierarchy available for integrated L/XL/XXL results.
+      return "m";
     case "XL":
       return "xl";
     case "L":
@@ -88,7 +89,10 @@ export function adaptResearchV6DirectorCanvas(
   // second Agent circle duplicates the same execution unit and overwhelms the
   // constellation with roster nodes and assignment edges.
   const visibleNodes = projection.nodes.filter(
-    (node) => !node.absorbed && node.canonicalRef.kind !== "agent",
+    (node) =>
+      !node.absorbed &&
+      node.canonicalRef.kind !== "agent" &&
+      node.kind.trim().toLowerCase() !== "agent",
   );
   const visibleNodeIds = new Set(visibleNodes.map((node) => node.id));
   const absorbedInputs = new Map<string, string[]>();

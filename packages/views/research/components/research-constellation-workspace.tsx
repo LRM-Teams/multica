@@ -416,14 +416,39 @@ export function ResearchConstellationWorkspace({
 
   const clusterLabels = useMemo(() => {
     const map = new Map<string, string>();
+    const tierRank = new Map<string, number>([
+      ["xxl", 5],
+      ["xl", 4],
+      ["l", 3],
+      ["m", 2],
+      ["s", 1],
+    ]);
     for (const cluster of typedGraph?.clusters ?? []) {
       const id = cluster.id || cluster.name;
       if (!id) continue;
       const label = (cluster.label || cluster.name || "").trim();
-      if (label) map.set(id, label);
+      if (label && label !== id) {
+        map.set(id, label);
+        continue;
+      }
+      const landmark = (typedGraph?.nodes ?? [])
+        .filter((node) => node.cluster_id === id && node.title.trim())
+        .sort(
+          (left, right) =>
+            (tierRank.get(right.level.toLowerCase()) ?? 0) -
+              (tierRank.get(left.level.toLowerCase()) ?? 0) ||
+            left.id.localeCompare(right.id),
+        )[0];
+      if (!landmark) continue;
+      const title = landmark.title.trim();
+      const conciseTitle = title.length > 28 ? `${title.slice(0, 27)}…` : title;
+      map.set(
+        id,
+        t(($) => $.d5.cluster_scope, { title: conciseTitle }),
+      );
     }
     return map;
-  }, [typedGraph?.clusters]);
+  }, [t, typedGraph?.clusters, typedGraph?.nodes]);
 
   const summary = useMemo(
     () =>
@@ -722,7 +747,7 @@ export function ResearchConstellationWorkspace({
         {canvasModel && !projectionMismatch && activeLens !== "lineage" ? (
           <StarGraphCanvas
             model={canvasModel}
-            cameraSessionId={`${overlaySessionId}:d5-visual-v3`}
+            cameraSessionId={`${overlaySessionId}:d5-visual-v4`}
             selectedNodeId={selectedNode?.id ?? null}
             onSelectNode={handleCanvasFocus}
             onClearSelection={handleCanvasBackground}

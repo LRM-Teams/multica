@@ -67,6 +67,8 @@ export function defaultLabelBox(tier: StarGraphLayoutTier): StarGraphLabelBox {
 export interface StarGraphLayoutNode {
   id: string;
   tier: StarGraphLayoutTier;
+  /** Optional semantic radius override. The Goal origin uses a compact 118px disc. */
+  radius?: number;
   /** Canonical backend node type. Used only for spatial semantics. */
   nodeKind?: string | null;
   /** Cluster (theme/成果) grouping key. Null = unclustered / free direction. */
@@ -123,6 +125,9 @@ export interface StarGraphLayoutCluster {
   x: number;
   y: number;
   radius: number;
+  /** Elliptical presentation footprint; radius remains the containment contract. */
+  width?: number;
+  height?: number;
   memberIds: string[];
 }
 
@@ -367,12 +372,17 @@ interface EngineNode extends StarGraphLayoutNode {
   label: StarGraphLabelBox;
 }
 
+function nodeRadius(node: Pick<StarGraphLayoutNode, "tier" | "radius">): number {
+  return node.radius ?? STAR_GRAPH_RADIUS[node.tier];
+}
+
 function nodeSignature(node: StarGraphLayoutNode): string {
   return [
     node.id,
     node.tier,
     node.clusterId ?? "",
     node.parentId ?? "",
+    nodeRadius(node),
     node.nodeKind ?? "",
   ].join("|");
 }
@@ -474,7 +484,11 @@ export function layoutStarGraph(
         .map((node) => node.clusterId as string),
     ),
   ].sort();
-  const sectorCount = clusterKeys.length + (freeStable.length > 0 ? 1 : 0);
+  const orderedGroups: (string | "__free__")[] = [
+    ...clusterKeys,
+    ...(freeStable.length > 0 ? (["__free__"] as const) : []),
+  ];
+  const sectorCount = orderedGroups.length;
 
   /* ---- Angular sector per cluster group; deterministic (sorted keys). ---- */
   const sectorStart = new Map<string | "__free__", number>();
@@ -491,7 +505,6 @@ export function layoutStarGraph(
     // two stable results on the left/right axis and three in a broad triangle
     // instead of collapsing the first impression into a vertical chain.
     let cursor = hasCanonicalOrigin ? -fieldSpan / 2 : -Math.PI / 2;
-    const orderedGroups: (string | "__free__")[] = [...clusterKeys, "__free__"];
     for (const g of orderedGroups) {
       sectorStart.set(g, cursor + gap / 2);
       sectorSpan.set(g, slot);
@@ -502,9 +515,19 @@ export function layoutStarGraph(
   /* ---- Radial band: place each cluster's members outward from the root. ---- */
   // Each stable node gets an angle inside its group sector and a radial offset
   // that grows so big tiers sit further out and clear the root's own disc.
-  const rootRadius = STAR_GRAPH_RADIUS[root.tier];
+  const rootRadius = nodeRadius(root);
   const hasCanonicalOrigin = root.nodeKind?.toLowerCase() === "goal";
   const reused = new Set<string>();
+
+  // The reference constellation is intentionally not an equal-radius wheel.
+  // Branches advance through alternating depth bands, producing short local
+  // edges, medium branch edges, and long cross-field synthesis edges.
+  const directionalDepthFor = (group: string | "__free__") => {
+    const index = Math.max(0, orderedGroups.indexOf(group));
+    const depthPattern = [0, 220, 430, 110, 330, 560] as const;
+    return depthPattern[index % depthPattern.length]! +
+      Math.floor(index / depthPattern.length) * 240;
+  };
 
   const placeStableCluster = (nodesInGroup: EngineNode[], group: string | "__free__") => {
     const start = sectorStart.get(group) ?? 0;
@@ -512,12 +535,12 @@ export function layoutStarGraph(
     // Sort members largest-first so big nodes anchor the innermost radius.
     const members = [...nodesInGroup].sort(
       (a, b) =>
-        STAR_GRAPH_RADIUS[b.tier] - STAR_GRAPH_RADIUS[a.tier] ||
+        nodeRadius(b) - nodeRadius(a) ||
         a.id.localeCompare(b.id),
     );
-    const firstRadius = STAR_GRAPH_RADIUS[members[0]!.tier];
+    const firstRadius = nodeRadius(members[0]!);
     let radial = hasCanonicalOrigin
-      ? rootRadius + firstRadius + 300
+      ? rootRadius + firstRadius + 300 + directionalDepthFor(group)
       : rootRadius + members[0]!.label.halfWidth * 0.5 + 46;
     for (let i = 0; i < members.length; i += 1) {
       const n = members[i]!;
@@ -535,8 +558,8 @@ export function layoutStarGraph(
       const fraction = count === 1 ? 0.5 : (i + 0.5) / count;
       const angle = start + fraction * span;
       // Push the radial offset out enough to avoid the previous member's disc.
-      const r = STAR_GRAPH_RADIUS[n.tier];
-      const prevRadius = i > 0 ? STAR_GRAPH_RADIUS[members[i - 1]!.tier] : 0;
+      const r = nodeRadius(n);
+      const prevRadius = i > 0 ? nodeRadius(members[i - 1]!) : 0;
       const minGap = r + prevRadius + padding;
       if (radial < rootRadius + minGap * 0.4) {
         radial = rootRadius + minGap * 0.4;
@@ -588,7 +611,7 @@ export function layoutStarGraph(
             const memberPosition = pos.get(member.id)!;
             return (
               dist(center.x, center.y, memberPosition.x, memberPosition.y) +
-              STAR_GRAPH_RADIUS[member.tier]
+              nodeRadius(member)
             );
           }),
         ),
@@ -598,7 +621,8 @@ export function layoutStarGraph(
     const start = sectorStart.get(key) ?? 0;
     const span = sectorSpan.get(key) ?? 0;
     const angle = start + span / 2;
-    const radial = rootRadius + STAR_GRAPH_RADIUS.m + 300;
+    const radial =
+      rootRadius + STAR_GRAPH_RADIUS.m + 300 + directionalDepthFor(key);
     clusterCenters.set(key, {
       x: Math.cos(angle) * radial,
       y: Math.sin(angle) * radial,
@@ -626,7 +650,7 @@ export function layoutStarGraph(
       { x: 0, y: 0 };
     const parent = nodes.find((n) => n.id === parentId);
     const parentRadius = parent
-      ? STAR_GRAPH_RADIUS[parent.tier]
+      ? nodeRadius(parent)
       : clusterId
         ? (clusterAnchorRadii.get(clusterId) ?? STAR_GRAPH_RADIUS.m)
         : STAR_GRAPH_RADIUS.m;
@@ -678,8 +702,8 @@ export function layoutStarGraph(
         const dx = pb.x - pa.x;
         const dy = pb.y - pa.y;
         const d = Math.sqrt(dx * dx + dy * dy) || 1e-6;
-        const ar = STAR_GRAPH_RADIUS[a.tier];
-        const br = STAR_GRAPH_RADIUS[b.tier];
+        const ar = nodeRadius(a);
+        const br = nodeRadius(b);
         const want = ar + br + padding;
         if (d < want) {
           // Incremental stability: reused/root nodes are anchors. New content
@@ -734,7 +758,7 @@ export function layoutStarGraph(
         if (!parentCenter) continue;
         const parent = nodes.find((n) => n.id === parentId);
         const parentRadius = parent
-          ? STAR_GRAPH_RADIUS[parent.tier]
+          ? nodeRadius(parent)
           : clusterId
             ? (clusterAnchorRadii.get(clusterId) ?? STAR_GRAPH_RADIUS.m)
             : STAR_GRAPH_RADIUS.m;
@@ -770,7 +794,7 @@ export function layoutStarGraph(
       tier: n.tier,
       x: Math.round(p.x * 100) / 100,
       y: Math.round(p.y * 100) / 100,
-      radius: STAR_GRAPH_RADIUS[n.tier],
+      radius: nodeRadius(n),
       label: n.label,
       clusterId: n.clusterId ?? null,
       angle: angleOf.get(n.id) ?? 0,
@@ -791,20 +815,29 @@ export function layoutStarGraph(
     });
     const members = [...stableMembers, ...orbitMembers];
     const memberIds = members.map((n) => n.id).sort();
-    let cx = 0;
-    let cy = 0;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
     for (const m of members) {
       const p = pos.get(m.id)!;
-      cx += p.x;
-      cy += p.y;
+      const radius = nodeRadius(m);
+      const horizontalPad = m.label.halfWidth * 0.35 + 36;
+      const verticalPad = m.label.halfHeight * 0.25 + 34;
+      minX = Math.min(minX, p.x - radius - horizontalPad);
+      maxX = Math.max(maxX, p.x + radius + horizontalPad);
+      minY = Math.min(minY, p.y - radius - verticalPad);
+      maxY = Math.max(maxY, p.y + radius + verticalPad);
     }
-    cx /= members.length;
-    cy /= members.length;
+    const width = Math.max(260, maxX - minX);
+    const height = Math.max(190, maxY - minY);
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
     let maxR = 0;
     for (const m of members) {
       const p = pos.get(m.id)!;
       const d = dist(cx, cy, p.x, p.y);
-      const ext = d + STAR_GRAPH_RADIUS[m.tier] + m.label.halfWidth * 0.5 + 12;
+      const ext = d + nodeRadius(m) + m.label.halfWidth * 0.5 + 12;
       if (ext > maxR) maxR = ext;
     }
     clusters.push({
@@ -812,6 +845,8 @@ export function layoutStarGraph(
       x: Math.round(cx * 100) / 100,
       y: Math.round(cy * 100) / 100,
       radius: Math.ceil(maxR),
+      width: Math.ceil(width),
+      height: Math.ceil(height),
       memberIds,
     });
   }
@@ -832,7 +867,7 @@ export function layoutStarGraph(
     let maxY = -Infinity;
     for (const member of frontierMembers) {
       const point = pos.get(member.id)!;
-      const radius = STAR_GRAPH_RADIUS[member.tier];
+      const radius = nodeRadius(member);
       minX = Math.min(minX, point.x - radius - pad);
       minY = Math.min(minY, point.y - radius - pad);
       maxX = Math.max(maxX, point.x + radius + pad);
@@ -888,6 +923,6 @@ function nodeSignatureCompat(
 ): boolean {
   // Older position records do not carry nodeKind. Compare the geometry part;
   // the full signature still invalidates through keyByNode between versions.
-  const geometrySig = `${prev.id}|${prev.tier}|${prev.clusterId ?? ""}|${prev.parentId ?? ""}`;
+  const geometrySig = `${prev.id}|${prev.tier}|${prev.clusterId ?? ""}|${prev.parentId ?? ""}|${prev.radius}`;
   return currentSig.startsWith(`${geometrySig}|`);
 }

@@ -1347,6 +1347,7 @@
       "load_more": "Load more ({{count}} remaining)",
       "load_more_pending": "Loading more…"
     },
+    "cluster_scope": "Deep research around {{title}}",
     "cluster_hidden": "+{{count}} hidden",
     "graph_live": {
       "updating": "Constellation reorganizing (v{{version}})…",
@@ -1392,6 +1393,7 @@
     },
     "star_graph": {
       "canvas_label": "Research constellation canvas",
+      "origin_header": "ORIGIN",
       "tier_headers": {
         "xxl": "MASTER SYNTHESIS",
         "xl": "STABLE RESULT",

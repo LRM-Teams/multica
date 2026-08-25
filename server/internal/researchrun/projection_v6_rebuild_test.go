@@ -50,7 +50,7 @@ func TestV6WorkProjectionUsesAssignedBranchScope(t *testing.T) {
 		"inbox.completed_at",
 		"agent_task_progress_snapshot",
 		"progress.updated_at",
-		`kind != "director" || !terminal`,
+		`w.kind<>'director'`,
 		"build.defaultVisible[workNodeID] = false",
 		`v6ProjectionEdgeID("collapsed_path"`,
 	} {

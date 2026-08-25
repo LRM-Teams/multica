@@ -89,3 +89,55 @@ func TestV6ProjectionIncludesRunScopedAgentsAndWorkAssignments(t *testing.T) {
 		t.Fatalf("Work detail Agent refs=%+v, want assigned worker before an Attempt exists", detail.AgentRefs)
 	}
 }
+
+func TestV6ProjectionSliceDoesNotRevealDirectorCycleWork(t *testing.T) {
+	run := newTransactionRecoveryRun(t, "Hide Director cycle Work from V6 projection")
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_session SET orchestrator_version='research-run-v6' WHERE id=$1::uuid`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	directorWorkID := uuid.NewString()
+	if _, err := run.pool.Exec(run.ctx, `INSERT INTO research_work_item(
+		id,workspace_id,session_id,kind,status,assigned_agent_id,goal_version,idempotency_key,
+		payload_schema_id,expected_result_schema_id,payload,state_version
+	) VALUES($1::uuid,$2::uuid,$3::uuid,'director','succeeded',$4::uuid,1,$5,
+		'director.action.registry.v1','director_action_proposal','{}'::jsonb,1)`,
+		directorWorkID, run.fixture.workspaceID, run.fixture.sessionID, run.fixture.agentID,
+		"projection-director:"+directorWorkID); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot, err := run.store.ProjectionV6Snapshot(run.ctx, V6ProjectionPageRequest{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	goalNodeID := ""
+	for _, node := range snapshot.Nodes {
+		if node.Kind == "goal" {
+			goalNodeID = node.ID
+		}
+		if node.CanonicalRef.Kind == "work_item" && node.CanonicalRef.ID == directorWorkID {
+			t.Fatal("default projection exposed operational Director cycle Work")
+		}
+	}
+	if goalNodeID == "" {
+		t.Fatal("V6 projection Goal node is missing")
+	}
+
+	slice, err := run.store.ProjectionV6Slice(run.ctx, V6ProjectionSliceRequest{
+		WorkspaceID: run.fixture.workspaceID,
+		RunID:       run.fixture.sessionID,
+		SnapshotID:  snapshot.SnapshotID,
+		RootNodeID:  goalNodeID,
+		Depth:       1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, node := range slice.Nodes {
+		if node.CanonicalRef.Kind == "work_item" && node.CanonicalRef.ID == directorWorkID {
+			t.Fatal("expanded Goal slice exposed operational Director cycle Work")
+		}
+	}
+}

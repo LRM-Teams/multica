@@ -69,6 +69,11 @@ The Work node carries the Agent's canonical id and display name. A stable Agent
 identity colour may accent the badge, while lifecycle borders and glyphs remain
 reserved for execution state so identity and status never compete.
 
+Director cycle Work is internal orchestration, not user-facing research Work.
+It must never enter the default canvas, canonical canvas pages, expanded Goal
+slices, or live deltas. Director execution remains visible through chat, Brief,
+presence, and activity surfaces without producing duplicate Work circles.
+
 The origin is always a distinct `{node_kind: "goal", level: "m"}` node. A
 master synthesis is emitted only for a uniquely highest, accepted Insight with
 canonical derivation inputs, as `{node_kind: "insight", node_subtype:

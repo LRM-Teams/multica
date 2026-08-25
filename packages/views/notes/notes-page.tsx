@@ -640,6 +640,13 @@ function NoteEditor({
     return () => {
       active = false;
       window.clearTimeout(timeout);
+      const latest = draftRef.current;
+      if (latest.title !== latest.serverTitle || latest.content !== latest.serverContent) {
+        void updateNotePage({
+          id: selected.id,
+          data: { title: latest.title, content: latest.content },
+        });
+      }
     };
   }, [dirty, draft.content, draft.title, selected.id, t, updateNotePage]);
 

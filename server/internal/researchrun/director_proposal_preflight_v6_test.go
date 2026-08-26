@@ -48,6 +48,11 @@ func TestValidateV6ParallelResearchPlanRequiresStaffingAndParallelWork(t *testin
 			facts: v6DirectorPreflightFacts{maxParallelTasks: 5, workerCount: 1, pendingAgentCount: 2, childBranches: 3},
 		},
 		{
+			name: "report-only maintenance cycle does not starve behind open questions",
+			facts: v6DirectorPreflightFacts{maxParallelTasks: 5, workerCount: 5, resultCount: 10,
+				unresolvedQuestions: 12, proposedReports: 1, reportOnly: true, childBranches: 5},
+		},
+		{
 			name: "surplus Agent creation does not block work assigned to joined workers",
 			facts: v6DirectorPreflightFacts{maxParallelTasks: 5, workerCount: 3, proposedAgentCount: 1,
 				resultCount: 3, unresolvedQuestions: 3, proposedAtomicWork: 3, proposedWorkBranches: 3, childBranches: 3},

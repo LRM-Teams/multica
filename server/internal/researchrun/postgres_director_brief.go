@@ -583,10 +583,7 @@ func v6DirectorActionPayloadSchemas() map[string]any {
 			"required": []string{"objective", "scope", "budget_share"}, "properties": map[string]any{
 				"objective": text, "scope": jsonObject, "budget_share": map[string]any{"type": "number", "minimum": 0, "maximum": 1}, "parent_branch_id": uuidValue}},
 		"report.create.v1": map[string]any{"type": "object", "additionalProperties": false,
-			"required": []string{"assignee_agent_id", "title", "inputs"}, "properties": map[string]any{
-				"assignee_agent_id": uuidValue, "title": text, "inputs": map[string]any{"type": "array", "minItems": 1, "maxItems": 1024, "items": map[string]any{
-					"type": "object", "additionalProperties": false, "required": []string{"branch_id", "node_artifact_version_id", "input_role", "content_hash"}, "properties": map[string]any{
-						"branch_id": uuidValue, "node_artifact_version_id": uuidValue, "input_role": map[string]any{"enum": []string{"branch_xxl", "branch_maximum", "unresolved_gap"}}, "content_hash": hashValue}}}}},
+			"required": []string{"title"}, "properties": map[string]any{"title": text}},
 		"target.action.v1": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"target_id"}, "properties": map[string]any{
 			"target_id": uuidValue, "assignee_agent_id": uuidValue, "mission": text, "scope": jsonObject, "reason": text}},
 		"agent.action.v1": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"agent_id"}, "properties": map[string]any{

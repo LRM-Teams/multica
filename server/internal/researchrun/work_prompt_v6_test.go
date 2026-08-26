@@ -79,6 +79,9 @@ func TestRonaldoV6DirectorProtocolRequiresParallelChineseResearch(t *testing.T) 
 		"不得对同一输入组合重复 create_integration",
 		"拆成独立 atomic Work",
 		"一级研究方向总数不得超过 max_parallel_tasks",
+		"payload 只提供 title",
+		"由服务端在创建 Report Work 的同一事务内选择",
+		"不得复制或提交 reporter_agent_id、inputs、content_hash",
 	} {
 		if !strings.Contains(RonaldoV6DirectorSystemProtocol, want) {
 			t.Fatalf("director protocol missing %q", want)

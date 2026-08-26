@@ -300,7 +300,7 @@ func validateV6ParallelResearchPlan(facts v6DirectorPreflightFacts) error {
 	if facts.workerCount+facts.pendingAgentCount+facts.proposedAgentCount < requiredWork {
 		return fmt.Errorf("%w: 当前研究至少需要 %d 个不同的 run-scoped Agent 并发覆盖独立方向或待回答问题", ErrInvalidContract, requiredWork)
 	}
-	if facts.pendingAgentCount+facts.proposedAgentCount > 0 {
+	if facts.workerCount < requiredWork && facts.pendingAgentCount+facts.proposedAgentCount > 0 {
 		if facts.proposedAtomicWork > 0 {
 			return fmt.Errorf("%w: Agent 创建是异步的；先等待全部成员 joined，再在后续轮次并行派工", ErrInvalidContract)
 		}

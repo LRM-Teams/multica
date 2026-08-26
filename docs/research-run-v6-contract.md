@@ -158,6 +158,10 @@ Atomic research dispatch has one exact mechanical mapping: the outer Action uses
 `kind=research` and `expected_result_schema_id=atomic_result_submission`.
 Names from any of those other layers are not Action-kind aliases, and the
 Director must not discover the vocabulary through repeated rejected submissions.
+Agent creation is asynchronous, so Work cannot target an Agent requested in the
+same Proposal. A Proposal may still create surplus capacity while dispatching
+Work to enough already-joined, eligible workers; that independent Work must not
+be rejected merely because the staffing Action shares the Proposal.
 
 The Director plans, staffs, assigns and integrates; it never executes atomic
 research Work itself. Atomic Work uses `atomic_result_submission`, a non-empty

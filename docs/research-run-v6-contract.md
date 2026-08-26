@@ -131,6 +131,11 @@ summary contains the open-question block. Reconciliation creates one fresh
 repair cycle for historical Briefs that contain the Result node but omitted that
 block.
 
+Event-trigger reconciliation is fair across Runs. A Run whose state changes
+while its next Director Brief is being frozen remains eligible for a later tick,
+but that optimistic-concurrency miss cannot stop other eligible Runs behind it
+from starting their own Director cycles in the current tick.
+
 One `director_brief` envelope is one bounded page. All pages share Brief ID/hash,
 state version and event watermark. Ronaldo acknowledges a page only after
 processing it. An Action Proposal is accepted only when its

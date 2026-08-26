@@ -244,7 +244,8 @@ HTTP 400 `research.v6.invalid_contract` 响应会包含受限字段或 hash 的�
 提交前先修正该精确合同违规；被拒绝的 envelope 尚未持久交接。不得盲目重发未修改的
 无效文件。若当前 Work 是主理人 `director_action_proposal`，严格边界拒绝会立即终止该
 Director Attempt 并触发新的 Director cycle；不要在已经结算的 Attempt 上重试，必须读取
-新 Manifest 与新 Brief 后重新规划。
+新 Manifest 与新 Brief 后重新规划。某个 Run 在 Brief 冻结期间发生状态竞争时，服务端会
+保留该 Run 供后续重试，同时继续触发其他 Run，不会让队首竞争阻塞整条恢复队列。
 
 JSON 字符串不得包含 `U+0000`/NUL。重新计算 `content_hash` 和提交前，先从复制的来源
 文本中移除该字符。

@@ -78,9 +78,8 @@ func (s *PostgresStore) CreateV6ReportWork(ctx context.Context, in CreateV6Repor
 		if input.InputRole != "branch_xxl" && input.InputRole != "branch_maximum" && input.InputRole != "unresolved_gap" {
 			return V6ReportWork{}, fmt.Errorf("%w: server report selection contains unsupported role %q", ErrInvalidContract, input.InputRole)
 		}
-		var storedHash, tier, insightStatus string
-		var currentXXL, activeFrontier bool
-		err = tx.QueryRow(ctx, `SELECT v.content_hash,COALESCE(iv.tier,''),COALESCE(iv.status,''),COALESCE(b.current_xxl_version_id=iv.id,false),EXISTS(SELECT 1 FROM research_branch_frontier f WHERE f.session_id=$2::uuid AND f.branch_id=$4::uuid AND f.node_artifact_version_id=v.id AND f.removed_by_event_sequence IS NULL) FROM research_artifact_version v JOIN research_artifact_passport p ON p.id=v.artifact_id JOIN research_node_branch nb ON nb.session_id=v.session_id AND nb.node_artifact_version_id=v.id AND nb.branch_id=$4::uuid JOIN research_branch b ON b.id=nb.branch_id LEFT JOIN research_insight_version iv ON iv.artifact_version_id=v.id WHERE v.workspace_id=$1::uuid AND v.session_id=$2::uuid AND v.id=$3::uuid AND p.lifecycle_status='accepted'`, in.WorkspaceID, in.RunID, input.NodeArtifactVersionID, input.BranchID).Scan(&storedHash, &tier, &insightStatus, &currentXXL, &activeFrontier)
+		var storedHash string
+		err = tx.QueryRow(ctx, `SELECT v.content_hash FROM research_artifact_version v JOIN research_artifact_passport p ON p.id=v.artifact_id JOIN research_node_branch nb ON nb.session_id=v.session_id AND nb.node_artifact_version_id=v.id AND nb.branch_id=$4::uuid WHERE v.workspace_id=$1::uuid AND v.session_id=$2::uuid AND v.id=$3::uuid AND p.lifecycle_status='accepted'`, in.WorkspaceID, in.RunID, input.NodeArtifactVersionID, input.BranchID).Scan(&storedHash)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return V6ReportWork{}, ErrWorkItemChanged
 		}
@@ -89,20 +88,6 @@ func (s *PostgresStore) CreateV6ReportWork(ctx context.Context, in CreateV6Repor
 		}
 		if storedHash != input.ContentHash {
 			return V6ReportWork{}, ErrWorkItemChanged
-		}
-		switch input.InputRole {
-		case "branch_xxl":
-			if !currentXXL || tier != "XXL" || insightStatus != "accepted" {
-				return V6ReportWork{}, fmt.Errorf("%w: selected branch_xxl is not the accepted current XXL", ErrInvalidContract)
-			}
-		case "branch_maximum":
-			if !activeFrontier || tier == "" || (tier != "S" && insightStatus != "accepted") {
-				return V6ReportWork{}, fmt.Errorf("%w: selected branch_maximum is not an accepted active Frontier node", ErrInvalidContract)
-			}
-		case "unresolved_gap":
-			if !activeFrontier {
-				return V6ReportWork{}, fmt.Errorf("%w: selected unresolved_gap is not on the active Frontier", ErrInvalidContract)
-			}
 		}
 	}
 	snapshotHash := selection.Hash

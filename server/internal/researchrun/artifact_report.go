@@ -82,6 +82,11 @@ func registerDraftReportRevisionPassportTx(
 	if err != nil {
 		return err
 	}
+	if _, err = tx.Exec(ctx, `
+		SELECT research_artifact_record_artifact_create_mutation($1::uuid, $2::uuid, $3::uuid)
+	`, workspaceID, sessionID, reportID); err != nil {
+		return err
+	}
 	if command.RowsAffected() == 1 {
 		return nil
 	}

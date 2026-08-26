@@ -59,7 +59,7 @@ func TestV6ReportReviewTransactionBoundary(t *testing.T) {
 
 func TestV6ReportWorkCreateTransactionBoundary(t *testing.T) {
 	assertReportSource(t, "postgres_report_work_v6.go", "registerDraftReportRevisionPassportTx", "research_report_input", "research_work_item", "'report_package_submission',$11::jsonb,1,now()", "commitResearchTx")
-	assertReportSource(t, "artifact_report.go", "'report_revision', NULL", "current_version", "ErrResultConflict")
+	assertReportSource(t, "artifact_report.go", "'report_revision', NULL", "research_artifact_record_artifact_create_mutation", "current_version", "ErrResultConflict")
 }
 
 func TestV6ReportWorkCreatedEventDoesNotReferenceUnversionedDraft(t *testing.T) {

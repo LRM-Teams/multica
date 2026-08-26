@@ -111,7 +111,8 @@ export type WSEventType =
   | "research_session:stage_eval"
   | "research_session:status_changed"
   | "research_session:product_round"
-  | "research_projection_v6:delta";
+  | "research_projection_v6:delta"
+  | "notes:share_unread";
 
 export interface WSMessage<T = unknown> {
   type: WSEventType;
@@ -658,6 +659,7 @@ export interface WSEventPayloadMap {
     through_sequence?: number;
     delta?: unknown;
   };
+  "notes:share_unread": { page_id?: string };
 }
 
 /**

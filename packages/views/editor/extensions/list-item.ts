@@ -1,5 +1,5 @@
-import { type Editor, InputRule } from "@tiptap/core";
-import { ListItem, TaskItem } from "@tiptap/extension-list";
+import { type Editor, InputRule, parseIndentedBlocks } from "@tiptap/core";
+import { ListItem, TaskItem, TaskList } from "@tiptap/extension-list";
 
 /**
  * Shared list keymap with proper "double-Enter exits list" behaviour.
@@ -32,6 +32,87 @@ function listItemKeymap(editor: Editor, name: string) {
     "Shift-Tab": () => editor.commands.liftListItem(name),
   };
 }
+
+// Stock TipTap requires whitespace after `]` (`- [ ] todo`). An empty item at
+// EOF serializes as `- [ ] ` and ContentEditor's getMarkdown().trimEnd()
+// strips that space. Without a match, `- [ ]` becomes a bullet whose text is
+// `[ ]` — a checkbox that turns into a dot and brackets after reload.
+const TASK_ITEM_LINE = /^(\s*)([-+*])\s+\[([ xX])\](?:\s+(.*))?$/;
+const TASK_LIST_START = /^\s*[-+*]\s+\[([ xX])\](?:\s+|$)/;
+
+function extractTaskItemData(match: RegExpMatchArray) {
+  return {
+    indentLevel: match[1]!.length,
+    mainContent: match[4] ?? "",
+    checked: match[3]!.toLowerCase() === "x",
+  };
+}
+
+export const PatchedTaskList = TaskList.extend({
+  markdownTokenizer: {
+    name: "taskList",
+    level: "block",
+    start(src: string) {
+      const index = src.match(TASK_LIST_START)?.index;
+      return index !== undefined ? index : -1;
+    },
+    tokenize(src, _tokens, lexer) {
+      const createToken = (
+        data: ReturnType<typeof extractTaskItemData>,
+        nestedTokens?: unknown[],
+      ) => ({
+        type: "taskItem",
+        raw: "",
+        mainContent: data.mainContent,
+        indentLevel: data.indentLevel,
+        checked: data.checked,
+        text: data.mainContent,
+        tokens: lexer.inlineTokens(data.mainContent),
+        nestedTokens,
+      });
+
+      const parseTaskListContent = (content: string) => {
+        const nestedResult = parseIndentedBlocks(
+          content,
+          {
+            itemPattern: TASK_ITEM_LINE,
+            extractItemData: extractTaskItemData,
+            createToken,
+            customNestedParser: parseTaskListContent,
+          },
+          lexer,
+        );
+        if (nestedResult) {
+          return [
+            {
+              type: "taskList",
+              raw: nestedResult.raw,
+              items: nestedResult.items,
+            },
+          ];
+        }
+        return lexer.blockTokens(content);
+      };
+
+      const result = parseIndentedBlocks(
+        src,
+        {
+          itemPattern: TASK_ITEM_LINE,
+          extractItemData: extractTaskItemData,
+          createToken,
+          customNestedParser: parseTaskListContent,
+        },
+        lexer,
+      );
+      if (!result) return undefined;
+      return {
+        type: "taskList",
+        raw: result.raw,
+        items: result.items,
+      };
+    },
+  },
+});
 
 export const PatchedListItem = ListItem.extend({
   addKeyboardShortcuts() {

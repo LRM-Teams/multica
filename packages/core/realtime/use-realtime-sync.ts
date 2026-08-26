@@ -469,6 +469,7 @@ function invalidateWorkspaceScopedQueries(qc: QueryClient): void {
     qc.invalidateQueries({ queryKey: chatKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: labelKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: voiceCallKeys.all(wsId) });
+    qc.invalidateQueries({ queryKey: noteKeys.all(wsId) });
   }
   // Per-issue caches are keyed without wsId, so the issueKeys.all(wsId)
   // prefix above does not reach them. They rely entirely on WS events for
@@ -737,6 +738,9 @@ export function useRealtimeSync(
       // every message would flood the network. Specific chat handlers below
       // still receive it via ws.on() (a separate subscription channel).
       "task:message",
+      // Direct note shares notify recipients here; skip the prefix path so a
+      // future notes:* refreshMap entry cannot double-invalidate.
+      "notes:share_unread",
       // task:completed / task:failed deliberately NOT here. They go through
       // both the task-prefix invalidate (refreshes the agent-task-snapshot
       // cache) AND the chat-specific ws.on() handlers below. The two
@@ -1404,6 +1408,11 @@ export function useRealtimeSync(
       onResearchEvent("research_projection_v6:delta"),
     );
 
+    const unsubNotesShareUnread = ws.on("notes:share_unread", () => {
+      const wsId = getCurrentWsId();
+      if (wsId) qc.invalidateQueries({ queryKey: noteKeys.all(wsId) });
+    });
+
     return () => {
       unsubAny();
       unsubAgentActivity();
@@ -1462,6 +1471,7 @@ export function useRealtimeSync(
       unsubResearchStatus();
       unsubResearchProductRound();
       unsubResearchV6Projection();
+      unsubNotesShareUnread();
       timers.forEach(clearTimeout);
       timers.clear();
     };

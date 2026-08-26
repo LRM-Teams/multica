@@ -60,6 +60,8 @@
     "child_page": "子页面",
     "child_links": "子页面",
     "share_action": "分享",
+    "share_unread": "未读的分享笔记",
+    "share_unread_nav": "未读的分享笔记",
     "current_shares": "正在共享给",
     "no_current_shares": "未共享给其他人",
     "share_member_workspace_label": "{{name}}（{{workspace}}）",

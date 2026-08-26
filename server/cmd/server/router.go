@@ -895,6 +895,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 
 			// Notes
 			r.Route("/api/notes", func(r chi.Router) {
+				r.Get("/share-unread-count", h.CountNoteShareUnread)
 				r.Post("/retrospectives", h.CreateNoteRetrospective)
 				r.Post("/period-briefs", h.CreateNotePeriodBrief)
 				r.Get("/period-briefs/active", h.GetActiveNotePeriodBrief)

@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 type NotePageResponse struct {
@@ -31,6 +32,7 @@ type NotePageResponse struct {
 	ShareAgentIDs   []string                   `json:"share_agent_ids"`
 	ShareChannelIDs []string                   `json:"share_channel_ids"`
 	CanManageShares bool                       `json:"can_manage_shares"`
+	ShareUnread     bool                       `json:"share_unread"`
 	CreatedAt       string                     `json:"created_at"`
 	UpdatedAt       string                     `json:"updated_at"`
 	DeletedAt       *string                    `json:"deleted_at"`
@@ -226,6 +228,64 @@ ORDER BY created_at ASC`, pageID)
 	return ids, rows.Err()
 }
 
+func (h *Handler) noteShareUnreadPageIDs(ctx context.Context, userID pgtype.UUID, pages []notePageRow) (map[string]struct{}, error) {
+	unread := map[string]struct{}{}
+	if len(pages) == 0 {
+		return unread, nil
+	}
+	pageIDs := make([]string, 0, len(pages))
+	for _, page := range pages {
+		pageIDs = append(pageIDs, uuidToString(page.ID))
+	}
+	rows, err := h.DB.Query(ctx, `
+SELECT page_id
+FROM note_page_share
+WHERE user_id = $1
+  AND seen_at IS NULL
+  AND page_id = ANY($2::uuid[])`, userID, pageIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		unread[uuidToString(id)] = struct{}{}
+	}
+	return unread, rows.Err()
+}
+
+func (h *Handler) markNoteShareSeen(ctx context.Context, pageID, userID pgtype.UUID) error {
+	_, err := h.DB.Exec(ctx, `
+UPDATE note_page_share
+SET seen_at = now()
+WHERE page_id = $1 AND user_id = $2 AND seen_at IS NULL`, pageID, userID)
+	return err
+}
+
+func (h *Handler) CountNoteShareUnread(w http.ResponseWriter, r *http.Request) {
+	workspaceID, userID, _, ok := h.notesWorkspaceAndUser(w, r)
+	if !ok {
+		return
+	}
+	var count int
+	if err := h.DB.QueryRow(r.Context(), `
+SELECT count(*)
+FROM note_page_share s
+JOIN note_page p ON p.id = s.page_id
+WHERE s.user_id = $1
+  AND s.seen_at IS NULL
+  AND p.deleted_at IS NULL
+  AND p.workspace_id = $2
+  AND p.owner_user_id <> $1`, userID, workspaceID).Scan(&count); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to count unread shares")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"count": count})
+}
+
 func (h *Handler) noteAccess(ctx context.Context, pageID, workspaceID, userID pgtype.UUID) (accessible bool, owner bool, err error) {
 	err = h.DB.QueryRow(ctx, `
 WITH RECURSIVE chain AS (
@@ -345,6 +405,12 @@ ORDER BY parent_id NULLS FIRST, sort_key, created_at`, workspaceID, userID)
 		writeError(w, http.StatusInternalServerError, "failed to list notes")
 		return
 	}
+	unreadIDs, err := h.noteShareUnreadPageIDs(r.Context(), userID, collected)
+	if err != nil {
+		// Unread markers must never blank the directory (e.g. migration not applied yet).
+		slog.Warn("note share unread lookup failed", "error", err)
+		unreadIDs = map[string]struct{}{}
+	}
 	pages := make([]NotePageResponse, 0, len(collected))
 	for _, p := range collected {
 		resp, err := h.notePageResponseWithShares(r.Context(), p, userID, nil)
@@ -352,6 +418,7 @@ ORDER BY parent_id NULLS FIRST, sort_key, created_at`, workspaceID, userID)
 			writeError(w, http.StatusInternalServerError, "failed to list notes")
 			return
 		}
+		_, resp.ShareUnread = unreadIDs[uuidToString(p.ID)]
 		pages = append(pages, resp)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"pages": pages})
@@ -436,9 +503,14 @@ func (h *Handler) GetNotePage(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	page, _, ok := h.loadAccessibleNote(w, r, chi.URLParam(r, "id"), workspaceID, userID)
+	page, owner, ok := h.loadAccessibleNote(w, r, chi.URLParam(r, "id"), workspaceID, userID)
 	if !ok {
 		return
+	}
+	if !owner {
+		if err := h.markNoteShareSeen(r.Context(), page.ID, userID); err != nil {
+			slog.Warn("mark note share seen failed", "page_id", uuidToString(page.ID), "error", err)
+		}
 	}
 	refs, err := h.loadNotePageRefs(r.Context(), page.ID, page.WorkspaceID, userID)
 	if err != nil {
@@ -860,6 +932,16 @@ func (h *Handler) UpdateNotePageShares(w http.ResponseWriter, r *http.Request) {
 		addedShareIDs(previous.AgentIDs, roster.AgentIDs),
 		addedShareIDs(previous.ChannelIDs, roster.ChannelIDs),
 	)
+	if addedUsers := addedShareIDs(previous.UserIDs, roster.UserIDs); len(addedUsers) > 0 {
+		h.publishToUsers(
+			protocol.EventNotesShareUnread,
+			uuidToString(page.WorkspaceID),
+			"member",
+			uuidToString(userID),
+			addedUsers,
+			map[string]any{"page_id": uuidToString(page.ID)},
+		)
+	}
 	resp := notePageToResponse(page, userID, roster.UserIDs, nil)
 	applyNoteShareRoster(&resp, roster)
 	writeJSON(w, http.StatusOK, resp)

@@ -220,6 +220,7 @@ export const NotePageSchema: z.ZodType<NotePage> = z.object({
   share_agent_ids: z.array(z.string()).default([]),
   share_channel_ids: z.array(z.string()).default([]),
   can_manage_shares: z.boolean().default(false),
+  share_unread: z.boolean().default(false),
   created_at: z.string().default(""),
   updated_at: z.string().default(""),
   deleted_at: z.string().nullable().default(null),
@@ -229,6 +230,12 @@ export const NotePageSchema: z.ZodType<NotePage> = z.object({
 export const NotePageListResponseSchema: z.ZodType<NotePageListResponse> = z.object({
   pages: z.array(NotePageSchema).default([]),
 }).loose();
+
+export const NoteShareUnreadCountSchema = z.object({
+  count: z.number().int().nonnegative().default(0),
+}).loose();
+
+export const EMPTY_NOTE_SHARE_UNREAD_COUNT = { count: 0 };
 
 export const EMPTY_NOTE_PAGE: NotePage = {
   id: "",
@@ -243,6 +250,7 @@ export const EMPTY_NOTE_PAGE: NotePage = {
   share_agent_ids: [],
   share_channel_ids: [],
   can_manage_shares: false,
+  share_unread: false,
   created_at: "",
   updated_at: "",
   deleted_at: null,

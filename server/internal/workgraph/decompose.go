@@ -151,17 +151,20 @@ func (s *Store) DecomposeIssue(ctx context.Context, input DecomposeInput) (Decom
 
 	var projectID, sourceChannelID, sourceMessageID, channelGoalID pgtype.UUID
 	var goalRequired pgtype.Bool
+	var goalVersion pgtype.Int8
 	var parentStatus string
 	err = tx.QueryRow(ctx, `
 		SELECT parent.project_id,source.channel_id,source.message_id,parent.status,
-		       parent.channel_goal_id,parent.goal_required
+		       parent.channel_goal_id,parent.goal_required,goal.version
 		FROM issue parent
 		LEFT JOIN issue_source_message source ON source.issue_id=parent.id
+		LEFT JOIN channel_goal goal
+		  ON goal.workspace_id=parent.workspace_id AND goal.id=parent.channel_goal_id
 		WHERE parent.workspace_id=$1 AND parent.id=$2
 		  AND parent.status NOT IN ('done','cancelled')
 		  AND ((parent.assignee_type='agent' AND parent.assignee_id=$3)
 		       OR (parent.creator_type='agent' AND parent.creator_id=$3))
-	`, w, parent, actor).Scan(&projectID, &sourceChannelID, &sourceMessageID, &parentStatus, &channelGoalID, &goalRequired)
+	`, w, parent, actor).Scan(&projectID, &sourceChannelID, &sourceMessageID, &parentStatus, &channelGoalID, &goalRequired, &goalVersion)
 	if err != nil {
 		return DecomposeResult{}, ErrGraphForbidden
 	}
@@ -206,12 +209,12 @@ func (s *Store) DecomposeIssue(ctx context.Context, input DecomposeInput) (Decom
 			INSERT INTO issue(
 				workspace_id,title,description,status,priority,assignee_type,assignee_id,
 				creator_type,creator_id,parent_issue_id,project_id,
-				acceptance_criteria,channel_goal_id,goal_required,position,number
+				acceptance_criteria,channel_goal_id,goal_required,goal_version_at_creation,position,number
 			) VALUES($1,$2,$3,$4,'none','agent',$5,'agent',$6,$7,$8,$9,
-				$10,$11,COALESCE((SELECT min(position)-1 FROM issue WHERE workspace_id=$1 AND status=$4),0),$12)
+				$10,$11,$12,COALESCE((SELECT min(position)-1 FROM issue WHERE workspace_id=$1 AND status=$4),0),$13)
 			RETURNING id
 		`, w, node.Title, node.Description, status, agentID, actor, parent, projectID,
-			acceptanceCriteria, channelGoalID, goalRequired, number).Scan(&issueID)
+			acceptanceCriteria, channelGoalID, goalRequired, goalVersion, number).Scan(&issueID)
 		if err != nil {
 			return DecomposeResult{}, err
 		}

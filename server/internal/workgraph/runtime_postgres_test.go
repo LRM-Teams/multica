@@ -391,6 +391,11 @@ func TestDecomposeIssueCreatesParallelRootsAndParkedJoin(t *testing.T) {
 	}
 	parent := createWorkgraphIssue(t, ctx, workspace, agentID, 1, "Parent", "in_progress")
 	goalID := createGoalAnchor(t, ctx, workspace, agentID)
+	// Children must be stamped with the Goal's version at creation time, not
+	// the default 1, so bump it before decomposing.
+	if _, err := testPool.Exec(ctx, `UPDATE channel_goal SET version=3 WHERE id=$1`, goalID); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := testPool.Exec(ctx, `UPDATE issue SET channel_goal_id=$2,goal_required=true WHERE id=$1`, parent.ID, goalID); err != nil {
 		t.Fatal(err)
 	}
@@ -452,14 +457,18 @@ func TestDecomposeIssueCreatesParallelRootsAndParkedJoin(t *testing.T) {
 	}
 	var childGoalID pgtype.UUID
 	var childGoalRequired bool
+	var childGoalVersion int64
 	var firstCriterion string
 	if err = testPool.QueryRow(ctx, `
-		SELECT channel_goal_id,goal_required,acceptance_criteria->>0
-		FROM issue WHERE id=$1::uuid`, result.IssueIDs["a"]).Scan(&childGoalID, &childGoalRequired, &firstCriterion); err != nil {
+		SELECT channel_goal_id,goal_required,goal_version_at_creation,acceptance_criteria->>0
+		FROM issue WHERE id=$1::uuid`, result.IssueIDs["a"]).Scan(&childGoalID, &childGoalRequired, &childGoalVersion, &firstCriterion); err != nil {
 		t.Fatal(err)
 	}
 	if childGoalID != goalID || !childGoalRequired || firstCriterion != "evidence A recorded" {
 		t.Fatalf("child Goal contract goal=%v required=%v criterion=%q", childGoalID, childGoalRequired, firstCriterion)
+	}
+	if childGoalVersion != 3 {
+		t.Fatalf("child goal_version_at_creation=%d, want the Goal's version 3 at creation time", childGoalVersion)
 	}
 	var managedChildren int
 	if err = testPool.QueryRow(ctx, `SELECT count(*) FROM issue_decompose_child WHERE parent_issue_id=$1`, parent.ID).Scan(&managedChildren); err != nil || managedChildren != 3 {

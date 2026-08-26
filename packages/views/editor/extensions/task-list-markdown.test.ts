@@ -2,8 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import { Editor } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
 import { Markdown } from "@tiptap/markdown";
-import { PatchedListItem, PatchedTaskItem } from "./list-item";
-import { TaskList } from "@tiptap/extension-list";
+import { PatchedListItem, PatchedTaskItem, PatchedTaskList } from "./list-item";
 
 // A minimal editor mirroring the production list config: StarterKit's stock
 // ListItem disabled in favor of PatchedListItem, plus the checkbox TaskList /
@@ -16,7 +15,7 @@ function makeEditor() {
     extensions: [
       StarterKit.configure({ listItem: false }),
       PatchedListItem,
-      TaskList,
+      PatchedTaskList,
       PatchedTaskItem,
       Markdown.configure({ indentation: { style: "space", size: 3 } }),
     ],
@@ -96,6 +95,23 @@ describe("task list markdown parsing", () => {
     expect(findAll(json, "taskList")).toHaveLength(0);
     expect(findAll(json, "bulletList")).toHaveLength(1);
   });
+
+  // Autosave does getMarkdown().trimEnd(). An empty task at EOF serializes as
+  // `- [ ] ` (space required by the tokenizer) and trimEnd strips that space.
+  // Reloading `- [ ]` must stay a checkbox, not a bullet whose text is `[ ]`.
+  it("parses a trailing empty `- [ ]` as an empty task item", () => {
+    editor = makeEditor();
+    loadMarkdown(editor, "- [ ] buy milk\n- [ ]");
+
+    const json = editor.getJSON() as JsonNode;
+    const items = findAll(json, "taskItem");
+    expect(items).toHaveLength(2);
+    expect(items[0]!.attrs?.checked).toBe(false);
+    expect(nodeText(items[0]!)).toBe("buy milk");
+    expect(items[1]!.attrs?.checked).toBe(false);
+    expect(nodeText(items[1]!)).toBe("");
+    expect(findAll(json, "listItem")).toHaveLength(0);
+  });
 });
 
 describe("task list markdown serialization", () => {
@@ -121,6 +137,18 @@ describe("task list markdown serialization", () => {
     });
 
     expect(editor.getMarkdown().trim()).toBe("- [x] todo");
+  });
+
+  it("reloads an empty trailing task after getMarkdown().trimEnd()", () => {
+    editor = makeEditor();
+    loadMarkdown(editor, "- [ ] buy milk\n- [ ] ");
+    loadMarkdown(editor, editor.getMarkdown().trimEnd());
+
+    const json = editor.getJSON() as JsonNode;
+    const items = findAll(json, "taskItem");
+    expect(items).toHaveLength(2);
+    expect(nodeText(items[1]!)).toBe("");
+    expect(findAll(json, "listItem")).toHaveLength(0);
   });
 });
 

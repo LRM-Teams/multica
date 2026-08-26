@@ -263,17 +263,41 @@ const reportReview = z
   })
   .strict();
 
+const reportDirectionCoverage = z
+  .object({
+    branch_id: uuid,
+    objective: z.string().min(1).max(32_768),
+    status: z.enum([
+      "represented",
+      "converging",
+      "researching",
+      "closed_without_result",
+      "empty",
+    ]),
+    node_artifact_version_id: uuid.optional(),
+    tier: z.enum(["S", "M", "L", "XL", "XXL"]).optional(),
+    input_role: z.string().max(160).optional(),
+    candidate_count: z.number().int().nonnegative(),
+    pending_count: z.number().int().nonnegative(),
+    active_work_count: z.number().int().nonnegative(),
+  })
+  .strict();
+
 export const ResearchV6DirectorReportMetadataSchema = z
   .object({
     id: uuid,
     revision: z.number().int().positive(),
     status: z.string().min(1).max(160),
+    work_status: z.string().max(160),
+    maturity: z.enum(["interim", "final"]),
+    direction_coverage: z.array(reportDirectionCoverage).max(128),
     title: z.string().max(4096),
     summary: z.string().max(32_768),
     package_hash: z.string(),
     document_content_hash: z.string(),
     published_at: timestamp.nullable(),
     created_at: timestamp,
+    updated_at: timestamp,
     author_agent_id: z.string(),
     input_count: z.number().int().nonnegative(),
     latest_review: reportReview,
@@ -297,6 +321,9 @@ export const ResearchV6DirectorReportDetailSchema = z
     id: uuid,
     revision: z.number().int().positive(),
     status: z.string().min(1).max(160),
+    maturity: z.enum(["interim", "final"]),
+    direction_coverage: z.array(reportDirectionCoverage).max(128),
+    updated_at: timestamp,
     title: z.string().max(4096),
     summary: z.string().max(32_768),
     plain_text: z.string(),
@@ -319,6 +346,7 @@ type WireProjectionSnapshot = z.output<typeof ResearchV6DirectorProjectionSnapsh
 type WireProjectionDelta = z.output<typeof ResearchV6DirectorProjectionDeltaSchema>;
 type WireNodeDetail = z.output<typeof ResearchV6DirectorNodeDetailSchema>;
 type WireReportReview = z.output<typeof reportReview>;
+type WireReportDirectionCoverage = z.output<typeof reportDirectionCoverage>;
 type WireReportMetadata = z.output<typeof ResearchV6DirectorReportMetadataSchema>;
 type WireReportDetail = z.output<typeof ResearchV6DirectorReportDetailSchema>;
 
@@ -480,6 +508,22 @@ function reportReviewFromWire(
   };
 }
 
+function reportDirectionCoverageFromWire(
+  value: WireReportDirectionCoverage,
+) {
+  return {
+    branchId: value.branch_id,
+    objective: value.objective,
+    status: value.status,
+    nodeArtifactVersionId: value.node_artifact_version_id,
+    tier: value.tier,
+    inputRole: value.input_role,
+    candidateCount: value.candidate_count,
+    pendingCount: value.pending_count,
+    activeWorkCount: value.active_work_count,
+  };
+}
+
 function reportMetadataFromWire(
   value: WireReportMetadata,
 ): ResearchV6DirectorReportMetadata {
@@ -487,12 +531,16 @@ function reportMetadataFromWire(
     id: value.id,
     revision: value.revision,
     status: value.status,
+    workStatus: value.work_status,
+    maturity: value.maturity,
+    directionCoverage: value.direction_coverage.map(reportDirectionCoverageFromWire),
     title: value.title,
     summary: value.summary,
     packageHash: value.package_hash,
     documentContentHash: value.document_content_hash,
     publishedAt: value.published_at,
     createdAt: value.created_at,
+    updatedAt: value.updated_at,
     authorAgentId: value.author_agent_id,
     inputCount: value.input_count,
     latestReview: reportReviewFromWire(value.latest_review),
@@ -508,6 +556,9 @@ function reportDetailFromWire(
     id: value.id,
     revision: value.revision,
     status: value.status,
+    maturity: value.maturity,
+    directionCoverage: value.direction_coverage.map(reportDirectionCoverageFromWire),
+    updatedAt: value.updated_at,
     title: value.title,
     summary: value.summary,
     plainText: value.plain_text,

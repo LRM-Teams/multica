@@ -86,6 +86,42 @@ type V6ReportInputRef struct {
 	ContentHash           string `json:"content_hash"`
 }
 
+type V6ReportDirectionCoverage struct {
+	BranchID              string `json:"branch_id"`
+	Objective             string `json:"objective"`
+	Status                string `json:"status"`
+	NodeArtifactVersionID string `json:"node_artifact_version_id,omitempty"`
+	Tier                  V6Tier `json:"tier,omitempty"`
+	InputRole             string `json:"input_role,omitempty"`
+	CandidateCount        int    `json:"candidate_count"`
+	PendingCount          int    `json:"pending_count"`
+	ActiveWorkCount       int    `json:"active_work_count"`
+}
+
+type V6ReportSelection struct {
+	Inputs     []V6ReportInputRef          `json:"inputs"`
+	InputNodes []V6NodeRef                 `json:"input_nodes"`
+	Documents  []V6ReportInputDocument     `json:"input_documents"`
+	Directions []V6ReportDirectionCoverage `json:"directions"`
+	Maturity   string                      `json:"maturity"`
+	Hash       string                      `json:"hash"`
+}
+
+type V6ReportInputDocument struct {
+	Node            V6NodeRef       `json:"node"`
+	ProducerAgentID string          `json:"producer_agent_id,omitempty"`
+	ProducerName    string          `json:"producer_name,omitempty"`
+	Catalog         string          `json:"catalog_summary"`
+	Brief           string          `json:"brief_summary"`
+	Objective       string          `json:"objective"`
+	Conclusion      string          `json:"conclusion"`
+	Content         string          `json:"content"`
+	Scope           json.RawMessage `json:"scope"`
+	Uncertainties   json.RawMessage `json:"uncertainties"`
+	Conflicts       json.RawMessage `json:"conflicts"`
+	OpenQuestions   json.RawMessage `json:"open_questions"`
+}
+
 type CreateV6ReportWorkInput struct {
 	WorkspaceID, RunID, DirectorCycleID, AssigneeAgentID string
 	IdempotencyKey, Title, Reason                        string

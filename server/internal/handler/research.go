@@ -490,6 +490,22 @@ func (h *Handler) CreateResearchSession(w http.ResponseWriter, r *http.Request) 
 		if _, valid = parseUUIDOrBadRequest(w, req.ClientRequestID, "client_request_id"); !valid {
 			return
 		}
+		fleet, members, fleetErr := h.ensureResearchFleet(r.Context(), wsUUID, parseUUID(userID))
+		if fleetErr != nil {
+			writeRonaldoV6Error(w, http.StatusServiceUnavailable, "research.v6.reporter_unavailable", "报告老板暂不可用", true)
+			return
+		}
+		reporterAgentID := ""
+		for _, member := range members {
+			if member.Role == "reporter" && member.Status == "active" {
+				reporterAgentID = uuidToString(member.AgentID)
+				break
+			}
+		}
+		if reporterAgentID == "" {
+			writeRonaldoV6Error(w, http.StatusServiceUnavailable, "research.v6.reporter_unavailable", "报告老板暂不可用", true)
+			return
+		}
 		bootstrap, available := h.ResearchRun.(researchrun.ResearchRunV6Bootstrap)
 		if !available {
 			writeRonaldoV6Error(w, http.StatusServiceUnavailable, "research.v6.capability_unavailable", "research V6 bootstrap is unavailable", true)
@@ -497,7 +513,7 @@ func (h *Handler) CreateResearchSession(w http.ResponseWriter, r *http.Request) 
 		}
 		depthTier := normalizeResearchDepthTier(req.DepthTier)
 		createdRun, createErr := bootstrap.BootstrapV6(r.Context(), researchrun.V6BootstrapInput{
-			WorkspaceID: workspaceID, CreatedBy: userID, DirectorAgentID: uuidToString(directorID), Goal: req.Goal, Title: title,
+			WorkspaceID: workspaceID, CreatedBy: userID, FleetID: uuidToString(fleet.ID), DirectorAgentID: uuidToString(directorID), ReporterAgentID: reporterAgentID, Goal: req.Goal, Title: title,
 			DepthTier: depthTier, Language: language, SourcePolicy: sourcePolicyJSON, ClientRequestID: req.ClientRequestID,
 		})
 		if createErr != nil && createdRun.SessionID == "" {

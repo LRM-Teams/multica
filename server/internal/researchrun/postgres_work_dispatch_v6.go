@@ -425,6 +425,13 @@ func compileV6WorkManifestTx(ctx context.Context, tx pgx.Tx, workspaceID, runID,
 		}
 		manifestMap["catalog_access"] = map[string]any{"same_tier": tier, "higher_candidate_branch_ids": branchIDs, "include_higher_candidates": true, "through_event_sequence": throughSequence, "page_size": 128}
 	}
+	if expectedSchema == string(V6ContractReportPackageSubmission) {
+		var reportID string
+		if err = tx.QueryRow(ctx, `SELECT target_id::text FROM research_work_item WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid AND target_kind='report'`, workspaceID, runID, workItemID).Scan(&reportID); err != nil {
+			return nil, "", err
+		}
+		manifestMap["task_id"] = reportID
+	}
 	if taskSchema != nil {
 		if expectedSchema == string(V6ContractAtomicResultSubmission) {
 			var payloadSchemaID string

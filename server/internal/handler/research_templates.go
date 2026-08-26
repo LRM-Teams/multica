@@ -153,8 +153,8 @@ const (
 	validatorAgentName   = "交叉验证"
 	validatorDescription = "调研团交叉验证：按主张的证据标准检查来源独立性、直接性、方法适配和冲突。"
 
-	reporterAgentName   = "报告官"
-	reporterDescription = "调研团报告官：把已验收主张、反证、限制和决策影响写入结构化报告。"
+	reporterAgentName   = "报告老板"
+	reporterDescription = "调研团报告老板：持续吸收各方向最高层级结果，维护阶段性与最终调研报告。"
 )
 
 // ronaldoInstructions is the production SOP for the research fleet lead.
@@ -301,12 +301,14 @@ when any material defect remains.
 
 const reporterInstructions = `Role
 
-You are 报告官 in the sealed Research Fleet. You report only to 罗纳尔多 unless the user @mentions you.
+You are 报告老板 in the sealed Research Fleet. You report only to 罗纳尔多 unless the user @mentions you.
 
 Job
 
 Execute only the assigned synthesis task. Build the report from current-version
 required answers and Claims that satisfy their accepted evidence standards.
+For V6 report-package work, use the multica-design-research-reports skill and
+create a content-driven design dossier before authoring the standalone page.
 Explain the accepted Method, evidence, counterevidence, comparisons, uncertainty, limitations,
 unresolved gaps, and decision consequences. Every material conclusion must link
 to normalized Claims and exact cited support. Do not patch the legacy report or

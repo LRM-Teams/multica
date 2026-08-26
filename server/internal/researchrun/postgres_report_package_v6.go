@@ -45,9 +45,9 @@ func (s *PostgresStore) applyReportPackageV6(ctx context.Context, submissionID s
 	}
 	var reportID string
 	var revision, goalVersion int
-	var snapshotHash string
-	err := s.pool.QueryRow(ctx, `SELECT w.target_id::text,r.revision,w.goal_version,COALESCE(r.input_snapshot_hash,'') FROM research_work_item_attempt a JOIN research_work_item w ON w.id=a.work_item_id JOIN research_report r ON r.id=w.target_id
-		WHERE a.workspace_id=$1::uuid AND a.session_id=$2::uuid AND a.id=$3::uuid AND a.work_item_id=$4::uuid AND a.assigned_agent_id=$5::uuid AND a.manifest_id=$6::uuid AND a.manifest_hash=$7 AND a.status='running' AND w.status='running'`, in.WorkspaceID, in.RunID, in.AttemptID, in.WorkItemID, in.AgentID, in.ManifestID, in.ManifestHash).Scan(&reportID, &revision, &goalVersion, &snapshotHash)
+	var snapshotHash, reportMaturity string
+	err := s.pool.QueryRow(ctx, `SELECT w.target_id::text,r.revision,w.goal_version,COALESCE(r.input_snapshot_hash,''),r.maturity FROM research_work_item_attempt a JOIN research_work_item w ON w.id=a.work_item_id JOIN research_report r ON r.id=w.target_id
+		WHERE a.workspace_id=$1::uuid AND a.session_id=$2::uuid AND a.id=$3::uuid AND a.work_item_id=$4::uuid AND a.assigned_agent_id=$5::uuid AND a.manifest_id=$6::uuid AND a.manifest_hash=$7 AND a.status='running' AND w.status='running'`, in.WorkspaceID, in.RunID, in.AttemptID, in.WorkItemID, in.AgentID, in.ManifestID, in.ManifestHash).Scan(&reportID, &revision, &goalVersion, &snapshotHash, &reportMaturity)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", ErrAttemptNotAssigned
 	}
@@ -129,6 +129,17 @@ func (s *PostgresStore) applyReportPackageV6(ctx context.Context, submissionID s
 	if compiled.PackageHash != in.PackageHash || !slices.Equal(compiled.ScriptHashes, in.ScriptHashes) || !slices.Equal(compiled.StyleHashes, in.StyleHashes) {
 		return "", ErrResultConflict
 	}
+	designDossier, err := ExtractV6ReportDesignDossier(compiled.HTML)
+	if err != nil {
+		return "", err
+	}
+	designFields, err := parseV6ReportDesignDossier(designDossier)
+	if err != nil {
+		return "", err
+	}
+	if designFields["maturity"] != reportMaturity {
+		return "", fmt.Errorf("%w: report design dossier maturity does not match frozen report state", ErrInvalidContract)
+	}
 	key := "research-v6-reports/" + in.WorkspaceID + "/" + in.RunID + "/" + reportID + "/" + compiled.PackageHash + ".html"
 	stored, err := s.reportStorage.PutImmutable(ctx, key, compiled.HTML, "text/html;charset=utf-8")
 	if err != nil {
@@ -142,8 +153,8 @@ func (s *PostgresStore) applyReportPackageV6(ctx context.Context, submissionID s
 	if err = lockRunForMutation(ctx, tx, in.RunID, in.WorkspaceID); err != nil {
 		return "", err
 	}
-	command, err := tx.Exec(ctx, `UPDATE research_report SET title=$4,summary=$5,plain_text=$6,package_hash=$7,document_content_hash=$8,document_storage_key=$9,document_storage_generation=$10,document_byte_size=$11,csp_script_hashes=$12::jsonb,csp_style_hashes=$13::jsonb,outline=$14::jsonb,citations=$15::jsonb,status='draft',updated_at=now()
-		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid AND revision=$16 AND status<>'published'`, in.WorkspaceID, in.RunID, reportID, in.Title, in.Summary, in.PlainText, compiled.PackageHash, compiled.DocumentHash, stored.Key, stored.Generation, len(compiled.HTML), mustJSONRaw(compiled.CSPScriptHashes), mustJSONRaw(compiled.CSPStyleHashes), in.Outline, in.Citations, revision)
+	command, err := tx.Exec(ctx, `UPDATE research_report SET title=$4,summary=$5,plain_text=$6,package_hash=$7,document_content_hash=$8,document_storage_key=$9,document_storage_generation=$10,document_byte_size=$11,csp_script_hashes=$12::jsonb,csp_style_hashes=$13::jsonb,outline=$14::jsonb,citations=$15::jsonb,design_dossier=$16,status='draft',updated_at=now()
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid AND revision=$17 AND status<>'published'`, in.WorkspaceID, in.RunID, reportID, in.Title, in.Summary, in.PlainText, compiled.PackageHash, compiled.DocumentHash, stored.Key, stored.Generation, len(compiled.HTML), mustJSONRaw(compiled.CSPScriptHashes), mustJSONRaw(compiled.CSPStyleHashes), in.Outline, in.Citations, designDossier, revision)
 	if err != nil {
 		return "", err
 	}

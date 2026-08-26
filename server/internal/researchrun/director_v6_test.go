@@ -587,7 +587,9 @@ func TestV6EventTriggerRecoversBootstrapWithoutDirectorCycle(t *testing.T) {
 	bootstrapped, _, err := run.store.BootstrapV6(run.ctx, V6BootstrapInput{
 		WorkspaceID:     run.fixture.workspaceID,
 		CreatedBy:       run.fixture.userID,
+		FleetID:         run.fixture.fleetID,
 		DirectorAgentID: run.fixture.agentID,
+		ReporterAgentID: run.fixture.reporterID,
 		Goal:            title,
 		Title:           title,
 		DepthTier:       "standard",

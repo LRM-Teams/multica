@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-const frozenV6ContractSHA256 = "888377d0abd2b51de10947d7b7736e23677793679b72056b7cb130e69c6c5b57"
+const frozenV6ContractSHA256 = "1ea2c7feef1058fc6feb30568fde821412240236ca72d86c448acf33ec6c5655"
 
 func TestV6DesignContractIsFrozenAndNotProductionEnabled(t *testing.T) {
 	path := filepath.Join("..", "..", "..", "docs", "contracts", "research-run-v6-director.schema.json")

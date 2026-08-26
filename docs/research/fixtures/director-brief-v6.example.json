@@ -70,7 +70,7 @@
   },
   "control": {
     "director_state": "available",
-    "active_team_count": 2,
+    "active_team_count": 3,
     "team_hard_cap": 50,
     "creation_threshold": 20,
     "team": [
@@ -78,6 +78,7 @@
         "agent_id": "00000000-0000-4000-8000-000000000009",
         "membership_id": "00000000-0000-4000-8000-000000000010",
         "state": "working",
+        "role": "director",
         "mission_summary": "统筹全部调研方向并处理争议。",
         "active_work_item_id": "00000000-0000-4000-8000-000000000011",
         "steward_node_count": 0
@@ -86,13 +87,50 @@
         "agent_id": "00000000-0000-4000-8000-000000000008",
         "membership_id": "00000000-0000-4000-8000-000000000012",
         "state": "idle",
+        "role": "researcher",
         "mission_summary": "测量生产型负载的性能边界。",
         "steward_node_count": 1
+      },
+      {
+        "agent_id": "00000000-0000-4000-8000-000000000013",
+        "membership_id": "00000000-0000-4000-8000-000000000014",
+        "state": "idle",
+        "role": "reporter",
+        "mission_summary": "持续整合各方向当前最高层级结果并维护动态报告。",
+        "steward_node_count": 0
       }
     ],
     "work_items": [],
     "discussions": [],
     "reports": [],
+    "report_plan": {
+      "reporter_agent_id": "00000000-0000-4000-8000-000000000013",
+      "selection_hash": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+      "maturity": "interim",
+      "inputs": [
+        {
+          "branch_id": "00000000-0000-4000-8000-000000000005",
+          "node_artifact_version_id": "00000000-0000-4000-8000-000000000007",
+          "input_role": "branch_maximum",
+          "content_hash": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+        }
+      ],
+      "directions": [
+        {
+          "branch_id": "00000000-0000-4000-8000-000000000005",
+          "objective": "验证性能与扩展边界。",
+          "status": "represented",
+          "node_artifact_version_id": "00000000-0000-4000-8000-000000000007",
+          "tier": "S",
+          "input_role": "branch_maximum",
+          "candidate_count": 1,
+          "pending_count": 0,
+          "active_work_count": 0
+        }
+      ],
+      "active_report_work": false,
+      "needs_refresh": true
+    },
     "latest_steering": [],
     "changes": []
   },

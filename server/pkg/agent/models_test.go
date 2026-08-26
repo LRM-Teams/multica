@@ -116,6 +116,7 @@ func TestListModelsUnknownProvider(t *testing.T) {
 func TestListModelsWithEnvironmentPassesRuntimeEnvToCursor(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "cursor-agent")
 	writeTestExecutable(t, path, []byte("#!/bin/sh\nif [ \"$CURSOR_API_KEY\" = \"runtime-key\" ]; then\n  echo 'cursor-model - Cursor Model'\nfi\n"))
+	t.Setenv("CURSOR_API_KEY", "daemon-key")
 
 	modelCacheMu.Lock()
 	for key := range modelCache {

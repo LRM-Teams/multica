@@ -252,7 +252,9 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	if e, ok := probe("MULTICA_PI_PATH", agent.ProviderPi, "MULTICA_PI_MODEL"); ok {
 		agents[agent.ProviderPi] = e
 	}
-	if e, ok := probe("MULTICA_CURSOR_PATH", "cursor-agent", "MULTICA_CURSOR_MODEL"); ok {
+	if e, ok := probe("MULTICA_CURSOR_PATH", "agent", "MULTICA_CURSOR_MODEL"); ok {
+		agents[agent.ProviderCursor] = e
+	} else if e, ok := probe("MULTICA_CURSOR_PATH", "cursor-agent", "MULTICA_CURSOR_MODEL"); ok {
 		agents[agent.ProviderCursor] = e
 	}
 	if e, ok := probe("MULTICA_KIRO_PATH", "kiro-cli", "MULTICA_KIRO_MODEL"); ok {
@@ -597,7 +599,7 @@ func shellArgsFromEnv(name string) ([]string, error) {
 // list to pre-fetch canonical paths for every known agent in a single shell
 // invocation, instead of paying the cost-per-miss.
 var defaultAgentCommandNames = []string{
-	"claude", "codex", "opencode", "pi", "cursor-agent", "kiro-cli", "grok",
+	"claude", "codex", "opencode", "pi", "agent", "cursor-agent", "kiro-cli", "grok",
 }
 
 var codexDesktopAppBundlePaths = func() []string {

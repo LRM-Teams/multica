@@ -19,6 +19,10 @@ type faultingSubmissionStore struct {
 }
 
 func seedV6RecoveryWorkItem(t *testing.T, run *transactionRecoveryRun, status string, expires time.Time) (string, string) {
+	return seedV6RecoveryWorkItemForAgent(t, run, run.fixture.agentID, status, expires)
+}
+
+func seedV6RecoveryWorkItemForAgent(t *testing.T, run *transactionRecoveryRun, agentID, status string, expires time.Time) (string, string) {
 	t.Helper()
 	membershipID, workItemID := uuid.NewString(), uuid.NewString()
 	missionHash := "sha256:" + strings.Repeat("1", 64)
@@ -26,7 +30,7 @@ func seedV6RecoveryWorkItem(t *testing.T, run *transactionRecoveryRun, status st
 		INSERT INTO research_team_membership (
 		 id,workspace_id,session_id,agent_id,membership_generation,mission_prompt,mission_hash,mission_revision,state
 		) VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,1,'test',$5,1,'working')
-	`, membershipID, run.fixture.workspaceID, run.fixture.sessionID, run.fixture.agentID, missionHash); err != nil {
+	`, membershipID, run.fixture.workspaceID, run.fixture.sessionID, agentID, missionHash); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := run.pool.Exec(run.ctx, `
@@ -34,7 +38,7 @@ func seedV6RecoveryWorkItem(t *testing.T, run *transactionRecoveryRun, status st
 		 id,workspace_id,session_id,kind,status,assigned_agent_id,goal_version,idempotency_key,
 		 lease_token,lease_expires_at,payload_schema_id,state_version
 		) VALUES ($1::uuid,$2::uuid,$3::uuid,'research',$4,$5::uuid,1,$6,$7::uuid,$8,'schema',1)
-	`, workItemID, run.fixture.workspaceID, run.fixture.sessionID, status, run.fixture.agentID,
+	`, workItemID, run.fixture.workspaceID, run.fixture.sessionID, status, agentID,
 		"test:"+workItemID, uuid.NewString(), expires); err != nil {
 		t.Fatal(err)
 	}
@@ -42,6 +46,10 @@ func seedV6RecoveryWorkItem(t *testing.T, run *transactionRecoveryRun, status st
 }
 
 func seedV6RecoveryAttempt(t *testing.T, run *transactionRecoveryRun, membershipID, workItemID string) string {
+	return seedV6RecoveryAttemptForAgent(t, run, run.fixture.agentID, membershipID, workItemID)
+}
+
+func seedV6RecoveryAttemptForAgent(t *testing.T, run *transactionRecoveryRun, agentID, membershipID, workItemID string) string {
 	t.Helper()
 	attemptID, manifestID := uuid.NewString(), uuid.NewString()
 	manifestHash, dispatchKey := "sha256:"+strings.Repeat("3", 64), "dispatch:"+uuid.NewString()
@@ -54,10 +62,10 @@ func seedV6RecoveryAttempt(t *testing.T, run *transactionRecoveryRun, membership
 		id,workspace_id,session_id,work_item_id,attempt_number,assigned_agent_id,membership_id,
 		dispatch_key,manifest_id,manifest_hash,status,manifest
 	) VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,1,$5::uuid,$6::uuid,$7,$8::uuid,$9,'running','{}'::jsonb)`,
-		attemptID, run.fixture.workspaceID, run.fixture.sessionID, workItemID, run.fixture.agentID, membershipID, dispatchKey, manifestID, manifestHash); err != nil {
+		attemptID, run.fixture.workspaceID, run.fixture.sessionID, workItemID, agentID, membershipID, dispatchKey, manifestID, manifestHash); err != nil {
 		t.Fatal(err)
 	}
-	hash, err := ArtifactContentHash(ArtifactKindAttempt, v6WorkAttemptArtifactContent(workItemID, 1, run.fixture.agentID, membershipID, dispatchKey, manifestID, manifestHash))
+	hash, err := ArtifactContentHash(ArtifactKindAttempt, v6WorkAttemptArtifactContent(workItemID, 1, agentID, membershipID, dispatchKey, manifestID, manifestHash))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -207,6 +207,7 @@ multica research work-artifact <session-id> <work-item-id> <attempt-id> \
 
 CLI 不可用时，对 `${V6_API}/artifacts/<artifact-version-id>` 执行 GET。该接口只能返回
 当前 Attempt 的 Manifest 授权版本。`input_nodes` 的 ID、层级、hash 和摘要不能替代正文；
+服务端会使用结果产出 Work 冻结的 `task_specific_schema` 重新校验 atomic result 正文；
 任一正文读取失败时不得凭摘要投 accept 或生成 successor。
 Integration 必须原样复制 Manifest 的 `input_nodes`、`branch_refs` 和 Discussion identity，
 按 S+S→M、M+M→L、L+L→XL、XL+XL→XXL、高层+低层保持高层、XXL+XXL→XXL 的规则提交。

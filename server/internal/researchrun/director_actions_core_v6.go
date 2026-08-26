@@ -275,25 +275,11 @@ func (s *PostgresStore) executeV6CreateReportAction(ctx context.Context, proposa
 		return ErrInvalidContract
 	}
 	var payload struct {
-		AssigneeAgentID string             `json:"assignee_agent_id"`
-		Title           string             `json:"title"`
-		Inputs          []V6ReportInputRef `json:"inputs"`
+		Title string `json:"title"`
 	}
-	if json.Unmarshal(action.Payload, &payload) != nil || !validV6ActionUUID(payload.AssigneeAgentID) || strings.TrimSpace(payload.Title) == "" {
+	if json.Unmarshal(action.Payload, &payload) != nil || strings.TrimSpace(payload.Title) == "" {
 		return ErrInvalidContract
 	}
-	for _, input := range payload.Inputs {
-		if strings.TrimSpace(input.BranchID) != "" && !validV6ActionUUID(input.BranchID) {
-			return ErrInvalidContract
-		}
-		if strings.TrimSpace(input.NodeArtifactVersionID) != "" && !validV6ActionUUID(input.NodeArtifactVersionID) {
-			return ErrInvalidContract
-		}
-	}
-	var sequence int64
-	if err := s.pool.QueryRow(ctx, `SELECT COALESCE(max(sequence),0) FROM research_run_event WHERE session_id=$1::uuid`, proposal.RunID).Scan(&sequence); err != nil {
-		return err
-	}
-	_, err := s.CreateV6ReportWork(ctx, CreateV6ReportWorkInput{WorkspaceID: proposal.WorkspaceID, RunID: proposal.RunID, DirectorCycleID: cycleID, AssigneeAgentID: payload.AssigneeAgentID, IdempotencyKey: action.IdempotencyKey, Title: payload.Title, Reason: action.Reason, ExpectedGoalVersion: goalVersion, ExpectedStateVersion: expectedState, InputEventSequence: sequence, Inputs: payload.Inputs})
+	_, err := s.CreateV6ReportWork(ctx, CreateV6ReportWorkInput{WorkspaceID: proposal.WorkspaceID, RunID: proposal.RunID, DirectorCycleID: cycleID, IdempotencyKey: action.IdempotencyKey, Title: payload.Title, Reason: action.Reason, ExpectedGoalVersion: goalVersion, ExpectedStateVersion: expectedState})
 	return err
 }

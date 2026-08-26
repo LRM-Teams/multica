@@ -33,11 +33,6 @@ type v6DirectorPreflightFacts struct {
 	openConvergence      int
 }
 
-type v6ProposedReport struct {
-	AssigneeAgentID string             `json:"assignee_agent_id"`
-	Inputs          []V6ReportInputRef `json:"inputs"`
-}
-
 func (s *PostgresStore) preflightV6DirectorProposal(ctx context.Context, proposal v6DirectorProposal) error {
 	branchIDs := make([]uuid.UUID, 0)
 	assigneeIDs := make([]uuid.UUID, 0)
@@ -46,7 +41,6 @@ func (s *PostgresStore) preflightV6DirectorProposal(ctx context.Context, proposa
 	proposedAtomicWork := 0
 	proposedConvergence := 0
 	proposedReports := 0
-	reportPayloads := make([]v6ProposedReport, 0, 1)
 	proposedBranches := 0
 	proposedBranchParents := make([]uuid.UUID, 0)
 	proposedWorkBranchIDs := map[uuid.UUID]struct{}{}
@@ -57,12 +51,13 @@ func (s *PostgresStore) preflightV6DirectorProposal(ctx context.Context, proposa
 		case "open_discussion", "create_integration":
 			proposedConvergence++
 		case "create_report":
-			factsPayload := v6ProposedReport{}
-			if json.Unmarshal(action.Payload, &factsPayload) != nil || strings.TrimSpace(factsPayload.AssigneeAgentID) == "" {
-				return fmt.Errorf("%w: create_report 缺少报告老板", ErrInvalidContract)
+			var payload struct {
+				Title string `json:"title"`
+			}
+			if json.Unmarshal(action.Payload, &payload) != nil || strings.TrimSpace(payload.Title) == "" {
+				return fmt.Errorf("%w: create_report 缺少报告标题", ErrInvalidContract)
 			}
 			proposedReports++
-			reportPayloads = append(reportPayloads, factsPayload)
 		case "create_branch":
 			var payload struct {
 				ParentBranchID string `json:"parent_branch_id"`
@@ -274,13 +269,6 @@ func (s *PostgresStore) preflightV6DirectorProposal(ctx context.Context, proposa
 	}
 	if facts.proposedReports > 1 {
 		return fmt.Errorf("%w: 同一时刻只能由报告老板维护一个报告修订", ErrInvalidContract)
-	}
-	if needsReport {
-		reporterAgentID, _ := reportPlan["reporter_agent_id"].(string)
-		expectedInputs, _ := reportPlan["inputs"].([]V6ReportInputRef)
-		if len(reportPayloads) != 1 || reportPayloads[0].AssigneeAgentID != reporterAgentID || !sameV6ReportInputs(expectedInputs, reportPayloads[0].Inputs) {
-			return fmt.Errorf("%w: create_report 必须原样复制 report_plan 的报告老板和冻结输入", ErrInvalidContract)
-		}
 	}
 	return validateV6ParallelResearchPlan(facts)
 }

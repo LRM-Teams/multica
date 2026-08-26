@@ -123,11 +123,10 @@ type V6ReportInputDocument struct {
 }
 
 type CreateV6ReportWorkInput struct {
-	WorkspaceID, RunID, DirectorCycleID, AssigneeAgentID string
-	IdempotencyKey, Title, Reason                        string
-	ExpectedGoalVersion                                  int
-	ExpectedStateVersion, InputEventSequence             int64
-	Inputs                                               []V6ReportInputRef
+	WorkspaceID, RunID, DirectorCycleID string
+	IdempotencyKey, Title, Reason       string
+	ExpectedGoalVersion                 int
+	ExpectedStateVersion                int64
 }
 
 type V6ReportWork struct {

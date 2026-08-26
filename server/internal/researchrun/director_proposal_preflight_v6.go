@@ -18,6 +18,7 @@ type v6DirectorPreflightFacts struct {
 	activeAtomicWork     int
 	resultCount          int
 	unresolvedQuestions  int
+	escalatedDiscussions int
 	proposedAgentCount   int
 	proposedAtomicWork   int
 	proposedConvergence  int
@@ -116,16 +117,16 @@ func (s *PostgresStore) preflightV6DirectorProposal(ctx context.Context, proposa
 			AND NOT EXISTS (SELECT 1 FROM research_node_absorption absorbed
 				WHERE absorbed.workspace_id=result.workspace_id AND absorbed.session_id=result.session_id
 				AND absorbed.input_artifact_version_id=result.artifact_version_id)),
-		((SELECT COALESCE(sum(jsonb_array_length(COALESCE(result.open_questions,'[]'::jsonb))),0)::int
+		(SELECT COALESCE(sum(jsonb_array_length(COALESCE(result.open_questions,'[]'::jsonb))),0)::int
 			FROM research_result_node result
 			WHERE result.workspace_id=s.workspace_id AND result.session_id=s.id
 			AND result.conclusion_state NOT IN ('invalid','refuted')
 			AND NOT EXISTS (SELECT 1 FROM research_node_absorption absorbed
 				WHERE absorbed.workspace_id=result.workspace_id AND absorbed.session_id=result.session_id
-				AND absorbed.input_artifact_version_id=result.artifact_version_id))
-		 + (SELECT count(*)::int FROM research_discussion unresolved_question
+				AND absorbed.input_artifact_version_id=result.artifact_version_id)),
+		(SELECT count(*)::int FROM research_discussion unresolved_question
 			WHERE unresolved_question.workspace_id=s.workspace_id AND unresolved_question.session_id=s.id
-			  AND unresolved_question.status='escalated')),
+			  AND unresolved_question.status='escalated'),
 		(SELECT count(*)::int FROM research_branch branch
 			WHERE branch.workspace_id=s.workspace_id AND branch.session_id=s.id
 			AND branch.parent_branch_id IS NOT NULL AND branch.status IN ('proposed','active')),
@@ -162,11 +163,12 @@ func (s *PostgresStore) preflightV6DirectorProposal(ctx context.Context, proposa
 			  AND unresolved.status='escalated'))
 		FROM research_session s WHERE s.workspace_id=$1::uuid AND s.id=$2::uuid`, proposal.WorkspaceID, proposal.RunID).Scan(
 		&facts.maxParallelTasks, &facts.workerCount, &facts.pendingAgentCount, &facts.activeAtomicWork,
-		&facts.resultCount, &facts.unresolvedQuestions, &facts.childBranches,
+		&facts.resultCount, &facts.unresolvedQuestions, &facts.escalatedDiscussions, &facts.childBranches,
 		&facts.convergenceReady, &facts.openConvergence)
 	if err != nil {
 		return err
 	}
+	facts.unresolvedQuestions = requiredV6FollowupCount(facts.unresolvedQuestions, facts.escalatedDiscussions)
 	if len(proposedBranchParents) > 0 {
 		uniqueParents := map[uuid.UUID]struct{}{}
 		for _, parentID := range proposedBranchParents {
@@ -241,6 +243,13 @@ func (s *PostgresStore) preflightV6DirectorProposal(ctx context.Context, proposa
 		}
 	}
 	return validateV6ParallelResearchPlan(facts)
+}
+
+func requiredV6FollowupCount(openQuestions, escalatedDiscussions int) int {
+	if escalatedDiscussions > openQuestions {
+		return escalatedDiscussions
+	}
+	return openQuestions
 }
 
 func validateV6ParallelResearchPlan(facts v6DirectorPreflightFacts) error {

@@ -60,6 +60,8 @@ canonical state。替换后的 Agent 或主理人必须能够只依靠 PostgreSQ
   不继续的问题在 action reason 中记录收敛理由。存在高价值待回答问题且没有活动 Work
   覆盖时，不得提交 `no_op`。历史 Brief 若遗漏 Result 的待回答问题，服务端会自动创建
   一次修复 Cycle；不要要求用户重建 Run。
+- `escalated` Discussion 至少需要证据跟进；如果同一缺口已经出现在 Frontier 的待回答问题中，
+  不要把 Discussion 再当成额外问题重复派工，按两类缺口数量中的较大值覆盖即可。
 - 每轮先检查 Branch Frontier 的 fresh、未吸收节点。两个或更多节点语义相关且满足
   promotion、assimilation 或 `xxl_merge` 时，优先启动收敛；数量只触发判断，不得强行
   融合不相关内容。使用 `kind: "create_integration"`、

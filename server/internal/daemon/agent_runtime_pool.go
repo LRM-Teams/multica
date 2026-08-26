@@ -211,9 +211,9 @@ type agentRuntimeSlot struct {
 	// runtime has been silent. Stamped at process create and on every
 	// observed provider Message; zero means "unknown", which never recovers.
 	lastRuntimeActivityAt time.Time
-	// outstandingToolCalls tracks tool calls this process started but has not
-	// reported a result for. Raft 1.0.17 refuses stalled recovery while any
-	// is in flight (a live Pi may legitimately be running a long tool).
+	// outstandingToolCalls tracks tool calls the current turn started but has
+	// not reported a result for. Recent activity protects a legitimately long
+	// tool; calls left after turn completion or the stall window are stale.
 	outstandingToolCalls map[string]struct{}
 	// stalledRecovering is Raft's alreadyRecovering fence. The server
 	// redelivers roughly every 20s, so without it each redelivery would fire
@@ -1500,6 +1500,9 @@ func (p *agentRuntimePool) finishResidentMessageInput(slot *agentRuntimeSlot, do
 	var settleIdentity *agent.PiRunIdentity
 	slot.mu.Lock()
 	if slot.messageInputDone == done {
+		// Provider completion is authoritative for the turn. A tool without a
+		// result cannot remain live after its owning turn has completed.
+		slot.outstandingToolCalls = nil
 		if slot.invalidateAfterInput {
 			slot.messageInputDone = nil
 			slot.running = false

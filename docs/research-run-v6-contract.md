@@ -464,9 +464,10 @@ reporting never depends on inter-Agent chat. One active Report
 Work is the single writer; results arriving during it cause a subsequent
 revision instead of a competing write.
 
-The `v6_report_work_created` event carries `draft_report_id`, not `report_id`.
-A draft passport intentionally has no current artifact version until package
-acceptance, so its creation event must not claim `event_report` lineage early.
+The `v6_report_work_created` event identifies the Work and report revision but
+omits `report_id`. A draft passport intentionally has no current artifact version
+until package acceptance, so its creation event must not claim `event_report`
+lineage early.
 
 Package acceptance requires a bounded `multica-design-dossier:v1` HTML comment
 with the report's reading job, evidence shape, maturity, layout family, motif,

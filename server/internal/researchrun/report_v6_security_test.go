@@ -58,8 +58,23 @@ func TestV6ReportReviewTransactionBoundary(t *testing.T) {
 }
 
 func TestV6ReportWorkCreateTransactionBoundary(t *testing.T) {
-	assertReportSource(t, "postgres_report_work_v6.go", "lockRunForMutation", "role='reporter'", "selectV6ReportInputs(ctx, tx", "registerDraftReportRevisionPassportTx", `"draft_report_id"`, "research_report_input", "research_work_item", "'report_package_submission',$11::jsonb,1,now()", "commitResearchTx")
+	assertReportSource(t, "postgres_report_work_v6.go", "lockRunForMutation", "role='reporter'", "selectV6ReportInputs(ctx, tx", "registerDraftReportRevisionPassportTx", "v6ReportWorkCreatedEventPayload", "research_report_input", "research_work_item", "'report_package_submission',$11::jsonb,1,now()", "commitResearchTx")
 	assertReportSource(t, "artifact_report.go", "'report_revision', NULL", "current_version", "ErrResultConflict")
+}
+
+func TestV6ReportWorkCreatedEventDoesNotReferenceUnversionedDraft(t *testing.T) {
+	payload := v6ReportWorkCreatedEventPayload(V6ReportWork{
+		ReportID:          "draft-report",
+		WorkItemID:        "report-work",
+		Revision:          4,
+		InputSnapshotHash: "snapshot-hash",
+	}, "director-cycle")
+	if _, exists := payload["report_id"]; exists {
+		t.Fatal("report work event must not claim exact-version lineage for an unversioned draft")
+	}
+	if payload["work_item_id"] != "report-work" || payload["report_revision"] != 4 {
+		t.Fatalf("unexpected report work event payload: %+v", payload)
+	}
 }
 
 func TestV6DirectorProposalApplyFailureIsObservable(t *testing.T) {

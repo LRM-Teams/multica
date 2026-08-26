@@ -90,8 +90,8 @@ canonical state。替换后的 Agent 或主理人必须能够只依靠 PostgreSQ
   报告刷新可以单独构成一个维护轮次；它产生的新事件会触发下一轮继续派发尚未覆盖的
   待回答问题，避免报告与补充调研互相阻塞。
   草稿修订创建时即登记无 current version 的 passport；报告老板提交并验收不可变 package
-  后，服务端才写入并切换到 version 1。草稿创建事件只记录 `draft_report_id`，不会在尚无
-  artifact version 时提前声明 `event_report` 血缘。
+  后，服务端才写入并切换到 version 1。草稿创建事件记录 Work 和修订号但不记录
+  `report_id`，不会在尚无 artifact version 时提前声明 `event_report` 血缘。
   只有主理人发布工作流可以发布通过验证的 package。报告资源不得输出外部 URL、凭据、
   应用同源依赖或 bridge 调用。
 - 内部 `director` cycle Work 只是主理人调度记录，不是成果星图节点。星图只展示可向用户

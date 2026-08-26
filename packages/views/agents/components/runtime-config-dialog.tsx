@@ -3,7 +3,6 @@
 import { useMemo, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import type { Agent, AgentRuntime, MemberWithUser } from "@multica/core/types";
-import { Button } from "@multica/ui/components/ui/button";
 import {
   Collapsible,
   CollapsibleContent,
@@ -12,13 +11,15 @@ import {
 import {
   Dialog,
   DialogContent,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@multica/ui/components/ui/dialog";
 import { useT } from "../../i18n";
 import { AgentEnvEditor } from "./agent-env-editor";
-import { RuntimeConfigFields } from "./runtime-config-fields";
+import {
+  RuntimeConfigDialogFooter,
+  RuntimeConfigSelectionFields,
+} from "./runtime-config-dialog-shared";
 import { useRuntimeConfigSelection } from "./use-runtime-config-selection";
 
 /**
@@ -151,20 +152,11 @@ function RuntimeConfigDialogBody({
   return (
     <>
       <div className="min-w-0 space-y-4 overflow-y-auto py-1 max-h-[60vh]">
-        <RuntimeConfigFields
+        <RuntimeConfigSelectionFields
           runtimes={runtimes}
           members={members}
           currentUserId={currentUserId}
-          machineId={selection.machineId}
-          onMachineSelect={selection.selectMachine}
-          machineRuntimes={selection.machineRuntimes}
-          runtimeId={selection.runtimeId}
-          onRuntimeSelect={selection.selectRuntime}
-          model={selection.model}
-          onModelChange={selection.selectModel}
-          thinkingLevel={selection.thinkingLevel}
-          onThinkingChange={selection.selectThinking}
-          modelRequired
+          selection={selection}
           disabled={saving}
         />
 
@@ -195,26 +187,18 @@ function RuntimeConfigDialogBody({
         </Collapsible>
       </div>
 
-      <DialogFooter>
-        <Button
-          type="button"
-          variant="ghost"
-          disabled={saving}
-          onClick={() => onOpenChange(false)}
-        >
-          {t(($) => $.inspector.cancel)}
-        </Button>
-        <Button
-          type="button"
-          disabled={saving || !selection.runtimeId || !selection.model.trim()}
-          data-testid="agent-runtime-config-save"
-          onClick={() => void handleSave()}
-        >
-          {saving
+      <RuntimeConfigDialogFooter
+        saving={saving}
+        cancelLabel={t(($) => $.inspector.cancel)}
+        saveLabel={
+          saving
             ? t(($) => $.runtime_config.dialog_saving)
-            : t(($) => $.inspector.save)}
-        </Button>
-      </DialogFooter>
+            : t(($) => $.inspector.save)
+        }
+        saveTestId="agent-runtime-config-save"
+        onCancel={() => onOpenChange(false)}
+        onSave={() => void handleSave()}
+      />
     </>
   );
 }

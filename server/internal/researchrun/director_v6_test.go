@@ -318,6 +318,22 @@ func TestV6DirectorBriefIncludesAtomicResultFrontier(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open discussion from Director Brief node ref: %v", err)
 	}
+	if _, err = run.pool.Exec(run.ctx, `UPDATE research_discussion SET status='escalated' WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid`, run.fixture.workspaceID, run.fixture.sessionID, discussion.ID); err != nil {
+		t.Fatalf("escalate discussion fixture: %v", err)
+	}
+	reopened, err := run.store.OpenV6Discussion(run.ctx, OpenV6DiscussionInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID, Kind: "promotion",
+		ScopeHash: "sha256:" + strings.Repeat("b", 64), InputSetHash: v6InputSetHash([]V6NodeRef{input}),
+		BranchScopeHash: v6BranchScopeHash([]V6BranchRef{branchRef}), GoalVersion: 1, ThroughEventSequence: 2,
+		Inputs: []V6NodeRef{input}, BranchRefs: []V6BranchRef{branchRef},
+	})
+	if err != nil || reopened.ID != discussion.ID || reopened.Status != "escalated" {
+		t.Fatalf("reopen exact escalated discussion: got=%+v err=%v", reopened, err)
+	}
+	var discussionCount int
+	if err = run.pool.QueryRow(run.ctx, `SELECT count(*)::int FROM research_discussion WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND scope_hash=$3 AND input_set_hash=$4`, run.fixture.workspaceID, run.fixture.sessionID, discussion.ScopeHash, discussion.InputSetHash).Scan(&discussionCount); err != nil || discussionCount != 1 {
+		t.Fatalf("exact discussion count=%d err=%v", discussionCount, err)
+	}
 	if _, err = run.pool.Exec(run.ctx, `DELETE FROM research_work_item WHERE session_id=$1::uuid AND target_id=$2::uuid`, run.fixture.sessionID, discussion.ID); err != nil {
 		t.Fatalf("delete discussion work fixture: %v", err)
 	}

@@ -70,6 +70,12 @@ func TestValidateV6ParallelResearchPlanRequiresStaffingAndParallelWork(t *testin
 			wantErr: "不能同时继续堆积 atomic Work",
 		},
 		{
+			name: "escalated convergence permits independent evidence follow-up",
+			facts: v6DirectorPreflightFacts{maxParallelTasks: 5, workerCount: 3, childBranches: 3,
+				resultCount: 2, unresolvedQuestions: 1, convergenceReady: true, openConvergence: 1,
+				proposedAtomicWork: 1, proposedWorkBranches: 1},
+		},
+		{
 			name:    "top-level directions are bounded by parallel capacity",
 			facts:   v6DirectorPreflightFacts{maxParallelTasks: 5, topLevelBranches: 5, proposedTopLevel: 1},
 			wantErr: "一级研究方向最多 5 个",

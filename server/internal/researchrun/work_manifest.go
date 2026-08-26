@@ -58,11 +58,25 @@ type V6WorkManifest struct {
 	ETag  string
 }
 
+type V6WorkArtifact struct {
+	ArtifactVersionID  string          `json:"artifact_version_id"`
+	Kind               string          `json:"kind"`
+	Representation     string          `json:"representation"`
+	RepresentationHash string          `json:"representation_hash"`
+	Content            json.RawMessage `json:"content"`
+}
+
 type workManifestStore interface {
 	LoadV6WorkManifest(context.Context, V6AttemptAccess) (V6WorkManifest, error)
 }
 
+type workArtifactStore interface {
+	LoadV6WorkArtifact(context.Context, V6AttemptAccess, string) (V6WorkArtifact, error)
+}
+
 type workManifestModule struct{ store workManifestStore }
+
+type workArtifactModule struct{ store workArtifactStore }
 
 func (m workManifestModule) Get(ctx context.Context, access V6AttemptAccess) (V6WorkManifest, error) {
 	if m.store == nil || strings.TrimSpace(access.WorkspaceID) == "" || strings.TrimSpace(access.RunID) == "" ||
@@ -81,4 +95,13 @@ func (m workManifestModule) Get(ctx context.Context, access V6AttemptAccess) (V6
 		return V6WorkManifest{}, fmt.Errorf("%w: stored manifest hash mismatch", ErrInvalidContract)
 	}
 	return manifest, nil
+}
+
+func (m workArtifactModule) Get(ctx context.Context, access V6AttemptAccess, artifactVersionID string) (V6WorkArtifact, error) {
+	if m.store == nil || strings.TrimSpace(access.WorkspaceID) == "" || strings.TrimSpace(access.RunID) == "" ||
+		strings.TrimSpace(access.WorkItemID) == "" || strings.TrimSpace(access.AttemptID) == "" || strings.TrimSpace(access.AgentID) == "" ||
+		strings.TrimSpace(artifactVersionID) == "" {
+		return V6WorkArtifact{}, fmt.Errorf("%w: incomplete work artifact identity", ErrInvalidContract)
+	}
+	return m.store.LoadV6WorkArtifact(ctx, access, artifactVersionID)
 }

@@ -23,6 +23,9 @@ type v6WorkDispatchIdentity struct {
 	BranchRefs    []V6BranchRef   `json:"branch_refs"`
 	CatalogAccess json.RawMessage `json:"catalog_access"`
 	TaskSchema    json.RawMessage `json:"task_specific_schema"`
+	Artifacts     []struct {
+		ArtifactVersionID string `json:"artifact_version_id"`
+	} `json:"artifacts"`
 }
 
 type v6DispatchContext struct {
@@ -73,6 +76,19 @@ func BuildV6WorkDispatchPrompt(manifest V6WorkManifest) (string, error) {
 	prompt.WriteString("持续报告实时进度，供用户了解当前阶段。读取 Manifest 后立即报告一次；此后每次进入新阶段（读取 Brief 或 catalog、搜索、阅读来源、分析、起草、验证）时，向 `${V6_API}/progress` POST 一条简体中文进度（最多 240 个字符）：\n\n")
 	prompt.WriteString("```bash\n\"${V6_CURL[@]}\" -X POST -H 'Content-Type: application/json' \\\n  -d '{\"client_request_id\":\"'\"$(uuidgen | tr A-Z a-z)\"'\",\"text\":\"<正在进行的工作，用简体中文>\",\"stage\":\"<短 key，例如 searching>\"}' \\\n  \"${V6_API}/progress\"\n```\n\n")
 	prompt.WriteString("进度说明不会结算 Work Item。进度 POST 失败不得阻塞任务或形成重试循环；忽略错误并继续。每条被接受的进度也会延长 Work Item 租约，因此长回合至少每 15 分钟报告一次，否则租约可能在工作期间过期。\n\n")
+	if identity.ExpectedResult == V6ContractDiscussionTurnSubmission || identity.ExpectedResult == V6ContractIntegrationSubmission {
+		if len(identity.Artifacts) < 2 {
+			return "", fmt.Errorf("%w: convergence Work has fewer than two frozen artifacts", ErrInvalidContract)
+		}
+		prompt.WriteString("在判断或整合前，必须逐个读取 Manifest 授权的冻结节点正文；`input_nodes` 的 ID、层级和 hash 不能替代正文。读取全部正文后再比较共同发现、独有发现、冲突、不确定性和待回答问题：\n\n```bash\n")
+		for _, artifact := range identity.Artifacts {
+			if strings.TrimSpace(artifact.ArtifactVersionID) == "" {
+				return "", fmt.Errorf("%w: convergence Work has an incomplete artifact reference", ErrInvalidContract)
+			}
+			fmt.Fprintf(&prompt, "multica research work-artifact %s %s --output json\n", base, artifact.ArtifactVersionID)
+		}
+		prompt.WriteString("```\n\n使用凭据代理回退时，对每个版本 ID 请求 `GET ${V6_API}/artifacts/<artifact-version-id>`。该接口只返回当前 Manifest 已授权的不可变版本；任一正文读取失败时，不得凭摘要猜测或提交 accept。\n\n")
+	}
 	if identity.ExpectedResult == V6ContractDirectorActionProposal {
 		prompt.WriteString(RonaldoV6DirectorSystemProtocol + "\n\n")
 		prompt.WriteString("读取每一页 Director Brief，使用每页的精确 ID 和 hash 逐页确认，然后提交 proposal：\n\n")
@@ -111,7 +127,7 @@ func BuildV6WorkDispatchPrompt(manifest V6WorkManifest) (string, error) {
 		if json.Unmarshal(dispatchContext.TaskContext, &discussion) != nil || discussion.DiscussionID == "" || discussion.DiscussionRevision < 1 || discussion.InputSetHash == "" {
 			return "", fmt.Errorf("%w: incomplete V6 discussion identity", ErrInvalidContract)
 		}
-		prompt.WriteString("你是候选节点的当前 Steward。逐项比较 Manifest 中冻结的 input_nodes，判断它们是否存在足够的共同语义与新增价值；不得因为数量足够就同意融合。提交下面的精确结构：\n\n")
+		prompt.WriteString("你是候选节点的当前 Steward。逐项比较已经读取的冻结节点正文，判断它们是否存在足够的共同语义与新增价值；不得只看 input_nodes 元数据，也不得因为数量足够就同意融合。提交下面的精确结构：\n\n")
 		prompt.WriteString("```json\n{\n  \"contract_kind\": \"discussion_turn_submission\",\n  \"schema_version\": 6,\n  \"client_request_id\": \"<new-uuid>\",\n")
 		fmt.Fprintf(&prompt, "  \"workspace_id\": \"%s\",\n  \"run_id\": \"%s\",\n  \"work_item_id\": \"%s\",\n  \"attempt_id\": \"%s\",\n  \"manifest_id\": \"%s\",\n  \"manifest_hash\": \"%s\",\n  \"discussion_id\": \"%s\",\n  \"discussion_revision\": %d,\n  \"input_set_hash\": \"%s\",\n  \"agent_id\": \"%s\",\n", identity.WorkspaceID, identity.RunID, identity.WorkItemID, identity.AttemptID, identity.ManifestID, identity.ManifestHash, discussion.DiscussionID, discussion.DiscussionRevision, discussion.InputSetHash, identity.AssignedAgent)
 		prompt.WriteString("  \"visible_message\": \"<面向用户可见的中文判断>\",\n  \"contribution\": {\"common_findings\":[],\"unique_findings\":[],\"conflicts\":[],\"scope\":{},\"omissions\":[],\"vote\":\"<accept|reject|uncertain>\",\"reason\":\"<中文理由>\"},\n  \"evidence_refs\": []\n}\n```\n\n")
@@ -128,7 +144,7 @@ func BuildV6WorkDispatchPrompt(manifest V6WorkManifest) (string, error) {
 		}
 		inputNodes, _ := json.Marshal(dispatchContext.InputNodes)
 		branchRefs, _ := json.Marshal(identity.BranchRefs)
-		prompt.WriteString("Discussion 已全体同意。综合冻结 input_nodes，生成一个有明确语义增益、可独立阅读的 successor。两个同级输入晋升一级；一个最高层输入加低层输入为 assimilation 且保持最高 tier；两个 XXL 为 xxl_merge。提交下面的精确结构：\n\n")
+		prompt.WriteString("Discussion 已全体同意。综合已经读取的全部冻结节点正文，生成一个有明确语义增益、可独立阅读的 successor。不得用 input_nodes 的摘要或 ID 代替正文。两个同级输入晋升一级；一个最高层输入加低层输入为 assimilation 且保持最高 tier；两个 XXL 为 xxl_merge。提交下面的精确结构：\n\n")
 		prompt.WriteString("```json\n{\n  \"contract_kind\": \"integration_submission\",\n  \"schema_version\": 6,\n  \"client_request_id\": \"<new-uuid>\",\n")
 		fmt.Fprintf(&prompt, "  \"workspace_id\": \"%s\",\n  \"run_id\": \"%s\",\n  \"work_item_id\": \"%s\",\n  \"attempt_id\": \"%s\",\n  \"agent_id\": \"%s\",\n  \"manifest_id\": \"%s\",\n  \"manifest_hash\": \"%s\",\n  \"discussion_id\": \"%s\",\n  \"discussion_revision\": %d,\n  \"input_set_hash\": \"%s\",\n", identity.WorkspaceID, identity.RunID, identity.WorkItemID, identity.AttemptID, identity.AssignedAgent, identity.ManifestID, identity.ManifestHash, integration.DiscussionID, integration.DiscussionRevision, integration.InputSetHash)
 		fmt.Fprintf(&prompt, "  \"mode\": \"<promotion|assimilation|xxl_merge>\",\n  \"input_nodes\": %s,\n  \"output_tier\": \"<M|L|XL|XXL>\",\n  \"output_content\": {\"catalog_summary\":\"<summary>\",\"brief_summary\":\"<summary>\",\"objective\":\"<objective>\",\"conclusion\":\"<conclusion>\",\"content\":\"<完整中文整合结果>\",\"scope\":{},\"uncertainties\":[],\"conflicts\":[],\"open_questions\":[]},\n  \"branch_refs\": %s,\n", inputNodes, branchRefs)

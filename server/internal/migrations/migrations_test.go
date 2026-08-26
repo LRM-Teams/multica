@@ -1221,11 +1221,13 @@ func TestBranchSourceInstanceQueryStaysWorkspaceScoped(t *testing.T) {
 	}
 }
 
-// TestGeneratedSnapshotScanMatchesSelectedColumns guards the hand-maintained
-// generated code in this repository: sandbox.sql.go routes every sandbox_snapshot
-// row through one shared scan helper, so a column added to the SELECT lists
-// without a matching scan target would misalign every snapshot read at runtime,
-// which no compile check would catch.
+// TestGeneratedSnapshotScanMatchesSelectedColumns guards sandbox.sql.go's
+// sandbox_snapshot reads: a column added to the SELECT lists without a
+// matching scan target would misalign every snapshot read at runtime, which
+// no compile check would catch. The guard originally required one shared
+// scanSandboxSnapshot helper; LRM-1521 (7fe06396a) made `sqlc generate`
+// reproducible, which replaced the hand-added helper with the inline scans
+// bare sqlc v1.31.1 emits, so the guard now checks every inline scan instead.
 
 func TestGeneratedSnapshotScanMatchesSelectedColumns(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
@@ -1243,12 +1245,20 @@ func TestGeneratedSnapshotScanMatchesSelectedColumns(t *testing.T) {
 	if got := strings.Count(contents, snapshotColumns); got != 10 {
 		t.Errorf("snapshot column list appears %d times, want 10 (7 pre-existing queries plus attach, list-for-checkpoint and the per-instance savepoint lookup)", got)
 	}
-	// The scan helper must end with checkpoint_id, in the same order.
-	if !strings.Contains(contents, "&i.Metadata, &i.CreatedAt, &i.UpdatedAt, &i.CheckpointID,") {
-		t.Error("scanSandboxSnapshot does not scan checkpoint_id last, so snapshot reads would misalign")
+	// Every snapshot scan (anchored on CubeSnapshotID, which only the
+	// SandboxSnapshot row type has in this file) must read checkpoint_id
+	// last, immediately after updated_at, in the SELECT lists' order.
+	snapshotScans := strings.Count(contents, "&i.CubeSnapshotID,")
+	tailScans := strings.Count(contents, "&i.UpdatedAt,\n\t\t&i.CheckpointID,") +
+		strings.Count(contents, "&i.UpdatedAt,\n\t\t\t&i.CheckpointID,")
+	if snapshotScans != 10 || tailScans != snapshotScans {
+		t.Errorf("%d sandbox_snapshot scans (want 10) but only %d scan checkpoint_id last after updated_at, so snapshot reads would misalign", snapshotScans, tailScans)
 	}
-	if strings.Count(contents, "func scanSandboxSnapshot(") != 1 {
-		t.Error("expected exactly one shared sandbox_snapshot scan helper")
+	// The shared helper must stay gone: hand-restoring it (as #3660 once did)
+	// makes sandbox.sql.go non-reproducible by bare `sqlc generate` again,
+	// reintroducing the LRM-1505/LRM-1521 regen drift.
+	if strings.Count(contents, "func scanSandboxSnapshot(") != 0 {
+		t.Error("scanSandboxSnapshot was hand-restored; keep sandbox.sql.go exactly what sqlc v1.31.1 generates (LRM-1521)")
 	}
 
 	checkpoint, err := os.ReadFile(filepath.Join(generatedDir, "env_checkpoint.sql.go"))

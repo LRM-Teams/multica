@@ -902,7 +902,7 @@ func (d *Daemon) handleHeartbeatActions(ctx context.Context, runtimeID string, r
 	}
 	if resp.PendingModelList != nil {
 		if rt := d.findRuntime(runtimeID); rt != nil {
-			go d.handleModelList(ctx, *rt, resp.PendingModelList.ID)
+			go d.handleModelList(ctx, *rt, resp.PendingModelList.ID, resp.PendingModelList.Environment)
 		}
 	}
 	if resp.PendingLocalSkills != nil {
@@ -948,7 +948,7 @@ func (d *Daemon) handleHeartbeatActions(ctx context.Context, runtimeID string, r
 // back to the server. Model discovery failures are reported as empty
 // lists rather than errors so the UI can still render a creatable
 // dropdown.
-func (d *Daemon) handleModelList(ctx context.Context, rt Runtime, requestID string) {
+func (d *Daemon) handleModelList(ctx context.Context, rt Runtime, requestID string, modelListEnvironment map[string]string) {
 	d.logger.Info("model list requested", "runtime_id", rt.ID, "request_id", requestID, "provider", rt.Provider)
 
 	entry, ok := d.cfg.Agents[rt.Provider]
@@ -960,7 +960,7 @@ func (d *Daemon) handleModelList(ctx context.Context, rt Runtime, requestID stri
 		return
 	}
 
-	models, err := agent.ListModels(ctx, rt.Provider, entry.Path)
+	models, err := agent.ListModelsWithEnvironment(ctx, rt.Provider, entry.Path, modelListEnvironment)
 	if err != nil {
 		d.reportModelListResult(ctx, rt, requestID, map[string]any{
 			"status": "failed",

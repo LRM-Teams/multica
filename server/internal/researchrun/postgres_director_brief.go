@@ -276,9 +276,7 @@ func directorBriefFrontierSummary(summary string, rawOpenQuestions json.RawMessa
 
 func (s *PostgresStore) loadV6DirectorControlFacts(ctx context.Context, workspaceID, runID string, facts *DirectorBriefFacts) error {
 	rows, err := s.pool.Query(ctx, `SELECT discussion.id::text,discussion.kind,discussion.status,
-		left(format('讨论类型：%s；输入版本：%s；最新投票：%s；可见结论：%s',
-			discussion.kind,COALESCE(inputs.summary,'无'),COALESCE(votes.summary,'无'),COALESCE(turns.summary,'无')),8192),
-		discussion.updated_at
+		COALESCE(inputs.summary,'无'),COALESCE(votes.summary,'无'),COALESCE(turns.summary,'无'),discussion.updated_at
 		FROM research_discussion discussion
 		LEFT JOIN LATERAL (
 			SELECT string_agg(input.node_artifact_version_id::text,', ' ORDER BY input.ordinal) AS summary
@@ -308,12 +306,13 @@ func (s *PostgresStore) loadV6DirectorControlFacts(ctx context.Context, workspac
 		return err
 	}
 	for rows.Next() {
-		var id, kind, state, summary string
+		var id, kind, state, inputs, votes, turns string
 		var updated time.Time
-		if err = rows.Scan(&id, &kind, &state, &summary, &updated); err != nil {
+		if err = rows.Scan(&id, &kind, &state, &inputs, &votes, &turns, &updated); err != nil {
 			rows.Close()
 			return err
 		}
+		summary := directorBriefDiscussionSummary(kind, inputs, votes, turns)
 		facts.Discussions = append(facts.Discussions, map[string]any{"id": id, "kind": "discussion", "state": directorBriefControlState(state), "summary": summary, "updated_at": updated.UTC().Format(time.RFC3339Nano)})
 	}
 	if err = rows.Err(); err != nil {
@@ -405,6 +404,15 @@ func truncateV6BriefText(value string, limit int) string {
 		return value
 	}
 	return string(runes[:limit])
+}
+
+func directorBriefDiscussionSummary(kind, inputs, votes, turns string) string {
+	return truncateV6BriefText(fmt.Sprintf("讨论类型：%s；输入版本：%s；最新投票：%s；可见结论：%s",
+		truncateV6BriefText(kind, 32),
+		truncateV6BriefText(inputs, 128),
+		truncateV6BriefText(votes, 192),
+		truncateV6BriefText(turns, 128),
+	), 512)
 }
 
 func jsonObjectOrEmpty(raw json.RawMessage) any {

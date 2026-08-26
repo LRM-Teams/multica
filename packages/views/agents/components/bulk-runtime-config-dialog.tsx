@@ -2,17 +2,18 @@
 
 import { useMemo, useState } from "react";
 import type { Agent, AgentRuntime, MemberWithUser } from "@multica/core/types";
-import { Button } from "@multica/ui/components/ui/button";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@multica/ui/components/ui/dialog";
 import { useT } from "../../i18n";
-import { RuntimeConfigFields } from "./runtime-config-fields";
+import {
+  RuntimeConfigDialogFooter,
+  RuntimeConfigSelectionFields,
+} from "./runtime-config-dialog-shared";
 import { useRuntimeConfigSelection } from "./use-runtime-config-selection";
 
 type RuntimeConfigPatch = {
@@ -170,51 +171,30 @@ function BulkRuntimeConfigDialogBody({
   return (
     <>
       <div className="min-w-0 overflow-y-auto py-1 max-h-[60vh]">
-        <RuntimeConfigFields
+        <RuntimeConfigSelectionFields
           runtimes={runtimes}
           members={members}
           currentUserId={currentUserId}
-          machineId={selection.machineId}
-          onMachineSelect={selection.selectMachine}
-          machineRuntimes={selection.machineRuntimes}
-          runtimeId={selection.runtimeId}
-          onRuntimeSelect={selection.selectRuntime}
-          model={selection.model}
-          onModelChange={selection.selectModel}
-          thinkingLevel={selection.thinkingLevel}
-          onThinkingChange={selection.selectThinking}
-          modelRequired
+          selection={selection}
           disabled={saving}
         />
       </div>
 
-      <DialogFooter>
-        <Button
-          type="button"
-          variant="ghost"
-          disabled={saving}
-          onClick={() => onOpenChange(false)}
-        >
-          {t(($) => $.machine.agents_cancel)}
-        </Button>
-        <Button
-          type="button"
-          disabled={
-            saving ||
-            !dirty ||
-            !selection.runtimeId ||
-            !selection.model.trim()
-          }
-          data-testid="agent-bulk-runtime-config-save"
-          onClick={() => void handleSave()}
-        >
-          {saving
+      <RuntimeConfigDialogFooter
+        saving={saving}
+        disabled={!dirty || !selection.runtimeId || !selection.model.trim()}
+        cancelLabel={t(($) => $.machine.agents_cancel)}
+        saveLabel={
+          saving
             ? t(($) => $.machine.agents_bulk_config_saving)
             : t(($) => $.machine.agents_bulk_config_save, {
                 count: agents.length,
-              })}
-        </Button>
-      </DialogFooter>
+              })
+        }
+        saveTestId="agent-bulk-runtime-config-save"
+        onCancel={() => onOpenChange(false)}
+        onSave={() => void handleSave()}
+      />
     </>
   );
 }

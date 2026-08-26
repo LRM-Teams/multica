@@ -113,6 +113,27 @@ func TestListModelsUnknownProvider(t *testing.T) {
 	}
 }
 
+func TestListModelsWithEnvironmentPassesRuntimeEnvToCursor(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cursor-agent")
+	writeTestExecutable(t, path, []byte("#!/bin/sh\nif [ \"$CURSOR_API_KEY\" = \"runtime-key\" ]; then\n  echo 'cursor-model - Cursor Model'\nfi\n"))
+
+	modelCacheMu.Lock()
+	for key := range modelCache {
+		if strings.HasPrefix(key, "cursor:") {
+			delete(modelCache, key)
+		}
+	}
+	modelCacheMu.Unlock()
+
+	models, err := ListModelsWithEnvironment(context.Background(), "cursor", path, map[string]string{"CURSOR_API_KEY": "runtime-key"})
+	if err != nil {
+		t.Fatalf("ListModelsWithEnvironment: %v", err)
+	}
+	if len(models) != 1 || models[0].ID != "cursor-model" {
+		t.Fatalf("runtime environment was not passed to cursor-agent: %+v", models)
+	}
+}
+
 func TestStaticCatalogsHaveAtMostOneDefault(t *testing.T) {
 	// Each catalog should tag at most one entry as the display
 	// default so the UI badge is unambiguous. More than one

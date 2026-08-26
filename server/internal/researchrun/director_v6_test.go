@@ -138,6 +138,62 @@ func TestV6DirectorBriefBoundsTeamMissionSummary(t *testing.T) {
 	}
 }
 
+func TestV6DirectorBriefBoundsDiscussionSummary(t *testing.T) {
+	run := newTransactionRecoveryRun(t, "Bound V6 discussion summary")
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_session SET orchestrator_version='research-run-v6' WHERE id=$1::uuid`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.store.AssignV6Director(run.ctx, AssignV6DirectorInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+		AgentID: run.fixture.agentID, UserID: run.fixture.userID,
+		Reason: "Compile a bounded discussion summary", ClientRequestID: uuid.NewString(), ExpectedStateVersion: 0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	discussionID := uuid.NewString()
+	if _, err := run.pool.Exec(run.ctx, `INSERT INTO research_discussion(
+		id,workspace_id,session_id,kind,scope_hash,input_set_hash,goal_version,branch_scope_hash,through_event_sequence,revision,status
+	) VALUES($1::uuid,$2::uuid,$3::uuid,'integration',$4,$5,1,$6,1,1,'escalated')`,
+		discussionID, run.fixture.workspaceID, run.fixture.sessionID,
+		"sha256:"+strings.Repeat("a", 64), "sha256:"+strings.Repeat("b", 64), "sha256:"+strings.Repeat("c", 64)); err != nil {
+		t.Fatal(err)
+	}
+	for ordinal := range 20 {
+		if _, err := run.pool.Exec(run.ctx, `INSERT INTO research_discussion_input(
+			workspace_id,session_id,discussion_id,node_artifact_version_id,ordinal,tier,content_hash
+		) VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,'S',$6)`,
+			run.fixture.workspaceID, run.fixture.sessionID, discussionID, uuid.NewString(), ordinal,
+			fmt.Sprintf("sha256:%064x", ordinal+1)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var stateVersion int64
+	if err := run.pool.QueryRow(run.ctx, `SELECT state_version FROM research_session WHERE id=$1::uuid`, run.fixture.sessionID).Scan(&stateVersion); err != nil {
+		t.Fatal(err)
+	}
+	facts, err := run.store.LoadDirectorBriefFacts(run.ctx, StartV6DirectorCycleInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID, ExpectedStateVersion: stateVersion,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(facts.Discussions) != 1 {
+		t.Fatalf("discussions=%d, want 1", len(facts.Discussions))
+	}
+	summary, ok := facts.Discussions[0].(map[string]any)["summary"].(string)
+	if !ok || len([]rune(summary)) > 512 {
+		t.Fatalf("discussion summary rune count=%d, want at most 512", len([]rune(summary)))
+	}
+	for _, label := range []string{"讨论类型：", "输入版本：", "最新投票：", "可见结论："} {
+		if !strings.Contains(summary, label) {
+			t.Fatalf("discussion summary missing %q: %s", label, summary)
+		}
+	}
+	if _, err = (contextCompilerModule{}).CompileDirectorBrief(facts, time.Unix(1, 0)); err != nil {
+		t.Fatalf("compile Director Brief with bounded discussion: %v", err)
+	}
+}
+
 func TestV6DirectorBriefIncludesWorkFailureRecoveryFacts(t *testing.T) {
 	run := newTransactionRecoveryRun(t, "V6 Director Brief work failure recovery")
 	if _, err := run.pool.Exec(run.ctx, `UPDATE research_session SET orchestrator_version='research-run-v6' WHERE id=$1::uuid`, run.fixture.sessionID); err != nil {

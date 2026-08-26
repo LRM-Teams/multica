@@ -84,6 +84,8 @@ canonical state。替换后的 Agent 或主理人必须能够只依靠 PostgreSQ
   最大节点，跨方向 successor 去重。服务端把这些节点的完整持久化结果冻结到
   `report_context.input_documents`，不依赖 Agent 聊天转述。新的最大节点、方向状态或
   最终成熟度变化后，主理人必须派发下一版报告；同一时刻最多存在一个活动 report Work。
+  报告刷新可以单独构成一个维护轮次；它产生的新事件会触发下一轮继续派发尚未覆盖的
+  待回答问题，避免报告与补充调研互相阻塞。
   草稿修订创建时即登记无 current version 的 passport；报告老板提交并验收不可变 package
   后，服务端才写入并切换到 version 1。
   只有主理人发布工作流可以发布通过验证的 package。报告资源不得输出外部 URL、凭据、

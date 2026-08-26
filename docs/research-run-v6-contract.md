@@ -134,7 +134,9 @@ block.
 Event-trigger reconciliation is fair across Runs. A Run whose state changes
 while its next Director Brief is being frozen remains eligible for a later tick,
 but that optimistic-concurrency miss cannot stop other eligible Runs behind it
-from starting their own Director cycles in the current tick.
+from starting their own Director cycles in the current tick. Replaying the
+idempotency key of an already persisted cycle likewise does not count as fresh
+work or prevent later eligible events from starting cycles in the same batch.
 
 One `director_brief` envelope is one bounded page. All pages share Brief ID/hash,
 state version and event watermark. Ronaldo acknowledges a page only after

@@ -490,6 +490,7 @@ func (s *PostgresStore) PersistDirectorCycle(ctx context.Context, in StartV6Dire
 		Scan(&replay.ID, &replay.RunID, &replay.AssignmentID, &replay.BriefID, &replay.BriefHash, &replay.WorkItemID,
 			&replay.Generation, &replay.PageCount, &replay.StateVersion, &replay.Status)
 	if err == nil {
+		replay.Replayed = true
 		return replay, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {

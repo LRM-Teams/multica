@@ -80,6 +80,11 @@ func TestMachineUpgrade_NoCurrentSocketFailsInsteadOfQueuing(t *testing.T) {
 	if createdW.Code != http.StatusConflict || created["code"] != "no_current_socket" {
 		t.Fatalf("upgrade without a live socket = %d %s, want no_current_socket", createdW.Code, createdW.Body.String())
 	}
+	// LRM-1658: user-facing copy must name the Workspace Daemon, not internal
+	// socket terminology.
+	if want := "Update failed because the Workspace Daemon is not connected. Reconnect it, then retry."; created["error"] != want {
+		t.Fatalf("no-socket error copy = %q, want %q", created["error"], want)
+	}
 
 	retryW, retry := initiateMachineUpgrade(t, testUserID, daemonID, "v9.9.9")
 	if retryW.Code != http.StatusConflict || retry["code"] != "no_current_socket" {

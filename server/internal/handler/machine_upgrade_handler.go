@@ -67,7 +67,7 @@ func (h *Handler) dispatchMachineUpgrade(r *http.Request, daemonID string, req c
 		return "", &machineUpgradeInputError{code: "request_id_required", message: "request_id is required"}
 	}
 	if !h.dispatchComputerUpgradeToRunners(r.Context(), daemonID, requestID, target) {
-		return "", &machineUpgradeInputError{code: "no_current_socket", message: "Computer upgrade needs the current Binding socket"}
+		return "", &machineUpgradeInputError{code: "no_current_socket", message: "Update failed because the Workspace Daemon is not connected. Reconnect it, then retry."}
 	}
 	return requestID, nil
 }

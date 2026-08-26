@@ -243,17 +243,6 @@ type piRPCTurn struct {
 	progress func()
 }
 
-// noteProgress records that the Pi process delivered stream traffic, even
-// when the event maps to no Message. Long provider generations with no tool
-// calls are legitimate work; without this signal the resident silence
-// watchdog would mistake them for a wedged runtime.
-func (t *piRPCTurn) noteProgress() {
-	if t == nil || t.progress == nil {
-		return
-	}
-	t.progress()
-}
-
 // PiCompactionResult is the outcome of an explicit compaction call.
 type PiCompactionResult struct {
 	Summary      string
@@ -538,7 +527,12 @@ func (b *piRPCBackend) acceptIdleInputPrompt(ctx context.Context, prompt string)
 			message.SessionID = p.sessionID
 			trySend(idleInput.messages, message)
 		},
-		progress: b.currentProgressListener(),
+		progress: func() {
+			if listener := b.currentProgressListener(); listener != nil {
+				listener()
+			}
+			trySend(idleInput.messages, Message{Type: MessageProgress})
+		},
 	}
 	p.stateMu.Lock()
 	if p.turn != nil || p.idleInput != nil {
@@ -1098,11 +1092,9 @@ func (b *piRPCBackend) readEvents(p *piRPCProcess, stdout io.Reader) {
 			continue
 		}
 		if turn != nil {
-			turn.noteProgress()
 			piRPCDispatchEvent(event, turn)
 			continue
 		}
-		idleInput.stream.noteProgress()
 		piRPCDispatchEvent(event, idleInput.stream)
 	}
 	p.stateMu.Lock()

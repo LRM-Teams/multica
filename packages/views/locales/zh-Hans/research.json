@@ -1499,6 +1499,8 @@
       "frame_title": "调研报告文档",
       "loading": "正在打开隔离报告…",
       "loading_document": "正在打开报告…",
+      "empty_title": "尚无调研报告",
+      "empty_body": "当前任务尚未生成可查看的报告。",
       "unavailable_title": "交互报告暂不可用",
       "unavailable_body": "报告未能在安全隔离环境中打开。你仍可在下方阅读已经校验的纯文本版本。",
       "refresh_capability": "获取新的访问链接",

@@ -14,6 +14,8 @@ vi.mock("../../i18n/use-t", () => ({
             frame_title: "Research report document",
             loading: "Opening isolated report…",
             loading_document: "Opening report…",
+            empty_title: "No research report yet",
+            empty_body: "This task has not produced a report to view yet.",
             unavailable_title: "Interactive report unavailable",
             unavailable_body: "Read the verified plain-text version below.",
             refresh_capability: "Request a fresh link",
@@ -34,6 +36,24 @@ const report = {
 };
 
 describe("ResearchV6ReportModal", () => {
+  it("shows an empty state when no report has been generated", () => {
+    render(
+      <ResearchV6ReportModal
+        appOrigin={location.origin}
+        open
+        report={null}
+        onOpenChange={() => {}}
+        onRequestFreshCapability={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId("research-v6-report-empty")).toBeTruthy();
+    expect(screen.getByText("No research report yet")).toBeTruthy();
+    expect(screen.queryByText("Interactive report unavailable")).toBeNull();
+    expect(screen.queryByText("Request a fresh link")).toBeNull();
+    expect(screen.queryByTestId("research-v6-report-frame")).toBeNull();
+  });
+
   it("mounts the capability in the exact restricted iframe sandbox", async () => {
     const { rerender } = render(
       <ResearchV6ReportModal

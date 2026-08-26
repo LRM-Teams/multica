@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -18,6 +19,22 @@ const (
 )
 
 var ErrGraphMemoryAgentUnavailable = errors.New("graph memory agent unavailable")
+
+const graphMemoryAgentDefaultNodeOptions = "--use-openssl-ca"
+
+func mergeGraphMemoryAgentCustomEnv(raw []byte) ([]byte, error) {
+	env := map[string]string{}
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed != "" && trimmed != "null" {
+		if err := json.Unmarshal(raw, &env); err != nil {
+			return nil, fmt.Errorf("decode managed graph memory agent custom env: %w", err)
+		}
+	}
+	if _, exists := env["NODE_OPTIONS"]; !exists {
+		env["NODE_OPTIONS"] = graphMemoryAgentDefaultNodeOptions
+	}
+	return json.Marshal(env)
+}
 
 // GraphMemoryAgentChannelStatus is the externally observable provisioning state.
 type GraphMemoryAgentChannelStatus struct {
@@ -164,6 +181,14 @@ func (c *PostgresGraphMemoryAgentControlPlane) ReconcileChannel(ctx context.Cont
 			return status, fmt.Errorf("provision graph memory agent: %w", err)
 		}
 	}
+	var customEnvRaw []byte
+	if err = tx.QueryRow(ctx, `SELECT custom_env FROM agent WHERE id=$1 FOR UPDATE`, agentID).Scan(&customEnvRaw); err != nil {
+		return status, fmt.Errorf("load graph memory agent custom env: %w", err)
+	}
+	managedCustomEnv, err := mergeGraphMemoryAgentCustomEnv(customEnvRaw)
+	if err != nil {
+		return status, err
+	}
 	_, err = tx.Exec(ctx, `
 		INSERT INTO graph_memory_channel_agent (
 		  channel_id, workspace_id, agent_id, runtime_id, sponsor_user_id,
@@ -179,8 +204,8 @@ func (c *PostgresGraphMemoryAgentControlPlane) ReconcileChannel(ctx context.Cont
 		return status, err
 	}
 	if _, err = tx.Exec(ctx, `
-		UPDATE agent SET owner_id=$2,runtime_id=$3,model=$4,thinking_level=NULLIF($5,''),updated_at=now()
-		WHERE id=$1`, agentID, sponsorID, runtimeID, memoryAgentModel, memoryAgentThinking); err != nil {
+		UPDATE agent SET owner_id=$2,runtime_id=$3,model=$4,thinking_level=NULLIF($5,''),custom_env=$6,updated_at=now()
+		WHERE id=$1`, agentID, sponsorID, runtimeID, memoryAgentModel, memoryAgentThinking, managedCustomEnv); err != nil {
 		return status, err
 	}
 	if _, err = tx.Exec(ctx, `INSERT INTO channel_member(channel_id,workspace_id,member_type,member_id,role) VALUES($1::uuid,$2::uuid,'agent',$3,'member') ON CONFLICT DO NOTHING`, channelID, workspaceID, agentID); err != nil {

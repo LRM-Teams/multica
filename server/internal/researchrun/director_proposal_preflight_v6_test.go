@@ -180,6 +180,18 @@ func TestValidateV6IntegrationCandidateRequiresExecutableTierTransition(t *testi
 	}
 }
 
+func TestValidateV6IntegrationDiscussionOutcome(t *testing.T) {
+	if err := validateV6IntegrationDiscussionOutcome(V6Discussion{Status: "active"}); err != nil {
+		t.Fatalf("active discussion should be accepted: %v", err)
+	}
+	for _, status := range []string{"consensus_accept", "consensus_reject", "escalated"} {
+		err := validateV6IntegrationDiscussionOutcome(V6Discussion{Status: status})
+		if !errors.Is(err, ErrInvalidContract) {
+			t.Fatalf("status %q error=%v want ErrInvalidContract", status, err)
+		}
+	}
+}
+
 func TestPreflightV6DirectorProposalRejectsMissingBranchBeforeMutation(t *testing.T) {
 	run := newTransactionRecoveryRun(t, "Preflight Director Branch references")
 	if _, err := run.pool.Exec(run.ctx, `UPDATE research_session SET orchestrator_version='research-run-v6' WHERE id=$1::uuid`, run.fixture.sessionID); err != nil {

@@ -53,7 +53,7 @@ func (s *PostgresStore) executeV6OpenIntegrationDiscussionAction(
 	if err != nil {
 		return err
 	}
-	_, err = (discussionV6Module{store: s}).Open(ctx, OpenV6DiscussionInput{
+	discussion, err := (discussionV6Module{store: s}).Open(ctx, OpenV6DiscussionInput{
 		WorkspaceID:          proposal.WorkspaceID,
 		RunID:                proposal.RunID,
 		Kind:                 "integration",
@@ -68,6 +68,16 @@ func (s *PostgresStore) executeV6OpenIntegrationDiscussionAction(
 	})
 	if err != nil {
 		return err
+	}
+	if err = validateV6IntegrationDiscussionOutcome(discussion); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateV6IntegrationDiscussionOutcome(discussion V6Discussion) error {
+	if discussion.Status != "active" {
+		return fmt.Errorf("%w: integration inputs already have a terminal discussion; include new evidence before retrying", ErrInvalidContract)
 	}
 	return nil
 }

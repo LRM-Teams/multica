@@ -50,7 +50,7 @@ func (s *PostgresStore) CreateV6ReportWork(ctx context.Context, in CreateV6Repor
 		}
 		return V6ReportWork{}, ErrAttemptNotAssigned
 	}
-	selection, err := selectV6ReportInputsTx(ctx, tx, in.WorkspaceID, in.RunID)
+	selection, err := selectV6ReportInputs(ctx, tx, in.WorkspaceID, in.RunID)
 	if err != nil {
 		return V6ReportWork{}, err
 	}

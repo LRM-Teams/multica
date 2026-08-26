@@ -182,18 +182,13 @@ func (s *PostgresStore) LoadDirectorBriefFacts(ctx context.Context, in StartV6Di
 }
 
 func (s *PostgresStore) loadV6ReportPlanFact(ctx context.Context, workspaceID, runID string) (map[string]any, error) {
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback(ctx)
-	selection, err := selectV6ReportInputsTx(ctx, tx, workspaceID, runID)
+	selection, err := selectV6ReportInputs(ctx, s.pool, workspaceID, runID)
 	if err != nil {
 		return nil, err
 	}
 	var reporterAgentID, latestHash string
 	var active bool
-	if err = tx.QueryRow(ctx, `SELECT
+	if err = s.pool.QueryRow(ctx, `SELECT
 		COALESCE((SELECT agent_id::text FROM research_team_membership WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND role='reporter' AND state IN ('idle','working','offline','retiring') ORDER BY joined_at,id LIMIT 1),''),
 		EXISTS(SELECT 1 FROM research_work_item WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND kind='report' AND status IN ('ready','dispatching','enqueued','running','awaiting_input')),
 		COALESCE((SELECT input_snapshot_hash FROM research_report WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND package_hash IS NOT NULL ORDER BY revision DESC LIMIT 1),'')`, workspaceID, runID).Scan(&reporterAgentID, &active, &latestHash); err != nil {

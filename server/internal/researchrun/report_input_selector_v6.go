@@ -3,10 +3,16 @@ package researchrun
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sort"
 
 	"github.com/jackc/pgx/v5"
 )
+
+type v6ReportInputQuerier interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
 
 type v6ReportDirection struct {
 	id, objective, status string
@@ -20,11 +26,11 @@ type v6ReportCandidate struct {
 	createdOrdinal                                                                  int64
 }
 
-// selectV6ReportInputsTx is the sole policy boundary for report composition.
+// selectV6ReportInputs is the sole policy boundary for report composition.
 // It chooses one current maximum per top-level research direction and then
 // deduplicates cross-direction successors that represent several directions.
-func selectV6ReportInputsTx(ctx context.Context, tx pgx.Tx, workspaceID, runID string) (V6ReportSelection, error) {
-	rows, err := tx.Query(ctx, `WITH root AS (
+func selectV6ReportInputs(ctx context.Context, query v6ReportInputQuerier, workspaceID, runID string) (V6ReportSelection, error) {
+	rows, err := query.Query(ctx, `WITH root AS (
 		SELECT id FROM research_branch
 		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND parent_branch_id IS NULL
 		ORDER BY (client_key='root') DESC,created_at,id LIMIT 1
@@ -54,15 +60,18 @@ func selectV6ReportInputsTx(ctx context.Context, tx pgx.Tx, workspaceID, runID s
 	// new runs always create explicit top-level directions.
 	if len(directions) == 0 {
 		var direction v6ReportDirection
-		if err = tx.QueryRow(ctx, `SELECT id::text,objective,status FROM research_branch
+		if err = query.QueryRow(ctx, `SELECT id::text,objective,status FROM research_branch
 			WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND parent_branch_id IS NULL
 			ORDER BY (client_key='root') DESC,created_at,id LIMIT 1`, workspaceID, runID).Scan(&direction.id, &direction.objective, &direction.status); err != nil {
-			return V6ReportSelection{}, err
+			if !errors.Is(err, pgx.ErrNoRows) {
+				return V6ReportSelection{}, err
+			}
+		} else {
+			directions = append(directions, direction)
 		}
-		directions = append(directions, direction)
 	}
 
-	rows, err = tx.Query(ctx, `WITH RECURSIVE root AS (
+	rows, err = query.Query(ctx, `WITH RECURSIVE root AS (
 		SELECT id FROM research_branch
 		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND parent_branch_id IS NULL
 		ORDER BY (client_key='root') DESC,created_at,id LIMIT 1
@@ -141,7 +150,7 @@ func selectV6ReportInputsTx(ctx context.Context, tx pgx.Tx, workspaceID, runID s
 	rows.Close()
 
 	activeWorkByDirection := map[string]int{}
-	rows, err = tx.Query(ctx, `WITH RECURSIVE root AS (
+	rows, err = query.Query(ctx, `WITH RECURSIVE root AS (
 		SELECT id FROM research_branch
 		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND parent_branch_id IS NULL
 		ORDER BY (client_key='root') DESC,created_at,id LIMIT 1
@@ -253,7 +262,7 @@ func selectV6ReportInputsTx(ctx context.Context, tx pgx.Tx, workspaceID, runID s
 	}
 	if allFinal {
 		var activeWork, openDisputes int
-		if err = tx.QueryRow(ctx, `SELECT
+		if err = query.QueryRow(ctx, `SELECT
 			(SELECT count(*)::int FROM research_work_item work WHERE work.workspace_id=$1::uuid AND work.session_id=$2::uuid
 			 AND work.kind NOT IN ('director','report','review') AND work.status IN ('ready','dispatching','enqueued','running','awaiting_input')),
 			(SELECT count(*)::int FROM research_dispute dispute WHERE dispute.workspace_id=$1::uuid AND dispute.session_id=$2::uuid

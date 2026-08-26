@@ -148,7 +148,7 @@ jobs:
                   AND material_effect.status IN ('pending','delivering'))
           )
           SELECT 'GLOBAL_TRIGGER_QUEUE',count(*),count(DISTINCT session_id),
-            count(*) FILTER (WHERE (created_at,sequence,id)<=(target.created_at,target.sequence,target.id))
+            count(*) FILTER (WHERE (eligible.created_at,eligible.sequence,eligible.id)<=(target.created_at,target.sequence,target.id))
           FROM eligible CROSS JOIN target;
           SQL
 

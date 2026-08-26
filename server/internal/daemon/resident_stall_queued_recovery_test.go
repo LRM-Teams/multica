@@ -103,7 +103,21 @@ func TestRecoverStalledSlotForQueuedMessageSparesFreshProcess(t *testing.T) {
 	}
 }
 
-func TestRecoverStalledSlotForQueuedMessageSparesOutstandingToolCall(t *testing.T) {
+func TestRecoverStalledSlotForQueuedMessageSparesRecentlyActiveOutstandingToolCall(t *testing.T) {
+	pool, _, slot := stalledRecoveryPool(t, 15*time.Minute)
+	pool.observeResidentRuntimeMessage(slot, agent.Message{Type: agent.MessageToolUse, CallID: "call-1"})
+	ageSlotActivity(slot, time.Minute)
+
+	recovered, err := pool.recoverStalledSlotForQueuedMessage("agent-a", "runtime-a")
+	if err != nil {
+		t.Fatalf("recover: %v", err)
+	}
+	if recovered {
+		t.Fatal("recovered = true while a recently active tool call is still outstanding")
+	}
+}
+
+func TestRecoverStalledSlotForQueuedMessageRecoversStaleOutstandingToolCall(t *testing.T) {
 	pool, _, slot := stalledRecoveryPool(t, 15*time.Minute)
 	pool.observeResidentRuntimeMessage(slot, agent.Message{Type: agent.MessageToolUse, CallID: "call-1"})
 	ageSlotActivity(slot, 16*time.Minute)
@@ -112,8 +126,15 @@ func TestRecoverStalledSlotForQueuedMessageSparesOutstandingToolCall(t *testing.
 	if err != nil {
 		t.Fatalf("recover: %v", err)
 	}
-	if recovered {
-		t.Fatal("recovered = true while a tool call is still outstanding")
+	if !recovered {
+		t.Fatal("recovered = false for an outstanding tool call silent past the stall window")
+	}
+
+	slot.mu.Lock()
+	outstandingToolCalls := len(slot.outstandingToolCalls)
+	slot.mu.Unlock()
+	if outstandingToolCalls != 0 {
+		t.Fatalf("outstanding tool calls after stalled recovery = %d, want 0", outstandingToolCalls)
 	}
 }
 

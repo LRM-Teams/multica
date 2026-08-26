@@ -65,15 +65,14 @@ func (p *agentRuntimePool) recoverStalledSlotForQueuedMessage(agentID, runtimeID
 		slot.mu.Unlock()
 		return false, nil
 	}
-	if len(slot.outstandingToolCalls) > 0 {
-		slot.mu.Unlock()
-		return false, nil
-	}
 	staleFor, due := slot.stalledRecoveryDueLocked(p.residentStallWatchdog)
 	if !due {
 		slot.mu.Unlock()
 		return false, nil
 	}
+	// At this point every outstanding tool call is stale: the same activity
+	// clock that protects active long-running tools has exceeded the window.
+	slot.outstandingToolCalls = nil
 	slot.stalledRecovering = true
 	// Release slot.mu before beginResidentTermination: it re-takes p.mu then
 	// slot.mu itself, and holding slot.mu here would deadlock against that.

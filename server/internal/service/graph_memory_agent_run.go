@@ -144,7 +144,7 @@ func (s *GraphMemoryAgentRunStore) Claim(ctx context.Context, workspaceID, chann
 	var active bool
 	if err := tx.QueryRow(ctx, `
 		SELECT s.state_version, s.active_run_id, p.memory_agent_max_tokens_per_hour,
-		       a.status = 'active' AND s.lease_expires_at > $3
+		       COALESCE(a.status = 'active' AND s.lease_expires_at > $3, false)
 		FROM graph_memory_agent_state s
 		JOIN graph_memory_channel_agent a ON a.channel_id=s.channel_id
 		JOIN graph_memory_profile p ON p.workspace_id=a.workspace_id

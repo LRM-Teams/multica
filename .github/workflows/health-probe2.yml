@@ -103,6 +103,30 @@ jobs:
           FROM research_discussion d WHERE d.session_id=:'run_id'::uuid
           ORDER BY d.created_at DESC LIMIT 12;
 
+          SELECT 'DISCUSSION_VOTE',d.id,d.status,v.vote,
+                 COALESCE(jsonb_array_length(CASE WHEN jsonb_typeof(t.contribution->'conflicts')='array'
+                   THEN t.contribution->'conflicts' ELSE '[]'::jsonb END),0),
+                 left(v.reason,300)
+          FROM research_discussion d
+          JOIN research_discussion_vote v ON v.discussion_id=d.id
+          JOIN research_discussion_turn t ON t.id=v.turn_id
+          WHERE d.session_id=:'run_id'::uuid
+          ORDER BY d.created_at DESC,v.created_at LIMIT 40;
+
+          SELECT 'INSIGHT_GROUP',tier,status,count(*),max(created_at)
+          FROM research_insight_version WHERE session_id=:'run_id'::uuid
+          GROUP BY tier,status ORDER BY tier,status;
+
+          SELECT 'ABSORPTION_FACTS',count(*),count(DISTINCT input_artifact_version_id),
+                 count(DISTINCT successor_insight_version_id)
+          FROM research_node_absorption WHERE session_id=:'run_id'::uuid;
+
+          SELECT 'FRONTIER_TIER',COALESCE(iv.tier,'S'),count(*)
+          FROM research_branch_frontier f
+          LEFT JOIN research_insight_version iv ON iv.artifact_version_id=f.node_artifact_version_id
+          WHERE f.session_id=:'run_id'::uuid AND f.removed_by_event_sequence IS NULL
+          GROUP BY COALESCE(iv.tier,'S') ORDER BY COALESCE(iv.tier,'S');
+
           SELECT 'EVENT_RECENT',sequence,event_type,created_at,COALESCE(payload->>'recovery_kind','')
           FROM research_run_event WHERE session_id=:'run_id'::uuid
           ORDER BY sequence DESC LIMIT 30;

@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useMemo, useState } from "react";
+import { RuntimeConfigFields } from "../../agents/components/runtime-config-fields";
+import { useRuntimeConfigSelection } from "../../agents/components/use-runtime-config-selection";
 import { GitBranch, Play, RefreshCw, ShieldCheck, Timer } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -14,7 +16,13 @@ import {
   graphMemoryProfileOptions,
   graphMemoryStatusOptions,
 } from "@multica/core/evolution/queries";
-import type { GraphMemoryMode, GraphMemoryProfile, UpdateGraphMemoryProfileRequest } from "@multica/core/types";
+import type {
+  GraphMemoryMode,
+  GraphMemoryProfile,
+  MemberWithUser,
+  RuntimeDevice,
+  UpdateGraphMemoryProfileRequest,
+} from "@multica/core/types";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Button } from "@multica/ui/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@multica/ui/components/ui/card";
@@ -146,37 +154,88 @@ function isGraphMemoryParseFallback(profile: GraphMemoryProfile): boolean {
   );
 }
 
-export function GraphMemoryAgentModeCard({ wsId, isAdmin }: { wsId: string; isAdmin: boolean }) {
+export function GraphMemoryAgentModeCard({
+  wsId,
+  isAdmin,
+  runtimes,
+  runtimesLoading,
+  members,
+  currentUserId,
+}: {
+  wsId: string;
+  isAdmin: boolean;
+  runtimes: RuntimeDevice[];
+  runtimesLoading?: boolean;
+  members: MemberWithUser[];
+  currentUserId: string | null;
+}) {
+  const { data: profile } = useQuery(graphMemoryProfileOptions(wsId));
+
+  if (!profile || profile.memory_type !== "graph" || isGraphMemoryParseFallback(profile)) return null;
+
+  return (
+    <GraphMemoryAgentModeForm
+      key={`${profile.config_version}:${profile.memory_agent_runtime_id}:${profile.memory_agent_model}:${profile.memory_agent_thinking}`}
+      wsId={wsId}
+      isAdmin={isAdmin}
+      profile={profile}
+      runtimes={runtimes}
+      runtimesLoading={runtimesLoading}
+      members={members}
+      currentUserId={currentUserId}
+    />
+  );
+}
+
+function GraphMemoryAgentModeForm({
+  wsId,
+  isAdmin,
+  profile,
+  runtimes,
+  runtimesLoading,
+  members,
+  currentUserId,
+}: {
+  wsId: string;
+  isAdmin: boolean;
+  profile: GraphMemoryProfile;
+  runtimes: RuntimeDevice[];
+  runtimesLoading?: boolean;
+  members: MemberWithUser[];
+  currentUserId: string | null;
+}) {
   const copy = useEvolutionCopy();
   const queryClient = useQueryClient();
-  const { data: profile } = useQuery(graphMemoryProfileOptions(wsId));
-  const [mode, setMode] = useState<GraphMemoryMode>(profile?.graph_memory_mode ?? "agent");
-  const [runtimeId, setRuntimeId] = useState(profile?.memory_agent_runtime_id ?? "");
-  const [model, setModel] = useState(profile?.memory_agent_model ?? "");
-  const [tokensPerHour, setTokensPerHour] = useState(profile?.memory_agent_max_tokens_per_hour ?? 200000);
-
-  useEffect(() => {
-    if (!profile) return;
-    setMode(profile.graph_memory_mode);
-    setRuntimeId(profile.memory_agent_runtime_id);
-    setModel(profile.memory_agent_model);
-    setTokensPerHour(profile.memory_agent_max_tokens_per_hour);
-  }, [profile]);
+  const [mode, setMode] = useState<GraphMemoryMode>(profile.graph_memory_mode);
+  const [tokensPerHour, setTokensPerHour] = useState(profile.memory_agent_max_tokens_per_hour);
+  // The managed Graph Memory Agent currently runs on Pi. Keep the shared
+  // Computer → Runtime → Model picker, but do not offer providers that the
+  // control plane would reject when it reconciles channel agents.
+  const eligibleRuntimes = useMemo(
+    () => runtimes.filter((runtime) => runtime.provider === "pi"),
+    [runtimes],
+  );
+  const selection = useRuntimeConfigSelection({
+    runtimes: eligibleRuntimes,
+    currentUserId,
+    initialRuntimeId: profile.memory_agent_runtime_id,
+    initialModel: profile.memory_agent_model,
+    initialThinkingLevel: profile.memory_agent_thinking,
+    autoSeedMachine: true,
+  });
 
   const save = useMutation({
-    mutationFn: () => {
-      if (!profile) throw new Error(copy("graphAgentModeUnavailable"));
-      return api.updateGraphMemoryProfile(wsId, {
-        memory_type: profile.memory_type,
-        explore_agents: profile.explore_agents,
-        explore_max_rounds: profile.explore_max_rounds,
-        config_version: profile.config_version,
-        graph_memory_mode: mode,
-        memory_agent_runtime_id: runtimeId.trim(),
-        memory_agent_model: model.trim(),
-        memory_agent_max_tokens_per_hour: Math.max(1000, Math.trunc(tokensPerHour)),
-      });
-    },
+    mutationFn: () => api.updateGraphMemoryProfile(wsId, {
+      memory_type: profile.memory_type,
+      explore_agents: profile.explore_agents,
+      explore_max_rounds: profile.explore_max_rounds,
+      config_version: profile.config_version,
+      graph_memory_mode: mode,
+      memory_agent_runtime_id: selection.runtimeId.trim(),
+      memory_agent_model: selection.model.trim(),
+      memory_agent_thinking: selection.thinkingLevel.trim(),
+      memory_agent_max_tokens_per_hour: Math.max(1000, Math.trunc(tokensPerHour)),
+    }),
     onSuccess: async () => {
       toast.success(copy("graphAgentModeSaved"));
       await queryClient.invalidateQueries({ queryKey: evolutionKeys.graphMemoryProfile(wsId) });
@@ -191,7 +250,7 @@ export function GraphMemoryAgentModeCard({ wsId, isAdmin }: { wsId: string; isAd
     },
   });
 
-  if (!profile || profile.memory_type !== "graph" || isGraphMemoryParseFallback(profile)) return null;
+  const configDisabled = !isAdmin || mode !== "agent" || save.isPending;
 
   return (
     <Card className="bg-background/85 backdrop-blur">
@@ -204,17 +263,25 @@ export function GraphMemoryAgentModeCard({ wsId, isAdmin }: { wsId: string; isAd
           <Button type="button" variant={mode === "agent" ? "default" : "outline"} disabled={!isAdmin || save.isPending} onClick={() => setMode("agent")}>{copy("graphAgentModeAgent")}</Button>
           <Button type="button" variant={mode === "inject" ? "default" : "outline"} disabled={!isAdmin || save.isPending} onClick={() => setMode("inject")}>{copy("graphAgentModeInject")}</Button>
         </div>
-        <div className="space-y-1">
-          <Label htmlFor="graph-memory-agent-runtime">{copy("graphAgentRuntime")}</Label>
-          <Input id="graph-memory-agent-runtime" value={runtimeId} onChange={(event) => setRuntimeId(event.target.value)} disabled={!isAdmin || mode !== "agent" || save.isPending} placeholder={copy("graphAgentRuntimePlaceholder")} />
-        </div>
-        <div className="space-y-1">
-          <Label htmlFor="graph-memory-agent-model">{copy("graphAgentModel")}</Label>
-          <Input id="graph-memory-agent-model" value={model} onChange={(event) => setModel(event.target.value)} disabled={!isAdmin || mode !== "agent" || save.isPending} />
-        </div>
+        <RuntimeConfigFields
+          runtimes={eligibleRuntimes}
+          runtimesLoading={runtimesLoading}
+          members={members}
+          currentUserId={currentUserId}
+          machineId={selection.machineId}
+          onMachineSelect={selection.selectMachine}
+          machineRuntimes={selection.machineRuntimes}
+          runtimeId={selection.runtimeId}
+          onRuntimeSelect={selection.selectRuntime}
+          model={selection.model}
+          onModelChange={selection.selectModel}
+          thinkingLevel={selection.thinkingLevel}
+          onThinkingChange={selection.selectThinking}
+          disabled={configDisabled}
+        />
         <div className="space-y-1">
           <Label htmlFor="graph-memory-agent-token-limit">{copy("graphAgentTokensPerHour")}</Label>
-          <Input id="graph-memory-agent-token-limit" type="number" min={1000} max={10000000} value={tokensPerHour} onChange={(event) => setTokensPerHour(Number.parseInt(event.target.value, 10) || 1000)} disabled={!isAdmin || mode !== "agent" || save.isPending} />
+          <Input id="graph-memory-agent-token-limit" type="number" min={1000} max={10000000} value={tokensPerHour} onChange={(event) => setTokensPerHour(Number.parseInt(event.target.value, 10) || 1000)} disabled={configDisabled} />
         </div>
         <Button variant="outline" disabled={!isAdmin || save.isPending} onClick={() => save.mutate()}>{copy("graphAgentModeSave")}</Button>
       </CardContent>

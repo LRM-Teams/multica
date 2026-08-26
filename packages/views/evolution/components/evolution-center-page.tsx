@@ -26,7 +26,7 @@ import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { api, ApiError } from "@multica/core/api";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
-import { agentListOptions } from "@multica/core/workspace/queries";
+import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
 import { deriveRuntimeHealth, runtimeListOptions } from "@multica/core/runtimes";
 import { runtimeDisplayLabel } from "../../runtimes/components/runtime-machines";
 import { useCurrentMember } from "@multica/core/permissions";
@@ -601,7 +601,8 @@ export function EvolutionCenterPage() {
   const [activeTab, setActiveTab] = useState("overview");
 
   const { data: agentsData, isLoading: agentsLoading } = useQuery(agentListOptions(wsId));
-  const { data: runtimesData } = useQuery(runtimeListOptions(wsId));
+  const { data: membersData } = useQuery(memberListOptions(wsId));
+  const { data: runtimesData, isLoading: runtimesLoading } = useQuery(runtimeListOptions(wsId));
   const { data: profileData } = useQuery(memoryCuratorProfileOptions(wsId));
   const { data: gmProfile } = useQuery(graphMemoryProfileOptions(wsId));
   const isGraphMemory = gmProfile?.memory_type === "graph";
@@ -807,7 +808,14 @@ export function EvolutionCenterPage() {
             <TabsContent value="memory" className="grid gap-4 xl:grid-cols-[.9fr_1.1fr]">
               <div className="grid gap-4">
                 <MemoryTypeCard wsId={wsId} isAdmin={isWorkspaceAdmin} />
-                <GraphMemoryAgentModeCard wsId={wsId} isAdmin={isWorkspaceAdmin} />
+                <GraphMemoryAgentModeCard
+                  wsId={wsId}
+                  isAdmin={isWorkspaceAdmin}
+                  runtimes={runtimes}
+                  runtimesLoading={runtimesLoading}
+                  members={membersData ?? []}
+                  currentUserId={userId}
+                />
                 <GraphMemoryTttCard wsId={wsId} isAdmin={isWorkspaceAdmin} />
                 {isGraphMemory ? (
                   <>

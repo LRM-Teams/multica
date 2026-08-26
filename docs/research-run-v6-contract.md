@@ -92,6 +92,11 @@ Snapshot with nodes, edges and density bins sorted by stable ID, independent of
 pagination. A Delta's previous/new hashes refer to the complete states before and
 after its `event_sequence`.
 
+For every `node_ref`, `id` is the stable Artifact Passport identity and
+`version_id` is the immutable Artifact Version identity. Domain storage row IDs
+such as `research_result_node.id` and `research_insight_version.insight_id` are
+not valid `node_ref.id` values.
+
 Resource `content_hash` hashes the exact uploaded bytes. `package_hash` hashes a
 JCS manifest containing `document_resource_id` and resources sorted by normalized
 path, with each resource's path, MIME, byte size, content hash and role. The final

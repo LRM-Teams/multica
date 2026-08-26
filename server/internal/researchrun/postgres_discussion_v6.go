@@ -67,7 +67,7 @@ func (s *PostgresStore) OpenV6Discussion(ctx context.Context, in OpenV6Discussio
 		var tier, hash, nodeKind, nodeID, stewardID, agentID, membershipID string
 		err = tx.QueryRow(ctx, `SELECT f.tier,v.content_hash,
 			CASE WHEN rn.id IS NOT NULL THEN 'result_s' ELSE 'insight' END,
-			COALESCE(rn.id::text,iv.insight_id::text),st.id::text,st.agent_id::text,st.membership_id::text
+			v.artifact_id::text,st.id::text,st.agent_id::text,st.membership_id::text
 			FROM research_branch_frontier f JOIN research_artifact_version v ON v.id=f.node_artifact_version_id
 			LEFT JOIN research_result_node rn ON rn.artifact_version_id=v.id
 			LEFT JOIN research_insight_version iv ON iv.artifact_version_id=v.id
@@ -101,7 +101,7 @@ func (s *PostgresStore) OpenV6Discussion(ctx context.Context, in OpenV6Discussio
 			payload_schema_id,expected_result_schema_id,payload,ready_at,reason)
 			SELECT $1::uuid,$2::uuid,'discussion','ready','discussion',$3::uuid,$4,$4,$5,s.state_version,$6,$7::uuid,0.9,3,
 			'discussion.turn.v1','discussion_turn_submission',jsonb_build_object('task_context',jsonb_build_object(
-			'discussion_id',$3::text,'discussion_revision',$8,'input_set_hash',$9,'branch_scope_hash',$10)),now(),
+			'discussion_id',$3::text,'discussion_revision',$8::int,'input_set_hash',$9::text,'branch_scope_hash',$10::text)),now(),
 			'复核候选节点是否具有可融合的语义增益，并提交可见的结构化意见与投票。'
 			FROM research_session s WHERE s.workspace_id=$1::uuid AND s.id=$2::uuid ON CONFLICT DO NOTHING`,
 			in.WorkspaceID, in.RunID, discussion.ID, key, in.GoalVersion, in.ThroughEventSequence, participant.agentID,

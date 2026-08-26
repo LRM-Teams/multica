@@ -147,7 +147,7 @@ func (s *PostgresStore) CreateV6ReportWork(ctx context.Context, in CreateV6Repor
 	if _, err = tx.Exec(ctx, `INSERT INTO research_work_item(id,workspace_id,session_id,kind,status,target_kind,target_id,client_key,idempotency_key,goal_version,input_state_version,input_event_sequence,created_by_director_cycle_id,assigned_agent_id,priority,max_attempts,payload_schema_id,expected_result_schema_id,payload,state_version,ready_at,reason) VALUES($1::uuid,$2::uuid,$3::uuid,'report','ready','report',$4::uuid,$5,$5,$6,$7,$8,$9::uuid,$10::uuid,0.9,3,'report.package.v1','report_package_submission',$11::jsonb,1,now(),$12)`, result.WorkItemID, in.WorkspaceID, in.RunID, result.ReportID, in.IdempotencyKey, goalVersion, stateVersion, eventSequence, in.DirectorCycleID, reporterAgentID, payload, in.Reason); err != nil {
 		return V6ReportWork{}, err
 	}
-	if _, err = appendEvent(ctx, tx, in.WorkspaceID, in.RunID, "v6_report_work_created", "v6-report-work:"+in.IdempotencyKey, "system", "", map[string]any{"report_id": result.ReportID, "report_revision": result.Revision, "work_item_id": result.WorkItemID, "input_snapshot_hash": result.InputSnapshotHash, "director_cycle_id": in.DirectorCycleID}); err != nil {
+	if _, err = appendEvent(ctx, tx, in.WorkspaceID, in.RunID, "v6_report_work_created", "v6-report-work:"+in.IdempotencyKey, "system", "", map[string]any{"draft_report_id": result.ReportID, "report_revision": result.Revision, "work_item_id": result.WorkItemID, "input_snapshot_hash": result.InputSnapshotHash, "director_cycle_id": in.DirectorCycleID}); err != nil {
 		return V6ReportWork{}, err
 	}
 	if err = s.commitResearchTx(ctx, txOpV6ReportWorkCreate, tx); err != nil {

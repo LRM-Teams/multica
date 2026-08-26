@@ -2419,6 +2419,7 @@ type Issue struct {
 	GoalRequired             pgtype.Bool        `json:"goal_required"`
 	ExecutionRevision        int64              `json:"execution_revision"`
 	ExecutionAttemptSequence int64              `json:"execution_attempt_sequence"`
+	GoalVersionAtCreation    pgtype.Int8        `json:"goal_version_at_creation"`
 }
 
 type IssueCompletionReport struct {

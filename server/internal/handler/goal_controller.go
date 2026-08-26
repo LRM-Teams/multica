@@ -71,8 +71,9 @@ func (h *Handler) dispatchOneGoalController(ctx context.Context) (*goalControlle
 	var workspaceID, goalID, channelID pgtype.UUID
 	var goalTitle, channelName, channelKind, creatorType string
 	var creatorID pgtype.UUID
+	var goalVersion int64
 	err = tx.QueryRow(ctx, `
-		SELECT event.workspace_id, event.goal_id, goal.channel_id, goal.title,
+		SELECT event.workspace_id, event.goal_id, goal.channel_id, goal.title, goal.version,
 		       channel.name, channel.kind, goal.created_by_type, goal.created_by_id
 		FROM goal_controller_event event
 		JOIN channel_goal goal
@@ -90,7 +91,7 @@ func (h *Handler) dispatchOneGoalController(ctx context.Context) (*goalControlle
 		  )
 		ORDER BY event.available_at, event.created_at, event.id
 		FOR UPDATE OF event SKIP LOCKED
-		LIMIT 1`).Scan(&workspaceID, &goalID, &channelID, &goalTitle, &channelName, &channelKind, &creatorType, &creatorID)
+		LIMIT 1`).Scan(&workspaceID, &goalID, &channelID, &goalTitle, &goalVersion, &channelName, &channelKind, &creatorType, &creatorID)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, false, nil
@@ -175,8 +176,21 @@ func (h *Handler) dispatchOneGoalController(ctx context.Context) (*goalControlle
 		return nil, true, nil
 	}
 
+	// Issues stamped under an older Goal version are the re-validation queue a
+	// mid-flight Goal update creates: surface the count so the manager checks
+	// them against the current requirements instead of trusting stale scope.
+	var staleIssues int
+	if err = tx.QueryRow(ctx, `
+		SELECT count(*) FROM issue
+		WHERE workspace_id=$1 AND channel_goal_id=$2
+		  AND status NOT IN ('done','cancelled')
+		  AND goal_version_at_creation IS NOT NULL
+		  AND goal_version_at_creation < $3`, workspaceID, goalID, goalVersion).Scan(&staleIssues); err != nil {
+		return nil, false, fmt.Errorf("count stale Goal Issues: %w", err)
+	}
+
 	channel := ChannelResponse{ID: uuidToString(channelID), WorkspaceID: uuidToString(workspaceID), Name: channelName, Kind: channelKind}
-	prompt := buildGoalControllerPrompt(uuidToString(goalID), goalTitle, kindCounts, sources)
+	prompt := buildGoalControllerPrompt(uuidToString(goalID), goalTitle, goalVersion, staleIssues, kindCounts, sources)
 	trigger := ChannelMessageResponse{
 		ChannelID: channel.ID, WorkspaceID: channel.WorkspaceID, Type: "system",
 		Content: prompt, Source: protocol.AgentInboxReasonGoalController,
@@ -222,7 +236,7 @@ func goalControllerManager(ctx context.Context, tx pgx.Tx, workspaceID, channelI
 	return agent, err
 }
 
-func buildGoalControllerPrompt(goalID, title string, kindCounts map[string]int, sources []string) string {
+func buildGoalControllerPrompt(goalID, title string, goalVersion int64, staleIssues int, kindCounts map[string]int, sources []string) string {
 	kinds := make([]string, 0, len(kindCounts))
 	for kind := range kindCounts {
 		kinds = append(kinds, kind)
@@ -232,10 +246,18 @@ func buildGoalControllerPrompt(goalID, title string, kindCounts map[string]int, 
 	for _, kind := range kinds {
 		parts = append(parts, fmt.Sprintf("%s=%d", kind, kindCounts[kind]))
 	}
+	staleNotice := ""
+	if staleIssues > 0 {
+		staleNotice = fmt.Sprintf(
+			"The Goal requirements are now at version %d and %d open Issue(s) were created under an older version: re-validate their scope, acceptance criteria, and dependencies against the current Goal before dispatching or completing them, and cancel any made obsolete by the change. ",
+			goalVersion, staleIssues,
+		)
+	}
 	return fmt.Sprintf(
 		"Goal controller reconciliation for `%s` (%s). Durable events: %s. Sources: %s. "+
 			"Inspect the current Goal and all Issues scoped by channel_goal_id. If the Goal is not yet decomposed, create a parent/child Issue DAG with explicit dependencies, one accountable assignee per leaf, and non-empty acceptance criteria. "+
+			"%s"+
 			"Do not wake workers through chat: canonical Issue execution dispatches their Runs. Reconcile completed/failed Runs, unblock only dependency-ready Issues, update Goal progress and blockers, and complete the Goal only when every required Issue and success criterion has evidence. Avoid recreating equivalent Issues.",
-		goalID, strings.TrimSpace(title), strings.Join(parts, ", "), strings.Join(sources, ", "),
+		goalID, strings.TrimSpace(title), strings.Join(parts, ", "), strings.Join(sources, ", "), staleNotice,
 	)
 }

@@ -561,27 +561,6 @@ func (service *Service) Stop(ctx context.Context, input StopInput) (Session, err
 	return session, nil
 }
 
-func (service *Service) compensateStarted(
-	ctx context.Context,
-	session Session,
-	identity ProviderCallIdentity,
-	errorCode string,
-	cause error,
-) error {
-	cleanupContext, cancel := service.newCleanupContext(ctx)
-	defer cancel()
-	if err := service.provider.Stop(cleanupContext, identity); err != nil {
-		return errors.Join(cause, fmt.Errorf("compensate voice call provider: %w", err))
-	}
-	_, err := service.store.MarkFailed(
-		cleanupContext, session.WorkspaceID, session.ID, errorCode,
-	)
-	if err != nil {
-		return errors.Join(cause, fmt.Errorf("mark voice call failed after compensation: %w", err))
-	}
-	return cause
-}
-
 func (service *Service) recordFailed(
 	ctx context.Context,
 	session Session,

@@ -122,11 +122,6 @@ type reminderQueryRower interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 }
 
-type reminderQueryer interface {
-	reminderQueryRower
-	Query(context.Context, string, ...any) (pgx.Rows, error)
-}
-
 type authorizedReminderAnchor struct {
 	Available     bool
 	MessageID     string

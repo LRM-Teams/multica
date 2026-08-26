@@ -2,10 +2,12 @@ package researchrun
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func TestV6CreateReportActionFreezesServerOwnedReporterAndLatestInputs(t *testing.T) {
@@ -77,6 +79,10 @@ func TestV6CreateReportActionFreezesServerOwnedReporterAndLatestInputs(t *testin
 		ActionID: uuid.NewString(), Kind: "create_report", IdempotencyKey: idempotencyKey,
 		PayloadSchema: "report.create.v1", Payload: payload, Reason: "Refresh the phase report",
 	}, run.goalVersion, stateVersion); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) {
+			t.Fatalf("create report: constraint=%s detail=%s err=%v", pgErr.ConstraintName, pgErr.Detail, err)
+		}
 		t.Fatal(err)
 	}
 

@@ -46,11 +46,16 @@ func (a *researchV6AgentLifecycleAdapter) CreateAgent(ctx context.Context, works
 	var agentID string
 	err = tx.QueryRow(ctx, `
 		WITH template AS (
-		  SELECT a.* FROM research_team_membership m
-		  JOIN agent a ON a.id=m.agent_id AND a.workspace_id=m.workspace_id
-		  WHERE m.workspace_id=$1::uuid AND m.session_id=$7::uuid
-		    AND m.state IN ('idle','working') AND a.archived_at IS NULL
-		  ORDER BY m.membership_generation,m.created_at,m.id LIMIT 1
+		  SELECT a.* FROM research_session session
+		  JOIN research_director_assignment assignment
+		    ON assignment.workspace_id=session.workspace_id
+		   AND assignment.session_id=session.id
+		   AND assignment.id=session.current_director_assignment_id
+		  JOIN agent a
+		    ON a.workspace_id=session.workspace_id
+		   AND a.id=assignment.director_agent_id
+		  WHERE session.workspace_id=$1::uuid AND session.id=$7::uuid
+		    AND assignment.status='active' AND a.archived_at IS NULL
 		)
 		INSERT INTO agent(workspace_id,name,display_name,description,runtime_mode,runtime_config,runtime_id,owner_id,instructions,custom_env,custom_args,mcp_config,model,thinking_level,avatar_source)
 		SELECT $1::uuid,$2,$3,$4,runtime_mode,runtime_config,runtime_id,owner_id,$5,custom_env,custom_args,

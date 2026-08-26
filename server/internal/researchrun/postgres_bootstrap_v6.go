@@ -70,6 +70,33 @@ func (s *PostgresStore) BootstrapV6(ctx context.Context, in V6BootstrapInput, cf
 		}
 		return Run{}, 0, err
 	}
+	var runReporterAgentID string
+	if err = tx.QueryRow(ctx, `WITH director AS (
+			SELECT * FROM agent
+			WHERE workspace_id=$1::uuid AND id=$2::uuid AND archived_at IS NULL
+		), reporter_template AS (
+			SELECT * FROM agent
+			WHERE workspace_id=$1::uuid AND id=$3::uuid AND archived_at IS NULL
+		)
+		INSERT INTO agent(
+			workspace_id,name,display_name,description,runtime_mode,runtime_config,runtime_id,
+			owner_id,instructions,custom_env,custom_args,mcp_config,model,thinking_level,
+			avatar_source,managed_role
+		)
+		SELECT $1::uuid,$4,
+			COALESCE(NULLIF(reporter_template.display_name,''),'报告老板'),
+			reporter_template.description,
+			director.runtime_mode,director.runtime_config,director.runtime_id,
+			director.owner_id,reporter_template.instructions,
+			director.custom_env,director.custom_args,director.mcp_config,
+			director.model,director.thinking_level,'assigned','research_fleet'
+		FROM director CROSS JOIN reporter_template
+		RETURNING id::text`, in.WorkspaceID, in.DirectorAgentID, in.ReporterAgentID, "report-boss-"+runID).Scan(&runReporterAgentID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Run{}, 0, ErrRunNotFound
+		}
+		return Run{}, 0, err
+	}
 	assignmentID, membershipID, reporterMembershipID := uuid.NewString(), uuid.NewString(), uuid.NewString()
 	if _, err = tx.Exec(ctx, `INSERT INTO research_session(id,workspace_id,fleet_id,created_by,title,goal,status,current_stage,depth_tier,orchestrator_version,run_config,run_initialized_at,last_progress_at,next_reconcile_at,director_state_version,state_version)
 		VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,$6,'running','s1_plan',$7,$8,$9::jsonb,now(),now(),now(),1,1)`, runID, in.WorkspaceID, in.FleetID, in.CreatedBy, strings.TrimSpace(in.Title), strings.TrimSpace(in.Goal), in.DepthTier, OrchestratorVersionV6, configJSON); err != nil {
@@ -97,7 +124,7 @@ func (s *PostgresStore) BootstrapV6(ctx context.Context, in V6BootstrapInput, cf
 	reporterPayload, _ := json.Marshal(map[string]string{"mission": reporterMission})
 	reporterHash := ArtifactContentHashFromCanonicalJSON(reporterPayload)
 	if _, err = tx.Exec(ctx, `INSERT INTO research_team_membership(id,workspace_id,session_id,agent_id,membership_generation,mission_prompt,mission_hash,mission_revision,state,role)
-		VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,1,$5,$6,1,'idle','reporter')`, reporterMembershipID, in.WorkspaceID, runID, in.ReporterAgentID, reporterMission, reporterHash); err != nil {
+		VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,1,$5,$6,1,'idle','reporter')`, reporterMembershipID, in.WorkspaceID, runID, runReporterAgentID, reporterMission, reporterHash); err != nil {
 		return Run{}, 0, err
 	}
 	branchID := uuid.NewString()
@@ -130,7 +157,7 @@ func (s *PostgresStore) BootstrapV6(ctx context.Context, in V6BootstrapInput, cf
 	}
 	event, err := appendEvent(ctx, tx, in.WorkspaceID, runID, "v6_run_bootstrapped", "v6-bootstrap:"+in.ClientRequestID, "user", in.CreatedBy, rebuildablePayload(map[string]any{
 		"orchestrator_version": OrchestratorVersionV6, "director_assignment_id": assignmentID, "director_agent_id": in.DirectorAgentID, "membership_id": membershipID,
-		"reporter_agent_id": in.ReporterAgentID, "reporter_membership_id": reporterMembershipID,
+		"reporter_agent_id": runReporterAgentID, "reporter_template_agent_id": in.ReporterAgentID, "reporter_membership_id": reporterMembershipID,
 		"client_request_id": in.ClientRequestID, "request_hash": requestHash,
 		"goal": strings.TrimSpace(in.Goal), "title": strings.TrimSpace(in.Title), "status": "running",
 	}))

@@ -132,6 +132,9 @@ func (s *PostgresStore) CreateV6ReportWork(ctx context.Context, in CreateV6Repor
 	if _, err = tx.Exec(ctx, `INSERT INTO research_report(id,workspace_id,session_id,revision,goal_version,plan_version,status,title,input_snapshot_hash,input_event_sequence,parent_report_id,parent_revision,maturity,direction_coverage) VALUES($1::uuid,$2::uuid,$3::uuid,$4,$5,$6,'draft',$7,$8,$9,NULLIF($10,'')::uuid,NULLIF($11,0),$12,$13::jsonb)`, result.ReportID, in.WorkspaceID, in.RunID, result.Revision, goalVersion, planVersion, in.Title, result.InputSnapshotHash, eventSequence, parentReportID, parentRevision, selection.Maturity, coverageJSON); err != nil {
 		return V6ReportWork{}, err
 	}
+	if err = registerDraftReportRevisionPassportTx(ctx, tx, in.WorkspaceID, in.RunID, result.ReportID); err != nil {
+		return V6ReportWork{}, err
+	}
 	for ordinal, input := range inputs {
 		if _, err = tx.Exec(ctx, `INSERT INTO research_report_input(workspace_id,session_id,report_id,report_revision,branch_id,node_artifact_version_id,input_role,ordinal,content_hash) VALUES($1::uuid,$2::uuid,$3::uuid,$4,$5::uuid,$6::uuid,$7,$8,$9)`, in.WorkspaceID, in.RunID, result.ReportID, result.Revision, input.BranchID, input.NodeArtifactVersionID, input.InputRole, ordinal, input.ContentHash); err != nil {
 			return V6ReportWork{}, err

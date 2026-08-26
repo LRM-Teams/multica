@@ -217,7 +217,11 @@ authoritative after commit. The next cycle dispatches at least three independent
 atomic research directions. Each atomic Work binds to exactly one existing,
 non-root child Branch and one distinct Agent. Each unresolved open question on a
 frontier node requires its own follow-up Work and distinct Agent, up to the same
-parallel cap. The server preflights the complete Proposal before applying any
+parallel cap. An escalated Discussion requires evidence follow-up, but it is not
+an additional synthetic question when its gaps already appear in Frontier
+`open_questions`. Capacity preflight uses the larger of the open-question count
+and the escalated-Discussion count instead of adding overlapping requirements.
+The server preflights the complete Proposal before applying any
 action and rejects root-only or missing Branch references, duplicate/busy
 assignees, understaffed first rounds and uncovered open questions. A rejected
 Proposal is isolated to its Run and cannot block the global Director-Proposal

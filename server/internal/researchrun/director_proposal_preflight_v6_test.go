@@ -98,6 +98,26 @@ func TestValidateV6ParallelResearchPlanRequiresStaffingAndParallelWork(t *testin
 	}
 }
 
+func TestRequiredV6FollowupCountDoesNotDoubleCountEscalatedDiscussionQuestions(t *testing.T) {
+	tests := []struct {
+		name                 string
+		openQuestions        int
+		escalatedDiscussions int
+		want                 int
+	}{
+		{name: "frontier questions cover one escalated discussion", openQuestions: 3, escalatedDiscussions: 1, want: 3},
+		{name: "escalation still requires follow-up without frontier questions", escalatedDiscussions: 1, want: 1},
+		{name: "distinct escalations set the minimum", openQuestions: 1, escalatedDiscussions: 2, want: 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := requiredV6FollowupCount(tt.openQuestions, tt.escalatedDiscussions); got != tt.want {
+				t.Fatalf("requiredV6FollowupCount(%d, %d)=%d, want %d", tt.openQuestions, tt.escalatedDiscussions, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestValidateV6IntegrationCandidateRequiresExecutableTierTransition(t *testing.T) {
 	result := func(id string, tier V6Tier) V6NodeRef {
 		return V6NodeRef{Kind: "result_s", ID: uuid.NewString(), VersionID: id, Tier: tier, ContentHash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}

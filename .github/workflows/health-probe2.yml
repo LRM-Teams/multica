@@ -96,6 +96,60 @@ jobs:
               WHERE s.id=e.session_id AND a.status='active')
           FROM research_run_event e WHERE e.session_id=:'run_id'::uuid AND e.event_type='v6_work_submission_rejected'
           ORDER BY e.sequence DESC LIMIT 1;
+
+          WITH target AS (
+            SELECT created_at,sequence,id
+            FROM research_run_event
+            WHERE session_id=:'run_id'::uuid AND event_type='v6_work_submission_rejected'
+            ORDER BY sequence DESC LIMIT 1
+          ), eligible AS (
+            SELECT e.id,e.session_id,e.created_at,e.sequence
+            FROM research_run_event e
+            JOIN research_session s ON s.workspace_id=e.workspace_id AND s.id=e.session_id
+            JOIN research_director_assignment a ON a.id=s.current_director_assignment_id AND a.status='active'
+            WHERE s.orchestrator_version='research-run-v6' AND s.status='running'
+              AND e.event_type IN (
+                'v6_run_bootstrapped','v6_result_node_accepted','v6_plan_materialized','v6_evidence_screened','v6_integration_materialized',
+                'v6_deliberation_materialized','v6_director_adjudication_materialized','v6_work_item_succeeded',
+                'v6_work_item_recovered','v6_work_submission_rejected','v6_agent_creation_requested',
+                'v6_team_member_joined','v6_team_member_archived','v6_work_item_created','v6_branch_created',
+                'v6_match_decision_recorded','v6_discussion_open','v6_discussion_append_turn','v6_discussion_close',
+                'v6_dispute_review_tasks_created','v6_integration_commit','v6_report_work_created',
+                'v6_report_draft_accepted','v6_report_reviewed','v6_director_unavailable','v6_director_assigned',
+                'task_result_accepted','task_attempt_failed','task_blocked','budget_exhausted','run_resumed')
+              AND NOT EXISTS (
+                SELECT 1 FROM research_director_cycle covered
+                WHERE covered.workspace_id=e.workspace_id AND covered.session_id=e.session_id
+                  AND covered.trigger_from_sequence<=e.sequence AND covered.trigger_through_sequence>=e.sequence
+                  AND (e.event_type<>'v6_result_node_accepted' OR EXISTS (
+                    SELECT 1 FROM research_director_brief_page page
+                    CROSS JOIN LATERAL jsonb_array_elements(COALESCE(convert_from(page.content_bytes,'UTF8')::jsonb #> '{research,branches}','[]'::jsonb)) branch
+                    CROSS JOIN LATERAL jsonb_array_elements(COALESCE(branch #> '{frontier_nodes}','[]'::jsonb)) frontier
+                    WHERE page.workspace_id=e.workspace_id AND page.session_id=e.session_id AND page.director_cycle_id=covered.id
+                      AND frontier #>> '{node,version_id}'=e.payload->>'artifact_version_id'
+                      AND (NOT EXISTS (
+                        SELECT 1 FROM research_result_node unresolved
+                        WHERE unresolved.workspace_id=e.workspace_id AND unresolved.session_id=e.session_id
+                          AND unresolved.artifact_version_id::text=e.payload->>'artifact_version_id'
+                          AND jsonb_array_length(COALESCE(unresolved.open_questions,'[]'::jsonb))>0)
+                        OR strpos(COALESCE(frontier #>> '{brief_summary}',''),'待回答问题：')>0)))
+                  AND (e.event_type<>'v6_discussion_close' OR e.payload->>'status'<>'escalated' OR EXISTS (
+                    SELECT 1 FROM research_work_item followup
+                    WHERE followup.workspace_id=e.workspace_id AND followup.session_id=e.session_id
+                      AND followup.kind='research' AND followup.created_at>e.created_at)))
+              AND NOT EXISTS (
+                SELECT 1 FROM research_work_item active
+                WHERE active.workspace_id=e.workspace_id AND active.session_id=e.session_id AND active.kind='director'
+                  AND active.status IN ('ready','dispatching','enqueued','running','awaiting_input'))
+              AND NOT EXISTS (
+                SELECT 1 FROM research_v6_outbox material_effect
+                WHERE material_effect.workspace_id=e.workspace_id AND material_effect.session_id=e.session_id
+                  AND material_effect.kind IN ('create_agent','archive_agent')
+                  AND material_effect.status IN ('pending','delivering'))
+          )
+          SELECT 'GLOBAL_TRIGGER_QUEUE',count(*),count(DISTINCT session_id),
+            count(*) FILTER (WHERE (created_at,sequence,id)<=(target.created_at,target.sequence,target.id))
+          FROM eligible CROSS JOIN target;
           SQL
 
           followup_count="$(

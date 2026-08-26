@@ -231,6 +231,21 @@ func TestResidentMatchesSetupTargetRequiresEnvironmentOriginAndChannel(t *testin
 	}
 }
 
+func TestResidentMatchesSetupTargetRestartsLegacyHTTPResident(t *testing.T) {
+	cfg := cli.CLIConfig{
+		Environment: "production",
+		ServerURL:   "https://api.leagent.me", AppURL: "https://www.leagent.me",
+	}
+	health := map[string]any{
+		"serverUrl": "https://api.leagent.me", "environment": "production",
+		"releaseChannel": "latest", "legacy_transport": true,
+	}
+	got, err := residentMatchesSetupTarget(health, cfg)
+	if err != nil || got {
+		t.Fatalf("legacy resident match = %v, %v; setup must restart it", got, err)
+	}
+}
+
 func TestSetupAcceptanceRequiresAuthenticatedConnectionNotJustLocalWorkspaceState(t *testing.T) {
 	cfg := cli.CLIConfig{
 		Environment: "test",

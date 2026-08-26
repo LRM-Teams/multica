@@ -2,10 +2,17 @@ package computer
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 )
+
+// LegacyHealthEndpoint is the HTTP endpoint used by pre-Computer residents.
+// Those versions predate the Unix local-control socket and cannot be stopped
+// through the current RPC transport.
+const LegacyHealthEndpoint = "http://127.0.0.1:19514"
 
 const (
 	shutdownSourceHeader     = "X-Multica-Shutdown-Source"
@@ -35,6 +42,102 @@ func ProbeHealth(ctx context.Context, endpoint string) map[string]any {
 		return map[string]any{"status": "stopped"}
 	}
 	return result
+}
+
+// ProbeLegacyHealth reads the HTTP health endpoint exposed by old daemon
+// residents. A successful response is normalized to the current field names
+// so setup/restart matching can reason about either resident generation.
+func ProbeLegacyHealth(ctx context.Context) map[string]any {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, LegacyHealthEndpoint+"/health", nil)
+	if err != nil {
+		return map[string]any{"status": "stopped"}
+	}
+	client := &http.Client{
+		// This is a loopback compatibility probe; never route it through a
+		// user's HTTP proxy.
+		Transport: &http.Transport{Proxy: nil},
+		Timeout:   2 * time.Second,
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return map[string]any{"status": "stopped"}
+	}
+	defer response.Body.Close()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return map[string]any{"status": "stopped"}
+	}
+	var health map[string]any
+	if err := json.NewDecoder(response.Body).Decode(&health); err != nil || !legacyHealthIdentityPresent(health) {
+		return map[string]any{"status": "stopped"}
+	}
+	normalizeLegacyHealth(health)
+	health["legacy_transport"] = true
+	return health
+}
+
+func legacyHealthIdentityPresent(health map[string]any) bool {
+	if !Alive(health) {
+		return false
+	}
+	pid, ok := health["pid"].(float64)
+	if !ok || pid < 1 {
+		return false
+	}
+	for _, key := range []string{"daemon_id", "daemonId", "computer_id", "computerId", "cli_version", "cliVersion"} {
+		if strings.TrimSpace(fmt.Sprint(health[key])) != "" && fmt.Sprint(health[key]) != "<nil>" {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeLegacyHealth(health map[string]any) {
+	aliases := map[string]string{
+		"daemon_id":       "daemonId",
+		"computer_id":     "computerId",
+		"cli_version":     "cliVersion",
+		"server_url":      "serverUrl",
+		"release_channel": "releaseChannel",
+	}
+	for legacy, current := range aliases {
+		if _, present := health[current]; present {
+			continue
+		}
+		if value, present := health[legacy]; present {
+			health[current] = value
+		}
+	}
+}
+
+// RequestLegacyShutdown asks a pre-Computer resident to stop through its
+// legacy HTTP endpoint. Lifecycle.Stop falls back to a forced kill if this
+// endpoint is unavailable or the old resident does not understand it.
+func RequestLegacyShutdown(endpoint string, audit ShutdownRequest) error {
+	if strings.TrimSpace(endpoint) == "" {
+		endpoint = LegacyHealthEndpoint
+	}
+	request, err := http.NewRequest(http.MethodPost, strings.TrimRight(endpoint, "/")+"/shutdown", nil)
+	if err != nil {
+		return err
+	}
+	request.Header.Set(shutdownSourceHeader, strings.TrimSpace(audit.Source))
+	request.Header.Set(shutdownActionHeader, strings.TrimSpace(audit.Action))
+	if audit.RequestPID > 0 {
+		request.Header.Set(shutdownRequestPIDHeader, fmt.Sprintf("%d", audit.RequestPID))
+	}
+	client := &http.Client{Transport: &http.Transport{Proxy: nil}, Timeout: 2 * time.Second}
+	response, err := client.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return fmt.Errorf("legacy shutdown returned HTTP %d", response.StatusCode)
+	}
+	return nil
 }
 
 // RequestMachineUpgradeStatus reads the resident's current or most recent

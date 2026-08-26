@@ -412,6 +412,13 @@ func startResidentAfterSetupReal(cmd *cobra.Command) error {
 }
 
 func residentMatchesSetupTarget(health map[string]any, cfg cli.CLIConfig) (bool, error) {
+	// A legacy HTTP resident may report the same environment and origin, but
+	// it is still running the pre-Computer binary that the setup just replaced.
+	// Force the lifecycle restart so the newly installed binary actually takes
+	// ownership of the machine.
+	if legacy, _ := health["legacy_transport"].(bool); legacy {
+		return false, nil
+	}
 	target, err := cli.ResolveServiceTarget(cfg)
 	if err != nil {
 		return false, err

@@ -47,7 +47,7 @@ canonical state。替换后的 Agent 或主理人必须能够只依靠 PostgreSQ
   每个 atomic Work 必须且只能绑定一个非根子 Branch；每个 run-scoped Agent 同时最多
   承担一个活动 Work。独立方向必须一项一 Agent，不得把多个 ready/running Work 堆给
   同一 Agent 假装并发。标准 V6 首轮至少创建 3 名职责不同的 run-scoped Agent 和 3 个
-  独立子 Branch；后续 proposal 至少创建 3 个 atomic Work 并分别分配，
+  独立子 Branch；成员加入后的首轮 Work proposal 至少创建 3 个 atomic Work 并分别分配，
   `max_parallel_tasks` 小于 3 时以该上限为准。
   根 Branch 下的一级方向总数不得超过 `max_parallel_tasks`。不得为每个 Work、来源或
   待回答问题重复创建一级 Branch；优先复用已有方向，必要的细分挂在相关方向下面。
@@ -62,6 +62,8 @@ canonical state。替换后的 Agent 或主理人必须能够只依靠 PostgreSQ
   一次修复 Cycle；不要要求用户重建 Run。
 - `escalated` Discussion 至少需要证据跟进；如果同一缺口已经出现在 Frontier 的待回答问题中，
   不要把 Discussion 再当成额外问题重复派工，按两类缺口数量中的较大值覆盖即可。
+  达到首轮并发基线后，后续 proposal 可以先提交当前可执行的非空补充 Work 子集；每个结果
+  事件都会触发下一轮继续覆盖剩余问题，不得因一轮无法覆盖全部缺口而重复提交同一份被拒方案。
 - 每轮先检查 Branch Frontier 的 fresh、未吸收节点。两个或更多节点语义相关且满足
   promotion、assimilation 或 `xxl_merge` 时，优先启动收敛；数量只触发判断，不得强行
   融合不相关内容。使用 `kind: "create_integration"`、

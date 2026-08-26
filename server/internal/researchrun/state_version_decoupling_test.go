@@ -185,6 +185,37 @@ func TestV6DirectorProposalSurvivesOperationalEventsAfterBrief(t *testing.T) {
 	}
 }
 
+func TestV6DirectorSubmissionSettlesByIdentityWithoutWaitingForScheduler(t *testing.T) {
+	fx := setupV6DirectorProposalFixture(t, "Settle durable Director receipt immediately")
+	if _, err := fx.run.pool.Exec(fx.run.ctx, `UPDATE research_v6_work_submission SET status='received'
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid`,
+		fx.run.fixture.workspaceID, fx.run.fixture.sessionID, fx.submissionID); err != nil {
+		t.Fatal(err)
+	}
+	status, err := fx.run.store.SettleV6DirectorSubmission(
+		fx.run.ctx, fx.run.fixture.workspaceID, fx.run.fixture.sessionID, fx.submissionID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != "accepted" {
+		t.Fatalf("status=%s want accepted", status)
+	}
+	var cycleStatus, attemptStatus, workStatus string
+	if err = fx.run.pool.QueryRow(fx.run.ctx, `SELECT c.status,a.status,w.status
+		FROM research_v6_work_submission s
+		JOIN research_director_cycle c ON c.work_item_id=s.work_item_id
+		JOIN research_work_item_attempt a ON a.id=s.attempt_id
+		JOIN research_work_item w ON w.id=s.work_item_id
+		WHERE s.workspace_id=$1::uuid AND s.session_id=$2::uuid AND s.id=$3::uuid`,
+		fx.run.fixture.workspaceID, fx.run.fixture.sessionID, fx.submissionID).Scan(&cycleStatus, &attemptStatus, &workStatus); err != nil {
+		t.Fatal(err)
+	}
+	if cycleStatus != "applied" || attemptStatus != "succeeded" || workStatus != "succeeded" {
+		t.Fatalf("cycle=%s attempt=%s work=%s want applied/succeeded/succeeded", cycleStatus, attemptStatus, workStatus)
+	}
+}
+
 func TestV6DirectorProposalRejectedAfterSemanticStateChange(t *testing.T) {
 	fx := setupV6DirectorProposalFixture(t, "Reject after semantic change")
 	// Simulate a goal revision / steering decision landing after the brief froze.

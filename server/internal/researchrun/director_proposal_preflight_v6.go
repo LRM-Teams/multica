@@ -321,10 +321,12 @@ func validateV6ParallelResearchPlan(facts v6DirectorPreflightFacts) error {
 	}
 	requiredWork := 0
 	if facts.unresolvedQuestions > 0 {
-		requiredWork = facts.unresolvedQuestions
-		if requiredWork > facts.maxParallelTasks {
-			requiredWork = facts.maxParallelTasks
-		}
+		// Once the initial parallel baseline has produced enough results, any
+		// non-empty subset of valid follow-up Work is productive. The next
+		// result event schedules another Director cycle for the remaining gaps.
+		// Requiring every outstanding question in one proposal makes partial
+		// progress impossible and can starve convergence indefinitely.
+		requiredWork = 1
 	}
 	if remaining := parallelTarget - facts.resultCount; remaining > requiredWork {
 		requiredWork = remaining

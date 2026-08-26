@@ -104,7 +104,7 @@ func TestComputerMachineUpgradeStatusRetainsRealProgressAndFailure(t *testing.T)
 	upgrade := newComputerMachineUpgrade(&ComputerCore{}, computerMachineUpgradeConfig{})
 	upgrade.activeID = "upgrade-a"
 	upgrade.targetVersion = "v2.0.0"
-	upgrade.recordProgress("upgrade-a", "verifying", "Verifying binary")
+	upgrade.recordProgress("upgrade-a", "verifying", "Verifying release")
 	if status := upgrade.status(); status.ID != "upgrade-a" || status.Phase != "verifying" || status.TargetVersion != "v2.0.0" {
 		t.Fatalf("active status = %+v", status)
 	}

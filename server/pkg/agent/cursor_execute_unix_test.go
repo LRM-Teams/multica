@@ -51,6 +51,38 @@ printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"d
 	}
 }
 
+func TestCursorExecuteStopsAfterKeepaliveHangError(t *testing.T) {
+	t.Parallel()
+
+	hang := "Error: RetriableError: [internal] HTTP/2 keepalive ping timed out after 5000ms"
+	script := `#!/bin/sh
+printf '%s\n' '{"type":"system","subtype":"init","session_id":"sess-keepalive"}'
+printf '%s\n' '{"type":"error","error":"` + hang + `"}'
+sleep 10
+`
+	start := time.Now()
+	messages, result := executeFakeCursorWithMessages(t, script)
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Fatalf("keepalive hang took %s; expected cancel well before the 5s execute timeout", elapsed)
+	}
+	if result.Status != "failed" {
+		t.Fatalf("status = %q, want failed; error=%q", result.Status, result.Error)
+	}
+	if !strings.Contains(result.Error, "keepalive ping timed out") {
+		t.Fatalf("error = %q, want keepalive ping", result.Error)
+	}
+	sawError := false
+	for _, msg := range messages {
+		if msg.Type == MessageError && strings.Contains(msg.Content, "keepalive ping timed out") {
+			sawError = true
+			break
+		}
+	}
+	if !sawError {
+		t.Fatalf("expected MessageError for keepalive hang, got %+v", messages)
+	}
+}
+
 func TestCursorExecuteStopsAfterTerminalErrorResult(t *testing.T) {
 	t.Parallel()
 

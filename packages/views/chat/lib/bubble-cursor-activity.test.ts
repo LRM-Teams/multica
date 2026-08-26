@@ -101,6 +101,18 @@ describe("friendlyBubbleToolLabel / activeBubbleStepSummary", () => {
     expect(activeBubbleStepSummary(items)).toBe("Read · .../c/daemon.go");
   });
 
+  it("summarizes keepalive errors as connection lost", () => {
+    expect(
+      activeBubbleStepSummary([
+        {
+          seq: 1,
+          type: "error",
+          content: "Error: RetriableError: [internal] HTTP/2 keepalive ping timed out after 5000ms",
+        },
+      ]),
+    ).toBe("Connection lost");
+  });
+
   it("summarizes shell cmd / target_file aliases", () => {
     expect(
       bubbleToolSummary({

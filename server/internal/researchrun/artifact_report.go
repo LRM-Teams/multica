@@ -58,6 +58,50 @@ func RegisterProductionReportRevisionTx(
 	})
 }
 
+// registerDraftReportRevisionPassportTx creates the reciprocal passport shell
+// required while a report revision is still waiting for its immutable package.
+// Package acceptance fills version 1 and makes it current.
+func registerDraftReportRevisionPassportTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID, reportID string,
+) error {
+	command, err := tx.Exec(ctx, `
+		INSERT INTO research_artifact_passport (
+			id, workspace_id, session_id, entity_kind, current_version,
+			lifecycle_status, provenance_completeness, source_created_at
+		)
+		SELECT id, workspace_id, session_id, 'report_revision', NULL,
+		       'registered', 'complete', created_at
+		FROM research_report
+		WHERE workspace_id = $1::uuid
+		  AND session_id = $2::uuid
+		  AND id = $3::uuid
+		ON CONFLICT (workspace_id, session_id, id) DO NOTHING
+	`, workspaceID, sessionID, reportID)
+	if err != nil {
+		return err
+	}
+	if command.RowsAffected() == 1 {
+		return nil
+	}
+	var kind string
+	var currentVersion *int32
+	if err = tx.QueryRow(ctx, `
+		SELECT entity_kind, current_version
+		FROM research_artifact_passport
+		WHERE workspace_id = $1::uuid
+		  AND session_id = $2::uuid
+		  AND id = $3::uuid
+	`, workspaceID, sessionID, reportID).Scan(&kind, &currentVersion); err != nil {
+		return err
+	}
+	if kind != string(ArtifactKindReportRevision) || currentVersion != nil {
+		return ErrResultConflict
+	}
+	return nil
+}
+
 func reportRevisionArtifactContent(persisted json.RawMessage) map[string]any {
 	return map[string]any{"persisted": persisted}
 }

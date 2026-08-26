@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 
 	"github.com/jackc/pgx/v5"
@@ -135,6 +136,12 @@ func (s *PostgresStore) applyClaimedV6DirectorProposal(ctx context.Context, clai
 	if applyErr == nil {
 		return nil
 	}
+	slog.Warn("research V6 Director proposal canonical apply failed",
+		"submission_id", claim.submissionID,
+		"workspace_id", claim.workspaceID,
+		"run_id", claim.runID,
+		"error", applyErr,
+	)
 	if !isTerminalV6SubmissionError(applyErr) {
 		if isPermanentV6ProcessingError(ctx, applyErr) {
 			return s.rejectV6DirectorProposal(context.WithoutCancel(ctx), claim.submissionID, v6SubmissionApplyDiagnostic(applyErr))

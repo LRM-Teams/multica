@@ -15,6 +15,7 @@ import (
 type submissionStoreStub struct {
 	binding       V6SubmissionBinding
 	seen          map[string]V6SubmissionOutcome
+	rejected      []V6AttemptAccess
 	settled       []string
 	settlement    string
 	settlementErr error
@@ -22,6 +23,11 @@ type submissionStoreStub struct {
 
 func (s *submissionStoreStub) AuthorizeV6Submission(context.Context, V6AttemptAccess) (V6SubmissionBinding, error) {
 	return s.binding, nil
+}
+
+func (s *submissionStoreStub) RejectV6DirectorBoundaryAttempt(_ context.Context, access V6AttemptAccess, _ string) error {
+	s.rejected = append(s.rejected, access)
+	return nil
 }
 
 func (s *submissionStoreStub) RecordV6Submission(_ context.Context, _ V6AttemptAccess, decoded DecodedV6Contract, requestID string) (V6SubmissionOutcome, error) {
@@ -70,6 +76,29 @@ func TestV6DirectorSubmissionSettlesImmediatelyAfterDurableRecord(t *testing.T) 
 	}
 	if outcome.Status != "accepted" {
 		t.Fatalf("status=%s want accepted", outcome.Status)
+	}
+}
+
+func TestV6DirectorBoundaryRejectionSettlesAttemptImmediately(t *testing.T) {
+	access := V6AttemptAccess{
+		WorkspaceID: "00000000-0000-4000-8000-000000000002",
+		RunID:       "00000000-0000-4000-8000-000000000003",
+		WorkItemID:  "00000000-0000-4000-8000-000000000112",
+		AttemptID:   "00000000-0000-4000-8000-000000000113",
+		AgentID:     "00000000-0000-4000-8000-000000000004",
+	}
+	store := &submissionStoreStub{binding: V6SubmissionBinding{
+		ExpectedKind: V6ContractDirectorActionProposal,
+	}, seen: map[string]V6SubmissionOutcome{}}
+	_, err := (v6SubmissionModule{store: store}).Submit(context.Background(), V6SubmissionInput{
+		V6AttemptAccess: access,
+		Raw:             json.RawMessage(`{"contract_kind":"director_action_proposal","schema_version":6}`),
+	})
+	if !errors.Is(err, ErrInvalidContract) {
+		t.Fatalf("err=%v want invalid contract", err)
+	}
+	if len(store.rejected) != 1 || store.rejected[0].AttemptID != access.AttemptID {
+		t.Fatalf("rejected=%+v want attempt %s", store.rejected, access.AttemptID)
 	}
 }
 

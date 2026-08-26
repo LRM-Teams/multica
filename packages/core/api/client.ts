@@ -498,8 +498,10 @@ import {
   type DeleteComputerResponse,
   NotePageSchema,
   NotePageListResponseSchema,
+  NoteShareUnreadCountSchema,
   EMPTY_NOTE_PAGE,
   EMPTY_NOTE_PAGE_LIST,
+  EMPTY_NOTE_SHARE_UNREAD_COUNT,
   NoteAIJobSchema,
   EMPTY_NOTE_AI_JOB,
   NotePageIssueRefSchema,
@@ -1053,6 +1055,13 @@ export class ApiClient {
     const raw = await this.fetch<unknown>("/api/notes/pages");
     return parseWithFallback(raw, NotePageListResponseSchema, EMPTY_NOTE_PAGE_LIST, {
       endpoint: "GET /api/notes/pages",
+    });
+  }
+
+  async countNoteShareUnread(): Promise<{ count: number }> {
+    const raw = await this.fetch<unknown>("/api/notes/share-unread-count");
+    return parseWithFallback(raw, NoteShareUnreadCountSchema, EMPTY_NOTE_SHARE_UNREAD_COUNT, {
+      endpoint: "GET /api/notes/share-unread-count",
     });
   }
 

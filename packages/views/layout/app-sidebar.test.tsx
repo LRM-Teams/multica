@@ -15,7 +15,7 @@ function renderSidebar() {
   );
 }
 
-const { detail, deletePin, pins, unreadActivity } = vi.hoisted(() => ({
+const { detail, deletePin, pins, unreadActivity, notesShareUnread } = vi.hoisted(() => ({
   detail: { current: { isPending: false, isError: false, data: null as unknown, error: null as unknown } },
   deletePin: vi.fn(),
   pins: {
@@ -32,6 +32,7 @@ const { detail, deletePin, pins, unreadActivity } = vi.hoisted(() => ({
     ],
   },
   unreadActivity: { current: 0 },
+  notesShareUnread: { current: 0 },
 }));
 
 vi.mock("@dnd-kit/core", () => ({
@@ -142,6 +143,9 @@ vi.mock("@multica/core/user-activity/queries", () => ({
     queryFn: async () => ({ items: [] }),
   }),
 }));
+vi.mock("@multica/core/notes/queries", () => ({
+  useNoteShareUnreadCount: () => notesShareUnread.current,
+}));
 vi.mock("@multica/core/issues/queries", () => ({ issueDetailOptions: () => ({ queryKey: ["issue"] }) }));
 vi.mock("@multica/core/issues/stores/create-mode-store", () => ({
   useCreateModeStore: { getState: () => ({ lastMode: "agent" }) },
@@ -187,6 +191,7 @@ describe("AppSidebar navigation", () => {
   beforeEach(() => {
     detail.current = { isPending: false, isError: false, data: null, error: null };
     unreadActivity.current = 0;
+    notesShareUnread.current = 0;
   });
 
   it("renders one personal Messages entry directly below Activity", () => {
@@ -230,6 +235,23 @@ describe("AppSidebar navigation", () => {
     const badge = container.querySelector("span.bg-brand-solid.text-brand-solid-foreground");
     expect(badge).not.toBeNull();
     expect(badge).toHaveTextContent("3");
+  });
+
+  it("renders Notes share-unread as a brand pill and collapsed dot", () => {
+    notesShareUnread.current = 2;
+    const { container } = renderSidebar();
+    const badge = container.querySelector("span.bg-brand-solid.text-brand-solid-foreground");
+    expect(badge).not.toBeNull();
+    expect(badge).toHaveTextContent("2");
+    expect(badge).toHaveAttribute("aria-label", "Unread shared notes");
+    expect(screen.getByTestId("notes-share-unread-dot")).toBeInTheDocument();
+  });
+
+  it("renders Notes share-unread overflow as 99+", () => {
+    notesShareUnread.current = 120;
+    const { container } = renderSidebar();
+    const badge = container.querySelector("span.bg-brand-solid.text-brand-solid-foreground");
+    expect(badge).toHaveTextContent("99+");
   });
 
   it("centers the collapsed icon rail chrome", () => {

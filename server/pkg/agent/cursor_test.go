@@ -203,7 +203,7 @@ func TestCursorHandleAssistantText(t *testing.T) {
 		}),
 	}
 
-	b.handleCursorAssistant(evt, ch, &output, nil)
+	b.handleCursorAssistant(evt, ch, &output, nil, nil)
 
 	if output.String() != "Hello from Cursor" {
 		t.Fatalf("expected output 'Hello from Cursor', got %q", output.String())
@@ -273,7 +273,7 @@ func TestCursorHandleAssistantPreservesTextToolOrder(t *testing.T) {
 			t.Fatalf("tool event rejected: decoded=%q ok=%v reason=%q", decoded.reason, ok, reason)
 		}
 		ch <- message
-	})
+	}, nil)
 
 	want := []MessageType{MessageText, MessageToolUse, MessageText}
 	for i, wantType := range want {
@@ -499,7 +499,7 @@ func TestCursorUsageOnlyFromResult(t *testing.T) {
 		}),
 	}
 
-	b.handleCursorAssistant(evt, ch, &output, nil)
+	b.handleCursorAssistant(evt, ch, &output, nil, nil)
 
 	if output.String() != "hello" {
 		t.Fatalf("expected 'hello', got %q", output.String())
@@ -634,5 +634,50 @@ func TestCursorUsageNoDoubleCount(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestIsCursorTransportHang(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"Error: RetriableError: [internal] HTTP/2 keepalive ping timed out after 5000ms", true},
+		{"RetriableError: internal error: HTTP/2 keepalive ping timed out after 5000ms", true},
+		{"cursor-agent timed out after 2h0m0s", false},
+		{"failed hard", false},
+		{"", false},
+	}
+	for _, tc := range cases {
+		if got := isCursorTransportHang(tc.in); got != tc.want {
+			t.Errorf("isCursorTransportHang(%q) = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestHandleCursorAssistantTransportHangIsErrorNotText(t *testing.T) {
+	t.Parallel()
+	b := &cursorBackend{cfg: Config{Logger: slog.Default()}}
+	ch := make(chan Message, 4)
+	var output strings.Builder
+	hang := "Error: RetriableError: [internal] HTTP/2 keepalive ping timed out after 5000ms"
+	evt := &cursorStreamEvent{
+		Type: "assistant",
+		Message: mustMarshal(t, cursorAssistantMessage{
+			Content: []cursorContentBlock{{Type: "output_text", Text: hang}},
+		}),
+	}
+	b.handleCursorAssistant(evt, ch, &output, nil, nil)
+	if output.Len() != 0 {
+		t.Fatalf("hang text must not become assistant output, got %q", output.String())
+	}
+	select {
+	case m := <-ch:
+		if m.Type != MessageError || m.Content != hang {
+			t.Fatalf("unexpected message: %+v", m)
+		}
+	default:
+		t.Fatal("expected error message on channel")
 	}
 }

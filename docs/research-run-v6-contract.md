@@ -258,6 +258,11 @@ wide catalog of every fresh nonterminal node at the Agent's current tier and
 catalog summaries of higher candidates in the named Branches. It does not grant
 full content. Selecting a candidate creates Match/Discussion work whose new
 Manifest grants the exact brief/full representations required for comparison.
+The assigned worker reads each granted immutable version through the task-bound
+Work artifact endpoint. Version IDs, hashes, catalog summaries and
+`input_nodes` metadata never substitute for the frozen body. If any authorized
+body cannot be read or its hash does not match, the worker fails closed instead
+of voting or integrating from summaries.
 Every reviewed page and watermark is persisted so restart does not silently skip
 or reread the catalog as if it were new.
 

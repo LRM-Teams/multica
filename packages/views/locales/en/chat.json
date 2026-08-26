@@ -47,7 +47,8 @@
     "collapse_action": "See less",
     "loading_older": "Loading older messages…",
     "scroll_to_top": "Scroll to top",
-    "scroll_to_bottom": "Scroll to bottom"
+    "scroll_to_bottom": "Scroll to bottom",
+    "connection_lost": "Connection lost"
   },
   "session_history": {
     "untitled": "Untitled",

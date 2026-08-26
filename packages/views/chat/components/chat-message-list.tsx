@@ -52,6 +52,7 @@ import {
 } from "../../channels/components/message-parts-preview";
 import { formatElapsedMs } from "../lib/format";
 import { splitTimeline, extractCopyText } from "../lib/copy-text";
+import { isTransportHangError } from "../lib/timeline-error";
 import {
   activeBubbleStepSummary,
   bubbleToolSummary,
@@ -765,6 +766,9 @@ function MessageProse({
   parts?: MessagePart[] | null;
   attachments?: import("@multica/core/types").Attachment[];
 }) {
+  if (isTransportHangError(content) && !(parts && parts.length > 0)) {
+    return <ErrorRow item={{ seq: 0, type: "error", content }} />;
+  }
   const contentKey = `prose:${content.length}:${parts?.length ?? 0}:${content.slice(0, 48)}`;
   const resolved = resolveMessageParts(content, parts);
   if (resolved?.length) {
@@ -1188,10 +1192,14 @@ function ThinkingRow({ item }: { item: ChatTimelineItem }) {
 }
 
 function ErrorRow({ item }: { item: ChatTimelineItem }) {
+  const { t } = useT("chat");
+  const label = isTransportHangError(item.content)
+    ? t(($) => $.message_list.connection_lost)
+    : (item.content ?? "");
   return (
     <div className="flex items-start gap-1.5 px-1 -mx-1 py-0.5 text-xs">
       <AlertCircle className="h-3 w-3 shrink-0 text-destructive mt-0.5" />
-      <span className={cn("text-destructive", selectableMessageTextClass)}>{item.content}</span>
+      <span className={cn("text-destructive", selectableMessageTextClass)}>{label}</span>
     </div>
   );
 }

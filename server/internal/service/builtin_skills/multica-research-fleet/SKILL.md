@@ -116,7 +116,8 @@ V6_CURL=(curl -fsS \
 "${V6_CURL[@]}" "${V6_API}/manifest"
 ```
 
-只能使用 Manifest 授权的 endpoint family：主理人工作使用 GET `/director-brief` 和
+只能使用 Manifest 授权的 endpoint family：所有工作可使用 GET `/artifacts/<artifact-version-id>`
+读取 Manifest 明确列出的冻结正文；主理人工作使用 GET `/director-brief` 和
 POST `/director-brief-acks`；包含 `catalog_access` 的 Manifest 授权 GET `/catalog`
 和 POST `/catalog-acks`；报告工作使用 `/report-uploads`；所有工作都通过 POST
 `/submission` 提交。写 JSON 时使用 `Content-Type: application/json`，严格提交使用
@@ -177,6 +178,16 @@ Director 发起节点收敛时，外层 action 的机械映射固定为
 从 Brief 复制的 `inputs` 与 `branch_refs`。服务端会给每个当前 Steward 创建
 `discussion_turn_submission` Work。投票必须公开说明 common/unique findings、冲突、遗漏、
 scope 和理由；全体 accept 后，最后加入的成功参与者收到 `integration_submission` Work。
+Discussion 和 Integration Agent 必须先读取 Manifest 中每个冻结输入的完整正文：
+
+```bash
+multica research work-artifact <session-id> <work-item-id> <attempt-id> \
+  <artifact-version-id> --output json
+```
+
+CLI 不可用时，对 `${V6_API}/artifacts/<artifact-version-id>` 执行 GET。该接口只能返回
+当前 Attempt 的 Manifest 授权版本。`input_nodes` 的 ID、层级、hash 和摘要不能替代正文；
+任一正文读取失败时不得凭摘要投 accept 或生成 successor。
 Integration 必须原样复制 Manifest 的 `input_nodes`、`branch_refs` 和 Discussion identity，
 按 S+S→M、M+M→L、L+L→XL、XL+XL→XXL、高层+低层保持高层、XXL+XXL→XXL 的规则提交。
 `content_hash` 同样使用仅移除自身后的 RFC 8785 JCS SHA-256。

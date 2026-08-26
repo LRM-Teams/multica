@@ -1,0 +1,4 @@
+DROP INDEX IF EXISTS idx_graph_memory_agent_citation_channel_id;
+DROP INDEX IF EXISTS idx_graph_memory_agent_steering_event_message_id;
+DROP INDEX IF EXISTS idx_graph_memory_agent_steering_event_trajectory_id;
+DROP INDEX IF EXISTS idx_graph_memory_agent_state_active_run_id;

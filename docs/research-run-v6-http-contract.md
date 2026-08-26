@@ -193,7 +193,19 @@ refetch durable activity; it is not rendered as an uncommitted stream frame.
 Only bounded user-facing tool/error summaries are returned—never hidden model
 reasoning, raw tool output or unrecognized sensitive arguments.
 
-### 4.2 Review a paged Director Brief
+### 4.2 Fetch one frozen Work artifact
+
+`GET /api/agent/research/sessions/{id}/work-items/{workItemId}/attempts/{attemptId}/artifacts/{artifactVersionId}`
+
+Returns the exact immutable `full` representation authorized by the current
+Work Manifest, together with its Artifact Version ID, kind and representation
+hash. The route is fenced by Workspace, Run, Work Item, Attempt, assigned Agent
+and Inbox task identity. It cannot read an Artifact Version absent from the
+Manifest. Discussion and Integration workers must read every frozen input body
+through this route before voting or producing a successor; `input_nodes`
+metadata and projection summaries are not content authority.
+
+### 4.3 Review a paged Director Brief
 
 For a Director Work Item:
 
@@ -209,7 +221,7 @@ acknowledged by the same Director generation. The server may carry a prior
 acknowledgment into a new Brief only for an identical page hash and Director
 generation; changed pages remain unacknowledged.
 
-### 4.3 Traverse the authorized catalog
+### 4.4 Traverse the authorized catalog
 
 `GET /api/agent/research/sessions/{id}/work-items/{workItemId}/attempts/{attemptId}/catalog?view=same_tier|higher_candidates&cursor=<opaque>`
 
@@ -240,7 +252,7 @@ exhausts the pinned catalog, later new nodes appear in a new pinned page set and
 do not reorder acknowledged pages. Cursor, page hash and Manifest mismatch fail
 closed.
 
-### 4.4 Submit typed work
+### 4.5 Submit typed work
 
 `POST /api/agent/research/sessions/{id}/work-items/{workItemId}/attempts/{attemptId}/submission`
 
@@ -258,7 +270,7 @@ are server-produced and are rejected on this endpoint. The Work Item's
 more permissive decoder. Maximum JSON body size is 2 MiB except Report package
 metadata, which remains 2 MiB because bytes use upload sessions.
 
-### 4.5 Upload Report package inputs
+### 4.6 Upload Report package inputs
 
 `POST /api/agent/research/sessions/{id}/work-items/{workItemId}/attempts/{attemptId}/report-uploads`
 

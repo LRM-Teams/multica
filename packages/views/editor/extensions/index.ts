@@ -61,7 +61,7 @@ const TableHeaderWithDefaultWidth = TableHeader.extend({
     };
   },
 });
-import { TaskList } from "@tiptap/extension-list";
+import { PatchedListItem, PatchedTaskItem, PatchedTaskList } from "./list-item";
 import { Markdown } from "@tiptap/markdown";
 import { ReactNodeViewRenderer } from "@tiptap/react";
 import type { AnyExtension } from "@tiptap/core";
@@ -83,7 +83,6 @@ import {
   parseCodeFenceInfo,
   serializeCodeFenceInfo,
 } from "./code-block-fence";
-import { PatchedListItem, PatchedTaskItem } from "./list-item";
 import { createMarkdownPasteExtension } from "./markdown-paste";
 import { createMarkdownCopyExtension } from "./markdown-copy";
 import { createSubmitExtension } from "./submit-shortcut";
@@ -257,12 +256,10 @@ export function createEditorExtensions(
       listItem: false,
     }),
     PatchedListItem,
-    // Checkbox task lists: `- [ ]` / `- [x]`. TaskList + TaskItem ship their own
-    // markdown tokenizer / renderMarkdown, an input rule (typing `[] ` / `[x] `),
-    // and a checkbox NodeView. The taskList tokenizer is consulted before
-    // marked's built-in list tokenizer, so `- [ ]` becomes a task while a plain
-    // `- ` still falls through to PatchedListItem's bullet list.
-    TaskList,
+    // Checkbox task lists: `- [ ]` / `- [x]`. PatchedTaskList accepts an empty
+    // item at EOF (`- [ ]` with no trailing space) so autosave trimEnd does
+    // not turn a checkbox into a bullet whose text is `[ ]`.
+    PatchedTaskList,
     PatchedTaskItem,
     CodeBlockLowlight.extend({
       addAttributes() {

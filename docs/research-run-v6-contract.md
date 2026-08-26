@@ -183,6 +183,13 @@ External Agent creation, Inbox dispatch, storage upload and notification use
 durable outbox intents. Database facts commit before an Adapter call. Unknown
 external outcomes reconcile by idempotency key.
 
+A received Director Action Proposal is settled by its exact Submission identity
+in the submission request immediately after the durable receipt commits. This
+removes the scheduler-only gap between a Director handoff and the next research
+action. The global reconciler remains the restart recovery owner for a process
+that exits after receipt or during settlement; replay keeps the same
+`client_request_id` and never creates a second proposal.
+
 ### 4. Dynamic team
 
 A new V6 Run starts with only its Director membership. Active membership count

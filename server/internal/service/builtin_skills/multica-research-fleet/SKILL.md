@@ -232,8 +232,9 @@ HTTP 400 `research.v6.invalid_contract` 响应会包含受限字段或 hash 的�
 JSON 字符串不得包含 `U+0000`/NUL。重新计算 `content_hash` 和提交前，先从复制的来源
 文本中移除该字符。
 
-提交边界是异步的。状态 `received` 表示 envelope 已持久交接，Agent 应结束执行；服务端
-reconciler 之后会标记为 `accepted` 或 `rejected`。不得让 Inbox 执行保持打开等待
+提交边界以持久回执为准。状态 `received` 表示 envelope 已持久交接，Agent 应结束执行；
+Director proposal 会在回执提交后立即按 Submission identity 尝试结算，进程中断时由
+reconciler 继续标记为 `accepted` 或 `rejected`。不得让 Inbox 执行保持打开等待
 `accepted`，也不得在 `received` 后创建第二个 request ID。持久结果结算后，服务端可能
 取消剩余 Inbox 执行；这是成功清理，不是调研结果失败。
 

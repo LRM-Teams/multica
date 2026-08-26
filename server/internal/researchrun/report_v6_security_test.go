@@ -62,6 +62,21 @@ func TestV6ReportWorkCreateTransactionBoundary(t *testing.T) {
 	assertReportSource(t, "artifact_report.go", "'report_revision', NULL", "current_version", "ErrResultConflict")
 }
 
+func TestV6ReportWorkCreatedEventDoesNotReferenceUnversionedDraft(t *testing.T) {
+	payload := v6ReportWorkCreatedEventPayload(V6ReportWork{
+		ReportID:          "draft-report",
+		WorkItemID:        "report-work",
+		Revision:          4,
+		InputSnapshotHash: "snapshot-hash",
+	}, "director-cycle")
+	if _, exists := payload["report_id"]; exists {
+		t.Fatal("report work event must not claim exact-version lineage for an unversioned draft")
+	}
+	if payload["work_item_id"] != "report-work" || payload["report_revision"] != 4 {
+		t.Fatalf("unexpected report work event payload: %+v", payload)
+	}
+}
+
 func TestV6DirectorProposalApplyFailureIsObservable(t *testing.T) {
 	assertReportSource(t, "postgres_director_action_v6.go", "research V6 Director proposal canonical apply failed", "submission_id", "run_id", "error")
 }

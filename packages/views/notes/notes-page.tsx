@@ -14,7 +14,7 @@ import { useNoteFormatStore } from "@multica/core/notes/format-store";
 import { syncNotePageRefsFromContent } from "@multica/core/notes/issue-refs";
 import { useCreateNotePage, useDeleteNotePage, useDuplicateNotePage, useEmptyNoteTrash, useMoveNotePage, usePermanentlyDeleteNotePage, useRestoreNotePage, useUpdateNotePage } from "@multica/core/notes/mutations";
 import { requestInlineNotePageAI, resolveNotesAssistantAgent } from "@multica/core/notes/notes-assistant-agent";
-import { noteAIJobOptions, noteDetailOptions, noteListOptions, noteTrashOptions } from "@multica/core/notes/queries";
+import { applyNoteShareSeen, noteAIJobOptions, noteDetailOptions, noteListOptions, noteNeedsShareSeen, noteTrashOptions } from "@multica/core/notes/queries";
 import { useWorkspacePaths } from "@multica/core/paths";
 import type { Agent, NoteAIEditResult, NoteAIJobStatus, NotePage } from "@multica/core/types";
 import { agentListOptions, memberListOptions, workspaceListOptions } from "@multica/core/workspace/queries";
@@ -385,6 +385,13 @@ function NoteTreeRow({
             }}
           >
             <span className="truncate">{title}</span>
+            {node.share_unread && node.id !== activeId ? (
+              <span
+                aria-label={t(($) => $.notes_page.share_unread)}
+                data-testid="note-share-unread-dot"
+                className="ml-1.5 size-1.5 shrink-0 rounded-full bg-brand-solid"
+              />
+            ) : null}
           </button>
         )}
         <div className={cn("relative z-10 ml-auto items-center gap-0.5", menuOpen ? "flex" : "hidden group-hover:flex")} onClick={(event) => event.stopPropagation()}>
@@ -774,8 +781,21 @@ export function NotesPage({ pageId }: { pageId?: string }) {
   const { data: workspaces = [] } = useQuery(workspaceListOptions());
   const selectedFromList = findNote(list.pages, pageId);
   const selectedId = pageId ?? selectedFromList?.id;
-  const { data: detailPage } = useQuery(noteDetailOptions(wsId, selectedId ?? ""));
-  const selected = detailPage?.id ? detailPage : selectedFromList;
+  const shouldFetchDetail = Boolean(selectedId) && (!selectedFromList || noteNeedsShareSeen(selectedFromList));
+  const { data: detailPage } = useQuery({
+    ...noteDetailOptions(wsId, selectedId ?? ""),
+    enabled: !!wsId && shouldFetchDetail,
+  });
+  const selected = useMemo(() => {
+    const fromDetail = detailPage?.id === selectedId ? detailPage : undefined;
+    if (selectedFromList && fromDetail) {
+      if (fromDetail.title === selectedFromList.title && fromDetail.content === selectedFromList.content) {
+        return selectedFromList;
+      }
+      return fromDetail;
+    }
+    return selectedFromList ?? fromDetail;
+  }, [detailPage, selectedFromList, selectedId]);
   const [uiState, setUiState] = useState<NotesPageUiState>(() => ({
     sharePage: null,
     exportOpen: false,
@@ -855,6 +875,12 @@ export function NotesPage({ pageId }: { pageId?: string }) {
     if (!wsId || !selected?.id || showTrash) return;
     writeLastViewedNote(wsId, selected.id);
   }, [selected?.id, showTrash, wsId]);
+
+  useEffect(() => {
+    if (!wsId || !detailPage?.id || showTrash) return;
+    if (selectedFromList && !noteNeedsShareSeen(selectedFromList) && selectedFromList.id === detailPage.id) return;
+    applyNoteShareSeen(queryClient, wsId, detailPage.id);
+  }, [detailPage?.id, queryClient, selectedFromList, showTrash, wsId]);
 
   useEffect(() => {
     if (!wsId || pageId || isLoading || showTrash || list.pages.length === 0) return;
@@ -1214,7 +1240,7 @@ export function NotesPage({ pageId }: { pageId?: string }) {
           if (!open) setUiState((current) => ({ ...current, sharePage: null }));
         }}
       />
-      <ExportDialog page={selected} open={exportOpen} onOpenChange={(open) => setUiState((current) => ({ ...current, exportOpen: open }))} />
+      <ExportDialog page={selected ?? null} open={exportOpen} onOpenChange={(open) => setUiState((current) => ({ ...current, exportOpen: open }))} />
       <NoteFormatDefaultsDialog open={formatDefaultsOpen} onOpenChange={(open) => setUiState((current) => ({ ...current, formatDefaultsOpen: open }))} />
       {selected && !showTrash ? (
         <NoteAssistantBubble

@@ -464,6 +464,12 @@ reporting never depends on inter-Agent chat. One active Report
 Work is the single writer; results arriving during it cause a subsequent
 revision instead of a competing write.
 
+A required report refresh is a productive maintenance action whether submitted
+alone or alongside valid follow-up Work. It must not cause the whole Proposal to
+be rejected merely because that Proposal covers fewer open questions than the
+current parallel cap. The report event schedules a fresh Director cycle for the
+remaining questions.
+
 The `v6_report_work_created` event identifies the Work and report revision but
 omits `report_id`. A draft passport is registered with its `artifact_create`
 policy mutation but intentionally has no current artifact version until package

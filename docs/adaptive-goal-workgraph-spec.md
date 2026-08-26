@@ -107,6 +107,17 @@ Goal revision 2
 Goal revision 3
 ```
 
+A revision may arrive while work is executing. It MUST be applied at the next
+safe scheduling boundary, never by interrupting a run mid-flight:
+
+- in-flight AgentRuns continue to completion (or their own timeout) unless the
+  revision explicitly cancels their node;
+- their reports are still collected and their artifacts registered, then
+  evaluated against the new revision — work that still satisfies the new
+  requirements is reused, not discarded;
+- nodes not yet dispatched are re-evaluated against the new revision before
+  they become ready.
+
 After a revision is created, the planner performs impact analysis:
 
 ```text
@@ -181,6 +192,27 @@ Replanning may be triggered by:
 
 The old GraphRevision remains immutable. The new revision records its parent,
 reason, affected nodes, and reused artifacts.
+
+### Budgets and bounded parallelism
+
+Dispatch MUST be bounded by an explicit budget policy, not left implicit:
+
+```ts
+type ExecutionBudget = {
+  maxConcurrentRuns: number
+  maxRunsPerNode: number        // retry ceiling
+  maxDelegationDepth: number    // a run that spawns sub-work counts against this
+  maxTotalRuns?: number
+  maxWallClock?: string
+  maxCost?: number
+}
+```
+
+Delegation multiplies: if a coordinator node spawns sub-agents that may spawn
+their own work, effective concurrency approaches
+`maxConcurrentRuns × spawn limit per level`. The scheduler enforces the budget
+at dispatch time and records budget exhaustion as a `blocked` state with a
+structured reason, so a stalled goal is diagnosable instead of silently idle.
 
 ## 8. Agent execution
 
@@ -285,6 +317,24 @@ while not goal_is_terminal(goal):
 The loop is generic. Domain behaviour comes from the current GoalRevision,
 graph nodes, tools, capabilities, and verification policies.
 
+### Durability and resume
+
+The loop itself must be restartable. Every iteration reads state from durable
+storage (Goal, GraphRevision, WorkNode, AgentRun, reports, verdicts) and never
+relies on coordinator process memory. If the coordinator crashes or is
+redeployed:
+
+- completed runs, reports, artifacts, and verdicts are already persisted;
+- in-flight runs are detected by lease/heartbeat expiry and re-dispatched or
+  failed according to the node's retry policy;
+- the next loop iteration resumes from persisted state without replaying
+  finished work.
+
+This is a Phase 1 requirement, not an optimisation: the most common failure of
+a long-running goal is interruption, and a system that cannot resume loses all
+in-progress work exactly when the task is most expensive. Full run traces and
+sandbox snapshot/restore (Phase 3) build on this but are not required for it.
+
 ## 12. User interaction
 
 The UI should show the evolving result, not force users to understand every
@@ -358,6 +408,8 @@ train and evaluate agent teams later.
 - Artifact references
 - node and goal verification
 - one dynamic replan loop
+- durable loop state and coordinator resume (see “Durability and resume”)
+- explicit execution budget enforced at dispatch
 
 ### Phase 2 — adaptive correction
 
@@ -366,6 +418,7 @@ train and evaluate agent teams later.
 - blocked and waiting-user states
 - GraphRevision and impact analysis
 - artifact reuse and staleness
+- safe-boundary application of mid-flight GoalRevisions
 
 ### Phase 3 — runtime and reproducibility
 
@@ -373,7 +426,8 @@ train and evaluate agent teams later.
 - checkpoints
 - replay
 - sandbox snapshot/restore
-- cost and concurrency budgets
+- side-effect journaling so a superseded run's mutations can be reverted
+- cost accounting and budget tuning
 
 ### Phase 4 — optional domain templates and learning
 
@@ -382,7 +436,28 @@ train and evaluate agent teams later.
 - trajectory export
 - branch/reward/learning integration
 
-## 16. Acceptance criteria
+## 16. Current implementation mapping
+
+Migration `455_channel_goal_revision_history` is the first persisted slice of
+this spec. It is narrower than the ideal `GoalRevision` above, deliberately:
+
+- `channel_goal_revision` is a trigger-maintained immutable snapshot of the
+  existing `channel_goal` row, keyed by `(goal_id, version)`. It reuses the
+  live table's `version` counter (bumped by every contract-changing UPDATE)
+  rather than introducing a separate revision id.
+- Snapshot semantics are first-write-wins per version (`ON CONFLICT DO
+  NOTHING`): an UPDATE that does not bump `version` — for example a runtime
+  counter such as `execution_graph_revision` — does not produce or alter a
+  revision. Revisions capture the user-facing contract only.
+- Fields from the ideal model that have no `channel_goal` counterpart yet
+  (`changeReason`, `constraints`, `deliverables`, typed `context` references)
+  are not stored. They are added when the write path can populate them —
+  a trigger cannot invent a change reason.
+
+The gap between this snapshot table and the full `GoalRevision` model is
+tracked Phase 1 work, not an accident of the migration.
+
+## 17. Acceptance criteria
 
 The implementation is successful when a user can provide an arbitrary complex
 request and the system can:

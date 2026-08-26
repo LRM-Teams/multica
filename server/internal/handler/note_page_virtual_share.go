@@ -103,10 +103,6 @@ func (h *Handler) replaceNotePageShares(
 	ownerID pgtype.UUID,
 	req noteShareRequest,
 ) (noteShareRoster, bool) {
-	if _, err := tx.Exec(ctx, `DELETE FROM note_page_share WHERE page_id = $1`, page.ID); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to update shares")
-		return noteShareRoster{}, false
-	}
 	if _, err := tx.Exec(ctx, `DELETE FROM note_page_share_agent WHERE page_id = $1`, page.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update shares")
 		return noteShareRoster{}, false
@@ -118,6 +114,7 @@ func (h *Handler) replaceNotePageShares(
 
 	users := []string{}
 	seenUsers := map[string]bool{}
+	keepUserIDs := make([]pgtype.UUID, 0, len(req.UserIDs))
 	for _, rawID := range req.UserIDs {
 		targetID, ok := parseUUIDOrBadRequest(w, rawID, "share user id")
 		if !ok {
@@ -133,11 +130,28 @@ func (h *Handler) replaceNotePageShares(
 			writeError(w, http.StatusBadRequest, "share user must be a workspace member")
 			return noteShareRoster{}, false
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO note_page_share (page_id, user_id, created_by) VALUES ($1, $2, $3)`, page.ID, targetID, ownerID); err != nil {
+		keepUserIDs = append(keepUserIDs, targetID)
+		users = append(users, key)
+	}
+	if len(keepUserIDs) == 0 {
+		if _, err := tx.Exec(ctx, `DELETE FROM note_page_share WHERE page_id = $1`, page.ID); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to update shares")
 			return noteShareRoster{}, false
 		}
-		users = append(users, key)
+	} else {
+		if _, err := tx.Exec(ctx, `DELETE FROM note_page_share WHERE page_id = $1 AND NOT (user_id = ANY($2::uuid[]))`, page.ID, users); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to update shares")
+			return noteShareRoster{}, false
+		}
+		for _, targetID := range keepUserIDs {
+			if _, err := tx.Exec(ctx, `
+INSERT INTO note_page_share (page_id, user_id, created_by)
+VALUES ($1, $2, $3)
+ON CONFLICT (page_id, user_id) DO NOTHING`, page.ID, targetID, ownerID); err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to update shares")
+				return noteShareRoster{}, false
+			}
+		}
 	}
 
 	agents := []string{}

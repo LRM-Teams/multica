@@ -11,6 +11,8 @@ export interface NotePage {
   share_agent_ids?: string[];
   share_channel_ids?: string[];
   can_manage_shares: boolean;
+  /** True when the current user was newly granted a direct share and has not opened the page yet. */
+  share_unread?: boolean;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;

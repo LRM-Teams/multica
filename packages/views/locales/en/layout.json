@@ -60,6 +60,8 @@
     "child_page": "Child page",
     "child_links": "Child pages",
     "share_action": "Share",
+    "share_unread": "Unread shared note",
+    "share_unread_nav": "Unread shared notes",
     "current_shares": "Shared with",
     "no_current_shares": "Not shared with anyone else",
     "share_member_workspace_label": "{{name}} ({{workspace}})",

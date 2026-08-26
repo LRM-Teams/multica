@@ -287,7 +287,9 @@ metadata, which remains 2 MiB because bytes use upload sessions.
 
 The server normalizes and validates the path, allocates its own immutable object
 key and returns an upload ID plus either a presigned destination or the existing
-local upload destination. Object keys are never accepted from the Agent.
+local upload destination. Object keys are never accepted from the Agent. The
+production Research Run Engine exposes this capability and delegates both the
+declaration and completion checks to its configured persistent Store.
 
 `POST /api/agent/research/sessions/{id}/work-items/{workItemId}/attempts/{attemptId}/report-uploads/{uploadId}/complete`
 

@@ -242,6 +242,10 @@ multica research report-upload <session-id> <work-item-id> <attempt-id> \
   --media-type <media-type> --output json
 ```
 
+生产 Research Run Engine 会把上传声明与完成校验转发给同一持久化 Store；如果
+接口返回 `research.v6.capability_unavailable`，不得绕过上传或提交本地路径，应保留
+Attempt 并等待服务端恢复该能力。
+
 严格 envelope 只能通过 V6 endpoint 提交：
 
 ```bash

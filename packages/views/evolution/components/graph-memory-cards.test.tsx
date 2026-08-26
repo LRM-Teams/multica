@@ -1,13 +1,22 @@
 // @vitest-environment jsdom
 
 import type { ReactNode } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { I18nProvider } from "@multica/core/i18n/react";
+import { EMPTY_GRAPH_MEMORY_PROFILE } from "@multica/core/api/schemas";
+import { evolutionKeys } from "@multica/core/evolution/queries";
+import { runtimeModelsKeys } from "@multica/core/runtimes";
+import type { RuntimeDevice } from "@multica/core/types";
+import enAgents from "../../locales/en/agents.json";
 import enEvolution from "../../locales/en/evolution.json";
-import { LegacyCurationNotApplicableCard } from "./graph-memory-cards";
+import {
+  GraphMemoryAgentModeCard,
+  LegacyCurationNotApplicableCard,
+} from "./graph-memory-cards";
 
-const TEST_RESOURCES = { en: { evolution: enEvolution } };
+const TEST_RESOURCES = { en: { agents: enAgents, evolution: enEvolution } };
 
 function I18nWrapper({ children }: { children: ReactNode }) {
   return (
@@ -22,5 +31,83 @@ describe("LegacyCurationNotApplicableCard", () => {
     render(<LegacyCurationNotApplicableCard />, { wrapper: I18nWrapper });
     expect(screen.getByText(enEvolution.legacyCurationNotApplicable)).toBeTruthy();
     expect(screen.getByText(enEvolution.legacyCurationNotApplicableHint)).toBeTruthy();
+  });
+});
+
+
+describe("GraphMemoryAgentModeCard", () => {
+  it("reuses the interactive Computer to Runtime to Model selection chain", () => {
+    const workspaceId = "ws-1";
+    const runtimeId = "runtime-pi";
+    const runtime = {
+      id: runtimeId,
+      workspace_id: workspaceId,
+      daemon_id: "daemon-1",
+      name: "Developer computer",
+      runtime_mode: "local",
+      provider: "pi",
+      status: "online",
+      device_info: "Linux",
+      metadata: {},
+      current_version: null,
+      update_state: "idle",
+      runtime_health: "healthy",
+      owner_id: "user-1",
+      visibility: "private",
+      last_seen_at: new Date().toISOString(),
+      computer_connected: true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    } as unknown as RuntimeDevice;
+    const profile = {
+      ...EMPTY_GRAPH_MEMORY_PROFILE,
+      workspace_id: workspaceId,
+      memory_type: "graph" as const,
+      graph_memory_mode: "agent" as const,
+      memory_agent_runtime_id: runtimeId,
+      memory_agent_model: "provider/model-1",
+      config_version: 1,
+      updated_at: new Date().toISOString(),
+    };
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    queryClient.setQueryData(evolutionKeys.graphMemoryProfile(workspaceId), profile);
+    queryClient.setQueryData(["runtimes", workspaceId, "computers"], [
+      {
+        daemon_id: "daemon-1",
+        owner_id: "user-1",
+        connected: true,
+        last_seen_at: new Date().toISOString(),
+        runtimes: [{ id: runtimeId, provider: "pi" }],
+      },
+    ]);
+    queryClient.setQueryData(runtimeModelsKeys.forRuntime(runtimeId), {
+      supported: true,
+      customModelIdSupported: false,
+      thinkingDiscovery: false,
+      models: [{ id: "provider/model-1", label: "Model 1", provider: "provider" }],
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <I18nWrapper>
+          <GraphMemoryAgentModeCard
+            wsId={workspaceId}
+            isAdmin
+            runtimes={[runtime]}
+            members={[]}
+            currentUserId="user-1"
+          />
+        </I18nWrapper>
+      </QueryClientProvider>,
+    );
+
+    expect(screen.getByTestId("runtime-config-fields")).toBeTruthy();
+    expect(screen.getByTestId("computer-picker-trigger")).toBeEnabled();
+    expect(screen.getByTestId("runtime-picker-trigger")).toBeEnabled();
+    expect(screen.getByTestId("model-dropdown-trigger")).toBeEnabled();
+    expect(document.querySelector("#graph-memory-agent-runtime")).toBeNull();
+    expect(document.querySelector("#graph-memory-agent-model")).toBeNull();
   });
 });

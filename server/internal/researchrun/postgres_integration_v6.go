@@ -70,16 +70,17 @@ func (s *PostgresStore) applyIntegrationV6Tx(ctx context.Context, tx pgx.Tx, sub
 	}
 	locked := make([]lockedV6IntegrationInput, 0, len(inputs))
 	for _, input := range inputs {
-		var tier, hash, resultNodeID, insightID string
+		var tier, hash, nodeKind, artifactID, insightID string
 		var alreadyAbsorbed bool
-		err = tx.QueryRow(ctx, `SELECT COALESCE(iv.tier,'S'),v.content_hash,COALESCE(rn.id::text,''),COALESCE(iv.insight_id::text,''),
+		err = tx.QueryRow(ctx, `SELECT COALESCE(iv.tier,'S'),v.content_hash,
+			CASE WHEN rn.id IS NOT NULL THEN 'result_s' ELSE 'insight' END,v.artifact_id::text,COALESCE(iv.insight_id::text,''),
 			EXISTS(SELECT 1 FROM research_node_absorption a WHERE a.session_id=v.session_id AND a.input_artifact_version_id=v.id)
 			FROM research_artifact_version v LEFT JOIN research_result_node rn ON rn.artifact_version_id=v.id
 			LEFT JOIN research_insight_version iv ON iv.artifact_version_id=v.id
 			WHERE v.workspace_id=$1::uuid AND v.session_id=$2::uuid AND v.id=$3::uuid FOR UPDATE OF v`,
-			in.WorkspaceID, in.RunID, input.VersionID).Scan(&tier, &hash, &resultNodeID, &insightID, &alreadyAbsorbed)
+			in.WorkspaceID, in.RunID, input.VersionID).Scan(&tier, &hash, &nodeKind, &artifactID, &insightID, &alreadyAbsorbed)
 		if err != nil || alreadyAbsorbed || tier != string(input.Tier) || hash != input.ContentHash ||
-			(input.Kind == "result_s" && resultNodeID != input.ID) || (input.Kind == "insight" && insightID != input.ID) {
+			nodeKind != input.Kind || artifactID != input.ID {
 			if alreadyAbsorbed {
 				return V6IntegrationOutcome{}, ErrV6NodeAlreadyAbsorbed
 			}

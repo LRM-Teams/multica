@@ -2,12 +2,10 @@ package researchrun
 
 import (
 	"encoding/json"
-	"errors"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func TestV6CreateReportActionFreezesServerOwnedReporterAndLatestInputs(t *testing.T) {
@@ -79,10 +77,6 @@ func TestV6CreateReportActionFreezesServerOwnedReporterAndLatestInputs(t *testin
 		ActionID: uuid.NewString(), Kind: "create_report", IdempotencyKey: idempotencyKey,
 		PayloadSchema: "report.create.v1", Payload: payload, Reason: "Refresh the phase report",
 	}, run.goalVersion, stateVersion); err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) {
-			t.Fatalf("create report: constraint=%s detail=%s err=%v", pgErr.ConstraintName, pgErr.Detail, err)
-		}
 		t.Fatal(err)
 	}
 
@@ -97,6 +91,15 @@ func TestV6CreateReportActionFreezesServerOwnedReporterAndLatestInputs(t *testin
 	}
 	if frozenEventSequence <= briefThroughSequence {
 		t.Fatalf("report event watermark=%d want newer than frozen Brief %d", frozenEventSequence, briefThroughSequence)
+	}
+	var createMutationCount int
+	if err = run.pool.QueryRow(run.ctx, `SELECT count(*)::int FROM research_artifact_policy_mutation
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND artifact_id=$3::uuid
+		  AND mutation_kind='artifact_create'`, run.fixture.workspaceID, run.fixture.sessionID, reportID).Scan(&createMutationCount); err != nil {
+		t.Fatal(err)
+	}
+	if createMutationCount != 1 {
+		t.Fatalf("draft report artifact_create mutations=%d want 1", createMutationCount)
 	}
 	var selectedVersionID string
 	if err = run.pool.QueryRow(run.ctx, `SELECT node_artifact_version_id::text FROM research_report_input WHERE report_id=$1::uuid`, reportID).Scan(&selectedVersionID); err != nil {

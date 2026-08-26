@@ -66,6 +66,9 @@ func registerDraftReportRevisionPassportTx(
 	tx pgx.Tx,
 	workspaceID, sessionID, reportID string,
 ) error {
+	if err := ensureSessionPolicyStateTx(ctx, tx, workspaceID, sessionID); err != nil {
+		return err
+	}
 	command, err := tx.Exec(ctx, `
 		INSERT INTO research_artifact_passport (
 			id, workspace_id, session_id, entity_kind, current_version,
@@ -82,24 +85,28 @@ func registerDraftReportRevisionPassportTx(
 	if err != nil {
 		return err
 	}
-	if command.RowsAffected() == 1 {
-		return nil
-	}
-	var kind string
-	var currentVersion *int32
-	if err = tx.QueryRow(ctx, `
+	if command.RowsAffected() == 0 {
+		var kind string
+		var currentVersion *int32
+		if err = tx.QueryRow(ctx, `
 		SELECT entity_kind, current_version
 		FROM research_artifact_passport
 		WHERE workspace_id = $1::uuid
 		  AND session_id = $2::uuid
 		  AND id = $3::uuid
 	`, workspaceID, sessionID, reportID).Scan(&kind, &currentVersion); err != nil {
-		return err
+			return err
+		}
+		if kind != string(ArtifactKindReportRevision) || currentVersion != nil {
+			return ErrResultConflict
+		}
 	}
-	if kind != string(ArtifactKindReportRevision) || currentVersion != nil {
-		return ErrResultConflict
-	}
-	return nil
+	_, err = tx.Exec(ctx, `
+		SELECT research_artifact_record_artifact_create_mutation(
+			$1::uuid, $2::uuid, $3::uuid
+		)
+	`, workspaceID, sessionID, reportID)
+	return err
 }
 
 func reportRevisionArtifactContent(persisted json.RawMessage) map[string]any {

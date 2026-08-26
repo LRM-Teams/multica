@@ -1240,7 +1240,7 @@ export function NotesPage({ pageId }: { pageId?: string }) {
           if (!open) setUiState((current) => ({ ...current, sharePage: null }));
         }}
       />
-      <ExportDialog page={selected} open={exportOpen} onOpenChange={(open) => setUiState((current) => ({ ...current, exportOpen: open }))} />
+      <ExportDialog page={selected ?? null} open={exportOpen} onOpenChange={(open) => setUiState((current) => ({ ...current, exportOpen: open }))} />
       <NoteFormatDefaultsDialog open={formatDefaultsOpen} onOpenChange={(open) => setUiState((current) => ({ ...current, formatDefaultsOpen: open }))} />
       {selected && !showTrash ? (
         <NoteAssistantBubble

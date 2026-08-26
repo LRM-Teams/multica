@@ -9,7 +9,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/researchrun"
 )
 
-func TestResearchV6AgentLifecycleCreateAgentUsesMembershipGeneration(t *testing.T) {
+func TestResearchV6AgentLifecycleCreateAgentUsesCurrentDirector(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -52,10 +52,10 @@ func TestResearchV6AgentLifecycleCreateAgentUsesMembershipGeneration(t *testing.
 	if _, err = tx.Exec(ctx, `
 		INSERT INTO research_team_membership (
 			workspace_id, session_id, agent_id, membership_generation,
-			mission_prompt, mission_hash, mission_revision, state
+			mission_prompt, mission_hash, mission_revision, state, role
 		) VALUES (
 			$1::uuid, $2::uuid, $3::uuid, 1,
-			'foreign template mission', 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 1, 'idle'
+			'foreign template mission', 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 1, 'idle', 'director'
 		)
 	`, testWorkspaceID, foreignSessionID, foreignTemplateAgentID); err != nil {
 		t.Fatalf("create foreign research team membership: %v", err)
@@ -75,13 +75,24 @@ func TestResearchV6AgentLifecycleCreateAgentUsesMembershipGeneration(t *testing.
 	if _, err = tx.Exec(ctx, `
 		INSERT INTO research_team_membership (
 			workspace_id, session_id, agent_id, membership_generation,
-			mission_prompt, mission_hash, mission_revision, state
+			mission_prompt, mission_hash, mission_revision, state, role
 		) VALUES (
 			$1::uuid, $2::uuid, $3::uuid, 2,
-			'template mission', 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 1, 'idle'
+			'template mission', 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 1, 'idle', 'director'
 		)
 	`, testWorkspaceID, sessionID, templateAgentID); err != nil {
 		t.Fatalf("create research team membership: %v", err)
+	}
+	assignmentID := uuid.NewString()
+	if _, err = tx.Exec(ctx, `
+		INSERT INTO research_director_assignment(
+			id,workspace_id,session_id,director_agent_id,generation,status,assigned_by_user_id,reason
+		) VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,1,'active',$5::uuid,'runtime adapter fixture')
+	`, assignmentID, testWorkspaceID, sessionID, templateAgentID, testUserID); err != nil {
+		t.Fatalf("assign current V6 Director: %v", err)
+	}
+	if _, err = tx.Exec(ctx, `UPDATE research_session SET current_director_assignment_id=$1::uuid WHERE id=$2::uuid`, assignmentID, sessionID); err != nil {
+		t.Fatalf("select current V6 Director: %v", err)
 	}
 	if err = tx.Commit(ctx); err != nil {
 		t.Fatalf("commit research fixture transaction: %v", err)
@@ -164,16 +175,33 @@ func TestResearchV6AgentLifecycleCreateAgentScopesReceiptsByRun(t *testing.T) {
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO research_team_membership (
 			workspace_id, session_id, agent_id, membership_generation,
-			mission_prompt, mission_hash, mission_revision, state
+			mission_prompt, mission_hash, mission_revision, state, role
 		) VALUES (
 			$1::uuid, $2::uuid, $3::uuid, 1,
-			'template mission', 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 1, 'idle'
+			'template mission', 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 1, 'idle', 'director'
 		), (
 			$1::uuid, $4::uuid, $3::uuid, 1,
-			'template mission', 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 1, 'idle'
+			'template mission', 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 1, 'idle', 'director'
 		)
 	`, testWorkspaceID, runA, templateAgentID, runB); err != nil {
 		t.Fatalf("create run-scoped template memberships: %v", err)
+	}
+	assignmentA, assignmentB := uuid.NewString(), uuid.NewString()
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO research_director_assignment(
+			id,workspace_id,session_id,director_agent_id,generation,status,assigned_by_user_id,reason
+		) VALUES
+			($1::uuid,$3::uuid,$4::uuid,$6::uuid,1,'active',$7::uuid,'runtime adapter fixture'),
+			($2::uuid,$3::uuid,$5::uuid,$6::uuid,1,'active',$7::uuid,'runtime adapter fixture')
+	`, assignmentA, assignmentB, testWorkspaceID, runA, runB, templateAgentID, testUserID); err != nil {
+		t.Fatalf("assign run-scoped V6 Directors: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		UPDATE research_session SET current_director_assignment_id=CASE id
+			WHEN $1::uuid THEN $3::uuid WHEN $2::uuid THEN $4::uuid END
+		WHERE id=ANY(ARRAY[$1::uuid,$2::uuid])
+	`, runA, runB, assignmentA, assignmentB); err != nil {
+		t.Fatalf("select run-scoped V6 Directors: %v", err)
 	}
 
 	idempotencyKey := "create_agent.cross_validator.v1-" + uuid.NewString()[:8]

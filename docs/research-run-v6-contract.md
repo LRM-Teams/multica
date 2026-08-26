@@ -209,9 +209,13 @@ that exits after receipt or during settlement; replay keeps the same
 ### 4. Dynamic team
 
 A new V6 Run starts with its Director and one fixed Report Boss membership.
-The Report Boss has `role=reporter`, owns only Report Work, and is excluded from
-research-worker capacity. Active membership count is Run-scoped, includes the
-Director and Report Boss, and cannot exceed 50. Below 20, creation
+The workspace Fleet reporter is an identity and instruction template; bootstrap
+creates a dedicated Report Boss Agent for the Run and copies the selected
+Director's runtime, model and execution configuration. This prevents a reporter
+seeded on an older runtime from stranding Report Work when a Run uses another
+runtime. The Report Boss has `role=reporter`, owns only Report Work, and is
+excluded from research-worker capacity. Active membership count is Run-scoped,
+includes the Director and Report Boss, and cannot exceed 50. Below 20, creation
 needs no extra capacity justification beyond the Director Decision. At 20–49,
 the Decision records a capability, parallelism or independence reason. Fifty
 rejects creation mechanically.
@@ -447,8 +451,10 @@ submission repeats that hash and the deduplicated node versions. The server
 rejects stale, missing, extra or role-mismatched inputs rather than letting the
 Report Agent choose a more convenient subset.
 
-Every V6 Run has one fixed `reporter` membership named 报告老板. The Director
-Brief includes a server-computed `report_plan` containing that Agent identity,
+Every V6 Run has one fixed, Run-dedicated `reporter` membership named 报告老板.
+Its identity and instructions come from the active Fleet reporter template, but
+its runtime, model and execution configuration come from the selected Director.
+The Director Brief includes a server-computed `report_plan` containing that Agent identity,
 the exact selected inputs, per-direction coverage and maturity. Whenever that
 selection hash changes and no Report Work is active, proposal preflight requires
 one `create_report` intent whose payload contains only the report title. The

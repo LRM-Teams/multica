@@ -78,8 +78,9 @@ canonical state。替换后的 Agent 或主理人必须能够只依靠 PostgreSQ
 - 用户 Stop 是可恢复暂停：非 Director Work 返回 `ready`，当前 Attempt 取消且不消耗重试
   预算，Resume 后可重新派发。删除 V6 调研只归档 Run 和全部规范事实，不物理删除成果、
   证据、Discussion、Work 或 Report。
-- V6 Report 是不可变的 Goal 附件，不是图节点。每个 Run 启动时固定加入一名
-  role=`reporter` 的“报告老板”；它只执行 report Work，不承担原子调研、Discussion 或
+- V6 Report 是不可变的 Goal 附件，不是图节点。工作区 Fleet 的 reporter 只作为身份与
+  指令模板；每个 Run 启动时创建一名专属的 role=`reporter`“报告老板”，并继承所选主理人
+  的 runtime、model 与执行配置。它只执行 report Work，不承担原子调研、Discussion 或
   Integration。同一一级方向只把当前最高层级未吸收节点交给报告老板，不同方向各取一个
   最大节点，跨方向 successor 去重。服务端把这些节点的完整持久化结果冻结到
   `report_context.input_documents`，不依赖 Agent 聊天转述。新的最大节点、方向状态或

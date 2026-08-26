@@ -46,6 +46,25 @@ jobs:
           FROM research_director_cycle WHERE session_id=:'run_id'::uuid
           ORDER BY created_at DESC LIMIT 12;
 
+          SELECT 'CYCLE_ACTIONS',cycle.id,action.value->>'kind',count(*)
+          FROM research_director_cycle cycle
+          CROSS JOIN LATERAL jsonb_array_elements(COALESCE(cycle.proposal->'actions','[]'::jsonb)) action(value)
+          WHERE cycle.session_id=:'run_id'::uuid
+            AND cycle.id=(SELECT id FROM research_director_cycle WHERE session_id=:'run_id'::uuid ORDER BY created_at DESC LIMIT 1)
+          GROUP BY cycle.id,action.value->>'kind' ORDER BY action.value->>'kind';
+
+          SELECT 'TEAM_GROUP',role,state,count(*)
+          FROM research_team_membership WHERE session_id=:'run_id'::uuid
+          GROUP BY role,state ORDER BY role,state;
+
+          SELECT 'FRONTIER_FACTS',count(*) FILTER (WHERE result.conclusion_state NOT IN ('invalid','refuted')),
+                 COALESCE(sum(jsonb_array_length(COALESCE(result.open_questions,'[]'::jsonb)))
+                   FILTER (WHERE result.conclusion_state NOT IN ('invalid','refuted')),0)
+          FROM research_result_node result
+          WHERE result.session_id=:'run_id'::uuid
+            AND NOT EXISTS (SELECT 1 FROM research_node_absorption absorbed
+              WHERE absorbed.session_id=result.session_id AND absorbed.input_artifact_version_id=result.artifact_version_id);
+
           SELECT 'DISCUSSION_RECENT',d.id,d.kind,d.status,d.through_event_sequence,d.created_at,d.updated_at,
                  (SELECT count(*) FROM research_discussion_input i WHERE i.discussion_id=d.id),
                  (SELECT count(*) FROM research_discussion_vote v WHERE v.discussion_id=d.id)

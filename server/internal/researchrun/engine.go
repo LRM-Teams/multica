@@ -112,6 +112,28 @@ func NewEngineWithRuntimeAdapters(store *PostgresStore, dispatcher Dispatcher, p
 	return engine
 }
 
+// CreateV6ReportUpload keeps report package uploads on the production Engine
+// boundary used by the HTTP handler. The PostgresStore owns the transaction and
+// immutable object declaration; Engine only exposes that capability alongside
+// the rest of the ResearchRun surface.
+func (e *Engine) CreateV6ReportUpload(ctx context.Context, access V6AttemptAccess, declaration ReportUploadDeclaration) (ReportUploadCapability, error) {
+	if e == nil || e.store == nil {
+		return ReportUploadCapability{}, ErrV6DirectorUnavailable
+	}
+	return e.store.CreateV6ReportUpload(ctx, access, declaration)
+}
+
+// CompleteV6ReportUpload verifies an uploaded object through the same store
+// configured by NewEngineWithRuntimeAdapters.
+func (e *Engine) CompleteV6ReportUpload(ctx context.Context, access V6AttemptAccess, resourceID, requestID string) (VerifiedReportObject, error) {
+	if e == nil || e.store == nil {
+		return VerifiedReportObject{}, ErrV6DirectorUnavailable
+	}
+	return e.store.CompleteV6ReportUpload(ctx, access, resourceID, requestID)
+}
+
+var _ ResearchReportV6 = (*Engine)(nil)
+
 func newEngine(store *PostgresStore, dispatcher Dispatcher, projector Projector) *Engine {
 	return &Engine{
 		store: store, dispatcher: dispatcher, projector: projector, clock: systemClock{},

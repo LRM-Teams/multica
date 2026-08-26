@@ -103,7 +103,6 @@ import { useBrowserOnline } from "../lib/use-browser-online";
 import {
   useResearchV6DirectorCanvas,
   useResearchV6DirectorAssignment,
-  useResearchV6Reports,
   useResearchV6WorkActivity,
 } from "../v6-session-adapter";
 import {
@@ -132,7 +131,6 @@ import { ResearchLiveStream } from "./research-live-stream";
 import { ResearchNodeDetail } from "./research-node-detail";
 import { ResearchSelectedRefChip } from "./research-selected-ref-chip";
 import { ResearchV6NodeDetail } from "./research-v6-node-detail";
-import { ResearchV6ReportModal } from "./research-v6-report-modal";
 import { ResearchProductRoundCardView } from "./research-product-round-card";
 import { ResearchProjectionContractNotice } from "./research-projection-contract-notice";
 import { ResearchServerErrorPage } from "./research-server-error-page";
@@ -443,24 +441,6 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     runId: sessionId,
     persistedAgentId: persistedDirectorAgentId,
     expectedStateVersion: data?.run?.run.state_version ?? 0,
-  });
-  const {
-    reports: directorReportsData,
-    reportsLoading: directorReportsLoading,
-    refetchReports: refetchDirectorReports,
-    reportId: directorReportId,
-    selectReport: setSelectedDirectorReportId,
-    reportDetail: directorReportDetailData,
-    reportDetailFetching: directorReportDetailFetching,
-    refetchReportDetail: refetchDirectorReportDetail,
-    compiledHtml: directorReportCompiledHtml,
-    compiledFetching: directorReportCompiledFetching,
-  } = useResearchV6Reports({
-    enabled: directorV6Enabled,
-    deliveryOpen: ui.deliveryOpen,
-    workspaceId: wsId,
-    runId: sessionId,
-    transport: directorTransport,
   });
   const handleSelectCanvasNode = useCallback(
     (node: ResearchGraphNode | null) => {
@@ -1228,8 +1208,11 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
         rejectPending={rejectConfirm.isPending}
         handoffPending={handoff.isPending}
         onOpenDelivery={() => {
+          if (directorV6Enabled) {
+            nav.push(paths.researchReport(sessionId));
+            return;
+          }
           dispatch({ type: "setDeliveryOpen", value: true });
-          if (directorV6Enabled) void refetchDirectorReports();
         }}
         members={directorV6Enabled ? [] : fleet.members}
         sources={sources}
@@ -1777,8 +1760,11 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
           kind={completionKind}
           onViewReport={() => {
             dismissCompletion();
+            if (directorV6Enabled) {
+              nav.push(paths.researchReport(sessionId));
+              return;
+            }
             dispatch({ type: "setDeliveryOpen", value: true });
-            if (directorV6Enabled) void refetchDirectorReports();
           }}
           onNewResearch={() => {
             dismissCompletion();
@@ -1792,55 +1778,8 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
         />
       ) : null}
 
-      {/* Portal-friendly mount: keep delivery modal outside the canvas
-          `relative`/`overflow` section so it cannot collapse into a corner float. */}
-      {directorV6Enabled ? (
-        <ResearchV6ReportModal
-          open={ui.deliveryOpen}
-          onOpenChange={(open) =>
-            dispatch({ type: "setDeliveryOpen", value: open })
-          }
-          appOrigin={
-            typeof window === "undefined" ? "" : window.location.origin
-          }
-          report={
-            directorReportDetailData
-              ? {
-                  id: directorReportDetailData.id,
-                  title: directorReportDetailData.title,
-                  packageHash: directorReportDetailData.packageHash,
-                  sandboxUrl: directorReportDetailData.sandboxUrl ?? "",
-                  reportOrigin: directorReportDetailData.reportOrigin ?? "",
-                  compiledHtml: directorReportCompiledHtml,
-                  plainTextFallback: directorReportDetailData.plainText,
-                  revision: directorReportDetailData.revision,
-                  status: directorReportDetailData.status,
-                  inputCount:
-                    directorReportsData?.find(
-                      (item) => item.id === directorReportDetailData.id,
-                    )?.inputCount ?? directorReportDetailData.inputRefs.length,
-                }
-              : null
-          }
-          history={(directorReportsData ?? []).map((item) => ({
-            id: item.id,
-            revision: item.revision,
-            status: item.status,
-            title: item.title,
-            publishedAt: item.publishedAt,
-          }))}
-          onSelectReport={setSelectedDirectorReportId}
-          selectedReportId={directorReportId}
-          loading={
-            directorReportsLoading ||
-            directorReportDetailFetching ||
-            directorReportCompiledFetching
-          }
-          onRequestFreshCapability={() => {
-            void refetchDirectorReportDetail();
-          }}
-        />
-      ) : (
+      {/* V6 delivery owns an independent route; keep only the legacy drawer here. */}
+      {!directorV6Enabled ? (
         <ResearchDeliveryDrawer
           open={ui.deliveryOpen}
           onClose={() => dispatch({ type: "setDeliveryOpen", value: false })}
@@ -1863,7 +1802,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
             void refetch();
           }}
         />
-      )}
+      ) : null}
     </div>
   );
 

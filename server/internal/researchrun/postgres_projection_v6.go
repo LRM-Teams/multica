@@ -330,6 +330,7 @@ func appendV6AgentProjectionTx(ctx context.Context, tx pgx.Tx, build *v6Projecti
 		JOIN agent ON agent.id=m.agent_id AND agent.workspace_id=m.workspace_id
 		WHERE m.workspace_id=$1::uuid
 		  AND m.session_id=$2::uuid
+		  AND m.role<>'reporter'
 		  AND m.state IN ('idle','working','offline','retiring')
 		ORDER BY m.membership_generation,m.created_at,m.id`, build.workspaceID, build.runID)
 	if err != nil {
@@ -443,6 +444,7 @@ func appendV6WorkProjectionTx(ctx context.Context, tx pgx.Tx, build *v6Projectio
 		LEFT JOIN agent_task_progress_snapshot progress ON progress.task_id=latest_attempt.inbox_task_id
 		WHERE w.workspace_id=$1::uuid AND w.session_id=$2::uuid
 		  AND w.kind<>'director'
+		  AND w.kind NOT IN ('report','review')
 		ORDER BY w.id`, build.workspaceID, build.runID)
 	if err != nil {
 		return err

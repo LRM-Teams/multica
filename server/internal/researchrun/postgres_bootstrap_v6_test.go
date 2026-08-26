@@ -10,7 +10,7 @@ func TestBootstrapV6TransactionRecovery(t *testing.T) {
 	runTransactionRecoveryMatrix(t, txOpV6Bootstrap, func(t *testing.T, run *transactionRecoveryRun) transactionRecoveryOperation {
 		title := "V6 bootstrap recovery " + uuid.NewString()
 		input := V6BootstrapInput{
-			WorkspaceID: run.fixture.workspaceID, CreatedBy: run.fixture.userID, DirectorAgentID: run.fixture.agentID,
+			WorkspaceID: run.fixture.workspaceID, CreatedBy: run.fixture.userID, FleetID: run.fixture.fleetID, DirectorAgentID: run.fixture.agentID, ReporterAgentID: run.fixture.reporterID,
 			Goal: title, Title: title, DepthTier: "standard", Language: "English", ClientRequestID: uuid.NewString(),
 		}
 		invoke := func() error {

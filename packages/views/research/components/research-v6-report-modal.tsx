@@ -9,7 +9,8 @@ import {
   DialogTitle,
 } from "@multica/ui/components/ui/dialog";
 import { Button } from "@multica/ui/components/ui/button";
-import { LoaderCircle, ShieldCheck } from "lucide-react";
+import { CheckCircle2, GitMerge, LoaderCircle, ShieldCheck } from "lucide-react";
+import type { ResearchV6DirectorReportDirectionCoverage } from "@multica/core/types/research-v6-director";
 import { useT } from "../../i18n/use-t";
 import { resolveResearchV6ReportFrameSource } from "../lib/research-v6-report-sandbox";
 
@@ -24,6 +25,9 @@ export interface ResearchV6ReportSandboxDocument {
   revision?: number;
   status?: string;
   inputCount?: number;
+  maturity?: "interim" | "final";
+  directionCoverage?: ResearchV6DirectorReportDirectionCoverage[];
+  updatedAt?: string;
 }
 
 export interface ResearchV6ReportHistoryItem {
@@ -48,7 +52,9 @@ export function ResearchV6ReportModal({
   onSelectReport,
   selectedReportId,
   loading = false,
+  updating = false,
   loadTimeoutMs = 15_000,
+  presentation = "dialog",
 }: {
   open: boolean;
   report: ResearchV6ReportSandboxDocument | null;
@@ -59,7 +65,9 @@ export function ResearchV6ReportModal({
   onSelectReport?: (reportId: string) => void;
   selectedReportId?: string | null;
   loading?: boolean;
+  updating?: boolean;
   loadTimeoutMs?: number;
+  presentation?: "dialog" | "page";
 }) {
   const { t } = useT("research");
   const source = resolveResearchV6ReportFrameSource({
@@ -163,11 +171,23 @@ export function ResearchV6ReportModal({
 
   const unavailable = phase === "unavailable";
   const fallback = report?.plainTextFallback.trim() ?? "";
+  const updatedLabel = report?.updatedAt
+    ? `${new Date(report.updatedAt).toISOString().slice(0, 16).replace("T", " ")} UTC`
+    : "";
+  const reportNotice = updating
+    ? t(($) => $.d5.report_sandbox.updating)
+    : report?.maturity === "final"
+      ? t(($) => $.d5.report_sandbox.final_notice)
+      : t(($) => $.d5.report_sandbox.interim_notice);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="flex h-[calc(100dvh-1rem)] w-[calc(100vw-1rem)] max-w-none flex-col gap-0 overflow-hidden rounded-xl p-0 sm:h-[min(94vh,1000px)] sm:w-[min(96vw,1600px)]"
+        className={
+          presentation === "page"
+            ? "flex h-dvh w-dvw max-w-none flex-col gap-0 overflow-hidden rounded-none border-0 p-0 sm:h-dvh sm:w-dvw"
+            : "flex h-[calc(100dvh-1rem)] w-[calc(100vw-1rem)] max-w-none flex-col gap-0 overflow-hidden rounded-xl p-0 sm:h-[min(94vh,1000px)] sm:w-[min(96vw,1600px)]"
+        }
         data-testid="research-v6-report-modal"
       >
         <DialogHeader className="shrink-0 border-b border-border/70 bg-card px-4 py-3 text-left sm:px-5">
@@ -198,6 +218,11 @@ export function ResearchV6ReportModal({
                         count: report.inputCount,
                       })}`
                     : ""}
+                  {updatedLabel
+                    ? ` · ${t(($) => $.d5.report_sandbox.updated_at, {
+                        time: updatedLabel,
+                      })}`
+                    : ""}
                 </p>
               ) : null}
             </div>
@@ -222,6 +247,53 @@ export function ResearchV6ReportModal({
             ) : null}
           </div>
         </DialogHeader>
+
+        {report ? (
+          <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-border/70 bg-muted/35 px-4 py-2.5 text-xs sm:px-5">
+            <div className="flex items-center gap-2 font-medium text-foreground">
+              {report.maturity === "final" ? (
+                <CheckCircle2 className="size-3.5 text-success" aria-hidden="true" />
+              ) : (
+                <GitMerge className="size-3.5 text-primary" aria-hidden="true" />
+              )}
+              <span>
+                {report.maturity === "final"
+                  ? t(($) => $.d5.report_sandbox.final_report)
+                  : t(($) => $.d5.report_sandbox.interim_report)}
+              </span>
+            </div>
+            <p className="text-muted-foreground">
+              {reportNotice}
+            </p>
+            {report.directionCoverage?.length ? (
+              <div className="ml-auto flex max-w-full items-center gap-1.5 overflow-x-auto pb-0.5">
+                {report.directionCoverage.map((direction) => (
+                  <span
+                    key={direction.branchId}
+                    className="inline-flex shrink-0 items-center gap-1 rounded-md border border-border/70 bg-background px-2 py-1 text-[10px] text-muted-foreground"
+                    title={direction.objective}
+                  >
+                    <span className="max-w-36 truncate">{direction.objective}</span>
+                    {direction.tier ? (
+                      <span className="font-semibold tabular-nums text-foreground">
+                        {direction.tier}
+                      </span>
+                    ) : (
+                      <span>{t(($) => $.d5.report_sandbox.researching)}</span>
+                    )}
+                    {direction.activeWorkCount > 0 ? (
+                      <span className="text-primary">
+                        {t(($) => $.d5.report_sandbox.active_tasks, {
+                          count: direction.activeWorkCount,
+                        })}
+                      </span>
+                    ) : null}
+                  </span>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
 
         <div className="relative min-h-0 flex-1 bg-background">
           {frameUrl ? (
@@ -265,10 +337,14 @@ export function ResearchV6ReportModal({
             >
               <div className="max-w-md text-center">
                 <h2 className="text-balance text-xl font-semibold">
-                  {t(($) => $.d5.report_sandbox.empty_title)}
+                  {updating
+                    ? t(($) => $.d5.report_sandbox.building_title)
+                    : t(($) => $.d5.report_sandbox.empty_title)}
                 </h2>
                 <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                  {t(($) => $.d5.report_sandbox.empty_body)}
+                  {updating
+                    ? t(($) => $.d5.report_sandbox.building_body)
+                    : t(($) => $.d5.report_sandbox.empty_body)}
                 </p>
               </div>
             </div>

@@ -1501,6 +1501,8 @@
       "loading_document": "Opening report…",
       "empty_title": "No research report yet",
       "empty_body": "This task has not produced a report to view yet.",
+      "building_title": "The Report Boss is preparing the first revision",
+      "building_body": "The current maximum result for each direction is frozen. The first revision will appear here automatically without a page refresh.",
       "unavailable_title": "Interactive report unavailable",
       "unavailable_body": "The isolated document could not be opened safely. The verified plain-text version remains available below.",
       "refresh_capability": "Request a fresh link",
@@ -1508,7 +1510,15 @@
       "revision_history": "Revision",
       "revision_option": "Revision {{revision}} · {{status}}",
       "revision_label": "Revision {{revision}}",
-      "input_count": "{{count}} frozen inputs"
+      "input_count": "{{count}} frozen inputs",
+      "interim_report": "Interim research report",
+      "final_report": "Final research report",
+      "interim_notice": "Research is still in progress. The report updates as each direction reaches a new maximum tier.",
+      "final_notice": "All research directions have converged to deliverable results.",
+      "researching": "Researching",
+      "active_tasks": "{{count}} active",
+      "updated_at": "Updated {{time}}",
+      "updating": "The Report Boss is integrating new results. This page will switch to the new revision automatically."
     },
     "change_receipt": {
       "title": "Canvas update · {{label}}",

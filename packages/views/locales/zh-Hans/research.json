@@ -1501,6 +1501,8 @@
       "loading_document": "正在打开报告…",
       "empty_title": "尚无调研报告",
       "empty_body": "当前任务尚未生成可查看的报告。",
+      "building_title": "报告老板正在整理第一版",
+      "building_body": "已冻结各方向当前最高层级的阶段结果。首版完成后会自动出现在这里，无需刷新页面。",
       "unavailable_title": "交互报告暂不可用",
       "unavailable_body": "报告未能在安全隔离环境中打开。你仍可在下方阅读已经校验的纯文本版本。",
       "refresh_capability": "获取新的访问链接",
@@ -1508,7 +1510,15 @@
       "revision_history": "修订历史",
       "revision_option": "第 {{revision}} 版 · {{status}}",
       "revision_label": "第 {{revision}} 版",
-      "input_count": "{{count}} 个冻结输入"
+      "input_count": "{{count}} 个冻结输入",
+      "interim_report": "阶段性调研报告",
+      "final_report": "最终调研报告",
+      "interim_notice": "调研仍在进行；报告老板会随各方向的最高层级结果持续更新。",
+      "final_notice": "各方向已收敛至可交付结果。",
+      "researching": "调研中",
+      "active_tasks": "{{count}} 项进行中",
+      "updated_at": "更新于 {{time}}",
+      "updating": "报告老板正在吸收新结果，当前页面会自动切换到新修订。"
     },
     "change_receipt": {
       "title": "画布变更 · {{label}}",

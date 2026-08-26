@@ -46,6 +46,9 @@ function scheduleV6ProjectionRefresh(
     void qc.invalidateQueries({
       queryKey: researchV6DirectorProjectionKeys.snapshot(wsId, runId),
     });
+    void qc.invalidateQueries({
+      queryKey: researchV6DirectorProjectionKeys.reports(wsId, runId),
+    });
   }, 500);
   timers.set(timerKey, timer);
 }

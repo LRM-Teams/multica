@@ -78,8 +78,14 @@ canonical state。替换后的 Agent 或主理人必须能够只依靠 PostgreSQ
 - 用户 Stop 是可恢复暂停：非 Director Work 返回 `ready`，当前 Attempt 取消且不消耗重试
   预算，Resume 后可重新派发。删除 V6 调研只归档 Run 和全部规范事实，不物理删除成果、
   证据、Discussion、Work 或 Report。
-- V6 Report 是不可变的 Goal 附件，不是图节点。只有主理人发布工作流可以发布通过验证的
-  package。报告资源不得输出外部 URL、凭据、应用同源依赖或 bridge 调用。
+- V6 Report 是不可变的 Goal 附件，不是图节点。每个 Run 启动时固定加入一名
+  role=`reporter` 的“报告老板”；它只执行 report Work，不承担原子调研、Discussion 或
+  Integration。同一一级方向只把当前最高层级未吸收节点交给报告老板，不同方向各取一个
+  最大节点，跨方向 successor 去重。服务端把这些节点的完整持久化结果冻结到
+  `report_context.input_documents`，不依赖 Agent 聊天转述。新的最大节点、方向状态或
+  最终成熟度变化后，主理人必须派发下一版报告；同一时刻最多存在一个活动 report Work。
+  只有主理人发布工作流可以发布通过验证的 package。报告资源不得输出外部 URL、凭据、
+  应用同源依赖或 bridge 调用。
 - 内部 `director` cycle Work 只是主理人调度记录，不是成果星图节点。星图只展示可向用户
   解释的调研 Work、结果和洞察；主理人执行状态通过 Brief、聊天、presence 和活动记录查看。
   星图按根 Branch 的一级子 Branch 展示研究方向；更深层 Branch 保留真实归属，但不得被
@@ -384,7 +390,10 @@ legacy V1–V5 compatibility policy.
   structured source ID must name a stored Source in the same Research session;
   every linked section cites one of those sources and it verifiably supports that Claim. A
   V3–V5 report explains the applied Method, counterevidence, limitations,
-  unresolved gaps, and decision consequence.
+  unresolved gaps, and decision consequence. A V6 `report_package_submission`
+  must also use the reporter-only `multica-design-research-reports` skill so the
+  standalone page derives its visual language from the report's subject,
+  audience, evidence shape, and current completion state.
 - `quality_gate` / `citation_audit`: independent evaluation of the latest report
   revision by a `validator` Agent other than the report author. Structured evaluations
   provide substantive findings for all seven score dimensions and enumerate

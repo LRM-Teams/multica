@@ -273,17 +273,33 @@ export interface ResearchV6DirectorReportMetadata {
   id: string;
   revision: number;
   status: string;
+  workStatus: string;
+  maturity: "interim" | "final";
+  directionCoverage: ResearchV6DirectorReportDirectionCoverage[];
   title: string;
   summary: string;
   packageHash: string;
   documentContentHash: string;
   publishedAt: string | null;
   createdAt: string;
+  updatedAt: string;
   authorAgentId: string;
   inputCount: number;
   latestReview: ResearchV6DirectorReportReview;
   sandboxUrl?: string;
   reportOrigin?: string;
+}
+
+export interface ResearchV6DirectorReportDirectionCoverage {
+  branchId: string;
+  objective: string;
+  status: "represented" | "converging" | "researching" | "closed_without_result" | "empty";
+  nodeArtifactVersionId?: string;
+  tier?: "S" | "M" | "L" | "XL" | "XXL";
+  inputRole?: string;
+  candidateCount: number;
+  pendingCount: number;
+  activeWorkCount: number;
 }
 
 export interface ResearchV6DirectorReportInputRef {
@@ -298,6 +314,9 @@ export interface ResearchV6DirectorReportDetail {
   id: string;
   revision: number;
   status: string;
+  maturity: "interim" | "final";
+  directionCoverage: ResearchV6DirectorReportDirectionCoverage[];
+  updatedAt: string;
   title: string;
   summary: string;
   plainText: string;

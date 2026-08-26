@@ -1764,11 +1764,6 @@ func stringFromRawObject(raw json.RawMessage, key string) string {
 	return ""
 }
 
-func stringAny(v any) string {
-	s, _ := v.(string)
-	return s
-}
-
 func intValueFromRaw(raw json.RawMessage, key string, fallback int) int {
 	var obj map[string]any
 	if len(raw) == 0 || json.Unmarshal(raw, &obj) != nil {

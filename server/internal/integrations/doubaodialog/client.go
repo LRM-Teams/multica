@@ -58,12 +58,6 @@ func New(config Config) (*Client, error) {
 	}, nil
 }
 
-func (c *Client) withDialer(dialer Dialer) *Client {
-	clone := *c
-	clone.dialer = dialer
-	return &clone
-}
-
 func (c *Client) handshakeHeaders() http.Header {
 	headers := make(http.Header)
 	headers.Set("X-Api-Key", c.config.APIKey)

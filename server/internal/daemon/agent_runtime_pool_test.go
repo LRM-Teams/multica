@@ -1614,7 +1614,7 @@ func TestFinishResidentMessageInputHoldsAdmissionDuringSettlement(t *testing.T) 
 	}
 }
 
-func TestFinishResidentMessageInputDoesNotStayBusyWhenActivityStreamOutlivesFailedTurn(t *testing.T) {
+func TestFinishResidentMessageInputReleasesFailedTurnAndClearsOutstandingToolCalls(t *testing.T) {
 	pool := newAgentRuntimePool()
 	done := make(chan error, 1)
 	activity := make(chan struct{})
@@ -1622,6 +1622,7 @@ func TestFinishResidentMessageInputDoesNotStayBusyWhenActivityStreamOutlivesFail
 		running:                true,
 		messageInputDone:       done,
 		messageInputGeneration: 1,
+		outstandingToolCalls:   map[string]struct{}{"call-1": {}},
 	}
 	completed := make(chan error, 1)
 
@@ -1641,9 +1642,13 @@ func TestFinishResidentMessageInputDoesNotStayBusyWhenActivityStreamOutlivesFail
 
 	slot.mu.Lock()
 	running, inputDone := slot.running, slot.messageInputDone
+	outstandingToolCalls := len(slot.outstandingToolCalls)
 	slot.mu.Unlock()
 	if running || inputDone != nil {
 		t.Fatalf("slot after failed turn = running %v, done %v; want released", running, inputDone != nil)
+	}
+	if outstandingToolCalls != 0 {
+		t.Fatalf("outstanding tool calls after failed turn = %d, want 0", outstandingToolCalls)
 	}
 }
 

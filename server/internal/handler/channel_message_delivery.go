@@ -230,7 +230,10 @@ func (h *Handler) observeGraphMemoryChannelActivity(ctx context.Context, ch Chan
 	if parsed, err := time.Parse(time.RFC3339Nano, message.CreatedAt); err == nil {
 		observedAt = parsed
 	}
-	if err := h.GraphMemoryAgentControl.ObserveActivity(ctx, ch.WorkspaceID, ch.ID, observedAt); err != nil {
+	if err := h.GraphMemoryAgentControl.ObserveActivity(ctx, ch.WorkspaceID, ch.ID, observedAt); err != nil && !errors.Is(err, service.ErrGraphMemoryAgentUnavailable) {
+		// ErrGraphMemoryAgentUnavailable is the ordinary no-op for channels
+		// without a managed memory agent; keep it out of the Warn path now that
+		// this hook also runs on every typed group message.
 		slog.Warn("graph memory channel activity observation failed", "workspace_id", ch.WorkspaceID, "channel_id", ch.ID, "message_id", message.ID, "error", err)
 	}
 }

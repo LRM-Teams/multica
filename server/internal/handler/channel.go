@@ -4780,6 +4780,9 @@ func (h *Handler) persistPreparedCanonicalChannelMessage(ctx context.Context, in
 		txHandler.Queries = h.Queries.WithTx(tx)
 	}
 
+	if result.Created {
+		txHandler.observeGraphMemoryChannelActivity(ctx, input.Channel, result.Message)
+	}
 	if input.BeforeRecipientPlanning != nil {
 		if err := input.BeforeRecipientPlanning(&txHandler, ctx, result.Message, result.Created); err != nil {
 			return zero, err

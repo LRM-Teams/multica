@@ -1499,6 +1499,8 @@
       "frame_title": "Research report document",
       "loading": "Opening isolated report…",
       "loading_document": "Opening report…",
+      "empty_title": "No research report yet",
+      "empty_body": "This task has not produced a report to view yet.",
       "unavailable_title": "Interactive report unavailable",
       "unavailable_body": "The isolated document could not be opened safely. The verified plain-text version remains available below.",
       "refresh_capability": "Request a fresh link",

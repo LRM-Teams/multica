@@ -25,7 +25,7 @@ type v6DirectorPreflightFacts struct {
 	proposedBranches     int
 	proposedWorkBranches int
 	proposedReports      int
-	reportOnly           bool
+	hasReport            bool
 	childBranches        int
 	topLevelBranches     int
 	proposedTopLevel     int
@@ -109,7 +109,7 @@ func (s *PostgresStore) preflightV6DirectorProposal(ctx context.Context, proposa
 	facts.proposedConvergence = proposedConvergence
 	facts.proposedBranches = proposedBranches
 	facts.proposedReports = proposedReports
-	facts.reportOnly = proposedReports > 0 && proposedReports == len(proposal.Actions)
+	facts.hasReport = proposedReports > 0
 	facts.proposedWorkBranches = len(proposedWorkBranchIDs)
 	err := s.pool.QueryRow(ctx, `SELECT
 		COALESCE((s.run_config->>'max_parallel_tasks')::int,5),
@@ -309,10 +309,11 @@ func validateV6ParallelResearchPlan(facts v6DirectorPreflightFacts) error {
 	if facts.proposedConvergence > 0 {
 		return nil
 	}
-	// A report refresh is a productive maintenance cycle. Accept it on its own so
-	// the resulting report event can trigger a fresh cycle for unresolved research
-	// instead of rejecting the whole proposal and starving both operations.
-	if facts.reportOnly {
+	// A report refresh is a productive maintenance action. Accept the proposal
+	// even when it also contains fewer follow-up Work Items than the outstanding
+	// question count: the report event triggers another cycle for the remainder.
+	// Rejecting the complete proposal would otherwise starve both operations.
+	if facts.hasReport {
 		return nil
 	}
 	if facts.proposedAgentCount == 0 && facts.proposedAtomicWork == 0 && facts.unresolvedQuestions == 0 {

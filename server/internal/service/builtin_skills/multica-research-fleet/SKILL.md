@@ -87,8 +87,9 @@ canonical state。替换后的 Agent 或主理人必须能够只依靠 PostgreSQ
   只包含 `title`，不得复制或提交报告老板 ID、输入节点、内容 hash 或事件水位。服务端在
   创建 Report Work 的同一事务内选择固定报告老板并冻结当时最新输入。同一时刻最多存在
   一个活动 report Work。
-  报告刷新可以单独构成一个维护轮次；它产生的新事件会触发下一轮继续派发尚未覆盖的
-  待回答问题，避免报告与补充调研互相阻塞。
+  报告刷新可以单独构成一个维护轮次，也可以与当轮有效的补充 Work 一起提交；即使当轮
+  尚未覆盖全部待回答问题，也不得因此省略 `create_report`。报告事件会触发下一轮继续派发
+  剩余问题，避免报告与补充调研互相阻塞。
   草稿修订创建时即登记无 current version 的 passport；报告老板提交并验收不可变 package
   后，服务端才写入并切换到 version 1。草稿创建事件记录 Work 和修订号但不记录
   `report_id`，不会在尚无 artifact version 时提前声明 `event_report` 血缘。

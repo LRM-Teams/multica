@@ -50,7 +50,13 @@ func TestValidateV6ParallelResearchPlanRequiresStaffingAndParallelWork(t *testin
 		{
 			name: "report-only maintenance cycle does not starve behind open questions",
 			facts: v6DirectorPreflightFacts{maxParallelTasks: 5, workerCount: 5, resultCount: 10,
-				unresolvedQuestions: 12, proposedReports: 1, reportOnly: true, childBranches: 5},
+				unresolvedQuestions: 12, proposedReports: 1, hasReport: true, childBranches: 5},
+		},
+		{
+			name: "report refresh can make progress with partial parallel follow-up",
+			facts: v6DirectorPreflightFacts{maxParallelTasks: 5, workerCount: 5, resultCount: 10,
+				unresolvedQuestions: 12, proposedAtomicWork: 3, proposedWorkBranches: 3,
+				proposedReports: 1, hasReport: true, childBranches: 5},
 		},
 		{
 			name: "surplus Agent creation does not block work assigned to joined workers",

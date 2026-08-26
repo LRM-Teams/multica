@@ -25,6 +25,11 @@ CREATE TABLE channel_goal_revision (
 CREATE INDEX channel_goal_revision_lookup
     ON channel_goal_revision (workspace_id, goal_id, version DESC);
 
+-- Every cascading foreign key has a supporting index; channel deletion tests
+-- and production deletes rely on this for bounded lock/index work.
+CREATE INDEX channel_goal_revision_channel_idx
+    ON channel_goal_revision (channel_id);
+
 CREATE OR REPLACE FUNCTION snapshot_channel_goal_revision()
 RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN

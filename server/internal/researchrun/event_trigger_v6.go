@@ -76,7 +76,7 @@ func (s *PostgresStore) ProcessV6EventTriggers(ctx context.Context, limit int) (
 		if previouslyCovered {
 			triggerKey = "event-frontier-repair:" + eventID
 		}
-		_, err = (directorBriefModule{store: s, compiler: contextCompilerModule{}}).Start(ctx, StartV6DirectorCycleInput{
+		cycle, err := (directorBriefModule{store: s, compiler: contextCompilerModule{}}).Start(ctx, StartV6DirectorCycleInput{
 			WorkspaceID: workspaceID, RunID: runID, TriggerKey: triggerKey,
 			FromSequence: fromSequence, ThroughSequence: throughSequence, ExpectedStateVersion: stateVersion, Now: time.Now().UTC(),
 		})
@@ -88,6 +88,13 @@ func (s *PostgresStore) ProcessV6EventTriggers(ctx context.Context, limit int) (
 		}
 		if err != nil {
 			return processed, fmt.Errorf("start V6 Director event cycle: %w", err)
+		}
+		if cycle.Replayed {
+			// A covered repair event can remain eligible after its idempotent
+			// cycle terminates without producing the required material effect.
+			// Do not repeatedly count that replay as fresh work in this batch.
+			skipped++
+			continue
 		}
 		processed++
 	}

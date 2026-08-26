@@ -1386,7 +1386,7 @@ func (q *Queries) HasIncompleteIssueExecutionDependencies(ctx context.Context, i
 }
 
 const listRunnableIssuesMissingExecution = `-- name: ListRunnableIssuesMissingExecution :many
-SELECT issue_row.id, issue_row.workspace_id, issue_row.title, issue_row.description, issue_row.status, issue_row.priority, issue_row.assignee_type, issue_row.assignee_id, issue_row.creator_type, issue_row.creator_id, issue_row.parent_issue_id, issue_row.acceptance_criteria, issue_row.context_refs, issue_row.position, issue_row.due_date, issue_row.created_at, issue_row.updated_at, issue_row.number, issue_row.project_id, issue_row.origin_type, issue_row.origin_id, issue_row.first_executed_at, issue_row.start_date, issue_row.metadata, issue_row.forked_from_issue_id, issue_row.forked_at_seq, issue_row.forked_at_task_id, issue_row.channel_goal_id, issue_row.goal_required, issue_row.execution_revision, issue_row.execution_attempt_sequence
+SELECT issue_row.id, issue_row.workspace_id, issue_row.title, issue_row.description, issue_row.status, issue_row.priority, issue_row.assignee_type, issue_row.assignee_id, issue_row.creator_type, issue_row.creator_id, issue_row.parent_issue_id, issue_row.acceptance_criteria, issue_row.context_refs, issue_row.position, issue_row.due_date, issue_row.created_at, issue_row.updated_at, issue_row.number, issue_row.project_id, issue_row.origin_type, issue_row.origin_id, issue_row.first_executed_at, issue_row.start_date, issue_row.metadata, issue_row.forked_from_issue_id, issue_row.forked_at_seq, issue_row.forked_at_task_id, issue_row.channel_goal_id, issue_row.goal_required, issue_row.execution_revision, issue_row.execution_attempt_sequence, issue_row.goal_version_at_creation
 FROM issue issue_row
 JOIN agent
   ON agent.workspace_id = issue_row.workspace_id
@@ -1466,6 +1466,7 @@ func (q *Queries) ListRunnableIssuesMissingExecution(ctx context.Context, rowLim
 			&i.GoalRequired,
 			&i.ExecutionRevision,
 			&i.ExecutionAttemptSequence,
+			&i.GoalVersionAtCreation,
 		); err != nil {
 			return nil, err
 		}

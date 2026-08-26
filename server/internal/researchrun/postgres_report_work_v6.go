@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/google/uuid"
@@ -15,7 +16,7 @@ import (
 // so an interrupted Director can recover the complete assignment from Postgres.
 func (s *PostgresStore) CreateV6ReportWork(ctx context.Context, in CreateV6ReportWorkInput) (V6ReportWork, error) {
 	if strings.TrimSpace(in.IdempotencyKey) == "" || strings.TrimSpace(in.Title) == "" || strings.TrimSpace(in.Reason) == "" {
-		return V6ReportWork{}, ErrInvalidContract
+		return V6ReportWork{}, fmt.Errorf("%w: report intent requires idempotency key, title, and reason", ErrInvalidContract)
 	}
 	tx, err := s.beginResearchTx(ctx, txOpV6ReportWorkCreate, pgx.TxOptions{})
 	if err != nil {
@@ -71,11 +72,11 @@ func (s *PostgresStore) CreateV6ReportWork(ctx context.Context, in CreateV6Repor
 	seen := make(map[string]struct{}, len(inputs))
 	for _, input := range inputs {
 		if _, duplicate := seen[input.NodeArtifactVersionID]; duplicate {
-			return V6ReportWork{}, ErrInvalidContract
+			return V6ReportWork{}, fmt.Errorf("%w: server report selection contains duplicate node %s", ErrInvalidContract, input.NodeArtifactVersionID)
 		}
 		seen[input.NodeArtifactVersionID] = struct{}{}
 		if input.InputRole != "branch_xxl" && input.InputRole != "branch_maximum" && input.InputRole != "unresolved_gap" {
-			return V6ReportWork{}, ErrInvalidContract
+			return V6ReportWork{}, fmt.Errorf("%w: server report selection contains unsupported role %q", ErrInvalidContract, input.InputRole)
 		}
 		var storedHash, tier, insightStatus string
 		var currentXXL, activeFrontier bool
@@ -92,15 +93,15 @@ func (s *PostgresStore) CreateV6ReportWork(ctx context.Context, in CreateV6Repor
 		switch input.InputRole {
 		case "branch_xxl":
 			if !currentXXL || tier != "XXL" || insightStatus != "accepted" {
-				return V6ReportWork{}, ErrInvalidContract
+				return V6ReportWork{}, fmt.Errorf("%w: selected branch_xxl is not the accepted current XXL", ErrInvalidContract)
 			}
 		case "branch_maximum":
 			if !activeFrontier || tier == "" || (tier != "S" && insightStatus != "accepted") {
-				return V6ReportWork{}, ErrInvalidContract
+				return V6ReportWork{}, fmt.Errorf("%w: selected branch_maximum is not an accepted active Frontier node", ErrInvalidContract)
 			}
 		case "unresolved_gap":
 			if !activeFrontier {
-				return V6ReportWork{}, ErrInvalidContract
+				return V6ReportWork{}, fmt.Errorf("%w: selected unresolved_gap is not on the active Frontier", ErrInvalidContract)
 			}
 		}
 	}

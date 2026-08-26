@@ -17,35 +17,66 @@ func TestValidateV6ParallelResearchPlanRequiresStaffingAndParallelWork(t *testin
 	}{
 		{
 			name:    "one initial Agent is not a research team",
-			facts:   v6DirectorPreflightFacts{maxParallelTasks: 5, proposedAgentCount: 1},
+			facts:   v6DirectorPreflightFacts{maxParallelTasks: 5, proposedAgentCount: 1, proposedBranches: 3},
 			wantErr: "至少需要 3 个不同的 run-scoped Agent",
 		},
 		{
 			name:  "three initial Agents satisfy staffing",
-			facts: v6DirectorPreflightFacts{maxParallelTasks: 5, proposedAgentCount: 3},
+			facts: v6DirectorPreflightFacts{maxParallelTasks: 5, proposedAgentCount: 3, proposedBranches: 3},
+		},
+		{
+			name:    "initial staffing must create child Branches",
+			facts:   v6DirectorPreflightFacts{maxParallelTasks: 5, proposedAgentCount: 3},
+			wantErr: "至少 3 个非根子 Branch",
 		},
 		{
 			name:    "one broad Work is not parallel research",
-			facts:   v6DirectorPreflightFacts{maxParallelTasks: 5, workerCount: 3, proposedAtomicWork: 1},
-			wantErr: "至少需要 3 个分配给不同 Agent 的 atomic Work",
+			facts:   v6DirectorPreflightFacts{maxParallelTasks: 5, workerCount: 3, proposedAtomicWork: 1, proposedWorkBranches: 1, childBranches: 3},
+			wantErr: "至少 3 个不同的子 Branch",
 		},
 		{
 			name:  "three independent Work Items satisfy first round",
-			facts: v6DirectorPreflightFacts{maxParallelTasks: 5, workerCount: 3, proposedAtomicWork: 3},
+			facts: v6DirectorPreflightFacts{maxParallelTasks: 5, workerCount: 3, proposedAtomicWork: 3, proposedWorkBranches: 3, childBranches: 3},
 		},
 		{
 			name:    "open questions require distinct follow-up Work",
-			facts:   v6DirectorPreflightFacts{maxParallelTasks: 5, workerCount: 3, resultCount: 1, unresolvedQuestions: 3, proposedAtomicWork: 2},
+			facts:   v6DirectorPreflightFacts{maxParallelTasks: 5, workerCount: 3, resultCount: 1, unresolvedQuestions: 3, proposedAtomicWork: 2, proposedWorkBranches: 2, childBranches: 3},
 			wantErr: "至少需要 3 个分配给不同 Agent 的 atomic Work",
 		},
 		{
 			name:  "pending Agent creation permits a staffing cycle",
-			facts: v6DirectorPreflightFacts{maxParallelTasks: 5, workerCount: 1, pendingAgentCount: 2, proposedAtomicWork: 1},
+			facts: v6DirectorPreflightFacts{maxParallelTasks: 5, workerCount: 1, pendingAgentCount: 2, childBranches: 3},
 		},
 		{
 			name: "convergence may consume unresolved frontier nodes before more research",
 			facts: v6DirectorPreflightFacts{maxParallelTasks: 5, workerCount: 3, resultCount: 2,
-				unresolvedQuestions: 4, proposedConvergence: 1},
+				unresolvedQuestions: 4, proposedConvergence: 1, convergenceReady: true},
+		},
+		{
+			name:    "atomic Work cannot use only the bootstrap root Branch",
+			facts:   v6DirectorPreflightFacts{maxParallelTasks: 5, workerCount: 3, proposedAtomicWork: 3},
+			wantErr: "创建子 Branch",
+		},
+		{
+			name: "same-tier frontier must converge before more accumulation",
+			facts: v6DirectorPreflightFacts{maxParallelTasks: 5, workerCount: 3, childBranches: 3,
+				resultCount: 2, convergenceReady: true},
+			wantErr: "必须先创建 integration Discussion",
+		},
+		{
+			name: "same-tier convergence cannot be mixed with more atomic accumulation",
+			facts: v6DirectorPreflightFacts{maxParallelTasks: 5, workerCount: 3, childBranches: 3,
+				resultCount: 2, convergenceReady: true, proposedConvergence: 1, proposedAtomicWork: 1, proposedWorkBranches: 1},
+			wantErr: "不能同时继续堆积 atomic Work",
+		},
+		{
+			name:    "top-level directions are bounded by parallel capacity",
+			facts:   v6DirectorPreflightFacts{maxParallelTasks: 5, topLevelBranches: 5, proposedTopLevel: 1},
+			wantErr: "一级研究方向最多 5 个",
+		},
+		{
+			name:  "nested Branch does not consume another top-level direction",
+			facts: v6DirectorPreflightFacts{maxParallelTasks: 5, topLevelBranches: 5},
 		},
 	}
 	for _, tt := range tests {

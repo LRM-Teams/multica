@@ -2,10 +2,13 @@ import { describe, expect, it } from "vitest";
 import type { ChannelMessage } from "../types";
 import {
   appendWorkerReplyBelowNote,
+  buildChatNoteWriteConfirmationByMessageId,
   buildNoteWorkerPageIdByMessageId,
   buildNoteWriteConfirmationByMessageId,
   deriveNoteWorkerReplyTitle,
+  extractInsertableNoteMarkdown,
   extractNotePageIdsFromText,
+  isProductNoteWriteRequest,
   noteWorkerReplyPlainText,
 } from "./worker-reply-actions";
 
@@ -227,6 +230,78 @@ describe("buildNoteWriteConfirmationByMessageId", () => {
     ] as ChannelMessage[];
 
     expect(buildNoteWriteConfirmationByMessageId(messages).has("a1")).toBe(false);
+  });
+});
+
+describe("isProductNoteWriteRequest", () => {
+  it("matches insert-into-this-page wording without the 笔记 noun", () => {
+    expect(isProductNoteWriteRequest("插入当前页")).toBe(true);
+    expect(isProductNoteWriteRequest("插入子页")).toBe(true);
+    expect(isProductNoteWriteRequest("insert as a child page")).toBe(true);
+  });
+
+  it("does not match ordinary questions", () => {
+    expect(isProductNoteWriteRequest("这句话想表达什么？")).toBe(false);
+  });
+});
+
+describe("extractInsertableNoteMarkdown", () => {
+  it("uses the fenced markdown body when the assistant wrapped a copy box", () => {
+    expect(
+      extractInsertableNoteMarkdown(
+        "我不能直接插入，请复制：\n\n```markdown\n# 提纲\n\n- 待办\n```\n",
+      ),
+    ).toBe("# 提纲\n\n- 待办");
+  });
+
+  it("keeps the full reply when there is no fence", () => {
+    expect(extractInsertableNoteMarkdown("# 提纲\n\n- 待办")).toBe("# 提纲\n\n- 待办");
+  });
+});
+
+describe("buildChatNoteWriteConfirmationByMessageId", () => {
+  it("offers insert when the human asked to insert and the reply is a payload", () => {
+    const map = buildChatNoteWriteConfirmationByMessageId([
+      {
+        id: "u1",
+        chat_session_id: "s1",
+        role: "user",
+        content: "插入当前页",
+        task_id: null,
+        created_at: "2026-01-01T00:00:00Z",
+      },
+      {
+        id: "a1",
+        chat_session_id: "s1",
+        role: "assistant",
+        content: "我不能直接插入。\n\n```markdown\n# 提纲\n\n- 待办一\n- 待办二\n```",
+        task_id: null,
+        created_at: "2026-01-01T00:00:01Z",
+      },
+    ]);
+    expect(map.get("a1")).toEqual({ mode: "create" });
+  });
+
+  it("does not offer insert on ordinary Q&A", () => {
+    const map = buildChatNoteWriteConfirmationByMessageId([
+      {
+        id: "u1",
+        chat_session_id: "s1",
+        role: "user",
+        content: "这句话想表达什么？",
+        task_id: null,
+        created_at: "2026-01-01T00:00:00Z",
+      },
+      {
+        id: "a1",
+        chat_session_id: "s1",
+        role: "assistant",
+        content: "这是在说范围要收窄。",
+        task_id: null,
+        created_at: "2026-01-01T00:00:01Z",
+      },
+    ]);
+    expect(map.has("a1")).toBe(false);
   });
 });
 

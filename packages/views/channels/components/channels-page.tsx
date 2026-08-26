@@ -72,6 +72,7 @@ import {
   useSetChannelTyping,
   useComposerDraftStore,
   isImmutableSystemChannel,
+  canManageChannelGoal,
   channelMemberBadge,
   channelMemberRole,
   groupMemberActions,
@@ -1568,6 +1569,10 @@ export function ChannelsPage({
       !isImmutableSystemChannel(channel) &&
       (currentUserRole === "owner" || currentUserRole === "admin"),
     [currentUserRole],
+  );
+  const canManageGoal = useCallback(
+    (channel: Channel) => canManageChannelGoal(channel, currentUserId, currentUserRole),
+    [currentUserId, currentUserRole],
   );
   // #576 blocker (Iris) — the group-settings Project picker must be gated by
   // the same creator/admin permission as archiving, plus archived-channel and
@@ -4103,7 +4108,7 @@ export function ChannelsPage({
             <ChannelGoalCard
               key={active.id}
               channelId={active.id}
-              canManage={canArchive(active)}
+              canManage={canManageGoal(active)}
               archived={isActiveArchived}
             />
           </Suspense>

@@ -141,6 +141,21 @@ describe("LRM-1514 star-graph layout — D5 baseline from algorithm", () => {
     expect(Math.hypot(branchA.x - branchB.x, branchA.y - branchB.y)).toBeGreaterThan(150);
   });
 
+  it("does not flatten unparented Result S nodes into an Agent orbit", () => {
+    const layout = layoutStarGraph([
+      { id: "goal", tier: "m", radius: 59, nodeKind: "goal" },
+      { id: "result-a", tier: "s", nodeKind: "result_s", clusterId: "branch" },
+      { id: "result-b", tier: "s", nodeKind: "result_s", clusterId: "branch" },
+      { id: "result-c", tier: "s", nodeKind: "result_s", clusterId: "branch" },
+      { id: "result-d", tier: "s", nodeKind: "result_s", clusterId: "branch" },
+    ]);
+    const depths = layout.nodes
+      .filter((node) => node.id !== "goal")
+      .map((node) => Math.round(node.radiusOffset));
+
+    expect(new Set(depths).size).toBeGreaterThanOrEqual(3);
+  });
+
   it("uses unequal branch depths instead of an equal-radius wheel", () => {
     const layout = layoutStarGraph(
       [

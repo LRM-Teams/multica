@@ -196,6 +196,29 @@ describe("ChannelGoalCard work graph", () => {
     );
   });
 
+  it("hides the empty state from viewers who cannot manage the Goal", async () => {
+    state.goal = null;
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    renderWithI18n(
+      <QueryClientProvider client={queryClient}>
+        <ChannelGoalCard channelId="channel-1" canManage={false} />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => {
+      expect(screen.queryByTestId("channel-goal-loading")).not.toBeInTheDocument();
+    });
+    expect(screen.queryByRole("button", { name: "Set manually" })).not.toBeInTheDocument();
+  });
+
+  it("shows Set manually when a manager has no current Goal", async () => {
+    state.goal = null;
+    renderCard();
+    expect(await screen.findByRole("button", { name: "Set manually" })).toBeInTheDocument();
+    expect(screen.getByText(/State the overall goal in the group/)).toBeInTheDocument();
+  });
+
   it("distinguishes missing Issues from missing Project or Git setup", async () => {
     state.goal = {
       ...goal,

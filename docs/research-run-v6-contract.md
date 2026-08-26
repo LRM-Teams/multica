@@ -5,7 +5,7 @@ Status: target contract frozen; user-facing V6 create is open. Omitted
 
 Normative target schema:
 [`contracts/research-run-v6-director.schema.json`](contracts/research-run-v6-director.schema.json),
-SHA-256 `2ce8b8af85c9cec5e508fa1c6b01c6963d998899d09b99d33f8110aca3b59f88`.
+SHA-256 `888377d0abd2b51de10947d7b7736e23677793679b72056b7cb130e69c6c5b57`.
 Its `$id` is the final `research-run-v6.schema.json` identity.
 
 The code-coupled [`contracts/research-run-v6.schema.json`](contracts/research-run-v6.schema.json)
@@ -167,6 +167,10 @@ Director must retry it, reassign it, create replacement Work, or report the
 failure to the user. Only the authenticated user Stop operation or the V6 release
 maintenance control may move an active Run to `paused`. The frozen schema keeps
 the `pause_run` shape token, but the Director execution authorization rejects it.
+User Stop is reversible: active non-Director Work returns to `ready`, its current
+Attempt is cancelled without consuming an attempt budget, and Resume may dispatch
+it again. Delete archives the Run and its canonical facts; it never physically
+deletes V6 Work, Result, Insight, evidence, Discussion or Report history.
 
 When Ronaldo decides that no state change is useful, the Proposal contains one
 `no_op` action with its reason and no semantic dependents; `no_op` cannot coexist
@@ -193,15 +197,19 @@ research dimensions therefore use distinct Agents instead of accumulating
 multiple ready/running Work Items behind one Agent and presenting that queue as
 parallel execution.
 
-A standard V6 Run staffs and dispatches at least three independent atomic
-research directions in its first research round, capped by
-`max_parallel_tasks`. Staffing and Work creation happen in separate Director
-cycles because Agent creation is asynchronous. Each unresolved open question
-on a frontier node requires its own follow-up Work and distinct Agent, up to the
-same parallel cap. The server preflights the complete Proposal before applying
-any action and rejects missing Branch references, duplicate/busy assignees,
-understaffed first rounds and uncovered open questions. A rejected Proposal is
-isolated to its Run and cannot block the global Director-Proposal queue.
+A standard V6 Run first creates at least three run-scoped Agents and at least
+three child Branches under the root Branch, capped by `max_parallel_tasks`.
+Staffing/Branch creation and Work creation happen in separate Director cycles
+because Agent creation is asynchronous and generated Branch IDs are only
+authoritative after commit. The next cycle dispatches at least three independent
+atomic research directions. Each atomic Work binds to exactly one existing,
+non-root child Branch and one distinct Agent. Each unresolved open question on a
+frontier node requires its own follow-up Work and distinct Agent, up to the same
+parallel cap. The server preflights the complete Proposal before applying any
+action and rejects root-only or missing Branch references, duplicate/busy
+assignees, understaffed first rounds and uncovered open questions. A rejected
+Proposal is isolated to its Run and cannot block the global Director-Proposal
+queue.
 
 Agent archive is soft. Task, Attempt, Result, Discussion, Steward and Report
 attribution cannot be deleted or nulled by later Agent lifecycle changes.
@@ -289,8 +297,21 @@ One Branch may have several incomparable M/L/XL nodes but at most one current
 valid XXL. One Insight, including XXL, may bind to multiple Branches. Shared
 content and evidence are counted once by canonical identity.
 
+The root Branch has at most `max_parallel_tasks` active direct children. Those
+children are the Run's top-level research directions; Work, source and open
+question fan-out reuses them. Finer investigation creates descendants beneath
+the relevant direction instead of adding another root child. Projection maps
+every descendant to that top-level direction for visual grouping while keeping
+the exact canonical Branch bindings unchanged.
+
 Branch split, merge, parent change and terminal state require a Director action.
 Text similarity, UI clustering and layout cannot mutate Branch structure.
+
+When the Frontier contains at least two eligible fresh nodes at the same tier
+and no Discussion/Integration is active, the next Proposal must start
+convergence. It may not add unrelated atomic Work or `no_op` around the eligible
+pair. Accepted Integration promotes S→M→L→XL→XXL; absorbed inputs remain
+canonical history but leave the default visible Frontier.
 
 ### 9. Match and Discussion
 

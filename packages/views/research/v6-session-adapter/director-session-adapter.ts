@@ -115,9 +115,12 @@ export function adaptResearchV6DirectorCanvas(
     merged[successorId] = [...new Set(inputIds)];
   }
 
-  const branchIds = [
-    ...new Set(visibleNodes.flatMap((node) => node.branchIds)),
-  ];
+  const territoryById = new Map(
+    visibleNodes.flatMap((node) =>
+      node.territory ? [[node.territory.branchId, node.territory] as const] : [],
+    ),
+  );
+  const territoryIds = [...territoryById.keys()].sort();
 
   return {
     graph: {
@@ -137,6 +140,7 @@ export function adaptResearchV6DirectorCanvas(
           payload: {
             canonical_ref: node.canonicalRef,
             branch_ids: node.branchIds,
+            territory: node.territory,
             projection_state: node.state,
             projection_tier: node.tier,
             assigned_agent: assignedAgent
@@ -161,7 +165,7 @@ export function adaptResearchV6DirectorCanvas(
           // Unknown future tiers retain their canonical value in payload while
           // degrading to the neutral M visual instead of breaking the canvas.
           level: rendererLevel(node),
-          cluster_id: node.branchIds[0] ?? null,
+          cluster_id: node.territory?.branchId ?? null,
           confidence: null,
           goal_version_id: null,
           derived_from: null,
@@ -192,17 +196,17 @@ export function adaptResearchV6DirectorCanvas(
           edge_type: edge.kind,
           created_at: "",
         })),
-      clusters: branchIds.map((branchId) => ({
-        id: branchId,
+      clusters: territoryIds.map((territoryId) => ({
+        id: territoryId,
         session_id: projection.runId,
-        name: branchId,
-        label: branchId,
+        name: territoryById.get(territoryId)?.label ?? territoryId,
+        label: territoryById.get(territoryId)?.label ?? territoryId,
         level: "m",
         cluster_type: "branch",
         goal_version_id: null,
         payload: {
           member_node_ids: visibleNodes
-            .filter((node) => node.branchIds.includes(branchId))
+            .filter((node) => node.territory?.branchId === territoryId)
             .map((node) => node.id),
         },
         created_at: "",

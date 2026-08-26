@@ -56,6 +56,15 @@ type ResidentRuntimeLivenessChecker interface {
 	RuntimeAlive() (alive bool, known bool)
 }
 
+// ResidentProgressListener is an optional capability for resident backends
+// whose providers stream traffic that maps to no Message (empty deltas,
+// unknown update types). The daemon registers a callback that refreshes the
+// resident runtime's activity clock, so a long generation with no tool calls
+// is recognized as live work instead of tripping the stall watchdog.
+type ResidentProgressListener interface {
+	SetProgressListener(func())
+}
+
 // ResidentRuntimeStarter starts the long-lived provider child without a turn.
 // Raft only treats an Agent as running after this spawn; constructing the
 // adapter is not residency.

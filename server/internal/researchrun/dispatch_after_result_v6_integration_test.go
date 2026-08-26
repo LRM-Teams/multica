@@ -85,12 +85,13 @@ func TestV6DirectorRejectsSecondActiveAtomicWorkForSameAgent(t *testing.T) {
 	if err := run.pool.QueryRow(run.ctx, `SELECT state_version FROM research_session WHERE id=$1::uuid`, run.fixture.sessionID).Scan(&stateVersion); err != nil {
 		t.Fatal(err)
 	}
+	branchID := seedV6DirectorChildBranch(t, run, "second-active:", "核验第二个独立方向。", 1)
 	payload, err := json.Marshal(map[string]any{
 		"kind": "research", "assignee_agent_id": run.fixture.reporterID,
 		"mission": "核验第二个独立方向。", "expected_result_schema_id": "atomic_result_submission",
 		"payload_schema_id": "research.second.v1",
 		"payload":           map[string]any{"task_specific_schema": map[string]any{"type": "object"}},
-		"priority":          0.9, "max_attempts": 2, "branch_ids": []string{},
+		"priority":          0.9, "max_attempts": 2, "branch_ids": []string{branchID},
 	})
 	if err != nil {
 		t.Fatal(err)

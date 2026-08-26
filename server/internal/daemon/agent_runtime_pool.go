@@ -362,6 +362,13 @@ func (p *agentRuntimePool) acquire(request agentRuntimeAcquireRequest) (*agentRu
 		slot.provider = request.Identity.Provider
 		slot.agentInstanceID = ""
 		slot.processInstanceID = ""
+		// Providers whose stream traffic maps to no Message (Pi's empty or
+		// unknown update events) still prove liveness. Refresh the silence
+		// clock on every stream event so a long generation with no tool calls
+		// is not mistaken for a wedged runtime.
+		if listener, ok := created.(agent.ResidentProgressListener); ok {
+			listener.SetProgressListener(slot.stampRuntimeActivity)
+		}
 		// Re-arm the termination signal for this new process. A stale closed
 		// channel from a previous backend on this same slot must never make
 		// the next awaitTerminated return instantly.
@@ -486,6 +493,19 @@ func (slot *agentRuntimeSlot) silentFor(now time.Time) (time.Duration, bool) {
 	slot.mu.Lock()
 	defer slot.mu.Unlock()
 	return slot.silentForLocked(now)
+}
+
+// stampRuntimeActivity refreshes the silence clock from the backend's stream
+// reader goroutine (ResidentProgressListener). It deliberately touches only
+// lastRuntimeActivityAt: progress evidence must never fabricate a Message or
+// an Activity observation.
+func (slot *agentRuntimeSlot) stampRuntimeActivity() {
+	if slot == nil {
+		return
+	}
+	slot.mu.Lock()
+	slot.lastRuntimeActivityAt = time.Now()
+	slot.mu.Unlock()
 }
 
 // silentForLocked is silentFor for callers that already hold slot.mu.

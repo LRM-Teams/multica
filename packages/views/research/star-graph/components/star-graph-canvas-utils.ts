@@ -285,8 +285,9 @@ const NEW_DIRECTION_EDGE_TYPES = new Set(["restart_of"]);
 export function quadraticEdgePath(
   from: { x: number; y: number },
   to: { x: number; y: number },
+  curveKey = "",
 ): string {
-  const control = quadraticEdgeControl(from, to);
+  const control = quadraticEdgeControl(from, to, curveKey);
   return [
     `M ${from.x.toFixed(1)} ${from.y.toFixed(1)}`,
     `Q ${control.x.toFixed(1)} ${control.y.toFixed(1)}`,
@@ -297,19 +298,37 @@ export function quadraticEdgePath(
 function quadraticEdgeControl(
   from: { x: number; y: number },
   to: { x: number; y: number },
+  curveKey = "",
 ): { x: number; y: number } {
   const dx = to.x - from.x;
   const dy = to.y - from.y;
   const len = Math.hypot(dx, dy) || 1;
-  const bend = Math.min(32, len * 0.09);
+  const seed = hashCurveKey(
+    curveKey ||
+      `${Math.round(from.x)}:${Math.round(from.y)}:${Math.round(to.x)}:${Math.round(to.y)}`,
+  );
+  const direction = (seed & 1) === 0 ? -1 : 1;
+  const profile = (seed >>> 1) % 7;
+  const bendRatio = 0.055 + profile * 0.012;
+  const bend = Math.min(96, Math.max(Math.min(12, len * 0.04), len * bendRatio));
   return {
-    x: (from.x + to.x) / 2 - (dy / len) * bend,
-    y: (from.y + to.y) / 2 + (dx / len) * bend,
+    x: (from.x + to.x) / 2 - (dy / len) * bend * direction,
+    y: (from.y + to.y) / 2 + (dx / len) * bend * direction,
   };
+}
+
+function hashCurveKey(value: string): number {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return hash >>> 0;
 }
 
 export function isEdgeLabelClear(
   relation: {
+    id?: string;
     fromNodeId: string;
     toNodeId: string;
     from: { x: number; y: number };
@@ -318,7 +337,11 @@ export function isEdgeLabelClear(
   obstacles: readonly { id: string; x: number; y: number; radius: number }[],
   clearance = 18,
 ): boolean {
-  const control = quadraticEdgeControl(relation.from, relation.to);
+  const control = quadraticEdgeControl(
+    relation.from,
+    relation.to,
+    relation.id ?? "",
+  );
   const labelPoint = {
     x: relation.from.x * 0.25 + control.x * 0.5 + relation.to.x * 0.25,
     y: relation.from.y * 0.25 + control.y * 0.5 + relation.to.y * 0.25,

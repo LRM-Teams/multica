@@ -625,6 +625,10 @@ func (h *Handler) RescanIssuePullRequest(w http.ResponseWriter, r *http.Request)
 	if _, ok = h.requireWorkspaceRole(w, r, uuidToString(issue.WorkspaceID), "issue not found", "owner", "admin"); !ok {
 		return
 	}
+	h.rescanIssuePullRequest(w, r, issue)
+}
+
+func (h *Handler) rescanIssuePullRequest(w http.ResponseWriter, r *http.Request, issue db.Issue) {
 	if !issue.ProjectID.Valid {
 		writeError(w, http.StatusConflict, "issue is not assigned to a project")
 		return
@@ -684,11 +688,12 @@ func (h *Handler) RescanIssuePullRequest(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	closing := containsIdentifier(extractClosingIdentifiers(pullRequest.Title, pullRequest.Body), identifier)
+	state := derivePRState(pullRequest.State, pullRequest.Draft, pullRequest.Merged)
 	if err = h.Queries.LinkIssueToPullRequest(r.Context(), db.LinkIssueToPullRequestParams{
 		IssueID:             issue.ID,
 		PullRequestID:       pr.ID,
 		CloseIntent:         closing,
-		PreserveCloseIntent: false,
+		PreserveCloseIntent: state == "merged" || state == "closed",
 		LinkedByType:        strToText("system"),
 	}); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to link pull request")

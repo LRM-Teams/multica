@@ -1535,6 +1535,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 						r.Post("/tasks/{taskId}/attempts/{attemptId}/result", h.SubmitAgentResearchTaskResult)
 						r.Route("/work-items/{workItemId}/attempts/{attemptId}", func(r chi.Router) {
 							r.Get("/manifest", h.GetAgentResearchV6WorkManifest)
+							r.Get("/artifacts/{artifactVersionId}", h.GetAgentResearchV6WorkArtifact)
 							r.Get("/director-brief", h.GetAgentResearchV6DirectorBrief)
 							r.Post("/director-brief-acks", h.AcknowledgeAgentResearchV6DirectorBrief)
 							r.Get("/catalog", h.GetAgentResearchV6WorkCatalog)

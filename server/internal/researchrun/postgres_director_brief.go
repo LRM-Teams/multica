@@ -275,7 +275,35 @@ func directorBriefFrontierSummary(summary string, rawOpenQuestions json.RawMessa
 }
 
 func (s *PostgresStore) loadV6DirectorControlFacts(ctx context.Context, workspaceID, runID string, facts *DirectorBriefFacts) error {
-	rows, err := s.pool.Query(ctx, `SELECT id::text,kind,status,kind||' discussion',updated_at FROM research_discussion WHERE workspace_id=$1::uuid AND session_id=$2::uuid ORDER BY updated_at DESC,id LIMIT 256`, workspaceID, runID)
+	rows, err := s.pool.Query(ctx, `SELECT discussion.id::text,discussion.kind,discussion.status,
+		left(format('讨论类型：%s；输入版本：%s；最新投票：%s；可见结论：%s',
+			discussion.kind,COALESCE(inputs.summary,'无'),COALESCE(votes.summary,'无'),COALESCE(turns.summary,'无')),8192),
+		discussion.updated_at
+		FROM research_discussion discussion
+		LEFT JOIN LATERAL (
+			SELECT string_agg(input.node_artifact_version_id::text,', ' ORDER BY input.ordinal) AS summary
+			FROM research_discussion_input input
+			WHERE input.workspace_id=discussion.workspace_id AND input.session_id=discussion.session_id
+			  AND input.discussion_id=discussion.id
+		) inputs ON true
+		LEFT JOIN LATERAL (
+			SELECT string_agg(latest.vote||'：'||left(latest.reason,512),' | ' ORDER BY latest.agent_id::text) AS summary
+			FROM (
+				SELECT DISTINCT ON (vote.agent_id) vote.agent_id,vote.vote,vote.reason
+				FROM research_discussion_vote vote
+				WHERE vote.workspace_id=discussion.workspace_id AND vote.session_id=discussion.session_id
+				  AND vote.discussion_id=discussion.id AND vote.discussion_revision=discussion.revision
+				ORDER BY vote.agent_id,vote.created_at DESC,vote.id DESC
+			) latest
+		) votes ON true
+		LEFT JOIN LATERAL (
+			SELECT string_agg(left(turn.visible_message,1024),' | ' ORDER BY turn.ordinal) AS summary
+			FROM research_discussion_turn turn
+			WHERE turn.workspace_id=discussion.workspace_id AND turn.session_id=discussion.session_id
+			  AND turn.discussion_id=discussion.id AND turn.discussion_revision=discussion.revision
+		) turns ON true
+		WHERE discussion.workspace_id=$1::uuid AND discussion.session_id=$2::uuid
+		ORDER BY discussion.updated_at DESC,discussion.id LIMIT 256`, workspaceID, runID)
 	if err != nil {
 		return err
 	}

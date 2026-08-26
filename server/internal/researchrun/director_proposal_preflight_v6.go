@@ -27,7 +27,7 @@ type v6DirectorPreflightFacts struct {
 	topLevelBranches     int
 	proposedTopLevel     int
 	convergenceReady     bool
-	activeConvergence    int
+	openConvergence      int
 }
 
 func (s *PostgresStore) preflightV6DirectorProposal(ctx context.Context, proposal v6DirectorProposal) error {
@@ -116,13 +116,16 @@ func (s *PostgresStore) preflightV6DirectorProposal(ctx context.Context, proposa
 			AND NOT EXISTS (SELECT 1 FROM research_node_absorption absorbed
 				WHERE absorbed.workspace_id=result.workspace_id AND absorbed.session_id=result.session_id
 				AND absorbed.input_artifact_version_id=result.artifact_version_id)),
-		(SELECT COALESCE(sum(jsonb_array_length(COALESCE(result.open_questions,'[]'::jsonb))),0)::int
+		((SELECT COALESCE(sum(jsonb_array_length(COALESCE(result.open_questions,'[]'::jsonb))),0)::int
 			FROM research_result_node result
 			WHERE result.workspace_id=s.workspace_id AND result.session_id=s.id
 			AND result.conclusion_state NOT IN ('invalid','refuted')
 			AND NOT EXISTS (SELECT 1 FROM research_node_absorption absorbed
 				WHERE absorbed.workspace_id=result.workspace_id AND absorbed.session_id=result.session_id
-				AND absorbed.input_artifact_version_id=result.artifact_version_id)),
+				AND absorbed.input_artifact_version_id=result.artifact_version_id))
+		 + (SELECT count(*)::int FROM research_discussion unresolved_question
+			WHERE unresolved_question.workspace_id=s.workspace_id AND unresolved_question.session_id=s.id
+			  AND unresolved_question.status='escalated')),
 		(SELECT count(*)::int FROM research_branch branch
 			WHERE branch.workspace_id=s.workspace_id AND branch.session_id=s.id
 			AND branch.parent_branch_id IS NOT NULL AND branch.status IN ('proposed','active')),
@@ -150,14 +153,17 @@ func (s *PostgresStore) preflightV6DirectorProposal(ctx context.Context, proposa
 			GROUP BY candidate.tier
 			HAVING count(DISTINCT candidate.node_artifact_version_id) >= 2
 		),
-		(SELECT count(*)::int FROM research_work_item convergence
+		((SELECT count(*)::int FROM research_work_item convergence
 			WHERE convergence.workspace_id=s.workspace_id AND convergence.session_id=s.id
 			  AND convergence.kind IN ('discussion','integration')
 			  AND convergence.status IN ('ready','dispatching','enqueued','running','awaiting_input'))
+		 + (SELECT count(*)::int FROM research_discussion unresolved
+			WHERE unresolved.workspace_id=s.workspace_id AND unresolved.session_id=s.id
+			  AND unresolved.status='escalated'))
 		FROM research_session s WHERE s.workspace_id=$1::uuid AND s.id=$2::uuid`, proposal.WorkspaceID, proposal.RunID).Scan(
 		&facts.maxParallelTasks, &facts.workerCount, &facts.pendingAgentCount, &facts.activeAtomicWork,
 		&facts.resultCount, &facts.unresolvedQuestions, &facts.childBranches,
-		&facts.convergenceReady, &facts.activeConvergence)
+		&facts.convergenceReady, &facts.openConvergence)
 	if err != nil {
 		return err
 	}
@@ -257,7 +263,7 @@ func validateV6ParallelResearchPlan(facts v6DirectorPreflightFacts) error {
 	if facts.resultCount == 0 && facts.proposedAtomicWork > 0 && facts.proposedWorkBranches < parallelTarget {
 		return fmt.Errorf("%w: 首轮 atomic Work 必须覆盖至少 %d 个不同的子 Branch", ErrInvalidContract, parallelTarget)
 	}
-	if facts.convergenceReady && facts.activeConvergence == 0 && facts.proposedConvergence == 0 {
+	if facts.convergenceReady && facts.openConvergence == 0 && facts.proposedConvergence == 0 {
 		return fmt.Errorf("%w: 当前 Frontier 已有可合并的同层节点，必须先创建 integration Discussion，推进 S→M→L→XL→XXL 收敛", ErrInvalidContract)
 	}
 	if facts.convergenceReady && facts.proposedConvergence > 0 && facts.proposedAtomicWork > 0 {

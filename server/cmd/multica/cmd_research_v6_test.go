@@ -12,14 +12,15 @@ import (
 )
 
 const (
-	v6CLIRunID     = "00000000-0000-4000-8000-000000000003"
-	v6CLIWorkID    = "00000000-0000-4000-8000-000000000212"
-	v6CLIAttemptID = "00000000-0000-4000-8000-000000000213"
+	v6CLIRunID      = "00000000-0000-4000-8000-000000000003"
+	v6CLIWorkID     = "00000000-0000-4000-8000-000000000212"
+	v6CLIAttemptID  = "00000000-0000-4000-8000-000000000213"
+	v6CLIArtifactID = "00000000-0000-4000-8000-000000000214"
 )
 
 func TestResearchV6CommandsAreRegistered(t *testing.T) {
 	for _, name := range []string{
-		"work-manifest", "director-brief", "director-brief-ack",
+		"work-manifest", "work-artifact", "director-brief", "director-brief-ack",
 		"work-catalog", "work-catalog-ack", "work-submit", "report-upload",
 	} {
 		command, _, err := researchCmd.Find([]string{name})
@@ -45,6 +46,10 @@ func TestResearchV6ReadCommandsUseTaskBoundAgentRoutes(t *testing.T) {
 	if err := runResearchV6WorkManifest(manifestCmd, []string{v6CLIRunID, v6CLIWorkID, v6CLIAttemptID}); err != nil {
 		t.Fatal(err)
 	}
+	artifactCmd := newResearchV6TestCommand()
+	if err := runResearchV6WorkArtifact(artifactCmd, []string{v6CLIRunID, v6CLIWorkID, v6CLIAttemptID, v6CLIArtifactID}); err != nil {
+		t.Fatal(err)
+	}
 	briefCmd := newResearchV6TestCommand()
 	briefCmd.Flags().String("cursor", "4", "")
 	if err := runResearchV6DirectorBrief(briefCmd, []string{v6CLIRunID, v6CLIWorkID, v6CLIAttemptID}); err != nil {
@@ -60,6 +65,7 @@ func TestResearchV6ReadCommandsUseTaskBoundAgentRoutes(t *testing.T) {
 	base := "/api/agent/research/sessions/" + v6CLIRunID + "/work-items/" + v6CLIWorkID + "/attempts/" + v6CLIAttemptID
 	want := []string{
 		"GET " + base + "/manifest",
+		"GET " + base + "/artifacts/" + v6CLIArtifactID,
 		"GET " + base + "/director-brief?cursor=4",
 		"GET " + base + "/catalog?cursor=next+page&view=same_tier",
 	}

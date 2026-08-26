@@ -256,6 +256,10 @@ func (e *Engine) WorkManifest(ctx context.Context, access V6AttemptAccess) (V6Wo
 	return (workManifestModule{store: e.store}).Get(ctx, access)
 }
 
+func (e *Engine) WorkArtifact(ctx context.Context, access V6AttemptAccess, artifactVersionID string) (V6WorkArtifact, error) {
+	return (workArtifactModule{store: e.store}).Get(ctx, access, artifactVersionID)
+}
+
 func (e *Engine) WorkCatalog(ctx context.Context, in V6CatalogRequest) (V6CatalogPage, error) {
 	return (workCatalogModule{store: e.store}).Get(ctx, in)
 }

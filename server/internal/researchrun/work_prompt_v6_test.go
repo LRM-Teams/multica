@@ -76,6 +76,8 @@ func TestRonaldoV6DirectorProtocolRequiresParallelChineseResearch(t *testing.T) 
 		"S promotion 为 M",
 		"全体同意后自动创建 integration Work",
 		"持续推进 S→M→L→XL→XXL",
+		"不得对同一输入组合重复 create_integration",
+		"拆成独立 atomic Work",
 		"一级研究方向总数不得超过 max_parallel_tasks",
 	} {
 		if !strings.Contains(RonaldoV6DirectorSystemProtocol, want) {
@@ -87,6 +89,10 @@ func TestRonaldoV6DirectorProtocolRequiresParallelChineseResearch(t *testing.T) 
 func TestBuildV6WorkDispatchPromptMakesDiscussionExecutable(t *testing.T) {
 	manifest := validV6DispatchPromptManifest(t, map[string]any{
 		"expected_result_schema": string(V6ContractDiscussionTurnSubmission),
+		"artifacts": []any{
+			map[string]any{"artifact_version_id": "00000000-0000-4000-8000-000000000304", "kind": "result_artifact", "representation": "full", "representation_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "use_kind": "integration_input", "reason": "冻结输入"},
+			map[string]any{"artifact_version_id": "00000000-0000-4000-8000-000000000306", "kind": "result_artifact", "representation": "full", "representation_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "use_kind": "integration_input", "reason": "冻结输入"},
+		},
 		"task_specific_schema": map[string]any{
 			"task_context": map[string]any{
 				"discussion_id":       "00000000-0000-4000-8000-000000000301",
@@ -105,6 +111,8 @@ func TestBuildV6WorkDispatchPromptMakesDiscussionExecutable(t *testing.T) {
 		`"discussion_revision": 1`,
 		`"vote":"<accept|reject|uncertain>"`,
 		"不得因为数量足够就同意融合",
+		"multica research work-artifact 00000000-0000-4000-8000-000000000003 00000000-0000-4000-8000-000000000212 00000000-0000-4000-8000-000000000213 00000000-0000-4000-8000-000000000304",
+		"任一正文读取失败时，不得凭摘要猜测",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("discussion prompt missing %q:\n%s", want, prompt)
@@ -115,6 +123,10 @@ func TestBuildV6WorkDispatchPromptMakesDiscussionExecutable(t *testing.T) {
 func TestBuildV6WorkDispatchPromptMakesIntegrationExecutable(t *testing.T) {
 	manifest := validV6DispatchPromptManifest(t, map[string]any{
 		"expected_result_schema": string(V6ContractIntegrationSubmission),
+		"artifacts": []any{
+			map[string]any{"artifact_version_id": "00000000-0000-4000-8000-000000000304", "kind": "result_artifact", "representation": "full", "representation_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "use_kind": "integration_input", "reason": "冻结输入"},
+			map[string]any{"artifact_version_id": "00000000-0000-4000-8000-000000000306", "kind": "result_artifact", "representation": "full", "representation_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "use_kind": "integration_input", "reason": "冻结输入"},
+		},
 		"branch_refs": []any{
 			map[string]any{"id": "00000000-0000-4000-8000-000000000302", "state_version": 2},
 		},
@@ -140,6 +152,7 @@ func TestBuildV6WorkDispatchPromptMakesIntegrationExecutable(t *testing.T) {
 		`"output_tier": "<M|L|XL|XXL>"`,
 		`"steward_agent_id": "00000000-0000-4000-8000-000000000009"`,
 		"不得改写 Manifest 冻结的 input_nodes",
+		"multica research work-artifact 00000000-0000-4000-8000-000000000003 00000000-0000-4000-8000-000000000212 00000000-0000-4000-8000-000000000213 00000000-0000-4000-8000-000000000306",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("integration prompt missing %q:\n%s", want, prompt)

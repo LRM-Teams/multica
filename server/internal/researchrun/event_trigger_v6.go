@@ -53,6 +53,11 @@ func (s *PostgresStore) ProcessV6EventTriggers(ctx context.Context, limit int) (
 						)
 						OR strpos(COALESCE(frontier #>> '{brief_summary}',''),$1)>0
 					)
+				))
+				AND (e.event_type<>'v6_discussion_close' OR e.payload->>'status'<>'escalated' OR EXISTS (
+					SELECT 1 FROM research_work_item followup
+					WHERE followup.workspace_id=e.workspace_id AND followup.session_id=e.session_id
+					  AND followup.kind='research' AND followup.created_at>e.created_at
 				)))
 			AND NOT EXISTS (SELECT 1 FROM research_work_item active WHERE active.workspace_id=e.workspace_id AND active.session_id=e.session_id AND active.kind='director'
 				AND active.status IN ('ready','dispatching','enqueued','running','awaiting_input'))

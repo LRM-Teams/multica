@@ -137,6 +137,27 @@ func (h *Handler) GetAgentResearchV6WorkManifest(w http.ResponseWriter, r *http.
 	_, _ = w.Write(manifest.Bytes)
 }
 
+func (h *Handler) GetAgentResearchV6WorkArtifact(w http.ResponseWriter, r *http.Request) {
+	service, ok := h.researchV6Submission(w)
+	if !ok {
+		return
+	}
+	access, ok := h.authorizeResearchV6Attempt(w, r)
+	if !ok {
+		return
+	}
+	artifactVersionID := chi.URLParam(r, "artifactVersionId")
+	if _, valid := parseUUIDOrBadRequest(w, artifactVersionID, "artifact_version_id"); !valid {
+		return
+	}
+	artifact, err := service.WorkArtifact(r.Context(), access, artifactVersionID)
+	if err != nil {
+		writeResearchV6DomainError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, artifact)
+}
+
 func (h *Handler) GetAgentResearchV6WorkCatalog(w http.ResponseWriter, r *http.Request) {
 	service, ok := h.researchV6Submission(w)
 	if !ok {

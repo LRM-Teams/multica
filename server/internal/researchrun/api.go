@@ -32,6 +32,7 @@ type ResearchRun interface {
 // child-table stores.
 type ResearchRunSubmission interface {
 	WorkManifest(context.Context, V6AttemptAccess) (V6WorkManifest, error)
+	WorkArtifact(context.Context, V6AttemptAccess, string) (V6WorkArtifact, error)
 	WorkCatalog(context.Context, V6CatalogRequest) (V6CatalogPage, error)
 	AcknowledgeWorkCatalog(context.Context, AcknowledgeV6CatalogInput) error
 	ReportWorkProgress(context.Context, ReportV6WorkProgressInput) error

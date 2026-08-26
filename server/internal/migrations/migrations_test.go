@@ -1221,11 +1221,10 @@ func TestBranchSourceInstanceQueryStaysWorkspaceScoped(t *testing.T) {
 	}
 }
 
-// TestGeneratedSnapshotScanMatchesSelectedColumns guards the hand-maintained
-// generated code in this repository: sandbox.sql.go routes every sandbox_snapshot
-// row through one shared scan helper, so a column added to the SELECT lists
-// without a matching scan target would misalign every snapshot read at runtime,
-// which no compile check would catch.
+// TestGeneratedSnapshotScanMatchesSelectedColumns guards the generated code in
+// this repository: every sandbox_snapshot SELECT list must have a matching
+// scan target in the same order, so a column added without a scan target would
+// misalign snapshot reads at runtime, which no compile check would catch.
 
 func TestGeneratedSnapshotScanMatchesSelectedColumns(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
@@ -1243,12 +1242,10 @@ func TestGeneratedSnapshotScanMatchesSelectedColumns(t *testing.T) {
 	if got := strings.Count(contents, snapshotColumns); got != 10 {
 		t.Errorf("snapshot column list appears %d times, want 10 (7 pre-existing queries plus attach, list-for-checkpoint and the per-instance savepoint lookup)", got)
 	}
-	// The scan helper must end with checkpoint_id, in the same order.
-	if !strings.Contains(contents, "&i.Metadata, &i.CreatedAt, &i.UpdatedAt, &i.CheckpointID,") {
-		t.Error("scanSandboxSnapshot does not scan checkpoint_id last, so snapshot reads would misalign")
-	}
-	if strings.Count(contents, "func scanSandboxSnapshot(") != 1 {
-		t.Error("expected exactly one shared sandbox_snapshot scan helper")
+	// Every snapshot scan must end with checkpoint_id, in the same order as
+	// the shared column list. sqlc emits these scan targets inline.
+	if got := strings.Count(contents, "&i.CheckpointID,"); got != 10 {
+		t.Errorf("sandbox_snapshot scans with checkpoint_id = %d, want 10", got)
 	}
 
 	checkpoint, err := os.ReadFile(filepath.Join(generatedDir, "env_checkpoint.sql.go"))

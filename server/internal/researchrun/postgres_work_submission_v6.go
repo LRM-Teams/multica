@@ -48,6 +48,71 @@ func (s *PostgresStore) AuthorizeV6Submission(ctx context.Context, access V6Atte
 	return binding, nil
 }
 
+// RejectV6DirectorBoundaryAttempt settles an autonomous Director cycle when
+// its envelope fails the strict HTTP boundary before a Submission can be
+// recorded. Keeping the Attempt active would hide the failure from the event
+// trigger and leave the Run waiting for a long execution lease.
+func (s *PostgresStore) RejectV6DirectorBoundaryAttempt(ctx context.Context, access V6AttemptAccess, diagnostic string) error {
+	tx, err := s.beginResearchTx(ctx, txOpV6DirectorProposalComplete, pgx.TxOptions{})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = lockRunForMutation(ctx, tx, access.RunID, access.WorkspaceID); err != nil {
+		return err
+	}
+	var membershipID string
+	err = tx.QueryRow(ctx, `UPDATE research_work_item_attempt a
+		SET status='failed',failure_class='contract_rejected',diagnostics=$6,completed_at=now(),updated_at=now()
+		FROM research_work_item w
+		WHERE (w.workspace_id,w.session_id,w.id)=(a.workspace_id,a.session_id,a.work_item_id)
+		  AND a.workspace_id=$1::uuid AND a.session_id=$2::uuid AND a.work_item_id=$3::uuid AND a.id=$4::uuid
+		  AND a.assigned_agent_id=$5::uuid AND a.status IN ('dispatching','running')
+		  AND w.kind='director' AND w.expected_result_schema_id='director_action_proposal'
+		  AND w.status IN ('dispatching','running','awaiting_input')
+		  AND ($7='' OR a.inbox_task_id=$7::uuid)
+		RETURNING a.membership_id::text`, access.WorkspaceID, access.RunID, access.WorkItemID, access.AttemptID,
+		access.AgentID, diagnostic, access.InboxTaskID).Scan(&membershipID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrAttemptNotAssigned
+	}
+	if err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE research_work_item
+		SET status='failed',terminal_reason_code='contract_rejected',terminal_reason_detail=$5,
+		    lease_token=NULL,lease_expires_at=NULL,state_version=state_version+1,updated_at=now()
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid
+		  AND assigned_agent_id=$4::uuid AND kind='director' AND status IN ('dispatching','running','awaiting_input')`,
+		access.WorkspaceID, access.RunID, access.WorkItemID, access.AgentID, diagnostic); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE research_director_cycle
+		SET status='failed',failure_class='contract_rejected',diagnostics=$4,completed_at=now()
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND work_item_id=$3::uuid
+		  AND status IN ('pending','running')`, access.WorkspaceID, access.RunID, access.WorkItemID, diagnostic); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE research_team_membership m SET state='idle'
+		WHERE m.workspace_id=$1::uuid AND m.session_id=$2::uuid AND m.id=$3::uuid AND m.state='working'
+		  AND NOT EXISTS (
+		    SELECT 1 FROM research_work_item_attempt active
+		    WHERE active.workspace_id=m.workspace_id AND active.session_id=m.session_id
+		      AND active.membership_id=m.id AND active.status IN ('dispatching','running')
+		  )`, access.WorkspaceID, access.RunID, membershipID); err != nil {
+		return err
+	}
+	if _, err = appendEvent(ctx, tx, access.WorkspaceID, access.RunID, "v6_work_submission_rejected",
+		"v6-director-boundary-rejected:"+access.AttemptID, "system", "", map[string]any{
+			"work_item_id": access.WorkItemID, "work_item_attempt_id": access.AttemptID,
+			"contract_kind": V6ContractDirectorActionProposal, "failure_class": "contract_rejected",
+			"reason": diagnostic, "boundary_rejection": true,
+		}); err != nil {
+		return err
+	}
+	return s.commitResearchTx(ctx, txOpV6DirectorProposalComplete, tx)
+}
+
 func (s *PostgresStore) RecordV6Submission(ctx context.Context, access V6AttemptAccess, decoded DecodedV6Contract, requestID string) (V6SubmissionOutcome, error) {
 	tx, err := s.beginResearchTx(ctx, txOpV6SubmissionRecord, pgx.TxOptions{})
 	if err != nil {

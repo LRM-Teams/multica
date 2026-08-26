@@ -53,9 +53,19 @@ jobs:
             AND cycle.id=(SELECT id FROM research_director_cycle WHERE session_id=:'run_id'::uuid ORDER BY created_at DESC LIMIT 1)
           GROUP BY cycle.id,action.value->>'kind' ORDER BY action.value->>'kind';
 
-          SELECT 'TEAM_GROUP',role,state,count(*)
-          FROM research_team_membership WHERE session_id=:'run_id'::uuid
-          GROUP BY role,state ORDER BY role,state;
+          SELECT 'SUBMISSION_ACTIONS',sub.id,action.value->>'kind',count(*)
+          FROM research_v6_work_submission sub
+          CROSS JOIN LATERAL jsonb_array_elements(COALESCE(sub.envelope->'actions','[]'::jsonb)) action(value)
+          WHERE sub.session_id=:'run_id'::uuid AND sub.contract_kind='director_action_proposal'
+            AND sub.id=(SELECT id FROM research_v6_work_submission
+              WHERE session_id=:'run_id'::uuid AND contract_kind='director_action_proposal'
+              ORDER BY created_at DESC LIMIT 1)
+          GROUP BY sub.id,action.value->>'kind' ORDER BY action.value->>'kind';
+
+          SELECT 'TEAM_GROUP',COALESCE(to_jsonb(m)->>'role','legacy'),state,count(*)
+          FROM research_team_membership m WHERE session_id=:'run_id'::uuid
+          GROUP BY COALESCE(to_jsonb(m)->>'role','legacy'),state
+          ORDER BY COALESCE(to_jsonb(m)->>'role','legacy'),state;
 
           SELECT 'FRONTIER_FACTS',count(*) FILTER (WHERE result.conclusion_state NOT IN ('invalid','refuted')),
                  COALESCE(sum(jsonb_array_length(COALESCE(result.open_questions,'[]'::jsonb)))

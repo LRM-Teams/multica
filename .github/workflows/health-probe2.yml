@@ -84,6 +84,18 @@ jobs:
           SELECT 'EVENT_RECENT',sequence,event_type,created_at,COALESCE(payload->>'recovery_kind','')
           FROM research_run_event WHERE session_id=:'run_id'::uuid
           ORDER BY sequence DESC LIMIT 30;
+
+          SELECT 'TRIGGER_FACTS',e.sequence,e.event_type,
+            (SELECT count(*) FROM research_director_cycle c WHERE c.session_id=e.session_id
+              AND c.trigger_from_sequence<=e.sequence AND c.trigger_through_sequence>=e.sequence),
+            (SELECT count(*) FROM research_work_item w WHERE w.session_id=e.session_id AND w.kind='director'
+              AND w.status IN ('ready','dispatching','enqueued','running','awaiting_input')),
+            (SELECT count(*) FROM research_v6_outbox o WHERE o.session_id=e.session_id
+              AND o.kind IN ('create_agent','archive_agent') AND o.status IN ('pending','delivering')),
+            (SELECT count(*) FROM research_director_assignment a JOIN research_session s ON s.current_director_assignment_id=a.id
+              WHERE s.id=e.session_id AND a.status='active')
+          FROM research_run_event e WHERE e.session_id=:'run_id'::uuid AND e.event_type='v6_work_submission_rejected'
+          ORDER BY e.sequence DESC LIMIT 1;
           SQL
 
           followup_count="$(

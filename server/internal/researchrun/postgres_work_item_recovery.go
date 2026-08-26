@@ -138,31 +138,49 @@ func (s *PostgresStore) RecoverExpiredV6WorkItems(ctx context.Context, limit int
 	defer tx.Rollback(ctx)
 	rows, err := tx.Query(ctx, `
 		WITH invalid_manifest AS (
-		  SELECT DISTINCT w.id
+		  SELECT DISTINCT w.workspace_id,w.session_id,w.id,
+		    (w.kind='director' AND w.expected_result_schema_id='director_action_proposal') AS stale_director_manifest
 		  FROM research_work_item w
-		  JOIN research_work_item_attempt active_attempt ON active_attempt.work_item_id=w.id
+		  JOIN research_work_item_attempt active_attempt
+		    ON (active_attempt.workspace_id,active_attempt.session_id,active_attempt.work_item_id)=(w.workspace_id,w.session_id,w.id)
 		    AND active_attempt.status IN ('dispatching','running')
-		  JOIN research_v6_work_item_branch branch_scope ON branch_scope.work_item_id=w.id
-		  WHERE w.expected_result_schema_id='atomic_result_submission'
-		    AND w.status IN ('dispatching','running')
-		    AND COALESCE(active_attempt.manifest->'branch_refs','[]'::jsonb)='[]'::jsonb
+		  WHERE w.status IN ('dispatching','running')
+		    AND (
+		      (w.expected_result_schema_id='atomic_result_submission'
+		        AND EXISTS (SELECT 1 FROM research_v6_work_item_branch branch_scope
+		          WHERE (branch_scope.workspace_id,branch_scope.session_id,branch_scope.work_item_id)=(w.workspace_id,w.session_id,w.id))
+		        AND COALESCE(active_attempt.manifest->'branch_refs','[]'::jsonb)='[]'::jsonb)
+		      OR
+		      (w.kind='director' AND w.expected_result_schema_id='director_action_proposal'
+		        AND (
+		          NOT (COALESCE(active_attempt.manifest #> '{task_specific_schema,payload_schemas,work.create.v1,required}','[]'::jsonb) @> '["branch_ids"]'::jsonb)
+		          OR active_attempt.manifest #>> '{task_specific_schema,payload_schemas,work.create.v1,properties,kind,const}' IS DISTINCT FROM 'research'
+		          OR active_attempt.manifest #>> '{task_specific_schema,payload_schemas,work.create.v1,properties,expected_result_schema_id,const}' IS DISTINCT FROM 'atomic_result_submission'
+		          OR NOT (COALESCE(active_attempt.manifest #> '{task_specific_schema,payload_schemas,work.create.v1,properties,payload,required}','[]'::jsonb) @> '["task_specific_schema"]'::jsonb)
+		        ))
+		    )
 		    AND NOT EXISTS (
 		      SELECT 1 FROM research_v6_work_submission sub
-		      WHERE sub.attempt_id=active_attempt.id AND sub.status IN ('received','processing','accepted')
+		      WHERE (sub.workspace_id,sub.session_id,sub.attempt_id)=(active_attempt.workspace_id,active_attempt.session_id,active_attempt.id)
+		        AND sub.status IN ('received','processing','accepted')
 		    )
 		), terminal_inbox AS (
-		  SELECT DISTINCT active_attempt.work_item_id
+		  SELECT DISTINCT active_attempt.workspace_id,active_attempt.session_id,active_attempt.work_item_id
 		  FROM research_work_item_attempt active_attempt
-		  JOIN agent_inbox_event inbox ON inbox.id=active_attempt.inbox_task_id
+		  JOIN agent_inbox_event inbox
+		    ON (inbox.workspace_id,inbox.id)=(active_attempt.workspace_id,active_attempt.inbox_task_id)
 		  WHERE active_attempt.status IN ('dispatching','running')
 		    AND inbox.terminal_outcome IS NOT NULL
 		), due AS (
 		  SELECT w.id,(invalid.id IS NOT NULL) AS platform_invalid_manifest,
+		    COALESCE(invalid.stale_director_manifest,false) AS stale_director_manifest,
 		    (terminal.work_item_id IS NOT NULL) AS inbox_terminal
 		  FROM research_work_item w
 		  JOIN research_session s ON s.workspace_id=w.workspace_id AND s.id=w.session_id
-		  LEFT JOIN invalid_manifest invalid ON invalid.id=w.id
-		  LEFT JOIN terminal_inbox terminal ON terminal.work_item_id=w.id
+		  LEFT JOIN invalid_manifest invalid
+		    ON (invalid.workspace_id,invalid.session_id,invalid.id)=(w.workspace_id,w.session_id,w.id)
+		  LEFT JOIN terminal_inbox terminal
+		    ON (terminal.workspace_id,terminal.session_id,terminal.work_item_id)=(w.workspace_id,w.session_id,w.id)
 		  WHERE s.orchestrator_version='research-run-v6'
 		    AND w.status IN ('dispatching','running')
 		    AND (invalid.id IS NOT NULL OR (
@@ -208,7 +226,9 @@ func (s *PostgresStore) RecoverExpiredV6WorkItems(ctx context.Context, limit int
 		      WHEN a.work_item_id IN (SELECT id FROM due WHERE platform_invalid_manifest) THEN 'platform_invalid_manifest'
 		      WHEN a.work_item_id IN (SELECT id FROM due WHERE inbox_terminal) THEN 'inbox_terminal'
 		      ELSE 'lease_expired' END,
-		    diagnostics=CASE WHEN a.work_item_id IN (SELECT id FROM due WHERE platform_invalid_manifest)
+		    diagnostics=CASE WHEN a.work_item_id IN (SELECT id FROM due WHERE stale_director_manifest)
+		      THEN 'Director Work Manifest uses the superseded atomic dispatch contract'
+		      WHEN a.work_item_id IN (SELECT id FROM due WHERE platform_invalid_manifest)
 		      THEN 'Work Manifest omitted persisted Branch scope'
 		      WHEN a.work_item_id IN (SELECT id FROM due WHERE inbox_terminal)
 		      THEN 'Inbox delivery reached a terminal outcome before Work completion'
@@ -229,25 +249,34 @@ func (s *PostgresStore) RecoverExpiredV6WorkItems(ctx context.Context, limit int
 		UPDATE research_work_item w
 		SET status=CASE
 		      WHEN w.id IN (SELECT work_item_id FROM received) THEN 'awaiting_input'
+		      WHEN w.id IN (SELECT id FROM due WHERE stale_director_manifest) THEN 'failed'
 		      WHEN w.id IN (SELECT id FROM due WHERE platform_invalid_manifest) THEN 'ready'
 		      WHEN w.attempt_count >= w.max_attempts THEN 'failed'
 		      ELSE 'ready' END,
 		    attempt_count=CASE
 		      WHEN w.id IN (SELECT id FROM due WHERE platform_invalid_manifest)
+		        AND w.id NOT IN (SELECT id FROM due WHERE stale_director_manifest)
 		        AND w.id NOT IN (SELECT work_item_id FROM received)
 		      THEN GREATEST(w.attempt_count-1,0)
 		      ELSE w.attempt_count END,
 		    lease_token=NULL,lease_expires_at=NULL,state_version=state_version+1,
 		    terminal_reason_code=CASE
+		      WHEN w.id IN (SELECT id FROM due WHERE stale_director_manifest) THEN 'contract_rejected'
 		      WHEN w.id NOT IN (SELECT id FROM due WHERE platform_invalid_manifest) AND w.attempt_count >= w.max_attempts
 		      THEN 'attempt_budget_exhausted' ELSE '' END,
+		    terminal_reason_detail=CASE
+		      WHEN w.id IN (SELECT id FROM due WHERE stale_director_manifest)
+		      THEN 'Director Work 使用了过期的 atomic Work 派发合同，已终止并重新规划。'
+		      ELSE w.terminal_reason_detail END,
 		    ready_at=CASE
 		      WHEN w.id NOT IN (SELECT work_item_id FROM received)
+		        AND w.id NOT IN (SELECT id FROM due WHERE stale_director_manifest)
 		        AND (w.id IN (SELECT id FROM due WHERE platform_invalid_manifest) OR w.attempt_count < w.max_attempts)
 		      THEN now() ELSE w.ready_at END,
 		    updated_at=now()
 		WHERE w.id IN (SELECT id FROM due)
-		RETURNING w.workspace_id::text,w.session_id::text,w.id::text,w.status,w.state_version
+		RETURNING w.workspace_id::text,w.session_id::text,w.id::text,w.status,w.state_version,
+		  w.id IN (SELECT id FROM due WHERE stale_director_manifest)
 	`, limit)
 	if err != nil {
 		return 0, err
@@ -256,15 +285,19 @@ func (s *PostgresStore) RecoverExpiredV6WorkItems(ctx context.Context, limit int
 		workspaceID, runID, workItemID, status string
 		version                                int64
 		recoveryKind                           string
+		staleDirectorManifest                  bool
 	}
 	items := []recovered{}
 	for rows.Next() {
 		var item recovered
-		if err = rows.Scan(&item.workspaceID, &item.runID, &item.workItemID, &item.status, &item.version); err != nil {
+		if err = rows.Scan(&item.workspaceID, &item.runID, &item.workItemID, &item.status, &item.version, &item.staleDirectorManifest); err != nil {
 			rows.Close()
 			return 0, err
 		}
 		item.recoveryKind = "lease_or_budget"
+		if item.staleDirectorManifest {
+			item.recoveryKind = "stale_director_manifest"
+		}
 		items = append(items, item)
 	}
 	if err = rows.Err(); err != nil {

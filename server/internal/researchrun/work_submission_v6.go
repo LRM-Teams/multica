@@ -36,6 +36,7 @@ type V6SubmissionOutcome struct {
 
 type v6SubmissionStore interface {
 	AuthorizeV6Submission(context.Context, V6AttemptAccess) (V6SubmissionBinding, error)
+	RejectV6DirectorBoundaryAttempt(context.Context, V6AttemptAccess, string) error
 	RecordV6Submission(context.Context, V6AttemptAccess, DecodedV6Contract, string) (V6SubmissionOutcome, error)
 	SettleV6DirectorSubmission(context.Context, string, string, string) (string, error)
 }
@@ -99,6 +100,18 @@ func (m v6SubmissionModule) Submit(ctx context.Context, in V6SubmissionInput) (V
 	validator := boundV6SecondStage{schemaID: binding.TaskSchemaID, schema: binding.TaskSchema}
 	decoded, err := DecodeV6Contract(in.Raw, binding.ExpectedKind, validator)
 	if err != nil {
+		if binding.ExpectedKind == V6ContractDirectorActionProposal && errors.Is(err, ErrInvalidContract) {
+			rejectErr := m.store.RejectV6DirectorBoundaryAttempt(ctx, in.V6AttemptAccess, truncateBytes(err.Error(), 4096))
+			if rejectErr != nil && !errors.Is(rejectErr, ErrAttemptNotAssigned) {
+				slog.Warn("research V6 Director boundary rejection could not be settled",
+					"workspace_id", in.WorkspaceID,
+					"run_id", in.RunID,
+					"work_item_id", in.WorkItemID,
+					"attempt_id", in.AttemptID,
+					"error", rejectErr,
+				)
+			}
+		}
 		return V6SubmissionOutcome{}, err
 	}
 	var identity v6SubmissionIdentity

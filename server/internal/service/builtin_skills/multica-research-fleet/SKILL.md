@@ -165,7 +165,9 @@ assignment/generation、Brief 身份、页数、state version 和 event sequence
 `collaboration.create.v1` 当作 action kind，也不得靠重复提交猜测枚举值。不得猜测旧
 `research.*` schema 名。Agent 创建是异步的：
 不得把 Work 分给同一个 proposal 中刚申请的 Agent；等待 joined 事件和下一次 Director
-cycle。主理人只负责规划、组队、派工和整合，不得把原子调研 Work 指派给自己。原子
+cycle。如果已有足够的 joined 空闲成员，proposal 可以同时申请额外成员并把 Work 分给
+这些已有成员；额外扩容不得阻塞可立即执行的派工。主理人只负责规划、组队、派工和
+整合，不得把原子调研 Work 指派给自己。原子
 Work 使用 `atomic_result_submission`，`payload_schema_id` 必须非空且不得为
 `no_op.v1`，并在 `payload.task_specific_schema` 中携带精确、非空的结果校验器。派工
 的 `branch_ids` 必须且只能复制当前 Run 中一个已经存在的非根子 Branch ID，不得根据

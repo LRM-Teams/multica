@@ -48,6 +48,17 @@ func TestValidateV6ParallelResearchPlanRequiresStaffingAndParallelWork(t *testin
 			facts: v6DirectorPreflightFacts{maxParallelTasks: 5, workerCount: 1, pendingAgentCount: 2, childBranches: 3},
 		},
 		{
+			name: "surplus Agent creation does not block work assigned to joined workers",
+			facts: v6DirectorPreflightFacts{maxParallelTasks: 5, workerCount: 3, proposedAgentCount: 1,
+				resultCount: 3, unresolvedQuestions: 3, proposedAtomicWork: 3, proposedWorkBranches: 3, childBranches: 3},
+		},
+		{
+			name: "required Agent creation cannot be mixed with premature work",
+			facts: v6DirectorPreflightFacts{maxParallelTasks: 5, workerCount: 2, proposedAgentCount: 1,
+				resultCount: 3, unresolvedQuestions: 3, proposedAtomicWork: 2, proposedWorkBranches: 2, childBranches: 3},
+			wantErr: "Agent 创建是异步的",
+		},
+		{
 			name: "convergence may consume unresolved frontier nodes before more research",
 			facts: v6DirectorPreflightFacts{maxParallelTasks: 5, workerCount: 3, resultCount: 2,
 				unresolvedQuestions: 4, proposedConvergence: 1, convergenceReady: true},

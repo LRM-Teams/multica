@@ -30,6 +30,83 @@ env:
   MULTICA_CORS_ALLOWED_ORIGINS: ${{ vars.MULTICA_TEST_CORS_ALLOWED_ORIGINS || 'https://82.157.184.89' }}
 
 jobs:
+  diagnose-research-v6-run:
+    if: >-
+      github.repository_owner == 'LRM-Teams' &&
+      github.event_name == 'workflow_dispatch' &&
+      github.ref != 'refs/heads/dev' &&
+      startsWith(github.event.inputs.image_tag, 'diagnose:')
+    runs-on: [self-hosted, s89, test]
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Inspect one stalled Research V6 run without mutation
+        env:
+          DIAG_REQUEST: ${{ github.event.inputs.image_tag }}
+        run: |
+          set -euo pipefail
+          run_id="${DIAG_REQUEST#diagnose:}"
+          [[ "$run_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]
+          postgres_id="$(docker ps --filter label=com.docker.compose.project=multica-test --filter label=com.docker.compose.service=postgres -q | head -n 1)"
+          backend_id="$(docker ps --filter label=com.docker.compose.project=multica-test --filter label=com.docker.compose.service=backend -q | head -n 1)"
+          [ -n "$postgres_id" ]
+          [ -n "$backend_id" ]
+
+          docker exec -i "$postgres_id" sh -ec 'PGPASSWORD="$POSTGRES_PASSWORD" psql -X -v ON_ERROR_STOP=1 -v "run_id=$1" -U "$POSTGRES_USER" -d "$POSTGRES_DB"' sh "$run_id" <<'SQL'
+          \pset tuples_only on
+          \pset format unaligned
+          \pset fieldsep '|'
+          SELECT 'RUN',status,orchestrator_version,last_progress_at,next_reconcile_at,updated_at,left(COALESCE(last_error,''),240)
+          FROM research_session WHERE id=:'run_id'::uuid;
+
+          SELECT 'WORK_GROUP',kind,status,count(*),max(created_at)
+          FROM research_work_item WHERE session_id=:'run_id'::uuid
+          GROUP BY kind,status ORDER BY max(created_at),kind,status;
+
+          SELECT 'WORK_RECENT',id,kind,status,target_kind,COALESCE(created_by_director_cycle_id::text,''),
+                 COALESCE(assigned_agent_id::text,''),created_at,left(COALESCE(terminal_reason_code,''),80)
+          FROM research_work_item WHERE session_id=:'run_id'::uuid
+          ORDER BY created_at DESC LIMIT 20;
+
+          SELECT 'CYCLE_RECENT',id,status,trigger_from_sequence,trigger_through_sequence,created_at,
+                 COALESCE(started_at::text,''),COALESCE(completed_at::text,''),left(COALESCE(failure_class,''),80),left(COALESCE(diagnostics,''),240)
+          FROM research_director_cycle WHERE session_id=:'run_id'::uuid
+          ORDER BY created_at DESC LIMIT 12;
+
+          SELECT 'DISCUSSION_RECENT',d.id,d.kind,d.status,d.through_event_sequence,d.created_at,d.updated_at,
+                 (SELECT count(*) FROM research_discussion_input i WHERE i.discussion_id=d.id),
+                 (SELECT count(*) FROM research_discussion_vote v WHERE v.discussion_id=d.id)
+          FROM research_discussion d WHERE d.session_id=:'run_id'::uuid
+          ORDER BY d.created_at DESC LIMIT 12;
+
+          SELECT 'EVENT_RECENT',sequence,event_type,created_at,COALESCE(payload->>'recovery_kind','')
+          FROM research_run_event WHERE session_id=:'run_id'::uuid
+          ORDER BY sequence DESC LIMIT 30;
+          SQL
+
+          followup_count="$(
+            docker exec -i "$postgres_id" sh -ec 'PGPASSWORD="$POSTGRES_PASSWORD" psql -X -At -v ON_ERROR_STOP=1 -v "run_id=$1" -U "$POSTGRES_USER" -d "$POSTGRES_DB"' sh "$run_id" <<'SQL'
+          WITH escalated AS (
+            SELECT max(updated_at) AS at
+            FROM research_discussion
+            WHERE session_id=:'run_id'::uuid AND status='escalated'
+          )
+          SELECT count(*)
+          FROM research_work_item,escalated
+          WHERE session_id=:'run_id'::uuid AND kind='research' AND created_at>escalated.at;
+          SQL
+          )"
+
+          docker logs --since 30m "$backend_id" 2>&1 \
+            | grep -E "$run_id|research_run_reconcile|v6_discussion_close|idempotency" \
+            | tail -n 160 || true
+
+          if [ "$followup_count" -eq 0 ]; then
+            echo "VERDICT=RED no_research_followup_after_latest_escalated_discussion"
+            exit 1
+          fi
+          echo "VERDICT=GREEN research_followup_created_after_latest_escalated_discussion count=$followup_count"
+
   prepare:
     if: >-
       github.repository_owner == 'LRM-Teams' &&

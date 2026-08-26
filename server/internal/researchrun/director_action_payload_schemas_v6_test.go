@@ -58,3 +58,23 @@ func TestDirectorAtomicWorkSchemaMatchesExecutionContract(t *testing.T) {
 		})
 	}
 }
+
+func TestDirectorReportSchemaAcceptsOnlyServerOwnedReportIntent(t *testing.T) {
+	registry, err := json.Marshal(map[string]any{"payload_schemas": v6DirectorActionPayloadSchemas()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	validator := boundV6SecondStage{schema: registry}
+	if err = validator.ValidateV6Payload("report.create.v1", json.RawMessage(`{"title":"阶段性调研报告"}`)); err != nil {
+		t.Fatalf("title-only report intent rejected: %v", err)
+	}
+	for _, candidate := range []json.RawMessage{
+		json.RawMessage(`{}`),
+		json.RawMessage(`{"title":"阶段性调研报告","assignee_agent_id":"00000000-0000-4000-8000-000000000001"}`),
+		json.RawMessage(`{"title":"阶段性调研报告","inputs":[]}`),
+	} {
+		if err = validator.ValidateV6Payload("report.create.v1", candidate); err == nil {
+			t.Fatalf("invalid Director-owned report details accepted: %s", candidate)
+		}
+	}
+}

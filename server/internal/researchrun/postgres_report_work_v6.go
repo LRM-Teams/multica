@@ -14,7 +14,7 @@ import (
 // dispatched. The report envelope, input rows and Work Item are one transaction,
 // so an interrupted Director can recover the complete assignment from Postgres.
 func (s *PostgresStore) CreateV6ReportWork(ctx context.Context, in CreateV6ReportWorkInput) (V6ReportWork, error) {
-	if strings.TrimSpace(in.IdempotencyKey) == "" || strings.TrimSpace(in.Reason) == "" || len(in.Inputs) > 1024 {
+	if strings.TrimSpace(in.IdempotencyKey) == "" || strings.TrimSpace(in.Title) == "" || strings.TrimSpace(in.Reason) == "" {
 		return V6ReportWork{}, ErrInvalidContract
 	}
 	tx, err := s.beginResearchTx(ctx, txOpV6ReportWorkCreate, pgx.TxOptions{})
@@ -33,7 +33,17 @@ func (s *PostgresStore) CreateV6ReportWork(ctx context.Context, in CreateV6Repor
 		}
 		return V6ReportWork{}, err
 	}
-	if goalVersion != in.ExpectedGoalVersion || stateVersion != in.ExpectedStateVersion || eventSequence != in.InputEventSequence {
+	var replay V6ReportWork
+	var replayCycle, replayTitle, replayReason string
+	if err = tx.QueryRow(ctx, `SELECT w.target_id::text,w.id::text,r.input_snapshot_hash,r.revision,w.goal_version,w.created_by_director_cycle_id::text,r.title,w.reason FROM research_work_item w JOIN research_report r ON r.id=w.target_id WHERE w.workspace_id=$1::uuid AND w.session_id=$2::uuid AND w.goal_version=$3 AND w.idempotency_key=$4 AND w.kind='report'`, in.WorkspaceID, in.RunID, in.ExpectedGoalVersion, in.IdempotencyKey).Scan(&replay.ReportID, &replay.WorkItemID, &replay.InputSnapshotHash, &replay.Revision, &replay.GoalVersion, &replayCycle, &replayTitle, &replayReason); err == nil {
+		if replayCycle != in.DirectorCycleID || replayTitle != in.Title || replayReason != in.Reason {
+			return V6ReportWork{}, ErrResultConflict
+		}
+		return replay, nil
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return V6ReportWork{}, err
+	}
+	if goalVersion != in.ExpectedGoalVersion || stateVersion != in.ExpectedStateVersion {
 		return V6ReportWork{}, ErrWorkItemChanged
 	}
 	var cycleOK bool
@@ -43,18 +53,18 @@ func (s *PostgresStore) CreateV6ReportWork(ctx context.Context, in CreateV6Repor
 		}
 		return V6ReportWork{}, ErrV6DirectorUnavailable
 	}
-	var membershipOK bool
-	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM research_team_membership WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND agent_id=$3::uuid AND role='reporter' AND state IN ('idle','working','offline','retiring'))`, in.WorkspaceID, in.RunID, in.AssigneeAgentID).Scan(&membershipOK); err != nil || !membershipOK {
-		if err != nil {
-			return V6ReportWork{}, err
+	var reporterAgentID string
+	if err = tx.QueryRow(ctx, `SELECT agent_id::text FROM research_team_membership WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND role='reporter' AND state IN ('idle','working','offline','retiring') ORDER BY joined_at,id LIMIT 1`, in.WorkspaceID, in.RunID).Scan(&reporterAgentID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return V6ReportWork{}, ErrAttemptNotAssigned
 		}
-		return V6ReportWork{}, ErrAttemptNotAssigned
+		return V6ReportWork{}, err
 	}
 	selection, err := selectV6ReportInputs(ctx, tx, in.WorkspaceID, in.RunID)
 	if err != nil {
 		return V6ReportWork{}, err
 	}
-	if len(selection.Inputs) == 0 || len(selection.Inputs) > 1024 || !sameV6ReportInputs(selection.Inputs, in.Inputs) {
+	if len(selection.Inputs) == 0 || len(selection.Inputs) > 1024 {
 		return V6ReportWork{}, ErrWorkItemChanged
 	}
 	inputs := selection.Inputs
@@ -95,16 +105,6 @@ func (s *PostgresStore) CreateV6ReportWork(ctx context.Context, in CreateV6Repor
 		}
 	}
 	snapshotHash := selection.Hash
-	var replay V6ReportWork
-	var replayAssignee, replayCycle, replayTitle, replayReason string
-	if err = tx.QueryRow(ctx, `SELECT w.target_id::text,w.id::text,r.input_snapshot_hash,r.revision,w.goal_version,w.assigned_agent_id::text,w.created_by_director_cycle_id::text,r.title,w.reason FROM research_work_item w JOIN research_report r ON r.id=w.target_id WHERE w.workspace_id=$1::uuid AND w.session_id=$2::uuid AND w.goal_version=$3 AND w.idempotency_key=$4 AND w.kind='report'`, in.WorkspaceID, in.RunID, goalVersion, in.IdempotencyKey).Scan(&replay.ReportID, &replay.WorkItemID, &replay.InputSnapshotHash, &replay.Revision, &replay.GoalVersion, &replayAssignee, &replayCycle, &replayTitle, &replayReason); err == nil {
-		if replay.InputSnapshotHash != snapshotHash || replayAssignee != in.AssigneeAgentID || replayCycle != in.DirectorCycleID || replayTitle != in.Title || replayReason != in.Reason {
-			return V6ReportWork{}, ErrResultConflict
-		}
-		return replay, nil
-	} else if !errors.Is(err, pgx.ErrNoRows) {
-		return V6ReportWork{}, err
-	}
 	var activeOther bool
 	var latestSnapshotHash string
 	if err = tx.QueryRow(ctx, `SELECT
@@ -158,7 +158,7 @@ func (s *PostgresStore) CreateV6ReportWork(ctx context.Context, in CreateV6Repor
 		"artifact_version_ids": artifactVersionIDs, "required_output": "self_contained_html_package",
 		"task_specific_schema": map[string]any{"report_context": reportContext},
 	})
-	if _, err = tx.Exec(ctx, `INSERT INTO research_work_item(id,workspace_id,session_id,kind,status,target_kind,target_id,client_key,idempotency_key,goal_version,input_state_version,input_event_sequence,created_by_director_cycle_id,assigned_agent_id,priority,max_attempts,payload_schema_id,expected_result_schema_id,payload,state_version,ready_at,reason) VALUES($1::uuid,$2::uuid,$3::uuid,'report','ready','report',$4::uuid,$5,$5,$6,$7,$8,$9::uuid,$10::uuid,0.9,3,'report.package.v1','report_package_submission',$11::jsonb,1,now(),$12)`, result.WorkItemID, in.WorkspaceID, in.RunID, result.ReportID, in.IdempotencyKey, goalVersion, stateVersion, eventSequence, in.DirectorCycleID, in.AssigneeAgentID, payload, in.Reason); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO research_work_item(id,workspace_id,session_id,kind,status,target_kind,target_id,client_key,idempotency_key,goal_version,input_state_version,input_event_sequence,created_by_director_cycle_id,assigned_agent_id,priority,max_attempts,payload_schema_id,expected_result_schema_id,payload,state_version,ready_at,reason) VALUES($1::uuid,$2::uuid,$3::uuid,'report','ready','report',$4::uuid,$5,$5,$6,$7,$8,$9::uuid,$10::uuid,0.9,3,'report.package.v1','report_package_submission',$11::jsonb,1,now(),$12)`, result.WorkItemID, in.WorkspaceID, in.RunID, result.ReportID, in.IdempotencyKey, goalVersion, stateVersion, eventSequence, in.DirectorCycleID, reporterAgentID, payload, in.Reason); err != nil {
 		return V6ReportWork{}, err
 	}
 	if _, err = appendEvent(ctx, tx, in.WorkspaceID, in.RunID, "v6_report_work_created", "v6-report-work:"+in.IdempotencyKey, "system", "", map[string]any{"report_id": result.ReportID, "report_revision": result.Revision, "work_item_id": result.WorkItemID, "input_snapshot_hash": result.InputSnapshotHash, "director_cycle_id": in.DirectorCycleID}); err != nil {
@@ -168,24 +168,4 @@ func (s *PostgresStore) CreateV6ReportWork(ctx context.Context, in CreateV6Repor
 		return V6ReportWork{}, err
 	}
 	return result, nil
-}
-
-func sameV6ReportInputs(expected, proposed []V6ReportInputRef) bool {
-	if len(expected) != len(proposed) {
-		return false
-	}
-	byNode := make(map[string]V6ReportInputRef, len(proposed))
-	for _, input := range proposed {
-		if _, duplicate := byNode[input.NodeArtifactVersionID]; duplicate {
-			return false
-		}
-		byNode[input.NodeArtifactVersionID] = input
-	}
-	for _, input := range expected {
-		proposedInput, ok := byNode[input.NodeArtifactVersionID]
-		if !ok || proposedInput != input {
-			return false
-		}
-	}
-	return true
 }

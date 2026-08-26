@@ -451,8 +451,13 @@ Every V6 Run has one fixed `reporter` membership named 报告老板. The Directo
 Brief includes a server-computed `report_plan` containing that Agent identity,
 the exact selected inputs, per-direction coverage and maturity. Whenever that
 selection hash changes and no Report Work is active, proposal preflight requires
-one `create_report` action assigned to the Report Boss. The Work Manifest embeds
-the complete persisted content layers of every selected node in
+one `create_report` intent whose payload contains only the report title. The
+Director does not echo the reporter identity, input refs, content hashes or event
+watermark. While holding the Run mutation lock, the server chooses the fixed
+Report Boss and freezes the latest eligible inputs and event watermark in the
+same transaction that creates the Report Work. This prevents an accepted result
+arriving after a Director Brief was frozen from invalidating an otherwise valid
+report refresh. The Work Manifest embeds the complete persisted content layers of every selected node in
 `report_context.input_documents`, including the producing Agent identity and
 display name, plus the previous usable report as the revision baseline. Thus
 reporting never depends on inter-Agent chat. One active Report

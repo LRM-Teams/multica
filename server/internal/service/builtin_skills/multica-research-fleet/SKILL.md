@@ -83,7 +83,10 @@ canonical state。替换后的 Agent 或主理人必须能够只依靠 PostgreSQ
   Integration。同一一级方向只把当前最高层级未吸收节点交给报告老板，不同方向各取一个
   最大节点，跨方向 successor 去重。服务端把这些节点的完整持久化结果冻结到
   `report_context.input_documents`，不依赖 Agent 聊天转述。新的最大节点、方向状态或
-  最终成熟度变化后，主理人必须派发下一版报告；同一时刻最多存在一个活动 report Work。
+  最终成熟度变化后，主理人必须用 `create_report` 派发下一版报告；该 action 的 payload
+  只包含 `title`，不得复制或提交报告老板 ID、输入节点、内容 hash 或事件水位。服务端在
+  创建 Report Work 的同一事务内选择固定报告老板并冻结当时最新输入。同一时刻最多存在
+  一个活动 report Work。
   草稿修订创建时即登记无 current version 的 passport；报告老板提交并验收不可变 package
   后，服务端才写入并切换到 version 1。
   只有主理人发布工作流可以发布通过验证的 package。报告资源不得输出外部 URL、凭据、

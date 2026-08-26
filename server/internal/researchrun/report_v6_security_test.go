@@ -58,7 +58,7 @@ func TestV6ReportReviewTransactionBoundary(t *testing.T) {
 }
 
 func TestV6ReportWorkCreateTransactionBoundary(t *testing.T) {
-	assertReportSource(t, "postgres_report_work_v6.go", "registerDraftReportRevisionPassportTx", "research_report_input", "research_work_item", "'report_package_submission',$11::jsonb,1,now()", "commitResearchTx")
+	assertReportSource(t, "postgres_report_work_v6.go", "lockRunForMutation", "role='reporter'", "selectV6ReportInputs(ctx, tx", "registerDraftReportRevisionPassportTx", "research_report_input", "research_work_item", "'report_package_submission',$11::jsonb,1,now()", "commitResearchTx")
 	assertReportSource(t, "artifact_report.go", "'report_revision', NULL", "current_version", "ErrResultConflict")
 }
 

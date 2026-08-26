@@ -32,6 +32,7 @@ import { PageHeader } from "../layout/page-header";
 import { useT } from "../i18n/use-t";
 import { noteAssistantSidebarReservePx } from "../chat/components/chat-window-layout";
 import { useNoteBubbleSidebarWidth } from "../chat/components/use-note-bubble-sidebar-width";
+import { effectiveNoteShareIds } from "./effective-note-shares";
 import { NoteAssistantBubble } from "./note-assistant-bubble";
 import { NoteChannelAnchors } from "./note-channel-anchors";
 import { buildNotePageEditPrompt } from "./note-ai-edit-prompt";
@@ -834,18 +835,22 @@ export function NotesPage({ pageId }: { pageId?: string }) {
   const selectedWorkspaceName = selected ? workspaceLabel(workspacesById.get(selected.workspace_id)) : "";
   const shareWorkspaceName = workspaceLabel(workspacesById.get(shareWorkspaceId));
   const selectedShareNames = useMemo(
-    () => selected ? buildNoteShareNames({
-      shareUserIds: selected.share_user_ids,
-      membersByUserId: selectedMembersByUserId,
-      shareAgentIds: selected.share_agent_ids ?? [],
-      agentsById: new Map(agents.map((agent) => [agent.id, agent])),
-      shareChannelIds: selected.share_channel_ids ?? [],
-      channelsById: new Map(channels.map((channel) => [channel.id, channel])),
-      workspaceName: selectedWorkspaceName,
-      unknownMemberLabel: t(($) => $.notes_page.share_member_unknown),
-      formatName: (name, workspace) => t(($) => $.notes_page.share_member_workspace_label, { name, workspace }),
-    }) : [],
-    [agents, channels, selected, selectedMembersByUserId, selectedWorkspaceName, t],
+    () => {
+      if (!selected) return [];
+      const inherited = effectiveNoteShareIds(list.pages, selected);
+      return buildNoteShareNames({
+        shareUserIds: inherited.shareUserIds,
+        membersByUserId: selectedMembersByUserId,
+        shareAgentIds: inherited.shareAgentIds,
+        agentsById: new Map(agents.map((agent) => [agent.id, agent])),
+        shareChannelIds: inherited.shareChannelIds,
+        channelsById: new Map(channels.map((channel) => [channel.id, channel])),
+        workspaceName: selectedWorkspaceName,
+        unknownMemberLabel: t(($) => $.notes_page.share_member_unknown),
+        formatName: (name, workspace) => t(($) => $.notes_page.share_member_workspace_label, { name, workspace }),
+      });
+    },
+    [agents, channels, list.pages, selected, selectedMembersByUserId, selectedWorkspaceName, t],
   );
   const selectedOwnerName = selected ? memberLabel(currentMembersByUserId.get(selected.owner_user_id) ?? selectedMembersByUserId.get(selected.owner_user_id), selected.owner_user_id) : "";
   const createPage = useCreateNotePage();

@@ -38,6 +38,14 @@
     --color-warning: var(--warning);
     /* LRM-560 — Activity command / running-command node */
     --color-running: var(--running);
+    /* LRM-1533/1535 — status dot tokens (non-text; no WCAG text-warning share).
+       Single source for the working/waiting/idle/done/fail dot family so every
+       consumer renders the same aligned amber family. */
+    --color-dot-working: var(--dot-working);
+    --color-dot-waiting: var(--dot-waiting);
+    --color-dot-idle: var(--dot-idle);
+    --color-dot-done: var(--dot-done);
+    --color-dot-fail: var(--dot-fail);
     --color-brand: var(--brand);
     --color-brand-foreground: var(--brand-foreground);
     --color-brand-soft: var(--brand-soft);
@@ -170,6 +178,14 @@
        LRM-1519: brightened back to the original amber (was deepened to #e5a00d,
        read as too-dark mud brown) — brighter but restrained, not high-sat yellow. */
     --running: #F5B301;
+    /* LRM-1533/1535 — status dot family (light). working = --running bright
+       amber; waiting = same gold family, slightly dimmer; idle = gray;
+       done/fail = ok/danger. Independent of the WCAG text-warning token. */
+    --dot-working: var(--running);
+    --dot-waiting: #E8A60A;
+    --dot-idle: var(--muted-foreground);
+    --dot-done: var(--ok);
+    --dot-fail: var(--danger);
     /* Charts stay brand-anchored (hue ≈ #1264a3) */
     --chart-1: #1264a3;
     --chart-2: #3d8ec4;
@@ -287,6 +303,13 @@
        new light amber hue at a higher L for contrast on dark surfaces — design
        lock v2 value oklch(0.86 0.17 88). Dot-only token (no text-warning share). */
     --running: oklch(0.86 0.17 88);
+    /* LRM-1533/1535 — status dot family (dark). Same amber hue family as
+       --running, slightly dimmer for waiting; idle gray; done/fail green/red. */
+    --dot-working: var(--running);
+    --dot-waiting: oklch(0.78 0.16 85);
+    --dot-idle: var(--muted-foreground);
+    --dot-done: var(--ok);
+    --dot-fail: var(--danger);
     --scrollbar-thumb: oklch(1 0 0 / 8%);
     --scrollbar-thumb-hover: oklch(1 0 0 / 18%);
     --scrollbar-track: transparent;

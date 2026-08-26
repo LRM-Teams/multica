@@ -40,7 +40,7 @@ func TestWatchComputerUpgradeConfirmsSuccessorVersionAndConnection(t *testing.T)
 		t.Fatalf("watch result = %+v", result)
 	}
 	display.success(result)
-	for _, want := range []string{"✓ Release downloaded", "✓ Binary verified", "✓ Release installed", "✓ Computer restarted and reconnected"} {
+	for _, want := range []string{"✓ Release downloaded", "✓ Release verified", "✓ Release installed", "✓ Computer restarted and reconnected"} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("watch output missing %q:\n%s", want, output.String())
 		}
@@ -68,13 +68,13 @@ func TestComputerUpgradeDisplayFallsBackToPlainLines(t *testing.T) {
 	var output bytes.Buffer
 	display := newComputerUpgradeDisplay(&output, "v1.0.0", "v2.0.0", false)
 	display.update("staging", "Downloading release")
-	display.update("verifying", "Verifying binary")
+	display.update("verifying", "Verifying release")
 	display.success(computerUpgradeWatchResult{Version: "v2.0.0", PID: "202", Workspaces: 2})
 
 	got := output.String()
 	for _, want := range []string{
 		"Current: v1.0.0", "Target:  v2.0.0", "… Downloading release",
-		"✓ Release downloaded", "✓ Binary verified", "Version:    v2.0.0", "Workspaces: 2 connected",
+		"✓ Release downloaded", "✓ Release verified", "Version:    v2.0.0", "Workspaces: 2 connected",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("display output missing %q:\n%s", want, got)
@@ -90,7 +90,7 @@ func TestComputerUpgradeDisplayUsesTTYSpinnerAndColor(t *testing.T) {
 	var output bytes.Buffer
 	display := newComputerUpgradeDisplay(&output, "v1.0.0", "v2.0.0", true)
 	display.update("staging", "Downloading release")
-	display.update("verifying", "Verifying binary")
+	display.update("verifying", "Verifying release")
 
 	got := output.String()
 	for _, want := range []string{"\033[1m", "\r\033[2K", "\033[36m⠋\033[0m", "\033[32m✓\033[0m Release downloaded"} {
@@ -112,4 +112,25 @@ func restoreComputerUpgradeWatchSeams(t *testing.T) {
 		readComputerUpgradeHandoff = handoff
 		probeComputerUpgradeHealth = health
 	})
+}
+
+func TestUpgradeInstalledCopyDistinguishesAlreadyCurrent(t *testing.T) {
+	var output bytes.Buffer
+	display := newComputerUpgradeDisplay(&output, "v1.0.0", "v1.0.0", false)
+	display.installed("v1.0.0", "/usr/local/bin/multica", true)
+	rendered := output.String()
+	for _, want := range []string{"already on v1.0.0", "nothing to upgrade"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("already-current output missing %q:\n%s", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, "installed.") {
+		t.Fatalf("already-current output must not claim a fresh install:\n%s", rendered)
+	}
+
+	output.Reset()
+	display.installed("v2.0.0", "/usr/local/bin/multica", false)
+	if !strings.Contains(output.String(), "✓ Computer v2.0.0 installed.") {
+		t.Fatalf("fresh install output = %q", output.String())
+	}
 }

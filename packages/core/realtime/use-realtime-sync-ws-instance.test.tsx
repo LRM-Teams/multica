@@ -13,6 +13,7 @@ import { agentPresenceKeys } from "../agents/agent-presence";
 import { researchKeys } from "../research/queries";
 import { runtimeKeys } from "../runtimes/queries";
 import { voiceCallKeys } from "../voice-calls/queries";
+import { noteKeys } from "../notes/queries";
 import type {
   ChannelMessage,
   ChannelMessagesPage,
@@ -115,11 +116,11 @@ describe("useRealtimeSync — ws instance change", () => {
     rerender({ ws: ws2 });
 
     // Should have called invalidateQueries for all workspace-scoped keys
-    // (17 workspace-scoped, including Activity summaries and Presence, +
+    // (18 workspace-scoped, including Activity summaries, Presence, and notes, +
     // 6 per-issue prefixes + 1 channel-issues prefix (#562) + 1 session-scoped
-    // chat predicate + 1 workspaceKeys.list() = 26
+    // chat predicate + 1 workspaceKeys.list() = 27
     // calls; squads key removed in LRM-582; autopilot key removed in LRM-1050)
-    expect(invalidateSpy).toHaveBeenCalledTimes(26);
+    expect(invalidateSpy).toHaveBeenCalledTimes(27);
 
     // Assert the KEY, not just the count (Ronan): the reconnect resync must
     // invalidate the channel Tasks board prefix (#562) so tasks changed while
@@ -133,6 +134,7 @@ describe("useRealtimeSync — ws instance change", () => {
     expect(invalidatedKeys).toContainEqual(runnerActivitySummaryKeys.all("ws-1"));
     expect(invalidatedKeys).toContainEqual(runnerActivityKeys.root("ws-1"));
     expect(invalidatedKeys).toContainEqual(agentPresenceKeys.workspace("ws-1"));
+    expect(invalidatedKeys).toContainEqual(noteKeys.all("ws-1"));
   });
 
   it("does not re-invalidate when rerendered with the same ws instance", () => {

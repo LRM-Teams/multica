@@ -210,6 +210,10 @@ const (
 	// deleting the row; the audit trail is preserved.
 	EventLarkInstallationCreated = "lark_installation:created"
 	EventLarkInstallationRevoked = "lark_installation:revoked"
+
+	// Direct note-page share granted to a member. Routed to the new
+	// recipient only; opening the page clears their unseen share row.
+	EventNotesShareUnread = "notes:share_unread"
 )
 
 type VoiceCallUpdatedPayload struct {

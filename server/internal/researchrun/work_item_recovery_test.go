@@ -13,12 +13,21 @@ import (
 )
 
 type submissionStoreStub struct {
-	binding V6SubmissionBinding
-	seen    map[string]V6SubmissionOutcome
+	binding       V6SubmissionBinding
+	seen          map[string]V6SubmissionOutcome
+	rejected      []V6AttemptAccess
+	settled       []string
+	settlement    string
+	settlementErr error
 }
 
 func (s *submissionStoreStub) AuthorizeV6Submission(context.Context, V6AttemptAccess) (V6SubmissionBinding, error) {
 	return s.binding, nil
+}
+
+func (s *submissionStoreStub) RejectV6DirectorBoundaryAttempt(_ context.Context, access V6AttemptAccess, _ string) error {
+	s.rejected = append(s.rejected, access)
+	return nil
 }
 
 func (s *submissionStoreStub) RecordV6Submission(_ context.Context, _ V6AttemptAccess, decoded DecodedV6Contract, requestID string) (V6SubmissionOutcome, error) {
@@ -32,6 +41,65 @@ func (s *submissionStoreStub) RecordV6Submission(_ context.Context, _ V6AttemptA
 	outcome := V6SubmissionOutcome{SubmissionID: "submission", ClientRequestID: requestID, ContentHash: decoded.ContentHash, Kind: decoded.Kind, Status: "received"}
 	s.seen[requestID] = outcome
 	return outcome, nil
+}
+
+func (s *submissionStoreStub) SettleV6DirectorSubmission(_ context.Context, _, _, submissionID string) (string, error) {
+	s.settled = append(s.settled, submissionID)
+	return s.settlement, s.settlementErr
+}
+
+func TestV6DirectorSubmissionSettlesImmediatelyAfterDurableRecord(t *testing.T) {
+	raw := readV6Fixture(t, filepath.Join("..", "..", "..", "docs", "research", "fixtures", "director-no-op-v6.example.json"))
+	access := V6AttemptAccess{
+		WorkspaceID: "00000000-0000-4000-8000-000000000002",
+		RunID:       "00000000-0000-4000-8000-000000000003",
+		WorkItemID:  "00000000-0000-4000-8000-000000000112",
+		AttemptID:   "00000000-0000-4000-8000-000000000113",
+		AgentID:     "00000000-0000-4000-8000-000000000004",
+	}
+	store := &submissionStoreStub{
+		binding: V6SubmissionBinding{
+			ManifestID:   "00000000-0000-4000-8000-000000000114",
+			ManifestHash: "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+			ExpectedKind: V6ContractDirectorActionProposal,
+			TaskSchema:   json.RawMessage(`{"payload_schemas":{"research.no_op.v1":{"type":"object"}}}`),
+		},
+		seen:       map[string]V6SubmissionOutcome{},
+		settlement: "accepted",
+	}
+	outcome, err := (v6SubmissionModule{store: store}).Submit(context.Background(), V6SubmissionInput{V6AttemptAccess: access, Raw: raw})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(store.settled) != 1 || store.settled[0] != outcome.SubmissionID {
+		t.Fatalf("settled=%v submission=%s: Director proposal must settle in the submission request", store.settled, outcome.SubmissionID)
+	}
+	if outcome.Status != "accepted" {
+		t.Fatalf("status=%s want accepted", outcome.Status)
+	}
+}
+
+func TestV6DirectorBoundaryRejectionSettlesAttemptImmediately(t *testing.T) {
+	access := V6AttemptAccess{
+		WorkspaceID: "00000000-0000-4000-8000-000000000002",
+		RunID:       "00000000-0000-4000-8000-000000000003",
+		WorkItemID:  "00000000-0000-4000-8000-000000000112",
+		AttemptID:   "00000000-0000-4000-8000-000000000113",
+		AgentID:     "00000000-0000-4000-8000-000000000004",
+	}
+	store := &submissionStoreStub{binding: V6SubmissionBinding{
+		ExpectedKind: V6ContractDirectorActionProposal,
+	}, seen: map[string]V6SubmissionOutcome{}}
+	_, err := (v6SubmissionModule{store: store}).Submit(context.Background(), V6SubmissionInput{
+		V6AttemptAccess: access,
+		Raw:             json.RawMessage(`{"contract_kind":"director_action_proposal","schema_version":6}`),
+	})
+	if !errors.Is(err, ErrInvalidContract) {
+		t.Fatalf("err=%v want invalid contract", err)
+	}
+	if len(store.rejected) != 1 || store.rejected[0].AttemptID != access.AttemptID {
+		t.Fatalf("rejected=%+v want attempt %s", store.rejected, access.AttemptID)
+	}
 }
 
 func TestV6SubmissionReplayReturnsOriginalOutcomeAndRejectsChangedPayload(t *testing.T) {

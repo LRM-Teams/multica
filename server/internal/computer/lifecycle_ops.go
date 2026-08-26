@@ -9,7 +9,7 @@ import (
 // instead of knowing the Computer's singleton port or probing it directly.
 func (l *Lifecycle) Health(ctx context.Context) map[string]any {
 	v := l.view()
-	return v.probe(ctx, v.service)
+	return l.probeResident(ctx, v).health
 }
 
 type RestartResult struct {

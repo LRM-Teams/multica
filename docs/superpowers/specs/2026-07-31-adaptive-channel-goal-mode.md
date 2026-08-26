@@ -12,10 +12,10 @@ Multica has no channel-level, server-owned statement of the team's current goal,
 success criteria, progress, or blocker.
 
 Making every message a goal would create noise and force project-management
-ceremony onto greetings, questions, and small one-step tasks. Goal Mode must
-therefore be adaptive: ordinary work remains ordinary, while a channel manager
-may create a durable goal when a request needs sustained multi-step or
-multi-agent coordination.
+ceremony onto greetings, pure questions, and trivial one-step asks. Goal Mode
+must therefore be adaptive: ordinary work remains ordinary, while a channel
+manager should create a durable goal when a human states a channel-level overall
+goal/outcome (or explicitly asks to set/start goal mode) and none exists.
 
 ## 2. Product decision
 

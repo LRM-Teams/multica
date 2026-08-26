@@ -211,7 +211,7 @@ func persistV6CatalogPagesTx(ctx context.Context, tx pgx.Tx, workspaceID, runID,
 	branchScope, _ := json.Marshal(frozen.BranchRefs)
 	for _, view := range []V6CatalogView{V6CatalogSameTier, V6CatalogHigherCandidates} {
 		rows, err := tx.Query(ctx, `SELECT DISTINCT v.id::text,CASE WHEN rn.id IS NOT NULL THEN 'result_s' ELSE 'insight' END,
-		COALESCE(rn.id::text,iv.insight_id::text),f.tier,v.content_hash,COALESCE(rn.catalog_summary,iv.catalog_summary)
+		v.artifact_id::text,f.tier,v.content_hash,COALESCE(rn.catalog_summary,iv.catalog_summary)
 		FROM research_branch_frontier f JOIN research_artifact_version v ON v.id=f.node_artifact_version_id
 		LEFT JOIN research_result_node rn ON rn.artifact_version_id=v.id LEFT JOIN research_insight_version iv ON iv.artifact_version_id=v.id
 		WHERE f.workspace_id=$1::uuid AND f.session_id=$2::uuid AND f.removed_by_event_sequence IS NULL
@@ -326,7 +326,7 @@ func compileV6WorkManifestTx(ctx context.Context, tx pgx.Tx, workspaceID, runID,
 	inputNodes := []V6NodeRef{}
 	rows, err = tx.Query(ctx, `SELECT DISTINCT v.id::text,p.entity_kind,v.content_hash,
 		CASE WHEN rn.id IS NOT NULL THEN 'result_s' ELSE 'insight' END,
-		COALESCE(rn.id::text,iv.insight_id::text),COALESCE(iv.tier,'S')
+		v.artifact_id::text,COALESCE(iv.tier,'S')
 		FROM research_work_item w
 		JOIN research_discussion_input di ON di.discussion_id=w.target_id
 		JOIN research_artifact_version v ON v.id=di.node_artifact_version_id

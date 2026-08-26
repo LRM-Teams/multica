@@ -332,7 +332,8 @@ migrate-down: ## Create the target DB if needed, then roll back database migrati
 	@bash scripts/ensure-postgres.sh "$(ENV_FILE)"
 	cd server && go run ./cmd/migrate down
 
-sqlc: ## Regenerate sqlc code
+sqlc: ## Regenerate sqlc code (guards the pinned sqlc version in server/.sqlc-version)
+	@bash scripts/check-sqlc-version.sh
 	cd server && sqlc generate
 
 # Cleanup

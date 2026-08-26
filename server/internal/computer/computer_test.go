@@ -187,6 +187,36 @@ func TestStopWhenNotRunning(t *testing.T) {
 	}
 }
 
+func TestStopFallsBackToLegacyHTTPResident(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	var legacyCalls atomic.Int32
+	lc := &Lifecycle{}
+	lc.Probe = func(context.Context, string) map[string]any {
+		return map[string]any{"status": "stopped"}
+	}
+	legacyRestore := setLegacyHealthProbe(func(context.Context) map[string]any {
+		if legacyCalls.Add(1) == 1 {
+			return map[string]any{
+				"status": "running", "pid": float64(os.Getpid()),
+				"daemon_id": "legacy-daemon", "cli_version": "0.4.23",
+			}
+		}
+		return map[string]any{"status": "stopped"}
+	})
+	defer legacyRestore()
+	shutdownRestore := setLegacyShutdown(func(_ string, _ ShutdownRequest) error { return nil })
+	defer shutdownRestore()
+	lc.Sleep = func(time.Duration) {}
+
+	res := lc.Stop()
+	if !res.Running || !res.Stopped {
+		t.Fatalf("Stop = %+v, want legacy resident stopped", res)
+	}
+	if res.Pid != os.Getpid() {
+		t.Fatalf("Stop pid = %d, want %d", res.Pid, os.Getpid())
+	}
+}
+
 func TestStopGracefullyThenConfirmsStopped(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("MULTICA_SHUTDOWN_SOURCE", "")
@@ -364,6 +394,24 @@ func TestStartBackgroundRefusesWhenAlreadyRunning(t *testing.T) {
 	}
 }
 
+func TestStartBackgroundRefusesWhenLegacyHTTPResidentIsRunning(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	lc := &Lifecycle{Probe: func(context.Context, string) map[string]any {
+		return map[string]any{"status": "stopped"}
+	}}
+	restore := setLegacyHealthProbe(func(context.Context) map[string]any {
+		return map[string]any{
+			"status": "running", "pid": float64(4321),
+			"daemon_id": "legacy-daemon", "cli_version": "0.4.23",
+		}
+	})
+	defer restore()
+	_, err := lc.StartBackground(StartOptions{})
+	if err == nil || !strings.Contains(err.Error(), "already running") {
+		t.Fatalf("StartBackground = %v, want legacy already-running error", err)
+	}
+}
+
 func TestStartBackgroundRejectsAmbiguousIdentityBeforeSpawning(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -398,6 +446,18 @@ func setRequestShutdown(fn func(string, ShutdownRequest) error) func() {
 	old := requestShutdown
 	requestShutdown = fn
 	return func() { requestShutdown = old }
+}
+
+func setLegacyHealthProbe(fn func(context.Context) map[string]any) func() {
+	old := legacyHealthProbe
+	legacyHealthProbe = fn
+	return func() { legacyHealthProbe = old }
+}
+
+func setLegacyShutdown(fn func(string, ShutdownRequest) error) func() {
+	old := requestLegacyShutdown
+	requestLegacyShutdown = fn
+	return func() { requestLegacyShutdown = old }
 }
 
 // --- start background success path with a fake spawned process ---

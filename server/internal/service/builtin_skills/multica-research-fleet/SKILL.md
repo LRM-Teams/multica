@@ -42,11 +42,15 @@ canonical state。替换后的 Agent 或主理人必须能够只依靠 PostgreSQ
   是附在消息上的不可变提示，不是图变更。
 - 主理人在持久 membership 和硬上限内动态组建、替换团队。模型会话只是可丢弃的执行
   资源，不是持久团队成员或进度存储。
-- 存在独立调研维度且容量允许时，主理人应在一个 proposal 中创建多个 Branch 和 Work
-  Item 并发运行。每个 run-scoped Agent 同时最多承担一个活动 Work；独立方向必须一项一
-  Agent，已有任务集中在同一 Agent 时应扩充专职 Agent 并改派，不得伪装成并发后串行执行。
-  标准 V6 首轮至少创建 3 名职责不同的 run-scoped Agent；全部加入后，在后续 proposal
-  中至少创建 3 个独立 atomic Work 并分别分配，`max_parallel_tasks` 小于 3 时以该上限为准。
+- 存在独立调研维度且容量允许时，主理人应先在一个 proposal 中创建多个非根子 Branch
+  和 run-scoped Agent。Agent 加入且 Branch 提交后的下一轮再创建 Work Item 并发运行。
+  每个 atomic Work 必须且只能绑定一个非根子 Branch；每个 run-scoped Agent 同时最多
+  承担一个活动 Work。独立方向必须一项一 Agent，不得把多个 ready/running Work 堆给
+  同一 Agent 假装并发。标准 V6 首轮至少创建 3 名职责不同的 run-scoped Agent 和 3 个
+  独立子 Branch；后续 proposal 至少创建 3 个 atomic Work 并分别分配，
+  `max_parallel_tasks` 小于 3 时以该上限为准。
+  根 Branch 下的一级方向总数不得超过 `max_parallel_tasks`。不得为每个 Work、来源或
+  待回答问题重复创建一级 Branch；优先复用已有方向，必要的细分挂在相关方向下面。
   除非冻结合同明确指定其他语言，面向用户的进度和结果叙述一律使用
   简体中文；协议 key、枚举值、命令和来源原文保持精确。面向用户的输出不得叙述
   Manifest/Brief 查找、标识符、JSON 拼装、CLI 命令、工具调用或隐藏推理；交接后只输出
@@ -56,21 +60,30 @@ canonical state。替换后的 Agent 或主理人必须能够只依靠 PostgreSQ
   不继续的问题在 action reason 中记录收敛理由。存在高价值待回答问题且没有活动 Work
   覆盖时，不得提交 `no_op`。历史 Brief 若遗漏 Result 的待回答问题，服务端会自动创建
   一次修复 Cycle；不要要求用户重建 Run。
+- `escalated` Discussion 至少需要证据跟进；如果同一缺口已经出现在 Frontier 的待回答问题中，
+  不要把 Discussion 再当成额外问题重复派工，按两类缺口数量中的较大值覆盖即可。
 - 每轮先检查 Branch Frontier 的 fresh、未吸收节点。两个或更多节点语义相关且满足
   promotion、assimilation 或 `xxl_merge` 时，优先启动收敛；数量只触发判断，不得强行
   融合不相关内容。使用 `kind: "create_integration"`、
   `payload_schema: "integration.create.v1"`，并从 Brief 原样复制至少两个完整
   `inputs` node ref 和对应完整 `branch_refs`。服务端建立冻结 Steward Discussion；全体
   同意后自动派发 Integration Work 并创建 M/L/XL/XXL successor。不得创建普通 Work
-  绕过 Discussion。报告前，material unabsorbed content 必须已吸收、排除、终止或列为缺口。
+  绕过 Discussion。同层 Frontier 已有可合并节点且没有活动 Discussion/Integration 时，
+  下一轮必须发起收敛，不得继续堆积 S 节点或提交 `no_op`。报告前，material unabsorbed
+  content 必须已吸收、排除、终止或列为缺口。
 - 主理人不得自行暂停整场 Run。单个 Work Item 失败时，先读取 Brief 中的小目标、Attempt
   次数/预算、失败分类、诊断和终止原因，再选择 `retry_work_item`、`reassign_work_item`、
   创建替代 Work，或向用户明确报告。存在失败的专属 Agent Work 且当前没有活动 Agent
   Work 时不得 `no_op`。只有用户 Stop 或发布维护控制可以暂停整场调研。
+- 用户 Stop 是可恢复暂停：非 Director Work 返回 `ready`，当前 Attempt 取消且不消耗重试
+  预算，Resume 后可重新派发。删除 V6 调研只归档 Run 和全部规范事实，不物理删除成果、
+  证据、Discussion、Work 或 Report。
 - V6 Report 是不可变的 Goal 附件，不是图节点。只有主理人发布工作流可以发布通过验证的
   package。报告资源不得输出外部 URL、凭据、应用同源依赖或 bridge 调用。
 - 内部 `director` cycle Work 只是主理人调度记录，不是成果星图节点。星图只展示可向用户
   解释的调研 Work、结果和洞察；主理人执行状态通过 Brief、聊天、presence 和活动记录查看。
+  星图按根 Branch 的一级子 Branch 展示研究方向；更深层 Branch 保留真实归属，但不得被
+  重复解释为新的一级方向。跨一级方向的综合节点不属于任何单一方向区域。
 
 如果 Brief/Manifest hash、revision、cursor、state version、assignment、membership、
 capability 或 expected envelope 中任何一项与派发不一致，应拒绝继续并让持久恢复路径
@@ -105,7 +118,8 @@ V6_CURL=(curl -fsS \
 "${V6_CURL[@]}" "${V6_API}/manifest"
 ```
 
-只能使用 Manifest 授权的 endpoint family：主理人工作使用 GET `/director-brief` 和
+只能使用 Manifest 授权的 endpoint family：所有工作可使用 GET `/artifacts/<artifact-version-id>`
+读取 Manifest 明确列出的冻结正文；主理人工作使用 GET `/director-brief` 和
 POST `/director-brief-acks`；包含 `catalog_access` 的 Manifest 授权 GET `/catalog`
 和 POST `/catalog-acks`；报告工作使用 `/report-uploads`；所有工作都通过 POST
 `/submission` 提交。写 JSON 时使用 `Content-Type: application/json`，严格提交使用
@@ -154,8 +168,9 @@ assignment/generation、Brief 身份、页数、state version 和 event sequence
 cycle。主理人只负责规划、组队、派工和整合，不得把原子调研 Work 指派给自己。原子
 Work 使用 `atomic_result_submission`，`payload_schema_id` 必须非空且不得为
 `no_op.v1`，并在 `payload.task_specific_schema` 中携带精确、非空的结果校验器。派工
-的 `branch_ids` 只能复制当前 Run 中已经存在的 Branch ID，不得根据标题或 action ID
-推导 UUID；不存在或跨 Run 的 Branch 引用会使 proposal 被拒绝。派工
+的 `branch_ids` 必须且只能复制当前 Run 中一个已经存在的非根子 Branch ID，不得根据
+标题或 action ID 推导 UUID；根 Branch、不存在或跨 Run 的 Branch 引用会使 proposal
+被拒绝。派工
 发生合同拒绝且已有空闲专属 Agent 时，下一轮必须修正合同并重新派工，不得提交
 `no_op`；运行中尚无专属 Agent 且无 Agent 创建待处理时也不得 `no_op`。专属 Agent
 Work 已失败且当前无活动 Agent Work 时，必须重试或改派失败 Work，不得等待。
@@ -165,6 +180,16 @@ Director 发起节点收敛时，外层 action 的机械映射固定为
 从 Brief 复制的 `inputs` 与 `branch_refs`。服务端会给每个当前 Steward 创建
 `discussion_turn_submission` Work。投票必须公开说明 common/unique findings、冲突、遗漏、
 scope 和理由；全体 accept 后，最后加入的成功参与者收到 `integration_submission` Work。
+Discussion 和 Integration Agent 必须先读取 Manifest 中每个冻结输入的完整正文：
+
+```bash
+multica research work-artifact <session-id> <work-item-id> <attempt-id> \
+  <artifact-version-id> --output json
+```
+
+CLI 不可用时，对 `${V6_API}/artifacts/<artifact-version-id>` 执行 GET。该接口只能返回
+当前 Attempt 的 Manifest 授权版本。`input_nodes` 的 ID、层级、hash 和摘要不能替代正文；
+任一正文读取失败时不得凭摘要投 accept 或生成 successor。
 Integration 必须原样复制 Manifest 的 `input_nodes`、`branch_refs` 和 Discussion identity，
 按 S+S→M、M+M→L、L+L→XL、XL+XL→XXL、高层+低层保持高层、XXL+XXL→XXL 的规则提交。
 `content_hash` 同样使用仅移除自身后的 RFC 8785 JCS SHA-256。
@@ -215,13 +240,16 @@ Submission 结果；新 request ID 或变更后的内容不具备此性质。
 
 HTTP 400 `research.v6.invalid_contract` 响应会包含受限字段或 hash 的校验原因。下次
 提交前先修正该精确合同违规；被拒绝的 envelope 尚未持久交接。不得盲目重发未修改的
-无效文件。
+无效文件。若当前 Work 是主理人 `director_action_proposal`，严格边界拒绝会立即终止该
+Director Attempt 并触发新的 Director cycle；不要在已经结算的 Attempt 上重试，必须读取
+新 Manifest 与新 Brief 后重新规划。
 
 JSON 字符串不得包含 `U+0000`/NUL。重新计算 `content_hash` 和提交前，先从复制的来源
 文本中移除该字符。
 
-提交边界是异步的。状态 `received` 表示 envelope 已持久交接，Agent 应结束执行；服务端
-reconciler 之后会标记为 `accepted` 或 `rejected`。不得让 Inbox 执行保持打开等待
+提交边界以持久回执为准。状态 `received` 表示 envelope 已持久交接，Agent 应结束执行；
+Director proposal 会在回执提交后立即按 Submission identity 尝试结算，进程中断时由
+reconciler 继续标记为 `accepted` 或 `rejected`。不得让 Inbox 执行保持打开等待
 `accepted`，也不得在 `received` 后创建第二个 request ID。持久结果结算后，服务端可能
 取消剩余 Inbox 执行；这是成功清理，不是调研结果失败。
 

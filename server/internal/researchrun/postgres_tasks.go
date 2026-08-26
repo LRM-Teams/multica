@@ -957,7 +957,8 @@ func (s *PostgresStore) Resume(ctx context.Context, sessionID, workspaceID, user
 	if run.Status != RunStatusPaused {
 		return Run{}, RunEvent{}, fmt.Errorf("%w: only paused runs can resume", ErrInvalidTransition)
 	}
-	if _, err = tx.Exec(ctx, `UPDATE research_session SET status = 'running', stop_reason = '', next_reconcile_at = now(), last_progress_at = now(), updated_at = now() WHERE id = $1::uuid`, sessionID); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE research_session SET status = 'running', stop_reason = '', next_reconcile_at = now(), last_progress_at = now(), updated_at = now()
+		WHERE id = $1::uuid AND workspace_id = $2::uuid`, sessionID, workspaceID); err != nil {
 		return Run{}, RunEvent{}, err
 	}
 	event, err := appendEvent(ctx, tx, workspaceID, sessionID, "run_resumed", fmt.Sprintf("run-resumed:%d", run.StateVersion+1), "user", userID, map[string]any{})
@@ -1000,16 +1001,38 @@ func (s *PostgresStore) transitionRun(ctx context.Context, sessionID, workspaceI
 	if err != nil {
 		return Run{}, RunEvent{}, nil, err
 	}
-	if run.Status == target {
+	alreadyTarget := run.Status == target
+	if alreadyTarget && !(run.OrchestratorVersion == OrchestratorVersionV6 && target == RunStatusPaused) {
 		return run, RunEvent{}, nil, s.commitResearchTx(ctx, txOpRunTransition, tx)
+	}
+	if target == RunStatusArchived && (run.Status == RunStatusCompleted || run.Status == RunStatusCancelled) {
+		if _, err = tx.Exec(ctx, `UPDATE research_session SET status = 'archived', stop_reason = $3, updated_at = now()
+			WHERE id = $1::uuid AND workspace_id = $2::uuid`, sessionID, workspaceID, truncateBytes(reason, 1024)); err != nil {
+			return Run{}, RunEvent{}, nil, err
+		}
+		event, eventErr := appendEvent(ctx, tx, workspaceID, sessionID, "run_archived",
+			fmt.Sprintf("run-archived:%d", run.StateVersion+1), "user", userID, map[string]any{"reason": reason})
+		if eventErr != nil {
+			return Run{}, RunEvent{}, nil, eventErr
+		}
+		if err = s.commitResearchTx(ctx, txOpRunTransition, tx); err != nil {
+			return Run{}, RunEvent{}, nil, err
+		}
+		run, err = s.GetRun(ctx, sessionID, workspaceID)
+		return run, event, nil, err
 	}
 	if run.Status == RunStatusCompleted || run.Status == RunStatusArchived || run.Status == RunStatusCancelled {
 		return Run{}, RunEvent{}, nil, fmt.Errorf("%w: run is terminal", ErrInvalidTransition)
 	}
 	rows, err := tx.Query(ctx, `
 		SELECT inbox_task_id::text FROM research_task_attempt
-		WHERE session_id = $1::uuid AND status IN ('dispatching', 'running', 'cancelling') AND inbox_task_id IS NOT NULL
-	`, sessionID)
+		WHERE session_id = $1::uuid AND workspace_id = $2::uuid
+		  AND status IN ('dispatching', 'running', 'cancelling') AND inbox_task_id IS NOT NULL
+		UNION
+		SELECT inbox_task_id::text FROM research_work_item_attempt
+		WHERE session_id = $1::uuid AND workspace_id = $2::uuid
+		  AND status IN ('dispatching', 'running') AND inbox_task_id IS NOT NULL
+	`, sessionID, workspaceID)
 	if err != nil {
 		return Run{}, RunEvent{}, nil, err
 	}
@@ -1032,57 +1055,123 @@ func (s *PostgresStore) transitionRun(ctx context.Context, sessionID, workspaceI
 		FROM research_dispatch_outbox outbox
 		WHERE outbox.attempt_id = attempt.id
 		  AND attempt.session_id = $1::uuid
+		  AND attempt.workspace_id = $2::uuid
+		  AND outbox.workspace_id = $2::uuid
 		  AND attempt.status IN ('dispatching', 'running', 'cancelling')
 		  AND outbox.status = 'pending'
 		  AND outbox.delivery_attempts = 0
-	`, sessionID); err != nil {
+	`, sessionID, workspaceID); err != nil {
 		return Run{}, RunEvent{}, nil, err
 	}
 	if _, err = tx.Exec(ctx, `
 		UPDATE research_task_attempt
-		SET status = 'cancelled', failure_class = $2,
+		SET status = 'cancelled', failure_class = $3,
 		    pending_failure_class = '', pending_failure_diagnostics = '',
 		    pending_failure_retryable = false,
 		    completed_at = now(), updated_at = now()
-		WHERE session_id = $1::uuid AND status IN ('dispatching', 'running', 'cancelling')
-	`, sessionID, target); err != nil {
+		WHERE session_id = $1::uuid AND workspace_id = $2::uuid
+		  AND status IN ('dispatching', 'running', 'cancelling')
+	`, sessionID, workspaceID, target); err != nil {
 		return Run{}, RunEvent{}, nil, err
 	}
 	if _, err = tx.Exec(ctx, `
 		UPDATE research_dispatch_outbox
 		SET status = 'cancelled', lease_token = NULL, lease_expires_at = NULL,
-		    last_error = $2, updated_at = now()
-		WHERE session_id = $1::uuid AND status IN ('pending', 'delivering')
-	`, sessionID, target); err != nil {
+		    last_error = $3, updated_at = now()
+		WHERE session_id = $1::uuid AND workspace_id = $2::uuid
+		  AND status IN ('pending', 'delivering')
+	`, sessionID, workspaceID, target); err != nil {
 		return Run{}, RunEvent{}, nil, err
 	}
+	if run.OrchestratorVersion == OrchestratorVersionV6 {
+		if _, err = tx.Exec(ctx, `
+			UPDATE research_work_item_attempt
+			SET status = 'cancelled', failure_class = $3, completed_at = now(),
+			    cancellation_completed_at = now(), updated_at = now()
+			WHERE session_id = $1::uuid AND workspace_id = $2::uuid
+			  AND status IN ('dispatching', 'running')
+		`, sessionID, workspaceID, target); err != nil {
+			return Run{}, RunEvent{}, nil, err
+		}
+		v6OutboxKinds := []string{"create_agent", "update_agent", "archive_agent", "dispatch_work_item", "notify_user"}
+		if retryTasks {
+			// Agent lifecycle may safely finish while paused. Only execution
+			// delivery must be invalidated; Resume will issue a fresh dispatch.
+			v6OutboxKinds = []string{"dispatch_work_item"}
+		}
+		if _, err = tx.Exec(ctx, `
+			UPDATE research_v6_outbox
+			SET status = 'failed', last_error = $3, lease_token = NULL,
+			    lease_expires_at = NULL, updated_at = now()
+			WHERE session_id = $1::uuid AND workspace_id = $2::uuid
+			  AND kind = ANY($4::text[]) AND status IN ('pending', 'delivering')
+		`, sessionID, workspaceID, target, v6OutboxKinds); err != nil {
+			return Run{}, RunEvent{}, nil, err
+		}
+		if _, err = tx.Exec(ctx, `
+			UPDATE research_director_cycle
+			SET status = 'stale', failure_class = $3,
+			    diagnostics = $4, completed_at = now()
+			WHERE session_id = $1::uuid AND workspace_id = $2::uuid
+			  AND status IN ('pending', 'running')
+		`, sessionID, workspaceID, target, truncateBytes(reason, 1024)); err != nil {
+			return Run{}, RunEvent{}, nil, err
+		}
+		if retryTasks {
+			if _, err = tx.Exec(ctx, `
+				UPDATE research_work_item
+				SET status = CASE WHEN kind = 'director' THEN 'cancelled' ELSE 'ready' END,
+				    attempt_count = CASE WHEN status IN ('dispatching', 'running')
+				      THEN GREATEST(attempt_count - 1, 0) ELSE attempt_count END,
+				    terminal_reason_code = CASE WHEN kind = 'director' THEN 'run_paused' ELSE '' END,
+				    terminal_reason_detail = CASE WHEN kind = 'director' THEN $3 ELSE '' END,
+				    lease_token = NULL, lease_expires_at = NULL,
+				    ready_at = CASE WHEN kind = 'director' THEN ready_at ELSE now() END,
+				    updated_at = now()
+				WHERE session_id = $1::uuid AND workspace_id = $2::uuid
+				  AND status IN ('pending', 'enqueued', 'ready', 'dispatching', 'running', 'awaiting_input')
+			`, sessionID, workspaceID, truncateBytes(reason, 1024)); err != nil {
+				return Run{}, RunEvent{}, nil, err
+			}
+		} else if _, err = tx.Exec(ctx, `
+			UPDATE research_work_item
+			SET status = 'cancelled', terminal_reason_code = 'run_terminal', terminal_reason_detail = $3,
+			    lease_token = NULL, lease_expires_at = NULL, cancelled_at = now(), updated_at = now()
+			WHERE session_id = $1::uuid AND workspace_id = $2::uuid
+			  AND status IN ('pending', 'enqueued', 'ready', 'dispatching', 'running', 'awaiting_input')
+		`, sessionID, workspaceID, truncateBytes(reason, 1024)); err != nil {
+			return Run{}, RunEvent{}, nil, err
+		}
+		if _, err = tx.Exec(ctx, `
+			UPDATE research_team_membership
+			SET state = 'idle'
+			WHERE session_id = $1::uuid AND workspace_id = $2::uuid AND state = 'working'
+		`, sessionID, workspaceID); err != nil {
+			return Run{}, RunEvent{}, nil, err
+		}
+	}
 	if retryTasks {
-		_, err = tx.Exec(ctx, `UPDATE research_task SET status = 'ready', ready_at = now(), assigned_agent_id = NULL, updated_at = now() WHERE session_id = $1::uuid AND status IN ('dispatching', 'running')`, sessionID)
+		_, err = tx.Exec(ctx, `UPDATE research_task SET status = 'ready', ready_at = now(), assigned_agent_id = NULL, updated_at = now()
+			WHERE session_id = $1::uuid AND workspace_id = $2::uuid AND work_item_id IS NULL
+			  AND status IN ('dispatching', 'running')`, sessionID, workspaceID)
 	} else {
-		_, err = tx.Exec(ctx, `UPDATE research_task SET status = 'cancelled', terminal_reason = $2, completed_at = now(), updated_at = now() WHERE session_id = $1::uuid AND status IN ('pending', 'ready', 'dispatching', 'running')`, sessionID, truncateBytes(reason, 1024))
+		_, err = tx.Exec(ctx, `UPDATE research_task SET status = 'cancelled', terminal_reason = $3, completed_at = now(), updated_at = now()
+			WHERE session_id = $1::uuid AND workspace_id = $2::uuid AND work_item_id IS NULL
+			  AND status IN ('pending', 'ready', 'dispatching', 'running')`, sessionID, workspaceID, truncateBytes(reason, 1024))
 	}
 	if err != nil {
 		return Run{}, RunEvent{}, nil, err
 	}
-	if !retryTasks {
-		if _, err = tx.Exec(ctx, `
-			UPDATE research_work_item_attempt
-			SET status = 'cancelled', failure_class = $2, completed_at = now(), updated_at = now()
-			WHERE session_id = $1::uuid AND status IN ('dispatching', 'running')
-		`, sessionID, target); err != nil {
-			return Run{}, RunEvent{}, nil, err
-		}
-		if _, err = tx.Exec(ctx, `
-			UPDATE research_work_item
-			SET status = 'cancelled', terminal_reason_code = 'run_terminal', terminal_reason_detail = $2,
-			    lease_token = NULL, lease_expires_at = NULL, updated_at = now()
-			WHERE session_id = $1::uuid AND status IN ('pending', 'enqueued', 'ready', 'dispatching', 'running', 'awaiting_input')
-		`, sessionID, truncateBytes(reason, 1024)); err != nil {
-			return Run{}, RunEvent{}, nil, err
-		}
-	}
-	if _, err = tx.Exec(ctx, `UPDATE research_session SET status = $2, stop_reason = $3, updated_at = now() WHERE id = $1::uuid`, sessionID, target, truncateBytes(reason, 1024)); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE research_session SET status = $3, stop_reason = $4, updated_at = now()
+		WHERE id = $1::uuid AND workspace_id = $2::uuid`, sessionID, workspaceID, target, truncateBytes(reason, 1024)); err != nil {
 		return Run{}, RunEvent{}, nil, err
+	}
+	if alreadyTarget {
+		if err = s.commitResearchTx(ctx, txOpRunTransition, tx); err != nil {
+			return Run{}, RunEvent{}, nil, err
+		}
+		run, err = s.GetRun(ctx, sessionID, workspaceID)
+		return run, RunEvent{}, inboxIDs, err
 	}
 	eventType := "run_" + string(target)
 	actorType := "user"

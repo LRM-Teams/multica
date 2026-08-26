@@ -26,7 +26,7 @@ describe("ActivityTab", () => {
     renderTab();
     expect(runnerActivity).toHaveBeenCalledWith("workspace-1", "agent-1");
     expect(screen.getAllByTestId("runner-activity-row").map((row) => row.textContent)).toEqual([expect.stringContaining("Custom command title"), expect.stringContaining("Idle")]);
-    expect(screen.getAllByTestId("runner-activity-row")[0]?.querySelector(".bg-running")).not.toBeNull();
+    expect(screen.getAllByTestId("runner-activity-row")[0]?.querySelector(".bg-dot-working")).not.toBeNull();
     expect(screen.getByTestId("activity-command-block")).toHaveTextContent("git status");
   });
 

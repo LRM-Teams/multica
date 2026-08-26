@@ -25,20 +25,28 @@ type V6ProjectionState struct {
 	Termination *V6ProjectionTermination `json:"termination,omitempty"`
 }
 
+// V6ProjectionTerritory is the top-level Branch below the Run root that owns
+// a node for presentation. Canonical Branch membership remains in BranchIDs.
+type V6ProjectionTerritory struct {
+	BranchID string `json:"branch_id"`
+	Label    string `json:"label"`
+}
+
 type V6ProjectionNode struct {
-	ID               string                `json:"id"`
-	Kind             string                `json:"kind"`
-	Tier             string                `json:"tier"`
-	CanonicalRef     V6ProjectionEntityRef `json:"canonical_ref"`
-	BranchIDs        []string              `json:"branch_ids"`
-	State            V6ProjectionState     `json:"state"`
-	Title            string                `json:"title,omitempty"`
-	CatalogSummary   string                `json:"catalog_summary"`
-	Absorbed         bool                  `json:"absorbed"`
-	Terminal         bool                  `json:"terminal"`
-	Expandable       bool                  `json:"expandable"`
-	HiddenChildCount int                   `json:"hidden_child_count"`
-	UpdatedAt        string                `json:"updated_at"`
+	ID               string                 `json:"id"`
+	Kind             string                 `json:"kind"`
+	Tier             string                 `json:"tier"`
+	CanonicalRef     V6ProjectionEntityRef  `json:"canonical_ref"`
+	BranchIDs        []string               `json:"branch_ids"`
+	Territory        *V6ProjectionTerritory `json:"territory,omitempty"`
+	State            V6ProjectionState      `json:"state"`
+	Title            string                 `json:"title,omitempty"`
+	CatalogSummary   string                 `json:"catalog_summary"`
+	Absorbed         bool                   `json:"absorbed"`
+	Terminal         bool                   `json:"terminal"`
+	Expandable       bool                   `json:"expandable"`
+	HiddenChildCount int                    `json:"hidden_child_count"`
+	UpdatedAt        string                 `json:"updated_at"`
 }
 
 type V6ProjectionEdge struct {

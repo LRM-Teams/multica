@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 type faultingSubmissionStore struct {
@@ -77,29 +78,51 @@ func seedV6RecoveryAttempt(t *testing.T, run *transactionRecoveryRun, membership
 	return attemptID
 }
 
-func seedV6WorkBranchScope(t *testing.T, run *transactionRecoveryRun, workItemID, clientPrefix, objective string, stateVersion int64) string {
+func seedV6DirectorChildBranch(t *testing.T, run *transactionRecoveryRun, clientPrefix, objective string, stateVersion int64) string {
 	t.Helper()
-	branchID := uuid.NewString()
+	rootBranchID, branchID := uuid.NewString(), uuid.NewString()
 	tx, err := run.pool.Begin(run.ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer tx.Rollback(run.ctx)
-	if _, err = tx.Exec(run.ctx, `INSERT INTO research_branch(id,workspace_id,session_id,client_key,objective,status,goal_version,state_version)
-		VALUES($1::uuid,$2::uuid,$3::uuid,$4,$5,'active',$6,$7)`, branchID, run.fixture.workspaceID, run.fixture.sessionID, clientPrefix+branchID, objective, run.goalVersion, stateVersion); err != nil {
+	if err = tx.QueryRow(run.ctx, `SELECT id::text FROM research_branch
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND client_key='root'
+		ORDER BY created_at LIMIT 1`, run.fixture.workspaceID, run.fixture.sessionID).Scan(&rootBranchID); errors.Is(err, pgx.ErrNoRows) {
+		if _, err = tx.Exec(run.ctx, `INSERT INTO research_branch(id,workspace_id,session_id,client_key,objective,status,goal_version,state_version)
+			VALUES($1::uuid,$2::uuid,$3::uuid,'root','Root research scope','active',$4,1)`, rootBranchID, run.fixture.workspaceID, run.fixture.sessionID, run.goalVersion); err != nil {
+			t.Fatal(err)
+		}
+		if err = registerV6BranchArtifactTx(run.ctx, tx, run.fixture.workspaceID, run.fixture.sessionID, rootBranchID, time.Now().UTC(), int32(run.goalVersion), map[string]any{
+			"parent_branch_id": "", "objective": "Root research scope", "entry_conditions": json.RawMessage(`[]`),
+			"exit_conditions": json.RawMessage(`[]`), "budget_share": 1.0, "status": "active",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	} else if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(run.ctx, `INSERT INTO research_branch(id,workspace_id,session_id,client_key,parent_branch_id,objective,status,goal_version,state_version)
+		VALUES($1::uuid,$2::uuid,$3::uuid,$4,$5::uuid,$6,'active',$7,$8)`, branchID, run.fixture.workspaceID, run.fixture.sessionID, clientPrefix+branchID, rootBranchID, objective, run.goalVersion, stateVersion); err != nil {
 		t.Fatal(err)
 	}
 	if err = registerV6BranchArtifactTx(run.ctx, tx, run.fixture.workspaceID, run.fixture.sessionID, branchID, time.Now().UTC(), int32(run.goalVersion), map[string]any{
-		"parent_branch_id": "", "objective": objective, "entry_conditions": json.RawMessage(`[]`),
+		"parent_branch_id": rootBranchID, "objective": objective, "entry_conditions": json.RawMessage(`[]`),
 		"exit_conditions": json.RawMessage(`[]`), "budget_share": 0.0, "status": "active",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = tx.Exec(run.ctx, `INSERT INTO research_v6_work_item_branch(workspace_id,session_id,work_item_id,branch_id)
-		VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid)`, run.fixture.workspaceID, run.fixture.sessionID, workItemID, branchID); err != nil {
+	if err = tx.Commit(run.ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err = tx.Commit(run.ctx); err != nil {
+	return branchID
+}
+
+func seedV6WorkBranchScope(t *testing.T, run *transactionRecoveryRun, workItemID, clientPrefix, objective string, stateVersion int64) string {
+	t.Helper()
+	branchID := seedV6DirectorChildBranch(t, run, clientPrefix, objective, stateVersion)
+	if _, err := run.pool.Exec(run.ctx, `INSERT INTO research_v6_work_item_branch(workspace_id,session_id,work_item_id,branch_id)
+		VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid)`, run.fixture.workspaceID, run.fixture.sessionID, workItemID, branchID); err != nil {
 		t.Fatal(err)
 	}
 	return branchID
@@ -265,6 +288,49 @@ func TestRecoverV6WorkItemReplacesPlatformInvalidManifestWithoutSpendingAttempt(
 	}
 	if workStatus != "ready" || attemptCount != 2 || attemptStatus != "lost" || failureClass != "platform_invalid_manifest" {
 		t.Fatalf("work=%s count=%d attempt=%s failure=%s", workStatus, attemptCount, attemptStatus, failureClass)
+	}
+}
+
+func TestRecoverV6WorkItemReplacesStaleDirectorManifestWithNewCycle(t *testing.T) {
+	run := newTransactionRecoveryRun(t, "Recover stale Director Work Manifest")
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_session SET orchestrator_version='research-run-v6' WHERE id=$1::uuid`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	membershipID, workItemID := seedV6RecoveryWorkItem(t, run, "running", time.Now().Add(time.Hour))
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_work_item
+		SET kind='director',expected_result_schema_id='director_action_proposal',attempt_count=1,max_attempts=3
+		WHERE id=$1::uuid`, workItemID); err != nil {
+		t.Fatal(err)
+	}
+	attemptID := seedV6RecoveryAttempt(t, run, membershipID, workItemID)
+	staleManifest := `{"task_specific_schema":{"payload_schemas":{"work.create.v1":{
+		"type":"object","required":["kind","payload"],"properties":{
+			"kind":{"type":"string"},"expected_result_schema_id":{"type":"string"},"payload":{"type":"object"}
+		}}}}}`
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_work_item_attempt SET manifest=$2::jsonb WHERE id=$1::uuid`, attemptID, staleManifest); err != nil {
+		t.Fatal(err)
+	}
+
+	count, err := run.store.RecoverExpiredV6WorkItems(run.ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("recovered=%d want=1", count)
+	}
+	var workStatus, terminalReason, attemptStatus, failureClass, recoveryKind string
+	if err = run.pool.QueryRow(run.ctx, `SELECT w.status,w.terminal_reason_code,a.status,a.failure_class,
+		(SELECT payload->>'recovery_kind' FROM research_run_event e
+		 WHERE e.session_id=w.session_id AND e.event_type='v6_work_item_recovered'
+		 ORDER BY e.sequence DESC LIMIT 1)
+		FROM research_work_item w JOIN research_work_item_attempt a ON a.work_item_id=w.id
+		WHERE w.id=$1::uuid AND a.id=$2::uuid`, workItemID, attemptID).
+		Scan(&workStatus, &terminalReason, &attemptStatus, &failureClass, &recoveryKind); err != nil {
+		t.Fatal(err)
+	}
+	if workStatus != "failed" || terminalReason != "contract_rejected" || attemptStatus != "lost" ||
+		failureClass != "platform_invalid_manifest" || recoveryKind != "stale_director_manifest" {
+		t.Fatalf("work=%s reason=%s attempt=%s failure=%s recovery=%s", workStatus, terminalReason, attemptStatus, failureClass, recoveryKind)
 	}
 }
 

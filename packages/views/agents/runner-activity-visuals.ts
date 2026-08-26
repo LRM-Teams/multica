@@ -15,14 +15,16 @@ export function runnerActivityVisuals({
   detail_kind: detailKind,
 }: RunnerActivityFacts): RunnerActivityVisuals {
   if (activityKind === "error") {
-    return { dotClass: "bg-destructive", pulse: false, show: true, rank: 3 };
+    return { dotClass: "bg-dot-fail", pulse: false, show: true, rank: 3 };
   }
   if (activityKind === "thinking") {
     return { dotClass: "bg-blue-500", pulse: true, show: true, rank: 0 };
   }
   if (activityKind === "working") {
+    // LRM-1533/1535 — unify every working dot onto --dot-working (#F5B301);
+    // previously running_command vs other working used two divergent ambers.
     return {
-      dotClass: detailKind === "running_command" ? "bg-running" : "bg-amber-500",
+      dotClass: "bg-dot-working",
       pulse: true,
       show: true,
       rank: detailKind === "running_command" ? 1 : 2,

@@ -557,6 +557,15 @@
         "tier": { "enum": ["GOAL", "S", "M", "L", "XL", "XXL"] },
         "canonical_ref": { "$ref": "#/$defs/entity_ref" },
         "branch_ids": { "type": "array", "maxItems": 128, "uniqueItems": true, "items": { "$ref": "#/$defs/uuid" } },
+        "territory": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["branch_id", "label"],
+          "properties": {
+            "branch_id": { "$ref": "#/$defs/uuid" },
+            "label": { "type": "string", "minLength": 1, "maxLength": 160 }
+          }
+        },
         "state": { "$ref": "#/$defs/projection_state" },
         "title": { "type": "string", "maxLength": 4096 },
         "catalog_summary": { "type": "string", "maxLength": 512 },

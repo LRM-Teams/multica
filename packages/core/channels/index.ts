@@ -75,6 +75,7 @@ export {
 } from "./mutations";
 export { useComposerDraftStore, type ComposerDraftKey, type ComposerDraftAttachment } from "./stores";
 export { isImmutableSystemChannel } from "./system-channel";
+export { canManageChannelGoal } from "./can-manage-channel-goal";
 export {
   channelMemberRole,
   channelMemberBadge,

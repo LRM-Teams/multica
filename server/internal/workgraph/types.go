@@ -6,8 +6,6 @@ import (
 )
 
 const (
-	workNodeKindIssue = "issue"
-
 	ownerTypeAgent      = "agent"
 	ownerTypeMember     = "member"
 	ownerTypeUnassigned = "unassigned"

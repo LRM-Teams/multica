@@ -64,6 +64,13 @@ export const ResearchV6DirectorProjectionNodeSchema = z
       .array(uuid)
       .max(128)
       .refine((values) => new Set(values).size === values.length),
+    territory: z
+      .object({
+        branch_id: uuid,
+        label: z.string().min(1).max(160),
+      })
+      .strict()
+      .optional(),
     state: ResearchV6DirectorProjectionStateSchema,
     title: z.string().max(4096).optional(),
     catalog_summary: z.string().max(512),
@@ -334,6 +341,12 @@ function projectionNodeFromWire(
     tier: value.tier,
     canonicalRef: entityRefFromWire(value.canonical_ref),
     branchIds: value.branch_ids,
+    territory: value.territory
+      ? {
+          branchId: value.territory.branch_id,
+          label: value.territory.label,
+        }
+      : undefined,
     state: {
       execution: value.state.execution,
       conclusion: value.state.conclusion,

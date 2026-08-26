@@ -78,6 +78,13 @@ var researchV6WorkManifestCmd = &cobra.Command{
 	RunE:  runResearchV6WorkManifest,
 }
 
+var researchV6WorkArtifactCmd = &cobra.Command{
+	Use:   "work-artifact <session-id> <work-item-id> <attempt-id> <artifact-version-id>",
+	Short: "Read one frozen V6 Work artifact representation",
+	Args:  exactArgs(4),
+	RunE:  runResearchV6WorkArtifact,
+}
+
 var researchV6DirectorBriefCmd = &cobra.Command{
 	Use:   "director-brief <session-id> <work-item-id> <attempt-id>",
 	Short: "Read one frozen V6 Director Brief page",
@@ -245,6 +252,7 @@ func init() {
 	researchCmd.AddCommand(researchArchiveCmd)
 	researchCmd.AddCommand(researchTaskResultCmd)
 	researchCmd.AddCommand(researchV6WorkManifestCmd)
+	researchCmd.AddCommand(researchV6WorkArtifactCmd)
 	researchCmd.AddCommand(researchV6DirectorBriefCmd)
 	researchCmd.AddCommand(researchV6DirectorBriefAckCmd)
 	researchCmd.AddCommand(researchV6WorkCatalogCmd)
@@ -364,6 +372,10 @@ func researchV6AttemptPath(args []string) string {
 
 func runResearchV6WorkManifest(cmd *cobra.Command, args []string) error {
 	return researchV6GetJSON(cmd, researchV6AttemptPath(args)+"/manifest")
+}
+
+func runResearchV6WorkArtifact(cmd *cobra.Command, args []string) error {
+	return researchV6GetJSON(cmd, researchV6AttemptPath(args)+"/artifacts/"+args[3])
 }
 
 func runResearchV6DirectorBrief(cmd *cobra.Command, args []string) error {

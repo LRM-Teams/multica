@@ -34,7 +34,7 @@ export interface ResearchV6ReportHistoryItem {
   publishedAt?: string | null;
 }
 
-type FramePhase = "idle" | "loading" | "ready" | "unavailable";
+type FramePhase = "idle" | "loading" | "ready" | "empty" | "unavailable";
 
 const EMPTY_REPORT_HISTORY: readonly ResearchV6ReportHistoryItem[] = [];
 
@@ -99,9 +99,11 @@ export function ResearchV6ReportModal({
     ? "idle"
     : loading
       ? "loading"
-      : source.kind === "unavailable"
-        ? "unavailable"
-        : "loading";
+      : !report
+        ? "empty"
+        : source.kind === "unavailable"
+          ? "unavailable"
+          : "loading";
   const [frameState, setFrameState] = useState<{
     identity: string;
     phase: FramePhase;
@@ -115,7 +117,7 @@ export function ResearchV6ReportModal({
     frameState.identity === frameIdentity ? frameState.phase : initialPhase;
   const isolatedUrl = source.kind === "isolated" ? source.url : null;
   const frameUrl =
-    !open || phase === "unavailable"
+    !open || phase === "empty" || phase === "unavailable"
       ? null
       : isolatedUrl ?? (source.kind === "compiled" ? compiledBlobUrl : null);
   const documentLabel =
@@ -174,13 +176,15 @@ export function ResearchV6ReportModal({
               <DialogTitle className="truncate text-base sm:text-lg">
                 {report?.title || t(($) => $.d5.report_sandbox.title)}
               </DialogTitle>
-              <DialogDescription className="mt-1 flex min-w-0 items-center gap-1.5 truncate text-[11px]">
-                <ShieldCheck className="size-3 shrink-0 text-success" aria-hidden="true" />
-                <span className="truncate">
-                  {documentLabel}
-                  {report?.packageHash ? ` · ${report.packageHash}` : ""}
-                </span>
-              </DialogDescription>
+              {report ? (
+                <DialogDescription className="mt-1 flex min-w-0 items-center gap-1.5 truncate text-[11px]">
+                  <ShieldCheck className="size-3 shrink-0 text-success" aria-hidden="true" />
+                  <span className="truncate">
+                    {documentLabel}
+                    {report.packageHash ? ` · ${report.packageHash}` : ""}
+                  </span>
+                </DialogDescription>
+              ) : null}
               {report?.revision || report?.status || report?.inputCount != null ? (
                 <p className="mt-1.5 truncate text-[10px] text-muted-foreground">
                   {report.revision
@@ -254,6 +258,22 @@ export function ResearchV6ReportModal({
             </div>
           ) : null}
 
+          {phase === "empty" ? (
+            <div
+              className="absolute inset-0 grid place-items-center bg-card px-5 py-8 sm:px-10 sm:py-12"
+              data-testid="research-v6-report-empty"
+            >
+              <div className="max-w-md text-center">
+                <h2 className="text-balance text-xl font-semibold">
+                  {t(($) => $.d5.report_sandbox.empty_title)}
+                </h2>
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                  {t(($) => $.d5.report_sandbox.empty_body)}
+                </p>
+              </div>
+            </div>
+          ) : null}
+
           {unavailable ? (
             <div className="absolute inset-0 overflow-y-auto bg-card px-5 py-8 sm:px-10 sm:py-12">
               <div className="mx-auto max-w-3xl">
@@ -263,7 +283,7 @@ export function ResearchV6ReportModal({
                 <p className="mt-2 text-sm leading-6 text-muted-foreground">
                   {t(($) => $.d5.report_sandbox.unavailable_body)}
                 </p>
-                {onRequestFreshCapability ? (
+                {report && onRequestFreshCapability ? (
                   <Button
                     type="button"
                     variant="outline"

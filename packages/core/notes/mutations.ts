@@ -156,6 +156,7 @@ export function useUpdateNotePageShares() {
     onSettled: (_data, _err, vars) => {
       qc.invalidateQueries({ queryKey: noteKeys.detail(wsId, vars.id) });
       qc.invalidateQueries({ queryKey: noteKeys.list(wsId) });
+      qc.invalidateQueries({ queryKey: noteKeys.shareUnreadCount(wsId) });
     },
   });
 }

@@ -275,17 +275,44 @@ func directorBriefFrontierSummary(summary string, rawOpenQuestions json.RawMessa
 }
 
 func (s *PostgresStore) loadV6DirectorControlFacts(ctx context.Context, workspaceID, runID string, facts *DirectorBriefFacts) error {
-	rows, err := s.pool.Query(ctx, `SELECT id::text,kind,status,kind||' discussion',updated_at FROM research_discussion WHERE workspace_id=$1::uuid AND session_id=$2::uuid ORDER BY updated_at DESC,id LIMIT 256`, workspaceID, runID)
+	rows, err := s.pool.Query(ctx, `SELECT discussion.id::text,discussion.kind,discussion.status,
+		COALESCE(inputs.summary,'无'),COALESCE(votes.summary,'无'),COALESCE(turns.summary,'无'),discussion.updated_at
+		FROM research_discussion discussion
+		LEFT JOIN LATERAL (
+			SELECT string_agg(input.node_artifact_version_id::text,', ' ORDER BY input.ordinal) AS summary
+			FROM research_discussion_input input
+			WHERE input.workspace_id=discussion.workspace_id AND input.session_id=discussion.session_id
+			  AND input.discussion_id=discussion.id
+		) inputs ON true
+		LEFT JOIN LATERAL (
+			SELECT string_agg(latest.vote||'：'||left(latest.reason,512),' | ' ORDER BY latest.agent_id::text) AS summary
+			FROM (
+				SELECT DISTINCT ON (vote.agent_id) vote.agent_id,vote.vote,vote.reason
+				FROM research_discussion_vote vote
+				WHERE vote.workspace_id=discussion.workspace_id AND vote.session_id=discussion.session_id
+				  AND vote.discussion_id=discussion.id AND vote.discussion_revision=discussion.revision
+				ORDER BY vote.agent_id,vote.created_at DESC,vote.id DESC
+			) latest
+		) votes ON true
+		LEFT JOIN LATERAL (
+			SELECT string_agg(left(turn.visible_message,1024),' | ' ORDER BY turn.ordinal) AS summary
+			FROM research_discussion_turn turn
+			WHERE turn.workspace_id=discussion.workspace_id AND turn.session_id=discussion.session_id
+			  AND turn.discussion_id=discussion.id AND turn.discussion_revision=discussion.revision
+		) turns ON true
+		WHERE discussion.workspace_id=$1::uuid AND discussion.session_id=$2::uuid
+		ORDER BY discussion.updated_at DESC,discussion.id LIMIT 256`, workspaceID, runID)
 	if err != nil {
 		return err
 	}
 	for rows.Next() {
-		var id, kind, state, summary string
+		var id, kind, state, inputs, votes, turns string
 		var updated time.Time
-		if err = rows.Scan(&id, &kind, &state, &summary, &updated); err != nil {
+		if err = rows.Scan(&id, &kind, &state, &inputs, &votes, &turns, &updated); err != nil {
 			rows.Close()
 			return err
 		}
+		summary := directorBriefDiscussionSummary(kind, inputs, votes, turns)
 		facts.Discussions = append(facts.Discussions, map[string]any{"id": id, "kind": "discussion", "state": directorBriefControlState(state), "summary": summary, "updated_at": updated.UTC().Format(time.RFC3339Nano)})
 	}
 	if err = rows.Err(); err != nil {
@@ -377,6 +404,15 @@ func truncateV6BriefText(value string, limit int) string {
 		return value
 	}
 	return string(runes[:limit])
+}
+
+func directorBriefDiscussionSummary(kind, inputs, votes, turns string) string {
+	return truncateV6BriefText(fmt.Sprintf("讨论类型：%s；输入版本：%s；最新投票：%s；可见结论：%s",
+		truncateV6BriefText(kind, 32),
+		truncateV6BriefText(inputs, 128),
+		truncateV6BriefText(votes, 192),
+		truncateV6BriefText(turns, 128),
+	), 512)
 }
 
 func jsonObjectOrEmpty(raw json.RawMessage) any {
@@ -482,6 +518,9 @@ func v6DirectorActionPayloadSchemas() map[string]any {
 	uuidValue := map[string]any{"type": "string", "format": "uuid"}
 	hashValue := map[string]any{"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
 	jsonObject := map[string]any{"type": "object"}
+	nonEmptyJSONObject := map[string]any{"type": "object", "minProperties": 1}
+	atomicWorkConfig := map[string]any{"type": "object", "required": []string{"task_specific_schema"}, "properties": map[string]any{
+		"task_specific_schema": nonEmptyJSONObject}}
 	nodeRef := map[string]any{"type": "object", "additionalProperties": false, "required": []string{"kind", "id", "version_id", "tier", "content_hash"}, "properties": map[string]any{
 		"kind": map[string]any{"enum": []string{"result_s", "insight"}}, "id": uuidValue, "version_id": uuidValue,
 		"tier": map[string]any{"enum": []string{"S", "M", "L", "XL", "XXL"}}, "content_hash": hashValue}}
@@ -501,11 +540,11 @@ func v6DirectorActionPayloadSchemas() map[string]any {
 				"name": text, "capability": text, "mission_prompt": text, "capacity_reason": text,
 				"model_config": jsonObject, "tool_config": jsonObject, "permission_config": jsonObject}},
 		"work.create.v1": map[string]any{"type": "object", "additionalProperties": false,
-			"required": []string{"kind", "assignee_agent_id", "mission", "expected_result_schema_id", "payload_schema_id", "payload", "priority", "max_attempts"}, "properties": map[string]any{
-				"kind": map[string]any{"type": "string"}, "assignee_agent_id": uuidValue, "mission": text,
-				"expected_result_schema_id": map[string]any{"type": "string"}, "payload_schema_id": map[string]any{"type": "string"}, "payload": jsonObject,
+			"required": []string{"kind", "assignee_agent_id", "mission", "expected_result_schema_id", "payload_schema_id", "payload", "priority", "max_attempts", "branch_ids"}, "properties": map[string]any{
+				"kind": map[string]any{"const": "research"}, "assignee_agent_id": uuidValue, "mission": text,
+				"expected_result_schema_id": map[string]any{"const": "atomic_result_submission"}, "payload_schema_id": map[string]any{"type": "string", "pattern": "^research\\.[A-Za-z0-9._-]+$"}, "payload": atomicWorkConfig,
 				"priority": map[string]any{"type": "number", "minimum": 0, "maximum": 1}, "max_attempts": map[string]any{"type": "integer", "minimum": 1, "maximum": 100},
-				"branch_ids": map[string]any{"type": "array", "maxItems": 128, "items": uuidValue}}},
+				"branch_ids": map[string]any{"type": "array", "minItems": 1, "maxItems": 1, "uniqueItems": true, "items": uuidValue}}},
 		"collaboration.create.v1": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"assignee_agent_id", "mission", "expected_result_schema_id", "payload_schema_id", "payload", "priority", "max_attempts"}, "properties": map[string]any{
 			"kind": map[string]any{"type": "string"}, "assignee_agent_id": uuidValue, "mission": text, "expected_result_schema_id": map[string]any{"type": "string"}, "payload_schema_id": map[string]any{"type": "string"}, "payload": jsonObject,
 			"priority": map[string]any{"type": "number", "minimum": 0, "maximum": 1}, "max_attempts": map[string]any{"type": "integer", "minimum": 1, "maximum": 100}, "branch_ids": map[string]any{"type": "array", "maxItems": 128, "items": uuidValue}}},

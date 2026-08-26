@@ -1782,6 +1782,23 @@ type GithubPullRequestCheckSuite struct {
 	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
 }
 
+type GoalControllerEvent struct {
+	ID           pgtype.UUID        `json:"id"`
+	WorkspaceID  pgtype.UUID        `json:"workspace_id"`
+	GoalID       pgtype.UUID        `json:"goal_id"`
+	EventKind    string             `json:"event_kind"`
+	SourceKind   string             `json:"source_kind"`
+	SourceID     pgtype.UUID        `json:"source_id"`
+	Payload      []byte             `json:"payload"`
+	Status       string             `json:"status"`
+	RunID        pgtype.UUID        `json:"run_id"`
+	AttemptCount int32              `json:"attempt_count"`
+	AvailableAt  pgtype.Timestamptz `json:"available_at"`
+	LastError    string             `json:"last_error"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+}
+
 type GoalExecutionEpoch struct {
 	ID             pgtype.UUID        `json:"id"`
 	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
@@ -2792,6 +2809,7 @@ type NotePage struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 	DeletedAt   pgtype.Timestamptz `json:"deleted_at"`
+	Icon        pgtype.Text        `json:"icon"`
 }
 
 type NotePageAgentRef struct {
@@ -4956,6 +4974,23 @@ type ResearchWorkItem struct {
 	CancelledAt              pgtype.Timestamptz `json:"cancelled_at"`
 	StateVersion             int64              `json:"state_version"`
 	ExpectedResultSchemaID   string             `json:"expected_result_schema_id"`
+}
+
+type ResearchWorkItemActivityEntry struct {
+	ID                pgtype.UUID        `json:"id"`
+	WorkspaceID       pgtype.UUID        `json:"workspace_id"`
+	SessionID         pgtype.UUID        `json:"session_id"`
+	WorkItemID        pgtype.UUID        `json:"work_item_id"`
+	WorkItemAttemptID pgtype.UUID        `json:"work_item_attempt_id"`
+	InboxTaskID       pgtype.UUID        `json:"inbox_task_id"`
+	MessageSequence   int32              `json:"message_sequence"`
+	Title             string             `json:"title"`
+	Subtext           string             `json:"subtext"`
+	Tone              string             `json:"tone"`
+	BodyKind          string             `json:"body_kind"`
+	Body              string             `json:"body"`
+	ObservedAt        pgtype.Timestamptz `json:"observed_at"`
+	ReceivedAt        pgtype.Timestamptz `json:"received_at"`
 }
 
 type ResearchWorkItemAttempt struct {

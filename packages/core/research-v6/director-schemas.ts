@@ -616,7 +616,7 @@ const EMPTY_DIRECTOR_NODE_DETAIL_WIRE = {
   incoming: [], outgoing: [], history_refs: [], agent_refs: [], work_item_refs: [], attempt_refs: [], evidence_refs: [], discussion_refs: [], report_refs: [],
 } satisfies WireNodeDetail;
 const EMPTY_DIRECTOR_REPORT_DETAIL_WIRE = {
-  id: EMPTY_ID, revision: 1, status: "technical_failure", title: "Invalid response", summary: "", plain_text: "", package_hash: EMPTY_HASH, document_content_hash: EMPTY_HASH, outline: [], citations: [], input_refs: [], reviews: [],
+  id: EMPTY_ID, revision: 1, status: "technical_failure", maturity: "interim", direction_coverage: [], updated_at: "1970-01-01T00:00:00.000Z", title: "Invalid response", summary: "", plain_text: "", package_hash: EMPTY_HASH, document_content_hash: EMPTY_HASH, outline: [], citations: [], input_refs: [], reviews: [],
 } satisfies WireReportDetail;
 
 export function parseResearchV6DirectorProjectionSnapshot(

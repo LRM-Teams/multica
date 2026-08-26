@@ -5,7 +5,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/multica-ai/multica/server/pkg/db"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 func TestV6HomeProgressExcludesDirectorControlWork(t *testing.T) {

@@ -219,9 +219,6 @@ func (s *PostgresStore) applyIntegrationV6Tx(ctx context.Context, tx pgx.Tx, sub
 		if _, err = tx.Exec(ctx, `UPDATE research_node_steward_assignment SET status='released',released_at=now(),reason='absorbed' WHERE session_id=$1::uuid AND node_artifact_version_id=$2::uuid AND status='active'`, in.RunID, input.VersionID); err != nil {
 			return V6IntegrationOutcome{}, err
 		}
-		if _, err = tx.Exec(ctx, `UPDATE research_result_node SET integration_state='absorbed' WHERE session_id=$1::uuid AND artifact_version_id=$2::uuid`, in.RunID, input.VersionID); err != nil {
-			return V6IntegrationOutcome{}, err
-		}
 	}
 	for _, branch := range branches {
 		if _, err = tx.Exec(ctx, `INSERT INTO research_node_branch(workspace_id,session_id,node_artifact_version_id,branch_id,bound_by_decision_id)VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid)`, in.WorkspaceID, in.RunID, artifactVersionID, branch.ID, roundID); err != nil {

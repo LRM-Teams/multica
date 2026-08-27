@@ -78,6 +78,33 @@ func EffectiveGraphMemoryMode(memoryType, workspaceMode, channelOverride string)
 	return GraphMemoryModeAgent
 }
 
+type graphMemoryAgentRuntimeConfig struct {
+	runtimeID pgtype.UUID
+	model     string
+	thinking  string
+	source    string
+}
+
+func resolveGraphMemoryAgentRuntimeConfig(
+	profileRuntimeID, channelRuntimeID pgtype.UUID,
+	profileModel, channelModel, profileThinking, channelThinking string,
+) graphMemoryAgentRuntimeConfig {
+	if channelRuntimeID.Valid {
+		return graphMemoryAgentRuntimeConfig{
+			runtimeID: channelRuntimeID,
+			model:     strings.TrimSpace(channelModel),
+			thinking:  strings.TrimSpace(channelThinking),
+			source:    "channel",
+		}
+	}
+	return graphMemoryAgentRuntimeConfig{
+		runtimeID: profileRuntimeID,
+		model:     strings.TrimSpace(profileModel),
+		thinking:  strings.TrimSpace(profileThinking),
+		source:    "workspace",
+	}
+}
+
 func (c *PostgresGraphMemoryAgentControlPlane) ReconcileChannel(ctx context.Context, workspaceID, channelID string) (GraphMemoryAgentChannelStatus, error) {
 	if c == nil || c.pool == nil {
 		return GraphMemoryAgentChannelStatus{}, ErrGraphMemoryAgentUnavailable
@@ -91,29 +118,50 @@ func (c *PostgresGraphMemoryAgentControlPlane) ReconcileChannel(ctx context.Cont
 		return GraphMemoryAgentChannelStatus{}, err
 	}
 
-	var channelName, kind, override, memoryType, workspaceMode, memoryAgentModel, memoryAgentThinking string
+	var channelName, kind, override, memoryType, workspaceMode string
+	var profileModel, profileThinking, channelModel, channelThinking string
 	var maxSeq int64
-	var runtimeID pgtype.UUID
+	var profileRuntimeID, channelRuntimeID pgtype.UUID
 	var archivedAt pgtype.Timestamptz
 	err = tx.QueryRow(ctx, `
 		SELECT c.name, c.kind, c.graph_memory_mode_override, c.archived_at,
-		       COALESCE(p.memory_type, 'legacy'), COALESCE(p.graph_memory_mode, 'agent'), p.memory_agent_runtime_id,
-		       COALESCE(p.memory_agent_model,''),COALESCE(p.memory_agent_thinking,''),
+		       c.graph_memory_agent_runtime_id_override,
+		       COALESCE(c.graph_memory_agent_model_override,''),
+		       COALESCE(c.graph_memory_agent_thinking_override,''),
+		       COALESCE(p.memory_type, 'legacy'), COALESCE(p.graph_memory_mode, 'agent'),
+		       p.memory_agent_runtime_id, COALESCE(p.memory_agent_model,''),
+		       COALESCE(p.memory_agent_thinking,''),
 		       COALESCE((SELECT max(seq) FROM channel_message WHERE channel_id=c.id), 0)
 		FROM channel c
 		LEFT JOIN graph_memory_profile p ON p.workspace_id=c.workspace_id
 		WHERE c.id=$1::uuid AND c.workspace_id=$2::uuid
 		FOR UPDATE OF c`, channelID, workspaceID).Scan(
-		&channelName, &kind, &override, &archivedAt, &memoryType, &workspaceMode, &runtimeID, &memoryAgentModel, &memoryAgentThinking, &maxSeq,
+		&channelName, &kind, &override, &archivedAt,
+		&channelRuntimeID, &channelModel, &channelThinking,
+		&memoryType, &workspaceMode, &profileRuntimeID, &profileModel, &profileThinking, &maxSeq,
 	)
 	if err != nil {
 		return GraphMemoryAgentChannelStatus{}, err
 	}
+	resolvedRuntime := resolveGraphMemoryAgentRuntimeConfig(
+		profileRuntimeID, channelRuntimeID,
+		profileModel, channelModel, profileThinking, channelThinking,
+	)
+	runtimeID := resolvedRuntime.runtimeID
+	memoryAgentModel := resolvedRuntime.model
+	memoryAgentThinking := resolvedRuntime.thinking
 	effective := EffectiveGraphMemoryMode(memoryType, workspaceMode, override)
 	status := GraphMemoryAgentChannelStatus{ChannelID: channelID, EffectiveMode: effective}
-	var existingAgentID pgtype.UUID
-	var previousStatus string
-	_ = tx.QueryRow(ctx, `SELECT agent_id, status FROM graph_memory_channel_agent WHERE channel_id=$1::uuid`, channelID).Scan(&existingAgentID, &previousStatus)
+	var existingAgentID, existingRuntimeID pgtype.UUID
+	var previousStatus, existingModel, existingThinking string
+	_ = tx.QueryRow(ctx, `
+		SELECT managed.agent_id, managed.status, managed.runtime_id,
+		       COALESCE(agent.model,''), COALESCE(agent.thinking_level,'')
+		FROM graph_memory_channel_agent managed
+		LEFT JOIN agent ON agent.id=managed.agent_id
+		WHERE managed.channel_id=$1::uuid`, channelID).Scan(
+		&existingAgentID, &previousStatus, &existingRuntimeID, &existingModel, &existingThinking,
+	)
 
 	if effective != GraphMemoryModeAgent || kind != "group" || archivedAt.Valid {
 		if err = terminalizeGraphMemoryAgentRunTx(ctx, tx, channelID, "cancelled"); err != nil {
@@ -156,6 +204,14 @@ func (c *PostgresGraphMemoryAgentControlPlane) ReconcileChannel(ctx context.Cont
 	}
 	if err != nil || !runtimeID.Valid {
 		return c.setBlocked(ctx, tx, status, workspaceID, channelID, channelName, sponsorID, existingAgentID, previousStatus, maxSeq, "eligible Pi runtime with directed steering is unavailable")
+	}
+	configChanged := existingAgentID.Valid && (existingRuntimeID != runtimeID ||
+		strings.TrimSpace(existingModel) != memoryAgentModel ||
+		strings.TrimSpace(existingThinking) != memoryAgentThinking)
+	if previousStatus == "active" && configChanged {
+		if err = terminalizeGraphMemoryAgentRunTx(ctx, tx, channelID, "checkpointed"); err != nil {
+			return status, err
+		}
 	}
 
 	handle := "memory-" + strings.ReplaceAll(channelID, "-", "")

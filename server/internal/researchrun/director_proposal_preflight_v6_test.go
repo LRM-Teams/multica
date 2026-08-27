@@ -159,7 +159,8 @@ func TestValidateV6IntegrationCandidateRequiresExecutableTierTransition(t *testi
 		inputs  []V6NodeRef
 		wantErr bool
 	}{
-		{name: "two S nodes can promote to M", inputs: []V6NodeRef{result(uuid.NewString(), V6TierS), result(uuid.NewString(), V6TierS)}},
+		{name: "three S nodes can promote to M", inputs: []V6NodeRef{result(uuid.NewString(), V6TierS), result(uuid.NewString(), V6TierS), result(uuid.NewString(), V6TierS)}},
+		{name: "two S nodes are below promotion threshold", inputs: []V6NodeRef{result(uuid.NewString(), V6TierS), result(uuid.NewString(), V6TierS)}, wantErr: true},
 		{name: "one M can assimilate one S", inputs: []V6NodeRef{result(uuid.NewString(), V6TierM), result(uuid.NewString(), V6TierS)}},
 		{name: "mixed promotion and assimilation set is impossible", inputs: []V6NodeRef{result(uuid.NewString(), V6TierM), result(uuid.NewString(), V6TierM), result(uuid.NewString(), V6TierS)}, wantErr: true},
 		{name: "duplicate node version cannot satisfy input cardinality", inputs: func() []V6NodeRef {

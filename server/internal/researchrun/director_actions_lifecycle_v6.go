@@ -304,7 +304,7 @@ func (s *PostgresStore) recordV6DirectorNoOp(ctx context.Context, proposal v6Dir
 		         SELECT 1 FROM research_work_item w
 		         JOIN research_director_assignment d ON d.id=s.current_director_assignment_id AND d.status='active'
 		         WHERE w.workspace_id=s.workspace_id AND w.session_id=s.id
-		           AND w.kind<>'director' AND w.assigned_agent_id<>d.director_agent_id
+		           AND w.kind='research' AND w.assigned_agent_id<>d.director_agent_id
 		           AND w.status='failed'
 		       ),
 		       EXISTS(

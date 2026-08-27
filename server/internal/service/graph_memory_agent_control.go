@@ -302,7 +302,7 @@ func (c *PostgresGraphMemoryAgentControlPlane) ObserveActivity(ctx context.Conte
 	}
 	tag, err := c.pool.Exec(ctx, `
 		UPDATE graph_memory_agent_state s SET
-		  lease_expires_at=$3 + make_interval(secs => p.memory_agent_idle_grace_seconds), updated_at=now()
+		  lease_expires_at=$3::timestamptz + make_interval(secs => p.memory_agent_idle_grace_seconds), updated_at=now()
 		FROM graph_memory_channel_agent a
 		JOIN graph_memory_profile p ON p.workspace_id=a.workspace_id
 		WHERE s.channel_id=a.channel_id AND a.channel_id=$1::uuid AND a.workspace_id=$2::uuid AND a.status='active'`, channelID, workspaceID, at.UTC())

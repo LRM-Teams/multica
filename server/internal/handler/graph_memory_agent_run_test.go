@@ -18,6 +18,57 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
+func TestGraphMemoryAgentObserveActivityRenewsTimestampLease(t *testing.T) {
+	if testPool == nil {
+		t.Skip("handler test database unavailable")
+	}
+	ctx := context.Background()
+	workspaceID := createGraphMemoryTestWorkspace(t)
+	mustGraphMemoryMember(t, workspaceID, "owner")
+	channelID := createGraphMemoryTestChannel(t, workspaceID)
+	const idleGraceSeconds = 90
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO graph_memory_profile
+		 (workspace_id,memory_type,graph_memory_mode,memory_agent_idle_grace_seconds)
+		VALUES($1,'graph','agent',$2)`, workspaceID, idleGraceSeconds); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO graph_memory_channel_agent
+		 (channel_id,workspace_id,handle,display_name,status)
+		VALUES($1,$2,$3,$4,'active')`, channelID, workspaceID, "memory-activity-test", "Memory activity test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(ctx, `INSERT INTO graph_memory_agent_state(channel_id) VALUES($1)`, channelID); err != nil {
+		t.Fatal(err)
+	}
+
+	observedAt := time.Now().UTC().Truncate(time.Microsecond)
+	control := service.NewPostgresGraphMemoryAgentControlPlane(testPool)
+	if err := control.ObserveActivity(ctx, workspaceID.String(), channelID.String(), observedAt); err != nil {
+		t.Fatalf("ObserveActivity: %v", err)
+	}
+
+	var leaseExpiresAt time.Time
+	if err := testPool.QueryRow(ctx, `SELECT lease_expires_at FROM graph_memory_agent_state WHERE channel_id=$1`, channelID).Scan(&leaseExpiresAt); err != nil {
+		t.Fatal(err)
+	}
+	want := observedAt.Add(idleGraceSeconds * time.Second)
+	if !leaseExpiresAt.Equal(want) {
+		t.Fatalf("lease_expires_at=%s, want %s", leaseExpiresAt.Format(time.RFC3339Nano), want.Format(time.RFC3339Nano))
+	}
+
+	claim, err := service.NewGraphMemoryAgentRunStore(testPool).Claim(
+		ctx, workspaceID.String(), channelID.String(), "channel", channelID.String(), "wake after observed activity", 0,
+	)
+	if err != nil {
+		t.Fatalf("Claim after ObserveActivity: %v", err)
+	}
+	if claim.RunID == "" || claim.TrajectoryID == "" || claim.Resumed {
+		t.Fatalf("claim after ObserveActivity = %+v", claim)
+	}
+}
+
 func TestGraphMemoryAgentRunStoreFencingIdempotencyQuotaAndCitation(t *testing.T) {
 	if testPool == nil {
 		t.Skip("handler test database unavailable")

@@ -114,9 +114,11 @@ export function adaptResearchV6DirectorCanvas(
   // Roster circles are a staffing overlay, not knowledge-graph members.
   // Keep them only until the first research Work / Result / Insight appears.
   const absorbedInputs = new Map<string, string[]>();
+  const absorbedPairs = new Set<string>();
   const expandedAbsorbedNodeIds = new Set<string>();
   for (const edge of projection.edges) {
     if (edge.kind !== "absorbed_into") continue;
+    absorbedPairs.add(`${edge.fromNodeId}\0${edge.toNodeId}`);
     const inputs = absorbedInputs.get(edge.toNodeId) ?? [];
     inputs.push(edge.fromNodeId);
     absorbedInputs.set(edge.toNodeId, inputs);
@@ -222,11 +224,20 @@ export function adaptResearchV6DirectorCanvas(
         };
       }),
       edges: projection.edges
-        .filter(
-          (edge) =>
-            visibleNodeIds.has(edge.fromNodeId) &&
-            visibleNodeIds.has(edge.toNodeId),
-        )
+        .filter((edge) => {
+          if (
+            !visibleNodeIds.has(edge.fromNodeId) ||
+            !visibleNodeIds.has(edge.toNodeId)
+          ) {
+            return false;
+          }
+          // Integration writes both absorption and derivation for the same
+          // input → successor pair. Keep the fusion edge; a second line is noise.
+          return !(
+            edge.kind === "derived_from" &&
+            absorbedPairs.has(`${edge.fromNodeId}\0${edge.toNodeId}`)
+          );
+        })
         .map((edge) => ({
           id: edge.id,
           session_id: projection.runId,

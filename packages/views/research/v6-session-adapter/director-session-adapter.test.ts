@@ -327,6 +327,30 @@ describe("Director V6 canvas adapter", () => {
     });
   });
 
+  it("does not draw a second line when derivation repeats an absorption pair", () => {
+    const result = adaptResearchV6DirectorCanvas({
+      runId: RUN_ID,
+      eventSequence: 8,
+      nodes: [node("input", "S"), node("successor", "M"), node("peer", "M")],
+      edges: [
+        edge("absorb", "input", "successor", "absorbed_into"),
+        edge("derive", "input", "successor", "derived_from"),
+        edge("other", "input", "peer", "derived_from"),
+      ],
+    });
+
+    expect(
+      result.graph.edges.map((item) => [
+        item.from_node_id,
+        item.to_node_id,
+        item.edge_type,
+      ]),
+    ).toEqual([
+      ["input", "successor", "absorbed_into"],
+      ["input", "peer", "derived_from"],
+    ]);
+  });
+
   it("derives fusion presentation only from explicit absorbed_into edges", () => {
     const result = adaptResearchV6DirectorCanvas({
       runId: RUN_ID,

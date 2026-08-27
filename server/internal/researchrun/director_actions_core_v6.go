@@ -21,6 +21,9 @@ type v6CreateWorkActionPayload struct {
 	Priority               float64         `json:"priority"`
 	MaxAttempts            int             `json:"max_attempts"`
 	BranchIDs              []string        `json:"branch_ids"`
+	DirectionGateNodeCount int             `json:"direction_gate_node_count"`
+	DirectionGateDecision  string          `json:"direction_gate_decision"`
+	DirectionGateRationale string          `json:"direction_gate_rationale"`
 }
 
 func (s *PostgresStore) executeV6CreateAgentAction(ctx context.Context, proposal v6DirectorProposal, cycleID string, action v6DirectorAction, expectedState int64) error {
@@ -97,6 +100,19 @@ func (s *PostgresStore) executeV6CreateWorkAction(ctx context.Context, proposal 
 	if err != nil {
 		return err
 	}
+	if expectedKind := V6ContractKind(payload.ExpectedResultSchemaID); expectedKind == V6ContractAtomicResultSubmission {
+		var persistedPayload map[string]any
+		if err = json.Unmarshal(workPayload, &persistedPayload); err != nil {
+			return ErrInvalidContract
+		}
+		persistedPayload["direction_gate_node_count"] = payload.DirectionGateNodeCount
+		persistedPayload["direction_gate_decision"] = payload.DirectionGateDecision
+		persistedPayload["direction_gate_rationale"] = payload.DirectionGateRationale
+		workPayload, err = json.Marshal(persistedPayload)
+		if err != nil {
+			return err
+		}
+	}
 	if expectedKind == V6ContractAtomicResultSubmission {
 		var config struct {
 			TaskSpecificSchema json.RawMessage `json:"task_specific_schema"`
@@ -168,6 +184,15 @@ func (s *PostgresStore) executeV6CreateWorkAction(ctx context.Context, proposal 
 		}
 		if expectedKind == V6ContractAtomicResultSubmission && childBranchCount != 1 {
 			return fmt.Errorf("%w: atomic Work 不能直接堆进根 Branch，必须绑定一个独立子 Branch", ErrInvalidContract)
+		}
+		if expectedKind == V6ContractAtomicResultSubmission {
+			if err = validateV6DirectionGateTx(ctx, tx, proposal.WorkspaceID, proposal.RunID, branchIDs, v6DirectionGate{
+				NodeCount: payload.DirectionGateNodeCount,
+				Decision:  payload.DirectionGateDecision,
+				Rationale: payload.DirectionGateRationale,
+			}); err != nil {
+				return err
+			}
 		}
 	}
 	workID := uuid.NewString()

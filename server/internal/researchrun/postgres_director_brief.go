@@ -87,7 +87,20 @@ func (s *PostgresStore) LoadDirectorBriefFacts(ctx context.Context, in StartV6Di
 	}
 	rows.Close()
 	for _, branch := range branches {
-		item := map[string]any{"branch": map[string]any{"id": branch.id, "state_version": branch.version}, "objective": branch.objective, "scope": jsonObjectOrEmpty(branch.scope), "status": branch.status, "frontier_nodes": []any{}, "has_more": false}
+		scope, ok := jsonObjectOrEmpty(branch.scope).(map[string]any)
+		if !ok {
+			scope = map[string]any{}
+		}
+		if branch.parent != "" {
+			directionNodeCount, countErr := s.loadV6DirectionNodeCount(ctx, in.WorkspaceID, in.RunID, branch.id)
+			if countErr != nil {
+				return DirectorBriefFacts{}, countErr
+			}
+			scope["direction_node_count"] = directionNodeCount
+			scope["saturation_threshold"] = v6DirectionSaturationThreshold
+			scope["saturation_gate"] = directionNodeCount > v6DirectionSaturationThreshold
+		}
+		item := map[string]any{"branch": map[string]any{"id": branch.id, "state_version": branch.version}, "objective": branch.objective, "scope": scope, "status": branch.status, "frontier_nodes": []any{}, "has_more": false}
 		frontier, hasMore, frontierErr := s.loadV6BranchFrontierBrief(ctx, in.WorkspaceID, in.RunID, branch.id)
 		if frontierErr != nil {
 			return DirectorBriefFacts{}, frontierErr
@@ -181,6 +194,28 @@ func (s *PostgresStore) LoadDirectorBriefFacts(ctx context.Context, in StartV6Di
 	return facts, nil
 }
 
+func (s *PostgresStore) loadV6DirectionNodeCount(ctx context.Context, workspaceID, runID, branchID string) (int, error) {
+	var count int
+	err := s.pool.QueryRow(ctx, `WITH RECURSIVE branch_tree AS (
+		SELECT id,id AS top_id
+		FROM research_branch
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND parent_branch_id IS NULL
+		UNION ALL
+		SELECT child.id,branch_tree.top_id
+		FROM research_branch child
+		JOIN branch_tree ON branch_tree.id=child.parent_branch_id
+		WHERE child.workspace_id=$1::uuid AND child.session_id=$2::uuid
+	), selected_direction AS (
+		SELECT top_id FROM branch_tree WHERE id=$3::uuid
+	)
+	SELECT count(DISTINCT binding.node_artifact_version_id)::int
+	FROM branch_tree
+	JOIN selected_direction ON selected_direction.top_id=branch_tree.top_id
+	JOIN research_node_branch binding ON binding.workspace_id=$1::uuid
+		AND binding.session_id=$2::uuid AND binding.branch_id=branch_tree.id`, workspaceID, runID, branchID).Scan(&count)
+	return count, err
+}
+
 func (s *PostgresStore) loadV6ReportPlanFact(ctx context.Context, workspaceID, runID string) (map[string]any, error) {
 	selection, err := selectV6ReportInputs(ctx, s.pool, workspaceID, runID)
 	if err != nil {
@@ -230,19 +265,19 @@ func directorBriefWorkSummary(mission, state string, attemptCount, maxAttempts i
 
 func (s *PostgresStore) loadV6BranchFrontierBrief(ctx context.Context, workspaceID, runID, branchID string) ([]any, bool, error) {
 	rows, err := s.pool.Query(ctx, `WITH frontier_content AS (
-		SELECT rn.artifact_version_id,'result_s'::text AS node_kind,'S'::text AS tier,rn.catalog_summary,rn.brief_summary,rn.open_questions,
+		SELECT rn.artifact_version_id,'result_s'::text AS node_kind,'S'::text AS tier,rn.catalog_summary,rn.brief_summary,rn.conclusion,rn.open_questions,
 			rn.conclusion_state,
 			CASE rn.integration_state WHEN 'candidate' THEN 'candidate' WHEN 'discussing' THEN 'discussing' WHEN 'excluded' THEN 'excluded' WHEN 'absorbed' THEN 'excluded' ELSE 'unmatched' END AS integration_state,
 			rn.accepted_at AS content_created_at,rn.id AS content_id
 		FROM research_result_node rn WHERE rn.workspace_id=$1::uuid AND rn.session_id=$2::uuid
 		UNION ALL
-		SELECT iv.artifact_version_id,'insight'::text,iv.tier,iv.catalog_summary,iv.brief_summary,iv.open_questions,
+		SELECT iv.artifact_version_id,'insight'::text,iv.tier,iv.catalog_summary,iv.brief_summary,iv.conclusion,iv.open_questions,
 			CASE iv.status WHEN 'accepted' THEN 'accepted' WHEN 'challenged' THEN 'challenged' WHEN 'refuted' THEN 'refuted' ELSE 'invalid' END,
 			CASE WHEN iv.status IN ('refuted','invalid','terminal') THEN 'excluded' WHEN iv.discussion_id IS NOT NULL THEN 'discussing' WHEN iv.integration_round_id IS NOT NULL THEN 'candidate' ELSE 'unmatched' END,
 			iv.created_at,iv.id
 		FROM research_insight_version iv WHERE iv.workspace_id=$1::uuid AND iv.session_id=$2::uuid
 	)
-		SELECT v.id::text,v.artifact_id::text,v.content_hash,content.node_kind,content.tier,content.catalog_summary,content.brief_summary,content.open_questions,
+		SELECT v.id::text,v.artifact_id::text,v.content_hash,content.node_kind,content.tier,content.catalog_summary,content.brief_summary,content.conclusion,content.open_questions,
 		COALESCE((SELECT steward.agent_id::text FROM research_node_steward_assignment steward WHERE steward.session_id=f.session_id AND steward.node_artifact_version_id=f.node_artifact_version_id AND steward.status='active' ORDER BY steward.generation DESC LIMIT 1),
 		         (SELECT assignment.director_agent_id::text FROM research_session session JOIN research_director_assignment assignment ON assignment.id=session.current_director_assignment_id WHERE session.id=f.session_id)),
 		content.conclusion_state,content.integration_state,
@@ -257,19 +292,23 @@ func (s *PostgresStore) loadV6BranchFrontierBrief(ctx context.Context, workspace
 	defer rows.Close()
 	frontier := []any{}
 	for rows.Next() {
-		var versionID, artifactID, contentHash, nodeKind, tier, catalog, brief, steward, conclusion, integration string
+		var versionID, artifactID, contentHash, nodeKind, tier, catalog, brief, conclusion, steward, conclusionState, integration string
 		var openQuestions json.RawMessage
 		var branchIDs []string
-		if err = rows.Scan(&versionID, &artifactID, &contentHash, &nodeKind, &tier, &catalog, &brief, &openQuestions, &steward, &conclusion, &integration, &branchIDs); err != nil {
+		if err = rows.Scan(&versionID, &artifactID, &contentHash, &nodeKind, &tier, &catalog, &brief, &conclusion, &openQuestions, &steward, &conclusionState, &integration, &branchIDs); err != nil {
 			return nil, false, err
 		}
 		if len(frontier) == 64 {
 			return frontier, true, nil
 		}
+		briefSummary := directorBriefFrontierSummary(brief, openQuestions)
+		if strings.TrimSpace(conclusion) != "" {
+			briefSummary = truncateV6BriefText(briefSummary+"\n\n当前节点结论："+conclusion, 32768)
+		}
 		frontier = append(frontier, map[string]any{
 			"node":            map[string]any{"kind": nodeKind, "id": artifactID, "version_id": versionID, "tier": tier, "content_hash": contentHash},
-			"catalog_summary": catalog, "brief_summary": directorBriefFrontierSummary(brief, openQuestions), "steward_agent_id": steward, "branch_ids": branchIDs,
-			"conclusion_state": conclusion, "integration_state": integration,
+			"catalog_summary": catalog, "brief_summary": briefSummary, "steward_agent_id": steward, "branch_ids": branchIDs,
+			"conclusion_state": conclusionState, "integration_state": integration,
 		})
 	}
 	return frontier, false, rows.Err()

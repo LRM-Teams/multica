@@ -273,10 +273,16 @@
   opacity: 0.42;
 }
 .d5-rail-body {
+  display: flex;
   min-height: 0;
+  flex-direction: column;
   overflow: auto;
   scrollbar-color: #294257 transparent;
   scrollbar-width: thin;
+}
+.d5-rail-body > [data-testid="research-chat-rail-column"] {
+  flex: 1;
+  min-height: 0;
 }
 .d5-rail-body > aside {
   height: 100%;

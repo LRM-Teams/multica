@@ -201,10 +201,11 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   const qc = useQueryClient();
   const { subscribe, onReconnect, onConnectionStatus } = useWS();
   const currentUserId = useAuthStore((s) => s.user?.id ?? null);
-  const chatOpen = useResearchUiStore((s) => s.chatDrawerOpen);
   const d5Lens = useResearchUiStore((s) => s.d5Lens);
   const setD5Lens = useResearchUiStore((s) => s.setD5Lens);
+  const d5RailOpen = useResearchUiStore((s) => s.d5RailOpen);
   const setD5RailOpen = useResearchUiStore((s) => s.setD5RailOpen);
+  const d5RailMode = useResearchUiStore((s) => s.d5RailMode);
   const setD5RailMode = useResearchUiStore((s) => s.setD5RailMode);
   const completionDismissed = useResearchUiStore(
     (state) => state.completionGuideDismissedBySession[sessionId] === true,
@@ -546,7 +547,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   } | null>(null);
   // Stick-to-bottom while content grows (live stream / new cards); releases if
   // the user scrolls up to read history — no jump-scroll (LRM-820).
-  useAutoScroll(chatScrollRef, chatOpen);
+  useAutoScroll(chatScrollRef, d5RailOpen && d5RailMode === "chat");
 
   const send = useMutation({
     mutationFn: (body: string) => {
@@ -1385,7 +1386,10 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
           }
           agentPanel={agentPanelNode}
           chatPanel={
-            <>
+            <div
+              className="flex h-full min-h-0 flex-col"
+              data-testid="research-chat-rail-column"
+            >
             <ResearchDirectorChatHeader
               director={directorMember}
               fallbackName={
@@ -1499,7 +1503,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
             ) : null}
             <div
               ref={chatScrollRef}
-              className="flex-1 space-y-2.5 overflow-y-auto p-3"
+              className="min-h-0 flex-1 space-y-2.5 overflow-y-auto p-3"
               data-testid="research-chat-feed"
               data-chat-mode={chatMode}
             >
@@ -1629,7 +1633,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
                 <span className="text-muted-foreground">{t(($) => $.panel.paused_hint)}</span>
               </output>
             ) : null}
-            </>
+            </div>
           }
           composer={
             <div className="border-t bg-card p-3">

@@ -547,7 +547,22 @@ export interface GraphMemoryChannelMode {
   status: GraphMemoryChannelAgentStatus;
   blocked_reason: string;
   agent_id: string;
+  /** Actual runtime currently bound to the managed channel Agent. */
   runtime_id: string;
+  memory_agent_runtime_id_override: string;
+  memory_agent_model_override: string;
+  memory_agent_thinking_override: string;
+  effective_memory_agent_runtime_id: string;
+  effective_memory_agent_model: string;
+  effective_memory_agent_thinking: string;
+}
+
+export interface UpdateGraphMemoryChannelModeRequest {
+  override: GraphMemoryChannelModeOverride;
+  /** Omit to preserve; null clears the complete channel override tuple. */
+  memory_agent_runtime_id_override?: string | null;
+  memory_agent_model_override?: string | null;
+  memory_agent_thinking_override?: string | null;
 }
 
 export interface GraphMemoryCitation {

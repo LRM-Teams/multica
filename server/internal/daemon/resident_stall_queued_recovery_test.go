@@ -235,11 +235,10 @@ func TestRecoverStalledSlotForQueuedMessageDoesNotRefireWhileRecovering(t *testi
 	}
 }
 
-// wedgedResidentBackend accepts a Message batch but never completes the turn
-// until its process is force-killed — the pi-shaped failure this PR recovers.
-// It proves the existing self-heal chain (ForceKill → provider exits →
-// completion receipt resolves → slot released) actually closes, so no second
-// timeout mechanism is needed around finishResidentMessageInput.
+// wedgedResidentBackend accepts a Message batch and only resolves Done when
+// ForceKill cooperates. This preserves the fast self-heal case; the separate
+// completion-deadline tests cover the production failure where a live provider
+// accepts the turn but neither normal completion nor ForceKill settles Done.
 type wedgedResidentBackend struct {
 	mu   sync.Mutex
 	done chan error

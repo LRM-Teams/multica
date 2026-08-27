@@ -243,6 +243,15 @@ func (runner *WorkspaceDaemon) observeMessageTurnCompletion(agentID, runtimeID s
 	}
 	at := time.Now().UTC()
 	stage := AgentRuntimeStageObservationData{RuntimeID: runtimeID}
+	if timeout, ok := asResidentTurnCompletionTimeout(turnErr); ok {
+		if !timeout.RestartSafe {
+			runner.failManagedRuntime(agentID, runtimeID, launch.AgentInstanceID, managedRuntimeFailureRuntime, "provider_turn_timeout", timeout.Error(), at)
+			return
+		}
+		stage.StaleFor = timeout.Timeout
+		runner.observeActivity(AgentObservation{AgentID: agentID, AgentInstanceID: launch.AgentInstanceID, Kind: AgentObservationRuntimeStalled, Data: stage, At: at}, "Message completion timeout")
+		return
+	}
 	if turnErr != nil {
 		runner.failManagedRuntime(agentID, runtimeID, launch.AgentInstanceID, managedRuntimeFailureRuntime, "provider_turn_failed", turnErr.Error(), at)
 		return
@@ -258,6 +267,15 @@ func (runner *WorkspaceDaemon) observeMessageTurnCompletionForProcess(callback a
 	}
 	at := time.Now().UTC()
 	stage := AgentRuntimeStageObservationData{RuntimeID: runtimeID}
+	if timeout, ok := asResidentTurnCompletionTimeout(turnErr); ok {
+		if !timeout.RestartSafe {
+			runner.failManagedRuntime(callback.AgentID, runtimeID, callback.AgentInstanceID, managedRuntimeFailureRuntime, "provider_turn_timeout", timeout.Error(), at)
+			return
+		}
+		stage.StaleFor = timeout.Timeout
+		runner.observeActivity(AgentObservation{AgentID: callback.AgentID, AgentInstanceID: callback.AgentInstanceID, Kind: AgentObservationRuntimeStalled, Data: stage, At: at}, "Message completion timeout")
+		return
+	}
 	if turnErr != nil {
 		runner.failManagedRuntime(callback.AgentID, runtimeID, callback.AgentInstanceID, managedRuntimeFailureRuntime, "provider_turn_failed", turnErr.Error(), at)
 		return

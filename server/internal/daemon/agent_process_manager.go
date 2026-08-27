@@ -531,6 +531,32 @@ func (m *agentProcessManager) ProcessExited(callback agentProcessCallback, recov
 	return nil
 }
 
+// ReplaceProcessForImmediateRestart atomically retires the exact old process
+// owner and creates a new managed Agent instance with an independent startup
+// fence. A late defer from the prior start is keyed to the old AgentInstanceID
+// and therefore cannot settle the replacement's startupDone.
+func (m *agentProcessManager) ReplaceProcessForImmediateRestart(callback agentProcessCallback) (agentProcessCallback, error) {
+	if m == nil {
+		return agentProcessCallback{}, errors.New("agent process manager is not configured")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	managed, err := m.currentLocked(callback, true)
+	if err != nil {
+		return agentProcessCallback{}, err
+	}
+	m.closeAllLocked(managed, "terminal")
+	managed.managed = false
+	replacement := &managedAgentProcess{
+		agentID: managed.agentID, runtimeID: managed.runtimeID, agentInstanceID: m.newID(), managed: true,
+		readinessPolicy: managed.readinessPolicy, deliveryMode: managed.deliveryMode,
+		transitions: make(map[string]*openLifecycleTransition), startupDone: make(chan struct{}),
+	}
+	m.agents[managed.agentID] = replacement
+	m.beginProcessLocked(replacement)
+	return agentProcessCallback{AgentID: replacement.agentID, AgentInstanceID: replacement.agentInstanceID}, nil
+}
+
 func (m *agentProcessManager) Snapshot(agentID string) (agentProcessManagerSnapshot, bool) {
 	if m == nil {
 		return agentProcessManagerSnapshot{}, false

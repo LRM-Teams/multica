@@ -5,7 +5,7 @@ Status: target contract frozen; user-facing V6 create is open. Omitted
 
 Normative target schema:
 [`contracts/research-run-v6-director.schema.json`](contracts/research-run-v6-director.schema.json),
-SHA-256 `888377d0abd2b51de10947d7b7736e23677793679b72056b7cb130e69c6c5b57`.
+SHA-256 `1ea2c7feef1058fc6feb30568fde821412240236ca72d86c448acf33ec6c5655`.
 Its `$id` is the final `research-run-v6.schema.json` identity.
 
 The code-coupled [`contracts/research-run-v6.schema.json`](contracts/research-run-v6.schema.json)
@@ -131,6 +131,13 @@ summary contains the open-question block. Reconciliation creates one fresh
 repair cycle for historical Briefs that contain the Result node but omitted that
 block.
 
+Event-trigger reconciliation is fair across Runs. A Run whose state changes
+while its next Director Brief is being frozen remains eligible for a later tick,
+but that optimistic-concurrency miss cannot stop other eligible Runs behind it
+from starting their own Director cycles in the current tick. Replaying the
+idempotency key of an already persisted cycle likewise does not count as fresh
+work or prevent later eligible events from starting cycles in the same batch.
+
 One `director_brief` envelope is one bounded page. All pages share Brief ID/hash,
 state version and event watermark. Ronaldo acknowledges a page only after
 processing it. An Action Proposal is accepted only when its
@@ -158,6 +165,10 @@ Atomic research dispatch has one exact mechanical mapping: the outer Action uses
 `kind=research` and `expected_result_schema_id=atomic_result_submission`.
 Names from any of those other layers are not Action-kind aliases, and the
 Director must not discover the vocabulary through repeated rejected submissions.
+Agent creation is asynchronous, so Work cannot target an Agent requested in the
+same Proposal. A Proposal may still create surplus capacity while dispatching
+Work to enough already-joined, eligible workers; that independent Work must not
+be rejected merely because the staffing Action shares the Proposal.
 
 The Director plans, staffs, assigns and integrates; it never executes atomic
 research Work itself. Atomic Work uses `atomic_result_submission`, a non-empty
@@ -197,8 +208,14 @@ that exits after receipt or during settlement; replay keeps the same
 
 ### 4. Dynamic team
 
-A new V6 Run starts with only its Director membership. Active membership count
-is Run-scoped, includes the Director, and cannot exceed 50. Below 20, creation
+A new V6 Run starts with its Director and one fixed Report Boss membership.
+The workspace Fleet reporter is an identity and instruction template; bootstrap
+creates a dedicated Report Boss Agent for the Run and copies the selected
+Director's runtime, model and execution configuration. This prevents a reporter
+seeded on an older runtime from stranding Report Work when a Run uses another
+runtime. The Report Boss has `role=reporter`, owns only Report Work, and is
+excluded from research-worker capacity. Active membership count is Run-scoped,
+includes the Director and Report Boss, and cannot exceed 50. Below 20, creation
 needs no extra capacity justification beyond the Director Decision. At 20–49,
 the Decision records a capability, parallelism or independence reason. Fifty
 rejects creation mechanically.
@@ -216,14 +233,17 @@ because Agent creation is asynchronous and generated Branch IDs are only
 authoritative after commit. The next cycle dispatches at least three independent
 atomic research directions. Each atomic Work binds to exactly one existing,
 non-root child Branch and one distinct Agent. Each unresolved open question on a
-frontier node requires its own follow-up Work and distinct Agent, up to the same
-parallel cap. An escalated Discussion requires evidence follow-up, but it is not
+frontier node ultimately requires its own follow-up Work and distinct Agent, up
+to the same parallel cap. After the initial parallel result baseline is met, a
+Proposal may submit any non-empty executable subset of those follow-ups; each
+accepted result schedules another Director cycle for the remaining gaps. An
+escalated Discussion requires evidence follow-up, but it is not
 an additional synthetic question when its gaps already appear in Frontier
 `open_questions`. Capacity preflight uses the larger of the open-question count
 and the escalated-Discussion count instead of adding overlapping requirements.
 The server preflights the complete Proposal before applying any
 action and rejects root-only or missing Branch references, duplicate/busy
-assignees, understaffed first rounds and uncovered open questions. A rejected
+assignees, understaffed first rounds and attempts to ignore all open questions. A rejected
 Proposal is isolated to its Run and cannot block the global Director-Proposal
 queue.
 
@@ -410,11 +430,19 @@ publication proceeds. No automatic successor exists.
 
 ### 13. Report
 
-A Report is an immutable Goal attachment, never a graph node. Its input set is
-the current XXL of every Branch that has one and the maximal Frontier inputs of
-Branches without XXL, deduplicated by node version. Material lower inputs cannot
-be silently omitted; they must first be absorbed, excluded, terminated or listed
-as unresolved gaps.
+A Report is an immutable Goal attachment, never a graph node. The server groups
+the graph by root-Branch child (one top-level research direction), chooses the
+single current highest-tier Frontier node in each direction using
+`XXL > XL > L > M > S`, and deduplicates successors shared across directions.
+Lower-tier nodes in the same direction are represented by that maximum and are
+not repeated. Multiple candidates tied at the maximum tier mark the direction
+`converging`; a direction with no accepted Frontier result remains
+`researching` or `closed_without_result`. Coverage also freezes the number of
+active scoped Work Items under each direction, so a direction with an XL result
+and unfinished follow-up is presented as in progress rather than complete. The
+Report Agent cannot replace this selection with its own subset.
+Historical V6 Runs that have no explicit root children treat the canonical root
+as one direction; newly created Runs must use explicit top-level directions.
 
 Report package upload creates a draft. Mechanical validation checks exact inputs,
 resource hashes, self-containment, citations, size limits and sandbox policy.
@@ -426,12 +454,67 @@ submission repeats that hash and the deduplicated node versions. The server
 rejects stale, missing, extra or role-mismatched inputs rather than letting the
 Report Agent choose a more convenient subset.
 
+Every V6 Run has one fixed, Run-dedicated `reporter` membership named 报告老板.
+Its identity and instructions come from the active Fleet reporter template, but
+its runtime, model and execution configuration come from the selected Director.
+The Director Brief includes a server-computed `report_plan` containing that Agent identity,
+the exact selected inputs, per-direction coverage and maturity. Whenever that
+selection hash changes and no Report Work is active, proposal preflight requires
+one `create_report` intent whose payload contains only the report title. The
+Director does not echo the reporter identity, input refs, content hashes or event
+watermark. While holding the Run mutation lock, the server chooses the fixed
+Report Boss and freezes the latest eligible inputs and event watermark in the
+same transaction that creates the Report Work. This prevents an accepted result
+arriving after a Director Brief was frozen from invalidating an otherwise valid
+report refresh. The Work Manifest embeds the complete persisted content layers of every selected node in
+`report_context.input_documents`, including the producing Agent identity and
+display name, plus the previous usable report as the revision baseline. Thus
+reporting never depends on inter-Agent chat. One active Report
+Work is the single writer; results arriving during it cause a subsequent
+revision instead of a competing write.
+
+A required report refresh is a productive maintenance action whether submitted
+alone or alongside valid follow-up Work. It must not cause the whole Proposal to
+be rejected merely because that Proposal covers fewer open questions than the
+current parallel cap. The report event schedules a fresh Director cycle for the
+remaining questions.
+
+The `v6_report_work_created` event identifies the Work and report revision but
+omits `report_id`. A draft passport is registered with its `artifact_create`
+policy mutation but intentionally has no current artifact version until package
+acceptance, so its creation event must not claim `event_report` lineage early.
+
+Package acceptance requires a bounded `multica-design-dossier:v1` HTML comment
+with the report's reading job, evidence shape, maturity, layout family, motif,
+density, motion, accent and design reason. The server persists that dossier and
+freezes it into `report_context.supersedes.design_dossier` for the next revision,
+so one report keeps a coherent visual language while unrelated reports still
+derive their own design from their content.
+
+A report is `interim` until every represented direction has one unambiguous XXL,
+non-report Work is quiescent and no dispute remains open. Draft packages with a
+verified document are immediately viewable on the independent report route and
+identified as phase results. Each committed projection delta invalidates the
+report list so a newly completed revision replaces the current latest view
+without reloading the research page. The transition to `final` changes the input
+snapshot hash and therefore requires a final revision.
+
 Uploaded package resources are immutable build inputs. Validation compiles them
 into one final HTML document with scripts/styles inline and images/fonts embedded
 as data; the published page serves only that document and performs no subresource
 request. The server derives storage keys from the bound upload session rather
 than trusting an Agent-supplied arbitrary object key. Script and style hashes in
 the submission must match the compiled bytes and the response CSP.
+
+The active Fleet `reporter`, and a run-scoped Agent only while claiming a
+structurally bound `report_package_submission`, receive the built-in
+report-design skill. A Report Work dispatch explicitly requires that skill
+before package authoring. The reporter derives a design dossier from the goal,
+audience, evidence shape, and report maturity; records it in the document; and
+preserves it across a revision unless a review finding requires a deliberate
+redesign. Visual variety is content-driven, not random: each report chooses a
+composition, information rhythm, motif, and accent that fit its material instead
+of reusing one generic card grid.
 
 The HTML response and embedding iframe both enforce sandboxing. Script execution
 is allowed; same-origin access, storage, forms, popups, downloads, top navigation,

@@ -35,20 +35,29 @@ func (s *PostgresStore) LoadV6WorkArtifact(ctx context.Context, access V6Attempt
 
 	switch artifact.Kind {
 	case string(ArtifactKindResultArtifact):
-		var storedHash string
+		var storedHash, taskSchemaID string
+		var taskSchema json.RawMessage
 		err = s.pool.QueryRow(ctx, `
-			SELECT result.result,version.content_hash
+			SELECT result.result,version.content_hash,producer_work.payload_schema_id,
+			       COALESCE(producer.manifest->'task_specific_schema','null'::jsonb)
 			FROM research_artifact_version version
 			JOIN research_artifact_passport passport
 			  ON (passport.workspace_id,passport.session_id,passport.id)=(version.workspace_id,version.session_id,version.artifact_id)
 			JOIN research_result_artifact result
 			  ON (result.workspace_id,result.session_id,result.id)=(version.workspace_id,version.session_id,version.artifact_id)
+			JOIN research_work_item_attempt producer
+			  ON (producer.workspace_id,producer.session_id,producer.id)=(result.workspace_id,result.session_id,result.work_item_attempt_id)
+			JOIN research_work_item producer_work
+			  ON (producer_work.workspace_id,producer_work.session_id,producer_work.id)=(producer.workspace_id,producer.session_id,producer.work_item_id)
 			WHERE version.workspace_id=$1::uuid AND version.session_id=$2::uuid AND version.id=$3::uuid
 			  AND passport.entity_kind='result_artifact' AND passport.lifecycle_status='accepted'
-		`, access.WorkspaceID, access.RunID, artifactVersionID).Scan(&artifact.Content, &storedHash)
+		`, access.WorkspaceID, access.RunID, artifactVersionID).Scan(&artifact.Content, &storedHash, &taskSchemaID, &taskSchema)
 		if err == nil {
 			var decoded DecodedV6Contract
-			decoded, err = DecodeV6Contract(artifact.Content, V6ContractAtomicResultSubmission, nil)
+			decoded, err = DecodeV6Contract(artifact.Content, V6ContractAtomicResultSubmission, boundV6SecondStage{
+				schemaID: taskSchemaID,
+				schema:   taskSchema,
+			})
 			if err == nil && (decoded.ContentHash != storedHash || storedHash != artifact.RepresentationHash) {
 				err = fmt.Errorf("%w: frozen result representation hash mismatch", ErrInvalidContract)
 			}

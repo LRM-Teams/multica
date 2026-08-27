@@ -137,12 +137,11 @@ func (s *LocalStorage) Upload(ctx context.Context, key string, data []byte, cont
 		return "", fmt.Errorf("local storage WriteFile: %w", err)
 	}
 	// Best-effort sidecar so ServeFile can restore the original filename in
-	// Content-Disposition. A failure here is logged but does not fail the
-	// upload — the file is still usable, just without the human-readable
-	// download name. Skip when there's no filename to preserve: a sidecar
-	// without a filename is dead weight, since ServeFile only reads it for
-	// that field.
-	if filename != "" {
+	// Content-Disposition and VerifyUpload can return the declared type.
+	// Research V6 report uploads PUT with an empty filename; without a
+	// content-type sidecar, complete compares "" != "text/html" and 409s.
+	// A failure here is logged but does not fail the upload.
+	if filename != "" || contentType != "" {
 		body, _ := json.Marshal(localMeta{Filename: filename, ContentType: contentType})
 		if err := os.WriteFile(dest+metaSuffix, body, 0644); err != nil {
 			slog.Error("local storage meta write failed", "key", key, "error", err)

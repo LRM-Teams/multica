@@ -587,7 +587,9 @@ func TestV6EventTriggerRecoversBootstrapWithoutDirectorCycle(t *testing.T) {
 	bootstrapped, _, err := run.store.BootstrapV6(run.ctx, V6BootstrapInput{
 		WorkspaceID:     run.fixture.workspaceID,
 		CreatedBy:       run.fixture.userID,
+		FleetID:         run.fixture.fleetID,
 		DirectorAgentID: run.fixture.agentID,
+		ReporterAgentID: run.fixture.reporterID,
 		Goal:            title,
 		Title:           title,
 		DepthTier:       "standard",
@@ -812,6 +814,46 @@ func TestV6EventTriggerRepairsAtomicResultMissingFromCoveredBrief(t *testing.T) 
 	}
 	if cycles != 4 || !strings.Contains(latestBrief, directorBriefOpenQuestionsMarker) || !strings.Contains(latestBrief, "Which unresolved market constraint matters?") {
 		t.Fatalf("open-question repair cycles=%d marker=%v question=%v", cycles, strings.Contains(latestBrief, directorBriefOpenQuestionsMarker), strings.Contains(latestBrief, "Which unresolved market constraint matters?"))
+	}
+
+	// If the repair cycle terminates without producing the required effect, its
+	// stable idempotency key replays the persisted cycle. That replay must not
+	// consume the whole batch and starve a later material event.
+	if _, err = run.pool.Exec(run.ctx, `UPDATE research_work_item w SET status='failed',terminal_reason_code='contract_rejected',completed_at=now()
+		FROM research_director_cycle c WHERE c.work_item_id=w.id AND c.id=(SELECT id FROM research_director_cycle WHERE session_id=$1::uuid ORDER BY created_at DESC LIMIT 1)`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = run.pool.Exec(run.ctx, `UPDATE research_director_cycle SET status='failed',failure_class='contract_rejected',completed_at=now()
+		WHERE id=(SELECT id FROM research_director_cycle WHERE session_id=$1::uuid ORDER BY created_at DESC LIMIT 1)`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = run.pool.Exec(run.ctx, `UPDATE research_director_brief_page SET content_bytes=convert_to(replace(convert_from(content_bytes,'UTF8'),$2,''),'UTF8')
+		WHERE director_cycle_id=(SELECT id FROM research_director_cycle WHERE session_id=$1::uuid ORDER BY created_at DESC LIMIT 1)`, run.fixture.sessionID, directorBriefOpenQuestionsMarker); err != nil {
+		t.Fatal(err)
+	}
+	tailTx, err := run.pool.Begin(run.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tailEvent, err := appendEvent(run.ctx, tailTx, run.fixture.workspaceID, run.fixture.sessionID,
+		"v6_work_item_recovered", "event-after-terminal-replay:"+uuid.NewString(), "system", "", map[string]any{"reason": "retryable runtime recovery"})
+	if err != nil {
+		_ = tailTx.Rollback(run.ctx)
+		t.Fatal(err)
+	}
+	if err = tailTx.Commit(run.ctx); err != nil {
+		t.Fatal(err)
+	}
+	processed, err = run.store.ProcessV6EventTriggers(run.ctx, 32)
+	if err != nil || processed != 1 {
+		t.Fatalf("post-replay trigger processed=%d err=%v, want one fresh cycle", processed, err)
+	}
+	var latestFromSequence int64
+	if err = run.pool.QueryRow(run.ctx, `SELECT trigger_from_sequence FROM research_director_cycle WHERE session_id=$1::uuid ORDER BY created_at DESC LIMIT 1`, run.fixture.sessionID).Scan(&latestFromSequence); err != nil {
+		t.Fatal(err)
+	}
+	if latestFromSequence != tailEvent.Sequence {
+		t.Fatalf("latest trigger sequence=%d want tail event %d", latestFromSequence, tailEvent.Sequence)
 	}
 }
 

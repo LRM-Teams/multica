@@ -38,7 +38,7 @@ func (s *PostgresStore) LoadDirectorBriefFacts(ctx context.Context, in StartV6Di
 		facts.DirectorState = "awaiting_director"
 	}
 	facts.Goal = map[string]any{"goal_version": goalVersion, "goal": goal, "scope": jsonObjectOrEmpty(scope), "audience": audience, "freshness": freshness, "language": language, "source_policy": jsonObjectOrEmpty(sourcePolicy)}
-	rows, err := s.pool.Query(ctx, `SELECT m.agent_id::text,m.id::text,m.state,left(m.mission_prompt,4096),
+	rows, err := s.pool.Query(ctx, `SELECT m.agent_id::text,m.id::text,m.state,m.role,left(m.mission_prompt,4096),
 		COALESCE((SELECT w.id::text FROM research_work_item w WHERE w.session_id=m.session_id AND w.assigned_agent_id=m.agent_id AND w.status IN ('ready','dispatching','running','awaiting_input') ORDER BY w.priority DESC,w.created_at LIMIT 1),''),
 		(SELECT count(*)::int FROM research_node_steward_assignment n WHERE n.session_id=m.session_id AND n.agent_id=m.agent_id AND n.status='active')
 		FROM research_team_membership m WHERE m.workspace_id=$1::uuid AND m.session_id=$2::uuid ORDER BY m.joined_at,m.id`, in.WorkspaceID, in.RunID)
@@ -46,13 +46,13 @@ func (s *PostgresStore) LoadDirectorBriefFacts(ctx context.Context, in StartV6Di
 		return DirectorBriefFacts{}, err
 	}
 	for rows.Next() {
-		var agentID, membershipID, state, mission, activeWork string
+		var agentID, membershipID, state, role, mission, activeWork string
 		var stewardCount int
-		if err = rows.Scan(&agentID, &membershipID, &state, &mission, &activeWork, &stewardCount); err != nil {
+		if err = rows.Scan(&agentID, &membershipID, &state, &role, &mission, &activeWork, &stewardCount); err != nil {
 			rows.Close()
 			return DirectorBriefFacts{}, err
 		}
-		item := map[string]any{"agent_id": agentID, "membership_id": membershipID, "state": state, "mission_summary": truncateV6BriefText(mission, 512), "steward_node_count": stewardCount}
+		item := map[string]any{"agent_id": agentID, "membership_id": membershipID, "state": state, "role": role, "mission_summary": truncateV6BriefText(mission, 512), "steward_node_count": stewardCount}
 		if activeWork != "" {
 			item["active_work_item_id"] = activeWork
 		}
@@ -175,7 +175,34 @@ func (s *PostgresStore) LoadDirectorBriefFacts(ctx context.Context, in StartV6Di
 		return DirectorBriefFacts{}, err
 	}
 	rows.Close()
+	if facts.ReportPlan, err = s.loadV6ReportPlanFact(ctx, in.WorkspaceID, in.RunID); err != nil {
+		return DirectorBriefFacts{}, err
+	}
 	return facts, nil
+}
+
+func (s *PostgresStore) loadV6ReportPlanFact(ctx context.Context, workspaceID, runID string) (map[string]any, error) {
+	selection, err := selectV6ReportInputs(ctx, s.pool, workspaceID, runID)
+	if err != nil {
+		return nil, err
+	}
+	var reporterAgentID, latestHash string
+	var active bool
+	if err = s.pool.QueryRow(ctx, `SELECT
+		COALESCE((SELECT agent_id::text FROM research_team_membership WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND role='reporter' AND state IN ('idle','working','offline','retiring') ORDER BY joined_at,id LIMIT 1),''),
+		EXISTS(SELECT 1 FROM research_work_item WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND kind='report' AND status IN ('ready','dispatching','enqueued','running','awaiting_input')),
+		COALESCE((SELECT input_snapshot_hash FROM research_report WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND package_hash IS NOT NULL ORDER BY revision DESC LIMIT 1),'')`, workspaceID, runID).Scan(&reporterAgentID, &active, &latestHash); err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"reporter_agent_id":  reporterAgentID,
+		"selection_hash":     selection.Hash,
+		"maturity":           selection.Maturity,
+		"inputs":             selection.Inputs,
+		"directions":         selection.Directions,
+		"active_report_work": active,
+		"needs_refresh":      len(selection.Inputs) > 0 && !active && selection.Hash != latestHash,
+	}, nil
 }
 
 func directorBriefWorkSummary(mission, state string, attemptCount, maxAttempts int, attemptState, failureClass, failureDiagnostics, terminalReasonCode, terminalReasonDetail string) string {
@@ -463,6 +490,7 @@ func (s *PostgresStore) PersistDirectorCycle(ctx context.Context, in StartV6Dire
 		Scan(&replay.ID, &replay.RunID, &replay.AssignmentID, &replay.BriefID, &replay.BriefHash, &replay.WorkItemID,
 			&replay.Generation, &replay.PageCount, &replay.StateVersion, &replay.Status)
 	if err == nil {
+		replay.Replayed = true
 		return replay, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
@@ -555,10 +583,7 @@ func v6DirectorActionPayloadSchemas() map[string]any {
 			"required": []string{"objective", "scope", "budget_share"}, "properties": map[string]any{
 				"objective": text, "scope": jsonObject, "budget_share": map[string]any{"type": "number", "minimum": 0, "maximum": 1}, "parent_branch_id": uuidValue}},
 		"report.create.v1": map[string]any{"type": "object", "additionalProperties": false,
-			"required": []string{"assignee_agent_id", "title", "inputs"}, "properties": map[string]any{
-				"assignee_agent_id": uuidValue, "title": text, "inputs": map[string]any{"type": "array", "minItems": 1, "maxItems": 1024, "items": map[string]any{
-					"type": "object", "additionalProperties": false, "required": []string{"branch_id", "node_artifact_version_id", "input_role", "content_hash"}, "properties": map[string]any{
-						"branch_id": uuidValue, "node_artifact_version_id": uuidValue, "input_role": map[string]any{"enum": []string{"branch_xxl", "branch_maximum", "unresolved_gap"}}, "content_hash": hashValue}}}}},
+			"required": []string{"title"}, "properties": map[string]any{"title": text}},
 		"target.action.v1": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"target_id"}, "properties": map[string]any{
 			"target_id": uuidValue, "assignee_agent_id": uuidValue, "mission": text, "scope": jsonObject, "reason": text}},
 		"agent.action.v1": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"agent_id"}, "properties": map[string]any{

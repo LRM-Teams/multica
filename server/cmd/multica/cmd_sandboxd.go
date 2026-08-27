@@ -369,9 +369,9 @@ func (c *sandboxdClient) nodeMetadata() map[string]any {
 	if !dockerImagesSyncedAt.IsZero() {
 		meta["docker_images_synced_at"] = dockerImagesSyncedAt.UTC().Format(time.RFC3339)
 	}
-	if dockerImagesError != "" {
-		meta["docker_images_error"] = dockerImagesError
-	}
+	// Always report docker_images_error (including "") so a transient docker
+	// image ls failure cannot stick in server metadata after recovery.
+	meta["docker_images_error"] = dockerImagesError
 	return meta
 }
 

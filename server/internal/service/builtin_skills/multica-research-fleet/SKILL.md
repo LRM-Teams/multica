@@ -47,7 +47,7 @@ canonical state。替换后的 Agent 或主理人必须能够只依靠 PostgreSQ
   每个 atomic Work 必须且只能绑定一个非根子 Branch；每个 run-scoped Agent 同时最多
   承担一个活动 Work。独立方向必须一项一 Agent，不得把多个 ready/running Work 堆给
   同一 Agent 假装并发。标准 V6 首轮至少创建 3 名职责不同的 run-scoped Agent 和 3 个
-  独立子 Branch；后续 proposal 至少创建 3 个 atomic Work 并分别分配，
+  独立子 Branch；成员加入后的首轮 Work proposal 至少创建 3 个 atomic Work 并分别分配，
   `max_parallel_tasks` 小于 3 时以该上限为准。
   根 Branch 下的一级方向总数不得超过 `max_parallel_tasks`。不得为每个 Work、来源或
   待回答问题重复创建一级 Branch；优先复用已有方向，必要的细分挂在相关方向下面。
@@ -62,6 +62,8 @@ canonical state。替换后的 Agent 或主理人必须能够只依靠 PostgreSQ
   一次修复 Cycle；不要要求用户重建 Run。
 - `escalated` Discussion 至少需要证据跟进；如果同一缺口已经出现在 Frontier 的待回答问题中，
   不要把 Discussion 再当成额外问题重复派工，按两类缺口数量中的较大值覆盖即可。
+  达到首轮并发基线后，后续 proposal 可以先提交当前可执行的非空补充 Work 子集；每个结果
+  事件都会触发下一轮继续覆盖剩余问题，不得因一轮无法覆盖全部缺口而重复提交同一份被拒方案。
 - 每轮先检查 Branch Frontier 的 fresh、未吸收节点。两个或更多节点语义相关且满足
   promotion、assimilation 或 `xxl_merge` 时，优先启动收敛；数量只触发判断，不得强行
   融合不相关内容。使用 `kind: "create_integration"`、
@@ -78,8 +80,24 @@ canonical state。替换后的 Agent 或主理人必须能够只依靠 PostgreSQ
 - 用户 Stop 是可恢复暂停：非 Director Work 返回 `ready`，当前 Attempt 取消且不消耗重试
   预算，Resume 后可重新派发。删除 V6 调研只归档 Run 和全部规范事实，不物理删除成果、
   证据、Discussion、Work 或 Report。
-- V6 Report 是不可变的 Goal 附件，不是图节点。只有主理人发布工作流可以发布通过验证的
-  package。报告资源不得输出外部 URL、凭据、应用同源依赖或 bridge 调用。
+- V6 Report 是不可变的 Goal 附件，不是图节点。工作区 Fleet 的 reporter 只作为身份与
+  指令模板；每个 Run 启动时创建一名专属的 role=`reporter`“报告老板”，并继承所选主理人
+  的 runtime、model 与执行配置。它只执行 report Work，不承担原子调研、Discussion 或
+  Integration。同一一级方向只把当前最高层级未吸收节点交给报告老板，不同方向各取一个
+  最大节点，跨方向 successor 去重。服务端把这些节点的完整持久化结果冻结到
+  `report_context.input_documents`，不依赖 Agent 聊天转述。新的最大节点、方向状态或
+  最终成熟度变化后，主理人必须用 `create_report` 派发下一版报告；该 action 的 payload
+  只包含 `title`，不得复制或提交报告老板 ID、输入节点、内容 hash 或事件水位。服务端在
+  创建 Report Work 的同一事务内选择固定报告老板并冻结当时最新输入。同一时刻最多存在
+  一个活动 report Work。
+  报告刷新可以单独构成一个维护轮次，也可以与当轮有效的补充 Work 一起提交；即使当轮
+  尚未覆盖全部待回答问题，也不得因此省略 `create_report`。报告事件会触发下一轮继续派发
+  剩余问题，避免报告与补充调研互相阻塞。
+  草稿修订创建时即登记无 current version 的 passport；报告老板提交并验收不可变 package
+  后，服务端才写入并切换到 version 1。草稿创建事件记录 Work 和修订号但不记录
+  `report_id`，不会在尚无 artifact version 时提前声明 `event_report` 血缘。
+  只有主理人发布工作流可以发布通过验证的 package。报告资源不得输出外部 URL、凭据、
+  应用同源依赖或 bridge 调用。
 - 内部 `director` cycle Work 只是主理人调度记录，不是成果星图节点。星图只展示可向用户
   解释的调研 Work、结果和洞察；主理人执行状态通过 Brief、聊天、presence 和活动记录查看。
   星图按根 Branch 的一级子 Branch 展示研究方向；更深层 Branch 保留真实归属，但不得被
@@ -165,7 +183,9 @@ assignment/generation、Brief 身份、页数、state version 和 event sequence
 `collaboration.create.v1` 当作 action kind，也不得靠重复提交猜测枚举值。不得猜测旧
 `research.*` schema 名。Agent 创建是异步的：
 不得把 Work 分给同一个 proposal 中刚申请的 Agent；等待 joined 事件和下一次 Director
-cycle。主理人只负责规划、组队、派工和整合，不得把原子调研 Work 指派给自己。原子
+cycle。如果已有足够的 joined 空闲成员，proposal 可以同时申请额外成员并把 Work 分给
+这些已有成员；额外扩容不得阻塞可立即执行的派工。主理人只负责规划、组队、派工和
+整合，不得把原子调研 Work 指派给自己。原子
 Work 使用 `atomic_result_submission`，`payload_schema_id` 必须非空且不得为
 `no_op.v1`，并在 `payload.task_specific_schema` 中携带精确、非空的结果校验器。派工
 的 `branch_ids` 必须且只能复制当前 Run 中一个已经存在的非根子 Branch ID，不得根据
@@ -189,6 +209,7 @@ multica research work-artifact <session-id> <work-item-id> <attempt-id> \
 
 CLI 不可用时，对 `${V6_API}/artifacts/<artifact-version-id>` 执行 GET。该接口只能返回
 当前 Attempt 的 Manifest 授权版本。`input_nodes` 的 ID、层级、hash 和摘要不能替代正文；
+服务端会使用结果产出 Work 冻结的 `task_specific_schema` 重新校验 atomic result 正文；
 任一正文读取失败时不得凭摘要投 accept 或生成 successor。
 Integration 必须原样复制 Manifest 的 `input_nodes`、`branch_refs` 和 Discussion identity，
 按 S+S→M、M+M→L、L+L→XL、XL+XL→XXL、高层+低层保持高层、XXL+XXL→XXL 的规则提交。
@@ -223,6 +244,10 @@ multica research report-upload <session-id> <work-item-id> <attempt-id> \
   --media-type <media-type> --output json
 ```
 
+生产 Research Run Engine 会把上传声明与完成校验转发给同一持久化 Store；如果
+接口返回 `research.v6.capability_unavailable`，不得绕过上传或提交本地路径，应保留
+Attempt 并等待服务端恢复该能力。
+
 严格 envelope 只能通过 V6 endpoint 提交：
 
 ```bash
@@ -242,7 +267,9 @@ HTTP 400 `research.v6.invalid_contract` 响应会包含受限字段或 hash 的�
 提交前先修正该精确合同违规；被拒绝的 envelope 尚未持久交接。不得盲目重发未修改的
 无效文件。若当前 Work 是主理人 `director_action_proposal`，严格边界拒绝会立即终止该
 Director Attempt 并触发新的 Director cycle；不要在已经结算的 Attempt 上重试，必须读取
-新 Manifest 与新 Brief 后重新规划。
+新 Manifest 与新 Brief 后重新规划。某个 Run 在 Brief 冻结期间发生状态竞争时，服务端会
+保留该 Run 供后续重试，同时继续触发其他 Run；已经持久化的旧 cycle 被幂等重放时也不会
+被误算成新派工，不会让队首事件阻塞整条恢复队列。
 
 JSON 字符串不得包含 `U+0000`/NUL。重新计算 `content_hash` 和提交前，先从复制的来源
 文本中移除该字符。
@@ -382,7 +409,10 @@ legacy V1–V5 compatibility policy.
   structured source ID must name a stored Source in the same Research session;
   every linked section cites one of those sources and it verifiably supports that Claim. A
   V3–V5 report explains the applied Method, counterevidence, limitations,
-  unresolved gaps, and decision consequence.
+  unresolved gaps, and decision consequence. A V6 `report_package_submission`
+  must also use the reporter-only `multica-design-research-reports` skill so the
+  standalone page derives its visual language from the report's subject,
+  audience, evidence shape, and current completion state.
 - `quality_gate` / `citation_audit`: independent evaluation of the latest report
   revision by a `validator` Agent other than the report author. Structured evaluations
   provide substantive findings for all seven score dimensions and enumerate

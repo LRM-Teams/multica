@@ -14,9 +14,12 @@ function node(
 ): ResearchV6DirectorProjectionNode {
   return {
     id,
-    kind: tier === "S" ? "result_s" : "insight",
+    kind: tier === "GOAL" ? "goal" : tier === "S" ? "result_s" : "insight",
     tier,
-    canonicalRef: { kind: tier === "S" ? "result" : "insight", id: RUN_ID },
+    canonicalRef: {
+      kind: tier === "GOAL" ? "goal" : tier === "S" ? "result" : "insight",
+      id: RUN_ID,
+    },
     branchIds: [],
     state: {
       execution: "succeeded",
@@ -77,6 +80,129 @@ describe("Director V6 canvas adapter", () => {
       edges: [],
     });
     expect(result.graph.nodes.map((item) => item.level)).toEqual(["s", "xl"]);
+  });
+
+  it("shows Agent satellites while the constellation is still staffing", () => {
+    const directorId = "00000000-0000-4000-8000-000000000210";
+    const researcherId = "00000000-0000-4000-8000-000000000211";
+    const result = adaptResearchV6DirectorCanvas({
+      runId: RUN_ID,
+      eventSequence: 3,
+      nodes: [
+        node("goal", "GOAL", { kind: "goal" }),
+        node("director", "S", {
+          kind: "agent",
+          canonicalRef: { kind: "agent", id: directorId },
+          title: "Ronaldo",
+          state: {
+            execution: "idle",
+            conclusion: "proposed",
+            integration: "unmatched",
+          },
+        }),
+        node("researcher", "S", {
+          kind: "agent",
+          canonicalRef: { kind: "agent", id: researcherId },
+          title: "市场研究员",
+          state: {
+            execution: "offline",
+            conclusion: "proposed",
+            integration: "unmatched",
+          },
+        }),
+      ],
+      edges: [
+        edge("director-goal", "director", "goal", "belongs_to"),
+        edge("researcher-goal", "researcher", "goal", "belongs_to"),
+      ],
+    });
+
+    expect(result.graph.nodes.map((item) => item.id)).toEqual([
+      "goal",
+      "director",
+      "researcher",
+    ]);
+    expect(result.graph.nodes.find((item) => item.id === "researcher")).toMatchObject({
+      node_type: "agent",
+      status: "offline",
+      actor_agent_id: researcherId,
+      payload: { semantic_role: "roster" },
+    });
+    expect(result.graph.edges.map((item) => item.id)).toEqual([
+      "director-goal",
+      "researcher-goal",
+    ]);
+  });
+
+  it("renders unnamed pending Agent placeholders during staffing", () => {
+    const result = adaptResearchV6DirectorCanvas({
+      runId: RUN_ID,
+      eventSequence: 2,
+      nodes: [
+        node("goal", "GOAL", { kind: "goal" }),
+        node("pending", "S", {
+          kind: "agent",
+          canonicalRef: {
+            kind: "pending_agent",
+            id: "00000000-0000-4000-8000-000000000213",
+          },
+          title: "",
+          catalogSummary: "",
+          state: {
+            execution: "pending",
+            conclusion: "proposed",
+            integration: "unmatched",
+          },
+        }),
+      ],
+      edges: [edge("pending-goal", "pending", "goal", "belongs_to")],
+    });
+
+    expect(result.graph.nodes.map((item) => item.id)).toEqual([
+      "goal",
+      "pending",
+    ]);
+    expect(result.graph.nodes[1]).toMatchObject({
+      status: "pending",
+      payload: { semantic_role: "roster" },
+    });
+  });
+
+  it("hides Agent satellites once research Work appears", () => {
+    const result = adaptResearchV6DirectorCanvas({
+      runId: RUN_ID,
+      eventSequence: 6,
+      nodes: [
+        node("goal", "GOAL", { kind: "goal" }),
+        node("agent-node", "S", {
+          kind: "agent",
+          canonicalRef: { kind: "agent", id: "00000000-0000-4000-8000-000000000212" },
+          title: "市场研究员",
+        }),
+        node("work-node", "S", {
+          kind: "work_s",
+          canonicalRef: { kind: "work_item", id: RUN_ID },
+          title: "核验 Manus 技术进展",
+        }),
+      ],
+      edges: [
+        edge("agent-goal", "agent-node", "goal", "belongs_to"),
+        edge("work-goal", "work-node", "goal", "belongs_to"),
+        edge("assignment", "work-node", "agent-node", "assigned_to"),
+      ],
+    });
+
+    expect(result.graph.nodes.map((item) => item.id)).toEqual([
+      "goal",
+      "work-node",
+    ]);
+    expect(result.graph.nodes[1]).toMatchObject({
+      id: "work-node",
+      payload: {
+        assigned_agent: { name: "市场研究员" },
+      },
+    });
+    expect(result.graph.edges.map((item) => item.id)).toEqual(["work-goal"]);
   });
 
   it("folds assigned Agent identity into its Work node", () => {

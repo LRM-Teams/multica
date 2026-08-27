@@ -4289,6 +4289,9 @@ type ResearchReport struct {
 	ReviewedByDirectorAssignmentID pgtype.UUID        `json:"reviewed_by_director_assignment_id"`
 	Outline                        []byte             `json:"outline"`
 	Citations                      []byte             `json:"citations"`
+	Maturity                       string             `json:"maturity"`
+	DirectionCoverage              []byte             `json:"direction_coverage"`
+	DesignDossier                  string             `json:"design_dossier"`
 }
 
 type ResearchReportClaim struct {
@@ -4813,6 +4816,7 @@ type ResearchTeamMembership struct {
 	LeftAt               pgtype.Timestamptz `json:"left_at"`
 	TerminalReason       string             `json:"terminal_reason"`
 	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	Role                 string             `json:"role"`
 }
 
 type ResearchV6ActivationEvidence struct {

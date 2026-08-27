@@ -8,6 +8,7 @@ describe("familyForNodeKind", () => {
     ["source_snapshot", "evidence"],
     ["insight", "cognition"],
     ["team_membership", "collaboration"],
+    ["agent", "collaboration"],
     ["report_revision", "governance"],
   ] as const)("maps %s to %s", (kind, family) => {
     expect(familyForNodeKind(kind)).toBe(family);

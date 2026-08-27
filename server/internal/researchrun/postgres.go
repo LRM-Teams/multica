@@ -911,7 +911,17 @@ func (s *PostgresStore) ListDueRunIDs(ctx context.Context, limit int) ([]string,
 	rows, err := s.pool.Query(ctx, `
 		SELECT id::text FROM research_session
 		WHERE run_initialized_at IS NOT NULL
-		  AND orchestrator_version IS DISTINCT FROM 'research-run-v6'
+		  -- V6 work is reconciled separately, but its committed events still need
+		  -- this run-scoped pass to publish the realtime projection signal.
+		  AND (
+			orchestrator_version IS DISTINCT FROM 'research-run-v6'
+			OR EXISTS (
+			  SELECT 1 FROM research_run_event event
+			  WHERE event.session_id = research_session.id
+			    AND event.projected_at IS NULL
+			    AND event.next_projection_at <= now()
+			)
+		  )
 		  AND (
 		    (status = 'running' AND next_reconcile_at <= now())
 		    OR EXISTS (

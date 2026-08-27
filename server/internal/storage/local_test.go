@@ -385,11 +385,43 @@ func TestLocalStorage_ServeFile_RejectsPathTraversal(t *testing.T) {
 	}
 }
 
-// TestLocalStorage_Upload_SkipsSidecarWhenFilenameEmpty verifies the tighter
-// Upload gate: a write with no filename has nothing useful to preserve, so
-// we shouldn't litter the upload directory with content-type-only sidecars
-// that ServeFile would ignore anyway.
-func TestLocalStorage_Upload_SkipsSidecarWhenFilenameEmpty(t *testing.T) {
+// TestLocalStorage_VerifyUpload_KeepsContentTypeWithoutFilename locks the
+// V6 report-upload complete path: the authenticated PUT writes bytes with
+// an empty download filename, but VerifyUpload must still return the
+// declared Content-Type. An empty type looks like a checksum/media
+// mismatch and complete answers 409.
+func TestLocalStorage_VerifyUpload_KeepsContentTypeWithoutFilename(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("LOCAL_UPLOAD_DIR", tmpDir)
+
+	store := NewLocalStorageFromEnv()
+	if store == nil {
+		t.Fatal("NewLocalStorageFromEnv returned nil")
+	}
+
+	ctx := context.Background()
+	key := "research-v6/report.html"
+	body := []byte("<html><body>report</body></html>")
+	if _, err := store.Upload(ctx, key, body, "text/html", ""); err != nil {
+		t.Fatalf("Upload failed: %v", err)
+	}
+
+	object, err := store.VerifyUpload(ctx, key)
+	if err != nil {
+		t.Fatalf("VerifyUpload: %v", err)
+	}
+	if object.ContentType != "text/html" {
+		t.Fatalf("ContentType=%q, want text/html", object.ContentType)
+	}
+	if object.SizeBytes != int64(len(body)) {
+		t.Fatalf("SizeBytes=%d, want %d", object.SizeBytes, len(body))
+	}
+}
+
+// TestLocalStorage_Upload_WritesSidecarForContentTypeOnly records that a
+// content-type sidecar is still written when there is no download filename.
+// VerifyUpload reads that field; ServeFile still ignores a blank filename.
+func TestLocalStorage_Upload_WritesSidecarForContentTypeOnly(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("LOCAL_UPLOAD_DIR", tmpDir)
 
@@ -404,8 +436,8 @@ func TestLocalStorage_Upload_SkipsSidecarWhenFilenameEmpty(t *testing.T) {
 		t.Fatalf("Upload failed: %v", err)
 	}
 
-	if _, err := os.Stat(filepath.Join(tmpDir, key+metaSuffix)); !os.IsNotExist(err) {
-		t.Errorf("sidecar should not exist when filename is empty, got err=%v", err)
+	if _, err := os.Stat(filepath.Join(tmpDir, key+metaSuffix)); err != nil {
+		t.Fatalf("sidecar should exist when content type is set, got err=%v", err)
 	}
 }
 

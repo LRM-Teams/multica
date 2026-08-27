@@ -221,14 +221,25 @@ func commandEnvironment(overrides map[string]string) []string {
 	if len(overrides) == 0 {
 		return nil
 	}
-	env := append([]string(nil), os.Environ()...)
-	keys := make([]string, 0, len(overrides))
-	for name := range overrides {
+	env := os.Environ()
+	remaining := make(map[string]string, len(overrides))
+	for name, value := range overrides {
+		remaining[name] = value
+	}
+	for i, entry := range env {
+		name, _, ok := strings.Cut(entry, "=")
+		if value, exists := remaining[name]; ok && exists {
+			env[i] = name + "=" + value
+			delete(remaining, name)
+		}
+	}
+	keys := make([]string, 0, len(remaining))
+	for name := range remaining {
 		keys = append(keys, name)
 	}
 	sort.Strings(keys)
 	for _, name := range keys {
-		env = append(env, name+"="+overrides[name])
+		env = append(env, name+"="+remaining[name])
 	}
 	return env
 }
@@ -1100,7 +1111,7 @@ func acpModelLabel(name, modelID string) string {
 	return label
 }
 
-// discoverCursorModels runs `cursor-agent --list-models` and parses
+// discoverCursorModels runs Cursor Agent's `agent --list-models` command and parses
 // the `id - Label` rows. Cursor's catalog changes often and ships
 // many variants of the same base model (thinking / fast / max
 // suffixes) — static baking would be obsolete within weeks. On any
@@ -1108,7 +1119,7 @@ func acpModelLabel(name, modelID string) string {
 // stays usable when cursor-agent isn't installed on the daemon host.
 func discoverCursorModels(ctx context.Context, executablePath string, environment map[string]string) ([]Model, error) {
 	if executablePath == "" {
-		executablePath = "cursor-agent"
+		executablePath = "agent"
 	}
 	if _, err := exec.LookPath(executablePath); err != nil {
 		return cursorStaticModels(), nil

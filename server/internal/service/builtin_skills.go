@@ -12,11 +12,12 @@ var builtinSkillsFS embed.FS
 
 const builtinSkillsRoot = "builtin_skills"
 const hiringBuiltinSkillName = "multica-creating-agents"
+const researchReportDesignBuiltinSkillName = "multica-design-research-reports"
 
 // BuiltinSkills returns the platform's built-in skills, embedded at compile
-// time. Every agent receives these on top of its workspace-bound skills, so
-// they teach platform-wide "how to" workflows (e.g. mentioning) that the
-// runtime brief intentionally leaves to skills.
+// time. Execution profiles receive the applicable subset on top of their
+// workspace-bound skills, so platform-wide and role-specific workflows remain
+// explicit without leaking privileged capabilities to unrelated agents.
 //
 // Layout: builtin_skills/<name>/SKILL.md plus optional supporting files. The
 // <name> directory carries a "multica-" prefix so its on-disk slug can never
@@ -26,23 +27,24 @@ func (s *TaskService) BuiltinSkills() []AgentSkillData {
 	return loadBuiltinSkills()
 }
 
-// BuiltinSkillsForAgent keeps the platform hiring contract out of ordinary
-// Agent execution profiles. The caller must derive isOnboardingAgent from the
-// Workspace's structured onboarding_agent_id binding, never from display name.
-func (s *TaskService) BuiltinSkillsForAgent(isOnboardingAgent bool) []AgentSkillData {
-	return builtinSkillsForAgent(isOnboardingAgent)
+// BuiltinSkillsForAgent keeps role-scoped contracts out of unrelated Agent
+// execution profiles. The caller must derive both capabilities from structured
+// bindings, never from display names or instructions.
+func (s *TaskService) BuiltinSkillsForAgent(isOnboardingAgent bool, researchRole string) []AgentSkillData {
+	return builtinSkillsForAgent(isOnboardingAgent, researchRole)
 }
 
-func builtinSkillsForAgent(isOnboardingAgent bool) []AgentSkillData {
+func builtinSkillsForAgent(isOnboardingAgent bool, researchRole string) []AgentSkillData {
 	skills := loadBuiltinSkills()
-	if isOnboardingAgent {
-		return skills
-	}
 	filtered := make([]AgentSkillData, 0, len(skills))
 	for _, skill := range skills {
-		if skill.Name != hiringBuiltinSkillName {
-			filtered = append(filtered, skill)
+		if skill.Name == hiringBuiltinSkillName && !isOnboardingAgent {
+			continue
 		}
+		if skill.Name == researchReportDesignBuiltinSkillName && researchRole != "reporter" {
+			continue
+		}
+		filtered = append(filtered, skill)
 	}
 	return filtered
 }

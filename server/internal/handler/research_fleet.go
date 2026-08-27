@@ -85,8 +85,9 @@ func (h *Handler) ensureResearchFleet(ctx context.Context, workspaceID, userID p
 		if merr != nil {
 			return db.ResearchFleet{}, nil, merr
 		}
-		if len(members) > 0 && fleet.LeadAgentID.Valid {
+		if researchFleetHasEveryActiveRole(members) && fleet.LeadAgentID.Valid {
 			h.healResearchFleetAgentModels(ctx, members)
+			h.healResearchFleetReporterIdentity(ctx, members)
 			h.seedResearchFleetPlaybooks(ctx, workspaceID, fleet.ID)
 			return fleet, members, nil
 		}
@@ -109,6 +110,33 @@ func (h *Handler) ensureResearchFleet(ctx context.Context, workspaceID, userID p
 		}
 	}
 	return h.seedResearchFleetMembers(ctx, fleet, workspaceID, userID)
+}
+
+func researchFleetHasEveryActiveRole(members []db.ResearchFleetMember) bool {
+	activeRoles := make(map[string]struct{}, len(members))
+	for _, member := range members {
+		if member.Status == "active" {
+			activeRoles[member.Role] = struct{}{}
+		}
+	}
+	for _, seed := range researchSeedRoles() {
+		if _, ok := activeRoles[seed.Role]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func (h *Handler) healResearchFleetReporterIdentity(ctx context.Context, members []db.ResearchFleetMember) {
+	for _, member := range members {
+		if member.Status != "active" || member.Role != "reporter" || !member.AgentID.Valid || h.DB == nil {
+			continue
+		}
+		if _, err := h.DB.Exec(ctx, `UPDATE agent SET display_name=$2,description=$3,instructions=$4,updated_at=now()
+			WHERE id=$1::uuid AND managed_role='research_fleet'`, uuidToString(member.AgentID), reporterAgentName, reporterDescription, reporterInstructions); err != nil {
+			slog.Warn("research fleet reporter identity heal failed", "agent_id", uuidToString(member.AgentID), "error", err)
+		}
+	}
 }
 
 func (h *Handler) seedResearchFleetMembers(ctx context.Context, fleet db.ResearchFleet, workspaceID, userID pgtype.UUID) (db.ResearchFleet, []db.ResearchFleetMember, error) {

@@ -90,6 +90,50 @@ func TestV6ProjectionIncludesRunScopedAgentsAndWorkAssignments(t *testing.T) {
 	}
 }
 
+func TestV6ProjectionIncludesPendingCreateAgentPlaceholders(t *testing.T) {
+	run := newTransactionRecoveryRun(t, "Project pending create_agent placeholders")
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_session SET orchestrator_version='research-run-v6' WHERE id=$1::uuid`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	outboxID := uuid.NewString()
+	if _, err := run.pool.Exec(run.ctx, `
+		INSERT INTO research_v6_outbox(id,workspace_id,session_id,kind,idempotency_key,payload,status)
+		VALUES($1::uuid,$2::uuid,$3::uuid,'create_agent',$4,'{"spec":{"name":"市场研究员"}}'::jsonb,'pending')`,
+		outboxID, run.fixture.workspaceID, run.fixture.sessionID, "pending-agent:"+outboxID); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot, err := run.store.ProjectionV6Snapshot(run.ctx, V6ProjectionPageRequest{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pending *V6ProjectionNode
+	for index := range snapshot.Nodes {
+		node := snapshot.Nodes[index]
+		if node.CanonicalRef.Kind == "pending_agent" && node.CanonicalRef.ID == outboxID {
+			copy := node
+			pending = &copy
+		}
+	}
+	if pending == nil {
+		t.Fatalf("pending create_agent projection missing: %+v", snapshot.Nodes)
+	}
+	if pending.Kind != "agent" || pending.Title != "" || pending.State.Execution != "pending" {
+		t.Fatalf("pending placeholder=%+v, want unnamed pending agent", pending)
+	}
+	belongsToGoal := false
+	for _, edge := range snapshot.Edges {
+		if edge.Kind == "belongs_to" && edge.FromNodeID == pending.ID {
+			belongsToGoal = true
+		}
+	}
+	if !belongsToGoal {
+		t.Fatalf("pending placeholder has no belongs_to Goal edge: %+v", snapshot.Edges)
+	}
+}
+
 func TestV6ProjectionSliceDoesNotRevealDirectorCycleWork(t *testing.T) {
 	run := newTransactionRecoveryRun(t, "Hide Director cycle Work from V6 projection")
 	if _, err := run.pool.Exec(run.ctx, `UPDATE research_session SET orchestrator_version='research-run-v6' WHERE id=$1::uuid`, run.fixture.sessionID); err != nil {

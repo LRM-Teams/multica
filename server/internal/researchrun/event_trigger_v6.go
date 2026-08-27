@@ -13,8 +13,8 @@ import (
 // state change. Coverage is recorded by the cycle's immutable event watermark,
 // so restart and concurrent reconcilers can safely rediscover the same event.
 func (s *PostgresStore) ProcessV6EventTriggers(ctx context.Context, limit int) (int, error) {
-	processed := 0
-	for processed < limit {
+	processed, skipped := 0, 0
+	for processed+skipped < limit {
 		var eventID, workspaceID, runID string
 		var fromSequence, throughSequence, stateVersion int64
 		var previouslyCovered bool
@@ -65,7 +65,7 @@ func (s *PostgresStore) ProcessV6EventTriggers(ctx context.Context, limit int) (
 				WHERE material_effect.workspace_id=e.workspace_id AND material_effect.session_id=e.session_id
 				AND material_effect.kind IN ('create_agent','archive_agent')
 				AND material_effect.status IN ('pending','delivering'))
-			ORDER BY e.created_at,e.sequence,e.id LIMIT 1`, directorBriefOpenQuestionsMarker).Scan(&eventID, &workspaceID, &runID, &fromSequence, &throughSequence, &stateVersion, &previouslyCovered)
+			ORDER BY e.created_at,e.sequence,e.id OFFSET $2 LIMIT 1`, directorBriefOpenQuestionsMarker, skipped).Scan(&eventID, &workspaceID, &runID, &fromSequence, &throughSequence, &stateVersion, &previouslyCovered)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return processed, nil
 		}
@@ -76,15 +76,25 @@ func (s *PostgresStore) ProcessV6EventTriggers(ctx context.Context, limit int) (
 		if previouslyCovered {
 			triggerKey = "event-frontier-repair:" + eventID
 		}
-		_, err = (directorBriefModule{store: s, compiler: contextCompilerModule{}}).Start(ctx, StartV6DirectorCycleInput{
+		cycle, err := (directorBriefModule{store: s, compiler: contextCompilerModule{}}).Start(ctx, StartV6DirectorCycleInput{
 			WorkspaceID: workspaceID, RunID: runID, TriggerKey: triggerKey,
 			FromSequence: fromSequence, ThroughSequence: throughSequence, ExpectedStateVersion: stateVersion, Now: time.Now().UTC(),
 		})
 		if errors.Is(err, ErrWorkItemChanged) {
-			return processed, nil
+			// Keep the racing Run eligible for the next tick without letting it
+			// block unrelated Runs behind it in the global trigger queue.
+			skipped++
+			continue
 		}
 		if err != nil {
 			return processed, fmt.Errorf("start V6 Director event cycle: %w", err)
+		}
+		if cycle.Replayed {
+			// A covered repair event can remain eligible after its idempotent
+			// cycle terminates without producing the required material effect.
+			// Do not repeatedly count that replay as fresh work in this batch.
+			skipped++
+			continue
 		}
 		processed++
 	}

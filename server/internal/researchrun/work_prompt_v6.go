@@ -157,6 +157,9 @@ func BuildV6WorkDispatchPrompt(manifest V6WorkManifest) (string, error) {
 		prompt.WriteString("使用凭据代理回退时，GET `${V6_API}/catalog?view=<same_tier|higher_candidates>`，并把确认 POST 到 `${V6_API}/catalog-acks`。Manifest 中没有 `catalog_access` 时不得调用 catalog endpoint。\n\n")
 	}
 	if identity.ExpectedResult == V6ContractReportPackageSubmission {
+		prompt.WriteString("必须使用 `multica-design-research-reports` skill 先建立内容驱动的设计档案，再制作独立报告页面。同一报告的修订必须延续既有视觉语言；不得退化为通用卡片模板。\n\n")
+		prompt.WriteString("Manifest 的 `task_specific_schema.report_context` 是冻结的报告计划。`input_documents` 是其他智能体已经持久提交、并由服务端按方向与层级选出的完整阶段性结果；报告老板直接据此整合，不得依赖聊天转述。必须原样使用其中的 input_snapshot_hash 与 input_nodes；按 direction_coverage 组织章节，只展开每个一级方向的最高层节点。maturity=interim 时，页面首屏必须明确显示“阶段性调研报告”和持续更新提示；converging、researching、closed_without_result 方向必须作为过程状态展示，不能伪装成最终结论。supersedes.report_id 非空时，以既有 summary/plain_text 为内容修订基线，以 supersedes.design_dossier 为视觉连续性基线，只更新发生变化的方向。\n\n")
+		fmt.Fprintf(&prompt, "提交 envelope 的 task_id 使用报告 ID：`%s`。\n\n", identity.TaskID)
 		prompt.WriteString("先上传每个报告资源，再引用上传返回的 resource ID：\n\n")
 		prompt.WriteString("```bash\nmultica research report-upload " + base + " --file <absolute-file> --path <package-path> --role <role> --media-type <media-type> --output json\n```\n\n")
 		prompt.WriteString("使用凭据代理回退时，按冻结 Manifest 描述的 `${V6_API}/report-uploads` 工作流操作。\n\n")

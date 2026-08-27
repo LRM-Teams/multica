@@ -39,13 +39,45 @@ func TestValidateV6ParallelResearchPlanRequiresStaffingAndParallelWork(t *testin
 			facts: v6DirectorPreflightFacts{maxParallelTasks: 5, workerCount: 3, proposedAtomicWork: 3, proposedWorkBranches: 3, childBranches: 3},
 		},
 		{
-			name:    "open questions require distinct follow-up Work",
-			facts:   v6DirectorPreflightFacts{maxParallelTasks: 5, workerCount: 3, resultCount: 1, unresolvedQuestions: 3, proposedAtomicWork: 2, proposedWorkBranches: 2, childBranches: 3},
-			wantErr: "至少需要 3 个分配给不同 Agent 的 atomic Work",
+			name:    "early research still fills the minimum parallel frontier",
+			facts:   v6DirectorPreflightFacts{maxParallelTasks: 5, workerCount: 3, resultCount: 1, unresolvedQuestions: 3, proposedAtomicWork: 1, proposedWorkBranches: 1, childBranches: 3},
+			wantErr: "至少需要 2 个分配给不同 Agent 的 atomic Work",
+		},
+		{
+			name: "late follow-up may make partial parallel progress",
+			facts: v6DirectorPreflightFacts{maxParallelTasks: 5, workerCount: 5, resultCount: 10,
+				unresolvedQuestions: 8, proposedAtomicWork: 3, proposedWorkBranches: 3, childBranches: 5},
+		},
+		{
+			name:    "late follow-up cannot ignore all unresolved questions",
+			facts:   v6DirectorPreflightFacts{maxParallelTasks: 5, workerCount: 5, resultCount: 10, unresolvedQuestions: 8, childBranches: 5},
+			wantErr: "至少需要 1 个分配给不同 Agent 的 atomic Work",
 		},
 		{
 			name:  "pending Agent creation permits a staffing cycle",
 			facts: v6DirectorPreflightFacts{maxParallelTasks: 5, workerCount: 1, pendingAgentCount: 2, childBranches: 3},
+		},
+		{
+			name: "report-only maintenance cycle does not starve behind open questions",
+			facts: v6DirectorPreflightFacts{maxParallelTasks: 5, workerCount: 5, resultCount: 10,
+				unresolvedQuestions: 12, proposedReports: 1, hasReport: true, childBranches: 5},
+		},
+		{
+			name: "report refresh can make progress with partial parallel follow-up",
+			facts: v6DirectorPreflightFacts{maxParallelTasks: 5, workerCount: 5, resultCount: 10,
+				unresolvedQuestions: 12, proposedAtomicWork: 3, proposedWorkBranches: 3,
+				proposedReports: 1, hasReport: true, childBranches: 5},
+		},
+		{
+			name: "surplus Agent creation does not block work assigned to joined workers",
+			facts: v6DirectorPreflightFacts{maxParallelTasks: 5, workerCount: 3, proposedAgentCount: 1,
+				resultCount: 3, unresolvedQuestions: 3, proposedAtomicWork: 3, proposedWorkBranches: 3, childBranches: 3},
+		},
+		{
+			name: "required Agent creation cannot be mixed with premature work",
+			facts: v6DirectorPreflightFacts{maxParallelTasks: 5, proposedAgentCount: 1,
+				resultCount: 3, unresolvedQuestions: 3, proposedAtomicWork: 1, proposedWorkBranches: 1, childBranches: 3},
+			wantErr: "Agent 创建是异步的",
 		},
 		{
 			name: "convergence may consume unresolved frontier nodes before more research",
@@ -145,6 +177,18 @@ func TestValidateV6IntegrationCandidateRequiresExecutableTierTransition(t *testi
 				t.Fatalf("validate integration candidate: %v", err)
 			}
 		})
+	}
+}
+
+func TestValidateV6IntegrationDiscussionOutcome(t *testing.T) {
+	if err := validateV6IntegrationDiscussionOutcome(V6Discussion{Status: "active"}); err != nil {
+		t.Fatalf("active discussion should be accepted: %v", err)
+	}
+	for _, status := range []string{"consensus_accept", "consensus_reject", "escalated"} {
+		err := validateV6IntegrationDiscussionOutcome(V6Discussion{Status: status})
+		if !errors.Is(err, ErrInvalidContract) {
+			t.Fatalf("status %q error=%v want ErrInvalidContract", status, err)
+		}
 	}
 }
 

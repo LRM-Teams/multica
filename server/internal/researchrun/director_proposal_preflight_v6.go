@@ -24,6 +24,8 @@ type v6DirectorPreflightFacts struct {
 	proposedConvergence  int
 	proposedBranches     int
 	proposedWorkBranches int
+	proposedReports      int
+	hasReport            bool
 	childBranches        int
 	topLevelBranches     int
 	proposedTopLevel     int
@@ -38,6 +40,7 @@ func (s *PostgresStore) preflightV6DirectorProposal(ctx context.Context, proposa
 	proposedAgentCount := 0
 	proposedAtomicWork := 0
 	proposedConvergence := 0
+	proposedReports := 0
 	proposedBranches := 0
 	proposedBranchParents := make([]uuid.UUID, 0)
 	proposedWorkBranchIDs := map[uuid.UUID]struct{}{}
@@ -47,6 +50,14 @@ func (s *PostgresStore) preflightV6DirectorProposal(ctx context.Context, proposa
 			proposedAgentCount++
 		case "open_discussion", "create_integration":
 			proposedConvergence++
+		case "create_report":
+			var payload struct {
+				Title string `json:"title"`
+			}
+			if json.Unmarshal(action.Payload, &payload) != nil || strings.TrimSpace(payload.Title) == "" {
+				return fmt.Errorf("%w: create_report 缺少报告标题", ErrInvalidContract)
+			}
+			proposedReports++
 		case "create_branch":
 			var payload struct {
 				ParentBranchID string `json:"parent_branch_id"`
@@ -97,11 +108,14 @@ func (s *PostgresStore) preflightV6DirectorProposal(ctx context.Context, proposa
 	facts.proposedAtomicWork = proposedAtomicWork
 	facts.proposedConvergence = proposedConvergence
 	facts.proposedBranches = proposedBranches
+	facts.proposedReports = proposedReports
+	facts.hasReport = proposedReports > 0
 	facts.proposedWorkBranches = len(proposedWorkBranchIDs)
 	err := s.pool.QueryRow(ctx, `SELECT
 		COALESCE((s.run_config->>'max_parallel_tasks')::int,5),
 		(SELECT count(*)::int FROM research_team_membership m
 			WHERE m.workspace_id=s.workspace_id AND m.session_id=s.id AND m.state IN ('idle','working')
+			AND m.role='researcher'
 			AND NOT EXISTS (SELECT 1 FROM research_director_assignment director
 				WHERE director.workspace_id=m.workspace_id AND director.session_id=m.session_id
 				AND director.status='active' AND director.director_agent_id=m.agent_id)),
@@ -232,7 +246,7 @@ func (s *PostgresStore) preflightV6DirectorProposal(ctx context.Context, proposa
 				AND active.assigned_agent_id=m.agent_id
 				AND active.status IN ('ready','dispatching','enqueued','running','awaiting_input')
 			WHERE m.workspace_id=$1::uuid AND m.session_id=$2::uuid AND m.agent_id=ANY($3::uuid[])
-			AND m.state IN ('idle','working','offline','retiring')`, proposal.WorkspaceID, proposal.RunID, assigneeIDs).Scan(&eligible, &busy); err != nil {
+			AND m.role='researcher' AND m.state IN ('idle','working','offline','retiring')`, proposal.WorkspaceID, proposal.RunID, assigneeIDs).Scan(&eligible, &busy); err != nil {
 			return err
 		}
 		if eligible != len(assigneeSeen) {
@@ -241,6 +255,20 @@ func (s *PostgresStore) preflightV6DirectorProposal(ctx context.Context, proposa
 		if busy > 0 {
 			return fmt.Errorf("%w: atomic Work 的 Agent 已有活动任务，必须改派给不同 Agent", ErrInvalidContract)
 		}
+	}
+	reportPlan, err := s.loadV6ReportPlanFact(ctx, proposal.WorkspaceID, proposal.RunID)
+	if err != nil {
+		return err
+	}
+	needsReport, _ := reportPlan["needs_refresh"].(bool)
+	if needsReport && facts.proposedReports == 0 {
+		return fmt.Errorf("%w: 当前方向最大节点已变化，必须同时派发报告老板更新阶段性报告", ErrInvalidContract)
+	}
+	if !needsReport && facts.proposedReports > 0 {
+		return fmt.Errorf("%w: 当前报告输入没有变化，不得重复创建相同修订", ErrInvalidContract)
+	}
+	if facts.proposedReports > 1 {
+		return fmt.Errorf("%w: 同一时刻只能由报告老板维护一个报告修订", ErrInvalidContract)
 	}
 	return validateV6ParallelResearchPlan(facts)
 }
@@ -281,15 +309,24 @@ func validateV6ParallelResearchPlan(facts v6DirectorPreflightFacts) error {
 	if facts.proposedConvergence > 0 {
 		return nil
 	}
+	// A report refresh is a productive maintenance action. Accept the proposal
+	// even when it also contains fewer follow-up Work Items than the outstanding
+	// question count: the report event triggers another cycle for the remainder.
+	// Rejecting the complete proposal would otherwise starve both operations.
+	if facts.hasReport {
+		return nil
+	}
 	if facts.proposedAgentCount == 0 && facts.proposedAtomicWork == 0 && facts.unresolvedQuestions == 0 {
 		return nil
 	}
 	requiredWork := 0
 	if facts.unresolvedQuestions > 0 {
-		requiredWork = facts.unresolvedQuestions
-		if requiredWork > facts.maxParallelTasks {
-			requiredWork = facts.maxParallelTasks
-		}
+		// Once the initial parallel baseline has produced enough results, any
+		// non-empty subset of valid follow-up Work is productive. The next
+		// result event schedules another Director cycle for the remaining gaps.
+		// Requiring every outstanding question in one proposal makes partial
+		// progress impossible and can starve convergence indefinitely.
+		requiredWork = 1
 	}
 	if remaining := parallelTarget - facts.resultCount; remaining > requiredWork {
 		requiredWork = remaining
@@ -300,7 +337,7 @@ func validateV6ParallelResearchPlan(facts v6DirectorPreflightFacts) error {
 	if facts.workerCount+facts.pendingAgentCount+facts.proposedAgentCount < requiredWork {
 		return fmt.Errorf("%w: 当前研究至少需要 %d 个不同的 run-scoped Agent 并发覆盖独立方向或待回答问题", ErrInvalidContract, requiredWork)
 	}
-	if facts.pendingAgentCount+facts.proposedAgentCount > 0 {
+	if facts.workerCount < requiredWork && facts.pendingAgentCount+facts.proposedAgentCount > 0 {
 		if facts.proposedAtomicWork > 0 {
 			return fmt.Errorf("%w: Agent 创建是异步的；先等待全部成员 joined，再在后续轮次并行派工", ErrInvalidContract)
 		}

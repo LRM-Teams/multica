@@ -560,10 +560,12 @@ function ImageAttachmentView({
 
   // Click on figure opens the preview only in non-editor / non-uploading
   // surfaces — inside the editor we let ProseMirror own the click for
-  // selection / cursor placement and route preview through the explicit
-  // Maximize button. The CSS rule `.image-figure[data-clickable="true"] {
-  // cursor: zoom-in }` keys off this same flag for the cursor affordance.
+  // selection / cursor placement. Preview is the Maximize button *or*
+  // a double-click on the image itself. The CSS rule
+  // `.image-figure[data-clickable="true"] { cursor: zoom-in }` keys off
+  // this same flag for the single-click cursor affordance.
   const clickable = !editable && !uploading;
+  const canPreview = !uploading && !!src;
 
   const aspectRatioStyle =
     width && height && width > 0 && height > 0
@@ -586,6 +588,15 @@ function ImageAttachmentView({
         data-clickable={clickable || undefined}
         contentEditable={false}
         onClick={clickable ? onView : undefined}
+        onDoubleClick={
+          canPreview
+            ? (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                onView();
+              }
+            : undefined
+        }
       >
         <img
           src={src || undefined}
@@ -600,6 +611,7 @@ function ImageAttachmentView({
             className="image-toolbar"
             onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => e.stopPropagation()}
           >
             <Tooltip>
               <TooltipTrigger type="button" aria-label={t(($) => $.image.view)} onClick={onView}>

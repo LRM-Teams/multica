@@ -362,7 +362,10 @@ func (s *PostgresStore) RecoverExpiredV6WorkItems(ctx context.Context, limit int
 		  FROM research_work_item w
 		  JOIN research_session s ON s.id=w.session_id
 		  WHERE s.orchestrator_version='research-run-v6' AND s.status='running'
-		    AND w.kind<>'director' AND w.status='ready'
+		    -- Discussion participants may queue behind their research Work. They
+		    -- must not be quarantined as duplicate independent directions; once
+		    -- the Agent becomes idle, dispatch can resume the discussion turn.
+		    AND w.kind NOT IN ('director','discussion') AND w.status='ready'
 		), surplus AS (
 		  SELECT w.id
 		  FROM research_work_item w JOIN ranked candidate ON candidate.id=w.id

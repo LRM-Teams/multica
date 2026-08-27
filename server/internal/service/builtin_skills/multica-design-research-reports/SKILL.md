@@ -113,7 +113,8 @@ design_reason=用同一坐标系比较竞争方案并显式标出证据缺口。
 - 不使用表单、iframe、弹窗、下载、存储、网络请求、Worker 或父页面 bridge。
 - 优先使用语义 HTML 和 CSS；只有交互确实提升阅读时才加入小型脚本。
 - 保持键盘可达、清晰焦点、可读对比度、响应式布局和减少动态偏好。
-- 生成完整纯文本、outline 和 citations；它们必须与页面实际内容一致。
+- 生成完整纯文本。outline 和 citations 与页面一致更好，但提交时可省略或写 `[]`。
+- 不要手抄冻结 `input_nodes`、`package_hash` 或 citations 枚举；服务端在验收时绑定冻结输入并计算 package hash。
 - 先完成并检查全部资源，再执行不可逆的正式提交；不要发送探测 payload。
 
 ## 7. 提交前检查

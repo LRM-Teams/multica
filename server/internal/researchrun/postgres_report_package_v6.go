@@ -6,11 +6,28 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"slices"
-	"sort"
 
 	"github.com/jackc/pgx/v5"
 )
+
+func bindServerOwnedV6ReportPackage(in *v6ReportSubmission, goalVersion int, snapshotHash string, nodes []V6NodeRef) {
+	in.GoalVersion = goalVersion
+	in.InputSnapshotHash = snapshotHash
+	in.InputNodes = append([]V6NodeRef(nil), nodes...)
+	in.Outline = coerceV6JSONArray(in.Outline)
+	in.Citations = coerceV6JSONArray(in.Citations)
+}
+
+func coerceV6JSONArray(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 || string(raw) == "null" {
+		return json.RawMessage("[]")
+	}
+	var values []json.RawMessage
+	if json.Unmarshal(raw, &values) != nil {
+		return json.RawMessage("[]")
+	}
+	return raw
+}
 
 type v6ReportSubmission struct {
 	WorkspaceID        string             `json:"workspace_id"`
@@ -54,35 +71,27 @@ func (s *PostgresStore) applyReportPackageV6(ctx context.Context, submissionID s
 	if err != nil {
 		return "", err
 	}
-	if goalVersion != in.GoalVersion || snapshotHash != in.InputSnapshotHash {
-		return "", ErrWorkItemChanged
-	}
 	rows, err := s.pool.Query(ctx, `SELECT CASE WHEN iv.id IS NULL THEN 'result_s' ELSE 'insight' END,p.id::text,i.node_artifact_version_id::text,COALESCE(iv.tier,'S'),i.content_hash FROM research_report_input i JOIN research_artifact_version v ON v.id=i.node_artifact_version_id JOIN research_artifact_passport p ON p.id=v.artifact_id LEFT JOIN research_insight_version iv ON iv.artifact_version_id=v.id WHERE i.report_id=$1::uuid AND i.report_revision=$2 ORDER BY i.node_artifact_version_id`, reportID, revision)
 	if err != nil {
 		return "", err
 	}
-	expected := []string{}
+	expectedNodes := []V6NodeRef{}
 	for rows.Next() {
-		var kind, id, versionID, tier, hash string
-		if err = rows.Scan(&kind, &id, &versionID, &tier, &hash); err != nil {
+		var node V6NodeRef
+		var tier string
+		if err = rows.Scan(&node.Kind, &node.ID, &node.VersionID, &tier, &node.ContentHash); err != nil {
 			rows.Close()
 			return "", err
 		}
-		expected = append(expected, kind+":"+id+":"+versionID+":"+tier+":"+hash)
+		node.Tier = V6Tier(tier)
+		expectedNodes = append(expectedNodes, node)
 	}
 	if err = rows.Err(); err != nil {
 		rows.Close()
 		return "", err
 	}
 	rows.Close()
-	actual := make([]string, len(in.InputNodes))
-	for i, node := range in.InputNodes {
-		actual[i] = node.Kind + ":" + node.ID + ":" + node.VersionID + ":" + string(node.Tier) + ":" + node.ContentHash
-	}
-	sort.Strings(actual)
-	if !slices.Equal(expected, actual) {
-		return "", ErrWorkItemChanged
-	}
+	bindServerOwnedV6ReportPackage(&in, goalVersion, snapshotHash, expectedNodes)
 	resources := make([]V6ReportResource, 0, len(in.Resources))
 	var verifiedResourceCount int
 	if err = s.pool.QueryRow(ctx, `SELECT count(*)::int FROM research_report_resource WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND report_id=$3::uuid AND report_revision=$4 AND upload_status='verified'`, in.WorkspaceID, in.RunID, reportID, revision).Scan(&verifiedResourceCount); err != nil {
@@ -124,11 +133,9 @@ func (s *PostgresStore) applyReportPackageV6(ctx context.Context, submissionID s
 	if err != nil {
 		return "", err
 	}
-	sort.Strings(in.ScriptHashes)
-	sort.Strings(in.StyleHashes)
-	if compiled.PackageHash != in.PackageHash || !slices.Equal(compiled.ScriptHashes, in.ScriptHashes) || !slices.Equal(compiled.StyleHashes, in.StyleHashes) {
-		return "", ErrResultConflict
-	}
+	in.PackageHash = compiled.PackageHash
+	in.ScriptHashes = compiled.ScriptHashes
+	in.StyleHashes = compiled.StyleHashes
 	designDossier, err := ExtractV6ReportDesignDossier(compiled.HTML)
 	if err != nil {
 		return "", err

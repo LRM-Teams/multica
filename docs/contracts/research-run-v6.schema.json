@@ -551,7 +551,7 @@
     "report_package_submission": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["contract_kind", "schema_version", "client_request_id", "workspace_id", "run_id", "work_item_id", "task_id", "attempt_id", "agent_id", "manifest_id", "manifest_hash", "goal_version", "input_snapshot_hash", "input_nodes", "title", "summary", "document_resource_id", "resources", "outline", "citations", "plain_text", "script_hashes", "style_hashes", "package_hash"],
+      "required": ["contract_kind", "schema_version", "client_request_id", "workspace_id", "run_id", "work_item_id", "task_id", "attempt_id", "agent_id", "manifest_id", "manifest_hash", "title", "summary", "document_resource_id", "resources", "plain_text"],
       "properties": {
         "contract_kind": { "const": "report_package_submission" },
         "schema_version": { "const": 6 },

@@ -109,6 +109,10 @@ func DecodeV6Contract(raw []byte, expected V6ContractKind, secondStage V6SecondS
 	if !exists {
 		return DecodedV6Contract{}, fmt.Errorf("%w: V6 schema definition %q is missing", ErrInvalidContract, definitionName)
 	}
+	if identity.ContractKind == V6ContractReportPackageSubmission {
+		normalizeV6ReportPackageSubmission(root)
+		value = root
+	}
 	if err = validateV6SchemaValue(value, definition, schema.Definitions, "$"); err != nil {
 		return DecodedV6Contract{}, fmt.Errorf("%w: %v", ErrInvalidContract, err)
 	}
@@ -161,6 +165,18 @@ func loadV6Schema() (v6SchemaDocument, error) {
 		return v6SchemaDocument{}, fmt.Errorf("%w: embedded V6 schema is invalid: %v", ErrInvalidContract, err)
 	}
 	return schema, nil
+}
+
+// normalizeV6ReportPackageSubmission drops agent copies of server-owned
+// frozen identity and compiled hashes. Those fields are bound at apply
+// from the Work Item and verified uploads. Malformed copies must not
+// fail the receive gate.
+func normalizeV6ReportPackageSubmission(root map[string]any) {
+	for _, field := range []string{"goal_version", "input_snapshot_hash", "input_nodes", "package_hash", "script_hashes", "style_hashes"} {
+		delete(root, field)
+	}
+	root["citations"] = []any{}
+	root["outline"] = []any{}
 }
 
 func v6SelfHashField(kind V6ContractKind) string {

@@ -32,6 +32,7 @@ export function selectSemanticLabelNodeIds(
     selectedNodeId?: string | null;
     enabled?: boolean;
     collisionGap?: number;
+    alwaysVisibleNodeIds?: ReadonlySet<string>;
   },
 ): Set<string> {
   const landmarks = entities.filter((entity) => entity.tier !== "s");
@@ -43,6 +44,7 @@ export function selectSemanticLabelNodeIds(
   const candidates = landmarks
     .filter((entity) => {
       if (entity.id === options.selectedNodeId) return true;
+      if (options.alwaysVisibleNodeIds?.has(entity.id)) return true;
       const threshold = MIN_SCREEN_DIAMETER[entity.tier] ?? Infinity;
       return entity.radius * 2 * zoom >= threshold;
     })

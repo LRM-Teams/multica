@@ -343,6 +343,42 @@ describe("Director V6 canvas adapter", () => {
     ]);
   });
 
+  it("reveals absorbed inputs when their successor is expanded", () => {
+    const successor = node("successor", "M", {
+      expandable: true,
+      hiddenChildCount: 2,
+    });
+    const absorbedState = {
+      execution: "succeeded" as const,
+      conclusion: "accepted" as const,
+      integration: "absorbed" as const,
+    };
+    const result = adaptResearchV6DirectorCanvas({
+      runId: RUN_ID,
+      eventSequence: 9,
+      nodes: [
+        successor,
+        node("input-a", "S", { absorbed: true, state: absorbedState }),
+        node("input-b", "S", { absorbed: true, state: absorbedState }),
+      ],
+      edges: [
+        edge("input-a-into-successor", "input-a", "successor", "absorbed_into"),
+        edge("input-b-into-successor", "input-b", "successor", "absorbed_into"),
+      ],
+      expandedRootIds: new Set(["successor"]),
+    });
+
+    expect(result.graph.nodes.map((item) => item.id)).toEqual([
+      "successor",
+      "input-a",
+      "input-b",
+    ]);
+    expect(result.graph.edges.map((item) => item.edge_type)).toEqual([
+      "absorbed_into",
+      "absorbed_into",
+    ]);
+  });
+
   it("exposes only server-declared disclosure roots", () => {
     const result = adaptResearchV6DirectorCanvas({
       runId: RUN_ID,

@@ -12,6 +12,8 @@ export interface ResearchV6DirectorCanvasProjection {
   nodes: readonly ResearchV6DirectorProjectionNode[];
   edges: readonly ResearchV6DirectorProjectionEdge[];
   densityBins?: readonly ResearchV6DirectorDensityBin[];
+  /** Composite roots whose one-layer disclosure is currently open. */
+  expandedRootIds?: ReadonlySet<string>;
 }
 
 export interface ResearchV6DirectorCanvasAdapterResult {
@@ -111,20 +113,29 @@ export function adaptResearchV6DirectorCanvas(
 
   // Roster circles are a staffing overlay, not knowledge-graph members.
   // Keep them only until the first research Work / Result / Insight appears.
-  const staffing = !projection.nodes.some(isResearchContentNode);
-  const visibleNodes = projection.nodes.filter((node) => {
-    if (node.absorbed) return false;
-    if (isAgentProjectionNode(node)) return staffing;
-    return true;
-  });
-  const visibleNodeIds = new Set(visibleNodes.map((node) => node.id));
   const absorbedInputs = new Map<string, string[]>();
+  const expandedAbsorbedNodeIds = new Set<string>();
   for (const edge of projection.edges) {
     if (edge.kind !== "absorbed_into") continue;
     const inputs = absorbedInputs.get(edge.toNodeId) ?? [];
     inputs.push(edge.fromNodeId);
     absorbedInputs.set(edge.toNodeId, inputs);
+    if (projection.expandedRootIds?.has(edge.toNodeId)) {
+      expandedAbsorbedNodeIds.add(edge.fromNodeId);
+    }
   }
+
+  const staffing = !projection.nodes.some(isResearchContentNode);
+  const visibleNodes = projection.nodes.filter((node) => {
+    // Absorbed inputs are hidden in the default constellation, but a
+    // disclosure slice must be able to reveal the exact inputs of its open
+    // successor. The server supplies the canonical absorbed_into edge; the
+    // client only uses the explicit expanded-root intent to change visibility.
+    if (node.absorbed && !expandedAbsorbedNodeIds.has(node.id)) return false;
+    if (isAgentProjectionNode(node)) return staffing;
+    return true;
+  });
+  const visibleNodeIds = new Set(visibleNodes.map((node) => node.id));
 
   const expandableNodeIds = new Set<string>();
   const hiddenChildCountByNodeId = new Map<string, number>();

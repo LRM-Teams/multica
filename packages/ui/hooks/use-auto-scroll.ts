@@ -42,8 +42,9 @@ export function useAutoScroll(
       }
     }
 
-    // Watch child element resizes (content growth, image loads, streaming)
+    // Watch the host (tab reveal / flex height) and children (content growth).
     const ro = new ResizeObserver(onContentChange)
+    ro.observe(el)
     for (const child of el.children) {
       ro.observe(child)
     }

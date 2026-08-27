@@ -1,0 +1,2 @@
+-- Data repair is intentionally irreversible; reverting the migration must
+-- not make accepted Insight outputs invisible to report composition again.

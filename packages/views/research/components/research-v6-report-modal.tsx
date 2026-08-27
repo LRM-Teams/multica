@@ -183,11 +183,8 @@ export function ResearchV6ReportModal({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className={
-          presentation === "page"
-            ? "flex h-dvh w-dvw max-w-none flex-col gap-0 overflow-hidden rounded-none border-0 p-0 sm:h-dvh sm:w-dvw"
-            : "flex h-[calc(100dvh-1rem)] w-[calc(100vw-1rem)] max-w-none flex-col gap-0 overflow-hidden rounded-xl p-0 sm:h-[min(94vh,1000px)] sm:w-[min(96vw,1600px)]"
-        }
+        className="flex h-dvh w-dvw !max-w-none flex-col gap-0 overflow-hidden rounded-none border-0 p-0 sm:h-dvh sm:w-dvw sm:!max-w-none"
+        data-presentation={presentation}
         data-testid="research-v6-report-modal"
       >
         <DialogHeader className="shrink-0 border-b border-border/70 bg-card px-4 py-3 text-left sm:px-5">

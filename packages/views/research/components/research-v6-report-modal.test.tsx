@@ -36,6 +36,39 @@ const report = {
 };
 
 describe("ResearchV6ReportModal", () => {
+  it("beats the default dialog strip so the report can render as a webpage", () => {
+    render(
+      <ResearchV6ReportModal
+        appOrigin={location.origin}
+        open
+        presentation="page"
+        report={null}
+        onOpenChange={() => {}}
+      />,
+    );
+
+    const dialog = screen.getByTestId("research-v6-report-modal");
+    expect(dialog.className).toMatch(/!max-w-none/);
+    expect(dialog.className).toMatch(/sm:!max-w-none/);
+    expect(dialog.className).toMatch(/\bh-dvh\b/);
+    expect(dialog.className).toMatch(/\bw-dvw\b/);
+  });
+
+  it("uses the same full-page shell when opened as a session overlay", () => {
+    render(
+      <ResearchV6ReportModal
+        appOrigin={location.origin}
+        open
+        report={null}
+        onOpenChange={() => {}}
+      />,
+    );
+
+    const dialog = screen.getByTestId("research-v6-report-modal");
+    expect(dialog.className).toMatch(/!max-w-none/);
+    expect(dialog.className).toMatch(/sm:!max-w-none/);
+  });
+
   it("shows an empty state when no report has been generated", () => {
     render(
       <ResearchV6ReportModal

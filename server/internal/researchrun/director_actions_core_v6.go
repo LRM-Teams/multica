@@ -82,6 +82,23 @@ func (s *PostgresStore) executeV6CreateWorkAction(ctx context.Context, proposal 
 	if json.Unmarshal(action.Payload, &payload) != nil || strings.TrimSpace(payload.Kind) == "" || strings.TrimSpace(payload.Mission) == "" || payload.Priority < 0 || payload.Priority > 1 || payload.MaxAttempts < 1 || payload.MaxAttempts > 100 {
 		return ErrInvalidContract
 	}
+	// Some Director model responses place the gate metadata beside
+	// task_specific_schema inside payload.payload. Accept that equivalent
+	// representation and normalize it before persisting the Work item.
+	if payload.DirectionGateDecision == "" || payload.DirectionGateRationale == "" {
+		var nested v6CreateWorkActionPayload
+		if err := json.Unmarshal(payload.Payload, &nested); err == nil {
+			if payload.DirectionGateNodeCount == 0 {
+				payload.DirectionGateNodeCount = nested.DirectionGateNodeCount
+			}
+			if payload.DirectionGateDecision == "" {
+				payload.DirectionGateDecision = nested.DirectionGateDecision
+			}
+			if payload.DirectionGateRationale == "" {
+				payload.DirectionGateRationale = nested.DirectionGateRationale
+			}
+		}
+	}
 	expectedKind := V6ContractKind(payload.ExpectedResultSchemaID)
 	persistedKind := ""
 	switch expectedKind {

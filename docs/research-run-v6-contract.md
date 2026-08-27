@@ -63,6 +63,25 @@ rounds, or when no new evidence can change the decision, the Director must submi
 No Discussion may remain indefinitely in `uncertain`/`escalated` without either
 an owned follow-up Work or an explicit Director resolution.
 
+### Direction saturation gate
+
+For a non-root direction, the Brief exposes `scope.direction_node_count`,
+`scope.saturation_threshold` (5), and `scope.saturation_gate`. Once a direction
+has more than five bound research nodes, every new atomic Work for that
+direction must carry `direction_gate_node_count`,
+`direction_gate_decision=continue_direction`, and a non-empty
+`direction_gate_rationale` explaining how the question can change the user Goal
+decision. The server compares the submitted count with the current count both
+when the Work is created and when it is dispatched, so stale queued Work cannot
+silently bypass the gate.
+
+The Director should stop a saturated direction when its highest current node is
+sufficient for the Goal, rather than spend budget on marginal details. If a
+material Goal dimension is missing, it should create a new direction while
+capacity remains. If all directions are sufficient and no material question or
+conflict remains, it must stop creating research Work and create or refresh the
+final Report Work instead.
+
 Examples are stored in [`research/fixtures/`](research/fixtures/):
 
 - `director-brief-v6.example.json`

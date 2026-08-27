@@ -73,6 +73,26 @@ func (s *PostgresStore) prepareNextV6Dispatch(ctx context.Context) (bool, v6Disp
 		if _, err = ensureV6BackingTaskTx(ctx, tx, workItemID); err != nil {
 			return false, candidate, err
 		}
+		var work struct {
+			DirectionGateNodeCount int    `json:"direction_gate_node_count"`
+			DirectionGateDecision  string `json:"direction_gate_decision"`
+			DirectionGateRationale string `json:"direction_gate_rationale"`
+		}
+		if err = json.Unmarshal(payload, &work); err != nil {
+			return false, candidate, err
+		}
+		var branchIDs []string
+		if err = tx.QueryRow(ctx, `SELECT COALESCE(array_agg(branch_id::text ORDER BY branch_id::text),'{}')
+			FROM research_v6_work_item_branch WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND work_item_id=$3::uuid`, workspaceID, runID, workItemID).Scan(&branchIDs); err != nil {
+			return false, candidate, err
+		}
+		if err = validateV6DirectionGateTx(ctx, tx, workspaceID, runID, branchIDs, v6DirectionGate{
+			NodeCount: work.DirectionGateNodeCount,
+			Decision:  work.DirectionGateDecision,
+			Rationale: work.DirectionGateRationale,
+		}); err != nil {
+			return false, candidate, err
+		}
 	}
 	attemptID, manifestID := uuid.NewString(), uuid.NewString()
 	manifest, manifestHash, err := compileV6WorkManifestTx(ctx, tx, workspaceID, runID, workItemID, attemptID, manifestID, agentID, mission, expectedSchema, goalVersion, stateVersion, throughSequence, payload)

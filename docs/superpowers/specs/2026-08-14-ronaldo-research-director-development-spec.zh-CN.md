@@ -284,7 +284,9 @@ Match Decision 固定到 node revisions + Goal version + Branch scope。未变�
 - 最后加入并成功完成 Integration 的 Agent 成为 successor Steward；只有该 Agent 已离线、归档或在提交时失去资格，才由罗纳尔多立即指派替代者。
 - 全部同意：提交 Integration。
 - 全部拒绝：记录 Match Decision，不融合。
-- 混合意见或无法判断：邀请罗纳尔多。
+- 混合意见或无法判断：Discussion 进入 `escalated`，由罗纳尔多负责下一步决策；这不是等待用户确认。
+- `uncertain` 必须归类为 `evidence_gap`、`evidence_conflict` 或 `scope_mismatch`。可验证的缺口必须创建有负责 Agent 的 atomic Work；完成两轮补证后，或没有可改变结论的新证据时，罗纳尔多必须提交 `adjudicate_discussion`（`discussion.resolution.v1`），在 `keep_separate`、`terminate`、`accept_residual_uncertainty` 中选择一个终态并写明可见理由。
+- 不允许 Discussion 无限停留在 `uncertain`/`escalated`；每个 escalated Discussion 必须有活动补证 Work 或已记录的 Director 终态决定。
 - 存在事实/证据冲突：同时创建 Dispute。
 - 输入 revision 变化：Discussion 变为 `stale_input`，旧 turns 保留，使用最新输入继续或重开。
 

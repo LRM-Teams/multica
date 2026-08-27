@@ -22,6 +22,7 @@ type v6DirectorPreflightFacts struct {
 	proposedAgentCount   int
 	proposedAtomicWork   int
 	proposedConvergence  int
+	proposedResolutions  int
 	proposedBranches     int
 	proposedWorkBranches int
 	proposedReports      int
@@ -40,6 +41,7 @@ func (s *PostgresStore) preflightV6DirectorProposal(ctx context.Context, proposa
 	proposedAgentCount := 0
 	proposedAtomicWork := 0
 	proposedConvergence := 0
+	proposedResolutions := 0
 	proposedReports := 0
 	proposedBranches := 0
 	proposedBranchParents := make([]uuid.UUID, 0)
@@ -50,6 +52,11 @@ func (s *PostgresStore) preflightV6DirectorProposal(ctx context.Context, proposa
 			proposedAgentCount++
 		case "open_discussion", "create_integration":
 			proposedConvergence++
+		case "adjudicate_discussion":
+			if action.PayloadSchema != "discussion.resolution.v1" {
+				break
+			}
+			proposedResolutions++
 		case "create_report":
 			var payload struct {
 				Title string `json:"title"`
@@ -109,6 +116,7 @@ func (s *PostgresStore) preflightV6DirectorProposal(ctx context.Context, proposa
 	facts.proposedConvergence = proposedConvergence
 	facts.proposedBranches = proposedBranches
 	facts.proposedReports = proposedReports
+	facts.proposedResolutions = proposedResolutions
 	facts.hasReport = proposedReports > 0
 	facts.proposedWorkBranches = len(proposedWorkBranchIDs)
 	err := s.pool.QueryRow(ctx, `SELECT
@@ -307,6 +315,9 @@ func validateV6ParallelResearchPlan(facts v6DirectorPreflightFacts) error {
 		return fmt.Errorf("%w: 当前轮次必须先完成同层节点收敛，不能同时继续堆积 atomic Work", ErrInvalidContract)
 	}
 	if facts.proposedConvergence > 0 {
+		return nil
+	}
+	if facts.proposedResolutions > 0 {
 		return nil
 	}
 	// A report refresh is a productive maintenance action. Accept the proposal

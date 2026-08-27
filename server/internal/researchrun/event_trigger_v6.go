@@ -31,6 +31,7 @@ func (s *PostgresStore) ProcessV6EventTriggers(ctx context.Context, limit int) (
 				'v6_work_item_recovered','v6_work_submission_rejected','v6_agent_creation_requested',
 				'v6_team_member_joined','v6_team_member_archived','v6_work_item_created','v6_branch_created',
 				'v6_match_decision_recorded','v6_discussion_open','v6_discussion_append_turn','v6_discussion_close',
+				'v6_discussion_resolved',
 				'v6_dispute_review_tasks_created','v6_integration_commit','v6_report_work_created',
 				'v6_report_draft_accepted','v6_report_reviewed','v6_director_unavailable',
 				'v6_director_assigned',

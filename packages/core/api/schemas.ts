@@ -1605,6 +1605,12 @@ export const GraphMemoryChannelModeSchema = z.object({
   blocked_reason: z.string().default(""),
   agent_id: z.string().default(""),
   runtime_id: z.string().default(""),
+  memory_agent_runtime_id_override: z.string().default(""),
+  memory_agent_model_override: z.string().default(""),
+  memory_agent_thinking_override: z.string().default(""),
+  effective_memory_agent_runtime_id: z.string().default(""),
+  effective_memory_agent_model: z.string().default(""),
+  effective_memory_agent_thinking: z.string().default(""),
 }).loose();
 
 export const GraphMemoryCitationSchema = z.object({

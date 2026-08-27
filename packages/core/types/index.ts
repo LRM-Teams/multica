@@ -188,6 +188,7 @@ export type {
   UpdateGraphMemoryProfileRequest,
   GraphMemoryChannelAgentStatus,
   GraphMemoryChannelMode,
+  UpdateGraphMemoryChannelModeRequest,
   GraphMemoryCitation,
   GraphMemoryMessageCitations,
   GraphMemoryGraphStatus,

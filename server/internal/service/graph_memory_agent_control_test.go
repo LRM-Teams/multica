@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"reflect"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 func TestEffectiveGraphMemoryMode(t *testing.T) {
@@ -69,4 +71,29 @@ func TestMergeGraphMemoryAgentCustomEnv(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestResolveGraphMemoryAgentRuntimeConfig(t *testing.T) {
+	profileRuntime := pgtype.UUID{Bytes: [16]byte{1}, Valid: true}
+	channelRuntime := pgtype.UUID{Bytes: [16]byte{2}, Valid: true}
+
+	t.Run("channel tuple overrides workspace tuple", func(t *testing.T) {
+		got := resolveGraphMemoryAgentRuntimeConfig(
+			profileRuntime, channelRuntime,
+			"profile/model", " channel/model ", "profile-thinking", " high ",
+		)
+		if got.runtimeID != channelRuntime || got.model != "channel/model" || got.thinking != "high" || got.source != "channel" {
+			t.Fatalf("resolved config = %+v, want channel tuple", got)
+		}
+	})
+
+	t.Run("null channel runtime inherits the complete workspace tuple", func(t *testing.T) {
+		got := resolveGraphMemoryAgentRuntimeConfig(
+			profileRuntime, pgtype.UUID{},
+			" profile/model ", "stale/channel/model", " medium ", "stale-thinking",
+		)
+		if got.runtimeID != profileRuntime || got.model != "profile/model" || got.thinking != "medium" || got.source != "workspace" {
+			t.Fatalf("resolved config = %+v, want workspace tuple", got)
+		}
+	})
 }

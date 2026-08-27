@@ -97,6 +97,8 @@ Promotion 不允许跳级。补充输入可以参与内容，但不能替代两�
 - 每个 Branch 最多有一个当前有效 XXL。历史 XXL revision 和终止 XXL 可以有多个。
 - 同一个 Insight 或 XXL 可以同时属于多个 Branch；生成报告时按 canonical node ID 去重。
 - Branch 重组、合并或拆分由罗纳尔多决定，不能由视觉聚类或字符串相似度自动完成。
+- 同一一级方向累计节点数超过 5 个后进入饱和门禁。Director Brief 提供该方向的节点数、门禁阈值和当前最高节点结论；此后每个新增 atomic Work 都必须记录当前节点数、`continue_direction` 决策和说明其对用户 Goal 的具体价值。信息已经足够时停止该方向，不得为了局部细节或重复证据继续深挖。
+- 如果只是覆盖不足而不是深度不足，优先创建新的一级方向；如果所有方向最高节点已足够回答 Goal、没有高价值待回答问题和必须解决的冲突，罗纳尔多应停止全部 Research Work，联系报告老板生成最终报告。
 
 ### 4.5 Report
 
@@ -284,7 +286,9 @@ Match Decision 固定到 node revisions + Goal version + Branch scope。未变�
 - 最后加入并成功完成 Integration 的 Agent 成为 successor Steward；只有该 Agent 已离线、归档或在提交时失去资格，才由罗纳尔多立即指派替代者。
 - 全部同意：提交 Integration。
 - 全部拒绝：记录 Match Decision，不融合。
-- 混合意见或无法判断：邀请罗纳尔多。
+- 混合意见或无法判断：Discussion 进入 `escalated`，由罗纳尔多负责下一步决策；这不是等待用户确认。
+- `uncertain` 必须归类为 `evidence_gap`、`evidence_conflict` 或 `scope_mismatch`。可验证的缺口必须创建有负责 Agent 的 atomic Work；完成两轮补证后，或没有可改变结论的新证据时，罗纳尔多必须提交 `adjudicate_discussion`（`discussion.resolution.v1`），在 `keep_separate`、`terminate`、`accept_residual_uncertainty` 中选择一个终态并写明可见理由。
+- 不允许 Discussion 无限停留在 `uncertain`/`escalated`；每个 escalated Discussion 必须有活动补证 Work 或已记录的 Director 终态决定。
 - 存在事实/证据冲突：同时创建 Dispute。
 - 输入 revision 变化：Discussion 变为 `stale_input`，旧 turns 保留，使用最新输入继续或重开。
 

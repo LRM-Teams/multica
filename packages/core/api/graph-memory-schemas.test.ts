@@ -5,6 +5,7 @@ import {
   EMPTY_GRAPH_MEMORY_STATUS,
   GraphMemoryAuditSummarySchema,
   GraphMemoryChannelLineageSchema,
+  GraphMemoryChannelModeSchema,
   GraphMemoryConsolidationRunSchema,
   GraphMemoryProfileSchema,
   GraphMemoryStatusSchema,
@@ -169,5 +170,39 @@ describe("GraphMemoryConsolidationRunSchema", () => {
     });
     expect(parsed.started_at).toBe("");
     expect(parsed.finished_at).toBe("");
+  });
+});
+
+describe("GraphMemoryChannelModeSchema", () => {
+  const base = {
+    workspace_id: "ws-1",
+    channel_id: "channel-1",
+    override: "agent",
+    effective_mode: "agent",
+    status: "active",
+    blocked_reason: "",
+    agent_id: "agent-1",
+    runtime_id: "runtime-actual",
+  };
+
+  it("parses channel override, effective config, and actual binding separately", () => {
+    const parsed = GraphMemoryChannelModeSchema.parse({
+      ...base,
+      memory_agent_runtime_id_override: "runtime-channel",
+      memory_agent_model_override: "channel/model",
+      memory_agent_thinking_override: "high",
+      effective_memory_agent_runtime_id: "runtime-channel",
+      effective_memory_agent_model: "channel/model",
+      effective_memory_agent_thinking: "high",
+    });
+    expect(parsed.runtime_id).toBe("runtime-actual");
+    expect(parsed.memory_agent_runtime_id_override).toBe("runtime-channel");
+    expect(parsed.effective_memory_agent_model).toBe("channel/model");
+  });
+
+  it("defaults new fields for legacy server payloads", () => {
+    const parsed = GraphMemoryChannelModeSchema.parse(base);
+    expect(parsed.memory_agent_runtime_id_override).toBe("");
+    expect(parsed.effective_memory_agent_runtime_id).toBe("");
   });
 });

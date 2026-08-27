@@ -19,6 +19,20 @@ func TestV6ReportCompilerRejectsNetworkAndPrivilegeEscapes(t *testing.T) {
 		}
 	}
 }
+func TestV6ReportCompilerAllowsDocumentCharsetAndViewportMeta(t *testing.T) {
+	doc := `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>阶段性调研报告</title></head><body><h1>阶段性调研报告</h1><p>结论。</p></body></html>`
+	if _, err := CompileV6ReportPackage([]V6ReportResource{reportTestResource("doc", "index.html", "document", "text/html", doc)}, "doc", "结论。"); err != nil {
+		t.Fatalf("standard document meta must compile: %v", err)
+	}
+}
+
+func TestV6ReportCompilerStillRejectsMetaRefresh(t *testing.T) {
+	doc := `<html><head><meta http-equiv="refresh" content="0;url=https://evil.test"></head><body>x</body></html>`
+	if _, err := CompileV6ReportPackage([]V6ReportResource{reportTestResource("doc", "index.html", "document", "text/html", doc)}, "doc", "x"); !errors.Is(err, ErrInvalidContract) {
+		t.Fatalf("meta refresh must stay rejected, err=%v", err)
+	}
+}
+
 func TestV6ReportCompilerInlinesPackageResourcesAndBuildsCSP(t *testing.T) {
 	doc := `<html><head><link rel="stylesheet" href="app.css"></head><body><img src="plot.png"><script src="app.js"></script></body></html>`
 	out, err := CompileV6ReportPackage([]V6ReportResource{reportTestResource("doc", "index.html", "document", "text/html", doc), reportTestResource("css", "app.css", "style", "text/css", "body{color:#fff}"), reportTestResource("js", "app.js", "script", "text/javascript", "document.body.dataset.ok='1'"), reportTestResource("img", "plot.png", "image", "image/png", "png")}, "doc", "fallback")

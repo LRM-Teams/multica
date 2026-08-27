@@ -26,6 +26,15 @@ const (
 	// still-booting process get a generous window so they are not thrashingly
 	// disposed before the resident registers its control reader.
 	canonicalIdleAcceptTimeout = 20 * time.Second
+
+	// defaultResidentTurnCompletionTimeout is an absolute deadline from native
+	// Message acceptance through provider Done, Activity/Capture drain, and Pi
+	// settlement. Progress and tool calls do not extend it: those signals protect
+	// the silence watchdog, but cannot leave canonical admission owned forever.
+	defaultResidentTurnCompletionTimeout = 15 * time.Minute
+	// residentTurnForceKillGrace bounds a misbehaving ForceKill implementation.
+	// The old backend is generation-fenced before this wait and detached after it.
+	residentTurnForceKillGrace = 5 * time.Second
 )
 
 // canonicalAgentRuntimeIdentity locates the agent×runtime slot and carries
@@ -180,6 +189,10 @@ type agentRuntimePool struct {
 	// Message turn. Zero disables the recovery watchdog (used by tests and
 	// operators that opt out).
 	residentStallWatchdog time.Duration
+	// residentTurnCompletionTimeout is the non-renewable wall-clock budget for
+	// the complete accepted-turn settlement chain. It is separate from silence:
+	// provider progress may refresh the watchdog but never this deadline.
+	residentTurnCompletionTimeout time.Duration
 }
 
 type agentRuntimeSlot struct {
@@ -219,6 +232,10 @@ type agentRuntimeSlot struct {
 	// redelivers roughly every 20s, so without it each redelivery would fire
 	// another kill while the first teardown is still in flight.
 	stalledRecovering bool
+	// replacementBlocked keeps an unconfirmed timed-out process from being
+	// replaced in parallel. It is cleared only when the bounded teardown worker
+	// eventually confirms cleanup returned (or on a normal confirmed close).
+	replacementBlocked bool
 	// terminated signals that this slot's resident process is confirmed gone
 	// AND slot.running has been released — the single completion fact
 	// awaitTerminated waits on instead of polling hasRunningTurn/
@@ -233,8 +250,9 @@ type agentRuntimeSlot struct {
 
 func newAgentRuntimePool() *agentRuntimePool {
 	return &agentRuntimePool{
-		slots:      make(map[string]*agentRuntimeSlot),
-		nextResume: make(map[string]string),
+		slots:                         make(map[string]*agentRuntimeSlot),
+		nextResume:                    make(map[string]string),
+		residentTurnCompletionTimeout: defaultResidentTurnCompletionTimeout,
 	}
 }
 
@@ -243,6 +261,13 @@ func (p *agentRuntimePool) setResidentStallWatchdog(window time.Duration) {
 		return
 	}
 	p.residentStallWatchdog = window
+}
+
+func (p *agentRuntimePool) setResidentTurnCompletionTimeout(timeout time.Duration) {
+	if p == nil {
+		return
+	}
+	p.residentTurnCompletionTimeout = timeout
 }
 
 func (p *agentRuntimePool) acquire(request agentRuntimeAcquireRequest) (*agentRuntimeLease, error) {
@@ -302,6 +327,9 @@ func (p *agentRuntimePool) acquire(request agentRuntimeAcquireRequest) (*agentRu
 	defer slot.mu.Unlock()
 	if slot.running {
 		return nil, ErrCanonicalAgentRuntimeBusy
+	}
+	if slot.replacementBlocked {
+		return nil, errors.New("canonical resident runtime termination is unconfirmed")
 	}
 
 	// Live process → reuse. No hash, no implicit stop+start.
@@ -520,6 +548,24 @@ func (slot *agentRuntimeSlot) closeBackend() {
 	if slot.close != nil {
 		slot.close()
 	}
+	slot.clearBackendStateLocked()
+}
+
+// clearBackendStateLocked detaches the current backend identity and settles
+// the slot termination signal. Most callers use closeBackend, which runs the
+// provider cleanup first. The accepted-turn timeout path calls this directly
+// only after its bounded ForceKill attempt, then runs cleanup asynchronously:
+// a cleanup that waits forever must not reacquire canonical admission forever.
+// slot.mu must be held.
+func (slot *agentRuntimeSlot) clearBackendStateLocked() {
+	slot.detachBackendStateLocked(true)
+}
+
+// detachBackendStateLocked clears backend ownership while preserving whether
+// replacement is safe. confirmed=false deliberately leaves terminated open
+// and blocks acquire until confirmDetachedBackendTermination observes cleanup.
+// slot.mu must be held.
+func (slot *agentRuntimeSlot) detachBackendStateLocked(confirmed bool) {
 	slot.backend = nil
 	slot.close = nil
 	slot.agentInstanceID = ""
@@ -534,6 +580,7 @@ func (slot *agentRuntimeSlot) closeBackend() {
 	slot.lastRuntimeActivityAt = time.Time{}
 	slot.outstandingToolCalls = nil
 	slot.stalledRecovering = false
+	slot.replacementBlocked = !confirmed
 	// Every closeBackend() caller either already has slot.running false or
 	// sets it false in the same slot.mu critical section as this call (see
 	// releaseAt's unhealthy branch, failResidentMessageInputAttempt,
@@ -546,6 +593,25 @@ func (slot *agentRuntimeSlot) closeBackend() {
 	// signal. Guard against a double close: closeBackend() is idempotent by
 	// design (e.g. beginResidentTermination's idle path can run again
 	// against an already-closed slot).
+	if confirmed && slot.terminated != nil {
+		select {
+		case <-slot.terminated:
+		default:
+			close(slot.terminated)
+		}
+	}
+}
+
+func (slot *agentRuntimeSlot) confirmDetachedBackendTermination() {
+	if slot == nil {
+		return
+	}
+	slot.mu.Lock()
+	defer slot.mu.Unlock()
+	if slot.backend != nil || !slot.replacementBlocked {
+		return
+	}
+	slot.replacementBlocked = false
 	if slot.terminated != nil {
 		select {
 		case <-slot.terminated:
@@ -1126,19 +1192,26 @@ func (p *agentRuntimePool) deliverIdleMessages(
 	// processing that accepted input afterward, so retain pool-level admission
 	// until its completion receipt resolves without delaying boundary persistence.
 	slot.messageInputDone = acceptance.Done
-	slot.lastRuntimeActivityAt = time.Now()
-	var generation uint64
-	if !invalidated {
-		slot.messageInputGeneration++
-		generation = slot.messageInputGeneration
-	}
+	acceptedAt := time.Now()
+	slot.lastRuntimeActivityAt = acceptedAt
+	completionDeadline := p.residentTurnDeadline(acceptedAt)
+	slot.messageInputGeneration++
+	generation := slot.messageInputGeneration
 	slot.mu.Unlock()
 	if invalidated {
-		activityDone := drainResidentActivity(acceptance.Messages, func(message agent.Message) {
-			p.observeResidentRuntimeMessage(slot, message)
-		})
-		go p.finishResidentMessageInput(slot, acceptance.Done, activityDone, drainResidentCapture(acceptance.Capture), 0, nil)
+		drains := startResidentTurnDrains(acceptance.Messages, acceptance.Capture, func(message agent.Message) {
+			p.observeResidentRuntimeMessageIfOwned(slot, acceptance.Done, generation, message)
+		}, completionDeadline)
+		go p.finishResidentMessageInput(slot, acceptance.Done, drains, 0, nil)
 		return errors.New("canonical resident runtime was invalidated during Message input acceptance")
+	}
+	acceptedObserveRuntimeMessage := func(message agent.Message) {
+		if !p.observeResidentRuntimeMessageIfOwned(slot, acceptance.Done, generation, message) {
+			return
+		}
+		if onMessage != nil && slot.ownsResidentMessageInput(acceptance.Done, generation) {
+			onMessage(message)
+		}
 	}
 	if runtimeWasConfirmedDead && onStarting != nil {
 		if liveness, ok := slot.backend.(agent.ResidentRuntimeLivenessChecker); ok {
@@ -1149,32 +1222,39 @@ func (p *agentRuntimePool) deliverIdleMessages(
 		}
 	}
 	if !compactedThisInput {
-		if onAccepted != nil {
-			onAccepted()
+		// Arm completion before synchronous acceptance reporting: Activity
+		// transport is best effort and must not retain canonical admission. The
+		// gate preserves the public ordering guarantee that Message accepted is
+		// published before any buffered provider Activity.
+		activityStart := make(chan struct{})
+		gatedObserveRuntimeMessage := func(message agent.Message) {
+			if waitForResidentActivityStart(activityStart, completionDeadline) {
+				acceptedObserveRuntimeMessage(message)
+			}
 		}
-		// The Context Boundary receipt is the public acceptance fact. Do not
-		// start draining provider Activity until that fact is published: a
-		// buffered first runtime event can otherwise win the goroutine race and
-		// render Working before Message received/acceptance exists.
-		activityDone := drainResidentActivity(acceptance.Messages, observeRuntimeMessage)
+		drains := startResidentTurnDrains(acceptance.Messages, acceptance.Capture, gatedObserveRuntimeMessage, completionDeadline)
 		turnDone := make(chan struct{})
-		go p.finishResidentMessageInput(slot, acceptance.Done, activityDone, drainResidentCapture(acceptance.Capture), generation, func(turnErr error, gen uint64, capture *agent.ResidentTurnCapture) {
+		go p.finishResidentMessageInput(slot, acceptance.Done, drains, generation, func(turnErr error, gen uint64, capture *agent.ResidentTurnCapture) {
 			close(turnDone)
 			if onComplete != nil {
 				onComplete(turnErr, gen, capture)
 			}
 		})
 		p.startResidentStallWatchdog(agentID, runtimeID, slot, turnDone)
+		if onAccepted != nil {
+			onAccepted()
+		}
+		close(activityStart)
 		return nil
 	}
 	// Raft: compaction does not cover inbox. After a prepare-time compact,
 	// wait for the follow-up turn to do real work before the Context Boundary
 	// receipt. An empty/compaction-only turn stays uncommitted so the Message
 	// can be retried.
-	activityDone := drainResidentActivity(acceptance.Messages, observeRuntimeMessage)
+	drains := startResidentTurnDrains(acceptance.Messages, acceptance.Capture, acceptedObserveRuntimeMessage, completionDeadline)
 	finished := make(chan error, 1)
 	turnDone := make(chan struct{})
-	go p.finishResidentMessageInput(slot, acceptance.Done, activityDone, drainResidentCapture(acceptance.Capture), generation, func(turnErr error, gen uint64, capture *agent.ResidentTurnCapture) {
+	go p.finishResidentMessageInput(slot, acceptance.Done, drains, generation, func(turnErr error, gen uint64, capture *agent.ResidentTurnCapture) {
 		close(turnDone)
 		finished <- turnErr
 		if onComplete != nil {
@@ -1190,6 +1270,37 @@ func (p *agentRuntimePool) deliverIdleMessages(
 		onAccepted()
 	}
 	return nil
+}
+
+func waitForResidentActivityStart(start <-chan struct{}, deadline time.Time) bool {
+	if start == nil {
+		return true
+	}
+	if deadline.IsZero() {
+		<-start
+		return true
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return false
+	}
+	timer := time.NewTimer(remaining)
+	defer timer.Stop()
+	select {
+	case <-start:
+		return time.Now().Before(deadline)
+	case <-timer.C:
+		return false
+	}
+}
+
+func (slot *agentRuntimeSlot) ownsResidentMessageInput(done <-chan error, generation uint64) bool {
+	if slot == nil || generation == 0 {
+		return false
+	}
+	slot.mu.Lock()
+	defer slot.mu.Unlock()
+	return slot.running && slot.messageInputDone == done && slot.messageInputGeneration == generation
 }
 
 func (p *agentRuntimePool) failResidentMessageInputAttempt(slot *agentRuntimeSlot, attempt uint64) bool {
@@ -1219,6 +1330,23 @@ func (p *agentRuntimePool) observeResidentRuntimeMessage(slot *agentRuntimeSlot,
 	}
 	slot.mu.Lock()
 	defer slot.mu.Unlock()
+	observeResidentRuntimeMessageLocked(slot, message)
+}
+
+func (p *agentRuntimePool) observeResidentRuntimeMessageIfOwned(slot *agentRuntimeSlot, done <-chan error, generation uint64, message agent.Message) bool {
+	if slot == nil {
+		return false
+	}
+	slot.mu.Lock()
+	defer slot.mu.Unlock()
+	if !slot.running || slot.messageInputDone != done || generation != 0 && slot.messageInputGeneration != generation {
+		return false
+	}
+	observeResidentRuntimeMessageLocked(slot, message)
+	return true
+}
+
+func observeResidentRuntimeMessageLocked(slot *agentRuntimeSlot, message agent.Message) {
 	slot.lastRuntimeActivityAt = time.Now()
 	switch message.Type {
 	case agent.MessageCompactionStarted:
@@ -1333,8 +1461,9 @@ func (p *agentRuntimePool) deliverAppInboxNotice(ctx context.Context, agentID, r
 		slot.lastAppInboxNoticeFingerprint = fingerprint
 	}
 	slot.mu.Unlock()
-	activityDone := drainResidentActivity(acceptance.Messages, nil)
-	go p.finishResidentMessageInput(slot, acceptance.Done, activityDone, drainResidentCapture(acceptance.Capture), 0, nil)
+	drains := startResidentTurnDrains(acceptance.Messages, acceptance.Capture, nil, time.Time{})
+	drains.deadlineDisabled = true
+	go p.finishResidentMessageInput(slot, acceptance.Done, drains, 0, nil)
 	if invalidated {
 		return errors.New("canonical resident runtime was invalidated during Inbox Notice acceptance")
 	}
@@ -1359,7 +1488,35 @@ func (p *agentRuntimePool) clearAppInboxNoticeMemo(agentID, runtimeID string) {
 	slot.mu.Unlock()
 }
 
-func drainResidentActivity(messages <-chan agent.Message, onMessage func(agent.Message)) <-chan struct{} {
+type residentTurnDrains struct {
+	activityDone     <-chan struct{}
+	captureDone      <-chan *agent.ResidentTurnCapture
+	cancel           context.CancelFunc
+	deadline         time.Time
+	deadlineDisabled bool
+}
+
+func (p *agentRuntimePool) residentTurnDeadline(acceptedAt time.Time) time.Time {
+	if p == nil || p.residentTurnCompletionTimeout <= 0 {
+		return time.Time{}
+	}
+	if acceptedAt.IsZero() {
+		acceptedAt = time.Now()
+	}
+	return acceptedAt.Add(p.residentTurnCompletionTimeout)
+}
+
+func startResidentTurnDrains(messages <-chan agent.Message, captures <-chan agent.ResidentTurnCapture, onMessage func(agent.Message), deadline time.Time) residentTurnDrains {
+	ctx, cancel := context.WithCancel(context.Background())
+	return residentTurnDrains{
+		activityDone: drainResidentActivity(ctx, messages, onMessage, deadline),
+		captureDone:  drainResidentCapture(ctx, captures),
+		cancel:       cancel,
+		deadline:     deadline,
+	}
+}
+
+func drainResidentActivity(ctx context.Context, messages <-chan agent.Message, onMessage func(agent.Message), deadline time.Time) <-chan struct{} {
 	done := make(chan struct{})
 	if messages == nil {
 		close(done)
@@ -1367,29 +1524,74 @@ func drainResidentActivity(messages <-chan agent.Message, onMessage func(agent.M
 	}
 	go func() {
 		defer close(done)
-		for message := range messages {
-			if onMessage != nil {
-				onMessage(message)
+		var timer *time.Timer
+		var deadlineC <-chan time.Time
+		if !deadline.IsZero() {
+			remaining := time.Until(deadline)
+			if remaining < 0 {
+				remaining = 0
+			}
+			timer = time.NewTimer(remaining)
+			deadlineC = timer.C
+			defer timer.Stop()
+		}
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-deadlineC:
+				return
+			case message, ok := <-messages:
+				if !ok {
+					return
+				}
+				if !deadline.IsZero() && !time.Now().Before(deadline) {
+					return
+				}
+				if onMessage != nil {
+					onMessage(message)
+				}
 			}
 		}
 	}()
 	return done
 }
 
-func drainResidentCapture(captures <-chan agent.ResidentTurnCapture) <-chan *agent.ResidentTurnCapture {
+func drainResidentCapture(ctx context.Context, captures <-chan agent.ResidentTurnCapture) <-chan *agent.ResidentTurnCapture {
 	done := make(chan *agent.ResidentTurnCapture, 1)
 	if captures == nil {
+		done <- nil
 		close(done)
 		return done
 	}
 	go func() {
 		defer close(done)
-		for capture := range captures {
-			copy := capture
-			done <- &copy
+		var latest *agent.ResidentTurnCapture
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case capture, ok := <-captures:
+				if !ok {
+					done <- latest
+					return
+				}
+				copy := capture
+				latest = &copy
+			}
 		}
 	}()
 	return done
+}
+
+func stopResidentTurnDrains(drains residentTurnDrains) {
+	if drains.cancel != nil {
+		drains.cancel()
+	}
+	// Activity observers are provider-independent application code and cannot
+	// be preempted safely; Capture producers may also ignore closure. Never let
+	// either auxiliary path retain slot admission after the hard deadline.
+	// ownsResidentMessageInput fences any late Activity continuation.
 }
 
 // isResidentAcceptBusyErr reports whether an idle Message acceptance error
@@ -1482,20 +1684,115 @@ func (p *agentRuntimePool) deliverBusyInboxNotice(ctx context.Context, agentID, 
 	return nil
 }
 
-func (p *agentRuntimePool) finishResidentMessageInput(slot *agentRuntimeSlot, done <-chan error, activityDone <-chan struct{}, captureDone <-chan *agent.ResidentTurnCapture, generation uint64, onComplete func(error, uint64, *agent.ResidentTurnCapture)) {
-	turnErr := <-done
-	var capture *agent.ResidentTurnCapture
-	// A failed provider may exit without closing its auxiliary Activity/Capture
-	// streams. The provider completion receipt is authoritative for admission:
-	// release the slot immediately on failure so Pending Messages can be retried.
-	// Successful turns still drain both streams before settlement and completion.
-	if turnErr == nil {
-		<-activityDone
-		if captureDone != nil {
-			capture = <-captureDone
+type residentTurnCompletionTimeout struct {
+	Timeout     time.Duration
+	Phase       string
+	RestartSafe bool
+}
+
+func (e *residentTurnCompletionTimeout) Error() string {
+	if e == nil {
+		return "resident provider turn completion timed out"
+	}
+	phase := strings.TrimSpace(e.Phase)
+	if phase == "" {
+		phase = "completion"
+	}
+	return fmt.Sprintf("resident provider turn completion timed out after %s while waiting for %s", e.Timeout, phase)
+}
+
+func asResidentTurnCompletionTimeout(err error) (*residentTurnCompletionTimeout, bool) {
+	var timeout *residentTurnCompletionTimeout
+	ok := errors.As(err, &timeout)
+	return timeout, ok
+}
+
+func (p *agentRuntimePool) finishResidentMessageInput(slot *agentRuntimeSlot, done <-chan error, drains residentTurnDrains, generation uint64, onComplete func(error, uint64, *agent.ResidentTurnCapture)) {
+	if drains.cancel != nil {
+		defer drains.cancel()
+	}
+	timeout := p.residentTurnCompletionTimeout
+	deadlineAt := drains.deadline
+	if deadlineAt.IsZero() && timeout > 0 && !drains.deadlineDisabled {
+		deadlineAt = time.Now().Add(timeout)
+	}
+	var timer *time.Timer
+	var deadline <-chan time.Time
+	if !deadlineAt.IsZero() {
+		remaining := time.Until(deadlineAt)
+		if remaining < 0 {
+			remaining = 0
+		}
+		timer = time.NewTimer(remaining)
+		deadline = timer.C
+		defer timer.Stop()
+	}
+	expired := func() bool {
+		return !deadlineAt.IsZero() && !time.Now().Before(deadlineAt)
+	}
+
+	var turnErr error
+	providerDoneSettled := false
+	var timeoutErr *residentTurnCompletionTimeout
+	if expired() {
+		timeoutErr = &residentTurnCompletionTimeout{Timeout: timeout, Phase: "provider completion"}
+	} else {
+		select {
+		case turnErr = <-done:
+			providerDoneSettled = true
+			if expired() {
+				timeoutErr = &residentTurnCompletionTimeout{Timeout: timeout, Phase: "provider completion"}
+			}
+		case <-deadline:
+			timeoutErr = &residentTurnCompletionTimeout{Timeout: timeout, Phase: "provider completion"}
 		}
 	}
+	var capture *agent.ResidentTurnCapture
+	// A failed provider may exit without closing its auxiliary Activity/Capture
+	// streams. Done remains authoritative in that case. A successful Done is not
+	// sufficient by itself: all auxiliary drains and Pi settlement share the same
+	// absolute deadline so none can retain admission indefinitely.
+	if timeoutErr == nil && turnErr == nil {
+		if expired() {
+			timeoutErr = &residentTurnCompletionTimeout{Timeout: timeout, Phase: "provider activity drain"}
+		} else {
+			select {
+			case <-drains.activityDone:
+				if expired() {
+					timeoutErr = &residentTurnCompletionTimeout{Timeout: timeout, Phase: "provider activity drain"}
+				}
+			case <-deadline:
+				timeoutErr = &residentTurnCompletionTimeout{Timeout: timeout, Phase: "provider activity drain"}
+			}
+		}
+	}
+	if timeoutErr == nil && turnErr == nil {
+		if expired() {
+			timeoutErr = &residentTurnCompletionTimeout{Timeout: timeout, Phase: "provider capture drain"}
+		} else {
+			select {
+			case capture = <-drains.captureDone:
+				if expired() {
+					timeoutErr = &residentTurnCompletionTimeout{Timeout: timeout, Phase: "provider capture drain"}
+				}
+			case <-deadline:
+				timeoutErr = &residentTurnCompletionTimeout{Timeout: timeout, Phase: "provider capture drain"}
+			}
+		}
+	}
+
+	if timeoutErr != nil {
+		stopResidentTurnDrains(drains)
+		restartSafe, completed := p.retireTimedOutResidentMessageInput(slot, done, providerDoneSettled, nil)
+		timeoutErr.RestartSafe = restartSafe
+		if completed && onComplete != nil {
+			onComplete(timeoutErr, generation, capture)
+		}
+		return
+	}
+
 	completed := false
+	finishInvalidated := false
 	var settleBackend agent.PiRPCBackend
 	var settleIdentity *agent.PiRunIdentity
 	slot.mu.Lock()
@@ -1504,13 +1801,7 @@ func (p *agentRuntimePool) finishResidentMessageInput(slot *agentRuntimeSlot, do
 		// result cannot remain live after its owning turn has completed.
 		slot.outstandingToolCalls = nil
 		if slot.invalidateAfterInput {
-			slot.messageInputDone = nil
-			slot.running = false
-			slot.compacting = false
-			slot.idleSince = time.Now()
-			slot.closeBackend()
-
-			completed = true
+			finishInvalidated = true
 		} else if slot.piRunIdentity != nil {
 			if backend, ok := slot.backend.(agent.PiRPCBackend); ok {
 				settleBackend = backend
@@ -1533,27 +1824,256 @@ func (p *agentRuntimePool) finishResidentMessageInput(slot *agentRuntimeSlot, do
 	}
 	slot.mu.Unlock()
 
-	if settleBackend != nil && settleIdentity != nil {
-		if err := settleBackend.SettleRunTurn(*settleIdentity); err != nil && turnErr == nil {
-			turnErr = err
+	if finishInvalidated {
+		handled, cleanupTimedOut := p.finishInvalidatedResidentMessageInput(slot, done, deadlineAt)
+		if handled && onComplete != nil {
+			if cleanupTimedOut {
+				turnErr = &residentTurnCompletionTimeout{Timeout: timeout, Phase: "provider cleanup"}
+			}
+			onComplete(turnErr, generation, capture)
 		}
+		return
+	}
+
+	if settleBackend != nil && settleIdentity != nil {
+		var settlementQuiesced <-chan struct{}
+		if expired() {
+			timeoutErr = &residentTurnCompletionTimeout{Timeout: timeout, Phase: "Pi turn settlement"}
+		} else {
+			settled := make(chan error, 1)
+			settlementDone := make(chan struct{})
+			settlementQuiesced = settlementDone
+			go func() {
+				defer close(settlementDone)
+				settled <- settleBackend.SettleRunTurn(*settleIdentity)
+			}()
+			select {
+			case err := <-settled:
+				if expired() {
+					timeoutErr = &residentTurnCompletionTimeout{Timeout: timeout, Phase: "Pi turn settlement"}
+				} else if err != nil && turnErr == nil {
+					turnErr = err
+				}
+			case <-deadline:
+				timeoutErr = &residentTurnCompletionTimeout{Timeout: timeout, Phase: "Pi turn settlement"}
+			}
+		}
+		if timeoutErr != nil {
+			stopResidentTurnDrains(drains)
+			restartSafe, retired := p.retireTimedOutResidentMessageInput(slot, done, true, settlementQuiesced)
+			timeoutErr.RestartSafe = restartSafe
+			if retired && onComplete != nil {
+				onComplete(timeoutErr, generation, capture)
+			}
+			return
+		}
+		finishInvalidated = false
 		slot.mu.Lock()
 		if slot.messageInputDone == done {
-			slot.messageInputDone = nil
-			slot.running = false
-			slot.compacting = false
-			slot.idleSince = time.Now()
 			if slot.invalidateAfterInput {
-				slot.closeBackend()
-
+				finishInvalidated = true
+			} else {
+				slot.messageInputDone = nil
+				slot.running = false
+				slot.compacting = false
+				slot.idleSince = time.Now()
+				completed = true
 			}
-			completed = true
 		}
 		slot.mu.Unlock()
+		if finishInvalidated {
+			handled, cleanupTimedOut := p.finishInvalidatedResidentMessageInput(slot, done, deadlineAt)
+			if handled && onComplete != nil {
+				if cleanupTimedOut {
+					turnErr = &residentTurnCompletionTimeout{Timeout: timeout, Phase: "provider cleanup"}
+				}
+				onComplete(turnErr, generation, capture)
+			}
+			return
+		}
 	}
 	if completed && onComplete != nil {
 		onComplete(turnErr, generation, capture)
 	}
+}
+
+// finishInvalidatedResidentMessageInput closes a lifecycle-invalidated backend
+// only after its turn owner has settled. Provider Close may itself wait/reap,
+// so it runs outside slot.mu and is bounded by the accepted-turn deadline.
+// A timed-out cleanup detaches logical ownership but retains replacementBlocked
+// and the open terminated signal until the cleanup goroutine eventually returns.
+func (p *agentRuntimePool) finishInvalidatedResidentMessageInput(slot *agentRuntimeSlot, done <-chan error, deadline time.Time) (handled, timedOut bool) {
+	if slot == nil {
+		return false, false
+	}
+	slot.mu.Lock()
+	if slot.messageInputDone != done || !slot.invalidateAfterInput {
+		slot.mu.Unlock()
+		return false, false
+	}
+	backend := slot.backend
+	cleanup := slot.close
+	slot.mu.Unlock()
+
+	cleanupDone := make(chan struct{})
+	go func() {
+		if cleanup != nil {
+			cleanup()
+		}
+		close(cleanupDone)
+	}()
+	confirmed := false
+	if deadline.IsZero() {
+		<-cleanupDone
+		confirmed = true
+	} else {
+		remaining := time.Until(deadline)
+		if remaining < 0 {
+			remaining = 0
+		}
+		timer := time.NewTimer(remaining)
+		select {
+		case <-cleanupDone:
+			confirmed = true
+			timedOut = !time.Now().Before(deadline)
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+		case <-timer.C:
+			timedOut = true
+		}
+	}
+
+	slot.mu.Lock()
+	if slot.messageInputDone != done || slot.backend != backend {
+		slot.mu.Unlock()
+		return false, timedOut
+	}
+	slot.messageInputDone = nil
+	slot.running = false
+	slot.compacting = false
+	slot.outstandingToolCalls = nil
+	slot.idleSince = time.Now()
+	slot.detachBackendStateLocked(confirmed)
+	slot.mu.Unlock()
+	if !confirmed {
+		go func() {
+			<-cleanupDone
+			slot.confirmDetachedBackendTermination()
+		}()
+	}
+	return true, timedOut
+}
+
+// retireTimedOutResidentMessageInput is the timeout owner's only detach path.
+// It fences native acceptance, bounds ForceKill, and releases the exact
+// Done/backend generation. ForceKill's contract permits replacement after a
+// successful interrupt, but provider Close/Wait is deferred until the original
+// Done settles so cleanup never races the in-flight reader/reaper.
+func (p *agentRuntimePool) retireTimedOutResidentMessageInput(slot *agentRuntimeSlot, done <-chan error, providerDoneSettled bool, additionalQuiescence <-chan struct{}) (restartSafe, completed bool) {
+	if slot == nil {
+		return false, false
+	}
+	slot.mu.Lock()
+	if slot.messageInputDone != done {
+		slot.mu.Unlock()
+		return false, false
+	}
+	slot.invalidationGeneration++
+	slot.invalidateAfterInput = true
+	backend := slot.backend
+	cleanup := slot.close
+	slot.mu.Unlock()
+
+	decision := make(chan bool, 1)
+	eventualTermination := make(chan struct{})
+	go func() {
+		providerSettled := providerDoneSettled
+		if !providerSettled {
+			select {
+			case <-done:
+				providerSettled = true
+			default:
+			}
+		}
+		additionalSettled := additionalQuiescence == nil
+		if !additionalSettled {
+			select {
+			case <-additionalQuiescence:
+				additionalSettled = true
+			default:
+			}
+		}
+		if providerSettled && additionalSettled {
+			if cleanup != nil {
+				cleanup()
+			}
+			decision <- true
+			close(eventualTermination)
+			return
+		}
+
+		killSucceeded := false
+		if killable, ok := backend.(agent.ResidentRuntimeForceKillable); ok {
+			killSucceeded = killable.ForceKill() == nil
+		}
+		// A successful ForceKill is the backend contract's process-termination
+		// boundary, so replacement may proceed. Cleanup still waits for every
+		// prior owner; failed/unsupported kills remain fenced until settlement.
+		decision <- killSucceeded
+		if !providerSettled {
+			<-done
+		}
+		if !additionalSettled {
+			<-additionalQuiescence
+		}
+		if cleanup != nil {
+			cleanup()
+		}
+		close(eventualTermination)
+	}()
+
+	decided := false
+	killTimer := time.NewTimer(residentTurnForceKillGrace)
+	select {
+	case restartSafe = <-decision:
+		decided = true
+		killTimer.Stop()
+	case <-killTimer.C:
+	}
+
+	slot.mu.Lock()
+	if slot.messageInputDone != done || slot.backend != backend {
+		slot.mu.Unlock()
+		return false, false
+	}
+	slot.messageInputDone = nil
+	slot.running = false
+	slot.compacting = false
+	slot.outstandingToolCalls = nil
+	slot.idleSince = time.Now()
+	slot.detachBackendStateLocked(decided && restartSafe)
+	slot.mu.Unlock()
+
+	if !decided {
+		go func() {
+			if safe := <-decision; safe {
+				slot.confirmDetachedBackendTermination()
+				return
+			}
+			<-eventualTermination
+			slot.confirmDetachedBackendTermination()
+		}()
+	} else if !restartSafe {
+		go func() {
+			<-eventualTermination
+			slot.confirmDetachedBackendTermination()
+		}()
+	}
+	return decided && restartSafe, true
 }
 
 // publishIfMessageTurnStillIdle serializes a terminal Activity observation

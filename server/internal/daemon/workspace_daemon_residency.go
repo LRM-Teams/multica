@@ -112,6 +112,20 @@ func (s *agentResidencyStore) replaceIdleInstance(agentID, runtimeID, previousAg
 	return true
 }
 
+func (s *agentResidencyStore) replaceLaunchInstance(agentID, runtimeID, previousAgentInstanceID, agentInstanceID string) bool {
+	if s == nil || agentID == "" || previousAgentInstanceID == "" || agentInstanceID == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, ok := s.byAgent[agentID]
+	if !ok || current.runtimeID != runtimeID || current.agentInstanceID != previousAgentInstanceID {
+		return false
+	}
+	current.agentInstanceID = agentInstanceID
+	s.byAgent[agentID] = current
+	return true
+}
 func (s *agentResidencyStore) beginRestart(parent context.Context, agentID string) (context.Context, bool) {
 	if s == nil || agentID == "" {
 		return parent, false

@@ -95,7 +95,6 @@ export function ResearchV6ReportModal({
     open ? "open" : "closed",
     report?.id ?? "missing",
     report?.packageHash ?? "missing",
-    loading ? "fetching" : "settled",
     source.kind,
     source.kind === "isolated"
       ? source.url

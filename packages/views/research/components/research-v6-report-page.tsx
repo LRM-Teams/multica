@@ -82,7 +82,11 @@ export function ResearchV6ReportPage({ sessionId }: { sessionId: string }) {
           }))}
         onSelectReport={selectReport}
         selectedReportId={reportId}
-        loading={reportsLoading || reportDetailFetching || compiledFetching}
+        loading={
+          reportsLoading ||
+          (reportDetail == null && reportDetailFetching) ||
+          (compiledHtml == null && compiledFetching)
+        }
         updating={ACTIVE_REPORT_WORK_STATUSES.has(reports?.[0]?.workStatus ?? "")}
         onRequestFreshCapability={() => void refetchReportDetail()}
       />

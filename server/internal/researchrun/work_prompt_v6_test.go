@@ -73,7 +73,7 @@ func TestRonaldoV6DirectorProtocolRequiresParallelChineseResearch(t *testing.T) 
 		"action.payload.expected_result_schema_id 必须是 atomic_result_submission",
 		"action.kind 必须是 create_integration",
 		"action.payload_schema 必须是 integration.create.v1",
-		"S promotion 为 M",
+		"才能在该方向内 promotion 为 M",
 		"全体同意后自动创建 integration Work",
 		"持续推进 S→M→L→XL→XXL",
 		"不得对同一输入组合重复 create_integration",

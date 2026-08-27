@@ -43,6 +43,26 @@ their named `payload_schema` or task schema receives a second validator.
 | `projection_snapshot` | Projection Module | Web/Desktop | One pinned, paginated graph Slice |
 | `projection_delta` | Projection Module | Web/Desktop | Event-sequenced changes after a pinned Snapshot |
 
+### Discussion uncertainty resolution
+
+`uncertain` is a Steward vote, not an execution state and not an approval request
+to the user. It means the Steward found an evidence gap, an evidence conflict,
+or a scope mismatch that prevents a safe merge. When all turns are complete and
+the votes are not unanimous, the Discussion becomes `escalated`.
+
+The Director owns the next decision. A verifiable gap must be dispatched as an
+atomic research Work and then evaluated in a new Discussion. After two evidence
+rounds, or when no new evidence can change the decision, the Director must submit
+`adjudicate_discussion` with `discussion.resolution.v1` and choose exactly one:
+
+- `keep_separate`: record a terminal no-merge decision and keep both nodes;
+- `terminate`: stop this candidate direction with a visible reason;
+- `accept_residual_uncertainty`: record a terminal deferred decision whose
+  rationale is disclosed as residual uncertainty.
+
+No Discussion may remain indefinitely in `uncertain`/`escalated` without either
+an owned follow-up Work or an explicit Director resolution.
+
 Examples are stored in [`research/fixtures/`](research/fixtures/):
 
 - `director-brief-v6.example.json`

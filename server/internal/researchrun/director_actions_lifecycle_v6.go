@@ -332,7 +332,7 @@ func (s *PostgresStore) recordV6DirectorNoOp(ctx context.Context, proposal v6Dir
 	if runStatus == "running" && hasIdleWorker && !hasActiveWorkerWork && hasFailedWorkerWork {
 		return fmt.Errorf("%w: run-scoped Agent Work failed and no Agent Work is active; retry or reassign failed Work instead of returning no_op", ErrInvalidContract)
 	}
-	if runStatus == "running" && !hasActiveWorkerWork && !agentCreationPending {
+	if runStatus == "running" && hasWorkerWork && !hasActiveWorkerWork && !agentCreationPending {
 		return fmt.Errorf("%w: running Research Run has no active Agent Work; dispatch research, maintain the report, or complete the Run instead of returning no_op", ErrInvalidContract)
 	}
 	if _, err = appendEvent(ctx, tx, proposal.WorkspaceID, proposal.RunID, "v6_director_no_op", "v6-director-action:"+action.IdempotencyKey, "director", "", map[string]any{"director_cycle_id": cycleID, "reason": firstNonEmptyV6(reason, action.Reason)}); err != nil {

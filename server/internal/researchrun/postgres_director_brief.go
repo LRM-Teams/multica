@@ -587,7 +587,10 @@ func v6DirectorActionPayloadSchemas() map[string]any {
 	jsonObject := map[string]any{"type": "object"}
 	nonEmptyJSONObject := map[string]any{"type": "object", "minProperties": 1}
 	atomicWorkConfig := map[string]any{"type": "object", "required": []string{"task_specific_schema"}, "properties": map[string]any{
-		"task_specific_schema": nonEmptyJSONObject}}
+		"task_specific_schema":      nonEmptyJSONObject,
+		"direction_gate_node_count": map[string]any{"type": "integer", "minimum": 0},
+		"direction_gate_decision":   map[string]any{"enum": []string{"continue_direction"}},
+		"direction_gate_rationale":  text}}
 	nodeRef := map[string]any{"type": "object", "additionalProperties": false, "required": []string{"kind", "id", "version_id", "tier", "content_hash"}, "properties": map[string]any{
 		"kind": map[string]any{"enum": []string{"result_s", "insight"}}, "id": uuidValue, "version_id": uuidValue,
 		"tier": map[string]any{"enum": []string{"S", "M", "L", "XL", "XXL"}}, "content_hash": hashValue}}
@@ -611,10 +614,10 @@ func v6DirectorActionPayloadSchemas() map[string]any {
 				"kind": map[string]any{"const": "research"}, "assignee_agent_id": uuidValue, "mission": text,
 				"expected_result_schema_id": map[string]any{"const": "atomic_result_submission"}, "payload_schema_id": map[string]any{"type": "string", "pattern": "^research\\.[A-Za-z0-9._-]+$"}, "payload": atomicWorkConfig,
 				"priority": map[string]any{"type": "number", "minimum": 0, "maximum": 1}, "max_attempts": map[string]any{"type": "integer", "minimum": 1, "maximum": 100},
-				"branch_ids": map[string]any{"type": "array", "minItems": 1, "maxItems": 1, "uniqueItems": true, "items": uuidValue},
+				"branch_ids":                map[string]any{"type": "array", "minItems": 1, "maxItems": 1, "uniqueItems": true, "items": uuidValue},
 				"direction_gate_node_count": map[string]any{"type": "integer", "minimum": 0},
-				"direction_gate_decision": map[string]any{"enum": []string{"continue_direction"}},
-				"direction_gate_rationale": text}}},
+				"direction_gate_decision":   map[string]any{"enum": []string{"continue_direction"}},
+				"direction_gate_rationale":  text}},
 		"collaboration.create.v1": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"assignee_agent_id", "mission", "expected_result_schema_id", "payload_schema_id", "payload", "priority", "max_attempts"}, "properties": map[string]any{
 			"kind": map[string]any{"type": "string"}, "assignee_agent_id": uuidValue, "mission": text, "expected_result_schema_id": map[string]any{"type": "string"}, "payload_schema_id": map[string]any{"type": "string"}, "payload": jsonObject,
 			"priority": map[string]any{"type": "number", "minimum": 0, "maximum": 1}, "max_attempts": map[string]any{"type": "integer", "minimum": 1, "maximum": 100}, "branch_ids": map[string]any{"type": "array", "maxItems": 128, "items": uuidValue}}},

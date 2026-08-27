@@ -41,7 +41,7 @@ func (s *PostgresStore) executeV6OpenIntegrationDiscussionAction(
 			return fmt.Errorf("%w: S promotion requires at least three nodes from one research direction", ErrV6InvalidTierTransition)
 		}
 		var topDirectionCount, boundBranchCount int
-		if err = s.pool.QueryRow(ctx, `WITH RECURSIVE branch_tree AS (
+		if queryErr := s.pool.QueryRow(ctx, `WITH RECURSIVE branch_tree AS (
 			SELECT id,id AS top_id
 			FROM research_branch
 			WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND parent_branch_id IS NULL
@@ -52,8 +52,8 @@ func (s *PostgresStore) executeV6OpenIntegrationDiscussionAction(
 			WHERE child.workspace_id=$1::uuid AND child.session_id=$2::uuid
 		)
 		SELECT count(DISTINCT branch_tree.top_id),count(DISTINCT branch_tree.id)
-		FROM branch_tree WHERE branch_tree.id=ANY($3::uuid[])`, proposal.WorkspaceID, proposal.RunID, branchIDs(branches)).Scan(&topDirectionCount, &boundBranchCount); err != nil {
-			return err
+		FROM branch_tree WHERE branch_tree.id=ANY($3::uuid[])`, proposal.WorkspaceID, proposal.RunID, branchIDs(branches)).Scan(&topDirectionCount, &boundBranchCount); queryErr != nil {
+			return queryErr
 		}
 		if boundBranchCount != len(branches) || topDirectionCount != 1 {
 			return fmt.Errorf("%w: S promotion must use at least three nodes bound to one top-level research direction", ErrV6InvalidTierTransition)

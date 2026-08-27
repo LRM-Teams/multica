@@ -110,7 +110,7 @@ design_reason=用同一坐标系比较竞争方案并显式标出证据缺口。
 
 - 只使用报告 package 中上传并验证的 HTML、CSS、脚本、图片和字体。
 - 不引用外部 URL、CDN、远程字体、应用同源资源或未上传的本地路径。
-- 不使用表单、iframe、弹窗、下载、存储、网络请求、Worker 或父页面 bridge。
+- 文档 `<head>` 可以使用 charset 与 viewport 的 `<meta>`；禁止 `http-equiv`、表单、iframe、弹窗、下载、存储、网络请求、Worker 或父页面 bridge。
 - 优先使用语义 HTML 和 CSS；只有交互确实提升阅读时才加入小型脚本。
 - 保持键盘可达、清晰焦点、可读对比度、响应式布局和减少动态偏好。
 - 生成完整纯文本。outline 和 citations 与页面一致更好，但提交时可省略或写 `[]`。

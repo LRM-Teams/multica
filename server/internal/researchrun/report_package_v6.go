@@ -18,7 +18,7 @@ const v6ReportMaxDesignDossierBytes = 4096
 
 const v6ReportDesignDossierMarker = "<!-- multica-design-dossier:v1"
 
-var reportForbidden = regexp.MustCompile(`(?is)<\s*(base|form|object|embed|iframe|frame|frameset|link|meta|video|audio)\b|\bsrcdoc\s*=|\bon[a-z]+\s*=|\bstyle\s*=|\b(fetch|XMLHttpRequest|WebSocket|EventSource|Worker|SharedWorker|ServiceWorker|sendBeacon|window\.open|localStorage|sessionStorage|indexedDB|document\.cookie|document\.domain|document\.createElement|document\.write|innerHTML|outerHTML|insertAdjacentHTML|setAttribute|history\.|navigation\.|location|eval|WebAssembly)\b|\b(?:parent|top)\s*\.|\b(?:import|Function)\s*\(|\.click\s*\(|\.(?:src|href)\s*=|(?:src|href)\s*=\s*["']\s*(?:https?:|//|blob:)|@import\b|url\(\s*["']?\s*(?:https?:|//|blob:)`)
+var reportForbidden = regexp.MustCompile(`(?is)<\s*(base|form|object|embed|iframe|frame|frameset|link|video|audio)\b|\bhttp-equiv\s*=|\bsrcdoc\s*=|\bon[a-z]+\s*=|\bstyle\s*=|\b(fetch|XMLHttpRequest|WebSocket|EventSource|Worker|SharedWorker|ServiceWorker|sendBeacon|window\.open|localStorage|sessionStorage|indexedDB|document\.cookie|document\.domain|document\.createElement|document\.write|innerHTML|outerHTML|insertAdjacentHTML|setAttribute|history\.|navigation\.|location|eval|WebAssembly)\b|\b(?:parent|top)\s*\.|\b(?:import|Function)\s*\(|\.click\s*\(|\.(?:src|href)\s*=|(?:src|href)\s*=\s*["']\s*(?:https?:|//|blob:)|@import\b|url\(\s*["']?\s*(?:https?:|//|blob:)`)
 
 var reportAgentProvidedURL = regexp.MustCompile(`(?is)(?:src|href)\s*=\s*["']\s*(?:https?:|//|data:|blob:)`)
 

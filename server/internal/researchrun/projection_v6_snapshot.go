@@ -54,6 +54,28 @@ func hashV6Projection(nodes []V6ProjectionNode, edges []V6ProjectionEdge, densit
 	return ArtifactContentHashFromCanonicalJSON(canonical), nil
 }
 
+// compactV6ProjectionEdges drops derived_from when absorption already covers
+// the same directed pair. Integration persists both tables; the canvas only
+// needs one line into the successor.
+func compactV6ProjectionEdges(edges []V6ProjectionEdge) []V6ProjectionEdge {
+	absorbed := make(map[string]struct{}, len(edges))
+	for _, edge := range edges {
+		if edge.Kind == "absorbed_into" {
+			absorbed[edge.FromNodeID+"\x00"+edge.ToNodeID] = struct{}{}
+		}
+	}
+	out := make([]V6ProjectionEdge, 0, len(edges))
+	for _, edge := range edges {
+		if edge.Kind == "derived_from" {
+			if _, ok := absorbed[edge.FromNodeID+"\x00"+edge.ToNodeID]; ok {
+				continue
+			}
+		}
+		out = append(out, edge)
+	}
+	return out
+}
+
 func normalizeV6Projection(nodes []V6ProjectionNode, edges []V6ProjectionEdge, density []V6ProjectionDensityBin) {
 	for index := range nodes {
 		sort.Strings(nodes[index].BranchIDs)

@@ -58,6 +58,7 @@ func (s *PostgresStore) createV6ProjectionSnapshot(ctx context.Context, request 
 	if err != nil {
 		return V6ProjectionSnapshot{}, err
 	}
+	build.edges = compactV6ProjectionEdges(build.edges)
 	normalizeV6Projection(build.nodes, build.edges, build.density)
 	projectionHash, err := hashV6Projection(build.nodes, build.edges, build.density)
 	if err != nil {

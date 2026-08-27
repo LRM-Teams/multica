@@ -87,7 +87,10 @@ func (s *PostgresStore) LoadDirectorBriefFacts(ctx context.Context, in StartV6Di
 	}
 	rows.Close()
 	for _, branch := range branches {
-		scope := jsonObjectOrEmpty(branch.scope)
+		scope, ok := jsonObjectOrEmpty(branch.scope).(map[string]any)
+		if !ok {
+			scope = map[string]any{}
+		}
 		if branch.parent != "" {
 			directionNodeCount, countErr := s.loadV6DirectionNodeCount(ctx, in.WorkspaceID, in.RunID, branch.id)
 			if countErr != nil {

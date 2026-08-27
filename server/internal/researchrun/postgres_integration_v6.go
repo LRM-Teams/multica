@@ -192,6 +192,16 @@ func (s *PostgresStore) applyIntegrationV6Tx(ctx context.Context, tx pgx.Tx, sub
 			return V6IntegrationOutcome{}, err
 		}
 	}
+	// The first integration revision is registered before its typed Insight
+	// version is persisted. Mark the passport accepted after that version is
+	// committed as well; otherwise report input selection (which only consumes
+	// accepted passports) silently drops the newly-created M/L/... node.
+	if _, err = tx.Exec(ctx, `UPDATE research_artifact_passport
+		SET lifecycle_status='accepted',accepted_at=COALESCE(accepted_at,now())
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid
+			AND lifecycle_status='registered'`, in.WorkspaceID, in.RunID, insightID); err != nil {
+		return V6IntegrationOutcome{}, err
+	}
 	if _, err = tx.Exec(ctx, `UPDATE research_insight SET current_version_id=$2::uuid,title=$3,summary=$4,status='accepted',level=$5,updated_at=now() WHERE id=$1::uuid`, insightID, insightVersionID, in.OutputContent.Objective, in.OutputContent.BriefSummary, v6TierLevel(in.OutputTier)); err != nil {
 		return V6IntegrationOutcome{}, err
 	}

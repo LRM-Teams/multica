@@ -209,7 +209,7 @@ func buildCanonicalV6ProjectionTx(ctx context.Context, tx pgx.Tx, workspaceID, r
 	versionNodeIDs := map[string]string{}
 	workNodeIDs := map[string]string{}
 	agentNodeIDs := map[string]string{}
-	if err := appendV6InsightProjectionTx(ctx, tx, &build, versionNodeIDs); err != nil {
+	if err := appendV6InsightProjectionTx(ctx, tx, &build, goalID, versionNodeIDs); err != nil {
 		return build, err
 	}
 	if err := appendV6AgentProjectionTx(ctx, tx, &build, goalID, agentNodeIDs); err != nil {
@@ -410,7 +410,7 @@ func appendV6PendingAgentProjectionTx(ctx context.Context, tx pgx.Tx, build *v6P
 	return rows.Err()
 }
 
-func appendV6InsightProjectionTx(ctx context.Context, tx pgx.Tx, build *v6ProjectionBuild, versionNodeIDs map[string]string) error {
+func appendV6InsightProjectionTx(ctx context.Context, tx pgx.Tx, build *v6ProjectionBuild, goalID string, versionNodeIDs map[string]string) error {
 	rows, err := tx.Query(ctx, `SELECT iv.id::text,iv.insight_id::text,iv.revision,iv.artifact_version_id::text,iv.tier,iv.catalog_summary,iv.status,iv.created_at,v.content_hash,COALESCE(array_agg(DISTINCT nb.branch_id::text) FILTER(WHERE nb.branch_id IS NOT NULL),'{}'),EXISTS(SELECT 1 FROM research_node_absorption a WHERE a.input_artifact_version_id=iv.artifact_version_id),(SELECT count(*)::int FROM research_node_absorption a WHERE a.successor_insight_version_id=iv.id),EXISTS(SELECT 1 FROM research_branch_frontier f WHERE f.session_id=iv.session_id AND f.node_artifact_version_id=iv.artifact_version_id AND f.removed_by_event_sequence IS NULL) OR EXISTS(SELECT 1 FROM research_branch b WHERE b.session_id=iv.session_id AND b.current_xxl_version_id=iv.id) FROM research_insight_version iv JOIN research_artifact_version v ON v.id=iv.artifact_version_id LEFT JOIN research_node_branch nb ON nb.node_artifact_version_id=iv.artifact_version_id WHERE iv.workspace_id=$1::uuid AND iv.session_id=$2::uuid GROUP BY iv.id,v.content_hash ORDER BY iv.id`, build.workspaceID, build.runID)
 	if err != nil {
 		return err
@@ -435,6 +435,16 @@ func appendV6InsightProjectionTx(ctx context.Context, tx pgx.Tx, build *v6Projec
 		build.nodes = append(build.nodes, V6ProjectionNode{ID: nodeID, Kind: "insight", Tier: tier, CanonicalRef: V6ProjectionEntityRef{Kind: "insight", ID: insightID, Revision: revision, VersionID: artifactVersionID, ContentHash: contentHash}, BranchIDs: branches, Territory: projectionTerritoryForBranches(build, branches), State: V6ProjectionState{Execution: "succeeded", Conclusion: conclusion, Integration: integration}, CatalogSummary: summary, Absorbed: absorbed, Terminal: terminal, Expandable: absorbed || hiddenInputs > 0, HiddenChildCount: hiddenInputs, UpdatedAt: normalizeProjectionTime(updated)})
 		build.defaultVisible[nodeID] = terminal || (branchTop && !absorbed)
 		versionNodeIDs[artifactVersionID] = nodeID
+		if branchTop && !absorbed {
+			// Keep a visible, non-canonical path from the current branch frontier
+			// to the Goal when the frontier node replaces hidden descendants. This
+			// prevents a valid composite Insight from becoming an isolated island
+			// before its absorbed inputs are explicitly expanded.
+			build.edges = append(build.edges, V6ProjectionEdge{
+				ID: v6ProjectionEdgeID("collapsed_path", nodeID, goalID), Kind: "collapsed_path",
+				FromNodeID: nodeID, ToNodeID: goalID, Canonical: false,
+			})
+		}
 		_ = versionEntityID
 	}
 	return rows.Err()

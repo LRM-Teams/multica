@@ -13,7 +13,6 @@ import type { ResearchSession } from "@multica/core/types";
 import { ResearchFleetAvatarStack } from "./research-fleet-avatar-stack";
 import { ResearchSessionChrome } from "./research-session-chrome";
 import { ResearchSessionGoalCard } from "./research-session-goal-card";
-import { ResearchSessionMetaMenu } from "./research-session-meta-menu";
 
 /** Exact structural visibility flips — do not match sm:flex-row / sm:flex-1 / sm:gap-*. */
 const FORBIDDEN_STRUCTURAL_SM =
@@ -242,7 +241,6 @@ vi.mock("@multica/ui/components/ui/dialog", () => ({
 const SOURCE_FILES = [
   "research-session-chrome.tsx",
   "research-session-goal-card.tsx",
-  "research-session-meta-menu.tsx",
   "research-fleet-avatar-stack.tsx",
 ] as const;
 
@@ -271,7 +269,7 @@ describe("research session chrome a11y static contract (LRM-1202)", () => {
     window.localStorage.clear();
   });
 
-  it("bans sm structural visibility flips on chrome/goal/meta/fleet sources", () => {
+  it("bans sm structural visibility flips on chrome/goal/fleet sources", () => {
     for (const file of SOURCE_FILES) {
       const src = readSrc(file);
       expect(src, file).not.toMatch(FORBIDDEN_STRUCTURAL_SM);
@@ -285,8 +283,7 @@ describe("research session chrome a11y static contract (LRM-1202)", () => {
     expect(src).toMatch(/aria-hidden/);
   });
 
-  it("source: session tools trigger has aria-label; fleet toggle has expand/collapse label", () => {
-    expect(readSrc("research-session-meta-menu.tsx")).toMatch(/aria-label=\{t\(\(\$\) => \$\.panel\.session_tools\)\}/);
+  it("source: fleet toggle has expand/collapse label", () => {
     const fleet = readSrc("research-fleet-avatar-stack.tsx");
     expect(fleet).toMatch(/aria-label=\{open \? t\(\(\$\) => \$\.overlay\.fleet_collapse\)/);
     expect(fleet).toMatch(/fleet_expand/);
@@ -355,13 +352,6 @@ describe("research session chrome a11y static contract (LRM-1202)", () => {
     expect(
       screen.getByRole("button", { name: /View final goal|GOAL|分析知春路/ }),
     ).toBe(card);
-  });
-
-  it("render: Session tools trigger exposes aria-label", () => {
-    render(<ResearchSessionMetaMenu members={[]} sources={[]} />);
-    const tools = screen.getByTestId("research-session-tools");
-    expect(tools).toHaveAttribute("aria-label", "Session tools");
-    expect(screen.getByRole("button", { name: "Session tools" })).toBe(tools);
   });
 
   it("render: fleet stack with members exposes labeled expand control", () => {

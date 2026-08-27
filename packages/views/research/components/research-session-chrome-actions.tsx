@@ -1,12 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import type {
-  ResearchFleetMember,
-  ResearchRunContract,
-  ResearchSession,
-  ResearchSource,
-} from "@multica/core/types";
+import type { ResearchSession } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import { Checkbox } from "@multica/ui/components/ui/checkbox";
 import {
@@ -18,11 +13,9 @@ import {
   PopoverTrigger,
 } from "@multica/ui/components/ui/popover";
 import { Textarea } from "@multica/ui/components/ui/textarea";
-import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
 import { ResearchSessionGoalCard } from "./research-session-goal-card";
-import { ResearchSessionMetaMenu } from "./research-session-meta-menu";
 
 const STATUS_TONES: Record<string, { dot: string; pill: string }> = {
   running: {
@@ -43,12 +36,8 @@ const DEFAULT_TONE = {
   pill: "border-border bg-muted/50 text-muted-foreground",
 };
 
-const EMPTY_MEMBERS: ResearchFleetMember[] = [];
-const EMPTY_SOURCES: ResearchSource[] = [];
-
 export function ResearchSessionChromeActions({
   session,
-  contract,
   canConfirm,
   canHandoff,
   createProject,
@@ -62,8 +51,6 @@ export function ResearchSessionChromeActions({
   rejectPending,
   handoffPending,
   onOpenDelivery,
-  members = EMPTY_MEMBERS,
-  sources = EMPTY_SOURCES,
   pendingSubstantiveGoal = null,
   onConfirmSubstantiveGoal,
   confirmSubstantivePending = false,
@@ -75,7 +62,6 @@ export function ResearchSessionChromeActions({
   className,
 }: {
   session: ResearchSession;
-  contract?: ResearchRunContract | null;
   canConfirm: boolean;
   canHandoff: boolean;
   createProject: boolean;
@@ -89,8 +75,6 @@ export function ResearchSessionChromeActions({
   rejectPending?: boolean;
   handoffPending?: boolean;
   onOpenDelivery?: () => void;
-  members?: ResearchFleetMember[];
-  sources?: ResearchSource[];
   pendingSubstantiveGoal?: string | null;
   onConfirmSubstantiveGoal?: (proposal: string) => void | Promise<void>;
   confirmSubstantivePending?: boolean;
@@ -102,7 +86,6 @@ export function ResearchSessionChromeActions({
   className?: string;
 }) {
   const { t } = useT("research");
-  const isMobile = useIsMobile();
   const [handoffOpen, setHandoffOpen] = useState(false);
   const [rejectOpen, setRejectOpen] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
@@ -117,8 +100,7 @@ export function ResearchSessionChromeActions({
   const showHandoff = status === "completed" && canHandoff;
   const hasPrimary = showConfirm || showHandoff;
   const gateBusy = Boolean(confirmPending || rejectPending);
-  const foldDeliveryIntoTools = Boolean(onOpenDelivery) && isMobile;
-  const showDeliveryButton = Boolean(onOpenDelivery) && !isMobile;
+  const showDeliveryButton = Boolean(onOpenDelivery);
   const primaryClass = "bg-brand text-brand-foreground hover:bg-brand/90";
 
   return (
@@ -129,24 +111,6 @@ export function ResearchSessionChromeActions({
         className,
       )}
     >
-      {showStatus ? (
-        <span
-          data-testid="research-session-status"
-          className={cn(
-            "inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-semibold",
-            tone.pill,
-          )}
-        >
-          <span
-            className={cn(
-              "size-1.5 rounded-full",
-              tone.dot,
-              status === "running" && "animate-pulse motion-reduce:animate-none",
-            )}
-          />
-          {statusLabel}
-        </span>
-      ) : null}
       {showGoalCard ? (
         <ResearchSessionGoalCard
           sessionId={session.id}
@@ -343,24 +307,24 @@ export function ResearchSessionChromeActions({
           {t(($) => $.panel.view_delivery)}
         </Button>
       ) : null}
-      <ResearchSessionMetaMenu
-        members={members}
-        sources={sources}
-        session={session}
-        contract={contract}
-        sessionStatus={session.status}
-        leadingActions={
-          foldDeliveryIntoTools && onOpenDelivery
-            ? [
-                {
-                  id: "view-delivery",
-                  label: t(($) => $.panel.view_delivery),
-                  onSelect: onOpenDelivery,
-                },
-              ]
-            : undefined
-        }
-      />
+      {showStatus ? (
+        <span
+          data-testid="research-session-status"
+          className={cn(
+            "inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-semibold",
+            tone.pill,
+          )}
+        >
+          <span
+            className={cn(
+              "size-1.5 rounded-full",
+              tone.dot,
+              status === "running" && "animate-pulse motion-reduce:animate-none",
+            )}
+          />
+          {statusLabel}
+        </span>
+      ) : null}
     </div>
   );
 }

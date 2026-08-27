@@ -1186,7 +1186,6 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
         goalImpact={goalImpact}
         projectionSource={projectionSource}
         session={session}
-        contract={data.run?.contract}
         canConfirm={!directorV6Enabled && canConfirm}
         canHandoff={canHandoff}
         createProject={ui.createProject}
@@ -1210,8 +1209,6 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
           }
           dispatch({ type: "setDeliveryOpen", value: true });
         }}
-        members={directorV6Enabled ? [] : fleet.members}
-        sources={sources}
         pendingSubstantiveGoal={
           !directorV6Enabled && latestRound?.goal_patch_proposal?.trim()
             ? latestRound.goal_patch_proposal

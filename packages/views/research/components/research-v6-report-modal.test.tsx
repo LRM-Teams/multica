@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { ResearchV6ReportModal } from "./research-v6-report-modal";
 
@@ -67,6 +67,45 @@ describe("ResearchV6ReportModal", () => {
     const dialog = screen.getByTestId("research-v6-report-modal");
     expect(dialog.className).toMatch(/!max-w-none/);
     expect(dialog.className).toMatch(/sm:!max-w-none/);
+  });
+
+  it("does not flash the loading shell when the same packaged report is refetched", async () => {
+    const compiled = {
+      ...report,
+      sandboxUrl: "",
+      reportOrigin: "",
+      compiledHtml: "<html><body>compiled body</body></html>",
+    };
+    vi.spyOn(URL, "createObjectURL").mockReturnValue(
+      `blob:${location.origin}/stable-report`,
+    );
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+
+    const { rerender } = render(
+      <ResearchV6ReportModal
+        appOrigin={location.origin}
+        open
+        report={compiled}
+        onOpenChange={() => {}}
+      />,
+    );
+    const frame = await screen.findByTestId("research-v6-report-frame");
+    fireEvent.load(frame);
+    await waitFor(() => {
+      expect(screen.queryByTestId("research-v6-report-loading")).toBeNull();
+    });
+
+    rerender(
+      <ResearchV6ReportModal
+        appOrigin={location.origin}
+        open
+        loading
+        report={compiled}
+        onOpenChange={() => {}}
+      />,
+    );
+    expect(screen.getByTestId("research-v6-report-frame")).toBeTruthy();
+    expect(screen.queryByTestId("research-v6-report-loading")).toBeNull();
   });
 
   it("shows an empty state when no report has been generated", () => {

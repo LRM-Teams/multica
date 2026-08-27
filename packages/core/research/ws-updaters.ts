@@ -48,6 +48,7 @@ function scheduleV6ProjectionRefresh(
     });
     void qc.invalidateQueries({
       queryKey: researchV6DirectorProjectionKeys.reports(wsId, runId),
+      exact: true,
     });
   }, 500);
   timers.set(timerKey, timer);

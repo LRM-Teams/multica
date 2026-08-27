@@ -44,6 +44,7 @@ describe("applyResearchWSEvent", () => {
     });
     expect(qc.invalidateQueries).toHaveBeenCalledWith({
       queryKey: researchV6DirectorProjectionKeys.reports("ws", "run-v6"),
+      exact: true,
     });
     vi.useRealTimers();
   });

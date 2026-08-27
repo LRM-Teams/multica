@@ -399,8 +399,18 @@ func (b *cursorACPBackend) ensureProcess(ctx context.Context, opts ExecOptions) 
 		return nil, fmt.Errorf("cursor-agent executable not found at %q: %w", execPath, err)
 	}
 
-	// Live CLI: `cursor-agent acp` starts the ACP (Agent Client Protocol) server.
-	cmd := exec.Command(execPath, "acp")
+	// Cursor's API-key authentication is a global CLI option, so it must be
+	// placed before the `acp` subcommand (the CLI otherwise falls back to its
+	// interactive cursor_login flow even when the key is present in env).
+	acpArgs := []string{"acp"}
+	apiKey := strings.TrimSpace(b.cfg.Env["CURSOR_API_KEY"])
+	if apiKey == "" {
+		apiKey = strings.TrimSpace(os.Getenv("CURSOR_API_KEY"))
+	}
+	if apiKey != "" {
+		acpArgs = []string{"--api-key", apiKey, "acp"}
+	}
+	cmd := exec.Command(execPath, acpArgs...)
 	hideAgentWindow(cmd)
 	if opts.Cwd != "" {
 		cmd.Dir = opts.Cwd

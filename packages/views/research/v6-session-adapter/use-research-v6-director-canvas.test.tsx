@@ -190,6 +190,137 @@ describe("useResearchV6DirectorCanvas", () => {
     ).toBe(nextSnapshotId);
   });
 
+  it("shows a staffing Agent satellite from a live delta without refetching", async () => {
+    let snapshotLoads = 0;
+    let pushEvent = (_payload: unknown) => {};
+    const realtimeBus = {
+      subscribeEvent: (_event, handler) => {
+        pushEvent = handler;
+        return () => {
+          pushEvent = () => {};
+        };
+      },
+      onBusReconnect: () => () => {},
+      onBusConnectionStatus: () => () => {},
+    } satisfies ResearchV6DirectorRealtimeBus;
+    const initial: ResearchV6DirectorProjectionSnapshot = {
+      ...snapshot("default", []),
+      nodes: [
+        {
+          id: "goal",
+          kind: "goal",
+          tier: "GOAL",
+          canonicalRef: { kind: "goal", id: RUN_ID },
+          branchIds: [],
+          state: {
+            execution: "running",
+            conclusion: "accepted",
+            integration: "unmatched",
+          },
+          title: "Research Manus",
+          catalogSummary: "Research Manus",
+          absorbed: false,
+          terminal: false,
+          expandable: true,
+          hiddenChildCount: 0,
+          updatedAt: "2026-08-17T08:00:00Z",
+        },
+      ],
+    };
+    const transport = {
+      loadSnapshot: async () => {
+        snapshotLoads += 1;
+        return initial;
+      },
+    } as Pick<
+      ResearchV6DirectorProjectionTransport,
+      "loadSnapshot"
+    > as ResearchV6DirectorProjectionTransport;
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const { result } = renderHook(
+      () =>
+        useResearchV6DirectorCanvas({
+          workspaceId: WORKSPACE_ID,
+          runId: RUN_ID,
+          transport,
+          realtimeBus,
+          expansionFailureLabel: "Expansion failed",
+        }),
+      { wrapper: wrapper(client) },
+    );
+    await waitFor(() =>
+      expect(result.current.canvas?.graph.nodes.map((node) => node.id)).toEqual([
+        "goal",
+      ]),
+    );
+    const agentId = "00000000-0000-4000-8000-000000000221";
+    act(() => {
+      pushEvent({
+        run_id: RUN_ID,
+        delta: {
+          contract_kind: "projection_delta",
+          schema_version: 6,
+          workspace_id: WORKSPACE_ID,
+          run_id: RUN_ID,
+          snapshot_id: SNAPSHOT_ID,
+          event_sequence: 5,
+          previous_projection_hash: initial.projectionHash,
+          projection_hash: `sha256:${"e".repeat(64)}`,
+          upsert_nodes: [
+            {
+              id: "researcher",
+              kind: "agent",
+              tier: "S",
+              canonical_ref: { kind: "agent", id: agentId },
+              branch_ids: [],
+              state: {
+                execution: "idle",
+                conclusion: "proposed",
+                integration: "unmatched",
+              },
+              title: "市场研究员",
+              catalog_summary: "Cover the market branch",
+              absorbed: false,
+              terminal: false,
+              expandable: false,
+              hidden_child_count: 0,
+              updated_at: "2026-08-17T08:00:10Z",
+            },
+          ],
+          remove_node_ids: [],
+          upsert_edges: [
+            {
+              id: "researcher-goal",
+              kind: "belongs_to",
+              from_node_id: "researcher",
+              to_node_id: "goal",
+              canonical: true,
+              hidden_count: 0,
+              expandable: false,
+            },
+          ],
+          remove_edge_ids: [],
+          invalidate_slice_keys: [],
+        },
+      });
+    });
+    await waitFor(() => {
+      expect(result.current.canvas?.graph.nodes.map((node) => node.id)).toEqual([
+        "goal",
+        "researcher",
+      ]);
+      expect(
+        result.current.canvas?.graph.nodes.find((node) => node.id === "researcher"),
+      ).toMatchObject({
+        node_type: "agent",
+        payload: { semantic_role: "roster" },
+      });
+    });
+    expect(snapshotLoads).toBe(1);
+  });
+
   it("renders a committed realtime delta without refetching the snapshot", async () => {
     let pushEvent = (_payload: unknown) => {};
     const realtimeBus = {

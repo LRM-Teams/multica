@@ -472,13 +472,39 @@
   72%, 100% { opacity: 0; transform: scale(1.1); }
 }
 
+.sg-node[data-semantic-role="roster"] {
+  opacity: 0.82;
+}
+.sg-node[data-semantic-role="roster"][data-state="default"] {
+  opacity: 0.88;
+}
+.sg-node[data-semantic-role="roster"][data-state="run"] {
+  opacity: 1;
+}
+.sg-node[data-semantic-role="roster"]:not([data-state="run"]) {
+  animation: sg-roster-breathe 2.4s ease-in-out infinite;
+}
+.sg-node[data-semantic-role="roster"][data-state="pending-review"] {
+  opacity: 0.48;
+  animation-name: sg-roster-breathe-dim;
+}
+@keyframes sg-roster-breathe {
+  0%, 100% { opacity: 0.62; }
+  50% { opacity: 0.9; }
+}
+@keyframes sg-roster-breathe-dim {
+  0%, 100% { opacity: 0.32; }
+  50% { opacity: 0.62; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .sg-node {
     transition: none;
   }
   .sg-glyph[data-glyph="pulse"],
   .sg-glyph[data-glyph="restart"],
-  .sg-node[data-state="run"]::after {
+  .sg-node[data-state="run"]::after,
+  .sg-node[data-semantic-role="roster"] {
     animation: none;
   }
   .sg-node.sg-s-point .sg-core {

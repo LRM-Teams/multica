@@ -68,7 +68,7 @@ export interface StarGraphNodeView {
   tier: StarGraphTier;
   tierSource: "typed" | "kind-classified" | "fallback";
   /** Canonical semantic role kept separate from the five visual size tiers. */
-  semanticRole?: "goal";
+  semanticRole?: "goal" | "roster";
   state: StarGraphNodeState;
   title: string;
   subLabel?: string;

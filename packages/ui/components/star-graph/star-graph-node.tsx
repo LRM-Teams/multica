@@ -49,7 +49,7 @@ export interface StarGraphNodeProps {
   /** Short tier header (e.g. "MASTER SYNTHESIS", "STABLE RESULT"). */
   headerLabel?: string;
   /** Canonical role marker; intentionally independent from the visual tier. */
-  semanticRole?: "goal";
+  semanticRole?: "goal" | "roster";
   /** S-tier agent badge (e.g. "A1"). Only rendered for tier `s`. */
   agentBadge?: string;
   /** S-tier body treatment. `point` keeps text in the accessible name only. */

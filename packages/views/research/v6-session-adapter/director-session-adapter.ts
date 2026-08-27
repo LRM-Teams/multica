@@ -42,6 +42,30 @@ function rendererStatus(node: ResearchV6DirectorProjectionNode): string {
   return "pending";
 }
 
+function isAgentProjectionNode(node: ResearchV6DirectorProjectionNode): boolean {
+  const refKind = node.canonicalRef.kind;
+  return (
+    refKind === "agent" ||
+    refKind === "pending_agent" ||
+    node.kind.trim().toLowerCase() === "agent"
+  );
+}
+
+function isResearchContentNode(node: ResearchV6DirectorProjectionNode): boolean {
+  if (node.absorbed || isAgentProjectionNode(node)) return false;
+  const kind = node.kind.trim().toLowerCase();
+  if (kind === "goal" || node.tier === "GOAL") return false;
+  const refKind = node.canonicalRef.kind;
+  return (
+    kind === "work_s" ||
+    kind === "result_s" ||
+    kind === "insight" ||
+    refKind === "work_item" ||
+    refKind === "result" ||
+    refKind === "insight"
+  );
+}
+
 function rendererLevel(node: ResearchV6DirectorProjectionNode): "xxl" | "xl" | "l" | "m" | "s" {
   switch (node.tier) {
     case "XXL":
@@ -85,15 +109,14 @@ export function adaptResearchV6DirectorCanvas(
     }
   }
 
-  // Agent identity is presentation metadata for its assigned Work. Keeping a
-  // second Agent circle duplicates the same execution unit and overwhelms the
-  // constellation with roster nodes and assignment edges.
-  const visibleNodes = projection.nodes.filter(
-    (node) =>
-      !node.absorbed &&
-      node.canonicalRef.kind !== "agent" &&
-      node.kind.trim().toLowerCase() !== "agent",
-  );
+  // Roster circles are a staffing overlay, not knowledge-graph members.
+  // Keep them only until the first research Work / Result / Insight appears.
+  const staffing = !projection.nodes.some(isResearchContentNode);
+  const visibleNodes = projection.nodes.filter((node) => {
+    if (node.absorbed) return false;
+    if (isAgentProjectionNode(node)) return staffing;
+    return true;
+  });
   const visibleNodeIds = new Set(visibleNodes.map((node) => node.id));
   const absorbedInputs = new Map<string, string[]>();
   for (const edge of projection.edges) {
@@ -129,6 +152,7 @@ export function adaptResearchV6DirectorCanvas(
       total_node_count: visibleNodes.length,
       nodes: visibleNodes.map((node) => {
         const assignedAgent = assignedAgentByWorkNodeId.get(node.id);
+        const rosterSatellite = isAgentProjectionNode(node);
         return {
           id: node.id,
           session_id: projection.runId,
@@ -136,7 +160,9 @@ export function adaptResearchV6DirectorCanvas(
           title: node.title ?? node.catalogSummary,
           summary: node.catalogSummary,
           status: rendererStatus(node),
-          actor_agent_id: assignedAgent?.canonicalRef.id ?? null,
+          actor_agent_id:
+            assignedAgent?.canonicalRef.id ??
+            (rosterSatellite ? node.canonicalRef.id : null),
           payload: {
             canonical_ref: node.canonicalRef,
             branch_ids: node.branchIds,
@@ -156,7 +182,9 @@ export function adaptResearchV6DirectorCanvas(
             semantic_role:
               node.tier === "GOAL" || node.kind.toLowerCase() === "goal"
                 ? "goal"
-                : undefined,
+                : rosterSatellite
+                  ? "roster"
+                  : undefined,
             absorbed: node.absorbed,
             terminal: node.terminal,
             expandable: node.expandable,

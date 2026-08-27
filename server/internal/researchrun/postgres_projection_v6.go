@@ -215,6 +215,9 @@ func buildCanonicalV6ProjectionTx(ctx context.Context, tx pgx.Tx, workspaceID, r
 	if err := appendV6AgentProjectionTx(ctx, tx, &build, goalID, agentNodeIDs); err != nil {
 		return build, err
 	}
+	if err := appendV6PendingAgentProjectionTx(ctx, tx, &build, goalID); err != nil {
+		return build, err
+	}
 	if err := appendV6WorkProjectionTx(ctx, tx, &build, goalID, workNodeIDs, agentNodeIDs); err != nil {
 		return build, err
 	}
@@ -367,6 +370,42 @@ func appendV6AgentProjectionTx(ctx context.Context, tx pgx.Tx, build *v6Projecti
 		build.defaultVisible[nodeID] = true
 		agentNodeIDs[agentID] = nodeID
 		build.edges = append(build.edges, V6ProjectionEdge{ID: v6ProjectionEdgeID("belongs_to", nodeID, goalID), Kind: "belongs_to", FromNodeID: nodeID, ToNodeID: goalID, Canonical: true})
+	}
+	return rows.Err()
+}
+
+func appendV6PendingAgentProjectionTx(ctx context.Context, tx pgx.Tx, build *v6ProjectionBuild, goalID string) error {
+	rows, err := tx.Query(ctx, `
+		SELECT o.id::text, o.updated_at
+		FROM research_v6_outbox o
+		WHERE o.workspace_id=$1::uuid
+		  AND o.session_id=$2::uuid
+		  AND o.kind='create_agent'
+		  AND o.status IN ('pending','delivering')
+		ORDER BY o.created_at,o.id`, build.workspaceID, build.runID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var outboxID string
+		var updated time.Time
+		if err = rows.Scan(&outboxID, &updated); err != nil {
+			return err
+		}
+		nodeID := v6ProjectionStableID("agent-pending", outboxID, 0)
+		build.nodes = append(build.nodes, V6ProjectionNode{
+			ID: nodeID, Kind: "agent", Tier: "S",
+			CanonicalRef: V6ProjectionEntityRef{Kind: "pending_agent", ID: outboxID},
+			BranchIDs:    []string{},
+			State:        V6ProjectionState{Execution: "pending", Conclusion: "proposed", Integration: "unmatched"},
+			Terminal:     false, Expandable: false, UpdatedAt: normalizeProjectionTime(updated),
+		})
+		build.defaultVisible[nodeID] = true
+		build.edges = append(build.edges, V6ProjectionEdge{
+			ID: v6ProjectionEdgeID("belongs_to", nodeID, goalID), Kind: "belongs_to",
+			FromNodeID: nodeID, ToNodeID: goalID, Canonical: true,
+		})
 	}
 	return rows.Err()
 }

@@ -112,7 +112,6 @@ import {
 import { ResearchConstellationWorkspace } from "./research-constellation-workspace";
 import { ResearchD5Chrome } from "./research-d5-chrome";
 import { ResearchDirectorChatHeader } from "./research-director-chat-header";
-import { ResearchDirectorAssignmentPicker } from "./research-director-assignment-picker";
 import {
   ResearchCanvasChangeCard,
   canvasChangeTargetNodeIds,
@@ -431,16 +430,12 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     INITIAL_RESEARCH_SESSION_UI_STATE,
   );
   const {
-    agents: workspaceAgents,
     assignedAgentId: assignedDirectorAgentId,
     assignedAgent: assignedDirectorAgent,
-    assignment: directorAssignment,
   } = useResearchV6DirectorAssignment({
     enabled: directorV6Enabled,
     workspaceId: wsId,
-    runId: sessionId,
     persistedAgentId: persistedDirectorAgentId,
-    expectedStateVersion: data?.run?.run.state_version ?? 0,
   });
   const handleSelectCanvasNode = useCallback(
     (node: ResearchGraphNode | null) => {
@@ -1408,16 +1403,6 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
               modeChip={<ResearchChatModeChip mode={chatMode} />}
               mode={chatMode}
             />
-            {directorV6Enabled ? (
-              /* react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- picker is a deliberate slot in the shared chat shell and is gated by the V6 route. */
-              <ResearchDirectorAssignmentPicker
-                agents={workspaceAgents}
-                currentAgentId={assignedDirectorAgentId}
-                pending={directorAssignment.isPending}
-                error={directorAssignment.error instanceof Error ? directorAssignment.error.message : null}
-                onAssign={(agentId, reason) => directorAssignment.mutate({ agentId, reason })}
-              />
-            ) : null}
             {!directorV6Enabled ? (
               <div className="border-b px-3 py-2 text-[11px] text-muted-foreground">
                 {t(($) => $.panel.fleet)}:{" "}

@@ -39,7 +39,7 @@ their named `payload_schema` or task schema receives a second validator.
 | `atomic_result_submission` | Research Agent | Result Acceptance Module | Immutable Result S and Match candidates |
 | `discussion_turn_submission` | participating Steward | Discussion Module | User-visible turn, structured contribution and vote |
 | `integration_submission` | joining/integrating Agent | Knowledge Graph Module | Promotion, assimilation or XXL merge proposal |
-| `report_package_submission` | Report Agent | Report Module | Immutable self-contained HTML package manifest and exact research inputs |
+| `report_package_submission` | Report Agent | Report Module | Immutable self-contained HTML package; the server binds frozen inputs and compiled package hash |
 | `projection_snapshot` | Projection Module | Web/Desktop | One pinned, paginated graph Slice |
 | `projection_delta` | Projection Module | Web/Desktop | Event-sequenced changes after a pinned Snapshot |
 

@@ -61,8 +61,8 @@ export const viewport: Viewport = {
 export const metadata: Metadata = {
   metadataBase: new URL(PUBLIC_APP_ORIGIN),
   title: {
-    default: "Multica — Project Management for Human + Agent Teams",
-    template: "%s | Multica",
+    default: "CoForge — Project Management for Human + Agent Teams",
+    template: "%s | CoForge",
   },
   description:
     "Open-source platform that turns coding agents into real teammates. Assign tasks, track progress, compound skills.",

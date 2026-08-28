@@ -2572,8 +2572,11 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	cliWrapperDir := ""
 	cliTokenFile := ""
 	cliBinDir := ""
+	selfBin := ""
 	agentProxyWrapperDir := ""
 	transportAttemptPath := ""
+	var stableTransport *turntransport.Transport
+	var stableTransportBinding turntransport.Binding
 	resolveExecutable := d.resolveExecutable
 	if resolveExecutable == nil {
 		resolveExecutable = os.Executable
@@ -2585,7 +2588,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	if restrictedExecution {
 		taskLog.Info("agent cli transport omitted for restricted execution")
 	} else {
-		selfBin, err := resolveExecutable()
+		selfBin, err = resolveExecutable()
 		if err != nil {
 			taskLog.Warn("agent cli transport: unable to resolve multica executable", "error", err)
 		} else {
@@ -2733,7 +2736,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			pathDirectories = append(pathDirectories, agentProxyWrapperDir)
 		}
 		if cliWrapperDir != "" {
-			agentEnv["MULTICA_TOKEN_FILE"] = cliTokenFile
+			if cliTokenFile != "" {
+				agentEnv["MULTICA_TOKEN_FILE"] = cliTokenFile
+			}
 			pathDirectories = append(pathDirectories, cliWrapperDir)
 		}
 		pathDirectories = append(pathDirectories, cliBinDir, os.Getenv("PATH"))
@@ -2752,6 +2757,40 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	arealModel, arealArgs, arealEnvKey, arealEnvVal, arealOverride := arealProxyExecOverride(task.ArealProxy)
 	if arealOverride && arealEnvKey != "" {
 		agentEnv[arealEnvKey] = arealEnvVal
+	}
+	if !restrictedExecution && profile == executionProfileFull && isCanonicalResidentProvider(provider) && agentToken != "" {
+		var transportErr error
+		stableTransport, transportErr = prepareStableAgentCLITransport(d.cfg, task.WorkspaceID, agentID, selfBin)
+		if transportErr != nil {
+			return TaskResult{}, fmt.Errorf("prepare stable agent CLI transport: %w", transportErr)
+		}
+		currentTurn := make(map[string]string)
+		for key, value := range agentEnv {
+			if turntransport.IsTurnEnvironmentKey(key) {
+				currentTurn[key] = value
+			}
+		}
+		var bindErr error
+		stableTransportBinding, bindErr = stableTransport.Bind(task.ID, agentToken, currentTurn)
+		if bindErr != nil {
+			return TaskResult{}, fmt.Errorf("bind stable agent CLI transport: %w", bindErr)
+		}
+		defer func() {
+			if _, unbindErr := turntransport.Unbind(stableTransportBinding); unbindErr != nil {
+				taskLog.Warn("stable agent CLI transport cleanup failed", "error", unbindErr)
+			}
+		}()
+		delete(agentEnv, "MULTICA_TOKEN_FILE")
+		stablePath := filepath.Dir(stableTransport.WrapperPath())
+		if agentProxyWrapperDir != "" {
+			stablePath += string(os.PathListSeparator) + agentProxyWrapperDir
+		}
+		if cliBinDir != "" {
+			stablePath += string(os.PathListSeparator) + cliBinDir
+		}
+		stablePath += string(os.PathListSeparator) + os.Getenv("PATH")
+		agentEnv["PATH"] = stablePath
+		transportAttemptPath = turntransport.AttemptPath(stableTransport.Root())
 	}
 	backendCfg := agent.Config{
 		ExecutablePath: entry.Path,
@@ -2863,9 +2902,70 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// SystemPrompt (e.g. Cursor).
 	appendAgentScopeSystemPrompt(&execOpts, agentScopeMemories)
 
-	backend, createErr := agent.New(provider, backendCfg)
-	if createErr != nil {
-		return TaskResult{}, fmt.Errorf("create agent backend: %w", createErr)
+	var runtimeLease *agentRuntimeLease
+	var backend agent.Backend
+	var createErr error
+	if !restrictedExecution && profile == executionProfileFull && isCanonicalResidentProvider(provider) {
+		stableEnvironment := stripProviderCredentialTransport(agentEnv)
+		identity, identityErr := newCanonicalAgentRuntimeIdentity(canonicalAgentRuntimeIdentityParams{
+			AgentID:             agentID,
+			RuntimeID:           task.RuntimeID,
+			Provider:            provider,
+			Executable:          entry.Path,
+			Model:               model,
+			Thinking:            thinkingLevel,
+			WorkDir:             agentRootPath,
+			SystemPrompt:        execOpts.SystemPrompt,
+			MCP:                 string(mcpConfig),
+			CustomArgs:          customArgs,
+			Environment:         stableEnvironment,
+			WorkspaceID:         task.WorkspaceID,
+			AgentInstructions:   instructions,
+			WorkspaceContext:    task.WorkspaceContext,
+			StartupStaticDigest: execenv.StartupStaticDigest(provider, taskCtx),
+		})
+		if identityErr != nil {
+			return TaskResult{}, fmt.Errorf("build canonical runtime identity: %w", identityErr)
+		}
+		residentConfig := backendCfg
+		residentConfig.ResidentOptions = execOpts
+		residentConfig.ResidentOptions.Cwd = agentRootPath
+		acquireRequest := agentRuntimeAcquireRequest{
+			Identity:      identity,
+			BackendConfig: residentConfig,
+			Factory:       defaultCanonicalRuntimeFactory(provider),
+		}
+		// A resident slot is deliberately single-flight. Tasks for the same
+		// Agent/runtime wait here and are picked up by the same provider process
+		// after the previous turn releases the slot, instead of spawning another
+		// provider or failing the task as "busy".
+		for {
+			runtimeLease, createErr = d.canonicalRuntimes.acquire(acquireRequest)
+			if !errors.Is(createErr, ErrCanonicalAgentRuntimeBusy) {
+				break
+			}
+			timer := time.NewTimer(250 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				if !timer.Stop() {
+					<-timer.C
+				}
+				createErr = ctx.Err()
+			case <-timer.C:
+			}
+			if createErr != nil && !errors.Is(createErr, ErrCanonicalAgentRuntimeBusy) {
+				break
+			}
+		}
+		if createErr != nil {
+			return TaskResult{}, fmt.Errorf("acquire canonical agent runtime: %w", createErr)
+		}
+		backend = runtimeLease.backend
+	} else {
+		backend, createErr = agent.New(provider, backendCfg)
+		if createErr != nil {
+			return TaskResult{}, fmt.Errorf("create agent backend: %w", createErr)
+		}
 	}
 
 	taskLog.Debug("invoking backend",
@@ -2919,6 +3019,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		if markSessionID != "" {
 			d.turnScopeMemory.markInjected(issueTurnScopeSessionKey(agentID, task.RuntimeID, markSessionID), injectedTurnMemories)
 		}
+	}
+	if runtimeLease != nil {
+		runtimeLease.releaseForResult(result.Status, nil)
 	}
 	elapsed := time.Since(taskStart).Round(time.Second)
 	taskLog.Info("agent finished",

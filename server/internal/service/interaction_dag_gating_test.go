@@ -258,3 +258,91 @@ func TestInteractionDAG_RecordingErrorIsBestEffort(t *testing.T) {
 	svc2.closeSegmentForTerminal(context.Background(), child, "proj-1", leanSnap())
 	assert.Len(t, store2.segmentSnapshots, 2, "terminal segment recorded even when the edge insert fails")
 }
+
+// TestInteractionDAG_ChannelConversationRecordsSegment verifies that an
+// ordinary channel conversation (non-training, non-env-dispatch, no project)
+// records a channel-scoped local segment and fires the graph-memory ingest
+// hook, so channel learning reaches staging/segments for consolidation.
+func TestInteractionDAG_ChannelConversationRecordsSegment(t *testing.T) {
+	t.Setenv("MULTICA_MEMORY_TYPE", "graph")
+	store := newFakeInteractionDAGStore()
+	client := &fakeArealSegmentClient{closeSegmentID: 1, exportPayload: json.RawMessage(shardExport)}
+	msgs := newFakeMessageStore()
+	checker := &fakeEnvDispatchChecker{hasRun: false}
+	svc := newSeamTaskServiceWithChecker(store, client, msgs, checker)
+	hook := newFakeSegmentIngestHook()
+	svc.SetSegmentIngestHook(hook)
+
+	taskID := testUUID(3)
+	channelID := testUUID(7)
+	task := db.AgentInboxEvent{ID: taskID, ChannelID: channelID, WorkspaceID: testUUID(1)}
+	msgs.addTaskMessage(util.UUIDToString(taskID), taskMsg(taskID, 1, "assistant", "learned: codename is NIMBUS"))
+	store.addTestTaskMessage(util.UUIDToString(taskID), 1)
+
+	// Projectless channel conversation (FinalizeTerminalTaskSideEffects passes
+	// an empty projectID for channel-only tasks).
+	svc.closeSegmentForTerminal(context.Background(), task, "", nil)
+
+	require.Len(t, store.segmentSnapshots, 1, "channel conversation records a local segment")
+	seg := store.segmentSnapshots[0]
+	assert.Equal(t, "channel:"+util.UUIDToString(channelID), seg.ProjectID, "segment is scoped to the channel")
+	assert.Equal(t, "multica:"+util.UUIDToString(taskID), seg.SegmentID)
+	assert.Equal(t, "task_messages", seg.TrajectorySource)
+	assert.False(t, seg.Trainable)
+	assert.Empty(t, client.closeCalls, "zero AReaL close calls")
+	assert.Empty(t, client.exportCalls, "zero AReaL export calls")
+
+	ingested := awaitIngest(t, hook)
+	assert.Equal(t, seg.SegmentID, ingested.SegmentID)
+	assert.Equal(t, util.UUIDToString(taskID), ingested.AgentRunID)
+	assert.Contains(t, string(ingested.Trajectory), "NIMBUS")
+
+	// One-segment-per-task: a repeated close must not record a second segment.
+	svc.closeSegmentForTerminal(context.Background(), task, "", nil)
+	assert.Len(t, store.segmentSnapshots, 1, "repeated close stays one segment per task")
+}
+
+// TestInteractionDAG_ChannelConversationWithProjectNonDispatch verifies that a
+// channel task inside a non-env-dispatch project also records a channel-scoped
+// segment (the env-dispatch check gates the project path, not the channel one).
+func TestInteractionDAG_ChannelConversationWithProjectNonDispatch(t *testing.T) {
+	t.Setenv("MULTICA_MEMORY_TYPE", "graph")
+	store := newFakeInteractionDAGStore()
+	client := &fakeArealSegmentClient{closeSegmentID: 1, exportPayload: json.RawMessage(shardExport)}
+	msgs := newFakeMessageStore()
+	checker := &fakeEnvDispatchChecker{hasRun: false}
+	svc := newSeamTaskServiceWithChecker(store, client, msgs, checker)
+
+	taskID := testUUID(4)
+	channelID := testUUID(8)
+	task := db.AgentInboxEvent{ID: taskID, ChannelID: channelID}
+	msgs.addTaskMessage(util.UUIDToString(taskID), taskMsg(taskID, 1, "assistant", "hello"))
+
+	svc.closeSegmentForTerminal(context.Background(), task, "proj-1", leanSnap())
+
+	require.Len(t, store.segmentSnapshots, 1, "non-dispatch channel task records a channel-scoped segment")
+	assert.Equal(t, "channel:"+util.UUIDToString(channelID), store.segmentSnapshots[0].ProjectID)
+}
+
+// TestInteractionDAG_ChannelConversationLegacyNoop verifies that legacy
+// (memory_type != graph) workspaces and channel-less tasks keep the historical
+// no-op: no segment rows, no ingest.
+func TestInteractionDAG_ChannelConversationLegacyNoop(t *testing.T) {
+	t.Setenv("MULTICA_MEMORY_TYPE", "") // resolveGraphMemoryType -> "legacy"
+	store := newFakeInteractionDAGStore()
+	client := &fakeArealSegmentClient{closeSegmentID: 1, exportPayload: json.RawMessage(shardExport)}
+	msgs := newFakeMessageStore()
+	checker := &fakeEnvDispatchChecker{hasRun: false}
+	svc := newSeamTaskServiceWithChecker(store, client, msgs, checker)
+
+	// (a) legacy workspace, channel task -> no-op.
+	legacyTask := db.AgentInboxEvent{ID: testUUID(5), ChannelID: testUUID(9)}
+	svc.closeSegmentForTerminal(context.Background(), legacyTask, "", nil)
+	assert.Empty(t, store.segmentSnapshots, "legacy workspace records nothing")
+
+	// (b) graph workspace but no channel -> no-op.
+	t.Setenv("MULTICA_MEMORY_TYPE", "graph")
+	noChannel := db.AgentInboxEvent{ID: testUUID(6)}
+	svc.closeSegmentForTerminal(context.Background(), noChannel, "", nil)
+	assert.Empty(t, store.segmentSnapshots, "task without a channel records nothing")
+}

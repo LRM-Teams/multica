@@ -174,7 +174,16 @@ func (s *TaskService) closeTrainedSegmentForTerminal(ctx context.Context, task d
 // RecordLocalSegmentForEvent. The task is non-training (no areal_proxy context).
 // Zero AReaL client calls are made in this path. Recording is best-effort:
 // errors are logged and the run continues.
+//
+// Tasks that are not env-dispatch (including channel conversations without a
+// project) fall through to maybeRecordChannelConversationSegment, so ordinary
+// channel conversations still produce a segment for graph-memory staging.
 func (s *TaskService) maybeRecordLocalSegmentForEvent(ctx context.Context, task db.AgentInboxEvent, projectID, closingEvent string, envSnapshot map[string]any) {
+	if projectID == "" {
+		// No project to check: an ordinary channel conversation.
+		s.maybeRecordChannelConversationSegment(ctx, task, closingEvent)
+		return
+	}
 	if s.EnvDispatchCheck == nil {
 		return
 	}
@@ -188,6 +197,7 @@ func (s *TaskService) maybeRecordLocalSegmentForEvent(ctx context.Context, task 
 		return
 	}
 	if !isDispatch {
+		s.maybeRecordChannelConversationSegment(ctx, task, closingEvent)
 		return
 	}
 	runID := util.UUIDToString(task.ID)
@@ -227,6 +237,55 @@ func (s *TaskService) maybeRecordLocalSegmentForEvent(ctx context.Context, task 
 			}
 		}
 	}
+}
+
+// channelSegmentScope is the interaction_dag_segment.project_id value for a
+// channel-scoped segment. The column is a plain text key (no FK, no CHECK;
+// assembly filters by exact project_id match), so the synthetic "channel:"
+// prefix keeps channel conversations out of project assembly without a schema
+// change. A future migration can move this to a real channel_id column.
+func channelSegmentScope(channelID pgtype.UUID) string {
+	return "channel:" + util.UUIDToString(channelID)
+}
+
+// maybeRecordChannelConversationSegment records a local, channel-scoped
+// segment for an ordinary channel conversation (non-training,
+// non-env-dispatch) and feeds it to graph-memory staging, so learning in a
+// channel reaches staging/segments and consolidation has material to merge.
+//
+// Gated on memory_type=graph: legacy workspaces keep the historical no-op
+// because nothing consumes the rows. Tasks without a channel also stay no-op.
+func (s *TaskService) maybeRecordChannelConversationSegment(ctx context.Context, task db.AgentInboxEvent, closingEvent string) {
+	if !task.ChannelID.Valid {
+		return
+	}
+	if rt := resolveGraphMemoryType(ctx, s.Queries, task.WorkspaceID, graphMemoryEnvMemoryType()); rt != "graph" {
+		return
+	}
+	runID := util.UUIDToString(task.ID)
+	// One-segment-per-task: skip if this task already recorded a segment (the
+	// env-dispatch branch shares this guard via the deterministic segment id).
+	if existing, err := s.Training.DAG.SegmentIDForAgentRun(ctx, runID); err == nil && existing != "" {
+		return
+	}
+	issueID := ""
+	if task.IssueID.Valid {
+		issueID = util.UUIDToString(task.IssueID)
+	}
+	segID, traj, err := s.Training.DAG.RecordLocalSegmentForEvent(ctx, channelSegmentScope(task.ChannelID), runID, issueID, closingEvent, nil)
+	if err != nil {
+		slog.Warn("interaction_dag: channel conversation segment record failed", "task_id", runID, "err", err)
+		return
+	}
+	// Graph-memory ingest (async, best-effort): the hook routes by the task's
+	// channel through the route registry into the channel-scoped graph, so the
+	// staging summary lands under memory_graph/channels/<channel_id>.
+	s.fireSegmentIngest(ctx, memorygraph.SegmentExport{
+		SegmentID:    segID,
+		AgentRunID:   runID,
+		Trajectory:   traj,
+		ClosingEvent: closingEvent,
+	})
 }
 
 // leanEnvSnapshot builds the refs-only env snapshot available at the task.go

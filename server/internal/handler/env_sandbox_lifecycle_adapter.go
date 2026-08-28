@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -102,6 +103,101 @@ func (a *envSandboxLifecycleDepsAdapter) MintSandboxRuntimeEnv(ctx context.Conte
 	return a.h.mintSandboxRuntimeEnv(ctx, wsUUID, userUUID, instanceID, serverURL, displayName)
 }
 
+func normalizeLifecycleDockerSelection(template, dockerImage string) (string, string, error) {
+	template = strings.TrimSpace(template)
+	dockerImage = strings.TrimSpace(dockerImage)
+	if template == "" {
+		template = "default"
+	}
+	if strings.HasPrefix(template, "docker:") {
+		templateImage := strings.TrimSpace(strings.TrimPrefix(template, "docker:"))
+		if templateImage == "" {
+			return "", "", fmt.Errorf("docker sandbox template has no image")
+		}
+		if dockerImage != "" && dockerImage != templateImage {
+			return "", "", fmt.Errorf("docker sandbox image conflicts with template")
+		}
+		dockerImage = templateImage
+	}
+	if dockerImage == "" {
+		return template, "", nil
+	}
+	if strings.ContainsAny(dockerImage, "\r\n") {
+		return "", "", fmt.Errorf("docker sandbox image is invalid")
+	}
+	if template != "default" && template != "docker:"+dockerImage {
+		return "", "", fmt.Errorf("docker sandbox image conflicts with explicit Cube template")
+	}
+	return "docker:" + dockerImage, dockerImage, nil
+}
+
+const sandboxDockerInventoryMaxAge = 2 * time.Minute
+
+func sandboxNodeHasFreshDockerImage(raw []byte, image string, now time.Time) bool {
+	inventory := sandboxNodeDockerImagesFromMetadata(raw, true)
+	if inventory.Error != "" || inventory.SyncedAt == "" {
+		return false
+	}
+	syncedAt, err := time.Parse(time.RFC3339, inventory.SyncedAt)
+	if err != nil || syncedAt.After(now.Add(time.Minute)) || now.Sub(syncedAt) > sandboxDockerInventoryMaxAge {
+		return false
+	}
+	image = strings.TrimSpace(image)
+	for _, item := range inventory.Images {
+		if item.ImageRef == image {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *envSandboxLifecycleDepsAdapter) pickSandboxNode(ctx context.Context, workspaceID pgtype.UUID, requestedNodeID, dockerImage string) (db.SandboxNode, error) {
+	if requestedNodeID != "" {
+		nodeUUID, err := util.ParseUUID(requestedNodeID)
+		if err != nil {
+			return db.SandboxNode{}, fmt.Errorf("parse node_id: %w", err)
+		}
+		row, err := a.h.Queries.PickSandboxNodeForWorkspace(ctx, db.PickSandboxNodeForWorkspaceParams{WorkspaceID: workspaceID, NodeID: nodeUUID})
+		if err != nil {
+			return db.SandboxNode{}, fmt.Errorf("pick sandbox node: %w", err)
+		}
+		node := sandboxNodeFromPickRow(row)
+		if dockerImage != "" && !sandboxNodeHasFreshDockerImage(node.Metadata, dockerImage, time.Now()) {
+			return db.SandboxNode{}, fmt.Errorf("configured env-dispatch Docker image is not advertised by the selected node")
+		}
+		return node, nil
+	}
+	if dockerImage == "" {
+		row, err := a.h.Queries.PickAvailableSandboxNodeForWorkspace(ctx, workspaceID)
+		if err != nil {
+			return db.SandboxNode{}, fmt.Errorf("pick available sandbox node: %w", err)
+		}
+		return sandboxNodeFromPickAvailRow(row), nil
+	}
+
+	bindings, err := a.h.Queries.ListSandboxWorkspaceBindings(ctx, workspaceID)
+	if err != nil {
+		return db.SandboxNode{}, fmt.Errorf("list sandbox workspace bindings: %w", err)
+	}
+	for _, binding := range bindings {
+		if !binding.Enabled {
+			continue
+		}
+		row, pickErr := a.h.Queries.PickSandboxNodeForWorkspace(ctx, db.PickSandboxNodeForWorkspaceParams{WorkspaceID: workspaceID, NodeID: binding.NodeID})
+		if errors.Is(pickErr, pgx.ErrNoRows) {
+			continue
+		}
+		if pickErr != nil {
+			return db.SandboxNode{}, fmt.Errorf("pick image-capable sandbox node: %w", pickErr)
+		}
+		node := sandboxNodeFromPickRow(row)
+		if sandboxNodeHasFreshDockerImage(node.Metadata, dockerImage, time.Now()) {
+			return node, nil
+		}
+	}
+	return db.SandboxNode{}, fmt.Errorf("configured env-dispatch Docker image is not advertised by an online workspace node")
+}
+
 func (a *envSandboxLifecycleDepsAdapter) InsertSandboxInstance(ctx context.Context, in service.CreateSandboxInstanceInput, actorUserID string) (service.SandboxInstanceRef, error) {
 	wsUUID, err := util.ParseUUID(in.WorkspaceID)
 	if err != nil {
@@ -111,35 +207,29 @@ func (a *envSandboxLifecycleDepsAdapter) InsertSandboxInstance(ctx context.Conte
 	if err != nil {
 		return service.SandboxInstanceRef{}, fmt.Errorf("parse actor_user_id: %w", err)
 	}
-	// Node selection (mirrors CreateSandboxInstance handler): use the provided
-	// NodeID when set, else pick an available node for the workspace.
-	var nodeID pgtype.UUID
-	if in.NodeID != "" {
-		nodeUUID, err := util.ParseUUID(in.NodeID)
-		if err != nil {
-			return service.SandboxInstanceRef{}, fmt.Errorf("parse node_id: %w", err)
-		}
-		node, err := a.h.Queries.PickSandboxNodeForWorkspace(ctx, db.PickSandboxNodeForWorkspaceParams{WorkspaceID: wsUUID, NodeID: nodeUUID})
-		if err != nil {
-			return service.SandboxInstanceRef{}, fmt.Errorf("pick sandbox node: %w", err)
-		}
-		nodeID = node.ID
-	} else {
-		node, err := a.h.Queries.PickAvailableSandboxNodeForWorkspace(ctx, wsUUID)
-		if err != nil {
-			return service.SandboxInstanceRef{}, fmt.Errorf("pick available sandbox node: %w", err)
-		}
-		nodeID = node.ID
+	template, dockerImage, err := normalizeLifecycleDockerSelection(in.Template, in.DockerImage)
+	if err != nil {
+		return service.SandboxInstanceRef{}, err
 	}
-	template := in.Template
-	if template == "" {
-		template = "default"
+	node, err := a.pickSandboxNode(ctx, wsUUID, in.NodeID, dockerImage)
+	if err != nil {
+		return service.SandboxInstanceRef{}, err
 	}
 	metadata := buildSandboxMetadata(nil, in.Name, in.Runtime)
+	if dockerImage != "" {
+		var meta map[string]any
+		_ = json.Unmarshal(metadata, &meta)
+		if meta == nil {
+			meta = map[string]any{}
+		}
+		meta["creation_mode"] = "docker_container"
+		meta["docker_image"] = dockerImage
+		metadata, _ = json.Marshal(meta)
+	}
 	inst, err := a.h.Queries.CreateSandboxInstance(ctx, db.CreateSandboxInstanceParams{
 		WorkspaceID:   wsUUID,
 		CreatorUserID: userUUID,
-		NodeID:        nodeID,
+		NodeID:        node.ID,
 		Status:        "pending",
 		Template:      template,
 		Limits:        jsonBytesOrDefault(in.Limits, "{}"),
@@ -153,6 +243,7 @@ func (a *envSandboxLifecycleDepsAdapter) InsertSandboxInstance(ctx context.Conte
 		WorkspaceID:     util.UUIDToString(inst.WorkspaceID),
 		NodeID:          util.UUIDToString(inst.NodeID),
 		Template:        inst.Template,
+		DockerImage:     dockerImage,
 		Status:          inst.Status,
 		LocalRef:        textValue(inst.LocalRef),
 		EndpointInfo:    inst.EndpointInfo,

@@ -166,7 +166,30 @@ func reclaimMixedDispatchAReALSession(ctx context.Context, sessionID string) err
 // runtime. A truthful timeout (vs. indefinite polling) lets env-dispatch fail
 // closed and compensate owned resources instead of leaving the DAG
 // indefinitely in progress.
-const envDispatchRuntimeReadinessTimeout = 2 * time.Minute
+const (
+	envDispatchRuntimeReadinessTimeout     = 2 * time.Minute
+	envDispatchSharedScratchDockerImageEnv = "ENV_DISPATCH_SHARED_SCRATCH_DOCKER_IMAGE"
+)
+
+// configureEnvDispatchSharedScratchDocker keeps a shared, non-training scratch
+// rollout off the node's mutable Cube default. Production must name one exact
+// daemon-capable image; the lifecycle adapter later verifies that an online
+// workspace node currently advertises that exact ref. Explicit templates and
+// non-shared/branch/training flows retain their existing backend selection.
+func configureEnvDispatchSharedScratchDocker(config envDispatchSandboxConfig, in *service.CreateSandboxInstanceInput) error {
+	if !config.Shared || strings.TrimSpace(config.Template) != "default" {
+		return nil
+	}
+	image := strings.TrimSpace(os.Getenv(envDispatchSharedScratchDockerImageEnv))
+	if image == "" {
+		return fmt.Errorf("shared scratch Docker image is not configured")
+	}
+	if strings.ContainsAny(image, "\r\n") {
+		return fmt.Errorf("shared scratch Docker image is invalid")
+	}
+	in.DockerImage = image
+	return nil
+}
 
 // envDispatchDerivedAgentEnabled gates the derived-agent provisioning path
 // (ARE-5 feature flag, openspec env-dispatch-agent-runtime-config Task 8.3).
@@ -343,8 +366,13 @@ func (h *Handler) provisionEnvDispatchAgent(ctx context.Context, in ProvisionEnv
 	// Scratch first-address: create sandbox (service mints daemon nonce on
 	// ref.DaemonID), discover the online runtime, clone the derived agent.
 	createInput, err := config.createInput(in.WorkspaceID, "")
+	if err == nil {
+		err = configureEnvDispatchSharedScratchDocker(config, &createInput)
+	}
 	if err != nil {
-		_ = store.markFailed(context.WithoutCancel(ctx), h.DB, in.EnvID, in.AgentID, "build create input failed")
+		if markErr := store.markFailed(context.WithoutCancel(ctx), h.DB, in.EnvID, in.AgentID, "build create input failed"); markErr != nil {
+			return ProvisionEnvDispatchAgentResult{}, errors.Join(err, fmt.Errorf("mark binding failed: %w", markErr))
+		}
 		return ProvisionEnvDispatchAgentResult{}, err
 	}
 	ref, err := lifecycle.Create(ctx, createInput, in.UserID)

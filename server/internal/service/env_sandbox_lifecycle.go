@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 )
 
@@ -17,12 +18,16 @@ var (
 // SandboxInstanceRef is the structured env lifecycle handle used by
 // env-dispatch and checkpointing when save/resume semantics are required.
 type SandboxInstanceRef struct {
-	InstanceID      string          `json:"instance_id"`
-	WorkspaceID     string          `json:"workspace_id"`
-	CreatorUserID   string          `json:"creator_user_id,omitempty"`
-	NodeID          string          `json:"node_id"`
-	LocalRef        string          `json:"local_ref,omitempty"`
-	Template        string          `json:"template,omitempty"`
+	InstanceID    string `json:"instance_id"`
+	WorkspaceID   string `json:"workspace_id"`
+	CreatorUserID string `json:"creator_user_id,omitempty"`
+	NodeID        string `json:"node_id"`
+	LocalRef      string `json:"local_ref,omitempty"`
+	Template      string `json:"template,omitempty"`
+	// DockerImage is internal create-routing state. It is deliberately excluded
+	// from serialized rollout refs; Template and RuntimeMetadata preserve the
+	// durable backend discriminator before endpoint_info is available.
+	DockerImage     string          `json:"-"`
 	Status          string          `json:"status,omitempty"`
 	RuntimeMetadata json.RawMessage `json:"runtime,omitempty"`
 	EndpointInfo    json.RawMessage `json:"endpoint_info,omitempty"`
@@ -68,6 +73,9 @@ type CreateSandboxInstanceInput struct {
 	WorkspaceID string
 	NodeID      string
 	Template    string
+	// DockerImage selects sandboxd's Docker backend. The lifecycle adapter must
+	// validate the exact ref against the selected node's advertised inventory.
+	DockerImage string
 	// Name is the control-plane display name persisted on metadata.name and
 	// injected into MULTICA_DAEMON_DEVICE_NAME when DaemonEnabled.
 	Name       string
@@ -141,6 +149,15 @@ func (s *EnvSandboxLifecycleService) Create(ctx context.Context, in CreateSandbo
 	ref, err := s.deps.InsertSandboxInstance(ctx, in, actorUserID)
 	if err != nil {
 		return SandboxInstanceRef{}, fmt.Errorf("insert sandbox instance: %w", err)
+	}
+	// The adapter may resolve a configured Docker image onto an image-capable
+	// workspace node. Carry that exact resolved routing into the immutable job
+	// payload; never re-select an image after the instance row exists.
+	if ref.Template != "" {
+		in.Template = ref.Template
+	}
+	if ref.DockerImage != "" {
+		in.DockerImage = ref.DockerImage
 	}
 	compensate := func(cause error) (SandboxInstanceRef, error) {
 		if cleanupErr := s.deps.ForceDeleteSandboxInstance(
@@ -245,6 +262,13 @@ func sandboxLifecyclePayload(ref SandboxInstanceRef, runtime json.RawMessage) (j
 		"local_ref":   ref.LocalRef,
 		"template":    ref.Template,
 	}
+	dockerImage, err := sandboxLifecycleDockerImage(ref)
+	if err != nil {
+		return nil, err
+	}
+	if dockerImage != "" {
+		payload["docker_image"] = dockerImage
+	}
 	if len(ref.EndpointInfo) > 0 && string(ref.EndpointInfo) != "null" {
 		var endpoint any
 		if err := json.Unmarshal(ref.EndpointInfo, &endpoint); err != nil {
@@ -262,14 +286,33 @@ func sandboxLifecyclePayload(ref SandboxInstanceRef, runtime json.RawMessage) (j
 	return json.Marshal(payload)
 }
 
-// sandboxCreatePayload builds the canonical sandboxd create job payload shared
-// by the frontend CreateSandboxInstance handler and env-dispatch provisioning:
-// template, limits, runtime, runtime_env (when present), metadata, and
-// instance_id. instance_id lets the in-sandbox daemon register its runtime with
-// sandbox_instance_id so env-dispatch can discover the online runtime by
-// (workspace, daemon_id, sandbox_instance_id) instead of binding to a
-// pre-created row. metadata mirrors the instance's persisted metadata so
-// frontend and env-dispatch create jobs carry the same canonical shape.
+func sandboxLifecycleDockerImage(ref SandboxInstanceRef) (string, error) {
+	image := strings.TrimSpace(ref.DockerImage)
+	if template := strings.TrimSpace(ref.Template); strings.HasPrefix(template, "docker:") {
+		templateImage := strings.TrimSpace(strings.TrimPrefix(template, "docker:"))
+		if templateImage == "" {
+			return "", fmt.Errorf("docker sandbox template has no image")
+		}
+		if image != "" && image != templateImage {
+			return "", fmt.Errorf("docker sandbox image conflicts with template")
+		}
+		image = templateImage
+	}
+	if image == "" && len(ref.RuntimeMetadata) > 0 && string(ref.RuntimeMetadata) != "null" {
+		var metadata map[string]any
+		if err := json.Unmarshal(ref.RuntimeMetadata, &metadata); err != nil {
+			return "", err
+		}
+		if mode, _ := metadata["creation_mode"].(string); strings.TrimSpace(mode) == "docker_container" {
+			image, _ = metadata["docker_image"].(string)
+			image = strings.TrimSpace(image)
+		}
+	}
+	if strings.ContainsAny(image, "\r\n") {
+		return "", fmt.Errorf("docker sandbox image is invalid")
+	}
+	return image, nil
+}
 func sandboxCreatePayload(in CreateSandboxInstanceInput, instanceID string, metadata json.RawMessage) (json.RawMessage, error) {
 	payload := map[string]any{
 		"template":    in.Template,
@@ -280,6 +323,9 @@ func sandboxCreatePayload(in CreateSandboxInstanceInput, instanceID string, meta
 	}
 	if len(in.RuntimeEnv) > 0 {
 		payload["runtime_env"] = in.RuntimeEnv
+	}
+	if image := strings.TrimSpace(in.DockerImage); image != "" {
+		payload["docker_image"] = image
 	}
 	return json.Marshal(payload)
 }

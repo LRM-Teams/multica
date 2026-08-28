@@ -1626,7 +1626,7 @@ func TestFinishResidentMessageInputReleasesFailedTurnAndClearsOutstandingToolCal
 	}
 	completed := make(chan error, 1)
 
-	go pool.finishResidentMessageInput(slot, done, activity, nil, 1, func(err error, _ uint64, _ *agent.ResidentTurnCapture) {
+	go pool.finishResidentMessageInput(slot, done, residentTurnDrains{activityDone: activity}, 1, func(err error, _ uint64, _ *agent.ResidentTurnCapture) {
 		completed <- err
 	})
 	done <- errors.New("provider exited")

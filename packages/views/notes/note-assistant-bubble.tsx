@@ -43,6 +43,7 @@ import {
   NotePeriodBriefCompose,
   type NotePeriodBriefResolved,
 } from "./note-period-brief-compose";
+import { NotePeriodBriefIntentConfirm } from "./note-period-brief-intent-confirm";
 import { NoteSelectionQuotePreview } from "./note-selection-quote-preview";
 import { NotesAssistantSetupCard } from "./notes-assistant-setup-card";
 
@@ -127,12 +128,15 @@ export function NoteAssistantBubble({
   const [collectorConfigSlot, setCollectorConfigSlot] =
     React.useState<PeriodBriefCollectorSlot | null>(null);
   const [composerFocusToken, setComposerFocusToken] = React.useState(0);
+  const [composerResetToken, setComposerResetToken] = React.useState(0);
   const [pendingSend, setPendingSend] = React.useState<{ nonce: number; text: string } | null>(null);
   const seedNonceRef = React.useRef(0);
   const [periodBriefOpen, setPeriodBriefOpen] = React.useState(false);
   const [periodBriefSubmitting, setPeriodBriefSubmitting] = React.useState(false);
+  const [periodBriefConfirmText, setPeriodBriefConfirmText] = React.useState<string | null>(null);
   const [highlightsOpen, setHighlightsOpen] = React.useState(false);
   const periodBriefResolvedRef = React.useRef<NotePeriodBriefResolved | null>(null);
+  const periodBriefBypassRef = React.useRef<string | null>(null);
   const composerLocked =
     periodBriefRunLocksComposer(activePeriodBrief?.run?.status) || periodBriefSubmitting;
   const isRunning = chatTaskRunning || composerLocked;
@@ -285,6 +289,7 @@ export function NoteAssistantBubble({
       setPendingSend(null);
       setPeriodBriefOpen(false);
       setPeriodBriefSubmitting(false);
+      setPeriodBriefConfirmText(null);
       setHighlightsOpen(false);
     }
   }, [openPageId, pageId]);
@@ -361,19 +366,53 @@ export function NoteAssistantBubble({
   }, [pageId, queryClient, setNoteBubbleActiveSession, t, wsId]);
 
   const interceptPeriodBriefCompose = React.useCallback((text: string) => {
+    if (periodBriefBypassRef.current !== null) {
+      const bypass = periodBriefBypassRef.current;
+      periodBriefBypassRef.current = null;
+      if (text === bypass) {
+        setPeriodBriefConfirmText(null);
+        return false;
+      }
+    }
     if (highlightsOpen) {
       if (looksLikePeriodBriefRequest(text)) {
         setHighlightsOpen(false);
-        setPeriodBriefOpen(true);
+        setPeriodBriefOpen(false);
+        setPeriodBriefConfirmText(text);
         return true;
       }
       return true;
     }
-    if (periodBriefOpen || composerLocked) return false;
-    if (!looksLikePeriodBriefRequest(text)) return false;
-    setPeriodBriefOpen(true);
+    if (periodBriefOpen || composerLocked) {
+      setPeriodBriefConfirmText(null);
+      return false;
+    }
+    if (!looksLikePeriodBriefRequest(text)) {
+      setPeriodBriefConfirmText(null);
+      return false;
+    }
+    setPeriodBriefConfirmText(text);
     return true;
   }, [composerLocked, highlightsOpen, periodBriefOpen]);
+
+  const acceptPeriodBriefIntent = React.useCallback(() => {
+    setPeriodBriefConfirmText(null);
+    setHighlightsOpen(false);
+    setPeriodBriefOpen(true);
+  }, []);
+
+  const declinePeriodBriefIntent = React.useCallback(() => {
+    const text = periodBriefConfirmText;
+    setPeriodBriefConfirmText(null);
+    if (!text) return;
+    periodBriefBypassRef.current = text;
+    seedNonceRef.current += 1;
+    setComposerResetToken((n) => n + 1);
+    setPendingSend({
+      nonce: seedNonceRef.current,
+      text,
+    });
+  }, [periodBriefConfirmText]);
 
   const handleHighlightsSend = React.useCallback((text: string) => {
     seedNonceRef.current += 1;
@@ -390,6 +429,7 @@ export function NoteAssistantBubble({
       if (!isOpen) toggleNoteBubble(pageId);
       if (!composerLocked) {
         setHighlightsOpen(false);
+        setPeriodBriefConfirmText(null);
         setPeriodBriefOpen(true);
       }
       return;
@@ -398,6 +438,7 @@ export function NoteAssistantBubble({
       if (!isOpen) toggleNoteBubble(pageId);
       if (!composerLocked) {
         setPeriodBriefOpen(false);
+        setPeriodBriefConfirmText(null);
         setHighlightsOpen(true);
       }
       return;
@@ -436,10 +477,20 @@ export function NoteAssistantBubble({
         lockPreferredAgent
         layout={layout}
         composerFocusToken={composerFocusToken}
+        composerResetToken={composerResetToken}
         seedSend={periodBriefOpen || highlightsOpen ? null : pendingSend}
         onSeedSendConsumed={handleSeedSendConsumed}
         transformOutgoing={wrapOutgoing}
         onSendAccepted={clearSelectionQuote}
+        transcriptAccessory={
+          periodBriefConfirmText ? (
+            <NotePeriodBriefIntentConfirm
+              userText={periodBriefConfirmText}
+              onYes={acceptPeriodBriefIntent}
+              onNo={declinePeriodBriefIntent}
+            />
+          ) : null
+        }
         composerPrefix={
           excerptsForPage.length > 0 ? (
             <NoteSelectionQuotePreview

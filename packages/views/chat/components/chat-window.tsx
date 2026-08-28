@@ -111,6 +111,11 @@ export interface ChatWindowProps {
    */
   composerFocusToken?: number;
   /**
+   * Bump to clear the composer draft (e.g. after declining a 写汇报
+   * confirm and seeding the original text as a normal send).
+   */
+  composerResetToken?: number;
+  /**
    * Send this text once the Notes bubble is open and an agent is ready
    * (e.g. after the user confirms the Highlights compose card). Cleared
    * via onSeedSendConsumed. `nonce` is unique per click so React Strict
@@ -123,6 +128,12 @@ export interface ChatWindowProps {
    * when messages exist, above the composer (e.g. Period Brief chips).
    */
   composerAccessory?: React.ReactNode;
+  /**
+   * Local conversation turn after persisted messages (e.g. 写汇报
+   * confirm). Treated as "has messages" so an empty thread still shows
+   * the list instead of the empty state.
+   */
+  transcriptAccessory?: React.ReactNode;
   /** Override the composer placeholder when the accessory is driving send. */
   composerPlaceholder?: string;
   /** Allow sending an empty composer (Period Brief chip-only start). */
@@ -283,9 +294,11 @@ export function ChatWindow({
   lockPreferredAgent = false,
   headerAccessory,
   composerFocusToken,
+  composerResetToken,
   seedSend,
   onSeedSendConsumed,
   composerAccessory,
+  transcriptAccessory,
   composerPlaceholder,
   allowEmptySend = false,
   onSendOverride,
@@ -967,7 +980,7 @@ export function ChatWindow({
   const sidebarPresence = noteAssistantSidebarPresence(isOpen, sidebarStayMounted);
   const sidebarSlideOpen = sidebarPresence === "open" && sidebarEntered;
 
-  const hasMessages = messages.length > 0 || turnOutstanding;
+  const hasMessages = messages.length > 0 || turnOutstanding || Boolean(transcriptAccessory);
   const mainPane = chatWindowMainPane(showSkeleton, hasMessages, Boolean(composerAccessory));
 
   const isVisible = isOpen && (isFullscreen || isSidebar || isExpanded || boundsReady);
@@ -1192,6 +1205,7 @@ export function ChatWindow({
           isDmBubble={isDmBubble}
           hoverMessageActions={isNoteBubble}
           noteInsertPageId={isNoteBubble ? contextNotePageId : undefined}
+          trailingSlot={transcriptAccessory}
         />
       ) : mainPane === "spacer" ? (
         <div className={chatWindowMainPaneClassName(mainPane)} aria-hidden />
@@ -1236,6 +1250,7 @@ export function ChatWindow({
         sessionId={activeSessionId}
         safeArea={isFullscreen}
         focusToken={composerFocusToken}
+        resetToken={composerResetToken}
         placeholder={composerPlaceholder}
         allowEmptySend={allowEmptySend}
         composerPrefix={composerPrefix}

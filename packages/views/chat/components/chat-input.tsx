@@ -56,6 +56,8 @@ interface ChatInputProps {
   safeArea?: boolean;
   /** Bump to focus the composer editor. */
   focusToken?: number;
+  /** Bump to clear the composer draft (e.g. after a programmatic seed send). */
+  resetToken?: number;
   /** Replace the default composer placeholder. */
   placeholder?: string;
   /** Allow sending when the composer is empty. */
@@ -80,6 +82,7 @@ export function ChatInput({
   sessionId,
   safeArea = false,
   focusToken,
+  resetToken,
   placeholder: placeholderOverride,
   allowEmptySend = false,
   composerPrefix,
@@ -160,6 +163,17 @@ export function ChatInput({
     });
     return () => window.cancelAnimationFrame(id);
   }, [focusToken]);
+
+  const lastResetTokenRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (resetToken == null || resetToken === 0) return;
+    if (lastResetTokenRef.current === resetToken) return;
+    lastResetTokenRef.current = resetToken;
+    editorRef.current?.clearContent();
+    clearInputDraft(draftKey);
+    uploadMapRef.current.clear();
+    setIsEmpty(true);
+  }, [clearInputDraft, draftKey, resetToken]);
 
   useEffect(() => {
     if (!restoreDraftRequest) return;

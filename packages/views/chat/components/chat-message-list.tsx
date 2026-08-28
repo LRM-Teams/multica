@@ -81,6 +81,7 @@ interface ChatListChrome {
   pendingTask: ChatPendingTask | null | undefined;
   availability: AgentPresence | undefined;
   loadingOlderLabel: string;
+  trailingSlot: ReactNode;
 }
 
 const ChatListChromeContext = createContext<ChatListChrome | null>(null);
@@ -101,8 +102,10 @@ function ChatMessageListHeader() {
 function ChatMessageListFooter() {
   const chrome = use(ChatListChromeContext);
   if (!chrome) return null;
+  if (!chrome.trailingSlot && !(chrome.showStatusPill && chrome.pendingTask)) return null;
   return (
     <div className="mx-auto w-full max-w-4xl px-5 pb-4 space-y-4">
+      {chrome.trailingSlot}
       {chrome.showStatusPill && chrome.pendingTask && (
         <TaskStatusPill
           pendingTask={chrome.pendingTask}
@@ -147,6 +150,8 @@ interface ChatMessageListProps {
   hoverMessageActions?: boolean;
   /** Notes page id for hover insert-below / insert-child. */
   noteInsertPageId?: string | null;
+  /** Local turn rendered after persisted messages (e.g. 写汇报 confirm). */
+  trailingSlot?: ReactNode;
 }
 
 export function ChatMessageList({
@@ -161,6 +166,7 @@ export function ChatMessageList({
   isDmBubble = false,
   hoverMessageActions = false,
   noteInsertPageId,
+  trailingSlot,
 }: ChatMessageListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const lastTailIdRef = useRef<string | undefined>(undefined);
@@ -247,6 +253,11 @@ export function ChatMessageList({
     }
   }, [totalCount, showStatusPill, updateScrollPosition, scrollToLatest]);
 
+  const hasTrailingSlot = Boolean(trailingSlot);
+  useEffect(() => {
+    if (hasTrailingSlot) scrollToLatest("smooth");
+  }, [hasTrailingSlot, scrollToLatest]);
+
   const handleMessageBodyLayoutChange = useCallback(() => {
     const shouldKeepBottom = isNearBottom;
     window.requestAnimationFrame(() => {
@@ -266,6 +277,7 @@ export function ChatMessageList({
       pendingTask,
       availability,
       loadingOlderLabel: t(($) => $.message_list.loading_older),
+      trailingSlot: trailingSlot ?? null,
     }),
     [
       isFetchingOlderMessages,
@@ -273,6 +285,7 @@ export function ChatMessageList({
       pendingTask,
       availability,
       t,
+      trailingSlot,
     ],
   );
 

@@ -48,6 +48,7 @@ import {
 import { NoteFormatDefaultsDialog } from "./note-format-defaults-dialog";
 import { NoteShareDialog } from "./note-share-dialog";
 import { NoteShareSummary } from "./note-share-summary";
+import { noteCanDropOnTarget, type NoteDropPosition } from "./note-drag";
 import { NoteTrashDock, noteCanDropOnTrash } from "./note-trash-dock";
 import { NoteTreeIcon } from "./note-tree-icon";
 import { NoteTrashView } from "./note-trash-view";
@@ -55,7 +56,6 @@ import { NoteWritebackReview } from "./note-writeback-review";
 import { buildNoteShareNames, memberLabel, workspaceLabel } from "./share-labels";
 
 type NoteTreeNode = NotePage & { children: NoteTreeNode[] };
-type NoteDropPosition = "before" | "after" | "inside";
 type NoteDropTarget = { id: string; position: NoteDropPosition };
 
 type NoteExpansionOverrides = { selectionId: string | null; expanded: Set<string>; collapsed: Set<string> };
@@ -165,19 +165,6 @@ function noteSortKeyBetween(previous?: string, next?: string) {
   if (previous) return `${previous}~${nowKey}`;
   if (next) return `!${next}:${nowKey}`;
   return nowKey.padStart(20, "0");
-}
-
-function isNoteDescendant(pages: NotePage[], ancestorId: string, targetId: string) {
-  const byId = new Map(pages.map((page) => [page.id, page]));
-  const seen = new Set<string>();
-  let current = byId.get(targetId);
-  while (current?.parent_id) {
-    if (current.parent_id === ancestorId) return true;
-    if (seen.has(current.parent_id)) return false;
-    seen.add(current.parent_id);
-    current = byId.get(current.parent_id);
-  }
-  return false;
 }
 
 function findNoteDropPosition(event: DragEvent<HTMLElement>): NoteDropPosition {
@@ -888,11 +875,7 @@ export function NotesPage({ pageId }: { pageId?: string }) {
   };
 
   const noteDragAllowed = (draggedId: string, target: NotePage, position: NoteDropPosition) => {
-    const dragged = findNote(list.pages, draggedId);
-    if (!dragged?.can_manage_shares || !target.can_manage_shares || dragged.id === target.id) return false;
-    if (position === "inside" && isNoteDescendant(list.pages, dragged.id, target.id)) return false;
-    if (position !== "inside" && target.parent_id && isNoteDescendant(list.pages, dragged.id, target.parent_id)) return false;
-    return true;
+    return noteCanDropOnTarget(findNote(list.pages, draggedId), target, position, list.pages);
   };
 
   const handleNoteDragStart = (id: string) => {

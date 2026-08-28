@@ -618,14 +618,14 @@ func (h *Handler) MoveNotePage(w http.ResponseWriter, r *http.Request) {
 	}
 	parentID := pgtype.UUID{}
 	pageWorkspaceID := page.WorkspaceID
+	shareWithOwner := pgtype.UUID{}
 	if req.ParentID != nil && strings.TrimSpace(*req.ParentID) != "" {
 		parent, parentOwner, ok := h.loadAccessibleNote(w, r, *req.ParentID, workspaceID, userID)
 		if !ok {
 			return
 		}
 		if !parentOwner {
-			writeError(w, http.StatusForbidden, "only the owner can move notes under this parent")
-			return
+			shareWithOwner = parent.OwnerUserID
 		}
 		if uuidToString(parent.ID) == uuidToString(page.ID) {
 			writeError(w, http.StatusBadRequest, "cannot move a note under itself")
@@ -677,12 +677,43 @@ WHERE id = $1`, page.ID, userID, pageWorkspaceID, parentID, normalizeNoteSortKey
 		writeError(w, http.StatusInternalServerError, "failed to move note page")
 		return
 	}
+	if shareWithOwner.Valid {
+		added, err := h.grantNotePageUserShare(r.Context(), updated.ID, shareWithOwner, userID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to move note page")
+			return
+		}
+		if added {
+			h.publishToUsers(
+				protocol.EventNotesShareUnread,
+				uuidToString(updated.WorkspaceID),
+				"member",
+				uuidToString(userID),
+				[]string{uuidToString(shareWithOwner)},
+				map[string]any{"page_id": uuidToString(updated.ID)},
+			)
+		}
+	}
 	shares, err := h.noteShareUserIDs(r.Context(), updated.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to move note page")
 		return
 	}
 	writeJSON(w, http.StatusOK, notePageToResponse(updated, userID, shares, nil))
+}
+
+func (h *Handler) grantNotePageUserShare(ctx context.Context, pageID, targetUserID, createdBy pgtype.UUID) (bool, error) {
+	result, err := h.DB.Exec(ctx, `
+INSERT INTO note_page_share (page_id, user_id, created_by)
+VALUES ($1, $2, $3)
+ON CONFLICT (page_id, user_id) DO NOTHING`, pageID, targetUserID, createdBy)
+	if err != nil {
+		return false, err
+	}
+	if _, err := h.DB.Exec(ctx, `DELETE FROM note_page_hidden WHERE page_id = $1 AND user_id = $2`, pageID, targetUserID); err != nil {
+		return false, err
+	}
+	return result.RowsAffected() > 0, nil
 }
 
 func (h *Handler) DeleteNotePage(w http.ResponseWriter, r *http.Request) {

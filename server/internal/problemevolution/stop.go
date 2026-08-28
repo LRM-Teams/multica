@@ -32,10 +32,12 @@ const (
 // StopConfig is the run-scoped stop policy.
 type StopConfig struct {
 	MaxGenerations      int     `json:"max_generations"`
+	MaxIterations       int     `json:"max_iterations"`
 	MaxCandidates       int     `json:"max_candidates"`
 	MaxModelCalls       int     `json:"max_model_calls"`
 	MaxCostUSD          float64 `json:"max_cost_usd"`
 	TargetScore         float64 `json:"target_score"`
+	TargetPassRate      float64 `json:"target_pass_rate"`
 	NoImprovementRounds int     `json:"no_improvement_rounds"`
 	EliteCount          int     `json:"elite_count"`
 }
@@ -54,12 +56,25 @@ func DefaultStopConfig() StopConfig {
 	}
 }
 
+// DefaultPersistentStopConfig is the AHE-style iteration policy.
+func DefaultPersistentStopConfig() StopConfig {
+	return StopConfig{
+		MaxIterations:       10,
+		MaxModelCalls:       100,
+		TargetPassRate:      0.9,
+		NoImprovementRounds: 3,
+	}
+}
+
 // WithDefaults fills unset fields, so a partially specified stop config from
 // the API still has every bound the run is enforced against.
 func (c StopConfig) WithDefaults() StopConfig {
 	defaults := DefaultStopConfig()
 	if c.MaxGenerations <= 0 {
 		c.MaxGenerations = defaults.MaxGenerations
+	}
+	if c.MaxIterations < 0 {
+		c.MaxIterations = 0
 	}
 	if c.MaxCandidates <= 0 {
 		c.MaxCandidates = defaults.MaxCandidates
@@ -71,11 +86,33 @@ func (c StopConfig) WithDefaults() StopConfig {
 	if c.TargetScore <= 0 || c.TargetScore > 1 {
 		c.TargetScore = defaults.TargetScore
 	}
+	if c.TargetPassRate < 0 || c.TargetPassRate > 1 {
+		c.TargetPassRate = 0
+	}
 	if c.NoImprovementRounds <= 0 {
 		c.NoImprovementRounds = defaults.NoImprovementRounds
 	}
 	if c.EliteCount <= 0 {
 		c.EliteCount = defaults.EliteCount
+	}
+	return c
+}
+
+// WithPersistentDefaults keeps candidate-count and best-score bounds out of
+// the AHE policy: its unit is a task-set iteration, not a candidate batch.
+func (c StopConfig) WithPersistentDefaults() StopConfig {
+	defaults := DefaultPersistentStopConfig()
+	if c.MaxIterations <= 0 {
+		c.MaxIterations = defaults.MaxIterations
+	}
+	if c.MaxModelCalls <= 0 {
+		c.MaxModelCalls = defaults.MaxModelCalls
+	}
+	if c.TargetPassRate <= 0 || c.TargetPassRate > 1 {
+		c.TargetPassRate = defaults.TargetPassRate
+	}
+	if c.NoImprovementRounds <= 0 {
+		c.NoImprovementRounds = defaults.NoImprovementRounds
 	}
 	return c
 }
@@ -87,6 +124,8 @@ type RunProgress struct {
 	ModelCalls        int
 	CostUSD           float64
 	BestScore         float64
+	PassRate          float64
+	Iterations        int
 	RoundsWithoutGain int
 }
 
@@ -110,6 +149,12 @@ func ShouldStop(config StopConfig, progress RunProgress) (bool, string) {
 	}
 	if config.MaxGenerations > 0 && progress.Generation >= config.MaxGenerations {
 		return true, StopReasonBudgetExhausted
+	}
+	if config.MaxIterations > 0 && progress.Iterations >= config.MaxIterations {
+		return true, StopReasonBudgetExhausted
+	}
+	if config.TargetPassRate > 0 && progress.PassRate >= config.TargetPassRate {
+		return true, StopReasonTargetReached
 	}
 	if config.NoImprovementRounds > 0 && progress.RoundsWithoutGain >= config.NoImprovementRounds {
 		return true, StopReasonNoImprovement

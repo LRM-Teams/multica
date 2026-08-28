@@ -33,28 +33,47 @@ export function ProblemEvolutionSolvePage({
   const [composing, setComposing] = useState(false);
   const [title, setTitle] = useState("");
   const [statement, setStatement] = useState("");
+  const [mode, setMode] = useState("solution");
+  const [datasetRef, setDatasetRef] = useState("");
+  const [taskNames, setTaskNames] = useState("");
+  const [holdoutTaskNames, setHoldoutTaskNames] = useState("");
   const [maxModelCalls, setMaxModelCalls] = useState("100");
   const [maxCostUSD, setMaxCostUSD] = useState("");
 
   const runsQuery = useQuery(problemEvolutionRunListOptions(workspaceId ?? ""));
 
   const createRun = useMutation({
-    mutationFn: () =>
-      api.createProblemEvolutionRun({
-        mode: "solution",
+    mutationFn: async () => {
+      let taskSetID: string | undefined;
+      if (mode === "task_harness_persistent") {
+        const taskSet = (await api.createProblemEvolutionTaskSet({
+          dataset_ref: datasetRef.trim(),
+          task_names: splitTaskNames(taskNames),
+          holdout_task_names: splitTaskNames(holdoutTaskNames),
+        })) as { id: string };
+        taskSetID = taskSet.id;
+      }
+      return api.createProblemEvolutionRun({
+        mode,
         title: title.trim(),
         problem_spec: { statement: statement.trim(), artifact_type: "markdown" },
         artifact_type: "markdown",
+        task_set_id: taskSetID,
         stop_config: {
           max_model_calls: Math.max(1, Number(maxModelCalls) || 100),
           // Empty means unlimited; the server stores that as zero.
           max_cost_usd: Math.max(0, Number(maxCostUSD) || 0),
         },
-      }),
+      });
+    },
     onSuccess: (run) => {
       setComposing(false);
       setTitle("");
       setStatement("");
+      setMode("solution");
+      setDatasetRef("");
+      setTaskNames("");
+      setHoldoutTaskNames("");
       setMaxModelCalls("100");
       setMaxCostUSD("");
       if (workspaceId) {
@@ -89,6 +108,22 @@ export function ProblemEvolutionSolvePage({
         <section className="space-y-3 rounded-lg border p-4">
           <h2 className="text-sm font-medium">{t(($) => $.create.title)}</h2>
           <div className="space-y-2">
+            <label className="text-muted-foreground text-xs" htmlFor="pe-mode">
+              {t(($) => $.create.mode)}
+            </label>
+            <select
+              id="pe-mode"
+              className="border-input bg-background h-9 w-full rounded-md border px-3 text-sm"
+              value={mode}
+              onChange={(event) => setMode(event.target.value)}
+            >
+              <option value="solution">{t(($) => $.create.modeSolution)}</option>
+              <option value="task_harness_persistent">
+                {t(($) => $.create.modePersistent)}
+              </option>
+            </select>
+          </div>
+          <div className="space-y-2">
             <label className="text-muted-foreground text-xs" htmlFor="pe-title">
               {t(($) => $.create.runTitle)}
             </label>
@@ -99,6 +134,43 @@ export function ProblemEvolutionSolvePage({
               onChange={(event: ChangeEvent<HTMLInputElement>) => setTitle(event.target.value)}
             />
           </div>
+          {mode === "task_harness_persistent" ? (
+            <>
+              <div className="space-y-2">
+                <label className="text-muted-foreground text-xs" htmlFor="pe-dataset-ref">
+                  {t(($) => $.create.datasetRef)}
+                </label>
+                <Input
+                  id="pe-dataset-ref"
+                  value={datasetRef}
+                  placeholder={t(($) => $.create.datasetRefPlaceholder)}
+                  onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                    setDatasetRef(event.target.value)
+                  }
+                />
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Textarea
+                  aria-label={t(($) => $.create.taskNames)}
+                  rows={4}
+                  value={taskNames}
+                  placeholder={t(($) => $.create.taskNamesPlaceholder)}
+                  onChange={(event: ChangeEvent<HTMLTextAreaElement>) =>
+                    setTaskNames(event.target.value)
+                  }
+                />
+                <Textarea
+                  aria-label={t(($) => $.create.holdoutTaskNames)}
+                  rows={4}
+                  value={holdoutTaskNames}
+                  placeholder={t(($) => $.create.holdoutTaskNamesPlaceholder)}
+                  onChange={(event: ChangeEvent<HTMLTextAreaElement>) =>
+                    setHoldoutTaskNames(event.target.value)
+                  }
+                />
+              </div>
+            </>
+          ) : null}
           <div className="space-y-2">
             <label className="text-muted-foreground text-xs" htmlFor="pe-statement">
               {t(($) => $.create.statement)}
@@ -155,7 +227,14 @@ export function ProblemEvolutionSolvePage({
               {t(($) => $.create.cancel)}
             </Button>
             <Button
-              disabled={statement.trim() === "" || createRun.isPending}
+              disabled={
+                statement.trim() === "" ||
+                createRun.isPending ||
+                (mode === "task_harness_persistent" &&
+                  (datasetRef.trim() === "" ||
+                    splitTaskNames(taskNames).length === 0 ||
+                    splitTaskNames(holdoutTaskNames).length === 0))
+              }
               onClick={() => createRun.mutate()}
             >
               {createRun.isPending ? (
@@ -213,6 +292,13 @@ export function ProblemEvolutionStatusBadge({ run }: { run: ProblemEvolutionRun 
         ? "default"
         : "secondary";
   return <Badge variant={variant}>{label}</Badge>;
+}
+
+function splitTaskNames(value: string): string[] {
+  return value
+    .split(/[\n,]/)
+    .map((name) => name.trim())
+    .filter(Boolean);
 }
 
 type StatusTranslator = ReturnType<typeof useT<"problem-evolution">>["t"];

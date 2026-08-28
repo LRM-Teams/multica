@@ -21,6 +21,7 @@ import (
 const (
 	ModeSolution              = "solution"
 	ModeTaskHarnessRewardOnly = "task_harness_reward_only"
+	ModeTaskHarnessPersistent = "task_harness_persistent"
 )
 
 // Evaluator kinds. Only builtin evaluators are accepted in the first phase:

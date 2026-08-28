@@ -16,6 +16,24 @@ const (
 	InputFileName            = "input.json"
 )
 
+// TaskSetInput is the non-secret task-set reference passed to an external
+// evolver. The actual task and verifier content stays on the execution side.
+type TaskSetInput struct {
+	Source           string   `json:"source"`
+	DatasetRef       string   `json:"dataset_ref"`
+	DatasetRevision  string   `json:"dataset_revision"`
+	TaskNames        []string `json:"task_names"`
+	HoldoutTaskNames []string `json:"holdout_task_names"`
+	RolloutsPerTask  int      `json:"rollouts_per_task"`
+	MaxParallel      int      `json:"max_parallel"`
+}
+
+type PersistentHarnessInput struct {
+	Iteration       int    `json:"iteration"`
+	InputVersionRef string `json:"input_version_ref,omitempty"`
+	ContentHash     string `json:"content_hash,omitempty"`
+}
+
 // Artifact size ceilings. A candidate exceeding them is marked
 // artifact_too_large rather than silently truncated.
 const (
@@ -96,15 +114,18 @@ type OutputConfig struct {
 
 // EvolverInput is the input.json contract (spec §19.3.1).
 type EvolverInput struct {
-	SchemaVersion int            `json:"schema_version"`
-	RunID         string         `json:"run_id"`
-	Mode          string         `json:"mode"`
-	Generation    int            `json:"generation"`
-	Problem       ProblemSpec    `json:"problem"`
-	Evaluator     EvaluatorRef   `json:"evaluator"`
-	Budget        BudgetConfig   `json:"budget"`
-	Model         ModelConfig    `json:"model"`
-	Feedback      FeedbackBundle `json:"feedback"`
+	SchemaVersion int                     `json:"schema_version"`
+	RunID         string                  `json:"run_id"`
+	Mode          string                  `json:"mode"`
+	Generation    int                     `json:"generation"`
+	Iteration     int                     `json:"iteration,omitempty"`
+	Problem       ProblemSpec             `json:"problem"`
+	TaskSet       *TaskSetInput           `json:"task_set,omitempty"`
+	Harness       *PersistentHarnessInput `json:"harness,omitempty"`
+	Evaluator     EvaluatorRef            `json:"evaluator"`
+	Budget        BudgetConfig            `json:"budget"`
+	Model         ModelConfig             `json:"model"`
+	Feedback      FeedbackBundle          `json:"feedback"`
 	// Seeds carries the search seed only. The blind-validation seed is
 	// deliberately withheld: an evolver that knew it could tune to the final
 	// check instead of generalising.
@@ -131,7 +152,7 @@ func (i EvolverInput) Validate() error {
 	if strings.TrimSpace(i.RunID) == "" {
 		return fmt.Errorf("run_id is required")
 	}
-	if i.Mode != ModeSolution && i.Mode != ModeTaskHarnessRewardOnly {
+	if i.Mode != ModeSolution && i.Mode != ModeTaskHarnessRewardOnly && i.Mode != ModeTaskHarnessPersistent {
 		return fmt.Errorf("unsupported mode %q", i.Mode)
 	}
 	if strings.TrimSpace(i.Problem.Statement) == "" {
@@ -142,6 +163,20 @@ func (i EvolverInput) Validate() error {
 	}
 	if i.Budget.MaxModelCalls <= 0 {
 		return fmt.Errorf("budget max_model_calls must be positive")
+	}
+	if i.Mode == ModeTaskHarnessPersistent {
+		if i.TaskSet == nil || strings.TrimSpace(i.TaskSet.DatasetRef) == "" {
+			return fmt.Errorf("persistent harness mode requires a task_set dataset_ref")
+		}
+		if len(i.TaskSet.TaskNames) == 0 {
+			return fmt.Errorf("persistent harness mode requires task_set task_names")
+		}
+		if len(i.TaskSet.HoldoutTaskNames) == 0 {
+			return fmt.Errorf("persistent harness mode requires task_set holdout_task_names")
+		}
+		if i.Iteration < 0 {
+			return fmt.Errorf("iteration cannot be negative")
+		}
 	}
 	if i.Budget.BatchTimeoutSeconds <= 0 {
 		return fmt.Errorf("budget batch_timeout_seconds must be positive")

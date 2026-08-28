@@ -804,26 +804,29 @@ type AutopilotRetirementExport struct {
 }
 
 type Channel struct {
-	ID                      pgtype.UUID        `json:"id"`
-	WorkspaceID             pgtype.UUID        `json:"workspace_id"`
-	Name                    string             `json:"name"`
-	Description             pgtype.Text        `json:"description"`
-	LarkChatID              pgtype.Text        `json:"lark_chat_id"`
-	CreatedBy               pgtype.UUID        `json:"created_by"`
-	CreatedAt               pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt               pgtype.Timestamptz `json:"updated_at"`
-	ProjectID               pgtype.UUID        `json:"project_id"`
-	Kind                    string             `json:"kind"`
-	ArchivedAt              pgtype.Timestamptz `json:"archived_at"`
-	ArchivedBy              pgtype.UUID        `json:"archived_by"`
-	SystemKey               pgtype.Text        `json:"system_key"`
-	AvatarUrl               pgtype.Text        `json:"avatar_url"`
-	Temporary               bool               `json:"temporary"`
-	ParentChannelID         pgtype.UUID        `json:"parent_channel_id"`
-	CreatedByAgentID        pgtype.UUID        `json:"created_by_agent_id"`
-	CoordinationPurpose     pgtype.Text        `json:"coordination_purpose"`
-	ClientRequestID         pgtype.Text        `json:"client_request_id"`
-	GraphMemoryModeOverride string             `json:"graph_memory_mode_override"`
+	ID                                pgtype.UUID        `json:"id"`
+	WorkspaceID                       pgtype.UUID        `json:"workspace_id"`
+	Name                              string             `json:"name"`
+	Description                       pgtype.Text        `json:"description"`
+	LarkChatID                        pgtype.Text        `json:"lark_chat_id"`
+	CreatedBy                         pgtype.UUID        `json:"created_by"`
+	CreatedAt                         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt                         pgtype.Timestamptz `json:"updated_at"`
+	ProjectID                         pgtype.UUID        `json:"project_id"`
+	Kind                              string             `json:"kind"`
+	ArchivedAt                        pgtype.Timestamptz `json:"archived_at"`
+	ArchivedBy                        pgtype.UUID        `json:"archived_by"`
+	SystemKey                         pgtype.Text        `json:"system_key"`
+	AvatarUrl                         pgtype.Text        `json:"avatar_url"`
+	Temporary                         bool               `json:"temporary"`
+	ParentChannelID                   pgtype.UUID        `json:"parent_channel_id"`
+	CreatedByAgentID                  pgtype.UUID        `json:"created_by_agent_id"`
+	CoordinationPurpose               pgtype.Text        `json:"coordination_purpose"`
+	ClientRequestID                   pgtype.Text        `json:"client_request_id"`
+	GraphMemoryModeOverride           string             `json:"graph_memory_mode_override"`
+	GraphMemoryAgentRuntimeIDOverride pgtype.UUID        `json:"graph_memory_agent_runtime_id_override"`
+	GraphMemoryAgentModelOverride     pgtype.Text        `json:"graph_memory_agent_model_override"`
+	GraphMemoryAgentThinkingOverride  pgtype.Text        `json:"graph_memory_agent_thinking_override"`
 }
 
 type ChannelAgentOnboarding struct {
@@ -3099,6 +3102,24 @@ type ProblemEvolutionCandidateEdge struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
+type ProblemEvolutionChangeRecord struct {
+	ID                     pgtype.UUID        `json:"id"`
+	RunID                  pgtype.UUID        `json:"run_id"`
+	IterationID            pgtype.UUID        `json:"iteration_id"`
+	HarnessVersionID       pgtype.UUID        `json:"harness_version_id"`
+	Component              string             `json:"component"`
+	FailureEvidenceRef     string             `json:"failure_evidence_ref"`
+	RootCause              string             `json:"root_cause"`
+	FixSummary             string             `json:"fix_summary"`
+	PredictedPassTaskNames []byte             `json:"predicted_pass_task_names"`
+	PredictedRiskTaskNames []byte             `json:"predicted_risk_task_names"`
+	ObservedFlips          []byte             `json:"observed_flips"`
+	Verdict                string             `json:"verdict"`
+	Action                 string             `json:"action"`
+	CreatedAt              pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt              pgtype.Timestamptz `json:"updated_at"`
+}
+
 type ProblemEvolutionEvaluation struct {
 	ID                   pgtype.UUID        `json:"id"`
 	RunID                pgtype.UUID        `json:"run_id"`
@@ -3165,6 +3186,42 @@ type ProblemEvolutionHarness struct {
 	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
 }
 
+type ProblemEvolutionHarnessRegistry struct {
+	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
+	HarnessVersionID pgtype.UUID        `json:"harness_version_id"`
+	ContentHash      string             `json:"content_hash"`
+	PromotedAt       pgtype.Timestamptz `json:"promoted_at"`
+}
+
+type ProblemEvolutionHarnessVersion struct {
+	ID              pgtype.UUID        `json:"id"`
+	RunID           pgtype.UUID        `json:"run_id"`
+	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
+	Iteration       int32              `json:"iteration"`
+	ParentVersionID pgtype.UUID        `json:"parent_version_id"`
+	Components      []byte             `json:"components"`
+	ContentHash     string             `json:"content_hash"`
+	RolledBack      bool               `json:"rolled_back"`
+	PromotedScope   string             `json:"promoted_scope"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ProblemEvolutionIteration struct {
+	ID              pgtype.UUID        `json:"id"`
+	RunID           pgtype.UUID        `json:"run_id"`
+	Iteration       int32              `json:"iteration"`
+	InputVersionID  pgtype.UUID        `json:"input_version_id"`
+	EvolveVersionID pgtype.UUID        `json:"evolve_version_id"`
+	Stage           string             `json:"stage"`
+	PassRate        float64            `json:"pass_rate"`
+	HoldoutPassRate float64            `json:"holdout_pass_rate"`
+	Cost            pgtype.Numeric     `json:"cost"`
+	Tokens          int64              `json:"tokens"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+}
+
 type ProblemEvolutionRun struct {
 	ID                   pgtype.UUID        `json:"id"`
 	WorkspaceID          pgtype.UUID        `json:"workspace_id"`
@@ -3211,6 +3268,7 @@ type ProblemEvolutionRun struct {
 	BlindScore           pgtype.Float8      `json:"blind_score"`
 	OverfitGap           pgtype.Float8      `json:"overfit_gap"`
 	ModelCallCount       int32              `json:"model_call_count"`
+	TaskSetID            pgtype.UUID        `json:"task_set_id"`
 }
 
 type ProblemEvolutionSecret struct {
@@ -3257,6 +3315,52 @@ type ProblemEvolutionSecretCapability struct {
 	RevokedAt   pgtype.Timestamptz `json:"revoked_at"`
 	IssuedTo    string             `json:"issued_to"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+type ProblemEvolutionTaskResult struct {
+	ID             pgtype.UUID        `json:"id"`
+	RunID          pgtype.UUID        `json:"run_id"`
+	IterationID    pgtype.UUID        `json:"iteration_id"`
+	TaskName       string             `json:"task_name"`
+	RolloutIndex   int32              `json:"rollout_index"`
+	Split          string             `json:"split"`
+	Reward         float64            `json:"reward"`
+	Verdict        string             `json:"verdict"`
+	TraceRef       string             `json:"trace_ref"`
+	TraceDigestRef string             `json:"trace_digest_ref"`
+	Tokens         int64              `json:"tokens"`
+	Cost           pgtype.Numeric     `json:"cost"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
+type ProblemEvolutionTaskSet struct {
+	ID               pgtype.UUID        `json:"id"`
+	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
+	Source           string             `json:"source"`
+	DatasetRef       string             `json:"dataset_ref"`
+	DatasetRevision  string             `json:"dataset_revision"`
+	TaskNames        []byte             `json:"task_names"`
+	HoldoutTaskNames []byte             `json:"holdout_task_names"`
+	RolloutsPerTask  int32              `json:"rollouts_per_task"`
+	MaxParallel      int32              `json:"max_parallel"`
+	CreatedBy        pgtype.UUID        `json:"created_by"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ProblemEvolutionUsage struct {
+	ID            pgtype.UUID        `json:"id"`
+	RunID         pgtype.UUID        `json:"run_id"`
+	WorkspaceID   pgtype.UUID        `json:"workspace_id"`
+	SourceEventID pgtype.UUID        `json:"source_event_id"`
+	Provider      string             `json:"provider"`
+	Model         string             `json:"model"`
+	ModelCalls    int32              `json:"model_calls"`
+	InputTokens   int64              `json:"input_tokens"`
+	OutputTokens  int64              `json:"output_tokens"`
+	Cost          pgtype.Numeric     `json:"cost"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
 }
 
 type Project struct {

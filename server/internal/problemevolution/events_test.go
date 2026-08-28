@@ -101,6 +101,52 @@ func TestValidatePayloadRejectsOutOfRangeScore(t *testing.T) {
 	}
 }
 
+func TestPersistentHarnessEventsRequireFalsifiableFields(t *testing.T) {
+	payload, err := json.Marshal(ChangeProposedPayload{
+		Iteration: 1, Component: "systemprompt.md", RootCause: "missing constraint",
+		FixSummary: "add constraint guidance", PredictedPassTaskNames: []string{"task-a"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := EvolverEvent{
+		SchemaVersion: SchemaVersion, ClientEventID: "persistent-change-1",
+		EventType: EventChangeProposed, Payload: payload,
+	}
+	if err := event.Validate(); err != nil {
+		t.Fatalf("envelope rejected: %v", err)
+	}
+	if err := event.ValidatePayload(); err != nil {
+		t.Fatalf("valid change proposal rejected: %v", err)
+	}
+	payload, _ = json.Marshal(ChangeProposedPayload{Iteration: 1, Component: "tools"})
+	event.Payload = payload
+	if err := event.ValidatePayload(); err == nil {
+		t.Fatal("change without root cause or predicted pass tasks was accepted")
+	}
+}
+
+func TestPersistentHarnessTaskResultRejectsHoldoutOutOfRange(t *testing.T) {
+	payload, _ := json.Marshal(TaskResultPayload{
+		Iteration: 1, TaskName: "task-a", RolloutIndex: 0,
+		Split: "holdout", Reward: 0.5, Verdict: "pass",
+	})
+	event := EvolverEvent{
+		SchemaVersion: SchemaVersion, ClientEventID: "persistent-result-1",
+		EventType: EventTaskResult, Payload: payload,
+	}
+	if err := event.ValidatePayload(); err != nil {
+		t.Fatalf("valid task result rejected: %v", err)
+	}
+	payload, _ = json.Marshal(TaskResultPayload{
+		Iteration: 1, TaskName: "task-a", Split: "private", Reward: 0.5, Verdict: "pass",
+	})
+	event.Payload = payload
+	if err := event.ValidatePayload(); err == nil {
+		t.Fatal("unknown result split was accepted")
+	}
+}
+
 func TestValidatePayloadRejectsUnnormalisedScale(t *testing.T) {
 	score := validScore()
 	score.Scale = "percent"

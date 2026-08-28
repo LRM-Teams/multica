@@ -75,7 +75,7 @@ SET rounds_without_gain = CASE
     END,
     updated_at = now()
 WHERE id = $2
-RETURNING id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count
+RETURNING id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count, task_set_id
 `
 
 type BumpProblemEvolutionRunRoundsWithoutGainParams struct {
@@ -132,6 +132,7 @@ func (q *Queries) BumpProblemEvolutionRunRoundsWithoutGain(ctx context.Context, 
 		&i.BlindScore,
 		&i.OverfitGap,
 		&i.ModelCallCount,
+		&i.TaskSetID,
 	)
 	return i, err
 }
@@ -144,7 +145,7 @@ SET status = 'cancelled',
     finished_at = now(),
     updated_at = now()
 WHERE id = $1 AND workspace_id = $2 AND status = 'stopping'
-RETURNING id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count
+RETURNING id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count, task_set_id
 `
 
 type CancelProblemEvolutionRunParams struct {
@@ -201,6 +202,7 @@ func (q *Queries) CancelProblemEvolutionRun(ctx context.Context, arg CancelProbl
 		&i.BlindScore,
 		&i.OverfitGap,
 		&i.ModelCallCount,
+		&i.TaskSetID,
 	)
 	return i, err
 }
@@ -224,7 +226,7 @@ WHERE id = (
     FOR UPDATE SKIP LOCKED
     LIMIT 1
 )
-RETURNING id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count
+RETURNING id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count, task_set_id
 `
 
 type ClaimProblemEvolutionRunParams struct {
@@ -281,6 +283,7 @@ func (q *Queries) ClaimProblemEvolutionRun(ctx context.Context, arg ClaimProblem
 		&i.BlindScore,
 		&i.OverfitGap,
 		&i.ModelCallCount,
+		&i.TaskSetID,
 	)
 	return i, err
 }
@@ -295,7 +298,7 @@ SET status = 'completed',
     finished_at = now(),
     updated_at = now()
 WHERE id = $3 AND claim_token = $4
-RETURNING id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count
+RETURNING id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count, task_set_id
 `
 
 type CompleteProblemEvolutionRunParams struct {
@@ -359,6 +362,7 @@ func (q *Queries) CompleteProblemEvolutionRun(ctx context.Context, arg CompleteP
 		&i.BlindScore,
 		&i.OverfitGap,
 		&i.ModelCallCount,
+		&i.TaskSetID,
 	)
 	return i, err
 }
@@ -437,13 +441,13 @@ func (q *Queries) CreateProblemEvolutionEvaluatorContract(ctx context.Context, a
 const createProblemEvolutionRun = `-- name: CreateProblemEvolutionRun :one
 INSERT INTO problem_evolution_run (
     workspace_id, created_by, mode, title, problem_spec, artifact_type,
-    runtime_id, model_config, budget_config, stop_config
+    runtime_id, model_config, budget_config, stop_config, task_set_id
 )
 VALUES (
     $1, $2, $3, $4, $5, $6,
-    $7, $8, $9, $10
+    $7, $8, $9, $10, $11
 )
-RETURNING id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count
+RETURNING id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count, task_set_id
 `
 
 type CreateProblemEvolutionRunParams struct {
@@ -457,6 +461,7 @@ type CreateProblemEvolutionRunParams struct {
 	ModelConfig  []byte      `json:"model_config"`
 	BudgetConfig []byte      `json:"budget_config"`
 	StopConfig   []byte      `json:"stop_config"`
+	TaskSetID    pgtype.UUID `json:"task_set_id"`
 }
 
 func (q *Queries) CreateProblemEvolutionRun(ctx context.Context, arg CreateProblemEvolutionRunParams) (ProblemEvolutionRun, error) {
@@ -471,6 +476,7 @@ func (q *Queries) CreateProblemEvolutionRun(ctx context.Context, arg CreateProbl
 		arg.ModelConfig,
 		arg.BudgetConfig,
 		arg.StopConfig,
+		arg.TaskSetID,
 	)
 	var i ProblemEvolutionRun
 	err := row.Scan(
@@ -519,6 +525,7 @@ func (q *Queries) CreateProblemEvolutionRun(ctx context.Context, arg CreateProbl
 		&i.BlindScore,
 		&i.OverfitGap,
 		&i.ModelCallCount,
+		&i.TaskSetID,
 	)
 	return i, err
 }
@@ -583,7 +590,7 @@ SET status = 'failed',
     finished_at = now(),
     updated_at = now()
 WHERE id = $2 AND workspace_id = $3
-RETURNING id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count
+RETURNING id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count, task_set_id
 `
 
 type FailProblemEvolutionRunParams struct {
@@ -641,6 +648,7 @@ func (q *Queries) FailProblemEvolutionRun(ctx context.Context, arg FailProblemEv
 		&i.BlindScore,
 		&i.OverfitGap,
 		&i.ModelCallCount,
+		&i.TaskSetID,
 	)
 	return i, err
 }
@@ -654,7 +662,7 @@ SET status = 'cancelled',
     finished_at = now(),
     updated_at = now()
 WHERE id = $2 AND status = 'stopping'
-RETURNING id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count
+RETURNING id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count, task_set_id
 `
 
 type ForceCancelProblemEvolutionRunParams struct {
@@ -711,6 +719,7 @@ func (q *Queries) ForceCancelProblemEvolutionRun(ctx context.Context, arg ForceC
 		&i.BlindScore,
 		&i.OverfitGap,
 		&i.ModelCallCount,
+		&i.TaskSetID,
 	)
 	return i, err
 }
@@ -726,7 +735,7 @@ SET status = 'queued',
     failure_reason = $1,
     updated_at = now()
 WHERE id = $2 AND status IN ('running', 'synthesizing')
-RETURNING id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count
+RETURNING id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count, task_set_id
 `
 
 type ForceReleaseProblemEvolutionRunParams struct {
@@ -786,6 +795,7 @@ func (q *Queries) ForceReleaseProblemEvolutionRun(ctx context.Context, arg Force
 		&i.BlindScore,
 		&i.OverfitGap,
 		&i.ModelCallCount,
+		&i.TaskSetID,
 	)
 	return i, err
 }
@@ -980,7 +990,7 @@ func (q *Queries) GetProblemEvolutionLatestEventSeq(ctx context.Context, runID p
 }
 
 const getProblemEvolutionRun = `-- name: GetProblemEvolutionRun :one
-SELECT id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count FROM problem_evolution_run
+SELECT id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count, task_set_id FROM problem_evolution_run
 WHERE id = $1 AND workspace_id = $2
 `
 
@@ -1038,12 +1048,13 @@ func (q *Queries) GetProblemEvolutionRun(ctx context.Context, arg GetProblemEvol
 		&i.BlindScore,
 		&i.OverfitGap,
 		&i.ModelCallCount,
+		&i.TaskSetID,
 	)
 	return i, err
 }
 
 const getProblemEvolutionRunByID = `-- name: GetProblemEvolutionRunByID :one
-SELECT id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count FROM problem_evolution_run
+SELECT id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count, task_set_id FROM problem_evolution_run
 WHERE id = $1
 `
 
@@ -1098,6 +1109,7 @@ func (q *Queries) GetProblemEvolutionRunByID(ctx context.Context, id pgtype.UUID
 		&i.BlindScore,
 		&i.OverfitGap,
 		&i.ModelCallCount,
+		&i.TaskSetID,
 	)
 	return i, err
 }
@@ -1106,7 +1118,7 @@ const heartbeatProblemEvolutionRun = `-- name: HeartbeatProblemEvolutionRun :one
 UPDATE problem_evolution_run
 SET heartbeat_at = now(), updated_at = now()
 WHERE id = $1 AND claim_token = $2
-RETURNING id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count
+RETURNING id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count, task_set_id
 `
 
 type HeartbeatProblemEvolutionRunParams struct {
@@ -1163,6 +1175,7 @@ func (q *Queries) HeartbeatProblemEvolutionRun(ctx context.Context, arg Heartbea
 		&i.BlindScore,
 		&i.OverfitGap,
 		&i.ModelCallCount,
+		&i.TaskSetID,
 	)
 	return i, err
 }
@@ -1564,7 +1577,7 @@ func (q *Queries) ListProblemEvolutionEventsAfterSeq(ctx context.Context, arg Li
 }
 
 const listProblemEvolutionRuns = `-- name: ListProblemEvolutionRuns :many
-SELECT id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count FROM problem_evolution_run
+SELECT id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count, task_set_id FROM problem_evolution_run
 WHERE workspace_id = $1
 ORDER BY created_at DESC
 LIMIT $2
@@ -1630,6 +1643,46 @@ func (q *Queries) ListProblemEvolutionRuns(ctx context.Context, arg ListProblemE
 			&i.BlindScore,
 			&i.OverfitGap,
 			&i.ModelCallCount,
+			&i.TaskSetID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listProblemEvolutionUsage = `-- name: ListProblemEvolutionUsage :many
+SELECT id, run_id, workspace_id, source_event_id, provider, model, model_calls, input_tokens, output_tokens, cost, created_at, updated_at FROM problem_evolution_usage
+WHERE run_id = $1
+ORDER BY provider, model
+`
+
+func (q *Queries) ListProblemEvolutionUsage(ctx context.Context, runID pgtype.UUID) ([]ProblemEvolutionUsage, error) {
+	rows, err := q.db.Query(ctx, listProblemEvolutionUsage, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ProblemEvolutionUsage{}
+	for rows.Next() {
+		var i ProblemEvolutionUsage
+		if err := rows.Scan(
+			&i.ID,
+			&i.RunID,
+			&i.WorkspaceID,
+			&i.SourceEventID,
+			&i.Provider,
+			&i.Model,
+			&i.ModelCalls,
+			&i.InputTokens,
+			&i.OutputTokens,
+			&i.Cost,
+			&i.CreatedAt,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1642,7 +1695,7 @@ func (q *Queries) ListProblemEvolutionRuns(ctx context.Context, arg ListProblemE
 }
 
 const listStaleProblemEvolutionRuns = `-- name: ListStaleProblemEvolutionRuns :many
-SELECT id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count FROM problem_evolution_run
+SELECT id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count, task_set_id FROM problem_evolution_run
 WHERE status IN ('running', 'synthesizing', 'stopping')
   AND heartbeat_at IS NOT NULL
   AND heartbeat_at < $1
@@ -1710,6 +1763,7 @@ func (q *Queries) ListStaleProblemEvolutionRuns(ctx context.Context, arg ListSta
 			&i.BlindScore,
 			&i.OverfitGap,
 			&i.ModelCallCount,
+			&i.TaskSetID,
 		); err != nil {
 			return nil, err
 		}
@@ -1722,7 +1776,7 @@ func (q *Queries) ListStaleProblemEvolutionRuns(ctx context.Context, arg ListSta
 }
 
 const listStopRequestedProblemEvolutionRuns = `-- name: ListStopRequestedProblemEvolutionRuns :many
-SELECT id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count FROM problem_evolution_run
+SELECT id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count, task_set_id FROM problem_evolution_run
 WHERE status = 'stopping'
   AND stop_requested_at IS NOT NULL
   AND stop_requested_at < $1
@@ -1790,6 +1844,7 @@ func (q *Queries) ListStopRequestedProblemEvolutionRuns(ctx context.Context, arg
 			&i.BlindScore,
 			&i.OverfitGap,
 			&i.ModelCallCount,
+			&i.TaskSetID,
 		); err != nil {
 			return nil, err
 		}
@@ -1849,7 +1904,7 @@ WHERE run.id = $1
   AND contract.status = 'frozen'
   AND contract.content_hash <> ''
   AND run.status IN ('draft', 'validating_evaluator', 'ready')
-RETURNING run.id, run.workspace_id, run.created_by, run.mode, run.title, run.problem_spec, run.artifact_type, run.status, run.stage, run.runtime_id, run.model_config, run.budget_config, run.stop_config, run.evaluator_contract_id, run.evaluator_content_hash, run.evolver_version, run.best_candidate_id, run.final_candidate_id, run.graph_version, run.claimed_runtime_id, run.claim_token, run.claimed_at, run.heartbeat_at, run.stop_requested_at, run.stop_reason, run.failure_reason, run.started_at, run.finished_at, run.created_at, run.updated_at, run.generation, run.candidate_count, run.rounds_without_gain, run.best_score, run.total_cost, run.harness_proposals, run.harness_execute_count, run.benchmark_mode, run.winner_harness_id, run.search_seed, run.blind_seed, run.blind_candidate_id, run.blind_score, run.overfit_gap, run.model_call_count
+RETURNING run.id, run.workspace_id, run.created_by, run.mode, run.title, run.problem_spec, run.artifact_type, run.status, run.stage, run.runtime_id, run.model_config, run.budget_config, run.stop_config, run.evaluator_contract_id, run.evaluator_content_hash, run.evolver_version, run.best_candidate_id, run.final_candidate_id, run.graph_version, run.claimed_runtime_id, run.claim_token, run.claimed_at, run.heartbeat_at, run.stop_requested_at, run.stop_reason, run.failure_reason, run.started_at, run.finished_at, run.created_at, run.updated_at, run.generation, run.candidate_count, run.rounds_without_gain, run.best_score, run.total_cost, run.harness_proposals, run.harness_execute_count, run.benchmark_mode, run.winner_harness_id, run.search_seed, run.blind_seed, run.blind_candidate_id, run.blind_score, run.overfit_gap, run.model_call_count, run.task_set_id
 `
 
 type QueueProblemEvolutionRunParams struct {
@@ -1908,6 +1963,7 @@ func (q *Queries) QueueProblemEvolutionRun(ctx context.Context, arg QueueProblem
 		&i.BlindScore,
 		&i.OverfitGap,
 		&i.ModelCallCount,
+		&i.TaskSetID,
 	)
 	return i, err
 }
@@ -1931,7 +1987,7 @@ FROM (
     WHERE run_id = $1
 ) AS agg
 WHERE r.id = $1
-RETURNING r.id, r.workspace_id, r.created_by, r.mode, r.title, r.problem_spec, r.artifact_type, r.status, r.stage, r.runtime_id, r.model_config, r.budget_config, r.stop_config, r.evaluator_contract_id, r.evaluator_content_hash, r.evolver_version, r.best_candidate_id, r.final_candidate_id, r.graph_version, r.claimed_runtime_id, r.claim_token, r.claimed_at, r.heartbeat_at, r.stop_requested_at, r.stop_reason, r.failure_reason, r.started_at, r.finished_at, r.created_at, r.updated_at, r.generation, r.candidate_count, r.rounds_without_gain, r.best_score, r.total_cost, r.harness_proposals, r.harness_execute_count, r.benchmark_mode, r.winner_harness_id, r.search_seed, r.blind_seed, r.blind_candidate_id, r.blind_score, r.overfit_gap, r.model_call_count
+RETURNING r.id, r.workspace_id, r.created_by, r.mode, r.title, r.problem_spec, r.artifact_type, r.status, r.stage, r.runtime_id, r.model_config, r.budget_config, r.stop_config, r.evaluator_contract_id, r.evaluator_content_hash, r.evolver_version, r.best_candidate_id, r.final_candidate_id, r.graph_version, r.claimed_runtime_id, r.claim_token, r.claimed_at, r.heartbeat_at, r.stop_requested_at, r.stop_reason, r.failure_reason, r.started_at, r.finished_at, r.created_at, r.updated_at, r.generation, r.candidate_count, r.rounds_without_gain, r.best_score, r.total_cost, r.harness_proposals, r.harness_execute_count, r.benchmark_mode, r.winner_harness_id, r.search_seed, r.blind_seed, r.blind_candidate_id, r.blind_score, r.overfit_gap, r.model_call_count, r.task_set_id
 `
 
 // Progress counters are derived, not accumulated, so a retried or duplicated
@@ -1985,6 +2041,7 @@ func (q *Queries) RecomputeProblemEvolutionRunProgress(ctx context.Context, id p
 		&i.BlindScore,
 		&i.OverfitGap,
 		&i.ModelCallCount,
+		&i.TaskSetID,
 	)
 	return i, err
 }
@@ -1999,7 +2056,7 @@ SET status = 'queued',
     heartbeat_at = NULL,
     updated_at = now()
 WHERE id = $1 AND claim_token = $2
-RETURNING id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count
+RETURNING id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count, task_set_id
 `
 
 type ReleaseProblemEvolutionRunParams struct {
@@ -2056,6 +2113,7 @@ func (q *Queries) ReleaseProblemEvolutionRun(ctx context.Context, arg ReleasePro
 		&i.BlindScore,
 		&i.OverfitGap,
 		&i.ModelCallCount,
+		&i.TaskSetID,
 	)
 	return i, err
 }
@@ -2069,7 +2127,7 @@ SET status = 'stopping',
 WHERE id = $2
   AND workspace_id = $3
   AND status IN ('queued', 'running', 'synthesizing')
-RETURNING id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count
+RETURNING id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count, task_set_id
 `
 
 type RequestStopProblemEvolutionRunParams struct {
@@ -2127,6 +2185,7 @@ func (q *Queries) RequestStopProblemEvolutionRun(ctx context.Context, arg Reques
 		&i.BlindScore,
 		&i.OverfitGap,
 		&i.ModelCallCount,
+		&i.TaskSetID,
 	)
 	return i, err
 }
@@ -2397,7 +2456,7 @@ const setProblemEvolutionRunBestCandidate = `-- name: SetProblemEvolutionRunBest
 UPDATE problem_evolution_run
 SET best_candidate_id = $1, updated_at = now()
 WHERE id = $2
-RETURNING id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count
+RETURNING id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count, task_set_id
 `
 
 type SetProblemEvolutionRunBestCandidateParams struct {
@@ -2454,6 +2513,7 @@ func (q *Queries) SetProblemEvolutionRunBestCandidate(ctx context.Context, arg S
 		&i.BlindScore,
 		&i.OverfitGap,
 		&i.ModelCallCount,
+		&i.TaskSetID,
 	)
 	return i, err
 }
@@ -2465,7 +2525,7 @@ SET blind_candidate_id = $1,
     overfit_gap = $3,
     updated_at = now()
 WHERE id = $4
-RETURNING id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count
+RETURNING id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count, task_set_id
 `
 
 type SetProblemEvolutionRunBlindResultParams struct {
@@ -2529,6 +2589,7 @@ func (q *Queries) SetProblemEvolutionRunBlindResult(ctx context.Context, arg Set
 		&i.BlindScore,
 		&i.OverfitGap,
 		&i.ModelCallCount,
+		&i.TaskSetID,
 	)
 	return i, err
 }
@@ -2537,7 +2598,7 @@ const setProblemEvolutionRunEvolverVersion = `-- name: SetProblemEvolutionRunEvo
 UPDATE problem_evolution_run
 SET evolver_version = $1, updated_at = now()
 WHERE id = $2 AND claim_token = $3
-RETURNING id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count
+RETURNING id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count, task_set_id
 `
 
 type SetProblemEvolutionRunEvolverVersionParams struct {
@@ -2595,6 +2656,7 @@ func (q *Queries) SetProblemEvolutionRunEvolverVersion(ctx context.Context, arg 
 		&i.BlindScore,
 		&i.OverfitGap,
 		&i.ModelCallCount,
+		&i.TaskSetID,
 	)
 	return i, err
 }
@@ -2603,7 +2665,7 @@ const setProblemEvolutionRunFinalCandidate = `-- name: SetProblemEvolutionRunFin
 UPDATE problem_evolution_run
 SET final_candidate_id = $1, updated_at = now()
 WHERE id = $2
-RETURNING id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count
+RETURNING id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count, task_set_id
 `
 
 type SetProblemEvolutionRunFinalCandidateParams struct {
@@ -2660,6 +2722,7 @@ func (q *Queries) SetProblemEvolutionRunFinalCandidate(ctx context.Context, arg 
 		&i.BlindScore,
 		&i.OverfitGap,
 		&i.ModelCallCount,
+		&i.TaskSetID,
 	)
 	return i, err
 }
@@ -2669,7 +2732,7 @@ UPDATE problem_evolution_run
 SET model_call_count = GREATEST(model_call_count, $1::int),
     updated_at = now()
 WHERE id = $2
-RETURNING id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count
+RETURNING id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count, task_set_id
 `
 
 type SetProblemEvolutionRunModelCallsParams struct {
@@ -2728,6 +2791,7 @@ func (q *Queries) SetProblemEvolutionRunModelCalls(ctx context.Context, arg SetP
 		&i.BlindScore,
 		&i.OverfitGap,
 		&i.ModelCallCount,
+		&i.TaskSetID,
 	)
 	return i, err
 }
@@ -2741,7 +2805,7 @@ SET generation = $1,
     total_cost = $5,
     updated_at = now()
 WHERE id = $6
-RETURNING id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count
+RETURNING id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count, task_set_id
 `
 
 type SetProblemEvolutionRunProgressParams struct {
@@ -2809,6 +2873,7 @@ func (q *Queries) SetProblemEvolutionRunProgress(ctx context.Context, arg SetPro
 		&i.BlindScore,
 		&i.OverfitGap,
 		&i.ModelCallCount,
+		&i.TaskSetID,
 	)
 	return i, err
 }
@@ -2819,7 +2884,7 @@ SET search_seed = $1,
     blind_seed = $2,
     updated_at = now()
 WHERE id = $3
-RETURNING id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count
+RETURNING id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count, task_set_id
 `
 
 type SetProblemEvolutionRunSeedsParams struct {
@@ -2877,6 +2942,7 @@ func (q *Queries) SetProblemEvolutionRunSeeds(ctx context.Context, arg SetProble
 		&i.BlindScore,
 		&i.OverfitGap,
 		&i.ModelCallCount,
+		&i.TaskSetID,
 	)
 	return i, err
 }
@@ -2885,7 +2951,7 @@ const setProblemEvolutionRunStage = `-- name: SetProblemEvolutionRunStage :one
 UPDATE problem_evolution_run
 SET stage = $1, updated_at = now()
 WHERE id = $2 AND claim_token = $3
-RETURNING id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count
+RETURNING id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count, task_set_id
 `
 
 type SetProblemEvolutionRunStageParams struct {
@@ -2943,6 +3009,7 @@ func (q *Queries) SetProblemEvolutionRunStage(ctx context.Context, arg SetProble
 		&i.BlindScore,
 		&i.OverfitGap,
 		&i.ModelCallCount,
+		&i.TaskSetID,
 	)
 	return i, err
 }
@@ -3002,12 +3069,13 @@ SET title = $1,
     model_config = $5,
     budget_config = $6,
     stop_config = $7,
-    evaluator_contract_id = $8,
+    task_set_id = $8,
+    evaluator_contract_id = $9,
     updated_at = now()
-WHERE id = $9
-  AND workspace_id = $10
+WHERE id = $10
+  AND workspace_id = $11
   AND status IN ('draft', 'validating_evaluator', 'ready')
-RETURNING id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count
+RETURNING id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count, task_set_id
 `
 
 type UpdateProblemEvolutionRunDraftParams struct {
@@ -3018,6 +3086,7 @@ type UpdateProblemEvolutionRunDraftParams struct {
 	ModelConfig         []byte      `json:"model_config"`
 	BudgetConfig        []byte      `json:"budget_config"`
 	StopConfig          []byte      `json:"stop_config"`
+	TaskSetID           pgtype.UUID `json:"task_set_id"`
 	EvaluatorContractID pgtype.UUID `json:"evaluator_contract_id"`
 	ID                  pgtype.UUID `json:"id"`
 	WorkspaceID         pgtype.UUID `json:"workspace_id"`
@@ -3032,6 +3101,7 @@ func (q *Queries) UpdateProblemEvolutionRunDraft(ctx context.Context, arg Update
 		arg.ModelConfig,
 		arg.BudgetConfig,
 		arg.StopConfig,
+		arg.TaskSetID,
 		arg.EvaluatorContractID,
 		arg.ID,
 		arg.WorkspaceID,
@@ -3083,6 +3153,7 @@ func (q *Queries) UpdateProblemEvolutionRunDraft(ctx context.Context, arg Update
 		&i.BlindScore,
 		&i.OverfitGap,
 		&i.ModelCallCount,
+		&i.TaskSetID,
 	)
 	return i, err
 }
@@ -3311,6 +3382,70 @@ func (q *Queries) UpsertProblemEvolutionEvaluation(ctx context.Context, arg Upse
 		&i.FeedbackProjection,
 		&i.RuntimeSeconds,
 		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const upsertProblemEvolutionUsage = `-- name: UpsertProblemEvolutionUsage :one
+INSERT INTO problem_evolution_usage (
+    run_id, workspace_id, source_event_id, provider, model,
+    model_calls, input_tokens, output_tokens, cost
+)
+VALUES (
+    $1, $2, $3, $4, $5,
+    $6, $7, $8, $9
+)
+ON CONFLICT (run_id, provider, model)
+DO UPDATE SET
+    source_event_id = EXCLUDED.source_event_id,
+    model_calls = GREATEST(problem_evolution_usage.model_calls, EXCLUDED.model_calls),
+    input_tokens = GREATEST(problem_evolution_usage.input_tokens, EXCLUDED.input_tokens),
+    output_tokens = GREATEST(problem_evolution_usage.output_tokens, EXCLUDED.output_tokens),
+    cost = GREATEST(problem_evolution_usage.cost, EXCLUDED.cost),
+    updated_at = now()
+RETURNING id, run_id, workspace_id, source_event_id, provider, model, model_calls, input_tokens, output_tokens, cost, created_at, updated_at
+`
+
+type UpsertProblemEvolutionUsageParams struct {
+	RunID         pgtype.UUID    `json:"run_id"`
+	WorkspaceID   pgtype.UUID    `json:"workspace_id"`
+	SourceEventID pgtype.UUID    `json:"source_event_id"`
+	Provider      string         `json:"provider"`
+	Model         string         `json:"model"`
+	ModelCalls    int32          `json:"model_calls"`
+	InputTokens   int64          `json:"input_tokens"`
+	OutputTokens  int64          `json:"output_tokens"`
+	Cost          pgtype.Numeric `json:"cost"`
+}
+
+// Progress reports are cumulative. Max keeps retries from double charging the
+// local ledger while still allowing a later report to advance the totals.
+func (q *Queries) UpsertProblemEvolutionUsage(ctx context.Context, arg UpsertProblemEvolutionUsageParams) (ProblemEvolutionUsage, error) {
+	row := q.db.QueryRow(ctx, upsertProblemEvolutionUsage,
+		arg.RunID,
+		arg.WorkspaceID,
+		arg.SourceEventID,
+		arg.Provider,
+		arg.Model,
+		arg.ModelCalls,
+		arg.InputTokens,
+		arg.OutputTokens,
+		arg.Cost,
+	)
+	var i ProblemEvolutionUsage
+	err := row.Scan(
+		&i.ID,
+		&i.RunID,
+		&i.WorkspaceID,
+		&i.SourceEventID,
+		&i.Provider,
+		&i.Model,
+		&i.ModelCalls,
+		&i.InputTokens,
+		&i.OutputTokens,
+		&i.Cost,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }

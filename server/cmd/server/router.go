@@ -1001,6 +1001,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// Problem-evolution runs (workspace-facing control plane).
 			r.Get("/api/problem-evolution/runs", h.ListProblemEvolutionRuns)
 			r.Post("/api/problem-evolution/runs", h.CreateProblemEvolutionRun)
+			r.Get("/api/problem-evolution/task-sets", h.ListProblemEvolutionTaskSets)
+			r.Post("/api/problem-evolution/task-sets", h.CreateProblemEvolutionTaskSet)
+			r.Get("/api/problem-evolution/workspace-harness", h.GetProblemEvolutionWorkspaceHarness)
 			r.Route("/api/problem-evolution/runs/{runId}", func(r chi.Router) {
 				r.Get("/", h.GetProblemEvolutionRun)
 				r.Patch("/", h.UpdateProblemEvolutionRun)
@@ -1018,6 +1021,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Post("/capabilities", h.IssueProblemEvolutionCapability)
 				r.Get("/secret-audit", h.ListProblemEvolutionSecretAudit)
 				r.Get("/harnesses", h.ListProblemEvolutionHarnesses)
+				r.Get("/harness-versions", h.ListProblemEvolutionHarnessVersions)
+				r.Post("/harness-versions/{versionId}/promote", h.PromoteProblemEvolutionHarnessVersion)
+				r.Get("/iterations", h.ListProblemEvolutionIterations)
+				r.Get("/task-results", h.ListProblemEvolutionTaskResults)
+				r.Get("/changes", h.ListProblemEvolutionChangeRecords)
 				r.Patch("/harness-budget", h.UpdateProblemEvolutionHarnessBudget)
 				r.Get("/export", h.ExportProblemEvolutionRun)
 				r.Get("/compare/{otherRunId}", h.CompareProblemEvolutionRuns)

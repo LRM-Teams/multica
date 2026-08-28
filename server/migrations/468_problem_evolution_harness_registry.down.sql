@@ -1,0 +1,1 @@
+DROP TABLE problem_evolution_harness_registry;

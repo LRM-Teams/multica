@@ -11,15 +11,21 @@ import (
 // dropped rather than forwarded, so a newer evolver cannot widen the surface
 // the platform stores and renders.
 const (
-	EventBatchStarted      = "batch_started"
-	EventCandidateStarted  = "candidate_started"
-	EventCandidateArtifact = "candidate_artifact"
-	EventCandidateScored   = "candidate_scored"
-	EventCandidateFailed   = "candidate_failed"
-	EventCandidateFinished = "candidate_finished"
-	EventHarnessProposed   = "harness_proposed"
-	EventProgress          = "progress"
-	EventBatchFinished     = "batch_finished"
+	EventBatchStarted        = "batch_started"
+	EventCandidateStarted    = "candidate_started"
+	EventCandidateArtifact   = "candidate_artifact"
+	EventCandidateScored     = "candidate_scored"
+	EventCandidateFailed     = "candidate_failed"
+	EventCandidateFinished   = "candidate_finished"
+	EventHarnessProposed     = "harness_proposed"
+	EventProgress            = "progress"
+	EventBatchFinished       = "batch_finished"
+	EventIterationStarted    = "iteration_started"
+	EventTaskResult          = "task_result"
+	EventAnalysisReady       = "analysis_ready"
+	EventChangeProposed      = "change_proposed"
+	EventHarnessVersionReady = "harness_version_ready"
+	EventIterationFinished   = "iteration_finished"
 )
 
 // MaxEventLineBytes bounds one NDJSON line; longer lines are truncated by the
@@ -34,15 +40,21 @@ const MaxFreeTextBytes = 1024
 var ErrEventRejected = errors.New("problem evolution event rejected")
 
 var allowedEventTypes = map[string]struct{}{
-	EventBatchStarted:      {},
-	EventCandidateStarted:  {},
-	EventCandidateArtifact: {},
-	EventCandidateScored:   {},
-	EventCandidateFailed:   {},
-	EventCandidateFinished: {},
-	EventHarnessProposed:   {},
-	EventProgress:          {},
-	EventBatchFinished:     {},
+	EventBatchStarted:        {},
+	EventCandidateStarted:    {},
+	EventCandidateArtifact:   {},
+	EventCandidateScored:     {},
+	EventCandidateFailed:     {},
+	EventCandidateFinished:   {},
+	EventHarnessProposed:     {},
+	EventProgress:            {},
+	EventBatchFinished:       {},
+	EventIterationStarted:    {},
+	EventTaskResult:          {},
+	EventAnalysisReady:       {},
+	EventChangeProposed:      {},
+	EventHarnessVersionReady: {},
+	EventIterationFinished:   {},
 }
 
 // AllowedEventTypes lists the accepted event types in a stable order.
@@ -164,10 +176,62 @@ type HarnessProposedPayload struct {
 
 // ProgressPayload carries bounded progress notes and usage counters.
 type ProgressPayload struct {
-	Note       string  `json:"note,omitempty"`
-	Tokens     int64   `json:"tokens,omitempty"`
-	Cost       float64 `json:"cost,omitempty"`
-	ModelCalls int     `json:"model_calls,omitempty"`
+	Note         string  `json:"note,omitempty"`
+	Tokens       int64   `json:"tokens,omitempty"`
+	Cost         float64 `json:"cost,omitempty"`
+	ModelCalls   int     `json:"model_calls,omitempty"`
+	Provider     string  `json:"provider,omitempty"`
+	Model        string  `json:"model,omitempty"`
+	InputTokens  int64   `json:"input_tokens,omitempty"`
+	OutputTokens int64   `json:"output_tokens,omitempty"`
+}
+
+type IterationStartedPayload struct {
+	Iteration        int    `json:"iteration"`
+	InputVersionHash string `json:"input_version_hash"`
+}
+
+type TaskResultPayload struct {
+	Iteration      int     `json:"iteration"`
+	TaskName       string  `json:"task_name"`
+	RolloutIndex   int     `json:"rollout_index"`
+	Split          string  `json:"split"`
+	Reward         float64 `json:"reward"`
+	Verdict        string  `json:"verdict"`
+	TraceRef       string  `json:"trace_ref,omitempty"`
+	TraceDigestRef string  `json:"trace_digest_ref,omitempty"`
+	Tokens         int64   `json:"tokens,omitempty"`
+	Cost           float64 `json:"cost,omitempty"`
+}
+
+type AnalysisReadyPayload struct {
+	Iteration int    `json:"iteration"`
+	DigestRef string `json:"digest_ref"`
+}
+
+type ChangeProposedPayload struct {
+	Iteration              int      `json:"iteration"`
+	Component              string   `json:"component"`
+	FailureEvidenceRef     string   `json:"failure_evidence_ref"`
+	RootCause              string   `json:"root_cause"`
+	FixSummary             string   `json:"fix_summary"`
+	PredictedPassTaskNames []string `json:"predicted_pass_task_names"`
+	PredictedRiskTaskNames []string `json:"predicted_risk_task_names"`
+}
+
+type HarnessVersionReadyPayload struct {
+	Iteration         int             `json:"iteration"`
+	ParentVersionHash string          `json:"parent_version_hash,omitempty"`
+	Components        json.RawMessage `json:"components"`
+	ContentHash       string          `json:"content_hash"`
+}
+
+type IterationFinishedPayload struct {
+	Iteration       int     `json:"iteration"`
+	PassRate        float64 `json:"pass_rate"`
+	HoldoutPassRate float64 `json:"holdout_pass_rate,omitempty"`
+	Tokens          int64   `json:"tokens,omitempty"`
+	Cost            float64 `json:"cost,omitempty"`
 }
 
 // BatchFinishedPayload closes one evolver invocation.
@@ -291,8 +355,79 @@ func (e EvolverEvent) ValidatePayload() error {
 		if err := decodePayload(e.Payload, &payload); err != nil {
 			return err
 		}
-		if payload.ModelCalls < 0 || payload.Tokens < 0 || payload.Cost < 0 {
+		if payload.ModelCalls < 0 || payload.Tokens < 0 || payload.Cost < 0 ||
+			payload.InputTokens < 0 || payload.OutputTokens < 0 {
 			return fmt.Errorf("%w: progress counters cannot be negative", ErrEventRejected)
+		}
+		return nil
+	case EventIterationStarted:
+		var payload IterationStartedPayload
+		if err := decodePayload(e.Payload, &payload); err != nil {
+			return err
+		}
+		if payload.Iteration < 0 || strings.TrimSpace(payload.InputVersionHash) == "" {
+			return fmt.Errorf("%w: iteration_started needs iteration and input_version_hash", ErrEventRejected)
+		}
+		return nil
+	case EventTaskResult:
+		var payload TaskResultPayload
+		if err := decodePayload(e.Payload, &payload); err != nil {
+			return err
+		}
+		if payload.Iteration < 0 || strings.TrimSpace(payload.TaskName) == "" {
+			return fmt.Errorf("%w: task_result needs iteration and task_name", ErrEventRejected)
+		}
+		if payload.RolloutIndex < 0 || payload.Split != "search" && payload.Split != "holdout" {
+			return fmt.Errorf("%w: task_result has invalid split or rollout_index", ErrEventRejected)
+		}
+		if payload.Reward < 0 || payload.Reward > 1 || payload.Cost < 0 || payload.Tokens < 0 {
+			return fmt.Errorf("%w: task_result counters are out of range", ErrEventRejected)
+		}
+		switch payload.Verdict {
+		case "pass", "fail", "error", "timeout":
+		default:
+			return fmt.Errorf("%w: task_result has invalid verdict", ErrEventRejected)
+		}
+		return nil
+	case EventAnalysisReady:
+		var payload AnalysisReadyPayload
+		if err := decodePayload(e.Payload, &payload); err != nil {
+			return err
+		}
+		if payload.Iteration < 0 || strings.TrimSpace(payload.DigestRef) == "" {
+			return fmt.Errorf("%w: analysis_ready needs iteration and digest_ref", ErrEventRejected)
+		}
+		return nil
+	case EventChangeProposed:
+		var payload ChangeProposedPayload
+		if err := decodePayload(e.Payload, &payload); err != nil {
+			return err
+		}
+		if payload.Iteration < 0 || strings.TrimSpace(payload.Component) == "" ||
+			strings.TrimSpace(payload.RootCause) == "" ||
+			len(payload.PredictedPassTaskNames) == 0 {
+			return fmt.Errorf("%w: change_proposed lacks falsifiable evidence", ErrEventRejected)
+		}
+		return nil
+	case EventHarnessVersionReady:
+		var payload HarnessVersionReadyPayload
+		if err := decodePayload(e.Payload, &payload); err != nil {
+			return err
+		}
+		if payload.Iteration < 0 || len(payload.Components) == 0 ||
+			strings.TrimSpace(payload.ContentHash) == "" {
+			return fmt.Errorf("%w: harness_version_ready is incomplete", ErrEventRejected)
+		}
+		return nil
+	case EventIterationFinished:
+		var payload IterationFinishedPayload
+		if err := decodePayload(e.Payload, &payload); err != nil {
+			return err
+		}
+		if payload.Iteration < 0 || payload.PassRate < 0 || payload.PassRate > 1 ||
+			payload.HoldoutPassRate < 0 || payload.HoldoutPassRate > 1 ||
+			payload.Tokens < 0 || payload.Cost < 0 {
+			return fmt.Errorf("%w: iteration_finished values are out of range", ErrEventRejected)
 		}
 		return nil
 	case EventBatchStarted, EventBatchFinished:

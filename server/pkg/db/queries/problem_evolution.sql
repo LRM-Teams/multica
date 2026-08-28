@@ -40,11 +40,11 @@ RETURNING *;
 -- name: CreateProblemEvolutionRun :one
 INSERT INTO problem_evolution_run (
     workspace_id, created_by, mode, title, problem_spec, artifact_type,
-    runtime_id, model_config, budget_config, stop_config
+    runtime_id, model_config, budget_config, stop_config, task_set_id
 )
 VALUES (
     @workspace_id, @created_by, @mode, @title, @problem_spec, @artifact_type,
-    @runtime_id, @model_config, @budget_config, @stop_config
+    @runtime_id, @model_config, @budget_config, @stop_config, @task_set_id
 )
 RETURNING *;
 
@@ -73,6 +73,7 @@ SET title = @title,
     model_config = @model_config,
     budget_config = @budget_config,
     stop_config = @stop_config,
+    task_set_id = @task_set_id,
     evaluator_contract_id = @evaluator_contract_id,
     updated_at = now()
 WHERE id = @id
@@ -465,6 +466,32 @@ UPDATE problem_evolution_run
 SET final_candidate_id = @final_candidate_id, updated_at = now()
 WHERE id = @id
 RETURNING *;
+
+-- name: UpsertProblemEvolutionUsage :one
+-- Progress reports are cumulative. Max keeps retries from double charging the
+-- local ledger while still allowing a later report to advance the totals.
+INSERT INTO problem_evolution_usage (
+    run_id, workspace_id, source_event_id, provider, model,
+    model_calls, input_tokens, output_tokens, cost
+)
+VALUES (
+    @run_id, @workspace_id, @source_event_id, @provider, @model,
+    @model_calls, @input_tokens, @output_tokens, @cost
+)
+ON CONFLICT (run_id, provider, model)
+DO UPDATE SET
+    source_event_id = EXCLUDED.source_event_id,
+    model_calls = GREATEST(problem_evolution_usage.model_calls, EXCLUDED.model_calls),
+    input_tokens = GREATEST(problem_evolution_usage.input_tokens, EXCLUDED.input_tokens),
+    output_tokens = GREATEST(problem_evolution_usage.output_tokens, EXCLUDED.output_tokens),
+    cost = GREATEST(problem_evolution_usage.cost, EXCLUDED.cost),
+    updated_at = now()
+RETURNING *;
+
+-- name: ListProblemEvolutionUsage :many
+SELECT * FROM problem_evolution_usage
+WHERE run_id = @run_id
+ORDER BY provider, model;
 
 -- name: SetProblemEvolutionCandidateLane :one
 UPDATE problem_evolution_candidate

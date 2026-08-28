@@ -60,6 +60,7 @@ export const ProblemEvolutionRunSchema = z.object({
   // reported alongside best_score rather than replacing it.
   blind_score: z.number().nullable().optional(),
   overfit_gap: z.number().nullable().optional(),
+  task_set_id: z.string().nullable().optional(),
   stop_reason: z.string().default(""),
   failure_reason: z.string().default(""),
   started_at: z.string().nullable().optional(),
@@ -122,6 +123,20 @@ export const ProblemEvolutionCandidateEdgeSchema = z.object({
   child_id: z.string(),
   relation: z.string(),
   parent_index: z.number().default(0),
+});
+
+export const ProblemEvolutionTaskSetSchema = z.object({
+  id: z.string(),
+  workspace_id: z.string(),
+  source: z.string().default(""),
+  dataset_ref: z.string(),
+  dataset_revision: z.string().default(""),
+  task_names: z.array(z.string()).default([]),
+  holdout_task_names: z.array(z.string()).default([]),
+  rollouts_per_task: z.number().default(1),
+  max_parallel: z.number().default(4),
+  created_at: z.string().default(""),
+  updated_at: z.string().default(""),
 });
 
 export const ProblemEvolutionSnapshotSchema = z.object({
@@ -200,6 +215,7 @@ export type ProblemEvolutionCandidate = z.infer<typeof ProblemEvolutionCandidate
 export type ProblemEvolutionCandidateEdge = z.infer<
   typeof ProblemEvolutionCandidateEdgeSchema
 >;
+export type ProblemEvolutionTaskSet = z.infer<typeof ProblemEvolutionTaskSetSchema>;
 export type ProblemEvolutionEvent = z.infer<typeof ProblemEvolutionEventSchema>;
 export type ProblemEvolutionSnapshot = z.infer<typeof ProblemEvolutionSnapshotSchema>;
 export type ProblemEvolutionScore = z.infer<typeof ProblemEvolutionScoreSchema>;

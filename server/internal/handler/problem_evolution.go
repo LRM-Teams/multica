@@ -1,15 +1,19 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/multica-ai/multica/server/internal/cloudruntime"
 	"github.com/multica-ai/multica/server/internal/problemevolution"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -50,6 +54,7 @@ type ProblemEvolutionRunResponse struct {
 	WinnerHarnessID      *string         `json:"winner_harness_id,omitempty"`
 	BlindScore           *float64        `json:"blind_score,omitempty"`
 	OverfitGap           *float64        `json:"overfit_gap,omitempty"`
+	TaskSetID            *string         `json:"task_set_id,omitempty"`
 	StopReason           string          `json:"stop_reason"`
 	FailureReason        string          `json:"failure_reason"`
 	StartedAt            *string         `json:"started_at,omitempty"`
@@ -139,6 +144,7 @@ type createProblemEvolutionRunRequest struct {
 	ModelConfig  json.RawMessage `json:"model_config"`
 	BudgetConfig json.RawMessage `json:"budget_config"`
 	StopConfig   json.RawMessage `json:"stop_config"`
+	TaskSetID    *string         `json:"task_set_id"`
 }
 
 type updateProblemEvolutionRunRequest struct {
@@ -150,6 +156,7 @@ type updateProblemEvolutionRunRequest struct {
 	BudgetConfig        json.RawMessage `json:"budget_config"`
 	StopConfig          json.RawMessage `json:"stop_config"`
 	EvaluatorContractID *string         `json:"evaluator_contract_id"`
+	TaskSetID           *string         `json:"task_set_id"`
 }
 
 type problemEvolutionEvaluatorRequest struct {
@@ -190,6 +197,11 @@ func (h *Handler) CreateProblemEvolutionRun(w http.ResponseWriter, r *http.Reque
 			writeError(w, http.StatusBadRequest, "task harness mode is not enabled")
 			return
 		}
+	case problemevolution.ModeTaskHarnessPersistent:
+		if req.TaskSetID == nil || strings.TrimSpace(*req.TaskSetID) == "" {
+			writeError(w, http.StatusBadRequest, "persistent harness mode requires a task_set_id")
+			return
+		}
 	default:
 		writeError(w, http.StatusBadRequest, "unsupported mode")
 		return
@@ -197,6 +209,28 @@ func (h *Handler) CreateProblemEvolutionRun(w http.ResponseWriter, r *http.Reque
 	runtimeID, ok := h.optionalProblemEvolutionRuntime(w, req.RuntimeID)
 	if !ok {
 		return
+	}
+	taskSetID := pgtype.UUID{}
+	if req.TaskSetID != nil && strings.TrimSpace(*req.TaskSetID) != "" {
+		parsedTaskSetID, parseOK := parseUUIDOrBadRequest(w, *req.TaskSetID, "task_set_id")
+		if !parseOK {
+			return
+		}
+		taskSet, err := h.Queries.GetProblemEvolutionTaskSet(r.Context(), db.GetProblemEvolutionTaskSetParams{
+			ID: parsedTaskSetID, WorkspaceID: wsUUID,
+		})
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "task set not found")
+			return
+		}
+		if req.Mode == problemevolution.ModeTaskHarnessPersistent {
+			var holdoutNames []string
+			if json.Unmarshal(taskSet.HoldoutTaskNames, &holdoutNames) != nil || len(holdoutNames) == 0 {
+				writeError(w, http.StatusBadRequest, "persistent harness mode requires holdout_task_names")
+				return
+			}
+		}
+		taskSetID = parsedTaskSetID
 	}
 	artifactType := req.ArtifactType
 	if artifactType == "" {
@@ -213,6 +247,7 @@ func (h *Handler) CreateProblemEvolutionRun(w http.ResponseWriter, r *http.Reque
 		ModelConfig:  jsonOrEmptyObject(req.ModelConfig),
 		BudgetConfig: jsonOrEmptyObject(req.BudgetConfig),
 		StopConfig:   jsonOrEmptyObject(req.StopConfig),
+		TaskSetID:    taskSetID,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create run")
@@ -273,6 +308,7 @@ func (h *Handler) UpdateProblemEvolutionRun(w http.ResponseWriter, r *http.Reque
 		ModelConfig:         run.ModelConfig,
 		BudgetConfig:        run.BudgetConfig,
 		StopConfig:          run.StopConfig,
+		TaskSetID:           run.TaskSetID,
 		EvaluatorContractID: run.EvaluatorContractID,
 	}
 	if req.Title != nil {
@@ -299,6 +335,19 @@ func (h *Handler) UpdateProblemEvolutionRun(w http.ResponseWriter, r *http.Reque
 	}
 	if len(req.StopConfig) > 0 {
 		params.StopConfig = req.StopConfig
+	}
+	if req.TaskSetID != nil {
+		taskSetID, valid := parseUUIDOrBadRequest(w, *req.TaskSetID, "task_set_id")
+		if !valid {
+			return
+		}
+		if _, err := h.Queries.GetProblemEvolutionTaskSet(r.Context(), db.GetProblemEvolutionTaskSetParams{
+			ID: taskSetID, WorkspaceID: run.WorkspaceID,
+		}); err != nil {
+			writeError(w, http.StatusBadRequest, "task set not found")
+			return
+		}
+		params.TaskSetID = taskSetID
 	}
 	if req.EvaluatorContractID != nil {
 		contractID, valid := parseUUIDOrBadRequest(w, *req.EvaluatorContractID, "evaluator_contract_id")
@@ -521,6 +570,14 @@ func (h *Handler) StartProblemEvolutionRun(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
+	if err := h.preflightProblemEvolutionBilling(r.Context(), r, run); err != nil {
+		if errors.Is(err, errProblemEvolutionBillingUnavailable) {
+			writeError(w, http.StatusServiceUnavailable, err.Error())
+		} else {
+			writeError(w, http.StatusPaymentRequired, err.Error())
+		}
+		return
+	}
 	queued, err := h.Queries.QueueProblemEvolutionRun(r.Context(), db.QueueProblemEvolutionRunParams{
 		ID:          run.ID,
 		WorkspaceID: run.WorkspaceID,
@@ -545,6 +602,70 @@ func (h *Handler) StartProblemEvolutionRun(w http.ResponseWriter, r *http.Reques
 	}
 	h.publishProblemEvolutionRunChanged(uuidToString(queued.WorkspaceID), queued)
 	writeJSON(w, http.StatusOK, problemEvolutionRunToResponse(queued))
+}
+
+var errProblemEvolutionBillingUnavailable = errors.New("problem evolution billing unavailable")
+
+// preflightProblemEvolutionBilling uses the existing cloud billing service when
+// configured. A zero run cost ceiling means "no run-level ceiling", not
+// "bypass account billing": a configured wallet must still have a positive
+// balance before execution starts. Unknown self-hosted billing responses are
+// left to local run budgets rather than blocking deployments that do not expose
+// the cloud wallet.
+func (h *Handler) preflightProblemEvolutionBilling(ctx context.Context, r *http.Request, run db.ProblemEvolutionRun) error {
+	if h.CloudRuntime == nil || !h.CloudRuntime.Enabled() {
+		return nil
+	}
+	userID := requestUserID(r)
+	resp, err := h.CloudRuntime.Do(ctx, cloudruntime.Request{
+		Method: http.MethodGet, Path: "/api/v1/billing/balance", UserID: userID,
+		RequestID: cloudRuntimeRequestID(r), Op: "billing_balance",
+	})
+	if err != nil {
+		return fmt.Errorf("%w: billing balance could not be checked", errProblemEvolutionBillingUnavailable)
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return fmt.Errorf("%w: billing balance returned HTTP %d", errProblemEvolutionBillingUnavailable, resp.StatusCode)
+	}
+	balance, found := billingBalanceFromJSON(resp.Body)
+	if !found {
+		return nil
+	}
+	config := problemEvolutionStopConfig(run)
+	if balance <= 0 {
+		return errors.New("billing balance is insufficient to start problem evolution")
+	}
+	if config.MaxCostUSD > 0 && balance < config.MaxCostUSD {
+		return fmt.Errorf("billing balance %.6f is below the configured run ceiling %.6f", balance, config.MaxCostUSD)
+	}
+	return nil
+}
+
+func billingBalanceFromJSON(raw []byte) (float64, bool) {
+	var value any
+	if json.Unmarshal(raw, &value) != nil {
+		return 0, false
+	}
+	var walk func(any) (float64, bool)
+	walk = func(node any) (float64, bool) {
+		switch v := node.(type) {
+		case map[string]any:
+			for _, key := range []string{"available_balance", "balance", "credit_balance", "credits"} {
+				if number, ok := v[key].(float64); ok {
+					return number, true
+				}
+			}
+			for _, key := range []string{"data", "wallet", "account"} {
+				if nested, ok := v[key]; ok {
+					if number, found := walk(nested); found {
+						return number, true
+					}
+				}
+			}
+		}
+		return 0, false
+	}
+	return walk(value)
 }
 
 // StopProblemEvolutionRun asks the daemon to stop producing candidates. The
@@ -794,6 +915,7 @@ func problemEvolutionRunToResponse(row db.ProblemEvolutionRun) ProblemEvolutionR
 		ModelConfig:          row.ModelConfig,
 		BudgetConfig:         row.BudgetConfig,
 		StopConfig:           row.StopConfig,
+		TaskSetID:            uuidToPtr(row.TaskSetID),
 		EvaluatorContractID:  uuidToPtr(row.EvaluatorContractID),
 		EvaluatorContentHash: row.EvaluatorContentHash,
 		EvolverVersion:       row.EvolverVersion,

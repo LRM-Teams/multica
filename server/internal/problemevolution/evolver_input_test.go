@@ -63,6 +63,24 @@ func TestEvolverInputRejectsUnsupportedMode(t *testing.T) {
 	}
 }
 
+func TestEvolverInputAcceptsPersistentHarnessTaskSet(t *testing.T) {
+	input := validInput()
+	input.Mode = ModeTaskHarnessPersistent
+	input.TaskSet = &TaskSetInput{
+		DatasetRef:       "harbor://terminal-bench@rev",
+		TaskNames:        []string{"task-a"},
+		HoldoutTaskNames: []string{"holdout-a"},
+	}
+	input.Iteration = 2
+	if err := input.Validate(); err != nil {
+		t.Fatalf("persistent harness input rejected: %v", err)
+	}
+	input.TaskSet = nil
+	if err := input.Validate(); err == nil {
+		t.Fatal("persistent harness input without task set was accepted")
+	}
+}
+
 func TestEvolverInputRejectsUnboundedBatch(t *testing.T) {
 	input := validInput()
 	input.Budget.BatchTimeoutSeconds = 0

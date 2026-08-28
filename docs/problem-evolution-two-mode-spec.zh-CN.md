@@ -15,7 +15,7 @@ Multica 增加一个“解题进化”能力，支持三种相互独立但共享
 1. **答案进化（solution evolution）**：用户提供问题；用户提供评分方法，或由系统生成评分规则并由用户确认。系统直接进化本次任务的候选答案，最终交付一个答案。
 2. **每题 harness 进化（JIT task harness + reward-only）**：用户提供当前任务及其隐藏答案或 verifier。系统参考 JIT-Agent 为这道题现场生成多个任务专用 harness，再通过静态门槛、任务匹配选择和 reward-only 执行反馈选择、修复或重启。harness 默认只服务当前任务，不宣称具备跨任务泛化能力。
 
-3. **持久 harness 工程化（AHE，模式 C）**：用户提供一个任务集引用。系统在 `evaluate → analyze → improve` 外层循环里进化一个带版本的 harness 工作区，每次修改必须给出可证伪的预期影响，下一轮用实测 flip 判定并按判定保留或回滚。完整定义见第 20 章；实现排在 PR-7 之后。
+3. **持久 harness 工程化（AHE，模式 C）**：用户提供一个任务集引用。系统在 `evaluate → analyze → improve` 外层循环里进化一个带版本的 harness 工作区，每次修改必须给出可证伪的预期影响，下一轮用实测 flip 判定并按判定保留或回滚。完整定义见第 20 章。
 
 模式 A 与模式 B 都必须在开始前具备：
 
@@ -1399,3 +1399,25 @@ run 记录必须保存：
 - **PR-10**：change_record 证伪闭环（预测入库、下一轮 flip 归因、`kept`/`reverted` 判定）。
 - **PR-11**：held-out 隔离与提升门槛（冻结名单、收尾单次盲测、workspace 级提升审批）。
 - **PR-12**：画布与报告（harness 版本谱系、组件 diff、search/holdout 双数字、变更—证伪时间线）。
+
+### 20.10 当前实现补充
+
+模式 C 的第一版已落地：
+
+- `task_harness_persistent` 运行模式、外部任务集引用与 held-out 名单冻结；
+- harness version、iteration、task result、change record 四类持久化数据；
+- `iteration_started`、`task_result`、`analysis_ready`、`change_proposed`、
+  `harness_version_ready`、`iteration_finished` 事件及服务端投影；
+- 服务端计算变更是否被下一轮确认/证伪，进化程序不能自报结论；
+- 只有同时具备 held-out 成绩、过拟合缺口不超过 0.15、至少一条 confirmed
+  变更时，才能把 harness version 提升到 workspace 范围；
+- 页面可创建模式 C 运行，并配置外部任务集、搜索任务和盲验任务。
+
+计费侧已接入本仓现有的云 billing 代理边界：
+
+- 若配置了云 billing，start 前调用余额接口做预检；
+- 本仓新增 `problem_evolution_usage` 归因表，按 run、provider、model 记录累计
+  model calls、input/output tokens 与 cost，并用幂等 upsert 防止重试重复计费；
+- 自托管且未配置云 billing 时，仍使用本地模型调用/金额预算；
+- 当前云端仓库没有公开的扣费/usage-ingest 契约，因此不会凭空调用未定义的
+  billing endpoint；云端正式扣款由 billing 服务消费该归因记录或后续明确契约。

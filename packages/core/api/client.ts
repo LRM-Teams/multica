@@ -5710,6 +5710,37 @@ export class ApiClient {
     });
   }
 
+  async listProblemEvolutionTaskSets(): Promise<
+    import("../problem-evolution/schemas").ProblemEvolutionTaskSet[]
+  > {
+    const { ProblemEvolutionTaskSetSchema } = await import("../problem-evolution/schemas");
+    const raw = await this.fetch("/api/problem-evolution/task-sets");
+    if (!Array.isArray(raw)) return [];
+    return raw.flatMap((item) => {
+      const parsed = ProblemEvolutionTaskSetSchema.safeParse(item);
+      return parsed.success ? [parsed.data] : [];
+    });
+  }
+
+  async createProblemEvolutionTaskSet(body: {
+    source?: string;
+    dataset_ref: string;
+    dataset_revision?: string;
+    task_names: string[];
+    holdout_task_names?: string[];
+    rollouts_per_task?: number;
+    max_parallel?: number;
+  }): Promise<import("../problem-evolution/schemas").ProblemEvolutionTaskSet> {
+    const { ProblemEvolutionTaskSetSchema } = await import("../problem-evolution/schemas");
+    const raw = await this.fetch("/api/problem-evolution/task-sets", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    const parsed = ProblemEvolutionTaskSetSchema.safeParse(raw);
+    if (!parsed.success) throw new Error("task-set response failed schema validation");
+    return parsed.data;
+  }
+
   async createProblemEvolutionRun(body: {
     mode?: string;
     title?: string;
@@ -5719,6 +5750,7 @@ export class ApiClient {
     model_config?: unknown;
     budget_config?: unknown;
     stop_config?: unknown;
+    task_set_id?: string;
   }): Promise<import("../problem-evolution/schemas").ProblemEvolutionRun> {
     const { ProblemEvolutionRunSchema } = await import("../problem-evolution/schemas");
     const raw = await this.fetch("/api/problem-evolution/runs", {

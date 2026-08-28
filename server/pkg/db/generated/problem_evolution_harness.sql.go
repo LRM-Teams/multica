@@ -239,7 +239,7 @@ SET harness_proposals = $1,
     updated_at = now()
 WHERE id = $4 AND workspace_id = $5
   AND status IN ('draft', 'validating_evaluator', 'ready')
-RETURNING id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count
+RETURNING id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count, task_set_id
 `
 
 type SetProblemEvolutionRunHarnessBudgetParams struct {
@@ -305,6 +305,7 @@ func (q *Queries) SetProblemEvolutionRunHarnessBudget(ctx context.Context, arg S
 		&i.BlindScore,
 		&i.OverfitGap,
 		&i.ModelCallCount,
+		&i.TaskSetID,
 	)
 	return i, err
 }
@@ -313,7 +314,7 @@ const setProblemEvolutionRunWinnerHarness = `-- name: SetProblemEvolutionRunWinn
 UPDATE problem_evolution_run
 SET winner_harness_id = $1, updated_at = now()
 WHERE id = $2
-RETURNING id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count
+RETURNING id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count, task_set_id
 `
 
 type SetProblemEvolutionRunWinnerHarnessParams struct {
@@ -370,6 +371,7 @@ func (q *Queries) SetProblemEvolutionRunWinnerHarness(ctx context.Context, arg S
 		&i.BlindScore,
 		&i.OverfitGap,
 		&i.ModelCallCount,
+		&i.TaskSetID,
 	)
 	return i, err
 }

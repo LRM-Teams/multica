@@ -28,6 +28,7 @@ type ProblemEvolutionExport struct {
 	Edges         []ProblemEvolutionCandidateEdgeResponse    `json:"edges"`
 	Evaluations   []ProblemEvolutionEvaluationExport         `json:"evaluations"`
 	Artifacts     []ProblemEvolutionArtifactExport           `json:"artifacts"`
+	Usage         []ProblemEvolutionUsageExport               `json:"usage"`
 	Harnesses     []ProblemEvolutionHarnessResponse          `json:"harnesses,omitempty"`
 	Result        ProblemEvolutionResultExport               `json:"result"`
 	Reproduction  ProblemEvolutionReproduction               `json:"reproduction"`
@@ -54,6 +55,15 @@ type ProblemEvolutionArtifactExport struct {
 	ContentHash  string `json:"content_hash"`
 	ContentType  string `json:"content_type"`
 	SizeBytes    int64  `json:"size_bytes"`
+}
+
+type ProblemEvolutionUsageExport struct {
+	Provider     string  `json:"provider"`
+	Model        string  `json:"model"`
+	ModelCalls   int     `json:"model_calls"`
+	InputTokens  int64   `json:"input_tokens"`
+	OutputTokens int64   `json:"output_tokens"`
+	Cost         float64 `json:"cost"`
 }
 
 // ProblemEvolutionResultExport reports the search and blind numbers together.
@@ -131,6 +141,7 @@ func (h *Handler) buildProblemEvolutionExport(
 		Edges:         []ProblemEvolutionCandidateEdgeResponse{},
 		Evaluations:   []ProblemEvolutionEvaluationExport{},
 		Artifacts:     []ProblemEvolutionArtifactExport{},
+		Usage:         []ProblemEvolutionUsageExport{},
 	}
 	candidates, err := h.Queries.ListProblemEvolutionCandidates(ctx, run.ID)
 	if err != nil {
@@ -175,6 +186,17 @@ func (h *Handler) buildProblemEvolutionExport(
 	artifacts, err := h.Queries.ListProblemEvolutionArtifacts(ctx, run.ID)
 	if err != nil {
 		return ProblemEvolutionExport{}, err
+	}
+	usage, err := h.Queries.ListProblemEvolutionUsage(ctx, run.ID)
+	if err != nil {
+		return ProblemEvolutionExport{}, err
+	}
+	for _, item := range usage {
+		export.Usage = append(export.Usage, ProblemEvolutionUsageExport{
+			Provider: item.Provider, Model: item.Model, ModelCalls: int(item.ModelCalls),
+			InputTokens: item.InputTokens, OutputTokens: item.OutputTokens,
+			Cost: problemEvolutionCost(item.Cost),
+		})
 	}
 	for _, artifact := range artifacts {
 		export.Artifacts = append(export.Artifacts, ProblemEvolutionArtifactExport{

@@ -127,6 +127,7 @@ func (h *Handler) ReportProblemEvolutionEvents(w http.ResponseWriter, r *http.Re
 	scoredInBatch := false
 	harnessProposedInBatch := false
 	progressInBatch := false
+	iterationFinishedInBatch := false
 	for _, event := range events {
 		switch event.EventType {
 		case problemevolution.EventCandidateScored:
@@ -135,6 +136,8 @@ func (h *Handler) ReportProblemEvolutionEvents(w http.ResponseWriter, r *http.Re
 			harnessProposedInBatch = true
 		case problemevolution.EventProgress:
 			progressInBatch = true
+		case problemevolution.EventIterationFinished:
+			iterationFinishedInBatch = true
 		}
 		if err := event.Validate(); err != nil {
 			resp.Rejected++
@@ -189,6 +192,12 @@ func (h *Handler) ReportProblemEvolutionEvents(w http.ResponseWriter, r *http.Re
 		}
 		if err := h.enforceProblemEvolutionStopConditions(r.Context(), run, stopConfig); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to evaluate stop conditions")
+			return
+		}
+	}
+	if run.Mode == problemevolution.ModeTaskHarnessPersistent && iterationFinishedInBatch && resp.Accepted > 0 {
+		if err := h.enforceProblemEvolutionPersistentStopConditions(r.Context(), run); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to evaluate persistent stop conditions")
 			return
 		}
 	}
@@ -360,6 +369,18 @@ type problemEvolutionEventOutcome struct {
 // persistProblemEvolutionEvent stores one event and applies its projection to
 // the candidate row. Retried delivery of the same client_event_id is a no-op.
 func (h *Handler) persistProblemEvolutionEvent(ctx context.Context, run db.ProblemEvolutionRun, event problemevolution.EvolverEvent) (problemEvolutionEventOutcome, error) {
+	if run.Mode == problemevolution.ModeTaskHarnessPersistent {
+		// Projectors run before insert so a projection failure cannot leave an
+		// event that the caller must retry. Check idempotency first so a retry
+		// cannot duplicate a change record.
+		if existing, err := h.Queries.GetProblemEvolutionEventByClientID(ctx, db.GetProblemEvolutionEventByClientIDParams{
+			RunID: run.ID, ClientEventID: event.ClientEventID,
+		}); err == nil {
+			return problemEvolutionEventOutcome{disposition: problemEvolutionEventDuplicate, seq: existing.Seq}, nil
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return problemEvolutionEventOutcome{}, err
+		}
+	}
 	candidateID := pgtype.UUID{}
 	if event.CandidateRef != "" {
 		candidate, err := h.projectProblemEvolutionCandidate(ctx, run, event)
@@ -371,6 +392,11 @@ func (h *Handler) persistProblemEvolutionEvent(ctx context.Context, run db.Probl
 	payload := event.Payload
 	if len(payload) == 0 {
 		payload = json.RawMessage(`{}`)
+	}
+	if run.Mode == problemevolution.ModeTaskHarnessPersistent {
+		if err := h.projectProblemEvolutionPersistentEvent(ctx, run, event); err != nil {
+			return problemEvolutionEventOutcome{}, err
+		}
 	}
 	row, err := h.Queries.InsertProblemEvolutionEvent(ctx, db.InsertProblemEvolutionEventParams{
 		RunID:         run.ID,
@@ -404,6 +430,18 @@ func (h *Handler) persistProblemEvolutionEvent(ctx context.Context, run db.Probl
 			if _, err := h.Queries.SetProblemEvolutionRunModelCalls(ctx, db.SetProblemEvolutionRunModelCallsParams{
 				ID:             run.ID,
 				ModelCallCount: int32(progress.ModelCalls),
+			}); err != nil {
+				return problemEvolutionEventOutcome{}, err
+			}
+		}
+		if progress.ModelCalls > 0 || progress.Tokens > 0 || progress.Cost > 0 ||
+			progress.InputTokens > 0 || progress.OutputTokens > 0 {
+			if _, err := h.Queries.UpsertProblemEvolutionUsage(ctx, db.UpsertProblemEvolutionUsageParams{
+				RunID: run.ID, WorkspaceID: run.WorkspaceID, SourceEventID: row.ID,
+				Provider:   problemevolution.TruncateFreeText(progress.Provider),
+				Model:      problemevolution.TruncateFreeText(progress.Model),
+				ModelCalls: int32(progress.ModelCalls), InputTokens: progress.InputTokens,
+				OutputTokens: progress.OutputTokens, Cost: numericFromFloat(progress.Cost),
 			}); err != nil {
 				return problemEvolutionEventOutcome{}, err
 			}
@@ -736,6 +774,9 @@ func problemEvolutionStopConfig(run db.ProblemEvolutionRun) problemevolution.Sto
 			config = problemevolution.StopConfig{}
 		}
 	}
+	if run.Mode == problemevolution.ModeTaskHarnessPersistent {
+		return config.WithPersistentDefaults()
+	}
 	return config.WithDefaults()
 }
 
@@ -912,6 +953,30 @@ func (h *Handler) buildProblemEvolutionInput(ctx context.Context, run db.Problem
 	if problem.ArtifactType == "" {
 		problem.ArtifactType = run.ArtifactType
 	}
+	var taskSet *problemevolution.TaskSetInput
+	if run.Mode == problemevolution.ModeTaskHarnessPersistent {
+		if !run.TaskSetID.Valid {
+			return problemevolution.EvolverInput{}, problemevolution.FeedbackPolicy{}, errors.New("persistent harness run has no task set")
+		}
+		row, err := h.Queries.GetProblemEvolutionTaskSet(ctx, db.GetProblemEvolutionTaskSetParams{
+			ID: run.TaskSetID, WorkspaceID: run.WorkspaceID,
+		})
+		if err != nil {
+			return problemevolution.EvolverInput{}, problemevolution.FeedbackPolicy{}, errors.New("task set not found")
+		}
+		var taskNames, holdoutNames []string
+		if err := json.Unmarshal(row.TaskNames, &taskNames); err != nil {
+			return problemevolution.EvolverInput{}, problemevolution.FeedbackPolicy{}, errors.New("task set task_names is invalid")
+		}
+		if err := json.Unmarshal(row.HoldoutTaskNames, &holdoutNames); err != nil {
+			return problemevolution.EvolverInput{}, problemevolution.FeedbackPolicy{}, errors.New("task set holdout_task_names is invalid")
+		}
+		taskSet = &problemevolution.TaskSetInput{
+			Source: row.Source, DatasetRef: row.DatasetRef, DatasetRevision: row.DatasetRevision,
+			TaskNames: taskNames, HoldoutTaskNames: holdoutNames,
+			RolloutsPerTask: int(row.RolloutsPerTask), MaxParallel: int(row.MaxParallel),
+		}
+	}
 	budget := problemevolution.DefaultBudget()
 	if len(run.BudgetConfig) > 0 {
 		if err := json.Unmarshal(run.BudgetConfig, &budget); err != nil {
@@ -931,12 +996,36 @@ func (h *Handler) buildProblemEvolutionInput(ctx context.Context, run db.Problem
 			return problemevolution.EvolverInput{}, problemevolution.FeedbackPolicy{}, err
 		}
 	}
+	iterationNumber := 0
+	var persistentHarness *problemevolution.PersistentHarnessInput
+	if run.Mode == problemevolution.ModeTaskHarnessPersistent {
+		iterations, err := h.Queries.ListProblemEvolutionIterations(ctx, run.ID)
+		if err != nil {
+			return problemevolution.EvolverInput{}, problemevolution.FeedbackPolicy{}, err
+		}
+		if len(iterations) > 0 {
+			iterationNumber = int(iterations[len(iterations)-1].Iteration) + 1
+		}
+		versions, err := h.Queries.ListProblemEvolutionHarnessVersions(ctx, run.ID)
+		if err != nil {
+			return problemevolution.EvolverInput{}, problemevolution.FeedbackPolicy{}, err
+		}
+		if len(versions) > 0 {
+			persistentHarness = &problemevolution.PersistentHarnessInput{
+				Iteration: iterationNumber, InputVersionRef: versions[len(versions)-1].ContentHash,
+				ContentHash: versions[len(versions)-1].ContentHash,
+			}
+		}
+	}
 	input := problemevolution.EvolverInput{
 		SchemaVersion: problemevolution.SchemaVersion,
 		RunID:         uuidToString(run.ID),
 		Mode:          run.Mode,
 		Generation:    0,
+		Iteration:     iterationNumber,
 		Problem:       problem,
+		TaskSet:       taskSet,
+		Harness:       persistentHarness,
 		Evaluator: problemevolution.EvaluatorRef{
 			ContractID:    uuidToString(contractRow.ID),
 			ContentHash:   contractRow.ContentHash,

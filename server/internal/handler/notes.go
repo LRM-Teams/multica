@@ -279,7 +279,10 @@ WHERE s.user_id = $1
   AND s.seen_at IS NULL
   AND p.deleted_at IS NULL
   AND p.workspace_id = $2
-  AND p.owner_user_id <> $1`, userID, workspaceID).Scan(&count); err != nil {
+  AND p.owner_user_id <> $1
+  AND NOT EXISTS (
+    SELECT 1 FROM note_page_hidden h WHERE h.page_id = s.page_id AND h.user_id = $1
+  )`, userID, workspaceID).Scan(&count); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to count unread shares")
 		return
 	}
@@ -294,11 +297,23 @@ WITH RECURSIVE chain AS (
     WHERE id = $1
       AND deleted_at IS NULL
       AND (workspace_id = $2 OR owner_user_id = $3)
+      AND (
+        owner_user_id = $3
+        OR NOT EXISTS (
+          SELECT 1 FROM note_page_hidden h WHERE h.page_id = id AND h.user_id = $3
+        )
+      )
   UNION
     SELECT parent.id, parent.workspace_id, parent.parent_id, parent.owner_user_id
     FROM note_page parent
     JOIN chain child ON child.parent_id = parent.id
     WHERE parent.deleted_at IS NULL
+      AND (
+        parent.owner_user_id = $3
+        OR NOT EXISTS (
+          SELECT 1 FROM note_page_hidden h WHERE h.page_id = parent.id AND h.user_id = $3
+        )
+      )
 )
 SELECT
   EXISTS (
@@ -376,6 +391,9 @@ WITH RECURSIVE visible AS (
               WHERE sc.page_id = p.id
             )
           )
+          AND NOT EXISTS (
+            SELECT 1 FROM note_page_hidden h WHERE h.page_id = p.id AND h.user_id = $2
+          )
         )
       )
   UNION
@@ -383,6 +401,9 @@ WITH RECURSIVE visible AS (
     FROM note_page child
     JOIN visible parent ON child.parent_id = parent.id
     WHERE child.deleted_at IS NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM note_page_hidden h WHERE h.page_id = child.id AND h.user_id = $2
+      )
 )
 SELECT id, workspace_id, parent_id, owner_user_id, title, icon, content, sort_key, created_at, updated_at, deleted_at
 FROM visible
@@ -674,26 +695,41 @@ func (h *Handler) DeleteNotePage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !owner {
-		writeError(w, http.StatusForbidden, "only the owner can delete this note page")
+		if err := h.dismissNotePageForUser(r.Context(), page.ID, userID); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to delete note page")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	_, err := h.DB.Exec(r.Context(), `
 WITH RECURSIVE subtree AS (
-    SELECT id FROM note_page WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL
+    SELECT id, owner_user_id FROM note_page WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL
   UNION
-    SELECT child.id
+    SELECT child.id, child.owner_user_id
     FROM note_page child
     JOIN subtree parent ON child.parent_id = parent.id
     WHERE child.workspace_id = $2 AND child.deleted_at IS NULL
 )
 UPDATE note_page
 SET deleted_at = now(), updated_by = $3, updated_at = now()
-WHERE id IN (SELECT id FROM subtree)`, page.ID, page.WorkspaceID, userID)
+WHERE id IN (SELECT id FROM subtree WHERE owner_user_id = $3)`, page.ID, page.WorkspaceID, userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete note page")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) dismissNotePageForUser(ctx context.Context, pageID, userID pgtype.UUID) error {
+	if _, err := h.DB.Exec(ctx, `DELETE FROM note_page_share WHERE page_id = $1 AND user_id = $2`, pageID, userID); err != nil {
+		return err
+	}
+	_, err := h.DB.Exec(ctx, `
+INSERT INTO note_page_hidden (page_id, user_id)
+VALUES ($1, $2)
+ON CONFLICT (page_id, user_id) DO NOTHING`, pageID, userID)
+	return err
 }
 
 func (h *Handler) DuplicateNotePage(w http.ResponseWriter, r *http.Request) {

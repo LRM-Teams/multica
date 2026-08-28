@@ -1,0 +1,70 @@
+{
+  "title": "Solve",
+  "subtitle": "Evolve candidate answers for one problem under a frozen scoring contract.",
+  "newRun": "New run",
+  "emptyTitle": "No runs yet",
+  "emptyBody": "Create a run, describe the problem, freeze the scoring contract, then start.",
+  "runList": {
+    "status": "Status",
+    "mode": "Mode",
+    "created": "Created",
+    "candidates": "Candidates"
+  },
+  "create": {
+    "title": "New solve run",
+    "runTitle": "Title",
+    "runTitlePlaceholder": "Short name for this run",
+    "statement": "Problem",
+    "statementPlaceholder": "Describe the problem to solve",
+    "maxModelCalls": "Maximum model calls",
+    "maxModelCallsHelp": "Defaults to 100 calls per problem.",
+    "maxCostUSD": "Cost ceiling (USD)",
+    "maxCostHelp": "Leave blank for no cost limit.",
+    "unlimited": "Unlimited",
+    "submit": "Create run",
+    "cancel": "Cancel"
+  },
+  "detail": {
+    "back": "Back to runs",
+    "freezeEvaluator": "Freeze scoring contract",
+    "start": "Start",
+    "stop": "Stop",
+    "evaluatorHash": "Contract hash",
+    "evolverVersion": "Evolver version",
+    "notReplayable": "Not exactly replayable: the external evolver did not report a version.",
+    "graphVersion": "Graph version",
+    "noCandidates": "No candidates yet. Candidates appear as the external evolver reports them.",
+    "candidateScore": "Score",
+    "candidateUnscored": "Not evaluated",
+    "candidateLane": "Lane",
+    "candidateOperator": "Operator",
+    "hardGateFailed": "Hard gate failed",
+    "failureClass": "Failure",
+    "candidateLineage": "Lineage",
+    "searchBest": "Search best",
+    "blindScore": "Blind validation",
+    "modelCalls": "Model calls",
+    "overfitWarning": "Overfit gap",
+    "repairRounds": "Repair rounds",
+    "export": "Export"
+  },
+  "status": {
+    "draft": "Draft",
+    "validating_evaluator": "Validating contract",
+    "ready": "Ready",
+    "queued": "Queued",
+    "running": "Running",
+    "synthesizing": "Synthesizing",
+    "stopping": "Stopping",
+    "completed": "Completed",
+    "cancelled": "Cancelled",
+    "failed": "Failed"
+  },
+  "errors": {
+    "createFailed": "Failed to create run",
+    "freezeFailed": "Failed to freeze the scoring contract",
+    "startFailed": "Failed to start the run",
+    "stopFailed": "Failed to stop the run",
+    "exportFailed": "Failed to export run"
+  }
+}

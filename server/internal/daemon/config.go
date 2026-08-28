@@ -38,6 +38,15 @@ const (
 	DefaultHealthPort               = 19514
 	DefaultSharedSkillsSyncInterval = 60 * time.Second
 	DefaultMemoryCurationRunTimeout = 10 * time.Minute
+	// DefaultProblemEvolutionBatchTimeout is the wall clock for one external
+	// evolver invocation when the run's budget does not set its own.
+	DefaultProblemEvolutionBatchTimeout = 30 * time.Minute
+	// DefaultProblemEvolutionGracefulDrain is how long a stopped evolver has
+	// to exit after SIGTERM before it is killed (spec §13.1).
+	DefaultProblemEvolutionGracefulDrain = 60 * time.Second
+	// DefaultProblemEvolutionClaimInterval is how often the daemon asks for a
+	// queued run while none is executing locally.
+	DefaultProblemEvolutionClaimInterval = 15 * time.Second
 
 	// Graph memory reviewer (design: docs/superpowers/specs/2026-08-14-graph-memory-reviewer-design.zh-CN.md).
 	MemoryTypeLegacy = "legacy"
@@ -100,6 +109,20 @@ type Config struct {
 	MemoryCurationL3ReviewEnabled bool          // run the local Pi L3 reviewer during daemon-side curation
 	MemoryCurationL3ReviewTimeout time.Duration // per-agent L3 reviewer timeout
 	MemoryCurationRunTimeout      time.Duration // wall-clock timeout for one daemon-claimed curation run
+	// ProblemEvolutionEvolverPath is the external evolution program the daemon
+	// launches for problem-evolution runs. It is daemon-owned configuration on
+	// purpose: the server must not be able to name an arbitrary executable.
+	// Empty disables the capability on this machine.
+	ProblemEvolutionEvolverPath string
+	// ProblemEvolutionEvolverArgs are extra leading arguments passed before
+	// --input / --workdir (e.g. a python module invocation).
+	ProblemEvolutionEvolverArgs []string
+	// ProblemEvolutionBatchTimeout bounds one evolver invocation.
+	ProblemEvolutionBatchTimeout time.Duration
+	// ProblemEvolutionGracefulDrain is the SIGTERM → SIGKILL window.
+	ProblemEvolutionGracefulDrain time.Duration
+	// ProblemEvolutionClaimInterval throttles claim polling.
+	ProblemEvolutionClaimInterval time.Duration
 	// MemoryType selects the memory reviewer pipeline: "legacy" (default)
 	// or "graph" (design §1 memory_type switch). Any other value is a
 	// configuration error and fails LoadConfig.
@@ -442,6 +465,27 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	if memoryCurationRunTimeout <= 0 {
 		return Config{}, fmt.Errorf("MULTICA_DAEMON_MEMORY_CURATION_RUN_TIMEOUT: must be positive")
 	}
+	problemEvolutionBatchTimeout, err := durationFromEnv("MULTICA_DAEMON_PROBLEM_EVOLUTION_BATCH_TIMEOUT", DefaultProblemEvolutionBatchTimeout)
+	if err != nil {
+		return Config{}, err
+	}
+	if problemEvolutionBatchTimeout <= 0 {
+		return Config{}, fmt.Errorf("MULTICA_DAEMON_PROBLEM_EVOLUTION_BATCH_TIMEOUT: must be positive")
+	}
+	problemEvolutionGracefulDrain, err := durationFromEnv("MULTICA_DAEMON_PROBLEM_EVOLUTION_GRACEFUL_DRAIN", DefaultProblemEvolutionGracefulDrain)
+	if err != nil {
+		return Config{}, err
+	}
+	if problemEvolutionGracefulDrain <= 0 {
+		return Config{}, fmt.Errorf("MULTICA_DAEMON_PROBLEM_EVOLUTION_GRACEFUL_DRAIN: must be positive")
+	}
+	problemEvolutionClaimInterval, err := durationFromEnv("MULTICA_DAEMON_PROBLEM_EVOLUTION_CLAIM_INTERVAL", DefaultProblemEvolutionClaimInterval)
+	if err != nil {
+		return Config{}, err
+	}
+	if problemEvolutionClaimInterval <= 0 {
+		return Config{}, fmt.Errorf("MULTICA_DAEMON_PROBLEM_EVOLUTION_CLAIM_INTERVAL: must be positive")
+	}
 	// Graph memory reviewer (design §1/§6). memory_type fails loud on any
 	// value outside legacy|graph: a typo must not silently pin the daemon to
 	// the wrong memory pipeline.
@@ -485,6 +529,11 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		MemoryCurationL3ReviewEnabled:  memoryCurationL3ReviewEnabled,
 		MemoryCurationL3ReviewTimeout:  memoryCurationL3ReviewTimeout,
 		MemoryCurationRunTimeout:       memoryCurationRunTimeout,
+		ProblemEvolutionEvolverPath:    strings.TrimSpace(os.Getenv("MULTICA_DAEMON_PROBLEM_EVOLUTION_EVOLVER")),
+		ProblemEvolutionEvolverArgs:    splitEvolverArgs(os.Getenv("MULTICA_DAEMON_PROBLEM_EVOLUTION_EVOLVER_ARGS")),
+		ProblemEvolutionBatchTimeout:   problemEvolutionBatchTimeout,
+		ProblemEvolutionGracefulDrain:  problemEvolutionGracefulDrain,
+		ProblemEvolutionClaimInterval:  problemEvolutionClaimInterval,
 		MemoryType:                     memoryType,
 		GraphEmbedBaseURL:              strings.TrimSpace(os.Getenv("MULTICA_GRAPH_EMBED_BASE_URL")),
 		GraphEmbedAPIKey:               strings.TrimSpace(os.Getenv("MULTICA_GRAPH_EMBED_API_KEY")),

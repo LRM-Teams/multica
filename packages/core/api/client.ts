@@ -5699,4 +5699,156 @@ export class ApiClient {
       quality_signal: "user_confirmed_delivery",
     }, { endpoint: "GET /api/research/v6/production-window" });
   }
+
+  async listProblemEvolutionRuns(): Promise<
+    import("../problem-evolution/schemas").ProblemEvolutionRun[]
+  > {
+    const { ProblemEvolutionRunListSchema } = await import("../problem-evolution/schemas");
+    const raw = await this.fetch("/api/problem-evolution/runs");
+    return parseWithFallback(raw, ProblemEvolutionRunListSchema, [], {
+      endpoint: "GET /api/problem-evolution/runs",
+    });
+  }
+
+  async createProblemEvolutionRun(body: {
+    mode?: string;
+    title?: string;
+    problem_spec?: unknown;
+    artifact_type?: string;
+    runtime_id?: string | null;
+    model_config?: unknown;
+    budget_config?: unknown;
+    stop_config?: unknown;
+  }): Promise<import("../problem-evolution/schemas").ProblemEvolutionRun> {
+    const { ProblemEvolutionRunSchema } = await import("../problem-evolution/schemas");
+    const raw = await this.fetch("/api/problem-evolution/runs", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    const parsed = ProblemEvolutionRunSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw new Error("POST /api/problem-evolution/runs response failed schema validation");
+    }
+    return parsed.data;
+  }
+
+  async getProblemEvolutionSnapshot(
+    runId: string,
+  ): Promise<import("../problem-evolution/schemas").ProblemEvolutionSnapshot> {
+    const { ProblemEvolutionSnapshotSchema, EMPTY_PROBLEM_EVOLUTION_SNAPSHOT } = await import(
+      "../problem-evolution/schemas"
+    );
+    const raw = await this.fetch(`/api/problem-evolution/runs/${runId}/snapshot`);
+    return parseWithFallback(raw, ProblemEvolutionSnapshotSchema, EMPTY_PROBLEM_EVOLUTION_SNAPSHOT, {
+      endpoint: "GET /api/problem-evolution/runs/:id/snapshot",
+    });
+  }
+
+  async listProblemEvolutionEvents(
+    runId: string,
+    afterSeq: number,
+  ): Promise<import("../problem-evolution/schemas").ProblemEvolutionEvent[]> {
+    const { ProblemEvolutionEventListSchema } = await import("../problem-evolution/schemas");
+    const raw = await this.fetch(
+      `/api/problem-evolution/runs/${runId}/events?after_seq=${afterSeq}`,
+    );
+    return parseWithFallback(raw, ProblemEvolutionEventListSchema, [], {
+      endpoint: "GET /api/problem-evolution/runs/:id/events",
+    });
+  }
+
+  async createProblemEvolutionEvaluator(
+    runId: string,
+    body: { contract: unknown; feedback_policy?: unknown },
+  ): Promise<import("../problem-evolution/schemas").ProblemEvolutionEvaluatorContract> {
+    const { ProblemEvolutionEvaluatorContractSchema } = await import(
+      "../problem-evolution/schemas"
+    );
+    const raw = await this.fetch(`/api/problem-evolution/runs/${runId}/evaluator`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    const parsed = ProblemEvolutionEvaluatorContractSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw new Error("POST /api/problem-evolution/runs/:id/evaluator failed schema validation");
+    }
+    return parsed.data;
+  }
+
+  async freezeProblemEvolutionEvaluator(
+    runId: string,
+  ): Promise<import("../problem-evolution/schemas").ProblemEvolutionEvaluatorContract> {
+    const { ProblemEvolutionEvaluatorContractSchema } = await import(
+      "../problem-evolution/schemas"
+    );
+    const raw = await this.fetch(`/api/problem-evolution/runs/${runId}/evaluator/freeze`, {
+      method: "POST",
+    });
+    const parsed = ProblemEvolutionEvaluatorContractSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw new Error(
+        "POST /api/problem-evolution/runs/:id/evaluator/freeze failed schema validation",
+      );
+    }
+    return parsed.data;
+  }
+
+  async startProblemEvolutionRun(
+    runId: string,
+  ): Promise<import("../problem-evolution/schemas").ProblemEvolutionRun> {
+    const { ProblemEvolutionRunSchema } = await import("../problem-evolution/schemas");
+    const raw = await this.fetch(`/api/problem-evolution/runs/${runId}/start`, {
+      method: "POST",
+    });
+    const parsed = ProblemEvolutionRunSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw new Error("POST /api/problem-evolution/runs/:id/start failed schema validation");
+    }
+    return parsed.data;
+  }
+
+  async stopProblemEvolutionRun(
+    runId: string,
+    reason?: string,
+  ): Promise<import("../problem-evolution/schemas").ProblemEvolutionRun> {
+    const { ProblemEvolutionRunSchema } = await import("../problem-evolution/schemas");
+    const raw = await this.fetch(`/api/problem-evolution/runs/${runId}/stop`, {
+      method: "POST",
+      body: JSON.stringify({ reason: reason ?? "user_stopped" }),
+    });
+    const parsed = ProblemEvolutionRunSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw new Error("POST /api/problem-evolution/runs/:id/stop failed schema validation");
+    }
+    return parsed.data;
+  }
+
+  async exportProblemEvolutionRun(
+    runId: string,
+  ): Promise<import("../problem-evolution/schemas").ProblemEvolutionExport> {
+    const { ProblemEvolutionExportSchema } = await import("../problem-evolution/schemas");
+    const raw = await this.fetch(`/api/problem-evolution/runs/${runId}/export`);
+    const parsed = ProblemEvolutionExportSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw new Error("GET /api/problem-evolution/runs/:id/export failed schema validation");
+    }
+    return parsed.data;
+  }
+
+  async compareProblemEvolutionRuns(
+    runId: string,
+    otherRunId: string,
+  ): Promise<import("../problem-evolution/schemas").ProblemEvolutionComparison> {
+    const { ProblemEvolutionComparisonSchema } = await import("../problem-evolution/schemas");
+    const raw = await this.fetch(
+      `/api/problem-evolution/runs/${runId}/compare/${otherRunId}`,
+    );
+    const parsed = ProblemEvolutionComparisonSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw new Error(
+        "GET /api/problem-evolution/runs/:id/compare/:otherId failed schema validation",
+      );
+    }
+    return parsed.data;
+  }
 }

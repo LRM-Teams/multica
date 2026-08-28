@@ -489,6 +489,7 @@ func main() {
 	// state drives liveness for daemons that no longer send heartbeat frames.
 	go runRunnerPresenceLivenessTicker(sweepCtx, queries, liveness, daemonHub)
 	go runMixedRLQuiescenceReaper(sweepCtx, h)
+	go runProblemEvolutionReaper(sweepCtx, h)
 	go runCollaborationTurnWorkers(sweepCtx, h)
 	go runChannelOnboardingPublisher(sweepCtx, h)
 	go heartbeatScheduler.Run(sweepCtx)

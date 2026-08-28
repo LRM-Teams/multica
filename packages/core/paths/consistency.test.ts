@@ -25,6 +25,9 @@ describe("paths.workspace() shape", () => {
         "channels",
         "agents",
         "evolution",
+        // Nested under the evolution segment, so link-handler needs no new
+        // first-segment entry.
+        "evolutionSolve",
         "planBilling",
         "inbox",
         "myIssues",
@@ -53,6 +56,7 @@ describe("paths.workspace() shape", () => {
       ["agents", "members"],
       ["members", "members"],
       ["evolution", "evolution"],
+      ["evolutionSolve", "evolution/solve"],
       ["planBilling", "plan-billing"],
       ["inbox", "inbox"],
       ["myIssues", "my-issues"],

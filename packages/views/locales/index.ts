@@ -28,6 +28,7 @@ import enChannels from "./en/channels.json";
 import enEvolution from "./en/evolution.json";
 import enKnowledge from "./en/knowledge.json";
 import enResearch from "./en/research.json";
+import enProblemEvolution from "./en/problem-evolution.json";
 import enPlanBilling from "./en/plan-billing.json";
 import zhHansCommon from "./zh-Hans/common.json";
 import zhHansAuth from "./zh-Hans/auth.json";
@@ -58,6 +59,7 @@ import zhHansChannels from "./zh-Hans/channels.json";
 import zhHansEvolution from "./zh-Hans/evolution.json";
 import zhHansKnowledge from "./zh-Hans/knowledge.json";
 import zhHansResearch from "./zh-Hans/research.json";
+import zhHansProblemEvolution from "./zh-Hans/problem-evolution.json";
 import zhHansPlanBilling from "./zh-Hans/plan-billing.json";
 
 // Single source of truth for the resource bundle. Both apps (web layout +
@@ -94,6 +96,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     evolution: enEvolution,
     knowledge: enKnowledge,
     research: enResearch,
+    "problem-evolution": enProblemEvolution,
     "plan-billing": enPlanBilling,
   },
   "zh-Hans": {
@@ -126,6 +129,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     evolution: zhHansEvolution,
     knowledge: zhHansKnowledge,
     research: zhHansResearch,
+    "problem-evolution": zhHansProblemEvolution,
     "plan-billing": zhHansPlanBilling,
   },
 };

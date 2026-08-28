@@ -1,0 +1,70 @@
+{
+  "title": "解题进化",
+  "subtitle": "在冻结的评分契约下，为同一道题进化候选答案。",
+  "newRun": "新建运行",
+  "emptyTitle": "还没有运行",
+  "emptyBody": "先新建运行、写清题目、冻结评分契约，然后开始。",
+  "runList": {
+    "status": "状态",
+    "mode": "模式",
+    "created": "创建时间",
+    "candidates": "候选数"
+  },
+  "create": {
+    "title": "新建解题运行",
+    "runTitle": "标题",
+    "runTitlePlaceholder": "给这次运行起个短名字",
+    "statement": "题目",
+    "statementPlaceholder": "描述要解决的问题",
+    "maxModelCalls": "模型调用上限",
+    "maxModelCallsHelp": "默认每道题最多调用 100 次模型。",
+    "maxCostUSD": "金额上限（USD）",
+    "maxCostHelp": "留空表示不限制金额。",
+    "unlimited": "无限制",
+    "submit": "创建运行",
+    "cancel": "取消"
+  },
+  "detail": {
+    "back": "返回运行列表",
+    "freezeEvaluator": "冻结评分契约",
+    "start": "开始",
+    "stop": "停止",
+    "evaluatorHash": "契约哈希",
+    "evolverVersion": "进化程序版本",
+    "notReplayable": "无法精确重放：外部进化程序未上报版本。",
+    "graphVersion": "图谱版本",
+    "noCandidates": "还没有候选。外部进化程序上报后会出现在这里。",
+    "candidateScore": "得分",
+    "candidateUnscored": "未评测",
+    "candidateLane": "分支",
+    "candidateOperator": "算子",
+    "hardGateFailed": "硬性维度未通过",
+    "failureClass": "失败类型",
+    "candidateLineage": "谱系",
+    "searchBest": "搜索最优",
+    "blindScore": "盲验成绩",
+    "modelCalls": "模型调用",
+    "overfitWarning": "过拟合缺口",
+    "repairRounds": "修复轮数",
+    "export": "导出"
+  },
+  "status": {
+    "draft": "草稿",
+    "validating_evaluator": "校验契约中",
+    "ready": "就绪",
+    "queued": "排队中",
+    "running": "运行中",
+    "synthesizing": "综合中",
+    "stopping": "停止中",
+    "completed": "已完成",
+    "cancelled": "已取消",
+    "failed": "已失败"
+  },
+  "errors": {
+    "createFailed": "创建运行失败",
+    "freezeFailed": "冻结评分契约失败",
+    "startFailed": "开始运行失败",
+    "stopFailed": "停止运行失败",
+    "exportFailed": "导出运行失败"
+  }
+}

@@ -577,10 +577,14 @@ const (
 	DaemonCapabilityAgentCLITransport        = "agent_cli_transport"
 	DaemonCapabilityAgentCredentialTransport = "agent_credential_transport_v1"
 	DaemonCapabilityMemoryCuration           = "memory_curation_v1"
-	DaemonCapabilityMemoryCrossDeviceSync    = "memory_cross_device_sync_v2"
-	DaemonCapabilityRestrictedExecution      = "restricted_execution_profiles_v1"
-	DaemonCapabilityReminderVersionedCache   = "reminder_versioned_cache_v1"
-	DaemonCapabilityReminderFireRequest      = "reminder:fire-request-v2"
+	// DaemonCapabilityProblemEvolution gates claiming problem-evolution runs
+	// and launching the external evolver program. It is only advertised when
+	// the daemon has an evolver path configured.
+	DaemonCapabilityProblemEvolution       = "problem_evolution_v1"
+	DaemonCapabilityMemoryCrossDeviceSync  = "memory_cross_device_sync_v2"
+	DaemonCapabilityRestrictedExecution    = "restricted_execution_profiles_v1"
+	DaemonCapabilityReminderVersionedCache = "reminder_versioned_cache_v1"
+	DaemonCapabilityReminderFireRequest    = "reminder:fire-request-v2"
 	// DaemonCapabilityWorkspaceDaemonAgentReset gates Raft's discrete
 	// agent:reset-workspace command plus Multica's terminal reset receipt.
 	DaemonCapabilityWorkspaceDaemonAgentReset = "workspace_daemon_agent_reset_workspace_v1"

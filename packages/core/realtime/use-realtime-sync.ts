@@ -14,6 +14,7 @@ import { projectKeys } from "../projects/queries";
 import { pinKeys } from "../pins/queries";
 import { runtimeKeys } from "../runtimes/queries";
 import { sandboxKeys } from "../sandboxes/queries";
+import { problemEvolutionKeys } from "../problem-evolution/queries";
 import { labelKeys } from "../labels/queries";
 import {
   agentTaskSnapshotKeys,
@@ -1408,6 +1409,33 @@ export function useRealtimeSync(
       onResearchEvent("research_projection_v6:delta"),
     );
 
+    // Problem evolution keeps its graph state server-side; every event is an
+    // invalidate carrying the graph version the server wrote at.
+    const onProblemEvolutionEvent = (payload: unknown) => {
+      const wsId = getCurrentWsId();
+      if (!wsId) return;
+      const runId =
+        payload && typeof payload === "object" && !Array.isArray(payload)
+          ? (payload as { run_id?: unknown }).run_id
+          : undefined;
+      if (typeof runId === "string" && runId !== "") {
+        qc.invalidateQueries({ queryKey: problemEvolutionKeys.snapshot(wsId, runId) });
+      }
+      qc.invalidateQueries({ queryKey: problemEvolutionKeys.runs(wsId) });
+    };
+    const unsubProblemEvolutionChanged = ws.on(
+      "problem_evolution_run:changed",
+      onProblemEvolutionEvent,
+    );
+    const unsubProblemEvolutionGraph = ws.on(
+      "problem_evolution_run:graph_updated",
+      onProblemEvolutionEvent,
+    );
+    const unsubProblemEvolutionCompleted = ws.on(
+      "problem_evolution_run:completed",
+      onProblemEvolutionEvent,
+    );
+
     const unsubNotesShareUnread = ws.on("notes:share_unread", () => {
       const wsId = getCurrentWsId();
       if (wsId) qc.invalidateQueries({ queryKey: noteKeys.all(wsId) });
@@ -1471,6 +1499,9 @@ export function useRealtimeSync(
       unsubResearchStatus();
       unsubResearchProductRound();
       unsubResearchV6Projection();
+      unsubProblemEvolutionChanged();
+      unsubProblemEvolutionGraph();
+      unsubProblemEvolutionCompleted();
       unsubNotesShareUnread();
       timers.forEach(clearTimeout);
       timers.clear();

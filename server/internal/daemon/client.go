@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/multica-ai/multica/server/internal/problemevolution"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -681,6 +682,71 @@ func (c *Client) ReportLocalSkillImportResult(ctx context.Context, runtimeID, re
 
 func (c *Client) ReportMemoryCurationResult(ctx context.Context, runtimeID, runID string, result map[string]any) error {
 	return c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/memory-curation/%s/result", runtimeID, runID), result, nil, c.tokenForRuntime(runtimeID))
+}
+
+// ClaimProblemEvolutionRun asks for one queued problem-evolution run. A nil
+// result with a nil error means the queue was empty.
+func (c *Client) ClaimProblemEvolutionRun(ctx context.Context, runtimeID string) (*problemEvolutionClaim, error) {
+	var resp problemEvolutionClaim
+	if err := c.postJSONWithToken(ctx, "/api/daemon/problem-evolution/claim", map[string]any{
+		"runtime_id": runtimeID,
+	}, &resp, c.tokenForRuntime(runtimeID)); err != nil {
+		return nil, err
+	}
+	if resp.Run.ID == "" {
+		return nil, nil
+	}
+	return &resp, nil
+}
+
+// ReportProblemEvolutionEvents posts a batch of evolver events. The server
+// allocates the sequence numbers and reports whether a stop was requested.
+func (c *Client) ReportProblemEvolutionEvents(ctx context.Context, runtimeID, runID, claimToken string, events []problemevolution.EvolverEvent) (*problemEvolutionEventAck, error) {
+	var ack problemEvolutionEventAck
+	if err := c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/problem-evolution/runs/%s/events", runID), map[string]any{
+		"claim_token": claimToken,
+		"events":      events,
+	}, &ack, c.tokenForRuntime(runtimeID)); err != nil {
+		return nil, err
+	}
+	return &ack, nil
+}
+
+// HeartbeatProblemEvolutionRun renews the claim and reports stop intent.
+func (c *Client) HeartbeatProblemEvolutionRun(ctx context.Context, runtimeID, runID, claimToken string) (bool, error) {
+	var resp struct {
+		StopRequested bool `json:"stop_requested"`
+	}
+	if err := c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/problem-evolution/runs/%s/heartbeat", runID), map[string]any{
+		"claim_token": claimToken,
+	}, &resp, c.tokenForRuntime(runtimeID)); err != nil {
+		return false, err
+	}
+	return resp.StopRequested, nil
+}
+
+// CompleteProblemEvolutionRun reports a finished batch.
+func (c *Client) CompleteProblemEvolutionRun(ctx context.Context, runtimeID, runID, claimToken, bestCandidateRef, evolverVersion string) error {
+	return c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/problem-evolution/runs/%s/complete", runID), map[string]any{
+		"claim_token":        claimToken,
+		"best_candidate_ref": bestCandidateRef,
+		"evolver_version":    evolverVersion,
+	}, nil, c.tokenForRuntime(runtimeID))
+}
+
+// FailProblemEvolutionRun reports an unrecoverable batch failure.
+func (c *Client) FailProblemEvolutionRun(ctx context.Context, runtimeID, runID, claimToken, failureReason string) error {
+	return c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/problem-evolution/runs/%s/fail", runID), map[string]any{
+		"claim_token":    claimToken,
+		"failure_reason": failureReason,
+	}, nil, c.tokenForRuntime(runtimeID))
+}
+
+// ReleaseProblemEvolutionRun returns a claimed run to the queue.
+func (c *Client) ReleaseProblemEvolutionRun(ctx context.Context, runtimeID, runID, claimToken string) error {
+	return c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/problem-evolution/runs/%s/release", runID), map[string]any{
+		"claim_token": claimToken,
+	}, nil, c.tokenForRuntime(runtimeID))
 }
 
 // ReportAgentProviderCrashed tells the server an idle resident provider

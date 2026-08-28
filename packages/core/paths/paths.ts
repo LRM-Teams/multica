@@ -24,6 +24,13 @@ function workspaceScoped(slug: string) {
     overview: () => `${ws}/overview`,
     usage: () => `${ws}/usage`,
     evolution: () => `${ws}/evolution`,
+    /**
+     * Problem-evolution ("solve") lives under Evolution Center as a full-screen
+     * sub-route so it shares the section's navigation without sharing the
+     * memory/curation pages' data model.
+     */
+    evolutionSolve: () => `${ws}/evolution/solve`,
+    evolutionSolveRun: (id: string) => `${ws}/evolution/solve/${encode(id)}`,
     notes: () => `${ws}/notes`,
     noteDetail: (id: string) => `${ws}/notes/${encode(id)}`,
     /** Member-visible memory Wiki (LRM-1001). Nav label: 知识 / Knowledge. */

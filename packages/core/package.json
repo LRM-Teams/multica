@@ -50,6 +50,7 @@
     "./notes/selection-quote": "./notes/selection-quote.ts",
     "./notes/queries": "./notes/queries.ts",
     "./notes/mutations": "./notes/mutations.ts",
+    "./notes/delete": "./notes/delete.ts",
     "./notes/issue-refs": "./notes/issue-refs.ts",
     "./notes/writeback-preview": "./notes/writeback-preview.ts",
     "./notes/worker-reply-actions": "./notes/worker-reply-actions.ts",

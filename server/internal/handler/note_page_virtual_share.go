@@ -152,6 +152,10 @@ ON CONFLICT (page_id, user_id) DO NOTHING`, page.ID, targetID, ownerID); err != 
 				return noteShareRoster{}, false
 			}
 		}
+		if _, err := tx.Exec(ctx, `DELETE FROM note_page_hidden WHERE page_id = $1 AND user_id = ANY($2::uuid[])`, page.ID, users); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to update shares")
+			return noteShareRoster{}, false
+		}
 	}
 
 	agents := []string{}

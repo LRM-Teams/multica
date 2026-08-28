@@ -12,6 +12,7 @@ import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { noteFormatCssVars, type NoteFormatDefaults } from "@multica/core/notes/format";
 import { useNoteFormatStore } from "@multica/core/notes/format-store";
 import { syncNotePageRefsFromContent } from "@multica/core/notes/issue-refs";
+import { collectNoteIdsRemovedOnDelete } from "@multica/core/notes/delete";
 import { useCreateNotePage, useDeleteNotePage, useDuplicateNotePage, useEmptyNoteTrash, useMoveNotePage, usePermanentlyDeleteNotePage, useRestoreNotePage, useUpdateNotePage } from "@multica/core/notes/mutations";
 import { requestInlineNotePageAI, resolveNotesAssistantAgent } from "@multica/core/notes/notes-assistant-agent";
 import { applyNoteShareSeen, noteAIJobOptions, noteDetailOptions, noteListOptions, noteNeedsShareSeen, noteTrashOptions } from "@multica/core/notes/queries";
@@ -47,6 +48,7 @@ import {
 import { NoteFormatDefaultsDialog } from "./note-format-defaults-dialog";
 import { NoteShareDialog } from "./note-share-dialog";
 import { NoteShareSummary } from "./note-share-summary";
+import { noteCanDropOnTarget, type NoteDropPosition } from "./note-drag";
 import { NoteTrashDock, noteCanDropOnTrash } from "./note-trash-dock";
 import { NoteTreeIcon } from "./note-tree-icon";
 import { NoteTrashView } from "./note-trash-view";
@@ -54,7 +56,6 @@ import { NoteWritebackReview } from "./note-writeback-review";
 import { buildNoteShareNames, memberLabel, workspaceLabel } from "./share-labels";
 
 type NoteTreeNode = NotePage & { children: NoteTreeNode[] };
-type NoteDropPosition = "before" | "after" | "inside";
 type NoteDropTarget = { id: string; position: NoteDropPosition };
 
 type NoteExpansionOverrides = { selectionId: string | null; expanded: Set<string>; collapsed: Set<string> };
@@ -166,19 +167,6 @@ function noteSortKeyBetween(previous?: string, next?: string) {
   return nowKey.padStart(20, "0");
 }
 
-function isNoteDescendant(pages: NotePage[], ancestorId: string, targetId: string) {
-  const byId = new Map(pages.map((page) => [page.id, page]));
-  const seen = new Set<string>();
-  let current = byId.get(targetId);
-  while (current?.parent_id) {
-    if (current.parent_id === ancestorId) return true;
-    if (seen.has(current.parent_id)) return false;
-    seen.add(current.parent_id);
-    current = byId.get(current.parent_id);
-  }
-  return false;
-}
-
 function findNoteDropPosition(event: DragEvent<HTMLElement>): NoteDropPosition {
   const rect = event.currentTarget.getBoundingClientRect();
   const ratio = (event.clientY - rect.top) / Math.max(rect.height, 1);
@@ -217,21 +205,6 @@ function collectNoteAncestorIds(pages: NotePage[], id?: string) {
     current = byId.get(current.parent_id);
   }
   return expanded;
-}
-
-function collectNoteSubtreeIds(pages: NotePage[], rootId: string) {
-  const ids = new Set([rootId]);
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const page of pages) {
-      if (page.parent_id && ids.has(page.parent_id) && !ids.has(page.id)) {
-        ids.add(page.id);
-        changed = true;
-      }
-    }
-  }
-  return ids;
 }
 
 function NoteTreeRow({
@@ -396,27 +369,29 @@ function NoteTreeRow({
           </button>
         )}
         <div className={cn("relative z-10 ml-auto items-center gap-0.5", menuOpen ? "flex" : "hidden group-hover:flex")} onClick={(event) => event.stopPropagation()}>
-          {node.can_manage_shares && (
-            <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
-              <DropdownMenuTrigger render={<button type="button" aria-label={t(($) => $.notes_page.page_menu)} />} className="flex size-5 items-center justify-center rounded text-muted-foreground hover:bg-background hover:text-foreground">
-                <MoreHorizontal className="size-3.5" />
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
+          <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+            <DropdownMenuTrigger render={<button type="button" aria-label={t(($) => $.notes_page.page_menu)} />} className="flex size-5 items-center justify-center rounded text-muted-foreground hover:bg-background hover:text-foreground">
+              <MoreHorizontal className="size-3.5" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {node.can_manage_shares && (
                 <DropdownMenuItem onClick={() => onShare(node)}>
                   <Share2 className="size-3.5" />
                   {t(($) => $.notes_page.share_action)}
                 </DropdownMenuItem>
+              )}
+              {node.can_manage_shares && (
                 <DropdownMenuItem onClick={() => onDuplicate(node)}>
                   <Copy className="size-3.5" />
                   {t(($) => $.notes_page.duplicate_action)}
                 </DropdownMenuItem>
-                <DropdownMenuItem variant="destructive" onClick={() => onDelete(node)}>
-                  <Trash2 className="size-3.5" />
-                  {t(($) => $.notes_page.delete_action)}
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
+              )}
+              <DropdownMenuItem variant="destructive" onClick={() => onDelete(node)}>
+                <Trash2 className="size-3.5" />
+                {t(($) => $.notes_page.delete_action)}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <button
             type="button"
             className="flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-background hover:text-foreground"
@@ -900,11 +875,7 @@ export function NotesPage({ pageId }: { pageId?: string }) {
   };
 
   const noteDragAllowed = (draggedId: string, target: NotePage, position: NoteDropPosition) => {
-    const dragged = findNote(list.pages, draggedId);
-    if (!dragged?.can_manage_shares || !target.can_manage_shares || dragged.id === target.id) return false;
-    if (position === "inside" && isNoteDescendant(list.pages, dragged.id, target.id)) return false;
-    if (position !== "inside" && target.parent_id && isNoteDescendant(list.pages, dragged.id, target.parent_id)) return false;
-    return true;
+    return noteCanDropOnTarget(findNote(list.pages, draggedId), target, position, list.pages);
   };
 
   const handleNoteDragStart = (id: string) => {
@@ -1045,9 +1016,9 @@ export function NotesPage({ pageId }: { pageId?: string }) {
     }
   };
 
-  const moveNoteToTrash = async (page: NotePage) => {
-    if (!noteCanDropOnTrash(page)) return;
-    const deletedIds = collectNoteSubtreeIds(list.pages, page.id);
+  const removeNoteFromDirectory = async (page: NotePage) => {
+    const owned = page.owner_user_id === currentUserId;
+    const deletedIds = collectNoteIdsRemovedOnDelete(list.pages, page.id, owned);
     const expandedAfterDelete = new Set([...expandedNoteIds].filter((id) => !deletedIds.has(id)));
     try {
       setNoteExpansionOverrides((current) => ({
@@ -1058,16 +1029,26 @@ export function NotesPage({ pageId }: { pageId?: string }) {
       writeNoteExpandedIds(wsId, expandedAfterDelete);
       await deletePage.mutateAsync(page.id);
       if (selected?.id && deletedIds.has(selected.id)) navigation.push(paths.notes());
-      toast.success(t(($) => $.notes_page.moved_to_trash));
+      toast.success(owned ? t(($) => $.notes_page.moved_to_trash) : t(($) => $.notes_page.removed_share));
     } catch (error) {
       showErrorToast(error instanceof Error ? error.message : t(($) => $.notes_page.delete_failed));
     }
   };
 
-  const handleDelete = async (page: NotePage) => {
+  const moveNoteToTrash = async (page: NotePage) => {
     if (!noteCanDropOnTrash(page)) return;
-    if (!window.confirm(t(($) => $.notes_page.delete_confirm, { title: page.title }))) return;
-    await moveNoteToTrash(page);
+    await removeNoteFromDirectory(page);
+  };
+
+  const handleDelete = async (page: NotePage) => {
+    const owned = page.owner_user_id === currentUserId;
+    const confirmed = window.confirm(
+      owned
+        ? t(($) => $.notes_page.delete_confirm, { title: page.title })
+        : t(($) => $.notes_page.remove_share_confirm, { title: page.title }),
+    );
+    if (!confirmed) return;
+    await removeNoteFromDirectory(page);
   };
 
   const handleDropOnTrash = async () => {
@@ -1128,6 +1109,10 @@ export function NotesPage({ pageId }: { pageId?: string }) {
               <DropdownMenuItem onClick={() => setUiState((current) => ({ ...current, exportOpen: true }))}>
                 <Download className="size-3.5" />
                 {t(($) => $.notes_page.export_action)}
+              </DropdownMenuItem>
+              <DropdownMenuItem variant="destructive" onClick={() => handleDelete(selected)}>
+                <Trash2 className="size-3.5" />
+                {t(($) => $.notes_page.delete_action)}
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>

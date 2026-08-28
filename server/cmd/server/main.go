@@ -453,6 +453,11 @@ func main() {
 		pool, service.LoadGraphMemoryLimits(os.Getenv), "", "", service.GraphMemoryHybridSeeder{})
 	h.GraphMemoryAgentControl = service.NewPostgresGraphMemoryAgentControlPlane(pool)
 	h.GraphMemoryAgentGateway = service.NewGraphMemoryAgentGateway(pool)
+	// Submitted memory-agent runs are the conversational turns of agent-mode
+	// channels; record each as a channel-scoped interaction_dag segment so
+	// graph-memory staging receives them (the task-close seams never see
+	// these runs — they create no agent_inbox_event rows).
+	h.GraphMemoryAgentGateway.SetSubmittedRunSink(service.NewGraphMemoryRunSegmentRecorder(pool))
 	// Recall execution uses the same PI environment contract as the graph
 	// scheduler. The model is also passed through to Explore audit records.
 	h.GraphMemoryRecallExecutor = service.NewGraphMemoryRecallExecutor(

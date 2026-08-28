@@ -1,0 +1,270 @@
+// SPDX-License-Identifier: Apache-2.0
+
+package service
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"log/slog"
+	"os"
+	"strconv"
+	"strings"
+	"sync"
+
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/multica-ai/multica/server/internal/memorygraph"
+	"github.com/multica-ai/multica/server/internal/util"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
+)
+
+// GraphMemorySubmittedRunSink is notified after a graph_memory_agent_run
+// commits with status "submitted". Agent-mode channel turns never create an
+// agent_inbox_event (the conversational worker is the managed Memory Agent),
+// so the task-close seams cannot see them; this sink is the seam that turns a
+// submitted run into a channel-scoped interaction_dag segment feeding
+// graph-memory staging. Best-effort by contract: sink errors never affect the
+// run's terminal result.
+type GraphMemorySubmittedRunSink interface {
+	RecordSubmittedRun(ctx context.Context, runID, workspaceID, channelID string, consumedSeq int64)
+}
+
+// GraphMemoryRunSegmentRecorder is the production sink. It is self-contained
+// on the pool: dedup, run/message reads, the segment insert, and the ingest
+// hook all resolve through it, so wiring needs no new dependencies.
+type GraphMemoryRunSegmentRecorder struct {
+	pool    *pgxpool.Pool
+	queries *db.Queries
+	dag     *InteractionDAGService
+
+	hookOnce sync.Once
+	hook     *GraphMemoryIngestHook
+
+	// ingestOverride is test-only: replaces IngestChannelRun with a stub.
+	ingestOverride func(ctx context.Context, workspaceID, channelID, agentID, runID string, seg memorygraph.SegmentExport) error
+}
+
+// NewGraphMemoryRunSegmentRecorder builds the sink. dag may be nil (recording
+// disabled); the ingest hook is constructed lazily from the pool.
+func NewGraphMemoryRunSegmentRecorder(pool *pgxpool.Pool) *GraphMemoryRunSegmentRecorder {
+	queries := db.New(pool)
+	return &GraphMemoryRunSegmentRecorder{
+		pool:    pool,
+		queries: queries,
+		dag:     NewInteractionDAGService(queries, nil, interactionDAGEnabledDefault()),
+	}
+}
+
+// interactionDAGEnabledDefault mirrors the TrainingConfig gate: segment-DAG
+// recording is on unless INTERACTION_DAG_ENABLED is explicitly false.
+func interactionDAGEnabledDefault() bool {
+	if raw := os.Getenv(interactionDAGEnabledEnv); raw != "" {
+		v, err := strconv.ParseBool(raw)
+		if err != nil {
+			return true
+		}
+		return v
+	}
+	return true
+}
+
+// channelSegmentScopeText is the channel-scoped interaction_dag_segment
+// project_id value for a channel UUID already in string form. See
+// channelSegmentScope for why the synthetic prefix is safe.
+func channelSegmentScopeText(channelID string) string {
+	return "channel:" + channelID
+}
+
+// RecordSubmittedRun records the submitted run as a channel-scoped segment and
+// fires the graph-memory ingest. Every step is best-effort: failures are
+// logged and swallowed so a staging hiccup never surfaces to the agent turn.
+func (r *GraphMemoryRunSegmentRecorder) RecordSubmittedRun(ctx context.Context, runID, workspaceID, channelID string, consumedSeq int64) {
+	if r == nil || r.pool == nil || r.dag == nil || !r.dag.Enabled() {
+		return
+	}
+	if runID == "" || workspaceID == "" || channelID == "" {
+		return
+	}
+	wsUUID, err := util.ParseUUID(workspaceID)
+	if err != nil {
+		slog.Warn("graph memory run segment: invalid workspace id", "workspace_id", workspaceID, "err", err)
+		return
+	}
+	if rt := resolveGraphMemoryType(ctx, r.queries, wsUUID, graphMemoryEnvMemoryType()); rt != "graph" {
+		return
+	}
+
+	// One segment per run: the deterministic segment id makes a duplicate
+	// notification a no-op.
+	if existing, err := r.dag.SegmentIDForAgentRun(ctx, runID); err == nil && existing != "" {
+		return
+	}
+
+	// The run's conversational evidence: the triggering channel message (the
+	// user's learn instruction), falling back to the agent's own start query.
+	runQuery, targetSeq, err := r.loadRun(ctx, runID)
+	if err != nil {
+		slog.Warn("graph memory run segment: load run failed", "run_id", runID, "err", err)
+		return
+	}
+	content := r.loadChannelMessage(ctx, channelID, targetSeq)
+	if strings.TrimSpace(content) == "" {
+		content = runQuery
+	}
+	if strings.TrimSpace(content) == "" {
+		slog.Warn("graph memory run segment: no trajectory content", "run_id", runID)
+		return
+	}
+
+	trajectory := channelRunTrajectory(content)
+	scope := channelSegmentScopeText(channelID)
+
+	if err := r.dag.RecordMemoryAgentRunSegment(ctx, scope, runID, trajectory, targetSeq, consumedSeq); err != nil {
+		slog.Warn("graph memory run segment: record failed", "run_id", runID, "err", err)
+		return
+	}
+
+	seg := memorygraph.SegmentExport{
+		SegmentID:  "multica:" + runID,
+		AgentRunID: runID,
+		Trajectory: trajectory,
+	}
+	if err := r.ingestChannelRun(ctx, workspaceID, channelID, runID, seg); err != nil {
+		slog.Warn("graph memory run segment: ingest failed", "segment_id", seg.SegmentID, "err", err)
+	}
+}
+
+// loadRun reads the run's start query and target channel message seq.
+func (r *GraphMemoryRunSegmentRecorder) loadRun(ctx context.Context, runID string) (string, int64, error) {
+	var initialQuery string
+	var targetSeq int64
+	err := r.pool.QueryRow(ctx, `
+		SELECT initial_query, target_seq FROM graph_memory_agent_run WHERE id=$1::uuid`, runID).Scan(&initialQuery, &targetSeq)
+	return initialQuery, targetSeq, err
+}
+
+// loadChannelMessage fetches the triggering message's text content; "" on any
+// miss (deleted, non-content kind, seq unknown).
+func (r *GraphMemoryRunSegmentRecorder) loadChannelMessage(ctx context.Context, channelID string, seq int64) string {
+	if seq <= 0 {
+		return ""
+	}
+	var content string
+	err := r.pool.QueryRow(ctx, `
+		SELECT content FROM channel_message
+		WHERE channel_id=$1::uuid AND seq=$2 AND kind='content' AND deleted_at IS NULL
+		LIMIT 1`, channelID, seq).Scan(&content)
+	if err != nil {
+		return ""
+	}
+	return content
+}
+
+// ingestChannelRun fires the hook's channel-run entry, constructing the hook
+// lazily from the pool (production) or using the test override.
+func (r *GraphMemoryRunSegmentRecorder) ingestChannelRun(ctx context.Context, workspaceID, channelID, runID string, seg memorygraph.SegmentExport) error {
+	if r.ingestOverride != nil {
+		return r.ingestOverride(ctx, workspaceID, channelID, "", runID, seg)
+	}
+	hook := r.ingestHook()
+	if hook == nil {
+		return nil
+	}
+	agentID := r.managedAgentID(ctx, workspaceID, channelID)
+	return hook.IngestChannelRun(ctx, workspaceID, channelID, agentID, runID, seg)
+}
+
+func (r *GraphMemoryRunSegmentRecorder) ingestHook() *GraphMemoryIngestHook {
+	r.hookOnce.Do(func() {
+		r.hook = NewGraphMemoryIngestHook(db.New(r.pool), r.pool, "", nil)
+	})
+	return r.hook
+}
+
+// managedAgentID resolves the channel's active managed Memory Agent for
+// segment scope metadata; "" on any miss (metadata only).
+func (r *GraphMemoryRunSegmentRecorder) managedAgentID(ctx context.Context, workspaceID, channelID string) string {
+	var agentID string
+	err := r.pool.QueryRow(ctx, `
+		SELECT agent_id::text FROM graph_memory_channel_agent
+		WHERE workspace_id=$1::uuid AND channel_id=$2::uuid AND status='active'
+		LIMIT 1`, workspaceID, channelID).Scan(&agentID)
+	if err != nil {
+		return ""
+	}
+	return agentID
+}
+
+// channelRunTrajectory serializes the run's evidence into the same allowlisted
+// entry shape the local task_messages snapshot uses, so the ingester's
+// summarizer treats both identically.
+func channelRunTrajectory(content string) json.RawMessage {
+	entries := []localTrajectoryEntry{{
+		Seq:     1,
+		Type:    "user",
+		Content: content,
+	}}
+	data, err := json.Marshal(entries)
+	if err != nil {
+		return json.RawMessage("[]")
+	}
+	return data
+}
+
+// RecordMemoryAgentRunSegment records a channel-scoped segment for a submitted
+// graph_memory_agent_run. Unlike RecordLocalSegmentForEvent the trajectory is
+// supplied by the caller (the run's channel evidence), not read from
+// task_messages. Idempotent on the deterministic segment id multica:<runID>.
+func (s *InteractionDAGService) RecordMemoryAgentRunSegment(
+	ctx context.Context,
+	scope, agentRunID string,
+	trajectory json.RawMessage,
+	startSeq, endSeq int64,
+) error {
+	if !s.enabled || s.store == nil {
+		return nil
+	}
+	if scope == "" || agentRunID == "" {
+		return errors.New("interaction_dag: RecordMemoryAgentRunSegment requires scope and agent_run_id")
+	}
+	sessionID := "multica:" + agentRunID
+	if err := s.store.UpsertInteractionDAGSessionRun(ctx, db.UpsertInteractionDAGSessionRunParams{
+		SessionID:  sessionID,
+		ProjectID:  scope,
+		AgentRunID: agentRunID,
+	}); err != nil {
+		return err
+	}
+	sandboxIDs, issueSnapshotID, envState := encodeEnvSnapshot(nil)
+	return s.store.InsertInteractionDAGSegmentWithSnapshot(ctx, db.InsertInteractionDAGSegmentWithSnapshotParams{
+		SegmentID:        sessionID,
+		ProjectID:        scope,
+		AgentRunID:       agentRunID,
+		TrajectoryID:     pgtype.Int8{},
+		TensorRef:        nil,
+		ClosingEvent:     pgText(""),
+		StartSeq:         clampInt32(startSeq),
+		EndSeq:           clampInt32(endSeq),
+		TrajectorySource: "memory_agent_run",
+		Trainable:        false,
+		Trajectory:       trajectory,
+		SandboxIds:       sandboxIDs,
+		IssueSnapshotID:  issueSnapshotID,
+		EnvState:         envState,
+	})
+}
+
+// clampInt32 narrows a channel message seq for the segment's seq columns;
+// out-of-range values saturate (channel seqs are far below int32 in practice).
+func clampInt32(v int64) int32 {
+	switch {
+	case v < 0:
+		return 0
+	case v > 1<<31-1:
+		return 1<<31 - 1
+	default:
+		return int32(v)
+	}
+}

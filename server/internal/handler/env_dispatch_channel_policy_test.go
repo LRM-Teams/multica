@@ -105,6 +105,33 @@ func TestEnvDispatchSandboxConfigCodecRoundTripsSharedRuntimeAndExecutionModel(t
 		t.Fatal("decode error disclosed a runtime credential")
 	}
 }
+func TestConfigureEnvDispatchSharedScratchDocker(t *testing.T) {
+	t.Run("shared default requires exact configured image", func(t *testing.T) {
+		t.Setenv(envDispatchSharedScratchDockerImageEnv, "runtime:test")
+		in := service.CreateSandboxInstanceInput{}
+		err := configureEnvDispatchSharedScratchDocker(envDispatchSandboxConfig{Shared: true, Template: "default"}, &in)
+		if err != nil || in.DockerImage != "runtime:test" {
+			t.Fatalf("configure = image %q, err %v", in.DockerImage, err)
+		}
+	})
+	t.Run("missing image fails closed", func(t *testing.T) {
+		t.Setenv(envDispatchSharedScratchDockerImageEnv, "")
+		in := service.CreateSandboxInstanceInput{}
+		if err := configureEnvDispatchSharedScratchDocker(envDispatchSandboxConfig{Shared: true, Template: "default"}, &in); err == nil {
+			t.Fatal("expected missing configured image error")
+		}
+	})
+	t.Run("explicit Cube and non-shared remain unchanged", func(t *testing.T) {
+		t.Setenv(envDispatchSharedScratchDockerImageEnv, "runtime:test")
+		for _, cfg := range []envDispatchSandboxConfig{{Shared: true, Template: "tpl-explicit"}, {Template: "default"}} {
+			in := service.CreateSandboxInstanceInput{}
+			if err := configureEnvDispatchSharedScratchDocker(cfg, &in); err != nil || in.DockerImage != "" {
+				t.Fatalf("config %+v changed: image=%q err=%v", cfg, in.DockerImage, err)
+			}
+		}
+	})
+}
+
 func TestEnvDispatchSandboxConfigCodec_RejectsMalformed(t *testing.T) {
 	cases := []struct {
 		name string

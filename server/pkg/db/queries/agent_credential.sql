@@ -37,6 +37,7 @@ WHERE agent.id = sqlc.arg(agent_id)
         AND b.active = TRUE
   )
   AND agent.archived_at IS NULL
+  AND agent.stopped_at IS NULL
 FOR UPDATE OF agent, runtime;
 
 -- name: ClearAgentRuntimeReassignedAt :exec
@@ -56,10 +57,21 @@ JOIN agent AS a
   ON a.id = ac.agent_id
  AND a.workspace_id = ac.workspace_id
  AND a.archived_at IS NULL
+ AND a.stopped_at IS NULL
+LEFT JOIN agent_runtime AS runtime
+  ON runtime.id = a.runtime_id
+ AND runtime.workspace_id = a.workspace_id
+LEFT JOIN computer_workspace_bindings AS binding
+  ON binding.daemon_id = runtime.daemon_id
+ AND binding.workspace_id = ac.workspace_id
+ AND binding.user_id = ac.user_id
+ AND binding.active = TRUE
+ AND binding.revoked_at IS NULL
 JOIN member AS m
   ON m.workspace_id = ac.workspace_id
  AND m.user_id = ac.user_id
 WHERE ac.token_hash = $1
+  AND (ac.issuance_source <> 'daemon' OR binding.daemon_id IS NOT NULL)
   AND ac.revoked_at IS NULL
   AND ac.disabled_at IS NULL
   AND (ac.expires_at IS NULL OR ac.expires_at > now());
@@ -72,6 +84,33 @@ WHERE id = $1
   AND workspace_id = $3
   AND user_id = $4;
 
+-- name: HasOtherLiveDaemonAgentCredential :one
+SELECT EXISTS (
+  SELECT 1
+  FROM agent_credential
+  WHERE agent_id = $1
+    AND workspace_id = $2
+    AND user_id = $3
+    AND issuance_source = 'daemon'
+    AND revoked_at IS NULL
+    AND disabled_at IS NULL
+    AND (expires_at IS NULL OR expires_at > now())
+    AND id <> $4
+);
+
+-- name: HasLiveDaemonAgentCredential :one
+SELECT EXISTS (
+  SELECT 1
+  FROM agent_credential
+  WHERE agent_id = $1
+    AND workspace_id = $2
+    AND user_id = $3
+    AND issuance_source = 'daemon'
+    AND revoked_at IS NULL
+    AND disabled_at IS NULL
+    AND (expires_at IS NULL OR expires_at > now())
+);
+
 -- name: TouchAgentCredentialLastUsed :exec
 UPDATE agent_credential
 SET last_used_at = now(), updated_at = now()
@@ -82,6 +121,16 @@ UPDATE agent_credential
 SET revoked_at = COALESCE(revoked_at, now()), updated_at = now()
 WHERE id = $1 AND revoked_at IS NULL
 RETURNING *;
+
+-- name: RevokeDaemonAgentCredentialForLaunch :execrows
+UPDATE agent_credential
+SET revoked_at = now(), updated_at = now()
+WHERE id = $1
+  AND agent_id = $2
+  AND workspace_id = $3
+  AND user_id = $4
+  AND issuance_source = 'daemon'
+  AND revoked_at IS NULL;
 
 -- name: RevokeDaemonAgentCredentialsForSubject :execrows
 UPDATE agent_credential

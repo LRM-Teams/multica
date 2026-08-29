@@ -1,40 +1,28 @@
 package daemon
 
 import (
-	"context"
 	"encoding/json"
-	"errors"
-	"io"
-	"log/slog"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
-	"sync/atomic"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/agentworkspace"
 )
 
-func TestAgentCredentialCacheWrites0600AndReusesValidCredential(t *testing.T) {
+func TestAgentCredentialCachePersistsMetadataWithoutPlaintextToken(t *testing.T) {
 	root := t.TempDir()
 	now := time.Date(2026, 7, 12, 8, 0, 0, 0, time.UTC)
 	cfg := Config{WorkspacesRoot: root, ServerBaseURL: "https://api.example.test"}
-	expiresAt := now.Add(30 * 24 * time.Hour).Format(time.RFC3339)
-
 	cached, err := writeCachedAgentCredential(cfg, "workspace-1", "runtime-1", "agent-1", AgentCredentialResponse{
-		ID:        "credential-1",
-		AgentID:   "agent-1",
-		Prefix:    "mac_123456",
-		ExpiresAt: &expiresAt,
-		Token:     "mac_secret_token",
+		ID: "credential-1", AgentID: "agent-1", Prefix: "sk_agent_123456", Token: "sk_agent_secret_token",
 	}, now)
 	if err != nil {
 		t.Fatalf("writeCachedAgentCredential: %v", err)
 	}
-	if cached.Token != "mac_secret_token" {
+	if cached.Token != "sk_agent_secret_token" {
 		t.Fatalf("cached token mismatch")
 	}
 
@@ -56,50 +44,49 @@ func TestAgentCredentialCacheWrites0600AndReusesValidCredential(t *testing.T) {
 	if !ok {
 		t.Fatal("expected cached credential to be reusable")
 	}
-	if read.Token != "mac_secret_token" || read.CredentialID != "credential-1" {
+	if read.Token != "" || read.CredentialID != "credential-1" {
 		t.Fatalf("read cached credential = %#v", read)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "sk_agent_secret_token") || strings.Contains(string(raw), `"token"`) {
+		t.Fatalf("credential cache contains plaintext server credential: %s", raw)
 	}
 }
 
-func TestAgentCredentialCacheInvalidatesScopeAndNearExpiry(t *testing.T) {
+func TestAgentCredentialCacheInvalidatesScopeAndExpiredCredential(t *testing.T) {
 	root := t.TempDir()
 	now := time.Date(2026, 7, 12, 8, 0, 0, 0, time.UTC)
 	cfg := Config{WorkspacesRoot: root, ServerBaseURL: "https://api.example.test"}
-	expiresAt := now.Add(agentCredentialRefreshBeforeExpiry / 2).Format(time.RFC3339)
+	expiresAt := now.Add(-time.Minute).Format(time.RFC3339)
 	_, err := writeCachedAgentCredential(cfg, "workspace-1", "runtime-1", "agent-1", AgentCredentialResponse{
 		ID:        "credential-1",
 		AgentID:   "agent-1",
-		Prefix:    "mac_123456",
+		Prefix:    "sk_agent_123456",
 		ExpiresAt: &expiresAt,
-		Token:     "mac_secret_token",
+		Token:     "sk_agent_secret_token",
 	}, now)
 	if err != nil {
 		t.Fatalf("writeCachedAgentCredential: %v", err)
 	}
 	if _, ok := readCachedAgentCredential(cfg, "workspace-1", "runtime-1", "agent-1", now); ok {
-		t.Fatal("near-expiry credential should force re-ensure")
+		t.Fatal("legacy expired credential should be rejected")
 	}
 
 	_, err = writeCachedAgentCredential(cfg, "workspace-1", "runtime-1", "agent-1", AgentCredentialResponse{
-		ID:      "credential-2",
-		AgentID: "agent-1",
-		Prefix:  "mac_abcdef",
-		Token:   "mac_secret_token_2",
+		ID: "credential-2", AgentID: "agent-1", Prefix: "sk_agent_123456", Token: "launch-scoped-token",
 	}, now)
 	if err != nil {
-		t.Fatalf("writeCachedAgentCredential no-expiry: %v", err)
+		t.Fatalf("write non-expiring credential: %v", err)
 	}
-	if _, ok := readCachedAgentCredential(cfg, "workspace-1", "runtime-1", "agent-1", now); ok {
-		t.Fatal("credential without expires_at should force re-ensure")
+	if _, ok := readCachedAgentCredential(cfg, "workspace-1", "runtime-1", "agent-1", now.Add(25*time.Hour)); !ok {
+		t.Fatal("launch-scoped credential should remain valid after 24 hours")
 	}
 
-	validExpiresAt := now.Add(30 * 24 * time.Hour).Format(time.RFC3339)
 	_, err = writeCachedAgentCredential(cfg, "workspace-1", "runtime-1", "agent-1", AgentCredentialResponse{
-		ID:        "credential-3",
-		AgentID:   "agent-1",
-		Prefix:    "mac_fedcba",
-		ExpiresAt: &validExpiresAt,
-		Token:     "mac_secret_token_3",
+		ID: "credential-3", AgentID: "agent-1", Prefix: "sk_agent_fedcba", Token: "sk_agent_secret_token_3",
 	}, now)
 	if err != nil {
 		t.Fatalf("writeCachedAgentCredential valid: %v", err)
@@ -154,122 +141,61 @@ func TestAgentCredentialCacheMigratesLegacyWorkspaceCredential(t *testing.T) {
 		t.Fatalf("write legacy credential: %v", err)
 	}
 
-	cached, ok := readCachedAgentCredentialForMessage(cfg, "workspace-1", "agent-1", now)
-	if !ok || cached.Token != "mac_legacy_token" {
+	cached, ok := readCachedAgentCredential(cfg, "workspace-1", "runtime-1", "agent-1", now)
+	if !ok || cached.Token != "" {
 		t.Fatalf("read legacy credential = %#v, ok=%t", cached, ok)
 	}
-	if strict, ok := readCachedAgentCredential(cfg, "workspace-1", "runtime-1", "agent-1", now); !ok || strict.Token != cached.Token {
+	if strict, ok := readCachedAgentCredential(cfg, "workspace-1", "runtime-1", "agent-1", now); !ok || strict.Token != "" {
 		t.Fatalf("migrated credential failed strict runtime read: %#v, ok=%t", strict, ok)
 	}
 	newPath := agentCredentialCachePath(cfg, "workspace-1", "agent-1")
 	if _, err := os.Stat(newPath); err != nil {
 		t.Fatalf("migrated credential missing: %v", err)
 	}
-	if _, err := os.Stat(legacyPath); err != nil {
-		t.Fatalf("legacy credential should remain after migration: %v", err)
+	if _, err := os.Stat(legacyPath); !os.IsNotExist(err) {
+		t.Fatalf("legacy plaintext credential survived migration: %v", err)
 	}
 }
 
-func TestEnsureTaskAgentCredentialMissingBindingFailsBeforeFallback(t *testing.T) {
-	d := &Daemon{cfg: Config{WorkspacesRoot: t.TempDir(), ServerBaseURL: "https://api.example.test"}}
-	if _, err := d.ensureTaskAgentCredential(context.Background(), Task{WorkspaceID: "workspace-1", RuntimeID: "", AgentID: "agent-1"}, nil); err == nil {
-		t.Fatal("expected missing runtime binding to fail")
-	}
-}
-
-func TestEnsureTaskAgentCredentialValidatesCachedCredentialEveryRun(t *testing.T) {
+func TestAgentCredentialCacheRetiresLegacyPlaintextBesideModernMetadata(t *testing.T) {
 	root := t.TempDir()
-	now := time.Now()
-	expiresAt := now.Add(24 * time.Hour).Format(time.RFC3339)
-
-	var calls atomic.Int32
-	var body map[string]any
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls.Add(1)
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Fatalf("decode ensure body: %v", err)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"credential-1","agent_id":"agent-1","token_prefix":"mat_cached","expires_at":"` + expiresAt + `","reused":true}`))
-	}))
-	defer srv.Close()
-
-	cfg := Config{WorkspacesRoot: root, ServerBaseURL: srv.URL}
+	now := time.Date(2026, 7, 12, 8, 0, 0, 0, time.UTC)
+	cfg := Config{WorkspacesRoot: root, ServerBaseURL: "https://api.example.test"}
 	if _, err := writeCachedAgentCredential(cfg, "workspace-1", "runtime-1", "agent-1", AgentCredentialResponse{
-		ID:        "credential-1",
-		AgentID:   "agent-1",
-		Prefix:    "mat_cached",
-		ExpiresAt: &expiresAt,
-		Token:     "mat_cached_secret",
+		ID: "credential-1", AgentID: "agent-1", Token: "sk_agent_secret",
 	}, now); err != nil {
-		t.Fatalf("write cache: %v", err)
+		t.Fatal(err)
 	}
-	d := &Daemon{cfg: cfg, client: NewClient(srv.URL)}
-	token, err := d.ensureTaskAgentCredential(
-		context.Background(),
-		Task{WorkspaceID: "workspace-1", RuntimeID: "runtime-1", AgentID: "agent-1"},
-		slog.New(slog.NewTextHandler(io.Discard, nil)),
-	)
-	if err != nil {
-		t.Fatalf("ensure cached credential: %v", err)
+	legacyPath := legacyAgentCredentialCachePath(cfg, "workspace-1", "agent-1")
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o700); err != nil {
+		t.Fatal(err)
 	}
-	if token != "mat_cached_secret" {
-		t.Fatalf("token = %q, want cached raw token", token)
+	if err := os.WriteFile(legacyPath, []byte(`{"token":"exposed-legacy-token"}`), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	if calls.Load() != 1 {
-		t.Fatalf("ensure calls = %d, want 1 live validation per run", calls.Load())
+	if _, ok := readCachedAgentCredential(cfg, "workspace-1", "runtime-1", "agent-1", now); !ok {
+		t.Fatal("modern credential metadata should remain valid")
 	}
-	if got, _ := body["credential_id"].(string); got != "credential-1" {
-		t.Fatalf("credential_id = %q, want credential-1", got)
+	if _, err := os.Stat(legacyPath); !os.IsNotExist(err) {
+		t.Fatalf("legacy plaintext credential survived modern metadata read: %v", err)
 	}
 }
 
-// TestEnsureTaskAgentCredentialClearsCacheOnAgentReassigned reproduces the
-// 2026-07-31 production incident: an agent reassigned to a different
-// runtime (agent.runtime_id is user-editable — a normal operation), where
-// this daemon's cached credential is now for a binding that no longer
-// exists. ensureTaskAgentCredential must classify the resulting 403 as
-// errAgentReassignedElsewhere (not a generic credential error) and remove
-// the now-stale cache entry so a future reassignment back to this runtime
-// cannot reuse it.
-func TestEnsureTaskAgentCredentialClearsCacheOnAgentReassigned(t *testing.T) {
+func TestAgentCredentialCacheDeletesMalformedLegacyPlaintext(t *testing.T) {
 	root := t.TempDir()
-	now := time.Now()
-	expiresAt := now.Add(24 * time.Hour).Format(time.RFC3339)
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusForbidden)
-		_, _ = w.Write([]byte(`{"error":"agent is not bound to this runtime"}`))
-	}))
-	defer srv.Close()
-
-	cfg := Config{WorkspacesRoot: root, ServerBaseURL: srv.URL}
-	if _, err := writeCachedAgentCredential(cfg, "workspace-1", "runtime-old", "agent-1", AgentCredentialResponse{
-		ID:        "credential-1",
-		AgentID:   "agent-1",
-		Prefix:    "mat_stale",
-		ExpiresAt: &expiresAt,
-		Token:     "mat_stale_secret",
-	}, now); err != nil {
-		t.Fatalf("write stale cache: %v", err)
+	cfg := Config{WorkspacesRoot: root, ServerBaseURL: "https://api.example.test"}
+	legacyPath := legacyAgentCredentialCachePath(cfg, "workspace-1", "agent-1")
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o700); err != nil {
+		t.Fatal(err)
 	}
-	cachePath := agentCredentialCachePath(cfg, "workspace-1", "agent-1")
-	if _, err := os.Stat(cachePath); err != nil {
-		t.Fatalf("precondition: stale cache file should exist: %v", err)
+	if err := os.WriteFile(legacyPath, []byte(`{"token":"exposed"`), 0o600); err != nil {
+		t.Fatal(err)
 	}
-
-	d := &Daemon{cfg: cfg, client: NewClient(srv.URL)}
-	_, err := d.ensureTaskAgentCredential(
-		context.Background(),
-		Task{WorkspaceID: "workspace-1", RuntimeID: "runtime-old", AgentID: "agent-1"},
-		slog.New(slog.NewTextHandler(io.Discard, nil)),
-	)
-	if !errors.Is(err, errAgentReassignedElsewhere) {
-		t.Fatalf("ensureTaskAgentCredential error = %v, want errAgentReassignedElsewhere", err)
+	if _, ok := readCachedAgentCredential(cfg, "workspace-1", "runtime-1", "agent-1", time.Now()); ok {
+		t.Fatal("malformed legacy credential unexpectedly authenticated")
 	}
-	if _, statErr := os.Stat(cachePath); !os.IsNotExist(statErr) {
-		t.Fatalf("stale cache file should have been removed, stat err = %v", statErr)
+	if _, err := os.Stat(legacyPath); !os.IsNotExist(err) {
+		t.Fatalf("malformed legacy plaintext credential survived read: %v", err)
 	}
 }
 

@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -11,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/multica-ai/multica/server/internal/diagnosticlog"
 	"github.com/multica-ai/multica/server/internal/turntransport"
@@ -29,8 +31,10 @@ const (
 var ErrAgentProxyCredentialInvalid = errors.New("Agent Proxy credential is invalid")
 
 type authenticatedAgentProxy struct {
-	Inbox     InboxKey
-	RuntimeID string
+	Inbox            InboxKey
+	RuntimeID        string
+	LaunchID         string
+	ServerCredential cachedAgentCredential
 }
 
 type agentProxyCLITransport struct {
@@ -52,6 +56,7 @@ type agentProxyCLITransport struct {
 func (d *Daemon) prepareAgentProxyCLITransport(
 	key InboxKey,
 	runtimeID, agentInstanceID, multicaBin string,
+	launchCredential ...cachedAgentCredential,
 ) (*agentProxyCLITransport, error) {
 	if d == nil {
 		return nil, errors.New("Machine Service is unavailable")
@@ -84,6 +89,10 @@ func (d *Daemon) prepareAgentProxyCLITransport(
 	}
 	if d.cfg.HealthPort <= 0 {
 		return nil, errors.New("Agent Proxy local port is unavailable")
+	}
+	serverCredential := cachedAgentCredential{}
+	if len(launchCredential) > 0 {
+		serverCredential = launchCredential[0]
 	}
 	token, err := newAgentProxyToken()
 	if err != nil {
@@ -147,7 +156,9 @@ func (d *Daemon) prepareAgentProxyCLITransport(
 		return nil, fmt.Errorf("write Agent Proxy CLI wrapper: %w", err)
 	}
 
-	context := authenticatedAgentProxy{Inbox: key, RuntimeID: runtimeID}
+	proxyCredential := authenticatedAgentProxy{
+		Inbox: key, RuntimeID: runtimeID, LaunchID: agentInstanceID, ServerCredential: serverCredential,
+	}
 	d.agentProxyCredentialMu.Lock()
 	if d.agentProxyCredentials == nil {
 		d.agentProxyCredentials = make(map[[32]byte]authenticatedAgentProxy)
@@ -156,7 +167,7 @@ func (d *Daemon) prepareAgentProxyCLITransport(
 		d.agentProxyCredentialMu.Unlock()
 		return nil, errors.New("Agent Proxy credential collision")
 	}
-	d.agentProxyCredentials[credentialHash] = context
+	d.agentProxyCredentials[credentialHash] = proxyCredential
 	d.agentProxyCredentialMu.Unlock()
 
 	transport := &agentProxyCLITransport{
@@ -166,6 +177,37 @@ func (d *Daemon) prepareAgentProxyCLITransport(
 	cleanupOnFailure = false
 	d.recordAgentProxyCredentialLifecycle(key, runtimeID, "agent_proxy_credential_issued", "accepted", "")
 	return transport, nil
+}
+
+func (d *Daemon) agentProxyServerCredentialForLaunch(agentID, runtimeID, launchID string) (cachedAgentCredential, bool) {
+	d.agentProxyCredentialMu.RLock()
+	defer d.agentProxyCredentialMu.RUnlock()
+	for _, registration := range d.agentProxyCredentials {
+		if registration.Inbox.AgentID == agentID && registration.RuntimeID == runtimeID && registration.LaunchID == launchID &&
+			registration.ServerCredential.CredentialID != "" {
+			return registration.ServerCredential, true
+		}
+	}
+	return cachedAgentCredential{}, false
+}
+
+func (d *Daemon) activeAgentProxyServerCredential(workspaceID, runtimeID, agentID string) (cachedAgentCredential, bool) {
+	d.agentProxyCredentialMu.RLock()
+	defer d.agentProxyCredentialMu.RUnlock()
+	var credential cachedAgentCredential
+	found := false
+	for _, registration := range d.agentProxyCredentials {
+		if registration.Inbox.WorkspaceID != workspaceID || registration.Inbox.AgentID != agentID ||
+			(runtimeID != "" && registration.RuntimeID != runtimeID) || strings.TrimSpace(registration.ServerCredential.Token) == "" {
+			continue
+		}
+		if found {
+			return cachedAgentCredential{}, false
+		}
+		credential = registration.ServerCredential
+		found = true
+	}
+	return credential, found
 }
 
 func (d *Daemon) authenticateAgentProxyToken(token string) (authenticatedAgentProxy, error) {
@@ -193,8 +235,23 @@ func (t *agentProxyCLITransport) Close() error {
 	t.closeOnce.Do(func() {
 		if t.daemon != nil {
 			t.daemon.agentProxyCredentialMu.Lock()
+			proxyCredential := t.daemon.agentProxyCredentials[t.credential]
 			delete(t.daemon.agentProxyCredentials, t.credential)
 			t.daemon.agentProxyCredentialMu.Unlock()
+			if t.daemon.client != nil && proxyCredential.ServerCredential.CredentialID != "" {
+				revokeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				err := t.daemon.client.RevokeAgentCredential(
+					revokeCtx, t.runtimeID, t.inbox.AgentID, proxyCredential.ServerCredential.CredentialID,
+				)
+				cancel()
+				if err != nil {
+					t.closeErr = fmt.Errorf("revoke Agent server credential: %w", err)
+				} else if err := removeCachedAgentCredentialIfMatches(
+					t.daemon.cfg, t.inbox.WorkspaceID, t.runtimeID, t.inbox.AgentID, proxyCredential.ServerCredential.CredentialID,
+				); err != nil && t.closeErr == nil {
+					t.closeErr = err
+				}
+			}
 		}
 		rootErr := os.RemoveAll(t.root)
 		tokenErr := os.Remove(t.tokenFile)
@@ -203,14 +260,20 @@ func (t *agentProxyCLITransport) Close() error {
 			if err == nil {
 				err = tokenErr
 			}
-			t.closeErr = fmt.Errorf("remove Agent Proxy transport: %w", err)
+			if t.closeErr == nil {
+				t.closeErr = fmt.Errorf("remove Agent Proxy transport: %w", err)
+			}
 			if t.daemon != nil {
 				t.daemon.recordAgentProxyCredentialLifecycle(t.inbox, t.runtimeID, "agent_proxy_credential_revoked", "degraded", "credential_file_cleanup_failed")
 			}
 			return
 		}
 		if t.daemon != nil {
-			t.daemon.recordAgentProxyCredentialLifecycle(t.inbox, t.runtimeID, "agent_proxy_credential_revoked", "revoked", "")
+			if t.closeErr != nil {
+				t.daemon.recordAgentProxyCredentialLifecycle(t.inbox, t.runtimeID, "agent_proxy_credential_revoked", "degraded", "server_credential_revoke_failed")
+			} else {
+				t.daemon.recordAgentProxyCredentialLifecycle(t.inbox, t.runtimeID, "agent_proxy_credential_revoked", "revoked", "")
+			}
 		}
 	})
 	return t.closeErr
@@ -259,7 +322,7 @@ func newAgentProxyToken() (string, error) {
 	if _, err := rand.Read(raw); err != nil {
 		return "", err
 	}
-	return "map_" + base64.RawURLEncoding.EncodeToString(raw), nil
+	return "mpt_" + base64.RawURLEncoding.EncodeToString(raw), nil
 }
 
 func writeAgentProxyFileAtomic(path string, content []byte, mode os.FileMode) error {

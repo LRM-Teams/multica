@@ -28,6 +28,7 @@ type residentProcessEvent struct {
 	RuntimeID         string
 	AgentInstanceID   string
 	ProcessInstanceID string
+	CredentialID      string
 	Kind              residentProcessEventKind
 	Provider          string        // exited only, where known
 	SilentFor         time.Duration // stalled only

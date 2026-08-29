@@ -261,6 +261,7 @@ func TestResidentMessageRuntimeCapture_UploadsTrustedBatchAtTurnEnd(t *testing.T
 			return true
 		},
 	}
+	registerTestAgentProxyServerCredential(t, d, workspaceID, runtimeID, agentID, "durable-agent-token")
 
 	messages := []protocol.AgentMessageProjection{{
 		ID: "message-1", Target: "channel:one", Seq: 1, Content: "hello",
@@ -350,6 +351,7 @@ func TestResidentMessageRuntimeCapture_BindsProxyActionToProviderCallAndDrainsTu
 			return true
 		},
 	}
+	registerTestAgentProxyServerCredential(t, d, workspaceID, runtimeID, agentID, "durable-agent-token")
 	if err := d.deliverIdleMessageBatch(context.Background(), agentID, runtimeID, []protocol.AgentMessageProjection{{
 		ID: "message-1", Target: "channel:one", Seq: 1, Content: "send a message",
 		RunID: runID, RunAgentID: runAgentID, DeliveryID: "delivery-1",
@@ -421,6 +423,7 @@ func TestResidentMessageRuntimeCapture_ToolLifecycleDuringIdleInput(t *testing.T
 			return true
 		},
 	}
+	registerTestAgentProxyServerCredential(t, d, "workspace-1", runtimeID, agentID, "durable-agent-token")
 	if err := d.deliverIdleMessageBatch(context.Background(), agentID, runtimeID, []protocol.AgentMessageProjection{{
 		ID: "message-1", Target: "channel:one", Seq: 1, Content: "use a tool",
 		RunID: "run-1", RunAgentID: "run-agent-1", DeliveryID: "delivery-1",
@@ -516,6 +519,7 @@ func TestResidentMessageRuntimeCapture_MissingBatchReportsCaptureGap(t *testing.
 			return true
 		},
 	}
+	registerTestAgentProxyServerCredential(t, d, workspaceID, runtimeID, agentID, "durable-agent-token")
 	if err := d.deliverIdleMessageBatch(context.Background(), agentID, runtimeID, []protocol.AgentMessageProjection{{
 		ID: "message-1", Target: "channel:one", Seq: 1, Content: "hello",
 		RunID: runID, RunAgentID: runAgentID, DeliveryID: "delivery-1",
@@ -591,6 +595,7 @@ func TestResidentMessageRuntimeCapture_ActionOverflowReportsGapWithoutUpload(t *
 		t.Fatalf("write credential: %v", err)
 	}
 	d := &Daemon{cfg: cfg, client: NewClient(upstream.URL), logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	registerTestAgentProxyServerCredential(t, d, workspaceID, runtimeID, agentID, "durable-agent-token")
 	turnToken := d.beginCanonicalActionTurn(agentID)
 	toolContext := ActiveProviderToolContext{AgentID: agentID, CallID: "tool-overflow", ToolCallID: "tool-overflow", TurnToken: turnToken}
 	d.SetActiveProviderToolContext(toolContext)
@@ -658,6 +663,7 @@ func TestResidentMessageRuntimeCapture_AmbiguousContextReportsGapAndRecovers(t *
 		t.Fatalf("write credential: %v", err)
 	}
 	d := &Daemon{cfg: cfg, client: NewClient(upstream.URL), logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	registerTestAgentProxyServerCredential(t, d, workspaceID, runtimeID, agentID, "durable-agent-token")
 	turn1 := d.beginCanonicalActionTurn(agentID)
 	turn2 := d.beginCanonicalActionTurn(agentID)
 	for index, token := range []canonicalActionTurnToken{turn1, turn2} {
@@ -755,6 +761,7 @@ func TestResidentMessageRuntimeCapture_NoHistoryReplayAfterNewBoundary(t *testin
 		canonicalRuntimes: pool,
 		runtimeIndex:      map[string]Runtime{runtimeID: {ID: runtimeID, WorkspaceID: workspaceID}},
 	}
+	registerTestAgentProxyServerCredential(t, d, workspaceID, runtimeID, agentID, "durable-agent-token")
 
 	firstBatch := []protocol.AgentMessageProjection{{
 		ID: "message-1", Target: "channel:one", Seq: 1, Content: "first turn",

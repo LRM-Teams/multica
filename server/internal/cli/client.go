@@ -48,11 +48,12 @@ func normalizeGOOS(goos string) string {
 // Used by ctrl subcommands (agent, runtime, status, etc.). Requests
 // automatically include auth and execution context headers when configured.
 type APIClient struct {
-	BaseURL     string
-	WorkspaceID string
-	Token       string
-	AgentID     string // When set, requests are attributed to this agent instead of the user.
-	TaskID      string // When set, sent as X-Task-ID for agent-task validation.
+	BaseURL         string
+	WorkspaceID     string
+	Token           string
+	AgentID         string // When set, requests are attributed to this agent instead of the user.
+	AgentProxyToken string // Local Agent-to-Proxy credential; never sent to the Server.
+	TaskID          string // When set, sent as X-Task-ID for agent-task validation.
 	// Agent inbox delivery context is sent by daemon-managed chat runs when the
 	// bearer token is a durable agent credential. The server uses it as
 	// per-request freshness proof before allowing chat transport actions.
@@ -198,6 +199,9 @@ func (c *APIClient) setHeaders(req *http.Request) {
 	}
 	if c.AgentID != "" {
 		req.Header.Set("X-Agent-ID", c.AgentID)
+	}
+	if c.AgentProxyToken != "" {
+		req.Header.Set("X-Multica-Agent-Proxy-Token", c.AgentProxyToken)
 	}
 	if c.TaskID != "" {
 		req.Header.Set("X-Task-ID", c.TaskID)

@@ -3,13 +3,85 @@ package daemon
 import (
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestAgentProxyRegistrationPinsAndRevokesServerCredential(t *testing.T) {
+	root := t.TempDir()
+	var forwarded, revoked bool
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/agent/reminders/list":
+			forwarded = true
+			if got := r.Header.Get("Authorization"); got != "Bearer sk_agent_launch" {
+				t.Errorf("forwarded Authorization = %q", got)
+			}
+			w.WriteHeader(http.StatusNoContent)
+		case "/api/daemon/runtimes/runtime-1/agents/agent-1/credentials/credential-1/revoke":
+			revoked = true
+			if got := r.Header.Get("Authorization"); got != "Bearer mdt_runtime" {
+				t.Errorf("revoke Authorization = %q", got)
+			}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	cfg := Config{WorkspacesRoot: root, ServerBaseURL: upstream.URL, HealthPort: 19514}
+	launchCredential, err := writeCachedAgentCredential(cfg, "workspace-1", "runtime-1", "agent-1", AgentCredentialResponse{
+		ID: "credential-1", AgentID: "agent-1", Prefix: "sk_agent_lau", Token: "sk_agent_launch",
+	}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := NewClient(upstream.URL)
+	client.SetRuntimeDaemonToken("runtime-1", "mdt_runtime", time.Now().Add(time.Hour))
+	d := &Daemon{cfg: cfg, client: client, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	transport, err := d.prepareAgentProxyCLITransport(
+		InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"},
+		"runtime-1", "launch-1", filepath.Join(root, "bin", "multica"), launchCredential,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawToken, err := os.ReadFile(transport.tokenFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writeCachedAgentCredential(cfg, "workspace-1", "runtime-1", "agent-1", AgentCredentialResponse{
+		ID: "credential-2", AgentID: "agent-1", Prefix: "sk_agent_new", Token: "sk_agent_replacement",
+	}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/agent/reminders/list", strings.NewReader(`{}`))
+	req.Header.Set(AgentProxyTokenHeader, strings.TrimSpace(string(rawToken)))
+	req.Header.Set("Authorization", "Bearer forged")
+	rec := httptest.NewRecorder()
+	d.authenticateAgentProxyRequest(d.credentialProxyAgentAPIHandler()).ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent || !forwarded {
+		t.Fatalf("Proxy response = %d, forwarded=%v", rec.Code, forwarded)
+	}
+	if err := transport.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !revoked {
+		t.Fatal("launch server credential was not revoked")
+	}
+	if cached, ok := readCachedAgentCredential(cfg, "workspace-1", "runtime-1", "agent-1", time.Now()); !ok || cached.CredentialID != "credential-2" {
+		t.Fatalf("replacement cache was removed: ok=%v credential=%+v", ok, cached)
+	}
+}
 
 func TestAgentProxyCLITransportPinsAuthenticatedLaunchContext(t *testing.T) {
 	root := t.TempDir()
@@ -91,6 +163,51 @@ func TestAgentProxyCLITransportPinsAuthenticatedLaunchContext(t *testing.T) {
 	}
 	if err := transport.Close(); err != nil {
 		t.Fatalf("idempotent Agent Proxy CLI transport close: %v", err)
+	}
+}
+
+func TestAgentProxyRequestAuthenticationPinsLaunchIdentity(t *testing.T) {
+	root := t.TempDir()
+	d := New(Config{WorkspacesRoot: root, HealthPort: 19514}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	transport, err := d.prepareAgentProxyCLITransport(
+		InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"},
+		"runtime-1", "launch-1", filepath.Join(root, "bin", "multica"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = transport.Close() })
+	rawToken, err := os.ReadFile(transport.tokenFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := d.authenticateAgentProxyRequest(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Agent-ID") != "agent-1" || r.Header.Get("X-Workspace-ID") != "workspace-1" {
+			t.Errorf("identity headers = %q/%q", r.Header.Get("X-Agent-ID"), r.Header.Get("X-Workspace-ID"))
+		}
+		if r.Header.Get(AgentProxyTokenHeader) != "" {
+			t.Error("local credential leaked past authentication boundary")
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	for name, tc := range map[string]struct {
+		token string
+		want  int
+	}{
+		"forged": {token: "mpt_forged", want: http.StatusUnauthorized},
+		"valid":  {token: strings.TrimSpace(string(rawToken)), want: http.StatusNoContent},
+	} {
+		t.Run(name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
+			req.Header.Set(AgentProxyTokenHeader, tc.token)
+			req.Header.Set("X-Agent-ID", "agent-forged")
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != tc.want {
+				t.Fatalf("status = %d, want %d", rec.Code, tc.want)
+			}
+		})
 	}
 }
 

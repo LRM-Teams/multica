@@ -126,7 +126,12 @@ func (d *Daemon) onResidentRuntimeExited(ev residentProcessEvent) {
 	// 2. Server-facing report. Best-effort: local recovery continues even if
 	// the server call fails.
 	if d.client != nil && ev.AgentID != "" && ev.RuntimeID != "" {
-		if err := d.client.ReportAgentProviderCrashed(context.Background(), ev.RuntimeID, ev.AgentID); err != nil {
+		if ev.CredentialID == "" {
+			d.logger.Debug("report agent provider crashed skipped; launch credential unavailable",
+				"agent_id", ev.AgentID, "runtime_id", ev.RuntimeID)
+		} else if err := d.client.ReportAgentProviderCrashed(
+			context.Background(), ev.RuntimeID, ev.AgentID, ev.CredentialID,
+		); err != nil {
 			d.logger.Debug("report agent provider crashed failed; continuing",
 				"agent_id", ev.AgentID, "runtime_id", ev.RuntimeID, "error", err)
 		}

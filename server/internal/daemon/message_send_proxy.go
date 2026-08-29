@@ -59,9 +59,21 @@ func (d *Daemon) credentialProxyMessageSendHandler() http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		credential, err := d.messageAgentCredential(r.Context(), request.WorkspaceID, request.AgentID)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusConflict)
+		if !credentialProxyIdentityMatches(r, request.AgentID, request.WorkspaceID) {
+			http.Error(w, "Agent Proxy credential scope mismatch", http.StatusForbidden)
+			return
+		}
+		credential, ok := agentProxyServerCredential(r)
+		if !ok && !agentProxyRequestAuthenticated(r) {
+			var err error
+			credential, err = d.messageAgentCredential(r.Context(), request.WorkspaceID, request.AgentID)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusConflict)
+				return
+			}
+		}
+		if strings.TrimSpace(credential.Token) == "" {
+			http.Error(w, "Agent credential is unavailable", http.StatusConflict)
 			return
 		}
 

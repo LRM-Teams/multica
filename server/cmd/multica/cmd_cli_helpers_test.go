@@ -5,13 +5,29 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/multica-ai/multica/server/internal/daemon"
 	"github.com/spf13/cobra"
 )
 
+func setTestAgentProxyToken(t *testing.T) {
+	t.Helper()
+	tokenFile := filepath.Join(t.TempDir(), "agent-proxy.token")
+	if err := os.WriteFile(tokenFile, []byte("mpt_test-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(daemon.AgentProxyTokenFileEnv, tokenFile)
+}
+
 func TestNewAPIClientUsesLocalCredentialProxyForAgentRuns(t *testing.T) {
+	tokenFile := filepath.Join(t.TempDir(), "proxy.token")
+	if err := os.WriteFile(tokenFile, []byte("mpt_test-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	var gotRequest bool
 	local := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotRequest = true
@@ -25,6 +41,9 @@ func TestNewAPIClientUsesLocalCredentialProxyForAgentRuns(t *testing.T) {
 			if got := r.Header.Get(name); got != want {
 				t.Errorf("%s = %q, want %q", name, got, want)
 			}
+		}
+		if got := r.Header.Get("X-Multica-Agent-Proxy-Token"); got != "mpt_test-token" {
+			t.Errorf("Agent Proxy token = %q", got)
 		}
 		for _, name := range []string{"X-Task-ID", "X-Agent-Inbox-Event-ID", "X-Agent-Inbox-Delivery-ID", "X-Agent-Inbox-Lease-Token"} {
 			if got := r.Header.Get(name); got != "" {
@@ -42,6 +61,7 @@ func TestNewAPIClientUsesLocalCredentialProxyForAgentRuns(t *testing.T) {
 	t.Setenv("MULTICA_AGENT_ID", "agent-1")
 	t.Setenv("MULTICA_WORKSPACE_ID", "workspace-1")
 	t.Setenv("MULTICA_DAEMON_PORT", port)
+	t.Setenv("MULTICA_AGENT_PROXY_TOKEN_FILE", tokenFile)
 	t.Setenv("MULTICA_SERVER_URL", "https://server.example.invalid")
 	t.Setenv("MULTICA_TOKEN", "user-token-must-not-leave-agent")
 	t.Setenv("MULTICA_TASK_ID", "retired-task")
@@ -91,6 +111,10 @@ func TestAgentAPIPathSelectionUsesDaemonExecutionWithoutBearer(t *testing.T) {
 }
 
 func TestFetchWorkspacesUsesLocalCredentialProxyForDaemonAgentRun(t *testing.T) {
+	tokenFile := filepath.Join(t.TempDir(), "proxy.token")
+	if err := os.WriteFile(tokenFile, []byte("mpt_test-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	var gotRequest bool
 	local := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotRequest = true
@@ -116,6 +140,7 @@ func TestFetchWorkspacesUsesLocalCredentialProxyForDaemonAgentRun(t *testing.T) 
 	t.Setenv("MULTICA_AGENT_ID", "agent-1")
 	t.Setenv("MULTICA_WORKSPACE_ID", "workspace-1")
 	t.Setenv("MULTICA_DAEMON_PORT", port)
+	t.Setenv("MULTICA_AGENT_PROXY_TOKEN_FILE", tokenFile)
 	t.Setenv("MULTICA_TOKEN", "")
 	t.Setenv("MULTICA_TOKEN_FILE", "")
 

@@ -392,6 +392,7 @@ func setAgentProxyEnv(t *testing.T, proxyURL string) {
 	t.Setenv("MULTICA_TOKEN_FILE", "")
 	t.Setenv("MULTICA_TASK_ID", "")
 	t.Setenv("MULTICA_SERVER_URL", "https://server.example.invalid")
+	setTestAgentProxyToken(t)
 }
 
 func TestRunIssueMineAggregatesPRsAndGatesInOneRequest(t *testing.T) {

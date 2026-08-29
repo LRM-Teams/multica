@@ -136,8 +136,8 @@ type Client struct {
 
 	tokenMu sync.RWMutex
 	// workspaceTokens and runtimeTokens hold Computer Binding credentials
-	// (mdt_). Human PATs (mul_) stay in setup/CLI. Agent credentials (mat_)
-	// are passed explicitly by the agent process, not stored here.
+	// (mdt_). Human PATs (mul_) stay in setup/CLI. Agent credentials (sk_agent_)
+	// are held by each local Proxy registration, not stored here.
 	workspaceTokens map[string]daemonAuthToken
 	runtimeTokens   map[string]daemonAuthToken
 
@@ -339,8 +339,8 @@ func (c *Client) tokenForWorkspace(workspaceID string) string {
 }
 
 // tokenForRuntime returns the live Computer Binding token (mdt_) for one
-// Runtime. It never falls back to a human PAT. Agent credentials (mat_) are
-// passed explicitly by the agent process, not through this helper.
+// Runtime. It never falls back to a human PAT. Agent credentials (sk_agent_) are
+// held by local Proxy registrations, not returned by this helper.
 func (c *Client) tokenForRuntime(runtimeID string) string {
 	c.tokenMu.RLock()
 	defer c.tokenMu.RUnlock()
@@ -412,12 +412,12 @@ type AgentCredentialResponse struct {
 	ExpiresAt      *string `json:"expires_at"`
 	Token          string  `json:"token"`
 	Reused         bool    `json:"reused"`
-	RotationReason string  `json:"rotation_reason"`
+	IssuanceReason string  `json:"issuance_reason"`
 }
 
-func (c *Client) EnsureAgentCredential(ctx context.Context, runtimeID, agentID, credentialID string) (*AgentCredentialResponse, error) {
+func (c *Client) IssueAgentLaunchCredential(ctx context.Context, runtimeID, agentID, credentialID string) (*AgentCredentialResponse, error) {
 	var resp AgentCredentialResponse
-	body := map[string]any{}
+	body := map[string]any{"replace_launch": true}
 	if credentialID != "" {
 		body["credential_id"] = credentialID
 	}
@@ -425,6 +425,25 @@ func (c *Client) EnsureAgentCredential(ctx context.Context, runtimeID, agentID, 
 		return nil, err
 	}
 	return &resp, nil
+}
+
+func (c *Client) RevokeAgentCredential(ctx context.Context, runtimeID, agentID, credentialID string) error {
+	if strings.TrimSpace(credentialID) == "" {
+		return errors.New("credential_id is required")
+	}
+	err := c.postJSONWithRetryToken(
+		ctx,
+		fmt.Sprintf("/api/daemon/runtimes/%s/agents/%s/credentials/%s/revoke", runtimeID, agentID, credentialID),
+		map[string]any{},
+		nil,
+		[]time.Duration{100 * time.Millisecond, 500 * time.Millisecond, 2 * time.Second},
+		c.tokenForRuntime(runtimeID),
+	)
+	var requestErr *requestError
+	if errors.As(err, &requestErr) && requestErr.StatusCode == http.StatusNotFound {
+		return nil
+	}
+	return err
 }
 
 // GetResidentAgentRuntimeConfig fetches only stable Agent process
@@ -686,8 +705,15 @@ func (c *Client) ReportMemoryCurationResult(ctx context.Context, runtimeID, runI
 // ReportAgentProviderCrashed tells the server an idle resident provider
 // process for this agent was found dead (task #42② / Raft status ②).
 // Best-effort: callers should log and continue on error.
-func (c *Client) ReportAgentProviderCrashed(ctx context.Context, runtimeID, agentID string) error {
-	return c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/agents/%s/crashed", runtimeID, agentID), map[string]any{}, nil, c.tokenForRuntime(runtimeID))
+func (c *Client) ReportAgentProviderCrashed(ctx context.Context, runtimeID, agentID, credentialID string) error {
+	return c.postJSONWithRetryToken(
+		ctx,
+		fmt.Sprintf("/api/daemon/runtimes/%s/agents/%s/crashed", runtimeID, agentID),
+		map[string]any{"credential_id": credentialID},
+		nil,
+		[]time.Duration{100 * time.Millisecond, 500 * time.Millisecond, 2 * time.Second},
+		c.tokenForRuntime(runtimeID),
+	)
 }
 
 // ClearAgentProviderCrashed clears a prior ReportAgentProviderCrashed after

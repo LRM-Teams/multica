@@ -295,7 +295,10 @@ func (d *Daemon) credentialProxyAgentAPIHandler() http.HandlerFunc {
 			return
 		}
 		providerContext, hasProviderContext := d.activeProviderToolContextSnapshot(agentID)
-		credential, ok := readCachedAgentCredentialForMessage(d.cfg, workspaceID, agentID, time.Now())
+		credential, ok := agentProxyServerCredential(r)
+		if !ok && !agentProxyRequestAuthenticated(r) {
+			credential, ok = d.activeAgentProxyServerCredential(workspaceID, "", agentID)
+		}
 		if !ok {
 			http.Error(w, "agent credential is unavailable", http.StatusConflict)
 			return

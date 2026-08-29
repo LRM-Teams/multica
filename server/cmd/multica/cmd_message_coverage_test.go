@@ -184,7 +184,7 @@ func TestCommitLocalMessageCoverageUsesPinnedProxyCredential(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
-		if got := r.Header.Get(daemon.AgentProxyTokenHeader); got != "map_test-token" {
+		if got := r.Header.Get(daemon.AgentProxyTokenHeader); got != "mpt_test-token" {
 			t.Errorf("Agent Proxy token header = %q", got)
 		}
 		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
@@ -195,7 +195,7 @@ func TestCommitLocalMessageCoverageUsesPinnedProxyCredential(t *testing.T) {
 	defer server.Close()
 
 	tokenFile := filepath.Join(t.TempDir(), "token")
-	if err := os.WriteFile(tokenFile, []byte("map_test-token"), 0o600); err != nil {
+	if err := os.WriteFile(tokenFile, []byte("mpt_test-token"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv(daemon.AgentProxyURLEnv, server.URL)
@@ -214,7 +214,7 @@ func TestCommitLocalMessageCoverageRejectsPermissiveTokenFile(t *testing.T) {
 		t.Skip("POSIX mode bits do not represent the Windows token ACL")
 	}
 	tokenFile := filepath.Join(t.TempDir(), "token")
-	if err := os.WriteFile(tokenFile, []byte("map_test-token"), 0o644); err != nil {
+	if err := os.WriteFile(tokenFile, []byte("mpt_test-token"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv(daemon.AgentProxyURLEnv, "http://127.0.0.1:19514")

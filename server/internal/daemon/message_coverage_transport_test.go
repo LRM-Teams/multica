@@ -185,7 +185,7 @@ func TestCredentialProxyCoverageCommitRejectsMissingOrWrongCredential(t *testing
 	handler := d.credentialProxyMessageCoverageCommitHandler()
 	body := `{"receipt_id":"` + offer.ReceiptID + `"}`
 
-	for name, token := range map[string]string{"missing": "", "unknown": "map_forged"} {
+	for name, token := range map[string]string{"missing": "", "unknown": "mpt_forged"} {
 		t.Run(name, func(t *testing.T) {
 			recorder := coverageCommitRequest(t, handler, token, body)
 			if recorder.Code != http.StatusUnauthorized {
@@ -281,7 +281,7 @@ func TestCredentialProxyCoverageCommitInvalidCredentialLogIsSafe(t *testing.T) {
 	var logs bytes.Buffer
 	d, _, offer, _ := coverageCommitTestDaemon(t)
 	d.logger = slog.New(slog.NewTextHandler(&logs, nil))
-	forgedToken := "map_secret-canary"
+	forgedToken := "mpt_secret-canary"
 
 	recorder := coverageCommitRequest(t, d.credentialProxyMessageCoverageCommitHandler(), forgedToken, `{"receipt_id":"`+offer.ReceiptID+`"}`)
 	if recorder.Code != http.StatusUnauthorized {

@@ -359,6 +359,7 @@ func TestBoundary_MessageSend_UsesMachineLocalProxy(t *testing.T) {
 	t.Setenv("MULTICA_DAEMON_PORT", port)
 	t.Setenv("MULTICA_AGENT_ID", "agent-boundary")
 	t.Setenv("MULTICA_TASK_ID", "")
+	setTestAgentProxyToken(t)
 
 	cmd := newMessageSendCmd()
 	_ = cmd.Flags().Set("target", "#multica")
@@ -502,6 +503,7 @@ func boundaryCLIEnvProxy(t *testing.T, srvURL string) {
 	t.Setenv("MULTICA_SERVER_URL", "https://server.example.invalid")
 	t.Setenv("MULTICA_AGENT_ID", "agent-boundary")
 	t.Setenv("MULTICA_TASK_ID", "")
+	setTestAgentProxyToken(t)
 }
 
 func TestBoundary_IssueGet_UsesLocalProxyDedicatedAgentAPI(t *testing.T) {

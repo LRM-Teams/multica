@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/cli"
@@ -125,7 +124,14 @@ func (d *Daemon) agentAppInboxAckHandler() http.HandlerFunc {
 			writeAgentInboxError(w, http.StatusNotFound, "item not found", "item_not_found")
 			return
 		}
-		status, body, accepted, authoritativeReject := d.authorizeAgentAppSourceAck(r.Context(), workspaceID, agentID, item, *intent)
+		launchCredential, _ := agentProxyServerCredential(r)
+		if agentProxyRequestAuthenticated(r) && strings.TrimSpace(launchCredential.Token) == "" {
+			writeAgentInboxError(w, http.StatusConflict, "agent credential is unavailable", "agent_credential_unavailable")
+			return
+		}
+		status, body, accepted, authoritativeReject := d.authorizeAgentAppSourceAck(
+			r.Context(), workspaceID, agentID, item, *intent, launchCredential,
+		)
 		if authoritativeReject {
 			store.ClearServerAuthorizedAckIntent(item.ItemID, intent.AckAttemptID)
 		}
@@ -143,10 +149,17 @@ func (d *Daemon) agentAppInboxAckHandler() http.HandlerFunc {
 	}
 }
 
-func (d *Daemon) authorizeAgentAppSourceAck(ctx context.Context, workspaceID, agentID string, item AgentAppInboxItem, intent AgentAppInboxAckIntent) (int, map[string]any, bool, bool) {
-	credential, ok := readCachedAgentCredentialForMessage(d.cfg, workspaceID, agentID, time.Now())
-	if !ok {
-		return http.StatusConflict, map[string]any{"error": "agent credential is unavailable", "code": "agent_credential_unavailable"}, false, false
+func (d *Daemon) authorizeAgentAppSourceAck(ctx context.Context, workspaceID, agentID string, item AgentAppInboxItem, intent AgentAppInboxAckIntent, pinned ...cachedAgentCredential) (int, map[string]any, bool, bool) {
+	credential := cachedAgentCredential{}
+	if len(pinned) > 0 {
+		credential = pinned[0]
+	}
+	if strings.TrimSpace(credential.Token) == "" {
+		var ok bool
+		credential, ok = d.activeAgentProxyServerCredential(workspaceID, "", agentID)
+		if !ok {
+			return http.StatusConflict, map[string]any{"error": "agent credential is unavailable", "code": "agent_credential_unavailable"}, false, false
+		}
 	}
 	requestBody := map[string]any{
 		"itemId": item.ItemID, "appId": item.AppID, "notificationClass": item.NotificationClass,

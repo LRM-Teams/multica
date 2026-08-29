@@ -339,14 +339,10 @@ func (d *Daemon) reportResidentTurnCapture(workspaceID, agentID, runtimeID, runI
 	}
 	reportCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	credential, err := d.credentialManager().Get(reportCtx, agentCredentialKey{
-		WorkspaceID: workspaceID,
-		RuntimeID:   runtimeID,
-		AgentID:     agentID,
-	}, agentCredentialCacheFirst)
-	if err != nil {
+	credential, ok := d.activeAgentProxyServerCredential(workspaceID, runtimeID, agentID)
+	if !ok {
 		if d.logger != nil {
-			d.logger.Warn("mixed-run capture credential unavailable", "run_id", runID, "run_agent_id", runAgentID, "error", err)
+			d.logger.Warn("mixed-run capture credential unavailable", "run_id", runID, "run_agent_id", runAgentID)
 		}
 		return false
 	}

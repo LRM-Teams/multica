@@ -53,13 +53,13 @@ func TestCredentialProxyAgentAPIForwardsDurableCredentialAndBusinessRequest(t *t
 	defer upstream.Close()
 
 	cfg := Config{WorkspacesRoot: t.TempDir(), ServerBaseURL: upstream.URL}
-	expiresAt := time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339Nano)
 	if _, err := writeCachedAgentCredential(cfg, "workspace-1", "runtime-1", "agent-1", AgentCredentialResponse{
-		ID: "credential-1", AgentID: "agent-1", Prefix: "mac_test", Token: "cached-token", ExpiresAt: &expiresAt,
+		ID: "credential-1", AgentID: "agent-1", Prefix: "sk_agent_test", Token: "cached-token",
 	}, time.Now()); err != nil {
 		t.Fatalf("write cached credential: %v", err)
 	}
 	d := &Daemon{cfg: cfg}
+	registerTestAgentProxyServerCredential(t, d, "workspace-1", "runtime-1", "agent-1", "cached-token")
 
 	req := httptest.NewRequest(http.MethodPost, "/api/agent/reminders/list?status=active", bytes.NewBufferString(`{"status":"active"}`))
 	req.Header.Set("Authorization", "Bearer agent-controlled-token")
@@ -299,13 +299,13 @@ func TestCredentialProxyAssociatesResponseWithIngressContextSnapshot(t *testing.
 	defer upstream.Close()
 
 	cfg := Config{WorkspacesRoot: t.TempDir(), ServerBaseURL: upstream.URL}
-	expiresAt := time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339Nano)
 	if _, err := writeCachedAgentCredential(cfg, "workspace-1", "runtime-1", "agent-1", AgentCredentialResponse{
-		ID: "credential-1", AgentID: "agent-1", Token: "cached-token", ExpiresAt: &expiresAt,
+		ID: "credential-1", AgentID: "agent-1", Prefix: "sk_agent_test", Token: "cached-token",
 	}, time.Now()); err != nil {
 		t.Fatalf("write cached credential: %v", err)
 	}
 	d := &Daemon{cfg: cfg}
+	registerTestAgentProxyServerCredential(t, d, "workspace-1", "runtime-1", "agent-1", "cached-token")
 	turn1 := d.beginCanonicalActionTurn("agent-1")
 	d.SetActiveProviderToolContext(ActiveProviderToolContext{
 		AgentID: "agent-1", CallID: "tool-1", ToolCallID: "tool-1", TurnToken: turn1,
@@ -453,13 +453,14 @@ func newCredentialProxyTestDaemon(t *testing.T, status int, responseBody string)
 	t.Cleanup(upstream.Close)
 
 	cfg := Config{WorkspacesRoot: t.TempDir(), ServerBaseURL: upstream.URL}
-	expiresAt := time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339Nano)
 	if _, err := writeCachedAgentCredential(cfg, "workspace-1", "runtime-1", "agent-1", AgentCredentialResponse{
-		ID: "credential-1", AgentID: "agent-1", Prefix: "mac_test", Token: "cached-token", ExpiresAt: &expiresAt,
+		ID: "credential-1", AgentID: "agent-1", Prefix: "sk_agent_test", Token: "cached-token",
 	}, time.Now()); err != nil {
 		t.Fatalf("write cached credential: %v", err)
 	}
-	return &Daemon{cfg: cfg}
+	d := &Daemon{cfg: cfg}
+	registerTestAgentProxyServerCredential(t, d, "workspace-1", "runtime-1", "agent-1", "cached-token")
+	return d
 }
 
 func serveCredentialProxyTestRequest(t *testing.T, d *Daemon, method, path, body string) *httptest.ResponseRecorder {

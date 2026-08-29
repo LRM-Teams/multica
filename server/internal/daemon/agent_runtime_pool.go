@@ -164,7 +164,7 @@ type agentRuntimeAcquireRequest struct {
 	// PrepareLaunchEnvironment may add launch-scoped transport state after the
 	// stable runtime fingerprint has been computed. Its cleanup is owned by the
 	// concrete backend lifetime and runs on every create failure.
-	PrepareLaunchEnvironment func(map[string]string) (func(), error)
+	PrepareLaunchEnvironment func(map[string]string) (string, func(), error)
 	Now                      time.Time
 	// ForceFreshSession discards CanonicalSessionID and any queued
 	// nextResume pointer so this acquire cannot continue a poisoned Pi
@@ -200,10 +200,12 @@ type agentRuntimeSlot struct {
 	provider                       string
 	agentInstanceID                string
 	processInstanceID              string
+	launchCredentialID             string
 	running                        bool
 	idleSince                      time.Time
 	backend                        agent.Backend
 	close                          func()
+	launchCleanup                  func()
 	piRunIdentity                  *agent.PiRunIdentity
 	messageInputDone               <-chan error
 	messageInputGeneration         uint64
@@ -354,15 +356,21 @@ func (p *agentRuntimePool) acquire(request agentRuntimeAcquireRequest) (*agentRu
 		config := request.BackendConfig
 		config.ExecutablePath = request.Identity.Executable
 		config.Env = cloneStringMap(request.Identity.Environment)
+		launchCredentialID := ""
 		var processCleanup func()
 		if request.PrepareLaunchEnvironment != nil {
-			processCleanup, err = request.PrepareLaunchEnvironment(config.Env)
+			launchCredentialID, processCleanup, err = request.PrepareLaunchEnvironment(config.Env)
 			if err != nil {
 				if processCleanup != nil {
 					processCleanup()
 				}
 				slot.running = false
 				return nil, fmt.Errorf("prepare canonical runtime process: %w", err)
+			}
+			if processCleanup != nil {
+				cleanup := processCleanup
+				var cleanupOnce sync.Once
+				processCleanup = func() { cleanupOnce.Do(cleanup) }
 			}
 		}
 		created, closeFn, err := request.Factory(config)
@@ -387,9 +395,11 @@ func (p *agentRuntimePool) acquire(request agentRuntimeAcquireRequest) (*agentRu
 		closeBackend = combineRuntimeCleanup(closeFn, processCleanup)
 		slot.backend = created
 		slot.close = closeBackend
+		slot.launchCleanup = processCleanup
 		slot.provider = request.Identity.Provider
 		slot.agentInstanceID = ""
 		slot.processInstanceID = ""
+		slot.launchCredentialID = launchCredentialID
 		// Providers whose stream traffic maps to no Message (Pi's empty or
 		// unknown update events) still prove liveness. Refresh the silence
 		// clock on every stream event so a long generation with no tool calls
@@ -568,8 +578,10 @@ func (slot *agentRuntimeSlot) clearBackendStateLocked() {
 func (slot *agentRuntimeSlot) detachBackendStateLocked(confirmed bool) {
 	slot.backend = nil
 	slot.close = nil
+	slot.launchCleanup = nil
 	slot.agentInstanceID = ""
 	slot.processInstanceID = ""
+	slot.launchCredentialID = ""
 	slot.piRunIdentity = nil
 	slot.lastPendingNoticeFingerprint = ""
 	slot.lastPendingTargetFingerprint = nil
@@ -2179,6 +2191,12 @@ func (p *agentRuntimePool) beginResidentTermination(agentID, runtimeID string) e
 	if !ok {
 		return ErrCanonicalAgentRuntimeBusy
 	}
+	// Retire both launch credentials as soon as lifecycle termination begins.
+	// The in-flight owner may invoke this cleanup again while detaching the
+	// backend; launch cleanup is idempotent.
+	if slot.launchCleanup != nil {
+		slot.launchCleanup()
+	}
 	// Fence any native acceptance that races this restart. The in-flight owner
 	// keeps admission until the killed process actually finishes, then closes
 	// and detaches this backend so the next delivery creates a fresh instance.
@@ -2404,19 +2422,25 @@ func (p *agentRuntimePool) checkResidentLiveness(now time.Time) []residentProces
 		provider := ref.slot.provider
 		agentInstanceID := ref.slot.agentInstanceID
 		processInstanceID := ref.slot.processInstanceID
-		ref.slot.closeBackend()
+		credentialID := ref.slot.launchCredentialID
+		cleanup := ref.slot.close
+		ref.slot.detachBackendStateLocked(true)
 		ref.slot.mu.Unlock()
 
 		agentID, runtimeID := splitCanonicalSlotKey(ref.key)
-		events = append(events, residentProcessEvent{
+		event := residentProcessEvent{
 			AgentID: agentID, RuntimeID: runtimeID,
 			AgentInstanceID: agentInstanceID, ProcessInstanceID: processInstanceID,
-			Kind: residentProcessExited, Provider: provider, At: now,
-		})
-	}
-
-	for _, ev := range events {
-		p.emitResidentProcessEvent(ev)
+			CredentialID: credentialID,
+			Kind:         residentProcessExited, Provider: provider, At: now,
+		}
+		// Crash reporting performs the exact-credential server CAS. Deliver it
+		// before generic launch cleanup attempts the same credential revocation.
+		p.emitResidentProcessEvent(event)
+		if cleanup != nil {
+			cleanup()
+		}
+		events = append(events, event)
 	}
 	return events
 }
@@ -2457,6 +2481,28 @@ func (p *agentRuntimePool) closeAll() error {
 	}
 	p.slots = make(map[string]*agentRuntimeSlot)
 	return nil
+}
+
+// revokeAllLaunchCredentials retires launch-scoped Proxy registrations even
+// when a provider turn is still unwinding. Each cleanup is idempotent, so the
+// normal backend close path may safely invoke it again later.
+func (p *agentRuntimePool) revokeAllLaunchCredentials() {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	cleanups := make([]func(), 0, len(p.slots))
+	for _, slot := range p.slots {
+		slot.mu.Lock()
+		if slot.launchCleanup != nil {
+			cleanups = append(cleanups, slot.launchCleanup)
+		}
+		slot.mu.Unlock()
+	}
+	p.mu.Unlock()
+	for _, cleanup := range cleanups {
+		cleanup()
+	}
 }
 
 // forceTerminateAll interrupts only processes owned by this pool. A backend

@@ -572,6 +572,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Get("/ws", h.DaemonWebSocket)
 		r.Post("/runtimes/{runtimeId}/agent-inbox/drain", h.DrainAgentInboxByRuntime)
 		r.Post("/runtimes/{runtimeId}/agents/{agentId}/credential", h.EnsureDaemonAgentCredential)
+		r.Post("/runtimes/{runtimeId}/agents/{agentId}/credentials/{credentialId}/revoke", h.RevokeDaemonAgentCredential)
 		r.Get("/runtimes/{runtimeId}/agents/{agentId}/runtime-config", h.DaemonGetAgentRuntimeConfig)
 		r.Post("/runtimes/{runtimeId}/agents/{agentId}/crashed", h.ReportAgentProviderCrashed)
 		r.Post("/runtimes/{runtimeId}/agents/{agentId}/crashed/clear", h.ClearAgentProviderCrashed)

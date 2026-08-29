@@ -111,13 +111,13 @@ func TestCredentialProxyMessageReadUsesCachedCredentialAndWritesTargetBoundary(t
 	defer upstream.Close()
 
 	cfg := Config{WorkspacesRoot: root, ServerBaseURL: upstream.URL}
-	expiresAt := time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339Nano)
 	if _, err := writeCachedAgentCredential(cfg, "workspace-1", "runtime-1", "agent-1", AgentCredentialResponse{
-		ID: "credential-1", AgentID: "agent-1", Prefix: "mac_test", Token: "cached-token", ExpiresAt: &expiresAt,
+		ID: "credential-1", AgentID: "agent-1", Prefix: "sk_agent_test", Token: "cached-token",
 	}, time.Now()); err != nil {
 		t.Fatalf("writeCachedAgentCredential: %v", err)
 	}
 	d := &Daemon{cfg: cfg}
+	registerTestAgentProxyServerCredential(t, d, "workspace-1", "runtime-1", "agent-1", "cached-token")
 	registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
 	handler := d.credentialProxyMessageReadHandler()
 
@@ -198,13 +198,13 @@ func TestCredentialProxySearchAndResolveNeverExposeOrPrepareCoverage(t *testing.
 	}))
 	defer upstream.Close()
 	cfg := Config{WorkspacesRoot: root, ServerBaseURL: upstream.URL}
-	expiresAt := time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339Nano)
 	if _, err := writeCachedAgentCredential(cfg, "workspace-1", "runtime-1", "agent-1", AgentCredentialResponse{
-		ID: "credential-1", AgentID: "agent-1", Prefix: "mac_test", Token: "cached-token", ExpiresAt: &expiresAt,
+		ID: "credential-1", AgentID: "agent-1", Prefix: "sk_agent_test", Token: "cached-token",
 	}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	d := &Daemon{cfg: cfg}
+	registerTestAgentProxyServerCredential(t, d, "workspace-1", "runtime-1", "agent-1", "cached-token")
 	registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", &MessageCoordinator{
 		key: InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, pending: make(map[string]map[int64]protocol.AgentMessageProjection),
 	})
@@ -250,7 +250,7 @@ func TestCredentialProxySearchAndResolveNeverExposeOrPrepareCoverage(t *testing.
 	}
 }
 
-func TestCredentialProxyMessageSendRefreshesNearExpiryCredential(t *testing.T) {
+func TestCredentialProxyMessageSendUsesLaunchCredentialAfterIdle(t *testing.T) {
 	root := t.TempDir()
 	coordinator, err := newTestMessageCoordinator(t, root, func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
 	if err != nil {
@@ -258,23 +258,16 @@ func TestCredentialProxyMessageSendRefreshesNearExpiryCredential(t *testing.T) {
 	}
 	completeCoordinatorRecovery(t, coordinator)
 
-	var ensureCalls int
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/api/daemon/runtimes/runtime-1/agents/agent-1/credential":
-			ensureCalls++
-			expiresAt := time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339Nano)
-			_ = json.NewEncoder(w).Encode(AgentCredentialResponse{
-				ID: "credential-2", AgentID: "agent-1", Prefix: "mac_new", Token: "refreshed-token", ExpiresAt: &expiresAt,
-			})
 		case "/api/agent/messages/target":
-			if got := r.Header.Get("Authorization"); got != "Bearer refreshed-token" {
-				t.Errorf("target Authorization = %q, want refreshed credential", got)
+			if got := r.Header.Get("Authorization"); got != "Bearer launch-token" {
+				t.Errorf("target Authorization = %q, want launch credential", got)
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"target": "#one", "context_target": "channel:one"})
 		case "/api/agent/messages/send":
-			if got := r.Header.Get("Authorization"); got != "Bearer refreshed-token" {
-				t.Errorf("send Authorization = %q, want refreshed credential", got)
+			if got := r.Header.Get("Authorization"); got != "Bearer launch-token" {
+				t.Errorf("send Authorization = %q, want launch credential", got)
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"action": "message_send", "target": "#one", "created": true, "message": map[string]any{"id": "message-1"}})
 		default:
@@ -284,24 +277,21 @@ func TestCredentialProxyMessageSendRefreshesNearExpiryCredential(t *testing.T) {
 	defer upstream.Close()
 
 	cfg := Config{WorkspacesRoot: root, ServerBaseURL: upstream.URL}
-	expiresAt := time.Now().Add(30 * time.Minute).UTC().Format(time.RFC3339Nano)
 	if _, err := writeCachedAgentCredential(cfg, "workspace-1", "runtime-1", "agent-1", AgentCredentialResponse{
-		ID: "credential-1", AgentID: "agent-1", Prefix: "mac_old", Token: "near-expiry-token", ExpiresAt: &expiresAt,
+		ID: "credential-1", AgentID: "agent-1", Prefix: "sk_agent_launch", Token: "launch-token",
 	}, time.Now()); err != nil {
 		t.Fatalf("writeCachedAgentCredential: %v", err)
 	}
 	client := NewClient(upstream.URL)
 	client.SetRuntimeDaemonToken("runtime-1", "daemon-token", time.Now().Add(time.Hour))
 	d := &Daemon{cfg: cfg, client: client, messageDraftStore: NewMessageDraftStore(root)}
+	registerTestAgentProxyServerCredential(t, d, "workspace-1", "runtime-1", "agent-1", "launch-token")
 	registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
 
 	recorder := httptest.NewRecorder()
 	d.credentialProxyMessageSendHandler().ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/credential-proxy/messages/send", bytes.NewBufferString(`{"agent_id":"agent-1","workspace_id":"workspace-1","target":"#one","content":"hello"}`)))
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("message send status=%d body=%s", recorder.Code, recorder.Body.String())
-	}
-	if ensureCalls != 1 {
-		t.Fatalf("credential ensure calls = %d, want 1", ensureCalls)
 	}
 }
 
@@ -617,13 +607,13 @@ func TestCredentialProxyMessageSendDraftReusesIdentityAndAnywayOnlyOnReplay(t *t
 func credentialProxySendTestDaemon(t *testing.T, root, serverURL string, coordinator *MessageCoordinator) *Daemon {
 	t.Helper()
 	cfg := Config{WorkspacesRoot: root, ServerBaseURL: serverURL}
-	expiresAt := time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339Nano)
 	if _, err := writeCachedAgentCredential(cfg, "workspace-1", "runtime-1", "agent-1", AgentCredentialResponse{
-		ID: "credential-1", AgentID: "agent-1", Prefix: "mac_test", Token: "cached-token", ExpiresAt: &expiresAt,
+		ID: "credential-1", AgentID: "agent-1", Prefix: "sk_agent_test", Token: "cached-token",
 	}, time.Now()); err != nil {
 		t.Fatalf("writeCachedAgentCredential: %v", err)
 	}
 	d := &Daemon{cfg: cfg, messageDraftStore: NewMessageDraftStore(root)}
+	registerTestAgentProxyServerCredential(t, d, "workspace-1", "runtime-1", "agent-1", "cached-token")
 	registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
 	return d
 }

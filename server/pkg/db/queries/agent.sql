@@ -956,16 +956,30 @@ WHERE (i.project_id = @project_id OR cs.project_id = @project_id)
   AND atq.status = 'draining'
 ORDER BY atq.created_at ASC;
 
--- name: MarkAgentCrashed :exec
+-- name: MarkAgentCrashed :execrows
 -- Records that this agent's idle resident provider process was found dead
 -- (daemon ResidentRuntimeCrashEvent / task #42②). Per-agent on purpose: many
 -- agents can share one runtime/daemon, and only the crashed provider slot
 -- should show "crashed". Cleared explicitly on successful recreate / manual
 -- lifecycle restart — not by TTL (a crash with no next dispatch is exactly
 -- the long-lived case this signal exists for).
+-- A crashed resident launch is no longer allowed to use its server
+-- credential. The next recreate obtains a fresh launch credential.
+WITH revoked AS (
+  UPDATE agent_credential
+  SET revoked_at = now(), updated_at = now()
+  WHERE agent_id = sqlc.arg(agent_id)
+    AND id = sqlc.arg(credential_id)
+    AND workspace_id = sqlc.arg(workspace_id)
+    AND user_id = sqlc.arg(owner_id)
+    AND issuance_source = 'daemon'
+    AND revoked_at IS NULL
+    AND disabled_at IS NULL
+  RETURNING agent_id
+)
 UPDATE agent
 SET crashed_since = now(), updated_at = now()
-WHERE id = $1;
+WHERE id IN (SELECT agent_id FROM revoked);
 
 -- name: ClearAgentCrashed :exec
 -- Clears a prior MarkAgentCrashed once the daemon has a live resident

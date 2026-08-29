@@ -219,9 +219,9 @@ func TestAgentRuntimePoolCleansPreparedProcessWhenFactoryFails(t *testing.T) {
 	cleanupCalls := 0
 	_, err := pool.acquire(agentRuntimeAcquireRequest{
 		Identity: identity,
-		PrepareLaunchEnvironment: func(environment map[string]string) (func(), error) {
+		PrepareLaunchEnvironment: func(environment map[string]string) (string, func(), error) {
 			environment["PATH"] = "/launch-scoped/bin:" + environment["PATH"]
-			return func() { cleanupCalls++ }, nil
+			return "credential-1", func() { cleanupCalls++ }, nil
 		},
 		Factory: func(config agent.Config) (agent.Backend, func(), error) {
 			if !strings.HasPrefix(config.Env["PATH"], "/launch-scoped/bin:") {
@@ -788,6 +788,37 @@ func TestCanonicalAgentRuntimeCloseAllRejectsBusySlot(t *testing.T) {
 	}
 }
 
+func TestCanonicalAgentRuntimeShutdownRevokesBusyLaunchCredential(t *testing.T) {
+	pool := newAgentRuntimePool()
+	probe := &canonicalRuntimeFactoryProbe{}
+	identity := canonicalRuntimeIdentityForTest(t, "model-a", map[string]string{
+		"MULTICA_SERVER_URL": "https://multica.example",
+		"MULTICA_TASK_ID":    "turn-a",
+	})
+	cleanupCalls := 0
+	lease, err := pool.acquire(agentRuntimeAcquireRequest{
+		Identity: identity,
+		Factory:  probe.factory,
+		PrepareLaunchEnvironment: func(map[string]string) (string, func(), error) {
+			return "credential-busy", func() { cleanupCalls++ }, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	pool.revokeAllLaunchCredentials()
+	if cleanupCalls != 1 {
+		t.Fatalf("launch cleanup calls = %d, want 1", cleanupCalls)
+	}
+	lease.release(true)
+	if err := pool.closeAll(); err != nil {
+		t.Fatalf("closeAll: %v", err)
+	}
+	if cleanupCalls != 1 {
+		t.Fatalf("launch cleanup ran again during backend close: %d", cleanupCalls)
+	}
+}
+
 func TestCanonicalAgentRuntimeEvictIdleClosesOnlyExpiredResidentSlot(t *testing.T) {
 	pool := newAgentRuntimePool()
 	probe := &canonicalRuntimeFactoryProbe{}
@@ -893,6 +924,7 @@ func TestCanonicalAgentRuntimeSessionResetRejectsBusySlot(t *testing.T) {
 func TestCanonicalAgentRuntimeBeginResidentTerminationKillsBusySlot(t *testing.T) {
 	pool := newAgentRuntimePool()
 	probe := &canonicalRuntimeFactoryProbe{}
+	cleanupCalls := 0
 	identity := canonicalRuntimeIdentityForTest(t, "model-a", map[string]string{
 		"MULTICA_SERVER_URL":   "https://multica.example",
 		"MULTICA_WORKSPACE_ID": "workspace-a",
@@ -901,7 +933,10 @@ func TestCanonicalAgentRuntimeBeginResidentTerminationKillsBusySlot(t *testing.T
 	})
 	lease, err := pool.acquire(agentRuntimeAcquireRequest{
 		Identity: identity,
-		Factory:  probe.factory,
+		PrepareLaunchEnvironment: func(map[string]string) (string, func(), error) {
+			return "credential-a", func() { cleanupCalls++ }, nil
+		},
+		Factory: probe.factory,
 	})
 	if err != nil {
 		t.Fatalf("acquire: %v", err)
@@ -913,6 +948,9 @@ func TestCanonicalAgentRuntimeBeginResidentTerminationKillsBusySlot(t *testing.T
 	}
 	if got := backend.forceKillCount(); got != 1 {
 		t.Fatalf("ForceKill called %d times, want 1", got)
+	}
+	if cleanupCalls != 1 {
+		t.Fatalf("launch credential cleanup calls = %d, want 1 before ForceKill returns", cleanupCalls)
 	}
 	created, closed := probe.counts()
 	if created != 1 || closed != 0 {
@@ -928,6 +966,9 @@ func TestCanonicalAgentRuntimeBeginResidentTerminationKillsBusySlot(t *testing.T
 	created, closed = probe.counts()
 	if closed != 1 {
 		t.Fatalf("closed count after release = %d, want 1", closed)
+	}
+	if cleanupCalls != 1 {
+		t.Fatalf("launch credential cleanup calls after release = %d, want idempotent 1", cleanupCalls)
 	}
 	_ = created
 }
@@ -1077,6 +1118,8 @@ func newLivenessFactory(backend *canonicalRuntimeLivenessTestBackend) canonicalR
 // misclassifying any of those as a crash would kill a healthy session.
 func TestCheckResidentLivenessEvictsAndReportsOnlyConfirmedDeadIdleSlots(t *testing.T) {
 	pool := newAgentRuntimePool()
+	var orderMu sync.Mutex
+	var crashOrder []string
 
 	dead := &canonicalRuntimeLivenessTestBackend{}
 	dead.setLiveness(false, true) // known dead
@@ -1089,6 +1132,13 @@ func TestCheckResidentLivenessEvictsAndReportsOnlyConfirmedDeadIdleSlots(t *test
 	}
 	deadLease, err := pool.acquire(agentRuntimeAcquireRequest{
 		Identity: deadIdentity, Factory: newLivenessFactory(dead),
+		PrepareLaunchEnvironment: func(map[string]string) (string, func(), error) {
+			return "credential-dead", func() {
+				orderMu.Lock()
+				crashOrder = append(crashOrder, "cleanup")
+				orderMu.Unlock()
+			}, nil
+		},
 	})
 	if err != nil {
 		t.Fatalf("acquire dead: %v", err)
@@ -1159,6 +1209,9 @@ func TestCheckResidentLivenessEvictsAndReportsOnlyConfirmedDeadIdleSlots(t *test
 		mu.Lock()
 		defer mu.Unlock()
 		received = append(received, ev)
+		orderMu.Lock()
+		crashOrder = append(crashOrder, "report")
+		orderMu.Unlock()
 	})
 
 	events := pool.checkResidentLiveness(time.Unix(500, 0))
@@ -1171,6 +1224,9 @@ func TestCheckResidentLivenessEvictsAndReportsOnlyConfirmedDeadIdleSlots(t *test
 	if events[0].Kind != residentProcessExited {
 		t.Fatalf("Kind = %v, want %v", events[0].Kind, residentProcessExited)
 	}
+	if events[0].CredentialID != "credential-dead" {
+		t.Fatalf("CredentialID = %q, want credential-dead", events[0].CredentialID)
+	}
 	if !events[0].At.Equal(time.Unix(500, 0)) {
 		t.Fatalf("At = %v, want %v", events[0].At, time.Unix(500, 0))
 	}
@@ -1180,6 +1236,12 @@ func TestCheckResidentLivenessEvictsAndReportsOnlyConfirmedDeadIdleSlots(t *test
 	mu.Unlock()
 	if !gotSubscriber {
 		t.Fatalf("subscriber did not receive the crash event: %+v", received)
+	}
+	orderMu.Lock()
+	gotOrder := append([]string(nil), crashOrder...)
+	orderMu.Unlock()
+	if len(gotOrder) != 2 || gotOrder[0] != "report" || gotOrder[1] != "cleanup" {
+		t.Fatalf("crash handling order = %v, want report before cleanup", gotOrder)
 	}
 
 	if !dead.closed {

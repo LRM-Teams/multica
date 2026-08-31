@@ -21,8 +21,6 @@ import (
 
 const agentCredentialActivityCreated = "agent_credential_created"
 const agentCredentialActivityDaemonEnsured = "agent_credential_daemon_ensured"
-const daemonAgentCredentialTTL = 24 * time.Hour
-const daemonAgentCredentialRefreshBeforeExpiry = time.Hour
 
 // agentRuntimeReassignmentGraceWindow (task #38) is how long after
 // agent.runtime_id changes a stale-runtime credential request is treated as
@@ -44,7 +42,8 @@ type CreateAgentCredentialRequest struct {
 }
 
 type EnsureDaemonAgentCredentialRequest struct {
-	CredentialID string `json:"credential_id,omitempty"`
+	CredentialID  string `json:"credential_id,omitempty"`
+	ReplaceLaunch bool   `json:"replace_launch,omitempty"`
 }
 
 type AgentCredentialResponse struct {
@@ -60,7 +59,7 @@ type CreateAgentCredentialResponse struct {
 	AgentCredentialResponse
 	Token          string `json:"token,omitempty"`
 	Reused         bool   `json:"reused,omitempty"`
-	RotationReason string `json:"rotation_reason,omitempty"`
+	IssuanceReason string `json:"issuance_reason,omitempty"`
 }
 
 func agentCredentialToResponse(credential db.AgentCredential) AgentCredentialResponse {
@@ -326,7 +325,7 @@ func (h *Handler) EnsureDaemonAgentCredential(w http.ResponseWriter, r *http.Req
 	defer tx.Rollback(r.Context())
 	qtx := h.Queries.WithTx(tx)
 
-	rotationReason := "missing_cached_credential"
+	issuanceReason := "missing_cached_credential"
 	var supersededCredential *db.AgentCredential
 	if _, err := qtx.LockAgentForDaemonCredentialEnsure(r.Context(), db.LockAgentForDaemonCredentialEnsureParams{
 		AgentID:     agent.ID,
@@ -354,10 +353,23 @@ func (h *Handler) EnsureDaemonAgentCredential(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusInternalServerError, "failed to validate agent owner membership")
 		return
 	}
+	if ensureReq.ReplaceLaunch && ensureReq.CredentialID == "" {
+		hasLive, liveErr := qtx.HasLiveDaemonAgentCredential(r.Context(), db.HasLiveDaemonAgentCredentialParams{
+			AgentID: agent.ID, WorkspaceID: agent.WorkspaceID, UserID: runtimeOwnerID,
+		})
+		if liveErr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to validate Agent launch credential")
+			return
+		}
+		if hasLive {
+			writeError(w, http.StatusConflict, "Agent launch predecessor credential is required")
+			return
+		}
+	}
 	if ensureReq.CredentialID != "" {
 		credentialID, parseErr := util.ParseUUID(ensureReq.CredentialID)
 		if parseErr != nil {
-			rotationReason = "invalid_credential_id"
+			issuanceReason = "invalid_credential_id"
 		} else {
 			cached, lookupErr := qtx.GetAgentCredentialForDaemonEnsure(r.Context(), db.GetAgentCredentialForDaemonEnsureParams{
 				ID:          credentialID,
@@ -372,21 +384,32 @@ func (h *Handler) EnsureDaemonAgentCredential(w http.ResponseWriter, r *http.Req
 				writeError(w, http.StatusInternalServerError, "failed to validate agent credential")
 				return
 			case isNotFound(lookupErr):
-				rotationReason = "not_found_or_scope_mismatch"
+				issuanceReason = "not_found_or_scope_mismatch"
 			case cached.IssuanceSource != "daemon":
-				rotationReason = "not_daemon_issued"
+				issuanceReason = "not_daemon_issued"
 			case cached.RevokedAt.Valid:
+				hasReplacement, replacementErr := qtx.HasOtherLiveDaemonAgentCredential(r.Context(), db.HasOtherLiveDaemonAgentCredentialParams{
+					AgentID: agent.ID, WorkspaceID: agent.WorkspaceID, UserID: runtimeOwnerID, ID: cached.ID,
+				})
+				if replacementErr != nil {
+					writeError(w, http.StatusInternalServerError, "failed to validate Agent launch credential")
+					return
+				}
+				if hasReplacement {
+					writeError(w, http.StatusConflict, "stale Agent launch credential")
+					return
+				}
 				supersededCredential = &cached
-				rotationReason = "revoked"
+				issuanceReason = "revoked"
 			case cached.DisabledAt.Valid:
 				supersededCredential = &cached
-				rotationReason = "disabled"
-			case !cached.ExpiresAt.Valid || !cached.ExpiresAt.Time.After(time.Now()):
+				issuanceReason = "disabled"
+			case cached.ExpiresAt.Valid && !cached.ExpiresAt.Time.After(time.Now()):
 				supersededCredential = &cached
-				rotationReason = "expired"
-			case !cached.ExpiresAt.Time.After(time.Now().Add(daemonAgentCredentialRefreshBeforeExpiry)):
+				issuanceReason = "expired"
+			case ensureReq.ReplaceLaunch:
 				supersededCredential = &cached
-				rotationReason = "near_expiry"
+				issuanceReason = "launch_replaced"
 			default:
 				retiredCount, revokeErr := qtx.RevokeOtherDaemonAgentCredentialsForSubject(
 					r.Context(),
@@ -466,7 +489,7 @@ func (h *Handler) EnsureDaemonAgentCredential(w http.ResponseWriter, r *http.Req
 	if err != nil {
 		slog.Error("daemon agent credential ensure: stale credential cleanup failed; rolling back",
 			append(logger.RequestAttrs(r), "error", err, "agent_id", uuidToString(agent.ID), "runtime_id", runtimeID)...)
-		writeError(w, http.StatusInternalServerError, "failed to rotate agent credential")
+		writeError(w, http.StatusInternalServerError, "failed to replace Agent launch credential")
 		return
 	}
 
@@ -476,7 +499,10 @@ func (h *Handler) EnsureDaemonAgentCredential(w http.ResponseWriter, r *http.Req
 		AgentID:     agent.ID,
 		WorkspaceID: agent.WorkspaceID,
 		UserID:      runtimeOwnerID,
-		ExpiresAt:   pgtype.Timestamptz{Time: time.Now().Add(daemonAgentCredentialTTL), Valid: true},
+		// Daemon-issued credentials are scoped to the resident Agent
+		// lifecycle, not to a wall-clock lease. Revocation is the expiry
+		// boundary and is performed when the Agent launch is retired.
+		ExpiresAt: pgtype.Timestamptz{},
 	})
 	if err != nil {
 		if isCheckViolation(err) {
@@ -506,7 +532,7 @@ func (h *Handler) EnsureDaemonAgentCredential(w http.ResponseWriter, r *http.Req
 		"agent_credential_prefix":    credential.TokenPrefix,
 		"expires_at":                 timestampToPtr(credential.ExpiresAt),
 		"reused":                     false,
-		"rotation_reason":            rotationReason,
+		"issuance_reason":            issuanceReason,
 		"retired_daemon_credentials": retiredCount,
 	}
 	if supersededCredential != nil {
@@ -544,6 +570,53 @@ func (h *Handler) EnsureDaemonAgentCredential(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusCreated, CreateAgentCredentialResponse{
 		AgentCredentialResponse: agentCredentialToResponse(credential),
 		Token:                   rawToken,
-		RotationReason:          rotationReason,
+		IssuanceReason:          issuanceReason,
 	})
+}
+
+func (h *Handler) RevokeDaemonAgentCredential(w http.ResponseWriter, r *http.Request) {
+	runtimeID := chi.URLParam(r, "runtimeId")
+	runtime, ok := h.requireDaemonRuntimeAccess(w, r, runtimeID)
+	if !ok {
+		return
+	}
+	if middleware.DaemonAuthPathFromContext(r.Context()) != middleware.DaemonAuthPathDaemonToken {
+		writeError(w, http.StatusForbidden, "Agent credential revocation requires daemon token")
+		return
+	}
+	daemonID := middleware.DaemonIDFromContext(r.Context())
+	if daemonID == "" || !runtime.DaemonID.Valid || runtime.DaemonID.String != daemonID {
+		writeError(w, http.StatusForbidden, "daemon token is not bound to this runtime")
+		return
+	}
+	ownerID, err := h.resolveRuntimeOwner(r, runtime)
+	if err != nil {
+		writeError(w, http.StatusConflict, "agent runtime has no owning user")
+		return
+	}
+	agentID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "agentId"), "agent_id")
+	if !ok {
+		return
+	}
+	agent, err := h.Queries.GetAgent(r.Context(), agentID)
+	if err != nil || !agent.RuntimeID.Valid || agent.RuntimeID.Bytes != runtime.ID.Bytes || agent.WorkspaceID.Bytes != runtime.WorkspaceID.Bytes {
+		writeError(w, http.StatusNotFound, "agent not found on runtime")
+		return
+	}
+	credentialID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "credentialId"), "credential_id")
+	if !ok {
+		return
+	}
+	rows, err := h.Queries.RevokeDaemonAgentCredentialForLaunch(r.Context(), db.RevokeDaemonAgentCredentialForLaunchParams{
+		ID: credentialID, AgentID: agentID, WorkspaceID: runtime.WorkspaceID, UserID: ownerID,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to revoke Agent launch credential")
+		return
+	}
+	if rows == 0 {
+		writeError(w, http.StatusNotFound, "Agent launch credential not found")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

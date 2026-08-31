@@ -392,6 +392,7 @@ func setAgentProxyEnv(t *testing.T, proxyURL string) {
 	t.Setenv("MULTICA_TOKEN_FILE", "")
 	t.Setenv("MULTICA_TASK_ID", "")
 	t.Setenv("MULTICA_SERVER_URL", "https://server.example.invalid")
+	setTestAgentProxyToken(t)
 }
 
 func TestRunIssueMineAggregatesPRsAndGatesInOneRequest(t *testing.T) {
@@ -779,6 +780,12 @@ func newIssuePullRequestsTestCmd() *cobra.Command {
 	return cmd
 }
 
+func newIssuePullRequestsRescanTestCmd() *cobra.Command {
+	cmd := &cobra.Command{Use: "rescan"}
+	cmd.Flags().String("output", "json", "")
+	return cmd
+}
+
 func TestRunIssuePullRequestsListsLinkedPRsAsJSON(t *testing.T) {
 	var gotPaths []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -810,6 +817,9 @@ func TestRunIssuePullRequestsListsLinkedPRsAsJSON(t *testing.T) {
 	t.Setenv("MULTICA_SERVER_URL", srv.URL)
 	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
 	t.Setenv("MULTICA_TOKEN", "test-token")
+	t.Setenv("MULTICA_TOKEN_FILE", "")
+	t.Setenv("MULTICA_AGENT_ID", "")
+	t.Setenv("MULTICA_TASK_ID", "")
 
 	cmd := newIssuePullRequestsTestCmd()
 	_ = cmd.Flags().Set("output", "json")
@@ -838,6 +848,82 @@ func TestRunIssuePullRequestsListsLinkedPRsAsJSON(t *testing.T) {
 	pr, _ := prs[0].(map[string]any)
 	if pr["url"] != "https://github.com/multica-ai/multica/pull/42" || pr["number"] != float64(42) || pr["state"] != "open" || pr["title"] != "MUL-2818 add issue PR CLI" {
 		t.Fatalf("unexpected PR payload: %#v", pr)
+	}
+}
+
+func TestRunIssuePullRequestsRescanUsesCanonicalEndpoint(t *testing.T) {
+	var gotPaths []string
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPaths = append(gotPaths, r.Method+" "+r.URL.Path)
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/issues/LRM-1642":
+			json.NewEncoder(w).Encode(map[string]any{
+				"id":         "issue-uuid",
+				"identifier": "LRM-1642",
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/issues/issue-uuid/pull-requests/rescan":
+			if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+				t.Fatalf("decode request body: %v", err)
+			}
+			json.NewEncoder(w).Encode(map[string]any{"pull_request": map[string]any{
+				"number": float64(73), "state": "open", "checks_conclusion": "passed",
+			}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	t.Setenv("MULTICA_SERVER_URL", srv.URL)
+	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
+	t.Setenv("MULTICA_TOKEN", "test-token")
+	t.Setenv("MULTICA_TOKEN_FILE", "")
+	t.Setenv("MULTICA_AGENT_ID", "")
+	t.Setenv("MULTICA_TASK_ID", "")
+
+	cmd := newIssuePullRequestsRescanTestCmd()
+	old := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+	err := runIssuePullRequestsRescan(cmd, []string{"LRM-1642", "73"})
+	_ = w.Close()
+	os.Stdout = old
+	out, _ := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("runIssuePullRequestsRescan: %v", err)
+	}
+
+	wantPaths := []string{
+		"GET /api/issues/LRM-1642",
+		"POST /api/issues/issue-uuid/pull-requests/rescan",
+	}
+	if fmt.Sprint(gotPaths) != fmt.Sprint(wantPaths) {
+		t.Fatalf("paths = %v, want %v", gotPaths, wantPaths)
+	}
+	if gotBody["pull_request_number"] != float64(73) {
+		t.Fatalf("request body = %#v, want pull_request_number=73", gotBody)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(out, &payload); err != nil {
+		t.Fatalf("decode JSON output: %v\n%s", err, string(out))
+	}
+	pr, _ := payload["pull_request"].(map[string]any)
+	if pr["number"] != float64(73) || pr["checks_conclusion"] != "passed" {
+		t.Fatalf("unexpected PR payload: %#v", pr)
+	}
+}
+
+func TestRunIssuePullRequestsRescanRejectsInvalidNumber(t *testing.T) {
+	t.Setenv("MULTICA_SERVER_URL", "http://example.invalid")
+	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
+	t.Setenv("MULTICA_TOKEN", "test-token")
+	t.Setenv("MULTICA_TOKEN_FILE", "")
+	t.Setenv("MULTICA_AGENT_ID", "")
+	t.Setenv("MULTICA_TASK_ID", "")
+	cmd := newIssuePullRequestsRescanTestCmd()
+	if err := runIssuePullRequestsRescan(cmd, []string{"LRM-1642", "0"}); err == nil || !strings.Contains(err.Error(), "positive integer") {
+		t.Fatalf("error = %v, want positive integer error", err)
 	}
 }
 

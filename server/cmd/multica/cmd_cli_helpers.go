@@ -43,6 +43,18 @@ func newAPIClient(cmd *cobra.Command) (*cli.APIClient, error) {
 		}
 		client := cli.NewAPIClient(proxyURL, workspaceID, "")
 		client.AgentID = agentID
+		tokenFile := strings.TrimSpace(os.Getenv(daemon.AgentProxyTokenFileEnv))
+		if tokenFile == "" {
+			return nil, fmt.Errorf("agent API requests require %s", daemon.AgentProxyTokenFileEnv)
+		}
+		rawToken, err := os.ReadFile(tokenFile)
+		if err != nil {
+			return nil, fmt.Errorf("read Agent Proxy credential: %w", err)
+		}
+		client.AgentProxyToken = strings.TrimSpace(string(rawToken))
+		if client.AgentProxyToken == "" {
+			return nil, fmt.Errorf("Agent Proxy credential is empty")
+		}
 		return client, nil
 	}
 

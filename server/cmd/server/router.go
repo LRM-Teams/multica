@@ -572,6 +572,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Get("/ws", h.DaemonWebSocket)
 		r.Post("/runtimes/{runtimeId}/agent-inbox/drain", h.DrainAgentInboxByRuntime)
 		r.Post("/runtimes/{runtimeId}/agents/{agentId}/credential", h.EnsureDaemonAgentCredential)
+		r.Post("/runtimes/{runtimeId}/agents/{agentId}/credentials/{credentialId}/revoke", h.RevokeDaemonAgentCredential)
 		r.Get("/runtimes/{runtimeId}/agents/{agentId}/runtime-config", h.DaemonGetAgentRuntimeConfig)
 		r.Post("/runtimes/{runtimeId}/agents/{agentId}/crashed", h.ReportAgentProviderCrashed)
 		r.Post("/runtimes/{runtimeId}/agents/{agentId}/crashed/clear", h.ClearAgentProviderCrashed)
@@ -895,6 +896,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 
 			// Notes
 			r.Route("/api/notes", func(r chi.Router) {
+				r.Get("/share-unread-count", h.CountNoteShareUnread)
 				r.Post("/retrospectives", h.CreateNoteRetrospective)
 				r.Post("/period-briefs", h.CreateNotePeriodBrief)
 				r.Get("/period-briefs/active", h.GetActiveNotePeriodBrief)
@@ -1500,6 +1502,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Post("/issues/{id}/unsubscribe", h.UnsubscribeAgentFromIssue)
 				r.Get("/issues/{id}/task-runs", h.ListAgentIssueTaskRuns)
 				r.Get("/issues/{id}/pull-requests", h.ListAgentIssuePullRequests)
+				r.Post("/issues/{id}/pull-requests/rescan", h.RescanAgentIssuePullRequest)
 				r.Get("/issues/{id}/attachments", h.ListAgentIssueAttachments)
 				r.Post("/issues/{id}/completion", h.SubmitAgentIssueCompletion)
 				r.Get("/issues/{id}/completion-reports", h.ListAgentIssueCompletionReports)
@@ -1534,6 +1537,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 						r.Post("/tasks/{taskId}/attempts/{attemptId}/result", h.SubmitAgentResearchTaskResult)
 						r.Route("/work-items/{workItemId}/attempts/{attemptId}", func(r chi.Router) {
 							r.Get("/manifest", h.GetAgentResearchV6WorkManifest)
+							r.Get("/artifacts/{artifactVersionId}", h.GetAgentResearchV6WorkArtifact)
 							r.Get("/director-brief", h.GetAgentResearchV6DirectorBrief)
 							r.Post("/director-brief-acks", h.AcknowledgeAgentResearchV6DirectorBrief)
 							r.Get("/catalog", h.GetAgentResearchV6WorkCatalog)

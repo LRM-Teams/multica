@@ -304,7 +304,7 @@ func (s *PostgresStore) recordV6DirectorNoOp(ctx context.Context, proposal v6Dir
 		         SELECT 1 FROM research_work_item w
 		         JOIN research_director_assignment d ON d.id=s.current_director_assignment_id AND d.status='active'
 		         WHERE w.workspace_id=s.workspace_id AND w.session_id=s.id
-		           AND w.kind<>'director' AND w.assigned_agent_id<>d.director_agent_id
+		           AND w.kind='research' AND w.assigned_agent_id<>d.director_agent_id
 		           AND w.status='failed'
 		       ),
 		       EXISTS(
@@ -331,6 +331,9 @@ func (s *PostgresStore) recordV6DirectorNoOp(ctx context.Context, proposal v6Dir
 	}
 	if runStatus == "running" && hasIdleWorker && !hasActiveWorkerWork && hasFailedWorkerWork {
 		return fmt.Errorf("%w: run-scoped Agent Work failed and no Agent Work is active; retry or reassign failed Work instead of returning no_op", ErrInvalidContract)
+	}
+	if runStatus == "running" && hasWorkerWork && !hasActiveWorkerWork && !agentCreationPending {
+		return fmt.Errorf("%w: running Research Run has no active Agent Work; dispatch research, maintain the report, or complete the Run instead of returning no_op", ErrInvalidContract)
 	}
 	if _, err = appendEvent(ctx, tx, proposal.WorkspaceID, proposal.RunID, "v6_director_no_op", "v6-director-action:"+action.IdempotencyKey, "director", "", map[string]any{"director_cycle_id": cycleID, "reason": firstNonEmptyV6(reason, action.Reason)}); err != nil {
 		return err

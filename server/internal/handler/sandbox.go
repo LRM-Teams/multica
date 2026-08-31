@@ -1903,6 +1903,15 @@ func mergeSandboxNodeHeartbeatMetadata(existing, incoming json.RawMessage) json.
 			base[key] = v
 		}
 	}
+	// Older sandboxd builds omitted docker_images_error after recovery; clear a
+	// stale error whenever a heartbeat reports a fresh docker image sync.
+	if _, ok := in["docker_images_error"]; !ok {
+		if _, synced := in["docker_images_synced_at"]; synced {
+			if images, ok := in["docker_images"].([]any); ok && len(images) > 0 {
+				delete(base, "docker_images_error")
+			}
+		}
+	}
 	if existingDefault != "" {
 		base["cube_template_id"] = existingDefault
 	} else if v := strings.TrimSpace(stringFromAny(in["cube_template_id"])); v != "" {

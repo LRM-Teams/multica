@@ -103,7 +103,6 @@ import { useBrowserOnline } from "../lib/use-browser-online";
 import {
   useResearchV6DirectorCanvas,
   useResearchV6DirectorAssignment,
-  useResearchV6Reports,
   useResearchV6WorkActivity,
 } from "../v6-session-adapter";
 import {
@@ -113,7 +112,6 @@ import {
 import { ResearchConstellationWorkspace } from "./research-constellation-workspace";
 import { ResearchD5Chrome } from "./research-d5-chrome";
 import { ResearchDirectorChatHeader } from "./research-director-chat-header";
-import { ResearchDirectorAssignmentPicker } from "./research-director-assignment-picker";
 import {
   ResearchCanvasChangeCard,
   canvasChangeTargetNodeIds,
@@ -132,7 +130,6 @@ import { ResearchLiveStream } from "./research-live-stream";
 import { ResearchNodeDetail } from "./research-node-detail";
 import { ResearchSelectedRefChip } from "./research-selected-ref-chip";
 import { ResearchV6NodeDetail } from "./research-v6-node-detail";
-import { ResearchV6ReportModal } from "./research-v6-report-modal";
 import { ResearchProductRoundCardView } from "./research-product-round-card";
 import { ResearchProjectionContractNotice } from "./research-projection-contract-notice";
 import { ResearchServerErrorPage } from "./research-server-error-page";
@@ -204,10 +201,11 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   const qc = useQueryClient();
   const { subscribe, onReconnect, onConnectionStatus } = useWS();
   const currentUserId = useAuthStore((s) => s.user?.id ?? null);
-  const chatOpen = useResearchUiStore((s) => s.chatDrawerOpen);
   const d5Lens = useResearchUiStore((s) => s.d5Lens);
   const setD5Lens = useResearchUiStore((s) => s.setD5Lens);
+  const d5RailOpen = useResearchUiStore((s) => s.d5RailOpen);
   const setD5RailOpen = useResearchUiStore((s) => s.setD5RailOpen);
+  const d5RailMode = useResearchUiStore((s) => s.d5RailMode);
   const setD5RailMode = useResearchUiStore((s) => s.setD5RailMode);
   const completionDismissed = useResearchUiStore(
     (state) => state.completionGuideDismissedBySession[sessionId] === true,
@@ -433,34 +431,12 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     INITIAL_RESEARCH_SESSION_UI_STATE,
   );
   const {
-    agents: workspaceAgents,
     assignedAgentId: assignedDirectorAgentId,
     assignedAgent: assignedDirectorAgent,
-    assignment: directorAssignment,
   } = useResearchV6DirectorAssignment({
     enabled: directorV6Enabled,
     workspaceId: wsId,
-    runId: sessionId,
     persistedAgentId: persistedDirectorAgentId,
-    expectedStateVersion: data?.run?.run.state_version ?? 0,
-  });
-  const {
-    reports: directorReportsData,
-    reportsLoading: directorReportsLoading,
-    refetchReports: refetchDirectorReports,
-    reportId: directorReportId,
-    selectReport: setSelectedDirectorReportId,
-    reportDetail: directorReportDetailData,
-    reportDetailFetching: directorReportDetailFetching,
-    refetchReportDetail: refetchDirectorReportDetail,
-    compiledHtml: directorReportCompiledHtml,
-    compiledFetching: directorReportCompiledFetching,
-  } = useResearchV6Reports({
-    enabled: directorV6Enabled,
-    deliveryOpen: ui.deliveryOpen,
-    workspaceId: wsId,
-    runId: sessionId,
-    transport: directorTransport,
   });
   const handleSelectCanvasNode = useCallback(
     (node: ResearchGraphNode | null) => {
@@ -571,7 +547,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   } | null>(null);
   // Stick-to-bottom while content grows (live stream / new cards); releases if
   // the user scrolls up to read history — no jump-scroll (LRM-820).
-  useAutoScroll(chatScrollRef, chatOpen);
+  useAutoScroll(chatScrollRef, d5RailOpen && d5RailMode === "chat");
 
   const send = useMutation({
     mutationFn: (body: string) => {
@@ -1210,7 +1186,6 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
         goalImpact={goalImpact}
         projectionSource={projectionSource}
         session={session}
-        contract={data.run?.contract}
         canConfirm={!directorV6Enabled && canConfirm}
         canHandoff={canHandoff}
         createProject={ui.createProject}
@@ -1228,11 +1203,12 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
         rejectPending={rejectConfirm.isPending}
         handoffPending={handoff.isPending}
         onOpenDelivery={() => {
+          if (directorV6Enabled) {
+            nav.push(paths.researchReport(sessionId));
+            return;
+          }
           dispatch({ type: "setDeliveryOpen", value: true });
-          if (directorV6Enabled) void refetchDirectorReports();
         }}
-        members={directorV6Enabled ? [] : fleet.members}
-        sources={sources}
         pendingSubstantiveGoal={
           !directorV6Enabled && latestRound?.goal_patch_proposal?.trim()
             ? latestRound.goal_patch_proposal
@@ -1407,7 +1383,10 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
           }
           agentPanel={agentPanelNode}
           chatPanel={
-            <>
+            <div
+              className="flex h-full min-h-0 flex-col"
+              data-testid="research-chat-rail-column"
+            >
             <ResearchDirectorChatHeader
               director={directorMember}
               fallbackName={
@@ -1425,16 +1404,6 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
               modeChip={<ResearchChatModeChip mode={chatMode} />}
               mode={chatMode}
             />
-            {directorV6Enabled ? (
-              /* react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- picker is a deliberate slot in the shared chat shell and is gated by the V6 route. */
-              <ResearchDirectorAssignmentPicker
-                agents={workspaceAgents}
-                currentAgentId={assignedDirectorAgentId}
-                pending={directorAssignment.isPending}
-                error={directorAssignment.error instanceof Error ? directorAssignment.error.message : null}
-                onAssign={(agentId, reason) => directorAssignment.mutate({ agentId, reason })}
-              />
-            ) : null}
             {!directorV6Enabled ? (
               <div className="border-b px-3 py-2 text-[11px] text-muted-foreground">
                 {t(($) => $.panel.fleet)}:{" "}
@@ -1531,7 +1500,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
             ) : null}
             <div
               ref={chatScrollRef}
-              className="flex-1 space-y-2.5 overflow-y-auto p-3"
+              className="min-h-0 flex-1 space-y-2.5 overflow-y-auto p-3"
               data-testid="research-chat-feed"
               data-chat-mode={chatMode}
             >
@@ -1661,7 +1630,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
                 <span className="text-muted-foreground">{t(($) => $.panel.paused_hint)}</span>
               </output>
             ) : null}
-            </>
+            </div>
           }
           composer={
             <div className="border-t bg-card p-3">
@@ -1777,8 +1746,11 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
           kind={completionKind}
           onViewReport={() => {
             dismissCompletion();
+            if (directorV6Enabled) {
+              nav.push(paths.researchReport(sessionId));
+              return;
+            }
             dispatch({ type: "setDeliveryOpen", value: true });
-            if (directorV6Enabled) void refetchDirectorReports();
           }}
           onNewResearch={() => {
             dismissCompletion();
@@ -1792,55 +1764,8 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
         />
       ) : null}
 
-      {/* Portal-friendly mount: keep delivery modal outside the canvas
-          `relative`/`overflow` section so it cannot collapse into a corner float. */}
-      {directorV6Enabled ? (
-        <ResearchV6ReportModal
-          open={ui.deliveryOpen}
-          onOpenChange={(open) =>
-            dispatch({ type: "setDeliveryOpen", value: open })
-          }
-          appOrigin={
-            typeof window === "undefined" ? "" : window.location.origin
-          }
-          report={
-            directorReportDetailData
-              ? {
-                  id: directorReportDetailData.id,
-                  title: directorReportDetailData.title,
-                  packageHash: directorReportDetailData.packageHash,
-                  sandboxUrl: directorReportDetailData.sandboxUrl ?? "",
-                  reportOrigin: directorReportDetailData.reportOrigin ?? "",
-                  compiledHtml: directorReportCompiledHtml,
-                  plainTextFallback: directorReportDetailData.plainText,
-                  revision: directorReportDetailData.revision,
-                  status: directorReportDetailData.status,
-                  inputCount:
-                    directorReportsData?.find(
-                      (item) => item.id === directorReportDetailData.id,
-                    )?.inputCount ?? directorReportDetailData.inputRefs.length,
-                }
-              : null
-          }
-          history={(directorReportsData ?? []).map((item) => ({
-            id: item.id,
-            revision: item.revision,
-            status: item.status,
-            title: item.title,
-            publishedAt: item.publishedAt,
-          }))}
-          onSelectReport={setSelectedDirectorReportId}
-          selectedReportId={directorReportId}
-          loading={
-            directorReportsLoading ||
-            directorReportDetailFetching ||
-            directorReportCompiledFetching
-          }
-          onRequestFreshCapability={() => {
-            void refetchDirectorReportDetail();
-          }}
-        />
-      ) : (
+      {/* V6 delivery owns an independent route; keep only the legacy drawer here. */}
+      {!directorV6Enabled ? (
         <ResearchDeliveryDrawer
           open={ui.deliveryOpen}
           onClose={() => dispatch({ type: "setDeliveryOpen", value: false })}
@@ -1863,7 +1788,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
             void refetch();
           }}
         />
-      )}
+      ) : null}
     </div>
   );
 

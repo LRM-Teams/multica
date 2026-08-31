@@ -52,6 +52,7 @@ import type {
   GraphMemoryProfile,
   UpdateGraphMemoryProfileRequest,
   GraphMemoryChannelMode,
+  UpdateGraphMemoryChannelModeRequest,
   GraphMemoryMessageCitations,
   GraphMemoryStatus,
   GraphMemoryAuditSummary,
@@ -498,8 +499,10 @@ import {
   type DeleteComputerResponse,
   NotePageSchema,
   NotePageListResponseSchema,
+  NoteShareUnreadCountSchema,
   EMPTY_NOTE_PAGE,
   EMPTY_NOTE_PAGE_LIST,
+  EMPTY_NOTE_SHARE_UNREAD_COUNT,
   NoteAIJobSchema,
   EMPTY_NOTE_AI_JOB,
   NotePageIssueRefSchema,
@@ -1053,6 +1056,13 @@ export class ApiClient {
     const raw = await this.fetch<unknown>("/api/notes/pages");
     return parseWithFallback(raw, NotePageListResponseSchema, EMPTY_NOTE_PAGE_LIST, {
       endpoint: "GET /api/notes/pages",
+    });
+  }
+
+  async countNoteShareUnread(): Promise<{ count: number }> {
+    const raw = await this.fetch<unknown>("/api/notes/share-unread-count");
+    return parseWithFallback(raw, NoteShareUnreadCountSchema, EMPTY_NOTE_SHARE_UNREAD_COUNT, {
+      endpoint: "GET /api/notes/share-unread-count",
     });
   }
 
@@ -3280,17 +3290,27 @@ export class ApiClient {
     return parseWithFallback(raw, GraphMemoryChannelModeSchema, {
       workspace_id: workspaceId, channel_id: channelId, override: "inherit", effective_mode: "agent",
       status: "inactive", blocked_reason: "", agent_id: "", runtime_id: "",
+      memory_agent_runtime_id_override: "", memory_agent_model_override: "", memory_agent_thinking_override: "",
+      effective_memory_agent_runtime_id: "", effective_memory_agent_model: "", effective_memory_agent_thinking: "",
     }, { endpoint: "GET /api/workspaces/{id}/graph-memory/channels/{channelId}/mode" });
   }
 
-  async updateGraphMemoryChannelMode(workspaceId: string, channelId: string, override: "inherit" | "inject" | "agent"): Promise<GraphMemoryChannelMode> {
+  async updateGraphMemoryChannelMode(
+    workspaceId: string,
+    channelId: string,
+    update: UpdateGraphMemoryChannelModeRequest | "inherit" | "inject" | "agent",
+  ): Promise<GraphMemoryChannelMode> {
+    const data: UpdateGraphMemoryChannelModeRequest = typeof update === "string" ? { override: update } : update;
     const raw = await this.fetch<unknown>(
       `/api/workspaces/${encodeURIComponent(workspaceId)}/graph-memory/channels/${encodeURIComponent(channelId)}/mode`,
-      { method: "PUT", body: JSON.stringify({ override }) },
+      { method: "PUT", body: JSON.stringify(data) },
     );
     return parseWithFallback(raw, GraphMemoryChannelModeSchema, {
-      workspace_id: workspaceId, channel_id: channelId, override, effective_mode: override === "inherit" ? "agent" : override,
+      workspace_id: workspaceId, channel_id: channelId, override: data.override,
+      effective_mode: data.override === "inherit" ? "agent" : data.override,
       status: "inactive", blocked_reason: "", agent_id: "", runtime_id: "",
+      memory_agent_runtime_id_override: "", memory_agent_model_override: "", memory_agent_thinking_override: "",
+      effective_memory_agent_runtime_id: "", effective_memory_agent_model: "", effective_memory_agent_thinking: "",
     }, { endpoint: "PUT /api/workspaces/{id}/graph-memory/channels/{channelId}/mode" });
   }
 

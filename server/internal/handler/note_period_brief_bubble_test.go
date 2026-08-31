@@ -541,18 +541,10 @@ SELECT content FROM note_page WHERE id = $1`, sourcePageID).Scan(&sourceContent)
 	}
 }
 
-func TestNoteBubbleChatAsksBeforeStartingPeriodBrief(t *testing.T) {
+func TestNoteBubbleChatLeavesIntentTextToAssistant(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
-	prevWait := notePeriodBriefCollectorMaxWait
-	notePeriodBriefCollectorMaxWait = 0
-	prevBG := notePeriodBriefFinishInBackground
-	notePeriodBriefFinishInBackground = false
-	t.Cleanup(func() {
-		notePeriodBriefCollectorMaxWait = prevWait
-		notePeriodBriefFinishInBackground = prevBG
-	})
 
 	var sourcePageID string
 	if err := testPool.QueryRow(context.Background(), `
@@ -566,7 +558,6 @@ RETURNING id`, testWorkspaceID, testUserID, "Intake page "+uuid.NewString()[:8])
 	})
 
 	agentID := createHandlerTestAgent(t, "Notes Assistant "+uuid.NewString()[:8], nil)
-	collector := createPeriodBriefCollectorTestAgent(t, "Laptop A")
 	sessionID := createHandlerTestChatSession(t, agentID)
 	if _, err := testPool.Exec(context.Background(), `
 UPDATE chat_session SET context_note_page_id = $2 WHERE id = $1`, sessionID, sourcePageID); err != nil {
@@ -574,8 +565,8 @@ UPDATE chat_session SET context_note_page_id = $2 WHERE id = $1`, sessionID, sou
 	}
 
 	ask := sendNoteBubbleChat(t, sessionID, "帮我写汇报")
-	if ask.Pending {
-		t.Fatal("intake ask should not wake a collector/synthesizer turn")
+	if !ask.Pending {
+		t.Fatal("declined-or-unconfirmed 写汇报 text should wake the notes assistant")
 	}
 	var joined string
 	if err := testPool.QueryRow(context.Background(), `
@@ -583,8 +574,11 @@ SELECT string_agg(content, E'\n' ORDER BY created_at, id)
 FROM chat_message WHERE chat_session_id = $1`, sessionID).Scan(&joined); err != nil {
 		t.Fatalf("load ask transcript: %v", err)
 	}
-	if !strings.Contains(joined, "时间") || !strings.Contains(joined, "电脑") {
-		t.Fatalf("assistant should ask for time and computers:\n%s", joined)
+	if !strings.Contains(joined, "帮我写汇报") {
+		t.Fatalf("user text should stay in the transcript:\n%s", joined)
+	}
+	if strings.Contains(joined, "时间") || strings.Contains(joined, "电脑") {
+		t.Fatalf("chat must not start spoken intake:\n%s", joined)
 	}
 	var runCount int
 	if err := testPool.QueryRow(context.Background(), `
@@ -592,30 +586,16 @@ SELECT count(*) FROM note_period_brief_run WHERE chat_session_id = $1`, sessionI
 		t.Fatalf("count runs: %v", err)
 	}
 	if runCount != 0 {
-		t.Fatalf("asked before start, runs = %d", runCount)
+		t.Fatalf("intent text must not start a run, runs = %d", runCount)
 	}
-
-	start := sendNoteBubbleChat(t, sessionID, "本周，全部")
-	if start.Pending {
-		t.Fatal("starting from a completed answer should not enqueue a regular chat wake")
-	}
+	var promptCount int
 	if err := testPool.QueryRow(context.Background(), `
-SELECT count(*) FROM note_period_brief_run WHERE chat_session_id = $1`, sessionID).Scan(&runCount); err != nil {
-		t.Fatalf("count runs after answer: %v", err)
+SELECT count(*) FROM note_period_brief_prompt WHERE chat_session_id = $1`, sessionID).Scan(&promptCount); err != nil {
+		t.Fatalf("count prompts: %v", err)
 	}
-	if runCount != 1 {
-		t.Fatalf("expected one period brief run after the answer, got %d", runCount)
+	if promptCount != 0 {
+		t.Fatalf("intent text must not open an intake prompt, prompts = %d", promptCount)
 	}
-	var after string
-	if err := testPool.QueryRow(context.Background(), `
-SELECT string_agg(content, E'\n' ORDER BY created_at, id)
-FROM chat_message WHERE chat_session_id = $1`, sessionID).Scan(&after); err != nil {
-		t.Fatalf("load start transcript: %v", err)
-	}
-	if !strings.Contains(after, "我将让") {
-		t.Fatalf("expected collect progress after start:\n%s", after)
-	}
-	_ = collector
 }
 
 func TestCreateNotePeriodBriefRetriesOnceBeforeMaterialsReady(t *testing.T) {

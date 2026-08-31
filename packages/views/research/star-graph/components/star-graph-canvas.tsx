@@ -444,8 +444,15 @@ export function StarGraphCanvas({
         zoom: camera.zoom,
         selectedNodeId,
         enabled: semanticLandmarkLabels,
+        alwaysVisibleNodeIds: expansionControl?.expandableNodeIds,
       }),
-    [camera.zoom, selectedNodeId, semanticLandmarkLabels, visibleEntities],
+    [
+      camera.zoom,
+      expansionControl?.expandableNodeIds,
+      selectedNodeId,
+      semanticLandmarkLabels,
+      visibleEntities,
+    ],
   );
 
   const nodeTierById = useMemo(

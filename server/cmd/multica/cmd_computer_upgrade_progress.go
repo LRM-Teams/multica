@@ -107,7 +107,7 @@ func completedUpgradeStep(phase, fallback string) string {
 	case "staging":
 		return "Release downloaded"
 	case "verifying":
-		return "Binary verified"
+		return "Release verified"
 	case "applying":
 		return "Release installed"
 	case "restarting":
@@ -140,7 +140,7 @@ func (display *computerUpgradeDisplay) accepted(requestID, targetVersion string)
 func (display *computerUpgradeDisplay) installed(version, binaryPath string, alreadyCurrent bool) {
 	display.clear()
 	if alreadyCurrent {
-		fmt.Fprintf(display.out, "\n✓ Computer %s is already installed.\n", version)
+		fmt.Fprintf(display.out, "\n✓ Computer is already on %s — nothing to upgrade.\n", version)
 	} else {
 		fmt.Fprintf(display.out, "\n✓ Computer %s installed.\n", version)
 	}
@@ -208,7 +208,7 @@ func watchComputerUpgrade(
 			case "staging":
 				display.update(status.Phase, "Downloading release")
 			case "verifying":
-				display.update(status.Phase, "Verifying binary")
+				display.update(status.Phase, "Verifying release")
 			case "applying":
 				display.update(status.Phase, "Installing release")
 			case "restarting":
@@ -258,7 +258,7 @@ func activeUpgradeStep(phase string) string {
 	case "staging":
 		return "Downloading release"
 	case "verifying":
-		return "Verifying binary"
+		return "Verifying release"
 	case "applying":
 		return "Installing release"
 	case "restarting":

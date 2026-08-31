@@ -1,10 +1,8 @@
 "use client";
 
 import type {
-  ResearchFleetMember,
   ResearchRunContract,
   ResearchSession,
-  ResearchSource,
 } from "@multica/core/types";
 import { Compass } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
@@ -45,11 +43,6 @@ const DEFAULT_TONE: StatusTone = {
   pill: "border-border bg-muted/50 text-muted-foreground",
 };
 
-// Module-level so the default doesn't allocate a new array identity on every
-// render — an inline `= []` default breaks memo comparison downstream.
-const EMPTY_MEMBERS: ResearchFleetMember[] = [];
-const EMPTY_SOURCES: ResearchSource[] = [];
-
 export function ResearchSessionChrome({
   session,
   contract,
@@ -66,8 +59,6 @@ export function ResearchSessionChrome({
   rejectPending,
   handoffPending,
   onOpenDelivery,
-  members = EMPTY_MEMBERS,
-  sources = EMPTY_SOURCES,
   onSelectStage,
   pendingSubstantiveGoal = null,
   onConfirmSubstantiveGoal,
@@ -93,8 +84,6 @@ export function ResearchSessionChrome({
   rejectPending?: boolean;
   handoffPending?: boolean;
   onOpenDelivery?: () => void;
-  members?: ResearchFleetMember[];
-  sources?: ResearchSource[];
   /** LRM-824 — top-bar stage chip anchors into the chat message area. */
   onSelectStage?: (stage: string) => void;
   /** LRM-1008 — pending substantive goal proposal (if any). */
@@ -215,7 +204,6 @@ export function ResearchSessionChrome({
         />
         <ResearchSessionChromeActions
           session={session}
-          contract={contract}
           canConfirm={canConfirm}
           canHandoff={canHandoff}
           createProject={createProject}
@@ -229,8 +217,6 @@ export function ResearchSessionChrome({
           rejectPending={rejectPending}
           handoffPending={handoffPending}
           onOpenDelivery={onOpenDelivery}
-          members={members}
-          sources={sources}
           pendingSubstantiveGoal={pendingSubstantiveGoal}
           onConfirmSubstantiveGoal={onConfirmSubstantiveGoal}
           confirmSubstantivePending={confirmSubstantivePending}

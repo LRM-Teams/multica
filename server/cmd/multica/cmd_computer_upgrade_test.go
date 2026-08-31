@@ -240,7 +240,7 @@ func TestComputerUpgradeSubprocessCloudDispatchConflictNeverHitsLocalOwner(t *te
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusConflict)
-		_ = json.NewEncoder(w).Encode(map[string]string{"code": "no_current_socket", "error": "Computer upgrade needs the current Binding socket"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"code": "no_current_socket", "error": "Update failed because the Workspace Daemon is not connected. Reconnect it, then retry."})
 	}))
 	defer intentServer.Close()
 	writeComputerUpgradeHumanConfig(t, home, intentServer.URL)

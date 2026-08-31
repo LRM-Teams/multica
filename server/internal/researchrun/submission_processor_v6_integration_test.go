@@ -37,6 +37,16 @@ func seedReceivedV6AtomicSubmission(t *testing.T, title string) seededV6AtomicSu
 		"expected_result_schema": "atomic_result_submission",
 		"branch_refs":            []map[string]any{{"id": branchID, "state_version": 1}},
 		"artifacts":              []any{},
+		"task_specific_schema": map[string]any{"payload_schemas": map[string]any{
+			"research.test.v1": map[string]any{
+				"type":                 "object",
+				"additionalProperties": false,
+				"required":             []string{"finding"},
+				"properties": map[string]any{
+					"finding": map[string]any{"type": "string", "minLength": 1},
+				},
+			},
+		}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -44,7 +54,7 @@ func seedReceivedV6AtomicSubmission(t *testing.T, title string) seededV6AtomicSu
 	if _, err = run.pool.Exec(run.ctx, `UPDATE research_work_item_attempt SET manifest=$2::jsonb WHERE id=$1::uuid`, attemptID, manifest); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = run.pool.Exec(run.ctx, `UPDATE research_work_item SET expected_result_schema_id='atomic_result_submission',attempt_count=1,max_attempts=3 WHERE id=$1::uuid`, workItemID); err != nil {
+	if _, err = run.pool.Exec(run.ctx, `UPDATE research_work_item SET expected_result_schema_id='atomic_result_submission',payload_schema_id='research.test.v1',attempt_count=1,max_attempts=3 WHERE id=$1::uuid`, workItemID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = run.pool.Exec(run.ctx, `UPDATE research_task SET work_item_id=$2::uuid,goal_version=$3 WHERE id=$1::uuid`, run.taskID, workItemID, run.goalVersion); err != nil {
@@ -162,6 +172,51 @@ func TestApplyReceivedV6AtomicResultCompletesCanonicalWork(t *testing.T) {
 	}
 	if !strings.HasPrefix(resultHash, "sha256:") {
 		t.Fatalf("result hash=%q", resultHash)
+	}
+}
+
+func TestLoadV6WorkArtifactValidatesResultWithProducerFrozenSchema(t *testing.T) {
+	seeded := seedReceivedV6AtomicSubmission(t, "Read accepted V6 atomic result")
+	t.Cleanup(func() { cleanupAcceptedV6ResultProducerBinding(t, seeded) })
+	if applied, err := seeded.run.store.ApplyReceivedV6Submissions(seeded.run.ctx, 1); err != nil || applied != 1 {
+		t.Fatalf("apply submission: applied=%d err=%v", applied, err)
+	}
+
+	var artifactVersionID, artifactHash string
+	if err := seeded.run.pool.QueryRow(seeded.run.ctx, `SELECT n.artifact_version_id::text,n.content_hash
+		FROM research_result_node n
+		WHERE n.workspace_id=$1::uuid AND n.session_id=$2::uuid AND n.work_item_attempt_id=$3::uuid`,
+		seeded.run.fixture.workspaceID, seeded.run.fixture.sessionID, seeded.attemptID).Scan(&artifactVersionID, &artifactHash); err != nil {
+		t.Fatal(err)
+	}
+
+	membershipID, workItemID := seedV6RecoveryWorkItemForAgent(t, seeded.run, seeded.run.fixture.reporterID, "running", time.Now().Add(time.Minute))
+	attemptID := seedV6RecoveryAttemptForAgent(t, seeded.run, seeded.run.fixture.reporterID, membershipID, workItemID)
+	manifest, err := json.Marshal(map[string]any{"artifacts": []map[string]any{{
+		"artifact_version_id": artifactVersionID,
+		"kind":                string(ArtifactKindResultArtifact),
+		"representation":      "full",
+		"representation_hash": artifactHash,
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = seeded.run.pool.Exec(seeded.run.ctx, `UPDATE research_work_item_attempt SET manifest=$2::jsonb WHERE id=$1::uuid`, attemptID, manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	artifact, err := seeded.run.store.LoadV6WorkArtifact(seeded.run.ctx, V6AttemptAccess{
+		WorkspaceID: seeded.run.fixture.workspaceID,
+		RunID:       seeded.run.fixture.sessionID,
+		WorkItemID:  workItemID,
+		AttemptID:   attemptID,
+		AgentID:     seeded.run.fixture.reporterID,
+	}, artifactVersionID)
+	if err != nil {
+		t.Fatalf("load result artifact: %v", err)
+	}
+	if artifact.RepresentationHash != artifactHash || len(artifact.Content) == 0 {
+		t.Fatalf("artifact hash=%q content=%s", artifact.RepresentationHash, artifact.Content)
 	}
 }
 

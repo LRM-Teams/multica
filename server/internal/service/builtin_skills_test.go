@@ -77,8 +77,8 @@ func TestBuiltinSkillsConformToTemplate(t *testing.T) {
 }
 
 func TestBuiltinSkillsForAgent_ExcludesHiringFromOrdinaryAgents(t *testing.T) {
-	ordinary := builtinSkillsForAgent(false)
-	onboarding := builtinSkillsForAgent(true)
+	ordinary := builtinSkillsForAgent(false, "")
+	onboarding := builtinSkillsForAgent(true, "")
 	for _, skill := range ordinary {
 		if skill.Name == hiringBuiltinSkillName || strings.Contains(skill.Content, "/api/agent/actions/prepare") {
 			t.Fatalf("ordinary Agent received hiring contract in %q", skill.Name)
@@ -101,6 +101,25 @@ func TestBuiltinSkillsForAgent_ExcludesHiringFromOrdinaryAgents(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("Onboarding Agent did not receive %q", hiringBuiltinSkillName)
+	}
+}
+
+func TestBuiltinSkillsForAgent_ScopesReportDesignToReporter(t *testing.T) {
+	for _, skill := range builtinSkillsForAgent(false, "validator") {
+		if skill.Name == researchReportDesignBuiltinSkillName {
+			t.Fatalf("validator Agent received reporter-only skill %q", skill.Name)
+		}
+	}
+
+	found := false
+	for _, skill := range builtinSkillsForAgent(false, "reporter") {
+		if skill.Name == researchReportDesignBuiltinSkillName {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("reporter Agent did not receive %q", researchReportDesignBuiltinSkillName)
 	}
 }
 
@@ -559,6 +578,8 @@ func TestNotesAssistantSkillRequiresSelectiveReads(t *testing.T) {
 		"final assistant output",
 		"Do **not** run `multica message send`",
 		"context_note_page_id",
+		"Insert below note",
+		"Insert as child note",
 		"references/notes-assistant-source-map.md",
 	} {
 		if !strings.Contains(body, want) && !strings.Contains(skill.Content, want) {

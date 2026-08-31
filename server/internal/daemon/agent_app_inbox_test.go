@@ -192,14 +192,14 @@ func TestAgentAppInboxRestoredAckIntentRetriesSameAttempt(t *testing.T) {
 	if intent == nil {
 		t.Fatal("persist ACK intent")
 	}
-	expiresAt := time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339Nano)
 	if _, err := writeCachedAgentCredential(cfg, "workspace-1", "runtime-1", testInboxAgentID, AgentCredentialResponse{
-		ID: "credential-1", AgentID: testInboxAgentID, Token: "agent-token", ExpiresAt: &expiresAt,
+		ID: "credential-1", AgentID: testInboxAgentID, Prefix: "sk_agent_test", Token: "agent-token",
 	}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 
 	restarted := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	registerTestAgentProxyServerCredential(t, restarted, "workspace-1", "runtime-1", testInboxAgentID, "agent-token")
 	restarted.reminderCache.receipts[testInboxReminderID] = []reminderDueReceipt{{
 		Job:         protocol.ReminderTimerJob{OwnerAgentID: testInboxAgentID, ReminderID: testInboxReminderID, Version: 3},
 		ServerAcked: true, ServerFired: true, WakeEnqueued: true,
@@ -293,13 +293,13 @@ func TestAgentInboxHTTPAckIsStrictAndConsumesExactReminderReceipt(t *testing.T) 
 	}))
 	defer upstream.Close()
 	cfg := Config{WorkspacesRoot: root, BindingStateRoot: root, BindingsRoot: root, MachineID: "machine-1", WorkspaceID: "workspace-1", ServerBaseURL: upstream.URL}
-	expiresAt := time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339Nano)
 	if _, err := writeCachedAgentCredential(cfg, "workspace-1", "runtime-1", testInboxAgentID, AgentCredentialResponse{
-		ID: "credential-1", AgentID: testInboxAgentID, Token: "agent-token", ExpiresAt: &expiresAt,
+		ID: "credential-1", AgentID: testInboxAgentID, Prefix: "sk_agent_test", Token: "agent-token",
 	}, time.Now()); err != nil {
 		t.Fatalf("cache agent credential: %v", err)
 	}
 	d := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	registerTestAgentProxyServerCredential(t, d, "workspace-1", "runtime-1", testInboxAgentID, "agent-token")
 	registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: testInboxAgentID}, "runtime-1", &MessageCoordinator{key: InboxKey{WorkspaceID: "workspace-1", AgentID: testInboxAgentID}, pending: make(map[string]map[int64]protocol.AgentMessageProjection)})
 	d.reminderCache.receipts[testInboxReminderID] = []reminderDueReceipt{{
 		Job:         protocol.ReminderTimerJob{OwnerAgentID: testInboxAgentID, ReminderID: testInboxReminderID, Version: 3},

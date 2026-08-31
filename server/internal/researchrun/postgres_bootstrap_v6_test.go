@@ -8,9 +8,22 @@ import (
 
 func TestBootstrapV6TransactionRecovery(t *testing.T) {
 	runTransactionRecoveryMatrix(t, txOpV6Bootstrap, func(t *testing.T, run *transactionRecoveryRun) transactionRecoveryOperation {
+		reporterRuntimeID := uuid.NewString()
+		if _, err := run.pool.Exec(run.ctx, `
+			INSERT INTO agent_runtime(id,workspace_id,name,runtime_mode,provider,status)
+			VALUES($1::uuid,$2::uuid,$3,'local','pi','online')
+		`, reporterRuntimeID, run.fixture.workspaceID, "reporter-template-runtime-"+reporterRuntimeID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := run.pool.Exec(run.ctx, `
+			UPDATE agent SET runtime_id=$2::uuid,model='reporter-template-model'
+			WHERE id=$1::uuid
+		`, run.fixture.reporterID, reporterRuntimeID); err != nil {
+			t.Fatal(err)
+		}
 		title := "V6 bootstrap recovery " + uuid.NewString()
 		input := V6BootstrapInput{
-			WorkspaceID: run.fixture.workspaceID, CreatedBy: run.fixture.userID, DirectorAgentID: run.fixture.agentID,
+			WorkspaceID: run.fixture.workspaceID, CreatedBy: run.fixture.userID, FleetID: run.fixture.fleetID, DirectorAgentID: run.fixture.agentID, ReporterAgentID: run.fixture.reporterID,
 			Goal: title, Title: title, DepthTier: "standard", Language: "English", ClientRequestID: uuid.NewString(),
 		}
 		invoke := func() error {
@@ -50,6 +63,27 @@ func TestBootstrapV6TransactionRecovery(t *testing.T) {
 				}
 				if branchKey != "root" {
 					t.Fatalf("V6 root branch client_key=%q", branchKey)
+				}
+				var reporterAgentID, reporterRuntimeID, reporterModel, directorRuntimeID, directorModel string
+				if err := run.pool.QueryRow(run.ctx, `
+					SELECT reporter.id::text, reporter.runtime_id::text, COALESCE(reporter.model,''),
+					       director.runtime_id::text, COALESCE(director.model,'')
+					FROM research_session session
+					JOIN research_team_membership membership
+					  ON membership.workspace_id=session.workspace_id AND membership.session_id=session.id AND membership.role='reporter'
+					JOIN agent reporter ON reporter.id=membership.agent_id
+					JOIN agent director ON director.id=$4::uuid
+					WHERE session.workspace_id=$1::uuid AND session.title=$2 AND session.orchestrator_version=$3
+				`, run.fixture.workspaceID, title, OrchestratorVersionV6, run.fixture.agentID).Scan(
+					&reporterAgentID, &reporterRuntimeID, &reporterModel, &directorRuntimeID, &directorModel,
+				); err != nil {
+					t.Fatal(err)
+				}
+				if reporterAgentID == run.fixture.reporterID {
+					t.Fatal("V6 Run reused the workspace reporter template")
+				}
+				if reporterRuntimeID != directorRuntimeID || reporterModel != directorModel {
+					t.Fatalf("Run reporter execution target=(%q,%q) want Director target=(%q,%q)", reporterRuntimeID, reporterModel, directorRuntimeID, directorModel)
 				}
 			},
 			recover: func() error {

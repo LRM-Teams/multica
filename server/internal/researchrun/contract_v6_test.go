@@ -54,6 +54,46 @@ func TestRonaldoV6GoldenFixturesMatchTheirStrictRootSchemas(t *testing.T) {
 	}
 }
 
+// Report bosses keep failing the receive gate by hand-copying frozen
+// identity: missing citations, swapped node hashes, invalid citation
+// enums, and package_hash set to the HTML digest. Decode must accept
+// those envelopes so apply can bind server-owned inputs.
+func TestDecodeV6ContractAcceptsReportPackageWithBrokenFrozenCopies(t *testing.T) {
+	raw := readV6Fixture(t, filepath.Join("..", "..", "..", "docs", "research", "fixtures", "report-package-v6.example.json"))
+	var root map[string]any
+	if err := json.Unmarshal(raw, &root); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := map[string]func(map[string]any){
+		"missing citations": func(value map[string]any) { delete(value, "citations") },
+		"null citations":    func(value map[string]any) { value["citations"] = nil },
+		"invalid citation kind": func(value map[string]any) {
+			value["citations"] = []any{map[string]any{
+				"id": "citation-1", "label": "结果",
+				"evidence_refs": []any{map[string]any{"kind": "result_s", "id": "00000000-0000-4000-8000-000000000302"}},
+			}}
+		},
+		"invalid input node id": func(value map[string]any) {
+			value["input_nodes"] = []any{map[string]any{
+				"kind": "result_s", "id": "not-a-uuid", "version_id": "00000000-0000-4000-8000-000000000507",
+				"tier": "S", "content_hash": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+			}}
+		},
+		"missing package hash": func(value map[string]any) { delete(value, "package_hash") },
+		"html digest as package hash": func(value map[string]any) {
+			value["package_hash"] = "sha256:33b3384c2545a1b674a6ba2e0e40def56e3688f8bffe186012e0a7a6a06c974a"
+		},
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := DecodeV6Contract(mutateV6Fixture(t, root, mutate), V6ContractReportPackageSubmission, nil); err != nil {
+				t.Fatalf("decode report package: %v", err)
+			}
+		})
+	}
+}
+
 func TestDecodeV6ContractRejectsBoundaryAndSchemaViolations(t *testing.T) {
 	raw := readV6Fixture(t, filepath.Join("..", "..", "..", "docs", "research", "fixtures", "projection-snapshot-v6.example.json"))
 	if _, err := DecodeV6Contract(raw, V6ContractProjectionSnapshot, acceptingV6SecondStage{}); err != nil {

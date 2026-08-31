@@ -30,6 +30,43 @@ func (runner *WorkspaceDaemon) retryManagedLaunchAfterExit(agentID string, launc
 	return runner.processes.ProcessExited(callback, true)
 }
 
+// restartManagedAgentAfterTurnTimeout replaces exactly the managed process that
+// owned a timed-out accepted turn. The pool has already force-killed and
+// detached that backend. Reusing startAgentNow preserves the ordinary
+// process-residency/readiness lifecycle and, critically, its post-ready
+// flushManagedAgentStartMessages call. The replacement gets a new local
+// AgentInstanceID, so stale process and startup callbacks cannot affect it.
+func (runner *WorkspaceDaemon) restartManagedAgentAfterTurnTimeout(callback agentProcessCallback, runtimeID string) {
+	if runner == nil || runner.processes == nil || runner.ensureResidentRuntime == nil {
+		return
+	}
+	launch, found := runner.managedLaunchForProcess(callback, runtimeID)
+	if !found || launch.QueueState != protocol.AgentStartQueueRunning {
+		return
+	}
+	providerSessionID := ""
+	if runner.currentProviderSession != nil {
+		if current, err := runner.currentProviderSession(callback.AgentID, runtimeID); err == nil {
+			providerSessionID = current
+		}
+	}
+	replacement, err := runner.processes.ReplaceProcessForImmediateRestart(callback)
+	if err != nil {
+		return
+	}
+	if !runner.residency.replaceLaunchInstance(callback.AgentID, runtimeID, callback.AgentInstanceID, replacement.AgentInstanceID) {
+		_ = runner.processes.Stop(replacement)
+		return
+	}
+	callback = replacement
+	start := protocol.AgentStartPayload{
+		AgentID: callback.AgentID, RuntimeID: runtimeID,
+		Config: protocol.AgentStartConfig{SessionID: providerSessionID},
+	}
+	ack := protocol.AgentStartAckPayload{AgentID: callback.AgentID, QueueState: protocol.AgentStartQueueStarting}
+	runner.startAgentNow(runner.life, start, callback, ack, nil, nil, nil, nil)
+}
+
 // retireManagedLaunchAfterExit is the resident process event bus's "exited,
 // over the crash retry cap" route.
 func (runner *WorkspaceDaemon) retireManagedLaunchAfterExit(agentID, runtimeID string, launch agentProcessManagerSnapshot, reasonCode string) error {

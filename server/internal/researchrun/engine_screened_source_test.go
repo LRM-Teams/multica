@@ -35,6 +35,13 @@ func TestNewEngineWithRuntimeAdaptersWiresRetrieval(t *testing.T) {
 	}
 }
 
+func TestNewEngineWithRuntimeAdaptersExposesReportUploadCapability(t *testing.T) {
+	engine := NewEngineWithRuntimeAdapters(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	if _, ok := engine.(ResearchReportV6); !ok {
+		t.Fatal("runtime engine lost the V6 report upload capability")
+	}
+}
+
 func TestIngestPendingScreenedSourcesRequiresAdapter(t *testing.T) {
 	engine := newEngine(nil, nil, nil)
 	processed, err := engine.IngestPendingScreenedSources(context.Background(), 8)

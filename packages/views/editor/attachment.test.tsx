@@ -238,6 +238,29 @@ describe("Attachment — image dispatch", () => {
     expect(screen.getByRole("dialog")).toBeTruthy();
   });
 
+  it("single-clicking an editable image does not open the lightbox", () => {
+    const att = makeRecord();
+    renderWithQuery(
+      <Attachment attachment={{ kind: "record", attachment: att }} editable />,
+    );
+    const figure = document.querySelector(".image-figure");
+    expect(figure).toBeTruthy();
+    fireEvent.click(figure!);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("double-clicking an editable image opens the lightbox", () => {
+    const att = makeRecord();
+    renderWithQuery(
+      <Attachment attachment={{ kind: "record", attachment: att }} editable />,
+    );
+    expect(screen.queryByRole("dialog")).toBeNull();
+    const figure = document.querySelector(".image-figure");
+    expect(figure).toBeTruthy();
+    fireEvent.doubleClick(figure!);
+    expect(screen.getByRole("dialog")).toBeTruthy();
+  });
+
   it("editable image exposes the compose toolbar (View/Download/Copy link)", () => {
     const att = makeRecord();
     renderWithQuery(

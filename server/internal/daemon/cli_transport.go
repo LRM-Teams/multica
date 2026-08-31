@@ -36,6 +36,21 @@ func prepareStableAgentCLITransport(cfg Config, workspaceID, agentID, multicaBin
 // CLI wrapper (MULTICA_TOKEN_FILE only inside the wrapper), never in the
 // provider process environment. Call before splitAgentProcessEnvironment so
 // legacy agentEnv maps that still carry TOKEN_FILE do not fail D3 closed.
+func stripProviderCredentialTransport(environment map[string]string) map[string]string {
+	if environment == nil {
+		return map[string]string{}
+	}
+	out := make(map[string]string, len(environment))
+	for key, value := range environment {
+		switch key {
+		case "MULTICA_TOKEN", "MULTICA_TOKEN_FILE", turntransport.EnvelopePathEnv:
+			continue
+		default:
+			out[key] = value
+		}
+	}
+	return out
+}
 
 // splitAgentProcessEnvironment is the stable-process/current-turn contract for
 // persistent runtimes. It is intentionally a daemon seam so D4 does not grow a

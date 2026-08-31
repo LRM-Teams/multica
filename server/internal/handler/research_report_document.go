@@ -47,13 +47,15 @@ func (h *Handler) researchReportSandboxURL(reportID, packageHash string) (string
 	return base.String(), nil
 }
 func (h *Handler) GetResearchV6Reports(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	workspace := h.resolveWorkspaceID(r)
 	runUUID, valid := parseUUIDOrBadRequest(w, chi.URLParam(r, "runId"), "runId")
 	if !valid {
 		return
 	}
 	run := uuidToString(runUUID)
-	rows, err := h.DB.Query(r.Context(), `SELECT r.id::text,r.revision,r.status,r.title,r.summary,COALESCE(r.package_hash,''),COALESCE(r.document_content_hash,''),r.published_at,r.created_at,
+	rows, err := h.DB.Query(r.Context(), `SELECT r.id::text,r.revision,r.status,r.maturity,r.direction_coverage,r.title,r.summary,COALESCE(r.package_hash,''),COALESCE(r.document_content_hash,''),r.published_at,r.created_at,r.updated_at,
+		COALESCE((SELECT w.status FROM research_work_item w WHERE w.workspace_id=r.workspace_id AND w.session_id=r.session_id AND w.target_kind='report' AND w.target_id=r.id ORDER BY w.created_at DESC,w.id DESC LIMIT 1),''),
 		COALESCE((SELECT a.assigned_agent_id::text FROM research_work_item w JOIN research_work_item_attempt a ON a.work_item_id=w.id WHERE w.target_kind='report' AND w.target_id=r.id AND a.status='succeeded' ORDER BY a.completed_at DESC LIMIT 1),''),
 		(SELECT count(*)::int FROM research_report_input i WHERE i.report_id=r.id AND i.report_revision=r.revision),
 		COALESCE((SELECT review.decision FROM research_report_review review WHERE review.report_id=r.id AND review.report_revision=r.revision ORDER BY review.created_at DESC LIMIT 1),''),
@@ -66,16 +68,17 @@ func (h *Handler) GetResearchV6Reports(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	items := []map[string]any{}
 	for rows.Next() {
-		var id, status, title, summary, pkg, doc, authorAgentID, reviewDecision, reviewReason string
+		var id, status, maturity, title, summary, pkg, doc, workStatus, authorAgentID, reviewDecision, reviewReason string
+		var coverage json.RawMessage
 		var revision, inputCount int
 		var published *time.Time
-		var created time.Time
-		if rows.Scan(&id, &revision, &status, &title, &summary, &pkg, &doc, &published, &created, &authorAgentID, &inputCount, &reviewDecision, &reviewReason) != nil {
+		var created, updated time.Time
+		if rows.Scan(&id, &revision, &status, &maturity, &coverage, &title, &summary, &pkg, &doc, &published, &created, &updated, &workStatus, &authorAgentID, &inputCount, &reviewDecision, &reviewReason) != nil {
 			writeError(w, 500, "failed to list reports")
 			return
 		}
-		item := map[string]any{"id": id, "revision": revision, "status": status, "title": title, "summary": summary, "package_hash": pkg, "document_content_hash": doc, "published_at": published, "created_at": created, "author_agent_id": authorAgentID, "input_count": inputCount, "latest_review": map[string]any{"decision": reviewDecision, "reason": reviewReason}}
-		if pkg != "" && (status == "published" || reviewDecision == "published") {
+		item := map[string]any{"id": id, "revision": revision, "status": status, "work_status": workStatus, "maturity": maturity, "direction_coverage": coverage, "title": title, "summary": summary, "package_hash": pkg, "document_content_hash": doc, "published_at": published, "created_at": created, "updated_at": updated, "author_agent_id": authorAgentID, "input_count": inputCount, "latest_review": map[string]any{"decision": reviewDecision, "reason": reviewReason}}
+		if pkg != "" {
 			if sandbox, e := h.researchReportSandboxURL(id, pkg); e == nil {
 				item["sandbox_url"] = sandbox
 				item["report_origin"] = strings.TrimRight(h.cfg.ResearchReportOrigin, "/")
@@ -86,6 +89,7 @@ func (h *Handler) GetResearchV6Reports(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"reports": items})
 }
 func (h *Handler) GetResearchV6Report(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	workspace := h.resolveWorkspaceID(r)
 	runUUID, valid := parseUUIDOrBadRequest(w, chi.URLParam(r, "runId"), "runId")
 	if !valid {
@@ -97,14 +101,15 @@ func (h *Handler) GetResearchV6Report(w http.ResponseWriter, r *http.Request) {
 	}
 	run, id := uuidToString(runUUID), uuidToString(reportUUID)
 	var revision int
-	var status, title, summary, plain, pkg, doc string
-	var outline, citations json.RawMessage
-	err := h.DB.QueryRow(r.Context(), `SELECT revision,status,title,summary,plain_text,COALESCE(package_hash,''),COALESCE(document_content_hash,''),outline,citations FROM research_report WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid`, workspace, run, id).Scan(&revision, &status, &title, &summary, &plain, &pkg, &doc, &outline, &citations)
+	var status, maturity, title, summary, plain, pkg, doc string
+	var outline, citations, coverage json.RawMessage
+	var updated time.Time
+	err := h.DB.QueryRow(r.Context(), `SELECT revision,status,maturity,direction_coverage,title,summary,plain_text,COALESCE(package_hash,''),COALESCE(document_content_hash,''),outline,citations,updated_at FROM research_report WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid`, workspace, run, id).Scan(&revision, &status, &maturity, &coverage, &title, &summary, &plain, &pkg, &doc, &outline, &citations, &updated)
 	if err != nil {
 		writeError(w, 404, "report not found")
 		return
 	}
-	out := map[string]any{"id": id, "revision": revision, "status": status, "title": title, "summary": summary, "plain_text": plain, "package_hash": pkg, "document_content_hash": doc, "outline": outline, "citations": citations}
+	out := map[string]any{"id": id, "revision": revision, "status": status, "maturity": maturity, "direction_coverage": coverage, "updated_at": updated, "title": title, "summary": summary, "plain_text": plain, "package_hash": pkg, "document_content_hash": doc, "outline": outline, "citations": citations}
 	inputRows, queryErr := h.DB.Query(r.Context(), `SELECT branch_id::text,node_artifact_version_id::text,input_role,ordinal,content_hash FROM research_report_input WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND report_id=$3::uuid AND report_revision=$4 ORDER BY ordinal`, workspace, run, id, revision)
 	if queryErr != nil {
 		writeError(w, 500, "failed to load report inputs")
@@ -143,16 +148,7 @@ func (h *Handler) GetResearchV6Report(w http.ResponseWriter, r *http.Request) {
 	reviewRows.Close()
 	out["input_refs"] = inputs
 	out["reviews"] = reviews
-	approved := status == "published"
-	if !approved {
-		for _, review := range reviews {
-			if review["decision"] == "published" {
-				approved = true
-				break
-			}
-		}
-	}
-	if pkg != "" && approved {
+	if pkg != "" {
 		if sandbox, e := h.researchReportSandboxURL(id, pkg); e == nil {
 			out["sandbox_url"] = sandbox
 			out["report_origin"] = strings.TrimRight(h.cfg.ResearchReportOrigin, "/")
@@ -234,7 +230,7 @@ func (h *Handler) ServeResearchV6ReportDocument(w http.ResponseWriter, r *http.R
 	var key, generation, documentHash, status string
 	var documentSize int64
 	var scripts, styles json.RawMessage
-	err := h.DB.QueryRow(r.Context(), `SELECT document_storage_key,document_storage_generation,document_content_hash,document_byte_size,csp_script_hashes,csp_style_hashes,status FROM research_report WHERE id=$1::uuid AND package_hash=$2 AND (status='published' OR (status='draft' AND EXISTS (SELECT 1 FROM research_report_review review WHERE review.report_id=research_report.id AND review.report_revision=research_report.revision AND review.decision='published')))`, id, pkg).Scan(&key, &generation, &documentHash, &documentSize, &scripts, &styles, &status)
+	err := h.DB.QueryRow(r.Context(), `SELECT document_storage_key,document_storage_generation,document_content_hash,document_byte_size,csp_script_hashes,csp_style_hashes,status FROM research_report WHERE id=$1::uuid AND package_hash=$2 AND document_storage_key IS NOT NULL`, id, pkg).Scan(&key, &generation, &documentHash, &documentSize, &scripts, &styles, &status)
 	if err != nil || documentSize < 0 || documentSize > researchrun.V6ReportMaxCompiledBytes {
 		http.Error(w, "not found", 404)
 		return

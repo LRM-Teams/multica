@@ -20,6 +20,7 @@ type V6DirectorCycle struct {
 	Generation, PageCount                                   int
 	StateVersion                                            int64
 	Status                                                  string
+	Replayed                                                bool
 }
 type V6DirectorBriefPage struct {
 	Bytes                        json.RawMessage

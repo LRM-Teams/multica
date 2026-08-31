@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 )
 
@@ -35,7 +36,9 @@ type V6SubmissionOutcome struct {
 
 type v6SubmissionStore interface {
 	AuthorizeV6Submission(context.Context, V6AttemptAccess) (V6SubmissionBinding, error)
+	RejectV6DirectorBoundaryAttempt(context.Context, V6AttemptAccess, string) error
 	RecordV6Submission(context.Context, V6AttemptAccess, DecodedV6Contract, string) (V6SubmissionOutcome, error)
+	SettleV6DirectorSubmission(context.Context, string, string, string) (string, error)
 }
 
 type v6SubmissionModule struct{ store v6SubmissionStore }
@@ -97,6 +100,18 @@ func (m v6SubmissionModule) Submit(ctx context.Context, in V6SubmissionInput) (V
 	validator := boundV6SecondStage{schemaID: binding.TaskSchemaID, schema: binding.TaskSchema}
 	decoded, err := DecodeV6Contract(in.Raw, binding.ExpectedKind, validator)
 	if err != nil {
+		if binding.ExpectedKind == V6ContractDirectorActionProposal && errors.Is(err, ErrInvalidContract) {
+			rejectErr := m.store.RejectV6DirectorBoundaryAttempt(ctx, in.V6AttemptAccess, truncateBytes(err.Error(), 4096))
+			if rejectErr != nil && !errors.Is(rejectErr, ErrAttemptNotAssigned) {
+				slog.Warn("research V6 Director boundary rejection could not be settled",
+					"workspace_id", in.WorkspaceID,
+					"run_id", in.RunID,
+					"work_item_id", in.WorkItemID,
+					"attempt_id", in.AttemptID,
+					"error", rejectErr,
+				)
+			}
+		}
 		return V6SubmissionOutcome{}, err
 	}
 	var identity v6SubmissionIdentity
@@ -110,5 +125,25 @@ func (m v6SubmissionModule) Submit(ctx context.Context, in V6SubmissionInput) (V
 	if identity.AgentID != "" && identity.AgentID != in.AgentID {
 		return V6SubmissionOutcome{}, ErrAttemptNotAssigned
 	}
-	return m.store.RecordV6Submission(ctx, in.V6AttemptAccess, decoded, identity.ClientRequestID)
+	outcome, err := m.store.RecordV6Submission(ctx, in.V6AttemptAccess, decoded, identity.ClientRequestID)
+	if err != nil || decoded.Kind != V6ContractDirectorActionProposal {
+		return outcome, err
+	}
+	status, settleErr := m.store.SettleV6DirectorSubmission(ctx, in.WorkspaceID, in.RunID, outcome.SubmissionID)
+	if settleErr != nil {
+		// The durable receipt is authoritative. A request-scoped settlement
+		// failure must not make the Agent resubmit a committed proposal; the
+		// scheduler will retry the same submission by its stable identity.
+		slog.Warn("research V6 Director proposal deferred after durable receipt",
+			"workspace_id", in.WorkspaceID,
+			"run_id", in.RunID,
+			"submission_id", outcome.SubmissionID,
+			"error", settleErr,
+		)
+		return outcome, nil
+	}
+	if status != "" {
+		outcome.Status = status
+	}
+	return outcome, nil
 }

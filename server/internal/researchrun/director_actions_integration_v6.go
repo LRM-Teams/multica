@@ -33,6 +33,32 @@ func (s *PostgresStore) executeV6OpenIntegrationDiscussionAction(
 	if err := validateV6IntegrationCandidate(inputs); err != nil {
 		return err
 	}
+	// S-level promotion is an intra-direction consolidation step. Do not let
+	// the Director skip the per-direction evidence threshold by promoting one
+	// S result from several top-level directions directly into a shared M.
+	if allV6InputsAtTier(inputs, V6TierS) {
+		if len(inputs) < 3 {
+			return fmt.Errorf("%w: S promotion requires at least three nodes from one research direction", ErrV6InvalidTierTransition)
+		}
+		var topDirectionCount, boundBranchCount int
+		if queryErr := s.pool.QueryRow(ctx, `WITH RECURSIVE branch_tree AS (
+			SELECT id,id AS top_id
+			FROM research_branch
+			WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND parent_branch_id IS NULL
+			UNION ALL
+			SELECT child.id,branch_tree.top_id
+			FROM research_branch child
+			JOIN branch_tree ON branch_tree.id=child.parent_branch_id
+			WHERE child.workspace_id=$1::uuid AND child.session_id=$2::uuid
+		)
+		SELECT count(DISTINCT branch_tree.top_id),count(DISTINCT branch_tree.id)
+		FROM branch_tree WHERE branch_tree.id=ANY($3::uuid[])`, proposal.WorkspaceID, proposal.RunID, branchIDs(branches)).Scan(&topDirectionCount, &boundBranchCount); queryErr != nil {
+			return queryErr
+		}
+		if boundBranchCount != len(branches) || topDirectionCount != 1 {
+			return fmt.Errorf("%w: S promotion must use at least three nodes bound to one top-level research direction", ErrV6InvalidTierTransition)
+		}
+	}
 	var liveStateVersion int64
 	if err := s.pool.QueryRow(ctx, `SELECT state_version FROM research_session
 		WHERE workspace_id=$1::uuid AND id=$2::uuid AND status='running' AND goal_version=$3`,
@@ -53,7 +79,7 @@ func (s *PostgresStore) executeV6OpenIntegrationDiscussionAction(
 	if err != nil {
 		return err
 	}
-	_, err = (discussionV6Module{store: s}).Open(ctx, OpenV6DiscussionInput{
+	discussion, err := (discussionV6Module{store: s}).Open(ctx, OpenV6DiscussionInput{
 		WorkspaceID:          proposal.WorkspaceID,
 		RunID:                proposal.RunID,
 		Kind:                 "integration",
@@ -69,10 +95,43 @@ func (s *PostgresStore) executeV6OpenIntegrationDiscussionAction(
 	if err != nil {
 		return err
 	}
+	if err = validateV6IntegrationDiscussionOutcome(discussion); err != nil {
+		return err
+	}
+	return nil
+}
+
+func allV6InputsAtTier(inputs []V6NodeRef, tier V6Tier) bool {
+	if len(inputs) == 0 {
+		return false
+	}
+	for _, input := range inputs {
+		if input.Tier != tier {
+			return false
+		}
+	}
+	return true
+}
+
+func branchIDs(branches []V6BranchRef) []string {
+	ids := make([]string, len(branches))
+	for i, branch := range branches {
+		ids[i] = branch.ID
+	}
+	return ids
+}
+
+func validateV6IntegrationDiscussionOutcome(discussion V6Discussion) error {
+	if discussion.Status != "active" {
+		return fmt.Errorf("%w: integration inputs already have a terminal discussion; include new evidence before retrying", ErrInvalidContract)
+	}
 	return nil
 }
 
 func validateV6IntegrationCandidate(inputs []V6NodeRef) error {
+	if allV6InputsAtTier(inputs, V6TierS) && len(inputs) < 3 {
+		return fmt.Errorf("%w: S promotion requires at least three nodes from one research direction", ErrV6InvalidTierTransition)
+	}
 	seen := make(map[string]struct{}, len(inputs))
 	for _, input := range inputs {
 		if _, exists := seen[input.VersionID]; exists {

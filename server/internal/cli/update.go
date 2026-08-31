@@ -341,14 +341,6 @@ func GetBrewPrefix() string {
 	return strings.TrimSpace(string(out))
 }
 
-func updateTargetPath(exePath string) (string, error) {
-	resolved, err := filepath.EvalSymlinks(exePath)
-	if err != nil {
-		return "", fmt.Errorf("resolve symlink: %w", err)
-	}
-	return updateTargetPathFromResolved(resolved), nil
-}
-
 func updateTargetPathFromResolved(resolved string) string {
 	if prefix := MatchKnownBrewPrefix(resolved); prefix != "" {
 		return prefix + "/bin/multica"

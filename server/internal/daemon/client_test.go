@@ -89,28 +89,38 @@ func TestClient_VersionOmittedWhenUnset(t *testing.T) {
 func TestClient_RuntimeScopedCallsUseRuntimeDaemonToken(t *testing.T) {
 	var body map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.URL.Path; got != "/api/daemon/runtimes/rt-1/agents/agent-1/credential" {
-			t.Fatalf("path = %q, want ensure credential path", got)
-		}
 		if got := r.Header.Get("Authorization"); got != "Bearer mdt-runtime" {
 			t.Fatalf("Authorization = %q, want runtime daemon token", got)
 		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Fatalf("decode ensure body: %v", err)
+		switch r.URL.Path {
+		case "/api/daemon/runtimes/rt-1/agents/agent-1/credential":
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode ensure body: %v", err)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":"cred-1","agent_id":"agent-1","token_prefix":"sk_agent_abc","token":"sk_agent_secret"}`))
+		case "/api/daemon/runtimes/rt-1/agents/agent-1/credentials/cred-1/revoke":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("unexpected runtime-scoped path %q", r.URL.Path)
 		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"cred-1","agent_id":"agent-1","token_prefix":"mac_abc","token":"mac_secret"}`))
 	}))
 	defer srv.Close()
 
 	c := NewClient(srv.URL)
 	c.SetRuntimeDaemonToken("rt-1", "mdt-runtime", time.Now().Add(time.Hour))
 
-	if _, err := c.EnsureAgentCredential(context.Background(), "rt-1", "agent-1", "cred-cached"); err != nil {
-		t.Fatalf("EnsureAgentCredential: %v", err)
+	if _, err := c.IssueAgentLaunchCredential(context.Background(), "rt-1", "agent-1", "cred-cached"); err != nil {
+		t.Fatalf("IssueAgentLaunchCredential: %v", err)
 	}
 	if got, _ := body["credential_id"].(string); got != "cred-cached" {
 		t.Fatalf("credential_id = %q, want cred-cached", got)
+	}
+	if replace, _ := body["replace_launch"].(bool); !replace {
+		t.Fatal("replace_launch = false, want true")
+	}
+	if err := c.RevokeAgentCredential(context.Background(), "rt-1", "agent-1", "cred-1"); err != nil {
+		t.Fatalf("RevokeAgentCredential: %v", err)
 	}
 }
 
@@ -158,15 +168,15 @@ func TestClient_RuntimeScopedCallsDoNotFallBackToHumanToken(t *testing.T) {
 			t.Fatalf("Authorization = %q, want omitted Binding token", got)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"cred-1","agent_id":"agent-1","token_prefix":"mac_abc","token":"mac_secret"}`))
+		_, _ = w.Write([]byte(`{"id":"cred-1","agent_id":"agent-1","token_prefix":"sk_agent_abc","token":"sk_agent_secret"}`))
 	}))
 	defer srv.Close()
 
 	c := NewClient(srv.URL)
 	c.SetRuntimeDaemonToken("rt-1", "mdt-runtime", time.Now().Add(-time.Hour))
 
-	if _, err := c.EnsureAgentCredential(context.Background(), "rt-1", "agent-1", ""); err != nil {
-		t.Fatalf("EnsureAgentCredential: %v", err)
+	if _, err := c.IssueAgentLaunchCredential(context.Background(), "rt-1", "agent-1", ""); err != nil {
+		t.Fatalf("IssueAgentLaunchCredential: %v", err)
 	}
 }
 

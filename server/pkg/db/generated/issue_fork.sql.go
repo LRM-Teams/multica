@@ -24,7 +24,7 @@ INSERT INTO issue (
     $10, $11, $12, $13,
     $14, $15, $16, $17, $18,
     $19, $20, $21
-) RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, forked_from_issue_id, forked_at_seq, forked_at_task_id, channel_goal_id, goal_required, execution_revision, execution_attempt_sequence
+) RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, forked_from_issue_id, forked_at_seq, forked_at_task_id, channel_goal_id, goal_required, execution_revision, execution_attempt_sequence, goal_version_at_creation
 `
 
 type CreateForkedIssueParams struct {
@@ -112,6 +112,7 @@ func (q *Queries) CreateForkedIssue(ctx context.Context, arg CreateForkedIssuePa
 		&i.GoalRequired,
 		&i.ExecutionRevision,
 		&i.ExecutionAttemptSequence,
+		&i.GoalVersionAtCreation,
 	)
 	return i, err
 }

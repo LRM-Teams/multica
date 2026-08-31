@@ -29,7 +29,7 @@ func TestV6ProjectionUsesCanonicalPostgresAndPinnedPages(t *testing.T) {
 		t.Fatal(err)
 	}
 	source := string(raw)
-	for _, required := range []string{"research_projection_snapshot", "research_projection_slice", "research_result_node", "research_insight_version", "research_node_absorption", "RepeatableRead"} {
+	for _, required := range []string{"research_projection_snapshot", "research_projection_slice", "research_result_node", "research_insight_version", "research_node_absorption", "RepeatableRead", "research_v6_outbox", "pending_agent"} {
 		if !strings.Contains(source, required) {
 			t.Fatalf("projection implementation missing %q", required)
 		}

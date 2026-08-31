@@ -103,6 +103,13 @@ must not be silently reinterpreted as supporting evidence.
 
 Cluster boundaries are display groupings backed by projection cluster facts.
 They are not canonical Insights and are never written back as research facts.
+Tier S controls visual scale; it does not by itself mean “Agent satellite.”
+Only an explicit Agent satellite or a Work node with a canonical parent uses a
+local orbit. Unparented Work and Result S nodes participate in the directional
+branch field across multiple depth bands, so a branch cannot collapse into an
+equal-radius wheel. Relation paths retain their canonical endpoints while
+using deterministic per-relation curvature; repeated Goal relations must not
+degrade into equal-curvature spokes.
 The canonical `goal` is the visual origin at the leading edge of the field;
 an XXL master synthesis is a separate convergence destination. Goal-led graphs
 therefore progress left-to-right through result clusters instead of placing the

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
@@ -81,9 +82,6 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 		return fmt.Errorf("provider %q has no resident Message runtime", runtime.Provider)
 	}
 
-	if _, err := d.ensureResidentAgentCredential(ctx, config.WorkspaceID, config.RuntimeID, config.Agent.ID); err != nil {
-		return fmt.Errorf("ensure durable Agent credential: %w", err)
-	}
 	workspace, err := execenv.ProvisionAgentWorkspace(d.cfg.WorkspacesRoot, config.WorkspaceID, config.Agent.ID, d.logger)
 	if err != nil {
 		return fmt.Errorf("provision resident Agent workspace: %w", err)
@@ -225,19 +223,26 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 			_, _, err := execenv.MaterializeCanonicalTurnContextB(env.AgentRoot, ledgerRoot, runtime.Provider, taskCtx)
 			return err
 		},
-		PrepareLaunchEnvironment: func(environment map[string]string) (func(), error) {
+		PrepareLaunchEnvironment: func(environment map[string]string) (string, func(), error) {
+			launchCredential, err := d.ensureResidentAgentCredential(ctx, config.WorkspaceID, config.RuntimeID, config.Agent.ID)
+			if err != nil {
+				return "", nil, fmt.Errorf("issue Agent launch credential: %w", err)
+			}
 			transport, err := d.prepareAgentProxyCLITransport(
 				InboxKey{WorkspaceID: config.WorkspaceID, AgentID: config.Agent.ID},
 				config.RuntimeID,
 				residentAgentInstanceID,
 				selfBin,
+				launchCredential,
 			)
 			if err != nil {
-				return nil, err
+				_ = d.client.RevokeAgentCredential(context.Background(), config.RuntimeID, config.Agent.ID, launchCredential.CredentialID)
+				_ = removeCachedAgentCredentialIfMatches(d.cfg, config.WorkspaceID, config.RuntimeID, config.Agent.ID, launchCredential.CredentialID)
+				return "", nil, err
 			}
 			environment[AgentProxyCLIWrapperEnv] = transport.wrapperPath
 			environment["PATH"] = filepath.Dir(transport.wrapperPath) + string(os.PathListSeparator) + environment["PATH"]
-			return func() { _ = transport.Close() }, nil
+			return launchCredential.CredentialID, func() { _ = transport.Close() }, nil
 		},
 	})
 	if err != nil {
@@ -281,8 +286,27 @@ func (d *Daemon) ensureResidentProviderProcess(ctx context.Context, agentID, run
 
 // ensureResidentAgentCredential is the durable Agent identity for Message
 // delivery. It never creates a task-shaped execution record.
-func (d *Daemon) ensureResidentAgentCredential(ctx context.Context, workspaceID, runtimeID, agentID string) (string, error) {
-	return d.ensureAgentCredential(ctx, workspaceID, runtimeID, agentID, nil)
+func (d *Daemon) ensureResidentAgentCredential(ctx context.Context, workspaceID, runtimeID, agentID string) (cachedAgentCredential, error) {
+	// A resident process gets a fresh server credential for each launch. The
+	// local mpt_ proxy token remains independently launch-scoped and is never
+	// sent to the server. The predecessor metadata remains durable until the
+	// replacement succeeds, so a transient issuance failure can be retried
+	// without losing the server-side replacement identity.
+	predecessor, predecessorOK := readCachedAgentCredential(d.cfg, workspaceID, runtimeID, agentID, time.Now())
+	predecessorID := ""
+	if predecessorOK {
+		predecessorID = predecessor.CredentialID
+	}
+	response, err := d.client.IssueAgentLaunchCredential(ctx, runtimeID, agentID, predecessorID)
+	if err != nil {
+		return cachedAgentCredential{}, fmt.Errorf("issue resident Agent launch credential: %w", err)
+	}
+	credential, err := writeCachedAgentCredential(d.cfg, workspaceID, runtimeID, agentID, *response, time.Now())
+	if err != nil {
+		_ = d.client.RevokeAgentCredential(context.Background(), runtimeID, agentID, response.ID)
+		return cachedAgentCredential{}, err
+	}
+	return credential, nil
 }
 
 func (d *Daemon) canonicalResidentMessageFactory(provider string) canonicalRuntimeBackendFactory {

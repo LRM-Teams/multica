@@ -4,6 +4,7 @@ export {
   ExplorationMap,
   ResearchExecutionPanel,
   ResearchV6ReportModal,
+  ResearchV6ReportPage,
   type ResearchV6ReportSandboxDocument,
   ResearchSelectedRefChip,
 } from "./components";

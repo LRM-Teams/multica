@@ -2404,6 +2404,12 @@ func (s *TaskService) FinalizeTerminalTaskSideEffects(ctx context.Context, task 
 				"task_id", util.UUIDToString(task.ID), "error", err)
 		} else if projectID.Valid {
 			s.closeSegmentForTerminal(ctx, task, util.UUIDToString(projectID), s.leanEnvSnapshot(ctx, projectID))
+		} else if task.ChannelID.Valid {
+			// LRM-1079: ordinary channel wakes carry no chat session and no
+			// issue, so terminalTaskProjectID resolves nothing. Channel
+			// conversations still close a channel-scoped segment; the seam
+			// routes by channel when the project is empty.
+			s.closeSegmentForTerminal(ctx, task, "", nil)
 		}
 	}
 	s.RouteTerminalTrainingTask(ctx, task)

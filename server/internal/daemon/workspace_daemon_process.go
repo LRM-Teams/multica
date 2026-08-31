@@ -99,7 +99,11 @@ func RunWorkspaceDaemonProcess(ctx context.Context, config WorkspaceDaemonProces
 	}
 	defer controlListener.Close()
 	go d.serveWorkspaceDaemonControlRPC(ctx, controlListener, bootstrap)
-	defer func() { _ = d.canonicalRuntimes.closeAll() }()
+	defer func() {
+		d.canonicalRuntimes.revokeAllLaunchCredentials()
+		_ = d.canonicalRuntimes.forceTerminateAll()
+		_ = d.canonicalRuntimes.closeAll()
+	}()
 
 	bindings, err := d.configuredWorkspaceBindings()
 	if err != nil {

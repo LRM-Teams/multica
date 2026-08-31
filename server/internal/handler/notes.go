@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 type NotePageResponse struct {
@@ -31,6 +32,7 @@ type NotePageResponse struct {
 	ShareAgentIDs   []string                   `json:"share_agent_ids"`
 	ShareChannelIDs []string                   `json:"share_channel_ids"`
 	CanManageShares bool                       `json:"can_manage_shares"`
+	ShareUnread     bool                       `json:"share_unread"`
 	CreatedAt       string                     `json:"created_at"`
 	UpdatedAt       string                     `json:"updated_at"`
 	DeletedAt       *string                    `json:"deleted_at"`
@@ -226,6 +228,67 @@ ORDER BY created_at ASC`, pageID)
 	return ids, rows.Err()
 }
 
+func (h *Handler) noteShareUnreadPageIDs(ctx context.Context, userID pgtype.UUID, pages []notePageRow) (map[string]struct{}, error) {
+	unread := map[string]struct{}{}
+	if len(pages) == 0 {
+		return unread, nil
+	}
+	pageIDs := make([]string, 0, len(pages))
+	for _, page := range pages {
+		pageIDs = append(pageIDs, uuidToString(page.ID))
+	}
+	rows, err := h.DB.Query(ctx, `
+SELECT page_id
+FROM note_page_share
+WHERE user_id = $1
+  AND seen_at IS NULL
+  AND page_id = ANY($2::uuid[])`, userID, pageIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		unread[uuidToString(id)] = struct{}{}
+	}
+	return unread, rows.Err()
+}
+
+func (h *Handler) markNoteShareSeen(ctx context.Context, pageID, userID pgtype.UUID) error {
+	_, err := h.DB.Exec(ctx, `
+UPDATE note_page_share
+SET seen_at = now()
+WHERE page_id = $1 AND user_id = $2 AND seen_at IS NULL`, pageID, userID)
+	return err
+}
+
+func (h *Handler) CountNoteShareUnread(w http.ResponseWriter, r *http.Request) {
+	workspaceID, userID, _, ok := h.notesWorkspaceAndUser(w, r)
+	if !ok {
+		return
+	}
+	var count int
+	if err := h.DB.QueryRow(r.Context(), `
+SELECT count(*)
+FROM note_page_share s
+JOIN note_page p ON p.id = s.page_id
+WHERE s.user_id = $1
+  AND s.seen_at IS NULL
+  AND p.deleted_at IS NULL
+  AND p.workspace_id = $2
+  AND p.owner_user_id <> $1
+  AND NOT EXISTS (
+    SELECT 1 FROM note_page_hidden h WHERE h.page_id = s.page_id AND h.user_id = $1
+  )`, userID, workspaceID).Scan(&count); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to count unread shares")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"count": count})
+}
+
 func (h *Handler) noteAccess(ctx context.Context, pageID, workspaceID, userID pgtype.UUID) (accessible bool, owner bool, err error) {
 	err = h.DB.QueryRow(ctx, `
 WITH RECURSIVE chain AS (
@@ -234,11 +297,23 @@ WITH RECURSIVE chain AS (
     WHERE id = $1
       AND deleted_at IS NULL
       AND (workspace_id = $2 OR owner_user_id = $3)
+      AND (
+        owner_user_id = $3
+        OR NOT EXISTS (
+          SELECT 1 FROM note_page_hidden h WHERE h.page_id = id AND h.user_id = $3
+        )
+      )
   UNION
     SELECT parent.id, parent.workspace_id, parent.parent_id, parent.owner_user_id
     FROM note_page parent
     JOIN chain child ON child.parent_id = parent.id
     WHERE parent.deleted_at IS NULL
+      AND (
+        parent.owner_user_id = $3
+        OR NOT EXISTS (
+          SELECT 1 FROM note_page_hidden h WHERE h.page_id = parent.id AND h.user_id = $3
+        )
+      )
 )
 SELECT
   EXISTS (
@@ -316,6 +391,9 @@ WITH RECURSIVE visible AS (
               WHERE sc.page_id = p.id
             )
           )
+          AND NOT EXISTS (
+            SELECT 1 FROM note_page_hidden h WHERE h.page_id = p.id AND h.user_id = $2
+          )
         )
       )
   UNION
@@ -323,6 +401,9 @@ WITH RECURSIVE visible AS (
     FROM note_page child
     JOIN visible parent ON child.parent_id = parent.id
     WHERE child.deleted_at IS NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM note_page_hidden h WHERE h.page_id = child.id AND h.user_id = $2
+      )
 )
 SELECT id, workspace_id, parent_id, owner_user_id, title, icon, content, sort_key, created_at, updated_at, deleted_at
 FROM visible
@@ -345,6 +426,12 @@ ORDER BY parent_id NULLS FIRST, sort_key, created_at`, workspaceID, userID)
 		writeError(w, http.StatusInternalServerError, "failed to list notes")
 		return
 	}
+	unreadIDs, err := h.noteShareUnreadPageIDs(r.Context(), userID, collected)
+	if err != nil {
+		// Unread markers must never blank the directory (e.g. migration not applied yet).
+		slog.Warn("note share unread lookup failed", "error", err)
+		unreadIDs = map[string]struct{}{}
+	}
 	pages := make([]NotePageResponse, 0, len(collected))
 	for _, p := range collected {
 		resp, err := h.notePageResponseWithShares(r.Context(), p, userID, nil)
@@ -352,6 +439,7 @@ ORDER BY parent_id NULLS FIRST, sort_key, created_at`, workspaceID, userID)
 			writeError(w, http.StatusInternalServerError, "failed to list notes")
 			return
 		}
+		_, resp.ShareUnread = unreadIDs[uuidToString(p.ID)]
 		pages = append(pages, resp)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"pages": pages})
@@ -436,9 +524,14 @@ func (h *Handler) GetNotePage(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	page, _, ok := h.loadAccessibleNote(w, r, chi.URLParam(r, "id"), workspaceID, userID)
+	page, owner, ok := h.loadAccessibleNote(w, r, chi.URLParam(r, "id"), workspaceID, userID)
 	if !ok {
 		return
+	}
+	if !owner {
+		if err := h.markNoteShareSeen(r.Context(), page.ID, userID); err != nil {
+			slog.Warn("mark note share seen failed", "page_id", uuidToString(page.ID), "error", err)
+		}
 	}
 	refs, err := h.loadNotePageRefs(r.Context(), page.ID, page.WorkspaceID, userID)
 	if err != nil {
@@ -525,14 +618,14 @@ func (h *Handler) MoveNotePage(w http.ResponseWriter, r *http.Request) {
 	}
 	parentID := pgtype.UUID{}
 	pageWorkspaceID := page.WorkspaceID
+	shareWithOwner := pgtype.UUID{}
 	if req.ParentID != nil && strings.TrimSpace(*req.ParentID) != "" {
 		parent, parentOwner, ok := h.loadAccessibleNote(w, r, *req.ParentID, workspaceID, userID)
 		if !ok {
 			return
 		}
 		if !parentOwner {
-			writeError(w, http.StatusForbidden, "only the owner can move notes under this parent")
-			return
+			shareWithOwner = parent.OwnerUserID
 		}
 		if uuidToString(parent.ID) == uuidToString(page.ID) {
 			writeError(w, http.StatusBadRequest, "cannot move a note under itself")
@@ -584,12 +677,43 @@ WHERE id = $1`, page.ID, userID, pageWorkspaceID, parentID, normalizeNoteSortKey
 		writeError(w, http.StatusInternalServerError, "failed to move note page")
 		return
 	}
+	if shareWithOwner.Valid {
+		added, err := h.grantNotePageUserShare(r.Context(), updated.ID, shareWithOwner, userID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to move note page")
+			return
+		}
+		if added {
+			h.publishToUsers(
+				protocol.EventNotesShareUnread,
+				uuidToString(updated.WorkspaceID),
+				"member",
+				uuidToString(userID),
+				[]string{uuidToString(shareWithOwner)},
+				map[string]any{"page_id": uuidToString(updated.ID)},
+			)
+		}
+	}
 	shares, err := h.noteShareUserIDs(r.Context(), updated.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to move note page")
 		return
 	}
 	writeJSON(w, http.StatusOK, notePageToResponse(updated, userID, shares, nil))
+}
+
+func (h *Handler) grantNotePageUserShare(ctx context.Context, pageID, targetUserID, createdBy pgtype.UUID) (bool, error) {
+	result, err := h.DB.Exec(ctx, `
+INSERT INTO note_page_share (page_id, user_id, created_by)
+VALUES ($1, $2, $3)
+ON CONFLICT (page_id, user_id) DO NOTHING`, pageID, targetUserID, createdBy)
+	if err != nil {
+		return false, err
+	}
+	if _, err := h.DB.Exec(ctx, `DELETE FROM note_page_hidden WHERE page_id = $1 AND user_id = $2`, pageID, targetUserID); err != nil {
+		return false, err
+	}
+	return result.RowsAffected() > 0, nil
 }
 
 func (h *Handler) DeleteNotePage(w http.ResponseWriter, r *http.Request) {
@@ -602,26 +726,41 @@ func (h *Handler) DeleteNotePage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !owner {
-		writeError(w, http.StatusForbidden, "only the owner can delete this note page")
+		if err := h.dismissNotePageForUser(r.Context(), page.ID, userID); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to delete note page")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	_, err := h.DB.Exec(r.Context(), `
 WITH RECURSIVE subtree AS (
-    SELECT id FROM note_page WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL
+    SELECT id, owner_user_id FROM note_page WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL
   UNION
-    SELECT child.id
+    SELECT child.id, child.owner_user_id
     FROM note_page child
     JOIN subtree parent ON child.parent_id = parent.id
     WHERE child.workspace_id = $2 AND child.deleted_at IS NULL
 )
 UPDATE note_page
 SET deleted_at = now(), updated_by = $3, updated_at = now()
-WHERE id IN (SELECT id FROM subtree)`, page.ID, page.WorkspaceID, userID)
+WHERE id IN (SELECT id FROM subtree WHERE owner_user_id = $3)`, page.ID, page.WorkspaceID, userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete note page")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) dismissNotePageForUser(ctx context.Context, pageID, userID pgtype.UUID) error {
+	if _, err := h.DB.Exec(ctx, `DELETE FROM note_page_share WHERE page_id = $1 AND user_id = $2`, pageID, userID); err != nil {
+		return err
+	}
+	_, err := h.DB.Exec(ctx, `
+INSERT INTO note_page_hidden (page_id, user_id)
+VALUES ($1, $2)
+ON CONFLICT (page_id, user_id) DO NOTHING`, pageID, userID)
+	return err
 }
 
 func (h *Handler) DuplicateNotePage(w http.ResponseWriter, r *http.Request) {
@@ -860,6 +999,16 @@ func (h *Handler) UpdateNotePageShares(w http.ResponseWriter, r *http.Request) {
 		addedShareIDs(previous.AgentIDs, roster.AgentIDs),
 		addedShareIDs(previous.ChannelIDs, roster.ChannelIDs),
 	)
+	if addedUsers := addedShareIDs(previous.UserIDs, roster.UserIDs); len(addedUsers) > 0 {
+		h.publishToUsers(
+			protocol.EventNotesShareUnread,
+			uuidToString(page.WorkspaceID),
+			"member",
+			uuidToString(userID),
+			addedUsers,
+			map[string]any{"page_id": uuidToString(page.ID)},
+		)
+	}
 	resp := notePageToResponse(page, userID, roster.UserIDs, nil)
 	applyNoteShareRoster(&resp, roster)
 	writeJSON(w, http.StatusOK, resp)

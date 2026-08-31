@@ -335,12 +335,14 @@ func (h *Handler) tryHandlePeriodBriefBubbleChat(
 	}
 	owned := h.listOwnedPeriodBriefCollectors(r.Context(), workspaceID, userID)
 	prompt, promptErr := h.loadPeriodBriefPrompt(r.Context(), session.ID, workspaceID, userID)
-	hasPrompt := promptErr == nil
-	if !hasPrompt && !looksLikePeriodBriefRequest(content) {
+	// New 写汇报 starts from POST /api/notes/period-briefs (FAB / confirmed chips).
+	// Chat only continues an intake already in progress — regex must not hijack
+	// a declined "帮我写汇报" that the notes assistant should answer.
+	if promptErr != nil {
 		return false
 	}
 
-	if periodBriefIntakeCancelled(content) && hasPrompt {
+	if periodBriefIntakeCancelled(content) {
 		h.closePeriodBriefPrompt(r.Context(), prompt.ID, "cancelled")
 		h.postPeriodBriefBubbleMessage(r.Context(), session.ID, workspaceID, session.CreatorID, userIDString, "assistant", "好，那这次先不写汇报。")
 		return true
@@ -352,18 +354,10 @@ func (h *Handler) tryHandlePeriodBriefBubbleChat(
 	}
 
 	today := time.Now().Format("2006-01-02")
-	if !hasPrompt {
-		prompt = notePeriodBriefPromptRow{
-			WorkspaceID:   workspaceID,
-			OwnerUserID:   userID,
-			ChatSessionID: session.ID,
-			SourcePageID:  pageID,
-		}
-	}
 	h.applyPeriodBriefIntakeText(&prompt, content, owned, today)
 
 	ready := periodBriefPromptReady(prompt)
-	if ready && hasPrompt && !prompt.AwaitingConfirm {
+	if ready && !prompt.AwaitingConfirm {
 		if err := h.startPeriodBriefFromChat(r, session, userIDString, prompt, owned); err != nil {
 			h.postPeriodBriefBubbleMessage(r.Context(), session.ID, workspaceID, session.CreatorID, userIDString, "assistant", "现在还开不了写汇报："+err.Error())
 			return true

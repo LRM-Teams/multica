@@ -725,7 +725,7 @@ const createResearchReport = `-- name: CreateResearchReport :one
 INSERT INTO research_report (
   workspace_id, session_id, revision, content_md, structured
 ) VALUES ($1, $2, $3, $4, $5)
-RETURNING id, workspace_id, session_id, revision, content_md, structured, created_at, updated_at, goal_version, plan_version, produced_by_task_id, produced_by_attempt_id, author_agent_id, status, parent_report_id, parent_revision, title, summary, plain_text, package_hash, document_content_hash, document_storage_key, document_storage_generation, document_byte_size, input_snapshot_hash, csp_script_hashes, csp_style_hashes, input_event_sequence, published_at, reviewed_by_director_assignment_id, outline, citations
+RETURNING id, workspace_id, session_id, revision, content_md, structured, created_at, updated_at, goal_version, plan_version, produced_by_task_id, produced_by_attempt_id, author_agent_id, status, parent_report_id, parent_revision, title, summary, plain_text, package_hash, document_content_hash, document_storage_key, document_storage_generation, document_byte_size, input_snapshot_hash, csp_script_hashes, csp_style_hashes, input_event_sequence, published_at, reviewed_by_director_assignment_id, outline, citations, maturity, direction_coverage, design_dossier
 `
 
 type CreateResearchReportParams struct {
@@ -778,6 +778,9 @@ func (q *Queries) CreateResearchReport(ctx context.Context, arg CreateResearchRe
 		&i.ReviewedByDirectorAssignmentID,
 		&i.Outline,
 		&i.Citations,
+		&i.Maturity,
+		&i.DirectionCoverage,
+		&i.DesignDossier,
 	)
 	return i, err
 }
@@ -1053,7 +1056,7 @@ func (q *Queries) GetLatestResearchPlaybook(ctx context.Context, arg GetLatestRe
 }
 
 const getLatestResearchReport = `-- name: GetLatestResearchReport :one
-SELECT id, workspace_id, session_id, revision, content_md, structured, created_at, updated_at, goal_version, plan_version, produced_by_task_id, produced_by_attempt_id, author_agent_id, status, parent_report_id, parent_revision, title, summary, plain_text, package_hash, document_content_hash, document_storage_key, document_storage_generation, document_byte_size, input_snapshot_hash, csp_script_hashes, csp_style_hashes, input_event_sequence, published_at, reviewed_by_director_assignment_id, outline, citations FROM research_report
+SELECT id, workspace_id, session_id, revision, content_md, structured, created_at, updated_at, goal_version, plan_version, produced_by_task_id, produced_by_attempt_id, author_agent_id, status, parent_report_id, parent_revision, title, summary, plain_text, package_hash, document_content_hash, document_storage_key, document_storage_generation, document_byte_size, input_snapshot_hash, csp_script_hashes, csp_style_hashes, input_event_sequence, published_at, reviewed_by_director_assignment_id, outline, citations, maturity, direction_coverage, design_dossier FROM research_report
 WHERE session_id = $1 AND workspace_id = $2
 ORDER BY revision DESC
 LIMIT 1
@@ -1100,6 +1103,9 @@ func (q *Queries) GetLatestResearchReport(ctx context.Context, arg GetLatestRese
 		&i.ReviewedByDirectorAssignmentID,
 		&i.Outline,
 		&i.Citations,
+		&i.Maturity,
+		&i.DirectionCoverage,
+		&i.DesignDossier,
 	)
 	return i, err
 }
@@ -2151,7 +2157,7 @@ func (q *Queries) ListResearchProductRoundCards(ctx context.Context, arg ListRes
 }
 
 const listResearchReports = `-- name: ListResearchReports :many
-SELECT id, workspace_id, session_id, revision, content_md, structured, created_at, updated_at, goal_version, plan_version, produced_by_task_id, produced_by_attempt_id, author_agent_id, status, parent_report_id, parent_revision, title, summary, plain_text, package_hash, document_content_hash, document_storage_key, document_storage_generation, document_byte_size, input_snapshot_hash, csp_script_hashes, csp_style_hashes, input_event_sequence, published_at, reviewed_by_director_assignment_id, outline, citations FROM research_report
+SELECT id, workspace_id, session_id, revision, content_md, structured, created_at, updated_at, goal_version, plan_version, produced_by_task_id, produced_by_attempt_id, author_agent_id, status, parent_report_id, parent_revision, title, summary, plain_text, package_hash, document_content_hash, document_storage_key, document_storage_generation, document_byte_size, input_snapshot_hash, csp_script_hashes, csp_style_hashes, input_event_sequence, published_at, reviewed_by_director_assignment_id, outline, citations, maturity, direction_coverage, design_dossier FROM research_report
 WHERE session_id = $1 AND workspace_id = $2
 ORDER BY revision DESC
 `
@@ -2203,6 +2209,9 @@ func (q *Queries) ListResearchReports(ctx context.Context, arg ListResearchRepor
 			&i.ReviewedByDirectorAssignmentID,
 			&i.Outline,
 			&i.Citations,
+			&i.Maturity,
+			&i.DirectionCoverage,
+			&i.DesignDossier,
 		); err != nil {
 			return nil, err
 		}
@@ -2241,6 +2250,7 @@ WITH task_progress AS (
   WHERE w.workspace_id = $1
     AND s.orchestrator_version = 'research-run-v6'
     AND w.goal_version = s.goal_version
+    AND w.kind <> 'director'
   GROUP BY w.session_id
 ), evidence_progress AS (
   SELECT o.session_id, count(*) AS evidence_count,

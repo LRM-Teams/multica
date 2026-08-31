@@ -161,10 +161,21 @@ JOIN agent AS a
   ON a.id = ac.agent_id
  AND a.workspace_id = ac.workspace_id
  AND a.archived_at IS NULL
+ AND a.stopped_at IS NULL
+LEFT JOIN agent_runtime AS runtime
+  ON runtime.id = a.runtime_id
+ AND runtime.workspace_id = a.workspace_id
+LEFT JOIN computer_workspace_bindings AS binding
+  ON binding.daemon_id = runtime.daemon_id
+ AND binding.workspace_id = ac.workspace_id
+ AND binding.user_id = ac.user_id
+ AND binding.active = TRUE
+ AND binding.revoked_at IS NULL
 JOIN member AS m
   ON m.workspace_id = ac.workspace_id
  AND m.user_id = ac.user_id
 WHERE ac.token_hash = $1
+  AND (ac.issuance_source <> 'daemon' OR binding.daemon_id IS NOT NULL)
   AND ac.revoked_at IS NULL
   AND ac.disabled_at IS NULL
   AND (ac.expires_at IS NULL OR ac.expires_at > now())
@@ -233,6 +244,67 @@ func (q *Queries) GetAgentCredentialForDaemonEnsure(ctx context.Context, arg Get
 	return i, err
 }
 
+const hasOtherLiveDaemonAgentCredential = `-- name: HasOtherLiveDaemonAgentCredential :one
+SELECT EXISTS (
+  SELECT 1
+  FROM agent_credential
+  WHERE agent_id = $1
+    AND workspace_id = $2
+    AND user_id = $3
+    AND issuance_source = 'daemon'
+    AND revoked_at IS NULL
+    AND disabled_at IS NULL
+    AND (expires_at IS NULL OR expires_at > now())
+    AND id <> $4
+)
+`
+
+type HasOtherLiveDaemonAgentCredentialParams struct {
+	AgentID     pgtype.UUID `json:"agent_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	UserID      pgtype.UUID `json:"user_id"`
+	ID          pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) HasOtherLiveDaemonAgentCredential(ctx context.Context, arg HasOtherLiveDaemonAgentCredentialParams) (bool, error) {
+	row := q.db.QueryRow(ctx, hasOtherLiveDaemonAgentCredential,
+		arg.AgentID,
+		arg.WorkspaceID,
+		arg.UserID,
+		arg.ID,
+	)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
+const hasLiveDaemonAgentCredential = `-- name: HasLiveDaemonAgentCredential :one
+SELECT EXISTS (
+  SELECT 1
+  FROM agent_credential
+  WHERE agent_id = $1
+    AND workspace_id = $2
+    AND user_id = $3
+    AND issuance_source = 'daemon'
+    AND revoked_at IS NULL
+    AND disabled_at IS NULL
+    AND (expires_at IS NULL OR expires_at > now())
+)
+`
+
+type HasLiveDaemonAgentCredentialParams struct {
+	AgentID     pgtype.UUID `json:"agent_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	UserID      pgtype.UUID `json:"user_id"`
+}
+
+func (q *Queries) HasLiveDaemonAgentCredential(ctx context.Context, arg HasLiveDaemonAgentCredentialParams) (bool, error) {
+	row := q.db.QueryRow(ctx, hasLiveDaemonAgentCredential, arg.AgentID, arg.WorkspaceID, arg.UserID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const lockAgentForDaemonCredentialEnsure = `-- name: LockAgentForDaemonCredentialEnsure :one
 SELECT agent.id
 FROM agent
@@ -250,6 +322,7 @@ WHERE agent.id = $1
         AND b.active = TRUE
   )
   AND agent.archived_at IS NULL
+  AND agent.stopped_at IS NULL
 FOR UPDATE OF agent, runtime
 `
 
@@ -302,6 +375,37 @@ func (q *Queries) RevokeAgentCredential(ctx context.Context, id pgtype.UUID) (Ag
 		&i.IssuanceSource,
 	)
 	return i, err
+}
+
+const revokeDaemonAgentCredentialForLaunch = `-- name: RevokeDaemonAgentCredentialForLaunch :execrows
+UPDATE agent_credential
+SET revoked_at = now(), updated_at = now()
+WHERE id = $1
+  AND agent_id = $2
+  AND workspace_id = $3
+  AND user_id = $4
+  AND issuance_source = 'daemon'
+  AND revoked_at IS NULL
+`
+
+type RevokeDaemonAgentCredentialForLaunchParams struct {
+	ID          pgtype.UUID `json:"id"`
+	AgentID     pgtype.UUID `json:"agent_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	UserID      pgtype.UUID `json:"user_id"`
+}
+
+func (q *Queries) RevokeDaemonAgentCredentialForLaunch(ctx context.Context, arg RevokeDaemonAgentCredentialForLaunchParams) (int64, error) {
+	result, err := q.db.Exec(ctx, revokeDaemonAgentCredentialForLaunch,
+		arg.ID,
+		arg.AgentID,
+		arg.WorkspaceID,
+		arg.UserID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const revokeAgentCredentialsByAgent = `-- name: RevokeAgentCredentialsByAgent :exec

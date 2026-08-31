@@ -22,7 +22,7 @@ describe("AgentActivityStatus", () => {
   it("derives command color and pulse from lifecycle facts", () => {
     const { container } = render(<AgentActivityStatus agentId="agent-1" />);
     expect(screen.getByTestId("agent-activity-status")).toHaveAttribute("data-activity-kind", "working");
-    expect(container.querySelector(".bg-running")).not.toBeNull();
+    expect(container.querySelector(".bg-dot-working")).not.toBeNull();
     expect(container.querySelector(".animate-ping")).not.toBeNull();
   });
 
@@ -33,7 +33,7 @@ describe("AgentActivityStatus", () => {
     state.availability = "offline";
     state.summary = { label: "Runtime unavailable", activityKind: "error", detailKind: "runtime_error" };
     rerender(<AgentActivityStatus agentId="agent-1" />);
-    expect(container.querySelector(".bg-destructive")).not.toBeNull();
+    expect(container.querySelector(".bg-dot-fail")).not.toBeNull();
     expect(container.querySelector(".animate-ping")).toBeNull();
   });
 

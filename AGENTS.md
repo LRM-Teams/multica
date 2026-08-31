@@ -141,7 +141,7 @@ make daemon           # Run local daemon
 make build            # Build server + CLI binaries to server/bin/
 make cli ARGS="..."   # Run multica CLI (e.g. make cli ARGS="config")
 make test             # Go tests
-make sqlc             # Regenerate sqlc code after editing SQL in server/pkg/db/queries/
+make sqlc             # Regenerate sqlc code after editing SQL in server/pkg/db/queries/ (uses pinned sqlc version in server/.sqlc-version)
 make migrate-up       # Run database migrations
 make migrate-down     # Rollback migrations
 

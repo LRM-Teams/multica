@@ -38,6 +38,15 @@ func NewGraphMemoryAgentGateway(pool *pgxpool.Pool) *GraphMemoryAgentGateway {
 	return &GraphMemoryAgentGateway{pool: pool, runs: NewGraphMemoryAgentRunStore(pool)}
 }
 
+// SetSubmittedRunSink wires the submitted-run segment sink on the run store
+// (see GraphMemorySubmittedRunSink). Nil-safe.
+func (g *GraphMemoryAgentGateway) SetSubmittedRunSink(sink GraphMemorySubmittedRunSink) {
+	if g == nil || g.runs == nil {
+		return
+	}
+	g.runs.SetSubmittedRunSink(sink)
+}
+
 func (g *GraphMemoryAgentGateway) AddUsage(ctx context.Context, workspaceID, agentID, channelID string, inputTokens, outputTokens int64) error {
 	if g == nil || g.pool == nil {
 		return ErrGraphMemoryAgentRunUnavailable

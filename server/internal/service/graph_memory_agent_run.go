@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -59,10 +60,20 @@ type GraphMemoryAgentCitationInput struct {
 type GraphMemoryAgentRunStore struct {
 	pool *pgxpool.Pool
 	now  func() time.Time
+	// submittedRunSink is optional (nil = no-op): notified after a run
+	// commits as "submitted" so the run becomes a channel-scoped
+	// interaction_dag segment feeding graph-memory staging.
+	submittedRunSink GraphMemorySubmittedRunSink
 }
 
 func NewGraphMemoryAgentRunStore(pool *pgxpool.Pool) *GraphMemoryAgentRunStore {
 	return &GraphMemoryAgentRunStore{pool: pool, now: time.Now}
+}
+
+// SetSubmittedRunSink wires the submitted-run segment sink. Best-effort by
+// contract: sink errors never affect the run's terminal result.
+func (s *GraphMemoryAgentRunStore) SetSubmittedRunSink(sink GraphMemorySubmittedRunSink) {
+	s.submittedRunSink = sink
 }
 
 type GraphMemoryAgentRunContext struct {
@@ -552,7 +563,25 @@ func (s *GraphMemoryAgentRunStore) finish(ctx context.Context, runID string, fen
 		WHERE channel_id=$2::uuid AND active_run_id=$1::uuid`, runID, channelID, consumedSeq, statePatch); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	// Submitted runs are the conversational turn of an agent-mode channel:
+	// notify the segment sink (best-effort, detached) so the turn reaches
+	// graph-memory staging. checkpointed/failed/cancelled runs record nothing.
+	if terminalStatus == "submitted" && s.submittedRunSink != nil {
+		sink := s.submittedRunSink
+		detached := context.WithoutCancel(ctx)
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Warn("graph memory agent run segment sink panicked", "run_id", runID, "panic", r)
+				}
+			}()
+			sink.RecordSubmittedRun(detached, runID, workspaceID, channelID, consumedSeq)
+		}()
+	}
+	return nil
 }
 
 func jsonEqual(a, b json.RawMessage) bool {

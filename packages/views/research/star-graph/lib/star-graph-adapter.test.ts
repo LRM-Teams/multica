@@ -73,6 +73,10 @@ describe("mapNodeState — real status strings", () => {
   it("defaults unknown statuses to default", () => {
     expect(mapNodeState("weird_unknown")).toBe("default");
   });
+  it("maps offline and idle roster statuses without inventing a run pulse", () => {
+    expect(mapNodeState("offline")).toBe("pending-review");
+    expect(mapNodeState("idle")).toBe("default");
+  });
 });
 
 describe("mapMetrics — never synthesised", () => {
@@ -153,5 +157,20 @@ describe("toStarGraphNodeView — full view", () => {
   it("omits agent badge when the projection carries no agent id", () => {
     const v = toStarGraphNodeView(node({ node_kind: "attempt", actor_agent_id: null }));
     expect(v.agentBadge).toBeUndefined();
+  });
+
+  it("keeps a roster satellite role independent from Goal", () => {
+    const v = toStarGraphNodeView(
+      node({
+        node_kind: "agent",
+        status: "offline",
+        title: "市场研究员",
+        typed: { level: "s" },
+        detail: { semantic_role: "roster" },
+      }),
+    );
+    expect(v.semanticRole).toBe("roster");
+    expect(v.tier).toBe("s");
+    expect(v.state).toBe("pending-review");
   });
 });

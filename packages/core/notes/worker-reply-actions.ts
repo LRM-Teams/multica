@@ -1,4 +1,4 @@
-import type { ChannelMessage, MessagePart } from "../types";
+import type { ChannelMessage, ChatMessage, MessagePart } from "../types";
 
 const NOTE_PAGE_IN_PATH =
   /(?:^|\/)notes\/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\b/gi;
@@ -93,10 +93,30 @@ function noteWritePart(
 export function isProductNoteWriteRequest(text: string): boolean {
   const value = text.trim();
   if (!value) return false;
-  if (/(写入|插入|写进|写到|存到|记到|新建|创建|保存).{0,12}笔记/.test(value)) return true;
+  if (/(写入|插入|写进|写到|存到|记到|新建|创建|保存).{0,12}(笔记|当前页|本页|子页|新页)/.test(value)) {
+    return true;
+  }
   if (/(给我|弹出|出示).{0,12}按钮/.test(value)) return true;
   if (/按钮.{0,12}(插入|写入|笔记)/.test(value)) return true;
-  return /\b(?:write|insert|save|create)\b.{0,32}\bnotes?\b/i.test(value);
+  return /\b(?:write|insert|save|create)\b.{0,32}\b(notes?|page|child)\b/i.test(value);
+}
+
+const NOTE_MARKDOWN_FENCE = /```(?:markdown|md)?\r?\n([\s\S]*?)```/gi;
+
+/**
+ * Prefer the largest fenced markdown body when the assistant wrapped a
+ * copy-box; otherwise use the full reply.
+ */
+export function extractInsertableNoteMarkdown(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) return "";
+  let best = "";
+  NOTE_MARKDOWN_FENCE.lastIndex = 0;
+  for (const match of trimmed.matchAll(NOTE_MARKDOWN_FENCE)) {
+    const body = (match[1] ?? "").replace(/\s+$/g, "");
+    if (body.length > best.length) best = body;
+  }
+  return best || trimmed;
 }
 
 /**
@@ -112,14 +132,16 @@ export function looksLikeNoteProposal(text: string): boolean {
   return value.split(/\r?\n/).filter((line) => line.trim().length > 0).length >= 3;
 }
 
-/**
- * For each agent message, decide the human-confirm note write action.
- * `--note-write` always opts that send in. A human insert/write-note request
- * also opts in the next agent replies that look like a proposal, so a forgotten
- * flag still shows Create note. Ordinary chat stays button-free.
- */
-export function buildNoteWriteConfirmationByMessageId(
-  messages: readonly ChannelMessage[],
+type NoteWriteScanMessage = {
+  id: string;
+  kind: "user" | "agent" | "other";
+  content: string;
+  parts?: MessagePart[];
+  deleted?: boolean;
+};
+
+function buildNoteWriteConfirmationFromMessages(
+  messages: readonly NoteWriteScanMessage[],
 ): Map<string, NoteWriteConfirmation> {
   const map = new Map<string, NoteWriteConfirmation>();
   let stickyPageId: string | null = null;
@@ -133,13 +155,13 @@ export function buildNoteWriteConfirmationByMessageId(
     const writePageId = write?.ref_id?.trim() || "";
     if (writePageId) stickyPageId = writePageId;
 
-    if (message.type === "user" && !message.deleted_at) {
+    if (message.kind === "user" && !message.deleted) {
       const fromText = extractNotePageIdsFromText(message.content ?? "");
       precedingUserNotePageId = fromText.length > 0 ? fromText[fromText.length - 1]! : null;
       precedingUserAskedWrite = isProductNoteWriteRequest(message.content ?? "");
     }
 
-    if (message.type !== "agent" || message.deleted_at) continue;
+    if (message.kind !== "agent" || message.deleted) continue;
     const proposing =
       Boolean(write) ||
       (precedingUserAskedWrite && looksLikeNoteProposal(noteWorkerReplyPlainText(message)));
@@ -152,6 +174,41 @@ export function buildNoteWriteConfirmationByMessageId(
     }
   }
   return map;
+}
+
+/**
+ * For each agent message, decide the human-confirm note write action.
+ * `--note-write` always opts that send in. A human insert/write-note request
+ * also opts in the next agent replies that look like a proposal, so a forgotten
+ * flag still shows Create note. Ordinary chat stays button-free.
+ */
+export function buildNoteWriteConfirmationByMessageId(
+  messages: readonly ChannelMessage[],
+): Map<string, NoteWriteConfirmation> {
+  return buildNoteWriteConfirmationFromMessages(
+    messages.map((message) => ({
+      id: message.id,
+      kind:
+        message.type === "user" ? "user" : message.type === "agent" ? "agent" : "other",
+      content: message.content,
+      parts: message.parts,
+      deleted: Boolean(message.deleted_at),
+    })),
+  );
+}
+
+/** Same confirm gate as channel `--note-write`, for Notes FAB chat_session. */
+export function buildChatNoteWriteConfirmationByMessageId(
+  messages: readonly ChatMessage[],
+): Map<string, NoteWriteConfirmation> {
+  return buildNoteWriteConfirmationFromMessages(
+    messages.map((message) => ({
+      id: message.id,
+      kind: message.role === "user" ? "user" : "agent",
+      content: message.content,
+      parts: message.parts,
+    })),
+  );
 }
 
 /**

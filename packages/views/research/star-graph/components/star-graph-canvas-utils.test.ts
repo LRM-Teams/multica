@@ -149,6 +149,16 @@ describe("star-graph-canvas-utils", () => {
     ).toMatch(/^M 0\.0 0\.0 Q .+ .+ 100\.0 50\.0$/);
   });
 
+  it("gives stable relation identities distinct organic curve profiles", () => {
+    const from = { x: 0, y: 0 };
+    const to = { x: 640, y: 180 };
+    const first = quadraticEdgePath(from, to, "relation-alpha");
+    const second = quadraticEdgePath(from, to, "relation-beta");
+
+    expect(quadraticEdgePath(from, to, "relation-alpha")).toBe(first);
+    expect(second).not.toBe(first);
+  });
+
   it("suppresses an edge label when another node occupies its midpoint", () => {
     const relation = {
       fromNodeId: "from",

@@ -23,6 +23,7 @@ type DirectorBriefFacts struct {
 	Branches, TerminalSummaries      []any
 	WorkItems, Discussions, Reports  []any
 	UnresolvedDisputes, Steering     []any
+	ReportPlan                       map[string]any
 }
 
 type CompiledDirectorBrief struct {
@@ -55,13 +56,17 @@ func (contextCompilerModule) CompileDirectorBrief(facts DirectorBriefFacts, now 
 		if index+1 < pageCount {
 			pageDescriptor["next_cursor"] = fmt.Sprintf("%d", index+1)
 		}
+		reportPlan := facts.ReportPlan
+		if reportPlan == nil {
+			reportPlan = map[string]any{"reporter_agent_id": "", "selection_hash": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "maturity": "interim", "inputs": []any{}, "directions": []any{}, "active_report_work": false, "needs_refresh": false}
+		}
 		page := map[string]any{
 			"contract_kind": "director_brief", "schema_version": 6, "brief_id": briefID,
 			"workspace_id": facts.WorkspaceID, "run_id": facts.RunID, "director_assignment_id": facts.AssignmentID,
 			"director_generation": facts.DirectorGeneration, "state_version": facts.StateVersion, "through_event_sequence": facts.ThroughSequence,
 			"page": pageDescriptor, "goal": facts.Goal, "created_at": createdAt,
 			"research": map[string]any{"overview": "Current fresh Branch Frontier summaries.", "branch_count": len(facts.Branches), "branches": branches, "terminal_summaries": facts.TerminalSummaries, "unresolved_disputes": facts.UnresolvedDisputes},
-			"control":  map[string]any{"director_state": facts.DirectorState, "active_team_count": len(facts.Team), "team_hard_cap": 50, "creation_threshold": 20, "team": facts.Team, "work_items": work, "discussions": facts.Discussions, "reports": facts.Reports, "latest_steering": facts.Steering, "changes": []any{}},
+			"control":  map[string]any{"director_state": facts.DirectorState, "active_team_count": len(facts.Team), "team_hard_cap": 50, "creation_threshold": 20, "team": facts.Team, "work_items": work, "discussions": facts.Discussions, "reports": facts.Reports, "report_plan": reportPlan, "latest_steering": facts.Steering, "changes": []any{}},
 		}
 		canonical, err := marshalV6CanonicalJSON(page)
 		if err != nil {

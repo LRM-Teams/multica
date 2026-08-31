@@ -250,7 +250,7 @@ func TestRunAgentMessageCheckUsesMachineLocalCredentialProxy(t *testing.T) {
 			})
 		case "/credential-proxy/messages/coverage/commit":
 			commitCalls++
-			if got := r.Header.Get(daemon.AgentProxyTokenHeader); got != "map_test-token" {
+			if got := r.Header.Get(daemon.AgentProxyTokenHeader); got != "mpt_test-token" {
 				t.Errorf("coverage commit token = %q", got)
 			}
 			var commit map[string]any
@@ -273,7 +273,7 @@ func TestRunAgentMessageCheckUsesMachineLocalCredentialProxy(t *testing.T) {
 	t.Setenv("MULTICA_DAEMON_PORT", port)
 	t.Setenv("MULTICA_AGENT_ID", "agent-1")
 	tokenFile := filepath.Join(t.TempDir(), "agent-proxy.token")
-	if err := os.WriteFile(tokenFile, []byte("map_test-token"), 0o600); err != nil {
+	if err := os.WriteFile(tokenFile, []byte("mpt_test-token"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv(daemon.AgentProxyURLEnv, srv.URL)
@@ -348,7 +348,7 @@ func TestRunAgentMessageCheckCommitsCoverageBeforeOutput(t *testing.T) {
 	t.Setenv("MULTICA_AGENT_ID", "agent-1")
 	t.Setenv(daemon.AgentProxyURLEnv, srv.URL)
 	tokenFile := filepath.Join(t.TempDir(), "agent-proxy.token")
-	if err := os.WriteFile(tokenFile, []byte("map_test-token"), 0o600); err != nil {
+	if err := os.WriteFile(tokenFile, []byte("mpt_test-token"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv(daemon.AgentProxyTokenFileEnv, tokenFile)
@@ -378,7 +378,7 @@ func TestRunAgentMessageReadUsesMachineLocalCredentialProxy(t *testing.T) {
 			})
 		case "/credential-proxy/messages/coverage/commit":
 			commitCalls++
-			if got := r.Header.Get(daemon.AgentProxyTokenHeader); got != "map_read-token" {
+			if got := r.Header.Get(daemon.AgentProxyTokenHeader); got != "mpt_read-token" {
 				t.Errorf("coverage commit token = %q", got)
 			}
 			var commit map[string]any
@@ -402,7 +402,7 @@ func TestRunAgentMessageReadUsesMachineLocalCredentialProxy(t *testing.T) {
 	t.Setenv("MULTICA_AGENT_ID", "agent-1")
 	t.Setenv("MULTICA_WORKSPACE_ID", "workspace-1")
 	tokenFile := filepath.Join(t.TempDir(), "agent-proxy.token")
-	if err := os.WriteFile(tokenFile, []byte("map_read-token"), 0o600); err != nil {
+	if err := os.WriteFile(tokenFile, []byte("mpt_read-token"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv(daemon.AgentProxyURLEnv, srv.URL)
@@ -609,7 +609,7 @@ func TestRunAgentMessageSendCommitsHeldCoverageAfterVisibleOutput(t *testing.T) 
 			})
 		case "/credential-proxy/messages/coverage/commit":
 			commitCalls++
-			if got := r.Header.Get(daemon.AgentProxyTokenHeader); got != "map_send-token" {
+			if got := r.Header.Get(daemon.AgentProxyTokenHeader); got != "mpt_send-token" {
 				t.Errorf("coverage commit token = %q", got)
 			}
 			var commit map[string]any
@@ -627,7 +627,7 @@ func TestRunAgentMessageSendCommitsHeldCoverageAfterVisibleOutput(t *testing.T) 
 	defer srv.Close()
 	setMessageCredentialProxyEnv(t, srv.URL)
 	tokenFile := filepath.Join(t.TempDir(), "agent-proxy.token")
-	if err := os.WriteFile(tokenFile, []byte("map_send-token"), 0o600); err != nil {
+	if err := os.WriteFile(tokenFile, []byte("mpt_send-token"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv(daemon.AgentProxyURLEnv, srv.URL)

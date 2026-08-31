@@ -20,6 +20,7 @@ type v6SchemaNode struct {
 	Properties           map[string]json.RawMessage `json:"properties"`
 	AdditionalProperties json.RawMessage            `json:"additionalProperties"`
 	Items                json.RawMessage            `json:"items"`
+	MinProperties        *int                       `json:"minProperties"`
 	MinItems             *int                       `json:"minItems"`
 	MaxItems             *int                       `json:"maxItems"`
 	UniqueItems          bool                       `json:"uniqueItems"`
@@ -75,6 +76,9 @@ func validateV6SchemaValue(value any, raw json.RawMessage, definitions map[strin
 
 	switch typed := value.(type) {
 	case map[string]any:
+		if schema.MinProperties != nil && len(typed) < *schema.MinProperties {
+			return fmt.Errorf("%s: requires at least %d properties", path, *schema.MinProperties)
+		}
 		for _, required := range schema.Required {
 			member, exists := typed[required]
 			if !exists || member == nil {

@@ -537,15 +537,6 @@ func runAgentMessageResolve(_ *cobra.Command, args []string) error {
 	return cli.PrintJSON(os.Stdout, out)
 }
 
-func postAgentTransport(cmd *cobra.Command, path string, body any, out any) error {
-	client, err := newAPIClient(cmd)
-	if err != nil {
-		return err
-	}
-	ctx, cancel := cli.APIContext(context.Background())
-	defer cancel()
-	return client.PostJSON(ctx, path, body, out)
-}
 func printAgentTransportOutput(out map[string]any) error {
 	if err := cli.PrintJSON(os.Stdout, out); err != nil {
 		return err

@@ -2,6 +2,7 @@ import { useMutation, useQueryClient, type QueryClient } from "@tanstack/react-q
 import { api } from "../api";
 import { useWorkspaceId } from "../hooks";
 import type { CreateNotePageRequest, DuplicateNotePageRequest, MoveNotePageRequest, NotePage, NotePageListResponse, UpdateNotePageRequest, UpdateNotePageSharesRequest } from "../types";
+import { collectNoteIdsRemovedOnDelete } from "./delete";
 import { noteKeys } from "./queries";
 
 /**
@@ -156,6 +157,7 @@ export function useUpdateNotePageShares() {
     onSettled: (_data, _err, vars) => {
       qc.invalidateQueries({ queryKey: noteKeys.detail(wsId, vars.id) });
       qc.invalidateQueries({ queryKey: noteKeys.list(wsId) });
+      qc.invalidateQueries({ queryKey: noteKeys.shareUnreadCount(wsId) });
     },
   });
 }
@@ -168,17 +170,8 @@ export function useDeleteNotePage() {
     onMutate: async (id) => {
       await qc.cancelQueries({ queryKey: noteKeys.list(wsId) });
       const prevList = qc.getQueryData<NotePageListResponse>(noteKeys.list(wsId));
-      const collect = new Set([id]);
-      let changed = true;
-      while (changed) {
-        changed = false;
-        for (const page of prevList?.pages ?? []) {
-          if (page.parent_id && collect.has(page.parent_id) && !collect.has(page.id)) {
-            collect.add(page.id);
-            changed = true;
-          }
-        }
-      }
+      const root = prevList?.pages.find((page) => page.id === id);
+      const collect = collectNoteIdsRemovedOnDelete(prevList?.pages ?? [], id, root?.can_manage_shares === true);
       qc.setQueryData<NotePageListResponse>(noteKeys.list(wsId), (old) =>
         old ? { pages: old.pages.filter((p) => !collect.has(p.id)) } : old,
       );

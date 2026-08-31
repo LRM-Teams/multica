@@ -50,6 +50,11 @@ type procHandle interface {
 // reaching a real loopback endpoint.
 var requestShutdown = RequestShutdown
 
+// Legacy transport seams keep the old HTTP resident compatibility path
+// testable without changing the current Unix-RPC lifecycle contract.
+var legacyHealthProbe = ProbeLegacyHealth
+var requestLegacyShutdown = RequestLegacyShutdown
+
 // spawnResident starts a detached resident process writing to log. It is a
 // field so tests can substitute a fake handle; the default is
 // startResidentProcess.
@@ -63,6 +68,24 @@ type startView struct {
 	sleep    func(time.Duration)
 	stderr   *os.File
 	executor func() (string, error)
+}
+
+type residentHealth struct {
+	health   map[string]any
+	endpoint string
+	legacy   bool
+}
+
+func (l *Lifecycle) probeResident(ctx context.Context, v *startView) residentHealth {
+	health := v.probe(ctx, v.service)
+	if Alive(health) {
+		return residentHealth{health: health, endpoint: v.service}
+	}
+	legacy := legacyHealthProbe(ctx)
+	if Alive(legacy) {
+		return residentHealth{health: legacy, endpoint: LegacyHealthEndpoint, legacy: true}
+	}
+	return residentHealth{health: health, endpoint: v.service}
 }
 
 func (l *Lifecycle) view() *startView {
@@ -236,7 +259,7 @@ func (l *Lifecycle) StartBackground(options StartOptions) (StartResult, error) {
 	// Already-running guard.
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	health := v.probe(ctx, v.service)
+	health := l.probeResident(ctx, v).health
 	if Alive(health) {
 		pid, _ := health["pid"].(float64)
 		return StartResult{}, fmt.Errorf("already running (pid %v)", int(pid))
@@ -320,7 +343,8 @@ func (l *Lifecycle) stop(action string) StopResult {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	health := v.probe(ctx, v.service)
+	target := l.probeResident(ctx, v)
+	health := target.health
 	if !Alive(health) {
 		return StopResult{Running: false}
 	}
@@ -350,7 +374,11 @@ func (l *Lifecycle) stop(action string) StopResult {
 	if requestedAction := strings.TrimSpace(os.Getenv("MULTICA_SHUTDOWN_ACTION")); requestedAction != "" {
 		action = requestedAction
 	}
-	if err := requestShutdown(v.service, ShutdownRequest{
+	shutdown := requestShutdown
+	if target.legacy {
+		shutdown = requestLegacyShutdown
+	}
+	if err := shutdown(target.endpoint, ShutdownRequest{
 		Source: source, Action: action, RequestPID: os.Getpid(),
 	}); err != nil {
 		res.GracefulFailed = true
@@ -386,7 +414,7 @@ func (l *Lifecycle) stop(action string) StopResult {
 	for i := 0; i < 10; i++ {
 		v.sleep(500 * time.Millisecond)
 		ctx2, cancel2 := context.WithTimeout(context.Background(), 1*time.Second)
-		h := v.probe(ctx2, v.service)
+		h := l.probeResident(ctx2, v).health
 		cancel2()
 		if !Alive(h) {
 			_ = os.Remove(v.pidPath)
@@ -413,7 +441,7 @@ func (l *Lifecycle) Status() map[string]any {
 	v := l.view()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	raw := v.probe(ctx, v.service)
+	raw := l.probeResident(ctx, v).health
 	health := map[string]any{
 		"status":           "stopped",
 		"connected":        false,

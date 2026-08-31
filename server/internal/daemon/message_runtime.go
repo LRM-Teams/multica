@@ -187,6 +187,21 @@ func (d *Daemon) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID
 			runner.observeResidentMessageRuntime(agentID, runtimeID, message)
 		}
 	}, func(turnErr error, generation uint64, capture *agent.ResidentTurnCapture) {
+		timeout, timedOut := asResidentTurnCompletionTimeout(turnErr)
+		if timedOut {
+			// Publish the old process's terminal fact before replacing its local
+			// AgentInstanceID. WorkspaceDaemon transport writes are bounded, so
+			// this preserves terminal→Starting/Idle ordering without an unbounded
+			// dependency on Activity delivery.
+			if managedProcess {
+				runner.observeMessageTurnCompletionForProcess(processCallback, runtimeID, turnErr)
+			} else {
+				runner.observeMessageTurnCompletion(agentID, runtimeID, turnErr)
+			}
+			if timeout.RestartSafe && managedProcess {
+				go runner.restartManagedAgentAfterTurnTimeout(processCallback, runtimeID)
+			}
+		}
 		d.canonicalRuntimes.clearDirectedTurn(agentID, runtimeID, directedRunID, directedTurnID)
 		if mixed {
 			d.reportMixedRunActivity(agentID, runtimeID, runID, runAgentID, "turn:"+turnID+":active:end", protocol.MixedRunActivityActiveTurn, -1)
@@ -197,6 +212,9 @@ func (d *Daemon) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID
 		outcome, reasonCode := "completed", ""
 		if turnErr != nil {
 			outcome, reasonCode = "failed", "provider_turn_failed"
+			if _, timedOut := asResidentTurnCompletionTimeout(turnErr); timedOut {
+				reasonCode = "provider_turn_timeout"
+			}
 		}
 		d.recordResidentMessageBatch(workspaceID, runtimeID, agentID, preparedMessages, "provider_finished", outcome, reasonCode)
 		if d.client != nil && strings.TrimSpace(d.client.baseURL) != "" {
@@ -228,13 +246,15 @@ func (d *Daemon) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID
 		if runner != nil && runner.notifyAppInbox != nil {
 			_ = runner.notifyAppInbox(context.Background(), agentID, runtimeID)
 		}
-		d.canonicalRuntimes.publishIfMessageTurnStillIdle(agentID, runtimeID, generation, func() {
-			if managedProcess {
-				runner.observeMessageTurnCompletionForProcess(processCallback, runtimeID, turnErr)
-			} else {
-				runner.observeMessageTurnCompletion(agentID, runtimeID, turnErr)
-			}
-		})
+		if !timedOut {
+			d.canonicalRuntimes.publishIfMessageTurnStillIdle(agentID, runtimeID, generation, func() {
+				if managedProcess {
+					runner.observeMessageTurnCompletionForProcess(processCallback, runtimeID, turnErr)
+				} else {
+					runner.observeMessageTurnCompletion(agentID, runtimeID, turnErr)
+				}
+			})
+		}
 	})
 	if err != nil {
 		if mixed {
@@ -319,14 +339,10 @@ func (d *Daemon) reportResidentTurnCapture(workspaceID, agentID, runtimeID, runI
 	}
 	reportCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	credential, err := d.credentialManager().Get(reportCtx, agentCredentialKey{
-		WorkspaceID: workspaceID,
-		RuntimeID:   runtimeID,
-		AgentID:     agentID,
-	}, agentCredentialCacheFirst)
-	if err != nil {
+	credential, ok := d.activeAgentProxyServerCredential(workspaceID, runtimeID, agentID)
+	if !ok {
 		if d.logger != nil {
-			d.logger.Warn("mixed-run capture credential unavailable", "run_id", runID, "run_agent_id", runAgentID, "error", err)
+			d.logger.Warn("mixed-run capture credential unavailable", "run_id", runID, "run_agent_id", runAgentID)
 		}
 		return false
 	}

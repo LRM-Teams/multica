@@ -29,14 +29,20 @@ func (d *Daemon) registerLocalControlRoutes(mux *http.ServeMux) {
 
 func (d *Daemon) authenticateAgentProxyRequest(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		credential, err := d.authenticateAgentProxyToken(r.Header.Get(AgentProxyTokenHeader))
+		authorization := strings.TrimSpace(r.Header.Get(AgentProxyAuthHeader))
+		const bearerPrefix = "Bearer "
+		if !strings.HasPrefix(authorization, bearerPrefix) {
+			http.Error(w, "invalid Agent Proxy credential", http.StatusUnauthorized)
+			return
+		}
+		credential, err := d.authenticateAgentProxyToken(strings.TrimSpace(strings.TrimPrefix(authorization, bearerPrefix)))
 		if err != nil {
 			http.Error(w, "invalid Agent Proxy credential", http.StatusUnauthorized)
 			return
 		}
 		r.Header.Set("X-Agent-ID", credential.Inbox.AgentID)
 		r.Header.Set("X-Workspace-ID", credential.Inbox.WorkspaceID)
-		r.Header.Del(AgentProxyTokenHeader)
+		r.Header.Del(AgentProxyAuthHeader)
 		ctx := context.WithValue(r.Context(), agentProxyAuthContextKey{}, credential)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})

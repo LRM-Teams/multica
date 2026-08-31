@@ -50,9 +50,7 @@ func (r *idleMessageFakeRuntime) AcceptIdleInboxNotice(_ context.Context, notice
 	r.mu.Lock()
 	r.notices = append(r.notices, notice)
 	r.mu.Unlock()
-	done := make(chan error)
-	close(done)
-	return agent.ResidentMessageAcceptance{Done: done}, nil
+	return agent.ResidentMessageAcceptance{Done: make(chan error)}, nil
 }
 
 func (r *idleMessageFakeRuntime) Execute(context.Context, string, agent.ExecOptions) (*agent.Session, error) {
@@ -71,9 +69,7 @@ func (r *idleMessageFakeRuntime) AcceptMessageBatch(_ context.Context, messages 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.batches = append(r.batches, append([]agent.ResidentMessage(nil), messages...))
-	done := make(chan error)
-	close(done)
-	return agent.ResidentMessageAcceptance{Done: done}, nil
+	return agent.ResidentMessageAcceptance{Done: make(chan error)}, nil
 }
 
 func (r *idleMessageFakeRuntime) snapshot() [][]agent.ResidentMessage {
@@ -125,7 +121,14 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 		t.Fatal(err)
 	}
 	fakeRuntime := &idleMessageFakeRuntime{}
-	d := New(Config{DaemonID: daemonID, WorkspacesRoot: workspacesRoot}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	d := New(Config{
+		DaemonID:         daemonID,
+		WorkspaceID:      workspaceID,
+		MachineID:        "acceptance-machine",
+		BindingsRoot:     t.TempDir(),
+		BindingStateRoot: t.TempDir(),
+		WorkspacesRoot:   workspacesRoot,
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	d.mu.Lock()
 	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
 	d.workspaces[workspaceID] = newWorkspaceState(workspaceID, []string{runtimeID})
@@ -178,10 +181,6 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 	// no-ACK rejection path both require Running; otherwise Accept buffers
 	// and ACKs before the fake runtime is ever asked.
 	markTestLaunchRunning(t, runner, agentID)
-	coordinator, _ := resolveTestInbox(t, d, InboxKey{WorkspaceID: workspaceID, AgentID: agentID})
-	coordinator.ConfigurePendingNotices(func(ctx context.Context, snapshot InboxNoticeSnapshot, commitIfCurrent InboxNoticeCommitIfCurrent) error {
-		return d.canonicalRuntimes.deliverBusyInboxNotice(ctx, agentID, runtimeID, snapshot, commitIfCurrent)
-	}, 20*time.Millisecond, 30*time.Millisecond)
 	teardownRunner := startIdleMessageAcceptanceRunner(t, d, hub, workspaceID, daemonID)
 	defer teardownRunner()
 
@@ -218,13 +217,13 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 	if batches := fakeRuntime.snapshot(); len(batches) != 1 || len(batches[0]) != 1 || batches[0][0].ID != created.ID {
 		t.Fatalf("runtime batches = %+v, want exactly one concrete Message acceptance", batches)
 	}
-	target := "channel:" + channelID
-	if seq, err := d.CredentialProxy().SeenUpToSeq(agentID, target); err != nil || seq != created.Seq {
-		t.Fatalf("Credential Proxy boundary = %d, %v", seq, err)
+	store, err := d.agentAppInboxes.Store(agentID)
+	if err != nil {
+		t.Fatalf("open Agent App Inbox Store: %v", err)
 	}
 	// A second canonical Message arrives while the same runtime session is
-	// busy. The Machine acknowledges transport acceptance, coalesces a
-	// content-free Notice, and does not advance the message boundary.
+	// busy. The Machine acknowledges transport acceptance and coalesces a
+	// content-free Notice while the Store retains the concrete item.
 	slot := d.canonicalRuntimes.slots[agentID+"\x00"+runtimeID]
 	slot.mu.Lock()
 	slot.running = true
@@ -257,46 +256,40 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("busy canonical delivery was not acknowledged")
 	}
-	deadline := time.Now().Add(2 * time.Second)
-	for len(fakeRuntime.noticeSnapshot()) == 0 && time.Now().Before(deadline) {
-		runtime.Gosched()
+	// A busy runtime may receive a content-free notice later, but that notice is
+	// not the ownership boundary. The durable Store item must remain available
+	// until the explicit item ACK below.
+	items := store.ListMessageItems()
+	if len(items) != 1 {
+		t.Fatalf("Store message items after read = %+v, want one pending durable item", items)
 	}
-	notices := fakeRuntime.noticeSnapshot()
-	if len(notices) != 1 || notices[0].TotalPending != 1 || len(notices[0].ChangedTargets) != 1 || !strings.HasPrefix(notices[0].ChangedTargets[0].Target, "#delivery-channel-") {
-		t.Fatalf("busy runtime Notices = %+v", notices)
+	var item AgentAppInboxItem
+	for _, candidate := range items {
+		if candidate.SourceRef.ID == busyCreated.ID {
+			item = candidate
+			break
+		}
 	}
-	if got := coordinator.Boundaries()[target]; got != created.Seq {
-		t.Fatalf("boundary after busy Notice = %d, want %d", got, created.Seq)
+	if item.ItemID == "" {
+		t.Fatalf("Store items missing busy message %s: %+v", busyCreated.ID, items)
 	}
-	checkRecorder := httptest.NewRecorder()
-	checkRequest := httptest.NewRequest(http.MethodPost, "/credential-proxy/messages/check", bytes.NewBufferString(
-		fmt.Sprintf(`{"agent_id":%q}`, agentID),
-	))
-	d.credentialProxyMessageCheckHandler().ServeHTTP(checkRecorder, checkRequest)
-	if checkRecorder.Code != http.StatusOK {
-		t.Fatalf("Credential Proxy check: status=%d body=%s", checkRecorder.Code, checkRecorder.Body.String())
+	if item.ItemID == "" || item.SourceRef.Kind != "message" || item.SourceRef.ID != busyCreated.ID || item.SourceRef.Revision != fmt.Sprint(busyCreated.Seq) {
+		t.Fatalf("Store item = %+v, want message sourceRef revision %d", item, busyCreated.Seq)
 	}
-	var checked MessageCheckResult
-	if err := json.Unmarshal(checkRecorder.Body.Bytes(), &checked); err != nil {
-		t.Fatalf("decode checked Messages: %v", err)
+	if item.Message == nil || item.Message.Content != "busy secret" {
+		t.Fatalf("Store item projection = %+v", item.Message)
 	}
-	if len(checked.Messages) != 1 || checked.Messages[0].ID != busyCreated.ID || checked.Messages[0].Content != "busy secret" || checked.HasMore {
-		t.Fatalf("checked Messages = %+v", checked)
+	// Reading the projection does not retire it. Only an explicit item ACK
+	// changes the durable Store state.
+	if len(store.ListMessageItems()) != 1 {
+		t.Fatal("reading Store item retired the durable message")
 	}
-	if checked.Revision == 0 {
-		t.Fatal("message check did not return an inbox revision")
+	attemptID := uuid.NewString()
+	if store.BeginServerAuthorizedAckIntent(item.ItemID, attemptID) == nil || !store.CompleteServerAuthorizedAck(item.ItemID, attemptID) {
+		t.Fatalf("ACK Store item %q", item.ItemID)
 	}
-	if got := coordinator.Boundaries()[target]; got != created.Seq {
-		t.Fatalf("boundary before check output commit = %d, want prior %d", got, created.Seq)
-	}
-	if !coordinator.AckMessage(busyCreated.ID, busyCreated.Seq) {
-		t.Fatalf("ACK checked inbox item")
-	}
-	if got := coordinator.Boundaries()[target]; got != busyCreated.Seq {
-		t.Fatalf("boundary after check output commit = %d, want %d", got, busyCreated.Seq)
-	}
-	if seq, err := d.CredentialProxy().SeenUpToSeq(agentID, target); err != nil || seq != busyCreated.Seq {
-		t.Fatalf("Credential Proxy boundary after check = %d, %v", seq, err)
+	if len(store.ListMessageItems()) != 0 || !store.IsAcknowledged(item.ItemID) {
+		t.Fatalf("Store item after ACK = items=%+v acknowledged=%v", store.ListMessageItems(), store.IsAcknowledged(item.ItemID))
 	}
 	if batches := fakeRuntime.snapshot(); len(batches) != 1 {
 		t.Fatalf("message check duplicated runtime body handoff: %+v", batches)
@@ -531,15 +524,17 @@ func TestIdleMessageRealWebSocketCrashRestartRehandsDeliveredMessage(t *testing.
 			// A provider may be stuck in an external process. Keep teardown
 			// bounded so a wedged provider cannot hang the whole test package;
 			// the runner/process-manager closes below remains the final cleanup.
-			terminated := make(chan error, 1)
-			go func() { terminated <- d.canonicalRuntimes.forceTerminateAll() }()
-			select {
-			case err := <-terminated:
-				if err != nil {
-					t.Errorf("force terminate canonical runtime: %v", err)
+			if _, killable := backend.(agent.ResidentRuntimeForceKillable); killable {
+				terminated := make(chan error, 1)
+				go func() { terminated <- d.canonicalRuntimes.forceTerminateAll() }()
+				select {
+				case err := <-terminated:
+					if err != nil {
+						t.Errorf("force terminate canonical runtime: %v", err)
+					}
+				case <-time.After(2 * time.Second):
+					t.Errorf("force terminate canonical runtime timed out")
 				}
-			case <-time.After(2 * time.Second):
-				t.Errorf("force terminate canonical runtime timed out")
 			}
 			// The runner's Run defer normally closes these resources, but the
 			// crash/restart path can detach immediately after the websocket has
@@ -548,8 +543,10 @@ func TestIdleMessageRealWebSocketCrashRestartRehandsDeliveredMessage(t *testing.
 			runner.processes.Close()
 			runner.activity.Close()
 			runner.inboxes.Close()
-			if err := d.canonicalRuntimes.closeAll(); err != nil {
-				t.Errorf("close canonical runtime: %v", err)
+			if _, killable := backend.(agent.ResidentRuntimeForceKillable); killable {
+				if err := d.canonicalRuntimes.closeAll(); err != nil {
+					t.Errorf("close canonical runtime: %v", err)
+				}
 			}
 		}
 		return d, acks, normal.snapshot, normal.observed, teardown

@@ -201,7 +201,7 @@ func (c *APIClient) setHeaders(req *http.Request) {
 		req.Header.Set("X-Agent-ID", c.AgentID)
 	}
 	if c.AgentProxyToken != "" {
-		req.Header.Set("X-Multica-Agent-Proxy-Token", c.AgentProxyToken)
+		req.Header.Set("Authorization", "Bearer "+c.AgentProxyToken)
 	}
 	if c.TaskID != "" {
 		req.Header.Set("X-Task-ID", c.TaskID)

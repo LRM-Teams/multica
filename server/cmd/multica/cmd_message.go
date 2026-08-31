@@ -581,6 +581,15 @@ func withAgentMessageCredentialProxyResponse(
 		return fmt.Errorf("prepare message %s: %w", operation, err)
 	}
 	request.Header.Set("Content-Type", "application/json")
+	tokenFile := strings.TrimSpace(os.Getenv("MULTICA_AGENT_PROXY_TOKEN_FILE"))
+	if tokenFile == "" {
+		return fmt.Errorf("message %s requires MULTICA_AGENT_PROXY_TOKEN_FILE", operation)
+	}
+	proxyToken, err := os.ReadFile(tokenFile)
+	if err != nil || strings.TrimSpace(string(proxyToken)) == "" {
+		return fmt.Errorf("message %s requires a readable Agent Proxy credential", operation)
+	}
+	request.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(proxyToken)))
 	response, err := (&http.Client{Timeout: cli.APITimeout()}).Do(request)
 	if err != nil {
 		return fmt.Errorf("message %s through Credential Proxy: %w", operation, err)

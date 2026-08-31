@@ -57,7 +57,7 @@ func TestAgentInboxRoutesRequireCredentialProxyAuthentication(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "/inbox", nil)
 			if token != "" {
-				req.Header.Set(AgentProxyTokenHeader, token)
+				req.Header.Set(AgentProxyAuthHeader, "Bearer "+token)
 			}
 			rec := httptest.NewRecorder()
 			mux.ServeHTTP(rec, req)
@@ -67,7 +67,7 @@ func TestAgentInboxRoutesRequireCredentialProxyAuthentication(t *testing.T) {
 		})
 	}
 	valid := httptest.NewRequest(http.MethodGet, "/inbox", nil)
-	valid.Header.Set(AgentProxyTokenHeader, "agent-token")
+	valid.Header.Set(AgentProxyAuthHeader, "Bearer agent-token")
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, valid)
 	if rec.Code == http.StatusUnauthorized {

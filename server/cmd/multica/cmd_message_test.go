@@ -32,6 +32,7 @@ func setMessageCredentialProxyEnv(t *testing.T, serverURL string) {
 	t.Setenv("MULTICA_DAEMON_PORT", port)
 	t.Setenv("MULTICA_AGENT_ID", "agent-1")
 	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
+	setTestAgentProxyToken(t)
 }
 
 func TestMessageSendHasNoAgentControlledCursorFlag(t *testing.T) {
@@ -465,6 +466,7 @@ func TestRunAgentMessageSendPostsOpaqueAttachmentIDsInOrder(t *testing.T) {
 		t.Fatalf("server port: %v", err)
 	}
 	t.Setenv("MULTICA_DAEMON_PORT", port)
+	setTestAgentProxyToken(t)
 
 	cmd := newMessageSendCmd()
 	_ = cmd.Flags().Set("target", "#multica")

@@ -34,16 +34,13 @@ func TestNewAPIClientUsesLocalCredentialProxyForAgentRuns(t *testing.T) {
 		if r.URL.Path != "/api/agent/reminders/list" {
 			t.Errorf("path = %q", r.URL.Path)
 		}
-		if got := r.Header.Get("Authorization"); got != "" {
-			t.Errorf("agent process sent authorization %q", got)
+		if got := r.Header.Get("Authorization"); got != "Bearer mpt_test-token" {
+			t.Errorf("agent process authorization = %q", got)
 		}
 		for name, want := range map[string]string{"X-Agent-ID": "agent-1", "X-Workspace-ID": "workspace-1"} {
 			if got := r.Header.Get(name); got != want {
 				t.Errorf("%s = %q, want %q", name, got, want)
 			}
-		}
-		if got := r.Header.Get("X-Multica-Agent-Proxy-Token"); got != "mpt_test-token" {
-			t.Errorf("Agent Proxy token = %q", got)
 		}
 		for _, name := range []string{"X-Task-ID", "X-Agent-Inbox-Event-ID", "X-Agent-Inbox-Delivery-ID", "X-Agent-Inbox-Lease-Token"} {
 			if got := r.Header.Get(name); got != "" {
@@ -121,8 +118,8 @@ func TestFetchWorkspacesUsesLocalCredentialProxyForDaemonAgentRun(t *testing.T) 
 		if r.Method != http.MethodGet || r.URL.Path != "/api/agent/workspace" {
 			t.Errorf("request = %s %s, want GET /api/agent/workspace", r.Method, r.URL.Path)
 		}
-		if got := r.Header.Get("Authorization"); got != "" {
-			t.Errorf("agent process sent authorization %q", got)
+		if got := r.Header.Get("Authorization"); got != "Bearer mpt_test-token" {
+			t.Errorf("agent process authorization = %q", got)
 		}
 		for name, want := range map[string]string{"X-Agent-ID": "agent-1", "X-Workspace-ID": "workspace-1"} {
 			if got := r.Header.Get(name); got != want {

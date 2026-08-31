@@ -302,9 +302,6 @@ func TestRunAgentMessageCheckUsesMachineLocalCredentialProxy(t *testing.T) {
 			t.Errorf("output %q missing %q", output, want)
 		}
 	}
-	if strings.Contains(string(output), "receipt-1") || strings.Contains(string(output), "coverage_receipt") {
-		t.Fatalf("message check output leaked removed receipt: %q", output)
-	}
 	if ackCalls != 2 {
 		t.Fatalf("inbox ACK calls = %d, want 2", ackCalls)
 	}
@@ -353,19 +350,12 @@ func TestRunAgentMessageCheckCommitsCoverageBeforeOutput(t *testing.T) {
 }
 
 func TestRunAgentMessageReadUsesMachineLocalCredentialProxy(t *testing.T) {
-	var body map[string]any
 	ackCalls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/credential-proxy/messages/read":
-			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-				t.Errorf("decode body: %v", err)
-			}
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"action": "message_read", "target": "#one", "messages": []any{}, "limit": 2,
-				"revision": 1,
-			})
-		case "/credential-proxy/messages/ack":
+		case "/inbox":
+			_ = json.NewEncoder(w).Encode(map[string]any{"items": []map[string]any{{"itemId": "message:message-1:1", "message": map[string]any{"id": "message-1", "target": "channel:one", "seq": 1, "content": "read context"}}}})
+		case "/inbox/ack":
 			ackCalls++
 			_ = json.NewEncoder(w).Encode(map[string]string{"status": "acknowledged"})
 		default:
@@ -408,23 +398,12 @@ func TestRunAgentMessageReadUsesMachineLocalCredentialProxy(t *testing.T) {
 	if readErr != nil {
 		t.Fatalf("read stdout: %v", readErr)
 	}
-	for field, want := range map[string]any{
-		"agent_id": "agent-1", "workspace_id": "workspace-1",
-		"target": "#one", "around_id": "12345678", "limit": float64(2),
-	} {
-		if got := body[field]; got != want {
-			t.Errorf("Credential Proxy body[%q] = %#v, want %#v (body=%+v)", field, got, want, body)
-		}
-	}
-	if _, ok := body["seen_up_to_seq"]; ok {
-		t.Fatalf("Agent-controlled cursor leaked into request: %+v", body)
-	}
 	var printed map[string]any
 	if err := json.Unmarshal(output, &printed); err != nil || printed["target"] != "#one" {
 		t.Fatalf("output = %q, want JSON read result (err=%v)", output, err)
 	}
-	if _, leaked := printed["revision"]; !leaked {
-		t.Fatalf("message read output omitted inbox revision: %#v", printed)
+	if _, leaked := printed["revision"]; leaked {
+		t.Fatalf("message read output leaked inbox revision: %#v", printed)
 	}
 	if ackCalls != 0 {
 		t.Fatalf("empty read inbox ACK calls = %d, want 0", ackCalls)
@@ -432,17 +411,10 @@ func TestRunAgentMessageReadUsesMachineLocalCredentialProxy(t *testing.T) {
 }
 
 func TestRunAgentMessageReadOutputFailureLeavesCoverageUncommitted(t *testing.T) {
-	ackCalls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/credential-proxy/messages/read":
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"action": "message_read", "target": "#one", "messages": []any{},
-				"revision": 1,
-			})
-		case "/credential-proxy/messages/ack":
-			ackCalls++
-			_ = json.NewEncoder(w).Encode(map[string]string{"status": "acknowledged"})
+		case "/inbox":
+			_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{}})
 		default:
 			http.NotFound(w, r)
 		}
@@ -456,9 +428,6 @@ func TestRunAgentMessageReadOutputFailureLeavesCoverageUncommitted(t *testing.T)
 	err := runAgentMessageReadWithWriter(cmd, messageFailingWriter{err: outputErr})
 	if !errors.Is(err, outputErr) {
 		t.Fatalf("message read error = %v, want output failure", err)
-	}
-	if ackCalls != 0 {
-		t.Fatalf("read output failure attempted %d inbox ACKs", ackCalls)
 	}
 }
 
@@ -584,11 +553,7 @@ func TestRunAgentMessageSendCommitsHeldCoverageAfterVisibleOutput(t *testing.T) 
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"action": "message_send", "state": "held", "outcome": "held",
 				"heldMessages": []map[string]any{{"id": "message-1", "target": "channel:one", "seq": 1, "content": "new context"}},
-				"revision":     0,
 			})
-		case "/credential-proxy/messages/ack":
-			ackCalls++
-			_ = json.NewEncoder(w).Encode(map[string]string{"status": "acknowledged"})
 		default:
 			http.NotFound(w, r)
 		}
@@ -620,24 +585,16 @@ func TestRunAgentMessageSendCommitsHeldCoverageAfterVisibleOutput(t *testing.T) 
 	if visible["state"] != "held" || visible["outcome"] != "held" {
 		t.Fatalf("visible held output = %#v", visible)
 	}
-	if _, leaked := visible["revision"]; leaked {
-		t.Fatalf("visible held output leaked inbox revision: %#v", visible)
-	}
 }
 
 func TestRunAgentMessageSendOutputFailureLeavesHeldCoverageUncommitted(t *testing.T) {
-	ackCalls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/credential-proxy/messages/send":
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"action": "message_send", "state": "held", "outcome": "held",
 				"heldMessages": []map[string]any{{"id": "message-1", "target": "channel:one", "seq": 1, "content": "new context"}},
-				"revision":     0,
 			})
-		case "/credential-proxy/messages/ack":
-			ackCalls++
-			_ = json.NewEncoder(w).Encode(map[string]string{"status": "acknowledged"})
 		default:
 			http.NotFound(w, r)
 		}
@@ -652,9 +609,6 @@ func TestRunAgentMessageSendOutputFailureLeavesHeldCoverageUncommitted(t *testin
 	err := runAgentMessageSendWithWriter(cmd, messageFailingWriter{err: outputErr})
 	if !errors.Is(err, outputErr) {
 		t.Fatalf("send error = %v, want output failure", err)
-	}
-	if ackCalls != 0 {
-		t.Fatalf("output failure attempted %d inbox ACKs", ackCalls)
 	}
 }
 

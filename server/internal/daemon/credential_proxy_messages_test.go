@@ -48,17 +48,14 @@ func TestCredentialProxyMessageCheckDrainsCoordinatorWithoutExecutionIdentity(t 
 	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
 		t.Fatalf("decode message check: %v", err)
 	}
-	if len(result.Messages) != messageCheckDefaultLimit || !result.HasMore || result.Remaining != 1 || result.Revision == 0 {
+	if len(result.Messages) != messageCheckDefaultLimit || !result.HasMore || result.Remaining != 1 {
 		t.Fatalf("message check result = %+v", result)
 	}
 	if got := coordinator.Boundaries(); len(got) != 0 {
 		t.Fatalf("message check advanced boundary before CLI output: %+v", got)
 	}
-	if err := coordinator.AcknowledgeInbox("channel:one", result.Messages[len(result.Messages)-1].Seq, result.Revision); err != nil {
-		t.Fatalf("ack checked inbox: %v", err)
-	}
-	if got := coordinator.Boundaries()["channel:one"]; got != messageCheckDefaultLimit {
-		t.Fatalf("committed check boundary = %d, want %d", got, messageCheckDefaultLimit)
+	if got := len(coordinator.MessageItemsSnapshot()); got != 4 {
+		t.Fatalf("message check retired items = %d, want 4", got)
 	}
 }
 
@@ -148,11 +145,8 @@ func TestCredentialProxyMessageReadUsesCachedCredentialAndWritesTargetBoundary(t
 	if got := coordinator.Boundaries()["channel:one"]; got != 0 {
 		t.Fatalf("message read advanced boundary before CLI output: %d", got)
 	}
-	if err := coordinator.AcknowledgeInbox("channel:one", 7, coordinator.InboxRevision()); err != nil {
-		t.Fatalf("ack read inbox: %v", err)
-	}
-	if got, err := d.CredentialProxy().SeenUpToSeq("agent-1", "channel:one"); err != nil || got != 7 {
-		t.Fatalf("seen boundary = %d, %v; want 7, nil", got, err)
+	if got := len(coordinator.MessageItemsSnapshot()); got != 0 {
+		t.Fatalf("read changed durable item count=%d, want 0 after earlier explicit ACK", got)
 	}
 	invalidCoverageResponse = true
 	invalid := httptest.NewRecorder()
@@ -160,7 +154,7 @@ func TestCredentialProxyMessageReadUsesCachedCredentialAndWritesTargetBoundary(t
 	if invalid.Code != http.StatusBadGateway {
 		t.Fatalf("cross-target read coverage status=%d body=%s, want 502", invalid.Code, invalid.Body.String())
 	}
-	if got := coordinator.Boundaries()["channel:one"]; got != 7 {
+	if got := coordinator.Boundaries()["channel:one"]; got != 0 {
 		t.Fatalf("invalid read coverage changed boundary to %d", got)
 	}
 }
@@ -202,7 +196,7 @@ func TestCredentialProxySearchAndResolveNeverExposeOrPrepareCoverage(t *testing.
 	d := &Daemon{cfg: cfg}
 	registerTestAgentProxyServerCredential(t, d, "workspace-1", "runtime-1", "agent-1", "cached-token")
 	registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", &MessageCoordinator{
-		key: InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, pending: make(map[string]map[int64]protocol.AgentMessageProjection),
+		key: InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"},
 	})
 
 	for name, test := range map[string]struct {
@@ -428,14 +422,10 @@ func TestCredentialProxyMessageSendHoldsLocalPendingWithoutUpstreamSend(t *testi
 	if messages, _ := response["heldMessages"].([]any); len(messages) != 3 {
 		t.Fatalf("held Messages=%+v, want newest three", response["heldMessages"])
 	}
-	revision, _ := response["revision"].(float64)
-	if revision == 0 {
-		t.Fatalf("local hold omitted inbox revision: %+v", response)
-	}
 	if boundary := coordinator.Boundaries()["channel:one"]; boundary != 0 {
 		t.Fatalf("pre-output held boundary=%d, want 0", boundary)
 	}
-	if got := len(coordinator.pending["channel:one"]); got != 4 {
+	if got := len(coordinator.MessageItemsSnapshot()); got != 4 {
 		t.Fatalf("pre-output Pending count=%d, want 4", got)
 	}
 	firstDraft, found, err := d.CredentialProxy().LoadMessageDraft("workspace-1", "agent-1", "#one", time.Now())
@@ -452,22 +442,16 @@ func TestCredentialProxyMessageSendHoldsLocalPendingWithoutUpstreamSend(t *testi
 	if err := json.Unmarshal(repeated.Body.Bytes(), &repeatedResponse); err != nil {
 		t.Fatalf("decode repeated local hold: %v", err)
 	}
-	repeatedRevision, _ := repeatedResponse["revision"].(float64)
-	if repeatedRevision == 0 {
-		t.Fatalf("repeated local hold omitted inbox revision: %+v", repeatedResponse)
-	}
 	repeatedDraft, found, err := d.CredentialProxy().LoadMessageDraft("workspace-1", "agent-1", "#one", time.Now())
 	if err != nil || !found || repeatedDraft.IdempotencyKey != firstDraft.IdempotencyKey || repeatedDraft.HoldCount != 2 {
 		t.Fatalf("repeated held Draft=%+v first=%+v found=%v err=%v", repeatedDraft, firstDraft, found, err)
 	}
-	if sends != 0 || len(coordinator.pending["channel:one"]) != 4 || coordinator.Boundaries()["channel:one"] != 0 {
-		t.Fatalf("repeated hold sent=%d pending=%d boundary=%d", sends, len(coordinator.pending["channel:one"]), coordinator.Boundaries()["channel:one"])
+	if sends != 0 || len(coordinator.MessageItemsSnapshot()) != 4 || coordinator.Boundaries()["channel:one"] != 0 {
+		t.Fatalf("repeated hold sent=%d pending=%d boundary=%d", sends, len(coordinator.MessageItemsSnapshot()), coordinator.Boundaries()["channel:one"])
 	}
-	if err := coordinator.AcknowledgeInbox("channel:one", 4, uint64(repeatedRevision)); err != nil {
-		t.Fatalf("ack held inbox: %v", err)
-	}
-	if boundary, known := coordinator.ContextBoundary("channel:one"); !known || boundary != 4 {
-		t.Fatalf("committed held boundary=%d known=%v, want 4 true", boundary, known)
+	items := coordinator.MessageItemsSnapshot()
+	if len(items) != 4 || !coordinator.inboxStore.Ack(items[0].ItemID) {
+		t.Fatalf("item ACK did not retire one Store item: %+v", items)
 	}
 }
 
@@ -478,9 +462,6 @@ func TestCredentialProxyMessageSendConsumesServerRaceHoldAndKeepsDraft(t *testin
 		t.Fatalf("NewMessageCoordinator: %v", err)
 	}
 	completeCoordinatorRecovery(t, coordinator)
-	if err := coordinator.MarkRead("channel:one", 2); err != nil {
-		t.Fatalf("seed Context Boundary: %v", err)
-	}
 	var sent map[string]any
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -508,11 +489,11 @@ func TestCredentialProxyMessageSendConsumesServerRaceHoldAndKeepsDraft(t *testin
 	if rec.Code != http.StatusOK {
 		t.Fatalf("server race hold status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if sent["seen_up_to_seq"] != float64(2) || sent["context_target"] != "channel:one" {
+	if sent["context_target"] != "channel:one" {
 		t.Fatalf("server race preflight request=%+v", sent)
 	}
-	if boundary, known := coordinator.ContextBoundary("channel:one"); !known || boundary != 2 {
-		t.Fatalf("pre-output held boundary=%d known=%v, want 2 true", boundary, known)
+	if boundary, known := coordinator.ContextBoundary("channel:one"); !known || boundary != 0 {
+		t.Fatalf("pre-output held boundary=%d known=%v, want 0 true", boundary, known)
 	}
 	draft, found, err := d.CredentialProxy().LoadMessageDraft("workspace-1", "agent-1", "#one", time.Now())
 	if err != nil || !found || draft.SeenUpToSeq != 5 || draft.HoldCount != 1 {
@@ -530,8 +511,8 @@ func TestCredentialProxyMessageSendConsumesServerRaceHoldAndKeepsDraft(t *testin
 			t.Fatalf("proxy leaked %s: %+v", private, response)
 		}
 	}
-	if boundary, known := coordinator.ContextBoundary("channel:one"); !known || boundary != 2 {
-		t.Fatalf("server-held boundary=%d known=%v, want unchanged 2 true", boundary, known)
+	if boundary, known := coordinator.ContextBoundary("channel:one"); !known || boundary != 0 {
+		t.Fatalf("server-held boundary=%d known=%v, want unchanged 0 true", boundary, known)
 	}
 }
 
@@ -542,9 +523,6 @@ func TestCredentialProxyMessageSendDraftReusesIdentityAndAnywayOnlyOnReplay(t *t
 		t.Fatalf("NewMessageCoordinator: %v", err)
 	}
 	completeCoordinatorRecovery(t, coordinator)
-	if err := coordinator.MarkRead("channel:one", 2); err != nil {
-		t.Fatalf("seed Context Boundary: %v", err)
-	}
 	var sent map[string]any
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/agent/messages/send" {

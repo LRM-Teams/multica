@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
 
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -127,6 +128,9 @@ func registerTestWorkspaceDaemonInbox(t *testing.T, runner *WorkspaceDaemon, key
 	}
 	if runner.config.WorkspaceID != key.WorkspaceID {
 		t.Fatalf("Runner Workspace %q cannot register Inbox %+v", runner.config.WorkspaceID, key)
+	}
+	if coordinator.inboxStore == nil {
+		coordinator.SetInboxStore(newAgentAppInboxStore(key.AgentID, filepath.Join(t.TempDir(), "test-inbox", key.AgentID, "state.json")))
 	}
 	runner.inboxes.mu.Lock()
 	if previous := runner.inboxes.inboxes[key.AgentID]; previous.coordinator != nil && previous.coordinator != coordinator {

@@ -92,6 +92,7 @@ type AgentAppInboxMintInput struct {
 
 type AgentAppInboxStore struct {
 	mu                     sync.Mutex
+	messageMintMu          sync.Mutex
 	ownerAgentID           string
 	path                   string
 	items                  map[string]AgentAppInboxItem
@@ -250,6 +251,29 @@ func (s *AgentAppInboxStore) Mint(input AgentAppInboxMintInput) (AgentAppInboxIt
 	return item, nil
 }
 
+// MintMessage atomically inserts a message item and reports whether this
+// source revision was newly accepted. The item identity is the durable
+// idempotency key; callers must not maintain a second pending index.
+func (s *AgentAppInboxStore) MintMessage(message protocol.AgentMessageProjection) (AgentAppInboxItem, bool, error) {
+	itemID := "message:" + message.ID + ":" + strconv.FormatInt(message.Seq, 10)
+	s.messageMintMu.Lock()
+	defer s.messageMintMu.Unlock()
+	s.mu.Lock()
+	_, exists := s.items[itemID]
+	_, acknowledged := s.acknowledgedSources[agentAppInboxIdentity(agentInboxAppID, "message", AgentAppInboxSourceRef{Kind: "message", ID: message.ID, Revision: strconv.FormatInt(message.Seq, 10)})]
+	s.mu.Unlock()
+	if exists || acknowledged {
+		item, _ := s.Item(itemID)
+		return item, false, nil
+	}
+	item, err := s.Mint(AgentAppInboxMintInput{
+		AppID: agentInboxAppID, NotificationClass: "message",
+		SourceRef: AgentAppInboxSourceRef{Kind: "message", ID: message.ID, Revision: strconv.FormatInt(message.Seq, 10)},
+		Message:   &message,
+	})
+	return item, err == nil, err
+}
+
 func (s *AgentAppInboxStore) List() []AgentAppInboxItem {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -273,6 +297,9 @@ func (s *AgentAppInboxStore) ListMessageItems() []AgentAppInboxItem {
 			result = append(result, item)
 		}
 	}
+	sort.SliceStable(result, func(i, j int) bool {
+		return result[i].Message.Seq < result[j].Message.Seq
+	})
 	return result
 }
 
@@ -281,6 +308,17 @@ func (s *AgentAppInboxStore) Item(itemID string) (AgentAppInboxItem, bool) {
 	defer s.mu.Unlock()
 	item, ok := s.items[itemID]
 	return item, ok
+}
+
+func (s *AgentAppInboxStore) IsAcknowledged(itemID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, source := range s.acknowledgedSources {
+		if source.ItemID == itemID {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *AgentAppInboxStore) ListAcknowledgedSources() []AgentAppInboxAcknowledgedSource {

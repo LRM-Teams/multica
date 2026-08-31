@@ -469,7 +469,16 @@ func commitPendingNoticeForTest(commit func()) bool {
 
 func newTestMessageCoordinator(t *testing.T, agentRoot string, deliver RuntimeMessageDelivery, activity MessageReceivedActivity) (*MessageCoordinator, error) {
 	t.Helper()
-	return NewMessageCoordinator(InboxKey{WorkspaceID: "workspace-test", AgentID: "agent-test"}, agentRoot, deliver, activity)
+	coordinator, err := NewMessageCoordinator(InboxKey{WorkspaceID: "workspace-test", AgentID: "agent-test"}, agentRoot, deliver, activity)
+	if err != nil {
+		return nil, err
+	}
+	store := newAgentAppInboxStore("agent-test", filepath.Join(agentRoot, "inbox", "state.json"))
+	if err := store.Restore(); err != nil {
+		return nil, err
+	}
+	coordinator.SetInboxStore(store)
+	return coordinator, nil
 }
 
 func (r *pendingNoticeRuntime) Execute(context.Context, string, agent.ExecOptions) (*agent.Session, error) {
@@ -1233,11 +1242,9 @@ func TestMessageCoordinatorInboxACKAdvancesOnlyAfterACK(t *testing.T) {
 	if c.Boundaries()["channel:one"] != 0 {
 		t.Fatal("preflight advanced boundary")
 	}
-	if err := c.AcknowledgeInbox("channel:one", 3, result.Revision); err != nil {
-		t.Fatal(err)
-	}
-	if c.Boundaries()["channel:one"] != 3 {
-		t.Fatal("ACK did not advance boundary")
+	items := c.MessageItemsSnapshot()
+	if len(items) != 3 || !c.inboxStore.Ack(items[0].ItemID) {
+		t.Fatal("item ACK did not retire one item")
 	}
 }
 
@@ -1268,7 +1275,7 @@ func TestMessageCoordinatorAcceptsBeforeAckWithoutAdvancingBoundary(t *testing.T
 	}
 }
 
-func TestMessageCoordinatorMarkReadAdvancesOnlyRequestedTarget(t *testing.T) {
+func TestMessageCoordinatorReadLeavesStoreItemsActive(t *testing.T) {
 	root := t.TempDir()
 	var handoffs, activities int
 	coordinator, err := newTestMessageCoordinator(t, root, func(context.Context, []protocol.AgentMessageProjection) error {
@@ -1289,20 +1296,23 @@ func TestMessageCoordinatorMarkReadAdvancesOnlyRequestedTarget(t *testing.T) {
 			t.Fatalf("Accept: %v", err)
 		}
 	}
-	if err := coordinator.MarkRead("channel:one", 5); err != nil {
-		t.Fatalf("MarkRead: %v", err)
+	if got := coordinator.Boundaries()["channel:one"]; got != 0 {
+		t.Fatalf("read advanced boundary = %d, want 0", got)
 	}
-	if got, want := coordinator.Boundaries(), map[string]int64{"channel:one": 5}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("boundaries = %v, want %v", got, want)
+	if len(coordinator.MessageItemsSnapshot()) < 2 {
+		t.Fatalf("read retired inbox items, want durable items retained")
 	}
-	if _, found := coordinator.pending["channel:one"]; found {
-		t.Fatalf("read target pending remains: %+v", coordinator.pending)
+	var got string
+	for _, item := range coordinator.MessageItemsSnapshot() {
+		if item.Message != nil && item.Message.Target == "channel:two" && item.Message.Seq == 8 {
+			got = item.Message.ID
+		}
 	}
-	if got := coordinator.pending["channel:two"][8].ID; got != "two-8" {
+	if got != "two-8" {
 		t.Fatalf("other target pending = %q, want two-8", got)
 	}
 	if handoffs != 0 || activities != 0 {
-		t.Fatalf("MarkRead caused handoffs=%d activities=%d, want neither", handoffs, activities)
+		t.Fatalf("read caused handoffs=%d activities=%d, want neither", handoffs, activities)
 	}
 }
 
@@ -1762,13 +1772,10 @@ func TestMessageCoordinatorBoundaryResetsWithCoordinator(t *testing.T) {
 	if got := second.Boundaries(); len(got) != 0 {
 		t.Fatalf("replacement restored process-local boundaries: %v", got)
 	}
-	if accepted, err := second.Accept(context.Background(), delivery); err != nil || !accepted {
-		t.Fatalf("replacement Accept = %v, %v; want replay accepted", accepted, err)
+	if accepted, err := second.Accept(context.Background(), delivery); err != nil || accepted {
+		t.Fatalf("replacement Accept = %v, %v; want durable duplicate", accepted, err)
 	}
-	if err := second.Flush(context.Background()); err != nil {
-		t.Fatalf("replacement Flush: %v", err)
-	}
-	if len(replayed) != 1 || replayed[0].ID != delivery.Message.ID {
+	if len(replayed) != 0 {
 		t.Fatalf("replacement replay = %+v", replayed)
 	}
 }
@@ -1823,11 +1830,8 @@ func TestMessageCoordinatorPreflightReturnsRevision(t *testing.T) {
 	if err != nil || !result.Held || result.Revision == 0 || len(result.Messages) != 3 {
 		t.Fatalf("preflight=%+v err=%v", result, err)
 	}
-	if err := c.AcknowledgeInbox("channel:one", 5, result.Revision); err != nil {
-		t.Fatal(err)
-	}
-	if c.Boundaries()["channel:one"] != 5 {
-		t.Fatal("ACK did not retire inbox")
+	if len(c.MessageItemsSnapshot()) != 5 {
+		t.Fatal("read/preflight changed durable inbox")
 	}
 }
 

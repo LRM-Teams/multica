@@ -289,8 +289,8 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 	if got := coordinator.Boundaries()[target]; got != created.Seq {
 		t.Fatalf("boundary before check output commit = %d, want prior %d", got, created.Seq)
 	}
-	if err := coordinator.AcknowledgeInbox(target, busyCreated.Seq, checked.Revision); err != nil {
-		t.Fatalf("ACK checked inbox: %v", err)
+	if !coordinator.AckMessage(busyCreated.ID, busyCreated.Seq) {
+		t.Fatalf("ACK checked inbox item")
 	}
 	if got := coordinator.Boundaries()[target]; got != busyCreated.Seq {
 		t.Fatalf("boundary after check output commit = %d, want %d", got, busyCreated.Seq)

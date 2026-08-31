@@ -5,10 +5,11 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -91,12 +92,10 @@ func (k InboxKey) normalized() (InboxKey, error) {
 // the provider, retained it in Pending, or identified it as a duplicate.
 type MessageCoordinator struct {
 	mu                  sync.Mutex
-	deliveryMu          sync.Mutex
 	key                 InboxKey
 	root                string
 	boundaries          map[string]int64
-	pending             map[string]map[int64]protocol.AgentMessageProjection
-	accepted            map[string]struct{}
+	flushOwner          atomic.Bool
 	deliver             RuntimeMessageDelivery
 	activity            MessageReceivedActivity
 	queueActivity       MessageQueueActivity
@@ -169,15 +168,19 @@ func NewMessageCoordinator(key InboxKey, agentRoot string, deliver RuntimeMessag
 	if deliver == nil {
 		return nil, errors.New("runtime message delivery is required")
 	}
-	return &MessageCoordinator{
+	coordinator := &MessageCoordinator{
 		key: key, root: agentRoot, boundaries: make(map[string]int64),
-		pending:  make(map[string]map[int64]protocol.AgentMessageProjection),
-		accepted: make(map[string]struct{}), deliver: deliver, activity: activity,
+		deliver: deliver, activity: activity,
 		noticeCoordinatorID: uuid.NewString(),
 		noticeCoalesce:      pendingNoticeCoalesceWindow,
 		noticeRetry:         pendingNoticeRetryDelay,
 		providerRetryState:  providerDeliveryRetryIdle,
-	}, nil
+	}
+	coordinator.inboxStore = newAgentAppInboxStore(key.AgentID, filepath.Join(agentRoot, "app-inbox", "state.json"))
+	if err := coordinator.inboxStore.Restore(); err != nil {
+		return nil, fmt.Errorf("restore Agent App Inbox: %w", err)
+	}
+	return coordinator, nil
 }
 
 // ConfigurePendingNotices installs the busy-runtime Notice seam. Durations are
@@ -217,7 +220,7 @@ func (c *MessageCoordinator) Close() {
 func (c *MessageCoordinator) ContextBoundary(target string) (int64, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if len(c.pending[target]) > 0 {
+	if c.hasMessageItemsForTarget(target) {
 		return 0, false
 	}
 	return c.boundaries[target], true
@@ -246,41 +249,27 @@ func (c *MessageCoordinator) PreflightMessageSend(target string) (MessageSendFre
 		return MessageSendFreshness{}, errors.New("Message coordinator is closed")
 	}
 	result := MessageSendFreshness{SeenUpToSeq: c.boundaries[target]}
-	hasPending := len(c.pending[target]) > 0
+	hasPending := c.hasMessageItemsForTarget(target)
 	c.mu.Unlock()
 	if !hasPending {
 		return result, nil
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	covered := pendingForCoverageTarget(c.pending[target])
+	allMessages := c.messageItemsForTarget(target)
+	covered := allMessages
 	if len(covered) > messageCheckMaxLimit {
 		covered = covered[len(covered)-messageCheckMaxLimit:]
 	}
 	result.Held = true
-	result.NewMessageCount = int64(len(c.pending[target]))
+	result.NewMessageCount = int64(len(allMessages))
 	if len(covered) > 0 {
 		result.LatestSeq = covered[len(covered)-1].Seq
 	}
 	result.Messages = covered
-	result.Omitted = int64(len(c.pending[target]) - len(covered))
+	result.Omitted = 0
 	result.Revision = c.pendingGeneration
 	return result, nil
-}
-
-// AcknowledgeInbox retires the exact inbox revision after the caller has
-// presented or processed its messages. A stale revision is rejected and a
-// repeated ACK for an already retired revision is harmless.
-func (c *MessageCoordinator) AcknowledgeInbox(target string, throughSeq int64, revision uint64) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.closed {
-		return errors.New("Message coordinator is closed")
-	}
-	if revision != c.pendingGeneration && len(c.pending[target]) > 0 {
-		return errStaleInboxRevision
-	}
-	return c.markReadLocked(target, throughSeq)
 }
 
 // Accept installs a Delivery into Pending. It returns false for a duplicate;
@@ -291,48 +280,28 @@ func (c *MessageCoordinator) Accept(_ context.Context, delivery protocol.AgentDe
 		return false, err
 	}
 	c.mu.Lock()
-	if c.inboxStore != nil {
-		if _, err := c.inboxStore.Mint(AgentAppInboxMintInput{
-			AppID: agentInboxAppID, NotificationClass: "message",
-			SourceRef: AgentAppInboxSourceRef{Kind: "message", ID: delivery.Message.ID, Revision: strconv.FormatInt(delivery.Message.Seq, 10)},
-			Message:   &delivery.Message,
-		}); err != nil {
-			c.mu.Unlock()
-			return false, fmt.Errorf("persist message inbox item: %w", err)
-		}
-	}
-	created, err := c.acceptLocked(delivery)
-	activity := c.queueActivity
+	closed := c.closed
 	c.mu.Unlock()
+	if closed {
+		return false, errors.New("Message coordinator is closed")
+	}
+	if c.inboxStore == nil {
+		return false, errors.New("agent app inbox store is unavailable")
+	}
+	_, created, err := c.inboxStore.MintMessage(delivery.Message)
+	if err != nil {
+		return false, fmt.Errorf("persist message inbox item: %w", err)
+	}
+	activity := c.queueActivity
+	if created {
+		c.mu.Lock()
+		c.pendingGeneration++
+		c.mu.Unlock()
+	}
 	if err == nil && created && activity != nil {
 		activity([]protocol.AgentMessageProjection{delivery.Message}, 1)
 	}
 	return created, err
-}
-
-func (c *MessageCoordinator) acceptLocked(delivery protocol.AgentDeliverPayload) (bool, error) {
-	if c.closed {
-		return false, errors.New("Message coordinator is closed")
-	}
-	key := messageIdentityKey(delivery.Message)
-	if _, ok := c.accepted[key]; ok {
-		return false, nil
-	}
-	if delivery.Seq <= c.boundaries[delivery.Target] {
-		return false, nil
-	}
-	bySequence := c.pending[delivery.Target]
-	if bySequence == nil {
-		bySequence = make(map[int64]protocol.AgentMessageProjection)
-		c.pending[delivery.Target] = bySequence
-	}
-	if existing, ok := bySequence[delivery.Seq]; ok && existing.ID != delivery.Message.ID {
-		return false, fmt.Errorf("target %q sequence %d maps to conflicting Messages", delivery.Target, delivery.Seq)
-	}
-	bySequence[delivery.Seq] = delivery.Message
-	c.accepted[key] = struct{}{}
-	c.pendingGeneration++
-	return true, nil
 }
 
 // Flush hands all currently Pending bodies to an idle runtime in target-sequence
@@ -364,11 +333,6 @@ func (c *MessageCoordinator) beginProviderDeliveryRetry(messages []protocol.Agen
 		if message.Target == "" || message.Seq <= 0 {
 			continue
 		}
-		if c.pending[message.Target] == nil {
-			c.pending[message.Target] = make(map[int64]protocol.AgentMessageProjection)
-		}
-		c.pending[message.Target][message.Seq] = message
-		c.accepted[messageIdentityKey(message)] = struct{}{}
 		if first, ok := firstPendingSeq[message.Target]; !ok || message.Seq < first {
 			firstPendingSeq[message.Target] = message.Seq
 		}
@@ -411,52 +375,22 @@ func (c *MessageCoordinator) finishProviderDeliveryRetry(success bool) {
 // batch solely because Pending exists. Body delivery stays on idle Accept→Flush
 // (workspace daemon) and recovery Flush; the agent may also `message check`.
 func (c *MessageCoordinator) NotifyPendingAfterTurn() {
+	if c == nil || c.inboxStore == nil || len(c.inboxStore.ListMessageItems()) == 0 {
+		return
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.closed || c.pendingCountLocked() == 0 {
+	if c.closed {
 		return
 	}
 	c.schedulePendingNoticeLocked(c.noticeCoalesce)
 }
 
-// MarkRead advances exactly one target's Context Boundary after the Credential
-// Proxy has returned canonical history to the Agent. It has no runtime delivery
-// or Activity side effect: explicit history reading is its own boundary.
-func (c *MessageCoordinator) MarkRead(target string, throughSeq int64) error {
-	target = strings.TrimSpace(target)
-	if target == "" || throughSeq <= 0 {
-		return errors.New("message read target and positive sequence are required")
+func (c *MessageCoordinator) AckMessage(messageID string, seq int64) bool {
+	if c == nil || c.inboxStore == nil {
+		return false
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.closed {
-		return errors.New("Message coordinator is closed")
-	}
-	return c.markReadLocked(target, throughSeq)
-}
-
-func (c *MessageCoordinator) markReadLocked(target string, throughSeq int64) error {
-	if throughSeq > c.boundaries[target] {
-		c.boundaries[target] = throughSeq
-	}
-	pendingChanged := false
-	var removed []protocol.AgentMessageProjection
-	for sequence, message := range c.pending[target] {
-		if sequence <= c.boundaries[target] {
-			removed = append(removed, message)
-			delete(c.pending[target], sequence)
-			delete(c.accepted, messageIdentityKey(message))
-			pendingChanged = true
-		}
-	}
-	if len(c.pending[target]) == 0 {
-		delete(c.pending, target)
-	}
-	if pendingChanged {
-		c.pendingGeneration++
-	}
-	c.emitQueueActivityLocked(removed, -1)
-	return nil
+	return c.inboxStore.Ack("message:" + messageID + ":" + fmt.Sprint(seq))
 }
 
 func (c *MessageCoordinator) flush(ctx context.Context, scheduleBusyNotice bool) error {
@@ -465,10 +399,10 @@ func (c *MessageCoordinator) flush(ctx context.Context, scheduleBusyNotice bool)
 }
 
 func (c *MessageCoordinator) flushWithResult(ctx context.Context, scheduleBusyNotice bool) (bool, error) {
-	if !c.deliveryMu.TryLock() {
+	if !c.flushOwner.CompareAndSwap(false, true) {
 		return false, errRuntimeMessageDeliveryInProgress
 	}
-	defer c.deliveryMu.Unlock()
+	defer c.flushOwner.Store(false)
 	return c.flushWithResultBody(ctx, scheduleBusyNotice)
 }
 
@@ -487,8 +421,6 @@ func (c *MessageCoordinator) flushWithResultBody(ctx context.Context, scheduleBu
 			for _, item := range inboxItems {
 				messages = append(messages, *item.Message)
 			}
-		} else {
-			messages = c.pendingBatchLocked()
 		}
 		if len(messages) == 0 {
 			c.mu.Unlock()
@@ -513,63 +445,32 @@ func (c *MessageCoordinator) flushWithResultBody(ctx context.Context, scheduleBu
 			c.activity(messages)
 		}
 
-		c.mu.Lock()
 		if c.closed {
-			c.mu.Unlock()
 			return delivered, errRuntimeMessageDeliveryInvalidated
 		}
-		if c.inboxStore != nil {
-			for _, item := range inboxItems {
-				if !c.inboxStore.Ack(item.ItemID) {
-					c.mu.Unlock()
-					return delivered, errRuntimeMessageDeliveryInvalidated
-				}
+		for _, item := range inboxItems {
+			if !c.inboxStore.Ack(item.ItemID) {
+				return delivered, errRuntimeMessageDeliveryInvalidated
 			}
-			c.mu.Unlock()
-			continue
 		}
-		if !c.pendingContentsCurrentLocked(messages, identities) {
-			if c.inboxStore != nil {
-				for _, item := range inboxItems {
-					c.inboxStore.Ack(item.ItemID)
-				}
-				c.mu.Unlock()
-				return delivered, nil
-			}
-			c.mu.Unlock()
-			return delivered, errRuntimeMessageDeliveryInvalidated
-		}
+		c.emitQueueActivityLocked(messages, -1)
+		c.mu.Lock()
 		for _, message := range messages {
 			if message.Seq > c.boundaries[message.Target] {
 				c.boundaries[message.Target] = message.Seq
 			}
-			delete(c.pending[message.Target], message.Seq)
-			delete(c.accepted, messageIdentityKey(message))
-			if len(c.pending[message.Target]) == 0 {
-				delete(c.pending, message.Target)
-			}
 		}
-		c.emitQueueActivityLocked(messages, -1)
 		c.pendingGeneration++
 		c.mu.Unlock()
 	}
 }
 
 func (c *MessageCoordinator) pendingContentsCurrentLocked(messages []protocol.AgentMessageProjection, identities []string) bool {
-	if len(messages) != len(identities) {
-		return false
-	}
-	for i, message := range messages {
-		current, ok := c.pending[message.Target][message.Seq]
-		if !ok || messageIdentityKey(current) != identities[i] {
-			return false
-		}
-	}
-	return true
+	return len(messages) == len(identities)
 }
 
 func (c *MessageCoordinator) schedulePendingNoticeLocked(delay time.Duration) {
-	if c.closed || c.deliverInboxNotice == nil || c.noticeTimer != nil || len(c.pending) == 0 {
+	if c.closed || c.deliverInboxNotice == nil || c.noticeTimer != nil || c.inboxStore == nil || len(c.inboxStore.ListMessageItems()) == 0 {
 		return
 	}
 	if delay <= 0 {
@@ -639,8 +540,13 @@ func (c *MessageCoordinator) deliverPendingNotice(ctx context.Context) error {
 }
 
 func (c *MessageCoordinator) pendingNoticeLocked() InboxNoticeSnapshot {
-	targets := make([]string, 0, len(c.pending))
-	for target := range c.pending {
+	items := c.inboxStore.ListMessageItems()
+	byTarget := make(map[string][]protocol.AgentMessageProjection)
+	targets := make([]string, 0)
+	for _, item := range items {
+		byTarget[item.Message.Target] = append(byTarget[item.Message.Target], *item.Message)
+	}
+	for target := range byTarget {
 		targets = append(targets, target)
 	}
 	sort.Strings(targets)
@@ -649,21 +555,33 @@ func (c *MessageCoordinator) pendingNoticeLocked() InboxNoticeSnapshot {
 	targetFingerprints := make(map[string]string, len(targets))
 	targetKeys := make([]string, 0, len(targets))
 	for _, target := range targets {
-		sequences := make([]int64, 0, len(c.pending[target]))
-		for sequence := range c.pending[target] {
-			sequences = append(sequences, sequence)
+		messages := byTarget[target]
+		sequences := make([]int64, 0, len(messages))
+		for _, message := range messages {
+			sequences = append(sequences, message.Seq)
 		}
 		sort.Slice(sequences, func(i, j int) bool { return sequences[i] < sequences[j] })
 		replyTarget := ""
 		if len(sequences) > 0 {
-			replyTarget = c.pending[target][sequences[0]].ReplyTarget
+			for _, message := range messages {
+				if message.Seq == sequences[0] {
+					replyTarget = message.ReplyTarget
+					break
+				}
+			}
 		}
 		notice.ChangedTargets = append(notice.ChangedTargets, agent.ResidentPendingTarget{Target: replyTarget, PendingCount: len(sequences)})
 		targetKeys = append(targetKeys, target)
 		notice.TotalPending += len(sequences)
 		targetIdentities := make([]string, 0, len(sequences))
 		for _, sequence := range sequences {
-			identity := messageIdentityKey(c.pending[target][sequence])
+			identity := ""
+			for _, message := range messages {
+				if message.Seq == sequence {
+					identity = messageIdentityKey(message)
+					break
+				}
+			}
 			identities = append(identities, identity)
 			targetIdentities = append(targetIdentities, identity)
 		}
@@ -700,14 +618,6 @@ func (c *MessageCoordinator) Boundaries() map[string]int64 {
 	return cloneBoundaries(c.boundaries)
 }
 
-// PendingSnapshot returns a pure copy for aggregate Inbox inspection. Unlike
-// message check/read, it creates no coverage receipt and advances no boundary.
-func (c *MessageCoordinator) PendingSnapshot() []protocol.AgentMessageProjection {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return append([]protocol.AgentMessageProjection(nil), c.pendingBatchLocked()...)
-}
-
 // MessageItemsSnapshot exposes the durable inbox projection for recovery and
 // transport code. It deliberately does not expose coordinator internals.
 func (c *MessageCoordinator) MessageItemsSnapshot() []AgentAppInboxItem {
@@ -727,20 +637,11 @@ func (c *MessageCoordinator) Acknowledgement(delivery protocol.AgentDeliverPaylo
 }
 
 func (c *MessageCoordinator) pendingBatchLocked() []protocol.AgentMessageProjection {
-	targets := make([]string, 0, len(c.pending))
-	for target := range c.pending {
-		targets = append(targets, target)
-	}
-	sort.Strings(targets)
-	var batch []protocol.AgentMessageProjection
-	for _, target := range targets {
-		sequences := make([]int64, 0, len(c.pending[target]))
-		for sequence := range c.pending[target] {
-			sequences = append(sequences, sequence)
-		}
-		sort.Slice(sequences, func(i, j int) bool { return sequences[i] < sequences[j] })
-		for _, sequence := range sequences {
-			batch = append(batch, c.pending[target][sequence])
+	items := c.MessageItemsSnapshot()
+	batch := make([]protocol.AgentMessageProjection, 0, len(items))
+	for _, item := range items {
+		if item.Message != nil {
+			batch = append(batch, *item.Message)
 		}
 	}
 	return batch
@@ -772,11 +673,23 @@ func (c *MessageCoordinator) InboxRevision() uint64 {
 }
 
 func (c *MessageCoordinator) pendingCountLocked() int {
-	total := 0
-	for _, messages := range c.pending {
-		total += len(messages)
+	return len(c.MessageItemsSnapshot())
+}
+
+func (c *MessageCoordinator) hasMessageItemsForTarget(target string) bool {
+	return len(c.messageItemsForTarget(target)) > 0
+}
+
+func (c *MessageCoordinator) messageItemsForTarget(target string) []protocol.AgentMessageProjection {
+	items := c.MessageItemsSnapshot()
+	result := make([]protocol.AgentMessageProjection, 0, len(items))
+	for _, item := range items {
+		if item.Message != nil && item.Message.Target == target {
+			result = append(result, *item.Message)
+		}
 	}
-	return total
+	sort.Slice(result, func(i, j int) bool { return result[i].Seq < result[j].Seq })
+	return result
 }
 
 func validateAgentDelivery(delivery protocol.AgentDeliverPayload) error {

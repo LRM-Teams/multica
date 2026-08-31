@@ -497,20 +497,46 @@ func runAgentMessageReadWithWriter(cmd *cobra.Command, output io.Writer) error {
 }
 
 func outputAgentMessageReadThroughCredentialProxy(body map[string]any, output io.Writer) error {
-	var result map[string]any
-	err := withAgentMessageCredentialProxyResponse("read", body, func(ctx context.Context, responseBody io.Reader) error {
-		return consumeInboxResponse(
-			ctx,
-			responseBody,
-			output,
-			&result,
-			func(w io.Writer) error { return cli.PrintJSON(w, result) },
-		)
-	})
+	agentID := strings.TrimSpace(os.Getenv("MULTICA_AGENT_ID"))
+	workspaceID := strings.TrimSpace(os.Getenv("MULTICA_WORKSPACE_ID"))
+	port, err := strconv.Atoi(strings.TrimSpace(os.Getenv("MULTICA_DAEMON_PORT")))
+	if agentID == "" || workspaceID == "" || err != nil || port < 1 || port > 65535 {
+		return errors.New("message read requires Agent and Workspace identity and a valid daemon port")
+	}
+	ctx, cancel := cli.APIContext(context.Background())
+	defer cancel()
+	endpoint := fmt.Sprintf("http://127.0.0.1:%d/inbox", port)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return err
 	}
-	return nil
+	request.Header.Set("X-Agent-ID", agentID)
+	request.Header.Set("X-Workspace-ID", workspaceID)
+	response, err := (&http.Client{Timeout: cli.APITimeout()}).Do(request)
+	if err != nil {
+		return fmt.Errorf("read messages through daemon proxy: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return fmt.Errorf("read messages through daemon proxy: %s", response.Status)
+	}
+	var snapshot messageInboxCLIResponse
+	if err := json.NewDecoder(response.Body).Decode(&snapshot); err != nil {
+		return fmt.Errorf("decode inbox response: %w", err)
+	}
+	target, _ := body["target"].(string)
+	result := map[string]any{"action": "message_read", "target": target, "messages": []protocol.AgentMessageProjection{}}
+	messages := result["messages"].([]protocol.AgentMessageProjection)
+	for _, item := range snapshot.Items {
+		if item.Message != nil && (target == "" || item.Message.Target == target || strings.TrimPrefix(target, "#") == strings.TrimPrefix(item.Message.Target, "channel:")) {
+			messages = append(messages, *item.Message)
+		}
+	}
+	if limit, ok := body["limit"].(int); ok && limit > 0 && len(messages) > limit {
+		messages = messages[:limit]
+	}
+	result["messages"] = messages
+	return cli.PrintJSON(output, result)
 }
 
 func postAgentMessageThroughCredentialProxy(operation string, body map[string]any, out any) error {

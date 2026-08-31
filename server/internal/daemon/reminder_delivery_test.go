@@ -27,7 +27,7 @@ func registerReminderNoticeRuntime(t *testing.T, d *Daemon, busy bool) *idleMess
 	d.runtimeIndex["runtime-a"] = Runtime{ID: "runtime-a", WorkspaceID: "workspace-a"}
 	d.mu.Unlock()
 	runner := registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-a", AgentID: testInboxAgentID}, "runtime-a", &MessageCoordinator{
-		key: InboxKey{WorkspaceID: "workspace-a", AgentID: testInboxAgentID}, pending: make(map[string]map[int64]protocol.AgentMessageProjection),
+		key: InboxKey{WorkspaceID: "workspace-a", AgentID: testInboxAgentID},
 	})
 	if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: testInboxAgentID, RuntimeID: "runtime-a"}); err != nil {
 		t.Fatal(err)

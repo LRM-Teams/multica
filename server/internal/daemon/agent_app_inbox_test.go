@@ -281,10 +281,7 @@ func TestAgentInboxHTTPAggregatesWithoutPreparingMessageCoverage(t *testing.T) {
 	root := t.TempDir()
 	d := New(Config{WorkspacesRoot: root, BindingStateRoot: root, BindingsRoot: root, MachineID: "machine-1", WorkspaceID: "workspace-1"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	coordinator := &MessageCoordinator{
-		key: InboxKey{WorkspaceID: "workspace-1", AgentID: testInboxAgentID},
-		pending: map[string]map[int64]protocol.AgentMessageProjection{
-			"channel:one": {4: {ID: "message-4", Target: "channel:one", Seq: 4, InitiatorName: "alice"}},
-		},
+		key:        InboxKey{WorkspaceID: "workspace-1", AgentID: testInboxAgentID},
 		boundaries: map[string]int64{"channel:one": 2},
 	}
 	registerTestInbox(t, d, coordinator.key, "runtime-1", coordinator)
@@ -350,7 +347,7 @@ func TestAgentInboxHTTPAckIsStrictAndConsumesExactReminderReceipt(t *testing.T) 
 	}
 	d := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	registerTestAgentProxyServerCredential(t, d, "workspace-1", "runtime-1", testInboxAgentID, "agent-token")
-	registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: testInboxAgentID}, "runtime-1", &MessageCoordinator{key: InboxKey{WorkspaceID: "workspace-1", AgentID: testInboxAgentID}, pending: make(map[string]map[int64]protocol.AgentMessageProjection)})
+	registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: testInboxAgentID}, "runtime-1", &MessageCoordinator{key: InboxKey{WorkspaceID: "workspace-1", AgentID: testInboxAgentID}})
 	d.reminderCache.receipts[testInboxReminderID] = []reminderDueReceipt{{
 		Job:         protocol.ReminderTimerJob{OwnerAgentID: testInboxAgentID, ReminderID: testInboxReminderID, Version: 3},
 		ServerAcked: true, WakeEnqueued: true,

@@ -101,14 +101,6 @@ func (runner *WorkspaceDaemon) messageContextBoundary(agentID, target string) (i
 	return seq, known, nil
 }
 
-func (runner *WorkspaceDaemon) readMessageBoundary(agentID, target string, throughSeq int64) error {
-	coordinator, _, ok := runner.messageCoordinator(agentID)
-	if !ok {
-		return errors.New("Message coordinator is unavailable")
-	}
-	return coordinator.MarkRead(target, throughSeq)
-}
-
 func coordinatorRevision(runner *WorkspaceDaemon, agentID string) uint64 {
 	coordinator, _, ok := runner.messageCoordinator(agentID)
 	if !ok {
@@ -198,8 +190,8 @@ func (runner *WorkspaceDaemon) acceptMessageDelivery(ctx context.Context, delive
 	))
 	if delivery.Message.Directed && launch.QueueState == protocol.AgentStartQueueRunning {
 		if err := runner.runtimes.deliverActiveDirectedProjection(ctx, delivery.AgentID, runtimeID, delivery.Message); err == nil {
-			if markErr := coordinator.MarkRead(delivery.Target, delivery.Seq); markErr != nil {
-				return messageDeliveryAcceptance{}, fmt.Errorf("persist directed Message boundary: %w", markErr)
+			if !coordinator.AckMessage(delivery.Message.ID, delivery.Seq) {
+				return messageDeliveryAcceptance{}, errors.New("retire directed Message inbox item")
 			}
 			result.ack = coordinator.Acknowledgement(delivery)
 			result.outcome = messageDeliveryProviderAccepted
@@ -272,8 +264,6 @@ func (runner *WorkspaceDaemon) retryQueuedMessageAfterProviderFailure(coordinato
 	if runner == nil || coordinator == nil {
 		return
 	}
-	coordinator.deliveryMu.Lock()
-	defer coordinator.deliveryMu.Unlock()
 	items := coordinator.MessageItemsSnapshot()
 	messages := make([]protocol.AgentMessageProjection, 0, len(items))
 	for _, item := range items {
@@ -341,6 +331,9 @@ func (runner *WorkspaceDaemon) acknowledgeConsumedDelivery(delivery protocol.Age
 	coordinator, _, ok := runner.messageCoordinator(delivery.AgentID)
 	if !ok {
 		return messageDeliveryAcceptance{}, false
+	}
+	if coordinator.inboxStore != nil && coordinator.inboxStore.IsAcknowledged("message:"+delivery.Message.ID+":"+fmt.Sprint(delivery.Seq)) {
+		return messageDeliveryAcceptance{ack: coordinator.Acknowledgement(delivery), outcome: messageDeliveryDeduplicated}, true
 	}
 	seq, known, err := runner.messageContextBoundary(delivery.AgentID, delivery.Target)
 	if err != nil || !known || delivery.Seq > seq {

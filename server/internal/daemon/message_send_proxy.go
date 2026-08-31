@@ -348,7 +348,6 @@ func localMessageSendHeldResponse(target string, freshness MessageSendFreshness,
 		"newMessageCount":     freshness.NewMessageCount,
 		"shownMessageCount":   int64(len(freshness.Messages)),
 		"omittedMessageCount": freshness.Omitted,
-		"revision":            freshness.Revision,
 	}
 	return response
 }

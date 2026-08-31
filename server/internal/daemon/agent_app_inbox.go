@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/pkg/agent"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 const (
@@ -40,17 +41,18 @@ type AgentAppInboxPrimaryAction struct {
 }
 
 type AgentAppInboxItem struct {
-	Source            string                     `json:"source"`
-	ItemID            string                     `json:"itemId"`
-	AppID             string                     `json:"appId"`
-	NotificationClass string                     `json:"notificationClass"`
-	SourceRef         AgentAppInboxSourceRef     `json:"sourceRef"`
-	PrimaryAction     AgentAppInboxPrimaryAction `json:"primaryAction"`
-	ActionCLI         string                     `json:"actionCli"`
-	Retention         string                     `json:"retention"`
-	Title             string                     `json:"title,omitempty"`
-	Summary           string                     `json:"summary,omitempty"`
-	CreatedAtMS       int64                      `json:"createdAtMs"`
+	Source            string                           `json:"source"`
+	ItemID            string                           `json:"itemId"`
+	AppID             string                           `json:"appId"`
+	NotificationClass string                           `json:"notificationClass"`
+	SourceRef         AgentAppInboxSourceRef           `json:"sourceRef"`
+	PrimaryAction     AgentAppInboxPrimaryAction       `json:"primaryAction"`
+	ActionCLI         string                           `json:"actionCli"`
+	Retention         string                           `json:"retention"`
+	Title             string                           `json:"title,omitempty"`
+	Summary           string                           `json:"summary,omitempty"`
+	CreatedAtMS       int64                            `json:"createdAtMs"`
+	Message           *protocol.AgentMessageProjection `json:"message,omitempty"`
 }
 
 type AgentAppInboxAcknowledgedSource struct {
@@ -85,6 +87,7 @@ type AgentAppInboxMintInput struct {
 	SourceRef         AgentAppInboxSourceRef
 	Title             string
 	Summary           string
+	Message           *protocol.AgentMessageProjection
 }
 
 type AgentAppInboxStore struct {
@@ -143,7 +146,7 @@ func (s *AgentAppInboxStore) Restore() error {
 	items := make(map[string]AgentAppInboxItem, len(state.Items))
 	index := make(map[string]string, len(state.Items))
 	for _, item := range state.Items {
-		if err := validatePersistedReminderInboxItem(item); err != nil {
+		if err := validatePersistedInboxItem(item); err != nil {
 			return err
 		}
 		identity := agentAppInboxIdentity(item.AppID, item.NotificationClass, item.SourceRef)
@@ -183,13 +186,19 @@ func (s *AgentAppInboxStore) Mint(input AgentAppInboxMintInput) (AgentAppInboxIt
 	defer s.mu.Unlock()
 	input.AppID = strings.TrimSpace(input.AppID)
 	input.NotificationClass = strings.TrimSpace(input.NotificationClass)
-	if input.AppID != reminderInboxAppID {
+	if input.AppID != reminderInboxAppID && input.AppID != agentInboxAppID {
 		return AgentAppInboxItem{}, fmt.Errorf("unknown appId: %s", input.AppID)
 	}
-	if input.NotificationClass != reminderDueClass {
+	if input.AppID == reminderInboxAppID && input.NotificationClass != reminderDueClass || input.AppID == agentInboxAppID && input.NotificationClass != "message" {
 		return AgentAppInboxItem{}, fmt.Errorf("unknown notificationClass for %s: %s", input.AppID, input.NotificationClass)
 	}
-	ref, err := normalizeReminderSourceRef(input.SourceRef)
+	ref := input.SourceRef
+	var err error
+	if input.AppID == reminderInboxAppID {
+		ref, err = normalizeReminderSourceRef(input.SourceRef)
+	} else if input.Message == nil || input.Message.ID == "" || ref.Kind != "message" || ref.ID != input.Message.ID || ref.Revision == "" {
+		err = errors.New("message inbox sourceRef and projection are invalid")
+	}
 	if err != nil {
 		return AgentAppInboxItem{}, err
 	}
@@ -203,6 +212,9 @@ func (s *AgentAppInboxStore) Mint(input AgentAppInboxMintInput) (AgentAppInboxIt
 	}
 	identity := agentAppInboxIdentity(input.AppID, input.NotificationClass, ref)
 	itemID := reminderInboxItemID(ref)
+	if input.AppID == agentInboxAppID {
+		itemID = "message:" + ref.ID + ":" + ref.Revision
+	}
 	createdAt := s.now().UnixMilli()
 	if existingID := s.identityIndex[identity]; existingID != "" {
 		createdAt = s.items[existingID].CreatedAtMS
@@ -220,6 +232,11 @@ func (s *AgentAppInboxStore) Mint(input AgentAppInboxMintInput) (AgentAppInboxIt
 		Title:             title,
 		Summary:           summary,
 		CreatedAtMS:       createdAt,
+		Message:           input.Message,
+	}
+	if input.AppID == agentInboxAppID {
+		item.PrimaryAction = AgentAppInboxPrimaryAction{Kind: "run_command", CommandID: "message.check"}
+		item.Retention = "until_explicit_ack"
 	}
 	previous := s.captureMemoryStateLocked()
 	s.items[itemID] = item
@@ -243,6 +260,19 @@ func (s *AgentAppInboxStore) List() []AgentAppInboxItem {
 	sort.Slice(result, func(i, j int) bool {
 		return result[i].CreatedAtMS > result[j].CreatedAtMS || result[i].CreatedAtMS == result[j].CreatedAtMS && result[i].ItemID < result[j].ItemID
 	})
+	return result
+}
+
+// ListMessageItems returns the durable message projection owned by this app
+// inbox. Callers receive copies and must use Ack to retire an item.
+func (s *AgentAppInboxStore) ListMessageItems() []AgentAppInboxItem {
+	items := s.List()
+	result := make([]AgentAppInboxItem, 0, len(items))
+	for _, item := range items {
+		if item.AppID == agentInboxAppID && item.NotificationClass == "message" && item.Message != nil {
+			result = append(result, item)
+		}
+	}
 	return result
 }
 
@@ -441,7 +471,23 @@ func validatePersistedReminderInboxItem(item AgentAppInboxItem) error {
 	return nil
 }
 
+func validatePersistedInboxItem(item AgentAppInboxItem) error {
+	if item.AppID == agentInboxAppID {
+		if item.Source != "app" || item.NotificationClass != "message" || item.Retention != "until_explicit_ack" || item.Message == nil || item.SourceRef.Kind != "message" || item.SourceRef.ID != item.Message.ID || item.SourceRef.Revision == "" || item.ItemID != "message:"+item.SourceRef.ID+":"+item.SourceRef.Revision || item.CreatedAtMS < 0 {
+			return errors.New("agent app inbox persisted message item invalid")
+		}
+		return nil
+	}
+	return validatePersistedReminderInboxItem(item)
+}
+
 func validatePersistedAcknowledgedSource(source AgentAppInboxAcknowledgedSource) error {
+	if source.AppID == agentInboxAppID {
+		if source.NotificationClass != "message" || source.SourceRef.Kind != "message" || source.SourceRef.ID == "" || source.SourceRef.Revision == "" || source.ItemID != "message:"+source.SourceRef.ID+":"+source.SourceRef.Revision || source.AcknowledgedAtMS < 0 {
+			return errors.New("agent app inbox acknowledged message source invalid")
+		}
+		return nil
+	}
 	ref, err := normalizeReminderSourceRef(source.SourceRef)
 	if err != nil || source.AppID != reminderInboxAppID || source.NotificationClass != reminderDueClass || source.ItemID != reminderInboxItemID(ref) || source.AcknowledgedAtMS < 0 {
 		return errors.New("agent app inbox acknowledged source invalid")
@@ -450,6 +496,12 @@ func validatePersistedAcknowledgedSource(source AgentAppInboxAcknowledgedSource)
 }
 
 func validatePersistedAckIntent(intent AgentAppInboxAckIntent) error {
+	if intent.AppID == agentInboxAppID {
+		if intent.NotificationClass != "message" || intent.SourceRef.Kind != "message" || intent.SourceRef.ID == "" || intent.SourceRef.Revision == "" || intent.ItemID != "message:"+intent.SourceRef.ID+":"+intent.SourceRef.Revision || strings.TrimSpace(intent.AckAttemptID) == "" || intent.CreatedAtMS < 0 {
+			return errors.New("agent app inbox message ACK intent invalid")
+		}
+		return nil
+	}
 	ref, err := normalizeReminderSourceRef(intent.SourceRef)
 	if err != nil || intent.AppID != reminderInboxAppID || intent.NotificationClass != reminderDueClass || intent.ItemID != reminderInboxItemID(ref) || strings.TrimSpace(intent.AckAttemptID) == "" || intent.CreatedAtMS < 0 {
 		return errors.New("agent app inbox ACK intent invalid")

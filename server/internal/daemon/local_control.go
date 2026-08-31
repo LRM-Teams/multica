@@ -21,8 +21,8 @@ func (d *Daemon) localControlAuthorized(r *http.Request) bool {
 // registerLocalControlRoutes assembles the routes exposed by the binding
 // child listener. Route implementations stay with their owning boundary.
 func (d *Daemon) registerLocalControlRoutes(mux *http.ServeMux) {
-	mux.Handle("/internal/agent-api/inbox", d.authenticateAgentProxyRequest(d.agentAppInboxHandler()))
-	mux.Handle("/internal/agent-api/inbox/ack", d.authenticateAgentProxyRequest(d.agentAppInboxAckHandler()))
+	mux.Handle("/inbox", d.authenticateAgentProxyRequest(d.agentAppInboxHandler()))
+	mux.Handle("/inbox/ack", d.authenticateAgentProxyRequest(d.agentAppInboxAckHandler()))
 	d.registerCredentialProxyMessageRoutes(mux)
 	mux.Handle("/api/", d.authenticateAgentProxyRequest(d.credentialProxyAgentAPIHandler()))
 }

@@ -3,6 +3,7 @@ package daemon
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"io"
@@ -17,6 +18,62 @@ import (
 	"github.com/multica-ai/multica/server/pkg/agent"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
+
+func TestAgentInboxStorePersistsMessageItemAndIdempotentACK(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	owner := "11111111-1111-4111-8111-111111111111"
+	store := newAgentAppInboxStore(owner, path)
+	message := protocol.AgentMessageProjection{ID: "message-1", Target: "channel:one", Seq: 7, Content: "hello"}
+	item, err := store.Mint(AgentAppInboxMintInput{AppID: agentInboxAppID, NotificationClass: "message", SourceRef: AgentAppInboxSourceRef{Kind: "message", ID: message.ID, Revision: "3"}, Message: &message, Title: "message", Summary: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored := newAgentAppInboxStore(owner, path)
+	if err := restored.Restore(); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := restored.Item(item.ItemID)
+	if !ok || got.Message == nil || got.Message.ID != message.ID {
+		t.Fatalf("restored item=%+v found=%v", got, ok)
+	}
+	if !restored.Ack(item.ItemID) || restored.Ack(item.ItemID) {
+		t.Fatal("message ACK was not idempotent")
+	}
+}
+
+func TestAgentInboxRoutesRequireCredentialProxyAuthentication(t *testing.T) {
+	root := t.TempDir()
+	d := New(Config{WorkspacesRoot: root, BindingStateRoot: root, BindingsRoot: root, MachineID: "machine-1"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	registerTestAgentProxyServerCredential(t, d, "workspace-1", "runtime-1", testInboxAgentID, "agent-token")
+	// The helper's registration key is intentionally test-scoped; add the wire
+	// token key used by the route itself so this exercises the real middleware.
+	tokenHash := sha256.Sum256([]byte("agent-token"))
+	d.agentProxyCredentialMu.Lock()
+	d.agentProxyCredentials[tokenHash] = authenticatedAgentProxy{Inbox: InboxKey{WorkspaceID: "workspace-1", AgentID: testInboxAgentID}, RuntimeID: "runtime-1"}
+	d.agentProxyCredentialMu.Unlock()
+	mux := http.NewServeMux()
+	d.registerLocalControlRoutes(mux)
+	for name, token := range map[string]string{"missing": "", "forged": "mpt_forged"} {
+		t.Run(name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/inbox", nil)
+			if token != "" {
+				req.Header.Set(AgentProxyTokenHeader, token)
+			}
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("unauthenticated inbox status = %d, want %d", rec.Code, http.StatusUnauthorized)
+			}
+		})
+	}
+	valid := httptest.NewRequest(http.MethodGet, "/inbox", nil)
+	valid.Header.Set(AgentProxyTokenHeader, "agent-token")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, valid)
+	if rec.Code == http.StatusUnauthorized {
+		t.Fatalf("valid Agent Proxy credential was rejected: %s", rec.Body.String())
+	}
+}
 
 const (
 	testInboxAgentID    = "11111111-1111-4111-8111-111111111111"
@@ -228,8 +285,7 @@ func TestAgentInboxHTTPAggregatesWithoutPreparingMessageCoverage(t *testing.T) {
 		pending: map[string]map[int64]protocol.AgentMessageProjection{
 			"channel:one": {4: {ID: "message-4", Target: "channel:one", Seq: 4, InitiatorName: "alice"}},
 		},
-		boundaries:       map[string]int64{"channel:one": 2},
-		coverageReceipts: make(map[string]*coverageReceipt),
+		boundaries: map[string]int64{"channel:one": 2},
 	}
 	registerTestInbox(t, d, coordinator.key, "runtime-1", coordinator)
 	store, err := d.agentAppInboxes.Store(testInboxAgentID)
@@ -252,17 +308,11 @@ func TestAgentInboxHTTPAggregatesWithoutPreparingMessageCoverage(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if response.PendingMessages != 1 || response.PendingTargets != 1 || response.PendingAppItems != 1 || len(response.Items) != 2 {
+	if response.PendingMessages != 1 || response.PendingTargets != 0 || response.PendingAppItems != 1 || len(response.Items) != 1 {
 		t.Fatalf("aggregate response = %+v", response)
 	}
 	if got := coordinator.Boundaries()["channel:one"]; got != 2 {
 		t.Fatalf("inbox check advanced boundary to %d", got)
-	}
-	coordinator.mu.Lock()
-	prepared := len(coordinator.coverageReceipts)
-	coordinator.mu.Unlock()
-	if prepared != 0 {
-		t.Fatalf("inbox check prepared %d message coverage receipts", prepared)
 	}
 }
 

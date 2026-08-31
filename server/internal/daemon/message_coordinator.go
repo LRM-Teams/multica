@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -28,11 +29,11 @@ const (
 // MessageCheckResult is the bounded concrete-body projection returned through
 // the machine-local Credential Proxy.
 type MessageCheckResult struct {
-	Messages        []protocol.AgentMessageProjection `json:"messages"`
-	HasMore         bool                              `json:"has_more"`
-	Remaining       int                               `json:"remaining"`
-	Status          string                            `json:"status"`
-	CoverageReceipt string                            `json:"_coverage_receipt,omitempty"`
+	Messages  []protocol.AgentMessageProjection `json:"messages"`
+	HasMore   bool                              `json:"has_more"`
+	Remaining int                               `json:"remaining"`
+	Status    string                            `json:"status"`
+	Revision  uint64                            `json:"revision"`
 }
 
 // RuntimeMessageDelivery is the boundary at which concrete Message
@@ -105,12 +106,17 @@ type MessageCoordinator struct {
 	noticeCoalesce      time.Duration
 	noticeRetry         time.Duration
 	noticeTimer         *time.Timer
-	coverageReceipts    map[string]*coverageReceipt
-	coverageNow         func() time.Time
-	coverageTTL         time.Duration
-	coverageCapacity    int
 	closed              bool
 	providerRetryState  providerDeliveryRetryState
+	inboxStore          *AgentAppInboxStore
+}
+
+// SetInboxStore binds the coordinator to the daemon's single per-agent inbox
+// store. The daemon installs this before exposing the coordinator.
+func (c *MessageCoordinator) SetInboxStore(store *AgentAppInboxStore) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.inboxStore = store
 }
 
 // MessageSendFreshness is the local preflight result for one target.  The
@@ -123,7 +129,7 @@ type MessageSendFreshness struct {
 	Messages        []protocol.AgentMessageProjection
 	Omitted         int64
 	Held            bool
-	CoverageReceipt string
+	Revision        uint64
 }
 
 type pendingNoticeCommitState uint8
@@ -149,6 +155,7 @@ var (
 	errRuntimeMessageDeliveryInProgress  = errors.New("runtime Message delivery is already in progress")
 	errRuntimeMessageDeliveryInvalidated = errors.New("runtime Message delivery was invalidated")
 	errPendingNoticeGenerationChanged    = errors.New("Pending Notice generation changed before suppression commit")
+	errStaleInboxRevision                = errors.New("stale inbox revision")
 )
 
 func NewMessageCoordinator(key InboxKey, agentRoot string, deliver RuntimeMessageDelivery, activity MessageReceivedActivity) (*MessageCoordinator, error) {
@@ -169,10 +176,6 @@ func NewMessageCoordinator(key InboxKey, agentRoot string, deliver RuntimeMessag
 		noticeCoordinatorID: uuid.NewString(),
 		noticeCoalesce:      pendingNoticeCoalesceWindow,
 		noticeRetry:         pendingNoticeRetryDelay,
-		coverageReceipts:    make(map[string]*coverageReceipt),
-		coverageNow:         time.Now,
-		coverageTTL:         coverageReceiptDefaultTTL,
-		coverageCapacity:    coverageReceiptDefaultCapacity,
 		providerRetryState:  providerDeliveryRetryIdle,
 	}, nil
 }
@@ -204,7 +207,6 @@ func (c *MessageCoordinator) Close() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.closed = true
-	c.coverageReceipts = nil
 	if c.noticeTimer != nil {
 		c.noticeTimer.Stop()
 		c.noticeTimer = nil
@@ -231,9 +233,8 @@ func (c *MessageCoordinator) SendBoundarySnapshot(target string) int64 {
 }
 
 // PreflightMessageSend checks one canonical target after the caller has saved
-// its local Draft. Pending is represented by one two-phase coverage receipt:
-// only the newest three concrete bodies are returned, while commit advances
-// through the complete represented Pending range.
+// its local Draft. Pending is represented by the coordinator's current inbox
+// revision; callers must acknowledge that revision after presenting the body.
 func (c *MessageCoordinator) PreflightMessageSend(target string) (MessageSendFreshness, error) {
 	target = strings.TrimSpace(target)
 	if target == "" {
@@ -250,20 +251,36 @@ func (c *MessageCoordinator) PreflightMessageSend(target string) (MessageSendFre
 	if !hasPending {
 		return result, nil
 	}
-	offer, err := c.PrepareCoverage(CoverageRequest{Kind: CoverageHold, Target: target, Limit: messageCheckMaxLimit})
-	if err != nil {
-		return result, err
-	}
-	if offer.ReceiptID == "" {
-		return result, errors.New("freshness hold coverage is unavailable")
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	covered := pendingForCoverageTarget(c.pending[target])
+	if len(covered) > messageCheckMaxLimit {
+		covered = covered[len(covered)-messageCheckMaxLimit:]
 	}
 	result.Held = true
-	result.NewMessageCount = int64(offer.CoveredCount)
-	result.LatestSeq = offer.ThroughSeq
-	result.Messages = offer.Messages
-	result.Omitted = int64(offer.CoveredCount - len(offer.Messages))
-	result.CoverageReceipt = offer.ReceiptID
+	result.NewMessageCount = int64(len(c.pending[target]))
+	if len(covered) > 0 {
+		result.LatestSeq = covered[len(covered)-1].Seq
+	}
+	result.Messages = covered
+	result.Omitted = int64(len(c.pending[target]) - len(covered))
+	result.Revision = c.pendingGeneration
 	return result, nil
+}
+
+// AcknowledgeInbox retires the exact inbox revision after the caller has
+// presented or processed its messages. A stale revision is rejected and a
+// repeated ACK for an already retired revision is harmless.
+func (c *MessageCoordinator) AcknowledgeInbox(target string, throughSeq int64, revision uint64) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return errors.New("Message coordinator is closed")
+	}
+	if revision != c.pendingGeneration && len(c.pending[target]) > 0 {
+		return errStaleInboxRevision
+	}
+	return c.markReadLocked(target, throughSeq)
 }
 
 // Accept installs a Delivery into Pending. It returns false for a duplicate;
@@ -274,6 +291,16 @@ func (c *MessageCoordinator) Accept(_ context.Context, delivery protocol.AgentDe
 		return false, err
 	}
 	c.mu.Lock()
+	if c.inboxStore != nil {
+		if _, err := c.inboxStore.Mint(AgentAppInboxMintInput{
+			AppID: agentInboxAppID, NotificationClass: "message",
+			SourceRef: AgentAppInboxSourceRef{Kind: "message", ID: delivery.Message.ID, Revision: strconv.FormatInt(delivery.Message.Seq, 10)},
+			Message:   &delivery.Message,
+		}); err != nil {
+			c.mu.Unlock()
+			return false, fmt.Errorf("persist message inbox item: %w", err)
+		}
+	}
 	created, err := c.acceptLocked(delivery)
 	activity := c.queueActivity
 	c.mu.Unlock()
@@ -284,6 +311,9 @@ func (c *MessageCoordinator) Accept(_ context.Context, delivery protocol.AgentDe
 }
 
 func (c *MessageCoordinator) acceptLocked(delivery protocol.AgentDeliverPayload) (bool, error) {
+	if c.closed {
+		return false, errors.New("Message coordinator is closed")
+	}
 	key := messageIdentityKey(delivery.Message)
 	if _, ok := c.accepted[key]; ok {
 		return false, nil
@@ -397,15 +427,15 @@ func (c *MessageCoordinator) MarkRead(target string, throughSeq int64) error {
 	if target == "" || throughSeq <= 0 {
 		return errors.New("message read target and positive sequence are required")
 	}
-	if !c.deliveryMu.TryLock() {
-		return errors.New("runtime Message delivery is in progress")
-	}
-	defer c.deliveryMu.Unlock()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
 		return errors.New("Message coordinator is closed")
 	}
+	return c.markReadLocked(target, throughSeq)
+}
+
+func (c *MessageCoordinator) markReadLocked(target string, throughSeq int64) error {
 	if throughSeq > c.boundaries[target] {
 		c.boundaries[target] = throughSeq
 	}
@@ -450,7 +480,16 @@ func (c *MessageCoordinator) flushWithResultBody(ctx context.Context, scheduleBu
 			c.mu.Unlock()
 			return delivered, errors.New("Message coordinator is closed")
 		}
-		messages := c.pendingBatchLocked()
+		var messages []protocol.AgentMessageProjection
+		var inboxItems []AgentAppInboxItem
+		if c.inboxStore != nil {
+			inboxItems = c.inboxStore.ListMessageItems()
+			for _, item := range inboxItems {
+				messages = append(messages, *item.Message)
+			}
+		} else {
+			messages = c.pendingBatchLocked()
+		}
 		if len(messages) == 0 {
 			c.mu.Unlock()
 			return delivered, nil
@@ -475,7 +514,28 @@ func (c *MessageCoordinator) flushWithResultBody(ctx context.Context, scheduleBu
 		}
 
 		c.mu.Lock()
-		if c.closed || !c.pendingContentsCurrentLocked(messages, identities) {
+		if c.closed {
+			c.mu.Unlock()
+			return delivered, errRuntimeMessageDeliveryInvalidated
+		}
+		if c.inboxStore != nil {
+			for _, item := range inboxItems {
+				if !c.inboxStore.Ack(item.ItemID) {
+					c.mu.Unlock()
+					return delivered, errRuntimeMessageDeliveryInvalidated
+				}
+			}
+			c.mu.Unlock()
+			continue
+		}
+		if !c.pendingContentsCurrentLocked(messages, identities) {
+			if c.inboxStore != nil {
+				for _, item := range inboxItems {
+					c.inboxStore.Ack(item.ItemID)
+				}
+				c.mu.Unlock()
+				return delivered, nil
+			}
 			c.mu.Unlock()
 			return delivered, errRuntimeMessageDeliveryInvalidated
 		}
@@ -621,6 +681,19 @@ func messageIdentityKey(message protocol.AgentMessageProjection) string {
 	return message.ID + "\x00" + message.Target + "\x00" + fmt.Sprint(message.Seq)
 }
 
+func pendingForCoverageTarget(bySequence map[int64]protocol.AgentMessageProjection) []protocol.AgentMessageProjection {
+	sequences := make([]int64, 0, len(bySequence))
+	for sequence := range bySequence {
+		sequences = append(sequences, sequence)
+	}
+	sort.Slice(sequences, func(i, j int) bool { return sequences[i] < sequences[j] })
+	result := make([]protocol.AgentMessageProjection, 0, len(sequences))
+	for _, sequence := range sequences {
+		result = append(result, bySequence[sequence])
+	}
+	return result
+}
+
 func (c *MessageCoordinator) Boundaries() map[string]int64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -633,6 +706,15 @@ func (c *MessageCoordinator) PendingSnapshot() []protocol.AgentMessageProjection
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return append([]protocol.AgentMessageProjection(nil), c.pendingBatchLocked()...)
+}
+
+// MessageItemsSnapshot exposes the durable inbox projection for recovery and
+// transport code. It deliberately does not expose coordinator internals.
+func (c *MessageCoordinator) MessageItemsSnapshot() []AgentAppInboxItem {
+	if c == nil || c.inboxStore == nil {
+		return nil
+	}
+	return c.inboxStore.ListMessageItems()
 }
 
 // Acknowledgement constructs the wire receipt after Accept succeeds. Emission
@@ -678,6 +760,15 @@ func (c *MessageCoordinator) PendingCount() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.pendingCountLocked()
+}
+
+func (c *MessageCoordinator) InboxRevision() uint64 {
+	if c == nil {
+		return 0
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.pendingGeneration
 }
 
 func (c *MessageCoordinator) pendingCountLocked() int {

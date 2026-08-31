@@ -42,6 +42,13 @@ func (d *Daemon) openMessageCoordinator(key InboxKey, runtimeID string) (*Messag
 	if err != nil {
 		return nil, err
 	}
+	store, err := d.agentAppInboxes.Store(key.AgentID)
+	if err == nil {
+		if err := store.Restore(); err != nil {
+			return nil, fmt.Errorf("restore Agent App Inbox: %w", err)
+		}
+		coordinator.SetInboxStore(store)
+	}
 	coordinator.ConfigurePendingNotices(func(ctx context.Context, snapshot InboxNoticeSnapshot, commitIfCurrent InboxNoticeCommitIfCurrent) error {
 		return d.canonicalRuntimes.deliverBusyInboxNotice(ctx, key.AgentID, runtimeID, snapshot, commitIfCurrent)
 	}, 0, 0)
@@ -229,7 +236,7 @@ func (d *Daemon) deliverIdleMessageBatchWithCoordinator(ctx context.Context, age
 			// its local boundary, so put the exact batch back before replacing the
 			// provider. Do not write a failure assistant row for this transport
 			// failure; the replacement owns the single user-visible reply.
-			go runner.retryQueuedMessageAfterProviderFailure(coordinator, agentID, runtimeID, preparedMessages)
+			go runner.retryQueuedMessageAfterProviderFailure(coordinator, agentID, runtimeID)
 			return
 		}
 		if d.client != nil && strings.TrimSpace(d.client.baseURL) != "" {
@@ -764,41 +771,44 @@ func (p *CredentialProxy) CheckMessages(agentID string) (MessageCheckResult, err
 	if err != nil {
 		return MessageCheckResult{}, errors.New("Message coordinator is unavailable")
 	}
-	offer, err := runner.prepareMessageCoverage(agentID, CoverageRequest{Kind: CoverageCheck, Limit: messageCheckDefaultLimit})
-	if err != nil {
-		return MessageCheckResult{}, err
+	messages := runner.agentInboxPendingSnapshot(agentID)
+	if len(messages) > messageCheckMaxLimit {
+		messages = messages[:messageCheckMaxLimit]
 	}
 	status := messageCheckStatusComplete
-	if offer.HasMore {
+	if len(runner.agentInboxPendingSnapshot(agentID)) > len(messages) {
 		status = messageCheckStatusMore
 	}
 	return MessageCheckResult{
-		Messages: offer.Messages, HasMore: offer.HasMore, Remaining: offer.Remaining,
-		Status: status, CoverageReceipt: offer.ReceiptID,
+		Messages: messages, HasMore: status == messageCheckStatusMore, Remaining: len(runner.agentInboxPendingSnapshot(agentID)) - len(messages),
+		Status: status, Revision: coordinatorRevision(runner, agentID),
 	}, nil
 }
 
-// PrepareMessageRead stages only server-validated canonical bodies. The
-// boundary remains unchanged until the CLI writes the visible JSON and commits
-// the returned local receipt.
+// PrepareMessageRead validates server-provided canonical bodies and returns
+// them without retiring the inbox. Retirement requires an explicit ACK with
+// the revision returned by the check/read boundary.
 func (p *CredentialProxy) PrepareMessageRead(
 	agentID, target string,
 	throughSeq int64,
 	messages []protocol.AgentMessageProjection,
-) (CoverageOffer, error) {
+) ([]protocol.AgentMessageProjection, error) {
 	if p == nil || p.daemon == nil {
-		return CoverageOffer{}, errors.New("Credential Proxy is unavailable")
+		return nil, errors.New("Credential Proxy is unavailable")
 	}
-	runner, err := p.daemon.resolveWorkspaceDaemonByAgent(agentID)
+	_, err := p.daemon.resolveWorkspaceDaemonByAgent(agentID)
 	if err != nil {
-		return CoverageOffer{}, errors.New("Message coordinator is unavailable")
+		return nil, errors.New("Message coordinator is unavailable")
 	}
 	if throughSeq == 0 && len(messages) == 0 {
-		return CoverageOffer{Messages: []protocol.AgentMessageProjection{}}, nil
+		return []protocol.AgentMessageProjection{}, nil
 	}
-	return runner.prepareMessageCoverage(agentID, CoverageRequest{
-		Kind: CoverageRead, Target: target, ThroughSeq: throughSeq, Messages: messages,
-	})
+	for _, message := range messages {
+		if message.Target != target || message.Seq > throughSeq {
+			return nil, errors.New("read message does not match inbox target and sequence")
+		}
+	}
+	return messages, nil
 }
 
 func (p *CredentialProxy) messageDraftStore() (*MessageDraftStore, error) {
@@ -887,17 +897,4 @@ func (p *CredentialProxy) PreflightMessageSend(agentID, target string) (MessageS
 		return MessageSendFreshness{}, errors.New("Message coordinator is unavailable")
 	}
 	return runner.preflightMessageSend(agentID, target)
-}
-
-func (p *CredentialProxy) PrepareHeldMessageContext(agentID, target string, throughSeq int64, messages []protocol.AgentMessageProjection) (CoverageOffer, error) {
-	if p == nil || p.daemon == nil {
-		return CoverageOffer{}, errors.New("Credential Proxy is unavailable")
-	}
-	runner, err := p.daemon.resolveWorkspaceDaemonByAgent(agentID)
-	if err != nil {
-		return CoverageOffer{}, errors.New("Message coordinator is unavailable")
-	}
-	return runner.prepareMessageCoverage(agentID, CoverageRequest{
-		Kind: CoverageHold, Target: target, ThroughSeq: throughSeq, Messages: messages,
-	})
 }

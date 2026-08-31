@@ -56,30 +56,24 @@ func (d *Daemon) agentAppInboxHandler() http.HandlerFunc {
 			writeAgentInboxError(w, http.StatusMethodNotAllowed, "method not allowed", "method_not_allowed")
 			return
 		}
-		agentID, workspaceID, runner, ok := d.localAgentInboxIdentity(w, r)
+		agentID, workspaceID, _, ok := d.localAgentInboxIdentity(w, r)
 		if !ok {
 			return
 		}
-		pending := runner.agentInboxPendingSnapshot(agentID)
 		store, err := d.agentAppInboxes.Store(agentID)
 		if err != nil {
 			writeAgentInboxError(w, http.StatusConflict, "open app inbox: "+err.Error(), "app_inbox_unavailable")
 			return
 		}
-		rows := projectAgentInboxRows(pending)
 		appItems := store.List()
-		items := make([]agentInboxTypedItem, 0, len(rows)+len(appItems))
-		for i := range rows {
-			row := rows[i]
-			items = append(items, agentInboxTypedItem{Source: "message_target", Row: &row})
-		}
+		items := make([]agentInboxTypedItem, 0, len(appItems))
 		for i := range appItems {
 			item := appItems[i]
 			items = append(items, agentInboxTypedItem{Source: "app", AgentAppInboxItem: &item})
 		}
 		_ = workspaceID
 		writeAgentInboxJSON(w, http.StatusOK, agentInboxSnapshotResponse{
-			Rows: rows, Items: items, PendingTargets: len(rows), PendingMessages: len(pending),
+			Rows: nil, Items: items, PendingTargets: 0, PendingMessages: len(appItems),
 			PendingAppItems: len(appItems), AcknowledgedAppSources: store.ListAcknowledgedSources(),
 		})
 	}

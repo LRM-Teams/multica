@@ -30,6 +30,8 @@ import (
 	"github.com/multica-ai/multica/server/pkg/taskfailure"
 )
 
+var configureMemoryFlushHookOnce sync.Once
+
 const (
 	taskMessageFlushInterval            = 200 * time.Millisecond
 	taskMessageTrajectoryCoalesceWindow = 350 * time.Millisecond
@@ -257,9 +259,11 @@ func newDaemonForRole(cfg Config, logger *slog.Logger, role daemonProcessRole) *
 		instanceID:                uuid.NewString(),
 	}
 	d.initializeBindingExecution(bindingStateRoot)
-	agent.MemoryFlushBeforeCompaction = func(agentRoot string) {
-		_ = memoryflush.BeforeCompaction(agentRoot)
-	}
+	configureMemoryFlushHookOnce.Do(func() {
+		agent.MemoryFlushBeforeCompaction = func(agentRoot string) {
+			_ = memoryflush.BeforeCompaction(agentRoot)
+		}
+	})
 	return d
 }
 

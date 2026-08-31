@@ -97,6 +97,17 @@ type messageCheckCLIResponse struct {
 	HasMore   bool                              `json:"has_more"`
 	Remaining int                               `json:"remaining"`
 	Status    string                            `json:"status"`
+	Revision  uint64                            `json:"revision"`
+	Items     []messageInboxCLIItem             `json:"-"`
+}
+
+type messageInboxCLIItem struct {
+	ItemID  string                           `json:"itemId"`
+	Message *protocol.AgentMessageProjection `json:"message"`
+}
+
+type messageInboxCLIResponse struct {
+	Items []messageInboxCLIItem `json:"items"`
 }
 
 func newMessageCheckCmd() *cobra.Command {
@@ -114,6 +125,7 @@ func runAgentMessageCheck(_ *cobra.Command, _ []string) error {
 
 func runAgentMessageCheckWithWriter(output io.Writer) error {
 	agentID := strings.TrimSpace(os.Getenv("MULTICA_AGENT_ID"))
+	workspaceID := strings.TrimSpace(os.Getenv("MULTICA_WORKSPACE_ID"))
 	port := strings.TrimSpace(os.Getenv("MULTICA_DAEMON_PORT"))
 	if agentID == "" {
 		return errors.New("message check requires MULTICA_AGENT_ID")
@@ -122,32 +134,30 @@ func runAgentMessageCheckWithWriter(output io.Writer) error {
 	if err != nil || portNumber < 1 || portNumber > 65535 {
 		return errors.New("message check requires a valid MULTICA_DAEMON_PORT")
 	}
-	endpoint := fmt.Sprintf("http://127.0.0.1:%d/credential-proxy/messages/check", portNumber)
+	endpoint := fmt.Sprintf("http://127.0.0.1:%d/inbox", portNumber)
+	ackEndpoint := fmt.Sprintf("http://127.0.0.1:%d/inbox/ack", portNumber)
 	client := &http.Client{Timeout: cli.APITimeout()}
 
 	for round := 0; round < maxMessageCheckRounds; round++ {
 		ctx, cancel := cli.APIContext(context.Background())
-		result, receiptID, err := fetchMessageCheckBatch(ctx, client, endpoint, agentID)
+		result, err := fetchMessageInboxBatch(ctx, client, endpoint, agentID, workspaceID)
 		if err != nil {
 			cancel()
 			return err
 		}
 
-		terminal := !result.HasMore
-		if (len(result.Messages) > 0 || result.HasMore) && receiptID == "" {
+		terminal := true
+		if err := printMessageCheckResult(output, result, terminal); err != nil {
 			cancel()
-			return errors.New("message check response omitted coverage receipt")
+			return fmt.Errorf("write message check output: %w", err)
 		}
-		if receiptID != "" {
-			if err := commitLocalMessageCoverage(ctx, receiptID); err != nil {
+		for _, item := range result.Items {
+			if err := acknowledgeMessageInboxItem(ctx, client, ackEndpoint, agentID, workspaceID, item.ItemID); err != nil {
 				cancel()
-				return fmt.Errorf("commit message check coverage: %w", err)
+				return err
 			}
 		}
 		cancel()
-		if err := printMessageCheckResult(output, result, terminal); err != nil {
-			return fmt.Errorf("write message check output: %w", err)
-		}
 		if terminal {
 			return nil
 		}
@@ -156,32 +166,80 @@ func runAgentMessageCheckWithWriter(output io.Writer) error {
 	return errors.New("message check stopped after the maximum drain rounds; messages remain pending")
 }
 
-func fetchMessageCheckBatch(ctx context.Context, client *http.Client, endpoint, agentID string) (messageCheckCLIResponse, string, error) {
+func fetchMessageInboxBatch(ctx context.Context, client *http.Client, endpoint, agentID, workspaceID string) (messageCheckCLIResponse, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return messageCheckCLIResponse{}, fmt.Errorf("prepare inbox request: %w", err)
+	}
+	request.Header.Set("X-Agent-ID", agentID)
+	request.Header.Set("X-Workspace-ID", workspaceID)
+	response, err := client.Do(request)
+	if err != nil {
+		return messageCheckCLIResponse{}, fmt.Errorf("read agent inbox: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return messageCheckCLIResponse{}, fmt.Errorf("read agent inbox: %s", response.Status)
+	}
+	var snapshot messageInboxCLIResponse
+	if err := json.NewDecoder(response.Body).Decode(&snapshot); err != nil {
+		return messageCheckCLIResponse{}, fmt.Errorf("decode inbox response: %w", err)
+	}
+	result := messageCheckCLIResponse{Status: "complete", Items: snapshot.Items}
+	for _, item := range snapshot.Items {
+		if item.Message != nil {
+			result.Messages = append(result.Messages, *item.Message)
+		}
+	}
+	return result, nil
+}
+
+func acknowledgeMessageInboxItem(ctx context.Context, client *http.Client, endpoint, agentID, workspaceID, itemID string) error {
+	body, _ := json.Marshal(map[string]string{"itemId": itemID})
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("prepare inbox ACK: %w", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Agent-ID", agentID)
+	request.Header.Set("X-Workspace-ID", workspaceID)
+	response, err := client.Do(request)
+	if err != nil {
+		return fmt.Errorf("acknowledge inbox item: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return fmt.Errorf("acknowledge inbox item: %s", response.Status)
+	}
+	return nil
+}
+
+func fetchMessageCheckBatch(ctx context.Context, client *http.Client, endpoint, agentID string) (messageCheckCLIResponse, error) {
 	body, err := json.Marshal(map[string]string{"agent_id": agentID})
 	if err != nil {
-		return messageCheckCLIResponse{}, "", fmt.Errorf("encode message check request: %w", err)
+		return messageCheckCLIResponse{}, fmt.Errorf("encode message check request: %w", err)
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return messageCheckCLIResponse{}, "", fmt.Errorf("prepare message check: %w", err)
+		return messageCheckCLIResponse{}, fmt.Errorf("prepare message check: %w", err)
 	}
 	request.Header.Set("Content-Type", "application/json")
 	response, err := client.Do(request)
 	if err != nil {
-		return messageCheckCLIResponse{}, "", fmt.Errorf("message check through Credential Proxy: %w", err)
+		return messageCheckCLIResponse{}, fmt.Errorf("message check through Credential Proxy: %w", err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		detail, _ := io.ReadAll(io.LimitReader(response.Body, 4<<10))
-		return messageCheckCLIResponse{}, "", fmt.Errorf("message check through Credential Proxy: %s: %s", response.Status, strings.TrimSpace(string(detail)))
+		return messageCheckCLIResponse{}, fmt.Errorf("message check through Credential Proxy: %s: %s", response.Status, strings.TrimSpace(string(detail)))
 	}
 
 	var result messageCheckCLIResponse
-	receiptID, err := decodeMessageCoverageResponse(response.Body, &result)
+	err = json.NewDecoder(response.Body).Decode(&result)
 	if err != nil {
-		return messageCheckCLIResponse{}, "", fmt.Errorf("decode message check response: %w", err)
+		return messageCheckCLIResponse{}, fmt.Errorf("decode message check response: %w", err)
 	}
-	return result, receiptID, nil
+	return result, nil
 }
 
 func printMessageCheckResult(w io.Writer, result messageCheckCLIResponse, terminal bool) error {
@@ -359,19 +417,24 @@ func runAgentMessageSendWithWriter(cmd *cobra.Command, output io.Writer) error {
 func outputAgentMessageSendThroughCredentialProxy(body map[string]any, output io.Writer) error {
 	var result map[string]any
 	err := withAgentMessageCredentialProxyResponse("send", body, func(ctx context.Context, responseBody io.Reader) error {
-		return consumeMessageCoverageResponse(
+		return consumeInboxResponse(
 			ctx,
 			responseBody,
 			output,
 			&result,
-			func(w io.Writer) error { return cli.PrintJSON(w, result) },
-			commitLocalMessageCoverage,
+			func(w io.Writer) error {
+				if agentTransportOutputIsHeld(result) {
+					delete(result, "revision")
+				}
+				return cli.PrintJSON(w, result)
+			},
 		)
 	})
 	if err != nil {
 		return err
 	}
 	if agentTransportOutputIsHeld(result) {
+		delete(result, "revision")
 		return errAgentMessageHeld
 	}
 	return nil
@@ -435,16 +498,19 @@ func runAgentMessageReadWithWriter(cmd *cobra.Command, output io.Writer) error {
 
 func outputAgentMessageReadThroughCredentialProxy(body map[string]any, output io.Writer) error {
 	var result map[string]any
-	return withAgentMessageCredentialProxyResponse("read", body, func(ctx context.Context, responseBody io.Reader) error {
-		return consumeMessageCoverageResponse(
+	err := withAgentMessageCredentialProxyResponse("read", body, func(ctx context.Context, responseBody io.Reader) error {
+		return consumeInboxResponse(
 			ctx,
 			responseBody,
 			output,
 			&result,
 			func(w io.Writer) error { return cli.PrintJSON(w, result) },
-			commitLocalMessageCoverage,
 		)
 	})
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func postAgentMessageThroughCredentialProxy(operation string, body map[string]any, out any) error {

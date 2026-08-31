@@ -48,14 +48,14 @@ func TestCredentialProxyMessageCheckDrainsCoordinatorWithoutExecutionIdentity(t 
 	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
 		t.Fatalf("decode message check: %v", err)
 	}
-	if len(result.Messages) != messageCheckDefaultLimit || !result.HasMore || result.Remaining != 1 || result.CoverageReceipt == "" {
+	if len(result.Messages) != messageCheckDefaultLimit || !result.HasMore || result.Remaining != 1 || result.Revision == 0 {
 		t.Fatalf("message check result = %+v", result)
 	}
 	if got := coordinator.Boundaries(); len(got) != 0 {
 		t.Fatalf("message check advanced boundary before CLI output: %+v", got)
 	}
-	if err := coordinator.CommitCoverage(result.CoverageReceipt); err != nil {
-		t.Fatalf("commit checked coverage: %v", err)
+	if err := coordinator.AcknowledgeInbox("channel:one", result.Messages[len(result.Messages)-1].Seq, result.Revision); err != nil {
+		t.Fatalf("ack checked inbox: %v", err)
 	}
 	if got := coordinator.Boundaries()["channel:one"]; got != messageCheckDefaultLimit {
 		t.Fatalf("committed check boundary = %d, want %d", got, messageCheckDefaultLimit)
@@ -145,15 +145,11 @@ func TestCredentialProxyMessageReadUsesCachedCredentialAndWritesTargetBoundary(t
 	if _, found := response["seenUpToSeq"]; found {
 		t.Fatalf("proxy leaked Context Boundary sequence: %+v", response)
 	}
-	receiptID, _ := response[MessageCoverageReceiptField].(string)
-	if receiptID == "" {
-		t.Fatalf("proxy omitted internal read coverage receipt: %+v", response)
-	}
 	if got := coordinator.Boundaries()["channel:one"]; got != 0 {
 		t.Fatalf("message read advanced boundary before CLI output: %d", got)
 	}
-	if err := coordinator.CommitCoverage(receiptID); err != nil {
-		t.Fatalf("commit read coverage: %v", err)
+	if err := coordinator.AcknowledgeInbox("channel:one", 7, coordinator.InboxRevision()); err != nil {
+		t.Fatalf("ack read inbox: %v", err)
 	}
 	if got, err := d.CredentialProxy().SeenUpToSeq("agent-1", "channel:one"); err != nil || got != 7 {
 		t.Fatalf("seen boundary = %d, %v; want 7, nil", got, err)
@@ -175,11 +171,11 @@ func TestCredentialProxySearchAndResolveNeverExposeOrPrepareCoverage(t *testing.
 		switch r.URL.Path {
 		case "/api/agent/messages/search":
 			_ = json.NewEncoder(w).Encode(map[string]any{
-				"action": "message_search", "results": []any{}, MessageCoverageReceiptField: "forged-service-receipt",
+				"action": "message_search", "results": []any{},
 			})
 		case "/api/agent/messages/resolve":
 			_ = json.NewEncoder(w).Encode(map[string]any{
-				"action": "message_resolve", "message": map[string]any{"id": "message-1"}, MessageCoverageReceiptField: "forged-service-receipt",
+				"action": "message_resolve", "message": map[string]any{"id": "message-1"},
 			})
 		case "/api/agent/messages/react":
 			var body map[string]any
@@ -190,7 +186,7 @@ func TestCredentialProxySearchAndResolveNeverExposeOrPrepareCoverage(t *testing.
 				t.Errorf("reaction request = %#v", body)
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{
-				"action": "message_react", "removed": true, MessageCoverageReceiptField: "forged-service-receipt",
+				"action": "message_react", "removed": true,
 			})
 		default:
 			http.NotFound(w, r)
@@ -226,9 +222,6 @@ func TestCredentialProxySearchAndResolveNeverExposeOrPrepareCoverage(t *testing.
 			var response map[string]any
 			if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
 				t.Fatal(err)
-			}
-			if _, leaked := response[MessageCoverageReceiptField]; leaked {
-				t.Fatalf("non-covering %s leaked or invented a receipt: %#v", name, response)
 			}
 		})
 	}
@@ -435,9 +428,9 @@ func TestCredentialProxyMessageSendHoldsLocalPendingWithoutUpstreamSend(t *testi
 	if messages, _ := response["heldMessages"].([]any); len(messages) != 3 {
 		t.Fatalf("held Messages=%+v, want newest three", response["heldMessages"])
 	}
-	receipt, _ := response[MessageCoverageReceiptField].(string)
-	if receipt == "" {
-		t.Fatalf("local hold omitted coverage receipt: %+v", response)
+	revision, _ := response["revision"].(float64)
+	if revision == 0 {
+		t.Fatalf("local hold omitted inbox revision: %+v", response)
 	}
 	if boundary := coordinator.Boundaries()["channel:one"]; boundary != 0 {
 		t.Fatalf("pre-output held boundary=%d, want 0", boundary)
@@ -459,9 +452,9 @@ func TestCredentialProxyMessageSendHoldsLocalPendingWithoutUpstreamSend(t *testi
 	if err := json.Unmarshal(repeated.Body.Bytes(), &repeatedResponse); err != nil {
 		t.Fatalf("decode repeated local hold: %v", err)
 	}
-	repeatedReceipt, _ := repeatedResponse[MessageCoverageReceiptField].(string)
-	if repeatedReceipt == "" {
-		t.Fatalf("repeated local hold omitted coverage receipt: %+v", repeatedResponse)
+	repeatedRevision, _ := repeatedResponse["revision"].(float64)
+	if repeatedRevision == 0 {
+		t.Fatalf("repeated local hold omitted inbox revision: %+v", repeatedResponse)
 	}
 	repeatedDraft, found, err := d.CredentialProxy().LoadMessageDraft("workspace-1", "agent-1", "#one", time.Now())
 	if err != nil || !found || repeatedDraft.IdempotencyKey != firstDraft.IdempotencyKey || repeatedDraft.HoldCount != 2 {
@@ -470,8 +463,8 @@ func TestCredentialProxyMessageSendHoldsLocalPendingWithoutUpstreamSend(t *testi
 	if sends != 0 || len(coordinator.pending["channel:one"]) != 4 || coordinator.Boundaries()["channel:one"] != 0 {
 		t.Fatalf("repeated hold sent=%d pending=%d boundary=%d", sends, len(coordinator.pending["channel:one"]), coordinator.Boundaries()["channel:one"])
 	}
-	if err := coordinator.CommitCoverage(repeatedReceipt); err != nil {
-		t.Fatalf("commit held coverage: %v", err)
+	if err := coordinator.AcknowledgeInbox("channel:one", 4, uint64(repeatedRevision)); err != nil {
+		t.Fatalf("ack held inbox: %v", err)
 	}
 	if boundary, known := coordinator.ContextBoundary("channel:one"); !known || boundary != 4 {
 		t.Fatalf("committed held boundary=%d known=%v, want 4 true", boundary, known)
@@ -529,20 +522,16 @@ func TestCredentialProxyMessageSendConsumesServerRaceHoldAndKeepsDraft(t *testin
 	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
 		t.Fatalf("decode server hold: %v", err)
 	}
-	receipt, _ := response[MessageCoverageReceiptField].(string)
-	if receipt == "" {
-		t.Fatalf("server hold omitted local coverage receipt: %+v", response)
+	if _, ok := response["revision"]; ok {
+		t.Fatalf("server hold unexpectedly included local inbox revision: %+v", response)
 	}
 	for _, private := range []string{"seenUpToSeq", "latestSeq", "transport_id", "producerFactId"} {
 		if _, leaked := response[private]; leaked {
 			t.Fatalf("proxy leaked %s: %+v", private, response)
 		}
 	}
-	if err := coordinator.CommitCoverage(receipt); err != nil {
-		t.Fatalf("commit server-held coverage: %v", err)
-	}
-	if boundary, known := coordinator.ContextBoundary("channel:one"); !known || boundary != 5 {
-		t.Fatalf("committed held boundary=%d known=%v, want 5 true", boundary, known)
+	if boundary, known := coordinator.ContextBoundary("channel:one"); !known || boundary != 2 {
+		t.Fatalf("server-held boundary=%d known=%v, want unchanged 2 true", boundary, known)
 	}
 }
 

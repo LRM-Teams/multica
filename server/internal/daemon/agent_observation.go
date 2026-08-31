@@ -54,11 +54,11 @@ func (AgentRuntimeObservationData) agentObservationData() {}
 // concrete process/generation identity is available at this adapter seam.
 // It cannot be used for RuntimeReady, which remains strictly process-fenced.
 type AgentRuntimeStageObservationData struct {
-	RuntimeID  string
-	ToolName   string
-	ToolCallID string
-	ToolInput  map[string]any
-	StaleFor   time.Duration
+	RuntimeID       string
+	ToolName        string
+	ToolCallID      string
+	ToolInput       map[string]any
+	StaleFor        time.Duration
 	ProviderEventAt time.Time
 }
 
@@ -79,7 +79,7 @@ type AgentRuntimeDiagnosticObservationData struct {
 func (AgentRuntimeDiagnosticObservationData) agentObservationData() {}
 
 type AgentMessageAcceptanceObservationData struct {
-	RuntimeID string
+	RuntimeID  string
 	AcceptedAt time.Time
 }
 

@@ -283,14 +283,14 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 	if len(checked.Messages) != 1 || checked.Messages[0].ID != busyCreated.ID || checked.Messages[0].Content != "busy secret" || checked.HasMore {
 		t.Fatalf("checked Messages = %+v", checked)
 	}
-	if checked.CoverageReceipt == "" {
-		t.Fatal("message check did not return a local coverage receipt")
+	if checked.Revision == 0 {
+		t.Fatal("message check did not return an inbox revision")
 	}
 	if got := coordinator.Boundaries()[target]; got != created.Seq {
 		t.Fatalf("boundary before check output commit = %d, want prior %d", got, created.Seq)
 	}
-	if err := coordinator.CommitCoverage(checked.CoverageReceipt); err != nil {
-		t.Fatalf("commit checked coverage: %v", err)
+	if err := coordinator.AcknowledgeInbox(target, busyCreated.Seq, checked.Revision); err != nil {
+		t.Fatalf("ACK checked inbox: %v", err)
 	}
 	if got := coordinator.Boundaries()[target]; got != busyCreated.Seq {
 		t.Fatalf("boundary after check output commit = %d, want %d", got, busyCreated.Seq)

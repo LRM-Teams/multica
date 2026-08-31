@@ -214,8 +214,15 @@ func TestWorkspaceDaemonConsumedDeliveryAcknowledgesWithoutProcess(t *testing.T)
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
 	d.mu.Unlock()
 	runner := registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
-	if err := coordinator.MarkRead("channel:one", 1); err != nil {
-		t.Fatalf("cover seq 1: %v", err)
+	if accepted, err := coordinator.Accept(context.Background(), protocol.AgentDeliverPayload{
+		AgentID: "agent-1", Target: "channel:one", Seq: 1, DeliveryID: "delivery-1",
+		Message: protocol.AgentMessageProjection{ID: "message-1", Target: "channel:one", Seq: 1},
+	}); err != nil || !accepted {
+		t.Fatalf("seed durable delivery: accepted=%v err=%v", accepted, err)
+	}
+	items := coordinator.MessageItemsSnapshot()
+	if len(items) != 1 || !coordinator.inboxStore.Ack(items[0].ItemID) {
+		t.Fatalf("ACK item 1: %+v", items)
 	}
 	if err := runner.processes.Stop(currentTestAgentProcessCallback(t, runner, "agent-1")); err != nil {
 		t.Fatalf("remove managed launch: %v", err)

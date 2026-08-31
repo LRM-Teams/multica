@@ -404,8 +404,8 @@ func TestRunIssueMineAggregatesPRsAndGatesInOneRequest(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
-		if got := r.Header.Get("Authorization"); got != "" {
-			t.Errorf("Authorization = %q, want none at the local proxy boundary", got)
+		if got := r.Header.Get("Authorization"); got != "Bearer mpt_test-token" {
+			t.Errorf("Authorization = %q, want local proxy bearer", got)
 		}
 		if got := r.Header.Get("X-Task-ID"); got != "" {
 			t.Errorf("X-Task-ID = %q, want none at the local proxy boundary", got)
@@ -529,8 +529,8 @@ func TestRunIssueListMineUsesAgentContextAssignee(t *testing.T) {
 		if got := r.URL.Query().Get("assignee_id"); got != "agent-123" {
 			t.Errorf("assignee_id = %q, want agent-123", got)
 		}
-		if got := r.Header.Get("Authorization"); got != "" {
-			t.Errorf("Authorization = %q, want none at the local proxy boundary", got)
+		if got := r.Header.Get("Authorization"); got != "Bearer mpt_test-token" {
+			t.Errorf("Authorization = %q, want local proxy bearer", got)
 		}
 		if got := r.Header.Get("X-Agent-ID"); got != "agent-123" {
 			t.Errorf("X-Agent-ID = %q, want agent-123", got)

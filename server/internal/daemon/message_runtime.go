@@ -35,11 +35,19 @@ func (d *Daemon) openMessageCoordinator(key InboxKey, runtimeID string) (*Messag
 	if err := ensureMulticaAgentRoot(agentRoot); err != nil {
 		return nil, fmt.Errorf("create Agent root for Message coordinator: %w", err)
 	}
-	coordinator, err := NewMessageCoordinator(key, agentRoot, func(ctx context.Context, messages []protocol.AgentMessageProjection) error {
-		return d.deliverIdleMessageBatch(ctx, key.AgentID, runtimeID, messages)
+	var coordinator *MessageCoordinator
+	coordinator, err = NewMessageCoordinator(key, agentRoot, func(ctx context.Context, messages []protocol.AgentMessageProjection) error {
+		return d.deliverIdleMessageBatchWithCoordinator(ctx, key.AgentID, runtimeID, messages, coordinator)
 	}, nil)
 	if err != nil {
 		return nil, err
+	}
+	store, err := d.agentAppInboxes.Store(key.AgentID)
+	if err == nil {
+		if err := store.Restore(); err != nil {
+			return nil, fmt.Errorf("restore Agent App Inbox: %w", err)
+		}
+		coordinator.SetInboxStore(store)
 	}
 	coordinator.ConfigurePendingNotices(func(ctx context.Context, snapshot InboxNoticeSnapshot, commitIfCurrent InboxNoticeCommitIfCurrent) error {
 		return d.canonicalRuntimes.deliverBusyInboxNotice(ctx, key.AgentID, runtimeID, snapshot, commitIfCurrent)
@@ -103,6 +111,10 @@ func mixedRunMessageBatchIdentity(messages []protocol.AgentMessageProjection) (s
 }
 
 func (d *Daemon) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID string, messages []protocol.AgentMessageProjection) error {
+	return d.deliverIdleMessageBatchWithCoordinator(ctx, agentID, runtimeID, messages, nil)
+}
+
+func (d *Daemon) deliverIdleMessageBatchWithCoordinator(ctx context.Context, agentID, runtimeID string, messages []protocol.AgentMessageProjection, coordinator *MessageCoordinator) error {
 	runID, runAgentID, turnID, mixed := mixedRunMessageBatchIdentity(messages)
 	directedRunID, directedTurnID := runID, turnID
 	if directedRunID == "" {
@@ -115,6 +127,7 @@ func (d *Daemon) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID
 	workspaceID := d.runtimeIndex[runtimeID].WorkspaceID
 	d.mu.Unlock()
 	runner, _ := d.ensureWorkspaceDaemon(workspaceID)
+	coordinatorOK := coordinator != nil
 	preparedMessages, memoryTask, err := d.prepareResidentMessageBatch(ctx, agentID, runtimeID, messages)
 	if err != nil {
 		return err
@@ -217,6 +230,15 @@ func (d *Daemon) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID
 			}
 		}
 		d.recordResidentMessageBatch(workspaceID, runtimeID, agentID, preparedMessages, "provider_finished", outcome, reasonCode)
+		if turnErr != nil && isRetryableResidentProviderFailure(turnErr) && coordinatorOK {
+			// The provider can die after native acceptance (notably while writing
+			// turn/start to a stale stdin). The coordinator has already advanced
+			// its local boundary, so put the exact batch back before replacing the
+			// provider. Do not write a failure assistant row for this transport
+			// failure; the replacement owns the single user-visible reply.
+			go runner.retryQueuedMessageAfterProviderFailure(coordinator, agentID, runtimeID)
+			return
+		}
 		if d.client != nil && strings.TrimSpace(d.client.baseURL) != "" {
 			reportCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			if turnErr == nil {
@@ -638,6 +660,19 @@ func standaloneAssistantFailureReply(err error) string {
 	return "I could not complete that reply (" + detail + "). Please try again."
 }
 
+func isRetryableResidentProviderFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	detail := strings.ToLower(err.Error())
+	for _, marker := range []string{"broken pipe", "closed pipe", "use of closed network connection", "process exited", "app-server process exited", "unexpected eof"} {
+		if strings.Contains(detail, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 func (d *Daemon) writebackStandaloneChatTurn(ctx context.Context, sessionID, runtimeID string, turnErr error, capture *agent.ResidentTurnCapture, streamed string) {
 	if d == nil || d.client == nil || strings.TrimSpace(sessionID) == "" {
 		return
@@ -736,41 +771,44 @@ func (p *CredentialProxy) CheckMessages(agentID string) (MessageCheckResult, err
 	if err != nil {
 		return MessageCheckResult{}, errors.New("Message coordinator is unavailable")
 	}
-	offer, err := runner.prepareMessageCoverage(agentID, CoverageRequest{Kind: CoverageCheck, Limit: messageCheckDefaultLimit})
-	if err != nil {
-		return MessageCheckResult{}, err
+	messages := runner.agentInboxPendingSnapshot(agentID)
+	if len(messages) > messageCheckMaxLimit {
+		messages = messages[:messageCheckMaxLimit]
 	}
 	status := messageCheckStatusComplete
-	if offer.HasMore {
+	if len(runner.agentInboxPendingSnapshot(agentID)) > len(messages) {
 		status = messageCheckStatusMore
 	}
 	return MessageCheckResult{
-		Messages: offer.Messages, HasMore: offer.HasMore, Remaining: offer.Remaining,
-		Status: status, CoverageReceipt: offer.ReceiptID,
+		Messages: messages, HasMore: status == messageCheckStatusMore, Remaining: len(runner.agentInboxPendingSnapshot(agentID)) - len(messages),
+		Status: status, Revision: coordinatorRevision(runner, agentID),
 	}, nil
 }
 
-// PrepareMessageRead stages only server-validated canonical bodies. The
-// boundary remains unchanged until the CLI writes the visible JSON and commits
-// the returned local receipt.
+// PrepareMessageRead validates server-provided canonical bodies and returns
+// them without retiring the inbox. Retirement requires an explicit ACK with
+// the revision returned by the check/read boundary.
 func (p *CredentialProxy) PrepareMessageRead(
 	agentID, target string,
 	throughSeq int64,
 	messages []protocol.AgentMessageProjection,
-) (CoverageOffer, error) {
+) ([]protocol.AgentMessageProjection, error) {
 	if p == nil || p.daemon == nil {
-		return CoverageOffer{}, errors.New("Credential Proxy is unavailable")
+		return nil, errors.New("Credential Proxy is unavailable")
 	}
-	runner, err := p.daemon.resolveWorkspaceDaemonByAgent(agentID)
+	_, err := p.daemon.resolveWorkspaceDaemonByAgent(agentID)
 	if err != nil {
-		return CoverageOffer{}, errors.New("Message coordinator is unavailable")
+		return nil, errors.New("Message coordinator is unavailable")
 	}
 	if throughSeq == 0 && len(messages) == 0 {
-		return CoverageOffer{Messages: []protocol.AgentMessageProjection{}}, nil
+		return []protocol.AgentMessageProjection{}, nil
 	}
-	return runner.prepareMessageCoverage(agentID, CoverageRequest{
-		Kind: CoverageRead, Target: target, ThroughSeq: throughSeq, Messages: messages,
-	})
+	for _, message := range messages {
+		if message.Target != target || message.Seq > throughSeq {
+			return nil, errors.New("read message does not match inbox target and sequence")
+		}
+	}
+	return messages, nil
 }
 
 func (p *CredentialProxy) messageDraftStore() (*MessageDraftStore, error) {
@@ -859,17 +897,4 @@ func (p *CredentialProxy) PreflightMessageSend(agentID, target string) (MessageS
 		return MessageSendFreshness{}, errors.New("Message coordinator is unavailable")
 	}
 	return runner.preflightMessageSend(agentID, target)
-}
-
-func (p *CredentialProxy) PrepareHeldMessageContext(agentID, target string, throughSeq int64, messages []protocol.AgentMessageProjection) (CoverageOffer, error) {
-	if p == nil || p.daemon == nil {
-		return CoverageOffer{}, errors.New("Credential Proxy is unavailable")
-	}
-	runner, err := p.daemon.resolveWorkspaceDaemonByAgent(agentID)
-	if err != nil {
-		return CoverageOffer{}, errors.New("Message coordinator is unavailable")
-	}
-	return runner.prepareMessageCoverage(agentID, CoverageRequest{
-		Kind: CoverageHold, Target: target, ThroughSeq: throughSeq, Messages: messages,
-	})
 }

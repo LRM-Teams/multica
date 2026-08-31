@@ -85,7 +85,7 @@ func (b *codexAppServerBackend) ForceKill() error {
 		return nil
 	}
 	b.forceKilled.Store(true)
-	_ = p.stdin.Close()
+	p.client.closeInput()
 	return forceKillProcess(p.cmd.Process)
 }
 
@@ -708,7 +708,7 @@ func (b *codexAppServerBackend) ensureProcess(ctx context.Context, opts ExecOpti
 func (b *codexAppServerBackend) disposeProcess(p *codexAppServerProcess) {
 	b.process.CompareAndSwap(p, nil)
 	p.disposeOnce.Do(func() {
-		_ = p.stdin.Close()
+		p.client.closeInput()
 		// Prefer graceful exit (OTEL flush) then force-kill.
 		select {
 		case <-p.readerDone:

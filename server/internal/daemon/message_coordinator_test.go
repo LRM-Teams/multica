@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
@@ -468,7 +469,16 @@ func commitPendingNoticeForTest(commit func()) bool {
 
 func newTestMessageCoordinator(t *testing.T, agentRoot string, deliver RuntimeMessageDelivery, activity MessageReceivedActivity) (*MessageCoordinator, error) {
 	t.Helper()
-	return NewMessageCoordinator(InboxKey{WorkspaceID: "workspace-test", AgentID: "agent-test"}, agentRoot, deliver, activity)
+	coordinator, err := NewMessageCoordinator(InboxKey{WorkspaceID: "workspace-test", AgentID: "agent-test"}, agentRoot, deliver, activity)
+	if err != nil {
+		return nil, err
+	}
+	store := newAgentAppInboxStore("agent-test", filepath.Join(agentRoot, "inbox", "state.json"))
+	if err := store.Restore(); err != nil {
+		return nil, err
+	}
+	coordinator.SetInboxStore(store)
+	return coordinator, nil
 }
 
 func (r *pendingNoticeRuntime) Execute(context.Context, string, agent.ExecOptions) (*agent.Session, error) {
@@ -1205,88 +1215,36 @@ func TestMessageCoordinatorRetriesFailedBusyNoticeWithoutLosingDebt(t *testing.T
 }
 
 func TestClosedMessageCoordinatorRejectsPendingWork(t *testing.T) {
-	handoffs := 0
-	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
-		handoffs++
-		return nil
-	}, nil)
+	c, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
 	if err != nil {
-		t.Fatalf("NewMessageCoordinator: %v", err)
+		t.Fatal(err)
 	}
-	completeCoordinatorRecovery(t, coordinator)
-	if _, err := coordinator.Accept(context.Background(), testDelivery("message-1", "channel:one", 1, "delivery-1")); err != nil {
-		t.Fatalf("Accept: %v", err)
-	}
-	coordinator.Close()
-	if err := coordinator.Flush(context.Background()); err == nil {
-		t.Fatal("Flush succeeded after Close")
-	}
-	if offer, err := coordinator.PrepareCoverage(CoverageRequest{Kind: CoverageCheck}); err == nil {
-		t.Fatalf("PrepareCoverage succeeded after Close: %+v", offer)
-	}
-	if handoffs != 0 {
-		t.Fatalf("runtime handoffs after Close = %d", handoffs)
+	c.Close()
+	if _, err := c.Accept(context.Background(), testDelivery("message-1", "channel:one", 1, "delivery-1")); err == nil {
+		t.Fatal("closed coordinator accepted work")
 	}
 }
 
-func TestMessageCoordinatorCoverageCheckAdvancesOnlyAfterCommit(t *testing.T) {
-	root := t.TempDir()
-	activityCount := 0
-	coordinator, err := newTestMessageCoordinator(t, root, func(context.Context, []protocol.AgentMessageProjection) error {
-		t.Fatal("message check must not use idle runtime handoff")
-		return nil
-	}, func([]protocol.AgentMessageProjection) {
-		activityCount++
-	})
+func TestMessageCoordinatorInboxACKAdvancesOnlyAfterACK(t *testing.T) {
+	c, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
 	if err != nil {
-		t.Fatalf("NewMessageCoordinator: %v", err)
+		t.Fatal(err)
 	}
-	completeCoordinatorRecovery(t, coordinator)
-	for _, delivery := range []protocol.AgentDeliverPayload{
-		testDelivery("message-1", "channel:one", 1, "delivery-1"),
-		testDelivery("message-2", "channel:one", 2, "delivery-2"),
-		testDelivery("message-3", "dm:two", 1, "delivery-3"),
-	} {
-		if _, err := coordinator.Accept(context.Background(), delivery); err != nil {
-			t.Fatalf("Accept: %v", err)
+	for i := int64(1); i <= 3; i++ {
+		if _, err := c.Accept(context.Background(), testDelivery(fmt.Sprintf("message-%d", i), "channel:one", i, fmt.Sprintf("delivery-%d", i))); err != nil {
+			t.Fatal(err)
 		}
 	}
-
-	first, err := coordinator.PrepareCoverage(CoverageRequest{Kind: CoverageCheck, Limit: 2})
-	if err != nil {
-		t.Fatalf("PrepareCoverage: %v", err)
+	result, err := c.PreflightMessageSend("channel:one")
+	if err != nil || result.Revision == 0 || len(result.Messages) != 3 {
+		t.Fatalf("preflight=%+v err=%v", result, err)
 	}
-	if got := []string{first.Messages[0].ID, first.Messages[1].ID}; !reflect.DeepEqual(got, []string{"message-1", "message-2"}) {
-		t.Fatalf("checked Messages = %v", got)
+	if c.Boundaries()["channel:one"] != 0 {
+		t.Fatal("preflight advanced boundary")
 	}
-	if !first.HasMore || first.Remaining != 1 || first.ReceiptID == "" {
-		t.Fatalf("first coverage offer = %+v", first)
-	}
-	if got := coordinator.Boundaries(); len(got) != 0 {
-		t.Fatalf("boundaries advanced before output commit: %+v", got)
-	}
-	if err := coordinator.CommitCoverage(first.ReceiptID); err != nil {
-		t.Fatalf("CommitCoverage: %v", err)
-	}
-	if got := coordinator.Boundaries(); !reflect.DeepEqual(got, map[string]int64{"channel:one": 2}) {
-		t.Fatalf("boundaries after first commit = %+v", got)
-	}
-	if activityCount != 0 {
-		t.Fatalf("Message received Activity count = %d, want 0", activityCount)
-	}
-
-	second, err := coordinator.PrepareCoverage(CoverageRequest{Kind: CoverageCheck, Limit: 2})
-	if err != nil {
-		t.Fatalf("second PrepareCoverage: %v", err)
-	}
-	if len(second.Messages) != 1 || second.Messages[0].ID != "message-3" || second.HasMore || second.Remaining != 0 {
-		t.Fatalf("second coverage offer = %+v", second)
-	}
-	if err := coordinator.CommitCoverage(second.ReceiptID); err != nil {
-		t.Fatalf("second CommitCoverage: %v", err)
-	}
-	if got := coordinator.Boundaries(); !reflect.DeepEqual(got, map[string]int64{"channel:one": 2, "dm:two": 1}) {
-		t.Fatalf("final boundaries = %+v", got)
+	items := c.MessageItemsSnapshot()
+	if len(items) != 3 || !c.inboxStore.Ack(items[0].ItemID) {
+		t.Fatal("item ACK did not retire one item")
 	}
 }
 
@@ -1317,7 +1275,7 @@ func TestMessageCoordinatorAcceptsBeforeAckWithoutAdvancingBoundary(t *testing.T
 	}
 }
 
-func TestMessageCoordinatorMarkReadAdvancesOnlyRequestedTarget(t *testing.T) {
+func TestMessageCoordinatorReadLeavesStoreItemsActive(t *testing.T) {
 	root := t.TempDir()
 	var handoffs, activities int
 	coordinator, err := newTestMessageCoordinator(t, root, func(context.Context, []protocol.AgentMessageProjection) error {
@@ -1338,20 +1296,23 @@ func TestMessageCoordinatorMarkReadAdvancesOnlyRequestedTarget(t *testing.T) {
 			t.Fatalf("Accept: %v", err)
 		}
 	}
-	if err := coordinator.MarkRead("channel:one", 5); err != nil {
-		t.Fatalf("MarkRead: %v", err)
+	if got := coordinator.Boundaries()["channel:one"]; got != 0 {
+		t.Fatalf("read advanced boundary = %d, want 0", got)
 	}
-	if got, want := coordinator.Boundaries(), map[string]int64{"channel:one": 5}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("boundaries = %v, want %v", got, want)
+	if len(coordinator.MessageItemsSnapshot()) < 2 {
+		t.Fatalf("read retired inbox items, want durable items retained")
 	}
-	if _, found := coordinator.pending["channel:one"]; found {
-		t.Fatalf("read target pending remains: %+v", coordinator.pending)
+	var got string
+	for _, item := range coordinator.MessageItemsSnapshot() {
+		if item.Message != nil && item.Message.Target == "channel:two" && item.Message.Seq == 8 {
+			got = item.Message.ID
+		}
 	}
-	if got := coordinator.pending["channel:two"][8].ID; got != "two-8" {
+	if got != "two-8" {
 		t.Fatalf("other target pending = %q, want two-8", got)
 	}
 	if handoffs != 0 || activities != 0 {
-		t.Fatalf("MarkRead caused handoffs=%d activities=%d, want neither", handoffs, activities)
+		t.Fatalf("read caused handoffs=%d activities=%d, want neither", handoffs, activities)
 	}
 }
 
@@ -1811,13 +1772,10 @@ func TestMessageCoordinatorBoundaryResetsWithCoordinator(t *testing.T) {
 	if got := second.Boundaries(); len(got) != 0 {
 		t.Fatalf("replacement restored process-local boundaries: %v", got)
 	}
-	if accepted, err := second.Accept(context.Background(), delivery); err != nil || !accepted {
-		t.Fatalf("replacement Accept = %v, %v; want replay accepted", accepted, err)
+	if accepted, err := second.Accept(context.Background(), delivery); err != nil || accepted {
+		t.Fatalf("replacement Accept = %v, %v; want durable duplicate", accepted, err)
 	}
-	if err := second.Flush(context.Background()); err != nil {
-		t.Fatalf("replacement Flush: %v", err)
-	}
-	if len(replayed) != 1 || replayed[0].ID != delivery.Message.ID {
+	if len(replayed) != 0 {
 		t.Fatalf("replacement replay = %+v", replayed)
 	}
 }
@@ -1858,48 +1816,22 @@ func TestMessageCoordinatorRetriesRuntimeDeliverySafely(t *testing.T) {
 	}
 }
 
-func TestMessageCoordinatorPreflightHoldsCompletePendingRangeWithNewestThree(t *testing.T) {
-	root := t.TempDir()
-	coordinator, err := newTestMessageCoordinator(t, root, func(context.Context, []protocol.AgentMessageProjection) error {
-		return nil
-	}, nil)
+func TestMessageCoordinatorPreflightReturnsRevision(t *testing.T) {
+	c, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
 	if err != nil {
-		t.Fatalf("NewMessageCoordinator: %v", err)
+		t.Fatal(err)
 	}
-	completeCoordinatorRecovery(t, coordinator)
-	for sequence := int64(1); sequence <= 5; sequence++ {
-		if _, err := coordinator.Accept(context.Background(), testDelivery(fmt.Sprintf("message-%d", sequence), "channel:one", sequence, fmt.Sprintf("delivery-%d", sequence))); err != nil {
-			t.Fatalf("Accept %d: %v", sequence, err)
+	for i := int64(1); i <= 5; i++ {
+		if _, err := c.Accept(context.Background(), testDelivery(fmt.Sprintf("message-%d", i), "channel:one", i, fmt.Sprintf("delivery-%d", i))); err != nil {
+			t.Fatal(err)
 		}
 	}
-
-	result, err := coordinator.PreflightMessageSend("channel:one")
-	if err != nil {
-		t.Fatalf("PreflightMessageSend: %v", err)
+	result, err := c.PreflightMessageSend("channel:one")
+	if err != nil || !result.Held || result.Revision == 0 || len(result.Messages) != 3 {
+		t.Fatalf("preflight=%+v err=%v", result, err)
 	}
-	if !result.Held || result.NewMessageCount != 5 || result.Omitted != 2 || result.LatestSeq != 5 {
-		t.Fatalf("preflight result = %+v", result)
-	}
-	if result.CoverageReceipt == "" {
-		t.Fatal("freshness hold omitted two-phase coverage receipt")
-	}
-	if got, want := []string{result.Messages[0].ID, result.Messages[1].ID, result.Messages[2].ID}, []string{"message-3", "message-4", "message-5"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("shown messages = %v, want %v", got, want)
-	}
-	if got := len(coordinator.pending["channel:one"]); got != 5 {
-		t.Fatalf("pre-commit Pending count = %d, want 5", got)
-	}
-	if got := coordinator.Boundaries()["channel:one"]; got != 0 {
-		t.Fatalf("pre-commit boundary = %d, want 0", got)
-	}
-	if err := coordinator.CommitCoverage(result.CoverageReceipt); err != nil {
-		t.Fatalf("CommitCoverage: %v", err)
-	}
-	if _, found := coordinator.pending["channel:one"]; found {
-		t.Fatalf("committed held Pending remains: %+v", coordinator.pending)
-	}
-	if got, ok := coordinator.ContextBoundary("channel:one"); !ok || got != 5 {
-		t.Fatalf("committed boundary = %d, known=%v; want 5, true", got, ok)
+	if len(c.MessageItemsSnapshot()) != 5 {
+		t.Fatal("read/preflight changed durable inbox")
 	}
 }
 
@@ -1915,5 +1847,35 @@ func TestMessageCoordinatorExposesNoDraftStateOrMethods(t *testing.T) {
 		if strings.Contains(strings.ToLower(pointerType.Method(index).Name), "draft") {
 			t.Fatalf("MessageCoordinator still exposes Draft method %s", pointerType.Method(index).Name)
 		}
+	}
+}
+
+func TestMessageCoordinatorFlushReadsAndRetiresStoreItems(t *testing.T) {
+	store := newAgentAppInboxStore("agent-1", filepath.Join(t.TempDir(), "inbox.json"))
+	message := protocol.AgentMessageProjection{ID: "message-store-1", Target: "channel:one", Seq: 9, Content: "durable"}
+	item, err := store.Mint(AgentAppInboxMintInput{
+		AppID: agentInboxAppID, NotificationClass: "message",
+		SourceRef: AgentAppInboxSourceRef{Kind: "message", ID: message.ID, Revision: "9"}, Message: &message,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var delivered []protocol.AgentMessageProjection
+	c, err := NewMessageCoordinator(InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, t.TempDir(), func(_ context.Context, messages []protocol.AgentMessageProjection) error {
+		delivered = append(delivered, messages...)
+		return nil
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.SetInboxStore(store)
+	if err := c.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(delivered) != 1 || delivered[0].ID != message.ID {
+		t.Fatalf("delivered=%+v", delivered)
+	}
+	if _, ok := store.Item(item.ItemID); ok {
+		t.Fatal("successful provider delivery did not ACK and retire Store item")
 	}
 }

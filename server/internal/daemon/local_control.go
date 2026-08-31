@@ -21,22 +21,28 @@ func (d *Daemon) localControlAuthorized(r *http.Request) bool {
 // registerLocalControlRoutes assembles the routes exposed by the binding
 // child listener. Route implementations stay with their owning boundary.
 func (d *Daemon) registerLocalControlRoutes(mux *http.ServeMux) {
-	mux.Handle("/internal/agent-api/inbox", d.authenticateAgentProxyRequest(d.agentAppInboxHandler()))
-	mux.Handle("/internal/agent-api/inbox/ack", d.authenticateAgentProxyRequest(d.agentAppInboxAckHandler()))
+	mux.Handle("/inbox", d.authenticateAgentProxyRequest(d.agentAppInboxHandler()))
+	mux.Handle("/inbox/ack", d.authenticateAgentProxyRequest(d.agentAppInboxAckHandler()))
 	d.registerCredentialProxyMessageRoutes(mux)
 	mux.Handle("/api/", d.authenticateAgentProxyRequest(d.credentialProxyAgentAPIHandler()))
 }
 
 func (d *Daemon) authenticateAgentProxyRequest(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		credential, err := d.authenticateAgentProxyToken(r.Header.Get(AgentProxyTokenHeader))
+		authorization := strings.TrimSpace(r.Header.Get(AgentProxyAuthHeader))
+		const bearerPrefix = "Bearer "
+		if !strings.HasPrefix(authorization, bearerPrefix) {
+			http.Error(w, "invalid Agent Proxy credential", http.StatusUnauthorized)
+			return
+		}
+		credential, err := d.authenticateAgentProxyToken(strings.TrimSpace(strings.TrimPrefix(authorization, bearerPrefix)))
 		if err != nil {
 			http.Error(w, "invalid Agent Proxy credential", http.StatusUnauthorized)
 			return
 		}
 		r.Header.Set("X-Agent-ID", credential.Inbox.AgentID)
 		r.Header.Set("X-Workspace-ID", credential.Inbox.WorkspaceID)
-		r.Header.Del(AgentProxyTokenHeader)
+		r.Header.Del(AgentProxyAuthHeader)
 		ctx := context.WithValue(r.Context(), agentProxyAuthContextKey{}, credential)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})

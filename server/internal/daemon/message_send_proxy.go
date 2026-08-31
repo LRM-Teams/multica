@@ -151,24 +151,12 @@ func (d *Daemon) credentialProxyMessageSendHandler() http.HandlerFunc {
 			http.Error(w, "send message through Credential Proxy: "+err.Error(), http.StatusBadGateway)
 			return
 		}
-		localCoverageReceipt := ""
 		if credentialProxyMessageOutputIsHeld(response) {
 			latestSeq, ok := jsonInteger(response["latestSeq"])
 			if !ok || latestSeq <= 0 {
 				http.Error(w, "invalid held send response from server", http.StatusBadGateway)
 				return
 			}
-			heldMessages, err := parseServerHeldMessageContext(response, draft.ContextTarget)
-			if err != nil {
-				http.Error(w, "invalid held send response from server", http.StatusBadGateway)
-				return
-			}
-			coverage, err := proxy.PrepareHeldMessageContext(request.AgentID, draft.ContextTarget, latestSeq, heldMessages)
-			if err != nil || coverage.ReceiptID == "" {
-				http.Error(w, "prepare held message coverage", http.StatusConflict)
-				return
-			}
-			localCoverageReceipt = coverage.ReceiptID
 			if _, err := proxy.RecordMessageDraftHold(request.WorkspaceID, request.AgentID, draft.Target, draft.IdempotencyKey, draft.ContextTarget, latestSeq, time.Now()); err != nil {
 				http.Error(w, "refresh held local Draft: "+err.Error(), http.StatusConflict)
 				return
@@ -194,9 +182,6 @@ func (d *Daemon) credentialProxyMessageSendHandler() http.HandlerFunc {
 			}
 		}
 		sanitizeCredentialProxyMessageSendResponse(response)
-		if localCoverageReceipt != "" {
-			response[MessageCoverageReceiptField] = localCoverageReceipt
-		}
 		writeCredentialProxyMessageJSON(w, response)
 	}
 }
@@ -364,9 +349,6 @@ func localMessageSendHeldResponse(target string, freshness MessageSendFreshness,
 		"shownMessageCount":   int64(len(freshness.Messages)),
 		"omittedMessageCount": freshness.Omitted,
 	}
-	if freshness.CoverageReceipt != "" {
-		response[MessageCoverageReceiptField] = freshness.CoverageReceipt
-	}
 	return response
 }
 
@@ -374,7 +356,7 @@ func sanitizeCredentialProxyMessageSendResponse(response map[string]any) {
 	// These fields are intentionally only Proxy↔Server implementation state.
 	// A tool gets canonical messages and held context, never a cursor-like
 	// boundary, internal transport record, or reusable identity.
-	for _, key := range []string{"seenUpToSeq", "latestSeq", "transport_id", "producerFactId", "freshnessResolution", MessageCoverageReceiptField} {
+	for _, key := range []string{"seenUpToSeq", "latestSeq", "transport_id", "producerFactId", "freshnessResolution"} {
 		delete(response, key)
 	}
 	sanitizeCredentialProxyMessageValue(response)

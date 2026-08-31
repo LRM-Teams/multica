@@ -25,7 +25,7 @@ const (
 	// credentials. The real CLI uses it to recover when a login shell rebuilds
 	// PATH and would otherwise bypass the authenticated wrapper.
 	AgentProxyCLIWrapperEnv = "MULTICA_AGENT_CLI_WRAPPER"
-	AgentProxyTokenHeader   = "X-Multica-Agent-Proxy-Token"
+	AgentProxyAuthHeader    = "Authorization"
 )
 
 var ErrAgentProxyCredentialInvalid = errors.New("Agent Proxy credential is invalid")

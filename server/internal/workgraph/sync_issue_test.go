@@ -210,6 +210,7 @@ func createWorkgraphWorkspace(t *testing.T, ctx context.Context, id pgtype.UUID)
 		t.Fatalf("commit workspace fixture: %v", err)
 	}
 	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent WHERE workspace_id = $1`, id)
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM "user" WHERE id = $1`, ownerID)
 	})
 }

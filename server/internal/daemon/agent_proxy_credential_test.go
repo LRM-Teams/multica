@@ -65,8 +65,7 @@ func TestAgentProxyRegistrationPinsAndRevokesServerCredential(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodPost, "/api/agent/reminders/list", strings.NewReader(`{}`))
-	req.Header.Set(AgentProxyTokenHeader, strings.TrimSpace(string(rawToken)))
-	req.Header.Set("Authorization", "Bearer forged")
+	req.Header.Set(AgentProxyAuthHeader, "Bearer "+strings.TrimSpace(string(rawToken)))
 	rec := httptest.NewRecorder()
 	d.authenticateAgentProxyRequest(d.credentialProxyAgentAPIHandler()).ServeHTTP(rec, req)
 	if rec.Code != http.StatusNoContent || !forwarded {
@@ -185,7 +184,7 @@ func TestAgentProxyRequestAuthenticationPinsLaunchIdentity(t *testing.T) {
 		if r.Header.Get("X-Agent-ID") != "agent-1" || r.Header.Get("X-Workspace-ID") != "workspace-1" {
 			t.Errorf("identity headers = %q/%q", r.Header.Get("X-Agent-ID"), r.Header.Get("X-Workspace-ID"))
 		}
-		if r.Header.Get(AgentProxyTokenHeader) != "" {
+		if r.Header.Get(AgentProxyAuthHeader) != "" {
 			t.Error("local credential leaked past authentication boundary")
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -200,7 +199,7 @@ func TestAgentProxyRequestAuthenticationPinsLaunchIdentity(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
-			req.Header.Set(AgentProxyTokenHeader, tc.token)
+			req.Header.Set(AgentProxyAuthHeader, "Bearer "+tc.token)
 			req.Header.Set("X-Agent-ID", "agent-forged")
 			rec := httptest.NewRecorder()
 			handler.ServeHTTP(rec, req)

@@ -9,9 +9,9 @@ func TestLocalControlAuthorizedRequiresMatchingConfiguredToken(t *testing.T) {
 	d := &Daemon{cfg: Config{LocalControlToken: " control-token "}}
 
 	tests := []struct {
-		name    string
-		header  string
-		wantOK  bool
+		name   string
+		header string
+		wantOK bool
 	}{
 		{name: "matching token", header: "control-token", wantOK: true},
 		{name: "trimmed matching token", header: "  control-token  ", wantOK: true},

@@ -378,6 +378,12 @@ func cleanupHandlerTestFixture(ctx context.Context, pool *pgxpool.Pool) error {
 	if _, err := tx.Exec(ctx, `DELETE FROM workspace WHERE slug = $1`, handlerTestWorkspaceSlug); err != nil {
 		return err
 	}
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM agent
+		WHERE owner_id = (SELECT id FROM "user" WHERE email = $1)
+	`, handlerTestEmail); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx, `DELETE FROM "user" WHERE email = $1`, handlerTestEmail); err != nil {
 		return err
 	}

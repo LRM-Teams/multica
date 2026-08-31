@@ -29,7 +29,14 @@ func (runner *WorkspaceDaemon) agentInboxPendingSnapshot(agentID string) []proto
 	if !ok {
 		return nil
 	}
-	return coordinator.PendingSnapshot()
+	items := coordinator.MessageItemsSnapshot()
+	messages := make([]protocol.AgentMessageProjection, 0, len(items))
+	for _, item := range items {
+		if item.Message != nil {
+			messages = append(messages, *item.Message)
+		}
+	}
+	return messages
 }
 
 func (runner *WorkspaceDaemon) ensureMessageInbox(agentID, expectedRuntimeID string) (bool, error) {
@@ -94,12 +101,12 @@ func (runner *WorkspaceDaemon) messageContextBoundary(agentID, target string) (i
 	return seq, known, nil
 }
 
-func (runner *WorkspaceDaemon) prepareMessageCoverage(agentID string, request CoverageRequest) (CoverageOffer, error) {
+func coordinatorRevision(runner *WorkspaceDaemon, agentID string) uint64 {
 	coordinator, _, ok := runner.messageCoordinator(agentID)
 	if !ok {
-		return CoverageOffer{}, errors.New("Message coordinator is unavailable")
+		return 0
 	}
-	return coordinator.PrepareCoverage(request)
+	return coordinator.InboxRevision()
 }
 
 func (runner *WorkspaceDaemon) messageSendBoundarySnapshot(agentID, target string) (int64, error) {
@@ -183,8 +190,8 @@ func (runner *WorkspaceDaemon) acceptMessageDelivery(ctx context.Context, delive
 	))
 	if delivery.Message.Directed && launch.QueueState == protocol.AgentStartQueueRunning {
 		if err := runner.runtimes.deliverActiveDirectedProjection(ctx, delivery.AgentID, runtimeID, delivery.Message); err == nil {
-			if markErr := coordinator.MarkRead(delivery.Target, delivery.Seq); markErr != nil {
-				return messageDeliveryAcceptance{}, fmt.Errorf("persist directed Message boundary: %w", markErr)
+			if !coordinator.AckMessage(delivery.Message.ID, delivery.Seq) {
+				return messageDeliveryAcceptance{}, errors.New("retire directed Message inbox item")
 			}
 			result.ack = coordinator.Acknowledgement(delivery)
 			result.outcome = messageDeliveryProviderAccepted
@@ -237,12 +244,61 @@ func (runner *WorkspaceDaemon) acceptMessageDelivery(ctx context.Context, delive
 			runner.recoverStalledRuntimeForQueuedMessage(coordinator, delivery.AgentID, runtimeID)
 			return result, nil
 		}
+		if isRetryableResidentProviderFailure(err) {
+			// Native acceptance can race a provider child exit. Keep the server
+			// delivery pending locally and retry after the resident process is
+			// replaced; reporting provider_rejected here would make the server
+			// persist a failure reply before the retry gets a chance to succeed.
+			go runner.retryQueuedMessageAfterProviderFailure(coordinator, delivery.AgentID, runtimeID)
+			return result, nil
+		}
 		return messageDeliveryAcceptance{}, fmt.Errorf("%w: %v", errDeliveryProviderRejected, err)
 	}
 	runner.recordDiagnostic(canonicalMessageDiagnosticEvent(
 		runner.config.WorkspaceID, runtimeID, delivery, "context_boundary_advanced", "accepted", "",
 	))
 	return result, nil
+}
+
+func (runner *WorkspaceDaemon) retryQueuedMessageAfterProviderFailure(coordinator *MessageCoordinator, agentID, runtimeID string) {
+	if runner == nil || coordinator == nil {
+		return
+	}
+	items := coordinator.MessageItemsSnapshot()
+	messages := make([]protocol.AgentMessageProjection, 0, len(items))
+	for _, item := range items {
+		if item.Message != nil {
+			messages = append(messages, *item.Message)
+		}
+	}
+	if !coordinator.beginProviderDeliveryRetry(messages) {
+		return
+	}
+	if !coordinator.advanceProviderDeliveryRetry(providerDeliveryRetryQueued, providerDeliveryRetryReplacing) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), canonicalIdleAcceptTimeout+10*time.Second)
+	defer cancel()
+	if err := runner.ensureResidentRuntime(ctx, agentID, runtimeID, nil); err != nil {
+		coordinator.finishProviderDeliveryRetry(false)
+		if runner.logger != nil {
+			runner.logger.Warn("resident provider replacement failed", "agent_id", agentID, "runtime_id", runtimeID, "error", err)
+		}
+		return
+	}
+	if !coordinator.advanceProviderDeliveryRetry(providerDeliveryRetryReplacing, providerDeliveryRetryFlushing) {
+		coordinator.finishProviderDeliveryRetry(false)
+		return
+	}
+	if err := coordinator.flushWithResultLocked(ctx, true); err != nil {
+		coordinator.finishProviderDeliveryRetry(false)
+		if runner.logger == nil {
+			return
+		}
+		runner.logger.Warn("queued Message retry after provider failure failed", "agent_id", agentID, "runtime_id", runtimeID, "error", err)
+		return
+	}
+	coordinator.finishProviderDeliveryRetry(true)
 }
 
 // recoverStalledRuntimeForQueuedMessage asks the resident pool to terminate a
@@ -275,6 +331,9 @@ func (runner *WorkspaceDaemon) acknowledgeConsumedDelivery(delivery protocol.Age
 	coordinator, _, ok := runner.messageCoordinator(delivery.AgentID)
 	if !ok {
 		return messageDeliveryAcceptance{}, false
+	}
+	if coordinator.inboxStore != nil && coordinator.inboxStore.IsAcknowledged("message:"+delivery.Message.ID+":"+fmt.Sprint(delivery.Seq)) {
+		return messageDeliveryAcceptance{ack: coordinator.Acknowledgement(delivery), outcome: messageDeliveryDeduplicated}, true
 	}
 	seq, known, err := runner.messageContextBoundary(delivery.AgentID, delivery.Target)
 	if err != nil || !known || delivery.Seq > seq {
@@ -440,29 +499,6 @@ func (runner *WorkspaceDaemon) notifyPendingMessagesAfterTurn(agentID string) {
 	if ok {
 		coordinator.NotifyPendingAfterTurn()
 	}
-}
-
-func (runner *WorkspaceDaemon) commitMessageCoverage(key InboxKey, receiptID string) error {
-	coordinator, _, ok := runner.messageCoordinator(key.AgentID)
-	if !ok || !coordinator.hasInboxKey(key) {
-		return ErrCoverageReceiptInvalid
-	}
-	if !coordinator.ownsCoverageReceipt(receiptID) {
-		return ErrCoverageReceiptInvalid
-	}
-	return coordinator.CommitCoverage(receiptID)
-}
-
-func (runner *WorkspaceDaemon) ownsMessageCoverageReceipt(receiptID string) bool {
-	if runner == nil || runner.inboxes == nil {
-		return false
-	}
-	for _, entry := range runner.inboxes.snapshot() {
-		if entry.coordinator != nil && entry.coordinator.ownsCoverageReceipt(receiptID) {
-			return true
-		}
-	}
-	return false
 }
 
 // handleMessageDelivery owns the wire half of one durable Message transition.

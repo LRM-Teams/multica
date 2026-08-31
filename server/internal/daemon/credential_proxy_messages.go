@@ -172,14 +172,10 @@ func (d *Daemon) credentialProxyMessageReadHandler() http.HandlerFunc {
 			http.Error(w, "invalid read response from server", http.StatusBadGateway)
 			return
 		}
-		offer, err := d.CredentialProxy().PrepareMessageRead(request.AgentID, contextTarget, int64(seenUpToSeq), messages)
+		_, err := d.CredentialProxy().PrepareMessageRead(request.AgentID, contextTarget, int64(seenUpToSeq), messages)
 		if err != nil {
 			http.Error(w, "invalid read coverage from server", http.StatusBadGateway)
 			return
-		}
-		delete(response, MessageCoverageReceiptField)
-		if offer.ReceiptID != "" {
-			response[MessageCoverageReceiptField] = offer.ReceiptID
 		}
 		// Context target and sequence are proxy-only facts. A Message command
 		// never exposes a cursor-like read state to the Agent process.
@@ -358,7 +354,7 @@ func (d *Daemon) credentialProxyMessageMutationHandler(path string, newRequest f
 	}
 }
 
-// registerCredentialProxyMessageRoutes wires only message and coverage
+// registerCredentialProxyMessageRoutes wires the machine-local message API.
 // endpoints; local listener assembly belongs to local_control.go.
 func (d *Daemon) registerCredentialProxyMessageRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /credential-proxy/messages/check", d.authenticateAgentProxyRequest(d.credentialProxyMessageCheckHandler()))
@@ -367,5 +363,4 @@ func (d *Daemon) registerCredentialProxyMessageRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /credential-proxy/messages/search", d.authenticateAgentProxyRequest(d.credentialProxyMessageSearchHandler()))
 	mux.Handle("POST /credential-proxy/messages/resolve", d.authenticateAgentProxyRequest(d.credentialProxyMessageResolveHandler()))
 	mux.Handle("POST /credential-proxy/messages/react", d.authenticateAgentProxyRequest(d.credentialProxyMessageReactHandler()))
-	mux.HandleFunc("POST "+MessageCoverageCommitPath, d.credentialProxyMessageCoverageCommitHandler())
 }

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/stretchr/testify/assert"
@@ -261,8 +262,10 @@ func TestInteractionDAG_RecordingErrorIsBestEffort(t *testing.T) {
 
 // TestInteractionDAG_ChannelConversationRecordsSegment verifies that an
 // ordinary channel conversation (non-training, non-env-dispatch, no project)
-// records a channel-scoped local segment and fires the graph-memory ingest
-// hook, so channel learning reaches staging/segments for consolidation.
+// feeds its canonical segment into graph-memory staging: the seam is
+// write-free (the terminal transaction closed the canonical segment) and
+// forwards the allowlisted task_message snapshot under the canonical segment
+// id, so channel learning reaches staging for consolidation.
 func TestInteractionDAG_ChannelConversationRecordsSegment(t *testing.T) {
 	t.Setenv("MULTICA_MEMORY_TYPE", "graph")
 	store := newFakeInteractionDAGStore()
@@ -278,33 +281,35 @@ func TestInteractionDAG_ChannelConversationRecordsSegment(t *testing.T) {
 	task := db.AgentInboxEvent{ID: taskID, ChannelID: channelID, WorkspaceID: testUUID(1)}
 	msgs.addTaskMessage(util.UUIDToString(taskID), taskMsg(taskID, 1, "assistant", "learned: codename is NIMBUS"))
 	store.addTestTaskMessage(util.UUIDToString(taskID), 1)
+	// The canonical terminal close committed in the owning transaction; the
+	// post-commit seam only needs the segment row to already exist.
+	const canonicalSegID = "seg-ws1-task3-gen1"
+	store.addTestCanonicalSegment(taskID, canonicalSegID)
 
 	// Projectless channel conversation (FinalizeTerminalTaskSideEffects passes
 	// an empty projectID for channel-only tasks).
 	svc.closeSegmentForTerminal(context.Background(), task, "", nil)
 
-	require.Len(t, store.segmentSnapshots, 1, "channel conversation records a local segment")
-	seg := store.segmentSnapshots[0]
-	assert.Equal(t, "channel:"+util.UUIDToString(channelID), seg.ProjectID, "segment is scoped to the channel")
-	assert.Equal(t, "multica:"+util.UUIDToString(taskID), seg.SegmentID)
-	assert.Equal(t, "task_messages", seg.TrajectorySource)
-	assert.False(t, seg.Trainable)
+	assert.Empty(t, store.sessionRuns, "write-free seam performs no legacy session upsert")
+	assert.Len(t, store.segmentSnapshots, 1, "seam records no legacy segment row")
 	assert.Empty(t, client.closeCalls, "zero AReaL close calls")
 	assert.Empty(t, client.exportCalls, "zero AReaL export calls")
 
 	ingested := awaitIngest(t, hook)
-	assert.Equal(t, seg.SegmentID, ingested.SegmentID)
+	assert.Equal(t, canonicalSegID, ingested.SegmentID)
 	assert.Equal(t, util.UUIDToString(taskID), ingested.AgentRunID)
 	assert.Contains(t, string(ingested.Trajectory), "NIMBUS")
 
-	// One-segment-per-task: a repeated close must not record a second segment.
+	// One-feed-per-segment: a repeated close must not re-feed staging.
 	svc.closeSegmentForTerminal(context.Background(), task, "", nil)
-	assert.Len(t, store.segmentSnapshots, 1, "repeated close stays one segment per task")
+	time.Sleep(100 * time.Millisecond)
+	assert.Len(t, hook.calls, 0, "repeated close does not re-feed staging")
 }
 
 // TestInteractionDAG_ChannelConversationWithProjectNonDispatch verifies that a
-// channel task inside a non-env-dispatch project also records a channel-scoped
-// segment (the env-dispatch check gates the project path, not the channel one).
+// channel task inside a non-env-dispatch project also takes the write-free
+// channel feed (the env-dispatch check gates the project path, not the
+// channel one).
 func TestInteractionDAG_ChannelConversationWithProjectNonDispatch(t *testing.T) {
 	t.Setenv("MULTICA_MEMORY_TYPE", "graph")
 	store := newFakeInteractionDAGStore()
@@ -312,16 +317,25 @@ func TestInteractionDAG_ChannelConversationWithProjectNonDispatch(t *testing.T) 
 	msgs := newFakeMessageStore()
 	checker := &fakeEnvDispatchChecker{hasRun: false}
 	svc := newSeamTaskServiceWithChecker(store, client, msgs, checker)
+	hook := newFakeSegmentIngestHook()
+	svc.SetSegmentIngestHook(hook)
 
 	taskID := testUUID(4)
 	channelID := testUUID(8)
 	task := db.AgentInboxEvent{ID: taskID, ChannelID: channelID}
 	msgs.addTaskMessage(util.UUIDToString(taskID), taskMsg(taskID, 1, "assistant", "hello"))
+	store.addTestTaskMessage(util.UUIDToString(taskID), 1)
+	const canonicalSegID = "seg-ws1-task4-gen1"
+	store.addTestCanonicalSegment(taskID, canonicalSegID)
 
 	svc.closeSegmentForTerminal(context.Background(), task, "proj-1", leanSnap())
 
-	require.Len(t, store.segmentSnapshots, 1, "non-dispatch channel task records a channel-scoped segment")
-	assert.Equal(t, "channel:"+util.UUIDToString(channelID), store.segmentSnapshots[0].ProjectID)
+	assert.Empty(t, store.sessionRuns, "non-dispatch channel task performs no legacy write")
+	assert.Len(t, store.segmentSnapshots, 1, "non-dispatch channel task records no legacy segment row")
+	ingested := awaitIngest(t, hook)
+	assert.Equal(t, canonicalSegID, ingested.SegmentID)
+	assert.Equal(t, util.UUIDToString(taskID), ingested.AgentRunID)
+	assert.Contains(t, string(ingested.Trajectory), "hello")
 }
 
 // TestInteractionDAG_ChannelConversationLegacyNoop verifies that legacy

@@ -172,6 +172,19 @@ func (f *fakeInteractionDAGStore) addTestTaskMessage(taskIDText string, seq int3
 	f.taskMessages[taskIDText] = append(f.taskMessages[taskIDText], seq)
 }
 
+// addTestCanonicalSegment registers an existing canonical segment row for a
+// task, modelling the in-transaction terminal close that already committed
+// before the write-free post-commit seam runs.
+func (f *fakeInteractionDAGStore) addTestCanonicalSegment(agentRunID pgtype.UUID, segmentID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.segmentSnapshots = append(f.segmentSnapshots, db.InsertInteractionDAGSegmentWithSnapshotParams{
+		SegmentID:        segmentID,
+		AgentRunID:       agentRunID,
+		TrajectorySource: "task_messages",
+	})
+}
+
 func (f *fakeInteractionDAGStore) AllocateUniversalDAGEdgeSeq(_ context.Context, _ pgtype.UUID) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

@@ -34,16 +34,6 @@ func TestChannelRunTrajectoryShape(t *testing.T) {
 	assert.Contains(t, entries[0].Content, "NIMBUS")
 }
 
-func TestChannelSegmentScopeText(t *testing.T) {
-	assert.Equal(t, "channel:abc", channelSegmentScopeText("abc"))
-}
-
-func TestClampInt32(t *testing.T) {
-	assert.Equal(t, int32(0), clampInt32(-5))
-	assert.Equal(t, int32(7), clampInt32(7))
-	assert.Equal(t, int32(1<<31-1), clampInt32(1<<62))
-}
-
 // recordingFakeSink captures RecordSubmittedRun notifications.
 type recordingFakeSink struct {
 	mu    sync.Mutex
@@ -115,10 +105,17 @@ func (f *graphMemoryRunFixture) newRunningRun(t *testing.T, suffix string) strin
 		INSERT INTO graph_memory_agent_trajectory (run_id) VALUES ($1::uuid)`, runID)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_, _ = f.pool.Exec(context.Background(), `DELETE FROM graph_memory_agent_trajectory WHERE run_id=$1::uuid`, runID)
-		_, _ = f.pool.Exec(context.Background(), `DELETE FROM interaction_dag_segment WHERE agent_run_id=$1::text`, runID)
-		_, _ = f.pool.Exec(context.Background(), `DELETE FROM interaction_dag_session_run WHERE agent_run_id=$1::text`, runID)
-		_, _ = f.pool.Exec(context.Background(), `DELETE FROM graph_memory_agent_run WHERE id=$1::uuid`, runID)
+		cctx := context.Background()
+		// Child-first FK order for the canonical adapter's rows: cursor and
+		// task_message reference the synthetic task; the segment references
+		// the task (its outbox rows cascade); the run and trajectory go last.
+		_, _ = f.pool.Exec(cctx, `DELETE FROM interaction_dag_task_cursor WHERE agent_run_id=$1::uuid`, runID)
+		_, _ = f.pool.Exec(cctx, `DELETE FROM task_message WHERE task_id=$1::uuid`, runID)
+		_, _ = f.pool.Exec(cctx, `DELETE FROM interaction_dag_segment WHERE agent_run_id=$1::uuid`, runID)
+		_, _ = f.pool.Exec(cctx, `DELETE FROM agent_inbox_event WHERE id=$1::uuid`, runID)
+		_, _ = f.pool.Exec(cctx, `DELETE FROM graph_memory_agent_trajectory WHERE run_id=$1::uuid`, runID)
+		_, _ = f.pool.Exec(cctx, `DELETE FROM interaction_dag_session_run WHERE agent_run_id=$1::uuid`, runID)
+		_, _ = f.pool.Exec(cctx, `DELETE FROM graph_memory_agent_run WHERE id=$1::uuid`, runID)
 	})
 	return runID
 }
@@ -213,12 +210,25 @@ func TestGraphMemoryRunSegment_SubmittedRunFeedsStaging(t *testing.T) {
 	recorder.RecordSubmittedRun(ctx, call.runID, f.wsID, call.channelID, call.consumedSeq)
 
 	queries := db.New(pool)
-	seg, err := queries.GetInteractionDAGSegmentByAgentRun(ctx, pgtype.UUID{Bytes: uuid.MustParse(f.runID), Valid: true})
-	require.NoError(t, err, "submitted run records an interaction_dag segment")
-	assert.Equal(t, "channel:"+f.channelID, seg.ProjectID)
-	assert.Equal(t, "memory_agent_run", seg.TrajectorySource)
-	assert.False(t, seg.Trainable)
-	assert.Contains(t, string(seg.Trajectory), "NIMBUS", "trajectory carries the user's learn message")
+	runUUID := pgtype.UUID{Bytes: uuid.MustParse(f.runID), Valid: true}
+	seg, err := queries.GetInteractionDAGSegmentByAgentRun(ctx, runUUID)
+	require.NoError(t, err, "submitted run records a canonical interaction_dag segment")
+	assert.Equal(t, "task_messages", seg.TrajectorySource)
+	assert.Equal(t, int32(1), seg.StartSeq)
+	assert.Equal(t, int32(1), seg.EndSeq)
+	assert.False(t, seg.ProjectID.Valid, "canonical channel segment carries no project scope")
+	assert.True(t, seg.TrainableEligible, "non-derivative run evidence is frozen as projection-eligible")
+
+	// The synthetic task is the run itself: terminal, channel-owned.
+	task, err := queries.GetAgentInboxEvent(ctx, runUUID)
+	require.NoError(t, err, "synthetic task materialized for the run")
+	assert.Equal(t, "acked", task.Status)
+	assert.Equal(t, "completed", task.TerminalOutcome.String)
+	msgs, err := queries.ListTaskMessages(ctx, runUUID)
+	require.NoError(t, err)
+	require.Len(t, msgs, 1)
+	assert.Equal(t, int32(1), msgs[0].Seq)
+	assert.Contains(t, msgs[0].Content.String, "NIMBUS", "task_message carries the user's learn message")
 
 	// The ingest hook routed the segment into the channel graph staging.
 	stagingDir := filepath.Join(root, f.wsID, "memory_graph", "channels", f.channelID, "staging", "segments")
@@ -237,8 +247,12 @@ func TestGraphMemoryRunSegment_SubmittedRunFeedsStaging(t *testing.T) {
 	recorder.RecordSubmittedRun(ctx, f.runID, f.wsID, f.channelID, 9)
 	var count int
 	require.NoError(t, pool.QueryRow(ctx, `
-		SELECT count(*) FROM interaction_dag_segment WHERE agent_run_id=$1::text`, f.runID).Scan(&count))
+		SELECT count(*) FROM interaction_dag_segment WHERE agent_run_id=$1::uuid`, f.runID).Scan(&count))
 	assert.Equal(t, 1, count, "duplicate notification stays one segment")
+	var taskCount int
+	require.NoError(t, pool.QueryRow(ctx, `
+		SELECT count(*) FROM agent_inbox_event WHERE id=$1::uuid`, f.runID).Scan(&taskCount))
+	assert.Equal(t, 1, taskCount, "duplicate notification keeps the single synthetic task")
 
 	// A checkpointed run never notifies and never records. run2 is created
 	// after run1 finishes (one active running run per channel).
@@ -248,6 +262,8 @@ func TestGraphMemoryRunSegment_SubmittedRunFeedsStaging(t *testing.T) {
 	assert.Equal(t, 1, sink.count(), "checkpointed run does not notify the sink")
 	_, err = queries.GetInteractionDAGSegmentByAgentRun(ctx, pgtype.UUID{Bytes: uuid.MustParse(f.run2ID), Valid: true})
 	assert.Error(t, err, "checkpointed run records no segment")
+	_, err = queries.GetAgentInboxEvent(ctx, pgtype.UUID{Bytes: uuid.MustParse(f.run2ID), Valid: true})
+	assert.Error(t, err, "checkpointed run materializes no synthetic task")
 }
 
 // TestGraphMemoryRunSegment_LegacyWorkspaceNoop verifies the memory_type gate:
@@ -289,7 +305,9 @@ func TestGraphMemoryRunSegment_IngestOverrideCapturesExport(t *testing.T) {
 
 	recorder.RecordSubmittedRun(ctx, f.runID, f.wsID, f.channelID, 9)
 	require.Len(t, exports, 1)
-	assert.Equal(t, "multica:"+f.runID, exports[0].SegmentID)
+	seg, err := db.New(pool).GetInteractionDAGSegmentByAgentRun(ctx, pgtype.UUID{Bytes: uuid.MustParse(f.runID), Valid: true})
+	require.NoError(t, err, "canonical segment exists for the submitted run")
+	assert.Equal(t, seg.SegmentID, exports[0].SegmentID, "export carries the canonical segment id")
 	assert.Equal(t, f.runID, exports[0].AgentRunID)
 	assert.Contains(t, string(exports[0].Trajectory), "NIMBUS")
 }

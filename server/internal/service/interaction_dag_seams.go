@@ -4,9 +4,12 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -237,22 +240,26 @@ func (s *TaskService) maybeRecordLocalSegmentForEvent(ctx context.Context, task 
 	}
 }
 
-// channelSegmentScope is the interaction_dag_segment.project_id value for a
-// channel-scoped segment. The column is a plain text key (no FK, no CHECK;
-// assembly filters by exact project_id match), so the synthetic "channel:"
-// prefix keeps channel conversations out of project assembly without a schema
-// change. A future migration can move this to a real channel_id column.
-func channelSegmentScope(channelID pgtype.UUID) string {
-	return "channel:" + util.UUIDToString(channelID)
-}
+// channelStagingFeedOnce dedups the post-commit staging feed per canonical
+// segment id within this process. A repeated terminal close of the same task
+// must not double-feed the reviewer; across restarts the staging store's
+// immutable segment write is the durable backstop.
+var channelStagingFeedOnce sync.Map
 
-// maybeRecordChannelConversationSegment records a local, channel-scoped
-// segment for an ordinary channel conversation (non-training,
-// non-env-dispatch) and feeds it to graph-memory staging, so learning in a
-// channel reaches staging/segments and consolidation has material to merge.
+// maybeRecordChannelConversationSegment feeds an ordinary channel conversation
+// (non-training, non-env-dispatch) into graph-memory staging, so learning in a
+// channel reaches the reviewer's staging area and consolidation has material
+// to merge.
 //
-// Gated on memory_type=graph: legacy workspaces keep the historical no-op
-// because nothing consumes the rows. Tasks without a channel also stay no-op.
+// Under the canonical 454 schema this seam is write-free: the owning terminal
+// transaction already closed the task's universal DAG segment (Task 3), so
+// there is no legacy segment row to record here. The seam resolves the
+// canonical segment id and forwards the allowlisted task_message snapshot
+// (never the legacy segment body) through the ingest hook, which resolves the
+// task's channel and routes the summary into the channel-scoped graph.
+//
+// Gated on memory_type=graph: legacy workspaces keep the historical no-op.
+// Tasks without a channel or without a canonical segment also stay no-op.
 func (s *TaskService) maybeRecordChannelConversationSegment(ctx context.Context, task db.AgentInboxEvent, closingEvent string) {
 	if !task.ChannelID.Valid {
 		return
@@ -261,29 +268,63 @@ func (s *TaskService) maybeRecordChannelConversationSegment(ctx context.Context,
 		return
 	}
 	runID := util.UUIDToString(task.ID)
-	// One-segment-per-task: skip if this task already recorded a segment (the
-	// env-dispatch branch shares this guard via the deterministic segment id).
-	if existing, err := s.Training.DAG.SegmentIDForAgentRun(ctx, runID); err == nil && existing != "" {
-		return
-	}
-	issueID := ""
-	if task.IssueID.Valid {
-		issueID = util.UUIDToString(task.IssueID)
-	}
-	segID, traj, err := s.Training.DAG.RecordLocalSegmentForEvent(ctx, channelSegmentScope(task.ChannelID), runID, issueID, closingEvent, nil)
+	segID, err := s.Training.DAG.SegmentIDForAgentRun(ctx, runID)
 	if err != nil {
-		slog.Warn("interaction_dag: channel conversation segment record failed", "task_id", runID, "err", err)
+		slog.Warn("interaction_dag: channel conversation segment lookup failed", "task_id", runID, "err", err)
 		return
 	}
-	// Graph-memory ingest (async, best-effort): the hook routes by the task's
-	// channel through the route registry into the channel-scoped graph, so the
-	// staging summary lands under memory_graph/channels/<channel_id>.
+	if segID == "" {
+		// No canonical segment: the terminal close never committed for this
+		// task (or predates the canonical wiring); nothing to feed.
+		return
+	}
+	if _, loaded := channelStagingFeedOnce.LoadOrStore(segID, struct{}{}); loaded {
+		return
+	}
+	traj, err := s.channelTaskMessagesTrajectory(ctx, runID)
+	if err != nil {
+		// Release the in-process guard so a later close can retry the feed.
+		channelStagingFeedOnce.Delete(segID)
+		slog.Warn("interaction_dag: channel conversation trajectory read failed", "task_id", runID, "err", err)
+		return
+	}
 	s.fireSegmentIngest(ctx, memorygraph.SegmentExport{
 		SegmentID:    segID,
 		AgentRunID:   runID,
 		Trajectory:   traj,
 		ClosingEvent: closingEvent,
 	})
+}
+
+// channelTaskMessagesTrajectory reads the task's persisted task_messages
+// through the seam message store and serializes the allowlisted fields, the
+// same projection RecordLocalSegmentForEvent uses for its legacy snapshot.
+// The legacy segment body is never read: legacy rows are unverified and are
+// never surfaced downstream.
+func (s *TaskService) channelTaskMessagesTrajectory(ctx context.Context, runID string) (json.RawMessage, error) {
+	dag := s.Training.DAG
+	if dag == nil || dag.store == nil || dag.msgs == nil {
+		return nil, errors.New("interaction_dag: message store not configured")
+	}
+	endSeq, err := dag.store.GetMaxTaskMessageSeq(ctx, runID)
+	if err != nil {
+		return nil, fmt.Errorf("interaction_dag: read max task_message seq for %s: %w", runID, err)
+	}
+	if endSeq <= 0 {
+		return nil, errors.New("interaction_dag: no task messages to feed")
+	}
+	msgs, err := dag.msgs.MessagesForTaskInRange(ctx, db.MessagesForTaskInRangeParams{
+		TaskID:   runID,
+		StartSeq: 1,
+		EndSeq:   endSeq,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("interaction_dag: read messages for %s [1,%d]: %w", runID, endSeq, err)
+	}
+	if len(msgs) == 0 {
+		return nil, errors.New("interaction_dag: no task messages in range")
+	}
+	return json.RawMessage(serializeLocalTrajectory(msgs)), nil
 }
 
 // leanEnvSnapshot builds the refs-only env snapshot available at the task.go

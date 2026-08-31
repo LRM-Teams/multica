@@ -5,7 +5,6 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -71,13 +70,6 @@ func interactionDAGEnabledDefault() bool {
 	return true
 }
 
-// channelSegmentScopeText is the channel-scoped interaction_dag_segment
-// project_id value for a channel UUID already in string form. See
-// channelSegmentScope for why the synthetic prefix is safe.
-func channelSegmentScopeText(channelID string) string {
-	return "channel:" + channelID
-}
-
 // RecordSubmittedRun records the submitted run as a channel-scoped segment and
 // fires the graph-memory ingest. Every step is best-effort: failures are
 // logged and swallowed so a staging hiccup never surfaces to the agent turn.
@@ -91,6 +83,16 @@ func (r *GraphMemoryRunSegmentRecorder) RecordSubmittedRun(ctx context.Context, 
 	wsUUID, err := util.ParseUUID(workspaceID)
 	if err != nil {
 		slog.Warn("graph memory run segment: invalid workspace id", "workspace_id", workspaceID, "err", err)
+		return
+	}
+	channelUUID, err := util.ParseUUID(channelID)
+	if err != nil {
+		slog.Warn("graph memory run segment: invalid channel id", "channel_id", channelID, "err", err)
+		return
+	}
+	runUUID, err := util.ParseUUID(runID)
+	if err != nil {
+		slog.Warn("graph memory run segment: invalid run id", "run_id", runID, "err", err)
 		return
 	}
 	if rt := resolveGraphMemoryType(ctx, r.queries, wsUUID, graphMemoryEnvMemoryType()); rt != "graph" {
@@ -120,15 +122,18 @@ func (r *GraphMemoryRunSegmentRecorder) RecordSubmittedRun(ctx context.Context, 
 	}
 
 	trajectory := channelRunTrajectory(content)
-	scope := channelSegmentScopeText(channelID)
 
-	if err := r.dag.RecordMemoryAgentRunSegment(ctx, scope, runID, trajectory, targetSeq, consumedSeq); err != nil {
-		slog.Warn("graph memory run segment: record failed", "run_id", runID, "err", err)
+	// Canonical representation (Task 3B, D1 plan amendment): materialize the
+	// run as a task-owned universal DAG segment instead of a legacy-shaped
+	// row, so the canonical 454 schema accepts the write.
+	segmentID, err := r.recordCanonicalRunSegment(ctx, wsUUID, channelUUID, runUUID, content, targetSeq, consumedSeq)
+	if err != nil {
+		slog.Warn("graph memory run segment: canonical record failed", "run_id", runID, "err", err)
 		return
 	}
 
 	seg := memorygraph.SegmentExport{
-		SegmentID:  "multica:" + runID,
+		SegmentID:  segmentID,
 		AgentRunID: runID,
 		Trajectory: trajectory,
 	}
@@ -214,67 +219,116 @@ func channelRunTrajectory(content string) json.RawMessage {
 	return data
 }
 
-// RecordMemoryAgentRunSegment records a channel-scoped segment for a submitted
-// graph_memory_agent_run. Unlike RecordLocalSegmentForEvent the trajectory is
-// supplied by the caller (the run's channel evidence), not read from
-// task_messages. Idempotent on the deterministic segment id multica:<runID>.
-// Under the canonical 454 schema the retained writer requires a task-owned
-// segment, so non-task memory-agent runs fail closed inside this method; the
-// sink contract is best-effort and a canonical representation for these runs
-// is pending a plan decision.
-func (s *InteractionDAGService) RecordMemoryAgentRunSegment(
+// recordCanonicalRunSegment materializes a submitted memory-agent run as a
+// task-owned canonical segment (Task 3B): inside one transaction it creates
+// the synthetic task (agent_inbox_event, id = run id, terminal_outcome
+// completed), persists the run's channel evidence as task_message seq 1,
+// then opens segment [1,1] with a canonical inbound boundary and seals it
+// with a terminal close. The canonical segment id is returned. Every write
+// satisfies the 454 validation chain: task/channel ownership, exact range
+// coverage, and the task_messages-only trajectory_source.
+func (r *GraphMemoryRunSegmentRecorder) recordCanonicalRunSegment(
 	ctx context.Context,
-	scope, agentRunID string,
-	trajectory json.RawMessage,
-	startSeq, endSeq int64,
-) error {
-	if !s.enabled || s.store == nil {
-		return nil
+	workspaceID, channelID, runID pgtype.UUID,
+	content string,
+	targetSeq, consumedSeq int64,
+) (string, error) {
+	runIDText := util.UUIDToString(runID)
+	agentID := r.managedAgentID(ctx, util.UUIDToString(workspaceID), util.UUIDToString(channelID))
+	if agentID == "" {
+		return "", fmt.Errorf("graph memory run segment: no active managed memory agent for channel (run %s)", runIDText)
 	}
-	if scope == "" || agentRunID == "" {
-		return errors.New("interaction_dag: RecordMemoryAgentRunSegment requires scope and agent_run_id")
-	}
-	agentRunUUID, err := util.ParseUUID(agentRunID)
+	agentUUID, err := util.ParseUUID(agentID)
 	if err != nil {
-		return fmt.Errorf("interaction_dag: RecordMemoryAgentRunSegment agent_run_id: %w", err)
+		return "", fmt.Errorf("graph memory run segment: parse managed agent id: %w", err)
 	}
-	sessionID := "multica:" + agentRunID
-	if err := s.store.UpsertInteractionDAGSessionRun(ctx, db.UpsertInteractionDAGSessionRunParams{
-		SessionID:  sessionID,
-		ProjectID:  scope,
-		AgentRunID: agentRunID,
-	}); err != nil {
-		return err
-	}
-	sandboxIDs, issueSnapshotID, envState := encodeEnvSnapshot(nil)
-	_, err = s.store.InsertInteractionDAGSegmentWithSnapshot(ctx, db.InsertInteractionDAGSegmentWithSnapshotParams{
-		SegmentID:        sessionID,
-		ProjectID:        scope,
-		AgentRunID:       agentRunUUID,
-		TrajectoryID:     pgtype.Int8{},
-		TensorRef:        nil,
-		ClosingEvent:     pgText(""),
-		StartSeq:         clampInt32(startSeq),
-		EndSeq:           clampInt32(endSeq),
-		TrajectorySource: "memory_agent_run",
-		Trainable:        false,
-		Trajectory:       trajectory,
-		SandboxIds:       sandboxIDs,
-		IssueSnapshotID:  issueSnapshotID,
-		EnvState:         envState,
-	})
-	return err
-}
 
-// clampInt32 narrows a channel message seq for the segment's seq columns;
-// out-of-range values saturate (channel seqs are far below int32 in practice).
-func clampInt32(v int64) int32 {
-	switch {
-	case v < 0:
-		return 0
-	case v > 1<<31-1:
-		return 1<<31 - 1
-	default:
-		return int32(v)
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return "", err
 	}
+	defer tx.Rollback(ctx)
+	qtx := r.queries.WithTx(tx)
+
+	// Synthetic task marker: provenance only, no payload beyond ids and seqs.
+	marker, err := json.Marshal(map[string]any{
+		"kind":         "memory_agent_run",
+		"run_id":       runIDText,
+		"target_seq":   targetSeq,
+		"consumed_seq": consumedSeq,
+	})
+	if err != nil {
+		return "", err
+	}
+	seqFrom := targetSeq
+	if seqFrom < 0 {
+		seqFrom = 0
+	}
+	seqTo := consumedSeq
+	if seqTo < seqFrom {
+		seqTo = seqFrom
+	}
+	// Idempotent on the task id: a retried notification re-creates nothing; the
+	// recorder-level segment dedup normally returns before reaching here.
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO agent_inbox_event (
+			id, workspace_id, agent_id, channel_id, reason, status,
+			seq_from, seq_to, context, started_at, completed_at, terminal_at,
+			terminal_outcome
+		) VALUES (
+			$1::uuid, $2::uuid, $3::uuid, $4::uuid, 'channel_message', 'acked',
+			$5::bigint, $6::bigint, $7::jsonb, now(), now(), now(), 'completed'
+		)
+		ON CONFLICT (id) DO NOTHING`,
+		runID, workspaceID, agentUUID, channelID, seqFrom, seqTo, marker); err != nil {
+		return "", fmt.Errorf("graph memory run segment: insert synthetic task: %w", err)
+	}
+	task, err := qtx.GetAgentInboxEvent(ctx, runID)
+	if err != nil {
+		return "", fmt.Errorf("graph memory run segment: load synthetic task: %w", err)
+	}
+
+	// The evidence lives in task_messages so the future publish pipeline can
+	// compute the redacted content; the legacy segment body is never written.
+	if _, err := qtx.CreateTaskMessage(ctx, db.CreateTaskMessageParams{
+		TaskID:     runID,
+		Seq:        1,
+		Type:       "user",
+		Content:    pgText(content),
+		Visibility: "user_facing",
+	}); err != nil {
+		return "", fmt.Errorf("graph memory run segment: insert evidence task_message: %w", err)
+	}
+
+	dag := NewUniversalInteractionDAG()
+	base := DAGBoundaryInput{
+		WorkspaceID:       workspaceID,
+		Task:              task,
+		MemoryTypeAtEvent: "graph",
+		ChannelID:         channelID,
+	}
+	openInput := base
+	openInput.BoundaryKind = DAGBoundaryInbound
+	openInput.EndSeq = 1
+	open, err := dag.RecordBoundaryTx(ctx, qtx, tx, openInput)
+	if err != nil {
+		return "", fmt.Errorf("graph memory run segment: inbound boundary: %w", err)
+	}
+	if open.Closed {
+		return "", fmt.Errorf("graph memory run segment: inbound boundary closed a segment (run %s)", runIDText)
+	}
+	closeInput := base
+	closeInput.BoundaryKind = DAGBoundaryTerminal
+	closeInput.CloseActionKind = DAGCloseTerminal
+	sealed, err := dag.RecordBoundaryTx(ctx, qtx, tx, closeInput)
+	if err != nil {
+		return "", fmt.Errorf("graph memory run segment: terminal close: %w", err)
+	}
+	if !sealed.Closed {
+		return "", fmt.Errorf("graph memory run segment: terminal close did not seal the segment (run %s)", runIDText)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", err
+	}
+	return sealed.SegmentID, nil
 }

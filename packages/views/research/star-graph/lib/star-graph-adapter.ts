@@ -136,6 +136,7 @@ export function mapNodeState(status: string): StarGraphNodeState {
     case "pending_review":
     case "review":
     case "waiting":
+    case "offline":
       return "pending-review";
     case "conflict":
     case "conflicted":
@@ -205,6 +206,19 @@ function subLabelForTier(
     : undefined;
 }
 
+function semanticRoleFromNode(
+  node: StarGraphNodeInput,
+): StarGraphNodeView["semanticRole"] {
+  const kind =
+    typeof node.node_kind === "string" ? node.node_kind.trim().toLowerCase() : "";
+  if (kind === "goal") return "goal";
+  if (!node.detail || typeof node.detail !== "object" || Array.isArray(node.detail)) {
+    return undefined;
+  }
+  const role = (node.detail as Record<string, unknown>).semantic_role;
+  return role === "goal" || role === "roster" ? role : undefined;
+}
+
 function assignedAgentName(detail: unknown): string | undefined {
   if (!detail || typeof detail !== "object" || Array.isArray(detail)) {
     return undefined;
@@ -237,10 +251,7 @@ export function toStarGraphNodeView(node: StarGraphNodeInput): StarGraphNodeView
   // document_count from a pre-1505 projection without inventing it, so the
   // metrics are simply omitted until typed data exists.
   const metrics = mapMetrics(node.typed);
-  const semanticRole =
-    typeof node.node_kind === "string" && node.node_kind.trim().toLowerCase() === "goal"
-      ? ("goal" as const)
-      : undefined;
+  const semanticRole = semanticRoleFromNode(node);
 
   const mappedState = mapNodeState(node.status);
   // The run projection uses `active` for an execution node that is currently

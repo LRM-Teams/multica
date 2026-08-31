@@ -30,26 +30,6 @@ import (
 	"github.com/multica-ai/multica/server/pkg/taskfailure"
 )
 
-// errAgentReassignedElsewhere marks ensureTaskAgentCredential's terminal
-// classification of a 403 "agent is not bound to this runtime" response: the
-// agent this task names has been reassigned to a different runtime, and no
-// amount of retrying from this daemon will change that. Callers use this to
-// report a clear, distinct failure reason instead of the generic
-// "credential_unavailable" every other credential error produces.
-var errAgentReassignedElsewhere = errors.New("agent is no longer bound to this daemon's runtime (reassigned elsewhere)")
-
-// errRuntimeTransitionInProgress marks ensureTaskAgentCredential's
-// classification of the task #38 "runtime_transition_in_progress" 403 —
-// this daemon's runtime was reassigned within the server's grace window and
-// the new runtime hasn't confirmed the handoff yet. Unlike
-// errAgentReassignedElsewhere this is expected to self-resolve shortly
-// (either the new runtime confirms, or the grace window expires and a later
-// attempt gets the terminal classification instead): callers must retry
-// quietly, without reporting a failed task result or logging above debug —
-// surfacing this to the user would recreate exactly the "why do I see scary
-// errors during a normal machine move" complaint task #38 exists to fix.
-var errRuntimeTransitionInProgress = errors.New("agent runtime transition in progress")
-
 const (
 	taskMessageFlushInterval            = 200 * time.Millisecond
 	taskMessageTrajectoryCoalesceWindow = 350 * time.Millisecond
@@ -111,8 +91,6 @@ type Daemon struct {
 	messageDraftStore          *MessageDraftStore
 	agentProxyCredentialMu     sync.RWMutex
 	agentProxyCredentials      map[[32]byte]authenticatedAgentProxy
-	agentCredentialManagerOnce sync.Once
-	agentCredentialManager     *agentCredentialManager
 	messageSendMu              sync.Mutex
 	messageSends               map[string]int
 	workspaceDaemonMu          sync.RWMutex
@@ -902,7 +880,7 @@ func (d *Daemon) handleHeartbeatActions(ctx context.Context, runtimeID string, r
 	}
 	if resp.PendingModelList != nil {
 		if rt := d.findRuntime(runtimeID); rt != nil {
-			go d.handleModelList(ctx, *rt, resp.PendingModelList.ID)
+			go d.handleModelList(ctx, *rt, resp.PendingModelList.ID, resp.PendingModelList.Environment)
 		}
 	}
 	if resp.PendingLocalSkills != nil {
@@ -948,7 +926,7 @@ func (d *Daemon) handleHeartbeatActions(ctx context.Context, runtimeID string, r
 // back to the server. Model discovery failures are reported as empty
 // lists rather than errors so the UI can still render a creatable
 // dropdown.
-func (d *Daemon) handleModelList(ctx context.Context, rt Runtime, requestID string) {
+func (d *Daemon) handleModelList(ctx context.Context, rt Runtime, requestID string, modelListEnvironment map[string]string) {
 	d.logger.Info("model list requested", "runtime_id", rt.ID, "request_id", requestID, "provider", rt.Provider)
 
 	entry, ok := d.cfg.Agents[rt.Provider]
@@ -960,7 +938,7 @@ func (d *Daemon) handleModelList(ctx context.Context, rt Runtime, requestID stri
 		return
 	}
 
-	models, err := agent.ListModels(ctx, rt.Provider, entry.Path)
+	models, err := agent.ListModelsWithEnvironment(ctx, rt.Provider, entry.Path, modelListEnvironment)
 	if err != nil {
 		d.reportModelListResult(ctx, rt, requestID, map[string]any{
 			"status": "failed",
@@ -1985,85 +1963,6 @@ func taskResultDiscardReason(status string, err error) string {
 	return "task_interrupted_before_terminal"
 }
 
-func (d *Daemon) ensureTaskAgentCredential(ctx context.Context, task Task, taskLog *slog.Logger) (string, error) {
-	return d.ensureAgentCredential(ctx, task.WorkspaceID, task.RuntimeID, task.AgentID, taskLog)
-}
-
-func (d *Daemon) ensureAgentCredential(ctx context.Context, workspaceID, runtimeID, agentID string, taskLog *slog.Logger) (string, error) {
-	credential, err := d.credentialManager().get(ctx, agentCredentialKey{
-		WorkspaceID: workspaceID,
-		RuntimeID:   runtimeID,
-		AgentID:     agentID,
-	}, agentCredentialRevalidate, taskLog)
-	if err != nil {
-		return "", err
-	}
-	return credential.Token, nil
-}
-
-func (d *Daemon) ensureAgentCredentialOnce(ctx context.Context, workspaceID, runtimeID, agentID string, taskLog *slog.Logger) (cachedAgentCredential, error) {
-	if strings.TrimSpace(workspaceID) == "" || strings.TrimSpace(runtimeID) == "" || strings.TrimSpace(agentID) == "" {
-		return cachedAgentCredential{}, fmt.Errorf("workspace_id, runtime_id, and agent_id are required")
-	}
-	cached, cacheOK := readCachedAgentCredential(d.cfg, workspaceID, runtimeID, agentID, time.Now())
-	cachedCredentialID := ""
-	if cacheOK {
-		cachedCredentialID = cached.CredentialID
-	}
-	resp, err := d.client.EnsureAgentCredential(ctx, runtimeID, agentID, cachedCredentialID)
-	if err != nil {
-		if isRuntimeTransitionInProgressError(err) {
-			// task #38: the reassignment may still complete within the
-			// server's grace window — do NOT drop the cached credential
-			// (it could still be valid if this ends up being a false
-			// alarm) and do not warn-log; this is expected traffic during
-			// a normal machine move, not a fault.
-			if taskLog != nil {
-				taskLog.Debug("agent runtime transition in progress; will retry",
-					"agent_id", shortID(agentID), "runtime_id", shortID(runtimeID))
-			}
-			return cachedAgentCredential{}, fmt.Errorf("%w: %s", errRuntimeTransitionInProgress, err.Error())
-		}
-		if isAgentNotBoundToRuntimeError(err) {
-			// This agent was reassigned to a different runtime (agent.runtime_id
-			// is a normal, user-editable field — not data corruption). Retrying
-			// with the same local state can never succeed, so drop the now-stale
-			// cached credential rather than let a future attempt reuse it if this
-			// agent is ever reassigned back to this runtime.
-			if removeErr := removeCachedAgentCredential(d.cfg, workspaceID, agentID); removeErr != nil && taskLog != nil {
-				taskLog.Warn("failed to remove stale agent credential cache", "error", removeErr, "agent_id", shortID(agentID))
-			}
-			if taskLog != nil {
-				taskLog.Warn("agent no longer bound to this runtime; this task's agent has moved elsewhere",
-					"agent_id", shortID(agentID), "runtime_id", shortID(runtimeID))
-			}
-			return cachedAgentCredential{}, fmt.Errorf("%w: %s", errAgentReassignedElsewhere, err.Error())
-		}
-		return cachedAgentCredential{}, fmt.Errorf("ensure daemon agent credential: %w", err)
-	}
-	if resp.Reused {
-		if !cacheOK || resp.ID != cached.CredentialID {
-			return cachedAgentCredential{}, fmt.Errorf("ensure response reused an unexpected credential")
-		}
-		if taskLog != nil {
-			taskLog.Info("agent credential cache validated", "credential_id", shortID(cached.CredentialID), "token_prefix", cached.Prefix)
-		}
-		return cached, nil
-	}
-	cached, err = writeCachedAgentCredential(d.cfg, workspaceID, runtimeID, agentID, *resp, time.Now())
-	if err != nil {
-		return cachedAgentCredential{}, err
-	}
-	if taskLog != nil {
-		taskLog.Info("agent credential ensured",
-			"credential_id", shortID(cached.CredentialID),
-			"token_prefix", cached.Prefix,
-			"rotation_reason", resp.RotationReason,
-		)
-	}
-	return cached, nil
-}
-
 // reportTaskResult writes the final task disposition back to the server.
 //
 // Fail closed: only an explicit "completed" status is reported as success.
@@ -2536,44 +2435,23 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// Prepare the per-run Multica CLI wrapper before injecting the runtime
 	// brief. Product-task transport remains task-scoped; Message delivery has
 	// its own resident Credential Proxy and never enters this runner.
+	// Task execution keeps its short-lived inbox credential. A resident
+	// launch credential must never be copied into the task token file.
 	agentToken := task.AuthToken
-	durableAgentToken := false
-	if task.isInboxTask() && agentToken == "" && !restrictedExecution {
-		token, err := d.ensureTaskAgentCredential(ctx, task, taskLog)
-		if err != nil {
-			if errors.Is(err, errRuntimeTransitionInProgress) {
-				// task #38: do not report a terminal TaskResult at all — an
-				// in-progress transition is not this task's failure to own,
-				// it is exactly the kind of internal noise the grace window
-				// exists to keep off the user's activity feed. Returning a
-				// plain error (not a TaskResult{Status:"failed",...}) routes
-				// through the same un-reported retry path setup failures
-				// above already use, so the caller's normal retry loop picks
-				// this task back up rather than the server ever seeing an
-				// outcome for it.
-				return TaskResult{}, err
-			}
-			if errors.Is(err, errAgentReassignedElsewhere) {
-				return TaskResult{
-					Status:        "failed",
-					Comment:       "agent_reassigned_elsewhere: this agent is now running on a different computer; no action needed on this machine",
-					FailureReason: "agent_reassigned_elsewhere",
-				}, nil
-			}
-			return TaskResult{
-				Status:        "failed",
-				Comment:       fmt.Sprintf("credential_unavailable: %s", err.Error()),
-				FailureReason: "credential_unavailable",
-			}, nil
-		}
-		agentToken = token
-		durableAgentToken = true
+	if agentToken == "" && !restrictedExecution {
+		return TaskResult{
+			Status:        "failed",
+			Comment:       "credential_unavailable: task inbox credential is missing",
+			FailureReason: "credential_unavailable",
+		}, nil
 	}
 	cliWrapperDir := ""
 	cliTokenFile := ""
 	cliBinDir := ""
-	agentProxyWrapperDir := ""
+	selfBin := ""
 	transportAttemptPath := ""
+	var stableTransport *turntransport.Transport
+	var stableTransportBinding turntransport.Binding
 	resolveExecutable := d.resolveExecutable
 	if resolveExecutable == nil {
 		resolveExecutable = os.Executable
@@ -2585,30 +2463,11 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	if restrictedExecution {
 		taskLog.Info("agent cli transport omitted for restricted execution")
 	} else {
-		selfBin, err := resolveExecutable()
+		selfBin, err = resolveExecutable()
 		if err != nil {
 			taskLog.Warn("agent cli transport: unable to resolve multica executable", "error", err)
 		} else {
 			cliBinDir = filepath.Dir(selfBin)
-			agentProxyTransport, proxyErr := d.prepareAgentProxyCLITransport(
-				InboxKey{WorkspaceID: task.WorkspaceID, AgentID: agentID},
-				task.RuntimeID,
-				task.ID,
-				selfBin,
-			)
-			if proxyErr != nil {
-				// Agent Proxy is additive for existing commands. Coverage-aware
-				// commands will fail safe after output when the local credential is
-				// unavailable; unrelated CLI commands retain their prior transport.
-				taskLog.Warn("agent proxy transport unavailable", "reason", "agent_proxy_credential_unavailable")
-			} else {
-				agentProxyWrapperDir = filepath.Dir(agentProxyTransport.wrapperPath)
-				defer func() {
-					if err := agentProxyTransport.Close(); err != nil {
-						taskLog.Warn("agent proxy transport cleanup degraded", "reason", "credential_file_cleanup_failed")
-					}
-				}()
-			}
 			if agentToken == "" {
 				taskLog.Warn("agent cli transport: no run bearer token available; CLI API calls will require external auth")
 			} else {
@@ -2623,13 +2482,6 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 					return TaskResult{}, fmt.Errorf("clear stale transport attempt marker: %w", err)
 				}
 				taskLog.Info("agent cli transport prepared", "wrapper_dir", wrapperDir, "token_file", tokenFile)
-				if durableAgentToken {
-					defer func() {
-						if err := os.RemoveAll(wrapperDir); err != nil {
-							taskLog.Warn("agent cli transport cleanup failed", "wrapper_dir", wrapperDir, "error", err)
-						}
-					}()
-				}
 			}
 		}
 	}
@@ -2729,11 +2581,10 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// real binary directory after it as a fallback for explicit wrapper exec.
 	if cliBinDir != "" {
 		pathDirectories := make([]string, 0, 3)
-		if agentProxyWrapperDir != "" {
-			pathDirectories = append(pathDirectories, agentProxyWrapperDir)
-		}
 		if cliWrapperDir != "" {
-			agentEnv["MULTICA_TOKEN_FILE"] = cliTokenFile
+			if cliTokenFile != "" {
+				agentEnv["MULTICA_TOKEN_FILE"] = cliTokenFile
+			}
 			pathDirectories = append(pathDirectories, cliWrapperDir)
 		}
 		pathDirectories = append(pathDirectories, cliBinDir, os.Getenv("PATH"))
@@ -2752,6 +2603,37 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	arealModel, arealArgs, arealEnvKey, arealEnvVal, arealOverride := arealProxyExecOverride(task.ArealProxy)
 	if arealOverride && arealEnvKey != "" {
 		agentEnv[arealEnvKey] = arealEnvVal
+	}
+	if !restrictedExecution && profile == executionProfileFull && isCanonicalResidentProvider(provider) && agentToken != "" {
+		var transportErr error
+		stableTransport, transportErr = prepareStableAgentCLITransport(d.cfg, task.WorkspaceID, agentID, selfBin)
+		if transportErr != nil {
+			return TaskResult{}, fmt.Errorf("prepare stable agent CLI transport: %w", transportErr)
+		}
+		currentTurn := make(map[string]string)
+		for key, value := range agentEnv {
+			if turntransport.IsTurnEnvironmentKey(key) {
+				currentTurn[key] = value
+			}
+		}
+		var bindErr error
+		stableTransportBinding, bindErr = stableTransport.Bind(task.ID, agentToken, currentTurn)
+		if bindErr != nil {
+			return TaskResult{}, fmt.Errorf("bind stable agent CLI transport: %w", bindErr)
+		}
+		defer func() {
+			if _, unbindErr := turntransport.Unbind(stableTransportBinding); unbindErr != nil {
+				taskLog.Warn("stable agent CLI transport cleanup failed", "error", unbindErr)
+			}
+		}()
+		delete(agentEnv, "MULTICA_TOKEN_FILE")
+		stablePath := filepath.Dir(stableTransport.WrapperPath())
+		if cliBinDir != "" {
+			stablePath += string(os.PathListSeparator) + cliBinDir
+		}
+		stablePath += string(os.PathListSeparator) + os.Getenv("PATH")
+		agentEnv["PATH"] = stablePath
+		transportAttemptPath = turntransport.AttemptPath(stableTransport.Root())
 	}
 	backendCfg := agent.Config{
 		ExecutablePath: entry.Path,
@@ -2863,9 +2745,70 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// SystemPrompt (e.g. Cursor).
 	appendAgentScopeSystemPrompt(&execOpts, agentScopeMemories)
 
-	backend, createErr := agent.New(provider, backendCfg)
-	if createErr != nil {
-		return TaskResult{}, fmt.Errorf("create agent backend: %w", createErr)
+	var runtimeLease *agentRuntimeLease
+	var backend agent.Backend
+	var createErr error
+	if !restrictedExecution && profile == executionProfileFull && isCanonicalResidentProvider(provider) {
+		stableEnvironment := stripProviderCredentialTransport(agentEnv)
+		identity, identityErr := newCanonicalAgentRuntimeIdentity(canonicalAgentRuntimeIdentityParams{
+			AgentID:             agentID,
+			RuntimeID:           task.RuntimeID,
+			Provider:            provider,
+			Executable:          entry.Path,
+			Model:               model,
+			Thinking:            thinkingLevel,
+			WorkDir:             agentRootPath,
+			SystemPrompt:        execOpts.SystemPrompt,
+			MCP:                 string(mcpConfig),
+			CustomArgs:          customArgs,
+			Environment:         stableEnvironment,
+			WorkspaceID:         task.WorkspaceID,
+			AgentInstructions:   instructions,
+			WorkspaceContext:    task.WorkspaceContext,
+			StartupStaticDigest: execenv.StartupStaticDigest(provider, taskCtx),
+		})
+		if identityErr != nil {
+			return TaskResult{}, fmt.Errorf("build canonical runtime identity: %w", identityErr)
+		}
+		residentConfig := backendCfg
+		residentConfig.ResidentOptions = execOpts
+		residentConfig.ResidentOptions.Cwd = agentRootPath
+		acquireRequest := agentRuntimeAcquireRequest{
+			Identity:      identity,
+			BackendConfig: residentConfig,
+			Factory:       defaultCanonicalRuntimeFactory(provider),
+		}
+		// A resident slot is deliberately single-flight. Tasks for the same
+		// Agent/runtime wait here and are picked up by the same provider process
+		// after the previous turn releases the slot, instead of spawning another
+		// provider or failing the task as "busy".
+		for {
+			runtimeLease, createErr = d.canonicalRuntimes.acquire(acquireRequest)
+			if !errors.Is(createErr, ErrCanonicalAgentRuntimeBusy) {
+				break
+			}
+			timer := time.NewTimer(250 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				if !timer.Stop() {
+					<-timer.C
+				}
+				createErr = ctx.Err()
+			case <-timer.C:
+			}
+			if createErr != nil && !errors.Is(createErr, ErrCanonicalAgentRuntimeBusy) {
+				break
+			}
+		}
+		if createErr != nil {
+			return TaskResult{}, fmt.Errorf("acquire canonical agent runtime: %w", createErr)
+		}
+		backend = runtimeLease.backend
+	} else {
+		backend, createErr = agent.New(provider, backendCfg)
+		if createErr != nil {
+			return TaskResult{}, fmt.Errorf("create agent backend: %w", createErr)
+		}
 	}
 
 	taskLog.Debug("invoking backend",
@@ -2919,6 +2862,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		if markSessionID != "" {
 			d.turnScopeMemory.markInjected(issueTurnScopeSessionKey(agentID, task.RuntimeID, markSessionID), injectedTurnMemories)
 		}
+	}
+	if runtimeLease != nil {
+		runtimeLease.releaseForResult(result.Status, nil)
 	}
 	elapsed := time.Since(taskStart).Round(time.Second)
 	taskLog.Info("agent finished",

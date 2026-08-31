@@ -342,7 +342,7 @@ func TestEnsureDaemonAgentCredential_DerivesOwnerFromRuntime(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if resp.Token == "" || resp.AgentID != agentID || resp.ExpiresAt == nil {
+	if resp.Token == "" || resp.AgentID != agentID || resp.ExpiresAt != nil {
 		t.Fatalf("unexpected response: %#v", resp)
 	}
 	credential, err := testHandler.Queries.GetAgentCredentialByHash(context.Background(), auth.HashToken(resp.Token))
@@ -352,9 +352,29 @@ func TestEnsureDaemonAgentCredential_DerivesOwnerFromRuntime(t *testing.T) {
 	if uuidToString(credential.WorkspaceID) != testWorkspaceID || uuidToString(credential.UserID) != testUserID || uuidToString(credential.AgentID) != agentID {
 		t.Fatalf("credential binding workspace/user/agent = %s/%s/%s", uuidToString(credential.WorkspaceID), uuidToString(credential.UserID), uuidToString(credential.AgentID))
 	}
-	remaining := time.Until(credential.ExpiresAt.Time)
-	if !credential.ExpiresAt.Valid || remaining < 23*time.Hour || remaining > 25*time.Hour {
-		t.Fatalf("daemon-issued credential expires_at = %v, want bounded future expiry", credential.ExpiresAt)
+	if credential.ExpiresAt.Valid {
+		t.Fatalf("daemon-issued credential expires_at = %v, want no wall-clock expiry", credential.ExpiresAt)
+	}
+}
+
+func TestEnsureDaemonAgentCredentialRejectsStoppedAgent(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	daemonID := "agent-credential-stopped-" + uuid.NewString()
+	runtimeID := handlerTestRuntimeID(t)
+	seedHandlerTestRuntimeOwner(t, testUserID)
+	seedHandlerTestRuntimeDaemonID(t, daemonID)
+	agentID := createHandlerTestAgent(t, "agent-credential-stopped", nil)
+	if _, err := testPool.Exec(context.Background(), `UPDATE agent SET stopped_at = now() WHERE id = $1`, agentID); err != nil {
+		t.Fatal(err)
+	}
+	req := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agents/"+agentID+"/credential", nil, testWorkspaceID, daemonID)
+	req = withRouteParams(req, "runtimeId", runtimeID, "agentId", agentID)
+	rec := httptest.NewRecorder()
+	testHandler.EnsureDaemonAgentCredential(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d body=%s, want 404", rec.Code, rec.Body.String())
 	}
 }
 
@@ -397,14 +417,14 @@ func TestEnsureDaemonAgentCredential_ReusesOnlyLiveCachedCredential(t *testing.T
 	if _, err := testHandler.Queries.RevokeAgentCredential(context.Background(), parseUUID(issued.ID)); err != nil {
 		t.Fatalf("revoke cached credential: %v", err)
 	}
-	status, rotated := ensure(map[string]any{"credential_id": issued.ID})
-	if status != http.StatusCreated || rotated.Token == "" || rotated.ID == issued.ID || rotated.RotationReason != "revoked" {
-		t.Fatalf("revoked ensure = %d %#v, want rotated credential", status, rotated)
+	status, replacement := ensure(map[string]any{"credential_id": issued.ID})
+	if status != http.StatusCreated || replacement.Token == "" || replacement.ID == issued.ID || replacement.IssuanceReason != "revoked" {
+		t.Fatalf("revoked ensure = %d %#v, want replacement credential", status, replacement)
 	}
 	var auditReused bool
 	var auditReason string
 	if err := testPool.QueryRow(context.Background(), `
-		SELECT (details->>'reused')::boolean, details->>'rotation_reason'
+		SELECT (details->>'reused')::boolean, details->>'issuance_reason'
 		FROM activity_log
 		WHERE workspace_id = $1
 		  AND action = $2
@@ -419,141 +439,46 @@ func TestEnsureDaemonAgentCredential_ReusesOnlyLiveCachedCredential(t *testing.T
 	}
 }
 
-func TestEnsureDaemonAgentCredential_RevokesSupersededLiveCachedCredentialOnly(t *testing.T) {
+func TestEnsureDaemonAgentCredential_StaleLaunchCannotRevokeReplacement(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
-
-	ctx := context.Background()
-	daemonID := "agent-credential-supersede-" + uuid.NewString()
+	daemonID := "agent-credential-launch-cas-" + uuid.NewString()
 	runtimeID := handlerTestRuntimeID(t)
 	seedHandlerTestRuntimeOwner(t, testUserID)
 	seedHandlerTestRuntimeDaemonID(t, daemonID)
-	agentID := createHandlerTestAgent(t, "agent-credential-daemon-supersede", nil)
-
-	manualToken, err := auth.GenerateAgentCredentialToken()
-	if err != nil {
-		t.Fatalf("generate manual sibling credential token: %v", err)
-	}
-	manualCredential, err := testHandler.Queries.CreateAgentCredential(ctx, db.CreateAgentCredentialParams{
-		TokenHash:   auth.HashToken(manualToken),
-		TokenPrefix: tokenPrefix(manualToken),
-		AgentID:     parseUUID(agentID),
-		WorkspaceID: parseUUID(testWorkspaceID),
-		UserID:      parseUUID(testUserID),
-		ExpiresAt:   pgtype.Timestamptz{},
-	})
-	if err != nil {
-		t.Fatalf("create manual sibling credential: %v", err)
-	}
-
-	ensure := func(body any) (int, CreateAgentCredentialResponse) {
-		t.Helper()
+	agentID := createHandlerTestAgent(t, "agent-credential-launch-cas", nil)
+	ensure := func(body any) *httptest.ResponseRecorder {
 		req := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agents/"+agentID+"/credential", body, testWorkspaceID, daemonID)
 		req = withRouteParams(req, "runtimeId", runtimeID, "agentId", agentID)
-		w := httptest.NewRecorder()
-		testHandler.EnsureDaemonAgentCredential(w, req)
-		var resp CreateAgentCredentialResponse
-		if w.Body.Len() > 0 {
-			if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-				t.Fatalf("decode response: %v; body=%s", err, w.Body.String())
-			}
+		recorder := httptest.NewRecorder()
+		testHandler.EnsureDaemonAgentCredential(recorder, req)
+		return recorder
+	}
+	decode := func(recorder *httptest.ResponseRecorder) CreateAgentCredentialResponse {
+		var response CreateAgentCredentialResponse
+		if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+			t.Fatalf("decode ensure response: %v", err)
 		}
-		return w.Code, resp
+		return response
 	}
 
-	status, issued := ensure(nil)
-	if status != http.StatusCreated || issued.Token == "" || issued.ID == "" {
-		t.Fatalf("initial ensure = %d %#v, want newly issued credential", status, issued)
+	firstRecorder := ensure(nil)
+	first := decode(firstRecorder)
+	if firstRecorder.Code != http.StatusCreated {
+		t.Fatalf("initial ensure = %d %s", firstRecorder.Code, firstRecorder.Body.String())
 	}
-	if _, err := testPool.Exec(ctx, `
-		UPDATE agent_credential
-		SET expires_at = now() + interval '30 minutes'
-		WHERE id = $1
-	`, issued.ID); err != nil {
-		t.Fatalf("move cached credential into refresh window: %v", err)
+	replacementRecorder := ensure(map[string]any{"credential_id": first.ID, "replace_launch": true})
+	replacement := decode(replacementRecorder)
+	if replacementRecorder.Code != http.StatusCreated || replacement.ID == first.ID || replacement.IssuanceReason != "launch_replaced" {
+		t.Fatalf("replacement ensure = %d %#v", replacementRecorder.Code, replacement)
 	}
-
-	status, rotated := ensure(map[string]any{"credential_id": issued.ID})
-	if status != http.StatusCreated || rotated.Token == "" || rotated.ID == issued.ID || rotated.RotationReason != "near_expiry" {
-		t.Fatalf("near-expiry ensure = %d %#v, want rotated credential", status, rotated)
+	staleRecorder := ensure(map[string]any{"credential_id": first.ID, "replace_launch": true})
+	if staleRecorder.Code != http.StatusConflict {
+		t.Fatalf("stale ensure = %d %s, want 409", staleRecorder.Code, staleRecorder.Body.String())
 	}
-	if _, err := testHandler.Queries.GetAgentCredentialByHash(ctx, auth.HashToken(issued.Token)); !isNotFound(err) {
-		t.Fatalf("superseded credential remains live: %v", err)
-	}
-	if _, err := testHandler.Queries.GetAgentCredentialByHash(ctx, auth.HashToken(rotated.Token)); err != nil {
-		t.Fatalf("replacement credential is not live: %v", err)
-	}
-	if _, err := testHandler.Queries.GetAgentCredentialByHash(ctx, auth.HashToken(manualToken)); err != nil {
-		t.Fatalf("manual sibling credential was revoked: %v", err)
-	}
-
-	var (
-		revokedAt                   pgtype.Timestamptz
-		auditSupersededCredentialID string
-		auditSupersededRevoked      bool
-	)
-	if err := testPool.QueryRow(ctx, `
-		SELECT revoked_at
-		FROM agent_credential
-		WHERE id = $1
-	`, issued.ID).Scan(&revokedAt); err != nil {
-		t.Fatalf("load superseded credential: %v", err)
-	}
-	if !revokedAt.Valid {
-		t.Fatal("superseded credential revoked_at is NULL")
-	}
-	if err := testPool.QueryRow(ctx, `
-		SELECT
-			details->>'superseded_credential_id',
-			(details->>'superseded_credential_revoked')::boolean
-		FROM activity_log
-		WHERE workspace_id = $1
-		  AND action = $2
-		  AND details->>'agent_id' = $3
-		ORDER BY created_at DESC, id DESC
-		LIMIT 1
-	`, testWorkspaceID, agentCredentialActivityDaemonEnsured, agentID).Scan(
-		&auditSupersededCredentialID,
-		&auditSupersededRevoked,
-	); err != nil {
-		t.Fatalf("load daemon rotation audit: %v", err)
-	}
-	if auditSupersededCredentialID != issued.ID || !auditSupersededRevoked {
-		t.Fatalf(
-			"daemon rotation audit superseded id/revoked = %q/%v, want %q/true",
-			auditSupersededCredentialID,
-			auditSupersededRevoked,
-			issued.ID,
-		)
-	}
-
-	status, retried := ensure(map[string]any{"credential_id": issued.ID})
-	if status != http.StatusCreated || retried.Token == "" || retried.ID == issued.ID || retried.ID == rotated.ID || retried.RotationReason != "revoked" {
-		t.Fatalf("replayed superseded ensure = %d %#v, want one replacement for revoked old credential", status, retried)
-	}
-	if _, err := testHandler.Queries.GetAgentCredentialByHash(ctx, auth.HashToken(rotated.Token)); !isNotFound(err) {
-		t.Fatalf("first replacement remains live after replaying superseded credential: %v", err)
-	}
-	if _, err := testHandler.Queries.GetAgentCredentialByHash(ctx, auth.HashToken(retried.Token)); err != nil {
-		t.Fatalf("retry replacement credential is not live: %v", err)
-	}
-	if _, err := testHandler.Queries.GetAgentCredentialByHash(ctx, auth.HashToken(manualToken)); err != nil {
-		t.Fatalf("manual sibling credential was revoked by replay cleanup: %v", err)
-	}
-
-	status, fromManual := ensure(map[string]any{"credential_id": uuidToString(manualCredential.ID)})
-	if status != http.StatusCreated || fromManual.Token == "" || fromManual.ID == uuidToString(manualCredential.ID) || fromManual.RotationReason != "not_daemon_issued" {
-		t.Fatalf("manual cached ensure = %d %#v, want separate daemon credential", status, fromManual)
-	}
-	if _, err := testHandler.Queries.GetAgentCredentialByHash(ctx, auth.HashToken(manualToken)); err != nil {
-		t.Fatalf("submitted manual credential was revoked: %v", err)
-	}
-	if _, err := testHandler.Queries.GetAgentCredentialByHash(ctx, auth.HashToken(retried.Token)); !isNotFound(err) {
-		t.Fatalf("prior daemon credential remains live after manual-id ensure: %v", err)
-	}
-	if _, err := testHandler.Queries.GetAgentCredentialByHash(ctx, auth.HashToken(fromManual.Token)); err != nil {
-		t.Fatalf("daemon credential issued from manual-id ensure is not live: %v", err)
+	if _, err := testHandler.Queries.GetAgentCredentialByHash(context.Background(), auth.HashToken(replacement.Token)); err != nil {
+		t.Fatalf("replacement credential was revoked by stale launch: %v", err)
 	}
 }
 
@@ -640,7 +565,7 @@ func TestEnsureDaemonAgentCredential_ConcurrentMissingCacheLeavesOneDaemonCreden
 			expires_at,
 			issuance_source
 		)
-		VALUES ($1, $2, $3, $4, $5, now() + interval '24 hours', 'daemon')
+		VALUES ($1, $2, $3, $4, $5, NULL, 'daemon')
 	`, auth.HashToken(duplicateToken), tokenPrefix(duplicateToken), agentID, testWorkspaceID, testUserID); !isUniqueViolation(err) {
 		t.Fatalf("second unrevoked daemon credential error = %v, want unique violation", err)
 	}
@@ -681,7 +606,7 @@ func TestEnsureDaemonAgentCredential_DoesNotRevokeScopeMismatchCredential(t *tes
 		AgentID:     parseUUID(otherAgentID),
 		WorkspaceID: parseUUID(testWorkspaceID),
 		UserID:      parseUUID(testUserID),
-		ExpiresAt:   pgtype.Timestamptz{Time: time.Now().Add(daemonAgentCredentialTTL), Valid: true},
+		ExpiresAt:   pgtype.Timestamptz{},
 	})
 	if err != nil {
 		t.Fatalf("create other agent credential: %v", err)
@@ -702,7 +627,7 @@ func TestEnsureDaemonAgentCredential_DoesNotRevokeScopeMismatchCredential(t *tes
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v; body=%s", err, w.Body.String())
 	}
-	if w.Code != http.StatusCreated || resp.Token == "" || resp.RotationReason != "not_found_or_scope_mismatch" {
+	if w.Code != http.StatusCreated || resp.Token == "" || resp.IssuanceReason != "not_found_or_scope_mismatch" {
 		t.Fatalf("scope-mismatch ensure = %d %#v, want safe replacement", w.Code, resp)
 	}
 	if _, err := testHandler.Queries.GetAgentCredentialByHash(ctx, auth.HashToken(otherToken)); err != nil {
@@ -742,7 +667,7 @@ func TestEnsureDaemonAgentCredential_DoesNotRevokePreviousRuntimeOwnerCredential
 	if err != nil {
 		t.Fatalf("generate previous owner credential token: %v", err)
 	}
-	oldOwnerCredential, err := testHandler.Queries.CreateAgentCredential(ctx, db.CreateAgentCredentialParams{
+	oldOwnerCredential, err := testHandler.Queries.CreateDaemonAgentCredential(ctx, db.CreateDaemonAgentCredentialParams{
 		TokenHash:   auth.HashToken(oldOwnerToken),
 		TokenPrefix: tokenPrefix(oldOwnerToken),
 		AgentID:     parseUUID(agentID),
@@ -795,11 +720,11 @@ func TestEnsureDaemonAgentCredential_DoesNotRevokePreviousRuntimeOwnerCredential
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v; body=%s", err, w.Body.String())
 	}
-	if w.Code != http.StatusCreated || resp.Token == "" || resp.RotationReason != "not_found_or_scope_mismatch" {
+	if w.Code != http.StatusCreated || resp.Token == "" || resp.IssuanceReason != "not_found_or_scope_mismatch" {
 		t.Fatalf("previous-owner ensure = %d %#v, want current-owner replacement", w.Code, resp)
 	}
-	if _, err := testHandler.Queries.GetAgentCredentialByHash(ctx, auth.HashToken(oldOwnerToken)); err != nil {
-		t.Fatalf("previous runtime owner credential was revoked: %v", err)
+	if _, err := testHandler.Queries.GetAgentCredentialByHash(ctx, auth.HashToken(oldOwnerToken)); !isNotFound(err) {
+		t.Fatalf("previous runtime owner credential still authenticates: %v", err)
 	}
 
 	var newCredentialOwnerID string
@@ -844,14 +769,6 @@ func TestEnsureDaemonAgentCredential_AuditFailureRollsBackRotation(t *testing.T)
 	if issuedRec.Code != http.StatusCreated || issued.Token == "" || issued.ID == "" {
 		t.Fatalf("initial ensure = %d %#v, want newly issued credential", issuedRec.Code, issued)
 	}
-	if _, err := testPool.Exec(ctx, `
-		UPDATE agent_credential
-		SET expires_at = now() + interval '30 minutes'
-		WHERE id = $1
-	`, issued.ID); err != nil {
-		t.Fatalf("move cached credential into refresh window: %v", err)
-	}
-
 	var (
 		credentialsBefore int
 		auditsBefore      int
@@ -875,9 +792,9 @@ func TestEnsureDaemonAgentCredential_AuditFailureRollsBackRotation(t *testing.T)
 
 	restore := installAgentCredentialAuditFailure(testHandler)
 	defer restore()
-	rotatedRec := ensure(map[string]any{"credential_id": issued.ID})
-	if rotatedRec.Code != http.StatusInternalServerError {
-		t.Fatalf("audit failure rotate = %d %s, want 500", rotatedRec.Code, rotatedRec.Body.String())
+	reusedRec := ensure(map[string]any{"credential_id": issued.ID})
+	if reusedRec.Code != http.StatusInternalServerError {
+		t.Fatalf("audit failure reuse = %d %s, want 500", reusedRec.Code, reusedRec.Body.String())
 	}
 
 	if _, err := testHandler.Queries.GetAgentCredentialByHash(ctx, auth.HashToken(issued.Token)); err != nil {

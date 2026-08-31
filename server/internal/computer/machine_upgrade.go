@@ -260,8 +260,8 @@ func (upgrade *computerMachineUpgrade) executeServiceUpgrade(identity WorkspaceD
 		upgrade.emitRunnerEvent(identity, protocol.EventComputerUpgradeDone, protocol.ComputerUpgradeDonePayload{RequestID: command.RequestID, OK: false, Error: "stage_failed"})
 		return
 	}
-	upgrade.recordProgress(operationID, "verifying", "Verifying binary")
-	upgrade.emitRunnerEvent(identity, protocol.EventComputerUpgradeProgress, protocol.ComputerUpgradeProgressPayload{RequestID: command.RequestID, Phase: "verifying", Message: "Verifying binary"})
+	upgrade.recordProgress(operationID, "verifying", "Verifying release")
+	upgrade.emitRunnerEvent(identity, protocol.EventComputerUpgradeProgress, protocol.ComputerUpgradeProgressPayload{RequestID: command.RequestID, Phase: "verifying", Message: "Verifying release"})
 	if err := upgrade.verifyBinary(ctx, staged, target); err != nil {
 		upgrade.recordDone(operationID, "", "verification_failed")
 		upgrade.emitRunnerEvent(identity, protocol.EventComputerUpgradeDone, protocol.ComputerUpgradeDonePayload{RequestID: command.RequestID, OK: false, Error: "verification_failed"})

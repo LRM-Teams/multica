@@ -48,9 +48,9 @@ func TestIsSafeAgentName(t *testing.T) {
 }
 
 func TestBuildLoginShellResolveScript_ShapeAndContent(t *testing.T) {
-	got := buildLoginShellResolveScript([]string{"claude", "cursor-agent"})
+	got := buildLoginShellResolveScript([]string{"claude", "agent", "cursor-agent"})
 	// Must list exactly the names we asked for, in order.
-	if !strings.Contains(got, "for n in claude cursor-agent;") {
+	if !strings.Contains(got, "for n in claude agent cursor-agent;") {
 		t.Errorf("script missing expected for-loop header:\n%s", got)
 	}
 	// Must strip aliases AND functions before `command -v` — otherwise

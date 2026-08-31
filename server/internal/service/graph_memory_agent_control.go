@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -18,6 +19,22 @@ const (
 )
 
 var ErrGraphMemoryAgentUnavailable = errors.New("graph memory agent unavailable")
+
+const graphMemoryAgentDefaultNodeOptions = "--use-openssl-ca"
+
+func mergeGraphMemoryAgentCustomEnv(raw []byte) ([]byte, error) {
+	env := map[string]string{}
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed != "" && trimmed != "null" {
+		if err := json.Unmarshal(raw, &env); err != nil {
+			return nil, fmt.Errorf("decode managed graph memory agent custom env: %w", err)
+		}
+	}
+	if _, exists := env["NODE_OPTIONS"]; !exists {
+		env["NODE_OPTIONS"] = graphMemoryAgentDefaultNodeOptions
+	}
+	return json.Marshal(env)
+}
 
 // GraphMemoryAgentChannelStatus is the externally observable provisioning state.
 type GraphMemoryAgentChannelStatus struct {
@@ -61,6 +78,33 @@ func EffectiveGraphMemoryMode(memoryType, workspaceMode, channelOverride string)
 	return GraphMemoryModeAgent
 }
 
+type graphMemoryAgentRuntimeConfig struct {
+	runtimeID pgtype.UUID
+	model     string
+	thinking  string
+	source    string
+}
+
+func resolveGraphMemoryAgentRuntimeConfig(
+	profileRuntimeID, channelRuntimeID pgtype.UUID,
+	profileModel, channelModel, profileThinking, channelThinking string,
+) graphMemoryAgentRuntimeConfig {
+	if channelRuntimeID.Valid {
+		return graphMemoryAgentRuntimeConfig{
+			runtimeID: channelRuntimeID,
+			model:     strings.TrimSpace(channelModel),
+			thinking:  strings.TrimSpace(channelThinking),
+			source:    "channel",
+		}
+	}
+	return graphMemoryAgentRuntimeConfig{
+		runtimeID: profileRuntimeID,
+		model:     strings.TrimSpace(profileModel),
+		thinking:  strings.TrimSpace(profileThinking),
+		source:    "workspace",
+	}
+}
+
 func (c *PostgresGraphMemoryAgentControlPlane) ReconcileChannel(ctx context.Context, workspaceID, channelID string) (GraphMemoryAgentChannelStatus, error) {
 	if c == nil || c.pool == nil {
 		return GraphMemoryAgentChannelStatus{}, ErrGraphMemoryAgentUnavailable
@@ -74,29 +118,50 @@ func (c *PostgresGraphMemoryAgentControlPlane) ReconcileChannel(ctx context.Cont
 		return GraphMemoryAgentChannelStatus{}, err
 	}
 
-	var channelName, kind, override, memoryType, workspaceMode, memoryAgentModel, memoryAgentThinking string
+	var channelName, kind, override, memoryType, workspaceMode string
+	var profileModel, profileThinking, channelModel, channelThinking string
 	var maxSeq int64
-	var runtimeID pgtype.UUID
+	var profileRuntimeID, channelRuntimeID pgtype.UUID
 	var archivedAt pgtype.Timestamptz
 	err = tx.QueryRow(ctx, `
 		SELECT c.name, c.kind, c.graph_memory_mode_override, c.archived_at,
-		       COALESCE(p.memory_type, 'legacy'), COALESCE(p.graph_memory_mode, 'agent'), p.memory_agent_runtime_id,
-		       COALESCE(p.memory_agent_model,''),COALESCE(p.memory_agent_thinking,''),
+		       c.graph_memory_agent_runtime_id_override,
+		       COALESCE(c.graph_memory_agent_model_override,''),
+		       COALESCE(c.graph_memory_agent_thinking_override,''),
+		       COALESCE(p.memory_type, 'legacy'), COALESCE(p.graph_memory_mode, 'agent'),
+		       p.memory_agent_runtime_id, COALESCE(p.memory_agent_model,''),
+		       COALESCE(p.memory_agent_thinking,''),
 		       COALESCE((SELECT max(seq) FROM channel_message WHERE channel_id=c.id), 0)
 		FROM channel c
 		LEFT JOIN graph_memory_profile p ON p.workspace_id=c.workspace_id
 		WHERE c.id=$1::uuid AND c.workspace_id=$2::uuid
 		FOR UPDATE OF c`, channelID, workspaceID).Scan(
-		&channelName, &kind, &override, &archivedAt, &memoryType, &workspaceMode, &runtimeID, &memoryAgentModel, &memoryAgentThinking, &maxSeq,
+		&channelName, &kind, &override, &archivedAt,
+		&channelRuntimeID, &channelModel, &channelThinking,
+		&memoryType, &workspaceMode, &profileRuntimeID, &profileModel, &profileThinking, &maxSeq,
 	)
 	if err != nil {
 		return GraphMemoryAgentChannelStatus{}, err
 	}
+	resolvedRuntime := resolveGraphMemoryAgentRuntimeConfig(
+		profileRuntimeID, channelRuntimeID,
+		profileModel, channelModel, profileThinking, channelThinking,
+	)
+	runtimeID := resolvedRuntime.runtimeID
+	memoryAgentModel := resolvedRuntime.model
+	memoryAgentThinking := resolvedRuntime.thinking
 	effective := EffectiveGraphMemoryMode(memoryType, workspaceMode, override)
 	status := GraphMemoryAgentChannelStatus{ChannelID: channelID, EffectiveMode: effective}
-	var existingAgentID pgtype.UUID
-	var previousStatus string
-	_ = tx.QueryRow(ctx, `SELECT agent_id, status FROM graph_memory_channel_agent WHERE channel_id=$1::uuid`, channelID).Scan(&existingAgentID, &previousStatus)
+	var existingAgentID, existingRuntimeID pgtype.UUID
+	var previousStatus, existingModel, existingThinking string
+	_ = tx.QueryRow(ctx, `
+		SELECT managed.agent_id, managed.status, managed.runtime_id,
+		       COALESCE(agent.model,''), COALESCE(agent.thinking_level,'')
+		FROM graph_memory_channel_agent managed
+		LEFT JOIN agent ON agent.id=managed.agent_id
+		WHERE managed.channel_id=$1::uuid`, channelID).Scan(
+		&existingAgentID, &previousStatus, &existingRuntimeID, &existingModel, &existingThinking,
+	)
 
 	if effective != GraphMemoryModeAgent || kind != "group" || archivedAt.Valid {
 		if err = terminalizeGraphMemoryAgentRunTx(ctx, tx, channelID, "cancelled"); err != nil {
@@ -140,6 +205,14 @@ func (c *PostgresGraphMemoryAgentControlPlane) ReconcileChannel(ctx context.Cont
 	if err != nil || !runtimeID.Valid {
 		return c.setBlocked(ctx, tx, status, workspaceID, channelID, channelName, sponsorID, existingAgentID, previousStatus, maxSeq, "eligible Pi runtime with directed steering is unavailable")
 	}
+	configChanged := existingAgentID.Valid && (existingRuntimeID != runtimeID ||
+		strings.TrimSpace(existingModel) != memoryAgentModel ||
+		strings.TrimSpace(existingThinking) != memoryAgentThinking)
+	if previousStatus == "active" && configChanged {
+		if err = terminalizeGraphMemoryAgentRunTx(ctx, tx, channelID, "checkpointed"); err != nil {
+			return status, err
+		}
+	}
 
 	handle := "memory-" + strings.ReplaceAll(channelID, "-", "")
 	if len(handle) > 32 {
@@ -164,6 +237,14 @@ func (c *PostgresGraphMemoryAgentControlPlane) ReconcileChannel(ctx context.Cont
 			return status, fmt.Errorf("provision graph memory agent: %w", err)
 		}
 	}
+	var customEnvRaw []byte
+	if err = tx.QueryRow(ctx, `SELECT custom_env FROM agent WHERE id=$1 FOR UPDATE`, agentID).Scan(&customEnvRaw); err != nil {
+		return status, fmt.Errorf("load graph memory agent custom env: %w", err)
+	}
+	managedCustomEnv, err := mergeGraphMemoryAgentCustomEnv(customEnvRaw)
+	if err != nil {
+		return status, err
+	}
 	_, err = tx.Exec(ctx, `
 		INSERT INTO graph_memory_channel_agent (
 		  channel_id, workspace_id, agent_id, runtime_id, sponsor_user_id,
@@ -179,8 +260,8 @@ func (c *PostgresGraphMemoryAgentControlPlane) ReconcileChannel(ctx context.Cont
 		return status, err
 	}
 	if _, err = tx.Exec(ctx, `
-		UPDATE agent SET owner_id=$2,runtime_id=$3,model=$4,thinking_level=NULLIF($5,''),updated_at=now()
-		WHERE id=$1`, agentID, sponsorID, runtimeID, memoryAgentModel, memoryAgentThinking); err != nil {
+		UPDATE agent SET owner_id=$2,runtime_id=$3,model=$4,thinking_level=NULLIF($5,''),custom_env=$6,updated_at=now()
+		WHERE id=$1`, agentID, sponsorID, runtimeID, memoryAgentModel, memoryAgentThinking, managedCustomEnv); err != nil {
 		return status, err
 	}
 	if _, err = tx.Exec(ctx, `INSERT INTO channel_member(channel_id,workspace_id,member_type,member_id,role) VALUES($1::uuid,$2::uuid,'agent',$3,'member') ON CONFLICT DO NOTHING`, channelID, workspaceID, agentID); err != nil {
@@ -277,7 +358,7 @@ func (c *PostgresGraphMemoryAgentControlPlane) ObserveActivity(ctx context.Conte
 	}
 	tag, err := c.pool.Exec(ctx, `
 		UPDATE graph_memory_agent_state s SET
-		  lease_expires_at=$3 + make_interval(secs => p.memory_agent_idle_grace_seconds), updated_at=now()
+		  lease_expires_at=$3::timestamptz + make_interval(secs => p.memory_agent_idle_grace_seconds), updated_at=now()
 		FROM graph_memory_channel_agent a
 		JOIN graph_memory_profile p ON p.workspace_id=a.workspace_id
 		WHERE s.channel_id=a.channel_id AND a.channel_id=$1::uuid AND a.workspace_id=$2::uuid AND a.status='active'`, channelID, workspaceID, at.UTC())

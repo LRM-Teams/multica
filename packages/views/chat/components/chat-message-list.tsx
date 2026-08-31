@@ -29,6 +29,8 @@ import {
 } from "@multica/ui/components/ui/tooltip";
 import { ChevronRight, ChevronDown, ChevronUp, Brain, AlertCircle, AlertTriangle, Copy } from "lucide-react";
 import { ChatMessageHoverShell } from "./chat-message-hover-actions";
+import { NoteChatInsertActions } from "./note-chat-insert-actions";
+import { buildChatNoteWriteConfirmationByMessageId } from "@multica/core/notes/worker-reply-actions";
 import { useScrollFade } from "@multica/ui/hooks/use-scroll-fade";
 import { chatTranscriptOptions, isStandaloneSessionOutstanding, isTaskMessageTaskId } from "@multica/core/chat/queries";
 import { Markdown } from "@multica/views/common/markdown";
@@ -50,6 +52,7 @@ import {
 } from "../../channels/components/message-parts-preview";
 import { formatElapsedMs } from "../lib/format";
 import { splitTimeline, extractCopyText } from "../lib/copy-text";
+import { isTransportHangError } from "../lib/timeline-error";
 import {
   activeBubbleStepSummary,
   bubbleToolSummary,
@@ -78,6 +81,7 @@ interface ChatListChrome {
   pendingTask: ChatPendingTask | null | undefined;
   availability: AgentPresence | undefined;
   loadingOlderLabel: string;
+  trailingSlot: ReactNode;
 }
 
 const ChatListChromeContext = createContext<ChatListChrome | null>(null);
@@ -98,8 +102,10 @@ function ChatMessageListHeader() {
 function ChatMessageListFooter() {
   const chrome = use(ChatListChromeContext);
   if (!chrome) return null;
+  if (!chrome.trailingSlot && !(chrome.showStatusPill && chrome.pendingTask)) return null;
   return (
     <div className="mx-auto w-full max-w-4xl px-5 pb-4 space-y-4">
+      {chrome.trailingSlot}
       {chrome.showStatusPill && chrome.pendingTask && (
         <TaskStatusPill
           pendingTask={chrome.pendingTask}
@@ -144,6 +150,8 @@ interface ChatMessageListProps {
   hoverMessageActions?: boolean;
   /** Notes page id for hover insert-below / insert-child. */
   noteInsertPageId?: string | null;
+  /** Local turn rendered after persisted messages (e.g. 写汇报 confirm). */
+  trailingSlot?: ReactNode;
 }
 
 export function ChatMessageList({
@@ -158,6 +166,7 @@ export function ChatMessageList({
   isDmBubble = false,
   hoverMessageActions = false,
   noteInsertPageId,
+  trailingSlot,
 }: ChatMessageListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const lastTailIdRef = useRef<string | undefined>(undefined);
@@ -171,6 +180,14 @@ export function ChatMessageList({
   }, []);
   const fadeStyle = useScrollFade(scrollRef);
   const { t } = useT("chat");
+
+  const noteInsertOffers = useMemo(
+    () =>
+      noteInsertPageId?.trim()
+        ? buildChatNoteWriteConfirmationByMessageId(messages)
+        : new Map<string, { mode: string }>(),
+    [messages, noteInsertPageId],
+  );
 
   const turnOutstanding = isStandaloneSessionOutstanding(pendingTask);
   const lastMessage = messages[messages.length - 1];
@@ -236,6 +253,11 @@ export function ChatMessageList({
     }
   }, [totalCount, showStatusPill, updateScrollPosition, scrollToLatest]);
 
+  const hasTrailingSlot = Boolean(trailingSlot);
+  useEffect(() => {
+    if (hasTrailingSlot) scrollToLatest("smooth");
+  }, [hasTrailingSlot, scrollToLatest]);
+
   const handleMessageBodyLayoutChange = useCallback(() => {
     const shouldKeepBottom = isNearBottom;
     window.requestAnimationFrame(() => {
@@ -255,6 +277,7 @@ export function ChatMessageList({
       pendingTask,
       availability,
       loadingOlderLabel: t(($) => $.message_list.loading_older),
+      trailingSlot: trailingSlot ?? null,
     }),
     [
       isFetchingOlderMessages,
@@ -262,6 +285,7 @@ export function ChatMessageList({
       pendingTask,
       availability,
       t,
+      trailingSlot,
     ],
   );
 
@@ -311,6 +335,7 @@ export function ChatMessageList({
                   enhanced={isDmBubble}
                   hoverMessageActions={hoverMessageActions}
                   noteInsertPageId={noteInsertPageId}
+                  offerNoteInsert={noteInsertOffers.has(msg.id)}
                 />
               </div>
             )}
@@ -397,6 +422,7 @@ function MessageBubble({
   enhanced,
   hoverMessageActions,
   noteInsertPageId,
+  offerNoteInsert,
 }: {
   sessionId: string;
   message: ChatMessage;
@@ -404,6 +430,7 @@ function MessageBubble({
   enhanced?: boolean;
   hoverMessageActions?: boolean;
   noteInsertPageId?: string | null;
+  offerNoteInsert?: boolean;
 }) {
   if (message.role === "user") {
     return (
@@ -452,6 +479,7 @@ function MessageBubble({
       enhanced={enhanced}
       hoverMessageActions={hoverMessageActions}
       noteInsertPageId={noteInsertPageId}
+      offerNoteInsert={offerNoteInsert}
     />
   );
 }
@@ -463,6 +491,7 @@ function AssistantMessage({
   enhanced,
   hoverMessageActions,
   noteInsertPageId,
+  offerNoteInsert,
 }: {
   sessionId: string;
   message: ChatMessage;
@@ -470,6 +499,7 @@ function AssistantMessage({
   enhanced?: boolean;
   hoverMessageActions?: boolean;
   noteInsertPageId?: string | null;
+  offerNoteInsert?: boolean;
 }) {
   const taskId = message.task_id;
   const canFetchTaskMessages = !!sessionId && isTaskMessageTaskId(taskId);
@@ -539,6 +569,12 @@ function AssistantMessage({
           isPending={isPending}
           hideCopy={hoverMessageActions}
         />
+        {offerNoteInsert && noteInsertPageId && !isPending ? (
+          <NoteChatInsertActions
+            pageId={noteInsertPageId}
+            text={extractCopyText(message, timeline)}
+          />
+        ) : null}
       </div>
     </ChatMessageHoverShell>
   );
@@ -743,6 +779,9 @@ function MessageProse({
   parts?: MessagePart[] | null;
   attachments?: import("@multica/core/types").Attachment[];
 }) {
+  if (isTransportHangError(content) && !(parts && parts.length > 0)) {
+    return <ErrorRow item={{ seq: 0, type: "error", content }} />;
+  }
   const contentKey = `prose:${content.length}:${parts?.length ?? 0}:${content.slice(0, 48)}`;
   const resolved = resolveMessageParts(content, parts);
   if (resolved?.length) {
@@ -1166,10 +1205,14 @@ function ThinkingRow({ item }: { item: ChatTimelineItem }) {
 }
 
 function ErrorRow({ item }: { item: ChatTimelineItem }) {
+  const { t } = useT("chat");
+  const label = isTransportHangError(item.content)
+    ? t(($) => $.message_list.connection_lost)
+    : (item.content ?? "");
   return (
     <div className="flex items-start gap-1.5 px-1 -mx-1 py-0.5 text-xs">
       <AlertCircle className="h-3 w-3 shrink-0 text-destructive mt-0.5" />
-      <span className={cn("text-destructive", selectableMessageTextClass)}>{item.content}</span>
+      <span className={cn("text-destructive", selectableMessageTextClass)}>{label}</span>
     </div>
   );
 }

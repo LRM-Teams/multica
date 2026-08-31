@@ -108,9 +108,11 @@ successful run ends with `Message check complete.` A content-free Notice does
 not identify whether the pending item is a reminder or a Message, so run
 `multica inbox check` first to route the work, then use `multica message check`
 only when the snapshot shows pending Messages. Message commands use the
-machine-local Credential Proxy, which refreshes a near-expiry Agent credential
-before forwarding the command; do not restart a runtime or read a token to
-renew it.
+machine-local Credential Proxy. Each Agent launch receives a local Proxy token;
+the Proxy holds the launch's server credential and forwards commands without
+exposing that credential to the Agent. Both credentials remain valid while the
+launch runs and are revoked when it ends. No refresh command or runtime restart
+is required after idle time.
 
 ## 4. Execute the selected mode
 

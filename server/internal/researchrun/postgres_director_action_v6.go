@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 
 	"github.com/jackc/pgx/v5"
@@ -37,66 +38,124 @@ type v6DirectorAction struct {
 	DependsOnActionIDs   []string        `json:"depends_on_action_ids"`
 }
 
+type v6DirectorProposalClaim struct {
+	submissionID string
+	workspaceID  string
+	runID        string
+	envelope     json.RawMessage
+}
+
 func (s *PostgresStore) ApplyReceivedV6DirectorProposals(ctx context.Context, limit int) (int, error) {
 	applied := 0
 	for applied < limit {
-		var submissionID, workspaceID, runID string
-		var envelope json.RawMessage
-		tx, err := s.beginResearchTx(ctx, txOpV6DirectorProposalClaim, pgx.TxOptions{})
+		claim, claimed, err := s.claimNextV6DirectorProposal(ctx)
 		if err != nil {
 			return applied, err
 		}
-		err = tx.QueryRow(ctx, `SELECT sub.id::text,sub.workspace_id::text,sub.session_id::text,sub.envelope FROM research_v6_work_submission sub
-			JOIN research_work_item w ON w.workspace_id=sub.workspace_id AND w.session_id=sub.session_id AND w.id=sub.work_item_id
-			WHERE (sub.status='received' OR (sub.status='processing' AND sub.updated_at<now()-interval '1 minute'))
-			AND COALESCE((sub.outcome->>'next_apply_after')::timestamptz,'-infinity'::timestamptz)<=now()
-			AND sub.contract_kind='director_action_proposal' AND w.client_key LIKE 'director-cycle:%'
-			ORDER BY sub.created_at,sub.id FOR UPDATE OF sub SKIP LOCKED LIMIT 1`).Scan(&submissionID, &workspaceID, &runID, &envelope)
-		if errors.Is(err, pgx.ErrNoRows) {
-			_ = tx.Rollback(ctx)
+		if !claimed {
 			return applied, nil
 		}
-		if err == nil {
-			_, err = tx.Exec(ctx, `UPDATE research_v6_work_submission SET status='processing',updated_at=now() WHERE id=$1::uuid`, submissionID)
-		}
-		if err == nil {
-			err = s.commitResearchTx(ctx, txOpV6DirectorProposalClaim, tx)
-		} else {
-			_ = tx.Rollback(ctx)
-		}
-		if err != nil {
+		if err = s.applyClaimedV6DirectorProposal(ctx, claim); err != nil {
 			return applied, err
-		}
-		applyErr := s.executeV6DirectorProposal(ctx, submissionID, envelope)
-		if applyErr != nil {
-			if !isTerminalV6SubmissionError(applyErr) {
-				if isPermanentV6ProcessingError(ctx, applyErr) {
-					if err = s.rejectV6DirectorProposal(context.WithoutCancel(ctx), submissionID, v6SubmissionApplyDiagnostic(applyErr)); err != nil {
-						return applied, err
-					}
-					applied++
-					continue
-				}
-				terminal, recordErr := s.recordV6DirectorProposalApplyFailure(context.WithoutCancel(ctx), workspaceID, runID, submissionID, v6SubmissionApplyDiagnostic(applyErr))
-				if recordErr != nil {
-					return applied, recordErr
-				}
-				if !terminal {
-					applied++
-					continue
-				}
-			}
-			reason := applyErr.Error()
-			if !isTerminalV6SubmissionError(applyErr) {
-				reason = v6SubmissionApplyDiagnostic(applyErr)
-			}
-			if err = s.rejectV6DirectorProposal(context.WithoutCancel(ctx), submissionID, reason); err != nil {
-				return applied, err
-			}
 		}
 		applied++
 	}
 	return applied, nil
+}
+
+func (s *PostgresStore) SettleV6DirectorSubmission(ctx context.Context, workspaceID, runID, submissionID string) (string, error) {
+	claim, claimed, err := s.claimV6DirectorProposal(ctx, workspaceID, runID, submissionID)
+	if err != nil {
+		return "", err
+	}
+	if claimed {
+		if err = s.applyClaimedV6DirectorProposal(ctx, claim); err != nil {
+			return "", err
+		}
+	}
+	var status string
+	err = s.pool.QueryRow(ctx, `SELECT status FROM research_v6_work_submission
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid AND contract_kind='director_action_proposal'`,
+		workspaceID, runID, submissionID).Scan(&status)
+	return status, err
+}
+
+func (s *PostgresStore) claimNextV6DirectorProposal(ctx context.Context) (v6DirectorProposalClaim, bool, error) {
+	return s.claimV6DirectorProposalRow(ctx, func(tx pgx.Tx, claim *v6DirectorProposalClaim) error {
+		return tx.QueryRow(ctx, `SELECT sub.id::text,sub.workspace_id::text,sub.session_id::text,sub.envelope FROM research_v6_work_submission sub
+			JOIN research_work_item w ON w.workspace_id=sub.workspace_id AND w.session_id=sub.session_id AND w.id=sub.work_item_id
+			WHERE (sub.status='received' OR (sub.status='processing' AND sub.updated_at<now()-interval '1 minute'))
+			AND COALESCE((sub.outcome->>'next_apply_after')::timestamptz,'-infinity'::timestamptz)<=now()
+			AND sub.contract_kind='director_action_proposal' AND w.client_key LIKE 'director-cycle:%'
+			ORDER BY sub.created_at,sub.id FOR UPDATE OF sub SKIP LOCKED LIMIT 1`).Scan(
+			&claim.submissionID, &claim.workspaceID, &claim.runID, &claim.envelope)
+	})
+}
+
+func (s *PostgresStore) claimV6DirectorProposal(ctx context.Context, workspaceID, runID, submissionID string) (v6DirectorProposalClaim, bool, error) {
+	return s.claimV6DirectorProposalRow(ctx, func(tx pgx.Tx, claim *v6DirectorProposalClaim) error {
+		return tx.QueryRow(ctx, `SELECT sub.id::text,sub.workspace_id::text,sub.session_id::text,sub.envelope FROM research_v6_work_submission sub
+			JOIN research_work_item w ON w.workspace_id=sub.workspace_id AND w.session_id=sub.session_id AND w.id=sub.work_item_id
+			WHERE sub.workspace_id=$1::uuid AND sub.session_id=$2::uuid AND sub.id=$3::uuid
+			AND (sub.status='received' OR (sub.status='processing' AND sub.updated_at<now()-interval '1 minute'))
+			AND COALESCE((sub.outcome->>'next_apply_after')::timestamptz,'-infinity'::timestamptz)<=now()
+			AND sub.contract_kind='director_action_proposal' AND w.client_key LIKE 'director-cycle:%'
+			FOR UPDATE OF sub SKIP LOCKED`, workspaceID, runID, submissionID).Scan(
+			&claim.submissionID, &claim.workspaceID, &claim.runID, &claim.envelope)
+	})
+}
+
+func (s *PostgresStore) claimV6DirectorProposalRow(
+	ctx context.Context,
+	selectRow func(pgx.Tx, *v6DirectorProposalClaim) error,
+) (v6DirectorProposalClaim, bool, error) {
+	tx, err := s.beginResearchTx(ctx, txOpV6DirectorProposalClaim, pgx.TxOptions{})
+	if err != nil {
+		return v6DirectorProposalClaim{}, false, err
+	}
+	defer tx.Rollback(ctx)
+	var claim v6DirectorProposalClaim
+	if err = selectRow(tx, &claim); errors.Is(err, pgx.ErrNoRows) {
+		return v6DirectorProposalClaim{}, false, nil
+	}
+	if err != nil {
+		return v6DirectorProposalClaim{}, false, err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE research_v6_work_submission SET status='processing',updated_at=now()
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid`, claim.workspaceID, claim.runID, claim.submissionID); err != nil {
+		return v6DirectorProposalClaim{}, false, err
+	}
+	if err = s.commitResearchTx(ctx, txOpV6DirectorProposalClaim, tx); err != nil {
+		return v6DirectorProposalClaim{}, false, err
+	}
+	return claim, true, nil
+}
+
+func (s *PostgresStore) applyClaimedV6DirectorProposal(ctx context.Context, claim v6DirectorProposalClaim) error {
+	applyErr := s.executeV6DirectorProposal(ctx, claim.submissionID, claim.envelope)
+	if applyErr == nil {
+		return nil
+	}
+	slog.Warn("research V6 Director proposal canonical apply failed",
+		"submission_id", claim.submissionID,
+		"workspace_id", claim.workspaceID,
+		"run_id", claim.runID,
+		"error", applyErr,
+	)
+	if !isTerminalV6SubmissionError(applyErr) {
+		if isPermanentV6ProcessingError(ctx, applyErr) {
+			return s.rejectV6DirectorProposal(context.WithoutCancel(ctx), claim.submissionID, v6SubmissionApplyDiagnostic(applyErr))
+		}
+		terminal, err := s.recordV6DirectorProposalApplyFailure(context.WithoutCancel(ctx), claim.workspaceID, claim.runID, claim.submissionID, v6SubmissionApplyDiagnostic(applyErr))
+		if err != nil || !terminal {
+			return err
+		}
+	}
+	reason := applyErr.Error()
+	if !isTerminalV6SubmissionError(applyErr) {
+		reason = v6SubmissionApplyDiagnostic(applyErr)
+	}
+	return s.rejectV6DirectorProposal(context.WithoutCancel(ctx), claim.submissionID, reason)
 }
 
 func (s *PostgresStore) recordV6DirectorProposalApplyFailure(ctx context.Context, workspaceID, runID, submissionID, diagnostic string) (bool, error) {
@@ -280,8 +339,12 @@ func (s *PostgresStore) executeV6DirectorProposal(ctx context.Context, submissio
 		case "revise_goal":
 			err = s.executeV6ReviseGoalAction(ctx, proposal, action, liveStateVersion)
 		case "adjudicate_discussion":
-			action.Payload = withV6ActionKind(action.Payload, "discussion")
-			err = s.executeV6CreateWorkAction(ctx, proposal, cycleID, action, liveStateVersion)
+			if action.PayloadSchema == "discussion.resolution.v1" {
+				err = s.executeV6ResolveDiscussionAction(ctx, proposal, cycleID, action, liveStateVersion)
+			} else {
+				action.Payload = withV6ActionKind(action.Payload, "discussion")
+				err = s.executeV6CreateWorkAction(ctx, proposal, cycleID, action, liveStateVersion)
+			}
 		case "cancel_work_item", "retry_work_item", "reassign_work_item":
 			err = s.executeV6WorkLifecycleAction(ctx, proposal, action, liveStateVersion)
 		case "update_agent", "archive_agent":

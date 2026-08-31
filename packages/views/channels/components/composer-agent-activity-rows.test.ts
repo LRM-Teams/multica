@@ -11,7 +11,7 @@ describe("composer activity fact projection", () => {
       ],
     );
     expect(rows.map((row) => row.agentId)).toEqual(["b", "a"]);
-    expect(rows.map((row) => row.dotClass)).toEqual(["bg-blue-500", "bg-running"]);
+    expect(rows.map((row) => row.dotClass)).toEqual(["bg-blue-500", "bg-dot-working"]);
   });
 
   it("hides presence-only facts and groups matching verbs", () => {
@@ -49,9 +49,9 @@ describe("composer activity fact projection", () => {
   it("caps grouped lines and counts hidden agents", () => {
     const grouped = groupComposerAgentActivityRows([
       { agentId: "a", name: "A", label: "Thinking...", dotClass: "bg-blue-500", rank: 0 },
-      { agentId: "b", name: "B", label: "Running command...", dotClass: "bg-running", rank: 1 },
-      { agentId: "c", name: "C", label: "Reading history...", dotClass: "bg-amber-500", rank: 2 },
-      { agentId: "d", name: "D", label: "Reading history...", dotClass: "bg-amber-500", rank: 2 },
+      { agentId: "b", name: "B", label: "Running command...", dotClass: "bg-dot-working", rank: 1 },
+      { agentId: "c", name: "C", label: "Reading history...", dotClass: "bg-dot-working", rank: 2 },
+      { agentId: "d", name: "D", label: "Reading history...", dotClass: "bg-dot-working", rank: 2 },
     ]);
     expect(grouped.lines.map((line) => line.label)).toEqual(["Thinking...", "Running command..."]);
     expect(grouped.hiddenAgentCount).toBe(2);

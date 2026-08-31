@@ -14,10 +14,67 @@ import (
 
 const v6ReportMaxBytes = 16 << 20
 const V6ReportMaxCompiledBytes = 24 << 20
+const v6ReportMaxDesignDossierBytes = 4096
 
-var reportForbidden = regexp.MustCompile(`(?is)<\s*(base|form|object|embed|iframe|frame|frameset|link|meta|video|audio)\b|\bsrcdoc\s*=|\bon[a-z]+\s*=|\bstyle\s*=|\b(fetch|XMLHttpRequest|WebSocket|EventSource|Worker|SharedWorker|ServiceWorker|sendBeacon|window\.open|localStorage|sessionStorage|indexedDB|document\.cookie|document\.domain|document\.createElement|document\.write|innerHTML|outerHTML|insertAdjacentHTML|setAttribute|history\.|navigation\.|location|eval|WebAssembly)\b|\b(?:parent|top)\s*\.|\b(?:import|Function)\s*\(|\.click\s*\(|\.(?:src|href)\s*=|(?:src|href)\s*=\s*["']\s*(?:https?:|//|blob:)|@import\b|url\(\s*["']?\s*(?:https?:|//|blob:)`)
+const v6ReportDesignDossierMarker = "<!-- multica-design-dossier:v1"
+
+var reportForbidden = regexp.MustCompile(`(?is)<\s*(base|form|object|embed|iframe|frame|frameset|link|video|audio)\b|\bhttp-equiv\s*=|\bsrcdoc\s*=|\bon[a-z]+\s*=|\bstyle\s*=|\b(fetch|XMLHttpRequest|WebSocket|EventSource|Worker|SharedWorker|ServiceWorker|sendBeacon|window\.open|localStorage|sessionStorage|indexedDB|document\.cookie|document\.domain|document\.createElement|document\.write|innerHTML|outerHTML|insertAdjacentHTML|setAttribute|history\.|navigation\.|location|eval|WebAssembly)\b|\b(?:parent|top)\s*\.|\b(?:import|Function)\s*\(|\.click\s*\(|\.(?:src|href)\s*=|(?:src|href)\s*=\s*["']\s*(?:https?:|//|blob:)|@import\b|url\(\s*["']?\s*(?:https?:|//|blob:)`)
 
 var reportAgentProvidedURL = regexp.MustCompile(`(?is)(?:src|href)\s*=\s*["']\s*(?:https?:|//|data:|blob:)`)
+
+func ExtractV6ReportDesignDossier(html []byte) (string, error) {
+	document := string(html)
+	start := strings.Index(document, v6ReportDesignDossierMarker)
+	if start < 0 {
+		return "", fmt.Errorf("%w: report design dossier is required", ErrInvalidContract)
+	}
+	endOffset := strings.Index(document[start:], "-->")
+	if endOffset < 0 {
+		return "", fmt.Errorf("%w: report design dossier is not closed", ErrInvalidContract)
+	}
+	dossier := strings.TrimSpace(document[start : start+endOffset+3])
+	if len(dossier) > v6ReportMaxDesignDossierBytes {
+		return "", fmt.Errorf("%w: report design dossier is too large", ErrInvalidContract)
+	}
+	fields, err := parseV6ReportDesignDossier(dossier)
+	if err != nil {
+		return "", err
+	}
+	if fields["maturity"] != "interim" && fields["maturity"] != "final" {
+		return "", fmt.Errorf("%w: report design dossier has invalid maturity", ErrInvalidContract)
+	}
+	return dossier, nil
+}
+
+func parseV6ReportDesignDossier(dossier string) (map[string]string, error) {
+	required := []string{"reading_job", "evidence_shape", "maturity", "layout_family", "signature_motif", "density", "motion", "accent", "design_reason"}
+	body := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(dossier, v6ReportDesignDossierMarker), "-->"))
+	fields := make(map[string]string, len(required))
+	for _, declaration := range strings.Split(body, ";") {
+		declaration = strings.TrimSpace(declaration)
+		if declaration == "" {
+			continue
+		}
+		parts := strings.SplitN(declaration, "=", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("%w: malformed report design dossier field", ErrInvalidContract)
+		}
+		key, value := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+		if key == "" || value == "" || len(value) > 1024 || strings.ContainsAny(value, "<>") {
+			return nil, fmt.Errorf("%w: invalid report design dossier field %s", ErrInvalidContract, key)
+		}
+		if _, duplicate := fields[key]; duplicate {
+			return nil, fmt.Errorf("%w: duplicate report design dossier field %s", ErrInvalidContract, key)
+		}
+		fields[key] = value
+	}
+	for _, key := range required {
+		if fields[key] == "" {
+			return nil, fmt.Errorf("%w: report design dossier is missing %s", ErrInvalidContract, key)
+		}
+	}
+	return fields, nil
+}
 
 func CompileV6ReportPackage(resources []V6ReportResource, documentID, plainText string) (CompiledV6Report, error) {
 	return CompileV6ReportPackageWithMetadata(resources, documentID, plainText, V6ReportPackageMetadata{})

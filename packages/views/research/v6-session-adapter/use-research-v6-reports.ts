@@ -33,11 +33,12 @@ export function useResearchV6Reports({
   });
   const reportId =
     (selectedReportId &&
-    reports.data?.some((item) => item.id === selectedReportId)
+    reports.data?.some(
+      (item) => item.id === selectedReportId && Boolean(item.packageHash),
+    )
       ? selectedReportId
       : null) ??
-    reports.data?.find((item) => item.status === "published")?.id ??
-    reports.data?.[0]?.id ??
+    reports.data?.find((item) => Boolean(item.packageHash))?.id ??
     null;
   const detail = useQuery({
     ...researchV6DirectorReportOptions(

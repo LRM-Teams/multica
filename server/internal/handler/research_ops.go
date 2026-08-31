@@ -912,6 +912,16 @@ func (h *Handler) StopResearchSession(w http.ResponseWriter, r *http.Request) {
 	}
 	switch session.Status {
 	case "paused":
+		if session.OrchestratorVersion == researchrun.OrchestratorVersionV6 {
+			if h.ResearchRun == nil {
+				writeError(w, http.StatusServiceUnavailable, "research run engine is unavailable")
+				return
+			}
+			if _, err = h.ResearchRun.Pause(r.Context(), uuidToString(sessionID), workspaceID, userID); err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to finish stopping session")
+				return
+			}
+		}
 		if err = h.stopResearchSessionWakes(r.Context(), wsUUID, sessionID); err != nil {
 			writeError(w, http.StatusInternalServerError, "research session is paused but wake cancellation is still pending")
 			return
@@ -1003,15 +1013,13 @@ func (h *Handler) DeleteResearchSession(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, "failed to inspect research run ownership")
 		return
 	}
-	if durableRun && session.Status != string(researchrun.RunStatusCompleted) &&
-		session.Status != string(researchrun.RunStatusArchived) &&
-		session.Status != string(researchrun.RunStatusCancelled) {
+	if durableRun {
 		if h.ResearchRun == nil {
 			writeError(w, http.StatusServiceUnavailable, "research run engine is unavailable")
 			return
 		}
-		if _, err = h.ResearchRun.Cancel(r.Context(), uuidToString(sessionID), workspaceID, userID, "research session deleted"); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to cancel research run before deletion")
+		if _, err = h.ResearchRun.Archive(r.Context(), uuidToString(sessionID), workspaceID, userID, "research session archived by user"); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to archive research run")
 			return
 		}
 	}
@@ -1021,19 +1029,6 @@ func (h *Handler) DeleteResearchSession(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if session.OrchestratorVersion == researchrun.OrchestratorVersionV6 {
-		archived, archiveErr := h.Queries.UpdateResearchSession(r.Context(), db.UpdateResearchSessionParams{
-			ID:          sessionID,
-			WorkspaceID: wsUUID,
-			Status:      pgtype.Text{String: "archived", Valid: true},
-		})
-		if archiveErr != nil {
-			writeError(w, http.StatusInternalServerError, "failed to archive research session")
-			return
-		}
-		h.publish(protocol.EventResearchSessionStatusChanged, workspaceID, "user", userID, map[string]any{
-			"session":  researchSessionToResponse(archived),
-			"archived": true,
-		})
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}

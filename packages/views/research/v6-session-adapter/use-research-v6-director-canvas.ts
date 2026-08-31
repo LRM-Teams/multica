@@ -262,6 +262,9 @@ export function useResearchV6DirectorCanvas({
       nodes: dedupeById(nodes),
       edges: dedupeById(edges),
       densityBins: dedupeById(densityBins),
+      expandedRootIds: displayScopeMatches
+        ? new Set(Object.keys(expandedByRoot))
+        : undefined,
     });
   }, [
     displayScopeMatches,

@@ -21,6 +21,9 @@ type v6CreateWorkActionPayload struct {
 	Priority               float64         `json:"priority"`
 	MaxAttempts            int             `json:"max_attempts"`
 	BranchIDs              []string        `json:"branch_ids"`
+	DirectionGateNodeCount int             `json:"direction_gate_node_count"`
+	DirectionGateDecision  string          `json:"direction_gate_decision"`
+	DirectionGateRationale string          `json:"direction_gate_rationale"`
 }
 
 func (s *PostgresStore) executeV6CreateAgentAction(ctx context.Context, proposal v6DirectorProposal, cycleID string, action v6DirectorAction, expectedState int64) error {
@@ -79,6 +82,23 @@ func (s *PostgresStore) executeV6CreateWorkAction(ctx context.Context, proposal 
 	if json.Unmarshal(action.Payload, &payload) != nil || strings.TrimSpace(payload.Kind) == "" || strings.TrimSpace(payload.Mission) == "" || payload.Priority < 0 || payload.Priority > 1 || payload.MaxAttempts < 1 || payload.MaxAttempts > 100 {
 		return ErrInvalidContract
 	}
+	// Some Director model responses place the gate metadata beside
+	// task_specific_schema inside payload.payload. Accept that equivalent
+	// representation and normalize it before persisting the Work item.
+	if payload.DirectionGateDecision == "" || payload.DirectionGateRationale == "" {
+		var nested v6CreateWorkActionPayload
+		if err := json.Unmarshal(payload.Payload, &nested); err == nil {
+			if payload.DirectionGateNodeCount == 0 {
+				payload.DirectionGateNodeCount = nested.DirectionGateNodeCount
+			}
+			if payload.DirectionGateDecision == "" {
+				payload.DirectionGateDecision = nested.DirectionGateDecision
+			}
+			if payload.DirectionGateRationale == "" {
+				payload.DirectionGateRationale = nested.DirectionGateRationale
+			}
+		}
+	}
 	expectedKind := V6ContractKind(payload.ExpectedResultSchemaID)
 	persistedKind := ""
 	switch expectedKind {
@@ -97,12 +117,28 @@ func (s *PostgresStore) executeV6CreateWorkAction(ctx context.Context, proposal 
 	if err != nil {
 		return err
 	}
+	if expectedKind := V6ContractKind(payload.ExpectedResultSchemaID); expectedKind == V6ContractAtomicResultSubmission {
+		var persistedPayload map[string]any
+		if err = json.Unmarshal(workPayload, &persistedPayload); err != nil {
+			return ErrInvalidContract
+		}
+		persistedPayload["direction_gate_node_count"] = payload.DirectionGateNodeCount
+		persistedPayload["direction_gate_decision"] = payload.DirectionGateDecision
+		persistedPayload["direction_gate_rationale"] = payload.DirectionGateRationale
+		workPayload, err = json.Marshal(persistedPayload)
+		if err != nil {
+			return err
+		}
+	}
 	if expectedKind == V6ContractAtomicResultSubmission {
 		var config struct {
 			TaskSpecificSchema json.RawMessage `json:"task_specific_schema"`
 		}
 		if json.Unmarshal(workPayload, &config) != nil || len(config.TaskSpecificSchema) == 0 || string(config.TaskSpecificSchema) == "null" || strings.TrimSpace(payload.PayloadSchemaID) == "" || payload.PayloadSchemaID == "no_op.v1" {
 			return fmt.Errorf("%w: atomic Work payload_schema_id must never be no_op.v1 and payload.task_specific_schema is required", ErrInvalidContract)
+		}
+		if len(payload.BranchIDs) != 1 {
+			return fmt.Errorf("%w: 每个 atomic Work 必须只属于一个独立研究方向；先创建子 Branch，再提供唯一 branch_id", ErrInvalidContract)
 		}
 	}
 	if !validV6ActionUUID(payload.AssigneeAgentID) {
@@ -152,14 +188,28 @@ func (s *PostgresStore) executeV6CreateWorkAction(ctx context.Context, proposal 
 			seen[branchID] = struct{}{}
 			branchIDs = append(branchIDs, branchID)
 		}
-		var branchCount int
-		if err = tx.QueryRow(ctx, `SELECT count(*)::int FROM research_branch
+		var branchCount, childBranchCount int
+		if err = tx.QueryRow(ctx, `SELECT count(*)::int,
+			count(*) FILTER (WHERE parent_branch_id IS NOT NULL)::int
+			FROM research_branch
 			WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=ANY($3::uuid[])`,
-			proposal.WorkspaceID, proposal.RunID, branchIDs).Scan(&branchCount); err != nil {
+			proposal.WorkspaceID, proposal.RunID, branchIDs).Scan(&branchCount, &childBranchCount); err != nil {
 			return err
 		}
 		if branchCount != len(branchIDs) {
 			return fmt.Errorf("%w: Work branch_ids must reference branches in the current Run", ErrInvalidContract)
+		}
+		if expectedKind == V6ContractAtomicResultSubmission && childBranchCount != 1 {
+			return fmt.Errorf("%w: atomic Work 不能直接堆进根 Branch，必须绑定一个独立子 Branch", ErrInvalidContract)
+		}
+		if expectedKind == V6ContractAtomicResultSubmission {
+			if err = validateV6DirectionGateTx(ctx, tx, proposal.WorkspaceID, proposal.RunID, branchIDs, v6DirectionGate{
+				NodeCount: payload.DirectionGateNodeCount,
+				Decision:  payload.DirectionGateDecision,
+				Rationale: payload.DirectionGateRationale,
+			}); err != nil {
+				return err
+			}
 		}
 	}
 	workID := uuid.NewString()
@@ -235,6 +285,15 @@ func (s *PostgresStore) executeV6CreateBranchAction(ctx context.Context, proposa
 	if state != expectedState {
 		return ErrWorkItemChanged
 	}
+	var parentCount int
+	if err = tx.QueryRow(ctx, `SELECT count(*)::int FROM research_branch
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid`,
+		proposal.WorkspaceID, proposal.RunID, payload.ParentBranchID).Scan(&parentCount); err != nil {
+		return err
+	}
+	if parentCount != 1 {
+		return fmt.Errorf("%w: create_branch parent must belong to the current Run", ErrInvalidContract)
+	}
 	branchID := uuid.NewString()
 	createdAt := time.Now().UTC()
 	if _, err = tx.Exec(ctx, `INSERT INTO research_branch(id,workspace_id,session_id,client_key,parent_branch_id,objective,entry_conditions,exit_conditions,budget_share,status,goal_version,scope,state_version,created_by_director_cycle_id,created_at,updated_at)
@@ -258,25 +317,11 @@ func (s *PostgresStore) executeV6CreateReportAction(ctx context.Context, proposa
 		return ErrInvalidContract
 	}
 	var payload struct {
-		AssigneeAgentID string             `json:"assignee_agent_id"`
-		Title           string             `json:"title"`
-		Inputs          []V6ReportInputRef `json:"inputs"`
+		Title string `json:"title"`
 	}
-	if json.Unmarshal(action.Payload, &payload) != nil || !validV6ActionUUID(payload.AssigneeAgentID) || strings.TrimSpace(payload.Title) == "" {
+	if json.Unmarshal(action.Payload, &payload) != nil || strings.TrimSpace(payload.Title) == "" {
 		return ErrInvalidContract
 	}
-	for _, input := range payload.Inputs {
-		if strings.TrimSpace(input.BranchID) != "" && !validV6ActionUUID(input.BranchID) {
-			return ErrInvalidContract
-		}
-		if strings.TrimSpace(input.NodeArtifactVersionID) != "" && !validV6ActionUUID(input.NodeArtifactVersionID) {
-			return ErrInvalidContract
-		}
-	}
-	var sequence int64
-	if err := s.pool.QueryRow(ctx, `SELECT COALESCE(max(sequence),0) FROM research_run_event WHERE session_id=$1::uuid`, proposal.RunID).Scan(&sequence); err != nil {
-		return err
-	}
-	_, err := s.CreateV6ReportWork(ctx, CreateV6ReportWorkInput{WorkspaceID: proposal.WorkspaceID, RunID: proposal.RunID, DirectorCycleID: cycleID, AssigneeAgentID: payload.AssigneeAgentID, IdempotencyKey: action.IdempotencyKey, Title: payload.Title, Reason: action.Reason, ExpectedGoalVersion: goalVersion, ExpectedStateVersion: expectedState, InputEventSequence: sequence, Inputs: payload.Inputs})
+	_, err := s.CreateV6ReportWork(ctx, CreateV6ReportWorkInput{WorkspaceID: proposal.WorkspaceID, RunID: proposal.RunID, DirectorCycleID: cycleID, IdempotencyKey: action.IdempotencyKey, Title: payload.Title, Reason: action.Reason, ExpectedGoalVersion: goalVersion, ExpectedStateVersion: expectedState})
 	return err
 }

@@ -1,7 +1,9 @@
 package daemon
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,34 +13,32 @@ import (
 	"github.com/multica-ai/multica/server/internal/agentworkspace"
 )
 
-const agentCredentialRefreshBeforeExpiry = time.Hour
-
 type cachedAgentCredential struct {
 	SchemaVersion int    `json:"schemaVersion"`
 	CredentialID  string `json:"credentialId"`
-	Token         string `json:"token"`
-	Prefix        string `json:"tokenPrefix"`
-	ExpiresAt     string `json:"expiresAt,omitempty"`
-	IssuedAt      string `json:"issuedAt"`
-	ServerURL     string `json:"serverUrl"`
-	WorkspaceID   string `json:"workspaceId"`
-	RuntimeID     string `json:"runtimeId"`
-	AgentID       string `json:"agentId"`
+	// Token is held only by the in-memory Agent Proxy registration. It must
+	// never be serialized into the workspace tree, which is readable by the
+	// resident Agent process running under the same OS account.
+	Token       string `json:"-"`
+	Prefix      string `json:"tokenPrefix"`
+	ExpiresAt   string `json:"expiresAt,omitempty"`
+	IssuedAt    string `json:"issuedAt"`
+	ServerURL   string `json:"serverUrl"`
+	WorkspaceID string `json:"workspaceId"`
+	RuntimeID   string `json:"runtimeId"`
+	AgentID     string `json:"agentId"`
 }
 
 func agentCredentialCachePath(cfg Config, workspaceID, agentID string) string {
 	return filepath.Join(workspaceStateRoot(cfg.WorkspacesRoot, workspaceID), "profiles", agentID, "credential.json")
 }
 
-func readCachedAgentCredential(cfg Config, workspaceID, runtimeID, agentID string, now time.Time) (cachedAgentCredential, bool) {
-	return readCachedAgentCredentialFor(cfg, workspaceID, runtimeID, agentID, now, true)
+func legacyAgentCredentialCachePath(cfg Config, workspaceID, agentID string) string {
+	return filepath.Join(agentworkspace.Root(cfg.WorkspacesRoot, workspaceID, agentID), "runtime", "credentials", "current.json")
 }
 
-// readCachedAgentCredentialForMessage resolves the durable credential owned by
-// a local workspace-agent root. Message transport has no task, lease, or
-// current-turn identity; runtime binding is checked when issued.
-func readCachedAgentCredentialForMessage(cfg Config, workspaceID, agentID string, now time.Time) (cachedAgentCredential, bool) {
-	return readCachedAgentCredentialFor(cfg, workspaceID, "", agentID, now, false)
+func readCachedAgentCredential(cfg Config, workspaceID, runtimeID, agentID string, now time.Time) (cachedAgentCredential, bool) {
+	return readCachedAgentCredentialFor(cfg, workspaceID, runtimeID, agentID, now, true)
 }
 
 func readCachedAgentCredentialFor(cfg Config, workspaceID, runtimeID, agentID string, now time.Time, requireRuntime bool) (cachedAgentCredential, bool) {
@@ -60,6 +60,11 @@ func readCachedAgentCredentialFor(cfg Config, workspaceID, runtimeID, agentID st
 	if !cached.validFor(cfg, workspaceID, runtimeID, agentID, now, requireRuntime) {
 		return cachedAgentCredential{}, false
 	}
+	// A prior migration may have written modern metadata but failed to remove
+	// the legacy plaintext file. Retry retirement on every successful read.
+	if err := os.Remove(legacyAgentCredentialCachePath(cfg, workspaceID, agentID)); err != nil && !os.IsNotExist(err) {
+		return cachedAgentCredential{}, false
+	}
 	return cached, true
 }
 
@@ -78,13 +83,17 @@ type legacyCachedAgentCredential struct {
 }
 
 func readAndMigrateLegacyAgentCredential(cfg Config, workspaceID, runtimeID, agentID string, now time.Time, requireRuntime bool) (cachedAgentCredential, bool) {
-	legacyPath := filepath.Join(agentworkspace.Root(cfg.WorkspacesRoot, workspaceID, agentID), "runtime", "credentials", "current.json")
+	legacyPath := legacyAgentCredentialCachePath(cfg, workspaceID, agentID)
 	raw, err := os.ReadFile(legacyPath)
 	if err != nil {
+		if !os.IsNotExist(err) {
+			_ = os.Remove(legacyPath)
+		}
 		return cachedAgentCredential{}, false
 	}
 	var legacy legacyCachedAgentCredential
 	if err := json.Unmarshal(raw, &legacy); err != nil {
+		_ = os.Remove(legacyPath)
 		return cachedAgentCredential{}, false
 	}
 	cached := cachedAgentCredential{
@@ -100,6 +109,7 @@ func readAndMigrateLegacyAgentCredential(cfg Config, workspaceID, runtimeID, age
 		AgentID:       legacy.AgentID,
 	}
 	if !cached.validFor(cfg, workspaceID, runtimeID, agentID, now, requireRuntime) {
+		_ = os.Remove(legacyPath)
 		return cachedAgentCredential{}, false
 	}
 	if _, err := writeCachedAgentCredential(cfg, workspaceID, cached.RuntimeID, agentID, AgentCredentialResponse{
@@ -111,6 +121,10 @@ func readAndMigrateLegacyAgentCredential(cfg Config, workspaceID, runtimeID, age
 	}, now); err != nil {
 		return cachedAgentCredential{}, false
 	}
+	if err := os.Remove(legacyPath); err != nil && !os.IsNotExist(err) {
+		return cachedAgentCredential{}, false
+	}
+	cached.Token = ""
 	return cached, true
 }
 
@@ -214,8 +228,29 @@ func removeCachedAgentCredential(cfg Config, workspaceID, agentID string) error 
 	return nil
 }
 
+func removeCachedAgentCredentialIfMatches(cfg Config, workspaceID, runtimeID, agentID, credentialID string) error {
+	cached, ok := readCachedAgentCredential(cfg, workspaceID, runtimeID, agentID, time.Now())
+	if !ok || cached.CredentialID != credentialID {
+		return nil
+	}
+	return removeCachedAgentCredential(cfg, workspaceID, agentID)
+}
+
+func (d *Daemon) messageAgentCredential(_ context.Context, workspaceID, agentID string) (cachedAgentCredential, error) {
+	runner := d.currentWorkspaceDaemon(workspaceID)
+	if runner == nil {
+		return cachedAgentCredential{}, errors.New("Agent message runtime is unavailable")
+	}
+	runtimeID := runner.messageRuntimeID(agentID)
+	credential, ok := d.activeAgentProxyServerCredential(workspaceID, runtimeID, agentID)
+	if !ok {
+		return cachedAgentCredential{}, errors.New("Agent launch credential is unavailable")
+	}
+	return credential, nil
+}
+
 func (c cachedAgentCredential) validFor(cfg Config, workspaceID, runtimeID, agentID string, now time.Time, requireRuntime bool) bool {
-	if strings.TrimSpace(c.Token) == "" {
+	if strings.TrimSpace(c.CredentialID) == "" {
 		return false
 	}
 	if c.ServerURL != cfg.ServerBaseURL || c.WorkspaceID != workspaceID || c.AgentID != agentID {
@@ -224,12 +259,15 @@ func (c cachedAgentCredential) validFor(cfg Config, workspaceID, runtimeID, agen
 	if requireRuntime && c.RuntimeID != runtimeID {
 		return false
 	}
+	// An empty expiry is intentional for daemon-issued credentials: their
+	// lifetime is the resident Agent launch and the server revokes them when
+	// that launch ends.
 	if strings.TrimSpace(c.ExpiresAt) == "" {
-		return false
+		return true
 	}
 	expiresAt, err := time.Parse(time.RFC3339Nano, c.ExpiresAt)
 	if err != nil {
 		return false
 	}
-	return expiresAt.After(now.Add(agentCredentialRefreshBeforeExpiry))
+	return expiresAt.After(now)
 }

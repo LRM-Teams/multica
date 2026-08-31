@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -110,6 +111,28 @@ func NewEngineWithRuntimeAdapters(store *PostgresStore, dispatcher Dispatcher, p
 	engine.retrieval = retrieval
 	return engine
 }
+
+// CreateV6ReportUpload keeps report package uploads on the production Engine
+// boundary used by the HTTP handler. The PostgresStore owns the transaction and
+// immutable object declaration; Engine only exposes that capability alongside
+// the rest of the ResearchRun surface.
+func (e *Engine) CreateV6ReportUpload(ctx context.Context, access V6AttemptAccess, declaration ReportUploadDeclaration) (ReportUploadCapability, error) {
+	if e == nil || e.store == nil {
+		return ReportUploadCapability{}, ErrV6DirectorUnavailable
+	}
+	return e.store.CreateV6ReportUpload(ctx, access, declaration)
+}
+
+// CompleteV6ReportUpload verifies an uploaded object through the same store
+// configured by NewEngineWithRuntimeAdapters.
+func (e *Engine) CompleteV6ReportUpload(ctx context.Context, access V6AttemptAccess, resourceID, requestID string) (VerifiedReportObject, error) {
+	if e == nil || e.store == nil {
+		return VerifiedReportObject{}, ErrV6DirectorUnavailable
+	}
+	return e.store.CompleteV6ReportUpload(ctx, access, resourceID, requestID)
+}
+
+var _ ResearchReportV6 = (*Engine)(nil)
 
 func newEngine(store *PostgresStore, dispatcher Dispatcher, projector Projector) *Engine {
 	return &Engine{
@@ -253,6 +276,10 @@ func (e *Engine) ReconcileDue(ctx context.Context, limit int) (int, error) {
 
 func (e *Engine) WorkManifest(ctx context.Context, access V6AttemptAccess) (V6WorkManifest, error) {
 	return (workManifestModule{store: e.store}).Get(ctx, access)
+}
+
+func (e *Engine) WorkArtifact(ctx context.Context, access V6AttemptAccess, artifactVersionID string) (V6WorkArtifact, error) {
+	return (workArtifactModule{store: e.store}).Get(ctx, access, artifactVersionID)
 }
 
 func (e *Engine) WorkCatalog(ctx context.Context, in V6CatalogRequest) (V6CatalogPage, error) {
@@ -519,10 +546,11 @@ func hasUnfinishedCurrentWork(run Run, tasks []Task) bool {
 }
 
 func (e *Engine) Pause(ctx context.Context, sessionID, workspaceID, userID string) (Run, error) {
-	run, _, _, err := e.store.Pause(ctx, sessionID, workspaceID, userID)
+	run, _, inboxTaskIDs, err := e.store.Pause(ctx, sessionID, workspaceID, userID)
 	if err != nil {
 		return Run{}, err
 	}
+	e.cancelV6TransitionInboxTasks(ctx, run, inboxTaskIDs, "research_run_paused")
 	return run, e.finishTerminalTransition(ctx, run, sessionID, "research_run_paused")
 }
 
@@ -535,19 +563,39 @@ func (e *Engine) Resume(ctx context.Context, sessionID, workspaceID, userID stri
 }
 
 func (e *Engine) Cancel(ctx context.Context, sessionID, workspaceID, userID, reason string) (Run, error) {
-	run, _, _, err := e.store.Cancel(ctx, sessionID, workspaceID, userID, reason)
+	run, _, inboxTaskIDs, err := e.store.Cancel(ctx, sessionID, workspaceID, userID, reason)
 	if err != nil {
 		return Run{}, err
 	}
+	e.cancelV6TransitionInboxTasks(ctx, run, inboxTaskIDs, "research_run_cancelled")
 	return run, e.finishTerminalTransition(ctx, run, sessionID, "research_run_cancelled")
 }
 
 func (e *Engine) Archive(ctx context.Context, sessionID, workspaceID, userID, reason string) (Run, error) {
-	run, _, _, err := e.store.Archive(ctx, sessionID, workspaceID, userID, reason)
+	run, _, inboxTaskIDs, err := e.store.Archive(ctx, sessionID, workspaceID, userID, reason)
 	if err != nil {
 		return Run{}, err
 	}
+	e.cancelV6TransitionInboxTasks(ctx, run, inboxTaskIDs, "research_run_archived")
 	return run, e.finishTerminalTransition(ctx, run, sessionID, "research_run_archived")
+}
+
+func (e *Engine) cancelV6TransitionInboxTasks(ctx context.Context, run Run, inboxTaskIDs []string, reason string) {
+	if run.OrchestratorVersion != OrchestratorVersionV6 || len(inboxTaskIDs) == 0 || e.dispatcher == nil {
+		return
+	}
+	cancelCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	defer cancel()
+	if err := e.dispatcher.Cancel(cancelCtx, inboxTaskIDs, reason); err != nil {
+		// The durable Attempt is already terminal. ReconcileV6Work retries the
+		// shared cancellation path while the Inbox task remains non-terminal.
+		slog.Warn("research V6 run transition: immediate Inbox cancellation failed",
+			"session_id", run.SessionID,
+			"reason", reason,
+			"task_count", len(inboxTaskIDs),
+			"error", err,
+		)
+	}
 }
 
 // finishTerminalTransition keeps a persisted terminal transition successful

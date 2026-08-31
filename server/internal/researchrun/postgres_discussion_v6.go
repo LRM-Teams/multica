@@ -23,7 +23,7 @@ func (s *PostgresStore) OpenV6Discussion(ctx context.Context, in OpenV6Discussio
 	var existing V6Discussion
 	err = tx.QueryRow(ctx, `SELECT id::text,kind,scope_hash,input_set_hash,branch_scope_hash,status,goal_version,revision,through_event_sequence
 		FROM research_discussion WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND scope_hash=$3 AND input_set_hash=$4
-		AND goal_version=$5 AND branch_scope_hash=$6 AND status='active'`, in.WorkspaceID, in.RunID, in.ScopeHash, in.InputSetHash,
+		AND goal_version=$5 AND branch_scope_hash=$6 ORDER BY created_at DESC,id DESC LIMIT 1`, in.WorkspaceID, in.RunID, in.ScopeHash, in.InputSetHash,
 		in.GoalVersion, in.BranchScopeHash).Scan(&existing.ID, &existing.Kind, &existing.ScopeHash, &existing.InputSetHash,
 		&existing.BranchScopeHash, &existing.Status, &existing.GoalVersion, &existing.Revision, &existing.ThroughEventSequence)
 	if err == nil {
@@ -67,19 +67,20 @@ func (s *PostgresStore) OpenV6Discussion(ctx context.Context, in OpenV6Discussio
 		var tier, hash, nodeKind, nodeID, stewardID, agentID, membershipID string
 		err = tx.QueryRow(ctx, `SELECT f.tier,v.content_hash,
 			CASE WHEN rn.id IS NOT NULL THEN 'result_s' ELSE 'insight' END,
-			COALESCE(rn.id::text,iv.insight_id::text),st.id::text,st.agent_id::text,st.membership_id::text
-			FROM research_branch_frontier f JOIN research_artifact_version v ON v.id=f.node_artifact_version_id
-			LEFT JOIN research_result_node rn ON rn.artifact_version_id=v.id
-			LEFT JOIN research_insight_version iv ON iv.artifact_version_id=v.id
-			JOIN research_node_steward_assignment st ON st.node_artifact_version_id=f.node_artifact_version_id AND st.status='active'
+			v.artifact_id::text,st.id::text,st.agent_id::text,st.membership_id::text
+			FROM research_branch_frontier f
+			JOIN research_artifact_version v ON (v.workspace_id,v.session_id,v.id)=(f.workspace_id,f.session_id,f.node_artifact_version_id)
+			LEFT JOIN research_result_node rn ON (rn.workspace_id,rn.session_id,rn.artifact_version_id)=(v.workspace_id,v.session_id,v.id)
+			LEFT JOIN research_insight_version iv ON (iv.workspace_id,iv.session_id,iv.artifact_version_id)=(v.workspace_id,v.session_id,v.id)
+			JOIN research_node_steward_assignment st ON (st.workspace_id,st.session_id,st.node_artifact_version_id)=(f.workspace_id,f.session_id,f.node_artifact_version_id) AND st.status='active'
 			WHERE f.workspace_id=$1::uuid AND f.session_id=$2::uuid AND f.node_artifact_version_id=$3::uuid
 			AND f.removed_by_event_sequence IS NULL LIMIT 1 FOR UPDATE OF f,st`, in.WorkspaceID, in.RunID, input.VersionID).Scan(&tier, &hash, &nodeKind, &nodeID, &stewardID, &agentID, &membershipID)
 		if err != nil || tier != string(input.Tier) || hash != input.ContentHash || nodeKind != input.Kind || nodeID != input.ID {
 			return V6Discussion{}, ErrWorkItemChanged
 		}
 		var inScope bool
-		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM research_node_branch WHERE session_id=$1::uuid
-			AND node_artifact_version_id=$2::uuid AND branch_id=ANY($3::uuid[]))`, in.RunID, input.VersionID, branchIDs).Scan(&inScope); err != nil || !inScope {
+		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM research_node_branch WHERE workspace_id=$1::uuid AND session_id=$2::uuid
+			AND node_artifact_version_id=$3::uuid AND branch_id=ANY($4::uuid[]))`, in.WorkspaceID, in.RunID, input.VersionID, branchIDs).Scan(&inScope); err != nil || !inScope {
 			return V6Discussion{}, ErrWorkItemChanged
 		}
 		if _, err = tx.Exec(ctx, `INSERT INTO research_discussion_input(workspace_id,session_id,discussion_id,node_artifact_version_id,ordinal,tier,content_hash)
@@ -101,7 +102,7 @@ func (s *PostgresStore) OpenV6Discussion(ctx context.Context, in OpenV6Discussio
 			payload_schema_id,expected_result_schema_id,payload,ready_at,reason)
 			SELECT $1::uuid,$2::uuid,'discussion','ready','discussion',$3::uuid,$4,$4,$5,s.state_version,$6,$7::uuid,0.9,3,
 			'discussion.turn.v1','discussion_turn_submission',jsonb_build_object('task_context',jsonb_build_object(
-			'discussion_id',$3::text,'discussion_revision',$8,'input_set_hash',$9,'branch_scope_hash',$10)),now(),
+			'discussion_id',$3::text,'discussion_revision',$8::int,'input_set_hash',$9::text,'branch_scope_hash',$10::text)),now(),
 			'复核候选节点是否具有可融合的语义增益，并提交可见的结构化意见与投票。'
 			FROM research_session s WHERE s.workspace_id=$1::uuid AND s.id=$2::uuid ON CONFLICT DO NOTHING`,
 			in.WorkspaceID, in.RunID, discussion.ID, key, in.GoalVersion, in.ThroughEventSequence, participant.agentID,
@@ -109,7 +110,8 @@ func (s *PostgresStore) OpenV6Discussion(ctx context.Context, in OpenV6Discussio
 			return V6Discussion{}, err
 		}
 	}
-	if _, err = appendEvent(ctx, tx, in.WorkspaceID, in.RunID, "v6_discussion_open", "v6-discussion:"+in.InputSetHash, "director", "",
+	discussionEventKey := "v6-discussion:" + in.ScopeHash + ":" + in.InputSetHash + ":" + in.BranchScopeHash + ":" + fmt.Sprint(in.GoalVersion)
+	if _, err = appendEvent(ctx, tx, in.WorkspaceID, in.RunID, "v6_discussion_open", discussionEventKey, "director", "",
 		map[string]any{"discussion_id": discussion.ID, "kind": in.Kind, "input_set_hash": in.InputSetHash, "participant_count": len(participants)}); err != nil {
 		return V6Discussion{}, err
 	}
@@ -141,9 +143,9 @@ func (s *PostgresStore) applyDiscussionTurnV6Tx(ctx context.Context, tx pgx.Tx, 
 	var participant bool
 	var manifestID, manifestHash, membershipID string
 	var manifest json.RawMessage
-	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM research_discussion_participant WHERE discussion_id=$1::uuid AND agent_id=$2::uuid AND state='active'),a.manifest_id::text,a.manifest_hash,a.manifest,a.membership_id::text
-		FROM research_work_item_attempt a WHERE a.id=$3::uuid AND a.work_item_id=$4::uuid AND a.assigned_agent_id=$2::uuid AND a.status='running' FOR UPDATE`,
-		in.DiscussionID, in.AgentID, in.AttemptID, in.WorkItemID).Scan(&participant, &manifestID, &manifestHash, &manifest, &membershipID); err != nil {
+	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM research_discussion_participant WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND discussion_id=$3::uuid AND agent_id=$4::uuid AND state='active'),a.manifest_id::text,a.manifest_hash,a.manifest,a.membership_id::text
+		FROM research_work_item_attempt a WHERE a.workspace_id=$1::uuid AND a.session_id=$2::uuid AND a.id=$5::uuid AND a.work_item_id=$6::uuid AND a.assigned_agent_id=$4::uuid AND a.status='running' FOR UPDATE`,
+		in.WorkspaceID, in.RunID, in.DiscussionID, in.AgentID, in.AttemptID, in.WorkItemID).Scan(&participant, &manifestID, &manifestHash, &manifest, &membershipID); err != nil {
 		return err
 	}
 	if !participant || manifestID != in.ManifestID || manifestHash != in.ManifestHash {
@@ -158,7 +160,7 @@ func (s *PostgresStore) applyDiscussionTurnV6Tx(ctx context.Context, tx pgx.Tx, 
 	}
 	var ordinal, round int
 	if err = tx.QueryRow(ctx, `SELECT COALESCE(max(ordinal),-1)+1,COALESCE(max(round),0)+1 FROM research_discussion_turn
-		WHERE discussion_id=$1::uuid AND discussion_revision=$2`, in.DiscussionID, revision).Scan(&ordinal, &round); err != nil {
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND discussion_id=$3::uuid AND discussion_revision=$4`, in.WorkspaceID, in.RunID, in.DiscussionID, revision).Scan(&ordinal, &round); err != nil {
 		return err
 	}
 	turnID := uuid.NewString()
@@ -173,17 +175,17 @@ func (s *PostgresStore) applyDiscussionTurnV6Tx(ctx context.Context, tx pgx.Tx, 
 		contribution.Vote, contribution.Reason, turnID); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE research_work_item_attempt SET status='succeeded',result_kind='discussion_turn',result_entity_id=$2::uuid,result_hash=$3,client_request_id=$4::uuid,result_submitted_at=now(),completed_at=now(),updated_at=now() WHERE id=$1::uuid`,
-		in.AttemptID, in.DiscussionID, decoded.ContentHash, in.ClientRequestID); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE research_work_item_attempt SET status='succeeded',result_kind='discussion_turn',result_entity_id=$4::uuid,result_hash=$5,client_request_id=$6::uuid,result_submitted_at=now(),completed_at=now(),updated_at=now() WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid`,
+		in.WorkspaceID, in.RunID, in.AttemptID, in.DiscussionID, decoded.ContentHash, in.ClientRequestID); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE research_work_item SET status='succeeded',state_version=state_version+1,completed_at=now(),updated_at=now() WHERE id=$1::uuid`, in.WorkItemID); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE research_work_item SET status='succeeded',state_version=state_version+1,completed_at=now(),updated_at=now() WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid`, in.WorkspaceID, in.RunID, in.WorkItemID); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE research_team_membership SET state='idle' WHERE id=$1::uuid AND state='working'`, membershipID); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE research_team_membership SET state='idle' WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid AND state='working'`, in.WorkspaceID, in.RunID, membershipID); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE research_v6_work_submission SET status='accepted',outcome=jsonb_build_object('turn_id',$2::text),updated_at=now() WHERE id=$1::uuid`, submissionID, turnID); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE research_v6_work_submission SET status='accepted',outcome=jsonb_build_object('turn_id',$4::text),updated_at=now() WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid`, in.WorkspaceID, in.RunID, submissionID, turnID); err != nil {
 		return err
 	}
 	if _, err = appendEvent(ctx, tx, in.WorkspaceID, in.RunID, "v6_discussion_append_turn", "v6-discussion-turn:"+in.ClientRequestID, "agent", in.AgentID,
@@ -195,15 +197,15 @@ func (s *PostgresStore) applyDiscussionTurnV6Tx(ctx context.Context, tx pgx.Tx, 
 
 func (s *PostgresStore) closeV6DiscussionIfReadyTx(ctx context.Context, tx pgx.Tx, workspaceID, runID, discussionID string, revision int) error {
 	var participants, votes, accepts, rejects, uncertain, conflictTurns int
-	err := tx.QueryRow(ctx, `WITH latest AS(SELECT DISTINCT ON(agent_id) agent_id,vote FROM research_discussion_vote WHERE discussion_id=$1::uuid AND discussion_revision=$2 ORDER BY agent_id,created_at DESC)
-		SELECT (SELECT count(*) FROM research_discussion_participant WHERE discussion_id=$1::uuid AND state='active'),count(*),count(*)FILTER(WHERE vote='accept'),count(*)FILTER(WHERE vote='reject'),count(*)FILTER(WHERE vote='uncertain') FROM latest`,
-		discussionID, revision).Scan(&participants, &votes, &accepts, &rejects, &uncertain)
+	err := tx.QueryRow(ctx, `WITH latest AS(SELECT DISTINCT ON(agent_id) agent_id,vote FROM research_discussion_vote WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND discussion_id=$3::uuid AND discussion_revision=$4 ORDER BY agent_id,created_at DESC)
+		SELECT (SELECT count(*) FROM research_discussion_participant WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND discussion_id=$3::uuid AND state='active'),count(*),count(*)FILTER(WHERE vote='accept'),count(*)FILTER(WHERE vote='reject'),count(*)FILTER(WHERE vote='uncertain') FROM latest`,
+		workspaceID, runID, discussionID, revision).Scan(&participants, &votes, &accepts, &rejects, &uncertain)
 	if err != nil || votes < participants {
 		return err
 	}
-	if err = tx.QueryRow(ctx, `SELECT count(*)::int FROM research_discussion_turn WHERE discussion_id=$1::uuid
-		AND discussion_revision=$2 AND jsonb_typeof(contribution->'conflicts')='array'
-		AND jsonb_array_length(contribution->'conflicts')>0`, discussionID, revision).Scan(&conflictTurns); err != nil {
+	if err = tx.QueryRow(ctx, `SELECT count(*)::int FROM research_discussion_turn WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND discussion_id=$3::uuid
+		AND discussion_revision=$4 AND jsonb_typeof(contribution->'conflicts')='array'
+		AND jsonb_array_length(contribution->'conflicts')>0`, workspaceID, runID, discussionID, revision).Scan(&conflictTurns); err != nil {
 		return err
 	}
 	status := "escalated"
@@ -212,7 +214,7 @@ func (s *PostgresStore) closeV6DiscussionIfReadyTx(ctx context.Context, tx pgx.T
 	} else if rejects == participants && conflictTurns == 0 {
 		status = "consensus_reject"
 	}
-	if _, err = tx.Exec(ctx, `UPDATE research_discussion SET status=$2,updated_at=now() WHERE id=$1::uuid AND status='active'`, discussionID, status); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE research_discussion SET status=$4,updated_at=now() WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid AND status='active'`, workspaceID, runID, discussionID, status); err != nil {
 		return err
 	}
 	if status == "consensus_reject" {
@@ -220,42 +222,27 @@ func (s *PostgresStore) closeV6DiscussionIfReadyTx(ctx context.Context, tx pgx.T
 			goal_version,branch_scope_hash,decision,reason_code,reason_detail,decided_by)
 			SELECT d.workspace_id,d.session_id,d.input_set_hash,array_agg(i.node_artifact_version_id ORDER BY i.ordinal),
 			d.goal_version,d.branch_scope_hash,'rejected','no_semantic_gain','All current Stewards rejected integration.','discussion_consensus'
-			FROM research_discussion d JOIN research_discussion_input i ON i.discussion_id=d.id WHERE d.id=$1::uuid
-			GROUP BY d.workspace_id,d.session_id,d.input_set_hash,d.goal_version,d.branch_scope_hash ON CONFLICT DO NOTHING`, discussionID); err != nil {
+			FROM research_discussion d JOIN research_discussion_input i ON (i.workspace_id,i.session_id,i.discussion_id)=(d.workspace_id,d.session_id,d.id)
+			WHERE d.workspace_id=$1::uuid AND d.session_id=$2::uuid AND d.id=$3::uuid
+			GROUP BY d.workspace_id,d.session_id,d.input_set_hash,d.goal_version,d.branch_scope_hash ON CONFLICT DO NOTHING`, workspaceID, runID, discussionID); err != nil {
 			return err
 		}
 	}
 	if status == "consensus_accept" {
 		var integratorAgentID string
 		if err = tx.QueryRow(ctx, `SELECT agent_id::text FROM research_discussion_participant
-			WHERE discussion_id=$1::uuid AND state='active' ORDER BY joined_ordinal DESC LIMIT 1`, discussionID).Scan(&integratorAgentID); err != nil {
+			WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND discussion_id=$3::uuid AND state='active' ORDER BY joined_ordinal DESC LIMIT 1`, workspaceID, runID, discussionID).Scan(&integratorAgentID); err != nil {
 			return err
 		}
 		key := "discussion-integration:" + discussionID + ":" + fmt.Sprint(revision)
 		if _, err = tx.Exec(ctx, `INSERT INTO research_work_item(workspace_id,session_id,kind,status,target_kind,target_id,
 			client_key,idempotency_key,goal_version,input_state_version,input_event_sequence,assigned_agent_id,payload_schema_id,expected_result_schema_id,payload,ready_at)
-			SELECT d.workspace_id,d.session_id,'integration','ready','discussion',d.id,$2,$2,d.goal_version,s.state_version,
-			d.through_event_sequence,$3::uuid,'integration.task.v1','integration_submission',jsonb_build_object('task_context',jsonb_build_object(
+			SELECT d.workspace_id,d.session_id,'integration','ready','discussion',d.id,$4,$4,d.goal_version,s.state_version,
+			d.through_event_sequence,$5::uuid,'integration.task.v1','integration_submission',jsonb_build_object('task_context',jsonb_build_object(
 			'discussion_id',d.id::text,'discussion_revision',d.revision,'input_set_hash',d.input_set_hash,'branch_scope_hash',d.branch_scope_hash)),now()
-			FROM research_discussion d JOIN research_session s ON s.id=d.session_id WHERE d.id=$1::uuid ON CONFLICT DO NOTHING`,
-			discussionID, key, integratorAgentID); err != nil {
-			return err
-		}
-	}
-	if status == "escalated" {
-		var directorAgentID string
-		if err = tx.QueryRow(ctx, `SELECT a.director_agent_id::text FROM research_session s
-			JOIN research_director_assignment a ON a.id=s.current_director_assignment_id
-			WHERE s.id=$1::uuid AND a.status='active'`, runID).Scan(&directorAgentID); err != nil {
-			return err
-		}
-		key := "discussion-escalation:" + discussionID + ":" + fmt.Sprint(revision)
-		if _, err = tx.Exec(ctx, `INSERT INTO research_work_item(workspace_id,session_id,kind,status,target_kind,target_id,
-			client_key,idempotency_key,goal_version,input_state_version,input_event_sequence,assigned_agent_id,payload_schema_id,expected_result_schema_id,payload,ready_at)
-			SELECT $1::uuid,$2::uuid,'director','ready','discussion',$3::uuid,$4,$4,s.goal_version,s.state_version,
-			COALESCE((SELECT max(sequence) FROM research_run_event WHERE session_id=s.id),0),$5::uuid,'director.action.registry.v1','director_action_proposal',
-			jsonb_build_object('discussion_id',$3,'reason','mixed_or_uncertain_votes'),now()
-			FROM research_session s WHERE s.id=$2::uuid ON CONFLICT DO NOTHING`, workspaceID, runID, discussionID, key, directorAgentID); err != nil {
+			FROM research_discussion d JOIN research_session s ON (s.workspace_id,s.id)=(d.workspace_id,d.session_id)
+			WHERE d.workspace_id=$1::uuid AND d.session_id=$2::uuid AND d.id=$3::uuid ON CONFLICT DO NOTHING`,
+			workspaceID, runID, discussionID, key, integratorAgentID); err != nil {
 			return err
 		}
 	}

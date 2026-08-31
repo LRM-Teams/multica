@@ -33,6 +33,7 @@ type ChannelGoalResponse struct {
 	CreatedByID       string                          `json:"created_by_id"`
 	UpdatedByType     string                          `json:"updated_by_type"`
 	UpdatedByID       string                          `json:"updated_by_id"`
+	ChangeReason      string                          `json:"change_reason"`
 	CreatedAt         time.Time                       `json:"created_at"`
 	UpdatedAt         time.Time                       `json:"updated_at"`
 	CompletedAt       *time.Time                      `json:"completed_at,omitempty"`
@@ -86,6 +87,7 @@ type updateChannelGoalRequest struct {
 	Blocker           *string   `json:"blocker,omitempty"`
 	EvidenceRefs      *[]string `json:"evidence_refs,omitempty"`
 	CompletedCriteria *[]string `json:"completed_criteria,omitempty"`
+	ChangeReason      *string   `json:"change_reason,omitempty"`
 }
 
 type checkpointChannelGoalRequest struct {
@@ -95,6 +97,16 @@ type checkpointChannelGoalRequest struct {
 	Blocker           string   `json:"blocker"`
 	EvidenceRefs      []string `json:"evidence_refs"`
 	CompletedCriteria []string `json:"completed_criteria"`
+	ChangeReason      string   `json:"change_reason"`
+}
+
+// normalizeGoalChangeReason trims and bounds the optional free-text reason a
+// caller attaches to a Goal revision. The reason describes only the revision
+// being written, so an omitted value resets the live column to '' rather than
+// carrying the previous revision's reason forward.
+func normalizeGoalChangeReason(reason string) (string, bool) {
+	reason = strings.TrimSpace(reason)
+	return reason, len(reason) <= 2000
 }
 
 const initialChannelGoalStep = "Choose DIRECT or durable coordination. For multi-agent code delivery, create or bind a Git-backed Project and decompose the Goal into reviewed Issues before implementation."
@@ -148,7 +160,7 @@ func scanChannelGoal(row pgx.Row) (ChannelGoalResponse, error) {
 		&successCriteria, &goal.Status, &goal.Version, &goal.ProgressSummary,
 		&goal.CurrentStep, &goal.Blocker, &evidenceRefs, &completedCriteria,
 		&goal.CreatedByType, &createdByID, &goal.UpdatedByType, &updatedByID,
-		&goal.CreatedAt, &goal.UpdatedAt, &completedAt,
+		&goal.CreatedAt, &goal.UpdatedAt, &completedAt, &goal.ChangeReason,
 	)
 	if err != nil {
 		return goal, err
@@ -180,7 +192,7 @@ const channelGoalColumns = `
 	id::text, workspace_id, channel_id, title, objective, success_criteria,
 	status, version, progress_summary, current_step, blocker, evidence_refs,
 	completed_criteria, created_by_type, created_by_id, updated_by_type,
-	updated_by_id, created_at, updated_at, completed_at`
+	updated_by_id, created_at, updated_at, completed_at, change_reason`
 
 func (h *Handler) currentChannelGoal(ctx context.Context, workspaceID, channelID pgtype.UUID) (ChannelGoalResponse, error) {
 	return scanChannelGoal(h.DB.QueryRow(ctx, `
@@ -580,6 +592,15 @@ func (h *Handler) UpdateChannelGoal(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	changeReason := ""
+	if req.ChangeReason != nil {
+		var valid bool
+		changeReason, valid = normalizeGoalChangeReason(*req.ChangeReason)
+		if !valid {
+			writeError(w, http.StatusBadRequest, "change reason is too long")
+			return
+		}
+	}
 	criteriaJSON, _ := json.Marshal(current.SuccessCriteria)
 	evidenceJSON, _ := json.Marshal(current.EvidenceRefs)
 	completedJSON, _ := json.Marshal(current.CompletedCriteria)
@@ -588,14 +609,15 @@ func (h *Handler) UpdateChannelGoal(w http.ResponseWriter, r *http.Request) {
 		SET title = $1, objective = $2, success_criteria = $3, status = $4,
 		    progress_summary = $5, current_step = $6, blocker = $7,
 		    evidence_refs = $8, completed_criteria = $9,
-		    updated_by_type = 'user', updated_by_id = $10,
+		    updated_by_type = 'user', updated_by_id = $10, change_reason = $13,
 		    version = version + 1, updated_at = now(),
 		    completed_at = CASE WHEN $4 = 'completed' THEN now() ELSE completed_at END
 		WHERE id = $11 AND version = $12
 		RETURNING `+channelGoalColumns,
 		current.Title, current.Objective, criteriaJSON, current.Status,
 		current.ProgressSummary, current.CurrentStep, current.Blocker,
-		evidenceJSON, completedJSON, parseUUID(userID), parseUUID(current.ID), req.ExpectedVersion))
+		evidenceJSON, completedJSON, parseUUID(userID), parseUUID(current.ID), req.ExpectedVersion,
+		changeReason))
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusConflict, "channel goal version is stale")
 		return
@@ -818,18 +840,28 @@ func (h *Handler) UpdateAgentChannelGoal(w http.ResponseWriter, r *http.Request)
 			return
 		}
 	}
+	changeReason := ""
+	if req.ChangeReason != nil {
+		var valid bool
+		changeReason, valid = normalizeGoalChangeReason(*req.ChangeReason)
+		if !valid {
+			writeError(w, http.StatusBadRequest, "change reason is too long")
+			return
+		}
+	}
 	criteriaJSON, _ := json.Marshal(current.SuccessCriteria)
 	completedJSON, _ := json.Marshal(current.CompletedCriteria)
 	goal, err := scanChannelGoal(h.DB.QueryRow(r.Context(), `
 		UPDATE channel_goal
 		SET title = $1, objective = $2, success_criteria = $3, status = $4,
 		    completed_criteria = $5, updated_by_type = 'agent', updated_by_id = $6,
+		    change_reason = $9,
 		    version = version + 1, updated_at = now(),
 		    completed_at = CASE WHEN $4 = 'completed' THEN now() ELSE completed_at END
 		WHERE id = $7 AND version = $8
 		RETURNING `+channelGoalColumns,
 		current.Title, current.Objective, criteriaJSON, current.Status,
-		completedJSON, agentID, parseUUID(current.ID), req.ExpectedVersion))
+		completedJSON, agentID, parseUUID(current.ID), req.ExpectedVersion, changeReason))
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusConflict, "channel goal version is stale")
 		return
@@ -896,18 +928,23 @@ func (h *Handler) CheckpointAgentChannelGoal(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusBadRequest, "completed criteria are invalid")
 		return
 	}
+	changeReason, valid := normalizeGoalChangeReason(req.ChangeReason)
+	if !valid {
+		writeError(w, http.StatusBadRequest, "change reason is too long")
+		return
+	}
 	evidenceJSON, _ := json.Marshal(evidenceRefs)
 	completedJSON, _ := json.Marshal(completedCriteria)
 	goal, err := scanChannelGoal(h.DB.QueryRow(r.Context(), `
 		UPDATE channel_goal
 		SET progress_summary = $1, current_step = $2, blocker = $3,
 		    evidence_refs = $4, completed_criteria = $5,
-		    updated_by_type = 'agent', updated_by_id = $6,
+		    updated_by_type = 'agent', updated_by_id = $6, change_reason = $9,
 		    version = version + 1, updated_at = now()
 		WHERE id = $7 AND version = $8 AND status = 'active'
 		RETURNING `+channelGoalColumns,
 		req.ProgressSummary, req.CurrentStep, req.Blocker, evidenceJSON, completedJSON, agentID,
-		parseUUID(current.ID), req.ExpectedVersion))
+		parseUUID(current.ID), req.ExpectedVersion, changeReason))
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusConflict, "channel goal version is stale")
 		return

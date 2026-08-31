@@ -102,3 +102,59 @@ func TestMergeSandboxNodeHeartbeatMetadataPreservesDefaultTemplate(t *testing.T)
 		t.Fatalf("docker_images = %#v", meta["docker_images"])
 	}
 }
+
+func TestMergeSandboxNodeHeartbeatMetadataClearsStaleDockerImagesError(t *testing.T) {
+	existing := json.RawMessage(`{
+		"docker_images_error": "docker image ls: permission denied",
+		"docker_images": [{"image_ref": "multica/runtime:old"}]
+	}`)
+	incoming := json.RawMessage(`{
+		"docker_images": [{"image_ref": "multica/runtime:dev"}],
+		"docker_images_synced_at": "2026-07-29T09:00:00Z",
+		"docker_images_error": ""
+	}`)
+	merged := mergeSandboxNodeHeartbeatMetadata(existing, incoming)
+	var meta map[string]any
+	if err := json.Unmarshal(merged, &meta); err != nil {
+		t.Fatal(err)
+	}
+	if errMsg, _ := meta["docker_images_error"].(string); errMsg != "" {
+		t.Fatalf("docker_images_error = %q, want empty", errMsg)
+	}
+}
+
+func TestMergeSandboxNodeHeartbeatMetadataClearsStaleDockerImagesErrorFromLegacyHeartbeat(t *testing.T) {
+	existing := json.RawMessage(`{
+		"docker_images_error": "docker image ls: ",
+		"docker_images": []
+	}`)
+	incoming := json.RawMessage(`{
+		"docker_images": [{"image_ref": "cube-leagent-template-test:local"}],
+		"docker_images_synced_at": "2026-07-29T09:00:00Z"
+	}`)
+	merged := mergeSandboxNodeHeartbeatMetadata(existing, incoming)
+	var meta map[string]any
+	if err := json.Unmarshal(merged, &meta); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := meta["docker_images_error"]; ok {
+		t.Fatalf("docker_images_error = %v, want key removed", meta["docker_images_error"])
+	}
+}
+
+func TestSandboxNodeDockerImagesFromMetadataIncludesStaleErrorField(t *testing.T) {
+	raw := json.RawMessage(`{
+		"docker_images_error": "docker image ls: ",
+		"docker_images_synced_at": "2026-07-29T08:00:00Z",
+		"docker_images": [
+			{"image_ref": "multica/runtime:dev", "repository": "multica/runtime", "tag": "dev"}
+		]
+	}`)
+	resp := sandboxNodeDockerImagesFromMetadata(raw, true)
+	if resp.Error != "docker image ls:" {
+		t.Fatalf("error = %q", resp.Error)
+	}
+	if len(resp.Images) != 1 {
+		t.Fatalf("len(images) = %d", len(resp.Images))
+	}
+}

@@ -1,4 +1,8 @@
 version: "2"
+# Binary version is pinned in .sqlc-version (enforced by `make sqlc`).
+# The committed pkg/db/generated/** must stay reproducible by bare
+# `sqlc generate` at that exact version (LRM-1521): a regen diff that touches
+# unrelated files signals drift, not a feature.
 sql:
   - engine: "postgresql"
     queries: "pkg/db/queries/"

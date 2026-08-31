@@ -31,7 +31,6 @@ func TestEnsureResidentMessageRuntimeUsesOnlyStableAgentConfiguration(t *testing
 		mu       sync.Mutex
 		requests []string
 	)
-	expiresAt := time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339Nano)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		requests = append(requests, r.Method+" "+r.URL.Path)
@@ -50,7 +49,7 @@ func TestEnsureResidentMessageRuntimeUsesOnlyStableAgentConfiguration(t *testing
 			})
 		case "POST /api/daemon/runtimes/" + runtimeID + "/agents/" + agentID + "/credential":
 			_ = json.NewEncoder(w).Encode(AgentCredentialResponse{
-				ID: "credential-1", AgentID: agentID, Prefix: "mat_test", Token: "durable-agent-token", ExpiresAt: &expiresAt,
+				ID: "credential-1", AgentID: agentID, Prefix: "sk_agent_test", Token: "durable-agent-token",
 			})
 		case "POST /api/daemon/agent-memory-center/hydrate":
 			_ = json.NewEncoder(w).Encode(AgentMemoryHydrateResponse{
@@ -157,8 +156,8 @@ func TestEnsureResidentMessageRuntimeUsesOnlyStableAgentConfiguration(t *testing
 	defer mu.Unlock()
 	want := []string{
 		"GET /api/daemon/runtimes/" + runtimeID + "/agents/" + agentID + "/runtime-config",
-		"POST /api/daemon/runtimes/" + runtimeID + "/agents/" + agentID + "/credential",
 		"POST /api/daemon/agent-memory-center/hydrate",
+		"POST /api/daemon/runtimes/" + runtimeID + "/agents/" + agentID + "/credential",
 	}
 	if len(requests) != len(want) {
 		t.Fatalf("stable-config/credential/hydrate requests = %v, want %v", requests, want)
@@ -173,6 +172,52 @@ func TestEnsureResidentMessageRuntimeUsesOnlyStableAgentConfiguration(t *testing
 	}
 	if _, err := os.Stat(wrapperDir); !os.IsNotExist(err) {
 		t.Fatalf("resident Agent Proxy transport survived backend cleanup: %v", err)
+	}
+}
+
+func TestEnsureResidentAgentCredentialRetainsPredecessorAcrossIssuanceRetry(t *testing.T) {
+	const workspaceID, runtimeID, agentID = "workspace-1", "runtime-1", "agent-1"
+	var attempts int
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["credential_id"] != "credential-old" {
+			t.Errorf("attempt %d predecessor = %v, want credential-old", attempts, body["credential_id"])
+		}
+		if attempts == 1 {
+			http.Error(w, "temporary failure", http.StatusServiceUnavailable)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(AgentCredentialResponse{
+			ID: "credential-new", AgentID: agentID, Prefix: "sk_agent_new", Token: "sk_agent_new_secret",
+		})
+	}))
+	defer upstream.Close()
+
+	cfg := Config{WorkspacesRoot: t.TempDir(), ServerBaseURL: upstream.URL}
+	if _, err := writeCachedAgentCredential(cfg, workspaceID, runtimeID, agentID, AgentCredentialResponse{
+		ID: "credential-old", AgentID: agentID, Prefix: "sk_agent_old", Token: "sk_agent_old_secret",
+	}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	client := NewClient(upstream.URL)
+	client.SetRuntimeDaemonToken(runtimeID, "daemon-token", time.Now().Add(time.Hour))
+	d := &Daemon{cfg: cfg, client: client}
+	if _, err := d.ensureResidentAgentCredential(context.Background(), workspaceID, runtimeID, agentID); err == nil {
+		t.Fatal("first issuance unexpectedly succeeded")
+	}
+	if cached, ok := readCachedAgentCredential(cfg, workspaceID, runtimeID, agentID, time.Now()); !ok || cached.CredentialID != "credential-old" {
+		t.Fatalf("predecessor metadata after failed issuance = %+v, ok=%v", cached, ok)
+	}
+	credential, err := d.ensureResidentAgentCredential(context.Background(), workspaceID, runtimeID, agentID)
+	if err != nil {
+		t.Fatalf("retry issuance: %v", err)
+	}
+	if credential.CredentialID != "credential-new" || credential.Token != "sk_agent_new_secret" || attempts != 2 {
+		t.Fatalf("retry credential = %+v attempts=%d", credential, attempts)
 	}
 }
 
@@ -247,7 +292,6 @@ func TestEnsureResidentMessageRuntimeSpawnsProviderProcess(t *testing.T) {
 		runtimeID   = "22222222-2222-2222-2222-222222222222"
 		agentID     = "33333333-3333-3333-3333-333333333333"
 	)
-	expiresAt := time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339Nano)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/daemon/runtimes/" + runtimeID + "/agents/" + agentID + "/runtime-config":
@@ -257,7 +301,7 @@ func TestEnsureResidentMessageRuntimeSpawnsProviderProcess(t *testing.T) {
 			})
 		case "POST /api/daemon/runtimes/" + runtimeID + "/agents/" + agentID + "/credential":
 			_ = json.NewEncoder(w).Encode(AgentCredentialResponse{
-				ID: "credential-1", AgentID: agentID, Prefix: "mat_test", Token: "durable-agent-token", ExpiresAt: &expiresAt,
+				ID: "credential-1", AgentID: agentID, Prefix: "sk_agent_test", Token: "durable-agent-token",
 			})
 		default:
 			http.NotFound(w, r)
@@ -329,7 +373,6 @@ func TestEnsureResidentMessageRuntimeSpawnFailureDoesNotKeepBackend(t *testing.T
 		runtimeID   = "22222222-2222-2222-2222-222222222222"
 		agentID     = "33333333-3333-3333-3333-333333333333"
 	)
-	expiresAt := time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339Nano)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/daemon/runtimes/" + runtimeID + "/agents/" + agentID + "/runtime-config":
@@ -339,7 +382,7 @@ func TestEnsureResidentMessageRuntimeSpawnFailureDoesNotKeepBackend(t *testing.T
 			})
 		case "POST /api/daemon/runtimes/" + runtimeID + "/agents/" + agentID + "/credential":
 			_ = json.NewEncoder(w).Encode(AgentCredentialResponse{
-				ID: "credential-1", AgentID: agentID, Prefix: "mat_test", Token: "durable-agent-token", ExpiresAt: &expiresAt,
+				ID: "credential-1", AgentID: agentID, Prefix: "sk_agent_test", Token: "durable-agent-token",
 			})
 		default:
 			http.NotFound(w, r)
@@ -379,7 +422,6 @@ func TestEnsureResidentMessageRuntimeNonStarterDoesNotKeepBackend(t *testing.T) 
 		runtimeID   = "22222222-2222-2222-2222-222222222222"
 		agentID     = "33333333-3333-3333-3333-333333333333"
 	)
-	expiresAt := time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339Nano)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/daemon/runtimes/" + runtimeID + "/agents/" + agentID + "/runtime-config":
@@ -389,7 +431,7 @@ func TestEnsureResidentMessageRuntimeNonStarterDoesNotKeepBackend(t *testing.T) 
 			})
 		case "POST /api/daemon/runtimes/" + runtimeID + "/agents/" + agentID + "/credential":
 			_ = json.NewEncoder(w).Encode(AgentCredentialResponse{
-				ID: "credential-1", AgentID: agentID, Prefix: "mat_test", Token: "durable-agent-token", ExpiresAt: &expiresAt,
+				ID: "credential-1", AgentID: agentID, Prefix: "sk_agent_test", Token: "durable-agent-token",
 			})
 		default:
 			http.NotFound(w, r)
@@ -567,7 +609,6 @@ func TestWorkspaceDaemonStartUsesExplicitProviderSession(t *testing.T) {
 
 func newResidentStartTestDaemon(t *testing.T, workspaceID, runtimeID, agentID string, factory canonicalRuntimeBackendFactory) *Daemon {
 	t.Helper()
-	expiresAt := time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339Nano)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/daemon/runtimes/" + runtimeID + "/agents/" + agentID + "/runtime-config":
@@ -577,7 +618,7 @@ func newResidentStartTestDaemon(t *testing.T, workspaceID, runtimeID, agentID st
 			})
 		case "POST /api/daemon/runtimes/" + runtimeID + "/agents/" + agentID + "/credential":
 			_ = json.NewEncoder(w).Encode(AgentCredentialResponse{
-				ID: "credential-1", AgentID: agentID, Prefix: "mat_test", Token: "durable-agent-token", ExpiresAt: &expiresAt,
+				ID: "credential-1", AgentID: agentID, Prefix: "sk_agent_test", Token: "durable-agent-token",
 			})
 		default:
 			http.NotFound(w, r)
@@ -609,7 +650,6 @@ func TestEnsureResidentMessageRuntimeRotatesPiSessionBetweenRuns(t *testing.T) {
 		runtimeID   = "22222222-2222-2222-2222-222222222222"
 		agentID     = "33333333-3333-3333-3333-333333333333"
 	)
-	expiresAt := time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/daemon/runtimes/" + runtimeID + "/agents/" + agentID + "/runtime-config":
@@ -618,7 +658,7 @@ func TestEnsureResidentMessageRuntimeRotatesPiSessionBetweenRuns(t *testing.T) {
 				Agent: &AgentData{ID: agentID, Name: "message-agent"},
 			})
 		case "POST /api/daemon/runtimes/" + runtimeID + "/agents/" + agentID + "/credential":
-			_ = json.NewEncoder(w).Encode(AgentCredentialResponse{ID: "credential-1", AgentID: agentID, Token: "durable-agent-token", ExpiresAt: &expiresAt})
+			_ = json.NewEncoder(w).Encode(AgentCredentialResponse{ID: "credential-1", AgentID: agentID, Prefix: "sk_agent_test", Token: "durable-agent-token"})
 		default:
 			http.NotFound(w, r)
 		}

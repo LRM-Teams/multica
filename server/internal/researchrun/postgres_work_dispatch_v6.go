@@ -73,6 +73,26 @@ func (s *PostgresStore) prepareNextV6Dispatch(ctx context.Context) (bool, v6Disp
 		if _, err = ensureV6BackingTaskTx(ctx, tx, workItemID); err != nil {
 			return false, candidate, err
 		}
+		var work struct {
+			DirectionGateNodeCount int    `json:"direction_gate_node_count"`
+			DirectionGateDecision  string `json:"direction_gate_decision"`
+			DirectionGateRationale string `json:"direction_gate_rationale"`
+		}
+		if err = json.Unmarshal(payload, &work); err != nil {
+			return false, candidate, err
+		}
+		var branchIDs []string
+		if err = tx.QueryRow(ctx, `SELECT COALESCE(array_agg(branch_id::text ORDER BY branch_id::text),'{}')
+			FROM research_v6_work_item_branch WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND work_item_id=$3::uuid`, workspaceID, runID, workItemID).Scan(&branchIDs); err != nil {
+			return false, candidate, err
+		}
+		if err = validateV6DirectionGateTx(ctx, tx, workspaceID, runID, branchIDs, v6DirectionGate{
+			NodeCount: work.DirectionGateNodeCount,
+			Decision:  work.DirectionGateDecision,
+			Rationale: work.DirectionGateRationale,
+		}); err != nil {
+			return false, candidate, err
+		}
 	}
 	attemptID, manifestID := uuid.NewString(), uuid.NewString()
 	manifest, manifestHash, err := compileV6WorkManifestTx(ctx, tx, workspaceID, runID, workItemID, attemptID, manifestID, agentID, mission, expectedSchema, goalVersion, stateVersion, throughSequence, payload)
@@ -211,7 +231,7 @@ func persistV6CatalogPagesTx(ctx context.Context, tx pgx.Tx, workspaceID, runID,
 	branchScope, _ := json.Marshal(frozen.BranchRefs)
 	for _, view := range []V6CatalogView{V6CatalogSameTier, V6CatalogHigherCandidates} {
 		rows, err := tx.Query(ctx, `SELECT DISTINCT v.id::text,CASE WHEN rn.id IS NOT NULL THEN 'result_s' ELSE 'insight' END,
-		COALESCE(rn.id::text,iv.insight_id::text),f.tier,v.content_hash,COALESCE(rn.catalog_summary,iv.catalog_summary)
+		v.artifact_id::text,f.tier,v.content_hash,COALESCE(rn.catalog_summary,iv.catalog_summary)
 		FROM research_branch_frontier f JOIN research_artifact_version v ON v.id=f.node_artifact_version_id
 		LEFT JOIN research_result_node rn ON rn.artifact_version_id=v.id LEFT JOIN research_insight_version iv ON iv.artifact_version_id=v.id
 		WHERE f.workspace_id=$1::uuid AND f.session_id=$2::uuid AND f.removed_by_event_sequence IS NULL
@@ -326,7 +346,7 @@ func compileV6WorkManifestTx(ctx context.Context, tx pgx.Tx, workspaceID, runID,
 	inputNodes := []V6NodeRef{}
 	rows, err = tx.Query(ctx, `SELECT DISTINCT v.id::text,p.entity_kind,v.content_hash,
 		CASE WHEN rn.id IS NOT NULL THEN 'result_s' ELSE 'insight' END,
-		COALESCE(rn.id::text,iv.insight_id::text),COALESCE(iv.tier,'S')
+		v.artifact_id::text,COALESCE(iv.tier,'S')
 		FROM research_work_item w
 		JOIN research_discussion_input di ON di.discussion_id=w.target_id
 		JOIN research_artifact_version v ON v.id=di.node_artifact_version_id
@@ -387,11 +407,26 @@ func compileV6WorkManifestTx(ctx context.Context, tx pgx.Tx, workspaceID, runID,
 		taskContext = value
 	}
 	manifestMap := map[string]any{"contract_kind": "work_manifest", "schema_version": 6, "manifest_id": manifestID, "workspace_id": workspaceID, "run_id": runID, "work_item_id": workItemID, "attempt_id": attemptID, "assigned_agent_id": agentID, "goal": map[string]any{"goal_version": goalVersion, "goal": goal, "scope": jsonObjectOrEmpty(scope), "audience": audience, "freshness": freshness, "language": language, "source_policy": jsonObjectOrEmpty(sourcePolicy)}, "branch_refs": branchRefs, "runtime_protocol_version": "research-run-v6-runtime-v1", "mission_prompt": mission, "expected_result_schema": expectedSchema, "artifacts": artifacts, "through_state_version": stateVersion, "through_event_sequence": throughSequence}
-	if len(inputNodes) > 0 {
-		manifestMap["input_nodes"] = inputNodes
-	}
-	if taskContext != nil {
-		manifestMap["task_context"] = taskContext
+	// Discussion and integration dispatch context is carried inside the
+	// schema-approved free-form task_specific_schema object.  The frozen V6
+	// work_manifest contract intentionally rejects ad-hoc top-level fields.
+	if expectedSchema == string(V6ContractDiscussionTurnSubmission) || expectedSchema == string(V6ContractIntegrationSubmission) {
+		dispatchContext := map[string]any{}
+		if len(inputNodes) > 0 {
+			dispatchContext["input_nodes"] = inputNodes
+		}
+		if taskContext != nil {
+			dispatchContext["task_context"] = taskContext
+		}
+		if len(dispatchContext) > 0 {
+			if taskSchemaMap, ok := taskSchema.(map[string]any); ok {
+				for key, value := range dispatchContext {
+					taskSchemaMap[key] = value
+				}
+			} else if taskSchema == nil {
+				taskSchema = dispatchContext
+			}
+		}
 	}
 	if expectedSchema == string(V6ContractAtomicResultSubmission) {
 		var taskID string
@@ -409,6 +444,13 @@ func compileV6WorkManifestTx(ctx context.Context, tx pgx.Tx, workspaceID, runID,
 			}
 		}
 		manifestMap["catalog_access"] = map[string]any{"same_tier": tier, "higher_candidate_branch_ids": branchIDs, "include_higher_candidates": true, "through_event_sequence": throughSequence, "page_size": 128}
+	}
+	if expectedSchema == string(V6ContractReportPackageSubmission) {
+		var reportID string
+		if err = tx.QueryRow(ctx, `SELECT target_id::text FROM research_work_item WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid AND target_kind='report'`, workspaceID, runID, workItemID).Scan(&reportID); err != nil {
+			return nil, "", err
+		}
+		manifestMap["task_id"] = reportID
 	}
 	if taskSchema != nil {
 		if expectedSchema == string(V6ContractAtomicResultSubmission) {

@@ -19,6 +19,20 @@ func TestV6ReportCompilerRejectsNetworkAndPrivilegeEscapes(t *testing.T) {
 		}
 	}
 }
+func TestV6ReportCompilerAllowsDocumentCharsetAndViewportMeta(t *testing.T) {
+	doc := `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>阶段性调研报告</title></head><body><h1>阶段性调研报告</h1><p>结论。</p></body></html>`
+	if _, err := CompileV6ReportPackage([]V6ReportResource{reportTestResource("doc", "index.html", "document", "text/html", doc)}, "doc", "结论。"); err != nil {
+		t.Fatalf("standard document meta must compile: %v", err)
+	}
+}
+
+func TestV6ReportCompilerStillRejectsMetaRefresh(t *testing.T) {
+	doc := `<html><head><meta http-equiv="refresh" content="0;url=https://evil.test"></head><body>x</body></html>`
+	if _, err := CompileV6ReportPackage([]V6ReportResource{reportTestResource("doc", "index.html", "document", "text/html", doc)}, "doc", "x"); !errors.Is(err, ErrInvalidContract) {
+		t.Fatalf("meta refresh must stay rejected, err=%v", err)
+	}
+}
+
 func TestV6ReportCompilerInlinesPackageResourcesAndBuildsCSP(t *testing.T) {
 	doc := `<html><head><link rel="stylesheet" href="app.css"></head><body><img src="plot.png"><script src="app.js"></script></body></html>`
 	out, err := CompileV6ReportPackage([]V6ReportResource{reportTestResource("doc", "index.html", "document", "text/html", doc), reportTestResource("css", "app.css", "style", "text/css", "body{color:#fff}"), reportTestResource("js", "app.js", "script", "text/javascript", "document.body.dataset.ok='1'"), reportTestResource("img", "plot.png", "image", "image/png", "png")}, "doc", "fallback")
@@ -58,5 +72,26 @@ func TestV6ReportReviewTransactionBoundary(t *testing.T) {
 }
 
 func TestV6ReportWorkCreateTransactionBoundary(t *testing.T) {
-	assertReportSource(t, "postgres_report_work_v6.go", "research_report_input", "research_work_item", "commitResearchTx")
+	assertReportSource(t, "postgres_report_work_v6.go", "lockRunForMutation", "role='reporter'", "selectV6ReportInputs(ctx, tx", "registerDraftReportRevisionPassportTx", "v6ReportWorkCreatedEventPayload", "research_report_input", "research_work_item", "'report_package_submission',$11::jsonb,1,now()", "commitResearchTx")
+	assertReportSource(t, "artifact_report.go", "ensureSessionPolicyStateTx", "research_artifact_record_artifact_create_mutation")
+	assertReportSource(t, "artifact_report.go", "'report_revision', NULL", "current_version", "ErrResultConflict")
+}
+
+func TestV6ReportWorkCreatedEventDoesNotReferenceUnversionedDraft(t *testing.T) {
+	payload := v6ReportWorkCreatedEventPayload(V6ReportWork{
+		ReportID:          "draft-report",
+		WorkItemID:        "report-work",
+		Revision:          4,
+		InputSnapshotHash: "snapshot-hash",
+	}, "director-cycle")
+	if _, exists := payload["report_id"]; exists {
+		t.Fatal("report work event must not claim exact-version lineage for an unversioned draft")
+	}
+	if payload["work_item_id"] != "report-work" || payload["report_revision"] != 4 {
+		t.Fatalf("unexpected report work event payload: %+v", payload)
+	}
+}
+
+func TestV6DirectorProposalApplyFailureIsObservable(t *testing.T) {
+	assertReportSource(t, "postgres_director_action_v6.go", "research V6 Director proposal canonical apply failed", "submission_id", "run_id", "error")
 }

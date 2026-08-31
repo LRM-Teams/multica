@@ -12,6 +12,8 @@ export interface ResearchV6DirectorCanvasProjection {
   nodes: readonly ResearchV6DirectorProjectionNode[];
   edges: readonly ResearchV6DirectorProjectionEdge[];
   densityBins?: readonly ResearchV6DirectorDensityBin[];
+  /** Composite roots whose one-layer disclosure is currently open. */
+  expandedRootIds?: ReadonlySet<string>;
 }
 
 export interface ResearchV6DirectorCanvasAdapterResult {
@@ -40,6 +42,30 @@ function rendererStatus(node: ResearchV6DirectorProjectionNode): string {
   if (node.state.conclusion === "accepted") return "accepted";
   if (node.state.execution === "succeeded") return "succeeded";
   return "pending";
+}
+
+function isAgentProjectionNode(node: ResearchV6DirectorProjectionNode): boolean {
+  const refKind = node.canonicalRef.kind;
+  return (
+    refKind === "agent" ||
+    refKind === "pending_agent" ||
+    node.kind.trim().toLowerCase() === "agent"
+  );
+}
+
+function isResearchContentNode(node: ResearchV6DirectorProjectionNode): boolean {
+  if (node.absorbed || isAgentProjectionNode(node)) return false;
+  const kind = node.kind.trim().toLowerCase();
+  if (kind === "goal" || node.tier === "GOAL") return false;
+  const refKind = node.canonicalRef.kind;
+  return (
+    kind === "work_s" ||
+    kind === "result_s" ||
+    kind === "insight" ||
+    refKind === "work_item" ||
+    refKind === "result" ||
+    refKind === "insight"
+  );
 }
 
 function rendererLevel(node: ResearchV6DirectorProjectionNode): "xxl" | "xl" | "l" | "m" | "s" {
@@ -85,23 +111,33 @@ export function adaptResearchV6DirectorCanvas(
     }
   }
 
-  // Agent identity is presentation metadata for its assigned Work. Keeping a
-  // second Agent circle duplicates the same execution unit and overwhelms the
-  // constellation with roster nodes and assignment edges.
-  const visibleNodes = projection.nodes.filter(
-    (node) =>
-      !node.absorbed &&
-      node.canonicalRef.kind !== "agent" &&
-      node.kind.trim().toLowerCase() !== "agent",
-  );
-  const visibleNodeIds = new Set(visibleNodes.map((node) => node.id));
+  // Roster circles are a staffing overlay, not knowledge-graph members.
+  // Keep them only until the first research Work / Result / Insight appears.
   const absorbedInputs = new Map<string, string[]>();
+  const absorbedPairs = new Set<string>();
+  const expandedAbsorbedNodeIds = new Set<string>();
   for (const edge of projection.edges) {
     if (edge.kind !== "absorbed_into") continue;
+    absorbedPairs.add(`${edge.fromNodeId}\0${edge.toNodeId}`);
     const inputs = absorbedInputs.get(edge.toNodeId) ?? [];
     inputs.push(edge.fromNodeId);
     absorbedInputs.set(edge.toNodeId, inputs);
+    if (projection.expandedRootIds?.has(edge.toNodeId)) {
+      expandedAbsorbedNodeIds.add(edge.fromNodeId);
+    }
   }
+
+  const staffing = !projection.nodes.some(isResearchContentNode);
+  const visibleNodes = projection.nodes.filter((node) => {
+    // Absorbed inputs are hidden in the default constellation, but a
+    // disclosure slice must be able to reveal the exact inputs of its open
+    // successor. The server supplies the canonical absorbed_into edge; the
+    // client only uses the explicit expanded-root intent to change visibility.
+    if (node.absorbed && !expandedAbsorbedNodeIds.has(node.id)) return false;
+    if (isAgentProjectionNode(node)) return staffing;
+    return true;
+  });
+  const visibleNodeIds = new Set(visibleNodes.map((node) => node.id));
 
   const expandableNodeIds = new Set<string>();
   const hiddenChildCountByNodeId = new Map<string, number>();
@@ -115,9 +151,12 @@ export function adaptResearchV6DirectorCanvas(
     merged[successorId] = [...new Set(inputIds)];
   }
 
-  const branchIds = [
-    ...new Set(visibleNodes.flatMap((node) => node.branchIds)),
-  ];
+  const territoryById = new Map(
+    visibleNodes.flatMap((node) =>
+      node.territory ? [[node.territory.branchId, node.territory] as const] : [],
+    ),
+  );
+  const territoryIds = [...territoryById.keys()].sort();
 
   return {
     graph: {
@@ -126,6 +165,7 @@ export function adaptResearchV6DirectorCanvas(
       total_node_count: visibleNodes.length,
       nodes: visibleNodes.map((node) => {
         const assignedAgent = assignedAgentByWorkNodeId.get(node.id);
+        const rosterSatellite = isAgentProjectionNode(node);
         return {
           id: node.id,
           session_id: projection.runId,
@@ -133,10 +173,13 @@ export function adaptResearchV6DirectorCanvas(
           title: node.title ?? node.catalogSummary,
           summary: node.catalogSummary,
           status: rendererStatus(node),
-          actor_agent_id: assignedAgent?.canonicalRef.id ?? null,
+          actor_agent_id:
+            assignedAgent?.canonicalRef.id ??
+            (rosterSatellite ? node.canonicalRef.id : null),
           payload: {
             canonical_ref: node.canonicalRef,
             branch_ids: node.branchIds,
+            territory: node.territory,
             projection_state: node.state,
             projection_tier: node.tier,
             assigned_agent: assignedAgent
@@ -152,7 +195,9 @@ export function adaptResearchV6DirectorCanvas(
             semantic_role:
               node.tier === "GOAL" || node.kind.toLowerCase() === "goal"
                 ? "goal"
-                : undefined,
+                : rosterSatellite
+                  ? "roster"
+                  : undefined,
             absorbed: node.absorbed,
             terminal: node.terminal,
             expandable: node.expandable,
@@ -161,7 +206,7 @@ export function adaptResearchV6DirectorCanvas(
           // Unknown future tiers retain their canonical value in payload while
           // degrading to the neutral M visual instead of breaking the canvas.
           level: rendererLevel(node),
-          cluster_id: node.branchIds[0] ?? null,
+          cluster_id: node.territory?.branchId ?? null,
           confidence: null,
           goal_version_id: null,
           derived_from: null,
@@ -179,11 +224,20 @@ export function adaptResearchV6DirectorCanvas(
         };
       }),
       edges: projection.edges
-        .filter(
-          (edge) =>
-            visibleNodeIds.has(edge.fromNodeId) &&
-            visibleNodeIds.has(edge.toNodeId),
-        )
+        .filter((edge) => {
+          if (
+            !visibleNodeIds.has(edge.fromNodeId) ||
+            !visibleNodeIds.has(edge.toNodeId)
+          ) {
+            return false;
+          }
+          // Integration writes both absorption and derivation for the same
+          // input → successor pair. Keep the fusion edge; a second line is noise.
+          return !(
+            edge.kind === "derived_from" &&
+            absorbedPairs.has(`${edge.fromNodeId}\0${edge.toNodeId}`)
+          );
+        })
         .map((edge) => ({
           id: edge.id,
           session_id: projection.runId,
@@ -192,17 +246,17 @@ export function adaptResearchV6DirectorCanvas(
           edge_type: edge.kind,
           created_at: "",
         })),
-      clusters: branchIds.map((branchId) => ({
-        id: branchId,
+      clusters: territoryIds.map((territoryId) => ({
+        id: territoryId,
         session_id: projection.runId,
-        name: branchId,
-        label: branchId,
+        name: territoryById.get(territoryId)?.label ?? territoryId,
+        label: territoryById.get(territoryId)?.label ?? territoryId,
         level: "m",
         cluster_type: "branch",
         goal_version_id: null,
         payload: {
           member_node_ids: visibleNodes
-            .filter((node) => node.branchIds.includes(branchId))
+            .filter((node) => node.territory?.branchId === territoryId)
             .map((node) => node.id),
         },
         created_at: "",

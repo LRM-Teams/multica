@@ -21,10 +21,16 @@ type v6WorkDispatchIdentity struct {
 		GoalVersion int `json:"goal_version"`
 	} `json:"goal"`
 	BranchRefs    []V6BranchRef   `json:"branch_refs"`
-	InputNodes    []V6NodeRef     `json:"input_nodes"`
 	CatalogAccess json.RawMessage `json:"catalog_access"`
 	TaskSchema    json.RawMessage `json:"task_specific_schema"`
-	TaskContext   json.RawMessage `json:"task_context"`
+	Artifacts     []struct {
+		ArtifactVersionID string `json:"artifact_version_id"`
+	} `json:"artifacts"`
+}
+
+type v6DispatchContext struct {
+	InputNodes  []V6NodeRef     `json:"input_nodes"`
+	TaskContext json.RawMessage `json:"task_context"`
 }
 
 // BuildV6WorkDispatchPrompt turns a frozen Work Manifest into an executable
@@ -38,6 +44,12 @@ func BuildV6WorkDispatchPrompt(manifest V6WorkManifest) (string, error) {
 	var identity v6WorkDispatchIdentity
 	if err = json.Unmarshal(decoded.Envelope, &identity); err != nil {
 		return "", fmt.Errorf("%w: decode V6 work identity", ErrInvalidContract)
+	}
+	var dispatchContext v6DispatchContext
+	if len(identity.TaskSchema) > 0 && string(identity.TaskSchema) != "null" {
+		if err = json.Unmarshal(identity.TaskSchema, &dispatchContext); err != nil {
+			return "", fmt.Errorf("%w: decode V6 dispatch context", ErrInvalidContract)
+		}
 	}
 	if strings.TrimSpace(identity.RunID) == "" || strings.TrimSpace(identity.WorkItemID) == "" || strings.TrimSpace(identity.AttemptID) == "" ||
 		strings.TrimSpace(identity.ManifestID) == "" || strings.TrimSpace(identity.ManifestHash) == "" || strings.TrimSpace(string(identity.ExpectedResult)) == "" {
@@ -64,6 +76,19 @@ func BuildV6WorkDispatchPrompt(manifest V6WorkManifest) (string, error) {
 	prompt.WriteString("持续报告实时进度，供用户了解当前阶段。读取 Manifest 后立即报告一次；此后每次进入新阶段（读取 Brief 或 catalog、搜索、阅读来源、分析、起草、验证）时，向 `${V6_API}/progress` POST 一条简体中文进度（最多 240 个字符）：\n\n")
 	prompt.WriteString("```bash\n\"${V6_CURL[@]}\" -X POST -H 'Content-Type: application/json' \\\n  -d '{\"client_request_id\":\"'\"$(uuidgen | tr A-Z a-z)\"'\",\"text\":\"<正在进行的工作，用简体中文>\",\"stage\":\"<短 key，例如 searching>\"}' \\\n  \"${V6_API}/progress\"\n```\n\n")
 	prompt.WriteString("进度说明不会结算 Work Item。进度 POST 失败不得阻塞任务或形成重试循环；忽略错误并继续。每条被接受的进度也会延长 Work Item 租约，因此长回合至少每 15 分钟报告一次，否则租约可能在工作期间过期。\n\n")
+	if identity.ExpectedResult == V6ContractDiscussionTurnSubmission || identity.ExpectedResult == V6ContractIntegrationSubmission {
+		if len(identity.Artifacts) < 2 {
+			return "", fmt.Errorf("%w: convergence Work has fewer than two frozen artifacts", ErrInvalidContract)
+		}
+		prompt.WriteString("在判断或整合前，必须逐个读取 Manifest 授权的冻结节点正文；`input_nodes` 的 ID、层级和 hash 不能替代正文。读取全部正文后再比较共同发现、独有发现、冲突、不确定性和待回答问题：\n\n```bash\n")
+		for _, artifact := range identity.Artifacts {
+			if strings.TrimSpace(artifact.ArtifactVersionID) == "" {
+				return "", fmt.Errorf("%w: convergence Work has an incomplete artifact reference", ErrInvalidContract)
+			}
+			fmt.Fprintf(&prompt, "multica research work-artifact %s %s --output json\n", base, artifact.ArtifactVersionID)
+		}
+		prompt.WriteString("```\n\n使用凭据代理回退时，对每个版本 ID 请求 `GET ${V6_API}/artifacts/<artifact-version-id>`。该接口只返回当前 Manifest 已授权的不可变版本；任一正文读取失败时，不得凭摘要猜测或提交 accept。\n\n")
+	}
 	if identity.ExpectedResult == V6ContractDirectorActionProposal {
 		prompt.WriteString(RonaldoV6DirectorSystemProtocol + "\n\n")
 		prompt.WriteString("读取每一页 Director Brief，使用每页的精确 ID 和 hash 逐页确认，然后提交 proposal：\n\n")
@@ -91,7 +116,7 @@ func BuildV6WorkDispatchPrompt(manifest V6WorkManifest) (string, error) {
 		prompt.WriteString("```json\n{\n  \"contract_kind\": \"atomic_result_submission\",\n  \"schema_version\": 6,\n  \"client_request_id\": \"<new-uuid>\",\n")
 		fmt.Fprintf(&prompt, "  \"workspace_id\": \"%s\",\n  \"run_id\": \"%s\",\n  \"work_item_id\": \"%s\",\n  \"task_id\": \"%s\",\n  \"attempt_id\": \"%s\",\n  \"agent_id\": \"%s\",\n  \"manifest_id\": \"%s\",\n  \"manifest_hash\": \"%s\",\n  \"goal_version\": %d,\n", identity.WorkspaceID, identity.RunID, identity.WorkItemID, identity.TaskID, identity.AttemptID, identity.AssignedAgent, identity.ManifestID, identity.ManifestHash, identity.Goal.GoalVersion)
 		fmt.Fprintf(&prompt, "  \"branch_refs\": <manifest.branch_refs>,\n  \"content_layers\": {\"catalog_summary\":\"<summary>\",\"brief_summary\":\"<summary>\",\"objective\":\"<objective>\",\"conclusion\":\"<conclusion>\",\"content\":\"<content>\",\"scope\":{},\"uncertainties\":[],\"conflicts\":[],\"open_questions\":[]},\n  \"evidence_refs\": <only frozen manifest artifact versions actually used>,\n  \"state_proposal\": {\"conclusion_state\":\"proposed\",\"integration_state\":\"candidate\"},\n  \"related_candidates\": [],\n  \"task_specific_schema\": \"%s\",\n  \"task_specific_payload\": <object matching the schema under that exact manifest key>,\n  \"content_hash\": \"sha256:<RFC-8785-hash>\"\n}\n```\n\n", taskSchemaID)
-		prompt.WriteString("必须使用 `manifest.task_specific_schema.payload_schemas` 下唯一的 key，不得编造或重命名 schema ID。`content_layers.catalog_summary` 最多 512 个字符。根层的 `content_layers.uncertainties`、`content_layers.conflicts` 和 `content_layers.open_questions` 是字符串数组；`task_specific_payload` 内同名字段遵循冻结的任务 schema，可能包含对象。计算 `content_hash` 时只移除 `content_hash` 字段，用 RFC 8785 JCS 规范化其余对象，对所得字节做 SHA-256，然后写入小写 `sha256:<64-hex>`。提交前必须读取并确认实际使用的每一页 catalog。\n\n")
+		prompt.WriteString("必须使用 `manifest.task_specific_schema.payload_schemas` 下唯一的 key，不得编造或重命名 schema ID。`content_layers.catalog_summary` 最多 512 个字符。根层的 `content_layers.uncertainties`、`content_layers.conflicts` 和 `content_layers.open_questions` 是字符串数组；`task_specific_payload` 内同名字段遵循冻结的任务 schema，可能包含对象。`direction_gate_node_count`、`direction_gate_decision` 和 `direction_gate_rationale` 是 Director/Work 的服务器元数据，禁止复制到 `task_specific_payload` 或自定义 findings 字段中。计算 `content_hash` 时只移除 `content_hash` 字段，用 RFC 8785 JCS 规范化其余对象，对所得字节做 SHA-256，然后写入小写 `sha256:<64-hex>`。提交前必须读取并确认实际使用的每一页 catalog。\n\n")
 	}
 	if identity.ExpectedResult == V6ContractDiscussionTurnSubmission {
 		var discussion struct {
@@ -99,10 +124,10 @@ func BuildV6WorkDispatchPrompt(manifest V6WorkManifest) (string, error) {
 			DiscussionRevision int    `json:"discussion_revision"`
 			InputSetHash       string `json:"input_set_hash"`
 		}
-		if json.Unmarshal(identity.TaskContext, &discussion) != nil || discussion.DiscussionID == "" || discussion.DiscussionRevision < 1 || discussion.InputSetHash == "" {
+		if json.Unmarshal(dispatchContext.TaskContext, &discussion) != nil || discussion.DiscussionID == "" || discussion.DiscussionRevision < 1 || discussion.InputSetHash == "" {
 			return "", fmt.Errorf("%w: incomplete V6 discussion identity", ErrInvalidContract)
 		}
-		prompt.WriteString("你是候选节点的当前 Steward。逐项比较 Manifest 中冻结的 input_nodes，判断它们是否存在足够的共同语义与新增价值；不得因为数量足够就同意融合。提交下面的精确结构：\n\n")
+		prompt.WriteString("你是候选节点的当前 Steward。逐项比较已经读取的冻结节点正文，判断它们是否存在足够的共同语义与新增价值；不得只看 input_nodes 元数据，也不得因为数量足够就同意融合。提交下面的精确结构：\n\n")
 		prompt.WriteString("```json\n{\n  \"contract_kind\": \"discussion_turn_submission\",\n  \"schema_version\": 6,\n  \"client_request_id\": \"<new-uuid>\",\n")
 		fmt.Fprintf(&prompt, "  \"workspace_id\": \"%s\",\n  \"run_id\": \"%s\",\n  \"work_item_id\": \"%s\",\n  \"attempt_id\": \"%s\",\n  \"manifest_id\": \"%s\",\n  \"manifest_hash\": \"%s\",\n  \"discussion_id\": \"%s\",\n  \"discussion_revision\": %d,\n  \"input_set_hash\": \"%s\",\n  \"agent_id\": \"%s\",\n", identity.WorkspaceID, identity.RunID, identity.WorkItemID, identity.AttemptID, identity.ManifestID, identity.ManifestHash, discussion.DiscussionID, discussion.DiscussionRevision, discussion.InputSetHash, identity.AssignedAgent)
 		prompt.WriteString("  \"visible_message\": \"<面向用户可见的中文判断>\",\n  \"contribution\": {\"common_findings\":[],\"unique_findings\":[],\"conflicts\":[],\"scope\":{},\"omissions\":[],\"vote\":\"<accept|reject|uncertain>\",\"reason\":\"<中文理由>\"},\n  \"evidence_refs\": []\n}\n```\n\n")
@@ -114,12 +139,12 @@ func BuildV6WorkDispatchPrompt(manifest V6WorkManifest) (string, error) {
 			DiscussionRevision int    `json:"discussion_revision"`
 			InputSetHash       string `json:"input_set_hash"`
 		}
-		if json.Unmarshal(identity.TaskContext, &integration) != nil || integration.DiscussionID == "" || integration.DiscussionRevision < 1 || integration.InputSetHash == "" || len(identity.InputNodes) < 2 || len(identity.BranchRefs) == 0 {
+		if json.Unmarshal(dispatchContext.TaskContext, &integration) != nil || integration.DiscussionID == "" || integration.DiscussionRevision < 1 || integration.InputSetHash == "" || len(dispatchContext.InputNodes) < 2 || len(identity.BranchRefs) == 0 {
 			return "", fmt.Errorf("%w: incomplete V6 integration identity", ErrInvalidContract)
 		}
-		inputNodes, _ := json.Marshal(identity.InputNodes)
+		inputNodes, _ := json.Marshal(dispatchContext.InputNodes)
 		branchRefs, _ := json.Marshal(identity.BranchRefs)
-		prompt.WriteString("Discussion 已全体同意。综合冻结 input_nodes，生成一个有明确语义增益、可独立阅读的 successor。两个同级输入晋升一级；一个最高层输入加低层输入为 assimilation 且保持最高 tier；两个 XXL 为 xxl_merge。提交下面的精确结构：\n\n")
+		prompt.WriteString("Discussion 已全体同意。综合已经读取的全部冻结节点正文，生成一个有明确语义增益、可独立阅读的 successor。不得用 input_nodes 的摘要或 ID 代替正文。两个同级输入晋升一级；一个最高层输入加低层输入为 assimilation 且保持最高 tier；两个 XXL 为 xxl_merge。提交下面的精确结构：\n\n")
 		prompt.WriteString("```json\n{\n  \"contract_kind\": \"integration_submission\",\n  \"schema_version\": 6,\n  \"client_request_id\": \"<new-uuid>\",\n")
 		fmt.Fprintf(&prompt, "  \"workspace_id\": \"%s\",\n  \"run_id\": \"%s\",\n  \"work_item_id\": \"%s\",\n  \"attempt_id\": \"%s\",\n  \"agent_id\": \"%s\",\n  \"manifest_id\": \"%s\",\n  \"manifest_hash\": \"%s\",\n  \"discussion_id\": \"%s\",\n  \"discussion_revision\": %d,\n  \"input_set_hash\": \"%s\",\n", identity.WorkspaceID, identity.RunID, identity.WorkItemID, identity.AttemptID, identity.AssignedAgent, identity.ManifestID, identity.ManifestHash, integration.DiscussionID, integration.DiscussionRevision, integration.InputSetHash)
 		fmt.Fprintf(&prompt, "  \"mode\": \"<promotion|assimilation|xxl_merge>\",\n  \"input_nodes\": %s,\n  \"output_tier\": \"<M|L|XL|XXL>\",\n  \"output_content\": {\"catalog_summary\":\"<summary>\",\"brief_summary\":\"<summary>\",\"objective\":\"<objective>\",\"conclusion\":\"<conclusion>\",\"content\":\"<完整中文整合结果>\",\"scope\":{},\"uncertainties\":[],\"conflicts\":[],\"open_questions\":[]},\n  \"branch_refs\": %s,\n", inputNodes, branchRefs)
@@ -132,6 +157,10 @@ func BuildV6WorkDispatchPrompt(manifest V6WorkManifest) (string, error) {
 		prompt.WriteString("使用凭据代理回退时，GET `${V6_API}/catalog?view=<same_tier|higher_candidates>`，并把确认 POST 到 `${V6_API}/catalog-acks`。Manifest 中没有 `catalog_access` 时不得调用 catalog endpoint。\n\n")
 	}
 	if identity.ExpectedResult == V6ContractReportPackageSubmission {
+		prompt.WriteString("必须使用 `multica-design-research-reports` skill 先建立内容驱动的设计档案，再制作独立报告页面。同一报告的修订必须延续既有视觉语言；不得退化为通用卡片模板。\n\n")
+		prompt.WriteString("Manifest 的 `task_specific_schema.report_context` 是冻结的报告计划。`input_documents` 是其他智能体已经持久提交、并由服务端按方向与层级选出的完整阶段性结果；报告老板直接据此整合，不得依赖聊天转述。按 direction_coverage 组织章节，只展开每个一级方向的最高层节点。maturity=interim 时，页面首屏必须明确显示“阶段性调研报告”和持续更新提示；converging、researching、closed_without_result 方向必须作为过程状态展示，不能伪装成最终结论。supersedes.report_id 非空时，以既有 summary/plain_text 为内容修订基线，以 supersedes.design_dossier 为视觉连续性基线，只更新发生变化的方向。\n\n")
+		prompt.WriteString("提交 envelope 时不要手抄 `input_nodes`、`input_snapshot_hash`、`package_hash`、`script_hashes`、`style_hashes` 或 citations 枚举；服务端会绑定冻结输入并计算 package hash。envelope 只需身份字段、title、summary、plain_text、document_resource_id 和已验证 resources。citations 与 outline 可省略或写 `[]`。\n\n")
+		fmt.Fprintf(&prompt, "提交 envelope 的 task_id 使用报告 ID：`%s`。\n\n", identity.TaskID)
 		prompt.WriteString("先上传每个报告资源，再引用上传返回的 resource ID：\n\n")
 		prompt.WriteString("```bash\nmultica research report-upload " + base + " --file <absolute-file> --path <package-path> --role <role> --media-type <media-type> --output json\n```\n\n")
 		prompt.WriteString("使用凭据代理回退时，按冻结 Manifest 描述的 `${V6_API}/report-uploads` 工作流操作。\n\n")

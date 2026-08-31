@@ -108,7 +108,7 @@ func TestMigratedTransactionsUseResearchTransactionRunner(t *testing.T) {
 		{file: "postgres_tasks.go", function: "SetAwaitingConfirmation", wantBegins: 1, wantCommits: 2},
 		{file: "postgres_tasks.go", function: "Complete", wantBegins: 1, wantCommits: 2},
 		{file: "postgres_tasks.go", function: "Resume", wantBegins: 1, wantCommits: 2},
-		{file: "postgres_tasks.go", function: "transitionRun", wantBegins: 1, wantCommits: 2},
+		{file: "postgres_tasks.go", function: "transitionRun", wantBegins: 1, wantCommits: 4},
 		{file: "postgres_tasks.go", function: "Steer", wantBegins: 1, wantCommits: 1},
 		{file: "postgres_gate.go", function: "RecordBudgetExhausted", wantBegins: 1, wantCommits: 2},
 		{file: "postgres_gate.go", function: "MarkEventProjected", wantBegins: 1, wantCommits: 1},

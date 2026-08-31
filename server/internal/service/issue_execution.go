@@ -22,6 +22,20 @@ import (
 const (
 	issueDispatchLeaseTTL = 30 * time.Second
 	issueDispatchBatch    = 100
+
+	// maxConcurrentRunsPerGoal bounds how many Issues of one Goal may hold an
+	// active execution claim at the same time. Decomposition fans out and a
+	// dispatched worker can decompose further, so without a per-Goal ceiling
+	// effective concurrency (and spend) grows multiplicatively with graph
+	// depth. Deferred Issues keep no claim, so the 5s recovery scan
+	// (IssueExecutionReconcileJob -> RecoverMissing) re-reconciles them as
+	// soon as a sibling Run releases its slot.
+	maxConcurrentRunsPerGoal = 8
+	// maxExecutionAttemptsPerIssue is the runaway circuit breaker: an Issue
+	// that has burned this many execution attempts stops consuming Runs until
+	// the manager intervenes. Generous on purpose — it exists to stop
+	// crash/retry loops from spending forever, not to police normal retries.
+	maxExecutionAttemptsPerIssue = 50
 )
 
 // IssueExecutionReconcileOptions describes why canonical Issue execution is
@@ -226,6 +240,16 @@ func (s *IssueExecutionService) ReconcileTx(ctx context.Context, tx pgx.Tx, issu
 	}
 	if !runnable {
 		return outcome, nil
+	}
+
+	if state.ChannelGoalID.Valid {
+		allowed, budgetErr := s.enforceGoalExecutionBudgetTx(ctx, tx, state)
+		if budgetErr != nil {
+			return outcome, budgetErr
+		}
+		if !allowed {
+			return outcome, nil
+		}
 	}
 
 	// Re-read the full row so a caller-provided pre-update value never leaks
@@ -632,6 +656,60 @@ func (s *IssueExecutionService) deliverOutbox(ctx context.Context, outbox db.Iss
 		s.TaskService.NotifyTaskEnqueued(ctx, event)
 	}
 	return nil
+}
+
+// enforceGoalExecutionBudgetTx applies the per-Goal execution budget before a
+// new attempt is allocated. Two limits with different failure semantics:
+//
+//   - Attempts: an Issue past maxExecutionAttemptsPerIssue is a permanent
+//     stall, so it surfaces a durable budget_exhausted controller event
+//     (deduplicated while one is pending) and the manager decides — fix the
+//     contract, reassign, cancel, or recreate — instead of the scheduler
+//     retrying forever.
+//   - Concurrency: a Goal at maxConcurrentRunsPerGoal is ordinary
+//     backpressure, healed within seconds by the recovery scan once a slot
+//     frees, so deferral is silent. Two parallel reconciles can each observe
+//     cap-1 and both dispatch; a transient overshoot of one is acceptable for
+//     a spend bound and not worth a serialized counter.
+func (s *IssueExecutionService) enforceGoalExecutionBudgetTx(ctx context.Context, tx pgx.Tx, state db.GetIssueExecutionStateForUpdateRow) (bool, error) {
+	if state.ExecutionAttemptSequence >= maxExecutionAttemptsPerIssue {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO goal_controller_event(workspace_id, goal_id, event_kind, source_kind, source_id, payload)
+			SELECT $1, $2, 'budget_exhausted', 'issue', $3,
+			       jsonb_build_object('attempts', $4::bigint, 'limit', $5::bigint)
+			WHERE NOT EXISTS (
+				SELECT 1 FROM goal_controller_event
+				WHERE workspace_id=$1 AND goal_id=$2 AND event_kind='budget_exhausted'
+				  AND source_id=$3 AND status='pending'
+			)`, state.WorkspaceID, state.ChannelGoalID, state.ID,
+			state.ExecutionAttemptSequence, int64(maxExecutionAttemptsPerIssue)); err != nil {
+			return false, fmt.Errorf("record issue attempt budget exhaustion: %w", err)
+		}
+		slog.Warn("issue execution attempt budget exhausted",
+			"issue_id", util.UUIDToString(state.ID),
+			"goal_id", util.UUIDToString(state.ChannelGoalID),
+			"attempts", state.ExecutionAttemptSequence)
+		return false, nil
+	}
+
+	var activeSiblings int64
+	if err := tx.QueryRow(ctx, `
+		SELECT count(*)
+		FROM active_issue_execution claim
+		JOIN issue sibling
+		  ON sibling.workspace_id=claim.workspace_id AND sibling.id=claim.issue_id
+		WHERE claim.workspace_id=$1 AND sibling.channel_goal_id=$2 AND claim.issue_id<>$3`,
+		state.WorkspaceID, state.ChannelGoalID, state.ID).Scan(&activeSiblings); err != nil {
+		return false, fmt.Errorf("count active goal executions: %w", err)
+	}
+	if activeSiblings >= maxConcurrentRunsPerGoal {
+		slog.Debug("issue execution deferred by goal concurrency budget",
+			"issue_id", util.UUIDToString(state.ID),
+			"goal_id", util.UUIDToString(state.ChannelGoalID),
+			"active_runs", activeSiblings)
+		return false, nil
+	}
+	return true, nil
 }
 
 // RecoverMissing scans only runnable Agent-assigned Issues without a canonical

@@ -173,6 +173,7 @@
         "agent_id": { "$ref": "#/$defs/uuid" },
         "membership_id": { "$ref": "#/$defs/uuid" },
         "state": { "enum": ["idle", "working", "offline", "retiring", "archived", "failed"] },
+        "role": { "enum": ["director", "reporter", "researcher"] },
         "mission_summary": { "$ref": "#/$defs/short_text" },
         "active_work_item_id": { "$ref": "#/$defs/uuid" },
         "steward_node_count": { "type": "integer", "minimum": 0 }
@@ -200,6 +201,47 @@
         "through_sequence": { "$ref": "#/$defs/sequence" },
         "summary": { "$ref": "#/$defs/short_text" },
         "affected_refs": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/entity_ref" } }
+      }
+    },
+    "report_input_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["branch_id", "node_artifact_version_id", "input_role", "content_hash"],
+      "properties": {
+        "branch_id": { "$ref": "#/$defs/uuid" },
+        "node_artifact_version_id": { "$ref": "#/$defs/uuid" },
+        "input_role": { "enum": ["branch_xxl", "branch_maximum", "unresolved_gap"] },
+        "content_hash": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "report_direction_coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["branch_id", "objective", "status", "candidate_count", "pending_count", "active_work_count"],
+      "properties": {
+        "branch_id": { "$ref": "#/$defs/uuid" },
+        "objective": { "$ref": "#/$defs/text" },
+        "status": { "enum": ["represented", "converging", "researching", "closed_without_result", "empty"] },
+        "node_artifact_version_id": { "$ref": "#/$defs/uuid" },
+        "tier": { "enum": ["S", "M", "L", "XL", "XXL"] },
+        "input_role": { "enum": ["branch_xxl", "branch_maximum", "unresolved_gap"] },
+        "candidate_count": { "type": "integer", "minimum": 0 },
+        "pending_count": { "type": "integer", "minimum": 0 },
+        "active_work_count": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "report_plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reporter_agent_id", "selection_hash", "maturity", "inputs", "directions", "active_report_work", "needs_refresh"],
+      "properties": {
+        "reporter_agent_id": { "type": "string", "maxLength": 36 },
+        "selection_hash": { "$ref": "#/$defs/hash" },
+        "maturity": { "enum": ["interim", "final"] },
+        "inputs": { "type": "array", "maxItems": 1024, "items": { "$ref": "#/$defs/report_input_ref" } },
+        "directions": { "type": "array", "maxItems": 128, "items": { "$ref": "#/$defs/report_direction_coverage" } },
+        "active_report_work": { "type": "boolean" },
+        "needs_refresh": { "type": "boolean" }
       }
     },
     "director_brief_page_descriptor": {
@@ -248,7 +290,7 @@
         "control": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["director_state", "active_team_count", "team_hard_cap", "creation_threshold", "team", "work_items", "discussions", "reports", "latest_steering", "changes"],
+          "required": ["director_state", "active_team_count", "team_hard_cap", "creation_threshold", "team", "work_items", "discussions", "reports", "report_plan", "latest_steering", "changes"],
           "properties": {
             "director_state": { "enum": ["available", "degraded", "awaiting_director"] },
             "active_team_count": { "type": "integer", "minimum": 1, "maximum": 50 },
@@ -258,6 +300,7 @@
             "work_items": { "type": "array", "maxItems": 512, "items": { "$ref": "#/$defs/control_item_summary" } },
             "discussions": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/control_item_summary" } },
             "reports": { "type": "array", "maxItems": 128, "items": { "$ref": "#/$defs/control_item_summary" } },
+            "report_plan": { "$ref": "#/$defs/report_plan" },
             "latest_steering": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/change_summary" } },
             "changes": { "type": "array", "maxItems": 512, "items": { "$ref": "#/$defs/change_summary" } }
           }
@@ -508,7 +551,7 @@
     "report_package_submission": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["contract_kind", "schema_version", "client_request_id", "workspace_id", "run_id", "work_item_id", "task_id", "attempt_id", "agent_id", "manifest_id", "manifest_hash", "goal_version", "input_snapshot_hash", "input_nodes", "title", "summary", "document_resource_id", "resources", "outline", "citations", "plain_text", "script_hashes", "style_hashes", "package_hash"],
+      "required": ["contract_kind", "schema_version", "client_request_id", "workspace_id", "run_id", "work_item_id", "task_id", "attempt_id", "agent_id", "manifest_id", "manifest_hash", "title", "summary", "document_resource_id", "resources", "plain_text"],
       "properties": {
         "contract_kind": { "const": "report_package_submission" },
         "schema_version": { "const": 6 },
@@ -557,6 +600,15 @@
         "tier": { "enum": ["GOAL", "S", "M", "L", "XL", "XXL"] },
         "canonical_ref": { "$ref": "#/$defs/entity_ref" },
         "branch_ids": { "type": "array", "maxItems": 128, "uniqueItems": true, "items": { "$ref": "#/$defs/uuid" } },
+        "territory": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["branch_id", "label"],
+          "properties": {
+            "branch_id": { "$ref": "#/$defs/uuid" },
+            "label": { "type": "string", "minLength": 1, "maxLength": 160 }
+          }
+        },
         "state": { "$ref": "#/$defs/projection_state" },
         "title": { "type": "string", "maxLength": 4096 },
         "catalog_summary": { "type": "string", "maxLength": 512 },

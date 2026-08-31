@@ -162,7 +162,11 @@ jobs:
         github.ref == 'refs/heads/dev' &&
         github.event.inputs.image_tag != ''))
     runs-on: [self-hosted, s89, test]
-    timeout-minutes: 15
+    # The s89 docker daemon normally pulls GHCR through a local sing-box proxy.
+    # While that proxy node is down (2026-08-28), pulls fall back to the direct
+    # link, which is heavily throttled (~25KB/s) and can take over an hour for
+    # the frontend image. Give the lane enough headroom to finish.
+    timeout-minutes: 180
     permissions:
       actions: read
       packages: read

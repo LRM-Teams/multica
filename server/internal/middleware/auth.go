@@ -133,9 +133,20 @@ func Auth(queries *db.Queries, patCache *auth.PATCache, cloudPAT *auth.CloudPATV
 					http.Error(w, `{"error":"invalid token"}`, http.StatusUnauthorized)
 					return
 				}
+				slog.Warn("auth: invalid mat token", "path", r.URL.Path)
+				http.Error(w, `{"error":"invalid token"}`, http.StatusUnauthorized)
+				return
+			}
+
+			if strings.HasPrefix(tokenString, "sk_agent_") {
+				if queries == nil {
+					http.Error(w, `{"error":"invalid token"}`, http.StatusUnauthorized)
+					return
+				}
+				hash := auth.HashToken(tokenString)
 				credential, err := queries.GetAgentCredentialByHash(r.Context(), hash)
 				if err != nil {
-					slog.Warn("auth: invalid mat token", "path", r.URL.Path, "error", err)
+					slog.Warn("auth: invalid Agent credential", "path", r.URL.Path, "error", err)
 					http.Error(w, `{"error":"invalid token"}`, http.StatusUnauthorized)
 					return
 				}

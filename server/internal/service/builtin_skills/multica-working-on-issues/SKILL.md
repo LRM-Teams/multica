@@ -235,6 +235,27 @@ gate model.
 If the command returns no linked PRs after a PR was opened, the link scanner did
 not observe a routable issue key in the PR title/body/branch.
 
+## Recovering a missed canonical PR link
+
+When GitHub has the routable Issue key but `issue pull-requests` is missing the
+PR, use the supported single-PR recovery command:
+
+```bash
+multica issue pull-requests rescan <issue-id> <pull-request-number> --output json
+```
+
+The command fetches the PR and current check suites from GitHub, then idempotently
+repairs the canonical `github_pull_request` and `issue_pull_request` rows. It is
+not a metadata or Graph-state override. The server fixes the repository from the
+Issue's bound `github_repo`, rejects a PR that does not mention the Issue key,
+and scopes Agent callers to their own workspace. Human callers still require
+workspace `owner` or `admin` role.
+
+Close intent is re-derived from the authoritative PR title/body only. A key
+present only in the branch repairs the link without setting close intent. It is
+safe to repeat the command, and rescanning another PR for the same Issue keeps
+both canonical links.
+
 ## Metadata: high-signal keys only
 
 Metadata is durable issue state. Reading metadata is safe. Writing a metadata key

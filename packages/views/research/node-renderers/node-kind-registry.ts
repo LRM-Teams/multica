@@ -37,6 +37,7 @@ const NODE_KIND_TO_FAMILY: ReadonlyMap<string, NodeKindFamily> = new Map<
   ["evaluation_defect", "cognition"],
   ["team_formation", "collaboration"],
   ["team_membership", "collaboration"],
+  ["agent", "collaboration"],
   ["integration_round", "collaboration"],
   ["integration_contribution", "collaboration"],
   ["divergence_pass", "collaboration"],

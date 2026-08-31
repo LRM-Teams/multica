@@ -38,9 +38,13 @@ describe("applyResearchWSEvent", () => {
     vi.advanceTimersByTime(499);
     expect(qc.invalidateQueries).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1);
-    expect(qc.invalidateQueries).toHaveBeenCalledTimes(1);
+    expect(qc.invalidateQueries).toHaveBeenCalledTimes(2);
     expect(qc.invalidateQueries).toHaveBeenCalledWith({
       queryKey: researchV6DirectorProjectionKeys.snapshot("ws", "run-v6"),
+    });
+    expect(qc.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: researchV6DirectorProjectionKeys.reports("ws", "run-v6"),
+      exact: true,
     });
     vi.useRealTimers();
   });

@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/researchrun"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -50,5 +51,50 @@ func (h *Handler) requireOnboardingAgentLifecycleOwner(w http.ResponseWriter, r 
 func (h *Handler) builtinSkillsForAgent(ctx context.Context, agent db.Agent) []service.AgentSkillData {
 	return h.TaskService.BuiltinSkillsForAgent(
 		h.isActiveOnboardingAgentRecord(ctx, agent),
+		h.activeResearchFleetRole(ctx, agent),
 	)
+}
+
+func (h *Handler) builtinSkillsForInboxEvent(ctx context.Context, event db.AgentInboxEvent, agent db.Agent) []service.AgentSkillData {
+	researchRole := h.activeResearchFleetRole(ctx, agent)
+	if researchRole == "" && h.isV6ReportPackageInboxEvent(ctx, event) {
+		researchRole = "reporter"
+	}
+	return h.TaskService.BuiltinSkillsForAgent(
+		h.isActiveOnboardingAgentRecord(ctx, agent),
+		researchRole,
+	)
+}
+
+func (h *Handler) isV6ReportPackageInboxEvent(ctx context.Context, event db.AgentInboxEvent) bool {
+	if h.DB == nil || !event.ID.Valid || !event.WorkspaceID.Valid || !event.AgentID.Valid {
+		return false
+	}
+	var expectedResult string
+	err := h.DB.QueryRow(ctx, `
+		SELECT work.expected_result_schema_id
+		FROM research_work_item_attempt attempt
+		JOIN research_work_item work
+		  ON work.workspace_id = attempt.workspace_id
+		 AND work.session_id = attempt.session_id
+		 AND work.id = attempt.work_item_id
+		WHERE attempt.inbox_task_id = $1
+		  AND attempt.workspace_id = $2
+		  AND attempt.assigned_agent_id = $3
+		LIMIT 1`, event.ID, event.WorkspaceID, event.AgentID).Scan(&expectedResult)
+	return err == nil && expectedResult == string(researchrun.V6ContractReportPackageSubmission)
+}
+
+func (h *Handler) activeResearchFleetRole(ctx context.Context, agent db.Agent) string {
+	if !agent.WorkspaceID.Valid || !agent.ID.Valid || agent.ArchivedAt.Valid {
+		return ""
+	}
+	member, err := h.Queries.GetResearchFleetMemberByAgent(ctx, db.GetResearchFleetMemberByAgentParams{
+		WorkspaceID: agent.WorkspaceID,
+		AgentID:     agent.ID,
+	})
+	if err != nil || member.Status == "archived" {
+		return ""
+	}
+	return member.Role
 }

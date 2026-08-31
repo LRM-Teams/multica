@@ -6,4 +6,5 @@ export {
   ResearchV6ReportModal,
   type ResearchV6ReportSandboxDocument,
 } from "./research-v6-report-modal";
+export { ResearchV6ReportPage } from "./research-v6-report-page";
 export { ResearchSelectedRefChip } from "./research-selected-ref-chip";

@@ -181,6 +181,24 @@ func (b *cursorBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 			trySend(msgCh, message)
 		}
 
+		recordCursorError := func(errMsg string) {
+			errMsg = strings.TrimSpace(errMsg)
+			if errMsg == "" {
+				return
+			}
+			trySend(msgCh, Message{Type: MessageError, Content: errMsg})
+			finalError = errMsg
+			if finalStatus == "completed" {
+				finalStatus = "failed"
+			}
+			// Keepalive / HTTP/2 RetriableError means cursor-agent will sit on a
+			// dead stream. Fail-and-cancel so the DM bubble does not keep
+			// "Thinking" until the 30m idle watchdog.
+			if isCursorTransportHang(errMsg) {
+				cancel()
+			}
+		}
+
 		scanner := bufio.NewScanner(stdout)
 		scanner.Buffer(make([]byte, 0, 1024*1024), 10*1024*1024)
 
@@ -213,16 +231,11 @@ func (b *cursorBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 					trySend(msgCh, Message{Type: MessageStatus, Status: "running"})
 				}
 				if evt.Subtype == "error" {
-					errMsg := cursorErrorText(&evt)
-					if errMsg != "" {
-						finalStatus = "failed"
-						finalError = errMsg
-						trySend(msgCh, Message{Type: MessageError, Content: errMsg})
-					}
+					recordCursorError(cursorErrorText(&evt))
 				}
 
 			case "assistant":
-				b.handleCursorAssistant(&evt, msgCh, &output, emitToolEvent)
+				b.handleCursorAssistant(&evt, msgCh, &output, emitToolEvent, recordCursorError)
 
 			case "result":
 				resultSeen = true
@@ -243,18 +256,17 @@ func (b *cursorBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 				cancel()
 
 			case "error":
-				errMsg := cursorErrorText(&evt)
-				if errMsg != "" {
-					finalStatus = "failed"
-					finalError = errMsg
-				}
-				trySend(msgCh, Message{Type: MessageError, Content: errMsg})
+				recordCursorError(cursorErrorText(&evt))
 
 			case "text":
 				if evt.Part != nil {
 					var part cursorTextPart
 					_ = json.Unmarshal(evt.Part, &part)
 					if part.Text != "" {
+						if isCursorTransportHang(part.Text) {
+							recordCursorError(part.Text)
+							break
+						}
 						output.WriteString(part.Text)
 						trySend(msgCh, Message{Type: MessageText, Content: part.Text})
 					}
@@ -302,7 +314,7 @@ func (b *cursorBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 		if runCtx.Err() == context.DeadlineExceeded {
 			finalStatus = "timeout"
 			finalError = fmt.Sprintf("cursor-agent timed out after %s", timeout)
-		} else if runCtx.Err() == context.Canceled && !resultSeen {
+		} else if runCtx.Err() == context.Canceled && !resultSeen && finalStatus == "completed" {
 			finalStatus = "aborted"
 			finalError = "execution cancelled"
 		} else if exitErr != nil && finalStatus == "completed" && !resultSeen && finalError == "" {
@@ -332,7 +344,7 @@ func (b *cursorBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 	return &Session{Messages: msgCh, Result: resCh, RuntimeAlive: processLiveness(cmd.Process)}, nil
 }
 
-func (b *cursorBackend) handleCursorAssistant(evt *cursorStreamEvent, ch chan<- Message, output *strings.Builder, emitToolEvent func(cursorDecodedToolEvent)) {
+func (b *cursorBackend) handleCursorAssistant(evt *cursorStreamEvent, ch chan<- Message, output *strings.Builder, emitToolEvent func(cursorDecodedToolEvent), recordError func(string)) {
 	if evt.Message == nil {
 		return
 	}
@@ -350,6 +362,14 @@ func (b *cursorBackend) handleCursorAssistant(evt *cursorStreamEvent, ch chan<- 
 		switch block.Type {
 		case "output_text", "text":
 			if block.Text != "" {
+				if isCursorTransportHang(block.Text) {
+					if recordError != nil {
+						recordError(block.Text)
+					} else {
+						trySend(ch, Message{Type: MessageError, Content: block.Text})
+					}
+					continue
+				}
 				output.WriteString(block.Text)
 				trySend(ch, Message{Type: MessageText, Content: block.Text})
 			}
@@ -558,6 +578,17 @@ func cursorErrorText(evt *cursorStreamEvent) string {
 		return evt.ResultText
 	}
 	return ""
+}
+
+// isCursorTransportHang reports Cursor stream errors whose HTTP/2 session is
+// already dead. Cursor labels these RetriableError and keeps the worker
+// alive; without cancel the DM bubble stays on "Thinking" until idle-stop.
+func isCursorTransportHang(err string) bool {
+	lower := strings.ToLower(err)
+	if strings.Contains(lower, "keepalive ping timed out") {
+		return true
+	}
+	return strings.Contains(lower, "retriableerror") && strings.Contains(lower, "http/2")
 }
 
 func parseCursorToolCall(raw json.RawMessage) (string, map[string]any, json.RawMessage, bool) {

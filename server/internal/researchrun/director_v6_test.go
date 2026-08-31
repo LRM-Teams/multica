@@ -138,6 +138,62 @@ func TestV6DirectorBriefBoundsTeamMissionSummary(t *testing.T) {
 	}
 }
 
+func TestV6DirectorBriefBoundsDiscussionSummary(t *testing.T) {
+	run := newTransactionRecoveryRun(t, "Bound V6 discussion summary")
+	if _, err := run.pool.Exec(run.ctx, `UPDATE research_session SET orchestrator_version='research-run-v6' WHERE id=$1::uuid`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.store.AssignV6Director(run.ctx, AssignV6DirectorInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID,
+		AgentID: run.fixture.agentID, UserID: run.fixture.userID,
+		Reason: "Compile a bounded discussion summary", ClientRequestID: uuid.NewString(), ExpectedStateVersion: 0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	discussionID := uuid.NewString()
+	if _, err := run.pool.Exec(run.ctx, `INSERT INTO research_discussion(
+		id,workspace_id,session_id,kind,scope_hash,input_set_hash,goal_version,branch_scope_hash,through_event_sequence,revision,status
+	) VALUES($1::uuid,$2::uuid,$3::uuid,'integration',$4,$5,1,$6,1,1,'escalated')`,
+		discussionID, run.fixture.workspaceID, run.fixture.sessionID,
+		"sha256:"+strings.Repeat("a", 64), "sha256:"+strings.Repeat("b", 64), "sha256:"+strings.Repeat("c", 64)); err != nil {
+		t.Fatal(err)
+	}
+	for ordinal := range 20 {
+		if _, err := run.pool.Exec(run.ctx, `INSERT INTO research_discussion_input(
+			workspace_id,session_id,discussion_id,node_artifact_version_id,ordinal,tier,content_hash
+		) VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,'S',$6)`,
+			run.fixture.workspaceID, run.fixture.sessionID, discussionID, uuid.NewString(), ordinal,
+			fmt.Sprintf("sha256:%064x", ordinal+1)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var stateVersion int64
+	if err := run.pool.QueryRow(run.ctx, `SELECT state_version FROM research_session WHERE id=$1::uuid`, run.fixture.sessionID).Scan(&stateVersion); err != nil {
+		t.Fatal(err)
+	}
+	facts, err := run.store.LoadDirectorBriefFacts(run.ctx, StartV6DirectorCycleInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID, ExpectedStateVersion: stateVersion,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(facts.Discussions) != 1 {
+		t.Fatalf("discussions=%d, want 1", len(facts.Discussions))
+	}
+	summary, ok := facts.Discussions[0].(map[string]any)["summary"].(string)
+	if !ok || len([]rune(summary)) > 512 {
+		t.Fatalf("discussion summary rune count=%d, want at most 512", len([]rune(summary)))
+	}
+	for _, label := range []string{"讨论类型：", "输入版本：", "最新投票：", "可见结论："} {
+		if !strings.Contains(summary, label) {
+			t.Fatalf("discussion summary missing %q: %s", label, summary)
+		}
+	}
+	if _, err = (contextCompilerModule{}).CompileDirectorBrief(facts, time.Unix(1, 0)); err != nil {
+		t.Fatalf("compile Director Brief with bounded discussion: %v", err)
+	}
+}
+
 func TestV6DirectorBriefIncludesWorkFailureRecoveryFacts(t *testing.T) {
 	run := newTransactionRecoveryRun(t, "V6 Director Brief work failure recovery")
 	if _, err := run.pool.Exec(run.ctx, `UPDATE research_session SET orchestrator_version='research-run-v6' WHERE id=$1::uuid`, run.fixture.sessionID); err != nil {
@@ -302,6 +358,43 @@ func TestV6DirectorBriefIncludesAtomicResultFrontier(t *testing.T) {
 	}, time.Unix(1, 0))
 	if err != nil {
 		t.Fatalf("compile Director Brief with atomic frontier: %v", err)
+	}
+
+	input := V6NodeRef{
+		Kind: "result_s", ID: resultArtifactID, VersionID: artifactVersionID,
+		Tier: V6TierS, ContentHash: contentHash,
+	}
+	branchRef := V6BranchRef{ID: branchID, StateVersion: 1}
+	discussion, err := run.store.OpenV6Discussion(run.ctx, OpenV6DiscussionInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID, Kind: "promotion",
+		ScopeHash: "sha256:" + strings.Repeat("b", 64), InputSetHash: v6InputSetHash([]V6NodeRef{input}),
+		BranchScopeHash: v6BranchScopeHash([]V6BranchRef{branchRef}), GoalVersion: 1, ThroughEventSequence: 1,
+		Inputs: []V6NodeRef{input}, BranchRefs: []V6BranchRef{branchRef},
+	})
+	if err != nil {
+		t.Fatalf("open discussion from Director Brief node ref: %v", err)
+	}
+	if _, err = run.pool.Exec(run.ctx, `UPDATE research_discussion SET status='escalated' WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid`, run.fixture.workspaceID, run.fixture.sessionID, discussion.ID); err != nil {
+		t.Fatalf("escalate discussion fixture: %v", err)
+	}
+	reopened, err := run.store.OpenV6Discussion(run.ctx, OpenV6DiscussionInput{
+		WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID, Kind: "promotion",
+		ScopeHash: "sha256:" + strings.Repeat("b", 64), InputSetHash: v6InputSetHash([]V6NodeRef{input}),
+		BranchScopeHash: v6BranchScopeHash([]V6BranchRef{branchRef}), GoalVersion: 1, ThroughEventSequence: 2,
+		Inputs: []V6NodeRef{input}, BranchRefs: []V6BranchRef{branchRef},
+	})
+	if err != nil || reopened.ID != discussion.ID || reopened.Status != "escalated" {
+		t.Fatalf("reopen exact escalated discussion: got=%+v err=%v", reopened, err)
+	}
+	var discussionCount int
+	if err = run.pool.QueryRow(run.ctx, `SELECT count(*)::int FROM research_discussion WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND scope_hash=$3 AND input_set_hash=$4`, run.fixture.workspaceID, run.fixture.sessionID, discussion.ScopeHash, discussion.InputSetHash).Scan(&discussionCount); err != nil || discussionCount != 1 {
+		t.Fatalf("exact discussion count=%d err=%v", discussionCount, err)
+	}
+	if _, err = run.pool.Exec(run.ctx, `DELETE FROM research_work_item WHERE session_id=$1::uuid AND target_id=$2::uuid`, run.fixture.sessionID, discussion.ID); err != nil {
+		t.Fatalf("delete discussion work fixture: %v", err)
+	}
+	if _, err = run.pool.Exec(run.ctx, `DELETE FROM research_discussion WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid`, run.fixture.workspaceID, run.fixture.sessionID, discussion.ID); err != nil {
+		t.Fatalf("delete discussion fixture: %v", err)
 	}
 }
 
@@ -494,7 +587,9 @@ func TestV6EventTriggerRecoversBootstrapWithoutDirectorCycle(t *testing.T) {
 	bootstrapped, _, err := run.store.BootstrapV6(run.ctx, V6BootstrapInput{
 		WorkspaceID:     run.fixture.workspaceID,
 		CreatedBy:       run.fixture.userID,
+		FleetID:         run.fixture.fleetID,
 		DirectorAgentID: run.fixture.agentID,
+		ReporterAgentID: run.fixture.reporterID,
 		Goal:            title,
 		Title:           title,
 		DepthTier:       "standard",
@@ -720,6 +815,46 @@ func TestV6EventTriggerRepairsAtomicResultMissingFromCoveredBrief(t *testing.T) 
 	if cycles != 4 || !strings.Contains(latestBrief, directorBriefOpenQuestionsMarker) || !strings.Contains(latestBrief, "Which unresolved market constraint matters?") {
 		t.Fatalf("open-question repair cycles=%d marker=%v question=%v", cycles, strings.Contains(latestBrief, directorBriefOpenQuestionsMarker), strings.Contains(latestBrief, "Which unresolved market constraint matters?"))
 	}
+
+	// If the repair cycle terminates without producing the required effect, its
+	// stable idempotency key replays the persisted cycle. That replay must not
+	// consume the whole batch and starve a later material event.
+	if _, err = run.pool.Exec(run.ctx, `UPDATE research_work_item w SET status='failed',terminal_reason_code='contract_rejected',completed_at=now()
+		FROM research_director_cycle c WHERE c.work_item_id=w.id AND c.id=(SELECT id FROM research_director_cycle WHERE session_id=$1::uuid ORDER BY created_at DESC LIMIT 1)`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = run.pool.Exec(run.ctx, `UPDATE research_director_cycle SET status='failed',failure_class='contract_rejected',completed_at=now()
+		WHERE id=(SELECT id FROM research_director_cycle WHERE session_id=$1::uuid ORDER BY created_at DESC LIMIT 1)`, run.fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = run.pool.Exec(run.ctx, `UPDATE research_director_brief_page SET content_bytes=convert_to(replace(convert_from(content_bytes,'UTF8'),$2,''),'UTF8')
+		WHERE director_cycle_id=(SELECT id FROM research_director_cycle WHERE session_id=$1::uuid ORDER BY created_at DESC LIMIT 1)`, run.fixture.sessionID, directorBriefOpenQuestionsMarker); err != nil {
+		t.Fatal(err)
+	}
+	tailTx, err := run.pool.Begin(run.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tailEvent, err := appendEvent(run.ctx, tailTx, run.fixture.workspaceID, run.fixture.sessionID,
+		"v6_work_item_recovered", "event-after-terminal-replay:"+uuid.NewString(), "system", "", map[string]any{"reason": "retryable runtime recovery"})
+	if err != nil {
+		_ = tailTx.Rollback(run.ctx)
+		t.Fatal(err)
+	}
+	if err = tailTx.Commit(run.ctx); err != nil {
+		t.Fatal(err)
+	}
+	processed, err = run.store.ProcessV6EventTriggers(run.ctx, 32)
+	if err != nil || processed != 1 {
+		t.Fatalf("post-replay trigger processed=%d err=%v, want one fresh cycle", processed, err)
+	}
+	var latestFromSequence int64
+	if err = run.pool.QueryRow(run.ctx, `SELECT trigger_from_sequence FROM research_director_cycle WHERE session_id=$1::uuid ORDER BY created_at DESC LIMIT 1`, run.fixture.sessionID).Scan(&latestFromSequence); err != nil {
+		t.Fatal(err)
+	}
+	if latestFromSequence != tailEvent.Sequence {
+		t.Fatalf("latest trigger sequence=%d want tail event %d", latestFromSequence, tailEvent.Sequence)
+	}
 }
 
 func TestRejectedV6DirectorProposalTerminatesAndEmitsTrigger(t *testing.T) {
@@ -803,11 +938,12 @@ func TestV6DirectorCreatedWorkStartsAtVersionOne(t *testing.T) {
 	if err = run.pool.QueryRow(run.ctx, `SELECT state_version FROM research_session WHERE id=$1::uuid`, run.fixture.sessionID).Scan(&stateVersion); err != nil {
 		t.Fatal(err)
 	}
+	branchID := seedV6DirectorChildBranch(t, run, "create-versioned-work:", "Investigate the assigned question", 1)
 	actionPayload, err := json.Marshal(map[string]any{
 		"kind": "deep_read", "assignee_agent_id": run.fixture.reporterID, "mission": "Investigate the assigned question",
 		"expected_result_schema_id": "atomic_result_submission", "payload_schema_id": "research.test.v1",
 		"payload":  map[string]any{"task_specific_schema": map[string]any{"type": "object"}},
-		"priority": 0.5, "max_attempts": 1, "branch_ids": []string{},
+		"priority": 0.5, "max_attempts": 1, "branch_ids": []string{branchID},
 	})
 	if err != nil {
 		t.Fatal(err)

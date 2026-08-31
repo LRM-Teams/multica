@@ -27,7 +27,7 @@ export function buildD5SessionCanvasModel(
     edges: typed.edges,
     seed: typed.graph_version,
     // Stable version so graph_version bumps reuse incremental layout positions.
-    version: "d5-star-v2",
+    version: "d5-star-v3",
     previous: options.previousLayout,
   });
 

@@ -76,6 +76,7 @@ WITH task_progress AS (
   WHERE w.workspace_id = $1
     AND s.orchestrator_version = 'research-run-v6'
     AND w.goal_version = s.goal_version
+    AND w.kind <> 'director'
   GROUP BY w.session_id
 ), evidence_progress AS (
   SELECT o.session_id, count(*) AS evidence_count,

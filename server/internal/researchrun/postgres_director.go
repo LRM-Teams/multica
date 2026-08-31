@@ -49,12 +49,18 @@ func (s *PostgresStore) AssignV6Director(ctx context.Context, in AssignV6Directo
 	if currentVersion != in.ExpectedStateVersion {
 		return V6DirectorAssignment{}, ErrWorkItemChanged
 	}
-	var exists bool
-	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM agent WHERE id=$1::uuid AND workspace_id=$2::uuid AND archived_at IS NULL)`, in.AgentID, in.WorkspaceID).Scan(&exists); err != nil {
+	var exists, isReporter bool
+	if err = tx.QueryRow(ctx, `SELECT
+		EXISTS(SELECT 1 FROM agent WHERE id=$1::uuid AND workspace_id=$2::uuid AND archived_at IS NULL),
+		EXISTS(SELECT 1 FROM research_team_membership WHERE workspace_id=$2::uuid AND session_id=$3::uuid
+			AND agent_id=$1::uuid AND role='reporter' AND state IN ('idle','working','offline','retiring'))`, in.AgentID, in.WorkspaceID, in.RunID).Scan(&exists, &isReporter); err != nil {
 		return V6DirectorAssignment{}, err
 	}
 	if !exists {
 		return V6DirectorAssignment{}, ErrRunNotFound
+	}
+	if isReporter {
+		return V6DirectorAssignment{}, ErrInvalidContract
 	}
 	var generation int
 	if err = tx.QueryRow(ctx, `SELECT COALESCE(max(generation),0)+1 FROM research_director_assignment WHERE workspace_id=$1::uuid AND session_id=$2::uuid`, in.WorkspaceID, in.RunID).Scan(&generation); err != nil {
@@ -71,7 +77,7 @@ func (s *PostgresStore) AssignV6Director(ctx context.Context, in AssignV6Directo
 	if _, err = tx.Exec(ctx, `UPDATE research_session SET current_director_assignment_id=$3::uuid,director_state_version=director_state_version+1,status=CASE WHEN status='awaiting_director' THEN 'running' ELSE status END,updated_at=now() WHERE workspace_id=$1::uuid AND id=$2::uuid`, in.WorkspaceID, in.RunID, assignment.ID); err != nil {
 		return V6DirectorAssignment{}, err
 	}
-	// A Director is the first and only membership created at Run start. On an
+	// A Director is one of the two fixed memberships created at Run start. On an
 	// explicit replacement, reuse the existing Agent membership or add one.
 	var activeMembership bool
 	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM research_team_membership WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND agent_id=$3::uuid AND state IN ('idle','working','offline','retiring'))`, in.WorkspaceID, in.RunID, in.AgentID).Scan(&activeMembership); err != nil {
@@ -80,10 +86,14 @@ func (s *PostgresStore) AssignV6Director(ctx context.Context, in AssignV6Directo
 	if !activeMembership {
 		mission := "担任用户为本次调研指定的调研主理人。"
 		missionHash := ArtifactContentHashFromCanonicalJSON([]byte(`{"mission":"user-selected Research Director"}`))
-		if _, err = tx.Exec(ctx, `INSERT INTO research_team_membership(id,workspace_id,session_id,agent_id,membership_generation,mission_prompt,mission_hash,mission_revision,state)
-			VALUES(gen_random_uuid(),$1::uuid,$2::uuid,$3::uuid,COALESCE((SELECT max(membership_generation)+1 FROM research_team_membership WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND agent_id=$3::uuid),1),$4,$5,1,'idle')`, in.WorkspaceID, in.RunID, in.AgentID, mission, missionHash); err != nil {
+		if _, err = tx.Exec(ctx, `INSERT INTO research_team_membership(id,workspace_id,session_id,agent_id,membership_generation,mission_prompt,mission_hash,mission_revision,state,role)
+			VALUES(gen_random_uuid(),$1::uuid,$2::uuid,$3::uuid,COALESCE((SELECT max(membership_generation)+1 FROM research_team_membership WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND agent_id=$3::uuid),1),$4,$5,1,'idle','director')`, in.WorkspaceID, in.RunID, in.AgentID, mission, missionHash); err != nil {
 			return V6DirectorAssignment{}, err
 		}
+	} else if _, err = tx.Exec(ctx, `UPDATE research_team_membership SET role='director'
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND agent_id=$3::uuid
+		AND state IN ('idle','working','offline','retiring')`, in.WorkspaceID, in.RunID, in.AgentID); err != nil {
+		return V6DirectorAssignment{}, err
 	}
 	if _, err = appendEvent(ctx, tx, in.WorkspaceID, in.RunID, "v6_director_assigned", key, "user", in.UserID, map[string]any{"assignment_id": assignment.ID, "agent_id": in.AgentID, "reason": assignment.Reason, "generation": generation, "state_version": assignment.StateVersion}); err != nil {
 		return V6DirectorAssignment{}, err

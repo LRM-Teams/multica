@@ -12,7 +12,7 @@
  * - 1100 overlay Esc/a11y — hard
  * - 1104 goal-chip dedupe (#1949) + no max-w-3xl shell (#1962) — hard
  * - 1105 helpers (#1952) + role=application (1091) + Home/End via resolveCanvasKeyEvent — hard
- * - 1109 meta-menu md: (#1947) — hard; template chip-row sm: still `it.fails`
+ * - 1109 template chip-row sm: still `it.fails`
  * - 1091 planar layout + arrow/Enter/Esc/F10 + retry status gate — hard;
  *   legacy planar session canvas removed (D5 star-graph is canonical).
  */
@@ -321,17 +321,6 @@ describe(`Smoke · breakpoints 360/700/767/768 (${SMOKE_ISSUES.breakpoints})`, (
   });
 
   it(`${SMOKE_ISSUES.breakpoints}: baseline inventory — template chip-row uses md: (768)`, () => {
-    // LRM-1109 #1947: meta-menu no longer pairs useIsMobile with sm: classes.
-    const meta = readResearchSource("components/research-session-meta-menu.tsx");
-    expect(meta.includes("useIsMobile")).toBe(true);
-    expect(
-      hasTailwindSmClass(meta),
-      failHint(
-        SMOKE_ISSUES.breakpoints,
-        "meta-menu regressed: sm: class companion returned beside useIsMobile",
-      ),
-    ).toBe(false);
-
     // LRM-1106: composer chip row aligns with md / 768.
     const templates = readResearchSource("components/research-template-chip-row.tsx");
     expect(
@@ -339,17 +328,6 @@ describe(`Smoke · breakpoints 360/700/767/768 (${SMOKE_ISSUES.breakpoints})`, (
       failHint(
         SMOKE_ISSUES.breakpoints,
         "template-chip-row should switch layout at md: (768)",
-      ),
-    ).toBe(true);
-  });
-
-  it(`${SMOKE_ISSUES.breakpoints}: useIsMobile companions must use md: not sm: (meta-menu)`, () => {
-    const meta = readResearchSource("components/research-session-meta-menu.tsx");
-    expect(
-      meta.includes("useIsMobile") && !hasTailwindSmClass(meta),
-      failHint(
-        SMOKE_ISSUES.breakpoints,
-        "replace companion sm: with md: in research-session-meta-menu.tsx",
       ),
     ).toBe(true);
   });

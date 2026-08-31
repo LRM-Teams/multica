@@ -3616,10 +3616,22 @@ func (q *Queries) ListWorkspaceAgentTaskSnapshot(ctx context.Context, workspaceI
 	return items, nil
 }
 
-const markAgentCrashed = `-- name: MarkAgentCrashed :exec
+const markAgentCrashed = `-- name: MarkAgentCrashed :execrows
+WITH revoked AS (
+  UPDATE agent_credential
+  SET revoked_at = now(), updated_at = now()
+  WHERE agent_id = $1
+    AND id = $2
+    AND workspace_id = $3
+    AND user_id = $4
+    AND issuance_source = 'daemon'
+    AND revoked_at IS NULL
+    AND disabled_at IS NULL
+  RETURNING agent_id
+)
 UPDATE agent
 SET crashed_since = now(), updated_at = now()
-WHERE id = $1
+WHERE id IN (SELECT agent_id FROM revoked)
 `
 
 // Records that this agent's idle resident provider process was found dead
@@ -3628,9 +3640,19 @@ WHERE id = $1
 // should show "crashed". Cleared explicitly on successful recreate / manual
 // lifecycle restart — not by TTL (a crash with no next dispatch is exactly
 // the long-lived case this signal exists for).
-func (q *Queries) MarkAgentCrashed(ctx context.Context, id pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, markAgentCrashed, id)
-	return err
+type MarkAgentCrashedParams struct {
+	AgentID      pgtype.UUID `json:"agent_id"`
+	CredentialID pgtype.UUID `json:"credential_id"`
+	WorkspaceID  pgtype.UUID `json:"workspace_id"`
+	OwnerID      pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) MarkAgentCrashed(ctx context.Context, arg MarkAgentCrashedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markAgentCrashed, arg.AgentID, arg.CredentialID, arg.WorkspaceID, arg.OwnerID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const markAgentProviderBlocked = `-- name: MarkAgentProviderBlocked :exec

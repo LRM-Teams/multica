@@ -78,6 +78,7 @@ import {
   useUserActivityUnreadCount,
   userActivityListOptions,
 } from "@multica/core/user-activity/queries";
+import { useNoteShareUnreadCount } from "@multica/core/notes/queries";
 import { api, ApiError } from "@multica/core/api";
 import { useModalStore } from "@multica/core/modals";
 import { useConfigStore } from "@multica/core/config";
@@ -368,6 +369,7 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
 
   const wsId = workspace?.id;
   const unreadCount = useUserActivityUnreadCount(wsId);
+  const notesShareUnread = useNoteShareUnreadCount(wsId);
   const { data: pinnedItems = EMPTY_PINS } = useQuery({
     ...pinListOptions(wsId ?? "", userId ?? ""),
     enabled: !!wsId && !!userId,
@@ -701,6 +703,7 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
                 {workspaceNav.map((item) => {
                   const href = p[item.key]();
                   const isActive = isNavActive(pathname, href);
+                  const notesUnread = item.key === "notes" && notesShareUnread > 0;
                   return (
                     <SidebarMenuItem key={item.key}>
                       <SidebarMenuButton
@@ -709,8 +712,29 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
                         tooltip={t(($) => $.nav[item.labelKey])}
                         className="text-muted-foreground hover:not-data-active:bg-sidebar-accent/70 data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground"
                       >
-                        <item.icon />
+                        {item.key === "notes" ? (
+                          <span className="relative inline-flex shrink-0">
+                            <item.icon />
+                            {notesUnread ? (
+                              <span
+                                aria-hidden
+                                data-testid="notes-share-unread-dot"
+                                className="absolute -top-0.5 -right-0.5 hidden size-1.5 rounded-full bg-brand-solid group-data-[collapsible=icon]:block"
+                              />
+                            ) : null}
+                          </span>
+                        ) : (
+                          <item.icon />
+                        )}
                         <span>{t(($) => $.nav[item.labelKey])}</span>
+                        {notesUnread && (
+                          <span
+                            className="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full bg-brand-solid px-1 text-[10px] font-semibold text-brand-solid-foreground"
+                            aria-label={t(($) => $.notes_page.share_unread_nav)}
+                          >
+                            {notesShareUnread > 99 ? t(($) => $.sidebar.unread_overflow) : notesShareUnread}
+                          </span>
+                        )}
                       </SidebarMenuButton>
                     </SidebarMenuItem>
                   );

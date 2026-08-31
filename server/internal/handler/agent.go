@@ -1781,6 +1781,21 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// A provider block records the failure of the previous execution
+	// configuration. Once the user selects a different model, retaining that
+	// lock prevents the repaired configuration from ever being dispatched and
+	// leaves the Agent permanently blocked without a chance to prove recovery.
+	// A no-op model save must not clear a real quota lock.
+	modelChanged := req.Model != nil && strings.TrimSpace(*req.Model) != strings.TrimSpace(existing.Model.String)
+	if modelChanged {
+		if err := h.Queries.ClearAgentProviderBlocked(r.Context(), updated.ID); err != nil {
+			slog.Warn("clear agent provider block after model change failed", append(logger.RequestAttrs(r), "error", err, "agent_id", id)...)
+			writeError(w, http.StatusInternalServerError, "failed to clear provider block: "+err.Error())
+			return
+		}
+		updated.ProviderBlockedUntil = pgtype.Timestamptz{}
+		updated.ProviderBlockDetail = ""
+	}
 	resp := agentToResponse(updated)
 	// agentToResponse always initialises Skills as []; junction-table rows
 	// are untouched by the SQL update, so we reload them here to keep the

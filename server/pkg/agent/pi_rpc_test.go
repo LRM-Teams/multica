@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -1170,5 +1171,50 @@ func TestPiRPCBackendSteersCompleteDirectedMessageAtBusySafePoint(t *testing.T) 
 		if !strings.Contains(command.Message, want) {
 			t.Fatalf("directed Message %s does not contain %q", command.Message, want)
 		}
+	}
+}
+
+func TestNewPiRPCBackendImplementsResidentProgressListener(t *testing.T) {
+	backend := NewPiRPCBackend(Config{})
+	if _, ok := backend.(ResidentProgressListener); !ok {
+		t.Fatal("PiRPCBackend must expose stream progress for the resident silence clock")
+	}
+}
+
+func TestReadEventsFiresProgressListenerOnMessagelessEvents(t *testing.T) {
+	backend := newPiRPCBackend(Config{})
+	var progressCount atomic.Int32
+	backend.SetProgressListener(func() { progressCount.Add(1) })
+
+	var messageCount atomic.Int32
+	p := &piRPCProcess{
+		turn: &piRPCTurn{
+			response: make(chan piRPCResponse, 1),
+			done:     make(chan piRPCCompletion, 1),
+			message:  func(Message) { messageCount.Add(1) },
+			progress: backend.currentProgressListener(),
+		},
+	}
+	stdout := strings.Join([]string{
+		`{"type":"mystery_event"}`,
+		`{"type":"message_update","assistantMessageEvent":{"type":"unknown_delta"}}`,
+	}, "\n") + "\n"
+
+	done := make(chan struct{})
+	go func() {
+		backend.readEvents(p, strings.NewReader(stdout))
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("readEvents did not drain the stream")
+	}
+
+	if got := progressCount.Load(); got != 2 {
+		t.Fatalf("progress fired %d times, want 2 (every stream event proves liveness)", got)
+	}
+	if got := messageCount.Load(); got != 0 {
+		t.Fatalf("message callback fired %d times, want 0 (progress must not fabricate Messages)", got)
 	}
 }

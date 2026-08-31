@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { ResearchV6ReportModal } from "./research-v6-report-modal";
 
@@ -14,6 +14,8 @@ vi.mock("../../i18n/use-t", () => ({
             frame_title: "Research report document",
             loading: "Opening isolated report…",
             loading_document: "Opening report…",
+            empty_title: "No research report yet",
+            empty_body: "This task has not produced a report to view yet.",
             unavailable_title: "Interactive report unavailable",
             unavailable_body: "Read the verified plain-text version below.",
             refresh_capability: "Request a fresh link",
@@ -34,6 +36,96 @@ const report = {
 };
 
 describe("ResearchV6ReportModal", () => {
+  it("beats the default dialog strip so the report can render as a webpage", () => {
+    render(
+      <ResearchV6ReportModal
+        appOrigin={location.origin}
+        open
+        presentation="page"
+        report={null}
+        onOpenChange={() => {}}
+      />,
+    );
+
+    const dialog = screen.getByTestId("research-v6-report-modal");
+    expect(dialog.className).toMatch(/!max-w-none/);
+    expect(dialog.className).toMatch(/sm:!max-w-none/);
+    expect(dialog.className).toMatch(/\bh-dvh\b/);
+    expect(dialog.className).toMatch(/\bw-dvw\b/);
+  });
+
+  it("uses the same full-page shell when opened as a session overlay", () => {
+    render(
+      <ResearchV6ReportModal
+        appOrigin={location.origin}
+        open
+        report={null}
+        onOpenChange={() => {}}
+      />,
+    );
+
+    const dialog = screen.getByTestId("research-v6-report-modal");
+    expect(dialog.className).toMatch(/!max-w-none/);
+    expect(dialog.className).toMatch(/sm:!max-w-none/);
+  });
+
+  it("does not flash the loading shell when the same packaged report is refetched", async () => {
+    const compiled = {
+      ...report,
+      sandboxUrl: "",
+      reportOrigin: "",
+      compiledHtml: "<html><body>compiled body</body></html>",
+    };
+    vi.spyOn(URL, "createObjectURL").mockReturnValue(
+      `blob:${location.origin}/stable-report`,
+    );
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+
+    const { rerender } = render(
+      <ResearchV6ReportModal
+        appOrigin={location.origin}
+        open
+        report={compiled}
+        onOpenChange={() => {}}
+      />,
+    );
+    const frame = await screen.findByTestId("research-v6-report-frame");
+    fireEvent.load(frame);
+    await waitFor(() => {
+      expect(screen.queryByTestId("research-v6-report-loading")).toBeNull();
+    });
+
+    rerender(
+      <ResearchV6ReportModal
+        appOrigin={location.origin}
+        open
+        loading
+        report={compiled}
+        onOpenChange={() => {}}
+      />,
+    );
+    expect(screen.getByTestId("research-v6-report-frame")).toBeTruthy();
+    expect(screen.queryByTestId("research-v6-report-loading")).toBeNull();
+  });
+
+  it("shows an empty state when no report has been generated", () => {
+    render(
+      <ResearchV6ReportModal
+        appOrigin={location.origin}
+        open
+        report={null}
+        onOpenChange={() => {}}
+        onRequestFreshCapability={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId("research-v6-report-empty")).toBeTruthy();
+    expect(screen.getByText("No research report yet")).toBeTruthy();
+    expect(screen.queryByText("Interactive report unavailable")).toBeNull();
+    expect(screen.queryByText("Request a fresh link")).toBeNull();
+    expect(screen.queryByTestId("research-v6-report-frame")).toBeNull();
+  });
+
   it("mounts the capability in the exact restricted iframe sandbox", async () => {
     const { rerender } = render(
       <ResearchV6ReportModal

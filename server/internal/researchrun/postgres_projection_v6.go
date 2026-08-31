@@ -18,6 +18,11 @@ type v6ProjectionBuild struct {
 	edges              []V6ProjectionEdge
 	density            []V6ProjectionDensityBin
 	defaultVisible     map[string]bool
+	territoryByBranch  map[string]V6ProjectionTerritory
+}
+
+type v6ProjectionBranchRecord struct {
+	id, parentID, objective string
 }
 
 func (s *PostgresStore) ProjectionV6Snapshot(ctx context.Context, request V6ProjectionPageRequest) (V6ProjectionSnapshot, error) {
@@ -53,6 +58,7 @@ func (s *PostgresStore) createV6ProjectionSnapshot(ctx context.Context, request 
 	if err != nil {
 		return V6ProjectionSnapshot{}, err
 	}
+	build.edges = compactV6ProjectionEdges(build.edges)
 	normalizeV6Projection(build.nodes, build.edges, build.density)
 	projectionHash, err := hashV6Projection(build.nodes, build.edges, build.density)
 	if err != nil {
@@ -165,28 +171,52 @@ func (s *PostgresStore) loadV6ProjectionPage(ctx context.Context, workspaceID, r
 }
 
 func buildCanonicalV6ProjectionTx(ctx context.Context, tx pgx.Tx, workspaceID, runID string) (v6ProjectionBuild, error) {
-	build := v6ProjectionBuild{workspaceID: workspaceID, runID: runID, nodes: []V6ProjectionNode{}, edges: []V6ProjectionEdge{}, density: []V6ProjectionDensityBin{}, defaultVisible: map[string]bool{}}
+	build := v6ProjectionBuild{workspaceID: workspaceID, runID: runID, nodes: []V6ProjectionNode{}, edges: []V6ProjectionEdge{}, density: []V6ProjectionDensityBin{}, defaultVisible: map[string]bool{}, territoryByBranch: map[string]V6ProjectionTerritory{}}
 	var runStatus, goal string
 	var updated time.Time
 	var goalVersion int
-	var contractID string
-	if err := tx.QueryRow(ctx, `SELECT s.status,s.goal,s.goal_version,s.updated_at,COALESCE(c.id::text,s.id::text),COALESCE((SELECT max(sequence) FROM research_run_event WHERE session_id=s.id),0) FROM research_session s LEFT JOIN research_contract_revision c ON c.session_id=s.id AND c.goal_version=s.goal_version WHERE s.workspace_id=$1::uuid AND s.id=$2::uuid AND s.orchestrator_version='research-run-v6'`, workspaceID, runID).Scan(&runStatus, &goal, &goalVersion, &updated, &contractID, &build.throughSequence); err != nil {
+	var contractID, rootBranchID string
+	if err := tx.QueryRow(ctx, `SELECT s.status,s.goal,s.goal_version,s.updated_at,
+		COALESCE(c.id::text,s.id::text),
+		COALESCE((SELECT max(event.sequence) FROM research_run_event event
+			WHERE event.workspace_id=s.workspace_id AND event.session_id=s.id),0),
+		COALESCE((SELECT root.id::text FROM research_branch root
+			WHERE root.workspace_id=s.workspace_id AND root.session_id=s.id AND root.parent_branch_id IS NULL
+			ORDER BY (root.client_key='root') DESC,root.created_at,root.id LIMIT 1),'')
+		FROM research_session s
+		LEFT JOIN research_contract_revision c ON c.workspace_id=s.workspace_id
+			AND c.session_id=s.id AND c.goal_version=s.goal_version
+		WHERE s.workspace_id=$1::uuid AND s.id=$2::uuid AND s.orchestrator_version='research-run-v6'`, workspaceID, runID).Scan(
+		&runStatus, &goal, &goalVersion, &updated, &contractID, &build.throughSequence, &rootBranchID,
+	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return build, ErrRunNotFound
 		}
 		return build, err
 	}
 	goalExecution, goalTerminal := projectionExecutionForRun(runStatus)
+	territoryByBranch, err := loadV6ProjectionTerritoriesTx(ctx, tx, workspaceID, runID, rootBranchID)
+	if err != nil {
+		return build, err
+	}
+	build.territoryByBranch = territoryByBranch
 	goalID := v6ProjectionStableID("goal", contractID, goalVersion)
-	build.nodes = append(build.nodes, V6ProjectionNode{ID: goalID, Kind: "goal", Tier: "GOAL", CanonicalRef: V6ProjectionEntityRef{Kind: "goal", ID: contractID, Revision: goalVersion}, BranchIDs: []string{}, State: V6ProjectionState{Execution: goalExecution, Conclusion: "accepted", Integration: "unmatched"}, Title: truncateProjectionText(goal, 4096), CatalogSummary: truncateProjectionText(goal, 512), Terminal: goalTerminal, Expandable: true, UpdatedAt: normalizeProjectionTime(updated)})
+	goalBranchIDs := []string{}
+	if rootBranchID != "" {
+		goalBranchIDs = append(goalBranchIDs, rootBranchID)
+	}
+	build.nodes = append(build.nodes, V6ProjectionNode{ID: goalID, Kind: "goal", Tier: "GOAL", CanonicalRef: V6ProjectionEntityRef{Kind: "goal", ID: contractID, Revision: goalVersion}, BranchIDs: goalBranchIDs, State: V6ProjectionState{Execution: goalExecution, Conclusion: "accepted", Integration: "unmatched"}, Title: truncateProjectionText(goal, 4096), CatalogSummary: truncateProjectionText(goal, 512), Terminal: goalTerminal, Expandable: true, UpdatedAt: normalizeProjectionTime(updated)})
 	build.defaultVisible[goalID] = true
 	versionNodeIDs := map[string]string{}
 	workNodeIDs := map[string]string{}
 	agentNodeIDs := map[string]string{}
-	if err := appendV6InsightProjectionTx(ctx, tx, &build, versionNodeIDs); err != nil {
+	if err := appendV6InsightProjectionTx(ctx, tx, &build, goalID, versionNodeIDs); err != nil {
 		return build, err
 	}
 	if err := appendV6AgentProjectionTx(ctx, tx, &build, goalID, agentNodeIDs); err != nil {
+		return build, err
+	}
+	if err := appendV6PendingAgentProjectionTx(ctx, tx, &build, goalID); err != nil {
 		return build, err
 	}
 	if err := appendV6WorkProjectionTx(ctx, tx, &build, goalID, workNodeIDs, agentNodeIDs); err != nil {
@@ -204,6 +234,94 @@ func buildCanonicalV6ProjectionTx(ctx context.Context, tx pgx.Tx, workspaceID, r
 	return build, nil
 }
 
+func loadV6ProjectionTerritoriesTx(ctx context.Context, tx pgx.Tx, workspaceID, runID, rootBranchID string) (map[string]V6ProjectionTerritory, error) {
+	rows, err := tx.Query(ctx, `SELECT id::text,COALESCE(parent_branch_id::text,''),objective
+		FROM research_branch
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid
+		ORDER BY created_at,id`, workspaceID, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	branches := map[string]v6ProjectionBranchRecord{}
+	for rows.Next() {
+		var branch v6ProjectionBranchRecord
+		if err = rows.Scan(&branch.id, &branch.parentID, &branch.objective); err != nil {
+			return nil, err
+		}
+		branches[branch.id] = branch
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return resolveV6ProjectionTerritories(branches, rootBranchID), nil
+}
+
+func resolveV6ProjectionTerritories(branches map[string]v6ProjectionBranchRecord, rootBranchID string) map[string]V6ProjectionTerritory {
+	territories := map[string]V6ProjectionTerritory{}
+	resolved := map[string]struct{}{}
+	for branchID := range branches {
+		if _, exists := resolved[branchID]; exists {
+			continue
+		}
+		currentID := branchID
+		path := []string{}
+		visited := map[string]struct{}{}
+		var selected *V6ProjectionTerritory
+		for currentID != "" && currentID != rootBranchID {
+			if _, exists := resolved[currentID]; exists {
+				if territory, hasTerritory := territories[currentID]; hasTerritory {
+					copy := territory
+					selected = &copy
+				}
+				break
+			}
+			if _, cycle := visited[currentID]; cycle {
+				break
+			}
+			visited[currentID] = struct{}{}
+			current, exists := branches[currentID]
+			if !exists || current.parentID == "" {
+				break
+			}
+			path = append(path, currentID)
+			if current.parentID == rootBranchID {
+				selected = &V6ProjectionTerritory{
+					BranchID: current.id,
+					Label:    truncateProjectionText(current.objective, 160),
+				}
+				break
+			}
+			currentID = current.parentID
+		}
+		for _, pathBranchID := range path {
+			resolved[pathBranchID] = struct{}{}
+			if selected != nil {
+				territories[pathBranchID] = *selected
+			}
+		}
+		resolved[branchID] = struct{}{}
+	}
+	return territories
+}
+
+func projectionTerritoryForBranches(build *v6ProjectionBuild, branchIDs []string) *V6ProjectionTerritory {
+	var selected *V6ProjectionTerritory
+	for _, branchID := range branchIDs {
+		territory, exists := build.territoryByBranch[branchID]
+		if !exists {
+			continue
+		}
+		if selected != nil && selected.BranchID != territory.BranchID {
+			return nil
+		}
+		copy := territory
+		selected = &copy
+	}
+	return selected
+}
+
 func appendV6AgentProjectionTx(ctx context.Context, tx pgx.Tx, build *v6ProjectionBuild, goalID string, agentNodeIDs map[string]string) error {
 	rows, err := tx.Query(ctx, `
 		SELECT m.agent_id::text,
@@ -216,6 +334,7 @@ func appendV6AgentProjectionTx(ctx context.Context, tx pgx.Tx, build *v6Projecti
 		JOIN agent ON agent.id=m.agent_id AND agent.workspace_id=m.workspace_id
 		WHERE m.workspace_id=$1::uuid
 		  AND m.session_id=$2::uuid
+		  AND m.role<>'reporter'
 		  AND m.state IN ('idle','working','offline','retiring')
 		ORDER BY m.membership_generation,m.created_at,m.id`, build.workspaceID, build.runID)
 	if err != nil {
@@ -256,7 +375,43 @@ func appendV6AgentProjectionTx(ctx context.Context, tx pgx.Tx, build *v6Projecti
 	return rows.Err()
 }
 
-func appendV6InsightProjectionTx(ctx context.Context, tx pgx.Tx, build *v6ProjectionBuild, versionNodeIDs map[string]string) error {
+func appendV6PendingAgentProjectionTx(ctx context.Context, tx pgx.Tx, build *v6ProjectionBuild, goalID string) error {
+	rows, err := tx.Query(ctx, `
+		SELECT o.id::text, o.updated_at
+		FROM research_v6_outbox o
+		WHERE o.workspace_id=$1::uuid
+		  AND o.session_id=$2::uuid
+		  AND o.kind='create_agent'
+		  AND o.status IN ('pending','delivering')
+		ORDER BY o.created_at,o.id`, build.workspaceID, build.runID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var outboxID string
+		var updated time.Time
+		if err = rows.Scan(&outboxID, &updated); err != nil {
+			return err
+		}
+		nodeID := v6ProjectionStableID("agent-pending", outboxID, 0)
+		build.nodes = append(build.nodes, V6ProjectionNode{
+			ID: nodeID, Kind: "agent", Tier: "S",
+			CanonicalRef: V6ProjectionEntityRef{Kind: "pending_agent", ID: outboxID},
+			BranchIDs:    []string{},
+			State:        V6ProjectionState{Execution: "pending", Conclusion: "proposed", Integration: "unmatched"},
+			Terminal:     false, Expandable: false, UpdatedAt: normalizeProjectionTime(updated),
+		})
+		build.defaultVisible[nodeID] = true
+		build.edges = append(build.edges, V6ProjectionEdge{
+			ID: v6ProjectionEdgeID("belongs_to", nodeID, goalID), Kind: "belongs_to",
+			FromNodeID: nodeID, ToNodeID: goalID, Canonical: true,
+		})
+	}
+	return rows.Err()
+}
+
+func appendV6InsightProjectionTx(ctx context.Context, tx pgx.Tx, build *v6ProjectionBuild, goalID string, versionNodeIDs map[string]string) error {
 	rows, err := tx.Query(ctx, `SELECT iv.id::text,iv.insight_id::text,iv.revision,iv.artifact_version_id::text,iv.tier,iv.catalog_summary,iv.status,iv.created_at,v.content_hash,COALESCE(array_agg(DISTINCT nb.branch_id::text) FILTER(WHERE nb.branch_id IS NOT NULL),'{}'),EXISTS(SELECT 1 FROM research_node_absorption a WHERE a.input_artifact_version_id=iv.artifact_version_id),(SELECT count(*)::int FROM research_node_absorption a WHERE a.successor_insight_version_id=iv.id),EXISTS(SELECT 1 FROM research_branch_frontier f WHERE f.session_id=iv.session_id AND f.node_artifact_version_id=iv.artifact_version_id AND f.removed_by_event_sequence IS NULL) OR EXISTS(SELECT 1 FROM research_branch b WHERE b.session_id=iv.session_id AND b.current_xxl_version_id=iv.id) FROM research_insight_version iv JOIN research_artifact_version v ON v.id=iv.artifact_version_id LEFT JOIN research_node_branch nb ON nb.node_artifact_version_id=iv.artifact_version_id WHERE iv.workspace_id=$1::uuid AND iv.session_id=$2::uuid GROUP BY iv.id,v.content_hash ORDER BY iv.id`, build.workspaceID, build.runID)
 	if err != nil {
 		return err
@@ -278,9 +433,19 @@ func appendV6InsightProjectionTx(ctx context.Context, tx pgx.Tx, build *v6Projec
 		if absorbed {
 			integration = "absorbed"
 		}
-		build.nodes = append(build.nodes, V6ProjectionNode{ID: nodeID, Kind: "insight", Tier: tier, CanonicalRef: V6ProjectionEntityRef{Kind: "insight", ID: insightID, Revision: revision, VersionID: artifactVersionID, ContentHash: contentHash}, BranchIDs: branches, State: V6ProjectionState{Execution: "succeeded", Conclusion: conclusion, Integration: integration}, CatalogSummary: summary, Absorbed: absorbed, Terminal: terminal, Expandable: absorbed || hiddenInputs > 0, HiddenChildCount: hiddenInputs, UpdatedAt: normalizeProjectionTime(updated)})
+		build.nodes = append(build.nodes, V6ProjectionNode{ID: nodeID, Kind: "insight", Tier: tier, CanonicalRef: V6ProjectionEntityRef{Kind: "insight", ID: insightID, Revision: revision, VersionID: artifactVersionID, ContentHash: contentHash}, BranchIDs: branches, Territory: projectionTerritoryForBranches(build, branches), State: V6ProjectionState{Execution: "succeeded", Conclusion: conclusion, Integration: integration}, CatalogSummary: summary, Absorbed: absorbed, Terminal: terminal, Expandable: absorbed || hiddenInputs > 0, HiddenChildCount: hiddenInputs, UpdatedAt: normalizeProjectionTime(updated)})
 		build.defaultVisible[nodeID] = terminal || (branchTop && !absorbed)
 		versionNodeIDs[artifactVersionID] = nodeID
+		if branchTop && !absorbed {
+			// Keep a visible, non-canonical path from the current branch frontier
+			// to the Goal when the frontier node replaces hidden descendants. This
+			// prevents a valid composite Insight from becoming an isolated island
+			// before its absorbed inputs are explicitly expanded.
+			build.edges = append(build.edges, V6ProjectionEdge{
+				ID: v6ProjectionEdgeID("collapsed_path", nodeID, goalID), Kind: "collapsed_path",
+				FromNodeID: nodeID, ToNodeID: goalID, Canonical: false,
+			})
+		}
 		_ = versionEntityID
 	}
 	return rows.Err()
@@ -329,6 +494,7 @@ func appendV6WorkProjectionTx(ctx context.Context, tx pgx.Tx, build *v6Projectio
 		LEFT JOIN agent_task_progress_snapshot progress ON progress.task_id=latest_attempt.inbox_task_id
 		WHERE w.workspace_id=$1::uuid AND w.session_id=$2::uuid
 		  AND w.kind<>'director'
+		  AND w.kind NOT IN ('report','review')
 		ORDER BY w.id`, build.workspaceID, build.runID)
 	if err != nil {
 		return err
@@ -345,7 +511,7 @@ func appendV6WorkProjectionTx(ctx context.Context, tx pgx.Tx, build *v6Projectio
 		state := V6ProjectionState{Execution: execution, Conclusion: "proposed", Integration: "unmatched"}
 		state.Termination = projectionTerminationForWork(execution, terminal, reasonCode, reasonDetail, attemptFailureClass, attemptDiagnostics)
 		nodeID := v6ProjectionStableID("work_s", id, 0)
-		build.nodes = append(build.nodes, V6ProjectionNode{ID: nodeID, Kind: "work_s", Tier: "S", CanonicalRef: V6ProjectionEntityRef{Kind: "work_item", ID: id}, BranchIDs: branches, State: state, Title: truncateProjectionText(firstNonEmptyV6(reason, agentName), 160), CatalogSummary: truncateProjectionText(reason, 512), Terminal: terminal, Expandable: false, UpdatedAt: normalizeProjectionTime(updated)})
+		build.nodes = append(build.nodes, V6ProjectionNode{ID: nodeID, Kind: "work_s", Tier: "S", CanonicalRef: V6ProjectionEntityRef{Kind: "work_item", ID: id}, BranchIDs: branches, Territory: projectionTerritoryForBranches(build, branches), State: state, Title: truncateProjectionText(firstNonEmptyV6(reason, agentName), 160), CatalogSummary: truncateProjectionText(reason, 512), Terminal: terminal, Expandable: false, UpdatedAt: normalizeProjectionTime(updated)})
 		build.defaultVisible[nodeID] = true
 		workNodeIDs[id] = nodeID
 		build.edges = append(build.edges, V6ProjectionEdge{ID: v6ProjectionEdgeID("belongs_to", nodeID, goalID), Kind: "belongs_to", FromNodeID: nodeID, ToNodeID: goalID, Canonical: true})
@@ -379,7 +545,7 @@ func appendV6ResultProjectionTx(ctx context.Context, tx pgx.Tx, build *v6Project
 			state.Termination = &V6ProjectionTermination{ReasonCode: normalizeProjectionReason(reasonCode), ReasonDetail: nonemptyProjectionReason(reasonDetail)}
 		}
 		nodeID := v6ProjectionStableID("result_s", id, 0)
-		build.nodes = append(build.nodes, V6ProjectionNode{ID: nodeID, Kind: "result_s", Tier: "S", CanonicalRef: V6ProjectionEntityRef{Kind: "result", ID: artifactID, VersionID: versionID, ContentHash: contentHash}, BranchIDs: branches, State: state, CatalogSummary: summary, Absorbed: absorbed, Terminal: terminal, Expandable: absorbed, UpdatedAt: normalizeProjectionTime(updated)})
+		build.nodes = append(build.nodes, V6ProjectionNode{ID: nodeID, Kind: "result_s", Tier: "S", CanonicalRef: V6ProjectionEntityRef{Kind: "result", ID: artifactID, VersionID: versionID, ContentHash: contentHash}, BranchIDs: branches, Territory: projectionTerritoryForBranches(build, branches), State: state, CatalogSummary: summary, Absorbed: absorbed, Terminal: terminal, Expandable: absorbed, UpdatedAt: normalizeProjectionTime(updated)})
 		build.defaultVisible[nodeID] = terminal || !absorbed
 		versionNodeIDs[versionID] = nodeID
 		if workNodeIDs[workID] != "" {

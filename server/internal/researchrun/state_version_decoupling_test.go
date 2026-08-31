@@ -146,6 +146,53 @@ func setupV6DirectorProposalFixture(t *testing.T, title string) directorProposal
 	return directorProposalFixture{run: run, cycle: cycle, submissionID: submissionID, envelope: envelope, otherWorkID: otherWorkID}
 }
 
+func TestRejectV6DirectorBoundaryAttemptTerminatesCycleAndEmitsTrigger(t *testing.T) {
+	fx := setupV6DirectorProposalFixture(t, "Reject malformed Director proposal at boundary")
+	if _, err := fx.run.pool.Exec(fx.run.ctx, `DELETE FROM research_v6_work_submission WHERE id=$1::uuid`, fx.submissionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.run.pool.Exec(fx.run.ctx, `UPDATE research_work_item SET status='running'
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid`,
+		fx.run.fixture.workspaceID, fx.run.fixture.sessionID, fx.cycle.WorkItemID); err != nil {
+		t.Fatal(err)
+	}
+	var attemptID string
+	if err := fx.run.pool.QueryRow(fx.run.ctx, `SELECT id::text FROM research_work_item_attempt
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND work_item_id=$3::uuid
+		AND status='running'`, fx.run.fixture.workspaceID, fx.run.fixture.sessionID, fx.cycle.WorkItemID).Scan(&attemptID); err != nil {
+		t.Fatal(err)
+	}
+	access := V6AttemptAccess{
+		WorkspaceID: fx.run.fixture.workspaceID, RunID: fx.run.fixture.sessionID,
+		WorkItemID: fx.cycle.WorkItemID, AttemptID: attemptID, AgentID: fx.run.fixture.agentID,
+	}
+	if err := fx.run.store.RejectV6DirectorBoundaryAttempt(fx.run.ctx, access, "branch_ids is required"); err != nil {
+		t.Fatal(err)
+	}
+	var attemptStatus, failureClass, workStatus, cycleStatus string
+	if err := fx.run.pool.QueryRow(fx.run.ctx, `SELECT a.status,a.failure_class,w.status,c.status
+		FROM research_work_item_attempt a
+		JOIN research_work_item w ON (w.workspace_id,w.session_id,w.id)=(a.workspace_id,a.session_id,a.work_item_id)
+		JOIN research_director_cycle c ON (c.workspace_id,c.session_id,c.work_item_id)=(w.workspace_id,w.session_id,w.id)
+		WHERE a.workspace_id=$1::uuid AND a.session_id=$2::uuid AND a.id=$3::uuid`,
+		fx.run.fixture.workspaceID, fx.run.fixture.sessionID, attemptID).
+		Scan(&attemptStatus, &failureClass, &workStatus, &cycleStatus); err != nil {
+		t.Fatal(err)
+	}
+	if attemptStatus != "failed" || failureClass != "contract_rejected" || workStatus != "failed" || cycleStatus != "failed" {
+		t.Fatalf("attempt=%s failure=%s work=%s cycle=%s", attemptStatus, failureClass, workStatus, cycleStatus)
+	}
+	var events int
+	if err := fx.run.pool.QueryRow(fx.run.ctx, `SELECT count(*)::int FROM research_run_event
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND event_type='v6_work_submission_rejected'
+		AND payload->>'work_item_attempt_id'=$3`, fx.run.fixture.workspaceID, fx.run.fixture.sessionID, attemptID).Scan(&events); err != nil {
+		t.Fatal(err)
+	}
+	if events != 1 {
+		t.Fatalf("boundary rejection events=%d want=1", events)
+	}
+}
+
 func appendOperationalEvent(t *testing.T, run *transactionRecoveryRun, eventType, workItemID string) {
 	t.Helper()
 	tx, err := run.pool.Begin(run.ctx)
@@ -182,6 +229,37 @@ func TestV6DirectorProposalSurvivesOperationalEventsAfterBrief(t *testing.T) {
 	}
 	if cycleStatus != "applied" || attemptStatus != "succeeded" {
 		t.Fatalf("cycle=%s attempt=%s want applied/succeeded", cycleStatus, attemptStatus)
+	}
+}
+
+func TestV6DirectorSubmissionSettlesByIdentityWithoutWaitingForScheduler(t *testing.T) {
+	fx := setupV6DirectorProposalFixture(t, "Settle durable Director receipt immediately")
+	if _, err := fx.run.pool.Exec(fx.run.ctx, `UPDATE research_v6_work_submission SET status='received'
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid`,
+		fx.run.fixture.workspaceID, fx.run.fixture.sessionID, fx.submissionID); err != nil {
+		t.Fatal(err)
+	}
+	status, err := fx.run.store.SettleV6DirectorSubmission(
+		fx.run.ctx, fx.run.fixture.workspaceID, fx.run.fixture.sessionID, fx.submissionID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != "accepted" {
+		t.Fatalf("status=%s want accepted", status)
+	}
+	var cycleStatus, attemptStatus, workStatus string
+	if err = fx.run.pool.QueryRow(fx.run.ctx, `SELECT c.status,a.status,w.status
+		FROM research_v6_work_submission s
+		JOIN research_director_cycle c ON c.work_item_id=s.work_item_id
+		JOIN research_work_item_attempt a ON a.id=s.attempt_id
+		JOIN research_work_item w ON w.id=s.work_item_id
+		WHERE s.workspace_id=$1::uuid AND s.session_id=$2::uuid AND s.id=$3::uuid`,
+		fx.run.fixture.workspaceID, fx.run.fixture.sessionID, fx.submissionID).Scan(&cycleStatus, &attemptStatus, &workStatus); err != nil {
+		t.Fatal(err)
+	}
+	if cycleStatus != "applied" || attemptStatus != "succeeded" || workStatus != "succeeded" {
+		t.Fatalf("cycle=%s attempt=%s work=%s want applied/succeeded/succeeded", cycleStatus, attemptStatus, workStatus)
 	}
 }
 

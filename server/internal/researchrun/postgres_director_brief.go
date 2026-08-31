@@ -38,7 +38,7 @@ func (s *PostgresStore) LoadDirectorBriefFacts(ctx context.Context, in StartV6Di
 		facts.DirectorState = "awaiting_director"
 	}
 	facts.Goal = map[string]any{"goal_version": goalVersion, "goal": goal, "scope": jsonObjectOrEmpty(scope), "audience": audience, "freshness": freshness, "language": language, "source_policy": jsonObjectOrEmpty(sourcePolicy)}
-	rows, err := s.pool.Query(ctx, `SELECT m.agent_id::text,m.id::text,m.state,left(m.mission_prompt,4096),
+	rows, err := s.pool.Query(ctx, `SELECT m.agent_id::text,m.id::text,m.state,m.role,left(m.mission_prompt,4096),
 		COALESCE((SELECT w.id::text FROM research_work_item w WHERE w.session_id=m.session_id AND w.assigned_agent_id=m.agent_id AND w.status IN ('ready','dispatching','running','awaiting_input') ORDER BY w.priority DESC,w.created_at LIMIT 1),''),
 		(SELECT count(*)::int FROM research_node_steward_assignment n WHERE n.session_id=m.session_id AND n.agent_id=m.agent_id AND n.status='active')
 		FROM research_team_membership m WHERE m.workspace_id=$1::uuid AND m.session_id=$2::uuid ORDER BY m.joined_at,m.id`, in.WorkspaceID, in.RunID)
@@ -46,13 +46,13 @@ func (s *PostgresStore) LoadDirectorBriefFacts(ctx context.Context, in StartV6Di
 		return DirectorBriefFacts{}, err
 	}
 	for rows.Next() {
-		var agentID, membershipID, state, mission, activeWork string
+		var agentID, membershipID, state, role, mission, activeWork string
 		var stewardCount int
-		if err = rows.Scan(&agentID, &membershipID, &state, &mission, &activeWork, &stewardCount); err != nil {
+		if err = rows.Scan(&agentID, &membershipID, &state, &role, &mission, &activeWork, &stewardCount); err != nil {
 			rows.Close()
 			return DirectorBriefFacts{}, err
 		}
-		item := map[string]any{"agent_id": agentID, "membership_id": membershipID, "state": state, "mission_summary": truncateV6BriefText(mission, 512), "steward_node_count": stewardCount}
+		item := map[string]any{"agent_id": agentID, "membership_id": membershipID, "state": state, "role": role, "mission_summary": truncateV6BriefText(mission, 512), "steward_node_count": stewardCount}
 		if activeWork != "" {
 			item["active_work_item_id"] = activeWork
 		}
@@ -87,7 +87,20 @@ func (s *PostgresStore) LoadDirectorBriefFacts(ctx context.Context, in StartV6Di
 	}
 	rows.Close()
 	for _, branch := range branches {
-		item := map[string]any{"branch": map[string]any{"id": branch.id, "state_version": branch.version}, "objective": branch.objective, "scope": jsonObjectOrEmpty(branch.scope), "status": branch.status, "frontier_nodes": []any{}, "has_more": false}
+		scope, ok := jsonObjectOrEmpty(branch.scope).(map[string]any)
+		if !ok {
+			scope = map[string]any{}
+		}
+		if branch.parent != "" {
+			directionNodeCount, countErr := s.loadV6DirectionNodeCount(ctx, in.WorkspaceID, in.RunID, branch.id)
+			if countErr != nil {
+				return DirectorBriefFacts{}, countErr
+			}
+			scope["direction_node_count"] = directionNodeCount
+			scope["saturation_threshold"] = v6DirectionSaturationThreshold
+			scope["saturation_gate"] = directionNodeCount > v6DirectionSaturationThreshold
+		}
+		item := map[string]any{"branch": map[string]any{"id": branch.id, "state_version": branch.version}, "objective": branch.objective, "scope": scope, "status": branch.status, "frontier_nodes": []any{}, "has_more": false}
 		frontier, hasMore, frontierErr := s.loadV6BranchFrontierBrief(ctx, in.WorkspaceID, in.RunID, branch.id)
 		if frontierErr != nil {
 			return DirectorBriefFacts{}, frontierErr
@@ -175,7 +188,56 @@ func (s *PostgresStore) LoadDirectorBriefFacts(ctx context.Context, in StartV6Di
 		return DirectorBriefFacts{}, err
 	}
 	rows.Close()
+	if facts.ReportPlan, err = s.loadV6ReportPlanFact(ctx, in.WorkspaceID, in.RunID); err != nil {
+		return DirectorBriefFacts{}, err
+	}
 	return facts, nil
+}
+
+func (s *PostgresStore) loadV6DirectionNodeCount(ctx context.Context, workspaceID, runID, branchID string) (int, error) {
+	var count int
+	err := s.pool.QueryRow(ctx, `WITH RECURSIVE branch_tree AS (
+		SELECT id,id AS top_id
+		FROM research_branch
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND parent_branch_id IS NULL
+		UNION ALL
+		SELECT child.id,branch_tree.top_id
+		FROM research_branch child
+		JOIN branch_tree ON branch_tree.id=child.parent_branch_id
+		WHERE child.workspace_id=$1::uuid AND child.session_id=$2::uuid
+	), selected_direction AS (
+		SELECT top_id FROM branch_tree WHERE id=$3::uuid
+	)
+	SELECT count(DISTINCT binding.node_artifact_version_id)::int
+	FROM branch_tree
+	JOIN selected_direction ON selected_direction.top_id=branch_tree.top_id
+	JOIN research_node_branch binding ON binding.workspace_id=$1::uuid
+		AND binding.session_id=$2::uuid AND binding.branch_id=branch_tree.id`, workspaceID, runID, branchID).Scan(&count)
+	return count, err
+}
+
+func (s *PostgresStore) loadV6ReportPlanFact(ctx context.Context, workspaceID, runID string) (map[string]any, error) {
+	selection, err := selectV6ReportInputs(ctx, s.pool, workspaceID, runID)
+	if err != nil {
+		return nil, err
+	}
+	var reporterAgentID, latestHash string
+	var active bool
+	if err = s.pool.QueryRow(ctx, `SELECT
+		COALESCE((SELECT agent_id::text FROM research_team_membership WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND role='reporter' AND state IN ('idle','working','offline','retiring') ORDER BY joined_at,id LIMIT 1),''),
+		EXISTS(SELECT 1 FROM research_work_item WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND kind='report' AND status IN ('ready','dispatching','enqueued','running','awaiting_input')),
+		COALESCE((SELECT input_snapshot_hash FROM research_report WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND package_hash IS NOT NULL ORDER BY revision DESC LIMIT 1),'')`, workspaceID, runID).Scan(&reporterAgentID, &active, &latestHash); err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"reporter_agent_id":  reporterAgentID,
+		"selection_hash":     selection.Hash,
+		"maturity":           selection.Maturity,
+		"inputs":             selection.Inputs,
+		"directions":         selection.Directions,
+		"active_report_work": active,
+		"needs_refresh":      len(selection.Inputs) > 0 && !active && selection.Hash != latestHash,
+	}, nil
 }
 
 func directorBriefWorkSummary(mission, state string, attemptCount, maxAttempts int, attemptState, failureClass, failureDiagnostics, terminalReasonCode, terminalReasonDetail string) string {
@@ -203,19 +265,19 @@ func directorBriefWorkSummary(mission, state string, attemptCount, maxAttempts i
 
 func (s *PostgresStore) loadV6BranchFrontierBrief(ctx context.Context, workspaceID, runID, branchID string) ([]any, bool, error) {
 	rows, err := s.pool.Query(ctx, `WITH frontier_content AS (
-		SELECT rn.artifact_version_id,'result_s'::text AS node_kind,'S'::text AS tier,rn.catalog_summary,rn.brief_summary,rn.open_questions,
+		SELECT rn.artifact_version_id,'result_s'::text AS node_kind,'S'::text AS tier,rn.catalog_summary,rn.brief_summary,rn.conclusion,rn.open_questions,
 			rn.conclusion_state,
 			CASE rn.integration_state WHEN 'candidate' THEN 'candidate' WHEN 'discussing' THEN 'discussing' WHEN 'excluded' THEN 'excluded' WHEN 'absorbed' THEN 'excluded' ELSE 'unmatched' END AS integration_state,
 			rn.accepted_at AS content_created_at,rn.id AS content_id
 		FROM research_result_node rn WHERE rn.workspace_id=$1::uuid AND rn.session_id=$2::uuid
 		UNION ALL
-		SELECT iv.artifact_version_id,'insight'::text,iv.tier,iv.catalog_summary,iv.brief_summary,iv.open_questions,
+		SELECT iv.artifact_version_id,'insight'::text,iv.tier,iv.catalog_summary,iv.brief_summary,iv.conclusion,iv.open_questions,
 			CASE iv.status WHEN 'accepted' THEN 'accepted' WHEN 'challenged' THEN 'challenged' WHEN 'refuted' THEN 'refuted' ELSE 'invalid' END,
 			CASE WHEN iv.status IN ('refuted','invalid','terminal') THEN 'excluded' WHEN iv.discussion_id IS NOT NULL THEN 'discussing' WHEN iv.integration_round_id IS NOT NULL THEN 'candidate' ELSE 'unmatched' END,
 			iv.created_at,iv.id
 		FROM research_insight_version iv WHERE iv.workspace_id=$1::uuid AND iv.session_id=$2::uuid
 	)
-		SELECT v.id::text,content.content_id::text,v.content_hash,content.node_kind,content.tier,content.catalog_summary,content.brief_summary,content.open_questions,
+		SELECT v.id::text,v.artifact_id::text,v.content_hash,content.node_kind,content.tier,content.catalog_summary,content.brief_summary,content.conclusion,content.open_questions,
 		COALESCE((SELECT steward.agent_id::text FROM research_node_steward_assignment steward WHERE steward.session_id=f.session_id AND steward.node_artifact_version_id=f.node_artifact_version_id AND steward.status='active' ORDER BY steward.generation DESC LIMIT 1),
 		         (SELECT assignment.director_agent_id::text FROM research_session session JOIN research_director_assignment assignment ON assignment.id=session.current_director_assignment_id WHERE session.id=f.session_id)),
 		content.conclusion_state,content.integration_state,
@@ -230,19 +292,23 @@ func (s *PostgresStore) loadV6BranchFrontierBrief(ctx context.Context, workspace
 	defer rows.Close()
 	frontier := []any{}
 	for rows.Next() {
-		var versionID, artifactID, contentHash, nodeKind, tier, catalog, brief, steward, conclusion, integration string
+		var versionID, artifactID, contentHash, nodeKind, tier, catalog, brief, conclusion, steward, conclusionState, integration string
 		var openQuestions json.RawMessage
 		var branchIDs []string
-		if err = rows.Scan(&versionID, &artifactID, &contentHash, &nodeKind, &tier, &catalog, &brief, &openQuestions, &steward, &conclusion, &integration, &branchIDs); err != nil {
+		if err = rows.Scan(&versionID, &artifactID, &contentHash, &nodeKind, &tier, &catalog, &brief, &conclusion, &openQuestions, &steward, &conclusionState, &integration, &branchIDs); err != nil {
 			return nil, false, err
 		}
 		if len(frontier) == 64 {
 			return frontier, true, nil
 		}
+		briefSummary := directorBriefFrontierSummary(brief, openQuestions)
+		if strings.TrimSpace(conclusion) != "" {
+			briefSummary = truncateV6BriefText(briefSummary+"\n\n当前节点结论："+conclusion, 32768)
+		}
 		frontier = append(frontier, map[string]any{
 			"node":            map[string]any{"kind": nodeKind, "id": artifactID, "version_id": versionID, "tier": tier, "content_hash": contentHash},
-			"catalog_summary": catalog, "brief_summary": directorBriefFrontierSummary(brief, openQuestions), "steward_agent_id": steward, "branch_ids": branchIDs,
-			"conclusion_state": conclusion, "integration_state": integration,
+			"catalog_summary": catalog, "brief_summary": briefSummary, "steward_agent_id": steward, "branch_ids": branchIDs,
+			"conclusion_state": conclusionState, "integration_state": integration,
 		})
 	}
 	return frontier, false, rows.Err()
@@ -275,17 +341,44 @@ func directorBriefFrontierSummary(summary string, rawOpenQuestions json.RawMessa
 }
 
 func (s *PostgresStore) loadV6DirectorControlFacts(ctx context.Context, workspaceID, runID string, facts *DirectorBriefFacts) error {
-	rows, err := s.pool.Query(ctx, `SELECT id::text,kind,status,kind||' discussion',updated_at FROM research_discussion WHERE workspace_id=$1::uuid AND session_id=$2::uuid ORDER BY updated_at DESC,id LIMIT 256`, workspaceID, runID)
+	rows, err := s.pool.Query(ctx, `SELECT discussion.id::text,discussion.kind,discussion.status,
+		COALESCE(inputs.summary,'无'),COALESCE(votes.summary,'无'),COALESCE(turns.summary,'无'),discussion.updated_at
+		FROM research_discussion discussion
+		LEFT JOIN LATERAL (
+			SELECT string_agg(input.node_artifact_version_id::text,', ' ORDER BY input.ordinal) AS summary
+			FROM research_discussion_input input
+			WHERE input.workspace_id=discussion.workspace_id AND input.session_id=discussion.session_id
+			  AND input.discussion_id=discussion.id
+		) inputs ON true
+		LEFT JOIN LATERAL (
+			SELECT string_agg(latest.vote||'：'||left(latest.reason,512),' | ' ORDER BY latest.agent_id::text) AS summary
+			FROM (
+				SELECT DISTINCT ON (vote.agent_id) vote.agent_id,vote.vote,vote.reason
+				FROM research_discussion_vote vote
+				WHERE vote.workspace_id=discussion.workspace_id AND vote.session_id=discussion.session_id
+				  AND vote.discussion_id=discussion.id AND vote.discussion_revision=discussion.revision
+				ORDER BY vote.agent_id,vote.created_at DESC,vote.id DESC
+			) latest
+		) votes ON true
+		LEFT JOIN LATERAL (
+			SELECT string_agg(left(turn.visible_message,1024),' | ' ORDER BY turn.ordinal) AS summary
+			FROM research_discussion_turn turn
+			WHERE turn.workspace_id=discussion.workspace_id AND turn.session_id=discussion.session_id
+			  AND turn.discussion_id=discussion.id AND turn.discussion_revision=discussion.revision
+		) turns ON true
+		WHERE discussion.workspace_id=$1::uuid AND discussion.session_id=$2::uuid
+		ORDER BY discussion.updated_at DESC,discussion.id LIMIT 256`, workspaceID, runID)
 	if err != nil {
 		return err
 	}
 	for rows.Next() {
-		var id, kind, state, summary string
+		var id, kind, state, inputs, votes, turns string
 		var updated time.Time
-		if err = rows.Scan(&id, &kind, &state, &summary, &updated); err != nil {
+		if err = rows.Scan(&id, &kind, &state, &inputs, &votes, &turns, &updated); err != nil {
 			rows.Close()
 			return err
 		}
+		summary := directorBriefDiscussionSummary(kind, inputs, votes, turns)
 		facts.Discussions = append(facts.Discussions, map[string]any{"id": id, "kind": "discussion", "state": directorBriefControlState(state), "summary": summary, "updated_at": updated.UTC().Format(time.RFC3339Nano)})
 	}
 	if err = rows.Err(); err != nil {
@@ -379,6 +472,15 @@ func truncateV6BriefText(value string, limit int) string {
 	return string(runes[:limit])
 }
 
+func directorBriefDiscussionSummary(kind, inputs, votes, turns string) string {
+	return truncateV6BriefText(fmt.Sprintf("讨论类型：%s；输入版本：%s；最新投票：%s；可见结论：%s",
+		truncateV6BriefText(kind, 32),
+		truncateV6BriefText(inputs, 128),
+		truncateV6BriefText(votes, 192),
+		truncateV6BriefText(turns, 128),
+	), 512)
+}
+
 func jsonObjectOrEmpty(raw json.RawMessage) any {
 	var value map[string]any
 	if json.Unmarshal(raw, &value) != nil || value == nil {
@@ -427,6 +529,7 @@ func (s *PostgresStore) PersistDirectorCycle(ctx context.Context, in StartV6Dire
 		Scan(&replay.ID, &replay.RunID, &replay.AssignmentID, &replay.BriefID, &replay.BriefHash, &replay.WorkItemID,
 			&replay.Generation, &replay.PageCount, &replay.StateVersion, &replay.Status)
 	if err == nil {
+		replay.Replayed = true
 		return replay, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
@@ -482,6 +585,12 @@ func v6DirectorActionPayloadSchemas() map[string]any {
 	uuidValue := map[string]any{"type": "string", "format": "uuid"}
 	hashValue := map[string]any{"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
 	jsonObject := map[string]any{"type": "object"}
+	nonEmptyJSONObject := map[string]any{"type": "object", "minProperties": 1}
+	atomicWorkConfig := map[string]any{"type": "object", "required": []string{"task_specific_schema"}, "properties": map[string]any{
+		"task_specific_schema":      nonEmptyJSONObject,
+		"direction_gate_node_count": map[string]any{"type": "integer", "minimum": 0},
+		"direction_gate_decision":   map[string]any{"enum": []string{"continue_direction"}},
+		"direction_gate_rationale":  text}}
 	nodeRef := map[string]any{"type": "object", "additionalProperties": false, "required": []string{"kind", "id", "version_id", "tier", "content_hash"}, "properties": map[string]any{
 		"kind": map[string]any{"enum": []string{"result_s", "insight"}}, "id": uuidValue, "version_id": uuidValue,
 		"tier": map[string]any{"enum": []string{"S", "M", "L", "XL", "XXL"}}, "content_hash": hashValue}}
@@ -501,11 +610,14 @@ func v6DirectorActionPayloadSchemas() map[string]any {
 				"name": text, "capability": text, "mission_prompt": text, "capacity_reason": text,
 				"model_config": jsonObject, "tool_config": jsonObject, "permission_config": jsonObject}},
 		"work.create.v1": map[string]any{"type": "object", "additionalProperties": false,
-			"required": []string{"kind", "assignee_agent_id", "mission", "expected_result_schema_id", "payload_schema_id", "payload", "priority", "max_attempts"}, "properties": map[string]any{
-				"kind": map[string]any{"type": "string"}, "assignee_agent_id": uuidValue, "mission": text,
-				"expected_result_schema_id": map[string]any{"type": "string"}, "payload_schema_id": map[string]any{"type": "string"}, "payload": jsonObject,
+			"required": []string{"kind", "assignee_agent_id", "mission", "expected_result_schema_id", "payload_schema_id", "payload", "priority", "max_attempts", "branch_ids"}, "properties": map[string]any{
+				"kind": map[string]any{"const": "research"}, "assignee_agent_id": uuidValue, "mission": text,
+				"expected_result_schema_id": map[string]any{"const": "atomic_result_submission"}, "payload_schema_id": map[string]any{"type": "string", "pattern": "^research\\.[A-Za-z0-9._-]+$"}, "payload": atomicWorkConfig,
 				"priority": map[string]any{"type": "number", "minimum": 0, "maximum": 1}, "max_attempts": map[string]any{"type": "integer", "minimum": 1, "maximum": 100},
-				"branch_ids": map[string]any{"type": "array", "maxItems": 128, "items": uuidValue}}},
+				"branch_ids":                map[string]any{"type": "array", "minItems": 1, "maxItems": 1, "uniqueItems": true, "items": uuidValue},
+				"direction_gate_node_count": map[string]any{"type": "integer", "minimum": 0},
+				"direction_gate_decision":   map[string]any{"enum": []string{"continue_direction"}},
+				"direction_gate_rationale":  text}},
 		"collaboration.create.v1": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"assignee_agent_id", "mission", "expected_result_schema_id", "payload_schema_id", "payload", "priority", "max_attempts"}, "properties": map[string]any{
 			"kind": map[string]any{"type": "string"}, "assignee_agent_id": uuidValue, "mission": text, "expected_result_schema_id": map[string]any{"type": "string"}, "payload_schema_id": map[string]any{"type": "string"}, "payload": jsonObject,
 			"priority": map[string]any{"type": "number", "minimum": 0, "maximum": 1}, "max_attempts": map[string]any{"type": "integer", "minimum": 1, "maximum": 100}, "branch_ids": map[string]any{"type": "array", "maxItems": 128, "items": uuidValue}}},
@@ -516,10 +628,7 @@ func v6DirectorActionPayloadSchemas() map[string]any {
 			"required": []string{"objective", "scope", "budget_share"}, "properties": map[string]any{
 				"objective": text, "scope": jsonObject, "budget_share": map[string]any{"type": "number", "minimum": 0, "maximum": 1}, "parent_branch_id": uuidValue}},
 		"report.create.v1": map[string]any{"type": "object", "additionalProperties": false,
-			"required": []string{"assignee_agent_id", "title", "inputs"}, "properties": map[string]any{
-				"assignee_agent_id": uuidValue, "title": text, "inputs": map[string]any{"type": "array", "minItems": 1, "maxItems": 1024, "items": map[string]any{
-					"type": "object", "additionalProperties": false, "required": []string{"branch_id", "node_artifact_version_id", "input_role", "content_hash"}, "properties": map[string]any{
-						"branch_id": uuidValue, "node_artifact_version_id": uuidValue, "input_role": map[string]any{"enum": []string{"branch_xxl", "branch_maximum", "unresolved_gap"}}, "content_hash": hashValue}}}}},
+			"required": []string{"title"}, "properties": map[string]any{"title": text}},
 		"target.action.v1": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"target_id"}, "properties": map[string]any{
 			"target_id": uuidValue, "assignee_agent_id": uuidValue, "mission": text, "scope": jsonObject, "reason": text}},
 		"agent.action.v1": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"agent_id"}, "properties": map[string]any{

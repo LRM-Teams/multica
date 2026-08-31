@@ -145,20 +145,48 @@ func (h *GraphMemoryIngestHook) Ingest(ctx context.Context, seg memorygraph.Segm
 		return nil
 	}
 
-	root, err := h.workspacesRoot()
-	if err != nil {
-		return err
-	}
-	// Scoped write target (spec §4/§5): channel-origin tasks resolve their
-	// target through the route registry (the server binding is
-	// authoritative); project-only tasks write the owning project's graph;
-	// unscoped tasks never create graphs (spec §2).
-	wsID := util.UUIDToString(task.WorkspaceID)
 	projectID, err := h.projectForTask(ctx, task)
 	if err != nil {
 		return err
 	}
-	channelID := util.UUIDToString(task.ChannelID)
+	return h.ingestForScope(ctx, task.WorkspaceID, projectID, util.UUIDToString(task.ChannelID),
+		util.UUIDToString(task.AgentID), util.UUIDToString(task.ID), seg)
+}
+
+// IngestChannelRun ingests a submitted graph_memory_agent_run as channel
+// conversation evidence. Agent-mode channel turns never create an
+// agent_inbox_event row (they live in graph_memory_agent_run), so the task-row
+// lookup in Ingest cannot resolve them and the graphMemoryDerivativeAgent skip
+// does not apply: the run's trajectory is the primary learning evidence (the
+// user's message), not the Memory Agent's synthesized graph output.
+func (h *GraphMemoryIngestHook) IngestChannelRun(ctx context.Context, workspaceID, channelID, agentID, runID string, seg memorygraph.SegmentExport) error {
+	if h.queries == nil {
+		return fmt.Errorf("graph memory ingest: queries not configured")
+	}
+	if seg.AgentRunID == "" {
+		return fmt.Errorf("graph memory ingest: agent_run_id required")
+	}
+	wsUUID, err := util.ParseUUID(workspaceID)
+	if err != nil {
+		return fmt.Errorf("graph memory ingest: parse workspace_id %q: %w", workspaceID, err)
+	}
+	if rt := resolveGraphMemoryType(ctx, h.queries, wsUUID, graphMemoryEnvMemoryType()); rt != "graph" {
+		return nil
+	}
+	return h.ingestForScope(ctx, wsUUID, "", channelID, agentID, runID, seg)
+}
+
+// ingestForScope is the shared write tail of Ingest/IngestChannelRun: resolve
+// the scoped write target (spec §4/§5), run the ingester, persist segment
+// meta, and update the daily node. channelID routes through the route registry
+// (the server binding is authoritative — a stale projectID never selects the
+// target); projectID is used only for channel-less project tasks.
+func (h *GraphMemoryIngestHook) ingestForScope(ctx context.Context, workspaceID pgtype.UUID, projectID, channelID, agentID, taskID string, seg memorygraph.SegmentExport) error {
+	root, err := h.workspacesRoot()
+	if err != nil {
+		return err
+	}
+	wsID := util.UUIDToString(workspaceID)
 	var route GraphRouteResolution
 	if channelID != "" {
 		if h.pool == nil {
@@ -169,10 +197,9 @@ func (h *GraphMemoryIngestHook) Ingest(ctx context.Context, seg memorygraph.Segm
 			return err
 		}
 	}
-	meta, kind, ownerID, ok := ingestScopeForTask(wsID, projectID, channelID, route,
-		util.UUIDToString(task.AgentID), util.UUIDToString(task.ID))
+	meta, kind, ownerID, ok := ingestScopeForTask(wsID, projectID, channelID, route, agentID, taskID)
 	if !ok {
-		return nil // unscoped task: no graph (spec §2)
+		return nil // unscoped: no graph (spec §2)
 	}
 	dir, err := memorygraph.EnsureScopedDir(root, wsID, kind, ownerID)
 	if err != nil {
@@ -198,7 +225,7 @@ func (h *GraphMemoryIngestHook) Ingest(ctx context.Context, seg memorygraph.Segm
 	// node of the same graph, serialized by the graph mutation lock. A
 	// daily failure never fails the ingest.
 	if h.mutations != nil {
-		updater := memorygraph.NewDailyUpdater(store, h.timezoneFor(ctx, task.WorkspaceID))
+		updater := memorygraph.NewDailyUpdater(store, h.timezoneFor(ctx, workspaceID))
 		updater.SetLocker(func(ctx context.Context, fn func() error) error {
 			return h.mutations.WithGraphLock(ctx, wsID, string(kind), ownerID, func(context.Context) error { return fn() })
 		})

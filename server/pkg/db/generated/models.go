@@ -2499,6 +2499,7 @@ type Issue struct {
 	GoalRequired             pgtype.Bool        `json:"goal_required"`
 	ExecutionRevision        int64              `json:"execution_revision"`
 	ExecutionAttemptSequence int64              `json:"execution_attempt_sequence"`
+	GoalVersionAtCreation    pgtype.Int8        `json:"goal_version_at_creation"`
 }
 
 type IssueCompletionReport struct {
@@ -4368,6 +4369,9 @@ type ResearchReport struct {
 	ReviewedByDirectorAssignmentID pgtype.UUID        `json:"reviewed_by_director_assignment_id"`
 	Outline                        []byte             `json:"outline"`
 	Citations                      []byte             `json:"citations"`
+	Maturity                       string             `json:"maturity"`
+	DirectionCoverage              []byte             `json:"direction_coverage"`
+	DesignDossier                  string             `json:"design_dossier"`
 }
 
 type ResearchReportClaim struct {
@@ -4892,6 +4896,7 @@ type ResearchTeamMembership struct {
 	LeftAt               pgtype.Timestamptz `json:"left_at"`
 	TerminalReason       string             `json:"terminal_reason"`
 	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	Role                 string             `json:"role"`
 }
 
 type ResearchV6ActivationEvidence struct {

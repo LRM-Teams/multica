@@ -77,7 +77,7 @@ export function StarGraphEdges({
       </defs>
       {relations.map((relation, index) => {
         const pathId = `${idPrefix}-edge-${index}`;
-        const path = quadraticEdgePath(relation.from, relation.to);
+        const path = quadraticEdgePath(relation.from, relation.to, relation.id);
         const labelKind = truthfulLabelKind(relation);
         const revealing = revealingRelationIds?.has(relation.id) ?? false;
         return (

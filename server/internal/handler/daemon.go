@@ -1434,7 +1434,16 @@ func (h *Handler) processHeartbeat(
 		if popErr != nil {
 			slog.Warn("model list PopPending failed", "error", popErr, "runtime_id", runtimeID)
 		} else if pendingModel != nil {
-			ack.PendingModelList = &protocol.DaemonHeartbeatPendingModelList{ID: pendingModel.ID}
+			var runtimeEnvironment map[string]string
+			if len(rt.CustomEnv) > 0 {
+				if err := json.Unmarshal(rt.CustomEnv, &runtimeEnvironment); err != nil {
+					slog.Warn("model list: failed to decode runtime custom_env", "runtime_id", runtimeID, "error", err)
+				}
+			}
+			ack.PendingModelList = &protocol.DaemonHeartbeatPendingModelList{
+				ID:          pendingModel.ID,
+				Environment: runtimeEnvironment,
+			}
 		}
 	case probeModelErr != nil:
 		if errors.Is(probeModelErr, context.DeadlineExceeded) || errors.Is(probeModelErr, context.Canceled) {

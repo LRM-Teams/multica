@@ -239,7 +239,7 @@ export function CreateDockerContainerDialog({
                 </div>
               ) : isLoading ? (
                 <Skeleton className="h-9 w-full" />
-              ) : error || dockerImagesError ? (
+              ) : error || (dockerImagesError && images.length === 0) ? (
                 <div className="flex flex-col items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 p-3">
                   <div className="text-sm font-medium text-destructive">
                     {t(($) => $.sandboxes_page.docker_images_load_failed)}

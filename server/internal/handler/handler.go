@@ -798,16 +798,6 @@ func roleAllowed(role string, roles ...string) bool {
 	return false
 }
 
-func countOwners(members []db.Member) int {
-	owners := 0
-	for _, member := range members {
-		if member.Role == "owner" {
-			owners++
-		}
-	}
-	return owners
-}
-
 func (h *Handler) getWorkspaceMember(ctx context.Context, userID, workspaceID string) (db.Member, error) {
 	userUUID, err := util.ParseUUID(userID)
 	if err != nil {

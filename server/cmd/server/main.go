@@ -431,6 +431,11 @@ func main() {
 		pool, service.LoadGraphMemoryLimits(os.Getenv), "", "", service.GraphMemoryHybridSeeder{})
 	h.GraphMemoryAgentControl = service.NewPostgresGraphMemoryAgentControlPlane(pool)
 	h.GraphMemoryAgentGateway = service.NewGraphMemoryAgentGateway(pool, memoryProviderPolicy)
+	// Submitted memory-agent runs are the conversational turns of agent-mode
+	// channels; record each as a channel-scoped interaction_dag segment so
+	// graph-memory staging receives them (the task-close seams never see
+	// these runs — they create no agent_inbox_event rows).
+	h.GraphMemoryAgentGateway.SetSubmittedRunSink(service.NewGraphMemoryRunSegmentRecorder(pool))
 	// Recall execution constructs only the provider/model selected by the
 	// same Workspace policy resolver used by the gateway and Dive worker.
 	h.GraphMemoryRecallExecutor = service.NewGraphMemoryRecallExecutor(

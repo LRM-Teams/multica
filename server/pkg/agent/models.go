@@ -3,6 +3,7 @@ package agent
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -90,6 +91,17 @@ const modelCacheTTL = 10 * time.Minute
 // executablePath lets the caller point at a non-default binary; pass
 // "" to use the provider's default name on PATH.
 func ListModels(ctx context.Context, providerType, executablePath string) ([]Model, error) {
+	return listModels(ctx, providerType, executablePath, nil)
+}
+
+// ListModelsWithEnvironment discovers models using the supplied runtime
+// environment. The environment is layered over the daemon environment for
+// providers whose CLI needs credentials during discovery.
+func ListModelsWithEnvironment(ctx context.Context, providerType, executablePath string, environment map[string]string) ([]Model, error) {
+	return listModels(ctx, providerType, executablePath, environment)
+}
+
+func listModels(ctx context.Context, providerType, executablePath string, environment map[string]string) ([]Model, error) {
 	switch providerType {
 	case "claude":
 		return claudeStaticModels(), nil
@@ -105,8 +117,8 @@ func ListModels(ctx context.Context, providerType, executablePath string) ([]Mod
 			return discoverGrokModels(ctx, executablePath)
 		})
 	case "cursor":
-		return cachedDiscovery(providerType, func() ([]Model, error) {
-			return discoverCursorModels(ctx, executablePath)
+		return cachedDiscovery(discoveryCacheKeyWithEnvironment(providerType, executablePath, environment), func() ([]Model, error) {
+			return discoverCursorModels(ctx, executablePath, environment)
 		})
 	case "kiro":
 		return cachedDiscovery(providerType, func() ([]Model, error) {
@@ -186,6 +198,50 @@ func discoveryCacheKey(providerType, executablePath string) string {
 		return providerType
 	}
 	return providerType + ":" + executablePath
+}
+
+func discoveryCacheKeyWithEnvironment(providerType, executablePath string, environment map[string]string) string {
+	key := discoveryCacheKey(providerType, executablePath)
+	if len(environment) == 0 {
+		return key
+	}
+	keys := make([]string, 0, len(environment))
+	for name := range environment {
+		keys = append(keys, name)
+	}
+	sort.Strings(keys)
+	h := sha256.New()
+	for _, name := range keys {
+		fmt.Fprintf(h, "%s=%s\x00", name, environment[name])
+	}
+	return fmt.Sprintf("%s:env-%x", key, h.Sum(nil))
+}
+
+func commandEnvironment(overrides map[string]string) []string {
+	if len(overrides) == 0 {
+		return nil
+	}
+	env := os.Environ()
+	remaining := make(map[string]string, len(overrides))
+	for name, value := range overrides {
+		remaining[name] = value
+	}
+	for i, entry := range env {
+		name, _, ok := strings.Cut(entry, "=")
+		if value, exists := remaining[name]; ok && exists {
+			env[i] = name + "=" + value
+			delete(remaining, name)
+		}
+	}
+	keys := make([]string, 0, len(remaining))
+	for name := range remaining {
+		keys = append(keys, name)
+	}
+	sort.Strings(keys)
+	for _, name := range keys {
+		env = append(env, name+"="+remaining[name])
+	}
+	return env
 }
 
 // ── Static catalogs ──
@@ -1055,15 +1111,15 @@ func acpModelLabel(name, modelID string) string {
 	return label
 }
 
-// discoverCursorModels runs `cursor-agent --list-models` and parses
+// discoverCursorModels runs Cursor Agent's `agent --list-models` command and parses
 // the `id - Label` rows. Cursor's catalog changes often and ships
 // many variants of the same base model (thinking / fast / max
 // suffixes) — static baking would be obsolete within weeks. On any
 // failure we fall back to the minimal static catalog so the UI
 // stays usable when cursor-agent isn't installed on the daemon host.
-func discoverCursorModels(ctx context.Context, executablePath string) ([]Model, error) {
+func discoverCursorModels(ctx context.Context, executablePath string, environment map[string]string) ([]Model, error) {
 	if executablePath == "" {
-		executablePath = "cursor-agent"
+		executablePath = "agent"
 	}
 	if _, err := exec.LookPath(executablePath); err != nil {
 		return cursorStaticModels(), nil
@@ -1074,6 +1130,7 @@ func discoverCursorModels(ctx context.Context, executablePath string) ([]Model, 
 	runCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(runCtx, executablePath, "--list-models")
+	cmd.Env = commandEnvironment(environment)
 	hideAgentWindow(cmd)
 	out, err := cmd.Output()
 	if err != nil && len(out) == 0 {
@@ -1169,4 +1226,3 @@ func isCatalogModelID(s string) bool {
 	}
 	return true
 }
-

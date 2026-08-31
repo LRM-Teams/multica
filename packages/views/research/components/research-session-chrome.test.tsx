@@ -250,7 +250,7 @@ describe("ResearchSessionChrome", () => {
     expect(screen.getByText("View delivery")).toBeTruthy();
   });
 
-  it("narrow folds delivery into tools so primary is not crowded", () => {
+  it("keeps the delivery button visible on a narrow viewport", () => {
     mobileState.isMobile = true;
     const onOpenDelivery = vi.fn();
     renderChrome(makeSession({ status: "awaiting_user_confirm" }), {
@@ -258,8 +258,8 @@ describe("ResearchSessionChrome", () => {
       onReject: () => {},
     });
     expect(screen.getByTestId("research-session-primary")).toBeTruthy();
-    expect(screen.queryByTestId("research-session-delivery")).toBeNull();
-    expect(screen.getByText("View delivery")).toBeTruthy();
+    expect(screen.getByTestId("research-session-delivery")).toBeTruthy();
+    expect(screen.queryByTestId("research-session-tools")).toBeNull();
     fireEvent.click(screen.getByText("View delivery"));
     expect(onOpenDelivery).toHaveBeenCalledTimes(1);
   });

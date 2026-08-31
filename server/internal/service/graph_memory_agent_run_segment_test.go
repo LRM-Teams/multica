@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -212,7 +213,7 @@ func TestGraphMemoryRunSegment_SubmittedRunFeedsStaging(t *testing.T) {
 	recorder.RecordSubmittedRun(ctx, call.runID, f.wsID, call.channelID, call.consumedSeq)
 
 	queries := db.New(pool)
-	seg, err := queries.GetInteractionDAGSegmentByAgentRun(ctx, f.runID)
+	seg, err := queries.GetInteractionDAGSegmentByAgentRun(ctx, pgtype.UUID{Bytes: uuid.MustParse(f.runID), Valid: true})
 	require.NoError(t, err, "submitted run records an interaction_dag segment")
 	assert.Equal(t, "channel:"+f.channelID, seg.ProjectID)
 	assert.Equal(t, "memory_agent_run", seg.TrajectorySource)
@@ -245,7 +246,7 @@ func TestGraphMemoryRunSegment_SubmittedRunFeedsStaging(t *testing.T) {
 	require.NoError(t, store.Finish(ctx, f.run2ID, 1, "checkpointed", 9, []byte(`{}`), nil))
 	time.Sleep(200 * time.Millisecond)
 	assert.Equal(t, 1, sink.count(), "checkpointed run does not notify the sink")
-	_, err = queries.GetInteractionDAGSegmentByAgentRun(ctx, f.run2ID)
+	_, err = queries.GetInteractionDAGSegmentByAgentRun(ctx, pgtype.UUID{Bytes: uuid.MustParse(f.run2ID), Valid: true})
 	assert.Error(t, err, "checkpointed run records no segment")
 }
 
@@ -261,7 +262,7 @@ func TestGraphMemoryRunSegment_LegacyWorkspaceNoop(t *testing.T) {
 	recorder.RecordSubmittedRun(ctx, f.runID, f.wsID, f.channelID, 9)
 
 	queries := db.New(pool)
-	_, err := queries.GetInteractionDAGSegmentByAgentRun(ctx, f.runID)
+	_, err := queries.GetInteractionDAGSegmentByAgentRun(ctx, pgtype.UUID{Bytes: uuid.MustParse(f.runID), Valid: true})
 	assert.Error(t, err, "legacy workspace records no segment")
 }
 

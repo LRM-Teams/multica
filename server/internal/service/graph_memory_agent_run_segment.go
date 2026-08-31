@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"strconv"
@@ -217,6 +218,10 @@ func channelRunTrajectory(content string) json.RawMessage {
 // graph_memory_agent_run. Unlike RecordLocalSegmentForEvent the trajectory is
 // supplied by the caller (the run's channel evidence), not read from
 // task_messages. Idempotent on the deterministic segment id multica:<runID>.
+// Under the canonical 454 schema the retained writer requires a task-owned
+// segment, so non-task memory-agent runs fail closed inside this method; the
+// sink contract is best-effort and a canonical representation for these runs
+// is pending a plan decision.
 func (s *InteractionDAGService) RecordMemoryAgentRunSegment(
 	ctx context.Context,
 	scope, agentRunID string,
@@ -229,6 +234,10 @@ func (s *InteractionDAGService) RecordMemoryAgentRunSegment(
 	if scope == "" || agentRunID == "" {
 		return errors.New("interaction_dag: RecordMemoryAgentRunSegment requires scope and agent_run_id")
 	}
+	agentRunUUID, err := util.ParseUUID(agentRunID)
+	if err != nil {
+		return fmt.Errorf("interaction_dag: RecordMemoryAgentRunSegment agent_run_id: %w", err)
+	}
 	sessionID := "multica:" + agentRunID
 	if err := s.store.UpsertInteractionDAGSessionRun(ctx, db.UpsertInteractionDAGSessionRunParams{
 		SessionID:  sessionID,
@@ -238,10 +247,10 @@ func (s *InteractionDAGService) RecordMemoryAgentRunSegment(
 		return err
 	}
 	sandboxIDs, issueSnapshotID, envState := encodeEnvSnapshot(nil)
-	return s.store.InsertInteractionDAGSegmentWithSnapshot(ctx, db.InsertInteractionDAGSegmentWithSnapshotParams{
+	_, err = s.store.InsertInteractionDAGSegmentWithSnapshot(ctx, db.InsertInteractionDAGSegmentWithSnapshotParams{
 		SegmentID:        sessionID,
 		ProjectID:        scope,
-		AgentRunID:       agentRunID,
+		AgentRunID:       agentRunUUID,
 		TrajectoryID:     pgtype.Int8{},
 		TensorRef:        nil,
 		ClosingEvent:     pgText(""),
@@ -254,6 +263,7 @@ func (s *InteractionDAGService) RecordMemoryAgentRunSegment(
 		IssueSnapshotID:  issueSnapshotID,
 		EnvState:         envState,
 	})
+	return err
 }
 
 // clampInt32 narrows a channel message seq for the segment's seq columns;

@@ -185,12 +185,13 @@ func (h *Handler) RevokeProblemEvolutionSecret(w http.ResponseWriter, r *http.Re
 	revoked, err := h.Queries.RevokeProblemEvolutionSecret(r.Context(), db.RevokeProblemEvolutionSecretParams{
 		ID:          secretID,
 		WorkspaceID: run.WorkspaceID,
+		RunID:       run.ID,
 	})
 	if err != nil {
 		writeError(w, http.StatusNotFound, "secret not found or already revoked")
 		return
 	}
-	if _, err := h.Queries.RevokeProblemEvolutionSecretCapabilitiesForRun(r.Context(), run.ID); err != nil {
+	if _, err := h.Queries.RevokeProblemEvolutionSecretCapabilities(r.Context(), revoked.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to revoke capabilities")
 		return
 	}
@@ -223,6 +224,7 @@ func (h *Handler) IssueProblemEvolutionCapability(w http.ResponseWriter, r *http
 	secret, err := h.Queries.GetProblemEvolutionSecret(r.Context(), db.GetProblemEvolutionSecretParams{
 		ID:          secretID,
 		WorkspaceID: run.WorkspaceID,
+		RunID:       run.ID,
 	})
 	if err != nil {
 		writeError(w, http.StatusNotFound, "secret not found")
@@ -329,6 +331,7 @@ func (h *Handler) RedeemProblemEvolutionCapability(w http.ResponseWriter, r *htt
 	secret, err := h.Queries.GetProblemEvolutionSecret(r.Context(), db.GetProblemEvolutionSecretParams{
 		ID:          row.SecretID,
 		WorkspaceID: row.WorkspaceID,
+		RunID:       row.RunID,
 	})
 	if err != nil {
 		h.denyProblemEvolutionCapability(r.Context(), row, problemevolution.DenyReasonSecretRevoked)

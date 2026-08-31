@@ -165,7 +165,9 @@ SET status = 'failed',
     claim_token = NULL,
     finished_at = now(),
     updated_at = now()
-WHERE id = @id AND workspace_id = @workspace_id
+WHERE id = @id
+  AND workspace_id = @workspace_id
+  AND claim_token = @claim_token
 RETURNING *;
 
 -- name: CancelProblemEvolutionRun :one
@@ -175,7 +177,10 @@ SET status = 'cancelled',
     claim_token = NULL,
     finished_at = now(),
     updated_at = now()
-WHERE id = @id AND workspace_id = @workspace_id AND status = 'stopping'
+WHERE id = @id
+  AND workspace_id = @workspace_id
+  AND claim_token = @claim_token
+  AND status = 'stopping'
 RETURNING *;
 
 -- name: ReleaseProblemEvolutionRun :one
@@ -320,6 +325,13 @@ SELECT
     @payload
 ON CONFLICT (run_id, client_event_id) DO NOTHING
 RETURNING *;
+
+-- name: LockClaimedProblemEvolutionRun :one
+-- Event persistence updates several projections. Serializing them per run keeps
+-- sequence allocation and idempotency checks in the same critical section.
+SELECT id FROM problem_evolution_run
+WHERE id = @id AND claim_token = @claim_token
+FOR UPDATE;
 
 -- name: GetProblemEvolutionEventByClientID :one
 SELECT * FROM problem_evolution_event
@@ -551,6 +563,8 @@ SET blind_candidate_id = @blind_candidate_id,
     overfit_gap = @overfit_gap,
     updated_at = now()
 WHERE id = @id
+  AND claim_token = @claim_token
+  AND blind_score IS NULL
 RETURNING *;
 
 -- name: ListProblemEvolutionEliteCandidates :many

@@ -1,9 +1,11 @@
 package daemon
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/multica-ai/multica/server/internal/problemevolution"
@@ -101,5 +103,55 @@ func TestProblemEvolutionEnvExcludesPlatformCredentials(t *testing.T) {
 		if entry == "MULTICA_DAEMON_TOKEN=secret-token" || entry == "MULTICA_API_KEY=secret-key" {
 			t.Fatalf("credential leaked into the evolver environment: %q", entry)
 		}
+	}
+}
+
+func TestProblemEvolutionEnvForwardsOnlyExplicitProviderCredentials(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "provider-secret")
+	t.Setenv("MULTICA_API_KEY", "platform-secret")
+	env := problemEvolutionEnvWithForwarded("/tmp/workdir", []string{
+		"OPENAI_API_KEY", "MULTICA_API_KEY", "invalid-name",
+	})
+	if !containsEnvEntry(env, "OPENAI_API_KEY=provider-secret") {
+		t.Fatal("expected explicitly allowed provider credential")
+	}
+	if containsEnvEntry(env, "MULTICA_API_KEY=platform-secret") {
+		t.Fatal("platform credential must never be forwarded")
+	}
+	if containsEnvEntry(env, "invalid-name="+os.Getenv("invalid-name")) {
+		t.Fatal("invalid environment name must not be forwarded")
+	}
+}
+
+func TestSplitEvolverEnv(t *testing.T) {
+	got := splitEvolverEnv(" OPENAI_API_KEY, ANTHROPIC_API_KEY, MULTICA_API_KEY, bad-name ")
+	want := []string{"OPENAI_API_KEY", "ANTHROPIC_API_KEY"}
+	if len(got) != len(want) {
+		t.Fatalf("env names = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("env names = %v, want %v", got, want)
+		}
+	}
+}
+
+func containsEnvEntry(env []string, wanted string) bool {
+	for _, entry := range env {
+		if entry == wanted {
+			return true
+		}
+	}
+	return false
+}
+
+func TestForwardProblemEvolutionEventsRejectsOversizedOutput(t *testing.T) {
+	d := &Daemon{}
+	oversized := strings.NewReader(strings.Repeat("x", problemevolution.MaxEventLineBytes+1))
+	err := d.forwardProblemEvolutionEvents(
+		context.Background(), Runtime{}, problemEvolutionClaim{}, oversized, nil,
+	)
+	if err == nil {
+		t.Fatal("expected oversized evolver output to fail event forwarding")
 	}
 }

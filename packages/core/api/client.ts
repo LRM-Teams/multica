@@ -5807,6 +5807,24 @@ export class ApiClient {
     return parsed.data;
   }
 
+  async proposeProblemEvolutionEvaluator(
+    runId: string,
+  ): Promise<import("../problem-evolution/schemas").ProblemEvolutionEvaluatorContract> {
+    const { ProblemEvolutionEvaluatorContractSchema } = await import(
+      "../problem-evolution/schemas"
+    );
+    const raw = await this.fetch(`/api/problem-evolution/runs/${runId}/evaluator/propose`, {
+      method: "POST",
+    });
+    const parsed = ProblemEvolutionEvaluatorContractSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw new Error(
+        "POST /api/problem-evolution/runs/:id/evaluator/propose failed schema validation",
+      );
+    }
+    return parsed.data;
+  }
+
   async freezeProblemEvolutionEvaluator(
     runId: string,
   ): Promise<import("../problem-evolution/schemas").ProblemEvolutionEvaluatorContract> {

@@ -14,6 +14,7 @@
     "title": "新建解题运行",
     "mode": "运行模式",
     "modeSolution": "模式 A：答案进化",
+    "modeRewardOnly": "模式 B：按题生成 JIT Harness",
     "modePersistent": "模式 C：持久 Harness 工程化",
     "runTitle": "标题",
     "runTitlePlaceholder": "给这次运行起个短名字",
@@ -35,6 +36,7 @@
   },
   "detail": {
     "back": "返回运行列表",
+    "proposeEvaluator": "创建评分契约",
     "freezeEvaluator": "冻结评分契约",
     "start": "开始",
     "stop": "停止",
@@ -71,6 +73,7 @@
   },
   "errors": {
     "createFailed": "创建运行失败",
+    "proposeFailed": "创建评分契约失败",
     "freezeFailed": "冻结评分契约失败",
     "startFailed": "开始运行失败",
     "stopFailed": "停止运行失败",

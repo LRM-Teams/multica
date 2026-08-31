@@ -10,7 +10,10 @@ RETURNING *;
 
 -- name: GetProblemEvolutionSecret :one
 SELECT * FROM problem_evolution_secret
-WHERE id = @id AND workspace_id = @workspace_id;
+WHERE id = @id
+  AND workspace_id = @workspace_id
+  AND run_id = @run_id
+  AND revoked_at IS NULL;
 
 -- name: ListProblemEvolutionSecretsByRun :many
 -- Metadata only: the ciphertext columns are excluded so a listing endpoint
@@ -24,17 +27,24 @@ ORDER BY created_at DESC;
 -- name: RevokeProblemEvolutionSecret :one
 UPDATE problem_evolution_secret
 SET revoked_at = now(), updated_at = now()
-WHERE id = @id AND workspace_id = @workspace_id AND revoked_at IS NULL
+WHERE id = @id
+  AND workspace_id = @workspace_id
+  AND run_id = @run_id
+  AND revoked_at IS NULL
 RETURNING *;
 
 -- name: CreateProblemEvolutionSecretCapability :one
 INSERT INTO problem_evolution_secret_capability (
     secret_id, run_id, workspace_id, token_hash, audience, max_uses,
     expires_at, issued_to
-) VALUES (
+) SELECT
     @secret_id, @run_id, @workspace_id, @token_hash, @audience, @max_uses,
     @expires_at, @issued_to
-)
+FROM problem_evolution_secret
+WHERE id = @secret_id
+  AND run_id = @run_id
+  AND workspace_id = @workspace_id
+  AND revoked_at IS NULL
 RETURNING *;
 
 -- name: GetProblemEvolutionSecretCapabilityByTokenHash :one
@@ -49,12 +59,15 @@ WHERE capability.token_hash = @token_hash;
 -- The use counter is incremented in the same statement that checks it, so two
 -- concurrent redemptions cannot both pass a single-use capability.
 UPDATE problem_evolution_secret_capability
-SET uses = uses + 1
-WHERE token_hash = @token_hash
-  AND revoked_at IS NULL
-  AND expires_at > now()
-  AND uses < max_uses
-RETURNING *;
+SET uses = problem_evolution_secret_capability.uses + 1
+FROM problem_evolution_secret secret
+WHERE problem_evolution_secret_capability.token_hash = @token_hash
+  AND problem_evolution_secret_capability.revoked_at IS NULL
+  AND problem_evolution_secret_capability.expires_at > now()
+  AND problem_evolution_secret_capability.uses < problem_evolution_secret_capability.max_uses
+  AND secret.id = problem_evolution_secret_capability.secret_id
+  AND secret.revoked_at IS NULL
+RETURNING problem_evolution_secret_capability.*;
 
 -- name: RevokeProblemEvolutionSecretCapability :one
 UPDATE problem_evolution_secret_capability
@@ -62,10 +75,10 @@ SET revoked_at = now()
 WHERE id = @id AND workspace_id = @workspace_id AND revoked_at IS NULL
 RETURNING *;
 
--- name: RevokeProblemEvolutionSecretCapabilitiesForRun :execrows
+-- name: RevokeProblemEvolutionSecretCapabilities :execrows
 UPDATE problem_evolution_secret_capability
 SET revoked_at = now()
-WHERE run_id = @run_id AND revoked_at IS NULL;
+WHERE secret_id = @secret_id AND revoked_at IS NULL;
 
 -- name: ListProblemEvolutionSecretCapabilities :many
 SELECT * FROM problem_evolution_secret_capability

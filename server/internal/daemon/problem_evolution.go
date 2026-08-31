@@ -114,7 +114,7 @@ func (d *Daemon) runProblemEvolutionBatch(ctx context.Context, rt Runtime, claim
 	// The evolver runs with a scrubbed environment: no Multica token, no
 	// hidden-answer material, no secret capability. Scoring happens through the
 	// evaluator command declared in input.json.
-	cmd.Env = problemEvolutionEnv(workdir)
+	cmd.Env = problemEvolutionEnvWithForwarded(workdir, d.cfg.ProblemEvolutionEvolverEnv)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		d.failProblemEvolutionRun(ctx, rt, claim, "evolver_stdout_unavailable")
@@ -144,12 +144,17 @@ func (d *Daemon) runProblemEvolutionBatch(ctx context.Context, rt Runtime, claim
 	go d.problemEvolutionHeartbeatLoop(heartbeatCtx, rt, claim, stopRequested, cmd)
 
 	forwardErr := d.forwardProblemEvolutionEvents(runCtx, rt, claim, stdout, cmd)
+	if forwardErr != nil {
+		d.terminateProblemEvolutionProcess(cmd)
+	}
 	waitErr := cmd.Wait()
 	stopHeartbeat()
 	<-stderrDone
 
 	if forwardErr != nil {
 		d.logger.Warn("problem evolution event forwarding failed", "run_id", claim.Run.ID, "error", forwardErr)
+		d.failProblemEvolutionRun(ctx, rt, claim, "event_forwarding_failed")
+		return
 	}
 	d.settleProblemEvolutionBatch(ctx, rt, claim, waitErr)
 }
@@ -235,9 +240,7 @@ func (d *Daemon) forwardProblemEvolutionEvents(ctx context.Context, rt Runtime, 
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		// A line over the cap is reported as a bounded progress note rather
-		// than parsed, so an oversized artifact dump cannot stall the run.
-		d.logger.Warn("problem evolution stdout scan failed", "run_id", claim.Run.ID, "error", err)
+		return fmt.Errorf("scan evolver output: %w", err)
 	}
 	return flush()
 }
@@ -313,6 +316,10 @@ func (d *Daemon) prepareProblemEvolutionWorkdir(claim problemEvolutionClaim) (st
 
 // problemEvolutionEnv builds the scrubbed environment for the child process.
 func problemEvolutionEnv(workdir string) []string {
+	return problemEvolutionEnvWithForwarded(workdir, nil)
+}
+
+func problemEvolutionEnvWithForwarded(workdir string, forwarded []string) []string {
 	env := []string{
 		"PATH=" + os.Getenv("PATH"),
 		"HOME=" + os.Getenv("HOME"),
@@ -321,6 +328,14 @@ func problemEvolutionEnv(workdir string) []string {
 	}
 	if lang := os.Getenv("LANG"); lang != "" {
 		env = append(env, "LANG="+lang)
+	}
+	for _, name := range forwarded {
+		if name == "" || strings.HasPrefix(name, "MULTICA_") {
+			continue
+		}
+		if value, ok := os.LookupEnv(name); ok {
+			env = append(env, name+"="+value)
+		}
 	}
 	return env
 }
@@ -355,6 +370,28 @@ func splitEvolverArgs(raw string) []string {
 		return nil
 	}
 	return fields
+}
+
+func splitEvolverEnv(raw string) []string {
+	var names []string
+	for _, field := range strings.Split(raw, ",") {
+		name := strings.TrimSpace(field)
+		if name == "" || strings.HasPrefix(name, "MULTICA_") {
+			continue
+		}
+		valid := true
+		for index, char := range name {
+			if (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9' && index > 0) || char == '_' {
+				continue
+			}
+			valid = false
+			break
+		}
+		if valid {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 func (d *Daemon) beginProblemEvolutionRun(runtimeID string) bool {

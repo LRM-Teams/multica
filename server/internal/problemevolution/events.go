@@ -69,6 +69,12 @@ func AllowedEventTypes() []string {
 		EventHarnessProposed,
 		EventProgress,
 		EventBatchFinished,
+		EventIterationStarted,
+		EventTaskResult,
+		EventAnalysisReady,
+		EventChangeProposed,
+		EventHarnessVersionReady,
+		EventIterationFinished,
 	}
 }
 

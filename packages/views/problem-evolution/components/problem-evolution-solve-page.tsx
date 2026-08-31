@@ -118,6 +118,9 @@ export function ProblemEvolutionSolvePage({
               onChange={(event) => setMode(event.target.value)}
             >
               <option value="solution">{t(($) => $.create.modeSolution)}</option>
+              <option value="task_harness_reward_only">
+                {t(($) => $.create.modeRewardOnly)}
+              </option>
               <option value="task_harness_persistent">
                 {t(($) => $.create.modePersistent)}
               </option>

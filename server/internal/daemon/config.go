@@ -117,6 +117,10 @@ type Config struct {
 	// ProblemEvolutionEvolverArgs are extra leading arguments passed before
 	// --input / --workdir (e.g. a python module invocation).
 	ProblemEvolutionEvolverArgs []string
+	// ProblemEvolutionEvolverEnv is an explicit allowlist of model-provider
+	// environment variable names forwarded to the external evolver. Multica
+	// credentials and internal MULTICA_* variables are never forwarded.
+	ProblemEvolutionEvolverEnv []string
 	// ProblemEvolutionBatchTimeout bounds one evolver invocation.
 	ProblemEvolutionBatchTimeout time.Duration
 	// ProblemEvolutionGracefulDrain is the SIGTERM → SIGKILL window.
@@ -531,6 +535,7 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		MemoryCurationRunTimeout:       memoryCurationRunTimeout,
 		ProblemEvolutionEvolverPath:    strings.TrimSpace(os.Getenv("MULTICA_DAEMON_PROBLEM_EVOLUTION_EVOLVER")),
 		ProblemEvolutionEvolverArgs:    splitEvolverArgs(os.Getenv("MULTICA_DAEMON_PROBLEM_EVOLUTION_EVOLVER_ARGS")),
+		ProblemEvolutionEvolverEnv:     splitEvolverEnv(os.Getenv("MULTICA_DAEMON_PROBLEM_EVOLUTION_EVOLVER_ENV")),
 		ProblemEvolutionBatchTimeout:   problemEvolutionBatchTimeout,
 		ProblemEvolutionGracefulDrain:  problemEvolutionGracefulDrain,
 		ProblemEvolutionClaimInterval:  problemEvolutionClaimInterval,

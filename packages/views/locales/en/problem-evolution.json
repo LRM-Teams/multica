@@ -14,6 +14,7 @@
     "title": "New solve run",
     "mode": "Run mode",
     "modeSolution": "Mode A: solution evolution",
+    "modeRewardOnly": "Mode B: per-problem JIT harness",
     "modePersistent": "Mode C: persistent harness engineering",
     "runTitle": "Title",
     "runTitlePlaceholder": "Short name for this run",
@@ -35,6 +36,7 @@
   },
   "detail": {
     "back": "Back to runs",
+    "proposeEvaluator": "Create scoring contract",
     "freezeEvaluator": "Freeze scoring contract",
     "start": "Start",
     "stop": "Stop",
@@ -71,6 +73,7 @@
   },
   "errors": {
     "createFailed": "Failed to create run",
+    "proposeFailed": "Failed to create the scoring contract",
     "freezeFailed": "Failed to freeze the scoring contract",
     "startFailed": "Failed to start the run",
     "stopFailed": "Failed to stop the run",

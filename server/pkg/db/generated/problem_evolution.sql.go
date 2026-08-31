@@ -144,17 +144,21 @@ SET status = 'cancelled',
     claim_token = NULL,
     finished_at = now(),
     updated_at = now()
-WHERE id = $1 AND workspace_id = $2 AND status = 'stopping'
+WHERE id = $1
+  AND workspace_id = $2
+  AND claim_token = $3
+  AND status = 'stopping'
 RETURNING id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count, task_set_id
 `
 
 type CancelProblemEvolutionRunParams struct {
 	ID          pgtype.UUID `json:"id"`
 	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ClaimToken  pgtype.UUID `json:"claim_token"`
 }
 
 func (q *Queries) CancelProblemEvolutionRun(ctx context.Context, arg CancelProblemEvolutionRunParams) (ProblemEvolutionRun, error) {
-	row := q.db.QueryRow(ctx, cancelProblemEvolutionRun, arg.ID, arg.WorkspaceID)
+	row := q.db.QueryRow(ctx, cancelProblemEvolutionRun, arg.ID, arg.WorkspaceID, arg.ClaimToken)
 	var i ProblemEvolutionRun
 	err := row.Scan(
 		&i.ID,
@@ -589,7 +593,9 @@ SET status = 'failed',
     claim_token = NULL,
     finished_at = now(),
     updated_at = now()
-WHERE id = $2 AND workspace_id = $3
+WHERE id = $2
+  AND workspace_id = $3
+  AND claim_token = $4
 RETURNING id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count, task_set_id
 `
 
@@ -597,10 +603,16 @@ type FailProblemEvolutionRunParams struct {
 	FailureReason string      `json:"failure_reason"`
 	ID            pgtype.UUID `json:"id"`
 	WorkspaceID   pgtype.UUID `json:"workspace_id"`
+	ClaimToken    pgtype.UUID `json:"claim_token"`
 }
 
 func (q *Queries) FailProblemEvolutionRun(ctx context.Context, arg FailProblemEvolutionRunParams) (ProblemEvolutionRun, error) {
-	row := q.db.QueryRow(ctx, failProblemEvolutionRun, arg.FailureReason, arg.ID, arg.WorkspaceID)
+	row := q.db.QueryRow(ctx, failProblemEvolutionRun,
+		arg.FailureReason,
+		arg.ID,
+		arg.WorkspaceID,
+		arg.ClaimToken,
+	)
 	var i ProblemEvolutionRun
 	err := row.Scan(
 		&i.ID,
@@ -1856,6 +1868,26 @@ func (q *Queries) ListStopRequestedProblemEvolutionRuns(ctx context.Context, arg
 	return items, nil
 }
 
+const lockClaimedProblemEvolutionRun = `-- name: LockClaimedProblemEvolutionRun :one
+SELECT id FROM problem_evolution_run
+WHERE id = $1 AND claim_token = $2
+FOR UPDATE
+`
+
+type LockClaimedProblemEvolutionRunParams struct {
+	ID         pgtype.UUID `json:"id"`
+	ClaimToken pgtype.UUID `json:"claim_token"`
+}
+
+// Event persistence updates several projections. Serializing them per run keeps
+// sequence allocation and idempotency checks in the same critical section.
+func (q *Queries) LockClaimedProblemEvolutionRun(ctx context.Context, arg LockClaimedProblemEvolutionRunParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, lockClaimedProblemEvolutionRun, arg.ID, arg.ClaimToken)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
 const markProblemEvolutionEvaluatorContractInvalid = `-- name: MarkProblemEvolutionEvaluatorContractInvalid :one
 UPDATE problem_evolution_evaluator_contract
 SET status = 'invalid', updated_at = now()
@@ -2525,6 +2557,8 @@ SET blind_candidate_id = $1,
     overfit_gap = $3,
     updated_at = now()
 WHERE id = $4
+  AND claim_token = $5
+  AND blind_score IS NULL
 RETURNING id, workspace_id, created_by, mode, title, problem_spec, artifact_type, status, stage, runtime_id, model_config, budget_config, stop_config, evaluator_contract_id, evaluator_content_hash, evolver_version, best_candidate_id, final_candidate_id, graph_version, claimed_runtime_id, claim_token, claimed_at, heartbeat_at, stop_requested_at, stop_reason, failure_reason, started_at, finished_at, created_at, updated_at, generation, candidate_count, rounds_without_gain, best_score, total_cost, harness_proposals, harness_execute_count, benchmark_mode, winner_harness_id, search_seed, blind_seed, blind_candidate_id, blind_score, overfit_gap, model_call_count, task_set_id
 `
 
@@ -2533,6 +2567,7 @@ type SetProblemEvolutionRunBlindResultParams struct {
 	BlindScore       pgtype.Float8 `json:"blind_score"`
 	OverfitGap       pgtype.Float8 `json:"overfit_gap"`
 	ID               pgtype.UUID   `json:"id"`
+	ClaimToken       pgtype.UUID   `json:"claim_token"`
 }
 
 func (q *Queries) SetProblemEvolutionRunBlindResult(ctx context.Context, arg SetProblemEvolutionRunBlindResultParams) (ProblemEvolutionRun, error) {
@@ -2541,6 +2576,7 @@ func (q *Queries) SetProblemEvolutionRunBlindResult(ctx context.Context, arg Set
 		arg.BlindScore,
 		arg.OverfitGap,
 		arg.ID,
+		arg.ClaimToken,
 	)
 	var i ProblemEvolutionRun
 	err := row.Scan(

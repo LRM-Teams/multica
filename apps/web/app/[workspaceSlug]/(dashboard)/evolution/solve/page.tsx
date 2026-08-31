@@ -14,7 +14,7 @@ export default function ProblemEvolutionSolveRoute() {
   const paths = useWorkspacePaths();
   return (
     <ProblemEvolutionSolvePage
-      onOpenRun={(runId) => router.push(paths.evolutionSolveRun(runId))}
+      onOpenRun={(runId: string) => router.push(paths.evolutionSolveRun(runId))}
     />
   );
 }

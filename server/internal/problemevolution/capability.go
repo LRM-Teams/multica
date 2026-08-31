@@ -89,7 +89,7 @@ func CheckCapability(state CapabilityState, requestedRunID string, now time.Time
 	if state.MaxUses > 0 && state.Uses >= state.MaxUses {
 		return denial(DenyReasonExhausted)
 	}
-	if requestedRunID != "" && state.RunID != "" && state.RunID != requestedRunID {
+	if strings.TrimSpace(requestedRunID) == "" || state.RunID == "" || state.RunID != requestedRunID {
 		return denial(DenyReasonRunMismatch)
 	}
 	return nil

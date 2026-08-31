@@ -13,12 +13,15 @@ import (
 
 const consumeProblemEvolutionSecretCapability = `-- name: ConsumeProblemEvolutionSecretCapability :one
 UPDATE problem_evolution_secret_capability
-SET uses = uses + 1
-WHERE token_hash = $1
-  AND revoked_at IS NULL
-  AND expires_at > now()
-  AND uses < max_uses
-RETURNING id, secret_id, run_id, workspace_id, token_hash, audience, max_uses, uses, expires_at, revoked_at, issued_to, created_at
+SET uses = problem_evolution_secret_capability.uses + 1
+FROM problem_evolution_secret secret
+WHERE problem_evolution_secret_capability.token_hash = $1
+  AND problem_evolution_secret_capability.revoked_at IS NULL
+  AND problem_evolution_secret_capability.expires_at > now()
+  AND problem_evolution_secret_capability.uses < problem_evolution_secret_capability.max_uses
+  AND secret.id = problem_evolution_secret_capability.secret_id
+  AND secret.revoked_at IS NULL
+RETURNING problem_evolution_secret_capability.id, problem_evolution_secret_capability.secret_id, problem_evolution_secret_capability.run_id, problem_evolution_secret_capability.workspace_id, problem_evolution_secret_capability.token_hash, problem_evolution_secret_capability.audience, problem_evolution_secret_capability.max_uses, problem_evolution_secret_capability.uses, problem_evolution_secret_capability.expires_at, problem_evolution_secret_capability.revoked_at, problem_evolution_secret_capability.issued_to, problem_evolution_secret_capability.created_at
 `
 
 // The use counter is incremented in the same statement that checks it, so two
@@ -119,10 +122,14 @@ const createProblemEvolutionSecretCapability = `-- name: CreateProblemEvolutionS
 INSERT INTO problem_evolution_secret_capability (
     secret_id, run_id, workspace_id, token_hash, audience, max_uses,
     expires_at, issued_to
-) VALUES (
+) SELECT
     $1, $2, $3, $4, $5, $6,
     $7, $8
-)
+FROM problem_evolution_secret
+WHERE id = $1
+  AND run_id = $2
+  AND workspace_id = $3
+  AND revoked_at IS NULL
 RETURNING id, secret_id, run_id, workspace_id, token_hash, audience, max_uses, uses, expires_at, revoked_at, issued_to, created_at
 `
 
@@ -168,16 +175,20 @@ func (q *Queries) CreateProblemEvolutionSecretCapability(ctx context.Context, ar
 
 const getProblemEvolutionSecret = `-- name: GetProblemEvolutionSecret :one
 SELECT id, workspace_id, run_id, kind, label, ciphertext, nonce, wrapped_key, wrapped_key_nonce, key_id, content_hash, created_by, revoked_at, created_at, updated_at FROM problem_evolution_secret
-WHERE id = $1 AND workspace_id = $2
+WHERE id = $1
+  AND workspace_id = $2
+  AND run_id = $3
+  AND revoked_at IS NULL
 `
 
 type GetProblemEvolutionSecretParams struct {
 	ID          pgtype.UUID `json:"id"`
 	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	RunID       pgtype.UUID `json:"run_id"`
 }
 
 func (q *Queries) GetProblemEvolutionSecret(ctx context.Context, arg GetProblemEvolutionSecretParams) (ProblemEvolutionSecret, error) {
-	row := q.db.QueryRow(ctx, getProblemEvolutionSecret, arg.ID, arg.WorkspaceID)
+	row := q.db.QueryRow(ctx, getProblemEvolutionSecret, arg.ID, arg.WorkspaceID, arg.RunID)
 	var i ProblemEvolutionSecret
 	err := row.Scan(
 		&i.ID,
@@ -444,17 +455,21 @@ func (q *Queries) ListProblemEvolutionSecretsByRun(ctx context.Context, arg List
 const revokeProblemEvolutionSecret = `-- name: RevokeProblemEvolutionSecret :one
 UPDATE problem_evolution_secret
 SET revoked_at = now(), updated_at = now()
-WHERE id = $1 AND workspace_id = $2 AND revoked_at IS NULL
+WHERE id = $1
+  AND workspace_id = $2
+  AND run_id = $3
+  AND revoked_at IS NULL
 RETURNING id, workspace_id, run_id, kind, label, ciphertext, nonce, wrapped_key, wrapped_key_nonce, key_id, content_hash, created_by, revoked_at, created_at, updated_at
 `
 
 type RevokeProblemEvolutionSecretParams struct {
 	ID          pgtype.UUID `json:"id"`
 	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	RunID       pgtype.UUID `json:"run_id"`
 }
 
 func (q *Queries) RevokeProblemEvolutionSecret(ctx context.Context, arg RevokeProblemEvolutionSecretParams) (ProblemEvolutionSecret, error) {
-	row := q.db.QueryRow(ctx, revokeProblemEvolutionSecret, arg.ID, arg.WorkspaceID)
+	row := q.db.QueryRow(ctx, revokeProblemEvolutionSecret, arg.ID, arg.WorkspaceID, arg.RunID)
 	var i ProblemEvolutionSecret
 	err := row.Scan(
 		&i.ID,
@@ -476,14 +491,14 @@ func (q *Queries) RevokeProblemEvolutionSecret(ctx context.Context, arg RevokePr
 	return i, err
 }
 
-const revokeProblemEvolutionSecretCapabilitiesForRun = `-- name: RevokeProblemEvolutionSecretCapabilitiesForRun :execrows
+const revokeProblemEvolutionSecretCapabilities = `-- name: RevokeProblemEvolutionSecretCapabilities :execrows
 UPDATE problem_evolution_secret_capability
 SET revoked_at = now()
-WHERE run_id = $1 AND revoked_at IS NULL
+WHERE secret_id = $1 AND revoked_at IS NULL
 `
 
-func (q *Queries) RevokeProblemEvolutionSecretCapabilitiesForRun(ctx context.Context, runID pgtype.UUID) (int64, error) {
-	result, err := q.db.Exec(ctx, revokeProblemEvolutionSecretCapabilitiesForRun, runID)
+func (q *Queries) RevokeProblemEvolutionSecretCapabilities(ctx context.Context, secretID pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, revokeProblemEvolutionSecretCapabilities, secretID)
 	if err != nil {
 		return 0, err
 	}

@@ -3,9 +3,11 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/multica-ai/multica/server/internal/problemevolution"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -130,6 +132,52 @@ func TestPersistProblemEvolutionEventIsIdempotentPerClientEventID(t *testing.T) 
 	}
 	if stored != 1 {
 		t.Fatalf("stored events = %d, want 1", stored)
+	}
+	var evaluations int
+	if err := testPool.QueryRow(ctx,
+		`SELECT count(*) FROM problem_evolution_evaluation WHERE run_id = $1`, run.ID).Scan(&evaluations); err != nil {
+		t.Fatalf("count evaluations: %v", err)
+	}
+	if evaluations != 1 {
+		t.Fatalf("stored evaluations = %d, want 1", evaluations)
+	}
+}
+
+func TestProblemEvolutionTerminalWritesRequireCurrentClaimToken(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	run := seedClaimedProblemEvolutionRun(t)
+	wrongToken := parseUUID(uuid.NewString())
+
+	_, err := testHandler.Queries.FailProblemEvolutionRun(ctx, db.FailProblemEvolutionRunParams{
+		ID: run.ID, WorkspaceID: run.WorkspaceID, ClaimToken: wrongToken,
+		FailureReason: "wrong daemon",
+	})
+	if !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("fail with stale claim error = %v, want pgx.ErrNoRows", err)
+	}
+
+	if _, err := testPool.Exec(ctx,
+		`UPDATE problem_evolution_run SET status = 'stopping' WHERE id = $1`, run.ID); err != nil {
+		t.Fatalf("mark run stopping: %v", err)
+	}
+	_, err = testHandler.Queries.CancelProblemEvolutionRun(ctx, db.CancelProblemEvolutionRunParams{
+		ID: run.ID, WorkspaceID: run.WorkspaceID, ClaimToken: wrongToken,
+	})
+	if !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("cancel with stale claim error = %v, want pgx.ErrNoRows", err)
+	}
+
+	cancelled, err := testHandler.Queries.CancelProblemEvolutionRun(ctx, db.CancelProblemEvolutionRunParams{
+		ID: run.ID, WorkspaceID: run.WorkspaceID, ClaimToken: run.ClaimToken,
+	})
+	if err != nil {
+		t.Fatalf("cancel with current claim: %v", err)
+	}
+	if cancelled.Status != "cancelled" {
+		t.Fatalf("run status = %q, want cancelled", cancelled.Status)
 	}
 }
 

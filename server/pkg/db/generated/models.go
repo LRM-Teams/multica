@@ -2855,6 +2855,12 @@ type NotePageChannelRef struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
+type NotePageHidden struct {
+	PageID    pgtype.UUID        `json:"page_id"`
+	UserID    pgtype.UUID        `json:"user_id"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
 type NotePageIssueRef struct {
 	PageID      pgtype.UUID        `json:"page_id"`
 	IssueID     pgtype.UUID        `json:"issue_id"`

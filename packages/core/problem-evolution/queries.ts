@@ -24,13 +24,5 @@ export function problemEvolutionSnapshotOptions(wsId: string, runId: string) {
     queryKey: problemEvolutionKeys.snapshot(wsId, runId),
     queryFn: () => api.getProblemEvolutionSnapshot(runId),
     enabled: !!wsId && !!runId,
-    // WS `problem_evolution_run:*` events invalidate this key; polling is only
-    // a backstop for a quiet socket while a run is executing.
-    refetchInterval: (query) => {
-      const status = query.state.data?.run.status;
-      return status === "running" || status === "queued" || status === "stopping"
-        ? 5000
-        : false;
-    },
   });
 }

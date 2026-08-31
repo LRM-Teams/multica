@@ -159,6 +159,7 @@ func TestCheckCapabilityDeniesWithSpecificReasons(t *testing.T) {
 		{"secret revoked", func(s CapabilityState) CapabilityState { s.SecretRevoked = true; return s }, "run-1", DenyReasonSecretRevoked},
 		{"expired", func(s CapabilityState) CapabilityState { s.ExpiresAt = now.Add(-time.Second); return s }, "run-1", DenyReasonExpired},
 		{"exhausted", func(s CapabilityState) CapabilityState { s.Uses = 1; return s }, "run-1", DenyReasonExhausted},
+		{"missing run", func(s CapabilityState) CapabilityState { return s }, "", DenyReasonRunMismatch},
 		{"other run", func(s CapabilityState) CapabilityState { return s }, "run-2", DenyReasonRunMismatch},
 	}
 	for _, testCase := range cases {

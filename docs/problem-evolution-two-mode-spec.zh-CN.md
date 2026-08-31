@@ -1208,6 +1208,40 @@ daemon 以子进程方式启动外部程序：
 | 其他非 0 | 未知错误 | run `failed`，保留 stderr 尾部 |
 | 被信号终止 | 超时或停止 | 按 13.1 的 `stopping` 流程处理 |
 
+#### 19.3.5 接入独立 evolver
+
+算法实现不嵌入 Server，也不需要直接调用 Multica HTTP API。部署 evolver
+的 daemon 机器配置：
+
+```bash
+MULTICA_DAEMON_PROBLEM_EVOLUTION_EVOLVER=/absolute/path/to/evolver
+MULTICA_DAEMON_PROBLEM_EVOLUTION_EVOLVER_ARGS=
+# 可选：明确允许传给 evolver 的模型厂商凭据名
+MULTICA_DAEMON_PROBLEM_EVOLUTION_EVOLVER_ENV=OPENAI_API_KEY,ANTHROPIC_API_KEY
+```
+
+本机使用 CO-Bench ReEvo 时可直接配置：
+
+```bash
+MULTICA_DAEMON_PROBLEM_EVOLUTION_EVOLVER=/home/jianghp3/CO-Bench/multica_evolver.py
+```
+
+Daemon 实际执行：
+
+```bash
+<evolver> --input <workdir>/input.json --workdir <workdir>
+```
+
+因此 CO-Bench、ReEvo、EoH 或自研算法都可以作为同一个 evolver 入口；
+入口程序读取 `input.mode` 后选择具体算法。算法只需遵守本章的
+`input.json`、NDJSON 事件、产物目录和退出码约定。
+
+模式 B 额外受服务端开关保护，部署完成 sandbox 和隐藏答案隔离后配置：
+
+```bash
+MULTICA_PROBLEM_EVOLUTION_MODE_B=true
+```
+
 ### 19.4 停止与超时
 
 - daemon 收到 stop 后先向子进程发 `SIGTERM`，`graceful_drain = 60s` 后 `SIGKILL`（Windows 走既有 `force_kill_process.go` 路径）；

@@ -199,6 +199,28 @@ func TestProblemEvolutionCapabilityDeniedForOtherRun(t *testing.T) {
 	}
 }
 
+func TestProblemEvolutionCapabilityCannotBindSecretFromOtherRun(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	withProblemEvolutionMasterKey(t)
+	runID := createSolveRun(t)
+	otherRunID := createSolveRun(t)
+	secret := createSecret(t, runID, problemEvolutionSecretSentinel)
+
+	rec := httptest.NewRecorder()
+	req := newProblemEvolutionRequest(t, http.MethodPost,
+		"/api/problem-evolution/runs/"+otherRunID+"/capabilities", map[string]any{
+			"secret_id": secret.ID,
+			"max_uses":  1,
+			"issued_to": "verifier-1",
+		}, "runId", otherRunID)
+	testHandler.IssueProblemEvolutionCapability(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("cross-run capability status = %d, want 404: %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestProblemEvolutionSecretRevocationDeniesIssuedCapabilities(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -222,6 +244,32 @@ func TestProblemEvolutionSecretRevocationDeniesIssuedCapabilities(t *testing.T) 
 	redeemed := redeemCapability(t, capability.Token, runID)
 	if redeemed.Code != http.StatusForbidden {
 		t.Fatalf("redemption after revocation status = %d, want 403", redeemed.Code)
+	}
+}
+
+func TestProblemEvolutionSecretRevocationKeepsSiblingCapabilityValid(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	withProblemEvolutionMasterKey(t)
+	runID := createSolveRun(t)
+	revokedSecret := createSecret(t, runID, "revoked secret")
+	keptSecret := createSecret(t, runID, problemEvolutionSecretSentinel)
+	issueCapability(t, runID, revokedSecret.ID)
+	keptCapability := issueCapability(t, runID, keptSecret.ID)
+
+	rec := httptest.NewRecorder()
+	req := newProblemEvolutionRequest(t, http.MethodPost,
+		"/api/problem-evolution/runs/"+runID+"/secrets/"+revokedSecret.ID+"/revoke", nil,
+		"runId", runID, "secretId", revokedSecret.ID)
+	testHandler.RevokeProblemEvolutionSecret(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("revoke status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+
+	redeemed := redeemCapability(t, keptCapability.Token, runID)
+	if redeemed.Code != http.StatusOK {
+		t.Fatalf("sibling capability status = %d, want 200: %s", redeemed.Code, redeemed.Body.String())
 	}
 }
 

@@ -91,6 +91,7 @@ func (h *Handler) ClaimProblemEvolutionRun(w http.ResponseWriter, r *http.Reques
 		failed, failErr := h.Queries.FailProblemEvolutionRun(r.Context(), db.FailProblemEvolutionRunParams{
 			ID:            run.ID,
 			WorkspaceID:   run.WorkspaceID,
+			ClaimToken:    run.ClaimToken,
 			FailureReason: "evolver_input_rejected",
 		})
 		if failErr == nil {
@@ -129,16 +130,6 @@ func (h *Handler) ReportProblemEvolutionEvents(w http.ResponseWriter, r *http.Re
 	progressInBatch := false
 	iterationFinishedInBatch := false
 	for _, event := range events {
-		switch event.EventType {
-		case problemevolution.EventCandidateScored:
-			scoredInBatch = true
-		case problemevolution.EventHarnessProposed:
-			harnessProposedInBatch = true
-		case problemevolution.EventProgress:
-			progressInBatch = true
-		case problemevolution.EventIterationFinished:
-			iterationFinishedInBatch = true
-		}
 		if err := event.Validate(); err != nil {
 			resp.Rejected++
 			continue
@@ -162,6 +153,16 @@ func (h *Handler) ReportProblemEvolutionEvents(w http.ResponseWriter, r *http.Re
 		case problemEvolutionEventInserted:
 			resp.Accepted++
 			resp.LatestSeq = outcome.seq
+			switch event.EventType {
+			case problemevolution.EventCandidateScored:
+				scoredInBatch = true
+			case problemevolution.EventHarnessProposed:
+				harnessProposedInBatch = true
+			case problemevolution.EventProgress:
+				progressInBatch = true
+			case problemevolution.EventIterationFinished:
+				iterationFinishedInBatch = true
+			}
 		case problemEvolutionEventDuplicate:
 			resp.Duplicates++
 			if outcome.seq > resp.LatestSeq {
@@ -308,27 +309,32 @@ func (h *Handler) FailProblemEvolutionRun(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if _, ok := parseUUIDOrBadRequest(w, req.ClaimToken, "claim_token"); !ok {
+	token, ok := parseUUIDOrBadRequest(w, req.ClaimToken, "claim_token")
+	if !ok {
 		return
 	}
 	if run.Status == "stopping" {
 		cancelled, err := h.Queries.CancelProblemEvolutionRun(r.Context(), db.CancelProblemEvolutionRunParams{
 			ID:          run.ID,
 			WorkspaceID: run.WorkspaceID,
+			ClaimToken:  token,
 		})
-		if err == nil {
-			h.publishProblemEvolutionRunChanged(uuidToString(cancelled.WorkspaceID), cancelled)
-			writeJSON(w, http.StatusOK, problemEvolutionRunToResponse(cancelled))
+		if err != nil {
+			writeError(w, http.StatusConflict, "claim is no longer valid")
 			return
 		}
+		h.publishProblemEvolutionRunChanged(uuidToString(cancelled.WorkspaceID), cancelled)
+		writeJSON(w, http.StatusOK, problemEvolutionRunToResponse(cancelled))
+		return
 	}
 	failed, err := h.Queries.FailProblemEvolutionRun(r.Context(), db.FailProblemEvolutionRunParams{
 		ID:            run.ID,
 		WorkspaceID:   run.WorkspaceID,
+		ClaimToken:    token,
 		FailureReason: problemevolution.TruncateFreeText(req.FailureReason),
 	})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to fail run")
+		writeError(w, http.StatusConflict, "claim is no longer valid")
 		return
 	}
 	h.publishProblemEvolutionRunChanged(uuidToString(failed.WorkspaceID), failed)
@@ -367,19 +373,43 @@ type problemEvolutionEventOutcome struct {
 }
 
 // persistProblemEvolutionEvent stores one event and applies its projection to
-// the candidate row. Retried delivery of the same client_event_id is a no-op.
+// the candidate row atomically. Retried delivery of the same client_event_id
+// is a no-op, including when two copies arrive concurrently.
 func (h *Handler) persistProblemEvolutionEvent(ctx context.Context, run db.ProblemEvolutionRun, event problemevolution.EvolverEvent) (problemEvolutionEventOutcome, error) {
-	if run.Mode == problemevolution.ModeTaskHarnessPersistent {
-		// Projectors run before insert so a projection failure cannot leave an
-		// event that the caller must retry. Check idempotency first so a retry
-		// cannot duplicate a change record.
-		if existing, err := h.Queries.GetProblemEvolutionEventByClientID(ctx, db.GetProblemEvolutionEventByClientIDParams{
-			RunID: run.ID, ClientEventID: event.ClientEventID,
-		}); err == nil {
-			return problemEvolutionEventOutcome{disposition: problemEvolutionEventDuplicate, seq: existing.Seq}, nil
-		} else if !errors.Is(err, pgx.ErrNoRows) {
-			return problemEvolutionEventOutcome{}, err
-		}
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		return problemEvolutionEventOutcome{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	txHandler := *h
+	txHandler.Queries = h.Queries.WithTx(tx)
+	txHandler.DB = tx
+	outcome, err := txHandler.persistProblemEvolutionEventTx(ctx, run, event)
+	if err != nil {
+		return problemEvolutionEventOutcome{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return problemEvolutionEventOutcome{}, err
+	}
+	return outcome, nil
+}
+
+func (h *Handler) persistProblemEvolutionEventTx(ctx context.Context, run db.ProblemEvolutionRun, event problemevolution.EvolverEvent) (problemEvolutionEventOutcome, error) {
+	if _, err := h.Queries.LockClaimedProblemEvolutionRun(ctx, db.LockClaimedProblemEvolutionRunParams{
+		ID: run.ID, ClaimToken: run.ClaimToken,
+	}); err != nil {
+		return problemEvolutionEventOutcome{}, err
+	}
+	// Projectors run before insert so a projection failure cannot leave an
+	// event without its derived state. The row lock makes the pre-check safe
+	// against concurrent delivery of the same idempotency key.
+	if existing, err := h.Queries.GetProblemEvolutionEventByClientID(ctx, db.GetProblemEvolutionEventByClientIDParams{
+		RunID: run.ID, ClientEventID: event.ClientEventID,
+	}); err == nil {
+		return problemEvolutionEventOutcome{disposition: problemEvolutionEventDuplicate, seq: existing.Seq}, nil
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return problemEvolutionEventOutcome{}, err
 	}
 	candidateID := pgtype.UUID{}
 	if event.CandidateRef != "" {
@@ -1123,6 +1153,7 @@ func (h *Handler) ReportProblemEvolutionBlindValidation(w http.ResponseWriter, r
 	}
 	updated, err := h.Queries.SetProblemEvolutionRunBlindResult(r.Context(), db.SetProblemEvolutionRunBlindResultParams{
 		ID:               run.ID,
+		ClaimToken:       token,
 		BlindCandidateID: candidate.ID,
 		BlindScore:       pgtype.Float8{Float64: req.Outcome.Score.Total, Valid: true},
 		OverfitGap: pgtype.Float8{

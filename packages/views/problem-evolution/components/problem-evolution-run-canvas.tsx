@@ -2,7 +2,7 @@
 
 import { useMemo } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Download, Loader2, Play, Snowflake, Square } from "lucide-react";
+import { ArrowLeft, Download, Loader2, Play, Sparkles, Snowflake, Square } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
@@ -55,6 +55,11 @@ export function ProblemEvolutionRunCanvas({
     mutationFn: () => api.freezeProblemEvolutionEvaluator(runId),
     onSuccess: invalidate,
     onError: () => showErrorToast(t(($) => $.errors.freezeFailed)),
+  });
+  const proposeEvaluator = useMutation({
+    mutationFn: () => api.proposeProblemEvolutionEvaluator(runId),
+    onSuccess: invalidate,
+    onError: () => showErrorToast(t(($) => $.errors.proposeFailed)),
   });
   const startRun = useMutation({
     mutationFn: () => api.startProblemEvolutionRun(runId),
@@ -116,11 +121,21 @@ export function ProblemEvolutionRunCanvas({
           <ProblemEvolutionStatusBadge run={run} />
         </div>
         <div className="flex items-center gap-2">
-          {!contractFrozen ? (
+          {!run.evaluator_contract_id ? (
             <Button
               size="sm"
               variant="secondary"
-              disabled={freezeEvaluator.isPending || !run.evaluator_contract_id}
+              disabled={proposeEvaluator.isPending}
+              onClick={() => proposeEvaluator.mutate()}
+            >
+              <Sparkles className="size-4" aria-hidden />
+              {t(($) => $.detail.proposeEvaluator)}
+            </Button>
+          ) : !contractFrozen ? (
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={freezeEvaluator.isPending}
               onClick={() => freezeEvaluator.mutate()}
             >
               <Snowflake className="size-4" aria-hidden />
